@@ -1249,6 +1249,12 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CLUSTER_DIAG_CSB:
 		return vms_facility_errno(
 		    vms_ioctl_cluster_diag_csb(NULL, (unsigned long)data));
+	/* E69: the join transition ring, same DISPATCH-ALWAYS terms as the
+	 * three above -- a read-only projection of real executive state, whose
+	 * whole purpose is to be readable on a node whose join is stuck. */
+	case VMS_IOCTL_CLUSTER_DIAG_JOIN:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_join(NULL, (unsigned long)data));
 
 	/*
 	 * Lock-manager facility (DLM, src/kernel-core/vms_lock.c) -- P4-A, rd

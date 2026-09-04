@@ -82,6 +82,7 @@
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_join_fsm.h"
+#include "vms_cnxman_diag.h"    /* E69: the join's transition ring */
 #include "vms_cnxman_barrier_fsm.h"
 #include "vms_cnxman_coord_fsm.h"
 #include "vms_cnxman_recnx_fsm.h"
@@ -198,6 +199,18 @@ struct vms_cnxman {
 	uint64_t  cluevt_astadr;
 	uint64_t  cluevt_astprm;
 
+	/*
+	 * E69: the join's transition ring, or NULL. Allocated ONCE beside this
+	 * struct at CLUSTER_START (6 KB -- too big to embed in a struct the
+	 * VAX kmod allocates, and a separate allocation lets a node whose
+	 * memory is short run with NO diagnostics rather than fail to start
+	 * its connection manager). OBSERVABILITY ONLY: nothing in this file or
+	 * in the join reads it, and its absence changes no behaviour. Written
+	 * under the fork mutex like every other field here, and read under the
+	 * same mutex by VMS_IOCTL_CLUSTER_DIAG_JOIN.
+	 */
+	struct cnxman_diag_ring *diag;
+
 	/* ---- counted, never displayed as protocol state ---- */
 	uint32_t frames_to_join;
 	uint32_t frames_to_barrier;
@@ -209,6 +222,31 @@ struct vms_cnxman {
 	uint32_t reconnects_issued;
 	uint32_t peers_discovered;   /* E36: CSBs allocated from a real vc_up */
 };
+
+/* ==========================================================================
+ * 0b. The E69 transition ring, from the GLUE side
+ *
+ * The join records its own [state][event] dispatches and its own emits
+ * (vms_cnxman_join_fsm.c). What only THIS file can record is the SCS->CNXMAN
+ * seam itself: which of the two halves an `opened()` callback was -- a
+ * connection this node dialled, or one a member dialled to us -- and the fact
+ * that a close/open reached the connection manager at all. Without that, an
+ * SCS event that never reaches the join (or reaches it and hits an empty table
+ * cell) is indistinguishable from an event SCS never delivered, which is
+ * exactly the ambiguity E67/E68 had to guess at from a pcap.
+ *
+ * Recording only. Every call below is a store; none has a return value, none
+ * takes a lock (the fork mutex is already held on every one of these paths),
+ * and removing them all would leave this file's behaviour identical.
+ * ========================================================================== */
+
+static void cnxman_diag_note(struct vms_cnxman *cn, enum cnxman_diag_reason r,
+			     int32_t rc, uint32_t aux)
+{
+	cnxman_diag_arrival(cn->diag, (uint32_t)exec_ticks_ms(),
+			    cn->join.state, CNXMAN_DIAG_EV_NONE, (uint8_t)r,
+			    rc, aux);
+}
 
 /* ==========================================================================
  * 1. CSB lookup helpers -- the only two ways this glue resolves a peer
@@ -734,6 +772,14 @@ static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 	 * cnxman_join_opened() for the same Con.ID (which cannot match a
 	 * connection the join never opened) has nothing left to do.
 	 */
+	/* E69: WHICH half this was is a glue-only fact -- the join can only see
+	 * a Con.ID, and a Con.ID it did not open looks the same as one it did
+	 * not recognise. Recorded before the join is told, so the transcript
+	 * reads cause then effect. */
+	cnxman_diag_note(cn, accepted ? CNXMAN_DIAG_R_CM_ACCEPT
+				      : CNXMAN_DIAG_R_CDT_OPEN,
+			 0, (uint32_t)local_conid);
+
 	if (accepted)
 		cnxman_join_cm_accepted(&cn->join, accepted_from, local_conid);
 
@@ -840,6 +886,11 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 	struct vms_csb *csb = csb_by_conid(&cn->cl->club, local_conid);
+
+	/* E69: the raw SCS verdict, before this glue routes it. `rc` is the
+	 * reason SCS gave, not an interpretation of it. */
+	cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_CLOSED, (int32_t)reason,
+			 (uint32_t)local_conid);
 
 	if (reason == (uint32_t)SCS_CLOSE_REJECTED) {
 		cnxman_join_rejected(&cn->join, local_conid, reason);
@@ -963,6 +1014,7 @@ static void cnxman_mscp_opened(void *ctx, vms_conid_t local_conid)
 	 * CSB dispatch, because the MSCP CDT is a disk-client connection, not a
 	 * VMS$VAXcluster membership block. (E43: without this, j->mscp_open is
 	 * never set on a real wire; only the fake-ops R1 path reached the FSM.) */
+	cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_OPEN, 0, (uint32_t)local_conid);
 	cnxman_join_opened(&cn->join, local_conid);
 
 	if (dc != NULL && dc->opened != NULL)
@@ -987,6 +1039,8 @@ static void cnxman_mscp_closed(void *ctx, vms_conid_t local_conid,
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 	const struct cnxman_disk_client_ops *dc = cnxman_dc(cn);
 
+	cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_CLOSED, (int32_t)reason,
+			 (uint32_t)local_conid);
 	cnxman_join_closed(&cn->join, local_conid, reason);
 	if (dc != NULL && dc->closed != NULL)
 		dc->closed(dc->ctx, local_conid, reason);
@@ -1229,6 +1283,21 @@ static void cnxman_start_join_or_wait(struct vms_cnxman *cn)
 	}
 }
 
+/* The connection manager owns TWO allocations since E69 -- itself and the
+ * transition ring beside it -- so it is released from ONE place rather than
+ * from each of the three sites that used to call exec_free(cn) directly. */
+static void cnxman_free(struct vms_cnxman *cn)
+{
+	if (cn == NULL)
+		return;
+	if (cn->diag != NULL) {
+		cnxman_join_set_diag(&cn->join, NULL);
+		exec_free(cn->diag);
+		cn->diag = NULL;
+	}
+	exec_free(cn);
+}
+
 int vms_cnxman_start(struct vms_cluster *cl)
 {
 	struct vms_cnxman *cn;
@@ -1267,6 +1336,24 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	cnxman_coord_init(&cn->coord, cl, &cn->ops);
 	cnxman_recnx_init(&cn->recnx, cl, &cn->ops);
 	cnxman_join_set_barrier(&cn->join, &cn->barrier);
+
+	/*
+	 * E69: the transition ring, allocated ONCE here (never on a recording
+	 * path) and installed into the join. FAIL-SOFT ON PURPOSE: if the
+	 * allocation fails this node starts its connection manager WITHOUT
+	 * diagnostics rather than refusing to join a cluster over a
+	 * diagnostic -- the join is the product, the transcript is the
+	 * instrument. cnxman_join_set_diag() must come after
+	 * cnxman_join_init(), which zeroes the context.
+	 */
+	cn->diag = (struct cnxman_diag_ring *)exec_zalloc(sizeof(*cn->diag));
+	if (cn->diag != NULL)
+		cnxman_diag_init(cn->diag, 1);
+	else
+		cnxman_ops_log(cn, "%CNXMAN, no memory for the join "
+				   "diagnostics ring: it is NOT recording");
+	cnxman_join_set_diag(&cn->join, cn->diag);
+
 	/* No DLM arm in P3 (vms_cnxman_barrier_fsm.h / _coord_fsm.h: NULL is a
 	 * real VMS configuration, a node with no distributed locking still
 	 * joins) -- FC-P4.x installs one later via cnxman_set_dlm(). */
@@ -1289,14 +1376,14 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	status = (int)scs_sysap_listen(cl->scs, cnxman_join_name_vaxcluster,
 				       &cn->vc_sysap, CNXMAN_VC_CREDITS);
 	if (status != (int)SS__NORMAL) {
-		exec_free(cn);
+		cnxman_free(cn);
 		return status;
 	}
 	status = (int)scs_sysap_listen(cl->scs, cnxman_join_name_disk_cl_drvr,
 				       &cn->mscp_sysap, CNXMAN_MSCP_CREDITS);
 	if (status != (int)SS__NORMAL) {
 		(void)scs_sysap_unlisten(cl->scs, cnxman_join_name_vaxcluster);
-		exec_free(cn);
+		cnxman_free(cn);
 		return status;
 	}
 
@@ -1347,7 +1434,7 @@ void vms_cnxman_stop(struct vms_cluster *cl)
 	}
 
 	cl->cnxman = NULL;
-	exec_free(cn);
+	cnxman_free(cn);
 }
 
 /* ==========================================================================
@@ -1385,6 +1472,55 @@ int cnxman_get_csb(struct vms_cluster *cl, uint32_t index,
 		cnxman_csb_project(csb, out);
 	vms_cluster_fork_leave(cl);
 	return csb != NULL ? (int)SS__NORMAL : (int)SS__NOSUCHDEV;
+}
+
+/*
+ * cnxman_get_join_diag - VMS_IOCTL_CLUSTER_DIAG_JOIN's projection (E69).
+ *
+ * A window into the join's transition ring plus the join's LIVE state, taken
+ * TOGETHER under the fork mutex -- because the whole value of the transcript
+ * is that "here is what happened" and "here is where it is now" are the same
+ * instant. Everything below is a copy of a value the executive really holds:
+ * the ring's own records, the FSM's own `state`/`failure`/`ignored_events`.
+ * Nothing is composed, and a connection manager that is not up is
+ * SS$_NOSUCHDEV with an all-zero view rather than an empty transcript a
+ * reader could mistake for "the join did nothing".
+ */
+static void cnxman_project_join_diag(const struct vms_cnxman *cn,
+				     uint32_t first,
+				     struct cnxman_diag_view *out)
+{
+	uint32_t i;
+
+	out->count    = cnxman_diag_count(cn->diag);
+	out->recorded = cnxman_diag_recorded(cn->diag);
+	out->first    = first;
+	out->enabled  = (cn->diag != NULL) ? cn->diag->enabled : 0u;
+
+	out->join_state     = cn->join.state;
+	out->join_failure   = cn->join.failure;
+	out->ignored_events = cn->join.ignored_events;
+
+	for (i = 0; i < CNXMAN_DIAG_ROWS; i++) {
+		if (!cnxman_diag_get(cn->diag, first + i, &out->row[i]))
+			break;
+	}
+	out->n_rows = i;
+}
+
+int cnxman_get_join_diag(struct vms_cluster *cl, uint32_t first,
+			 struct cnxman_diag_view *out)
+{
+	if (cl == NULL || out == NULL)
+		return (int)SS__BADPARAM;
+	memset(out, 0, sizeof(*out));
+	if (cl->cnxman == NULL)
+		return (int)SS__NOSUCHDEV;
+
+	vms_cluster_fork_enter(cl);
+	cnxman_project_join_diag(cl->cnxman, first, out);
+	vms_cluster_fork_leave(cl);
+	return (int)SS__NORMAL;
 }
 
 int cnxman_find_csb(struct vms_cluster *cl, vms_csid_t csid,

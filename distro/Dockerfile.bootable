@@ -592,6 +592,14 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # command fails %SYSGEN-F-NOIMG and SYS$SYSTEM:OVMXVMSSYS.PAR can never
     # be read or written on the real runtime.
     cp build-static/bin/SYSGEN.EXE     /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # CNXTRACE.EXE (E69): prints the executive's own CNXMAN join transition
+    # ring to SYS$OUTPUT. The cluster stack is executive-resident and the
+    # executive has no console log (ovmx_init.c:1399), so on a booted node
+    # whose join stalls this image is the ONLY route the evidence has out --
+    # and the acceptance harness boots THIS image, which is exactly why
+    # staging it only in the ktest image was the E52 gap. `RUN
+    # SYS$SYSTEM:CNXTRACE.EXE`.
+    cp build-static/bin/CNXTRACE.EXE   /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # NO SCSD.EXE, DELIBERATELY (FC-P3.9). There is no cluster daemon in the
     # installed system: the SCS port, SCS itself and the connection manager
     # are executive-resident (vms.ko / vms.kmod), and STARTUP.EXE forms or

@@ -944,6 +944,11 @@ long vms_ioctl_cluster_diag_conn(struct vms_proc *proc, unsigned long arg);
  * projection and $SETCLUEVT's registration, against vms_cluster_node()'s
  * real vms_cnxman.c objects. */
 long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_JOIN (E69): the connection manager's JOIN TRANSITION
+ * RING plus the join FSM's live state, projected together under the fork mutex
+ * against vms_cluster_node()'s real vms_cnxman.c objects. Read-only; the
+ * executive has no console log, so this is how the lab sees what the join did. */
+long vms_ioctl_cluster_diag_join(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): mirror of the src/kernel/vms_internal.h
  * decl -- $GETSYI's cluster item codes projected from the CLUB. */

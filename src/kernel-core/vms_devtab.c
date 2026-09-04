@@ -60,6 +60,7 @@
 #include "vms_pe.h"
 #include "vms_cnxman.h"        /* FC-P3.8: cnxman_get_club/_csb + $SETCLUEVT */
 #include "vms_cnxman_csb.h"    /* FC-P3.9: the CSB state names MEMBER_GET renders */
+#include "vms_cnxman_diag.h"   /* E69: cnxman_get_join_diag + the ring's records */
 #include "vms_scs.h"           /* FC-P2.4: vms_scs_start + the CONN snapshots */
 #include "vms_mscp_srv.h"      /* FC-P6.3: the MSCP disk server (CLUSTER_START step 5) */
 #include "vms_mscp_cl.h"       /* FC-P7.1: the MSCP disk class driver (step 6) */
@@ -1956,6 +1957,83 @@ long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg)
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
     return 0;
+}
+
+/*
+ * The two CLUSTER_DIAG_JOIN structs (vms_ioctl.h / vms_lock_nb.h) are
+ * BYTE-IDENTICAL duplicates of src/kernel-core/vms_cnxman_diag.h's
+ * struct cnxman_diag_rec / struct cnxman_diag_view -- the same shape as the
+ * three DIAG siblings above, and the same tripwire against a future edit to
+ * either copy.
+ */
+_Static_assert(sizeof(struct cnxman_diag_rec) == sizeof(struct cnxman_diag_rec_wire),
+               "cnxman_diag_rec / cnxman_diag_rec_wire layout drifted");
+_Static_assert(sizeof(struct cnxman_diag_view) == sizeof(struct cnxman_diag_view_wire),
+               "cnxman_diag_view / cnxman_diag_view_wire layout drifted");
+_Static_assert(CNXMAN_DIAG_ROWS == VMS_CLUSTER_DIAG_JOIN_ROWS,
+               "the CLUSTER_DIAG_JOIN row count drifted from the ring's own");
+
+/*
+ * vms_ioctl_cluster_diag_join - VMS_IOCTL_CLUSTER_DIAG_JOIN (E69). The
+ * connection manager's JOIN TRANSITION RING plus the join FSM's own live
+ * state, projected together under the fork mutex by cnxman_get_join_diag()
+ * (vms_cnxman.c). `first` names the first HELD record to copy; a caller walks
+ * the ring by re-issuing with it advanced by the `n_rows` it got back.
+ *
+ * READ-ONLY in the strongest sense this codebase has: the projection reads
+ * records the executive itself wrote at real [state][event] dispatches and
+ * real emit attempts (INV-6), and nothing in the path -- here, in
+ * cnxman_get_join_diag(), or in the ring -- writes a byte of cluster state or
+ * puts a byte on the wire. This function adds no state of its own, only the
+ * copyin/copyout, exactly like its three DIAG siblings above.
+ */
+/*
+ * The two buffers this handler needs, allocated TOGETHER on the heap.
+ *
+ * NOT ON THE STACK, and that is not a style choice: the args struct and the
+ * view are ~1 KB each and this code runs on a kernel stack -- an ILP32 VAX
+ * kernel stack among them. The first draft put both on the stack and the
+ * Linux build said so immediately ("the frame size of 2112 bytes is larger
+ * than 1024"). VMS_IOCTL_CLUSTER_MEMBER_GET's handler below already answers
+ * the same problem the same way (its args struct is 3848 bytes); the
+ * CLUSTER_DIAG_PORT/_CONN/_CSB siblings are 120-160 bytes and legitimately
+ * stack-local.
+ */
+struct diag_join_work {
+    struct vms_cluster_diag_join_args args;
+    struct cnxman_diag_view           view;
+};
+
+long vms_ioctl_cluster_diag_join(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster *cl = vms_cluster_node();
+    struct diag_join_work *w;
+    uint32_t status;
+    long rc = 0;
+
+    (void)proc;
+    w = exec_alloc(sizeof(*w));
+    if (!w)
+        return -ENOMEM;
+    memset(w, 0, sizeof(*w));
+
+    if (exec_copyin(&w->args, (const void *)arg, sizeof(w->args))) {
+        exec_free(w);
+        return -EFAULT;
+    }
+
+    status = (uint32_t)cnxman_get_join_diag(cl, w->args.first, &w->view);
+    if (status == SS__NORMAL)
+        memcpy(&w->args.view, &w->view, sizeof(w->args.view));
+    else
+        pr_info("vms: CLUSTER_DIAG_JOIN first %u -> SS$ %u\n",
+                (unsigned)w->args.first, (unsigned)status);
+
+    w->args.status = status;
+    if (exec_copyout((void *)arg, &w->args, sizeof(w->args)))
+        rc = -EFAULT;
+    exec_free(w);
+    return rc;
 }
 
 /*

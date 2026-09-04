@@ -1174,6 +1174,98 @@ _Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC024566Cu,
                "VMS_IOCTL_CLUSTER_GETSYI encodes differently than the reference build");
 
 /*
+ * VMS_IOCTL_CLUSTER_DIAG_JOIN (E69, docs/cluster-integration-notes.md). The
+ * CONNECTION MANAGER's JOIN TRANSITION RING -- a read-only window into the
+ * executive-resident transcript src/kernel-core/vms_cnxman_diag.c records, plus
+ * the join FSM's own live state, projected together under the fork mutex by
+ * cnxman_get_join_diag() (src/kernel-core/vms_cnxman.c).
+ *
+ * WHY IT EXISTS. The executive has no console log (src/ovmx_init/ovmx_init.c:
+ * 1399 -- its output is not OPA0:), so a join that stalls at a point the wire
+ * does not expose cannot be diagnosed at all: three consecutive promotion walls
+ * (E67, E68, the E68 re-fire) were read off a pcap by luck, and the remaining
+ * gap -- OVMX receives the members' PARAMS and never answers with its own
+ * MODEL/PARAMS burst -- shows nothing on the wire by construction. This ioctl
+ * is how the lab reads what the join FSM actually did.
+ *
+ * READ-ONLY AND DISPATCH-ALWAYS, exactly like its three CLUSTER_DIAG_*
+ * siblings (E47): the handler takes `proc` only to match the ioctl signature
+ * and never touches it, so a caller that has never registered a VMS process
+ * still gets the executive's real answer, and a connection manager that is not
+ * up is the honest SS$_NOSUCHDEV with an all-zero view (never an empty
+ * transcript a reader could mistake for "the join did nothing").
+ *
+ * Walk the ring by re-issuing with `first` advanced by `view.n_rows`;
+ * `n_rows == 0` is the end. `view.recorded - view.count` is exactly how many
+ * records the wrap dropped, so a truncated transcript says so rather than
+ * looking complete -- and a row's `repeat`/`t_last_ms` carry how many times the
+ * identical fact repeated back to back (kernel-core vms_cnxman_diag.h SS4b: an
+ * identical fact coalesces into the record it repeats, which is what stops a
+ * once-a-second watchdog erasing the join drive it is waiting on).
+ *
+ * The two row structs mirror src/kernel-core/vms_cnxman_diag.h's
+ * struct cnxman_diag_rec / struct cnxman_diag_view byte-for-byte -- the same
+ * "ONE facility source, duplicated struct declaration" shape as the sibling
+ * DIAG ioctls, because this header must stay includable with no kernel-core
+ * dependency, and vms_devtab.c's _Static_asserts pin the two copies together.
+ */
+#define VMS_CLUSTER_DIAG_JOIN_ROWS 32u   /* == CNXMAN_DIAG_ROWS */
+
+struct cnxman_diag_rec_wire {
+    uint32_t seq;
+    uint32_t t_ms;
+    uint32_t t_last_ms;
+    uint32_t repeat;
+    uint8_t  kind;
+    uint8_t  state;
+    uint8_t  new_state;
+    uint8_t  event;
+    uint8_t  detail;
+    uint8_t  cat;
+    uint8_t  op;
+    uint8_t  rx;
+    int32_t  rc;
+    uint32_t aux;
+};
+_Static_assert(sizeof(struct cnxman_diag_rec_wire) == 32,
+               "cnxman_diag_rec_wire changed size -- must match cnxman_diag_rec");
+
+struct cnxman_diag_view_wire {
+    uint32_t count;
+    uint32_t recorded;
+    uint32_t first;
+    uint32_t n_rows;
+    uint8_t  join_state;
+    uint8_t  join_failure;
+    uint8_t  enabled;
+    uint8_t  pad0;
+    uint32_t ignored_events;
+    struct cnxman_diag_rec_wire row[VMS_CLUSTER_DIAG_JOIN_ROWS];
+};
+_Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
+               "cnxman_diag_view_wire changed size -- must match cnxman_diag_view");
+
+struct vms_cluster_diag_join_args {
+    uint32_t first;                       /* in: first HELD record to copy   */
+    uint32_t status;                      /* return: SS$_ status             */
+    struct cnxman_diag_view_wire view;    /* return: the window + live state */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
+               "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
+/*
+ * NR 0x6d: the next unused number in this magic (0x6c is CLUSTER_GETSYI just
+ * above). 1056 bytes is under NetBSD's one-page IOCPARM_MAX, so this rides the
+ * same pre-copy _IOWR path as every other cluster diagnostic. The encoded value
+ * below was computed for THIS struct's size -- _IOWR folds sizeof(type) into
+ * the command word, so appending a field silently changes the ioctl NUMBER, and
+ * this assert is what turns that into a build failure instead of an ENOTTY on a
+ * booted node.
+ */
+#define VMS_IOCTL_CLUSTER_DIAG_JOIN _IOWR(VMS_IOC_MAGIC, 0x6d, struct vms_cluster_diag_join_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_JOIN == 0xC420566Du,
+               "VMS_IOCTL_CLUSTER_DIAG_JOIN encodes differently than the reference build");
+
+/*
  * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, docs/plan-faithful-cluster-executive.md).
  * STARTUP.EXE's own case of SYSBOOT: hands the cluster SYSGEN parameters and
  * the CLUSTER_AUTHORIZE record it read off SYS$SYSTEM:OVMXVMSSYS.PAR

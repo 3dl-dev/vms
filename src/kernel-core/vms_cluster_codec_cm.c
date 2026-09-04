@@ -79,6 +79,28 @@ vms_codec_status_t vms_cm_envelope_parse(const uint8_t *frame, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
+vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
+				    uint8_t *out_category, uint8_t *out_opcode)
+{
+	vms_wire_view_t v;
+	uint8_t category, opcode;
+
+	vms_wire_view_init(&v, body, len);
+	if (!vms_wire_view_ok(&v))
+		return VMS_CODEC_E_INVAL;
+
+	category = vms_wire_get_u8(&v, VMS_OFB_CM_CATEGORY);
+	opcode   = vms_wire_get_u8(&v, VMS_OFB_CM_OPCODE);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+
+	if (out_category != (uint8_t *)0)
+		*out_category = category;
+	if (out_opcode != (uint8_t *)0)
+		*out_opcode = opcode;
+	return VMS_CODEC_OK;
+}
+
 /* ------------------------------------------------------------------ *
  * sec 3: the abs [0,72) span -- NOT this file's business since FC-P3.15.
  * See the header's sec 3 note: the demoted `vms_cm_link`/its builder now

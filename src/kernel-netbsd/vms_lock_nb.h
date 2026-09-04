@@ -511,6 +511,52 @@ struct vms_cluster_diag_csb_args {
 };
 
 /*
+ * VMS_IOCTL_CLUSTER_DIAG_JOIN (E69). Byte-for-byte the same two structs as
+ * src/kernel/vms_ioctl.h -- see that header for what the connection manager's
+ * join transition ring is, why the executive needs one at all (it has no
+ * console log), and how a caller walks it. Both are ILP32-safe by
+ * construction: no 64-bit scalar, 4-byte alignment throughout, so the VAX kmod
+ * and the LP64 kmods lay them out identically.
+ */
+#define VMS_CLUSTER_DIAG_JOIN_ROWS 32u   /* == CNXMAN_DIAG_ROWS */
+
+struct cnxman_diag_rec_wire {
+	uint32_t seq;
+	uint32_t t_ms;
+	uint32_t t_last_ms;
+	uint32_t repeat;
+	uint8_t  kind;
+	uint8_t  state;
+	uint8_t  new_state;
+	uint8_t  event;
+	uint8_t  detail;
+	uint8_t  cat;
+	uint8_t  op;
+	uint8_t  rx;
+	int32_t  rc;
+	uint32_t aux;
+};
+
+struct cnxman_diag_view_wire {
+	uint32_t count;
+	uint32_t recorded;
+	uint32_t first;
+	uint32_t n_rows;
+	uint8_t  join_state;
+	uint8_t  join_failure;
+	uint8_t  enabled;
+	uint8_t  pad0;
+	uint32_t ignored_events;
+	struct cnxman_diag_rec_wire row[VMS_CLUSTER_DIAG_JOIN_ROWS];
+};
+
+struct vms_cluster_diag_join_args {
+	uint32_t first;
+	uint32_t status;
+	struct cnxman_diag_view_wire view;
+};
+
+/*
  * VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8). Byte-for-byte the same struct as
  * src/kernel/vms_ioctl.h -- see that header for $SETCLUEVT's registration
  * semantics and the process-death safety hook.
@@ -641,6 +687,8 @@ struct vms_cluster_getsyi_args {
 #define VMS_IOCTL_CLUSTER_SETCLUEVT    _IOWR(VMS_LOCK_IOC_MAGIC, 0x6b, struct vms_cluster_setcluevt_args)
 /* FC-P3.9: NR 0x6c, same magic and NR byte as src/kernel/vms_ioctl.h. */
 #define VMS_IOCTL_CLUSTER_GETSYI       _IOWR(VMS_LOCK_IOC_MAGIC, 0x6c, struct vms_cluster_getsyi_args)
+/* E69: NR 0x6d, same magic and NR byte as src/kernel/vms_ioctl.h. */
+#define VMS_IOCTL_CLUSTER_DIAG_JOIN    _IOWR(VMS_LOCK_IOC_MAGIC, 0x6d, struct vms_cluster_diag_join_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -696,5 +744,11 @@ _Static_assert(sizeof(struct vms_cluster_diag_csb_args) == 144,
                "vms_cluster_diag_csb_args changed size -- VMS_IOCTL_CLUSTER_DIAG_CSB ABI break");
 _Static_assert(sizeof(struct vms_cluster_setcluevt_args) == 24,
                "vms_cluster_setcluevt_args changed size -- VMS_IOCTL_CLUSTER_SETCLUEVT ABI break");
+_Static_assert(sizeof(struct cnxman_diag_rec_wire) == 32,
+               "cnxman_diag_rec_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
+               "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
+               "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

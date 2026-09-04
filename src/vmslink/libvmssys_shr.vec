@@ -242,3 +242,9 @@ vms_kif_cluster_diag_conn=PROCEDURE
 vms_kif_cluster_diag_csb=PROCEDURE
 vms_kif_cluster_getsyi=PROCEDURE
 vms_kif_cluster_setcluevt=PROCEDURE
+# E69 (docs/cluster-integration-notes.md): the CONNECTION MANAGER's join
+# TRANSITION RING. SYS$SYSTEM:CNXTRACE.EXE reads it through this wrapper to
+# print the executive's own join transcript to SYS$OUTPUT -- the executive has
+# no console log, so this is the only route that transcript has out. APPENDED
+# per the append-only contract -- never shifts an existing index.
+vms_kif_cluster_diag_join=PROCEDURE

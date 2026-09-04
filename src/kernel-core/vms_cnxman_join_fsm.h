@@ -193,6 +193,11 @@
 #include "vms_cluster_codec_cm.h"
 #include "vms_mscp_cl_fsm.h"
 
+/* The transition ring (E69). Observability only: a NULL ring is the normal
+ * wiring for every caller that does not want a transcript, and this FSM's
+ * behaviour is bit-identical with and without one. */
+struct cnxman_diag_ring;
+
 /* ==========================================================================
  * 1. Constants
  * ========================================================================== */
@@ -433,6 +438,17 @@ struct cnxman_join {
 	 * instead of forwarding. */
 	struct cnxman_barrier        *barrier;
 
+	/*
+	 * The E69 transition ring, or NULL. RECORDING ONLY -- nothing this FSM
+	 * does is conditional on it, no handler consults it, and every write to
+	 * it is a bounded store into a caller-owned buffer. Installed after
+	 * cnxman_join_init() (which zeroes this struct) by
+	 * cnxman_join_set_diag(); production installs the one the connection
+	 * manager allocates beside itself, host tests install a stack ring, and
+	 * a build that wants no diagnostics installs none.
+	 */
+	struct cnxman_diag_ring      *diag;
+
 	uint8_t  state;              /* enum cnxman_join_state               */
 	uint8_t  failure;            /* enum cnxman_join_failure             */
 	uint8_t  lookups_hit;        /* names the member really HOSTS        */
@@ -572,6 +588,19 @@ void cnxman_join_set_cfg(struct cnxman_join *j,
 /* Install (or, with NULL, detach) the transition barrier this join hands off
  * to at the op-0x0a GO. */
 void cnxman_join_set_barrier(struct cnxman_join *j, struct cnxman_barrier *b);
+
+/*
+ * Install (or, with NULL, detach) the E69 transition ring this join records
+ * into. Call AFTER cnxman_join_init(), which zeroes the context.
+ *
+ * OBSERVABILITY ONLY (INV-6). Installing a ring changes no state, arms no
+ * timer, sends nothing and alters no decision this FSM makes; removing one
+ * loses history and nothing else. The ring's own serialization is the
+ * CALLER's -- in production every join event is already dispatched from the
+ * one cluster fork context under the fork mutex, and the diagnostics ioctl
+ * reads under that same mutex, so this adds no lock and no ordering.
+ */
+void cnxman_join_set_diag(struct cnxman_join *j, struct cnxman_diag_ring *r);
 
 /* ==========================================================================
  * 7. Events -- one entry point per FACT

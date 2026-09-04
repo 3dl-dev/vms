@@ -464,6 +464,16 @@ uint32_t vms_kif_cluster_diag_conn(struct vms_cluster_diag_conn_args *args);
 uint32_t vms_kif_cluster_diag_csb(struct vms_cluster_diag_csb_args *args);
 
 /*
+ * vms_kif_cluster_diag_join - VMS_IOCTL_CLUSTER_DIAG_JOIN (E69): the
+ * connection manager's join TRANSITION RING plus the join FSM's live state.
+ * Same terms as the three above -- read-only, the caller sets `first`, the
+ * wrapper interprets nothing, and SS$_NOSUCHDEV with an all-zero view is the
+ * honest answer on a node whose connection manager is not up.
+ * WIRED: SYS$SYSTEM:CNXTRACE.EXE (tools/vms_cnxtrace.c).
+ */
+uint32_t vms_kif_cluster_diag_join(struct vms_cluster_diag_join_args *args);
+
+/*
  * vms_kif_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): $GETSYI's
  * cluster item codes, projected from the connection manager's CLUB. WIRED:
  * sys$getsyi/sys$getsyiw (src/libvms/syssvc/sys_misc.c) answer every cluster

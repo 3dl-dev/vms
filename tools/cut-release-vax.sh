@@ -57,7 +57,7 @@
 #                      DCL.EXE, LOGINOUT.EXE, OVMXDUMP, LIBRARIAN.EXE,
 #                      INSTALL.EXE, PRODUCT.EXE, HELP.EXE, AUTHORIZE.EXE,
 #                      MAIL.EXE, MONITOR.EXE, INITIALIZE.EXE, SYSGEN.EXE,
-#                      PARTS.EXE as of this writing, plus LINK.EXE if a
+#                      CNXTRACE.EXE, PARTS.EXE as of this writing, plus LINK.EXE if a
 #                      future rung gives it a vax role -- CMakeLists.txt's
 #                      `_OVMX_IMAGES_DEPS` is
 #                      authoritative, not this comment), ordinary dynamic

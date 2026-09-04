@@ -1143,6 +1143,32 @@ uint32_t vms_kif_cluster_diag_csb(struct vms_cluster_diag_csb_args *args)
 }
 
 /*
+ * vms_kif_cluster_diag_join - VMS_IOCTL_CLUSTER_DIAG_JOIN (E69). The
+ * connection manager's JOIN TRANSITION RING plus the join FSM's live state,
+ * which SYS$SYSTEM:CNXTRACE.EXE prints to SYS$OUTPUT so a lab console capture
+ * records what the executive's join actually did.
+ *
+ * Same shape and same discipline as the three diagnostics reads above: the
+ * caller sets `first` and this wrapper interprets nothing. `args->status`
+ * carries the executive's own answer INCLUDING the honest SS$_NOSUCHDEV for a
+ * connection manager that is not up -- and the view stays all-zero then, which
+ * a caller must render as "no connection manager", never as an empty
+ * transcript (INV-6).
+ */
+uint32_t vms_kif_cluster_diag_join(struct vms_cluster_diag_join_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_CLUSTER_DIAG_JOIN, args);
+
+    return args->status;
+}
+
+/*
  * vms_kif_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9). $GETSYI's
  * cluster item codes, read from the connection manager's CLUB. WIRED:
  * sys$getsyi/sys$getsyiw (src/libvms/syssvc/sys_misc.c) answer

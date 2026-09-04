@@ -39,6 +39,7 @@
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_barrier_fsm.h"
 #include "vms_cnxman_join_fsm.h"
+#include "vms_cnxman_diag.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_cluster_codec_mscp.h"
 #include "vms_mscp_cl_fsm.h"
@@ -99,6 +100,53 @@ static void join_log(const struct cnxman_join *j, const char *msg)
 {
 	if (j->ops != NULL && j->ops->log != NULL)
 		j->ops->log(j->ops->ctx, msg);
+}
+
+/* ==========================================================================
+ * The E69 transition ring -- OBSERVABILITY ONLY
+ *
+ * Three call sites in this file record into it (the [state][event] dispatcher,
+ * the CM/MSCP emit paths, and the entry points that decide WITHOUT the table),
+ * and every one of them is a store with no return value: nothing below reads
+ * the ring, branches on it, or fails because of it. The clock is this FSM's
+ * OWN injected one -- a pure TU may not read a clock, and the ring may not
+ * introduce the one exception (gate RULE4).
+ * ========================================================================== */
+
+static uint32_t join_now_ms(const struct cnxman_join *j)
+{
+	if (j->ops != NULL && j->ops->now_ms != NULL)
+		return j->ops->now_ms(j->ops->ctx);
+	return 0u;   /* honest: no clock is bound, not "time zero" */
+}
+
+/* An EMIT record for a body this node built. `cat`/`op` are read back out of
+ * the bytes really handed to SCS by the caller -- never the builder's intent. */
+static void join_diag_emit(const struct cnxman_join *j, uint8_t cat, uint8_t op,
+			   enum cnxman_diag_gate gate, int32_t rc,
+			   uint32_t conid)
+{
+	cnxman_diag_emit(j->diag, join_now_ms(j), j->state, cat, op,
+			 (uint8_t)gate, rc, conid);
+}
+
+/* An ARRIVAL record: a real fact reached an entry point and did NOT reach the
+ * [state][event] table -- with the reason it stopped. */
+static void join_diag_arrival(const struct cnxman_join *j, uint8_t event,
+			      enum cnxman_diag_reason reason, int32_t rc,
+			      uint32_t aux)
+{
+	cnxman_diag_arrival(j->diag, join_now_ms(j), j->state, event,
+			    (uint8_t)reason, rc, aux);
+}
+
+/* The (category, opcode) an inbound frame REALLY carried, packed into the
+ * ring's one `aux` longword: category in bits 8-15, opcode in bits 0-7. Both
+ * come from the parsed envelope -- the frame's own bytes, never a guess about
+ * what it should have been. */
+static uint32_t join_diag_catop(const struct vms_cm_envelope *env)
+{
+	return ((uint32_t)env->category << 8) | (uint32_t)env->opcode;
 }
 
 static const char *const join_state_names[CNXMAN_JOIN_STATE__COUNT] = {
@@ -181,14 +229,55 @@ static struct vms_csb *join_target_csb(struct cnxman_join *j)
  * never reaches here, and a send that failed is COUNTED and named.
  * ========================================================================== */
 
+/*
+ * WHICH precondition of an origination is unmet. Split out of join_emit_cm()'s
+ * one compound test because "the burst did not go out" has three completely
+ * different diagnoses -- no CSB to stamp an envelope from, no OPEN
+ * VMS$VAXcluster connection to put it on, or no send op bound at all -- and
+ * E69 exists to tell them apart on a live cluster. Returns
+ * CNXMAN_DIAG_G_SENT when every precondition holds.
+ */
+static enum cnxman_diag_gate join_emit_gate(const struct cnxman_join *j,
+					    const struct vms_csb *csb)
+{
+	if (csb == NULL)
+		return CNXMAN_DIAG_G_NO_CSB;
+	if (!j->cm_open)
+		return CNXMAN_DIAG_G_NO_CONN;
+	if (j->jops == NULL || j->jops->send_msg == NULL)
+		return CNXMAN_DIAG_G_NO_OPS;
+	return CNXMAN_DIAG_G_SENT;
+}
+
+/*
+ * The (category, opcode) of the body sitting in `scratch`, READ BACK OUT of
+ * the bytes themselves through the codec (vms_cm_body_kind) rather than taken
+ * from whichever builder ran. INV-6: the ring reports what is being sent, not
+ * what the caller meant to send -- a builder that wrote the wrong opcode is
+ * precisely the class of defect this instrument has to be able to show. A body
+ * the codec cannot read leaves both zero, which the renderer prints verbatim.
+ */
+static void join_body_kind(const struct cnxman_join *j, uint8_t *cat,
+			   uint8_t *op)
+{
+	*cat = 0u;
+	*op  = 0u;
+	(void)vms_cm_body_kind(j->scratch, (uint32_t)sizeof(j->scratch),
+			       cat, op);
+}
+
 static int join_emit_cm(struct cnxman_join *j, int is_response)
 {
 	struct vms_csb *csb = join_target_csb(j);
+	enum cnxman_diag_gate gate = join_emit_gate(j, csb);
+	uint8_t cat, op;
 	int rc;
 
-	if (csb == NULL || !j->cm_open ||
-	    j->jops == NULL || j->jops->send_msg == NULL) {
+	join_body_kind(j, &cat, &op);
+
+	if (gate != CNXMAN_DIAG_G_SENT) {
 		j->send_failures++;
+		join_diag_emit(j, cat, op, gate, 0, j->cm_conid);
 		return -1;
 	}
 
@@ -207,18 +296,25 @@ static int join_emit_cm(struct cnxman_join *j, int is_response)
 			       VMS_CM_BODY_LEN);
 	if (rc != 0) {
 		j->send_failures++;
+		join_diag_emit(j, cat, op, CNXMAN_DIAG_G_REFUSED, (int32_t)rc,
+			       j->cm_conid);
 		return -1;
 	}
+	join_diag_emit(j, cat, op, CNXMAN_DIAG_G_SENT, 0, j->cm_conid);
 	return 0;
 }
 
 /* A codec refusal and a send refusal are different facts and are counted as
- * such; a codec refusal ends the join honestly rather than silently. */
+ * such; a codec refusal ends the join honestly rather than silently. There is
+ * no body when the codec refuses, so the ring records the refusal with both
+ * wire bytes explicitly zero -- an omission, not a message. */
 static int join_build_failed(struct cnxman_join *j, vms_codec_status_t st)
 {
 	if (st == VMS_CODEC_OK)
 		return 0;
 	j->codec_failures++;
+	join_diag_emit(j, 0u, 0u, CNXMAN_DIAG_G_CODEC, (int32_t)st,
+		       j->cm_conid);
 	join_fail(j, CNXMAN_JOIN_FAIL_CODEC,
 		  "%CNXMAN, could not build a VMS$VAXcluster message");
 	return 1;
@@ -705,12 +801,33 @@ static enum cnxman_join_rx join_h_mscp_opened(struct cnxman_join *j,
  * filling them in here would not be.
  * ========================================================================== */
 
+/* The P.OPCD byte of the command in `mscp_frame`, read back through the MSCP
+ * codec for the same reason join_body_kind() reads the CM pair back: the ring
+ * reports the command really being sent. */
+static uint8_t join_mscp_opcode(const struct cnxman_join *j)
+{
+	uint8_t op = 0u;
+
+	(void)vms_mscp_read_opcode(j->mscp_frame,
+				   (uint32_t)sizeof(j->mscp_frame), &op);
+	return op;
+}
+
 static int join_mscp_emit(struct cnxman_join *j)
 {
+	uint8_t op = join_mscp_opcode(j);
 	int rc;
 
-	if (j->jops == NULL || j->jops->send_msg == NULL || !j->mscp_open) {
+	if (!j->mscp_open) {
 		j->send_failures++;
+		join_diag_emit(j, CNXMAN_DIAG_CAT_MSCP, op,
+			       CNXMAN_DIAG_G_NO_CONN, 0, j->mscp_conid);
+		return -1;
+	}
+	if (j->jops == NULL || j->jops->send_msg == NULL) {
+		j->send_failures++;
+		join_diag_emit(j, CNXMAN_DIAG_CAT_MSCP, op,
+			       CNXMAN_DIAG_G_NO_OPS, 0, j->mscp_conid);
 		return -1;
 	}
 	rc = j->jops->send_msg(j->jops->ctx, j->mscp_conid,
@@ -718,9 +835,14 @@ static int join_mscp_emit(struct cnxman_join *j)
 			       VMS_MSCP_CMD_BODY_LEN);
 	if (rc != 0) {
 		j->send_failures++;
+		join_diag_emit(j, CNXMAN_DIAG_CAT_MSCP, op,
+			       CNXMAN_DIAG_G_REFUSED, (int32_t)rc,
+			       j->mscp_conid);
 		return -1;
 	}
 	j->mscp_cmds_sent++;
+	join_diag_emit(j, CNXMAN_DIAG_CAT_MSCP, op, CNXMAN_DIAG_G_SENT, 0,
+		       j->mscp_conid);
 	return 0;
 }
 
@@ -747,6 +869,8 @@ static void join_mscp_send_scc(struct cnxman_join *j)
 				       (uint32_t)sizeof(j->mscp_frame), NULL);
 	if (st != VMS_CODEC_OK) {
 		j->codec_failures++;
+		join_diag_emit(j, CNXMAN_DIAG_CAT_MSCP, 0u,
+			       CNXMAN_DIAG_G_CODEC, (int32_t)st, j->mscp_conid);
 		return;
 	}
 	(void)join_mscp_emit(j);
@@ -762,6 +886,8 @@ static void join_mscp_send_gus(struct cnxman_join *j)
 				       (uint32_t)sizeof(j->mscp_frame), NULL);
 	if (st != VMS_CODEC_OK) {
 		j->codec_failures++;
+		join_diag_emit(j, CNXMAN_DIAG_CAT_MSCP, 0u,
+			       CNXMAN_DIAG_G_CODEC, (int32_t)st, j->mscp_conid);
 		return;
 	}
 	(void)join_mscp_emit(j);
@@ -1307,23 +1433,74 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
  * Dispatch
  * ========================================================================== */
 
+/*
+ * The ONE fact about an event this ring can carry beyond its name (E69). Which
+ * one it is depends on the event, so the mapping is stated here once rather
+ * than at each of the eight entry points -- and every value is a field the
+ * caller really supplied, never a composed identity.
+ *
+ * A 48-bit SCSSYSTEMID does not fit a longword, so a peer identity is recorded
+ * TRUNCATED to its low 32 bits and the record's own documentation says so: it
+ * is a correlation aid for a transcript, and a reader must not treat it as the
+ * system id (INV-6 -- half an identity is not an identity).
+ */
+static uint32_t join_ev_aux(enum cnxman_event ev, const struct join_ev *e)
+{
+	switch (ev) {
+	case CNXMAN_EV_CDT_OPEN:
+	case CNXMAN_EV_CDT_CLOSED:
+	case CNXMAN_EV_MSCP_END:
+		return (uint32_t)e->conid;
+	case CNXMAN_EV_CM_ACCEPTED:
+		return (uint32_t)e->from_sysid;   /* low 32 bits, see above */
+	case CNXMAN_EV_DIR_RESULT:
+		return e->present ? 1u : 0u;      /* HIT vs "NOT PRESENT HERE" */
+	case CNXMAN_EV_CSID_LEARNED:
+		return (uint32_t)e->csid;
+	default:
+		return 0u;
+	}
+}
+
+/*
+ * EVERY [state][event] pair this FSM evaluates passes through here, so ONE
+ * record per dispatch is a complete transcript of the machine -- including the
+ * EMPTY CELLS, which are the interesting ones: an event the evidence does not
+ * connect to the state it arrived in is counted as `ignored_events` and, from
+ * the wire alone, is indistinguishable from an event that never arrived. The
+ * record carries the state BEFORE and AFTER the handler, so a transition that
+ * fired and a handler that ran and changed nothing read differently.
+ */
 static enum cnxman_join_rx join_dispatch(struct cnxman_join *j,
 					 enum cnxman_event ev,
 					 const struct join_ev *e)
 {
 	join_handler_t h;
+	uint8_t before;
+	uint32_t aux;
+	enum cnxman_join_rx rx;
 
 	if ((unsigned)j->state >= (unsigned)CNXMAN_JOIN_STATE__COUNT)
 		return CNXMAN_JOIN_RX_BAD;
 	if ((unsigned)ev >= (unsigned)CNXMAN_EV__COUNT)
 		return CNXMAN_JOIN_RX_BAD;
 
+	before = j->state;
+	aux = join_ev_aux(ev, e);
+
 	h = join_table[j->state][ev];
 	if (h == NULL) {
 		j->ignored_events++;
+		cnxman_diag_dispatch(j->diag, join_now_ms(j), before, j->state,
+				     (uint8_t)ev, 0,
+				     (uint8_t)CNXMAN_JOIN_RX_CONSUMED, aux);
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
-	return h(j, e);
+
+	rx = h(j, e);
+	cnxman_diag_dispatch(j->diag, join_now_ms(j), before, j->state,
+			     (uint8_t)ev, 1, (uint8_t)rx, aux);
+	return rx;
 }
 
 /* ==========================================================================
@@ -1456,6 +1633,12 @@ void cnxman_join_set_barrier(struct cnxman_join *j, struct cnxman_barrier *b)
 		j->barrier = b;
 }
 
+void cnxman_join_set_diag(struct cnxman_join *j, struct cnxman_diag_ring *r)
+{
+	if (j != NULL)
+		j->diag = r;
+}
+
 /* ==========================================================================
  * Events
  * ========================================================================== */
@@ -1500,7 +1683,6 @@ void cnxman_join_rejected(struct cnxman_join *j, vms_conid_t conid,
 {
 	if (j == NULL)
 		return;
-	(void)reason;
 	/*
 	 * The disk-client connect asserted no version identity, so its refusal
 	 * is not the p. 2-25 verdict and not a join failure (E68). Counted,
@@ -1508,6 +1690,9 @@ void cnxman_join_rejected(struct cnxman_join *j, vms_conid_t conid,
 	 */
 	if (j->mscp_conid != 0u && conid == j->mscp_conid) {
 		j->mscp_rejected++;
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_MSCP_REJ, (int32_t)reason,
+				  (uint32_t)conid);
 		join_log(j, "%CNXMAN, the member refused this node's MSCP$DISK "
 			    "disk-client connection: no disk discovery from it, "
 			    "and the join goes on");
@@ -1518,8 +1703,13 @@ void cnxman_join_rejected(struct cnxman_join *j, vms_conid_t conid,
 	 * business; anything else belongs to whoever opened it. */
 	if (j->cm_conid == 0u || conid != j->cm_conid) {
 		j->ignored_events++;
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_NOT_OURS, (int32_t)reason,
+				  (uint32_t)conid);
 		return;
 	}
+	join_diag_arrival(j, CNXMAN_DIAG_EV_NONE, CNXMAN_DIAG_R_CM_REJ,
+			  (int32_t)reason, (uint32_t)conid);
 	/*
 	 * Book p. 2-25 / correction D12: the Connection Managers identify their
 	 * version to each other in the 16-byte connect data and REJECT a
@@ -1616,10 +1806,20 @@ enum cnxman_join_rx cnxman_join_rx_frame(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_BAD;
 
 	join_bzero(&e, (uint32_t)sizeof(e));
-	if (vms_frame_classify(frame, len, &e.fi) != VMS_CODEC_OK)
+	if (vms_frame_classify(frame, len, &e.fi) != VMS_CODEC_OK) {
+		/* A body that does not classify never reaches the table, so
+		 * without this record it would be indistinguishable from a
+		 * frame that never arrived (E69). `aux` carries its length --
+		 * the E67 wall was decoded from exactly that. */
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_UNPARSED, 0, len);
 		return CNXMAN_JOIN_RX_BAD;
-	if (vms_cm_envelope_parse(frame, len, &e.fi, &e.env) != VMS_CODEC_OK)
+	}
+	if (vms_cm_envelope_parse(frame, len, &e.fi, &e.env) != VMS_CODEC_OK) {
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_UNPARSED, 0, len);
 		return CNXMAN_JOIN_RX_BAD;
+	}
 
 	e.frame = frame;
 	e.len = len;
@@ -1638,12 +1838,23 @@ enum cnxman_join_rx cnxman_join_rx_frame(struct cnxman_join *j,
 	 * transition: counted, never answered (spec sec 4(u)). */
 	if (e.env.category == VMS_CM_CAT_ACK) {
 		j->peer_acks++;
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_PEER_ACK, 0,
+				  join_diag_catop(&e.env));
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 
 	ev = join_event_of(&e.env);
-	if (ev == CNXMAN_EV__COUNT)
+	if (ev == CNXMAN_EV__COUNT) {
+		/* A real CM frame no cell of THIS table owns. Recorded with the
+		 * (category, opcode) it really carried, because "the join saw a
+		 * frame it does not handle" and "nothing arrived" are different
+		 * diagnoses and the wire cannot tell them apart. */
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_NOT_MINE, 0,
+				  join_diag_catop(&e.env));
 		return CNXMAN_JOIN_RX_NOT_MINE;
+	}
 	return join_dispatch(j, ev, &e);
 }
 
@@ -1678,11 +1889,15 @@ int cnxman_join_connect_req(struct cnxman_join *j, vms_scs_sysid_t peer,
 	csb = cnxman_club_find_sysid(&j->cl->club, peer);
 	if (csb == NULL) {
 		j->inbound_refused++;
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_REFUSED, 0, (uint32_t)peer);
 		join_log(j, "%CNXMAN, refused a VMS$VAXcluster connection from "
 			    "a system with no cluster system block");
 		return -1;
 	}
 	j->inbound_accepted++;
+	join_diag_arrival(j, CNXMAN_DIAG_EV_NONE, CNXMAN_DIAG_R_ACCEPTED, 0,
+			  (uint32_t)peer);
 	return 0;
 }
 

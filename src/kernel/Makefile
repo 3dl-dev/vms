@@ -167,6 +167,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_cluster_codec_mscp.o \
          ../kernel-core/vms_mscp_cl_fsm.o \
          ../kernel-core/vms_cnxman_join_fsm.o \
+         ../kernel-core/vms_cnxman_diag.o \
          ../kernel-core/vms_cnxman.o \
          ../kernel-core/vms_mscp_srv_fsm.o \
          ../kernel-core/vms_mscp_srv.o \

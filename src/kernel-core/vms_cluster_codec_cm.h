@@ -313,6 +313,28 @@ vms_codec_status_t vms_cm_envelope_parse(const uint8_t *frame, uint32_t len,
 					 const struct vms_frame_info *fi,
 					 struct vms_cm_envelope *out);
 
+/*
+ * vms_cm_body_kind - read the (category, opcode) pair out of a 132-byte CM
+ * BODY, rather than out of a received 204-byte frame.
+ *
+ * WHY IT EXISTS. Every ORIGINATING builder in sec 5/5b writes a body buffer
+ * (design sec 3.2.4 ruling E1); vms_cm_envelope_parse() above reads a received
+ * FRAME through the frame-absolute offsets and needs a struct vms_frame_info
+ * an outbound body has never been classified into. A caller that wants to
+ * report WHICH message it is about to send -- the FC-P3.3 diagnostics ring,
+ * vms_cnxman_diag.h -- must therefore read the two bytes it is really sending
+ * (INV-6: report the bytes, never the intent). Doing that at the call site
+ * would put a raw wire offset outside a codec TU, which design sec 3.9 rule 2
+ * forbids; so it is done here, through the SAME VMS_OFB_CM_* constants the
+ * builders write, which are themselves derived arithmetically from the
+ * frame-absolute pair. There is no third addressing scheme.
+ *
+ * `body` must be at least VMS_OFB_CM_OPCODE + 1 bytes; a shorter buffer is
+ * VMS_CODEC_E_RANGE and nothing is written. Either out-pointer may be NULL.
+ */
+vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
+				    uint8_t *out_category, uint8_t *out_opcode);
+
 /* ------------------------------------------------------------------ *
  * sec 3  The abs [0,72) span -- NOT this file's business since FC-P3.15
  *

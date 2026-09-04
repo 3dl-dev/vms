@@ -240,6 +240,8 @@ COPY src/kernel-core/vms_mscp_cl_fsm.c       /netbsd/guest-src/kernel-core/vms_m
 COPY src/kernel-core/vms_mscp_cl_fsm.h       /netbsd/guest-src/kernel-core/vms_mscp_cl_fsm.h
 COPY src/kernel-core/vms_cnxman_join_fsm.c   /netbsd/guest-src/kernel-core/vms_cnxman_join_fsm.c
 COPY src/kernel-core/vms_cnxman_join_fsm.h   /netbsd/guest-src/kernel-core/vms_cnxman_join_fsm.h
+COPY src/kernel-core/vms_cnxman_diag.c       /netbsd/guest-src/kernel-core/vms_cnxman_diag.c
+COPY src/kernel-core/vms_cnxman_diag.h       /netbsd/guest-src/kernel-core/vms_cnxman_diag.h
 COPY src/kernel-core/vms_cnxman.c            /netbsd/guest-src/kernel-core/vms_cnxman.c
 # --- FC-P6.3: the MSCP disk SERVER. vms_mscp_srv_fsm.c is the pure server
 # (UQB/HQB/HRB + the [state][event] table) and vms_mscp_srv.c is its executive

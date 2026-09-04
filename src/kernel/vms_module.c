@@ -1975,6 +1975,16 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_cluster_diag_conn(NULL, arg);
     if (cmd == VMS_IOCTL_CLUSTER_DIAG_CSB)
         return vms_ioctl_cluster_diag_csb(NULL, arg);
+    /*
+     * E69 joins the same DISPATCH-ALWAYS group for the same reason: the join
+     * transition ring is a read-only projection of real executive state, and
+     * the whole point of it is that a node whose join is stuck can still be
+     * read -- gating it behind a registration would reproduce the exact E47
+     * bug (an honest "not started" read failing with -ESRCH before the
+     * handler ever runs).
+     */
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_JOIN)
+        return vms_ioctl_cluster_diag_join(NULL, arg);
 
     /* All other ioctls require a registered process */
     proc = vms_proc_find_or_err();

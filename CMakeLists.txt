@@ -1078,8 +1078,17 @@ if(BUILD_TOOLS)
         vms_monitor          # MONITOR.EXE
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
+        vms_cnxtrace         # CNXTRACE.EXE
         PARTS                # PARTS.EXE
     )
+
+    # CNXTRACE.EXE is in the aggregate on PURPOSE, on both arches (E69). It
+    # reads the connection manager's join transition ring out of the executive
+    # and prints it to SYS$OUTPUT; the executive has no console log, so on a
+    # node whose cluster join stalls it is the only way the evidence gets out.
+    # The cluster stack is executive-resident on BOTH substrates (vms.ko and
+    # vms.kmod), so the diagnostic that reads it has a role on both -- this is
+    # not a Decision-A split and must never become an allowlist entry.
 
     # SCSD.EXE is NOT in this aggregate, and the omission is the point:
     # FC-P3.9 deleted the image and its source with the userspace SCS

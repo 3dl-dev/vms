@@ -107,6 +107,11 @@ add_library(cluster_host_cnxman STATIC
     # in cluster_host_codec (it is a pure codec-level TU), and hands off to
     # FC-P3.5's barrier, which is already in this library.
     ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_join_fsm.c  # FC-P3.3
+    # E69: the join's transition ring. A pure TU on the same terms (no seam,
+    # no allocation, no clock) that the join records into and the
+    # CLUSTER_DIAG_JOIN ioctl reads back; it joins THIS library because the
+    # join FSM references it directly.
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cnxman_diag.c      # E69
     # FC-P4.3: the Lock Directory Weight Vector. A pure TU on exactly the
     # same terms (no seam call, no allocation, no clock), and it joins THIS
     # library rather than getting its own because Phase 2's commit and both
@@ -144,6 +149,14 @@ cluster_host_cnxman_test(test_cnxman_coord   test_cnxman_coord.c vms_frame_compo
 # FC-P3.3: the join. Same terms; it also needs the MSCP end-message builders
 # (already in cluster_host_codec, which cluster_host_cnxman links).
 cluster_host_cnxman_test(test_cnxman_join    test_cnxman_join.c vms_frame_compose.c)     # FC-P3.3
+
+# E69: the join's transition ring, and the two copies of its name tables. The
+# test includes the USERLAND dumper's own table header (tools/cnxtrace_names.h)
+# alongside the executive's renderers and compares them ordinal by ordinal, so
+# the one thing nothing else can catch -- a name that drifted between the
+# executive and the image that prints it -- is a red host test.
+cluster_host_cnxman_test(test_cnxman_diag    test_cnxman_diag.c)                          # E69
+target_include_directories(test_cnxman_diag PRIVATE ${CMAKE_SOURCE_DIR}/tools)
 
 # FC-P4.3's R1: the Lock Directory Weight Vector against the published worked
 # example (Davis p. 6-33), the all-zero-weight rule, own-entries-0, CSV-index
@@ -495,6 +508,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cnxman_barrier_fsm.c # FC-P3.5
     hdr_alone_vms_cnxman_coord_fsm.c  # FC-P3.12
     hdr_alone_vms_cnxman_join_fsm.c   # FC-P3.3
+    hdr_alone_vms_cnxman_diag.c       # E69
     hdr_alone_vms_pe_fsm.c            # FC-P0.8
     hdr_alone_vms_scs_fsm.c           # FC-P2.2
     hdr_alone_vms_scs_dir.c           # FC-P2.3

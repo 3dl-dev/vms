@@ -320,4 +320,30 @@ void cnxman_envelope_stamp(const struct vms_csb *csb,
 void cnxman_csb_dialogue_sent(struct vms_csb *csb);
 void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg);
 
+/*
+ * ASSIGN this dialogue's next send-msg# and STAMP the body with it, in that
+ * order -- the two calls above, fused, because doing them in the other order
+ * or in two different places is how a duplicate got onto the wire (E73).
+ *
+ * THE DEFECT THIS CLOSES. The join advanced the counter itself before
+ * stamping (correct: its first message to a peer carries 1), while the
+ * barrier and the coordinator stamped first and let vms_cnxman.c's transport
+ * thunks advance AFTER the send. Both are individually monotonic, but they are
+ * one apart in PHASE -- and they share a CSB, because the member a join is
+ * driven through is the coordinator whose transition the barrier then answers.
+ * So the first barrier-side body stamped after the join's last one repeated
+ * its send-msg#, on the one connection that matters, at the exact moment the
+ * admission dialogue hands over to the transition. Spec sec 4(j) measured
+ * "strictly monotonic per sender" over 17 539 of 17 541 golden frames (the two
+ * residuals are retransmits, which repeat a number deliberately); a fresh
+ * origination that repeats one is not something a real node does.
+ *
+ * EVERY origination and every response now goes through this one function, and
+ * the transport thunks advance nothing. `is_response` is the stamper's own
+ * flag: a response leaves the echoed txn/token the codec already copied.
+ */
+void cnxman_envelope_originate(struct vms_csb *csb,
+			       uint8_t body[132] /* VMS_CM_BODY_LEN */,
+			       int is_response);
+
 #endif /* OVMX_VMS_CNXMAN_CSB_H */

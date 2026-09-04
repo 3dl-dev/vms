@@ -93,8 +93,34 @@ enum cnxman_timer {
  */
 struct cnxman_ops {
 	/* Send one CM message on the VMS$VAXcluster connection to `dst`.
-	 * Production: scs_send_msg on the CSB's CDT. 0 = sent (above). */
+	 * Production: scs_send_msg on the CSB's CDT. 0 = sent (above).
+	 *
+	 * ONLY A COORDINATOR CAN USE THIS. A CSID is an identity the cluster
+	 * ASSIGNS during an ADD transition; the coordinator assigns them and so
+	 * knows them, while a participant has no grounded wire read that names
+	 * a PEER's (integration notes E30, E73). `send_csb` below is the
+	 * participant's form.
+	 */
 	int  (*send)(void *ctx, vms_csid_t dst, const uint8_t *body, uint32_t len);
+
+	/*
+	 * Send one CM message on the VMS$VAXcluster connection of the CSB at
+	 * CLUB slot `csb_index` -- ADDRESSED BY THE CONNECTION THE EXECUTIVE
+	 * HOLDS, not by an identity this node would have to infer (E73).
+	 *
+	 * Book p. 7-23 makes a CSB "the state of the SCS connection between the
+	 * local SYS$CLUSTER and the SYS$CLUSTER residing in the system
+	 * associated with the CSB": the block IS the connection record, and the
+	 * glue resolved this slot from the Con.ID SCS really delivered on. That
+	 * is why a participant addresses its twelve barrier steps this way --
+	 * `send` cannot resolve a peer CSID that was never learned, and a
+	 * participant that cannot send its steps strands the coordinator's
+	 * barrier, which times out and drops healthy members (spec SS4(p)).
+	 * A slot that is out of range or not in use is REFUSED, never
+	 * substituted (INV-6). Production: scs_send_msg on that CSB's CDT.
+	 */
+	int  (*send_csb)(void *ctx, int32_t csb_index, const uint8_t *body,
+			 uint32_t len);
 
 	/* Answer the request currently being dispatched, on its own connection,
 	 * correlated with its transaction. Distinct from `send` because a

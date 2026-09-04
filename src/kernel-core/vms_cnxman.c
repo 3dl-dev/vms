@@ -335,22 +335,25 @@ static int cnxman_fsm_rc(int status)
 }
 
 /*
- * E1's transport half, PLUS the one bookkeeping job that belongs here and
- * nowhere else in the barrier/coordinator's own TUs: advancing the CSB's
- * outbound dialogue counters (cnxman_csb_dialogue_sent(), vms_cnxman_csb.h).
- * The join FSM resolves its own target CSB and calls this itself (design
- * sec 3.2.4 ruling E1's FC-P3.3 half); the barrier and the coordinator
- * resolve a CSB per destination but do NOT call it (confirmed by grep at
- * review time), because a message they hand to `ops->send`/`respond` has not
- * left the node until this glue's transport call actually succeeds -- so
- * this is the one place a real send is known to have happened.
+ * E1's transport half, AND NOTHING ELSE (E73).
+ *
+ * This used to advance the destination CSB's outbound dialogue counter after
+ * a successful send, on the reasoning that "a message has not left the node
+ * until this transport call succeeds". That reasoning is wrong for a counter
+ * spec sec 4(j) grounds as assigned at message CREATION: the join already
+ * advanced before stamping (its first message to a peer must carry 1), so the
+ * two halves of the same connection manager ran one apart in phase and the
+ * first barrier-side body stamped after the join's last one REPEATED its
+ * send-msg#. Every origination now goes through cnxman_envelope_originate()
+ * (vms_cnxman_csb.h), which assigns and stamps in one place, and this thunk
+ * moves bytes. A message SCS refuses BURNS its number -- a gap, never a
+ * repeat, which is exactly what the spec's monotonicity permits.
  */
 static int cnxman_ops_send(void *ctx, vms_csid_t dst, const uint8_t *body,
 			   uint32_t len)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
 	struct vms_csb *csb;
-	int status;
 
 	if (cn == NULL || cn->cl->scs == NULL)
 		return -1;
@@ -365,23 +368,40 @@ static int cnxman_ops_send(void *ctx, vms_csid_t dst, const uint8_t *body,
 	csb = cnxman_club_find_csid(&cn->cl->club, dst);
 	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u)
 		return -1;
-	status = scs_send_msg(cn->cl->scs, csb->cdt_conid, body, len);
-	if (status == SS__NORMAL)
-		cnxman_csb_dialogue_sent(csb);
-	return cnxman_fsm_rc(status);   /* E67: the ops contract is 0/nonzero */
+	return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, csb->cdt_conid, body,
+					  len));
+}
+
+/*
+ * The PARTICIPANT's origination path (E73). Same transport and the same
+ * transport as cnxman_ops_send(), addressed by the CLUB slot the
+ * executive resolved from a real Con.ID instead of by a CSID this node has no
+ * grounded way to learn for a peer. A slot out of range, not in use, or with
+ * no connection is a refusal to transmit -- never a substituted destination.
+ */
+static int cnxman_ops_send_csb(void *ctx, int32_t csb_index,
+			       const uint8_t *body, uint32_t len)
+{
+	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
+	struct vms_csb *csb;
+
+	if (cn == NULL || cn->cl->scs == NULL || csb_index < 0)
+		return -1;
+	csb = cnxman_club_csb_at(&cn->cl->club, (uint32_t)csb_index);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u)
+		return -1;
+	return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, csb->cdt_conid, body,
+					  len));
 }
 
 static int cnxman_ops_respond(void *ctx, const uint8_t *body, uint32_t len)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
-	int status;
 
 	if (cn == NULL || !cn->cur_conid_valid || cn->cl->scs == NULL)
 		return -1;
-	status = scs_send_msg(cn->cl->scs, cn->cur_conid, body, len);
-	if (status == SS__NORMAL && cn->cur_csb != NULL)
-		cnxman_csb_dialogue_sent(cn->cur_csb);
-	return cnxman_fsm_rc(status);   /* E67: the ops contract is 0/nonzero */
+	return cnxman_fsm_rc(scs_send_msg(cn->cl->scs, cn->cur_conid, body,
+					  len));
 }
 
 static void cnxman_ops_arm_timer(void *ctx, enum cnxman_timer which,
@@ -421,6 +441,7 @@ static void cnxman_ops_log(void *ctx, const char *msg)
 static void cnxman_ops_bind(struct vms_cnxman *cn)
 {
 	cn->ops.send = cnxman_ops_send;
+	cn->ops.send_csb = cnxman_ops_send_csb;
 	cn->ops.respond = cnxman_ops_respond;
 	cn->ops.arm_timer = cnxman_ops_arm_timer;
 	cn->ops.cancel_timer = cnxman_ops_cancel_timer;
@@ -925,38 +946,38 @@ static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
 	cn->cur_csb = csb;
 	cnxman_membership_snapshot(club, before);
 
-	jrx = cnxman_join_rx_frame(&cn->join, body, len, from_csid, from_valid);
+	/*
+	 * ONE OWNER, FOR EVERY MESSAGE, ON THE CSB IT REALLY ARRIVED ON (E73).
+	 * Spec sec 4(j): ack-msg# "acknowledges the peer's highest send-msg#
+	 * seen", so it is a fact about a CONNECTION, and the block the Con.ID
+	 * resolves to is the only place that fact belongs. This used to run
+	 * only for messages the join did NOT consume, on the reasoning that
+	 * the join kept its own target CSB's counters -- which silently left
+	 * every OTHER member's block un-acked, and since E73 this node holds a
+	 * real dialogue with every member it has an open connection to.
+	 * cnxman_csb_dialogue_heard() keeps a MAXIMUM, so a retransmit at a
+	 * lower number cannot walk it back.
+	 */
+	if (csb != NULL) {
+		struct vms_cm_envelope env;
+
+		if (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK)
+			cnxman_csb_dialogue_heard(csb, env.send_msg);
+	}
+
+	jrx = cnxman_join_rx_body(&cn->join, body, len, from_csid, from_valid,
+				  from_csb);
 	if (jrx == CNXMAN_JOIN_RX_CONSUMED) {
-		/* The join resolves and advances its OWN target CSB's dialogue
-		 * counters internally (cnxman_csb_dialogue_sent/_heard,
-		 * vms_cnxman_join_fsm.c) -- nothing to do here for it. */
 		cn->frames_to_join++;
 		cnxman_glue_preload_proposed(cn);
 		cnxman_notify_membership_changes(cn, before);
 		return 0;
 	}
 
-	/*
-	 * Frames reaching here are NOT the join's own dialogue, and neither
-	 * the barrier nor the coordinator records the peer's send-msg#
-	 * themselves (grep-confirmed at review time) -- this is the ONE place
-	 * that bookkeeping happens for them, exactly once per frame (design
-	 * sec 3.2.4 ruling E1's FC-P3.8 half; spec sec 4(j): "ack-msg#
-	 * acknowledges the peer's highest send-msg# seen").
-	 */
-	if (csb != NULL) {
-		struct vms_frame_info fi;
-		struct vms_cm_envelope env;
-
-		if (vms_frame_classify(body, len, &fi) == VMS_CODEC_OK &&
-		    vms_cm_envelope_parse(body, len, &fi, &env) == VMS_CODEC_OK)
-			cnxman_csb_dialogue_heard(csb, env.send_msg);
-	}
-
 	{
 		enum cnxman_barrier_rx brx =
-			cnxman_barrier_rx_frame(&cn->barrier, body, len,
-						from_csid, from_valid);
+			cnxman_barrier_rx_body(&cn->barrier, body, len,
+					       from_csid, from_valid, from_csb);
 
 		if (brx == CNXMAN_BARRIER_RX_CONSUMED) {
 			cn->frames_to_barrier++;
@@ -968,7 +989,7 @@ static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
 
 	{
 		enum cnxman_coord_rx crx =
-			cnxman_coord_rx_frame(&cn->coord, body, len, from_csb);
+			cnxman_coord_rx_body(&cn->coord, body, len, from_csb);
 
 		if (crx == CNXMAN_COORD_RX_CONSUMED) {
 			cn->frames_to_coord++;
@@ -1343,6 +1364,16 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * refused join is untouched.
 		 */
 		(void)cnxman_join_drive(cn);
+		/*
+		 * E73: and on the SAME beat, tell every member this node has
+		 * an OPEN VMS$VAXcluster connection to what this node IS.
+		 * That is a per-CSB obligation of a connection manager, not a
+		 * step of a join -- the reference's members send it too -- so
+		 * it runs here rather than out of a join state, and a member
+		 * connection that arrived before CLUSTER_START is covered like
+		 * any other. Idempotent per (peer, connection).
+		 */
+		cnxman_join_advertise_peers(&cn->join);
 		n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
 		for (i = 0; i < n; i++)
 			cnxman_act_on_recnx_rec(cn, &recs[i]);

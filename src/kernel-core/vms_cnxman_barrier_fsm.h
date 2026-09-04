@@ -224,6 +224,14 @@ struct cnxman_barrier {
 	uint8_t  phase2_committed;  /* the p. 7-42 tasks have run              */
 	uint32_t epoch;             /* body[12:16] of the open/GO              */
 	vms_csid_t coordinator_csid;
+	/*
+	 * WHERE the coordinator is, as opposed to WHO it is: the CLUB slot of
+	 * the CSB whose VMS$VAXcluster connection carried the transition, or -1
+	 * (E73). This is what every response and every one of the twelve
+	 * op-0x0b steps is addressed by, because a participant has no grounded
+	 * way to learn a peer's CSID -- see barrier_csb_at() in the .c.
+	 */
+	int32_t  coordinator_csb;
 	uint8_t  coordinator_valid; /* 0 = we could not identify the sender    */
 	uint8_t  open_seen;         /* an op-09/08/0d preceded this GO         */
 	uint8_t  bitmap;            /* body[55] as received; 0 unless valid    */
@@ -297,21 +305,29 @@ void cnxman_barrier_set_dlm(struct cnxman_barrier *b,
  * ========================================================================== */
 
 /*
- * One inbound `VMS$VAXcluster` frame. The FSM classifies it through the CM
- * codec, maps it to a shared enum cnxman_event, and dispatches the
- * [state][event] table. `from_csid` is the sender as the connection manager
- * identified it; `from_valid` is 0 when it could not -- in which case no
- * coordinator identity is recorded (a zero CSID is never "node zero").
+ * One inbound `VMS$VAXcluster` SYSAP BODY -- the 132 bytes SCS hands a SYSAP's
+ * input routine (design SS3.2.4; E73 -- it took a whole 204-byte frame until
+ * then, and therefore refused every real message the executive delivered). The
+ * FSM parses it through the CM codec, maps it to a shared enum cnxman_event,
+ * and dispatches the [state][event] table.
  *
- * Returns CNXMAN_BARRIER_RX_NOT_MINE for every CM frame another FSM owns (the
- * join dialogue's 0x02/0x03/0x05/0x06/0x14, the coordinator's inbound 0x0b,
- * the relay 0x12), so the caller routes it on rather than this file guessing.
+ * `from_csid` is the sender as the connection manager identified it and
+ * `from_valid` is 0 when it could not -- in which case no coordinator IDENTITY
+ * is recorded (a zero CSID is never "node zero"). `from_csb` is the CLUB slot
+ * of the CSB whose connection carried it, or -1: the coordinator's ADDRESS,
+ * which is a different fact and the one this FSM answers and originates on.
+ *
+ * Returns CNXMAN_BARRIER_RX_NOT_MINE for every CM message another FSM owns
+ * (the join dialogue's 0x02/0x03/0x05/0x06/0x14, the coordinator's inbound
+ * 0x0b, the relay 0x12), so the caller routes it on rather than this file
+ * guessing.
  */
-enum cnxman_barrier_rx cnxman_barrier_rx_frame(struct cnxman_barrier *b,
-					       const uint8_t *frame,
-					       uint32_t len,
-					       vms_csid_t from_csid,
-					       int from_valid);
+enum cnxman_barrier_rx cnxman_barrier_rx_body(struct cnxman_barrier *b,
+					      const uint8_t *body,
+					      uint32_t len,
+					      vms_csid_t from_csid,
+					      int from_valid,
+					      int32_t from_csb);
 
 /*
  * The barrier watchdog (CNXMAN_TIMER_BARRIER). INSTRUMENT ONLY. Spec SS4(p):

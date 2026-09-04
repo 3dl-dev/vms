@@ -17,32 +17,28 @@
 #include "vms_cluster_codec_cm.h"
 
 /* ------------------------------------------------------------------ *
- * Shared class gate
+ * Shared BODY gate (E73)
+ *
+ * What a SYSAP is handed on receive is its own 132 bytes and nothing below
+ * them (design sec 3.2.4: SCS "calls scs_sysap_ops.message(ctx, local_conid,
+ * frame + 72, inner_len - 16)"; vms_scs_fsm.c h_rx_appl_msg does exactly
+ * that). The gate this file used to apply -- vms_frame_classify() plus
+ * fi->cls == VMS_FCLS_SCS_MSG -- reads the ETHERTYPE at abs 12 and therefore
+ * refuses EVERY real inbound CM message: see the VMS_OFB_CM_* block in the
+ * header for the live run in which it lost VAX2's op-0x03 membership COMMIT.
+ *
+ * So the gate is a LENGTH gate now, and the length is exact: spec sec 4(d)
+ * makes the VMS$VAXcluster class a fixed 190-content frame whose SYSAP body
+ * is 132 bytes, and there is no shorter grounded CM message. Half a body is
+ * refused rather than parsed out of whatever follows it in memory.
  * ------------------------------------------------------------------ */
 
-static vms_codec_status_t cm_check_class(const struct vms_frame_info *fi)
+static vms_codec_status_t cm_check_body(const uint8_t *body, uint32_t len)
 {
-	if (fi == (const struct vms_frame_info *)0)
+	if (body == (const uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
-	if (fi->family != VMS_FFAM_SCS || fi->cls != VMS_FCLS_SCS_MSG)
-		return VMS_CODEC_E_CLASS;
-	return VMS_CODEC_OK;
-}
-
-/* Classify + gate a raw request frame in one step, for the response
- * recipes (sec 5), which take a received frame rather than a pre-
- * classified one. */
-static vms_codec_status_t cm_classify_request(const uint8_t *frame,
-					      uint32_t len,
-					      struct vms_frame_info *fi)
-{
-	vms_codec_status_t st;
-
-	st = vms_frame_classify(frame, len, fi);
-	if (st != VMS_CODEC_OK)
-		return st;
-	if (fi->cls != VMS_FCLS_SCS_MSG)
-		return VMS_CODEC_E_CLASS;
+	if (len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
 	return VMS_CODEC_OK;
 }
 
@@ -50,8 +46,7 @@ static vms_codec_status_t cm_classify_request(const uint8_t *frame,
  * sec 2: the SYSAP transaction envelope (sec 4(j))
  * ------------------------------------------------------------------ */
 
-vms_codec_status_t vms_cm_envelope_parse(const uint8_t *frame, uint32_t len,
-					 const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_envelope_parse(const uint8_t *body, uint32_t len,
 					 struct vms_cm_envelope *out)
 {
 	vms_wire_view_t v;
@@ -59,20 +54,20 @@ vms_codec_status_t vms_cm_envelope_parse(const uint8_t *frame, uint32_t len,
 
 	if (out == (struct vms_cm_envelope *)0)
 		return VMS_CODEC_E_INVAL;
-	st = cm_check_class(fi);
+	st = cm_check_body(body, len);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_view_init(&v, frame, len);
+	vms_wire_view_init(&v, body, len);
 	if (!vms_wire_view_ok(&v))
 		return VMS_CODEC_E_INVAL;
 
-	out->send_msg = vms_wire_get_le16(&v, VMS_OFF_CM_SEND_MSG);
-	out->ack_msg  = vms_wire_get_le16(&v, VMS_OFF_CM_ACK_MSG);
-	out->txn      = vms_wire_get_le16(&v, VMS_OFF_CM_TXN);
-	out->token    = vms_wire_get_le16(&v, VMS_OFF_CM_TOKEN);
-	out->category = vms_wire_get_u8(&v, VMS_OFF_CM_CATEGORY);
-	out->opcode   = vms_wire_get_u8(&v, VMS_OFF_CM_OPCODE);
+	out->send_msg = vms_wire_get_le16(&v, VMS_OFB_CM_SEND_MSG);
+	out->ack_msg  = vms_wire_get_le16(&v, VMS_OFB_CM_ACK_MSG);
+	out->txn      = vms_wire_get_le16(&v, VMS_OFB_CM_TXN);
+	out->token    = vms_wire_get_le16(&v, VMS_OFB_CM_TOKEN);
+	out->category = vms_wire_get_u8(&v, VMS_OFB_CM_CATEGORY);
+	out->opcode   = vms_wire_get_u8(&v, VMS_OFB_CM_OPCODE);
 
 	if (!vms_wire_view_ok(&v))
 		return v.err;
@@ -111,8 +106,7 @@ vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
  * sec 4: opcode-specific body parsers
  * ------------------------------------------------------------------ */
 
-vms_codec_status_t vms_cm_open_parse(const uint8_t *frame, uint32_t len,
-				     const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 				     struct vms_cm_open *out)
 {
 	vms_wire_view_t v;
@@ -120,17 +114,17 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *frame, uint32_t len,
 
 	if (out == (struct vms_cm_open *)0)
 		return VMS_CODEC_E_INVAL;
-	st = vms_cm_envelope_parse(frame, len, fi, &out->env);
+	st = vms_cm_envelope_parse(body, len, &out->env);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_view_init(&v, frame, len);
-	out->epoch = vms_wire_get_le32(&v, VMS_OFF_CM_EPOCH);
-	out->role  = vms_wire_get_u8(&v, VMS_OFF_CM_ROLE);
-	out->cls   = vms_wire_get_u8(&v, VMS_OFF_CM_CLASS);
+	vms_wire_view_init(&v, body, len);
+	out->epoch = vms_wire_get_le32(&v, VMS_OFB_CM_EPOCH);
+	out->role  = vms_wire_get_u8(&v, VMS_OFB_CM_ROLE);
+	out->cls   = vms_wire_get_u8(&v, VMS_OFB_CM_CLASS);
 	out->has_bitmap = (out->env.opcode == VMS_CM_OP_XITION_ADD);
 	out->bitmap = out->has_bitmap
-			      ? vms_wire_get_u8(&v, VMS_OFF_CM_BITMAP)
+			      ? vms_wire_get_u8(&v, VMS_OFB_CM_BITMAP)
 			      : 0;
 
 	if (!vms_wire_view_ok(&v))
@@ -138,8 +132,7 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *frame, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *frame, uint32_t len,
-					   const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *body, uint32_t len,
 					   uint8_t *out)
 {
 	struct vms_cm_envelope env;
@@ -148,7 +141,7 @@ vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *frame, uint32_t len,
 
 	if (out == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
-	st = vms_cm_envelope_parse(frame, len, fi, &env);
+	st = vms_cm_envelope_parse(body, len, &env);
 	if (st != VMS_CODEC_OK)
 		return st;
 
@@ -158,16 +151,15 @@ vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *frame, uint32_t len,
 	    env.opcode != VMS_CM_OP_XITION_ADD)
 		return VMS_CODEC_E_CLASS;
 
-	vms_wire_view_init(&v, frame, len);
-	vms_wire_get_bytes(&v, VMS_OFF_CM_BITMAP_SPAN, VMS_CM_BITMAP_SPAN_LEN,
+	vms_wire_view_init(&v, body, len);
+	vms_wire_get_bytes(&v, VMS_OFB_CM_BITMAP_SPAN, VMS_CM_BITMAP_SPAN_LEN,
 			   out);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_barrier_parse(const uint8_t *frame, uint32_t len,
-					const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_barrier_parse(const uint8_t *body, uint32_t len,
 					struct vms_cm_barrier *out)
 {
 	vms_wire_view_t v;
@@ -175,21 +167,20 @@ vms_codec_status_t vms_cm_barrier_parse(const uint8_t *frame, uint32_t len,
 
 	if (out == (struct vms_cm_barrier *)0)
 		return VMS_CODEC_E_INVAL;
-	st = vms_cm_envelope_parse(frame, len, fi, &out->env);
+	st = vms_cm_envelope_parse(body, len, &out->env);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_view_init(&v, frame, len);
-	out->epoch = vms_wire_get_le32(&v, VMS_OFF_CM_EPOCH);
-	out->step  = vms_wire_get_le32(&v, VMS_OFF_CM_STEP);
+	vms_wire_view_init(&v, body, len);
+	out->epoch = vms_wire_get_le32(&v, VMS_OFB_CM_EPOCH);
+	out->step  = vms_wire_get_le32(&v, VMS_OFB_CM_STEP);
 
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_params_parse(const uint8_t *frame, uint32_t len,
-				       const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 				       struct vms_cm_params *out)
 {
 	vms_wire_view_t v;
@@ -197,15 +188,15 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *frame, uint32_t len,
 
 	if (out == (struct vms_cm_params *)0)
 		return VMS_CODEC_E_INVAL;
-	st = vms_cm_envelope_parse(frame, len, fi, &out->env);
+	st = vms_cm_envelope_parse(body, len, &out->env);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_view_init(&v, frame, len);
-	out->votes    = vms_wire_get_le16(&v, VMS_OFF_CM_VOTES);
-	out->param_f1 = vms_wire_get_le32(&v, VMS_OFF_CM_PARAM_F1);
-	out->param_f2 = vms_wire_get_le32(&v, VMS_OFF_CM_PARAM_F2);
-	vms_wire_get_bytes(&v, VMS_OFF_CM_VERSION, VMS_CM_VERSION_LEN,
+	vms_wire_view_init(&v, body, len);
+	out->votes    = vms_wire_get_le16(&v, VMS_OFB_CM_VOTES);
+	out->param_f1 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F1);
+	out->param_f2 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F2);
+	vms_wire_get_bytes(&v, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
 			   out->version);
 
 	if (!vms_wire_view_ok(&v))
@@ -213,8 +204,7 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *frame, uint32_t len,
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_model_parse(const uint8_t *frame, uint32_t len,
-				      const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_model_parse(const uint8_t *body, uint32_t len,
 				      struct vms_cm_model *out)
 {
 	vms_wire_view_t v;
@@ -223,26 +213,25 @@ vms_codec_status_t vms_cm_model_parse(const uint8_t *frame, uint32_t len,
 
 	if (out == (struct vms_cm_model *)0)
 		return VMS_CODEC_E_INVAL;
-	st = vms_cm_envelope_parse(frame, len, fi, &out->env);
+	st = vms_cm_envelope_parse(body, len, &out->env);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_view_init(&v, frame, len);
-	namelen = vms_wire_get_u8(&v, VMS_OFF_CM_MODEL_LEN);
+	vms_wire_view_init(&v, body, len);
+	namelen = vms_wire_get_u8(&v, VMS_OFB_CM_MODEL_LEN);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	if (namelen > VMS_CM_MODEL_MAX)
 		return VMS_CODEC_E_RANGE;
 	out->namelen = namelen;
-	vms_wire_get_bytes(&v, VMS_OFF_CM_MODEL_NAME, namelen, out->name);
+	vms_wire_get_bytes(&v, VMS_OFB_CM_MODEL_NAME, namelen, out->name);
 
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
-					    const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *body, uint32_t len,
 					    struct vms_cm_dlm_rebuild *out)
 {
 	vms_wire_view_t v;
@@ -251,19 +240,19 @@ vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 
 	if (out == (struct vms_cm_dlm_rebuild *)0)
 		return VMS_CODEC_E_INVAL;
-	st = vms_cm_envelope_parse(frame, len, fi, &out->env);
+	st = vms_cm_envelope_parse(body, len, &out->env);
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	vms_wire_view_init(&v, frame, len);
-	out->l1_len = vms_wire_get_u8(&v, VMS_OFF_CM_DLM_L1_LEN);
-	resnamelen = vms_wire_get_u8(&v, VMS_OFF_CM_DLM_RESNAMLEN);
+	vms_wire_view_init(&v, body, len);
+	out->l1_len = vms_wire_get_u8(&v, VMS_OFB_CM_DLM_L1_LEN);
+	resnamelen = vms_wire_get_u8(&v, VMS_OFB_CM_DLM_RESNAMLEN);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	if (resnamelen > VMS_CM_DLM_RESNAME_MAX)
 		return VMS_CODEC_E_RANGE;
 	out->resnamelen = resnamelen;
-	vms_wire_get_bytes(&v, VMS_OFF_CM_DLM_RESNAME, resnamelen,
+	vms_wire_get_bytes(&v, VMS_OFB_CM_DLM_RESNAME, resnamelen,
 			   out->resname);
 
 	if (!vms_wire_view_ok(&v))
@@ -293,42 +282,39 @@ static vms_codec_status_t cm_recipe_allowed(const struct vms_cm_envelope *req,
 	return VMS_CODEC_OK;
 }
 
-/* Verbatim-copy a received request's body into a fresh body-sized wire
- * buffer, positioned at body-relative offset 0 (abs 72 in the request
- * frame, offset 0 in `out`). Shared by every echo-based response recipe. */
-static vms_codec_status_t cm_copy_request_body(const uint8_t *req_frame,
+/* Verbatim-copy a received request BODY into a fresh body-sized wire buffer.
+ * Both sides are body-relative since E73 -- the request is the 132 bytes SCS
+ * handed the SYSAP, not a frame with 72 bytes of somebody else's headers in
+ * front of it. Shared by every echo-based response recipe. */
+static vms_codec_status_t cm_copy_request_body(const uint8_t *req_body,
 					       uint32_t req_len,
 					       uint8_t out[VMS_CM_BODY_LEN])
 {
 	vms_wire_view_t rv;
 
-	vms_wire_view_init(&rv, req_frame, req_len);
-	vms_wire_get_bytes(&rv, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, out);
+	vms_wire_view_init(&rv, req_body, req_len);
+	vms_wire_get_bytes(&rv, 0, VMS_CM_BODY_LEN, out);
 	if (!vms_wire_view_ok(&rv))
 		return rv.err;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_frame,
+vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
 					      uint32_t req_len,
 					      uint8_t own_class,
 					      uint8_t *out_body, uint32_t cap,
 					      uint32_t *written)
 {
-	struct vms_frame_info fi;
 	struct vms_cm_envelope req_env;
 	vms_wire_view_t rv;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 	uint8_t body[VMS_CM_BODY_LEN];
 
-	if (req_frame == (const uint8_t *)0 || out_body == (uint8_t *)0)
+	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
-	st = cm_classify_request(req_frame, req_len, &fi);
-	if (st != VMS_CODEC_OK)
-		return st;
-	st = vms_cm_envelope_parse(req_frame, req_len, &fi, &req_env);
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
 	if (st != VMS_CODEC_OK)
 		return st;
 	st = cm_recipe_allowed(&req_env, VMS_CM_RECIPE_ECHO);
@@ -339,10 +325,10 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_frame,
 	 * 0x81 echo takes THREE mutations" -- start from the request). This
 	 * is also what carries body[4:8] (txn/token) forward untouched: the
 	 * caller's cnxman_envelope_stamp(is_response=1) leaves them alone. */
-	st = cm_copy_request_body(req_frame, req_len, body);
+	st = cm_copy_request_body(req_body, req_len, body);
 	if (st != VMS_CODEC_OK)
 		return st;
-	vms_wire_view_init(&rv, req_frame, req_len);
+	vms_wire_view_init(&rv, req_body, req_len);
 
 	vms_wire_buf_init(&w, out_body, cap);
 	if (!vms_wire_buf_ok(&w))
@@ -372,7 +358,7 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_frame,
 	 * sec 4(r)): our own current transition class, and an LE u32 copy of
 	 * the request's own epoch field. */
 	if (req_env.opcode == VMS_CM_OP_RELAY) {
-		uint32_t epoch = vms_wire_get_le32(&rv, VMS_OFF_CM_EPOCH);
+		uint32_t epoch = vms_wire_get_le32(&rv, VMS_OFB_CM_EPOCH);
 
 		if (!vms_wire_view_ok(&rv))
 			return rv.err;
@@ -387,25 +373,21 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_frame,
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_close_build(const uint8_t *req_frame, uint32_t req_len,
+vms_codec_status_t vms_cm_close_build(const uint8_t *req_body, uint32_t req_len,
 				      const struct vms_cm_node_params *own_params,
 				      uint8_t *out_body, uint32_t cap,
 				      uint32_t *written)
 {
-	struct vms_frame_info fi;
 	struct vms_cm_envelope req_env;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 
-	if (req_frame == (const uint8_t *)0 ||
+	if (req_body == (const uint8_t *)0 ||
 	    own_params == (const struct vms_cm_node_params *)0 ||
 	    out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
-	st = cm_classify_request(req_frame, req_len, &fi);
-	if (st != VMS_CODEC_OK)
-		return st;
-	st = vms_cm_envelope_parse(req_frame, req_len, &fi, &req_env);
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
 	if (st != VMS_CODEC_OK)
 		return st;
 	st = cm_recipe_allowed(&req_env, VMS_CM_RECIPE_CLOSE);
@@ -440,24 +422,20 @@ vms_codec_status_t vms_cm_close_build(const uint8_t *req_frame, uint32_t req_len
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_frame,
+vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_body,
 						  uint32_t req_len,
 						  uint8_t *out_body, uint32_t cap,
 						  uint32_t *written)
 {
-	struct vms_frame_info fi;
 	struct vms_cm_envelope req_env;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 	uint8_t body[VMS_CM_BODY_LEN];
 
-	if (req_frame == (const uint8_t *)0 || out_body == (uint8_t *)0)
+	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
-	st = cm_classify_request(req_frame, req_len, &fi);
-	if (st != VMS_CODEC_OK)
-		return st;
-	st = vms_cm_envelope_parse(req_frame, req_len, &fi, &req_env);
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
 	if (st != VMS_CODEC_OK)
 		return st;
 	st = cm_recipe_allowed(&req_env, VMS_CM_RECIPE_DLM_OP0D);
@@ -470,7 +448,7 @@ vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_frame,
 	 * region and the lock RESOURCE NAME here (LOCKMGRERR on two real
 	 * VAXes when a prior implementation applied them). This is also what
 	 * carries body[4:8] forward untouched for the caller's stamp call. */
-	st = cm_copy_request_body(req_frame, req_len, body);
+	st = cm_copy_request_body(req_body, req_len, body);
 	if (st != VMS_CODEC_OK)
 		return st;
 
@@ -493,26 +471,22 @@ vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_frame,
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_cm_body_build(const uint8_t *req_frame, uint32_t req_len,
+vms_codec_status_t vms_cm_body_build(const uint8_t *req_body, uint32_t req_len,
 				     const uint8_t *body, uint32_t body_len,
 				     uint8_t *out_body, uint32_t cap,
 				     uint32_t *written)
 {
-	struct vms_frame_info fi;
 	struct vms_cm_envelope req_env;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 
-	if (req_frame == (const uint8_t *)0 || body == (const uint8_t *)0 ||
+	if (req_body == (const uint8_t *)0 || body == (const uint8_t *)0 ||
 	    out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 	if (body_len != VMS_CM_BODY_LEN)
 		return VMS_CODEC_E_INVAL;
 
-	st = cm_classify_request(req_frame, req_len, &fi);
-	if (st != VMS_CODEC_OK)
-		return st;
-	st = vms_cm_envelope_parse(req_frame, req_len, &fi, &req_env);
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
 	if (st != VMS_CODEC_OK)
 		return st;
 
@@ -762,24 +736,20 @@ vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_frame,
+vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
 					 uint32_t req_len,
 					 uint8_t *out_body, uint32_t cap,
 					 uint32_t *written)
 {
-	struct vms_frame_info fi;
 	struct vms_cm_envelope req_env;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 	uint8_t body[VMS_CM_BODY_LEN];
 
-	if (req_frame == (const uint8_t *)0 || out_body == (uint8_t *)0)
+	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
 
-	st = cm_classify_request(req_frame, req_len, &fi);
-	if (st != VMS_CODEC_OK)
-		return st;
-	st = vms_cm_envelope_parse(req_frame, req_len, &fi, &req_env);
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
 	if (st != VMS_CODEC_OK)
 		return st;
 	st = cm_recipe_allowed(&req_env, VMS_CM_RECIPE_STEP_ACK);
@@ -789,7 +759,7 @@ vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_frame,
 	/* Verbatim echo of the member's own step request first -- txn and
 	 * token ride back untouched (the caller's stamp call leaves them),
 	 * which is the whole correlation. */
-	st = cm_copy_request_body(req_frame, req_len, body);
+	st = cm_copy_request_body(req_body, req_len, body);
 	if (st != VMS_CODEC_OK)
 		return st;
 
@@ -953,9 +923,8 @@ static int cm_csid_shape_ok(uint32_t v)
 	       (lo & VMS_CM_CSID_SHAPE_LO_MASK) == 0u;
 }
 
-vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *frame,
+vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *body,
 						uint32_t len,
-						const struct vms_frame_info *fi,
 						uint32_t *out_csid)
 {
 	struct vms_cm_envelope env;
@@ -967,15 +936,15 @@ vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *frame,
 		return VMS_CODEC_E_INVAL;
 	*out_csid = 0u;
 
-	st = vms_cm_envelope_parse(frame, len, fi, &env);
+	st = vms_cm_envelope_parse(body, len, &env);
 	if (st != VMS_CODEC_OK)
 		return st;
 	if (env.category != VMS_CM_CAT_CONFIG ||
 	    env.opcode != VMS_CM_OP_MEMBERSHIP)
 		return VMS_CODEC_E_CLASS;
 
-	vms_wire_view_init(&v, frame, len);
-	a = vms_wire_get_le32(&v, VMS_OFF_CM_MEMBERSHIP_CSID_A);
+	vms_wire_view_init(&v, body, len);
+	a = vms_wire_get_le32(&v, VMS_OFB_CM_MEMBERSHIP_CSID_A);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	if (cm_csid_shape_ok(a)) {
@@ -983,8 +952,8 @@ vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *frame,
 		return VMS_CODEC_OK;
 	}
 
-	vms_wire_view_init(&v, frame, len);
-	b = vms_wire_get_le32(&v, VMS_OFF_CM_MEMBERSHIP_CSID_B);
+	vms_wire_view_init(&v, body, len);
+	b = vms_wire_get_le32(&v, VMS_OFB_CM_MEMBERSHIP_CSID_B);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	if (cm_csid_shape_ok(b)) {

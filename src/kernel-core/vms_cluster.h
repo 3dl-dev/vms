@@ -353,6 +353,30 @@ struct vms_csb {
 	uint16_t cm_ack_msg;
 	uint16_t cm_txn;
 	uint16_t cm_token;
+
+	/*
+	 * ---- what this node has ADVERTISED about ITSELF on the connection it
+	 * holds to this system RIGHT NOW (E73) ----
+	 *
+	 * The cat-0x01 op-0x14 MODEL and op-0x01 PARAMS pair is a PER-PEER
+	 * obligation, not a step of one join: on the reference join
+	 * (vax3-2to3-established-join-20260730) the joiner sent them to VAX1 at
+	 * t+29.8253 AND to VAX2 at t+30.3692, each on that peer's own VC with
+	 * its own send-msg# starting at 1, and both members sent theirs back the
+	 * same way. A member whose CSB for this node never received them holds
+	 * no parameters for it -- no VOTES -- and cannot count it.
+	 *
+	 * `cm_advert_conid` is the CONNECTION the mask describes, so nothing
+	 * has to reset it: when the executive's Con.ID for this system changes,
+	 * whatever was said down the old connection was not said down the new
+	 * one and the mask is simply stale (the same per-connection rule the
+	 * join applies to its own `burst_on_conn`). A lifetime counter cannot
+	 * answer that question and reading one as "already advertised" is how a
+	 * re-offer silently stops happening after a reconnect (E71).
+	 */
+	uint32_t cm_advert_conid;
+	uint8_t  cm_advert_sent;    /* CNXMAN_JOIN_B_* bits, per that Con.ID  */
+	uint8_t  pad4[3];
 };
 
 /*

@@ -73,12 +73,16 @@ static void barrier_bzero(void *p, uint32_t n)
  * One dispatched message
  * ========================================================================== */
 struct barrier_msg {
-	const uint8_t         *frame;
+	/* The SYSAP's OWN 132 bytes -- what SCS hands an input routine, and the
+	 * only bytes a SYSAP is entitled to see (design SS3.2.4; E73). */
+	const uint8_t         *body;
 	uint32_t               len;
-	struct vms_frame_info  fi;    /* classified once, in cnxman_barrier_rx_frame */
 	struct vms_cm_envelope env;
 	vms_csid_t             from_csid;
 	int                    from_valid;
+	/* The CLUB slot of the CSB whose connection carried it, or -1. See
+	 * barrier_csb_out() for why a PARTICIPANT must address by this. */
+	int32_t                from_csb;
 };
 
 /* ==========================================================================
@@ -116,12 +120,43 @@ static int barrier_dlm_recipe_allowed(const struct barrier_msg *m)
  * destination is a refusal to transmit, never a zero-filled body.
  * ========================================================================== */
 
-/* The CSB whose dialogue state stamps body[0:8] for `dst`. NULL means the
- * connection manager has no VMS$VAXcluster link to that node right now. */
-static struct vms_csb *barrier_csb_out(struct cnxman_barrier *b,
-				       vms_csid_t dst)
+/*
+ * The CSB whose dialogue state stamps body[0:8] for the far end of the
+ * transition, ADDRESSED BY THE CONNECTION IT ARRIVED ON (E73).
+ *
+ * WHY NOT BY CSID. A CSID is an identity the CLUSTER assigns during an ADD
+ * transition, and a PARTICIPANT has no grounded way to learn a PEER's: the one
+ * wire read this project has (vms_cm_membership_coordinator_csid, E30) reads
+ * an op-0x06 that carries "the existing member re-asserting ITS OWN record or
+ * another already-admitted member's" -- so which node it names is exactly what
+ * is not decidable. cnxman_csb_set_csid() is therefore called only by the
+ * COORDINATOR (which assigns them) and by cnxman_club_learn_local_csid(), and
+ * vms_cnxman.c's own cnxman_ops_send() says so out loud: "Today this is the
+ * ROUTINE case (integration note E30): no CSID is ever learned, so every
+ * CSID-addressed origination honestly fails here." A barrier that can only
+ * address by CSID cannot send one of its twelve steps.
+ *
+ * WHAT IS REAL is the CSB the message came in on. Book p. 7-23 makes a CSB
+ * "the state of the SCS connection between the local SYS$CLUSTER and the
+ * SYS$CLUSTER residing in the system associated with the CSB" -- the block IS
+ * the connection record, and the glue resolved it from the Con.ID SCS
+ * delivered on. Addressing the coordinator by it is a READ of executive state;
+ * deriving a CSID for it would be an inference.
+ *
+ * `csb_index` < 0, out of range, or a slot not in use is NULL -- a refusal to
+ * transmit, never a zero-filled body (INV-6).
+ */
+static struct vms_csb *barrier_csb_at(struct cnxman_barrier *b,
+				      int32_t csb_index)
 {
-	return cnxman_club_find_csid(&b->cl->club, dst);
+	struct vms_csb *csb;
+
+	if (csb_index < 0)
+		return NULL;
+	csb = cnxman_club_csb_at(&b->cl->club, (uint32_t)csb_index);
+	if (csb == NULL || !csb->in_use)
+		return NULL;
+	return csb;
 }
 
 static void barrier_note_send_failure(struct cnxman_barrier *b, const char *why)
@@ -157,14 +192,14 @@ static void barrier_respond_echo(struct cnxman_barrier *b,
 			       "transition message; sending nothing");
 		return;
 	}
-	csb = barrier_csb_out(b, m->from_csid);
+	csb = barrier_csb_at(b, m->from_csb);
 	if (csb == NULL) {
 		barrier_note_send_failure(b,
 			"%CNXMAN, no connection to the transition coordinator; "
 			"open not acknowledged");
 		return;
 	}
-	if (vms_cm_echo_response_build(m->frame, m->len, b->tr_class,
+	if (vms_cm_echo_response_build(m->body, m->len, b->tr_class,
 				       b->scratch, (uint32_t)sizeof(b->scratch),
 				       &written) != VMS_CODEC_OK) {
 		barrier_note_send_failure(b,
@@ -173,7 +208,7 @@ static void barrier_respond_echo(struct cnxman_barrier *b,
 	}
 	/* body[4:8] is already the request's echoed txn/token (the builder's
 	 * verbatim copy); is_response=1 leaves it alone and fills send/ack. */
-	cnxman_envelope_stamp(csb, b->scratch, 1);
+	cnxman_envelope_originate(csb, b->scratch, 1);
 	barrier_emit_response(b, written);
 }
 
@@ -189,20 +224,20 @@ static int barrier_respond_dlm_echo(struct cnxman_barrier *b,
 		b->ungrounded++;
 		return -1;
 	}
-	csb = barrier_csb_out(b, m->from_csid);
+	csb = barrier_csb_at(b, m->from_csb);
 	if (csb == NULL) {
 		barrier_note_send_failure(b,
 			"%CNXMAN, no connection to answer a lock-rebuild record");
 		return -1;
 	}
-	if (vms_cm_dlm_op0d_response_build(m->frame, m->len, b->scratch,
+	if (vms_cm_dlm_op0d_response_build(m->body, m->len, b->scratch,
 					   (uint32_t)sizeof(b->scratch),
 					   &written) != VMS_CODEC_OK) {
 		barrier_note_send_failure(b,
 			"%CNXMAN, lock-rebuild response could not be built");
 		return -1;
 	}
-	cnxman_envelope_stamp(csb, b->scratch, 1);
+	cnxman_envelope_originate(csb, b->scratch, 1);
 	barrier_emit_response(b, written);
 	return 0;
 }
@@ -217,20 +252,20 @@ static int barrier_respond_dlm_body(struct cnxman_barrier *b,
 
 	if (len != VMS_CM_BODY_LEN)
 		return -1;
-	csb = barrier_csb_out(b, m->from_csid);
+	csb = barrier_csb_at(b, m->from_csb);
 	if (csb == NULL) {
 		barrier_note_send_failure(b,
 			"%CNXMAN, no connection to return a lock-manager reply");
 		return -1;
 	}
-	if (vms_cm_body_build(m->frame, m->len, b->dlm_reply, len, b->scratch,
+	if (vms_cm_body_build(m->body, m->len, b->dlm_reply, len, b->scratch,
 			      (uint32_t)sizeof(b->scratch),
 			      &written) != VMS_CODEC_OK)
 		return -1;
 	/* body[4:8] is the request's txn/token, echoed by the builder itself
 	 * (the DLM's reply never writes body[0:8]); is_response=1 leaves it
 	 * and fills only send/ack. */
-	cnxman_envelope_stamp(csb, b->scratch, 1);
+	cnxman_envelope_originate(csb, b->scratch, 1);
 	barrier_emit_response(b, written);
 	return 0;
 }
@@ -239,21 +274,33 @@ static int barrier_respond_dlm_body(struct cnxman_barrier *b,
  * Originating a barrier step
  * ========================================================================== */
 
+/*
+ * One of the twelve op-0x0b steps, ORIGINATED on the coordinator's own
+ * connection (E73).
+ *
+ * ADDRESSED BY CSB, NOT BY CSID -- see barrier_csb_at() for the whole argument.
+ * The short version: `ops->send(dst_csid, ...)` cannot resolve a peer whose
+ * CSID this node has no grounded way to learn, and a participant that cannot
+ * send its steps strands the coordinator's barrier, which times out and drops
+ * healthy members (spec SS4(p)). `ops->send_csb(csb_index, ...)` addresses the
+ * connection the executive HOLDS for that system, which is the same thing the
+ * book says a CSB is.
+ */
 static void barrier_send_step(struct cnxman_barrier *b, uint32_t step)
 {
 	struct vms_csb *csb;
 	uint32_t written = 0;
 
-	if (!b->coordinator_valid) {
-		barrier_note_send_failure(b,
-			"%CNXMAN, no coordinator identity; barrier step not sent");
-		return;
-	}
-	csb = barrier_csb_out(b, b->coordinator_csid);
+	csb = barrier_csb_at(b, b->coordinator_csb);
 	if (csb == NULL) {
 		barrier_note_send_failure(b,
 			"%CNXMAN, no connection to the coordinator; barrier step "
 			"not sent");
+		return;
+	}
+	if (b->ops == NULL || b->ops->send_csb == NULL) {
+		barrier_note_send_failure(b,
+			"%CNXMAN, no transport for a barrier step; none sent");
 		return;
 	}
 	if (vms_cm_barrier_build(b->epoch, step, b->scratch,
@@ -265,10 +312,9 @@ static void barrier_send_step(struct cnxman_barrier *b, uint32_t step)
 	}
 	/* A genuine origination: the coordinator's CSB own txn/token belong
 	 * at body[4:8]. */
-	cnxman_envelope_stamp(csb, b->scratch, 0);
-	if (b->ops != NULL && b->ops->send != NULL)
-		(void)b->ops->send(b->ops->ctx, b->coordinator_csid, b->scratch,
-				   written);
+	cnxman_envelope_originate(csb, b->scratch, 0);
+	(void)b->ops->send_csb(b->ops->ctx, b->coordinator_csb, b->scratch,
+			       written);
 	b->step = (uint8_t)step;
 	b->steps_sent++;
 }
@@ -348,7 +394,7 @@ static void barrier_check_bitmap_span(struct cnxman_barrier *b,
 	uint8_t span[VMS_CM_BITMAP_SPAN_LEN];
 	uint32_t i;
 
-	if (vms_cm_open_bitmap_span(m->frame, m->len, &m->fi, span) !=
+	if (vms_cm_open_bitmap_span(m->body, m->len, span) !=
 	    VMS_CODEC_OK)
 		return;
 
@@ -470,6 +516,9 @@ static void barrier_start_transition(struct cnxman_barrier *b,
 	b->open_seen = 1u;
 	b->coordinator_valid = (uint8_t)(m->from_valid ? 1 : 0);
 	b->coordinator_csid = m->from_valid ? m->from_csid : (vms_csid_t)0;
+	/* The connection the proposal came in on IS the coordinator's, whether
+	 * or not its CSID could be identified (E73). */
+	b->coordinator_csb = m->from_csb;
 	b->transitions_seen++;
 
 	club->transition_active = 1u;
@@ -491,7 +540,7 @@ static void barrier_h_open(struct cnxman_barrier *b, const struct barrier_msg *m
 {
 	struct vms_cm_open open;
 
-	if (vms_cm_open_parse(m->frame, m->len, &m->fi, &open) != VMS_CODEC_OK) {
+	if (vms_cm_open_parse(m->body, m->len, &open) != VMS_CODEC_OK) {
 		/* Classifiable but not parseable: counted, never
 		 * acted on with a partially-read body. */
 		b->ignored_events++;
@@ -527,7 +576,7 @@ static void barrier_h_reopen(struct cnxman_barrier *b,
 {
 	struct vms_cm_open open;
 
-	if (vms_cm_open_parse(m->frame, m->len, &m->fi, &open) != VMS_CODEC_OK) {
+	if (vms_cm_open_parse(m->body, m->len, &open) != VMS_CODEC_OK) {
 		/* Classifiable but not parseable: counted, never
 		 * acted on with a partially-read body. */
 		b->ignored_events++;
@@ -567,7 +616,7 @@ static void barrier_h_go(struct cnxman_barrier *b, const struct barrier_msg *m)
 {
 	struct vms_cm_open go;
 
-	if (vms_cm_open_parse(m->frame, m->len, &m->fi, &go) != VMS_CODEC_OK) {
+	if (vms_cm_open_parse(m->body, m->len, &go) != VMS_CODEC_OK) {
 		/* Classifiable but not parseable: counted, never
 		 * acted on with a partially-read body. */
 		b->ignored_events++;
@@ -593,6 +642,7 @@ static void barrier_h_go(struct cnxman_barrier *b, const struct barrier_msg *m)
 		b->step = 0u;
 		b->transitions_seen++;
 		b->coordinator_valid = (uint8_t)(m->from_valid ? 1 : 0);
+		b->coordinator_csb = m->from_csb;
 		b->coordinator_csid = m->from_valid ? m->from_csid
 						    : (vms_csid_t)0;
 		b->cl->club.transition_active = 1u;
@@ -666,7 +716,7 @@ static void barrier_h_release(struct cnxman_barrier *b,
 {
 	struct vms_cm_barrier rel;
 
-	if (vms_cm_barrier_parse(m->frame, m->len, &m->fi, &rel) != VMS_CODEC_OK) {
+	if (vms_cm_barrier_parse(m->body, m->len, &rel) != VMS_CODEC_OK) {
 		/* Classifiable but not parseable: counted, never
 		 * acted on with a partially-read body. */
 		b->ignored_events++;
@@ -733,7 +783,7 @@ static void barrier_h_rebuild(struct cnxman_barrier *b,
 	/* The received FRAME, which is what every vms_cluster_codec_cm.h
 	 * accessor takes: the DLM reads it through those and never by offset
 	 * (vms_dlm_scs.h SS3). */
-	req.body = m->frame;
+	req.body = m->body;
 	req.len = m->len;
 
 	reply.body = b->dlm_reply;
@@ -931,25 +981,25 @@ static enum cnxman_barrier_rx barrier_dispatch(struct cnxman_barrier *b,
 	return CNXMAN_BARRIER_RX_CONSUMED;
 }
 
-enum cnxman_barrier_rx cnxman_barrier_rx_frame(struct cnxman_barrier *b,
-					       const uint8_t *frame,
-					       uint32_t len,
-					       vms_csid_t from_csid,
-					       int from_valid)
+enum cnxman_barrier_rx cnxman_barrier_rx_body(struct cnxman_barrier *b,
+					      const uint8_t *body,
+					      uint32_t len,
+					      vms_csid_t from_csid,
+					      int from_valid,
+					      int32_t from_csb)
 {
 	struct barrier_msg m;
 
-	if (b == NULL || b->cl == NULL || frame == NULL)
+	if (b == NULL || b->cl == NULL || body == NULL)
 		return CNXMAN_BARRIER_RX_BAD;
-	if (vms_frame_classify(frame, len, &m.fi) != VMS_CODEC_OK)
-		return CNXMAN_BARRIER_RX_BAD;
-	if (vms_cm_envelope_parse(frame, len, &m.fi, &m.env) != VMS_CODEC_OK)
+	if (vms_cm_envelope_parse(body, len, &m.env) != VMS_CODEC_OK)
 		return CNXMAN_BARRIER_RX_BAD;
 
-	m.frame = frame;
+	m.body = body;
 	m.len = len;
 	m.from_csid = from_csid;
 	m.from_valid = from_valid;
+	m.from_csb = from_csb;
 	return barrier_dispatch(b, &m);
 }
 
@@ -996,6 +1046,7 @@ void cnxman_barrier_init(struct cnxman_barrier *b, struct vms_cluster *cl,
 	b->cl = cl;
 	b->ops = ops;
 	b->state = (uint8_t)CNXMAN_BARRIER_IDLE;
+	b->coordinator_csb = -1;   /* no transition, so no connection to one */
 }
 
 void cnxman_barrier_set_dlm(struct cnxman_barrier *b,

@@ -110,6 +110,34 @@ static void assert_body_matches(const struct vms_fixture *resp,
 	ct_check(mismatches == 0 && checked > 0, what);
 }
 
+/*
+ * E73: every parse/response entry of the CM codec takes the SYSAP BODY now --
+ * the 132 bytes SCS hands an input routine (design sec 3.2.4), not a whole
+ * 204-byte frame. The fixtures are captured FRAMES, so a test slices them the
+ * way the executive does: `frame + 72`, `wire_len - 72`.
+ *
+ * THIS IS THE ASSERTION THAT WOULD HAVE CAUGHT E73. Every one of these tests
+ * used to hand the codec a composed 204-byte frame and pass -- while the live
+ * executive handed it 132 bytes and every real inbound CM message was refused
+ * as unparsed. Feeding the codec what the executive really feeds it is the
+ * point, not a convenience.
+ */
+static const uint8_t *fx_body(const struct vms_fixture *f)
+{
+	return f->bytes + VMS_OFF_SYSAP_BODY;
+}
+
+static uint32_t fx_body_len(const struct vms_fixture *f)
+{
+	return f->wire_len - VMS_OFF_SYSAP_BODY;
+}
+
+/* The same slice of a locally composed frame. */
+static const uint8_t *frame_body(const uint8_t *frame)
+{
+	return frame + VMS_OFF_SYSAP_BODY;
+}
+
 static void test_echo_recipe(const char *req_name, const char *resp_name,
 			     uint8_t own_class, const char *label)
 {
@@ -127,7 +155,7 @@ static void test_echo_recipe(const char *req_name, const char *resp_name,
 	memset(built, 0xAA, sizeof(built));
 	snprintf(what, sizeof(what), "%s: vms_cm_echo_response_build succeeds",
 		 label);
-	ct_check(vms_cm_echo_response_build(req->bytes, req->wire_len,
+	ct_check(vms_cm_echo_response_build(fx_body(req), fx_body_len(req),
 					    own_class, built, sizeof(built),
 					    &written)
 		 == VMS_CODEC_OK, what);
@@ -154,7 +182,7 @@ static void test_close_recipe(void)
 	memcpy(np.version, "V7.3    ", VMS_CM_VERSION_LEN);
 
 	memset(built, 0xAA, sizeof(built));
-	ct_check(vms_cm_close_build(req->bytes, req->wire_len, &np, built,
+	ct_check(vms_cm_close_build(fx_body(req), fx_body_len(req), &np, built,
 				    sizeof(built), &written)
 		 == VMS_CODEC_OK, "vms_cm_close_build succeeds");
 	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
@@ -175,7 +203,7 @@ static void test_dlm_op0d_recipe(void)
 		return;
 
 	memset(built, 0xAA, sizeof(built));
-	ct_check(vms_cm_dlm_op0d_response_build(req->bytes, req->wire_len,
+	ct_check(vms_cm_dlm_op0d_response_build(fx_body(req), fx_body_len(req),
 						built, sizeof(built), &written)
 		 == VMS_CODEC_OK, "vms_cm_dlm_op0d_response_build succeeds");
 	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
@@ -291,7 +319,7 @@ static void test_open_parse(void)
 
 	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
 		 "classifies");
-	ct_check(vms_cm_open_parse(f->bytes, f->wire_len, &fi, &o) == VMS_CODEC_OK,
+	ct_check(vms_cm_open_parse(fx_body(f), fx_body_len(f), &o) == VMS_CODEC_OK,
 		 "parses");
 	ct_check_eq_u32(o.env.category, 0x01, "  category == 0x01");
 	ct_check_eq_u32(o.env.opcode, 0x09, "  opcode == 0x09");
@@ -315,7 +343,7 @@ static void test_barrier_parse(void)
 
 	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
 		 "classifies");
-	ct_check(vms_cm_barrier_parse(f->bytes, f->wire_len, &fi, &b)
+	ct_check(vms_cm_barrier_parse(fx_body(f), fx_body_len(f), &b)
 		 == VMS_CODEC_OK, "parses");
 	ct_check_eq_u32(b.env.opcode, 0x0b, "  opcode == 0x0b");
 	ct_check_eq_u32(b.epoch, 3, "  epoch == 3");
@@ -336,7 +364,7 @@ static void test_params_parse(void)
 
 	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
 		 "classifies");
-	ct_check(vms_cm_params_parse(f->bytes, f->wire_len, &fi, &p)
+	ct_check(vms_cm_params_parse(fx_body(f), fx_body_len(f), &p)
 		 == VMS_CODEC_OK, "parses");
 	ct_check_eq_u32(p.votes, 0, "  VOTES == 0 (non-voting, sec 4(j))");
 	ct_check_eq_u32(p.param_f1, 0x10, "  param_f1 == 0x10 (observed const)");
@@ -362,7 +390,7 @@ static void test_model_parse(void)
 
 	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
 		 "classifies");
-	ct_check(vms_cm_model_parse(f->bytes, f->wire_len, &fi, &m)
+	ct_check(vms_cm_model_parse(fx_body(f), fx_body_len(f), &m)
 		 == VMS_CODEC_OK, "parses");
 	ct_check_eq_u32(m.env.opcode, 0x14, "  opcode == 0x14");
 	ct_check_eq_u32(m.namelen, 21, "  namelen == 21 (GROUNDED sec 4(j))");
@@ -383,7 +411,7 @@ static void test_dlm_rebuild_parse(void)
 
 	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
 		 "classifies");
-	ct_check(vms_cm_dlm_rebuild_parse(f->bytes, f->wire_len, &fi, &d)
+	ct_check(vms_cm_dlm_rebuild_parse(fx_body(f), fx_body_len(f), &d)
 		 == VMS_CODEC_OK, "parses");
 	ct_check_eq_u32(d.env.category, 0x02, "  category == 0x02");
 	ct_check_eq_u32(d.env.opcode, 0x0d, "  opcode == 0x0d");
@@ -416,7 +444,7 @@ static void test_error_paths(void)
 					&frame_written) == VMS_CODEC_E_INVAL,
 		 "vms_frame_compose_link: NULL link rejected (test-only "
 		 "composer)");
-	ct_check(vms_cm_envelope_parse(frame, sizeof(frame), NULL, NULL)
+	ct_check(vms_cm_envelope_parse(frame_body(frame), VMS_CM_BODY_LEN, NULL)
 		 == VMS_CODEC_E_INVAL, "vms_cm_envelope_parse: NULL out rejected");
 
 	if (req != NULL) {
@@ -424,13 +452,13 @@ static void test_error_paths(void)
 		 * CLOSE recipe -- a recipe builder must refuse a
 		 * well-formed, classifiable frame whose (cat,op) it does not
 		 * own, not merely a malformed one. */
-		ct_check(vms_cm_close_build(req->bytes, req->wire_len, &np,
+		ct_check(vms_cm_close_build(fx_body(req), fx_body_len(req), &np,
 					    built, sizeof(built), &written)
 			 == VMS_CODEC_E_CLASS,
 			 "vms_cm_close_build refuses a well-formed op 0x0f "
 			 "request (wrong recipe for this (cat,op))");
-		ct_check(vms_cm_dlm_op0d_response_build(req->bytes,
-							req->wire_len, built,
+		ct_check(vms_cm_dlm_op0d_response_build(fx_body(req),
+							fx_body_len(req), built,
 							sizeof(built), &written)
 			 == VMS_CODEC_E_CLASS,
 			 "vms_cm_dlm_op0d_response_build refuses op 0x0f too");
@@ -475,7 +503,7 @@ static void test_barrier_build(void)
 		 "  composes into a full specimen");
 	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
 		 "  the result classifies as an SCA message");
-	ct_check(vms_cm_barrier_parse(frame, frame_written, &fi, &parsed)
+	ct_check(vms_cm_barrier_parse(frame_body(frame), VMS_CM_BODY_LEN, &parsed)
 		 == VMS_CODEC_OK, "  and round-trips through the parser");
 	ct_check_eq_u32(parsed.env.category, VMS_CM_CAT_CONFIG, "  cat 0x01");
 	ct_check_eq_u32(parsed.env.opcode, VMS_CM_OP_BARRIER, "  op 0x0b");
@@ -537,7 +565,7 @@ static void test_joiner_originations(void)
 		 "  composes into a specimen");
 	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
 		 "  classifies");
-	ct_check(vms_cm_model_parse(frame, frame_written, &fi, &model)
+	ct_check(vms_cm_model_parse(frame_body(frame), VMS_CM_BODY_LEN, &model)
 		 == VMS_CODEC_OK, "  round-trips through vms_cm_model_parse");
 	ct_check_eq_u32(model.env.category, VMS_CM_CAT_CONFIG, "  cat 0x01");
 	ct_check_eq_u32(model.env.opcode, VMS_CM_OP_MODEL, "  op 0x14");
@@ -565,7 +593,7 @@ static void test_joiner_originations(void)
 		 "  composes");
 	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
 		 "  classifies");
-	ct_check(vms_cm_params_parse(frame, frame_written, &fi, &params)
+	ct_check(vms_cm_params_parse(frame_body(frame), VMS_CM_BODY_LEN, &params)
 		 == VMS_CODEC_OK, "  round-trips through vms_cm_params_parse");
 	ct_check_eq_u32(params.env.opcode, VMS_CM_OP_PARAMS, "  op 0x01");
 	ct_check_eq_u32(params.votes, 2u, "  VOTES at body[22:24]");
@@ -629,7 +657,7 @@ static void test_membership_coordinator_csid(void)
 		 "composes an op-0x06 form-A specimen");
 	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
 		 "  classifies");
-	ct_check(vms_cm_membership_coordinator_csid(frame, frame_written, &fi,
+	ct_check(vms_cm_membership_coordinator_csid(frame_body(frame), VMS_CM_BODY_LEN,
 						    &csid) == VMS_CODEC_OK,
 		 "  reads the coordinator's CSID from form A");
 	ct_check_eq_u32(csid, 0x00010001u,
@@ -651,7 +679,7 @@ static void test_membership_coordinator_csid(void)
 	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
 		 "  classifies");
 	csid = 0;
-	ct_check(vms_cm_membership_coordinator_csid(frame, frame_written, &fi,
+	ct_check(vms_cm_membership_coordinator_csid(frame_body(frame), VMS_CM_BODY_LEN,
 						    &csid) == VMS_CODEC_OK,
 		 "  reads the coordinator's CSID from form B");
 	ct_check_eq_u32(csid, 0x00010003u,
@@ -668,7 +696,7 @@ static void test_membership_coordinator_csid(void)
 	ct_check(vms_frame_classify(frame, frame_written, &fi) == VMS_CODEC_OK,
 		 "  classifies");
 	csid = 0xffffffffu;
-	ct_check(vms_cm_membership_coordinator_csid(frame, frame_written, &fi,
+	ct_check(vms_cm_membership_coordinator_csid(frame_body(frame), VMS_CM_BODY_LEN,
 						    &csid) == VMS_CODEC_E_RANGE,
 		 "  no CSID in either slot is reported ABSENT");
 	ct_check_eq_u32(csid, 0u, "  with no value asserted");
@@ -678,8 +706,8 @@ static void test_membership_coordinator_csid(void)
 	if (req != NULL) {
 		ct_check(vms_frame_classify(req->bytes, req->wire_len, &fi)
 			 == VMS_CODEC_OK, "  cm-commit-req classifies");
-		ct_check(vms_cm_membership_coordinator_csid(req->bytes,
-							    req->wire_len, &fi,
+		ct_check(vms_cm_membership_coordinator_csid(fx_body(req),
+							    fx_body_len(req),
 							    &csid)
 			 == VMS_CODEC_E_CLASS,
 			 "  and a NON-op-0x06 frame is refused outright");
@@ -702,14 +730,14 @@ static void test_body_build(void)
 	ct_check(vms_frame_classify(req->bytes, req->wire_len, &fi) ==
 			 VMS_CODEC_OK,
 		 "the request specimen classifies");
-	ct_check(vms_cm_envelope_parse(req->bytes, req->wire_len, &fi,
+	ct_check(vms_cm_envelope_parse(fx_body(req), fx_body_len(req),
 				       &req_env) == VMS_CODEC_OK,
 		 "and its envelope parses");
 
 	for (i = 0; i < VMS_CM_BODY_LEN; i++)
 		body[i] = (uint8_t)(i * 7u + 3u);
 
-	ct_check(vms_cm_body_build(req->bytes, req->wire_len, body,
+	ct_check(vms_cm_body_build(fx_body(req), fx_body_len(req), body,
 				   sizeof(body), built, sizeof(built),
 				   &written) == VMS_CODEC_OK, "builds");
 	for (i = 8; i < VMS_CM_BODY_LEN; i++) {
@@ -728,7 +756,7 @@ static void test_body_build(void)
 		 "wrapper (the DLM's reply never writes body[0:8])");
 	ct_check((uint16_t)(built[6] | (built[7] << 8)) == req_env.token,
 		 "  and so is body[6:8] (token)");
-	ct_check(vms_cm_body_build(req->bytes, req->wire_len, body,
+	ct_check(vms_cm_body_build(fx_body(req), fx_body_len(req), body,
 				   VMS_CM_BODY_LEN - 1, built, sizeof(built),
 				   &written) == VMS_CODEC_E_INVAL,
 		 "  a short body is rejected rather than tail-padded with "
@@ -750,7 +778,7 @@ static void test_open_bitmap_span(void)
 
 	ct_check(vms_frame_classify(add->bytes, add->wire_len, &fi)
 		 == VMS_CODEC_OK, "classifies");
-	ct_check(vms_cm_open_bitmap_span(add->bytes, add->wire_len, &fi, span)
+	ct_check(vms_cm_open_bitmap_span(fx_body(add), fx_body_len(add), span)
 		 == VMS_CODEC_OK, "reads the span from an op-0x09 open");
 	ct_check_eq_u32(span[VMS_CM_BITMAP_SPAN_IDX], 0x0e,
 			"  body[55] sits at VMS_CM_BITMAP_SPAN_IDX");
@@ -763,8 +791,8 @@ static void test_open_bitmap_span(void)
 			"all 54 library opens (spec sec 4(p))");
 
 	if (other != NULL) {
-		ct_check(vms_cm_open_bitmap_span(other->bytes, other->wire_len,
-						 &fi, span)
+		ct_check(vms_cm_open_bitmap_span(fx_body(other), fx_body_len(other),
+						 span)
 			 == VMS_CODEC_E_CLASS,
 			 "  refused on an opcode that carries no bitmap -- its "
 			 "residue is not membership");

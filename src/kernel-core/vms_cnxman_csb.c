@@ -914,3 +914,10 @@ void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
 	if (peer_send_msg > csb->cm_ack_msg)
 		csb->cm_ack_msg = peer_send_msg;
 }
+
+void cnxman_envelope_originate(struct vms_csb *csb, uint8_t body[132],
+			       int is_response)
+{
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_envelope_stamp(csb, body, is_response);
+}

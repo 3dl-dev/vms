@@ -178,8 +178,12 @@ uint32_t vms_replay_check_allowlist(const struct vms_replay_result *r,
 			skip++;
 			continue;
 		}
-		if (vms_cm_envelope_parse(r->frame[i].bytes, r->frame[i].len,
-					  &fi, &env) != VMS_CODEC_OK) {
+		/* E73: the codec parses the SYSAP BODY, which is what SCS hands
+		 * a SYSAP. The replay works from captured FRAMES, so it slices
+		 * them exactly as the executive does. */
+		if (vms_cm_envelope_parse(r->frame[i].bytes + VMS_OFF_SYSAP_BODY,
+					  r->frame[i].len - VMS_OFF_SYSAP_BODY,
+					  &env) != VMS_CODEC_OK) {
 			bad++;
 			report_line(report, report_cap, &used,
 				   "  allow  FAIL frame %u: SCS_MSG class but "

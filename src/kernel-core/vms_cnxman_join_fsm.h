@@ -106,6 +106,17 @@
  * accepted while the join is in flight. cnxman_join_connect_req() is that
  * policy, and it is the same object's state -- one join, two directions.
  *
+ * AND STEP 5 IS NOT PART OF THE DRIVE AT ALL -- IT IS PER-PEER (E73).
+ * The MODEL+PARAMS pair above is written as step 5 of one join because that
+ * is where a joiner emits its first one, but the reference sends it on EVERY
+ * VMS$VAXcluster connection it has and so do the MEMBERS: it is what a
+ * connection manager says on any such connection, in either direction.
+ * cnxman_join_advertise_peers() is that obligation, driven from the
+ * once-a-second beat over every CSB the ladder calls OPEN, and it is what
+ * makes a member that connected before CLUSTER_START -- or one this join is
+ * not driving through -- hold real parameters (and therefore real VOTES) for
+ * this node. Only op-0x02 stays single-coordinator.
+ *
  * ===========================================================================
  * WHAT THIS FILE REFUSES TO INVENT (INV-6), EACH WITH ITS CONSEQUENCE
  *
@@ -612,6 +623,17 @@ struct cnxman_join {
 	uint32_t mscp_cmds_sent;
 	uint32_t mscp_ends;
 	uint32_t peer_adverts;       /* the member's own 0x14/0x01/0x02       */
+	/*
+	 * THE OTHER DIRECTION (E73): peers this node advertised ITSELF to on
+	 * the per-CSB beat, and how many op-0x14/op-0x01 records that took.
+	 * `peers_advertised` counts CSBs that were DUE one; `peer_adverts_sent`
+	 * counts records SCS really took. A member that never heard this pair
+	 * holds no parameters for this node and cannot count its VOTES, which
+	 * is what left VAX1's CSB for OVMXJ1 at `09 wait, votes 0/0` for a
+	 * whole live run while VAX2's dialogue proceeded.
+	 */
+	uint32_t peers_advertised;
+	uint32_t peer_adverts_sent;
 	uint32_t peer_acks;          /* cat-0x04 acks the member sent us      */
 	uint32_t inbound_accepted;   /* members' connects (total connectivity)*/
 	uint32_t inbound_refused;    /* ... refused, with a reason            */
@@ -636,10 +658,11 @@ struct cnxman_join {
 	 * this join runs its dialogue with. The Rule of Total Connectivity
 	 * requires this node to TAKE them (cnxman_join_connect_req does), and
 	 * the reference joiner also runs the op-0x14/op-0x01 identity exchange
-	 * on every one of them -- which this single-target FSM does not yet do.
-	 * Counted rather than guessed at, so the gap is visible in the
-	 * diagnostics instead of on a real cluster (plan follow-up, not this
-	 * FSM's to invent).
+	 * on every one of them -- which cnxman_join_advertise_peers() now does,
+	 * on the connection manager's beat, for every member with an OPEN
+	 * connection (E73). This counter is what it always was: the difference
+	 * between the offer this join was waiting for and one from a member it
+	 * is not driving through.
 	 */
 	uint32_t cm_other_member;
 	uint32_t handoffs;           /* transition frames given to the barrier*/
@@ -780,27 +803,58 @@ void cnxman_join_dir_result(struct cnxman_join *j, vms_scs_sysid_t from,
 int cnxman_join_holds_disk_client(const struct cnxman_join *j,
 				  vms_scs_sysid_t dst);
 
-/* One MSCP END message arrived on the MSCP$DISK connection: the whole frame as
- * the port delivered it (receive stays frame-based, design SS3.2.4). */
+/*
+ * One MSCP END message arrived on the MSCP$DISK connection: the SYSAP BODY SCS
+ * delivered (design SS3.2.4, same rule as cnxman_join_rx_body above).
+ *
+ * ⚠ KNOWN GAP, NAMED RATHER THAN HIDDEN (E73). vms_mscp_cl_fsm.c's own
+ * classifier still calls vms_frame_classify() on what it is given, i.e. it is
+ * the exact twin of the CM defect this item fixed, in a codec whose conversion
+ * touches the MSCP server and block-transfer paths too and is therefore its own
+ * plan row. Until that lands, an END arriving here is REFUSED by the MSCP FSM
+ * and counted as `ignored_events` -- honest silence, not a wrong answer. It
+ * does not block a join: the disk-client connection is not a membership
+ * prerequisite (E68) and, when the member refuses it, `mscp_walk_done` is set
+ * and op-0x02 goes out anyway.
+ */
 void cnxman_join_rx_mscp(struct cnxman_join *j, vms_conid_t conid,
-			 const uint8_t *frame, uint32_t len);
+			 const uint8_t *body, uint32_t len);
 
 /*
- * One inbound `VMS$VAXcluster` frame. Classified through the CM codec, mapped
- * to a shared enum cnxman_event and dispatched through the [state][event]
- * table. `from_csid` is the sender as the connection manager identified it and
- * `from_valid` is 0 when it could not -- in which case no identity is
- * recorded (a zero CSID is never "node zero").
+ * One inbound `VMS$VAXcluster` SYSAP BODY -- the 132 bytes SCS hands a SYSAP's
+ * input routine and nothing below them (design SS3.2.4: SCS "calls
+ * scs_sysap_ops.message(ctx, local_conid, frame + 72, inner_len - 16)").
+ * Parsed through the CM codec, mapped to a shared enum cnxman_event and
+ * dispatched through the [state][event] table.
  *
- * Transition frames (op 0x08/0x09/0x0a/0x0b/0x0c/0x0f and the cat-0x02
+ * IT WAS A WHOLE 204-BYTE FRAME UNTIL E73, AND THAT COST THE CAMPAIGN THE
+ * WHOLE POST-ADMIT DIALOGUE. FC-P3.15's body-level retrofit converted the
+ * ORIGINATE/RESPOND half and left this one classifying an Ethertype a SYSAP
+ * never sees, so every real inbound CM message was refused as unparsed. On
+ * join-e72refire (2026-09-04, the live 2-node VAX cluster) this node's
+ * promotion burst reached the wire and VAX2 answered 0.7 ms later with the
+ * cat-0x01 op-0x03 membership COMMIT that STARTS admission -- and the ring
+ * recorded `ARRIVAL ADMIT detail=unparsed aux=0x00000084` instead of a
+ * dispatch. Every host test stayed green because they fed composed 204-byte
+ * frames: they were testing a contract the executive never uses.
+ *
+ * `from_csid` is the sender as the connection manager identified it and
+ * `from_valid` is 0 when it could not -- in which case no identity is recorded
+ * (a zero CSID is never "node zero"). `from_csb` is the CLUB slot of the CSB
+ * whose connection carried it, or -1: the executive's own record of WHO is at
+ * the other end of this connection (book p. 7-23), which is how a participant
+ * addresses a coordinator whose CSID it has no way to learn.
+ *
+ * Transition messages (op 0x08/0x09/0x0a/0x0b/0x0c/0x0f and the cat-0x02
  * rebuild records) belong to the barrier: with a barrier installed they are
  * FORWARDED to it and the answer is CONSUMED; with none they come back as
  * CNXMAN_JOIN_RX_HANDOFF for the caller to route. Those are the only two
- * shapes -- a frame is never both delivered and handed back.
+ * shapes -- a message is never both delivered and handed back.
  */
-enum cnxman_join_rx cnxman_join_rx_frame(struct cnxman_join *j,
-					 const uint8_t *frame, uint32_t len,
-					 vms_csid_t from_csid, int from_valid);
+enum cnxman_join_rx cnxman_join_rx_body(struct cnxman_join *j,
+					const uint8_t *body, uint32_t len,
+					vms_csid_t from_csid, int from_valid,
+					int32_t from_csb);
 
 /*
  * THE SERVER HALF (spec SS4(y), book p. 7-11). A member is opening its own
@@ -850,6 +904,28 @@ void cnxman_join_cm_accepted(struct cnxman_join *j, vms_scs_sysid_t peer,
  * not yet permit. Nothing in this file calls it.
  */
 void cnxman_join_csid_learned(struct cnxman_join *j, vms_csid_t csid);
+
+/*
+ * ADVERTISE THIS NODE'S IDENTITY TO EVERY MEMBER IT HAS AN OPEN
+ * `VMS$VAXcluster` CONNECTION TO (spec SS4(o) rows 1-3 read per-peer off the
+ * reference join; see the block comment above cnxman_join_advertise_peers() in
+ * the .c for the frame-by-frame grounding).
+ *
+ * Called on the connection manager's own once-a-second beat, NOT out of a join
+ * state: the pair is a per-CSB obligation of a connection manager, which is
+ * why the reference's MEMBERS send it too, and why a member connection that
+ * arrives while this node has no join running must still be answered with it.
+ *
+ * IT ASSERTS NOTHING ABOUT MEMBERSHIP (INV-6). Each record carries this node's
+ * own model string (from cfg, read out of real executive state by the glue)
+ * and its own SYSGEN VOTES, stamped from the destination CSB's own dialogue
+ * counters. It never touches a CSID, a member flag or a quorum cell, and a
+ * peer whose connection the CSB ladder does not call OPEN is skipped.
+ *
+ * Idempotent: a record this connection has already carried is not sent again,
+ * and a connection that CHANGED has carried nothing (see `cm_advert_conid`).
+ */
+void cnxman_join_advertise_peers(struct cnxman_join *j);
 
 /*
  * The join watchdog (CNXMAN_TIMER_JOIN). INSTRUMENT-AND-REPEAT, never abandon:

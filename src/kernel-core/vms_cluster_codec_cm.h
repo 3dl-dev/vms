@@ -228,14 +228,39 @@ extern "C" {
 /*
  * BODY-RELATIVE offsets (body[0] == abs 72), derived arithmetically from the
  * frame-absolute constants above so the two addressing schemes can never
- * drift apart. The PARSE accessors (sec 4) read a RECEIVED FRAME and keep
- * using the VMS_OFF_CM_* constants above; every ORIGINATING/RESPONSE builder
- * (sec 5/5b) writes only a 132-byte body buffer and uses these VMS_OFB_CM_*
- * ones (design sec 3.2.4 ruling E1 -- FC-P3.15's body-level conformance
- * retrofit).
+ * drift apart.
+ *
+ * SINCE E73 THIS IS THE ONLY ADDRESSING THIS FILE'S ENTRY POINTS USE, on both
+ * directions of the wire. FC-P3.15 converted the ORIGINATE/RESPOND half to
+ * bodies and left the PARSE half reading a whole 204-byte frame -- but design
+ * sec 3.2.4 is explicit about what a SYSAP is handed on receive: "SCS parses
+ * 56-71, credits the ledger, dispatches by dst Con.ID and MTYPE, and calls
+ * scs_sysap_ops.message(ctx, local_conid, frame + 72, inner_len - 16)". A
+ * SYSAP never sees an Ethertype, so a parser that classifies one refuses every
+ * real message.
+ *
+ * THAT IS NOT A HYPOTHETICAL (integration note E73). On the live 2-node VAX
+ * cluster (join-e72refire, 2026-09-04) this node put its MODEL/PARAMS/CONFIG
+ * burst on the wire, VAX2 answered 0.7 ms later with the cat-0x01 op-0x03
+ * membership COMMIT that STARTS admission -- and the frame-absolute parser
+ * returned VMS_CODEC_E_NOTSCA on the 132 bytes SCS handed up. The CNXTRACE ring
+ * recorded it as `ARRIVAL detail=unparsed aux=0x00000084` (0x84 = 132, the body
+ * length) and the join sat in [ADMIT] for the remaining 1472 beats of the run.
+ * Three real inbound CM messages were lost that way in one run: VAX1's op-0x01
+ * parameters, VAX2's op-0x01 parameters, and VAX2's op-0x03 COMMIT.
+ *
+ * The VMS_OFF_CM_* frame-absolute family above is KEPT because the two must
+ * stay derived from one another and because the test-only full-frame composer
+ * (tests/cluster/host/vms_frame_compose.h) still assembles 204-byte specimens
+ * with it. No entry point in this file uses it any more.
  */
+#define VMS_OFB_CM_SEND_MSG    (VMS_OFF_CM_SEND_MSG    - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_ACK_MSG     (VMS_OFF_CM_ACK_MSG     - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_CATEGORY    (VMS_OFF_CM_CATEGORY    - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_OPCODE      (VMS_OFF_CM_OPCODE      - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_BITMAP_SPAN (VMS_OFF_CM_BITMAP_SPAN - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_DLM_RESNAMLEN (VMS_OFF_CM_DLM_RESNAMLEN - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_DLM_RESNAME (VMS_OFF_CM_DLM_RESNAME - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_EPOCH       (VMS_OFF_CM_EPOCH       - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_ROLE        (VMS_OFF_CM_ROLE        - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_CLASS       (VMS_OFF_CM_CLASS       - VMS_OFF_SYSAP_BODY)
@@ -309,28 +334,31 @@ struct vms_cm_envelope {
 	uint8_t  opcode;   /* body[9]                                          */
 };
 
-vms_codec_status_t vms_cm_envelope_parse(const uint8_t *frame, uint32_t len,
-					 const struct vms_frame_info *fi,
+/*
+ * Read the 10-byte envelope out of a RECEIVED 132-byte SYSAP BODY -- the
+ * bytes SCS hands a SYSAP's input routine, and the only bytes a SYSAP is
+ * entitled to see (design sec 3.2.4; see the VMS_OFB_CM_* block above for the
+ * live-cluster failure that made this the only shape).
+ *
+ * A `len` shorter than VMS_CM_BODY_LEN is VMS_CODEC_E_SHORT: half a CM message
+ * is not a CM message, and there is no shorter grounded class on the
+ * VMS$VAXcluster connection (spec sec 4(d): the class is 190-content, fixed).
+ */
+vms_codec_status_t vms_cm_envelope_parse(const uint8_t *body, uint32_t len,
 					 struct vms_cm_envelope *out);
 
 /*
- * vms_cm_body_kind - read the (category, opcode) pair out of a 132-byte CM
- * BODY, rather than out of a received 204-byte frame.
+ * vms_cm_body_kind - read the (category, opcode) pair out of a CM BODY with no
+ * length gate beyond the two bytes themselves.
  *
- * WHY IT EXISTS. Every ORIGINATING builder in sec 5/5b writes a body buffer
- * (design sec 3.2.4 ruling E1); vms_cm_envelope_parse() above reads a received
- * FRAME through the frame-absolute offsets and needs a struct vms_frame_info
- * an outbound body has never been classified into. A caller that wants to
- * report WHICH message it is about to send -- the FC-P3.3 diagnostics ring,
- * vms_cnxman_diag.h -- must therefore read the two bytes it is really sending
- * (INV-6: report the bytes, never the intent). Doing that at the call site
- * would put a raw wire offset outside a codec TU, which design sec 3.9 rule 2
- * forbids; so it is done here, through the SAME VMS_OFB_CM_* constants the
- * builders write, which are themselves derived arithmetically from the
- * frame-absolute pair. There is no third addressing scheme.
- *
- * `body` must be at least VMS_OFB_CM_OPCODE + 1 bytes; a shorter buffer is
- * VMS_CODEC_E_RANGE and nothing is written. Either out-pointer may be NULL.
+ * WHY IT IS SEPARATE from vms_cm_envelope_parse() now that both take a body:
+ * this one is the DIAGNOSTIC read, used by the FC-P3.3 transition ring to
+ * report which message is really being SENT (INV-6: report the bytes, never
+ * the builder's intent), and it must succeed on a partially-filled scratch
+ * buffer so that a body a builder REFUSED to complete still names itself in
+ * the transcript. `body` must be at least VMS_OFB_CM_OPCODE + 1 bytes; a
+ * shorter buffer is VMS_CODEC_E_RANGE and nothing is written. Either
+ * out-pointer may be NULL.
  */
 vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
 				    uint8_t *out_category, uint8_t *out_opcode);
@@ -373,8 +401,7 @@ struct vms_cm_open {
 	int      has_bitmap; /* 1 iff opcode == VMS_CM_OP_XITION_ADD           */
 };
 
-vms_codec_status_t vms_cm_open_parse(const uint8_t *frame, uint32_t len,
-				     const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 				     struct vms_cm_open *out);
 
 /*
@@ -392,8 +419,7 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *frame, uint32_t len,
  * bitmap at all, and reading this span from them would report residue as
  * membership.
  */
-vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *frame, uint32_t len,
-					   const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *body, uint32_t len,
 					   uint8_t *out /* [VMS_CM_BITMAP_SPAN_LEN] */);
 
 /* Barrier step (op 0x0b joiner-initiated) / release (op 0x0c, coordinator,
@@ -407,8 +433,7 @@ struct vms_cm_barrier {
 			 * across 6 joins / 4 clusters / 3 joiner nodes)     */
 };
 
-vms_codec_status_t vms_cm_barrier_parse(const uint8_t *frame, uint32_t len,
-					const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_barrier_parse(const uint8_t *body, uint32_t len,
 					struct vms_cm_barrier *out);
 
 /* cat-0x01 op-0x01 cluster-parameters: VOTES + the node-parameter block. */
@@ -421,8 +446,7 @@ struct vms_cm_params {
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], 8-byte space-padded ASCII version field (e.g. V7.3) */
 };
 
-vms_codec_status_t vms_cm_params_parse(const uint8_t *frame, uint32_t len,
-				       const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 				       struct vms_cm_params *out);
 
 /* cat-0x01 op-0x14 node CPU/model advertisement. */
@@ -432,8 +456,7 @@ struct vms_cm_model {
 	uint8_t name[VMS_CM_MODEL_MAX];  /* body[17..], ASCII                  */
 };
 
-vms_codec_status_t vms_cm_model_parse(const uint8_t *frame, uint32_t len,
-				      const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_model_parse(const uint8_t *body, uint32_t len,
 				      struct vms_cm_model *out);
 
 /* cat-0x02 op-0x0d DLM lock-resource rebuild record (sec 4(p)). */
@@ -444,8 +467,7 @@ struct vms_cm_dlm_rebuild {
 	uint8_t resname[VMS_CM_DLM_RESNAME_MAX]; /* body[48..48+resnamelen)   */
 };
 
-vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
-					    const struct vms_frame_info *fi,
+vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *body, uint32_t len,
 					    struct vms_cm_dlm_rebuild *out);
 
 /* ------------------------------------------------------------------ *
@@ -489,7 +511,7 @@ vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
  * STAMP with is_response=1: the verbatim body copy this builder does FIRST
  * already carries the request's txn/token at body[4:8].
  */
-vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_frame,
+vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
 					      uint32_t req_len,
 					      uint8_t own_class,
 					      uint8_t *out_body, uint32_t cap,
@@ -513,7 +535,7 @@ struct vms_cm_node_params {
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96] */
 };
 
-vms_codec_status_t vms_cm_close_build(const uint8_t *req_frame, uint32_t req_len,
+vms_codec_status_t vms_cm_close_build(const uint8_t *req_body, uint32_t req_len,
 				      const struct vms_cm_node_params *own_params,
 				      uint8_t *out_body, uint32_t cap,
 				      uint32_t *written);
@@ -531,7 +553,7 @@ vms_codec_status_t vms_cm_close_build(const uint8_t *req_frame, uint32_t req_len
  * STAMP with is_response=1: the verbatim copy already carries the
  * request's txn/token.
  */
-vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_frame,
+vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_body,
 						  uint32_t req_len,
 						  uint8_t *out_body, uint32_t cap,
 						  uint32_t *written);
@@ -552,7 +574,7 @@ vms_codec_status_t vms_cm_dlm_op0d_response_build(const uint8_t *req_frame,
  * STAMP with is_response=1: this builder has just written the echoed
  * txn/token itself, identically to vms_cm_close_build.
  */
-vms_codec_status_t vms_cm_body_build(const uint8_t *req_frame, uint32_t req_len,
+vms_codec_status_t vms_cm_body_build(const uint8_t *req_body, uint32_t req_len,
 				     const uint8_t *body, uint32_t body_len,
 				     uint8_t *out_body, uint32_t cap,
 				     uint32_t *written);
@@ -787,7 +809,7 @@ vms_codec_status_t vms_cm_commit_build(uint8_t tr_class, uint32_t epoch,
  * STAMP with is_response=1: the verbatim body copy already carries the
  * member's own txn/token to echo.
  */
-vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_frame,
+vms_codec_status_t vms_cm_step_ack_build(const uint8_t *req_body,
 					 uint32_t req_len,
 					 uint8_t *out_body, uint32_t cap,
 					 uint32_t *written);
@@ -899,9 +921,8 @@ vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
  * "no coordinator CSID in this frame", never a fabricated one).
  * VMS_CODEC_E_CLASS unless this is really a cat-0x01 op-0x06.
  */
-vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *frame,
+vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *body,
 						uint32_t len,
-						const struct vms_frame_info *fi,
 						uint32_t *out_csid);
 
 /* ------------------------------------------------------------------ *

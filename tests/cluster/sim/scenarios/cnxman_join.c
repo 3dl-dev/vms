@@ -334,13 +334,30 @@ static const struct vms_fixture *fixture(const char *name)
 	return NULL;
 }
 
+/*
+ * E73: feed the join the SYSAP BODY the executive delivers (design sec 3.2.4),
+ * sliced out of the captured FRAME the fixtures hold, and tell it which CSB's
+ * connection carried it -- the member's.
+ */
+static int32_t member_csb_index(void)
+{
+	return (int32_t)cnxman_club_csb_index(&g.cl.club, g.member_csb);
+}
+
+static enum cnxman_join_rx join_feed(const uint8_t *frame, uint32_t len)
+{
+	return cnxman_join_rx_body(&g.j, frame + VMS_OFF_SYSAP_BODY,
+				   len - VMS_OFF_SYSAP_BODY, MEMBER_CSID, 1,
+				   member_csb_index());
+}
+
 static int feed_fixture(const char *name)
 {
 	const struct vms_fixture *f = fixture(name);
 
 	if (f == NULL)
 		return -1;
-	(void)cnxman_join_rx_frame(&g.j, f->bytes, f->wire_len, MEMBER_CSID, 1);
+	(void)join_feed(f->bytes, f->wire_len);
 	return 0;
 }
 
@@ -483,7 +500,7 @@ static void replay(void)
 	(void)feed_fixture("cm-open-add-req");
 	len = mk_go_frame(0x0000000eu);
 	if (len != 0u)
-		(void)cnxman_join_rx_frame(&g.j, g_synth, len, MEMBER_CSID, 1);
+		(void)join_feed(g_synth, len);
 	if (cnxman_join_handed_off(&g.j))
 		obs(R_HANDOFF);
 }
@@ -631,7 +648,7 @@ static void replay_through_a_transient(uint32_t *timers_fired)
 	(void)feed_fixture("cm-open-add-req");
 	len = mk_go_frame(0x0000000eu);
 	if (len != 0u)
-		(void)cnxman_join_rx_frame(&g.j, g_synth, len, MEMBER_CSID, 1);
+		(void)join_feed(g_synth, len);
 	if (cnxman_join_handed_off(&g.j))
 		obs(R_HANDOFF);
 }

@@ -129,6 +129,32 @@ static int bed_send(void *ctx, vms_csid_t dst, const uint8_t *body, uint32_t len
 	return 0;
 }
 
+/*
+ * The PARTICIPANT's origination path (E73): addressed by CLUB slot, because a
+ * participant has no grounded way to learn a peer's CSID. Recorded against the
+ * CSID that slot's CSB really holds, so every existing "went out to the
+ * coordinator" assertion keeps meaning what it meant -- but a bed that
+ * resolved a destination the FSM never named would be the fabrication, so the
+ * CSB is looked up and an unresolvable slot is REFUSED here exactly as the
+ * production glue refuses it.
+ */
+static int bed_send_csb(void *ctx, int32_t csb_index, const uint8_t *body,
+			uint32_t len)
+{
+	struct vms_csb *csb;
+
+	(void)ctx;
+	if (csb_index < 0)
+		return -1;
+	csb = cnxman_club_csb_at(&g.cl.club, (uint32_t)csb_index);
+	if (csb == NULL || !csb->in_use)
+		return -1;
+	bed_record(&g, body, len,
+		   csb->csid_valid ? (uint32_t)csb->csid : 0u, 0);
+	bed_advance_dialogue(csb);
+	return 0;
+}
+
 static int bed_respond(void *ctx, const uint8_t *body, uint32_t len)
 {
 	(void)ctx;
@@ -147,6 +173,7 @@ static void bed_init(void)
 	memset(&g, 0, sizeof(g));
 	fake_ops_init(&g.ops, &g.fake);
 	g.ops.send = bed_send;
+	g.ops.send_csb = bed_send_csb;
 	g.ops.respond = bed_respond;
 	g.fake.now_ms = 100000u;
 
@@ -329,9 +356,25 @@ static uint32_t mk_abort(uint8_t *f)
 	return n;
 }
 
+/* The CLUB slot of the coordinator's CSB -- the connection its transition
+ * arrives on, which is how a participant addresses it (E73). */
+static int32_t coord_csb_index(void)
+{
+	return (int32_t)cnxman_club_csb_index(&g.cl.club, g.coord_csb);
+}
+
+/*
+ * FEED THE BARRIER WHAT THE EXECUTIVE FEEDS IT (E73): the 132-byte SYSAP BODY
+ * SCS hands an input routine, not the whole composed frame. `COORD_CSB` is the
+ * CLUB slot the glue resolves from the Con.ID the transition really arrived on
+ * -- the coordinator's ADDRESS, which is what every response and every one of
+ * the twelve op-0x0b steps is sent on.
+ */
 static enum cnxman_barrier_rx feed(const uint8_t *f, uint32_t len)
 {
-	return cnxman_barrier_rx_frame(&g.b, f, len, COORD_CSID, 1);
+	return cnxman_barrier_rx_body(&g.b, f + VMS_OFF_SYSAP_BODY,
+				      len - VMS_OFF_SYSAP_BODY,
+				      COORD_CSID, 1, coord_csb_index());
 }
 
 /* ==========================================================================

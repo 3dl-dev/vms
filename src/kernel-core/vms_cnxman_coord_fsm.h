@@ -414,9 +414,9 @@ void cnxman_coord_set_rebuild(struct cnxman_coord *c,
  * that told us we lost the race is handed to the participant half. That is the
  * hand-off, and it costs no extra round trip.
  */
-enum cnxman_coord_rx cnxman_coord_rx_frame(struct cnxman_coord *c,
-					   const uint8_t *frame, uint32_t len,
-					   int32_t from_csb);
+enum cnxman_coord_rx cnxman_coord_rx_body(struct cnxman_coord *c,
+					  const uint8_t *body, uint32_t len,
+					  int32_t from_csb);
 
 /*
  * FC-P3.6 hand-off: the CSB ten-state ladder returned

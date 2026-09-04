@@ -404,8 +404,7 @@ static int join_emit_cm(struct cnxman_join *j, int is_response)
 	 * outright therefore BURNS its number; that leaves a gap, never a
 	 * repeat or a decrement, and the refusal is counted below.
 	 */
-	cnxman_csb_dialogue_sent(csb);
-	cnxman_envelope_stamp(csb, j->scratch, is_response);
+	cnxman_envelope_originate(csb, j->scratch, is_response);
 
 	rc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,
 			       VMS_CM_BODY_LEN);
@@ -419,17 +418,34 @@ static int join_emit_cm(struct cnxman_join *j, int is_response)
 	return 0;
 }
 
-/* A codec refusal and a send refusal are different facts and are counted as
- * such; a codec refusal ends the join honestly rather than silently. There is
- * no body when the codec refuses, so the ring records the refusal with both
- * wire bytes explicitly zero -- an omission, not a message. */
-static int join_build_failed(struct cnxman_join *j, vms_codec_status_t st)
+/*
+ * A codec refusal and a send refusal are different facts and are counted as
+ * such. There is no body when the codec refuses, so the ring records the
+ * refusal with both wire bytes explicitly zero -- an omission, not a message.
+ * Returns nonzero when there is nothing to send.
+ */
+static int join_note_codec_failure(struct cnxman_join *j, vms_codec_status_t st)
 {
 	if (st == VMS_CODEC_OK)
 		return 0;
 	j->codec_failures++;
 	join_diag_emit(j, 0u, 0u, CNXMAN_DIAG_G_CODEC, (int32_t)st,
 		       j->cm_conid);
+	return 1;
+}
+
+/* The same, for a body on the JOIN'S OWN drive: a codec this node cannot get a
+ * message out of is a defect in this node, and retrying it is a loop rather
+ * than a recovery -- so the attempt ends honestly.
+ *
+ * The per-peer identity beat deliberately does NOT use this (E73): that beat
+ * runs on every CSB whether or not a join is in flight, including on a node
+ * that is already a MEMBER, and a build refusal there is a reason to say
+ * nothing to that peer -- never a reason to unmake a membership. */
+static int join_build_failed(struct cnxman_join *j, vms_codec_status_t st)
+{
+	if (!join_note_codec_failure(j, st))
+		return 0;
 	join_fail(j, CNXMAN_JOIN_FAIL_CODEC,
 		  "%CNXMAN, could not build a VMS$VAXcluster message");
 	return 1;
@@ -465,22 +481,71 @@ static void join_own_params(struct cnxman_join *j,
  * The three originations of the joiner's own burst (spec sec 4(o))
  * ========================================================================== */
 
-static void join_send_model(struct cnxman_join *j)
+/*
+ * WHAT THIS NODE HAS ALREADY SAID ABOUT ITSELF ON THE CONNECTION IT HOLDS TO
+ * `csb` RIGHT NOW (E73). Keyed to the Con.ID, so a connection that changed
+ * makes the record stale by construction and the identity goes out again --
+ * the same per-connection rule `burst_on_conn` applies to the join's own
+ * dialogue, applied to every peer.
+ */
+/*
+ * `conid` is the connection the record would go out ON, and the two callers
+ * name a DIFFERENT one on purpose: the join's own dialogue rides the Con.ID
+ * the join holds (`j->cm_conid`, which it may have adopted from the member's
+ * own connect before the CSB was updated), while the per-peer beat rides the
+ * one the CSB records (`csb->cdt_conid`). In production those are the same
+ * value for the member a join is driving through -- the glue writes the
+ * accepted/connected Con.ID into the CSB at the instant SCS mints it -- so the
+ * two paths share one mask and neither can send the same record twice. A
+ * Con.ID of 0 is "no connection", never "connection zero" (INV-6).
+ */
+static int join_advert_due(const struct vms_csb *csb, vms_conid_t conid,
+			   uint8_t bit)
 {
-	vms_codec_status_t st;
+	if (csb == NULL || conid == 0u)
+		return 0;
+	if (csb->cm_advert_conid != (uint32_t)conid)
+		return 1;   /* a different connection: nothing was said on it */
+	return (csb->cm_advert_sent & bit) == 0u;
+}
+
+static void join_advert_mark(struct vms_csb *csb, vms_conid_t conid,
+			     uint8_t bit)
+{
+	if (csb == NULL || conid == 0u)
+		return;
+	if (csb->cm_advert_conid != (uint32_t)conid) {
+		csb->cm_advert_conid = (uint32_t)conid;
+		csb->cm_advert_sent = 0u;
+	}
+	csb->cm_advert_sent |= bit;
+}
+
+/* Build this node's model advertisement into `scratch`. Nonzero when the codec
+ * refused, which has already ended the join honestly. */
+static vms_codec_status_t join_build_model(struct cnxman_join *j)
+{
 	const uint8_t *name = j->cfg.model_valid ? j->cfg.model : NULL;
 	uint8_t len = j->cfg.model_valid ? j->cfg.model_len : 0u;
 
 	if (!j->cfg.model_valid)
 		j->model_omitted++;
+	return vms_cm_model_build(name, len, j->scratch,
+				  (uint32_t)sizeof(j->scratch), NULL);
+}
 
-	st = vms_cm_model_build(name, len, j->scratch,
-				(uint32_t)sizeof(j->scratch), NULL);
-	if (join_build_failed(j, st))
+static void join_send_model(struct cnxman_join *j)
+{
+	struct vms_csb *csb = join_target_csb(j);
+
+	if (!join_advert_due(csb, j->cm_conid, CNXMAN_JOIN_B_MODEL))
+		return;   /* this connection has already carried it */
+	if (join_build_failed(j, join_build_model(j)))
 		return;
 	if (join_emit_cm(j, 0) == 0) {
 		j->model_sent++;
 		j->burst_on_conn |= CNXMAN_JOIN_B_MODEL;
+		join_advert_mark(csb, j->cm_conid, CNXMAN_JOIN_B_MODEL);
 	}
 }
 
@@ -506,28 +571,172 @@ static void join_note_lockdirwt(struct cnxman_join *j)
 	}
 }
 
-static void join_send_params(struct cnxman_join *j)
+/* Build this node's cluster-parameters record into `scratch`, VOTES read from
+ * the REAL SYSGEN parameters this node booted with -- never a default (spec
+ * sec 4(j) pinned body[22:24] byte-exact across four configured values; 0 is a
+ * legitimate one). */
+static vms_codec_status_t join_build_params(struct cnxman_join *j)
 {
 	struct vms_cm_node_params own;
-	vms_codec_status_t st;
 	uint16_t votes = 0u;
 
-	/* VOTES from the REAL SYSGEN parameters this node booted with, never a
-	 * default (spec sec 4(j) pinned body[22:24] byte-exact across four
-	 * configured values; 0 is a legitimate one). */
 	if (j->cl != NULL)
 		votes = j->cl->params.votes;
 
 	join_own_params(j, &own);
 	join_note_lockdirwt(j);
+	return vms_cm_params_build(votes, &own, j->scratch,
+				   (uint32_t)sizeof(j->scratch), NULL);
+}
 
-	st = vms_cm_params_build(votes, &own, j->scratch,
-				 (uint32_t)sizeof(j->scratch), NULL);
-	if (join_build_failed(j, st))
+static void join_send_params(struct cnxman_join *j)
+{
+	struct vms_csb *csb = join_target_csb(j);
+
+	if (!join_advert_due(csb, j->cm_conid, CNXMAN_JOIN_B_PARAMS))
+		return;
+	if (join_build_failed(j, join_build_params(j)))
 		return;
 	if (join_emit_cm(j, 0) == 0) {
 		j->params_sent++;
 		j->burst_on_conn |= CNXMAN_JOIN_B_PARAMS;
+		join_advert_mark(csb, j->cm_conid, CNXMAN_JOIN_B_PARAMS);
+	}
+}
+
+/* ==========================================================================
+ * THE IDENTITY EXCHANGE IS PER-PEER, NOT PER-JOIN (E73 part A)
+ *
+ * THE WALL, live (join-e72refire, 2026-09-04). This node's promotion burst
+ * reached the wire for the first time -- and it reached exactly ONE member.
+ * VAX2 had won the connect race, so the join drove VAX2; VAX1's own
+ * VMS$VAXcluster connection had arrived while the join was still in [IDLE],
+ * where no cell handles it, so VAX1 never heard this node say what it is. Its
+ * CSB for OVMXJ1 stayed at `State: 09 wait, votes 0/0` for the whole run, and
+ * VAX1 is the node CLUSTER_NODES was read from.
+ *
+ * WHAT THE REFERENCE DOES, decoded frame by frame from
+ * vax3-2to3-established-join-20260730 (the joiner is 08:00:2b:11:22:33):
+ *
+ *   t+29.8253  J -> VAX1   cat 0x01 op 0x14 (snd 1), op 0x01 (snd 2)
+ *   t+29.8256  VAX1 -> J   the same two back, snd 1 and 2
+ *   t+30.3692  VAX2 -> J   op 0x14 (snd 1)   [VAX2 opened this VC]
+ *   t+30.3692  J -> VAX2   op 0x14 (snd 1), op 0x01 (snd 2)
+ *   t+30.3694  VAX2 -> J   op 0x01 (snd 2)
+ *   t+34.7634  J -> VAX2   cat 0x01 op 0x02  -- to the COORDINATOR ONLY
+ *
+ * So the pair (MODEL, PARAMS) goes to EVERY member, on that member's own VC,
+ * each with its own send-msg# starting at 1 -- and the members send theirs
+ * back the same way, i.e. it is what a connection manager says on every
+ * VMS$VAXcluster connection it has, in both directions, whether it is joining
+ * or already a member. Only op-0x02 is the join's single act, and it goes to
+ * one peer (spec sec 4(o): "A non-coordinator peer SILENTLY DISCARDS op 0x02").
+ *
+ * SO THIS IS A PER-CSB OBLIGATION AND IT RUNS ON THE BEAT, not out of a join
+ * state. It asserts nothing about membership: it says this node's own model
+ * string and its own SYSGEN VOTES, addressed by the CSB whose connection the
+ * executive really holds, stamped from that CSB's own dialogue counters. A
+ * peer whose connection is not OPEN is skipped, not queued -- p. 7-24's OPEN
+ * is the executive's own record of connectivity and this reads it.
+ * ========================================================================== */
+
+/*
+ * Originate one already-built body to `csb` (CLUB slot `idx`).
+ *
+ * ADDRESSED BY CSB, like the barrier's steps and for the same reason: a peer's
+ * CSID is not something this node can learn (integration notes E30, E73), and
+ * the connection the executive holds for that system is. The dialogue counter
+ * is advanced BEFORE the stamp, which is what makes the first message to a
+ * fresh peer carry send-msg# 1 (spec sec 4(j), "Starts at 1 on the first VC
+ * message"; cnxman_csb_dialogue_sent()'s own note).
+ */
+static int join_emit_to_csb(struct cnxman_join *j, struct vms_csb *csb,
+			    int32_t idx)
+{
+	uint8_t cat, op;
+	int rc;
+
+	join_body_kind(j, &cat, &op);
+	if (j->ops == NULL || j->ops->send_csb == NULL) {
+		j->send_failures++;
+		join_diag_emit(j, cat, op, CNXMAN_DIAG_G_NO_OPS, 0,
+			       csb->cdt_conid);
+		return -1;
+	}
+
+	cnxman_envelope_originate(csb, j->scratch, 0);
+
+	rc = j->ops->send_csb(j->ops->ctx, idx, j->scratch, VMS_CM_BODY_LEN);
+	if (rc != 0) {
+		j->send_failures++;
+		join_diag_emit(j, cat, op, CNXMAN_DIAG_G_REFUSED, (int32_t)rc,
+			       csb->cdt_conid);
+		return -1;
+	}
+	join_diag_emit(j, cat, op, CNXMAN_DIAG_G_SENT, 0, csb->cdt_conid);
+	return 0;
+}
+
+/* Is this CSB a peer whose VMS$VAXcluster connection the executive says is
+ * OPEN? Both halves are the CSB ladder's own state (p. 7-23/7-24), written
+ * from a real CDT open and from nothing else. */
+static int join_peer_advertisable(const struct vms_csb *csb,
+				  const struct vms_csb *local)
+{
+	return csb != NULL && csb != local && csb->in_use && csb->sysid_valid &&
+	       csb->cdt_conid != 0u &&
+	       csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN;
+}
+
+/* One peer: whichever of the two identity records this connection has not
+ * carried yet. Each is built fresh and stamped from THIS peer's counters --
+ * nothing is copied from another peer's frame (INV-6). */
+static void join_advert_peer(struct cnxman_join *j, struct vms_csb *csb,
+			     int32_t idx)
+{
+	if (join_advert_due(csb, csb->cdt_conid, CNXMAN_JOIN_B_MODEL)) {
+		if (join_note_codec_failure(j, join_build_model(j)))
+			return;
+		if (join_emit_to_csb(j, csb, idx) == 0) {
+			j->model_sent++;
+			j->peer_adverts_sent++;
+			join_advert_mark(csb, csb->cdt_conid,
+					 CNXMAN_JOIN_B_MODEL);
+		}
+	}
+	if (join_advert_due(csb, csb->cdt_conid, CNXMAN_JOIN_B_PARAMS)) {
+		if (join_note_codec_failure(j, join_build_params(j)))
+			return;
+		if (join_emit_to_csb(j, csb, idx) == 0) {
+			j->params_sent++;
+			j->peer_adverts_sent++;
+			join_advert_mark(csb, csb->cdt_conid,
+					 CNXMAN_JOIN_B_PARAMS);
+		}
+	}
+}
+
+void cnxman_join_advertise_peers(struct cnxman_join *j)
+{
+	struct vms_club *club;
+	struct vms_csb *local;
+	uint32_t i;
+
+	if (j == NULL || j->cl == NULL)
+		return;
+	club = &j->cl->club;
+	local = cnxman_club_local(club);
+
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *c = cnxman_club_csb_at(club, i);
+
+		if (!join_peer_advertisable(c, local))
+			continue;
+		if (!join_advert_due(c, c->cdt_conid, CNXMAN_JOIN_B_MODEL) &&
+		    !join_advert_due(c, c->cdt_conid, CNXMAN_JOIN_B_PARAMS))
+			continue;
+		j->peers_advertised++;
+		join_advert_peer(j, c, (int32_t)i);
 	}
 }
 
@@ -566,13 +775,30 @@ static int join_recipe_allowed(uint8_t category, uint8_t opcode,
  * ========================================================================== */
 
 struct join_ev {
-	/* frame events */
-	const uint8_t         *frame;
+	/*
+	 * Message events. `body` is the SYSAP's OWN bytes and nothing below
+	 * them -- 132 for a VMS$VAXcluster body, the MSCP end class's own
+	 * length on the disk-client connection. Design sec 3.2.4: SCS "calls
+	 * scs_sysap_ops.message(ctx, local_conid, frame + 72, inner_len - 16)".
+	 * There is no struct vms_frame_info here because a SYSAP never sees a
+	 * frame to classify (E73).
+	 */
+	const uint8_t         *body;
 	uint32_t               len;
-	struct vms_frame_info  fi;
 	struct vms_cm_envelope env;
 	vms_csid_t             from_csid;
 	int                    from_valid;
+	/*
+	 * WHICH CSB this message arrived on -- the CLUB slot of the system at
+	 * the other end of the connection SCS delivered it through, or -1 when
+	 * the glue could not resolve one. Carried alongside `from_csid` because
+	 * the two are different facts: a CSID is an identity the CLUSTER
+	 * assigns and this node has no way to learn for a PEER, while the CSB
+	 * is the executive's own record of the connection the message came in
+	 * on (book p. 7-23). The barrier addresses the coordinator by this
+	 * (E73) -- see cnxman_barrier_rx_body().
+	 */
+	int32_t                from_csb;
 
 	/* connection events */
 	vms_conid_t conid;
@@ -1137,13 +1363,13 @@ static enum cnxman_join_rx join_h_mscp_end(struct cnxman_join *j,
 	int terminator = 0;
 	vms_codec_status_t st;
 
-	if (e->conid != j->mscp_conid || e->frame == NULL) {
+	if (e->conid != j->mscp_conid || e->body == NULL) {
 		j->ignored_events++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 	j->mscp_ends++;
 
-	st = vms_mscp_cl_fsm_on_scc_end(&j->mscp, e->frame, e->len);
+	st = vms_mscp_cl_fsm_on_scc_end(&j->mscp, e->body, e->len);
 	if (st == VMS_CODEC_OK) {
 		if (j->mscp.state == VMS_MSCP_CL_ST_SCC1_DONE)
 			join_mscp_send_scc(j);   /* SET CONTROLLER, twice */
@@ -1152,7 +1378,7 @@ static enum cnxman_join_rx join_h_mscp_end(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 
-	st = vms_mscp_cl_fsm_on_gus_end(&j->mscp, e->frame, e->len, &unit,
+	st = vms_mscp_cl_fsm_on_gus_end(&j->mscp, e->body, e->len, &unit,
 					&terminator);
 	if (st != VMS_CODEC_OK) {
 		j->ignored_events++;
@@ -1237,9 +1463,17 @@ static enum cnxman_join_rx join_h_cm_accepted(struct cnxman_join *j,
 {
 	/*
 	 * Another member's connection. The Rule of Total Connectivity requires
-	 * this node to ACCEPT it (cnxman_join_connect_req does), but it is not
-	 * the dialogue this single-target join runs, so this join says nothing
-	 * on it (the gap is `cm_other_member`'s own note in the header).
+	 * this node to ACCEPT it (cnxman_join_connect_req does), and it is NOT
+	 * the dialogue this single-target join runs -- the op-0x02 that starts
+	 * admission goes to one coordinator (spec sec 4(o)).
+	 *
+	 * WHAT THIS NODE STILL OWES IT is its IDENTITY, and since E73 that is
+	 * not this handler's job: cnxman_join_advertise_peers() sends the
+	 * op-0x14/op-0x01 pair to every member whose connection the CSB ladder
+	 * calls OPEN, on the connection manager's own beat, exactly as the
+	 * reference joiner did with VAX1 and VAX2 alike. So this cell records
+	 * the fact and changes nothing, which is now the whole truth rather
+	 * than a gap.
 	 *
 	 * SAID OUT LOUD, ONCE. On a live cluster this counter and `cm_adopted`
 	 * are the difference between "the offer this join was waiting for" and
@@ -1314,19 +1548,32 @@ static enum cnxman_join_rx join_h_cm_accepted(struct cnxman_join *j,
  * Handlers: the member-driven tail (spec sec 4(o) rows 3, 5-10)
  * ========================================================================== */
 
-/* The peer's own 0x14/0x01/0x02. A real record arriving is the ONLY way a
- * peer's VOTES enters its CSB. */
+/*
+ * The peer's own 0x14/0x01/0x02. A real record arriving is the ONLY way a
+ * peer's VOTES enters its CSB.
+ *
+ * INTO THE CSB IT ARRIVED ON, not into the join's target (E73). This used to
+ * write `join_target_csb()`, which is right only when the sender IS the member
+ * this join is driving through -- and since this node now advertises its own
+ * identity to EVERY member on the beat, every member reciprocates, so a
+ * target-only write would either drop a member's real VOTES or file them under
+ * the wrong system. The arriving CSB is the executive's own answer to "who is
+ * at the other end of this connection" (book p. 7-23).
+ */
 static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 					      const struct join_ev *e)
 {
-	struct vms_csb *csb = join_target_csb(j);
+	struct vms_csb *csb;
 	struct vms_cm_params p;
 
 	j->peer_adverts++;
-	if (e->env.opcode != VMS_CM_OP_PARAMS || csb == NULL)
+	if (e->env.opcode != VMS_CM_OP_PARAMS || e->from_csb < 0)
+		return CNXMAN_JOIN_RX_CONSUMED;
+	csb = cnxman_club_csb_at(&j->cl->club, (uint32_t)e->from_csb);
+	if (csb == NULL || !csb->in_use)
 		return CNXMAN_JOIN_RX_CONSUMED;
 
-	if (vms_cm_params_parse(e->frame, e->len, &e->fi, &p) != VMS_CODEC_OK)
+	if (vms_cm_params_parse(e->body, e->len, &p) != VMS_CODEC_OK)
 		return CNXMAN_JOIN_RX_CONSUMED;
 
 	/*
@@ -1353,7 +1600,7 @@ static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
 		j->ignored_events++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
-	st = vms_cm_echo_response_build(e->frame, e->len, j->tr_class,
+	st = vms_cm_echo_response_build(e->body, e->len, j->tr_class,
 					j->scratch,
 					(uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
@@ -1397,7 +1644,7 @@ static void join_learn_csid_from_membership(struct cnxman_join *j,
 
 	if (j->cl == NULL)
 		return;
-	if (vms_cm_membership_coordinator_csid(e->frame, e->len, &e->fi,
+	if (vms_cm_membership_coordinator_csid(e->body, e->len,
 					       &coord_csid) != VMS_CODEC_OK) {
 		j->csid_unpinned++;
 		if (j->csid_unpinned == 1u)
@@ -1444,7 +1691,7 @@ static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 	join_own_params(j, &own);
-	st = vms_cm_close_build(e->frame, e->len, &own, j->scratch,
+	st = vms_cm_close_build(e->body, e->len, &own, j->scratch,
 				(uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
 		return CNXMAN_JOIN_RX_CONSUMED;
@@ -1464,8 +1711,8 @@ static enum cnxman_join_rx join_forward(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_HANDOFF;
 
 	j->handoffs++;
-	(void)cnxman_barrier_rx_frame(j->barrier, e->frame, e->len,
-				      e->from_csid, e->from_valid);
+	(void)cnxman_barrier_rx_body(j->barrier, e->body, e->len,
+				     e->from_csid, e->from_valid, e->from_csb);
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
@@ -1497,7 +1744,7 @@ static enum cnxman_join_rx join_h_tr_open(struct cnxman_join *j,
 {
 	struct vms_cm_open o;
 
-	if (vms_cm_open_parse(e->frame, e->len, &e->fi, &o) == VMS_CODEC_OK)
+	if (vms_cm_open_parse(e->body, e->len, &o) == VMS_CODEC_OK)
 		j->tr_class = o.cls;
 	return join_forward(j, e);
 }
@@ -1852,11 +2099,26 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	[CNXMAN_JOIN_IDLE] = {
 		[CNXMAN_EV_START]        = join_h_start,
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
+		/*
+		 * E73: and a member's own op-0x14/op-0x01, whenever it comes.
+		 * This node now advertises its identity to every member with
+		 * an OPEN connection on the beat -- including before
+		 * CLUSTER_START, which is exactly the case that cost the live
+		 * cluster VAX1's whole dialogue -- and every member
+		 * reciprocates in kind (spec sec 4(o) row 3). Dropping the
+		 * reply while sending the question would leave that member's
+		 * CSB without the VOTES it really advertised, forever: it does
+		 * not repeat. The handler WRITES ONLY THE SENDER'S OWN CSB
+		 * from the sender's own bytes and asserts nothing about this
+		 * node (INV-6).
+		 */
+		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 	},
 
 	/* [DIR ROUND] spec sec 4(L)(a)+(b): our OWN SCS$DIRECTORY client
 	 * round, resolving every name before connecting to it. */
 	[CNXMAN_JOIN_DIR_ROUND] = {
+		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_DIR_RESULT]   = join_h_dir_result,
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_TIMER_JOIN]   = join_h_watch_lookup,
@@ -1864,6 +2126,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 
 	/* [MSCP CONNECT] spec sec 4(L)(c). */
 	[CNXMAN_JOIN_MSCP_CONNECT] = {
+		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_CDT_OPEN]     = join_h_mscp_opened,
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
@@ -1878,6 +2141,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	 * connect is adopted here (p. 7-24 REACCEPT); the bound is the CSB's.
 	 */
 	[CNXMAN_JOIN_VC_CONNECT] = {
+		[CNXMAN_EV_RX_CONFIG]    = join_h_peer_advert,
 		[CNXMAN_EV_CDT_OPEN]     = join_h_cm_opened,
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
@@ -2291,15 +2555,15 @@ int cnxman_join_holds_disk_client(const struct cnxman_join *j,
 }
 
 void cnxman_join_rx_mscp(struct cnxman_join *j, vms_conid_t conid,
-			 const uint8_t *frame, uint32_t len)
+			 const uint8_t *body, uint32_t len)
 {
 	struct join_ev e;
 
-	if (j == NULL || frame == NULL)
+	if (j == NULL || body == NULL)
 		return;
 	join_bzero(&e, (uint32_t)sizeof(e));
 	e.conid = conid;
-	e.frame = frame;
+	e.body = body;
 	e.len = len;
 	(void)join_dispatch(j, CNXMAN_EV_MSCP_END, &e);
 }
@@ -2338,45 +2602,47 @@ void cnxman_join_timer(struct cnxman_join *j)
 	(void)join_dispatch(j, CNXMAN_EV_TIMER_JOIN, &e);
 }
 
-enum cnxman_join_rx cnxman_join_rx_frame(struct cnxman_join *j,
-					 const uint8_t *frame, uint32_t len,
-					 vms_csid_t from_csid, int from_valid)
+enum cnxman_join_rx cnxman_join_rx_body(struct cnxman_join *j,
+					const uint8_t *body, uint32_t len,
+					vms_csid_t from_csid, int from_valid,
+					int32_t from_csb)
 {
 	struct join_ev e;
 	enum cnxman_event ev;
-	struct vms_csb *csb;
 
-	if (j == NULL || j->cl == NULL || frame == NULL)
+	if (j == NULL || j->cl == NULL || body == NULL)
 		return CNXMAN_JOIN_RX_BAD;
 
 	join_bzero(&e, (uint32_t)sizeof(e));
-	if (vms_frame_classify(frame, len, &e.fi) != VMS_CODEC_OK) {
-		/* A body that does not classify never reaches the table, so
-		 * without this record it would be indistinguishable from a
-		 * frame that never arrived (E69). `aux` carries its length --
-		 * the E67 wall was decoded from exactly that. */
-		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
-				  CNXMAN_DIAG_R_UNPARSED, 0, len);
-		return CNXMAN_JOIN_RX_BAD;
-	}
-	if (vms_cm_envelope_parse(frame, len, &e.fi, &e.env) != VMS_CODEC_OK) {
+	e.from_csb = from_csb;
+	/*
+	 * A body that does not parse never reaches the table, so without this
+	 * record it would be indistinguishable from a message that never
+	 * arrived (E69). `aux` carries its length -- E73 was decoded from
+	 * exactly that: three ARRIVAL records reading `unparsed aux=0x84`
+	 * (132) were VAX1's op-0x01, VAX2's op-0x01 and VAX2's op-0x03
+	 * membership COMMIT, refused by a frame-absolute parser handed a
+	 * SYSAP body.
+	 */
+	if (vms_cm_envelope_parse(body, len, &e.env) != VMS_CODEC_OK) {
 		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
 				  CNXMAN_DIAG_R_UNPARSED, 0, len);
 		return CNXMAN_JOIN_RX_BAD;
 	}
 
-	e.frame = frame;
+	e.body = body;
 	e.len = len;
 	e.from_csid = from_csid;
 	e.from_valid = from_valid;
 
-	/* Every body that really arrived from this peer advances the ack side
-	 * of the dialogue -- spec sec 4(j): ack-msg# "acknowledges the peer's
-	 * highest send-msg# seen". Recorded here, once, from the parsed
-	 * envelope, so no emitter ever has to guess it. */
-	csb = join_target_csb(j);
-	if (csb != NULL)
-		cnxman_csb_dialogue_heard(csb, e.env.send_msg);
+	/*
+	 * The ack side of the dialogue is NOT recorded here (E73). ack-msg# is
+	 * a fact about the CONNECTION a message arrived on, and this FSM can
+	 * only resolve the ONE peer it is joining through -- which left every
+	 * other member's block un-acked once this node started holding a real
+	 * dialogue with all of them. vms_cnxman.c records it for the CSB the
+	 * Con.ID really resolves to, once, before any FSM is offered the body.
+	 */
 
 	/* The opportunistic cat-0x04 ack the member sends is a fact, not a
 	 * transition: counted, never answered (spec sec 4(u)). */

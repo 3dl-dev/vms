@@ -192,7 +192,9 @@ static void bed_record(struct bed *bp, const uint8_t *body, uint32_t len,
 	s->opcode = 0xffu;
 	if (vms_frame_classify(s->bytes, s->len, &fi) != VMS_CODEC_OK)
 		return;
-	if (vms_cm_envelope_parse(s->bytes, s->len, &fi, &env) != VMS_CODEC_OK)
+	if (vms_cm_envelope_parse(s->bytes + VMS_OFF_SYSAP_BODY,
+				  s->len - VMS_OFF_SYSAP_BODY,
+				  &env) != VMS_CODEC_OK)
 		return;
 	s->category = env.category;
 	s->opcode = env.opcode;
@@ -324,7 +326,9 @@ static enum cnxman_coord_rx coord_feed(struct cnxman_coord *c,
 				       int32_t from_csb)
 {
 	g.dispatching_from_csb = from_csb;
-	return cnxman_coord_rx_frame(c, f, n, from_csb);
+	/* E73: the coordinator parses the SYSAP BODY too. */
+	return cnxman_coord_rx_body(c, f + VMS_OFF_SYSAP_BODY,
+				    n - VMS_OFF_SYSAP_BODY, from_csb);
 }
 
 /* ==========================================================================

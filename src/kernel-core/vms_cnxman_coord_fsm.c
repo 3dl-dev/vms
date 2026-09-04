@@ -111,9 +111,9 @@ static int coord_is_participant(const struct cnxman_coord *c, uint32_t i)
  * One dispatched message
  * ========================================================================== */
 struct coord_msg {
-	const uint8_t         *frame;
+	/* The SYSAP's OWN 132 bytes (design SS3.2.4; E73). */
+	const uint8_t         *body;
 	uint32_t               len;
-	struct vms_frame_info  fi;
 	struct vms_cm_envelope env;
 	int32_t                from_csb;
 };
@@ -580,7 +580,7 @@ static void coord_send_relay(struct cnxman_coord *c, uint32_t i)
 		return;
 	}
 	/* A genuine origination: this CSB's own txn/token belong at body[4:8]. */
-	cnxman_envelope_stamp(csb, c->scratch, 0);
+	cnxman_envelope_originate(csb, c->scratch, 0);
 	coord_emit(c, dst, written);
 	c->relays_sent++;
 	/* The subject's identity has no grounded offset in this body (codec
@@ -604,7 +604,7 @@ static void coord_send_commit(struct cnxman_coord *c, uint32_t i)
 			"%CNXMAN, membership commit could not be built");
 		return;
 	}
-	cnxman_envelope_stamp(csb, c->scratch, 0);
+	cnxman_envelope_originate(csb, c->scratch, 0);
 	coord_emit(c, dst, written);
 	c->commits_sent++;
 }
@@ -626,7 +626,7 @@ static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 			"%CNXMAN, transition proposal could not be built");
 		return;
 	}
-	cnxman_envelope_stamp(csb, c->scratch, 0);
+	cnxman_envelope_originate(csb, c->scratch, 0);
 	coord_emit(c, dst, written);
 	c->opens_sent++;
 	/* Book p. 7-40's proposed quorum / votes / foundation time / founder /
@@ -654,7 +654,7 @@ static void coord_send_go(struct cnxman_coord *c, uint32_t i)
 	/* A genuine origination (real send/ack/token), with the ONE documented
 	 * exception the codec itself enforces: txn forced back to zero, a
 	 * notification wire fact (spec sec 4(p)), never a raw offset here. */
-	cnxman_envelope_stamp(csb, c->scratch, 0);
+	cnxman_envelope_originate(csb, c->scratch, 0);
 	vms_cm_notification_zero_txn(c->scratch);
 	coord_emit(c, dst, written);
 	c->gos_sent++;
@@ -677,7 +677,7 @@ static void coord_send_release(struct cnxman_coord *c, uint32_t i, uint32_t step
 		return;
 	}
 	/* Same origination-then-force-txn-zero recipe as the GO. */
-	cnxman_envelope_stamp(csb, c->scratch, 0);
+	cnxman_envelope_originate(csb, c->scratch, 0);
 	vms_cm_notification_zero_txn(c->scratch);
 	coord_emit(c, dst, written);
 	c->releases_sent++;
@@ -1136,7 +1136,7 @@ static void coord_ack_step(struct cnxman_coord *c, const struct coord_msg *m)
 
 	if (csb == NULL || !csb->csid_valid)
 		return;
-	if (vms_cm_step_ack_build(m->frame, m->len, c->scratch,
+	if (vms_cm_step_ack_build(m->body, m->len, c->scratch,
 				  (uint32_t)sizeof(c->scratch), &written) !=
 	    VMS_CODEC_OK) {
 		coord_note_send_failure(c,
@@ -1145,7 +1145,7 @@ static void coord_ack_step(struct cnxman_coord *c, const struct coord_msg *m)
 		return;
 	}
 	/* The verbatim echo already carries the member's own txn/token. */
-	cnxman_envelope_stamp(csb, c->scratch, 1);
+	cnxman_envelope_originate(csb, c->scratch, 1);
 	coord_emit_response(c, written);
 	c->step_acks_sent++;
 }
@@ -1164,7 +1164,7 @@ static void coord_h_step(struct cnxman_coord *c, const struct coord_msg *m)
 	struct vms_cm_barrier rep;
 	int32_t i;
 
-	if (vms_cm_barrier_parse(m->frame, m->len, &m->fi, &rep) !=
+	if (vms_cm_barrier_parse(m->body, m->len, &rep) !=
 	    VMS_CODEC_OK) {
 		c->ignored_events++;
 		return;
@@ -1395,20 +1395,18 @@ static enum cnxman_coord_rx coord_dispatch(struct cnxman_coord *c,
 			     : CNXMAN_COORD_RX_CONSUMED;
 }
 
-enum cnxman_coord_rx cnxman_coord_rx_frame(struct cnxman_coord *c,
-					   const uint8_t *frame, uint32_t len,
-					   int32_t from_csb)
+enum cnxman_coord_rx cnxman_coord_rx_body(struct cnxman_coord *c,
+					  const uint8_t *body, uint32_t len,
+					  int32_t from_csb)
 {
 	struct coord_msg m;
 
-	if (c == NULL || c->cl == NULL || frame == NULL)
+	if (c == NULL || c->cl == NULL || body == NULL)
 		return CNXMAN_COORD_RX_BAD;
-	if (vms_frame_classify(frame, len, &m.fi) != VMS_CODEC_OK)
-		return CNXMAN_COORD_RX_BAD;
-	if (vms_cm_envelope_parse(frame, len, &m.fi, &m.env) != VMS_CODEC_OK)
+	if (vms_cm_envelope_parse(body, len, &m.env) != VMS_CODEC_OK)
 		return CNXMAN_COORD_RX_BAD;
 
-	m.frame = frame;
+	m.body = body;
 	m.len = len;
 	m.from_csb = from_csb;
 	return coord_dispatch(c, &m);

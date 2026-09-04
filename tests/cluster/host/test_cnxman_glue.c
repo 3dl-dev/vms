@@ -234,6 +234,17 @@ static void preload_proposed(struct vms_club *club)
  * 1. The choreography: OPEN -> E3 preload -> GO -> Phase 2 commit, and the
  *    node STAYS NEW throughout (E30's honest outcome).
  * ========================================================================== */
+/* E73: feed the barrier the SYSAP BODY SCS delivers, addressed by the CSB the
+ * transition really arrived on. */
+static enum cnxman_barrier_rx glue_feed_barrier(const uint8_t *frame,
+						uint32_t len)
+{
+	return cnxman_barrier_rx_body(&g.b, frame + VMS_OFF_SYSAP_BODY,
+				      len - VMS_OFF_SYSAP_BODY, COORD_CSID, 1,
+				      (int32_t)cnxman_club_csb_index(
+					      &g.cl.club, g.coord_csb));
+}
+
 static void test_open_preload_go_stays_new(void)
 {
 	uint8_t frame[VMS_CM_FRAME_LEN];
@@ -251,7 +262,7 @@ static void test_open_preload_go_stays_new(void)
 	quorum_before = g.cl.club.quorum;
 
 	len = mk_open_add(frame, EPOCH, 0x06u);
-	ct_check_eq_u32(cnxman_barrier_rx_frame(&g.b, frame, len, COORD_CSID, 1),
+	ct_check_eq_u32(glue_feed_barrier(frame, len),
 			CNXMAN_BARRIER_RX_CONSUMED, "Phase 1 OPEN consumed");
 	ct_check_eq_u32(g.b.state, (unsigned long)CNXMAN_BARRIER_OPEN,
 			"barrier state is OPEN");
@@ -279,7 +290,7 @@ static void test_open_preload_go_stays_new(void)
 	g.cl.club.proposed_cevotes = cevotes_before;   /* restore for the GO */
 
 	len = mk_go(frame, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO);
-	ct_check_eq_u32(cnxman_barrier_rx_frame(&g.b, frame, len, COORD_CSID, 1),
+	ct_check_eq_u32(glue_feed_barrier(frame, len),
 			CNXMAN_BARRIER_RX_CONSUMED, "the GO is consumed");
 	ct_check(cnxman_barrier_phase2_committed(&g.b) != 0,
 		 "Phase 2 has now run (book p. 7-42)");
@@ -460,21 +471,29 @@ static void test_glue_bindings(void)
 		  "the MSCP CDT-open advances the join too, not just the VC (E43)");
 
 	/* Dispatch order: join, then barrier, then coordinator. */
-	check_has("cnxman_join_rx_frame(&cn->join", "the join sees a frame first");
-	check_has("cnxman_barrier_rx_frame(&cn->barrier",
+	check_has("cnxman_join_rx_body(&cn->join",
+		  "the join sees the SYSAP body first");
+	check_has("cnxman_barrier_rx_body(&cn->barrier",
 		  "... then the barrier on NOT_MINE/HANDOFF");
-	check_has("cnxman_coord_rx_frame(&cn->coord",
+	check_has("cnxman_coord_rx_body(&cn->coord",
 		  "... then the coordinator on NOT_MINE");
 
-	/* E1's transport + the dialogue-counter bookkeeping this glue owns
-	 * for the barrier/coordinator (neither calls it itself). */
-	check_has("scs_send_msg(cn->cl->scs, csb->cdt_conid, body, len)",
+	/*
+	 * E1's transport -- AND NOTHING ELSE since E73. The glue used to
+	 * advance the destination CSB's send-msg# after a successful send,
+	 * one step out of phase with the join's advance-then-stamp, so the
+	 * first barrier-side body stamped after the join's last one repeated
+	 * a number spec sec 4(j) grounds as strictly monotonic per sender.
+	 * The assignment now lives in cnxman_envelope_originate() alone.
+	 */
+	check_has("scs_send_msg(cn->cl->scs, csb->cdt_conid, body,",
 		  "ops.send resolves the destination CSB's real CDT and hands "
 		  "off to SCS (E1)");
-	check_has("cnxman_csb_dialogue_sent(csb)",
-		  "ops.send advances the CSB's outbound dialogue counter");
-	check_has("cnxman_csb_dialogue_sent(cn->cur_csb)",
-		  "ops.respond does too, on the request's own CSB");
+	check_has("scs_send_msg(cn->cl->scs, csb->cdt_conid, body,",
+		  "ops.send_csb does the same, addressed by CLUB slot (E73)");
+	check_absent("cnxman_csb_dialogue_sent(",
+		  "E73: no transport thunk assigns a send-msg# -- exactly one "
+		  "function does, before the stamp");
 	check_has("cnxman_csb_dialogue_heard(csb, env.send_msg)",
 		  "inbound frames update the peer's ack-msg# for the barrier/"
 		  "coordinator path (the join does its own, internally)");
@@ -607,8 +626,8 @@ static void test_glue_bindings(void)
 
 	check_has("return cnxman_fsm_rc(scs_disconnect(",
 		  "E67: disconnect translates");
-	check_has("return cnxman_fsm_rc(status);   /* E67: the ops contract is 0/nonzero */",
-		  "E67: ops.send/ops.respond translate too, so an FSM that "
+	check_has("return cnxman_fsm_rc(scs_send_msg(",
+		  "E67: ops.send/ops.send_csb/ops.respond translate too, so an FSM that "
 		  "ever tests their result gets the right answer");
 
 	/*

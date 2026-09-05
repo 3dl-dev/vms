@@ -243,6 +243,12 @@ COPY src/kernel-core/vms_cnxman_join_fsm.h   /netbsd/guest-src/kernel-core/vms_c
 COPY src/kernel-core/vms_cnxman_diag.c       /netbsd/guest-src/kernel-core/vms_cnxman_diag.c
 COPY src/kernel-core/vms_cnxman_diag.h       /netbsd/guest-src/kernel-core/vms_cnxman_diag.h
 COPY src/kernel-core/vms_cnxman.c            /netbsd/guest-src/kernel-core/vms_cnxman.c
+# --- E82: the runtime cluster-emit safety guard (pe_vc_send_frame drops frames
+# that violate the measured crash-safe envelope). It joined src/kernel-netbsd/
+# Makefile's SRCS with E82 but was not staged here, which
+# tests/netbsd/check_guest_payload.sh reports; these lines close that. ---
+COPY src/kernel-core/vms_cluster_emit_guard.c /netbsd/guest-src/kernel-core/vms_cluster_emit_guard.c
+COPY src/kernel-core/vms_cluster_emit_guard.h /netbsd/guest-src/kernel-core/vms_cluster_emit_guard.h
 # --- FC-P6.3: the MSCP disk SERVER. vms_mscp_srv_fsm.c is the pure server
 # (UQB/HQB/HRB + the [state][event] table) and vms_mscp_srv.c is its executive
 # glue; both joined src/kernel-netbsd/Makefile's SRCS with this item, so the

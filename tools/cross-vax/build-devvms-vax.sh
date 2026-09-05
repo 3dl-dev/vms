@@ -99,7 +99,43 @@ SRCS="$KMOD/vms_netbsd.c \
       $ODS2/ods2_reader.c \
       $ODS2/ods2_edit.c \
       $KMOD/vms_blockdev_netbsd.c \
-      $KMOD/vms_socket_netbsd.c"
+      $KMOD/vms_socket_netbsd.c \
+      $KMOD/vms_lan_netbsd.c \
+      $PROBE/cluster_seam.c \
+      $CORE/vms_cluster_fork.c \
+      $CORE/vms_cluster_fork_bind.c \
+      $CORE/vms_pe.c \
+      $CORE/vms_cnxman_csb.c \
+      $CORE/vms_cnxman_recnx_fsm.c \
+      $CORE/vms_cnxman_quorum.c \
+      $CORE/vms_cluster_api.c \
+      $CORE/vms_cluster_sysgen.c \
+      $CORE/vms_cluster_codec.c \
+      $CORE/vms_cluster_codec_cm.c \
+      $CORE/vms_cluster_codec_hello.c \
+      $CORE/vms_cluster_codec_vc.c \
+      $CORE/vms_cluster_codec_blk.c \
+      $CORE/vms_pe_fsm.c \
+      $CORE/vms_cnxman_phase2.c \
+      $CORE/vms_dlm_ldwv.c \
+      $CORE/vms_cnxman_barrier_fsm.c \
+      $CORE/vms_cnxman_coord_fsm.c \
+      $CORE/vms_scs_fsm.c \
+      $CORE/vms_cluster_codec_scs.c \
+      $CORE/vms_cluster_emit_guard.c \
+      $CORE/vms_scs_dir.c \
+      $CORE/vms_scs.c \
+      $CORE/vms_cluster_codec_mscp.c \
+      $CORE/vms_mscp_cl_fsm.c \
+      $CORE/vms_cnxman_join_fsm.c \
+      $CORE/vms_cnxman_diag.c \
+      $CORE/vms_cnxman.c \
+      $CORE/vms_mscp_srv_fsm.c \
+      $CORE/vms_mscp_srv.c \
+      $CORE/vms_mscp_srv_io.c \
+      $CORE/vms_mscp_cl_io_fsm.c \
+      $CORE/vms_mscp_cl_conn_fsm.c \
+      $CORE/vms_mscp_cl.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo
 

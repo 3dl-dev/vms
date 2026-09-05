@@ -221,6 +221,13 @@ if [ "$rc" -eq 0 ]; then
         send 'MANAGER'; sleep 2
         waitfor 'Welcome to OpenVMX' 120 || true
         send 'SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST'; sleep 2
+        # vms-fc-e51: the port-wide tx/rx counters (vms_pe.c pe_ops_send, real
+        # executive state, INV-6) are the discriminator for whether
+        # exec_lan_xmit is actually reaching the wire -- read them before AND
+        # after the join-poll window (below) via SHOW CLUSTER/LOCAL_PORTS so a
+        # tcpdump-frame-count-vs-tx_frames comparison is possible straight
+        # from this transcript, not just from a pcap read on the host.
+        send 'SHOW CLUSTER/LOCAL_PORTS'; sleep 3
         # Poll membership ACROSS the join window instead of sampling once. The
         # NEW->MEMBER join sequencer + the real-VAX cluster handshake take tens
         # of seconds under TCG; the old code slept a fixed 60s then sampled a
@@ -246,6 +253,32 @@ if [ "$rc" -eq 0 ]; then
             sleep 11; pw=$((pw + 20))
         done
         echo "[node] join-poll held the node LIVE ~${pw}s (full window; teardown is gated by the VAX-side STATUS==MEMBER verdict, not an OVMX self-report)" | tee -a "$OUT_LOG"
+        # E69 -- DUMP THE EXECUTIVE'S OWN JOIN TRANSCRIPT.
+        #
+        # The cluster stack is executive-resident and the executive has no
+        # console log (ovmx_init.c:1399), so THREE consecutive promotion walls
+        # (E67, E68 and the E68 re-fire) had to be diagnosed from the pcap, and
+        # the remaining drive gap -- OVMX receives the members' PARAMS and never
+        # answers with its own MODEL/PARAMS burst -- shows NOTHING on the wire.
+        # SYS$SYSTEM:CNXTRACE.EXE reads the CNXMAN join FSM's transition ring
+        # (VMS_IOCTL_CLUSTER_DIAG_JOIN, read-only) and prints it to SYS$OUTPUT,
+        # so it lands HERE, in this console transcript, next to the pcap.
+        #
+        # AFTER the join-wait deliberately: the ring is a wrap-around history
+        # and this is the moment it holds the whole drive plus whatever the
+        # members did to it.
+        #
+        # ADDITIVE AND GUARDED. This is one console line against a booted node.
+        # An image that is not on the disk answers %DCL-E-IVIMAGE and an
+        # executive with no connection manager answers %CNXTRACE-W-NOCNXMAN;
+        # both are recorded in this log and neither changes the run. The
+        # markers bracket the dump so the integrator can slice it out of a
+        # multi-megabyte console capture with one sed range.
+        send 'WRITE SYS$OUTPUT "OVMX-CNXTRACE-BEGIN"'; sleep 2
+        send 'RUN SYS$SYSTEM:CNXTRACE.EXE'; sleep 20
+        send 'WRITE SYS$OUTPUT "OVMX-CNXTRACE-END"'; sleep 2
+        waitfor 'OVMX-CNXTRACE-END' 60 || true
+        send 'SHOW CLUSTER/LOCAL_PORTS'; sleep 3
         send 'WRITE SYS$OUTPUT "OVMX-SC-DONE"'; sleep 3
         waitfor 'OVMX-SC-DONE' 30 || true
     else

@@ -457,6 +457,57 @@ set_target_properties(vms_analyze PROPERTIES
 )
 install(TARGETS vms_analyze RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
+# CNXTRACE.EXE (E69) - the connection manager's JOIN TRANSITION RING, printed
+# to SYS$OUTPUT.
+#
+# WHY IT SHIPS ON THE SYSTEM DISK RATHER THAN IN A TEST IMAGE. The OVMX cluster
+# stack is executive-resident and the executive has no console log (src/
+# ovmx_init/ovmx_init.c:1399), so a join that stalls at a point the wire does
+# not expose cannot be diagnosed from a booted node at all -- three consecutive
+# promotion walls against the live VAX cluster were read off a pcap by luck
+# (integration notes E67/E68). Staging the reader only in the ktest image is
+# exactly the gap E52 recorded: the acceptance harness boots the SHIPPED
+# distribution image, so a diagnostic that is not on it does not exist. It is
+# the same call OVMXDUMP and SYSGEN.EXE already embody -- a runtime facility a
+# faithful system carries, not build-only tooling.
+#
+# It reads the executive through vms_kif_cluster_diag_join() (libvmssys),
+# reached the way every other hosted image reaches the KIF: the libvms link
+# edge plus the libvmssys include dir, exactly as src/vmsdcl does for SHOW
+# CLUSTER's own diagnostics reads.
+add_executable(vms_cnxtrace
+    vms_cnxtrace.c
+)
+
+target_include_directories(vms_cnxtrace PRIVATE
+    ${VMS_INCLUDE_DIR}                        # ssdef.h -- the ONE SS$_ table
+    ${CMAKE_SOURCE_DIR}/src/libvmssys         # vms_kif.h -> ../kernel/vms_ioctl.h
+)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    target_compile_definitions(vms_cnxtrace PRIVATE _NETBSD_SOURCE)
+else()
+    target_compile_definitions(vms_cnxtrace PRIVATE
+        _POSIX_C_SOURCE=200809L
+        _DEFAULT_SOURCE
+    )
+endif()
+
+target_compile_options(vms_cnxtrace PRIVATE
+    -Wall -Wextra
+)
+
+# `vms` carries the KIF on the hosted (Linux/Alpha) configurations; `vmssys` is
+# named explicitly as well so the netbsd-vax cross -- where libvms is built
+# STANDALONE and does NOT pull vmssys -- still resolves vms_kif_*.
+target_link_libraries(vms_cnxtrace PRIVATE vms vmssys)
+
+set_target_properties(vms_cnxtrace PROPERTIES
+    OUTPUT_NAME "CNXTRACE"
+    SUFFIX ".EXE"
+)
+install(TARGETS vms_cnxtrace RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
 # vmsfs_master - VMSFS media-mastering build tool (host tooling).
 #
 # Populates a VMSFS/ODS-2 image from a source directory tree so vms-8ab can

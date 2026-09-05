@@ -88,8 +88,8 @@ exec_hash_init_helper(struct exec_hash_head *tbl, unsigned int nbuckets)
  * unlink itself in O(1). Matches Linux hash_add / hlist_add_head. Called through
  * the exec_hash_add(name, node, key) macro. The bucket index is a pure
  * distribution choice (a name/pid match in the walk is what decides correctness),
- * so a modulo suffices -- exec_hash.h's contract note that exec_jhash's VALUE is
- * never a correctness decision applies to keyed placement here too.
+ * so a modulo suffices -- exec_hash.h's contract note that a bucket key's VALUE
+ * is never a correctness decision applies to keyed placement here too.
  */
 void
 exec_hash_add_helper(struct exec_hash_head *tbl, unsigned int nbuckets,
@@ -126,32 +126,3 @@ exec_hash_bucket_of(struct exec_hash_head *tbl, unsigned int nbuckets,
 	return &tbl[key % nbuckets];
 }
 
-/*
- * exec_jhash - hash a byte range to a 32-bit bucket key (the lock manager's
- * resource-name hash; exec_hash.h Phase G). Per that contract the VALUE is used
- * ONLY for bucketing and a membership modulo, NEVER for a correctness decision
- * (resource-name matches are by strncmp), so "a substrate whose exec_jhash
- * differs is still correct" -- the NetBSD backend need not reproduce the Linux
- * jhash bit-for-bit, only be a deterministic, well-distributed function so that
- * an $ENQ and a later lookup of the same name land in the same bucket.
- *
- * This is OVMX's OWN implementation: the textbook FNV-1a 32-bit hash (a public-
- * domain algorithm, not copied from NetBSD, Linux, or VSI/HPE source -- CLAUDE.md
- * Rule 8). `initval' seeds the running hash so callers that pass a non-zero seed
- * get an independent distribution, mirroring jhash's initval role.
- */
-uint32_t
-exec_jhash(const void *key, uint32_t length, uint32_t initval)
-{
-	const unsigned char *p = (const unsigned char *)key;
-	/* FNV-1a: offset basis 2166136261, prime 16777619. Fold the caller's
-	 * seed into the starting state so initval actually perturbs the result. */
-	uint32_t h = 2166136261u ^ initval;
-	uint32_t i;
-
-	for (i = 0; i < length; i++) {
-		h ^= (uint32_t)p[i];
-		h *= 16777619u;
-	}
-	return h;
-}

@@ -7,13 +7,43 @@ scope_1_0: in
 plan_ref: vms-694
 summary: >
   The LAN transport under SCS: genuine raw-Ethernet frames on the LAVC/SCA
-  ethertype, not a UDP/IP tunnel standing in for the real wire.
-last_reviewed: 2026-08-31
+  ethertype, not a UDP/IP tunnel standing in for the real wire. Now the
+  EXECUTIVE's own port driver (PEDRIVER role, PEA0:) rather than a userspace
+  daemon's raw socket — FC-P3.9 deleted that daemon.
+last_reviewed: 2026-09-03
 items:
   - id: nisca$lan-transport
     kind: protocol
     status: implemented
     authenticity: real
     vms: "NISCA/SCA raw-Ethernet transport, ethertype 0x6007 (LAVC/SCA)"
-    evidence: src/vmsscs/scs_hello.c
-    notes: "AF_PACKET/SOCK_RAW genuine raw frames (requires CAP_NET_RAW) — not UDP/IP. Raw-L2 datalink API closes the SCSD.EXE VAX build (vms-838)."
+    evidence: src/kernel-core/vms_pe.c
+    notes: >
+      FC-P0.9. The datalink is opened IN KERNEL CONTEXT (exec_l2_open(), the
+      exec_kbackend seam: AF_PACKET on Linux, the NetBSD equivalent on the vax
+      substrate), so a booted node needs no CAP_NET_RAW anywhere in userspace --
+      there is no userspace raw socket on the cluster path at all any more. Real
+      frames on 0x6007, never a UDP/IP tunnel.
+      PROVEN AT R1/R2/R3, in CI: tests/cluster/host/test_pe_*.c (the pure port
+      FSM: channels, HELLO cadence, circuit formation, TIMVCFAIL, sequence/ack);
+      the N-node simulator's virtual LAN; tests/qemu/test_cluster_vc.sh drives
+      CLUSTER_DIAG_PORT against a real /dev/vms on a booted node.
+      NOT claimed: interoperation with a real VAX's PEDRIVER on a live LAN --
+      that is R5, LAB-DEFERRED.
+
+  - id: nisca$pea0-device
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "PEA0: — the LAN cluster port device"
+    evidence: src/kernel-core/vms_pe.c
+    notes: >
+      FC-P0.9/FC-P0.11. The port comes up from the executive at
+      VMS_IOCTL_CLUSTER_START, gated on the VAXCLUSTER the SYSGEN load actually
+      committed: VAXCLUSTER=0 means NO PEA0: and no HELLO at all (the honest
+      silence INV-6 requires, refused twice over -- at the boot-path gate and
+      again inside vms_pe_start). Its state is readable through
+      CLUSTER_DIAG_PORT, which returns SS$_NOSUCHDEV with an all-zero row rather
+      than a placeholder channel or circuit.
+      PROVEN: R1 (test_pe_view.c, test_cluster_boot_gate.c), R4 negctl
+      (tests/qemu/test_cluster_start_negctl.sh). R5 lab-deferred.

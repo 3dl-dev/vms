@@ -166,6 +166,11 @@ int main(int argc, char **argv)
     int ready[2], go[2];
     pid_t pids[N_WORKERS];
     int all_workers_ok = 1;
+    /* FC-P4.7: the standing F11B$v<label> resource name, captured once at
+     * $MOUNT time (below) so the DISMOUNT-releases-it proof at the end of
+     * main() can re-check the SAME resource without re-deriving it. */
+    char vresnam[32];
+    int have_vresnam = 0;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGPIPE, SIG_IGN);
@@ -190,6 +195,56 @@ int main(int argc, char **argv)
 
     st = vms_kif_acp_mount(ODS2_UNIT);
     check($VMS_STATUS_SUCCESS(st), "$MOUNT of the genuine ODS-2 " ODS2_UNIT " (precondition)");
+
+    /*
+     * vms-25e: $MOUNT holds the STANDING volume lock (F11B$v<label>) for the whole
+     * mount life -- the cluster-registration presence marker a faithful VMS MOUNT
+     * holds and the connection manager registers to the coordinator on join
+     * (distinct from the transient per-write F11B$s sync lock the workers below
+     * exercise). PROVE it is genuinely held: read the mounted volume's label (the
+     * SAME vol->volname the executive built the resource name from -- vmsfs_acp.c
+     * getvol copies it verbatim, so this reconstruction is byte-exact), form the
+     * F11B$v resource name, and assert the executive's DLM reports a granted lock
+     * on it. This is a READ of real GET_RESMASTER lock-manager state, never a fake
+     * (INV-6): a real standing lock the executive holds on a real mounted volume.
+     */
+    {
+        struct vms_getvol_args gv;
+        memset(&gv, 0, sizeof(gv));
+        st = vms_kif_getvol(ODS2_UNIT, &gv);
+        check($VMS_STATUS_SUCCESS(st) && gv.mounted && gv.volnam[0] != '\0',
+              "read the mounted volume label for the standing-lock proof");
+        if ($VMS_STATUS_SUCCESS(st) && gv.volnam[0] != '\0') {
+            snprintf(vresnam, sizeof(vresnam), "F11B$v%s", gv.volnam);
+            have_vresnam = 1;
+            uint32_t found = 0, lc = 0, dc = 0, mc = 0, ilm = 0, ng = 0, rh = 0;
+            uint32_t rst = vms_kif_get_resmaster(vresnam, &found, &lc, &dc, &mc,
+                                                 &ilm, &ng, &rh);
+            check($VMS_STATUS_SUCCESS(rst) && found && ng >= 1,
+                  "the STANDING F11B$v<label> volume lock is HELD after $MOUNT "
+                  "(vms-25e: GET_RESMASTER found, n_granted >= 1)");
+
+            /*
+             * vms-1f4: the enumeration accessor scsd registers FROM must surface
+             * that same standing lock. Assert DLM_ENUM_STANDING returns an entry
+             * naming F11B$v<label> with a real (nonzero) local handle -- the
+             * (resname, lkid) pair scsd puts on the wire as the op-0x01 requester
+             * registration. A READ of real lock state, no fabrication.
+             */
+            struct vms_dlm_enum_standing_args se;
+            memset(&se, 0, sizeof(se));
+            uint32_t est = vms_kif_dlm_enum_standing(&se);
+            int found_vol = 0;
+            for (uint32_t i = 0; i < se.count; i++) {
+                if (strcmp(se.ent[i].resnam, vresnam) == 0 && se.ent[i].lkid != 0)
+                    found_vol = 1;
+            }
+            check($VMS_STATUS_SUCCESS(est) && se.count >= 1 && found_vol,
+                  "DLM_ENUM_STANDING surfaces the F11B$v<label> standing lock with a "
+                  "real handle (vms-1f4: scsd's registration source)");
+        }
+    }
+
     st = vms_kif_acp_assign(ODS2_UNIT, &chan);
     check($VMS_STATUS_SUCCESS(st) && chan != 0, "$ASSIGN a file-class channel (precondition)");
     if (chan == 0) {
@@ -314,6 +369,29 @@ int main(int argc, char **argv)
             strncpy(d.name, nm, VMS_ACP_NAME_SIZE - 1);
             (void)vms_kif_acp_fileop(&d);
         }
+    }
+
+    /*
+     * FC-P4.7 done-condition (design §3.6, plan): DISMOUNT must RELEASE the
+     * standing F11B$v<label> volume lock, not just MOUNT hold it. Release
+     * this suite's own file channel first (DISMOUNT is refused SS$_DEVALLOC
+     * while any channel is still assigned -- vms_ioctl_acp_dmount), then
+     * DISMOUNT and re-read GET_RESMASTER on the SAME resource name captured
+     * at $MOUNT time above: a real lock-manager READ, never a fabricated
+     * absence (INV-6). Every other acp_* suite already dismounts VDA0: at
+     * its own end and the next suite's own $MOUNT is idempotent, so this
+     * does not disturb suite ordering.
+     */
+    (void)vms_kif_dassgn(chan);
+    st = vms_kif_acp_dmount(ODS2_UNIT);
+    check($VMS_STATUS_SUCCESS(st), "$DISMOUNT of " ODS2_UNIT " succeeds (no channels assigned)");
+    if (have_vresnam) {
+        uint32_t found = 0, lc = 0, dc = 0, mc = 0, ilm = 0, ng = 0, rh = 0;
+        uint32_t rst = vms_kif_get_resmaster(vresnam, &found, &lc, &dc, &mc,
+                                             &ilm, &ng, &rh);
+        check($VMS_STATUS_SUCCESS(rst) && (!found || ng == 0),
+              "the STANDING F11B$v<label> volume lock is RELEASED after $DISMOUNT "
+              "(vms-25e: GET_RESMASTER no longer reports it granted)");
     }
 
     printf("=== test_syssvc_acp_dlm: %d passed, %d failed ===\n", pass, fail);

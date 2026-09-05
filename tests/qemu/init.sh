@@ -25,6 +25,14 @@ echo ""
 MODULE_PASS=0
 MODULE_FAIL=0
 
+# veth.ko (rd FC-P0.2): test_kmod_cluster_seam.c (the R3 cluster substrate
+# contract test) needs a real veth pair, which this stock kernel builds as a
+# module, not built-in. Loaded before vms.ko so a load failure here shows up
+# next to the module-load diagnostics below rather than mid-suite. Not fatal
+# on its own -- an absent veth.ko only makes that one suite's rtnetlink veth
+# creation fail honestly, which its own PASS/FAIL lines already report.
+[ -f /lib/modules/veth.ko ] && insmod /lib/modules/veth.ko 2>&1
+
 # Load vms.ko
 echo "--- Loading vms.ko ---"
 insmod /lib/modules/vms.ko

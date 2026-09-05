@@ -71,6 +71,13 @@
  * class): it links vmsfs statically already (CMakeLists.txt's vmsfs_static
  * in OVMX_IMGACT mode), which is all this header-only reader needs. */
 #include "sysgen_params.h"
+/* CLUSTER_AUTHORIZE.DAT reader (vms-ci.8) -- group + password, loaded into
+ * the executive alongside the SYSGEN cluster parameters below (FC-P0.10). */
+#include "cluster_authorize.h"
+/* The FC-P0.11 VAXCLUSTER gate: the ONE function that decides whether the
+ * boot path issues VMS_IOCTL_CLUSTER_START, shared with its R1 host test
+ * (tests/cluster/host/test_cluster_boot_gate.c) so neither copy can drift. */
+#include "cluster_boot_gate.h"
 /* SYSBOOT> conversational-boot prompt (vms-b81) -- operates on the SAME
  * SYS$SYSTEM:OVMXVMSSYS.PAR every other consumer uses. On the Linux atomic-flip
  * runtime (vms-46c) it reaches that file over the executive Files-11 ACP, the
@@ -1165,6 +1172,313 @@ static void read_boot_parameters(void)
     sethostname(OVMX_DEFAULT_NODENAME, strlen(OVMX_DEFAULT_NODENAME));
 }
 
+/* ------------------------------------------------------------------ */
+/* Cluster SYSGEN parameters into the executive (FC-P0.10)             */
+/* ------------------------------------------------------------------ */
+
+/*
+ * sysgen_str_into - copy a NUL-terminated string read off the parameter file
+ * into a fixed, non-NUL-terminated wire field, clamped to its width. Shared
+ * by SCSNODE and DISK_QUORUM below so the clamp-and-copy logic exists once.
+ */
+static void sysgen_str_into(const char *src, uint8_t *dst, size_t dstlen,
+                            uint8_t *out_len)
+{
+    size_t n = strlen(src);
+    if (n > dstlen)
+        n = dstlen;
+    memcpy(dst, src, n);
+    *out_len = (uint8_t)n;
+}
+
+/*
+ * The cluster software-version identity is a FIXED-WIDTH wire field, and
+ * sysgen_str_into() above truncates silently. A token that outgrew the field
+ * would go on the wire cut in half -- a different identity, not a shorter one --
+ * so the SSOT is checked against the field here, at compile time.
+ */
+_Static_assert(sizeof(OVMX_CLUSTER_SW_VERSION) - 1u <= OVMX_CLUSTER_SW_VERSION_LEN,
+               "OVMX_CLUSTER_SW_VERSION does not fit the SCS START software-version field");
+_Static_assert(sizeof(((struct vms_sysgen_load_args *)0)->sw_version) ==
+                       OVMX_CLUSTER_SW_VERSION_LEN,
+               "the SYSGEN_LOAD sw_version field is not the identity SSOT's field width");
+
+/*
+ * cluster_credits_requested - SYSGEN CLUSTER_CREDITS: how many receive buffers
+ * this node asks the cluster port to commit to each virtual circuit.
+ *
+ * WHY THIS ONE PARAMETER HAS A FALLBACK AND ITS NEIGHBOURS DO NOT (E60).
+ * sysgen_read_param() reads the PERSISTED store and nothing else, so a
+ * parameter the running system knows but the file has never carried reads as
+ * "absent" and lands in the wire struct as a zero indistinguishable from a
+ * configured one. For CLUSTER_CREDITS that zero is not a harmless default: it
+ * is this node telling every peer it has no buffers, which is how OVMX's START
+ * body went out with abs 95 = 0 against a live VAX cluster. A parameter the
+ * system defines takes the system's default when the file predates it --
+ * exactly what SYSBOOT's built-in parameter table does on VMS -- and the
+ * default is the SSOT the SYSGEN table itself uses (sysgen_params.h).
+ *
+ * It is a REQUEST, not a wire value. The executive grants each circuit the
+ * smaller of this and the receive buffers the port really allocated, and
+ * advertises what it granted (src/kernel-core/vms_pe_fsm.h SS4b) -- so a
+ * default here can never become a promise the node cannot keep.
+ *
+ * The substitution is ANNOUNCED, never silent: an operator who sees this line
+ * can make it permanent with one SYSGEN WRITE.
+ */
+static uint16_t cluster_credits_requested(void)
+{
+    uint32_t u32;
+
+    if (sysgen_read_param("CLUSTER_CREDITS", &u32) == 0)
+        return (uint16_t)u32;
+
+    fprintf(stderr,
+            "%%OVMX-I-NOPARAM, CLUSTER_CREDITS is absent from this system's"
+            " parameter file; using the SYSGEN default (%u)\n",
+            (unsigned)SYSGEN_DEFAULT_CLUSTER_CREDITS);
+    return (uint16_t)SYSGEN_DEFAULT_CLUSTER_CREDITS;
+}
+
+/*
+ * load_cluster_sysgen_params - STARTUP.EXE's own case of SYSBOOT (FC-P0.10,
+ * docs/plan-faithful-cluster-executive.md). Reads the cluster SYSGEN
+ * parameters off SYS$SYSTEM:OVMXVMSSYS.PAR through the SAME shared reader
+ * read_boot_parameters() above uses (sysgen_read_string/sysgen_read_param --
+ * vms_sysgen.c, scsd.c and the DCL F$GETSYI lexicals already share it), plus
+ * the CLUSTER_AUTHORIZE group/password (cluster_authorize_read()), and hands
+ * the whole set to VMS_IOCTL_SYSGEN_LOAD (vms_kif_sysgen_load) so the
+ * executive's real struct vms_cluster (vms_cluster_node()) carries it before
+ * any later item starts the port (VMS_IOCTL_CLUSTER_START, FC-P0.11).
+ *
+ * Uses the SAME OVMX_SYSGEN_PATH staging scope as read_boot_parameters() (see
+ * its header for why) so both readers see the identical parameter file this
+ * boot. A parameter absent from the file reads as its honest zero (VAXCLUSTER
+ * 0 = never, VOTES 0, ...) -- never a fabricated default (INV-6); the FACTORY
+ * DEFAULTS a fresh install seeds the file with live in tools/vms_sysgen.c and
+ * sysboot.c, not here. Called unconditionally, even when the file is missing:
+ * an all-zero set is the honest "VAXCLUSTER never" state, not a skip.
+ *
+ * Does not consult conversational_boot_params: a SYSBOOT> SET on a cluster
+ * parameter this session is not yet threaded through to this load (only
+ * SCSNODE's hostname effect is, above) -- a disclosed limitation, not a
+ * silent one; the persisted store's value stands until a later item extends
+ * sysboot.h with a numeric working-set reader.
+ *
+ * SS$_BADPARAM (the negctl this ioctl enforces: VAXCLUSTER >= 1 with no
+ * SCSNODE loaded) is logged loudly and honestly -- OVMX invents no VMS
+ * message text for a condition no oracle capture grounds (Rule 10) -- and the
+ * boot continues; the cluster stack simply never received a loaded identity
+ * (a fact the READER of it stays not knowing anything the executive itself
+ * does not honestly hold, not a symptom this function paints over).
+ *
+ * Returns the VAXCLUSTER value the executive actually COMMITTED -- 0 if the
+ * ioctl was refused (SS$_BADPARAM) or otherwise failed, regardless of what
+ * this boot's parameter file named, because a refused SYSGEN_LOAD leaves
+ * vms_cluster_node()->params at its PRIOR (honest, zero) state. The FC-P0.11
+ * caller (start_cluster_port() below) gates VMS_IOCTL_CLUSTER_START on THIS
+ * return value, never on the locally-parsed `args.vaxcluster` -- the executive's
+ * real committed state is the only honest thing to gate on (INV-6).
+ */
+static uint32_t load_cluster_sysgen_params(void)
+{
+    struct vms_sysgen_load_args args;
+    struct cluster_authorize auth;
+    char strval[SYSGEN_STRVAL_LEN];
+    uint32_t u32, status;
+
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+    int staged_params = (access(OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", R_OK) == 0);
+    if (staged_params)
+        setenv("OVMX_SYSGEN_PATH", OVMX_BOOT_STAGE_DIR "/OVMXVMSSYS.PAR", 1);
+#endif
+
+    memset(&args, 0, sizeof(args));
+
+    if (sysgen_read_string("SCSNODE", strval, sizeof(strval)) == 0 && strval[0] != '\0')
+        sysgen_str_into(strval, args.scsnode, sizeof(args.scsnode), &args.scsnode_len);
+
+    /* SCSSYSTEMID: the generic numeric SYSGEN reader is a plain uint32_t
+     * (sys_misc.c's SYI$_SCSSYSTEMID already reads it the same way), so the
+     * wire's high word is always 0 today -- honest, not a truncation this
+     * function invents; a wider store is a future item's concern. */
+    if (sysgen_read_param("SCSSYSTEMID", &u32) == 0)
+        args.scssystemid_lo = u32;
+    if (sysgen_read_param("ALLOCLASS", &u32) == 0)
+        args.alloclass = (uint8_t)u32;
+    if (sysgen_read_param("VOTES", &u32) == 0)
+        args.votes = (uint16_t)u32;
+    if (sysgen_read_param("EXPECTED_VOTES", &u32) == 0)
+        args.expected_votes = (uint16_t)u32;
+    if (sysgen_read_param("VAXCLUSTER", &u32) == 0)
+        args.vaxcluster = (uint8_t)u32;
+    if (sysgen_read_param("LOCKDIRWT", &u32) == 0)
+        args.lockdirwt = (uint8_t)u32;
+    if (sysgen_read_param("QDSKVOTES", &u32) == 0)
+        args.qdskvotes = (uint16_t)u32;
+    if (sysgen_read_param("RECNXINTERVAL", &u32) == 0)
+        args.recnxinterval = (uint16_t)u32;
+    if (sysgen_read_param("TIMVCFAIL", &u32) == 0)
+        args.timvcfail = (uint16_t)u32;
+    args.cluster_credits = cluster_credits_requested();
+    if (sysgen_read_param("NISCS_MAX_PKTSZ", &u32) == 0)
+        args.niscs_max_pktsz = u32;
+    if (sysgen_read_param("MSCP_LOAD", &u32) == 0)
+        args.mscp_load = (uint8_t)u32;
+    if (sysgen_read_param("MSCP_SERVE_ALL", &u32) == 0)
+        args.mscp_serve_all = (uint8_t)u32;
+
+    if (sysgen_read_string("DISK_QUORUM", strval, sizeof(strval)) == 0 && strval[0] != '\0')
+        sysgen_str_into(strval, args.disk_quorum, sizeof(args.disk_quorum),
+                        &args.disk_quorum_len);
+
+    /*
+     * The ONE field here that is not a SYSGEN parameter: the software-version
+     * identity this node broadcasts as a cluster member (SCS START body abs
+     * 72). It is OVMX's own, so it comes from the identity SSOT
+     * (OVMX_CLUSTER_SW_VERSION, ovmx_identity.h) and is carried DOWN -- the
+     * executive may hold no version literal of its own (INV-1), and it must
+     * never echo a peer's "VMS V7.3" (INV-0 masquerade). Length-carried, not
+     * NUL-terminated: the executive blank-pads it to the wire field's width.
+     */
+    sysgen_str_into(OVMX_CLUSTER_SW_VERSION, args.sw_version,
+                    sizeof(args.sw_version), &args.sw_version_len);
+
+    if (cluster_authorize_read(&auth) == 0) {
+        args.auth_group = auth.group;
+        sysgen_str_into(auth.password, args.auth_password,
+                        sizeof(args.auth_password), &args.auth_password_len);
+        args.auth_valid = 1;
+    }
+
+#if defined(OVMX_BOOT_ACP_BRIDGE)
+    if (staged_params)
+        unsetenv("OVMX_SYSGEN_PATH");
+#endif
+
+    status = vms_kif_sysgen_load(&args);
+    if (status == SS$_BADPARAM) {
+        fprintf(stderr,
+                "%%OVMX-F-BADSYSGEN, VAXCLUSTER is %u but no SCSNODE is configured\n",
+                (unsigned)args.vaxcluster);
+        fprintf(stderr,
+                "-OVMX-I-BADSYSGEN, cluster SYSGEN parameters were not loaded\n");
+        return 0;
+    }
+    if (status != SS$_NORMAL) {
+        fprintf(stderr,
+                "%%OVMX-W-NOCLUSTER, cluster SYSGEN parameters were not loaded"
+                " (status %#x)\n", (unsigned)status);
+        return 0;
+    }
+
+    return (uint32_t)args.vaxcluster;
+}
+
+/*
+ * The cluster states VMS_IOCTL_CLUSTER_START reports back (enum
+ * vms_cluster_state, src/kernel-core/vms_cluster.h). Duplicated here rather
+ * than #included because this file must not depend on a kernel-core header;
+ * the ioctl's own comment in src/kernel/vms_ioctl.h names the enum, and the
+ * default arm below prints the raw ordinal rather than inventing a name for a
+ * state this copy does not know -- so a state added on the executive side
+ * shows up as an unfamiliar number, never as a wrong word.
+ */
+#define OVMX_CLUSTER_STATE_OFF        0u
+#define OVMX_CLUSTER_STATE_PORT_UP    1u
+#define OVMX_CLUSTER_STATE_JOINING    2u
+#define OVMX_CLUSTER_STATE_MEMBER     3u
+#define OVMX_CLUSTER_STATE_STANDALONE 4u
+
+/*
+ * report_cluster_state - the operator line for what the EXECUTIVE just said
+ * this node is. `state` is read back from struct vms_cluster, never composed
+ * from the ioctl's status, so this cannot announce a membership the executive
+ * does not hold (INV-6).
+ *
+ * The "waiting to form or join an OpenVMS Cluster" wording is VMS's own line
+ * for a VAXCLUSTER=2 node with nowhere to join yet; the executive logs it too
+ * (vms_cnxman.c), and it is repeated on the console because OPA0: is where
+ * SYSINIT puts it and the executive's log is not OPA0: on either substrate.
+ */
+static void report_cluster_state(uint32_t state)
+{
+    switch (state) {
+    case OVMX_CLUSTER_STATE_MEMBER:
+        printf("%%CNXMAN, this system is a member of an OpenVMS Cluster\n");
+        break;
+    case OVMX_CLUSTER_STATE_JOINING:
+        printf("%%CNXMAN, waiting to form or join an OpenVMS Cluster\n");
+        break;
+    case OVMX_CLUSTER_STATE_STANDALONE:
+        printf("%%CNXMAN, no OpenVMS Cluster is present; running standalone\n");
+        break;
+    case OVMX_CLUSTER_STATE_PORT_UP:
+        /* The port is up but the connection manager reported no state of its
+         * own -- honest, and distinct from STANDALONE. */
+        printf("%%CNXMAN, the cluster port is up; this system has not joined"
+               " a cluster\n");
+        break;
+    default:
+        fprintf(stderr,
+                "%%OVMX-W-CLUSTERSTATE, the executive reported cluster state"
+                " %u, which this image does not name\n", (unsigned)state);
+        break;
+    }
+}
+
+/*
+ * start_cluster_port - VMS_IOCTL_CLUSTER_START (FC-P0.11; join semantics
+ * FC-P3.9, docs/plan-faithful-cluster-executive.md). SYSINIT's own step: the
+ * executive starts the fork thread, PEA0:, SCS and the CONNECTION MANAGER,
+ * and forms or joins per VAXCLUSTER -- all of it BEFORE the system disk is
+ * mounted, which is the ordering this call site exists to reproduce (this is
+ * boot Step 2d; STARTUP.COM, and every MOUNT it drives, is Step 3).
+ *
+ * `vaxcluster` is load_cluster_sysgen_params()'s return -- the value the
+ * executive actually COMMITTED, never a locally re-parsed copy. The gate
+ * itself (cluster_start_wanted(), cluster_boot_gate.h) is the ONE place the
+ * VAXCLUSTER convention (0 = never, 1 = if present, 2 = always; non-zero
+ * both start the port -- see that header's own rationale) is decided, shared
+ * with its R1 host test so this boot path and the test can never drift.
+ *
+ * VAXCLUSTER=0: this function does not even issue the ioctl -- no PEA0:, no
+ * HELLO, no connection manager, and no console line either. That is the
+ * honest silence INV-6 requires, not a call the executive then has to refuse.
+ */
+static void start_cluster_port(uint32_t vaxcluster)
+{
+    uint32_t port_up = 0;
+    uint32_t state = OVMX_CLUSTER_STATE_OFF;
+    uint32_t status;
+
+    if (!cluster_start_wanted(vaxcluster))
+        return;
+
+    status = vms_kif_cluster_start(&port_up, &state);
+    if (status != SS$_NORMAL) {
+        /* `port_up` is what tells the failures apart -- the port never came
+         * up at all, or it did and a layer above it would not start.
+         * Reported, never guessed. */
+        fprintf(stderr,
+                "%%OVMX-W-CLUSTERPORT, cluster %s did not start"
+                " (VAXCLUSTER %u, status %#x)\n",
+                port_up ? "SCS/connection-manager layer" : "port",
+                (unsigned)vaxcluster, (unsigned)status);
+        return;
+    }
+    if (!port_up) {
+        /* Honest: SS$_NORMAL with the port still not up should not happen
+         * (vms_pe_start's own contract), but INV-6 forbids ever printing a
+         * success line the executive itself did not attest to. */
+        fprintf(stderr,
+                "%%OVMX-W-CLUSTERPORT, CLUSTER_START returned normally but"
+                " PEA0: is not up\n");
+        return;
+    }
+    report_cluster_state(state);
+}
+
 /*
  * NOTE ON SERVICES: STARTUP.EXE STARTS NO SERVICES. DO NOT ADD ONE HERE.
  *
@@ -1500,6 +1814,24 @@ int main(void)
      * header for the ordering divergence from real VMS and the honest
      * missing/corrupt-file fallback. */
     read_boot_parameters();
+
+    /* Step 2c: STARTUP.EXE's own case of SYSBOOT (FC-P0.10, docs/plan-
+     * faithful-cluster-executive.md) -- load the cluster SYSGEN parameters
+     * and the CLUSTER_AUTHORIZE record into the executive's real
+     * struct vms_cluster, BEFORE any later item starts the cluster port
+     * (VMS_IOCTL_CLUSTER_START, FC-P0.11), reproducing SYSBOOT's ordering
+     * (vms_cluster.h section 2). Must run after read_boot_parameters()'s own
+     * mount/device-table preconditions. */
+    {
+        uint32_t cluster_vaxcluster = load_cluster_sysgen_params();
+
+        /* Step 2d: FC-P0.11 -- bring PEA0: up (P0 "port up" semantic only),
+         * gated on the VAXCLUSTER value the executive just committed. Must
+         * run immediately after Step 2c: SYSINIT's own ordering (design
+         * SS3.5) is SYSGEN_LOAD, then CLUSTER_START, before the system disk
+         * mount / STARTUP.COM below. */
+        start_cluster_port(cluster_vaxcluster);
+    }
 
     /* Step 3: %STDRV-I-STARTUP begun, then run STARTUP.COM.
      * The STDRV "begun" bracket precedes the startup procedure (F1). There is

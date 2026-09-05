@@ -175,7 +175,14 @@ def test_extract_vax_images_regression_when_target_dropped():
     """TEETH on the extraction itself (not just compute_diff): removing a
     target from _OVMX_IMAGES_DEPS must remove its shipped name from the
     extracted vax set -- the exact regression this gate exists to catch
-    (e.g. someone reverting the vms-838 SCSD.EXE cross-build)."""
+    (e.g. someone reverting the vms-838 SCSD.EXE cross-build).
+
+    The image used here is SCSD.EXE, which FC-P3.9 retired from the real tree.
+    That is deliberate and makes the fixture STRONGER, not stale: this test
+    feeds `extract_vax_images` two SYNTHETIC CMakeLists strings, so it proves
+    the extractor's behaviour against a controlled input rather than against
+    whatever happens to ship today. A real image name would silently change
+    meaning the next time the image set moves."""
     full_cmakelists = (
         "set(_OVMX_IMAGES_DEPS\n"
         "    ovmx_init            # STARTUP.EXE\n"
@@ -270,7 +277,7 @@ def test_real_vax_extraction_finds_boot_chain_images(cmakelists_text, cut_releas
     images = ip.extract_vax_images(cmakelists_text, cut_release_vax_text)
     for expected in (
         "STARTUP.EXE", "DCL.EXE", "LOGINOUT.EXE", "PROVISION.EXE", "JOB_CONTROL.EXE",
-        "LIBRARIAN.EXE", "SCSD.EXE",
+        "LIBRARIAN.EXE",
     ):
         assert expected in images, f"{expected} missing from vax extraction -- CMakeLists.txt _OVMX_IMAGES_DEPS parsing regressed"
 

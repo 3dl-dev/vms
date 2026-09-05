@@ -31,7 +31,7 @@
  *   exec_hash_add                   -> hash_add          (non-RCU)
  *   exec_hash_for_each_possible     -> hash_for_each_possible
  *   exec_hash_del                   -> hash_del          (non-RCU, plain unlink)
- *   exec_jhash                      -> jhash             (key hashing)
+ *   (exec_jhash deleted by FC-P4.3 -- see exec_hash.h)
  *
  * The for_each forms MUST stay macros: they resolve the element from its
  * embedded node with the caller's element type + member name (container_of),
@@ -77,10 +77,10 @@ static inline void exec_hash_del_rcu(exec_hash_node_t *n) { hash_del_rcu(n); }
 	hash_for_each_possible(name, obj, member, key)
 static inline void exec_hash_del(exec_hash_node_t *n) { hash_del(n); }
 
-/* ---- Phase G: key hashing (the resource-name and directory-node hash) ---- */
-static inline uint32_t exec_jhash(const void *key, uint32_t length, uint32_t initval)
-{
-	return jhash(key, length, initval);
-}
+/* ---- Phase G: key hashing ---- */
+/* exec_jhash is GONE (FC-P4.3): see the note in src/kernel-core/exec_hash.h.
+ * The bucket key the resource hash uses is vms_lock.c's own private six-line
+ * FNV-1a; there is no shared "the hash function" in this seam any more, and no
+ * directory path can reach for one. */
 
 #endif /* OVMX_EXEC_HASH_LINUX_H */

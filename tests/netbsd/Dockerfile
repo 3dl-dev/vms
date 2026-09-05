@@ -152,6 +152,145 @@ COPY src/vmsfs/ods2/ods2_edit.c              /netbsd/guest-src/vmsfs/ods2/ods2_e
 COPY src/vmsfs/ods2/ods2_kcompat.h           /netbsd/guest-src/vmsfs/ods2/ods2_kcompat.h
 COPY src/vmsfs/ods2/ods2_block.h             /netbsd/guest-src/vmsfs/ods2/ods2_block.h
 COPY src/vmsfs/include/vmsfs/ods2.h          /netbsd/guest-src/vmsfs/include/vmsfs/ods2.h
+# --- FC-P0.1: the executive-resident VMScluster stack's LAN port layer + the
+# NetBSD half of the cluster seam (exec_kbackend.h families SS14..SS18). vms_pe.c
+# is in src/kernel-netbsd/Makefile's SRCS from its first commit, so the in-guest
+# module build needs it and its kernel-core headers staged. ---
+COPY src/kernel-core/vms_pe.c                /netbsd/guest-src/kernel-core/vms_pe.c
+COPY src/kernel-core/vms_pe.h                /netbsd/guest-src/kernel-core/vms_pe.h
+COPY src/kernel-core/vms_scs.h               /netbsd/guest-src/kernel-core/vms_scs.h
+COPY src/kernel-core/vms_cnxman.h            /netbsd/guest-src/kernel-core/vms_cnxman.h
+COPY src/kernel-core/vms_dlm_scs.h           /netbsd/guest-src/kernel-core/vms_dlm_scs.h
+COPY src/kernel-core/vms_dlm_proxy.h         /netbsd/guest-src/kernel-core/vms_dlm_proxy.h
+COPY src/kernel-core/vms_cluster.h           /netbsd/guest-src/kernel-core/vms_cluster.h
+COPY src/kernel-core/vms_cluster_snapshot.h  /netbsd/guest-src/kernel-core/vms_cluster_snapshot.h
+# --- FC-P3.6: the CLUB/CSB model + the CSB ten-state ladder, and the
+# RECNXINTERVAL/TIMVCFAIL reconnect loop. Both are in SRCS from their first
+# commit for the same reason vms_pe.c is, so the in-guest module build needs
+# them staged. ---
+COPY src/kernel-core/vms_cnxman_csb.c        /netbsd/guest-src/kernel-core/vms_cnxman_csb.c
+COPY src/kernel-core/vms_cnxman_csb.h        /netbsd/guest-src/kernel-core/vms_cnxman_csb.h
+COPY src/kernel-core/vms_cnxman_recnx_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.c
+COPY src/kernel-core/vms_cnxman_recnx_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_recnx_fsm.h
+# --- FC-P3.7: quorum arithmetic (tracking only) + the $GETSYI cluster
+# item-code projection. Same reason as FC-P3.6 above: both are in SRCS from
+# their first commit, so the in-guest module build needs them staged. ---
+COPY src/kernel-core/vms_cnxman_quorum.c     /netbsd/guest-src/kernel-core/vms_cnxman_quorum.c
+COPY src/kernel-core/vms_cnxman_quorum.h     /netbsd/guest-src/kernel-core/vms_cnxman_quorum.h
+COPY src/kernel-core/vms_cluster_api.c       /netbsd/guest-src/kernel-core/vms_cluster_api.c
+COPY src/kernel-core/vms_cluster_api.h       /netbsd/guest-src/kernel-core/vms_cluster_api.h
+# --- FC-P0.10: cluster SYSGEN parameters loaded into struct vms_cluster.
+# In SRCS from this commit (vms_cluster_sysgen.c), so the in-guest module
+# build needs it staged. ---
+COPY src/kernel-core/vms_cluster_sysgen.c    /netbsd/guest-src/kernel-core/vms_cluster_sysgen.c
+COPY src/kernel-core/vms_cluster_sysgen.h    /netbsd/guest-src/kernel-core/vms_cluster_sysgen.h
+# --- FC-P0.8: the NISCA channel state machine and the codec it builds every
+# frame through (FC-P0.6 shared + FC-P0.7 HELLO/SOLICIT). All three are in SRCS
+# from this commit for the same reason vms_pe.c is, so the in-guest module build
+# needs them staged. ---
+COPY src/kernel-core/vms_pe_fsm.c            /netbsd/guest-src/kernel-core/vms_pe_fsm.c
+COPY src/kernel-core/vms_pe_fsm.h            /netbsd/guest-src/kernel-core/vms_pe_fsm.h
+COPY src/kernel-core/vms_wire_types.h        /netbsd/guest-src/kernel-core/vms_wire_types.h
+COPY src/kernel-core/vms_cluster_codec.c     /netbsd/guest-src/kernel-core/vms_cluster_codec.c
+COPY src/kernel-core/vms_cluster_codec.h     /netbsd/guest-src/kernel-core/vms_cluster_codec.h
+COPY src/kernel-core/vms_cluster_codec_hello.c /netbsd/guest-src/kernel-core/vms_cluster_codec_hello.c
+COPY src/kernel-core/vms_cluster_codec_hello.h /netbsd/guest-src/kernel-core/vms_cluster_codec_hello.h
+# --- FC-P3.1 / FC-P3.5 / FC-P3.12: the VMS$VAXcluster SYSAP codec, the
+# state-transition barrier's PARTICIPANT side, the p. 7-42 Phase 2 commit both
+# halves share, and the COORDINATOR side. All are already in the NetBSD
+# module's SRCS (src/kernel-netbsd/Makefile) -- the codec and the barrier were
+# listed there without being staged here, which tests/netbsd/check_guest_payload.sh
+# reports; these lines close that and keep the new pair from repeating it. ---
+COPY src/kernel-core/vms_cluster_codec_cm.c  /netbsd/guest-src/kernel-core/vms_cluster_codec_cm.c
+COPY src/kernel-core/vms_cluster_codec_cm.h  /netbsd/guest-src/kernel-core/vms_cluster_codec_cm.h
+COPY src/kernel-core/vms_cnxman_phase2.c     /netbsd/guest-src/kernel-core/vms_cnxman_phase2.c
+COPY src/kernel-core/vms_cnxman_phase2.h     /netbsd/guest-src/kernel-core/vms_cnxman_phase2.h
+COPY src/kernel-core/vms_dlm_ldwv.c          /netbsd/guest-src/kernel-core/vms_dlm_ldwv.c
+COPY src/kernel-core/vms_dlm_ldwv.h          /netbsd/guest-src/kernel-core/vms_dlm_ldwv.h
+COPY src/kernel-core/vms_cnxman_barrier_fsm.c /netbsd/guest-src/kernel-core/vms_cnxman_barrier_fsm.c
+COPY src/kernel-core/vms_cnxman_barrier_fsm.h /netbsd/guest-src/kernel-core/vms_cnxman_barrier_fsm.h
+COPY src/kernel-core/vms_cnxman_coord_fsm.c  /netbsd/guest-src/kernel-core/vms_cnxman_coord_fsm.c
+COPY src/kernel-core/vms_cnxman_coord_fsm.h  /netbsd/guest-src/kernel-core/vms_cnxman_coord_fsm.h
+COPY src/kernel-core/vms_cluster_codec_vc.c /netbsd/guest-src/kernel-core/vms_cluster_codec_vc.c
+COPY src/kernel-core/vms_cluster_codec_vc.h /netbsd/guest-src/kernel-core/vms_cluster_codec_vc.h
+COPY src/kernel-core/vms_cluster_codec_blk.c /netbsd/guest-src/kernel-core/vms_cluster_codec_blk.c
+COPY src/kernel-core/vms_cluster_codec_blk.h /netbsd/guest-src/kernel-core/vms_cluster_codec_blk.h
+COPY src/kernel-core/vms_cluster_codec_scs.h /netbsd/guest-src/kernel-core/vms_cluster_codec_scs.h
+# --- FC-P2.4: SCS becomes an in-module layer. vms_scs_fsm.c (the SB/CDT
+# ladder, the Con.ID allocator, the credit ledger), vms_scs_dir.c (the
+# SCS$DIRECTORY / SCS$DIR_LOOKUP SYSAPs), the FC-P2.1 SCS codec they build and
+# parse every frame through, and vms_scs.c (the executive glue that binds them
+# to the port) all joined src/kernel-netbsd/Makefile's SRCS with this item, so
+# the in-guest module build needs them staged. ---
+COPY src/kernel-core/vms_cluster_codec_scs.c /netbsd/guest-src/kernel-core/vms_cluster_codec_scs.c
+COPY src/kernel-core/vms_scs_fsm.c           /netbsd/guest-src/kernel-core/vms_scs_fsm.c
+COPY src/kernel-core/vms_scs_fsm.h           /netbsd/guest-src/kernel-core/vms_scs_fsm.h
+COPY src/kernel-core/vms_scs_dir.c           /netbsd/guest-src/kernel-core/vms_scs_dir.c
+COPY src/kernel-core/vms_scs_dir.h           /netbsd/guest-src/kernel-core/vms_scs_dir.h
+COPY src/kernel-core/vms_scs.c               /netbsd/guest-src/kernel-core/vms_scs.c
+# --- FC-P3.8: the connection manager's GLUE (vms_cnxman.c), the FIRST
+# in-module consumer of the join FSM (FC-P3.3) -- which brings its own two
+# not-yet-staged dependencies along (FC-P3.4's disk-client discovery walk and
+# FC-P6.2's MSCP command codec, E4). All four joined src/kernel-netbsd/
+# Makefile's SRCS with this item, so the in-guest module build needs them
+# staged. ---
+COPY src/kernel-core/vms_cluster_codec_mscp.c /netbsd/guest-src/kernel-core/vms_cluster_codec_mscp.c
+COPY src/kernel-core/vms_cluster_codec_mscp.h /netbsd/guest-src/kernel-core/vms_cluster_codec_mscp.h
+COPY src/kernel-core/vms_mscp_cl_fsm.c       /netbsd/guest-src/kernel-core/vms_mscp_cl_fsm.c
+COPY src/kernel-core/vms_mscp_cl_fsm.h       /netbsd/guest-src/kernel-core/vms_mscp_cl_fsm.h
+COPY src/kernel-core/vms_cnxman_join_fsm.c   /netbsd/guest-src/kernel-core/vms_cnxman_join_fsm.c
+COPY src/kernel-core/vms_cnxman_join_fsm.h   /netbsd/guest-src/kernel-core/vms_cnxman_join_fsm.h
+COPY src/kernel-core/vms_cnxman_diag.c       /netbsd/guest-src/kernel-core/vms_cnxman_diag.c
+COPY src/kernel-core/vms_cnxman_diag.h       /netbsd/guest-src/kernel-core/vms_cnxman_diag.h
+COPY src/kernel-core/vms_cnxman.c            /netbsd/guest-src/kernel-core/vms_cnxman.c
+# --- E82: the runtime cluster-emit safety guard (pe_vc_send_frame drops frames
+# that violate the measured crash-safe envelope). It joined src/kernel-netbsd/
+# Makefile's SRCS with E82 but was not staged here, which
+# tests/netbsd/check_guest_payload.sh reports; these lines close that. ---
+COPY src/kernel-core/vms_cluster_emit_guard.c /netbsd/guest-src/kernel-core/vms_cluster_emit_guard.c
+COPY src/kernel-core/vms_cluster_emit_guard.h /netbsd/guest-src/kernel-core/vms_cluster_emit_guard.h
+# --- FC-P6.3: the MSCP disk SERVER. vms_mscp_srv_fsm.c is the pure server
+# (UQB/HQB/HRB + the [state][event] table) and vms_mscp_srv.c is its executive
+# glue; both joined src/kernel-netbsd/Makefile's SRCS with this item, so the
+# in-guest module build needs them and their headers staged. vms_acp_serve.h is
+# the ODS-2 ACP's served-volume projection the glue reads units through. ---
+COPY src/kernel-core/vms_mscp_srv_fsm.c      /netbsd/guest-src/kernel-core/vms_mscp_srv_fsm.c
+COPY src/kernel-core/vms_mscp_srv_fsm.h      /netbsd/guest-src/kernel-core/vms_mscp_srv_fsm.h
+COPY src/kernel-core/vms_mscp_srv.c          /netbsd/guest-src/kernel-core/vms_mscp_srv.c
+COPY src/kernel-core/vms_mscp_srv.h          /netbsd/guest-src/kernel-core/vms_mscp_srv.h
+# FC-P6.6: the SERVED-I/O WORKER half -- the ONE cluster TU allowed to call the
+# block seam, so the fork thread never stalls on a served disk.
+COPY src/kernel-core/vms_mscp_srv_io.c       /netbsd/guest-src/kernel-core/vms_mscp_srv_io.c
+COPY src/kernel-core/vms_mscp_srv_io.h       /netbsd/guest-src/kernel-core/vms_mscp_srv_io.h
+COPY src/kernel-core/vms_acp_serve.h         /netbsd/guest-src/kernel-core/vms_acp_serve.h
+# --- FC-P7.1: the MSCP disk CLASS DRIVER. vms_mscp_cl_io_fsm.c is the pure
+# driver (CDDB/UCB/CDRP + the [state][event] table) and vms_mscp_cl.c is its
+# executive glue; both joined src/kernel-netbsd/Makefile's SRCS with this item,
+# so the in-guest module build needs them and their headers staged. ---
+COPY src/kernel-core/vms_mscp_cl_io_fsm.c    /netbsd/guest-src/kernel-core/vms_mscp_cl_io_fsm.c
+COPY src/kernel-core/vms_mscp_cl_io_fsm.h    /netbsd/guest-src/kernel-core/vms_mscp_cl_io_fsm.h
+# E64: WHEN the class driver may connect (lookup-before-connect; the join
+# drives alone). A pure TU, so it builds identically in both kmods.
+COPY src/kernel-core/vms_mscp_cl_conn_fsm.c  /netbsd/guest-src/kernel-core/vms_mscp_cl_conn_fsm.c
+COPY src/kernel-core/vms_mscp_cl_conn_fsm.h  /netbsd/guest-src/kernel-core/vms_mscp_cl_conn_fsm.h
+COPY src/kernel-core/vms_mscp_cl.c           /netbsd/guest-src/kernel-core/vms_mscp_cl.c
+COPY src/kernel-core/vms_mscp_cl.h           /netbsd/guest-src/kernel-core/vms_mscp_cl.h
+COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
+# FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
+# seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under
+# tests/netbsd/guest/ in the repo but is staged INTO kmod/ (not probe/) here,
+# alongside the Makefile it builds with -- check_guest_payload.sh's resolve()
+# only checks kernel-netbsd/ and kernel-core/ (the src/vmsfs/ods2 precedent,
+# docs memory netbsd-module-srcs-four-places), so this staging line is NOT
+# gate-verified and must be kept in sync by hand.
+COPY tests/netbsd/guest/cluster_seam.c       /netbsd/guest-src/kmod/cluster_seam.c
+# --- FC-P0.5: the cluster FORK CONTEXT. vms_cluster_fork.c is the pure queue/
+# dispatch half (no substrate type at all) and vms_cluster_fork_bind.c binds its
+# ops to exec_kthread_*/exec_timer_*/exec_mutex_*; both are in the NetBSD
+# module's SRCS from their first commit, so the in-guest build needs them. ---
+COPY src/kernel-core/vms_cluster_fork.c      /netbsd/guest-src/kernel-core/vms_cluster_fork.c
+COPY src/kernel-core/vms_cluster_fork.h      /netbsd/guest-src/kernel-core/vms_cluster_fork.h
+COPY src/kernel-core/vms_cluster_fork_bind.c /netbsd/guest-src/kernel-core/vms_cluster_fork_bind.c
 # --- probe/: the userspace tools + the NetBSD transport seam ---
 COPY tests/netbsd/guest/vmsprobe.c           /netbsd/guest-src/probe/vmsprobe.c
 COPY tests/netbsd/guest/vmseflag.c           /netbsd/guest-src/probe/vmseflag.c

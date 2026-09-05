@@ -31,6 +31,40 @@ vms-y := vms_module.o \
          vms_lnm.o \
          vms_lock.o \
          vms_mbx.o \
+         vms_cluster_fork.o \
+         vms_cluster_fork_bind.o \
+         vms_pe.o \
+         vms_cluster_codec.o \
+         vms_cluster_codec_cm.o \
+         vms_pe_fsm.o \
+         vms_cluster_codec_hello.o \
+         vms_cluster_codec_vc.o \
+         vms_cluster_codec_blk.o \
+         vms_cnxman_csb.o \
+         vms_cnxman_recnx_fsm.o \
+         vms_cnxman_quorum.o \
+         vms_cluster_api.o \
+         vms_cluster_sysgen.o \
+         vms_cnxman_phase2.o \
+         vms_dlm_ldwv.o \
+         vms_cnxman_barrier_fsm.o \
+         vms_cnxman_coord_fsm.o \
+         vms_scs_fsm.o \
+         vms_cluster_codec_scs.o \
+         vms_cluster_emit_guard.o \
+         vms_scs_dir.o \
+         vms_scs.o \
+         vms_cluster_codec_mscp.o \
+         vms_mscp_cl_fsm.o \
+         vms_cnxman_join_fsm.o \
+         vms_cnxman_diag.o \
+         vms_cnxman.o \
+         vms_mscp_srv_fsm.o \
+         vms_mscp_srv.o \
+         vms_mscp_srv_io.o \
+         vms_mscp_cl_io_fsm.o \
+         vms_mscp_cl_conn_fsm.o \
+         vms_mscp_cl.o \
          vms_proctab.o \
          vmsfs_acp.o \
          ods2_reader.o \
@@ -46,4 +80,27 @@ vms-y := vms_module.o \
 # path uses). NOT the writer / block-I/O objects: vmsfs_acp.c does its own block
 # reads/writes through the exec_blockdev_*_block shim. Same flatten-safe codec
 # staging as vmsfs/Kbuild (sources.conf stages vmsfs/ods2.h at <moddir>/vmsfs/).
+# FC-P3.6: vms_cnxman_csb.o (the CLUB/CSB model + the CSB ten-state ladder) and
+# vms_cnxman_recnx_fsm.o (the RECNXINTERVAL/TIMVCFAIL reconnect loop) join on the
+# same terms, and for the same two-object-lists reason.
+# FC-P3.7: vms_cnxman_quorum.o (CEVOTES/QUORUM, tracking only) and
+# vms_cluster_api.o (the $GETSYI cluster item-code projection) join the same way.
+# FC-P3.5: vms_cnxman_barrier_fsm.o (the state-transition barrier, participant
+# side) plus the two codec objects it reads and builds every frame through --
+# vms_cluster_codec.o (FC-P0.6) and vms_cluster_codec_cm.o (FC-P3.1). Same
+# two-object-lists rule: all three are in src/kernel/Makefile's vms-y.
+# FC-P0.8: vms_pe_fsm.o (the pure NISCA channel state machine) plus the codec it
+# builds every frame through -- vms_cluster_codec.o (FC-P0.6) and
+# vms_cluster_codec_hello.o (FC-P0.7) -- join on the same terms and for the same
+# two-object-lists reason.
+# FC-P1.2 grows that same TU with the VIRTUAL-CIRCUIT tables and brings
+# vms_cluster_codec_vc.o (FC-P1.1) with them: the START/STACK/ACK builders, the
+# 0x48 credit-return, and the sequence stamp a retransmit re-applies.
+# FC-P0.1: vms_pe.o is the executive-resident VMScluster stack's LAN port layer.
+# It mirrors src/kernel/Makefile's vms-y (the two-object-lists rule: an executive
+# core .c missing here builds standalone and then fails modpost in the bootable
+# image, which only the boot gate catches). Its includes are all basenames, as
+# the flattening overlay requires. FC-P0.5 adds the fork context beside it
+# (vms_cluster_fork.o = the pure queue/dispatch, vms_cluster_fork_bind.o = its
+# exec_kthread/exec_timer binding); their includes are basenames too.
 ccflags-y := -I $(src) -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL

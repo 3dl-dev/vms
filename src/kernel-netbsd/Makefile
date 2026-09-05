@@ -36,6 +36,8 @@ KMOD=		vms
 # executive's exec_rbtree_netbsd.h (their <sys/rbtree.h> rb_left/rb_right macros
 # would collide), listed with the other _netbsd backend TUs above.)
 SRCS=		vms_netbsd.c \
+		vms_lan_netbsd.c \
+		cluster_seam.c \
 		vms_lnm_arena_netbsd.c \
 		vms_acct_rss_netbsd.c \
 		vms_sysmem_netbsd.c \
@@ -50,12 +52,94 @@ SRCS=		vms_netbsd.c \
 		vms_lock.c \
 		vms_lnm.c \
 		vms_devtab.c \
+		vms_cluster_fork.c \
+		vms_cluster_fork_bind.c \
+		vms_pe.c \
+		vms_cluster_codec.c \
+		vms_cluster_codec_cm.c \
+		vms_pe_fsm.c \
+		vms_cluster_codec_hello.c \
+		vms_cluster_codec_vc.c \
+		vms_cluster_codec_blk.c \
+		vms_cnxman_csb.c \
+		vms_cnxman_recnx_fsm.c \
+		vms_cnxman_quorum.c \
+		vms_cluster_api.c \
+		vms_cluster_sysgen.c \
+		vms_cnxman_phase2.c \
+		vms_dlm_ldwv.c \
+		vms_cnxman_barrier_fsm.c \
+		vms_cnxman_coord_fsm.c \
+		vms_scs_fsm.c \
+		vms_cluster_codec_scs.c \
+		vms_cluster_emit_guard.c \
+		vms_scs_dir.c \
+		vms_scs.c \
+		vms_cluster_codec_mscp.c \
+		vms_mscp_cl_fsm.c \
+		vms_cnxman_join_fsm.c \
+		vms_cnxman_diag.c \
+		vms_cnxman.c \
+		vms_mscp_srv_fsm.c \
+		vms_mscp_srv.c \
+		vms_mscp_srv_io.c \
+		vms_mscp_cl_io_fsm.c \
+		vms_mscp_cl_conn_fsm.c \
+		vms_mscp_cl.c \
 		vmsfs_acp.c \
 		ods2_reader.c \
 		ods2_edit.c \
 		vms_blockdev_netbsd.c \
 		vms_socket_netbsd.c
 
+# FC-P0.1 (the executive-resident VMScluster stack): ../kernel-core/vms_pe.c is
+# the LAN port layer, and it is in SRCS from its FIRST commit -- not "Linux
+# first, NetBSD later", which is exactly what left vms_l2.c Linux-only and absent
+# here. It reaches the wire only through exec_kbackend.h families SS14..SS18,
+# whose NetBSD half is vms_lan_netbsd.c above (honest SS$_NOSUCHDEV stubs until
+# FC-P0.3 records which link-layer receive hook this rail's NetBSD has and
+# FC-P0.4 lands the real pfil/if_input + if_transmit binding). The include
+# discipline that keeps vms_pe.c substrate-free is gated by
+# tools/ci/cluster_core_includes_gate.sh.
+#
+# FC-P3.6 joins on the same terms: ../kernel-core/vms_cnxman_csb.c (the CLUB/CSB
+# model + the CSB ten-state connectivity ladder, pp. 7-23/7-24 of the published
+# VAXcluster description) and ../kernel-core/vms_cnxman_recnx_fsm.c (the
+# RECNXINTERVAL/TIMVCFAIL reconnect loop and the last-gasp decision). Both are
+# PURE -- they reach nothing but their injected ops -- so there is no NetBSD half
+# to write and no reason for them to arrive here later than on Linux.
+#
+# FC-P3.7 joins the same way: ../kernel-core/vms_cnxman_quorum.c (the Quorum
+# Algorithm, CEVOTES/QUORUM tracking only) and ../kernel-core/vms_cluster_api.c
+# (the $GETSYI cluster item-code projection). Both PURE, both here from their
+# first commit.
+#
+# FC-P0.5 adds the cluster fork context on the same terms: vms_cluster_fork.c is
+# pure (queues, dispatch, timer bookkeeping -- host-unit-tested with no kernel at
+# all), and vms_cluster_fork_bind.c binds its ops to exec_kthread_*/exec_timer_*/
+# exec_mutex_*, so this module gets a real NetBSD kthread + callout(9) fork
+# context the moment FC-P0.4 fills in vms_lan_netbsd.c's SS15/SS16 bodies.
+#
+# FC-P3.5 joins on exactly the same terms: ../kernel-core/vms_cnxman_barrier_fsm.c
+# (the cluster state-transition barrier, participant side) and the two codec TUs
+# it reads and builds every frame through -- ../kernel-core/vms_cluster_codec.c
+# (FC-P0.6) and ../kernel-core/vms_cluster_codec_cm.c (FC-P3.1). All three are
+# pure and take their fixed-width types from vms_wire_types.h, whose NetBSD
+# branch is <sys/types.h> + <sys/stdint.h>; there is no NetBSD half to write.
+#
+# FC-P0.8 joins on those same terms: ../kernel-core/vms_pe_fsm.c (the NISCA
+# channel state machine -- HELLO cadence, the b2/b3/b4 verify ladder, the sec
+# 4(k) packet-size verification, per-remote incarnation tracking, the listen
+# timeout) together with the codec it builds every frame through,
+# ../kernel-core/vms_cluster_codec.c (FC-P0.6) and
+# ../kernel-core/vms_cluster_codec_hello.c (FC-P0.7). All three are PURE and are
+# proven to compile for elf32-vax; they arrive here in the same commit as on
+# Linux. Their consumer, the port's executive glue, arrives with FC-P0.9.
+#
+# FC-P1.2 adds the virtual-circuit tables to that same file and brings
+# ../kernel-core/vms_cluster_codec_vc.c (FC-P1.1) with them -- also PURE, and
+# proven to compile + relocatable-link for elf32-vax in the same run.
+#
 # vms-d5d: vmsfs_acp.c (the Files-11 ODS-2 ACP: channel + IO$_ACCESS/READVBLK/
 # WRITEVBLK/$MOUNT handlers) + ods2_edit.c (the pure on-disk EDIT helpers its
 # implicit-extend path calls) join the loadable module so the VAX runtime reads
@@ -67,6 +151,10 @@ SRCS=		vms_netbsd.c \
 # vms_eflag.c lives in the shared core dir; tell bmake where to find it.
 .PATH:		${.CURDIR}/../kernel-core
 .PATH:		${.CURDIR}/../vmsfs/ods2
+# FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
+# seam, called from MODULE_CMD_INIT below) lives with the other NetBSD guest
+# harness sources, not under kernel-netbsd/ or kernel-core/.
+.PATH:		${.CURDIR}/../../tests/netbsd/guest
 
 # -I${.CURDIR}            : this dir's headers -- the NetBSD backend
 #                          (exec_kbackend_netbsd.h, exec_list_netbsd.h), the

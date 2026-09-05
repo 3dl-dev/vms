@@ -592,13 +592,20 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # command fails %SYSGEN-F-NOIMG and SYS$SYSTEM:OVMXVMSSYS.PAR can never
     # be read or written on the real runtime.
     cp build-static/bin/SYSGEN.EXE     /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    # SCSD.EXE (vms-c3b): the SCS datalink daemon. Ships so the installed
-    # system can run clustering, and so `SCSD --show-identity` can read back
-    # the operator-authored cluster params (SCSNODE/SCSSYSTEMID/ALLOCLASS/
-    # RECNXINTERVAL) from SYS$SYSTEM:OVMXVMSSYS.PAR through the same
-    # sysgen_read_param()/scsd_recnxinterval() path scsd adopts on boot --
-    # a genuine store->boot->scsd round trip (INV-6), not a per-process fake.
-    cp build-static/bin/SCSD.EXE       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # CNXTRACE.EXE (E69): prints the executive's own CNXMAN join transition
+    # ring to SYS$OUTPUT. The cluster stack is executive-resident and the
+    # executive has no console log (ovmx_init.c:1399), so on a booted node
+    # whose join stalls this image is the ONLY route the evidence has out --
+    # and the acceptance harness boots THIS image, which is exactly why
+    # staging it only in the ktest image was the E52 gap. `RUN
+    # SYS$SYSTEM:CNXTRACE.EXE`.
+    cp build-static/bin/CNXTRACE.EXE   /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # NO SCSD.EXE, DELIBERATELY (FC-P3.9). There is no cluster daemon in the
+    # installed system: the SCS port, SCS itself and the connection manager
+    # are executive-resident (vms.ko / vms.kmod), and STARTUP.EXE forms or
+    # joins through VMS_IOCTL_CLUSTER_START before the system disk is
+    # mounted. tests/integration/test_no_scsd_image.sh asserts this staging
+    # step stays absent, so the daemon cannot come back by accident.
     # PRODUCT.EXE (vms-df9): `$ PRODUCT INSTALL`/`SHOW PRODUCT`
     # dcl_exec_utility()'s for it at SYS$SYSTEM: -- without this copy every
     # PRODUCT operation fails %PCSI-F-NOIMG on the real runtime.
@@ -960,30 +967,6 @@ RUN cp -r /system-stage/vms /system-stage-negctl-vms && \
     rm -rf /system-stage-negctl-vms && \
     echo "NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-negctl.img | awk '{print $5}')"
 
-# -- SCS component-registration negative-control disk (vms-5ad) -----------------
-# A THIRD mastered disk, built from the SAME staged system tree
-# (/system-stage/vms) as ovmx-distrib.img, with exactly one line removed:
-# SYS$STARTUP:VMS$VMS.DAT's CONFIG-phase `SCS_STARTUP.COM` registration.
-# Nothing else differs. Mirrors the JOB_CONTROL negative-control disk just
-# above, applied to the SCS cluster connection manager instead: the negative
-# half of vms-5ad's ground-source proof (tests/qemu/test_scs_autostart.sh) --
-# boot it with VAXCLUSTER authored nonzero (so SCS WOULD start if only the
-# VAXCLUSTER gate mattered) and prove SCSD.EXE is never RUN/DETACHED anyway,
-# because the STDRV registration that creates it is what actually gates
-# creation, not just the VAXCLUSTER self-check inside scsd.c.
-RUN cp -r /system-stage/vms /system-stage-scs-negctl-vms && \
-    grep -v 'SCS_STARTUP\.COM' \
-        "/system-stage/vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT" \
-        > "/system-stage-scs-negctl-vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT" && \
-    if grep -q 'SCS_STARTUP\.COM' "/system-stage-scs-negctl-vms/SYS0/SYSCOMMON/SYS\$STARTUP/VMS\$VMS.DAT"; then \
-        echo "FAIL: scs-negctl VMS\$VMS.DAT still names SCS_STARTUP.COM"; exit 1; \
-    fi && \
-    /src/build-static/bin/vmsfs_master --ods2 master \
-        /boot/ovmx-distrib-scs-negctl.img OVMXSYS /system-stage-scs-negctl-vms 128 && \
-    /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib-scs-negctl.img && \
-    rm -rf /system-stage-scs-negctl-vms && \
-    echo "SCS NEGCTL DISTRIB image: $(ls -lh /boot/ovmx-distrib-scs-negctl.img | awk '{print $5}')"
-
 # -- Install-media distribution disk (vms-dcf) ----------------------------------
 # A SEPARATE THIRD mastered disk, built from the SAME staged system tree
 # (/system-stage/vms) as ovmx-distrib.img above, with exactly one file
@@ -1028,13 +1011,30 @@ RUN cp -r /system-stage/vms /system-stage-install-media-vms && \
 # on ovmx-os.kit and ovmx-distrib.img). All other binaries (DCL, LOGIN, HELP,
 # IMGACT, the SYSLIB shareables) must be on the system disk, which arrives
 # pre-installed (docs/design-vms-faithful-install.md §3.1).
+# CLUSTER_AUTHORIZE.DAT staging (E53, docs/cluster-integration-notes.md).
+# Real VMS writes this once, at CLUSTER_CONFIG.COM time, onto the persistent
+# system disk; OVMX has no interactive equivalent yet (a disclosed gap, not a
+# silent one), so a specific boot's group/password is staged at IMAGE-BUILD
+# time here, gated on a build-arg that defaults OFF -- an ordinary build
+# (no --build-arg) stages nothing and boots with auth_group=0, byte-identical
+# to today. Only a caller who explicitly names a real cluster's group (e.g.
+# the lab VAX cluster's group 257) gets a CLUSTER_AUTHORIZE.DAT written.
+ARG CLUSTER_AUTH_GROUP=0
+ARG CLUSTER_AUTH_PASSWORD=""
+
 RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
              /initramfs-slim/tmp /initramfs-slim/var /initramfs-slim/mnt \
              /initramfs-slim/sbin \
-             /initramfs-slim/etc \
+             /initramfs-slim/etc/ovmx \
              /initramfs-slim/lib/modules \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSEXE \
              /initramfs-slim/vms/SYS0/SYSCOMMON/SYSMGR && \
+    if [ "$CLUSTER_AUTH_GROUP" != "0" ]; then \
+        musl-gcc -Isrc/libvms/include tools/cluster/mk_cluster_authorize.c \
+            -o /tmp/mk_cluster_authorize && \
+        /tmp/mk_cluster_authorize /initramfs-slim/etc/ovmx/cluster_authorize.dat \
+            "$CLUSTER_AUTH_GROUP" "$CLUSTER_AUTH_PASSWORD" ; \
+    fi && \
     # Bootstrap binary only -- STARTUP.EXE (/init). INITIALIZE.EXE stays off
     # the bootstrap (see header above); it is already staged onto the
     # distribution disk by the system-tree stage.
@@ -1169,10 +1169,6 @@ COPY --from=builder /boot/ovmx-distrib.img /boot/ovmx-distrib.img
 # STDRV component registration removed. Consumed only by
 # tests/qemu/test_job_control_negctl.sh -- never booted by anything else.
 COPY --from=builder /boot/ovmx-distrib-negctl.img /boot/ovmx-distrib-negctl.img
-# SCS component-registration negative-control disk (vms-5ad): same tree,
-# SCS_STARTUP.COM's STDRV component registration removed. Consumed only by
-# tests/qemu/test_scs_autostart.sh -- never booted by anything else.
-COPY --from=builder /boot/ovmx-distrib-scs-negctl.img /boot/ovmx-distrib-scs-negctl.img
 # Install-media distribution disk (vms-dcf): same tree as ovmx-distrib.img,
 # SYSTARTUP_VMS.COM swapped for the variant that runs the install menu.
 # Consumed only by tests/qemu/test_install_menu.sh -- ovmx-distrib.img

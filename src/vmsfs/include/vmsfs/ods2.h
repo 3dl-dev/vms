@@ -796,7 +796,7 @@ int ods2_dir_block_scan(const void *dir_block, ods2_dir_cb cb, void *ctx);
  * genuine reader logic (ods2_home_parse / ods2_fh2_parse / ods2_fh2_map_walk
  * / ods2_dir_block_scan) run over live storage without loading the entire
  * volume into RAM. The pread block-transfer shape deliberately mirrors
- * src/vmsscs/scs_mscp_srv.c's raw-block server (whole-block reads, a short
+ * the MSCP server's raw-block path (whole-block reads, a short
  * read is a hard failure, offsets computed in 64 bits). The in-memory
  * ods2_volume_t path is UNCHANGED and both variants coexist.
  *
@@ -1772,7 +1772,7 @@ ods2_status_t ods2_dir_remove_blocks(const uint8_t *in_blocks, unsigned in_nblk,
  *   Every top-level entry point (format_bdev/create_file/create_dir/
  *   dir_insert) commits its cache to `bdev_fd` via ods2_wvolume_flush()
  *   (pwrite, whole-block, hard-failure-on-short-write -- the same shape
- *   ods2_bdev.c's pread side and src/vmsscs/scs_mscp_srv.c use) and clears
+ *   ods2_bdev.c's pread side and the MSCP server's raw-block path use) and clears
  *   it before returning success, so the cache never holds more than one
  *   call's own working set regardless of how many files/inserts a caller
  *   makes across the volume's lifetime.

@@ -120,7 +120,7 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # "OVMX_LINK_NATIVE off ... alpha-linux-gnu is not aarch64/x86_64-musl").
     for e in PROVISION.EXE JOB_CONTROL.EXE LOGINOUT.EXE DCL.EXE HELP.EXE \
              AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE \
-             SYSGEN.EXE SCSD.EXE PRODUCT.EXE LIBRARIAN.EXE ANALYZE.EXE \
+             SYSGEN.EXE PRODUCT.EXE LIBRARIAN.EXE ANALYZE.EXE \
              SYSMAN.EXE; do
         [ -f "$BIN/$e" ] && cp "$BIN/$e" "$SYSEXE/" || echo "   (no $e)"
     done

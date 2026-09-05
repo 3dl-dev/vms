@@ -121,6 +121,41 @@ if [ -f "$OSREL" ] && [ -f "$SRC_ROOT/$SSOT" ]; then
     fi
 fi
 
+# --- 5. The cluster software identity must not go stale ------------
+# OVMX_CLUSTER_SW_VERSION is the version OVMX BROADCASTS as a cluster node
+# (SHOW CLUSTER's software column and the SCS START body at abs 72, which a
+# real VAX renders verbatim). It is a separate literal from
+# OVMX_PRODUCT_VERSION because the wire field is a fixed 8 bytes -- "VMX " plus
+# a full product version does not fit, so the patch level is dropped. That
+# separateness is exactly how it drifted: it sat at "VMX V0.1" while the product
+# shipped V0.6-10, so a V0.6 executive told the cluster it was V0.1. Nothing
+# scanned it, so the stale claim was invisible (the same failure mode as the
+# os-release drift in section 4).
+#
+# The rule: OVMX_CLUSTER_SW_VERSION must be "VMX " + OVMX_PRODUCT_VERSION's
+# MAJOR.MINOR. Bumping the product version means bumping this too.
+if [ -f "$SRC_ROOT/$SSOT" ]; then
+    prod_ver=$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' \
+        "$SRC_ROOT/$SSOT")
+    clu_ver=$(sed -n 's/^#define[[:space:]]\+OVMX_CLUSTER_SW_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' \
+        "$SRC_ROOT/$SSOT")
+    # V0.6-10 -> V0.6 : major.minor only, the width the wire field allows.
+    prod_majmin=$(printf '%s' "$prod_ver" | sed 's/^\(V[0-9]\{1,\}\.[0-9]\{1,\}\).*/\1/')
+    want_clu="VMX $prod_majmin"
+    if [ -z "$prod_ver" ] || [ -z "$clu_ver" ]; then
+        echo "FAIL: could not read both version macros from $SSOT"
+        status=1
+    elif [ "$clu_ver" = "$want_clu" ]; then
+        echo "  OK: OVMX_CLUSTER_SW_VERSION ($clu_ver) tracks OVMX_PRODUCT_VERSION ($prod_ver)"
+    else
+        echo "FAIL: the cluster software identity drifted from the product version"
+        echo "  OVMX_CLUSTER_SW_VERSION=\"$clu_ver\""
+        echo "  expected \"$want_clu\"  (OVMX_PRODUCT_VERSION=\"$prod_ver\", major.minor only)"
+        echo "  -> the executive BROADCASTS this to other cluster nodes; bump it in $SSOT."
+        status=1
+    fi
+fi
+
 if [ "$status" -eq 0 ]; then
     echo "INV-1 identity SSOT gate: PASS"
 else

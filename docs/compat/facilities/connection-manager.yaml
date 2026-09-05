@@ -2,93 +2,249 @@
 facility: connection-manager
 name: "Connection manager / membership / quorum / rejoin"
 domain: clustering
-vms_ref: "OpenVMS Cluster Systems manual (connection manager, quorum algorithm)"
+vms_ref: "OpenVMS Cluster Systems manual (connection manager, quorum algorithm); VAXcluster Principles ch. 7 (CLUB/CSB)"
 scope_1_0: in
 plan_ref: vms-694
 summary: >
-  Full HELLO/disconnect/reconnect/depart finite-state machines, byte-exact
-  against mined wire captures. Quorum recompute (including quorum disk) is real,
-  driven by wire-grounded per-node VOTES — daemon-resident (scsd), executive
-  cutover deferred. Cluster membership now crosses into the executive: vms.ko
-  owns a real membership block that scsd populates from its live connection view
-  and SHOW CLUSTER reads through /dev/vms (the userspace file bridge is retired).
-  Membership/rejoin is a single 3-party member-driven join FSM — VMS's own model
-  has no distinct rejoin state either.
-  SCOPE CAVEAT (vms-110b): the wire join and the quorum/membership arithmetic run
-  in the userspace SCSD daemon, which the shipping runtime does NOT auto-start at
-  boot — so a BOOTED OVMX is not yet a cluster member. The executive membership
-  block is real, but a booted node joining a real VAX end-to-end is unbuilt.
-last_reviewed: 2026-08-31
+  The connection manager is EXECUTIVE-RESIDENT (vms_cnxman.c and four pure
+  FSMs in vms.ko / the NetBSD vms.kmod). FC-P3.9 deleted the userspace SCS
+  daemon that previously carried the join, the quorum arithmetic and a
+  membership block it wrote into the executive by ioctl — the operator's
+  2026-09-02 clustering reset ruled that stack a non-portable strawman.
+  READ THE STATUSES LITERALLY. What is verified is the MODEL and the LOCAL
+  machinery: the CLUB/CSB data model, the ten-state connectivity ladder, the
+  join drive, the 12-step transition barrier, the coordinator, the reconnect
+  loop and the quorum arithmetic — each proven at R1 (host unit) and R2 (the
+  N-node simulator), with the readback ioctls proven at R3/R4 against a real
+  /dev/vms. What is NOT verified is the DISTRIBUTED outcome: this node has
+  never reached MEMBER, because reaching it requires learning its own CSID
+  from a real op-0x06 membership record whose layout is not yet pinned
+  (integration note E30, a lab capture). Every row below says which of the two
+  it is. A node that cannot learn its CSID stays NEW and issues no DLM traffic,
+  which is the honest state, not a defect being hidden.
+last_reviewed: 2026-09-03
 items:
-  - id: connection-manager$hello-protocol
-    kind: protocol
+  - id: connection-manager$club-csb-model
+    kind: feature
     status: verified
     authenticity: real
-    vms: "HELLO / disconnect / reconnect / depart connection state machines"
-    evidence: src/vmsscs/scs_hello.c
-    verified_against: "mined lab captures"
-    notes: "scs_hello.c, scs_disc.c, scs_recnx.c (10-state CSB), scs_depart.c — byte-exact against mined wire captures."
+    vms: "CLUB (cluster block) and CSB (cluster system block) per remote system"
+    evidence: src/kernel-core/vms_cnxman_csb.c
+    verified_against: "VAXcluster Principles (Davis 1993) pp. 7-23/7-24/7-26 — the ten connectivity states, the flag set and the CLUB's own fields, each cited at the struct field that carries it"
+    notes: >
+      FC-P3.6, executive-resident. One CLUB per node and one CSB per system
+      (local included), with the ten p. 7-23/7-24 SCS connectivity states as a
+      pure [state][event] table, the p. 7-23 flag set (member/selected/
+      status_rcvd) and the membership bitmap. Every peer-advertised value carries
+      a `_valid` companion and is honestly absent until a real record supplies
+      it: a zero CSID reads "not yet learned", never "node zero".
+      PROVEN AT R1/R2, in CI: tests/cluster/host/test_cnxman_csb.c (the ladder,
+      every cell), test_cnxman_boot.c (the projection into CLUSTER_MEMBER_GET
+      rows), and the simulator's join/departure scenarios.
+
+  - id: connection-manager$join
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "The documented join: directory round, MSCP$DISK walk, VMS$VAXcluster VC, barrier"
+    evidence: src/kernel-core/vms_cnxman_join_fsm.c
+    notes: >
+      FC-P3.3, executive-resident and pure. Drives the wire spec sec 4(L)/(m)/(o)
+      sequence: this node's own SCS$DIRECTORY client round, the MSCP$DISK
+      connect + served-unit walk, the VMS$VAXcluster VC, the server half
+      (accepting every member's own connect), the op-0d echo recipe and the
+      hand-off into the barrier. Reached from the boot path: FC-P3.9's
+      VMS_IOCTL_CLUSTER_START starts the connection manager and drives the join
+      when a real system has been discovered to join THROUGH.
+      IMPLEMENTED, NOT VERIFIED. The join reaches the barrier, completes the
+      dialogue, AND now reaches MEMBER at R1: a real-VAX capture
+      (op06-join-20260903.pcap) grounded the CSID mechanism (E30, resolved) --
+      op-0x06 carries the EXISTING member's record, not the joiner's, and a node's
+      CSID is deterministic: `CSID = (cluster_generation << 16) | (SCSSYSTEMID &
+      0x3ff)`, the generation READ FROM THE WIRE (the coordinator's CSID high-word,
+      op-06 b[24]), never fabricated. The join computes its own CSID this way and
+      learns it; a node that has not yet seen a coordinator CSID stays NEW (honest).
+      PROVEN AT R1/R2: tests/cluster/host/test_cnxman_join.c (capture-exact CSID
+      vectors both op-06 sub-forms + a synthetic generation to prove it is not
+      hardcoded) per transition; the simulator replays the reference joiner.
+      R4/R5 (a booted node counted CN=3 by a real member on the wire) LAB-DEFERRED,
+      and still needs E31 (the VMS$VAXcluster connect-data identity, operator ruling)
+      so a real VAX does not REJECT the join.
+
+  - id: connection-manager$peer-discovery
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "A newly discovered connection manager gets a CSB (p. 7-23)"
+    evidence: src/kernel-core/vms_cnxman.c
+    notes: >
+      FC-P3.9 (integration note E36). The port learns a peer's SCSSYSTEMID off a
+      real received frame and raises vc_up; SCS records it on that system's SB;
+      the connection manager sweeps those SBs on its reconnect beat and allocates
+      a CSB, in state NEW, for each system it does not already hold one for. That
+      is the whole of it -- it opens nothing and asserts nothing about the system
+      beyond the one fact the port established. Before it existed the CLUB never
+      learned of anyone, and every join returned NO_TARGET even with a member on
+      the same LAN.
+      PROVEN AT R1: tests/cluster/host/test_cnxman_boot.c drives the predicate
+      against a real CLUB and pins the sweep's shipped wiring. R4 (a second real
+      node actually appearing) LAB-DEFERRED.
+
+  - id: connection-manager$transition-barrier
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "The 12-step transition barrier, participant and coordinator roles"
+    evidence: src/kernel-core/vms_cnxman_barrier_fsm.c
+    notes: >
+      FC-P3.5 (participant) + FC-P3.12 (coordinator) + the shared Phase 2 commit
+      (vms_cnxman_phase2.c), all pure and executive-resident. The coordinator
+      runs the documented collision back-off rather than assuming it wins.
+      Quorum cells are copied proposed->effective only from REAL running CLUB
+      values; asserting a quorum of zero is refused outright.
+      PROVEN AT R1/R2: test_cnxman_barrier.c, test_cnxman_coord.c, and the
+      simulator's 3-8 node join/departure loops. NOT claimed: a barrier run
+      against a real VAX coordinator (R5, lab-deferred).
+
+  - id: connection-manager$reconnect
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "RECNXINTERVAL/TIMVCFAIL reconnect loop; last gasp on orderly shutdown"
+    evidence: src/kernel-core/vms_cnxman_recnx_fsm.c
+    notes: >
+      FC-P3.6, pure, on an injected clock. Drives the p. 7-30 reconnect window
+      per CSB and decides RECONNECT vs PROPOSE_TRANSITION. RECNXINTERVAL comes
+      from the SYSGEN parameters the executive actually committed, and a zero is
+      replaced by the published default with the substitution FLAGGED
+      (recnxinterval_defaulted), never silently.
+      DISCLOSED GAP: the last-gasp DATAGRAM is not sent. The ladder raises the
+      LAST_GASP action, but no port-level builder is wired to it, so a
+      shutting-down node is removed by the survivors' reconnect timeout rather
+      than at once. An honest gap, not a fabricated send.
+      PROVEN AT R1/R2: test_cnxman_recnx.c, plus the simulator's departure loops.
 
   - id: connection-manager$quorum
     kind: feature
     status: implemented
     authenticity: real
     vms: "CEVOTES/QUORUM recompute, including quorum disk as a virtual voting member"
-    evidence: src/vmsscs/scs_quorum.c
+    evidence: src/kernel-core/vms_cnxman_quorum.c
     notes: >
-      The documented connection-manager quorum arithmetic (VMScluster Systems for
-      OpenVMS sec 2.3.5; mined CM transcript 5-node worked example reproduced in the
-      unit test). Per-node VOTES are wire-grounded from the peer's own report
-      (cm_quorum_note_peer_votes reads the peer's mv.votes), not fabricated. Computed
-      daemon-resident in scsd, not yet executive-resident — the votes/quorum cutover
-      into vms.ko is deferred (vms-551 follow-on). Note scsd is not auto-started at
-      boot (vms-110b), so this arithmetic runs only when the hand-launched SCSD probe
-      is driven, not on a booted OVMX node.
+      FC-P3.7, executive-resident (the arithmetic moved out of the deleted
+      daemon). Recomputed on every membership transition from the CLUB's own
+      state: per-node VOTES come from each CSB's advertised PARAMS record and are
+      NOT counted until `params_valid` is set -- an un-advertised VOTES is not an
+      advertised zero. EXPECTED_VOTES is this node's own SYSGEN value.
+      TRACKING ONLY, and this is the honest limit: the figures are computed and
+      readable, but nothing in the tree yet BLOCKS on lost quorum -- no cluster
+      state transition is gated on it -- because a booted node has never been a
+      member. Quorum ENFORCEMENT is a later item.
+      PROVEN AT R1: test_cnxman_quorum.c reproduces the documented worked
+      example. R5 (agreement with a real VAX's own figures) lab-deferred.
 
-  - id: connection-manager$membership-rejoin
+  - id: connection-manager$getsyi-showcluster
     kind: feature
     status: implemented
     authenticity: real
-    vms: "Cluster membership join / rejoin"
-    evidence: src/vmsscs/scsd.c
+    vms: "$GETSYI cluster item codes and SHOW CLUSTER read the connection manager"
+    evidence: src/kernel-core/vms_cluster_api.c
     notes: >
-      3-party member-driven join FSM (scsd.c enum join_step); no distinct rejoin
-      state, matching VMS's own model. §4(O.38): 4/5 member-oracle reliable after
-      fixing OVMX's own XITDONE self-verdict bug; residual 1/5 is real member-side
-      loss, not an OVMX defect (operator call).
-      SCOPE (vms-110b): this is the userspace SCSD probe (hand-launched, kubectl-
-      exec'd onto a lab pod's br0) joining a real VAX cluster — a real wire join by
-      the daemon, NOT a booted OVMX node. A booted OVMX auto-starting SCS and joining
-      a cluster is unbuilt: nothing spawns scsd at boot.
+      FC-P3.7 (the projection) + FC-P3.9 (the ioctls and both callers).
+      SYI$_CLUSTER_MEMBER/_NODES answer from ONE projection off the CLUB
+      (VMS_IOCTL_CLUSTER_GETSYI), and DCL's SHOW CLUSTER reads the CSB table
+      (CLUSTER_MEMBER_GET) plus the CLUB/SCS/port diagnostics for its CLUSTER,
+      CONNECTIONS, LOCAL_PORTS and CIRCUITS classes -- so F$GETSYI and SHOW
+      CLUSTER cannot disagree about the same node, and neither has a second
+      source. Every `_valid`-gated field is BLANKED when its companion is clear.
+      THE TWO NON-LIST ANSWERS STAY DISTINCT: executive reachable with no CSB is
+      SS$_NORMAL and renders SYSTEM-I-NOTMEMBER; executive unreachable renders
+      SYSTEM-W-NOSUCHDEV. Conflating them would let a node report a confident
+      "not a member" it never read.
+      PROVEN AT R1 (test_cnxman_boot.c, test_cluster_api_getsyi.c), at the host
+      negctl (tests/integration/test_show_cluster_negctl.sh, every class), and at
+      R4 against a real /dev/vms (tests/qemu/test_syssvc_cluster_negctl.c).
 
   - id: connection-manager$executive-membership
     kind: feature
     status: implemented
     authenticity: real
-    vms: "Cluster membership visible to the executive ($GETSYI/SHOW CLUSTER see a real cluster)"
-    evidence: src/kernel-core/vms_lock.c
+    vms: "Cluster membership is the executive's, and userspace cannot assert it"
+    evidence: src/kernel-core/vms_cnxman.c
     notes: >
-      vms-551 / vms-967d / vms-8d4. vms.ko owns a module-global membership block
-      (struct vms_cluster_member{csid,sysid,scsnode[16],state}, up to 96 nodes,
-      separate from the CSID-only dlm_member_csids). The block is REAL and
-      executive-resident: scsd's scsd_publish_membership writes it via
-      VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR (0x39/0x3a) and SHOW CLUSTER reads it via the
-      wired CLUSTER_MEMBER_GET (0x3b) — the userspace /var/run/ovmx/cluster_state file
-      bridge (an INV-6/Rule-9 userspace-to-userspace path) is fully retired
-      (vms-967d). NOTMEMBER (executive reachable, 0 members, SS$_NORMAL) is honestly
-      distinct from NOSUCHDEV (executive unreachable, 2680).
-      WHAT IS PROVEN — the executive block itself, single-node:
-      tests/qemu/test_syssvc_cluster_member.c ioctl-SETs member records against a real
-      /dev/vms and reads them back field-by-field; tests/integration/test_show_cluster_
-      membership.sh is a host honest-absence gate (NO QEMU boot) proving SHOW CLUSTER
-      reads the executive and fails NOSUCHDEV without it. This is NOT 2/3 booted OVMX
-      nodes forming a cluster over the wire (the prior "Proven on real 2/3-node QEMU"
-      wording overclaimed — the records are ioctl-injected, not wire-joined).
-      NOT built (vms-110b): a BOOTED OVMX runtime does not auto-start SCS — nothing
-      spawns scsd at boot (VMS$VMS.DAT registers only JOB_CONTROL as a STDRV
-      component; ovmx_init.c:953 merely STAGES SCSD.EXE as an on-demand image). So a
-      booted node never populates this block from a real join; today it is fed only by
-      the ioctl test or by the hand-launched SCSD probe. "The executive sees a real
-      cluster" end-to-end on a booted node is the unbuilt gap.
-      Also deferred: votes/quorum and $GETSYI cutover into the executive; today's
-      membership block carries no votes field.
+      FC-P3.9, superseding vms-551. The module-global membership block a
+      USERSPACE daemon populated through VMS_IOCTL_CLUSTER_MEMBER_SET/_CLEAR is
+      DELETED, both mutators are deleted, and CLUSTER_MEMBER_GET now projects the
+      connection manager's own CLUB/CSB table. There is no setter on any path, so
+      nothing outside the executive can assert who the cluster is --
+      tests/qemu/test_syssvc_cluster_negctl.c issues the two retired command
+      numbers raw and requires the executive to refuse them.
+      WHAT IT REPORTS TODAY, honestly: one row per system the CLUB holds a block
+      for, each carrying that CSB's real state. A system this node merely
+      DISCOVERED renders "NEW" with csid 0 -- discovered, not admitted (E30). A
+      row becomes "MEMBER" only when the p. 7-23 MEMBER flag is set, which only a
+      real membership record does.
+      NOT claimed: that any row has ever read MEMBER on a booted node. It has
+      not, and cannot until E30's op-06 layout is pinned in the lab.
+
+  - id: connection-manager$boot-join
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "SYSINIT forms or joins the cluster BEFORE the system disk is mounted"
+    evidence: src/ovmx_init/ovmx_init.c
+    notes: >
+      FC-P0.10/P0.11/P3.9. STARTUP.EXE loads the cluster SYSGEN parameters
+      (VMS_IOCTL_SYSGEN_LOAD), then issues VMS_IOCTL_CLUSTER_START, which starts
+      the fork thread, PEA0:, SCS and the connection manager and forms or joins
+      per VAXCLUSTER -- all of it at boot Step 2d, BEFORE run_startup() and every
+      MOUNT that STARTUP.COM drives. That ordering is the point: a cluster that
+      started from a DCL phase would be a different operating system.
+      VAXCLUSTER=0 issues no ioctl at all (no PEA0:, no HELLO, no console line);
+      =2 with nowhere to join prints VMS's own "waiting to form or join an
+      OpenVMS Cluster" and keeps sweeping; =1 reports STANDALONE. The console
+      line is rendered from the executive's OWN cluster state, read back from
+      struct vms_cluster, never composed from the ioctl's status -- so a JOINING
+      node is never announced as a MEMBER.
+      PROVEN AT R1 (test_cnxman_boot.c pins the step ordering and the state
+      rendering; test_cluster_boot_gate.c the VAXCLUSTER gate) and R4 negctl
+      (tests/qemu/test_cluster_start_negctl.sh). NOT claimed: a booted node
+      reaching MEMBER -- see connection-manager$join.
+
+  - id: connection-manager$setcluevt
+    kind: feature
+    status: partial
+    authenticity: real
+    vms: "$SETCLUEVT — a process asks to be told when a node joins or leaves"
+    evidence: src/kernel-core/vms_cnxman.c
+    notes: >
+      FC-P3.8 built the EXECUTIVE half and it is real: one registration per node,
+      a genuine completion AST queued on the caller's own PSL_C_USER queue when
+      the connection manager detects a real membership ADD or REMOVE, and the
+      registration cleared at process death so a delivery cannot reach freed
+      memory. VMS_IOCTL_CLUSTER_SETCLUEVT and its userspace marshalling wrapper
+      (vms_kif_cluster_setcluevt) both exist.
+      PARTIAL because the SERVICE does not: there is no
+      src/libvms/syssvc/sys_cluevt.c, and starlet.h prototypes none of
+      $SETCLUEVT/$CLRCLUEVT/$TSTCLUEVT, so no VMS program can reach this yet.
+      Tracked as rd vms-733; the wrapper carries a matching OVMX-UNWIRED
+      declaration rather than pretending to a caller it does not have.
+
+  - id: connection-manager$real-vax-join
+    kind: feature
+    status: absent
+    authenticity: n/a
+    vms: "A booted OVMX node is a counted member of a real VMScluster"
+    notes: >
+      THE OPEN END OF THIS FACILITY, given its own row so no reader has to infer
+      it from the rows above. No booted OVMX node has joined a real VAX
+      VMScluster as a counted member. Three things stand between the built stack
+      and that outcome, all named in docs/cluster-integration-notes.md: E30 (the
+      op-0x06 SCSSYSTEMID/CSID layout -- one lab capture), E31 (an operator
+      ruling on what OVMX declares as its cluster-protocol version identity in
+      the 16-byte VMS$VAXcluster connect data, since a real member may REJECT a
+      counted zero), and the other half of E36 (a second node actually
+      appearing). The R5 lab run that would grade it is FC-P3.11/FC-P3.13.
+      A previous revision of this register described a hand-launched userspace
+      probe joining a lab VAX. That probe is deleted; whatever it demonstrated
+      was never a booted node, and is not carried forward as a claim.

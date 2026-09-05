@@ -238,20 +238,21 @@ if(TARGET test_syssvc_dlm_xnode)
         ${CMAKE_SOURCE_DIR}/src/kernel)
 endif()
 
-# test_syssvc_cluster_member (rd vms-551, docs/design-cluster-membership-
-# executive.md) drives VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR/GET through the
-# vms_kif client + a raw VMS_IOCTL_REGISTER-adjacent struct layout, so it
-# needs src/kernel on its include path for vms_ioctl.h -- same footing as
-# test_syssvc_dlm_xnode above.
-if(TARGET test_syssvc_cluster_member)
-    target_include_directories(test_syssvc_cluster_member PRIVATE
+# test_syssvc_cluster_negctl (FC-P3.9) drives VMS_IOCTL_CLUSTER_MEMBER_GET and
+# VMS_IOCTL_CLUSTER_GETSYI against a real /dev/vms with the cluster stack NOT
+# started, so it needs src/kernel on its include path for vms_ioctl.h -- same
+# footing as test_syssvc_dlm_xnode above. It REPLACES test_syssvc_cluster_member,
+# which drove the deleted CLUSTER_MEMBER_SET/_CLEAR mutators (FC-P3.9 retired
+# the userspace daemon that was their only issuer, and the mutators with it).
+if(TARGET test_syssvc_cluster_negctl)
+    target_include_directories(test_syssvc_cluster_negctl PRIVATE
         ${CMAKE_SOURCE_DIR}/src/kernel)
 endif()
 
 # test_syssvc_l2_datalink (rd vms-7eb, auth slice of vms-1e4) drives
 # VMS_IOCTL_L2_OPEN/SEND/RECV/CLOSE through the vms_kif client + VMS_PRV_M_PHY_IO
 # (for its $SETPRV negctl), so it needs src/kernel on its include path for
-# vms_ioctl.h -- same footing as test_syssvc_dlm_xnode / test_syssvc_cluster_member
+# vms_ioctl.h -- same footing as test_syssvc_dlm_xnode / test_syssvc_cluster_negctl
 # above.
 if(TARGET test_syssvc_l2_datalink)
     target_include_directories(test_syssvc_l2_datalink PRIVATE
@@ -692,31 +693,6 @@ set_tests_properties(sysgen_versioning_e2e PROPERTIES
     TIMEOUT 600)
 
 # ---------------------------------------------------------------------------
-# CLUSTER PARAM AUTHORING -> PERSIST -> SCSD ADOPTS, incl. RECNXINTERVAL
-# (vms-c3b, epic vms-098 R1.1).
-#
-# Boots the ACTUAL mastered bootable image, authors the complete 6-param
-# cluster set via SYSGEN (SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/
-# RECNXINTERVAL/ALLOCLASS) with WRITE CURRENT, and proves a FRESH SCSD
-# --show-identity reads every one back off the real volume (RECNXINTERVAL=30)
-# through scsd_recnxinterval() -> sysgen_read_param(). run_*.sh runs the paired
-# MEASURED negative control (test_cluster_params_recnx_negctl.sh: unauthored
-# store -> default 20, never 30) FIRST, then the positive. See the two test
-# scripts' headers for the full sequence and honest-failure modes.
-#
-# Same opt-in/SKIP convention as the other qemu-full-boot gates: real docker +
-# QEMU boot, real minutes, gated behind OVMX_QEMU_FULL_E2E=1 so it does not run
-# under a bare `ctest`.
-add_test(
-    NAME cluster_params_recnx_e2e
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_cluster_params_recnx_e2e.sh
-)
-set_tests_properties(cluster_params_recnx_e2e PROPERTIES
-    LABELS "slow;qemu-full-boot"
-    SKIP_RETURN_CODE 77
-    TIMEOUT 900)
-
-# ---------------------------------------------------------------------------
 # (vms-165: the mount_e2e ctest was retired with the vmsfs VFS driver. It drove
 # run_mount_e2e.sh / test_mount_e2e.sh, which formatted a second disk as the
 # legacy VMSFS type and MOUNTed it via a real mount(2)-as-vmsfs -- the exact path
@@ -1039,31 +1015,3 @@ set_tests_properties(console_boot_no_newline_spam_e2e PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 1200)
 
-# ---------------------------------------------------------------------------
-# SCS BOOT-AUTOSTART, END TO END (vms-5ad, child of vms-110b).
-#
-# Boots the real mastered bootable image across THREE arms / FIVE boots and
-# proves: (ARM N) the shipped default VAXCLUSTER=0 leaves SCSD self-gated off
-# with no detached process; (ARM P) authoring VAXCLUSTER=2 and rebooting
-# creates a real, persistent SCS_SERVER detached process bound to a real
-# Ethernet NIC (never the lab default "br0"); (ARM R) removing
-# SCS_STARTUP.COM's CONFIG-phase STDRV registration (a SECOND mastered image,
-# /boot/ovmx-distrib-scs-negctl.img) stops SCSD from ever being created even
-# with VAXCLUSTER=2 authored -- the registration, not the daemon's own
-# self-gate, is what actually creates it. See test_scs_autostart.sh's header
-# for the full reasoning, including a grounded, flagged limitation around
-# single-node SHOW CLUSTER membership.
-#
-# Same opt-in/SKIP convention as the other qemu-full-boot gates: real
-# docker + QEMU (KVM-accelerated -- see the test's own header) boot, gated
-# behind OVMX_QEMU_FULL_E2E=1 so it does not run under a bare `ctest`. Three
-# arms / five boots is more than any single-boot gate above, so this gets a
-# longer TIMEOUT.
-add_test(
-    NAME scs_autostart_e2e
-    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_scs_autostart_e2e.sh
-)
-set_tests_properties(scs_autostart_e2e PROPERTIES
-    LABELS "slow;qemu-full-boot"
-    SKIP_RETURN_CODE 77
-    TIMEOUT 1800)

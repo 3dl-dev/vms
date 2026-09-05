@@ -32,6 +32,17 @@
 #include "vms_internal.h"
 #include "vms_bg_core.h"    /* vms_bg_capture_channels -- fork-inherit snapshot (vms-0cd) */
 
+#if defined(OVMX_KTEST_CLUSTER_SEAM)
+#include <linux/completion.h>   /* struct completion (post-and-wake proofs) */
+#include <linux/delay.h>        /* msleep */
+#include "exec_kbackend.h"      /* SS13 exec_l2_* (already real) + SS14..SS18
+				  * (FC-P0.2) -- the ONLY substrate surface the
+				  * cluster-seam self-test below touches */
+#include "vms_cluster.h"        /* struct vms_cluster (FC-P0.16 hammer knob) */
+#include "vms_cluster_fork.h"   /* cf_rx_deliver/cf_post/vms_cluster_fork_start
+				  * -- the REAL FC-P0.16 rxlock/cv path */
+#endif
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("OVMX Project");
 MODULE_DESCRIPTION("VMS subsystem kernel module");
@@ -63,27 +74,16 @@ MODULE_PARM_DESC(vms_local_csid,
     "OVMX DLM: this node's cluster system ID (local scaffolding; the connection manager assigns the real CSID at cluster join in 0.4)");
 
 /*
- * dlm_member_csids[] / dlm_member_count - the DLM directory membership vector
- * (rd vms-1bba, the "DB" rung). A CONTROLLED, STATIC configuration input: the
- * operator or the 2-node test harness supplies the ordered cluster-member CSID
- * vector at insmod (`dlm_member_csids=1030,1031`), exactly as vms_local_csid is
- * supplied. module_param_array sets dlm_member_count to the number of elements
- * actually given. The shared DLM directory logic (src/kernel-core/vms_lock.c)
- * hashes a resource name across this vector to select the directory node, so
- * every node given the SAME vector independently resolves the SAME directory
- * (and, this rung, master) -- which is what vms-1bba proves.
- *
- * This is DELIBERATELY NOT the live membership feed from the connection manager
- * / SCS rejoin: that is the 0.4 "DC" successor (overlapping vms-2f3). Supplying
- * membership as a load-time input is honest configuration, distinct from
- * fabricating live cluster state (INV-6). Left empty (count 0) it defaults to a
- * cluster-of-one on vms_local_csid, so single-node behaviour is unchanged.
+ * The static DLM directory membership vector (dlm_member_csids /
+ * dlm_member_count, rd vms-1bba) is GONE with FC-P4.3. The membership a
+ * directory resolves over is the connection manager's CLUB, indexed by the
+ * cluster's own wire-carried resource hash through the Lock Directory Weight
+ * Vector (src/kernel-core/vms_dlm_ldwv.h); the lock engine reaches it through
+ * the injected dir_resolve/dir_generation ops (src/kernel-core/vms_dlm_proxy.h).
+ * An insmod-supplied member list was a second, drifting copy of a fact the
+ * executive already holds -- and it was only ever consumed by the exec_jhash
+ * directory this item deleted.
  */
-uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
-int      dlm_member_count;
-module_param_array(dlm_member_csids, uint, &dlm_member_count, 0444);
-MODULE_PARM_DESC(dlm_member_csids,
-    "OVMX DLM: static ordered cluster-member CSID vector for the directory proof (controlled DB-rung input, NOT the live 0.4/DC membership feed); same order on every node");
 
 #if defined(OVMX_KTEST_FAULT_INJECT)
 /*
@@ -115,6 +115,989 @@ module_param_cb(vms_ktest_bdev_fault, &vms_ktest_bdev_fault_ops, NULL, 0200);
 MODULE_PARM_DESC(vms_ktest_bdev_fault,
     "TEST-ONLY (rd vms-5f82): arm ACP block-I/O fault injection as \"major:minor:count\"; count 0 disarms");
 #endif /* OVMX_KTEST_FAULT_INJECT */
+
+#if defined(OVMX_KTEST_CLUSTER_SEAM)
+/*
+ * TEST-ONLY: the FC-P0.2 substrate contract self-test (rung R3, design
+ * docs/design-faithful-cluster-executive.md SS3.9). Compiled in ONLY for the
+ * out-of-tree QEMU-test vms.ko (src/kernel/Makefile defines the macro), never
+ * the bootable executive (distro Kbuild does not) -- the same posture as
+ * OVMX_KTEST_FAULT_INJECT above. Exercises the REAL Linux binding of
+ * exec_kbackend.h SS14..SS18 (dev_add_pack/dev_queue_xmit/dev_mc_add/kthread/
+ * timer_list/ktime) against a veth pair the harness has already created, using
+ * the already-real SS13 exec_l2_* AF_PACKET primitives on the PEER interface
+ * as the test's own verification oracle -- no protocol-layer code (vms_pe.c,
+ * FC-P0.9) is on this path, only the seam itself. Write-triggered
+ * (vms_ktest_cluster_seam_run="ifname_a:ifname_b"), the same
+ * arm-then-read-back shape as vms_ktest_bdev_fault above; results are read
+ * back as KEY=VAL tokens from vms_ktest_cluster_seam_result.
+ */
+struct vms_ktest_seam_result {
+	int done, open_ok, mc_add_ok, mc_del_ok, close_ok, hwaddr_ok, mtu_ok, link_ok;
+	int link_up, rx_ok, tx_ok, kthread_ok, kthread_iters;
+	int timer_ok, time_mono_ok, ticks_mono_ok;
+	uint8_t mc_mac[6], hwaddr[6];
+	uint32_t mtu, rx_len, tx_len;
+	char rx_payload[32], tx_payload[32];
+};
+static struct vms_ktest_seam_result vms_ktest_seam_res;
+static DEFINE_MUTEX(vms_ktest_seam_mtx);
+
+struct vms_ktest_seam_rx_ctx {
+	struct completion got;
+	uint8_t buf[128];
+	uint32_t len;
+};
+
+/* CONTRACT RULE 1 in miniature: this rx_cb, standing in for the core's own,
+ * only copies into a buffer it owns and wakes a waiter -- no protocol code. */
+static void vms_ktest_seam_rx_cb(void *ctx, const uint8_t *frame, uint32_t len)
+{
+	struct vms_ktest_seam_rx_ctx *rc = ctx;
+	uint32_t n = len < sizeof(rc->buf) ? len : sizeof(rc->buf);
+
+	memcpy(rc->buf, frame, n);
+	rc->len = len;
+	complete(&rc->got);
+}
+
+struct vms_ktest_seam_kt_ctx {
+	atomic_t iters;
+	struct completion started;
+};
+
+static int vms_ktest_seam_kt_fn(void *arg)
+{
+	struct vms_ktest_seam_kt_ctx *kc = arg;
+
+	while (!exec_kthread_should_stop(NULL)) {
+		if (atomic_inc_return(&kc->iters) == 1)
+			complete(&kc->started);
+		msleep(20);
+	}
+	return 0;
+}
+
+/* CONTRACT RULE 2 in miniature: this cb only "posts and wakes" -- complete()
+ * is this test's stand-in for the real fork queue post+wake (FC-P0.5). */
+static void vms_ktest_seam_timer_cb(void *ctx)
+{
+	complete((struct completion *)ctx);
+}
+
+/* Probe the four read-only SS14 accessors on the just-opened port. */
+static void vms_ktest_seam_probe_port(struct vms_ktest_seam_result *res,
+				       uint8_t hwaddr_out[6])
+{
+	if (exec_lan_hwaddr(hwaddr_out) == 0) {
+		res->hwaddr_ok = 1;
+		memcpy(res->hwaddr, hwaddr_out, 6);
+	}
+	res->mtu_ok = (exec_lan_mtu(&res->mtu) == 0 && res->mtu > 0);
+	res->link_ok = (exec_lan_link_up(&res->link_up) == 0);
+
+	res->mc_mac[0] = 0xab; res->mc_mac[1] = 0x00; res->mc_mac[2] = 0x04;
+	res->mc_mac[3] = 0x01; res->mc_mac[4] = 0x00; res->mc_mac[5] = 0x2a;
+	res->mc_add_ok = (exec_lan_mc_add(res->mc_mac) == 0);
+}
+
+/* RX proof: inject a 0x6007 frame from the PEER interface (via the already-
+ * real SS13 exec_l2_send) addressed to the port's own hwaddr, and confirm
+ * exec_lan_open's rx_cb (registered on THIS interface) saw it -- the veth-
+ * pair softirq-delivery proof the design's R3 rung names. */
+static void vms_ktest_seam_do_rx(struct vms_ktest_seam_result *res,
+				  struct vms_ktest_seam_rx_ctx *rx_ctx,
+				  exec_socket_t peer_sock, uint32_t peer_ifindex,
+				  const uint8_t hwaddr_a[6])
+{
+	static const char want[] = "OVMXSEAMRX";
+	uint8_t frame[64];
+
+	memset(frame, 0, sizeof(frame));
+	memcpy(frame + 0, hwaddr_a, 6);
+	frame[12] = 0x60; frame[13] = 0x07;         /* ethertype 0x6007 (SCA) */
+	memcpy(frame + 14, want, sizeof(want));
+	exec_l2_send(peer_sock, (int)peer_ifindex, 0x6007u, hwaddr_a,
+		     frame, 14 + sizeof(want));
+
+	res->rx_ok = wait_for_completion_timeout(&rx_ctx->got, HZ) != 0;
+	if (res->rx_ok && rx_ctx->len > 14) {
+		uint32_t n = rx_ctx->len - 14;
+
+		if (n > sizeof(res->rx_payload) - 1)
+			n = sizeof(res->rx_payload) - 1;
+		res->rx_len = rx_ctx->len;
+		memcpy(res->rx_payload, rx_ctx->buf + 14, n);
+	}
+}
+
+/* TX proof: exec_lan_xmit a frame out the port and confirm the PEER
+ * interface's (already-real SS13) exec_l2_recv captures it. */
+static void vms_ktest_seam_do_tx(struct vms_ktest_seam_result *res,
+				  exec_socket_t peer_sock,
+				  const uint8_t hwaddr_a[6])
+{
+	static const char payload[] = "OVMXSEAMTX";
+	uint8_t frame[64], rxbuf[128];
+	size_t out_len = 0;
+
+	memset(frame, 0xff, 6);                     /* broadcast dst */
+	memcpy(frame + 6, hwaddr_a, 6);
+	frame[12] = 0x60; frame[13] = 0x07;
+	memcpy(frame + 14, payload, sizeof(payload));
+
+	if (exec_lan_xmit(frame, 14 + sizeof(payload)) != 0)
+		return;
+	if (exec_l2_recv(peer_sock, rxbuf, sizeof(rxbuf), 1000, &out_len) != 0)
+		return;
+	if (out_len < 14 + sizeof(payload) ||
+	    memcmp(rxbuf + 14, payload, sizeof(payload)) != 0)
+		return;
+
+	res->tx_ok = 1;
+	res->tx_len = (uint32_t)out_len;
+	memcpy(res->tx_payload, rxbuf + 14, sizeof(payload));
+}
+
+static void vms_ktest_seam_do_kthread(struct vms_ktest_seam_result *res)
+{
+	struct vms_ktest_seam_kt_ctx kt_ctx;
+	exec_kthread_t kt = NULL;
+
+	atomic_set(&kt_ctx.iters, 0);
+	init_completion(&kt_ctx.started);
+	if (exec_kthread_create(&kt, vms_ktest_seam_kt_fn, &kt_ctx, "vms_seam_kt") != 0)
+		return;
+	res->kthread_ok = wait_for_completion_timeout(&kt_ctx.started, HZ) != 0;
+	exec_kthread_stop(&kt);
+	res->kthread_iters = atomic_read(&kt_ctx.iters);
+	res->kthread_ok = res->kthread_ok && res->kthread_iters > 0;
+}
+
+static void vms_ktest_seam_do_timer(struct vms_ktest_seam_result *res)
+{
+	struct completion fired;
+	exec_timer_t timer;
+
+	init_completion(&fired);
+	exec_timer_init(&timer, vms_ktest_seam_timer_cb, &fired);
+	exec_timer_arm(&timer, 50);
+	res->timer_ok = wait_for_completion_timeout(&fired, HZ) != 0;
+	exec_timer_cancel(&timer);
+	exec_timer_destroy(&timer);
+}
+
+static void vms_ktest_seam_do_time(struct vms_ktest_seam_result *res)
+{
+	uint64_t t1 = exec_time_now_vms();
+	uint64_t k1 = exec_ticks_ms();
+
+	msleep(15);
+	res->time_mono_ok = (t1 != 0 && exec_time_now_vms() > t1);
+	res->ticks_mono_ok = (exec_ticks_ms() > k1);
+}
+
+/*
+ * The port and its multicast membership are DELIBERATELY left open on return
+ * (no exec_lan_mc_del / exec_lan_close here): the R3 done-condition requires
+ * "multicast add visible in `ip maddr`" as an assertion the CALLER makes from
+ * userspace, external to this module, AFTER vms_ktest_cluster_seam_run
+ * returns -- tearing the join down before the caller can look would make that
+ * assertion untestable. vms_ktest_cluster_seam_teardown (below) closes it.
+ */
+static int vms_ktest_cluster_seam_run(const char *ifname_a, const char *ifname_b)
+{
+	struct vms_ktest_seam_result res;
+	struct vms_ktest_seam_rx_ctx rx_ctx;
+	exec_socket_t peer_sock = NULL;
+	uint32_t peer_ifindex = 0;
+	uint8_t hwaddr_a[6] = {0};
+
+	memset(&res, 0, sizeof(res));
+	init_completion(&rx_ctx.got);
+	rx_ctx.len = 0;
+
+	if (exec_lan_open(ifname_a, 0x6007u, vms_ktest_seam_rx_cb, &rx_ctx) != 0) {
+		res.open_ok = 0;
+		goto record;    /* honest: nothing else is meaningful with no port */
+	}
+	res.open_ok = 1;
+	vms_ktest_seam_probe_port(&res, hwaddr_a);
+
+	if (res.hwaddr_ok &&
+	    exec_l2_open(ifname_b, 0x6007u, &peer_ifindex, &peer_sock) == 0) {
+		vms_ktest_seam_do_rx(&res, &rx_ctx, peer_sock, peer_ifindex, hwaddr_a);
+		vms_ktest_seam_do_tx(&res, peer_sock, hwaddr_a);
+		exec_socket_release(peer_sock);
+	}
+
+	vms_ktest_seam_do_kthread(&res);
+	vms_ktest_seam_do_timer(&res);
+	vms_ktest_seam_do_time(&res);
+
+record:
+	res.done = 1;
+	mutex_lock(&vms_ktest_seam_mtx);
+	vms_ktest_seam_res = res;
+	mutex_unlock(&vms_ktest_seam_mtx);
+	return 0;
+}
+
+/* Written second, after the caller has inspected the live multicast join
+ * (/proc/net/dev_mcast == what `ip maddr` reads) and the open port: tears
+ * the SS14 state down and records mc_del_ok/close in the result. */
+static int vms_ktest_cluster_seam_teardown(void)
+{
+	struct vms_ktest_seam_result res;
+
+	mutex_lock(&vms_ktest_seam_mtx);
+	res = vms_ktest_seam_res;
+	mutex_unlock(&vms_ktest_seam_mtx);
+
+	if (res.open_ok) {
+		res.mc_del_ok = (exec_lan_mc_del(res.mc_mac) == 0);
+		exec_lan_close();
+		res.close_ok = 1;
+	}
+
+	mutex_lock(&vms_ktest_seam_mtx);
+	vms_ktest_seam_res = res;
+	mutex_unlock(&vms_ktest_seam_mtx);
+	return 0;
+}
+
+static int vms_ktest_cluster_seam_set(const char *val, const struct kernel_param *kp)
+{
+	char ifname_a[IFNAMSIZ] = {0};
+	char ifname_b[IFNAMSIZ] = {0};
+	const char *sep;
+	size_t blen;
+
+	(void)kp;
+	if (!val)
+		return -EINVAL;
+	sep = strchr(val, ':');
+	if (!sep || (size_t)(sep - val) >= sizeof(ifname_a))
+		return -EINVAL;
+	memcpy(ifname_a, val, sep - val);
+
+	blen = strlen(sep + 1);
+	if (blen && (sep + 1)[blen - 1] == '\n')
+		blen--;                          /* strip a sysfs-write newline */
+	if (blen >= sizeof(ifname_b))
+		return -EINVAL;
+	memcpy(ifname_b, sep + 1, blen);
+
+	return vms_ktest_cluster_seam_run(ifname_a, ifname_b);
+}
+static const struct kernel_param_ops vms_ktest_cluster_seam_run_ops = {
+	.set = vms_ktest_cluster_seam_set,
+};
+module_param_cb(vms_ktest_cluster_seam_run, &vms_ktest_cluster_seam_run_ops, NULL, 0200);
+MODULE_PARM_DESC(vms_ktest_cluster_seam_run,
+    "TEST-ONLY (rd FC-P0.2): run the SS14..SS18 substrate contract self-test against a veth pair \"ifname_a:ifname_b\"; leaves the port + multicast join OPEN for inspection until _teardown is written");
+
+static int vms_ktest_cluster_seam_teardown_set(const char *val, const struct kernel_param *kp)
+{
+	(void)val;
+	(void)kp;
+	return vms_ktest_cluster_seam_teardown();
+}
+static const struct kernel_param_ops vms_ktest_cluster_seam_teardown_ops = {
+	.set = vms_ktest_cluster_seam_teardown_set,
+};
+module_param_cb(vms_ktest_cluster_seam_teardown, &vms_ktest_cluster_seam_teardown_ops, NULL, 0200);
+MODULE_PARM_DESC(vms_ktest_cluster_seam_teardown,
+    "TEST-ONLY (rd FC-P0.2): close the port opened by vms_ktest_cluster_seam_run (any value written triggers it)");
+
+static int vms_ktest_cluster_seam_result_get(char *buf, const struct kernel_param *kp)
+{
+	struct vms_ktest_seam_result res;
+
+	(void)kp;
+	mutex_lock(&vms_ktest_seam_mtx);
+	res = vms_ktest_seam_res;
+	mutex_unlock(&vms_ktest_seam_mtx);
+
+	return scnprintf(buf, PAGE_SIZE,
+	    "DONE=%d OPEN=%d MC_ADD=%d MC_DEL=%d CLOSE=%d MC_MAC=%02x:%02x:%02x:%02x:%02x:%02x "
+	    "HWADDR=%d HWADDR_VAL=%02x:%02x:%02x:%02x:%02x:%02x MTU=%d MTU_VAL=%u "
+	    "LINK=%d LINK_UP=%d RX=%d RX_LEN=%u RX_PAYLOAD=%s "
+	    "TX=%d TX_LEN=%u TX_PAYLOAD=%s KTHREAD=%d KTHREAD_ITERS=%d "
+	    "TIMER=%d TIME_MONO=%d TICKS_MONO=%d\n",
+	    res.done, res.open_ok, res.mc_add_ok, res.mc_del_ok, res.close_ok,
+	    res.mc_mac[0], res.mc_mac[1], res.mc_mac[2],
+	    res.mc_mac[3], res.mc_mac[4], res.mc_mac[5],
+	    res.hwaddr_ok, res.hwaddr[0], res.hwaddr[1], res.hwaddr[2],
+	    res.hwaddr[3], res.hwaddr[4], res.hwaddr[5],
+	    res.mtu_ok, res.mtu, res.link_ok, res.link_up,
+	    res.rx_ok, res.rx_len, res.rx_payload,
+	    res.tx_ok, res.tx_len, res.tx_payload,
+	    res.kthread_ok, res.kthread_iters,
+	    res.timer_ok, res.time_mono_ok, res.ticks_mono_ok);
+}
+static const struct kernel_param_ops vms_ktest_cluster_seam_result_ops = {
+	.get = vms_ktest_cluster_seam_result_get,
+};
+module_param_cb(vms_ktest_cluster_seam_result, &vms_ktest_cluster_seam_result_ops, NULL, 0444);
+MODULE_PARM_DESC(vms_ktest_cluster_seam_result,
+    "TEST-ONLY (rd FC-P0.2): read the last vms_ktest_cluster_seam_run result as KEY=VAL tokens");
+
+/*
+ * TEST-ONLY: the FC-P0.16 receive-level lock conformance self-test (rung R3,
+ * design docs/design-faithful-cluster-executive.md SS3.2.3 RULING, CONTRACT
+ * RULE 14.1). Compiled in under the SAME OVMX_KTEST_CLUSTER_SEAM gate as the
+ * FC-P0.2 self-test above (out-of-tree QEMU-test vms.ko only, never the
+ * bootable executive).
+ *
+ * WHAT THIS PROVES. It stands up the REAL cluster fork context
+ * (vms_cluster_fork_start, the actual exec_rxlock_t + exec_cv_wait_rx path
+ * from vms_cluster_fork_bind.c -- FC-P0.16's landing) and hammers its ONE
+ * shared object, the fork queue, from BOTH sides CONTRACT RULE 14.1
+ * distinguishes:
+ *
+ *   - RECEIVE LEVEL: a real 0x6007 frame flood over a veth pair, delivered to
+ *     exec_lan_open's rx_cb in Linux's receive softirq -- vms_ktest_hammer_
+ *     rx_bridge calls cf_rx_deliver() exactly as CONTRACT RULE 14.1(a) permits
+ *     (copy/enqueue/wake, nothing else), copying the FC-P0.2 self-test's own
+ *     already-proven veth-loopback mechanism.
+ *   - PROCESS CONTEXT: a poster kthread calling cf_post() in a tight loop --
+ *     CONTRACT RULE 14.1's "process-context posters ... rxlock briefly (post +
+ *     signal)" row.
+ *
+ * SAME-CPU BY CONSTRUCTION. The flood and poster kthreads are explicitly
+ * kthread_bind()'d to CPU 0; the harness this runs under (tests/qemu/
+ * run_tests.sh) boots with -smp 1, so CPU 0 is the ONLY vCPU and every
+ * receive-softirq delivery, every fork-thread dispatch and every poster
+ * iteration genuinely share one core -- exactly the hazard design SS3.2.3
+ * records (a process-context holder of the OLD exec_lock_t preempted by a
+ * same-CPU softirq taking the same lock deadlocks solid; the fix is
+ * spin_lock_irqsave, which this test exercises for real, not a mock).
+ *
+ * TWO-TIER LOCKUP DETECTION (INV-6: never a fabricated pass). After the flood
+ * and poster stop, a BOUNDED poll (<=2s) waits for cf_stats' dispatched
+ * counters to catch up with what was actually enqueued/posted -- the "every
+ * posted item is observed within one scheduling latency" assertion, made
+ * concrete. That bound cannot itself hang on a lost wakeup. The GENUINE
+ * lockup detector is the vms_cluster_fork_stop() join immediately after: if
+ * the rxlock fix ever regresses, the fork thread is stuck spinning against a
+ * same-CPU holder and that call never returns -- the whole sysfs write hangs
+ * honestly, caught by run_tests.sh's own wall timeout, rather than this code
+ * reporting a pass it cannot back.
+ *
+ * DEFAULT DURATION vs THE FULL 60s. run_tests.sh shares ONE ~600s wall across
+ * ~77 suites in a single QEMU boot (see that script's own header); a genuine
+ * 60s hammer wired into the default per-PR battery would cost 10% of that
+ * wall on every PR. vms_ktest_cluster_fork_hammer_run's THIRD field is a
+ * duration in milliseconds (default 3000 if omitted, capped at 65000) so the
+ * SAME real mechanism -- same code, same lock, same kthreads -- runs a short
+ * proof by default and can be driven for the full 60s from a dedicated,
+ * non-default invocation (tests/qemu/run_cluster_fork_hammer_60s.sh).
+ */
+struct vms_ktest_hammer_result {
+	int done;
+	int fork_start_ok;
+	int open_ok;
+	int l2_open_ok;
+	unsigned int duration_ms;
+	unsigned int elapsed_ms;
+	unsigned int frames_sent;
+	unsigned int posts_accepted;
+	unsigned int posts_dropped_nobuf;
+	int drain_ok;
+	unsigned int drain_ms;
+	unsigned long long st_rx_enqueued;
+	unsigned long long st_rx_dropped_nobuf;
+	unsigned long long st_rx_dispatched;
+	unsigned long long st_work_posted;
+	unsigned long long st_work_dropped_nobuf;
+	unsigned long long st_work_dispatched;
+	unsigned long long st_waits;
+
+	/*
+	 * The SERVED-I/O WORKER leg (FC-P6.6). This is the R3/R4 substrate
+	 * proof that a BLOCKING call on the worker does not stall the fork
+	 * thread: the io handler below really msleep()s -- the shape of
+	 * exec_blockdev_read_block on a served volume -- while a real
+	 * exec_timer cadence keeps firing into the fork thread.
+	 */
+	int                worker_start_ok;
+	unsigned int       io_submitted;
+	unsigned int       io_refused;
+	unsigned int       io_handler_calls;
+	unsigned int       io_done_seen;
+	unsigned int       io_tag_mismatches;
+	unsigned int       cadence_ticks;         /* expiries the fork thread ran */
+	unsigned int       cadence_ticks_during_io;
+	unsigned int       cadence_max_gap_ms;    /* the JITTER measurement      */
+	unsigned int       work_during_io;        /* THE PROPERTY, robustly      */
+	unsigned long long st_io_posted;
+	unsigned long long st_io_completed;
+	unsigned long long st_io_abandoned;
+};
+static struct vms_ktest_hammer_result vms_ktest_hammer_res;
+static DEFINE_MUTEX(vms_ktest_hammer_mtx);
+
+/* CONTRACT RULE 14.1(a) in miniature: the REAL receive-level entry point,
+ * called from Linux's rx softirq. Copy/enqueue/wake and nothing else -- the
+ * exact repertoire cf_rx_deliver() itself enforces. */
+static void vms_ktest_hammer_rx_bridge(void *ctx, const uint8_t *frame, uint32_t len)
+{
+	(void)cf_rx_deliver((struct vms_cluster_fork *)ctx, frame, len);
+}
+
+/* The fork thread's own handlers -- run under the fork mutex, one at a time,
+ * exactly like every other dispatched event. A bare counter, nothing more:
+ * this test's assertions are on cf_stats, not on handler-side state. */
+static void vms_ktest_hammer_rx_handler(void *ctx, const uint8_t *frame, uint32_t len)
+{
+	(void)frame; (void)len;
+	atomic_inc((atomic_t *)ctx);
+}
+
+/*
+ * THE SERVED-I/O WORKER LEG (FC-P6.6, design §3.2.6's E42 corollary).
+ *
+ * `io_busy` marks the window in which a worker callback is inside a BLOCKING
+ * sleep -- exactly where exec_blockdev_read_block sits when a served READ is
+ * in flight. The cadence handler below records how many of its expiries the
+ * FORK THREAD ran during that window, and the largest gap between two of them.
+ * Before FC-P6.6 that work ran ON the fork thread, so the count could only have
+ * been zero and the gap could only have been the disk's own latency.
+ */
+struct vms_ktest_hammer_io_ctx {
+	struct vms_cluster_fork *fork;
+	unsigned long            deadline;    /* jiffies */
+	atomic_t                 busy;        /* a callback is blocking now    */
+	atomic_t                 calls;
+	unsigned int             submitted;   /* this one thread only */
+	unsigned int             refused;
+	unsigned int             block_ms;
+};
+
+/* One cadence identity, a stand-in for the HELLO beat: a REAL exec_timer armed
+ * through cf_timer_arm, re-armed by its own expiry handler in the fork thread,
+ * exactly as vms_pe.c's cadence does. */
+#define VMS_KTEST_HAMMER_CADENCE_WHICH 7u
+#define VMS_KTEST_HAMMER_CADENCE_MS    10u
+
+struct vms_ktest_hammer_cadence {
+	struct vms_cluster_fork      *fork;
+	struct vms_ktest_hammer_io_ctx *io;
+	unsigned long                 last_jiffies;
+	unsigned int                  ticks;
+	unsigned int                  ticks_during_io;
+	unsigned int                  max_gap_ms;
+};
+
+/* WORKER CONTEXT: it sleeps, which is the whole point. Returns the request's
+ * own tag so the completion's two halves can be checked against each other. */
+static uint32_t vms_ktest_hammer_io_handler(void *ctx, const struct cf_io *io)
+{
+	struct vms_ktest_hammer_io_ctx *ic = ctx;
+
+	atomic_inc(&ic->busy);
+	msleep(ic->block_ms);
+	atomic_inc(&ic->calls);
+	atomic_dec(&ic->busy);
+	return io->tag;
+}
+
+/* FORK THREAD: the cadence expiry, which re-arms itself and measures its own
+ * gap. A stall behind a served disk shows up here and nowhere else. */
+static void vms_ktest_hammer_cadence_tick(struct vms_ktest_hammer_cadence *cd)
+{
+	unsigned long now = jiffies;
+
+	if (cd->ticks) {
+		unsigned int gap = jiffies_to_msecs(now - cd->last_jiffies);
+
+		if (gap > cd->max_gap_ms)
+			cd->max_gap_ms = gap;
+	}
+	cd->last_jiffies = now;
+	cd->ticks++;
+	if (atomic_read(&cd->io->busy))
+		cd->ticks_during_io++;
+	(void)cf_timer_arm(cd->fork, CF_OWNER_PE,
+			   VMS_KTEST_HAMMER_CADENCE_WHICH, 0u,
+			   VMS_KTEST_HAMMER_CADENCE_MS);
+}
+
+/* PROCESS CONTEXT: the submitter, standing in for the fork thread's own
+ * srv_op_io_submit. */
+static int vms_ktest_hammer_io_fn(void *arg)
+{
+	struct vms_ktest_hammer_io_ctx *ic = arg;
+	struct cf_io io;
+	uint32_t seq = 0;
+
+	memset(&io, 0, sizeof(io));
+	io.owner = CF_OWNER_PE;
+
+	while (!kthread_should_stop() && time_before(jiffies, ic->deadline)) {
+		cf_status_t st;
+
+		seq++;
+		io.tag = seq;
+		st = cf_io_post(ic->fork, &io);
+		if (st == CF_OK)
+			ic->submitted++;
+		else
+			ic->refused++;
+		msleep(1);   /* the worker is the bottleneck, not this loop */
+	}
+	return 0;
+}
+
+/*
+ * The fork thread's work handler. Three kinds arrive: the hammer's own posts,
+ * the cadence expiry (CF_WORK_TIMER) and the SERVED-I/O WORKER's completions
+ * (CF_WORK_IO_DONE). All three run here, one at a time, under the fork mutex --
+ * which is exactly the claim FC-P6.6 makes: the protocol stays serialised and
+ * only the DISK WAIT moved.
+ */
+struct vms_ktest_hammer_work_ctx {
+	atomic_t                        delivered;
+	struct vms_ktest_hammer_cadence cadence;
+	unsigned int                    io_done_seen;
+	unsigned int                    io_tag_mismatches;
+	/*
+	 * THE ROBUST FORM OF THE MEASUREMENT: fork-thread dispatches that
+	 * happened while a worker callback was BLOCKED. The cadence below is
+	 * the same property expressed as a timer, but a timer expiry needs a
+	 * free work item and this test deliberately floods the work pool, so a
+	 * starved cadence is expected here and is NOT what the assertion rests
+	 * on (vms_cluster_fork.c: "The tick is LOST -- counted, never faked").
+	 */
+	unsigned int                    work_during_io;
+};
+
+static void vms_ktest_hammer_work_handler(void *ctx, const struct cf_work *w)
+{
+	struct vms_ktest_hammer_work_ctx *wc = ctx;
+
+	atomic_inc(&wc->delivered);
+	if (atomic_read(&wc->cadence.io->busy))
+		wc->work_during_io++;
+	if (w->kind == CF_WORK_IO_DONE) {
+		/* The handler returned the tag as its status, so a completion
+		 * whose halves disagree means one of them was rewritten. */
+		if (w->arg0 != w->arg1)
+			wc->io_tag_mismatches++;
+		wc->io_done_seen++;
+	} else if (w->kind == CF_WORK_TIMER &&
+		   w->arg0 == VMS_KTEST_HAMMER_CADENCE_WHICH) {
+		vms_ktest_hammer_cadence_tick(&wc->cadence);
+	}
+}
+
+struct vms_ktest_hammer_flood_ctx {
+	exec_socket_t peer_sock;
+	uint32_t      peer_ifindex;
+	uint8_t       hwaddr_a[6];
+	unsigned long deadline;   /* jiffies */
+	unsigned int  sent;       /* touched only by this one thread */
+};
+
+/* The RECEIVE-LEVEL producer: floods real 0x6007 frames at the port's own
+ * hwaddr over the veth pair. Every successful send drives a real softirq
+ * delivery into vms_ktest_hammer_rx_bridge on the SAME (only) CPU this
+ * kthread is bound to (CONTRACT RULE 1 / 14.1(a) territory) -- process
+ * context is never touched by this thread. */
+static int vms_ktest_hammer_flood_fn(void *arg)
+{
+	struct vms_ktest_hammer_flood_ctx *fc = arg;
+	uint8_t frame[32];
+	uint32_t seq = 0;
+
+	memset(frame, 0, sizeof(frame));
+	memcpy(frame + 0, fc->hwaddr_a, 6);
+	frame[12] = 0x60; frame[13] = 0x07;      /* ethertype 0x6007 (SCA) */
+
+	while (!kthread_should_stop() && time_before(jiffies, fc->deadline)) {
+		seq++;
+		frame[14] = (uint8_t)(seq);
+		frame[15] = (uint8_t)(seq >> 8);
+		frame[16] = (uint8_t)(seq >> 16);
+		frame[17] = (uint8_t)(seq >> 24);
+		if (exec_l2_send(fc->peer_sock, (int)fc->peer_ifindex, 0x6007u,
+				  fc->hwaddr_a, frame, sizeof(frame)) >= 0)
+			fc->sent++;
+		if ((seq & 0x3fu) == 0)
+			cond_resched();
+	}
+	return 0;
+}
+
+struct vms_ktest_hammer_post_ctx {
+	struct vms_cluster_fork *fork;
+	unsigned long            deadline;   /* jiffies */
+	unsigned int             accepted;      /* touched only by this thread */
+	unsigned int             dropped_nobuf; /* touched only by this thread */
+};
+
+/* The PROCESS-CONTEXT producer: cf_post() in a tight loop -- CONTRACT RULE
+ * 14.1's "process-context posters ... rxlock briefly (post + signal)" row,
+ * exercised for real against the same rxlock the flood above hammers from
+ * receive level, on the same CPU. */
+static int vms_ktest_hammer_post_fn(void *arg)
+{
+	struct vms_ktest_hammer_post_ctx *pc = arg;
+	struct cf_work w;
+	uint32_t seq = 0;
+
+	memset(&w, 0, sizeof(w));
+	w.owner = CF_OWNER_PE;
+	w.kind  = 1;      /* a private "hammer post" kind; never CF_WORK_TIMER */
+
+	while (!kthread_should_stop() && time_before(jiffies, pc->deadline)) {
+		cf_status_t st;
+
+		seq++;
+		w.arg0 = seq;
+		st = cf_post(pc->fork, &w);
+		if (st == CF_OK)
+			pc->accepted++;
+		else if (st == CF_E_NOBUF)
+			pc->dropped_nobuf++;
+		if ((seq & 0x3fu) == 0)
+			cond_resched();
+	}
+	return 0;
+}
+
+/*
+ * Spawn one CPU-0-bound producer, holding a task reference for the caller.
+ * Returns NULL on failure, which every caller treats as "that producer did not
+ * run" rather than as a reason to abandon the test.
+ */
+static struct task_struct *vms_ktest_hammer_spawn(int (*fn)(void *), void *arg,
+						  const char *name)
+{
+	struct task_struct *t = kthread_create(fn, arg, "%s", name);
+
+	if (IS_ERR(t))
+		return NULL;
+	get_task_struct(t);      /* released by vms_ktest_hammer_reap */
+	kthread_bind(t, 0);
+	wake_up_process(t);
+	return t;
+}
+
+/* Join one producer and release the reference its handle held. Safe on NULL
+ * and on a thread that has already returned -- which is the ordinary case
+ * here, since every producer exits on its own deadline. */
+static void vms_ktest_hammer_reap(struct task_struct *t)
+{
+	if (!t)
+		return;
+	kthread_stop(t);
+	put_task_struct(t);
+}
+
+static int vms_ktest_cluster_fork_hammer_run(const char *ifname_a,
+					      const char *ifname_b,
+					      unsigned int duration_ms)
+{
+	struct vms_ktest_hammer_result res;
+	struct vms_cluster *cl;
+	struct vms_ktest_hammer_flood_ctx fc;
+	struct vms_ktest_hammer_post_ctx pc;
+	struct vms_ktest_hammer_io_ctx ic;
+	struct vms_ktest_hammer_work_ctx wc;
+	struct task_struct *flood_t = NULL, *post_t = NULL, *io_t = NULL;
+	atomic_t rx_delivered_ctr;
+	unsigned long start_jiffies = 0, deadline = 0;
+	unsigned long drain_start = 0;
+	int rc;
+
+	memset(&res, 0, sizeof(res));
+	res.duration_ms = duration_ms;
+	atomic_set(&rx_delivered_ctr, 0);
+	memset(&fc, 0, sizeof(fc));
+	memset(&pc, 0, sizeof(pc));
+	memset(&ic, 0, sizeof(ic));
+	memset(&wc, 0, sizeof(wc));
+	atomic_set(&wc.delivered, 0);
+	atomic_set(&ic.busy, 0);
+	atomic_set(&ic.calls, 0);
+	ic.block_ms = 5;   /* the shape of a served disk read */
+
+	cl = kzalloc(sizeof(*cl), GFP_KERNEL);
+	if (!cl) {
+		res.done = 1;
+		goto record;
+	}
+
+	/* This is vms_cluster_fork_bind.c's REAL start path: exec_rxlock_init,
+	 * exec_cv_init, the real kthread. No fake ops, no shortcut. */
+	rc = vms_cluster_fork_start(cl, NULL);
+	res.fork_start_ok = (rc == SS__NORMAL);   /* SS$_ convention: odd == success */
+	if (!res.fork_start_ok) {
+		/* Honest end of the road (Rule 9): no thread, no test. */
+		kfree(cl);
+		res.done = 1;
+		goto record;
+	}
+
+	cf_set_rx_handler(cl->fork, vms_ktest_hammer_rx_handler, &rx_delivered_ctr);
+	wc.cadence.fork = cl->fork;
+	wc.cadence.io = &ic;
+	(void)cf_set_work_handler(cl->fork, CF_OWNER_PE,
+				   vms_ktest_hammer_work_handler, &wc);
+
+	/*
+	 * The SERVED-I/O WORKER (FC-P6.6): the REAL second kthread, started by
+	 * the REAL binding, with a callback that really blocks. Not available
+	 * on a substrate without a §15 binding, which is an honest skip of this
+	 * leg rather than a fabricated pass (Rule 9).
+	 */
+	(void)cf_set_io_handler(cl->fork, CF_OWNER_PE,
+				vms_ktest_hammer_io_handler, &ic);
+	res.worker_start_ok =
+		(vms_cluster_fork_worker_start(cl) == SS__NORMAL);
+
+	rc = exec_lan_open(ifname_a, 0x6007u, vms_ktest_hammer_rx_bridge, cl->fork);
+	res.open_ok = (rc == 0);
+	if (!res.open_ok)
+		goto teardown_fork;
+
+	rc = exec_lan_hwaddr(fc.hwaddr_a);
+	if (rc != 0)
+		goto teardown_lan;
+
+	rc = exec_l2_open(ifname_b, 0x6007u, &fc.peer_ifindex, &fc.peer_sock);
+	res.l2_open_ok = (rc == 0);
+	if (!res.l2_open_ok)
+		goto teardown_lan;
+
+	start_jiffies = jiffies;
+	deadline = start_jiffies + msecs_to_jiffies(duration_ms);
+	fc.deadline = deadline;
+	pc.fork = cl->fork;
+	pc.deadline = deadline;
+	ic.fork = cl->fork;
+	ic.deadline = deadline;
+
+	/* Arm the cadence BEFORE the producers start, from process context with
+	 * the fork thread already running -- the same order vms_pe.c uses. */
+	(void)cf_timer_arm(cl->fork, CF_OWNER_PE,
+			   VMS_KTEST_HAMMER_CADENCE_WHICH, 0u,
+			   VMS_KTEST_HAMMER_CADENCE_MS);
+
+	/*
+	 * Both bound to CPU 0: the harness's only vCPU. See the file-header
+	 * comment above for why that makes "same-CPU" true by construction.
+	 *
+	 * EACH HANDLE HOLDS A TASK REFERENCE (vms_ktest_hammer_spawn). These
+	 * producer bodies RETURN when their own deadline passes and are then
+	 * kthread_stop()'d to be joined -- and on Linux a kthread that has
+	 * returned is self-reaped, so without a held reference that join reads
+	 * a freed task_struct. The FC-P6.6 QEMU run found exactly that
+	 * (kthread_stop+0x48, refcount already 0); exec_kbackend_linux.h's
+	 * SS15 binding carries the same fix for the executive's own threads.
+	 */
+	flood_t = vms_ktest_hammer_spawn(vms_ktest_hammer_flood_fn, &fc,
+					 "vms_hammer_flood");
+	post_t = vms_ktest_hammer_spawn(vms_ktest_hammer_post_fn, &pc,
+					"vms_hammer_post");
+	if (res.worker_start_ok)
+		io_t = vms_ktest_hammer_spawn(vms_ktest_hammer_io_fn, &ic,
+					      "vms_hammer_io");
+
+	/* Let both threads run out their OWN deadline check before signaling a
+	 * stop: kthread_stop() does not just join, it ACTIVELY requests an
+	 * exit (sets the should_stop flag and wakes the target), so calling it
+	 * immediately here would cut the hammer off after a few scheduler
+	 * ticks instead of running it for duration_ms. */
+	while (time_before(jiffies, deadline))
+		msleep(10);
+
+	/* Now the join: each thread has already (or is about to) notice its
+	 * own deadline and return on its own; kthread_stop() here is the
+	 * synchronization primitive that waits for that exit and reaps it. */
+	vms_ktest_hammer_reap(flood_t);
+	vms_ktest_hammer_reap(post_t);
+	vms_ktest_hammer_reap(io_t);
+
+	/* Stop the cadence before the drain poll: it re-arms itself, so a live
+	 * cadence would keep the work queue non-empty forever and the bounded
+	 * drain below would be measuring the wrong thing. */
+	cf_timer_cancel(cl->fork, CF_OWNER_PE, VMS_KTEST_HAMMER_CADENCE_WHICH,
+			0u);
+
+	res.elapsed_ms = jiffies_to_msecs(jiffies - start_jiffies);
+	res.frames_sent = fc.sent;
+	res.posts_accepted = pc.accepted;
+	res.posts_dropped_nobuf = pc.dropped_nobuf;
+	res.io_submitted = ic.submitted;
+	res.io_refused = ic.refused;
+
+	/*
+	 * The SERVED-I/O WORKER goes down FIRST and is JOINED: it is the only
+	 * context that could still be inside a callback, and the readback below
+	 * must be of a settled queue. Every OTHER teardown here already had
+	 * that property; the worker is the new thing that does not, so it is
+	 * made to.
+	 */
+	vms_cluster_fork_worker_stop(cl);
+	/* Read AFTER the join, or the last callback to finish is missed. */
+	res.io_handler_calls = (unsigned int)atomic_read(&ic.calls);
+
+	/* The bounded drain proof -- see the file-header comment's "TWO-TIER
+	 * LOCKUP DETECTION". */
+	{
+		unsigned long drain_deadline;
+		struct cf_stats st;
+
+		drain_start = jiffies;
+		drain_deadline = drain_start + msecs_to_jiffies(2000);
+		for (;;) {
+			cf_stats_get(cl->fork, &st);
+			if (st.rx_dispatched >= st.rx_enqueued &&
+			    st.work_dispatched >= st.work_posted)
+				break;
+			if (!time_before(jiffies, drain_deadline))
+				break;
+			msleep(5);
+		}
+		res.drain_ok = (st.rx_dispatched >= st.rx_enqueued &&
+				 st.work_dispatched >= st.work_posted);
+		res.drain_ms = jiffies_to_msecs(jiffies - drain_start);
+		res.st_rx_enqueued = st.rx_enqueued;
+		res.st_rx_dropped_nobuf = st.rx_dropped_nobuf;
+		res.st_rx_dispatched = st.rx_dispatched;
+		res.st_work_posted = st.work_posted;
+		res.st_work_dropped_nobuf = st.work_dropped_nobuf;
+		res.st_work_dispatched = st.work_dispatched;
+		res.st_waits = st.waits;
+		res.st_io_posted = st.io_posted;
+		res.st_io_completed = st.io_completed;
+		res.st_io_abandoned = st.io_abandoned;
+	}
+
+	res.io_done_seen = wc.io_done_seen;
+	res.io_tag_mismatches = wc.io_tag_mismatches;
+	res.cadence_ticks = wc.cadence.ticks;
+	res.cadence_ticks_during_io = wc.cadence.ticks_during_io;
+	res.cadence_max_gap_ms = wc.cadence.max_gap_ms;
+	res.work_during_io = wc.work_during_io;
+
+	exec_socket_release(fc.peer_sock);
+teardown_lan:
+	exec_lan_close();
+teardown_fork:
+	/* THE genuine lockup detector: see the file-header comment. A real
+	 * rxlock regression makes this call, not the bounded poll above,
+	 * hang -- honestly, under run_tests.sh's own wall timeout. */
+	vms_cluster_fork_stop(cl);
+	kfree(cl);
+	res.done = 1;
+
+record:
+	mutex_lock(&vms_ktest_hammer_mtx);
+	vms_ktest_hammer_res = res;
+	mutex_unlock(&vms_ktest_hammer_mtx);
+	return 0;
+}
+
+/* "digits" only -- no libc/kstrtox dependency, matching this file's existing
+ * minimal hand-rolled parsing style (vms_ktest_cluster_seam_set above). */
+static unsigned int vms_ktest_hammer_parse_uint(const char *s)
+{
+	unsigned int v = 0;
+
+	while (*s >= '0' && *s <= '9') {
+		v = v * 10u + (unsigned int)(*s - '0');
+		s++;
+	}
+	return v;
+}
+
+static int vms_ktest_cluster_fork_hammer_set(const char *val, const struct kernel_param *kp)
+{
+	char ifname_a[IFNAMSIZ] = {0};
+	char ifname_b[IFNAMSIZ] = {0};
+	unsigned int duration_ms = 3000;   /* default: fits run_tests.sh's shared wall */
+	const char *sep1, *sep2;
+	size_t blen;
+
+	(void)kp;
+	if (!val)
+		return -EINVAL;
+	sep1 = strchr(val, ':');
+	if (!sep1 || (size_t)(sep1 - val) >= sizeof(ifname_a))
+		return -EINVAL;
+	memcpy(ifname_a, val, sep1 - val);
+
+	sep2 = strchr(sep1 + 1, ':');
+	if (sep2) {
+		if ((size_t)(sep2 - (sep1 + 1)) >= sizeof(ifname_b))
+			return -EINVAL;
+		memcpy(ifname_b, sep1 + 1, sep2 - (sep1 + 1));
+		duration_ms = vms_ktest_hammer_parse_uint(sep2 + 1);
+		if (duration_ms == 0)
+			duration_ms = 3000;
+	} else {
+		blen = strlen(sep1 + 1);
+		if (blen && (sep1 + 1)[blen - 1] == '\n')
+			blen--;                          /* strip a sysfs-write newline */
+		if (blen >= sizeof(ifname_b))
+			return -EINVAL;
+		memcpy(ifname_b, sep1 + 1, blen);
+	}
+
+	if (duration_ms > 65000u)
+		duration_ms = 65000u;   /* never let a bad value hang the harness forever */
+
+	return vms_ktest_cluster_fork_hammer_run(ifname_a, ifname_b, duration_ms);
+}
+static const struct kernel_param_ops vms_ktest_cluster_fork_hammer_run_ops = {
+	.set = vms_ktest_cluster_fork_hammer_set,
+};
+module_param_cb(vms_ktest_cluster_fork_hammer_run, &vms_ktest_cluster_fork_hammer_run_ops, NULL, 0200);
+MODULE_PARM_DESC(vms_ktest_cluster_fork_hammer_run,
+    "TEST-ONLY (rd FC-P0.16): run the receive-level lock conformance same-CPU hammer as \"ifname_a:ifname_b[:duration_ms]\" (default 3000, cap 65000)");
+
+static int vms_ktest_cluster_fork_hammer_result_get(char *buf, const struct kernel_param *kp)
+{
+	struct vms_ktest_hammer_result res;
+
+	(void)kp;
+	mutex_lock(&vms_ktest_hammer_mtx);
+	res = vms_ktest_hammer_res;
+	mutex_unlock(&vms_ktest_hammer_mtx);
+
+	return scnprintf(buf, PAGE_SIZE,
+	    "DONE=%d FORK_START=%d OPEN=%d L2_OPEN=%d DURATION_MS=%u ELAPSED_MS=%u "
+	    "FRAMES_SENT=%u POSTS_ACCEPTED=%u POSTS_DROPPED_NOBUF=%u DRAIN_OK=%d DRAIN_MS=%u "
+	    "RX_ENQUEUED=%llu RX_DROPPED_NOBUF=%llu RX_DISPATCHED=%llu "
+	    "WORK_POSTED=%llu WORK_DROPPED_NOBUF=%llu WORK_DISPATCHED=%llu WAITS=%llu "
+	    "WORKER_START=%d IO_SUBMITTED=%u IO_REFUSED=%u IO_HANDLER_CALLS=%u "
+	    "IO_DONE_SEEN=%u IO_TAG_MISMATCHES=%u CADENCE_TICKS=%u "
+	    "CADENCE_TICKS_DURING_IO=%u CADENCE_MAX_GAP_MS=%u WORK_DURING_IO=%u "
+	    "IO_POSTED=%llu IO_COMPLETED=%llu IO_ABANDONED=%llu\n",
+	    res.done, res.fork_start_ok, res.open_ok, res.l2_open_ok,
+	    res.duration_ms, res.elapsed_ms,
+	    res.frames_sent, res.posts_accepted, res.posts_dropped_nobuf,
+	    res.drain_ok, res.drain_ms,
+	    res.st_rx_enqueued, res.st_rx_dropped_nobuf, res.st_rx_dispatched,
+	    res.st_work_posted, res.st_work_dropped_nobuf, res.st_work_dispatched,
+	    res.st_waits,
+	    res.worker_start_ok, res.io_submitted, res.io_refused,
+	    res.io_handler_calls, res.io_done_seen, res.io_tag_mismatches,
+	    res.cadence_ticks, res.cadence_ticks_during_io,
+	    res.cadence_max_gap_ms, res.work_during_io,
+	    res.st_io_posted, res.st_io_completed, res.st_io_abandoned);
+}
+static const struct kernel_param_ops vms_ktest_cluster_fork_hammer_result_ops = {
+	.get = vms_ktest_cluster_fork_hammer_result_get,
+};
+module_param_cb(vms_ktest_cluster_fork_hammer_result, &vms_ktest_cluster_fork_hammer_result_ops, NULL, 0444);
+MODULE_PARM_DESC(vms_ktest_cluster_fork_hammer_result,
+    "TEST-ONLY (rd FC-P0.16): read the last vms_ktest_cluster_fork_hammer_run result as KEY=VAL tokens");
+#endif /* OVMX_KTEST_CLUSTER_SEAM */
 
 /* ================================================================
  * Process management
@@ -824,6 +1807,12 @@ void vms_proc_free_claimed(struct vms_proc *proc)
      * the mailbox and BG channels above. */
     vms_acp_release_all(proc);
 
+    /* Clear this process's $SETCLUEVT registration, if any (FC-P3.8) -- a
+     * no-op when the cluster stack never started or this process never
+     * registered; `proc` is passed as `void *` so vms_internal.h's own
+     * declaration needs no vms_cluster.h include. */
+    vms_cnxman_proc_gone(vms_cluster_node(), (void *)proc);
+
     /* Drop the pinned pid reference taken at registration */
     if (proc->pid_ref) {
         put_pid(proc->pid_ref);
@@ -964,6 +1953,39 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
     if (cmd == VMS_IOCTL_REGISTER_SUBPROCESS)
         return vms_ioctl_register(arg, true, false);
 
+    /*
+     * E47 (docs/cluster-integration-notes.md): the three cluster
+     * diagnostic reads -- the port's SDA SHOW PORT-equivalent
+     * (CLUSTER_DIAG_PORT), SCS's SHOW CONNECTIONS-equivalent
+     * (CLUSTER_DIAG_CONN) and the connection manager's own CLUB/CSB read
+     * (CLUSTER_DIAG_CSB) -- are DISPATCH-ALWAYS. A diagnostic reads real
+     * executive cluster state (vms_pe.c/vms_scs.c/vms_cnxman.c, under the
+     * fork mutex); it does not require the CALLER to be a registered VMS
+     * process first. Each handler already takes `proc` only to match every
+     * other ioctl's signature and never touches it (`(void)proc;`), so a
+     * NULL caller context is safe. Gating these behind
+     * vms_proc_find_or_err() made an honest "cluster/port not started"
+     * read fail the ioctl() itself with -ESRCH before it ever reached the
+     * SS$_NOSUCHDEV + all-zero-row answer the handler computes -- exactly
+     * the bug that broke SHOW CLUSTER on a booted, not-yet-clustered node.
+     */
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_PORT)
+        return vms_ioctl_cluster_diag_port(NULL, arg);
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_CONN)
+        return vms_ioctl_cluster_diag_conn(NULL, arg);
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_CSB)
+        return vms_ioctl_cluster_diag_csb(NULL, arg);
+    /*
+     * E69 joins the same DISPATCH-ALWAYS group for the same reason: the join
+     * transition ring is a read-only projection of real executive state, and
+     * the whole point of it is that a node whose join is stuck can still be
+     * read -- gating it behind a registration would reproduce the exact E47
+     * bug (an honest "not started" read failing with -ESRCH before the
+     * handler ever runs).
+     */
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_JOIN)
+        return vms_ioctl_cluster_diag_join(NULL, arg);
+
     /* All other ioctls require a registered process */
     proc = vms_proc_find_or_err();
     if (!proc)
@@ -1036,14 +2058,34 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * search (rd vms-ec75, DLM rung H11). */
     case VMS_IOCTL_DLM_ENUM_WAITS:
         return vms_ioctl_dlm_enum_waits(proc, arg);
-    /* Cluster membership crosses into the executive (vms-551): scsd's local
-     * populate path (SET/CLEAR) and SHOW CLUSTER's read (GET). */
-    case VMS_IOCTL_CLUSTER_MEMBER_SET:
-        return vms_ioctl_cluster_member_set(proc, arg);
-    case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
-        return vms_ioctl_cluster_member_clear(proc, arg);
+    case VMS_IOCTL_DLM_ENUM_STANDING:
+        return vms_ioctl_dlm_enum_standing(proc, arg);
+    /* SHOW CLUSTER's read (vms-551), projecting the connection manager's own
+     * CLUB/CSB table since FC-P3.9. There is no SET/CLEAR: the userspace
+     * daemon that populated a mirror through them is retired, and so are
+     * they. */
     case VMS_IOCTL_CLUSTER_MEMBER_GET:
         return vms_ioctl_cluster_member_get(proc, arg);
+    /* CLUSTER_DIAG_PORT/_CONN/_CSB dispatch earlier now, before the
+     * registered-process gate above (E47) -- their case labels are gone
+     * from here so there is exactly one dispatch point per ioctl, never
+     * two that could drift. */
+    case VMS_IOCTL_CLUSTER_SETCLUEVT:
+        return vms_ioctl_cluster_setcluevt(proc, arg);
+    /* $GETSYI's cluster item codes, from the CLUB (FC-P3.9). */
+    case VMS_IOCTL_CLUSTER_GETSYI:
+        return vms_ioctl_cluster_getsyi(proc, arg);
+    /* STARTUP.EXE's own case of SYSBOOT (FC-P0.10): load the cluster SYSGEN
+     * parameters + CLUSTER_AUTHORIZE into vms_cluster_node()->params, once,
+     * before VMS_IOCTL_CLUSTER_START (FC-P0.11). */
+    case VMS_IOCTL_SYSGEN_LOAD:
+        return vms_ioctl_sysgen_load(proc, arg);
+    /* STARTUP.EXE's boot path (FC-P0.11; join semantics FC-P3.9): the fork
+     * thread, then vms_pe_start(), vms_scs_start() and vms_cnxman_start() --
+     * against the same vms_cluster_node(), gated on VAXCLUSTER at both the
+     * ovmx_init.c caller and here (each layer's own check). */
+    case VMS_IOCTL_CLUSTER_START:
+        return vms_ioctl_cluster_start(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
      * a decoded remote DLM message reaches the cross-node handler, which
      * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */

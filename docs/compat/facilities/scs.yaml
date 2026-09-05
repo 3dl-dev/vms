@@ -6,24 +6,46 @@ vms_ref: "OpenVMS Cluster Systems manual; Systems Application A (SCS/SCA archite
 scope_1_0: in
 plan_ref: vms-694
 summary: >
-  The SCS message/connection layer OVMX's cluster wire stack is built on.
-  Connection Descriptor Table and message service are real and wired
-  end-to-end into scsd.c. The datagram (class 2) service is real internal
-  logic with zero production callers — unwired dead code, self-labeled as such.
-last_reviewed: 2026-08-31
+  The SCS message/connection layer OVMX's cluster wire stack is built on. It is
+  now EXECUTIVE-RESIDENT: a table-driven CDT state machine (vms_scs_fsm.c) with
+  its glue in vms_scs.c, inside vms.ko and the NetBSD vms.kmod. FC-P3.9 deleted
+  the userspace SCS daemon the previous rows described, executing the operator's
+  2026-09-02 clustering reset.
+  WHAT IS VERIFIED AND WHERE: R1 host unit + R2 N-node simulator + R3 substrate
+  contract, all in CI. R4 (booted OVMX nodes) has legs but they are the
+  cluster harness's, not a graded multi-node run; R5 (a real VAX) is
+  LAB-DEFERRED and nothing here claims it.
+last_reviewed: 2026-09-03
 items:
   - id: scs$cdt-message-service
     kind: feature
     status: implemented
     authenticity: real
     vms: "Connection Descriptor Table + SCS message/block-transfer service primitives"
-    evidence: src/vmsscs/scs_cdt.c
-    notes: "Wired into scsd.c, not a standalone demo path."
+    evidence: src/kernel-core/vms_scs_fsm.c
+    notes: >
+      FC-P2.2/P2.4. A pure [state][event] CDT table (ten frozen states, connect/
+      accept/reject/disconnect half-exchanges, the credit ledger, the SB path-block
+      CDT queue and the VC-break scan) plus vms_scs.c's glue, which binds it DOWN
+      to the port and registers SCS$DIRECTORY. Every send SPENDS a real credit;
+      SCS never retries and never re-opens a connection on its own.
+      PROVEN AT R1/R2/R3, in CI: tests/cluster/host/test_scs_fsm.c,
+      test_scs_fsm_credit.c, test_scs_fsm_vcdown.c, test_scs_glue_conn.c,
+      test_scs_directory.c; the N-node simulator (tests/cluster/sim);
+      tests/qemu/test_cluster_conn.sh drives CLUSTER_DIAG_CONN against a real
+      /dev/vms. NOT claimed: a graded two-node OVMX connection over the wire, or
+      any interoperation with a real VAX — R4-multi-node and R5 are lab-deferred.
 
   - id: scs$datagram-service
     kind: feature
-    status: stub
-    authenticity: facade-risk
+    status: partial
+    authenticity: real
     vms: "SCS datagram (class 2) send/receive service"
-    evidence: src/vmsscs/scs_dgram.c
-    notes: "Self-labeled: scs_dgram.h documents it never routes a datagram and the run log prints zeros — an honest state, but flagged facade-risk because it is real logic with zero production callers, the exact unwired-dead-code shape the Draper register hunts."
+    evidence: src/kernel-core/vms_scs_fsm.c
+    notes: >
+      The RECEIVE side is real and reached (scs_fsm_rx_datagram); the frozen
+      scs_sysap_ops has no datagram input routine, so an application datagram is
+      COUNTED rather than delivered -- and deliberately so: wire spec §4(h)(1d)
+      refutes the candidate discriminator between a message and a datagram, and
+      delivering one through the message path would assert a distinction the wire
+      does not carry. An honest, documented partial, not a facade.

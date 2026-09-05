@@ -54,6 +54,31 @@
  */
 #define SYSGEN_STRVAL_LEN   8
 
+/*
+ * CLUSTER_CREDITS' factory default -- how many receive buffers a node asks
+ * the cluster port to commit to each virtual circuit (VAXcluster Principles
+ * p. 2-43: the credit a node extends IS the count of buffers it allocated to
+ * receive that peer's messages).
+ *
+ * DEFINED ONCE, HERE, because two independent readers need the same answer and
+ * a second copy is how they drift apart (INV-LEDGER):
+ *   - tools/vms_sysgen.c's parameter table, which is what a WRITE mints into
+ *     SYS$SYSTEM:OVMXVMSSYS.PAR;
+ *   - src/ovmx_init/ovmx_init.c's boot-time cluster load, for the case where
+ *     the persisted store PREDATES this parameter and carries no record for
+ *     it. An absent record is not "the operator configured zero"; a parameter
+ *     the system knows but the file has never held takes the system's default,
+ *     exactly as SYSBOOT's parameter table supplies one on VMS.
+ *
+ * The value is OVMX's OWN default, disclosed as such -- it is not a published
+ * VMS constant (CLAUDE.md Rule 8). It is a REQUEST for buffers, never a value
+ * asserted on the wire: what a START body advertises is the reservation the
+ * executive's credit ledger actually granted out of real allocated buffers
+ * (src/kernel-core/vms_pe_fsm.h §4b), which is smaller when the pool is
+ * smaller.
+ */
+#define SYSGEN_DEFAULT_CLUSTER_CREDITS  10u
+
 struct sysgen_param {
     char        name[32];
     uint32_t    current;

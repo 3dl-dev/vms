@@ -5,7 +5,7 @@
 # Cross-builds the FULL OVMX userland library stack for alpha-linux-gnu and runs
 # its compiled unit tests under qemu-alpha (user mode). Proves the RTL stack --
 # vmsprocess -> libvms -> {vmslnm -> vmsfs -> vmsrms} and vmsdcl, plus vmsqueue/
-# vmsscs/ods2 -- is LP64-clean on a 64-bit big-register Alpha target.
+# ods2 -- is LP64-clean on a 64-bit big-register Alpha target.
 #
 # Build/TEST tooling only (Rule 9): compiling and emulating the freestanding +
 # glibc-hosted RTL to prove it ports; never a runtime.

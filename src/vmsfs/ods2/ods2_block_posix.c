@@ -5,7 +5,7 @@
  * offsets, treating a short transfer as a hard failure -- the exact shape
  * ods2_bdev.c's bdev_pread_block() and ods2_writer.c's wcache pread/pwrite
  * used inline before the seam existed (which itself mirrors
- * src/vmsscs/scs_mscp_srv.c's raw-block server).
+ * the MSCP server's raw-block path).
  *
  * Built ONLY in the userspace codec library (the kernel build compiles
  * ods2_block_kern.c instead). Rule 8: pure I/O plumbing, no on-disk fact.

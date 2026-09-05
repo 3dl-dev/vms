@@ -106,15 +106,16 @@ exec_lock_t vms_proc_hash_lock;
 uint32_t vms_local_csid = 1;
 
 /*
- * dlm_member_csids[] / dlm_member_count - the DLM directory membership vector
- * (rd vms-1bba, "DB" rung), read by the shared lock manager through the extern
- * in vms_internal.h. On Linux these are a module_param_array (harness-supplied);
- * this NetBSD substrate defines them with a cluster-of-one default (count 0 ->
- * the directory helpers fall back to vms_local_csid). A static controlled input,
- * NOT the live 0.4/DC membership feed.
+ * The static DLM directory membership vector (dlm_member_csids /
+ * dlm_member_count, rd vms-1bba) is GONE with FC-P4.3. The membership a
+ * directory resolves over is the connection manager's CLUB, indexed by the
+ * cluster's own wire-carried resource hash through the Lock Directory Weight
+ * Vector (src/kernel-core/vms_dlm_ldwv.h); the lock engine reaches it through
+ * the injected dir_resolve/dir_generation ops (src/kernel-core/vms_dlm_proxy.h).
+ * An insmod-supplied member list was a second, drifting copy of a fact the
+ * executive already holds -- and it was only ever consumed by the exec_jhash
+ * directory this item deleted.
  */
-uint32_t dlm_member_csids[VMS_DLM_MAX_MEMBERS];
-int      dlm_member_count;
 
 /*
  * vms_proc_get - find (or create) the vms_proc for `pid'. The shared facilities
@@ -450,6 +451,11 @@ vms_proc_free_claimed(struct vms_proc *proc)
 	 * mailbox release above, mirroring the Linux vms.ko's vms_acp_release_all in
 	 * vms_module.c's proc free. */
 	vms_acp_release_all(proc);
+	/* Clear this process's $SETCLUEVT registration, if any (FC-P3.8) --
+	 * mirrors the Linux vms.ko's vms_cnxman_proc_gone call in vms_module.c's
+	 * proc free. A no-op when the cluster stack never started or this
+	 * process never registered. */
+	vms_cnxman_proc_gone(vms_cluster_node(), (void *)proc);
 	/* Release every lock this process still held ($DEQ-all at process death, P4-A
 	 * rd vms-ff7). Runs while lock_list_lock is still alive, before it is
 	 * destroyed below -- mirrors the Linux vms.ko's vms_proc_release_locks call
@@ -1222,6 +1228,35 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 		return vms_facility_errno(r);
 
 	/*
+	 * Cluster diagnostic reads -- CLUSTER_DIAG_PORT/_CONN/_CSB (E47,
+	 * docs/cluster-integration-notes.md). The port's SDA SHOW PORT-
+	 * equivalent (vms_pe.c), SCS's SHOW CONNECTIONS-equivalent (vms_scs.c)
+	 * and the connection manager's own CLUB/CSB read (vms_cnxman.c) are
+	 * DISPATCH-ALWAYS: each is a pure projection of real executive cluster
+	 * state under the fork mutex, honestly SS$_NOSUCHDEV + an all-zero row
+	 * before CLUSTER_START (INV-6), never an ioctl-level failure. Like
+	 * VMS_IOCTL_GETSYIMEM above and unlike the lock-manager group below,
+	 * they need no proc lookup at all: every handler ignores its `proc`
+	 * argument (`(void)proc;` in vms_devtab.c), so a caller that has never
+	 * registered a VMS process still gets the executive's real answer.
+	 */
+	case VMS_IOCTL_CLUSTER_DIAG_PORT:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_port(NULL, (unsigned long)data));
+	case VMS_IOCTL_CLUSTER_DIAG_CONN:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_conn(NULL, (unsigned long)data));
+	case VMS_IOCTL_CLUSTER_DIAG_CSB:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_csb(NULL, (unsigned long)data));
+	/* E69: the join transition ring, same DISPATCH-ALWAYS terms as the
+	 * three above -- a read-only projection of real executive state, whose
+	 * whole purpose is to be readable on a node whose join is stuck. */
+	case VMS_IOCTL_CLUSTER_DIAG_JOIN:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_join(NULL, (unsigned long)data));
+
+	/*
 	 * Lock-manager facility (DLM, src/kernel-core/vms_lock.c) -- P4-A, rd
 	 * vms-ff7, the LAST executive facility. Same dispatch shape as the others:
 	 * find-or-create the caller's proc, hand the framework's kernel buffer `data'
@@ -1239,6 +1274,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	 * that in-kernel wait can return -ERESTARTSYS, which vms_facility_errno maps
 	 * to ERESTART so the ioctl restarts, exactly as the event-flag WAITFR path
 	 * does. GET_RESMASTER is a read-only DLM directory/mastering view.
+	 * DLM_XNODE (FC-P0.12, dispatch parity with the Linux vms_module.c switch,
+	 * vms-94c/DLM epic vms-7fa rung 1) delivers a decoded remote DLM request to
+	 * vms_lock_dlm_xnode_dispatch; rung 1 returns SS$_UNSUPPORTED (no fabricated
+	 * cross-node grant, INV-6).
 	 */
 	case VMS_IOCTL_ENQ:
 	case VMS_IOCTL_DEQ:
@@ -1248,9 +1287,13 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_DLM_MEMBER_DEPART:
 	case VMS_IOCTL_DLM_GET_GRANTED:
 	case VMS_IOCTL_DLM_ENUM_WAITS:
-	case VMS_IOCTL_CLUSTER_MEMBER_SET:
-	case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
+	case VMS_IOCTL_DLM_ENUM_STANDING:
+	case VMS_IOCTL_DLM_XNODE:
 	case VMS_IOCTL_CLUSTER_MEMBER_GET:
+	case VMS_IOCTL_CLUSTER_SETCLUEVT:
+	case VMS_IOCTL_CLUSTER_GETSYI:
+	case VMS_IOCTL_SYSGEN_LOAD:
+	case VMS_IOCTL_CLUSTER_START:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1273,12 +1316,20 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_dlm_get_granted(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_DLM_ENUM_WAITS:
 			r = vms_ioctl_dlm_enum_waits(proc, (unsigned long)uarg); break;
-		case VMS_IOCTL_CLUSTER_MEMBER_SET:
-			r = vms_ioctl_cluster_member_set(proc, (unsigned long)uarg); break;
-		case VMS_IOCTL_CLUSTER_MEMBER_CLEAR:
-			r = vms_ioctl_cluster_member_clear(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_DLM_ENUM_STANDING:
+			r = vms_ioctl_dlm_enum_standing(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_DLM_XNODE:
+			r = vms_ioctl_dlm_xnode(proc, (unsigned long)uarg);      break;
 		case VMS_IOCTL_CLUSTER_MEMBER_GET:
 			r = vms_ioctl_cluster_member_get(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_SETCLUEVT:
+			r = vms_ioctl_cluster_setcluevt(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_CLUSTER_GETSYI:
+			r = vms_ioctl_cluster_getsyi(proc, (unsigned long)uarg); break;
+		case VMS_IOCTL_SYSGEN_LOAD:
+			r = vms_ioctl_sysgen_load(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_CLUSTER_START:
+			r = vms_ioctl_cluster_start(proc, (unsigned long)uarg); break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}
@@ -1428,6 +1479,13 @@ vms_modcmd(modcmd_t cmd, void *arg __unused)
 		 * is after INIT returns, and vms_acp_init cannot fail (vmsfs_acp.c), so it
 		 * needs no unwind. Mirrors the Linux vms.ko init. */
 		vms_acp_init();
+		/* FC-P0.4: prove the cluster seam (SS14..SS18) at module load,
+		 * the same "self-test on the console" posture
+		 * vms_lnm_arena_selftest() takes for the arena seam above -- no
+		 * ioctl exists to drive exec_lan_, exec_kthread_ or
+		 * exec_timer_ yet (that is FC-P0.9), so this is how the R3 substrate-
+		 * contract test proves the real bindings on a booted node. */
+		vms_cluster_seam_selftest();
 		return 0;
 
 	case MODULE_CMD_FINI:

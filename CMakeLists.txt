@@ -222,10 +222,20 @@ add_subdirectory(src/vmsrms)
 add_subdirectory(src/vmsqueue)
 add_subdirectory(src/vmsdcl)
 
-# vmsscs - SCS Datalink daemon (SCSD, docs/design-cluster-node.md sec 3.1).
-# No dependency on the OVMX library chain above (plain POSIX AF_PACKET
-# sockets), so it builds unconditionally like known_images.
-add_subdirectory(src/vmsscs)
+# libdatalink - the raw-L2 Ethernet datalink abstraction (vms-838), formerly
+# src/vmsscs's `vmsscs_datalink`. Kept when the daemon that motivated it was
+# retired, because DECnet Phase IV (src/vmsdecnet/engine) is a live second
+# consumer. Plain POSIX / NetBSD bpf(4), so it builds unconditionally.
+add_subdirectory(src/libdatalink)
+
+# src/vmsscs (SCSD.EXE, the userspace SCS datalink daemon) was DELETED by
+# FC-P3.9, executing the operator's 2026-09-02 clustering reset: the cluster
+# stack is EXECUTIVE-RESIDENT (src/kernel-core/vms_pe.c, vms_scs.c,
+# vms_cnxman.c, built into vms.ko and the NetBSD vms.kmod), and a userspace
+# daemon speaking SCS beside it was a non-portable strawman. Its wire
+# knowledge lives on as docs/cluster-protocol-spec.md and as the ported R1/R2
+# suites under tests/cluster/. See docs/plan-faithful-cluster-executive.md
+# row FC-P3.9.
 
 # boundary_audit - executive-boundary AUDIT tracer (vms-c08, Phase A under
 # vms-040). Hosted library (seccomp user-notif + supervisor thread); no
@@ -237,7 +247,7 @@ add_subdirectory(src/boundary_audit)
 # Rung 1 lands only the routing-layer Ethernet Endnode Hello codec: a pure,
 # engine-agnostic byte-layout library (plain stdint + memcpy, no OVMX-chain
 # dependency), validated against the vms-3be lab-oracle specimen. Builds
-# unconditionally like vmsscs. docs/design-decnet-ovmx.md.
+# unconditionally. docs/design-decnet-ovmx.md.
 add_subdirectory(src/vmsdecnet)
 
 # NetBSD/vax facility guest test tools (vmseflag/vmsaccess/vmsproctab/vmsmbx
@@ -272,7 +282,15 @@ if(BUILD_TESTS)
     add_subdirectory(tests/vmsrms)
     add_subdirectory(tests/vmsqueue)
     add_subdirectory(tests/dcl)
-    add_subdirectory(tests/vmsscs)
+    # Rung-1 host build for the executive-resident VMScluster stack: the pure
+    # inter-layer headers (FC-P0.1) and the wire codec (FC-P0.6) both compile
+    # with a plain host compiler and NO kernel headers. `ctest -R cluster_host`.
+    add_subdirectory(tests/cluster/host)
+    # Rung-2 host cluster simulator (FC-P1.4): N instances of the same pure
+    # stack on a virtual LAN with a virtual clock. `ctest -R cluster_sim`.
+    # Must follow tests/cluster/host: it links that directory's cluster_host_pe
+    # (the SHIPPING vms_pe_fsm.c) rather than compiling a copy.
+    add_subdirectory(tests/cluster/sim)
     add_subdirectory(tests/vmsdecnet)  # DECnet Phase IV codec (vms-851)
     add_subdirectory(tests/ovmx_init)
     add_subdirectory(tests/tools)
@@ -755,16 +773,31 @@ if(BUILD_TESTS)
     set_tests_properties(show_device_rows_negctl PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 300)
 
-    # SHOW CLUSTER reflects the SCS daemon's LIVE membership (rd vms-8d4,
-    # INV-DCL). cmd_show_cluster() used to hardcode %SYSTEM-I-NOTMEMBER, so a
-    # genuinely-clustered node lied. This RUNS DCL against a membership file
-    # written in SCSD's own publication format (scs_membership.h -- the real
-    # boundary between the daemon and the DCL process) and requires the member
-    # set to be shown when present and NOTMEMBER only when genuinely absent.
-    add_test(NAME show_cluster_membership_gate
-        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_cluster_membership.sh
+    # SHOW CLUSTER answers from the EXECUTIVE, and says so honestly when there
+    # is no executive to ask (rd vms-8d4's NOTMEMBER != NOSUCHDEV contract,
+    # carried into FC-P3.9). This RUNS DCL with /dev/vms deliberately absent
+    # and requires "%SYSTEM-W-NOSUCHDEV" -- never NOTMEMBER, which would be a
+    # cluster CLAIM made with nothing behind it, and never a member table.
+    #
+    # It REPLACES show_cluster_membership_gate, which drove a membership FILE
+    # in the retired userspace daemon's publication format. There is no such
+    # file and no such daemon: FC-P3.9 deleted both, and SHOW CLUSTER now reads
+    # the connection manager's CLUB/CSB table through /dev/vms.
+    add_test(NAME show_cluster_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_show_cluster_negctl.sh
                 $<TARGET_FILE:vmsdcl>)
-    set_tests_properties(show_cluster_membership_gate PROPERTIES
+    set_tests_properties(show_cluster_negctl PROPERTIES
+        LABELS "integration;authenticity;cluster" TIMEOUT 60)
+
+    # The retirement itself, asserted rather than assumed (FC-P3.9's own
+    # done-condition "no scsd binary in the image"): no SCSD.EXE staging step,
+    # no SYS$STARTUP:SCS_STARTUP.COM, no VMS$VMS.DAT cluster component, and no
+    # src/vmsscs tree. A strawman that can come back by an unreviewed `cp` line
+    # is not retired.
+    add_test(NAME no_scsd_image_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_no_scsd_image.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(no_scsd_image_gate PROPERTIES
         LABELS "integration;authenticity;cluster" TIMEOUT 60)
 
     # SHOW SYMBOL renders an integer's Hex and Octal columns as a LONGWORD
@@ -1045,19 +1078,24 @@ if(BUILD_TOOLS)
         vms_monitor          # MONITOR.EXE
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
+        vms_cnxtrace         # CNXTRACE.EXE
         PARTS                # PARTS.EXE
     )
 
-    # SCSD.EXE (scsd_exe, src/vmsscs/CMakeLists.txt): the SCS datalink daemon.
-    # vms-838 gave it a thin raw-L2 datalink abstraction (scs_datalink.h/.c,
-    # src/vmsscs/) with a Linux AF_PACKET backend (unchanged behavior) and a
-    # NetBSD bpf(4) backend (NetBSD has no AF_PACKET; bpf(4) is its raw-link
-    # facility, a materially different API), selected at compile time --
-    # scsd.c itself no longer opens a socket directly. That closed the last
-    # of rd vms-e1d's ten x86_64<->vax parity-drift images, so SCSD.EXE now
-    # ships in the aggregate on every substrate, same as everything else in
-    # _OVMX_IMAGES_DEPS above.
-    list(APPEND _OVMX_IMAGES_DEPS scsd_exe)  # SCSD.EXE
+    # CNXTRACE.EXE is in the aggregate on PURPOSE, on both arches (E69). It
+    # reads the connection manager's join transition ring out of the executive
+    # and prints it to SYS$OUTPUT; the executive has no console log, so on a
+    # node whose cluster join stalls it is the only way the evidence gets out.
+    # The cluster stack is executive-resident on BOTH substrates (vms.ko and
+    # vms.kmod), so the diagnostic that reads it has a role on both -- this is
+    # not a Decision-A split and must never become an allowlist entry.
+
+    # SCSD.EXE is NOT in this aggregate, and the omission is the point:
+    # FC-P3.9 deleted the image and its source with the userspace SCS
+    # strawman. The cluster stack ships inside the executive (vms.ko /
+    # vms.kmod), so a booted OVMX node forms or joins a cluster with no
+    # cluster daemon in the image at all -- which is exactly what
+    # tests/integration/test_no_scsd_image.sh asserts.
 
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
         # LINK.EXE (vmslink, src/vmslink/link.c): the OVMX-native ELF64

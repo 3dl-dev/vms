@@ -23,7 +23,7 @@
 #                      LOGINOUT.EXE, HELP.EXE, AUTHORIZE.EXE, MAIL.EXE,
 #                      MONITOR.EXE, INITIALIZE.EXE, INSTALL.EXE, SYSGEN.EXE,
 #                      PRODUCT.EXE, LIBRARIAN.EXE, ANALYZE.EXE, SYSMAN.EXE,
-#                      PARTS.EXE as of this writing -- CMakeLists.txt's
+#                      CNXTRACE.EXE, PARTS.EXE as of this writing -- CMakeLists.txt's
 #                      `_OVMX_IMAGES_DEPS` is authoritative, not this comment),
 #                      cross-built EM_ALPHA under the alpha-linux-gnu toolchain
 #                      (Rung A of the OVMX-on-Alpha epic, the same images

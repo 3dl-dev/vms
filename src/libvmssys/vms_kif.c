@@ -813,6 +813,33 @@ uint32_t vms_kif_get_resmaster(const char *resnam, uint32_t *found,
 }
 
 /*
+ * vms_kif_dlm_enum_standing - enumerate this node's STANDING cluster-registrable
+ * system locks over /dev/vms (vms-1f4): on return *out holds up to
+ * VMS_DLM_ENUM_STANDING_MAX entries (out->count filled, out->total held), each
+ * the resource name + local lkid + mode of a lock the executive genuinely holds
+ * (the F11B$v volume lock a MOUNT holds). scsd registers these to the coordinator
+ * during a directory rebuild. Fail-honest (SS$_NOSUCHDEV) when /dev/vms is absent
+ * (KIF_CALL); a READ of real lock state, never a fabricated lock (INV-6).
+ */
+uint32_t vms_kif_dlm_enum_standing(struct vms_dlm_enum_standing_args *out)
+{
+    if (!out)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    /*
+     * Write STRAIGHT into the caller's buffer -- no local copy. A local
+     * `struct ... args; ...; *out = args;` would lower the 656-byte struct
+     * assignment to a libc memcpy() call, which the freestanding libvmssys
+     * shareable cannot resolve (DECC$SHR exports no memcpy -- vms-61f). The
+     * KIF_CALL copyout fills *out directly; vms_memset (a local shim, not libc)
+     * zeroes it first so a pre-ioctl failure leaves a clean all-zero block.
+     */
+    vms_memset(out, 0, sizeof(*out));
+    KIF_CALL(VMS_IOCTL_DLM_ENUM_STANDING, out);
+    return out->status;
+}
+
+/*
  * vms_kif_dlm_xnode - dispatch a decoded cross-node DLM request to the kernel
  * lock manager's cross-node handler (vms-94c, DLM epic vms-7fa rung 1). Issues
  * VMS_IOCTL_DLM_XNODE, which reaches vms_lock_dlm_xnode_dispatch(): rung 1 the
@@ -960,62 +987,19 @@ static int cluster_bind_ok(void)
 }
 
 /*
- * vms_kif_cluster_member_set - insert-or-update one member by csid in the
- * executive's cluster-membership block (vms-551). OVMX-UNWIRED (see the
- * header): scsd issues VMS_IOCTL_CLUSTER_MEMBER_SET with a direct POSIX
- * ioctl from scsd_publish_membership, not this freestanding client.
- */
-uint32_t vms_kif_cluster_member_set(uint32_t csid, uint32_t sysid,
-                                    const char *scsnode, const char *state)
-{
-    struct vms_cluster_member_set_args args;
-
-    if (!cluster_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.csid = csid;
-    args.sysid = sysid;
-    if (scsnode) {
-        vms_strncpy(args.scsnode, scsnode, sizeof(args.scsnode) - 1);
-        args.scsnode[sizeof(args.scsnode) - 1] = '\0';
-    }
-    if (state) {
-        vms_strncpy(args.state, state, sizeof(args.state) - 1);
-        args.state[sizeof(args.state) - 1] = '\0';
-    }
-
-    KIF_CALL(VMS_IOCTL_CLUSTER_MEMBER_SET, &args);
-
-    return args.status;
-}
-
-/*
- * vms_kif_cluster_member_clear - remove one member by csid (vms-551).
- * OVMX-UNWIRED (see the header): scsd issues VMS_IOCTL_CLUSTER_MEMBER_CLEAR
- * with a direct POSIX ioctl on departure, not this freestanding client.
- */
-uint32_t vms_kif_cluster_member_clear(uint32_t csid)
-{
-    struct vms_cluster_member_clear_args args;
-
-    if (!cluster_bind_ok())
-        return SS$_NOSUCHDEV;
-
-    vms_memset(&args, 0, sizeof(args));
-    args.csid = csid;
-
-    KIF_CALL(VMS_IOCTL_CLUSTER_MEMBER_CLEAR, &args);
-
-    return args.status;
-}
-
-/*
- * vms_kif_cluster_get_members - SHOW CLUSTER's read of the executive
- * membership block (vms-551). WIRED: cmd_show_cluster calls this directly.
- * SS$_NOSUCHDEV when /dev/vms is unreachable (out_n_members left at 0, but
- * the CALLER must distinguish this status from a genuine SS$_NORMAL/n==0
- * NOTMEMBER view -- never render the same message for both, vms-8d4).
+ * vms_kif_cluster_get_members - SHOW CLUSTER's read of the CONNECTION
+ * MANAGER's CLUB/CSB table (vms-551, re-pointed by FC-P3.9). WIRED:
+ * cmd_show_cluster calls this directly.
+ *
+ * THREE distinct outcomes, and the caller must render all three differently:
+ *   SS$_NOSUCHDEV  -- /dev/vms unreachable, OR the connection manager is not
+ *                     started (VAXCLUSTER=0 / before CLUSTER_START). Not a
+ *                     cluster fact at all.
+ *   SS$_NORMAL, n == 0 -- the executive answered and holds no CSB: the
+ *                     genuine NOTMEMBER view (vms-8d4).
+ *   SS$_NORMAL, n >= 1 -- one row per system the CLUB holds a block for, the
+ *                     local system included. A row is NOT a claim of
+ *                     membership: read its `state` column.
  */
 uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
                                      uint32_t max_members,
@@ -1047,6 +1031,192 @@ uint32_t vms_kif_cluster_get_members(struct vms_cluster_member *out_members,
         vms_memcpy(out_members, args.members, copy_n * sizeof(*out_members));
     if (out_n_members)
         *out_n_members = n;
+    return args.status;
+}
+
+/*
+ * vms_kif_sysgen_load - VMS_IOCTL_SYSGEN_LOAD (FC-P0.10). Loads the cluster
+ * SYSGEN parameters + CLUSTER_AUTHORIZE record the caller filled into every
+ * `in:` field of *args (struct vms_sysgen_load_args, vms_ioctl.h) into the
+ * executive's real struct vms_cluster (vms_cluster_node()). On return,
+ * args->status carries the SS$_ result -- SS$_BADPARAM is the negctl this
+ * ioctl enforces (VAXCLUSTER >= 1 with no SCSNODE loaded, INV-6).
+ *
+ * WIRED (FC-P0.10): STARTUP.EXE's cluster-sysgen loader (ovmx_init.c,
+ * load_cluster_sysgen_params) calls this once, before
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11) -- reproducing SYSBOOT's ordering.
+ */
+uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_SYSGEN_LOAD, args);
+
+    return args->status;
+}
+
+/*
+ * vms_kif_cluster_start - VMS_IOCTL_CLUSTER_START (FC-P0.11; join semantics
+ * FC-P3.9). See vms_kif.h for the contract; this wrapper adds no state of its
+ * own, only the copyin-free (no `in:` fields) call and the two readbacks --
+ * both of which the EXECUTIVE filled from its own objects, so a caller that
+ * renders them is quoting the executive, not this wrapper.
+ */
+uint32_t vms_kif_cluster_start(uint32_t *out_port_up, uint32_t *out_state)
+{
+    struct vms_cluster_start_args args;
+
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    KIF_CALL(VMS_IOCTL_CLUSTER_START, &args);
+
+    if (out_port_up)
+        *out_port_up = args.port_up;
+    if (out_state)
+        *out_state = args.cluster_state;
+
+    return args.status;
+}
+
+/*
+ * vms_kif_cluster_diag_port / _diag_conn / _diag_csb - the three SDA-shaped
+ * cluster diagnostics reads (FC-P0.9 / FC-P2.4 / FC-P3.8), which SHOW CLUSTER
+ * issues for its LOCAL_PORTS+CIRCUITS, CONNECTIONS and CLUSTER classes
+ * (src/vmsdcl/dcl_cmd_show.c).
+ *
+ * Each takes the caller's OWN args struct by pointer rather than exploding it
+ * into out-parameters: these are wide row structs (a port view, a CDT view, a
+ * CSB view), and a wrapper that unpacked them would be a second, drifting
+ * declaration of the same rows -- exactly the duplication the _Static_asserts
+ * in vms_devtab.c exist to prevent. The caller sets `row` and `index`; the
+ * wrapper zeroes nothing else and interprets nothing.
+ *
+ * `args->status` carries the executive's own SS$_ answer, INCLUDING the honest
+ * SS$_NOSUCHDEV for a layer that is not up or an index past the end -- the
+ * negctl each of those ioctls enforces. The row stays all-zero then, and a
+ * caller must not render it (INV-6: a zeroed row is not a channel, a
+ * connection or a system).
+ */
+uint32_t vms_kif_cluster_diag_port(struct vms_cluster_diag_port_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_CLUSTER_DIAG_PORT, args);
+
+    return args->status;
+}
+
+uint32_t vms_kif_cluster_diag_conn(struct vms_cluster_diag_conn_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_CLUSTER_DIAG_CONN, args);
+
+    return args->status;
+}
+
+uint32_t vms_kif_cluster_diag_csb(struct vms_cluster_diag_csb_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_CLUSTER_DIAG_CSB, args);
+
+    return args->status;
+}
+
+/*
+ * vms_kif_cluster_diag_join - VMS_IOCTL_CLUSTER_DIAG_JOIN (E69). The
+ * connection manager's JOIN TRANSITION RING plus the join FSM's live state,
+ * which SYS$SYSTEM:CNXTRACE.EXE prints to SYS$OUTPUT so a lab console capture
+ * records what the executive's join actually did.
+ *
+ * Same shape and same discipline as the three diagnostics reads above: the
+ * caller sets `first` and this wrapper interprets nothing. `args->status`
+ * carries the executive's own answer INCLUDING the honest SS$_NOSUCHDEV for a
+ * connection manager that is not up -- and the view stays all-zero then, which
+ * a caller must render as "no connection manager", never as an empty
+ * transcript (INV-6).
+ */
+uint32_t vms_kif_cluster_diag_join(struct vms_cluster_diag_join_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_CLUSTER_DIAG_JOIN, args);
+
+    return args->status;
+}
+
+/*
+ * vms_kif_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9). $GETSYI's
+ * cluster item codes, read from the connection manager's CLUB. WIRED:
+ * sys$getsyi/sys$getsyiw (src/libvms/syssvc/sys_misc.c) answer
+ * SYI$_CLUSTER_MEMBER/_NODES/_VOTES/_QUORUM/_FSYSID/_FTIME and SYI$_NODE_CSID
+ * from this and nothing else.
+ *
+ * By pointer for the same reason the three diagnostics above are: the view is
+ * wide, and every value carries a `_valid` companion the caller must honour
+ * (an item whose companion is clear is left UNRETRIEVED, never printed as 0).
+ */
+uint32_t vms_kif_cluster_getsyi(struct vms_cluster_getsyi_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(args, 0, sizeof(*args));
+    KIF_CALL(VMS_IOCTL_CLUSTER_GETSYI, args);
+
+    return args->status;
+}
+
+/*
+ * vms_kif_cluster_setcluevt - VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8). WIRED:
+ * sys$setcluevt/sys$clrcluevt (src/libvms/syssvc/sys_cluevt.c) register and
+ * clear this process's ONE cluster-event AST through it.
+ *
+ * `event_mask == 0` or `astadr == 0` DEREGISTERS -- the same call, mirroring
+ * $SETCLUEVT's own re-arm-by-recall shape. SS$_NOSUCHDEV when the connection
+ * manager is not started: a registration the executive cannot honour is
+ * refused rather than accepted and never delivered.
+ */
+uint32_t vms_kif_cluster_setcluevt(uint32_t event_mask, uint64_t astadr,
+                                   uint64_t astprm)
+{
+    struct vms_cluster_setcluevt_args args;
+
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    args.event_mask = event_mask;
+    args.astadr = astadr;
+    args.astprm = astprm;
+
+    KIF_CALL(VMS_IOCTL_CLUSTER_SETCLUEVT, &args);
+
     return args.status;
 }
 

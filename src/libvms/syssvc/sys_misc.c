@@ -14,11 +14,13 @@
  *
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
  * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
- *     SYI$_CLUSTER_NODES now read the EXECUTIVE cluster-membership block
- *     (vms_kif_cluster_get_members -> VMS_IOCTL_CLUSTER_MEMBER_GET, the vms-551
- *     block on /dev/vms), so F$GETSYI sees the same real member set as SHOW
- *     CLUSTER; absent /dev/vms those two items are left unretrieved (honest, not
- *     the old SCSD file). No fabricated membership.
+ *     SYI$_CLUSTER_NODES read the CONNECTION MANAGER's own CLUB through the one
+ *     projection that owns them (vms_kif_cluster_getsyi ->
+ *     VMS_IOCTL_CLUSTER_GETSYI -> cluster_api_getsyi_project, FC-P3.7/P3.9), so
+ *     F$GETSYI and SHOW CLUSTER read the SAME executive state and cannot
+ *     disagree. Absent /dev/vms, or with the connection manager not started,
+ *     both items are left unretrieved (honest -- not a non-member cluster of
+ *     one, not the retired daemon's file). No fabricated membership.
  * OVMX-LOCAL: sys$getsyi -- the REMAINING items (NODENAME/VERSION/SCSNODE/
  *     SCSSYSTEMID/... ) answer from uname()/host sysconf(), not an executive
  *     system block. csidadr and nodename are still discarded
@@ -26,8 +28,8 @@
  *     node is answered with this machine's numbers as though aimed here (vms-642
  *     open; the cluster-item cutover above is the first executive-backed slice).
  * OVMX-PARTIAL: sys$getsyiw (vms-5919) -- exec: the same SYI$_CLUSTER_MEMBER /
- *     SYI$_CLUSTER_NODES executive cluster-block read as sys$getsyi above (this
- *     is the wait form of the same service).
+ *     SYI$_CLUSTER_NODES read of the connection manager's CLUB as sys$getsyi
+ *     above (this is the wait form of the same service).
  * OVMX-LOCAL: sys$getsyiw -- the remaining items answer from uname()/host
  *     sysconf(), as sys$getsyi's local half.
  * OVMX-USERSPACE: sys$setddir (vms-947) -- the process default directory is a
@@ -265,49 +267,53 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
                 break;
             }
 
-            case SYI$_CLUSTER_MEMBER: {
-                /* vms-5919 (cutover from vms-8d4): read the LIVE member set from
-                 * the EXECUTIVE membership block (vms_cluster_members via
-                 * /dev/vms, vms-551), NOT SCSD's published file -- the exact
-                 * userspace-to-userspace facade vms-551 excised from the DCL
-                 * surface. A node is a member iff the executive holds >=1 member.
-                 * Absent /dev/vms the block is unreachable (SS$_NOSUCHDEV): answer
-                 * HONESTLY by leaving the item unretrieved -- never the file,
-                 * never a fabricated flag (Rule 9/INV-6, vms-b44). On the real
-                 * runtime /dev/vms is always present. Mirrors cmd_show_cluster. */
-                struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
-                uint32_t n = 0;
-                uint32_t st =
-                    vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX, &n);
-                if (st == SS$_NORMAL) {
-                    uint32_t member = (n >= 1) ? 1 : 0;
-                    if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                        *(uint32_t *)item->bufaddr = member;
-                    if (item->retlen) *item->retlen = sizeof(uint32_t);
-                } else {
-                    /* no executive -> no answer (honest), not the file, not a fab */
-                    if (item->retlen) *item->retlen = 0;
-                }
-                break;
-            }
-
+            case SYI$_CLUSTER_MEMBER:
             case SYI$_CLUSTER_NODES: {
-                /* vms-5919 (cutover): live node count from the EXECUTIVE block;
-                 * this node only (1) when the executive holds no cluster members.
-                 * Absent /dev/vms -> honest unretrieved item (never a fabricated
-                 * 1, never the file). Mirrors SYI$_CLUSTER_MEMBER above. */
-                struct vms_cluster_member members[VMS_CLUSTER_MEMBER_MAX];
-                uint32_t n = 0;
-                uint32_t st =
-                    vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX, &n);
-                if (st == SS$_NORMAL) {
-                    uint32_t nodes = (n >= 1) ? n : 1;
-                    if (item->bufaddr && item->buflen >= sizeof(uint32_t))
-                        *(uint32_t *)item->bufaddr = nodes;
-                    if (item->retlen) *item->retlen = sizeof(uint32_t);
-                } else {
+                /*
+                 * FC-P3.9 cutover (from vms-5919, itself a cutover from
+                 * vms-8d4's file-reading facade): both items are answered from
+                 * the CONNECTION MANAGER's own CLUB, through the ONE projection
+                 * that owns them (cluster_api_getsyi_project, FC-P3.7) --
+                 * VMS_IOCTL_CLUSTER_GETSYI. So F$GETSYI and SHOW CLUSTER cannot
+                 * disagree about the same node: they read the same CLUB.
+                 *
+                 * WHAT CHANGED, AND WHY IT IS AN UPGRADE. The predecessor
+                 * counted rows in a module-global block that a USERSPACE daemon
+                 * wrote, and derived "member" from "the block has >= 1 row" --
+                 * a count of what a daemon had published, not a fact about this
+                 * cluster. CLUSTER_MEMBER is now the executive's own
+                 * cl->state == VMS_CLUSTER_MEMBER, which ONLY a real membership
+                 * record naming this node's SCSSYSTEMID ever sets, and
+                 * CLUSTER_NODES is the CLUB's own p. 7-49 SELECTED-flag member
+                 * count. NOTHING here derives one from the other.
+                 *
+                 * CLUSTER_NODES IS NO LONGER FLOORED AT 1. The predecessor
+                 * returned 1 when the block was empty ("this node only"), which
+                 * was a userspace `?:` and not a reading of anything. A node
+                 * that is not a cluster member reports the CLUB's real count,
+                 * and a caller that wants "how many systems do I know about"
+                 * asks SHOW CLUSTER, which reads the CSB table.
+                 *
+                 * SS$_NOSUCHDEV -- no /dev/vms, or the connection manager is
+                 * not started (VAXCLUSTER=0, or before CLUSTER_START) -- leaves
+                 * the item UNRETRIEVED, which is the honest answer for a
+                 * question nothing in the executive can answer (Rule 9/INV-6,
+                 * vms-b44). It is NOT reported as a non-member cluster of one.
+                 */
+                struct vms_cluster_getsyi_args cargs;
+                uint32_t st = vms_kif_cluster_getsyi(&cargs);
+                uint32_t val;
+
+                if (st != SS$_NORMAL) {
                     if (item->retlen) *item->retlen = 0;
+                    break;
                 }
+                val = (item->item_code == SYI$_CLUSTER_MEMBER)
+                          ? (uint32_t)cargs.cluster_member
+                          : cargs.cluster_nodes;
+                if (item->bufaddr && item->buflen >= sizeof(uint32_t))
+                    *(uint32_t *)item->bufaddr = val;
+                if (item->retlen) *item->retlen = sizeof(uint32_t);
                 break;
             }
 

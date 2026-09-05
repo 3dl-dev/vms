@@ -461,22 +461,33 @@ struct vms_getlki_args {
  * DLM resource-directory + mastering readback (vms-ci.5 DB).
  *
  * A READ-ONLY diagnostic view of a resource's DLM state: which node is its
- * DIRECTORY (dir_csid, the node reached by hashing resnam), which node
- * MASTERS it (master_csid, 0 until mastered on first $ENQ), and how many
- * locks are granted on it. It does NOT create or master a resource -- an
- * unknown name comes back found=0 with master_csid=0 -- so it can be called
- * before and after an $ENQ to prove the local-master path actually mastered
- * the resource, rather than a test asserting a hand-set structure.
+ * DIRECTORY (dir_csid), which node MASTERS it (master_csid, 0 until mastered
+ * on first $ENQ), and how many locks are granted on it. It does NOT create or
+ * master a resource -- an unknown name comes back found=0 with master_csid=0 --
+ * so it can be called before and after an $ENQ to prove the local-master path
+ * actually mastered the resource, rather than a test asserting a hand-set
+ * structure.
+ *
+ * dir_csid IS 0 WHEN THERE IS NO ANSWER (FC-P4.3). It used to be reported for
+ * every name, because the executive COMPUTED it (an OVMX hash over a static
+ * member vector). It is now the entry the cluster's own Lock Directory Weight
+ * Vector holds at the index of the cluster's own wire-carried hash for that
+ * name (Davis pp. 6-31/6-50, src/kernel-core/vms_dlm_ldwv.h), which the
+ * executive can only report when it genuinely holds both. 0 means "not
+ * resolved" -- no cluster, no wire-learned hash, or a vector under rebuild --
+ * exactly as master_csid 0 means "unmastered". Reporting a computed value here
+ * would be a readback asserting state the executive does not hold (INV-6).
  *
  * is_local_master is (master_csid == local_csid), surfaced so a test need not
- * know the CSID value. Grounding: IDSM lock-management directory lookups
- * (mined transcript ch6-part02 pp. 6-18..6-35); docs/design-cluster-node.md §5.
+ * know the CSID value.
  */
 struct vms_resmaster_args {
     char     resnam[32];        /* in: resource name (null-terminated) */
     uint32_t found;             /* return: 1 if a resource block exists */
     uint32_t local_csid;        /* return: this node's CSID */
-    uint32_t dir_csid;          /* return: directory node CSID for resnam */
+    uint32_t dir_csid;          /* return: the directory node for resnam, or 0
+                                 * when the executive cannot resolve one (see
+                                 * the note above) -- never a computed value */
     uint32_t master_csid;       /* return: mastering node CSID; 0 = unmastered */
     uint32_t is_local_master;   /* return: 1 if mastered by this node */
     uint32_t n_granted;         /* return: granted locks on the resource */
@@ -505,7 +516,7 @@ struct vms_resmaster_args {
  * DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1).
  *
  * The RECEIVE side of the distributed lock manager. A DLM message that arrived
- * over SCS from a REMOTE node (decoded by src/vmsscs/scs_dlm.c) is marshalled
+ * over SCS from a REMOTE node (decoded by the cat-02 codec) is marshalled
  * into the executive through this ioctl so it reaches the kernel lock manager's
  * cross-node handler (vms_lock_dlm_xnode_dispatch). Rung 1 is the TRANSPORT
  * only: the message reaches the handler decoded and the handler returns
@@ -514,7 +525,7 @@ struct vms_resmaster_args {
  * honestly fails, exactly as dlm_resolve_master() already does for the SEND side.
  *
  * `op` carries a DLM message kind as a plain byte so this header takes no
- * dependency on src/vmsscs; the VMS_DLM_OP_* values below MUST match
+ * dependency on the cluster codec; the VMS_DLM_OP_* values below MUST match
  * scs_dlm.h's SCS_DLM_OP_* (scsd.c static-asserts they do).
  */
 #define VMS_DLM_OP_ENQ      1u   /* lock/convert request  -> master  */
@@ -611,24 +622,37 @@ _Static_assert(sizeof(struct vms_dlm_xnode_args) == 120,
 #define VMS_IOCTL_DLM_XNODE _IOWR(VMS_IOC_MAGIC, 0x35, struct vms_dlm_xnode_args)
 
 /*
- * $DLM member departure (rd vms-2bf, DLM rung H10a). scsd calls this when it
- * observes a GRACEFUL cluster departure (SCS_MEMBER_OP_DEPART): the executive
- * marks departed_csid gone from the LIVE directory membership -- the static
- * dlm_member_csids insmod vector (0444) is NOT mutated; a runtime departed-set
- * filters it -- and invalidates the cached directory so resolution re-runs over
- * the shrunk set. A departed master's resources then remaster to a survivor
- * (dlm_directory_csid re-hashes over fewer members). members_live returns the
- * post-shrink directory-member count; found is 1 iff departed_csid was a
- * configured member. INV-6: this reflects a REAL departure the connection
- * manager (scsd) observed and reported, never a fabricated membership change;
- * with no /dev/vms there is no executive to shrink (honest SS$_NOSUCHDEV).
- * (Supersedes the note above that remaster adds no ioctl -- the departure
- * INGRESS is this ioctl; the cross-node lock-rebuild send is the H10b rung.)
+ * $DLM member departure. The connection manager calls this when it observes a
+ * GRACEFUL cluster departure.
+ *
+ * WHAT IT DOES (revised by FC-P4.3). The membership this node's directory
+ * resolves over is the connection manager's CLUB, and a departure is handled by
+ * the transition that removes the member: Phase 1 discards the Lock Directory
+ * Weight Vector, Phase 2 refills it, and every cached directory answer in the
+ * lock engine is re-resolved because the vector's generation changed (Davis
+ * p. 6-33; src/kernel-core/vms_dlm_ldwv.h). The static dlm_member_csids insmod
+ * vector this ioctl used to filter is GONE with the exec_jhash directory it fed.
+ *
+ * What remains here is the LOCK STATE the departure orphans: a resource
+ * MASTERED on the departed node loses its master (it re-masters on first use),
+ * cached directory answers are dropped eagerly, and a proxy LKB still pending
+ * at the departed master is ended honestly rather than left asleep forever.
+ * Reconstructing the locks themselves is the DLM rebuild, not this.
+ *
+ * INV-6: this reflects a REAL departure the connection manager observed, never
+ * a fabricated membership change; with no /dev/vms there is no executive to
+ * tell (honest SS$_NOSUCHDEV).
  */
 struct vms_dlm_depart_args {
     uint32_t departed_csid;   /* in: the CSID that left the cluster */
-    uint32_t members_live;    /* return: live directory-member count after shrink */
-    uint32_t found;           /* return: 1 iff departed_csid was a configured member */
+    uint32_t members_live;    /* return: ALWAYS 0 -- the live member count is the
+                               * connection manager's fact (CLUSTER_DIAG_CSB),
+                               * not the lock engine's; answering with a count
+                               * this facility no longer holds would be the
+                               * mirrored-membership fabrication FC-P3.9 deleted */
+    uint32_t found;           /* return: 1 iff the departed CSID actually mastered
+                               * a resource on this node -- a real observation,
+                               * not a lookup in a configured list */
     uint32_t status;          /* return: SS$_ status */
 };
 _Static_assert(sizeof(struct vms_dlm_depart_args) == 16,
@@ -667,18 +691,18 @@ _Static_assert(VMS_IOCTL_DLM_GET_GRANTED == 0xC0385637u,
  * $DLM pending-wait enumeration (rd vms-ec75, DLM rung H11) -- the HOME authority
  * for distributed deadlock search. Enumerates THIS node's outstanding cross-node
  * requests that are still PENDING (granted_mode == NL): each is a requester-side
- * ORIGIN record (vms_dlm_origin) this node's scsd created from a queued-reply.
- * For the edge-chase, "what is CSID H waiting for?" is answered by asking H's home
- * node to run this: every returned entry names a resource H waits on (resnam), the
- * node mastering it (master_csid), and H's own requester-side handle for the wait
- * (req_lkid) -- exactly one outgoing wait-for edge. INV-6: a READ of real
- * vms_dlm_origin_list state; count=0 when nothing is pending, never a fabricated
- * edge. This surfaces EXISTING executive state (the origin list H5's grant_recv
- * already builds), so no wait-for graph is stored or guessed.
+ * PROXY LKB (FC-P4.4; formerly a vms_dlm_origin record) that a master's reply
+ * completed. For the edge-chase, "what is CSID H waiting for?" is answered by
+ * asking H's home node to run this: every returned entry names a resource H waits
+ * on (resnam), the node mastering it (master_csid), and H's own requester-side
+ * handle for the wait (req_lkid) -- exactly one outgoing wait-for edge. INV-6: a
+ * READ of real proxy-LKB state; count=0 when nothing is pending, never a
+ * fabricated edge. This surfaces EXISTING executive state, so no wait-for graph
+ * is stored or guessed.
  */
 #define VMS_DLM_ENUM_WAITS_MAX 8u   /* entries returned per call (a chase visits few) */
 struct vms_dlm_wait_ent {
-    char     resnam[32];        /* resource this node waits on (its origin's resnam) */
+    char     resnam[32];        /* resource this node waits on (its proxy's RSB name) */
     uint32_t master_csid;       /* the node mastering that resource                  */
     uint32_t req_lkid;          /* this node's requester-side handle for the wait    */
     uint32_t req_csid;          /* this node's own CSID (the waiter)                 */
@@ -698,68 +722,81 @@ _Static_assert(VMS_IOCTL_DLM_ENUM_WAITS == 0xC1905638u,
                "VMS_IOCTL_DLM_ENUM_WAITS encodes differently than the reference build");
 
 /*
- * Cluster membership crosses into the executive (rd vms-551,
- * docs/design-cluster-membership-executive.md). vms.ko owns a small
- * module-global membership block -- one entry per node the connection
- * manager (scsd) currently sees -- so SHOW CLUSTER (and, later, $GETSYI)
- * reads a REAL executive view through /dev/vms instead of scsd's peer
- * table publishing a file straight to another userspace process (the
- * INV-6/Rule-9 LARP class). SEPARATE from dlm_member_csids (vms_lock.c):
- * that vector is a STATIC 0444 insmod param, CSID-only, for DLM directory
- * hashing (vms-50e is active on it); this block is SCSNODE-name
- * membership state, mutable at runtime by scsd.
+ * Enumerate this node's STANDING cluster-registrable system locks (vms-1f4, the
+ * enumeration seam of faithful cluster DLM registration vms-3eb). These are the
+ * locks the executive holds for the node's LIFE -- today the per-volume
+ * "F11B$v<label>" lock a faithful MOUNT holds from $MOUNT to $DISMOUNT (vms-25e),
+ * later the mount (MOU$) and clusterwide-logical (LNM$CWLOGICALS) locks -- that
+ * the connection manager (scsd) must register to the coordinator during a
+ * directory rebuild. Each entry gives the resource name and this node's LOCAL
+ * lock handle, which becomes the op-0x01 requester lkid on the wire.
  *
- * NOTMEMBER != NOSUCHDEV, and this struct pair is what keeps them distinct:
+ * INV-6: a READ of REAL lock-manager state -- one entry per lock the executive
+ * genuinely holds (a nonzero vol_lkid on a mounted volume). count=0 when the node
+ * holds no standing locks; never a fabricated lock. This is the honest boundary
+ * scsd registers FROM: it can only announce to the cluster what the executive
+ * actually holds.
+ */
+#define VMS_DLM_ENUM_STANDING_MAX 16u   /* standing system locks returned per call */
+struct vms_dlm_standing_ent {
+    char     resnam[32];        /* the standing lock's resource name (e.g. "F11B$vOVMXSYS") */
+    uint32_t lkid;              /* this node's LOCAL handle for it (the op-0x01 req_lkid)   */
+    uint32_t mode;              /* granted mode (LCK_K_NLMODE for the volume presence lock) */
+};
+struct vms_dlm_enum_standing_args {
+    uint32_t count;             /* return: standing locks filled (<= VMS_DLM_ENUM_STANDING_MAX) */
+    uint32_t total;             /* return: total standing locks the node holds (may exceed count) */
+    uint32_t status;            /* return: SS$_ status */
+    uint32_t pad;               /* zero */
+    struct vms_dlm_standing_ent ent[VMS_DLM_ENUM_STANDING_MAX];
+};
+_Static_assert(sizeof(struct vms_dlm_enum_standing_args) == 16 + 40 * 16,
+               "vms_dlm_enum_standing_args changed size -- VMS_IOCTL_DLM_ENUM_STANDING ABI break");
+#define VMS_IOCTL_DLM_ENUM_STANDING _IOWR(VMS_IOC_MAGIC, 0x3c, struct vms_dlm_enum_standing_args)
+_Static_assert(VMS_IOCTL_DLM_ENUM_STANDING == 0xC290563Cu,
+               "VMS_IOCTL_DLM_ENUM_STANDING encodes differently than the reference build");
+
+/*
+ * Cluster membership is the CONNECTION MANAGER's, and the connection manager
+ * is executive-resident (FC-P3.8/FC-P3.9, docs/design-faithful-cluster-
+ * executive.md SS3.4). One row per system the CLUB knows about.
+ *
+ * WHAT THIS USED TO BE. rd vms-551 gave vms.ko a module-global
+ * `vms_cluster_members[]` block that a USERSPACE daemon (scsd) POPULATED
+ * through VMS_IOCTL_CLUSTER_MEMBER_SET/_CLEAR and SHOW CLUSTER read back --
+ * an executive-shaped mirror of a userspace fact, which is the shape the
+ * operator's 2026-09-02 reset ruling retired. FC-P3.9 DELETED both mutators,
+ * the block and the daemon: the only remaining member ioctl is this READ, and
+ * it projects the connection manager's own CLUB and CSB table
+ * (src/kernel-core/vms_cnxman.c). Nothing outside the executive can write
+ * membership any more, because nothing can: there is no setter.
+ *
+ * HONEST ROWS, NOT A MEMBER COUNT. A CSB exists from the moment this node
+ * OBSERVES another connection manager (p. 7-23, state NEW) -- long before the
+ * cluster has assigned anyone a CSID. So a row here means "a system this
+ * node's CLUB holds a block for", and `state` carries WHICH of the ten CSB
+ * connectivity states it is in. A NEW row is not a member and never claims to
+ * be; `csid` is 0 until the cluster assigns one (integration note E30), which
+ * is the honest "not yet learned", never "node zero".
+ *
+ * NOTMEMBER != NOSUCHDEV, and this struct is what keeps them distinct:
  * the executive reachable with n_members==0 is SS$_NORMAL (a genuine
  * NOTMEMBER view); the executive UNREACHABLE (no /dev/vms) is the transport
  * failure SS$_NOSUCHDEV a caller sees from KIF_CALL itself, never from these
  * args. Never conflate the two (vms-8d4 precedent).
  */
 struct vms_cluster_member {
-    uint32_t csid;               /* cluster system id (SCS low-16 identity) */
+    uint32_t csid;               /* cluster system id, 0 = not yet assigned */
     uint32_t sysid;              /* SCSSYSTEMID */
     char     scsnode[16];        /* SCSNODE name, NUL-padded ("" until learned) */
-    char     state[16];          /* "MEMBER", "BRK_NON", ... */
+    char     state[16];          /* the CSB connectivity state: "NEW", "MEMBER", ... */
 };
 #define VMS_CLUSTER_MEMBER_MAX 96u   /* VMScluster tops out at 96 nodes */
 
 /*
- * VMS_IOCTL_CLUSTER_MEMBER_SET (rd vms-551). scsd (a direct POSIX ioctl
- * issuer, like VMS_IOCTL_DLM_MEMBER_DEPART) inserts-or-updates one member by
- * csid: csid already present -> update sysid/scsnode/state in place; csid
- * absent -> append (refused SS$_INSFMEM if the block is full).
- */
-struct vms_cluster_member_set_args {
-    uint32_t csid;                /* in: the member's csid (the key)     */
-    uint32_t sysid;               /* in: SCSSYSTEMID                     */
-    char     scsnode[16];         /* in: SCSNODE name, NUL-padded        */
-    char     state[16];           /* in: "MEMBER", "BRK_NON", ...        */
-    uint32_t status;              /* return: SS$_ status                 */
-};
-_Static_assert(sizeof(struct vms_cluster_member_set_args) == 44,
-               "vms_cluster_member_set_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_SET ABI break");
-#define VMS_IOCTL_CLUSTER_MEMBER_SET _IOWR(VMS_IOC_MAGIC, 0x39, struct vms_cluster_member_set_args)
-_Static_assert(VMS_IOCTL_CLUSTER_MEMBER_SET == 0xC02C5639u,
-               "VMS_IOCTL_CLUSTER_MEMBER_SET encodes differently than the reference build");
-
-/*
- * VMS_IOCTL_CLUSTER_MEMBER_CLEAR (rd vms-551). scsd removes one member by
- * csid (compacting the array). Idempotent: a csid not present is a no-op,
- * SS$_NORMAL -- a departure the executive never SET is not an error.
- */
-struct vms_cluster_member_clear_args {
-    uint32_t csid;                 /* in: the member's csid to remove */
-    uint32_t status;               /* return: SS$_ status             */
-};
-_Static_assert(sizeof(struct vms_cluster_member_clear_args) == 8,
-               "vms_cluster_member_clear_args changed size -- VMS_IOCTL_CLUSTER_MEMBER_CLEAR ABI break");
-#define VMS_IOCTL_CLUSTER_MEMBER_CLEAR _IOWR(VMS_IOC_MAGIC, 0x3a, struct vms_cluster_member_clear_args)
-_Static_assert(VMS_IOCTL_CLUSTER_MEMBER_CLEAR == 0xC008563Au,
-               "VMS_IOCTL_CLUSTER_MEMBER_CLEAR encodes differently than the reference build");
-
-/*
- * VMS_IOCTL_CLUSTER_MEMBER_GET (rd vms-551). SHOW CLUSTER's read: copies out
- * the live view (up to VMS_CLUSTER_MEMBER_MAX members) + the live count.
+ * VMS_IOCTL_CLUSTER_MEMBER_GET (rd vms-551; re-pointed at the CLUB/CSB table
+ * by FC-P3.9, integration note E35). SHOW CLUSTER's read: copies out the live
+ * view (up to VMS_CLUSTER_MEMBER_MAX rows) + the live count.
  * n_members==0 is a valid SS$_NORMAL (NOTMEMBER), never an error -- see the
  * NOTMEMBER != NOSUCHDEV note above. 3848 bytes total, under NetBSD's
  * one-page IOCPARM_MAX (4096), so this rides the same pre-copy _IOWR path as
@@ -775,6 +812,594 @@ _Static_assert(sizeof(struct vms_cluster_member_get_args) == 3848,
 #define VMS_IOCTL_CLUSTER_MEMBER_GET _IOWR(VMS_IOC_MAGIC, 0x3b, struct vms_cluster_member_get_args)
 _Static_assert(VMS_IOCTL_CLUSTER_MEMBER_GET == 0xCF08563Bu,
                "VMS_IOCTL_CLUSTER_MEMBER_GET encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_DIAG_PORT (FC-P0.9, rd docs/plan-faithful-cluster-
+ * executive.md). The port's (PEA0:, PEDRIVER role) diagnostics view --
+ * SDA's SHOW PORT / SCACP SHOW CHANNEL equivalent. `row` names WHICH of the
+ * port's three real projections (vms_pe_snapshot / _channel_snapshot /
+ * _vc_snapshot, src/kernel-core/vms_pe.c) the call fills; `index` walks
+ * channels/circuits for the CHANNEL/VC rows and is ignored for the PORT row.
+ * Only the ONE struct `row` names is meaningful on a given call -- named,
+ * never guessed by a caller scanning every field for a nonzero one.
+ *
+ * status carries the honest SS$_NOSUCHDEV before the port has ever come up
+ * (no CLUSTER_START yet, VAXCLUSTER=0, or a channel/VC index past the
+ * table's high-water mark) -- the negctl this ioctl's plan row requires.
+ *
+ * The three row structs mirror src/kernel-core/vms_cluster_snapshot.h's
+ * vms_pe_view / vms_pe_channel_view / vms_pe_vc_view byte-for-byte (same
+ * "ONE facility source, duplicated struct declaration" shape
+ * VMS_IOCTL_CLUSTER_MEMBER_GET above already uses for vms_cluster_member):
+ * this header must stay includable with no kernel-core dependency, so the
+ * layout is copied here rather than shared by #include, and the
+ * _Static_asserts below pin the two copies to the same size.
+ */
+#define VMS_CLUSTER_DIAG_PORT_ROW      0u  /* the port-wide view */
+#define VMS_CLUSTER_DIAG_PORT_CHANNEL  1u  /* one channel row, by `index` */
+#define VMS_CLUSTER_DIAG_PORT_VC       2u  /* one virtual-circuit row, by `index` */
+
+struct vms_pe_view_wire {
+    uint8_t  port_open;
+    uint8_t  hwaddr_valid;
+    uint8_t  hwaddr[6];
+    uint8_t  link_up;
+    uint8_t  pad0[3];
+    uint32_t mtu;
+    uint32_t max_pktsz;
+    uint32_t n_channels;
+    uint32_t n_vcs;
+    uint32_t rx_frames;
+    uint32_t rx_drops_nobuf;
+    uint32_t rx_drops_badclass;
+    uint32_t tx_frames;
+    uint32_t tx_errors;
+};
+_Static_assert(sizeof(struct vms_pe_view_wire) == 48,
+               "vms_pe_view_wire changed size -- must match vms_pe_view");
+
+struct vms_pe_channel_view_wire {
+    uint8_t  remote_mac[6];
+    uint8_t  state;
+    uint8_t  remote_sysid_valid;
+    uint32_t remote_sysid_lo;
+    uint32_t remote_sysid_hi;
+    uint32_t last_rx_ms;
+    uint32_t hello_tx;
+    uint32_t hello_rx;
+    uint32_t verified_pktsz;
+};
+_Static_assert(sizeof(struct vms_pe_channel_view_wire) == 32,
+               "vms_pe_channel_view_wire changed size -- must match vms_pe_channel_view");
+
+struct vms_pe_vc_view_wire {
+    uint32_t peer_sysid_lo;
+    uint32_t peer_sysid_hi;
+    uint8_t  state;
+    uint8_t  pad0[3];
+    uint32_t send_seq;
+    uint32_t recv_seq;
+    uint32_t recv_ack;
+    uint32_t peer_recv_ack;
+    uint32_t unacked;
+    uint32_t retransmits;
+    uint32_t incarnation_lo;
+    uint32_t incarnation_hi;
+    uint32_t timvcfail_ms_left;
+    uint32_t credits_send;
+    uint32_t credits_receive;
+    /* FC-P1.6: appended, never inserted -- see vms_cluster_snapshot.h's
+     * vms_pe_vc_view for the field-by-field rationale (both real pe_vc
+     * counters, INV-6). */
+    uint32_t rx_gaps;
+    uint8_t  down_reason;
+    uint8_t  pad1[3];
+};
+_Static_assert(sizeof(struct vms_pe_vc_view_wire) == 64,
+               "vms_pe_vc_view_wire changed size -- must match vms_pe_vc_view");
+
+struct vms_cluster_diag_port_args {
+    uint32_t row;                       /* in: VMS_CLUSTER_DIAG_PORT_*        */
+    uint32_t index;                     /* in: channel/vc index; else ignored */
+    uint32_t status;                    /* return: SS$_ status                */
+    uint32_t pad0;
+    struct vms_pe_view_wire         port;      /* valid iff row == _ROW     */
+    struct vms_pe_channel_view_wire channel;   /* valid iff row == _CHANNEL */
+    struct vms_pe_vc_view_wire      vc;        /* valid iff row == _VC      */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_port_args) == 160,
+               "vms_cluster_diag_port_args changed size -- VMS_IOCTL_CLUSTER_DIAG_PORT ABI break");
+#define VMS_IOCTL_CLUSTER_DIAG_PORT _IOWR(VMS_IOC_MAGIC, 0x3d, struct vms_cluster_diag_port_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_PORT == 0xC0A0563Du,
+               "VMS_IOCTL_CLUSTER_DIAG_PORT encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_DIAG_CONN (FC-P2.4, docs/plan-faithful-cluster-
+ * executive.md). SCS's diagnostics view -- SDA's SHOW CONNECTIONS equivalent.
+ * `row` names WHICH of the two real projections (vms_scs_snapshot /
+ * vms_scs_cdt_snapshot, src/kernel-core/vms_scs.c) the call fills; `index`
+ * walks the CDL for the CDT row and is ignored for the SCS row. Exactly the
+ * shape VMS_IOCTL_CLUSTER_DIAG_PORT above already uses, for the same reasons.
+ *
+ * THE CDT ROW IS THE SDA `SHOW CONNECTIONS` DECODER RING (wire spec
+ * docs/cluster-protocol-spec.md SS3, `sda-scs-extract-vax1.txt`), column for
+ * column, so a lab comparison against a real VAX is a field-by-field match and
+ * not an interpretation:
+ *
+ *     Local SYSAP        <- local_name  (16 bytes, blank-padded as the wire
+ *                                        carries it)
+ *     Remote             <- peer_sysid_lo/_hi + remote_name
+ *     Local Con. ID      <- local_conid
+ *     Remote Con. ID     <- remote_conid, and ONLY when remote_conid_valid;
+ *                           the reference extract's own `Remote Con. ID
+ *                           00000000` for a connection that never bound one is
+ *                           reproduced by the flag being CLEAR, not by
+ *                           printing a zero that could be mistaken for a
+ *                           handle (INV-6, rule 2 of vms_cluster_snapshot.h)
+ *     Credit (Send/Recv) <- credit_send / credit_receive (+ credit_pending,
+ *                           the ledger's third counter, which SDA does not
+ *                           print but the executive really holds)
+ *     State              <- `state`, an enum vms_scs_cdt_state ordinal whose
+ *                           NAME comes from scs_cdt_state_name()
+ *     MTYPE              <- msgtype, spec SS4(m)'s abs-30 phase byte
+ *
+ * Every one of those is a projection of a live struct scs_cdt taken under the
+ * fork mutex; nothing here is a frame count standing in for state, and a CDT
+ * the executive does not hold is SS$_NOSUCHDEV with an all-zero row.
+ *
+ * The two row structs mirror src/kernel-core/vms_cluster_snapshot.h's
+ * vms_scs_view / vms_scs_cdt_view byte-for-byte -- same "ONE facility source,
+ * duplicated struct declaration" shape as the CLUSTER_DIAG_PORT rows, because
+ * this header must stay includable with no kernel-core dependency.
+ */
+#define VMS_CLUSTER_DIAG_CONN_ROW 0u  /* the SCS-wide view */
+#define VMS_CLUSTER_DIAG_CONN_CDT 1u  /* one CDT row, by `index` */
+
+struct vms_scs_view_wire {
+    uint32_t n_sbs;
+    uint32_t n_cdts;
+    uint32_t n_sysaps;
+    uint32_t conid_seq;
+    uint32_t conid_epoch;
+    uint32_t dir_lookups_served;
+    uint32_t dir_lookups_sent;
+    uint32_t credit_stalls;
+};
+_Static_assert(sizeof(struct vms_scs_view_wire) == 32,
+               "vms_scs_view_wire changed size -- must match vms_scs_view");
+
+struct vms_scs_cdt_view_wire {
+    uint32_t local_conid;
+    uint32_t remote_conid;
+    uint8_t  remote_conid_valid;
+    uint8_t  state;
+    uint8_t  pad0[2];
+    uint32_t peer_sysid_lo;
+    uint32_t peer_sysid_hi;
+    uint8_t  local_name[16];    /* VMS_SCS_PROCNAME_LEN */
+    uint8_t  remote_name[16];
+    uint16_t credit_send;
+    uint16_t credit_receive;
+    uint16_t credit_pending;
+    uint16_t pad1;
+    uint32_t msgs_sent;
+    uint32_t msgs_received;
+    uint8_t  msgtype;
+    uint8_t  pad2[3];
+};
+_Static_assert(sizeof(struct vms_scs_cdt_view_wire) == 72,
+               "vms_scs_cdt_view_wire changed size -- must match vms_scs_cdt_view");
+
+struct vms_cluster_diag_conn_args {
+    uint32_t row;                       /* in: VMS_CLUSTER_DIAG_CONN_*        */
+    uint32_t index;                     /* in: CDL index; ignored for _ROW    */
+    uint32_t status;                    /* return: SS$_ status                */
+    uint32_t pad0;
+    struct vms_scs_view_wire     scs;   /* valid iff row == _ROW              */
+    struct vms_scs_cdt_view_wire cdt;   /* valid iff row == _CDT              */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_conn_args) == 120,
+               "vms_cluster_diag_conn_args changed size -- VMS_IOCTL_CLUSTER_DIAG_CONN ABI break");
+/*
+ * NR 0x69, not 0x40: the cluster block 0x39-0x3f is FULL (MEMBER_SET through
+ * CLUSTER_START), and 0x40-0x4d belong to the register/process groups. 0x69 is
+ * the next unused number in this magic. The encoded value below was RECOMPUTED
+ * for this struct's size, the way FC-P1.6 had to recompute
+ * VMS_IOCTL_CLUSTER_DIAG_PORT's when its VC row grew: _IOWR folds sizeof(type)
+ * into the command word, so an appended field silently changes the ioctl
+ * NUMBER, and this assert is what turns that into a build failure instead of an
+ * ENOTTY on a booted node.
+ */
+#define VMS_IOCTL_CLUSTER_DIAG_CONN _IOWR(VMS_IOC_MAGIC, 0x69, struct vms_cluster_diag_conn_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_CONN == 0xC0785669u,
+               "VMS_IOCTL_CLUSTER_DIAG_CONN encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_DIAG_CSB (FC-P3.8, docs/plan-faithful-cluster-
+ * executive.md). The connection manager's own SDA equivalent (SHOW CLUSTER's
+ * underlying CLUB/CSB table): `row` names WHICH of the two real projections
+ * (cnxman_get_club / cnxman_get_csb, src/kernel-core/vms_cnxman.c) the call
+ * fills; `index` walks the CSB table for the CSB row and is ignored for the
+ * CLUB row. Same "row selects one of two real snapshots" shape as
+ * VMS_IOCTL_CLUSTER_DIAG_PORT/_CONN above, for the same reasons.
+ *
+ * Both rows are PURE PROJECTIONS of a live struct vms_club / struct vms_csb,
+ * taken under the fork mutex (cnxman_club_project / cnxman_csb_project,
+ * src/kernel-core/vms_cnxman_csb.c); a CSB the executive does not hold is
+ * SS$_NOSUCHDEV with an all-zero row, never a placeholder member (INV-6).
+ * `csb.csid_valid` clear is the honest "not yet learned" the connection
+ * manager reads as NEW, not a fabricated CSID 0 (integration note E30: this
+ * is the routine case until the op-06 layout is lab-pinned).
+ *
+ * The two row structs mirror src/kernel-core/vms_cluster_snapshot.h's
+ * vms_club_view / vms_csb_view byte-for-byte -- same "ONE facility source,
+ * duplicated struct declaration" shape as the sibling DIAG ioctls, because
+ * this header must stay includable with no kernel-core dependency.
+ */
+#define VMS_CLUSTER_DIAG_CSB_CLUB 0u  /* the CLUB-wide view */
+#define VMS_CLUSTER_DIAG_CSB_CSB  1u  /* one CSB row, by `index` */
+
+struct vms_club_view_wire {
+    uint32_t local_csid;
+    uint8_t  local_csid_valid;
+    uint8_t  state;
+    uint8_t  quorum_lost;
+    uint8_t  pad0;
+    uint32_t epoch;
+    uint32_t cluster_nodes;
+    uint16_t cevotes;
+    uint16_t quorum;
+    uint16_t expected_votes;
+    uint16_t pad1;
+    uint32_t bitmap[4];         /* VMS_CLUB_BITMAP_WORDS */
+    uint32_t bitmap_slots_seen;
+    uint8_t  transition_active;
+    uint8_t  transition_class;
+    uint8_t  barrier_step;
+    uint8_t  coordinator_valid;
+    uint32_t coordinator_csid;
+    uint32_t outstanding_rebuild;
+    uint32_t ftime_lo;
+    uint32_t ftime_hi;
+    uint32_t fsysid_lo;
+    uint32_t fsysid_hi;
+    uint32_t reformations;
+};
+_Static_assert(sizeof(struct vms_club_view_wire) == 76,
+               "vms_club_view_wire changed size -- must match vms_club_view");
+
+struct vms_csb_view_wire {
+    uint32_t csid;
+    uint8_t  csid_valid;
+    uint8_t  state;
+    uint8_t  is_member;
+    uint8_t  is_selected;
+    uint8_t  status_rcvd;
+    uint8_t  scsnode_len;
+    uint8_t  scsnode[8];        /* VMS_SCSNODE_MAX + 2 */
+    uint16_t votes;
+    uint8_t  votes_valid;
+    uint8_t  lockdirwt;
+    uint8_t  lockdirwt_valid;
+    uint8_t  pad0;
+    uint32_t peer_sysid_lo;
+    uint32_t peer_sysid_hi;
+    uint32_t sw_version;
+    uint32_t cdt_conid;
+    uint32_t incarnation_lo;
+    uint32_t incarnation_hi;
+    uint32_t last_status_ms;
+};
+_Static_assert(sizeof(struct vms_csb_view_wire) == 52,
+               "vms_csb_view_wire changed size -- must match vms_csb_view");
+
+struct vms_cluster_diag_csb_args {
+    uint32_t row;                       /* in: VMS_CLUSTER_DIAG_CSB_*         */
+    uint32_t index;                     /* in: CSB index; ignored for _CLUB   */
+    uint32_t status;                    /* return: SS$_ status                */
+    uint32_t pad0;
+    struct vms_club_view_wire club;     /* valid iff row == _CLUB             */
+    struct vms_csb_view_wire  csb;      /* valid iff row == _CSB              */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_csb_args) == 144,
+               "vms_cluster_diag_csb_args changed size -- VMS_IOCTL_CLUSTER_DIAG_CSB ABI break");
+#define VMS_IOCTL_CLUSTER_DIAG_CSB _IOWR(VMS_IOC_MAGIC, 0x6a, struct vms_cluster_diag_csb_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_CSB == 0xC090566Au,
+               "VMS_IOCTL_CLUSTER_DIAG_CSB encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8, docs/plan-faithful-cluster-
+ * executive.md). $SETCLUEVT's executive-side registration: this process asks
+ * to be told, by completion AST, when CNXMAN detects a real membership ADD or
+ * REMOVE (cluevtdef.h CLUEVT$C_ADD/_REMOVE, OR'd into `event_mask`).
+ * `event_mask == 0` (or `astadr == 0`) deregisters -- the SAME call, never a
+ * second ioctl, mirroring $SETCLUEVT's own re-arm-by-recall shape. One
+ * registration per node (src/kernel-core/vms_cnxman.c: `struct vms_cnxman`
+ * keeps a single slot, last caller wins); delivery is a real completion AST
+ * queued on the caller's own PSL_C_USER queue (vms_ioctl_deliverast drains
+ * it), and process death clears the slot (vms_cnxman_proc_gone(), called from
+ * proc teardown) so a delivery can never reach freed memory.
+ */
+struct vms_cluster_setcluevt_args {
+    uint32_t event_mask;    /* in: CLUEVT$C_ADD | CLUEVT$C_REMOVE, 0 = clear */
+    uint32_t status;        /* return: SS$_ status                          */
+    uint64_t astadr;        /* in: AST routine address, 0 = clear           */
+    uint64_t astprm;        /* in: AST parameter                            */
+};
+_Static_assert(sizeof(struct vms_cluster_setcluevt_args) == 24,
+               "vms_cluster_setcluevt_args changed size -- VMS_IOCTL_CLUSTER_SETCLUEVT ABI break");
+#define VMS_IOCTL_CLUSTER_SETCLUEVT _IOWR(VMS_IOC_MAGIC, 0x6b, struct vms_cluster_setcluevt_args)
+_Static_assert(VMS_IOCTL_CLUSTER_SETCLUEVT == 0xC018566Bu,
+               "VMS_IOCTL_CLUSTER_SETCLUEVT encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9, docs/plan-faithful-cluster-executive.md
+ * SS3.5's "VMS_IOCTL_CLUSTER_GET_CLUB -> $GETSYI CLUSTER_MEMBER/CLUSTER_NODES/
+ * CLUSTER_VOTES/CLUSTER_QUORUM/CLUSTER_FSYSID/CLUSTER_FTIME/NODE_CSID").
+ * $GETSYI's cluster item codes, projected from the CONNECTION MANAGER's own
+ * CLUB by cluster_api_getsyi_project() (FC-P3.7, src/kernel-core/
+ * vms_cluster_api.c) -- the one function that owns this projection, so
+ * F$GETSYI and SHOW CLUSTER cannot answer differently about the same node.
+ *
+ * This is BYTE-FOR-BYTE struct vms_getsyi_cluster_view (vms_cluster_api.h)
+ * plus the `status` return, the same "one facility source, two struct
+ * declarations" shape the CLUSTER_DIAG_* rows use; vms_devtab.c asserts the
+ * two sizes agree and memcpys.
+ *
+ * INV-6: every `_valid` companion travels with its value. A caller that finds
+ * `node_csid_valid == 0` must leave the F$GETSYI item UNRETRIEVED -- it must
+ * never print `node_csid` (which is 0, meaning "the cluster has not assigned
+ * this node a CSID yet", never "node zero"). SS$_NOSUCHDEV before
+ * VMS_IOCTL_CLUSTER_START, with every field left zeroed.
+ */
+struct vms_cluster_getsyi_args {
+    uint32_t status;                /* return: SS$_ status                    */
+    uint32_t cluster_nodes;         /* return: SYI$_CLUSTER_NODES             */
+    uint32_t cluster_fsysid_lo;     /* return: SYI$_CLUSTER_FSYSID low word   */
+    uint32_t cluster_fsysid_hi;     /* return: ... high word                  */
+    uint32_t cluster_ftime_lo;      /* return: SYI$_CLUSTER_FTIME low word    */
+    uint32_t cluster_ftime_hi;      /* return: ... high word                  */
+    uint32_t node_csid;             /* return: SYI$_NODE_CSID (0 = unassigned)*/
+    uint16_t cluster_votes;         /* return: SYI$_CLUSTER_VOTES (ours)      */
+    uint16_t cluster_quorum;        /* return: SYI$_CLUSTER_QUORUM            */
+    uint8_t  cluster_member;        /* return: SYI$_CLUSTER_MEMBER, 0 or 1    */
+    uint8_t  cluster_fsysid_valid;  /* return: 0 = the CLUB has not learned it*/
+    uint8_t  cluster_ftime_valid;   /* return: 0 = the CLUB has not learned it*/
+    uint8_t  node_csid_valid;       /* return: 0 = this node is still NEW     */
+};
+_Static_assert(sizeof(struct vms_cluster_getsyi_args) == 36,
+               "vms_cluster_getsyi_args changed size -- VMS_IOCTL_CLUSTER_GETSYI ABI break");
+#define VMS_IOCTL_CLUSTER_GETSYI _IOWR(VMS_IOC_MAGIC, 0x6c, struct vms_cluster_getsyi_args)
+_Static_assert(VMS_IOCTL_CLUSTER_GETSYI == 0xC024566Cu,
+               "VMS_IOCTL_CLUSTER_GETSYI encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_DIAG_JOIN (E69, docs/cluster-integration-notes.md). The
+ * CONNECTION MANAGER's JOIN TRANSITION RING -- a read-only window into the
+ * executive-resident transcript src/kernel-core/vms_cnxman_diag.c records, plus
+ * the join FSM's own live state, projected together under the fork mutex by
+ * cnxman_get_join_diag() (src/kernel-core/vms_cnxman.c).
+ *
+ * WHY IT EXISTS. The executive has no console log (src/ovmx_init/ovmx_init.c:
+ * 1399 -- its output is not OPA0:), so a join that stalls at a point the wire
+ * does not expose cannot be diagnosed at all: three consecutive promotion walls
+ * (E67, E68, the E68 re-fire) were read off a pcap by luck, and the remaining
+ * gap -- OVMX receives the members' PARAMS and never answers with its own
+ * MODEL/PARAMS burst -- shows nothing on the wire by construction. This ioctl
+ * is how the lab reads what the join FSM actually did.
+ *
+ * READ-ONLY AND DISPATCH-ALWAYS, exactly like its three CLUSTER_DIAG_*
+ * siblings (E47): the handler takes `proc` only to match the ioctl signature
+ * and never touches it, so a caller that has never registered a VMS process
+ * still gets the executive's real answer, and a connection manager that is not
+ * up is the honest SS$_NOSUCHDEV with an all-zero view (never an empty
+ * transcript a reader could mistake for "the join did nothing").
+ *
+ * Walk the ring by re-issuing with `first` advanced by `view.n_rows`;
+ * `n_rows == 0` is the end. `view.recorded - view.count` is exactly how many
+ * records the wrap dropped, so a truncated transcript says so rather than
+ * looking complete -- and a row's `repeat`/`t_last_ms` carry how many times the
+ * identical fact repeated back to back (kernel-core vms_cnxman_diag.h SS4b: an
+ * identical fact coalesces into the record it repeats, which is what stops a
+ * once-a-second watchdog erasing the join drive it is waiting on).
+ *
+ * The two row structs mirror src/kernel-core/vms_cnxman_diag.h's
+ * struct cnxman_diag_rec / struct cnxman_diag_view byte-for-byte -- the same
+ * "ONE facility source, duplicated struct declaration" shape as the sibling
+ * DIAG ioctls, because this header must stay includable with no kernel-core
+ * dependency, and vms_devtab.c's _Static_asserts pin the two copies together.
+ */
+#define VMS_CLUSTER_DIAG_JOIN_ROWS 32u   /* == CNXMAN_DIAG_ROWS */
+
+struct cnxman_diag_rec_wire {
+    uint32_t seq;
+    uint32_t t_ms;
+    uint32_t t_last_ms;
+    uint32_t repeat;
+    uint8_t  kind;
+    uint8_t  state;
+    uint8_t  new_state;
+    uint8_t  event;
+    uint8_t  detail;
+    uint8_t  cat;
+    uint8_t  op;
+    uint8_t  rx;
+    int32_t  rc;
+    uint32_t aux;
+};
+_Static_assert(sizeof(struct cnxman_diag_rec_wire) == 32,
+               "cnxman_diag_rec_wire changed size -- must match cnxman_diag_rec");
+
+struct cnxman_diag_view_wire {
+    uint32_t count;
+    uint32_t recorded;
+    uint32_t first;
+    uint32_t n_rows;
+    uint8_t  join_state;
+    uint8_t  join_failure;
+    uint8_t  enabled;
+    uint8_t  pad0;
+    uint32_t ignored_events;
+    struct cnxman_diag_rec_wire row[VMS_CLUSTER_DIAG_JOIN_ROWS];
+};
+_Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
+               "cnxman_diag_view_wire changed size -- must match cnxman_diag_view");
+
+struct vms_cluster_diag_join_args {
+    uint32_t first;                       /* in: first HELD record to copy   */
+    uint32_t status;                      /* return: SS$_ status             */
+    struct cnxman_diag_view_wire view;    /* return: the window + live state */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
+               "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
+/*
+ * NR 0x6d: the next unused number in this magic (0x6c is CLUSTER_GETSYI just
+ * above). 1056 bytes is under NetBSD's one-page IOCPARM_MAX, so this rides the
+ * same pre-copy _IOWR path as every other cluster diagnostic. The encoded value
+ * below was computed for THIS struct's size -- _IOWR folds sizeof(type) into
+ * the command word, so appending a field silently changes the ioctl NUMBER, and
+ * this assert is what turns that into a build failure instead of an ENOTTY on a
+ * booted node.
+ */
+#define VMS_IOCTL_CLUSTER_DIAG_JOIN _IOWR(VMS_IOC_MAGIC, 0x6d, struct vms_cluster_diag_join_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_JOIN == 0xC420566Du,
+               "VMS_IOCTL_CLUSTER_DIAG_JOIN encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, docs/plan-faithful-cluster-executive.md).
+ * STARTUP.EXE's own case of SYSBOOT: hands the cluster SYSGEN parameters and
+ * the CLUSTER_AUTHORIZE record it read off SYS$SYSTEM:OVMXVMSSYS.PAR
+ * (sysgen_params.h, cluster_authorize.h) into the executive's ONE
+ * struct vms_cluster (vms_cluster_node(), FC-P0.9's singleton) so every
+ * later cluster layer reads real loaded state, never a compiled-in default.
+ * Issued once, before VMS_IOCTL_CLUSTER_START (FC-P0.11) -- reproducing
+ * SYSBOOT's ordering (vms_cluster.h section 2's header comment: "on VMS
+ * these are in the executive before SYSINIT forms or joins").
+ *
+ * Field-for-field this is struct vms_cluster_params (vms_cluster.h) plus the
+ * `status` return. (struct vms_cluster_params also carries params_valid's
+ * companion in struct vms_cluster -- a flag the EXECUTIVE sets on commit and
+ * that deliberately has no field here, so no caller can assert it.)
+ * The dispatcher (vms_ioctl_sysgen_load, vms_devtab.c)
+ * copies each field explicitly rather than a byte-identical memcpy, because
+ * -- unlike CLUSTER_DIAG_PORT's pure snapshot reads -- this ioctl performs
+ * the negctl validation the plan row requires: VAXCLUSTER >= 1 with no
+ * SCSNODE loaded is SS$_BADPARAM, logged, and struct vms_cluster.params is
+ * left at its prior (honest, zeroed) state -- never a fabricated identity
+ * (INV-6). This header stays includable with no kernel-core dependency, so
+ * the field layout is duplicated here rather than shared by #include, same
+ * discipline as the CLUSTER_DIAG_PORT row structs above.
+ *
+ * SCSSYSTEMID is split into _lo/_hi uint32_t halves rather than one uint64_t
+ * -- the same "no raw 64-bit field in a wire struct" discipline
+ * vms_pe_vc_view_wire's peer_sysid_lo/hi already uses, because a struct built
+ * entirely from <=4-byte fields lays out IDENTICALLY on ILP32 (elf32-vax) and
+ * LP64 (x86_64/NetBSD-amd64): a bare uint64_t does not (the VAX cross-compile
+ * gate caught exactly this drift; see docs/design-faithful-cluster-executive.md's
+ * "Word width" leak-table entry).
+ */
+struct vms_sysgen_load_args {
+    /* ---- identity (fatal if absent with vaxcluster >= 1) ---- */
+    uint8_t  scsnode[8];            /* in: VMS_SCSNODE_MAX(6)+2, blank/NUL padded */
+    uint8_t  scsnode_len;           /* in: significant chars, 0..6 (0 = unset)    */
+    uint8_t  pad0;
+    uint32_t scssystemid_lo;        /* in: SCSSYSTEMID low word, 0 = unset        */
+    uint32_t scssystemid_hi;        /* in: SCSSYSTEMID high word (48-bit id: 0 today) */
+
+    /* ---- membership / quorum arithmetic ---- */
+    uint16_t votes;                 /* in: VOTES                                  */
+    uint16_t expected_votes;        /* in: EXPECTED_VOTES                         */
+    uint16_t qdskvotes;             /* in: QDSKVOTES                              */
+    uint16_t recnxinterval;         /* in: RECNXINTERVAL, seconds                 */
+    uint16_t timvcfail;             /* in: TIMVCFAIL, its SYSGEN unit             */
+    uint16_t cluster_credits;       /* in: CLUSTER_CREDITS                        */
+
+    /* ---- roles ---- */
+    uint8_t  vaxcluster;            /* in: VAXCLUSTER, 0 = never, 1 = if present, 2 = always */
+    uint8_t  lockdirwt;             /* in: LOCKDIRWT                              */
+    uint8_t  alloclass;             /* in: ALLOCLASS                              */
+    uint8_t  mscp_load;             /* in: MSCP_LOAD                              */
+    uint8_t  mscp_serve_all;        /* in: MSCP_SERVE_ALL                         */
+    uint8_t  pad1[3];
+
+    uint32_t niscs_max_pktsz;       /* in: NISCS_MAX_PKTSZ (clamped by the port)  */
+
+    /* ---- DISK_QUORUM (empty = none) ---- */
+    uint8_t  disk_quorum[16];       /* in: quorum-disk device name                */
+    uint8_t  disk_quorum_len;       /* in: significant chars, 0 = none            */
+    uint8_t  pad2;
+
+    /* ---- CLUSTER_AUTHORIZE (group + password) ---- */
+    uint16_t auth_group;            /* in: CLUSTER_AUTHORIZE group, 0 if !valid   */
+    uint8_t  auth_password[32];     /* in: CLUSTER_AUTHORIZE password (VMS_CLUSTER_PWD_LEN) */
+    uint8_t  auth_password_len;     /* in: significant bytes                      */
+    uint8_t  auth_valid;            /* in: 1 = a real CLUSTER_AUTHORIZE.DAT was read */
+
+    /*
+     * ---- this node's OWN software identity (NOT a SYSGEN parameter) ----
+     * The one field here that does not come from OVMXVMSSYS.PAR. The SCS START
+     * body advertises an 8-byte software version at abs 72 (spec SS4(g)); the
+     * value is OVMX's, and its SSOT (OVMX_CLUSTER_SW_VERSION,
+     * src/libvms/include/ovmx_identity.h) is USERLAND -- kernel-core cannot
+     * include it and may hold no version literal of its own (INV-1). So the
+     * boot CARRIES it down here, exactly as it carries SCSNODE: STARTUP.EXE
+     * reads the SSOT, this ioctl commits it, and vms_pe.c reads it back out of
+     * committed executive state to fill the wire field. Never a constant in the
+     * executive, and never echoed from a peer's START (a real VAX's "VMS V7.3"
+     * is that VAX's identity; repeating it is a masquerade, INV-0).
+     *
+     * sw_version_len 0 = no token supplied: the port then advertises zeros and
+     * counts it (pe_fsm.vc_sw_version_absent), never a fabricated version.
+     */
+    uint8_t  sw_version[8];         /* in: the SSOT's token, blank/NUL padded     */
+    uint8_t  sw_version_len;        /* in: significant chars, 0 = not supplied    */
+    uint8_t  pad3;
+
+    uint32_t status;                /* return: SS$_ status                        */
+};
+_Static_assert(sizeof(struct vms_sysgen_load_args) == 112,
+               "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
+#define VMS_IOCTL_SYSGEN_LOAD _IOWR(VMS_IOC_MAGIC, 0x3e, struct vms_sysgen_load_args)
+_Static_assert(VMS_IOCTL_SYSGEN_LOAD == 0xC070563Eu,
+               "VMS_IOCTL_SYSGEN_LOAD encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_START (FC-P0.11; join semantics added by FC-P3.9,
+ * docs/plan-faithful-cluster-executive.md). SYSINIT's own ordering, in one
+ * call (design SS3.5 step 2): start the fork thread, bring PEA0: up on ETH0:,
+ * start SCS on that port, then start the CONNECTION MANAGER, which forms or
+ * joins per VAXCLUSTER. STARTUP.EXE issues it BEFORE the system disk is
+ * mounted, exactly as VMS joins before mounting.
+ *
+ * Issued once, after VMS_IOCTL_SYSGEN_LOAD, from STARTUP.EXE's boot path
+ * (ovmx_init.c) -- gated there on VAXCLUSTER != 0 (cluster_boot_gate.h): the
+ * executive's own vms_pe_start() (FC-P0.9) applies the SAME gate internally
+ * (SS$_NOSUCHDEV for VAXCLUSTER=0), so a stray call with the port not wanted
+ * is refused twice over, never silently upgraded to a running port.
+ *
+ * Takes no `in:` fields: the port starts from vms_cluster_node()'s already-
+ * loaded struct vms_cluster.params (VMS_IOCTL_SYSGEN_LOAD's own commit) --
+ * never a second, possibly different, copy of SYSGEN state riding this call.
+ *
+ * `cluster_state` is READ BACK from the executive's own struct vms_cluster
+ * after the call, not composed from `status`: it is `enum vms_cluster_state`
+ * (src/kernel-core/vms_cluster.h) -- OFF / PORT_UP / JOINING / MEMBER /
+ * STANDALONE. STARTUP.EXE renders the operator line from THIS value, so the
+ * console can never announce a membership the executive does not hold
+ * (INV-6). A node with no connection manager to join through is JOINING (with
+ * VAXCLUSTER=2, "waiting to form or join") or STANDALONE (VAXCLUSTER=1) --
+ * never MEMBER.
+ */
+struct vms_cluster_start_args {
+    uint32_t port_up;               /* return: 1 = PEA0: is up after this call */
+    uint32_t status;                /* return: SS$_ status                     */
+    uint32_t cluster_state;         /* return: enum vms_cluster_state          */
+};
+_Static_assert(sizeof(struct vms_cluster_start_args) == 12,
+               "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
+#define VMS_IOCTL_CLUSTER_START _IOWR(VMS_IOC_MAGIC, 0x3f, struct vms_cluster_start_args)
+_Static_assert(VMS_IOCTL_CLUSTER_START == 0xC00C563Fu,
+               "VMS_IOCTL_CLUSTER_START encodes differently than the reference build");
 
 /* ================================================================
  * Process registration
@@ -1066,7 +1691,13 @@ struct vms_devinfo {
     uint32_t width;                     /* terminal width */
     uint32_t page;                      /* terminal page length */
     uint32_t allocated;                 /* 1 = allocated to owner_pid */
-    uint32_t pad;
+    /*
+     * DVI$_MSCP_SERVED (dvidef.h 0x0073, "Device is MSCP served"): 1 for a
+     * disk this node reaches through the MSCP disk class driver on another
+     * cluster member (FC-P7.1). Took the struct's trailing pad word, so the
+     * layout and the 72-byte ABI guard below are unchanged.
+     */
+    uint32_t mscp_served;
 };
 
 /*

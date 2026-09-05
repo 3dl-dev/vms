@@ -36,14 +36,13 @@
 #   * the Decision-A activation contract genuinely rejects a non-ld.elf_so
 #     image -- was build-activation-vax.sh's CROSSCOMPILE_NEGCTL=1 branch.
 #
-# SCSD.EXE (scsd_exe) was the tenth, previously-excluded drift image: it
-# opened a Linux-only AF_PACKET raw socket with no NetBSD equivalent
-# (NetBSD's raw-link facility is bpf(4), a materially different API). rd
-# vms-838 closed that gap with a thin raw-L2 datalink abstraction
-# (src/vmsscs/scs_datalink.h/.c) -- an unchanged Linux AF_PACKET backend and
-# a new NetBSD bpf(4) backend behind one header -- so scsd.c no longer opens
-# a socket directly and SCSD.EXE now builds and ships in `ovmx-images` on
-# every substrate, same as the other nine.
+# SCSD.EXE was the tenth drift image and is GONE (FC-P3.9): the userspace
+# SCS daemon is retired with the rest of the userspace SCS strawman, so there
+# is no image left to keep in cross-arch parity. The cluster stack it carried
+# is executive-resident and cross-builds as part of vms.kmod, which
+# tools/cross-vax/build-vms-module-vax.sh proves ILP32-clean. The raw-L2
+# datalink abstraction vms-838 added for it SURVIVED the retirement under
+# src/libdatalink -- DECnet Phase IV is a live second consumer.
 #
 # LINK.EXE (vmslink) is also excluded on NetBSD -- it is the OVMX-native
 # ELF64 linker that produces x86_64/aarch64 Mode-2 shareable images, a role
@@ -88,8 +87,8 @@ echo
 # design). Boot set + LIBRARIAN.EXE are rung A/C's existing scope, carried
 # here too so one job proves the whole aggregate; the ten names marked
 # DRIFT are rd vms-e1d's full parity-drift image set, now all closed.
-IMAGES="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE SCSD.EXE"
-DRIFT_IMAGES="HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE SCSD.EXE"
+IMAGES="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE LIBRARIAN.EXE OVMXDUMP HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE"
+DRIFT_IMAGES="HELP.EXE AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE SYSGEN.EXE PRODUCT.EXE PARTS.EXE"
 
 FAIL=0
 for img in $IMAGES; do

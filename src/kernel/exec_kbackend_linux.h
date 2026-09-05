@@ -57,6 +57,13 @@
 #include <linux/kdev_t.h>         /* MAJOR / MINOR / MKDEV */
 #include <linux/bio.h>            /* bio_init / __bio_add_page / submit_bio_wait (vms-127) */
 #include <linux/version.h>        /* LINUX_VERSION_CODE / KERNEL_VERSION (bdev-open guard) */
+/* FC-P0.1 (the cluster seam, SS15/SS16/SS18) backing headers: the TYPES the core
+ * embeds by value plus the console primitive. The rx/xmit headers
+ * (<linux/netdevice.h>, <linux/if_ether.h>) arrive with the real binding in
+ * FC-P0.2 -- they are not needed to fix a size. */
+#include <linux/kthread.h>        /* struct task_struct (exec_kthread_t) */
+#include <linux/timer.h>          /* struct timer_list (exec_timer_t) */
+#include <linux/printk.h>         /* printk / KERN_ERR (exec_console_printf) */
 /* vms-9d2 (primary Ethernet net device -> ETH0:) backing headers. */
 #include <linux/netdevice.h>      /* struct net_device, for_each_netdev, netif_carrier_ok */
 #include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
@@ -91,6 +98,33 @@ static inline void exec_lock_destroy(exec_lock_t *l) { (void)l; /* no-op on Linu
  * lock manager's deadlock walker takes other processes' lock-list locks with a
  * trylock to avoid an ABBA inversion). Linux: spin_trylock. */
 static inline int exec_trylock(exec_lock_t *l)       { return spin_trylock(l); }
+
+/* ---- 1b. receive-level lock (FC-P0.16, exec_kbackend.h SS1b / design SS3.2.3
+ * RULING) ----
+ * On Linux, exec_rxlock_t is the SAME spinlock_t as exec_lock_t, but acquired
+ * with _irqsave/_irqrestore rather than the plain form: disabling the local
+ * CPU's interrupts for the critical section is what makes it safe against a
+ * same-CPU softirq (the cluster rx path) taking the identical lock -- the
+ * plain exec_lock_t hazard SS3.2.3 records. EXEC_LAN_RX_IPL is a no-op on
+ * Linux (irqsave already covers every level a softirq can run at); it exists
+ * so the ONE cf_bind.c call site is substrate-symmetric.
+ */
+typedef spinlock_t    exec_rxlock_t;
+typedef unsigned long exec_rxflags_t;
+#define EXEC_LAN_RX_IPL 0   /* no-op: irqsave covers all Linux receive levels */
+
+static inline void exec_rxlock_init(exec_rxlock_t *l)    { spin_lock_init(l); }
+static inline void exec_rxlock_destroy(exec_rxlock_t *l) { (void)l; /* no-op on Linux */ }
+
+static inline void exec_rxlock_acquire(exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	spin_lock_irqsave(l, *flags);
+}
+
+static inline void exec_rxlock_release(exec_rxlock_t *l, exec_rxflags_t *flags)
+{
+	spin_unlock_irqrestore(l, *flags);
+}
 
 /* ---- 2. wait / wake (cv-shaped; see exec_kbackend.h) ----
  *
@@ -171,6 +205,45 @@ static inline int exec_cv_wait_timeout(exec_cv_t *cv, exec_lock_t *lk,
 static inline void exec_cv_signal(exec_cv_t *cv)    { wake_up_interruptible_nr(cv, 1); }
 static inline void exec_cv_broadcast(exec_cv_t *cv) { wake_up_interruptible(cv); }
 static inline void exec_cv_destroy(exec_cv_t *cv)   { (void)cv; /* no-op on Linux */ }
+
+/*
+ * exec_cv_wait_rx (FC-P0.16, exec_kbackend.h SS1b) -- the SS2 cv contract with
+ * an exec_rxlock_t as the interlock, THREAD CONTEXT ONLY (the fork thread is
+ * the sole caller: cf_bind.c's cfb_wait).
+ *
+ * TASK_INTERRUPTIBLE, NOT TASK_UNINTERRUPTIBLE -- a DELIBERATE, MEASURED
+ * DEVIATION from design SS3.2.3's literal Linux pseudocode ("prepare_to_wait
+ * (TASK_UNINTERRUPTIBLE)"), found by the FC-P0.16 R3 same-CPU hammer, not by
+ * inspection: exec_cv_signal/exec_cv_broadcast are UNCHANGED per the ruling
+ * (still wake_up_interruptible{,_nr} above), and Linux's wake_up_interruptible
+ * only wakes waiters in TASK_INTERRUPTIBLE state -- try_to_wake_up's `p->state
+ * & state` test is false against a TASK_UNINTERRUPTIBLE sleeper, so a
+ * TASK_UNINTERRUPTIBLE exec_cv_wait_rx paired with the ruling's own "unchanged"
+ * broadcast is a LOST WAKEUP by construction: the fork thread would sleep
+ * forever on the first wait, exactly what the hammer's DRAIN_OK/WORK_DISPATCHED
+ * assertions caught (dispatched stayed 0 while enqueued/posted grew). Contract
+ * symmetry is preserved on the RETURN side: this still always returns 0 (no
+ * signal semantics), because the fork kthread never calls allow_signal(), so
+ * signal_pending(current) is never true for it -- TASK_INTERRUPTIBLE is
+ * observationally identical to TASK_UNINTERRUPTIBLE for THIS specific thread,
+ * while actually pairing with the wake primitive the ruling keeps unchanged.
+ * prepare_to_wait enqueues on `cv` WHILE `l` is still held (irqsave, so no
+ * receive-level interrupt can slip in), so a waker sharing `l` cannot lose
+ * the wakeup -- the same lost-wakeup-free argument as exec_cv_wait, with the
+ * rxlock's saved irq flags restored on the re-acquire.
+ */
+static inline int exec_cv_wait_rx(exec_cv_t *cv, exec_rxlock_t *l,
+				   exec_rxflags_t *flags)
+{
+	DEFINE_WAIT(__w);
+
+	prepare_to_wait(cv, &__w, TASK_INTERRUPTIBLE);
+	spin_unlock_irqrestore(l, *flags);
+	schedule();
+	spin_lock_irqsave(l, *flags);
+	finish_wait(cv, &__w);
+	return 0;
+}
 
 /* ---- 3. user <-> kernel copy (normalized 0 / EXEC_EFAULT) ----
  * The __user annotation is re-applied here so a portable facility can pass a
@@ -836,6 +909,32 @@ static inline struct socket *exec_socket_raw(exec_socket_t s) { return s->sock; 
  * socket would face, exactly the exec_socket_create_icmp precedent (SS12).
  * ================================================================ */
 
+/*
+ * The executive OWNS every datalink it opens, so it brings the interface
+ * administratively up itself rather than trusting something else already
+ * did (vms-7eb) -- exactly as PEDRIVER brings up the LAN adapter when the
+ * cluster starts (SS14 exec_lan_open, below, is the second caller). Without
+ * this, bind()/dev_add_pack() succeeds on an administratively-down NIC but
+ * the first send silently drops at the (still noop) qdisc instead of
+ * reaching the wire -- dev_queue_xmit's NET_XMIT_* soft codes are all >= 0,
+ * so a caller checking only "< 0 is failure" (both SS13 and SS14's xmit
+ * primitives do, correctly, since a queued/congested send is not a hard
+ * failure) never sees that drop. Idempotent (a no-op when already up);
+ * needs the RTNL lock, as any flag change from kernel context does. Returns
+ * 0 on success, a negative errno otherwise.
+ */
+static inline int exec_netdev_ensure_up(struct net_device *dev)
+{
+	int rc = 0;
+
+	if (dev->flags & IFF_UP)
+		return 0;
+	rtnl_lock();
+	rc = dev_change_flags(dev, dev->flags | IFF_UP, NULL);
+	rtnl_unlock();
+	return rc;
+}
+
 /* Open a kernel AF_PACKET/SOCK_RAW socket bound to `ifname`/`ethertype` (host
  * order; converted to network order here for both the socket's own protocol
  * and the sockaddr_ll bind -- struct sock's sk_protocol field mirrors AF_PACKET
@@ -865,21 +964,11 @@ static inline int exec_l2_open(const char *ifname, uint16_t ethertype,
 		return -ENODEV;
 	}
 
-	/* vms-7eb: the executive OWNS this datalink, so it brings the interface
-	 * up when SCS opens it -- exactly as PEDRIVER brings up the LAN adapter
-	 * when the cluster starts. Without this, bind() succeeds on an
-	 * administratively-down NIC but the first send fails ENETDOWN. Idempotent
-	 * (a no-op when already up); needs the RTNL lock, as any flag change from
-	 * kernel context does. */
-	if (!(dev->flags & IFF_UP)) {
-		rtnl_lock();
-		rc = dev_change_flags(dev, dev->flags | IFF_UP, NULL);
-		rtnl_unlock();
-		if (rc) {
-			dev_put(dev);
-			sock_release(sock);
-			return rc;
-		}
+	rc = exec_netdev_ensure_up(dev);
+	if (rc) {
+		dev_put(dev);
+		sock_release(sock);
+		return rc;
 	}
 
 	memset(&sll, 0, sizeof(sll));
@@ -1023,5 +1112,324 @@ static inline int exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
 /* exec_l2_close is deliberately NOT a distinct primitive: an L2 handle's
  * socket is released exactly like a TCP/ICMP one -- exec_socket_release
  * (SS12) drops the reference and, on the last drop, sock_release()s it. */
+
+/* ================================================================
+ * SS14..SS18  The cluster seam (FC-P0.1 contract; FC-P0.2 the REAL Linux
+ * binding).
+ *
+ * FC-P0.1 froze the contract (exec_kbackend.h SS14..SS18, including CONTRACT
+ * RULES 1 and 2). FC-P0.2 lands the real primitives here: dev_add_pack /
+ * dev_queue_xmit / dev_mc_add / dev_mc_del / kthread_run / timer_list /
+ * ktime_get_* / printk, proved by the rung-3 substrate contract test
+ * (tests/qemu/test_kmod_cluster_seam.c, driven through the TEST-ONLY
+ * OVMX_KTEST_CLUSTER_SEAM knob in src/kernel/vms_module.c): a veth pair
+ * delivers a 0x6007 frame to rx_cb in softirq and exec_lan_xmit is seen on
+ * the peer, multicast add is visible in `ip maddr` (== /proc/net/dev_mcast),
+ * timer post-and-wake, kthread start/stop, exec_time monotone.
+ *
+ * The TYPES were already real as of FC-P0.1 (struct timer_list, struct
+ * task_struct *): they fixed the sizes the core embeds by value, so this is a
+ * body-only change, as designed.
+ * ================================================================ */
+
+typedef struct task_struct *exec_kthread_t;
+
+typedef struct exec_timer {
+	struct timer_list tl;      /* the real Linux timer this binding arms */
+	void (*cb)(void *);
+	void *ctx;
+} exec_timer_t;
+
+/*
+ * SS14 LAN port. "One node has exactly one cluster port... these ops
+ * therefore name no handle: the binding owns at most one open port"
+ * (exec_kbackend.h SS14) -- so this backend keeps the open port's state in
+ * one file-scope struct, exactly the "no handle crosses the seam" contract.
+ * Only vms_pe.c calls these in the shipped executive; the TEST-ONLY knob in
+ * vms_module.c (OVMX_KTEST_CLUSTER_SEAM) is the only other caller, and never
+ * both at once.
+ */
+struct vms_lan_port {
+	struct net_device *dev;    /* dev_get_by_name'd ref, held while open */
+	struct packet_type pt;     /* registered via dev_add_pack */
+	exec_lan_rx_cb_t   rx_cb;
+	void              *rx_ctx;
+};
+static struct vms_lan_port vms_lan_port;
+
+/*
+ * dev_add_pack's func trampoline -- CONTRACT RULE 1 territory: this runs in
+ * Linux's receive softirq (the packet_type dispatch out of
+ * __netif_receive_skb_core). It does the MINIMUM needed to hand the core a
+ * flat (frame, len) view of the wire frame before calling rx_cb, which is
+ * where rule 1 (copy/enqueue/wake only, no protocol) actually binds:
+ *
+ *   - skb_linearize: a paged skb cannot be handed to rx_cb as one pointer;
+ *     linearizing uses GFP_ATOMIC internally (__pskb_pull_tail), so it does
+ *     not sleep and is safe here. A failure (OOM) drops the frame -- the
+ *     same "pool empty" drop-and-count posture rule 1 already prescribes for
+ *     the core's own queue, applied one step earlier.
+ *   - the driver's eth_type_trans() already reset skb->mac_header to the
+ *     frame's start and pulled skb->data past the 14-byte Ethernet header
+ *     before this callback ever runs, so skb_mac_header(skb) is byte 0 (the
+ *     destination MAC) and (skb->data - skb_mac_header(skb)) + skb->len is
+ *     the WHOLE frame length -- exactly the "byte 0 = dest MAC" shape SS14
+ *     promises the core, with no substrate offset base leaking through.
+ */
+static int vms_lan_rx_thunk(struct sk_buff *skb, struct net_device *dev,
+			     struct packet_type *pt, struct net_device *orig_dev)
+{
+	struct vms_lan_port *port = container_of(pt, struct vms_lan_port, pt);
+	const uint8_t *frame;
+	uint32_t frame_len;
+
+	(void)dev;
+	(void)orig_dev;
+
+	if (skb_linearize(skb))
+		goto drop;   /* OOM: cannot present one contiguous frame -- drop */
+
+	frame = skb_mac_header(skb);
+	frame_len = skb->len + (uint32_t)(skb->data - frame);
+	if (port->rx_cb)
+		port->rx_cb(port->rx_ctx, frame, frame_len);
+drop:
+	kfree_skb(skb);
+	return 0;
+}
+
+static inline int exec_lan_open(const char *ifname, uint16_t ethertype,
+				exec_lan_rx_cb_t rx_cb, void *ctx)
+{
+	struct net_device *dev;
+
+	if (vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;   /* "at most one open port" */
+
+	dev = dev_get_by_name(&init_net, ifname);
+	if (!dev)
+		return (int)EXEC_SS_NOSUCHDEV;   /* honest: no such interface */
+
+	/*
+	 * vms-fc-e51: PEDRIVER OWNS this datalink exactly like SS13's
+	 * exec_l2_open does, and needs the SAME bring-up (see
+	 * exec_netdev_ensure_up's own comment, above SS13). Without it the
+	 * port comes up (dev_add_pack succeeds on an administratively-down
+	 * NIC) and CLUSTER_START reports SS$_NORMAL, but every HELLO
+	 * dev_queue_xmit later posts is silently dropped by the still-noop
+	 * qdisc (NET_XMIT_CN, >= 0 -- "success" by exec_lan_xmit's own "< 0
+	 * is failure" rule) and nothing ever reaches the wire. Measured: a
+	 * booted node's PEA0: reporting up while 3 tcpdump windows (20/40/
+	 * 240s) on the peer's LAN saw zero frames from this node's MAC. A
+	 * bring-up that itself fails is honestly refused -- no PEA0: for an
+	 * interface this node cannot actually use (INV-6).
+	 */
+	if (exec_netdev_ensure_up(dev)) {
+		dev_put(dev);
+		return (int)EXEC_SS_NOSUCHDEV;
+	}
+
+	vms_lan_port.dev = dev;                  /* reference held until close */
+	vms_lan_port.rx_cb = rx_cb;
+	vms_lan_port.rx_ctx = ctx;
+	vms_lan_port.pt.type = htons(ethertype);
+	vms_lan_port.pt.dev = dev;
+	vms_lan_port.pt.func = vms_lan_rx_thunk;
+	dev_add_pack(&vms_lan_port.pt);
+	return 0;
+}
+
+static inline void exec_lan_close(void)
+{
+	if (!vms_lan_port.dev)
+		return;                           /* nothing open; a no-op close */
+	dev_remove_pack(&vms_lan_port.pt);
+	dev_put(vms_lan_port.dev);
+	memset(&vms_lan_port, 0, sizeof(vms_lan_port));
+}
+
+/*
+ * Transmit ONE complete Ethernet frame (source MAC already set by the caller
+ * per SS14). alloc_skb + skb_put_data copies `frame` into a fresh skb headed
+ * by the device's real link-layer reserve; skb_reset_mac_header + reading
+ * h_proto back out of the frame we just wrote mirrors the driver-side setup
+ * eth_type_trans does on receive, so tc/qdisc classification sees a
+ * correctly-tagged skb. dev_queue_xmit's NET_XMIT_* soft codes (queued,
+ * congested) are all >= 0 -- only a negative return is a hard failure. */
+static inline int exec_lan_xmit(const uint8_t *frame, uint32_t len)
+{
+	struct sk_buff *skb;
+
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;
+
+	skb = alloc_skb(len + LL_RESERVED_SPACE(vms_lan_port.dev), GFP_KERNEL);
+	if (!skb)
+		return (int)EXEC_SS_NOSUCHDEV;
+
+	skb_reserve(skb, LL_RESERVED_SPACE(vms_lan_port.dev));
+	skb_put_data(skb, frame, len);
+	skb->dev = vms_lan_port.dev;
+	skb_reset_mac_header(skb);
+	skb->protocol = eth_hdr(skb)->h_proto;
+
+	if (dev_queue_xmit(skb) < 0)
+		return (int)EXEC_SS_NOSUCHDEV;
+	return 0;
+}
+
+static inline int exec_lan_mc_add(const uint8_t mac[6])
+{
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;
+	return dev_mc_add(vms_lan_port.dev, mac) ? (int)EXEC_SS_NOSUCHDEV : 0;
+}
+
+static inline int exec_lan_mc_del(const uint8_t mac[6])
+{
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;
+	return dev_mc_del(vms_lan_port.dev, mac) ? (int)EXEC_SS_NOSUCHDEV : 0;
+}
+
+static inline int exec_lan_hwaddr(uint8_t out[6])
+{
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;   /* untouched: never a fabricated MAC */
+	memcpy(out, vms_lan_port.dev->dev_addr, ETH_ALEN);
+	return 0;
+}
+
+static inline int exec_lan_mtu(uint32_t *out)
+{
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;
+	*out = (uint32_t)vms_lan_port.dev->mtu;
+	return 0;
+}
+
+static inline int exec_lan_link_up(int *out)
+{
+	if (!vms_lan_port.dev)
+		return (int)EXEC_SS_NOSUCHDEV;   /* "port not open" is not "link down" */
+	*out = netif_carrier_ok(vms_lan_port.dev) ? 1 : 0;
+	return 0;
+}
+
+/* ---- SS15 fork context: kthread_run / kthread_stop (joins) /
+ * kthread_should_stop. Linux's kthread_should_stop() reads `current` and
+ * ignores its argument -- the handle parameter exists for the NetBSD twin,
+ * which has no such implicit read (exec_kbackend.h SS15). ----
+ *
+ * THE HANDLE OWNS A TASK REFERENCE, AND IT MUST (found by the FC-P6.6 QEMU
+ * hammer run: `BUG: kernel NULL pointer dereference ... kthread_stop+0x48`,
+ * a task_struct whose usage refcount was already 0).
+ *
+ * Every thread body in this stack RETURNS ON ITS OWN when its work is done --
+ * cf_run() returns once a stop has been requested AND the queues are drained,
+ * cf_io_run() likewise -- and only THEN does the stopper call
+ * exec_kthread_stop() to join it. On Linux a kthread that returns is
+ * self-reaped (its parent kthreadd ignores SIGCHLD, so exit_notify() autoreaps
+ * it), which drops the last reference and frees the task_struct AND the
+ * `struct kthread` behind it. kthread_stop() then reads a freed task's
+ * worker_private and dies -- and kthread_stop(9)'s own contract says so:
+ * "If threadfn() may call kthread_exit() itself, the caller must ensure
+ * task_struct can't go away."
+ *
+ * So the HANDLE holds a reference for its whole life. The NetBSD twin already
+ * has this guarantee by construction (KTHREAD_MUSTJOIN keeps the lwp until
+ * kthread_join), so this makes the two substrates' handles mean the same
+ * thing, which is the entire point of the seam.
+ */
+
+static inline int exec_kthread_create(exec_kthread_t *t, int (*fn)(void *),
+				      void *arg, const char *name)
+{
+	struct task_struct *task = kthread_run(fn, arg, "%s", name);
+
+	if (IS_ERR(task)) {
+		*t = NULL;
+		return (int)EXEC_SS_NOSUCHDEV;
+	}
+	get_task_struct(task);   /* released by exec_kthread_stop */
+	*t = task;
+	return 0;
+}
+
+static inline void exec_kthread_stop(exec_kthread_t *t)
+{
+	if (t && *t) {
+		struct task_struct *task = *t;
+
+		/* Cleared FIRST so a second _stop on the same handle is the
+		 * documented no-op rather than a second put of one reference. */
+		*t = NULL;
+		kthread_stop(task);
+		put_task_struct(task);
+	}
+}
+
+static inline int exec_kthread_should_stop(exec_kthread_t *t)
+{
+	(void)t;                         /* Linux reads `current`, not the handle */
+	return kthread_should_stop();
+}
+
+/* ---- SS16 timers: timer_list + CONTRACT RULE 2 (a Linux timer callback runs
+ * in softirq with a single `struct timer_list *` argument -- the trampoline
+ * recovers {cb, ctx} via container_of and forwards to the core's cb, which
+ * must itself honour rule 2: post and wake, nothing else). ---- */
+
+static void vms_exec_timer_thunk(struct timer_list *tl)
+{
+	struct exec_timer *t = container_of(tl, struct exec_timer, tl);
+
+	if (t->cb)
+		t->cb(t->ctx);
+}
+
+static inline void exec_timer_init(exec_timer_t *t, void (*cb)(void *), void *ctx)
+{
+	t->cb = cb;
+	t->ctx = ctx;
+	timer_setup(&t->tl, vms_exec_timer_thunk, 0);
+}
+
+static inline void exec_timer_arm(exec_timer_t *t, uint32_t ms)
+{
+	mod_timer(&t->tl, jiffies + msecs_to_jiffies(ms));
+}
+
+static inline void exec_timer_cancel(exec_timer_t *t)
+{
+	del_timer_sync(&t->tl);
+}
+
+static inline void exec_timer_destroy(exec_timer_t *t)
+{
+	(void)t;                         /* Linux has no callout_destroy twin */
+}
+
+/* ---- SS17 time: VMS absolute time is 100ns ticks since 00:00 17-NOV-1858,
+ * i.e. Unix epoch (1970) + 3,506,716,800 wall seconds; exec_ticks_ms is a
+ * monotonic (never wall-clock) millisecond counter for deadline math. ---- */
+
+#define VMS_EXEC_EPOCH_OFFSET_100NS (3506716800ULL * 10000000ULL)
+
+static inline uint64_t exec_time_now_vms(void)
+{
+	return (uint64_t)(ktime_get_real_ns() / 100) + VMS_EXEC_EPOCH_OFFSET_100NS;
+}
+
+static inline uint64_t exec_ticks_ms(void)
+{
+	return (uint64_t)(ktime_get_ns() / 1000000ULL);
+}
+
+/* A macro, not a function: it forwards the caller's format string straight to
+ * printk so the compiler's -Wformat checks the call site, and KERN_ERR is the
+ * level the QEMU console actually shows. Already the real binding as of
+ * FC-P0.1; unchanged here, listed for SS18 completeness. */
+#define exec_console_printf(fmt, ...) printk(KERN_ERR fmt, ##__VA_ARGS__)
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

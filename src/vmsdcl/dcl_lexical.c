@@ -3474,7 +3474,7 @@ static int lex_setprv(struct dcl_context *ctx, const char *args,
  * each CSID as an 8-hex-digit string and "" when the list is exhausted.
  *
  * OVMX SCOPE (honest, not fabricated): the SCS membership table lives in the
- * cluster daemon (src/vmsscs), which the DCL layer does not read -- and there
+ * connection manager, which the DCL layer reads through /dev/vms -- and there
  * is no other DCL-reachable cluster-id interface. From the DCL layer OVMX
  * therefore presents as a NON-clustered node, whose defined F$CSID answer is
  * an empty list: the first call returns "". This is the true non-cluster state,

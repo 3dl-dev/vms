@@ -205,9 +205,9 @@ multicast and directed) and `satellite-niscs-boot-solicit.pcap` frame 1100
 | 37 | 3 | constant suffix `01 00 00` | unknown/inferred |
 | 40 | 1 | node-name length prefix (observed `6`) | GROUNDED (matches the following ASCII name's byte count in every frame) |
 | 41 | *namelen* | node name, ASCII, space-padded (`"VAX1  "`, `"VAX2  "`, `"VAX3  "`) | GROUNDED |
-| 33+14=47 | 17 | constant capability/version-ish span, differs slightly HELLO vs. SOLICIT | unknown/inferred |
-| 64 | 1 | constant `0x03` | unknown |
-| 65 | 3 | zero | unknown |
+| 33+14=47 | 17 | **discovery-format span** `00 80 01 ff 83 00 04 00×9 18` (differs slightly HELLO vs. SOLICIT) | **GROUNDED as a node-independent constant** in §4(a).2 (11 403/11 575 HELLOs, 5 senders, 0 residuals among real nodes); the *meaning* of the bytes remains unknown and is not claimed |
+| 64 | 1 | constant `0x03` | **GROUNDED** with the same census (§4(a).2) |
+| 65 | 3 | zero | **GROUNDED** with the same census (§4(a).2) |
 | 68 | 4 | **connect/join nonce** | **GROUNDED**: `0x00000000` on every multicast HELLO, and the identical non-zero shared token (e.g. `ee 05 39 5b`) on every directed HELLO between VAX1/VAX2 *and* on the VAX3 boot SOLICIT — the same cluster-wide token the initial RE-specimens doc flagged. Confirmed frame examples: `scs-idle-baseline.pcap` frame 1 (zero, multicast) vs. frame 2/3 (`ee05395b`, directed); `satellite-niscs-boot-solicit.pcap` frame 1100 (`ee05395b`). |
 
 #### 4(a).0 Directed-HELLO addressing: abs 16 is the peer's LOGICAL address, not its HW MAC (GROUNDED, `vms-760`)
@@ -308,6 +308,77 @@ timing and frame-count structure observed on the reference-lab wire (two
 independent captures) plus the saturating-increment pattern; no VSI/HPE source or
 binary was read. The low-byte-carries-state / high-byte-`0x00` split and the
 INIT/REQUEST/CONFIRM labels are OVMX working labels for the observed values.
+
+#### 4(a).2 The abs 47–67 discovery-format span — GROUNDED as a node-independent constant, and it GATES the circuit (`E56`)
+
+The table above records abs 47–63 as a "constant capability/version-ish span"
+and abs 64–67 as "unknown", and every earlier revision left both **unpublished**
+— which is why OVMX's own port put **zero** there and called it honest omission.
+It is not omission: it puts a *different* value on the wire where every real
+node puts one identical value, and that is what stalled the join.
+
+**The bytes (GROUNDED, byte-exact):**
+
+```
+abs  47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 | 64 65 66 67
+     00 80 01 ff 83 00 04 00 00 00 00 00 00 00 00 00 18 | 03 00 00 00
+```
+
+**Census — node-INDEPENDENT.** Over **11 575 HELLO frames in 10 captures**
+(`scs-idle-baseline`, `formation-ci1-joinwindow`, `ci3`-era and every
+`ovmx-*` run through `ovmx-e81-*`, plus the E56 re-fire), **11 403** carry
+exactly those 21 bytes. The **172** residuals are all one sender: the current
+OVMX build's own zeros. Split by source MAC:
+
+| sender | HELLOs | abs 47–67 |
+|---|---|---|
+| VAX1 `aa:00:04:00:01:04` | 3 347 | the span |
+| VAX2 `08:00:2b:78:56:b9` | 3 103 | the span |
+| VAX3 `08:00:2b:11:22:33` | 2 331 | the span |
+| **OVMX `b6:16:8a:dc:3a:53`** (the build that reached MEMBER) | 2 301 | the span |
+| VAX2 (current HW) `08:00:2b:1e:85:61` | 321 | the span |
+| **OVMX `52:54:00:00:00:f4`** (faithful stack, E55/E56 re-fire) | **172** | **zero** |
+
+Five distinct senders, two different clusters, two months apart, **0 residuals
+among real nodes** — the span does not vary with node name, SCSSYSTEMID,
+hardware MAC or incarnation, so it is a **format property of the discovery
+frame**, not a claim about the system that sent it.
+
+**It gates VC formation.** A controlled pair of captures separates it from
+everything else on the wire, because in both the LAN channel reaches `b4` in
+both directions:
+
+| capture | OVMX HELLO abs 47–67 | channel | member-originated `0x41` STARTs to OVMX |
+|---|---|---|---|
+| `ovmx-5fe-channel-formed-20260728.pcap` | the span | VAX1 `b2`→OVMX `b3`→VAX1 `b4` | **18** — the first arrives **10 ms** after `b4`, unprompted |
+| `join-e55refire-1788460304.pcap` (E56) | **zero** | full `b2`/`b3`/`b4` **plus** the §4(k) padded verify, **both directions, both VAXes** | **0**, over 242 s |
+
+Byte-diff of the two OVMX directed HELLOs (`ovmx-5fe` SCA 17 vs. E56 SCA 67)
+leaves only: the two node identities (src-logical/name/HW MAC), the abs 96–101
+live tick, and **abs 47–67**. Everything the §4(a).1 channel handshake reads is
+identical, and the channel does complete — so the field the member consults
+before it opens a circuit is this span. In the E56 run OVMX emitted **242**
+`0x41` STARTs of its own into that silence and received **0** replies: the
+member, not the joiner, opens the circuit (§4(g) phase 2 confirms the
+ordering — the round-0 START is the member's).
+
+**Clean-room note.** These bytes were read off our own lab's wire, from
+captures whose SHA-256s are in `docs/clean-room/reference-captures.sha256`
+(`scs-idle-baseline.pcap` frames 1–3, `ovmx-5fe-channel-formed-20260728.pcap`,
+`ovmx-760-MEMBER-achieved-20260730.pcap`, all three verified byte-exact against
+that manifest when this section was measured). **No meaning is claimed for any
+byte** — not the `0x0180` at abs 48, not the `0x18` at abs 63, not the `0x03`
+at abs 64. Whatever computes or encodes them is unpublished and is **not**
+reconstructed here (Rule 8). What is asserted is only what was counted: the
+21 bytes are the same on every real node, and their absence stops the member
+from opening a circuit.
+
+**What OVMX does with that (INV-6).** The port does **not** bake these bytes
+in: `src/kernel-core/vms_pe_fsm.c` `pe_learn_disc_format()` LEARNS them off the
+first real peer's own discovery frame in the current run — the identical
+mechanism §4(g)/`E55` already sanctions for the cluster join nonce ("the
+cluster's on-wire assignment"). Until a peer has been heard the span goes out
+zero and `pe_fsm.disc_format_absent` counts every frame that left without it.
 
 ### 4(b) HELLO frame — offsets 72–133 (HELLO-specific tail)
 
@@ -1953,6 +2024,119 @@ because `vms-aa1` wired the live piggyback for MTYPE-10 application messages
 only and a directory inquiry is not one (`scs_credit.h` reachability note). A reference exchange longer than one inquiry would show a `1` OVMX never
 sends. Listed as a KNOWN DEVIATION and as one of the unseparated candidates
 for (e).**
+
+#### 4(h)(4b) The TRANSPORT COUNTER SPAN abs 36..55 — GROUNDED position by position (`E63`)
+
+§4(d) described abs 32..63 as "two 16-bit counters, each repeated up to 3×,
+zero-padded" and left "which repeat is which" **inferred**. `E63` measured it
+directly. Re-derive with
+
+```
+tools/cluster/scs_counter_span_measure.py ~/vax/cluster/captures --exclude ovmx
+```
+
+(the exclusion keeps OVMX's own emissions out of the population used to judge
+them). Population: **239,981 sequenced frames** — msgtype `0x4b`/`0x5b`/`0x7b`
+— across every reference capture we hold.
+
+| abs | Field | Dominant | Grounding |
+|---|---|---|---|
+| 36 | **§4(i).B node-incarnation echo** (was "small message count" — CORRECTED by `E66`, see 4(h)(4c)) | `1` (76.1%), `2` (19.4%), `3` (4.4%) | **zero in 0 of 239,981**; the 2/3 residue is DECODED — it is the incarnation, not a count |
+| 38 | SYSGEN `NISCS_LAN_OVRHD` | `18` | 239,932/239,981; zero in 0 |
+| 40 | `recv_ack` mirror | == `recv_ack` | 239,916/239,981; zero in 65 (frames whose `recv_ack` is itself 0) |
+| 42 | zero | `0` | 239,981/239,981 |
+| 44 | `send_seq` mirror | == `send_seq` | 239,981/239,981 (extends §4(h)(4)'s 17,758) |
+| 46 | zero | `0` | 239,981/239,981 |
+| 48 | `recv_ack`, 3rd repeat | == `recv_ack` | 239,872/239,981; zero in 109 |
+| 50 | zero | `0` | 239,981/239,981 |
+| 52 | constant | `0x0001` | 239,862/239,981; zero in 0 |
+| 54 | constant | `0x0200` | 238,521/239,981; zero in 0 |
+
+**The `0x41` START and the `0x48` credit-return occupy the same offsets by
+DIFFERENT rules** and are excluded from the table above — *except abs 36, which
+is the SAME field on all three classes* (§4(h)(4c)): on a START, abs 40/48/54
+are zero; on a credit-return, abs 44 is the §4(h)(3) secondary counter and abs
+54 is the frame's last byte. Only the sequenced classes follow the abs 40..54
+rule tabulated here.
+
+#### 4(h)(4c) abs 36 IS the §4(i).B incarnation, on EVERY class — GROUNDED (`E66`)
+
+§4(h)(4b) above labelled abs 36 a "small message count" and declared "what
+selects 2 or 3 is NOT decoded" an RE gap. That gap is **closed**, and the label
+was wrong: abs 36 is the §4(i).B **node-incarnation echo** — the number the
+PEER advertises for this node in its directed HELLO at payload `[78:80]` — and
+a real node stamps it on **every** frame of that circuit: `0x41`
+START/STACK/ACK, `0x4b`/`0x5b`/`0x7b` sequenced, and the `0x48` credit-return.
+
+Re-derive with `tools/cluster/incarnation_census.py <capture>...`:
+
+| specimen | what it shows |
+|---|---|
+| `af2-firsttimer-established-20260728.pcap` | VAX1 advertises `1 → 2 → 3` to the joiner across its three incarnations; the joiner's abs 36 walks in LOCKSTEP on all three classes — `0x41` {1:3, 2:3, 3:3}, sequenced {1:11769, 2:8042, 3:10658}, `0x48` {1:208, 2:29, 3:23}. VAX1 itself stamps `1` on 18,869 sequenced frames + 876 credit-returns: what the joiner advertised to IT. |
+| `cd0-bootB-zk1099-join-20260728.pcap` | the same `1 → 2` walk across `0x41` / sequenced / `0x48`. |
+| `join-e65refire-1788483810.pcap` (live 2-node) | 6 directions, 6/6 match "abs 36 == what the peer advertised to me": VAX1↔VAX2 is ASYMMETRIC (VAX1 advertises 2 to VAX2 and stamps 1; VAX2 advertises 1 to VAX1 and stamps 2), which a message count cannot produce. |
+| `ci3-addmember` / `c6d-vaxcluster-connect` | VAX1 stamps `1` toward VAX2 and `9/10` (resp. `6`) toward the OVMX MAC **in the same seconds** — per-circuit, not per-node, not per-frame. |
+| `ovmx-760-MEMBER-achieved-20260730.pcap` | every advertisement in the capture is `1`, so every node's abs 36 is `1`. The "floor 1" model was right by luck on a virgin lab and nowhere else. |
+
+**WHY IT MATTERS — the `E66` wall.** `E63` implemented the floor: the port
+echoed the real incarnation on its `0x41` frames (§4(i).B) but baked `1` into
+`vms_scs_seq_stamp()` and into the credit-return builder. Against the live
+2-node cluster, which advertised `8` to OVMX in every directed HELLO
+(`b2`/`b3`/`b4`, 1,743 frames, both members), the split produced:
+
+* `0x41` START/STACK/ACK at abs 36 = 8 — **accepted**, the handshake completed
+  in both directions with both members (round 0 → 1 → the 46-byte round-2 ACK);
+* 8,146 sequenced frames and 1,028 credit-returns at abs 36 = 1 —
+  **acknowledged ZERO times in 1,500 s**. Both members' `recv_ack` toward OVMX
+  stayed `0`, neither ever sent OVMX a `0x48`, and both retransmitted their own
+  `SCS$DIR_LOOKUP` `CONNECT_REQ` ~430 times at a frozen `send_seq`;
+* OVMX's `CONNECT_REQ` was otherwise **byte-identical** to VAX1's own
+  `CONNECT_REQ` on the same wire — the only differences in all 124 bytes are
+  the two MACs, the two LAVC addresses and the local Con.ID. So the discard is
+  not a content defect anywhere else in the frame.
+
+One root cause explains both halves of the symptom: the members discard the
+sequenced frames (never ack, `recv_ack` frozen at 0) **and** discard the
+credit-returns (so their own `CONNECT_REQ` never retires and they retransmit
+forever).
+
+**Consequence for a port (the rule).** The incarnation is a property of the
+CIRCUIT, not of a message class. Read it once, at formation, from the peer's
+directed HELLO, and stamp that one value on every frame of that circuit. A
+class-local constant is a fabrication (INV-6) even when it happens to match.
+Zero is unobserved in 239,981 frames, so a circuit with no echo has nothing
+honest to stamp and must send nothing at all.
+
+**WHY IT MATTERS — the `E63` measurement.** A port that stamped only abs
+32/34/44 and left 36/38/40/48/52/54 zero produced a shape that appears **in
+none** of the 239,981 reference frames. Against the live 2-node VAX cluster
+(`join-e60refire-1788471537.pcap`, 1,604 s) that port:
+
+* sent **8,550 sequenced frames** (419 `0x5b` + 8,131 `0x7b` retransmits) and
+  was acknowledged **zero times** — VAX1's and VAX2's `recv_ack` toward OVMX
+  read `0` on every frame in the capture, maximum 0;
+* never advanced past `send_seq` 3 (VAX1) / 4 (VAX2), i.e. never left the
+  §4(h) `SCS$DIRECTORY` connect handshake — it emitted `CONNECT_REQ`,
+  `CONNECT_RSP` and `ACCEPT_REQ` and **never once received `ACCEPT_RSP`**;
+* watched each VAX retransmit its own `SCS$DIR_LOOKUP` `CONNECT_REQ` 498 and
+  500 times, at a frozen `send_seq` of 1;
+* had the circuit closed on a timeout roughly every 17 s — 510 OVMX `0x41`
+  STARTs falling into **99 re-formation episodes** (grouping consecutive
+  STARTs separated by more than 3 s) — with **no `DISCONNECT_REQ`, no
+  `REJECT_REQ` and no diagnostic code** from either peer: across the whole
+  capture the only connection-control verbs either VAX sent OVMX are 498 and
+  500 `CONNECT_REQ`s. The only close indication is VAX1's
+  console `%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXJ1`, and
+  VAX1 allocating a fresh `SCS$DIRECTORY` Con.ID (`5441000c` → `5442000c`) for
+  the next attempt.
+
+The golden control is `formation-ci1-joinwindow.pcap` SCA 21–27, the same four
+frames in the same order between two real VAXes, where the responder's
+`CONNECT_RSP` is credit-returned by the initiator **within one millisecond**
+and `ACCEPT_RSP` follows. Byte-diffing OVMX's `CONNECT_RSP` against VAX2's
+(both 80-byte wire, same op, same phase) leaves exactly this span as the
+structural difference. An uninitialised span is not an honest omission; it is
+a poisoned frame.
 
 ### 4(i) Joining an ALREADY-ESTABLISHED cluster (member-state-seq > 1)
 

@@ -902,6 +902,72 @@ static void test_guard_class_names_do_not_drift(void)
 		 "an unknown ordinal renders as ? and never as a neighbour");
 }
 
+/*
+ * E81 -- THE RE-ISSUE THE FIX PRODUCES IS GENUINELY SAFE, not merely caught.
+ *
+ * When the p. 7-30 reconnect ladder rebinds a system to a fresh Con.ID, the CSB
+ * restarts BOTH dialogue cells (cnxman_csb_bind_connection), so the first body
+ * this node originates on it carries send-msg# 1 and ack 0. That is the shape
+ * asserted here, at the point every sequenced frame really passes: it goes out,
+ * and the guard finds NOTHING -- no refusal and no warning. A fix whose output
+ * only survived because the guard tolerated it would not be a fix.
+ *
+ * WHAT THIS TEST DELIBERATELY DOES NOT ASSERT. It does not claim the guard would
+ * catch a re-issue that carried the OLD dialogue's ack onto the new Con.ID pair.
+ * It would not, and must not: this guard's high-water mark is per CIRCUIT, not
+ * per Con.ID pair, because the reference corpus measures real VMS nodes opening
+ * a new pair and CONTINUING their counters across it (see `struct cm_guard`).
+ * The per-connection rule is the CSB's to keep, and test_cnxman_csb.c keeps it;
+ * what the guard owns, and what the arm below proves it still owns, is acking
+ * above what the peer has really said ON THIS CIRCUIT.
+ */
+static void test_e81_reconnect_reissue_is_clean_and_the_regression_is_not(void)
+{
+	struct guard_env e;
+	struct cm_spec s;
+	uint32_t i;
+
+	printf("-- E81: a rebound re-issue at send 1 / ack 0 is clean; an ack "
+	       "above the circuit's real high is refused\n");
+	open_circuit(&e);
+
+	/* The dialogue on the connection that later closes: the peer speaks
+	 * five times and this node answers, acking what really arrived. */
+	for (i = 1u; i <= 5u; i++) {
+		rx_cm(&e, (uint16_t)i, (uint16_t)(i - 1u), (uint16_t)i);
+		s = cm_ok((uint16_t)i, (uint16_t)i);
+		ct_check_eq_u32((unsigned long)send_cm(&e, &s),
+				(unsigned long)PE_VC_SEND_OK,
+				"the pre-reconnect dialogue runs clean");
+	}
+	ct_check_eq_u32(e.fsm.guard_refused, 0u, "nothing refused so far");
+
+	/* The ladder reconnects: a NEW Con.ID pair, and the CSB's restarted
+	 * cells put send-msg# 1 / ack 0 in the envelope. */
+	s = cm_ok(1u, 0u);
+	s.local_conid = CONID_OURS2;
+	s.remote_conid = CONID_THEIRS2;
+	ct_check_eq_u32((unsigned long)send_cm(&e, &s),
+			(unsigned long)PE_VC_SEND_OK,
+			"the E81 re-issue goes out");
+	ct_check_eq_u32(e.fsm.guard_refused, 0u,
+			"guard_refused is 0 -- the corrected re-issue is SAFE, "
+			"not tolerated");
+	ct_check_eq_u32(e.fsm.guard_warned, 0u, "and nothing was warned about");
+
+	/* The half the guard does own: an ack above what the peer has really
+	 * sent on this circuit is still refused outright. */
+	s = cm_ok(2u, 99u);
+	s.local_conid = CONID_OURS2;
+	s.remote_conid = CONID_THEIRS2;
+	ct_check_eq_u32((unsigned long)send_cm(&e, &s),
+			(unsigned long)PE_VC_SEND_UNSAFE,
+			"an unbacked ack is REFUSED, on the new pair as on the old");
+	ct_check_eq_u32(e.fsm.guard_refused, 1u, "and counted exactly once");
+	ct_check(strstr(e.fake.last_log, "ack-unbacked") != NULL,
+		 "named as the S2 vector");
+}
+
 int main(void)
 {
 	test_golden_dialogue_is_never_refused();
@@ -917,6 +983,7 @@ int main(void)
 	test_short_cm_frame_is_refused();
 	test_envelope_jump_warns_but_does_not_drop();
 	test_a_rebound_dialogue_restarting_at_one_is_clean();
+	test_e81_reconnect_reissue_is_clean_and_the_regression_is_not();
 	test_a_stalled_send_msg_warns();
 	test_ledger_does_not_advance_on_a_failed_send();
 	test_the_console_is_throttled();

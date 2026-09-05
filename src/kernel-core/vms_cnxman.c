@@ -1292,14 +1292,53 @@ static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
 }
 
 /*
- * E29: the first SYSAP to act on `enum scs_close_reason`. A REJECT is a
- * DIFFERENT fact from every other close (book p. 2-25's version gate, D12)
- * and is routed to cnxman_join_rejected(); everything else -- a matched
- * DISCONNECT, a lost path, a withdrawn SYSAP -- goes through the CSB ladder's
- * own connectivity-lost handling, which is what decides RECONNECT vs
- * PROPOSE_TRANSITION (p. 7-30), and then to cnxman_join_closed() so the join
- * (if this was one of its own two connections) sees the fact too.
+ * THE PEER ANSWERED "NO", AND BOTH HALVES OF THIS FILE HAVE TO HEAR IT (E81).
+ *
+ * A rejected VMS$VAXcluster connect is a fact about the SYSTEM, so it belongs to
+ * the CSB the Con.ID resolves to -- and until E81 it went ONLY to the join, which
+ * drops any Con.ID that is not its own (`cnxman_join_rejected`'s NOT_OURS arm).
+ * The reconnect ladder issues connects too (CNXMAN_CSB_ACT_RECONNECT, below), and
+ * a reject of ONE OF THOSE therefore reached nobody at all: the CSB stayed in
+ * RECONNECT and the once-a-second beat re-asked.
+ *
+ * MEASURED (join-e80refire-1788563452, CNXTRACE + pcap agreeing to the
+ * millisecond): CDT closed PATHLOST -> ladder reconnect -> the VAX answers
+ * REJECT_REQ -> the reject is logged `not-our-conid` and dropped -> 1.024 s later
+ * the beat sends a SECOND VMS$VAXcluster CONNECT_REQ -> ~470 ms after it the
+ * reference VAX's connection manager bugchecks CNXMGRERR and last-gasps. Fifteen
+ * of fifteen crash cycles in that run have exactly this shape; the one connect
+ * that was NOT followed by a second one was followed by no crash.
+ *
+ * So the ladder is told FIRST, and it stops asking for the rest of the reconnect
+ * window (h_connect_rejected). The join is still told, unchanged: if this WAS its
+ * own connect, p. 2-25's version verdict is its business.
+ *
+ * AND THE CON.ID IS RELEASED. `cdt_conid` is this node's claim to hold a
+ * connection to that system; the peer just refused it, so the claim is false, and
+ * a CSB that keeps it would let an emitter stamp an envelope for a connection
+ * that does not exist -- the E76/E77 crash family. Released through the single
+ * writer, and only when the CSB really was claiming THIS Con.ID (INV-6: a read,
+ * not an assumption about which attempt was refused).
+ *
+ * E29: the first SYSAP to act on `enum scs_close_reason`. Everything that is not
+ * a REJECT -- a matched DISCONNECT, a lost path, a withdrawn SYSAP -- goes
+ * through the CSB ladder's own connectivity-lost handling, which is what decides
+ * RECONNECT vs PROPOSE_TRANSITION (p. 7-30), and then to cnxman_join_closed() so
+ * the join (if this was one of its own two connections) sees the fact too.
  */
+static void cnxman_vc_rejected(struct vms_cnxman *cn, struct vms_csb *csb,
+			       vms_conid_t local_conid, uint32_t reason)
+{
+	if (csb != NULL) {
+		(void)cnxman_csb_dispatch(&cn->cl->club, csb,
+					  CNXMAN_CSB_EV_CONNECT_REJECTED,
+					  &cn->ops);
+		if (csb->cdt_conid == (uint32_t)local_conid)
+			cnxman_csb_bind_connection(csb, 0u);
+	}
+	cnxman_join_rejected(&cn->join, local_conid, reason);
+}
+
 static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 			     uint32_t reason)
 {
@@ -1312,7 +1351,7 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 			 (uint32_t)local_conid);
 
 	if (reason == (uint32_t)SCS_CLOSE_REJECTED) {
-		cnxman_join_rejected(&cn->join, local_conid, reason);
+		cnxman_vc_rejected(cn, csb, local_conid, reason);
 		return;
 	}
 

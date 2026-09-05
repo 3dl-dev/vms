@@ -14,7 +14,7 @@
  *
  * WHAT THIS PROVES. Two different things, deliberately kept apart:
  *
- *   1. THE TABLE, EXHAUSTIVELY. All 10 x 10 (state, event) cells are dispatched.
+ *   1. THE TABLE, EXHAUSTIVELY. Every (state, event) cell is dispatched.
  *      A cell the book puts an edge in must produce exactly that next state and
  *      that action; EVERY OTHER CELL must leave the CSB untouched, return NONE,
  *      and raise the CLUB's ignored-event counter. That last half is the real
@@ -140,6 +140,12 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_EV_NEW_INCARNATION,
 	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
 
+	/* E81: the peer's REJECT of our INITIAL connect. No reconnect window
+	 * exists and there is no membership to hold, so the CSB rests in NEW --
+	 * h_connect_abandoned's own grounding, with the reject counted. */
+	{ VMS_CNXMAN_CSB_CONNECT, CNXMAN_CSB_EV_CONNECT_REJECTED,
+	  VMS_CNXMAN_CSB_NEW, CNXMAN_CSB_ACT_NONE, "2-25/D12 + 7-24 CONNECT" },
+
 	/* OPEN -- "the normal state of a CSB" */
 	{ VMS_CNXMAN_CSB_OPEN, CNXMAN_CSB_EV_DISCONNECT,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_NONE, "7-24 DISCONNECT" },
@@ -167,6 +173,10 @@ static const struct ladder_case ladder[] = {
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_NEW_INCARNATION,
 	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	/* E81: a reject can land after the beat has already stepped the CSB
+	 * back to WAIT under the outstanding attempt. */
+	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_CONNECT_REJECTED,
+	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-25/D12 + 7-30" },
 
 	/* RECONNECT -- our attempt is in flight */
 	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_RECNX_ATTEMPT,
@@ -183,6 +193,11 @@ static const struct ladder_case ladder[] = {
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
 	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_NEW_INCARNATION,
 	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	/* E81: the peer ANSWERED our reconnect. Back to WAIT, and this ladder
+	 * stops asking for the rest of the window (proved behaviourally in
+	 * test_cnxman_recnx.c). */
+	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_CONNECT_REJECTED,
+	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-25/D12 + 7-30" },
 
 	/* REACCEPT -- the peer is reconnecting to us */
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_CONN_OPEN,
@@ -233,11 +248,13 @@ static struct vms_csb *ladder_csb(uint8_t state)
 
 static void test_ladder_exhaustive(void)
 {
+	const unsigned cells = (unsigned)VMS_CNXMAN_CSB_STATE__COUNT *
+			       (unsigned)CNXMAN_CSB_EV__COUNT;
 	unsigned covered = 0, ignored_cells = 0;
 	int st, ev;
 	int all_ok = 1;
 
-	printf("[csb] every one of the 100 (state, event) cells\n");
+	printf("[csb] every one of the %u (state, event) cells\n", cells);
 
 	for (st = 0; st < VMS_CNXMAN_CSB_STATE__COUNT; st++) {
 		for (ev = 0; ev < CNXMAN_CSB_EV__COUNT; ev++) {
@@ -302,10 +319,10 @@ static void test_ladder_exhaustive(void)
 		}
 	}
 
-	ct_check(all_ok, "all 100 cells behave exactly as the table declares");
+	ct_check(all_ok, "every cell behaves exactly as the table declares");
 	ct_check_eq_u32(covered, sizeof(ladder) / sizeof(ladder[0]),
 			"every declared edge was reached");
-	ct_check_eq_u32(ignored_cells, 100u - (unsigned)(sizeof(ladder) /
+	ct_check_eq_u32(ignored_cells, cells - (unsigned)(sizeof(ladder) /
 							 sizeof(ladder[0])),
 			"every other cell is an honestly ignored event");
 }
@@ -635,6 +652,68 @@ static void test_dialogue_is_per_connection(void)
 	cnxman_csb_bind_connection(NULL, 1u);   /* safe */
 }
 
+/*
+ * E81 -- THE RECONNECT LADDER'S OWN REBIND, AND THE REJECT THAT FOLLOWS IT.
+ *
+ * E77 proved the rule on the connection the JOIN adopts. The p. 7-30 reconnect
+ * apparatus mints connections too (CNXMAN_CSB_ACT_RECONNECT -> scs_connect ->
+ * cnxman_csb_bind_connection), and on join-e80refire that was the leg in play:
+ * the CM connection closed PATHLOST, the ladder reconnected, and the VAX
+ * refused the new connection. Two facts have to hold on that leg.
+ *
+ *   1. The envelope this block would stamp on the ladder's fresh Con.ID is
+ *      send-msg# 1 / ack 0 -- READ BACK OUT OF THE BYTES, not asserted about
+ *      the fields -- because the peer has said nothing on that connection.
+ *   2. Once the peer REFUSES that connection, this block claims no connection
+ *      at all, so no emitter can stamp an envelope for one that does not exist
+ *      (the E76/E77 crash family). The glue releases it through the single
+ *      writer; here that release is exercised directly.
+ */
+static void test_reconnect_dialogue_never_carries_the_old_ack(void)
+{
+	struct vms_csb *csb;
+	uint8_t body[132];
+	unsigned i;
+
+	printf("[csb] E81: the LADDER's reconnect opens at send 1 / ack 0\n");
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+
+	/* The connection the peer opened and this node accepted, with a real
+	 * dialogue on it: two originations of ours, five messages of theirs. */
+	cnxman_csb_bind_connection(csb, 0x81290012u);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_heard(csb, 5u);
+	ct_check_eq_u32(csb->cm_ack_msg, 5u, "the accepted leg acks the peer's 5");
+
+	/* It closes, and the ladder's reconnect mints a NEW Con.ID. */
+	cnxman_csb_bind_connection(csb, 0x81290013u);
+
+	for (i = 0; i < sizeof(body); i++)
+		body[i] = 0xffu;          /* poison: nothing may survive */
+	cnxman_envelope_originate(csb, body, 0);
+	ct_check_eq_u32((uint32_t)body[0] | ((uint32_t)body[1] << 8), 1u,
+			"body[0:2] on the reconnect is send-msg# 1");
+	ct_check_eq_u32((uint32_t)body[2] | ((uint32_t)body[3] << 8), 0u,
+			"body[2:4] is ack 0 -- the peer has sent NOTHING on "
+			"this connection, and asserting the old leg's 5 here is "
+			"the unbacked ack a real VAX bugchecks on");
+
+	/* The peer refuses it. This node then holds no connection to that
+	 * system, and says so. */
+	cnxman_csb_bind_connection(csb, 0u);
+	ct_check(!cnxman_csb_dialogue_is_on(csb, 0x81290013u),
+		 "a refused connection is not this block's dialogue");
+	ct_check_eq_u32(csb->cdt_conid, 0u,
+			"and the block claims no Con.ID at all, so no emitter "
+			"can stamp an envelope for it");
+}
+
 /* ==========================================================================
  * 5. NULL / edge safety
  * ========================================================================== */
@@ -703,6 +782,7 @@ int main(void)
 	test_learn_local_csid();
 	test_projection();
 	test_dialogue_is_per_connection();
+	test_reconnect_dialogue_never_carries_the_old_ack();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");
 }

@@ -540,6 +540,126 @@ static void test_degenerate_one_second_window(void)
 	ct_check_eq_u32(peer->attempts, 0, "and none was counted");
 }
 
+
+/* ==========================================================================
+ * 9. E81 -- A REJECTED RECONNECT IS AN ANSWER, AND IS NOT RE-ASKED
+ *
+ * THE WALL, live (join-e80refire-1788563452, 2026-09-04). The CNXTRACE ring and
+ * the LAN capture agree to the millisecond on a cycle that repeated 15 times:
+ *
+ *   t        the CM connection to VAX closes PATHLOST
+ *   t        this ladder issues its p. 7-30 reconnect (a VMS$VAXcluster
+ *            CONNECT_REQ carrying a fresh Con.ID)
+ *   t+0.4ms  the VAX answers REJECT_REQ -- it still holds a connection to us
+ *   t+1.024s the reject having reached nobody, THE BEAT ASKS AGAIN: a SECOND
+ *            VMS$VAXcluster CONNECT_REQ inside one second
+ *   t+1.49s  the VAX's connection manager bugchecks CNXMGRERR and last-gasps
+ *
+ * Fifteen of fifteen crashes in that run have exactly that shape, and the one
+ * reconnect in the run that was NOT followed by a second one was followed by no
+ * crash. The reject was dropped because it was delivered only to the JOIN, which
+ * discards a Con.ID that is not its own -- and these connects are the LADDER's.
+ *
+ * p. 2-25 / correction D12 makes a REJECT the peer's own judgement, and
+ * p. 7-30's "attempt once a second" is the rule for attempts that get NO answer.
+ * So the ladder now hears it, and stops asking for the rest of the window.
+ * ========================================================================== */
+
+/* Lose the connection, let the one p. 7-30 beat fire, and hand the ladder the
+ * peer's REJECT of that attempt. Returns the peer CSB, parked as the reject
+ * left it. */
+static struct vms_csb *rejected_reconnect_bed(void)
+{
+	struct vms_csb *peer;
+	struct cnxman_recnx_rec rec[4];
+
+	peer = bed(5, 0, 0);           /* a 5 s window: four beats' worth */
+	g_fake.now_ms = 0;
+	(void)cnxman_recnx_connectivity_lost(&g_recnx, peer, 0);
+
+	g_fake.now_ms = 1000;
+	(void)cnxman_recnx_tick(&g_recnx, rec, 4);
+	(void)cnxman_csb_dispatch(&g_cl.club, peer,
+				  CNXMAN_CSB_EV_CONNECT_REJECTED, &g_ops);
+	return peer;
+}
+
+static void test_a_rejected_reconnect_is_not_re_asked(void)
+{
+	struct vms_csb *peer;
+	struct cnxman_recnx_rec rec[4];
+	uint32_t t, n, i;
+	uint32_t further_attempts = 0, proposals = 0;
+
+	printf("[recnx] E81: a REJECTED reconnect is not re-asked (p. 2-25/D12)\n");
+	peer = rejected_reconnect_bed();
+
+	ct_check_eq_u32(peer->attempts, 1,
+			"exactly ONE attempt was made before the peer answered");
+	ct_check_eq_u32(peer->connect_rejects, 1,
+			"and the peer's answer reached this CSB");
+	ct_check_eq_u32(peer->state, VMS_CNXMAN_CSB_WAIT,
+			"the CSB is back in WAIT, not still attempting");
+	ct_check(cnxman_csb_is_member(peer),
+		 "MEMBERSHIP IS HELD -- one refused connect is not a departure "
+		 "(p. 7-30)");
+	ct_check_eq_u32(peer->deadline_ms, 5000,
+			"and the reconnect window itself was NOT shortened");
+
+	/* THE REGRESSION. Before E81 every one of these beats produced another
+	 * VMS$VAXcluster CONNECT_REQ, and the second one crashed the peer. */
+	for (t = 1250; t < 5000; t += 250) {
+		g_fake.now_ms = t;
+		n = cnxman_recnx_tick(&g_recnx, rec, 4);
+		for (i = 0; i < n; i++) {
+			if (rec[i].action == CNXMAN_CSB_ACT_RECONNECT)
+				further_attempts++;
+		}
+	}
+	ct_check_eq_u32(further_attempts, 0,
+			"ZERO further connects go to a peer that already answered");
+	ct_check_eq_u32(peer->attempts, 1, "the attempt count did not move");
+	ct_check_eq_u32(g_recnx.attempts_issued, 1,
+			"and the loop's own ledger agrees");
+
+	/* p. 7-30's ending is untouched: the window runs out and the node makes
+	 * its ONE conditional proposal. */
+	g_fake.now_ms = 5000;
+	n = cnxman_recnx_tick(&g_recnx, rec, 4);
+	for (i = 0; i < n; i++) {
+		if (rec[i].action == CNXMAN_CSB_ACT_PROPOSE_TRANSITION)
+			proposals++;
+	}
+	ct_check_eq_u32(proposals, 1,
+			"the window still expires into exactly one proposal");
+}
+
+/*
+ * STOPPING ASKING IS NOT STOPPING ANSWERING. p. 7-24 REACCEPT is still on the
+ * [WAIT] row, so the peer that refused our connect can still open its own -- and
+ * on the live run it did, 0.46 s after the fatal second CONNECT_REQ. A fix that
+ * wedged this node into silence would trade a crash for a join that can never
+ * complete.
+ */
+static void test_a_reject_does_not_stop_us_answering(void)
+{
+	struct vms_csb *peer;
+
+	printf("[recnx] E81: after a reject the peer's OWN reconnect is still taken\n");
+	peer = rejected_reconnect_bed();
+
+	(void)cnxman_csb_dispatch(&g_cl.club, peer,
+				  CNXMAN_CSB_EV_CONNECT_RCVD, &g_ops);
+	ct_check_eq_u32(peer->state, VMS_CNXMAN_CSB_REACCEPT,
+			"the peer's reconnect is accepted (p. 7-24 REACCEPT)");
+	(void)cnxman_csb_dispatch(&g_cl.club, peer, CNXMAN_CSB_EV_CONN_OPEN,
+				  &g_ops);
+	ct_check_eq_u32(peer->state, VMS_CNXMAN_CSB_OPEN,
+			"and the connection comes up on the peer's leg");
+	ct_check_eq_u32(peer->reconnects, 1, "counted as a recovered break");
+	ct_check(cnxman_csb_is_member(peer), "membership never lapsed");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_recnx: RECNXINTERVAL/TIMVCFAIL + last gasp ===\n");
@@ -556,5 +676,7 @@ int main(void)
 	test_local_csb_never_reconnects();
 	test_lifecycle_and_null_safety();
 	test_degenerate_one_second_window();
+	test_a_rejected_reconnect_is_not_re_asked();
+	test_a_reject_does_not_stop_us_answering();
 	return ct_summary("test_cnxman_recnx");
 }

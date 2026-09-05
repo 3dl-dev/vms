@@ -246,6 +246,42 @@ static enum cnxman_csb_action h_recnx_attempt(struct vms_club *club,
 	return CNXMAN_CSB_ACT_RECONNECT;
 }
 
+/*
+ * THE PEER ANSWERED "NO" (E81). p. 2-25 / correction D12: a REJECT is the
+ * remote connection manager's JUDGEMENT on the 16-byte connect data, not a lost
+ * attempt -- and p. 7-30's "attempt once a second" is the rule for attempts that
+ * get no answer. Re-asking a peer that answered is the loop
+ * cnxman_join_rejected() already refuses for the join's own connect, and it is
+ * measured: on join-e80refire-1788563452 this ladder's reconnect was rejected,
+ * the reject reached nobody, and the beat re-asked 1.024 s later -- 15 of 15
+ * times, that SECOND VMS$VAXcluster CONNECT_REQ was followed ~470 ms later by
+ * the reference VAX's CNXMGRERR bugcheck and last gasp.
+ *
+ * SO: no further attempt is made in THIS reconnect window. The window itself is
+ * untouched -- `deadline_ms` was set when connectivity was lost and is not
+ * extended or shortened here -- so p. 7-30's ending is unchanged: the window
+ * runs out and h_recnx_expired() makes its conditional proposal. And the peer's
+ * own reconnect is still taken, because [WAIT] keeps its CONNECT_RCVD ->
+ * h_reaccept edge (p. 7-24 REACCEPT); this node stops ASKING, it does not stop
+ * ANSWERING.
+ *
+ * MEMBERSHIP IS HELD, exactly as h_conn_lost holds it: nothing about the remote
+ * system's membership changed because it refused one connect (p. 7-30, "do not
+ * presume that the remote system has left").
+ */
+static enum cnxman_csb_action h_connect_rejected(struct vms_club *club,
+						 struct vms_csb *csb,
+						 const struct cnxman_ops *ops)
+{
+	(void)club;
+	csb->connect_rejects++;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	csb->next_attempt_ms = csb->deadline_ms;
+	csb_log(ops, "%CNXMAN, a cluster member refused this node's reconnect: "
+		     "not asking it again until the reconnect interval expires");
+	return CNXMAN_CSB_ACT_NONE;
+}
+
 /* p. 7-24 WAIT: "This will be repeated until either connectivity is once again
  * established ... or a time limit is exceeded". The attempt failed, so the
  * timeout resumes; the deadline set at loss time is NOT extended. */
@@ -316,6 +352,23 @@ static enum cnxman_csb_action h_connect_abandoned(struct vms_club *club,
 	return CNXMAN_CSB_ACT_NONE;
 }
 
+/*
+ * The peer's REJECT of this node's INITIAL connect (E81). There is no reconnect
+ * window here and no membership to hold, so h_connect_abandoned's own grounding
+ * applies unchanged -- "the connection was never OPEN, so p. 7-30's reconnect
+ * apparatus ... does not apply" -- and the CSB rests in NEW. The reject is
+ * COUNTED, because "the peer refuses us" and "the peer never answered" are the
+ * two diagnoses an operator has to be able to tell apart.
+ */
+static enum cnxman_csb_action h_initial_connect_rejected(struct vms_club *club,
+							 struct vms_csb *csb,
+							 const struct cnxman_ops *ops)
+{
+	csb->connect_rejects++;
+	csb_log(ops, "%CNXMAN, a cluster member refused this node's connection");
+	return h_connect_abandoned(club, csb, ops);
+}
+
 /* ==========================================================================
  * The table. [state][event]; NULL = the published description names no such
  * edge, so the event is ignored and counted.
@@ -337,6 +390,7 @@ static const csb_handler_t csb_table[VMS_CNXMAN_CSB_STATE__COUNT]
 	[VMS_CNXMAN_CSB_CONNECT] = {
 		[CNXMAN_CSB_EV_CONN_OPEN]       = h_open,
 		[CNXMAN_CSB_EV_CONN_LOST]       = h_connect_abandoned, /* INFERRED */
+		[CNXMAN_CSB_EV_CONNECT_REJECTED] = h_initial_connect_rejected,
 		[CNXMAN_CSB_EV_DISCONNECT]      = h_disconnect,
 		[CNXMAN_CSB_EV_NEW_INCARNATION] = h_dead,
 	},
@@ -368,6 +422,9 @@ static const csb_handler_t csb_table[VMS_CNXMAN_CSB_STATE__COUNT]
 	/* [WAIT] the p. 7-30 timeout is running. */
 	[VMS_CNXMAN_CSB_WAIT] = {
 		[CNXMAN_CSB_EV_RECNX_ATTEMPT]   = h_recnx_attempt,
+		/* E81: a reject can land here when the beat has already stepped
+		 * the CSB back to WAIT under the outstanding attempt. */
+		[CNXMAN_CSB_EV_CONNECT_REJECTED] = h_connect_rejected,
 		[CNXMAN_CSB_EV_RECNX_EXPIRED]   = h_recnx_expired,
 		[CNXMAN_CSB_EV_CONNECT_RCVD]    = h_reaccept,
 		[CNXMAN_CSB_EV_CONN_OPEN]       = h_open,
@@ -380,6 +437,7 @@ static const csb_handler_t csb_table[VMS_CNXMAN_CSB_STATE__COUNT]
 	 * not just for the first attempt. */
 	[VMS_CNXMAN_CSB_RECONNECT] = {
 		[CNXMAN_CSB_EV_RECNX_ATTEMPT]   = h_recnx_attempt,
+		[CNXMAN_CSB_EV_CONNECT_REJECTED] = h_connect_rejected,
 		[CNXMAN_CSB_EV_CONN_OPEN]       = h_open,
 		[CNXMAN_CSB_EV_RECNX_FAILED]    = h_recnx_failed,
 		[CNXMAN_CSB_EV_RECNX_EXPIRED]   = h_recnx_expired,
@@ -809,7 +867,7 @@ static const char *const csb_event_names[CNXMAN_CSB_EV__COUNT] = {
 	"connect sent", "connect received", "connection open",
 	"disconnect", "connectivity lost", "last gasp",
 	"reconnect attempt", "reconnect failed", "reconnect expired",
-	"new incarnation"
+	"new incarnation", "connect rejected"
 };
 
 static const char *const csb_action_names[CNXMAN_CSB_ACT__COUNT] = {

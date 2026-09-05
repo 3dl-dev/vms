@@ -518,6 +518,24 @@ static void test_glue_bindings(void)
 		  "E77: and so is a reconnect's -- the case where a burned "
 		  "number used to cross a teardown");
 
+	/*
+	 * E81. A rejected connect is a fact about the SYSTEM, so the CSB ladder
+	 * has to hear it: this ladder issues connects of its own, and until E81
+	 * their rejections went ONLY to the join, which discards a Con.ID that is
+	 * not its own -- so the once-a-second beat re-asked a peer that had
+	 * already answered, and the SECOND VMS$VAXcluster CONNECT_REQ inside one
+	 * second bugchecked the reference VAX (join-e80refire, 15/15).
+	 */
+	check_has("CNXMAN_CSB_EV_CONNECT_REJECTED",
+		  "E81: a REJECT reaches the CSB ladder, not only the join");
+	check_has("cnxman_join_rejected(&cn->join, local_conid, reason)",
+		  "E81: and the join is still told -- p. 2-25's version verdict "
+		  "is still its business");
+	check_has("cnxman_csb_bind_connection(csb, 0u)",
+		  "E81: a refused connection is RELEASED through the single "
+		  "writer -- a CSB that kept claiming it could stamp an "
+		  "envelope for a connection that does not exist");
+
 	/* E3. */
 	check_has("club->proposed_valid = 1u",
 		  "E3: the glue sets proposed_valid when it fills the "

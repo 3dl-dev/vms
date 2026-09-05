@@ -341,6 +341,17 @@ struct vms_csb {
 	uint32_t attempts;           /* reconnect attempts issued for this break */
 	uint32_t reconnects;         /* breaks this CSB recovered from */
 	uint32_t transitions_proposed; /* transitions THIS CSB's loss caused us to propose */
+	/*
+	 * How many of this CSB's own connect attempts the remote connection
+	 * manager REJECTED (book p. 2-25 / correction D12: the CMs identify
+	 * their version to each other in the 16-byte connect data and reject one
+	 * they do not approve of). Counted in the block rather than a global
+	 * (design sec 3.9 rule 3) because "the peer keeps saying no" and "the
+	 * peer keeps not answering" are different diagnoses that p. 7-30's
+	 * `attempts` alone cannot tell apart -- and because re-asking a peer
+	 * that answered is the E81 crash-loop.
+	 */
+	uint32_t connect_rejects;
 
 	/*
 	 * ---- the SYSAP dialogue counters (design sec 3.2.4 ruling E1) ----

@@ -93,6 +93,21 @@ enum cnxman_csb_event {
 	 * CSB whose connection state is DEAD represents the old incarnation"). */
 	CNXMAN_CSB_EV_NEW_INCARNATION = 9,
 
+	/*
+	 * The remote connection manager REJECTED a connect this ladder issued
+	 * (E81). Distinct from RECNX_FAILED, and the distinction is the whole
+	 * point: RECNX_FAILED is "the attempt did not connect", which p. 7-30
+	 * answers by attempting again a second later; a REJECT is the peer's own
+	 * ANSWER (p. 2-25 / correction D12), and re-asking a peer that answered
+	 * is a loop rather than a recovery -- cnxman_join_rejected() already says
+	 * so in as many words for the join's own connect. Until E81 nothing
+	 * carried that answer to this ladder at all, so the once-a-second beat
+	 * re-asked, and the SECOND CONNECT_REQ inside one second bugchecked the
+	 * reference VAX's connection manager (CNXMGRERR, 15/15 in
+	 * join-e80refire-1788563452).
+	 */
+	CNXMAN_CSB_EV_CONNECT_REJECTED = 10,
+
 	CNXMAN_CSB_EV__COUNT
 };
 

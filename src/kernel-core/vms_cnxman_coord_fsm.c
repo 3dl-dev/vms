@@ -579,8 +579,9 @@ static void coord_send_relay(struct cnxman_coord *c, uint32_t i)
 			"%CNXMAN, transition relay could not be built");
 		return;
 	}
-	/* A genuine origination: this CSB's own txn/token belong at body[4:8]. */
-	cnxman_envelope_originate(csb, c->scratch, 0);
+	/* A REQUEST: the relay is answered (0x81/0x12), and 53 of 55 real
+	 * op-0x12 originations carry a nonzero pair (E85 census). */
+	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_REQUEST);
 	coord_emit(c, dst, written);
 	c->relays_sent++;
 	/* The subject's identity has no grounded offset in this body (codec
@@ -604,7 +605,8 @@ static void coord_send_commit(struct cnxman_coord *c, uint32_t i)
 			"%CNXMAN, membership commit could not be built");
 		return;
 	}
-	cnxman_envelope_originate(csb, c->scratch, 0);
+	/* A REQUEST: 142/142 real op-0x03 originations carry a nonzero pair. */
+	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_REQUEST);
 	coord_emit(c, dst, written);
 	c->commits_sent++;
 }
@@ -626,7 +628,8 @@ static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 			"%CNXMAN, transition proposal could not be built");
 		return;
 	}
-	cnxman_envelope_originate(csb, c->scratch, 0);
+	/* A REQUEST: 97/97 real op-0x09 originations carry a nonzero pair. */
+	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_REQUEST);
 	coord_emit(c, dst, written);
 	c->opens_sent++;
 	/* Book p. 7-40's proposed quorum / votes / foundation time / founder /
@@ -651,10 +654,11 @@ static void coord_send_go(struct cnxman_coord *c, uint32_t i)
 			"%CNXMAN, transition commit could not be built");
 		return;
 	}
-	/* A genuine origination (real send/ack/token), with the ONE documented
-	 * exception the codec itself enforces: txn forced back to zero, a
-	 * notification wire fact (spec sec 4(p)), never a raw offset here. */
-	cnxman_envelope_originate(csb, c->scratch, 0);
+	/* A NOTIFY: spec sec 4(p) says the GO is never answered, and the E85
+	 * census says both cells are zero on all 125 real ones. The codec's own
+	 * enforcement follows, so the wire fact holds even if this kind is ever
+	 * mis-stated here -- a raw offset never appears in this file. */
+	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_NOTIFY);
 	vms_cm_notification_zero_txn(c->scratch);
 	coord_emit(c, dst, written);
 	c->gos_sent++;
@@ -676,8 +680,9 @@ static void coord_send_release(struct cnxman_coord *c, uint32_t i, uint32_t step
 			"%CNXMAN, barrier release could not be built");
 		return;
 	}
-	/* Same origination-then-force-txn-zero recipe as the GO. */
-	cnxman_envelope_originate(csb, c->scratch, 0);
+	/* Same NOTIFY-then-force-zero recipe as the GO (1104/1104 real op-0x0c
+	 * originations carry no pair at all). */
+	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_NOTIFY);
 	vms_cm_notification_zero_txn(c->scratch);
 	coord_emit(c, dst, written);
 	c->releases_sent++;
@@ -1145,7 +1150,7 @@ static void coord_ack_step(struct cnxman_coord *c, const struct coord_msg *m)
 		return;
 	}
 	/* The verbatim echo already carries the member's own txn/token. */
-	cnxman_envelope_originate(csb, c->scratch, 1);
+	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_RESPONSE);
 	coord_emit_response(c, written);
 	c->step_acks_sent++;
 }

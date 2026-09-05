@@ -120,10 +120,11 @@ static void bed_advance_dialogue(struct vms_csb *csb)
 	if (csb == NULL)
 		return;
 	csb->cm_send_msg++;
-	csb->cm_token++;
-	/* cm_ack_msg/cm_txn are NOT advanced here, same reasoning as the
-	 * barrier bed: ack_msg changes only on a real receive, and txn is
-	 * per-dialogue, not per-message. */
+	/* `cm_token` IS NOT advanced here any more (E85): the executive owns
+	 * it, in cnxman_envelope_originate(). See the barrier bed's note for
+	 * what the bed-only maintenance cost on the real wire.
+	 * cm_ack_msg/cm_txn are likewise not advanced here: ack_msg changes
+	 * only on a real receive, and txn is per-dialogue, not per-message. */
 }
 
 static uint32_t bed_rebuild_outstanding(void *ctx)
@@ -981,12 +982,21 @@ static void test_release_fields_trace_to_real_state(void)
 				"step index 1");
 		ct_check_eq_u32(sent_le16(s, VMS_OFF_CM_TXN), 0,
 				"txn=0: a release is never answered");
-		/* THE ANTI-LARP CHECK. The token is the connection manager's
-		 * own continuous counter, never the step ordinal and never a
-		 * member index -- the substitution that stalled a real
-		 * barrier. */
-		ct_check(sent_le16(s, VMS_OFF_CM_TOKEN) >= 0x07f5u,
-			 "token came from the CM's counter, not an ordinal");
+		/*
+		 * ... AND SO IS THE TOKEN (E85, a CORRECTION). This used to
+		 * assert the token came from the CM's counter (>= the bed's
+		 * seed), on the reasoning that only txn was spec-constrained.
+		 * The wire says otherwise: 1104 of 1104 real op-0x0c releases
+		 * in the capture library carry a ZERO token, as do 125 of 125
+		 * op-0x0a GOs. A message no node ever answers has nothing to
+		 * correlate, and the tightened assertion (== 0, not >= a bed
+		 * seed) is the one the census supports. The anti-LARP check it
+		 * replaced now lives where the token is really asserted -- the
+		 * op-0x0b step, test_cnxman_barrier.c.
+		 */
+		ct_check_eq_u32(sent_le16(s, VMS_OFF_CM_TOKEN), 0,
+				"and token=0 with it: a notification carries "
+				"no correlation pair at all");
 	}
 	ct_check_eq_u32(g.c.epoch, START_EPOCH + 1u,
 			"the epoch is the CLUB's own, advanced (spec sec 4(r) "

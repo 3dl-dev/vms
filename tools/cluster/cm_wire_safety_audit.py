@@ -670,6 +670,93 @@ def check_uncorrelatable_response(frames, audited):
     return findings
 
 
+# ---------------------------------------------------------------------------
+# vector S13/S14 -- a MANDATORY field asserted as "nothing here"
+#
+# Both of these are the same defect wearing two hats: a fixed-width body cannot
+# express "omitted", so a field the executive cannot ground goes out as zero --
+# and on these offsets zero is a value no reference node has ever put on this
+# wire. The gate reported 0 FATAL / 0 WARN on the run that discovered them
+# (join-e83refire-1788612567), 0.6 ms before the transition coordinator
+# bugchecked CNXMGRERR and last-gasped, which is why they exist.
+# ---------------------------------------------------------------------------
+
+# MEASURED over the whole capture library (47 pcaps, five distinct responder
+# nodes): of the 122 body offsets in body[10:132], body[24] is the ONLY one
+# that is nonzero in 1308 of 1308 real cat-0x86 op-0x00 close responses. Its
+# meaning is UNGROUNDED -- it is not an echo (the best-matching request offset
+# agrees 358/1308 = 27%), it is not the op-0x01 PARAMS block (every real PARAMS
+# puts 0x0001 there while the same node's closes put 3, 4 and 5), and it is not
+# per-node. So this check asserts nothing about what the field MEANS; it
+# asserts only what the corpus says about what it is never allowed to be.
+CLOSE_STATE_OFFSET = 24
+
+# MEASURED per (category, opcode) over every originated body in the corpus: the
+# opcodes whose (txn, token) pair is nonzero in EVERY single specimen, with the
+# population. The complement -- op 0x00/0x02/0x04/0x06/0x0a/0x0c/0x14 and all of
+# cat-0x04 -- is the opposite law, zero in every specimen, and spec sec 4(p)
+# names two of those ("Notifications carry txn=0 and are NEVER answered").
+# Only opcodes with a population far above the corpus's own thin-sample
+# threshold are listed, so a finding here is never a small-sample artefact.
+CORRELATED_OPS = {
+    (0x01, 0x03): 142,     # membership COMMIT
+    (0x01, 0x05): 282,     # lock/resource rebuild
+    (0x01, 0x09): 97,      # transition open
+    (0x01, 0x0b): 1035,    # BARRIER STEP -- the coordinator correlates its
+                           # releases by this pair; twelve steps sharing one
+                           # value are twelve steps it cannot tell apart
+    (0x02, 0x0d): 21680,   # DLM rebuild record
+    (0x06, 0x00): 1361,    # transaction close (the REQUEST direction)
+}
+
+
+def check_close_state(frames, audited):
+    """A cat-0x86 op-0x00 close whose body[24] is zero -- a byte no reference
+    node has ever put on this wire, and the one OVMX did put there 0.6 ms
+    before the coordinator bugchecked."""
+    findings = []
+    for f in frames:
+        if f.category != 0x86 or f.opcode != 0x00 or f.src not in audited:
+            continue
+        if f.body[CLOSE_STATE_OFFSET] != 0:
+            continue
+        findings.append(Finding(
+            "S13-CLOSE-STATE-ZERO", FATAL, f,
+            "cat-06 close %s carries body[%d] == 0" %
+            (f.label(), CLOSE_STATE_OFFSET),
+            "MEASURED: body[%d] is nonzero in 1308 of 1308 real close "
+            "responses across the whole library -- the ONLY offset in "
+            "body[10:132] that is never zero. OBSERVED CRASH: CNXMGRERR, the "
+            "coordinator's last gasp 0.6 ms later "
+            "(join-e83refire-1788612567 frames 894 -> 898)." %
+            CLOSE_STATE_OFFSET))
+    return findings
+
+
+def check_request_pair(frames, audited):
+    """An ORIGINATION of an opcode whose transaction pair is nonzero in every
+    reference specimen, carrying zero in either cell. The peer echoes that pair
+    to correlate its answer; a run of requests carrying one value is a run the
+    peer cannot tell apart."""
+    findings = []
+    for f in frames:
+        if f.is_response or f.src not in audited:
+            continue
+        n = CORRELATED_OPS.get((f.base_category, f.opcode))
+        if n is None or (f.txn != 0 and f.token != 0):
+            continue
+        findings.append(Finding(
+            "S14-REQUEST-PAIR-ZERO", FATAL, f,
+            "origination %s carries txn=%04x token=%04x" %
+            (f.label(), f.txn, f.token),
+            "MEASURED: all %d real cat-%02x op-%02x originations in the "
+            "corpus carry a NONZERO transaction number AND a nonzero "
+            "correlation token; zero occurrences of either at zero. The peer "
+            "correlates its answer by that pair." %
+            (n, f.base_category, f.opcode)))
+    return findings
+
+
 def uncorrelated_rate(frames, audited, matched):
     """(uncorrelated, total) responses from the audited sources -- reported as
     context, never as a finding. Real corpus baseline: 5.3%."""
@@ -800,6 +887,8 @@ def audit(path, frames, audited):
     findings += check_dlm_resource_name(frames, audited)
     findings += check_cm_echo(frames, audited, matched)
     findings += check_close_echo(frames, audited, matched)
+    findings += check_close_state(frames, audited)
+    findings += check_request_pair(frames, audited)
     findings += check_notification_answered(frames, audited)
     findings += check_uncorrelatable_response(frames, audited)
     findings += check_conid(frames, audited)
@@ -1083,6 +1172,20 @@ def _violation_cases():
     cases["S11-FRAME-SIZE"] = [
         _synth_cm(ts, OVMX, VAX, 0x2002, 0x1002, 1, 0, 1, 1, 0x01, 0x06,
                   length=CM_FRAME_BYTES + 60)]
+
+    # S13: the close OVMX really sent -- correct envelope, correct token pair,
+    # a payload that is NOT a reflection (S7 stays quiet), and body[24] zero.
+    req13 = _synth_cm(ts, VAX, OVMX, 0x1002, 0x2002, 9, 1, 13, 13, 0x06, 0x00,
+                      payload=b"\x55" * 100)
+    resp13 = bytearray(_synth_cm(ts + .001, OVMX, VAX, 0x2002, 0x1002, 4, 9,
+                                 13, 13, 0x86, 0x00)[1])
+    resp13[OFF_CM_BODY + 88:OFF_CM_BODY + 96] = b"VMX V0.6"
+    cases["S13-CLOSE-STATE-ZERO"] = [req13, (ts + .001, bytes(resp13))]
+
+    # S14: a barrier step originated with the pair this executive carried on
+    # every one of its twelve, before it minted them.
+    cases["S14-REQUEST-PAIR-ZERO"] = [
+        _synth_cm(ts, OVMX, VAX, 0x2002, 0x1002, 5, 9, 0, 0, 0x01, 0x0b)]
     return cases
 
 

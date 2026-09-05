@@ -289,15 +289,42 @@ const char *cnxman_csb_action_name(enum cnxman_csb_action a);
  *     dialogue with `csb`'s system, written on EVERY call, response or
  *     origination.
  *
- *   body[4:6] txn, body[6:8] token -- written ONLY when `is_response` is 0: an
- *     ORIGINATION carries this CSB's own transaction id and correlation
- *     token (the token's derivation is UNKNOWN per spec sec 4(j); it is
- *     never computed, only carried). When `is_response` is nonzero these two
+ *   body[4:6] txn, body[6:8] token -- written ONLY when `keep_pair` is 0: an
+ *     origination that OPENS A TRANSACTION carries this CSB's own transaction
+ *     id and correlation token. When `keep_pair` is nonzero these two
  *     bytes are left EXACTLY as they already are in `body` -- the answer a
  *     real VMS peer correlates by is the txn/token IT sent, and every
  *     response recipe in vms_cluster_codec_cm.h (the echo family, the
  *     close/DLM-op0d/body/step-ack builders) already puts that echoed value
  *     there before this is called.
+ *
+ *     THIS NODE MINTS ITS OWN PAIR; IT DOES NOT REPRODUCE THE PEER'S (E85).
+ *     Spec sec 4(j) records VMS's derivation of these two cells as UNKNOWN,
+ *     and Rule 8 forbids recomputing it -- but a correlation token is not a
+ *     claim about cluster state, it is the sender's own handle for a request
+ *     it is about to make, exactly like send-msg#. The peer's only use of it
+ *     is to echo it back (measured: every response in the capture library
+ *     returns the requester's pair verbatim), so a value minted from this
+ *     block's own counters is grounded in real executive state, asserts
+ *     nothing about the cluster, and is the ONLY thing here that lets a peer
+ *     tell this node's twelve barrier steps apart.
+ *
+ *     WHAT IS MEASURED, AND WHAT IS NOT. Measured over the whole capture
+ *     library: 1035 of 1035 real cat-0x01 op-0x0b barrier steps carry a
+ *     NONZERO txn and a NONZERO token -- zero occurrences of either at zero.
+ *     Measured on the reference joiner across one barrier: the txn stays
+ *     constant for the dialogue while the token advances by one per
+ *     origination (0x07f5, f6, f7 ... 0x0801 at step 12). NOT measured, and
+ *     therefore NOT implemented as a rule: the third reference node varies
+ *     both, so "txn is constant per dialogue" is this node's own discipline,
+ *     not a protocol law.
+ *
+ *     WHAT IT COST TO LEAVE THEM AT ZERO. Nothing in this executive advanced
+ *     either cell until E85 -- only three test beds did -- so every
+ *     origination this node has ever made carried (0,0), and its twelve
+ *     barrier steps were byte-identical in the two fields the coordinator
+ *     correlates its releases by. The bed-only maintenance is exactly why the
+ *     R1 suite was green while the wire carried zeros.
  *
  *     The GO and the RELEASE (op 0x0a/0x0c) are notifications that force
  *     txn=0 (spec sec 4(p): "Notifications carry txn=0 and are NEVER
@@ -315,7 +342,7 @@ const char *cnxman_csb_action_name(enum cnxman_csb_action a);
  */
 void cnxman_envelope_stamp(const struct vms_csb *csb,
 			   uint8_t body[132] /* VMS_CM_BODY_LEN */,
-			   int is_response);
+			   int keep_pair);
 
 /*
  * The two dialogue cells the stamper reads, maintained as NAMED CSB
@@ -334,6 +361,50 @@ void cnxman_envelope_stamp(const struct vms_csb *csb,
  */
 void cnxman_csb_dialogue_sent(struct vms_csb *csb);
 void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg);
+
+/*
+ * OPEN A TRANSACTION ON THIS DIALOGUE: advance `cm_token` to its next NONZERO
+ * value (E85, see SS8 above). Called once per body that really OPENS one, by
+ * cnxman_envelope_originate() and nowhere else -- an emitter that advances it
+ * itself is doing arithmetic on another layer's dialogue state, the same
+ * category error the stamper exists to prevent.
+ */
+void cnxman_csb_transaction_opened(struct vms_csb *csb);
+
+/*
+ * WHAT A BODY IS, AS FAR AS body[4:8] IS CONCERNED (E85).
+ *
+ * "Origination vs response" is not the distinction the wire draws. A CENSUS of
+ * every originated `VMS$VAXcluster` body in the capture library splits the
+ * opcodes cleanly in three, and the split is "does the sender expect this
+ * message to be ANSWERED":
+ *
+ *   ALWAYS NONZERO -- cat-0x01 op 0x03 (142/142), 0x05 (282/282), 0x08
+ *     (26/26), 0x09 (97/97), 0x0b (1035/1035), 0x0d, 0x0f; cat-0x02 op 0x0d
+ *     (21680/21680), 0x07, 0x08, 0x0e, 0x0f, 0x10, 0x12, 0x14, 0x16;
+ *     cat-0x06 op 0x00 (1361/1361). Zero occurrences of zero, anywhere.
+ *
+ *   ALWAYS ZERO -- cat-0x01 op 0x00, 0x02 (95/95), 0x04, 0x06 (12757/12757),
+ *     0x0a (125/125), 0x0c (1104/1104), 0x14 (203/203); every cat-0x04.
+ *     Spec sec 4(p) already names two of these ("Notifications carry txn=0 and
+ *     are NEVER answered"); the census says the rule is the whole class, and
+ *     that BOTH cells are zero, not just body[4:6].
+ *
+ * So an emitter has to say which of the three its body is. It always knows --
+ * it just built it -- and making it say so is what keeps this rule out of a
+ * table of opcodes that some future builder forgets to update.
+ */
+enum cnxman_envelope_kind {
+	/* Answers the peer's request: body[4:8] already holds the peer's own
+	 * pair, echoed by the response recipe. Nothing here may touch it. */
+	CNXMAN_ENV_RESPONSE = 0,
+	/* An origination whose (cat,op) the census measures at zero: the
+	 * builder built from zero and it stays that way. */
+	CNXMAN_ENV_NOTIFY   = 1,
+	/* An origination the peer WILL answer: this dialogue mints a fresh
+	 * nonzero token so the answer can be told from the last one. */
+	CNXMAN_ENV_REQUEST  = 2
+};
 
 /*
  * THE COUNTERS BELONG TO A CONNECTION, NOT TO A SYSTEM (E77).
@@ -388,11 +459,12 @@ int  cnxman_csb_dialogue_is_on(const struct vms_csb *csb, uint32_t conid);
  * origination that repeats one is not something a real node does.
  *
  * EVERY origination and every response now goes through this one function, and
- * the transport thunks advance nothing. `is_response` is the stamper's own
- * flag: a response leaves the echoed txn/token the codec already copied.
+ * the transport thunks advance nothing. `kind` says what the body is (see
+ * enum cnxman_envelope_kind): only CNXMAN_ENV_REQUEST mints a transaction, and
+ * the other two leave body[4:8] exactly as the builder left it.
  */
 void cnxman_envelope_originate(struct vms_csb *csb,
 			       uint8_t body[132] /* VMS_CM_BODY_LEN */,
-			       int is_response);
+			       enum cnxman_envelope_kind kind);
 
 #endif /* OVMX_VMS_CNXMAN_CSB_H */

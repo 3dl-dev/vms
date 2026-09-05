@@ -375,6 +375,7 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
 
 vms_codec_status_t vms_cm_close_build(const uint8_t *req_body, uint32_t req_len,
 				      const struct vms_cm_node_params *own_params,
+				      uint16_t close_state,
 				      uint8_t *out_body, uint32_t cap,
 				      uint32_t *written)
 {
@@ -386,6 +387,16 @@ vms_codec_status_t vms_cm_close_build(const uint8_t *req_body, uint32_t req_len,
 	    own_params == (const struct vms_cm_node_params *)0 ||
 	    out_body == (uint8_t *)0)
 		return VMS_CODEC_E_INVAL;
+
+	/*
+	 * body[24:26] is MANDATORY and its meaning is UNGROUNDED, so a caller
+	 * with no value has nothing to say and this response cannot be built
+	 * (VMS_OFF_CM_CLOSE_STATE: nonzero in 1308/1308 real closes; the one
+	 * zero ever put there bugchecked the transition coordinator 0.6 ms
+	 * later). Refusing costs a response; emitting cost the cluster.
+	 */
+	if (close_state == 0u)
+		return VMS_CODEC_E_CLASS;
 
 	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
 	if (st != VMS_CODEC_OK)
@@ -410,6 +421,7 @@ vms_codec_status_t vms_cm_close_build(const uint8_t *req_body, uint32_t req_len,
 	vms_wire_put_u8(&w, VMS_OFB_CM_CATEGORY,
 			vms_wire_response_category(req_env.category));
 	vms_wire_put_u8(&w, VMS_OFB_CM_OPCODE, req_env.opcode);
+	vms_wire_put_le16(&w, VMS_OFB_CM_CLOSE_STATE, close_state);
 	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F1, own_params->param_f1);
 	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F2, own_params->param_f2);
 	vms_wire_put_bytes(&w, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
@@ -690,7 +702,9 @@ void vms_cm_notification_zero_txn(uint8_t out_body[VMS_CM_BODY_LEN])
 	vms_wire_buf_init(&w, out_body, VMS_CM_BODY_LEN);
 	if (!vms_wire_buf_ok(&w))
 		return;
-	vms_wire_put_zero(&w, VMS_OFB_CM_TXN, 2u);
+	/* BOTH cells: txn body[4:6] and token body[6:8]. 125/125 real GOs and
+	 * 1104/1104 real RELEASEs carry zero in each (E85 census). */
+	vms_wire_put_zero(&w, VMS_OFB_CM_TXN, 4u);
 }
 
 vms_codec_status_t vms_cm_relay_build(uint8_t tr_class, uint32_t epoch,

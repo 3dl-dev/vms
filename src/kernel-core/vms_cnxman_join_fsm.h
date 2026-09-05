@@ -438,6 +438,24 @@ struct cnxman_join_cfg {
 	uint32_t param_f2;
 	uint8_t  params_valid;
 
+	/*
+	 * body[24:26] of the cat-0x86 op-0x00 transaction-close RESPONSE
+	 * (VMS_OFF_CM_CLOSE_STATE). Unlike every other field in this struct an
+	 * unsupplied value here cannot be sent as an explicit zero: zero is a
+	 * value no real node has ever put there (1308/1308 nonzero), and the
+	 * one time OVMX sent it the transition coordinator bugchecked
+	 * CNXMGRERR 0.6 ms later (E85). So `close_state_valid == 0` means the
+	 * close response is WITHHELD, not zero-filled.
+	 *
+	 * NOTHING SETS THIS TODAY, and that is the honest state of the
+	 * evidence: the field's meaning is not published, no peer assigns it
+	 * on the wire, and this executive holds nothing that derives it. When
+	 * a real source is grounded, the glue fills these two cells and the
+	 * response resumes with no other change.
+	 */
+	uint16_t close_state;
+	uint8_t  close_state_valid;
+
 	/* The 16-byte SCA connect data for the VMS$VAXcluster connect
 	 * (see "WHAT THIS FILE REFUSES TO INVENT", C). */
 	uint8_t  conndata[VMS_SCS_PROCNAME_LEN];
@@ -804,6 +822,13 @@ struct cnxman_join {
 	 */
 	uint32_t acks_sent;
 	uint32_t closes_answered;    /* cat-0x06 close, own parameter block   */
+	/*
+	 * ... and the closes this node did NOT answer because body[24:26] is
+	 * not grounded (E85). A nonzero here is not a defect report: it is the
+	 * count of times this node chose honest silence over a byte no real
+	 * node has ever put on this wire.
+	 */
+	uint32_t closes_withheld;
 	uint32_t mscp_cmds_sent;
 	uint32_t mscp_ends;
 	uint32_t peer_adverts;       /* the member's own 0x14/0x01/0x02       */

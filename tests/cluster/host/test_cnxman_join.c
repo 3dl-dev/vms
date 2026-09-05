@@ -309,16 +309,38 @@ static void bed_init(void)
  * executive. Not one byte comes from a capture: the model string names OVMX,
  * and the version is OVMX's own (spec sec 4(L)(6) measured that a real VAX
  * accepts and DISPLAYS a non-"VMS" string here). */
+static void bed_fill_identity(struct cnxman_join_cfg *cfg)
+{
+	memset(cfg, 0, sizeof(*cfg));
+	memcpy(cfg->model, "OVMX x86_64", 11);
+	cfg->model_len = 11;
+	cfg->model_valid = 1;
+	memcpy(cfg->version, "VMX V0.6", 8);
+	cfg->version_valid = 1;
+}
+
 static void bed_set_identity(void)
 {
 	struct cnxman_join_cfg cfg;
 
-	memset(&cfg, 0, sizeof(cfg));
-	memcpy(cfg.model, "OVMX x86_64", 11);
-	cfg.model_len = 11;
-	cfg.model_valid = 1;
-	memcpy(cfg.version, "VMX V0.6", 8);
-	cfg.version_valid = 1;
+	bed_fill_identity(&cfg);
+	cnxman_join_set_cfg(&g.j, &cfg);
+}
+
+/*
+ * The same identity PLUS a grounded body[24:26] for the cat-0x06 close (E85).
+ * Nothing in the executive supplies this today -- that is the whole reason the
+ * close is withheld -- so this is the bed standing in for a glue that one day
+ * will, and it exists so the withholding is proven to be a GATE and not a
+ * removed feature.
+ */
+static void bed_set_identity_with_close_state(uint16_t close_state)
+{
+	struct cnxman_join_cfg cfg;
+
+	bed_fill_identity(&cfg);
+	cfg.close_state = close_state;
+	cfg.close_state_valid = 1;
 	cnxman_join_set_cfg(&g.j, &cfg);
 }
 
@@ -1332,6 +1354,7 @@ static void test_watchdog(void)
 static void test_handoff_without_a_barrier(void)
 {
 	uint32_t len;
+	uint32_t sent_before;
 
 	printf("\n-- hand-off: forwarded when installed, handed back when not --\n");
 	bed_init();
@@ -1358,10 +1381,60 @@ static void test_handoff_without_a_barrier(void)
 	len = mk_go(EPOCH);
 	(void)join_feed(len);
 	len = mk_cm(VMS_CM_CAT_MEMBERSHIP, VMS_CM_OP_CLOSE, 0x0060);
+	sent_before = g.n_sent;
+	(void)join_feed(len);
+	/*
+	 * E85 -- THIS ASSERTION IS INVERTED, AND THE INVERSION IS THE FIX.
+	 *
+	 * It used to read `closes_answered == 1`: the close is a recurring
+	 * member poll (sec 4(q)) and this node answered it. It DID answer it,
+	 * once, on a real cluster -- with body[24:26] at zero, because nothing
+	 * grounds that field and the honest-omission rule for everything else
+	 * in this response is an explicit zero. Zero is a value no real node
+	 * has ever put there (1308/1308 nonzero across the capture library),
+	 * and the transition coordinator bugchecked CNXMGRERR and last-gasped
+	 * 0.6 ms later, taking the barrier and the cluster with it.
+	 *
+	 * A fixed-width body cannot express "omitted", so the omission moves up
+	 * a level: with no grounded value the whole response is WITHHELD --
+	 * counted, announced, and not a join failure.
+	 */
+	ct_check_eq_u32(g.j.closes_answered, 0u,
+			"an ungrounded close is NOT answered (E85: the one "
+			"time it was, with body[24:26] zero, it bugchecked "
+			"the coordinator)");
+	ct_check_eq_u32(g.j.closes_withheld, 1u,
+			"... it is COUNTED as a deliberate silence");
+	ct_check_eq_u32(g.n_sent, sent_before,
+			"... and nothing at all went on the wire");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_NONE,
+			"... and withholding is not a join failure");
+
+	/*
+	 * THE OTHER HALF: the mechanism is not disabled, it is GATED. Give the
+	 * node a grounded value and the same close is answered exactly as
+	 * before -- so when the field is grounded, one cfg cell restores it.
+	 */
+	bed_init();
+	bed_set_identity_with_close_state(0x0004u);
+	drive_to_admit();
+	len = mk_go(EPOCH);
+	(void)join_feed(len);
+	len = mk_cm(VMS_CM_CAT_MEMBERSHIP, VMS_CM_OP_CLOSE, 0x0060);
 	(void)join_feed(len);
 	ct_check_eq_u32(g.j.closes_answered, 1u,
-			"the cat-0x06 close is still answered during a "
-			"transition (a recurring member poll, sec 4(q))");
+			"with body[24:26] grounded the close IS answered, a "
+			"recurring member poll again (sec 4(q))");
+	ct_check_eq_u32(g.j.closes_withheld, 0u,
+			"... and nothing was withheld");
+	ct_check_eq_u32(sent_le16(n_cm_sent() - 1u, VMS_OFB_CM_CLOSE_STATE),
+			0x0004u,
+			"... carrying the value the executive supplied, at "
+			"body[24:26]");
+	ct_check(sent_is(n_cm_sent() - 1u,
+			 (uint8_t)(VMS_CM_CAT_MEMBERSHIP | 0x80u),
+			 VMS_CM_OP_CLOSE),
+			"... and it really is the cat-0x86 op-0x00 close");
 }
 
 static void test_unowned_frame_is_not_mine(void)
@@ -2956,6 +3029,160 @@ static void test_post_admit_drive_to_member(void)
 			"and this node is a MEMBER at the end of it");
 }
 
+/* ==========================================================================
+ * E85: THE BARRIER THE REAL CLUSTER NEVER GOT TO RUN
+ *
+ * The live run this test is written from (join-e83refire-1788612567) reached
+ * the barrier, sent step 1 and was acknowledged -- and then the transition
+ * COORDINATOR bugchecked CNXMGRERR and put its last-gasp datagram on the
+ * cluster multicast 0.6 ms after this node's cat-0x86 close response, so
+ * there was never a step 2. Two facts about that run were invisible to this
+ * suite because the beds supplied what the executive did not:
+ *
+ *   1. every one of the twelve op-0x0b steps went out with (txn,token) =
+ *      (0,0) -- twelve requests a coordinator has no way to tell apart --
+ *      because nothing in the executive advanced the CSB's token;
+ *   2. the close that killed the coordinator carried body[24:26] = 0.
+ *
+ * So this drives the WHOLE barrier, with a close arriving in the middle of it,
+ * and asserts the three things the wire needed: the steps are correlatable,
+ * the killing frame is not emitted, and withholding it does not stop the
+ * barrier reaching op-0x0c #12 and MEMBER. The connection is never dropped and
+ * never re-dialled across any of it.
+ * ========================================================================== */
+static uint32_t nth_step_body(uint32_t n)
+{
+	uint32_t i, k = 0;
+
+	for (i = 0; i < n_cm_sent(); i++) {
+		if (!sent_is(i, VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER))
+			continue;
+		if (k == n)
+			return i;
+		k++;
+	}
+	return 0xffffffffu;
+}
+
+static uint32_t n_step_bodies(void)
+{
+	uint32_t i, k = 0;
+
+	for (i = 0; i < n_cm_sent(); i++) {
+		if (sent_is(i, VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER))
+			k++;
+	}
+	return k;
+}
+
+static void test_e85_barrier_survives_to_member(void)
+{
+	uint32_t len, step, i, j, idx;
+	uint16_t peer_msg = 0x0002;
+	uint32_t connects_at_go, disconnects_at_go, sent_at_close;
+	uint16_t tok[CNXMAN_BARRIER_STEPS];
+	uint16_t txn[CNXMAN_BARRIER_STEPS];
+	uint32_t zero_pairs = 0, collisions = 0;
+
+	printf("\n-- E85: the connection survives all twelve steps, and the "
+	       "frame that killed the coordinator is never emitted --\n");
+	bed_init();
+	bed_set_identity();          /* NO grounded body[24:26] -- as shipped */
+	drive_to_admit();
+
+	len = mk_membership_csid(MEMBER_CSID, 'A');
+	(void)join_feed(len);
+	len = mk_open_add(EPOCH, 0x0eu);
+	(void)join_feed(len);
+	len = mk_go(EPOCH);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
+			"the GO put this node in [BARRIER]");
+
+	connects_at_go = g.n_connect;
+	disconnects_at_go = g.n_disconnect;
+
+	for (step = 1; step <= CNXMAN_BARRIER_STEPS; step++) {
+		/*
+		 * THE KILLING FRAME, arriving exactly where it really did:
+		 * between the step and its release. Nothing may go out for it.
+		 */
+		if (step == 1u) {
+			sent_at_close = n_cm_sent();
+			len = mk_cm(VMS_CM_CAT_MEMBERSHIP, VMS_CM_OP_CLOSE,
+				    ++peer_msg);
+			(void)join_feed(len);
+			ct_check_eq_u32(n_cm_sent(), sent_at_close,
+					"  the mid-barrier cat-0x06 close "
+					"emits NOTHING (E85: the one response "
+					"that went out bugchecked the "
+					"coordinator)");
+			ct_check_eq_u32(g.j.closes_withheld, 1u,
+					"  ... and is counted as a deliberate "
+					"silence");
+		}
+
+		len = mk_step_ack(step, ++peer_msg);
+		(void)join_feed(len);
+		len = mk_release(step, ++peer_msg);
+		(void)join_feed(len);
+
+		if (step < CNXMAN_BARRIER_STEPS)
+			ct_check(g.j.state != CNXMAN_JOIN_MEMBER,
+				 "  not a MEMBER before op-0x0c #12");
+	}
+
+	/* THE BARRIER COMPLETED -- withholding the close did not stall it. */
+	ct_check_eq_u32(n_step_bodies(), CNXMAN_BARRIER_STEPS,
+			"twelve op-0x0b steps went out, never a thirteenth");
+	ct_check_eq_u32(g.b.state, (unsigned long)CNXMAN_BARRIER_COMPLETE,
+			"release #12 completed the transition");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"and MEMBER follows from THAT -- the real op-0x0c #12, "
+			"nothing synthetic (sec 4(q))");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_NONE,
+			"with no failure recorded anywhere in it");
+
+	/* THE CONNECTION SURVIVED IT: not re-dialled, not torn down. */
+	ct_check_eq_u32(g.n_connect, connects_at_go,
+			"not one connect was issued across the whole barrier "
+			"-- a reconnect is what crashed the peer in E81");
+	ct_check_eq_u32(g.n_disconnect, disconnects_at_go,
+			"and the connection was never dropped mid-barrier");
+
+	/*
+	 * THE STEPS ARE CORRELATABLE. Measured on the wire: 1035 of 1035 real
+	 * op-0x0b steps carry a nonzero (txn,token). Twelve steps sharing one
+	 * value -- which (0,0) is -- give the coordinator twelve requests it
+	 * cannot match to twelve releases.
+	 */
+	for (i = 0; i < CNXMAN_BARRIER_STEPS; i++) {
+		idx = nth_step_body(i);
+		ct_check(idx != 0xffffffffu, "step body present");
+		if (idx == 0xffffffffu)
+			return;
+		txn[i] = sent_le16(idx, VMS_OFB_CM_TXN);
+		tok[i] = sent_le16(idx, VMS_OFB_CM_TOKEN);
+		if (txn[i] == 0u || tok[i] == 0u)
+			zero_pairs++;
+	}
+	ct_check_eq_u32(zero_pairs, 0u,
+			"not one step carries a zero txn or a zero token "
+			"(1035/1035 real steps carry neither)");
+	for (i = 0; i < CNXMAN_BARRIER_STEPS; i++) {
+		for (j = i + 1u; j < CNXMAN_BARRIER_STEPS; j++) {
+			if (tok[i] == tok[j])
+				collisions++;
+		}
+	}
+	ct_check_eq_u32(collisions, 0u,
+			"and no two of the twelve share a token -- the "
+			"collision that made a real coordinator drop the "
+			"frame and stall the barrier");
+	for (i = 1; i < CNXMAN_BARRIER_STEPS; i++)
+		ct_check(tok[i] != tok[i - 1u], "consecutive tokens differ");
+}
+
 /*
  * THE ANTI-FABRICATION ASSERTION, and the reason this item exists. Run the
  * SAME completion with an op-0x06 that carries no shape-valid CSID: the
@@ -3751,6 +3978,7 @@ int main(void)
 	test_every_table_cell();
 	test_e73_the_executive_delivers_a_body();
 	test_post_admit_drive_to_member();
+	test_e85_barrier_survives_to_member();
 	test_member_only_on_a_real_op06_csid();
 	test_e79_op06_burst_originates_nothing();
 	test_e79_member_only_on_the_op0c_commit();

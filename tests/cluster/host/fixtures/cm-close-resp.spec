@@ -5,7 +5,7 @@ origin:    spec-composed
 spec:      docs/cluster-protocol-spec.md 4(p) "send your own node-parameter block, the same one carried in the op 0x01 PARAMS message (body[72:76]=0x10, body[76:80]=0x01, body[88:96]=\"V7.3    \")"
 capture:   formation-ci1-joinwindow.pcap
 wire-len:  204
-sha256:    33454b5bae2c5077dac387eb102adddd0a39e711514924f4310a733011e328c8
+sha256:    421a850158ae0be82147d44181be49385f25b8f2fae8d59988221fe3eae3f148
 %bytes
 ; Full 32-byte SCS envelope prefix (spec sec 4(d)) -- required so this
 ; fixture classifies as 'scs-msg' and satisfies the shared harvest-span
@@ -38,6 +38,15 @@ sha256:    33454b5bae2c5077dac387eb102adddd0a39e711514924f4310a733011e328c8
 @81   00                         ; body9  opcode -- echoed value (0x00)
 @92   00 00 00 00                ; body20:24 ZERO -- the peer's fabricated
                                  ; Con.ID/cluster-id is NOT reflected back
+@96   04 00                      ; body24:26 the MANDATORY never-zero field
+                                 ; (VMS_OFF_CM_CLOSE_STATE; nonzero in
+                                 ; 1308/1308 real closes, E85). The CALLER
+                                 ; supplies this -- the codec chooses nothing
+                                 ; and refuses to build when it is 0. The
+                                 ; value here is this test's own input,
+                                 ; picked from the observed set {1,3,4,5}
+                                 ; only so the fixture pins WHERE the byte
+                                 ; lands; no production path asserts it.
 @144  10 00 00 00                ; body72:76 node-param field1 (observed const)
 @148  01 00 00 00                ; body76:80 node-param field2 (observed const)
 @160  56 37 2e 33 20 20 20 20    ; body88:96 "V7.3    "

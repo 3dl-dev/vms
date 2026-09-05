@@ -424,7 +424,16 @@ static int join_emit_cm(struct cnxman_join *j, int is_response)
 	 * outright therefore BURNS its number; that leaves a gap, never a
 	 * repeat or a decrement, and the refusal is counted below.
 	 */
-	cnxman_envelope_originate(csb, j->scratch, is_response);
+	/*
+	 * A response echoes the peer's pair; an ORIGINATION from this path is
+	 * always one of the identity records (op-0x14 MODEL, op-0x01 PARAMS,
+	 * op-0x02 CONFIG), and the E85 census measures every real one of those
+	 * at zero -- 203/203, 220/247 and 95/95 -- so it is a NOTIFY and mints
+	 * nothing. The joiner's REQUESTs live in the barrier FSM.
+	 */
+	cnxman_envelope_originate(csb, j->scratch,
+				  is_response ? CNXMAN_ENV_RESPONSE
+					      : CNXMAN_ENV_NOTIFY);
 
 	rc = j->jops->send_msg(j->jops->ctx, j->cm_conid, j->scratch,
 			       VMS_CM_BODY_LEN);
@@ -684,7 +693,9 @@ static int join_emit_to_csb(struct cnxman_join *j, struct vms_csb *csb,
 		return -1;
 	}
 
-	cnxman_envelope_originate(csb, j->scratch, 0);
+	/* The per-peer advertise beat carries the same identity records as
+	 * join_emit_cm() above, and the census measures them all at zero. */
+	cnxman_envelope_originate(csb, j->scratch, CNXMAN_ENV_NOTIFY);
 
 	rc = j->ops->send_csb(j->ops->ctx, idx, j->scratch, VMS_CM_BODY_LEN);
 	if (rc != 0) {
@@ -1861,9 +1872,36 @@ static enum cnxman_join_rx join_h_membership(struct cnxman_join *j,
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
-/* The cat-0x06 close: answer with THIS node's own parameter block. Echoing the
+/*
+ * WITHHOLD THE CLOSE RESPONSE -- the honest outcome when body[24:26] is not
+ * grounded (E85; VMS_OFF_CM_CLOSE_STATE for the 1308/1308 measurement).
+ *
+ * Counted and announced once, because a response this node is expected to send
+ * and does not send has to be visible in the transcript rather than read as
+ * silence. It is NOT a join failure: nothing about this attempt is broken, this
+ * node simply has no value for a mandatory field and will not invent one.
+ */
+static int join_close_withheld(struct cnxman_join *j)
+{
+	j->closes_withheld++;
+	if (j->closes_withheld == 1u)
+		join_log(j, "%CNXMAN, transaction close not answered: this node "
+			    "holds no value for a required field");
+	return 1;
+}
+
+/*
+ * The cat-0x06 close: answer with THIS node's own parameter block. Echoing the
  * request's payload here bugchecked a real VAX with INCONSTATE (spec sec 4(p)),
- * which is why vms_cm_close_build takes our params and not the request's. */
+ * which is why vms_cm_close_build takes our params and not the request's.
+ *
+ * AND (E85) the response carries one more MANDATORY field this node cannot
+ * ground, body[24:26]. Sending it as zero -- the honest-omission rule that is
+ * correct for every other field of the node-parameter block -- bugchecked the
+ * transition coordinator CNXMGRERR 0.6 ms later and destroyed the barrier it
+ * was running. A fixed-width body cannot express "omitted", so the omission has
+ * to move up a level: no grounded value, no response.
+ */
 static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 					const struct join_ev *e)
 {
@@ -1875,9 +1913,13 @@ static enum cnxman_join_rx join_h_close(struct cnxman_join *j,
 		j->ignored_events++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
+	if (!j->cfg.close_state_valid || j->cfg.close_state == 0u) {
+		(void)join_close_withheld(j);
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
 	join_own_params(j, &own);
-	st = vms_cm_close_build(e->body, e->len, &own, j->scratch,
-				(uint32_t)sizeof(j->scratch), NULL);
+	st = vms_cm_close_build(e->body, e->len, &own, j->cfg.close_state,
+				j->scratch, (uint32_t)sizeof(j->scratch), NULL);
 	if (join_build_failed(j, st))
 		return CNXMAN_JOIN_RX_CONSUMED;
 	if (join_emit_cm(j, 1) == 0)

@@ -182,11 +182,28 @@ static void test_close_recipe(void)
 	memcpy(np.version, "V7.3    ", VMS_CM_VERSION_LEN);
 
 	memset(built, 0xAA, sizeof(built));
-	ct_check(vms_cm_close_build(fx_body(req), fx_body_len(req), &np, built,
-				    sizeof(built), &written)
+	ct_check(vms_cm_close_build(fx_body(req), fx_body_len(req), &np, 0x0004u,
+				    built, sizeof(built), &written)
 		 == VMS_CODEC_OK, "vms_cm_close_build succeeds");
 	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  wrote VMS_CM_BODY_LEN");
 	assert_body_matches(resp, built, "cm-close");
+
+	/*
+	 * E85: body[24:26] is MANDATORY and never zero on the wire (1308/1308
+	 * real closes). The builder is the layer that KNOWS that, so it is the
+	 * layer that refuses -- a caller with no grounded value cannot get a
+	 * zero-filled close past it, whatever else it gets right. The one zero
+	 * OVMX ever put there bugchecked the transition coordinator.
+	 */
+	memset(built, 0xAA, sizeof(built));
+	written = 0;
+	ct_check(vms_cm_close_build(fx_body(req), fx_body_len(req), &np, 0u,
+				    built, sizeof(built), &written)
+		 == VMS_CODEC_E_CLASS,
+		 "vms_cm_close_build REFUSES an ungrounded (zero) body[24:26]");
+	ct_check_eq_u32(written, 0, "  and wrote nothing at all");
+	ct_check(built[VMS_OFB_CM_CLOSE_STATE] == 0xAA,
+		 "  the refusal left the caller's buffer untouched");
 }
 
 static void test_dlm_op0d_recipe(void)
@@ -453,7 +470,8 @@ static void test_error_paths(void)
 		 * well-formed, classifiable frame whose (cat,op) it does not
 		 * own, not merely a malformed one. */
 		ct_check(vms_cm_close_build(fx_body(req), fx_body_len(req), &np,
-					    built, sizeof(built), &written)
+					    0x0004u, built, sizeof(built),
+					    &written)
 			 == VMS_CODEC_E_CLASS,
 			 "vms_cm_close_build refuses a well-formed op 0x0f "
 			 "request (wrong recipe for this (cat,op))");

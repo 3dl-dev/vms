@@ -117,6 +117,50 @@ extern "C" {
 							    * sec 4(p)) */
 
 /*
+ * cat-0x86 op-0x00 (the transaction CLOSE response): body[24:26], the ONE
+ * field of that response a real node never leaves at zero.
+ *
+ * MEASURED, integration note E85, over the whole capture library (47 pcaps,
+ * five distinct responder nodes -- 08:00:2b:11:22:33, 08:00:2b:1e:85:61,
+ * 08:00:2b:78:56:b9, aa:00:04:00:01:04, b6:16:8a:dc:3a:53): of the 122 body
+ * offsets in body[10:132], `body[24]` is the ONLY one that is nonzero in
+ * 1308 of 1308 real close responses -- every other offset in that span is
+ * zero somewhere. Its observed values are 1, 3, 4 and 5.
+ *
+ * ITS MEANING IS NOT GROUNDED, AND THIS FILE DOES NOT GUESS IT (Rule 8).
+ * Measured non-explanations, all refuted rather than assumed:
+ *   - it is NOT an echo: the best-matching request offset (body[24] itself)
+ *     agrees with the response only 358/1308 = 27%, and no offset does
+ *     better, so no peer ASSIGNS it on the wire;
+ *   - it is NOT part of the node-parameter block sec 4(p) says the close
+ *     carries: every real cat-0x01 op-0x01 PARAMS message puts 0x0001 at
+ *     body[24:26], while the same node's closes put 3, 4 and 5;
+ *   - it is NOT per-node: every responder emits several of the values;
+ *   - the REST of the close body is demonstrably stale-buffer residue
+ *     (real closes carry OPCOM text and lock resource names there), and a
+ *     real close with only ONE nonzero byte in body[10:132] exists -- that
+ *     byte is this one.
+ *
+ * WHAT IT COST. OVMX built its first close response with this field at zero
+ * (the honest-omission rule of struct cnxman_join_cfg, correct for every
+ * OTHER field) and sent it to the transition coordinator mid-barrier. The
+ * coordinator bugchecked CNXMGRERR and put its last-gasp datagram
+ * (msgtype 0xb1) on the cluster multicast 0.6 ms later, taking the barrier,
+ * the transition and the cluster with it (E85, join-e83refire-1788612567.pcap
+ * frames 894 -> 898). Spec sec 4(p) already warned that this is the one
+ * response whose payload bugchecks the peer; it named the ECHO variant, and
+ * this is the other one.
+ *
+ * So: a zero here is not an omission. The body is fixed-width, so "omit" and
+ * "assert zero" are the same bytes, and zero is a value no node has ever put
+ * on this wire. vms_cm_close_build() therefore REFUSES to build rather than
+ * emit it (INV-6: honest silence, never a placeholder).
+ */
+#define VMS_OFB_CM_CLOSE_STATE 24u
+#define VMS_OFF_CM_CLOSE_STATE (VMS_OFF_SYSAP_BODY + \
+				VMS_OFB_CM_CLOSE_STATE)          /* abs 96 */
+
+/*
  * The bitmap NEIGHBOURHOOD, body[52:60] -- the span whose emptiness is the
  * ONLY published evidence about how wide the membership bitmap really is.
  *
@@ -528,6 +572,13 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
  * STAMP with is_response=1: this builder writes the request's txn/token to
  * body[4:8] itself (it builds fresh from zero, unlike the echo family, so
  * there is no verbatim copy to rely on).
+ *
+ * `close_state` is body[24:26] -- see VMS_OFF_CM_CLOSE_STATE above for the
+ * 1308/1308 measurement, the four refuted derivations, and the CNXMGRERR it
+ * cost. It is MANDATORY: a `close_state` of 0 returns VMS_CODEC_E_CLASS and
+ * writes nothing, because the caller has no grounded value and this codec
+ * will not put a byte on the wire that no node has ever put there. A caller
+ * that cannot supply it must send NO close response at all.
  */
 struct vms_cm_node_params {
 	uint32_t param_f1;  /* body[72:76] */
@@ -537,6 +588,7 @@ struct vms_cm_node_params {
 
 vms_codec_status_t vms_cm_close_build(const uint8_t *req_body, uint32_t req_len,
 				      const struct vms_cm_node_params *own_params,
+				      uint16_t close_state,
 				      uint8_t *out_body, uint32_t cap,
 				      uint32_t *written);
 
@@ -725,8 +777,8 @@ vms_codec_status_t vms_cm_release_build(uint32_t epoch, uint32_t step,
 					uint32_t *written);
 
 /*
- * vms_cm_notification_zero_txn - force body[4:6] (txn) to zero on a
- * notification origination (op 0x0a GO, op 0x0c RELEASE), AFTER
+ * vms_cm_notification_zero_txn - force body[4:8] (txn AND token) to zero on
+ * a notification origination (op 0x0a GO, op 0x0c RELEASE), AFTER
  * cnxman_envelope_stamp() has run.
  *
  * Sec 4(p): "Notifications carry txn=0 and are NEVER answered." This is the
@@ -737,10 +789,14 @@ vms_codec_status_t vms_cm_release_build(uint32_t epoch, uint32_t step,
  * calls a named function for it rather than touching body[4:6] itself
  * (design SS3.9 rule 2: no raw wire offset outside a codec TU).
  *
- * body[6:8] (token) is UNTOUCHED: the spec places no constraint on it for
- * these two opcodes, and "token never computed" (ruling E1) means this
- * node's real per-CSB token is exactly as valid here as on any other
- * origination.
+ * body[6:8] (token) IS ZEROED TOO, and this is a CORRECTION (E85). This
+ * note used to say the token was untouched because "the spec places no
+ * constraint on it for these two opcodes". The spec does not, but the wire
+ * does: a census of the whole capture library finds the token at zero on
+ * 125 of 125 real op-0x0a GOs and 1104 of 1104 real op-0x0c RELEASEs --
+ * not one carries a nonzero one. A notification is never answered, so there
+ * is nothing for a token to correlate, and asserting one said this node
+ * expected a reply to a message no node ever replies to.
  */
 void vms_cm_notification_zero_txn(uint8_t out_body[VMS_CM_BODY_LEN]);
 

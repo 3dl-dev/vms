@@ -919,8 +919,22 @@ static void csb_stamp_put_le16(uint8_t *body, uint32_t off, uint16_t val)
 	body[off + 1] = (uint8_t)((val >> 8) & 0xffu);
 }
 
+/*
+ * The next value of a 16-bit cell that is NEVER allowed to read as zero: zero
+ * is what "this node asserted nothing here" looks like, and both cells this
+ * serves are fields a real node never leaves at zero (vms_cnxman_csb.h SS8).
+ * Sixteen bits wrap; the wrap skips 0 and lands on 1, so the sequence is
+ * 1,2,...,0xffff,1,... and no cycle ever presents the absent value.
+ */
+static uint16_t csb_next_nonzero(uint16_t v)
+{
+	uint16_t n = (uint16_t)(v + 1u);
+
+	return (n == 0u) ? 1u : n;
+}
+
 void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
-			   int is_response)
+			   int keep_pair)
 {
 	if (csb == NULL || body == NULL)
 		return;
@@ -928,8 +942,8 @@ void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
 	csb_stamp_put_le16(body, CSB_STAMP_OFF_SEND_MSG, csb->cm_send_msg);
 	csb_stamp_put_le16(body, CSB_STAMP_OFF_ACK_MSG, csb->cm_ack_msg);
 
-	if (is_response)
-		return;   /* the codec already put the echoed txn/token there */
+	if (keep_pair)
+		return;   /* the body already carries the pair it should */
 
 	csb_stamp_put_le16(body, CSB_STAMP_OFF_TXN, csb->cm_txn);
 	csb_stamp_put_le16(body, CSB_STAMP_OFF_TOKEN, csb->cm_token);
@@ -990,14 +1004,16 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 	csb->cm_send_msg = 0u;
 	csb->cm_ack_msg  = 0u;
 	/*
-	 * `cm_txn`/`cm_token` are deliberately NOT touched. Nothing in this
-	 * executive advances them (they are read by the stamper and written by
-	 * no one), because spec sec 4(j) records the token's derivation as
-	 * UNKNOWN -- so they are honestly 0, and clearing a cell nobody
-	 * maintains would state a per-connection rule this node has no evidence
-	 * for. When a real derivation is grounded, THIS is where its
-	 * per-dialogue reset belongs.
+	 * A NEW DIALOGUE TAKES A NEW TRANSACTION ID AND RESTARTS ITS TOKEN
+	 * (E85). See vms_cnxman_csb.h SS8 for why these two cells are this
+	 * node's own to mint and what is measured about them; the rule here is
+	 * only the per-dialogue one: `cm_txn` moves on, so two dialogues on
+	 * this block never present the same transaction id, and `cm_token`
+	 * restarts so the first origination on a fresh connection carries 1
+	 * exactly as send-msg# does.
 	 */
+	csb->cm_txn = csb_next_nonzero(csb->cm_txn);
+	csb->cm_token = 0u;
 }
 
 /*
@@ -1021,6 +1037,13 @@ void cnxman_csb_dialogue_sent(struct vms_csb *csb)
 	csb->cm_send_msg = (uint16_t)(csb->cm_send_msg + 1u);
 }
 
+void cnxman_csb_transaction_opened(struct vms_csb *csb)
+{
+	if (csb == NULL)
+		return;
+	csb->cm_token = csb_next_nonzero(csb->cm_token);
+}
+
 void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
 {
 	if (csb == NULL)
@@ -1030,8 +1053,18 @@ void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
 }
 
 void cnxman_envelope_originate(struct vms_csb *csb, uint8_t body[132],
-			       int is_response)
+			       enum cnxman_envelope_kind kind)
 {
+	int mints = (kind == CNXMAN_ENV_REQUEST);
+
 	cnxman_csb_dialogue_sent(csb);
-	cnxman_envelope_stamp(csb, body, is_response);
+	/*
+	 * Only a REQUEST opens a transaction. A RESPONSE carries the peer's
+	 * own pair back (the codec already put it in `body`), and a NOTIFY
+	 * carries none at all -- in both cases the counter must not move, or a
+	 * run of them would consume tokens this node never asserted (E85).
+	 */
+	if (mints)
+		cnxman_csb_transaction_opened(csb);
+	cnxman_envelope_stamp(csb, body, !mints);
 }

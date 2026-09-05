@@ -410,7 +410,8 @@ static void t_the_carrier_is_gated_on_the_real_ledger(void)
 	 * peer messages are an advance of three. A carrier that stamped its own
 	 * envelope would break that identity silently.
 	 */
-	check_has("cnxman_envelope_originate(csb, cn->carrier, 1);",
+	check_has("cnxman_envelope_originate(csb, cn->carrier, "
+		  "CNXMAN_ENV_RESPONSE);",
 		  "and the carrier's ack word is the CSB's own dialogue "
 		  "state, so its advance IS the records consumed");
 	check_has("cnxman_csb_dialogue_heard(csb, env.send_msg);",

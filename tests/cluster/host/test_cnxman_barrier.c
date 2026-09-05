@@ -90,10 +90,19 @@ static void bed_advance_dialogue(struct vms_csb *csb)
 	if (csb == NULL)
 		return;
 	csb->cm_send_msg++;
-	csb->cm_token++;
-	/* cm_ack_msg/cm_txn are NOT advanced here -- ack_msg changes only on
-	 * a real receive, and txn is per-dialogue, not per-message; both are
-	 * out of this bed's simulated scope. */
+	/*
+	 * `cm_token` IS NOT ADVANCED HERE ANY MORE (E85). It used to be, and
+	 * that is precisely why this file was green while the wire carried
+	 * zeros: nothing in the executive advanced it, only these beds did, so
+	 * every real op-0x0b went out with token 0 and the coordinator had
+	 * twelve steps it could not tell apart. cnxman_envelope_originate()
+	 * now advances it -- the FSM's own path -- and the assertions below
+	 * therefore measure the PRODUCT, not the bed.
+	 *
+	 * cm_ack_msg/cm_txn are likewise not advanced here: ack_msg changes
+	 * only on a real receive, and txn is per-dialogue (the executive mints
+	 * it in cnxman_csb_bind_connection), not per-message.
+	 */
 }
 
 static void bed_record(struct bed *bp, const uint8_t *body, uint32_t len,

@@ -208,7 +208,7 @@ static void barrier_respond_echo(struct cnxman_barrier *b,
 	}
 	/* body[4:8] is already the request's echoed txn/token (the builder's
 	 * verbatim copy); is_response=1 leaves it alone and fills send/ack. */
-	cnxman_envelope_originate(csb, b->scratch, 1);
+	cnxman_envelope_originate(csb, b->scratch, CNXMAN_ENV_RESPONSE);
 	barrier_emit_response(b, written);
 }
 
@@ -237,7 +237,7 @@ static int barrier_respond_dlm_echo(struct cnxman_barrier *b,
 			"%CNXMAN, lock-rebuild response could not be built");
 		return -1;
 	}
-	cnxman_envelope_originate(csb, b->scratch, 1);
+	cnxman_envelope_originate(csb, b->scratch, CNXMAN_ENV_RESPONSE);
 	barrier_emit_response(b, written);
 	return 0;
 }
@@ -265,7 +265,7 @@ static int barrier_respond_dlm_body(struct cnxman_barrier *b,
 	/* body[4:8] is the request's txn/token, echoed by the builder itself
 	 * (the DLM's reply never writes body[0:8]); is_response=1 leaves it
 	 * and fills only send/ack. */
-	cnxman_envelope_originate(csb, b->scratch, 1);
+	cnxman_envelope_originate(csb, b->scratch, CNXMAN_ENV_RESPONSE);
 	barrier_emit_response(b, written);
 	return 0;
 }
@@ -310,9 +310,13 @@ static void barrier_send_step(struct cnxman_barrier *b, uint32_t step)
 			"%CNXMAN, barrier step could not be built");
 		return;
 	}
-	/* A genuine origination: the coordinator's CSB own txn/token belong
-	 * at body[4:8]. */
-	cnxman_envelope_originate(csb, b->scratch, 0);
+	/*
+	 * A REQUEST, and the one that matters most: the coordinator correlates
+	 * its releases by this pair, and 1035 of 1035 real op-0x0b steps carry
+	 * a nonzero one. Twelve steps sharing a single value -- which is what
+	 * (0,0) is -- are twelve steps a coordinator cannot tell apart (E85).
+	 */
+	cnxman_envelope_originate(csb, b->scratch, CNXMAN_ENV_REQUEST);
 	(void)b->ops->send_csb(b->ops->ctx, b->coordinator_csb, b->scratch,
 			       written);
 	b->step = (uint8_t)step;

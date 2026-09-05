@@ -1172,7 +1172,7 @@ static void cnxman_credit_carrier(struct vms_cnxman *cn,
 		cn->credit_carriers_unbuilt++;
 		return;
 	}
-	cnxman_envelope_originate(csb, cn->carrier, 1);
+	cnxman_envelope_originate(csb, cn->carrier, CNXMAN_ENV_RESPONSE);
 	if (scs_send_msg(cn->cl->scs, local_conid, cn->carrier,
 			 VMS_CM_BODY_LEN) != (int)SS__NORMAL) {
 		cn->credit_carriers_refused++;

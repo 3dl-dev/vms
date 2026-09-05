@@ -41,6 +41,7 @@
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_recnx_fsm.h"   /* CNXMAN_RECNX_DEFAULT_SECS */
+#include "vms_cluster_codec_cm.h"   /* VMS_CM_BODY_LEN */
 
 static struct vms_cluster g_cl;   /* the CLUB carries a 96-slot CSB table */
 static struct cnxman_ops  g_ops;
@@ -696,7 +697,7 @@ static void test_reconnect_dialogue_never_carries_the_old_ack(void)
 
 	for (i = 0; i < sizeof(body); i++)
 		body[i] = 0xffu;          /* poison: nothing may survive */
-	cnxman_envelope_originate(csb, body, 0);
+	cnxman_envelope_originate(csb, body, CNXMAN_ENV_REQUEST);
 	ct_check_eq_u32((uint32_t)body[0] | ((uint32_t)body[1] << 8), 1u,
 			"body[0:2] on the reconnect is send-msg# 1");
 	ct_check_eq_u32((uint32_t)body[2] | ((uint32_t)body[3] << 8), 0u,
@@ -712,6 +713,93 @@ static void test_reconnect_dialogue_never_carries_the_old_ack(void)
 	ct_check_eq_u32(csb->cdt_conid, 0u,
 			"and the block claims no Con.ID at all, so no emitter "
 			"can stamp an envelope for it");
+}
+
+/* ==========================================================================
+ * 4b. THE CORRELATION PAIR body[4:8] (E85)
+ *
+ * The cells the stamper reads and, until E85, NOTHING in this executive wrote:
+ * every request this node ever originated carried (txn,token) = (0,0), and the
+ * twelve barrier steps of a transition were therefore indistinguishable to the
+ * coordinator that correlates its releases by them. The suite did not see it
+ * because three test beds advanced the cells by hand.
+ *
+ * What the wire measures, and what these assertions pin: a REQUEST mints a
+ * fresh nonzero token; a RESPONSE and a NOTIFY mint nothing; a new dialogue
+ * takes a new transaction id and restarts the token.
+ * ========================================================================== */
+static void test_correlation_pair_is_maintained(void)
+{
+	struct vms_csb *csb;
+	uint8_t body[VMS_CM_BODY_LEN];
+	uint16_t t1, t2, t3, txn_a, txn_b;
+	uint32_t i;
+
+	printf("-- E85: body[4:8] is minted by the executive, per REQUEST --\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+
+	cnxman_csb_bind_connection(csb, 0x81290012u);
+	txn_a = csb->cm_txn;
+	ct_check(txn_a != 0u,
+		 "binding a dialogue mints a NONZERO transaction id");
+
+	for (i = 0; i < sizeof(body); i++)
+		body[i] = 0xffu;
+	cnxman_envelope_originate(csb, body, CNXMAN_ENV_REQUEST);
+	t1 = (uint16_t)(body[6] | ((uint16_t)body[7] << 8));
+	ct_check(t1 != 0u, "the first REQUEST carries a nonzero token");
+	ct_check_eq_u32((uint32_t)(body[4] | ((uint16_t)body[5] << 8)),
+			(uint32_t)txn_a,
+			"... and this dialogue's own transaction id");
+
+	cnxman_envelope_originate(csb, body, CNXMAN_ENV_REQUEST);
+	t2 = (uint16_t)(body[6] | ((uint16_t)body[7] << 8));
+	ct_check(t2 != t1 && t2 != 0u,
+		 "the next REQUEST carries a DIFFERENT nonzero token -- twelve "
+		 "barrier steps must not share one");
+
+	/* A RESPONSE carries the peer's pair back and mints nothing. */
+	body[4] = 0x34; body[5] = 0x12; body[6] = 0x78; body[7] = 0x56;
+	cnxman_envelope_originate(csb, body, CNXMAN_ENV_RESPONSE);
+	ct_check_eq_u32((uint32_t)(body[6] | ((uint16_t)body[7] << 8)), 0x5678u,
+			"a RESPONSE leaves the peer's echoed token exactly "
+			"where the codec put it");
+	ct_check_eq_u32((uint32_t)csb->cm_token, (uint32_t)t2,
+			"... and consumes no token of ours");
+
+	/* A NOTIFY is an origination the peer never answers: nothing minted. */
+	body[4] = 0; body[5] = 0; body[6] = 0; body[7] = 0;
+	cnxman_envelope_originate(csb, body, CNXMAN_ENV_NOTIFY);
+	ct_check_eq_u32((uint32_t)(body[4] | ((uint16_t)body[5] << 8)), 0u,
+			"a NOTIFY keeps the zero pair the builder built "
+			"(125/125 real GOs, 1104/1104 real RELEASEs)");
+	ct_check_eq_u32((uint32_t)(body[6] | ((uint16_t)body[7] << 8)), 0u,
+			"... in BOTH cells");
+	ct_check_eq_u32((uint32_t)csb->cm_token, (uint32_t)t2,
+			"... and consumes no token either");
+
+	/* A NEW dialogue: new transaction id, token back to the start. */
+	cnxman_csb_bind_connection(csb, 0x81290013u);
+	txn_b = csb->cm_txn;
+	ct_check(txn_b != txn_a && txn_b != 0u,
+		 "a new connection is a new dialogue and takes a new "
+		 "transaction id");
+	cnxman_envelope_originate(csb, body, CNXMAN_ENV_REQUEST);
+	t3 = (uint16_t)(body[6] | ((uint16_t)body[7] << 8));
+	ct_check(t3 != 0u,
+		 "and its first REQUEST carries a nonzero token again -- "
+		 "never a number inherited from the dialogue that died");
+
+	/* The wrap never presents the absent value. */
+	csb->cm_token = 0xffffu;
+	cnxman_csb_transaction_opened(csb);
+	ct_check_eq_u32((uint32_t)csb->cm_token, 1u,
+			"the 16-bit wrap skips 0 and lands on 1, so no cycle "
+			"ever asserts 'nothing here'");
 }
 
 /* ==========================================================================
@@ -783,6 +871,7 @@ int main(void)
 	test_projection();
 	test_dialogue_is_per_connection();
 	test_reconnect_dialogue_never_carries_the_old_ack();
+	test_correlation_pair_is_maintained();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");
 }

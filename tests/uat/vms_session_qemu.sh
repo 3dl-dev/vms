@@ -977,8 +977,8 @@ check_response_at "$IDX_PRIORITY_SET" 'NOPRIV'
 # DERIVED from that mask's current definition, not a number owned by this
 # test; update it again whenever VMS_PRV_M_ENFORCED (src/kernel/
 # vms_ioctl.h) changes.
-check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT"'
-check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT"'
+check_response 'SHOW SYMBOL IDENT_CURPRIV' 'IDENT_CURPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO"'
+check_response 'SHOW SYMBOL IDENT_AUTHPRIV' 'IDENT_AUTHPRIV = "CMKRNL,CMEXEC,SYSNAM,GRPNAM,SETPRV,WORLD,MOUNT,PHY_IO"'
 
 # SET PROCESS/PRIVILEGES IS NOW WIRED TO THE EXECUTIVE (vms-e5d7). It used to
 # be a HIDE stub that printed %OVMX-I-NOSETPRV and changed nothing; it now

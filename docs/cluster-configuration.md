@@ -3,6 +3,11 @@
 How to configure a booted OpenVMX node so it joins an existing OpenVMS Cluster
 (VAXcluster) over the LAN and is counted as a real member.
 
+**See it:** [`docs/demos/cluster-cn3.cast`](demos/cluster-cn3.cast) is a live
+asciinema recording of a booted, cap-denied OVMX node reaching `CLUSTER_NODES=3`
+against the real lab cluster — `asciinema play docs/demos/cluster-cn3.cast`
+(details in [`demos/cluster-cn3.md`](demos/cluster-cn3.md)).
+
 This is the operator-facing guide. The engineering record of *how* the join was
 made faithful — the wire protocol, the crash-vector hunt, the executive-resident
 SCS/CNXMAN/DLM stack — lives in [`cluster-integration-notes.md`](cluster-integration-notes.md)

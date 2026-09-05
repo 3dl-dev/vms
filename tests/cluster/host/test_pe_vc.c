@@ -388,6 +388,10 @@ static const struct vc_edge edges_closed[] = {
 };
 
 static const struct vc_edge edges_start_sent[] = {
+	/* E83: a channel verified for a circuit that ALREADY EXISTS is another
+	 * PATH to the same system, not a formation -- an explicit no-op edge,
+	 * so "no edge" keeps meaning "the spec connects nothing here". */
+	{ PE_EV_CHANNEL_UP,       VMS_PE_VC_START_SENT },
 	{ PE_EV_RX_START,         VMS_PE_VC_STACK_SENT },  /* p. 2-14 */
 	{ PE_EV_RX_STACK,         VMS_PE_VC_OPEN },
 	{ PE_EV_RX_SEQMSG,        VMS_PE_VC_START_SENT },
@@ -402,6 +406,7 @@ static const struct vc_edge edges_start_sent[] = {
 };
 
 static const struct vc_edge edges_stack_sent[] = {
+	{ PE_EV_CHANNEL_UP,       VMS_PE_VC_STACK_SENT },  /* a PATH (E83) */
 	{ PE_EV_RX_ACK,           VMS_PE_VC_OPEN },
 	{ PE_EV_RX_STACK,         VMS_PE_VC_OPEN },
 	{ PE_EV_RX_START,         VMS_PE_VC_STACK_SENT },
@@ -417,6 +422,7 @@ static const struct vc_edge edges_stack_sent[] = {
 };
 
 static const struct vc_edge edges_open[] = {
+	{ PE_EV_CHANNEL_UP,       VMS_PE_VC_OPEN },        /* a PATH (E83) */
 	{ PE_EV_RX_SEQMSG,        VMS_PE_VC_OPEN },
 	{ PE_EV_RX_CREDIT,        VMS_PE_VC_OPEN },
 	{ PE_EV_RX_DATAGRAM,      VMS_PE_VC_OPEN },
@@ -1735,6 +1741,287 @@ static void test_channel_loss_tears_the_circuit_down(void)
 			"a re-verified channel re-forms the circuit");
 }
 
+/* ------------------------------------------------------------------ *
+ * E83: the circuit is with the SYSTEM; a channel is one of its paths
+ *
+ * THE DEFECT THIS PINS. Before E83 this port kept one circuit per CHANNEL, so
+ * a VAX reachable at two LAN addresses -- its hardware address and the logical
+ * AA-00-04-00-xx-yy address DECnet programs into the same adapter -- got two
+ * circuits. SCS keys its System Block on the SYSTEM, so when the FIRST of those
+ * channels timed out, scs_fsm_vc_down() closed EVERY connection to that node
+ * path-lost, including an ACCEPTED VMS$VAXcluster connection riding the OTHER,
+ * perfectly alive channel. Measured on the wire in join-e80refire-1788563452:
+ * three Ethernet sources, one logical address (aa:00:04:00:01:04 = SCSSYSTEMID
+ * 1025), and the surviving circuit's next frame carried send_seq 15 continuing
+ * 14 -- it had never gone down, only its connections had been killed.
+ *
+ * The two halves of the rule are both asserted here:
+ *   - an idle-but-alive circuit whose path fails, WITH another live path to the
+ *     same system, MOVES and stays open (SCS is not told anything);
+ *   - the same circuit, once the LAST path is gone, DOES break, and SCS is told
+ *     with the channel reason.
+ * ------------------------------------------------------------------ */
+
+/* The SAME VAX, seen at a second Ethernet source -- its hardware address
+ * before DECnet reprograms the adapter (the §3 decoder ring names exactly this
+ * case). Its frames carry the SAME logical LAVC address, which is how the port
+ * knows the two channels are one system, and the ONLY thing it goes on. */
+static const uint8_t vax1_hw_alt[6] = { 0x08, 0x00, 0x2b, 0x1e, 0x85, 0x61 };
+
+/* Walk a named peer's channel to b4, the way channel_to_b4 does the default
+ * peer's. */
+static void channel_to_b4_from(struct vc_env *e, const struct fake_peer *p,
+			       uint16_t incarnation)
+{
+	rx_hello_from(e, p, 1, PE_PFW_VERIFY_B2, incarnation);
+	rx_hello_from(e, p, 1, PE_PFW_VERIFY_B4, incarnation);
+}
+
+/* One second of a channel that is genuinely alive: a plain directed HELLO
+ * refreshes its §4(M) deadline and touches nothing else (the b-ladder is
+ * already terminal). */
+static void keepalive_second(struct vc_env *e, const struct fake_peer *p)
+{
+	e->fake.now_ms += 1000;
+	rx_hello_from(e, p, 1, PE_PFW_MULTICAST, 1);
+	(void)pe_fsm_tick(&e->fsm, NULL, 0);
+}
+
+static int addr_dst_is(struct vc_env *e, const uint8_t mac[6])
+{
+	struct vms_scs_addr a;
+
+	if (pe_vc_addr(&e->fsm, VAX1_SYSID, &a) != 0)
+		return 0;
+	return memcmp(a.dst_mac, mac, 6) == 0;
+}
+
+static void test_second_channel_is_a_path_not_a_circuit(void)
+{
+	struct fake_peer alt;
+	struct pe_vc *vc;
+
+	printf("-- E83: a second channel to the SAME system is a PATH\n");
+	env_init(&g_env, 1, 1);
+	fake_peer_init(&alt, VAX1_SYSID, vax1_hw_alt, "VAX1");
+
+	channel_to_b4(&g_env, 1);
+	rx_start(&g_env, 0, 1, 0);
+	rx_vc_ack(&g_env);
+	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_OPEN,
+			"path 1 formed and opened the circuit");
+
+	channel_to_b4_from(&g_env, &alt, 1);
+	ct_check(pe_fsm_vc_at(&g_env.fsm, 1) == NULL,
+		 "the second channel gets NO circuit of its own");
+	ct_check_eq_u32(g_env.fsm.vc_paths_redundant, 1,
+			"it is counted as an alternate path");
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->state, VMS_PE_VC_OPEN,
+			"and the one circuit is untouched");
+	ct_check(addr_dst_is(&g_env, vax1_hw),
+		 "still addressed on the path it formed over");
+
+	/* A frame arriving on the alternate path belongs to that ONE circuit's
+	 * sequence space and is taken, without moving the circuit. */
+	rx_seqmsg_from(&g_env, &alt, 1, 0);
+	ct_check_eq_u32(g_env.fsm.vc_rx_alt_path, 1,
+			"a frame on the alternate path is counted as such");
+	ct_check_eq_u32(the_vc(&g_env)->recv_seq, 1,
+			"and taken into the one circuit's sequence");
+	ct_check(addr_dst_is(&g_env, vax1_hw),
+		 "receiving on a path does not move the circuit onto it");
+}
+
+static void test_idle_circuit_survives_one_path_failing(void)
+{
+	struct fake_peer alt;
+	struct pe_vc *vc;
+	uint8_t msg[FAKE_VC_MSG_LEN];
+	uint32_t len, i;
+
+	printf("-- E83: an idle circuit with a live alternate path does NOT "
+	       "go path-lost\n");
+	env_init(&g_env, 1, 1);
+	fake_peer_init(&alt, VAX1_SYSID, vax1_hw_alt, "VAX1");
+
+	channel_to_b4(&g_env, 1);
+	rx_start(&g_env, 0, 1, 0);
+	rx_vc_ack(&g_env);
+	channel_to_b4_from(&g_env, &alt, 1);
+
+	/* THE E83 SHAPE. This node advertises, the peer ACKNOWLEDGES, and then
+	 * both sides go quiet while the coordinator decides. Nothing is
+	 * outstanding, so no p. 2-31 guarantee is at risk -- the circuit is
+	 * idle, not failing. */
+	len = our_seqmsg(&g_env, 0x62c50009u, msg, sizeof(msg));
+	ct_check_eq_u32((uint32_t)pe_vc_send_frame(&g_env.fsm, VAX1_SYSID, msg,
+						   len),
+			PE_VC_SEND_OK, "the advertisement went out");
+	rx_credit(&g_env, 1);
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->unacked, 0, "the peer acknowledged it: idle");
+
+	/* Twenty-five seconds in which path 1 says NOTHING and path 2 keeps
+	 * saying HELLO. Path 1 times out (§4(M), 20 s); path 2 does not. */
+	for (i = 0; i < 25u; i++)
+		keepalive_second(&g_env, &alt);
+
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->state, VMS_PE_VC_OPEN,
+			"the circuit is STILL OPEN: the system is reachable");
+	ct_check_eq_u32(g_env.upper_rec.downs, 0,
+			"SCS was NOT told -- no connection is path-lost");
+	ct_check_eq_u32(vc->path_moves, 1, "the circuit MOVED to path 2");
+	ct_check_eq_u32(g_env.fsm.vc_path_moves, 1, "and the port counted it");
+	ct_check(addr_dst_is(&g_env, vax1_hw_alt),
+		 "and the next frame is addressed to the surviving path");
+	ct_check_eq_u32(vc->send_seq, 2,
+			"the sequence CONTINUED -- nothing was re-formed");
+	ct_check_eq_u32(vc->opens, 1, "and the circuit never re-opened");
+
+	/* Now the LAST path goes too. Nothing is reachable, and the circuit
+	 * breaks exactly as it always did. */
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->state, VMS_PE_VC_CLOSED,
+			"with no path left the circuit closes");
+	ct_check_eq_u32(vc->last_down_reason, PE_VC_DOWN_CHANNEL,
+			"for the channel, as before");
+	ct_check_eq_u32(g_env.upper_rec.downs, 1,
+			"and only NOW is SCS told");
+}
+
+/*
+ * A circuit that fails over WITH SOMETHING OUTSTANDING must retransmit down the
+ * surviving path, not keep talking to a station that is gone. The bytes are
+ * still the ring's own (INV-6); only the addressing follows the path.
+ */
+static void test_retransmit_follows_the_surviving_path(void)
+{
+	struct fake_peer alt;
+	struct vms_sca_hdr h;
+	uint8_t msg[FAKE_VC_MSG_LEN];
+	uint32_t len, i, n, before;
+
+	printf("-- E83: a retransmit after failover goes down the NEW path\n");
+	/* TIMVCFAIL well past the §4(M) listen timeout, so the PATH fails first
+	 * and the circuit is still waiting on the same outstanding message when
+	 * it does -- which is the case this test exists for. */
+	env_timings(60000, 2000);
+	env_init(&g_env, 1, 1);
+	env_timings(16000, 2000);
+	fake_peer_init(&alt, VAX1_SYSID, vax1_hw_alt, "VAX1");
+
+	channel_to_b4(&g_env, 1);
+	rx_start(&g_env, 0, 1, 0);
+	rx_vc_ack(&g_env);
+	channel_to_b4_from(&g_env, &alt, 1);
+
+	/* Outstanding: sent, never acknowledged. */
+	len = our_seqmsg(&g_env, 0x62c50009u, msg, sizeof(msg));
+	ct_check_eq_u32((uint32_t)pe_vc_send_frame(&g_env.fsm, VAX1_SYSID, msg,
+						   len),
+			PE_VC_SEND_OK, "the message went out");
+	ct_check_eq_u32(the_vc(&g_env)->unacked, 1, "and is outstanding");
+
+	for (i = 0; i < 25u; i++)
+		keepalive_second(&g_env, &alt);
+	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_OPEN,
+			"the circuit rode out the path failure");
+	ct_check_eq_u32(the_vc(&g_env)->path_moves, 1, "on the alternate path");
+
+	/* Beat the retransmit ladder and read the frame that really left. */
+	fake_pe_clear_frames(&g_env.fake);
+	before = the_vc(&g_env)->retransmits;
+	g_env.fake.now_ms += 2500;
+	pe_fsm_vc_timer(&g_env.fsm, 0);
+	n = g_env.fake.n_frames;
+	ct_check(n >= 1, "the ladder retransmitted");
+	if (n >= 1) {
+		ct_check(vms_sca_hdr_parse(g_env.fake.frame[n - 1].b,
+					   g_env.fake.frame[n - 1].len,
+					   &h) == VMS_CODEC_OK,
+			 "the retransmitted frame decodes");
+		ct_check(memcmp(h.eth_dst, vax1_hw_alt, 6) == 0,
+			 "and it was addressed to the SURVIVING station");
+		ct_check(memcmp(h.dst_lavc, alt.lavc, 6) == 0,
+			 "with the same system's logical address");
+	}
+	ct_check_eq_u32(the_vc(&g_env)->retransmits, before + 1u,
+			"one retransmission this beat, at the same sequence");
+	ct_check_eq_u32(the_vc(&g_env)->send_seq, 2,
+			"and it consumed no new sequence number (§4(L))");
+}
+
+/*
+ * THE LINK IS NOT A PATH. pe_fsm_link_down() tells the circuits before it tells
+ * the channels, so at that instant every channel is still in b4 -- and a
+ * failover that trusted the state byte alone would hold up a circuit with no
+ * wire under it. Two live paths, link down, and the circuit must still close.
+ */
+static void test_link_down_beats_every_path(void)
+{
+	struct fake_peer alt;
+
+	printf("-- E83: a link bounce is not survivable by changing path\n");
+	env_init(&g_env, 1, 1);
+	fake_peer_init(&alt, VAX1_SYSID, vax1_hw_alt, "VAX1");
+
+	channel_to_b4(&g_env, 1);
+	rx_start(&g_env, 0, 1, 0);
+	rx_vc_ack(&g_env);
+	channel_to_b4_from(&g_env, &alt, 1);
+	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_OPEN,
+			"open, with two live paths");
+
+	(void)pe_fsm_link_down(&g_env.fsm, NULL, 0);
+	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_CLOSED,
+			"the circuit closed anyway");
+	ct_check_eq_u32(the_vc(&g_env)->path_moves, 0,
+			"and did NOT dodge onto the other channel");
+	ct_check_eq_u32(g_env.upper_rec.downs, 1, "SCS was told");
+}
+
+/*
+ * The failover is not a licence to keep a circuit the peer has re-formed.
+ * §4(i).B: the incarnation a channel advertises is the peer's number for US,
+ * and a different one means the peer regards this node as a new generation. A
+ * path advertising a different incarnation is therefore NOT a continuation, and
+ * the circuit breaks rather than silently continuing on it.
+ */
+static void test_failover_refuses_a_different_incarnation(void)
+{
+	struct fake_peer alt;
+	uint32_t i;
+
+	printf("-- E83: a path advertising a DIFFERENT incarnation is not a "
+	       "continuation\n");
+	env_init(&g_env, 1, 1);
+	fake_peer_init(&alt, VAX1_SYSID, vax1_hw_alt, "VAX1");
+
+	channel_to_b4(&g_env, 1);
+	rx_start(&g_env, 0, 1, 0);
+	rx_vc_ack(&g_env);
+	ct_check_eq_u32(the_vc(&g_env)->echo_incarnation, 1,
+			"the circuit carries the incarnation path 1 gave us");
+
+	/* Path 2 comes up advertising incarnation 2 for us. */
+	channel_to_b4_from(&g_env, &alt, 2);
+
+	for (i = 0; i < 25u; i++) {
+		g_env.fake.now_ms += 1000;
+		rx_hello_from(&g_env, &alt, 1, PE_PFW_MULTICAST, 2);
+		(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	}
+
+	ct_check_eq_u32(the_vc(&g_env)->path_moves, 0,
+			"the circuit did NOT move onto it");
+	ct_check(g_env.upper_rec.downs >= 1,
+		 "it broke instead, and SCS was told");
+}
+
 /* §4(O.30) / p. 7-29: on a last gasp the port "immediately closes the virtual
  * circuit … then notifies all SYSAPs" -- and does NOT re-form, because the
  * node said it was leaving. */
@@ -1884,6 +2171,11 @@ int main(void)
 	test_credit_window();
 	test_timvcfail_breaks_and_reforms();
 	test_channel_loss_tears_the_circuit_down();
+	test_second_channel_is_a_path_not_a_circuit();
+	test_idle_circuit_survives_one_path_failing();
+	test_retransmit_follows_the_surviving_path();
+	test_link_down_beats_every_path();
+	test_failover_refuses_a_different_incarnation();
 	test_last_gasp_closes_without_reforming();
 	test_peer_restart_resets_the_circuit();
 	test_projection();

@@ -1607,11 +1607,167 @@ static struct pe_vc *vc_alloc(struct pe_fsm *f, uint32_t ch_index)
 	return NULL;
 }
 
-static struct pe_vc *vc_find_or_alloc(struct pe_fsm *f, uint32_t ch_index)
+/* ==========================================================================
+ * THE CIRCUIT IS WITH THE SYSTEM; THE CHANNEL IS ITS PATH (E83)
+ *
+ * WHAT THE BUG WAS. This file used to key a circuit on the CHANNEL: one
+ * pe_vc per remote Ethernet address. A real VMS node is reachable at more
+ * than one LAN address at once -- its hardware address and the logical
+ * `AA-00-04-00-xx-yy` address DECnet programs into the same adapter -- so a
+ * single VAX gave this port SEVERAL channels, and therefore several circuits,
+ * all naming the same SCSSYSTEMID. SCS keys its System Block on the SYSTEM, so
+ * when ANY of those circuits went down, scs_fsm_vc_down() walked that one
+ * System Block and closed EVERY connection to that node with path-lost --
+ * including connections riding a channel that was perfectly alive.
+ *
+ * MEASURED (integration note E83, join-e80refire-1788563452.pcap): three
+ * Ethernet sources -- 08:00:2b:1e:85:61, 08:00:2b:7a:fa:e2 and
+ * aa:00:04:00:01:04 -- all carried the logical address aa:00:04:00:01:04 at
+ * abs 24, i.e. SCSSYSTEMID 1025, node VAX1. One of them went quiet at
+ * t=449.249; twenty seconds later (§4(M)) its channel timed out, its circuit
+ * broke, and an ACCEPTED VMS$VAXcluster connection on ANOTHER channel to the
+ * SAME VAX was closed path-lost -- 17.4 s after this node had advertised on
+ * it, while the VAX still held it. The wire proves the surviving circuit never
+ * went down: its very next frame carried send_seq 15, continuing 14, with no
+ * 0x41 and no counter reset.
+ *
+ * THE MODEL. The design says it in one line -- the port "builds VIRTUAL
+ * CIRCUITS (VCs) between nodes over ONE OR MORE LAN paths (channels)"
+ * (docs/design-cluster-node.md), and vms_pe.h §4 says the port "forms a
+ * VIRTUAL CIRCUIT with the remote SYSTEM". So: ONE circuit per remote system,
+ * carried over one or more verified channels; the bound channel is the path it
+ * is using now; the circuit fails when the LAST path does, not the first.
+ *
+ * INV-6. Every judgement below rests on something really read: the peer's own
+ * logical LAVC address off its own frame (pe_channel_learn), the b2/b3/b4
+ * ladder's own conclusion, that channel's own §4(M) deadline, and the
+ * incarnation the peer really advertised. A channel that never carried a
+ * logical address has NO system as far as this port is concerned, and is never
+ * merged onto another circuit on a guess.
+ * ========================================================================== */
+
+/*
+ * IS THIS CHANNEL A PATH THIS PORT MAY STILL USE? Two measured facts and no
+ * assumption: the ladder reached b4 (§4(a).1, the channel is VERIFIED) and the
+ * station is still inside its own §4(M) listen deadline. The deadline is
+ * re-tested rather than left to the state byte, because the channel beat and
+ * the circuit beat are separate: a station whose last frame is older than the
+ * listen timeout is not alive merely because nobody has run its timer yet.
+ */
+static int pe_channel_is_live(const struct pe_channel *ch, uint32_t now)
 {
+	if (ch == NULL || !ch->in_use)
+		return 0;
+	if (ch->state != (uint8_t)VMS_PE_CH_B4)
+		return 0;
+	return !pe_reached(now, ch->deadline_ms);
+}
+
+/* The channel a circuit is riding right now, or NULL if that slot is gone. */
+static struct pe_channel *vc_path(struct pe_fsm *f, const struct pe_vc *vc)
+{
+	return pe_fsm_channel_at(f, vc->channel);
+}
+
+/* The circuit belonging to the SYSTEM this channel reaches, or NULL -- either
+ * because the channel has never carried a logical address (so this port does
+ * not know what system it is) or because that system has no circuit yet. */
+static struct pe_vc *vc_by_channel_system(struct pe_fsm *f,
+					  const struct pe_channel *ch)
+{
+	if (ch == NULL || !ch->remote_sysid_valid)
+		return NULL;
+	return pe_fsm_vc_by_sysid(f, ch->remote_sysid);
+}
+
+/*
+ * Another LIVE channel to `sysid`, other than `except`. Index, or -1.
+ *
+ * THE LINK IS TESTED FIRST, and it is not belt-and-braces. pe_fsm_link_down()
+ * deliberately tells the CIRCUITS before it tells the channels ("the layers
+ * above must see vc_down before the channel records say the same thing"), so at
+ * that instant every channel is still sitting in b4. Without this test a link
+ * bounce would find a dozen "live" alternates and hold up circuits that have no
+ * wire under them at all -- which is the exact fabrication of liveness this
+ * whole change is not allowed to commit.
+ */
+static int32_t pe_alt_path(struct pe_fsm *f, vms_scs_sysid_t sysid,
+			   uint32_t except, uint32_t now)
+{
+	uint32_t i;
+
+	if (sysid == 0u || !f->link_up)
+		return -1;
+	for (i = 0; i < f->n_channels; i++) {
+		const struct pe_channel *ch = &f->ch[i];
+
+		if (i == except || !ch->remote_sysid_valid)
+			continue;
+		if (ch->remote_sysid != sysid)
+			continue;
+		if (pe_channel_is_live(ch, now))
+			return (int32_t)i;
+	}
+	return -1;
+}
+
+/*
+ * MOVE A CIRCUIT ONTO ANOTHER CHANNEL TO THE SAME SYSTEM. Nothing about the
+ * CIRCUIT changes -- not its state, not its sequence numbers, not its unacked
+ * ring, not the credit its peer granted -- because none of those belong to the
+ * LAN path. What changes is only which station's addresses the next frame is
+ * built with (vc_fill_addr reads them from the bound channel).
+ */
+static void vc_rebind_path(struct pe_fsm *f, struct pe_vc *vc,
+			   uint32_t ch_index)
+{
+	vc->channel = (uint8_t)ch_index;
+	vc->path_moves++;
+	f->vc_path_moves++;
+}
+
+/*
+ * MAY THIS CIRCUIT CONTINUE ON `ch`? §4(i).B: a directed HELLO carries the
+ * incarnation the peer attributes to US, and a CHANGE in it means the peer
+ * regards this node as a new generation -- which is a channel RESET, and tears
+ * the circuit down. So a path is a continuation of THIS circuit only if it
+ * advertises the same number the circuit has been stamping on every frame it
+ * sends. A different number is not a failover; it is the peer having re-formed,
+ * and the circuit then breaks exactly as it did before this rule existed.
+ */
+static int vc_path_continues(const struct pe_vc *vc,
+			     const struct pe_channel *ch)
+{
+	if (!vc->echo_valid)
+		return 1;               /* nothing yet that a path could contradict */
+	return ch->peer_incarnation_valid &&
+	       ch->peer_incarnation == vc->echo_incarnation;
+}
+
+/*
+ * THE CIRCUIT THIS CHANNEL BELONGS TO. Returns the circuit to use, or NULL
+ * when this channel must not have one:
+ *   - the circuit table is full (vc_alloc counts it), or
+ *   - the system already has a circuit on a path that is still LIVE, so this
+ *     channel is a second ROUTE to it (counted in vc_paths_redundant) and a
+ *     second circuit would be the E83 defect all over again.
+ */
+static struct pe_vc *vc_for_path(struct pe_fsm *f, uint32_t ch_index)
+{
+	struct pe_channel *ch = pe_fsm_channel_at(f, ch_index);
 	struct pe_vc *vc = vc_by_channel(f, ch_index);
 
-	return vc != NULL ? vc : vc_alloc(f, ch_index);
+	if (vc != NULL)
+		return vc;
+	vc = vc_by_channel_system(f, ch);
+	if (vc == NULL)
+		return vc_alloc(f, ch_index);
+	if (pe_channel_is_live(vc_path(f, vc), pe_now(f))) {
+		f->vc_paths_redundant++;
+		return NULL;
+	}
+	vc_rebind_path(f, vc, ch_index);
+	return vc;
 }
 
 /* --------------------------------------------------------------------------
@@ -2621,11 +2777,53 @@ static void h_vc_form_retry(struct pe_fsm *f, struct pe_vc *vc,
  * attempt is NOT counted, because `retransmits` counts transmissions that
  * happened.
  */
+/*
+ * RE-ADDRESS A HELD FRAME ONTO THE CIRCUIT'S CURRENT PATH (E83).
+ *
+ * A retransmission re-sends THE RING'S OWN BYTES (INV-6): the message is the
+ * one this port really sent, never rebuilt from a template. But the link-layer
+ * addressing is not part of the message -- it names the PATH -- and after a
+ * failover the path is a different station. So the frame's own header is parsed
+ * back out of the frame, its four address fields are replaced with the CURRENT
+ * channel's real learned addresses, and the header is rebuilt through the
+ * codec. Every other header field comes back out of the frame itself; nothing
+ * is invented, and a frame already addressed for this path is left untouched.
+ *
+ * Without this, a circuit that failed over with something outstanding would
+ * keep retransmitting to a station that is gone and then break on TIMVCFAIL --
+ * the E83 defect back by a slower road.
+ */
+static int vc_readdress(struct pe_fsm *f, const struct pe_vc *vc,
+			uint8_t *frame, uint32_t len)
+{
+	struct pe_channel *ch = vc_path(f, vc);
+	struct vms_scs_addr a;
+	struct vms_sca_hdr h;
+	uint32_t written = 0u;
+
+	if (ch == NULL || vc_fill_addr(f, ch, &a) != 0)
+		return -1;
+	if (vms_sca_hdr_parse(frame, len, &h) != VMS_CODEC_OK)
+		return -1;
+	if (pe_mac_eq(h.eth_dst, a.dst_mac))
+		return 0;                       /* already on this path */
+	pe_copy(h.eth_dst, a.dst_mac, VMS_ETH_ADDR_LEN);
+	pe_copy(h.eth_src, a.src_mac, VMS_ETH_ADDR_LEN);
+	pe_copy(h.dst_lavc, a.dst_logical, VMS_ETH_ADDR_LEN);
+	pe_copy(h.src_lavc, a.src_logical, VMS_ETH_ADDR_LEN);
+	return vms_sca_hdr_build(&h, frame, len, &written) == VMS_CODEC_OK
+		       ? 0 : -1;
+}
+
 static int vc_resend_one(struct pe_fsm *f, struct pe_vc *vc,
 			 struct pe_vc_unacked *e, uint32_t now)
 {
 	struct vms_frame_info fi;
 
+	/* First, because the header rebuild rewrites abs 30 and the retransmit
+	 * marking below must win. */
+	if (vc_readdress(f, vc, e->frame, e->len) != 0)
+		return -1;
 	if (vms_frame_classify(e->frame, e->len, &fi) != VMS_CODEC_OK)
 		return -1;
 	if (vms_scs_seq_mark_retransmit(e->frame, e->len, &fi) != VMS_CODEC_OK)
@@ -2752,16 +2950,57 @@ static void h_vc_channel_up(struct pe_fsm *f, struct pe_vc *vc,
 	vc_begin_formation(f, vc);
 }
 
+/*
+ * THE PATH FAILED; DID THE CIRCUIT? (E83.)
+ *
+ * The circuit is with the remote SYSTEM, not with one of its LAN addresses. If
+ * ANOTHER channel to that same system is still LIVE -- verified, inside its own
+ * §4(M) deadline, and advertising the same incarnation for us -- then the
+ * guarantee p. 2-31 breaks a circuit for has not failed at all: the peer is
+ * reachable and, from its side, nothing has happened. Breaking here is what
+ * closed an ACCEPTED VMS$VAXcluster connection the peer still held, and the
+ * whole cascade -- reconnect ladder, the peer's REJECT, the CNXMGRERR --
+ * followed from it (see the E83 block above vc_for_path).
+ *
+ * NOTHING IS ASSUMED ALIVE. The alternate must satisfy pe_channel_is_live(),
+ * which is two real measurements of a real channel; if it does not, this
+ * returns 0 and the circuit is torn down exactly as before.
+ *
+ * Returns 1 when the circuit MOVED and must not be torn down.
+ */
+static int vc_failover(struct pe_fsm *f, struct pe_vc *vc)
+{
+	struct pe_channel *alt;
+	int32_t idx;
+
+	if (!vc->peer_sysid_valid || vc->state == (uint8_t)VMS_PE_VC_CLOSED)
+		return 0;
+	idx = pe_alt_path(f, vc->peer_sysid, vc->channel, pe_now(f));
+	if (idx < 0)
+		return 0;
+	alt = pe_fsm_channel_at(f, (uint32_t)idx);
+	if (alt == NULL || !vc_path_continues(vc, alt))
+		return 0;
+	vc_rebind_path(f, vc, (uint32_t)idx);
+	pe_log(f, "%PEA0, channel lost, virtual circuit continues on another "
+		  "channel to the same system");
+	return 1;
+}
+
 /* The channel stopped being verified (a peer re-form, spec SS4(i).B, or the
  * SS4(M) listen timeout). Design SS3.4: the circuit rides the channel, so it
- * goes with it -- and it does NOT re-form here, because there is no verified
- * channel to form it over. The next CHANNEL_UP starts it again. */
+ * goes with it -- unless the SAME SYSTEM still has another live path, in which
+ * case the circuit moves rather than dies (E83). It does NOT re-form here,
+ * because there is no verified channel to form it over; the next CHANNEL_UP
+ * starts it again. */
 static void h_vc_channel_down(struct pe_fsm *f, struct pe_vc *vc,
 			      const struct pe_vc_rx *rx)
 {
 	int was_up = (vc->state == (uint8_t)VMS_PE_VC_OPEN);
 
 	(void)rx;
+	if (vc_failover(f, vc))
+		return;
 	vc->last_down_reason = (uint8_t)PE_VC_DOWN_CHANNEL;
 	vc->downs++;
 	vc_close(f, vc);
@@ -2854,6 +3093,10 @@ pe_vc_table[VMS_PE_VC_STATE__COUNT][PE_EV__COUNT] = {
 	/* [START SENT] our START is out. p. 2-14's acceptable responses are
 	 * START (both ends started: send a STACK) and STACK (open, ack). */
 	[VMS_PE_VC_START_SENT] = {
+		/* A channel verified for a circuit that already exists is a
+		 * PATH, not a formation (E83): vc_for_path() has already bound
+		 * it if this circuit needed it, and nothing else changes. */
+		[PE_EV_CHANNEL_UP]      = h_vc_idle,
 		[PE_EV_RX_START]        = h_vc_rx_start,
 		[PE_EV_RX_STACK]        = h_vc_rx_stack,
 		[PE_EV_RX_SEQMSG]       = h_vc_no_circuit,
@@ -2871,6 +3114,7 @@ pe_vc_table[VMS_PE_VC_STATE__COUNT][PE_EV__COUNT] = {
 	 * circuit opens on an ACK, on a STACK, or -- p. 2-16 -- on any packet
 	 * that requires a circuit at all. */
 	[VMS_PE_VC_STACK_SENT] = {
+		[PE_EV_CHANNEL_UP]      = h_vc_idle,          /* a PATH (E83) */
 		[PE_EV_RX_ACK]          = h_vc_rx_ack,
 		[PE_EV_RX_STACK]        = h_vc_rx_stack,
 		[PE_EV_RX_START]        = h_vc_rx_start,      /* re-send STACK */
@@ -2887,6 +3131,7 @@ pe_vc_table[VMS_PE_VC_STATE__COUNT][PE_EV__COUNT] = {
 
 	/* [OPEN] the sequenced conversation. */
 	[VMS_PE_VC_OPEN] = {
+		[PE_EV_CHANNEL_UP]      = h_vc_idle,          /* a PATH (E83) */
 		[PE_EV_RX_SEQMSG]       = h_vc_rx_seqmsg,
 		[PE_EV_RX_CREDIT]       = h_vc_rx_credit,
 		[PE_EV_RX_DATAGRAM]     = h_vc_rx_datagram,
@@ -3004,6 +3249,8 @@ static void pe_vc_rx_frame(struct pe_fsm *f, const uint8_t *frame, uint32_t len,
 	struct pe_vc_rx rx;
 	struct pe_channel *ch;
 	struct pe_vc *vc;
+	enum pe_event ev;
+	uint32_t ch_index;
 
 	/* No circuit table bound: this port is FC-P0.8's port, channels only.
 	 * Every SCS frame is then a frame there is no circuit to take, and it
@@ -3033,22 +3280,40 @@ static void pe_vc_rx_frame(struct pe_fsm *f, const uint8_t *frame, uint32_t len,
 		return;
 	}
 
-	vc = vc_by_channel(f, (uint32_t)(ch - f->ch));
+	ev = vc_event_for(&rx);
+	ch_index = (uint32_t)(ch - f->ch);
+	vc = vc_by_channel(f, ch_index);
+	if (vc == NULL)
+		vc = vc_by_channel_system(f, ch);   /* the system's other path */
 	if (vc == NULL) {
 		/* The peer opened the conversation. Only its START may create
 		 * a circuit -- anything else is data for a circuit that does
 		 * not exist, and is counted. */
-		if (vc_event_for(&rx) != PE_EV_RX_START) {
+		if (ev != PE_EV_RX_START) {
 			f->vc_rx_no_circuit++;
 			return;
 		}
-		vc = vc_find_or_alloc(f, (uint32_t)(ch - f->ch));
+		vc = vc_alloc(f, ch_index);
 		if (vc == NULL)
 			return;
 		vc->echo_incarnation = ch->peer_incarnation;
 		vc->echo_valid = ch->peer_incarnation_valid;
+	} else if (vc->channel != (uint8_t)ch_index) {
+		/*
+		 * A frame from this system on a channel other than the one its
+		 * circuit is bound to. Multi-path RECEIVE is normal and the
+		 * frame belongs to that one circuit's sequence space, so it is
+		 * delivered either way. The circuit only MOVES for a reason:
+		 * the peer's own START (§4(h)(4a) -- it is re-forming, and has
+		 * just told us which path it is using, so the STACK must go
+		 * back that way), or its current path no longer being live.
+		 */
+		f->vc_rx_alt_path++;
+		if (ev == PE_EV_RX_START ||
+		    !pe_channel_is_live(vc_path(f, vc), pe_now(f)))
+			vc_rebind_path(f, vc, ch_index);
 	}
-	pe_vc_dispatch(f, vc, vc_event_for(&rx), &rx);
+	pe_vc_dispatch(f, vc, ev, &rx);
 }
 
 /*
@@ -3065,7 +3330,10 @@ static void pe_vc_follow_channel(struct pe_fsm *f, uint32_t ch_index,
 	if (f->vc == NULL || act == PE_CH_ACT_NONE)
 		return;
 	if (act == PE_CH_ACT_VERIFIED) {
-		vc = vc_find_or_alloc(f, ch_index);
+		/* By SYSTEM, not by channel: a second verified channel to a node
+		 * that already has a circuit is another PATH to it, never a
+		 * second circuit (E83). */
+		vc = vc_for_path(f, ch_index);
 		if (vc == NULL)
 			return;
 		pe_vc_dispatch(f, vc, PE_EV_CHANNEL_UP, &pe_vc_rx_none);

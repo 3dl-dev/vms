@@ -662,6 +662,12 @@ struct pe_vc {
 	uint32_t implied_acks;            /* p. 2-16 opens                   */
 	uint32_t opens;                   /* times this VC reached OPEN      */
 	uint32_t downs;                   /* times it was torn down          */
+	/*
+	 * Times this circuit MOVED to another channel to the same remote
+	 * system (E83). Not a down: nothing about the conversation changed,
+	 * only which of the peer's LAN addresses the next frame is built for.
+	 */
+	uint32_t path_moves;
 	uint32_t send_refused_credit;     /* refused: no send credit         */
 	uint32_t send_refused_ring;       /* refused: ring full              */
 	uint8_t  last_down_reason;        /* enum pe_vc_down_reason, 0 = none */
@@ -1202,6 +1208,26 @@ struct pe_fsm {
 	uint32_t vc_rx_no_channel;  /* SCS frame from an unknown station      */
 	uint32_t vc_rx_parse_failed;/* classified SCS, then failed to decode  */
 	uint32_t vc_reformations;   /* circuits re-formed after a failure     */
+
+	/* ---- E83: THE CIRCUIT IS WITH THE SYSTEM, THE CHANNEL IS ITS PATH --
+	 *
+	 * A real node is reachable at more than one LAN address at once (its
+	 * hardware address AND the logical address DECnet programs into the
+	 * adapter). Each of those is its own CHANNEL and each carries the SAME
+	 * logical LAVC address at abs 24, so the port can SEE that they are one
+	 * system. These three numbers are the whole audit trail of it:
+	 *
+	 *   vc_paths_redundant  a channel verified to a system that already has
+	 *                       a circuit on a LIVE path: an alternate route,
+	 *                       counted, and deliberately NOT a second circuit.
+	 *   vc_path_moves       circuits that MOVED onto another channel to the
+	 *                       same system instead of being torn down.
+	 *   vc_rx_alt_path      frames taken on a channel other than the one the
+	 *                       circuit is currently bound to.
+	 */
+	uint32_t vc_paths_redundant;
+	uint32_t vc_path_moves;
+	uint32_t vc_rx_alt_path;
 	/*
 	 * Received, ACKNOWLEDGED, and not handed upward: no upper layer bound,
 	 * or a class whose Con.ID location the codec does not ground (§4(d)

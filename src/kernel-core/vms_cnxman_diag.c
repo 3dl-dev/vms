@@ -260,6 +260,7 @@ const char *cnxman_diag_reason_name(uint8_t reason)
 	case CNXMAN_DIAG_R_CDT_NOT_SENDABLE: return "cdt-not-sendable";
 	case CNXMAN_DIAG_R_CONNECT_REFUSED:  return "connect-refused";
 	case CNXMAN_DIAG_R_PEER_NOCREDIT:    return "peer-nocredit";
+	case CNXMAN_DIAG_R_UNSAFE_EMIT:      return "unsafe-emit";
 	default:                       return "?";
 	}
 }
@@ -343,6 +344,10 @@ enum cnxman_diag_reason cnxman_diag_port_reason(int32_t code)
 	case PE_VC_SEND_NOCIRCUIT: return CNXMAN_DIAG_R_PORT_NOCIRCUIT;
 	case PE_VC_SEND_NOCREDIT:  return CNXMAN_DIAG_R_PORT_NOCREDIT;
 	case PE_VC_SEND_RINGFULL:  return CNXMAN_DIAG_R_PORT_RINGFULL;
+	/* E82: NOT folded into PORT_BADFRAME. "This circuit cannot carry your
+	 * frame" and "this frame would have bugchecked the peer" are different
+	 * diagnoses and the transcript must say which. */
+	case PE_VC_SEND_UNSAFE:    return CNXMAN_DIAG_R_UNSAFE_EMIT;
 	/* Two port codes, one cause as a reader meets it: the port was handed
 	 * something it cannot put on this circuit. `rc` still carries WHICH of
 	 * the two it was, verbatim, so nothing is lost by naming them alike. */
@@ -369,6 +374,10 @@ uint32_t cnxman_diag_port_aux(const struct pe_vc_send_refusal *p)
 				     : CNXMAN_DIAG_NO_VC;
 	case PE_VC_SEND_NOCREDIT: return p->send_refused_credit;
 	case PE_VC_SEND_RINGFULL: return p->send_refused_ring;
+	/* E82: WHICH vector refused it -- the enum cm_guard_class the port
+	 * really recorded on that circuit, which is the one fact that names
+	 * this cause (a count would not). */
+	case PE_VC_SEND_UNSAFE:   return (uint32_t)p->guard_class;
 	/* The port keeps no count of unsendable frames or interface failures,
 	 * and inventing one would be worse than an explicit zero. */
 	default:                  return 0u;

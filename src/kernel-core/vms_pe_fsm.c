@@ -1595,6 +1595,10 @@ static struct pe_vc *vc_alloc(struct pe_fsm *f, uint32_t ch_index)
 		vc->in_use = 1u;
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
 		vc->channel = (uint8_t)ch_index;
+		/* E82: explicit, so a REUSED slot can never inherit another
+		 * system's high-water marks -- acking on a fresh circuit from
+		 * a number the previous peer sent is the E76 assertion. */
+		cm_guard_init(&vc->guard);
 		if (i + 1u > f->n_vcs)
 			f->n_vcs = i + 1u;
 		return vc;
@@ -2415,6 +2419,19 @@ static void vc_deliver(struct pe_fsm *f, struct pe_vc *vc,
 	if (rx->frame != NULL)
 		(void)pe_blk_rx_trailer_try(f, vc, rx->frame, rx->len);
 
+	/*
+	 * E82: the ONE place this port learns what the peer has actually said,
+	 * and therefore the only thing this node is entitled to acknowledge.
+	 *
+	 * It is HERE, in the delivery path, and not in the parser: a frame that
+	 * arrived out of sequence was DISCARDED (h_vc_rx_gap) and a frame the
+	 * codec would not classify never became a message. Raising the peer's
+	 * high-water mark from either would let this node ack a message it did
+	 * not take, which is the E76 assertion the guard exists to refuse.
+	 */
+	if (rx->frame != NULL && rx->fi != NULL)
+		cm_guard_rx(&vc->guard, rx->frame, rx->len, rx->fi);
+
 	if (!rx->conid_valid || f->upper == NULL || f->upper->message == NULL) {
 		f->vc_rx_undelivered++;
 		return;
@@ -3128,9 +3145,159 @@ static int pe_note_send_refusal(struct pe_fsm *f, vms_scs_sysid_t dst, int code)
 	return vc_note_send_refusal(pe_fsm_vc_by_sysid(f, dst), code);
 }
 
+/* --------------------------------------------------------------------------
+ * E82: THE EMIT-TIME WIRE-SAFETY GUARD, wired to this circuit
+ *
+ * Read vms_cluster_emit_guard.h for the whole argument. What lives HERE is
+ * only the wiring, and it is deliberately three small pieces: what the
+ * circuit really holds (guard_read_facts), what the console is told
+ * (guard_announce), and the one decision (guard_refuses).
+ *
+ * WHY THIS IS THE POINT IN THE STACK. pe_vc_send_frame is the LOWEST place
+ * every sequenced cluster frame passes -- CNXMAN's and the DLM arm's bodies
+ * come down through SCS's msg_transmit_* into it, and so do SCS's own
+ * connection-control frames -- and it is the ONLY place where the fully-built
+ * frame and the circuit's live transport state (the sequence about to be
+ * consumed, the peer's cumulative ack, the peer's own credit grant) are both
+ * in hand. Judging higher up would mean judging a frame that does not exist
+ * yet; judging lower down would mean judging bytes with no circuit behind
+ * them.
+ *
+ * IT IS NOT ON THE RETRANSMIT PATH, on purpose: vc_resend_one() re-sends
+ * bytes out of the unacked ring, and those bytes were judged when they were
+ * ORIGINATED. Re-judging them would spend the check twice and could refuse a
+ * frame the peer is already waiting for.
+ * -------------------------------------------------------------------------- */
+
+/*
+ * The circuit's LIVE transport facts. Every one is a field `vc` holds right
+ * now -- the sequence this send would consume, the cumulative acknowledgement
+ * the PEER really sent, and the PEER's own CLUSTER_CREDITS grant read from its
+ * START body (spec SS4(g) abs 95). Nothing here is defaulted: an unlearned
+ * grant stays 0 and the credit rule is simply not judged (INV-6).
+ *
+ * `peer_ack_valid` is `peer_recv_ack != 0`, which is exactly "this peer has
+ * acknowledged at least one of our sequences" -- vc_release_acked() returns
+ * before writing that field for ack 0, whose grounded meaning is "nothing
+ * acknowledged" (SS4(h)(3)/(4)). A circuit whose peer has acknowledged nothing
+ * therefore has no baseline, and the guard says so rather than assuming one.
+ */
+static void guard_read_facts(const struct pe_fsm *f, const struct pe_vc *vc,
+			     struct cm_guard_facts *facts)
+{
+	pe_bzero(facts, (uint32_t)sizeof(*facts));
+	facts->send_seq = vc->send_seq;
+	facts->peer_recv_ack = vc->peer_recv_ack;
+	facts->send_credit_max = vc->send_credit_max;
+	facts->peer_ack_valid = (uint8_t)(vc->peer_recv_ack != 0u ? 1u : 0u);
+	facts->now_ms = pe_now(f);
+}
+
+/* Append a NUL-terminated string, never past `cap - 1`. Returns the new
+ * length. No printf: this is a pure FSM TU on both substrates. */
+static uint32_t guard_str_add(char *buf, uint32_t cap, uint32_t at,
+			      const char *s)
+{
+	while (s != NULL && *s != '\0' && at + 1u < cap)
+		buf[at++] = *s++;
+	buf[at] = '\0';
+	return at;
+}
+
+/* ...and the peer's own SCSNODE, which is 8 blank-padded ASCII bytes read off
+ * its START body, not a C string. Trailing blanks are dropped. A peer whose
+ * name was never learned contributes NOTHING -- the line simply does not name
+ * a node, rather than naming a made-up one (INV-6). */
+static uint32_t guard_str_add_peer(char *buf, uint32_t cap, uint32_t at,
+				   const struct pe_vc *vc)
+{
+	uint32_t n = VMS_SCS_START_NODENAME_LEN;
+	uint32_t i;
+
+	if (!vc->peer_name_valid)
+		return at;
+	while (n > 0u && vc->peer_name[n - 1u] == (uint8_t)' ')
+		n--;
+	if (n == 0u)
+		return at;
+	at = guard_str_add(buf, cap, at, " to ");
+	for (i = 0u; i < n && at + 1u < cap; i++)
+		buf[at++] = (char)vc->peer_name[i];
+	buf[at] = '\0';
+	return at;
+}
+
+/*
+ * ONE CONSOLE LINE, THROTTLED. The guard exists because a per-frame reflex
+ * bugchecked VAX2; a per-frame console line answering a per-frame defect would
+ * be the same mistake one layer up, so cm_guard_log_due() prints the FIRST
+ * sighting of each vector and rate-limits every repeat.
+ */
+static void guard_announce(struct pe_fsm *f, struct pe_vc *vc,
+			   const struct cm_guard_finding *found)
+{
+	char line[112];
+	uint32_t at = 0u;
+
+	if (!cm_guard_log_due(&vc->guard, found->cls, pe_now(f)))
+		return;
+	/*
+	 * TWO LINES, because they are two different facts and the console may
+	 * not blur them: a DROP frame did not go, a WARN frame DID. Saying
+	 * "refused" about a frame that went out would be the reader's version
+	 * of a fabricated field.
+	 */
+	at = guard_str_add(line, (uint32_t)sizeof(line), at,
+			   found->severity == (uint8_t)CM_GUARD_SEV_DROP
+			   ? "%CNXMAN, refused to emit an unsafe cluster frame ("
+			   : "%CNXMAN, emitted a cluster frame outside the measured envelope (");
+	at = guard_str_add(line, (uint32_t)sizeof(line), at,
+			   cm_guard_class_name(found->cls));
+	at = guard_str_add(line, (uint32_t)sizeof(line), at, ")");
+	(void)guard_str_add_peer(line, (uint32_t)sizeof(line), at, vc);
+	pe_log(f, line);
+}
+
+/*
+ * THE DECISION. Non-zero means DO NOT PUT THIS FRAME ON THE WIRE.
+ *
+ * A WARN finding is counted and announced and the frame still goes: the guard
+ * refuses only what the auditor's corpus proves no real VMS node has ever
+ * emitted (vms_cluster_emit_guard.h SS2's two deliberate deviations).
+ */
+static int guard_refuses(struct pe_fsm *f, struct pe_vc *vc,
+			 const uint8_t *frame, uint32_t len,
+			 const struct vms_frame_info *fi,
+			 struct cm_guard_frame *view)
+{
+	struct cm_guard_facts facts;
+	struct cm_guard_finding found;
+	int verdict;
+
+	guard_read_facts(f, vc, &facts);
+	verdict = cm_guard_check_tx(&vc->guard, &facts, frame, len, fi, view,
+				    &found);
+	if (!view->judged) {
+		f->guard_skipped++;
+		return 0;
+	}
+	f->guard_judged++;
+	if (found.cls == (uint8_t)CM_GUARD_C_NONE)
+		return 0;
+
+	guard_announce(f, vc, &found);
+	if (verdict == CM_GUARD_REFUSE) {
+		f->guard_refused++;
+		return 1;
+	}
+	f->guard_warned++;
+	return 0;
+}
+
 int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 		     const uint8_t *frame, uint32_t len)
 {
+	struct cm_guard_frame gview;
 	struct vms_frame_info fi;
 	struct pe_vc_unacked *e;
 	struct pe_vc *vc;
@@ -3151,6 +3318,16 @@ int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 		vc->send_refused_credit++;
 		return vc_note_send_refusal(vc, PE_VC_SEND_NOCREDIT);
 	}
+	/*
+	 * E82: the LAST gate before this frame becomes a sequence, a ring
+	 * entry and a transmission. It is here rather than after the stamp so
+	 * a refused frame consumes NOTHING -- no number, no ring slot -- which
+	 * is the same no-hole guarantee the ordering below already makes, and
+	 * the exact defect (a counter advanced by a send that never left) that
+	 * produced the E76 bugcheck.
+	 */
+	if (guard_refuses(f, vc, frame, len, &fi, &gview))
+		return vc_note_send_refusal(vc, PE_VC_SEND_UNSAFE);
 
 	seq = vc->send_seq;
 	e = vc_ring_alloc(vc);
@@ -3180,6 +3357,13 @@ int pe_vc_send_frame(struct pe_fsm *f, vms_scs_sysid_t dst,
 
 	if (pe_tx_from(f, e->frame, e->len) != 0)   /* held for the ladder */
 		return vc_note_send_refusal(vc, PE_VC_SEND_TXFAIL);
+	/*
+	 * E82: and ONLY now -- once the substrate has really taken the bytes --
+	 * does the guard's observation ledger advance. A frame the interface
+	 * refused leaves the ledger exactly where it was, so this node can
+	 * never open its next dialogue at a number it never actually sent.
+	 */
+	cm_guard_sent(&vc->guard, &gview, pe_now(f));
 	return PE_VC_SEND_OK;
 }
 
@@ -3202,6 +3386,10 @@ int pe_vc_send_refusal_get(struct pe_fsm *f, vms_scs_sysid_t dst,
 	out->send_refused_credit = vc->send_refused_credit;
 	out->send_refused_ring = vc->send_refused_ring;
 	out->unacked = vc->unacked;
+	/* E82: the guard's own answer, live off this circuit's ledger. */
+	out->guard_class = vc->guard.last_class;
+	out->guard_refused = vc->guard.refused;
+	out->guard_warned = vc->guard.warned;
 	return 0;
 }
 

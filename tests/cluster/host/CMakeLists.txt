@@ -321,6 +321,12 @@ target_compile_definitions(test_cluster_fork_threads PRIVATE _DEFAULT_SOURCE)
 # packet-size ladder run in microseconds instead of only against a live VAX.
 add_library(cluster_host_pe STATIC
     ${OVMX_CLUSTER_CORE_DIR}/vms_pe_fsm.c
+    # E82: the emit-time wire-safety guard. A pure TU on exactly the terms the
+    # port is (no seam call, no allocation, no clock -- the caller passes its
+    # own injected now_ms), and it joins THIS library rather than getting its
+    # own because the port is its only caller: the guard is a gate ON the send
+    # path, not a service anything else consumes.
+    ${OVMX_CLUSTER_CORE_DIR}/vms_cluster_emit_guard.c
 )
 target_include_directories(cluster_host_pe PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_pe PUBLIC OVMX_CLUSTER_HOST)
@@ -381,6 +387,20 @@ cluster_host_pe_test(test_pe_block     test_pe_block.c)
 # view the glue (vms_pe.c, not host-testable -- it names exec_kbackend.h)
 # assembles CLUSTER_DIAG_PORT's top-level row from.
 cluster_host_pe_test(test_pe_view      test_pe_view.c)
+
+# E82: the EMIT-TIME WIRE-SAFETY GUARD, driven through the real port on a real
+# open circuit. Two halves that matter equally: a golden CM dialogue produces
+# ZERO refusals (the guard never blocks correct output), and every measured
+# crash class -- including the two that really bugchecked reference VAXes, E76
+# CNXMGRERR and E78 INVEXCEPTN -- is DROPPED before it reaches the interface.
+# It also includes tools/cnxtrace_names.h, so a vector name that drifts between
+# the executive and the image that prints its ring records is a RED host test
+# (the same drift proof test_cnxman_diag.c makes for the ring's other tables).
+cluster_host_pe_test(test_pe_emit_guard test_pe_emit_guard.c)
+target_include_directories(test_pe_emit_guard PRIVATE ${CMAKE_SOURCE_DIR}/tools)
+set_tests_properties(cluster_host_test_pe_emit_guard PROPERTIES
+    LABELS "unit;cluster;cluster_host;pe;crash-safety"
+)
 
 # ---- FC-P2.2: the SCS FSM (vms_scs_fsm.c) ----
 # The SB set, the CDL/CDT ladder, the Con.ID allocator, the credit ledger and
@@ -536,6 +556,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_mscp_cl_io_fsm.c    # FC-P7.1
     hdr_alone_vms_mscp_cl_conn_fsm.c  # FC-P7.1 (E64 connect admission)
     hdr_alone_vms_dlm_scs_fsm.c       # FC-P4.6
+    hdr_alone_vms_cluster_emit_guard.c # E82
 )
 target_include_directories(cluster_host_hdr_alone PRIVATE ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_hdr_alone PRIVATE OVMX_CLUSTER_HOST)

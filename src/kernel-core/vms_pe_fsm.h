@@ -139,6 +139,7 @@
 #include "vms_cluster_codec_vc.h"   /* FC-P1.1: START/STACK/ACK + 0x48 + stamp */
 #include "vms_cluster_codec_blk.h"  /* FC-P6.1: the 28-byte block-transfer hdr */
 #include "vms_cluster_codec_scs.h"  /* FC-P7.1: vms_scs_inner_frame_len, TRAP 1 */
+#include "vms_cluster_emit_guard.h" /* E82: the emit-time wire-safety guard    */
 #include "vms_cluster_snapshot.h"
 #include "vms_pe.h"
 
@@ -708,6 +709,20 @@ struct pe_vc {
 	uint32_t blk_rx;                  /* block frames taken into a buffer */
 	uint32_t blk_bytes_tx;
 	uint32_t blk_bytes_rx;
+
+	/*
+	 * E82: THE EMIT-TIME WIRE-SAFETY LEDGER for this circuit
+	 * (vms_cluster_emit_guard.h). It is per-CIRCUIT because every quantity
+	 * in it -- the peer's high-water send-msg#, our own, the ack stream --
+	 * is a property of the conversation with ONE peer system.
+	 *
+	 * It is OBSERVATION, not configuration: every cell is filled from a CM
+	 * frame this port really received (cm_guard_rx, from the delivery
+	 * path) or really transmitted (cm_guard_sent, after the substrate took
+	 * the bytes). Nothing above the port writes it and nothing in it
+	 * reaches the wire.
+	 */
+	struct cm_guard guard;
 };
 
 /* ==========================================================================
@@ -1248,6 +1263,30 @@ struct pe_fsm {
 				    * or the transmit failed part-way -- never
 				    * clamped and never partially claimed      */
 
+	/* ---- E82: THE EMIT-TIME WIRE-SAFETY GUARD, port-wide ----
+	 *
+	 * The per-circuit ledger lives on each `struct pe_vc`; these are the
+	 * port's totals, so "did this node ever try to put an unsafe frame on
+	 * the wire" is ONE number a diagnostic can read without walking every
+	 * circuit. Each is a thing that really happened:
+	 *
+	 *   guard_judged   CM-class frames the guard judged
+	 *   guard_refused  ...of which it REFUSED to emit (the frame did not
+	 *                  go; the caller was told PE_VC_SEND_UNSAFE)
+	 *   guard_warned   ...emitted with a finding recorded against them
+	 *   guard_skipped  sends outside the judged class (not CM-class, or a
+	 *                  body the codec would not decode as a CM envelope) --
+	 *                  counted so "the guard saw nothing" can be told apart
+	 *                  from "the guard was never reached"
+	 *
+	 * IN A HEALTHY RUN guard_refused AND guard_warned ARE BOTH ZERO. A
+	 * non-zero one is an upstream FSM defect that this backstop caught.
+	 */
+	uint32_t guard_judged;
+	uint32_t guard_refused;
+	uint32_t guard_warned;
+	uint32_t guard_skipped;
+
 	/* The one frame buffer. Sized for the largest frame SS4(k) grounds. */
 	uint8_t  scratch[VMS_HELLO_PADDED_MAX_FRAME];
 };
@@ -1390,7 +1429,19 @@ enum pe_vc_send_status {
 	PE_VC_SEND_RINGFULL  = -3,  /* unacked ring full (credit says other) */
 	PE_VC_SEND_BADFRAME  = -4,  /* not a stampable sequenced SCS frame   */
 	PE_VC_SEND_TOOBIG    = -5,  /* larger than PE_VC_FRAME_MAX           */
-	PE_VC_SEND_TXFAIL    = -6   /* ops->send failed; the seq is HELD     */
+	PE_VC_SEND_TXFAIL    = -6,  /* ops->send failed; the seq is HELD     */
+	/*
+	 * E82: the frame was outside the MEASURED wire-safety envelope
+	 * (vms_cluster_emit_guard.h) and this port REFUSED to put it on the
+	 * wire. WHICH vector is in the circuit's own guard ledger and is
+	 * carried out through pe_vc_send_refusal.guard_class.
+	 *
+	 * Nothing was consumed: the refusal happens before the sequence is
+	 * taken and before the unacked ring is touched, so a guarded frame
+	 * leaves no hole for the peer to break the circuit over -- the same
+	 * ordering guarantee SS3b(1) already makes for every other refusal.
+	 */
+	PE_VC_SEND_UNSAFE    = -7
 };
 
 /*
@@ -1578,7 +1629,24 @@ struct pe_vc_send_refusal {
 	uint32_t send_refused_credit; /* sends this circuit refused: credit */
 	uint32_t send_refused_ring;   /* ... and for a full unacked ring    */
 	uint8_t  unacked;             /* entries in the ring right now      */
-	uint8_t  pad0[3];
+	/*
+	 * E82, appended: the wire-safety guard's own answer, live off the
+	 * circuit's ledger. `guard_class` is the `enum cm_guard_class` of the
+	 * LAST finding on this circuit (CM_GUARD_C_NONE when it has never
+	 * found one) and `guard_refused`/`guard_warned` are how many frames
+	 * this circuit has REFUSED to emit and how many it emitted with a
+	 * finding recorded.
+	 *
+	 * They are here rather than folded into `code` because the SS$_ status
+	 * a SYSAP is handed is many-to-one (vms_scs.h SS5) and PE_VC_SEND_UNSAFE
+	 * maps to the same SS$_ABORT every other transport refusal does -- so
+	 * "the guard refused it, for THIS reason" would otherwise be
+	 * unreadable above the port, which is exactly the E70 wall.
+	 */
+	uint8_t  guard_class;         /* enum cm_guard_class, verbatim      */
+	uint8_t  pad0[2];
+	uint32_t guard_refused;
+	uint32_t guard_warned;
 };
 
 /* Fill *out for the circuit to `dst`. Returns 0 when the answer is real

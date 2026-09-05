@@ -69,6 +69,10 @@
 #define CNXTRACE_R_PORT_NOCREDIT    15u
 #define CNXTRACE_R_PORT_RINGFULL    16u
 #define CNXTRACE_R_CDT_NOT_SENDABLE 19u
+/* E82: the emit-time wire-safety guard's refusal. `aux` is the vector, and it
+ * prints by NAME -- a reader must not have to decode an ordinal to learn that
+ * this node nearly bugchecked a member. */
+#define CNXTRACE_R_UNSAFE_EMIT      22u
 #define CNXTRACE_NO_VC      0xffffffffu
 
 /*
@@ -169,6 +173,11 @@ static void cnxtrace_print_aux_note(const struct cnxman_diag_rec_wire *r)
     case CNXTRACE_R_CDT_NOT_SENDABLE:
         /* rc is the CDT's live state; aux is its live Send Credit. */
         printf(" cdtstate=%d credit_send=%u", (int)r->rc, (unsigned)r->aux);
+        break;
+    case CNXTRACE_R_UNSAFE_EMIT:
+        printf(" vector=%s", cnxtrace_name(cnxtrace_guard_class_names,
+                                           CNXTRACE_N(cnxtrace_guard_class_names),
+                                           (unsigned)r->aux));
         break;
     default:
         break;

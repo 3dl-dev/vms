@@ -221,6 +221,31 @@ enum cnxman_diag_reason {
 	 * transcript it sits beside; the glue's own counter carries the rest.
 	 */
 	CNXMAN_DIAG_R_PEER_NOCREDIT = 21,
+
+	/*
+	 * E82: THE PORT REFUSED TO EMIT AN UNSAFE FRAME.
+	 *
+	 * The emit-time wire-safety guard (vms_cluster_emit_guard.h) judged a
+	 * frame this node was about to put on the wire to be outside the
+	 * envelope every real VMS node in the reference corpus keeps, and
+	 * DROPPED it. `rc` is the port's own `PE_VC_SEND_UNSAFE`, verbatim,
+	 * and `aux` is the ONE fact that names the cause: the
+	 * `enum cm_guard_class` of the vector, which the dumper renders with
+	 * cm_guard_class_name() so a lab console reads `ack-unbacked`, not a
+	 * number.
+	 *
+	 * WHY IT EARNS A REASON OF ITS OWN rather than falling into the
+	 * PORT_BADFRAME catch-all. Every other port refusal says "this circuit
+	 * cannot carry your frame right now". This one says something
+	 * categorically different and far more serious: THE FRAME ITSELF WOULD
+	 * HAVE BUGCHECKED THE PEER, and an upstream FSM built it. A transcript
+	 * that merged the two would bury the only record of a defect that, on
+	 * the E80 re-fire, crashed each reference VAX 7-13 times in one run.
+	 *
+	 * SEEING THIS AT ALL IS A BUG REPORT. In a healthy run the FSMs emit
+	 * correct frames and this record never appears.
+	 */
+	CNXMAN_DIAG_R_UNSAFE_EMIT = 22,
 	CNXMAN_DIAG_R__COUNT
 };
 

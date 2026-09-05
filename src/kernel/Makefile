@@ -162,6 +162,7 @@ vms-y := vms_module.o \
          ../kernel-core/vms_cnxman_coord_fsm.o \
          ../kernel-core/vms_scs_fsm.o \
          ../kernel-core/vms_cluster_codec_scs.o \
+         ../kernel-core/vms_cluster_emit_guard.o \
          ../kernel-core/vms_scs_dir.o \
          ../kernel-core/vms_scs.o \
          ../kernel-core/vms_cluster_codec_mscp.o \

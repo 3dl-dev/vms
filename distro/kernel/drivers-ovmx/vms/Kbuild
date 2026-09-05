@@ -51,6 +51,7 @@ vms-y := vms_module.o \
          vms_cnxman_coord_fsm.o \
          vms_scs_fsm.o \
          vms_cluster_codec_scs.o \
+         vms_cluster_emit_guard.o \
          vms_scs_dir.o \
          vms_scs.o \
          vms_cluster_codec_mscp.o \

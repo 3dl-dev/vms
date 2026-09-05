@@ -541,10 +541,20 @@ void vms_pe_stop(struct vms_cluster *cl)
  *   BADFRAME/TOOBIG     the caller handed down something unsendable
  *                       -> SS$_BADPARAM
  *   TXFAIL              the interface refused the frame     -> SS$_ABORT
+ *   UNSAFE              E82: the frame was outside the MEASURED wire-safety
+ *                       envelope and this port refused to emit it. It answers
+ *                       SS$_BADPARAM, with the same reasoning the two cases
+ *                       above it use: the caller handed this port something it
+ *                       must not put on this circuit. WHICH vector it was is
+ *                       NOT in the status -- Rule 8 forbids inventing an SS$_
+ *                       value for it -- and is read back through
+ *                       pe_send_refusal()'s `guard_class`, exactly as the E70
+ *                       readback carries every other many-to-one refusal.
  */
 static uint32_t pe_send_status(int rc)
 {
 	switch (rc) {
+	case PE_VC_SEND_UNSAFE:    return SS__BADPARAM;
 	case PE_VC_SEND_OK:        return SS__NORMAL;
 	case PE_VC_SEND_NOCIRCUIT: return SS__DEVOFFLINE;
 	case PE_VC_SEND_RINGFULL:  return SS__DEVOFFLINE;

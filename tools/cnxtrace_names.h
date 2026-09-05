@@ -117,7 +117,41 @@ static const char *const cnxtrace_reason_names[] = {
      * is the one line that names the E77 stall's cause: the coordinator did
      * not refuse anything, it simply ran out of permission to speak.
      */
-    "peer-nocredit"   /* 21 */
+    "peer-nocredit",  /* 21 */
+    /*
+     * 22 (E82): the emit-time wire-safety guard REFUSED to put a frame on the
+     * wire, because it fell outside the envelope every real VMS node in the
+     * reference corpus keeps. rc = the port's own PE_VC_SEND_UNSAFE, aux = the
+     * `enum cm_guard_class` vector, rendered by name on the line.
+     *
+     * This line is a BUG REPORT about this node, not about the peer: in a
+     * healthy run the FSMs emit correct frames and it never appears. When it
+     * does, the frame did NOT go out -- the join fails safe instead of
+     * bugchecking a member.
+     */
+    "unsafe-emit"     /* 22 */
+};
+
+/*
+ * enum cm_guard_class (the `aux` of an `unsafe-emit` record) --
+ * src/kernel-core/vms_cluster_emit_guard.h's own vocabulary, kept
+ * byte-identical here for the same reason every other table in this file is:
+ * the host drift test compares them ordinal by ordinal, so a name that drifts
+ * between the executive and the image that prints it is a RED test rather
+ * than a lab-console mystery at 2 a.m.
+ */
+static const char *const cnxtrace_guard_class_names[] = {
+    "-",                     /* 0  CM_GUARD_C_NONE              */
+    "envelope-jump",         /* 1  S1  WARN                     */
+    "ack-unbacked",          /* 2  S2  DROP -- the CNXMGRERR    */
+    "ack-coalesce",          /* 3  S3  DROP -- the INVEXCEPTN   */
+    "ack-rate",              /* 4  S4  WARN                     */
+    "answered-notification", /* 5  S8  DROP                     */
+    "response-txn-zero",     /* 6  S9  DROP                     */
+    "conid-zero",            /* 7  S10 DROP                     */
+    "frame-size",            /* 8  S11 DROP                     */
+    "credit-oversend",       /* 9  S12 DROP                     */
+    "envelope-stall"         /* 10     WARN                     */
 };
 
 /* enum cnxman_diag_gate (an EMIT record's `detail`) */

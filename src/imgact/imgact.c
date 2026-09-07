@@ -333,6 +333,42 @@ static void imgact_dbg_map(const char *name, unsigned long base)
 	eputs(line);
 }
 
+/* vms-f49 Option-1 probe: log an import binding whose resolved PV or filled code
+ * entry lands in the wild 0x1_0000_0000..0x200_0000_0000 region (all real images
+ * map at 0x200_xxxx_xxxx; the veneer SIGSEGV jumps to 0x120000000+offset). Gated
+ * on OVMX_IMGACT_MAP=1. Prints who imports what, the cell, the PV (=PDSC), and
+ * the code entry *(PV+8) actually written -- so a wild PV vs a wild-only entry
+ * distinguishes an SV-value fault from a producer PDSC-entry rebase fault. */
+static void imgact_dbg_hexline(const char *tag, const char *a, const char *b,
+			       unsigned long v1, unsigned long v2, unsigned long v3)
+{
+	const char *want = imgact_env_value(g_envp, "OVMX_IMGACT_MAP");
+	if (!want || want[0] != '1')
+		return;
+	static const char H[] = "0123456789abcdef";
+	char line[320];
+	line[0] = 0;
+	xstrcat(line, tag);
+	if (a) { xstrcat(line, a); }
+	if (b) { xstrcat(line, " imports "); xstrcat(line, b); }
+	const char *labs[3] = { " cell=0x", " pv=0x", " entry=0x" };
+	unsigned long vs[3] = { v1, v2, v3 };
+	for (int j = 0; j < 3; j++) {
+		char hx[17];
+		for (int i = 0; i < 16; i++) hx[15 - i] = H[(vs[j] >> (i * 4)) & 0xf];
+		hx[16] = 0;
+		xstrcat(line, labs[j]);
+		xstrcat(line, hx);
+	}
+	xstrcat(line, "\n");
+	eputs(line);
+}
+
+static inline int imgact_addr_is_wild(unsigned long v)
+{
+	return v >= 0x100000000UL && v < 0x200000000000UL;
+}
+
 /* Defined further down; forward-declared here because imgact_vms_exit (which
  * precedes the definition) reads it for the OVMX_IMGACT_SEAM $STATUS readback. */
 static const char *imgact_env_value(char **envp, const char *key);
@@ -1782,6 +1818,15 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 			sys_exit(IMGACT_EXIT_FAIL);
 		}
 		imgact_fill_import(base + ie[k].patch_off, PV, linkage, codeaddr);
+		/* vms-f49 Option-1 probe: catch a binding that resolves/writes into the
+		 * wild 0x120000000-region (the veneer SIGSEGV target). PV wild -> SV-value
+		 * fault; PV sane but entry *(PV+8) wild -> producer PDSC-entry rebase fault. */
+		{
+			unsigned long _entry = (linkage || codeaddr) ? imgact_sv_code_entry(PV) : PV;
+			if (imgact_addr_is_wild(PV) || imgact_addr_is_wild(_entry))
+				imgact_dbg_hexline("IMGACT-WILD: ", whoami, soname,
+						   base + ie[k].patch_off, PV, _entry);
+		}
 #else
 		unsigned long addr = ovmx_sv_resolve(p->sv, ie[k].sv_index, p->base,
 						     ie[k].req_major, ie[k].req_minor);

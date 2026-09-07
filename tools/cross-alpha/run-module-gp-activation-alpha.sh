@@ -836,6 +836,8 @@ EOF
     # kernel already emitted it into the captured console.
     echo "--- guest-kernel fault signature (faulting user PC/RA/VA) ---"
     grep -aiE "memory violation|segmentation|segfault|unaligned| pc ?=?0x?[0-9a-f]| ra ?=?0x?[0-9a-f]|Oops|BUG:|kernel access|access to| va ?=?0x?[0-9a-f]|SIGSEGV|bad address|panic" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -30 || echo "  (no guest fault line captured)"
+    echo "--- IMGACT-MAP bases + IMGACT-WILD bindings (vms-f49 Option-1 probe) ---"
+    grep -aE "IMGACT-WILD|IMGACT-MAP" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -40 || echo "  (none -- wild value is code/GP-computed, not a linkage fill)"
     echo "--- last 60 console lines around the crash ---"
     tail -60 "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     # vms-f49: the qemu CPU-exception log pins the faulting PC/VA of the veneer

@@ -132,6 +132,22 @@ echo "mk_vmsrms_shr: --use $DECC_SHR $VMS_SHR $FS_SHR $SYS_SHR"
 # authoring / F$GETSYI(SCSNODE) fall to the retired /vms path.
 LIST="rms_core rms_io rms_seq rms_rel rms_idx rms_prolog3 sysuaf_rms sysuaf_live rightslist_rms rightslist_live rms_record rms_parse rms_search rms_util sysgen_acp"
 
+# ---- ALPHA/EVAX branch (vms-a7a) — the alpha-dec-vms LP64 RMS substrate. ----
+# Delegates the alpha mechanics (cross-compile with the port cc1, enumerate the
+# symbol vector from LINK.EXE's own view, link the EVAX shareable) to the shared
+# mk_alpha_shr.sh helper — the OVMX-C analogue of mk_decc_shr.sh's ALPHA branch.
+# The alpha LIST adds crtl_rms_stdio (the CRTL->RMS stdio veneer, #1010) so the
+# port image's file ops route onto the executive ACP; and adds --use LIBOTS$SHR
+# (the port compiler lowers RMS integer divides to OTS$DIV_*/OTS$REM_*). Env:
+# ALPHA_CC, ALPHA_MUSL_SRC (see mk_alpha_shr.sh), ALPHA_OTS_USE=<LIBOTS_SHR.EXE>.
+if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
+    : "${ALPHA_OTS_USE:?mk_vmsrms_shr alpha: set ALPHA_OTS_USE=<LIBOTS_SHR.EXE> (OTS\$ integer-divide runtime)}"
+    ALPHA_LIST="$LIST crtl_rms_stdio"
+    ALPHA_INCS="$INCS" ALPHA_DEFS="$DEFS" \
+        exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" "$ALPHA_LIST" \
+            --use "$DECC_SHR" --use "$VMS_SHR" --use "$FS_SHR" --use "$SYS_SHR" --use "$ALPHA_OTS_USE"
+fi
+
 OBJS=""
 for c in $LIST; do
     echo "  cc $c.c"

@@ -64,6 +64,20 @@ LIBVMS_INC=${6:-$(cd "$HERE/../libvms/include" && pwd)}      # for ssdef.h / prv
 CC=${CC:-gcc}
 GSMATCH=${GSMATCH:-LEQUAL,1,0}
 
+# ---- ALPHA/EVAX branch (vms-a7a) — LIBVMSPROCESS$SHR for alpha-dec-vms LP64. ----
+# vms_pcb_* producer. --allow-undefined: vms_pcb.c references vms_uring_cleanup
+# WEAK (io_uring teardown lives downstream in libvms), which binds at activation.
+# Env: ALPHA_CC, ALPHA_MUSL_SRC, ALPHA_OTS_USE; LIBVMSSYS_SHR is arg $4.
+if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
+    : "${ALPHA_OTS_USE:?mk_vmsprocess_shr alpha: set ALPHA_OTS_USE=<LIBOTS_SHR.EXE>}"
+    [ -n "$LIBVMSSYS_SHR" ] || { echo "mk_vmsprocess_shr alpha: arg 4 LIBVMSSYS\$SHR.EXE required" >&2; exit 2; }
+    ALPHA_INCS="-I$HERE/../libvms/include -I$HERE/../libvmssys -I$HERE/../vmsprocess/include -I$HERE/../vmslnm/include -I$HERE/../vmsfs/include -I$HERE/../vmsrms/include -I$HERE/include" \
+    ALPHA_DEFS="-DOVMX_HAVE_ACP" ALPHA_ALLOW_UNDEF=1 \
+        exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" \
+            "access_modes ast vms_pcb vms_process" \
+            --use "$DECC_SHR" --use "$LIBVMSSYS_SHR" --use "$ALPHA_OTS_USE"
+fi
+
 [ -f "$DECC_SHR" ] || { echo "mk_vmsprocess_shr: DECC\$SHR.EXE not found: $DECC_SHR"; exit 1; }
 [ -d "$SRC" ]      || { echo "mk_vmsprocess_shr: vmsprocess src dir not found: $SRC"; exit 1; }
 

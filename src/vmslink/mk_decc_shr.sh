@@ -280,6 +280,29 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # (vms-bdd first sub-step: settles the stdio-stream link-readiness gap.)
     VEC="$VEC,stdin=DATA,stdout=DATA,stderr=DATA"
 
+    # vms-a7a: the plain (non-decc$-decorated) POSIX names the OVMX producer
+    # graph (LIBVMS$SHR / LIBVMSRMS$SHR — the RMS substrate) imports that the
+    # alpha cc1 does NOT map into the DEC C RTL surface, so the ^decc$
+    # enumeration above misses them and a producer's STRICT link would hit
+    # %LINK-F-UNDEF: the pthread mutex + once primitives (rms_core.c and the
+    # libvms RTL serialize with them) and fnmatch (rms_search.c's wildcard
+    # match). Verified plain (undecorated) by direct cc1 compile, and defined by
+    # musl's own libc.a members, so the whole-archive link below binds them (and
+    # fails loudly if a name is not actually defined). The x86_64/aarch64 generic
+    # DECC$SHR already exports pthread_mutex_* + fnmatch; this brings the alpha
+    # surface to parity. Appended at the END (GSMATCH LEQUAL-compatible).
+    VEC="$VEC,pthread_mutex_init=PROCEDURE,pthread_mutex_lock=PROCEDURE,pthread_mutex_unlock=PROCEDURE,pthread_mutex_destroy=PROCEDURE,pthread_once=PROCEDURE,fnmatch=PROCEDURE"
+
+    # vms-a7a: musl-alpha defines BOTH __errno_location (two underscores, the
+    # standard C name every <errno.h> consumer emits — rms_core.c reads `errno`
+    # in its ACP error paths) AND ___errno_location (three, the extra-underscore
+    # form vms-719 already exports for the zlib/port-crt0 consumers). Both are
+    # real defined universals in libc.a (confirmed via the LINK dump); the
+    # existing export covers only the three-underscore form, so a producer using
+    # plain <errno.h> still deferred __errno_location. Export the two-underscore
+    # form too. Appended at the END (GSMATCH LEQUAL-compatible).
+    VEC="$VEC,__errno_location=PROCEDURE"
+
     # (The explicit `decc$free=PROCEDURE` VEC-add of #795 is removed here: the
     # vms-614 linker-view enumeration above now catches decc$free — and every
     # other weak-alias-equate decc$ symbol — automatically, so the one-off add is

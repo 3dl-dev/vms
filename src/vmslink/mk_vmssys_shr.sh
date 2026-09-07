@@ -71,6 +71,24 @@ EXTRA_VEC=${4:-}
 LIBVMS_INC=$(cd "$HERE/../libvms/include" && pwd)          # for ssdef.h (librarian.c)
 CC=${CC:-gcc}
 GSMATCH=${GSMATCH:-LEQUAL,1,0}
+
+# ---- ALPHA/EVAX branch (vms-a7a) — LIBVMSSYS$SHR for alpha-dec-vms LP64. ----
+# The base producer of the RMS-substrate graph: vms_kif_* + the /dev/vms ioctl
+# transport + the EVAX-native callsys trampolines (arch/alpha/syscall_vms.c, the
+# assemblable replacement for the alpha-linux-gnu arch/alpha/syscall.S) + a
+# minimal emutls runtime (arch/alpha/emutls_vms.c — the toolchain's libgcc strips
+# emutls, which the cc1 nonetheless emits for OVMX __thread state). Delegates the
+# alpha mechanics to mk_alpha_shr.sh. Env: ALPHA_CC, ALPHA_MUSL_SRC,
+# ALPHA_DECC_USE=<DECC$SHR.EXE>, ALPHA_OTS_USE=<LIBOTS_SHR.EXE>.
+if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
+    : "${ALPHA_DECC_USE:?mk_vmssys_shr alpha: set ALPHA_DECC_USE=<DECC\$SHR.EXE>}"
+    : "${ALPHA_OTS_USE:?mk_vmssys_shr alpha: set ALPHA_OTS_USE=<LIBOTS_SHR.EXE>}"
+    ALPHA_INCS="-I$HERE/../libvms/include -I$HERE/../libvmssys -I$HERE/../vmsprocess/include -I$HERE/../vmslnm/include -I$HERE/../vmsfs/include -I$HERE/../vmsrms/include -I$HERE/include" \
+    ALPHA_DEFS="-DOVMX_HAVE_ACP" \
+        exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" \
+            "vms_kif kif_transport_linux vms_string arch/alpha/syscall_vms arch/alpha/emutls_vms" \
+            --use "$ALPHA_DECC_USE" --use "$ALPHA_OTS_USE"
+fi
 ARCH=${ARCH:-aarch64}
 
 [ -d "$SRC" ] || { echo "mk_vmssys_shr: libvmssys src dir not found: $SRC"; exit 1; }

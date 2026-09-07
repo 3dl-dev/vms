@@ -398,13 +398,18 @@ struct posix_search_context {
 };
 
 /* Convert a VMS wildcard pattern ("*" any, "%" one) to fnmatch ("*"/"?"). */
-static void vms_to_glob(const char *vms, char *glob, size_t globlen)
+/* vms-a7a (alpha port seam): the alpha-dec-vms GCC port predefines the macro
+ * `vms` (and `VMS`) to 1, so a parameter literally named `vms` expands to the
+ * numeric constant 1 and the cross cc1 rejects the declaration. Renamed to
+ * `vpat` — a pure identifier rename, no logic change, so the host/x86_64/vax
+ * builds are byte-identical. */
+static void vms_to_glob(const char *vpat, char *glob, size_t globlen)
 {
     char *p = glob;
     char *end = glob + globlen - 1;
-    while (*vms && p < end) {
-        *p++ = (*vms == '%') ? '?' : *vms;
-        vms++;
+    while (*vpat && p < end) {
+        *p++ = (*vpat == '%') ? '?' : *vpat;
+        vpat++;
     }
     *p = '\0';
 }

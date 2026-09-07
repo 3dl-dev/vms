@@ -68,6 +68,18 @@ SYS_SHR=${VMSSYS_SHR:-"$(dirname "$DECC_SHR")/LIBVMSSYS\$SHR.EXE"}
 CC=${CC:-gcc}
 GSMATCH=${GSMATCH:-LEQUAL,1,0}
 
+# ---- ALPHA/EVAX branch (vms-a7a) — LIBVMSLNM$SHR for alpha-dec-vms LP64. ----
+# lnm_* logical-name producer; --use DECC$SHR + LIBVMSSYS$SHR (lnm_translate
+# routes through vms_kif_lnm_*). Env: ALPHA_CC, ALPHA_MUSL_SRC, ALPHA_OTS_USE.
+if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
+    : "${ALPHA_OTS_USE:?mk_vmslnm_shr alpha: set ALPHA_OTS_USE=<LIBOTS_SHR.EXE>}"
+    ALPHA_INCS="-I$HERE/../libvms/include -I$HERE/../libvmssys -I$HERE/../vmsprocess/include -I$HERE/../vmslnm/include -I$HERE/../vmsfs/include -I$HERE/../vmsrms/include -I$HERE/include" \
+    ALPHA_DEFS="-DOVMX_HAVE_ACP" \
+        exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" \
+            "lnm_translate lnm_client lnm_table lnm_defaults" \
+            --use "$DECC_SHR" --use "$SYS_SHR" --use "$ALPHA_OTS_USE"
+fi
+
 [ -f "$DECC_SHR" ] || { echo "mk_vmslnm_shr: DECC\$SHR.EXE not found: $DECC_SHR"; exit 1; }
 [ -f "$SYS_SHR" ]  || { echo "mk_vmslnm_shr: LIBVMSSYS\$SHR.EXE not found: $SYS_SHR (vmslnm now imports vms_kif_lnm_*; build it first or set \$VMSSYS_SHR)"; exit 1; }
 [ -d "$SRC" ]      || { echo "mk_vmslnm_shr: vmslnm src dir not found: $SRC"; exit 1; }

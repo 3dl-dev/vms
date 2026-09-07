@@ -127,6 +127,32 @@ rtl/sysuaf rtl/rightslist rtl/rms_textfile rtl/str_util rtl/lib_cli rtl/purdy"
 # definition src/libvms/CMakeLists.txt applies to the target.
 DEFS="-DOVMX_HAVE_ACP"
 
+# ---- ALPHA/EVAX branch (vms-a7a) — LIBVMS$SHR for alpha-dec-vms LP64. ----
+# The RTL + system-services producer. The alpha LIST OMITS syssvc/sys_imgact +
+# syssvc/imgact_prodreg (the host-side IMAGE ACTIVATOR): sys_imgact.c emits an
+# ELF `.hidden` directive and a TLSDESC static resolver (ovmx_tlsdesc_static)
+# the EVAX assembler cannot assemble (the alpha TLS/visibility activation model
+# is its own rung of work) — and nothing in the RMS-substrate graph references
+# either TU (verified), so this is the "alpha needs its own composition" case,
+# NOT a libvms compile failure (57/58 libvms TUs build clean on alpha).
+# --allow-undefined: libvms carries the intended cross-image cycle — weak seams
+# (ovmx_sysuaf_*/ovmx_rightslist_*/ovmx_sysgen_acp_*) and forward references to
+# RMS (sys$create/$put/...) live DOWNSTREAM in LIBVMSRMS$SHR and bind at image
+# activation, plus math/libc universals unused by the RMS path. --use DECC$SHR +
+# LIBVMSPROCESS$SHR + LIBVMSSYS$SHR + LIBVMSFS$SHR. Env: ALPHA_CC,
+# ALPHA_MUSL_SRC, ALPHA_OTS_USE.
+if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
+    : "${ALPHA_OTS_USE:?mk_libvms_shr alpha: set ALPHA_OTS_USE=<LIBOTS_SHR.EXE>}"
+    ALPHA_LIST=""
+    for _c in $LIST; do
+        case "$_c" in syssvc/sys_imgact|syssvc/imgact_prodreg) continue;; esac
+        ALPHA_LIST="$ALPHA_LIST $_c"
+    done
+    ALPHA_INCS="$INCS" ALPHA_DEFS="$DEFS" ALPHA_ALLOW_UNDEF=1 \
+        exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" "$ALPHA_LIST" \
+            --use "$DECC_SHR" --use "$PROC_SHR" --use "$SYS_SHR" --use "$FS_SHR" --use "$ALPHA_OTS_USE"
+fi
+
 OBJS=""
 for c in $LIST; do
     b=$(echo "$c" | tr / _)

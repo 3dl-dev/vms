@@ -186,10 +186,18 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
         # to before. (No apostrophes in this block -- it runs inside the assemble
         # docker bash -c single-quote; an apostrophe would break the quote.)
         if [ -f "$JOINT/LIBVMSRMS\$SHR.EXE" ]; then
-            cp "$JOINT/LIBVMSRMS\$SHR.EXE" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMSRMS\$SHR.EXE"
+            # Stage the FULL executive producer graph the veneer image imports at
+            # activation (LIBVMSRMS$SHR is not self-contained -- it transitively
+            # needs LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS$SHR). Any
+            # producer missing from SYS$SHARE -> %IMGACT-F-IMGNOTFND at RUN.
+            for _vp in LIBVMSRMS LIBVMS LIBVMSFS LIBVMSLNM LIBVMSPROCESS LIBVMSSYS; do
+                [ -f "$JOINT/${_vp}\$SHR.EXE" ] \
+                    && cp "$JOINT/${_vp}\$SHR.EXE" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/${_vp}\$SHR.EXE" \
+                    || { echo "FAIL: veneer producer $JOINT/${_vp}\$SHR.EXE missing"; exit 1; }
+            done
             cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VENEER_PROOF.COM \
                "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
-            echo "   JOINT-E2E (VENEER): joint_e2e.exe -> SYS\$SYSEXE; DECC\$SHR + LIBOTS_SHR + LIBVMSRMS\$SHR -> SYS\$SHARE; VENEER-proof SYSTARTUP (independent DIRECTORY/FULL reader) staged"
+            echo "   JOINT-E2E (VENEER): joint_e2e.exe -> SYS\$SYSEXE; DECC\$SHR + LIBOTS_SHR + full RMS producer graph (LIBVMSRMS/LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS\$SHR) -> SYS\$SHARE; VENEER-proof SYSTARTUP (independent DIRECTORY/FULL reader) staged"
         else
             cp /repo/tools/cross-alpha/SYSTARTUP_VMS_JOINT_PROOF.COM \
                "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
@@ -244,7 +252,10 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
         # mastered volume -- the port image veneer sys$create/$put imports are
         # deferred against it, so an activation without it on SYS$SHARE would fail
         # over the ACP (the same class as the vms-157 rc=44 initramfs-invisible gap).
-        [ -f "$ST/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMSRMS\$SHR.EXE" ] && JOINT_VERIFY="$JOINT_VERIFY LIBVMSRMS\$SHR.EXE"
+        # The whole transitive producer graph must be present, not just LIBVMSRMS.
+        for _vp in LIBVMSRMS LIBVMS LIBVMSFS LIBVMSLNM LIBVMSPROCESS LIBVMSSYS; do
+            [ -f "$ST/vms/SYS0/SYSCOMMON/SYSLIB/${_vp}\$SHR.EXE" ] && JOINT_VERIFY="$JOINT_VERIFY ${_vp}\$SHR.EXE"
+        done
         for jn in $JOINT_VERIFY; do
             grep -qi "$jn" /work/distrib-list.txt \
                 || { echo "FAIL: mastered ODS-2 image missing JOINT-E2E proof file $jn"; exit 1; }

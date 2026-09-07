@@ -217,11 +217,23 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
     MK=/src/src/vmslink
     OTS="$WORK/libots/LIBOTS_SHR.EXE"
 
-    echo "-- [vms-2655] DECC\$SHR pass 1 (bootstrap, no veneer) --"
+    # vms-f49 (rung 4): build the pass-1 bootstrap DECC under its OWN directory
+    # but with the BASENAME DECC$SHR.EXE (NOT DECC1$SHR.EXE). The producer graph +
+    # LIBVMSRMS$SHR --use this file, and LINK.EXE records the producer by BASENAME
+    # into their .vms$imp -- so with the basename DECC$SHR.EXE they record the name
+    # DECC$SHR.EXE and, at ACTIVATION, the IMGACT name-keyed binding resolves those
+    # imports against the SINGLE staged pass-2 (veneer) DECC$SHR.EXE (GSMATCH
+    # LEQUAL: pass 2 only appends the veneer aliases, so every pass-1 universal the
+    # graph bound is still present). Under the old DECC1$SHR.EXE basename the graph
+    # recorded a producer name that does NOT exist on SYS$SHARE -> the rung-4
+    # activation failed %IMGACT-F-IMGNOTFND. One DECC$SHR at runtime, not two -- no
+    # duplicate musl C-RTL. (No apostrophes in this block -- docker bash -c quote.)
+    echo "-- [vms-2655] DECC\$SHR pass 1 (bootstrap, no veneer; basename DECC\$SHR.EXE for runtime name-binding) --"
+    mkdir -p "$WORK/p1"
     OVMX_DECC_ARCH=alpha NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \
         ALPHA_CC="$ALPHA_CC" ALPHA_MUSL_SRC="$MUSL_SRC" DECC_USE="$OTS" \
-        sh "$MK/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC1\$SHR.EXE" "$LIBC" "$LIBGCC"
-    DECC1="$WORK/DECC1\$SHR.EXE"
+        sh "$MK/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/p1/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
+    DECC1="$WORK/p1/DECC\$SHR.EXE"
 
     echo "-- [vms-2655] the OVMX producer graph (rung 1, unchanged), using DECC1 --"
     export ALPHA_CC ALPHA_MUSL_SRC="$MUSL_SRC" OVMX_DECC_ARCH=alpha ALPHA_OTS_USE="$OTS"
@@ -239,6 +251,15 @@ if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
     echo "-- [vms-2655] LIBVMSRMS\$SHR (rung 1, unchanged) --"
     sh "$MK/mk_vmsrms_shr.sh" "$WORK/LINK.EXE" "$OUT/LIBVMSRMS\$SHR.EXE" "$DECC1" "$VMS" "$FS" "$SYS"
     RMS="$OUT/LIBVMSRMS\$SHR.EXE"
+
+    # vms-f49 (rung 4): LIBVMSRMS$SHR is NOT self-contained -- at activation it
+    # (transitively) imports from the WHOLE executive producer graph
+    # (LIBVMS$SHR/LIBVMSFS$SHR/LIBVMSLNM$SHR/LIBVMSPROCESS$SHR/LIBVMSSYS$SHR), so
+    # every one of those shareables must be on SYS$SHARE for IMGACT to resolve the
+    # veneer image. Emit them to OUTDIR alongside LIBVMSRMS$SHR (rung 3 only staged
+    # LIBVMSRMS$SHR, which is why the rung-4 activation drew %IMGACT-F-IMGNOTFND on
+    # the first unstaged producer). A non-veneer run never enters this block.
+    cp "$SYS" "$PROC" "$LNM" "$FS" "$VMS" "$OUT/"
 
     echo "-- [vms-2655] DECC\$SHR pass 2 (final, CRTL->RMS stdio veneer wired, vms-ed1e) --"
     OVMX_DECC_ARCH=alpha NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \

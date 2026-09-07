@@ -384,10 +384,17 @@ build_joint_images() {
   # $WORK/joint is exactly the signal build-alpha-bootimage.sh keys on to stage the
   # producer into SYS$SHARE + swap in the VENEER-proof SYSTARTUP.
   if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
-    [ -s "$out_n3/LIBVMSRMS\$SHR.EXE" ] \
-      || die "veneer build produced no LIBVMSRMS\$SHR.EXE in $out_n3 (JOINT_CRTL_RMS_VENEER=1 expected it)"
-    cp "$out_n3/LIBVMSRMS\$SHR.EXE" "$WORK/joint/LIBVMSRMS\$SHR.EXE"
-    log "step 1: joint images staged into $WORK/joint (VENEER milestone N=$WANT_SENTINEL + control + DECC\$SHR/LIBOTS/LIBVMSRMS\$SHR producers)"
+    # vms-f49: the veneer image needs the FULL executive producer graph on
+    # SYS$SHARE at activation, not just LIBVMSRMS$SHR -- LIBVMSRMS$SHR imports
+    # (transitively) from LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS$SHR.
+    # build-joint-image.sh emits all of them to $out_n3; stage each into
+    # $WORK/joint so build-alpha-bootimage.sh masters them onto the ODS-2 volume.
+    for _p in LIBVMSRMS LIBVMS LIBVMSFS LIBVMSLNM LIBVMSPROCESS LIBVMSSYS; do
+      [ -s "$out_n3/${_p}\$SHR.EXE" ] \
+        || die "veneer build produced no ${_p}\$SHR.EXE in $out_n3 (JOINT_CRTL_RMS_VENEER=1 expected the full producer graph)"
+      cp "$out_n3/${_p}\$SHR.EXE" "$WORK/joint/${_p}\$SHR.EXE"
+    done
+    log "step 1: joint images staged into $WORK/joint (VENEER milestone N=$WANT_SENTINEL + control + DECC\$SHR/LIBOTS + full RMS producer graph LIBVMSRMS/LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS\$SHR)"
   else
     log "step 1: joint images staged into $WORK/joint (milestone N=$WANT_SENTINEL + SS\$_NORMAL control + producers)"
   fi

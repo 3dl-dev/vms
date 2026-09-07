@@ -303,6 +303,26 @@ int strncmp(const char *a, const char *b, unsigned long n)
 
 static void eputs(const char *s) { sys_write(2, s, xstrlen(s)); }
 
+/* vms-f49 fault-localization: print a mapped image's runtime base so a qemu
+ * -d int faulting user pc can be resolved to <image>+offset. Unconditional but
+ * cheap (one line per producer at activation); the activation gates grep for
+ * their own patterns, so the extra "IMGACT-MAP:" lines are inert there. */
+static void imgact_dbg_map(const char *name, unsigned long base)
+{
+	static const char H[] = "0123456789abcdef";
+	char hx[17];
+	for (int i = 0; i < 16; i++) hx[15 - i] = H[(base >> (i * 4)) & 0xf];
+	hx[16] = 0;
+	char line[192];
+	line[0] = 0;
+	xstrcat(line, "IMGACT-MAP: ");
+	xstrcat(line, name);
+	xstrcat(line, " base=0x");
+	xstrcat(line, hx);
+	xstrcat(line, "\n");
+	eputs(line);
+}
+
 /* Defined further down; forward-declared here because imgact_vms_exit (which
  * precedes the definition) reads it for the OVMX_IMGACT_SEAM $STATUS readback. */
 static const char *imgact_env_value(char **envp, const char *key);
@@ -1574,6 +1594,7 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	struct ovmx_prod *p = &g_prods[g_nprods++];
 	xstrcpy(p->name, soname);
 	p->base = base;
+	imgact_dbg_map(soname, base);      /* vms-f49 fault-localization */
 	p->sv = (const struct ovmx_sv_header *)(base + sv_addr);
 	if (p->sv->magic != OVMX_SV_MAGIC) { g_nprods--; return 0; }
 

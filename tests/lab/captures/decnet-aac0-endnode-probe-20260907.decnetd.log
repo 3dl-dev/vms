@@ -1,0 +1,24 @@
+07-Sep-2026 16:14:38 DECNETD-I-STARTED, DECnet Phase IV endnode up on circuit EWA-0 (datalink hidden behind the VMS surface, Rule 1)
+Node Volatile Summary
+Executor node = 1.42 (OVMX)
+State                    = on
+Identification           = OVMX DECnet-compatible networking
+Type                     = nonrouting IV (endnode)
+Known Circuit Volatile Summary
+Circuit = EWA-0
+State                    = on
+Designated router        = none
+Hello timer              = 15
+Adjacent nodes           = 0
+07-Sep-2026 16:14:51 DECNETD-I-ADJINIT, heard 1.1 (initializing) on circuit EWA-0
+07-Sep-2026 16:14:53 DECNETD-I-HELLOSENT, circuit EWA-0 seq=1 bytes=60
+07-Sep-2026 16:15:06 DECNETD-I-ADJINIT, heard 1.1 (initializing) on circuit EWA-0
+07-Sep-2026 16:15:08 DECNETD-I-HELLOSENT, circuit EWA-0 seq=2 bytes=60
+07-Sep-2026 16:15:21 DECNETD-I-ADJINIT, heard 1.1 (initializing) on circuit EWA-0
+07-Sep-2026 16:15:23 DECNETD-I-HELLOSENT, circuit EWA-0 seq=3 bytes=60
+07-Sep-2026 16:15:23 DECNETD-I-STOPPING, shutting down circuit EWA-0
+Adjacent Node Volatile Summary
+Executor node = 1.42 (OVMX)
+    Node            State         Circuit
+ 1.1             initializing  EWA-0
+DECNETD-I-COUNTERS, hello_sent=3 hello_recv=3 frames_recv=3 frames_dropped=0 adj_up=0 adj_down=0

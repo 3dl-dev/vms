@@ -5,15 +5,15 @@
 
 ## Inventory
 
-**440 surfaces catalogued** across 9 domains, each with a per-surface status.
+**442 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 25 | | real | 295 |
-| 🟢 implemented | 257 | | n/a | 92 |
-| 🟡 partial | 46 | | advisory | 42 |
+| ✅ verified | 25 | | real | 297 |
+| 🟢 implemented | 258 | | n/a | 92 |
+| 🟡 partial | 47 | | advisory | 42 |
 | 🟠 stub | 18 | | facade-risk | 11 |
 | 🔵 designed | 0 | |  |  |
 | ⬜ absent | 94 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **396 committed** — **282 met** (implemented/verified), 45 in progress (partial), 69 not started (absent/stub/designed).
+- **398 committed** — **283 met** (implemented/verified), 46 in progress (partial), 69 not started (absent/stub/designed).
 - ⚠ **9 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -1106,7 +1106,7 @@ Universal symbol vectors (position-bound binding), GSMATCH (ALWAYS/EQUAL/LEQUAL,
 
 _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜`  —  22 surfaces catalogued (17 met · 2 in progress · 3 not started) · V1: 20 committed, 17 met
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟠⬜⬜`  —  24 surfaces catalogued (18 met · 3 in progress · 3 not started) · V1: 22 committed, 18 met
 
 ### decnet — DECnet Phase IV (Routing, NSP, Task-to-Task, SET HOST)
 <sub>scope: in · plan: vms-30e · ref: DECnet for OpenVMS Networking Manual; DNA Phase IV Routing + NSP specs · reviewed 2026-09-07</sub>
@@ -1114,7 +1114,7 @@ _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 No longer greenfield, and no longer codec-only: src/vmsdecnet now carries real clean-room Phase IV codecs AND a live engine (DECNETD.EXE) that moves frames over a real AF_PACKET datalink. Proven on real wires: the Ethernet Endnode Hello codec (oracle-verified) drives adjacency against the REAL lab VAX node 1.1 on the lab-2 br0 (OVMX emits faithful hellos and its engine registers the VAX; tests/lab/tools/decnet_adjacency.sh, capture 2026-09-07), and an NSP LOGICAL LINK completes end-to-end over a real datalink — Connect Initiate/Confirm, a byte-identical data segment + ack, and a clean Disconnect — between two engines (tests/integration/decnet_nsp_live_datalink.sh, veth). Also present: the Router Hello codec (spec-derived) and the routing adjacency state machine. STILL a codec-only / not-wired seam above the link: a real VAX does not yet list OVMX as a reachable endnode (needs the node DB + reachability wiring; parked on wedged lab consoles), task-to-task is only a raw data segment (no $QIO/object DB/FAL), SET HOST is still an honest stub, and NODE"acc"::file syntax parses but nothing downstream acts on it. 1.0 blocker (vms-30e).
 
 
-<sub>7 items · 4 met · 2 in progress · 1 not started</sub>
+<sub>9 items · 5 met · 3 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1123,7 +1123,9 @@ No longer greenfield, and no longer codec-only: src/vmsdecnet now carries real c
 | 🟢 | `decnet$routing-adjacency` | feature | Phase IV routing adjacency state machine (DOWN/INITIALIZING/UP) + hello cadence / listen timers | implemented | real | in | `src/vmsdecnet/routing/dnet_adjacency.c` — Pure clock-injectable SM over the Hello codec; T3=15s oracle-captured (vms-3be), BCT3MULT spec-derived. Tested tests/vmsdecnet/test_dnet_adjacency.c (rd vms-b15). |
 | 🟢 | `decnet$nsp-transport` | protocol | NSP transport codec + live logical-link connection service over the datalink | implemented | real | in | `src/vmsdecnet/engine/decnetd.c` — The connection FSM (src/vmsdecnet/nsp/dnet_link.c: CI/CC/DATA/ACK/DI/DC + retransmit/give-up) is now DRIVEN OVER A REAL AF_PACKET DATALINK by DECNETD's live loop (--connect/--listen), not only a socketpair: an end-to-end link OPEN -> byte-identical data segment + ack -> clean DISCONNECT is proven over a veth wire in tests/integration/decnet_nsp_live_datalink.sh (rd vms-c23). Oracle scope unchanged: only the Connect Initiate bytes are oracle-verified (register sec 4.6 specimen #3); CC/DATA/ACK/DI/DC are spec-derived and proven by round-trip, no fabricated specimen bytes. Unit: tests/vmsdecnet/test_dnet_nsp.c + test_dnet_link.c (rd vms-6986/vms-c23). |
 | 🟡 | `decnet$task-to-task` | feature | Task-to-task DECnet communication (logical-link data; $QIO / FAL) | partial | real | in | `src/vmsdecnet/engine/decnetd.c` — A raw application data segment now round-trips byte-identical over a LIVE NSP logical link between two engines on a real datalink (tests/integration/decnet_nsp_live_datalink.sh; the substrate exists). NOT yet built: the VMS $QIO task-to-task API, a named-object/listener database, and FAL file access — those are later rungs (vms-8c2/vms-230). |
-| 🟠 | `decnet$set-host` | command | SET HOST — DECnet remote-node connection | stub | real | in | `src/vmsdcl/dcl_cmd_set.c` — Honestly reports %SET-I-NOTAVAIL, DECnet is not available on this system — a stub, not a facade. |
+| 🟡 | `decnet$ncp` | command | NCP — Network Control Program (node/executor configuration) | partial | real | in | `src/vmsdecnet/ncp/ncp.c` — Real NCP.EXE driving a persisted database: SET/DEFINE NODE, CLEAR/PURGE NODE, SHOW KNOWN NODES, SHOW NODE, SET/SHOW EXECUTOR (ADDRESS/NAME/STATE), with VMS-faithful SHOW layout and honest errors. Grammar/layout from the public NCP manual (Rule 8). NOT yet: circuits, objects, lines, counters, LOOP, and the SET(volatile)/DEFINE(permanent) split — OVMX keeps one persisted DB today. Config-only; it does not itself start the network. |
+| 🟢 | `decnet$node-database` | feature | Persisted remote-node database + node NAME<->address resolution | implemented | real | in | `src/vmsdecnet/ncp/dnet_nodedb.c` — The NCP node table: add/update/clear, case-insensitive unique node names, ascending-address SHOW ordering, and persistence (atomic save + tolerant load). Provides the name<->address resolution the SET HOST / NODE:: paths need. On-disk format is a documented OVMX plain-text layout (labelled — NOT VMS NETNODE_REMOTE.DAT binary). Unit: tests/vmsdecnet/test_dnet_nodedb.c (rd vms-1e9). |
+| 🟠 | `decnet$set-host` | command | SET HOST — DECnet remote-node connection | stub | real | in | `src/vmsdcl/dcl_cmd_set.c` — Honestly reports %SET-I-NOTAVAIL, DECnet is not available on this system — a stub, not a facade. The CTERM protocol + live NSP link substrate exist; wiring SET HOST to open a CTERM link (and resolve the node name via the new node database) is the next rung (vms-230/vms-4d2). |
 | 🟡 | `decnet$node-filespec-syntax` | feature | NODE"acc"::dev:[dir]file filespec syntax | partial | real | in | `src/vmsrms/rms_parse.c` — Syntax only — sets NAM$M_NODE, parses/reconstructs the node prefix; nothing downstream (no live DECnet transport) acts on it. |
 
 ### lat — LAT (Local Area Transport)

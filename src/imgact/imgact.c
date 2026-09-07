@@ -2856,6 +2856,8 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	Elf64_Phdr *ephdr = (Elf64_Phdr *)at_phdr;
 	int ephnum = (int)at_phnum;
 	unsigned long ebias = exec_bias(ephdr, ephnum, at_phdr);
+	imgact_dbg_map("MAIN-EXE", ebias);                              /* vms-f49 */
+	imgact_dbg_map("IMGACT-INTERP", imgact_getauxval(7 /*AT_BASE*/)); /* vms-f49 */
 
 	Elf64_Dyn *edyn = 0;
 	for (int i = 0; i < ephnum; i++)

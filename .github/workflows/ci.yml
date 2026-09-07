@@ -4753,6 +4753,57 @@ jobs:
           if grep -q 'GVALFOLD' "$OUT/build.log"; then echo "ok: C\$_EXIT1 folded as globalvalue"; else echo "note: no GVALFOLD line logged"; fi
           echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
 
+      # vms-2655 (rung 3 of vms-b4f): the port-link recipe, opted into the rung-2
+      # CRTL->RMS stdio veneer (JOINT_CRTL_RMS_VENEER=1 -- see build-joint-image.sh's
+      # two-pass bootstrap block), STRICT-links the crtl_rms_test.c port program
+      # (heap+RMS+stdio) against the veneer-wired DECC$SHR + LIBVMSRMS$SHR + LIBOTS.
+      # Toolchain-only (no qemu boot -- the real-executive RMS-write proof is rung 4,
+      # vms-f49, gated on the LLP64 width fix vms-1fc); this leg proves the LINK-time
+      # composition: zero deferred/undef/muldef, EM_ALPHA/ET_DYN, and the import-map
+      # chain showing the port image's decc$fopen binds to the SAME DECC$SHR producer
+      # whose own build log recorded the veneer wiring + sys$create/open/connect/put/
+      # get/close bound to LIBVMSRMS$SHR (the un-fakeable proof fopen -> veneer -> RMS,
+      # not musl-POSIX). Reuses the toolchain image built/pulled above (cache hit).
+      - name: Link the port image against the CRTL->RMS veneer-wired DECC$SHR + LIBVMSRMS$SHR (vms-2655, rung 3, strict, zero-deferred)
+        run: |
+          set -euo pipefail
+          OUT=/tmp/joint-e2e-rms-veneer-out
+          JOINT_MAIN=crtl_rms_test.c JOINT_CRTL_RMS_VENEER=1 IMG=ovmx-cross-alpha-vms \
+            tools/cross-alpha-vms/joint-e2e/build-joint-image.sh "$OUT"
+          LOG="$OUT/build.log"
+          # (1) the pass-2 DECC$SHR build (inside this same recipe run) wired the veneer
+          grep -qE "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\\\$fopen/fwrite/fread/fclose -> ovmx_crtl_\* \(--use .*LIBVMSRMS\\\$SHR\.EXE\)" "$LOG" \
+            || { echo "GATE FAIL (vms-2655): veneer-wired log line not seen"; exit 1; }
+          # (2) DECC$SHR's own pass-2 build resolved sys$create/open/connect/put/get/close
+          #     against --use LIBVMSRMS$SHR (the real RMS substrate, not a stub)
+          for s in create open connect put get close; do
+            grep -qE "cross-image import 'sys\\\$${s}' bound to --use producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
+              || { echo "GATE FAIL (vms-2655): sys\$${s} not bound to LIBVMSRMS\$SHR inside DECC\$SHR pass 2"; exit 1; }
+          done
+          # (3) the FINAL joint_e2e.exe link (after crt0 assembly) is zero-deferred/
+          #     undef/muldef -- scope past the producer-graph's own pre-existing
+          #     first-light residual (LIBVMS$SHR aggregator, unrelated to this rung,
+          #     same scoping build-decc-veneer.sh's own gate applies).
+          FINAL_START=$(grep -n '^-- assembling crt0.obj' "$LOG" | head -1 | cut -d: -f1)
+          [ -n "$FINAL_START" ] || { echo "GATE FAIL (vms-2655): crt0.obj assembly marker not found in log"; exit 1; }
+          TAIL=$(awk -v n="$FINAL_START" 'NR>=n' "$LOG")
+          echo "$TAIL" | grep -q 'LINK-F-UNDEF'  && { echo "GATE FAIL (vms-2655): LINK-F-UNDEF in the final port-image link"; exit 1; }
+          echo "$TAIL" | grep -q 'LINK-F-MULDEF' && { echo "GATE FAIL (vms-2655): LINK-F-MULDEF in the final port-image link"; exit 1; }
+          echo "$TAIL" | grep -q 'LINK-W-DEFERRED' && { echo "GATE FAIL (vms-2655): LINK-W-DEFERRED in the final port-image link"; exit 1; }
+          echo "$TAIL" | grep -qE "LINK-S-CREATED, .*joint_e2e.exe: EVAX/Alpha ET_DYN" \
+            || { echo "GATE FAIL (vms-2655): joint_e2e.exe (veneer build) not created EVAX/Alpha ET_DYN"; exit 1; }
+          # (4) the port image's OWN decc$fopen import binds to the pass-2 (veneer)
+          #     DECC$SHR.EXE producer -- the chain from (1)+(2) above proves THAT
+          #     producer's decc$fopen is the crtl_rms_stdio.c veneer, not musl-POSIX.
+          echo "$TAIL" | grep -qE "cross-image import 'decc\\\$fopen' bound to --use producer DECC\\\$SHR.EXE" \
+            || { echo "GATE FAIL (vms-2655): port image decc\$fopen did not bind to the veneer-wired DECC\$SHR producer"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not EM_ALPHA"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not ET_DYN"; exit 1; }
+          test -f "$OUT/LIBVMSRMS\$SHR.EXE" || { echo "GATE FAIL (vms-2655): LIBVMSRMS\$SHR.EXE not staged in OUTDIR"; exit 1; }
+          echo "GATE PASS (vms-2655): port image STRICT-links --use veneer-wired DECC\$SHR + LIBVMSRMS\$SHR + LIBOTS zero-deferred;"
+          echo "  decc\$fopen binds to the veneer producer, whose own build resolved sys\$create/open/connect/put/get/close"
+          echo "  against LIBVMSRMS\$SHR (real RMS substrate, not musl-POSIX); EM_ALPHA/ET_DYN; LIBVMSRMS\$SHR.EXE staged."
+
       # vms-f1a: the EVAX/Alpha mirror of the ELF STRONG-vs-STRONG MULDEF gate
       # (vms-d8d, #777, run_muldef_x86_64.sh). LINK.EXE's evax_find_sym was a
       # linear FIRST-MATCH with no duplicate check, so two objects both STRONGLY

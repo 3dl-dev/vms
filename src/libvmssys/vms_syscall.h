@@ -255,13 +255,35 @@
  * Assembly trampoline declarations
  * ================================================================ */
 
-extern long __vms_syscall0(long nr);
-extern long __vms_syscall1(long nr, long a1);
-extern long __vms_syscall2(long nr, long a1, long a2);
-extern long __vms_syscall3(long nr, long a1, long a2, long a3);
-extern long __vms_syscall4(long nr, long a1, long a2, long a3, long a4);
-extern long __vms_syscall5(long nr, long a1, long a2, long a3, long a4, long a5);
-extern long __vms_syscall6(long nr, long a1, long a2, long a3, long a4, long a5, long a6);
+/*
+ * vms_reg_t -- a guaranteed-64-bit syscall register word (vms-1fc).
+ *
+ * The __vms_syscallN trampolines shift their arguments straight into the
+ * kernel's argument registers ($16.. on Alpha, rdi.. on x86_64), which are ALL
+ * 64 bits wide on every target the raw-syscall path is compiled for. Declaring
+ * these as `long` was correct on the three LP64 targets but WRONG on the
+ * alpha-dec-vms LLP64 model, where `long` is only 32 bits: a pointer argument
+ * cast through `(vms_reg_t)` lost its high half, so the kif transport's
+ * ioctl(/dev/vms, ...) landed on a truncated/garbage address and the RMS write
+ * reached nothing (vms-1fc, the runtime bug the rung-4 proof vms-f49 pins).
+ * `long long` is 64 bits on ALL FOUR raw-syscall targets -- x86_64, aarch64,
+ * alpha-linux-gnu (LP64) and alpha-dec-vms (LLP64) -- so it is the correct
+ * register-width word everywhere. On the three LP64 targets `long long` has the
+ * exact same representation and ABI as `long`, so widening to it is a strict
+ * no-op there (byte-identical codegen); it is the ACTUAL fix only on the
+ * alpha-dec-vms cc1. (VAX takes an entirely different path -- see the __NetBSD__
+ * branch at the top of this file, which includes arch/vax/vms_syscall_netbsd.h
+ * and compiles NONE of these declarations -- so VAX is untouched by definition.)
+ */
+typedef long long vms_reg_t;
+
+extern vms_reg_t __vms_syscall0(vms_reg_t nr);
+extern vms_reg_t __vms_syscall1(vms_reg_t nr, vms_reg_t a1);
+extern vms_reg_t __vms_syscall2(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2);
+extern vms_reg_t __vms_syscall3(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2, vms_reg_t a3);
+extern vms_reg_t __vms_syscall4(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2, vms_reg_t a3, vms_reg_t a4);
+extern vms_reg_t __vms_syscall5(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2, vms_reg_t a3, vms_reg_t a4, vms_reg_t a5);
+extern vms_reg_t __vms_syscall6(vms_reg_t nr, vms_reg_t a1, vms_reg_t a2, vms_reg_t a3, vms_reg_t a4, vms_reg_t a5, vms_reg_t a6);
 
 /* ================================================================
  * File I/O
@@ -269,7 +291,7 @@ extern long __vms_syscall6(long nr, long a1, long a2, long a3, long a4, long a5,
 
 static inline int vms_sys_openat(int dirfd, const char *path, int flags, vms_mode_t mode)
 {
-    return (int)__vms_syscall4(__NR_openat, dirfd, (long)path, flags, mode);
+    return (int)__vms_syscall4(__NR_openat, dirfd, (vms_reg_t)path, flags, mode);
 }
 
 static inline int vms_sys_close(int fd)
@@ -279,12 +301,12 @@ static inline int vms_sys_close(int fd)
 
 static inline vms_ssize_t vms_sys_read(int fd, void *buf, vms_size_t count)
 {
-    return (vms_ssize_t)__vms_syscall3(__NR_read, fd, (long)buf, count);
+    return (vms_ssize_t)__vms_syscall3(__NR_read, fd, (vms_reg_t)buf, count);
 }
 
 static inline vms_ssize_t vms_sys_write(int fd, const void *buf, vms_size_t count)
 {
-    return (vms_ssize_t)__vms_syscall3(__NR_write, fd, (long)buf, count);
+    return (vms_ssize_t)__vms_syscall3(__NR_write, fd, (vms_reg_t)buf, count);
 }
 
 static inline vms_off_t vms_sys_lseek(int fd, vms_off_t offset, int whence)
@@ -298,15 +320,15 @@ static inline int vms_sys_fstat(int fd, struct vms_stat *buf)
     /* stat64 pair: __NR_fstat (91) fills the OLD struct stat, which does
      * not match the stat64-shaped struct vms_stat defined for Alpha in
      * vms_types.h.  Use __NR_fstat64 (427) instead. */
-    return (int)__vms_syscall2(__NR_fstat64, fd, (long)buf);
+    return (int)__vms_syscall2(__NR_fstat64, fd, (vms_reg_t)buf);
 #else
-    return (int)__vms_syscall2(__NR_fstat, fd, (long)buf);
+    return (int)__vms_syscall2(__NR_fstat, fd, (vms_reg_t)buf);
 #endif
 }
 
 static inline int vms_sys_newfstatat(int dirfd, const char *path, struct vms_stat *buf, int flags)
 {
-    return (int)__vms_syscall4(__NR_newfstatat, dirfd, (long)path, (long)buf, flags);
+    return (int)__vms_syscall4(__NR_newfstatat, dirfd, (vms_reg_t)path, (vms_reg_t)buf, flags);
 }
 
 static inline int vms_sys_ftruncate(int fd, vms_off_t length)
@@ -331,24 +353,24 @@ static inline int vms_sys_fcntl(int fd, int cmd, long arg)
 
 static inline int vms_sys_unlinkat(int dirfd, const char *path, int flags)
 {
-    return (int)__vms_syscall3(__NR_unlinkat, dirfd, (long)path, flags);
+    return (int)__vms_syscall3(__NR_unlinkat, dirfd, (vms_reg_t)path, flags);
 }
 
 static inline int vms_sys_renameat2(int olddirfd, const char *oldpath,
                                      int newdirfd, const char *newpath, unsigned int flags)
 {
-    return (int)__vms_syscall5(__NR_renameat2, olddirfd, (long)oldpath,
-                               newdirfd, (long)newpath, flags);
+    return (int)__vms_syscall5(__NR_renameat2, olddirfd, (vms_reg_t)oldpath,
+                               newdirfd, (vms_reg_t)newpath, flags);
 }
 
 static inline int vms_sys_mkdirat(int dirfd, const char *path, vms_mode_t mode)
 {
-    return (int)__vms_syscall3(__NR_mkdirat, dirfd, (long)path, mode);
+    return (int)__vms_syscall3(__NR_mkdirat, dirfd, (vms_reg_t)path, mode);
 }
 
 static inline vms_ssize_t vms_sys_getdents64(int fd, void *dirp, vms_size_t count)
 {
-    return (vms_ssize_t)__vms_syscall3(__NR_getdents64, fd, (long)dirp, count);
+    return (vms_ssize_t)__vms_syscall3(__NR_getdents64, fd, (vms_reg_t)dirp, count);
 }
 
 /* ================================================================
@@ -358,27 +380,27 @@ static inline vms_ssize_t vms_sys_getdents64(int fd, void *dirp, vms_size_t coun
 static inline void *vms_sys_mmap(void *addr, vms_size_t length, int prot,
                                   int flags, int fd, vms_off_t offset)
 {
-    return (void *)__vms_syscall6(__NR_mmap, (long)addr, length, prot, flags, fd, offset);
+    return (void *)__vms_syscall6(__NR_mmap, (vms_reg_t)addr, length, prot, flags, fd, offset);
 }
 
 static inline int vms_sys_munmap(void *addr, vms_size_t length)
 {
-    return (int)__vms_syscall2(__NR_munmap, (long)addr, length);
+    return (int)__vms_syscall2(__NR_munmap, (vms_reg_t)addr, length);
 }
 
 static inline int vms_sys_mprotect(void *addr, vms_size_t length, int prot)
 {
-    return (int)__vms_syscall3(__NR_mprotect, (long)addr, length, prot);
+    return (int)__vms_syscall3(__NR_mprotect, (vms_reg_t)addr, length, prot);
 }
 
 static inline long vms_sys_brk(void *addr)
 {
-    return __vms_syscall1(__NR_brk, (long)addr);
+    return __vms_syscall1(__NR_brk, (vms_reg_t)addr);
 }
 
 static inline int vms_sys_madvise(void *addr, vms_size_t length, int advice)
 {
-    return (int)__vms_syscall3(__NR_madvise, (long)addr, length, advice);
+    return (int)__vms_syscall3(__NR_madvise, (vms_reg_t)addr, length, advice);
 }
 
 /* ================================================================
@@ -388,14 +410,14 @@ static inline int vms_sys_madvise(void *addr, vms_size_t length, int advice)
 static inline long vms_sys_clone(unsigned long flags, void *stack,
                                   int *parent_tid, int *child_tid, unsigned long tls)
 {
-    return __vms_syscall5(__NR_clone, flags, (long)stack,
-                          (long)parent_tid, (long)child_tid, tls);
+    return __vms_syscall5(__NR_clone, flags, (vms_reg_t)stack,
+                          (vms_reg_t)parent_tid, (vms_reg_t)child_tid, tls);
 }
 
 static inline int vms_sys_execve(const char *filename, char *const argv[],
                                   char *const envp[])
 {
-    return (int)__vms_syscall3(__NR_execve, (long)filename, (long)argv, (long)envp);
+    return (int)__vms_syscall3(__NR_execve, (vms_reg_t)filename, (vms_reg_t)argv, (vms_reg_t)envp);
 }
 
 static inline void vms_sys_exit_group(int status)
@@ -413,7 +435,7 @@ static inline void vms_sys_exit(int status)
 static inline vms_pid_t vms_sys_wait4(vms_pid_t pid, int *wstatus, int options,
                                        struct vms_rusage *rusage)
 {
-    return (vms_pid_t)__vms_syscall4(__NR_wait4, pid, (long)wstatus, options, (long)rusage);
+    return (vms_pid_t)__vms_syscall4(__NR_wait4, pid, (vms_reg_t)wstatus, options, (vms_reg_t)rusage);
 }
 
 static inline int vms_sys_kill(vms_pid_t pid, int sig)
@@ -468,17 +490,17 @@ static inline int vms_sys_rt_sigaction(int signum, const struct vms_sigaction *a
      * __vms_rt_sigreturn unconditionally is harmless when act == NULL
      * (query-only mode): the kernel only consults ka_restorer inside the
      * `if (act)` branch of sys_rt_sigaction. */
-    return (int)__vms_syscall5(__NR_rt_sigaction, signum, (long)act, (long)oldact,
-                               sigsetsize, (long)__vms_rt_sigreturn);
+    return (int)__vms_syscall5(__NR_rt_sigaction, signum, (vms_reg_t)act, (vms_reg_t)oldact,
+                               sigsetsize, (vms_reg_t)__vms_rt_sigreturn);
 #else
-    return (int)__vms_syscall4(__NR_rt_sigaction, signum, (long)act, (long)oldact, sigsetsize);
+    return (int)__vms_syscall4(__NR_rt_sigaction, signum, (vms_reg_t)act, (vms_reg_t)oldact, sigsetsize);
 #endif
 }
 
 static inline int vms_sys_rt_sigprocmask(int how, const vms_sigset_t *set,
                                            vms_sigset_t *oldset, vms_size_t sigsetsize)
 {
-    return (int)__vms_syscall4(__NR_rt_sigprocmask, how, (long)set, (long)oldset, sigsetsize);
+    return (int)__vms_syscall4(__NR_rt_sigprocmask, how, (vms_reg_t)set, (vms_reg_t)oldset, sigsetsize);
 }
 
 /* ================================================================
@@ -489,8 +511,8 @@ static inline long vms_sys_futex(uint32_t *uaddr, int futex_op, uint32_t val,
                                   const struct vms_timespec *timeout,
                                   uint32_t *uaddr2, uint32_t val3)
 {
-    return __vms_syscall6(__NR_futex, (long)uaddr, futex_op, val,
-                          (long)timeout, (long)uaddr2, val3);
+    return __vms_syscall6(__NR_futex, (vms_reg_t)uaddr, futex_op, val,
+                          (vms_reg_t)timeout, (vms_reg_t)uaddr2, val3);
 }
 
 /* ================================================================
@@ -499,7 +521,7 @@ static inline long vms_sys_futex(uint32_t *uaddr, int futex_op, uint32_t val,
 
 static inline int vms_sys_clock_gettime(vms_clockid_t clockid, struct vms_timespec *tp)
 {
-    return (int)__vms_syscall2(__NR_clock_gettime, clockid, (long)tp);
+    return (int)__vms_syscall2(__NR_clock_gettime, clockid, (vms_reg_t)tp);
 }
 
 static inline int vms_sys_clock_nanosleep(vms_clockid_t clockid, int flags,
@@ -507,14 +529,14 @@ static inline int vms_sys_clock_nanosleep(vms_clockid_t clockid, int flags,
                                            struct vms_timespec *remain)
 {
     return (int)__vms_syscall4(__NR_clock_nanosleep, clockid, flags,
-                               (long)request, (long)remain);
+                               (vms_reg_t)request, (vms_reg_t)remain);
 }
 
 static inline int vms_sys_timer_create(vms_clockid_t clockid,
                                         struct vms_sigevent *sevp,
                                         vms_timer_t *timerid)
 {
-    return (int)__vms_syscall3(__NR_timer_create, clockid, (long)sevp, (long)timerid);
+    return (int)__vms_syscall3(__NR_timer_create, clockid, (vms_reg_t)sevp, (vms_reg_t)timerid);
 }
 
 static inline int vms_sys_timer_settime(vms_timer_t timerid, int flags,
@@ -522,7 +544,7 @@ static inline int vms_sys_timer_settime(vms_timer_t timerid, int flags,
                                          struct vms_itimerspec *old_value)
 {
     return (int)__vms_syscall4(__NR_timer_settime, timerid, flags,
-                               (long)new_value, (long)old_value);
+                               (vms_reg_t)new_value, (vms_reg_t)old_value);
 }
 
 static inline int vms_sys_timer_delete(vms_timer_t timerid)
@@ -532,7 +554,7 @@ static inline int vms_sys_timer_delete(vms_timer_t timerid)
 
 static inline int vms_sys_nanosleep(const struct vms_timespec *req, struct vms_timespec *rem)
 {
-    return (int)__vms_syscall2(__NR_nanosleep, (long)req, (long)rem);
+    return (int)__vms_syscall2(__NR_nanosleep, (vms_reg_t)req, (vms_reg_t)rem);
 }
 
 /* ================================================================
@@ -546,7 +568,7 @@ static inline int vms_sys_socket(int domain, int type, int protocol)
 
 static inline int vms_sys_bind(int sockfd, const void *addr, uint32_t addrlen)
 {
-    return (int)__vms_syscall3(__NR_bind, sockfd, (long)addr, addrlen);
+    return (int)__vms_syscall3(__NR_bind, sockfd, (vms_reg_t)addr, addrlen);
 }
 
 static inline int vms_sys_listen(int sockfd, int backlog)
@@ -556,26 +578,26 @@ static inline int vms_sys_listen(int sockfd, int backlog)
 
 static inline int vms_sys_accept4(int sockfd, void *addr, uint32_t *addrlen, int flags)
 {
-    return (int)__vms_syscall4(__NR_accept4, sockfd, (long)addr, (long)addrlen, flags);
+    return (int)__vms_syscall4(__NR_accept4, sockfd, (vms_reg_t)addr, (vms_reg_t)addrlen, flags);
 }
 
 static inline int vms_sys_connect(int sockfd, const void *addr, uint32_t addrlen)
 {
-    return (int)__vms_syscall3(__NR_connect, sockfd, (long)addr, addrlen);
+    return (int)__vms_syscall3(__NR_connect, sockfd, (vms_reg_t)addr, addrlen);
 }
 
 static inline vms_ssize_t vms_sys_sendto(int sockfd, const void *buf, vms_size_t len,
                                           int flags, const void *dest_addr, uint32_t addrlen)
 {
-    return (vms_ssize_t)__vms_syscall6(__NR_sendto, sockfd, (long)buf, len,
-                                        flags, (long)dest_addr, addrlen);
+    return (vms_ssize_t)__vms_syscall6(__NR_sendto, sockfd, (vms_reg_t)buf, len,
+                                        flags, (vms_reg_t)dest_addr, addrlen);
 }
 
 static inline vms_ssize_t vms_sys_recvfrom(int sockfd, void *buf, vms_size_t len,
                                             int flags, void *src_addr, uint32_t *addrlen)
 {
-    return (vms_ssize_t)__vms_syscall6(__NR_recvfrom, sockfd, (long)buf, len,
-                                        flags, (long)src_addr, (long)addrlen);
+    return (vms_ssize_t)__vms_syscall6(__NR_recvfrom, sockfd, (vms_reg_t)buf, len,
+                                        flags, (vms_reg_t)src_addr, (vms_reg_t)addrlen);
 }
 
 /* ================================================================
@@ -584,27 +606,33 @@ static inline vms_ssize_t vms_sys_recvfrom(int sockfd, void *buf, vms_size_t len
 
 static inline int vms_sys_uname(struct vms_utsname *buf)
 {
-    return (int)__vms_syscall1(__NR_uname, (long)buf);
+    return (int)__vms_syscall1(__NR_uname, (vms_reg_t)buf);
 }
 
 static inline int vms_sys_sysinfo(struct vms_sysinfo *info)
 {
-    return (int)__vms_syscall1(__NR_sysinfo, (long)info);
+    return (int)__vms_syscall1(__NR_sysinfo, (vms_reg_t)info);
 }
 
-static inline int vms_sys_ioctl(int fd, unsigned long request, unsigned long arg)
+static inline int vms_sys_ioctl(int fd, unsigned long request, vms_reg_t arg)
 {
+    /* vms-1fc: `arg` is a guaranteed-64-bit register word, NOT `unsigned long`
+     * -- on the alpha-dec-vms LLP64 model `unsigned long` is 32 bits, which
+     * truncated the pointer the /dev/vms transport passes here (the RMS-over-ACP
+     * write path: ioctl(/dev/vms, VMS_IOCTL_*, &kif_request)). Callers cast the
+     * pointer through vms_reg_t so its high half survives. No-op on the LP64
+     * targets, where vms_reg_t == unsigned long in width. */
     return (int)__vms_syscall3(__NR_ioctl, fd, request, arg);
 }
 
 static inline vms_ssize_t vms_sys_getcwd(char *buf, vms_size_t size)
 {
-    return (vms_ssize_t)__vms_syscall2(__NR_getcwd, (long)buf, size);
+    return (vms_ssize_t)__vms_syscall2(__NR_getcwd, (vms_reg_t)buf, size);
 }
 
 static inline int vms_sys_chdir(const char *path)
 {
-    return (int)__vms_syscall1(__NR_chdir, (long)path);
+    return (int)__vms_syscall1(__NR_chdir, (vms_reg_t)path);
 }
 
 /* ================================================================
@@ -613,7 +641,7 @@ static inline int vms_sys_chdir(const char *path)
 
 static inline int vms_sys_io_uring_setup(uint32_t entries, struct vms_io_uring_params *p)
 {
-    return (int)__vms_syscall2(__NR_io_uring_setup, entries, (long)p);
+    return (int)__vms_syscall2(__NR_io_uring_setup, entries, (vms_reg_t)p);
 }
 
 static inline int vms_sys_io_uring_enter(int ring_fd, uint32_t to_submit,
@@ -621,13 +649,13 @@ static inline int vms_sys_io_uring_enter(int ring_fd, uint32_t to_submit,
                                           const void *sig)
 {
     return (int)__vms_syscall5(__NR_io_uring_enter, ring_fd, to_submit,
-                               min_complete, flags, (long)sig);
+                               min_complete, flags, (vms_reg_t)sig);
 }
 
 static inline int vms_sys_io_uring_register(int ring_fd, uint32_t opcode,
                                              const void *arg, uint32_t nr_args)
 {
-    return (int)__vms_syscall4(__NR_io_uring_register, ring_fd, opcode, (long)arg, nr_args);
+    return (int)__vms_syscall4(__NR_io_uring_register, ring_fd, opcode, (vms_reg_t)arg, nr_args);
 }
 
 /* ================================================================
@@ -643,12 +671,12 @@ static inline int vms_sys_arch_prctl(int code, unsigned long addr)
 
 static inline long vms_sys_set_tid_address(int *tidptr)
 {
-    return __vms_syscall1(__NR_set_tid_address, (long)tidptr);
+    return __vms_syscall1(__NR_set_tid_address, (vms_reg_t)tidptr);
 }
 
 static inline int vms_sys_set_robust_list(void *head, vms_size_t len)
 {
-    return (int)__vms_syscall2(__NR_set_robust_list, (long)head, len);
+    return (int)__vms_syscall2(__NR_set_robust_list, (vms_reg_t)head, len);
 }
 
 /* ================================================================
@@ -657,7 +685,7 @@ static inline int vms_sys_set_robust_list(void *head, vms_size_t len)
 
 static inline int vms_sys_pipe2(int pipefd[2], int flags)
 {
-    return (int)__vms_syscall2(__NR_pipe2, (long)pipefd, flags);
+    return (int)__vms_syscall2(__NR_pipe2, (vms_reg_t)pipefd, flags);
 }
 
 static inline int vms_sys_dup3(int oldfd, int newfd, int flags)

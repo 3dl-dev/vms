@@ -481,7 +481,7 @@ int ovmx_fd_getname(int fd, int peer, struct sockaddr *addr, socklen_t *addrlen)
     if (addr == NULL || addrlen == NULL) { errno = EFAULT; return -1; }
     memset(&a, 0, sizeof(a));
     a.which = peer ? 1u : 0u;
-    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_GETNAME, (unsigned long)&a) != 0)
+    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_GETNAME, (vms_reg_t)&a) != 0)
         return 1;                       /* not a materialized [bgconn] fd */
     if (!(a.status & 1)) { errno = ENOTCONN; return -1; }
 
@@ -509,7 +509,7 @@ int ovmx_fd_setsockopt(int fd, int level, int optname, const void *optval, sockl
     a.level = level;
     a.optname = optname;
     a.optval = *(const int *)optval;
-    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_SOCKOPT, (unsigned long)&a) != 0)
+    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_SOCKOPT, (vms_reg_t)&a) != 0)
         return 1;                       /* not a materialized [bgconn] fd */
     if (!(a.status & 1)) { errno = ENOPROTOOPT; return -1; }
     return 0;
@@ -526,7 +526,7 @@ int ovmx_fd_getsockopt(int fd, int level, int optname, void *optval, socklen_t *
     a.op = 1;                           /* get */
     a.level = level;
     a.optname = optname;
-    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_SOCKOPT, (unsigned long)&a) != 0)
+    if (vms_sys_ioctl(fd, VMS_IOCTL_BGCONN_SOCKOPT, (vms_reg_t)&a) != 0)
         return 1;                       /* not a materialized [bgconn] fd */
     if (!(a.status & 1)) { errno = ENOPROTOOPT; return -1; }
     *(int *)optval = a.optval;

@@ -366,7 +366,11 @@ static void imgact_dbg_hexline(const char *tag, const char *a, const char *b,
 
 static inline int imgact_addr_is_wild(unsigned long v)
 {
-	return v >= 0x100000000UL && v < 0x200000000000UL;
+	/* The wild region is the Alpha default/stack-top base ~0x120000000 (the
+	 * veneer SIGSEGV target); real images map far higher, at 0x200_xxxx_xxxx
+	 * (~2.2e12). So flag [0x1_0000_0000, 0x100_0000_0000) -- above a small
+	 * absolute yet BELOW the real image region. */
+	return v >= 0x100000000UL && v < 0x10000000000UL;
 }
 
 /* Defined further down; forward-declared here because imgact_vms_exit (which

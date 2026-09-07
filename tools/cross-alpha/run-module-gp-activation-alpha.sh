@@ -430,6 +430,10 @@ run_boot_a() {
   # way to pin the PC. Bounded/disk-safe: the boot reaches Username: within
   # ~30-60s (the wait loop then kills qemu), so qint.log stays small.
   local qdbg="${QEMU_DBG:-}"
+  # QEMU_APPEND (set only by crtl-rms-veneer-gate) adds kernel cmdline tokens --
+  # e.g. OVMX_IMGACT_MAP=1 to turn on IMGACT-MAP producer-base logging, which is
+  # silent by default (vms-f49 housekeeping).
+  local qappend="${QEMU_APPEND:-}"
   set +e
   timeout --kill-after="$TIMEOUT_GRACE" "$DOCKER_TIMEOUT" docker run --rm \
     --name "$cname" --memory=8g --cpus="$(nproc)" \
@@ -442,7 +446,7 @@ run_boot_a() {
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"$qappend"'" \
           -drive file=modgpA.img,format=raw,if=virtio \
           '"$qdbg"' \
           -nographic -no-reboot <"$FIFO" > modgpA.raw 2>&1 &
@@ -797,7 +801,7 @@ EOF
     # vms-f49 fault-capture: log qemu CPU exceptions so the veneer SIGSEGV's
     # faulting PC/VA is recorded (the guest kernel prints no user fault line, and
     # the crash is at/near activation). Bounded (boot reaches Username: fast).
-    QEMU_DBG="-d int,cpu_reset,guest_errors -D /work/qint.log" run_boot_a
+    QEMU_DBG="-d int,cpu_reset,guest_errors -D /work/qint.log" QEMU_APPEND="OVMX_IMGACT_MAP=1" run_boot_a
     echo ""
     echo "========================================================================"
     echo "== vms-f49 rung 4: CRTL->RMS veneer -> real ODS-2 landing, PROVEN by an"

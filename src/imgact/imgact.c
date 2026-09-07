@@ -303,12 +303,22 @@ int strncmp(const char *a, const char *b, unsigned long n)
 
 static void eputs(const char *s) { sys_write(2, s, xstrlen(s)); }
 
+/* Forward decls so imgact_dbg_map (below) can gate on OVMX_IMGACT_MAP. */
+static const char *imgact_env_value(char **envp, const char *key);
+static char **g_envp;
+
 /* vms-f49 fault-localization: print a mapped image's runtime base so a qemu
  * -d int faulting user pc can be resolved to <image>+offset. Unconditional but
  * cheap (one line per producer at activation); the activation gates grep for
  * their own patterns, so the extra "IMGACT-MAP:" lines are inert there. */
 static void imgact_dbg_map(const char *name, unsigned long base)
 {
+	/* Silent by default; opt in with OVMX_IMGACT_MAP=1 in the boot append line
+	 * (vms-f49 fault-localization -- do not emit on every activation for all
+	 * images in production). */
+	const char *want = imgact_env_value(g_envp, "OVMX_IMGACT_MAP");
+	if (!want || want[0] != '1')
+		return;
 	static const char H[] = "0123456789abcdef";
 	char hx[17];
 	for (int i = 0; i < 16; i++) hx[15 - i] = H[(base >> (i * 4)) & 0xf];

@@ -24,19 +24,20 @@
  * contract vms_syscall.h's wrappers expect. This backend does NOT fake success
  * (INV-6): a failed syscall returns a genuine negative errno.
  *
- * KNOWN RUNTIME GAP — LLP64 pointer width (tracked as vms-1fc, which BLOCKS the
- * rung-4 runtime proof vms-f49). vms_syscall.h declares these as `long`, and its
- * vms_sys_* wrappers cast pointer arguments through `(long)`. On the
- * alpha-dec-vms LLP64 model `long` is 32 bits while the Linux-Alpha kernel
- * takes full 64-bit register arguments, so a pointer argument is truncated —
- * the same class of bug the musl port fixed by widening its syscall_arg_t to
- * `long long` (syscall_arch.h). Rung 1's deliverable is BUILD + STRICT-LINK
- * only; this trampoline faithfully passes whatever width it is handed and links
- * clean. Making the transport RUN correctly requires widening the alpha
- * vms_syscall.h path to `long long` (arch-isolated: `long long` == `long` on
- * the alpha-linux-gnu LP64 build, so it is safe there too) — filed as vms-1fc,
- * landing with the un-fakeable /dev/vms runtime proof in rung 4 (vms-f49); NOT
- * papered over here.
+ * LLP64 pointer width — FIXED (vms-1fc, landing with the rung-4 runtime proof
+ * vms-f49). vms_syscall.h formerly declared these as `long` and its vms_sys_*
+ * wrappers cast pointer arguments through `(long)`. On the alpha-dec-vms LLP64
+ * model `long` is 32 bits while the Linux-Alpha kernel takes full 64-bit
+ * register arguments, so a pointer argument was truncated — the same class of
+ * bug the musl port fixed by widening its syscall_arg_t to `long long`
+ * (syscall_arch.h). vms-1fc widened the whole raw-syscall path to a
+ * guaranteed-64-bit `vms_reg_t` (== `long long`): the header's trampoline
+ * prototypes + vms_sys_* pointer casts, and these definitions below. It is
+ * arch-isolated — `long long` == `long` on the LP64 builds (x86_64/aarch64/
+ * alpha-linux-gnu), so the codegen there is byte-identical, and it is the
+ * actual fix only on alpha-dec-vms. The rung-4 proof (vms-f49) is what
+ * VALIDATES it: a truncated pointer makes the RMS-routed fopen write nothing,
+ * so the independent ODS-2 reader would see no file.
  */
 
 #if defined(__alpha__)
@@ -65,29 +66,37 @@ static long long vms_alpha_callsys(long long n, long long a1, long long a2,
 	return r0;
 }
 
-/* The __vms_syscallN signatures MATCH vms_syscall.h's `extern long` prototypes
- * so the declaration and definition agree at link. Each shifts nr -> $0 and
- * a1..aN -> $16.. and traps. (The LLP64 width of `long` here is the documented
- * rung-4 gap above; the trampoline itself is faithful.) */
-long __vms_syscall0(long nr)
-{ return (long)vms_alpha_callsys(nr, 0, 0, 0, 0, 0, 0); }
+/* The __vms_syscallN signatures MATCH vms_syscall.h's `extern vms_reg_t`
+ * prototypes (vms_reg_t == `long long` == a full 64-bit register word) so the
+ * declaration and definition agree at link. Each shifts nr -> $0 and a1..aN ->
+ * $16.. and traps. This is the vms-1fc width fix: on the alpha-dec-vms LLP64
+ * model `long` is 32 bits, so the earlier `long` prototype TRUNCATED every
+ * pointer argument the kif transport passes (ioctl(/dev/vms,...) then hit a
+ * truncated address and the RMS write reached nothing). `long long` is 64 bits
+ * on every raw-syscall target, so the trampoline now passes the full-width
+ * register value the Linux/Alpha kernel expects. (vms_reg_t is spelled out as
+ * `long long` here rather than pulled from vms_syscall.h to keep this leaf TU
+ * free of the whole syscall-number/wrapper header; the two spellings are the
+ * identical type, so declaration and definition agree at link on every arch.) */
+long long __vms_syscall0(long long nr)
+{ return vms_alpha_callsys(nr, 0, 0, 0, 0, 0, 0); }
 
-long __vms_syscall1(long nr, long a1)
-{ return (long)vms_alpha_callsys(nr, a1, 0, 0, 0, 0, 0); }
+long long __vms_syscall1(long long nr, long long a1)
+{ return vms_alpha_callsys(nr, a1, 0, 0, 0, 0, 0); }
 
-long __vms_syscall2(long nr, long a1, long a2)
-{ return (long)vms_alpha_callsys(nr, a1, a2, 0, 0, 0, 0); }
+long long __vms_syscall2(long long nr, long long a1, long long a2)
+{ return vms_alpha_callsys(nr, a1, a2, 0, 0, 0, 0); }
 
-long __vms_syscall3(long nr, long a1, long a2, long a3)
-{ return (long)vms_alpha_callsys(nr, a1, a2, a3, 0, 0, 0); }
+long long __vms_syscall3(long long nr, long long a1, long long a2, long long a3)
+{ return vms_alpha_callsys(nr, a1, a2, a3, 0, 0, 0); }
 
-long __vms_syscall4(long nr, long a1, long a2, long a3, long a4)
-{ return (long)vms_alpha_callsys(nr, a1, a2, a3, a4, 0, 0); }
+long long __vms_syscall4(long long nr, long long a1, long long a2, long long a3, long long a4)
+{ return vms_alpha_callsys(nr, a1, a2, a3, a4, 0, 0); }
 
-long __vms_syscall5(long nr, long a1, long a2, long a3, long a4, long a5)
-{ return (long)vms_alpha_callsys(nr, a1, a2, a3, a4, a5, 0); }
+long long __vms_syscall5(long long nr, long long a1, long long a2, long long a3, long long a4, long long a5)
+{ return vms_alpha_callsys(nr, a1, a2, a3, a4, a5, 0); }
 
-long __vms_syscall6(long nr, long a1, long a2, long a3, long a4, long a5, long a6)
-{ return (long)vms_alpha_callsys(nr, a1, a2, a3, a4, a5, a6); }
+long long __vms_syscall6(long long nr, long long a1, long long a2, long long a3, long long a4, long long a5, long long a6)
+{ return vms_alpha_callsys(nr, a1, a2, a3, a4, a5, a6); }
 
 #endif /* __alpha__ */

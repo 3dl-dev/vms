@@ -51,7 +51,14 @@ void kif_xport_dev_close(int fd)
 
 int kif_xport_ioctl(int fd, unsigned long req, void *arg)
 {
-    return vms_sys_ioctl(fd, req, (unsigned long)arg);
+    /* vms-1fc: cast the request-block pointer through vms_reg_t (a
+     * guaranteed-64-bit register word), NOT `unsigned long`. On the
+     * alpha-dec-vms LLP64 model `unsigned long` is 32 bits, so `(unsigned
+     * long)arg` truncated the high half of `arg` and the executive's
+     * copy_from_user read from a garbage address -- the RMS write reached
+     * nothing. This is THE /dev/vms pointer the rung-4 proof (vms-f49) exercises.
+     * No-op on the LP64 targets (vms_reg_t == unsigned long in width there). */
+    return vms_sys_ioctl(fd, req, (vms_reg_t)arg);
 }
 
 void *kif_xport_mmap(int fd, unsigned long length, unsigned long offset)

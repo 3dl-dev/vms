@@ -4773,6 +4773,81 @@ jobs:
             ovmx-cross-alpha-vms:latest \
             sh -c 'export PATH=/opt/cross-alpha-vms/bin:$PATH CC=gcc; sh /src/src/vmslink/test/run_muldef_evax.sh'
 
+  # ---------------------------------------------------------------------------
+  # alpha-rms-substrate (vms-a7a, rung 1): the alpha-dec-vms LP64 RMS substrate.
+  # Builds the faithful producer graph (LIBVMSSYS/PROCESS/LNM/FS/LIBVMS$SHR) and
+  # LIBVMSRMS$SHR via each recipe's OVMX_DECC_ARCH=alpha branch, then STRICT-links
+  # a tiny alpha image against LIBVMSRMS$SHR proving the RMS engine + the vms_kif
+  # /dev/vms ioctl transport link zero-deferred with sys$create/$open/$connect/
+  # $put/$get/$close bound as real cross-image imports (EM_ALPHA/ET_DYN). This is
+  # the BUILD + STRICT-LINK rung; the un-fakeable RUNTIME proof (the transport
+  # actually reaching the executive ACP, an independent reader seeing the ODS-2
+  # File ID) needs /dev/vms + qemu-system-alpha and is rung 4 (vms-f49). The build
+  # script'"'"'s embedded GATE fails the job on any missing shareable / deferred link.
+  # ---------------------------------------------------------------------------
+  alpha-rms-substrate:
+    name: alpha RMS substrate — LIBVMSRMS$SHR + producer graph STRICT-link (vms-a7a)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same source-hash-keyed prebuilt-image pull as joint-e2e-alpha-crt0 (no
+      # ftp.gnu.org fetch); a miss falls through to the gha-cached source build.
+      - name: Pull the prebuilt alpha-dec-vms toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-alpha-vms
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-alpha-vms:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the alpha-dec-vms cross toolchain image (fallback — gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Build the alpha RMS substrate + STRICT-link the proof image (vms-a7a rung-1 gate)
+        run: |
+          set -euo pipefail
+          IMG=ovmx-cross-alpha-vms tools/cross-alpha-vms/rms-substrate/build-rms-substrate.sh /tmp/rms-substrate-out
+          # The script'"'"'s embedded GATE already exits non-zero on failure; re-assert
+          # the headline lines here so the job log shows the proof explicitly.
+          test -f /tmp/rms-substrate-out/LIBVMSRMS\$SHR.EXE
+          test -f /tmp/rms-substrate-out/rms_substrate_test.exe
+          readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -q 'Machine:.*Alpha'
+          readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -qE 'Type:.*DYN'
+          echo "vms-a7a rung-1 CI gate PASSED"
+
   # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
   #
   # The pillar milestone (vms-ade / bead vms-80a): the whole toolchain end to

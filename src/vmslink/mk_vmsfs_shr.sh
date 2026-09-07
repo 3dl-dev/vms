@@ -68,6 +68,21 @@ LNM_INC=${7:-$(cd "$HERE/../vmslnm/include" && pwd)}         # for lnm.h (lnm_tr
 CC=${CC:-gcc}
 GSMATCH=${GSMATCH:-LEQUAL,1,0}
 
+# ---- ALPHA/EVAX branch (vms-a7a) — LIBVMSFS$SHR for alpha-dec-vms LP64. ----
+# vmsfs_* filespec/version/protection producer; --use DECC$SHR + LIBVMSLNM$SHR
+# (arg $4) + LIBVMSSYS$SHR (inert if unreferenced; kept for the vms_kif seam).
+# Env: ALPHA_CC, ALPHA_MUSL_SRC, ALPHA_OTS_USE; optional ALPHA_SYS_USE.
+if [ "${OVMX_DECC_ARCH:-}" = alpha ]; then
+    : "${ALPHA_OTS_USE:?mk_vmsfs_shr alpha: set ALPHA_OTS_USE=<LIBOTS_SHR.EXE>}"
+    _fs_use="--use $DECC_SHR --use $LNM_SHR"
+    [ -n "${ALPHA_SYS_USE:-}" ] && _fs_use="$_fs_use --use $ALPHA_SYS_USE"
+    ALPHA_INCS="-I$HERE/../libvms/include -I$HERE/../libvmssys -I$HERE/../vmsprocess/include -I$HERE/../vmslnm/include -I$HERE/../vmsfs/include -I$HERE/../vmsrms/include -I$HERE/include" \
+    ALPHA_DEFS="-DOVMX_HAVE_ACP" \
+        exec sh "$HERE/mk_alpha_shr.sh" "$LINK_EXE" "$OUT" "$SRC" \
+            "vmsfs_case vmsfs_device vmsfs_protect vmsfs_translate vmsfs_version" \
+            $_fs_use --use "$ALPHA_OTS_USE"
+fi
+
 [ -f "$DECC_SHR" ] || { echo "mk_vmsfs_shr: DECC\$SHR.EXE not found: $DECC_SHR"; exit 1; }
 [ -f "$LNM_SHR" ]  || { echo "mk_vmsfs_shr: LIBVMSLNM\$SHR.EXE not found: $LNM_SHR"; exit 1; }
 [ -d "$SRC" ]      || { echo "mk_vmsfs_shr: vmsfs src dir not found: $SRC"; exit 1; }

@@ -3988,12 +3988,22 @@ static int evax_is_companion_label(const char *n)
  * set on the alias). Callers dedup (sort -u); companion labels are dropped. */
 static void evax_dump_universals(struct evax_input *in, int nin)
 {
+    /* OVMX_LINK_DUMP_UNIVERSALS=all dumps EVERY defined universal (for the OVMX
+     * producer recipes / mk_alpha_shr.sh, vms-a7a); any other truthy value keeps
+     * the historical decc$-only surface (mk_decc_shr.sh, vms-614 — which greps
+     * ^decc$ from this output regardless, so it is unaffected by the wider dump).
+     * Enumerating from the LINKER's OWN evax_read view (not host/cross nm) is what
+     * keeps the emitted symbol vector in exact agreement with emit_shareable's
+     * universal resolution: a symbol nm reports as defined but evax_read does not
+     * treat as a universal-eligible global would otherwise fail %LINK-F-NOUNIV. */
+    const char *mode = getenv("OVMX_LINK_DUMP_UNIVERSALS");
+    int all = (mode && strcmp(mode, "all") == 0);
     for (int i = 0; i < nin; i++)
         for (int s = 0; s < in[i].obj.nsym; s++) {
             const struct evax_symbol *y = &in[i].obj.sym[s];
             if (!y->defined) continue;
             const char *n = y->name;
-            if (strncmp(n, "decc$", 5) != 0) continue;
+            if (!all && strncmp(n, "decc$", 5) != 0) continue;
             if (evax_is_companion_label(n)) continue;
             int is_proc = y->is_proc || y->code_value != 0 || y->code_psindx != 0;
             printf("%s=%s\n", n, is_proc ? "PROCEDURE" : "DATA");

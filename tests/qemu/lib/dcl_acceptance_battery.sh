@@ -325,6 +325,18 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'Default buffer size' "SHOW DEVICE/FULL OPA0: [vms-bed]: no fabricated Default buffer size (info->width is column width, not buffer size -- INV-6 honest omission)"
     negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE/FULL OPA0:"
 
+    # --- SHOW DEVICE/FULL (BARE, vms-ddc: the operator hit "/FULL does nothing")
+    # The named path above already honored /FULL; the BARE listing did NOT -- its
+    # terminal loop called the brief show_device_row() regardless of /FULL, so a
+    # bare `SHOW DEVICE/FULL` printed the same one-line rows as `SHOW DEVICE`.
+    # Fixed to render each device's full block (mirroring the disk loop + the
+    # named path). Assert the console's FULL block appears in the bare listing.
+    # OPA0: exists on every arch, so this assertion is substrate-independent.
+    run_cmd 'SHOW DEVICE/FULL'
+    must_have  "$SEG" 'Terminal OPA0' "SHOW DEVICE/FULL [vms-ddc]: the BARE /FULL listing renders the terminal FULL block (was the brief row -- the '/FULL does nothing' bug)"
+    must_have  "$SEG" 'Owner process' "SHOW DEVICE/FULL [vms-ddc]: bare /FULL shows the Owner process block, proving /FULL is applied in the bare listing, not only the named path"
+    negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE/FULL (bare)"
+
     # --- F$GETDVI reads the SAME real executive device table (vms-050) -------
     # F$GETDVI used to fabricate: EXISTS=TRUE for EVERY name, VOLNAM guessed from
     # a name substring ("OVMXSYS"/"VOLUME"), DEVCLASS/DEVTYPE guessed the same

@@ -52,6 +52,8 @@ OBJDUMP="${TARGET}-objdump"
 SRC="$(pwd)"
 KMOD="$SRC/src/kernel-netbsd"
 CORE="$SRC/src/kernel-core"
+ODS2="$SRC/src/vmsfs/ods2"             # ACP on-disk EDIT helpers (vms-d5d)
+ODS2_INC="$SRC/src/vmsfs/include"      # the genuine ODS-2 codec header vmsfs/ods2.h
 LIBVMSSYS="$SRC/src/libvmssys"
 PROBE="$SRC/tests/netbsd/guest"
 NBSRC="${NBSRC:-/nbsrc}"
@@ -77,7 +79,7 @@ ln -sf "$SYS/arch/vax/include" "$KL/vax"
 # not GOT-relative (R_VAX_GOT32) ones -- required for the vax kobj loader to
 # modload it.
 CFLAGS="-std=gnu99 -O2 -fno-pic -Werror -Wall -ffreestanding -fno-strict-aliasing -fno-omit-frame-pointer"
-CPPFLAGS="-DOVMX_KBACKEND_NETBSD -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE"
+CPPFLAGS="-DOVMX_KBACKEND_NETBSD -DOVMX_ODS2_KERNEL -DOVMX_DEVTAB_SUBSTRATE_DISK_RESOLVE -nostdinc -isystem $KL -isystem $SYS -isystem $SYS/arch -isystem $SYS/../common/include -D_KERNEL -D_MODULE -I$KMOD -I$CORE -I$ODS2_INC"
 
 # EXACTLY src/kernel-netbsd/Makefile's SRCS (= B1's SRCS = build-eflag-vax.sh's
 # SRCS = build-devvms-vax.sh's SRCS): the NetBSD backend glue + OVMX intrusive
@@ -96,7 +98,49 @@ SRCS="$KMOD/vms_netbsd.c \
       $CORE/vms_mbx.c \
       $CORE/vms_proctab.c \
       $CORE/vms_lock.c \
-      $CORE/vms_lnm.c"
+      $CORE/vms_lnm.c \
+      $CORE/vms_devtab.c \
+      $CORE/vmsfs_acp.c \
+      $ODS2/ods2_reader.c \
+      $ODS2/ods2_edit.c \
+      $KMOD/vms_blockdev_netbsd.c \
+      $KMOD/vms_socket_netbsd.c \
+      $KMOD/vms_lan_netbsd.c \
+      $PROBE/cluster_seam.c \
+      $CORE/vms_cluster_fork.c \
+      $CORE/vms_cluster_fork_bind.c \
+      $CORE/vms_pe.c \
+      $CORE/vms_cnxman_csb.c \
+      $CORE/vms_cnxman_recnx_fsm.c \
+      $CORE/vms_cnxman_quorum.c \
+      $CORE/vms_cluster_api.c \
+      $CORE/vms_cluster_sysgen.c \
+      $CORE/vms_cluster_codec.c \
+      $CORE/vms_cluster_codec_cm.c \
+      $CORE/vms_cluster_codec_hello.c \
+      $CORE/vms_cluster_codec_vc.c \
+      $CORE/vms_cluster_codec_blk.c \
+      $CORE/vms_pe_fsm.c \
+      $CORE/vms_cnxman_phase2.c \
+      $CORE/vms_dlm_ldwv.c \
+      $CORE/vms_cnxman_barrier_fsm.c \
+      $CORE/vms_cnxman_coord_fsm.c \
+      $CORE/vms_scs_fsm.c \
+      $CORE/vms_cluster_codec_scs.c \
+      $CORE/vms_cluster_emit_guard.c \
+      $CORE/vms_scs_dir.c \
+      $CORE/vms_scs.c \
+      $CORE/vms_cluster_codec_mscp.c \
+      $CORE/vms_mscp_cl_fsm.c \
+      $CORE/vms_cnxman_join_fsm.c \
+      $CORE/vms_cnxman_diag.c \
+      $CORE/vms_cnxman.c \
+      $CORE/vms_mscp_srv_fsm.c \
+      $CORE/vms_mscp_srv.c \
+      $CORE/vms_mscp_srv_io.c \
+      $CORE/vms_mscp_cl_io_fsm.c \
+      $CORE/vms_mscp_cl_conn_fsm.c \
+      $CORE/vms_mscp_cl.c"
 
 echo "=== toolchain ==="; "$CC" --version | head -1; "$CC" -dumpmachine; echo
 

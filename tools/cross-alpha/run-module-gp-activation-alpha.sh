@@ -421,8 +421,15 @@ assemble_boot_image() {
 # open long enough for STDRV to finish, then capture the filtered console log.
 # ---------------------------------------------------------------------------
 run_boot_a() {
-  rm -f "$WORK/modgpA.img" "$WORK/modgpA.raw" "$WORK/modgpA.log" "$WORK/modgpA.fifo"
+  rm -f "$WORK/modgpA.img" "$WORK/modgpA.raw" "$WORK/modgpA.log" "$WORK/modgpA.fifo" "$WORK/qint.log"
   local cname="ovmx-alpha-modgp-$$"
+  # vms-f49 fault-capture: QEMU_DBG (set only by crtl-rms-veneer-gate) injects
+  # qemu exception logging so the veneer SIGSEGV's faulting PC/VA is recorded.
+  # The Alpha guest kernel does not print a userspace fault line, and the crash
+  # is at/near activation (before any veneer stderr trace), so this is the only
+  # way to pin the PC. Bounded/disk-safe: the boot reaches Username: within
+  # ~30-60s (the wait loop then kills qemu), so qint.log stays small.
+  local qdbg="${QEMU_DBG:-}"
   set +e
   timeout --kill-after="$TIMEOUT_GRACE" "$DOCKER_TIMEOUT" docker run --rm \
     --name "$cname" --memory=8g --cpus="$(nproc)" \
@@ -437,6 +444,7 @@ run_boot_a() {
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
           -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1" \
           -drive file=modgpA.img,format=raw,if=virtio \
+          '"$qdbg"' \
           -nographic -no-reboot <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!
       exec 6>"$FIFO"
@@ -786,7 +794,10 @@ EOF
     build_joint_images
     assemble_boot_image
     log "step 3: BOOT A -- activate the VENEER crtl_rms image + run the INDEPENDENT DIRECTORY reader on the REAL executive"
-    run_boot_a
+    # vms-f49 fault-capture: log qemu CPU exceptions so the veneer SIGSEGV's
+    # faulting PC/VA is recorded (the guest kernel prints no user fault line, and
+    # the crash is at/near activation). Bounded (boot reaches Username: fast).
+    QEMU_DBG="-d int,cpu_reset,guest_errors -D /work/qint.log" run_boot_a
     echo ""
     echo "========================================================================"
     echo "== vms-f49 rung 4: CRTL->RMS veneer -> real ODS-2 landing, PROVEN by an"
@@ -823,6 +834,16 @@ EOF
     grep -aiE "memory violation|segmentation|segfault|unaligned| pc ?=?0x?[0-9a-f]| ra ?=?0x?[0-9a-f]|Oops|BUG:|kernel access|access to| va ?=?0x?[0-9a-f]|SIGSEGV|bad address|panic" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -30 || echo "  (no guest fault line captured)"
     echo "--- last 60 console lines around the crash ---"
     tail -60 "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    # vms-f49: the qemu CPU-exception log pins the faulting PC/VA of the veneer
+    # SIGSEGV (guest kernel emits no user fault line; crash is at/near activation).
+    if [ -f "$WORK/qint.log" ]; then
+      echo "--- qemu exception log: size $(wc -c <"$WORK/qint.log" 2>/dev/null) bytes; last exceptions (faulting PC/VA) ---"
+      grep -anE 'Abort|Access|MM_FAULT|D-fault|I-fault|fault|violation|PALcode|pc[ =]|EXCEPTION|Unaligned|GENTRAP|OPCDEC|mm fault|Taking exception|v0=|pc =0x|pc=0x' "$WORK/qint.log" 2>/dev/null | tail -40 | sed 's/^/  q| /' || true
+      echo "--- qemu exception log: raw tail (last 60 lines) ---"
+      tail -60 "$WORK/qint.log" 2>/dev/null | sed 's/^/  q| /' || true
+    else
+      echo "--- (no qemu exception log captured) ---"
+    fi
     exit 1
     ;;
   *)

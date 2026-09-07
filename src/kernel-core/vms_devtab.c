@@ -343,6 +343,63 @@ static void vms_devtab_probe_disks(void)
         pr_info("vms: disk unit %s -> %s (%u:%u)\n",
                 devnam, backing, exec_blockdev_major(dev), exec_blockdev_minor(dev));
     }
+
+    /*
+     * Beyond virtio-blk: real and bare-metal boots (the operator's Rule-9
+     * target) rarely have /dev/vd* -- their system disk is SATA/SCSI (/dev/sd*)
+     * or NVMe (/dev/nvmeNn1). Probing ONLY virtio left the device table with no
+     * disk row on those substrates, so `SHOW DEVICE <disk>:` returned NOSUCHDEV
+     * and a bare `SHOW DEVICE` showed only the console -- the "hollow" surface a
+     * user hits on non-virtio hardware (vms-ddc / vms-47d). These two families
+     * complete the documented device-native naming scheme. INV-6 is preserved
+     * exactly as the virtio loop above: exec_blockdev_lookup() must actually
+     * resolve the node before a unit is entered -- never a speculative row.
+     */
+    for (i = 0; i < VMS_DISK_UNITS; i++) {
+        char path[16];
+        char devnam[VMS_DEVNAM_SIZE];
+        char backing[VMS_BACKING_SIZE];
+        exec_dev_t dev;
+        int n;
+
+        n = snprintf(path, sizeof(path), "/dev/sd%c", 'a' + i);
+        if (n < 0 || n >= (int)sizeof(path))
+            continue;
+        if (exec_blockdev_lookup(path, &dev) != 0)
+            continue;
+
+        snprintf(devnam,  sizeof(devnam),  "SDA%u:", (unsigned)i * 100u);
+        snprintf(backing, sizeof(backing), "sd%c", 'a' + i);
+        vms_devtab_add_disk(devnam, backing,
+                            exec_blockdev_major(dev), exec_blockdev_minor(dev));
+    }
+
+    /*
+     * NVMe names a block device <controller>n<namespace> (nvme0n1, nvme1n1...).
+     * We probe namespace 1 of each controller -- the boot/system-disk case that
+     * covers essentially every single-namespace machine. Additional namespaces
+     * (nvme0n2...) are a documented, deliberate not-yet: they are entered by
+     * whatever probe actually resolves them, never by a speculative branch here
+     * (same rule the SATA/SCSI comment above states).
+     */
+    for (i = 0; i < VMS_DISK_UNITS; i++) {
+        char path[16];
+        char devnam[VMS_DEVNAM_SIZE];
+        char backing[VMS_BACKING_SIZE];
+        exec_dev_t dev;
+        int n;
+
+        n = snprintf(path, sizeof(path), "/dev/nvme%dn1", i);
+        if (n < 0 || n >= (int)sizeof(path))
+            continue;
+        if (exec_blockdev_lookup(path, &dev) != 0)
+            continue;
+
+        snprintf(devnam,  sizeof(devnam),  "NVME%u:", (unsigned)i * 100u);
+        snprintf(backing, sizeof(backing), "nvme%dn1", i);
+        vms_devtab_add_disk(devnam, backing,
+                            exec_blockdev_major(dev), exec_blockdev_minor(dev));
+    }
 }
 
 /*

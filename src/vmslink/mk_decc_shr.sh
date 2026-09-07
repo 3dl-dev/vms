@@ -136,6 +136,23 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         -o /dev/null "$LIBC" "$LIBGCC" 2>/dev/null \
       | grep -E '^decc\$[^=]+=(PROCEDURE|DATA)$' \
       | sort -u > "$ALPHA_VEC"
+
+    # vms-ed1e (rung 2 of vms-b4f, CRTL->RMS stdio veneer): when the caller
+    # opts in with ALPHA_CRTL_RMS_USE, the 4 STDIO file-op decc$ entries the
+    # enumeration above just picked up (decc$fopen/fwrite/fread/fclose) are
+    # musl-alpha's OWN POSIX definitions — open()/write() on the raw
+    # Linux-Alpha kernel VFS, never RMS/the executive/the ODS-2 volume
+    # (trace-grounded, vms-47e). Drop them here so the veneer aliases appended
+    # further down (decc$fopen/ovmx_crtl_fopen=PROCEDURE, ...) are the ONLY
+    # vector entry for each of these 4 names — musl's own fopen.o etc stay
+    # whole-archived (dead weight, simply never exported), so this is a
+    # vector-level substitution, never an object-level MULDEF fight (the
+    # veneer's compiled object defines the DISTINCT name `ovmx_crtl_fopen`,
+    # not `decc$fopen` — see the veneer block below for why that is safe).
+    if [ -n "${ALPHA_CRTL_RMS_USE:-}" ]; then
+        grep -vE '^decc\$(fopen|fwrite|fread|fclose)=' "$ALPHA_VEC" > "$ALPHA_VEC.f"
+        mv "$ALPHA_VEC.f" "$ALPHA_VEC"
+    fi
     NVEC=$(wc -l < "$ALPHA_VEC")
     echo "mk_decc_shr: enumerated $NVEC decc\$ universals from libc.a + libgcc.a (linker/evax_read view, vms-614)"
     [ "$NVEC" -ge 50 ] || { echo "mk_decc_shr: FAIL only $NVEC decc\$ universals from the LINK.EXE dump — is LINK_EXE the vms-614 build and libc.a genuine EVAX?" >&2; exit 2; }
@@ -225,6 +242,71 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     [ "$NBOOT" -ge 1 ] || { echo "mk_decc_shr: FAIL 0 decc\$ universals from the bootstrap surface -- did the alpha-dec-vms cc1's CRTL auto-decoration not fire (wrong ALPHA_CC)?" >&2; exit 2; }
     VEC="$VEC,$(paste -sd, "$ALPHA_BOOT_VEC")"
     rm -f "$ALPHA_BOOT_VEC"
+
+    # ----------------------------------------------------------------------
+    # CRTL->RMS STDIO VENEER (vms-ed1e, rung 2 of vms-b4f). Opt-in via
+    # ALPHA_CRTL_RMS_USE=<path to an ALREADY-BUILT alpha LIBVMSRMS$SHR.EXE>;
+    # every existing caller that does not set it (joint-e2e, the rung-1
+    # rms-substrate gate, CI) gets a BYTE-IDENTICAL DECC$SHR to before this
+    # change — no regression to the 6 VMS-native migration gates.
+    #
+    # WHY A SEPARATE, LATER PASS (bootstrap-order note, not a design change to
+    # this recipe's shape). src/vmsrms/crtl_rms_stdio.c's ovmx_crtl_fopen/
+    # fwrite/fread/fclose call sys$create/$open/$connect/$put/$get/$close —
+    # defined by LIBVMSRMS$SHR, not by anything DECC$SHR whole-archives. A
+    # cross-image import only resolves against an ALREADY-BUILT producer
+    # passed via --use at THIS link, so ALPHA_CRTL_RMS_USE must name a
+    # LIBVMSRMS$SHR.EXE from a PRIOR pass — which itself needed a DECC$SHR
+    # (the bootstrap pass: this same script, called WITHOUT
+    # ALPHA_CRTL_RMS_USE, exactly as it already runs today). Standard
+    # two-stage bootstrap for the mutual DECC$SHR<->LIBVMSRMS$SHR dependency;
+    # LIBVMSRMS$SHR itself is UNCHANGED and does NOT need rebuilding against
+    # the veneer-wired DECC$SHR — GSMATCH LEQUAL + NAME-keyed (not
+    # index-keyed) activation binding (IMGACT's sv_find_named) means every
+    # universal the bootstrap LIBVMSRMS$SHR already bound (malloc,
+    # decc$fprintf, ...) stays valid: this pass only ADDS universals or swaps
+    # an EXISTING name's internal binding in place, never removes/reorders one.
+    #
+    # The wrapper functions are OVMX-original names (ovmx_crtl_fopen, ...),
+    # NOT decc$-decorated: crtl_stdio.h documents that the alpha cc1 does not
+    # recognize them as a DEC C RTL surface name, so they compile as plain
+    # globals — a name the whole-archived musl-alpha objects never define, so
+    # this can never MULDEF against musl's own (still present, just no longer
+    # exported) decc$fopen/fwrite/fread/fclose definitions. The SYMBOL_VECTOR
+    # universal/internal alias form (parse_symbol_vector, link.c) does the
+    # decc$fopen -> ovmx_crtl_fopen binding — the explicit-alias analogue of
+    # how ovmx_decc_crtl.c's _malloc32 becomes decc$malloc via the cc1's OWN
+    # auto-decoration (that mechanism does not apply here since the veneer
+    # deliberately chose non-decorated names, see crtl_stdio.h).
+    if [ -n "${ALPHA_CRTL_RMS_USE:-}" ]; then
+        [ -f "$ALPHA_CRTL_RMS_USE" ] || { echo "mk_decc_shr: FAIL ALPHA_CRTL_RMS_USE=$ALPHA_CRTL_RMS_USE not found" >&2; exit 2; }
+        RMS_SRC_DIR="$(CDPATH= cd "$(dirname "$0")/../vmsrms" && pwd)"
+        RMS_INC="$RMS_SRC_DIR/include"
+        LIBVMS_INC_VENEER="$(CDPATH= cd "$(dirname "$0")/../libvms/include" && pwd)"
+        VENEER_DIR=$(mktemp -d)
+        VENEER_OBJ="$VENEER_DIR/crtl_rms_stdio.o"
+        # shellcheck disable=SC2086
+        "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 \
+            -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
+            -o "$VENEER_OBJ" "$RMS_SRC_DIR/crtl_rms_stdio.c"
+
+        # Ground-truth the veneer's own universals (never hand-listed): its 4
+        # OVMX-original entry points, plain (non-decc$) defined text symbols.
+        VENEER_VEC=$(mktemp)
+        "$NM" --defined-only "$VENEER_OBJ" 2>/dev/null \
+          | awk '$NF ~ /^ovmx_crtl_/ { t=$(NF-1); if (t=="T"||t=="t"||t=="W"||t=="w") print $NF }' \
+          | sort -u > "$VENEER_VEC"
+        NVENEER=$(wc -l < "$VENEER_VEC")
+        [ "$NVENEER" -eq 4 ] || { echo "mk_decc_shr: FAIL expected 4 ovmx_crtl_ universals from crtl_rms_stdio.c, got $NVENEER: $(tr '\n' ' ' < "$VENEER_VEC")" >&2; exit 2; }
+        for want in ovmx_crtl_fopen ovmx_crtl_fwrite ovmx_crtl_fread ovmx_crtl_fclose; do
+            grep -qx "$want" "$VENEER_VEC" || { echo "mk_decc_shr: FAIL crtl_rms_stdio.c did not define $want" >&2; exit 2; }
+        done
+        rm -f "$VENEER_VEC"
+
+        VEC="$VEC,decc\$fopen/ovmx_crtl_fopen=PROCEDURE,decc\$fwrite/ovmx_crtl_fwrite=PROCEDURE,decc\$fread/ovmx_crtl_fread=PROCEDURE,decc\$fclose/ovmx_crtl_fclose=PROCEDURE"
+        ALPHA_VENEER_OBJ="$VENEER_OBJ"
+        echo "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\$fopen/fwrite/fread/fclose -> ovmx_crtl_* (--use $ALPHA_CRTL_RMS_USE)"
+    fi
 
     # Plain (non-decc$-decorated) names the decc$ filter above cannot catch,
     # each verified present by direct nm before being claimed here:
@@ -332,10 +414,16 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # and the linker-defined _DYNAMIC/__init_array bounds) as deferred imports.
     ALPHA_LINK_FLAGS="--shareable --symbol-vector $VEC --gsmatch $GSMATCH"
     for p in ${DECC_USE:-}; do ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $p"; done
+    # vms-ed1e: the CRTL->RMS stdio veneer's own --use edge, kept separate
+    # from the generic DECC_USE (OTS$) list above for a clear provenance in
+    # the recipe's own echo/log output. See the veneer block earlier for why
+    # this must name an ALREADY-BUILT LIBVMSRMS$SHR.EXE.
+    [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_RMS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
-    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ"
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" ${ALPHA_VENEER_OBJ:-}
     rm -rf "$ALPHA_BOOT_DIR"
+    [ -n "${VENEER_DIR:-}" ] && rm -rf "$VENEER_DIR"
     echo "mk_decc_shr: created $OUT (alpha/EVAX)"
     exit 0
 fi

@@ -837,10 +837,14 @@ EOF
     # vms-f49: the qemu CPU-exception log pins the faulting PC/VA of the veneer
     # SIGSEGV (guest kernel emits no user fault line; crash is at/near activation).
     if [ -f "$WORK/qint.log" ]; then
-      echo "--- qemu exception log: size $(wc -c <"$WORK/qint.log" 2>/dev/null) bytes; last exceptions (faulting PC/VA) ---"
-      grep -anE 'Abort|Access|MM_FAULT|D-fault|I-fault|fault|violation|PALcode|pc[ =]|EXCEPTION|Unaligned|GENTRAP|OPCDEC|mm fault|Taking exception|v0=|pc =0x|pc=0x' "$WORK/qint.log" 2>/dev/null | tail -40 | sed 's/^/  q| /' || true
-      echo "--- qemu exception log: raw tail (last 60 lines) ---"
-      tail -60 "$WORK/qint.log" 2>/dev/null | sed 's/^/  q| /' || true
+      echo "--- qemu exception log: size $(wc -c <"$WORK/qint.log" 2>/dev/null) bytes ---"
+      # Filter the clk/dev interrupt firehose; the userspace SIGSEGV shows up as
+      # an MMFAULT/DFAULT/DTBMISS/OPCDEC/ARITH/UNALIGN exception with the faulting
+      # user pc= just before the process dies. Show the last such real exceptions.
+      echo "--- non-interrupt exceptions (the fault is here; last 60) ---"
+      grep -avE 'clk_interrupt|dev_interrupt|smp_' "$WORK/qint.log" 2>/dev/null | tail -60 | sed 's/^/  q| /' || true
+      echo "--- exception-type histogram (which exceptions fired) ---"
+      grep -aoE 'INT +[0-9]+: *[a-zA-Z_]+' "$WORK/qint.log" 2>/dev/null | sed -E 's/INT +[0-9]+: *//' | sort | uniq -c | sort -rn | head -20 | sed 's/^/  q| /' || true
     else
       echo "--- (no qemu exception log captured) ---"
     fi

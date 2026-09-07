@@ -811,6 +811,18 @@ EOF
     echo "      pointer symptom (Part A) -- the veneer ioctl(/dev/vms) landed on a bad address."
     echo "      Full log: $WORK/modgpA.log"
     grep -aE "VENEER-PROOF:|%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|%DIRECT|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -25 || echo "  (none captured)"
+    # vms-f49 fault-capture: when the veneer image SIGSEGVs (%DCL-F-ABORT signal
+    # 11), the Alpha guest kernel prints the faulting USER pc/ra/va to the console
+    # (arch/alpha/mm/fault.c show_unhandled_signals: "<image>: memory violation ...
+    # pc=... ra=..."). The gate's pattern grep above does not surface it, so dump
+    # the guest fault line(s) + the crash-context tail explicitly -- this is the
+    # authoritative fault PC for localizing the crash (gdb-equivalent, per the
+    # alpha-rail fault-capture discipline). No qemu -d flags (disk-safe): the guest
+    # kernel already emitted it into the captured console.
+    echo "--- guest-kernel fault signature (faulting user PC/RA/VA) ---"
+    grep -aiE "memory violation|segmentation|segfault|unaligned| pc ?=?0x?[0-9a-f]| ra ?=?0x?[0-9a-f]|Oops|BUG:|kernel access|access to| va ?=?0x?[0-9a-f]|SIGSEGV|bad address|panic" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -30 || echo "  (no guest fault line captured)"
+    echo "--- last 60 console lines around the crash ---"
+    tail -60 "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     exit 1
     ;;
   *)

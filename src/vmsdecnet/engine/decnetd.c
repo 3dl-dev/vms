@@ -553,7 +553,14 @@ static void usage(const char *argv0)
         "                      and exit (no CAP_NET_RAW -- two engines carry a\n"
         "                      whole terminal session: Bind, characteristics,\n"
         "                      screen output, keystrokes, out-of-band, Unbind,\n"
-        "                      over a socketpair; every payload byte-identical)\n",
+        "                      over a socketpair; every payload byte-identical)\n"
+        "  --connect A.N       CLIENT: open an NSP logical link to A.N over the\n"
+        "                      LIVE datalink (Connect Initiate; needs CAP_NET_RAW)\n"
+        "  --connect-data STR  with --connect: send STR as one data segment once\n"
+        "                      the link is RUN, then disconnect cleanly\n"
+        "  --listen            SERVER: accept an inbound Connect Initiate on the\n"
+        "                      live datalink and deliver its data segments\n"
+        "  --object N          task/object number (logged; routing is a later rung)\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT);
 }
 
@@ -570,6 +577,10 @@ int main(int argc, char **argv)
     int self_test = 0;
     int nsp_self_test = 0;
     int sethost_self_test = 0;
+    const char *connect_to = NULL;     /* --connect A.N : open a logical link  */
+    const char *connect_data = NULL;   /* --connect-data STR : one data segment */
+    int listen_mode = 0;               /* --listen : accept an inbound link     */
+    int object_num = 0;                /* --object N : task/object number (log)  */
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
@@ -585,6 +596,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--self-test"))     self_test = 1;
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
+        else if (!strcmp(argv[i], "--connect") && i + 1 < argc)      connect_to = argv[++i];
+        else if (!strcmp(argv[i], "--connect-data") && i + 1 < argc) connect_data = argv[++i];
+        else if (!strcmp(argv[i], "--listen"))                       listen_mode = 1;
+        else if (!strcmp(argv[i], "--object") && i + 1 < argc)       object_num = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
             return 0;
@@ -665,6 +680,18 @@ int main(int argc, char **argv)
         scs_datalink_close(sock);
         return 1;
     }
+    /* Receive unicast NSP frames addressed to our DECnet MAC. A faithful node
+     * owning its NIC would program that MAC onto the interface; on a shared
+     * bridge OVMX does not own, we go promiscuous and dst-filter in software
+     * (see the loop). Best-effort: HELLO/adjacency still works multicast if
+     * this is refused, so a failure is a warning, not fatal. */
+    if (scs_datalink_set_promisc(sock, ifname) != 0) {
+        log_ts(stdout);
+        printf(" DECNETD-W-NOPROMISC, could not enable promiscuous reception on"
+               " %s (%s) -- inbound unicast NSP may not be received\n",
+               ifname, strerror(errno));
+        fflush(stdout);
+    }
 
     struct dnet_engine eng;
     if (dnet_engine_init(&eng, area, node, name, device, circuit, hw_mac,
@@ -691,6 +718,51 @@ int main(int argc, char **argv)
 
     uint8_t frame[DNET_FRAME_MAX];
     uint8_t rxbuf[DNET_FRAME_MAX];
+
+    /* --- NSP logical-link mode over the LIVE datalink (rd vms-c23) ----------
+     * The socketpair selftest proves the FSM in isolation; here the SAME FSM is
+     * driven with every PDU crossing the real AF_PACKET datalink. Client
+     * (--connect A.N) opens a link, optionally sends one data segment, then
+     * disconnects; server (--listen) accepts an inbound Connect Initiate,
+     * delivers data, and mirrors the teardown. */
+    enum { CL_NONE, CL_CONNECTING, CL_UP, CL_SENT, CL_CLOSING } cl = CL_NONE;
+    unsigned peer_area = 0, peer_node = 0;
+    if (connect_to) {
+        if (parse_addr(connect_to, &peer_area, &peer_node) != 0) {
+            fprintf(stderr, "DECNETD-E-BADPEER, --connect wants AREA.NODE"
+                            " (1..63 . 1..1023)\n");
+            scs_datalink_close(sock);
+            return 1;
+        }
+        size_t flen = 0;
+        const uint8_t *cd = connect_data ? (const uint8_t *)connect_data : NULL;
+        size_t cdl = connect_data ? strlen(connect_data) : 0;
+        if (dnet_engine_link_open(&eng, peer_area, peer_node, 0x2001, cd, cdl,
+                                  1459, 1, DNET_NSP_VER_41,
+                                  frame, sizeof(frame), &flen, monotonic_sec())
+                == DNET_ENGINE_OK) {
+            uint8_t peer_id[DNET_ADDR_LEN];
+            dnet_id_from_addr(peer_area, peer_node, peer_id);
+            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, peer_id, frame, flen);
+            cl = CL_CONNECTING;
+            log_ts(stdout);
+            printf(" DECNETD-I-CONNECTING, Connect Initiate sent to %u.%u"
+                   " (object %d) on circuit %s\n",
+                   peer_area, peer_node, object_num, eng.circuit);
+            fflush(stdout);
+        } else {
+            fprintf(stderr, "DECNETD-E-NOCONNECT, could not open a logical link"
+                            " to %u.%u\n", peer_area, peer_node);
+            scs_datalink_close(sock);
+            return 1;
+        }
+    }
+    if (listen_mode) {
+        log_ts(stdout);
+        printf(" DECNETD-I-LISTEN, awaiting an inbound Connect Initiate"
+               " (object %d) on circuit %s\n", object_num, eng.circuit);
+        fflush(stdout);
+    }
 
     while (!g_stop) {
         dnet_tick_t now = monotonic_sec();
@@ -725,6 +797,32 @@ int main(int argc, char **argv)
             fflush(stdout);
         }
 
+        /* NSP: drive the active link's Connect-Initiate retransmit / give-up. */
+        if (eng.link_active) {
+            size_t tlen = 0;
+            int thas = 0;
+            if (dnet_engine_link_tick(&eng, now, frame, sizeof(frame), &tlen, &thas)
+                    == DNET_ENGINE_OK && thas) {
+                uint8_t dst[DNET_ADDR_LEN];
+                memcpy(dst, frame, DNET_ADDR_LEN);
+                scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, tlen);
+                log_ts(stdout);
+                printf(" DECNETD-I-CIRETRANS, Connect Initiate retransmitted on"
+                       " circuit %s\n", eng.circuit);
+                fflush(stdout);
+            }
+            /* CI give-up (max retransmits) closes the link as unreachable. */
+            if (cl == CL_CONNECTING && dnet_link_state_of(&eng.link) == DNET_LINK_CLOSED) {
+                log_ts(stdout);
+                printf(" DECNETD-W-UNREACH, peer %u.%u did not answer Connect"
+                       " Initiate -- link abandoned\n", peer_area, peer_node);
+                fflush(stdout);
+                eng.link_active = 0;
+                cl = CL_NONE;
+                g_stop = 1;
+            }
+        }
+
         ssize_t n = scs_datalink_recv(sock, rxbuf, sizeof(rxbuf));
         if (n < 0) {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
@@ -732,6 +830,134 @@ int main(int argc, char **argv)
             fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n", strerror(errno));
             break;
         }
+        /* Drop our own echo (an AF_PACKET SOCK_RAW socket sees frames it sent). */
+        if ((size_t)n >= DNET_ETH_HDRLEN &&
+            memcmp(rxbuf + 6, eng.my_id, DNET_ADDR_LEN) == 0)
+            continue;
+
+        /* Demux by the routing flag: a long-data frame carries an NSP PDU for
+         * the logical-link service; everything else goes to the HELLO/adjacency
+         * path. */
+        int is_nsp = ((size_t)n > (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX) &&
+                     rxbuf[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX] == DNET_RFLAG_LONG_DATA;
+        if (is_nsp) {
+            /* Promiscuous mode also surfaces unicast NSP addressed to OTHER
+             * nodes -- process only frames whose Ethernet destination is our
+             * own DECnet id (a real MAC-owning node's NIC would filter this). */
+            if (memcmp(rxbuf, eng.my_id, DNET_ADDR_LEN) != 0)
+                continue;
+            size_t rlen = 0;
+            int has_reply = 0;
+            enum dnet_link_event ev = DNET_LINK_EV_NONE;
+            if (dnet_engine_link_rx(&eng, now, rxbuf, (size_t)n, frame, sizeof(frame),
+                                    &rlen, &has_reply, &ev) != DNET_ENGINE_OK)
+                continue;
+            if (has_reply) {                    /* data ACK or Disconnect Confirm */
+                uint8_t dst[DNET_ADDR_LEN];
+                memcpy(dst, frame, DNET_ADDR_LEN);
+                scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, rlen);
+            }
+            char pbuf[8];
+            uint16_t pn = eng.link.remote_node;
+            switch (ev) {
+            case DNET_LINK_EV_CONNECT_IND:
+                log_ts(stdout);
+                printf(" DECNETD-I-CONNIN, inbound Connect Initiate from %s on"
+                       " circuit %s%s\n", dnet_addr_str(pn, pbuf, sizeof(pbuf)),
+                       eng.circuit, listen_mode ? " -- accepting" : " -- no listener, ignoring");
+                fflush(stdout);
+                if (listen_mode) {
+                    size_t clen = 0;
+                    if (dnet_engine_link_accept(&eng, 0x2002, frame, sizeof(frame),
+                                                &clen, now) == DNET_ENGINE_OK) {
+                        uint8_t dst[DNET_ADDR_LEN];
+                        memcpy(dst, frame, DNET_ADDR_LEN);
+                        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, clen);
+                        log_ts(stdout);
+                        printf(" DECNETD-I-LINKUP, logical link with %s is RUN on"
+                               " circuit %s\n", dnet_addr_str(pn, pbuf, sizeof(pbuf)),
+                               eng.circuit);
+                        fflush(stdout);
+                    }
+                }
+                break;
+            case DNET_LINK_EV_CONNECT_CONF:
+                cl = CL_UP;
+                log_ts(stdout);
+                printf(" DECNETD-I-LINKUP, logical link to %u.%u is RUN on circuit %s\n",
+                       peer_area, peer_node, eng.circuit);
+                fflush(stdout);
+                if (connect_data) {             /* client: send one data segment */
+                    size_t sl = 0;
+                    if (dnet_engine_link_send(&eng, (const uint8_t *)connect_data,
+                                              strlen(connect_data), frame, sizeof(frame),
+                                              &sl, now) == DNET_ENGINE_OK) {
+                        uint8_t dst[DNET_ADDR_LEN];
+                        memcpy(dst, frame, DNET_ADDR_LEN);
+                        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, sl);
+                        cl = CL_SENT;
+                        log_ts(stdout);
+                        printf(" DECNETD-I-DATATX, sent %zu byte(s) on circuit %s\n",
+                               strlen(connect_data), eng.circuit);
+                        fflush(stdout);
+                    }
+                } else {                        /* client: nothing to send, close */
+                    size_t dl = 0;
+                    if (dnet_engine_link_close(&eng, DNET_LINK_REASON_NORMAL, frame,
+                                               sizeof(frame), &dl, now) == DNET_ENGINE_OK) {
+                        uint8_t dst[DNET_ADDR_LEN];
+                        memcpy(dst, frame, DNET_ADDR_LEN);
+                        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, dl);
+                        cl = CL_CLOSING;
+                    }
+                }
+                break;
+            case DNET_LINK_EV_DATA:
+                log_ts(stdout);
+                printf(" DECNETD-I-DATARX, %u byte(s) delivered on circuit %s: \"%.*s\"\n",
+                       (unsigned)eng.rx_datalen, eng.circuit,
+                       (int)eng.rx_datalen, (const char *)eng.rx_data);
+                fflush(stdout);
+                break;
+            case DNET_LINK_EV_ACK:
+                if (cl == CL_SENT) {            /* client: data acked -> disconnect */
+                    size_t dl = 0;
+                    if (dnet_engine_link_close(&eng, DNET_LINK_REASON_NORMAL, frame,
+                                               sizeof(frame), &dl, now) == DNET_ENGINE_OK) {
+                        uint8_t dst[DNET_ADDR_LEN];
+                        memcpy(dst, frame, DNET_ADDR_LEN);
+                        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, dl);
+                        cl = CL_CLOSING;
+                        log_ts(stdout);
+                        printf(" DECNETD-I-DISCONN, data acknowledged -- disconnecting\n");
+                        fflush(stdout);
+                    }
+                }
+                break;
+            case DNET_LINK_EV_DISCONNECT:
+                log_ts(stdout);
+                printf(" DECNETD-I-LINKDOWN, peer disconnected on circuit %s\n", eng.circuit);
+                fflush(stdout);
+                eng.link_active = 0;
+                if (connect_to)                /* the client run is complete */
+                    g_stop = 1;
+                break;
+            case DNET_LINK_EV_DISCONNECT_CONF:
+                log_ts(stdout);
+                printf(" DECNETD-I-LINKDOWN, disconnect confirmed -- link closed on"
+                       " circuit %s\n", eng.circuit);
+                fflush(stdout);
+                eng.link_active = 0;
+                cl = CL_NONE;
+                if (connect_to)                /* the client run is complete */
+                    g_stop = 1;
+                break;
+            default:
+                break;
+            }
+            continue;
+        }
+
         char afrom[8];
         uint8_t from[6];
         enum dnet_adj_state st = DNET_ADJ_DOWN;
@@ -757,9 +983,10 @@ int main(int argc, char **argv)
     printf(" DECNETD-I-STOPPING, shutting down circuit %s\n", eng.circuit);
     dnet_engine_show_adjacent(&eng, stdout);
     printf("DECNETD-I-COUNTERS, hello_sent=%lu hello_recv=%lu frames_recv=%lu"
-           " frames_dropped=%lu adj_up=%lu adj_down=%lu\n",
+           " frames_dropped=%lu adj_up=%lu adj_down=%lu nsp_recv=%lu nsp_dropped=%lu\n",
            eng.hello_sent, eng.hello_recv, eng.frames_recv, eng.frames_dropped,
-           eng.adj_up_events, eng.adj_down_events);
+           eng.adj_up_events, eng.adj_down_events,
+           eng.nsp_frames_recv, eng.nsp_frames_dropped);
     fflush(stdout);
 
     scs_datalink_close(sock);

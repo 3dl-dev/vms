@@ -181,6 +181,22 @@ ssize_t scs_datalink_recv(int fd, uint8_t *buf, size_t buf_len);
  */
 int scs_datalink_set_recv_timeout(int fd, int seconds);
 
+/*
+ * scs_datalink_set_promisc - put the bound interface into promiscuous mode so
+ * the socket receives unicast frames addressed to a MAC the interface does not
+ * own (e.g. an OVMX DECnet address on a shared lab bridge). The faithful
+ * alternative -- programming the NIC's MAC to the DECnet address -- is only
+ * available on an interface OVMX owns; where it does not, the caller filters
+ * inbound frames to its address in software. Best-effort: a caller treats a
+ * -1 return as "unicast rx may be limited", not fatal.
+ *
+ *   Linux:  PACKET_ADD_MEMBERSHIP / PACKET_MR_PROMISC.
+ *   NetBSD: BIOCPROMISC.
+ *
+ * Returns 0 on success, -1 with errno set on failure.
+ */
+int scs_datalink_set_promisc(int fd, const char *ifname);
+
 #ifdef __cplusplus
 }
 #endif

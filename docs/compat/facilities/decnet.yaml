@@ -6,23 +6,28 @@ vms_ref: "DECnet for OpenVMS Networking Manual; DNA Phase IV Routing + NSP specs
 scope_1_0: in
 plan_ref: vms-30e
 summary: >
-  No longer greenfield: src/vmsdecnet now carries real, clean-room Phase IV
-  wire codecs and a routing adjacency engine, several oracle-verified
-  byte-identical against captures committed in docs/decnet-provenance-register.md
-  (lab specimens, rd vms-3be/PR #665). Present: the Ethernet Endnode Hello
-  codec (oracle-verified), the Router Hello codec (spec-derived), the routing
-  adjacency state machine + hello/listen timers, and the NSP transport codec
-  (Connect Initiate oracle-verified; other PDUs self-round-trip). NOT yet
-  wired: a live engine/socket — nothing drives a real logical link, so
-  task-to-task and a working SET HOST do not exist. SET HOST still honestly
-  reports unavailability; NODE"acc"::file filespec syntax parses but nothing
-  downstream acts on it. 1.0 blocker (vms-30e).
-last_reviewed: 2026-08-31
+  No longer greenfield, and no longer codec-only: src/vmsdecnet now carries
+  real clean-room Phase IV codecs AND a live engine (DECNETD.EXE) that moves
+  frames over a real AF_PACKET datalink. Proven on real wires: the Ethernet
+  Endnode Hello codec (oracle-verified) drives adjacency against the REAL lab
+  VAX node 1.1 on the lab-2 br0 (OVMX emits faithful hellos and its engine
+  registers the VAX; tests/lab/tools/decnet_adjacency.sh, capture 2026-09-07),
+  and an NSP LOGICAL LINK completes end-to-end over a real datalink —
+  Connect Initiate/Confirm, a byte-identical data segment + ack, and a clean
+  Disconnect — between two engines (tests/integration/decnet_nsp_live_datalink.sh,
+  veth). Also present: the Router Hello codec (spec-derived) and the routing
+  adjacency state machine. STILL a codec-only / not-wired seam above the link:
+  a real VAX does not yet list OVMX as a reachable endnode (needs the node DB +
+  reachability wiring; parked on wedged lab consoles), task-to-task is only a
+  raw data segment (no $QIO/object DB/FAL), SET HOST is still an honest stub,
+  and NODE"acc"::file syntax parses but nothing downstream acts on it. 1.0
+  blocker (vms-30e).
+last_reviewed: 2026-09-07
 items:
   - {id: decnet$routing-hello, kind: protocol, status: verified, authenticity: real, vms: "Phase IV Ethernet Endnode Hello codec (encode/decode)", evidence: "src/vmsdecnet/routing/dnet_hello.c", verified_against: "docs/decnet-provenance-register.md sec 4.6 specimen #1 (lab capture, rd vms-3be/PR #665) round-tripped byte-identical by tests/vmsdecnet/test_dnet_hello.c", notes: "Pure byte-layout library, no socket/allocation; field-by-field mapped to the committed capture."}
   - {id: decnet$router-hello, kind: protocol, status: implemented, authenticity: real, vms: "Phase IV Ethernet Router Hello codec (encode/decode)", evidence: "src/vmsdecnet/routing/dnet_router_hello.c", notes: "SPEC-DERIVED — no committed router-hello wire specimen exists, so not oracle-anchored; self round-trips in tests/vmsdecnet/test_dnet_router_hello.c (rd vms-0aba)."}
   - {id: decnet$routing-adjacency, kind: feature, status: implemented, authenticity: real, vms: "Phase IV routing adjacency state machine (DOWN/INITIALIZING/UP) + hello cadence / listen timers", evidence: "src/vmsdecnet/routing/dnet_adjacency.c", notes: "Pure clock-injectable SM over the Hello codec; T3=15s oracle-captured (vms-3be), BCT3MULT spec-derived. Tested tests/vmsdecnet/test_dnet_adjacency.c (rd vms-b15)."}
-  - {id: decnet$nsp-transport, kind: protocol, status: partial, authenticity: real, vms: "NSP transport codec — Connect Initiate/Confirm, Data, Ack, teardown PDUs (logical links)", evidence: "src/vmsdecnet/nsp/dnet_nsp.c", notes: "Connect Initiate is oracle-verified byte-identical against docs/decnet-provenance-register.md sec 4.6 specimen #3 (the lab handshake never completed, so the other PDUs are self-round-trip only, no fabricated specimen bytes). Codec only — no live transport engine drives a logical link yet. Tested tests/vmsdecnet/test_dnet_nsp.c (rd vms-6986)."}
-  - {id: decnet$task-to-task, kind: feature, status: absent, authenticity: n/a, vms: "Task-to-task DECnet communication (logical-link $QIO / FAL)", evidence: "docs/design-decnet-ovmx.md", scope_1_0: in, notes: "The codecs exist but the engine boundary has not moved — no socket/AF_PACKET engine binds them into a live link."}
+  - {id: decnet$nsp-transport, kind: protocol, status: implemented, authenticity: real, vms: "NSP transport codec + live logical-link connection service over the datalink", evidence: "src/vmsdecnet/engine/decnetd.c", notes: "The connection FSM (src/vmsdecnet/nsp/dnet_link.c: CI/CC/DATA/ACK/DI/DC + retransmit/give-up) is now DRIVEN OVER A REAL AF_PACKET DATALINK by DECNETD's live loop (--connect/--listen), not only a socketpair: an end-to-end link OPEN -> byte-identical data segment + ack -> clean DISCONNECT is proven over a veth wire in tests/integration/decnet_nsp_live_datalink.sh (rd vms-c23). Oracle scope unchanged: only the Connect Initiate bytes are oracle-verified (register sec 4.6 specimen #3); CC/DATA/ACK/DI/DC are spec-derived and proven by round-trip, no fabricated specimen bytes. Unit: tests/vmsdecnet/test_dnet_nsp.c + test_dnet_link.c (rd vms-6986/vms-c23)."}
+  - {id: decnet$task-to-task, kind: feature, status: partial, authenticity: real, vms: "Task-to-task DECnet communication (logical-link data; $QIO / FAL)", evidence: "src/vmsdecnet/engine/decnetd.c", scope_1_0: in, notes: "A raw application data segment now round-trips byte-identical over a LIVE NSP logical link between two engines on a real datalink (tests/integration/decnet_nsp_live_datalink.sh; the substrate exists). NOT yet built: the VMS $QIO task-to-task API, a named-object/listener database, and FAL file access — those are later rungs (vms-8c2/vms-230)."}
   - {id: decnet$set-host, kind: command, status: stub, authenticity: real, vms: "SET HOST — DECnet remote-node connection", evidence: "src/vmsdcl/dcl_cmd_set.c", notes: "Honestly reports %SET-I-NOTAVAIL, DECnet is not available on this system — a stub, not a facade."}
   - {id: decnet$node-filespec-syntax, kind: feature, status: partial, authenticity: real, vms: "NODE\"acc\"::dev:[dir]file filespec syntax", evidence: "src/vmsrms/rms_parse.c", notes: "Syntax only — sets NAM$M_NODE, parses/reconstructs the node prefix; nothing downstream (no live DECnet transport) acts on it."}

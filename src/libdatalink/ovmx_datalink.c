@@ -241,6 +241,17 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
     return 0;
 }
 
+/* Promiscuous reception is a property of the executive's L2 attach, not a
+ * userspace socket option, in this backend. It is not the DECnet daemon's
+ * datalink (decnetd links the AF_PACKET probe backend), so this path reports an
+ * honest "not supported here" rather than silently claiming success. */
+int scs_datalink_set_promisc(int fd, const char *ifname)
+{
+    (void)fd; (void)ifname;
+    errno = ENOSYS;
+    return -1;
+}
+
 #else  /* !SCS_DATALINK_VIA_EXECUTIVE -- the AF_PACKET PROBE backend */
 
 /* ---- AF_PACKET PROBE backend: a clean-room RE / ORACLE INSTRUMENT ONLY ----
@@ -287,6 +298,28 @@ int scs_datalink_open(const char *ifname, uint16_t ethertype)
 void scs_datalink_close(int fd)
 {
     close(fd);
+}
+
+/*
+ * scs_datalink_set_promisc - put the bound interface into promiscuous mode so
+ * the socket receives UNICAST frames addressed to a MAC the interface does not
+ * own. A faithful DECnet node programs its NIC's MAC to the algorithmic DECnet
+ * address (AA-00-04-00-<LE addr>) and then receives its unicast natively; on a
+ * shared NIC OVMX does not own (a lab bridge shared with other nodes), it
+ * cannot rewrite that MAC, so it goes promiscuous and filters inbound frames to
+ * its DECnet address in software instead. Wire-identical to peers either way --
+ * only local reception differs. Returns 0 on success, -1 (errno set) otherwise.
+ */
+int scs_datalink_set_promisc(int fd, const char *ifname)
+{
+    unsigned ifindex = if_nametoindex(ifname);
+    if (ifindex == 0)
+        return -1;
+    struct packet_mreq mr;
+    memset(&mr, 0, sizeof(mr));
+    mr.mr_ifindex = (int)ifindex;
+    mr.mr_type = PACKET_MR_PROMISC;
+    return setsockopt(fd, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mr, sizeof(mr));
 }
 
 /*
@@ -663,6 +696,16 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
     tv.tv_sec = seconds;
     tv.tv_usec = 0;
     return ioctl(fd, BIOCSRTIMEOUT, &tv);
+}
+
+/* BPF: put the attached interface into promiscuous mode (BIOCPROMISC takes no
+ * argument; the fd is already bound to its interface via BIOCSETIF). Same
+ * rationale as the Linux path -- receive unicast to a DECnet MAC the shared
+ * interface does not own, then filter to our address in software. */
+int scs_datalink_set_promisc(int fd, const char *ifname)
+{
+    (void)ifname;
+    return ioctl(fd, BIOCPROMISC, NULL);
 }
 
 #else

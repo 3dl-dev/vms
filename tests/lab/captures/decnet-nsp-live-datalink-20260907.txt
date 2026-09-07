@@ -1,0 +1,19 @@
+===== server (aa:00:04:00:2b:04, 1.43) =====
+07-Sep-2026 17:53:03 DECNETD-I-STARTED, DECnet Phase IV endnode up on circuit EWA-0 (datalink hidden behind the VMS surface, Rule 1)
+07-Sep-2026 17:53:03 DECNETD-I-LISTEN, awaiting an inbound Connect Initiate (object 0) on circuit EWA-0
+07-Sep-2026 17:53:04 DECNETD-I-CONNIN, inbound Connect Initiate from 1.44 on circuit EWA-0 -- accepting
+07-Sep-2026 17:53:04 DECNETD-I-LINKUP, logical link with 1.44 is RUN on circuit EWA-0
+07-Sep-2026 17:53:04 DECNETD-I-DATARX, 28 byte(s) delivered on circuit EWA-0: "OVMX-NSP-LIVE-DATALINK-PROOF"
+07-Sep-2026 17:53:04 DECNETD-I-LINKDOWN, peer disconnected on circuit EWA-0
+07-Sep-2026 17:53:05 DECNETD-I-STOPPING, shutting down circuit EWA-0
+DECNETD-I-COUNTERS, hello_sent=0 hello_recv=0 frames_recv=0 frames_dropped=0 adj_up=0 adj_down=0 nsp_recv=3 nsp_dropped=0
+===== client (aa:00:04:00:2c:04, 1.44) =====
+07-Sep-2026 17:53:04 DECNETD-I-STARTED, DECnet Phase IV endnode up on circuit EWA-0 (datalink hidden behind the VMS surface, Rule 1)
+07-Sep-2026 17:53:04 DECNETD-I-CONNECTING, Connect Initiate sent to 1.43 (object 42) on circuit EWA-0
+07-Sep-2026 17:53:04 DECNETD-I-LINKUP, logical link to 1.43 is RUN on circuit EWA-0
+07-Sep-2026 17:53:04 DECNETD-I-DATATX, sent 28 byte(s) on circuit EWA-0
+07-Sep-2026 17:53:04 DECNETD-I-DISCONN, data acknowledged -- disconnecting
+07-Sep-2026 17:53:04 DECNETD-I-LINKDOWN, disconnect confirmed -- link closed on circuit EWA-0
+07-Sep-2026 17:53:04 DECNETD-I-STOPPING, shutting down circuit EWA-0
+DECNETD-I-COUNTERS, hello_sent=0 hello_recv=0 frames_recv=0 frames_dropped=0 adj_up=0 adj_down=0 nsp_recv=3 nsp_dropped=0
+PASS: NSP logical link OPEN -> DATA (byte-identical) -> DISCONNECT over a REAL veth datalink

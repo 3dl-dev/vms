@@ -24,8 +24,19 @@
 #   JOINT_MAIN=crtl_rms_test.c IMG=ovmx-cross-alpha-vms \
 #       tools/cross-alpha-vms/joint-e2e/build-joint-image.sh [OUTDIR]
 #
+# JOINT_CRTL_RMS_VENEER=1 (vms-2655, rung 3 of vms-b4f; default 0, so every
+# existing caller/gate is byte-identical) opts DECC$SHR into the rung-2
+# CRTL->RMS stdio veneer (two-pass bootstrap — see the JOINT_CRTL_RMS_VENEER
+# block below) and adds --use LIBVMSRMS$SHR to the final link, so
+# decc$fopen/fwrite/fread/fclose in whatever JOINT_MAIN builds bind to the
+# veneer (ovmx_crtl_* -> real RMS system services) instead of musl-POSIX:
+#
+#   JOINT_MAIN=crtl_rms_test.c JOINT_CRTL_RMS_VENEER=1 IMG=ovmx-cross-alpha-vms \
+#       tools/cross-alpha-vms/joint-e2e/build-joint-image.sh [OUTDIR]
+#
 # OUTDIR (default /tmp/joint-e2e-out) receives: LINK.EXE, LIBOTS_SHR.EXE,
-# 'DECC$SHR.EXE', crt0.obj, joint_main.obj, joint_e2e.exe, and build.log.
+# 'DECC$SHR.EXE', crt0.obj, joint_main.obj, joint_e2e.exe, build.log, and (with
+# JOINT_CRTL_RMS_VENEER=1) 'LIBVMSRMS$SHR.EXE' alongside the other shareables.
 #
 # crt0.s here is a REAL alpha-dec-vms cc1 -mpointer-size=64 compile of the
 # GCC-port's own libgcc/config/vms/vms-ucrt0.c (GPLv3, gcc-14.2.0 — the exact
@@ -72,6 +83,31 @@ for _e in $JOINT_EXTRA; do
     esac
     test -f "$HERE/$_e" || { echo "FAIL: JOINT_EXTRA source '$_e' not found in $HERE" >&2; exit 1; }
 done
+
+# JOINT_CRTL_RMS_VENEER (vms-2655, rung 3 of vms-b4f). Opt-in (default 0, so
+# every existing gate/caller builds byte-identically to before). When set to
+# 1, this recipe builds the port image's DECC$SHR via the SAME two-pass
+# CRTL->RMS stdio-veneer bootstrap rung 2's build-decc-veneer.sh introduced
+# (tools/cross-alpha-vms/decc-veneer/build-decc-veneer.sh -- read that script
+# first, this composes it verbatim into this recipe's producer graph):
+#   pass 1 (bootstrap): DECC$SHR WITHOUT the veneer, used only to build the
+#     producer graph (LIBVMSSYS/PROCESS/LNM/FS/LIBVMS$SHR -> LIBVMSRMS$SHR).
+#   pass 2 (final):     DECC$SHR WITH ALPHA_CRTL_RMS_USE=<pass-1 LIBVMSRMS$SHR>,
+#     so decc$fopen/fwrite/fread/fclose alias to the crtl_rms_stdio.c veneer
+#     (ovmx_crtl_*) instead of musl's own POSIX defs. The final joint_e2e.exe
+#     link then ADDS --use LIBVMSRMS$SHR (the veneer's own cross-image sys$*
+#     imports need a producer at THIS link too, exactly as build-decc-veneer.sh's
+#     step-12 test image does), and LIBVMSRMS$SHR is staged into OUTDIR
+#     alongside DECC$SHR/LIBOTS_SHR (the SYS$SHARE search-path set a bootable
+#     runtime would load all three from). This is a build-ORCHESTRATION
+#     opt-in confined to this recipe -- with the var unset/0, every existing
+#     caller (joint-e2e-alpha-crt0, run-module-gp-activation-alpha.sh's gate/
+#     crtl-rms-gate/mf-gate) gets the SAME single-pass DECC$SHR + --use
+#     DECC$SHR/LIBOTS link as before this change, so those runtime-activation
+#     gates (which need the LLP64 width fix, vms-1fc, before an RMS-routed
+#     fopen is activation-safe on real /dev/vms -- rung 4, vms-f49) are
+#     unaffected.
+JOINT_CRTL_RMS_VENEER=${JOINT_CRTL_RMS_VENEER:-0}
 mkdir -p "$OUT"
 
 # vms-430: the PT_INTERP LINK.EXE bakes into every joint_e2e.exe this script
@@ -111,6 +147,7 @@ docker run --rm \
     -e IMGACT_INTERP_PATH \
     -e JOINT_MAIN \
     -e JOINT_EXTRA \
+    -e JOINT_CRTL_RMS_VENEER \
     "$IMG" bash -c '
 set -euxo pipefail
 OUT=/out
@@ -171,14 +208,53 @@ DET=$(OVMX_DECC_ARCH= OVMX_DECC_DETECT_ONLY=1 \
 [ "$DET" = alpha ] || { echo "FAIL (vms-2a0): auto-detect resolved [$DET], expected alpha" >&2; exit 1; }
 echo "   OK: auto-detect resolves to alpha (container-format-aware, vms-2a0)"
 
-echo "-- building the GENUINE alpha DECC\$SHR (OVMX_DECC_ARCH=alpha, forced) --"
-OVMX_DECC_ARCH=alpha \
-    NM="$PREFIX/bin/alpha-dec-vms-nm" \
-    AR_HOST=ar \
-    ALPHA_CC="$ALPHA_CC" \
-    ALPHA_MUSL_SRC="$MUSL_SRC" \
-    DECC_USE="$WORK/libots/LIBOTS_SHR.EXE" \
-    sh /src/src/vmslink/mk_decc_shr.sh "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
+RMS=""
+JOINT_CRTL_RMS_VENEER=${JOINT_CRTL_RMS_VENEER:-0}
+if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
+    # ---- vms-2655 (rung 3): the two-pass CRTL->RMS veneer bootstrap, composed
+    #      verbatim from tools/cross-alpha-vms/decc-veneer/build-decc-veneer.sh
+    #      (the rung 2 template) into this recipe producer graph. ----
+    MK=/src/src/vmslink
+    OTS="$WORK/libots/LIBOTS_SHR.EXE"
+
+    echo "-- [vms-2655] DECC\$SHR pass 1 (bootstrap, no veneer) --"
+    OVMX_DECC_ARCH=alpha NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \
+        ALPHA_CC="$ALPHA_CC" ALPHA_MUSL_SRC="$MUSL_SRC" DECC_USE="$OTS" \
+        sh "$MK/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC1\$SHR.EXE" "$LIBC" "$LIBGCC"
+    DECC1="$WORK/DECC1\$SHR.EXE"
+
+    echo "-- [vms-2655] the OVMX producer graph (rung 1, unchanged), using DECC1 --"
+    export ALPHA_CC ALPHA_MUSL_SRC="$MUSL_SRC" OVMX_DECC_ARCH=alpha ALPHA_OTS_USE="$OTS"
+    ALPHA_DECC_USE="$DECC1" sh "$MK/mk_vmssys_shr.sh" "$WORK/LINK.EXE" "$WORK/LIBVMSSYS\$SHR.EXE"
+    SYS="$WORK/LIBVMSSYS\$SHR.EXE"
+    sh "$MK/mk_vmsprocess_shr.sh" "$WORK/LINK.EXE" "$WORK/LIBVMSPROCESS\$SHR.EXE" "$DECC1" "$SYS"
+    PROC="$WORK/LIBVMSPROCESS\$SHR.EXE"
+    VMSSYS_SHR="$SYS" sh "$MK/mk_vmslnm_shr.sh" "$WORK/LINK.EXE" "$WORK/LIBVMSLNM\$SHR.EXE" "$DECC1"
+    LNM="$WORK/LIBVMSLNM\$SHR.EXE"
+    ALPHA_SYS_USE="$SYS" sh "$MK/mk_vmsfs_shr.sh" "$WORK/LINK.EXE" "$WORK/LIBVMSFS\$SHR.EXE" "$DECC1" "$LNM"
+    FS="$WORK/LIBVMSFS\$SHR.EXE"
+    sh "$MK/mk_libvms_shr.sh" "$WORK/LINK.EXE" "$WORK/LIBVMS\$SHR.EXE" "$DECC1" "$PROC" "$SYS" "$FS"
+    VMS="$WORK/LIBVMS\$SHR.EXE"
+
+    echo "-- [vms-2655] LIBVMSRMS\$SHR (rung 1, unchanged) --"
+    sh "$MK/mk_vmsrms_shr.sh" "$WORK/LINK.EXE" "$OUT/LIBVMSRMS\$SHR.EXE" "$DECC1" "$VMS" "$FS" "$SYS"
+    RMS="$OUT/LIBVMSRMS\$SHR.EXE"
+
+    echo "-- [vms-2655] DECC\$SHR pass 2 (final, CRTL->RMS stdio veneer wired, vms-ed1e) --"
+    OVMX_DECC_ARCH=alpha NM="$PREFIX/bin/alpha-dec-vms-nm" AR_HOST=ar \
+        ALPHA_CC="$ALPHA_CC" ALPHA_MUSL_SRC="$MUSL_SRC" DECC_USE="$OTS" \
+        ALPHA_CRTL_RMS_USE="$RMS" \
+        sh "$MK/mk_decc_shr.sh" "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
+else
+    echo "-- building the GENUINE alpha DECC\$SHR (OVMX_DECC_ARCH=alpha, forced) --"
+    OVMX_DECC_ARCH=alpha \
+        NM="$PREFIX/bin/alpha-dec-vms-nm" \
+        AR_HOST=ar \
+        ALPHA_CC="$ALPHA_CC" \
+        ALPHA_MUSL_SRC="$MUSL_SRC" \
+        DECC_USE="$WORK/libots/LIBOTS_SHR.EXE" \
+        sh /src/src/vmslink/mk_decc_shr.sh "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$LIBC" "$LIBGCC"
+fi
 
 # ---- 5. the real port crt0 + a hello main, both compiled/assembled fresh
 #         by the REAL alpha-dec-vms cross toolchain (no object blobs checked
@@ -216,11 +292,25 @@ done
 # OTS$DIV_UL/OTS$REM_UI against DECC$SHR alone. LINK binds only REFERENCED
 # imports, so adding --use LIBOTS$ is inert for programs (like this joint_main)
 # that emit no OTS$ call, and closes the gap for those that do.
+#
+# vms-2655 (rung 3): when JOINT_CRTL_RMS_VENEER=1, DECC$SHR (above) is the
+# pass-2 veneer-wired build, whose decc$fopen/fwrite/fread/fclose alias to the
+# crtl_rms_stdio.c veneer (ovmx_crtl_*), which itself references
+# sys$create/open/connect/put/get/close -- cross-image imports that need a
+# producer at THIS link too, exactly like build-decc-veneer.sh step 12s test
+# image. --use LIBVMSRMS$SHR supplies it (RMS is empty/unset otherwise, so
+# this is inert -- no extra --use flag -- when the veneer is not opted in).
+RMS_USE_FLAG=""
+[ -n "$RMS" ] && RMS_USE_FLAG="--use $RMS"
 "$WORK/LINK.EXE" --transfer __main \
-    --use "$WORK/DECC\$SHR.EXE" --use "$WORK/libots/LIBOTS_SHR.EXE" \
+    --use "$WORK/DECC\$SHR.EXE" $RMS_USE_FLAG --use "$WORK/libots/LIBOTS_SHR.EXE" \
     -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj" $EXTRA_OBJS
 
 cp "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$WORK/libots/LIBOTS_SHR.EXE" "$OUT/"
+# vms-2655: LIBVMSRMS$SHR.EXE was already built directly into $OUT (above), so
+# it lands in OUTDIR alongside DECC$SHR.EXE/LIBOTS_SHR.EXE -- the same
+# SYS$SHARE search-path set -- with no extra copy needed when the veneer path
+# built it; a plain (non-veneer) run leaves $RMS empty and stages nothing new.
 echo "== joint-e2e image built (genuine alpha path, vms-864) =="
 ls -la "$OUT/"
 readelf -h "$OUT/joint_e2e.exe" | grep -E "Type|Machine|Entry"

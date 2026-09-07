@@ -89,6 +89,40 @@ executive to sentinel 5 (`$STATUS = C$_EXIT1 + (5-1)*8 = 0x0035A029`). Leaving
 `JOINT_EXTRA` empty builds the N=3 (`joint_main.c`) and N=7 (`crtl_rms_test.c`)
 gates byte-identically to before.
 
+## CRTL->RMS stdio veneer variant (vms-2655, rung 3) — `JOINT_CRTL_RMS_VENEER`
+
+`JOINT_CRTL_RMS_VENEER=1` opts the port image's DECC$SHR into rung 2's
+CRTL->RMS stdio veneer (`tools/cross-alpha-vms/decc-veneer/build-decc-veneer.sh`'s
+two-pass bootstrap, composed into this recipe): pass 1 builds a bootstrap
+DECC$SHR to build the OVMX producer graph through `LIBVMSRMS$SHR`; pass 2
+rebuilds DECC$SHR with `ALPHA_CRTL_RMS_USE=<pass-1 LIBVMSRMS$SHR>`, so
+`decc$fopen/fwrite/fread/fclose` alias to the `crtl_rms_stdio.c` veneer
+(`ovmx_crtl_*`, real `sys$create/open/connect/put/get/close` against RMS)
+instead of musl's own POSIX defs. The final link adds `--use LIBVMSRMS$SHR`
+(the veneer's own cross-image `sys$*` imports need a producer here too), and
+`LIBVMSRMS$SHR.EXE` is staged into OUTDIR alongside `DECC$SHR.EXE`/
+`LIBOTS_SHR.EXE`:
+
+```sh
+JOINT_MAIN=crtl_rms_test.c JOINT_CRTL_RMS_VENEER=1 IMG=ovmx-cross-alpha-vms \
+    tools/cross-alpha-vms/joint-e2e/build-joint-image.sh [OUTDIR]
+```
+
+Default `JOINT_CRTL_RMS_VENEER=0` (unset), so every existing caller — this
+script's own default invocation, and
+`tools/cross-alpha/run-module-gp-activation-alpha.sh`'s `gate`/`crtl-rms-gate`/
+`mf-gate` modes (which activate on the real executive over qemu-system-alpha)
+— builds byte-identically to before this change. Those real-hardware
+activation gates stay on the plain (non-veneer) DECC$SHR until the LLP64
+width fix (vms-1fc) makes an RMS-routed `fopen` activation-safe on real
+`/dev/vms` (rung 4, vms-f49); `JOINT_CRTL_RMS_VENEER=1` proves the LINK-time
+composition only (toolchain container, no boot) — zero deferred/undef/muldef,
+EM_ALPHA/ET_DYN, and the import-map chain showing the port image's
+`decc$fopen` binds to the pass-2 DECC$SHR producer whose own build log
+recorded both the veneer wiring and `sys$create/open/connect/put/get/close`
+bound to `LIBVMSRMS$SHR` — the un-fakeable proof that fopen resolves to the
+veneer, not musl-POSIX.
+
 ## The activation round-trip (conductor / Alpha path, unchanged from before)
 
 1. IMGACT activates joint_e2e.exe; fills `.vms$imp` (`decc$main`,

@@ -176,9 +176,24 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
         # Control image (main returns 0) -- proves the DCL-RUN fork-path status
         # mapping (0 -> success-class; sentinel 3 -> ABORT-with-3). Optional.
         [ -f "$JOINT/joint_e2e_ok.exe" ] && cp "$JOINT/joint_e2e_ok.exe" "$SYSEXE/JOINT_E2E_OK.EXE" || true
-        cp /repo/tools/cross-alpha/SYSTARTUP_VMS_JOINT_PROOF.COM \
-           "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
-        echo "   JOINT-E2E: joint_e2e.exe -> SYS\$SYSEXE:JOINT_E2E.EXE; DECC\$SHR.EXE + LIBOTS_SHR.EXE -> SYS\$SHARE; proof SYSTARTUP staged"
+        # vms-f49 (rung 4): the CRTL->RMS VENEER path (JOINT_CRTL_RMS_VENEER=1)
+        # additionally emits LIBVMSRMS$SHR.EXE -- the port image's decc$fopen
+        # binds to the veneer whose sys$create/$put imports need this producer in
+        # SYS$SHARE at activation. Its PRESENCE in /work/joint is the signal that
+        # this is a veneer build, so we ALSO stage the un-fakeable independent-
+        # reader SYSTARTUP (DIRECTORY/FULL over the ACP) instead of the plain
+        # joint-proof COM. A non-veneer build leaves it absent -> byte-identical
+        # to before.
+        if [ -f "$JOINT/LIBVMSRMS\$SHR.EXE" ]; then
+            cp "$JOINT/LIBVMSRMS\$SHR.EXE" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMSRMS\$SHR.EXE"
+            cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VENEER_PROOF.COM \
+               "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+            echo "   JOINT-E2E (VENEER): joint_e2e.exe -> SYS\$SYSEXE; DECC\$SHR + LIBOTS_SHR + LIBVMSRMS\$SHR -> SYS\$SHARE; VENEER-proof SYSTARTUP (independent DIRECTORY/FULL reader) staged"
+        else
+            cp /repo/tools/cross-alpha/SYSTARTUP_VMS_JOINT_PROOF.COM \
+               "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+            echo "   JOINT-E2E: joint_e2e.exe -> SYS\$SYSEXE:JOINT_E2E.EXE; DECC\$SHR.EXE + LIBOTS_SHR.EXE -> SYS\$SHARE; proof SYSTARTUP staged"
+        fi
     else
         echo "-- (no /work/joint artifacts -- JOINT-E2E proof NOT staged) --"
     fi
@@ -223,7 +238,13 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # shareables MUST be on the mastered ODS-2 volume (IMGACT reads them over the
     # ACP -- an initramfs copy is invisible to the ACP, the rc=44 gap).
     if [ -f "$SYSEXE/JOINT_E2E.EXE" ]; then
-        for jn in JOINT_E2E.EXE DECC\$SHR.EXE LIBOTS_SHR.EXE; do
+        JOINT_VERIFY="JOINT_E2E.EXE DECC\$SHR.EXE LIBOTS_SHR.EXE"
+        # vms-f49: on the veneer build, LIBVMSRMS$SHR.EXE MUST also be on the
+        # mastered volume -- the port image's veneer sys$create/$put imports are
+        # deferred against it, so an activation without it on SYS$SHARE would fail
+        # over the ACP (the same class as the vms-157 rc=44 initramfs-invisible gap).
+        [ -f "$ST/vms/SYS0/SYSCOMMON/SYSLIB/LIBVMSRMS\$SHR.EXE" ] && JOINT_VERIFY="$JOINT_VERIFY LIBVMSRMS\$SHR.EXE"
+        for jn in $JOINT_VERIFY; do
             grep -qi "$jn" /work/distrib-list.txt \
                 || { echo "FAIL: mastered ODS-2 image missing JOINT-E2E proof file $jn"; exit 1; }
             echo "   OK: ovmx-distrib-alpha.img (ODS-2) carries JOINT-E2E $jn"

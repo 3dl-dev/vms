@@ -63,7 +63,8 @@
 # USAGE:
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh            # gate (default)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh gate        # same, explicit
-#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate # crtl_rms heap+RMS+stdio -> N=7
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate # crtl_rms heap+RMS+stdio -> N=7 (non-veneer control)
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate # vms-f49 rung 4: veneer write + INDEPENDENT ODS-2 File-ID reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
 #
@@ -110,6 +111,12 @@ MILESTONE_MAIN=joint_main.c
 # main. Empty for the N=3 / N=7 single-object gates; the `mf-gate' mode sets it to
 # mf_util.c so the multi-.o cross-boundary program (mf_main.c) is built + activated.
 MILESTONE_EXTRA=""
+# JOINT_CRTL_RMS_VENEER (vms-f49, rung 4 of vms-b4f): default 0, so the gate/
+# crtl-rms-gate/mf-gate modes build byte-identically to before. The
+# `crtl-rms-veneer-gate' mode sets it to 1 so build-joint-image.sh composes the
+# two-pass CRTL->RMS stdio veneer + emits LIBVMSRMS$SHR.EXE, and the port image's
+# decc$fopen binds to sys$create over the ACP instead of musl-POSIX.
+JOINT_CRTL_RMS_VENEER=0
 
 log() { echo "[modgp-activation] $*"; }
 die() { echo "[modgp-activation] FATAL: $*" >&2; exit 1; }
@@ -256,6 +263,76 @@ assert_mf() {
   return 1
 }
 
+# assert_veneer <console-log> -- THE TEETH for the vms-f49 rung-4 un-fakeable
+# CRTL->RMS veneer proof (`crtl-rms-veneer-gate' mode). This is the anti-
+# fabrication payoff (INV-6): it does NOT trust the port image's own console
+# text or its same-process CRTL/RMS read-back (which a ramfs satisfies
+# IDENTICALLY -- that is exactly what the plain crtl-rms N=7 gate can be fooled
+# by). It gates on an INDEPENDENT reader -- DCL DIRECTORY/FULL, a DIFFERENT
+# accessor that runs its OWN sys$parse+sys$search over the Files-11 ACP directory
+# (dcl_cmd_file.c cmd_directory, from_acp) and prints the GENUINE ODS-2 File ID
+# (num,seq,rvn) the on-disk directory returned. A POSIX/ramfs write cannot appear
+# in the ACP directory at all (it draws %DIRECT-W-NOFILES, NO File ID line), so a
+# PORTTEST.DAT;1 File-ID line here is proof the veneer's fopen genuinely landed
+# the file on the real ODS-2 volume. Pass iff:
+#   (a) the veneer write completed  -- crtl_rms port-test OK + executive N=7 seam;
+#   (b) THE TEETH: the INDEPENDENT DIRECTORY/FULL reader region shows
+#       PORTTEST.DAT;1 with a NONZERO ODS-2 File ID and NO %DIRECT-W-NOFILES;
+#   (c) no activation-failure %-error.
+# Pure function over the console transcript; shared verbatim by the real BOOT-A
+# run and the can-fail selftest.
+assert_veneer() {
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+
+  # (a) the veneer write ran: crtl_rms heap+RMS+stdio OK line + N=7 seam. With
+  # the veneer, fopen/fwrite/fclose route sys$create/$put over the ACP; a broken
+  # LLP64 width (vms-1fc) would truncate the ioctl pointer, fwrite would short,
+  # and the image would return <7 with no OK line -- so this already needs the
+  # write path to work end to end.
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaE "OVMX CRTL/RMS port test: OK \(heap\+RMS\+stdio\)" "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+
+  # (b) THE TEETH -- confine the check to the INDEPENDENT-reader region so no
+  # stray earlier token can satisfy it. DIRECTORY/FULL prints the name+version
+  # and the genuine File ID on one line ("PORTTEST.DAT;1  File ID:  (14,1,0)"),
+  # ONLY when the entry came from the ACP search (from_acp); a ramfs/POSIX write
+  # never reaches the ACP directory and draws %DIRECT-W-NOFILES instead.
+  local region fid_line fid_num=0 reader_ok=0 nofiles=0
+  region=$(awk '/VENEER-PROOF: === INDEPENDENT READER/{f=1} f{print} /VENEER-PROOF: DIR-STATUS/{f=0}' "$log")
+  printf '%s' "$region" | grep -qaE "%DIRECT-W-NOFILES" && nofiles=1
+  fid_line=$(printf '%s' "$region" | grep -aoE "PORTTEST\.DAT;1[^A-Za-z]*File ID:[[:space:]]*\([0-9]+,[0-9]+,[0-9]+\)" | tail -1)
+  if [ -n "$fid_line" ]; then
+    fid_num=$(printf '%s' "$fid_line" | grep -oE '\([0-9]+' | tr -d '(' | tail -1)
+    [ -n "$fid_num" ] && [ "$fid_num" -gt 0 ] && [ "$nofiles" -eq 0 ] && reader_ok=1
+  fi
+
+  # (c) no activation-failure %-error (a crash before/at main, or an IMGACT-side
+  # error). DIRECTORY's own %DIRECT-W-NOFILES is handled in (b), NOT here.
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+
+  echo "  (a) veneer write (crtl_rms OK + N=7 seam) : port_ok=$port_ok  seam=${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (b) INDEPENDENT ACP reader (DIRECTORY/FULL): ${fid_line:-<no PORTTEST.DAT;1 File-ID line>}"
+  echo "      nofiles=$nofiles  fid=$fid_num  (want a nonzero ODS-2 File ID, ramfs cannot produce this; reader_ok=$reader_ok)"
+  echo "  (c) no activation err                      : ok=$err_ok"
+  [ "$err_ok" -eq 0 ] && echo "      offending: $(printf '%s' "$errs" | tr '\n' '|')"
+
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$reader_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # build_joint_images -- build the N=3 milestone image (joint_main.c -> return 3)
 # and the SS$_NORMAL control (joint_main_ok.c -> return 0) with the SAME merged
@@ -274,14 +351,20 @@ build_joint_images() {
   # rung (`mf-gate' sets MILESTONE_MAIN=mf_main.c MILESTONE_EXTRA=mf_util.c so
   # mf_main.obj calls across the boundary into mf_util.obj). Empty for the N=3 and
   # N=7 gates, so they build byte-identically.
-  log "step 1a: build the milestone image ($MILESTONE_MAIN${MILESTONE_EXTRA:+ + $MILESTONE_EXTRA}, sentinel $WANT_SENTINEL) with the merged toolchain"
-  JOINT_MAIN="$MILESTONE_MAIN" JOINT_EXTRA="${MILESTONE_EXTRA:-}" IMG="$VMS_IMG" bash "$bji" "$out_n3" \
+  # vms-f49: both the milestone AND the control build with the SAME veneer flag so
+  # both link against the identical staged DECC$SHR (+ LIBVMSRMS$SHR) symbol vector
+  # -- a veneer milestone with a non-veneer control would stage one DECC$SHR but
+  # link the other image against a different one. Default 0 keeps every other mode
+  # byte-identical.
+  log "step 1a: build the milestone image ($MILESTONE_MAIN${MILESTONE_EXTRA:+ + $MILESTONE_EXTRA}, sentinel $WANT_SENTINEL${JOINT_CRTL_RMS_VENEER:+ veneer=$JOINT_CRTL_RMS_VENEER}) with the merged toolchain"
+  JOINT_MAIN="$MILESTONE_MAIN" JOINT_EXTRA="${MILESTONE_EXTRA:-}" \
+    JOINT_CRTL_RMS_VENEER="$JOINT_CRTL_RMS_VENEER" IMG="$VMS_IMG" bash "$bji" "$out_n3" \
     || die "build-joint-image.sh (milestone $MILESTONE_MAIN) failed -- see $out_n3/build.log"
   grep -q 'LINK-S-CREATED' "$out_n3/build.log" \
     || die "milestone image did not link (no %LINK-S-CREATED) -- see $out_n3/build.log"
 
   log "step 1b: build the SS\$_NORMAL control image (joint_main_ok.c, return 0) with the merged toolchain"
-  JOINT_MAIN=joint_main_ok.c IMG="$VMS_IMG" bash "$bji" "$out_ok" \
+  JOINT_MAIN=joint_main_ok.c JOINT_CRTL_RMS_VENEER="$JOINT_CRTL_RMS_VENEER" IMG="$VMS_IMG" bash "$bji" "$out_ok" \
     || die "build-joint-image.sh (control) failed -- see $out_ok/build.log"
   grep -q 'LINK-S-CREATED' "$out_ok/build.log" \
     || die "control image did not link (no %LINK-S-CREATED) -- see $out_ok/build.log"
@@ -296,7 +379,18 @@ build_joint_images() {
   for f in "joint_e2e.exe" "joint_e2e_ok.exe" "DECC\$SHR.EXE" "LIBOTS_SHR.EXE"; do
     [ -s "$WORK/joint/$f" ] || die "joint artifact $WORK/joint/$f missing/empty after build"
   done
-  log "step 1: joint images staged into $WORK/joint (milestone N=3 + SS\$_NORMAL control + producers)"
+  # vms-f49: on a veneer build, stage LIBVMSRMS$SHR.EXE too -- build-joint-image.sh
+  # emits it into $out_n3 whenever JOINT_CRTL_RMS_VENEER=1. Its presence in
+  # $WORK/joint is exactly the signal build-alpha-bootimage.sh keys on to stage the
+  # producer into SYS$SHARE + swap in the VENEER-proof SYSTARTUP.
+  if [ "$JOINT_CRTL_RMS_VENEER" = 1 ]; then
+    [ -s "$out_n3/LIBVMSRMS\$SHR.EXE" ] \
+      || die "veneer build produced no LIBVMSRMS\$SHR.EXE in $out_n3 (JOINT_CRTL_RMS_VENEER=1 expected it)"
+    cp "$out_n3/LIBVMSRMS\$SHR.EXE" "$WORK/joint/LIBVMSRMS\$SHR.EXE"
+    log "step 1: joint images staged into $WORK/joint (VENEER milestone N=$WANT_SENTINEL + control + DECC\$SHR/LIBOTS/LIBVMSRMS\$SHR producers)"
+  else
+    log "step 1: joint images staged into $WORK/joint (milestone N=$WANT_SENTINEL + SS\$_NORMAL control + producers)"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -589,7 +683,130 @@ EOF
     grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (none captured)"
     exit 1
     ;;
+  crtl-rms-veneer-gate)
+    # vms-f49 (rung 4 of vms-b4f): the un-fakeable CRTL->RMS veneer proof. Same
+    # crtl_rms milestone image (heap+RMS+stdio, sentinel 7) as `crtl-rms-gate',
+    # but built with the CRTL->RMS stdio VENEER wired in (JOINT_CRTL_RMS_VENEER=1)
+    # so its decc$fopen/fwrite/fclose bind to sys$create/$put over the Files-11
+    # ACP (-> LIBVMSRMS$SHR -> ioctl(/dev/vms)) instead of musl-POSIX. The proof
+    # is NOT the port image's own console/CRTL read-back (a ramfs satisfies that
+    # identically -- exactly what `crtl-rms-gate' cannot distinguish); it is an
+    # INDEPENDENT reader (DCL DIRECTORY/FULL, a different accessor over the ACP)
+    # asserting PORTTEST.DAT;1 exists on the ODS-2 volume with a genuine File ID.
+    # This is what VALIDATES the vms-1fc LLP64 width fix at runtime: a truncated
+    # ioctl pointer makes the veneer write reach nothing, and the independent
+    # reader draws %DIRECT-W-NOFILES -> the gate reds.
+    MILESTONE_MAIN=crtl_rms_test.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+
+    # Prove assert_veneer has teeth before trusting a green boot. The key case is
+    # the NEGATIVE/REJECTION one (2/6): a same-CRTL success (port-test OK + N=7
+    # seam) that a ramfs satisfies IDENTICALLY must FAIL when the INDEPENDENT
+    # DIRECTORY reader shows %DIRECT-W-NOFILES -- proving the reader, not the
+    # console/CRTL state, is what gates. A gate that cannot fail certifies nothing.
+    _st=$(mktemp -d); _fails=0
+    cat > "$_st/pass.log" <<'EOF'
+OVMX CRTL/RMS port test: wrote+read 8192 bytes via 'PORTTEST.DAT', pattern verified
+OVMX CRTL/RMS port test: OK (heap+RMS+stdio) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039
+VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL PORTTEST.DAT (a DIFFERENT accessor over the ACP) ===
+
+Directory DKA0:[SYSMGR]
+
+PORTTEST.DAT;1                 File ID:  (14,1,0)
+Size:            16/16          Owner:    [001,004]
+
+Total of 1 file.
+VENEER-PROOF: DIR-STATUS=%X00000001 SEVERITY=1
+EOF
+    # NEGATIVE: same-CRTL success but the file landed on ramfs -> the independent
+    # ACP reader finds nothing. MUST FAIL.
+    cat > "$_st/ramfs.log" <<'EOF'
+OVMX CRTL/RMS port test: wrote+read 8192 bytes via 'PORTTEST.DAT', pattern verified
+OVMX CRTL/RMS port test: OK (heap+RMS+stdio) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039
+VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL PORTTEST.DAT (a DIFFERENT accessor over the ACP) ===
+%DIRECT-W-NOFILES, no files found
+VENEER-PROOF: DIR-STATUS=%X00018292 SEVERITY=0
+EOF
+    # NO File ID line (a from_acp=0 / passthrough-style entry with no ODS-2 File
+    # ID) -> MUST FAIL: the File ID is the un-fakeable token.
+    cat > "$_st/nofid.log" <<'EOF'
+OVMX CRTL/RMS port test: OK (heap+RMS+stdio) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039
+VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL PORTTEST.DAT (a DIFFERENT accessor over the ACP) ===
+PORTTEST.DAT;1
+VENEER-PROOF: DIR-STATUS=%X00000001 SEVERITY=1
+EOF
+    # ZERO File ID -> MUST FAIL (a genuine ODS-2 create never mints fid 0).
+    cat > "$_st/zerofid.log" <<'EOF'
+OVMX CRTL/RMS port test: OK (heap+RMS+stdio) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039
+VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL PORTTEST.DAT (a DIFFERENT accessor over the ACP) ===
+PORTTEST.DAT;1                 File ID:  (0,0,0)
+VENEER-PROOF: DIR-STATUS=%X00000001 SEVERITY=1
+EOF
+    # WRONG SENTINEL (N=3, not 7) -> MUST FAIL.
+    cat > "$_st/wrong.log" <<'EOF'
+OVMX CRTL/RMS port test: OK (heap+RMS+stdio) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019
+VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL PORTTEST.DAT (a DIFFERENT accessor over the ACP) ===
+PORTTEST.DAT;1                 File ID:  (14,1,0)
+VENEER-PROOF: DIR-STATUS=%X00000001 SEVERITY=1
+EOF
+    # ACTIVATION CRASH (no port line + ACCVIO) -> MUST FAIL.
+    cat > "$_st/crash.log" <<'EOF'
+%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)
+JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4
+EOF
+    echo "-- veneer selftest 1/6: clean veneer write + independent File-ID reader must PASS --"
+    if assert_veneer "$_st/pass.log"    >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- veneer selftest 2/6: same-CRTL success but ramfs (%DIRECT-W-NOFILES) must FAIL --"
+    if assert_veneer "$_st/ramfs.log"   >/dev/null 2>&1; then echo "  FAIL: ramfs round-trip accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 3/6: PORTTEST.DAT;1 with NO File ID line must FAIL --"
+    if assert_veneer "$_st/nofid.log"   >/dev/null 2>&1; then echo "  FAIL: missing File ID accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 4/6: zero File ID (0,0,0) must FAIL --"
+    if assert_veneer "$_st/zerofid.log" >/dev/null 2>&1; then echo "  FAIL: zero File ID accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 5/6: wrong sentinel (N=3 not 7) must FAIL --"
+    if assert_veneer "$_st/wrong.log"   >/dev/null 2>&1; then echo "  FAIL: wrong sentinel accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 6/6: activation crash (no port line + ACCVIO) must FAIL --"
+    if assert_veneer "$_st/crash.log"   >/dev/null 2>&1; then echo "  FAIL: crash accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "veneer selftest failed -- assert_veneer cannot be trusted; aborting before the boot"
+    echo ""
+
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- activate the VENEER crtl_rms image + run the INDEPENDENT DIRECTORY reader on the REAL executive"
+    run_boot_a
+    echo ""
+    echo "========================================================================"
+    echo "== vms-f49 rung 4: CRTL->RMS veneer -> real ODS-2 landing, PROVEN by an"
+    echo "== INDEPENDENT ACP reader (DIRECTORY/FULL File ID) on the real OVMX/Alpha"
+    echo "== executive (qemu-system-alpha + /dev/vms). Validates the vms-1fc width fix."
+    echo "========================================================================"
+    grep -aE "VENEER-PROOF:|OVMX CRTL/RMS|OVMX-SEAM:|PORTTEST\.DAT|File ID:|%DIRECT|%IMGACT|%DCL-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    echo "------------------------------------------------------------------------"
+    if assert_veneer "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the veneer-wired port image's decc\$fopen genuinely landed PORTTEST.DAT on"
+      echo "      the real Files-11 ODS-2 volume over the ACP -- an INDEPENDENT reader"
+      echo "      (DIRECTORY/FULL, a different accessor than the writer's CRTL/RMS handle)"
+      echo "      returned a genuine ODS-2 File ID that a ramfs write cannot produce. The"
+      echo "      vms-1fc LLP64 width fix holds at runtime: the ioctl pointer was NOT truncated."
+      exit 0
+    fi
+    echo ""
+    echo "FAIL: the veneer write did NOT land on the real ODS-2 volume (the independent ACP"
+    echo "      reader saw no genuine File ID). If PORTTEST.DAT;1 is absent (%DIRECT-W-NOFILES)"
+    echo "      while the port image reported same-CRTL success, that is the vms-1fc truncated-"
+    echo "      pointer symptom (Part A) -- the veneer ioctl(/dev/vms) landed on a bad address."
+    echo "      Full log: $WORK/modgpA.log"
+    grep -aE "VENEER-PROOF:|%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|%DIRECT|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -25 || echo "  (none captured)"
+    exit 1
+    ;;
   *)
-    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | mf-gate | selftest)"
+    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | crtl-rms-veneer-gate | mf-gate | selftest)"
     ;;
 esac

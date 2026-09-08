@@ -594,6 +594,20 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'State' "SHOW SYSTEM [vms-f62]: no fabricated State column (executive holds no VMS scheduler state -- permanent honest omission)"
     negctl     "$SEG" 'SHOW SYSTEM' "SHOW SYSTEM"
 
+    # --- SHOW STATUS labels the resident page count correctly (vms-3c2) ------
+    # Earlier code put info.pages (JPI$_PPGCNT, the RESIDENT page count) under
+    # the label "Cur. ws." -- but real VMS's "Cur. ws." is the working-set
+    # SIZE (JPI$_WSSIZE), a DISTINCT quantity (docs/oracle/vax73-show-status.md).
+    # A real number under the WRONG label is worse than an honest omission
+    # (INV-6, anti-LARP finding 2026-09-07): OVMX has no JPI$_WSSIZE-equivalent
+    # source, so "Cur. ws." must be absent, not mislabeled, and the resident
+    # count belongs under its real field name, "Phys. Mem.".
+    run_cmd 'SHOW STATUS'
+    must_have     "$SEG" 'Elapsed CPU' "SHOW STATUS [vms-3c2]: header shows real Elapsed CPU"
+    must_match    "$SEG" 'Phys\. Mem\.[[:space:]]*:[[:space:]]*[0-9]+' "SHOW STATUS [vms-3c2]: the resident page count (JPI\$_PPGCNT) is labeled 'Phys. Mem.', its real VMS field name"
+    must_not_have "$SEG" 'Cur. ws.' "SHOW STATUS [vms-3c2]: does NOT print 'Cur. ws.' -- OVMX has no working-set-SIZE source (JPI\$_WSSIZE), so the field is honestly omitted rather than mislabeled"
+    negctl        "$SEG" 'SHOW STATUS' "SHOW STATUS"
+
     # --- F$PID reads the SAME executive process table as SHOW SYSTEM (vms-050) --
     # F$PID used to snapshot Linux /proc (opendir("/proc"), every numeric entry a
     # "PID" printed %08X; getpid() on failure) -- the Linux task pids dressed as

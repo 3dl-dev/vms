@@ -32,12 +32,18 @@
  * vms-3be lab capture + OVMX's own scsd datalink pattern. No VSI/HPE source.
  */
 #include <errno.h>
+#include <fcntl.h>       /* fcntl() */
 #include <net/if.h>      /* if_nametoindex() */
+#include <poll.h>        /* poll() -- multiplex the datalink + the aux fd */
+#include <pty.h>         /* openpty() -- the CTERM HOST spawns a real PTY */
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>   /* TIOCSWINSZ, TIOCSCTTY */
 #include <sys/socket.h>
+#include <sys/wait.h>    /* waitpid() -- reap the CTERM login child */
+#include <termios.h>     /* raw-mode local terminal (SET HOST client) */
 #include <time.h>
 #include <unistd.h>
 
@@ -528,6 +534,618 @@ done:
     return 0;
 }
 
+/*
+ * ================= LIVE $ SET HOST / CTERM over the wire ==================
+ * The three selftests above prove the CTERM choreography over a socketpair with
+ * SCRIPTED payloads. The two modes below carry a REAL interactive session over
+ * the LIVE NSP logical link: a genuine PTY + a real login-command on the HOST
+ * side, real stdin/stdout on the TERMINAL (client) side. NOTHING is canned --
+ * every screen byte is the spawned program's real output and every keystroke is
+ * real local input; every CTERM/NSP wire field is read from session/FSM state,
+ * never copied frame-to-frame (INV-6, executive-backed-not-wire-plumbing). The
+ * loops poll() BOTH the datalink AND the aux fd (stdin / pty master) on a ~1 s
+ * timeout so the HELLO cadence + link tick keep firing.
+ */
+
+/* Emit the periodic engine traffic (HELLO on the T3 cadence, adjacency aging,
+ * and the active link's Connect-Initiate retransmit) -- the same cadence the
+ * routing loop runs, so a live SET HOST node stays a well-behaved Phase IV
+ * endnode while the terminal session is up. */
+static void dnet_periodic(struct dnet_engine *eng, int sock, unsigned ifindex,
+                          dnet_tick_t now)
+{
+    if (dnet_engine_hello_due(eng, now)) {
+        uint8_t frame[DNET_FRAME_MAX];
+        size_t flen = 0;
+        if (dnet_engine_build_hello_frame(eng, frame, sizeof(frame), &flen)
+                == DNET_ENGINE_OK &&
+            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
+                              DNET_HELLO_MCAST, frame, flen) >= 0)
+            dnet_engine_hello_emitted(eng, now);
+    }
+    dnet_engine_tick(eng, now);
+    if (eng->link_active) {
+        uint8_t frame[DNET_FRAME_MAX];
+        size_t tlen = 0;
+        int thas = 0;
+        if (dnet_engine_link_tick(eng, now, frame, sizeof(frame), &tlen, &thas)
+                == DNET_ENGINE_OK && thas) {
+            uint8_t dst[DNET_ADDR_LEN];
+            memcpy(dst, frame, DNET_ADDR_LEN);
+            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, tlen);
+        }
+    }
+}
+
+/* Ship one CTERM PDU as an NSP data segment on the live link: the FSM builds the
+ * data frame (its own sequence/addressing, executive-backed), then it goes out
+ * to the peer's DECnet id (frame[0..5], the routing dst the FSM wrote). Returns
+ * 0 or -1. */
+static int cterm_link_send(struct dnet_engine *eng, int sock, unsigned ifindex,
+                           const uint8_t *pdu, size_t plen, dnet_tick_t now)
+{
+    uint8_t frame[DNET_FRAME_MAX];
+    size_t flen = 0;
+    if (dnet_engine_link_send(eng, pdu, plen, frame, sizeof(frame), &flen, now)
+            != DNET_ENGINE_OK)
+        return -1;
+    uint8_t dst[DNET_ADDR_LEN];
+    memcpy(dst, frame, DNET_ADDR_LEN);
+    return scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, flen)
+               < 0 ? -1 : 0;
+}
+
+/* Receive one frame and route it: an NSP long-data frame addressed to us drives
+ * the logical-link FSM (auto-replies -- data ack / Disconnect Confirm -- are sent
+ * here), and its higher-layer event is returned (>=0). A HELLO / adjacency frame
+ * is consumed so the peer's HELLOs are honoured, returning DNET_LINK_EV_NONE. An
+ * own-echo or a frame addressed elsewhere returns NONE. Returns -1 on a hard recv
+ * error (caller should stop). On DNET_LINK_EV_DATA the payload is in
+ * eng->rx_data / eng->rx_datalen. */
+static int dnet_recv_route(struct dnet_engine *eng, int sock, unsigned ifindex,
+                           dnet_tick_t now, uint8_t *rxbuf, size_t rxcap)
+{
+    ssize_t n = scs_datalink_recv(sock, rxbuf, rxcap);
+    if (n < 0) {
+        if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+            return DNET_LINK_EV_NONE;
+        return -1;
+    }
+    if ((size_t)n >= DNET_ETH_HDRLEN &&
+        memcmp(rxbuf + 6, eng->my_id, DNET_ADDR_LEN) == 0)
+        return DNET_LINK_EV_NONE;   /* our own transmitted frame */
+
+    int is_nsp = ((size_t)n > (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX) &&
+                 rxbuf[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX] == DNET_RFLAG_LONG_DATA;
+    if (is_nsp) {
+        if (memcmp(rxbuf, eng->my_id, DNET_ADDR_LEN) != 0)
+            return DNET_LINK_EV_NONE;   /* unicast for another node */
+        uint8_t frame[DNET_FRAME_MAX];
+        size_t rlen = 0;
+        int has_reply = 0;
+        enum dnet_link_event ev = DNET_LINK_EV_NONE;
+        if (dnet_engine_link_rx(eng, now, rxbuf, (size_t)n, frame, sizeof(frame),
+                                &rlen, &has_reply, &ev) != DNET_ENGINE_OK)
+            return DNET_LINK_EV_NONE;
+        if (has_reply) {
+            uint8_t dst[DNET_ADDR_LEN];
+            memcpy(dst, frame, DNET_ADDR_LEN);
+            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, rlen);
+        }
+        return (int)ev;
+    }
+
+    uint8_t from[DNET_ADDR_LEN];
+    enum dnet_adj_state st = DNET_ADJ_DOWN;
+    dnet_engine_rx_frame(eng, now, rxbuf, (size_t)n, from, &st);
+    return DNET_LINK_EV_NONE;
+}
+
+/* --- SET HOST client: local terminal in raw mode, save/restore on exit ----- */
+static struct termios g_saved_tio;
+static int g_tio_saved = 0;
+static void restore_local_tty(void)
+{
+    if (g_tio_saved) {
+        tcsetattr(STDIN_FILENO, TCSANOW, &g_saved_tio);
+        g_tio_saved = 0;
+    }
+}
+
+/*
+ * --set-host AREA.NODE : the CTERM TERMINAL (the $ SET HOST client). Opens the
+ * logical link to the peer's CTERM object (42), binds a terminal session,
+ * negotiates characteristics, then bridges the LOCAL terminal to the remote
+ * session -- real stdin keystrokes -> CTERM Read Data, remote CTERM Write ->
+ * real stdout -- until the host unbinds, the link drops, or the run ends. It
+ * poll()s stdin AND the datalink so the HELLO cadence + link tick keep firing.
+ */
+static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
+                             const char *peer_s, const char *user)
+{
+    unsigned parea = 0, pnode = 0;
+    if (parse_addr(peer_s, &parea, &pnode) != 0) {
+        fprintf(stderr, "DECNETD-E-BADPEER, --set-host wants AREA.NODE"
+                        " (1..63 . 1..1023)\n");
+        return 1;
+    }
+    struct dnet_cterm_session term;
+    if (dnet_cterm_session_init(&term, DNET_CTERM_ROLE_TERMINAL) != 0) {
+        fprintf(stderr, "DECNETD-E-CTERMINIT, terminal session init failed\n");
+        return 1;
+    }
+    /* The access-control username is the explicit --user (VMS SET HOST/USERNAME=
+     * analog), defaulting to SYSTEM (the vms-3be capture observed SYSTEM in the
+     * connect message). It is never read from the process environment -- see the
+     * vms-cb5 identity-environment census. */
+    if (!user || !*user)
+        user = "SYSTEM";
+    uint8_t sc[128];
+    size_t sclen = 0;
+    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, user, "", "",
+                                    sc, sizeof(sc), &sclen) != 0) {
+        fprintf(stderr, "DECNETD-E-SCBUILD, CTERM connect-data build failed\n");
+        return 1;
+    }
+
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], cpdu[DNET_CTERM_MAX_PDU];
+    size_t flen = 0, clen = 0;
+    dnet_tick_t now = monotonic_sec();
+    if (dnet_engine_link_open(eng, parea, pnode, 0x2001, sc, sclen, 1459, 1,
+                              DNET_NSP_VER_41, frame, sizeof(frame), &flen, now)
+            != DNET_ENGINE_OK) {
+        fprintf(stderr, "DECNETD-E-NOCONNECT, could not open a logical link"
+                        " to %u.%u\n", parea, pnode);
+        return 1;
+    }
+    {
+        uint8_t dst[DNET_ADDR_LEN];
+        dnet_id_from_addr(parea, pnode, dst);
+        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, flen);
+    }
+    log_ts(stdout);
+    printf(" DECNETD-I-SETHOST, $ SET HOST %u.%u -- Connect Initiate sent to"
+           " CTERM object %d on circuit %s\n",
+           parea, pnode, DNET_CTERM_OBJECT, eng->circuit);
+    fflush(stdout);
+
+    int raw_on = 0, stdin_eof = 0, done = 0, rc = 0;
+
+    while (!g_stop && !done) {
+        now = monotonic_sec();
+        dnet_periodic(eng, sock, ifindex, now);
+
+        /* Connect-Initiate give-up: the FSM closed the link before we ever
+         * bound -- the peer never answered. Report honestly and stop. */
+        if (eng->link_active &&
+            dnet_link_state_of(&eng->link) == DNET_LINK_CLOSED &&
+            dnet_cterm_state_of(&term) == DNET_CTERM_S_CLOSED) {
+            log_ts(stdout);
+            printf(" DECNETD-W-UNREACH, peer %u.%u did not answer -- SET HOST"
+                   " abandoned\n", parea, pnode);
+            fflush(stdout);
+            eng->link_active = 0;
+            rc = 1;
+            break;
+        }
+
+        struct pollfd pfd[2];
+        int nfd = 0;
+        pfd[nfd].fd = sock;          pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
+        if (dnet_cterm_is_bound(&term) && !stdin_eof) {
+            pfd[nfd].fd = STDIN_FILENO; pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
+        }
+        int pr = poll(pfd, (nfds_t)nfd, 1000);
+        if (pr < 0) {
+            if (errno == EINTR)
+                continue;
+            fprintf(stderr, "DECNETD-E-POLL, poll failed: %s\n", strerror(errno));
+            rc = 1;
+            break;
+        }
+        if (pr == 0)
+            continue;
+
+        if (pfd[0].revents & POLLIN) {
+            int ev = dnet_recv_route(eng, sock, ifindex, now, rxbuf, sizeof(rxbuf));
+            if (ev < 0) {
+                fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n",
+                        strerror(errno));
+                rc = 1;
+                break;
+            }
+            switch (ev) {
+            case DNET_LINK_EV_CONNECT_CONF:
+                log_ts(stdout);
+                printf(" DECNETD-I-LINKUP, logical link to %u.%u is RUN --"
+                       " sending CTERM Bind\n", parea, pnode);
+                fflush(stdout);
+                if (dnet_cterm_bind(&term, "OVMX$RTA1:", cpdu, sizeof(cpdu), &clen) != 0 ||
+                    cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0) {
+                    fprintf(stderr, "DECNETD-E-BIND, could not send CTERM Bind\n");
+                    rc = 1; done = 1;
+                }
+                break;
+            case DNET_LINK_EV_DATA: {
+                enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
+                if (dnet_cterm_rx(&term, eng->rx_data, eng->rx_datalen, &cev)
+                        != DNET_CTERM_OK)
+                    break;
+                if (cev == DNET_CTERM_EV_BOUND) {
+                    log_ts(stdout);
+                    printf(" DECNETD-I-BOUND, CTERM terminal session bound on"
+                           " circuit %s -- terminal is live\n", eng->circuit);
+                    fflush(stdout);
+                    /* Advertise our characteristics (VT100-class, 80x24). */
+                    if (dnet_cterm_send_characteristics(&term, 4, 80, 24,
+                            DNET_CTERM_CH_ECHO | DNET_CTERM_CH_WRAP,
+                            cpdu, sizeof(cpdu), &clen) == 0)
+                        cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
+                    /* Put the LOCAL terminal into raw mode (save first). On a
+                     * pipe/redirect (no tty) this is a no-op -- the byte pump
+                     * still works. */
+                    if (isatty(STDIN_FILENO) &&
+                        tcgetattr(STDIN_FILENO, &g_saved_tio) == 0) {
+                        struct termios raw = g_saved_tio;
+                        cfmakeraw(&raw);
+                        if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0) {
+                            g_tio_saved = 1;
+                            raw_on = 1;
+                        }
+                    }
+                } else if (cev == DNET_CTERM_EV_WRITE) {
+                    if (term.last.datalen) {
+                        ssize_t w = write(STDOUT_FILENO, term.last.data,
+                                          term.last.datalen);
+                        (void)w;
+                    }
+                } else if (cev == DNET_CTERM_EV_UNBOUND) {
+                    log_ts(stdout);
+                    printf(" DECNETD-I-UNBOUND, host released the terminal"
+                           " session on circuit %s\n", eng->circuit);
+                    fflush(stdout);
+                    done = 1;
+                }
+                break;
+            }
+            case DNET_LINK_EV_DISCONNECT:
+            case DNET_LINK_EV_DISCONNECT_CONF:
+                log_ts(stdout);
+                printf(" DECNETD-I-LINKDOWN, logical link closed on circuit %s\n",
+                       eng->circuit);
+                fflush(stdout);
+                eng->link_active = 0;
+                done = 1;
+                break;
+            default:
+                break;
+            }
+        }
+
+        if (nfd > 1 && (pfd[1].revents & (POLLIN | POLLHUP))) {
+            uint8_t inbuf[DNET_CTERM_MAX_DATA];
+            ssize_t rn = read(STDIN_FILENO, inbuf, sizeof(inbuf));
+            if (rn > 0) {
+                /* Real keystrokes -> CTERM Read Data (terminator CR). */
+                if (dnet_cterm_read_data(&term, inbuf, (size_t)rn, 0x0d,
+                                         cpdu, sizeof(cpdu), &clen) == 0)
+                    cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
+            } else {
+                /* Local EOF: stop soliciting input but KEEP the link open so the
+                 * host's remaining output drains. The session ends on the host's
+                 * Unbind, a link drop, or --duration. */
+                stdin_eof = 1;
+                log_ts(stdout);
+                printf(" DECNETD-I-EOF, local input closed -- draining remote"
+                       " output on circuit %s\n", eng->circuit);
+                fflush(stdout);
+            }
+        }
+    }
+
+    if (raw_on)
+        restore_local_tty();
+
+    /* On our way out, release the session + link cleanly if still up. */
+    if (dnet_cterm_is_bound(&term)) {
+        if (dnet_cterm_unbind(&term, DNET_CTERM_UNBIND_NORMAL,
+                              cpdu, sizeof(cpdu), &clen) == 0)
+            cterm_link_send(eng, sock, ifindex, cpdu, clen, monotonic_sec());
+    }
+    if (eng->link_active &&
+        dnet_link_state_of(&eng->link) != DNET_LINK_CLOSED) {
+        size_t dl = 0;
+        if (dnet_engine_link_close(eng, DNET_LINK_REASON_NORMAL, frame,
+                                   sizeof(frame), &dl, monotonic_sec())
+                == DNET_ENGINE_OK) {
+            uint8_t dst[DNET_ADDR_LEN];
+            memcpy(dst, frame, DNET_ADDR_LEN);
+            scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, dl);
+        }
+    }
+    log_ts(stdout);
+    printf(" DECNETD-I-SETHOSTEND, SET HOST session ended: cterm writes_recv=%lu"
+           " reads_sent=%lu on circuit %s\n",
+           term.writes_recv, term.reads_sent, eng->circuit);
+    fflush(stdout);
+    return rc;
+}
+
+/* Split a login-command string into an argv (in place; whitespace-separated, no
+ * quoting). Returns the token count. */
+static int tokenize_cmd(char *s, char **argv, int max)
+{
+    int n = 0;
+    char *p = s;
+    while (*p && n < max - 1) {
+        while (*p == ' ' || *p == '\t')
+            p++;
+        if (!*p)
+            break;
+        argv[n++] = p;
+        while (*p && *p != ' ' && *p != '\t')
+            p++;
+        if (*p)
+            *p++ = '\0';
+    }
+    argv[n] = NULL;
+    return n;
+}
+
+/*
+ * --cterm-server : the CTERM HOST. Accepts an inbound logical link to the CTERM
+ * object (42), spawns a REAL PTY + login-command, and bridges the pty to the
+ * CTERM read/write/OOB messages -- real program output -> CTERM Write, inbound
+ * CTERM Read Data -> the pty master. It poll()s the pty master AND the datalink
+ * once the child is up. The login-command defaults to `vmsdcl --login` (the
+ * booted-env target); the hermetic dev-test overrides it with a stand-in
+ * interactive program to prove the PTY<->CTERM pump end-to-end.
+ */
+static int run_cterm_server_loop(struct dnet_engine *eng, int sock,
+                                 unsigned ifindex, const char *login_command)
+{
+    char cmdbuf[512];
+    char *cargv[32];
+    snprintf(cmdbuf, sizeof(cmdbuf), "%s", login_command);
+    if (tokenize_cmd(cmdbuf, cargv, (int)(sizeof(cargv) / sizeof(cargv[0]))) < 1) {
+        fprintf(stderr, "DECNETD-E-NOCMD, --login-command is empty\n");
+        return 1;
+    }
+
+    struct dnet_cterm_session host;
+    if (dnet_cterm_session_init(&host, DNET_CTERM_ROLE_HOST) != 0) {
+        fprintf(stderr, "DECNETD-E-CTERMINIT, host session init failed\n");
+        return 1;
+    }
+
+    log_ts(stdout);
+    printf(" DECNETD-I-CTERMSRV, awaiting an inbound $ SET HOST to CTERM object"
+           " %d on circuit %s (login-command: %s)\n",
+           DNET_CTERM_OBJECT, eng->circuit, login_command);
+    fflush(stdout);
+
+    uint8_t rxbuf[DNET_FRAME_MAX], cpdu[DNET_CTERM_MAX_PDU];
+    size_t clen = 0;
+    int master_fd = -1;
+    pid_t child = -1;
+    int done = 0, rc = 0;
+    uint16_t pty_cols = 80, pty_rows = 24;   /* until CHARACTERISTICS arrive */
+
+    while (!g_stop && !done) {
+        dnet_tick_t now = monotonic_sec();
+        dnet_periodic(eng, sock, ifindex, now);
+
+        /* Only drain the pty once the CTERM session is BOUND: a login-command
+         * prints its first prompt the instant it is spawned (before the client's
+         * Bind arrives), and CTERM Write is a BOUND-only operation. The kernel
+         * pty buffer holds that early output until we are allowed to ship it, so
+         * nothing the program wrote is lost. */
+        int poll_master = (master_fd >= 0 && dnet_cterm_is_bound(&host));
+        struct pollfd pfd[2];
+        int nfd = 0;
+        pfd[nfd].fd = sock; pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
+        if (poll_master) {
+            pfd[nfd].fd = master_fd; pfd[nfd].events = POLLIN; pfd[nfd].revents = 0; nfd++;
+        }
+        int pr = poll(pfd, (nfds_t)nfd, 1000);
+        if (pr < 0) {
+            if (errno == EINTR)
+                continue;
+            fprintf(stderr, "DECNETD-E-POLL, poll failed: %s\n", strerror(errno));
+            rc = 1;
+            break;
+        }
+
+        /* Reap the child if it exited; the pty EOF below finalises the session. */
+        if (child > 0 && waitpid(child, NULL, WNOHANG) == child)
+            child = -1;
+
+        if (pr > 0 && (pfd[0].revents & POLLIN)) {
+            int ev = dnet_recv_route(eng, sock, ifindex, now, rxbuf, sizeof(rxbuf));
+            if (ev < 0) {
+                fprintf(stderr, "DECNETD-E-RECVFAIL, recv failed: %s\n",
+                        strerror(errno));
+                rc = 1;
+                break;
+            }
+            switch (ev) {
+            case DNET_LINK_EV_CONNECT_IND: {
+                char pbuf[8];
+                uint16_t pn = eng->link.remote_node;
+                int obj = dnet_cterm_sc_connect_object(eng->link.conn_data,
+                                                       eng->link.conn_len);
+                log_ts(stdout);
+                printf(" DECNETD-I-CONNIN, inbound Connect Initiate from %s to"
+                       " object %d on circuit %s\n",
+                       dnet_addr_str(pn, pbuf, sizeof(pbuf)), obj, eng->circuit);
+                fflush(stdout);
+                if (obj != DNET_CTERM_OBJECT || master_fd >= 0) {
+                    /* Not the CTERM object (or we already have a session):
+                     * do not accept -- one active link per instance (scope). */
+                    break;
+                }
+                /* Accept the link (CC), then spawn the PTY + login-command. */
+                uint8_t frame[DNET_FRAME_MAX];
+                size_t alen = 0;
+                if (dnet_engine_link_accept(eng, 0x2002, frame, sizeof(frame),
+                                            &alen, now) != DNET_ENGINE_OK)
+                    break;
+                {
+                    uint8_t dst[DNET_ADDR_LEN];
+                    memcpy(dst, frame, DNET_ADDR_LEN);
+                    scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, alen);
+                }
+                struct winsize ws;
+                memset(&ws, 0, sizeof(ws));
+                ws.ws_col = pty_cols;
+                ws.ws_row = pty_rows;
+                int slave_fd = -1;
+                if (openpty(&master_fd, &slave_fd, NULL, NULL, &ws) < 0) {
+                    fprintf(stderr, "DECNETD-E-PTYOPEN, openpty failed: %s\n",
+                            strerror(errno));
+                    master_fd = -1;
+                    break;
+                }
+                child = fork();
+                if (child < 0) {
+                    fprintf(stderr, "DECNETD-E-FORK, fork failed: %s\n",
+                            strerror(errno));
+                    close(master_fd); close(slave_fd);
+                    master_fd = -1;
+                    break;
+                }
+                if (child == 0) {
+                    /* Child: the PTY slave becomes the controlling terminal and
+                     * stdio; then exec the real login-command. */
+                    close(master_fd);
+                    close(sock);
+                    if (setsid() < 0)
+                        _exit(127);
+                    if (ioctl(slave_fd, TIOCSCTTY, 0) < 0) {
+                        /* non-fatal on some kernels */
+                    }
+                    dup2(slave_fd, STDIN_FILENO);
+                    dup2(slave_fd, STDOUT_FILENO);
+                    dup2(slave_fd, STDERR_FILENO);
+                    if (slave_fd > STDERR_FILENO)
+                        close(slave_fd);
+                    execvp(cargv[0], cargv);
+                    _exit(127);   /* exec failed */
+                }
+                /* Parent keeps the master; drop the slave. */
+                close(slave_fd);
+                log_ts(stdout);
+                printf(" DECNETD-I-LINKUP, logical link with %s is RUN --"
+                       " login-command spawned (pid %ld) on circuit %s\n",
+                       dnet_addr_str(pn, pbuf, sizeof(pbuf)),
+                       (long)child, eng->circuit);
+                fflush(stdout);
+                break;
+            }
+            case DNET_LINK_EV_DATA: {
+                enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
+                if (dnet_cterm_rx(&host, eng->rx_data, eng->rx_datalen, &cev)
+                        != DNET_CTERM_OK)
+                    break;
+                if (cev == DNET_CTERM_EV_BIND_IND) {
+                    if (dnet_cterm_bind_accept(&host, "OVMX", cpdu, sizeof(cpdu),
+                                               &clen) == 0)
+                        cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
+                    log_ts(stdout);
+                    printf(" DECNETD-I-BOUND, CTERM session bound (terminal %s)"
+                           " on circuit %s\n", host.peer_name, eng->circuit);
+                    fflush(stdout);
+                } else if (cev == DNET_CTERM_EV_CHARACTERISTICS) {
+                    pty_cols = host.width ? host.width : pty_cols;
+                    pty_rows = host.page ? host.page : pty_rows;
+                    if (master_fd >= 0) {
+                        struct winsize ws;
+                        memset(&ws, 0, sizeof(ws));
+                        ws.ws_col = pty_cols;
+                        ws.ws_row = pty_rows;
+                        ioctl(master_fd, TIOCSWINSZ, &ws);
+                    }
+                } else if (cev == DNET_CTERM_EV_READ_DATA) {
+                    if (master_fd >= 0 && host.last.datalen) {
+                        ssize_t w = write(master_fd, host.last.data,
+                                          host.last.datalen);
+                        (void)w;
+                    }
+                } else if (cev == DNET_CTERM_EV_OOB) {
+                    if (master_fd >= 0) {
+                        uint8_t oc = host.last.oob_char;
+                        ssize_t w = write(master_fd, &oc, 1);
+                        (void)w;
+                    }
+                } else if (cev == DNET_CTERM_EV_UNBOUND) {
+                    done = 1;
+                }
+                break;
+            }
+            case DNET_LINK_EV_DISCONNECT:
+            case DNET_LINK_EV_DISCONNECT_CONF:
+                log_ts(stdout);
+                printf(" DECNETD-I-LINKDOWN, peer disconnected on circuit %s\n",
+                       eng->circuit);
+                fflush(stdout);
+                eng->link_active = 0;
+                done = 1;
+                break;
+            default:
+                break;
+            }
+        }
+
+        /* PTY master readable -> real program output -> CTERM Write. */
+        if (poll_master && nfd > 1 &&
+            (pfd[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+            uint8_t obuf[DNET_CTERM_MAX_DATA];
+            ssize_t on = read(master_fd, obuf, sizeof(obuf));
+            if (on > 0) {
+                if (dnet_cterm_write(&host, obuf, (size_t)on,
+                                     DNET_CTERM_WR_NOFORMAT,
+                                     cpdu, sizeof(cpdu), &clen) == 0)
+                    cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
+            } else {
+                /* pty EOF: the login-command exited. Unbind + tear the link. */
+                log_ts(stdout);
+                printf(" DECNETD-I-CHILDEXIT, login-command exited -- unbinding"
+                       " the terminal session on circuit %s\n", eng->circuit);
+                fflush(stdout);
+                if (dnet_cterm_is_bound(&host) &&
+                    dnet_cterm_unbind(&host, DNET_CTERM_UNBIND_NORMAL,
+                                      cpdu, sizeof(cpdu), &clen) == 0)
+                    cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
+                close(master_fd);
+                master_fd = -1;
+                size_t dl = 0;
+                uint8_t frame[DNET_FRAME_MAX];
+                if (eng->link_active &&
+                    dnet_engine_link_close(eng, DNET_LINK_REASON_NORMAL, frame,
+                                           sizeof(frame), &dl, now) == DNET_ENGINE_OK) {
+                    uint8_t dst[DNET_ADDR_LEN];
+                    memcpy(dst, frame, DNET_ADDR_LEN);
+                    scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE, dst, frame, dl);
+                }
+                done = 1;
+            }
+        }
+    }
+
+    if (master_fd >= 0)
+        close(master_fd);
+    if (child > 0) {
+        kill(child, SIGHUP);
+        waitpid(child, NULL, 0);
+    }
+    log_ts(stdout);
+    printf(" DECNETD-I-CTERMSRVEND, CTERM host session ended: writes_sent=%lu"
+           " reads_recv=%lu on circuit %s\n",
+           host.writes_sent, host.reads_recv, eng->circuit);
+    fflush(stdout);
+    return rc;
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -560,6 +1178,19 @@ static void usage(const char *argv0)
         "                      the link is RUN, then disconnect cleanly\n"
         "  --listen            SERVER: accept an inbound Connect Initiate on the\n"
         "                      live datalink and deliver its data segments\n"
+        "  --set-host A.N      $ SET HOST client: open a CTERM terminal session to\n"
+        "                      A.N's CTERM object over the LIVE datalink and bridge\n"
+        "                      the LOCAL terminal to it (real stdin/stdout; needs\n"
+        "                      CAP_NET_RAW)\n"
+        "  --user NAME         with --set-host: CTERM access-control username\n"
+        "                      (SET HOST/USERNAME= analog; default SYSTEM; never\n"
+        "                      read from $USER -- vms-cb5 identity census)\n"
+        "  --cterm-server      CTERM HOST: accept an inbound $ SET HOST, spawn a\n"
+        "                      real PTY + login-command, and bridge it to the CTERM\n"
+        "                      read/write messages (needs CAP_NET_RAW)\n"
+        "  --login-command CMD with --cterm-server: the interactive program to run\n"
+        "                      as the session (default \"vmsdcl --login\"; the dev\n"
+        "                      bracket overrides it with a stand-in program)\n"
         "  --object N          task/object number (logged; routing is a later rung)\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT);
 }
@@ -581,6 +1212,10 @@ int main(int argc, char **argv)
     const char *connect_data = NULL;   /* --connect-data STR : one data segment */
     int listen_mode = 0;               /* --listen : accept an inbound link     */
     int object_num = 0;                /* --object N : task/object number (log)  */
+    const char *set_host_to = NULL;    /* --set-host A.N : CTERM terminal client */
+    const char *set_host_user = "SYSTEM"; /* --user : CTERM access-control name   */
+    int cterm_server = 0;              /* --cterm-server : CTERM host w/ real PTY */
+    const char *login_command = "vmsdcl --login"; /* --login-command CMD         */
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
@@ -599,6 +1234,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--connect") && i + 1 < argc)      connect_to = argv[++i];
         else if (!strcmp(argv[i], "--connect-data") && i + 1 < argc) connect_data = argv[++i];
         else if (!strcmp(argv[i], "--listen"))                       listen_mode = 1;
+        else if (!strcmp(argv[i], "--set-host") && i + 1 < argc)     set_host_to = argv[++i];
+        else if (!strcmp(argv[i], "--user") && i + 1 < argc)         set_host_user = argv[++i];
+        else if (!strcmp(argv[i], "--cterm-server"))                 cterm_server = 1;
+        else if (!strcmp(argv[i], "--login-command") && i + 1 < argc) login_command = argv[++i];
         else if (!strcmp(argv[i], "--object") && i + 1 < argc)       object_num = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
@@ -715,6 +1354,22 @@ int main(int argc, char **argv)
     dnet_engine_show_executor(&eng, stdout);
     dnet_engine_show_circuit(&eng, stdout);
     fflush(stdout);
+
+    /* --- $ SET HOST / CTERM interactive session over the LIVE datalink -------
+     * (rd vms-aac0 live bracket, child of vms-30e / vms-4d2). These modes carry
+     * a REAL PTY + login-command (host) and real stdin/stdout (client), poll()ing
+     * both the datalink and the aux fd. They own their own loop and do not fall
+     * through to the routing/NSP-data loop below. */
+    if (set_host_to) {
+        int r = run_set_host_loop(&eng, sock, ifindex, set_host_to, set_host_user);
+        scs_datalink_close(sock);
+        return r;
+    }
+    if (cterm_server) {
+        int r = run_cterm_server_loop(&eng, sock, ifindex, login_command);
+        scs_datalink_close(sock);
+        return r;
+    }
 
     uint8_t frame[DNET_FRAME_MAX];
     uint8_t rxbuf[DNET_FRAME_MAX];

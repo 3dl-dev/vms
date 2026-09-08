@@ -1,0 +1,34 @@
+===== server (aa:00:04:00:2b:04, 1.43 — CTERM HOST) =====
+08-Sep-2026 13:20:27 DECNETD-I-STARTED, DECnet Phase IV endnode up on circuit EWA-0 (datalink hidden behind the VMS surface, Rule 1)
+08-Sep-2026 13:20:27 DECNETD-I-CTERMSRV, awaiting an inbound $ SET HOST to CTERM object 42 on circuit EWA-0 (login-command: /bin/sh /tmp/tmp.eccc4uZJZk/login.sh)
+08-Sep-2026 13:20:28 DECNETD-I-CONNIN, inbound Connect Initiate from 1.44 to object 42 on circuit EWA-0
+08-Sep-2026 13:20:28 DECNETD-I-LINKUP, logical link with 1.44 is RUN -- login-command spawned (pid 20) on circuit EWA-0
+08-Sep-2026 13:20:28 DECNETD-I-BOUND, CTERM session bound (terminal OVMX$RTA1:) on circuit EWA-0
+08-Sep-2026 13:20:28 DECNETD-I-CHILDEXIT, login-command exited -- unbinding the terminal session on circuit EWA-0
+08-Sep-2026 13:20:28 DECNETD-I-CTERMSRVEND, CTERM host session ended: writes_sent=3 reads_recv=1 on circuit EWA-0
+===== client (aa:00:04:00:2c:04, 1.44 — SET HOST) =====
+08-Sep-2026 13:20:28 DECNETD-I-STARTED, DECnet Phase IV endnode up on circuit EWA-0 (datalink hidden behind the VMS surface, Rule 1)
+Node Volatile Summary
+Executor node = 1.44 (OVMXC)
+State                    = on
+Identification           = OVMX DECnet-compatible networking
+Type                     = nonrouting IV (endnode)
+Known Circuit Volatile Summary
+Circuit = EWA-0
+State                    = on
+Designated router        = none
+Hello timer              = 15
+Adjacent nodes           = 0
+08-Sep-2026 13:20:28 DECNETD-I-SETHOST, $ SET HOST 1.43 -- Connect Initiate sent to CTERM object 42 on circuit EWA-0
+08-Sep-2026 13:20:28 DECNETD-I-LINKUP, logical link to 1.43 is RUN -- sending CTERM Bind
+08-Sep-2026 13:20:28 DECNETD-I-BOUND, CTERM terminal session bound on circuit EWA-0 -- terminal is live
+08-Sep-2026 13:20:28 DECNETD-I-EOF, local input closed -- draining remote output on circuit EWA-0
+SYSTEM
+Username: Welcome, SYSTEM.
+08-Sep-2026 13:20:28 DECNETD-I-UNBOUND, host released the terminal session on circuit EWA-0
+08-Sep-2026 13:20:28 DECNETD-I-SETHOSTEND, SET HOST session ended: cterm writes_recv=3 reads_sent=1 on circuit EWA-0
+===== program read (side-channel) =====
+SYSTEM
+PASS: a REAL interactive program's I/O crossed a live $ SET HOST/CTERM
+      session over a REAL veth datalink — client input reached the
+      program AND the program's real output reached the client's stdout

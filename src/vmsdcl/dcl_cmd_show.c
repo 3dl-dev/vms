@@ -2090,7 +2090,19 @@ static int cmd_show_device(struct dcl_command *cmd)
         info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
         if (info.devclass == DC$_DISK)
             continue;
-        show_device_row(&info, &rows);
+        /*
+         * /FULL applies to a bare listing the same way it does to the disk
+         * section above (and to a NAMED terminal at line ~2038): each device
+         * renders its full per-device block, not the brief one-line row. The
+         * previous code called show_device_row() here unconditionally, so
+         * `SHOW DEVICE/FULL` with a terminal-only table produced output
+         * identical to bare `SHOW DEVICE` -- the "/FULL does nothing" the
+         * operator observed (vms-ddc). Mirror the disk loop and the named path.
+         */
+        if (full)
+            show_device_terminal_full(&info);
+        else
+            show_device_row(&info, &rows);
     }
 
     /*

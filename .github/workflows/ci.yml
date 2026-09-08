@@ -2316,11 +2316,16 @@ jobs:
       # verdicts on a red run, not just the first.
       fail-fast: false
       matrix:
-        # N shards. ~79 suites / 6 ≈ 11-16 per shard (measured, vms-ea7) --
-        # comfortably under the 600s wall even at 10x-slow. `strategy.job-total`
-        # (used in the name and passed to the guest) derives N from this list,
-        # so changing the shard count is a one-line edit here.
-        shard: [0, 1, 2, 3, 4, 5]
+        # N shards. ~80 suites / 8 ≈ 9-11 per shard -- comfortably under the
+        # 600s wall even at 10x-slow. `strategy.job-total` (used in the name and
+        # passed to the guest) derives N from this list, so changing the shard
+        # count is a one-line edit here. Bumped 6 -> 8 (vms-f881): the new
+        # test_kmod_devtab_terminal suite (real PTY setup + a cross-process
+        # fork/$GETDVI round trip) is heavier than the average suite and tipped
+        # shard 0/6 past the 600s wall under CI contention (qemu SIGTERM/rc=124,
+        # no suite FAILED). Sharding is the sanctioned fix over an ever-bigger
+        # wall (vms-ea7): fewer suites per VM, not a longer per-VM budget.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
 
     steps:
       - name: Checkout

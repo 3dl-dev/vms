@@ -2528,6 +2528,23 @@ static int cmd_show_memory(struct dcl_command *cmd)
  * src/kernel/vms_ioctl.h carries JPI$_DIRIO/BUFIO structural, valid bit
  * never set), so they are omitted rather than mislabelled. The header date is
  * the real current time.
+ *
+ * THE MISLABEL vms-3c2 FIXES. The real VMS grid (docs/oracle/
+ * vax73-show-status.md) has SIX accounting fields in two rows: row 1 is
+ * Buff. I/O / Cur. ws. / Open files, row 2 is Dir. I/O / Phys. Mem. /
+ * Page Faults. "Cur. ws." is the process's current WORKING-SET SIZE
+ * (JPI$_WSSIZE) -- a distinct quantity from the resident page count
+ * (JPI$_PPGCNT), which the oracle prints under "Phys. Mem." instead. Earlier
+ * code here put info.pages (JPI$_PPGCNT) under the "Cur. ws." label: a real
+ * number under the wrong field name, worse than an honest omission because
+ * a reader takes the label at face value (anti-LARP finding, 2026-09-07).
+ * OVMX's executive has no JPI$_WSSIZE-equivalent yet (grep struct
+ * vms_procinfo in src/kernel/vms_ioctl.h -- no working-set-size field
+ * exists), so "Cur. ws." cannot be sourced truthfully and is OMITTED, same
+ * as the I/O and Open-files columns already were. The resident count now
+ * prints under its real field name, "Phys. Mem.", the one row of the grid
+ * OVMX can source in full (Phys. Mem. + Page Faults), keeping the grid's
+ * column order and label spelling even though most cells are absent.
  */
 static int cmd_show_status(struct dcl_command *cmd)
 {
@@ -2559,13 +2576,24 @@ static int cmd_show_status(struct dcl_command *cmd)
                (int)(ts.tv_nsec / 10000000));
     }
 
-    /* Accounting columns -- each printed only when the executive sourced it.
-     * Buffered/Direct I/O, open files and page-file usage are deliberately
-     * absent: OVMX has no faithful source for them (see the header note). */
-    if (info.fields_valid & VMS_PI_V_PAGEFLTS)
-        printf("  Page faults : %10u\n", info.pageflts);
-    if (info.fields_valid & VMS_PI_V_PAGES)
-        printf("  Cur. ws.    : %10u\n", info.pages);
+    /* Accounting columns -- the oracle's grid row 2 (Dir. I/O / Phys. Mem. /
+     * Page Faults), each cell printed only when the executive sourced it
+     * (see the header note above). "Cur. ws." (grid row 1, working-set
+     * SIZE) is not printed at all: OVMX has no JPI$_WSSIZE-equivalent
+     * source, and the field this code used to label "Cur. ws." is really
+     * "Phys. Mem." (JPI$_PPGCNT, resident pages) -- a distinct quantity.
+     * Buffered/Direct I/O and Open files are likewise absent: OVMX has no
+     * faithful source for them either. */
+    if ((info.fields_valid & (VMS_PI_V_PAGES | VMS_PI_V_PAGEFLTS)) ==
+        (VMS_PI_V_PAGES | VMS_PI_V_PAGEFLTS)) {
+        printf("  Phys. Mem. : %10u    Page Faults : %10u\n",
+               info.pages, info.pageflts);
+    } else {
+        if (info.fields_valid & VMS_PI_V_PAGES)
+            printf("  Phys. Mem. : %10u\n", info.pages);
+        if (info.fields_valid & VMS_PI_V_PAGEFLTS)
+            printf("  Page Faults : %10u\n", info.pageflts);
+    }
 
     return SS$_NORMAL;
 }

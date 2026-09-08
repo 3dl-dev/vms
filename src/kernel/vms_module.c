@@ -116,6 +116,84 @@ MODULE_PARM_DESC(vms_ktest_bdev_fault,
     "TEST-ONLY (rd vms-5f82): arm ACP block-I/O fault injection as \"major:minor:count\"; count 0 disarms");
 #endif /* OVMX_KTEST_FAULT_INJECT */
 
+#if defined(OVMX_KTEST_DEVTAB_TERMINAL)
+/*
+ * TEST-ONLY: mint / withdraw a dynamic RTAn: terminal unit directly (rd
+ * vms-f881, design docs/design/faithful-sessions-and-network-subsystems.md
+ * §3.2/§6-P2). Compiled in ONLY for the out-of-tree QEMU-test vms.ko
+ * (src/kernel/Makefile defines the macro), never the bootable executive
+ * (distro Kbuild does not) -- the same posture as OVMX_KTEST_FAULT_INJECT
+ * above.
+ *
+ * WHY THIS EXISTS. vms_devtab_add_terminal()/_remove_terminal() (vms_devtab.c)
+ * are executive-internal entry points: their real caller is design P1's
+ * $CREPRC (a separate, parallel item, not yet landed) and P3/P4's vmssshd /
+ * decnetd-CTERM. This item's own hard-acceptance gate (§7.5's tell: "$GETDVI
+ * RTA0: from a DIFFERENT process, or it's a LARP") needs a REAL /dev/vms
+ * round trip proving the device table entry today, without waiting on that
+ * caller to land -- exactly the bring-up posture OVMX_KTEST_CLUSTER_SEAM
+ * already established for FC-P0.2/FC-P0.16 below. Write-only/read-only knobs
+ * that forward straight to the real kernel-core functions -- no protocol or
+ * ownership logic of their own (ownership still comes only from a real
+ * $ASSIGN through VMS_IOCTL_ASSIGN, see vms_devtab_add_terminal()'s header).
+ */
+static int vms_ktest_devtab_add_terminal_set(const char *val, const struct kernel_param *kp)
+{
+    char devnam[VMS_DEVNAM_SIZE] = {0};
+    char backing[VMS_BACKING_SIZE] = {0};
+    const char *sep;
+    size_t blen;
+
+    (void)kp;
+    if (!val)
+        return -EINVAL;
+    sep = strchr(val, ':');
+    if (!sep || (size_t)(sep - val) >= sizeof(devnam) - 1)
+        return -EINVAL;
+    memcpy(devnam, val, sep - val);
+    devnam[sep - val] = ':';
+
+    blen = strlen(sep + 1);
+    if (blen && (sep + 1)[blen - 1] == '\n')
+        blen--;                          /* strip a sysfs-write newline */
+    if (blen >= sizeof(backing))
+        return -EINVAL;
+    memcpy(backing, sep + 1, blen);
+
+    return vms_devtab_add_terminal(devnam, backing);
+}
+static const struct kernel_param_ops vms_ktest_devtab_add_terminal_ops = {
+    .set = vms_ktest_devtab_add_terminal_set,
+};
+module_param_cb(vms_ktest_devtab_add_terminal, &vms_ktest_devtab_add_terminal_ops, NULL, 0200);
+MODULE_PARM_DESC(vms_ktest_devtab_add_terminal,
+    "TEST-ONLY (rd vms-f881): mint a dynamic RTAn: unit as \"devnam:pty_backing\" (e.g. \"RTA0:pts7\")");
+
+static int vms_ktest_devtab_remove_terminal_set(const char *val, const struct kernel_param *kp)
+{
+    char devnam[VMS_DEVNAM_SIZE] = {0};
+    size_t blen;
+
+    (void)kp;
+    if (!val)
+        return -EINVAL;
+    blen = strlen(val);
+    if (blen && val[blen - 1] == '\n')
+        blen--;                          /* strip a sysfs-write newline */
+    if (blen >= sizeof(devnam))
+        return -EINVAL;
+    memcpy(devnam, val, blen);
+
+    return vms_devtab_remove_terminal(devnam);
+}
+static const struct kernel_param_ops vms_ktest_devtab_remove_terminal_ops = {
+    .set = vms_ktest_devtab_remove_terminal_set,
+};
+module_param_cb(vms_ktest_devtab_remove_terminal, &vms_ktest_devtab_remove_terminal_ops, NULL, 0200);
+MODULE_PARM_DESC(vms_ktest_devtab_remove_terminal,
+    "TEST-ONLY (rd vms-f881): withdraw a dynamic RTAn: unit created by vms_ktest_devtab_add_terminal");
+#endif /* OVMX_KTEST_DEVTAB_TERMINAL */
+
 #if defined(OVMX_KTEST_CLUSTER_SEAM)
 /*
  * TEST-ONLY: the FC-P0.2 substrate contract self-test (rung R3, design

@@ -795,6 +795,20 @@ struct vms_device {
 	uint32_t            link_up;
 
 	/*
+	 * RTAn: DYNAMIC TERMINAL (rd vms-f881, design faithful-sessions-and-
+	 * network-subsystems.md §3.2). 1 for a unit vms_devtab_add_terminal()
+	 * entered -- distinguishes it from the console (also DC$_TERM, but
+	 * created at module init and never dynamic) so
+	 * vms_devtab_remove_terminal() can never delete OPA0: or a row another
+	 * facility owns, exactly as `mscp_served` above guards
+	 * vms_devtab_remove_served_disk(). `backing` (above) doubles as this
+	 * unit's PTY record when devclass == DC$_TERM and this flag is set --
+	 * the short native name (e.g. "pts7"), not a full path, matching the
+	 * disk-backing convention.
+	 */
+	uint32_t            dynamic_term;
+
+	/*
 	 * Every channel currently assigned to this device, by any process: the
 	 * device has to know this to decide when IMPLICIT ownership ends (when the
 	 * owner has no channel left, not when any channel is returned).
@@ -1123,6 +1137,20 @@ int  vms_devtab_add_disk(const char *devnam, const char *backing,
  */
 int vms_devtab_add_served_disk(const char *devnam);
 int vms_devtab_remove_served_disk(const char *devnam);
+
+/*
+ * Enter / withdraw ONE dynamic RTAn: terminal unit (rd vms-f881, design
+ * faithful-sessions-and-network-subsystems.md §3.2/§6-P2). Unowned at
+ * creation -- the session job becomes owner through its own $ASSIGN, the
+ * same implicit-ownership rule every non-shareable device already enforces
+ * (vms_ioctl_assign()). `pty_backing` is the short native PTY name (e.g.
+ * "pts7"), recorded for provenance only -- the executive never moves bytes
+ * over it. Called by the executive (design P1/P3/P4's $CREPRC / vmssshd /
+ * decnetd-CTERM callers), never from module init. See vms_devtab.c for the
+ * full contract.
+ */
+int vms_devtab_add_terminal(const char *devnam, const char *pty_backing);
+int vms_devtab_remove_terminal(const char *devnam);
 void vms_proc_release_channels(struct vms_proc *proc);
 long vms_ioctl_assign(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_dassgn(struct vms_proc *proc, unsigned long arg);

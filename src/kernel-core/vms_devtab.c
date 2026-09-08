@@ -555,6 +555,124 @@ int vms_devtab_remove_served_disk(const char *devnam)
 }
 
 /*
+ * vms_devtab_add_terminal / _remove_terminal - a dynamically-created RTAn:
+ * terminal unit (rd vms-f881, design docs/design/faithful-sessions-and-
+ * network-subsystems.md §3.2/§6-P2 -- "RTAn: as a real-but-cheap executive
+ * device").
+ *
+ * THE RECONCILIATION THIS IMPLEMENTS: RTAn: (a DECnet SET HOST/CTERM inbound
+ * session's terminal, and the shape TNAn:/FTAn: will also want) is a REAL
+ * executive device-table entry -- $GETDVI-visible, $ASSIGN-able, cross-
+ * process visible -- carrying the exact OPA0:-shape VMS_TTC_* characteristics
+ * the console does (§3.2: "the VMS_TTC_* characteristics OPA0: carries"). It
+ * is deliberately NOT a new byte-QIO driver: there is no executive byte-QIO
+ * surface for ANY device today, not even OPA0: -- this file's own header
+ * says why ("Ownership, reference count and terminal characteristics are
+ * properties of the DEVICE... which is why a VMS terminal name means
+ * anything at all"): the executive's table holds identity, ownership and
+ * characteristics, and the console's own bytes flow over the inherited
+ * Linux fd, never through the executive. RTAn:'s bytes ride a PTY the same
+ * way -- `backing` records which one, for provenance, exactly as a disk
+ * row's `backing` records its block device (vms_devtab_add_disk above) --
+ * but the executive never touches those bytes itself. The device being
+ * executive-real and cross-process-visible IS the faithful part; requiring
+ * bytes to also traverse the executive would be over-building the thing the
+ * design explicitly rejected (§3.2, "does not require bytes to traverse the
+ * executive").
+ *
+ * OWNERSHIP is NOT stamped here. Exactly like the console at boot (this
+ * file's vms_devtab_init(), shareable = 0 below), the unit is entered
+ * UNOWNED and becomes "owned by the session job" (the design's own phrase,
+ * §3.2) the ordinary way -- that job's first $ASSIGN to it, through the
+ * SAME implicit-ownership rule vms_ioctl_assign() already enforces for every
+ * non-shareable device (oracle-measured, docs/oracle/vax73-terminal-
+ * device.md §7). $CREPRC (design P1, a separate item) is the caller that
+ * will mint the unit and then $ASSIGN it to the session it just created, in
+ * that order; this function does not need to know who that will be.
+ *
+ * Called from the executive itself when a session's terminal is needed
+ * (design P1/P3/P4's $CREPRC / vmssshd / decnetd-CTERM callers), NOT from
+ * module init -- an RTAn: unit appears when a network login session starts
+ * and disappears when it ends, exactly as vms_devtab_add_served_disk above
+ * appears/disappears with cluster membership. Both take the device-list
+ * lock like every other runtime reader.
+ *
+ * add: 0, -EINVAL, -EEXIST (this name is already in the table), -ENOMEM.
+ * remove: 0, or -ENODEV when no such dynamic terminal row exists. A TERM row
+ * that is NOT `dynamic_term` is never removed by this path (the console):
+ * the same defended-by-flag shape vms_devtab_remove_served_disk uses so it
+ * can never delete a locally-probed disk row that happens to share a name.
+ */
+int vms_devtab_add_terminal(const char *devnam, const char *pty_backing)
+{
+    struct vms_device *term;
+
+    if (!devnam || devnam[0] == '\0')
+        return -EINVAL;
+
+    exec_lock(&vms_device_list_lock);
+    if (devtab_lookup_locked(devnam)) {
+        exec_unlock(&vms_device_list_lock);
+        return -EEXIST;
+    }
+    exec_unlock(&vms_device_list_lock);
+
+    /*
+     * shareable = 0 and the devchar/width/page below are VMS_CONSOLE_*
+     * verbatim -- the OPA0:-shape the design calls for (§3.2). A terminal
+     * that silently diverged from the console's own characteristics would
+     * be exactly the kind of unmeasured claim the console's own comment
+     * (above, VMS_CONSOLE_DEVCHAR) warns against; RTAn: makes no claim of
+     * its own, it wears the one already oracle-measured for OPA0:.
+     */
+    term = vms_devtab_create(devnam, DC__TERM, VMS_DT_UNKNOWN,
+                             0 /* shareable */,
+                             VMS_CONSOLE_DEVCHAR,
+                             VMS_CONSOLE_WIDTH, VMS_CONSOLE_PAGE);
+    if (!term) {
+        pr_warn("vms: out of memory creating terminal unit %s\n", devnam);
+        return -ENOMEM;
+    }
+
+    exec_lock(&term->lock);
+    term->dynamic_term = 1;
+    if (pty_backing)
+        strscpy(term->backing, pty_backing, sizeof(term->backing));
+    exec_unlock(&term->lock);
+
+    pr_info("vms: terminal unit %s created (PTY-backed: %s)\n",
+            devnam, pty_backing && pty_backing[0] ? pty_backing : "(none recorded)");
+    return 0;
+}
+
+int vms_devtab_remove_terminal(const char *devnam)
+{
+    struct vms_device *dev;
+    int dynamic_term;
+
+    if (!devnam || devnam[0] == '\0')
+        return -EINVAL;
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        return -ENODEV;
+    }
+    dynamic_term = (dev->dynamic_term != 0);
+    if (dynamic_term)
+        exec_list_del(&dev->list);
+    exec_unlock(&vms_device_list_lock);
+
+    if (!dynamic_term)
+        return -ENODEV;   /* not ours: the console, or another driver's row */
+
+    exec_free(dev);
+    pr_info("vms: terminal unit %s withdrawn (session ended)\n", devnam);
+    return 0;
+}
+
+/*
  * The NIC as a VMS device (vms-9d2, epic vms-67f L0 -- the device face the
  * TCP/IP and DECnet stacks layer over; design docs/design-tcpip-services-ovmx.md
  * §4 "L0 NIC as VMS device").

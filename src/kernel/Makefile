@@ -225,10 +225,18 @@ vms-y := vms_module.o \
 #   params, vms_module.c) into THIS out-of-tree QEMU-test module ONLY, same
 #   posture as OVMX_KTEST_FAULT_INJECT above -- the bootable overlay does NOT
 #   define it, so the shipped executive carries no test-only cluster-seam code.
+# -DOVMX_KTEST_DEVTAB_TERMINAL (rd vms-f881): compiles the TEST-ONLY
+#   vms_ktest_devtab_add_terminal/_remove_terminal module-param knobs
+#   (vms_module.c) into THIS out-of-tree QEMU-test module ONLY, same posture as
+#   OVMX_KTEST_FAULT_INJECT above -- the bootable overlay does NOT define it,
+#   so the shipped executive gains no way to mint an RTAn: except through the
+#   real caller design P1's $CREPRC lands. They forward directly to
+#   vms_devtab_add_terminal()/_remove_terminal() (vms_devtab.c), which are
+#   themselves real executive-core code either way.
 ccflags-y := -I$(src) -I$(src)/../kernel-core \
              -I$(src)/../vmsfs/include -I$(src)/../vmsfs/ods2 \
              -DOVMX_KBACKEND_LINUX -DOVMX_ODS2_KERNEL -DOVMX_KTEST_FAULT_INJECT \
-             -DOVMX_KTEST_CLUSTER_SEAM
+             -DOVMX_KTEST_CLUSTER_SEAM -DOVMX_KTEST_DEVTAB_TERMINAL
 
 # Default target: build against running kernel
 KDIR ?= /lib/modules/$(shell uname -r)/build

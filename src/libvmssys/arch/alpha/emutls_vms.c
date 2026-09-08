@@ -46,12 +46,22 @@ extern void *memset(void *, int, unsigned long);
 /* The control object the compiler emits, in emission order. `word` is pointer-
  * width (8 bytes on this LP64-kernel/LLP64-compiler target: the .quad fields
  * above are 64-bit). */
-typedef unsigned long emutls_word;
+/* vms-f49 (rung 4): each control field the alpha-dec-vms cc1 emits is a `.quad`
+ * (64-bit) -- `__emutls_v.x: .quad size ; .quad align ; .quad loc ; .quad templ`
+ * (verified from generated assembly). emutls_word MUST therefore be 64-bit so
+ * `loc` lands at struct offset 16 and `templ` at 24, matching the emission. It
+ * was `unsigned long`, which on this LLP64 target is 32 BITS (same class as the
+ * vms-1fc width bug) -- that packed size+align into the first 8 bytes and put
+ * `loc` at offset 8 (the align field). __emutls_get_address then returned the
+ * align value (4) as the TLS pointer, and the first __thread access on the
+ * veneer's sys$create path dereferenced 4 -> SIGSEGV (the rung-4 blocker). Use
+ * `unsigned long long` (guaranteed 64-bit on every target) to match the .quad. */
+typedef unsigned long long emutls_word;
 struct __emutls_object {
-	emutls_word  size;   /* bytes of the __thread object            */
-	emutls_word  align;  /* required alignment                      */
-	void        *loc;    /* runtime-owned storage pointer (init 0)  */
-	void        *templ;  /* initializer image, or 0 => zero-init    */
+	emutls_word  size;   /* bytes of the __thread object  (.quad, offset 0)  */
+	emutls_word  align;  /* required alignment            (.quad, offset 8)  */
+	void        *loc;    /* runtime-owned storage pointer (.quad, offset 16) */
+	void        *templ;  /* initializer image, 0=>zero    (.quad, offset 24) */
 };
 
 void *__emutls_get_address(struct __emutls_object *obj)

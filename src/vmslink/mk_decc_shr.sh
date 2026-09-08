@@ -142,15 +142,28 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # enumeration above just picked up (decc$fopen/fwrite/fread/fclose) are
     # musl-alpha's OWN POSIX definitions — open()/write() on the raw
     # Linux-Alpha kernel VFS, never RMS/the executive/the ODS-2 volume
-    # (trace-grounded, vms-47e). Drop them here so the veneer aliases appended
-    # further down (decc$fopen/ovmx_crtl_fopen=PROCEDURE, ...) are the ONLY
-    # vector entry for each of these 4 names — musl's own fopen.o etc stay
+    # (trace-grounded, vms-47e). REWRITE each in place to its veneer-alias form
+    # (decc$fopen/ovmx_crtl_fopen=PROCEDURE, ...) — musl's own fopen.o etc stay
     # whole-archived (dead weight, simply never exported), so this is a
     # vector-level substitution, never an object-level MULDEF fight (the
     # veneer's compiled object defines the DISTINCT name `ovmx_crtl_fopen`,
     # not `decc$fopen` — see the veneer block below for why that is safe).
+    #
+    # ⭐ IN-PLACE, NOT delete-and-append (vms-b14). These 4 names sort in the
+    # MIDDLE of the enumerated vector; deleting them here and re-appending the
+    # aliases at the tail (as this did before) COMPACTS every higher sv# index
+    # by 4, so decc$strlen moved sv#414->sv#410 between the bootstrap pass
+    # (no veneer) and this final pass. IMGACT binds cross-image imports BY
+    # INDEX (ovmx_sv_resolve on the frozen .vms$imp sv_index), so every
+    # producer linked against the bootstrap DECC$SHR (LIBVMSFS/LIBVMSRMS/...)
+    # then dispatched its decc$strlen[sv#414] call to whatever the final
+    # DECC$SHR put at sv#414 (decc$strspn) — a NULL-a1 SIGSEGV at runtime.
+    # Real VMS symbol vectors are APPEND-ONLY and NEVER renumbered; rewriting
+    # the binding in the name's EXISTING slot keeps every sv# stable across the
+    # two passes (the invariant the veneer block below already documents).
     if [ -n "${ALPHA_CRTL_RMS_USE:-}" ]; then
-        grep -vE '^decc\$(fopen|fwrite|fread|fclose)=' "$ALPHA_VEC" > "$ALPHA_VEC.f"
+        sed -E 's,^decc\$(fopen|fwrite|fread|fclose)=PROCEDURE$,decc$\1/ovmx_crtl_\1=PROCEDURE,' \
+            "$ALPHA_VEC" > "$ALPHA_VEC.f"
         mv "$ALPHA_VEC.f" "$ALPHA_VEC"
     fi
     NVEC=$(wc -l < "$ALPHA_VEC")
@@ -261,11 +274,18 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # ALPHA_CRTL_RMS_USE, exactly as it already runs today). Standard
     # two-stage bootstrap for the mutual DECC$SHR<->LIBVMSRMS$SHR dependency;
     # LIBVMSRMS$SHR itself is UNCHANGED and does NOT need rebuilding against
-    # the veneer-wired DECC$SHR — GSMATCH LEQUAL + NAME-keyed (not
-    # index-keyed) activation binding (IMGACT's sv_find_named) means every
-    # universal the bootstrap LIBVMSRMS$SHR already bound (malloc,
-    # decc$fprintf, ...) stays valid: this pass only ADDS universals or swaps
-    # an EXISTING name's internal binding in place, never removes/reorders one.
+    # the veneer-wired DECC$SHR — but ONLY because this pass now preserves the
+    # symbol-vector INDEX of every universal (the in-place rewrite above), NOT
+    # because binding is by name. IMGACT resolves cross-image .vms$imp imports
+    # BY INDEX (ovmx_sv_resolve on the frozen sv_index, imgact.c:1893); only a
+    # handful of CRTL bootstrap hooks (__init_libc/__copy_tls/...) are looked up
+    # by name via sv_find_named. So the ONE hard invariant here is append-only,
+    # never-renumber sv# assignment: this pass ADDS universals at the tail or
+    # swaps an EXISTING name's internal binding IN PLACE (keeping its slot), and
+    # never removes/reorders one — because doing so silently mis-binds every
+    # producer's higher-index decc$ import at activation (vms-b14: a middle-drop
+    # + tail-append of the 4 veneer names shifted decc$strlen sv#414->sv#410, so
+    # LIBVMSFS's strlen[sv#414] dispatched to decc$strspn -> NULL-a1 SIGSEGV).
     #
     # The wrapper functions are OVMX-original names (ovmx_crtl_fopen, ...),
     # NOT decc$-decorated: crtl_stdio.h documents that the alpha cc1 does not
@@ -303,7 +323,13 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         done
         rm -f "$VENEER_VEC"
 
-        VEC="$VEC,decc\$fopen/ovmx_crtl_fopen=PROCEDURE,decc\$fwrite/ovmx_crtl_fwrite=PROCEDURE,decc\$fread/ovmx_crtl_fread=PROCEDURE,decc\$fclose/ovmx_crtl_fclose=PROCEDURE"
+        # NOTE: the decc$fopen/fwrite/fread/fclose -> ovmx_crtl_* alias entries
+        # are ALREADY in $VEC, rewritten in place at their enumerated sorted
+        # slot by the ALPHA_CRTL_RMS_USE block above — so the symbol-vector
+        # index of every OTHER universal is byte-stable vs the bootstrap pass
+        # (vms-b14). Do NOT re-append them at the tail here: that renumbering is
+        # exactly the sv# skew that mis-bound LIBVMSFS's decc$strlen to
+        # decc$strspn at runtime.
         ALPHA_VENEER_OBJ="$VENEER_OBJ"
         echo "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\$fopen/fwrite/fread/fclose -> ovmx_crtl_* (--use $ALPHA_CRTL_RMS_USE)"
     fi

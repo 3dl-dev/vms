@@ -3763,9 +3763,31 @@ store_target:;
      * section-relative linkage-pair quad pointing at the overridden weak def
      * (e.g. default_malloc's self-bind to __simple_malloc, redirected to
      * mallocng). No-op for a symbol target (already strong via evax_find_sym) and
-     * for any address not naming an overridden weak def. */
-    S      = evax_wredir_apply(redir, nredir, S);
-    if (have_code) code_S = evax_wredir_apply(redir, nredir, code_S);
+     * for any address not naming an overridden weak def.
+     *
+     * vms-b14: for a SECTION-RELATIVE target the true address is base+addend, so
+     * the override must match the FULL target, not the section base alone. When
+     * an overridden weak proc sits at OFFSET 0 of a $CODE$ (calloc.o's weak
+     * __malloc_allzerop), the section base coincides with that weak entry, and
+     * redirecting the base pulled EVERY sibling symbol in the section onto the
+     * strong def + its own addend: decc$_calloc64 (real calloc at $CODE$+0x008)
+     * was mis-bound onto strong __malloc_allzerop+0x008, so calloc(count,size)
+     * jumped into the metadata leaf, failed its pointer-alignment assert, and
+     * a_crash()ed (SIGSEGV at faultVA=0). Match base+addend and, on a hit, use
+     * the strong def's exact address with the addend CONSUMED (a self-bind that
+     * targets the weak def itself has addend 0 and is unaffected; a weak def at
+     * a nonzero offset — which the old base-only match silently missed — now
+     * redirects correctly). The symbol-target path (to_section < 0) keeps the
+     * pre-addend base-redirect exactly as before (no-op there anyway). */
+    int64_t addend = r->addend;
+    if (r->to_section >= 0) {
+        uint64_t full = S + (uint64_t)addend;
+        uint64_t rt   = evax_wredir_apply(redir, nredir, full);
+        if (rt != full) { S = rt; addend = 0; }   /* strong addr is the complete target */
+    } else {
+        S = evax_wredir_apply(redir, nredir, S);
+        if (have_code) code_S = evax_wredir_apply(redir, nredir, code_S);
+    }
 
     /* Image-relative offset of the store slot (the site), for the .vms$rel table. */
     uint64_t rel_site = in[ii].sec_base[r->psect] + r->address;
@@ -3776,7 +3798,7 @@ store_target:;
     switch (r->type) {
     case EVAX_R_REFLONG:
         if (r->address + 4 > sec->alloc) die("REFLONG site past psect end");
-        putl32(c + r->address, (uint32_t)(S + r->addend));
+        putl32(c + r->address, (uint32_t)(S + addend));
         /* A REFLONG is a 32-bit slot. If it holds an image-relative address into
          * a placed section it would need a load-bias fixup — but IMGACT's
          * .vms$rel loader adds a 64-bit bias to an 8-byte slot, which a 4-byte
@@ -3791,13 +3813,13 @@ store_target:;
         break;
     case EVAX_R_REFQUAD:
         if (r->address + 8 > sec->alloc) die("REFQUAD site past psect end");
-        putl64(c + r->address, S + r->addend);
+        putl64(c + r->address, S + addend);
         if (S_placed) evax_rel_add(rel_off, nrel, rel_cap, rel_site);
         break;
     case EVAX_R_CODEADDR:
         /* Store the target's CODE ENTRY address (a procedure's entry point). */
         if (r->address + 8 > sec->alloc) die("CODEADDR site past psect end");
-        putl64(c + r->address, (have_code ? code_S : S) + r->addend);
+        putl64(c + r->address, (have_code ? code_S : S) + addend);
         if (have_code ? codeS_placed : S_placed)
             evax_rel_add(rel_off, nrel, rel_cap, rel_site);
         break;

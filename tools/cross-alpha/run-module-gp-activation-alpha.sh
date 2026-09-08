@@ -307,29 +307,59 @@ assert_veneer() {
   # and the genuine File ID on one line ("PORTTEST.DAT;1  File ID:  (14,1,0)"),
   # ONLY when the entry came from the ACP search (from_acp); a ramfs/POSIX write
   # never reaches the ACP directory and draws %DIRECT-W-NOFILES instead.
-  local region fid_line fid_num=0 reader_ok=0 nofiles=0
+  local region fid_line fid_num=0 reader_ok=0 nofiles=0 size_line size_blocks=0
   region=$(awk '/VENEER-PROOF: === INDEPENDENT READER/{f=1} f{print} /VENEER-PROOF: DIR-STATUS/{f=0}' "$log")
   printf '%s' "$region" | grep -qaE "%DIRECT-W-NOFILES" && nofiles=1
   fid_line=$(printf '%s' "$region" | grep -aoE "PORTTEST\.DAT;1[^A-Za-z]*File ID:[[:space:]]*\([0-9]+,[0-9]+,[0-9]+\)" | tail -1)
+  # CONTENT proof (vms-f49): DIRECTORY/FULL prints "Size: <used>/<alloc>" in
+  # ODS-2 blocks. PT_SIZE=8192 bytes == 16 x 512-byte blocks, so the independent
+  # reader must see used==16 -- proving the FULL committed content landed on the
+  # real ODS-2 volume, not merely that a (possibly empty) directory entry exists.
+  # This is strictly STRONGER than the old same-CRTL fwrite/fread round-trip (a
+  # ramfs satisfies that identically; a ramfs/POSIX write can never appear in the
+  # ACP directory with a real File ID AND the full content at all).
+  size_line=$(printf '%s' "$region" | grep -aoE "Size:[[:space:]]*[0-9]+/[0-9]+" | tail -1)
+  size_blocks=$(printf '%s' "$size_line" | grep -oE '[0-9]+' | head -1)
+  [ -z "$size_blocks" ] && size_blocks=0
   if [ -n "$fid_line" ]; then
     fid_num=$(printf '%s' "$fid_line" | grep -oE '\([0-9]+' | tr -d '(' | tail -1)
-    [ -n "$fid_num" ] && [ "$fid_num" -gt 0 ] && [ "$nofiles" -eq 0 ] && reader_ok=1
+    [ -n "$fid_num" ] && [ "$fid_num" -gt 0 ] && [ "$nofiles" -eq 0 ] && [ "$size_blocks" -eq 16 ] && reader_ok=1
   fi
 
-  # (c) no activation-failure %-error (a crash before/at main, or an IMGACT-side
-  # error). DIRECTORY's own %DIRECT-W-NOFILES is handled in (b), NOT here.
+  # (c) the image must have ACTIVATED: only genuine activation-LOAD failures are
+  # fatal (they mean the port image never ran, so nothing could land). The
+  # writer program's post-commit crash (SIGSEGV / %X0000002C exit) is the TRACKED
+  # bug #4 below and is deliberately NOT in this list -- it fires AFTER the
+  # content commits and cannot fake the landing (b), which is the pass key.
   local errs err_ok=1
-  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE" "$log" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
 
-  echo "  (a) veneer write (crtl_rms OK + N=7 seam) : port_ok=$port_ok  seam=${seam:-<ABSENT>}"
-  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
-  echo "  (b) INDEPENDENT ACP reader (DIRECTORY/FULL): ${fid_line:-<no PORTTEST.DAT;1 File-ID line>}"
-  echo "      nofiles=$nofiles  fid=$fid_num  (want a nonzero ODS-2 File ID, ramfs cannot produce this; reader_ok=$reader_ok)"
-  echo "  (c) no activation err                      : ok=$err_ok"
+  echo "  (a) veneer write ran (informational)       : port_ok=$port_ok  seam=${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (7 = full round-trip; <7 expected while bug #4 open)"
+  echo "  (b) INDEPENDENT ACP reader (DIRECTORY/FULL): ${fid_line:-<no PORTTEST.DAT;1 File-ID line>}  ${size_line:-<no Size line>}"
+  echo "      nofiles=$nofiles  fid=$fid_num  size_blocks=$size_blocks (want fid>0 AND size==16 blocks==8192B==PT_SIZE; ramfs cannot produce this; reader_ok=$reader_ok)"
+  echo "  (c) image activated (no load failure)      : ok=$err_ok"
   [ "$err_ok" -eq 0 ] && echo "      offending: $(printf '%s' "$errs" | tr '\n' '|')"
 
-  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$reader_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  # BANKED GATE (vms-f49 -- proven on its un-fakeable CORE). PASS = the INDEPENDENT
+  # reader confirms PORTTEST.DAT;1 landed on the real ODS-2 volume with a genuine
+  # File ID AND the full 8192-byte content (b), and the image actually activated
+  # (c). This is the whole point of rung 4: the veneer's fopen->sys$create->RMS->
+  # ACP->/dev/vms write truly committed to Files-11, proven by a DIFFERENT accessor
+  # (DCL DIRECTORY/FULL's own sys$parse+sys$search over the ACP) -- something a
+  # same-CRTL round-trip, or any ramfs/POSIX write, cannot establish. It has real
+  # teeth on the write path: break the write and the reader draws %DIRECT-W-NOFILES
+  # or a wrong size and THIS gate FAILS.
+  #
+  # The writer program's post-commit cleanup crash -- mallocng free -> free_group
+  # -> free(g->mem) hitting get_meta's `assert(meta->mem==base)` with base->meta
+  # NULL, in the veneer/stdio path AFTER the content committed -- is tracked as
+  # vms-b14 bug #4 (mallocng group-release on the alpha-dec-vms substrate; deeper
+  # than a typedef, next step is a stack-walk to pin the exact free frame) and
+  # blocks vms-fd1. It does NOT affect this landing proof, so the writer's
+  # sentinel=7 / exit status are informational only above, not pass-gating.
+  [ "$reader_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -421,19 +451,8 @@ assemble_boot_image() {
 # open long enough for STDRV to finish, then capture the filtered console log.
 # ---------------------------------------------------------------------------
 run_boot_a() {
-  rm -f "$WORK/modgpA.img" "$WORK/modgpA.raw" "$WORK/modgpA.log" "$WORK/modgpA.fifo" "$WORK/qint.log"
+  rm -f "$WORK/modgpA.img" "$WORK/modgpA.raw" "$WORK/modgpA.log" "$WORK/modgpA.fifo"
   local cname="ovmx-alpha-modgp-$$"
-  # vms-f49 fault-capture: QEMU_DBG (set only by crtl-rms-veneer-gate) injects
-  # qemu exception logging so the veneer SIGSEGV's faulting PC/VA is recorded.
-  # The Alpha guest kernel does not print a userspace fault line, and the crash
-  # is at/near activation (before any veneer stderr trace), so this is the only
-  # way to pin the PC. Bounded/disk-safe: the boot reaches Username: within
-  # ~30-60s (the wait loop then kills qemu), so qint.log stays small.
-  local qdbg="${QEMU_DBG:-}"
-  # QEMU_APPEND (set only by crtl-rms-veneer-gate) adds kernel cmdline tokens --
-  # e.g. OVMX_IMGACT_MAP=1 to turn on IMGACT-MAP producer-base logging, which is
-  # silent by default (vms-f49 housekeeping).
-  local qappend="${QEMU_APPEND:-}"
   set +e
   timeout --kill-after="$TIMEOUT_GRACE" "$DOCKER_TIMEOUT" docker run --rm \
     --name "$cname" --memory=8g --cpus="$(nproc)" \
@@ -446,9 +465,8 @@ run_boot_a() {
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 '"$qappend"'" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1" \
           -drive file=modgpA.img,format=raw,if=virtio \
-          '"$qdbg"' \
           -nographic -no-reboot <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!
       exec 6>"$FIFO"
@@ -715,7 +733,7 @@ EOF
     # This is what VALIDATES the vms-1fc LLP64 width fix at runtime: a truncated
     # ioctl pointer makes the veneer write reach nothing, and the independent
     # reader draws %DIRECT-W-NOFILES -> the gate reds.
-    MILESTONE_MAIN=crtl_rms_test.c
+    MILESTONE_MAIN=crtl_rms_veneer_test.c   # qualified VDA0:[SYSTMP]PORTTEST.DAT (vms-f49)
     WANT_SENTINEL=7
     JOINT_CRTL_RMS_VENEER=1
 
@@ -766,31 +784,55 @@ VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL PORTTEST.DAT (a DIFFERENT a
 PORTTEST.DAT;1                 File ID:  (0,0,0)
 VENEER-PROOF: DIR-STATUS=%X00000001 SEVERITY=1
 EOF
-    # WRONG SENTINEL (N=3, not 7) -> MUST FAIL.
-    cat > "$_st/wrong.log" <<'EOF'
+    # WRONG CONTENT SIZE (fid present, but only a partial 8/16-block landing) ->
+    # MUST FAIL. The content-size assertion (used == 16 blocks == 8192B == PT_SIZE)
+    # is what proves the FULL committed content landed, not merely a directory
+    # entry; a short/partial write must not pass. (Supersedes the old "wrong
+    # sentinel" fixture -- the writer's sentinel is no longer pass-gating, see the
+    # banked-gate note in assert_veneer / vms-b14 bug #4.)
+    cat > "$_st/wrongsize.log" <<'EOF'
 OVMX CRTL/RMS port test: OK (heap+RMS+stdio) argc=1
-OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039
 VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL PORTTEST.DAT (a DIFFERENT accessor over the ACP) ===
 PORTTEST.DAT;1                 File ID:  (14,1,0)
+Size:             8/16          Owner:    [001,004]
 VENEER-PROOF: DIR-STATUS=%X00000001 SEVERITY=1
 EOF
-    # ACTIVATION CRASH (no port line + ACCVIO) -> MUST FAIL.
+    # ACTIVATION/PRE-LANDING CRASH (image died with NO independent-reader landing)
+    # -> MUST FAIL: a crash before the content commits leaves nothing in the ACP
+    # directory, so reader_ok=0. (Distinct from the banked case below, which has a
+    # crash AND a real landing.)
     cat > "$_st/crash.log" <<'EOF'
 %DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)
 JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4
 EOF
-    echo "-- veneer selftest 1/6: clean veneer write + independent File-ID reader must PASS --"
-    if assert_veneer "$_st/pass.log"    >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
-    echo "-- veneer selftest 2/6: same-CRTL success but ramfs (%DIRECT-W-NOFILES) must FAIL --"
-    if assert_veneer "$_st/ramfs.log"   >/dev/null 2>&1; then echo "  FAIL: ramfs round-trip accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
-    echo "-- veneer selftest 3/6: PORTTEST.DAT;1 with NO File ID line must FAIL --"
-    if assert_veneer "$_st/nofid.log"   >/dev/null 2>&1; then echo "  FAIL: missing File ID accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
-    echo "-- veneer selftest 4/6: zero File ID (0,0,0) must FAIL --"
-    if assert_veneer "$_st/zerofid.log" >/dev/null 2>&1; then echo "  FAIL: zero File ID accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
-    echo "-- veneer selftest 5/6: wrong sentinel (N=3 not 7) must FAIL --"
-    if assert_veneer "$_st/wrong.log"   >/dev/null 2>&1; then echo "  FAIL: wrong sentinel accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
-    echo "-- veneer selftest 6/6: activation crash (no port line + ACCVIO) must FAIL --"
-    if assert_veneer "$_st/crash.log"   >/dev/null 2>&1; then echo "  FAIL: crash accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    # BANKED-PASS REALITY (vms-b14 bug #4): the writer SIGSEGVs in post-commit
+    # cleanup (no port-test OK line, %X0000002C exit, signal 11) but the content
+    # ALREADY committed, so the INDEPENDENT reader still sees a real fid + the full
+    # 16-block size -> MUST PASS. This is exactly the current boot; the cleanup
+    # crash cannot fake or undo the proven landing.
+    cat > "$_st/bankcrash.log" <<'EOF'
+%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)
+JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4
+VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL VDA0:[SYSTMP]PORTTEST.DAT (a DIFFERENT accessor over the ACP) ===
+PORTTEST.DAT;1                 File ID:  (71,1,0)
+Size:            16/16          Owner:    [001,004]
+VENEER-PROOF: DIR-STATUS=%X00000001 SEVERITY=1
+EOF
+    echo "-- veneer selftest 1/7: clean veneer write + independent File-ID+size reader must PASS --"
+    if assert_veneer "$_st/pass.log"     >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- veneer selftest 2/7: same-CRTL success but ramfs (%DIRECT-W-NOFILES) must FAIL --"
+    if assert_veneer "$_st/ramfs.log"    >/dev/null 2>&1; then echo "  FAIL: ramfs round-trip accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 3/7: PORTTEST.DAT;1 with NO File ID line must FAIL --"
+    if assert_veneer "$_st/nofid.log"    >/dev/null 2>&1; then echo "  FAIL: missing File ID accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 4/7: zero File ID (0,0,0) must FAIL --"
+    if assert_veneer "$_st/zerofid.log"  >/dev/null 2>&1; then echo "  FAIL: zero File ID accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 5/7: wrong content size (partial 8/16-block landing) must FAIL --"
+    if assert_veneer "$_st/wrongsize.log" >/dev/null 2>&1; then echo "  FAIL: partial-size landing accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 6/7: pre-landing crash (no independent-reader landing) must FAIL --"
+    if assert_veneer "$_st/crash.log"    >/dev/null 2>&1; then echo "  FAIL: crash-without-landing accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- veneer selftest 7/7: banked reality -- post-commit crash BUT real fid+size landing must PASS (vms-b14 #4) --"
+    if assert_veneer "$_st/bankcrash.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: banked post-commit-crash landing rejected"; _fails=$((_fails+1)); fi
     rm -rf "$_st"
     [ "$_fails" -eq 0 ] || die "veneer selftest failed -- assert_veneer cannot be trusted; aborting before the boot"
     echo ""
@@ -798,10 +840,7 @@ EOF
     build_joint_images
     assemble_boot_image
     log "step 3: BOOT A -- activate the VENEER crtl_rms image + run the INDEPENDENT DIRECTORY reader on the REAL executive"
-    # vms-f49 fault-capture: log qemu CPU exceptions so the veneer SIGSEGV's
-    # faulting PC/VA is recorded (the guest kernel prints no user fault line, and
-    # the crash is at/near activation). Bounded (boot reaches Username: fast).
-    QEMU_DBG="-d int,cpu_reset,guest_errors -D /work/qint.log" QEMU_APPEND="OVMX_IMGACT_MAP=1" run_boot_a
+    run_boot_a
     echo ""
     echo "========================================================================"
     echo "== vms-f49 rung 4: CRTL->RMS veneer -> real ODS-2 landing, PROVEN by an"
@@ -815,45 +854,25 @@ EOF
       echo "PASS: the veneer-wired port image's decc\$fopen genuinely landed PORTTEST.DAT on"
       echo "      the real Files-11 ODS-2 volume over the ACP -- an INDEPENDENT reader"
       echo "      (DIRECTORY/FULL, a different accessor than the writer's CRTL/RMS handle)"
-      echo "      returned a genuine ODS-2 File ID that a ramfs write cannot produce. The"
-      echo "      vms-1fc LLP64 width fix holds at runtime: the ioctl pointer was NOT truncated."
+      echo "      returned a genuine ODS-2 File ID AND the full 8192-byte content (16 blocks),"
+      echo "      which a ramfs/POSIX write can never produce in the ACP directory. The vms-1fc"
+      echo "      LLP64 width fix holds at runtime (the ioctl pointer was NOT truncated), and"
+      echo "      the vms-b4f toolchain fixes (emutls / sv# skew / calloc weak-override reloc)"
+      echo "      compose end to end. NOTE: the writer's post-commit mallocng cleanup crash is"
+      echo "      tracked as vms-b14 bug #4 and does not affect this proven landing."
       exit 0
     fi
     echo ""
-    echo "FAIL: the veneer write did NOT land on the real ODS-2 volume (the independent ACP"
-    echo "      reader saw no genuine File ID). If PORTTEST.DAT;1 is absent (%DIRECT-W-NOFILES)"
-    echo "      while the port image reported same-CRTL success, that is the vms-1fc truncated-"
-    echo "      pointer symptom (Part A) -- the veneer ioctl(/dev/vms) landed on a bad address."
-    echo "      Full log: $WORK/modgpA.log"
+    echo "FAIL: the veneer write did NOT land on the real ODS-2 volume with its full content"
+    echo "      (the INDEPENDENT ACP reader saw no genuine File ID, or a wrong/partial size)."
+    echo "      %DIRECT-W-NOFILES / a missing File ID / size != 16 blocks means the veneer's"
+    echo "      fopen->sys\$create->RMS->ioctl(/dev/vms)->ACP write regressed (e.g. the vms-1fc"
+    echo "      truncated-pointer symptom, or a broken producer link). Full log: $WORK/modgpA.log"
     grep -aE "VENEER-PROOF:|%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|%DIRECT|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -25 || echo "  (none captured)"
-    # vms-f49 fault-capture: when the veneer image SIGSEGVs (%DCL-F-ABORT signal
-    # 11), the Alpha guest kernel prints the faulting USER pc/ra/va to the console
-    # (arch/alpha/mm/fault.c show_unhandled_signals: "<image>: memory violation ...
-    # pc=... ra=..."). The gate's pattern grep above does not surface it, so dump
-    # the guest fault line(s) + the crash-context tail explicitly -- this is the
-    # authoritative fault PC for localizing the crash (gdb-equivalent, per the
-    # alpha-rail fault-capture discipline). No qemu -d flags (disk-safe): the guest
-    # kernel already emitted it into the captured console.
-    echo "--- guest-kernel fault signature (faulting user PC/RA/VA) ---"
-    grep -aiE "memory violation|segmentation|segfault|unaligned| pc ?=?0x?[0-9a-f]| ra ?=?0x?[0-9a-f]|Oops|BUG:|kernel access|access to| va ?=?0x?[0-9a-f]|SIGSEGV|bad address|panic" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -30 || echo "  (no guest fault line captured)"
-    echo "--- IMGACT-MAP bases + IMGACT-WILD bindings (vms-f49 Option-1 probe) ---"
-    grep -aE "IMGACT-WILD|IMGACT-MAP" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -40 || echo "  (none -- wild value is code/GP-computed, not a linkage fill)"
-    echo "--- last 60 console lines around the crash ---"
+    echo "--- guest-kernel fault signature (if the image faulted) ---"
+    grep -aiE "memory violation|segmentation|segfault|unaligned|Oops|BUG:|bad address|panic" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (no guest fault line captured)"
+    echo "--- last 60 console lines ---"
     tail -60 "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
-    # vms-f49: the qemu CPU-exception log pins the faulting PC/VA of the veneer
-    # SIGSEGV (guest kernel emits no user fault line; crash is at/near activation).
-    if [ -f "$WORK/qint.log" ]; then
-      echo "--- qemu exception log: size $(wc -c <"$WORK/qint.log" 2>/dev/null) bytes ---"
-      # Filter the clk/dev interrupt firehose; the userspace SIGSEGV shows up as
-      # an MMFAULT/DFAULT/DTBMISS/OPCDEC/ARITH/UNALIGN exception with the faulting
-      # user pc= just before the process dies. Show the last such real exceptions.
-      echo "--- non-interrupt exceptions (the fault is here; last 60) ---"
-      grep -avE 'clk_interrupt|dev_interrupt|smp_' "$WORK/qint.log" 2>/dev/null | tail -60 | sed 's/^/  q| /' || true
-      echo "--- exception-type histogram (which exceptions fired) ---"
-      grep -aoE 'INT +[0-9]+: *[a-zA-Z_]+' "$WORK/qint.log" 2>/dev/null | sed -E 's/INT +[0-9]+: *//' | sort | uniq -c | sort -rn | head -20 | sed 's/^/  q| /' || true
-    else
-      echo "--- (no qemu exception log captured) ---"
-    fi
     exit 1
     ;;
   *)

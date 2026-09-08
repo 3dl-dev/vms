@@ -303,76 +303,6 @@ int strncmp(const char *a, const char *b, unsigned long n)
 
 static void eputs(const char *s) { sys_write(2, s, xstrlen(s)); }
 
-/* Forward decls so imgact_dbg_map (below) can gate on OVMX_IMGACT_MAP. */
-static const char *imgact_env_value(char **envp, const char *key);
-static char **g_envp;
-
-/* vms-f49 fault-localization: print a mapped image's runtime base so a qemu
- * -d int faulting user pc can be resolved to <image>+offset. Unconditional but
- * cheap (one line per producer at activation); the activation gates grep for
- * their own patterns, so the extra "IMGACT-MAP:" lines are inert there. */
-static void imgact_dbg_map(const char *name, unsigned long base)
-{
-	/* Silent by default; opt in with OVMX_IMGACT_MAP=1 in the boot append line
-	 * (vms-f49 fault-localization -- do not emit on every activation for all
-	 * images in production). */
-	const char *want = imgact_env_value(g_envp, "OVMX_IMGACT_MAP");
-	if (!want || want[0] != '1')
-		return;
-	static const char H[] = "0123456789abcdef";
-	char hx[17];
-	for (int i = 0; i < 16; i++) hx[15 - i] = H[(base >> (i * 4)) & 0xf];
-	hx[16] = 0;
-	char line[192];
-	line[0] = 0;
-	xstrcat(line, "IMGACT-MAP: ");
-	xstrcat(line, name);
-	xstrcat(line, " base=0x");
-	xstrcat(line, hx);
-	xstrcat(line, "\n");
-	eputs(line);
-}
-
-/* vms-f49 Option-1 probe: log an import binding whose resolved PV or filled code
- * entry lands in the wild 0x1_0000_0000..0x200_0000_0000 region (all real images
- * map at 0x200_xxxx_xxxx; the veneer SIGSEGV jumps to 0x120000000+offset). Gated
- * on OVMX_IMGACT_MAP=1. Prints who imports what, the cell, the PV (=PDSC), and
- * the code entry *(PV+8) actually written -- so a wild PV vs a wild-only entry
- * distinguishes an SV-value fault from a producer PDSC-entry rebase fault. */
-static void imgact_dbg_hexline(const char *tag, const char *a, const char *b,
-			       unsigned long v1, unsigned long v2, unsigned long v3)
-{
-	const char *want = imgact_env_value(g_envp, "OVMX_IMGACT_MAP");
-	if (!want || want[0] != '1')
-		return;
-	static const char H[] = "0123456789abcdef";
-	char line[320];
-	line[0] = 0;
-	xstrcat(line, tag);
-	if (a) { xstrcat(line, a); }
-	if (b) { xstrcat(line, " imports "); xstrcat(line, b); }
-	const char *labs[3] = { " cell=0x", " pv=0x", " entry=0x" };
-	unsigned long vs[3] = { v1, v2, v3 };
-	for (int j = 0; j < 3; j++) {
-		char hx[17];
-		for (int i = 0; i < 16; i++) hx[15 - i] = H[(vs[j] >> (i * 4)) & 0xf];
-		hx[16] = 0;
-		xstrcat(line, labs[j]);
-		xstrcat(line, hx);
-	}
-	xstrcat(line, "\n");
-	eputs(line);
-}
-
-static inline int imgact_addr_is_wild(unsigned long v)
-{
-	/* The wild region is the Alpha default/stack-top base ~0x120000000 (the
-	 * veneer SIGSEGV target); real images map far higher, at 0x200_xxxx_xxxx
-	 * (~2.2e12). So flag [0x1_0000_0000, 0x100_0000_0000) -- above a small
-	 * absolute yet BELOW the real image region. */
-	return v >= 0x100000000UL && v < 0x10000000000UL;
-}
-
 /* Defined further down; forward-declared here because imgact_vms_exit (which
  * precedes the definition) reads it for the OVMX_IMGACT_SEAM $STATUS readback. */
 static const char *imgact_env_value(char **envp, const char *key);
@@ -1644,7 +1574,6 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	struct ovmx_prod *p = &g_prods[g_nprods++];
 	xstrcpy(p->name, soname);
 	p->base = base;
-	imgact_dbg_map(soname, base);      /* vms-f49 fault-localization */
 	p->sv = (const struct ovmx_sv_header *)(base + sv_addr);
 	if (p->sv->magic != OVMX_SV_MAGIC) { g_nprods--; return 0; }
 
@@ -1822,15 +1751,6 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 			sys_exit(IMGACT_EXIT_FAIL);
 		}
 		imgact_fill_import(base + ie[k].patch_off, PV, linkage, codeaddr);
-		/* vms-f49 Option-1 probe: catch a binding that resolves/writes into the
-		 * wild 0x120000000-region (the veneer SIGSEGV target). PV wild -> SV-value
-		 * fault; PV sane but entry *(PV+8) wild -> producer PDSC-entry rebase fault. */
-		{
-			unsigned long _entry = (linkage || codeaddr) ? imgact_sv_code_entry(PV) : PV;
-			if (imgact_addr_is_wild(PV) || imgact_addr_is_wild(_entry))
-				imgact_dbg_hexline("IMGACT-WILD: ", whoami, soname,
-						   base + ie[k].patch_off, PV, _entry);
-		}
 #else
 		unsigned long addr = ovmx_sv_resolve(p->sv, ie[k].sv_index, p->base,
 						     ie[k].req_major, ie[k].req_minor);
@@ -2915,8 +2835,6 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	Elf64_Phdr *ephdr = (Elf64_Phdr *)at_phdr;
 	int ephnum = (int)at_phnum;
 	unsigned long ebias = exec_bias(ephdr, ephnum, at_phdr);
-	imgact_dbg_map("MAIN-EXE", ebias);                              /* vms-f49 */
-	imgact_dbg_map("IMGACT-INTERP", imgact_getauxval(7 /*AT_BASE*/)); /* vms-f49 */
 
 	Elf64_Dyn *edyn = 0;
 	for (int i = 0; i < ephnum; i++)

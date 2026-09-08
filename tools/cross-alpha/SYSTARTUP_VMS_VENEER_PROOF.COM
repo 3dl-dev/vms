@@ -24,13 +24,14 @@ $! here is proof the veneer's fopen genuinely landed the file on the real ODS-2
 $! volume -- something a same-CRTL fwrite->fread round-trip (which a ramfs
 $! satisfies identically) can never establish.
 $!
-$! The bare filespec PORTTEST.DAT is deliberate: the port image RUN executes in
-$! THIS STDRV process context, so its write and the DIRECTORY below resolve
-$! against the identical process default -- whatever that default is, writer and
-$! independent reader agree on it. If the LLP64 width fix (vms-1fc) were wrong,
-$! the veneer's ioctl(/dev/vms) pointer would truncate, the write would reach
-$! nothing, and DIRECTORY would report %DIRECT-W-NOFILES -- the gate reds. That
-$! is the whole point: Part A (width) is VALIDATED by Part B (this reader).
+$! The fully-qualified spec VDA0:[SYSTMP]PORTTEST.DAT (device + directory) is
+$! deliberate, matching the host-arch proof's VDA0:[OVMXDIR]VENEER.DAT: the port
+$! image RUN has no default device/directory in this STDRV process context, so a
+$! bare name cannot be resolved by RMS/Files-11 (vms-f49). The writer (veneer
+$! sys$create) and this independent DIRECTORY reader use the identical qualified
+$! spec, so they agree on the target. If the executive/RMS write path is wrong,
+$! the write reaches nothing and DIRECTORY reports %DIRECT-W-NOFILES -- the gate
+$! reds. That is the whole point: the un-fakeable ODS-2 landing is what is proven.
 $!
 $ SET NOON
 $!
@@ -38,8 +39,8 @@ $ WRITE SYS$OUTPUT "VENEER-PROOF: === MILESTONE: RUN JOINT_E2E (veneer crtl_rms 
 $ RUN SYS$SYSTEM:JOINT_E2E
 $ WRITE SYS$OUTPUT "VENEER-PROOF: WRITE-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $!
-$ WRITE SYS$OUTPUT "VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL PORTTEST.DAT (a DIFFERENT accessor over the ACP) ==="
-$ DIRECTORY/FULL PORTTEST.DAT
+$ WRITE SYS$OUTPUT "VENEER-PROOF: === INDEPENDENT READER: DIRECTORY/FULL VDA0:[SYSTMP]PORTTEST.DAT (a DIFFERENT accessor over the ACP) ==="
+$ DIRECTORY/FULL VDA0:[SYSTMP]PORTTEST.DAT
 $ WRITE SYS$OUTPUT "VENEER-PROOF: DIR-STATUS=''$STATUS' SEVERITY=''$SEVERITY'"
 $ WRITE SYS$OUTPUT "VENEER-PROOF: === END INDEPENDENT READER ==="
 $!

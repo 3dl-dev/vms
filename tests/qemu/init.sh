@@ -9,6 +9,16 @@ mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev
 
+# devpts, for POSIX pseudo-terminals. devtmpfs gives us /dev/ptmx, but
+# posix_openpt()/grantpt()/ptsname() also need a devpts filesystem mounted at
+# /dev/pts (test_kmod_devtab_terminal, rd vms-f881, opens a real PTY as RTAn:'s
+# byte transport). ptmxmode + the /dev/ptmx -> pts/ptmx symlink is the standard
+# way to make the master multiplexor resolve into this instance.
+mkdir -p /dev/pts
+mount -t devpts none /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || \
+    mount -t devpts none /dev/pts 2>/dev/null
+[ -e /dev/pts/ptmx ] && ln -sf pts/ptmx /dev/ptmx 2>/dev/null
+
 echo ""
 echo "=== OVMX Kernel Module Test Suite ==="
 echo "Kernel: $(uname -r) ($(uname -m))"

@@ -366,15 +366,21 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'terminal' "SHOW LOGICAL/FULL SYS\$SYSROOT [vms-676]: no fabricated 'terminal' tag -- OVMX's SYS\$SYSROOT seed does not set LNM_ATTR_TERMINAL (a real, tracked, separate fidelity gap vs. the oracle's [concealed,terminal]), and /FULL must render only what the entry's real attributes bit actually carries"
     negctl     "$SEG" 'SHOW LOGICAL' "SHOW LOGICAL/FULL SYS\$SYSROOT"
 
-    # SYS$SYSDEVICE: a single-valued, NO-attribute logical (lnm_seed_system_
-    # locating(mgr, "SYS$SYSDEVICE", sysdev, 0) -- attr 0) -- proves the "omit
-    # the attribute bracket entirely when no bits are set" shape (the oracle's
-    # own format for a non-concealed, non-terminal logical carries no second
-    # bracket at all).
+    # SYS$SYSDEVICE: OVMX seeds this one with LNM_ATTR_TERMINAL (attribute bit
+    # 0x02), NOT concealed -- the COMPLEMENT of SYS$SYSROOT's concealed-only
+    # seed. Rendered runtime: "SYS$SYSDEVICE" [exec] = "VDA0:" [terminal]
+    # (LNM$SYSTEM_TABLE). The pair is the real proof that /FULL renders EXACTLY
+    # the bits the entry carries and fabricates neither: SYS$SYSROOT shows
+    # [concealed] and not terminal; SYS$SYSDEVICE shows [terminal] and not
+    # concealed. (The oracle has BOTH bits on each -- [concealed,terminal] -- so
+    # each OVMX seed is missing the other's bit; that seed-data gap is tracked
+    # separately in vms-762 and must NOT be papered over by asserting a bit the
+    # entry does not really carry.)
     run_cmd 'SHOW LOGICAL/FULL SYS$SYSDEVICE'
     must_have  "$SEG" 'SYS$SYSDEVICE' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: names the logical"
     must_have  "$SEG" '[exec]' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: real access-mode tag [exec]"
-    must_match "$SEG" '\[exec\] = "[^"]+" \(LNM\$SYSTEM_TABLE\)' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: the value's closing quote is followed directly by '(LNM\$SYSTEM_TABLE)' -- no attribute bracket at all when attributes are 0, not an empty '[]' or a fabricated tag"
+    must_have  "$SEG" '[terminal]' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: real attribute tag [terminal] (LNM_ATTR_TERMINAL, the bit OVMX's own seed sets for SYS\$SYSDEVICE)"
+    must_not_have "$SEG" '[concealed]' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: no fabricated 'concealed' tag -- SYS\$SYSDEVICE's seed sets only TERMINAL, so /FULL renders only [terminal]; the missing 'concealed' vs the oracle's [concealed,terminal] is the tracked seed gap vms-762, never faked here"
     negctl     "$SEG" 'SHOW LOGICAL' "SHOW LOGICAL/FULL SYS\$SYSDEVICE"
 
     # --- F$GETDVI reads the SAME real executive device table (vms-050) -------

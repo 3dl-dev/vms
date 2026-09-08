@@ -29,20 +29,29 @@ target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 # touched. It ties the socketless engine core to the live datalink + a monotonic
 # clock. Links ovmx_datalink for its socket/bpf open + MAC-get + send + recv
 # primitives.
-add_executable(decnetd_exe decnetd.c)
-target_include_directories(decnetd_exe PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src/libdatalink/include       # scs_datalink.h
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include   # dnet_cterm.h (--set-host-selftest)
-    ${CMAKE_SOURCE_DIR}/src/libvms/include            # ovmx_identity.h (INV-1 banner SSOT)
-    ${CMAKE_SOURCE_DIR}/src/vmsfs/include             # transitive header of ovmx_identity.h
-)
-# vmsdecnet_cterm: the CTERM terminal-service protocol (rd vms-4d2) that rides on
-# the logical link -- the daemon's --set-host-selftest proves a full $ SET HOST
-# terminal session over a socketpair.
-target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm ovmx_datalink)
-set_target_properties(decnetd_exe PROPERTIES
-    OUTPUT_NAME "DECNETD"
-    SUFFIX ".EXE"
-)
-install(TARGETS decnetd_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+# The DECNETD.EXE daemon is built on Linux only for now: its CTERM login path
+# uses openpty()/forkpty() (libutil / <util.h> on the BSDs) and the datalink is
+# the AF_PACKET probe backend -- the netbsd-vax userspace port of the daemon is
+# a tracked later rung (rd vms-30e). The engine + cterm LIBRARIES and the NCP
+# utility (ncp_exe) remain portable and build on both arches; only this
+# executable is gated. Guarding it keeps the unconditional src/vmsdecnet subtree
+# clean under the netbsd-vax toolchain (no <pty.h>/-lutil link surprise).
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
+    add_executable(decnetd_exe decnetd.c)
+    target_include_directories(decnetd_exe PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src/libdatalink/include       # scs_datalink.h
+        ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include   # dnet_cterm.h (--set-host-selftest)
+        ${CMAKE_SOURCE_DIR}/src/libvms/include            # ovmx_identity.h (INV-1 banner SSOT)
+        ${CMAKE_SOURCE_DIR}/src/vmsfs/include             # transitive header of ovmx_identity.h
+    )
+    # vmsdecnet_cterm: the CTERM terminal-service protocol (rd vms-4d2) that rides
+    # on the logical link -- the daemon's --set-host-selftest proves a full
+    # $ SET HOST terminal session over a socketpair.
+    target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm ovmx_datalink)
+    set_target_properties(decnetd_exe PROPERTIES
+        OUTPUT_NAME "DECNETD"
+        SUFFIX ".EXE"
+    )
+    install(TARGETS decnetd_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+endif()

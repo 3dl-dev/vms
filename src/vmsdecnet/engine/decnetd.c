@@ -35,7 +35,11 @@
 #include <fcntl.h>       /* fcntl() */
 #include <net/if.h>      /* if_nametoindex() */
 #include <poll.h>        /* poll() -- multiplex the datalink + the aux fd */
-#include <pty.h>         /* openpty() -- the CTERM HOST spawns a real PTY */
+#if defined(__NetBSD__) || defined(__FreeBSD__) || defined(__OpenBSD__)
+#include <util.h>        /* openpty()/forkpty() live in libutil <util.h> on the BSDs */
+#else
+#include <pty.h>         /* openpty() -- glibc/Linux: the CTERM HOST spawns a real PTY */
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>

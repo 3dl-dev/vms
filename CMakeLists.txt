@@ -1080,7 +1080,15 @@ if(BUILD_TOOLS)
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE
         PARTS                # PARTS.EXE
+        ncp_exe              # NCP.EXE
     )
+    # NCP.EXE (rd vms-1e9): the DECnet Phase IV Network Control Program
+    # (SET/DEFINE/SHOW/CLEAR NODE, SET/SHOW EXECUTOR). Portable C (stdio + the
+    # node database) with no arch-specific code, so it ships on BOTH arches --
+    # the configuration surface a DECnet manager uses to build the node database.
+    # (The DECNETD.EXE network daemon is deliberately NOT in this aggregate yet:
+    # its AF_PACKET/PTY path needs the netbsd-vax userspace port + a booted proof
+    # before it ships -- tracked under vms-30e, not an allowlist gap.)
 
     # CNXTRACE.EXE is in the aggregate on PURPOSE, on both arches (E69). It
     # reads the connection manager's join transition ring out of the executive

@@ -4657,6 +4657,80 @@ jobs:
       - name: OTS$ runtime proof (LIBOTS$ links + DECC$SHR binds it + divide correct)
         run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/ots/run_ots_proof.sh
 
+  # GCC-port include surface (vms-714c, R5:
+  # docs/design-gcc-port-surface-gaps-register.md S1.2). Standing gate: the
+  # GENUINE, UNPATCHED upstream libgcc/config/alpha/vms-gcc_shell_handler.c
+  # (GCC 14.2.0, SHA256-pinned) must compile with the real alpha-dec-vms cross
+  # cc1 against src/libvms/include's vms/ canonicalized include-surface shim
+  # — proving the port's own host sources #include VMS-convention header
+  # names (`<vms/chfdef.h>`) UNCHANGED. A baseline control inside the proof
+  # script asserts the SAME file fails with that #include unresolved when the
+  # shim's -I is omitted, so a future regression that silently no-ops the shim
+  # cannot read as green. Host-container only; shares the cross-alpha-vms gha
+  # layer-cache scope so the toolchain-image build is a cache hit.
+  gcc-port-include-surface:
+    name: GCC-port include surface — unpatched port source builds unchanged (vms-714c)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5: PULL the source-hash-keyed prebuilt toolchain image from ghcr
+      # (zero ftp.gnu.org fetch). SOURCE_HASH is computed by the exact same
+      # `git ls-files -s | sha256sum` command as the alpha-toolchain-image
+      # build-push job, so the tag matches the current sources exactly. A
+      # missing tag (not yet seeded / registry hiccup) cleanly FALLS THROUGH to
+      # the gha-cached build below — `if docker pull; then … else …` keeps the
+      # pull-miss from aborting under `set -e`. Tags the result
+      # ovmx-cross-alpha-vms:latest either way, so the downstream steps are
+      # unchanged.
+      - name: Pull the prebuilt alpha-dec-vms toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-alpha-vms
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-alpha-vms:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the alpha-dec-vms cross toolchain image (fallback — gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Include-surface proof (unpatched port source builds against src/libvms/include/vms/)
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/include-surface/run_include_surface_proof.sh
+
   # Standing gate for vms-864: the genuine alpha DECC$SHR (musl-alpha universals
   # + the OVMX bootstrap surface from mk_decc_shr.sh's ALPHA branch) must link a
   # REAL alpha-dec-vms port crt0 (tools/cross-alpha-vms/joint-e2e/) with ZERO

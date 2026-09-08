@@ -186,7 +186,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
         const char *sysdev = getenv("OVMX_SYSDEVICE");
         lnm_seed_system_locating(mgr, "SYS$SYSDEVICE",
                                  (sysdev && sysdev[0]) ? sysdev : SYSDISK_DEVICE ":",
-                                 LNM_ATTR_TERMINAL);
+                                 LNM_ATTR_CONCEALED | LNM_ATTR_TERMINAL);
     }
 
     /*
@@ -206,6 +206,12 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      * (vms-b12/#332, extended for a concealed rooted root by vms-69e7): the
      * physical files live under [SYS0.SYSCOMMON.*], so the common member wins.
      * Nothing here is pre-flattened -- the SYS$xxx paths are DERIVED live.
+     *
+     * vms-762: a rooted concealed logical is BOTH concealed and terminal (the
+     * oracle, docs/oracle/vax73-system-root-logicals.md, shows SYS$SYSROOT /
+     * SYS$COMMON / SYS$SYSDEVICE all rendering [concealed,terminal]) -- the
+     * seed below now carries LNM_ATTR_CONCEALED | LNM_ATTR_TERMINAL, closing
+     * the prior CONCEALED-only / TERMINAL-only split across these three.
      */
     /*
      * vms-a01: the node-specific root [SYSn.] and the common root
@@ -224,7 +230,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
              "SYS$SYSDEVICE:[SYS%s.SYSCOMMON.]", root_tok);
     const char *sysroot_members[2] = { sysroot_self, syscommon_root };
     lnm_seed_system_locating_multi(mgr, "SYS$SYSROOT", sysroot_members, 2,
-                                   LNM_ATTR_CONCEALED);
+                                   LNM_ATTR_CONCEALED | LNM_ATTR_TERMINAL);
 
     /*
      * SYS$COMMON -> the cluster-common root [SYS0.SYSCOMMON.], concealed and
@@ -235,7 +241,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
      */
     lnm_seed_system_locating(mgr, "SYS$COMMON",
                              syscommon_root,
-                             LNM_ATTR_CONCEALED);
+                             LNM_ATTR_CONCEALED | LNM_ATTR_TERMINAL);
 
     /*
      * System directory logicals — COMPOSED onto SYS$SYSROOT, not spelled out.

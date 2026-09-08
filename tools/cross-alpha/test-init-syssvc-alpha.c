@@ -56,15 +56,25 @@
 #ifndef SUITE_TIMEOUT_SECS
 /* qemu-system-alpha runs pure TCG (no KVM on Alpha), ~10-50x slower than the
  * x86_64 KVM path, so 150s was too tight for several suites (procnam, the
- * DCL.EXE / process-spawning suites) that make real forward progress. 300s is
- * the honest per-suite calibration and fits the 3600s boot budget. NOTE: 300s
- * alone does NOT green the DCL/SPAWN suites (setname/spawn_users/showproc/
- * setprv_dcl/showterm) -- a 2026-08-28 confirm run showed they blow the suites'
- * OWN inner 15-30s poll deadlines (wait_for_named_row, subprocess-registration
- * poll, DCL_TIMEOUT_MS) under TCG cold-start, which are independent of this
- * outer watchdog. Proving those on LP64 needs the inner deadlines made
- * TCG-tolerant too -- a tracked follow-on, not a baseline (vms-039 commit msg). */
-#define SUITE_TIMEOUT_SECS 300
+ * DCL.EXE / process-spawning suites) that make real forward progress. 300s
+ * was the prior per-suite calibration and fits the 3600s boot budget. NOTE:
+ * 300s alone did NOT green the DCL/SPAWN suites (setname/spawn_users/
+ * showproc/setprv_dcl/showterm) -- a 2026-08-28 confirm run showed they blow
+ * the suites' OWN inner 15-30s poll deadlines (wait_for_named_row,
+ * subprocess-registration poll, DCL_TIMEOUT_MS) under TCG cold-start, which
+ * are independent of this outer watchdog.
+ *
+ * vms-b9e H1/H2 DIAGNOSTIC (2026-09-08), NOT a measured fix: bumped from 300
+ * toward the tcg_deadline.h clamp (SCALE 8->20 below) to disambiguate H1
+ * (calibration -- the 4 DCL suites go green at a bigger scale) from H2
+ * (a real registration race in spawn_users, which a bigger scale cannot
+ * fix). At SCALE=20 the largest ovmx_tcg_ms()-wrapped inner deadline is
+ * 30000ms*20 = 600s, so this outer watchdog must clear that with margin --
+ * 700s keeps the same ~100s cushion the prior 300/240 pairing had (scaled
+ * up), not a blind bump to turn red green. If the 4 DCL suites go green
+ * here, the FOLLOW-ON (not this diagnostic) is to replace this guess with a
+ * MEASURED Alpha-TCG cold-start budget, documented -- see vms-b9e. */
+#define SUITE_TIMEOUT_SECS 700
 #endif
 static volatile pid_t g_child = 0;
 static void on_alrm(int sig) { (void)sig; if (g_child > 0) kill(g_child, SIGKILL); }
@@ -120,14 +130,18 @@ static int run_suite(const char *name, int *out_pass, int *out_fail)
          * subprocess-registration polls) -- independent of the SUITE_TIMEOUT_SECS
          * watchdog above -- are hit as failures under DCL/subprocess cold-start.
          * This multiplies every deadline wrapped in ovmx_tcg_ms() (tcg_deadline.h)
-         * so a slow-but-healthy guest reaches the same PASS/FAIL. Scale 8 keeps
-         * the largest scaled inner deadline (30s*8 = 240s) below the 300s
-         * per-suite watchdog, so a genuine hang still fails LOUDLY (INV-6). The
-         * x86_64/aarch64 path never sets this env -> scale == 1, unchanged. */
+         * so a slow-but-healthy guest reaches the same PASS/FAIL.
+         *
+         * vms-b9e H1/H2 DIAGNOSTIC (2026-09-08): 8->20, the tcg_deadline.h
+         * clamp ceiling, in lockstep with SUITE_TIMEOUT_SECS 300->700 above.
+         * NOT a measured fix -- see that comment. The largest scaled inner
+         * deadline is now 30s*20 = 600s, under the 700s watchdog, so a
+         * genuine hang still fails LOUDLY (INV-6). The x86_64/aarch64 path
+         * never sets this env -> scale == 1, unchanged. */
         char *envp_plain[] = { (char *)"PATH=/tests:/bin", (char *)"HOME=/",
-                               (char *)"OVMX_TEST_DEADLINE_SCALE=8", NULL };
+                               (char *)"OVMX_TEST_DEADLINE_SCALE=20", NULL };
         char *envp_seam[]  = { (char *)"PATH=/tests:/bin", (char *)"HOME=/",
-                               (char *)"OVMX_TEST_DEADLINE_SCALE=8",
+                               (char *)"OVMX_TEST_DEADLINE_SCALE=20",
                                (char *)"OVMX_IMGACT_SEAM=1",
                                /* option (c): resolve the subject over the ACP on
                                 * the writable DKA300 sysvol (default DKA0: is the

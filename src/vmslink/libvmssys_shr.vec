@@ -248,3 +248,10 @@ vms_kif_cluster_setcluevt=PROCEDURE
 # no console log, so this is the only route that transcript has out. APPENDED
 # per the append-only contract -- never shifts an existing index.
 vms_kif_cluster_diag_join=PROCEDURE
+
+# vms-3e9: the $CREPRC interactive-session primitive (sys_process.c) records the
+# session's controlling terminal via VMS_IOCTL_SETTERM. Moving that call out of
+# JOB_CONTROL (which links libvmssys directly) into LIBVMS$SHR pulls this symbol
+# across the shareable boundary, so it must be exported as a universal here.
+# APPENDED per the append-only contract -- never shifts an existing index.
+vms_kif_setterm=PROCEDURE

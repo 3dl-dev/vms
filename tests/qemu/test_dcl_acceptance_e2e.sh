@@ -121,8 +121,11 @@ rm -f "$DISK" "$LOG" "$FIFO"
 cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
 
-# Whole-VM hard cap: boot + a settle + ~13 commands, each bounded by CMD_TIMEOUT.
-WALL=$((BOOT_TIMEOUT + CMD_TIMEOUT * 16 + 120))
+# Whole-VM hard cap: boot + a settle + ~13 commands, each bounded by CMD_TIMEOUT,
+# plus the session-primitive section (vms-3e9): a LOGOUT, a second console
+# session to reach Username: again (up to 60s of CR feeding, as at boot), a
+# second login and three more commands.
+WALL=$((BOOT_TIMEOUT + CMD_TIMEOUT * 20 + 240))
 
 cleanup() { exec 4>&- 2>/dev/null || true; [ -n "${QPID:-}" ] && kill "$QPID" 2>/dev/null; rm -f "$FIFO"; }
 trap cleanup EXIT

@@ -47,6 +47,14 @@
  *     reference monitor enforces the stamped UIC/privileges. (Before vms-d31d
  *     only NAME and pid were the executive's; UIC/username/privileges were the
  *     OVMX-LOCAL half. vms-afd owned that older, smaller executive part.)
+ *     vms-3e9 adds the SESSION-CREATION mode on the same executive footing:
+ *     PRC$M_INTER binds the created process to a terminal DEVICE the executive
+ *     records ($ASSIGN + VMS_IOCTL_SETTERM, so $GETJPI/$GETDVI from ANOTHER
+ *     process read the binding), and PRC$M_LOGINOUT establishes the created
+ *     process's system identity through the privilege-gated
+ *     vms_ioctl_establish_system() -- OVMX's stand-in for an INSTALLed
+ *     /PRIVILEGED LOGINOUT.EXE -- so no caller above the VMS layer forks,
+ *     execs, opens a terminal or forges an identity to start a login session.
  * OVMX-LOCAL: sys$creprc -- the child's default directory and quotas are still
  *     copied only into the child's process-local PCB; no executive row records
  *     those two, so nothing outside the child reads back what it was created
@@ -148,6 +156,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
+#include <sys/ioctl.h>
 #include <signal.h>
 #include <time.h>
 #include <stdio.h>
@@ -164,6 +173,12 @@
  * SPAWN) is execve'd from the boot-staging tmpfs PID 1 filled off the ODS-2
  * volume over the ACP. */
 #include "ovmx_layout.h"
+/* ovmx_console_terminal_path(): the ONE place a VMS terminal-device NAME maps
+ * to its substrate backing (vms-948). $CREPRC's session-creation mode
+ * (PRC$M_INTER, below) is the only caller that needs it on the create path --
+ * the terminal a session is bound to is named in VMS (OPA0:, and RTAn: when
+ * vms-515 P2 lands), never as a substrate path. */
+#include "ovmx_console.h"
 
 /*
  * sys$exit - Terminate process with a VMS status code.
@@ -628,6 +643,95 @@ static ssize_t creprc_read_all(int fd, void *buf, size_t len)
 }
 
 /*
+ * creprc_bind_terminal - bind the process being created to the TERMINAL
+ * DEVICE $CREPRC was asked to run it on (PRC$M_INTER; vms-3e9, design
+ * docs/design/faithful-sessions-and-network-subsystems.md §3.1).
+ *
+ * THIS IS WHERE THE LINUX MECHANICS LIVE, AND WHY THEY LIVE HERE. A VMS
+ * interactive process is a process bound to a terminal DEVICE; on Linux that
+ * binding is an open(2) of the device's backing plus dup2(2) onto the three
+ * standard descriptors plus a controlling-terminal claim. None of that is a
+ * VMS concept, so none of it may appear at a CALLER -- JOB_CONTROL today,
+ * NETACP and vmssshd in the later phases. It appears exactly once, here,
+ * INSIDE the executive-backed creation primitive, below the VMS layer
+ * (design §3.1: "Nothing above the VMS layer forks, execs, opens a pty, or
+ * dup2s"). Every session-creating path calls $CREPRC and hands it a DEVICE
+ * NAME; this function is the only thing that knows what backs it.
+ *
+ * THE NAME IS RESOLVED, NEVER TRANSMITTED AS A PATH. ovmx_console_terminal_
+ * path() (src/libvms/include/ovmx_console.h, vms-948) is the one home for the
+ * name->backing mapping, shared with $ASSIGN and DCL's RUN/INPUT= resolution.
+ * A spec it does not recognise as a terminal is refused SS$_NOSUCHDEV rather
+ * than opened as a path: a substrate path arriving here from above the VMS
+ * layer is precisely the leak this item removes, so it must not work. When
+ * RTAn: becomes a real device-table entry (vms-515 P2) it is that header, and
+ * nothing here, that learns the new name.
+ *
+ * THE EXECUTIVE RECORDS THE BINDING, so a DIFFERENT process can read which
+ * terminal this job is on ($GETJPI/JPI$_TERMINAL, $GETDVI on the device) --
+ * which is what makes it a fact rather than a self-description (CLAUDE.md
+ * Rule 11, and the design's §7.5 anti-LARP tell). $ASSIGN names the device
+ * because the SESSION IS BEING CREATED ON IT -- system configuration -- but
+ * VMS_IOCTL_SETTERM takes only the CHANNEL: the executive reads the device
+ * off the channel it issued and copies its own name, so nothing downstream
+ * receives a string it must trust. The binding survives the execl() below,
+ * because the executive keys its row on the thread-group id, which execve()
+ * does not change. Neither status is examined, deliberately -- the same
+ * reasoning JOB_CONTROL's login child carried before this item moved the
+ * sequence here: the executive is pinned open for the life of the system and
+ * OPA0: is created at module init, so a branch here would handle a state OVMX
+ * is not in, and the only thing it could usefully do is fabricate a binding.
+ * If a call did fail the executive records no terminal, and SHOW TERMINAL
+ * then names none -- the honest outcome (INV-6).
+ *
+ * THE CONTROLLING-TERMINAL CLAIM. An interactive process is ownerless -- the
+ * top of its own job -- so it is created on the PRC$M_DETACH path, which
+ * setsid()s in the INTERMEDIATE and then forks the task that runs the image.
+ * That leaves this task in a session it does not LEAD, and a session leader is
+ * exactly what a controlling-terminal claim requires; without the claim the
+ * operator's Ctrl-C would still be delivered to the job controller's process
+ * group rather than to the session sitting at the terminal (which is where it
+ * went before this item, only because the login child was forked inside
+ * JOB_CONTROL's own session). So the sequence here is the standard
+ * login-program one -- become a session leader, open the terminal, claim it --
+ * and it is best-effort by design: setsid() is refused to a process that
+ * already leads its group, NetBSD/vax's TIOCSCTTY does not implement stealing
+ * from another session, and a claim that does not take costs the session
+ * nothing this rung proves. It is never load-bearing for identity, and nothing
+ * is fabricated when it fails -- the session simply has no controlling
+ * terminal, which is a state Linux describes honestly on its own.
+ *
+ * Returns SS$_NORMAL, or the honest failure (SS$_NOSUCHDEV: not a terminal
+ * device name; SS$_DEVOFFLINE: the device's backing could not be opened).
+ */
+static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
+{
+    (void)setsid();     /* best-effort: see the controlling-terminal note */
+
+    int fd = open(devpath, O_RDWR);
+    if (fd < 0)
+        return SS$_DEVOFFLINE;
+
+    if (dup2(fd, STDIN_FILENO)  < 0 ||
+        dup2(fd, STDOUT_FILENO) < 0 ||
+        dup2(fd, STDERR_FILENO) < 0) {
+        close(fd);
+        return SS$_DEVOFFLINE;
+    }
+    if (fd > STDERR_FILENO)
+        close(fd);
+
+#ifdef TIOCSCTTY
+    (void)ioctl(STDIN_FILENO, TIOCSCTTY, 1);
+#endif
+
+    uint32_t chan = 0;
+    (void)vms_kif_assign(devnam, &chan);
+    (void)vms_kif_setterm(chan);
+    return SS$_NORMAL;
+}
+
+/*
  * sys$creprc - Create a process.
  *
  * Two kinds of process, selected by the stsflg argument:
@@ -640,6 +744,47 @@ static ssize_t creprc_read_all(int fd, void *buf, size_t len)
  *                  creator -- the creator cannot wait on it at all.
  *                  This is what RUN/DETACHED and the system startup
  *                  procedures create for services.
+ *
+ *   PRC$M_INTER    an INTERACTIVE process: one BOUND TO A TERMINAL DEVICE,
+ *                  named -- as a VMS device, never a substrate path -- by the
+ *                  input descriptor. This is the SESSION-CREATION mode
+ *                  (vms-3e9, design docs/design/faithful-sessions-and-
+ *                  network-subsystems.md §3.1/§6-P1): the ONE primitive every
+ *                  access route uses to start a login session, "create a
+ *                  process running LOGINOUT.EXE bound to terminal-device X".
+ *                  An interactive process is ownerless on VMS -- the top of
+ *                  its own job -- so it is created PRC$M_DETACH too; the
+ *                  creator cannot wait on it and reads its termination from
+ *                  the executive ($GETJPI on the process id returned here).
+ *                  Console today; SSH (P3) and DECnet CTERM (P4) later route
+ *                  through this same call with an RTAn: device (P2) instead
+ *                  of OPA0:. See creprc_bind_terminal() above for why the
+ *                  open/dup2/controlling-terminal mechanics live in here and
+ *                  nowhere above the VMS layer.
+ *
+ *   PRC$M_LOGINOUT the image is LOGINOUT.EXE, the system's one AUTHENTICATOR.
+ *                  On OpenVMS LOGINOUT is INSTALLED WITH PRIVILEGE, which is
+ *                  how a process running it may read SYS$SYSTEM:SYSUAF.DAT
+ *                  and set its own persona REGARDLESS OF WHO CREATED IT --
+ *                  the keystone that lets the creator (JOB_CONTROL now,
+ *                  NETACP later) forge no identity of its own (design §2).
+ *                  OVMX has no INSTALL/PRIVILEGED image-activation mechanism
+ *                  (src/install/install.c registers known images; it carries
+ *                  no privilege set), so this flag's stand-in is the
+ *                  privilege-GATED executive primitive the console login
+ *                  already used: vms_kif_establish_system(). It is stated as
+ *                  OVMX's own mechanism (Rule 8), not claimed as VMS's, and
+ *                  it fabricates nothing -- the executive refuses a caller
+ *                  without real host privilege and the SYSUAF read then fails
+ *                  honestly (INV-6). It is issued FIRST in the created
+ *                  process, before the terminal binding and before the image
+ *                  is activated, which is the WALL-6 ordering guard
+ *                  (vms-d4ef): the identity must be on the fresh PCB BEFORE
+ *                  LOGINOUT reads the World-denied SYSUAF, or the VAX rail --
+ *                  which has no root->group-0 crutch to hide behind -- denies
+ *                  the read RMS$_PRV. LOGINOUT then RE-PERSONAS the process
+ *                  after it authenticates, through the single guarded persona
+ *                  primitive (vms_ioctl_setident, "reserved for LOGINOUT").
  *
  * Uses fork()+exec() to create a new process running the specified image.
  * Inherits VMS context (privileges, UIC, username, quotas) from the
@@ -661,7 +806,41 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 
     if (!image || !image->dsc$a_pointer) return SS$_BADPARAM;
 
-    const int detached = (stsflg & PRC$M_DETACH) != 0;
+    /*
+     * An INTERACTIVE process is ownerless on VMS -- the top of its own job,
+     * not a subprocess of the job controller -- so PRC$M_INTER implies the
+     * detached shape here (no creator wait, reparented away, its own session).
+     * That is also what keeps the retired fork+execl from coming back in a
+     * quieter costume: the creator has no child to waitpid() for, and reads
+     * the session's life out of the executive instead.
+     */
+    const int interactive = (stsflg & PRC$M_INTER) != 0;
+    const int loginout    = (stsflg & PRC$M_LOGINOUT) != 0;
+    const int detached    = ((stsflg & PRC$M_DETACH) != 0) || interactive;
+
+    /*
+     * RESOLVE THE TERMINAL DEVICE BEFORE ANY PROCESS EXISTS. A session
+     * creation that names a device OVMX cannot bind must fail as a creation
+     * -- SS$_NOSUCHDEV to the caller, with nothing registered, named or
+     * forked -- rather than half-creating a process that then discovers it
+     * has no terminal. Same discipline as the refused-identity-override case
+     * below (vms-8be): a refusal leaves no live PCB behind.
+     */
+    /* VMS_PRCNAM_XFER, for the same reason child_prcnam below uses it: it is
+     * deliberately WIDER than any legal device name, so an oversized spec is
+     * REJECTED rather than clipped into a name that resolves. (No VMS terminal
+     * device name is long enough for a truncation to become a valid one, but
+     * the buffer that makes that argument unnecessary is the right buffer.) */
+    char term_devnam[VMS_PRCNAM_XFER] = {0};
+    char term_path[256] = {0};
+    if (interactive) {
+        if (!input || !input->dsc$a_pointer || input->dsc$w_length == 0)
+            return SS$_BADPARAM;
+        dsc$strncpy(term_devnam, input, sizeof(term_devnam));
+        if (!ovmx_console_terminal_path(term_devnam, term_path,
+                                        sizeof(term_path)))
+            return SS$_NOSUCHDEV;
+    }
 
     char img_path[512];
     dsc$strncpy(img_path, image, sizeof(img_path));
@@ -930,8 +1109,58 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
         int override_asked = (uic != 0 || prvadr != NULL);
         int engage = detached ? (child_username[0] != 0 || override_asked)
                               : override_asked;
+        /*
+         * PRC$M_LOGINOUT: THE CREATOR STAMPS NO IDENTITY AT ALL (design §2).
+         * The whole point of the installed-privileged-LOGINOUT model is that
+         * the authority to hold a system identity belongs to the IMAGE, not
+         * to whoever created the process -- so the creator-computed
+         * username/UIC/privilege stamp is skipped here and the created
+         * process establishes the identity itself, below, through the
+         * privilege-gated executive primitive. A creator with no identity to
+         * lend (a future NETACP that is not SYSTEM) therefore creates a
+         * working login session exactly as JOB_CONTROL does.
+         */
+        if (loginout)
+            engage = 0;
 
         rep.status = SS$_NORMAL;
+
+        /*
+         * WALL-6 (vms-d4ef, preserved verbatim in ORDER as well as in
+         * substance): this runs FIRST in the created process -- before the
+         * process is named, before the terminal is bound, and before the
+         * image is activated -- so the identity is on the fresh PCB BEFORE
+         * LOGINOUT reads the World-denied SYS$SYSTEM:SYSUAF.DAT (fh2_fileprot
+         * 0xFF88; acp_check_access() grants that read only to a caller in the
+         * SYSTEM protection category). A FRESH registration derives its UIC
+         * from the substrate's credentials: on the QEMU/Linux runtime those
+         * are root -> group 0 <= MAXSYSGROUP, which reads SYSUAF by luck of
+         * the environment; on NetBSD/VAX they are a non-system group and the
+         * ACP denies the read (RMS$_PRV, surfacing as LOGINOUT's clean "User
+         * authorization failure"). Moving this call after the SYSUAF read --
+         * or dropping it -- is an ASYMMETRIC-ARCH regression that x86_64
+         * cannot see, which is why the acceptance for it runs on the VAX rail.
+         *
+         * INV-6 / fail-honest: vms_ioctl_establish_system() is gated on the
+         * caller's real host privilege. If the executive refuses, or is
+         * absent, the process is left non-system and the SYSUAF read fails
+         * honestly -- nothing here fabricates the identity. The creation is
+         * NOT failed for it (that would surrender the console for a condition
+         * LOGINOUT reports perfectly well itself), but the status is reported
+         * so a regression is never silent: the same diagnostic the console
+         * login child printed before this item moved the sequence here, under
+         * the OVMX facility because it is OVMX's own condition, not a VMS one.
+         */
+        if (loginout) {
+            uint32_t est = vms_kif_establish_system();
+            if (!(est & 1))
+                fprintf(stderr,
+                        "%%OVMX-W-NOSYSID, login session could not establish "
+                        "its SYSTEM identity (status %08X); "
+                        "SYS$SYSTEM:SYSUAF.DAT read will be refused\n",
+                        (unsigned)est);
+        }
+
         if (engage && child_username[0] == 0) {
             /* Override asked with no user name to stamp it under: refuse
              * before touching the executive, so nothing is registered or
@@ -1010,6 +1239,26 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
                     rep.status = ist;
             }
         }
+
+        /*
+         * BIND THE INTERACTIVE PROCESS TO ITS TERMINAL DEVICE (PRC$M_INTER).
+         *
+         * After the identity, before the image: the executive's row for this
+         * process already exists, so SETTERM has a row to record the terminal
+         * on, and the binding is in place before LOGINOUT prints its first
+         * byte. A binding that does not take FAILS THE CREATION (the caller
+         * gets the device status and reaps nothing, because the report below
+         * is never written by a process that goes on to exec) -- an
+         * interactive process with no terminal is not a thing VMS produces,
+         * and silently continuing would hand the operator a session reading
+         * whatever descriptors happened to be inherited.
+         */
+        if ((rep.status & 1) && interactive) {
+            uint32_t tst = creprc_bind_terminal(term_devnam, term_path);
+            if (!(tst & 1))
+                rep.status = tst;
+        }
+
         /* Retried on EINTR and on a short write: an interrupted report
          * from a child that is about to exec its image would reach the
          * creator as a short read, i.e. as OVMX$_PRCLOST for a running
@@ -1055,33 +1304,42 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * observable. Mapping VMS's null device onto /dev/null here is
          * an OVMX implementation detail (CLAUDE.md Rule 8), not a
          * claimed byte-level VMS behaviour.
+         *
+         * AN INTERACTIVE PROCESS SKIPS ALL OF IT: its three streams ARE the
+         * terminal device creprc_bind_terminal() already bound them to, and
+         * its input/output/error descriptors named that DEVICE, not files to
+         * open. Re-running this block would reopen the device name as a path
+         * (it is not one) and, on the detached branch, would replace the
+         * operator's console with /dev/null.
          */
-        if (input && input->dsc$a_pointer) {
-            char path[256];
-            dsc$strncpy(path, input, sizeof(path));
-            int fd = open(path, O_RDONLY);
-            if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
-        } else if (detached) {
-            int fd = open("/dev/null", O_RDONLY);
-            if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
-        }
-        if (output && output->dsc$a_pointer) {
-            char path[256];
-            dsc$strncpy(path, output, sizeof(path));
-            int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
-        } else if (detached) {
-            int fd = open("/dev/null", O_WRONLY);
-            if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
-        }
-        if (error && error->dsc$a_pointer) {
-            char path[256];
-            dsc$strncpy(path, error, sizeof(path));
-            int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
-        } else if (detached) {
-            int fd = open("/dev/null", O_WRONLY);
-            if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
+        if (!interactive) {
+            if (input && input->dsc$a_pointer) {
+                char path[256];
+                dsc$strncpy(path, input, sizeof(path));
+                int fd = open(path, O_RDONLY);
+                if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
+            } else if (detached) {
+                int fd = open("/dev/null", O_RDONLY);
+                if (fd >= 0) { dup2(fd, STDIN_FILENO); close(fd); }
+            }
+            if (output && output->dsc$a_pointer) {
+                char path[256];
+                dsc$strncpy(path, output, sizeof(path));
+                int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
+            } else if (detached) {
+                int fd = open("/dev/null", O_WRONLY);
+                if (fd >= 0) { dup2(fd, STDOUT_FILENO); close(fd); }
+            }
+            if (error && error->dsc$a_pointer) {
+                char path[256];
+                dsc$strncpy(path, error, sizeof(path));
+                int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
+            } else if (detached) {
+                int fd = open("/dev/null", O_WRONLY);
+                if (fd >= 0) { dup2(fd, STDERR_FILENO); close(fd); }
+            }
         }
 
         execl(img_path, img_path, (char *)NULL);

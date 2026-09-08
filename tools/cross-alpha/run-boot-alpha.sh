@@ -316,7 +316,10 @@ run_acceptance_boot() {
   # The full battery (~10 commands) needs far longer than a boot-only run, so use
   # a generous qemu-run bound (QT); the CR-feed-to-Username loop keeps the shorter
   # BOOT_TIMEOUT bound (it breaks the instant Username: appears).
-  local QT="${ACCEPT_TIMEOUT:-900}"
+  # vms-3e9 added the session-primitive section at the tail: a LOGOUT, a second
+  # console session (its own CR-feed-to-Username loop, up to 60s) and a second
+  # login plus three commands -- so the bound gains room for that too.
+  local QT="${ACCEPT_TIMEOUT:-1080}"
   local DT="$((QT + 150))"
   local rc=0
   set +e

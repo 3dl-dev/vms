@@ -57,6 +57,13 @@
 # result, NOT a battery error). It returns 1 ONLY if the runtime never reached
 # the Username: prompt or SYSTEM login failed -- a hard boot/login failure the
 # caller should surface with a console dump.
+#
+# TWO SESSIONS, NOT ONE (vms-3e9). The battery's tail LOGS OUT of the SYSTEM
+# session and logs back in as the NON-SYSTEM SYSUAF account GUEST, to prove the
+# session-creation primitive ($CREPRC) and the re-persona (LOGINOUT) -- see the
+# "SESSION PRIMITIVE (vms-3e9)" section at the bottom. Callers must therefore
+# budget for a second login (a CR-feed-to-Username loop like the boot one) and
+# must not assume the guest is still logged in as SYSTEM when this returns.
 
 # --- assertion helpers (arch-independent; operate on a captured console SEGMENT)
 ok()  { echo "  PASS: $1"; PASS=$((PASS + 1)); }
@@ -781,6 +788,108 @@ run_dcl_acceptance_battery() {
     golden_diff_report vax-show-system  HOLLOW  vms-6b8e  # SHOW SYSTEM omits the State/Pri/I/O columns
     golden_diff_report vax-show-device  MISSING vms-ddc   # %SYSTEM-W-NOSUCHDEV (device-name model, ties vms-9f5)
     golden_diff_report vax-show-process HOLLOW  vms-1f7   # omits Terminal/Base priority/Devices allocated; UIC not resolved to [SYSTEM]
+
+    # =======================================================================
+    # SESSION PRIMITIVE (vms-3e9) -- $CREPRC creates the session, LOGINOUT
+    # re-personas it. Design record docs/design/faithful-sessions-and-network-
+    # subsystems.md §3.1/§6-P1, ratification gates §7.1/§7.5.
+    #
+    # WHY THIS SECTION IS HERE AND NOT IN AN x86_64-ONLY TEST. The property it
+    # proves is ASYMMETRIC ACROSS ARCHES (the Wall-6 trap, vms-d4ef): the
+    # created process must establish its system identity BEFORE LOGINOUT reads
+    # the World-denied SYS$SYSTEM:SYSUAF.DAT. On x86_64 a violation is
+    # INVISIBLE -- root maps to UIC group 0, which is <= MAXSYSGROUP and reads
+    # SYSUAF by luck of the environment -- while on the VAX rail the ACP denies
+    # the read RMS$_PRV and login stops working. This battery is the ONE
+    # place that runs byte-identically on x86_64, Alpha AND the VAX rail
+    # (tests/lab-vax/test_dcl_acceptance_vax.sh), so the proof lives here.
+    #
+    # WHAT IT ACTUALLY PROVES, and why a fake could not pass it:
+    #   - The console session is created ANEW after a logout. The battery has
+    #     been driving the session JOB_CONTROL created at boot; LOGOUT ends
+    #     that process, and a second "Username:" can only appear because
+    #     JOB_CONTROL went round its loop and issued $CREPRC again. There is
+    #     no fork+execl left in that program to produce one another way.
+    #   - A NON-SYSTEM SYSUAF account (GUEST, [128,129] = octal [200,201],
+    #     TMPMBX only, password GUEST -- tools/mksysuaf.c's seed) logs in and
+    #     the process reports THAT ACCOUNT'S identity. The creator (JOB_CONTROL)
+    #     is SYSTEM and passes no identity at all: if $CREPRC were stamping the
+    #     creator's identity, or if LOGINOUT were not re-personaing through the
+    #     guarded persona primitive, every one of these would still say SYSTEM.
+    #     That is the re-persona proof, and it is exactly the thing the
+    #     installed-privileged-LOGINOUT model exists to make possible.
+    #   - SHOW PROCESS and SHOW PROCESS/PRIVILEGES read the EXECUTIVE's row
+    #     ($GETJPI), not the session's own idea of itself, so the identity is
+    #     a fact other processes can see and not a self-description.
+    #   - SHOW TERMINAL is the $GETDVI leg: it reads JPI$_TERMINAL off the
+    #     executive row -- which is there only because $CREPRC's terminal
+    #     binding did $ASSIGN + SETTERM inside the created process -- and then
+    #     $GETDVIs THAT NAME to render the device row. A session with no
+    #     executive device prints nothing here, which is the design's §7.5
+    #     LARP tell in its console form.
+    # =======================================================================
+    local SESS_OFF; SESS_OFF=$(wc -c <"$LOG")
+    send 'LOGOUT'
+    if wait_for 'logged out at' 30 "$SESS_OFF"; then
+        ok "SESSION [vms-3e9]: the SYSTEM session logs out (LOGINOUT's session ends, so the creating loop comes round)"
+    else
+        bad "SESSION [vms-3e9]: LOGOUT never completed -- the rest of this section cannot run"
+    fi
+
+    # A fresh console session: LOGINOUT on OPA0: waits for the operator's
+    # RETURN, so feed a CR each second exactly as the boot loop above does.
+    local RELOGIN_OFF; RELOGIN_OFF=$(wc -c <"$LOG")
+    local rw=0
+    until tail -c "+$((RELOGIN_OFF + 1))" "$LOG" 2>/dev/null | grep -qaF 'Username:' \
+          || [ "$rw" -ge 60 ]; do
+        send ''; sleep 1; rw=$((rw + 1))
+    done
+    if wait_for 'Username:' 10 "$RELOGIN_OFF"; then
+        ok "SESSION [vms-3e9]: a SECOND console session reaches Username: -- JOB_CONTROL created it with \$CREPRC (PRC\$M_INTER|PRC\$M_LOGINOUT); it has no fork+execl left to do it any other way"
+    else
+        bad "SESSION [vms-3e9]: no second Username: prompt after logout -- the \$CREPRC session-creation loop did not come round"
+    fi
+
+    # --- log in as a NON-SYSTEM SYSUAF account ------------------------------
+    local GUEST_OFF; GUEST_OFF=$(wc -c <"$LOG")
+    send 'GUEST'
+    wait_for 'Password:' 30 "$GUEST_OFF" && send 'GUEST'
+    if wait_for 'Welcome to OpenVMX' 30 "$GUEST_OFF"; then
+        ok "SESSION [vms-3e9]: the NON-SYSTEM account GUEST authenticates against SYSUAF and reaches a session (the Wall-6 ordering held: the created process was system-identified BEFORE the SYSUAF read -- on the VAX rail this is the whole proof)"
+    else
+        bad "SESSION [vms-3e9]: GUEST could not log in. On the VAX rail this is the Wall-6 regression (establish_system after the SYSUAF read -> RMS\$_PRV -> 'User authorization failure'); on x86_64 it is a real login break the root->group-0 crutch would normally have hidden"
+    fi
+    wait_for '$ ' 20 "$GUEST_OFF"
+
+    # --- the re-persona proof: the process reports GUEST, not its creator ---
+    run_cmd 'SHOW PROCESS'
+    must_match    "$SEG" 'User: *GUEST' "SHOW PROCESS [vms-3e9]: the session's executive row carries the AUTHENTICATED user GUEST"
+    must_not_have "$SEG" 'User: SYSTEM' "SHOW PROCESS [vms-3e9]: it does NOT report its creator's identity (JOB_CONTROL is SYSTEM; a creator-stamped or un-re-personaed session would say SYSTEM here)"
+    # GUEST's UIC is [128,129] decimal = [200,201] octal. SHOW PROCESS resolves
+    # it through the rights list where it can ([GUEST]) and prints the octal
+    # [group,member] where it cannot -- both are GUEST's UIC and neither is
+    # SYSTEM's [1,4]/[001,004], which is what this asserts.
+    must_match    "$SEG" 'User Identifier: *\[(GUEST|200,201)\]' "SHOW PROCESS [vms-3e9]: the UIC is GUEST's -- [GUEST] resolved, or the octal [200,201] = decimal [128,129] (tools/mksysuaf.c seed)"
+    must_not_have "$SEG" '[001,004]' "SHOW PROCESS [vms-3e9]: the UIC is NOT SYSTEM's [1,4]"
+    negctl        "$SEG" 'Process ID' "SHOW PROCESS as GUEST"
+
+    run_cmd 'SHOW PROCESS/PRIVILEGES'
+    # GUEST is authorized TMPMBX and nothing else. SYSTEM holds PRV$M_ALL, so
+    # every one of these would be listed if the session were still its creator
+    # -- each is a privilege GUEST must not have.
+    must_have     "$SEG" 'Process privileges' "SHOW PROCESS/PRIVILEGES [vms-3e9]: prints the executive-held privilege blocks"
+    local _p
+    for _p in SETPRV SYSPRV BYPASS CMKRNL CMEXEC WORLD; do
+        must_not_have "$SEG" " $_p " "SHOW PROCESS/PRIVILEGES [vms-3e9]: GUEST does NOT hold $_p (SYSTEM's mask did not survive the re-persona)"
+    done
+    negctl        "$SEG" 'privileges' "SHOW PROCESS/PRIVILEGES as GUEST"
+
+    # --- the $GETDVI leg: the session's terminal is a REAL executive device --
+    run_cmd 'SHOW TERMINAL'
+    must_match "$SEG" 'Terminal: *_OPA0:' "SHOW TERMINAL [vms-3e9]: \$GETDVI on the terminal the executive recorded for this session returns the real OPA0: device row (\$CREPRC's \$ASSIGN+SETTERM ran inside the created process; a session with no executive device prints nothing here -- the §7.5 tell)"
+    must_have  "$SEG" 'Device_Type' "SHOW TERMINAL [vms-3e9]: the device row's own fields are rendered, not a name echoed back"
+    must_match "$SEG" 'Owner: *GUEST' "SHOW TERMINAL [vms-3e9]: the DEVICE row's owner resolves to the re-personaed session -- a second, cross-object read of the same identity"
+    negctl     "$SEG" 'Terminal:' "SHOW TERMINAL as GUEST"
 
     return 0
 }

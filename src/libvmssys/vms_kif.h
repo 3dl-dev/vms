@@ -929,12 +929,20 @@ int vms_kif_lnm_translate(uint32_t table, const char *name, uint8_t index,
  * its equivalence strings (vms-420 -- previously only index 0 was carried,
  * which is why an enumerated search-list logical showed just its first
  * value), NUL-terminated. Sizes track the arena's VMS_LNM_MAX_NAME/VALUE/
- * EQUIV (asserted in vms_kif.c). */
+ * EQUIV (asserted in vms_kif.c). `acmode` (vms-676) is the entry's REAL
+ * LNM_MODE_* access mode, read from the same struct vms_lnm_entry as
+ * `attributes` -- SHOW LOGICAL/FULL's per-name mode tag. Before vms-676 the
+ * DCL-layer enumerate wrapper (lnm_enumerate, src/vmslnm/lnm_client.c) had
+ * no field to receive this and hardcoded LNM_MODE_EXEC for every
+ * executive-resident entry regardless of the mode it was actually created
+ * at -- latent since nothing rendered it, but a fabrication the moment a
+ * caller displays it. */
 struct vms_kif_lnm_enum_rec {
     char     name[VMS_LNM_MAX_NAME + 1];
     uint8_t  num_values;                          /* 1..VMS_LNM_MAX_EQUIV */
     char     values[VMS_LNM_MAX_EQUIV][VMS_LNM_MAX_VALUE + 1];
     uint32_t attributes;
+    uint8_t  acmode;                              /* LNM_MODE_* */
 };
 
 /* Enumerate every name in an executive-resident table (VMS_LNM_TBL_SYSTEM,

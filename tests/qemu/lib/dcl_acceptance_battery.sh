@@ -337,6 +337,46 @@ run_dcl_acceptance_battery() {
     must_have  "$SEG" 'Owner process' "SHOW DEVICE/FULL [vms-ddc]: bare /FULL shows the Owner process block, proving /FULL is applied in the bare listing, not only the named path"
     negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE/FULL (bare)"
 
+    # --- SHOW LOGICAL/FULL (vms-676: cmd_show_logical() never checked /FULL,
+    # so SHOW LOGICAL/FULL was byte-identical to bare SHOW LOGICAL -- same
+    # qualifier-ignored bug class as vms-ddc/SHOW DEVICE/FULL above). /FULL now
+    # adds a per-name [access-mode] tag and a per-entry [attribute,...] tag,
+    # read from the REAL lnm_entry_t.acmode/.attributes (never fabricated --
+    # vms_kif_lnm_enumerate() now carries the executive's actual acmode instead
+    # of the old hardcoded LNM_MODE_EXEC, src/libvmssys/vms_kif.c).
+    #
+    # SYS$SYSROOT is OVMX's own boot-seeded concealed rooted search list
+    # (src/vmslnm/lnm_defaults.c), created at LNM_MODE_EXEC with attribute
+    # LNM_ATTR_CONCEALED only -- NOT LNM_ATTR_TERMINAL (real OpenVMS VAX V7.3's
+    # SYS$SYSROOT is [concealed,terminal], docs/oracle/vax73-system-root-
+    # logicals.md; OVMX's own attribute seed is narrower -- a separate, already
+    # tracked fidelity gap, not this qualifier bug). So the real tag OVMX emits
+    # is "[exec] ... [concealed]", and asserting "terminal" here would assert a
+    # tag OVMX will never produce -- only what is real is asserted.
+    run_cmd 'SHOW LOGICAL SYS$SYSROOT'
+    must_have  "$SEG" 'SYS$SYSROOT' "SHOW LOGICAL SYS\$SYSROOT [vms-676]: names the logical"
+    must_not_have "$SEG" '[exec]' "SHOW LOGICAL SYS\$SYSROOT (bare, no /FULL) [vms-676]: no access-mode tag -- bare output is unchanged by the /FULL fix"
+    must_not_have "$SEG" '[concealed]' "SHOW LOGICAL SYS\$SYSROOT (bare, no /FULL) [vms-676]: no attribute tag -- bare output is unchanged by the /FULL fix"
+    negctl     "$SEG" 'SHOW LOGICAL' "SHOW LOGICAL SYS\$SYSROOT"
+
+    run_cmd 'SHOW LOGICAL/FULL SYS$SYSROOT'
+    must_have  "$SEG" 'SYS$SYSROOT' "SHOW LOGICAL/FULL SYS\$SYSROOT [vms-676]: names the logical"
+    must_have  "$SEG" '[exec]' "SHOW LOGICAL/FULL SYS\$SYSROOT [vms-676]: real access-mode tag [exec] (SYS\$SYSROOT is seeded at LNM_MODE_EXEC) -- proves /FULL now changes the output"
+    must_have  "$SEG" '[concealed]' "SHOW LOGICAL/FULL SYS\$SYSROOT [vms-676]: real attribute tag [concealed] (LNM_ATTR_CONCEALED, the only bit OVMX's own seed sets)"
+    must_not_have "$SEG" 'terminal' "SHOW LOGICAL/FULL SYS\$SYSROOT [vms-676]: no fabricated 'terminal' tag -- OVMX's SYS\$SYSROOT seed does not set LNM_ATTR_TERMINAL (a real, tracked, separate fidelity gap vs. the oracle's [concealed,terminal]), and /FULL must render only what the entry's real attributes bit actually carries"
+    negctl     "$SEG" 'SHOW LOGICAL' "SHOW LOGICAL/FULL SYS\$SYSROOT"
+
+    # SYS$SYSDEVICE: a single-valued, NO-attribute logical (lnm_seed_system_
+    # locating(mgr, "SYS$SYSDEVICE", sysdev, 0) -- attr 0) -- proves the "omit
+    # the attribute bracket entirely when no bits are set" shape (the oracle's
+    # own format for a non-concealed, non-terminal logical carries no second
+    # bracket at all).
+    run_cmd 'SHOW LOGICAL/FULL SYS$SYSDEVICE'
+    must_have  "$SEG" 'SYS$SYSDEVICE' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: names the logical"
+    must_have  "$SEG" '[exec]' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: real access-mode tag [exec]"
+    must_match "$SEG" '\[exec\] = "[^"]+" \(LNM\$SYSTEM_TABLE\)' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: the value's closing quote is followed directly by '(LNM\$SYSTEM_TABLE)' -- no attribute bracket at all when attributes are 0, not an empty '[]' or a fabricated tag"
+    negctl     "$SEG" 'SHOW LOGICAL' "SHOW LOGICAL/FULL SYS\$SYSDEVICE"
+
     # --- F$GETDVI reads the SAME real executive device table (vms-050) -------
     # F$GETDVI used to fabricate: EXISTS=TRUE for EVERY name, VOLNAM guessed from
     # a name substring ("OVMXSYS"/"VOLUME"), DEVCLASS/DEVTYPE guessed the same

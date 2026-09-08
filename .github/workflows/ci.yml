@@ -7248,6 +7248,18 @@ jobs:
   # faithful-output gap to fix, each naming its bug -- never weaken the shared
   # battery to go green.
   #
+  # THIS IS ALSO THE VAX CONSOLE LEG (vms-3e9). The shared battery's
+  # console_login_acceptance() runs BEFORE any keystroke is sent and asserts the
+  # OPA0: login sequence itself: the pre-"Username:" system-identification line,
+  # the wait-for-RETURN wake, and the idle login-prompt disconnect. The wake was
+  # gated on isatty() -- true on the QEMU virtio console x86_64/aarch64 boot on,
+  # FALSE on the SIMH serial line THIS rail boots on -- so it was skipped here
+  # and nowhere else, and no CI leg could see it: the only gate that types at a
+  # booting console (tests/qemu/test_console_boot_no_newline_spam.sh) branches on
+  # `uname -m' over aarch64/x86_64 and launches qemu-system-* directly, which a
+  # SIMH/anita rail cannot do. Keeping the assertions in the SHARED battery is
+  # what stops that asymmetry recurring invisibly.
+  #
   # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), same shape as
   # netbsd-vax-sysboot above -- VAX under SIMH is a ~1980s CPU emulated, so a full
   # boot + login + the command battery is many minutes; it stays OFF the per-PR

@@ -319,7 +319,11 @@ run_acceptance_boot() {
   # vms-3e9 added the session-primitive section at the tail: a LOGOUT, a second
   # console session (its own CR-feed-to-Username loop, up to 60s) and a second
   # login plus three commands -- so the bound gains room for that too.
-  local QT="${ACCEPT_TIMEOUT:-1080}"
+  # vms-3e9: the battery now opens with console_login_acceptance() -- a console
+  # quiet-settle, then a deliberate idle-at-the-prompt probe longer than
+  # LOGIN_INPUT_TIMEOUT_SEC (30s) to prove the login prompt is really
+  # disconnected. That is ~60-90s of WAIT this bound must cover.
+  local QT="${ACCEPT_TIMEOUT:-1200}"
   local DT="$((QT + 150))"
   local rc=0
   set +e

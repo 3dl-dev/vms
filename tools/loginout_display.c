@@ -72,3 +72,30 @@ void loginout_display_session_info(FILE *out,
                 new_mail_count, new_mail_count == 1 ? "" : "s");
     }
 }
+
+void loginout_display_system_identification(FILE *out,
+                                            const char *product,
+                                            const char *arch,
+                                            const char *version,
+                                            const char *badge)
+{
+    if (!out)
+        return;
+
+    /* A half-known identity is not completed with an invented half (INV-6):
+     * without both the product and its version there is no honest line to
+     * print, so nothing is printed at all. */
+    if (!product || !product[0] || !version || !version[0])
+        return;
+
+    /* The oracle's shape (see the header): a blank line, ONE leading space,
+     * the identification, a blank line -- the caller's "Username:" follows. */
+    fputc('\n', out);
+    fprintf(out, " Welcome to the %s", product);
+    if (arch && arch[0])
+        fprintf(out, " %s", arch);
+    fprintf(out, " Operating System, Version %s", version);
+    if (badge && badge[0])
+        fprintf(out, " (%s)", badge);
+    fputs("\n\n", out);
+}

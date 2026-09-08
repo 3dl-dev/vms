@@ -94,10 +94,33 @@ export BOOT_TIMEOUT="${BOOT_TIMEOUT:-300}"
 # it still asserts a plausible current-century year (20XX -- rejects 1970/19XX),
 # an HH:MM:SS time, and a non-vacuous negctl. This is NOT a weakening.
 export EXPECT_HOST_YEAR=0
+# --- The shared battery's CONSOLE LOGIN-SEQUENCE gate (vms-3e9 a/b/c) ---------
+# console_login_acceptance() in the shared battery proves, on THIS rail, that:
+#   (a) the console prints the system-identification line before "Username:";
+#   (b) OPA0: waits for the operator's RETURN before it prompts at all -- the
+#       assertion that was RED here, and green on x86_64/aarch64, while the wake
+#       was gated on isatty() (FALSE on the SIMH serial console, TRUE on QEMU's
+#       virtio console); and
+#   (c) an idle login prompt is disconnected and replaced after the LGI-style
+#       deadline (tools/login_input.h LOGIN_INPUT_TIMEOUT_SEC, 30s).
+# THIS IS THE VAX CONSOLE LEG. The only other gate that types at a booting
+# console (tests/qemu/test_console_boot_no_newline_spam.sh) branches on
+# `uname -m' over aarch64/x86_64 and launches qemu-system-* directly, so it
+# cannot run on a SIMH/anita rail at all; the shared battery is the one place
+# all three arches meet, which is why the sequence is asserted there.
+# The two knobs below are the SIMH allowance: the emulated VAX runs a ~1980s CPU
+# at a fraction of real speed, so the console needs longer to settle and the
+# guest's own 30-second deadline can take substantially longer than 30 seconds
+# of HOST wall-clock to elapse. They lengthen the WAIT, never the assertion.
+export WAKE_QUIET_SECS="${WAKE_QUIET_SECS:-8}"
+export LOGIN_IDLE_WAIT="${LOGIN_IDLE_WAIT:-120}"
 # The single-disk boot is ~1980s VAX under SIMH: give the WHOLE run (boot + the
 # operator-CR-feed to Username: + login + ~10 commands) a generous bound. The
 # per-command wait stays CMD_TIMEOUT; the CR-feed loop stays BOOT_TIMEOUT.
-ACCEPT_TIMEOUT="${ACCEPT_TIMEOUT:-3000}"
+# vms-3e9 raised this from 3000: the battery now opens with the console
+# login-sequence gate, whose idle-at-the-prompt probe (LOGIN_IDLE_WAIT, 120s on
+# this rail) plus the quiet-settle is ~150s of additional WAIT.
+ACCEPT_TIMEOUT="${ACCEPT_TIMEOUT:-3300}"
 
 WORKDIR="${NETBSD_WORKDIR:-/cache/single-work}"
 SINGLE_RQ0_TYPE="${OVMX_SINGLE_RQ0_TYPE:-RAUSER=340}"

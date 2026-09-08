@@ -67,4 +67,60 @@ void loginout_display_session_info(FILE *out,
                                    unsigned login_failures,
                                    int new_mail_count);
 
+/*
+ * loginout_display_system_identification - the LOGINOUT SYSTEM-IDENTIFICATION
+ * line, printed ONCE immediately before the "Username:" prompt (vms-3e9,
+ * operator-reported on a real VAX boot: OVMX had no pre-Username announcement
+ * at all, on ANY arch).
+ *
+ * ORACLE (docs/design-boot-faithful.md §2 and §3.5, the OpenVMS Alpha V8.4
+ * capture; the same shape is in docs/oracle/installation-media-vax73-alpha84.md
+ * §5): the last thing a VMS console prints before the login prompt is an
+ * identification line, ONE leading space, then a blank line, then "Username:":
+ *
+ *      Welcome to OpenVMS (TM) Alpha Operating System, Version V8.4
+ *
+ *     Username:
+ *
+ * It is a DIFFERENT emission from the post-authentication SYS$WELCOME (which
+ * the same capture shows indented THREE spaces, after the password is
+ * accepted) and from the boot identification banner
+ * (src/ovmx_init/ovmx_init.c, printed by PID 1 long before LOGINOUT exists).
+ * All three now exist in OVMX, once each, in that order.
+ *
+ * WHY THE WORDING IS OVMX'S OWN, NOT THE ORACLE'S BYTES (INV-0, the trademark
+ * ceiling). OVMX may not print "Welcome to OpenVMS ... Version V8.4" on a
+ * human surface: that claims to BE VSI's product. The oracle's SHAPE is
+ * reproduced -- welcome, product, architecture, "Operating System, Version",
+ * version, one leading space, blank line, prompt -- with OVMX's own badged
+ * identity in it.
+ *
+ * DELIBERATELY NOT MATCHED BY 'Welcome to <product>' (anti-hollowing). The
+ * post-authentication SYS$WELCOME default reads "Welcome to OpenVMX V0.x ...",
+ * and roughly thirty runtime gates use that exact substring as their
+ * PROOF THAT A LOGIN SUCCEEDED. A pre-Username line that also matched it would
+ * silently turn every one of them into a test that passes without a login. So
+ * this line reads "Welcome to the <product> ..." -- one word different, and the
+ * difference is load-bearing: tests/tools/test_loginout_display.c asserts the
+ * two strings cannot be confused, so a future reword that reintroduces the
+ * collision reds there instead of quietly hollowing the battery.
+ *
+ * @out      destination stream (nothing is emitted if NULL).
+ * @product  human-facing product name -- OVMX_PRODUCT_NAME (INV-1 SSOT).
+ * @arch     the architecture this build actually runs on -- ovmx_hw_arch().
+ *           NULL/empty omits the architecture word rather than guessing one.
+ * @version  human-facing version -- ovmx_product_version() (INV-1 SSOT).
+ * @badge    the INV-0 compatibility badge (OVMX_COMPAT_BADGE), or NULL to omit.
+ *
+ * Every value is passed in from the identity SSOT; this TU holds no identity
+ * string of its own (same rule as the session-info block above). If product or
+ * version is missing NOTHING is printed -- a half-known identity is not
+ * completed with an invented half (INV-6).
+ */
+void loginout_display_system_identification(FILE *out,
+                                            const char *product,
+                                            const char *arch,
+                                            const char *version,
+                                            const char *badge);
+
 #endif /* LOGINOUT_DISPLAY_H */

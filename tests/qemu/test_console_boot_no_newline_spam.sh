@@ -25,6 +25,17 @@
 # no run of echoed blank lines before "Username:", while login still works.
 # THIS is the coverage CI lacked; it is what makes the vms-dec fix durable.
 #
+# THIS GATE CANNOT COVER THE VAX RAIL, and that gap had teeth (vms-3e9). It
+# picks its emulator from `uname -m' over aarch64/x86_64 and launches
+# qemu-system-* directly with a stdio console; the OVMX/NetBSD-vax runtime is
+# SIMH driven by anita over a pexpect pty and cannot be launched that way. So
+# the console login sequence -- the wake this file depends on, the pre-Username:
+# identification line, and the idle login-prompt disconnect -- is ALSO asserted
+# in the SHARED acceptance battery (console_login_acceptance() in
+# tests/qemu/lib/dcl_acceptance_battery.sh), which x86_64, Alpha AND VAX all
+# run. That is where the VAX console leg lives; without it the wake was
+# x86_64-green and VAX-broken with nothing in CI able to see the difference.
+#
 # Runs INSIDE the ovmx-boot image (distro/Dockerfile.bootable), which bakes in
 # the pre-mastered distribution disk. Invoke exactly like the DCL acceptance
 # e2e:

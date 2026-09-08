@@ -167,6 +167,165 @@ golden_diff_report() {
     printf '%s\n' "$_GD_CLS" | sed 's/^/      RPT| /' | head -40
 }
 
+# _batt_seg_since -- everything the console printed at/after byte <n>, CR-stripped.
+# Battery-LOCAL on purpose: `segment_since' is defined by only ONE of the three
+# arch drivers (tests/qemu/test_dcl_acceptance_e2e.sh), so the shared battery may
+# not call it -- doing so would work on x86_64 and blow up on Alpha and VAX,
+# which is the exact class of arch asymmetry this section exists to catch.
+_batt_seg_since() { tail -c "+$(($1 + 1))" "$LOG" 2>/dev/null | tr -d '\r'; }
+
+# console_wait_quiet -- block until the console log has stopped growing for
+# <quiet> consecutive seconds, or <budget> seconds have passed. Echoes the
+# reason it returned ("quiet" / "budget").
+#
+# WHY A QUIET WINDOW rather than a fixed sleep: it is the only observable that
+# says "LOGINOUT has reached its wake read and is now waiting for the operator"
+# without asking the guest anything. A boot still printing is not yet at the
+# prompt; a boot that has gone silent either IS at the wake or has died, and the
+# assertions below distinguish those two by driving it.
+console_wait_quiet() {
+    local quiet="$1" budget="$2"
+    local last=-1 cur stable=0 waited=0
+    while [ "$waited" -lt "$budget" ]; do
+        cur=$(wc -c <"$LOG" 2>/dev/null || echo 0)
+        if [ "$cur" = "$last" ]; then stable=$((stable + 1)); else stable=0; last="$cur"; fi
+        if [ "$stable" -ge "$quiet" ]; then echo quiet; return 0; fi
+        sleep 1; waited=$((waited + 1))
+    done
+    echo budget
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# console_login_acceptance -- THE OPA0: LOGIN-SEQUENCE GATE (vms-3e9).
+#
+# WHY IT LIVES IN THE SHARED BATTERY. The console login sequence had NO
+# arch-uniform coverage at all: the only gate that types at a booting console
+# (tests/qemu/test_console_boot_no_newline_spam.sh) branches on `uname -m` over
+# aarch64/x86_64 and cannot run on the VAX rail, which is under SIMH via anita,
+# not bash-launchable QEMU. So every proof of the wake was written where it
+# happened to work, and the operator found the VAX console printing "Username:"
+# with no RETURN wait -- the classic x86_64-green/VAX-broken asymmetry. This
+# battery is the ONE thing x86_64, Alpha and VAX all run
+# (tests/qemu/test_dcl_acceptance_e2e.sh, tools/cross-alpha/run-boot-alpha.sh,
+# tests/lab-vax/test_dcl_acceptance_vax.sh), so the sequence is asserted here
+# and the VAX rail gets it for free -- and cannot lose it again silently.
+#
+# IT MUST RUN BEFORE ANY CR IS SENT. The whole gate turns on the console NOT
+# having been touched: the caller's contract says the battery owns the operator
+# keystrokes, and both the QEMU drivers and the VAX bridge send nothing of their
+# own, so a "Username:" on screen here can only mean the wake did not happen.
+console_login_acceptance() {
+    local budget="${WAKE_QUIET_BUDGET:-$1}"
+    local quiet="${WAKE_QUIET_SECS:-5}"
+    local why; why=$(console_wait_quiet "$quiet" "$budget")
+
+    # INV-1: both halves come from the boot banner the caller derived from
+    # ovmx_identity.h -- "OpenVMX V0.6-11" -> product "OpenVMX", version "V0.6-11".
+    local ID_PRODUCT="${EXPECTED_BOOT_BANNER%% *}"
+    local ID_VERSION="${EXPECTED_BOOT_BANNER##* }"
+    local ID_LINE="Welcome to the ${ID_PRODUCT}"
+
+    # --- (b) THE WAKE: an untouched console must NOT be showing a prompt ----
+    # This is the assertion that is RED on the VAX rail before the isatty()
+    # gate is replaced by the executive's terminal binding, and green after.
+    if grep -qaF 'Username:' "$LOG" 2>/dev/null; then
+        bad "CONSOLE WAKE (vms-3e9 b): OPA0: printed 'Username:' with NO operator RETURN -- LOGINOUT did not wait for the wake keystroke on this arch (console went $why)"
+    else
+        ok "CONSOLE WAKE (vms-3e9 b): an untouched OPA0: shows no 'Username:' -- LOGINOUT is waiting for the operator's RETURN (console went $why)"
+    fi
+    if grep -qaF "$ID_LINE" "$LOG" 2>/dev/null; then
+        bad "CONSOLE WAKE (vms-3e9 b): the login identification line printed before any RETURN was struck"
+    else
+        ok "CONSOLE WAKE (vms-3e9 b): no login identification line before the operator's RETURN"
+    fi
+
+    # --- ONE RETURN must produce the whole login announcement ---------------
+    local WAKE_OFF; WAKE_OFF=$(wc -c <"$LOG")
+    send ''
+    if wait_for 'Username:' 60 "$WAKE_OFF"; then
+        ok "CONSOLE WAKE (vms-3e9 b): ONE RETURN wakes the session and produces the 'Username:' prompt"
+    else
+        bad "CONSOLE WAKE (vms-3e9 b): the operator's RETURN did not produce a 'Username:' prompt within 60s"
+        return 1
+    fi
+
+    local WAKE_SEG; WAKE_SEG=$(_batt_seg_since "$WAKE_OFF")
+
+    # --- (a) THE SYSTEM-IDENTIFICATION LINE, immediately before the prompt --
+    # Oracle: docs/design-boot-faithful.md sec3.5 -- identification, blank line,
+    # "Username:". OVMX printed nothing here on ANY arch before vms-3e9.
+    must_have "$WAKE_SEG" "$ID_LINE" \
+        "LOGIN BANNER (vms-3e9 a): the console announces the system immediately before 'Username:' ('$ID_LINE ...')"
+    must_have "$WAKE_SEG" "Version $ID_VERSION" \
+        "LOGIN BANNER (vms-3e9 a): it carries the ovmx_identity.h version ('Version $ID_VERSION') -- INV-1, not a literal"
+    # Ordering: the announcement precedes the prompt, as on the oracle console.
+    local BPOS UPOS
+    BPOS=$(printf '%s' "$WAKE_SEG" | grep -aboF "$ID_LINE" | head -1 | cut -d: -f1)
+    UPOS=$(printf '%s' "$WAKE_SEG" | grep -aboF 'Username:' | head -1 | cut -d: -f1)
+    if [ -n "$BPOS" ] && [ -n "$UPOS" ] && [ "$BPOS" -lt "$UPOS" ]; then
+        ok "LOGIN BANNER (vms-3e9 a): announcement precedes the prompt (banner@$BPOS < prompt@$UPOS)"
+    else
+        bad "LOGIN BANNER (vms-3e9 a): announcement/prompt ordering wrong (banner@${BPOS:-none} prompt@${UPOS:-none})"
+    fi
+    # ANTI-HOLLOWING: this pre-login line must NOT be confusable with the
+    # post-authentication SYS$WELCOME ("Welcome to <product> V..."), which is
+    # what ~30 gates -- including this battery's own login step below -- use as
+    # their proof that a login SUCCEEDED. If it ever matched, every one of them
+    # would pass without a login. tests/tools/test_loginout_display.c pins the
+    # same property on the emitter; this pins it on the real console.
+    must_not_have "$WAKE_SEG" "Welcome to $ID_PRODUCT " \
+        "LOGIN BANNER (vms-3e9 a): the pre-login announcement is NOT matched by the SYS\$WELCOME login-success token"
+    negctl "$WAKE_SEG" 'Username:' "console wake segment"
+
+    # --- (c) THE IDLE LOGIN TIMEOUT ----------------------------------------
+    # NEGATIVE CONTROL FIRST: at a LIVE prompt a bare RETURN is an empty
+    # username -- it must reprompt WITHOUT a fresh announcement. Without this,
+    # the timeout assertion below could be satisfied by a banner that is simply
+    # printed at every prompt.
+    local RE_OFF; RE_OFF=$(wc -c <"$LOG")
+    send ''
+    if wait_for 'Username:' 30 "$RE_OFF"; then
+        local RE_SEG; RE_SEG=$(_batt_seg_since "$RE_OFF")
+        must_not_have "$RE_SEG" "$ID_LINE" \
+            "NEGCTL IDLE TIMEOUT (vms-3e9 c): a reprompt in the SAME session does NOT reprint the announcement -- so the announcement really marks a NEW session"
+    else
+        bad "NEGCTL IDLE TIMEOUT (vms-3e9 c): an empty username did not reprompt within 30s"
+    fi
+
+    # Now leave the prompt strictly alone for longer than the deadline
+    # (LOGIN_INPUT_TIMEOUT_SEC in tools/login_input.h, the public LGI_PWD_TMO
+    # default of 30s). LOGINOUT must DISCONNECT -- silently, printing no
+    # farewell, as VMS does -- and JOB_CONTROL must create the next session on
+    # OPA0:, which then waits for its own RETURN.
+    local IDLE_WAIT="${LOGIN_IDLE_WAIT:-45}"
+    local IDLE_OFF; IDLE_OFF=$(wc -c <"$LOG")
+    echo "  (idle-timeout probe: leaving the login prompt untouched for ${IDLE_WAIT}s)"
+    sleep "$IDLE_WAIT"
+    local IDLE_SEG; IDLE_SEG=$(_batt_seg_since "$IDLE_OFF")
+    # Silent: no invented sign-off line (the MAX_ATTEMPTS rule, vms-417).
+    must_not_have "$IDLE_SEG" 'timed out' \
+        "IDLE TIMEOUT (vms-3e9 c): the disconnect is SILENT -- no invented 'timed out' farewell"
+    must_not_have "$IDLE_SEG" 'Username:' \
+        "IDLE TIMEOUT (vms-3e9 c): the replacement session does not prompt on its own -- it waits for RETURN like any OPA0: session"
+    # THE REAL PROOF: the session that was sitting at "Username:" is GONE. Only
+    # a NEW LOGINOUT prints the announcement, and only after a RETURN -- so if
+    # one RETURN now produces a fresh announcement, the old session really was
+    # disconnected and replaced. A cosmetic timeout could not do this.
+    local NEW_OFF; NEW_OFF=$(wc -c <"$LOG")
+    send ''
+    if wait_for "$ID_LINE" 60 "$NEW_OFF"; then
+        ok "IDLE TIMEOUT (vms-3e9 c): the idle session was really DISCONNECTED -- one RETURN now wakes a BRAND-NEW session (fresh announcement), which only happens if the old one ended"
+    else
+        bad "IDLE TIMEOUT (vms-3e9 c): after ${IDLE_WAIT}s idle at 'Username:' the session was still alive (no new session announcement) -- the login prompt has no idle deadline on this arch"
+    fi
+    if wait_for 'Username:' 30 "$NEW_OFF"; then
+        ok "IDLE TIMEOUT (vms-3e9 c): the replacement session reaches its own 'Username:' prompt"
+    else
+        bad "IDLE TIMEOUT (vms-3e9 c): the replacement session never prompted"
+    fi
+}
+
 # run_dcl_acceptance_battery -- the login + basic-command battery + assertions.
 # See the caller-provided contract above for the primitives/vars it requires.
 run_dcl_acceptance_battery() {
@@ -174,8 +333,17 @@ run_dcl_acceptance_battery() {
 
     # --- Boot the real runtime to the login prompt --------------------------
     if wait_for '%OVMX-I-EXEC' 60; then ok "executive attached (real vms.ko)"; else bad "executive never attached"; fi
+
+    # --- THE CONSOLE LOGIN SEQUENCE (vms-3e9 a/b/c) -------------------------
+    # Runs BEFORE any keystroke is sent, because that is what makes it a proof.
+    # Leaves the runtime at a fresh "Username:" prompt for the login below.
+    console_login_acceptance "$BOOT_TIMEOUT"
+
     # vms-2213: LOGINOUT on OPA0: waits for the operator's RETURN; feed a CR each
-    # second (as a real operator would) until Username: appears.
+    # second (as a real operator would) until Username: appears. (Normally a
+    # no-op now -- console_login_acceptance above has already woken a session --
+    # but kept so a failure there still leaves the battery able to reach a
+    # prompt and report the REST of the acceptance result rather than nothing.)
     local w=0
     until grep -qaF 'Username:' "$LOG" 2>/dev/null || [ "$w" -ge "$BOOT_TIMEOUT" ]; do
         send ''; sleep 1; w=$((w + 1))

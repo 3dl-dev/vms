@@ -1526,9 +1526,11 @@ int vms_devtab_init(void);
 void vms_devtab_cleanup(void);
 /*
  * Enter ONE disk unit the SUBSTRATE enumerated, for a substrate whose disks the
- * shared /dev/vd* probe cannot name (rd vms-618 -- NetBSD/vax MSCP units). Not
- * called on Linux, where vms_devtab_probe_disks() does the enumeration; declared
- * here so the shared facility source keeps one prototype on every substrate.
+ * shared /dev/vd* probe cannot name (rd vms-618 -- NetBSD/vax MSCP units). On
+ * Linux, vms_devtab_probe_disks() calls this too for the non-virtio-blk
+ * families it enumerates itself (SATA/SCSI /dev/sd*, NVMe /dev/nvmeNn1 --
+ * vms-ddc / vms-47d, bare-metal device-native naming); declared here so the
+ * shared facility source keeps one prototype on every substrate.
  */
 int vms_devtab_add_disk(const char *devnam, const char *backing,
                         uint32_t backing_major, uint32_t backing_minor);

@@ -567,7 +567,16 @@ uint32_t lnm_enumerate(lnm_manager_t *mgr, const char *table_name,
             entry.name[nl] = '\0';
             entry.name_length = (uint16_t)nl;
             entry.attributes = recs[i].attributes;
-            entry.acmode = LNM_MODE_EXEC;
+            /* vms-676: the entry's REAL access mode, now carried by
+             * vms_kif_lnm_enumerate() (src/libvmssys/vms_kif.c, read from
+             * the executive's struct vms_lnm_entry). This used to be
+             * hardcoded to LNM_MODE_EXEC for every SYSTEM/GROUP/JOB entry
+             * regardless of what mode it was actually created at -- latent
+             * because nothing rendered acmode yet, but a fabrication as
+             * soon as a caller (SHOW LOGICAL/FULL) displays it: a name
+             * DEFINE/SYSTEM'd from DCL is created at LNM_MODE_USER
+             * (cmd_define(), src/vmsdcl/dcl_cmd_io.c), not EXEC. */
+            entry.acmode = recs[i].acmode;
 
             /* vms-420: carry EVERY equivalence string the arena reported,
              * not just index 0 -- previously a SYSTEM/GROUP/JOB search-list

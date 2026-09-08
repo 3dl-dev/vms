@@ -169,7 +169,60 @@ static int cmd_show_default(struct dcl_command *cmd)
 /* Callback context for enumerating logical names under SHOW LOGICAL */
 struct show_lnm_ctx {
     const char *table_name;
+    int full;               /* vms-676: SHOW LOGICAL/FULL was given */
 };
+
+/* vms-676: sentinel meaning "no real lnm_entry_t backs this value" -- never
+ * a valid LNM_MODE_* bit pattern (those are 0-3), so it can never collide
+ * with a genuine mode. print_lnm_search_list() treats it as "omit the mode
+ * tag" rather than guess. */
+#define LNM_ACMODE_UNKNOWN 0xFFu
+
+/*
+ * lnm_acmode_label / lnm_attr_list - vms-676: render the real per-name
+ * access-mode and per-entry attribute tags SHOW LOGICAL/FULL adds, from the
+ * entry's OWN acmode/attributes fields (real executive/local-table state --
+ * never fabricated). Format oracle-pinned against OpenVMS VAX V7.3
+ * (docs/oracle/vax73-system-root-logicals.md):
+ *
+ *    "SYS$SYSROOT" [exec] = "$2$DUA0:[SYS0.]" [concealed,terminal] (LNM$SYSTEM_TABLE)
+ *
+ * lnm_attr_list() writes "" (empty string) when no bits are set, so the
+ * caller omits the "[...]" bracket entirely rather than printing an empty
+ * pair -- exactly what the oracle capture shows for a non-concealed,
+ * non-terminal logical (no second bracket at all).
+ */
+static const char *lnm_acmode_label(uint8_t acmode)
+{
+    switch (acmode) {
+    case LNM_MODE_KERNEL: return "kernel";
+    case LNM_MODE_EXEC:   return "exec";
+    case LNM_MODE_SUPER:  return "super";
+    case LNM_MODE_USER:   return "user";
+    default:              return "user";
+    }
+}
+
+static void lnm_attr_list(uint32_t attributes, char *out, size_t out_size)
+{
+    static const struct { uint32_t bit; const char *name; } tags[] = {
+        { LNM_ATTR_CONCEALED, "concealed" },
+        { LNM_ATTR_TERMINAL,  "terminal"  },
+        { LNM_ATTR_CONFINE,   "confine"   },
+        { LNM_ATTR_NO_ALIAS,  "no_alias"  },
+    };
+    out[0] = '\0';
+    size_t used = 0;
+    for (size_t i = 0; i < sizeof(tags) / sizeof(tags[0]); i++) {
+        if (!(attributes & tags[i].bit))
+            continue;
+        int n = snprintf(out + used, out_size - used, "%s%s",
+                         used ? "," : "", tags[i].name);
+        if (n < 0 || (size_t)n >= out_size - used)
+            break;
+        used += (size_t)n;
+    }
+}
 
 /*
  * print_lnm_search_list - render a logical name's equivalence string(s) in
@@ -182,13 +235,46 @@ struct show_lnm_ctx {
  * i.e. the first value shares the name/table line; every further value gets
  * its own continuation line, 8 spaces then "= \"value\"" -- fixed indentation,
  * not aligned to the name's length. `values`/`n` must have n >= 1.
+ *
+ * vms-676: with `full` set, the name/table line additionally carries the
+ * real per-name access-mode tag right after the name, and the real
+ * per-entry attribute tag right after the first value -- oracle-pinned
+ * (docs/oracle/vax73-system-root-logicals.md):
+ *
+ *    "SYS$SYSROOT" [exec] = "$2$DUA0:[SYS0.]" [concealed,terminal] (LNM$SYSTEM_TABLE)
+ *         = "SYS$COMMON:"
+ *
+ * Continuation lines never carry a tag -- acmode/attributes are per-ENTRY
+ * (lnm_entry_t has one `acmode` and one `attributes` field, not one per
+ * translation, confirmed against src/vmslnm/include/vms/logical.h), already
+ * stated once on the first line, and that is exactly what the oracle
+ * capture's own continuation line ("= \"SYS$COMMON:\"", no bracket) shows.
+ * Bare (non-/FULL) output is byte-identical to before this qualifier
+ * existed: `full` false takes the old two printf shapes verbatim.
  */
 static void print_lnm_search_list(const char *name, const char *table_label,
-                                  char values[][LNM_MAX_VALUE + 1], uint8_t n)
+                                  char values[][LNM_MAX_VALUE + 1], uint8_t n,
+                                  int full, uint8_t acmode, uint32_t attributes)
 {
     if (n == 0)
         return;
-    printf("   \"%s\" = \"%s\" (%s)\n", name, values[0], table_label);
+    /* LNM_ACMODE_UNKNOWN: the caller has no real entry to source a mode
+     * from (dcl_translate_logical()'s own pre-LNM-init fallback for
+     * SYS$DISK/SYS$LOGIN, cmd_show_logical()'s nvalues==0 branch) --
+     * degrade to the bare shape rather than fabricate an access mode for a
+     * value that names no actual logical-name-table entry. */
+    if (!full || acmode == LNM_ACMODE_UNKNOWN) {
+        printf("   \"%s\" = \"%s\" (%s)\n", name, values[0], table_label);
+    } else {
+        char attrs[64];
+        lnm_attr_list(attributes, attrs, sizeof(attrs));
+        if (attrs[0])
+            printf("   \"%s\" [%s] = \"%s\" [%s] (%s)\n", name,
+                   lnm_acmode_label(acmode), values[0], attrs, table_label);
+        else
+            printf("   \"%s\" [%s] = \"%s\" (%s)\n", name,
+                   lnm_acmode_label(acmode), values[0], table_label);
+    }
     for (uint8_t i = 1; i < n; i++)
         printf("        = \"%s\"\n", values[i]);
 }
@@ -207,9 +293,53 @@ static int show_lnm_callback(const char *name, const lnm_entry_t *entry, void *c
             strncpy(values[i], entry->translations[i].value, LNM_MAX_VALUE);
             values[i][LNM_MAX_VALUE] = '\0';
         }
-        print_lnm_search_list(name, sctx->table_name, values, n);
+        print_lnm_search_list(name, sctx->table_name, values, n,
+                              sctx->full, entry->acmode, entry->attributes);
     }
     return 0;
+}
+
+/*
+ * find_lnm_entry_callback / find_lnm_entry - vms-676: SHOW LOGICAL/FULL's
+ * named-lookup path (SHOW LOGICAL <name>) fetches its VALUES through
+ * lnm_translate_values(), which already returns the entry's real
+ * `attributes` but has no acmode out-param. Rather than widen that
+ * signature (lnm_translate_values() has callers well outside DCL --
+ * src/vmsrms/rms_parse.c, src/vmslnm/lnm_translate.c, tests), this reuses
+ * the ALREADY-FIXED lnm_enumerate() (same real acmode as of vms-676 above,
+ * for both the executive-resident tables and the local LNM$PROCESS_TABLE)
+ * and just picks out the one matching entry's acmode. Real data, minimal
+ * surface: no new vms_kif symbol, no shr.vec churn.
+ */
+struct find_lnm_ctx {
+    const char *want_name;   /* already uppercased, matches entry->name */
+    int found;
+    uint8_t acmode;
+};
+
+static int find_lnm_entry_callback(const char *name, const lnm_entry_t *entry, void *ctx)
+{
+    struct find_lnm_ctx *f = (struct find_lnm_ctx *)ctx;
+    if (strcmp(name, f->want_name) != 0)
+        return 0;
+    f->found = 1;
+    f->acmode = entry->acmode;
+    return 1;   /* stop enumerating -- found it */
+}
+
+/* Returns 1 and fills *acmode when `name` is found in `table_name`, else 0
+ * (not present, or the table/executive is unavailable -- caller renders no
+ * mode tag rather than fabricate one; SHOW LOGICAL/FULL already reported
+ * the name's VALUE by the time this runs, via lnm_translate_values(), so a
+ * miss here is not expected in practice, only defensive). */
+static int find_lnm_entry(lnm_manager_t *mgr, const char *table_name,
+                          const char *name, uint8_t *acmode)
+{
+    struct find_lnm_ctx fctx = { .want_name = name, .found = 0, .acmode = 0 };
+    lnm_enumerate(mgr, table_name, find_lnm_entry_callback, &fctx);
+    if (fctx.found)
+        *acmode = fctx.acmode;
+    return fctx.found;
 }
 
 /*
@@ -221,6 +351,11 @@ static int show_lnm_callback(const char *name, const lnm_entry_t *entry, void *c
 static int cmd_show_logical(struct dcl_command *cmd)
 {
     lnm_manager_t *mgr = lnm_get_manager();
+
+    /* vms-676: SHOW LOGICAL/FULL adds the per-name access-mode tag and the
+     * per-entry attribute tag (see print_lnm_search_list() above); bare
+     * SHOW LOGICAL is byte-unchanged when this is 0. */
+    const int full = dcl_has_qualifier(cmd, "FULL");
 
     /*
      * Scope qualifiers (OpenVMS DCL Dictionary, SHOW LOGICAL): /PROCESS, /JOB,
@@ -266,6 +401,8 @@ static int cmd_show_logical(struct dcl_command *cmd)
         char value[256];
         char values[LNM_MAX_SEARCHLIST][LNM_MAX_VALUE + 1];
         uint8_t nvalues;
+        uint32_t attrs;
+        uint8_t acmode;
 
         /*
          * A scope qualifier restricts the lookup to the named table(s), so a
@@ -283,11 +420,16 @@ static int cmd_show_logical(struct dcl_command *cmd)
             if (mgr) {
                 for (int t = 0; t < 4; t++) {
                     if (!want[t]) continue;
+                    attrs = 0;
                     uint32_t st = lnm_translate_values(mgr, tnames[t], upper_name,
                                                        values, LNM_MAX_SEARCHLIST,
-                                                       &nvalues, NULL);
+                                                       &nvalues, &attrs);
                     if (st == SS$_NORMAL) {
-                        print_lnm_search_list(upper_name, tnames[t], values, nvalues);
+                        acmode = LNM_ACMODE_UNKNOWN;
+                        if (full)
+                            find_lnm_entry(mgr, tnames[t], upper_name, &acmode);
+                        print_lnm_search_list(upper_name, tnames[t], values, nvalues,
+                                              full, acmode, attrs);
                         return SS$_NORMAL;
                     }
                 }
@@ -303,6 +445,8 @@ static int cmd_show_logical(struct dcl_command *cmd)
              */
             const char *found_table = LNM_PROCESS_TABLE;
             nvalues = 0;
+            attrs = 0;
+            acmode = LNM_ACMODE_UNKNOWN;
             if (mgr) {
                 /* Search tables in order to find where the name lives */
                 lnm_table_t *search[4];
@@ -314,9 +458,11 @@ static int cmd_show_logical(struct dcl_command *cmd)
                     if (!search[t]) continue;
                     uint32_t st = lnm_translate_values(mgr, tnames[t], upper_name,
                                                        values, LNM_MAX_SEARCHLIST,
-                                                       &nvalues, NULL);
+                                                       &nvalues, &attrs);
                     if (st == SS$_NORMAL) {
                         found_table = tnames[t];
+                        if (full)
+                            find_lnm_entry(mgr, tnames[t], upper_name, &acmode);
                         break;
                     }
                 }
@@ -327,8 +473,10 @@ static int cmd_show_logical(struct dcl_command *cmd)
                 strncpy(values[0], value, LNM_MAX_VALUE);
                 values[0][LNM_MAX_VALUE] = '\0';
                 nvalues = 1;
+                attrs = 0;
             }
-            print_lnm_search_list(upper_name, found_table, values, nvalues);
+            print_lnm_search_list(upper_name, found_table, values, nvalues,
+                                  full, acmode, attrs);
         } else {
             dcl_error("DCL", 0, "NOLOG", "no logical name match");
             return SS$_NOLOGNAM;
@@ -345,6 +493,7 @@ static int cmd_show_logical(struct dcl_command *cmd)
                 if (shown) printf("\n");
                 printf("(%s)\n\n", tlabels[t]);
                 sctx.table_name = tnames[t];
+                sctx.full = full;
                 lnm_enumerate(mgr, tnames[t], show_lnm_callback, &sctx);
                 shown = 1;
             }

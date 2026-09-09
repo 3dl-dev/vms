@@ -1086,6 +1086,11 @@ static void parse_gsmatch(char *spec, uint32_t *kind, uint32_t *maj, uint32_t *m
                         * which the x86_64 crt0 stub (vms-206) also fits in
                         * exactly (its 7 variable-length instructions total 28
                         * bytes too) -- same reservation, both encodings. */
+#define CRT0_VAX_SZ 48 /* elf32-vax crt0 (vms-099): the synthesized VAX stub is
+                        * 35 bytes of variable-length VAX machine code (see the
+                        * emit below); 48 gives byte headroom and stays 4-aligned.
+                        * The trailing reserved bytes are calloc-zeroed (HALT,
+                        * 0x00) and unreachable -- exit() never returns. */
 
 /* --------------------------------------------------------------------------
  * Consumer/executable linking: bind imports to producer symbol vectors.
@@ -2153,16 +2158,12 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                            int allow_undef, struct producer *ps, int np,
                            const char *out, int is_exec)
 {
-#ifdef OVMX_LINK_ELF32
-    /* P3a scope is the SHAREABLE side (LINK.EXE emits elf32-vax .vms$sv/.vms$imp
-     * shareables; readelf-shape verified). The elf32-vax EXECUTABLE emit — the
-     * synthesized crt0 (below, x86_64/aarch64 machine code only) and
-     * PT_INTERP=IMGACT.EXE displacing ld.elf_so — is vms-404 P3b/P4, coordinate-
-     * free with this item. Fail HONESTLY rather than emit wrong-arch crt0. (vms-19b) */
-    if (is_exec)
-        die("elf32-vax --executable emit is vms-404 P3b/P4, not P3a "
-            "(LINK.EXE -DOVMX_LINK_ELF32 emits shareables only)");
-#endif
+    /* elf32-vax EXECUTABLE emit is now implemented (vms-099, vms-404 P3b
+     * follow-on): the synthesized crt0 has a dedicated VAX machine-code path
+     * (below), and the PT_INTERP=IMGACT.EXE + .vms$imp emit is the same
+     * arch-neutral machinery every arch shares. What P3a deferred is closed
+     * here; the SIMH runtime-activation proof of the resulting consumer stays
+     * P4 (vms-d4a). (was: fail-honest die for the P3a shareable-only scope.) */
     g_allow_undef = allow_undef;
     g_deferred = 0;
     build_symhash(objs, nobj);
@@ -2488,7 +2489,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     if (use_crt0) {
         cur = ALIGN_UP(cur, 4);
         crt0_va = cur;
-        cur += CRT0_NINSN * 4;
+#ifdef OVMX_LINK_ELF32
+        cur += CRT0_VAX_SZ;         /* variable-length VAX crt0 (vms-099) */
+#else
+        cur += CRT0_NINSN * 4;      /* fixed 28-byte aarch64/x86_64 stub   */
+#endif
     }
     uint64_t text_end = cur;
     uint64_t ro_beg = cur;
@@ -3089,20 +3094,38 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     for (int i = 0; i < nimp; i++) {
         if (imp[i].is_data) continue;
 #ifdef OVMX_LINK_ELF32
-        /* VAX call-import PLT stub: `jmp *disp32(pc)` — opcode 0x17 (jmp),
-         * operand mode 0xFF (longword-displacement-DEFERRED, PC-relative: the
-         * CPU loads the target from *(PC+disp)), then a 4-byte displacement.
+        /* VAX call-import PLT stub. A VAX cross-image call is `calls #n, PLT`
+         * (opcode 0xFB; the R_VAX_PLT32 site points the CALLS destination
+         * operand at plt_va — see the reloc-apply above and the gcc-emitted
+         * `calls $1, prod_add@PLT` this binds). CALLS is a complex instruction:
+         * it reads an ENTRY MASK at the destination, saves the named registers,
+         * builds the call frame, then transfers to dest+2. So the stub MUST
+         * begin with a valid entry mask, exactly like a gcc-compiled procedure
+         * and like the canonical NetBSD/ELF elf32-vax PLT entry (`.word 0x0ffc;
+         * jsb resolver`), or CALLS reads the jump opcode as a mask (0xFF17 —
+         * reserved bits set -> reserved-operand fault). (vms-099)
+         *
+         * Layout (8 bytes, within the 12-byte reserved PLT slot):
+         *   +0: .word 0x0ffc      entry mask saving r2-r11 (calls-enterable;
+         *                          a superset of any callee's own save set, so
+         *                          the caller's registers are preserved across
+         *                          the bound callee's RET)
+         *   +2: 0x17 0xFF <disp>  jmp *disp(pc) — opcode 0x17 (jmp), mode 0xFF
+         *                          (longword-displacement-DEFERRED, PC-relative:
+         *                          target = *(PC+disp)), 4-byte displacement.
          * The memory operand IS the import-GOT cell (imp[i].got_va), read
          * indirectly exactly like the x86_64 `jmp *disp32(%rip)` stub — IMGACT
-         * fills the cell from .vms$imp at activation. VAX PC after the operand =
-         * plt_va + 6 (1 opcode + 1 mode + 4 disp), so disp = got_va-(plt_va+6),
-         * the same PC-past-the-field bias as every VAX PC-relative form. (vms-19b) */
+         * fills the cell from .vms$imp at activation (P4 runtime). VAX PC after
+         * the operand = plt_va + 8 (2 mask + 1 opcode + 1 mode + 4 disp), so
+         * disp = got_va-(plt_va+8), the PC-past-the-field bias every VAX
+         * PC-relative form uses. (vms-19b, vms-099) */
         {
             uint8_t *stub = img + imp[i].plt_va;
-            stub[0] = 0x17u; stub[1] = 0xFFu;
+            stub[0] = 0xFCu; stub[1] = 0x0Fu;   /* .word 0x0ffc  ; entry mask r2-r11 */
+            stub[2] = 0x17u; stub[3] = 0xFFu;   /* jmp *disp(pc)                     */
             int32_t d = (int32_t)((int64_t)imp[i].got_va -
-                                  (int64_t)(imp[i].plt_va + 6));
-            memcpy(stub + 2, &d, 4);
+                                  (int64_t)(imp[i].plt_va + 8));
+            memcpy(stub + 4, &d, 4);
         }
 #else
         if (g_out_machine == EM_X86_64) {
@@ -3133,6 +3156,45 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         uint64_t main_va = resolve_named(objs, nobj, "main",
             "--executable object set defines no main()");
         if (exit_imp < 0) die("internal: exit import missing for crt0");
+#ifdef OVMX_LINK_ELF32
+        /* elf32-vax crt0 (vms-099). Same contract as the x86_64/aarch64 stubs:
+         * IMGACT enters e_entry (crt0_va) by branch with the initial process
+         * stack intact — SP -> [argc][argv[0..argc-1]][NULL][envp...][NULL][auxv]
+         * — recover argc/argv/envp, `calls #3, main`, then `calls #1, exit`
+         * (exit is a --use producer import, reached through its PLT stub above).
+         * main is an intra-image gcc-compiled procedure entered by CALLS through
+         * its own entry mask, exactly as the compiler calls any local function.
+         * VAX register bytes: SP=0xE, r0=0x50, r1=0x51, r2=0x52 (mode 5=Rn).
+         * PC-relative CALLS destination disp = target - (PC after the disp
+         * field), the same bias gcc's `calls $n, f@PLT` uses. */
+        {
+            uint8_t *c = img + crt0_va;
+            int o = 0;
+            /* movl (sp),r0            ; r0 = argc                                 */
+            c[o++] = 0xD0; c[o++] = 0x6E; c[o++] = 0x50;
+            /* movab 4(sp),r1          ; r1 = argv = sp+4                          */
+            c[o++] = 0x9E; c[o++] = 0xAE; c[o++] = 0x04; c[o++] = 0x51;
+            /* moval 4(r1)[r0],r2      ; r2 = envp = r1 + 4 + r0*4 (index *4, MOVAL)*/
+            c[o++] = 0xDE; c[o++] = 0x40; c[o++] = 0xA1; c[o++] = 0x04; c[o++] = 0x52;
+            /* push args in reverse: envp, argv, argc                             */
+            c[o++] = 0xDD; c[o++] = 0x52;   /* pushl r2  ; envp                    */
+            c[o++] = 0xDD; c[o++] = 0x51;   /* pushl r1  ; argv                    */
+            c[o++] = 0xDD; c[o++] = 0x50;   /* pushl r0  ; argc                    */
+            /* calls $3, main          ; PC-relative longword-disp destination     */
+            c[o++] = 0xFB; c[o++] = 0x03; c[o++] = 0xEF;
+            { int32_t d = (int32_t)((int64_t)main_va - (int64_t)(crt0_va + o + 4));
+              memcpy(c + o, &d, 4); o += 4; }
+            /* pushl r0                ; exit code = main's return value (r0)       */
+            c[o++] = 0xDD; c[o++] = 0x50;
+            /* calls $1, exit          ; -> exit import PLT stub                    */
+            c[o++] = 0xFB; c[o++] = 0x01; c[o++] = 0xEF;
+            { int32_t d = (int32_t)((int64_t)imp[exit_imp].plt_va -
+                                    (int64_t)(crt0_va + o + 4));
+              memcpy(c + o, &d, 4); o += 4; }
+            /* halt                    ; unreachable — exit() never returns        */
+            c[o++] = 0x00;
+        }
+#else
         if (g_out_machine == EM_X86_64) {
             /* x86_64 crt0 (vms-206): same contract as the aarch64 stub below --
              * recover argc/argv/envp off the initial process stack per the
@@ -3168,6 +3230,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             c[5] = 0x94000000u | (uint32_t)((dexit >> 2) & 0x03FFFFFF);  /* bl exit   */
             c[6] = 0xD4200000u;   /* brk #0                     ; exit never returns */
         }
+#endif
     }
 
     struct ovmx_sv_header *svh = (struct ovmx_sv_header *)(img + off_sv);

@@ -869,17 +869,27 @@ static int run_cterm_accept_test(void)
      * before it announces itself and prompts -- gated on being bound to a
      * terminal DEVICE (tools/vms_login.c, loginout_at_operator_terminal()),
      * which this session is, exactly like the console. So the remote terminal
-     * types a bare RETURN, as a person at a SET HOST would; a few retries,
-     * because the session process has to be scheduled and reach the read
-     * first. This is also, incidentally, a second proof that the executive
-     * recorded the terminal binding: if it had not, LOGINOUT would not be
-     * waiting for a RETURN at all. */
+     * types a bare RETURN, as a person at a SET HOST would. This is also,
+     * incidentally, a second proof that the executive recorded the terminal
+     * binding: if it had not, LOGINOUT would not be waiting for a RETURN.
+     *
+     * ONE RETURN, THEN A LONG WAIT -- not a fast retry loop. The terminal
+     * buffers input, so a RETURN typed before the session process reaches its
+     * read is still there when it does (and LOGINOUT's own type-ahead flush
+     * runs AFTER that read, so it cannot eat the wake). A machine-gun of
+     * RETURNs, by contrast, can land one in the window between the flush and
+     * the prompt, where it reads as an EMPTY USERNAME -- burning one of
+     * LOGINOUT's three attempts and leaving too few for the three refusals
+     * this test needs. One keystroke, patiently, is both more faithful and
+     * more robust. A single retry after a long silence cannot race a prompt
+     * that would already have been seen.
+     */
     {
         int woke = 0, tries;
-        for (tries = 0; tries < 8 && !woke; tries++) {
+        for (tries = 0; tries < 2 && !woke; tries++) {
             if (ct_type(&c, "") != 0)
                 break;
-            woke = ct_pump(&c, "Username:", 3000);
+            woke = ct_pump(&c, "Username:", tries == 0 ? 20000 : 10000);
         }
         CT_CHECK(woke,
                  "the inbound SET HOST is CHALLENGED: LOGINOUT's own Username:"

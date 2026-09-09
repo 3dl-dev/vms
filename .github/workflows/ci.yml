@@ -2316,20 +2316,23 @@ jobs:
       # verdicts on a red run, not just the first.
       fail-fast: false
       matrix:
-        # N shards. ~80 suites / 6 ≈ 13-16 per shard. `strategy.job-total`
+        # N shards. ~115 suites / 8 ≈ 13-15 per shard. `strategy.job-total`
         # (used in the name and passed to the guest) derives N from this list.
-        # HISTORY (vms-f881): the new test_kmod_devtab_terminal suite (real PTY
-        # setup + a cross-process fork/$GETDVI round trip) is heavier than the
-        # average suite and tipped shard 0/6 past the 600s wall under CI
-        # contention (qemu SIGTERM/rc=124, no suite FAILED). A 6->8 re-shard
-        # relieved capacity but RESHUFFLED the md5 residue classes and moved
-        # test_syssvc_identcont into a grouping where it deterministically FAILED
-        # (green at 6 shards on main + elsewhere, red only at 8) -- identcont has
-        # a latent cross-suite isolation dependency the 6-shard layout happens to
-        # satisfy (filed separately). So we KEEP 6 shards and give this job a
-        # larger WALL instead (KE_WALL_TIMEOUT below), the run_tests.sh-documented
-        # fallback, which relieves shard 0 WITHOUT changing any suite's shard.
-        shard: [0, 1, 2, 3, 4, 5]
+        # HISTORY (vms-f881 / vms-739): the new test_kmod_devtab_terminal suite
+        # (real PTY setup + a cross-process fork/$GETDVI round trip) co-resided
+        # with the heavy test_kmod_cluster_fork_hammer on shard 0 at N=6 (both
+        # md5%6==0); their combined TCG cost blew the wall at BOTH 1200s and
+        # 1800s (cluster_fork_hammer alone starves devtab_terminal of the budget,
+        # qemu SIGTERM/rc=124, no suite FAILED). Raising the wall further is not
+        # viable (already half of timeout-minutes:60, TCG is unbounded-slow), so
+        # the sanctioned fix is MORE shards. The earlier 6->8 attempt reddened
+        # test_syssvc_identcont (a latent cross-suite isolation dependency: it
+        # free-rode on a co-resident ACP sibling's $MOUNT of the SYSUAF sysvol);
+        # vms-739 fixed that -- identcont now mounts VDA300: itself, so it passes
+        # in ANY cohort. At N=8 the md5 residue classes split the heavy pair
+        # (cluster_fork_hammer->shard 6, devtab_terminal->shard 0) onto separate
+        # lighter shards, and the 1800s wall (below) has ample headroom.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
 
     steps:
       - name: Checkout

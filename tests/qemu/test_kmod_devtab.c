@@ -68,6 +68,11 @@
  * fake for every nameable controller (INV-6).
  */
 #define NIC_DEV         "ETH0:"
+/* The DECnet device face, canonical form -- mirrors VMS_DECNET_DEVNAM in
+ * src/kernel-core/vms_devtab.c (rd vms-9ab). The user types the physical form
+ * "_NET:"; the executive keys it as "NET:" (normalize_devnam drops the leading
+ * underscore). A name change is a one-line edit there and here. */
+#define DECNET_DEV      "NET:"
 #define NIC_ABSENT      "ETH1:"
 
 /* What process A changes the console to, so B can look for it. */
@@ -312,6 +317,35 @@ int main(int argc, char **argv)
         }
         CHECK(saw_nic, "device scan lists the NIC ETH0:");
     }
+
+    /* --------------------------------------------------------------
+     * 2c. The DECnet device FACE _NET: (rd vms-9ab, P5; design
+     *     docs/design-decnet-ovmx.md §2b, vms-515 §3.3).
+     *
+     *     Like ETH0:, _NET: is entered by the EXECUTIVE at module init
+     *     (over the same primary net device), not by any process -- so
+     *     THIS process, which is NOT NETACP and created nothing, still
+     *     $GETDVIs a real device. That is the design's §7.5 CROSS-PROCESS
+     *     tell for DECnet, the same shape as the RTAn: proof: the object
+     *     table + device face are executive-resident, not a per-process
+     *     imitation. The user types the physical form `_NET:`; the
+     *     executive keys it canonically as NET: (normalize_devnam drops
+     *     the leading underscore), so BOTH spellings resolve to it.
+     * -------------------------------------------------------------- */
+    memset(&info, 0, sizeof(info));
+    status = vms_kif_getdvi_devnam("_NET:", &info);
+    CHECK(status == SS_NORMAL,
+          "DECnet device _NET: exists cross-process, entered by the executive (NETACP layers its circuit over it) -- not created by this process");
+    CHECK(strcmp(info.devnam, DECNET_DEV) == 0,
+          "_NET: reports its canonical physical name NET: (the leading underscore is the physical-form prefix, dropped in the table key)");
+    CHECK(info.devclass == DC_SCOM,
+          "_NET: is a DECnet network/template device (DC$_SCOM), like the LAN device it rides");
+    CHECK(info.owner_pid == 0, "_NET: starts unowned (a shareable template device)");
+
+    memset(&info, 0, sizeof(info));
+    status = vms_kif_getdvi_devnam(DECNET_DEV, &info);
+    CHECK(status == SS_NORMAL && strcmp(info.devnam, DECNET_DEV) == 0,
+          "the canonical spelling NET: resolves to the SAME device (name normalization, as on VMS)");
 
     /* $ASSIGN ETH0: succeeds and -- because a LAN controller is a
      * SHAREABLE device -- a bare channel confers NO ownership. This is

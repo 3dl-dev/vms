@@ -536,6 +536,87 @@ int dnet_cterm_remote_port_info(const struct dnet_cterm_sc_connect *sc,
     return DNET_CTERM_OK;
 }
 
+/* Copy at most DNET_SC_MAX_STR printable-ASCII characters of `src` into `dst`
+ * (dst is DNET_SC_MAX_STR + 1 bytes). Control characters and 8-bit bytes are
+ * dropped, so nothing a peer put in a Session Control name can carry a control
+ * or escape sequence past this boundary onto a human/accounting surface. */
+static void desc_copy_printable(char *dst, const char *src)
+{
+    size_t n = 0;
+    for (const char *p = src; *p && n < DNET_SC_MAX_STR; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x20 || c > 0x7e)
+            continue;
+        dst[n++] = (char)c;
+    }
+    dst[n] = '\0';
+}
+
+int dnet_conn_descriptor_from_wire(const uint8_t *conn_data, size_t conn_len,
+                                   uint16_t peer_addr,
+                                   struct dnet_conn_descriptor *out)
+{
+    struct dnet_cterm_sc_connect sc;
+    int rc;
+
+    if (!out)
+        return DNET_CTERM_EINVAL;
+
+    /* Zero FIRST: a failure below leaves validated == 0 and no half-filled
+     * identity, so a caller that ignores the return value still cannot hand a
+     * usable descriptor to the privileged path. */
+    memset(out, 0, sizeof(*out));
+
+    /* THE bounded parse. Every field-length is checked, an over-long counted
+     * string is refused (not clipped), an unknown descriptor format is refused,
+     * and the password bytes are measured and dropped -- all inside here, on
+     * the low-privilege side. */
+    rc = dnet_cterm_sc_connect_parse(conn_data, conn_len, &sc);
+    if (rc != DNET_CTERM_OK)
+        return rc;                 /* out stays all-zero / unvalidated */
+
+    out->dst_is_object = (sc.dst_format == DNET_SC_FMT_OBJECT) ? 1 : 0;
+    out->dst_object    = sc.dst_object;
+    out->peer_addr     = peer_addr;   /* engine state, NOT the wire */
+    desc_copy_printable(out->proxy_user, sc.src_user);
+    desc_copy_printable(out->proxy_task, sc.dst_task);
+
+    /* Deliberately NOT copied: password_present/password_len (already dropped
+     * by the parser), rqstrid/account, src_grpcode/usrcode, menuver -- none of
+     * it may reach a session-creation decision. */
+
+    out->validated = 1;
+    return DNET_CTERM_OK;
+}
+
+int dnet_conn_descriptor_port_info(const struct dnet_conn_descriptor *desc,
+                                   char *out, size_t cap)
+{
+    if (!desc || !out || cap == 0)
+        return DNET_CTERM_EINVAL;
+
+    unsigned n = 0;
+    char digits[8];
+    unsigned v = desc->peer_addr;
+    unsigned d = 0;
+
+    do { digits[d++] = (char)('0' + (v % 10)); v /= 10; } while (v && d < sizeof(digits));
+    while (d) {
+        if (n + 1 >= cap) return DNET_CTERM_ENOSPACE;
+        out[n++] = digits[--d];
+    }
+    if (n + 2 >= cap) return DNET_CTERM_ENOSPACE;
+    out[n++] = ':'; out[n++] = ':';
+
+    /* proxy_user is already printable-filtered at from_wire time; copy as-is. */
+    for (const char *p = desc->proxy_user; *p; p++) {
+        if (n + 1 >= cap) return DNET_CTERM_ENOSPACE;
+        out[n++] = *p;
+    }
+    out[n] = '\0';
+    return DNET_CTERM_OK;
+}
+
 /* ---- session FSM --------------------------------------------------------- */
 
 int dnet_cterm_session_init(struct dnet_cterm_session *s, enum dnet_cterm_role role)

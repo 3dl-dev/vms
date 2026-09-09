@@ -77,8 +77,9 @@ struct dnet_cterm_host_session {
     uint32_t session_pid;                 /* VMS pid $CREPRC returned          */
     int      active;                      /* a session is live                 */
 
-    /* Decoded connect. Proxy/accounting only -- see the header block. */
-    struct dnet_cterm_sc_connect sc;
+    /* The proxy/accounting identity, RENDERED from the validated descriptor
+     * (vms-515 §3.4). The privileged session object holds no parsed wire struct
+     * and no credential material -- only this human/accounting string. */
     char     remote_port_info[DNET_CTERM_HOST_RPI_MAX];
 };
 
@@ -108,6 +109,31 @@ struct dnet_cterm_host_session {
  *                  disconnect the caller then sends.
  *   SS$_DEVALLOC   the executive had no free RTAn: unit
  *   anything else  the executive's own status from the mint or the $CREPRC
+ */
+/*
+ * dnet_cterm_host_open_desc - THE PRIVILEGED CONTROL PATH (design vms-515 §3.4).
+ * Accept a VALIDATED, TYPED connect descriptor and create the AUTHENTICATED
+ * session it asks for. This function parses NO wire bytes -- it is handed only a
+ * `struct dnet_conn_descriptor` that the low-privilege parser already bounded
+ * and validated. A descriptor that did not come from that parser has
+ * validated == 0 and is refused (SS$_BADPARAM) before any device or process
+ * exists; so is a descriptor naming any object but 42. This is the seam a
+ * fuzzed/hostile inbound frame cannot cross: the attacker bytes are decoded far
+ * from here, and only a typed, bounded, credential-free descriptor arrives.
+ *
+ * On success (SS$_NORMAL) a process running LOGINOUT.EXE exists, bound to the
+ * RTAn: named in hs->devnam, and hs->master_fd is the byte channel to it.
+ * Refusals are honest and leave nothing behind (INV-6), same statuses as below.
+ */
+uint32_t dnet_cterm_host_open_desc(struct dnet_cterm_host_session *hs,
+                                   const struct dnet_conn_descriptor *desc);
+
+/*
+ * dnet_cterm_host_open - the thin low-privilege convenience entry for a caller
+ * that holds the raw connect bytes: it runs the low-privilege parse
+ * (dnet_conn_descriptor_from_wire) and hands the resulting descriptor to
+ * dnet_cterm_host_open_desc above. NETACP's serve loop calls the two steps
+ * explicitly instead, so the isolation seam is visible at the call site.
  */
 uint32_t dnet_cterm_host_open(struct dnet_cterm_host_session *hs,
                               const uint8_t *conn_data, size_t conn_len,

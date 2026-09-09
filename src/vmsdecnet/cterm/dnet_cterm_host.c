@@ -4,11 +4,15 @@
  * argument, the oracle that grounds it, and the no-auth hole this replaces.
  *
  * The body below is deliberately short, and every line of it is a VMS system
- * service or a CTERM field. That is the point. The sequence is:
+ * service or a CTERM field. That is the point. The sequence is (P5, vms-9ab,
+ * design vms-515 §3.4 -- the parse is now DONE ELSEWHERE, at low privilege, and
+ * this privileged path receives only the validated typed descriptor):
  *
  *      inbound connect data (untrusted bytes)
- *        -> dnet_cterm_sc_connect_parse   (bounded; rejects malformed)
- *        -> object 42?                     (else refuse)
+ *        -> dnet_conn_descriptor_from_wire (LOW PRIV, pure codec TU; bounded;
+ *                                           rejects malformed; drops password)
+ *      ---- the A2/A8 isolation seam: a validated struct, no wire bytes ----
+ *        -> dnet_cterm_host_open_desc      (PRIVILEGED; validated? object 42?)
  *        -> ovmx_vterm_create()            (executive mints RTAn:)
  *        -> $CREPRC(LOGINOUT.EXE, RTAn:, PRC$M_INTER|PRC$M_LOGINOUT)
  *        -> LOGINOUT challenges the remote user on that terminal
@@ -76,14 +80,27 @@ static int cterm_host_loginout_path(char *out, size_t outsz)
     return 1;
 }
 
-uint32_t dnet_cterm_host_open(struct dnet_cterm_host_session *hs,
-                              const uint8_t *conn_data, size_t conn_len,
-                              uint16_t peer_addr)
+uint32_t dnet_cterm_host_open_desc(struct dnet_cterm_host_session *hs,
+                                   const struct dnet_conn_descriptor *desc)
 {
     char loginout_path[512];
     uint32_t st;
 
-    if (!hs || !conn_data)
+    if (!hs || !desc)
+        return SS$_BADPARAM;
+
+    /* THE ISOLATION SEAM (design vms-515 §3.4). This is NETACP's privileged
+     * control path -- it mints a device and creates a process. It parses NO
+     * wire bytes: it is handed a `struct dnet_conn_descriptor` that the
+     * low-privilege parser (dnet_conn_descriptor_from_wire) already validated
+     * and bounded. A descriptor that did not come out of that parser is
+     * all-zero with validated == 0, and is refused HERE, before any device or
+     * process exists -- which is exactly what a fuzzed/malformed inbound frame
+     * turns into (see tests/vmsdecnet/test_dnet_cterm.c isolation cases). There
+     * is deliberately no conn_data pointer in scope in this function. */
+    if (!desc->validated)
+        return SS$_BADPARAM;
+    if (!desc->dst_is_object || desc->dst_object != DNET_CTERM_OBJECT)
         return SS$_BADPARAM;
 
     memset(hs, 0, sizeof(*hs));
@@ -91,22 +108,13 @@ uint32_t dnet_cterm_host_open(struct dnet_cterm_host_session *hs,
     if (dnet_cterm_session_init(&hs->cterm, DNET_CTERM_ROLE_HOST) != DNET_CTERM_OK)
         return SS$_BADPARAM;
 
-    /* 1. DECODE THE UNTRUSTED CONNECT. Bounded, and refused rather than
-     *    clipped -- these bytes came from a peer that has authenticated
-     *    nothing. A malformed connect ends here, before any device exists. */
-    if (dnet_cterm_sc_connect_parse(conn_data, conn_len, &hs->sc) != DNET_CTERM_OK)
-        return SS$_BADPARAM;
-    if (hs->sc.dst_format != DNET_SC_FMT_OBJECT ||
-        hs->sc.dst_object != DNET_CTERM_OBJECT)
-        return SS$_BADPARAM;
-
     /* 2. The carried identity becomes PROXY INFORMATION and nothing else --
      *    the oracle's "Remote Port Info: 1025::SYSTEM". The ADDRESS half comes
-     *    from the engine's decode of the routing header, not from anything the
-     *    peer wrote in the connect message, so a peer cannot name itself
-     *    something it is not on the accounting surface. */
-    (void)dnet_cterm_remote_port_info(&hs->sc, peer_addr, hs->remote_port_info,
-                                      sizeof(hs->remote_port_info));
+     *    from the engine's decode of the routing header (desc->peer_addr), not
+     *    from anything the peer wrote in the connect message, so a peer cannot
+     *    name itself something it is not on the accounting surface. */
+    (void)dnet_conn_descriptor_port_info(desc, hs->remote_port_info,
+                                         sizeof(hs->remote_port_info));
 
     /* 3. MINT THE TERMINAL, in the executive. The name comes BACK; this
      *    process does not choose it. */
@@ -157,6 +165,35 @@ uint32_t dnet_cterm_host_open(struct dnet_cterm_host_session *hs,
 
     hs->active = 1;
     return SS$_NORMAL;
+}
+
+/*
+ * dnet_cterm_host_open - the thin LOW-PRIVILEGE entry that a caller with raw
+ * connect bytes uses. It does the low-privilege parse ONCE
+ * (dnet_conn_descriptor_from_wire, which lives in the pure codec TU) and hands
+ * the resulting validated descriptor to the privileged control path above. It
+ * exists so callers that already hold the wire bytes need not open-code the two
+ * steps; NETACP's own serve loop calls the two steps explicitly so the seam is
+ * visible at the call site (src/vmsdecnet/engine/decnetd.c).
+ *
+ * The parse failure maps to SS$_BADPARAM -- the same refusal the privileged
+ * path gives an unvalidated descriptor -- so a malformed frame is refused
+ * before any device or process is created, exactly as before this split.
+ */
+uint32_t dnet_cterm_host_open(struct dnet_cterm_host_session *hs,
+                              const uint8_t *conn_data, size_t conn_len,
+                              uint16_t peer_addr)
+{
+    struct dnet_conn_descriptor desc;
+
+    if (!hs || !conn_data)
+        return SS$_BADPARAM;
+
+    if (dnet_conn_descriptor_from_wire(conn_data, conn_len, peer_addr, &desc)
+            != DNET_CTERM_OK)
+        return SS$_BADPARAM;
+
+    return dnet_cterm_host_open_desc(hs, &desc);
 }
 
 long dnet_cterm_host_read(struct dnet_cterm_host_session *hs,

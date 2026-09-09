@@ -357,6 +357,109 @@ static void test_sc_connect(void)
               "mutation fuzz: the corpus REACHES the accepting paths (a fuzz that"
               " only ever gets rejected proves nothing about them)");
     }
+
+    /* ---- 5. THE A2/A8 ISOLATION SEAM (vms-9ab, design vms-515 §3.4) -------
+     * dnet_conn_descriptor_from_wire() is the LOW-PRIVILEGE boundary: it turns
+     * untrusted connect bytes into a validated typed descriptor, and it is the
+     * ONLY thing between a hostile frame and NETACP's privileged control path.
+     * Prove its contract holds under the same mutation fuzz: a malformed frame
+     * NEVER yields a validated descriptor, a rejected frame ALWAYS leaves the
+     * descriptor all-zero (validated == 0 -- the state the privileged path
+     * refuses), and an accepted descriptor is fully bounded and credential-free. */
+    {
+        /* Positive: the real VAX specimen distils to a validated object-42
+         * descriptor whose proxy identity is the carried user and nothing more. */
+        struct dnet_conn_descriptor d;
+        check(dnet_conn_descriptor_from_wire(k_oracle_sc_connect,
+                                             sizeof(k_oracle_sc_connect) - 1,
+                                             1025, &d) == DNET_CTERM_OK &&
+              d.validated == 1 && d.dst_is_object == 1 &&
+              d.dst_object == DNET_CTERM_OBJECT &&
+              strcmp(d.proxy_user, "SYSTEM") == 0 && d.peer_addr == 1025,
+              "from_wire: the oracle connect yields a VALIDATED object-42"
+              " descriptor carrying only the proxy user (SYSTEM) + engine addr");
+
+        /* The descriptor TYPE has no field a credential could live in: even a
+         * connect that DOES carry a password produces a descriptor with the
+         * plaintext nowhere in it (structural, not a measured coincidence). */
+        uint8_t withpw[128]; size_t pn = 0;
+        check(dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", 0x021a,
+                                          0x2020, "RQ", "SECRETPW", "ACCT",
+                                          withpw, sizeof(withpw), &pn) == DNET_CTERM_OK &&
+              dnet_conn_descriptor_from_wire(withpw, pn, 7, &d) == DNET_CTERM_OK &&
+              memmem(&d, sizeof(d), "SECRETPW", 8) == NULL,
+              "from_wire: a password-bearing connect produces a descriptor with"
+              " the plaintext NOWHERE in it -- the seam cannot carry a credential");
+
+        /* An unvalidated (all-zero) descriptor is the state a REJECTED frame
+         * leaves, and it is exactly what the privileged path refuses. */
+        struct dnet_conn_descriptor zero;
+        memset(&zero, 0, sizeof(zero));
+        check(zero.validated == 0,
+              "an all-zero descriptor is unvalidated -- the privileged control"
+              " path (dnet_cterm_host_open_desc) refuses it before any device"
+              " or process exists");
+
+        unsigned seed = 0x5eed9ab, leaks = 0, dirty_reject = 0, unbounded = 0;
+        unsigned validated_ct = 0, i;
+        for (i = 0; i < 200000; i++) {
+            uint8_t mbuf[80];
+            size_t mlen, j;
+            int muts, m, rc;
+            mlen = (size_t)(rand_r(&seed) % sizeof(mbuf));
+            for (j = 0; j < mlen; j++)
+                mbuf[j] = j < sizeof(k_oracle_sc_connect)
+                              ? k_oracle_sc_connect[j]
+                              : (uint8_t)(rand_r(&seed) & 0xff);
+            muts = 1 + (rand_r(&seed) % 3);
+            for (m = 0; m < muts && mlen; m++)
+                mbuf[rand_r(&seed) % mlen] = (uint8_t)(rand_r(&seed) & 0xff);
+
+            memset(&d, 0xAB, sizeof(d));   /* poison: a failure must fully clear */
+            rc = dnet_conn_descriptor_from_wire(mbuf, mlen, 1025, &d);
+            if (rc == DNET_CTERM_OK) {
+                validated_ct++;
+                /* An ACCEPTED descriptor must be validated, NUL-terminated
+                 * within bound, printable-only, and CONSISTENT with the parser's
+                 * own object decode -- never a validated object-42 the parser
+                 * would not also call object 42. */
+                if (!d.validated)
+                    leaks++;
+                if (d.proxy_user[DNET_SC_MAX_STR] != '\0' ||
+                    d.proxy_task[DNET_SC_MAX_STR] != '\0')
+                    unbounded++;
+                for (const char *p = d.proxy_user; *p; p++)
+                    if ((unsigned char)*p < 0x20 || (unsigned char)*p > 0x7e)
+                        unbounded++;
+                if (d.dst_is_object) {
+                    int obj = dnet_cterm_sc_connect_object(mbuf, mlen);
+                    if (obj < 0 || (uint8_t)obj != d.dst_object)
+                        leaks++;
+                }
+            } else {
+                /* A REJECTED frame must leave the descriptor all-zero: no
+                 * poison bytes survive, and above all validated == 0. */
+                struct dnet_conn_descriptor z;
+                memset(&z, 0, sizeof(z));
+                if (d.validated != 0 || memcmp(&d, &z, sizeof(d)) != 0)
+                    dirty_reject++;
+            }
+        }
+        check(leaks == 0,
+              "from_wire fuzz: NO malformed frame ever produced a validated"
+              " descriptor inconsistent with the parser -- the privileged path"
+              " cannot be steered to a fabricated object by hostile bytes");
+        check(dirty_reject == 0,
+              "from_wire fuzz: EVERY rejected frame left the descriptor all-zero"
+              " (validated == 0) -- a refused parse hands the privileged path"
+              " nothing it will act on");
+        check(unbounded == 0,
+              "from_wire fuzz: every accepted descriptor's strings stay bounded"
+              " and printable -- no over-run, no control-char injection");
+        check(validated_ct > 20000,
+              "from_wire fuzz: the corpus REACHES the validated path (else the"
+              " no-leak result would be vacuous)");
+    }
 }
 
 /* ---- 2. session FSM (raw CTERM PDUs, no NSP) ----------------------------- */

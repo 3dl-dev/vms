@@ -960,6 +960,74 @@ static void vms_devtab_probe_nic(void)
 }
 
 /*
+ * The DECnet device FACE (rd vms-9ab, P5; design docs/design-decnet-ovmx.md §2b
+ * "L3-L4 VMS device face" + vms-515 §3.3). `_NET:` is the executive-resident
+ * name a process $ASSIGNs / $GETDVIs to reach DECnet -- the VMS DECnet template
+ * / network pseudo-device. NETACP (the privileged RUN/DETACHED session-control
+ * process) is the ACP that layers its Phase IV circuit and object dispatch over
+ * this device; the userspace AF_PACKET datalink binds the SAME primary net
+ * device ETH0: fronts (operator device-native-naming: one NIC discovered once,
+ * every consumer -- TCP/IP, the cluster port, DECnet -- binds the same record).
+ *
+ * BORN IN THE EXECUTIVE, like ETH0:/the disks/the console -- no process
+ * introduces it; it exists in the I/O database before /dev/vms does. That is
+ * what makes "$GETDVI _NET: from a DIFFERENT process returns a real device" the
+ * design's §7.5 CROSS-PROCESS TELL for DECnet, the same shape as the RTAn:
+ * proof: a green produced without the executive device table carrying this row
+ * would be a LARP.
+ *
+ * GATED ON THE NIC (INV-6). `_NET:` is entered ONLY when the node actually has
+ * the primary Ethernet unit ETH0: DECnet would ride; on a node with no NIC no
+ * `_NET:` is entered, so $ASSIGN/$GETDVI _NET: is SS$_NOSUCHDEV -- the honest
+ * "this node cannot do DECnet" state, never a fabricated device. Its existence
+ * is the device FACE being present, not a claim that a circuit is turned ON
+ * (that is NETACP's runtime state, read from NETACP, not asserted here).
+ *
+ * PROVENANCE (Rule 8, published-doc-derived; the `_NET:` name and template-
+ * device shape are VMS-authentic, from the DECnet for OpenVMS Networking
+ * Manual's network device, not an OVMX invention and not VSI-disasm):
+ *   - class DC$_SCOM, matching ETH0:/EWA0: (the DECnet device is a serial-
+ *     communications/LAN-class device);
+ *   - shareable = 1: `_NET:` is a TEMPLATE device -- many processes $ASSIGN it
+ *     concurrently for task-to-task logical links, exactly like ETH0: -- so the
+ *     shareable side of the ownership rule (a channel confers no ownership) is
+ *     the property test_kmod_devtab asserts on it.
+ */
+/* Stored in the CANONICAL physical form the table is keyed by (normalize_devnam:
+ * upper-case, trailing colon, NO leading underscore). The name a user types --
+ * `_NET:` (the design's/VMS's physical form) -- normalizes to exactly this, so
+ * $ASSIGN/$GETDVI of `_NET:` OR `NET:` both resolve here, as on VMS. */
+#define VMS_DECNET_DEVNAM  "NET:"   /* DECnet network/template pseudo-device */
+
+static void vms_devtab_probe_net(void)
+{
+    struct vms_device *net;
+    int have_nic;
+
+    /* Ride the SAME primary net device ETH0: was entered from. If the executive
+     * entered no ETH0: (no NIC), it enters no _NET: either -- honest INV-6. */
+    exec_lock(&vms_device_list_lock);
+    have_nic = devtab_lookup_locked(VMS_NIC_DEVNAM) != NULL;
+    exec_unlock(&vms_device_list_lock);
+    if (!have_nic) {
+        pr_info("vms: no Ethernet unit %s; DECnet device %s not created\n",
+                VMS_NIC_DEVNAM, VMS_DECNET_DEVNAM);
+        return;
+    }
+
+    net = vms_devtab_create(VMS_DECNET_DEVNAM, DC__SCOM, VMS_DT_UNKNOWN,
+                            1 /* shareable -- a template device */,
+                            0 /* devchar */, 0 /* width */, 0 /* page */);
+    if (!net) {
+        pr_warn("vms: out of memory creating DECnet device %s\n",
+                VMS_DECNET_DEVNAM);
+        return;
+    }
+    pr_info("vms: DECnet device face %s created (NETACP layers its circuit"
+            " over %s)\n", VMS_DECNET_DEVNAM, VMS_NIC_DEVNAM);
+}
+
+/*
  * The cluster port (PEDRIVER role), FC-P0.9. PEA0: is VMS's name for the
  * device the cluster's SCA (ethertype 0x6007) traffic rides; the real
  * question -- WHICH host interface that is -- was already answered once, at
@@ -1092,6 +1160,14 @@ int vms_devtab_init(void)
      * the I/O database before /dev/vms does; no process introduces it.
      */
     vms_devtab_probe_nic();
+
+    /*
+     * Enter the DECnet device face _NET: over that NIC the same way (vms-9ab,
+     * P5). Gated on ETH0: existing, so a NIC-less node has no _NET: and
+     * $GETDVI _NET: is SS$_NOSUCHDEV (INV-6). Born here in the I/O database
+     * before /dev/vms; no process introduces it -- the §7.5 cross-process tell.
+     */
+    vms_devtab_probe_net();
 
     pr_info("vms: device table initialized, console terminal %s created\n",
             VMS_CONSOLE_DEVNAM);

@@ -5,14 +5,14 @@
 
 ## Inventory
 
-**444 surfaces catalogued** across 9 domains, each with a per-surface status.
+**446 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 26 | | real | 300 |
-| 🟢 implemented | 261 | | n/a | 93 |
+| ✅ verified | 26 | | real | 302 |
+| 🟢 implemented | 263 | | n/a | 93 |
 | 🟡 partial | 46 | | advisory | 44 |
 | 🟠 stub | 17 | | facade-risk | 7 |
 | 🔵 designed | 0 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **400 committed** — **287 met** (implemented/verified), 45 in progress (partial), 68 not started (absent/stub/designed).
+- **402 committed** — **289 met** (implemented/verified), 45 in progress (partial), 68 not started (absent/stub/designed).
 - ⚠ **5 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -1106,7 +1106,7 @@ Universal symbol vectors (position-bound binding), GSMATCH (ALWAYS/EQUAL/LEQUAL,
 
 _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 
-`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟠⬜⬜⬜`  —  26 surfaces catalogued (19 met · 3 in progress · 4 not started) · V1: 24 committed, 19 met
+`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟠⬜⬜⬜`  —  28 surfaces catalogued (21 met · 3 in progress · 4 not started) · V1: 26 committed, 21 met
 
 ### decnet — DECnet Phase IV (Routing, NSP, Task-to-Task, SET HOST)
 <sub>scope: in · plan: vms-30e · ref: DECnet for OpenVMS Networking Manual; DNA Phase IV Routing + NSP specs · reviewed 2026-08-31</sub>
@@ -1114,7 +1114,7 @@ _TCP/IP Services (UCX), DECnet Phase IV, LAT, SSH._
 No longer greenfield: src/vmsdecnet now carries real, clean-room Phase IV wire codecs and a routing adjacency engine, several oracle-verified byte-identical against captures committed in docs/decnet-provenance-register.md (lab specimens, rd vms-3be/PR #665). Present: the Ethernet Endnode Hello codec (oracle-verified), the Router Hello codec (spec-derived), the routing adjacency state machine + hello/listen timers, and the NSP transport codec (Connect Initiate oracle-verified; other PDUs self-round-trip). NOT yet wired: a live engine/socket — nothing drives a real logical link, so task-to-task and a working SET HOST do not exist. SET HOST still honestly reports unavailability; NODE"acc"::file filespec syntax parses but nothing downstream acts on it. 1.0 blocker (vms-30e).
 
 
-<sub>11 items · 6 met · 3 in progress · 2 not started</sub>
+<sub>13 items · 8 met · 3 in progress · 2 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -1127,7 +1127,9 @@ No longer greenfield: src/vmsdecnet now carries real, clean-room Phase IV wire c
 | 🟢 | `decnet$node-database` | feature | Persisted remote-node database + node NAME<->address resolution | implemented | real | in | `src/vmsdecnet/ncp/dnet_nodedb.c` — The NCP node table: add/update/clear, case-insensitive unique node names, ascending-address SHOW ordering, and persistence (atomic save + tolerant load). Provides the name<->address resolution the SET HOST / NODE:: paths need. On-disk format is a documented OVMX plain-text layout at a Linux host path (labelled OVMX choice — NOT VMS NETNODE_REMOTE.DAT binary through SYS$SYSTEM; rd vms-20e tracks moving it behind the VMS file layer). Unit: tests/vmsdecnet/test_dnet_nodedb.c (rd vms-1e9). |
 | ✅ | `decnet$sc-connect` | protocol | DNA Session Control CONNECT message — destination/source end-user descriptors + access-control fields | verified | real | in | `src/vmsdecnet/cterm/dnet_cterm.c` — Oracle-CORRECTED the #1013 cut, which emitted format 1 for the destination object where the real VAX sends format 0. Establishes the security fact vms-f40 rests on: the access-control fields (RQSTRID/PASSWRD/ACCOUNT) are EMPTY on a real SET HOST, so the carried node::user is PROXY/accounting info and the remote must authenticate fresh. Decoder is fully bounded against attacker-controlled bytes (truncation/over-long/unknown-format all refused) and never retains a wire-supplied password. |
 | 🟢 | `decnet$cterm-session-auth` | feature | Inbound SET HOST (Session Control object 42) reaches an AUTHENTICATED LOGINOUT prompt on a virtual terminal (RTAn:) | implemented | real | in | `src/vmsdecnet/cterm/dnet_cterm_host.c` — An inbound object-42 connect mints an RTAn: THROUGH THE EXECUTIVE (VMS_IOCTL_TERM_CREATE -> vms_devtab_add_terminal; the executive picks the unit) and creates a process running the real SYS$SYSTEM:LOGINOUT.EXE on it via $CREPRC PRC$M_INTER|PRC$M_LOGINOUT -- the SAME primitive the console login uses (vms-3e9/vms-f881). The daemon holds no credential, spawns nothing, and the carried username reaches no decision; there is no fork/execvp/openpty anywhere above the VMS layer (standing gate tests/integration/test_creprc_session_primitive.sh check 5, both directions + negctl). NOT yet: one session at a time, no CTERM read-solicitation flow (byte-transparent pump), no DCL `SET HOST` client wiring (decnet$set-host), no live-VAX bracket. The authentication proof (challenged, bad credentials REFUSED, $GETDVI RTAn: cross-process) is DECNETD.EXE --cterm-accept-test against the real /dev/vms + real LOGINOUT, run by the shared acceptance battery in the booted image -- it FAILS honestly where the executive is absent (INV-6), it does not degrade to a stub. |
-| 🟠 | `decnet$set-host` | command | SET HOST — DECnet remote-node connection | stub | real | in | `src/vmsdcl/dcl_cmd_set.c` — Honestly reports %SET-I-NOTAVAIL, DECnet is not available on this system — a stub, not a facade. |
+| 🟢 | `decnet$netacp-device-face` | feature | NETACP presents the DECnet device face _NET: + object-dispatch as EXECUTIVE-RESIDENT, cross-process-real state | implemented | real | in | `src/kernel-core/vms_devtab.c` — P5 (rd vms-9ab, design vms-515 §3.3; vms_devtab_probe_net + src/vmsdecnet/engine/decnetd.c). The DECnet device _NET: is born in the executive I/O database at module init over the same primary NIC ETH0: rides (gated on the NIC -- no NIC, no _NET:, SS$_NOSUCHDEV, INV-6), so $ASSIGN/$GETDVI _NET: from a process that is NOT NETACP resolves a real DC$_SCOM device -- the §7.5 cross-process tell, same shape as the RTAn: proof. Asserted cross-process in tests/qemu/test_kmod_devtab.c (kmod leg) and via F$GETDVI _NET: in the shared acceptance battery. Object dispatch (42=CTERM) is executive-resident and cross-process-proven by the object-42->RTAn:->$GETDVI path (decnet$cterm-session-auth). NOT yet: a standalone NCP-style enumerable object REGISTRY query (its own executive ioctl, rd vms-9ab follow-on); the wire engine binary is not yet renamed NETACP.EXE (cosmetic, tracked). |
+| 🟢 | `decnet$wire-isolation` | feature | A2/A8 isolation: attacker wire-parsing runs at LOW privilege and hands NETACP's privileged control path a VALIDATED TYPED DESCRIPTOR; the privileged path parses no attacker bytes | implemented | real | in | `src/vmsdecnet/cterm/dnet_cterm_host.c` — P5 (rd vms-9ab, design vms-515 §3.4; low-priv parse dnet_conn_descriptor_from_wire in src/vmsdecnet/cterm/dnet_cterm.c, privileged consumer dnet_cterm_host_open_desc here). The low-privilege bounded parse distils untrusted NSP-connect bytes into a struct dnet_conn_descriptor carrying no wire pointer, no length, and no credential material; the privileged session-creating path (mints RTAn:, $CREPRCs LOGINOUT) takes ONLY that descriptor and refuses an unvalidated or wrong-object one BEFORE any device/process exists. Proven: the low-priv seam under 200k-frame mutation fuzz in tests/vmsdecnet/test_dnet_cterm.c (no malformed frame yields a validated/steered descriptor; every rejected frame leaves it all-zero), and the privileged double-door on the shipped binary in DECNETD.EXE --isolation-test (no /dev/vms needed), run by the acceptance battery. 'OVMX never crashes a peer': every hostile field is bounded and refused cleanly. |
+| 🟠 | `decnet$set-host` | command | SET HOST — DECnet remote-node connection (outbound client) | stub | real | in | `src/vmsdcl/dcl_cmd_set.c` — The DCL outbound client still honestly reports %SET-I-NOTAVAIL. The inbound serve path (object 42 -> authenticated LOGINOUT) IS live (decnet$cterm-session-auth); the outbound --set-host CLIENT over the live datalink is tracked follow-on (rd vms-9ab notes; harvest from the superseded #1057 work/vms-aac0-wire-adjacency). |
 | 🟡 | `decnet$node-filespec-syntax` | feature | NODE"acc"::dev:[dir]file filespec syntax | partial | real | in | `src/vmsrms/rms_parse.c` — Syntax only — sets NAM$M_NODE, parses/reconstructs the node prefix; nothing downstream (no live DECnet transport) acts on it. |
 
 ### lat — LAT (Local Area Transport)

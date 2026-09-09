@@ -215,7 +215,7 @@ fi
 CTERM_HOST_CODE=$(grep -vE '^[[:space:]]*(\*|/\*|//)' "$CTERM_HOST_C" 2>/dev/null \
     | sed -e 's:/\*[^*]*\*/::g' -e 's://.*::')
 for need in 'PRC\$M_INTER' 'PRC\$M_LOGINOUT' 'sys\$creprc(' 'ovmx_vterm_create(' \
-            'VMS_LOGINOUT_PATH' 'dnet_cterm_sc_connect_parse('; do
+            'VMS_LOGINOUT_PATH'; do
     if printf '%s\n' "$CTERM_HOST_CODE" | grep -q -- "$need"; then
         :
     else
@@ -226,6 +226,36 @@ for need in 'PRC\$M_INTER' 'PRC\$M_LOGINOUT' 'sys\$creprc(' 'ovmx_vterm_create('
         status=1
     fi
 done
+
+# (b-cont) The BOUNDED WIRE PARSE deliberately moved OUT of this privileged host
+# path into the LOW-PRIVILEGE seam (dnet_cterm.c dnet_conn_descriptor_from_wire),
+# per the A2/A8 isolation design (vms-515 §3.4): NETACP's privileged control path
+# must NOT parse attacker-controlled bytes. So the parse-before-create invariant
+# is now enforced in TWO places, and BOTH must hold or the gate goes red:
+#   (i)  the bounded parse still lives in the low-priv seam (dnet_cterm.c), and
+#   (ii) the privileged host path refuses an UNVALIDATED descriptor before it
+#        creates any device/process (the validated-flag gate = parse-before-create).
+# Losing (i) = an inbound connect reaches the privileged path unparsed; losing
+# (ii) = a create-before-validate hole. Matched as CODE (comments stripped), the
+# same discipline as the check above.
+CTERM_CODE=$(grep -vE '^[[:space:]]*(\*|/\*|//)' "$CTERM_C" 2>/dev/null \
+    | sed -e 's:/\*[^*]*\*/::g' -e 's://.*::')
+if printf '%s\n' "$CTERM_CODE" | grep -q -- 'dnet_cterm_sc_connect_parse('; then
+    :
+else
+    echo "FAIL: $CTERM_C has no CODE line carrying 'dnet_cterm_sc_connect_parse(' --"
+    echo "      the low-privilege wire parse (the A2/A8 seam) is gone; an inbound"
+    echo "      SET HOST would reach NETACP's privileged path without a bounded parse."
+    status=1
+fi
+if printf '%s\n' "$CTERM_HOST_CODE" | grep -q -- '->validated'; then
+    :
+else
+    echo "FAIL: $CTERM_HOST_C privileged open path does not gate on the descriptor's"
+    echo "      validated flag -- parse-before-create is not enforced; an unvalidated"
+    echo "      (unparsed) descriptor could create a session."
+    status=1
+fi
 
 # The pty belongs to the virtual-terminal service, below the VMS layer -- so
 # THAT file must have it. Same reasoning as check 3 for $CREPRC's mechanics.

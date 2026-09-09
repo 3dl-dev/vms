@@ -214,6 +214,7 @@ int main(int argc, char **argv)
         struct sockaddr_in pn, rn;
         socklen_t pl = sizeof(pn), rl = sizeof(rn);
         int gr = ovmx_fd_getname(realfd, 1, (struct sockaddr *)&pn, &pl);
+        /* negctl: bgconn-getname-addr-zeroed */
         CHECK(gr == 0 && pn.sin_family == AF_INET &&
               pn.sin_addr.s_addr == htonl(INADDR_LOOPBACK) &&
               pn.sin_port == peer.sin_port,

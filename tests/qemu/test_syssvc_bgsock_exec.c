@@ -153,7 +153,7 @@ int main(int argc, char **argv)
     }
     int cst = 0;
     waitpid(c, &cst, 0);
-    /* negctl: bgsock-recv-length-zeroed */
+    /* negctl: bgsock-exec-handle-not-readopted */
     CHECK(WIFEXITED(cst) && WEXITSTATUS(cst) == 0,
           "a fork()+exec()'d child drove ovmx_send/recv on the INHERITED veneer handle byte-exact (self-describing handle survives exec, vms-0cd)");
 

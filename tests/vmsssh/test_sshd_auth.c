@@ -59,6 +59,39 @@ static void build(sysuaf_record_t *rec, const char *user,
         sysuaf_set_password(rec, pw);
 }
 
+/* Little-endian writers for the binary record fields the expiry gate reads.
+ * These set the RAW $UAFDEF bytes directly -- the same on-disk representation
+ * mksysuaf/AUTHORIZE/the ACP writer produce -- so the test drives the real
+ * predicate against a genuine record, never a mock of the flag. */
+static void put_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static void put_le64(uint8_t *p, uint64_t v)
+{
+    put_le32(p, (uint32_t)v);
+    put_le32(p + 4, (uint32_t)(v >> 32));
+}
+/* Admin-forced expiry: set UAI$M_PWD_EXPIRED in the raw flags longword. Read
+ * back through le32 by sysuaf_password_expired -- NOT via the flag-name string
+ * (PWD_EXPIRED is not in the names table). */
+static void mark_pwd_expired_flag(sysuaf_record_t *rec)
+{
+    uint32_t f = (uint32_t)rec->raw.uaf$l_flags[0] |
+                 ((uint32_t)rec->raw.uaf$l_flags[1] << 8) |
+                 ((uint32_t)rec->raw.uaf$l_flags[2] << 16) |
+                 ((uint32_t)rec->raw.uaf$l_flags[3] << 24);
+    put_le32(rec->raw.uaf$l_flags, f | UAI$M_PWD_EXPIRED);
+}
+/* Lifetime-elapsed expiry: a non-zero lifetime with the change-date at the VMS
+ * epoch (0), so now > pwd_date + lifetime. */
+static void mark_pwd_lifetime_elapsed(sysuaf_record_t *rec)
+{
+    put_le64(rec->raw.uaf$q_pwd_date, 0);          /* changed at the VMS epoch  */
+    put_le64(rec->raw.uaf$q_pwd_lifetime, 1);      /* 1-tick lifetime -> elapsed */
+}
+
 int main(void)
 {
     sysuaf_record_t rec;
@@ -100,8 +133,43 @@ int main(void)
                                 "Sekrit-Purdy-Pw-1") == 0,
           "DISACNT account is refused DESPITE the correct password");
 
+    /* ---- 5b: PWD_EXPIRED (admin-forced) refuses even WITH the correct
+     *          password (vms-c6df). The enabled account authenticates and is
+     *          login-permitted, but the expired credential is a THIRD gate. */
+    build(&rec, "STALEPWD", "Sekrit-Purdy-Pw-1", NULL);
+    mark_pwd_expired_flag(&rec);
+    check(sysuaf_authenticate(&rec, "Sekrit-Purdy-Pw-1") == 1,
+          "sanity: the PWD_EXPIRED account's password DOES Purdy-verify");
+    check(sysuaf_interactive_login_permitted(&rec) == 1,
+          "sanity: the PWD_EXPIRED account is NOT DISUSER/DISACNT (login-permitted)");
+    check(sysuaf_password_expired(&rec) == 1,
+          "sanity: sysuaf_password_expired() reads the admin-forced PWD_EXPIRED bit from raw");
+    check(ovmx_sshd_check_login((struct sysuaf_record *)&rec,
+                                "Sekrit-Purdy-Pw-1") == 0,
+          "PWD_EXPIRED account is refused DESPITE the correct password (expiry gate)");
+
+    /* ---- 5c: lifetime-elapsed expiry refuses likewise (PWD_DATE+LIFETIME past). */
+    build(&rec, "OLDPWD", "Sekrit-Purdy-Pw-1", NULL);
+    mark_pwd_lifetime_elapsed(&rec);
+    check(sysuaf_password_expired(&rec) == 1,
+          "sanity: lifetime-elapsed record reads as expired (PWD_DATE+LIFETIME in the past)");
+    check(ovmx_sshd_check_login((struct sysuaf_record *)&rec,
+                                "Sekrit-Purdy-Pw-1") == 0,
+          "lifetime-elapsed account is refused DESPITE the correct password");
+
+    /* ---- 5d: a normal unexpired account is NOT falsely refused (no false
+     *          positive: lifetime 0 => never expires by age, flag clear). */
+    build(&rec, "FRESHPWD", "Sekrit-Purdy-Pw-1", NULL);
+    check(sysuaf_password_expired(&rec) == 0,
+          "unexpired account: not expired (no false positive)");
+    check(ovmx_sshd_check_login((struct sysuaf_record *)&rec,
+                                "Sekrit-Purdy-Pw-1") == 1,
+          "unexpired account with the correct password logs in normally");
+
     /* ---- 6: NULL record / NULL password fail closed ---- */
     check(ovmx_sshd_check_login(NULL, "x") == 0, "NULL record fails closed");
+    check(sysuaf_password_expired(NULL) == 1,
+          "sysuaf_password_expired(NULL) fails closed (treated as expired)");
     build(&rec, "OVMXUSER", "Sekrit-Purdy-Pw-1", NULL);
     check(ovmx_sshd_check_login((struct sysuaf_record *)&rec, NULL) == 0,
           "NULL password fails closed");

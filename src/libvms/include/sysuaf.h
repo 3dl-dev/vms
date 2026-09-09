@@ -185,7 +185,14 @@ typedef struct {
     uint8_t  uaf$l_flags[4];      /* @0x174 [OVMX] UAF$M_* flags longword      */
     uint8_t  uaf$q_priv[8];       /* @0x178 [OVMX] authorized privilege mask   */
     uint8_t  uaf$q_def_priv[8];   /* @0x180 [OVMX] default privilege mask      */
-    uint8_t  uaf$r_reserved4[120];/* @0x188 [OVMX] reserved up to quota block  */
+    /* Password-lifetime delta (vms-c6df). Real $UAFDEF carries UAF$Q_PWD_LIFETIME;
+     * the public docs do not pin its on-disk byte offset, so OVMX carves it from
+     * the head of the reserved region and LABELS it [OVMX] (CLAUDE.md Rule 8),
+     * exactly as uaf$q_pwd_date @0x15C above. A VMS-time delta (100ns ticks); 0
+     * means "no lifetime -> the password never expires by age". Read at login by
+     * sysuaf_password_expired() together with uaf$q_pwd_date. */
+    uint8_t  uaf$q_pwd_lifetime[8];/* @0x188 [OVMX] password lifetime (VMS delta)*/
+    uint8_t  uaf$r_reserved4[112];/* @0x190 [OVMX] reserved up to quota block  */
     /* -- quota block ([OVMX]; oracle §4 correlates values, not sub-offsets) --*/
     uint8_t  uaf$r_quota[132];    /* @0x200 [OVMX] quota region -> 0x284       */
 } sysuaf_rms_record_t;            /* total: 644 bytes ($UAFDEF) */
@@ -210,6 +217,14 @@ _Static_assert(offsetof(sysuaf_rms_record_t, uaf$b_pwd_length) == UAF$K_PWD_LENG
                "UAF$B_PWD_LENGTH must be at 0x16A (oracle [PIN])");
 _Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd2) == UAF$K_PWD2_OFF,
                "UAF$Q_PWD2 must be at 0x16C (oracle [PIN])");
+/* [OVMX] password-expiration fields sit at their labelled offsets, and carving
+   uaf$q_pwd_lifetime out of the reserved region must not move the quota block. */
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd_date) == 0x15C,
+               "UAF$Q_PWD_DATE must be at 0x15C ([OVMX])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$q_pwd_lifetime) == 0x188,
+               "UAF$Q_PWD_LIFETIME must be at 0x188 ([OVMX])");
+_Static_assert(offsetof(sysuaf_rms_record_t, uaf$r_quota) == 0x200,
+               "[OVMX] quota region must stay at 0x200 after the pwd_lifetime carve");
 /* The [OVMX] quota region is real estate inside the 644-byte record; the last
    cell (UAF$K_QUO_WSEXTENT @0x30 + 4) must fit the 132-byte region. */
 _Static_assert(UAF$K_QUO_WSEXTENT + 4 <= 132,
@@ -436,6 +451,26 @@ int sysuaf_authenticate(const sysuaf_record_t *rec, const char *password);
  */
 int sysuaf_interactive_login_permitted(const sysuaf_record_t *rec);
 int sysuaf_account_captive(const sysuaf_record_t *rec);
+
+/*
+ * PASSWORD-EXPIRATION ENFORCEMENT (vms-c6df), a THIRD login gate distinct from
+ * the password check AND the login-flag (DISUSER/CAPTIVE) gate. Returns 1 iff
+ * the account's SYSUAF password is EXPIRED:
+ *   - UAI$M_PWD_EXPIRED is set in the flags longword (an admin forced expiry,
+ *     AUTHORIZE MODIFY/FLAGS=PWD_EXPIRED / .../PWDEXPIRE), OR
+ *   - UAF$Q_PWD_LIFETIME is non-zero AND the current VMS time is past
+ *     UAF$Q_PWD_DATE + UAF$Q_PWD_LIFETIME (the password's age exceeded its
+ *     lifetime). A zero lifetime means "no expiry by age" (VMS LIFETIME (none)).
+ * Both fields are read STRAIGHT FROM the binary $UAFDEF record (rec->raw), NOT
+ * from the rendered flag-NAME string: sysuaf_flags_to_mask only round-trips the
+ * names in sysuaf_flag_names[], which deliberately omits the transient
+ * PWD_EXPIRED/PWD2_EXPIRED bits, so a names round-trip would silently drop an
+ * admin-forced expiry (the same lossiness sysuaf_record_privileges warns of).
+ * NULL fails closed => 1 (a record we cannot read is never granted a normal
+ * login). Grounding: OpenVMS Guide to System Security, "Password Expiration"
+ * (clean-room, public docs — CLAUDE.md Rule 8).
+ */
+int sysuaf_password_expired(const sysuaf_record_t *rec);
 
 /* Parse VMS privilege string (e.g. "TMPMBX,NETMBX,OPER") into bitmask. */
 uint64_t sysuaf_parse_privileges(const char *priv_string);

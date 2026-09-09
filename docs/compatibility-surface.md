@@ -13,10 +13,10 @@
 |---|---|---|---|---|
 | ✅ verified | 26 | | real | 302 |
 | 🟢 implemented | 263 | | n/a | 93 |
-| 🟡 partial | 46 | | advisory | 44 |
-| 🟠 stub | 17 | | facade-risk | 7 |
+| 🟡 partial | 47 | | advisory | 45 |
+| 🟠 stub | 17 | | facade-risk | 6 |
 | 🔵 designed | 0 | |  |  |
-| ⬜ absent | 94 | |  |  |
+| ⬜ absent | 93 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,8 +24,8 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **402 committed** — **289 met** (implemented/verified), 45 in progress (partial), 68 not started (absent/stub/designed).
-- ⚠ **5 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- **402 committed** — **289 met** (implemented/verified), 46 in progress (partial), 67 not started (absent/stub/designed).
+- ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -717,7 +717,7 @@ Standalone utility images invoked as DCL verbs. Most core system-management util
 
 _SYSUAF/accounts, privileges, rights DB, protection/ACLs, auditing, SYSGEN, boot, install, accounting._
 
-`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟠⬜⬜⬜⬜⬜⬜`  —  37 surfaces catalogued (22 met · 4 in progress · 11 not started) · V1: 31 committed, 22 met · ⚠ 1 facade-risk
+`✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟡🟠⬜⬜⬜⬜⬜`  —  37 surfaces catalogued (22 met · 5 in progress · 10 not started) · V1: 31 committed, 22 met
 
 ### accounting — Accounting
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security; DCL Dictionary (SET/SHOW ACCOUNTING) · reviewed 2026-08-31</sub>
@@ -839,12 +839,12 @@ VMS ships ~600 tunable SYSGEN parameters; OVMX has a thin, genuinely dynamic, fi
 | ⬜ | `sysgen$autogen` | utility | AUTOGEN — feedback-driven SYSGEN parameter computation utility | absent | n/a | in | No separate implementation found. |
 
 ### sysuaf — SYSUAF — Accounts + Login Authentication
-<sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security; Authorize Utility Manual · reviewed 2026-08-31</sub>
+<sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security; Authorize Utility Manual · reviewed 2026-09-09</sub>
 
-Full UAF account record storage and Purdy/hashed password authentication are real. Account-state login enforcement is now genuine: DISUSER/DISACNT deny login (console + SSH) and CAPTIVE confines the session — both read at login time (vms-c8fa). SSH now performs the executive setident + a permanent, fail-closed UIC credential drop (vms-49e/vms-6ae), closing the old authenticate-then-run-as-root facade. The remaining gap is password expiration / login-limit fields: the bits exist but are never enforced.
+Full UAF account record storage and Purdy/hashed password authentication are real. Account-state login enforcement is now genuine: DISUSER/DISACNT deny login (console + SSH) and CAPTIVE confines the session — both read at login time (vms-c8fa). SSH now performs the executive setident + a permanent, fail-closed UIC credential drop (vms-49e/vms-6ae), closing the old authenticate-then-run-as-root facade. Password expiration is now ENFORCED at login on both front-ends (vms-c6df): an expired password (admin-forced UAI$M_PWD_EXPIRED, or UAF$Q_PWD_DATE+UAF$Q_PWD_LIFETIME elapsed) is refused rather than logged straight in. The interactive force-change flow VMS runs in its place is not yet built (honest-refuse floor, INV-6); it is the tracked follow-up.
 
 
-<sub>6 items · 5 met · 0 in progress · 1 not started · ⚠ 1 facade-risk</sub>
+<sub>6 items · 5 met · 1 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -852,7 +852,7 @@ Full UAF account record storage and Purdy/hashed password authentication are rea
 | 🟢 | `sysuaf$authenticate` | routine | sysuaf_authenticate() — Purdy/hashed password check against stored quadword | implemented | real | in | `src/libvms/rtl/sysuaf.c:319` |
 | 🟢 | `sysuaf$disuser` | feature | UAI$M_DISUSER/DISACNT — interactive login disabled for account | implemented | real | in | `src/libvms/rtl/sysuaf.c:389` — vms-c8fa (re-census 2026-08-31): now READ at login. sysuaf_interactive_login_permitted() checks DISUSER|DISACNT and is enforced BEFORE start_session() in both console LOGINOUT (tools/vms_login.c:~740) and SSH (src/vmsssh/sshd_auth.c:41) — a disabled account is refused with the same generic failure text even with the correct password. Was absent/facade-risk on 2026-08-13. |
 | 🟢 | `sysuaf$captive` | feature | UAI$M_CAPTIVE — restrict account to captive command procedure | implemented | real | in | `src/libvms/rtl/sysuaf.c:399` — vms-c8fa (re-census 2026-08-31): sysuaf_account_captive() now read. SSH auth passes --captive to vmsdcl (src/vmsssh/sshd_auth.c:151); DCL enforces it (src/vmsdcl/dcl_main.c:614+ — Ctrl-Y disabled, REPL suppressed, logs out after the login procedure). Was absent/facade-risk on 2026-08-13. |
-| ⬜⚠ | `sysuaf$pwd_expired` | feature | UAI$M_PWD_EXPIRED + password-expiration/login-limit fields | absent | facade-risk | in | `src/libvms/include/uaidef.h:154` — Bit defined (uaidef.h:154), still ZERO readers — no password-expiration or login-limit enforcement. A stale/expired password logs in normally. The only remaining sysuaf login-flag facade after vms-c8fa. Login enforcement tracked vms-c6df. |
+| 🟡≈ | `sysuaf$pwd_expired` | feature | UAI$M_PWD_EXPIRED + UAF$Q_PWD_DATE/PWD_LIFETIME — password expiration enforced at login | partial | advisory | in | `src/libvms/rtl/sysuaf.c:418` — vms-c6df: NOW ENFORCED. sysuaf_password_expired() (src/libvms/rtl/sysuaf.c) reads UAI$M_PWD_EXPIRED and UAF$Q_PWD_DATE+UAF$Q_PWD_LIFETIME straight from the binary $UAFDEF record (NOT the flag-name string, which omits the transient bit) against sys$gettim; an expired password is REFUSED at login on both front-ends — console LOGINOUT (tools/vms_login.c, %OVMX-F-PWDEXPIRED before start_session) and SSH (src/vmsssh/sshd_auth.c ovmx_sshd_check_login). On-disk UAF$Q_PWD_LIFETIME field added at [OVMX] offset 0x188 (sysuaf.h). authenticity=advisory (not real): VMS FORCES a password change at login; OVMX honestly REFUSES instead (INV-6) — the interactive force-change flow is the tracked follow-up vms-91f. Proof: tests/libvms/test_sysuaf_login_flags.c (predicate + LOGINOUT source guard), tests/vmsssh/test_sshd_auth.c (real SSH decision fn vs expired binary records), tests/qemu/test_syssvc_loginout_acp.c (expired account authored + read back over the ODS-2 ACP). Was absent/facade-risk (zero readers, expired pwd logged in normally) on 2026-08-31. |
 | 🟢 | `sysuaf$ssh_credential_drop` | feature | Process credentials match the authenticated SYSUAF identity after SSH login | implemented | real | in | `src/vmsssh/vmssshd.c:612` — vms-49e/vms-6ae (re-census 2026-08-31): FIXED. vmssshd now (a) establishes the authenticated identity in the executive via vms_kif_setident, fail-closed _exit(1) on refusal (vmssshd.c:~446, INV-6), and (b) performs a permanent setgid-before-setuid UIC drop via ovmx_cred_drop_to_uic() (vmssshd.c:612) BEFORE execl of vmsdcl, fatal on failure. Unit-tested (tests/vmsssh/test_cred_drop.c, test_ssh_ident.c). Was absent/facade-risk (session ran as euid=0/root) on 2026-08-13. |
 
 ## E. Clustering
@@ -1280,7 +1280,6 @@ Surfaces that report success without doing the real work, or fake shared state p
 | `sys$lkwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
 | `sys$ulwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
 | `sys$cancel` | sys-process | stub | `src/libvms/syssvc/sys_process.c` — literal no-op returning SS$_NORMAL; QIO is genuinely ASYNC (io_uring, sys_qio.c/sys_uring.c) so pending I/O CAN exist and is NOT cancelled (the old 'synchronous model' rationale was wrong). Real cancel (io_uring_prep_cancel + IOSB SS$_CANCEL + AST/EF) tracked vms-c8c. |
-| `sysuaf$pwd_expired` | sysuaf | absent | `src/libvms/include/uaidef.h:154` — Bit defined (uaidef.h:154), still ZERO readers — no password-expiration or login-limit enforcement. A stale/expired password logs in normally. The only remaining sysuaf login-flag facade after vms-c8fa. Login enforcement tracked vms-c6df. |
 | `utilities$convert` | utilities | partial | `src/vmsdcl/dcl_cmd_misc.c:2604` — /FDL emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is a line-by-line fgets/fputs copy that prints '%CONVERT-S-CONVERTED, N records converted' — claiming a record-format conversion it did not perform. Real RMS record-format CONVERT tracked vms-558e. Still facade-risk. |
 
 ## Not yet catalogued

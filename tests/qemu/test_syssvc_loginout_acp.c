@@ -144,6 +144,81 @@ static int read_binary_sysuaf_system(const char *spec, sysuaf_record_t *out)
     return 0;
 }
 
+/* LE writers for the raw $UAFDEF expiry fields (vms-c6df). */
+static void le32w(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static void le64w(uint8_t *p, uint64_t v)
+{
+    le32w(p, (uint32_t)v); le32w(p + 4, (uint32_t)(v >> 32));
+}
+
+/* Author a SYSUAF at `spec` over the ACP holding two accounts: EXPUSER with an
+ * ADMIN-FORCED expired password (UAI$M_PWD_EXPIRED in the raw flags) and FRESHUSER
+ * with a normal unexpired password. Both carry a real Purdy credential. Returns
+ * 1 on success. Proves the new UAF$Q_PWD_LIFETIME/PWD_EXPIRED state survives the
+ * genuine Prolog-3 indexed-file round trip on the ODS-2 platter (vms-c6df). */
+static int author_expiry_sysuaf(const char *spec)
+{
+    uint32_t st = RMS$_FAB;
+    rms_file_t *h = rms_open_named_handle(spec, 1, 1, &st);
+    if (!h)
+        return 0;
+    sysuaf_rms_file_t sf;
+    if (sysuaf_rms_create(h, &sf) != RMS$_CREATED) {
+        rms_close_named_handle(h);
+        return 0;
+    }
+
+    sysuaf_record_t e;
+    memset(&e, 0, sizeof(e));
+    strncpy(e.username, "EXPUSER", sizeof(e.username) - 1);
+    e.uic_group = 128; e.uic_member = 200;
+    strncpy(e.privileges, "TMPMBX,NETMBX", sizeof(e.privileges) - 1);
+    sysuaf_view_to_raw(&e);
+    sysuaf_set_password(&e, "SECRET");
+    le32w(e.raw.uaf$l_flags, UAI$M_PWD_EXPIRED);   /* admin-forced expiry */
+    int ok = (sysuaf_put_record(&sf, &e.raw) == RMS$_NORMAL);
+
+    sysuaf_record_t f;
+    memset(&f, 0, sizeof(f));
+    strncpy(f.username, "FRESHUSER", sizeof(f.username) - 1);
+    f.uic_group = 128; f.uic_member = 201;
+    strncpy(f.privileges, "TMPMBX,NETMBX", sizeof(f.privileges) - 1);
+    sysuaf_view_to_raw(&f);
+    sysuaf_set_password(&f, "SECRET");             /* no flag, zero lifetime */
+    ok = ok && (sysuaf_put_record(&sf, &f.raw) == RMS$_NORMAL);
+
+    sysuaf_rms_close(&sf);
+    rms_close_named_handle(h);
+    return ok;
+}
+
+/* Read account `user` back from the binary SYSUAF at `spec`. 0 ok, -1 honest. */
+static int read_binary_sysuaf_user(const char *spec, const char *user,
+                                   sysuaf_record_t *out)
+{
+    uint32_t st = RMS$_FAB;
+    rms_file_t *h = rms_open_named_handle(spec, 0, 0, &st);
+    if (!h)
+        return -1;
+    sysuaf_rms_file_t sf;
+    if (!$VMS_STATUS_SUCCESS(sysuaf_rms_open(h, &sf))) {
+        rms_close_named_handle(h);
+        return -1;
+    }
+    sysuaf_rms_record_t raw;
+    uint32_t g = sysuaf_get_by_username(&sf, user, &raw);
+    sysuaf_rms_close(&sf);
+    rms_close_named_handle(h);
+    if (g != RMS$_NORMAL)
+        return -1;
+    sysuaf_raw_to_view(&raw, out);
+    return 0;
+}
+
 int main(void)
 {
     uint32_t st;
@@ -270,6 +345,35 @@ int main(void)
         check(got && sscanf(back, "%lld", &rbts) == 1 && rbts > 0,
               "LASTLOGIN timestamp read back from the ODS-2 volume");
     }
+
+    /* ---- (6) PASSWORD-EXPIRATION off the ODS-2 platter (vms-c6df). Author an
+     *          admin-forced-expired account and a fresh account over the ACP,
+     *          read them BACK through a fresh $GET, and assert the login-time
+     *          expiry predicate reads the correct state -- proving the new
+     *          UAF$Q_PWD_LIFETIME/PWD_EXPIRED record state survives the genuine
+     *          Prolog-3 indexed round trip, not just an in-memory struct. */
+#define UAF_EXP_SPEC "VDA0:[OVMXDIR]SYSUAFEXP.DAT"
+    check(author_expiry_sysuaf(UAF_EXP_SPEC),
+          "binary SYSUAF with an expired + a fresh account authored over the ACP");
+    {
+        sysuaf_record_t erec, frec;
+        int eok = read_binary_sysuaf_user(UAF_EXP_SPEC, "EXPUSER", &erec);
+        check(eok == 0, "EXPUSER read back from the ODS-2 binary record");
+        if (eok == 0) {
+            check(sysuaf_authenticate(&erec, "SECRET") == 1,
+                  "EXPUSER password Purdy-authenticates (record read from ODS-2)");
+            check(sysuaf_interactive_login_permitted(&erec) == 1,
+                  "EXPUSER is not DISUSER/DISACNT (login-permitted)");
+            check(sysuaf_password_expired(&erec) == 1,
+                  "EXPUSER: PWD_EXPIRED read off the platter -> password EXPIRED (login refused by both front-ends)");
+        }
+        int fok = read_binary_sysuaf_user(UAF_EXP_SPEC, "FRESHUSER", &frec);
+        check(fok == 0, "FRESHUSER read back from the ODS-2 binary record");
+        if (fok == 0)
+            check(sysuaf_password_expired(&frec) == 0,
+                  "FRESHUSER: no expiry state on disk -> NOT expired (no false positive)");
+    }
+    erase_file(UAF_EXP_SPEC);
 
     /* ---- cleanup: restore the directory to its prior state ---- */
     erase_file(UAF_SPEC);

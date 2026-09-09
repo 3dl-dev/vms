@@ -374,7 +374,8 @@ case "$MODE" in
     # (assert_shr_activation) is UNCHANGED, so this cannot fake a golden result.
     {
       echo "---- vms-d4a option (a) bind-trace (diagnostic, non-gating) ----"
-      grep -aE 'OVMX-IMGACT-BIND:' "$WORK/shr-activation-boot.log" || echo "  (no OVMX-IMGACT-BIND line -- IMGACT never reached the CONSUMER import store; if a %IMGACT-F-GSMATCH line is present the .vms\$sv resolve FAILED)"
+      grep -aE 'OVMX-IMGACT-BIND-ENTER:' "$WORK/shr-activation-boot.log" || echo "  (no OVMX-IMGACT-BIND-ENTER -- bind_imports never ran for CONSUMER; IMGACT failed UPSTREAM of import binding, or the CONSUMER argv0-scope did not match)"
+      grep -aE 'OVMX-IMGACT-BIND:' "$WORK/shr-activation-boot.log" || echo "  (no OVMX-IMGACT-BIND store line -- either count=0 [see ENTER], a %IMGACT-F-GSMATCH resolve-fail, or bind_imports did not reach the store)"
       grep -aE 'OVMX-VAX-SHR-ACT(-CON|-RAW)?: purdy=0x[0-9a-f]{16}' "$WORK/shr-activation-boot.log" || echo "  (no purdy= value line)"
       grep -aiE '%IMGACT-|ACCVIO|SS\$_|SIGSEGV|signal [0-9]+|STATUS=' "$WORK/shr-activation-boot.log" | head -8 || true
       echo "  VERDICT KEY: BIND absent+GSMATCH => resolve-failed | val!=LIBVMS\$SHR_base+purdy_off => cell-fill bug | val ok + crash => call mistransfer | val ok + clean + wrong purdy => wrong-return | golden => PASS"

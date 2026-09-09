@@ -7511,7 +7511,6 @@ jobs:
         with:
           path: |
             .boot-cache/lab-vax/boot-artifacts
-            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
           key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
           restore-keys: |
             vax-substrate-netbsd10.1-

@@ -12,9 +12,9 @@
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
 | ✅ verified | 25 | | real | 296 |
-| 🟢 implemented | 258 | | n/a | 93 |
-| 🟡 partial | 45 | | advisory | 42 |
-| 🟠 stub | 18 | | facade-risk | 9 |
+| 🟢 implemented | 259 | | n/a | 93 |
+| 🟡 partial | 45 | | advisory | 44 |
+| 🟠 stub | 17 | | facade-risk | 7 |
 | 🔵 designed | 0 | |  |  |
 | ⬜ absent | 94 | |  |  |
 
@@ -24,8 +24,8 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **396 committed** — **283 met** (implemented/verified), 44 in progress (partial), 69 not started (absent/stub/designed).
-- ⚠ **7 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
+- **396 committed** — **284 met** (implemented/verified), 44 in progress (partial), 68 not started (absent/stub/designed).
+- ⚠ **5 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
 _These are counts against an enumerable commitment list, deliberately not a percentage of VMS. If a surface is later ruled into V1, it joins the denominator at whatever status it actually has — cataloguing more of VMS makes the picture look less complete, never more._
@@ -34,15 +34,15 @@ _These are counts against an enumerable commitment list, deliberately not a perc
 
 _The C source-compatibility surface: descriptors, status codes, system services, RTL, condition handling, RMS programmatic API._
 
-`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  207 surfaces catalogued (142 met · 14 in progress · 51 not started) · V1: 198 committed, 142 met · ⚠ 6 facade-risk
+`🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡🟠⬜⬜⬜⬜⬜`  —  207 surfaces catalogued (143 met · 14 in progress · 50 not started) · V1: 198 committed, 143 met · ⚠ 4 facade-risk
 
 ### chf — Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND)
 <sub>scope: in · tier 1 · plan: vms-801 · ref: OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS RTL LIB$ Manual · reviewed 2026-08-31</sub>
 
-LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points) are implemented but advisory: a thread-local handler_stack is walked LIFO in-process, not real machine-frame unwind. LIB$SIG_TO_STOP and LIB$MATCH_COND are absent. chf$mech_array's savr0/savr1/frame fields are zeroed placeholders (facade-risk for handlers that read them). SYS$UNWIND and SYS$DCLEXH are documented simplified stubs. SYS$EXIV and SYS$SETEXV are absent.
+LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points) are implemented but advisory: a thread-local handler_stack is walked LIFO in-process, not real machine-frame unwind. LIB$SIG_TO_STOP and LIB$MATCH_COND are absent. chf$mech_array's frame + depth are real (real establisher frame + chain depth) and savr0 is written by lib$sig_to_ret; only savr1 stays 0 (host C ABI exposes no VAX/Alpha R1). SYS$UNWIND and SYS$DCLEXH are documented simplified stubs. SYS$EXIV and SYS$SETEXV are absent.
 
 
-<sub>12 items · 5 met · 0 in progress · 7 not started · ⚠ 1 facade-risk</sub>
+<sub>12 items · 6 met · 0 in progress · 6 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -53,7 +53,7 @@ LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points) are 
 | 🟢≈ | `lib$sig_to_ret` | routine | Convert a signal to a return status | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` |
 | ⬜ | `lib$sig_to_stop` | routine | Convert a signal to STOP severity | absent | n/a | in |  |
 | ⬜ | `lib$match_cond` | routine | Match a condition code against a list, ignoring severity | absent | n/a | in |  |
-| 🟠⚠ | `chf$mech_array` | struct | Condition-handler mechanism-args array (savr0/savr1/frame fields) | stub | facade-risk | in | `src/libvms/rtl/lib_signal.c` — savr0/savr1/frame are zeroed placeholders; a handler reading them gets fake data |
+| 🟢≈ | `chf$mech_array` | struct | Condition-handler mechanism-args array (savr0/savr1/frame fields) | implemented | advisory | in | `src/libvms/rtl/lib_signal.c` — vms-df8 sweep re-census: chf$ph_mch_frame + chf$is_mch_depth are REAL (establisher frame via __builtin_frame_address + real chain depth, lib_signal.c:258-259/351-352); chf$is_mch_savr0 is written by lib$sig_to_ret (lib_signal.c:485). Only chf$is_mch_savr1 stays 0 -- the host C ABI exposes no VAX/Alpha R1 to capture (documented gap, not fabrication). Was stale-flagged facade-risk. |
 | 🟠≈ | `sys$unwind` | routine | Unwind the call stack to an establisher | stub | advisory | in | `src/libvms/syssvc/sys_condition.c` — documented simplified unwind |
 | 🟠≈ | `sys$dclexh` | routine | Declare an exit handler | stub | advisory | in | `src/libvms/syssvc/sys_process.c:1016` |
 | ⬜ | `sys$exiv` | routine | Declare an exit vector | absent | n/a | in |  |
@@ -384,7 +384,7 @@ VMS ships ~2 mailbox-creation services; OVMX implements both, real, vms.ko-resid
 VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EXPREG/CRMPSC are real (mmap-backed). SYS$DGBLSC/PURGWS/LKWSET/ ULWSET validate arguments and return SS$_NORMAL with nothing done (facade-risk); LKWSET/ULWSET are kernel-mode/PFN working-set-lock services, out of scope for 1.0. SYS$ADJSTK and SYS$UPDSEC are absent. SYS$LCKPAG (lock pages in physical memory) is absent and permanently out of scope (kernel-mode/PFN).
 
 
-<sub>11 items · 4 met · 0 in progress · 7 not started · ⚠ 4 facade-risk</sub>
+<sub>11 items · 4 met · 0 in progress · 7 not started · ⚠ 3 facade-risk</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
@@ -392,8 +392,8 @@ VMS ships ~10 memory-management services; OVMX declares 9. SYS$CRETVA/ DELTVA/EX
 | 🟢 | `sys$deltva` | routine | Delete a virtual address region | implemented | real | in | `src/libvms/syssvc/sys_memory.c` |
 | 🟢 | `sys$expreg` | routine | Expand a virtual address region (P0/P1) | implemented | real | in | `src/libvms/syssvc/sys_memory.c` |
 | 🟢 | `sys$crmpsc` | routine | Create and map a section | implemented | real | in | `src/libvms/syssvc/sys_memory.c` — mmap-backed |
-| 🟠⚠ | `sys$dgblsc` | routine | Delete a global section | stub | facade-risk | in | `src/libvms/syssvc/sys_memory.c` — validates args and returns SS$_NORMAL; nothing done |
-| 🟠⚠ | `sys$purgws` | routine | Purge the working set | stub | facade-risk | in | `src/libvms/syssvc/sys_memory.c` — validates args and returns SS$_NORMAL; nothing done |
+| 🟠⚠ | `sys$dgblsc` | routine | Delete a global section | stub | facade-risk | in | `src/libvms/syssvc/sys_memory.c` — validates gsdnam then returns SS$_NORMAL though no named-global-section registry exists -- a delete of an unregistered section is reported as success. Honest fix (return SS$_NOSUCHSEC, needs the status code defined) tracked vms-d91. |
+| 🟠≈ | `sys$purgws` | routine | Purge the working set | stub | advisory | in | `src/libvms/syssvc/sys_memory.c` — vms-df8 sweep: $PURGWS is an advisory working-set HINT with no correctness contract; OVMX defers residency to host demand paging, so the no-op is faithful, not a fabrication. Advisory, not facade-risk. |
 | 🟠⚠ | `sys$lkwset` | routine | Lock pages in the working set | stub | facade-risk | out | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
 | 🟠⚠ | `sys$ulwset` | routine | Unlock pages from the working set | stub | facade-risk | out | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
 | ⬜ | `sys$adjstk` | routine | Adjust stack size | absent | n/a | in |  |
@@ -419,7 +419,7 @@ VMS ships ~25 process-control services; OVMX declares 14 (all in sys_process.c n
 | 🟢 | `sys$resume` | routine | Resume a suspended process | implemented | real | in | `src/libvms/syssvc/sys_process.c` — target resolved through the executive by prcnam or VMS PID (like $DELPRC), or self when none; SIGCONT to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904) |
 | 🟢 | `sys$forcex` | routine | Force a process to exit | implemented | real | in | `src/libvms/syssvc/sys_process.c` — sys$exit on the caller when no target; otherwise target resolved through the executive by prcnam or VMS PID (like $DELPRC), authorized GROUP/WORLD; SIGUSR1 to the resolved Linux pid; SS$_NONEXPR for an absent target (vms-904) |
 | 🟢 | `sys$setpri` | routine | Set process scheduling priority | implemented | real | in | `src/libvms/syssvc/sys_process.c` — target resolved through the executive by prcnam (caller's UIC group) or VMS PID (like $DELPRC), or self when none; authorized GROUP/WORLD for another process; the VMS-priority<->Linux-nice map is applied to the RESOLVED target's Linux pid, SS$_NONEXPR for an absent target (vms-dff7). Was facade-risk: discarded pidadr/prcnam and set the CALLER's priority for any target. |
-| 🟠⚠ | `sys$cancel` | routine | Cancel all I/O on all channels of the calling process | stub | facade-risk | in | `src/libvms/syssvc/sys_process.c` — literal no-op, returns SS$_NORMAL unconditionally |
+| 🟠⚠ | `sys$cancel` | routine | Cancel all I/O on all channels of the calling process | stub | facade-risk | in | `src/libvms/syssvc/sys_process.c` — literal no-op returning SS$_NORMAL; QIO is genuinely ASYNC (io_uring, sys_qio.c/sys_uring.c) so pending I/O CAN exist and is NOT cancelled (the old 'synchronous model' rationale was wrong). Real cancel (io_uring_prep_cancel + IOSB SS$_CANCEL + AST/EF) tracked vms-c8c. |
 | ⬜ | `sys$setprn` | routine | Set the calling process's name | absent | n/a | in | no $SETPRN service; only an internal vms_kif_setprn used by $CREPRC to stamp the child name |
 | ⬜ | `sys$process_scan` | routine | Scan for processes matching selection criteria | absent | n/a | in |  |
 | ⬜ | `sys$_other` | routine | Remaining SYS$ process-control services beyond the routines named above (VMS ships ~25 total) | absent | n/a | in |  |
@@ -700,7 +700,7 @@ Standalone utility images invoked as DCL verbs. Most core system-management util
 | ✅ | `utilities$product` | utility | PRODUCT / PCSI — software product installation utility | verified | real | in | `tools/ovmx_kit_pack.c` — INSTALL/SHOW PRODUCT/SHOW HISTORY real; rooted-layout install proven end-to-end. |
 | 🟢 | `utilities$sort` | utility | SORT — record sort utility with /KEY=(position,size,datatype) | implemented | real | in | `src/vmsdcl/dcl_cmd_misc.c` — SORT/KEY=(POSITION:n,SIZE:m[,DESCENDING]) sorts on the [pos,size] field, not the whole line; /KEY is a declared CDU_VT_LIST qualifier and is no longer silently ignored (vms-e76). /REVERSE and whole-line (no /KEY) unchanged. Follow-ups (documented gaps, not facades): secondary keys (multiple /KEY tie-breaking) use the first key only, and MERGE is a separate absent utility. |
 | 🟡≈ | `utilities$differences` | utility | DIFFERENCES — file comparison utility | partial | advisory | in | `src/vmsdcl/dcl_cmd_misc.c` — Slice exercised by tests/dcl/test_differences.sh (not a full-coverage oracle). |
-| 🟡⚠ | `utilities$convert` | utility | CONVERT — file/record-format conversion utility | partial | facade-risk | in | `src/vmsdcl/dcl_cmd_misc.c:2604` — /FDL now emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is still a line-by-line fgets/fputs copy that then prints '%CONVERT-S-CONVERTED, N records converted' — reporting a record-format conversion it did not perform. Still facade-risk. |
+| 🟡⚠ | `utilities$convert` | utility | CONVERT — file/record-format conversion utility | partial | facade-risk | in | `src/vmsdcl/dcl_cmd_misc.c:2604` — /FDL emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is a line-by-line fgets/fputs copy that prints '%CONVERT-S-CONVERTED, N records converted' — claiming a record-format conversion it did not perform. Real RMS record-format CONVERT tracked vms-558e. Still facade-risk. |
 | 🟢 | `utilities$analyze-disk-structure` | utility | ANALYZE/DISK_STRUCTURE — ODS-2 volume structure analysis | implemented | real | in | `tools/vms_analyze.c` |
 | 🟢 | `utilities$analyze-system` | utility | ANALYZE/SYSTEM — SDA (System Dump Analyzer), interactive mode | implemented | real | in | `tools/vms_analyze.c` — Interactive live-system analysis only; no standalone crash-dump SDA (see dcl-verbs.yaml). |
 | 🟢 | `utilities$analyze-image` | utility | ANALYZE/IMAGE — image file structure analysis | implemented | real | in | `tools/vms_analyze.c` — ELF-based, not VMS image-header-based. |
@@ -852,7 +852,7 @@ Full UAF account record storage and Purdy/hashed password authentication are rea
 | 🟢 | `sysuaf$authenticate` | routine | sysuaf_authenticate() — Purdy/hashed password check against stored quadword | implemented | real | in | `src/libvms/rtl/sysuaf.c:319` |
 | 🟢 | `sysuaf$disuser` | feature | UAI$M_DISUSER/DISACNT — interactive login disabled for account | implemented | real | in | `src/libvms/rtl/sysuaf.c:389` — vms-c8fa (re-census 2026-08-31): now READ at login. sysuaf_interactive_login_permitted() checks DISUSER|DISACNT and is enforced BEFORE start_session() in both console LOGINOUT (tools/vms_login.c:~740) and SSH (src/vmsssh/sshd_auth.c:41) — a disabled account is refused with the same generic failure text even with the correct password. Was absent/facade-risk on 2026-08-13. |
 | 🟢 | `sysuaf$captive` | feature | UAI$M_CAPTIVE — restrict account to captive command procedure | implemented | real | in | `src/libvms/rtl/sysuaf.c:399` — vms-c8fa (re-census 2026-08-31): sysuaf_account_captive() now read. SSH auth passes --captive to vmsdcl (src/vmsssh/sshd_auth.c:151); DCL enforces it (src/vmsdcl/dcl_main.c:614+ — Ctrl-Y disabled, REPL suppressed, logs out after the login procedure). Was absent/facade-risk on 2026-08-13. |
-| ⬜⚠ | `sysuaf$pwd_expired` | feature | UAI$M_PWD_EXPIRED + password-expiration/login-limit fields | absent | facade-risk | in | `src/libvms/include/uaidef.h:154` — Bit defined (uaidef.h:154), still ZERO readers — no password-expiration or login-limit enforcement. A stale/expired password logs in normally. The only remaining sysuaf login-flag facade after vms-c8fa. |
+| ⬜⚠ | `sysuaf$pwd_expired` | feature | UAI$M_PWD_EXPIRED + password-expiration/login-limit fields | absent | facade-risk | in | `src/libvms/include/uaidef.h:154` — Bit defined (uaidef.h:154), still ZERO readers — no password-expiration or login-limit enforcement. A stale/expired password logs in normally. The only remaining sysuaf login-flag facade after vms-c8fa. Login enforcement tracked vms-c6df. |
 | 🟢 | `sysuaf$ssh_credential_drop` | feature | Process credentials match the authenticated SYSUAF identity after SSH login | implemented | real | in | `src/vmsssh/vmssshd.c:612` — vms-49e/vms-6ae (re-census 2026-08-31): FIXED. vmssshd now (a) establishes the authenticated identity in the executive via vms_kif_setident, fail-closed _exit(1) on refusal (vmssshd.c:~446, INV-6), and (b) performs a permanent setgid-before-setuid UIC drop via ovmx_cred_drop_to_uic() (vmssshd.c:612) BEFORE execl of vmsdcl, fatal on failure. Unit-tested (tests/vmsssh/test_cred_drop.c, test_ssh_ident.c). Was absent/facade-risk (session ran as euid=0/root) on 2026-08-13. |
 
 ## E. Clustering
@@ -1269,15 +1269,13 @@ Surfaces that report success without doing the real work, or fake shared state p
 
 | Surface | Facility | Status | Evidence / notes |
 |---|---|---|---|
-| `chf$mech_array` | chf | stub | `src/libvms/rtl/lib_signal.c` — savr0/savr1/frame are zeroed placeholders; a handler reading them gets fake data |
 | `dcl-qualifiers$zero-validation-verbs` | dcl-qualifiers | absent | `src/vmsdcl/dcl_parser.c:451` — 12 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit'), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all. The remaining ~10 are the Phase-1 follow-up (vms-097). |
-| `sys$dgblsc` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — validates args and returns SS$_NORMAL; nothing done |
-| `sys$purgws` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — validates args and returns SS$_NORMAL; nothing done |
+| `sys$dgblsc` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — validates gsdnam then returns SS$_NORMAL though no named-global-section registry exists -- a delete of an unregistered section is reported as success. Honest fix (return SS$_NOSUCHSEC, needs the status code defined) tracked vms-d91. |
 | `sys$lkwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
 | `sys$ulwset` | sys-memory | stub | `src/libvms/syssvc/sys_memory.c` — kernel-mode/PFN; validates args and returns SS$_NORMAL; nothing done |
-| `sys$cancel` | sys-process | stub | `src/libvms/syssvc/sys_process.c` — literal no-op, returns SS$_NORMAL unconditionally |
-| `sysuaf$pwd_expired` | sysuaf | absent | `src/libvms/include/uaidef.h:154` — Bit defined (uaidef.h:154), still ZERO readers — no password-expiration or login-limit enforcement. A stale/expired password logs in normally. The only remaining sysuaf login-flag facade after vms-c8fa. |
-| `utilities$convert` | utilities | partial | `src/vmsdcl/dcl_cmd_misc.c:2604` — /FDL now emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is still a line-by-line fgets/fputs copy that then prints '%CONVERT-S-CONVERTED, N records converted' — reporting a record-format conversion it did not perform. Still facade-risk. |
+| `sys$cancel` | sys-process | stub | `src/libvms/syssvc/sys_process.c` — literal no-op returning SS$_NORMAL; QIO is genuinely ASYNC (io_uring, sys_qio.c/sys_uring.c) so pending I/O CAN exist and is NOT cancelled (the old 'synchronous model' rationale was wrong). Real cancel (io_uring_prep_cancel + IOSB SS$_CANCEL + AST/EF) tracked vms-c8c. |
+| `sysuaf$pwd_expired` | sysuaf | absent | `src/libvms/include/uaidef.h:154` — Bit defined (uaidef.h:154), still ZERO readers — no password-expiration or login-limit enforcement. A stale/expired password logs in normally. The only remaining sysuaf login-flag facade after vms-c8fa. Login enforcement tracked vms-c6df. |
+| `utilities$convert` | utilities | partial | `src/vmsdcl/dcl_cmd_misc.c:2604` — /FDL emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is a line-by-line fgets/fputs copy that prints '%CONVERT-S-CONVERTED, N records converted' — claiming a record-format conversion it did not perform. Real RMS record-format CONVERT tracked vms-558e. Still facade-risk. |
 
 ## Not yet catalogued
 

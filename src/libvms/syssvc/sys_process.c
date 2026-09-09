@@ -143,8 +143,12 @@
  *     success that changed the CALLER's own priority (vms-dff7).
  * OVMX-LOCAL: sys$setpri -- the VMS-priority<->Linux-nice mapping and the
  *     getpriority/setpriority applied to the resolved Linux pid are local.
- * OVMX-USERSPACE: sys$cancel (vms-pt1) -- returns SS$_NORMAL without doing
- *     anything; there is no executive I/O queue to cancel against.
+ * OVMX-USERSPACE: sys$cancel (vms-pt1) -- KNOWN GAP (facade-risk, tracked
+ *     vms-c8c): returns SS$_NORMAL without cancelling. QIO is genuinely
+ *     ASYNCHRONOUS (io_uring; sys_qio.c/sys_uring.c), so pending async I/O on a
+ *     channel CAN exist -- this no-op does NOT cancel it. A real $CANCEL must
+ *     io_uring_prep_cancel the channel's inflight SQEs and complete each IOSB
+ *     with SS$_CANCEL + fire the AST/EF.
  */
 
 #include <stdint.h>
@@ -1782,6 +1786,7 @@ uint32_t sys$setpri(const uint32_t *pidadr,
 uint32_t sys$cancel(uint16_t chan) {
     (void)chan;
 
-    /* No-op: synchronous I/O model has no pending operations */
+    /* KNOWN GAP (vms-c8c): QIO is async (io_uring), so pending I/O CAN exist;
+     * this no-op does not cancel it -- see the header note above. */
     return SS$_NORMAL;
 }

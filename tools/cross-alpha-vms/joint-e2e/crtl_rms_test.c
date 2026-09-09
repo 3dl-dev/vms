@@ -51,7 +51,16 @@ extern int   fprintf(void *, const char *, ...);
 extern void *stderr;   /* the FILE* stream DATA universal exported by DECC$SHR */
 
 #define PT_SIZE   8192          /* KB-scale buffer */
+/* PT_NAME defaults to a bare filename (the non-veneer N=7 gate's musl-POSIX
+ * fopen writes it to the ramfs cwd). The veneer variant (crtl_rms_veneer_test.c)
+ * overrides it with a FULLY-QUALIFIED ODS-2 spec (VDA0:[SYSTMP]PORTTEST.DAT) --
+ * matching the host-arch proof (tests/qemu/test_syssvc_crtl_rms_veneer.c uses
+ * VDA0:[OVMXDIR]VENEER.DAT): under the veneer, fopen routes to sys$create/RMS,
+ * which needs a device+directory to resolve (a bare name has no default device/
+ * dir in the RUN-context process and cannot be resolved). vms-f49. */
+#ifndef PT_NAME
 #define PT_NAME   "PORTTEST.DAT"
+#endif
 
 int main(int argc, char **argv, char **envp)
 {

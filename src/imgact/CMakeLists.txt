@@ -15,13 +15,29 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64|AMD64")
     set(IMGACT_ARCH "x86_64")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "alpha")
     set(IMGACT_ARCH "alpha")
+elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "vax")
+    # elf32-vax symbol-vector backend (rd vms-73b2, epic vms-404). Mirrors
+    # x86_64/aarch64 -- imgact_arch.h + start.S only, NO vms_transfer.S and NO
+    # IMGACT_HAVE_VMS_STD (VAX has no procedure descriptors; the SysV tail-jump
+    # is the faithful transfer -- design §0/§1b).
+    set(IMGACT_ARCH "vax")
 else()
     message(FATAL_ERROR
-        "OVMX_IMGACT supports aarch64, x86_64, and alpha only "
+        "OVMX_IMGACT supports aarch64, x86_64, alpha, and vax only "
         "(CMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}).")
 endif()
 
 set(IMGACT_ARCHDIR "${CMAKE_CURRENT_SOURCE_DIR}/arch/${IMGACT_ARCH}")
+
+# IMGACT.EXE is freestanding (-nostdlib) and must NOT inherit the substrate's
+# common system libraries. On the NetBSD/vax toolchain
+# CMAKE_C_STANDARD_LIBRARIES force-appends "-lpthread -lm -latomic" (Decision-A,
+# for the hosted RTL images -- tools/cross-vax/toolchain-vax-netbsd.cmake);
+# left in place they saddle a static-PIE interpreter with bogus
+# DT_NEEDED[libpthread,libm]. Clear them in this directory scope only, so
+# IMGACT links against nothing but its own objects (rd vms-73b2). No-op on the
+# Linux IMGACT toolchains (they set no standard-libraries override).
+set(CMAKE_C_STANDARD_LIBRARIES "")
 
 # Alpha-only: the VMS standard-call trampoline (imgact_vms_transfer, vms-f60d).
 # Issues a genuine Alpha standard call to a VMS-standard image's transfer

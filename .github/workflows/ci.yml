@@ -296,6 +296,15 @@ jobs:
               # reader all go through).
               - 'src/imgact/imgact_acp.c'
               - 'src/imgact/imgact_acp.h'
+              # vms-73b2 (epic vms-404): the elf32-vax symbol-vector IMGACT
+              # backend + the elf32-generalized activator core, built + proven
+              # by the imgact-vax-backend job.
+              - 'src/imgact/imgact.c'
+              - 'src/imgact/imgact_elf.h'
+              - 'src/imgact/imgact_boundary_audit.c'
+              - 'src/imgact/arch/**'
+              - 'src/imgact/CMakeLists.txt'
+              - 'src/imgact/test/run_test_vax.sh'
               - 'src/product/ovmx_kit_reader.c'
               # vms-64a (unified cross-build Rung B): the top-level project
               # now configures + builds the full ovmx-images aggregate
@@ -4496,6 +4505,73 @@ jobs:
             ovmx-cross-alpha:latest sh -c '
               sh /src/src/imgact/test/run_vms_std_activation_alpha.sh
             '
+
+  # -----------------------------------------------------------------------
+  # imgact-vax-backend (rd vms-73b2, epic vms-404,
+  # docs/design/vax-symbol-vector-imgact.md §4 P2). Builds the NEW elf32-vax
+  # symbol-vector IMGACT backend (src/imgact/arch/vax) + the elf32-generalized
+  # activator core for vax--netbsdelf and asserts it links into a clean
+  # static-PIE elf32-vax ET_DYN (no PT_INTERP, no bogus DT_NEEDED, RELATIVE +
+  # documented libc/libgcc helper relocs only), that the freestanding VAX
+  # syscall primitive has the right chmk/carry/-errno shape, and that the
+  # toolchain emits a real elf32-vax `.vms$sv`. There is NO qemu VAX, so this
+  # P2 gate does not execute a VAX binary (runtime activation on SIMH is P4);
+  # the by-index symbol-vector RESOLVE over a real elf32-vax `.vms$sv` is proven
+  # by the host ctest imgact_symvec_elf32_unit in the normal test job.
+  # Pulls the source-hash-keyed prebuilt vax toolchain image from ghcr (same as
+  # every other vax cross job), cleanly falling back to a gha-cached build.
+  # -----------------------------------------------------------------------
+  imgact-vax-backend:
+    name: IMGACT elf32-vax symbol-vector backend build (vms-404 P2)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Build + structurally prove the elf32-vax IMGACT backend
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/src -w /src \
+            ovmx-cross-vax:latest sh /src/src/imgact/test/run_test_vax.sh
 
   # -----------------------------------------------------------------------
   # alpha-toolchain-image (vms-e7c5): build ONCE, push to ghcr, keyed by a hash

@@ -31,7 +31,7 @@
  * linked --hash-style=sysv (DT_HASH) for now.
  */
 
-#include <elf.h>
+#include "imgact_elf.h"   /* ElfW()/ELFW_* class-width abstraction (vms-73b2) */
 
 #if defined(__aarch64__)
 #  include "arch/aarch64/imgact_arch.h"
@@ -39,8 +39,10 @@
 #  include "arch/x86_64/imgact_arch.h"
 #elif defined(__alpha__)
 #  include "arch/alpha/imgact_arch.h"
+#elif defined(__vax__)
+#  include "arch/vax/imgact_arch.h"   /* elf32-vax, NetBSD (vms-73b2/vms-404) */
 #else
-#  error "IMGACT.EXE: unsupported architecture (aarch64, x86_64, alpha only)"
+#  error "IMGACT.EXE: unsupported architecture (aarch64, x86_64, alpha, vax only)"
 #endif
 #include "ovmx_image.h"   /* OVMX symbol-vector image format (LINK.EXE) */
 #include "ovmx_symvec.h"  /* shared resolver + GSMATCH (bead vms-8d5)  */
@@ -176,6 +178,10 @@ long imgact_acp_dev_ioctl(int fd, unsigned long req, void *arg)
  * as a file-backed mapping request against the fd=-1 sentinel). vms-e11. */
 #if defined(__alpha__)
 #define MAP_ANONYMOUS 0x10
+#elif defined(__vax__)
+/* NetBSD/vax (unlike the Linux ports above) uses 0x1000 for MAP_ANON --
+ * confirmed against the sysroot <sys/mman.h>. vms-73b2. */
+#define MAP_ANONYMOUS 0x1000
 #else
 #define MAP_ANONYMOUS 0x20
 #endif
@@ -249,6 +255,8 @@ static char *xstrcat(char *d, const char *s)
 #  define IMGACT_SYS_FSTAT 5
 #elif defined(__alpha__)
 #  define IMGACT_SYS_FSTAT 91
+#elif defined(__vax__)
+#  define IMGACT_SYS_FSTAT 440   /* NetBSD SYS___fstat50 */
 #endif
 
 int open(const char *path, int flags, ...)
@@ -394,27 +402,28 @@ static void die_badimghdr(void)
 #define IMGACT_KPAGE PAGE_SIZE
 #endif
 
-/* SysV .hash section entry width: 4 bytes (Elf32_Word) everywhere except
- * Alpha, which uses 8 bytes (Elf64_Xword) -- see imgact_arch.h. */
+/* SysV .hash section entry width: 4 bytes (a 32-bit word) everywhere except
+ * Alpha, which uses 8 bytes (an xword) -- see imgact_arch.h. ElfW() sizes the
+ * default word to the ELF class (4 bytes on both Elf32/Elf64). */
 #ifdef IMGACT_HASH_XWORD
-typedef Elf64_Xword imgact_hashword_t;
+typedef ElfW(Xword) imgact_hashword_t;
 #else
-typedef Elf64_Word imgact_hashword_t;
+typedef ElfW(Word) imgact_hashword_t;
 #endif
 
 struct obj {
 	char           name[64];
 	unsigned long  base;          /* load bias */
-	Elf64_Dyn     *dyn;
-	Elf64_Sym     *symtab;
+	ElfW(Dyn)     *dyn;
+	ElfW(Sym)     *symtab;
 	const char    *strtab;
 	imgact_hashword_t *hash;      /* DT_HASH */
-	Elf64_Rela    *rela;
+	ElfW(Rela)    *rela;
 	unsigned long  relasz;
-	Elf64_Rela    *jmprel;
+	ElfW(Rela)    *jmprel;
 	unsigned long  pltrelsz;
 	void         (*init)(void);
-	Elf64_Addr    *init_array;
+	ElfW(Addr)    *init_array;
 	unsigned long  init_arraysz;
 	/* TLS (PT_TLS) */
 	int            has_tls;
@@ -428,7 +437,7 @@ struct obj {
 
 static struct obj g_objs[MAX_OBJS];
 static int        g_nobjs;
-static Elf64_auxv_t *g_auxv;      /* saved for __getauxval builtin */
+static imgact_auxv_t *g_auxv;      /* saved for __getauxval builtin */
 static char        **g_envp;      /* process envp — the C-RTL __init_libc arg */
 static char         *g_argv0;     /* process argv[0] (program name for musl)  */
 
@@ -445,7 +454,7 @@ static char         *g_argv0;     /* process argv[0] (program name for musl)  */
 
 static unsigned long imgact_getauxval(unsigned long type)
 {
-	Elf64_auxv_t *a = g_auxv;
+	imgact_auxv_t *a = g_auxv;
 	if (a)
 		for (; a->a_type != AT_NULL; a++)
 			if (a->a_type == type)
@@ -549,7 +558,7 @@ static unsigned long elf_sysv_hash(const char *name)
 }
 
 /* Find a *defined* symbol by name within one object via DT_HASH. */
-static Elf64_Sym *obj_find(struct obj *o, const char *name, unsigned long hash)
+static ElfW(Sym) *obj_find(struct obj *o, const char *name, unsigned long hash)
 {
 	if (!o->hash || !o->symtab || !o->strtab)
 		return 0;
@@ -559,7 +568,7 @@ static Elf64_Sym *obj_find(struct obj *o, const char *name, unsigned long hash)
 	if (!nbucket)
 		return 0;
 	for (imgact_hashword_t i = bucket[umod64(hash, nbucket)]; i; i = chain[i]) {
-		Elf64_Sym *s = &o->symtab[i];
+		ElfW(Sym) *s = &o->symtab[i];
 		if (s->st_shndx == SHN_UNDEF)
 			continue;
 		if (xstrcmp(o->strtab + s->st_name, name) == 0)
@@ -572,7 +581,7 @@ struct symres {
 	int            found;
 	unsigned long  value;   /* resolved runtime address (non-TLS) */
 	struct obj    *obj;     /* defining object (0 for builtins)   */
-	Elf64_Sym     *sym;
+	ElfW(Sym)     *sym;
 };
 
 /* Global-scope lookup: executable -> loaded images -> interpreter builtins. */
@@ -581,7 +590,7 @@ static struct symres resolve_sym(const char *name)
 	struct symres r = { 0, 0, 0, 0 };
 	unsigned long hash = elf_sysv_hash(name);
 	for (int i = 0; i < g_nobjs; i++) {
-		Elf64_Sym *s = obj_find(&g_objs[i], name, hash);
+		ElfW(Sym) *s = obj_find(&g_objs[i], name, hash);
 		if (s) {
 			r.found = 1;
 			r.obj   = &g_objs[i];
@@ -609,7 +618,7 @@ static void parse_dynamic(struct obj *o)
 	unsigned long strtab = 0, symtab = 0, hash = 0;
 	unsigned long rela = 0, relasz = 0, jmprel = 0, pltrelsz = 0;
 	unsigned long init = 0, init_array = 0, init_arraysz = 0;
-	for (Elf64_Dyn *d = o->dyn; d->d_tag != DT_NULL; d++) {
+	for (ElfW(Dyn) *d = o->dyn; d->d_tag != DT_NULL; d++) {
 		switch (d->d_tag) {
 		case DT_STRTAB:      strtab = d->d_un.d_ptr; break;
 		case DT_SYMTAB:      symtab = d->d_un.d_ptr; break;
@@ -626,19 +635,19 @@ static void parse_dynamic(struct obj *o)
 	}
 	/* Dynamic-section pointers are link-time vaddrs: apply the load bias. */
 	o->strtab       = strtab ? (const char *)(o->base + strtab) : 0;
-	o->symtab       = symtab ? (Elf64_Sym *)(o->base + symtab) : 0;
+	o->symtab       = symtab ? (ElfW(Sym) *)(o->base + symtab) : 0;
 	o->hash         = hash ? (imgact_hashword_t *)(o->base + hash) : 0;
-	o->rela         = rela ? (Elf64_Rela *)(o->base + rela) : 0;
+	o->rela         = rela ? (ElfW(Rela) *)(o->base + rela) : 0;
 	o->relasz       = relasz;
-	o->jmprel       = jmprel ? (Elf64_Rela *)(o->base + jmprel) : 0;
+	o->jmprel       = jmprel ? (ElfW(Rela) *)(o->base + jmprel) : 0;
 	o->pltrelsz     = pltrelsz;
 	o->init         = init ? (void (*)(void))(o->base + init) : 0;
-	o->init_array   = init_array ? (Elf64_Addr *)(o->base + init_array) : 0;
+	o->init_array   = init_array ? (ElfW(Addr) *)(o->base + init_array) : 0;
 	o->init_arraysz = init_arraysz;
 }
 
 /* Record PT_TLS geometry for an object from its program headers. */
-static void scan_tls(struct obj *o, Elf64_Phdr *phdr, int phnum)
+static void scan_tls(struct obj *o, ElfW(Phdr) *phdr, int phnum)
 {
 	for (int i = 0; i < phnum; i++) {
 		if (phdr[i].p_type == PT_TLS) {
@@ -802,7 +811,7 @@ static struct obj *load_object(const char *soname, const char *path)
 	if (imgsrc_open(&src, path) < 0)
 		return 0;
 
-	Elf64_Ehdr eh;
+	ElfW(Ehdr) eh;
 	if (imgsrc_pread(&src, &eh, sizeof(eh), 0) != (long)sizeof(eh) ||
 	    eh.e_ident[0] != 0x7f || eh.e_ident[1] != 'E' ||
 	    eh.e_ident[2] != 'L'  || eh.e_ident[3] != 'F') {
@@ -810,7 +819,7 @@ static struct obj *load_object(const char *soname, const char *path)
 		die_imgfmterr(soname);
 	}
 
-	Elf64_Phdr ph[32];
+	ElfW(Phdr) ph[32];
 	if (eh.e_phnum > 32) {
 		imgsrc_close(&src);
 		die_imgfmterr(soname);
@@ -881,7 +890,7 @@ static struct obj *load_object(const char *soname, const char *path)
 	/* Locate PT_DYNAMIC and PT_TLS. */
 	for (int i = 0; i < eh.e_phnum; i++) {
 		if (ph[i].p_type == PT_DYNAMIC)
-			o->dyn = (Elf64_Dyn *)(base + ph[i].p_vaddr);
+			o->dyn = (ElfW(Dyn) *)(base + ph[i].p_vaddr);
 	}
 	if (!o->dyn)
 		die_imgfmterr(soname);
@@ -980,7 +989,7 @@ static struct obj *load_needed(const char *soname)
 static void load_deps(struct obj *o)
 {
 	/* Snapshot the count: load_needed may append new objects. */
-	for (Elf64_Dyn *d = o->dyn; d->d_tag != DT_NULL; d++) {
+	for (ElfW(Dyn) *d = o->dyn; d->d_tag != DT_NULL; d++) {
 		if (d->d_tag != DT_NEEDED)
 			continue;
 		const char *soname = o->strtab + d->d_un.d_val;
@@ -1067,13 +1076,13 @@ static void setup_tls(void)
  * Relocation processing.
  * -------------------------------------------------------------------------- */
 
-static void apply_rela(struct obj *o, Elf64_Rela *rela, unsigned long size)
+static void apply_rela(struct obj *o, ElfW(Rela) *rela, unsigned long size)
 {
-	unsigned long n = size / sizeof(Elf64_Rela);
+	unsigned long n = size / sizeof(ElfW(Rela));
 	for (unsigned long i = 0; i < n; i++) {
-		Elf64_Rela *r = &rela[i];
-		unsigned long type = ELF64_R_TYPE(r->r_info);
-		unsigned long symi = ELF64_R_SYM(r->r_info);
+		ElfW(Rela) *r = &rela[i];
+		unsigned long type = ELFW_R_TYPE(r->r_info);
+		unsigned long symi = ELFW_R_SYM(r->r_info);
 		unsigned long *where = (unsigned long *)(o->base + r->r_offset);
 
 		switch (type) {
@@ -1090,7 +1099,7 @@ static void apply_rela(struct obj *o, Elf64_Rela *rela, unsigned long size)
 			struct symres res = resolve_sym(name);
 			if (!res.found) {
 				/* Weak undefined symbols resolve to 0. */
-				if (ELF64_ST_BIND(o->symtab[symi].st_info)
+				if (ELFW_ST_BIND(o->symtab[symi].st_info)
 				    == STB_WEAK) {
 					*where = (unsigned long)r->r_addend;
 					break;
@@ -1196,7 +1205,7 @@ static void run_init(struct obj *o)
 	if (o->init)
 		o->init();
 	if (o->init_array) {
-		unsigned long n = o->init_arraysz / sizeof(Elf64_Addr);
+		unsigned long n = o->init_arraysz / sizeof(ElfW(Addr));
 		for (unsigned long i = 0; i < n; i++) {
 			void (*fn)(void) = (void (*)(void))o->init_array[i];
 			if (fn)
@@ -1215,12 +1224,12 @@ static void run_init(struct obj *o)
  * other functions or touch globals.
  * -------------------------------------------------------------------------- */
 
-extern Elf64_Dyn _DYNAMIC[] __attribute__((visibility("hidden")));
+extern ElfW(Dyn) _DYNAMIC[] __attribute__((visibility("hidden")));
 
 __attribute__((no_stack_protector))
 static void self_relocate(unsigned long base)
 {
-	Elf64_Dyn *d = _DYNAMIC;   /* PC-relative (hidden): no reloc needed */
+	ElfW(Dyn) *d = _DYNAMIC;   /* PC-relative (hidden): no reloc needed */
 	unsigned long rela = 0, relasz = 0;
 	for (; d->d_tag != DT_NULL; d++) {
 		if (d->d_tag == DT_RELA)
@@ -1228,11 +1237,11 @@ static void self_relocate(unsigned long base)
 		else if (d->d_tag == DT_RELASZ)
 			relasz = d->d_un.d_val;
 	}
-	Elf64_Rela *r = (Elf64_Rela *)rela;
-	unsigned long n = relasz / sizeof(Elf64_Rela);
+	ElfW(Rela) *r = (ElfW(Rela) *)rela;
+	unsigned long n = relasz / sizeof(ElfW(Rela));
 	unsigned long last_pg = ~0UL;
 	for (unsigned long i = 0; i < n; i++) {
-		if (ELF64_R_TYPE(r[i].r_info) == IMGACT_R_RELATIVE) {
+		if (ELFW_R_TYPE(r[i].r_info) == IMGACT_R_RELATIVE) {
 			unsigned long addr = base + r[i].r_offset;
 			/* Same unprotected-write pattern as apply_vms_rel, but on
 			 * IMGACT.EXE's OWN pages and BEFORE any print. AUDIT (readelf):
@@ -1267,7 +1276,7 @@ static void self_relocate(unsigned long base)
  * -------------------------------------------------------------------------- */
 
 /* Compute the executable's load bias from PT_PHDR (0 for ET_EXEC). */
-static unsigned long exec_bias(Elf64_Phdr *phdr, int phnum, unsigned long at_phdr)
+static unsigned long exec_bias(ElfW(Phdr) *phdr, int phnum, unsigned long at_phdr)
 {
 	for (int i = 0; i < phnum; i++)
 		if (phdr[i].p_type == PT_PHDR)
@@ -1308,7 +1317,7 @@ static int imgact_page_mapped(unsigned long addr)
 static int ovmx_find_section(struct imgsrc *src, const char *want,
 			     unsigned long *addr, unsigned long *size)
 {
-	Elf64_Ehdr eh;
+	ElfW(Ehdr) eh;
 	if (imgsrc_pread(src, &eh, sizeof eh, 0) != (long)sizeof eh)
 		return 0;
 	/* No section table at all: the image simply has no sections to match
@@ -1317,7 +1326,7 @@ static int ovmx_find_section(struct imgsrc *src, const char *want,
 		return 0;
 	/* A present section table must be ELF64-shaped. A wrong entry size means
 	 * we cannot walk it without misreading -> fail honest (INV-6). */
-	if (eh.e_shentsize != sizeof(Elf64_Shdr))
+	if (eh.e_shentsize != sizeof(ElfW(Shdr)))
 		die_badimghdr();
 
 	/*
@@ -1329,7 +1338,7 @@ static int ovmx_find_section(struct imgsrc *src, const char *want,
 	 * DECC$SHR.EXE has 2083 section headers, which fits directly in e_shnum;
 	 * the escape is handled here for full robustness.)
 	 */
-	Elf64_Shdr sh0;
+	ElfW(Shdr) sh0;
 	if (imgsrc_pread(src, &sh0, sizeof sh0, (long)eh.e_shoff) != (long)sizeof sh0)
 		die_badimghdr();
 	unsigned long count = eh.e_shnum;
@@ -1359,14 +1368,14 @@ static int ovmx_find_section(struct imgsrc *src, const char *want,
 	 * reads below are the bound. Overflow-safe comparisons throughout.
 	 */
 	unsigned long imgsz     = imgsrc_size(src);
-	unsigned long tbl_bytes = count * sizeof(Elf64_Shdr);
+	unsigned long tbl_bytes = count * sizeof(ElfW(Shdr));
 	if (imgsz && (eh.e_shoff > imgsz || tbl_bytes > imgsz - eh.e_shoff))
 		die_badimghdr();
 
 	/* Locate the section-header string table. */
-	Elf64_Shdr shstr;
+	ElfW(Shdr) shstr;
 	if (imgsrc_pread(src, &shstr, sizeof shstr,
-			 (long)(eh.e_shoff + shstrndx * sizeof(Elf64_Shdr)))
+			 (long)(eh.e_shoff + shstrndx * sizeof(ElfW(Shdr))))
 	    != (long)sizeof shstr)
 		die_badimghdr();
 	unsigned long stoff = shstr.sh_offset, stsz = shstr.sh_size;
@@ -1390,9 +1399,9 @@ static int ovmx_find_section(struct imgsrc *src, const char *want,
 
 	unsigned long wlen = xstrlen(want);
 	for (unsigned long i = 0; i < count; i++) {
-		Elf64_Shdr sh;
+		ElfW(Shdr) sh;
 		if (imgsrc_pread(src, &sh, sizeof sh,
-				 (long)(eh.e_shoff + i * sizeof(Elf64_Shdr)))
+				 (long)(eh.e_shoff + i * sizeof(ElfW(Shdr))))
 		    != (long)sizeof sh)
 			die_badimghdr();
 		if (sh.sh_name >= stsz)
@@ -1512,11 +1521,11 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	if (imgsrc_open(&src, path) < 0 && imgsrc_open(&src, soname) < 0)
 		return 0;
 
-	Elf64_Ehdr eh;
+	ElfW(Ehdr) eh;
 	if (imgsrc_pread(&src, &eh, sizeof eh, 0) != (long)sizeof eh) { imgsrc_close(&src); return 0; }
-	Elf64_Phdr ph[16];
+	ElfW(Phdr) ph[16];
 	if (eh.e_phnum > 16) { imgsrc_close(&src); return 0; }
-	if (imgsrc_pread(&src, ph, (unsigned long)eh.e_phnum * sizeof(Elf64_Phdr),
+	if (imgsrc_pread(&src, ph, (unsigned long)eh.e_phnum * sizeof(ElfW(Phdr)),
 		      (long)eh.e_phoff) < 0) { imgsrc_close(&src); return 0; }
 
 	unsigned long lo = ~0UL, hi = 0;
@@ -2281,8 +2290,8 @@ static void run_init_array_symvec(unsigned long base, unsigned long addr,
 {
 	if (!size)
 		return;
-	Elf64_Addr *arr = (Elf64_Addr *)(base + addr);
-	unsigned long n = size / sizeof(Elf64_Addr);
+	ElfW(Addr) *arr = (ElfW(Addr) *)(base + addr);
+	unsigned long n = size / sizeof(ElfW(Addr));
 	for (unsigned long i = 0; i < n; i++) {
 		void (*fn)(void) = (void (*)(void))arr[i];
 		if (fn)
@@ -2552,7 +2561,7 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 #endif
 
 static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
-				   Elf64_Phdr *ephdr, int ephnum)
+				   ElfW(Phdr) *ephdr, int ephnum)
 {
 	if (!execfn)
 		die_imgfmterr("IMAGE.EXE");
@@ -2766,12 +2775,12 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	char **e = envp;
 	while (*e)
 		e++;
-	Elf64_auxv_t *auxv = (Elf64_auxv_t *)(e + 1);
+	imgact_auxv_t *auxv = (imgact_auxv_t *)(e + 1);
 
 	unsigned long at_base = 0, at_phdr = 0, at_entry = 0;
 	long at_phnum = 0;
 	const char *at_execfn = 0;
-	for (Elf64_auxv_t *a = auxv; a->a_type != AT_NULL; a++) {
+	for (imgact_auxv_t *a = auxv; a->a_type != AT_NULL; a++) {
 		switch (a->a_type) {
 		case AT_BASE:   at_base   = a->a_un.a_val; break;
 		case AT_PHDR:   at_phdr   = a->a_un.a_val; break;
@@ -2813,7 +2822,7 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	}
 	if (imgact_page_mapped((unsigned long)&argc)) {   /* control: mincore works */
 		unsigned long phdr_bytes =
-			(unsigned long)at_phnum * sizeof(Elf64_Phdr);
+			(unsigned long)at_phnum * sizeof(ElfW(Phdr));
 		int mapped = 1;
 		for (unsigned long o = 0; mapped && o < phdr_bytes; o += IMGACT_KPAGE)
 			mapped = imgact_page_mapped(at_phdr + o);
@@ -2832,14 +2841,14 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	 * IMGACT only needs to relocate it and load its shareable images.
 	 * (This departs from design spec §2 step 3, which describes IMGACT
 	 * mapping the executable — the kernel does that for the main image.) */
-	Elf64_Phdr *ephdr = (Elf64_Phdr *)at_phdr;
+	ElfW(Phdr) *ephdr = (ElfW(Phdr) *)at_phdr;
 	int ephnum = (int)at_phnum;
 	unsigned long ebias = exec_bias(ephdr, ephnum, at_phdr);
 
-	Elf64_Dyn *edyn = 0;
+	ElfW(Dyn) *edyn = 0;
 	for (int i = 0; i < ephnum; i++)
 		if (ephdr[i].p_type == PT_DYNAMIC)
-			edyn = (Elf64_Dyn *)(ebias + ephdr[i].p_vaddr);
+			edyn = (ElfW(Dyn) *)(ebias + ephdr[i].p_vaddr);
 
 	/* An OVMX symbol-vector image (LINK.EXE output) has no PT_DYNAMIC: it
 	 * binds universal symbols through .vms$imp, not ELF DT_HASH. (vms-714) */

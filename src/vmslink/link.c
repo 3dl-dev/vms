@@ -3765,28 +3765,56 @@ store_target:;
      * mallocng). No-op for a symbol target (already strong via evax_find_sym) and
      * for any address not naming an overridden weak def.
      *
-     * vms-b14: for a SECTION-RELATIVE target the true address is base+addend, so
-     * the override must match the FULL target, not the section base alone. When
-     * an overridden weak proc sits at OFFSET 0 of a $CODE$ (calloc.o's weak
-     * __malloc_allzerop), the section base coincides with that weak entry, and
-     * redirecting the base pulled EVERY sibling symbol in the section onto the
-     * strong def + its own addend: decc$_calloc64 (real calloc at $CODE$+0x008)
-     * was mis-bound onto strong __malloc_allzerop+0x008, so calloc(count,size)
-     * jumped into the metadata leaf, failed its pointer-alignment assert, and
-     * a_crash()ed (SIGSEGV at faultVA=0). Match base+addend and, on a hit, use
-     * the strong def's exact address with the addend CONSUMED (a self-bind that
-     * targets the weak def itself has addend 0 and is unaffected; a weak def at
-     * a nonzero offset — which the old base-only match silently missed — now
-     * redirects correctly). The symbol-target path (to_section < 0) keeps the
-     * pre-addend base-redirect exactly as before (no-op there anyway). */
-    int64_t addend = r->addend;
-    if (r->to_section >= 0) {
-        uint64_t full = S + (uint64_t)addend;
-        uint64_t rt   = evax_wredir_apply(redir, nredir, full);
-        if (rt != full) { S = rt; addend = 0; }   /* strong addr is the complete target */
-    } else {
-        S = evax_wredir_apply(redir, nredir, S);
-        if (have_code) code_S = evax_wredir_apply(redir, nredir, code_S);
+     * vms-b14 — CALLOC-FAMILY EXCEPTION (bounded, pending the root fix): a
+     * section-relative PDSC entry-field whose $CODE$ base is the overridden weak
+     * __malloc_allzerop (offset 0 of musl's calloc.o/__libc_calloc.o) is a REAL
+     * allocator (decc$_calloc64 / __libc_calloc at a small nonzero offset), NOT a
+     * weak_alias forwarder. The base-redirect sends it to strong __malloc_allzerop
+     * + its own addend, which lands back INSIDE the strong __malloc_allzerop code
+     * (the zero-helper) rather than the real calloc, so calling calloc jumps into
+     * the wrong routine and a_crash()es on the CRTL->RMS veneer path (the ONLY
+     * base-coincident relocs in the whole DECC$SHR link whose redirect lands in
+     * __malloc_allzerop are exactly these two — every other sibling forwards to
+     * its correct strong target, so redirecting them is right and the crtl_rms N=7
+     * heap/free path stays green). Detect precisely that case and LEAVE the reloc
+     * (store base + addend = the sibling's own real code). The structural
+     * discriminant is "base-only's redirect would land inside strong
+     * __malloc_allzerop"; a general fix (weak_alias-aware descriptor export) is
+     * tracked separately. */
+    {
+        uint64_t base_rt = evax_wredir_apply(redir, nredir, S);
+        int calloc_family = 0;
+        if (r->to_section >= 0 && base_rt != S) {
+            uint64_t store = base_rt + (uint64_t)r->addend;   /* base-only's value */
+            const struct evax_symbol *rown = NULL; uint64_t rown_off = 0;
+            for (int i5 = 0; i5 < nin; i5++)
+                for (int s5 = 0; s5 < in[i5].obj.nsym; s5++) {
+                    const struct evax_symbol *y = &in[i5].obj.sym[s5];
+                    if (!y->defined || !y->is_proc) continue;
+                    uint64_t ca = evax_sym_code_addr(in, i5, y);
+                    if (ca <= store && (!rown || ca >= rown_off)) { rown = y; rown_off = ca; }
+                }
+            /* target-owner: the sibling this section-relative reloc actually names
+             * (greatest defined offset <= addend in the reloc's own to_section). */
+            const struct evax_symbol *town = NULL; uint64_t town_off = 0;
+            for (int s2 = 0; s2 < o->nsym; s2++) {
+                const struct evax_symbol *y = &o->sym[s2];
+                if (!y->defined) continue;
+                if (y->psindx == (uint32_t)r->to_section && y->value <= (uint64_t)r->addend &&
+                    (!town || y->value >= town_off)) { town = y; town_off = y->value; }
+                if (y->is_proc && y->code_psindx == (uint32_t)r->to_section &&
+                    y->code_value <= (uint64_t)r->addend && (!town || y->code_value >= town_off)) { town = y; town_off = y->code_value; }
+            }
+            /* LEAVE only a DISTINCT sibling (not __malloc_allzerop's own self-bind)
+             * whose base-only redirect lands back inside strong __malloc_allzerop. */
+            calloc_family = (rown && strcmp(rown->name, "__malloc_allzerop") == 0 &&
+                             town && strcmp(town->name, "__malloc_allzerop") != 0);
+        }
+        if (!calloc_family) {
+            S      = base_rt;                                  /* base-only redirect */
+            if (have_code) code_S = evax_wredir_apply(redir, nredir, code_S);
+        }
+        /* calloc-family: leave S (and code_S) unredirected -> store base + addend */
     }
 
     /* Image-relative offset of the store slot (the site), for the .vms$rel table. */
@@ -3798,7 +3826,7 @@ store_target:;
     switch (r->type) {
     case EVAX_R_REFLONG:
         if (r->address + 4 > sec->alloc) die("REFLONG site past psect end");
-        putl32(c + r->address, (uint32_t)(S + addend));
+        putl32(c + r->address, (uint32_t)(S + r->addend));
         /* A REFLONG is a 32-bit slot. If it holds an image-relative address into
          * a placed section it would need a load-bias fixup — but IMGACT's
          * .vms$rel loader adds a 64-bit bias to an 8-byte slot, which a 4-byte
@@ -3813,13 +3841,13 @@ store_target:;
         break;
     case EVAX_R_REFQUAD:
         if (r->address + 8 > sec->alloc) die("REFQUAD site past psect end");
-        putl64(c + r->address, S + addend);
+        putl64(c + r->address, S + r->addend);
         if (S_placed) evax_rel_add(rel_off, nrel, rel_cap, rel_site);
         break;
     case EVAX_R_CODEADDR:
         /* Store the target's CODE ENTRY address (a procedure's entry point). */
         if (r->address + 8 > sec->alloc) die("CODEADDR site past psect end");
-        putl64(c + r->address, (have_code ? code_S : S) + addend);
+        putl64(c + r->address, (have_code ? code_S : S) + r->addend);
         if (have_code ? codeS_placed : S_placed)
             evax_rel_add(rel_off, nrel, rel_cap, rel_site);
         break;

@@ -2316,16 +2316,20 @@ jobs:
       # verdicts on a red run, not just the first.
       fail-fast: false
       matrix:
-        # N shards. ~80 suites / 8 ≈ 9-11 per shard -- comfortably under the
-        # 600s wall even at 10x-slow. `strategy.job-total` (used in the name and
-        # passed to the guest) derives N from this list, so changing the shard
-        # count is a one-line edit here. Bumped 6 -> 8 (vms-f881): the new
-        # test_kmod_devtab_terminal suite (real PTY setup + a cross-process
-        # fork/$GETDVI round trip) is heavier than the average suite and tipped
-        # shard 0/6 past the 600s wall under CI contention (qemu SIGTERM/rc=124,
-        # no suite FAILED). Sharding is the sanctioned fix over an ever-bigger
-        # wall (vms-ea7): fewer suites per VM, not a longer per-VM budget.
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        # N shards. ~80 suites / 6 ≈ 13-16 per shard. `strategy.job-total`
+        # (used in the name and passed to the guest) derives N from this list.
+        # HISTORY (vms-f881): the new test_kmod_devtab_terminal suite (real PTY
+        # setup + a cross-process fork/$GETDVI round trip) is heavier than the
+        # average suite and tipped shard 0/6 past the 600s wall under CI
+        # contention (qemu SIGTERM/rc=124, no suite FAILED). A 6->8 re-shard
+        # relieved capacity but RESHUFFLED the md5 residue classes and moved
+        # test_syssvc_identcont into a grouping where it deterministically FAILED
+        # (green at 6 shards on main + elsewhere, red only at 8) -- identcont has
+        # a latent cross-suite isolation dependency the 6-shard layout happens to
+        # satisfy (filed separately). So we KEEP 6 shards and give this job a
+        # larger WALL instead (KE_WALL_TIMEOUT below), the run_tests.sh-documented
+        # fallback, which relieves shard 0 WITHOUT changing any suite's shard.
+        shard: [0, 1, 2, 3, 4, 5]
 
     steps:
       - name: Checkout
@@ -2355,12 +2359,20 @@ jobs:
         env:
           SHARD_INDEX: ${{ matrix.shard }}
           SHARD_TOTAL: ${{ strategy.job-total }}
+          # Larger whole-VM wall for this job (run_tests.sh default is 600):
+          # shard 0's residue set includes the heavier test_kmod_devtab_terminal
+          # (real PTY + cross-process $GETDVI). 1200s = 2x headroom, still well
+          # under timeout-minutes: 60. This is the documented capacity fallback
+          # (raise the wall, never drop a suite) used here instead of re-sharding
+          # so no suite changes shard membership (see the matrix note above).
+          KE_WALL_TIMEOUT: 1200
         run: |
           set +e
-          # -e SHARD_INDEX/-e SHARD_TOTAL: run_tests.sh forwards these onto the
-          # guest kernel cmdline (ovmx.shard/ovmx.shards); init.sh runs only the
-          # residue class md5(name) mod SHARD_TOTAL == SHARD_INDEX.
-          RAW=$(docker run --rm -e SHARD_INDEX -e SHARD_TOTAL ovmx-ktest:latest 2>&1)
+          # -e SHARD_INDEX/-e SHARD_TOTAL/-e KE_WALL_TIMEOUT: run_tests.sh forwards
+          # the shard vars onto the guest kernel cmdline (ovmx.shard/ovmx.shards,
+          # residue class md5(name) mod SHARD_TOTAL == SHARD_INDEX) and reads
+          # KE_WALL_TIMEOUT as the whole-VM wall.
+          RAW=$(docker run --rm -e SHARD_INDEX -e SHARD_TOTAL -e KE_WALL_TIMEOUT ovmx-ktest:latest 2>&1)
           RC=$?
           set -e
           # QEMU's serial console emits CRLF; normalise so line-anchored

@@ -1,0 +1,20 @@
+20:51:26.896066 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 79: 1.1 > 1.2 63 conn-initiate 8195>0 ver 4.1 segsize 1459 
+20:51:26.896321 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 25  (nsplen 3 < 5) (invalid)
+20:51:27.193171 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 32 conn-confirm 8195>8195 ver 4.1 segsize 1459 
+20:51:27.193398 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 33 link-service 8195>8195  (invalid)
+20:51:27.193509 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 33 link-service 8195>8195  (invalid)
+20:51:27.193744 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 29 ils-ack 8195>8195  (invalid)
+20:51:27.197111 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 68: 1.1 > 1.2 52 data 8195>8195 ack 0 seg 1 
+20:51:27.197463 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 68: 1.2 > 1.1 52 data 8195>8195 ack 1 seg 1 
+20:51:27.201170 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 114: 1.1 > 1.2 98 data 8195>8195 ack 1 seg 2 
+20:51:27.208881 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 131: 1.2 > 1.1 115 data 8195>8195 ack 2 seg 2 
+20:51:27.211953 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 39 data 8195>8195 ack 2 seg 3 
+20:51:27.215883 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 164: 1.2 > 1.1 148 data 8195>8195 ack 3 seg 3 
+20:51:27.216880 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 39 data 8195>8195 ack 3 seg 4 
+20:51:27.217116 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 35 data 8195>8195 ack 4 seg 4 
+20:51:27.220896 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 177: 1.1 > 1.2 161 data 8195>8195 ack 4 seg 5 
+20:51:27.223341 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 36 data 8195>8195 ack 5 seg 5 
+20:51:27.224116 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 37 data 8195>8195 ack 5 seg 6 
+20:51:27.226635 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 36 data 8195>8195 ack 6 seg 6 
+20:51:27.228078 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 30 disconn-initiate 8195>8195 object rejected connect 
+20:51:27.228237 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 29 disconn-confirm 8195>8195 disconnect complete 

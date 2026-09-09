@@ -65,6 +65,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh gate        # same, explicit
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate # crtl_rms heap+RMS+stdio -> N=7
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
 #
 # EXIT: 0 iff the merged-$15 single-proc image activates N=3 on the real
@@ -589,7 +590,59 @@ EOF
     grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (none captured)"
     exit 1
     ;;
+  shipped-gate)
+    # vms-410: proves the Alpha shareable graph ships as part of the ORDINARY
+    # build-alpha-bootimage.sh packaging path, not as something only THIS
+    # gate's own build_joint_images() knows to inject. `gate`/`crtl-rms-gate`/
+    # `mf-gate` above all pre-stage $WORK/joint themselves (their own
+    # milestone image) before calling assemble_boot_image; this mode
+    # deliberately does the OPPOSITE -- it clears $WORK/joint first, so the
+    # ONLY way DECC$SHR.EXE / LIBOTS_SHR.EXE / JOINT_E2E.EXE can land on the
+    # mastered ODS-2 volume's SYS$SHARE is build-alpha-bootimage.sh's OWN
+    # built-in shareable-graph build (added for vms-410). If that packaging
+    # step regresses (or is ever reverted), $WORK/joint stays empty,
+    # assemble_boot_image's SYSTARTUP swap never triggers, and this gate
+    # fails HONESTLY on the missing-shareable assertion below rather than
+    # silently falling back to the caller-injection pattern. Reuses
+    # assert_activation() unchanged: build-alpha-bootimage.sh's default
+    # packaging builds the SAME joint_main.c/joint_main_ok.c milestone+control
+    # pair as `gate`, so the real-executive activation teeth are identical.
+    log "verifying the gate can fail (selftest) before the real boot"
+    selftest || die "selftest failed -- assert_activation() cannot be trusted; aborting before the boot"
+    echo ""
+    log "step 1: clear any pre-staged joint artifacts -- the SHIPPED packaging path alone must supply them"
+    rm -rf "$WORK/joint"
+    assemble_boot_image
+    [ -s "$WORK/joint/DECC\$SHR.EXE" ] && [ -s "$WORK/joint/LIBOTS_SHR.EXE" ] && [ -s "$WORK/joint/joint_e2e.exe" ] \
+        || die "build-alpha-bootimage.sh's own packaging did not stage the shareable graph into \$WORK/joint -- vms-410 packaging regression (no caller pre-staged it, so this is the ONLY source)"
+    log "step 3: BOOT A -- activate the SHIPPED single-proc N=3 image against the SYSLIB-staged shareables on the REAL executive"
+    run_boot_a
+    echo ""
+    echo "========================================================================"
+    echo "== vms-410 shipped shareable graph: SYSLIB-staged genuine alpha DECC\$SHR +"
+    echo "== LIBOTS\$SHR (build-alpha-bootimage.sh's own packaging, not caller-"
+    echo "== injected) activation on the real OVMX/Alpha executive"
+    echo "========================================================================"
+    grep -aE "JOINT-E2E-PROOF:|OVMX crt0 join|OVMX-SEAM:|%IMGACT|%DCL-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    echo "------------------------------------------------------------------------"
+    if assert_activation "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the SHIPPED Alpha boot image's own packaging staged the genuine DECC\$SHR +"
+      echo "      LIBOTS\$SHR into SYS\$SHARE, and a consumer image bound against them ACTIVATED"
+      echo "      on the real executive over the mounted ODS-2 ACP; \$STATUS = %X0035A019 (N=3)."
+      echo "      The SS\$_NORMAL control anchors value-sensitivity; no activation-failure"
+      echo "      %-error appeared. Alpha ships + activates real VMS shareable images (vms-410)."
+      exit 0
+    fi
+    echo ""
+    echo "FAIL: the SHIPPED single-proc N=3 image did NOT cleanly activate against the"
+    echo "      packaging-staged shareables on the real executive -- a REAL vms-410 packaging"
+    echo "      or activation regression. Full log: $WORK/modgpA.log"
+    echo "--- activation-failure signatures ---"
+    grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (none captured)"
+    exit 1
+    ;;
   *)
-    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | mf-gate | selftest)"
+    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | mf-gate | shipped-gate | selftest)"
     ;;
 esac

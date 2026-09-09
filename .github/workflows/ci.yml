@@ -6345,6 +6345,138 @@ jobs:
             ovmx-vax-lab negctl
 
   # -----------------------------------------------------------------------
+  # netbsd-vax-substrate-prime (rd vms-e77, parent vms-bde). THE ONE WRITER of
+  # the shared OVMX/vax substrate cache. It builds the SIMH-VAX modular kernel
+  # (netbsd-OVMX) + the OVMX substrate (STARTUP.EXE, vms.kmod) ONCE per
+  # source-state via a REAL green `run-boot.sh sysboot' (build the substrate,
+  # boot NetBSD/vax under SIMH, master the OVMX system volume, boot PAST the
+  # installed-system gate to PROVISION.EXE + assert) and SAVEs boot-artifacts/
+  # + the modular-kernel marker. Every SIMH consumer job below RESTORES this
+  # cache read-only instead of rebuilding the ~7.5-min kernel itself.
+  #
+  # CORRECTNESS CRUX (rd vms-e77): the cache key hashes EVERY input that feeds
+  # the built substrate binaries -- the pinned NetBSD version, run-boot.sh, the
+  # cross-vax build scripts + Dockerfile + vendored tarballs, and the full
+  # src/{kernel-netbsd,kernel-core,ovmx_init} source trees -- so ANY
+  # substrate-source change busts the key and forces a fresh build. A stale
+  # kernel silently reused across a source change would give FALSE test results.
+  # Because run-boot.sh reuses boot-artifacts/netbsd-OVMX + STARTUP.EXE/vms.kmod
+  # WHEN PRESENT (it does not re-derive freshness from source), a restore-keys
+  # PREFIX hit (an OLDER substrate) would otherwise be reused and then re-SAVED
+  # under the new exact key -- canonising a stale substrate. The guard step
+  # below DISCARDS any inexact (restore-keys) restore so the prime always
+  # rebuilds fresh for a new source-state; only an EXACT key hit (same sources)
+  # is reused warm. Mirrors netbsd-amd64-prime-cache (the amd64 writer).
+  # -----------------------------------------------------------------------
+  netbsd-vax-substrate-prime:
+    name: NetBSD/vax OVMX substrate prime (modular kernel + STARTUP/vms.kmod)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: [changes, netbsd-vax-simh]
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # The full NetBSD src tree + build.sh obj/tools are large, rebuildable scratch
+    # -> keep them OUT of the disk cache (a literal /tmp path).
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # THE ONE WRITER of the shared substrate cache (full actions/cache:
+      # restore + save). Same key/path the restore-only consumer jobs use. The
+      # key hashes EVERY input that feeds the built substrate binaries, so any
+      # substrate-source or NetBSD-pin change busts it (correctness crux).
+      - name: Cache the OVMX/vax substrate (modular kernel + STARTUP.EXE + vms.kmod) — WRITER
+        id: substrate_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
+
+      # CORRECTNESS GUARD (rd vms-e77): cache-hit is 'true' ONLY on an exact key
+      # match (identical substrate sources). A restore-keys PREFIX hit (an older
+      # substrate) or a total miss both leave cache-hit != 'true'. run-boot.sh
+      # reuses boot-artifacts/* WHEN PRESENT, so an older substrate restored via
+      # the prefix would be reused and re-SAVED under the new exact key. Discard
+      # it here so the prime always rebuilds fresh for a changed source-state;
+      # an exact hit (same sources) is kept and reused warm.
+      - name: Discard any inexact (restore-keys) substrate so the prime rebuilds fresh
+        if: steps.substrate_cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf .boot-cache/lab-vax/boot-artifacts \
+                 .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          echo "inexact substrate restore discarded — prime will rebuild the substrate from source"
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      # THE PRIME PROOF + WRITER PAYLOAD: a REAL green sysboot. This builds the
+      # full substrate (cross_build -> build_kernel -> master_system_volume ->
+      # ensure_modular_kernel -> make_boot_copy -> ensure_boot_install) into
+      # boot-artifacts/ + touches the modular-kernel marker, then boots NetBSD/vax
+      # under SIMH PAST the installed-system gate to the PROVISION.EXE exec and
+      # asserts it. Not stubbed: if it fails the prime FAILS and actions/cache
+      # SAVEs nothing (save only runs on job success) -- no bad cache is stored.
+      - name: "Prime — build the OVMX/vax substrate and prove it with a REAL boot to PROVISION.EXE"
+        run: tests/lab-vax/run-boot.sh sysboot
+
+  # -----------------------------------------------------------------------
   # netbsd-vax-devvms (rd vms-f78bb, parent vms-476, epic vms-8e8; P4-B)
   #
   # The RUNTIME proof one rung above netbsd-vax-simh: not just "NetBSD/vax boots"
@@ -6451,7 +6583,7 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     # Heavier than the smoke job: on a cold cache it also cross-builds a custom
@@ -6477,14 +6609,20 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache the built MODULAR kernel (4 MB) so the ~40-min build.sh runs only on
-      # a cold cache, keyed on the kernel-build inputs (the OVMX config + the vax
-      # module-wiring patch + the pinned NetBSD version).
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/devvms-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -6573,7 +6711,7 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -6593,13 +6731,20 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
-      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, eflag-artifacts)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/eflag-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-eflag-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -6706,7 +6851,7 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -6726,13 +6871,20 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
-      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, access-artifacts)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/access-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-access-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -6869,7 +7021,7 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -6889,13 +7041,20 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
-      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, proctab-artifacts)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/proctab-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-proctab-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -6959,7 +7118,7 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -6979,13 +7138,20 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
-      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, mbx-artifacts)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/mbx-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-mbx-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -7044,7 +7210,7 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -7066,14 +7232,20 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache the built MODULAR kernel (4 MB) so the ~40-min build.sh runs only on
-      # a cold cache, keyed on the kernel-build inputs (shared with the sibling
-      # SIMH jobs -- the same kernel).
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -7163,7 +7335,7 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -7183,11 +7355,20 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -7273,7 +7454,7 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
     if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
@@ -7293,11 +7474,20 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+            .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax

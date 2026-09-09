@@ -10,12 +10,13 @@ $! (tools/cross-alpha/SYSTARTUP_VMS_JOINT_PROOF.COM, rd vms-157).
 $!
 $! MILESTONE (rd vms-d4a): during STDRV a DCL RUN activates the REAL elf32-vax
 $! CONSUMER.EXE on the live OVMX/NetBSD-vax executive. IMGACT.EXE
-$! (PT_INTERP=SYS$SYSEXE:IMGACT.EXE) reads the image AND its `.vms$imp`
-$! producers -- the SHIPPED LIBVMS$SHR.EXE (rd vms-c7f7) and this gate's tiny
-$! P4BOOT$SHR.EXE -- OVER THE FILES-11 ACP from the MOUNTED ODS-2 volume.
-$! crt0 -> main runs, calls the REAL purdy_s_hash universal cross-shareable
-$! into LIBVMS$SHR.EXE, prints the value-sensitive result over p4boot_puts
-$! (P4BOOT$SHR.EXE), and exits.
+$! (PT_INTERP=SYS$SYSEXE:IMGACT.EXE) reads the image AND its SINGLE `.vms$imp`
+$! producer -- the SHIPPED LIBVMS$SHR.EXE (rd vms-c7f7) -- OVER THE FILES-11
+$! ACP from the MOUNTED ODS-2 volume. CONSUMER's freestanding _start runs its
+$! body, which calls the REAL purdy_s_hash universal cross-shareable into
+$! LIBVMS$SHR.EXE and prints the value-sensitive result on TWO channels (a
+$! C-RTL printf() over statically-linked NetBSD libc, and a bare write(2)
+$! fallback), then _exit()s with a POSIX code DCL maps to $STATUS.
 $!
 $ SET NOON
 $!

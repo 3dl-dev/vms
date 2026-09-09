@@ -83,7 +83,20 @@ BOOT_TIMEOUT="${BOOT_TIMEOUT:-1800}"
 SESSION_TIMEOUT="${SESSION_TIMEOUT:-2700}"
 TIMEOUT_GRACE="${TIMEOUT_GRACE:-30}"
 
-EXPECT_LINE='OVMX-VAX-SHR-ACT: purdy=0x716cbdc03c071c59'
+# The golden VAX V1 oracle vector (docs/oracle/purdy-hash-vectors.md, #657).
+# The cross-shareable purdy_s_hash returns THIS iff IMGACT genuinely resolved
+# the .vms$imp against the shipped LIBVMS$SHR.EXE's .vms$sv and the call ran.
+GOLDEN='716cbdc03c071c59'
+# CONSUMER.EXE (consumer_main.c) prints the value on TWO channels, so a hit on
+# EITHER proves the call ran and returned the value; the gate reports which:
+#   C-RTL printf channel (rc3.c's console-surfacing shape):
+EXPECT_LINE="OVMX-VAX-SHR-ACT: purdy=0x${GOLDEN}"
+#   bare write(2) fallback channel (self-contained, no stdio init):
+EXPECT_LINE_RAW="OVMX-VAX-SHR-ACT-RAW: purdy=0x${GOLDEN}"
+# The regexp that captures the value printed on EITHER channel, golden or not,
+# so a WRONG value is surfaced as a REAL product finding rather than a silent
+# miss (rd vms-d4a: never force a pass; report the truth).
+VALUE_GREP='OVMX-VAX-SHR-ACT(-RAW)?: purdy=0x[0-9a-f]{16}'
 
 log() { echo "[shr-activation-vax] $*"; }
 die() { echo "[shr-activation-vax] FATAL: $*" >&2; exit 1; }
@@ -92,23 +105,41 @@ die() { echo "[shr-activation-vax] FATAL: $*" >&2; exit 1; }
 # assert_shr_activation <console-log> -- THE TEETH. Pure function over a
 # console transcript; shared verbatim by the real boot run and `selftest`, so
 # the self-test exercises the exact logic that gates the real run.
+#
+# PASSES iff the GOLDEN purdy value surfaced on at least one channel AND no
+# activation-failure signature appears. A value line carrying a DIFFERENT
+# 64-bit hash FAILS loudly and is reported as a real IMGACT/.vms$sv resolution
+# finding (the value-sensitive teeth) -- never swallowed.
 # ---------------------------------------------------------------------------
 assert_shr_activation() {
   local log_file="$1"
   [ -f "$log_file" ] || { echo "  FAIL: no console log at $log_file"; return 1; }
 
-  local hit=0
-  grep -qaF "$EXPECT_LINE" "$log_file" && hit=1
+  # Which channel(s) carried the GOLDEN value?
+  local ch_crtl=0 ch_raw=0
+  grep -qaF "$EXPECT_LINE" "$log_file"     && ch_crtl=1
+  grep -qaF "$EXPECT_LINE_RAW" "$log_file" && ch_raw=1
+  local golden_hit=0
+  [ "$ch_crtl" -eq 1 ] || [ "$ch_raw" -eq 1 ] && golden_hit=1
+
+  # Every value CONSUMER actually printed (golden or not), for the readout.
+  local values
+  values=$(grep -aoE "$VALUE_GREP" "$log_file" 2>/dev/null | sed -E 's/.*=0x//' | sort -u | tr '\n' ' ' || true)
+  # A value line that is NOT the golden one => a real product finding.
+  local wrong=0
+  if [ "$golden_hit" -eq 0 ] && [ -n "$values" ]; then wrong=1; fi
 
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]" "$log_file" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
 
-  echo "  (a) value-sensitive purdy hash line : hit=$hit (want '$EXPECT_LINE')"
+  echo "  (a) golden purdy value surfaced     : hit=$golden_hit (want 0x${GOLDEN}; channels: crtl=$ch_crtl raw=$ch_raw)"
+  echo "      values CONSUMER printed         : [${values:-<none surfaced>}]"
+  [ "$wrong" -eq 1 ] && echo "      *** WRONG VALUE -- cross-shareable resolved to a NON-golden hash: REAL PRODUCT FINDING ***"
   echo "  (b) no activation err               : ok=$err_ok"
   [ "$err_ok" -eq 0 ] && echo "      offending: $(printf '%s' "$errs" | tr '\n' '|')"
 
-  [ "$hit" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  [ "$golden_hit" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
   return 1
 }
 
@@ -119,6 +150,7 @@ assert_shr_activation() {
 GOOD_FIXTURE() {
   cat <<EOF
 VAX-SHR-ACT-PROOF: === RUN CONSUMER (IMGACT resolves .vms\$sv; cross-shareable purdy_s_hash call into the shipped LIBVMS\$SHR.EXE) ===
+$EXPECT_LINE_RAW
 $EXPECT_LINE
 VAX-SHR-ACT-PROOF: STATUS=%X00000001 SEVERITY=1
 EOF
@@ -129,24 +161,33 @@ selftest() {
   local fails=0
 
   GOOD_FIXTURE > "$d/good.log"
-  echo "-- selftest 1/4: GOOD transcript must PASS --"
+  echo "-- selftest 1/5: GOOD transcript (both channels golden) must PASS --"
   if assert_shr_activation "$d/good.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: good transcript rejected"; fails=$((fails+1)); fi
 
+  # Only the C-RTL channel surfaces (the raw fallback did not) -- still a PASS,
+  # since the golden value reached the console on a working channel.
+  GOOD_FIXTURE | grep -v -- "-RAW:" > "$d/crtlonly.log"
+  echo "-- selftest 2/5: only the C-RTL channel golden must PASS --"
+  if assert_shr_activation "$d/crtlonly.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: single-channel golden rejected"; fails=$((fails+1)); fi
+
+  # A WRONG 64-bit value on both channels: the cross-shareable resolved to the
+  # wrong thing -- a REAL product finding, must FAIL (value-sensitive teeth).
   GOOD_FIXTURE | sed 's/716cbdc03c071c59/deadbeefcafef00d/' > "$d/wronghash.log"
-  echo "-- selftest 2/4: wrong hash value must FAIL --"
+  echo "-- selftest 3/5: wrong hash value must FAIL (real product finding) --"
   if assert_shr_activation "$d/wronghash.log" >/dev/null 2>&1; then echo "  FAIL: wrong hash accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   GOOD_FIXTURE | grep -v "purdy=" > "$d/missing.log"
-  echo "-- selftest 3/4: missing sentinel line must FAIL --"
-  if assert_shr_activation "$d/missing.log" >/dev/null 2>&1; then echo "  FAIL: missing sentinel accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
+  echo "-- selftest 4/5: no value line at all must FAIL --"
+  if assert_shr_activation "$d/missing.log" >/dev/null 2>&1; then echo "  FAIL: missing value accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   { echo "VAX-SHR-ACT-PROOF: === RUN CONSUMER ==="
+    echo "$EXPECT_LINE"
     echo '%IMGACT-F-IMGNOTFND, image SYS$SYSTEM:CONSUMER.EXE not found'; } > "$d/imgact.log"
-  echo "-- selftest 4/4: IMGACT activation failure (IMGNOTFND) must FAIL --"
+  echo "-- selftest 5/5: golden value BUT an IMGACT activation failure must FAIL --"
   if assert_shr_activation "$d/imgact.log" >/dev/null 2>&1; then echo "  FAIL: activation failure accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   if [ "$fails" -eq 0 ]; then
-    echo "=== selftest: assert_shr_activation() has teeth (good passes, all 3 breakages red) ==="
+    echo "=== selftest: assert_shr_activation() has teeth (good/single-channel pass, wrong-value + missing + activation-fail red) ==="
     return 0
   fi
   echo "=== selftest FAILED: $fails case(s) wrong -- the gate cannot be trusted ==="
@@ -165,11 +206,11 @@ ensure_images() {
 # Build the four shr-activation artifacts (build-shr-activation-vax.sh).
 build_shr_artifacts() {
   mkdir -p "$SHR_ARTIFACTS_DIR"
-  log "building the shr-activation artifacts (IMGACT.EXE, LIBVMS\$SHR.EXE, P4BOOT\$SHR.EXE, CONSUMER.EXE)"
+  log "building the shr-activation artifacts (IMGACT.EXE, LIBVMS\$SHR.EXE, CONSUMER.EXE)"
   docker run --rm -v "${REPO}:/src:ro" -v "${SHR_ARTIFACTS_DIR}:/out" \
     --entrypoint sh "${CROSS_IMAGE}" \
     /src/tools/cross-vax/build-shr-activation-vax.sh /src /out
-  for f in "IMGACT.EXE" "LIBVMS\$SHR.EXE" "P4BOOT\$SHR.EXE" "CONSUMER.EXE"; do
+  for f in "IMGACT.EXE" "LIBVMS\$SHR.EXE" "CONSUMER.EXE"; do
     [ -s "${SHR_ARTIFACTS_DIR}/${f}" ] || die "shr-activation artifact missing after build: ${f}"
   done
 }
@@ -191,10 +232,10 @@ ensure_substrate() {
 }
 
 # Master THIS gate's own system-volume file: stage_sysvol.sh's ordinary tree
-# (UNMODIFIED, the five standard boot images), overlaid with the four
+# (UNMODIFIED, the five standard boot images), overlaid with the three
 # shr-activation artifacts (SYSEXE/IMGACT.EXE, SYSEXE/CONSUMER.EXE,
-# SYSLIB/LIBVMS$SHR.EXE, SYSLIB/P4BOOT$SHR.EXE) and the proof SYSTARTUP_VMS.COM
-# in place of the Decision-A one. Never touches run-boot.sh's own SYSVOL_IMG.
+# SYSLIB/LIBVMS$SHR.EXE) and the proof SYSTARTUP_VMS.COM in place of the
+# Decision-A one. Never touches run-boot.sh's own SYSVOL_IMG.
 master_shr_activation_volume() {
   log "mastering the shr-activation system volume (stage_sysvol.sh + shr-activation overlay + vmsfs_master)"
   rm -f "${SHR_SYSVOL_IMG}"
@@ -214,18 +255,17 @@ master_shr_activation_volume() {
       cp "/shr/IMGACT.EXE"      /tmp/stage/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE
       cp "/shr/CONSUMER.EXE"    /tmp/stage/SYS0/SYSCOMMON/SYSEXE/CONSUMER.EXE
       cp "/shr/LIBVMS\$SHR.EXE" "/tmp/stage/SYS0/SYSCOMMON/SYSLIB/LIBVMS\$SHR.EXE"
-      cp "/shr/P4BOOT\$SHR.EXE" "/tmp/stage/SYS0/SYSCOMMON/SYSLIB/P4BOOT\$SHR.EXE"
       cp /src/tools/cross-vax/SYSTARTUP_VMS_SHR_ACTIVATION_PROOF.COM \
          /tmp/stage/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM
       /tmp/vmsfs_master --ods2 master /out/'"$(basename "${SHR_SYSVOL_IMG}")"' OVMXSYS /tmp/stage 64
       /tmp/vmsfs_master --ods2 list /out/'"$(basename "${SHR_SYSVOL_IMG}")")"
   echo "${listing}"
   [ -f "${SHR_SYSVOL_IMG}" ] || die "shr-activation system-volume mastering did not produce ${SHR_SYSVOL_IMG}"
-  for f in DCL.EXE PROVISION.EXE IMGACT.EXE CONSUMER.EXE "LIBVMS\$SHR.EXE" "P4BOOT\$SHR.EXE"; do
+  for f in DCL.EXE PROVISION.EXE IMGACT.EXE CONSUMER.EXE "LIBVMS\$SHR.EXE"; do
     echo "${listing}" | grep -qiF "${f}" \
       || die "mastered shr-activation volume is MISSING ${f}"
   done
-  log "OK: shr-activation system volume carries IMGACT.EXE + CONSUMER.EXE + LIBVMS\$SHR.EXE + P4BOOT\$SHR.EXE + the proof SYSTARTUP_VMS.COM"
+  log "OK: shr-activation system volume carries IMGACT.EXE + CONSUMER.EXE + LIBVMS\$SHR.EXE + the proof SYSTARTUP_VMS.COM"
 }
 
 # Boot the standard boot-work disk (rq0) with THIS gate's own mastered

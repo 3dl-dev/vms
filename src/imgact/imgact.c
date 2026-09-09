@@ -125,7 +125,14 @@ static long sys_write(int fd, const void *buf, unsigned long n)
 static void *sys_mmap(void *addr, unsigned long len, int prot, int flags,
 		      int fd, long off)
 {
+#if defined(__vax__)
+	/* NetBSD/vax mmap(2) is an 8-word syscall (padding longword + 64-bit
+	 * off_t), which syscall6() cannot express; the VAX backend supplies a
+	 * dedicated stub with the correct argument layout (rd vms-33b). */
+	return imgact_vax_mmap(addr, len, prot, flags, fd, off);
+#else
 	return (void *)syscall6(SYS_mmap, (long)addr, len, prot, flags, fd, off);
+#endif
 }
 static long sys_mprotect(void *addr, unsigned long len, int prot)
 {
@@ -271,6 +278,20 @@ int fstat(int fd, void *statbuf)
 {
 	return syscall6(IMGACT_SYS_FSTAT, fd, (long)statbuf, 0, 0, 0, 0) < 0 ? -1 : 0;
 }
+#if defined(__vax__)
+/* NetBSD/vax renames fstat() to __fstat50 at the source level: the sysroot
+ * <sys/stat.h> declares `int fstat(int, struct stat *) __RENAME(__fstat50)`
+ * (the 2012 time_t/stat ABI bump). known_images.c includes <sys/stat.h>, so ITS
+ * fstat() call links against __fstat50, whereas imgact.c's own freestanding
+ * calls (no <sys/stat.h>) use the plain name. Alias __fstat50 onto the single
+ * syscall-440 (SYS___fstat50) definition above so one implementation satisfies
+ * both. The struct stat known_images.c passes is the sysroot's *50 layout —
+ * exactly what SYS___fstat50 fills — so this is ABI-matched, not guessed
+ * (rd vms-33b). Hidden visibility keeps the reference link-time-bound (no UND,
+ * no dynamic JMP_SLOT) — the same treatment as the other freestanding shims. */
+extern __typeof(fstat) __fstat50
+	__attribute__((alias("fstat"), visibility("hidden")));
+#endif
 void *mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off)
 {
 	return sys_mmap(addr, len, prot, flags, fd, off);

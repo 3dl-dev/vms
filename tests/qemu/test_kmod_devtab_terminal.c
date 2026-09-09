@@ -58,6 +58,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <termios.h>
 
 #include "vms_kif.h"
 
@@ -204,6 +205,23 @@ int main(int argc, char **argv)
         printf("  FAIL: could not open a real PTY (posix_openpt/grantpt/unlockpt/ptsname)\n");
         printf("=== test_kmod_devtab_terminal: %d passed, %d failed ===\n", pass, fail + 1);
         return 1;
+    }
+    /* Put the PTY into RAW mode before the byte-transport check below. The
+     * slave defaults to CANONICAL (ICANON) line discipline, where read()
+     * blocks until a line terminator; the step-4 probe write sends no newline,
+     * so a canonical slave read() hangs forever -- the exact stall that fired
+     * the whole-VM wall (it happens AFTER the mint + the cross-process $ASSIGN/
+     * $GETDVI checks, which all pass, so it is a test-harness pty bug, not a
+     * vms_devtab.c device bug: the byte transport is a plain POSIX pty and does
+     * not traverse /dev/vms). cfmakeraw clears ICANON+ECHO and sets VMIN=1/
+     * VTIME=0; master and slave share one line-discipline state, so setting it
+     * on the master here (before open(slave) below) applies to the slave read. */
+    {
+        struct termios tio;
+        if (tcgetattr(master_fd, &tio) == 0) {
+            cfmakeraw(&tio);
+            tcsetattr(master_fd, TCSANOW, &tio);
+        }
     }
     /* `backing` (vms_devtab.c) holds the SHORT native name, the same
      * convention as a disk's "vda"/"sdb" -- not a full path. */

@@ -14,6 +14,12 @@
 add_subdirectory(routing)
 add_subdirectory(nsp)
 
+# NCP configuration surface (rd vms-1e9): the persisted node database + the
+# NCP.EXE Network Control Program (SET/DEFINE/SHOW/CLEAR NODE, SET/SHOW
+# EXECUTOR) -- the "configuration" pillar + the node NAME<->address resolution
+# the SET HOST / NODE:: paths resolve through.
+add_subdirectory(ncp)
+
 # CTERM layer (rd vms-4d2, rung 3): the Command Terminal protocol behind
 # $ SET HOST -- the terminal-service layered product that rides on an
 # established NSP logical link (nsp/dnet_link). Pure codec + session FSM,

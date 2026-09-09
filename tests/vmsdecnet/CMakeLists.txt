@@ -57,3 +57,12 @@ add_executable(test_dnet_engine test_dnet_engine.c)
 target_link_libraries(test_dnet_engine PRIVATE vmsdecnet_engine)
 target_compile_options(test_dnet_engine PRIVATE -Werror)
 add_test(NAME vmsdecnet_engine_unit COMMAND test_dnet_engine)
+
+# rd vms-1e9: the NCP node database (the configuration surface's persisted node
+# table) + name<->address resolution. Address parse/range, DEFINE/SET add +
+# update, node-name uniqueness, case-insensitive resolution, SHOW ordering,
+# persistence round-trip + corrupt-file handling. Warning-clean under -Werror.
+add_executable(test_dnet_nodedb test_dnet_nodedb.c)
+target_link_libraries(test_dnet_nodedb PRIVATE vmsdecnet_nodedb)
+target_compile_options(test_dnet_nodedb PRIVATE -Werror)
+add_test(NAME vmsdecnet_nodedb_unit COMMAND test_dnet_nodedb)

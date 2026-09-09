@@ -12,10 +12,12 @@ summary: >
   three file organizations. Sequential and Relative are real end to end. Cross-process
   locking, formerly the facility-wide gap (vms-407), is now real on the ACP path:
   file-level share arbitration (vms-50e) and per-record locking (vms-0dd) both run
-  through the executive DLM ($ENQ/$DEQ, RMS$_RLK on conflict). The remaining material
-  gap is Indexed, which is single-key only — a multi-key ISAM program silently sees the
-  primary key alone. (Non-ACP/POSIX-defer handles hold no lock, honestly documented.)
-last_reviewed: 2026-08-31
+  through the executive DLM ($ENQ/$DEQ, RMS$_RLK on conflict). Indexed (ISAM) is
+  multi-key over the ACP path: alternate keys are authored from the XABKEY chain and
+  read by key-of-reference via SIDR descent (honest narrower gap: index key compression
+  is rejected fail-honest, RMS$_PLG). (Non-ACP/POSIX-defer handles hold no lock, honestly
+  documented.)
+last_reviewed: 2026-09-09
 items:
   # --- Entry points: open/create/erase ---
   - {id: sys$open,       kind: routine, status: implemented, authenticity: real, vms: "Open an existing file", evidence: src/vmsrms/rms_core.c, notes: "local open() on caller fd; filespec resolves via executive LNM$SYSTEM (vms-96e2)"}
@@ -55,5 +57,5 @@ items:
   # --- File organizations ---
   - {id: rms$org_sequential, kind: feature, status: implemented, authenticity: real, vms: "Sequential file organization", evidence: src/vmsrms/rms_seq.c, notes: "all 7 record formats incl. VFC control area, VAR word-alignment"}
   - {id: rms$org_relative,   kind: feature, status: implemented, authenticity: real, vms: "Relative file organization", evidence: src/vmsrms/rms_rel.c, notes: "status-byte cells; record locking now via the DLM (see rms$record_locking)"}
-  - {id: rms$org_indexed,    kind: feature, status: partial, authenticity: facade-risk, vms: "Indexed (ISAM) file organization", evidence: src/vmsrms/rms_idx.c, notes: "primary key only per rms_idx.c's own header comment"}
-  - {id: rms$isam_alternate_key, kind: feature, status: absent, authenticity: facade-risk, vms: "ISAM alternate-key access (RAB$B_REF)", evidence: src/vmsrms/rms_idx.c, notes: "entirely unimplemented (zero hits) — a multi-key ISAM program silently only ever sees the primary key, breaking common COBOL/DIBOL business-app patterns"}
+  - {id: rms$org_indexed,    kind: feature, status: implemented, authenticity: real, vms: "Indexed (ISAM) file organization", evidence: src/vmsrms/rms_prolog3.c, notes: "genuine Files-11 Prolog-3 over the ACP: primary + alternate keys authored from the XABKEY chain (rms_idx_author_p3, rms_core.c:1940/2137) and read by key-of-reference via SIDR descent (rms_p3_get_by_key, rms_prolog3.c:389). Honest narrower gap: index key compression rejected fail-honest (RMS$_PLG). The primary-key-only limitation was the DEAD .rms_idx sidecar (executive-absent defer, vms-165), not the live path (corrected vms-df8)"}
+  - {id: rms$isam_alternate_key, kind: feature, status: implemented, authenticity: real, vms: "ISAM alternate-key access (RAB$B_REF)", evidence: src/vmsrms/rms_prolog3.c, notes: "RAB$B_REF key-of-reference is real over the ACP: secondaries authored from the XABKEY chain, read via SIDR descent (rms_p3_get_by_key -> rms_p3_sidr_lookup). Proven byte-exact by tests/vmsrms/test_prolog3_seckey.c (create + add secondary + rebind sees 2 keys + SIDR byte-exact across bucket splits/dup/delete-purge; host-runnable ctest vmsrms_prolog3_seckey). Was falsely reported absent/facade-risk against the dead rms_idx.c sidecar (corrected vms-df8)"}

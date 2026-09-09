@@ -1020,6 +1020,11 @@ uint32_t sys$create(void *fab, void (*err)(void *), void (*suc)(void *));
 /** sys$erase - Erase (delete) file (cb=FAB) */
 uint32_t sys$erase(void *fab, void (*err)(void *), void (*suc)(void *));
 
+/** sys$rename - Atomically rename/move a file (cb=old FAB, new FAB) -- ACP
+ *  MODIFY!IO$M_MOVE, keeps the File ID (vms-3320). Four-argument VMS form. */
+uint32_t sys$rename(void *old_fab, void (*err)(void *), void (*suc)(void *),
+                    void *new_fab);
+
 /** sys$parse - Parse file specification (cb=FAB with NAM/NAML) */
 uint32_t sys$parse(void *fab, void (*err)(void *), void (*suc)(void *));
 

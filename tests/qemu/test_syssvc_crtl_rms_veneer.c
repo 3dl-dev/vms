@@ -39,6 +39,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <fcntl.h>          /* vms-3320: O_* for ovmx_crtl_open */
 
 #include "vms_kif.h"
 #include "rms/rms.h"
@@ -217,12 +218,145 @@ int main(void)
     }
 
     /* ================================================================= *
-     * 5. Isolation — erase the file so the fixture is restored.         *
+     * 5. FILE-OP VENEER (vms-3320): decc$creat/open/unlink/remove/rename/ *
+     *    opendir/readdir/closedir over RMS, each proven by the SAME       *
+     *    INDEPENDENT ACP reader a ramfs cannot fake.                      *
+     * ================================================================= */
+#define CREATNAME  "CVENEER.DAT"
+#define CREATSPEC  DIRSPEC CREATNAME
+#define RENSRC     DIRSPEC "RENSRC.DAT"
+#define RENDST     DIRSPEC "RENDST.DAT"
+#define DIRA       DIRSPEC "ENUMA.DAT"
+#define DIRB       DIRSPEC "ENUMB.DAT"
+
+    /* --- 5.1 creat mints a real ODS-2 file the independent reader sees. --- */
+    erase_spec(CREATSPEC ";*");
+    int cfd = ovmx_crtl_creat(CREATSPEC, 0);
+    check(cfd >= OVMX_CRTL_FD_BASE,
+          "5.1a: ovmx_crtl_creat -> sys$create over the ACP, returns a veneer fd");
+    if (cfd >= 0) ovmx_crtl_fdclose(cfd);
+    {
+        uint16_t cfid = 0; char ctail[128]; uint32_t cend = 0;
+        int cn = search_one(CREATSPEC ";*", &cfid, ctail, sizeof(ctail), &cend);
+        check(cn == 1,
+              "5.1b: independent sys$search finds the creat-minted file "
+              "(ramfs cannot appear on the ACP directory)");
+        check(cfid != 0,
+              "5.1c: the creat file carries a genuine nonzero ODS-2 File ID");
+        check(strstr(ctail, ";1") != NULL,
+              "5.1d: creat minted version ;1 (a genuine ODS-2 create)");
+        printf("  [independent ACP reader] creat resultant='%s' fid=(%u,...)\n",
+               ctail, cfid);
+    }
+
+    /* --- 5.2 unlink removes it; the independent reader sees it GONE. --- */
+    check(ovmx_crtl_unlink(CREATSPEC ";*") == 0,
+          "5.2a: ovmx_crtl_unlink -> sys$erase NORMAL");
+    check(search_one(CREATSPEC ";*", NULL, NULL, 0, &endst) == 0,
+          "5.2b: independent sys$search finds the unlinked file GONE "
+          "(a real ODS-2 directory-entry removal)");
+
+    /* --- 5.3 open(O_CREAT) mints; remove() (ISO C) deletes; reader agrees. --- */
+    {
+        erase_spec(CREATSPEC ";*");
+        int ofd = ovmx_crtl_open(CREATSPEC, O_CREAT | O_WRONLY | O_TRUNC);
+        check(ofd >= OVMX_CRTL_FD_BASE,
+              "5.3a: ovmx_crtl_open(O_CREAT) -> sys$create, returns a veneer fd");
+        if (ofd >= 0) ovmx_crtl_fdclose(ofd);
+        uint16_t ofid = 0;
+        check(search_one(CREATSPEC ";*", &ofid, NULL, 0, &endst) == 1 && ofid != 0,
+              "5.3b: independent reader sees the open(O_CREAT) file with a File ID");
+        check(ovmx_crtl_remove(CREATSPEC ";*") == 0,
+              "5.3c: ovmx_crtl_remove -> sys$erase NORMAL");
+        check(search_one(CREATSPEC ";*", NULL, NULL, 0, &endst) == 0,
+              "5.3d: independent reader sees the removed file GONE");
+    }
+
+    /* --- 5.4 rename: the ATOMIC re-link keeps the SAME File ID (teeth). --- */
+    {
+        erase_spec(RENSRC ";*");
+        erase_spec(RENDST ";*");
+        /* Create the source through the proven stdio veneer, capture its FID. */
+        OVMX_CRTL_FILE *sf = ovmx_crtl_fopen(RENSRC, "w");
+        check(sf != NULL, "5.4a: create RENSRC.DAT (fopen->sys$create)");
+        if (sf) { ovmx_crtl_fwrite("RENAMEME", 1, 8, sf); ovmx_crtl_fclose(sf); }
+        uint16_t src_fid = 0;
+        check(search_one(RENSRC ";*", &src_fid, NULL, 0, &endst) == 1 && src_fid != 0,
+              "5.4b: independent reader sees RENSRC.DAT with File ID X");
+
+        check(ovmx_crtl_rename(RENSRC, RENDST) == 0,
+              "5.4c: ovmx_crtl_rename -> sys$rename (ACP MODIFY!M_MOVE) NORMAL");
+
+        check(search_one(RENSRC ";*", NULL, NULL, 0, &endst) == 0,
+              "5.4d: independent reader sees the OLD name RENSRC.DAT GONE");
+        uint16_t dst_fid = 0; char dtail[128];
+        int dn = search_one(RENDST ";*", &dst_fid, dtail, sizeof(dtail), &endst);
+        check(dn == 1,
+              "5.4e: independent reader sees the NEW name RENDST.DAT present");
+        check(dst_fid != 0 && dst_fid == src_fid,
+              "5.4f: RENDST.DAT carries the SAME File ID as RENSRC had -- proves "
+              "an ATOMIC directory-entry re-link, NOT erase+create (a new FID)");
+        printf("  [independent ACP reader] rename: RENSRC fid=(%u,...) -> "
+               "RENDST '%s' fid=(%u,...) SAME=%s\n",
+               src_fid, dtail, dst_fid, (src_fid == dst_fid) ? "YES" : "NO");
+        /* On-disk header confirms the moved file keeps its FID + allocation. */
+        struct rms_fileattr rattr; memset(&rattr, 0, sizeof rattr);
+        uint32_t rst = rms_file_attr(RENDST, &rattr);
+        check($VMS_STATUS_SUCCESS(rst) && rattr.fid_num == src_fid,
+              "5.4g: RENDST.DAT on-disk header File ID == the source's (two "
+              "independent readers agree the file kept its FID)");
+        erase_spec(RENDST ";*");
+    }
+
+    /* --- 5.5 opendir/readdir enumerate the REAL ODS-2 directory entries. --- */
+    {
+        erase_spec(DIRA ";*");
+        erase_spec(DIRB ";*");
+        OVMX_CRTL_FILE *fa = ovmx_crtl_fopen(DIRA, "w");
+        if (fa) ovmx_crtl_fclose(fa);
+        OVMX_CRTL_FILE *fb = ovmx_crtl_fopen(DIRB, "w");
+        if (fb) ovmx_crtl_fclose(fb);
+        check(fa != NULL && fb != NULL, "5.5a: create ENUMA.DAT + ENUMB.DAT");
+
+        OVMX_CRTL_DIR *dp = ovmx_crtl_opendir(DIRSPEC);
+        check(dp != NULL, "5.5b: ovmx_crtl_opendir(dir) -> sys$parse over the ACP");
+        int saw_a = 0, saw_b = 0, fid_a = 0, fid_b = 0, total = 0;
+        if (dp) {
+            struct ovmx_crtl_dirent *e;
+            while ((e = ovmx_crtl_readdir(dp)) != NULL) {
+                total++;
+                if (strstr(e->d_name, "ENUMA.DAT")) { saw_a = 1; fid_a = e->d_fileid; }
+                if (strstr(e->d_name, "ENUMB.DAT")) { saw_b = 1; fid_b = e->d_fileid; }
+            }
+            check(ovmx_crtl_closedir(dp) == 0,
+                  "5.5c: ovmx_crtl_closedir -> rms_search_end (context released)");
+        }
+        check(saw_a && saw_b,
+              "5.5d: readdir enumerated BOTH real ODS-2 entries by name");
+        check(fid_a != 0 && fid_b != 0 && fid_a != fid_b,
+              "5.5e: each enumerated entry carries its genuine (distinct) File ID");
+        /* Cross-check against the independent single-file searches. */
+        uint16_t ia = 0, ib = 0;
+        search_one(DIRA ";*", &ia, NULL, 0, &endst);
+        search_one(DIRB ";*", &ib, NULL, 0, &endst);
+        check((uint16_t)fid_a == ia && (uint16_t)fid_b == ib,
+              "5.5f: readdir's File IDs match the independent sys$search File IDs "
+              "(same genuine ODS-2 directory, two readers agree)");
+        printf("  [independent ACP reader] readdir enumerated %d entries; "
+               "ENUMA fid=%d (search %u), ENUMB fid=%d (search %u)\n",
+               total, fid_a, ia, fid_b, ib);
+        erase_spec(DIRA ";*");
+        erase_spec(DIRB ";*");
+    }
+
+    /* ================================================================= *
+     * 6. Isolation — erase the stdio-veneer file so the fixture is       *
+     *    restored.                                                       *
      * ================================================================= */
     st = erase_spec(VSPEC ";*");
-    check($VMS_STATUS_SUCCESS(st), "5a: sys$erase VENEER.DAT (isolation)");
+    check($VMS_STATUS_SUCCESS(st), "6a: sys$erase VENEER.DAT (isolation)");
     check(search_one(VSPEC ";*", NULL, NULL, 0, &endst) == 0,
-          "5b: a final search finds NONE (fixture restored)");
+          "6b: a final search finds NONE (fixture restored)");
 
     free(buf);
 

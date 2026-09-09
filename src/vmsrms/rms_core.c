@@ -56,6 +56,11 @@
  * OVMX-PARTIAL: sys$extend (vms-bc7) -- exec: IO$_MODIFY allocates fab$l_alq
  *     more blocks (BITMAP.SYS + FH2 retrieval-pointer append) without moving EOF.
  * OVMX-LOCAL: sys$extend -- validates the caller's own FAB before the request.
+ * OVMX-PARTIAL: sys$rename (vms-de7) -- exec: ONE IO$_MODIFY!IO$M_MOVE atomically
+ *     re-links the directory entry to the new name, keeping the same File ID
+ *     (not erase+create), proof=tests/qemu/test_syssvc_crtl_rms_veneer.c.
+ * OVMX-LOCAL: sys$rename -- resolves the old/new filespecs and validates both
+ *     FABs in this process; the executive-absent path defers to rename(2) (vms-5f0).
  * OVMX-PARTIAL: sys$connect (vms-407) -- exec: $DEQs the RAB's
  *     stashed record lkid (_rec_lock_lkid) if a prior lock survived from
  *     before this $CONNECT, a real vms_kif_deq -- guards a reconnect without
@@ -194,6 +199,8 @@ static uint32_t rms_impl_create(void *fab_ptr);
 static uint32_t rms_posix_open(struct FAB *fab);
 static uint32_t rms_posix_create(struct FAB *fab);
 static uint32_t rms_posix_erase(struct FAB *fab);
+static uint32_t rms_posix_rename(struct FAB *ofab, struct FAB *nfab);   /* vms-3320 */
+static uint32_t rms_impl_rename(void *old_ptr, void *new_ptr);          /* vms-3320 */
 static void rms_posix_close(struct FAB *fab, int deleting, uint32_t *close_sts);
 static int rms_resolve_version(const char *path, char *out, size_t outlen);
 /* rms_resolve_spec (filespec + default merge) is defined further down; the ACP
@@ -2498,6 +2505,159 @@ static uint32_t rms_posix_erase(struct FAB *fab)
 }
 
 /*
+ * sys$rename - Atomically rename/move a file (vms-3320).
+ *
+ * The OLD FAB names the source spec, the NEW FAB the target. On the executive
+ * (ACP) path this drives ONE IO$_MODIFY!IO$M_MOVE (vms-de7): the source
+ * {directory, name, version} entry is re-linked to the target
+ * {directory, name, version}, and the file KEEPS its File ID and allocation --
+ * NOT erase+create, which would be non-atomic and mint a new FID. This is the
+ * faithful decc$rename ("atomic output finalization") the GCC port needs.
+ *
+ * FAIL-HONEST (INV-6 / Rule 9): the real SS$/RMS$ status; no POSIX fallback on
+ * the executive-present path. The rms_acp_absent() defer to rms_posix_rename is
+ * the SAME atomic-flip host/netbsd defer sys$erase/$open/$create take (vms-5f0):
+ * reached only when /dev/vms is unreachable (host ctest / plain-container gates
+ * / netbsd-vax cross), never a runtime state under a live executive.
+ */
+static uint32_t rms_impl_rename(void *old_ptr, void *new_ptr)
+{
+    struct FAB *ofab = (struct FAB *)old_ptr;
+    struct FAB *nfab = (struct FAB *)new_ptr;
+    if (!ofab || ofab->fab$b_bid != FAB$C_BID ||
+        !nfab || nfab->fab$b_bid != FAB$C_BID) {
+        return RMS$_FAB;
+    }
+
+#if defined(OVMX_HAVE_ACP)
+    {
+        struct rms_acp_spec ospecs[RMS_ACP_MAX_CANDS];
+        struct rms_acp_spec nspecs[RMS_ACP_MAX_CANDS];
+        struct vms_acp_fileop_args fop;
+        uint32_t chan = 0, st = SS$_NOSUCHFILE;
+        int onc, nnc, done = 0;
+
+        /* ATOMIC-FLIP DEFER (vms-5f0): executive absent => legacy POSIX rename. */
+        if (rms_acp_absent())
+            return rms_posix_rename(ofab, nfab);
+
+        onc = rms_acp_specs_from_fab(ofab, ospecs, RMS_ACP_MAX_CANDS);
+        nnc = rms_acp_specs_from_fab(nfab, nspecs, RMS_ACP_MAX_CANDS);
+        if (onc < 0 || nnc < 0) {
+            ofab->fab$l_sts = RMS$_SYN;
+            return RMS$_SYN;
+        }
+
+        /* Rename has a SINGLE target (not a search-list op): use the first new
+         * candidate. Try each source candidate in order; the first that
+         * resolves + moves wins (mirrors sys$erase's candidate walk). */
+        for (int i = 0; i < onc && !done; i++) {
+            struct rms_acp_spec *os = &ospecs[i];
+            struct rms_acp_spec *ns = &nspecs[0];
+
+            chan = 0;
+            st = vms_kif_acp_assign(os->devnam, &chan);
+            if (!$VMS_STATUS_SUCCESS(st))
+                continue;
+
+            memset(&fop, 0, sizeof(fop));
+            fop.chan      = chan;
+            fop.func      = VMS_ACP_FOP_MODIFY;
+            fop.modifiers = VMS_ACP_M_MOVE;      /* atomic directory-entry re-link */
+
+            /* Source directory (FIB$W_DID) + name + version (0 => highest). */
+            st = rms_acp_resolve_did(chan, os->dirpath, &fop.did_num,
+                                     &fop.did_seq, &fop.did_rvn, &fop.did_nmx);
+            if (!$VMS_STATUS_SUCCESS(st)) {
+                vms_kif_dassgn(chan);
+                continue;                        /* source dir absent in this member */
+            }
+            fop.version = os->version;           /* 0 => highest existing */
+            strncpy(fop.name, os->name, VMS_ACP_NAME_SIZE - 1);
+
+            /* Target directory: resolve only when it differs from the source
+             * (0/0 new_did => the executive uses the SAME directory). */
+            if (ns->dirpath[0] &&
+                strcmp(ns->dirpath, os->dirpath) != 0) {
+                uint16_t nd = 0, nseq = 0; uint8_t nrvn = 0, nnmx = 0;
+                st = rms_acp_resolve_did(chan, ns->dirpath, &nd, &nseq,
+                                         &nrvn, &nnmx);
+                if (!$VMS_STATUS_SUCCESS(st)) {
+                    vms_kif_dassgn(chan);
+                    continue;                    /* target dir absent */
+                }
+                fop.new_did_num = nd;
+                fop.new_did_nmx = nnmx;
+            }
+            strncpy(fop.new_name, ns->name, VMS_ACP_NAME_SIZE - 1);
+            fop.new_version = ns->version;       /* 0 => highest existing + 1 */
+
+            st = vms_kif_acp_fileop(&fop);
+            vms_kif_dassgn(chan);
+            if ($VMS_STATUS_SUCCESS(st))
+                done = 1;
+        }
+
+        if (!done) {
+            ofab->fab$l_stv = st;
+            ofab->fab$l_sts = (st == SS$_NOSUCHFILE) ? RMS$_FNF
+                            : (st == SS$_NOPRIV)     ? RMS$_PRV
+                                                     : RMS$_ACC;
+            return ofab->fab$l_sts;
+        }
+        ofab->fab$l_sts = RMS$_NORMAL;
+        ofab->fab$l_stv = 0;
+        nfab->fab$l_sts = RMS$_NORMAL;
+        nfab->fab$l_stv = 0;
+        return RMS$_NORMAL;
+    }
+#else
+    return rms_posix_rename(ofab, nfab);
+#endif
+}
+
+/*
+ * rms_posix_rename - the executive-absent legacy rename body (rename(2) on the
+ * resolved host paths). netbsd-vax record backend / __linux__ defer target
+ * (vms-5f0). NOT the runtime path under a live /dev/vms (INV-6).
+ */
+static uint32_t rms_posix_rename(struct FAB *ofab, struct FAB *nfab)
+{
+    char oldpath[1024];   /* == FAB._resolved_path size */
+    if (resolve_for_open(ofab) < 0) {
+        ofab->fab$l_sts = RMS$_SYN;
+        return RMS$_SYN;
+    }
+    strncpy(oldpath, ofab->_resolved_path, sizeof(oldpath) - 1);
+    oldpath[sizeof(oldpath) - 1] = '\0';
+
+    if (resolve_for_open(nfab) < 0) {
+        ofab->fab$l_sts = RMS$_SYN;
+        return RMS$_SYN;
+    }
+
+    if (rename(oldpath, nfab->_resolved_path) < 0) {
+        ofab->fab$l_stv = (uint32_t)errno;
+        switch (errno) {
+            case ENOENT:
+                ofab->fab$l_sts = RMS$_FNF;
+                return RMS$_FNF;
+            case EACCES:
+            case EPERM:
+                ofab->fab$l_sts = RMS$_PRV;
+                return RMS$_PRV;
+            default:
+                ofab->fab$l_sts = RMS$_ACC;
+                return RMS$_ACC;
+        }
+    }
+    ofab->fab$l_sts = RMS$_NORMAL;
+    ofab->fab$l_stv = 0;
+    nfab->fab$l_sts = RMS$_NORMAL;
+    return RMS$_NORMAL;
+}
+
+/*
  * sys$connect - Connect a RAB to its FAB, establishing a record stream.
  *
  * Initializes the internal stream state in the RAB. Validates the
@@ -2830,6 +2990,14 @@ uint32_t sys$close(void *fab, void (*err)(void *), void (*suc)(void *))
 uint32_t sys$erase(void *fab, void (*err)(void *), void (*suc)(void *))
 {
     return rms_complete(rms_impl_erase(fab), fab, err, suc);
+}
+
+/* Four-argument VMS form: SYS$RENAME old_fab,[err],[suc],new_fab. The optional
+ * completion routine is dispatched on the OLD (primary) FAB, as on OpenVMS. */
+uint32_t sys$rename(void *old_fab, void (*err)(void *), void (*suc)(void *),
+                    void *new_fab)
+{
+    return rms_complete(rms_impl_rename(old_fab, new_fab), old_fab, err, suc);
 }
 
 uint32_t sys$connect(void *rab, void (*err)(void *), void (*suc)(void *))

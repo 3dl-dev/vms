@@ -8214,6 +8214,86 @@ jobs:
           echo "PASS: LINK.EXE emits elf32-vax ET_DYN .vms\$sv/.vms\$imp shareables (R_VAX_* relocs applied); LP64 output byte-unchanged"
 
   # -----------------------------------------------------------------------
+  # vmslink-vax-exec (rd vms-099, epic vms-404 P3b follow-on). Per-PR, fast,
+  # link-only (no SIMH): closes the CONSUMER half P3a/P3b deferred. Proves
+  # LINKVAX.EXE (src/vmslink/link.c -DOVMX_LINK_ELF32) emits a valid elf32-vax
+  # EXECUTABLE — a static-PIE-style ET_DYN with a synthesized VAX crt0 entry,
+  # PT_INTERP=IMGACT.EXE (NEVER ld.elf_so), and a .vms$imp that imports a
+  # `.vms$sv` producer shareable (LIBVAXPROD$SHR.EXE) — with every R_VAX_*
+  # relocation APPLIED in-image (no leftover dynamic R_VAX_*). Also re-gates
+  # that the DEFAULT (LP64) build's x86_64 --executable output is unchanged
+  # (additive). readelf-shape only — the SIMH runtime-activation proof of the
+  # resulting consumer is P4 (vms-d4a). Mirrors the vmslink-vax job above.
+  # -----------------------------------------------------------------------
+  vmslink-vax-exec:
+    name: LINK.EXE VMS-native Linker — elf32-vax --executable consumer (vms-099 / vms-404 P3b)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch), falling through to a gha-cached source
+      # build on a miss. Identical pattern to the vmslink-vax job above.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Prove LINKVAX.EXE (-DOVMX_LINK_ELF32) emits an elf32-vax --executable consumer (crt0 + PT_INTERP=IMGACT.EXE + .vms$imp) + the LP64 gate stays additive
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax sh src/vmslink/test/run_test_vax_exec.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: elf32-vax LINKVAX.EXE --executable proof exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL LINKVAX.EXE elf32-vax --executable CHECKS PASSED' \
+            || { echo "FAIL: did not see the elf32-vax --executable PASS banner"; exit 1; }
+          echo "PASS: LINKVAX.EXE emits an elf32-vax ET_DYN consumer (crt0 + PT_INTERP=IMGACT.EXE + .vms\$imp -> producer; R_VAX_* relocs applied); LP64 --executable output unchanged"
+
+  # -----------------------------------------------------------------------
   # vax-shipped-shareable-packaging (rd vms-c7f7, epic vms-404 P3b;
   # docs/design/vax-symbol-vector-imgact.md P3). Per-PR, fast, build-only (no
   # SIMH): proves tools/cross-vax/build-vax-shareable-graph.sh builds the
@@ -8225,11 +8305,10 @@ jobs:
   # the SIMH runtime-activation proof is P4, gated separately.
   #
   # NOT proven here (honest scope, see the scripts' own header comments): a
-  # genuine elf32-vax PT_INTERP=IMGACT.EXE CONSUMER of this shareable.
-  # LINKVAX.EXE's elf32-vax `--executable` emit is not implemented (it fails
-  # honestly: "%LINK-F-ERROR, elf32-vax --executable emit is vms-404 P3b/P4,
-  # not P3a") -- that is link.c work, explicitly out of P3b's packaging-only
-  # scope, tracked as a separate follow-on blocking P4.
+  # genuine elf32-vax PT_INTERP=IMGACT.EXE CONSUMER of this shareable. That
+  # consumer emit — LINKVAX.EXE's elf32-vax `--executable` (crt0 + PT_INTERP=
+  # IMGACT.EXE) — is now implemented (vms-099) and proven readelf-shape by the
+  # vmslink-vax-exec job above; its SIMH runtime-activation proof is P4 (vms-d4a).
   # -----------------------------------------------------------------------
   vax-shipped-shareable-packaging:
     name: VAX ships the VMS-format shareable graph (vms-c7f7 / vms-404 P3b)

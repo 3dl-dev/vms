@@ -1,0 +1,40 @@
+13:02:37.344331 aa:00:04:00:01:04 > ab:00:00:03:00:00, ethertype DN (0x6003), length 60: endnode-hello endnode vers 2 eco 0 ueco 0 src 1.1 blksize 1498 rtr 0.0 hello 15 data 2
+13:02:38.679836 aa:00:04:00:02:04 > ab:00:00:03:00:00, ethertype DN (0x6003), length 60: endnode-hello endnode vers 2 eco 0 ueco 0 src 1.2 blksize 1498 rtr 0.0 hello 15 data 2
+13:02:52.363398 aa:00:04:00:01:04 > ab:00:00:03:00:00, ethertype DN (0x6003), length 60: endnode-hello endnode vers 2 eco 0 ueco 0 src 1.1 blksize 1498 rtr 0.0 hello 15 data 2
+13:02:53.704192 aa:00:04:00:02:04 > ab:00:00:03:00:00, ethertype DN (0x6003), length 60: endnode-hello endnode vers 2 eco 0 ueco 0 src 1.2 blksize 1498 rtr 0.0 hello 15 data 2
+13:03:00.544483 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 67: 1.1 > 1.2 51 conn-initiate 8193>0 ver 4.1 segsize 1459 
+13:03:00.544760 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 25  (nsplen 3 < 5) (invalid)
+13:03:00.545943 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 32 conn-confirm 8193>8193 ver 4.1 segsize 1459 
+13:03:00.546082 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 33 link-service 8193>8193  (invalid)
+13:03:00.546486 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 33 link-service 8193>8193  (invalid)
+13:03:00.546748 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 29 ils-ack 8193>8193  (invalid)
+13:03:00.546775 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 39 data 8193>8193 ack 0 seg 1 
+13:03:00.547280 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 64: 1.1 > 1.2 48 data 8193>8193 ack 1 seg 1 
+13:03:00.547872 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 82: 1.2 > 1.1 66 data 8193>8193 ack 1 seg 2 
+13:03:00.547934 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 42 data 8193>8193 ack 1 seg 3 
+13:03:00.548130 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 104: 1.1 > 1.2 88 data 8193>8193 ack 2 seg 2 
+13:03:00.548218 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 62: 1.1 > 1.2 46 data 8193>8193 ack 2 seg 3 
+13:03:00.548324 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 29 data-ack 8193>8193  (invalid)
+13:03:00.548358 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 62: 1.2 > 1.1 46 data 8193>8193 ack 2 seg 4 
+13:03:00.548428 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 29 data-ack 8193>8193  (invalid)
+13:03:00.548648 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 29 data-ack 8193>8193  (invalid)
+13:03:00.548807 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 73: 1.1 > 1.2 57 data 8193>8193 ack 4 seg 4 
+13:03:00.556116 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 97: 1.2 > 1.1 81 data 8193>8193 ack 4 seg 5 
+13:03:00.556171 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 75: 1.2 > 1.1 59 data 8193>8193 ack 4 seg 6 
+13:03:00.556545 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 29 data-ack 8193>8193  (invalid)
+13:03:00.557217 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 77: 1.1 > 1.2 61 data 8193>8193 ack 6 seg 5 
+13:03:00.567241 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 80: 1.2 > 1.1 64 data 8193>8193 ack 5 seg 7 
+13:03:03.379799 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 29 data-ack 8193>8193  (invalid)
+13:03:06.317915 aa:00:04:00:02:04 > ab:00:00:02:00:00, ethertype MOP RC (0x6002), length 60: 
+	0x0000:  2400 0700 0000 0100 0303 0000 0200 0241  $..............A
+	0x0010:  0007 0006 0800 2b45 161a 6400 014b 9001  ......+E..d..K..
+	0x0020:  0101 c800 01ff 0000 0000 0000 0000       ..............
+13:03:06.768654 aa:00:04:00:01:04 > ab:00:00:02:00:00, ethertype MOP RC (0x6002), length 60: 
+	0x0000:  2400 0700 0000 0100 0303 0000 0200 0241  $..............A
+	0x0010:  0007 0006 0800 2b21 6999 6400 014b 9001  ......+!i.d..K..
+	0x0020:  0101 c800 01ff 0000 0000 0000 0000       ..............
+13:03:07.372177 aa:00:04:00:01:04 > ab:00:00:03:00:00, ethertype DN (0x6003), length 60: endnode-hello endnode vers 2 eco 0 ueco 0 src 1.1 blksize 1498 rtr 0.0 hello 15 data 2
+13:03:08.719088 aa:00:04:00:02:04 > ab:00:00:03:00:00, ethertype DN (0x6003), length 60: endnode-hello endnode vers 2 eco 0 ueco 0 src 1.2 blksize 1498 rtr 0.0 hello 15 data 2
+13:03:20.379037 aa:00:04:00:01:04 > aa:00:04:00:02:04, ethertype DN (0x6003), length 60: 1.1 > 1.2 43 data 8193>8193 ack 7 seg 6 
+13:03:20.387949 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 112: 1.2 > 1.1 96 data 8193>8193 ack 6 seg 8 
+13:03:20.389224 aa:00:04:00:02:04 > aa:00:04:00:01:04, ethertype DN (0x6003), length 60: 1.2 > 1.1 34 data 8193>8193 ack 6 seg 9 

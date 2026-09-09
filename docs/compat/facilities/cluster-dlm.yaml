@@ -59,7 +59,7 @@ items:
     status: verified
     authenticity: real
     vms: "Async DLM replies (queued-reply + deferred GRANT) delivered over SCS; requester-side completion"
-    evidence: src/vmsscs/scsd.c
+    evidence: src/kernel-core/vms_dlm_scs_fsm.c
     verified_against: "tests/qemu/run_dlm_harness_h5.sh (two-node A<->B live /dev/vms: SCSD-I-DLMPEND, SCSD-I-DLMDEFER, SCSD-I-DLMH5FLIP granted_mode=EX)"
     notes: >
       vms-6ca rung H5. The master's async replies ride the live SCS wire: node B
@@ -114,8 +114,8 @@ items:
     status: verified
     authenticity: real
     vms: "DLM SYSAP SCS connection + lock-request message class (ENQ/GRANT/DEQ/BLKAST/REBUILD/DLKSRCH) between cluster nodes"
-    evidence: src/vmsscs/scs_dlm.c
-    verified_against: "tests/qemu/run_dlm_harness_h0.sh..ec75 (H0..H11 on real /dev/vms); src/vmsscs codec ctests (scs_dlm frame encode/decode + op-name validators)"
+    evidence: src/kernel-core/vms_cluster_codec_dlm.c
+    verified_against: "tests/qemu/run_dlm_harness_h0.sh..ec75 (H0..H11 on real /dev/vms); tests/cluster/host/test_codec_dlm.c (DLM frame encode/decode + op validators)"
     notes: >
       vms-94c rung 1, extended through H11. A DLM message rides as a p.4-13 SCS
       application message (MTYPE 10) with its body at SCA content offset 58 (the

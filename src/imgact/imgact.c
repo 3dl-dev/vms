@@ -363,6 +363,35 @@ static void vms_fatal(const char *ident, const char *text, const char *detail)
 		xstrcat(line, "\n");
 		eputs(line);
 	}
+#ifdef OVMX_IMGACT_BIND_TRACE
+	/* vms-d4a option (a): IMGACT's eputs above goes to fd 2, which is NOT
+	 * console-wired for a RUN'd child -- so an IMGACT activation failure is
+	 * SILENT on the console (why no %IMGACT-F ever surfaced). Mirror the reason
+	 * to /dev/console directly. Fires ONLY on an actual IMGACT failure, which
+	 * during a healthy boot happens only for the CONSUMER activation (the boot
+	 * images activate cleanly), so it does not interleave with boot milestones.
+	 * Diagnostic reason text only -- never the purdy hash. */
+	{
+		char cl[512];
+		cl[0] = 0;
+		xstrcat(cl, "OVMX-IMGACT-FAIL: %IMGACT-F-");
+		xstrcat(cl, ident);
+		xstrcat(cl, ", ");
+		xstrcat(cl, text);
+		if (detail) {
+			xstrcat(cl, " (file: ");
+			xstrcat(cl, detail);
+			xstrcat(cl, ")");
+		}
+		xstrcat(cl, "\n");
+		long cfd = sys_openat("/dev/console", O_WRONLY | O_NOCTTY);
+		if (cfd >= 0) {
+			sys_write((int)cfd, cl, xstrlen(cl));
+			if (cfd > 2)
+				sys_close((int)cfd);
+		}
+	}
+#endif
 }
 
 /* IMGACT condition-value severities: fatal exits use a nonzero status. */

@@ -374,6 +374,7 @@ case "$MODE" in
     # (assert_shr_activation) is UNCHANGED, so this cannot fake a golden result.
     {
       echo "---- vms-d4a option (a) bind-trace (diagnostic, non-gating) ----"
+      grep -aE 'OVMX-IMGACT-FAIL:' "$WORK/shr-activation-boot.log" || echo "  (no OVMX-IMGACT-FAIL -- IMGACT did NOT hit a vms_fatal path; if \$STATUS=%X2C then it's the DCL generic-nonzero-exit fallback = CONSUMER activated + returned nonzero, NOT an IMGACT failure)"
       grep -aE 'OVMX-IMGACT-BIND-ENTER:' "$WORK/shr-activation-boot.log" || echo "  (no OVMX-IMGACT-BIND-ENTER -- bind_imports never ran for CONSUMER; IMGACT failed UPSTREAM of import binding, or the CONSUMER argv0-scope did not match)"
       grep -aE 'OVMX-IMGACT-BIND:' "$WORK/shr-activation-boot.log" || echo "  (no OVMX-IMGACT-BIND store line -- either count=0 [see ENTER], a %IMGACT-F-GSMATCH resolve-fail, or bind_imports did not reach the store)"
       grep -aE 'OVMX-VAX-SHR-ACT(-CON|-RAW)?: purdy=0x[0-9a-f]{16}' "$WORK/shr-activation-boot.log" || echo "  (no purdy= value line)"

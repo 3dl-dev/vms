@@ -121,8 +121,16 @@ rm -f "$DISK" "$LOG" "$FIFO"
 cp "$DISTRIB_IMG" "$DISK"
 mkfifo "$FIFO"
 
-# Whole-VM hard cap: boot + a settle + ~13 commands, each bounded by CMD_TIMEOUT.
-WALL=$((BOOT_TIMEOUT + CMD_TIMEOUT * 16 + 120))
+# Whole-VM hard cap: boot + a settle + ~13 commands, each bounded by CMD_TIMEOUT,
+# plus the session-primitive section (vms-3e9): a LOGOUT, a second console
+# session to reach Username: again (up to 60s of CR feeding, as at boot), a
+# second login and three more commands.
+#
+# vms-3e9 adds the console login-sequence gate at the FRONT of the battery: a
+# console quiet-settle plus a deliberate idle-at-the-prompt probe longer than
+# LOGIN_INPUT_TIMEOUT_SEC (30s), to prove the idle login prompt is really
+# disconnected. That is ~90s of WAIT, so the cap grows by 120.
+WALL=$((BOOT_TIMEOUT + CMD_TIMEOUT * 20 + 360))
 
 cleanup() { exec 4>&- 2>/dev/null || true; [ -n "${QPID:-}" ] && kill "$QPID" 2>/dev/null; rm -f "$FIFO"; }
 trap cleanup EXIT

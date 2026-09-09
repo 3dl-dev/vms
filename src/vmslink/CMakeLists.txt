@@ -157,6 +157,9 @@ if(OVMX_LINK_NATIVE)
         # LOGINOUT.EXE's extra TUs, linked in by mk_loginout.sh (vms-417).
         ${CMAKE_SOURCE_DIR}/tools/loginout_display.c
         ${CMAKE_SOURCE_DIR}/tools/loginout_display.h
+        # Header-only, so it adds no TU to mk_loginout.sh -- but it IS a source
+        # LOGINOUT.EXE is built from, so a change to it must re-link (vms-3e9).
+        ${CMAKE_SOURCE_DIR}/tools/login_input.h
         ${CMAKE_SOURCE_DIR}/tools/mail_notify.c
         ${CMAKE_SOURCE_DIR}/tools/vms_mail_notify.h
     )

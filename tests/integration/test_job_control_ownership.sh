@@ -45,9 +45,20 @@ if [ ! -f "$INIT_C" ]; then
 else
     # These four symbols are the login loop's own signature: the retry/
     # backoff counter, the two message facilities its diagnostics use, and
-    # the direct exec of LOGINOUT.EXE. None may appear in PID 1's source.
+    # the session-creation flag it passes $CREPRC. None may appear in PID 1's
+    # source.
+    #
+    # vms-3e9 changed the fourth: the login loop used to reach LOGINOUT.EXE by
+    # `execl(loginout_path` and that literal was this gate's marker for "the
+    # loop is here". JOB_CONTROL no longer execs anything -- it calls $CREPRC
+    # with PRC$M_INTER|PRC$M_LOGINOUT and the exec lives inside that service
+    # -- so the marker moved with the loop. A raw exec of LOGINOUT drifting
+    # back into PID 1 is caught by the STRONGER, dedicated scan in
+    # tests/integration/test_creprc_session_primitive.sh, which forbids
+    # fork/execl/openpty/dup2 in EVERY session-creating caller (PID 1
+    # included), not just this one literal in this one file.
     for sig in "consecutive_failures" "STARTUP-F-LOGINFAIL" "OVMX-E-NOLOGIN" \
-               "execl(loginout_path"; do
+               "PRC\$M_INTER"; do
         if grep -qF -- "$sig" "$INIT_C"; then
             echo "FAIL: $INIT_C still contains '$sig' -- the login loop is back in PID 1"
             status=1
@@ -63,7 +74,7 @@ if [ ! -f "$JC_C" ]; then
     echo "FAIL: $JC_C not found -- JOB_CONTROL.EXE has no source"
     status=1
 else
-    for sig in "consecutive_failures" "execl(loginout_path"; do
+    for sig in "consecutive_failures" "PRC\$M_INTER"; do
         if ! grep -qF -- "$sig" "$JC_C"; then
             echo "FAIL: $JC_C is missing '$sig' -- the login loop did not move here"
             status=1

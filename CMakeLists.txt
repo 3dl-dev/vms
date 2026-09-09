@@ -418,6 +418,20 @@ if(BUILD_TESTS)
     set_tests_properties(job_control_ownership_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-3e9 standing gate: $CREPRC is the SOLE session-creation primitive --
+    # no fork/execl/openpty/dup2 survives ABOVE the VMS layer in any session
+    # caller, the mechanics really did move INTO $CREPRC, and the Wall-6
+    # ordering (establish_system before image activation) holds. Source scan;
+    # the runtime proof -- a NON-SYSTEM SYSUAF account logging in at the
+    # console and reading its own UIC/privileges/terminal back out of the
+    # executive -- is the "SESSION PRIMITIVE (vms-3e9)" section of the shared
+    # acceptance battery, which runs on x86_64, Alpha AND the VAX rail.
+    add_test(NAME creprc_session_primitive_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_creprc_session_primitive.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(creprc_session_primitive_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # vms-2a9 standing gate: JOB_CONTROL is created by a registered STDRV
     # component (SYS$STARTUP:VMS$VMS.DAT, CONFIG phase), not a hardcoded
     # call from a site file. Source scan — no build artifacts needed. The

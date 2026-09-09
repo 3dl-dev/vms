@@ -35,8 +35,12 @@
  * render the authentic %RMS- status text. */
 #include "rmsdef.h"
 #include "ovmx_status.h"
-/* The OpenVMS-faithful post-authentication login-info block (vms-417). */
+/* The OpenVMS-faithful post-authentication login-info block (vms-417), and the
+ * pre-Username system-identification line (vms-3e9). */
 #include "loginout_display.h"
+/* The prompt reader: one line, with the LGI-style idle deadline, plus the
+ * substrate-independent type-ahead drain (vms-3e9). */
+#include "login_input.h"
 /* New-mail count for the login notification (vms-417). */
 #include "vms_mail_notify.h"
 
@@ -53,37 +57,40 @@
 /* str_upcase() and str_trim() replaced by str_str_upcase()/str_trim() from str_util.h */
 
 /* ------------------------------------------------------------------ */
-/* Read password with echo disabled                                   */
+/* Read one prompt response, with the LGI-style idle deadline          */
 /* ------------------------------------------------------------------ */
-static int read_password(char *buf, size_t bufsiz)
+/*
+ * THE LOGIN SEQUENCE IS BOUNDED IN TIME (vms-3e9). Both prompts are read
+ * through login_read_line_timed(), which gives up after
+ * LOGIN_INPUT_TIMEOUT_SEC seconds of an unfinished response -- the public
+ * OpenVMS LGI_PWD_TMO behaviour and its default value (see login_input.h for
+ * the citation and for why the deadline is a compiled-in constant rather than
+ * a fabricated SYSGEN row).
+ *
+ * BEFORE THIS, NEITHER PROMPT HAD A DEADLINE ON ANY ARCH: a console left at
+ * "Username:" held the session open forever, and JOB_CONTROL -- which watches
+ * the session it created and creates the next one when it ends -- had nothing
+ * to observe. The read is the only place a deadline can live, because that is
+ * where the session is idle.
+ *
+ * ON EXPIRY THE SESSION IS DISCONNECTED SILENTLY, which is the existing
+ * MAX_ATTEMPTS behaviour and the same VMS rule: LOGINOUT prints no farewell
+ * when it drops a connection, so an invented "login timed out" line would be a
+ * self-certified VMS message (CLAUDE.md Rule 10, the same defect vms-417
+ * deleted from the MAX_ATTEMPTS path). The disconnect is real, not cosmetic:
+ * console_login() returns, main() returns, the image exits, and JOB_CONTROL
+ * creates a fresh session on OPA0: -- which is what a real disconnect looks
+ * like from the terminal.
+ */
+static int read_prompt_response(char *buf, size_t bufsiz, int hide)
 {
-    struct termios old_term, new_term;
-    int have_term = 0;
-
-    /* Turn off echo (only if stdin is a terminal) */
-    if (isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &old_term) == 0) {
-        new_term = old_term;
-        new_term.c_lflag &= ~(tcflag_t)ECHO;
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &new_term);
-        have_term = 1;
-    }
-
-    /* Read the line */
-    if (fgets(buf, (int)bufsiz, stdin) == NULL) {
-        if (have_term)
-            tcsetattr(STDIN_FILENO, TCSAFLUSH, &old_term);
-        return -1;
-    }
-
-    /* Restore terminal */
-    if (have_term) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &old_term);
-        /* Print a newline (since echo was off) */
-        putchar('\n');
-    }
+    int rc = login_read_line_timed(STDIN_FILENO, buf, bufsiz, hide,
+                                   STDOUT_FILENO, LOGIN_INPUT_TIMEOUT_SEC);
+    if (rc != LOGIN_READ_OK)
+        return rc;
 
     str_trim(buf);
-    return 0;
+    return LOGIN_READ_OK;
 }
 
 /* ------------------------------------------------------------------ */
@@ -518,6 +525,51 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
 }
 
 /* ------------------------------------------------------------------ */
+/* Is this LOGINOUT sitting at an operator's terminal?                 */
+/* ------------------------------------------------------------------ */
+/*
+ * THE ASYMMETRY THIS FIXES (vms-3e9, operator-measured on a real VAX boot).
+ * The OPA0: wake below used to be gated on isatty(STDIN_FILENO) alone. That
+ * predicate is TRUE on the QEMU virtio console the x86_64 and aarch64 rails
+ * boot on and FALSE on the SIMH serial line the OVMX/NetBSD-vax rail boots on,
+ * so the wake -- and, with it, the type-ahead drain and the ECHO restore that
+ * live inside the same guard -- was silently skipped on the VAX and nowhere
+ * else. The VAX console printed "Username:" with no RETURN wait, and every
+ * proof of the wake was written on an arch where it happened to work: the
+ * exact x86_64-green/VAX-broken shape [[asymmetric-arch-red-is-real]].
+ *
+ * THE FIX IS TO ASK THE EXECUTIVE, NOT THE SUBSTRATE. "Am I an interactive
+ * process?" is a VMS question with a VMS answer: an interactive process is one
+ * BOUND TO A TERMINAL DEVICE, and since vms-3e9 that binding is established by
+ * $CREPRC PRC$M_INTER and RECORDED in the executive's process table
+ * ($ASSIGN + VMS_IOCTL_SETTERM, src/libvms/syssvc/sys_process.c
+ * creprc_bind_terminal), where $GETJPI reads it back. So LOGINOUT reads its own
+ * row: a non-empty JPI terminal name means the session was created ON a
+ * terminal device, on every arch, whatever the substrate calls the descriptor.
+ * This is the same rule src/vmsdcl/dcl_main.c's comment lays down for the
+ * terminal identity -- "the fix is the executive-resident process/terminal
+ * binding; anything else is this same defect wearing a different name".
+ *
+ * isatty() REMAINS AS A SECOND YES, never as the only one. An image started
+ * outside $CREPRC's interactive mode (a developer running LOGINOUT.EXE at a
+ * shell) has no executive terminal row but is genuinely at a terminal, and
+ * must still get the console behaviour. A SCRIPTED LOGINOUT -- the VMS-native
+ * login image test, src/imgact/test/run_login_native.sh, which feeds a session
+ * file on stdin -- has NEITHER, so it still skips the wake and does not lose
+ * its first input line to it, exactly as before.
+ */
+static int loginout_at_operator_terminal(void)
+{
+    struct vms_procinfo pi;
+
+    memset(&pi, 0, sizeof(pi));
+    if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0] != '\0')
+        return 1;
+
+    return isatty(STDIN_FILENO) ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
 /* Console mode: interactive login with username/password prompts      */
 /* ------------------------------------------------------------------ */
 static int console_login(void)
@@ -571,22 +623,39 @@ static int console_login(void)
      * RE-ENABLE ECHO just before "Username:" (below), so the operator's typed
      * username shows again.
      *
-     * CONSOLE ONLY. The wait is gated on an interactive terminal: JOB_CONTROL
-     * execs this image with stdin bound to the physical console (OPA0: ->
-     * /dev/console, SYS$STARTUP:JOB_CONTROL_STARTUP.COM), so isatty() is true
-     * exactly on the operator-console login path. A scripted/piped LOGINOUT
-     * (e.g. the VMS-native login image test, src/imgact/test/run_login_native.
-     * sh, which feeds a session file on stdin) has no operator to wait for and
-     * must NOT consume its first input line as the wake keystroke -- so it is
+     * CONSOLE ONLY. The wait is gated on the session being at an operator's
+     * TERMINAL -- loginout_at_operator_terminal() above, which asks the
+     * EXECUTIVE whether this process is bound to a terminal device and only
+     * then falls back to isatty(). $CREPRC PRC$M_INTER created this session on
+     * OPA0: and recorded that binding, so the gate is true on the
+     * operator-console login path on EVERY arch; the bare isatty() it replaces
+     * was true only where the substrate happened to present the console as a
+     * tty, which skipped this whole block on the VAX rail. A scripted/piped
+     * LOGINOUT (e.g. the VMS-native login image test, src/imgact/test/
+     * run_login_native.sh, which feeds a session file on stdin) has neither an
+     * executive terminal row nor a tty, has no operator to wait for, and must
+     * NOT consume its first input line as the wake keystroke -- so it is still
      * skipped there. A CR/RETURN (or any first line) wakes the session; EOF
      * before that means the connection closed with nobody there, so give up.
+     *
+     * NO DEADLINE ON THE WAKE, deliberately, unlike the prompts below: a VMS
+     * operator console offered but not used is a system waiting for its
+     * operator, not an idle login attempt, and timing it out would only make
+     * JOB_CONTROL respawn the session forever.
      */
-    if (isatty(STDIN_FILENO)) {
-        int c;
-        while ((c = getchar()) != EOF && c != '\n')
-            ;
-        if (c == EOF)
-            return 1;
+    if (loginout_at_operator_terminal()) {
+        char c;
+        ssize_t n;
+
+        for (;;) {
+            n = read(STDIN_FILENO, &c, 1);
+            if (n < 0 && (errno == EINTR || errno == EAGAIN))
+                continue;
+            if (n <= 0)
+                return 1;              /* EOF: connection closed, nobody there */
+            if (c == '\n')
+                break;
+        }
         /*
          * DISCARD TYPE-AHEAD QUEUED DURING THE (LONG) BOOT (vms-3ab8).
          *
@@ -608,10 +677,18 @@ static int console_login(void)
          * NEXT keystroke, as a VMS operator console does. This is OVMX
          * console-handling behaviour (CLAUDE.md Rule 8), not a claimed
          * byte-level VMS terminal-driver detail: stdin is unbuffered
-         * (setvbuf _IONBF above), so there is no stdio buffer to reconcile and
-         * tcflush() discards the kernel tty input queue directly.
+         * (setvbuf _IONBF above), so there is no stdio buffer to reconcile.
+         *
+         * WHY NOT tcflush() ALONE any more (vms-3e9). tcflush() empties the
+         * TERMINAL's input queue and is a no-op on a descriptor the substrate
+         * does not present as a terminal -- so on the VAX rail's SIMH serial
+         * console the queued RETURNs survived it and the machine-gun came back
+         * on one arch only. login_drain_typeahead() still issues the tcflush
+         * where there is a tty to flush, and then drains whatever is
+         * immediately readable with a zero-timeout poll(), which works the same
+         * on a tty, a serial line and a pipe.
          */
-        tcflush(STDIN_FILENO, TCIFLUSH);
+        login_drain_typeahead(STDIN_FILENO, 64 * 1024);
         /*
          * RE-ENABLE ECHO for the real "Username:" prompt (vms-dec). PID 1
          * turned the console's ECHO OFF for the whole boot so the operator's
@@ -619,10 +696,11 @@ static int console_login(void)
          * echoed as blank-line "newline spam" (boot_console_disable_echo() in
          * src/ovmx_init/ovmx_init.c). This is the point where the operator's
          * typing must show again, so turn ECHO back on. Idempotent and
-         * console-only (inside the isatty() guard): a scripted/piped LOGINOUT
-         * never reaches here. If the console still had ECHO on (some substrate
-         * where PID 1's disable did not take), this is a harmless no-op and the
-         * prompt still echoes.
+         * console-only (inside the operator-terminal guard): a scripted/piped
+         * LOGINOUT never reaches here, and on a descriptor with no termios at
+         * all the tcgetattr() simply fails and nothing is changed. If the
+         * console still had ECHO on (some substrate where PID 1's disable did
+         * not take), this is a harmless no-op and the prompt still echoes.
          */
         {
             struct termios t;
@@ -633,26 +711,52 @@ static int console_login(void)
         }
     }
 
-    /* SYS$ANNOUNCE -- displayed once before the first Username: prompt.
-     * Undefined by default, in which case nothing is printed (VMS). */
+    /*
+     * THE SYSTEM-IDENTIFICATION LINE, ONCE, IMMEDIATELY BEFORE "Username:"
+     * (vms-3e9). The oracle console prints it exactly here -- identification,
+     * blank line, prompt (docs/design-boot-faithful.md §3.5) -- and OVMX
+     * printed NOTHING here on any arch: the only identity a user saw before
+     * logging in was the boot banner PID 1 emitted minutes earlier, which has
+     * usually scrolled away by the time the prompt appears, and on a
+     * re-offered session (JOB_CONTROL creating the next one after a logout or
+     * a timeout) it never appears at all.
+     *
+     * THREE DISTINCT EMISSIONS, one each: the boot banner (PID 1,
+     * display_boot_banner()), this identification line (LOGINOUT, here) and
+     * the post-authentication SYS$WELCOME (start_session(), below). See
+     * loginout_display.h for the oracle citation, the INV-0 wording and why
+     * this line must not be confusable with the SYS$WELCOME one.
+     *
+     * EVERY VALUE COMES FROM THE IDENTITY SSOT (INV-1): the product name, the
+     * architecture this build actually runs on and the product version are
+     * read from ovmx_identity.h's accessors. Nothing here knows a version.
+     */
+    loginout_display_system_identification(stdout, OVMX_PRODUCT_NAME,
+                                           ovmx_hw_arch(),
+                                           ovmx_product_version(),
+                                           OVMX_COMPAT_BADGE);
+
+    /* SYS$ANNOUNCE -- the SITE's own announcement, displayed once before the
+     * first Username: prompt. Undefined by default, in which case nothing is
+     * printed (VMS). */
     ovmx_banner_announce(stdout);
 
     while (attempts < MAX_ATTEMPTS) {
-        /* Prompt for username */
+        /* Prompt for username. Bounded by the LGI-style idle deadline: on
+         * expiry the session is disconnected silently (read_prompt_response). */
         printf("Username: ");
         fflush(stdout);
-        if (fgets(username, sizeof(username), stdin) == NULL)
-            return 1;  /* EOF */
-        str_trim(username);
+        if (read_prompt_response(username, sizeof(username), 0) != LOGIN_READ_OK)
+            return 1;  /* EOF, or the idle deadline expired */
         str_upcase(username);
 
         if (username[0] == '\0')
             continue;
 
-        /* Prompt for password */
+        /* Prompt for password (echo suppressed), same deadline. */
         printf("Password: ");
         fflush(stdout);
-        if (read_password(password, sizeof(password)) < 0)
+        if (read_prompt_response(password, sizeof(password), 1) != LOGIN_READ_OK)
             return 1;
 
         /*

@@ -23,7 +23,11 @@
 #include <string.h>
 #include <time.h>
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include "loginout_display.h"
+#include "login_input.h"  /* the prompt reader + type-ahead drain (vms-3e9) */
 #include "test_paths.h"   /* generated: VMS_LOGIN_SRC, VMS_DCL_MAIN_SRC */
 
 static int failures = 0;
@@ -40,6 +44,23 @@ static void capture(char *buf, size_t bufsz,
     FILE *fp = tmpfile();
     if (!fp) { perror("tmpfile"); exit(2); }
     loginout_display_session_info(fp, li, ln, fails, mail);
+    long n = ftell(fp);
+    if (n < 0) n = 0;
+    if ((size_t)n >= bufsz) n = (long)bufsz - 1;
+    rewind(fp);
+    size_t got = fread(buf, 1, (size_t)n, fp);
+    buf[got] = '\0';
+    fclose(fp);
+}
+
+/* Capture loginout_display_system_identification() output into 'buf'. */
+static void capture_ident(char *buf, size_t bufsz, const char *product,
+                          const char *arch, const char *version,
+                          const char *badge)
+{
+    FILE *fp = tmpfile();
+    if (!fp) { perror("tmpfile"); exit(2); }
+    loginout_display_system_identification(fp, product, arch, version, badge);
     long n = ftell(fp);
     if (n < 0) n = 0;
     if ((size_t)n >= bufsz) n = (long)bufsz - 1;
@@ -136,6 +157,152 @@ int main(void)
               "non-interactive-only: exact line, interactive omitted");
     }
 
+    /* ================================================================
+     * (a) THE PRE-Username: SYSTEM-IDENTIFICATION LINE (vms-3e9).
+     * ================================================================ */
+
+    /* ---- Shape: oracle order/indent, every value the caller supplied ---- */
+    capture_ident(buf, sizeof(buf), "OpenVMX", "VAX", "V0.0-test",
+                  "OpenVMS-compatible");
+    CHECK(strcmp(buf,
+                 "\n Welcome to the OpenVMX VAX Operating System, "
+                 "Version V0.0-test (OpenVMS-compatible)\n\n") == 0,
+          "identification: blank line, ONE leading space, product/arch/version/badge, blank line");
+
+    /*
+     * ---- THE ANTI-HOLLOWING GUARD, and it is load-bearing ----
+     *
+     * ~30 runtime gates use the substring 'Welcome to <product>' as their
+     * PROOF THAT A LOGIN SUCCEEDED (it is the SYS$WELCOME default, printed
+     * only after the password is accepted). This line is printed BEFORE the
+     * Username: prompt, so if it ever matched that substring every one of
+     * those gates would pass without a login ever happening. Reword this line
+     * and this assertion reds -- which is the point: the collision must be
+     * caught here, not discovered as a silently-hollow battery.
+     */
+    CHECK(strstr(buf, "Welcome to OpenVMX") == NULL,
+          "identification: NOT matched by the SYS$WELCOME login-success token 'Welcome to <product>'");
+    CHECK(strstr(buf, "Welcome to the OpenVMX") != NULL,
+          "identification: does say 'Welcome to the <product>' (the deliberate one-word difference)");
+
+    /* ---- INV-0: no bare 'OpenVMS <version>' identity claim ---- */
+    CHECK(strstr(buf, "Welcome to OpenVMS") == NULL,
+          "identification: never claims to BE OpenVMS (INV-0 trademark ceiling)");
+
+    /* ---- Omission, never invention (INV-6) ---- */
+    capture_ident(buf, sizeof(buf), "OpenVMX", NULL, "V0.0-test", NULL);
+    CHECK(strcmp(buf,
+                 "\n Welcome to the OpenVMX Operating System, "
+                 "Version V0.0-test\n\n") == 0,
+          "identification: unknown arch and absent badge are OMITTED, not guessed");
+
+    capture_ident(buf, sizeof(buf), "OpenVMX", "VAX", NULL, "OpenVMS-compatible");
+    CHECK(buf[0] == '\0',
+          "identification: no version -> NOTHING printed (a half-known identity is not completed)");
+
+    capture_ident(buf, sizeof(buf), "", "VAX", "V0.0-test", "OpenVMS-compatible");
+    CHECK(buf[0] == '\0',
+          "identification: no product -> NOTHING printed");
+
+    /* ================================================================
+     * (c) THE LGI-STYLE IDLE DEADLINE ON THE LOGIN PROMPTS (vms-3e9).
+     *
+     * Exercised against a REAL descriptor (a pipe), not a stub: the
+     * poll()/read() deadline is the mechanism LOGINOUT runs, so the same
+     * code path decides these results as decides a console login.
+     * ================================================================ */
+    {
+        int pfd[2];
+        char line[16];
+
+        /* --- a complete line arrives -> LOGIN_READ_OK, trailing CR eaten --- */
+        CHECK(pipe(pfd) == 0, "idle deadline: test pipe created");
+        CHECK(write(pfd[1], "SYSTEM\r\n", 8) == 8, "idle deadline: line written");
+        CHECK(login_read_line_timed(pfd[0], line, sizeof(line), 0, pfd[1], 5)
+                  == LOGIN_READ_OK,
+              "prompt read: a complete line reads OK");
+        CHECK(strcmp(line, "SYSTEM") == 0,
+              "prompt read: the line is delivered without CR/LF");
+        close(pfd[0]); close(pfd[1]);
+
+        /* --- NOTHING arrives -> the deadline expires (this is the feature) --- */
+        CHECK(pipe(pfd) == 0, "idle deadline: second test pipe created");
+        {
+            long long t0 = login_now_ms();
+            int rc = login_read_line_timed(pfd[0], line, sizeof(line), 0,
+                                           pfd[1], 1);
+            long long elapsed = login_now_ms() - t0;
+            CHECK(rc == LOGIN_READ_TIMEOUT,
+                  "prompt read: an idle prompt times out (LGI_PWD_TMO behaviour)");
+            /* NEGATIVE CONTROL: it must actually have WAITED. A stub that
+             * returned TIMEOUT immediately would pass the line above and be
+             * useless as a login deadline. */
+            CHECK(elapsed >= 900,
+                  "NEGCTL: the timeout really waited the full window (>=900ms for a 1s deadline)");
+            CHECK(line[0] == '\0',
+                  "prompt read: a timed-out prompt yields no partial response");
+        }
+        close(pfd[0]); close(pfd[1]);
+
+        /* --- a HALF-TYPED response still times out (the deadline covers the
+         *     whole response, not just the first keystroke) --- */
+        CHECK(pipe(pfd) == 0, "idle deadline: third test pipe created");
+        CHECK(write(pfd[1], "SYST", 4) == 4, "idle deadline: partial line written");
+        CHECK(login_read_line_timed(pfd[0], line, sizeof(line), 0, pfd[1], 1)
+                  == LOGIN_READ_TIMEOUT,
+              "prompt read: a half-typed response times out too (partial input is not a response)");
+        close(pfd[0]); close(pfd[1]);
+
+        /* --- EOF (the connection closed with nothing typed) --- */
+        CHECK(pipe(pfd) == 0, "idle deadline: fourth test pipe created");
+        close(pfd[1]);
+        CHECK(login_read_line_timed(pfd[0], line, sizeof(line), 0, pfd[0], 5)
+                  == LOGIN_READ_EOF,
+              "prompt read: EOF is reported as EOF, not as a timeout");
+        close(pfd[0]);
+
+        /* --- an over-long line is truncated AND fully consumed, so its tail
+         *     cannot be read back as the next prompt's response --- */
+        CHECK(pipe(pfd) == 0, "idle deadline: fifth test pipe created");
+        CHECK(write(pfd[1], "ABCDEFGHIJKLMNOPQRSTUVWXYZ\nNEXT\n", 32) == 32,
+              "idle deadline: over-long line written");
+        CHECK(login_read_line_timed(pfd[0], line, sizeof(line), 0, pfd[1], 5)
+                  == LOGIN_READ_OK,
+              "prompt read: an over-long response still reads OK");
+        CHECK(strcmp(line, "ABCDEFGHIJKLMNO") == 0,
+              "prompt read: over-long response truncated to the buffer");
+        CHECK(login_read_line_timed(pfd[0], line, sizeof(line), 0, pfd[1], 5)
+                  == LOGIN_READ_OK && strcmp(line, "NEXT") == 0,
+              "prompt read: the NEXT line is the next response (no tail leaks into it)");
+        close(pfd[0]); close(pfd[1]);
+    }
+
+    /* ================================================================
+     * (b) THE TYPE-AHEAD DRAIN IS SUBSTRATE-INDEPENDENT (vms-3e9).
+     *
+     * On the VAX rail the console is not a tty, so tcflush() discarded
+     * nothing and the RETURNs struck during the boot came back as a burst of
+     * empty usernames. The drain must work on a NON-TTY descriptor -- which
+     * is exactly what this pipe is.
+     * ================================================================ */
+    {
+        int pfd[2];
+        char line[16];
+
+        CHECK(pipe(pfd) == 0, "type-ahead drain: test pipe created");
+        CHECK(!isatty(pfd[0]),
+              "NEGCTL: the drain is being tested on a NON-tty descriptor (where tcflush does nothing)");
+        CHECK(write(pfd[1], "\n\n\n\n\n", 5) == 5,
+              "type-ahead drain: five queued RETURNs written");
+        login_drain_typeahead(pfd[0], 64 * 1024);
+        CHECK(write(pfd[1], "SYSTEM\n", 7) == 7,
+              "type-ahead drain: the operator then types a username");
+        CHECK(login_read_line_timed(pfd[0], line, sizeof(line), 0, pfd[1], 5)
+                  == LOGIN_READ_OK && strcmp(line, "SYSTEM") == 0,
+              "type-ahead drain: the queued RETURNs are gone -- the first read is the typed username, not an empty one");
+        close(pfd[0]); close(pfd[1]);
+    }
+
     /* ---- Source guard: invented strings stay deleted ---- */
     {
         char *login = slurp(VMS_LOGIN_SRC);
@@ -147,6 +314,38 @@ int main(void)
                   "vms_login.c: invented 'Maximum login attempts exceeded' is gone");
             CHECK(strstr(login, "Welcome to OpenVMS") == NULL,
                   "vms_login.c: no hardcoded 'Welcome to OpenVMS' identity (INV-0)");
+
+            /* vms-3e9 (a): the identification line is emitted, and it is
+             * emitted BEFORE the Username: prompt, not after it. */
+            {
+                const char *ident = strstr(login,
+                        "loginout_display_system_identification(stdout");
+                const char *prompt = strstr(login, "printf(\"Username: \")");
+                CHECK(ident != NULL,
+                      "vms_login.c: emits the pre-Username system-identification line (vms-3e9 a)");
+                CHECK(prompt != NULL,
+                      "vms_login.c: still prints the Username: prompt");
+                CHECK(ident && prompt && ident < prompt,
+                      "vms_login.c: the identification line precedes the Username: prompt");
+            }
+
+            /* vms-3e9 (b): the console wake is gated on the EXECUTIVE's
+             * terminal binding, not on a bare isatty() the VAX rail answers
+             * FALSE. The predicate keeps isatty as a fallback INSIDE itself,
+             * so what must not come back is the bare `if (isatty(...))' wake. */
+            CHECK(strstr(login, "loginout_at_operator_terminal()") != NULL,
+                  "vms_login.c: the OPA0: wake asks the executive whether this session is on a terminal (vms-3e9 b)");
+            CHECK(strstr(login, "if (isatty(STDIN_FILENO)) {") == NULL,
+                  "vms_login.c: the bare isatty()-gated wake (x86_64-true, VAX-false) is gone");
+            CHECK(strstr(login, "login_drain_typeahead(STDIN_FILENO") != NULL,
+                  "vms_login.c: type-ahead is drained substrate-independently, not by tcflush alone");
+
+            /* vms-3e9 (c): both prompts carry the idle deadline. */
+            CHECK(strstr(login, "LOGIN_INPUT_TIMEOUT_SEC") != NULL,
+                  "vms_login.c: the login prompts carry the LGI-style idle deadline (vms-3e9 c)");
+            CHECK(strstr(login, "fgets(username") == NULL,
+                  "vms_login.c: the deadline-less fgets() username read is gone");
+
             free(login);
         }
     }

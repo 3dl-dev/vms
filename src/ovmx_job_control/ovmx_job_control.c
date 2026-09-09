@@ -52,6 +52,41 @@
  * dcl_resolve_path's existing Linux-path passthrough, which sys_assign.c's
  * own comment already names /dev/console as the physical device behind
  * OPA0:).
+ *
+ * ============================================================================
+ * HOW THE SESSION IS CREATED (vms-3e9; design record docs/design/
+ * faithful-sessions-and-network-subsystems.md §3.1/§6-P1)
+ * ============================================================================
+ * Through $CREPRC, and through nothing else. This program used to reach
+ * LOGINOUT.EXE by a raw fork() + execl() -- a disclosed Linux leak, flagged in
+ * its own comment as "the authentic-shape follow-up" -- with the terminal
+ * arriving by inherited descriptors and the SYSTEM identity established by the
+ * forked child itself. All of that is now ONE VMS system service call:
+ *
+ *     $CREPRC image=SYS$SYSTEM:LOGINOUT.EXE, input/output/error=OPA0:,
+ *             stsflg=PRC$M_INTER|PRC$M_LOGINOUT
+ *
+ * -- "create a process running LOGINOUT.EXE bound to terminal-device OPA0:".
+ * The fork(), the execve(), the open() of the terminal's backing, the dup2()s
+ * and the controlling-terminal claim all live INSIDE that service
+ * (src/libvms/syssvc/sys_process.c), below the VMS layer, where the SSH (P3)
+ * and DECnet CTERM (P4) paths will share them by making the SAME call with an
+ * RTAn: device instead of OPA0:. Nothing in this file forks, execs, opens a
+ * pty or dup2s any more, and nothing in it stamps the session's identity:
+ * LOGINOUT.EXE is the sole authenticator and re-personas its own process after
+ * it authenticates, so the job controller needs no identity-forging privilege
+ * of its own to start a session for an arbitrary user.
+ *
+ * WAITING, WITHOUT A LINUX CHILD TO WAIT ON. A VMS interactive process is
+ * OWNERLESS -- the top of its own job, not a subprocess of the job controller
+ * -- so $CREPRC's session-creation mode creates it detached and this program
+ * has no child to waitpid() for. It waits the way one VMS process watches
+ * another: $GETJPI on the process id the EXECUTIVE assigned, until the
+ * executive no longer carries it (SS$_NONEXPR, after vms_proc_reap_dead()
+ * reclaims the row of a process that has ceased to exist). That is a read of
+ * the real process table, not a Linux wait status, and it keeps the retry
+ * accounting below honest -- a session that dies instantly still measures as
+ * an instant session.
  */
 
 #include <stdio.h>
@@ -62,16 +97,22 @@
 #include <signal.h>
 #include <time.h>
 #include <sys/types.h>
-#include <sys/wait.h>
 #include <sys/stat.h>
 #include <errno.h>
 
 #include "vmsfs/filespec.h"
 #include "ovmx_layout.h"
 #include "ssdef.h"
-/* JOB_CONTROL's identity for OPA0: is established THROUGH the executive,
- * not declared -- the same vms_kif channel/setterm calls PID 1's login
- * loop used before this item (vms-d0b). */
+/* $CREPRC + the descriptor and PRC$M_ definitions its session-creation mode
+ * takes: the ONE way this program starts a login session (vms-3e9). */
+#include "starlet.h"
+#include "descrip.h"
+#include "prcdef.h"
+/* JOB_CONTROL's OWN SYSTEM identity is established THROUGH the executive, not
+ * declared (vms-d31d). The session's identity is NOT this program's business
+ * any more -- $CREPRC/LOGINOUT own it -- and neither is the OPA0: channel:
+ * the $ASSIGN/SETTERM pair that used to stand in the forked login child moved
+ * inside $CREPRC's terminal binding (vms-d0b's calls, relocated by vms-3e9). */
 #include "vms_kif.h"
 
 static volatile sig_atomic_t shutdown_requested = 0;
@@ -142,15 +183,28 @@ int main(void)
      * JOB_CONTROL is a SYSTEM-owned detached process. Each login session it
      * creates below is a DISTINCT executive process (vms-d4ef) that
      * independently establishes this SAME SYSTEM identity on its own fresh PCB
-     * (the child's vms_kif_establish_system() line, ~below) rather than
-     * continuing JOB_CONTROL's -- so the two hold system identity by the same
-     * privilege-gated primitive but at different vms_pids. LOGINOUT then has
-     * to read the World-denied SYS$SYSTEM:SYSUAF.DAT (fh2_fileprot 0xFF88;
-     * acp_check_access() in src/kernel-core/vmsfs_acp.c grants that read only to
-     * a caller in the SYSTEM protection category -- UIC group <= MAXSYSGROUP, or
-     * SYSPRV/BYPASS/READALL). So JOB_CONTROL MUST hold a system identity, or the
-     * login it spawns is refused its own authorization file (%RMS-E-PRV,
-     * surfacing as LOGINOUT's "User authorization failure").
+     * -- but that call is no longer made HERE: vms-3e9 moved it inside
+     * $CREPRC's PRC$M_LOGINOUT path (src/libvms/syssvc/sys_process.c), where it
+     * belongs, because the authority to read SYSUAF is the LOGINOUT IMAGE's,
+     * not its creator's (design record §2). The two processes still hold system
+     * identity by the same privilege-gated primitive at different vms_pids; the
+     * difference is that JOB_CONTROL no longer establishes it FOR the session.
+     *
+     * WHY JOB_CONTROL STILL ESTABLISHES ITS OWN. Two live reasons, neither of
+     * them the session's SYSUAF read any more:
+     *   - JOB_CONTROL genuinely IS a SYSTEM [1,4] detached process on VMS, and
+     *     SHOW SYSTEM must be able to say so from another process.
+     *   - It reads the session's row back through $GETJPI to wait for it (see
+     *     the loop below). Once LOGINOUT re-personas that session to an
+     *     ordinary account, its UIC is in another group, and the executive
+     *     grants a cross-group row read only to a caller holding WORLD
+     *     (vms_proc_may_read). Without a system identity here, the wait would
+     *     be refused SS$_NOPRIV on the first non-SYSTEM login and the loop
+     *     would read a live session as a finished one.
+     * The SYSUAF protection rules the rest of this comment recites are
+     * unchanged and still describe what the SESSION needs -- they are now
+     * satisfied inside $CREPRC, on the session's own fresh PCB, before the
+     * image is activated (the Wall-6 ordering guard).
      *
      * WHY THIS CALL, AND WHY $CREPRC DID NOT ALREADY DO IT. JOB_CONTROL is
      * created by SYS$STARTUP:JOB_CONTROL_STARTUP.COM's
@@ -193,6 +247,26 @@ int main(void)
                     "refused SYS$SYSTEM:SYSUAF.DAT\n", (unsigned)est);
     }
 
+    /*
+     * THE SESSION-CREATION ARGUMENTS, built once.
+     *
+     * The IMAGE is named as a filespec the loader can map, exactly as DCL's
+     * RUN/DETACHED names one (src/vmsdcl/dcl_cmd_process.c run_detached): the
+     * caller resolves SYS$SYSTEM:LOGINOUT.EXE through vmsfs + the boot-staging
+     * bridge above, and hands $CREPRC the result.
+     *
+     * The TERMINAL is named as a VMS DEVICE -- OPA0:, from the one constant
+     * that names it (ovmx_layout.h) -- and NEVER as a substrate path. That is
+     * the whole point of the mode: $CREPRC resolves the device to its backing
+     * behind the VMS layer (ovmx_console_terminal_path, the same mapping
+     * $ASSIGN uses), so a device this node does not have fails the creation
+     * honestly with SS$_NOSUCHDEV instead of a caller here opening something.
+     * The same three descriptors carry it, because a terminal is one device
+     * for input, output and error alike.
+     */
+    struct dsc$descriptor_s img_d  = dsc$init(loginout_path);
+    struct dsc$descriptor_s term_d = dsc$init(OVMX_CONSOLE_DEVICE);
+
     int console_interactive = isatty(STDIN_FILENO);
     int consecutive_failures = 0;
 
@@ -201,21 +275,21 @@ int main(void)
          * DEAD / NON-INTERACTIVE CONSOLE GUARD (vms-3ab8).
          *
          * The old guard here was `if (!console_interactive && feof(stdin))
-         * break;` -- DEAD CODE. JOB_CONTROL never read()s stdin (its forked
-         * LOGINOUT child does, on the inherited fd), so stdin's stdio EOF
-         * indicator is never set and feof(stdin) is never true. A genuinely
-         * dead or non-tty console therefore fell straight through: every
-         * forked LOGINOUT hit EOF on the first fgets() and exited in well under
-         * a second, and this loop respawned it as fast as the OS allowed. The
-         * 5-fast-failures backoff below only throttles that spin to one burst
-         * every five seconds -- it never stops it.
+         * break;` -- DEAD CODE. JOB_CONTROL never read()s stdin (the session
+         * it creates does, on the terminal device $CREPRC bound it to), so
+         * stdin's stdio EOF indicator is never set and feof(stdin) is never
+         * true. A genuinely dead or non-tty console therefore fell straight
+         * through: every LOGINOUT hit EOF on the first fgets() and exited in
+         * well under a second, and this loop respawned it as fast as the OS
+         * allowed. The 5-fast-failures backoff below only throttles that spin
+         * to one burst every five seconds -- it never stops it.
          *
          * JOB_CONTROL's whole job is to run login sessions ON THE OPERATOR
          * CONSOLE (OPA0:). If stdin is not an interactive terminal there is no
          * operator console to serve, so there is nothing to do and the process
          * exits honestly rather than respawning a login that can never read a
          * username. In normal operation JOB_CONTROL_STARTUP.COM binds stdin to
-         * /dev/console -- a real terminal -- so console_interactive is true and
+         * the console -- a real terminal -- so console_interactive is true and
          * the loop runs exactly as before this change.
          */
         if (!console_interactive)
@@ -224,250 +298,132 @@ int main(void)
         struct timespec t_before;
         clock_gettime(CLOCK_MONOTONIC, &t_before);
 
-        pid_t child = fork();
-        if (child == 0) {
+        /*
+         * CREATE THE INTERACTIVE SESSION (vms-3e9). One VMS system service,
+         * no Linux mechanics: "create a process running LOGINOUT.EXE bound to
+         * terminal-device OPA0:".
+         *
+         * NO IDENTITY IS PASSED. uic = 0 and prvadr = NULL mean "the creator's
+         * defaults" to $CREPRC, and PRC$M_LOGINOUT then tells it not to stamp
+         * even those: the created process establishes its own system identity
+         * through the privilege-gated executive primitive and LOGINOUT
+         * RE-PERSONAS it to the authenticated user afterwards. JOB_CONTROL
+         * therefore never names, never forges and never sees the identity of
+         * the user who logs in -- which is exactly why the same call will
+         * serve NETACP and the SSH daemon, neither of which may hold the
+         * authority to forge one (design record §2/§3.1).
+         *
+         * NO PROCESS NAME IS PASSED either: the session is named by LOGINOUT's
+         * own $SETPRN once it knows the account (tools/vms_login.c), which is
+         * what makes SHOW SYSTEM list the session under the username.
+         */
+        uint32_t session_pid = 0;
+        uint32_t cst = sys$creprc(&session_pid, &img_d,
+                                  &term_d, &term_d, &term_d,
+                                  NULL, NULL, NULL,
+                                  0, 0, 0,
+                                  PRC$M_INTER | PRC$M_LOGINOUT);
+
+        if (!(cst & 1)) {
             /*
-             * THE LOGIN SESSION IS A DISTINCT EXECUTIVE PROCESS (vms-d4ef).
+             * THE SESSION WAS NOT CREATED, AND NOTHING PRETENDS OTHERWISE.
              *
-             * On real OpenVMS the interactive session created by the job
-             * controller is a genuinely NEW process -- JOB_CONTROL $CREPRCs
-             * LOGINOUT.EXE, so the session is the top of its OWN job with its
-             * OWN process ID, DISTINCT from JOB_CONTROL's (oracle
-             * docs/oracle/vax73-show-system-process.md: JOB_CONTROL and the
-             * interactive SYSTEM session appear at different PIDs). It is NOT a
-             * continuation of JOB_CONTROL.
+             * This replaces the exec-failure branch the forked child used to
+             * carry, and it keeps that branch's ruling intact (vms-72c): there
+             * is NO DCL FALLBACK. VMS has no state in which the console cannot
+             * run LOGINOUT and responds by starting an interactive session
+             * anyway with no username, no password and no SYSUAF check. The
+             * loop reports the executive's own status and retries with the
+             * backoff below -- what it may not do is substitute an
+             * unauthenticated shell for the login it could not create.
              *
-             * This child therefore does NOT continue JOB_CONTROL's identity.
-             * With no vms_kif_register_continue() call, its first executive
-             * call lazily REGISTERs a FRESH process: assign_vms_pid()
-             * (src/kernel/vms_module.c) mints a vms_pid unique among live
-             * processes, instead of copying JOB_CONTROL's. That is the whole
-             * point of this change -- SHOW SYSTEM previously listed JOB_CONTROL
-             * and the console SYSTEM session at the SAME pid because the login
-             * child continued JOB_CONTROL's identity; now they are two
-             * processes with two pids, matching the oracle.
-             *
-             * WALL-6 IDENTITY GUARD (vms-d4ef, was the reason continue was
-             * added). LOGINOUT must read SYS$SYSTEM:SYSUAF.DAT to authenticate a
-             * not-yet-authenticated user, and SYSUAF is World-denied
-             * (fh2_fileprot 0xFF88 -- S:RWE, O:RWE, G:none, W:none;
-             * ods2_class_fileprot(), oracle vax73-authorize-privilege.md). The
-             * Files-11 protection gate (acp_check_access() in
-             * src/kernel-core/vmsfs_acp.c) grants that read only to a caller in
-             * the SYSTEM protection category -- a UIC group <= MAXSYSGROUP, or
-             * SYSPRV/BYPASS/READALL. A FRESH registration derives its UIC from
-             * the substrate's OS credentials (vms_proc_register, uic =
-             * (gid<<16)|uid): on the QEMU/Linux runtime those are root -> group
-             * 0 <= MAXSYSGROUP, which reads SYSUAF by luck of the environment;
-             * on NetBSD/VAX they are a non-system group and the ACP denies the
-             * read (0xFF88 -> RMS$_PRV), surfacing as LOGINOUT's clean "User
-             * authorization failure". A distinct fresh process would therefore
-             * REGRESS VAX login -- the exact Wall-6 trap.
-             *
-             * So immediately, before any other work, this child asks the
-             * executive to ESTABLISH THE SYSTEM IDENTITY on its fresh PCB:
-             * vms_kif_establish_system() (src/kernel-core/vms_proctab.c) stamps
-             * the fixed SYSTEM identity -- UIC [1,4], the enforced SYSTEM
-             * privilege set, user name "SYSTEM" -- and is GATED on the caller's
-             * real host privilege (exec_current_is_privileged()). This is the
-             * SAME executive primitive JOB_CONTROL uses above to become SYSTEM
-             * without a SYSUAF read, and the same one PROVISION.EXE uses.
-             * JOB_CONTROL genuinely holds that host privilege (it registered
-             * with the enforced set), and this fork()ed child inherits the host
-             * credential across fork(), so this is a privilege-checked
-             * establishment of a real system identity on EVERY substrate, NOT a
-             * blanket grant and NOT the root->group-0 crutch -- it makes the
-             * authentic SYSTEM identity load-bearing on VAX as well as x86_64,
-             * with no continuation of JOB_CONTROL's pid.
-             *
-             * It runs FIRST, before the $ASSIGN/setterm below, so the SYSTEM
-             * identity is on the PCB before LOGINOUT touches SYSUAF. (SETTERM
-             * below then promotes this terminal owner to its own INTERACTIVE
-             * job root, job_id == its own vms_pid -- src/kernel-core/
-             * vms_devtab.c -- which is correct precisely because that vms_pid
-             * is now distinct.)
-             *
-             * INV-6 / fail-honest: if the executive refuses (no host privilege)
-             * or is absent, the child is left non-system and the SYSUAF read
-             * then fails honestly, exactly as JOB_CONTROL's own establish does
-             * -- nothing here fabricates the identity. The status is checked and
-             * a diagnostic printed so a regression is never silent.
-             *
-             * FAITHFULNESS NOTE (vms-d4ef follow-up). The MOST faithful shape
-             * routes LOGINOUT through the real sys$creprc as an image INSTALLed
-             * /PRIVILEGED with SYSPRV -- its own pid, own job, privilege from
-             * installed-image activation rather than an establish_system() call.
-             * OVMX still reaches the console session by fork()+execl() rather
-             * than $CREPRC; the fresh-registration + establish_system pairing
-             * here is the smaller, lower-risk step that already yields the
-             * distinct pid the oracle shows. The installed-privileged-LOGINOUT
-             * $CREPRC model remains the authentic-shape follow-up.
+             * The message is an OVMX facility, not a VMS one: $CREPRC failing
+             * to create the console session is OVMX's condition to report, and
+             * the status printed is the one the service returned (an executive
+             * status such as SS$_NOSUCHDEV for a console this node does not
+             * have, or OVMX$_PRCLOST for a process that died before it
+             * registered), never a value invented here.
              */
-            {
-                uint32_t est = vms_kif_establish_system();
-                if (!(est & 1))
-                    fprintf(stderr,
-                            "%%JBC-W-NOSYSID, console login could not establish "
-                            "its SYSTEM identity (status %08X); "
-                            "SYS$SYSTEM:SYSUAF.DAT read will be refused\n",
-                            (unsigned)est);
-            }
-
+            fprintf(stderr,
+                    "%%OVMX-E-NOLOGIN, cannot create a console session running "
+                    "%s on %s (status %08X)\n",
+                    VMS_LOGINOUT_PATH, OVMX_CONSOLE_DEVICE, (unsigned)cst);
+        } else {
             /*
-             * DELETED, NOT REPLACED (vms-fb9): setenv("VMS_TERMINAL",
-             * "_OPA0:", 1) stood here once, in PID 1. A process told its
-             * login child what terminal it was on through the environment
-             * -- the rejected VMS_PRCNAM shape (CLAUDE.md rule 10, worked
-             * example 2). It was not even a claim anything could check:
-             * the child had no way to verify it and no other process
-             * could see it.
+             * WAIT FOR THE SESSION TO END, THROUGH THE EXECUTIVE.
              *
-             * OPA0: IS real -- the executive creates it at module init
-             * (src/kernel/vms_devtab.c) and every process on the node can
-             * read it. So the console terminal does not need to be
-             * announced; it needs to be LOOKED UP, with $ASSIGN and
-             * $GETDVI on the resulting channel. JOB_CONTROL has no
-             * business asserting it, and nothing downstream may be built
-             * on this line being here.
+             * The interactive process is ownerless (see the file header), so
+             * there is no Linux child to wait on and no wait status to read.
+             * $GETJPI on the process id the executive assigned is the VMS way
+             * to ask whether a process still exists, and the executive answers
+             * SS$_NONEXPR once it does not: vms_proc_reap_dead() reclaims the
+             * row of a process whose task the kernel has released, and PID 1
+             * reaps everything reparented to it, so the row really does go
+             * away when the session logs out.
              *
-             * WHAT STANDS HERE INSTEAD (vms-d0b). The login session takes
-             * a real channel to the console and asks the executive to
-             * record that channel's device as this job's terminal. Three
-             * properties, and each is the reason the environment variable
-             * was not simply reinstated behind a function call:
-             *
-             *   - The name is not transmitted. $ASSIGN names the console
-             *     because JOB_CONTROL is CREATING A SESSION ON IT -- that
-             *     is system configuration, exactly as JOB_CONTROL_STARTUP.
-             *     COM named the same device when IT created JOB_CONTROL --
-             *     but VMS_IOCTL_SETTERM takes only the CHANNEL. The
-             *     executive reads the device off the channel it issued and
-             *     copies its own name. Nothing downstream receives a
-             *     string it must trust.
-             *   - The binding is in the executive, so a DIFFERENT process
-             *     can read which terminal this job is on ($GETJPI), which
-             *     is what makes it a fact rather than a self-description
-             *     (CLAUDE.md Rule 11).
-             *   - It survives the execl() below. The executive keys the
-             *     process table on the thread-group id, which execve()
-             *     does not change, so LOGINOUT.EXE and then DCL.EXE run
-             *     with the binding their process already has, carrying
-             *     nothing.
-             *
-             * Neither status is examined, deliberately, and this is the
-             * same reasoning as cmd_show_device()'s untested
-             * vms_kif_open(): the conditions they could report are ones
-             * OVMX is not in. The executive is pinned open for the life
-             * of the system (PID 1's executive_attach(), which halts the
-             * whole boot if it is absent -- and JOB_CONTROL was created
-             * by SYSTARTUP_VMS.COM, which cannot have run before that),
-             * OPA0: is created at module init and vms.ko implements no
-             * operation that removes a device, and the channel handed to
-             * SETTERM is the one $ASSIGN just returned. A branch here
-             * would be a handler for a state VMS is not in (Rule 10), and
-             * the only thing it could usefully do is fabricate a binding.
-             * If a call did fail, the executive records no terminal --
-             * and SHOW TERMINAL then names none, which is the honest
-             * outcome and the one the reader already renders.
+             * The poll interval is OVMX's own (CLAUDE.md Rule 8), chosen small
+             * enough that the next "Username:" follows a logout without a
+             * visible pause and large enough to cost nothing while an operator
+             * is typing. It is not a claimed VMS behaviour: real VMS wakes the
+             * job controller from the process's termination mailbox, which
+             * OVMX's $CREPRC does not implement (the mbxunt argument is
+             * ignored) -- so this waits honestly instead of pretending to be
+             * notified.
              */
-            uint32_t console_chan = 0;
-            (void)vms_kif_assign(OVMX_CONSOLE_DEVICE, &console_chan);
-            (void)vms_kif_setterm(console_chan);
-
-            /* Child: exec vms_login (SYS$SYSTEM:LOGINOUT.EXE). */
-            execl(loginout_path, "vms_login", (char *)NULL);
-
-            /*
-             * NO DCL FALLBACK (vms-72c). "exec vmsdcl directly" used to
-             * stand here if the LOGINOUT.EXE exec above failed -- an
-             * unauthenticated shell handed to whoever is at the console,
-             * reached by nothing more than a missing or unexecutable
-             * file. That is CLAUDE.md Rule 10's illegal third answer:
-             * VMS has no state in which the console driver cannot run
-             * LOGINOUT and responds by starting an interactive session
-             * anyway with no username, no password and no SYSUAF check.
-             *
-             * MADE UNREACHABLE, NOT HANDLED, per Rule 10's other answer:
-             * LOGINOUT.EXE is a required system file, present on every
-             * installed system disk (the installer spine writes the whole
-             * system tree; STARTUP.EXE's require_installed_system() halts
-             * the boot before STARTUP.COM -- and therefore before
-             * JOB_CONTROL -- can ever run on a volume that is not
-             * installed), so failing to exec it here is the same class of
-             * condition as vms.ko or /dev/vms being absent -- OVMX's one
-             * runtime does not come up in that state. Unlike the
-             * executive gate, the response here is not to halt the whole
-             * boot: this is a per-login-attempt failure, not a per-system
-             * one, and the outer loop already retries with backoff (see
-             * "consecutive_failures" below) instead of surrendering the
-             * console -- NOT independently oracle-pinned here as "what
-             * VMS's console driver does on an image activation failure";
-             * it is the behavior this loop already had before this item
-             * moved it, kept unchanged. So the child reports why (OVMX
-             * facility, not a VMS one -- a Linux exec(2) failure has no
-             * VMS analogue) and exits, and the loop tries again; what it
-             * may not do is substitute an unauthenticated shell for the
-             * login it could not run.
-             */
-            fprintf(stderr, "%%OVMX-E-NOLOGIN, cannot exec %s: %s\n",
-                    VMS_LOGINOUT_PATH, strerror(errno));
-            _exit(1);
-        } else if (child > 0) {
-            /* Parent: wait for login session to end */
-            int wstatus;
-            waitpid(child, &wstatus, 0);
-
-            struct timespec t_after;
-            clock_gettime(CLOCK_MONOTONIC, &t_after);
-            long elapsed_ms = (t_after.tv_sec - t_before.tv_sec) * 1000
-                            + (t_after.tv_nsec - t_before.tv_nsec) / 1000000;
-
-            /* Track consecutive fast failures (< 1 second) */
-            if (elapsed_ms < 1000) {
-                consecutive_failures++;
-                if (consecutive_failures >= 5) {
-                    fprintf(stderr,
-                        "%%STARTUP-F-LOGINFAIL, login process failing repeatedly\n");
-                    if (WIFEXITED(wstatus))
-                        fprintf(stderr,
-                            "%%STARTUP-F-LOGINFAIL, exit status %d\n",
-                            WEXITSTATUS(wstatus));
-                    else if (WIFSIGNALED(wstatus))
-                        fprintf(stderr,
-                            "%%STARTUP-F-LOGINFAIL, killed by signal %d\n",
-                            WTERMSIG(wstatus));
-
-                    /* Check if the binaries actually exist (VMS specs in messages) */
-                    struct stat chk;
-                    fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
-                            VMS_LOGINOUT_PATH,
-                            stat(loginout_path, &chk) == 0 ?
-                                "exists" : strerror(errno));
-                    fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
-                            VMS_DCL_PATH,
-                            stat(dcl_path, &chk) == 0 ?
-                                "exists" : strerror(errno));
-
-                    /* Back off instead of spinning */
-                    sleep(5);
-                    consecutive_failures = 0;
+            struct vms_procinfo info;
+            for (;;) {
+                uint32_t gst = vms_kif_getjpi_pid(session_pid, &info);
+                if (!(gst & 1))
+                    break;                      /* SS$_NONEXPR: session gone */
+                if (shutdown_requested)
+                    break;
+                {
+                    struct timespec pause_for = { 0, 200 * 1000 * 1000 };
+                    nanosleep(&pause_for, NULL);
                 }
-            } else {
+            }
+        }
+
+        struct timespec t_after;
+        clock_gettime(CLOCK_MONOTONIC, &t_after);
+        long elapsed_ms = (t_after.tv_sec - t_before.tv_sec) * 1000
+                        + (t_after.tv_nsec - t_before.tv_nsec) / 1000000;
+
+        /* Track consecutive fast failures (< 1 second) */
+        if (elapsed_ms < 1000) {
+            consecutive_failures++;
+            if (consecutive_failures >= 5) {
+                fprintf(stderr,
+                    "%%STARTUP-F-LOGINFAIL, login process failing repeatedly\n");
+                fprintf(stderr,
+                    "%%STARTUP-F-LOGINFAIL, last $CREPRC status %08X\n",
+                    (unsigned)cst);
+
+                /* Check if the binaries actually exist (VMS specs in messages) */
+                struct stat chk;
+                fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
+                        VMS_LOGINOUT_PATH,
+                        stat(loginout_path, &chk) == 0 ?
+                            "exists" : strerror(errno));
+                fprintf(stderr, "%%STARTUP-I-DIAG, %s: %s\n",
+                        VMS_DCL_PATH,
+                        stat(dcl_path, &chk) == 0 ?
+                            "exists" : strerror(errno));
+
+                /* Back off instead of spinning */
+                sleep(5);
                 consecutive_failures = 0;
             }
-
-            if (WIFEXITED(wstatus) && WEXITSTATUS(wstatus) != 0) {
-                usleep(100000);
-            }
-
-            /* Print blank line between sessions (like real VMS console) */
-            printf("\n");
-            fflush(stdout);
         } else {
-            /* fork failed */
-            perror("fork");
-            sleep(1);
+            consecutive_failures = 0;
         }
+
+        if (!(cst & 1))
+            usleep(100000);
+
+        /* Print blank line between sessions (like real VMS console) */
+        printf("\n");
+        fflush(stdout);
     }
 
     return 0;

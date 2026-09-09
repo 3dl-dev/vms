@@ -629,6 +629,30 @@ uint32_t vms_kif_disk_resolve(const char *devnam, char *backing,
  * blocks; the values are the executive's, never a per-process fake (Rule 11). */
 uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out);
 
+/* ---- dynamic terminal units: RTAn: (rd vms-f40) -------------------------
+ * The executive-side half of an inbound network login's terminal. A DECnet
+ * SET HOST (Session Control object 42) arrives, the CTERM host asks the
+ * executive to MINT a virtual terminal backed by a substrate PTY, and
+ * $CREPRC is then handed the DEVICE NAME the executive assigned. Nothing
+ * above the VMS layer names a unit or a path: create RETURNS the name, and
+ * resolve is how the session-creation primitive turns that name back into
+ * the substrate it must open. See struct vms_terminal_args (vms_ioctl.h).
+ *
+ * create:  `backing` is the substrate device relative to /dev (e.g. "pts/7");
+ *          on success (odd status) `devnam` receives the executive-assigned
+ *          name ("RTA0:", ...). SS$_DEVALLOC when no unit is free.
+ * delete:  withdraw a unit create() minted. Refuses any row that is not a
+ *          dynamically-created terminal, so it can never remove OPA0:.
+ * resolve: `backing` receives the substrate device recorded for `devnam`.
+ *          SS$_NOSUCHDEV (no such unit), SS$_IVDEVNAM (not a dynamic
+ *          terminal), SS$_DEVOFFLINE (a row with no backing recorded).
+ */
+uint32_t vms_kif_terminal_create(const char *backing, char *devnam,
+                                 uint32_t devnam_size);
+uint32_t vms_kif_terminal_delete(const char *devnam);
+uint32_t vms_kif_terminal_resolve(const char *devnam, char *backing,
+                                  uint32_t backing_size);
+
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
  * if the caller holds no such channel.

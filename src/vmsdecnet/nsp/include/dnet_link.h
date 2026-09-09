@@ -138,6 +138,19 @@ enum dnet_link_event {
  * OVMX-labelled where noted). */
 #define DNET_LINK_REASON_NORMAL       0    /* normal user disconnect */
 #define DNET_LINK_REASON_UNREACHABLE  38   /* no response to Connect Initiate (spec: node unreachable) */
+/*
+ * ORACLE-GROUNDED (rd vms-558 / vms-f40): docs/oracle/vax-sethost-cterm.pcap
+ * frame 117 -- when the real VAX's CTERM object ended the SET HOST session it
+ * sent a Disconnect Initiate carrying reason 0x0009 (tcpdump decodes it as
+ * "object rejected connect"), answered by a Disconnect Confirm with reason
+ * 0x002a = 42 (disconnect complete), wire.txt line 90. This is therefore the
+ * OBSERVED reason for "the destination OBJECT is ending/refusing this
+ * connection", and it is what OVMX sends when it refuses an inbound connect
+ * (no such object served here, or no session could be created) -- a measured
+ * value, not an invented one.
+ */
+#define DNET_LINK_REASON_OBJREJ        9   /* object rejected/ended the connect (oracle frame 117) */
+#define DNET_LINK_REASON_DISCOMPLETE  42   /* disconnect complete (oracle frame 118) */
 
 /* 12-bit NSP data/ack sequence number mask. */
 #define DNET_LINK_SEQ_MASK          0x0fffu

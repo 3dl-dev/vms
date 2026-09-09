@@ -2189,6 +2189,15 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_acp_getvol(proc, arg);
     case VMS_IOCTL_DISK_RESOLVE:
         return vms_ioctl_disk_resolve(proc, arg);
+    /* Dynamic terminal units (RTAn:) -- the inbound-SET-HOST session's
+     * terminal device (rd vms-f40). The PRODUCT caller of the vms-f881
+     * primitive; see struct vms_terminal_args in vms_ioctl.h. */
+    case VMS_IOCTL_TERM_CREATE:
+        return vms_ioctl_term_create(proc, arg);
+    case VMS_IOCTL_TERM_DELETE:
+        return vms_ioctl_term_delete(proc, arg);
+    case VMS_IOCTL_TERM_RESOLVE:
+        return vms_ioctl_term_resolve(proc, arg);
     case VMS_IOCTL_SETTERM:
         return vms_ioctl_setterm(proc, arg);
 

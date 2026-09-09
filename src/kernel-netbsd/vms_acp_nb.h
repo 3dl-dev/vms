@@ -278,6 +278,19 @@ struct vms_diskresolve_args {
 	uint32_t pad;
 };
 
+/*
+ * Dynamic terminal units -- RTAn: create/delete/resolve (rd vms-f40). MUST
+ * match struct vms_terminal_args in src/kernel/vms_ioctl.h exactly: the same
+ * userspace client (libvmssys vms_kif_terminal_*) issues these against either
+ * executive, and both sides pass the struct by raw address.
+ */
+struct vms_terminal_args {
+	char     devnam[VMS_DEVNAM_SIZE];   /* CREATE: out. DELETE/RESOLVE: in.  */
+	char     backing[VMS_BACKING_SIZE]; /* CREATE: in. RESOLVE: out.         */
+	uint32_t status;                    /* return: SS$_ status               */
+	uint32_t pad;
+};
+
 /* ================================================================
  * Request numbers -- same NR band as src/kernel/vms_acp.h (0x68-0x6F); the
  * NetBSD _IOWR encoding of type/nr/size legitimately differs in VALUE from
@@ -303,6 +316,16 @@ struct vms_diskresolve_args {
  * reaches both executives.
  */
 #define VMS_IOCTL_DISK_RESOLVE   _IOWR(VMS_ACP_IOC_MAGIC, 0x57, struct vms_diskresolve_args)
+
+/*
+ * Dynamic terminal units -- nr 0x59/0x5A/0x5B, the SAME (magic,nr,size) as the
+ * Linux VMS_IOCTL_TERM_{CREATE,DELETE,RESOLVE}. sizeof(struct
+ * vms_terminal_args) == 40 on both substrates, so these fold to identical
+ * request numbers; asserted below.
+ */
+#define VMS_IOCTL_TERM_CREATE    _IOWR(VMS_ACP_IOC_MAGIC, 0x59, struct vms_terminal_args)
+#define VMS_IOCTL_TERM_DELETE    _IOWR(VMS_ACP_IOC_MAGIC, 0x5a, struct vms_terminal_args)
+#define VMS_IOCTL_TERM_RESOLVE   _IOWR(VMS_ACP_IOC_MAGIC, 0x5b, struct vms_terminal_args)
 
 /*
  * Freeze the shared layouts -- see src/kernel/vms_acp.h's identical asserts:
@@ -338,5 +361,13 @@ _Static_assert(sizeof(struct vms_diskresolve_args) == 48,
  */
 _Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
                "VMS_IOCTL_DISK_RESOLVE encodes differently here than on the Linux reference build");
+_Static_assert(sizeof(struct vms_terminal_args) == 40,
+               "struct vms_terminal_args changed size -- RTAn: create/delete/resolve would decode at the wrong offsets");
+_Static_assert(VMS_IOCTL_TERM_CREATE == 0xC0285659u,
+               "VMS_IOCTL_TERM_CREATE encodes differently here than on the Linux reference build");
+_Static_assert(VMS_IOCTL_TERM_DELETE == 0xC028565Au,
+               "VMS_IOCTL_TERM_DELETE encodes differently here than on the Linux reference build");
+_Static_assert(VMS_IOCTL_TERM_RESOLVE == 0xC028565Bu,
+               "VMS_IOCTL_TERM_RESOLVE encodes differently here than on the Linux reference build");
 
 #endif /* _VMS_ACP_NB_H */

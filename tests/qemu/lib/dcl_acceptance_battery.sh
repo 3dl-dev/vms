@@ -984,22 +984,21 @@ run_dcl_acceptance_battery() {
     # IT IS RUN AS A FOREIGN COMMAND because DCL's RUN passes no arguments; that
     # is the VMS way to pass one, not a shell escape.
     #
-    # WHERE IT IS A HARD GATE, AND WHERE IT IS A REPORTED GAP. DECNETD.EXE is in
-    # the x86_64 shipped image set (distro/Dockerfile.bootable) and in the
-    # `ovmx-images` CMake aggregate, so it is built for vax as well -- but the
-    # VAX rail boots a FIVE-IMAGE sysvol (tests/lab-vax/stage_sysvol.sh:
-    # DCL/PROVISION/LOGINOUT/JOB_CONTROL/STARTUP) and the Alpha boot image has
-    # its own list, so neither carries it yet. Staging it on those two rails is
-    # tracked follow-on work, NOT something to fake here. So: where the image is
-    # PRESENT this is a hard gate on every assertion; where it is ABSENT the
-    # section reports a LOUD note naming the gap and asserts nothing -- the same
-    # "tracked + routed, never silently green" shape golden_diff_report uses.
-    # The one thing it must never do is pass because nothing ran.
+    # HARD GATE ON ALL THREE RAILS (rd vms-c1f). DECNETD.EXE is in the x86_64
+    # shipped image set (distro/Dockerfile.bootable), the VAX sysvol
+    # (tests/lab-vax/stage_sysvol.sh) and the Alpha boot image
+    # (tools/cross-alpha/build-alpha-bootimage.sh) -- every runtime this
+    # battery drives ships the image, so the "not on this runtime" note path
+    # below is UNREACHABLE in normal operation. It stays as a HARD FAILURE,
+    # not a note: if a staging regression ever drops DECNETD.EXE off a rail's
+    # runtime again, that is a real INV-6 hole (a shipped facility whose
+    # runtime cannot prove it) and must RED here, not silently pass because
+    # nothing ran.
     local CTERM_OFF; CTERM_OFF=$(wc -c <"$LOG")
     run_cmd 'DNETACC :== $SYS$SYSTEM:DECNETD.EXE'
     send 'DNETACC --cterm-accept-test'
     if wait_for 'IVIMAGE' 15 "$CTERM_OFF"; then
-        note "CTERM [vms-f40]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-SET-HOST authentication proof DID NOT RUN here (it is a hard gate on the rails that ship the image). Staging DECNETD.EXE into the VAX sysvol + the Alpha boot image is tracked follow-on work"
+        bad "CTERM [vms-f40]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-SET-HOST authentication proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
     elif wait_for 'DECNETD-CTERM-ACCEPT:' 180 "$CTERM_OFF"; then
         local CTSEG; CTSEG=$(tail -c "+$((CTERM_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: PASS' \
@@ -1018,6 +1017,13 @@ run_dcl_acceptance_battery() {
     fi
     wait_for '$ ' 20 "$CTERM_OFF"
 
+    # SCOPE NOTE (rd vms-c1f): FAL's own auth proof (--fal-accept-test, rd
+    # vms-8c2/#1096) is NOT yet in this battery -- #1096 had not merged as of
+    # this section's hard-gate flip. DECNETD.EXE is now staged on all three
+    # rails, so once #1096 lands a FAL section here needs no rail-staging work
+    # of its own -- follow the SAME shape as CTERM above (assert on the verdict
+    # line, IVIMAGE means a real staging regression, never a silent note).
+
     # =======================================================================
     # DECnet NETACP ISOLATION (vms-9ab, P5) -- the A2/A8 security seam. Design
     # vms-515 §3.4: attacker-controlled wire parsing runs at LOW privilege and
@@ -1025,12 +1031,12 @@ run_dcl_acceptance_battery() {
     # descriptor; the privileged path parses no attacker bytes. This mode is the
     # NEGATIVE proof of that seam and needs NEITHER /dev/vms NOR CAP_NET_RAW --
     # every case is refused at NETACP's privileged front door BEFORE it would
-    # mint a device or create a process. So unlike --cterm-accept-test it is a
-    # hard gate wherever DECNETD.EXE is present, executive or not.
+    # mint a device or create a process, so it never depended on an executive
+    # either way. Hard gate on all three rails (rd vms-c1f), same as CTERM above.
     local ISOL_OFF; ISOL_OFF=$(wc -c <"$LOG")
     send 'DNETACC --isolation-test'
     if wait_for 'IVIMAGE' 15 "$ISOL_OFF"; then
-        note "NETACP isolation [vms-9ab]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the A2/A8 privileged-path isolation proof DID NOT RUN here (staging DECNETD.EXE onto the VAX/Alpha rails is the same tracked follow-on as CTERM above)"
+        bad "NETACP isolation [vms-9ab]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the A2/A8 privileged-path isolation proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
     elif wait_for 'DECNETD-ISOLATION:' 60 "$ISOL_OFF"; then
         local ISSEG; ISSEG=$(tail -c "+$((ISOL_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$ISSEG" 'DECNETD-ISOLATION: PASS' \

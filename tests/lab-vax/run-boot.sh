@@ -267,13 +267,23 @@ master_volume() {
 #    and collect them by name into SYSVOL_IMAGES_DIR. build-boot-images-vax.sh
 #    already builds + Decision-A-activation-asserts all five; here we just copy
 #    the delivered images up. Cached.
+#
+#    PLUS DECNETD.EXE (rd vms-c1f): the DCL acceptance battery's DECnet CTERM
+#    section hard-gates on this runtime, so the image it drives
+#    (SYS$SYSTEM:DECNETD.EXE) must actually be on the volume this staging feeds
+#    (stage_sysvol.sh -> master_system_volume). Built with a narrow `cmake
+#    --build --target decnetd_exe' (not the full ovmx-images aggregate
+#    build_vax_images() below already proves elsewhere) so this stays a cheap
+#    single-image add to the sysvol/acceptance boot path, same toolchain file
+#    tools/cross-vax/build-ovmx-images-vax-cmake.sh uses.
 build_boot_image_set() {
   if [ "${FORCE_SYSVOL_BUILD:-0}" != "1" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/DCL.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/PROVISION.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/LOGINOUT.EXE" ] \
      && [ -f "${SYSVOL_IMAGES_DIR}/JOB_CONTROL.EXE" ] \
-     && [ -f "${SYSVOL_IMAGES_DIR}/STARTUP.EXE" ]; then
+     && [ -f "${SYSVOL_IMAGES_DIR}/STARTUP.EXE" ] \
+     && [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ]; then
     log "boot image set present -- NOT rebuilding (set FORCE_SYSVOL_BUILD=1 to force)"; return 0; fi
   mkdir -p "${SYSVOL_IMAGES_DIR}"
   log "cross-building the full boot image set (STARTUP/PROVISION/DCL/JOB_CONTROL/LOGINOUT) for elf32-vax"
@@ -289,10 +299,20 @@ build_boot_image_set() {
   for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE; do
     [ -f "${SYSVOL_IMAGES_DIR}/${img}" ] || die "boot image set missing ${img}"
   done
+  log "cross-building DECNETD.EXE for elf32-vax (rd vms-c1f, cmake --target decnetd_exe)"
+  docker run --rm -v "${REPO}:/src" -w /src -v "${SYSVOL_IMAGES_DIR}:/out" \
+    --entrypoint sh "${CROSS_IMAGE}" -c '
+      set -e
+      cmake -S /src -B /tmp/build-decnetd-vax \
+        -DCMAKE_TOOLCHAIN_FILE=/src/tools/cross-vax/toolchain-vax-netbsd.cmake \
+        -DCMAKE_BUILD_TYPE=Release >/tmp/build-decnetd-vax-configure.log 2>&1
+      cmake --build /tmp/build-decnetd-vax --target decnetd_exe -- -j"$(nproc)" >/tmp/build-decnetd-vax-build.log 2>&1
+      cp /tmp/build-decnetd-vax/bin/DECNETD.EXE /out/DECNETD.EXE'
+  [ -f "${SYSVOL_IMAGES_DIR}/DECNETD.EXE" ] || die "DECNETD.EXE cross-build did not produce an elf32-vax image (rd vms-c1f)"
 }
 
 # 3c (sysboot). Master the OVMX SYSTEM volume: build the host vmsfs_master, stage
-#    the rooted [SYS0.SYSCOMMON] tree (stage_sysvol.sh: the five vax images +
+#    the rooted [SYS0.SYSCOMMON] tree (stage_sysvol.sh: the six vax images +
 #    reused data/COM files + the Decision-A SYSTARTUP_VMS.COM), and master a
 #    64 MB vmsfs volume. All inside CROSS_IMAGE's native cc (same "cc a host tool
 #    in the container" pattern as master_volume above -- nothing on the host).
@@ -337,9 +357,13 @@ master_system_volume() {
   # Hard content gate: the mastered volume MUST carry the images PID 1 execs and
   # the SYSGEN params it reads, so a staging/caching regression fails HERE (red),
   # never as a lenient boot that halts before PROVISION runs (rd vms-72da).
-  for f in DCL.EXE PROVISION.EXE OVMXVMSSYS.PAR; do
+  # DECNETD.EXE (rd vms-c1f) is in the same gate: the DCL acceptance battery's
+  # DECnet CTERM section hard-gates on it, so a regression that drops it off
+  # this rail's runtime must fail HERE too, not surface as a silent skip deep
+  # in the battery.
+  for f in DCL.EXE PROVISION.EXE OVMXVMSSYS.PAR DECNETD.EXE; do
     echo "${listing}" | grep -qiF "${f}" \
-      || die "mastered system volume is MISSING ${f} -- staging/caching regression (vms-72da)"
+      || die "mastered system volume is MISSING ${f} -- staging/caching regression (vms-72da / vms-c1f)"
   done
   # vms-329: [USERS] must be on the volume or PROVISION's home-directory pass has
   # no parent to create the four account homes in, and reports four

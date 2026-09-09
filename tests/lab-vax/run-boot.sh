@@ -383,8 +383,13 @@ master_system_volume() {
 #    into VAX_IMAGES_DIR. These are REAL elf32-vax executables (the script asserts
 #    the Decision-A activation contract on each), NOT stand-ins -- both the OS kit
 #    and the distribution volume below draw from here (rd vms-d0e5 rung G).
+#    DECNETD.EXE (rd vms-c1f) joins the collected set: the aggregate already
+#    builds it (build-ovmx-images-vax-cmake.sh), and stage_sysvol.sh's
+#    BOOT_IMAGES now requires it in IMAGES_DIR -- the distribution volume
+#    below stages via stage_sysvol.sh --distribution from VAX_IMAGES_DIR, so
+#    without this the install mode would die "boot image missing".
 build_vax_images() {
-  local need="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE"
+  local need="STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE DECNETD.EXE"
   if [ "${FORCE_VAX_IMAGES:-0}" != "1" ]; then
     local have=1
     for img in $need; do [ -f "${VAX_IMAGES_DIR}/${img}" ] || have=0; done
@@ -400,7 +405,7 @@ build_vax_images() {
         set -e
         BUILD_DIR=/tmp/build-vax-images-cmake sh tools/cross-vax/build-ovmx-images-vax-cmake.sh
         for img in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE \
-                   PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE; do
+                   PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE DECNETD.EXE; do
           cp /tmp/build-vax-images-cmake/bin/$img /out/$img
         done'
   rc=$?; set -e

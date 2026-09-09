@@ -8214,6 +8214,111 @@ jobs:
           echo "PASS: LINK.EXE emits elf32-vax ET_DYN .vms\$sv/.vms\$imp shareables (R_VAX_* relocs applied); LP64 output byte-unchanged"
 
   # -----------------------------------------------------------------------
+  # vax-shipped-shareable-packaging (rd vms-c7f7, epic vms-404 P3b;
+  # docs/design/vax-symbol-vector-imgact.md P3). Per-PR, fast, build-only (no
+  # SIMH): proves tools/cross-vax/build-vax-shareable-graph.sh builds the
+  # REAL src/libvms RTL as a genuine elf32-vax `.vms$sv` OVMX shareable
+  # (LIBVMS$SHR.EXE) via LINKVAX.EXE (vms-19b/P3a) -- NOT an ordinary NetBSD
+  # `.so` -- and that tools/cross-vax/build-os-kit-vax.sh stages it into the
+  # VAX SYSLIB. readelf-shape only (ET_DYN/EM_VAX/`.vms$sv`, no PT_DYNAMIC,
+  # no unapplied R_VAX_* dynamic relocations, real RTL universals present) --
+  # the SIMH runtime-activation proof is P4, gated separately.
+  #
+  # NOT proven here (honest scope, see the scripts' own header comments): a
+  # genuine elf32-vax PT_INTERP=IMGACT.EXE CONSUMER of this shareable.
+  # LINKVAX.EXE's elf32-vax `--executable` emit is not implemented (it fails
+  # honestly: "%LINK-F-ERROR, elf32-vax --executable emit is vms-404 P3b/P4,
+  # not P3a") -- that is link.c work, explicitly out of P3b's packaging-only
+  # scope, tracked as a separate follow-on blocking P4.
+  # -----------------------------------------------------------------------
+  vax-shipped-shareable-packaging:
+    name: VAX ships the VMS-format shareable graph (vms-c7f7 / vms-404 P3b)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Build LIBVMS$SHR.EXE (genuine elf32-vax .vms$sv shareable, from the real src/libvms RTL)
+        run: |
+          set +e
+          # -v /tmp:/tmp: build-vax-shareable-graph.sh writes to BUILD_DIR
+          # under /tmp (default /tmp/build-vax-shareable-graph) INSIDE the
+          # container; bind-mounting the runner's own /tmp makes that output
+          # visible to the next (non-containerized) step on the runner.
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -v /tmp:/tmp -w /src \
+                  ovmx-cross-vax sh tools/cross-vax/build-vax-shareable-graph.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: build-vax-shareable-graph.sh exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL VAX SHAREABLE-GRAPH CHECKS PASSED' \
+            || { echo "FAIL: did not see the shareable-graph PASS banner"; exit 1; }
+          echo "PASS: LIBVMS\$SHR.EXE is a genuine elf32-vax ET_DYN .vms\$sv shareable, self-contained, built from the real src/libvms RTL"
+
+      - name: Build the host ovmx_kit_pack tool
+        run: |
+          cmake -S . -B /tmp/host-build -DBUILD_TOOLS=ON -DBUILD_TESTS=OFF
+          cmake --build /tmp/host-build --target ovmx_kit_pack -j"$(nproc)"
+
+      - name: Stage LIBVMS$SHR.EXE into the VAX SYSLIB via build-os-kit-vax.sh (--shareables-dir)
+        run: |
+          set -euo pipefail
+          FAKE_IMAGES=/tmp/fake-vax-images
+          mkdir -p "$FAKE_IMAGES"
+          for f in STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE LOGINOUT.EXE \
+                   PRODUCT.EXE AUTHORIZE.EXE INITIALIZE.EXE SYSGEN.EXE; do
+            printf 'CI placeholder (this job proves SYSLIB staging, not the boot-image build)\n' > "$FAKE_IMAGES/$f"
+          done
+          sh tools/cross-vax/build-os-kit-vax.sh "$FAKE_IMAGES" "$PWD" /tmp/ovmx-os-vax-shareable.kit \
+              /tmp/host-build/bin/ovmx_kit_pack --shareables-dir /tmp/build-vax-shareable-graph/out
+          echo "PASS: build-os-kit-vax.sh stages LIBVMS\$SHR.EXE into SYSLIB and round-trips it byte-exact (SYS\$SHARE hard-fail lifted)"
+
+  # -----------------------------------------------------------------------
   # vax-cmake-images (rd vms-64a, epic vms-509 "unified cross-platform
   # build", Rung B; docs/design-unified-cross-build.md §3-B/§8). This job
   # proves the `ovmx-images` aggregate target -- the single authoritative

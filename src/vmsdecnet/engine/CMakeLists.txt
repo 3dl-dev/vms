@@ -29,7 +29,14 @@ target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 # touched. It ties the socketless engine core to the live datalink + a monotonic
 # clock. Links ovmx_datalink for its socket/bpf open + MAC-get + send + recv
 # primitives.
-add_executable(decnetd_exe decnetd.c)
+# decnetd_rms_bind.c: force-bind anchor (vms-8c2). DECNETD.EXE's FAL half reaches
+# the RMS record services + the binary SYSUAF engine through LIBVMS's `#pragma
+# weak` seam; under a static link a weak-only reference does not extract the
+# vmsrms archive member, so --fal-accept-test's real auth + real file I/O failed
+# with sys$open/ovmx_sysuaf_read_user NULL. The anchor takes their address so the
+# static linker pulls rms_core.o + sysuaf_live.o (the same weak-seam trap
+# provision_rms_bind.c / loginout_rms_bind.c / tests/qemu/rms_acp_bind.c close).
+add_executable(decnetd_exe decnetd.c decnetd_rms_bind.c)
 target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libdatalink/include       # scs_datalink.h
@@ -54,9 +61,15 @@ target_include_directories(decnetd_exe PRIVATE
 # pulls in vmsdecnet_dap (the DAP codec). The --fal-* proofs run the server and
 # client as two blocking peers, so decnetd links Threads.
 find_package(Threads REQUIRED)
+# vmsrms: the binary RMS record services + the $UAFDEF Purdy SYSUAF engine that
+# the FAL half's rms_textfile_* and sysuaf_lookup weak-seam onto (vms-8c2). Its
+# archive must be in DECNETD's link closure for decnetd_rms_bind.c's strong
+# references to extract rms_core.o + sysuaf_live.o; PROVISION.EXE links it the
+# same way. Ordered after vmsdecnet_fal so its members satisfy the anchors.
 target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm
                                           vmsdecnet_cterm_host vmsdecnet_fal
                                           vmsdecnet_dap ovmx_datalink
+                                          vmsrms
                                           Threads::Threads)
 target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_SOURCE_DIR}/src/libvmssys                 # vms_kif.h ($GETDVI readback)

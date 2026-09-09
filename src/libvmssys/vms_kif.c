@@ -2411,6 +2411,7 @@ int vms_kif_lnm_enumerate(uint32_t table,
             out[n].num_values = nv;
 
             out[n].attributes = e->attributes;
+            out[n].acmode = e->acmode;
             n++;
         }
 

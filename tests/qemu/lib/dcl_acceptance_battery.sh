@@ -325,6 +325,56 @@ run_dcl_acceptance_battery() {
     must_not_have "$SEG" 'Default buffer size' "SHOW DEVICE/FULL OPA0: [vms-bed]: no fabricated Default buffer size (info->width is column width, not buffer size -- INV-6 honest omission)"
     negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE/FULL OPA0:"
 
+    # --- SHOW DEVICE/FULL (BARE, vms-ddc: the operator hit "/FULL does nothing")
+    # The named path above already honored /FULL; the BARE listing did NOT -- its
+    # terminal loop called the brief show_device_row() regardless of /FULL, so a
+    # bare `SHOW DEVICE/FULL` printed the same one-line rows as `SHOW DEVICE`.
+    # Fixed to render each device's full block (mirroring the disk loop + the
+    # named path). Assert the console's FULL block appears in the bare listing.
+    # OPA0: exists on every arch, so this assertion is substrate-independent.
+    run_cmd 'SHOW DEVICE/FULL'
+    must_have  "$SEG" 'Terminal OPA0' "SHOW DEVICE/FULL [vms-ddc]: the BARE /FULL listing renders the terminal FULL block (was the brief row -- the '/FULL does nothing' bug)"
+    must_have  "$SEG" 'Owner process' "SHOW DEVICE/FULL [vms-ddc]: bare /FULL shows the Owner process block, proving /FULL is applied in the bare listing, not only the named path"
+    negctl     "$SEG" 'SHOW DEVICE' "SHOW DEVICE/FULL (bare)"
+
+    # --- SHOW LOGICAL/FULL (vms-676: cmd_show_logical() never checked /FULL,
+    # so SHOW LOGICAL/FULL was byte-identical to bare SHOW LOGICAL -- same
+    # qualifier-ignored bug class as vms-ddc/SHOW DEVICE/FULL above). /FULL now
+    # adds a per-name [access-mode] tag and a per-entry [attribute,...] tag,
+    # read from the REAL lnm_entry_t.acmode/.attributes (never fabricated --
+    # vms_kif_lnm_enumerate() now carries the executive's actual acmode instead
+    # of the old hardcoded LNM_MODE_EXEC, src/libvmssys/vms_kif.c).
+    #
+    # SYS$SYSROOT is OVMX's own boot-seeded concealed rooted search list
+    # (src/vmslnm/lnm_defaults.c), created at LNM_MODE_EXEC. vms-762: the seed
+    # now carries BOTH LNM_ATTR_CONCEALED and LNM_ATTR_TERMINAL, matching real
+    # OpenVMS VAX V7.3's SYS$SYSROOT [concealed,terminal] exactly
+    # (docs/oracle/vax73-system-root-logicals.md) -- a rooted concealed logical
+    # is by definition both concealed and terminal, so the prior
+    # concealed-only seed was a fidelity gap, not an intentional omission.
+    run_cmd 'SHOW LOGICAL SYS$SYSROOT'
+    must_have  "$SEG" 'SYS$SYSROOT' "SHOW LOGICAL SYS\$SYSROOT [vms-676]: names the logical"
+    must_not_have "$SEG" '[exec]' "SHOW LOGICAL SYS\$SYSROOT (bare, no /FULL) [vms-676]: no access-mode tag -- bare output is unchanged by the /FULL fix"
+    must_not_have "$SEG" '[concealed]' "SHOW LOGICAL SYS\$SYSROOT (bare, no /FULL) [vms-676]: no attribute tag -- bare output is unchanged by the /FULL fix"
+    negctl     "$SEG" 'SHOW LOGICAL' "SHOW LOGICAL SYS\$SYSROOT"
+
+    run_cmd 'SHOW LOGICAL/FULL SYS$SYSROOT'
+    must_have  "$SEG" 'SYS$SYSROOT' "SHOW LOGICAL/FULL SYS\$SYSROOT [vms-676]: names the logical"
+    must_have  "$SEG" '[exec]' "SHOW LOGICAL/FULL SYS\$SYSROOT [vms-676]: real access-mode tag [exec] (SYS\$SYSROOT is seeded at LNM_MODE_EXEC) -- proves /FULL now changes the output"
+    must_have  "$SEG" '[concealed,terminal]' "SHOW LOGICAL/FULL SYS\$SYSROOT [vms-762]: real attribute tag [concealed,terminal] (LNM_ATTR_CONCEALED | LNM_ATTR_TERMINAL) -- now MATCHES the oracle's [concealed,terminal] exactly (docs/oracle/vax73-system-root-logicals.md)"
+    negctl     "$SEG" 'SHOW LOGICAL' "SHOW LOGICAL/FULL SYS\$SYSROOT"
+
+    # SYS$SYSDEVICE: vms-762 -- the seed now carries BOTH LNM_ATTR_CONCEALED
+    # and LNM_ATTR_TERMINAL too, so SYS$SYSROOT and SYS$SYSDEVICE render the
+    # SAME attribute set, matching the oracle's [concealed,terminal] on both
+    # (docs/oracle/vax73-system-root-logicals.md) -- the prior CONCEALED-only /
+    # TERMINAL-only split was a fabricated asymmetry, not a real one.
+    run_cmd 'SHOW LOGICAL/FULL SYS$SYSDEVICE'
+    must_have  "$SEG" 'SYS$SYSDEVICE' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: names the logical"
+    must_have  "$SEG" '[exec]' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-676]: real access-mode tag [exec]"
+    must_have  "$SEG" '[concealed,terminal]' "SHOW LOGICAL/FULL SYS\$SYSDEVICE [vms-762]: real attribute tag [concealed,terminal] (LNM_ATTR_CONCEALED | LNM_ATTR_TERMINAL) -- now MATCHES the oracle's [concealed,terminal] exactly (docs/oracle/vax73-system-root-logicals.md)"
+    negctl     "$SEG" 'SHOW LOGICAL' "SHOW LOGICAL/FULL SYS\$SYSDEVICE"
+
     # --- F$GETDVI reads the SAME real executive device table (vms-050) -------
     # F$GETDVI used to fabricate: EXISTS=TRUE for EVERY name, VOLNAM guessed from
     # a name substring ("OVMXSYS"/"VOLUME"), DEVCLASS/DEVTYPE guessed the same
@@ -543,6 +593,20 @@ run_dcl_acceptance_battery() {
     # it wired accounting, not a scheduler; they stay omitted, not "coming later".)
     must_not_have "$SEG" 'State' "SHOW SYSTEM [vms-f62]: no fabricated State column (executive holds no VMS scheduler state -- permanent honest omission)"
     negctl     "$SEG" 'SHOW SYSTEM' "SHOW SYSTEM"
+
+    # --- SHOW STATUS labels the resident page count correctly (vms-3c2) ------
+    # Earlier code put info.pages (JPI$_PPGCNT, the RESIDENT page count) under
+    # the label "Cur. ws." -- but real VMS's "Cur. ws." is the working-set
+    # SIZE (JPI$_WSSIZE), a DISTINCT quantity (docs/oracle/vax73-show-status.md).
+    # A real number under the WRONG label is worse than an honest omission
+    # (INV-6, anti-LARP finding 2026-09-07): OVMX has no JPI$_WSSIZE-equivalent
+    # source, so "Cur. ws." must be absent, not mislabeled, and the resident
+    # count belongs under its real field name, "Phys. Mem.".
+    run_cmd 'SHOW STATUS'
+    must_have     "$SEG" 'Elapsed CPU' "SHOW STATUS [vms-3c2]: header shows real Elapsed CPU"
+    must_match    "$SEG" 'Phys\. Mem\.[[:space:]]*:[[:space:]]*[0-9]+' "SHOW STATUS [vms-3c2]: the resident page count (JPI\$_PPGCNT) is labeled 'Phys. Mem.', its real VMS field name"
+    must_not_have "$SEG" 'Cur. ws.' "SHOW STATUS [vms-3c2]: does NOT print 'Cur. ws.' -- OVMX has no working-set-SIZE source (JPI\$_WSSIZE), so the field is honestly omitted rather than mislabeled"
+    negctl        "$SEG" 'SHOW STATUS' "SHOW STATUS"
 
     # --- F$PID reads the SAME executive process table as SHOW SYSTEM (vms-050) --
     # F$PID used to snapshot Linux /proc (opendir("/proc"), every numeric entry a

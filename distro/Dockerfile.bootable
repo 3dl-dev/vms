@@ -622,6 +622,15 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # stages build-static/bin/LIBRARIAN.EXE, so the path + presence are proven.
     cp build-static/bin/LIBRARIAN.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/OVMXDUMP       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # DECnet Phase IV: ship the NCP configuration utility on the running system
+    # so an admin can build the node database (DEFINE NODE) + set the executor.
+    # NCP.EXE is portable C and ships on BOTH arches (see the ovmx-images vax
+    # aggregate). The DECNETD.EXE network daemon is NOT staged yet: its AF_PACKET
+    # datalink + PTY login path need the netbsd-vax userspace port + a booted
+    # proof before it ships (rd vms-30e); staging it x86-only would be an unbuilt
+    # parity gap, which the #589 allowlist forbids. Plain `cp ... SYSEXE/` form so
+    # the image-parity scanner sees it.
+    cp build-static/bin/NCP.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # TCC.EXE (compiler) + LINK.EXE (linker) -- the self-host toolchain on the
     # shipped disk (vms-992e). LINK.EXE comes from build-static (BUILD_TOOLS
     # vmslink target); TCC.EXE from the mk_tcc_static.sh step above. LIBRARIAN.EXE

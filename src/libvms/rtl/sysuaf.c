@@ -36,6 +36,7 @@
 #include "ssdef.h"      /* $VMS_STATUS_SUCCESS */
 #include "uaidef.h"
 #include "prv_names.h"  /* VMS_PRIV_NAME_LIST X-macro */
+#include "starlet.h"    /* sys$gettim — the canonical VMS "now" (vms-c6df)     */
 
 /* ------------------------------------------------------------------ */
 /* Weak references to the LIBVMSRMS binary SYSUAF entry points          */
@@ -401,6 +402,43 @@ int sysuaf_account_captive(const sysuaf_record_t *rec)
     if (!rec)
         return 0;
     return (sysuaf_flags_to_mask(rec->flags) & UAI$M_CAPTIVE) ? 1 : 0;
+}
+
+/*
+ * PASSWORD-EXPIRATION (vms-c6df). See the contract in sysuaf.h.
+ *
+ * Anti-LARP: every field is read from the binary $UAFDEF record (rec->raw)
+ * through the same little-endian accessors the rest of this file uses, NOT from
+ * the rendered flag-NAME string -- the names table omits PWD_EXPIRED, so a names
+ * round-trip would silently lose an admin-forced expiry. "Now" is the canonical
+ * VMS system time (sys$gettim), the same clock uaf$q_pwd_date/uaf$q_pwd_lifetime
+ * are expressed in (100ns ticks since the VMS epoch), so the comparison is a
+ * pure VMS-time arithmetic with no epoch confusion.
+ */
+int sysuaf_password_expired(const sysuaf_record_t *rec)
+{
+    if (!rec)
+        return 1;   /* fail closed: never grant a normal login on a null record */
+
+    uint32_t flags = le32(rec->raw.uaf$l_flags);
+    if (flags & UAI$M_PWD_EXPIRED)
+        return 1;   /* admin forced the expiry (AUTHORIZE MODIFY/FLAGS=PWD_EXPIRED) */
+
+    uint64_t lifetime = le64(rec->raw.uaf$q_pwd_lifetime);
+    if (lifetime == 0)
+        return 0;   /* no lifetime configured -> the password never expires by age */
+
+    uint64_t pwd_date = le64(rec->raw.uaf$q_pwd_date);
+    uint64_t now = 0;
+    if (!$VMS_STATUS_SUCCESS(sys$gettim(&now)))
+        return 1;   /* cannot read the clock -> fail closed rather than pass a stale pwd */
+
+    /* Guard the add against wrap (a corrupt/huge lifetime): if pwd_date+lifetime
+     * overflows, the "expiry instant" is effectively infinite -> not expired. */
+    uint64_t expiry = pwd_date + lifetime;
+    if (expiry < pwd_date)
+        return 0;
+    return (now > expiry) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */

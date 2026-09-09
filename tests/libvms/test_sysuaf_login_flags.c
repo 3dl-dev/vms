@@ -58,6 +58,20 @@ static sysuaf_record_t rec_with_flags(const char *flags)
     return rec;
 }
 
+/* Little-endian writers for the raw $UAFDEF expiry fields (vms-c6df). The
+ * expiry predicate reads these from the binary record, NOT from the flag-NAME
+ * string, so the test must set the raw bytes -- the same representation the
+ * on-disk record and AUTHORIZE/mksysuaf produce. */
+static void le32w(uint8_t *p, uint32_t v)
+{
+    p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static void le64w(uint8_t *p, uint64_t v)
+{
+    le32w(p, (uint32_t)v); le32w(p + 4, (uint32_t)(v >> 32));
+}
+
 /* Slurp a source file for the source-guard checks. Returns malloc'd buffer
  * (caller frees) or NULL. */
 static char *slurp(const char *path)
@@ -151,6 +165,61 @@ int main(int argc, char *argv[])
     CHECK(sysuaf_account_captive(NULL) == 0,
           "NULL record: not captive (fail closed)");
 
+    /* ---- Password-expiration predicate (vms-c6df) ---- */
+
+    /* A record with neither the flag nor a lifetime is NOT expired -- a normal
+     * account is unaffected (no false positive). */
+    {
+        sysuaf_record_t r;
+        memset(&r, 0, sizeof(r));
+        strncpy(r.username, "TESTUSR", sizeof(r.username) - 1);
+        CHECK(sysuaf_password_expired(&r) == 0,
+              "no PWD_EXPIRED flag, zero lifetime: NOT expired (normal account)");
+    }
+
+    /* Admin-forced expiry: UAI$M_PWD_EXPIRED set in the raw flags longword.
+     * Read via le32 from raw, NOT via the flag-name string (PWD_EXPIRED is not
+     * in the names table -- a names round-trip would drop it). */
+    {
+        sysuaf_record_t r;
+        memset(&r, 0, sizeof(r));
+        strncpy(r.username, "TESTUSR", sizeof(r.username) - 1);
+        le32w(r.raw.uaf$l_flags, UAI$M_PWD_EXPIRED);
+        CHECK(sysuaf_password_expired(&r) == 1,
+              "UAI$M_PWD_EXPIRED (admin-forced): password EXPIRED (the vms-c6df hole)");
+    }
+
+    /* Lifetime elapsed: non-zero lifetime with change-date at the VMS epoch, so
+     * now > PWD_DATE + PWD_LIFETIME. */
+    {
+        sysuaf_record_t r;
+        memset(&r, 0, sizeof(r));
+        strncpy(r.username, "TESTUSR", sizeof(r.username) - 1);
+        le64w(r.raw.uaf$q_pwd_date, 0);
+        le64w(r.raw.uaf$q_pwd_lifetime, 1);
+        CHECK(sysuaf_password_expired(&r) == 1,
+              "lifetime elapsed (PWD_DATE+LIFETIME in the past): password EXPIRED");
+    }
+
+    /* A future expiry instant is NOT expired: a large lifetime from a recent
+     * change-date puts PWD_DATE+LIFETIME well beyond now. */
+    {
+        sysuaf_record_t r;
+        memset(&r, 0, sizeof(r));
+        strncpy(r.username, "TESTUSR", sizeof(r.username) - 1);
+        /* pwd_date ~ now (a big VMS-tick value) + a ~3-year lifetime; the sum is
+         * far in the future, so not expired regardless of the wall clock. */
+        le64w(r.raw.uaf$q_pwd_date, 0x00E0000000000000ULL);
+        le64w(r.raw.uaf$q_pwd_lifetime, 0x0010000000000000ULL);
+        CHECK(sysuaf_password_expired(&r) == 0,
+              "lifetime NOT yet elapsed (expiry instant in the future): NOT expired");
+    }
+
+    /* Fail closed on a NULL record: an unreadable record is treated as expired,
+     * never granted a normal login. */
+    CHECK(sysuaf_password_expired(NULL) == 1,
+          "NULL record: password treated as EXPIRED (fail closed)");
+
     /* ---- Source guards: the login path actually CALLS the predicates ---- */
 
     if (argc > 1) {
@@ -163,6 +232,8 @@ int main(int argc, char *argv[])
                   "LOGINOUT consults sysuaf_account_captive");
             CHECK(strstr(login, "--captive") != NULL,
                   "LOGINOUT passes --captive to DCL for a captive account");
+            CHECK(strstr(login, "sysuaf_password_expired") != NULL,
+                  "LOGINOUT gates login on sysuaf_password_expired (vms-c6df)");
             free(login);
         }
     }

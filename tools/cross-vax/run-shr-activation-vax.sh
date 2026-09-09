@@ -9,9 +9,11 @@
 # `purdy_s_hash` from the SHIPPED LIBVMS$SHR.EXE (rd vms-c7f7) -- a REAL
 # cross-shareable universal-symbol call whose result is VALUE-SENSITIVE: the
 # real OpenVMS "VAX V1" oracle vector (docs/oracle/purdy-hash-vectors.md),
-# printed over a REAL write(2) syscall (P4BOOT$SHR.EXE's p4boot_puts, this
-# gate's tiny exit/write runtime shim -- LIBVMS$SHR.EXE rightly exports
-# neither), landing on the SIMH console transcript.
+# written by CONSUMER.EXE directly to the /dev/console DEVICE (the channel a
+# NetBSD process always has, since this SysV-activated fork()+execve() child's
+# inherited fd 1/2 are NOT console-wired -- consumer_main.c), and corroborated
+# by DCL's $STATUS (SS$_NORMAL iff the value was golden), both landing on the
+# SIMH console transcript.
 #
 # WHY NOT $STATUS/OVMX-SEAM (the Alpha shipped-shareable gate's discipline,
 # rd vms-410/#1075, tools/cross-alpha/run-module-gp-activation-alpha.sh
@@ -87,16 +89,25 @@ TIMEOUT_GRACE="${TIMEOUT_GRACE:-30}"
 # The cross-shareable purdy_s_hash returns THIS iff IMGACT genuinely resolved
 # the .vms$imp against the shipped LIBVMS$SHR.EXE's .vms$sv and the call ran.
 GOLDEN='716cbdc03c071c59'
-# CONSUMER.EXE (consumer_main.c) prints the value on TWO channels, so a hit on
-# EITHER proves the call ran and returned the value; the gate reports which:
-#   C-RTL printf channel (rc3.c's console-surfacing shape):
+# CONSUMER.EXE (consumer_main.c) prints the value on THREE channels, so a hit on
+# ANY proves the call ran and returned the value; the gate reports which:
+#   /dev/console DEVICE channel (PRIMARY -- survives an unwired fd 1/2, the
+#   measured failure mode of the prior cut; the exact open() PID 1 uses):
+EXPECT_LINE_CON="OVMX-VAX-SHR-ACT-CON: purdy=0x${GOLDEN}"
+#   C-RTL printf channel (rc3.c's console-surfacing shape, fallback):
 EXPECT_LINE="OVMX-VAX-SHR-ACT: purdy=0x${GOLDEN}"
-#   bare write(2) fallback channel (self-contained, no stdio init):
+#   bare write(2)-to-inherited-fd fallback channel (self-contained, no stdio):
 EXPECT_LINE_RAW="OVMX-VAX-SHR-ACT-RAW: purdy=0x${GOLDEN}"
-# The regexp that captures the value printed on EITHER channel, golden or not,
+# The regexp that captures the value printed on ANY channel, golden or not,
 # so a WRONG value is surfaced as a REAL product finding rather than a silent
 # miss (rd vms-d4a: never force a pass; report the truth).
-VALUE_GREP='OVMX-VAX-SHR-ACT(-RAW)?: purdy=0x[0-9a-f]{16}'
+VALUE_GREP='OVMX-VAX-SHR-ACT(-CON|-RAW)?: purdy=0x[0-9a-f]{16}'
+# The SECOND, console-PROVEN golden witness (independent of every text channel
+# above): CONSUMER returns 0 IFF got==golden, and DCL maps a fork()+execve()
+# child's exit 0 to $STATUS = SS$_NORMAL (%X00000001), which the proof
+# SYSTARTUP echoes as its "STATUS=" line. Only the exact golden 64-bit value
+# makes consumer_body() return 0, so this line is itself value-sensitive.
+STATUS_NORMAL_LINE="VAX-SHR-ACT-PROOF: STATUS=%X00000001"
 
 log() { echo "[shr-activation-vax] $*"; }
 die() { echo "[shr-activation-vax] FATAL: $*" >&2; exit 1; }
@@ -116,26 +127,42 @@ assert_shr_activation() {
   [ -f "$log_file" ] || { echo "  FAIL: no console log at $log_file"; return 1; }
 
   # Which channel(s) carried the GOLDEN value?
-  local ch_crtl=0 ch_raw=0
+  local ch_con=0 ch_crtl=0 ch_raw=0
+  grep -qaF "$EXPECT_LINE_CON" "$log_file" && ch_con=1
   grep -qaF "$EXPECT_LINE" "$log_file"     && ch_crtl=1
   grep -qaF "$EXPECT_LINE_RAW" "$log_file" && ch_raw=1
-  local golden_hit=0
-  [ "$ch_crtl" -eq 1 ] || [ "$ch_raw" -eq 1 ] && golden_hit=1
+  local golden_line=0
+  { [ "$ch_con" -eq 1 ] || [ "$ch_crtl" -eq 1 ] || [ "$ch_raw" -eq 1 ]; } && golden_line=1
 
   # Every value CONSUMER actually printed (golden or not), for the readout.
   local values
   values=$(grep -aoE "$VALUE_GREP" "$log_file" 2>/dev/null | sed -E 's/.*=0x//' | sort -u | tr '\n' ' ' || true)
   # A value line that is NOT the golden one => a real product finding.
   local wrong=0
-  if [ "$golden_hit" -eq 0 ] && [ -n "$values" ]; then wrong=1; fi
+  if [ "$golden_line" -eq 0 ] && [ -n "$values" ]; then wrong=1; fi
+
+  # The SECOND golden witness: DCL's $STATUS after RUN CONSUMER == SS$_NORMAL,
+  # which happens IFF consumer_body() returned 0 IFF the purdy value was golden.
+  # This proves golden even if no text channel surfaced -- but it is trusted
+  # ONLY when no CONFLICTING wrong value line was printed (the text value is
+  # authoritative when present).
+  local status_normal=0
+  grep -qaF "$STATUS_NORMAL_LINE" "$log_file" && status_normal=1
+
+  local golden_hit=0
+  [ "$golden_line" -eq 1 ] && golden_hit=1
+  [ "$status_normal" -eq 1 ] && [ "$wrong" -eq 0 ] && golden_hit=1
 
   local errs err_ok=1
   errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]" "$log_file" 2>/dev/null || true)
   [ -n "$errs" ] && err_ok=0
 
-  echo "  (a) golden purdy value surfaced     : hit=$golden_hit (want 0x${GOLDEN}; channels: crtl=$ch_crtl raw=$ch_raw)"
-  echo "      values CONSUMER printed         : [${values:-<none surfaced>}]"
-  [ "$wrong" -eq 1 ] && echo "      *** WRONG VALUE -- cross-shareable resolved to a NON-golden hash: REAL PRODUCT FINDING ***"
+  echo "  (a) golden purdy value surfaced     : hit=$golden_hit (want 0x${GOLDEN}; value-line=$golden_line channels: con=$ch_con crtl=$ch_crtl raw=$ch_raw; \$STATUS-normal witness=$status_normal)"
+  echo "      values CONSUMER printed         : [${values:-<none surfaced on any text channel>}]"
+  [ "$wrong" -eq 1 ] && echo "      *** WRONG VALUE -- cross-shareable resolved to a NON-golden hash: REAL PRODUCT FINDING (escalate with the value above) ***"
+  if [ "$golden_line" -eq 0 ] && [ "$wrong" -eq 0 ] && [ "$status_normal" -eq 0 ]; then
+    echo "      NOTE: no value line AND \$STATUS is not SS\$_NORMAL -- CONSUMER did not run to a golden exit (activation/exec failure, or a wrong value it could not surface)"
+  fi
   echo "  (b) no activation err               : ok=$err_ok"
   [ "$err_ok" -eq 0 ] && echo "      offending: $(printf '%s' "$errs" | tr '\n' '|')"
 
@@ -150,6 +177,7 @@ assert_shr_activation() {
 GOOD_FIXTURE() {
   cat <<EOF
 VAX-SHR-ACT-PROOF: === RUN CONSUMER (IMGACT resolves .vms\$sv; cross-shareable purdy_s_hash call into the shipped LIBVMS\$SHR.EXE) ===
+$EXPECT_LINE_CON
 $EXPECT_LINE_RAW
 $EXPECT_LINE
 VAX-SHR-ACT-PROOF: STATUS=%X00000001 SEVERITY=1
@@ -161,33 +189,53 @@ selftest() {
   local fails=0
 
   GOOD_FIXTURE > "$d/good.log"
-  echo "-- selftest 1/5: GOOD transcript (both channels golden) must PASS --"
+  echo "-- selftest 1/6: GOOD transcript (all channels golden + \$STATUS normal) must PASS --"
   if assert_shr_activation "$d/good.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: good transcript rejected"; fails=$((fails+1)); fi
 
-  # Only the C-RTL channel surfaces (the raw fallback did not) -- still a PASS,
-  # since the golden value reached the console on a working channel.
-  GOOD_FIXTURE | grep -v -- "-RAW:" > "$d/crtlonly.log"
-  echo "-- selftest 2/5: only the C-RTL channel golden must PASS --"
-  if assert_shr_activation "$d/crtlonly.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: single-channel golden rejected"; fails=$((fails+1)); fi
+  # Only the /dev/console channel surfaces (fd 1/2 unwired, so RAW+CRTL absent)
+  # -- still a PASS, since the golden value reached the console on the PRIMARY
+  # channel. This is the measured real-substrate shape.
+  { echo "VAX-SHR-ACT-PROOF: === RUN CONSUMER ==="
+    echo "$EXPECT_LINE_CON"
+    echo "VAX-SHR-ACT-PROOF: STATUS=%X00000001 SEVERITY=1"; } > "$d/cononly.log"
+  echo "-- selftest 2/6: only the /dev/console channel golden must PASS --"
+  if assert_shr_activation "$d/cononly.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: console-only golden rejected"; fails=$((fails+1)); fi
 
-  # A WRONG 64-bit value on both channels: the cross-shareable resolved to the
-  # wrong thing -- a REAL product finding, must FAIL (value-sensitive teeth).
-  GOOD_FIXTURE | sed 's/716cbdc03c071c59/deadbeefcafef00d/' > "$d/wronghash.log"
-  echo "-- selftest 3/5: wrong hash value must FAIL (real product finding) --"
+  # No text value line AT ALL, but $STATUS is SS$_NORMAL: the exit-code witness
+  # alone proves golden (consumer_body returned 0 IFF got==golden). Must PASS.
+  { echo "VAX-SHR-ACT-PROOF: === RUN CONSUMER ==="
+    echo "VAX-SHR-ACT-PROOF: STATUS=%X00000001 SEVERITY=1"; } > "$d/statusonly.log"
+  echo "-- selftest 3/6: no value line but \$STATUS=SS\$_NORMAL (exit-code witness) must PASS --"
+  if assert_shr_activation "$d/statusonly.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: \$STATUS-normal witness rejected"; fails=$((fails+1)); fi
+
+  # A WRONG 64-bit value on the channels (and $STATUS aborted, as a nonzero exit
+  # produces): the cross-shareable resolved to the wrong thing -- a REAL product
+  # finding, must FAIL. A stray STATUS-normal line must NOT rescue it (the text
+  # value is authoritative), so this also pins that precedence.
+  { echo "VAX-SHR-ACT-PROOF: === RUN CONSUMER ==="
+    echo "OVMX-VAX-SHR-ACT-CON: purdy=0xdeadbeefcafef00d"
+    echo "%DCL-E-ABORT, image SYS\$SYSTEM:CONSUMER exited with error status %X00000001"
+    echo "VAX-SHR-ACT-PROOF: STATUS=%X0000002C SEVERITY=4"; } > "$d/wronghash.log"
+  echo "-- selftest 4/6: wrong hash value must FAIL (real product finding) --"
   if assert_shr_activation "$d/wronghash.log" >/dev/null 2>&1; then echo "  FAIL: wrong hash accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
-  GOOD_FIXTURE | grep -v "purdy=" > "$d/missing.log"
-  echo "-- selftest 4/5: no value line at all must FAIL --"
-  if assert_shr_activation "$d/missing.log" >/dev/null 2>&1; then echo "  FAIL: missing value accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
+  # Nothing surfaced and $STATUS aborted: CONSUMER did not activate / never ran
+  # to a golden exit. Must FAIL (no golden witness of any kind).
+  { echo "VAX-SHR-ACT-PROOF: === RUN CONSUMER ==="
+    echo "%DCL-E-ABORT, image SYS\$SYSTEM:CONSUMER exited with error status %X00000001"
+    echo "VAX-SHR-ACT-PROOF: STATUS=%X0000002C SEVERITY=4"; } > "$d/nothing.log"
+  echo "-- selftest 5/6: no value line AND \$STATUS aborted must FAIL --"
+  if assert_shr_activation "$d/nothing.log" >/dev/null 2>&1; then echo "  FAIL: silent abort accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   { echo "VAX-SHR-ACT-PROOF: === RUN CONSUMER ==="
-    echo "$EXPECT_LINE"
+    echo "$EXPECT_LINE_CON"
+    echo "VAX-SHR-ACT-PROOF: STATUS=%X00000001 SEVERITY=1"
     echo '%IMGACT-F-IMGNOTFND, image SYS$SYSTEM:CONSUMER.EXE not found'; } > "$d/imgact.log"
-  echo "-- selftest 5/5: golden value BUT an IMGACT activation failure must FAIL --"
+  echo "-- selftest 6/6: golden value BUT an IMGACT activation failure must FAIL --"
   if assert_shr_activation "$d/imgact.log" >/dev/null 2>&1; then echo "  FAIL: activation failure accepted"; fails=$((fails+1)); else echo "  PASS (rejected)"; fi
 
   if [ "$fails" -eq 0 ]; then
-    echo "=== selftest: assert_shr_activation() has teeth (good/single-channel pass, wrong-value + missing + activation-fail red) ==="
+    echo "=== selftest: assert_shr_activation() has teeth (console-only + \$STATUS-witness pass; wrong-value + silent-abort + activation-fail red) ==="
     return 0
   fi
   echo "=== selftest FAILED: $fails case(s) wrong -- the gate cannot be trusted ==="

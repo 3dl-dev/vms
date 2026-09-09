@@ -1,6 +1,20 @@
 /*
- * decnetd.c - the OVMX DECnet Phase IV routing ENGINE daemon (rd vms-449d,
- *             engine rung 1 of epic vms-30e).
+ * decnetd.c - the OVMX DECnet NETACP: session control + the device/object
+ *             dispatch face, with the Phase IV wire engine as its low-privilege
+ *             DATALINK (rd vms-449d engine rung 1; rd vms-9ab P5 NETACP reframe,
+ *             design vms-515 §3.3/§3.4; epic vms-30e).
+ *
+ * THE NETACP MODEL (P5, vms-9ab). This process is DECnet's privileged
+ * RUN/DETACHED session-control ACP (JOB_CONTROL's category -- NOT kernel-
+ * resident; DECnet has no DLM-survival analogue that would justify moving it
+ * into vms.ko). It OWNS the executive-resident faces a VMS program sees: the
+ * _NET: device (born in src/kernel-core/vms_devtab.c, $ASSIGN/$GETDVI-able
+ * cross-process) and the network-object dispatch (object 42 = CTERM -> RTAn: +
+ * $CREPRC LOGINOUT). The wire engine below -- HELLO/adjacency/NSP/CTERM codecs
+ * over an AF_PACKET raw-L2 socket -- is DEMOTED to NETACP's DATALINK: it runs at
+ * LOW privilege, parses hostile frames, and hands the privileged control path
+ * only a VALIDATED TYPED DESCRIPTOR (the A2/A8 seam, see dnet_cterm_host.h and
+ * the --isolation-test mode). The privileged path parses no attacker bytes.
  *
  * A userspace daemon that
  * owns a raw-L2 datalink and speaks a DEC wire protocol over it, while
@@ -47,6 +61,7 @@
 #include "dnet_cterm_host.h" /* CTERM HOST session: $CREPRC -> LOGINOUT on RTAn: */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
+#include "ssdef.h"          /* SS$_BADPARAM (isolation-seam refusal, vms-9ab) */
 #include "vms_kif.h"        /* $GETDVI readback: the sec-7.5 anti-LARP tell */
 
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
@@ -803,14 +818,29 @@ static int run_cterm_accept_test(void)
              "the inbound connect names Session Control OBJECT 42 (CTERM), decoded"
              " off the wire in the oracle's format-0 destination-descriptor shape");
 
-    /* ---- 2. DISPATCH IT: mint RTAn: in the executive, $CREPRC LOGINOUT ---- */
-    st = dnet_cterm_host_open(&c.hs, c.R.link.conn_data, c.R.link.conn_len,
-                              c.R.link.remote_node);
+    /* ---- 2. DISPATCH IT, ACROSS THE ISOLATION SEAM (vms-515 §3.4) ---------
+     * The wire bytes are parsed at LOW privilege into a validated typed
+     * descriptor; ONLY that descriptor is handed to the privileged control
+     * path, which mints RTAn: + $CREPRCs LOGINOUT. This is the exact two-step
+     * NETACP serve flow -- open-coded here so the test drives the same seam the
+     * daemon does, not a convenience wrapper. */
+    {
+        struct dnet_conn_descriptor desc;
+        int prc = dnet_conn_descriptor_from_wire(c.R.link.conn_data,
+                                                 c.R.link.conn_len,
+                                                 c.R.link.remote_node, &desc);
+        CT_CHECK(prc == DNET_CTERM_OK && desc.validated && desc.dst_is_object &&
+                     desc.dst_object == DNET_CTERM_OBJECT,
+                 "the untrusted connect is parsed at LOW PRIVILEGE into a"
+                 " VALIDATED typed descriptor naming object 42 -- the privileged"
+                 " path is handed this, never the wire bytes (vms-515 §3.4)");
+        st = dnet_cterm_host_open_desc(&c.hs, &desc);
+    }
     CT_CHECK((st & 1) != 0,
              "object-42 dispatch created the session through the REAL executive"
              " ($CREPRC PRC$M_INTER|PRC$M_LOGINOUT on an executive-minted RTAn:)");
     if (!(st & 1)) {
-        fprintf(stderr, "DECNETD-E-CTERMACCEPT, dnet_cterm_host_open failed, status %08X\n",
+        fprintf(stderr, "DECNETD-E-CTERMACCEPT, dnet_cterm_host_open_desc failed, status %08X\n",
                 (unsigned)st);
         fprintf(stderr, "  (INV-6: no per-process imitation of a login is substituted;"
                         " a real /dev/vms + SYS$SYSTEM:LOGINOUT.EXE are required)\n");
@@ -821,15 +851,13 @@ static int run_cterm_accept_test(void)
 
     /* The carried identity is PROXY info and NOTHING ELSE (the oracle's A4/A9
      * answer). It shows up on the accounting surface, and the session is still
-     * about to be challenged for a username and a password. */
-    CT_CHECK(strcmp(c.hs.sc.src_user, "SYSTEM") == 0 &&
-             strstr(c.hs.remote_port_info, "::SYSTEM") != NULL,
+     * about to be challenged for a username and a password. The descriptor
+     * STRUCTURALLY cannot carry a credential -- it has no password field -- so
+     * the "no login on carried identity" property is now enforced by the type,
+     * not just measured on this specimen. */
+    CT_CHECK(strstr(c.hs.remote_port_info, "::SYSTEM") != NULL,
              "the connect-carried node::user is surfaced as Remote Port Info"
              " (proxy/accounting), exactly as the oracle's SHOW TERMINAL does");
-    CT_CHECK(c.hs.sc.password_len == 0,
-             "the connect carried NO password (oracle: the access-control fields"
-             " are empty) -- a login from the carried identity would be a login on"
-             " zero credential material");
 
     /* ---- 3. sec-7.5 TELL: $GETDVI the device FROM THIS PROCESS ------------ */
     {
@@ -988,6 +1016,117 @@ verdict:
     return 1;
 }
 
+/*
+ * ===================== --isolation-test (rd vms-9ab) =====================
+ * THE A2/A8 ISOLATION PROOF, privileged half. --cterm-accept-test (above)
+ * proves the POSITIVE path end to end on a booted image; this proves the
+ * NEGATIVE contract of the seam, and it needs NEITHER CAP_NET_RAW NOR
+ * /dev/vms, because every case here is REFUSED at NETACP's privileged front
+ * door BEFORE it would touch the executive:
+ *
+ *   - dnet_cterm_host_open_desc() -- the privileged control path that mints
+ *     RTAn: and $CREPRCs LOGINOUT -- takes ONLY a validated typed descriptor.
+ *     Handed an UNVALIDATED descriptor (the state a malformed frame leaves) or
+ *     one naming any object but 42, it returns SS$_BADPARAM and creates NO
+ *     device and NO process (master_fd stays -1). So a fuzzed inbound frame,
+ *     whose low-privilege parse fails, cannot reach the session-creating code.
+ *
+ *   - the double-door: for a mutation-fuzz corpus, EVERY frame the low-priv
+ *     parse (dnet_conn_descriptor_from_wire) rejects is ALSO refused by the
+ *     privileged path -- the two doors agree, and neither opens on hostile
+ *     bytes. This is run here (not only in the pure unit test) so the SAME
+ *     binary that serves the wire is the one proven to hold the door.
+ *
+ * Returns 0 on PASS, 1 on FAIL.
+ */
+static int run_isolation_test(void)
+{
+    struct dnet_cterm_host_session hs;
+    struct dnet_conn_descriptor d;
+    uint32_t st;
+    int pass = 0, fail = 0;
+
+    printf("DECNETD-I-ISOLATION, the A2/A8 privileged-path isolation proof"
+           " (rd vms-9ab; design vms-515 §3.4; runs off-target, needs neither"
+           " CAP_NET_RAW nor a booted executive)\n");
+
+    /* 1. An UNVALIDATED (all-zero) descriptor is refused, nothing created. */
+    memset(&hs, 0, sizeof(hs)); hs.master_fd = -1;
+    memset(&d, 0, sizeof(d));   /* validated == 0 */
+    st = dnet_cterm_host_open_desc(&hs, &d);
+    if (!(st & 1) && hs.master_fd == -1 && hs.active == 0) {
+        printf("  PASS: an UNVALIDATED descriptor is refused (%08X); no device,"
+               " no process (the state a malformed frame leaves)\n", (unsigned)st);
+        pass++;
+    } else { printf("  FAIL: an unvalidated descriptor was not cleanly refused\n"); fail++; }
+
+    /* 2. A VALIDATED descriptor naming the WRONG object (17 = FAL, not built)
+     *    is refused -- INV-6: a known-but-unbuilt object is not faked. */
+    memset(&hs, 0, sizeof(hs)); hs.master_fd = -1;
+    memset(&d, 0, sizeof(d));
+    d.validated = 1; d.dst_is_object = 1; d.dst_object = DNET_OBJ_FAL;
+    st = dnet_cterm_host_open_desc(&hs, &d);
+    if (!(st & 1) && hs.master_fd == -1 && hs.active == 0) {
+        printf("  PASS: a validated descriptor for object 17 (FAL, unbuilt) is"
+               " refused (%08X); no fabricated session (INV-6)\n", (unsigned)st);
+        pass++;
+    } else { printf("  FAIL: a wrong-object descriptor was not cleanly refused\n"); fail++; }
+
+    /* 3. A validated NAMED-TASK descriptor (not a well-known object) is refused
+     *    by this CTERM dispatch. */
+    memset(&hs, 0, sizeof(hs)); hs.master_fd = -1;
+    memset(&d, 0, sizeof(d));
+    d.validated = 1; d.dst_is_object = 0; d.dst_object = DNET_CTERM_OBJECT;
+    st = dnet_cterm_host_open_desc(&hs, &d);
+    if (!(st & 1) && hs.master_fd == -1) {
+        printf("  PASS: a named-task descriptor (not a well-known object) is"
+               " refused (%08X)\n", (unsigned)st);
+        pass++;
+    } else { printf("  FAIL: a named-task descriptor was not cleanly refused\n"); fail++; }
+
+    /* 4. THE DOUBLE-DOOR under mutation fuzz: every frame the low-priv parse
+     *    rejects, the privileged path also refuses -- proven on THIS binary. */
+    {
+        unsigned seed = 0x9abd0000u & 0x7fffffff, i, mism = 0, reached = 0;
+        for (i = 0; i < 100000; i++) {
+            uint8_t mbuf[64];
+            size_t mlen = (size_t)(rand_r(&seed) % sizeof(mbuf)), j;
+            int muts, m;
+            static const uint8_t seedmsg[10] =
+                { 0x00, 0x2a, 0x02, 0x00, 0x00, 0x00, 0x21, 0x84, 0x02, 0x27 };
+            for (j = 0; j < mlen; j++)
+                mbuf[j] = j < sizeof(seedmsg) ? seedmsg[j]
+                                              : (uint8_t)(rand_r(&seed) & 0xff);
+            muts = 1 + (rand_r(&seed) % 3);
+            for (m = 0; m < muts && mlen; m++)
+                mbuf[rand_r(&seed) % mlen] = (uint8_t)(rand_r(&seed) & 0xff);
+
+            int rc = dnet_conn_descriptor_from_wire(mbuf, mlen, 1025, &d);
+            if (rc != DNET_CTERM_OK) {
+                reached++;
+                memset(&hs, 0, sizeof(hs)); hs.master_fd = -1;
+                st = dnet_cterm_host_open_desc(&hs, &d);
+                if ((st & 1) || hs.master_fd != -1 || hs.active)
+                    mism++;
+            }
+        }
+        if (mism == 0 && reached > 10000) {
+            printf("  PASS: double-door fuzz -- %u parse-rejected frames, EVERY"
+                   " one also refused by the privileged path (no device/process)\n",
+                   reached);
+            pass++;
+        } else {
+            printf("  FAIL: double-door fuzz mism=%u reached=%u\n", mism, reached);
+            fail++;
+        }
+    }
+
+    printf("DECNETD-I-ISOLATION, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-ISOLATION: PASS\n"); return 0; }
+    printf("DECNETD-ISOLATION: FAIL\n");
+    return 1;
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -1021,6 +1160,13 @@ static void usage(const char *argv0)
         "                      RTAn:) and the REAL LOGINOUT.EXE must CHALLENGE it\n"
         "                      and REFUSE bad credentials. Needs /dev/vms +\n"
         "                      SYS$SYSTEM:LOGINOUT.EXE; no CAP_NET_RAW.\n"
+        "  --isolation-test    run the A2/A8 privileged-path isolation proof and\n"
+        "                      exit (needs neither CAP_NET_RAW nor an executive):\n"
+        "                      an unvalidated\n"
+        "                      or wrong-object descriptor is refused by NETACP's\n"
+        "                      privileged control path before any device/process\n"
+        "                      exists, and a mutation-fuzz corpus the low-priv\n"
+        "                      parse rejects is refused there too (double-door).\n"
         "  --cterm-server      serve inbound $ SET HOST on the live datalink:\n"
         "                      accept a logical link to object 42 and create a\n"
         "                      process running LOGINOUT.EXE on an RTAn: for it.\n"
@@ -1043,6 +1189,7 @@ int main(int argc, char **argv)
     int nsp_self_test = 0;
     int sethost_self_test = 0;
     int cterm_accept_test = 0;
+    int isolation_test = 0;
     int cterm_server = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -1060,6 +1207,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
+        else if (!strcmp(argv[i], "--isolation-test")) isolation_test = 1;
         else if (!strcmp(argv[i], "--cterm-server")) cterm_server = 1;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
@@ -1079,6 +1227,8 @@ int main(int argc, char **argv)
         return run_sethost_selftest();
     if (cterm_accept_test)
         return run_cterm_accept_test();
+    if (isolation_test)
+        return run_isolation_test();
 
     /* Identity is required and never invented (INV-6; the scsd
      * resolve_node_identity discipline: a wrong identity must never be made up). */
@@ -1159,10 +1309,14 @@ int main(int argc, char **argv)
         alarm((unsigned)duration);
     }
 
-    /* Startup: the VMS-visible face (never the raw socket). */
+    /* Startup: the VMS-visible face (never the raw socket). NETACP model
+     * (vms-9ab, P5): this process is DECnet's session-control ACP; the wire
+     * engine below is its low-privilege DATALINK, and the AF_PACKET socket is
+     * hidden behind the executive device face _NET: (Rule 1, vms-515 §3.3). */
     log_ts(stdout);
-    printf(" DECNETD-I-STARTED, DECnet Phase IV endnode up on circuit %s"
-           " (datalink hidden behind the VMS surface, Rule 1)\n", eng.circuit);
+    printf(" DECNETD-I-STARTED, NETACP up: DECnet Phase IV endnode on circuit %s"
+           " (wire engine demoted to NETACP's datalink; AF_PACKET hidden behind"
+           " the _NET: device face, Rule 1)\n", eng.circuit);
     dnet_engine_show_executor(&eng, stdout);
     dnet_engine_show_circuit(&eng, stdout);
     fflush(stdout);
@@ -1360,9 +1514,21 @@ int main(int argc, char **argv)
                                            : "no such object served here");
                         fflush(stdout);
                     } else {
-                        cst = dnet_cterm_host_open(&host, eng.link.conn_data,
-                                                   eng.link.conn_len,
-                                                   eng.link.remote_node);
+                        /* THE ISOLATION SEAM (vms-515 §3.4). Parse the untrusted
+                         * connect at low privilege into a validated typed
+                         * descriptor, then hand ONLY that to the privileged
+                         * control path. The privileged path never sees
+                         * eng.link.conn_data. A malformed frame fails the parse
+                         * here and the peer is refused below like any other
+                         * unservable connect. */
+                        struct dnet_conn_descriptor desc;
+                        if (dnet_conn_descriptor_from_wire(eng.link.conn_data,
+                                                           eng.link.conn_len,
+                                                           eng.link.remote_node,
+                                                           &desc) != DNET_CTERM_OK)
+                            cst = SS$_BADPARAM;
+                        else
+                            cst = dnet_cterm_host_open_desc(&host, &desc);
                         if (!(cst & 1)) {
                             /* No session, no shell, no fallback. */
                             if (dnet_engine_link_close(&eng, DNET_LINK_REASON_OBJREJ,

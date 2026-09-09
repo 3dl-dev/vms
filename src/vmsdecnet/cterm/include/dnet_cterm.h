@@ -79,6 +79,17 @@ extern "C" {
 #define DNET_CTERM_OBJECT   42
 
 /*
+ * The well-known DNA Session Control object numbers NETACP's object table
+ * dispatches (design vms-515 §3.3; register sec 4). CTERM (42) is served today;
+ * TASK (0, task-to-task) and FAL (17, File Access Listener) are DECLARED so the
+ * executive object table can answer "a known object, not yet built" HONESTLY
+ * (INV-6: an unbuilt object is refused, never faked into a fabricated session).
+ */
+#define DNET_OBJ_TASK    0
+#define DNET_OBJ_FAL     17
+#define DNET_OBJ_CTERM   DNET_CTERM_OBJECT   /* 42 */
+
+/*
  * CTERM message types (OVMX-assigned within the CTERM namespace; spec-derived
  * from the public DNA CTERM functional description -- see the provenance block).
  * The first byte of every CTERM PDU. Split into the Foundation (session setup)
@@ -346,6 +357,64 @@ int dnet_cterm_sc_connect_object(const uint8_t *buf, size_t len);
  */
 int dnet_cterm_remote_port_info(const struct dnet_cterm_sc_connect *sc,
                                 uint16_t src_addr, char *out, size_t cap);
+
+/*
+ * ================= THE A2/A8 ISOLATION SEAM (design vms-515 §3.4) ============
+ *
+ * A VALIDATED, TYPED inbound-connect descriptor. This is the ONLY thing the
+ * privileged control path (NETACP's session creation -- dnet_cterm_host_open_desc,
+ * which mints an RTAn: and $CREPRCs LOGINOUT) is allowed to see. Attacker-
+ * controlled wire bytes are parsed at LOW privilege by
+ * dnet_conn_descriptor_from_wire() and NEVER cross into the privileged path.
+ *
+ * THE SEAM IS THE STRUCT'S SHAPE, not a promise:
+ *   - there is NO pointer to, and NO length of, the wire frame here -- the
+ *     privileged side has nothing raw to re-parse and cannot be handed a longer
+ *     or differently-shaped buffer than the parser already bounded;
+ *   - there are NO password bytes and no access-control material here -- the
+ *     parser measured and dropped them (dnet_cterm.c), so no credential a peer
+ *     supplied can reach a decision;
+ *   - every string is already bounded (DNET_SC_MAX_STR) and printable-filtered;
+ *   - `validated` is set ONLY by a successful bounded parse. A descriptor that
+ *     did not come out of the parser is all-zero, validated == 0, and the
+ *     privileged consumer REFUSES it (SS$_BADPARAM) rather than acting on a
+ *     zero object. A fuzzed/malformed frame therefore produces a descriptor the
+ *     privileged path rejects at its own front door -- it never mints a device
+ *     or creates a process from hostile input.
+ */
+struct dnet_conn_descriptor {
+    int      validated;       /* nonzero IFF produced by a successful bounded parse   */
+    int      dst_is_object;   /* 1 = well-known object (format 0); 0 = named task     */
+    uint8_t  dst_object;      /* destination object number (0..255), meaningful iff ^ */
+    uint16_t peer_addr;       /* engine-decoded routing address -- NOT wire-supplied  */
+    char     proxy_user[DNET_SC_MAX_STR + 1]; /* accounting/proxy identity ONLY       */
+    char     proxy_task[DNET_SC_MAX_STR + 1]; /* named-task target (format 1/2)       */
+};
+
+/*
+ * dnet_conn_descriptor_from_wire - the LOW-PRIVILEGE parse boundary. Decode the
+ * untrusted NSP-connect bytes with the fully-bounded dnet_cterm_sc_connect_parse
+ * and distil them into a validated descriptor. `peer_addr` is the engine's own
+ * decode of the routing header (executive/engine state, never a value the peer
+ * wrote into the connect), and is the ONLY address that reaches the descriptor.
+ *
+ * On success sets out->validated = 1 and returns DNET_CTERM_OK. On ANY parse
+ * failure *out is left all-zero (validated == 0) and the parser's negative
+ * error code is returned -- the caller must not, and cannot usefully, hand an
+ * unvalidated descriptor to the privileged path.
+ */
+int dnet_conn_descriptor_from_wire(const uint8_t *conn_data, size_t conn_len,
+                                   uint16_t peer_addr,
+                                   struct dnet_conn_descriptor *out);
+
+/*
+ * dnet_conn_descriptor_port_info - render "<addr>::<user>" (the oracle's Remote
+ * Port Info form) from a validated descriptor, for the accounting/human surface.
+ * Uses the descriptor's already-filtered proxy_user and engine-decoded peer_addr.
+ * Returns DNET_CTERM_OK or DNET_CTERM_EINVAL/ENOSPACE.
+ */
+int dnet_conn_descriptor_port_info(const struct dnet_conn_descriptor *desc,
+                                   char *out, size_t cap);
 
 /* ---- session state machine ---------------------------------------------- */
 

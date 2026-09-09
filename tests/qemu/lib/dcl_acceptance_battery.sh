@@ -1019,6 +1019,51 @@ run_dcl_acceptance_battery() {
     wait_for '$ ' 20 "$CTERM_OFF"
 
     # =======================================================================
+    # DECnet NETACP ISOLATION (vms-9ab, P5) -- the A2/A8 security seam. Design
+    # vms-515 §3.4: attacker-controlled wire parsing runs at LOW privilege and
+    # hands NETACP's thin privileged control path only a VALIDATED, TYPED
+    # descriptor; the privileged path parses no attacker bytes. This mode is the
+    # NEGATIVE proof of that seam and needs NEITHER /dev/vms NOR CAP_NET_RAW --
+    # every case is refused at NETACP's privileged front door BEFORE it would
+    # mint a device or create a process. So unlike --cterm-accept-test it is a
+    # hard gate wherever DECNETD.EXE is present, executive or not.
+    local ISOL_OFF; ISOL_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --isolation-test'
+    if wait_for 'IVIMAGE' 15 "$ISOL_OFF"; then
+        note "NETACP isolation [vms-9ab]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the A2/A8 privileged-path isolation proof DID NOT RUN here (staging DECNETD.EXE onto the VAX/Alpha rails is the same tracked follow-on as CTERM above)"
+    elif wait_for 'DECNETD-ISOLATION:' 60 "$ISOL_OFF"; then
+        local ISSEG; ISSEG=$(tail -c "+$((ISOL_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$ISSEG" 'DECNETD-ISOLATION: PASS' \
+            "NETACP isolation [vms-9ab]: the privileged control path refuses an UNVALIDATED or wrong-object descriptor with no device/process created, and every parse-rejected fuzz frame is refused there too (the A2/A8 seam holds on the shipped binary)"
+        must_have "$ISSEG" 'double-door fuzz' \
+            "NETACP isolation [vms-9ab]: a mutation-fuzz corpus the low-priv parse rejects is ALSO refused by the privileged path -- a hostile frame cannot reach session creation"
+        must_not_have "$ISSEG" 'DECNETD-ISOLATION: FAIL' \
+            "NETACP isolation [vms-9ab]: no isolation assertion failed"
+        negctl "$ISSEG" 'DECNETD-I-ISOLATION' "DECnet NETACP isolation"
+    else
+        bad "NETACP isolation [vms-9ab]: DECNETD.EXE --isolation-test produced no verdict line within 60s"
+    fi
+    wait_for '$ ' 20 "$ISOL_OFF"
+
+    # The DECnet device FACE _NET: is executive-resident and cross-process real
+    # (vms-9ab, P5; design §2b/§7.5). $GETDVI it from DCL -- a process that is
+    # NOT NETACP -- and it resolves; the deep cross-process assertions (class,
+    # normalization, unowned) live in tests/qemu/test_kmod_devtab.c on the kmod
+    # leg. Gated on the node having a NIC (INV-6): where ETH0: exists _NET: does.
+    local NETDEV_OFF; NETDEV_OFF=$(wc -c <"$LOG")
+    run_cmd 'IF F$GETDVI("_NET:","EXISTS") THEN WRITE SYS$OUTPUT "OVMX-NET-FACE: _NET: EXISTS"'
+    run_cmd 'IF .NOT. F$GETDVI("_NET:","EXISTS") THEN WRITE SYS$OUTPUT "OVMX-NET-FACE: _NET: ABSENT"'
+    local NETSEG; NETSEG=$(tail -c "+$((NETDEV_OFF + 1))" "$LOG" | tr -d '\r')
+    if printf '%s' "$NETSEG" | grep -q 'OVMX-NET-FACE: _NET: EXISTS'; then
+        ok "NETACP device face [vms-9ab]: \$GETDVI _NET: from DCL (a non-NETACP process) resolves a real executive device -- the DECnet device face is cross-process real (§7.5 tell)"
+    elif printf '%s' "$NETSEG" | grep -q 'OVMX-NET-FACE: _NET: ABSENT'; then
+        note "NETACP device face [vms-9ab]: _NET: is ABSENT on this runtime -- honest only if this node has no primary NIC (INV-6: no NIC, no DECnet device face). If ETH0: exists here this is a FAILURE the kmod-leg test_kmod_devtab will red."
+    else
+        note "NETACP device face [vms-9ab]: F\$GETDVI _NET: produced no OVMX-NET-FACE line (older DCL F\$GETDVI EXISTS item, or no /dev/vms) -- the authoritative cross-process proof is test_kmod_devtab on the kmod leg"
+    fi
+    wait_for '$ ' 20 "$NETDEV_OFF"
+
+    # =======================================================================
     # SESSION PRIMITIVE (vms-3e9) -- $CREPRC creates the session, LOGINOUT
     # re-personas it. Design record docs/design/faithful-sessions-and-network-
     # subsystems.md §3.1/§6-P1, ratification gates §7.1/§7.5.

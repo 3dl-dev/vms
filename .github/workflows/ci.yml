@@ -8058,6 +8058,86 @@ jobs:
           echo "PASS: facility guest tools (eflag/access/proctab/mbx) built for netbsd-vax as real ELF32 VAX executables via CMake, and every width negctl teeth genuinely rejected the LP64 TU"
 
   # -----------------------------------------------------------------------
+  # vmslink-vax (rd vms-19b, epic vms-404 P3a; docs/design/vax-symbol-vector-
+  # imgact.md §1c "R3"). Per-PR, fast, link-only (no SIMH): proves LINK.EXE —
+  # a SEPARATE compile of src/vmslink/link.c with -DOVMX_LINK_ELF32 (an ElfW-
+  # style width switch, same per-ARCH-compile convention build_link_native.sh
+  # already uses) — consumes elf32-vax objects from the cross-vax binutils/gcc
+  # toolchain and emits a valid elf32-vax ET_DYN OVMX shareable carrying a
+  # .vms$sv symbol vector + .vms$imp imports, with every R_VAX_* relocation
+  # (PC32/PLT32/GOT32/R_VAX_32) APPLIED in-image (no leftover .rela.dyn), and
+  # that the DEFAULT (LP64) build's x86_64 output is byte-unchanged (additive
+  # gate). readelf-shape only — the SIMH runtime-activation proof is P4.
+  # -----------------------------------------------------------------------
+  vmslink-vax:
+    name: LINK.EXE VMS-native Linker — elf32-vax .vms$sv shareables (vms-19b / vms-404 P3a)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch), falling through to a gha-cached source
+      # build on a miss. Identical pattern to netbsd-vax-facility-tools-crosscompile.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (shared gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Prove LINK.EXE (-DOVMX_LINK_ELF32) emits elf32-vax .vms$sv shareables + the LP64 gate stays additive
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE:/src" -w /src \
+                  ovmx-cross-vax sh src/vmslink/test/run_test_vax.sh 2>&1)
+          RC=$?
+          set -e
+          echo "$RAW"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: elf32-vax LINK.EXE .vms\$sv shareable proof exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'ALL LINK.EXE elf32-vax .vms$sv SHAREABLE CHECKS PASSED' \
+            || { echo "FAIL: did not see the elf32-vax PASS banner"; exit 1; }
+          echo "PASS: LINK.EXE emits elf32-vax ET_DYN .vms\$sv/.vms\$imp shareables (R_VAX_* relocs applied); LP64 output byte-unchanged"
+
+  # -----------------------------------------------------------------------
   # vax-cmake-images (rd vms-64a, epic vms-509 "unified cross-platform
   # build", Rung B; docs/design-unified-cross-build.md §3-B/§8). This job
   # proves the `ovmx-images` aggregate target -- the single authoritative

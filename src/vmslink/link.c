@@ -47,6 +47,98 @@
 #include "ovmx_link_rms_io.h"   /* vms-b5a: RMS-backed object read + image write */
 #endif
 
+/* --------------------------------------------------------------------------
+ * ELF width abstraction (vms-19b / vms-404 P3a, docs/design/vax-symbol-vector-
+ * imgact.md §1c "R3").
+ *
+ * LINK.EXE is a host tool that reads foreign ELF relocatable objects and emits
+ * an OVMX shareable of the SAME ELF class. The x86_64 / aarch64 producer graph
+ * is Elf64 (LP64); the VAX (vax--netbsdelf) producer graph is elf32-vax (ILP32).
+ * The two classes have DIFFERENT struct layouts, and — decisively — the VAX
+ * r_info type codes (R_VAX_32=1, R_VAX_PC32=4, R_VAX_GOT32=7, R_VAX_PLT32=13)
+ * COLLIDE numerically with the x86_64 set (R_X86_64_64=1, PC32=2, PLT32=4,
+ * GOTPCREL=9), so one binary cannot dispatch both by type value at run time.
+ *
+ * VAX support is therefore a SEPARATE COMPILE of this same source with
+ * -DOVMX_LINK_ELF32 (producing e.g. LINKVAX.EXE), exactly as build_link_
+ * native.sh already compiles a per-ARCH linker driven by $CC -dumpmachine. The
+ * DEFAULT build (no macro) is byte-for-byte the pre-vms-19b Elf64 x86_64/aarch64
+ * linker — every Elf_/ELF_/OVMX_ELFCLASS/OVMX_PTRW token below expands to its
+ * Elf64 spelling, so the translation unit is identical.
+ *
+ * WIDTH-PORTABLE by construction (a favorable finding, design §1c): the OVMX
+ * symbol-vector sections (.vms$sv / .vms$imp / .vms$wimp / .vms$rel / .vms$tls)
+ * keep their 64-bit containers on BOTH classes — value/patch_off/offsets stay
+ * uint64_t on the wire, byte-identical across arches, and IMGACT reads the low
+ * 32 bits on VAX (ovmx_symvec.h resolves value in software: load_bias + value).
+ * Only the ELF CONTAINER structs (Ehdr/Phdr/Shdr/Sym/Rela) and the IN-IMAGE
+ * POINTER cells IMGACT biases (GOT / import-GOT / ABS pointer initializers) are
+ * width-switched — those are pointer-width (4 bytes on VAX, 8 elsewhere).
+ * -------------------------------------------------------------------------- */
+#ifndef EM_VAX
+#define EM_VAX 75
+#endif
+#ifdef OVMX_LINK_ELF32
+typedef Elf32_Ehdr  Elf_Ehdr;
+typedef Elf32_Phdr  Elf_Phdr;
+typedef Elf32_Shdr  Elf_Shdr;
+typedef Elf32_Sym   Elf_Sym;
+typedef Elf32_Rela  Elf_Rela;
+typedef Elf32_Word  Elf_Word;
+typedef Elf32_Half  Elf_Half;
+#define ELF_R_TYPE(i)  ELF32_R_TYPE(i)
+#define ELF_R_SYM(i)   ELF32_R_SYM(i)
+#define ELF_ST_BIND(i) ELF32_ST_BIND(i)
+#define OVMX_ELFCLASS  ELFCLASS32
+#define OVMX_EM_NATIVE EM_VAX
+#define OVMX_PTRW      4u             /* in-image pointer cell width (ILP32) */
+#else
+typedef Elf64_Ehdr  Elf_Ehdr;
+typedef Elf64_Phdr  Elf_Phdr;
+typedef Elf64_Shdr  Elf_Shdr;
+typedef Elf64_Sym   Elf_Sym;
+typedef Elf64_Rela  Elf_Rela;
+typedef Elf64_Word  Elf_Word;
+typedef Elf64_Half  Elf_Half;
+#define ELF_R_TYPE(i)  ELF64_R_TYPE(i)
+#define ELF_R_SYM(i)   ELF64_R_SYM(i)
+#define ELF_ST_BIND(i) ELF64_ST_BIND(i)
+#define OVMX_ELFCLASS  ELFCLASS64
+#define OVMX_PTRW      8u             /* in-image pointer cell width (LP64) */
+#endif
+
+/* Store an image-relative pointer value into an in-image cell (GOT slot,
+ * import-GOT cell, or ABS pointer initializer) at pointer width for the target
+ * class — 4 bytes on VAX (ILP32), 8 elsewhere. A plain `*(uint64_t*)p = v` would
+ * clobber the NEXT 4-byte cell on VAX, so every pointer-cell write routes here.
+ * (vms-19b) */
+static void ovmx_store_ptr(uint8_t *p, uint64_t v)
+{
+#ifdef OVMX_LINK_ELF32
+    uint32_t w = (uint32_t)v; memcpy(p, &w, sizeof w);
+#else
+    memcpy(p, &v, sizeof v);
+#endif
+}
+
+#ifdef OVMX_LINK_ELF32
+/* elf32-vax relocation type codes (vms-19b / P3a). Grounded EMPIRICALLY with
+ * `vax--netbsdelf-objdump -dr` / `readelf -r` on -fPIC objects from the cross-
+ * vax binutils 2.42 toolchain, and the resolved-byte formula re-derived from a
+ * real `vax--netbsdelf-ld -shared` output (docs/design/vax-symbol-vector-
+ * imgact.md §2). VAX PC-relative operands use the longword-displacement PC mode
+ * (`ef` = mode 0xE reg PC; `ff` = deferred, for the GOT indirection); the CPU's
+ * PC points PAST the 4-byte displacement field, so every PC-relative type
+ * carries an implicit -4 bias (the RELA addend is 0, unlike x86_64's -4 field
+ * addend). The in-image write is a flat little-endian 32-bit word, exactly the
+ * shape patch_pcrel/patch_got already use for x86_64 — only the -4 differs. */
+#define R_VAX_32     1   /* absolute 32-bit: S + A (pointer initializer -> .vms$rel) */
+#define R_VAX_PC32   4   /* 32-bit PC-relative: S + A - P - 4                        */
+#define R_VAX_GOT32  7   /* PC-relative(-deferred) ref to GOT slot: G + A - P - 4    */
+#define R_VAX_PLT32 13   /* 32-bit PC-relative call via PLT: S + A - P - 4 (intra-   */
+                         /* link, no stub) / stub_va + A - P - 4 (cross-image import) */
+#endif
+
 /* ABS64 pointer-initializer relocation (S+A written as a 64-bit word — used in
  * .rela.data for pointer tables like stdio FILE structs). Guarded. (vms-004) */
 #ifndef R_AARCH64_ABS64
@@ -314,28 +406,28 @@ struct reloc { uint64_t off; uint64_t info; int64_t add; int sec; };
 struct obj {
     uint8_t      *buf;
     size_t        size;
-    Elf64_Ehdr   *eh;
-    Elf64_Shdr   *sh;       /* section headers */
+    Elf_Ehdr   *eh;
+    Elf_Shdr   *sh;       /* section headers */
     int           nsh;
     const char   *shstr;    /* section header string table */
-    Elf64_Sym    *sym;      /* .symtab */
+    Elf_Sym    *sym;      /* .symtab */
     int           nsym;
     const char   *str;      /* .strtab */
     /* Legacy single-section handles (the *first* of each), used by the simple
      * legacy single-.text consumer path (pre-vms-ba1). */
     int           text_ndx; /* .text section index */
-    Elf64_Shdr   *text;     /* .text section header */
+    Elf_Shdr   *text;     /* .text section header */
     int           rodata_ndx; /* .rodata section index (0 if none) */
-    Elf64_Shdr   *rodata;   /* .rodata section header (0 if none) */
+    Elf_Shdr   *rodata;   /* .rodata section header (0 if none) */
     int           data_ndx; /* .data section index (0 if none) */
-    Elf64_Shdr   *data;     /* .data section header (0 if none) */
+    Elf_Shdr   *data;     /* .data section header (0 if none) */
     int           bss_ndx;  /* .bss section index (0 if none) */
-    Elf64_Shdr   *bss;      /* .bss section header (0 if none) */
+    Elf_Shdr   *bss;      /* .bss section header (0 if none) */
     int           tdata_ndx; /* .tdata (TLS init data) index (0 if none) */
-    Elf64_Shdr   *tdata;    /* .tdata section header (0 if none) */
+    Elf_Shdr   *tdata;    /* .tdata section header (0 if none) */
     int           tbss_ndx; /* .tbss (TLS zero data) index (0 if none) */
-    Elf64_Shdr   *tbss;     /* .tbss section header (0 if none) */
-    Elf64_Rela   *rela;     /* relocations against the first .text (SHT_RELA) */
+    Elf_Shdr   *tbss;     /* .tbss section header (0 if none) */
+    Elf_Rela   *rela;     /* relocations against the first .text (SHT_RELA) */
     int           nrela;
     /* Per-section classification + placement (the shareable path, vms-fa1).
      * Dynamically sized to nsh — no fixed cap, so whole-archive combines with
@@ -372,25 +464,30 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
     o->objname = strdup(name);
     if (!o->objname) die("oom recording object name");
 
-    if (o->size < sizeof(Elf64_Ehdr) || memcmp(o->buf, ELFMAG, SELFMAG) != 0) {
+    if (o->size < sizeof(Elf_Ehdr) || memcmp(o->buf, ELFMAG, SELFMAG) != 0) {
         fprintf(stderr, "%%LINK-F-ERROR, %s: input is not ELF\n", name);
         exit(1);
     }
-    o->eh = (Elf64_Ehdr *)o->buf;
-    if (o->eh->e_ident[EI_CLASS] != ELFCLASS64)
-        die("input is not ELF64");
+    o->eh = (Elf_Ehdr *)o->buf;
+    if (o->eh->e_ident[EI_CLASS] != OVMX_ELFCLASS)
+        die("input ELF class does not match this LINK.EXE build "
+            "(OVMX_LINK_ELF32 build reads elf32-vax; default build reads ELF64)");
     if (o->eh->e_type != ET_REL)
         die("input is not a relocatable object (.o)");
+#ifdef OVMX_LINK_ELF32
+    if (o->eh->e_machine != EM_VAX)
+        die("this LINK.EXE was built -DOVMX_LINK_ELF32 for elf32-vax objects only");
+#else
     if (o->eh->e_machine != EM_AARCH64 && o->eh->e_machine != EM_X86_64)
         die("MVP supports aarch64 and x86_64 objects only");
+#endif
     if (g_out_machine == 0)
         g_out_machine = o->eh->e_machine;
     else if (g_out_machine != o->eh->e_machine)
-        die("mixed-architecture link: all input objects must share one e_machine "
-            "(aarch64 and x86_64 objects cannot be linked into the same image)");
+        die("mixed-architecture link: all input objects must share one e_machine");
 
-    o->sh = (Elf64_Shdr *)xat(o, o->eh->e_shoff,
-                              (uint64_t)o->eh->e_shnum * sizeof(Elf64_Shdr),
+    o->sh = (Elf_Shdr *)xat(o, o->eh->e_shoff,
+                              (uint64_t)o->eh->e_shnum * sizeof(Elf_Shdr),
                               "bad section header table");
     o->nsh = o->eh->e_shnum;
     o->shstr = (const char *)(o->buf + o->sh[o->eh->e_shstrndx].sh_offset);
@@ -424,8 +521,8 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
             o->tbss_ndx = i;
             o->tbss = &o->sh[i];
         } else if (o->sh[i].sh_type == SHT_SYMTAB) {
-            o->sym  = (Elf64_Sym *)(o->buf + o->sh[i].sh_offset);
-            o->nsym = o->sh[i].sh_size / sizeof(Elf64_Sym);
+            o->sym  = (Elf_Sym *)(o->buf + o->sh[i].sh_offset);
+            o->nsym = o->sh[i].sh_size / sizeof(Elf_Sym);
             o->str  = (const char *)(o->buf + o->sh[o->sh[i].sh_link].sh_offset);
         }
     }
@@ -443,20 +540,20 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
     /* Collect relocations against the first .text (SHT_RELA), for the simple
      * consumer path. REL (implicit-addend) is not emitted by aarch64 gcc. */
     for (int i = 0; i < o->nsh; i++) {
-        if (o->sh[i].sh_info != (Elf64_Word)o->text_ndx || o->sh[i].sh_size == 0)
+        if (o->sh[i].sh_info != (Elf_Word)o->text_ndx || o->sh[i].sh_size == 0)
             continue;
         if (o->sh[i].sh_type == SHT_REL)
             die("REL relocations against .text are unsupported (expected RELA)");
         if (o->sh[i].sh_type == SHT_RELA) {
-            o->rela  = (Elf64_Rela *)(o->buf + o->sh[i].sh_offset);
-            o->nrela = o->sh[i].sh_size / sizeof(Elf64_Rela);
+            o->rela  = (Elf_Rela *)(o->buf + o->sh[i].sh_offset);
+            o->nrela = o->sh[i].sh_size / sizeof(Elf_Rela);
         }
     }
 
     /* Classify every allocatable section by ELF flags (not by name), so gcc's
      * split sections merge into the right output region. (vms-fa1) */
     for (int i = 0; i < o->nsh; i++) {
-        Elf64_Shdr *s = &o->sh[i];
+        Elf_Shdr *s = &o->sh[i];
         if (!(s->sh_flags & SHF_ALLOC)) continue;
         if (s->sh_flags & SHF_TLS)
             o->sec_bucket[i] = (s->sh_type == SHT_NOBITS) ? B_TBSS : B_TDATA;
@@ -517,7 +614,7 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
         if (o->sh[i].sh_type != SHT_RELA) continue;
         int t = (int)o->sh[i].sh_info;
         if (t >= 0 && t < o->nsh && bucket_is_patchable(o->sec_bucket[t]))
-            cap += o->sh[i].sh_size / sizeof(Elf64_Rela);
+            cap += o->sh[i].sh_size / sizeof(Elf_Rela);
     }
     o->relocs = cap ? malloc((size_t)cap * sizeof(struct reloc)) : NULL;
     if (cap && !o->relocs) die("oom collecting relocations");
@@ -535,13 +632,13 @@ static void parse_obj(struct obj *o, uint8_t *buf, size_t size, const char *name
                         "does not place it flat\n",
                         name,
                         o->shstr + o->sh[i].sh_name,
-                        (int)(o->sh[i].sh_size / sizeof(Elf64_Rela)),
-                        o->sh[i].sh_size == sizeof(Elf64_Rela) ? "" : "s",
+                        (int)(o->sh[i].sh_size / sizeof(Elf_Rela)),
+                        o->sh[i].sh_size == sizeof(Elf_Rela) ? "" : "s",
                         o->shstr + o->sh[t].sh_name);
             continue;
         }
-        Elf64_Rela *ra = (Elf64_Rela *)(o->buf + o->sh[i].sh_offset);
-        int n = o->sh[i].sh_size / sizeof(Elf64_Rela);
+        Elf_Rela *ra = (Elf_Rela *)(o->buf + o->sh[i].sh_offset);
+        int n = o->sh[i].sh_size / sizeof(Elf_Rela);
         for (int j = 0; j < n; j++)
             o->relocs[o->nreloc++] = (struct reloc){
                 ra[j].r_offset, ra[j].r_info, ra[j].r_addend, t };
@@ -794,8 +891,8 @@ static void symset_add(struct symset *S, const char *name)
 static void collect_defined(struct obj *o, struct symset *D)
 {
     for (int k = 0; k < o->nsym; k++) {
-        Elf64_Sym *s = &o->sym[k];
-        unsigned char b = ELF64_ST_BIND(s->st_info);
+        Elf_Sym *s = &o->sym[k];
+        unsigned char b = ELF_ST_BIND(s->st_info);
         if ((b == STB_GLOBAL || b == STB_WEAK) && s->st_shndx != SHN_UNDEF) {
             const char *nm = o->str + s->st_name;
             if (nm[0]) symset_add(D, nm);
@@ -807,8 +904,8 @@ static void collect_defined(struct obj *o, struct symset *D)
 static int member_satisfies(struct obj *o, struct symset *U)
 {
     for (int k = 0; k < o->nsym; k++) {
-        Elf64_Sym *s = &o->sym[k];
-        unsigned char b = ELF64_ST_BIND(s->st_info);
+        Elf_Sym *s = &o->sym[k];
+        unsigned char b = ELF_ST_BIND(s->st_info);
         if ((b == STB_GLOBAL || b == STB_WEAK) && s->st_shndx != SHN_UNDEF) {
             const char *nm = o->str + s->st_name;
             if (nm[0] && symset_has(U, nm)) return 1;
@@ -841,9 +938,9 @@ static void resolve_olbs(struct obj **objs, int *nobj, int *cap,
         for (int i = 0; i < *nobj; i++) {
             struct obj *o = &(*objs)[i];
             for (int k = 0; k < o->nsym; k++) {
-                Elf64_Sym *s = &o->sym[k];
+                Elf_Sym *s = &o->sym[k];
                 if (s->st_shndx != SHN_UNDEF) continue;
-                if (ELF64_ST_BIND(s->st_info) != STB_GLOBAL) continue; /* strong only */
+                if (ELF_ST_BIND(s->st_info) != STB_GLOBAL) continue; /* strong only */
                 const char *nm = o->str + s->st_name;
                 if (nm[0] && !symset_has(&D, nm)) symset_add(&U, nm);
             }
@@ -994,7 +1091,10 @@ static void parse_gsmatch(char *spec, uint32_t *kind, uint32_t *maj, uint32_t *m
  * Consumer/executable linking: bind imports to producer symbol vectors.
  * -------------------------------------------------------------------------- */
 
-/* aarch64 instruction encoders for the PLT stub + call patch. */
+/* aarch64 instruction encoders for the PLT stub + call patch. Not referenced in
+ * the elf32-vax build (its PLT stub is a VAX `jmp *disp(pc)` — see the stub
+ * loop), so gate them out to keep that build warning-clean. (vms-19b) */
+#ifndef OVMX_LINK_ELF32
 static uint32_t enc_adrp(int rd, int64_t page_delta)
 {
     uint32_t immlo = (uint32_t)(page_delta & 0x3);
@@ -1006,6 +1106,7 @@ static uint32_t enc_ldr_u64(int rt, int rn, uint32_t off /*8-aligned*/)
     return 0xF9400000u | ((off / 8) << 10) | ((uint32_t)rn << 5) | (uint32_t)rt;
 }
 static uint32_t enc_br(int rn) { return 0xD61F0000u | ((uint32_t)rn << 5); }
+#endif
 
 /* A loaded producer shareable image (read to bind universal symbols). */
 struct producer {
@@ -1089,10 +1190,10 @@ static void load_producer(const char *path_in, struct producer *p)
         die("read producer");
     close(fd);
 
-    Elf64_Ehdr *eh = (Elf64_Ehdr *)p->buf;
+    Elf_Ehdr *eh = (Elf_Ehdr *)p->buf;
     if (memcmp(eh->e_ident, ELFMAG, SELFMAG) || eh->e_type != ET_DYN)
         die("producer is not an OVMX shareable image (ET_DYN)");
-    Elf64_Shdr *sh = (Elf64_Shdr *)(p->buf + eh->e_shoff);
+    Elf_Shdr *sh = (Elf_Shdr *)(p->buf + eh->e_shoff);
     const char *shstr = (const char *)(p->buf + sh[eh->e_shstrndx].sh_offset);
     for (int i = 0; i < eh->e_shnum; i++)
         if (strcmp(shstr + sh[i].sh_name, OVMX_SV_SECTION) == 0)
@@ -1280,6 +1381,24 @@ static void vms_wimp_write(uint8_t *img, uint64_t off_wimp, struct import *imp,
 /* Patch one PC-relative relocation instruction to reach `target`. */
 static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t target)
 {
+#ifdef OVMX_LINK_ELF32
+    /* VAX R_VAX_PC32 (data/switch-table PC-relative datum) and the intra-link
+     * R_VAX_PLT32 (a `calls`/`jmp` whose callee is defined in THIS link, so no
+     * PLT stub) both write S + A - P - 4 as a flat little-endian 32-bit word:
+     * `target` already carries the RELA addend A (0 in practice), and the -4 is
+     * the VAX PC bias (the CPU's PC points past the 4-byte displacement field).
+     * Same disp32-write shape as x86_64 PC32/PLT32, only the -4 is intrinsic. */
+    switch (type) {
+    case R_VAX_PC32:
+    case R_VAX_PLT32: {
+        int64_t d = (int64_t)target - (int64_t)site - 4;
+        *insn = (uint32_t)(uint64_t)d;
+        break;
+    }
+    default:
+        die("unsupported elf32-vax .text relocation (need R_VAX_PC32/PLT32)");
+    }
+#else
     switch (type) {
     case R_AARCH64_CALL26:
     case R_AARCH64_JUMP26: {
@@ -1344,6 +1463,7 @@ static void patch_pcrel(uint32_t type, uint32_t *insn, uint64_t site, uint64_t t
     default:
         die("unsupported .text relocation (need a PC-relative type)");
     }
+#endif
 }
 
 /* --------------------------------------------------------------------------
@@ -1537,8 +1657,8 @@ static void build_symhash(struct obj *objs, int nobj)
     if (!g_syms) die("oom building symbol hash");
     for (int i = 0; i < nobj; i++)
         for (int k = 0; k < objs[i].nsym; k++) {
-            Elf64_Sym *s = &objs[i].sym[k];
-            unsigned char bind = ELF64_ST_BIND(s->st_info);
+            Elf_Sym *s = &objs[i].sym[k];
+            unsigned char bind = ELF_ST_BIND(s->st_info);
             if (bind == STB_LOCAL || s->st_shndx == SHN_UNDEF) continue;
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
@@ -1549,9 +1669,9 @@ static void build_symhash(struct obj *objs, int nobj)
      * resolver returns 0 legitimately instead of aborting / deferring. (vms-61f.1) */
     for (int i = 0; i < nobj; i++)
         for (int k = 0; k < objs[i].nsym; k++) {
-            Elf64_Sym *s = &objs[i].sym[k];
+            Elf_Sym *s = &objs[i].sym[k];
             if (s->st_shndx != SHN_UNDEF) continue;
-            if (ELF64_ST_BIND(s->st_info) != STB_WEAK) continue;
+            if (ELF_ST_BIND(s->st_info) != STB_WEAK) continue;
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
             int doi, dki;
@@ -1562,7 +1682,7 @@ static void build_symhash(struct obj *objs, int nobj)
 /* Map a symbol defined in object `d` to its final image vaddr, using the
  * per-section placement filled at layout. Returns 0 for a symbol in a section
  * this linker does not place flat (unplaced, or TLS — addressed via TLSDESC). */
-static uint64_t placed_addr(struct obj *d, Elf64_Sym *s)
+static uint64_t placed_addr(struct obj *d, Elf_Sym *s)
 {
     int sh = (int)s->st_shndx;
     if (sh <= 0 || sh >= d->nsh) return 0;
@@ -1581,7 +1701,7 @@ static uint64_t placed_addr(struct obj *d, Elf64_Sym *s)
 static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
 {
     struct obj *o = &objs[oi];
-    Elf64_Sym *s = &o->sym[symidx];
+    Elf_Sym *s = &o->sym[symidx];
     /* Weak-override (ELF symbol resolution): a WEAK symbol DEFINED in this
      * object must yield to a STRONG global definition of the same name in
      * another object. A relocation whose symtab entry is the locally-defined
@@ -1598,11 +1718,11 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
      * the STRONG def for a name, so resolving weak-defined references by name
      * through the global hash restores correct override. (vms-36a) */
     if (s->st_shndx != SHN_UNDEF &&
-        ELF64_ST_BIND(s->st_info) == STB_WEAK) {
+        ELF_ST_BIND(s->st_info) == STB_WEAK) {
         const char *nm = o->str + s->st_name;
         int doi, dki;
         if (nm[0] && sym_lookup(nm, &doi, &dki) &&
-            ELF64_ST_BIND(objs[doi].sym[dki].st_info) == STB_GLOBAL) {
+            ELF_ST_BIND(objs[doi].sym[dki].st_info) == STB_GLOBAL) {
             uint64_t da = placed_addr(&objs[doi], &objs[doi].sym[dki]);
             if (da) return da;
         }
@@ -1733,6 +1853,18 @@ static int find_got_local(struct gotslot *g, int ng, int oi, int sym)
 static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slot,
                       int64_t add)
 {
+#ifdef OVMX_LINK_ELF32
+    /* VAX R_VAX_GOT32: the operand is a longword PC-relative-deferred reference
+     * (`ff` mode) whose displacement addresses the GOT SLOT; the CPU then
+     * dereferences it. The displacement value is slot + A - P - 4 (VAX PC points
+     * past the 4-byte field; the RELA addend A is 0 in practice), written as a
+     * flat little-endian 32-bit word — the same shape as x86_64 GOTPCREL, only
+     * the -4 is intrinsic to the VAX PC mode rather than a field addend. (vms-19b) */
+    (void)type;
+    int64_t d = (int64_t)slot + add - (int64_t)site - 4;
+    *insn = (uint32_t)(uint64_t)d;
+    return;
+#else
     if (type == R_AARCH64_ADR_GOT_PAGE) {
         int64_t d = (int64_t)(slot >> 12) - (int64_t)(site >> 12);
         uint32_t immlo = (uint32_t)(d & 3), immhi = (uint32_t)((d >> 2) & 0x7FFFF);
@@ -1744,13 +1876,34 @@ static void patch_got(uint32_t type, uint32_t *insn, uint64_t site, uint64_t slo
         int64_t d = (int64_t)slot + add - (int64_t)site;
         *insn = (uint32_t)(uint64_t)d;
     }
+#endif
 }
 
 static int is_got_reloc(uint32_t type)
 {
+#ifdef OVMX_LINK_ELF32
+    /* VAX: a GOT-indirect reference is a single R_VAX_GOT32 (PC-relative-
+     * deferred load through the GOT slot), the elf32-vax analog of x86_64's
+     * single GOTPCREL — NOT a page/lo12 pair. (vms-19b) */
+    return type == R_VAX_GOT32;
+#else
     return type == R_AARCH64_ADR_GOT_PAGE || type == R_AARCH64_LD64_GOT_LO12_NC ||
            type == R_X86_64_GOTPCREL || type == R_X86_64_GOTPCRELX ||
            type == R_X86_64_REX_GOTPCRELX;
+#endif
+}
+
+/* True for a CALL/JUMP relocation that a cross-image reference routes to a PLT
+ * stub. VAX call is R_VAX_PLT32 (mirrors x86_64's R_X86_64_PLT32); an intra-link
+ * callee needs no stub and is patched as a plain PC-relative datum. (vms-19b) */
+static int is_call_reloc(uint32_t type)
+{
+#ifdef OVMX_LINK_ELF32
+    return type == R_VAX_PLT32;
+#else
+    return type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26 ||
+           type == R_X86_64_PLT32;
+#endif
 }
 
 /* A synthesized TLSDESC entry (two quadwords): [0]=resolver (IMGACT fills with
@@ -1772,17 +1925,30 @@ static int find_tls(struct tlsslot *t, int nt, const char *name)
  * R_X86_64_64 alongside the existing R_AARCH64_ABS64.) */
 static int is_abs64_reloc(uint32_t type)
 {
+#ifdef OVMX_LINK_ELF32
+    /* VAX: an absolute pointer initializer is R_VAX_32 (a 32-bit S+A word);
+     * the in-image write is pointer-width (4 bytes) via ovmx_store_ptr, and the
+     * slot is still recorded in .vms$rel for +load_bias at activation. (vms-19b) */
+    return type == R_VAX_32;
+#else
     return type == R_AARCH64_ABS64 || type == R_X86_64_64;
+#endif
 }
 
 static int is_tlsdesc_reloc(uint32_t type)
 {
+#ifdef OVMX_LINK_ELF32
+    /* The VAX shareable graph is _Thread_local-free (design R4): no TLS relocs.
+     * (If a future VAX RTL needs TLS this returns to the operator per §1a.) */
+    (void)type; return 0;
+#else
     return type == R_AARCH64_TLSDESC_ADR_PAGE21 ||
            type == R_AARCH64_TLSDESC_LD64_LO12 ||
            type == R_AARCH64_TLSDESC_ADD_LO12 ||
            type == R_AARCH64_TLSDESC_CALL ||
            type == R_X86_64_GOTPC32_TLSDESC ||
            type == R_X86_64_TLSDESC_CALL;
+#endif
 }
 
 /* x86_64 TLSDESC relocations carry a FIELD addend (-4 on GOTPC32_TLSDESC, for
@@ -1917,7 +2083,7 @@ static uint64_t tls_module_offset(struct obj *objs, int nobj,
     for (int j = 0; j < nobj; j++) {
         struct obj *d = &objs[j];
         for (int k = 0; k < d->nsym; k++) {
-            Elf64_Sym *s = &d->sym[k];
+            Elf_Sym *s = &d->sym[k];
             if (strcmp(d->str + s->st_name, name) != 0) continue;
             if (is_tls_section(d, (int)s->st_shndx))
                 return d->sec_va[s->st_shndx] + s->st_value + (uint64_t)addend;
@@ -1940,7 +2106,7 @@ static uint64_t tls_ref_offset(struct obj *objs, int nobj, int oi, uint32_t si,
                                int64_t addend)
 {
     struct obj *o = &objs[oi];
-    Elf64_Sym  *s = &o->sym[si];
+    Elf_Sym  *s = &o->sym[si];
     if (s->st_shndx != SHN_UNDEF && is_tls_section(o, (int)s->st_shndx))
         return o->sec_va[s->st_shndx] + s->st_value + (uint64_t)addend;
     return tls_module_offset(objs, nobj, o->str + s->st_name, addend);
@@ -1955,7 +2121,7 @@ static int defined_placed(struct obj *objs, const char *name)
 {
     int doi, dki;
     if (!sym_lookup(name, &doi, &dki)) return 0;
-    Elf64_Sym *s = &objs[doi].sym[dki];
+    Elf_Sym *s = &objs[doi].sym[dki];
     int shx = (int)s->st_shndx;
     if (shx <= 0 || shx >= objs[doi].nsh) return 0;
     int b = objs[doi].sec_bucket[shx];
@@ -1987,6 +2153,16 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                            int allow_undef, struct producer *ps, int np,
                            const char *out, int is_exec)
 {
+#ifdef OVMX_LINK_ELF32
+    /* P3a scope is the SHAREABLE side (LINK.EXE emits elf32-vax .vms$sv/.vms$imp
+     * shareables; readelf-shape verified). The elf32-vax EXECUTABLE emit — the
+     * synthesized crt0 (below, x86_64/aarch64 machine code only) and
+     * PT_INTERP=IMGACT.EXE displacing ld.elf_so — is vms-404 P3b/P4, coordinate-
+     * free with this item. Fail HONESTLY rather than emit wrong-arch crt0. (vms-19b) */
+    if (is_exec)
+        die("elf32-vax --executable emit is vms-404 P3b/P4, not P3a "
+            "(LINK.EXE -DOVMX_LINK_ELF32 emits shareables only)");
+#endif
     g_allow_undef = allow_undef;
     g_deferred = 0;
     build_symhash(objs, nobj);
@@ -2019,7 +2195,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     struct import *imp = NULL; int nimp = 0, imp_cap = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++) {
-            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
+            uint32_t type = ELF_R_TYPE(objs[i].relocs[r].info);
             /* R_X86_64_PLT32 is x86_64's call/jmp relocation (vms-206): the
              * SAME reloc type covers both an intra-image callee (patched as a
              * plain PC32-style datum below, no stub) and a cross-image call
@@ -2028,12 +2204,11 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
              * decided by defined_placed()/find_universal() below, same as the
              * aarch64 path -- an intra-image PLT32 never reaches find_universal
              * because defined_placed() is true and the loop `continue`s. */
-            int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26 ||
-                           type == R_X86_64_PLT32);
+            int is_call = is_call_reloc(type);
             int is_gotr = is_got_reloc(type);
             if (!is_call && !is_gotr) continue;
-            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
-            Elf64_Sym *s = &objs[i].sym[si];
+            uint32_t si = ELF_R_SYM(objs[i].relocs[r].info);
+            Elf_Sym *s = &objs[i].sym[si];
             if (s->st_shndx != SHN_UNDEF) continue;      /* locally defined     */
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
@@ -2088,13 +2263,12 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * 0 -- identical to today's bake-to-0, so including them is harmless. */
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++) {
-            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
-            int is_call = (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26 ||
-                           type == R_X86_64_PLT32);
+            uint32_t type = ELF_R_TYPE(objs[i].relocs[r].info);
+            int is_call = is_call_reloc(type);
             int is_gotr = is_got_reloc(type);
             if (!is_call && !is_gotr) continue;
-            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
-            Elf64_Sym *s = &objs[i].sym[si];
+            uint32_t si = ELF_R_SYM(objs[i].relocs[r].info);
+            Elf_Sym *s = &objs[i].sym[si];
             if (s->st_shndx != SHN_UNDEF) continue;
             const char *nm = objs[i].str + s->st_name;
             if (!nm[0]) continue;
@@ -2205,12 +2379,12 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     struct gotslot *got = NULL; int ngot = 0, got_cap = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++) {
-            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
+            uint32_t type = ELF_R_TYPE(objs[i].relocs[r].info);
             if (!is_got_reloc(type)) continue;
-            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
-            Elf64_Sym *sym = &objs[i].sym[si];
+            uint32_t si = ELF_R_SYM(objs[i].relocs[r].info);
+            Elf_Sym *sym = &objs[i].sym[si];
             const char *nm = objs[i].str + sym->st_name;
-            int is_local = (ELF64_ST_BIND(sym->st_info) == STB_LOCAL);
+            int is_local = (ELF_ST_BIND(sym->st_info) == STB_LOCAL);
             /* A LOCAL-bind GOT reference (tcc's per-TU statics / `L.n` string
              * labels) is resolved per-object by (oi, symidx), never by the
              * global name hash — so two TUs' distinct local `L.1`s get DISTINCT
@@ -2240,9 +2414,9 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     struct tlsslot *tls = NULL; int ntls = 0, tls_cap = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++) {
-            uint32_t type = ELF64_R_TYPE(objs[i].relocs[r].info);
+            uint32_t type = ELF_R_TYPE(objs[i].relocs[r].info);
             if (!is_tlsdesc_reloc(type)) continue;
-            uint32_t si = ELF64_R_SYM(objs[i].relocs[r].info);
+            uint32_t si = ELF_R_SYM(objs[i].relocs[r].info);
             const char *nm = objs[i].str + objs[i].sym[si].st_name;
             if (find_tls(tls, ntls, nm) < 0) {
                 if (ntls >= tls_cap) {
@@ -2266,24 +2440,24 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     int nabs = 0;
     for (int i = 0; i < nobj; i++)
         for (int r = 0; r < objs[i].nreloc; r++)
-            if (is_abs64_reloc(ELF64_R_TYPE(objs[i].relocs[r].info))) {
+            if (is_abs64_reloc(ELF_R_TYPE(objs[i].relocs[r].info))) {
                 /* A globalvalue ABS64 reference resolves to an ABSOLUTE constant
                  * that is NOT recorded in .vms$rel (the apply loop skips it), so
                  * it must not inflate the .vms$rel upper bound either — else an
                  * image whose only ABS64 ref is a globalvalue would carry an
                  * empty .vms$rel. (vms-954) */
                 const char *anm = objs[i].str +
-                    objs[i].sym[ELF64_R_SYM(objs[i].relocs[r].info)].st_name;
+                    objs[i].sym[ELF_R_SYM(objs[i].relocs[r].info)].st_name;
                 if (gval_find(anm, NULL)) continue;
                 nabs++;
             }
 
     /* ---- Layout: [ehdr][phdr] text|rodata|got|tlsdesc|data|init_array|tdata|sv|rel|tls|bss --- */
-    uint64_t off_ph   = sizeof(Elf64_Ehdr);
+    uint64_t off_ph   = sizeof(Elf_Ehdr);
     /* shareable: PT_LOAD (+ PT_TLS). executable: PT_PHDR, PT_INTERP, PT_LOAD
      * (+ PT_TLS) — the kernel maps the executable and reads PT_INTERP=IMGACT. */
     int      nph      = is_exec ? (3 + (has_tls ? 1 : 0)) : (has_tls ? 2 : 1);
-    uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf64_Phdr), 16);
+    uint64_t cur      = ALIGN_UP(off_ph + nph * sizeof(Elf_Phdr), 16);
 
     /* executable: the PT_INTERP string (IMGACT.EXE), placed in the loaded range
      * ahead of .text so its file offset == vaddr (identity map). */
@@ -2354,9 +2528,9 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     }
 
     /* GOT cells (writable, 8-aligned). */
-    uint64_t got_beg = ALIGN_UP(cur, 8);
-    for (int i = 0; i < ngot; i++) got[i].va = got_beg + (uint64_t)i * 8;
-    uint64_t got_end = got_beg + (uint64_t)ngot * 8;
+    uint64_t got_beg = ALIGN_UP(cur, OVMX_PTRW);
+    for (int i = 0; i < ngot; i++) got[i].va = got_beg + (uint64_t)i * OVMX_PTRW;
+    uint64_t got_end = got_beg + (uint64_t)ngot * OVMX_PTRW;
     cur = got_end;
 
     /* TLSDESC entries (writable, 2 quadwords = 16 bytes each). The x86_64
@@ -2477,9 +2651,9 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     /* Import-GOT cells: one per cross-image import (writable — IMGACT fills each
      * with the resolved producer address from .vms$imp at activation). Excluded
      * from .vms$rel (absolute, not load-biased). (vms-e65) */
-    uint64_t impgot_beg = ALIGN_UP(cur, 8);
-    for (int i = 0; i < nimp; i++) imp[i].got_va = impgot_beg + (uint64_t)i * 8;
-    uint64_t impgot_end = impgot_beg + (uint64_t)nimp * 8;
+    uint64_t impgot_beg = ALIGN_UP(cur, OVMX_PTRW);
+    for (int i = 0; i < nimp; i++) imp[i].got_va = impgot_beg + (uint64_t)i * OVMX_PTRW;
+    uint64_t impgot_end = impgot_beg + (uint64_t)nimp * OVMX_PTRW;
     cur = impgot_end;
 
     /* PLT stubs: one 12-byte slot per import (only call imports emit a stub, but
@@ -2614,23 +2788,28 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
     uint64_t sn_off[26]; uint64_t sn_sz = 0;
     for (int i = 0; i < nsec; i++) { sn_off[i] = sn_sz; sn_sz += strlen(secn[i]) + 1; }
     uint64_t off_shdr = ALIGN_UP(off_shstr + sn_sz, 8);
-    uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf64_Shdr);
+    uint64_t file_sz = off_shdr + (uint64_t)nsec * sizeof(Elf_Shdr);
 
     uint8_t *img = calloc(1, file_sz);
     if (!img) die("oom building image");
 
-    Elf64_Ehdr *eh = (Elf64_Ehdr *)img;
+    Elf_Ehdr *eh = (Elf_Ehdr *)img;
     memcpy(eh->e_ident, ELFMAG, SELFMAG);
-    eh->e_ident[EI_CLASS] = ELFCLASS64; eh->e_ident[EI_DATA] = ELFDATA2LSB;
+    eh->e_ident[EI_CLASS] = OVMX_ELFCLASS; eh->e_ident[EI_DATA] = ELFDATA2LSB;
     eh->e_ident[EI_VERSION] = EV_CURRENT;
     /* e_machine follows the input object set (vms-8f5) — g_out_machine is set
      * in parse_obj and validated there to be uniform across every input .o. */
+#ifdef OVMX_LINK_ELF32
+    if (g_out_machine != EM_VAX)
+        die("internal: no elf32-vax input machine recorded");
+#else
     if (g_out_machine != EM_AARCH64 && g_out_machine != EM_X86_64)
         die("internal: no input machine recorded");
+#endif
     eh->e_type = ET_DYN; eh->e_machine = g_out_machine; eh->e_version = EV_CURRENT;
     eh->e_phoff = off_ph; eh->e_shoff = off_shdr;
-    eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf64_Phdr); eh->e_phnum = nph;
-    eh->e_shentsize = sizeof(Elf64_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = ix_str;
+    eh->e_ehsize = sizeof *eh; eh->e_phentsize = sizeof(Elf_Phdr); eh->e_phnum = nph;
+    eh->e_shentsize = sizeof(Elf_Shdr); eh->e_shnum = nsec; eh->e_shstrndx = ix_str;
     /* kernel adds the load bias -> AT_ENTRY. Freestanding _start programs enter
      * at _start directly; main() programs enter at the synthesized crt0. */
     if (is_exec)
@@ -2645,12 +2824,12 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * its GOT/import cells are written at activation so it is always writable. */
     int writable = (ngot || ntls || has_data || has_init_array || has_bss ||
                     has_tls || nimp || is_exec);
-    Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
+    Elf_Phdr *ph = (Elf_Phdr *)(img + off_ph);
     int li;   /* index of the PT_LOAD phdr */
     if (is_exec) {
         ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
         ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
-        ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
+        ph[0].p_filesz = (uint64_t)nph * sizeof(Elf_Phdr);
         ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
         ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
         ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
@@ -2718,13 +2897,13 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             if (!got[i].value)
                 die("GOT reference to a LOCAL symbol in an unplaced section "
                     "(TLS/ABS local GOT slots are unsupported)");
-            *(uint64_t *)(img + got[i].va) = got[i].value;
+            ovmx_store_ptr(img + got[i].va, got[i].value);
             rel_off[nrel_filled++] = got[i].va;   /* image-relative -> bias at activation */
             continue;
         }
         got[i].value = resolve_named(objs, nobj, got[i].name, NULL);
         if (got[i].value) {
-            *(uint64_t *)(img + got[i].va) = got[i].value;
+            ovmx_store_ptr(img + got[i].va, got[i].value);
             rel_off[nrel_filled++] = got[i].va;   /* image-relative -> bias at activation */
             continue;
         }
@@ -2736,7 +2915,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             uint64_t gv;
             if (gval_find(got[i].name, &gv)) {
                 got[i].value = gv;
-                *(uint64_t *)(img + got[i].va) = gv;
+                ovmx_store_ptr(img + got[i].va, gv);
                 continue;
             }
         }
@@ -2745,7 +2924,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
          * __init_array/__fini_array bounds and null _DYNAMIC of a C-RTL with no
          * static constructors. Otherwise it is a deferred import
          * (--allow-undefined) or, strict, a hard error. (vms-61f.1) */
-        *(uint64_t *)(img + got[i].va) = 0;   /* cell = 0, NOT biased/recorded */
+        ovmx_store_ptr(img + got[i].va, 0);   /* cell = 0, NOT biased/recorded */
         if (weak_has(got[i].name))      { /* correct 0; nothing to defer */ }
         else if (g_allow_undef)         { dump_undef(got[i].name); g_deferred++; }
         else die("GOT symbol undefined (cross-image DATA import is a later increment)");
@@ -2775,24 +2954,24 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
          * module-relative. A single object uses one dialect throughout. */
         int classic_tls = 0;
         for (int r = 0; r < objs[i].nreloc; r++)
-            if (is_classic_gdld_reloc(ELF64_R_TYPE(objs[i].relocs[r].info))) {
+            if (is_classic_gdld_reloc(ELF_R_TYPE(objs[i].relocs[r].info))) {
                 classic_tls = 1;
                 break;
             }
         for (int r = 0; r < objs[i].nreloc; r++) {
             struct reloc *rl = &objs[i].relocs[r];
-            uint32_t type = ELF64_R_TYPE(rl->info);
+            uint32_t type = ELF_R_TYPE(rl->info);
             uint64_t site = objs[i].sec_va[rl->sec] + rl->off;
             uint32_t *insn = (uint32_t *)(img + site);
             const char *nm = objs[i].str +
-                             objs[i].sym[ELF64_R_SYM(rl->info)].st_name;
+                             objs[i].sym[ELF_R_SYM(rl->info)].st_name;
             /* The classic GD/LD call to __tls_get_addr is subsumed by the LE
              * relaxation of its paired lea; its site bytes were overwritten by
              * patch_tls_le(), so never patch it separately. (vms-76a) */
             if (strcmp(nm, "__tls_get_addr") == 0) continue;
             if (is_got_reloc(type)) {
-                uint32_t si = ELF64_R_SYM(rl->info);
-                if (ELF64_ST_BIND(objs[i].sym[si].st_info) == STB_LOCAL) {
+                uint32_t si = ELF_R_SYM(rl->info);
+                if (ELF_ST_BIND(objs[i].sym[si].st_info) == STB_LOCAL) {
                     /* LOCAL GOT reference -> its per-object (oi, sym) slot. */
                     int gi = find_got_local(got, ngot, i, (int)si);
                     if (gi < 0) {
@@ -2826,7 +3005,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                  * variable's TP-relative offset in place. For LD the offsets ride
                  * the paired DTPOFF32 operands, so tpoff here is unused. */
                 uint64_t moff = tls_ref_offset(objs, nobj, i,
-                                               ELF64_R_SYM(rl->info), 0);
+                                               ELF_R_SYM(rl->info), 0);
                 int32_t tpoff = (int32_t)(int64_t)(moff - tls_tp_size);
                 patch_tls_le(type, (uint8_t *)img, site, tpoff);
             } else if (is_dtpoff_reloc(type)) {
@@ -2838,7 +3017,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                  * relaxed to LE, %rax already holds TP, so the operand must be
                  * TP-relative (moff - aligned block size). (vms-76a) */
                 uint64_t moff = tls_ref_offset(objs, nobj, i,
-                                               ELF64_R_SYM(rl->info),
+                                               ELF_R_SYM(rl->info),
                                                rl->add);
                 *insn = classic_tls ? (uint32_t)(moff - tls_tp_size)
                                     : (uint32_t)moff;
@@ -2847,10 +3026,10 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                  * image-relative address and record the slot in .vms$rel so
                  * the activator adds the load bias. A deferred external leaves
                  * the slot 0 (unbiased). (vms-004, folds in vms-a17) */
-                uint64_t s = resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info));
+                uint64_t s = resolve_ref(objs, nobj, i, ELF_R_SYM(rl->info));
                 if (s == 0) continue;   /* deferred (counted in resolve_ref) */
                 uint64_t value = s + (uint64_t)rl->add;
-                *(uint64_t *)(img + site) = value;
+                ovmx_store_ptr(img + site, value);
                 /* A producer globalvalue is an ABSOLUTE constant (VMS
                  * globalvalue): write it, but do NOT record the slot in
                  * .vms$rel — biasing it at activation would corrupt the
@@ -2859,26 +3038,37 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 rel_off[nrel_filled++] = site;
             } else {
                 int ii = import_find(imp, nimp, nm);
-                if (ii >= 0 &&
-                    (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26)) {
-                    /* Cross-image CALL/JUMP import: branch to its PLT stub. */
-                    int64_t disp = (int64_t)imp[ii].plt_va - (int64_t)site;
-                    uint32_t imm26 = (uint32_t)((disp >> 2) & 0x03FFFFFF);
-                    uint32_t op = (type == R_AARCH64_JUMP26) ? 0x14000000u
-                                                             : 0x94000000u;
-                    *insn = op | imm26;
-                } else if (ii >= 0 && type == R_X86_64_PLT32) {
-                    /* Cross-image CALL import (vms-206): a PC32-style call to
-                     * the PLT stub instead of the (nonexistent, in this
-                     * object set) callee -- same S+A-P shape the intra-image
-                     * PC32/PLT32 datum write below uses, just with S = the
-                     * stub's address. rl->add carries the real x86_64 addend
-                     * (typically -4, same as the GOTPCREL/PC32 cases above). */
-                    int64_t d = (int64_t)imp[ii].plt_va + rl->add - (int64_t)site;
+                if (ii >= 0 && is_call_reloc(type)) {
+#ifdef OVMX_LINK_ELF32
+                    /* VAX cross-image CALL import (R_VAX_PLT32): a PC-relative
+                     * `calls`/`jmp` to the PLT stub instead of the (absent)
+                     * callee — stub_va + A - P - 4, the same S+A-P-4 shape the
+                     * intra-link PC32/PLT32 datum write uses (the -4 is the VAX
+                     * PC bias; rl->add is 0 in practice). (vms-19b) */
+                    int64_t d = (int64_t)imp[ii].plt_va + rl->add - (int64_t)site - 4;
                     *insn = (uint32_t)(uint64_t)d;
+#else
+                    if (type == R_AARCH64_CALL26 || type == R_AARCH64_JUMP26) {
+                        /* Cross-image CALL/JUMP import: branch to its PLT stub. */
+                        int64_t disp = (int64_t)imp[ii].plt_va - (int64_t)site;
+                        uint32_t imm26 = (uint32_t)((disp >> 2) & 0x03FFFFFF);
+                        uint32_t op = (type == R_AARCH64_JUMP26) ? 0x14000000u
+                                                                 : 0x94000000u;
+                        *insn = op | imm26;
+                    } else {   /* R_X86_64_PLT32 */
+                        /* Cross-image CALL import (vms-206): a PC32-style call to
+                         * the PLT stub instead of the (nonexistent, in this
+                         * object set) callee -- same S+A-P shape the intra-image
+                         * PC32/PLT32 datum write below uses, just with S = the
+                         * stub's address. rl->add carries the real x86_64 addend
+                         * (typically -4, same as the GOTPCREL/PC32 cases above). */
+                        int64_t d = (int64_t)imp[ii].plt_va + rl->add - (int64_t)site;
+                        *insn = (uint32_t)(uint64_t)d;
+                    }
+#endif
                 } else {
                     uint64_t target =
-                        resolve_ref(objs, nobj, i, ELF64_R_SYM(rl->info));
+                        resolve_ref(objs, nobj, i, ELF_R_SYM(rl->info));
                     if (target == 0) continue;  /* deferred external, skip patch */
                     target += (uint64_t)rl->add;
                     patch_pcrel(type, insn, site, target);
@@ -2898,6 +3088,23 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
      * unused — the site reads the import cell directly.) (vms-e65, vms-206) */
     for (int i = 0; i < nimp; i++) {
         if (imp[i].is_data) continue;
+#ifdef OVMX_LINK_ELF32
+        /* VAX call-import PLT stub: `jmp *disp32(pc)` — opcode 0x17 (jmp),
+         * operand mode 0xFF (longword-displacement-DEFERRED, PC-relative: the
+         * CPU loads the target from *(PC+disp)), then a 4-byte displacement.
+         * The memory operand IS the import-GOT cell (imp[i].got_va), read
+         * indirectly exactly like the x86_64 `jmp *disp32(%rip)` stub — IMGACT
+         * fills the cell from .vms$imp at activation. VAX PC after the operand =
+         * plt_va + 6 (1 opcode + 1 mode + 4 disp), so disp = got_va-(plt_va+6),
+         * the same PC-past-the-field bias as every VAX PC-relative form. (vms-19b) */
+        {
+            uint8_t *stub = img + imp[i].plt_va;
+            stub[0] = 0x17u; stub[1] = 0xFFu;
+            int32_t d = (int32_t)((int64_t)imp[i].got_va -
+                                  (int64_t)(imp[i].plt_va + 6));
+            memcpy(stub + 2, &d, 4);
+        }
+#else
         if (g_out_machine == EM_X86_64) {
             uint8_t *stub = img + imp[i].plt_va;
             stub[0] = 0xFFu; stub[1] = 0x25u;   /* jmp *disp32(%rip) */
@@ -2911,6 +3118,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
             stub[1] = enc_ldr_u64(16, 16, (uint32_t)(imp[i].got_va & 0xfff));
             stub[2] = enc_br(16);
         }
+#endif
     }
 
     /* Synthesized crt0 (executable entry). The initial process stack the kernel
@@ -3009,7 +3217,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 
     char *shstr = (char *)(img + off_shstr);
     for (int i = 0; i < nsec; i++) memcpy(shstr + sn_off[i], secn[i], strlen(secn[i]) + 1);
-    Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
+    Elf_Shdr *sh = (Elf_Shdr *)(img + off_shdr);
     sh[ix_text].sh_name = sn_off[ix_text]; sh[ix_text].sh_type = SHT_PROGBITS;
     sh[ix_text].sh_flags = SHF_ALLOC | SHF_EXECINSTR; sh[ix_text].sh_addr = text_beg;
     sh[ix_text].sh_offset = text_beg; sh[ix_text].sh_size = text_end - text_beg;
@@ -3033,7 +3241,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_got].sh_name = sn_off[ix_got]; sh[ix_got].sh_type = SHT_PROGBITS;
         sh[ix_got].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_got].sh_addr = got_beg;
         sh[ix_got].sh_offset = got_beg; sh[ix_got].sh_size = got_end - got_beg;
-        sh[ix_got].sh_addralign = 8;
+        sh[ix_got].sh_addralign = OVMX_PTRW;   /* pointer-width GOT slots (8 LP64 / 4 VAX) */
     }
     if (ntls) {
         sh[ix_tlsd].sh_name = sn_off[ix_tlsd]; sh[ix_tlsd].sh_type = SHT_PROGBITS;
@@ -3081,7 +3289,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
         sh[ix_igot].sh_name = sn_off[ix_igot]; sh[ix_igot].sh_type = SHT_PROGBITS;
         sh[ix_igot].sh_flags = SHF_ALLOC | SHF_WRITE; sh[ix_igot].sh_addr = impgot_beg;
         sh[ix_igot].sh_offset = impgot_beg; sh[ix_igot].sh_size = impgot_end - impgot_beg;
-        sh[ix_igot].sh_addralign = 8;
+        sh[ix_igot].sh_addralign = OVMX_PTRW;   /* pointer-width import cells (8 LP64 / 4 VAX) */
         sh[ix_plt].sh_name = sn_off[ix_plt]; sh[ix_plt].sh_type = SHT_PROGBITS;
         sh[ix_plt].sh_flags = SHF_ALLOC | SHF_EXECINSTR; sh[ix_plt].sh_addr = plt_beg;
         sh[ix_plt].sh_offset = plt_beg; sh[ix_plt].sh_size = plt_end - plt_beg;
@@ -3200,7 +3408,7 @@ static int file_is_archive(const char *path)
  * WHY A DEDICATED PATH, NOT emit_shareable(): the ELF emitter above is
  * arch-locked to aarch64/x86_64 — its GOT/TLSDESC/PLT synthesis, crt0 stub, and
  * every reloc apply switch on the aarch64 / x86_64 R_* type numbers, and it
- * reads Elf64_* structures directly out of the input buffer. Alpha has a different
+ * reads Elf_* structures directly out of the input buffer. Alpha has a different
  * relocation and linkage model (the 2-quadword linkage pair, GP-relative calls,
  * procedure descriptors). Feeding EVAX through the ELF machinery would mean
  * synthesizing fake Elf64 structures and then still not having any Alpha reloc
@@ -4093,8 +4301,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
      * activated through the kernel interp). An executable keeps PT_PHDR +
      * PT_INTERP=IMGACT.EXE + PT_LOAD (vms-e0c). (vms-c65) */
     const int      nph        = is_shareable ? 1 : 3;
-    const uint64_t off_ph     = sizeof(Elf64_Ehdr);
-    const uint64_t phdrs_end  = ALIGN_UP(off_ph + (uint64_t)nph * sizeof(Elf64_Phdr), 16);
+    const uint64_t off_ph     = sizeof(Elf_Ehdr);
+    const uint64_t phdrs_end  = ALIGN_UP(off_ph + (uint64_t)nph * sizeof(Elf_Phdr), 16);
     const uint64_t off_interp = is_shareable ? 0 : phdrs_end;
     const uint64_t interp_sz  = is_shareable ? 0 : (uint64_t)strlen(IMGACT_INTERP) + 1;
     uint64_t hdr_end = is_shareable ? phdrs_end : ALIGN_UP(off_interp + interp_sz, 16);
@@ -4399,13 +4607,13 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     uint64_t off_shstr = ALIGN_UP(file_end, 8);
     uint64_t off_shdr  = ALIGN_UP(off_shstr + shlen, 8);
     int nshdr = 1 /*NULL*/ + nos + 1 /*.shstrtab*/;
-    uint64_t total = off_shdr + (uint64_t)nshdr * sizeof(Elf64_Shdr);
+    uint64_t total = off_shdr + (uint64_t)nshdr * sizeof(Elf_Shdr);
 
     uint8_t *img = calloc(1, (size_t)total);
     if (!img) die("oom building EVAX image");
 
     /* ELF header. */
-    Elf64_Ehdr *eh = (Elf64_Ehdr *)img;
+    Elf_Ehdr *eh = (Elf_Ehdr *)img;
     memcpy(eh->e_ident, ELFMAG, SELFMAG);
     eh->e_ident[EI_CLASS]   = ELFCLASS64;
     eh->e_ident[EI_DATA]    = ELFDATA2LSB;
@@ -4416,10 +4624,10 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     eh->e_entry   = transfer_va;
     eh->e_phoff   = off_ph;
     eh->e_shoff   = off_shdr;
-    eh->e_ehsize  = sizeof(Elf64_Ehdr);
-    eh->e_phentsize = sizeof(Elf64_Phdr);
-    eh->e_phnum   = (Elf64_Half)nph;
-    eh->e_shentsize = sizeof(Elf64_Shdr);
+    eh->e_ehsize  = sizeof(Elf_Ehdr);
+    eh->e_phentsize = sizeof(Elf_Phdr);
+    eh->e_phnum   = (Elf_Half)nph;
+    eh->e_shentsize = sizeof(Elf_Shdr);
     eh->e_shnum   = nshdr;
     eh->e_shstrndx = nshdr - 1;
 
@@ -4427,7 +4635,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
      * PT_INTERP=IMGACT.EXE (so the kernel activates the image via IMGACT) + one
      * PT_LOAD over the whole image (RWX — first light). Mirrors the ELF exec
      * path. (vms-e0c) */
-    Elf64_Phdr *ph = (Elf64_Phdr *)(img + off_ph);
+    Elf_Phdr *ph = (Elf_Phdr *)(img + off_ph);
     int li;   /* index of the PT_LOAD phdr */
     if (is_shareable) {
         /* Match the ELF shareable: a bare PT_LOAD ET_DYN, read as a producer. */
@@ -4435,7 +4643,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     } else {
         ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
         ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
-        ph[0].p_filesz = (uint64_t)nph * sizeof(Elf64_Phdr);
+        ph[0].p_filesz = (uint64_t)nph * sizeof(Elf_Phdr);
         ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
         ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
         ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
@@ -4516,10 +4724,10 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
 
     /* shstrtab + section headers. */
     memcpy(img + off_shstr, shstr, shlen);
-    Elf64_Shdr *sh = (Elf64_Shdr *)(img + off_shdr);
+    Elf_Shdr *sh = (Elf_Shdr *)(img + off_shdr);
     /* sh[0] = NULL (zeroed). */
     for (int k = 0; k < nos; k++) {
-        Elf64_Shdr *s = &sh[1 + k];
+        Elf_Shdr *s = &sh[1 + k];
         s->sh_name = sh_name_off[k];
         s->sh_type = osec[k].nobits ? SHT_NOBITS : SHT_PROGBITS;
         s->sh_flags = SHF_ALLOC | (strcmp(osec[k].name, "$CODE$") == 0 ? SHF_EXECINSTR : SHF_WRITE);
@@ -4528,7 +4736,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         s->sh_size = osec[k].size;
         s->sh_addralign = 16;
     }
-    Elf64_Shdr *sstr = &sh[nshdr - 1];
+    Elf_Shdr *sstr = &sh[nshdr - 1];
     sstr->sh_name = sh_shstr_name; sstr->sh_type = SHT_STRTAB;
     sstr->sh_offset = off_shstr; sstr->sh_size = shlen; sstr->sh_addralign = 1;
 

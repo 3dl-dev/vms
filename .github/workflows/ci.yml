@@ -2361,11 +2361,14 @@ jobs:
           SHARD_TOTAL: ${{ strategy.job-total }}
           # Larger whole-VM wall for this job (run_tests.sh default is 600):
           # shard 0's residue set includes the heavier test_kmod_devtab_terminal
-          # (real PTY + cross-process $GETDVI). 1200s = 2x headroom, still well
-          # under timeout-minutes: 60. This is the documented capacity fallback
-          # (raise the wall, never drop a suite) used here instead of re-sharding
-          # so no suite changes shard membership (see the matrix note above).
-          KE_WALL_TIMEOUT: 1200
+          # (real PTY + cross-process $GETDVI). 1200s was not enough: shard 0/6
+          # (cluster_fork_hammer + the new devtab_terminal) hit the wall on
+          # run 34293670780. run_tests.sh's own header documents KE_WALL_TIMEOUT=1800
+          # as the capacity target (~2.3x the ~776s baseline). This is the documented
+          # capacity fallback (raise the wall, never drop a suite) used here instead
+          # of re-sharding so no suite changes shard membership (see the matrix note
+          # above). Durable identcont shard-isolation follow-up tracked as vms-739.
+          KE_WALL_TIMEOUT: 1800
         run: |
           set +e
           # -e SHARD_INDEX/-e SHARD_TOTAL/-e KE_WALL_TIMEOUT: run_tests.sh forwards

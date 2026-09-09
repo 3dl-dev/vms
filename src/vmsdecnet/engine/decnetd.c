@@ -1252,10 +1252,20 @@ int main(int argc, char **argv)
                                               sizeof(dframe), &dlen, now) == 0)
                         (void)scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
                                                 peer_mac, dframe, dlen);
-                } else if (got < 0) {
+                } else if (got < 0 || !dnet_cterm_host_alive(&host)) {
                     /* The session ended (it logged out, or LOGINOUT refused and
                      * exited). Release the terminal and tear the link down --
-                     * the same order the oracle's LOGOUT produced. */
+                     * the same order the oracle's LOGOUT produced.
+                     *
+                     * TWO INDEPENDENT WAYS TO NOTICE, and the executive is the
+                     * authoritative one. `got < 0` is the substrate telling us
+                     * the terminal channel closed; dnet_cterm_host_alive() ASKS
+                     * THE EXECUTIVE whether the session process still has a row
+                     * ($GETJPI on the pid $CREPRC returned). An interactive
+                     * process is ownerless -- the top of its own job -- so this
+                     * daemon has no child to waitpid() for and could not learn
+                     * it any other way; the same reason JOB_CONTROL reads the
+                     * console session's life out of the executive. */
                     size_t dlen = 0;
                     if (dnet_cterm_unbind(&host.cterm, DNET_CTERM_UNBIND_NORMAL,
                                           frame, sizeof(frame), &dlen) == 0) {

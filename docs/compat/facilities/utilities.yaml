@@ -114,7 +114,7 @@ items:
     authenticity: facade-risk
     vms: "CONVERT — file/record-format conversion utility"
     evidence: src/vmsdcl/dcl_cmd_misc.c:2604
-    notes: "/FDL now emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is still a line-by-line fgets/fputs copy that then prints '%CONVERT-S-CONVERTED, N records converted' — reporting a record-format conversion it did not perform. Still facade-risk."
+    notes: "/FDL emits an honest %CONVERT-I-FDL 'accepted but ignored' informational, but the body is a line-by-line fgets/fputs copy that prints '%CONVERT-S-CONVERTED, N records converted' — claiming a record-format conversion it did not perform. Real RMS record-format CONVERT tracked vms-558e. Still facade-risk."
 
   - id: utilities$analyze-disk-structure
     kind: utility

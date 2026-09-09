@@ -28,8 +28,11 @@
 #            verbatim from distro/rootfs -- arch-neutral, see
 #            tests/lab-vax/stage_sysvol.sh header)
 #   SYSMGR/  STARTUP.COM (reused verbatim)
-#            SYSTARTUP_VMS.COM (distro/rootfs-vax Decision-A variant --
-#            NO "INSTALL ADD SYS$SHARE" block, no OVMX shareables on vax)
+#            SYSTARTUP_VMS.COM (distro/rootfs-vax Decision-A variant)
+#   SYSLIB/  (OPTIONAL, rd vms-c7f7/vms-404 P3b) the genuine elf32-vax .vms$sv
+#            shareable graph (LIBVMS$SHR.EXE etc, built by
+#            tools/cross-vax/build-vax-shareable-graph.sh), staged when a
+#            shareables dir is supplied (see --shareables-dir below).
 #
 # Product identity: "OVMX VAXVMS VMS" -- the same "vendor + arch-code + VMS"
 # shape the Alpha oracle showed (DEC AXPVMS VMS) and the x86_64 kit already
@@ -37,9 +40,25 @@
 # ("OVMX-OS-VAX.KIT, distinct product identity string, e.g. OVMX VAXVMS VMS
 # Vx.y mirroring the existing OVMX X86VMS VMS V0.1 shape").
 #
+# vms-c7f7 (vms-404 P3b): the Decision-A guard that used to REJECT any
+# "INSTALL ADD SYS$SHARE" line in the staged SYSTARTUP_VMS.COM is LIFTED --
+# a genuine elf32-vax `.vms$sv` shareable graph now exists (LINKVAX.EXE,
+# vms-19b/P3a) and can be staged into SYSLIB (below). What this script does
+# NOT yet do: the boot/utility images this kit packages are still the
+# ORDINARY Decision-A dynamic NetBSD ELF32 executables (PT_INTERP =
+# /usr/libexec/ld.elf_so, built by build-boot-images-vax.sh /
+# build-ovmx-images-vax-cmake.sh), because LINKVAX.EXE's elf32-vax
+# `--executable` emit (the mode that would produce a genuine IMGACT.EXE-
+# activated consumer of this shareable) is not implemented yet -- it fails
+# honestly with "%LINK-F-ERROR, elf32-vax --executable emit is vms-404
+# P3b/P4, not P3a" (src/vmslink/link.c, unmodified here). So a kit built
+# today carries a real shareable in SYSLIB but no consumer that imports it
+# by symbol vector; PT_INTERP=IMGACT.EXE on the boot chain is a follow-on
+# (see the P3b PR notes) that needs that link.c gap closed first.
+#
 # Usage:
 #   build-os-kit-vax.sh <vax-images-dir> <repo-root> <kit-output-file> \
-#                        [ovmx_kit_pack-binary]
+#                        [ovmx_kit_pack-binary] [--shareables-dir DIR]
 #
 #   <vax-images-dir>     must contain the nine ELF32-vax images by name:
 #                         STARTUP.EXE PROVISION.EXE DCL.EXE JOB_CONTROL.EXE
@@ -61,10 +80,33 @@
 # extract round-trip that does not reproduce the staged tree byte-exact.
 set -eu
 
-IMAGES_DIR="${1:?usage: $0 <vax-images-dir> <repo-root> <kit-output-file> [ovmx_kit_pack-binary]}"
-REPO="${2:?usage: $0 <vax-images-dir> <repo-root> <kit-output-file> [ovmx_kit_pack-binary]}"
-KIT_OUT="${3:?usage: $0 <vax-images-dir> <repo-root> <kit-output-file> [ovmx_kit_pack-binary]}"
-PACK="${4:-$REPO/build/bin/ovmx_kit_pack}"
+IMAGES_DIR="${1:?usage: $0 <vax-images-dir> <repo-root> <kit-output-file> [ovmx_kit_pack-binary] [--shareables-dir DIR]}"
+REPO="${2:?usage: $0 <vax-images-dir> <repo-root> <kit-output-file> [ovmx_kit_pack-binary] [--shareables-dir DIR]}"
+KIT_OUT="${3:?usage: $0 <vax-images-dir> <repo-root> <kit-output-file> [ovmx_kit_pack-binary] [--shareables-dir DIR]}"
+shift 3
+
+# Remaining args: an optional bare PACK-binary-path token, and/or
+# --shareables-dir DIR (rd vms-c7f7) -- a directory holding the genuine
+# elf32-vax .vms$sv shareable graph (e.g. tools/cross-vax/
+# build-vax-shareable-graph.sh's $OUT_DIR, carrying `LIBVMS$SHR.EXE`). When
+# given, every file in it is staged into the kit's SYSLIB/ member set.
+# Optional: the kit still packs without it (SYSLIB stays absent, exactly
+# today's behavior) -- callers that have not built the shareable graph yet
+# are unaffected.
+PACK="$REPO/build/bin/ovmx_kit_pack"
+SHAREABLES_DIR=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --shareables-dir)
+            SHAREABLES_DIR="${2:?--shareables-dir requires a DIR argument}"
+            shift 2
+            ;;
+        *)
+            PACK="$1"
+            shift
+            ;;
+    esac
+done
 
 PRODUCT_SUFFIX="VAXVMS VMS"
 
@@ -86,6 +128,9 @@ echo "=== build-os-kit-vax: stage the OVMX/NetBSD-vax OS-kit payload ==="
 [ -d "$ROOTFS_SYSMGR" ] || die "arch-neutral SYSMGR tree missing: $ROOTFS_SYSMGR"
 [ -f "$VAX_SYSTARTUP" ] || die "vax Decision-A SYSTARTUP_VMS.COM missing: $VAX_SYSTARTUP"
 [ -x "$PACK" ]          || die "ovmx_kit_pack binary not executable: $PACK (build it: cmake -B build -DBUILD_TOOLS=ON && cmake --build build --target ovmx_kit_pack)"
+if [ -n "$SHAREABLES_DIR" ]; then
+    [ -d "$SHAREABLES_DIR" ] || die "--shareables-dir does not exist: $SHAREABLES_DIR"
+fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -114,12 +159,37 @@ done
 cp "$ROOTFS_SYSMGR/STARTUP.COM" "$STAGE/SYSMGR/STARTUP.COM"
 echo "OK: staged STARTUP.COM"
 
-# --- 4. the Decision-A vax SYSTARTUP_VMS.COM --------------------------------
+# --- 4. the vax SYSTARTUP_VMS.COM -------------------------------------------
+# vms-c7f7 (vms-404 P3b): the OLD guard here unconditionally DIED on any
+# "INSTALL ADD SYS$SHARE" line, because vax shipped no shareable at all and
+# Decision A said so explicitly. A genuine elf32-vax `.vms$sv` shareable
+# graph now exists (LINKVAX.EXE, vms-19b/P3a) -- so that is no longer a
+# reason to hard-fail packaging. It is still INFORMATIONAL: today's boot
+# images are still ordinary Decision-A ld.elf_so dynamic executables (see
+# the header comment) and cannot yet ACT on an INSTALL ADD SYS$SHARE line
+# (that needs LINKVAX.EXE's elf32-vax `--executable` emit, not yet built --
+# link.c is out of this script's scope). So we stage whatever
+# SYSTARTUP_VMS.COM the caller/repo provides as-is, and only NOTE whether it
+# carries that line -- never fail the build over it.
 cp "$VAX_SYSTARTUP" "$STAGE/SYSMGR/SYSTARTUP_VMS.COM"
 if grep -qiE '^\$[[:space:]]+INSTALL[[:space:]]+ADD[[:space:]]+SYS\$SHARE' "$STAGE/SYSMGR/SYSTARTUP_VMS.COM"; then
-    die "staged SYSTARTUP_VMS.COM has an INSTALL ADD SYS\$SHARE command line -- Decision A forbids it on vax"
+    echo "OK: staged SYSTARTUP_VMS.COM carries INSTALL ADD SYS\$SHARE (shareables enabled)"
+else
+    echo "OK: staged SYSTARTUP_VMS.COM (no INSTALL ADD SYS\$SHARE -- boot images do not yet consume shareables)"
 fi
-echo "OK: staged Decision-A SYSTARTUP_VMS.COM (no INSTALL ADD SYS\$SHARE)"
+
+# --- 5. OPTIONAL: the genuine elf32-vax .vms$sv shareable graph (vms-c7f7) --
+if [ -n "$SHAREABLES_DIR" ]; then
+    mkdir -p "$STAGE/SYSLIB"
+    N=0
+    for f in "$SHAREABLES_DIR"/*; do
+        [ -f "$f" ] || continue
+        cp "$f" "$STAGE/SYSLIB/$(basename "$f")"
+        echo "OK: staged shareable $(basename "$f") -> SYSLIB"
+        N=$((N + 1))
+    done
+    [ "$N" -gt 0 ] || die "--shareables-dir given but contains no files: $SHAREABLES_DIR"
+fi
 
 STAGED_COUNT=$(find "$STAGE" -type f | wc -l)
 echo "staged $STAGED_COUNT payload files under $STAGE"
@@ -140,7 +210,16 @@ echo "OK: kit manifest product identity is OVMX VAXVMS VMS"
 for name in $BOOT_IMAGES $UTIL_IMAGES $DATA_FILES STARTUP.COM SYSTARTUP_VMS.COM; do
     echo "$LISTING" | grep -q "$name" || die "kit manifest missing expected member: $name"
 done
-echo "OK: kit manifest names every staged member"
+if [ -n "$SHAREABLES_DIR" ]; then
+    for f in "$SHAREABLES_DIR"/*; do
+        [ -f "$f" ] || continue
+        name="$(basename "$f")"
+        echo "$LISTING" | grep -qF "$name" || die "kit manifest missing staged shareable: $name"
+    done
+    echo "OK: kit manifest names every staged member (including the shareable graph)"
+else
+    echo "OK: kit manifest names every staged member"
+fi
 echo
 
 echo "=== extract + byte-compare round-trip ==="

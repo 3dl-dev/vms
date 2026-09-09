@@ -39,7 +39,7 @@ items:
     authenticity: real
     vms: "Cross-node $ENQ grant / block-then-grant / blocking-AST delivered on the mastering node + real holder"
     evidence: src/kernel-core/vms_lock.c
-    verified_against: "tests/qemu/test_syssvc_dlm_xnode.c (x86_64 + Alpha LP64); tests/qemu/run_dlm_harness_h5.sh + run_dlm_harness_h6.sh (block-then-grant + BLKAST wire on real /dev/vms)"
+    verified_against: "tests/qemu/test_syssvc_dlm_xnode.c (x86_64 + Alpha LP64) — scenario 5 (H5: block-then-grant + deferred-grant report) and scenario 7 (H6: BLKAST wire + holder-side receive) driven against a real /dev/vms executive. (The former two-node run_dlm_harness_h5.sh/_h6.sh QEMU harnesses were retired with the userspace SCSD daemon in the executive-resident pivot, #1052; the receive-handler behavior they proved is now exercised by this injected-cross-node-request test on real /dev/vms.)"
     notes: >
       vms-94c/vms-e8f1/vms-904c + BLKAST wire H6 (vms-76d/#918).
       vms_lock_dlm_xnode_dispatch runs a decoded cross-node $ENQ through the real
@@ -60,7 +60,7 @@ items:
     authenticity: real
     vms: "Async DLM replies (queued-reply + deferred GRANT) delivered over SCS; requester-side completion"
     evidence: src/kernel-core/vms_dlm_scs_fsm.c
-    verified_against: "tests/qemu/run_dlm_harness_h5.sh (two-node A<->B live /dev/vms: SCSD-I-DLMPEND, SCSD-I-DLMDEFER, SCSD-I-DLMH5FLIP granted_mode=EX)"
+    verified_against: "tests/qemu/test_syssvc_dlm_xnode.c — scenario 5 (H5: the block-then-grant $DEQ REPORTS the flipped waiter so the daemon can wire a deferred GRANT) and scenario 5b (the requester-side VMS_DLM_OP_GRANT receive completes an executive-resident origin record — a queued-reply leaves it NL-pending, a deferred GRANT flips NL->EX, read back on the requester by GETLKI), driven against a real /dev/vms executive. (The former two-node A<->B run_dlm_harness_h5.sh daemon harness — SCSD-I-DLMPEND/DLMDEFER/DLMH5FLIP — was retired with the userspace SCSD daemon in the executive-resident pivot, #1052.)"
     notes: >
       vms-6ca rung H5. The master's async replies ride the live SCS wire: node B
       WIREs the queued-reply (granted mode NL — the requester stays genuinely
@@ -115,7 +115,7 @@ items:
     authenticity: real
     vms: "DLM SYSAP SCS connection + lock-request message class (ENQ/GRANT/DEQ/BLKAST/REBUILD/DLKSRCH) between cluster nodes"
     evidence: src/kernel-core/vms_cluster_codec_dlm.c
-    verified_against: "tests/qemu/run_dlm_harness_h0.sh..ec75 (H0..H11 on real /dev/vms); tests/cluster/host/test_codec_dlm.c (DLM frame encode/decode + op validators)"
+    verified_against: "tests/cluster/host/test_codec_dlm.c (DLM frame encode/decode + op validators: ENQ/GRANT/DENY/CONVERT fixture round trip + the op-0d rebuild-record echo); tests/qemu/test_syssvc_dlm_xnode.c (the receive handler GRANTS/QUEUES/DEQs and delivers BLKAST on a real /dev/vms executive, rungs 2/3/H5/H6). (The former run_dlm_harness_h0.sh..ec75 QEMU harnesses were retired with the userspace SCSD daemon in the executive-resident pivot, #1052. NOTE — the REBUILD-on-remaster and DLKSRCH distributed-deadlock op HANDLING those harnesses exercised at runtime on real /dev/vms has no equivalent successor test today; see the cluster-dlm remaster-lvb-deadlock row.)"
     notes: >
       vms-94c rung 1, extended through H11. A DLM message rides as a p.4-13 SCS
       application message (MTYPE 10) with its body at SCA content offset 58 (the

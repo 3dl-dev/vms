@@ -441,3 +441,5 @@ vms$$invo_set_curr_context=PROCEDURE
 vms$$invo_set_pdsc_resolver=PROCEDURE
 vms$$invo_transfer=PROCEDURE
 vms$$invo_walk_prev=PROCEDURE
+ovmx_vterm_create=PROCEDURE
+ovmx_vterm_delete=PROCEDURE

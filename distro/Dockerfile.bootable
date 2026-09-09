@@ -620,6 +620,14 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # gate holds set-equal across arches -- a non-arch-technical curation gap
     # closed by leveling up, not allowlisting. tests/qemu/Dockerfile already
     # stages build-static/bin/LIBRARIAN.EXE, so the path + presence are proven.
+    # DECNETD.EXE (rd vms-f40): the DECnet Phase IV endnode -- and the image an
+    # inbound $ SET HOST arrives at. Its CTERM host answers a Session Control
+    # object-42 connect by minting an RTAn: through the executive and creating
+    # a process running LOGINOUT.EXE on it ($CREPRC PRC$M_INTER|PRC$M_LOGINOUT),
+    # so the remote user is AUTHENTICATED. Shipping the facility without the
+    # image that implements it would be a claim the installed product cannot
+    # honour (INV-6). Shipped, not started: no startup procedure runs it.
+    cp build-static/bin/DECNETD.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/LIBRARIAN.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/OVMXDUMP       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # DECnet Phase IV: ship the NCP configuration utility on the running system

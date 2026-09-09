@@ -1049,6 +1049,18 @@ long vms_ioctl_acp_getvol(struct vms_proc *proc, unsigned long arg);  /* vms-e6f
  * Lets INITIALIZE.EXE name a VMS disk unit and get back the real backing device.
  */
 long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
+
+/*
+ * Dynamic terminal units -- RTAn: create / delete / resolve (rd vms-f40).
+ * The PRODUCT door to vms_devtab_add_terminal()/_remove_terminal() below: an
+ * inbound DECnet SET HOST (Session Control object 42) mints its virtual
+ * terminal through the executive, and $CREPRC resolves the device NAME it was
+ * given to the substrate that backs it. See struct vms_terminal_args in
+ * vms_ioctl.h for the full reasoning. Defined in kernel-core/vms_devtab.c.
+ */
+long vms_ioctl_term_create(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_delete(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
 /*

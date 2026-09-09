@@ -22,6 +22,9 @@
  *   GUEST    [128,129] TMPMBX                  password GUEST
  *   USER1    [128,130] TMPMBX,NETMBX            (no password)
  *   USER2    [128,131] TMPMBX,NETMBX            (no password)
+ *   DISABLED [128,132] TMPMBX, flags DISUSER   password DISABLED (rd vms-f40:
+ *            a VALID password on a DISABLED account -- the end-to-end fixture
+ *            for "a correct password is not sufficient")
  * UICs are the numeric values the ASCII file expressed in OCTAL (vms-e60):
  * [200,200] octal == [128,128] decimal, etc. An account with no password gets
  * no PURDY_S credential, so sysuaf_authenticate refuses every password -- the
@@ -93,6 +96,19 @@ static const struct seed_acct g_seed[] = {
     { "GUEST",    128, 129, "SYS$SYSDEVICE:[USERS.GUEST]",   "", "TMPMBX",                  "GUEST",   NULL },
     { "USER1",    128, 130, "SYS$SYSDEVICE:[USERS.USER1]",   "", "TMPMBX,NETMBX",           NULL,      NULL },
     { "USER2",    128, 131, "SYS$SYSDEVICE:[USERS.USER2]",   "", "TMPMBX,NETMBX",           NULL,      NULL },
+    /*
+     * A DISABLED account, WITH a correct password (rd vms-f40). The login-flag
+     * rule -- "a correct password is NOT sufficient; DISUSER refuses the login"
+     * (vms-c8fa, sysuaf_interactive_login_permitted) -- had unit coverage over a
+     * synthetic record and NO end-to-end fixture: nothing in a booted image could
+     * type a RIGHT password at a REAL LOGINOUT and be refused. It matters most on
+     * the access route this seed was added for: an inbound DECnet SET HOST, where
+     * the peer is unauthenticated and the only thing standing between it and a
+     * session is LOGINOUT applying exactly this rule. The password is deliberately
+     * VALID so the refusal can only come from the flag -- an account with no
+     * password would be refused for the wrong reason and prove nothing.
+     */
+    { "DISABLED", 128, 132, "SYS$SYSDEVICE:[USERS.DISABLED]", "DISUSER", "TMPMBX",  "DISABLED", NULL },
 };
 
 /* Build one $UAFDEF record from a seed row. */

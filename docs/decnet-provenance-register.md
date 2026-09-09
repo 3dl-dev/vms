@@ -372,12 +372,14 @@ negotiation), **Start Read** + **Read Data** (input solicitation ↔ keystrokes 
 **Write Complete** (screen output down), and **Out-of-Band** (`^C`/`^Y` interrupts). A `terminal`
 (the SET HOST initiator, i.e. the slave terminal) and a `host` (the remote node running DCL)
 session FSM drive each other CLOSED → BINDING/BOUND → UNBOUND. The `$ SET HOST` Connect Initiate
-addresses the well-known **CTERM Session Control object 42** via a minimal SC connect message
-(`dnet_cterm_sc_connect_build`), whose access-control username field is the one specimen #3 (§4.6)
-observed carrying plaintext `SYSTEM`.
+addresses the well-known **CTERM Session Control object 42** via an SC connect message
+(`dnet_cterm_sc_connect_build`) which is itself **now oracle-verified** — see §4.7a, which supersedes
+this section for the connect message and corrects an earlier reading of §4.6 specimen #3 (the
+plaintext `SYSTEM` sits in the SOURCE DESCRIPTOR, not in an access-control field).
 
-**Honest oracle scope (Rule 8) — CTERM is ENTIRELY SPEC-DERIVED. There is NO oracle specimen for
-it.** The §4.6 lab capture recorded only Connect Initiate frames: VAX1's `SET HOST VAX2` never
+**Honest oracle scope (Rule 8) — the CTERM PDUs are ENTIRELY SPEC-DERIVED. There is NO oracle
+specimen for THEM** (the connect message that carries the object number is a separate matter and IS
+oracle-verified; §4.7a). The §4.6 lab capture recorded only Connect Initiate frames: VAX1's `SET HOST VAX2` never
 completed a logical link (VAX2's permanent database was unconfigured), so **no CTERM byte ever
 crossed the captured wire**. Therefore the message SET and their FUNCTION mirror the public DEC DNA
 Phase IV **Command Terminal (CTERM) Message Protocol Functional Specification**, but the specific
@@ -397,10 +399,81 @@ protocol consistency + the layered-product path, NOT of wire-fidelity to VMS (no
 against). When the **`vms-aac0` live bracket** captures a real CTERM session from the lab VAX, these
 layouts become oracle-checkable and any delta is a tracked fix.
 
-**Deferred to children of `vms-30e`:** wiring the CTERM **server** to a real login — an inbound Bind
-spawning a PTY + LOGINOUT/DCL and bridging it to the Write/Read-Data/OOB messages, the way
-`src/vmsssh/vmssshd.c` `forkpty()`s `vmsdcl --login` — and the live `$ SET HOST` vs a real lab
-VAX/Alpha (the `vms-aac0`-class bracket, a coordinated lab run).
+**Deferred to children of `vms-30e`:** the live `$ SET HOST` vs a real lab VAX/Alpha (the
+`vms-aac0`-class bracket, a coordinated lab run).
+
+---
+
+### 4.7a The Session Control CONNECT message — ORACLE-VERIFIED (`vms-558` / `vms-f40`)
+
+**This subsection supersedes, for the SC connect message only, §4.7's "no oracle specimen" scope.**
+The CTERM *PDUs* remain spec-derived; the *connect* that names the CTERM object is now measured.
+
+**Specimen:** `docs/oracle/vax-sethost-cterm.pcap` frame 5 (retransmitted identically as frame 46),
+captured 2026-09-09 on lab pod `vaxlab-1` — a real `$ SET HOST VAX2` between two stock **OpenVMS VAX
+V7.3** nodes (1.1 → 1.2) over the QNA-0 circuit. The NSP Connect Initiate's connect data is exactly
+twenty bytes:
+
+```
+00 2a | 02 00 1a 02 20 20 06 'S' 'Y' 'S' 'T' 'E' 'M' | 27 00 00 00 00
+^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^
+DSTNAME  SRCNAME                                       MENUVER + the THREE
+                                                       ACCESS-CONTROL STRINGS
+```
+
+- **DSTNAME** — end-user descriptor **FORMAT 0** (object number only), OBJTYPE `0x2a` = **42**
+  (CTERM). **This corrected a real defect:** the `#1013` cut emitted format **1** for "object
+  number", which a real VAX would not have read as an object at all.
+- **SRCNAME** — **FORMAT 2** (coded), OBJTYPE 0, GRPCODE `0x021a`, USRCODE `0x2020`, then a counted
+  string `SYSTEM` — the SOURCE end user.
+- **MENUVER** `0x27`, then four zero bytes: **RQSTRID, PASSWRD and ACCOUNT are ALL EMPTY.**
+
+**The security fact this settles (the item's A4/A9 question).** The identity a `SET HOST` carries
+arrives in the SOURCE DESCRIPTOR, and **there is no password on the wire**. The initiator-side
+console transcript agrees: the remote prompts FRESH for `Username:` *and* `Password:`, and the
+carried identity surfaces only as `Remote Port Info: 1025::SYSTEM` on the virtual terminal. An
+implementation that logged an inbound `SET HOST` in from the carried username would be admitting a
+session on **zero credential material**. So OVMX treats the carried `node::user` as PROXY /
+ACCOUNTING information and routes the connect to **LOGINOUT, which authenticates from scratch**
+(`vms-f40`, §4.7b).
+
+**Also oracle-grounded here:** the NSP **disconnect reasons** — frame 117 carries reason `0x0009`
+(the destination object ending/refusing the connection; `tcpdump` renders it "object rejected
+connect") and frame 118 answers with `0x002a` = 42, "disconnect complete". `DNET_LINK_REASON_OBJREJ`
+and `DNET_LINK_REASON_DISCOMPLETE` are those measured values, not invented ones.
+
+**Proven:** `tests/vmsdecnet/test_dnet_cterm.c` holds the twenty specimen bytes verbatim and asserts
+that OVMX decodes them field-for-field **and re-emits them byte-identically**, plus a bounded-input
+battery (every truncated prefix, a length byte that lies, an over-long counted string, an unknown
+descriptor format, a format-0 descriptor naming object 0) — these are ATTACKER-CONTROLLED bytes that
+arrive before anyone has authenticated, so each must be a clean refusal rather than an over-read.
+
+### 4.7b The CTERM host session — an inbound `SET HOST` reaches an AUTHENTICATED LOGINOUT (`vms-f40`)
+
+**Landed:** `src/vmsdecnet/cterm/dnet_cterm_host.{c,h}`. An inbound connect to object 42 mints an
+**RTAn: virtual terminal through the executive** (`VMS_IOCTL_TERM_CREATE` → `vms_devtab_add_terminal`;
+the executive, not the caller, chooses the unit) and creates a process running the real
+`SYS$SYSTEM:LOGINOUT.EXE` on it via **`$CREPRC PRC$M_INTER|PRC$M_LOGINOUT`** — the same primitive the
+console login uses (`vms-3e9`, `vms-f881`). The DECnet daemon holds no credential, spawns nothing and
+makes no login decision; the connect-carried username reaches nothing that decides anything.
+
+**What it replaces.** The `--cterm-server` strawman answered an inbound connect by `openpty()`ing a
+pty and `fork()`+`execvp()`ing `vmsdcl --login`, so a remote `SET HOST` reached a **bare DCL prompt
+with no authentication**. That path is deleted, and its return is blocked by a standing source gate
+(`tests/integration/test_creprc_session_primitive.sh` check 5) that scans the daemon and the CTERM
+host for `fork`/`exec*`/`openpty`/`dup2` in both directions, with its own negative controls.
+
+**Proven against the real executive:** `DECNETD.EXE --cterm-accept-test`, run inside the booted image
+by the shared acceptance battery. It opens a REAL NSP link to object 42 over a socketpair datalink,
+dispatches it to `$CREPRC` → LOGINOUT on an executive-minted RTAn:, and then requires **three
+refusals**: an unknown account, a real account with a wrong password, and the seeded `DISABLED`
+account **with its correct password** (only the SYSUAF DISUSER rule can refuse that one). It also
+`$GETDVI`s the session's RTAn: from a process that is not the session — the design's §7.5 anti-LARP
+tell — and asserts no welcome banner or DCL prompt ever crossed the link. Where the executive is
+absent it FAILS honestly (INV-6); it does not degrade to a stub.
+
+**Still deferred:** one session at a time, no CTERM read-solicitation flow (the pump is
+byte-transparent), no DCL `SET HOST` client wiring, and the live-VAX bracket (`vms-aac0`).
 
 ---
 

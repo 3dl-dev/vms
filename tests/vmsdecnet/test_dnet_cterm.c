@@ -28,12 +28,23 @@
  *      exact link_send -> wire -> link_rx -> cterm_rx path a real SET HOST uses.
  *      No CAP_NET_RAW.
  *
- * Clean-room (Rule 8): CTERM is ENTIRELY SPEC-DERIVED -- there is NO oracle
- * specimen (the vms-3be capture never completed a logical link, so no CTERM byte
- * was ever observed). The message set + function mirror the public DNA CTERM
- * functional description; the numeric codes/layouts are OVMX-assigned and proven
- * here ONLY by round-trip, never presented as VMS-authentic bytes. See
- * docs/decnet-provenance-register.md sec 4.7.
+ * Clean-room (Rule 8), AND THE LINE BETWEEN THE TWO HALVES OF THIS FILE:
+ *
+ *   - The CTERM PDUs (Bind, Characteristics, Read/Write, OOB) are ENTIRELY
+ *     SPEC-DERIVED. There is no oracle specimen for them: the vms-3be capture
+ *     never completed a logical link, and the vms-558 capture that DID
+ *     complete one carries the CTERM payloads inside NSP data segments that
+ *     have not been decoded field-by-field. The message set + function mirror
+ *     the public DNA CTERM functional description; the numeric codes/layouts
+ *     are OVMX-assigned and proven here ONLY by round-trip, never presented as
+ *     VMS-authentic bytes. See docs/decnet-provenance-register.md sec 4.7.
+ *
+ *   - The SESSION CONTROL CONNECT MESSAGE is now ORACLE-GROUNDED (rd vms-558 /
+ *     vms-f40). docs/oracle/vax-sethost-cterm.pcap frame 5 carries the real
+ *     VAX's twenty bytes, and test_sc_connect() below asserts against THOSE
+ *     BYTES -- including the format-0 destination descriptor OVMX's first cut
+ *     got wrong, and the empty access-control fields that settle the
+ *     credential question. That half is measured, not assigned.
  */
 #include <assert.h>
 #include <stdint.h>
@@ -145,16 +156,150 @@ static void test_codec(void)
             "an unknown message type is rejected EBADTYPE"); }
 }
 
+/*
+ * THE ORACLE SPECIMEN (rd vms-558 / vms-f40). The twenty bytes of Session
+ * Control connect data a real OpenVMS VAX V7.3 put in the Connect Initiate of
+ * `$ SET HOST VAX2` -- docs/oracle/vax-sethost-cterm.pcap frame 5, offsets
+ * 0x2f..0x42 of the captured Ethernet frame (the retransmission, frame 46, is
+ * byte-identical). This array is the ORACLE, copied from the capture, and every
+ * assertion about the layout below is measured against it rather than against
+ * what OVMX happens to emit.
+ */
+static const uint8_t k_oracle_sc_connect[] = {
+    0x00, 0x2a,                                     /* DSTNAME: fmt 0, object 42 */
+    0x02, 0x00, 0x1a, 0x02, 0x20, 0x20,             /* SRCNAME: fmt 2, objtype 0,
+                                                     * grpcode 0x021a, usrcode 0x2020 */
+    0x06, 'S', 'Y', 'S', 'T', 'E', 'M',             /* ... counted "SYSTEM"      */
+    0x27,                                           /* MENUVER                   */
+    0x00, 0x00, 0x00, 0x00                          /* RQSTRID/PASSWRD/ACCOUNT
+                                                     * (+USRDATA) ALL EMPTY      */
+};
+
 static void test_sc_connect(void)
 {
-    printf("[sc] SET HOST connect data names the CTERM object (42)\n");
+    printf("[sc] the SET HOST connect: oracle layout + a bounded decoder\n");
     uint8_t buf[128]; size_t n = 0;
-    check(dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", "", "",
-                                      buf, sizeof(buf), &n) == DNET_CTERM_OK,
-          "SC connect builds (dst object 42, access user SYSTEM)");
+    struct dnet_cterm_sc_connect sc;
+
+    /* ---- 1. THE ORACLE SPECIMEN DECODES, AND SAYS WHAT THE ORACLE SAYS ---- */
+    check(dnet_cterm_sc_connect_parse(k_oracle_sc_connect,
+                                      sizeof(k_oracle_sc_connect), &sc)
+              == DNET_CTERM_OK,
+          "the REAL VAX's connect data (oracle pcap frame 5) decodes");
+    check(sc.dst_format == DNET_SC_FMT_OBJECT && sc.dst_object == DNET_CTERM_OBJECT,
+          "the destination is a FORMAT-0 descriptor naming object 42 (CTERM) --"
+          " format 0, not the format 1 OVMX's first cut emitted");
+    check(sc.src_format == DNET_SC_FMT_CODED && sc.src_object == 0 &&
+          sc.src_grpcode == 0x021a && sc.src_usrcode == 0x2020 &&
+          strcmp(sc.src_user, "SYSTEM") == 0,
+          "the SOURCE descriptor is format 2 and carries the source user"
+          " \"SYSTEM\" plus the specimen's group/user codes");
+    check(sc.menuver == 0x27, "the MENUVER byte is the specimen's 0x27");
+
+    /* ---- 2. THE SECURITY FACT: NO CREDENTIAL IS ON THE WIRE --------------- */
+    check(sc.rqstrid[0] == '\0' && sc.account[0] == '\0' && sc.password_len == 0,
+          "the ACCESS-CONTROL fields (RQSTRID/PASSWRD/ACCOUNT) are ALL EMPTY --"
+          " a real SET HOST carries NO password, so an auto-login from the"
+          " carried username would authenticate on zero credential material");
+
+    /* The decoder has NOWHERE to put a password even when one is sent: it
+     * records the length and drops the bytes (dnet_cterm.h). That is what makes
+     * "OVMX cannot auto-login from the wire" structural rather than a comment. */
+    check(dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", 0x021a, 0x2020,
+                                      "RQ", "SECRETPW", "ACCT",
+                                      buf, sizeof(buf), &n) == DNET_CTERM_OK &&
+          dnet_cterm_sc_connect_parse(buf, n, &sc) == DNET_CTERM_OK &&
+          sc.password_len == 8 && sc.password_present == 1 &&
+          memmem(&sc, sizeof(sc), "SECRETPW", 8) == NULL,
+          "a connect that DOES carry a password is decoded as a LENGTH only --"
+          " the plaintext appears nowhere in the decoded struct");
+
+    /* ---- 3. WHAT OVMX EMITS MATCHES THE ORACLE BYTE FOR BYTE -------------- */
+    check(dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", 0x021a, 0x2020,
+                                      "", "", "", buf, sizeof(buf), &n)
+              == DNET_CTERM_OK,
+          "OVMX builds a SET HOST connect for object 42");
+    check(n == sizeof(k_oracle_sc_connect) - 1 &&
+          memcmp(buf, k_oracle_sc_connect, n) == 0,
+          "OVMX's connect data is BYTE-IDENTICAL to the real VAX's, through the"
+          " three empty access-control strings (the specimen's trailing 4th zero"
+          " is USRDATA, which OVMX does not send)");
     check(dnet_cterm_sc_connect_object(buf, n) == DNET_CTERM_OBJECT,
-          "SC connect names object 42 (CTERM) -- the object $ SET HOST targets");
-    check(n >= 4, "SC connect carries dst + src descriptors + access strings");
+          "the object-number dispatch reads 42 back out of OVMX's own connect");
+
+    /* ---- 4. BOUNDED AGAINST ATTACKER-CONTROLLED BYTES --------------------- */
+    /* These bytes arrive from an UNAUTHENTICATED peer. Every one of these must
+     * be a clean refusal, never an over-read: "OVMX never crashes a peer" cuts
+     * both ways, and this decoder is the first thing an inbound SET HOST
+     * touches. Run under ASan/valgrind in CI, an over-read here is a hard red. */
+    { struct dnet_cterm_sc_connect s2;
+      check(dnet_cterm_sc_connect_parse(NULL, 4, &s2) == DNET_CTERM_EINVAL &&
+            dnet_cterm_sc_connect_parse(k_oracle_sc_connect, 4, NULL) == DNET_CTERM_EINVAL,
+            "NULL arguments are refused EINVAL"); }
+    { struct dnet_cterm_sc_connect s2;
+      /* EVERY prefix of the specimen: each must either decode (a short but
+       * well-formed connect) or be refused -- and never read past its end. */
+      int over = 0;
+      for (size_t len = 0; len < sizeof(k_oracle_sc_connect); len++) {
+          uint8_t tmp[sizeof(k_oracle_sc_connect)];
+          memcpy(tmp, k_oracle_sc_connect, len);
+          int rc = dnet_cterm_sc_connect_parse(tmp, len, &s2);
+          if (rc != DNET_CTERM_OK && rc != DNET_CTERM_ETRUNC &&
+              rc != DNET_CTERM_EBADLEN && rc != DNET_CTERM_EINVAL)
+              over = 1;
+      }
+      check(!over, "every TRUNCATED prefix of the specimen is answered with a"
+                   " defined status (OK/ETRUNC/EBADLEN/EINVAL), never a crash"); }
+    { struct dnet_cterm_sc_connect s2;
+      /* A counted string whose length byte claims more than the message holds. */
+      uint8_t lying[] = { 0x00, 0x2a, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 'A' };
+      check(dnet_cterm_sc_connect_parse(lying, sizeof(lying), &s2) == DNET_CTERM_ETRUNC,
+            "a counted string claiming 255 bytes in a 10-byte message is"
+            " refused ETRUNC (never read past the buffer)"); }
+    { struct dnet_cterm_sc_connect s2;
+      /* A counted string that fits the message but not the field: REFUSED, not
+       * clipped. A clipped identity that happens to resolve is the bug class
+       * this rule exists to prevent. */
+      uint8_t big[8 + 2 + DNET_SC_MAX_STR + 8];
+      size_t o = 0;
+      big[o++] = 0x00; big[o++] = 0x2a;
+      big[o++] = 0x02; big[o++] = 0x00; big[o++] = 0; big[o++] = 0; big[o++] = 0; big[o++] = 0;
+      big[o++] = (uint8_t)(DNET_SC_MAX_STR + 1);
+      for (int i = 0; i <= DNET_SC_MAX_STR; i++) big[o++] = 'A';
+      check(dnet_cterm_sc_connect_parse(big, o, &s2) == DNET_CTERM_EBADLEN,
+            "an over-long source-user string is REFUSED EBADLEN, not clipped"); }
+    { struct dnet_cterm_sc_connect s2;
+      uint8_t badfmt[] = { 0x07, 0x2a, 0x00, 0x00 };
+      check(dnet_cterm_sc_connect_parse(badfmt, sizeof(badfmt), &s2) == DNET_CTERM_EINVAL,
+            "an unknown descriptor FORMAT is refused EINVAL"); }
+    { struct dnet_cterm_sc_connect s2;
+      uint8_t zeroobj[] = { 0x00, 0x00, 0x00, 0x00 };
+      check(dnet_cterm_sc_connect_parse(zeroobj, sizeof(zeroobj), &s2) == DNET_CTERM_EINVAL,
+            "a format-0 descriptor naming object 0 is refused (it names nothing)"); }
+    { /* A connect for a DIFFERENT object must not read as CTERM. */
+      uint8_t other[] = { 0x00, 0x11, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+      check(dnet_cterm_sc_connect_object(other, sizeof(other)) == 17,
+            "a connect to object 17 (FAL) reads back as 17, not as CTERM"); }
+
+    /* ---- 5. Remote Port Info is the oracle's accounting string ------------ */
+    { char rpi[64];
+      struct dnet_cterm_sc_connect s2;
+      check(dnet_cterm_sc_connect_parse(k_oracle_sc_connect,
+                                        sizeof(k_oracle_sc_connect), &s2) == DNET_CTERM_OK &&
+            dnet_cterm_remote_port_info(&s2, 1025, rpi, sizeof(rpi)) == DNET_CTERM_OK &&
+            strcmp(rpi, "1025::SYSTEM") == 0,
+            "Remote Port Info renders as \"1025::SYSTEM\" -- exactly the string"
+            " the oracle's SHOW TERMINAL printed for this connect"); }
+    { char rpi[64];
+      struct dnet_cterm_sc_connect s2;
+      memset(&s2, 0, sizeof(s2));
+      /* A peer that puts control bytes in its source name must not be able to
+       * inject them into a console line or an accounting record. */
+      memcpy(s2.src_user, "AB\033[2JC\007D", 9);
+      check(dnet_cterm_remote_port_info(&s2, 1, rpi, sizeof(rpi)) == DNET_CTERM_OK &&
+            strcmp(rpi, "1::AB[2JCD") == 0,
+            "control characters in a peer-supplied source name are STRIPPED from"
+            " the accounting surface (no escape-sequence injection)"); }
 }
 
 /* ---- 2. session FSM (raw CTERM PDUs, no NSP) ----------------------------- */
@@ -303,9 +448,9 @@ static void test_engine_e2e(void)
     /* --- open the NSP logical link to the CTERM object (the CI carries the SC
      *     connect naming object 42, exactly as $ SET HOST originates). --- */
     uint8_t sc[128]; size_t sclen = 0;
-    check(dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", "", "",
-                                      sc, sizeof(sc), &sclen) == DNET_CTERM_OK,
-          "SET HOST builds the SC connect for object 42");
+    check(dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", 0x021a, 0x2020,
+                                      "", "", "", sc, sizeof(sc), &sclen) == DNET_CTERM_OK,
+          "SET HOST builds the SC connect for object 42 (oracle shape)");
     check(dnet_engine_link_open(&L, 2, 11, 0x2001, sc, sclen, 1459, 1,
                                 DNET_NSP_VER_41, frame, sizeof(frame), &flen, t++)
               == DNET_ENGINE_OK, "L link_open builds the CI (to CTERM object)");

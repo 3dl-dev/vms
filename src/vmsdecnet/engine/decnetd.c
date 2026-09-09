@@ -33,6 +33,7 @@
  */
 #include <errno.h>
 #include <net/if.h>      /* if_nametoindex() */
+#include <poll.h>       /* the --cterm-server loop waits on wire + session */
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,8 +44,10 @@
 
 #include "dnet_engine.h"
 #include "dnet_cterm.h"     /* CTERM terminal-service protocol (--set-host-selftest) */
+#include "dnet_cterm_host.h" /* CTERM HOST session: $CREPRC -> LOGINOUT on RTAn: */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
+#include "vms_kif.h"        /* $GETDVI readback: the sec-7.5 anti-LARP tell */
 
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
  * bridge model that carries raw Phase IV multicast; SLIRP cannot, see
@@ -414,7 +417,13 @@ static int run_sethost_selftest(void)
     dnet_tick_t t = 100;
 
     /* 1) open the logical link to the CTERM object (CI carries SC connect #42). */
-    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", "", "",
+    /* The connect is built in the ORACLE-OBSERVED shape (docs/oracle/
+     * vax-sethost-cterm.pcap frame 5): destination = format-0 object 42,
+     * source = format-2 coded descriptor carrying the local user "SYSTEM",
+     * and EMPTY access-control fields -- a real SET HOST carries no password.
+     * The group/user codes are the specimen's own. */
+    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", 0x021a, 0x2020,
+                                    "", "", "",
                                     sc, sizeof(sc), &sclen) != 0 ||
         dnet_engine_link_open(&L, 2, 11, 0x2001, sc, sclen, 1459, 1,
                               DNET_NSP_VER_41, frame, sizeof(frame), &flen, t) != 0 ||
@@ -528,6 +537,447 @@ done:
     return 0;
 }
 
+/*
+ * ================== --cterm-accept-test (rd vms-f40) ==================
+ * THE GROUND-SOURCE ACCEPTANCE for "an inbound $ SET HOST reaches an
+ * AUTHENTICATED LOGINOUT prompt". It is the design's sec-7.1/7.5 ratification
+ * gate in executable form, and it is written so that A FAKE CANNOT PASS IT:
+ *
+ *   - THE WIRE IS REAL. A client engine opens a genuine NSP logical link to
+ *     Session Control OBJECT 42, carrying a connect message built in the
+ *     ORACLE-OBSERVED shape (docs/oracle/vax-sethost-cterm.pcap frame 5:
+ *     format-0 destination object 42, format-2 source descriptor carrying
+ *     "SYSTEM", EMPTY access-control fields). Every frame is encoded and moved
+ *     over a real socketpair(2) -- the same transport the landed
+ *     --nsp-selftest and --set-host-selftest proofs use -- and every CTERM PDU
+ *     rides inside a real NSP data segment.
+ *
+ *   - THE SESSION IS REAL. The inbound connect is dispatched through
+ *     dnet_cterm_host_open(), which mints an RTAn: IN THE EXECUTIVE and calls
+ *     $CREPRC PRC$M_INTER|PRC$M_LOGINOUT to create a process running the REAL
+ *     SYS$SYSTEM:LOGINOUT.EXE on it. There is no stub login, no scripted
+ *     banner and no canned response anywhere in this file: every byte the
+ *     client "sees" below came out of that process's terminal.
+ *
+ *   - THE AUTHENTICATION IS REAL, AND IS PROVEN BY REFUSAL. The test types
+ *     credentials that MUST be rejected -- a nonexistent account, then a wrong
+ *     password for a real one -- and requires LOGINOUT's own authorization
+ *     failure to come back over the link. A no-auth implementation (the hole
+ *     this item closes) answers with a "$" prompt instead and fails here.
+ *
+ *   - THE DEVICE IS REAL, READ FROM ANOTHER PROCESS. While the session is
+ *     live, THIS process (which is NOT the session) $GETDVIs the RTAn: name
+ *     out of the executive and finds a genuine DC$_TERM row. That is the
+ *     design's own anti-LARP tell (sec 7.5): "if a 'SET HOST works' green can
+ *     be produced WITHOUT THE EXECUTIVE DEVICE TABLE CHANGING, it is a LARP."
+ *
+ * WHERE IT RUNS. It needs a real /dev/vms, a real SYSUAF and a real
+ * LOGINOUT.EXE, so it runs INSIDE THE BOOTED IMAGE -- the shared acceptance
+ * battery invokes it as a DCL foreign command (tests/qemu/lib/
+ * dcl_acceptance_battery.sh, "DECnet CTERM (vms-f40)"). It needs NO
+ * CAP_NET_RAW and no netdev: the datalink is the socketpair, exactly as the
+ * other selftests.
+ *
+ * INV-6: if the executive is absent or the session cannot be created, this
+ * FAILS. It never falls back to a per-process imitation of a login.
+ */
+
+/* One inbound-SET-HOST acceptance context: a client engine + CTERM terminal
+ * session on one side of a socketpair, the CTERM HOST session (and the real
+ * LOGINOUT process behind it) on the other. */
+struct ct_accept {
+    int      sv[2];
+    struct dnet_engine L;                    /* client (SET HOST initiator) */
+    struct dnet_engine R;                    /* host node                   */
+    struct dnet_cterm_session term;          /* client-side CTERM FSM       */
+    struct dnet_cterm_host_session hs;       /* host session + LOGINOUT     */
+    char     screen[16384];                  /* what the client has SEEN    */
+    size_t   screen_len;
+    dnet_tick_t t;
+};
+
+static void ct_screen_append(struct ct_accept *c, const uint8_t *d, size_t n)
+{
+    for (size_t i = 0; i < n && c->screen_len + 1 < sizeof(c->screen); i++)
+        c->screen[c->screen_len++] = (char)d[i];
+    c->screen[c->screen_len] = '\0';
+}
+
+/* Case-insensitive substring search over the captured screen. */
+static int ct_screen_has(const struct ct_accept *c, const char *needle)
+{
+    size_t nl = strlen(needle);
+
+    if (nl == 0 || c->screen_len < nl)
+        return 0;
+    for (size_t i = 0; i + nl <= c->screen_len; i++) {
+        size_t j = 0;
+        while (j < nl) {
+            char a = c->screen[i + j], b = needle[j];
+            if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+            if (b >= 'a' && b <= 'z') b = (char)(b - 32);
+            if (a != b) break;
+            j++;
+        }
+        if (j == nl)
+            return 1;
+    }
+    return 0;
+}
+
+/* Ship one CTERM PDU client -> host over the real link, and let the HOST
+ * consume it: a Bind is answered by the host FSM, a Read Data is written to
+ * the session's terminal (i.e. typed at LOGINOUT). Returns 0 or -1. */
+static int ct_to_host(struct ct_accept *c, const uint8_t *pdu, size_t plen)
+{
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t flen = 0, rlen = 0, rxlen = 0;
+    int has_reply = 0;
+    enum dnet_link_event lev = DNET_LINK_EV_NONE;
+    enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
+
+    if (dnet_engine_link_send(&c->L, pdu, plen, frame, sizeof(frame), &flen, c->t) != 0 ||
+        move_frame(c->sv[0], c->sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&c->R, c->t, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_DATA)
+        return -1;
+    if (dnet_cterm_rx(&c->hs.cterm, c->R.rx_data, c->R.rx_datalen, &cev) != DNET_CTERM_OK)
+        return -1;
+    if (cev == DNET_CTERM_EV_READ_DATA) {
+        /* The remote's keystrokes go to the SESSION's terminal -- to LOGINOUT,
+         * which is the thing that decides whether they are a valid login. */
+        if (c->hs.cterm.last.datalen &&
+            dnet_cterm_host_write(&c->hs, c->hs.cterm.last.data,
+                                  c->hs.cterm.last.datalen) < 0)
+            return -1;
+        if (c->hs.cterm.last.terminator) {
+            uint8_t nl = c->hs.cterm.last.terminator;
+            if (dnet_cterm_host_write(&c->hs, &nl, 1) < 0)
+                return -1;
+        }
+    }
+    if (has_reply) {
+        if (move_frame(c->sv[1], c->sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+            dnet_engine_link_rx(&c->L, c->t, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                                &has_reply, &lev) != 0)
+            return -1;
+    }
+    c->t++;
+    return 0;
+}
+
+/* Ship one CTERM PDU host -> client and let the CLIENT consume it: a Write
+ * lands on the client's screen, byte for byte as the session produced it. */
+static int ct_to_term(struct ct_accept *c, const uint8_t *pdu, size_t plen)
+{
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t flen = 0, rlen = 0, rxlen = 0;
+    int has_reply = 0;
+    enum dnet_link_event lev = DNET_LINK_EV_NONE;
+    enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
+
+    if (dnet_engine_link_send(&c->R, pdu, plen, frame, sizeof(frame), &flen, c->t) != 0 ||
+        move_frame(c->sv[1], c->sv[0], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&c->L, c->t, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_DATA)
+        return -1;
+    if (dnet_cterm_rx(&c->term, c->L.rx_data, c->L.rx_datalen, &cev) != DNET_CTERM_OK)
+        return -1;
+    if (cev == DNET_CTERM_EV_WRITE)
+        ct_screen_append(c, c->term.last.data, c->term.last.datalen);
+    if (has_reply) {
+        if (move_frame(c->sv[0], c->sv[1], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+            dnet_engine_link_rx(&c->R, c->t, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                                &has_reply, &lev) != 0)
+            return -1;
+    }
+    c->t++;
+    return 0;
+}
+
+/* Drain whatever the SESSION has written to its terminal and carry it to the
+ * client as CTERM Write PDUs, for up to `ms` milliseconds of QUIET or until
+ * `expect` (when non-NULL) appears on the client's screen. Returns 1 if
+ * `expect` was seen (or expect == NULL), 0 otherwise. */
+static int ct_pump(struct ct_accept *c, const char *expect, int ms)
+{
+    const int step_ms = 20;
+    int waited = 0;
+
+    for (;;) {
+        uint8_t out[DNET_CTERM_MAX_DATA];
+        long n = dnet_cterm_host_read(&c->hs, out, sizeof(out));
+
+        if (n > 0) {
+            uint8_t cpdu[DNET_CTERM_MAX_PDU];
+            size_t clen = 0;
+            if (dnet_cterm_write(&c->hs.cterm, out, (size_t)n,
+                                 DNET_CTERM_WR_NOFORMAT, cpdu, sizeof(cpdu), &clen) != 0 ||
+                ct_to_term(c, cpdu, clen) != 0)
+                return 0;
+            waited = 0;             /* progress: give the session more time */
+        }
+        if (expect && ct_screen_has(c, expect))
+            return 1;
+        if (n < 0)
+            return expect ? 0 : 1;  /* the session's terminal closed */
+        if (waited >= ms)
+            return expect ? 0 : 1;
+        {
+            struct timespec ts = { 0, (long)step_ms * 1000000L };
+            nanosleep(&ts, NULL);
+        }
+        waited += step_ms;
+    }
+}
+
+/* Type a line at the remote LOGINOUT, as the CTERM terminal would. */
+static int ct_type(struct ct_accept *c, const char *line)
+{
+    uint8_t cpdu[DNET_CTERM_MAX_PDU];
+    size_t clen = 0;
+
+    if (dnet_cterm_read_data(&c->term, (const uint8_t *)line, strlen(line), 0x0d,
+                             cpdu, sizeof(cpdu), &clen) != 0)
+        return -1;
+    return ct_to_host(c, cpdu, clen);
+}
+
+static int g_ct_pass, g_ct_fail;
+#define CT_CHECK(cond, msg) do { \
+    if (cond) { printf("  PASS: %s\n", (msg)); g_ct_pass++; } \
+    else      { printf("  FAIL: %s\n", (msg)); g_ct_fail++; } \
+} while (0)
+
+/* DC$_TERM. Spelled here rather than pulled from dcdef.h so the daemon keeps
+ * its existing (deliberately narrow) include set; a divergence shows up as a
+ * failing CHECK, not a silently passing one. */
+#define CT_DC_TERM  66
+
+static int run_cterm_accept_test(void)
+{
+    static struct ct_accept c;
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    uint8_t sc[128], cpdu[DNET_CTERM_MAX_PDU];
+    size_t flen = 0, rlen = 0, rxlen = 0, sclen = 0, clen = 0;
+    int has_reply = 0;
+    enum dnet_link_event lev = DNET_LINK_EV_NONE;
+    uint32_t st;
+
+    printf("DECNETD-I-CTERMACCEPT, inbound SET HOST -> $CREPRC -> LOGINOUT on RTAn:"
+           " (rd vms-f40; oracle docs/oracle/vax-sethost-cterm.*)\n");
+
+    memset(&c, 0, sizeof(c));
+    c.hs.master_fd = -1;
+    c.t = 100;
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, c.sv) != 0) {
+        fprintf(stderr, "DECNETD-E-CTERMACCEPT, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    {
+        const uint8_t hwL[6] = { 0x02,0,0,0,0,0x01 };
+        const uint8_t hwR[6] = { 0x02,0,0,0,0,0x02 };
+        if (dnet_engine_init(&c.L, 1, 1, "OVMXC", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
+            dnet_engine_init(&c.R, 1, 2, "OVMXH", "EWA0", NULL, hwR, 0, 0, 0) != 0 ||
+            dnet_cterm_session_init(&c.term, DNET_CTERM_ROLE_TERMINAL) != 0) {
+            fprintf(stderr, "DECNETD-E-CTERMACCEPT, engine init failed\n");
+            close(c.sv[0]); close(c.sv[1]);
+            return 1;
+        }
+    }
+
+    /* ---- 1. A REAL inbound connect to object 42, in the oracle's shape ---- */
+    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", 0x021a, 0x2020,
+                                    "", "", "", sc, sizeof(sc), &sclen) != 0 ||
+        dnet_engine_link_open(&c.L, 1, 2, 0x2001, sc, sclen, 1459, 1,
+                              DNET_NSP_VER_41, frame, sizeof(frame), &flen, c.t) != 0 ||
+        move_frame(c.sv[0], c.sv[1], frame, flen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&c.R, c.t, rxbuf, rxlen, reply, sizeof(reply), &rlen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_CONNECT_IND) {
+        fprintf(stderr, "DECNETD-E-CTERMACCEPT, the inbound connect never reached the host\n");
+        close(c.sv[0]); close(c.sv[1]);
+        return 1;
+    }
+    CT_CHECK(dnet_cterm_sc_connect_object(c.R.link.conn_data, c.R.link.conn_len)
+                 == DNET_CTERM_OBJECT,
+             "the inbound connect names Session Control OBJECT 42 (CTERM), decoded"
+             " off the wire in the oracle's format-0 destination-descriptor shape");
+
+    /* ---- 2. DISPATCH IT: mint RTAn: in the executive, $CREPRC LOGINOUT ---- */
+    st = dnet_cterm_host_open(&c.hs, c.R.link.conn_data, c.R.link.conn_len,
+                              c.R.link.remote_node);
+    CT_CHECK((st & 1) != 0,
+             "object-42 dispatch created the session through the REAL executive"
+             " ($CREPRC PRC$M_INTER|PRC$M_LOGINOUT on an executive-minted RTAn:)");
+    if (!(st & 1)) {
+        fprintf(stderr, "DECNETD-E-CTERMACCEPT, dnet_cterm_host_open failed, status %08X\n",
+                (unsigned)st);
+        fprintf(stderr, "  (INV-6: no per-process imitation of a login is substituted;"
+                        " a real /dev/vms + SYS$SYSTEM:LOGINOUT.EXE are required)\n");
+        goto verdict;
+    }
+    printf("  INFO: session terminal = %s, session pid = %08X, Remote Port Info = %s\n",
+           c.hs.devnam, (unsigned)c.hs.session_pid, c.hs.remote_port_info);
+
+    /* The carried identity is PROXY info and NOTHING ELSE (the oracle's A4/A9
+     * answer). It shows up on the accounting surface, and the session is still
+     * about to be challenged for a username and a password. */
+    CT_CHECK(strcmp(c.hs.sc.src_user, "SYSTEM") == 0 &&
+             strstr(c.hs.remote_port_info, "::SYSTEM") != NULL,
+             "the connect-carried node::user is surfaced as Remote Port Info"
+             " (proxy/accounting), exactly as the oracle's SHOW TERMINAL does");
+    CT_CHECK(c.hs.sc.password_len == 0,
+             "the connect carried NO password (oracle: the access-control fields"
+             " are empty) -- a login from the carried identity would be a login on"
+             " zero credential material");
+
+    /* ---- 3. sec-7.5 TELL: $GETDVI the device FROM THIS PROCESS ------------ */
+    {
+        struct vms_devinfo info;
+        uint32_t dst;
+
+        memset(&info, 0, sizeof(info));
+        dst = vms_kif_getdvi_devnam(c.hs.devnam, &info);
+        CT_CHECK((dst & 1) != 0 && info.devclass == CT_DC_TERM,
+                 "$GETDVI on the session's RTAn: from a DIFFERENT process than the"
+                 " session returns a real DC$_TERM device row (design sec-7.5 tell:"
+                 " a green produced without the executive device table changing is"
+                 " a LARP)");
+    }
+
+    /* ---- 4. Bind the CTERM session and read LOGINOUT's OWN prompt --------- */
+    if (dnet_engine_link_accept(&c.R, 0x2002, reply, sizeof(reply), &rlen, c.t) != 0 ||
+        move_frame(c.sv[1], c.sv[0], reply, rlen, rxbuf, sizeof(rxbuf), &rxlen) != 0 ||
+        dnet_engine_link_rx(&c.L, c.t, rxbuf, rxlen, frame, sizeof(frame), &flen,
+                            &has_reply, &lev) != 0 || lev != DNET_LINK_EV_CONNECT_CONF) {
+        fprintf(stderr, "DECNETD-E-CTERMACCEPT, the logical link did not come UP\n");
+        g_ct_fail++;
+        goto verdict;
+    }
+    c.t++;
+    if (dnet_cterm_bind(&c.term, "OVMXC$RTA1:", cpdu, sizeof(cpdu), &clen) != 0 ||
+        ct_to_host(&c, cpdu, clen) != 0 ||
+        dnet_cterm_bind_accept(&c.hs.cterm, "OVMXH", cpdu, sizeof(cpdu), &clen) != 0 ||
+        ct_to_term(&c, cpdu, clen) != 0 ||
+        !dnet_cterm_is_bound(&c.term)) {
+        fprintf(stderr, "DECNETD-E-CTERMACCEPT, the CTERM session did not bind\n");
+        g_ct_fail++;
+        goto verdict;
+    }
+
+    /* WAKE THE SESSION. LOGINOUT waits for the operator to strike RETURN
+     * before it announces itself and prompts -- gated on being bound to a
+     * terminal DEVICE (tools/vms_login.c, loginout_at_operator_terminal()),
+     * which this session is, exactly like the console. So the remote terminal
+     * types a bare RETURN, as a person at a SET HOST would; a few retries,
+     * because the session process has to be scheduled and reach the read
+     * first. This is also, incidentally, a second proof that the executive
+     * recorded the terminal binding: if it had not, LOGINOUT would not be
+     * waiting for a RETURN at all. */
+    {
+        int woke = 0, tries;
+        for (tries = 0; tries < 8 && !woke; tries++) {
+            if (ct_type(&c, "") != 0)
+                break;
+            woke = ct_pump(&c, "Username:", 3000);
+        }
+        CT_CHECK(woke,
+                 "the inbound SET HOST is CHALLENGED: LOGINOUT's own Username:"
+                 " prompt arrives over the link (a no-auth CTERM would answer"
+                 " with a bare $)");
+        if (!woke)
+            goto verdict;
+    }
+
+    /* ---- 5. REJECTION IS THE PROOF: bad credentials are refused ----------- */
+    if (ct_type(&c, "NOSUCHUSER") == 0 && ct_pump(&c, "Password:", 15000)) {
+        (void)ct_type(&c, "WRONGPASSWORD");
+        CT_CHECK(ct_pump(&c, "authorization failure", 20000),
+                 "a nonexistent account is REJECTED by LOGINOUT over the CTERM link"
+                 " (%LOGIN-F-INVPWD, user authorization failure)");
+    } else {
+        CT_CHECK(0, "LOGINOUT solicited a password for the offered username");
+    }
+
+    /* A REAL account with a WRONG password must be refused too -- otherwise the
+     * refusal above could be unknown-user handling rather than authentication. */
+    if (ct_pump(&c, "Username:", 20000) && ct_type(&c, "SYSTEM") == 0 &&
+        ct_pump(&c, "Password:", 15000)) {
+        (void)ct_type(&c, "NOTTHEPASSWORD");
+        CT_CHECK(ct_pump(&c, "authorization failure", 20000),
+                 "a REAL account with a WRONG password is REJECTED (so the refusal"
+                 " above is authentication, not unknown-user handling)");
+    } else {
+        CT_CHECK(0, "LOGINOUT re-prompted after the first authorization failure");
+    }
+
+    /* DISUSER, THE THIRD AND SHARPEST REFUSAL. DISABLED's password is CORRECT
+     * (tools/mksysuaf.c seeds it deliberately valid), so the only thing that
+     * can refuse this login is the SYSUAF login-flag rule -- "a correct
+     * password is not sufficient" (vms-c8fa). A CTERM path that bypassed
+     * LOGINOUT, or reached a LOGINOUT that skipped the flag check for network
+     * logins, admits this account and fails here. This is LOGINOUT's third
+     * attempt, so it is also the last one before it drops the connection
+     * (MAX_ATTEMPTS = 3, tools/vms_login.c) -- which is why it goes last. */
+    if (ct_pump(&c, "Username:", 20000) && ct_type(&c, "DISABLED") == 0 &&
+        ct_pump(&c, "Password:", 15000)) {
+        (void)ct_type(&c, "DISABLED");
+        CT_CHECK(ct_pump(&c, "authorization failure", 20000),
+                 "DISUSER IS HONOURED over CTERM: the DISABLED account is refused"
+                 " even though the password typed was CORRECT -- the refusal can"
+                 " only be the SYSUAF login-flag rule");
+        CT_CHECK(!ct_screen_has(&c, "Welcome to OpenVMX"),
+                 "...and it never reached a session banner");
+    } else {
+        CT_CHECK(0, "LOGINOUT re-prompted after the second authorization failure");
+    }
+
+    /* NO SESSION WAS EVER ADMITTED. The whole run typed three credential sets,
+     * every one of which had to be refused; if any DCL prompt or welcome banner
+     * appeared on the client's screen, an unauthenticated (or wrongly
+     * authenticated) session was handed to the peer -- which is the exact
+     * defect this item exists to close. */
+    CT_CHECK(!ct_screen_has(&c, "Welcome to OpenVMX") &&
+             !ct_screen_has(&c, "\n$ ") && !ct_screen_has(&c, "\r$ "),
+             "NO session was admitted anywhere in this run: no welcome banner and"
+             " no DCL prompt ever reached the remote terminal");
+
+    /* NEGCTL: prove the screen search is not vacuous -- it must FIND a token
+     * the session really produced and REJECT one it never could. Without this,
+     * every "was CHALLENGED" PASS above could be a search over an empty
+     * buffer that happened to be scored the right way. */
+    CT_CHECK(ct_screen_has(&c, "Username:") &&
+             !ct_screen_has(&c, "ZZ_NOT_ON_THIS_SCREEN_ZZ"),
+             "NEGCTL: the screen search finds a token the session really sent and"
+             " rejects one it never sent -- the assertions above can go red");
+
+    /* ---- 6. Tear down and prove the device row went with the session ------ */
+    {
+        char devnam[DNET_CTERM_HOST_DEVNAM];
+        struct vms_devinfo info;
+
+        snprintf(devnam, sizeof(devnam), "%s", c.hs.devnam);
+        (void)dnet_cterm_host_close(&c.hs);
+        memset(&info, 0, sizeof(info));
+        CT_CHECK((vms_kif_getdvi_devnam(devnam, &info) & 1) == 0,
+                 "the RTAn: row is WITHDRAWN from the executive when the session"
+                 " ends -- it appeared with the session and disappears with it");
+    }
+
+verdict:
+    if (c.hs.master_fd >= 0)
+        (void)dnet_cterm_host_close(&c.hs);
+    close(c.sv[0]);
+    close(c.sv[1]);
+    printf("DECNETD-I-CTERMACCEPT, %d passed, %d failed\n", g_ct_pass, g_ct_fail);
+    if (g_ct_fail == 0 && g_ct_pass > 0) {
+        printf("DECNETD-CTERM-ACCEPT: PASS\n");
+        return 0;
+    }
+    printf("DECNETD-CTERM-ACCEPT: FAIL\n");
+    return 1;
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -553,7 +1003,19 @@ static void usage(const char *argv0)
         "                      and exit (no CAP_NET_RAW -- two engines carry a\n"
         "                      whole terminal session: Bind, characteristics,\n"
         "                      screen output, keystrokes, out-of-band, Unbind,\n"
-        "                      over a socketpair; every payload byte-identical)\n",
+        "                      over a socketpair; every payload byte-identical)\n"
+        "  --cterm-accept-test run the INBOUND SET HOST acceptance and exit: a\n"
+        "                      real connect to Session Control object 42 is\n"
+        "                      dispatched through the executive ($CREPRC\n"
+        "                      PRC$M_INTER|PRC$M_LOGINOUT on an executive-minted\n"
+        "                      RTAn:) and the REAL LOGINOUT.EXE must CHALLENGE it\n"
+        "                      and REFUSE bad credentials. Needs /dev/vms +\n"
+        "                      SYS$SYSTEM:LOGINOUT.EXE; no CAP_NET_RAW.\n"
+        "  --cterm-server      serve inbound $ SET HOST on the live datalink:\n"
+        "                      accept a logical link to object 42 and create a\n"
+        "                      process running LOGINOUT.EXE on an RTAn: for it.\n"
+        "                      The remote user is AUTHENTICATED by LOGINOUT --\n"
+        "                      this daemon spawns nothing and knows no password.\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT);
 }
 
@@ -570,6 +1032,8 @@ int main(int argc, char **argv)
     int self_test = 0;
     int nsp_self_test = 0;
     int sethost_self_test = 0;
+    int cterm_accept_test = 0;
+    int cterm_server = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
@@ -585,6 +1049,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--self-test"))     self_test = 1;
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
+        else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
+        else if (!strcmp(argv[i], "--cterm-server")) cterm_server = 1;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
             return 0;
@@ -601,6 +1067,8 @@ int main(int argc, char **argv)
         return run_nsp_selftest();
     if (sethost_self_test)
         return run_sethost_selftest();
+    if (cterm_accept_test)
+        return run_cterm_accept_test();
 
     /* Identity is required and never invented (INV-6; the scsd
      * resolve_node_identity discipline: a wrong identity must never be made up). */
@@ -692,6 +1160,17 @@ int main(int argc, char **argv)
     uint8_t frame[DNET_FRAME_MAX];
     uint8_t rxbuf[DNET_FRAME_MAX];
 
+    /* The inbound-$-SET-HOST session this endnode is currently serving
+     * (--cterm-server). One at a time in this rung; the state is only ever the
+     * executive's device name plus the CTERM FSM -- no credential, no shell. */
+    struct dnet_cterm_host_session host;
+    int host_active = 0;
+    char session_devnam[DNET_CTERM_HOST_DEVNAM] = {0};
+    uint8_t peer_mac[6] = {0};
+
+    memset(&host, 0, sizeof(host));
+    host.master_fd = -1;
+
     while (!g_stop) {
         dnet_tick_t now = monotonic_sec();
 
@@ -725,6 +1204,80 @@ int main(int argc, char **argv)
             fflush(stdout);
         }
 
+        /*
+         * SERVE THE LIVE SESSION'S TERMINAL (rd vms-f40, --cterm-server).
+         *
+         * Whatever LOGINOUT/DCL has written to the session's RTAn: is carried
+         * to the remote terminal as CTERM Write PDUs inside NSP data segments.
+         * This daemon is a PIPE here and nothing more: it holds no credential,
+         * makes no login decision and spawns nothing -- the process on the
+         * other end of that terminal is the one authenticating, and it was
+         * created by $CREPRC, not by this program.
+         *
+         * poll() rather than the bare 1-second datalink timeout, so an
+         * interactive session is not typed into at one character a second;
+         * the 250 ms cap still lets the T3 cadence and the listen sweep fire.
+         */
+        if (cterm_server && host_active) {
+            struct pollfd pfd[2];
+            int nfds = 1;
+
+            pfd[0].fd = sock;         pfd[0].events = POLLIN; pfd[0].revents = 0;
+            pfd[1].fd = dnet_cterm_host_fd(&host); pfd[1].events = POLLIN; pfd[1].revents = 0;
+            if (pfd[1].fd >= 0)
+                nfds = 2;
+            (void)poll(pfd, (unsigned)nfds, 250);
+
+            if (nfds == 2 && (pfd[1].revents & (POLLIN | POLLHUP | POLLERR))) {
+                uint8_t out[DNET_CTERM_MAX_DATA];
+                long got = dnet_cterm_host_read(&host, out, sizeof(out));
+
+                if (got > 0 && dnet_cterm_is_bound(&host.cterm)) {
+                    uint8_t cpdu[DNET_CTERM_MAX_PDU], dframe[DNET_FRAME_MAX];
+                    size_t clen = 0, dlen = 0;
+                    if (dnet_cterm_write(&host.cterm, out, (size_t)got,
+                                         DNET_CTERM_WR_NOFORMAT, cpdu,
+                                         sizeof(cpdu), &clen) == 0 &&
+                        dnet_engine_link_send(&eng, cpdu, clen, dframe,
+                                              sizeof(dframe), &dlen, now) == 0)
+                        (void)scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
+                                                peer_mac, dframe, dlen);
+                } else if (got < 0) {
+                    /* The session ended (it logged out, or LOGINOUT refused and
+                     * exited). Release the terminal and tear the link down --
+                     * the same order the oracle's LOGOUT produced. */
+                    size_t dlen = 0;
+                    if (dnet_cterm_unbind(&host.cterm, DNET_CTERM_UNBIND_NORMAL,
+                                          frame, sizeof(frame), &dlen) == 0) {
+                        uint8_t dframe[DNET_FRAME_MAX];
+                        size_t flen2 = 0;
+                        if (dnet_engine_link_send(&eng, frame, dlen, dframe,
+                                                  sizeof(dframe), &flen2, now) == 0)
+                            (void)scs_datalink_send(sock, (int)ifindex,
+                                                    DNET_ETHERTYPE, peer_mac,
+                                                    dframe, flen2);
+                    }
+                    {
+                        size_t flen2 = 0;
+                        if (dnet_engine_link_close(&eng, DNET_LINK_REASON_NORMAL,
+                                                   frame, sizeof(frame), &flen2,
+                                                   now) == 0)
+                            (void)scs_datalink_send(sock, (int)ifindex,
+                                                    DNET_ETHERTYPE, peer_mac,
+                                                    frame, flen2);
+                    }
+                    (void)dnet_cterm_host_close(&host);
+                    host_active = 0;
+                    log_ts(stdout);
+                    printf(" DECNETD-I-SESSEND, inbound SET HOST session on %s ended\n",
+                           session_devnam);
+                    fflush(stdout);
+                }
+            }
+            if (!(pfd[0].revents & POLLIN))
+                continue;             /* nothing on the wire this round */
+        }
+
         ssize_t n = scs_datalink_recv(sock, rxbuf, sizeof(rxbuf));
         if (n < 0) {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
@@ -736,6 +1289,138 @@ int main(int argc, char **argv)
         uint8_t from[6];
         enum dnet_adj_state st = DNET_ADJ_DOWN;
         int rc = dnet_engine_rx_frame(&eng, now, rxbuf, (size_t)n, from, &st);
+
+        /*
+         * INBOUND $ SET HOST DISPATCH (rd vms-f40, --cterm-server). A frame the
+         * routing/HELLO path did not claim may be an NSP logical-link frame.
+         * On a CONNECT INDICATION we decode the Session Control connect --
+         * UNTRUSTED, UNAUTHENTICATED bytes, parsed under bounds -- and, if it
+         * names object 42, hand it to dnet_cterm_host_open(), which mints an
+         * RTAn: in the executive and $CREPRCs LOGINOUT.EXE onto it.
+         *
+         * WHAT THIS DAEMON DOES NOT DO, and must never do again: it does not
+         * openpty, does not fork, does not exec, and does not decide that
+         * anyone may log in. The connect-carried username (the oracle's
+         * "Remote Port Info") is accounting information and reaches no
+         * decision. Every refusal below leaves the peer disconnected rather
+         * than admitted (INV-6).
+         */
+        if (cterm_server && rc != 1) {
+            uint8_t reply[DNET_FRAME_MAX];
+            size_t rlen = 0;
+            int has_reply = 0;
+            enum dnet_link_event lev = DNET_LINK_EV_NONE;
+
+            if (dnet_engine_link_rx(&eng, now, rxbuf, (size_t)n, reply,
+                                    sizeof(reply), &rlen, &has_reply, &lev) == 0) {
+                if (has_reply)
+                    (void)scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
+                                            rxbuf + 6, reply, rlen);
+
+                if (lev == DNET_LINK_EV_CONNECT_IND) {
+                    int obj = dnet_cterm_sc_connect_object(eng.link.conn_data,
+                                                           eng.link.conn_len);
+                    uint32_t cst;
+                    size_t flen2 = 0;
+
+                    memcpy(peer_mac, rxbuf + 6, 6);
+                    if (host_active || obj != DNET_CTERM_OBJECT) {
+                        /* One session at a time in this rung, and only object
+                         * 42 is served here. Refuse on the wire; admit nobody. */
+                        if (dnet_engine_link_close(&eng, DNET_LINK_REASON_OBJREJ,
+                                                   frame, sizeof(frame), &flen2,
+                                                   now) == 0)
+                            (void)scs_datalink_send(sock, (int)ifindex,
+                                                    DNET_ETHERTYPE, peer_mac,
+                                                    frame, flen2);
+                        log_ts(stdout);
+                        printf(" DECNETD-I-CONNREJ, inbound connect to object %d"
+                               " refused (%s)\n", obj,
+                               host_active ? "a session is already active"
+                                           : "no such object served here");
+                        fflush(stdout);
+                    } else {
+                        cst = dnet_cterm_host_open(&host, eng.link.conn_data,
+                                                   eng.link.conn_len,
+                                                   eng.link.remote_node);
+                        if (!(cst & 1)) {
+                            /* No session, no shell, no fallback. */
+                            if (dnet_engine_link_close(&eng, DNET_LINK_REASON_OBJREJ,
+                                                       frame, sizeof(frame),
+                                                       &flen2, now) == 0)
+                                (void)scs_datalink_send(sock, (int)ifindex,
+                                                        DNET_ETHERTYPE, peer_mac,
+                                                        frame, flen2);
+                            fprintf(stderr, "DECNETD-E-NOSESSION, inbound SET HOST"
+                                    " refused: the session could not be created"
+                                    " (status %08X); no unauthenticated shell is"
+                                    " substituted\n", (unsigned)cst);
+                        } else {
+                            host_active = 1;
+                            snprintf(session_devnam, sizeof(session_devnam), "%s",
+                                     host.devnam);
+                            if (dnet_engine_link_accept(&eng, 0x2002, frame,
+                                                        sizeof(frame), &flen2,
+                                                        now) == 0)
+                                (void)scs_datalink_send(sock, (int)ifindex,
+                                                        DNET_ETHERTYPE, peer_mac,
+                                                        frame, flen2);
+                            log_ts(stdout);
+                            printf(" DECNETD-I-SESSTART, inbound SET HOST accepted"
+                                   " on %s -- LOGINOUT is authenticating"
+                                   " (Remote Port Info: %s)\n",
+                                   host.devnam, host.remote_port_info);
+                            fflush(stdout);
+                        }
+                    }
+                } else if (lev == DNET_LINK_EV_DATA && host_active) {
+                    /* Terminal bytes from the remote. The CTERM FSM decodes
+                     * them; a Bind is answered, keystrokes go to the session's
+                     * terminal -- to LOGINOUT, which is what decides whether
+                     * they are a valid login. */
+                    enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
+
+                    if (dnet_cterm_rx(&host.cterm, eng.rx_data, eng.rx_datalen,
+                                      &cev) == DNET_CTERM_OK) {
+                        uint8_t cpdu[DNET_CTERM_MAX_PDU], dframe[DNET_FRAME_MAX];
+                        size_t clen = 0, dlen = 0;
+
+                        if (cev == DNET_CTERM_EV_BIND_IND &&
+                            dnet_cterm_bind_accept(&host.cterm, eng.node_name, cpdu,
+                                                   sizeof(cpdu), &clen) == 0 &&
+                            dnet_engine_link_send(&eng, cpdu, clen, dframe,
+                                                  sizeof(dframe), &dlen, now) == 0)
+                            (void)scs_datalink_send(sock, (int)ifindex,
+                                                    DNET_ETHERTYPE, peer_mac,
+                                                    dframe, dlen);
+                        else if (cev == DNET_CTERM_EV_READ_DATA) {
+                            if (host.cterm.last.datalen)
+                                (void)dnet_cterm_host_write(&host,
+                                        host.cterm.last.data,
+                                        host.cterm.last.datalen);
+                            if (host.cterm.last.terminator) {
+                                uint8_t nl = host.cterm.last.terminator;
+                                (void)dnet_cterm_host_write(&host, &nl, 1);
+                            }
+                        } else if (cev == DNET_CTERM_EV_OOB) {
+                            uint8_t ob = host.cterm.last.oob_char;
+                            (void)dnet_cterm_host_write(&host, &ob, 1);
+                        } else if (cev == DNET_CTERM_EV_UNBOUND) {
+                            (void)dnet_cterm_host_close(&host);
+                            host_active = 0;
+                        }
+                    }
+                } else if (lev == DNET_LINK_EV_DISCONNECT && host_active) {
+                    (void)dnet_cterm_host_close(&host);
+                    host_active = 0;
+                    log_ts(stdout);
+                    printf(" DECNETD-I-SESSEND, the remote disconnected the"
+                           " SET HOST session on %s\n", session_devnam);
+                    fflush(stdout);
+                }
+            }
+        }
+
         if (rc == 1) {
             uint16_t na = dnet_addr_from_id(from);
             if (st == DNET_ADJ_UP) {

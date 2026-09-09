@@ -1127,6 +1127,7 @@ if(BUILD_TOOLS)
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE
+        decnetd_exe          # DECNETD.EXE
         PARTS                # PARTS.EXE
         ncp_exe              # NCP.EXE
     )
@@ -1137,6 +1138,19 @@ if(BUILD_TOOLS)
     # (The DECNETD.EXE network daemon is deliberately NOT in this aggregate yet:
     # its AF_PACKET/PTY path needs the netbsd-vax userspace port + a booted proof
     # before it ships -- tracked under vms-30e, not an allowlist gap.)
+
+    # DECNETD.EXE joins the aggregate on BOTH arches (rd vms-f40). It is not a
+    # diagnostic or a convenience: it is the DECnet Phase IV endnode, and it is
+    # what an inbound $ SET HOST arrives at. A system that claims to serve
+    # object 42 -- to create a LOGINOUT session for a remote user -- and does
+    # not ship the image that answers the connect would be claiming a facility
+    # the installed product does not have (INV-6). Its datalink is substrate-
+    # abstracted the same way the cluster's was (src/libdatalink: AF_PACKET on
+    # Linux, bpf(4) on NetBSD), so there is no Decision-A split here and this
+    # must never become an image-parity allowlist entry.
+    #
+    # Being SHIPPED is not being STARTED: nothing in the startup procedures
+    # runs it, exactly as staging LIBRARIAN.EXE does not start a librarian.
 
     # CNXTRACE.EXE is in the aggregate on PURPOSE, on both arches (E69). It
     # reads the connection manager's join transition ring out of the executive

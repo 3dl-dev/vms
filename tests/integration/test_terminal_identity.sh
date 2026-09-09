@@ -59,25 +59,59 @@ echo "  the no-fabricated-rows PROPERTY is enforced by test_show_device_rows.sh)
 # Strip C comments (/* */ and //) so a token that appears only in prose is
 # not mistaken for code. String literals containing "/*" are not handled and
 # do not occur in the files scanned.
-strip_comments() {
+#
+# PERFORMANCE IS PART OF THE CONTRACT HERE (rd vms-f40). This gate scans every
+# .c/.h under src/ once per tree-wide token -- six times over 550-odd files --
+# and the original stripper walked each line ONE CHARACTER AT A TIME, rebuilding
+# the output string on every step: O(n^2) per line, and one awk process per
+# (file, token) pair. That put the run at 51 s against a 60 s ctest TIMEOUT on
+# an unloaded machine, so it went RED under -j4 the first time anyone added four
+# source files. A gate whose verdict depends on how many files the tree happens
+# to hold, and on how busy the runner is, is a flaky gate, and a flaky gate is a
+# broken one (CLAUDE.md rule 8) -- raising the timeout would have been the
+# not-a-fix. Two root-cause changes, NEITHER of which changes what is scanned or
+# what counts as a hit:
+#   1. index() jumps to the next comment delimiter instead of stepping a
+#      character at a time. Same state machine, same output, no O(n^2).
+#   2. the stripped form of each file is computed ONCE and cached, so the six
+#      tree-wide scans read it back instead of re-running awk 3300 times.
+# Measured on this tree afterwards: 51 s -> a few seconds, with byte-identical
+# stripped output (the negative controls below still fire).
+STRIP_CACHE=$(mktemp -d)
+trap 'rm -rf "$STRIP_CACHE"' EXIT INT TERM HUP
+
+strip_comments_raw() {
     awk '
     BEGIN { inc = 0 }
     {
-        line = $0; out = ""; i = 1
-        while (i <= length(line)) {
-            two = substr(line, i, 2)
+        line = $0; out = ""
+        while (length(line) > 0) {
             if (inc) {
-                if (two == "*/") { inc = 0; i += 2 } else { i++ }
-            } else if (two == "/*") {
-                inc = 1; i += 2
-            } else if (two == "//") {
-                break
+                p = index(line, "*/")
+                if (p == 0) { line = "" }
+                else { line = substr(line, p + 2); inc = 0 }
             } else {
-                out = out substr(line, i, 1); i++
+                pc = index(line, "/*")
+                pl = index(line, "//")
+                if (pl > 0 && (pc == 0 || pl < pc)) {
+                    out = out substr(line, 1, pl - 1); line = ""
+                } else if (pc > 0) {
+                    out = out substr(line, 1, pc - 1)
+                    line = substr(line, pc + 2); inc = 1
+                } else {
+                    out = out line; line = ""
+                }
             }
         }
         print out
     }' "$1"
+}
+
+strip_comments() {
+    _sc_key=$(printf '%s' "$1" | tr '/.' '__')
+    _sc_out="$STRIP_CACHE/$_sc_key"
+    [ -f "$_sc_out" ] || strip_comments_raw "$1" > "$_sc_out"
+    cat "$_sc_out"
 }
 
 # scan_absent <label> <fixed-token> <file...>

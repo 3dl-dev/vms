@@ -40,7 +40,17 @@ target_include_directories(decnetd_exe PRIVATE
 # vmsdecnet_cterm: the CTERM terminal-service protocol (rd vms-4d2) that rides on
 # the logical link -- the daemon's --set-host-selftest proves a full $ SET HOST
 # terminal session over a socketpair.
-target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm ovmx_datalink)
+# vmsdecnet_cterm_host (rd vms-f40): the CTERM HOST SESSION -- an inbound
+# object-42 connect mints an RTAn: in the executive and $CREPRCs LOGINOUT.EXE
+# onto it, so a remote $ SET HOST is AUTHENTICATED. It pulls in libvms (the VMS
+# system services) and libvmssys (the executive interface); the daemon itself
+# still contains no fork/exec/openpty (gated by
+# tests/integration/test_creprc_session_primitive.sh).
+target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm
+                                          vmsdecnet_cterm_host ovmx_datalink)
+target_include_directories(decnetd_exe PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/libvmssys                 # vms_kif.h ($GETDVI readback)
+)
 set_target_properties(decnetd_exe PROPERTIES
     OUTPUT_NAME "DECNETD"
     SUFFIX ".EXE"

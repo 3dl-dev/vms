@@ -958,6 +958,67 @@ run_dcl_acceptance_battery() {
     golden_diff_report vax-show-process HOLLOW  vms-1f7   # omits Terminal/Base priority/Devices allocated; UIC not resolved to [SYSTEM]
 
     # =======================================================================
+    # DECnet CTERM (vms-f40) -- an inbound $ SET HOST reaches an AUTHENTICATED
+    # LOGINOUT prompt. Design §6-P4, ratification gates §7.1/§7.5; oracle
+    # docs/oracle/vax-sethost-cterm.* (rd vms-558).
+    #
+    # WHY THIS RUNS HERE, IN THE BOOTED IMAGE. The property is "a remote SET
+    # HOST is CHALLENGED, and REFUSED when the credentials are bad" -- which
+    # only means anything against the REAL executive (/dev/vms), the REAL
+    # SYS$SYSTEM:SYSUAF.DAT and the REAL LOGINOUT.EXE. On the build host there
+    # is no executive, and DECNETD.EXE --cterm-accept-test says so and fails
+    # (INV-6) rather than proving anything about a stub. This battery is the one
+    # place that runs byte-identically on x86_64, Alpha AND the VAX rail, which
+    # is also where a network login's Wall-6 ordering would break first.
+    #
+    # WHAT THE MODE DOES (src/vmsdecnet/engine/decnetd.c): opens a REAL NSP
+    # logical link to Session Control object 42 over a socketpair datalink,
+    # carrying a connect message byte-identical to the real VAX's; dispatches it
+    # through $CREPRC PRC$M_INTER|PRC$M_LOGINOUT onto an executive-minted RTAn:;
+    # then types three credential sets that MUST ALL BE REFUSED -- an unknown
+    # account, a real account with a wrong password, and (the sharpest) the
+    # DISABLED account with its CORRECT password, which only the SYSUAF DISUSER
+    # rule can refuse. It also $GETDVIs the session's RTAn: from a process that
+    # is NOT the session -- the §7.5 anti-LARP tell.
+    #
+    # IT IS RUN AS A FOREIGN COMMAND because DCL's RUN passes no arguments; that
+    # is the VMS way to pass one, not a shell escape.
+    #
+    # WHERE IT IS A HARD GATE, AND WHERE IT IS A REPORTED GAP. DECNETD.EXE is in
+    # the x86_64 shipped image set (distro/Dockerfile.bootable) and in the
+    # `ovmx-images` CMake aggregate, so it is built for vax as well -- but the
+    # VAX rail boots a FIVE-IMAGE sysvol (tests/lab-vax/stage_sysvol.sh:
+    # DCL/PROVISION/LOGINOUT/JOB_CONTROL/STARTUP) and the Alpha boot image has
+    # its own list, so neither carries it yet. Staging it on those two rails is
+    # tracked follow-on work, NOT something to fake here. So: where the image is
+    # PRESENT this is a hard gate on every assertion; where it is ABSENT the
+    # section reports a LOUD note naming the gap and asserts nothing -- the same
+    # "tracked + routed, never silently green" shape golden_diff_report uses.
+    # The one thing it must never do is pass because nothing ran.
+    local CTERM_OFF; CTERM_OFF=$(wc -c <"$LOG")
+    run_cmd 'DNETACC :== $SYS$SYSTEM:DECNETD.EXE'
+    send 'DNETACC --cterm-accept-test'
+    if wait_for 'IVIMAGE' 15 "$CTERM_OFF"; then
+        note "CTERM [vms-f40]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-SET-HOST authentication proof DID NOT RUN here (it is a hard gate on the rails that ship the image). Staging DECNETD.EXE into the VAX sysvol + the Alpha boot image is tracked follow-on work"
+    elif wait_for 'DECNETD-CTERM-ACCEPT:' 180 "$CTERM_OFF"; then
+        local CTSEG; CTSEG=$(tail -c "+$((CTERM_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: PASS' \
+            "CTERM [vms-f40]: an inbound SET HOST to object 42 reached an AUTHENTICATED LOGINOUT through \$CREPRC on an executive-minted RTAn:, and every bad credential was REFUSED (the mode prints one PASS/FAIL line per assertion above this verdict)"
+        must_have "$CTSEG" 'the inbound SET HOST is CHALLENGED' \
+            "CTERM [vms-f40]: LOGINOUT's own Username: prompt crossed the link -- the no-auth CTERM that answered with a bare \$ is gone"
+        must_have "$CTSEG" 'DISUSER IS HONOURED' \
+            "CTERM [vms-f40]: the DISABLED account is refused over CTERM with the CORRECT password -- the SYSUAF login-flag rule applies to a network login"
+        must_have "$CTSEG" 'a real DC$_TERM device row' \
+            "CTERM [vms-f40]: \$GETDVI on the session's RTAn: from a DIFFERENT process returns a real device row (§7.5 tell)"
+        must_not_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: FAIL' \
+            "CTERM [vms-f40]: no assertion in the inbound-SET-HOST acceptance failed"
+        negctl "$CTSEG" 'DECNETD-I-CTERMACCEPT' "DECnet CTERM acceptance"
+    else
+        bad "CTERM [vms-f40]: DECNETD.EXE --cterm-accept-test produced no verdict line within 180s -- the inbound-SET-HOST authentication proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung session)"
+    fi
+    wait_for '$ ' 20 "$CTERM_OFF"
+
+    # =======================================================================
     # SESSION PRIMITIVE (vms-3e9) -- $CREPRC creates the session, LOGINOUT
     # re-personas it. Design record docs/design/faithful-sessions-and-network-
     # subsystems.md §3.1/§6-P1, ratification gates §7.1/§7.5.

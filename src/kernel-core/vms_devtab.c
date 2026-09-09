@@ -645,6 +645,191 @@ int vms_devtab_add_terminal(const char *devnam, const char *pty_backing)
     return 0;
 }
 
+/*
+ * ===================== the RTAn: ioctl surface (rd vms-f40) =================
+ *
+ * vms_ioctl_term_create / _delete / _resolve -- the PRODUCT caller's door to
+ * the dynamic-terminal primitive above. Until this item the only way in was a
+ * TEST-ONLY module parameter (vms_module.c, OVMX_KTEST_DEVTAB_TERMINAL),
+ * because P4's caller had not landed; an inbound DECnet SET HOST now mints its
+ * virtual terminal HERE, in the executive, before $CREPRC creates the process
+ * that runs LOGINOUT on it.
+ *
+ * THE EXECUTIVE PICKS THE UNIT NUMBER. term_create_locked() scans RTA0:..
+ * RTA<max>: under the device-list lock and takes the first name the table does
+ * not hold. Two concurrent inbound sessions therefore cannot be handed the same
+ * unit, and a caller cannot ASK for a name -- if it could, a network daemon
+ * could claim RTA0: while another session was on it, or (the real hazard) hand
+ * $CREPRC a name the executive never gave it. The scan is the same
+ * "the table is the only thing that knows what is free" discipline the served-
+ * disk rows use.
+ *
+ * WHY NOT ONE SHARED HANDLER WITH AN OP FIELD: the three share a struct (like
+ * ALLOC/DALLOC share vms_alloc_args) but not a body, so a caller cannot flip a
+ * create into a delete by getting one field wrong.
+ */
+
+/* Highest RTAn: unit the executive will mint. Bounded on purpose: the caller
+ * is a NETWORK daemon serving UNAUTHENTICATED inbound connects, so "how many
+ * terminals can a peer make me create" must have an answer, and it must be a
+ * number rather than "until the allocator says no". 256 is the same order as
+ * the terminal unit space VMS itself uses and is far above any real SET HOST
+ * load; past it, CREATE fails honestly with SS$_DEVALLOC (INV-6) and the
+ * inbound connect is rejected rather than the node degraded. */
+#define VMS_RTA_MAX_UNITS  256
+
+/* Caller holds vms_device_list_lock. Fills `out` with the first free RTAn:
+ * name and returns SS__NORMAL, or SS__DEVALLOC when every unit is taken. */
+static uint32_t rta_next_free_locked(char *out, size_t outsz)
+{
+    unsigned unit;
+
+    for (unit = 0; unit < VMS_RTA_MAX_UNITS; unit++) {
+        char name[VMS_DEVNAM_SIZE];
+
+        snprintf(name, sizeof(name), "RTA%u:", unit);
+        if (devtab_lookup_locked(name))
+            continue;
+        strscpy(out, name, outsz);
+        return SS__NORMAL;
+    }
+    return SS__DEVALLOC;
+}
+
+long vms_ioctl_term_create(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_terminal_args args;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+    int rc;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.backing[VMS_BACKING_SIZE - 1] = '\0';
+    memset(args.devnam, 0, sizeof(args.devnam));
+
+    exec_lock(&vms_device_list_lock);
+    status = rta_next_free_locked(devnam, sizeof(devnam));
+    exec_unlock(&vms_device_list_lock);
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    /* vms_devtab_add_terminal takes the list lock itself; the window between
+     * the scan and the add is closed by its own -EEXIST check, which we
+     * surface as SS$_DEVALLOC (someone else took the unit) rather than
+     * pretending the create succeeded. */
+    rc = vms_devtab_add_terminal(devnam, args.backing);
+    if (rc == -EEXIST) {
+        args.status = SS__DEVALLOC;
+        goto out;
+    }
+    if (rc == -ENOMEM) {
+        args.status = SS__INSFMEM;
+        goto out;
+    }
+    if (rc != 0) {
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+
+    strscpy(args.devnam, devnam, sizeof(args.devnam));
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+long vms_ioctl_term_delete(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_terminal_args args;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+    int rc;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    memset(args.backing, 0, sizeof(args.backing));
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    /* vms_devtab_remove_terminal refuses any row that is not `dynamic_term`,
+     * so this can never withdraw OPA0: or a locally-probed row. */
+    rc = vms_devtab_remove_terminal(devnam);
+    args.status = (rc == 0) ? SS__NORMAL : SS__NOSUCHDEV;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_terminal_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    memset(args.backing, 0, sizeof(args.backing));
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        /* The console has no PTY backing to report, and a non-terminal row is
+         * a category error -- the same IVDEVNAM verdict disk_resolve gives for
+         * "that name is not a disk". */
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    strscpy(args.backing, dev->backing, sizeof(args.backing));
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    /* A dynamic terminal with NO recorded backing is a row nothing can bind a
+     * session to. Say so (INV-6) rather than hand back an empty string that a
+     * caller would turn into an open("/dev/") it cannot explain. */
+    args.status = args.backing[0] ? SS__NORMAL : SS__DEVOFFLINE;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 int vms_devtab_remove_terminal(const char *devnam)
 {
     struct vms_device *dev;

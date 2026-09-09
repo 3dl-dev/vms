@@ -255,3 +255,6 @@ vms_kif_cluster_diag_join=PROCEDURE
 # across the shareable boundary, so it must be exported as a universal here.
 # APPENDED per the append-only contract -- never shifts an existing index.
 vms_kif_setterm=PROCEDURE
+vms_kif_terminal_create=PROCEDURE
+vms_kif_terminal_delete=PROCEDURE
+vms_kif_terminal_resolve=PROCEDURE

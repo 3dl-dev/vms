@@ -270,30 +270,152 @@ int dnet_cterm_decode(const uint8_t *buf, size_t len,
 
 /* ---- Session Control connect message (SET HOST -> CTERM object) ---------- */
 /*
- * Minimal DNA Session Control CONNECT message (spec-derived). Format used here:
- *   dst descriptor:  FMT=1 (object number), OBJTYPE(1)
- *   src descriptor:  FMT=1 (object number), OBJTYPE(1)=0
- *   access control:  username[counted], password[counted], account[counted]
- * The username counted string is the field the vms-3be capture observed carrying
- * plaintext "SYSTEM" (register sec 4.6, specimen #3).
+ * The DNA Session Control CONNECT message, in the shape the ORACLE captured
+ * (docs/oracle/vax-sethost-cterm.pcap frame 5; rd vms-558 / vms-f40). The full
+ * provenance, the twenty specimen bytes and the security argument they settle
+ * are in dnet_cterm.h -- read that block before touching anything here.
+ *
+ * ATTACKER-CONTROLLED INPUT. dnet_cterm_sc_connect_parse() runs on bytes that
+ * arrived off the wire from an UNAUTHENTICATED peer. Every read below is
+ * bounded against `len`; every counted string is refused rather than clipped
+ * when it exceeds DNET_SC_MAX_STR; an unknown descriptor format is refused.
+ * A malformed connect returns a negative DNET_CTERM_E* and the caller
+ * disconnects -- it never over-reads, never allocates, never bugchecks.
  */
-#define SC_FMT_OBJNUM   1
+
+/* The MENUVER byte the oracle specimen carried. Recorded, not interpreted:
+ * OVMX reads the access-control fields that follow if (and only if) bytes
+ * remain, which is behaviourally identical for every value we have observed
+ * and cannot over-read for any value we have not. */
+#define SC_MENUVER_OBSERVED  0x27
+
+/* Copy a counted string, REFUSING (not clipping) one longer than the cap.
+ * Returns bytes consumed, DNET_CTERM_ETRUNC if the field runs off the end of
+ * the message, or DNET_CTERM_EBADLEN if it is longer than dst can hold. */
+static long sc_get_string(const uint8_t *buf, size_t len, size_t off,
+                          char *dst, size_t dstcap)
+{
+    if (off >= len)
+        return DNET_CTERM_ETRUNC;
+    size_t n = buf[off];
+    if (off + 1 + n > len)
+        return DNET_CTERM_ETRUNC;
+    if (n >= dstcap)
+        return DNET_CTERM_EBADLEN;
+    if (n)
+        memcpy(dst, buf + off + 1, n);
+    dst[n] = '\0';
+    return (long)(1 + n);
+}
+
+/* Decode one end-user descriptor (DSTNAME / SRCNAME). Returns bytes consumed
+ * or a negative DNET_CTERM_E*. */
+static long sc_get_descriptor(const uint8_t *buf, size_t len, size_t off,
+                              uint8_t *fmt, uint8_t *objtype,
+                              uint16_t *grpcode, uint16_t *usrcode,
+                              char *name, size_t namecap)
+{
+    long r;
+    size_t start = off;
+
+    if (off + 2 > len)
+        return DNET_CTERM_ETRUNC;
+    *fmt     = buf[off++];
+    *objtype = buf[off++];
+
+    switch (*fmt) {
+    case DNET_SC_FMT_OBJECT:
+        /* Object number only. A format-0 descriptor with objtype 0 names no
+         * object at all -- refuse it rather than dispatch object 0. */
+        if (*objtype == 0)
+            return DNET_CTERM_EINVAL;
+        break;
+
+    case DNET_SC_FMT_CODED:
+        if (off + 4 > len)
+            return DNET_CTERM_ETRUNC;
+        /* grpcode/usrcode are optional OUTPUTS (the destination descriptor has
+         * no slot for them); the bytes are consumed either way. */
+        if (grpcode) *grpcode = get_u16(buf + off);
+        off += 2;
+        if (usrcode) *usrcode = get_u16(buf + off);
+        off += 2;
+        /* fall through to the counted name */
+        /* FALLTHROUGH */
+    case DNET_SC_FMT_NAMED:
+        r = sc_get_string(buf, len, off, name, namecap);
+        if (r < 0)
+            return r;
+        off += (size_t)r;
+        break;
+
+    default:
+        return DNET_CTERM_EINVAL;   /* unknown descriptor format */
+    }
+
+    return (long)(off - start);
+}
+
+/* Emit an end-user descriptor. Returns bytes written or -1 on overflow. */
+static long sc_put_descriptor(uint8_t *buf, size_t cap, size_t off,
+                              uint8_t fmt, uint8_t objtype,
+                              uint16_t grpcode, uint16_t usrcode,
+                              const char *name)
+{
+    size_t start = off;
+    long r;
+
+    if (off + 2 > cap)
+        return -1;
+    buf[off++] = fmt;
+    buf[off++] = objtype;
+
+    if (fmt == DNET_SC_FMT_CODED) {
+        if (off + 4 > cap)
+            return -1;
+        put_u16(buf + off, grpcode); off += 2;
+        put_u16(buf + off, usrcode); off += 2;
+    }
+    if (fmt == DNET_SC_FMT_CODED || fmt == DNET_SC_FMT_NAMED) {
+        r = put_string(buf, cap, off, name);
+        if (r < 0)
+            return -1;
+        off += (size_t)r;
+    }
+    return (long)(off - start);
+}
 
 int dnet_cterm_sc_connect_build(uint8_t dst_object,
+                                const char *src_user,
+                                uint16_t src_grpcode, uint16_t src_usrcode,
                                 const char *username, const char *password,
                                 const char *account,
                                 uint8_t *buf, size_t cap, size_t *outlen)
 {
-    if (!buf)
+    if (!buf || dst_object == 0)
         return DNET_CTERM_EINVAL;
+    if (src_user && strlen(src_user) > DNET_SC_MAX_STR)
+        return DNET_CTERM_EBADLEN;
+
     size_t off = 0;
     long r;
 
-    if (off + 4 > cap) return DNET_CTERM_ENOSPACE;
-    buf[off++] = SC_FMT_OBJNUM;   /* dst descriptor format */
-    buf[off++] = dst_object;      /* dst object number     */
-    buf[off++] = SC_FMT_OBJNUM;   /* src descriptor format */
-    buf[off++] = 0;               /* src object number 0   */
+    /* DSTNAME: format 0, the object number. The oracle's byte is 0x00 0x2a --
+     * format ZERO, not one (the #1013 cut had this wrong). */
+    r = sc_put_descriptor(buf, cap, off, DNET_SC_FMT_OBJECT, dst_object, 0, 0, NULL);
+    if (r < 0) return DNET_CTERM_ENOSPACE;
+    off += (size_t)r;
+
+    /* SRCNAME: format 2, objtype 0, group/user codes, counted source user. */
+    r = sc_put_descriptor(buf, cap, off, DNET_SC_FMT_CODED, 0,
+                          src_grpcode, src_usrcode, src_user ? src_user : "");
+    if (r < 0) return DNET_CTERM_ENOSPACE;
+    off += (size_t)r;
+
+    /* MENUVER + the three access-control strings. A plain SET HOST sends them
+     * empty, exactly as the specimen does. */
+    if (off + 1 > cap) return DNET_CTERM_ENOSPACE;
+    buf[off++] = SC_MENUVER_OBSERVED;
 
     r = put_string(buf, cap, off, username); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
     r = put_string(buf, cap, off, password); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
@@ -304,13 +426,114 @@ int dnet_cterm_sc_connect_build(uint8_t dst_object,
     return DNET_CTERM_OK;
 }
 
+int dnet_cterm_sc_connect_parse(const uint8_t *buf, size_t len,
+                                struct dnet_cterm_sc_connect *out)
+{
+    if (!buf || !out)
+        return DNET_CTERM_EINVAL;
+
+    memset(out, 0, sizeof(*out));
+
+    size_t off = 0;
+    long r;
+
+    r = sc_get_descriptor(buf, len, off, &out->dst_format, &out->dst_object,
+                          NULL /* no grpcode slot for dst */, NULL,
+                          out->dst_task, sizeof(out->dst_task));
+    if (r < 0) { memset(out, 0, sizeof(*out)); return (int)r; }
+    off += (size_t)r;
+
+    r = sc_get_descriptor(buf, len, off, &out->src_format, &out->src_object,
+                          &out->src_grpcode, &out->src_usrcode,
+                          out->src_user, sizeof(out->src_user));
+    if (r < 0) { memset(out, 0, sizeof(*out)); return (int)r; }
+    off += (size_t)r;
+
+    /* MENUVER + access control. A connect that stops after the descriptors is
+     * still well-formed (nothing to authenticate WITH -- which is the normal
+     * case, per the oracle); it simply carries no access-control fields. */
+    if (off >= len)
+        return DNET_CTERM_OK;
+    out->menuver = buf[off++];
+
+    if (off >= len)
+        return DNET_CTERM_OK;
+    out->have_access_control = 1;
+
+    r = sc_get_string(buf, len, off, out->rqstrid, sizeof(out->rqstrid));
+    if (r < 0) { memset(out, 0, sizeof(*out)); return (int)r; }
+    off += (size_t)r;
+
+    /* PASSWRD: measured, NEVER RETAINED. Nothing in OVMX authenticates from a
+     * wire-supplied password (the oracle proves real VMS does not either), so
+     * the bytes are validated for length and then dropped -- there is no field
+     * on this struct that could carry them into a login decision. */
+    if (off < len) {
+        size_t plen = buf[off];
+        if (off + 1 + plen > len) { memset(out, 0, sizeof(*out)); return DNET_CTERM_ETRUNC; }
+        if (plen > DNET_SC_MAX_STR) { memset(out, 0, sizeof(*out)); return DNET_CTERM_EBADLEN; }
+        out->password_present = 1;
+        out->password_len = (uint8_t)plen;
+        off += 1 + plen;
+    }
+
+    if (off < len) {
+        r = sc_get_string(buf, len, off, out->account, sizeof(out->account));
+        if (r < 0) { memset(out, 0, sizeof(*out)); return (int)r; }
+        off += (size_t)r;
+    }
+
+    /* Any trailing USRDATA is not interpreted; it is not read either. */
+    return DNET_CTERM_OK;
+}
+
 int dnet_cterm_sc_connect_object(const uint8_t *buf, size_t len)
 {
-    if (!buf || len < 2)
+    struct dnet_cterm_sc_connect sc;
+    int rc = dnet_cterm_sc_connect_parse(buf, len, &sc);
+
+    if (rc != DNET_CTERM_OK)
+        return rc;
+    if (sc.dst_format != DNET_SC_FMT_OBJECT)
+        return DNET_CTERM_EINVAL;   /* a named task, not a well-known object */
+    return sc.dst_object;
+}
+
+int dnet_cterm_remote_port_info(const struct dnet_cterm_sc_connect *sc,
+                                uint16_t src_addr, char *out, size_t cap)
+{
+    if (!sc || !out || cap == 0)
         return DNET_CTERM_EINVAL;
-    if (buf[0] != SC_FMT_OBJNUM)
-        return DNET_CTERM_EINVAL;   /* only the object-number descriptor form here */
-    return buf[1];
+
+    /* "<addr>::<user>" -- the oracle's SHOW TERMINAL form, e.g. 1025::SYSTEM.
+     * The ADDRESS comes from the caller (the routing header the engine
+     * decoded), never from the connect message: a peer must not be able to
+     * name itself something it is not on the accounting surface. */
+    unsigned n = 0;
+    char digits[8];
+    unsigned v = src_addr;
+    unsigned d = 0;
+
+    do { digits[d++] = (char)('0' + (v % 10)); v /= 10; } while (v && d < sizeof(digits));
+    while (d) {
+        if (n + 1 >= cap) return DNET_CTERM_ENOSPACE;
+        out[n++] = digits[--d];
+    }
+    if (n + 2 >= cap) return DNET_CTERM_ENOSPACE;
+    out[n++] = ':'; out[n++] = ':';
+
+    /* The source user is UNTRUSTED text destined for a human surface: copy only
+     * printable ASCII, so a peer cannot inject control characters (or an
+     * escape sequence) into a console line or an accounting record. */
+    for (const char *p = sc->src_user; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c < 0x20 || c > 0x7e)
+            continue;
+        if (n + 1 >= cap) return DNET_CTERM_ENOSPACE;
+        out[n++] = (char)c;
+    }
+    out[n] = '\0';
+    return DNET_CTERM_OK;
 }
 
 /* ---- session FSM --------------------------------------------------------- */

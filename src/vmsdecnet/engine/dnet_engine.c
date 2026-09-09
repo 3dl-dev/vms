@@ -414,6 +414,32 @@ int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
     return engine_wrap_pdu(e, &di, frame_out, cap, len_out);
 }
 
+/* Advance the active link's timers (Connect Initiate retransmit / give-up). If
+ * the FSM produces a PDU to (re)send, wrap it into a full frame to the peer --
+ * the retransmitted CI is the FSM's own, not a template copy (executive-backed
+ * per the project invariant: every wire field is read from link state). */
+int dnet_engine_link_tick(struct dnet_engine *e, dnet_tick_t now,
+                          uint8_t *frame_out, size_t cap, size_t *len_out,
+                          int *has_out)
+{
+    if (has_out)
+        *has_out = 0;
+    if (!e || !frame_out || !e->link_active)
+        return DNET_ENGINE_EINVAL;
+    struct dnet_nsp_msg out;
+    int ho = 0;
+    if (dnet_link_tick(&e->link, now, &out, &ho) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    if (ho) {
+        int rc = engine_wrap_pdu(e, &out, frame_out, cap, len_out);
+        if (rc != DNET_ENGINE_OK)
+            return rc;
+        if (has_out)
+            *has_out = 1;
+    }
+    return DNET_ENGINE_OK;
+}
+
 int dnet_engine_link_rx(struct dnet_engine *e, dnet_tick_t now,
                         const uint8_t *frame, size_t len,
                         uint8_t *reply_frame, size_t cap, size_t *reply_len,

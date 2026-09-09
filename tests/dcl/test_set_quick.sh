@@ -18,9 +18,20 @@
 # the lie SET AUDIT /ENABLE used to write into it. Both /ENABLE and /DISABLE
 # now print the same honest refusal, so this file only has one AUDIT
 # EXPECT line rather than two. The negative gate for this fix is
-# tests/dcl/test_facade_gate_phase0.sh. SET ACCOUNTING/SET HOST are
-# unchanged here -- Phase 0 is scoped to the named canaries only; the rest
-# of this facade class is Phase 2's job.
+# tests/dcl/test_facade_gate_phase0.sh. SET ACCOUNTING is unchanged here --
+# Phase 0 is scoped to the named canaries only; the rest of this facade class
+# is Phase 2's job.
+#
+# SET HOST is NO LONGER A STUB (vms-f54): `SET HOST <node>` now activates
+# SYS$SYSTEM:DECNETD.EXE --set-host on the caller's terminal through the
+# executive image activator (the real outbound DECnet client). On THIS host
+# ctest runtime the image is not staged on a system disk, so it reports the
+# genuine "%SET-I-NOTAVAIL, DECnet is not available on this system" -- the same
+# text, now an HONEST not-available (the image really is not here) rather than a
+# permanent stub. That is why the node is present in the transcript: bare
+# `SET HOST` with no node is a %SET-E-NOHOST parameter error. The full
+# authenticated client path is proven over a real datalink by
+# tests/integration/decnet_set_host_live.sh.
 #
 # SET VOLUME's bare-no-device case (the last line of the transcript) moved
 # off the OLD facade text ("%SET-I-NOTIMPL ... requires a mounted VMSFS
@@ -33,4 +44,4 @@
 # genuinely mounted volume, /LABEL and an unknown qualifier).
 VMSDCL="${VMSDCL:-vmsdcl}"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}"
-printf 'SET HOST\nSET AUDIT /ENABLE\nSHOW AUDIT\nSET AUDIT /DISABLE\nSET ACCOUNTING /ENABLE\nSHOW ACCOUNTING\nSET ACCOUNTING /DISABLE\nSET VOLUME\n' | $VMSDCL 2>&1
+printf 'SET HOST VAX2\nSET AUDIT /ENABLE\nSHOW AUDIT\nSET AUDIT /DISABLE\nSET ACCOUNTING /ENABLE\nSHOW ACCOUNTING\nSET ACCOUNTING /DISABLE\nSET VOLUME\n' | $VMSDCL 2>&1

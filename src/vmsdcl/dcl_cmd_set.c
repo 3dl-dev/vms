@@ -1743,13 +1743,68 @@ static int cmd_set_time(struct dcl_command *cmd)
 }
 
 /*
- * SET HOST - Attempt DECnet connection (not available).
+ * SET HOST node - DECnet outbound $ SET HOST (rd vms-f54).
+ *
+ * Opens an interactive CTERM terminal session to Session Control object 42 on
+ * the remote node; the remote's LOGINOUT authenticates the user FRESH (the
+ * carried /USERNAME is proxy/accounting only), this process's terminal rides
+ * the NSP logical link until LOGOUT, and control returns with %REM-S-END.
+ *
+ * The client is SYS$SYSTEM:DECNETD.EXE --set-host <node>. DCL activates it
+ * ATTACHED TO THE CALLER'S TERMINAL through the executive image activator
+ * (dcl_activate_image -> imgact_activate, with DCL's fork fallback) -- the SAME
+ * path RUN and foreign commands use, NOT a bare fork/exec from DCL, and no Linux
+ * terminal mechanics above the VMS layer. The daemon self-sources its executor
+ * address + resolves the node name from the node's DECnet configuration, so DCL
+ * stays thin and knows nothing of DECnet internals.
+ *
+ * When DECNETD.EXE is not staged on this runtime's system disk, DECnet is
+ * genuinely not available here and this reports exactly that (honest, INV-6) --
+ * it never fakes a session.
  */
 static int cmd_set_host(struct dcl_command *cmd)
 {
-    (void)cmd;
-    printf("%%SET-I-NOTAVAIL, DECnet is not available on this system\n");
-    return SS$_NORMAL;
+    struct dcl_context *ctx = dcl_get_context();
+
+    /* SET HOST <node>: params[0] is the "HOST" subcommand, params[1] the node. */
+    const char *node = (cmd->param_count >= 2) ? cmd->params[1] : NULL;
+    if (!node || !node[0]) {
+        dcl_error("SET", 2, "NOHOST", "SET HOST requires a node name");
+        return SS$_BADPARAM;
+    }
+
+    /* /USERNAME=name -> the CTERM access-control username (proxy only; the
+     * remote authenticates fresh). Absent -> the daemon defaults to SYSTEM. */
+    const char *user = NULL;
+    if (dcl_has_qualifier(cmd, "USERNAME"))
+        user = dcl_qualifier_value(cmd, "USERNAME");
+
+    /* Resolve SYS$SYSTEM:DECNETD.EXE to an activatable image path, exactly as
+     * RUN / a foreign command does. Not found -> DECnet is not available here. */
+    const char *img_spec = "SYS$SYSTEM:DECNETD.EXE";
+    char linux_path[1024], resolved[1024];
+    dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
+    if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
+                                 resolved, sizeof(resolved))) {
+        printf("%%SET-I-NOTAVAIL, DECnet is not available on this system\n");
+        return SS$_NORMAL;
+    }
+    strncpy(linux_path, resolved, sizeof(linux_path) - 1);
+    linux_path[sizeof(linux_path) - 1] = '\0';
+
+    /* Activate the client on the caller's terminal through the executive. */
+    char *argv[8];
+    int argc = 0;
+    argv[argc++] = linux_path;
+    argv[argc++] = "--set-host";
+    argv[argc++] = (char *)node;
+    if (user && user[0]) {
+        argv[argc++] = "--user";
+        argv[argc++] = (char *)user;
+    }
+    argv[argc] = NULL;
+
+    return dcl_activate_image(ctx, img_spec, linux_path, argv);
 }
 
 /*

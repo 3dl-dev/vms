@@ -53,8 +53,11 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <stdlib.h>         /* rand/srand for the client-response mutation fuzz */
+
 #include "dnet_cterm.h"
 #include "dnet_engine.h"
+#include "dnet_nsp.h"       /* dnet_nsp_encode/decode: the client's link decode */
 #include "ovmx_identity.h"  /* INV-1/INV-0: a self-announcing banner is the OVMX
                              * product identity, never a bare "OpenVMS" literal */
 
@@ -740,6 +743,140 @@ static void test_engine_e2e(void)
     close(sv[0]); close(sv[1]);
 }
 
+/* ---- 5. CLIENT response-parse fuzz (rd vms-f54) -------------------------- *
+ *
+ * The $ SET HOST CLIENT decodes whatever a REMOTE node sends back: NSP transport
+ * PDUs (Connect Confirm / data / Disconnect Initiate) via dnet_nsp_decode, and
+ * the CTERM PDUs riding those data segments (Bind Accept / Write / Unbind) via
+ * dnet_cterm_rx. A hostile or buggy remote must not be able to crash the client
+ * with a malformed response -- "never crash a peer, and never be crashed BY
+ * one". This mutation-fuzzes both decoders against object-42-shaped seeds and
+ * pure noise: every draw must yield a DEFINED status (the decoder RETURNS; an
+ * out-of-bounds read would trip ASan on the sanitizer legs), and the corpus must
+ * reach the accepting paths (a fuzz that only ever rejects proves nothing). */
+static uint8_t fz_next(unsigned *st) { *st = *st * 1103515245u + 12345u; return (uint8_t)(*st >> 16); }
+
+static void mutate(uint8_t *buf, size_t *len, size_t cap, unsigned *st)
+{
+    int muts = 1 + (fz_next(st) & 3);
+    for (int i = 0; i < muts && *len; i++) {
+        int op = fz_next(st) % 3;
+        if (op == 0) {                        /* flip a byte */
+            buf[fz_next(st) % *len] ^= fz_next(st);
+        } else if (op == 1 && *len > 1) {     /* truncate */
+            *len = 1 + (fz_next(st) % *len);
+        } else if (*len < cap) {              /* extend with noise */
+            buf[*len] = fz_next(st);
+            (*len)++;
+        }
+    }
+}
+
+static void test_client_response_fuzz(void)
+{
+    printf("[fuzz] the SET HOST client's response decoders survive a hostile remote\n");
+
+    /* NSP seeds the client actually receives: Connect Confirm, a data segment,
+     * a Disconnect Initiate -- all for our logical-link addresses. */
+    uint8_t nsp_seed[3][DNET_NSP_MAX_DATA + 64];
+    size_t  nsp_slen[3] = {0,0,0};
+    struct dnet_nsp_msg m;
+    memset(&m, 0, sizeof(m));
+    m.type = DNET_NSP_T_CC; m.msgflg = DNET_NSP_MSGFLG_CC;
+    m.dstaddr = 0x2002; m.srcaddr = 0x2001; m.services = 1; m.info = DNET_NSP_VER_41; m.segsize = 1459;
+    check(dnet_nsp_encode(&m, nsp_seed[0], sizeof(nsp_seed[0]), &nsp_slen[0]) == DNET_NSP_OK,
+          "seed: Connect Confirm encodes");
+    memset(&m, 0, sizeof(m));
+    m.type = DNET_NSP_T_DATA; m.msgflg = DNET_NSP_MSGFLG_DATA;
+    m.dstaddr = 0x2001; m.srcaddr = 0x2002; m.segnum = DNET_NSP_DATA_BOM | DNET_NSP_DATA_EOM;
+    m.datalen = 8; memcpy(m.data, "Username", 8);
+    check(dnet_nsp_encode(&m, nsp_seed[1], sizeof(nsp_seed[1]), &nsp_slen[1]) == DNET_NSP_OK,
+          "seed: data segment encodes");
+    memset(&m, 0, sizeof(m));
+    m.type = DNET_NSP_T_DI; m.msgflg = DNET_NSP_MSGFLG_DI;
+    m.dstaddr = 0x2001; m.srcaddr = 0x2002; m.reason = 0;
+    check(dnet_nsp_encode(&m, nsp_seed[2], sizeof(nsp_seed[2]), &nsp_slen[2]) == DNET_NSP_OK,
+          "seed: Disconnect Initiate encodes");
+
+    /* CTERM seeds the client actually receives from the host, captured from a
+     * real handshake: Bind Accept, a Write (screen output), an Unbind. */
+    uint8_t ct_seed[3][DNET_CTERM_MAX_PDU];
+    size_t  ct_slen[3] = {0,0,0};
+    {
+        struct dnet_cterm_session t0, h0;
+        uint8_t p[DNET_CTERM_MAX_PDU]; size_t n = 0; enum dnet_cterm_event ev;
+        dnet_cterm_session_init(&t0, DNET_CTERM_ROLE_TERMINAL);
+        dnet_cterm_session_init(&h0, DNET_CTERM_ROLE_HOST);
+        dnet_cterm_bind(&t0, "OVMX$RTA1:", p, sizeof(p), &n);
+        dnet_cterm_rx(&h0, p, n, &ev);
+        dnet_cterm_bind_accept(&h0, "VAX2", ct_seed[0], sizeof(ct_seed[0]), &ct_slen[0]);
+        dnet_cterm_rx(&t0, ct_seed[0], ct_slen[0], &ev);           /* t0 now BOUND */
+        dnet_cterm_write(&h0, (const uint8_t *)"Username: ", 10,
+                         DNET_CTERM_WR_NOFORMAT, ct_seed[1], sizeof(ct_seed[1]), &ct_slen[1]);
+        dnet_cterm_unbind(&h0, DNET_CTERM_UNBIND_NORMAL, ct_seed[2], sizeof(ct_seed[2]), &ct_slen[2]);
+        check(ct_slen[0] && ct_slen[1] && ct_slen[2], "seed: CTERM Bind-Accept/Write/Unbind built");
+    }
+
+    unsigned st = 0xf54c0de;
+    int nsp_accepts = 0, ct_accepts = 0, undefined = 0, consumed_over = 0;
+    const int ITERS = 60000;
+    for (int i = 0; i < ITERS; i++) {
+        /* --- NSP decode fuzz (dnet_nsp_decode) --- */
+        uint8_t nb[DNET_NSP_MAX_DATA + 128];
+        size_t nl;
+        if ((fz_next(&st) & 7) == 0) {                 /* 1/8: pure noise */
+            nl = fz_next(&st) % 48;
+            for (size_t j = 0; j < nl; j++) nb[j] = fz_next(&st);
+        } else {                                       /* else: mutate a seed */
+            int s = fz_next(&st) % 3;
+            nl = nsp_slen[s];
+            memcpy(nb, nsp_seed[s], nl);
+            mutate(nb, &nl, sizeof(nb), &st);
+        }
+        struct dnet_nsp_msg om;
+        size_t cons = 0;
+        int rc = dnet_nsp_decode(nb, nl, &om, &cons);
+        /* Any of the documented codes is acceptable; the ONLY failures are a
+         * crash (caught by ASan), an undefined return, or an accept that claims
+         * to have consumed more than the buffer held. */
+        if (!(rc == DNET_NSP_OK || rc == DNET_NSP_ETRUNC || rc == DNET_NSP_EBADLEN ||
+              rc == DNET_NSP_EINVAL || rc == DNET_NSP_EBADTYPE || rc == DNET_NSP_ENOSPACE))
+            undefined++;
+        if (rc == DNET_NSP_OK) { nsp_accepts++; if (cons > nl) consumed_over++; }
+
+        /* --- CTERM rx fuzz (dnet_cterm_rx) into a fresh BOUND terminal --- */
+        struct dnet_cterm_session t, h;
+        uint8_t p[DNET_CTERM_MAX_PDU]; size_t n = 0; enum dnet_cterm_event ev;
+        dnet_cterm_session_init(&t, DNET_CTERM_ROLE_TERMINAL);
+        dnet_cterm_session_init(&h, DNET_CTERM_ROLE_HOST);
+        dnet_cterm_bind(&t, "OVMX$RTA1:", p, sizeof(p), &n);
+        dnet_cterm_rx(&h, p, n, &ev);
+        dnet_cterm_bind_accept(&h, "VAX2", p, sizeof(p), &n);
+        dnet_cterm_rx(&t, p, n, &ev);                  /* t BOUND */
+
+        uint8_t cb[DNET_CTERM_MAX_PDU + 64];
+        size_t cl;
+        if ((fz_next(&st) & 7) == 0) {
+            cl = fz_next(&st) % 40;
+            for (size_t j = 0; j < cl; j++) cb[j] = fz_next(&st);
+        } else {
+            int s = fz_next(&st) % 3;
+            cl = ct_slen[s];
+            memcpy(cb, ct_seed[s], cl);
+            mutate(cb, &cl, sizeof(cb), &st);
+        }
+        int crc = dnet_cterm_rx(&t, cb, cl, &ev);      /* must not crash */
+        if (crc == DNET_CTERM_OK) ct_accepts++;
+    }
+    check(undefined == 0, "every NSP decode returned a DEFINED status (no crash, no undefined code)");
+    check(consumed_over == 0, "no accepting NSP decode claimed to consume past the buffer");
+    check(nsp_accepts > 0, "fuzz corpus reaches accepting NSP decodes (not all-reject)");
+    check(ct_accepts  > 0, "fuzz corpus reaches accepting CTERM rx (not all-reject)");
+    printf("  fuzz: %d NSP + %d CTERM iterations, all decodes returned a defined"
+           " status (nsp_accepts=%d cterm_accepts=%d)\n",
+           ITERS, ITERS, nsp_accepts, ct_accepts);
+}
+
 int main(void)
 {
     printf("test_dnet_cterm: DECnet Phase IV CTERM (Command Terminal / SET HOST)\n");
@@ -747,6 +884,7 @@ int main(void)
     test_sc_connect();
     test_session();
     test_engine_e2e();
+    test_client_response_fuzz();
     if (failures == 0) { printf("test_dnet_cterm: ALL CHECKS PASSED\n"); return 0; }
     printf("test_dnet_cterm: %d CHECK(S) FAILED\n", failures);
     return 1;

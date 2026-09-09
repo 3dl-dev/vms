@@ -432,6 +432,21 @@ if(BUILD_TESTS)
     set_tests_properties(creprc_session_primitive_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-f54: the OUTBOUND $ SET HOST CLIENT over a REAL veth datalink. Two real
+    # DECNETD.EXE engines: a --set-host client drives a genuine Connect Initiate
+    # to Session Control object 42, and main's $CREPRC-based --cterm-server
+    # answers. With an executive (/dev/vms) the client reaches the remote's FRESH
+    # LOGINOUT challenge and control returns with %REM-S-END; without one the
+    # client's link still reaches the server, which HONESTLY refuses (no
+    # unauthenticated shell -- INV-6). It SKIPS honestly (exit 77) when it cannot
+    # create the veth (no CAP_NET_ADMIN). The FULL authenticated leg is the
+    # workflow_dispatch proof run (a runner with CAP_NET + a real executive).
+    add_test(NAME decnet_set_host_client_live
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/decnet_set_host_live.sh)
+    set_tests_properties(decnet_set_host_client_live PROPERTIES
+        LABELS "integration;decnet" TIMEOUT 120 SKIP_RETURN_CODE 77
+        ENVIRONMENT "REPO=${CMAKE_CURRENT_SOURCE_DIR};DECNETD_BIN=$<TARGET_FILE:decnetd_exe>")
+
     # vms-2a9 standing gate: JOB_CONTROL is created by a registered STDRV
     # component (SYS$STARTUP:VMS$VMS.DAT, CONFIG phase), not a hardcoded
     # call from a site file. Source scan — no build artifacts needed. The

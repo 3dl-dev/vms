@@ -185,6 +185,12 @@ extern void dcl_error(const char *facility, int severity, const char *ident,
                       const char *fmt, ...);
 extern int dcl_resolve_path(struct dcl_context *ctx, const char *spec,
                             char *linux_path, size_t path_size);
+/* Resolve a VMS image spec to an activatable Linux path (fills .EXE, resolves
+ * the RMS ;version, accepts a readable OVMX image). Defined in dcl_cmd_process.c;
+ * shared by RUN, foreign-command dispatch, and SET HOST's client activation. */
+extern int dcl_resolve_activatable(struct dcl_context *ctx, const char *vms_spec,
+                                   const char *linux_path, char *resolved,
+                                   size_t sz);
 extern int dcl_format_directory(const char *linux_path, char *vms_dir,
                                 size_t dir_size);
 extern int dcl_directory_header_spec(const char *def, const char *spec,

@@ -1045,6 +1045,57 @@ run_dcl_acceptance_battery() {
     fi
     wait_for '$ ' 20 "$ISOL_OFF"
 
+    # =======================================================================
+    # DECnet FILE COPY / FAL (vms-8c2) -- an inbound $ COPY node"user pw"::file
+    # authenticates the connect-carried credentials against the REAL SYSUAF and
+    # then moves a sequential file through DAP over the NSP link and RMS over the
+    # ODS-2 ACP, BOTH directions, byte-verified. Oracle
+    # docs/oracle/vax-copy-fal-dap.* (rd vms-cd3).
+    #
+    # WHY THIS RUNS HERE. The property is "a COPY with a BAD password is REFUSED,
+    # a COPY with the RIGHT password transfers the file, and the received bytes
+    # match the source" -- which only means anything against the REAL executive
+    # (/dev/vms), the REAL SYS$SYSTEM:SYSUAF.DAT (the seeded GUEST + DISABLED
+    # accounts) and REAL RMS on the mounted ODS-2 volume. On the build host there
+    # is no executive; DECNETD.EXE --fal-accept-test's auth checks then fail
+    # (INV-6) rather than proving anything about a stub. The honest floor -- a
+    # real object-17 connect carrying the creds, refused with an NSP disconnect
+    # when unauthenticated, plus the DAP transport pump -- is proven with no
+    # executive by --fal-selftest and by tests/vmsdecnet/test_dnet_dap (the DAP
+    # codec + FAL credential decoder, fuzzed ASan-clean).
+    #
+    # WHAT THE MODE DOES (src/vmsdecnet/engine/decnetd.c): authenticates the seed
+    # accounts through sysuaf_authenticate (Purdy) -- GUEST/GUEST accepted, a
+    # wrong password and DISABLED (DISUSER) refused; then opens a REAL object-17
+    # NSP link over a socketpair carrying the access-control creds, and runs the
+    # FAL server + COPY client (two threads) to PUT then GET a sequential file
+    # through DAP + RMS, byte-verifying the transferred records.
+    #
+    # HARD GATE where DECNETD.EXE ships (x86_64 image); a LOUD note where absent
+    # (the VAX/Alpha staging follow-on, same as CTERM). Never green because
+    # nothing ran.
+    local FAL_OFF; FAL_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --fal-accept-test'
+    if wait_for 'IVIMAGE' 15 "$FAL_OFF"; then
+        note "FAL COPY [vms-8c2]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-FAL COPY authentication + transfer proof DID NOT RUN here (hard gate on the rails that ship the image; staging into the VAX sysvol + Alpha boot image is tracked follow-on)"
+    elif wait_for 'DECNETD-FAL-ACCEPT:' 180 "$FAL_OFF"; then
+        local FALSEG; FALSEG=$(tail -c "+$((FAL_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$FALSEG" 'DECNETD-FAL-ACCEPT: PASS' \
+            "FAL COPY [vms-8c2]: inbound FAL authenticated the connect creds against the real SYSUAF and transferred a sequential file both directions through DAP + RMS, byte-verified (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$FALSEG" 'is REFUSED (SS\$_INVLOGIN) -- a fake would pass it' \
+            "FAL COPY [vms-8c2]: a wrong password is REFUSED by real SYSUAF/Purdy -- a fake auth would have admitted it"
+        must_have "$FALSEG" 'a right password is not sufficient' \
+            "FAL COPY [vms-8c2]: DISABLED (correct password, DISUSER) is refused -- the SYSUAF login-flag rule applies to a network file access"
+        must_have "$FALSEG" 'BYTE-MATCH the source' \
+            "FAL COPY [vms-8c2]: the transferred file's records byte-match the source (a real transfer through RMS over the ACP, both directions)"
+        must_not_have "$FALSEG" 'DECNETD-FAL-ACCEPT: FAIL' \
+            "FAL COPY [vms-8c2]: no assertion in the inbound-FAL COPY acceptance failed"
+        negctl "$FALSEG" 'DECNETD-I-FALACCEPT' "DECnet FAL COPY acceptance"
+    else
+        bad "FAL COPY [vms-8c2]: DECNETD.EXE --fal-accept-test produced no verdict line within 180s -- the inbound-FAL COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
+    fi
+    wait_for '$ ' 20 "$FAL_OFF"
+
     # The DECnet device FACE _NET: is executive-resident and cross-process real
     # (vms-9ab, P5; design §2b/§7.5). $GETDVI it from DCL -- a process that is
     # NOT NETACP -- and it resolves; the deep cross-process assertions (class,

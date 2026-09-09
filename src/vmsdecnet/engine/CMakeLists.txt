@@ -34,7 +34,9 @@ target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src/libdatalink/include       # scs_datalink.h
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include   # dnet_cterm.h (--set-host-selftest)
-    ${CMAKE_SOURCE_DIR}/src/libvms/include            # ovmx_identity.h (INV-1 banner SSOT)
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/dap/include     # dnet_dap.h (--fal-* COPY presentation)
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include     # dnet_fal.h (--fal-* FAL server + client)
+    ${CMAKE_SOURCE_DIR}/src/libvms/include            # ovmx_identity.h, rms_textfile.h, ssdef.h
     ${CMAKE_SOURCE_DIR}/src/vmsfs/include             # transitive header of ovmx_identity.h
 )
 # vmsdecnet_cterm: the CTERM terminal-service protocol (rd vms-4d2) that rides on
@@ -46,8 +48,16 @@ target_include_directories(decnetd_exe PRIVATE
 # system services) and libvmssys (the executive interface); the daemon itself
 # still contains no fork/exec/openpty (gated by
 # tests/integration/test_creprc_session_primitive.sh).
+# vmsdecnet_fal (rd vms-8c2): the FAL server (object 17) + the COPY node:: client
+# behind $ COPY node"user pw"::file. It authenticates the connect-carried creds
+# (real SYSUAF/Purdy, in libvms) and moves the file through RMS over the ACP; it
+# pulls in vmsdecnet_dap (the DAP codec). The --fal-* proofs run the server and
+# client as two blocking peers, so decnetd links Threads.
+find_package(Threads REQUIRED)
 target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm
-                                          vmsdecnet_cterm_host ovmx_datalink)
+                                          vmsdecnet_cterm_host vmsdecnet_fal
+                                          vmsdecnet_dap ovmx_datalink
+                                          Threads::Threads)
 target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_SOURCE_DIR}/src/libvmssys                 # vms_kif.h ($GETDVI readback)
 )

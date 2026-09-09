@@ -26,6 +26,17 @@ add_subdirectory(ncp)
 # entirely SPEC-DERIVED (no oracle specimen; register sec 4.7).
 add_subdirectory(cterm)
 
+# DAP layer (rd vms-8c2): the Data Access Protocol message codec -- the
+# presentation layer behind $ COPY node::file, riding an NSP logical link. Pure
+# codec (message set + generic framing from the public DAP spec; sequence +
+# carried values from docs/oracle/vax-copy-fal-dap.*, rd vms-cd3).
+add_subdirectory(dap)
+
+# FAL layer (rd vms-8c2): the File Access Listener (Session Control object 17)
+# server + the COPY node:: client. Authenticates the connect-carried credentials
+# (real SYSUAF/Purdy) and moves the file through RMS over the ODS-2 ACP.
+add_subdirectory(fal)
+
 # Engine rung 1 (rd vms-449d): the userspace routing ENGINE that MOVES FRAMES
 # using the engine-agnostic codecs above -- AF_PACKET SOCK_RAW over the shared
 # src/libdatalink raw-L2 datalink (operator ruling vms-a1c, Option B), with the

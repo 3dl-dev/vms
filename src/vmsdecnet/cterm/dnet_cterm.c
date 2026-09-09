@@ -487,6 +487,89 @@ int dnet_cterm_sc_connect_parse(const uint8_t *buf, size_t len,
     return DNET_CTERM_OK;
 }
 
+int dnet_fal_access_decode(const uint8_t *buf, size_t len,
+                           char *userid, size_t useridcap,
+                           char *password, size_t passwordcap,
+                           char *account, size_t accountcap)
+{
+    /*
+     * THE FAL DIFFERENCE (rd vms-8c2, oracle docs/oracle/vax-copy-fal-dap.md
+     * §1). Unlike CTERM/SET HOST -- where the access-control fields are EMPTY
+     * and dnet_cterm_sc_connect_parse deliberately DROPS the password so no
+     * wire-supplied credential can reach a decision -- an inbound FAL (object
+     * 17) connect CARRIES the username AND password the server must
+     * authenticate. So this decoder RETAINS the password, into a CALLER-OWNED
+     * buffer the FAL server wipes the instant sysuaf_authenticate has consumed
+     * it (dnet_fal.c). It is a SEPARATE, explicitly-named entry so the CTERM
+     * codec's "never retains a password" invariant (and its test) stays intact:
+     * only FAL, which must, ever sees the bytes.
+     *
+     * FULLY BOUNDED. These are attacker-controlled bytes on an unauthenticated
+     * inbound connect. The walk reuses the same bounded descriptor/string
+     * helpers the CTERM parse trusts (sc_get_descriptor / sc_get_string): it
+     * never reads past buf[len-1] and refuses (does not clip) an over-long
+     * counted field. On ANY malformation every output buffer is left empty and
+     * a negative code is returned, so a caller cannot authenticate from a
+     * half-parsed identity. "OVMX never crashes a peer": a hostile client
+     * cannot fault FAL here.
+     *
+     * FIELD ORDER (oracle §1 + DNA Session Control): after the DSTNAME and
+     * SRCNAME descriptors and the MENUVER byte come three counted access-
+     * control strings -- RQSTRID (the username to authenticate), PASSWRD, and
+     * ACCOUNT -- exactly the "06 'SYSTEM' 06 <pw> 00" the capture shows.
+     */
+    if (!buf || !userid || !password || !account ||
+        useridcap == 0 || passwordcap == 0 || accountcap == 0)
+        return DNET_CTERM_EINVAL;
+
+    userid[0] = password[0] = account[0] = '\0';
+
+    uint8_t  dfmt, dobj, sfmt, sobj;
+    uint16_t grp, usr;
+    char     dtask[DNET_SC_MAX_STR + 1], suser[DNET_SC_MAX_STR + 1];
+    size_t   off = 0;
+    long     r;
+
+    r = sc_get_descriptor(buf, len, off, &dfmt, &dobj, NULL, NULL,
+                          dtask, sizeof(dtask));
+    if (r < 0) return (int)r;
+    off += (size_t)r;
+
+    r = sc_get_descriptor(buf, len, off, &sfmt, &sobj, &grp, &usr,
+                          suser, sizeof(suser));
+    if (r < 0) return (int)r;
+    off += (size_t)r;
+
+    /* MENUVER byte. A connect with no access-control area (nothing to
+     * authenticate WITH) is well-formed but leaves every field empty -- the
+     * FAL server then refuses the connect, it does not admit an empty-credential
+     * session (that was the CTERM hole; FAL must not repeat it). */
+    if (off >= len) return DNET_CTERM_OK;
+    off++;  /* MENUVER, not interpreted here */
+
+    /* RQSTRID = the username. */
+    if (off >= len) return DNET_CTERM_OK;
+    r = sc_get_string(buf, len, off, userid, useridcap);
+    if (r < 0) { userid[0] = '\0'; return (int)r; }
+    off += (size_t)r;
+
+    /* PASSWRD = the password -- RETAINED (the FAL difference). */
+    if (off < len) {
+        r = sc_get_string(buf, len, off, password, passwordcap);
+        if (r < 0) { userid[0] = password[0] = '\0'; return (int)r; }
+        off += (size_t)r;
+    }
+
+    /* ACCOUNT (usually empty). */
+    if (off < len) {
+        r = sc_get_string(buf, len, off, account, accountcap);
+        if (r < 0) { userid[0] = password[0] = account[0] = '\0'; return (int)r; }
+        off += (size_t)r;
+    }
+
+    return DNET_CTERM_OK;
+}
+
 int dnet_cterm_sc_connect_object(const uint8_t *buf, size_t len)
 {
     struct dnet_cterm_sc_connect sc;

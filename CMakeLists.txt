@@ -82,11 +82,28 @@ if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD")
     # IMGACT.EXE activation has no meaning on this substrate; ld.elf_so is the
     # activator here). Unconditional for the NetBSD substrate -- there is no
     # SHARED mode on netbsd-vax today (docs/design-ovmx-netbsd-syskrnl.md).
-    if(OVMX_STATIC OR OVMX_IMGACT)
+    #
+    # vms-404 / vms-73b2 (docs/design/vax-symbol-vector-imgact.md §4 P2): the
+    # new elf32-vax symbol-vector IMGACT backend (src/imgact/arch/vax) makes
+    # OVMX_IMGACT MEANINGFUL on the NetBSD/vax substrate -- IMGACT.EXE resolves
+    # `.vms$sv` shareables here, displacing ld.elf_so as PT_INTERP (the
+    # operator's "not ld.elf_so, no LARP" requirement). So OVMX_IMGACT is now
+    # PERMITTED on vax; it stays forbidden on any other NetBSD arch (none has an
+    # IMGACT backend). OVMX_STATIC (a Linux host link mode) stays forbidden on
+    # every NetBSD arch. Building/staging the shareable GRAPH and dropping
+    # OVMX_LIB_TYPE=STATIC is P3 (LINK.EXE elf32-vax emit, a separate item):
+    # P2 builds IMGACT.EXE itself, which is -nostdlib -shared regardless of
+    # OVMX_LIB_TYPE, so STATIC stays set here for the RTL/image linkage.
+    if(OVMX_STATIC)
         message(FATAL_ERROR
-            "OVMX_STATIC and OVMX_IMGACT are host-substrate (Linux) link "
-            "modes; the NetBSD substrate uses Decision-A linkage "
-            "unconditionally (rd vms-42d) and must not combine with either.")
+            "OVMX_STATIC is a host-substrate (Linux) link mode; the NetBSD "
+            "substrate uses Decision-A linkage unconditionally (rd vms-42d).")
+    endif()
+    if(OVMX_IMGACT AND NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "vax")
+        message(FATAL_ERROR
+            "OVMX_IMGACT on NetBSD is implemented only for the elf32-vax "
+            "symbol-vector backend (rd vms-404); CMAKE_SYSTEM_PROCESSOR="
+            "${CMAKE_SYSTEM_PROCESSOR} has no NetBSD IMGACT backend.")
     endif()
     set(OVMX_LIB_TYPE STATIC)
 elseif(OVMX_STATIC)
@@ -199,6 +216,23 @@ if(BUILD_TESTS)
         src/vmslink/include)
     add_test(NAME imgact_xfer_parse_unit COMMAND test_xfer_parse)
     set_tests_properties(imgact_xfer_parse_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
+
+    # elf32-vax symbol-vector resolve (rd vms-73b2, epic vms-404). Host proof
+    # that IMGACT's elf32 class-width abstraction (imgact_elf.h, the real
+    # backend header) + the real ovmx_symvec resolver bind a real elf32-vax
+    # `.vms$sv` (EM_VAX/ELFCLASS32 ET_DYN) by vector index. Compiled with
+    # IMGACT_FORCE_ELFCLASS32 so ElfW()/ELFW_* take the SAME Elf32 path they
+    # take under __vax__ in imgact.c; a _Static_assert pins the Elf32 struct
+    # widths so a silent fallback to the Elf64 path cannot pass. Independent of
+    # OVMX_IMGACT (a plain host unit test), so it runs in the normal test suite
+    # on every arch.
+    add_executable(test_symvec_elf32 src/imgact/test/test_symvec_elf32.c)
+    target_compile_definitions(test_symvec_elf32 PRIVATE IMGACT_FORCE_ELFCLASS32=1)
+    target_include_directories(test_symvec_elf32 PRIVATE
+        src/imgact
+        src/vmslink/include)
+    add_test(NAME imgact_symvec_elf32_unit COMMAND test_symvec_elf32)
+    set_tests_properties(imgact_symvec_elf32_unit PROPERTIES LABELS "unit;imgact" TIMEOUT 30)
 
     # Proves /SHARED images share physical pages across processes via
     # /proc/PID/smaps (INSTALL done condition #4). See the file header in

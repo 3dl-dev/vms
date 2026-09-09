@@ -34,6 +34,8 @@
 #  include "arch/x86_64/imgact_arch.h"
 #elif defined(__alpha__)
 #  include "arch/alpha/imgact_arch.h"
+#elif defined(__vax__)
+#  include "arch/vax/imgact_arch.h"   /* NetBSD/vax has no seccomp -> NOARCH */
 #else
 #  error "imgact_boundary_audit: unsupported architecture"
 #endif

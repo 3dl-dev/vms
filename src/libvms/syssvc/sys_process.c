@@ -647,6 +647,48 @@ static ssize_t creprc_read_all(int fd, void *buf, size_t len)
 }
 
 /*
+ * creprc_dynamic_terminal_path - resolve a DYNAMIC terminal name (RTAn:) to its
+ * substrate backing, BY ASKING THE EXECUTIVE (rd vms-f40, design sec 3.2/6-P4).
+ *
+ * ovmx_console_terminal_path() above is the static half of the name->backing
+ * map: OPA0: and its aliases, known at compile time because the console is
+ * created at module init and never moves. A virtual terminal is the opposite
+ * kind of fact -- RTA1: exists because an inbound DECnet SET HOST caused the
+ * executive to mint it a moment ago, and WHICH pty backs it is something only
+ * the executive knows. So this half is a READ of executive state, not a table:
+ * a static map could not answer it, and a caller-supplied path is exactly the
+ * substrate leak the P1 item removed (see THE NAME IS RESOLVED, NEVER
+ * TRANSMITTED AS A PATH above -- that rule is why the network daemon hands
+ * $CREPRC "RTA1:" and nothing else).
+ *
+ * A name the executive does not hold as a dynamic terminal resolves to
+ * NOTHING, and $CREPRC then refuses the creation SS$_NOSUCHDEV -- so a peer
+ * cannot get a session created on a device that was never entered.
+ *
+ * Returns 1 and fills `out` with the substrate path, or 0.
+ */
+static int creprc_dynamic_terminal_path(const char *devnam, char *out,
+                                        size_t outsz)
+{
+    char backing[VMS_BACKING_SIZE] = {0};
+
+    if (!devnam || !devnam[0] || !out || outsz == 0)
+        return 0;
+
+    if (!(vms_kif_terminal_resolve(devnam, backing, sizeof(backing)) & 1))
+        return 0;
+    if (backing[0] == '\0')
+        return 0;
+
+    /* The executive records the backing RELATIVE to /dev (the same convention
+     * a disk row uses: "vda", not "/dev/vda"), so the one place that knows the
+     * substrate prefix is here, below the VMS layer. */
+    if (snprintf(out, outsz, "/dev/%s", backing) >= (int)outsz)
+        return 0;
+    return 1;
+}
+
+/*
  * creprc_bind_terminal - bind the process being created to the TERMINAL
  * DEVICE $CREPRC was asked to run it on (PRC$M_INTER; vms-3e9, design
  * docs/design/faithful-sessions-and-network-subsystems.md §3.1).
@@ -708,48 +750,6 @@ static ssize_t creprc_read_all(int fd, void *buf, size_t len)
  * Returns SS$_NORMAL, or the honest failure (SS$_NOSUCHDEV: not a terminal
  * device name; SS$_DEVOFFLINE: the device's backing could not be opened).
  */
-/*
- * creprc_dynamic_terminal_path - resolve a DYNAMIC terminal name (RTAn:) to its
- * substrate backing, BY ASKING THE EXECUTIVE (rd vms-f40, design sec 3.2/6-P4).
- *
- * ovmx_console_terminal_path() above is the static half of the name->backing
- * map: OPA0: and its aliases, known at compile time because the console is
- * created at module init and never moves. A virtual terminal is the opposite
- * kind of fact -- RTA1: exists because an inbound DECnet SET HOST caused the
- * executive to mint it a moment ago, and WHICH pty backs it is something only
- * the executive knows. So this half is a READ of executive state, not a table:
- * a static map could not answer it, and a caller-supplied path is exactly the
- * substrate leak the P1 item removed (see THE NAME IS RESOLVED, NEVER
- * TRANSMITTED AS A PATH above -- that rule is why the network daemon hands
- * $CREPRC "RTA1:" and nothing else).
- *
- * A name the executive does not hold as a dynamic terminal resolves to
- * NOTHING, and $CREPRC then refuses the creation SS$_NOSUCHDEV -- so a peer
- * cannot get a session created on a device that was never entered.
- *
- * Returns 1 and fills `out` with the substrate path, or 0.
- */
-static int creprc_dynamic_terminal_path(const char *devnam, char *out,
-                                        size_t outsz)
-{
-    char backing[VMS_BACKING_SIZE] = {0};
-
-    if (!devnam || !devnam[0] || !out || outsz == 0)
-        return 0;
-
-    if (!(vms_kif_terminal_resolve(devnam, backing, sizeof(backing)) & 1))
-        return 0;
-    if (backing[0] == '\0')
-        return 0;
-
-    /* The executive records the backing RELATIVE to /dev (the same convention
-     * a disk row uses: "vda", not "/dev/vda"), so the one place that knows the
-     * substrate prefix is here, below the VMS layer. */
-    if (snprintf(out, outsz, "/dev/%s", backing) >= (int)outsz)
-        return 0;
-    return 1;
-}
-
 static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
 {
     (void)setsid();     /* best-effort: see the controlling-terminal note */

@@ -366,6 +366,21 @@ case "$MODE" in
     boot_and_capture || boot_rc=$?
     log "boot driver exit code: ${boot_rc} (0 = drive_boot_vax.py's OWN sysboot verdict -- reached the real DCL Username: prompt)"
 
+    # rd vms-d4a option (a): NON-GATING diagnostic readout. The gate-private
+    # IMGACT (-DOVMX_IMGACT_BIND_TRACE) emits, for the CONSUMER activation only,
+    # the elf32-vax import bind (prod/base/cell/val) on /dev/console; CONSUMER
+    # emits the purdy value. Surface both so the transcript is self-diagnosing.
+    # These are ADDRESSES/values ONLY -- the PASS predicate below
+    # (assert_shr_activation) is UNCHANGED, so this cannot fake a golden result.
+    {
+      echo "---- vms-d4a option (a) bind-trace (diagnostic, non-gating) ----"
+      grep -aE 'OVMX-IMGACT-BIND:' "$WORK/shr-activation-boot.log" || echo "  (no OVMX-IMGACT-BIND line -- IMGACT never reached the CONSUMER import store; if a %IMGACT-F-GSMATCH line is present the .vms\$sv resolve FAILED)"
+      grep -aE 'OVMX-VAX-SHR-ACT(-CON|-RAW)?: purdy=0x[0-9a-f]{16}' "$WORK/shr-activation-boot.log" || echo "  (no purdy= value line)"
+      grep -aiE '%IMGACT-|ACCVIO|SS\$_|SIGSEGV|signal [0-9]+|STATUS=' "$WORK/shr-activation-boot.log" | head -8 || true
+      echo "  VERDICT KEY: BIND absent+GSMATCH => resolve-failed | val!=LIBVMS\$SHR_base+purdy_off => cell-fill bug | val ok + crash => call mistransfer | val ok + clean + wrong purdy => wrong-return | golden => PASS"
+      echo "---------------------------------------------------------------"
+    } || true
+
     if assert_shr_activation "$WORK/shr-activation-boot.log"; then
       if [ "$boot_rc" -eq 0 ]; then
         log "======================================================================"

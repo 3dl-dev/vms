@@ -140,11 +140,15 @@ fi
 echo "   OK: elf32-vax ET_DYN, PT_INTERP=IMGACT.EXE, .vms\$imp -> LIBVMS\$SHR.EXE ONLY (no P4BOOT\$SHR), no unapplied R_VAX_*"
 echo
 
-echo "=== 5. IMGACT.EXE (elf32-vax, -DOVMX_IMGACT=ON, rd vms-73b2/vms-33b) ==="
+echo "=== 5. IMGACT.EXE (elf32-vax, -DOVMX_IMGACT=ON + BIND_TRACE, rd vms-73b2/vms-33b/vms-d4a) ==="
 IMGACT_BUILD="$BUILD_DIR/imgact-cmake"
+# rd vms-d4a option (a): -DOVMX_IMGACT_BIND_TRACE=ON makes THIS gate-private
+# IMGACT emit the CONSUMER import bind (prod/base/cell/val on /dev/console). The
+# shipped IMGACT.EXE (built elsewhere, default OFF) never carries this.
 cmake -S "$SRC" -B "$IMGACT_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$SRC/tools/cross-vax/toolchain-vax-netbsd.cmake" \
-    -DOVMX_IMGACT=ON -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF >/dev/null
+    -DOVMX_IMGACT=ON -DOVMX_IMGACT_BIND_TRACE=ON \
+    -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF >/dev/null
 cmake --build "$IMGACT_BUILD" --target imgact >/dev/null
 IMGACT=$(find "$IMGACT_BUILD" -name IMGACT.EXE | head -1)
 [ -n "$IMGACT" ] && [ -s "$IMGACT" ] || die "IMGACT.EXE(vax) did not build"

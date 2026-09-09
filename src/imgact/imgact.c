@@ -65,6 +65,16 @@
 #ifndef O_RDWR
 #define O_RDWR 2
 #endif
+#ifdef OVMX_IMGACT_BIND_TRACE
+/* rd vms-d4a option (a): the diagnostic bind-trace opens /dev/console O_WRONLY|
+ * O_NOCTTY (NetBSD/vax values), same as the CONSUMER proof's channel (0). */
+#ifndef O_WRONLY
+#define O_WRONLY 1
+#endif
+#ifndef O_NOCTTY
+#define O_NOCTTY 0x8000
+#endif
+#endif
 
 /* The system disk the activator reads images from. On real OpenVMS this is the
  * discovered SYS$SYSDEVICE, not a compile-time constant. IMGACT no longer bakes
@@ -1742,6 +1752,12 @@ static void imgact_fill_import(unsigned long cell, unsigned long PV,
 }
 #endif  /* __alpha__ */
 
+#ifdef OVMX_IMGACT_BIND_TRACE
+/* vms-d4a option (a): imgact_u32_hex8 is defined later in the file; the
+ * bind-trace block below uses it, so forward-declare it here. */
+static void imgact_u32_hex8(char *out, uint32_t v);
+#endif
+
 /* Bind every .vms$imp import at `ih` into image `base`: map each named producer
  * (recursively — transitive imports), GSMATCH-resolve the universal by vector
  * index, and store the run-time address into the importing image's GOT cell.
@@ -1789,6 +1805,46 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 			sys_exit(IMGACT_EXIT_FAIL);
 		}
 		*(unsigned long *)(base + ie[k].patch_off) = addr;
+#ifdef OVMX_IMGACT_BIND_TRACE
+		/* rd vms-d4a option (a): emit the elf32-vax import bind for the
+		 * CONSUMER activation ONLY (basename of g_argv0), on /dev/console --
+		 * NetBSD does not wire a fork()+execve() child's fd 1/2 to the console,
+		 * so open it directly (as PID 1 and CONSUMER's channel (0) do). Prints
+		 * ADDRESSES ONLY, never the purdy hash, so it CANNOT fake the
+		 * value-sensitive golden gate. Gate-private: only
+		 * build-shr-activation-vax.sh builds IMGACT with -DOVMX_IMGACT_BIND_TRACE.
+		 * CONSUMER-scoped so it never interleaves with the boot-milestone regexes
+		 * of the other images this same IMGACT activates (STARTUP/PROVISION/
+		 * LOGINOUT/DCL). */
+		{
+			const char *b0 = g_argv0 ? g_argv0 : "";
+			for (const char *q = b0; *q; q++)
+				if (*q == '/')
+					b0 = q + 1;
+			if (b0[0] == 'C' && b0[1] == 'O' && b0[2] == 'N' &&
+			    b0[3] == 'S' && b0[4] == 'U') {
+				long cfd = sys_openat("/dev/console",
+						      O_WRONLY | O_NOCTTY);
+				if (cfd >= 0) {
+					char hb[9], hc[9], hv[9], line[192];
+					imgact_u32_hex8(hb, (uint32_t)p->base);
+					imgact_u32_hex8(hc,
+						(uint32_t)(base + ie[k].patch_off));
+					imgact_u32_hex8(hv, (uint32_t)addr);
+					line[0] = '\0';
+					xstrcat(line, "OVMX-IMGACT-BIND: prod=");
+					xstrcat(line, soname);
+					xstrcat(line, " base=0x"); xstrcat(line, hb);
+					xstrcat(line, " cell=0x"); xstrcat(line, hc);
+					xstrcat(line, " val=0x");  xstrcat(line, hv);
+					xstrcat(line, "\n");
+					sys_write((int)cfd, line, xstrlen(line));
+					if (cfd > 2)
+						sys_close((int)cfd);
+				}
+			}
+		}
+#endif
 #endif
 	}
 }

@@ -99,6 +99,16 @@ target_compile_options(imgact PRIVATE
     -fno-stack-protector -fno-builtin -fno-asynchronous-unwind-tables
 )
 
+# rd vms-d4a option (a): a DIAGNOSTIC-ONLY, default-OFF flag that makes
+# bind_imports emit the elf32-vax import bind (prod/base/cell/val addresses,
+# never the hash) for the CONSUMER activation on /dev/console. Enabled ONLY by
+# tools/cross-vax/build-shr-activation-vax.sh's gate build -- NEVER in a shipped
+# IMGACT.EXE (default OFF), so it cannot leak into a production image.
+option(OVMX_IMGACT_BIND_TRACE "vms-d4a: emit elf32-vax import bind trace for CONSUMER (diagnostic, gate-only)" OFF)
+if(OVMX_IMGACT_BIND_TRACE)
+    target_compile_definitions(imgact PRIVATE OVMX_IMGACT_BIND_TRACE=1)
+endif()
+
 # Freestanding static-PIE link: no libc, no crt, custom entry, self-relocating.
 # -shared yields ET_DYN (a position-independent image the kernel can load as
 # PT_INTERP); the globally injected --dynamic-linker/--hash-style flags are

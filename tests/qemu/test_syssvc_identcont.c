@@ -49,7 +49,9 @@
 
 #include "ssdef.h"
 #include "prvdef.h"
+#include "stsdef.h"          /* $VMS_STATUS_SUCCESS                          */
 #include "vms_kif.h"
+#include "vms/logical.h"     /* lnm_create + LNM$JOB (vms-739 ACP mount)     */
 
 #define EXIT_SKIP 77
 
@@ -62,6 +64,7 @@ static int fail = 0;
 } while (0)
 
 #define AUTHORIZE_PATH "/bin/AUTHORIZE.EXE"
+#define ODS2_UNIT "VDA300:"  /* the generated system-disk ODS-2 fixture (SYSUAF) */
 
 /* SYSTEM: the identity LOGINOUT stamps on the interactive SYSTEM session. */
 #define SYS_NAME   "SYSTEM"
@@ -183,6 +186,25 @@ int main(void)
         printf("  INFO: cannot open /dev/vms -- CI executive-absent rig, not the product\n");
         printf("=== test_syssvc_identcont: 0 passed, 0 failed (SKIPPED: no /dev/vms) ===\n");
         return EXIT_SKIP;
+    }
+
+    /* vms-739: mount the SYSUAF sysvol OURSELVES; do not free-ride on a
+     * co-resident ACP suite's mount. Without VDA300: mounted + SYS$SYSDEVICE
+     * composed onto it, the admitted SYSPRV session's ovmx_sysuaf_enum returns
+     * RMS$_ACC and AUTHORIZE exits 1 -- a latent cross-suite ordering dependency
+     * the 6-shard md5 grouping happened to satisfy (a mounting sibling co-resided)
+     * but the 8-shard grouping did not. Self-contained now, passes in ANY cohort.
+     * Mirrors the proven test_syssvc_authorize.c precondition block. */
+    {
+        uint32_t vpid = 0;
+        (void)vms_kif_register(&vpid);       /* job_id for the LNM$JOB scope   */
+        lnm_manager_t *mgr = lnm_get_manager();
+        uint32_t mst = vms_kif_acp_mount(ODS2_UNIT);
+        CHECK($VMS_STATUS_SUCCESS(mst),
+              "$MOUNT of the system-disk ODS-2 fixture on " ODS2_UNIT " (precondition)");
+        if (mgr)
+            lnm_create(mgr, LNM_JOB_TABLE, "SYS$SYSDEVICE", ODS2_UNIT,
+                       LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
     }
 
     static char outA[8192], outB[8192];

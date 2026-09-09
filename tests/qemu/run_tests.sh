@@ -97,6 +97,19 @@ if [ -n "${OVMX_HAMMER_MS:-}" ]; then
     esac
 fi
 
+# SINGLE-SUITE OVERRIDE (rd vms-f881). OVMX_KTEST_ONLY=<suite-name> forwards
+# ovmx.only=<name>; init.sh then runs EXACTLY that one suite, bypassing the
+# shard filter and the sharded-set exclusion. UNSET (every existing caller) =
+# empty token = normal behaviour. Used by the dedicated devtab_terminal job to
+# give that one TCG-heavy suite its own VM and its own generous wall.
+KCMD_ONLY=""
+if [ -n "${OVMX_KTEST_ONLY:-}" ]; then
+    case "$OVMX_KTEST_ONLY" in
+    ''|*[!A-Za-z0-9_]*) ;;
+    *) KCMD_ONLY="ovmx.only=$OVMX_KTEST_ONLY" ;;
+    esac
+fi
+
 # ASSERTION TRANSCRIPT (vms-b5b round 2). ttyS0 (below) carries the boot
 # banner, kernel printk and init.sh's own aggregate lines -- exactly what it
 # always has. A SECOND serial port, ttyS1, is wired to a plain file so that
@@ -262,7 +275,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -nographic \
-    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD $KCMD_HAMMER" \
+    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD $KCMD_HAMMER $KCMD_ONLY" \
     -m 512M \
     -no-reboot \
     -smp 1 \

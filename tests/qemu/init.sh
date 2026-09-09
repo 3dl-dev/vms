@@ -9,6 +9,16 @@ mount -t proc none /proc
 mount -t sysfs none /sys
 mount -t devtmpfs none /dev
 
+# devpts, for POSIX pseudo-terminals. devtmpfs gives us /dev/ptmx, but
+# posix_openpt()/grantpt()/ptsname() also need a devpts filesystem mounted at
+# /dev/pts (test_kmod_devtab_terminal, rd vms-f881, opens a real PTY as RTAn:'s
+# byte transport). ptmxmode + the /dev/ptmx -> pts/ptmx symlink is the standard
+# way to make the master multiplexor resolve into this instance.
+mkdir -p /dev/pts
+mount -t devpts none /dev/pts -o mode=0620,ptmxmode=0666 2>/dev/null || \
+    mount -t devpts none /dev/pts 2>/dev/null
+[ -e /dev/pts/ptmx ] && ln -sf pts/ptmx /dev/ptmx 2>/dev/null
+
 echo ""
 echo "=== OVMX Kernel Module Test Suite ==="
 echo "Kernel: $(uname -r) ($(uname -m))"
@@ -180,16 +190,33 @@ SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
 # the whole set with no gaps and no overlap (a residue class partition).
 SHARD_INDEX=0
 SHARD_TOTAL=1
+ONLY_SUITE=""
 for _tok in $(cat /proc/cmdline 2>/dev/null); do
     case "$_tok" in
         ovmx.shard=*)  SHARD_INDEX=${_tok#ovmx.shard=} ;;
         ovmx.shards=*) SHARD_TOTAL=${_tok#ovmx.shards=} ;;
+        ovmx.only=*)   ONLY_SUITE=${_tok#ovmx.only=} ;;
     esac
 done
 # Defensive: a malformed/empty value must not silently turn the loop into a
 # no-op (which would pass a shard that ran nothing). Fall back to run-all.
 case "$SHARD_TOTAL" in ''|*[!0-9]*|0) SHARD_TOTAL=1 ;; esac
 case "$SHARD_INDEX" in ''|*[!0-9]*) SHARD_INDEX=0 ;; esac
+# Reject a junk ovmx.only= (only a bare suite name is valid); empty = disabled.
+case "$ONLY_SUITE" in *[!A-Za-z0-9_]*) ONLY_SUITE="" ;; esac
+# SHARDED-SET EXCLUSION (rd vms-f881 / vms-8cb). test_kmod_devtab_terminal
+# (a real PTY + a cross-process fork doing $GETDVI) is a TCG-pathological hog
+# that blew the whole-VM wall on whichever shard it landed on (measured at
+# 1200s AND 1800s co-resident with cluster_fork_hammer on shard 0). It is NOT
+# dropped from coverage: it runs in its OWN dedicated VM (ci.yml job
+# kernel-executive-devtab-terminal, via OVMX_KTEST_ONLY -> ovmx.only=). It is
+# removed from the SHARDED residue set (SHARD_TOTAL>1) ONLY, so it never
+# co-resides with another heavy suite. It STILL runs in run-all (SHARD_TOTAL=1:
+# the negative-control image and a hand `docker run`), where every suite fails
+# fast against an absent /dev/vms with no wall pressure. The IDENTICAL name is
+# excluded in ci.yml's per-shard EXPECTED derivation and the union proof, kept
+# byte-identical the way the md5 partition is (rd vms-ea7).
+SHARD_EXCLUDE="test_kmod_devtab_terminal"
 if [ "$SHARD_TOTAL" -gt 1 ]; then
     echo "=== SHARD PLAN: this VM runs shard $SHARD_INDEX of $SHARD_TOTAL (suites where md5(name) mod $SHARD_TOTAL == $SHARD_INDEX) ==="
 fi
@@ -218,12 +245,26 @@ fi
 for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/test_corpus_*; do
     [ -x "$test" ] || continue
     name=$(basename "$test")
-    # Sharding (vms-ea7): skip suites not assigned to this VM's shard. The
-    # skipped suites run in a SIBLING shard VM; the union is the whole set.
-    # A skipped suite prints NO "=== SUITE ... ===" line, so ci.yml's per-
-    # shard verdict check (which asserts only THIS shard's assigned suites)
-    # is not fooled -- an absent line for an ASSIGNED suite is still RED.
-    suite_in_shard "$name" || continue
+    if [ -n "$ONLY_SUITE" ]; then
+        # Single-suite mode (ovmx.only=, the dedicated devtab_terminal job):
+        # run EXACTLY the named suite, bypassing BOTH the shard filter and the
+        # sharded-set exclusion below.
+        [ "$name" = "$ONLY_SUITE" ] || continue
+    else
+        # SHARDED-SET EXCLUSION (vms-f881): only when actually sharding
+        # (SHARD_TOTAL>1). In run-all (negctl / manual) devtab_terminal still
+        # runs, so the negative-control job's per-suite verdict check still
+        # sees its line. The SAME name is excluded in ci.yml's EXPECTED build.
+        if [ "$SHARD_TOTAL" -gt 1 ]; then
+            case " $SHARD_EXCLUDE " in *" $name "*) continue ;; esac
+        fi
+        # Sharding (vms-ea7): skip suites not assigned to this VM's shard. The
+        # skipped suites run in a SIBLING shard VM; the union is the whole set.
+        # A skipped suite prints NO "=== SUITE ... ===" line, so ci.yml's per-
+        # shard verdict check (which asserts only THIS shard's assigned suites)
+        # is not fooled -- an absent line for an ASSIGNED suite is still RED.
+        suite_in_shard "$name" || continue
+    fi
     echo "" >&4
     echo "--- $name ---" >&4
     rm -f "$SUITE_OUT" "$SUITE_FIFO"

@@ -2325,10 +2325,19 @@ jobs:
       # verdicts on a red run, not just the first.
       fail-fast: false
       matrix:
-        # N shards. ~79 suites / 6 ≈ 11-16 per shard (measured, vms-ea7) --
-        # comfortably under the 600s wall even at 10x-slow. `strategy.job-total`
-        # (used in the name and passed to the guest) derives N from this list,
-        # so changing the shard count is a one-line edit here.
+        # N shards over ~115 suites. `strategy.job-total` (used in the name and
+        # passed to the guest) derives N from this list.
+        # HISTORY (vms-f881 / vms-739 / vms-8cb): test_kmod_devtab_terminal (real
+        # PTY + a cross-process fork/$GETDVI) is a TCG-pathological hog that blew
+        # the whole-VM wall on whichever shard it landed on (1200s AND 1800s,
+        # co-resident with cluster_fork_hammer on shard 0 at N=6). Adding shards
+        # did not fix it (devtab_terminal blows any shard alone) and only
+        # whack-a-moled latent-isolation suites (N=8 reddened identcont, then
+        # mmk_build). So devtab_terminal is EXCLUDED from the sharded set
+        # (init.sh SHARD_EXCLUDE, SHARD_TOTAL>1) and runs in its OWN dedicated VM
+        # (job kernel-executive-devtab-terminal), and the sharded run reverts to
+        # the isolation-proven N=6 (identcont's vms-739 self-mount fix rides in
+        # and is cohort-robust at any N). Systemic capacity/isolation: vms-8cb.
         shard: [0, 1, 2, 3, 4, 5]
 
     steps:
@@ -2359,11 +2368,16 @@ jobs:
         env:
           SHARD_INDEX: ${{ matrix.shard }}
           SHARD_TOTAL: ${{ strategy.job-total }}
+          # No KE_WALL_TIMEOUT override: run_tests.sh's 600s default is the
+          # origin/main-proven baseline for the sharded N=6 set. The 1800 bump
+          # existed ONLY for test_kmod_devtab_terminal, now excluded from the
+          # sharded set and run in its own VM (kernel-executive-devtab-terminal).
         run: |
           set +e
-          # -e SHARD_INDEX/-e SHARD_TOTAL: run_tests.sh forwards these onto the
-          # guest kernel cmdline (ovmx.shard/ovmx.shards); init.sh runs only the
-          # residue class md5(name) mod SHARD_TOTAL == SHARD_INDEX.
+          # -e SHARD_INDEX/-e SHARD_TOTAL: run_tests.sh forwards the shard vars
+          # onto the guest kernel cmdline (ovmx.shard/ovmx.shards, residue class
+          # md5(name) mod SHARD_TOTAL == SHARD_INDEX). No wall override (600s
+          # default) -- devtab_terminal, the reason 1800 was set, runs elsewhere.
           RAW=$(docker run --rm -e SHARD_INDEX -e SHARD_TOTAL ovmx-ktest:latest 2>&1)
           RC=$?
           set -e
@@ -2446,8 +2460,17 @@ jobs:
 
           # Filter the full expected set to THIS shard's residue class, using
           # the SAME hash the guest applied (md5 first-6-hex mod SHARD_TOTAL).
+          # vms-f881: test_kmod_devtab_terminal is EXCLUDED from the SHARDED run
+          # in init.sh (SHARD_TOTAL>1) and runs in its own dedicated VM
+          # (kernel-executive-devtab-terminal), so it prints NO "=== SUITE ... ==="
+          # line on any shard. Exclude it here IDENTICALLY, or the shard that
+          # owns it (md5(name)%N) would assert a verdict line that never appears
+          # and go RED. It stays in EXPECTED above, so the deletion floor still
+          # trips if its .c is removed. Keep in lock-step with init.sh SHARD_EXCLUDE.
+          SHARD_EXCLUDE="test_kmod_devtab_terminal"
           SHARD_EXPECTED=""
           for suite in $EXPECTED; do
+            case " $SHARD_EXCLUDE " in *" $suite "*) continue ;; esac
             h=$(printf '%s' "$suite" | md5sum | cut -c1-6)
             if [ "$(( 0x$h % SHARD_TOTAL ))" -eq "$SHARD_INDEX" ]; then
               SHARD_EXPECTED="$SHARD_EXPECTED $suite"
@@ -2507,6 +2530,95 @@ jobs:
           echo "PASS: shard $SHARD_INDEX/$SHARD_TOTAL -- all $N_SHARD assigned suites ran with rc=0 against a real /dev/vms, both modules loaded"
 
   # -----------------------------------------------------------------------
+  # Job 3a-devtab: test_kmod_devtab_terminal in its OWN VM (rd vms-f881 / vms-8cb)
+  #
+  # This suite (a real /dev/pts PTY as RTAn: + a cross-process fork doing
+  # $GETDVI) is a TCG-pathological hog that blew the sharded whole-VM wall on
+  # whichever shard it landed on (1200s AND 1800s, co-resident with
+  # cluster_fork_hammer on shard 0). Rather than inflate every shard's wall for
+  # one suite -- or whack-a-mole latent-isolation suites by adding shards -- it
+  # is EXCLUDED from the sharded residue set (init.sh SHARD_EXCLUDE + the
+  # SHARD_EXPECTED/union filters in the shard/aggregate jobs) and run here ALONE
+  # with a wall of its own. Coverage is unchanged: it runs, just not co-resident.
+  # init.sh's ovmx.only= (via OVMX_KTEST_ONLY) runs exactly this one suite,
+  # bypassing the shard filter and the exclusion. Folded into the
+  # kernel-executive aggregate's required-check name (no new branch-protection
+  # entry). Systemic capacity/isolation tracked as vms-8cb.
+  # -----------------------------------------------------------------------
+  kernel-executive-devtab-terminal:
+    name: Kernel Executive — test_kmod_devtab_terminal (own VM, QEMU)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same image + SAME cache scope as the shards (scope=kernel-executive):
+      # the vms.ko + initramfs is byte-identical, only the boot cmdline differs,
+      # so this leg pulls the shards' cached layers rather than rebuilding.
+      - name: Build kernel executive test image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-ktest:latest
+          cache-from: type=gha,scope=kernel-executive
+          cache-to: type=gha,mode=max,scope=kernel-executive
+
+      - name: Boot QEMU, insmod vms.ko, run ONLY test_kmod_devtab_terminal against /dev/vms
+        env:
+          # Its own generous wall. Alone it covers only module load +
+          # corpus_seed_lnm + this one suite (1800 blew ONLY when co-resident
+          # with ~12 other suites incl. cluster_fork_hammer), so this is ample
+          # headroom, not a masked margin.
+          KE_WALL_TIMEOUT: 1800
+          OVMX_KTEST_ONLY: test_kmod_devtab_terminal
+        run: |
+          set +e
+          # -e OVMX_KTEST_ONLY -> run_tests.sh appends ovmx.only=<name>; init.sh
+          # runs EXACTLY that suite (no shard filter, exclusion bypassed).
+          RAW=$(docker run --rm -e KE_WALL_TIMEOUT -e OVMX_KTEST_ONLY ovmx-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: devtab_terminal harness exited nonzero (rc=$RC; rc=124 = the ${KE_WALL_TIMEOUT}s wall fired even ALONE -- investigate, do not just raise it)"
+            exit 1
+          fi
+
+          line=$(echo "$OUTPUT" | grep -F "=== SUITE test_kmod_devtab_terminal rc=" | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no '=== SUITE test_kmod_devtab_terminal rc= ===' verdict line -- suite not built/staged, or ovmx.only= did not select it."
+            exit 1
+          fi
+          rc=$(printf '%s' "$line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p')
+          if [ "$rc" != "0" ]; then
+            echo "FAIL: test_kmod_devtab_terminal exited rc=$rc against a real /dev/vms (expected 0)."
+            exit 1
+          fi
+
+          echo "$OUTPUT" | grep -qF 'PASS: vms.ko loaded, /dev/vms present' \
+            || { echo "FAIL: vms.ko did not load / /dev/vms absent"; exit 1; }
+
+          # ovmx.only= runs exactly one suite, so init.sh's tally must be
+          # exactly '1 suites passed, 0 suites failed' -- proves it reached its
+          # accounting (no panic/timeout) AND ovmx.only matched the suite (not
+          # zero, which would read as 0 passed / 0 failed).
+          echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: 1 suites passed, 0 suites failed ===' \
+            || { echo "FAIL: expected exactly '1 suites passed, 0 suites failed' -- the suite failed, ovmx.only matched nothing, or the harness never reached accounting (panic/timeout)"; exit 1; }
+
+          echo "PASS: test_kmod_devtab_terminal ran with rc=0 against a real /dev/vms in its own VM"
+
+  # -----------------------------------------------------------------------
   # Job 3b-aggregate: Kernel Executive (vms.ko via /dev/vms, QEMU) — REQUIRED
   # CHECK NAME PRESERVED (rd vms-ea7)
   #
@@ -2531,7 +2643,7 @@ jobs:
   # -----------------------------------------------------------------------
   kernel-executive:
     name: Kernel Executive (vms.ko via /dev/vms, QEMU)
-    needs: [kernel-executive-shard]
+    needs: [kernel-executive-shard, kernel-executive-devtab-terminal]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2554,9 +2666,16 @@ jobs:
           # Every suite init.sh actually runs (all four families), so the union
           # proof covers the whole run, not just the kmod/syssvc subset the
           # per-shard verdict check asserts.
+          # vms-f881: test_kmod_devtab_terminal runs in its own dedicated VM
+          # (kernel-executive-devtab-terminal), NOT in the sharded residue set,
+          # so exclude it here too -- else this proof would claim the N-way
+          # partition "covers" a suite the shards never run. (covered==TOTAL
+          # passes either way since both derive from this list; the exclusion
+          # keeps the CLAIM true and aligned with SHARD_EXPECTED above.)
           ALL=$(ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
                    tests/qemu/test_imgact_*.c tests/qemu/test_corpus_*.c \
-                | xargs -n1 basename | sed 's/\.c$//' | sort)
+                | xargs -n1 basename | sed 's/\.c$//' \
+                | grep -vx test_kmod_devtab_terminal | sort)
           TOTAL=$(echo "$ALL" | grep -c .)
           covered=0
           i=0
@@ -2590,6 +2709,25 @@ jobs:
               ;;
             *)
               echo "FAIL: the KE shard matrix result is '$result' -- at least one shard failed or was cancelled. The executive gate is RED."
+              exit 1
+              ;;
+          esac
+
+          # vms-f881: fold the dedicated test_kmod_devtab_terminal job into this
+          # SAME required-check name, so the isolated heavy suite gates without a
+          # new branch-protection entry. Its `needs: changes` + identical `if:`
+          # make it skip in exactly the non-kernel-PR case the shards do.
+          dt='${{ needs.kernel-executive-devtab-terminal.result }}'
+          echo "kernel-executive-devtab-terminal result: $dt"
+          case "$dt" in
+            success)
+              echo "PASS: test_kmod_devtab_terminal passed in its own dedicated VM."
+              ;;
+            skipped)
+              echo "SKIPPED: the devtab_terminal job did not run (no kernel-affecting change) -- gate not applicable, same case as the shards."
+              ;;
+            *)
+              echo "FAIL: kernel-executive-devtab-terminal result is '$dt' -- the isolated devtab_terminal (RTAn:) gate is RED."
               exit 1
               ;;
           esac

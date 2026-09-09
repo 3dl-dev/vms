@@ -84,6 +84,62 @@ if [ "$_force" = "1" ] || [ ! -x "$USERLAND/bin/STARTUP.EXE" ]; then
         cmake --build /b -j"$(nproc)" >/b/build-all.log 2>&1
     '
 fi
+# NOTE (vms-410): OVMX_STATIC=ON stays here deliberately. This CMake configure
+# targets alpha-linux-gnu (glibc, no OVMX runtime ld.so on the target disk) --
+# it builds the boot-critical PROVISION/JOB_CONTROL/LOGINOUT/DCL chain, which
+# has no VMS-native cross build graph yet (OVMX_LINK_NATIVE is forced OFF
+# under CMAKE_CROSSCOMPILING -- CMakeLists.txt:108-112 -- and OVMX_IMGACT is
+# musl-only). Flipping this OVMX_STATIC off would switch to ordinary ELF
+# .so + a real ld.so this runtime never ships, breaking the boot for zero
+# shareable-graph benefit. The "drop OVMX_STATIC" half of vms-410 is
+# satisfied below instead: the SHIPPED boot image now ALWAYS carries a real
+# VMS-format (EVAX, .vms$sv) shareable graph, so OVMX_STATIC is no longer
+# the blanket, only story for what an Alpha image can look like.
+
+# ---- 1b. Alpha shareable graph (vms-410 / vms-864) -----------------------
+# The SHIPPED Alpha boot image must carry a real VMS-format (EVAX, .vms$sv)
+# shareable graph in SYS$SHARE, not rely solely on the OVMX_STATIC=ON
+# userland above. Build it here, UNCONDITIONALLY, so a bare
+# `build-alpha-bootimage.sh` run packages the genuine alpha DECC$SHR.EXE +
+# LIBOTS_SHR.EXE (mk_decc_shr.sh's ALPHA/EVAX branch, real LINK.EXE
+# .vms$sv-carrying shareables, already proven zero-deferred by the
+# "genuine alpha DECC$SHR" CI job) plus a milestone consumer image
+# (joint_e2e.exe, imports resolved against those SAME shareables) and its
+# SS$_NORMAL control -- exactly what the per-PR activation gates
+# (run-module-gp-activation-alpha.sh gate/crtl-rms-gate/mf-gate) already
+# inject by hand into $WORK/joint before calling this script. This makes
+# the shareable graph part of the ORDINARY packaging path instead of an
+# opt-in side artifact only those three gates knew to stage: if a caller
+# has ALREADY populated $WORK/joint (those gates do, with their own
+# milestone image), that staging is reused untouched -- this step only
+# fills the gap when nothing pre-staged it.
+JOINT_DIR="$WORK/joint"
+if [ "$_force" = "1" ] || [ ! -s "$JOINT_DIR/joint_e2e.exe" ] || \
+   [ ! -s "$JOINT_DIR/DECC\$SHR.EXE" ] || [ ! -s "$JOINT_DIR/LIBOTS_SHR.EXE" ]; then
+    echo "== Alpha shareable graph not staged (or FORCE_BUILD) -- building the genuine alpha DECC\$SHR + LIBOTS\$SHR (vms-864/vms-410) =="
+    _jbuild="$WORK/.joint-build"
+    _jn3="$_jbuild/n3"; _jok="$_jbuild/ok"
+    rm -rf "$_jn3" "$_jok"; mkdir -p "$_jn3" "$_jok" "$JOINT_DIR"
+    IMG=ovmx-cross-alpha-vms JOINT_MAIN=joint_main.c \
+        bash "$REPO/tools/cross-alpha-vms/joint-e2e/build-joint-image.sh" "$_jn3"
+    grep -q 'LINK-S-CREATED' "$_jn3/build.log" \
+        || { echo "FAIL: shareable-graph milestone image did not link -- see $_jn3/build.log"; exit 1; }
+    IMG=ovmx-cross-alpha-vms JOINT_MAIN=joint_main_ok.c \
+        bash "$REPO/tools/cross-alpha-vms/joint-e2e/build-joint-image.sh" "$_jok"
+    grep -q 'LINK-S-CREATED' "$_jok/build.log" \
+        || { echo "FAIL: shareable-graph control image did not link -- see $_jok/build.log"; exit 1; }
+    cp "$_jn3/joint_e2e.exe"   "$JOINT_DIR/joint_e2e.exe"
+    cp "$_jok/joint_e2e.exe"   "$JOINT_DIR/joint_e2e_ok.exe"
+    cp "$_jn3/DECC\$SHR.EXE"   "$JOINT_DIR/DECC\$SHR.EXE"
+    cp "$_jn3/LIBOTS_SHR.EXE"  "$JOINT_DIR/LIBOTS_SHR.EXE"
+    for f in joint_e2e.exe joint_e2e_ok.exe "DECC\$SHR.EXE" LIBOTS_SHR.EXE; do
+        [ -s "$JOINT_DIR/$f" ] || { echo "FAIL: $JOINT_DIR/$f missing/empty after the shareable-graph build"; exit 1; }
+    done
+    rm -rf "$_jbuild"
+    echo "== Alpha shareable graph staged into $JOINT_DIR (genuine DECC\$SHR + LIBOTS\$SHR, vms-864/vms-410) =="
+else
+    echo "== Alpha shareable graph already staged at $JOINT_DIR (reusing, e.g. a caller-supplied milestone image) =="
+fi
 
 mkdir -p "$WORK"
 

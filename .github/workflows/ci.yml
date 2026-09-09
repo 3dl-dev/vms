@@ -7383,6 +7383,75 @@ jobs:
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate
 
   # -----------------------------------------------------------------------
+  # alpha-shipped-shareable-activation (vms-410, vms-deec Decision B): Alpha
+  # ships + activates real VMS shareable images. The Alpha VMS-format
+  # activator already exists (src/imgact/arch/alpha/, proven by "IMGACT
+  # VMS-standard Activation (Alpha)" above) and the genuine alpha DECC$SHR /
+  # LIBOTS$SHR EVAX shareables already exist (vms-864). The GAP this closes
+  # is PACKAGING: build-alpha-bootimage.sh -- the script that assembles the
+  # SHIPPED Alpha boot image -- now builds + stages that shareable graph
+  # into SYS$SHARE UNCONDITIONALLY, instead of only when a caller (like the
+  # gates above) happens to pre-populate $WORK/joint by hand.
+  #
+  # This gate proves exactly that packaging integration, isolated from the
+  # existing caller-injection pattern: `shipped-gate` mode clears
+  # $WORK/joint BEFORE calling build-alpha-bootimage.sh, so the ONLY source
+  # of DECC$SHR.EXE / LIBOTS_SHR.EXE / JOINT_E2E.EXE on the mastered ODS-2
+  # volume is that script's own new built-in step -- if the packaging
+  # regresses, the gate fails honestly on the missing-shareable assertion
+  # rather than silently reusing a caller's artifacts. It then boots the
+  # real /dev/vms executive and activates the shipped consumer image
+  # exactly as the N=3 gate does (asserts $STATUS=%X0035A019, the
+  # SS$_NORMAL control anchor, and no activation-failure signature) -- a
+  # REAL runtime activation of a shipped shareable, not a build-only check.
+  # Same alpha_activation scope-gate + build+boot path as the gates above.
+  # -----------------------------------------------------------------------
+  alpha-shipped-shareable-activation:
+    name: "OVMX/Alpha ships + activates real VMS shareable images — SYSLIB-staged genuine DECC$SHR/LIBOTS$SHR via the ordinary packaging path, asserts $STATUS=%X0035A019 (vms-410)"
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "Shipped shareable gate — build-alpha-bootimage.sh's OWN packaging (not caller-injection) stages the genuine DECC$SHR + LIBOTS$SHR into SYS$SHARE, qemu-system-alpha boots the assembled runtime, IMGACT activates a shipped consumer image over the real /dev/vms + ODS-2 ACP, asserts $STATUS=%X0035A019; runs its own can-fail selftest before the boot"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate
+
+  # -----------------------------------------------------------------------
   # alpha-activation-selftest (vms-c54). The CHEAP per-PR half of the N=3
   # activation guard: run-module-gp-activation-alpha.sh `selftest' drives the
   # SAME assert_activation() the heavy boot uses against crafted transcript

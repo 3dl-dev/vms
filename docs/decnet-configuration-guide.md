@@ -42,11 +42,16 @@ socket library. Three pieces matter to an operator:
   kernel 6.1, so unlike TCP/IP there is no live kernel facility left to ride
   (ruling vms-a1c; full rationale in `design-decnet-ovmx.md` §2). Nothing above
   NETACP ever sees a Linux socket.
-- **The ONE authenticator.** Every session-creating DECnet path — inbound
-  `SET HOST` today, and any future FAL/task-to-task session — authenticates
-  through the same `SYS$SYSTEM:LOGINOUT.EXE` / SYSUAF path an interactive
-  console login uses (via `$CREPRC PRC$M_INTER|PRC$M_LOGINOUT`), never a private
-  credential check of its own.
+- **The ONE authenticator.** Every DECnet path that grants access checks
+  credentials against the same SYSUAF/Purdy authority — never a private
+  credential path of its own. An interactive session (inbound `SET HOST`/CTERM)
+  runs the real `SYS$SYSTEM:LOGINOUT.EXE` via `$CREPRC PRC$M_INTER|PRC$M_LOGINOUT`
+  — the same primitive a console login uses — which prompts and authenticates
+  fresh. Inbound FAL file access instead checks the connect-carried credentials
+  directly against that same SYSUAF (`sysuaf_authenticate` + the disabled-account
+  gate LOGINOUT and SSH also enforce) before serving a file. Same authority, one
+  authenticator; the interactive paths reach it through LOGINOUT, FAL reaches it
+  directly because a file transfer has no interactive login.
 
 **Phase-IV addressing.** A node address is `area.node` (area 1–63, node
 1–1023). Ethernet MACs are the algorithmic Phase IV form
@@ -180,45 +185,64 @@ read-solicitation byte-transparent pump yet on the inbound side.
 
 ## 4. File access — COPY over DECnet (FAL/DAP)
 
-**This does not work yet.** Neither the inbound FAL server (Session Control
-object 17) nor the DAP codec nor an outbound `COPY` client exists in
-`src/vmsdecnet` today. The `decnet$task-to-task` register row — which
-explicitly covers logical-link `$QIO`/FAL — is **absent**:
+The **inbound** side works: OVMX runs an authenticated FAL (File Access
+Listener) server on DECnet Session Control **object 17**, and a real DAP (Data
+Access Protocol) codec moves the file through RMS over the ODS-2 ACP
+(`decnet$fal`, **partial/real**; `decnet$dap`, **implemented/real**). The
+**outbound** half — wiring DCL's own `COPY` command to drive a client over the
+live datalink — is not built yet (see "What does not work yet" below).
 
-> "The codecs exist but the engine boundary has not moved — no
-> socket/AF_PACKET engine binds them into a live link."
+### Inbound FAL — authenticated at the connect, the opposite of CTERM
 
-`NODE"acc"::dev:[dir]file` filespec syntax does parse: `rms_parse.c` recognizes
-the `node::` prefix, sets `NAM$M_NODE`, and can reconstruct it
-(`decnet$node-filespec-syntax`, **partial**). But nothing downstream acts on
-it — in particular, DCL's `cmd_copy()` has no special case for a node-prefixed
-source or destination at all; it runs the same local-file path every `COPY`
-does. **A `COPY VAX2"user pw"::file.txt local.txt` today is not a DECnet
-transfer and does not report a DECnet-specific status** — it is parsed and
-handled as an (invalid) local filespec. Do not rely on any particular error
-text here; the honest fact is there is no wired behavior to document.
+The FAL connect is the mirror image of SET HOST/CTERM (§3). Where CTERM carried
+**empty** access-control fields and the remote LOGINOUT prompted fresh, a FAL
+`COPY` connect (object 17) carries the username **and password** in the NSP
+connect-initiate's access-control fields, and **FAL authenticates from those
+connect-time credentials — it does not prompt** (the client syntax that puts
+them there is `COPY file.txt node"user password"::dest.txt`). This is the fact
+the oracle `docs/oracle/vax-copy-fal-dap.md` (rd vms-cd3) established, and the
+FAL server reproduces it faithfully:
 
-### What exists is the oracle, not the implementation
+- FAL decodes the connect-carried username+password with a **bounded** decoder
+  (attacker-controlled bytes: fuzzed 200k inputs + every truncated prefix,
+  ASan/UBSan-clean) and authenticates them through **the one faithful
+  authenticator** — `sysuaf_lookup` + `sysuaf_authenticate` (Purdy) + the
+  disabled-account gate, the *same* SYSUAF path LOGINOUT and SSH use — **before
+  accepting the logical link**. A bad password, an unknown user, or a
+  `DISUSER`/`DISACNT` account is **refused with an NSP disconnect — no
+  connect-confirm, no DAP, no file** (INV-6: no file is served on an
+  unauthenticated connect — the FAL analogue of the SET HOST no-auth hole,
+  closed the same way).
+- Once authenticated, FAL speaks DAP over the NSP logical link — file-attribute
+  negotiation (name, resolved full spec, owner UIC, RMS attributes), then
+  verbatim record data, then a status/access-complete exchange, then teardown —
+  the public DAP message set, decoded **clean-room** against the oracle's
+  captured bytes (Rule 8; the password value in the capture is redacted per
+  INV-0 — only the wire structure + the carried-cleartext semantic are kept).
+- The transferred bytes land in a real file via RMS over the ODS-2 ACP — no
+  userspace fake; where no executive is present the path fails honestly (Rule 9).
 
-`docs/oracle/vax-copy-fal-dap.md` (rd vms-cd3) captured a real VAX-to-VAX
-`COPY` and fixes the ground truth a future FAL/DAP implementation must match —
-it is **not** something OVMX runs today. The captured facts, for when this
-lands (rung vms-8c2, north-star vms-e4dc):
+### What does not work yet
 
-- The FAL connect (object 17) is the **opposite** of CTERM: the access-control
-  fields of the NSP connect-initiate carry the username **and password in
-  cleartext**, and FAL authenticates from those connect-time credentials —
-  it does not prompt. The intended client syntax is
-  `COPY file.txt node"user password"::dest.txt`. (The password value in the
-  oracle capture itself is redacted per INV-0 — only the wire *structure* and
-  the carried-cleartext *semantic* are preserved, never a real credential.)
-- Once accepted, FAL speaks DAP (Data Access Protocol) over the same NSP
-  logical link — file-attribute negotiation, then verbatim record data, then a
-  status/access-complete exchange, then teardown — the public DAP message set,
-  decoded clean-room against the captured bytes (Rule 8).
+- **DCL `COPY NODE::` (outbound).** DCL recognizes a node-prefixed filespec but
+  does **not** yet drive an outbound FAL client over the datalink: a
+  `COPY VAX2"user pw"::file.txt local.txt` reports `%COPY-I-NETNOTWIRED` rather
+  than transferring — an honest "not wired," not a broken transfer. The outbound
+  DCL→datalink COPY bridge is a tracked follow-on (**rd vms-ea8**).
+- **Advanced DAP** — indexed/relative files, wildcards, `DIRECTORY`, block mode,
+  and proxy access (an empty-access-control connect matched against a proxy DB,
+  instead of a cleartext password) — is not built; the current rung handles the
+  sequential-file case the oracle captured.
+- **Byte-level stock-VAX FAL interop.** Two OVMX nodes interoperate over DAP
+  faithfully; the per-field DAP sub-framing is not yet asserted byte-identical
+  to a stock OpenVMS VAX FAL (a filed follow-on).
 
-Until `decnet$task-to-task`/FAL moves off **absent**, treat `COPY` over
-`NODE::` as a documented future feature, not a usable command.
+The end-to-end proof (a sequential file transferred both directions with real
+SYSUAF/Purdy auth — GUEST accepted, wrong password and `DISUSER` refused — and
+byte-verified through real RMS) runs on a real executive in CI
+(`DECNETD.EXE --fal-accept-test` in the booted acceptance battery); the
+no-executive floor (`--fal-selftest`: a real object-17 connect carrying creds,
+the honest refusal, the DAP-over-NSP pump) runs anywhere.
 
 ## 5. Current status & limitations
 
@@ -232,7 +256,9 @@ second ledger).
 | Router Hello codec | implemented | real | Spec-derived, self-round-trip tested; not oracle-anchored. |
 | Routing adjacency state machine | implemented | real | DOWN/INITIALIZING/UP with hello/listen timers. |
 | NSP transport codec | partial | real | Connect Initiate oracle-verified; other PDUs self-round-trip only. Codec, not yet a general-purpose live transport engine outside SET HOST. |
-| Task-to-task ($QIO/FAL) | **absent** | n/a | No live engine binds the codecs into a link. `COPY NODE::` does not transfer files (§4). |
+| Inbound FAL file server (object 17) | partial | real | §4. Authenticated at the connect (SYSUAF/Purdy + disabled gate, bad password refused before accept); serves/stores via RMS over the ACP. Outbound DCL `COPY` bridge is a follow-on (rd vms-ea8). |
+| DAP codec | implemented | real | §4. Bounded, fuzz-clean; oracle-verified message sequence + carried values, public-spec field framing. |
+| Task-to-task programmatic `$QIO` | **absent** | n/a | Generic user-program logical-link `$QIO` to a DECnet object is not built (distinct from FAL, which is real above). |
 | NCP (node/executor config) | partial | real | §2 above. No circuits/objects/lines/counters/LOOP; single persisted DB; node DB stored at a Linux path, not `NETNODE_REMOTE.DAT` (rd vms-20e). |
 | Node database + name↔address resolution | implemented | real | Backs NCP and `SET HOST`/`NODE::` resolution. |
 | Session Control CONNECT codec | verified | real | Oracle byte-identical against a real VAX capture; access-control fields correctly empty for CTERM. |
@@ -240,14 +266,16 @@ second ledger).
 | NETACP device face (`_NET:` + object dispatch) | implemented | real | Executive-resident, cross-process real; object registry query and the `NETACP.EXE` rename are follow-ons. |
 | Wire-parsing isolation (A2/A8) | implemented | real | Attacker bytes never reach NETACP's privileged path unvalidated. |
 | Outbound SET HOST (client) | partial | real | §3 above. OVMX↔OVMX proven; live-VAX + full-executive CI leg is a tracked follow-on. |
-| `NODE"acc"::` filespec syntax | partial | real | Parses and reconstructs; nothing downstream (FAL, COPY) consumes it yet. |
+| `NODE"acc"::` filespec syntax | partial | real | Parses and reconstructs; DCL `COPY` acts on it but reports `%COPY-I-NETNOTWIRED` — the outbound transfer bridge is a follow-on (rd vms-ea8). |
 
 **Bottom line for an operator today:** you can configure node identity and a
-node database with `NCP`, and you can log in to a remote OVMX node with
-outbound or inbound `SET HOST` (each side authenticating through the real
-LOGINOUT/SYSUAF path). You cannot yet move a file over DECnet, run
-task-to-task `$QIO` applications, or manage circuits/objects/lines through
-`NCP`.
+node database with `NCP`; log in to a remote OVMX node with outbound or inbound
+`SET HOST` (each side authenticating through the real LOGINOUT/SYSUAF path); and
+**receive** a file from a remote node into OVMX over an authenticated inbound
+FAL/DAP transfer. You cannot yet **initiate** a file transfer with DCL `COPY`
+over `NODE::` (it reports `%COPY-I-NETNOTWIRED`; the outbound bridge is rd
+vms-ea8), run task-to-task `$QIO` applications, or manage
+circuits/objects/lines through `NCP`.
 
 ## Clean-room provenance (Rule 8)
 

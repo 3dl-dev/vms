@@ -36,6 +36,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <termios.h>
 #include "starlet.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
@@ -520,6 +521,75 @@ static uint32_t qio_validate_and_classify(uint16_t chan, uint32_t func,
 }
 
 /*
+ * qio_terminal_setmode - IO$_SETMODE line discipline for a TERMINAL channel
+ * (vms-f54). THIS is the terminal driver's home for the substrate line
+ * discipline: a $ SET HOST CTERM client (src/vmsdecnet/engine/decnetd.c) issues
+ * $QIO IO$_SETMODE with the OVMX-defined P2 selector IO$K_TT_PASSALL to hand
+ * echo/editing to the REMOTE session, and IO$K_TT_NORMAL to restore it -- the
+ * caller never touches termios, only VMS I/O function codes. The termios call
+ * lives HERE, below the $QIO interface, exactly as VMS's terminal class driver
+ * realises pass-all mode below IO$_SETMODE.
+ *
+ * On a channel whose fd is not a real terminal (a pipe / redirect -- e.g. the
+ * automated end-to-end test feeds the client a pipe) this is a graceful no-op
+ * that still reports SS$_NORMAL: pass-all has no meaning off a tty and there is
+ * nothing to fake. A tcgetattr/tcsetattr failure on a real tty is reported as
+ * SS$_ABORT rather than a false success (INV-6).
+ */
+static uint32_t qio_terminal_setmode(int fd, uint32_t p2, void *iosb_ptr,
+                                     uint32_t efn, void (*astadr)(uint32_t),
+                                     uint32_t astprm) {
+    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    uint32_t st = SS$_NORMAL;
+
+    if (isatty(fd)) {
+        struct termios tio;
+        if (tcgetattr(fd, &tio) != 0) {
+            st = SS$_ABORT;
+        } else {
+            if (p2 == IO$K_TT_PASSALL) {
+                /* PASS-ALL: raw bytes both ways, no echo, no canonical line
+                 * editing, no signal keys, no CR/LF translation -- the remote
+                 * CTERM session owns all of that. Set the raw-mode flags
+                 * INLINE (the exact cfmakeraw(3) semantics): cfmakeraw is a BSD
+                 * libc convenience helper, NOT a DECC$SHR universal, so calling
+                 * it leaves an unresolved external when LINK.EXE links the
+                 * VMS-native graph that pulls in this executive TU (vms-f54). */
+                tio.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP |
+                                 INLCR | IGNCR | ICRNL | IXON);
+                tio.c_oflag &= ~OPOST;
+                tio.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+                tio.c_cflag &= ~(CSIZE | PARENB);
+                tio.c_cflag |= CS8;
+                tio.c_cc[VMIN] = 1;
+                tio.c_cc[VTIME] = 0;
+            } else {
+                /* IO$K_TT_NORMAL: the interactive line discipline (canonical
+                 * input, echo, signals, output post-processing). */
+                tio.c_iflag |= (ICRNL | IXON);
+                tio.c_oflag |= (OPOST | ONLCR);
+                tio.c_lflag |= (ICANON | ECHO | ECHOE | ECHOK | ISIG | IEXTEN);
+                tio.c_cc[VMIN] = 1;
+                tio.c_cc[VTIME] = 0;
+            }
+            if (tcsetattr(fd, TCSANOW, &tio) != 0)
+                st = SS$_ABORT;
+        }
+    }
+
+    if (iosb) {
+        iosb->iosb$w_status = (uint16_t)st;
+        iosb->iosb$w_bcnt = 0;
+        iosb->iosb$l_dev_depend = 0;
+    }
+    if (st == SS$_NORMAL) {
+        if (efn != 0) sys$setef(efn);
+        if (astadr) astadr(astprm);
+    }
+    return st;
+}
+
+/*
  * sys$qio - Queue I/O Request (asynchronous).
  *
  * Submits the I/O via io_uring and returns immediately. The IOSB is
@@ -537,6 +607,15 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
 
     if (vms$$chan_is_bg(chan))
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
+
+    /* IO$_SETMODE line discipline on a terminal channel (vms-f54): the terminal
+     * driver's home, dispatched before the read/write classifier (which rejects
+     * SETMODE as SS$_ILLIOFUNC). Off a real tty it is a graceful no-op. */
+    if ((func & IO$M_FCODE) == IO$_SETMODE) {
+        int fd = vms$$chan_to_fd(chan);
+        if (fd < 0) return SS$_IVCHAN;
+        return qio_terminal_setmode(fd, p2, iosb_ptr, efn, astadr, astprm);
+    }
 
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,
@@ -577,6 +656,13 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
 
     if (vms$$chan_is_bg(chan))
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
+
+    /* IO$_SETMODE line discipline on a terminal channel (vms-f54): see sys$qio. */
+    if ((func & IO$M_FCODE) == IO$_SETMODE) {
+        int fd = vms$$chan_to_fd(chan);
+        if (fd < 0) return SS$_IVCHAN;
+        return qio_terminal_setmode(fd, p2, iosb_ptr, efn, astadr, astprm);
+    }
 
     int fd, is_read;
     uint32_t status = qio_validate_and_classify(chan, func, iosb_ptr, p1,

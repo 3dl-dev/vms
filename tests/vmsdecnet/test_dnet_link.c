@@ -37,6 +37,7 @@
 
 #include "dnet_link.h"
 #include "dnet_engine.h"
+#include "dnet_nsp.h"
 
 static int failures = 0;
 static void check(int cond, const char *what)
@@ -259,12 +260,47 @@ static void test_engine_e2e(void)
     close(sv[0]); close(sv[1]);
 }
 
+/* rd vms-c23: dnet_engine_link_tick drives the CI retransmit at the engine
+ * boundary (what DECNETD's live loop calls). The retransmitted Connect Initiate
+ * must be the link FSM's own PDU wrapped into a real data frame -- never a
+ * template copy -- so decode it back and confirm it is a CI. */
+static void test_engine_link_tick(void)
+{
+    printf("[engine] link_tick retransmits the Connect Initiate on the CI timer\n");
+    const uint8_t hw[6] = { 0x02,0,0,0,0,0x0a };
+    struct dnet_engine e;
+    check(dnet_engine_init(&e, 1, 10, "OVMXL", "EWA0", NULL, hw, 0, 0, 0) == DNET_ENGINE_OK,
+          "engine init");
+    uint8_t frame[DNET_FRAME_MAX];
+    size_t flen = 0;
+    check(dnet_engine_link_open(&e, 1, 11, 0x2001, NULL, 0, 1459, 1, DNET_NSP_VER_41,
+                                frame, sizeof(frame), &flen, 0) == DNET_ENGINE_OK,
+          "link_open builds the initial CI at t=0");
+
+    int has_out = 1;
+    size_t tlen = 0;
+    check(dnet_engine_link_tick(&e, 1, frame, sizeof(frame), &tlen, &has_out) == DNET_ENGINE_OK
+          && has_out == 0, "no retransmit before the CI interval");
+    check(dnet_engine_link_tick(&e, DNET_LINK_CI_RETRANS_SECS, frame, sizeof(frame),
+                                &tlen, &has_out) == DNET_ENGINE_OK && has_out == 1,
+          "link_tick retransmits the CI at the interval");
+
+    const uint8_t *pdu = NULL;
+    size_t plen = 0;
+    check(dnet_engine_parse_data_frame(frame, tlen, NULL, NULL, &pdu, &plen) == DNET_ENGINE_OK,
+          "the retransmit is a well-formed long-data frame");
+    struct dnet_nsp_msg m;
+    check(dnet_nsp_decode(pdu, plen, &m, NULL) == DNET_NSP_OK && m.type == DNET_NSP_T_CI,
+          "the retransmitted PDU is a Connect Initiate (the FSM's own, not a template)");
+}
+
 int main(void)
 {
     printf("test_dnet_link: DECnet Phase IV NSP logical-link connection service\n");
     test_fsm();
     test_retransmit();
     test_engine_e2e();
+    test_engine_link_tick();
     if (failures == 0) { printf("test_dnet_link: ALL CHECKS PASSED\n"); return 0; }
     printf("test_dnet_link: %d CHECK(S) FAILED\n", failures);
     return 1;

@@ -284,6 +284,16 @@ int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
                            dnet_tick_t now);
 
 /*
+ * dnet_engine_link_tick - advance the active link's timers at time `now`
+ * (Connect Initiate retransmission and its give-up budget). If the FSM decides
+ * to (re)transmit, builds the frame into frame_out and sets *has_out = 1. The
+ * PDU is the FSM's own, never a template copy. No active link -> EINVAL.
+ */
+int dnet_engine_link_tick(struct dnet_engine *e, dnet_tick_t now,
+                          uint8_t *frame_out, size_t cap, size_t *len_out,
+                          int *has_out);
+
+/*
  * dnet_engine_link_rx - consume a received full NSP data frame at time `now`:
  * parse the routing header, decode the NSP PDU, and drive the embedded link
  * FSM. If the FSM produced a protocol reply (a data acknowledgement, or a

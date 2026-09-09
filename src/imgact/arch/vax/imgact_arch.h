@@ -57,6 +57,14 @@
  * error (VAX carry-set), matching the Linux backends' convention. */
 long syscall6(long n, long a, long b, long c, long d, long e, long f);
 
+/* NetBSD/vax mmap(2) primitive (rd vms-33b). Implemented in arch/vax/start.S
+ * because the syscall takes EIGHT words — { addr, len, prot, flags, fd, pad,
+ * off_lo, off_hi } — with a padding longword before the 64-bit off_t, which
+ * syscall6() cannot express. The shared sys_mmap() routes here on VAX. Returns
+ * the mapped address, or -errno on error (VAX carry-set). */
+void *imgact_vax_mmap(void *addr, unsigned long len, int prot, int flags,
+		      int fd, long off);
+
 /* --------------------------------------------------------------------------
  * elf32-vax dynamic relocation types (Elf32 R_TYPE). Values from the public
  * elf32-vax ABI (binutils bfd / NetBSD <sys/elf_machdep.h>), CONFIRMED with

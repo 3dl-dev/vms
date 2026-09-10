@@ -166,6 +166,16 @@ int main(void)
 
 done:
     erase_spec(BSPEC ";*");
+    /* Restore the executive-global mount table to the state we found it in:
+     * this suite $MOUNTed VDA0: (line ~116) and runs in a SHARED KE guest boot.
+     * A later co-tenant (test_syssvc_startup_service) does RUN/DETACHED "/bin/sh"
+     * and expects the default disk (SYS$SYSDEVICE -> VDA0:) UNMOUNTED so the
+     * legacy host-path resolver finds the initramfs busybox; a left-mounted VDA0:
+     * routes that lookup through the ACP, misses (busybox is not on ODS-2), and
+     * correctly SS$_NOSUCHFILE -> %DCL-E-IVIMAGE (INV-6, no host fallback). Peers
+     * that $MOUNT (test_syssvc_acp_mount/_channel) already $DISMOUNT — mirror them
+     * so this suite leaves no shared mount state behind. Best-effort. */
+    vms_kif_acp_dmount(ODS2_UNIT);
     free(buf);
 
     printf("=== test_syssvc_crtl_rms_bigwrite: %d passed, %d failed ===\n", pass, fail);

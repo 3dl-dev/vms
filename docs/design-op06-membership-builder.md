@@ -206,57 +206,73 @@ consecutive from 1025, so "next free slot" and "`sysid & 0x3ff`" produce the
 same number for every node in every capture we hold. That is the whole of
 vms-3a7c, and no capture in the repository can separate them.
 
-### cn3 looked like it should already settle it. Decoded — it does not
+### RESOLVED (rd vms-fc7): the rule is the ROUND-ROBIN CSV SLOT
 
-`cn3-achieved-20260905.pcap` admits **OVMXJ1, SCSSYSTEMID 1986**, which is
-gloriously non-consecutive: `1986 & 0x3ff = 962 = 0x3C2`, while the next free
-CSV slot is 3. If the coordinator's assignment for OVMXJ1 were visible in that
-capture the two rules would predict `0x00010003` vs `0x000103C2` and the
-question would be over. It was decoded. It is not visible, for three
-independent reasons:
+A first pass at cn3 looked for OVMXJ1's assigned CSID in the op-0x06 burst and
+did not find it (the burst that reached OVMXJ1 was composed before its
+admission completed, so its record was not in it yet). The answer is not in the
+burst — **it is in the transition-open NODEMAP**, where the bits *are* the CSV
+slots, and there it is unambiguous by causality inside a single capture:
 
-1. **There is no pre-join baseline.** cn3 contains **zero** cat-0x01 op-0x06
-   frames before OVMXJ1 first speaks (t+15.247 s). All 254 are VAX2 → OVMXJ1
-   and start at t+18.933 s *because of* the join. All three CSIDs
-   (`0x00010001`, `0x00010002`, `0x00010003`) first appear **within one
-   millisecond of each other** in the burst's opening frames — so "a third CSID
-   appears when the new member arrives" is not observable; every CSID appears
-   then.
+| epoch | frame | transition | nodemap `body[55]` | bits |
+|---|---|---|---|---|
+| 5 | 273 | VAX2 → VAX1, op-09 **ADD** | `0x0e` | {1, 2, **3**} |
+| 5 | 834 | VAX2 → OVMXJ1, op-09 **ADD** | `0x0e` | {1, 2, **3**} |
+| 6 | 11347 | VAX1 → VAX2, op-08 **REMOVE** | `0x06` | {1, 2} |
 
-2. **`0x00010003` is not OVMXJ1's, and the sibling capture proves it.**
-   `op06-join-20260903.pcap` has only **two** stations on the wire — 1025 and
-   1026, no third VAX at all — and its burst nonetheless asserts `0x00010003`
-   **×46** at the grounded form-B offset, the *identical* multiplicity cn3
-   shows. That record therefore belongs to a member of the coordinator's own
-   table which is **absent from the segment** (p. 7-25's retained CSB), and cn3
-   is re-asserting the same foreign record. The elimination argument ("three
-   stations, three CSIDs, so the third is the joiner's") fails on this.
+Three stations are ever on that segment: 1025 (VAX1), 1026 (VAX2) and 1986
+(OVMXJ1, first frame t+15.247 s, gone by epoch 6). **Bit 3 is present in
+exactly the transition that admits OVMXJ1 and absent in exactly the transition
+that removes it**, and no other station enters or leaves. So CSV slot 3 is
+OVMXJ1's.
 
-3. **A burst never carries the RECIPIENT's own CSID** — E30 restated from a
-   second angle, and visible directly in the pairing:
+OVMXJ1's SCSSYSTEMID is **1986**, and `1986 & 0x3ff = 962 (0x3C2)` — a bit index
+that is not expressible in the nodemap byte at all.
 
-   | burst | CSIDs at the grounded offsets | absent |
-   |---|---|---|
-   | VAX1 (1025) → VAX2 (1026) | `0x00010001` ×47, `0x00010003` ×46 | `0x00010002` — the recipient's own |
-   | VAX2 (1026) → OVMXJ1 (1986) | `0x00010001` ×47, `0x00010002` ×23, `0x00010003` ×46 | OVMXJ1's, whatever it is |
+> **The real VAX coordinator assigned the round-robin CSV slot (3), not
+> `SCSSYSTEMID & 0x3ff` (962). vms-3a7c is CLOSED: Option A is correct.**
 
-   So OVMXJ1's assigned CSID is **not in cn3 at all**, under either rule.
+**Independent corroboration** from `op06-join-20260903.pcap`, a different
+cluster incarnation with only 1025 and 1026 on the wire: its epoch-6 ADD open
+(frame 450) carries nodemap `0x0a` = {1, **3**}. Both bits must be real members
+— VAX1 coordinates (op-09/0a/81-0b/0c) and VAX2 is the barrier participant
+(12 × op-0b) — so one of `1025` / `1026` holds slot 3, which neither
+`1025 & 0x3ff = 1` nor `1026 & 0x3ff = 2` can produce. (p. 7-25's "a rejoining
+system gets a NEW CSID, never its old one back" is the natural explanation for
+the vacant slot 2.)
 
-The negative check is consequently inconclusive rather than confirmatory:
-`0x000103C2` occurs **0 times** in all 11,478 SCA frames of cn3 — but since the
-burst structurally omits the recipient's own CSID, that absence is exactly what
-**both** rules predict.
+### Two claims in the first draft of this note were WRONG — corrected here
 
-### The capture that does separate them — sharpened by the above
+1. ~~"`0x00010003` belongs to a system absent from the segment."~~ **False.** In
+   `op06-join` slot 3 is held by one of the two VAXes that ARE present. The
+   record is an ordinary member's, not a retained ghost.
+2. ~~"A burst never carries its recipient's own CSID."~~ **False**, and it was
+   the load-bearing step of the old §8 argument. `op06-join`'s burst
+   (VAX1 → VAX2) carries slot 3's record ×46, and slot 3 is one of those two
+   nodes — so the burst *does* carry the recipient's own record. The reason
+   cn3's burst lacks OVMXJ1's record is **temporal**: frames 245–833 precede the
+   op-09 (834) that admitted it.
 
-Admit a node whose `SCSSYSTEMID & 0x3ff` is **not** the next free CSV slot (e.g.
-SCSSYSTEMID 1030 into a cluster holding slots 1 and 2) — and **capture the
-coordinator's op-0x06 burst toward an ALREADY-PRESENT member, not toward the
-joiner.** Point 3 above is why: the burst sent to the joiner omits precisely the
-record being sought. In that member-to-member burst a new low word appears:
-`3` means round-robin (p. 7-25), `6` means self-derive. One run, one frame, and
-it closes vms-3a7c — and the same run grounds the {SCSSYSTEMID → CSID}
-association §8 needs.
+### What this DOES and does NOT license in code
+
+It settles what the COORDINATOR must assign — and OVMX's `coord_next_slot()`
+round-robin was already right, so **no coordinator change is needed**; the §5
+gate below can eventually be retired rather than widened.
+
+It also proves the **JOINER's self-derive is WRONG**:
+`join_learn_csid_from_membership()` computes
+`generation << 16 | (own SCSSYSTEMID & 0x3ff)`, which for OVMXJ1 is
+`0x000103C2` while the cluster assigned `0x00010003`. With a CSID whose low word
+is 962, `phase2_csb_in_nodemap()` finds slot 962 inexpressible, answers
+"unknown", and **OVMX can never select itself into the map** — which is exactly
+why OVMX's own executive could not have read MEMBER in the CN=3 run even while
+VAX1's `SHOW CLUSTER` counted it. That is a real, grounded defect.
+
+**It does NOT, however, tell the joiner HOW to learn its slot**, and that is the
+open design question: the nodemap names slots but not systems, so a joiner
+receiving `0x0e` cannot tell which of the three bits is its own without either a
+pre-transition map to diff against or a grounded {system → slot} association.
+**Escalated, not implemented.**
 
 ### The safety gate this note recommends (and the implementation uses)
 
@@ -386,26 +402,22 @@ Three candidate closures, for the record:
 | 2 | Attribute the form-A CSID to the sender only when its low word equals that sender's own `SCSSYSTEMID & 0x3ff` | Measurably better than #1 -- it attributes 24/24 correctly in `op06-join` and correctly REFUSES 24/24 in `cn3`, where attribution would have been wrong -- but it still decides attribution by assuming the vms-3a7c construction. Also **escalated, not implemented.** |
 | 3 | Ground the association from a real cluster | The clean answer, and a **lab item**: see below. |
 
-**The capture that closes it.** The membership record's `{SCSSYSTEMID,
-incarnation, CSID}` triple (book p. 7-39) still has no isolated offset. What is
-needed is a capture in which a real coordinator's op-0x06 burst can be
-correlated to *which system each record is about*: admit a node and diff the
-burst against the pre-admission one, so the record that APPEARS is known to
-belong to the new member.
+**SUPERSEDED IN PART (rd vms-fc7).** The paragraph that used to stand here
+proposed a lab capture and justified it with "a burst never carries its
+recipient's own CSID" — which the re-decode **refuted** (see §5). The gap
+itself is unchanged, but its shape is now much better understood:
 
-Two constraints the §5 decode of cn3 established the hard way, and which any
-such run must satisfy:
-
-* **capture the burst toward an ALREADY-PRESENT member, not toward the joiner**
-  -- a burst never carries its recipient's own CSID, so the burst to the new
-  node omits exactly the record being sought;
-* **capture a pre-admission baseline** -- cn3 has none (its op-0x06 traffic
-  begins only because of the join), which is why its three CSIDs all "first
-  appear" in the same millisecond and none of them can be attributed.
-
-Choose the new node's `SCSSYSTEMID & 0x3ff` NOT to equal the next free CSV slot
-and the same run also settles vms-3a7c (§5). **One lab run answers both
-questions.**
+* The **slot** assignment rule is settled: round-robin CSV slot (§5). What is
+  still missing is the *association* — which system holds which slot.
+* The **nodemap already names the slots** (`body[55]`, bits = CSV slots, and
+  §5 uses exactly that to settle vms-3a7c by causality). What it does not carry
+  is which system each bit is. A node that has watched a cluster since before an
+  admission can diff two nodemaps and learn the new member's slot; a node that
+  joins cold cannot.
+* So the honest closure is either (a) a grounded {system → slot} field, or
+  (b) a nodemap-diff rule for a node that really did observe the earlier map —
+  which is real state, not an assumption, but is a design question about when a
+  joiner may rely on it. **Escalated, not implemented.**
 
 ## 9. Scope this note does **not** claim
 
@@ -416,3 +428,90 @@ questions.**
   record still have **no builder** and are untouched.
 * The CSID assignment rule remains **provisional pending oracle (vms-3a7c)**,
   marked as such in the code.
+
+---
+
+## 10. What completes a VMS state-transition commit (rd vms-fc7)
+
+The question came from `cn3-achieved-20260905.md`'s honest note: OVMXJ1 became a
+counted MEMBER with only one `01/0b`/ack pair on the wire and no `01/0c` at all,
+so "whatever completed the transition did not require an on-wire op-0c". Two
+findings, one of which corrects that note.
+
+### 10a. The premise was scoped wrong — cn3 DOES contain a full 12-step barrier
+
+Whole-capture census of cn3: **`01/0b` ×13, `01/0c` ×12.** They belong to a
+*second* transition the note does not mention — the **epoch-6 class-0x03 REMOVE
+at t+1584.23 s**, VAX1 coordinating, VAX2 participating, after OVMXJ1 departed:
+
+```
+11349  VAX1->VAX2  01/0a  GO
+11350  VAX2->VAX1  01/0b  step 1     11351  VAX1->VAX2  81/0b   11352  VAX1->VAX2  01/0c  release 1
+11353  VAX2->VAX1  01/0b  step 2     11354  VAX1->VAX2  81/0b   11355  VAX1->VAX2  01/0c  release 2
+  ...  (step index in body[16:20] walks 1..12, no gaps)  ...
+11394  VAX2->VAX1  01/0b  step 12    11395  VAX1->VAX2  81/0b   11396  VAX1->VAX2  01/0c  release 12
+```
+
+`op06-join-20260903.pcap` shows the same walk for a class-0x02 **ADD** (frames
+450–1107): 12 × `01/0b`, 12 × `81/0b`, 12 × `01/0c`, steps 1..12.
+
+**So the 12-step 0b/ack/0c barrier is real VMS, for ADD and for REMOVE, and
+OVMX's E85 model of it is NOT an over-model.** The `12 × (M−1)` law holds in
+both: nodemap `{1,3}` → M=2 → 12 steps; nodemap `{1,2}` → M=2 → 12 steps.
+
+### 10b. The membership commit is Phase 2 at the GO, NOT op-0c #12
+
+The cn3 **epoch-5 ADD** genuinely did stall its barrier (nodemap `{1,2,3}` →
+M=3 → 24 `01/0b` expected; exactly **1** observed, from OVMXJ1, acked by VAX2 at
+frame 856, never released). VAX1 sent **no** `01/0b` for epoch 5 — and VAX1↔VAX2
+traffic is definitely in this capture, since the entire epoch-6 barrier between
+them is. The coordinator cannot release step N until every participant reports
+it, so the barrier stopped at step 1.
+
+**And the membership committed anyway.** VAX1 received the GO (frame 850,
+t+18.9821 s) and counted `CN_3` from then, sustained across every poll to
+t+600 s, and 26 minutes later ran a clean epoch-6 REMOVE. Nothing else passed
+between them for that epoch.
+
+That is p. 7-42 exactly: Phase 2 — nodemap into the CSBs, quorum, the count,
+the CLUSTER flag — runs **at the GO**, and the 12-step barrier is the
+lock-database rebuild synchronisation that *follows* the commit.
+
+**OVMX already models this correctly.** `barrier_h_go()`
+(`src/kernel-core/vms_cnxman_barrier_fsm.c`) calls `barrier_commit_phase2()`
+with the comment *"The count commits HERE, before step 1 goes out and before a
+single rebuild record is answered (p. 7-42)"*, and
+`phase2_commit_local_membership()` sets `cl->state = VMS_CLUSTER_MEMBER` there.
+So OVMX's `cl->state` does not wait for op-0c. What waits for op-0c #12 is the
+**join FSM's own promotion** (`join_h_transition_done`, gated on
+`cnxman_barrier_commits()`, which `barrier_finish()` moves only on a genuine
+release #12, E79) — a narrower thing than "am I a member", and a deliberate E79
+choice. Worth a decision, not a silent change.
+
+### 10c. Why the epoch-5 barrier stalled: AMBIGUOUS on the wire
+
+The pcap does not say why VAX1 stayed silent. What can be ruled out:
+
+* **Not the DLM rebuild records.** E85's hypothesis was that the barrier gates
+  on `cat-02 op-0d`. cn3 contains **zero** `02/0d` frames in the whole capture,
+  yet its epoch-6 barrier walked all 12 steps. Refuted.
+* **Not a capture blind spot.** VAX1↔VAX2 CM traffic is present throughout.
+
+What correlates across the three observed transitions is only this: the two that
+walked 12 steps each had exactly **one** participant and it was a real VAX; the
+one that stalled had **two** participants, one of them OVMX. That is n=1 for the
+failing case and is **not** sufficient to implicate OVMX.
+
+**The run that would settle it:** a 3-VAX ADD with no OVMX present. If the
+barrier walks 24 steps, OVMX's presence is implicated; if it also stops early,
+M≥3 ADDs simply behave differently from the M=2 case both captures show.
+
+### 10d. Verdict
+
+| question | answer |
+|---|---|
+| Does OVMX over-model op-0c #12? | **No.** Both captures show the full 12-step 0b/ack/0c walk, for ADD and REMOVE. |
+| Does OVMX under-model the commit? | **No.** OVMX commits Phase 2 at the GO, which is what cn3 shows the real cluster doing. |
+| Code fix warranted from this? | **No.** The barrier and Phase 2 models both match the wire. |
+| Doc correction warranted? | **Yes** — `cn3-achieved-20260905.md`'s "no op-0c ever appears" is corrected in place. |
+| Anything left open? | Why VAX1 skipped the epoch-5 barrier (needs the 3-VAX ADD run), and whether the join FSM's op-0c #12 promotion gate should move to the GO (an E79 decision, not a decode question). |

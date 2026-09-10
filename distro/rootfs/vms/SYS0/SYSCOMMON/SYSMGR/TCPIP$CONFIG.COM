@@ -52,8 +52,20 @@ $! access-mode qualifier -- passing /EXECUTIVE yielded %DCL-W-IVQUAL and the DEF
 $! silently did nothing (host/domain read back "(not configured)"). Adding
 $! /EXECUTIVE_MODE acceptance to DCL DEFINE is tracked separately; /SYSTEM is the
 $! correct OVMX spelling and achieves the executive-resident, node-shared intent.
+$! CONFIG_OK tracks whether every core step succeeded, so the closing message is
+$! HONEST (INV-6): the procedure must NOT print %TCPIP-S-CONFIGURED if a DEFINE or
+$! the interface SET failed (e.g., no executive -> SS$_NOSUCHDEV, or an unknown
+$! interface -> the SET is refused). Each risky step's $SEVERITY is captured into
+$! SEV in ONE assignment immediately after it (a symbol assignment resets $STATUS/
+$! $SEVERITY to success, so a later read would lose the real result) and tested
+$! off SEV. Severity 1 == success.
+$ CONFIG_OK = 1
 $ DEFINE/SYSTEM TCPIP$INET_HOST "''HOSTNAME'"
+$ SEV = $SEVERITY
+$ IF SEV .NE. 1 THEN CONFIG_OK = 0
 $ IF DOMAIN .NES. "" THEN DEFINE/SYSTEM TCPIP$INET_DOMAIN "''DOMAIN'"
+$ SEV = $SEVERITY
+$ IF DOMAIN .NES. "" .AND. SEV .NE. 1 THEN CONFIG_OK = 0
 $ SAY "%TCPIP-I-CORE, core environment set: host ''HOSTNAME', domain ''DOMAIN'"
 $!
 $! --- Interface address -------------------------------------------------------
@@ -68,6 +80,8 @@ $ IF NETMASK .EQS. "" .AND. P1 .EQS. "" THEN INQUIRE NETMASK "    Network mask"
 $!
 $ IF NETMASK .EQS. "" THEN TCPIP SET INTERFACE 'IFNAME' /HOST='IPADDR'
 $ IF NETMASK .NES. "" THEN TCPIP SET INTERFACE 'IFNAME' /HOST='IPADDR' /NETWORK_MASK='NETMASK'
+$ SEV = $SEVERITY
+$ IF SEV .NE. 1 THEN CONFIG_OK = 0
 $!
 $DO_GATEWAY:
 $! --- Optional default gateway ------------------------------------------------
@@ -84,8 +98,17 @@ $!
 $ SAY ""
 $ SAY "    Current TCP/IP core configuration:"
 $ TCPIP SHOW CONFIGURATION
+$ IF .NOT. CONFIG_OK THEN GOTO CONFIG_INCOMPLETE
 $ SAY "%TCPIP-S-CONFIGURED, TCP/IP Services core configuration complete"
 $ EXIT 1
+$!
+$CONFIG_INCOMPLETE:
+$! INV-6: a core step (a host/domain logical DEFINE or the interface SET) failed,
+$! so DO NOT claim success. The failing command already reported its specific error
+$! above; report the aggregate honestly and exit with an error severity rather than
+$! the false %TCPIP-S-CONFIGURED the procedure used to print unconditionally.
+$ SAY "%TCPIP-E-CFGINCOMPLETE, TCP/IP Services core configuration INCOMPLETE -- a step failed (see the error above); not claiming success"
+$ EXIT 2
 $!
 $NO_HOST:
 $ SAY "%TCPIP-I-NOCONFIG, no host name supplied -- nothing configured"

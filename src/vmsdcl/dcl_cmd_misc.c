@@ -1990,6 +1990,21 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
                            strerror(errno));
                 }
             }
+
+            /* Bring the interface UP (idempotent). An address without IFF_UP does
+             * not receive packets -- SE0 showed State=Down and inbound daytime got
+             * no reply (rd vms-21b) -- so SET INTERFACE must enable it, exactly as
+             * the config engine's tcpip_cfg_apply_iface_addr does
+             * (src/vmstcpip/mgmt/tcpip_config.h). Re-init ifr with just the name,
+             * read current flags, OR in IFF_UP|IFF_RUNNING, write them back. */
+            memset(&ifr, 0, sizeof(ifr));
+            strncpy(ifr.ifr_name, linux_if, IFNAMSIZ - 1);
+            if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+                ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
+                if (ioctl(sock, SIOCSIFFLAGS, &ifr) < 0)
+                    printf("%%TCPIP-W-IOERR, failed to bring interface up: %s\n",
+                           strerror(errno));
+            }
 #endif
 
             close(sock);

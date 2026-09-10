@@ -4025,40 +4025,62 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
     }
 store_target:;
 
-    /* vms-f59 — strong-over-weak override at SYMBOL granularity (root fix; retires
-     * the vms-430 section-base heuristic AND the bounded vms-b14 __malloc_allzerop
-     * exception). The alpha-dec-vms back end binds a same-TU reference to a WEAK
-     * definition as a section-relative reloc that never names the symbol
-     * (r->to_section set, r->sym empty), so evax_find_sym's strong preference
-     * cannot reach it. musl-alpha overrides two such weaks with mallocng's strong
-     * defs — __malloc_allzerop (WEAK at $LINK$ offset 0 in calloc.o/__libc_calloc.o)
-     * and __libc_malloc_impl (WEAK at $LINK$ offset +0x30 in lite_malloc.o); leaving
-     * either weak live splits the heap between mallocng and a dead allocator and
-     * crashes (vms-864; the small-alloc __malloc_donate crash on the CRTL->RMS
-     * file-op veneer image, vms-c5d).
+    /* vms-f59 — strong-over-weak override at TOWN (descriptor-extent) granularity
+     * (root fix; retires the vms-430 section-base heuristic AND the bounded vms-b14
+     * __malloc_allzerop exception). The alpha-dec-vms back end binds a same-TU
+     * reference to a WEAK definition as a section-relative reloc that never names
+     * the symbol (r->to_section set, r->sym empty), so evax_find_sym's strong
+     * preference cannot reach it. musl-alpha overrides two such weaks with
+     * mallocng's strong defs — __malloc_allzerop (WEAK at $LINK$ offset 0 in
+     * calloc.o/__libc_calloc.o) and __libc_malloc_impl (WEAK at $LINK$ offset +0x30
+     * in lite_malloc.o); leaving either weak live splits the heap between mallocng
+     * and a dead allocator (vms-864/vms-c5d: the split produces a NULL group-meta
+     * that faults decc$free's get_meta at DECC$SHR+0x1e354, and the small-alloc
+     * __malloc_donate crash on the file-op veneer image).
      *
-     * KEY: the reloc's NAMED target is base+addend = the referenced symbol's own
-     * placed address, NOT the section base at offset 0. Redirect at THAT exact
-     * address. evax_wredir_apply maps an overridden weak def's placed address to
-     * its strong def, so a reference to __malloc_allzerop OR __libc_malloc_impl (at
-     * ANY section offset) forwards to mallocng, while a DISTINCT strong sibling
-     * sharing the section — decc$_calloc64 / __libc_calloc at +0x18, __libc_malloc,
-     * the sole-def weak decc$_malloc64 — has an address that is not a weak->strong
-     * key and is left untouched. No section-base coincidence, no per-name exception,
-     * no .o alias metadata. The prior base-key redirect keyed on section offset 0:
-     * it over-dragged distinct siblings when the offset-0 symbol was an overridden
-     * weak (the vms-b14 a_crash, patched by a hardcoded name check) and SILENTLY
-     * MISSED __libc_malloc_impl (not at offset 0) — both fixed here without a
-     * discriminant. */
+     * The reloc names base+addend = a byte INSIDE some defined symbol's descriptor
+     * in this object's to_section. Resolve that owner — TOWN: the defined symbol
+     * whose value/code span contains the addend (greatest defined offset <= addend)
+     * — and if TOWN is an overridden weak, remap the reference onto the STRONG def
+     * PRESERVING the intra-descriptor offset (addend - town_off). That forwards BOTH
+     * a self-bind to the weak's entry AND a reference to a weak descriptor FIELD
+     * (base+8/+16 — a linkage/PDSC quad the mallocng group-setup rides) to the
+     * strong def. A DISTINCT sole-def sibling (decc$_calloc64 / __libc_calloc at a
+     * nonzero offset, __libc_malloc, the sole-def weak decc$_malloc64) is its own
+     * TOWN, not an overridden weak, and is left untouched.
+     *
+     * Why not the exact base+addend match (a rejected earlier form of this fix): it
+     * keyed evax_wredir_apply on base+addend directly, which matches only when the
+     * reference lands EXACTLY on the weak's placed base — so it dropped the interior
+     * FIELD references (base+8/+16) that the mallocng group-setup relies on, leaving
+     * a split allocator and re-crashing decc$free at DECC$SHR+0x1e354 (regressed the
+     * crtl_rms N=7 gate, vms-032). The TOWN extent covers the whole descriptor span.
+     * And why not the old base-key redirect: it keyed on section OFFSET 0, so it
+     * over-dragged distinct siblings when offset 0 was an overridden weak (the
+     * vms-b14 a_crash, patched by a hardcoded name check) and SILENTLY MISSED
+     * __libc_malloc_impl (not at offset 0). TOWN granularity fixes both with no
+     * per-name exception. */
     if (r->to_section >= 0) {
-        /* Section-relative self-bind: redirect the exact named target (base+addend).
-         * Shift S by the weak->strong delta so the store's S+addend lands on the
-         * strong def; a no-op (delta 0) when base+addend is not an overridden weak.
-         * (have_code is 0 for a section-relative target; code_S is unused here — a
-         * LINKAGE reloc always names a symbol and takes the branch below.) */
-        uint64_t tgt    = S + (uint64_t)r->addend;
-        uint64_t tgt_rt = evax_wredir_apply(redir, nredir, tgt);
-        S += (tgt_rt - tgt);
+        /* TOWN = the symbol whose descriptor span contains base+addend (greatest
+         * defined value/code offset <= addend in to_section). have_code is 0 for a
+         * section-relative target; code_S is unused here (a LINKAGE reloc always
+         * names a symbol and takes the else branch). */
+        const struct evax_symbol *town = NULL; uint64_t town_off = 0;
+        for (int s2 = 0; s2 < o->nsym; s2++) {
+            const struct evax_symbol *y = &o->sym[s2];
+            if (!y->defined) continue;
+            if (y->psindx == (uint32_t)r->to_section && y->value <= (uint64_t)r->addend &&
+                (!town || y->value >= town_off)) { town = y; town_off = y->value; }
+            if (y->is_proc && y->code_psindx == (uint32_t)r->to_section &&
+                y->code_value <= (uint64_t)r->addend &&
+                (!town || y->code_value >= town_off)) { town = y; town_off = y->code_value; }
+        }
+        if (town) {
+            uint64_t town_addr   = S + town_off;   /* TOWN's placed addr (S = sec_base[to_section]) */
+            uint64_t strong_addr = evax_wredir_apply(redir, nredir, town_addr);
+            if (strong_addr != town_addr)          /* TOWN is an overridden weak */
+                S += (strong_addr - town_addr);    /* store lands on strong + (addend - town_off) */
+        }
     } else {
         /* Symbol target: evax_find_sym already prefers a strong def, so S/code_S are
          * normally strong already; redirect the exact descriptor + code-entry

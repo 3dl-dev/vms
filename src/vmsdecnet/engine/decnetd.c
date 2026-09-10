@@ -1878,7 +1878,12 @@ static int run_fal_accept_test(void)
            " -> DAP/RMS transfer both directions (rd vms-8c2; oracle"
            " docs/oracle/vax-copy-fal-dap.*)\n");
     int pass = 0, fail = 0;
-#define FA_CHECK(c, msg) do { if (c) { pass++; } \
+/* Emit a labelled line on BOTH outcomes (the house style, matching CT_CHECK):
+ * the booted battery greps each assertion's PROPERTY message (a wrong password
+ * REFUSED, DISABLED refused, records BYTE-MATCH) as positive evidence the
+ * property was exercised, so a PASS must print its label too -- a fail-only
+ * print left those greps satisfiable only when the assertion FAILED (inverted). */
+#define FA_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
     else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
 
     /* 1) AUTH IS REAL (the security core): the same SYSUAF/Purdy path LOGINOUT

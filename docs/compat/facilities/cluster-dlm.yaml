@@ -35,7 +35,7 @@ last_reviewed: 2026-08-31
 items:
   - id: cluster-dlm$cross-node-lock
     kind: feature
-    status: verified
+    status: implemented
     authenticity: real
     vms: "Cross-node $ENQ grant / block-then-grant / blocking-AST delivered on the mastering node + real holder"
     evidence: src/kernel-core/vms_lock.c
@@ -50,13 +50,15 @@ items:
       decision. The BLKAST is now DELIVERED over SCS and fires a genuine user-mode
       AST on the remote holder's process (H6, was deferred); a cross-node $DEQ
       (vms_lock_dlm_xnode_deq, authorized by CSID) releases and grants the blocked
-      request (GETLKI flips NL->EX). Proven on real /dev/vms
-      (tests/qemu/test_syssvc_dlm_xnode.c x86_64 + Alpha LP64; the multi-node H5/H6
-      QEMU harnesses). No fake grants OR blocks — a queued request is a real lock on
-      the master's queue that releases only on a real $DEQ (INV-6).
+      request (GETLKI flips NL->EX). Exercised on real /dev/vms single-node with an
+      injected cross-node CSID (tests/qemu/test_syssvc_dlm_xnode.c x86_64 + Alpha
+      LP64); the two-node H5/H6 QEMU harnesses that proved the over-the-wire path
+      were retired in #1052 — multi-node runtime proof pending (vms-1ee). No fake
+      grants OR blocks — a queued request is a real lock on the master's queue that
+      releases only on a real $DEQ (INV-6).
   - id: cluster-dlm$async-reply-wire
     kind: feature
-    status: verified
+    status: implemented
     authenticity: real
     vms: "Async DLM replies (queued-reply + deferred GRANT) delivered over SCS; requester-side completion"
     evidence: src/kernel-core/vms_dlm_scs_fsm.c
@@ -72,19 +74,26 @@ items:
       is set ONLY from what the master sent over SCS; GETLKI reads the NL->EX flip
       back on the REQUESTER. This origin record is the requester-side wait-for
       state H11's distributed deadlock search reads (VMS_IOCTL_DLM_ENUM_WAITS).
-      Proven on a two-node live A<->B QEMU harness with real /dev/vms on both
-      (tests/qemu/run_dlm_harness_h5.sh: SCSD-I-DLMPEND, SCSD-I-DLMDEFER,
-      SCSD-I-DLMH5FLIP granted_mode=EX). No fabricated wire reply or grant (INV-6).
+      The requester-side receive is exercised single-node on real /dev/vms
+      (tests/qemu/test_syssvc_dlm_xnode.c, injected CSID); the former two-node A<->B
+      run_dlm_harness_h5.sh proof (SCSD-I-DLMPEND/DLMDEFER/DLMH5FLIP) was retired in
+      #1052 — multi-node wire proof pending (vms-1ee). No fabricated wire reply or
+      grant (INV-6).
   - id: cluster-dlm$remaster-lvb-deadlock
     kind: feature
-    status: verified
+    status: implemented
     authenticity: real
     vms: "LVB replication, dynamic remastering (directory + lock state), directory-ownership guard, distributed deadlock detection"
     evidence: src/kernel-core/vms_lock.c
-    verified_against: "tests/qemu/run_dlm_harness_h8.sh, _h9.sh (LVB write/read), _h10.sh (H10a directory remaster), _h10b.sh (H10b lock-state rebuild), _e84.sh (directory-ownership refusal), _ec75.sh (H11 distributed deadlock) — all multi-node real /dev/vms"
+    verified_against: "PARTIAL coverage only — host units tests/cluster/host/test_dlm_ldwv.c (LVB read + wait-for visibility, injected/fake master) + tests/cluster/host/test_dlm_requester.c; N-node simulator scenarios tests/cluster/sim/scenarios/dlm_directory.c (directory routing) + tests/cluster/sim/scenarios/dlm_requester.c (simulated peers); tests/cluster/host/test_codec_dlm.c (REBUILD/DLKSRCH frame codec). The multi-node real-/dev/vms proofs (run_dlm_harness_h8/_h9/_h10/_h10b/_e84/_ec75.sh — LVB write/read crossing, dynamic remaster, directory-ownership refusal, distributed deadlock) were RETIRED with the userspace SCSD daemon in the #1052 executive-resident pivot and have NO real-/dev/vms multi-node successor today — status downgraded verified->implemented pending re-established proof (vms-1ee)."
     notes: >
-      The former "remain absent" cluster of the DLM epic, now COMPLETE and each
-      part proven on a live multi-node /dev/vms rail. LVB REPLICATION both ways:
+      The former "remain absent" cluster of the DLM epic. The code implements each
+      part below and was originally proven on a live multi-node /dev/vms rail, but
+      those multi-node proofs (the run_dlm_harness_* QEMU harnesses referenced below)
+      were RETIRED in the #1052 executive-resident pivot with no real-/dev/vms
+      multi-node successor today — so this row is implemented, not verified
+      (re-establishment tracked in vms-1ee). The mechanism, still in the executive.
+      LVB REPLICATION both ways:
       the H8 write crossing (vms-d81/#923) and the H9 read crossing (vms-eeb/#925).
       DYNAMIC REMASTERING on graceful departure: the directory INGRESS re-resolves
       a departed node's resources onto a survivor (H10a, vms-2bf/#927,
@@ -111,7 +120,7 @@ items:
       (vms-d1f, post-1.0).
   - id: cluster-dlm$scs-transport
     kind: feature
-    status: verified
+    status: implemented
     authenticity: real
     vms: "DLM SYSAP SCS connection + lock-request message class (ENQ/GRANT/DEQ/BLKAST/REBUILD/DLKSRCH) between cluster nodes"
     evidence: src/kernel-core/vms_cluster_codec_dlm.c
@@ -121,8 +130,9 @@ items:
       application message (MTYPE 10) with its body at SCA content offset 58 (the
       scs_mscp.c nesting). The transport is real and the receive handler GRANTS,
       QUEUES, delivers BLKAST, rebuilds on remaster, and runs the deadlock search —
-      the full ENQ-class op set is handled on a real /dev/vms executive across every
-      DLM QEMU harness (H0..H11).
+      the full ENQ-class op set is handled on a real /dev/vms executive (single-node
+      dispatch, tests/qemu/test_syssvc_dlm_xnode.c); the H0..H11 multi-node QEMU
+      harnesses were retired in #1052 with no multi-node successor (vms-1ee).
     wire_format:
       provenance: >
         TWO provenance classes, kept distinct (Rule 8). (A) SEMANTIC field

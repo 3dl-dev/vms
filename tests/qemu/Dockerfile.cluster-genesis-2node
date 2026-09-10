@@ -1,0 +1,97 @@
+# Dockerfile.cluster-genesis-2node - the hermetic 2-node OVMX cluster GENESIS
+# rig (rd vms-f6b). Builds everything the runtime proof needs and bakes the
+# runner as the entrypoint, so the whole rig is ONE image that can be scheduled
+# anywhere a /dev/kvm is available (it runs the two guests inside its own
+# container netns; no bridge, no NET_ADMIN, no NET_RAW).
+#
+# WHAT THE RIG PROVES (and what it does not). It boots TWO minimal Linux guests,
+# each of which insmods the REAL executive (vms.ko) and issues STARTUP.EXE's own
+# two cluster ioctls -- VMS_IOCTL_SYSGEN_LOAD then VMS_IOCTL_CLUSTER_START. Node
+# A is configured VOTES=1 EXPECTED_VOTES=1 VAXCLUSTER=2, so it satisfies quorum
+# by its own votes and FOUNDS generation 1 (cnxman_try_genesis). Node B is
+# configured VOTES=0 VAXCLUSTER=2, so it can never found and must join what it
+# discovers. Both nodes' membership is then READ BACK out of the executive
+# through three independent projections and printed on ttyS1 (INV-6: the rig
+# asserts nothing about membership; it prints what the executive holds).
+#
+# There is NO userspace SCS daemon in this image. The wire is the executive's:
+# CLUSTER_START opens the LAN port inside vms.ko (exec_lan_open) and every
+# 0x6007 frame on the segment is built by the executive. The only userspace
+# programs in the guest are `cluster_node` (issues ioctls, reads state back) and
+# `sca_l2probe` in RECEIVE-ONLY mode (a passive pcap, never a transmitter).
+#
+# Usage:
+#   docker build -f tests/qemu/Dockerfile.cluster-genesis-2node -t ovmx-genesis-rig .
+#   docker run --rm --device /dev/kvm ovmx-genesis-rig            # the CN=2 proof
+#   docker run --rm --device /dev/kvm -e RIG_NEGCTL=1 ovmx-genesis-rig  # teeth
+# Exit 0 = the asserted outcome held, 1 = it did not.
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
+    apt-get install -y --no-install-recommends \
+        make gcc libc6-dev kmod \
+        linux-headers-generic \
+        linux-image-virtual \
+        busybox-static \
+        cpio \
+        musl-tools linux-libc-dev \
+        "$QEMU_PKG" \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && echo "$KVER" > /tmp/kver && \
+    echo "Kernel version: $KVER" && \
+    if [ ! -e /boot/vmlinuz ]; then ln -s vmlinuz-${KVER} /boot/vmlinuz; fi
+
+# ---- the executive ----------------------------------------------------------
+COPY src/kernel-core/ /src/kernel-core/
+COPY src/kernel/ /src/kernel/
+COPY src/vmsfs/include/ /src/vmsfs/include/
+COPY src/vmsfs/ods2/ /src/vmsfs/ods2/
+RUN KVER=$(cat /tmp/kver) && \
+    cd /src/kernel && \
+    make KDIR=/lib/modules/${KVER}/build 2>&1 && \
+    ls -la /src/kernel/vms.ko && \
+    modinfo /src/kernel/vms.ko | head -3
+
+# ---- the guest-side programs (static musl: the initramfs has no libc) --------
+# musl ships no UAPI tree of its own; point it at the system one (the same
+# symlink set every OVMX static-musl build in this repo uses).
+RUN MUSL_INC=$(echo /usr/include/*-linux-musl) && \
+    ARCH_INC=$(echo /usr/include/*-linux-gnu) && \
+    ln -s /usr/include/linux "$MUSL_INC/linux" && \
+    ln -s /usr/include/asm-generic "$MUSL_INC/asm-generic" && \
+    ln -s "$ARCH_INC/asm" "$MUSL_INC/asm"
+
+COPY tests/qemu/cluster_node.c /src/cluster_node.c
+COPY tests/qemu/sca_l2probe.c /src/sca_l2probe.c
+RUN musl-gcc -static -O2 -Wall -Wextra -Werror -I/src/kernel \
+        /src/cluster_node.c -o /src/cluster_node && \
+    musl-gcc -static -O2 -Wall -Wextra /src/sca_l2probe.c -o /src/sca_l2probe && \
+    for f in /src/cluster_node /src/sca_l2probe; do \
+        readelf -d "$f" 2>/dev/null | grep -q NEEDED && \
+            { echo "FATAL: $f is not static"; exit 1; } || true; \
+    done
+
+# ---- ONE symmetric initramfs (the node identity rides the kernel cmdline) ----
+COPY tests/qemu/init_cluster_genesis.sh /src/init_cluster_genesis.sh
+RUN mkdir -p /initramfs/bin /initramfs/lib/modules \
+             /initramfs/dev /initramfs/proc /initramfs/sys /initramfs/tmp && \
+    cp /bin/busybox /initramfs/bin/busybox && \
+    ln -s busybox /initramfs/bin/sh && \
+    cp /src/kernel/vms.ko /initramfs/lib/modules/vms.ko && \
+    cp /src/cluster_node /initramfs/bin/cluster_node && \
+    cp /src/sca_l2probe /initramfs/bin/sca_l2probe && \
+    chmod +x /initramfs/bin/cluster_node /initramfs/bin/sca_l2probe && \
+    cp /src/init_cluster_genesis.sh /initramfs/init && \
+    chmod +x /initramfs/init && \
+    cd /initramfs && find . | cpio -o -H newc 2>/dev/null | gzip > /initramfs.cpio.gz && \
+    echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
+
+COPY tests/qemu/run_cluster_genesis_2node.sh /run_cluster_genesis_2node.sh
+RUN chmod +x /run_cluster_genesis_2node.sh
+
+CMD ["/run_cluster_genesis_2node.sh"]

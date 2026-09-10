@@ -1,0 +1,36 @@
+# 2-node cluster GENESIS rig -- NEGATIVE CONTROL run (VOTES=0 on BOTH nodes).
+# rd vms-f6b, same image (ovmx-genesis-rig:9), same k3s-worker pod, one
+# SYSGEN parameter changed. No node may found; nothing is granted; so no
+# node may hold a CSID or report MEMBER. This is what gives the proof run's
+# founder + CSID 0x00010001 its teeth.
+
+=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ===
+mode=NEGATIVE-CONTROL
+accel=kvm -cpu host group=2026 recnx=8s stagger=30s
+node A: OVMXA/1025 VOTES=0 EXPECTED_VOTES=1 VAXCLUSTER=2
+node B: OVMXB/1026 VOTES=0          VAXCLUSTER=2
+
+--- powering on node A (it must hear nobody for 8s, then found) ---
+--- powering on node B (it must join what A formed) ---
+
+=== node A: what its executive held (ttyS1) ===
+RIG-A-REGISTER status=1 vms_pid=0x10000001
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-A-START status=1 port_up=1 state=2
+RIG-A-FINAL role=none member=0 state=JOINING csid=- cn=0 quorum=0 cevotes=0 epoch=0 projections=agree
+RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1026 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-B-START status=1 port_up=1 state=2
+RIG-B-FINAL role=none member=0 state=JOINING csid=- cn=0 quorum=0 cevotes=0 epoch=0 projections=agree
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=none member=0 cn=0 csid=-
+  node B: role=none member=0 cn=0 csid=-
+
+==========================================
+  NEGATIVE CONTROL HELD: with VOTES=0 on both nodes, neither
+  founded, neither reached MEMBER and neither holds a CSID.
+  The founder + CSID the proof run reports are therefore
+  measurements of real executive state, not constants.
+==========================================

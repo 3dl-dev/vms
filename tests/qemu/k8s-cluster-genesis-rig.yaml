@@ -1,0 +1,56 @@
+# k8s-cluster-genesis-rig.yaml - how the 2-node cluster GENESIS rig (rd vms-f6b)
+# is actually RUN. The rig image carries both guests and the runner, so the pod
+# is one container: the two QEMU guests live inside its netns and talk over a
+# loopback socket-mcast netdev. It therefore needs NO network privilege at all
+# -- the only host resource it wants is /dev/kvm (without it QEMU falls back to
+# TCG and the run takes minutes instead of seconds).
+#
+# It is pinned to k3s-worker because that is the node with /dev/kvm. It must
+# NEVER be scheduled onto, or interfere with, the vaxlab-* pods (real OpenVMS
+# VAX oracle nodes) sharing that worker: this rig creates no bridge, no tap and
+# no host network state, and its 0x6007 traffic never leaves the pod netns.
+#
+#   kubectl -n ovmx-lab apply -f tests/qemu/k8s-cluster-genesis-rig.yaml
+#   kubectl -n ovmx-lab logs -f ovmx-genesis-rig
+#   kubectl -n ovmx-lab delete pod ovmx-genesis-rig
+#
+# Set RIG_NEGCTL=1 for the negative control (VOTES=0 on both nodes: no node may
+# found, so CN=2 must NOT be reached).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ovmx-genesis-rig
+  labels:
+    app: ovmx-genesis-rig
+spec:
+  nodeName: k3s-worker
+  restartPolicy: Never
+  containers:
+    - name: rig
+      image: 192.168.2.43:30500/ovmx-genesis-rig:9
+      imagePullPolicy: Always
+      env:
+        - name: RIG_NEGCTL
+          value: "0"
+        - name: OUT_DIR
+          value: /lab/genesis-rig-out
+      securityContext:
+        privileged: true            # /dev/kvm access; no network capability used
+      resources:
+        # Deliberately small REQUESTS: this worker is shared with the VAX
+        # lab and with CI, and the rig is timer-bound (the connection
+        # manager beats once a second), not CPU-bound. The limits let the
+        # two KVM guests burst when the node is idle.
+        requests: { cpu: "500m", memory: "2Gi" }
+        limits:   { cpu: "4", memory: "6Gi" }
+      volumeMounts:
+        - { name: kvm, mountPath: /dev/kvm }
+        - { name: lab, mountPath: /lab }
+  volumes:
+    - name: kvm
+      hostPath: { path: /dev/kvm, type: CharDevice }
+    # The shared lab PVC, so the guests' consoles, ttyS1 markers and pcaps
+    # OUTLIVE the pod. Everything this rig writes stays under its own
+    # genesis-rig-out/ subdirectory; it touches nothing the VAX lab owns.
+    - name: lab
+      persistentVolumeClaim: { claimName: vax-lab-pvc }

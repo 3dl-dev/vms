@@ -572,7 +572,6 @@ RUN if [ "$OVMX_TEST_ENABLE_SSH" = "1" ]; then \
             'PasswordAuthentication yes' \
             'PubkeyAuthentication yes' \
             'PermitRootLogin yes' \
-            'UsePAM no' \
             'KbdInteractiveAuthentication no' \
             'StrictModes no' \
             'LogLevel VERBOSE' \
@@ -1274,7 +1273,12 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
           [ -f /initramfs-slim/ovmxsshsrv/etc/hostkey ] && \
           [ -f /initramfs-slim/ovmxsshsrv/etc/sshd_config ]; } \
             || { echo "FATAL: SSH privsep tree incomplete on initramfs"; exit 1; } && \
-        echo "OK: SSH privsep tree staged on initramfs (/ovmxsshsrv: siblings + host key + sshd_config)"; \
+        printf '%s\n' \
+            'root:x:0:0:root:/:/bin/false' \
+            'sshd:x:74:74:sshd privsep:/ovmxsshsrv/empty:/bin/false' \
+            > /initramfs-slim/etc/passwd && \
+        printf '%s\n' 'root:x:0:' 'sshd:x:74:' > /initramfs-slim/etc/group && \
+        echo "OK: SSH privsep tree + /etc/passwd sshd privsep user staged on initramfs (/ovmxsshsrv: siblings + host key + sshd_config)"; \
     else echo "OVMX_TEST_ENABLE_SSH=0 -- no SSH tree on initramfs (shipped)"; fi && \
     find /initramfs-slim -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
     cd /initramfs-slim && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx.cpio.gz && \

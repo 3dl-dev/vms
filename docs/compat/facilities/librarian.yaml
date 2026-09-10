@@ -14,9 +14,16 @@ summary: >
   DCL LIBRARY command drives the same .OLB path plus OVMX text/help libraries
   (.TLB/.HLB, an OVMX "LBRO" format, Rule 8). Proven end-to-end (build .OLB →
   link → activate → run) and byte-identical-twice (reproducible archives).
-last_reviewed: 2026-08-31
+  LIBRARIAN.EXE now ALSO runs AS an OVMX-native image (like LINK/TCC/DCL): built
+  by mk_librarian.sh (-DOVMX_OLB_RMS_IO) into a PT_INTERP=IMGACT.EXE image, it is
+  IMGACT-activated and /CREATEs an .OLB reading each .OBJ and writing the .OLB
+  through RMS (sys$open/$get, sys$create/$put), proven byte-exact by
+  run_librarian_native.sh — the S3-spine step toward MMK building a component
+  inside OVMX (vms-1df).
+last_reviewed: 2026-09-10
 items:
   - {id: librarian$olb-utility, kind: utility, status: implemented, authenticity: real, vms: "LIBRARIAN.EXE — build/maintain .OLB object libraries (/CREATE /INSERT /DELETE /LIST /EXTRACT)", evidence: "src/vmslink/librarian.c", notes: "337-line SYS$SYSTEM image; operations real. Proven end-to-end by src/imgact/test/run_olb_native.sh (LIBRARIAN → LINK selective pull → IMGACT activate → runs) and the ctest toolchain-olb-roundtrip; byte-identical determinism by tests/toolchain/run_mmk_component_build.sh. .OLB container is Rule-8 (see olb-container item)."}
+  - {id: librarian$native-image, kind: utility, status: implemented, authenticity: real, vms: "LIBRARIAN.EXE runs AS a native OVMX image (IMGACT-activated), doing .OBJ→.OLB create through RMS", evidence: "src/imgact/test/run_librarian_native.sh", notes: "vms-1c2: librarian.c + ovmx_olb.h carry #ifdef OVMX_OLB_RMS_IO seams (read_obj, olb__slurp, olb_write buffer-then-write, cmd_extract) that reuse LINK.EXE's whole-file RMS shim (ovmx_link_rms_io.c). mk_librarian.sh links a PT_INTERP=IMGACT image; run_librarian_native.sh (CI: librarian-native-x86_64) IMGACT-activates it, /CREATEs an .OLB reading .OBJs + writing the .OLB via sys$open/$get + sys$create/$put (byte-exact trace cross-check), a stock `ar t` + native /LIST + a bootstrap LINK consume it. Promotes LIBRARIAN to a native OVMX image like LINK/TCC/DCL (S3 spine → vms-1df)."}
   - {id: librarian$dcl-library-cmd, kind: command, status: implemented, authenticity: real, vms: "DCL LIBRARY command — /CREATE /INSERT /EXTRACT /LIST (/DELETE for .OLB) across .OLB/.TLB/.HLB", evidence: "src/vmsdcl/dcl_library.c", notes: "Shares the .OLB reader/writer with LIBRARIAN.EXE via ovmx_olb.h. HELP reads the compiled .HLB directly (dcl_help.c)."}
   - {id: librarian$olb-container, kind: struct, status: implemented, authenticity: advisory, vms: ".OLB object-library on-disk container", evidence: "src/vmslink/include/ovmx_olb.h", notes: "Standard `ar` archive of ELF .OBJ members — an OVMX design choice (Rule 8), NOT the unpublished VMS LBR byte layout. Inspectable by stock `ar t` (used as an independent test oracle); consumed by LINK.EXE's own ar reader."}
   - {id: librarian$text-help-container, kind: struct, status: implemented, authenticity: advisory, vms: ".TLB text / .HLB help library on-disk format", evidence: "src/vmsdcl/include/dcl/hlb.h", notes: "OVMX 'LBRO' key-indexed binary format (magic/type/module table) — an OVMX design choice (Rule 8), not VMS binary-compatible. Real create/insert/extract/list + HELP consumption."}

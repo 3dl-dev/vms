@@ -11,18 +11,24 @@ summary: >
   daemon that previously carried the join, the quorum arithmetic and a
   membership block it wrote into the executive by ioctl — the operator's
   2026-09-02 clustering reset ruled that stack a non-portable strawman.
-  READ THE STATUSES LITERALLY. What is verified is the MODEL and the LOCAL
-  machinery: the CLUB/CSB data model, the ten-state connectivity ladder, the
-  join drive, the 12-step transition barrier, the coordinator, the reconnect
-  loop and the quorum arithmetic — each proven at R1 (host unit) and R2 (the
-  N-node simulator), with the readback ioctls proven at R3/R4 against a real
-  /dev/vms. What is NOT verified is the DISTRIBUTED outcome: this node has
-  never reached MEMBER, because reaching it requires learning its own CSID
-  from a real op-0x06 membership record whose layout is not yet pinned
-  (integration note E30, a lab capture). Every row below says which of the two
-  it is. A node that cannot learn its CSID stays NEW and issues no DLM traffic,
-  which is the honest state, not a defect being hidden.
-last_reviewed: 2026-09-03
+  READ THE STATUSES LITERALLY. Verified is the MODEL and the LOCAL machinery
+  (CLUB/CSB, the ten-state ladder, join drive, 12-step barrier, coordinator,
+  reconnect, quorum arithmetic) at R1/R2 with the readback ioctls at R3/R4 —
+  AND, as of the symmetric-CN=2 proof, the DISTRIBUTED outcome for OVMX^n: two
+  real /dev/vms executives form a cluster (one FOUNDS from nothing on quorum by
+  its own votes, the other JOINS and reaches MEMBER), CN=2 read from real
+  executive state on both. The CSID mechanism that gated this is now PINNED on a
+  real-VMS capture (integration note E30, resolved): the coordinator assigns a
+  round-robin, monotonically-advancing CSV slot (NOT sysid&0x3ff), sent per
+  member in a cat-0x01 op-0x05 membership record; the joiner ADOPTS its own
+  assigned CSID, never self-derives. What is STILL NOT verified: (a) a real-VAX
+  mixed cluster — OVMX joining or admitting a genuine OpenVMS node
+  (connection-manager$real-vax-join, absent — this proof is OVMX^n only); (b)
+  the cross-node DLM (the cluster-dlm rows stay implemented until vms-1ee's
+  multi-node /dev/vms proof lands); (c) quorum on a joiner (it counts members
+  but has not yet learned peer VOTES via op-01 PARAMS). Every row below says
+  which it is.
+last_reviewed: 2026-09-10
 items:
   - id: connection-manager$club-csb-model
     kind: feature
@@ -56,20 +62,70 @@ items:
       hand-off into the barrier. Reached from the boot path: FC-P3.9's
       VMS_IOCTL_CLUSTER_START starts the connection manager and drives the join
       when a real system has been discovered to join THROUGH.
-      IMPLEMENTED, NOT VERIFIED. The join reaches the barrier, completes the
-      dialogue, AND now reaches MEMBER at R1: a real-VAX capture
-      (op06-join-20260903.pcap) grounded the CSID mechanism (E30, resolved) --
-      op-0x06 carries the EXISTING member's record, not the joiner's, and a node's
-      CSID is deterministic: `CSID = (cluster_generation << 16) | (SCSSYSTEMID &
-      0x3ff)`, the generation READ FROM THE WIRE (the coordinator's CSID high-word,
-      op-06 b[24]), never fabricated. The join computes its own CSID this way and
-      learns it; a node that has not yet seen a coordinator CSID stays NEW (honest).
-      PROVEN AT R1/R2: tests/cluster/host/test_cnxman_join.c (capture-exact CSID
-      vectors both op-06 sub-forms + a synthetic generation to prove it is not
-      hardcoded) per transition; the simulator replays the reference joiner.
-      R4/R5 (a booted node counted CN=3 by a real member on the wire) LAB-DEFERRED,
-      and still needs E31 (the VMS$VAXcluster connect-data identity, operator ruling)
-      so a real VAX does not REJECT the join.
+      The join reaches the barrier, completes the dialogue, AND reaches MEMBER on
+      an OVMX^n cluster (see connection-manager$membership, R4-verified). The CSID
+      mechanism is now GROUNDED on a real-VMS own-lab capture (E30, resolved) and
+      CORRECTS an earlier misread: the coordinator ASSIGNS the joiner a
+      round-robin, monotonically-advancing CSV slot (a node's SCSSYSTEMID 1030 was
+      assigned slot 4, then slot 5 on rejoin — NEVER `SCSSYSTEMID & 0x3ff` = 6),
+      carried per member in a cat-0x01 op-0x05 membership record (sysid at
+      body[20:24], assigned CSID at body[36:40], CSV index at body[40:42]). The
+      joiner ADOPTS the CSID from the record naming its own SCSSYSTEMID and
+      re-adopts every admission; it does NOT self-derive `generation<<16 |
+      sysid&0x3ff` (that computed an inexpressible slot and could never
+      self-select — the deleted bug). op-0x06 is the lock-rebuild push to the
+      joiner, not the membership record.
+      PROVEN AT R1/R2: tests/cluster/host/test_cnxman_join.c (op-05 adopt, the
+      four joiner cases, slot-not-derivable) per transition; the simulator replays
+      the reference joiner. R4 for OVMX^n: the two-node genesis rig
+      (tests/qemu/run_cluster_genesis_2node.sh). Joining a REAL VAX to MEMBER stays
+      lab-deferred (connection-manager$real-vax-join, absent) and still needs E31
+      (the VMS$VAXcluster connect-data identity) so a real VAX does not REJECT it.
+
+  - id: connection-manager$genesis
+    kind: feature
+    status: verified
+    authenticity: real
+    vms: "A node forms an OpenVMS Cluster from nothing when it has quorum by its own votes"
+    evidence: src/kernel-core/vms_cnxman_coord_fsm.c
+    verified_against: "tests/qemu/run_cluster_genesis_2node.sh (real /dev/vms, KVM) — the founder reaches MEMBER, csid=(1<<16)|slot1, CN counted from real executive state; + host tests/cluster/host/test_cnxman_coord.c (the votes gate) and test_cnxman_genesis_negctl.c (VOTES=0 never mints)"
+    notes: >
+      The authentic VMS formation algorithm (OpenVMS Cluster Systems ch. 7), NOT
+      a fabricated default: a booting VAXCLUSTER=2 node founds generation-1 as
+      coordinator IFF quorum is met by its OWN configured votes
+      (votes>0 && votes>=(max{EXPECTED_VOTES,votes}+2)/2), minting
+      CSID=(1<<16)|(SCSSYSTEMID&0x3ff) and driving the SAME learn-CSID →
+      coordinator → phase2 machinery a real-VAX admission runs (no fork). A
+      VOTES=0 or sub-quorum node NEVER founds — it stays JOINING/STANDALONE
+      honestly (the negctl proves it). #1052 removed the old unconditional
+      CSID=1 phantom-cluster default under INV-6; this is the legitimate
+      replacement. PROVEN AT RUNTIME on two real /dev/vms executives (node A
+      founds → MEMBER, three agreeing executive projections; negctl held).
+      One shared path with OVMX↔VAX join, not a separate platform. rd vms-3c3.
+
+  - id: connection-manager$membership
+    kind: feature
+    status: verified
+    authenticity: real
+    vms: "A coordinator ADMITS a joiner to full membership; the joiner adopts its assigned CSID and both count the cluster"
+    evidence: src/kernel-core/vms_cnxman_coord_fsm.c
+    verified_against: "tests/qemu/run_cluster_genesis_2node.sh — SYMMETRIC CN=2 on two real /dev/vms executives (founder + joiner both MEMBER, node B counts 2), + the noderive control (sysid 1030 -> the executive ASSIGNS csid slot 2, a value the joiner cannot compute -> adopted not derived) + negctl; host tests/cluster/host/test_cnxman_coord.c (op-05 full-set/delta from CSB state) + test_cnxman_join.c (adopt/re-adopt) + test_codec_cm.c (op-05 round-trip)"
+    notes: >
+      The admission half of OVMX-as-founding-member. The coordinator sends the
+      joiner the full member set (delta to present members) as cat-0x01 op-0x05
+      records, EXECUTIVE-BACKED — every field read off the CSB the record is about
+      (the sysid the port learned, the CSID coord_next_slot actually stamped, that
+      member's real incarnation), never frame->frame; the uninterpreted
+      body[42:132] is emitted zero+counted, never another impl's bytes. The joiner
+      matches its own SCSSYSTEMID and ADOPTS the assigned CSID/slot (self-derive
+      deleted), re-adopting every admission; records about OTHER members are filed
+      on their CSBs — which is what lets the joiner count the cluster. The join
+      self-promotes at the GO / phase-2 commit (p.7-42), NOT waiting for an
+      op-0c#12 a real VAX need not send (rd vms-9c99). PROVEN AT RUNTIME:
+      symmetric CN=2, both executives MEMBER, node B counts 2, real state both
+      nodes. NOT claimed here: quorum on the joiner (it counts members but has not
+      learned peer VOTES via op-01 PARAMS — a follow-on); the cross-node DLM (the
+      cluster-dlm rows stay implemented until vms-1ee). rd vms-77c / vms-f6b.
 
   - id: connection-manager$peer-discovery
     kind: feature
@@ -184,8 +240,12 @@ items:
       DISCOVERED renders "NEW" with csid 0 -- discovered, not admitted (E30). A
       row becomes "MEMBER" only when the p. 7-23 MEMBER flag is set, which only a
       real membership record does.
-      NOT claimed: that any row has ever read MEMBER on a booted node. It has
-      not, and cannot until E30's op-06 layout is pinned in the lab.
+      A row DOES read MEMBER now, from real executive state: the symmetric-CN=2
+      proof (connection-manager$membership) reaches MEMBER on two real /dev/vms
+      executives, E30 resolved (the op-05 membership record + round-robin CSV
+      slot pinned on a real-VMS capture). Still only OVMX^n — no row has read
+      MEMBER against a genuine OpenVMS node (connection-manager$real-vax-join,
+      absent).
 
   - id: connection-manager$boot-join
     kind: feature
@@ -208,8 +268,13 @@ items:
       node is never announced as a MEMBER.
       PROVEN AT R1 (test_cnxman_boot.c pins the step ordering and the state
       rendering; test_cluster_boot_gate.c the VAXCLUSTER gate) and R4 negctl
-      (tests/qemu/test_cluster_start_negctl.sh). NOT claimed: a booted node
-      reaching MEMBER -- see connection-manager$join.
+      (tests/qemu/test_cluster_start_negctl.sh). The CLUSTER_START executive path
+      this boot drives DOES now reach MEMBER on an OVMX^n cluster
+      (connection-manager$genesis/$membership, R4-verified on real /dev/vms). What
+      this row does not separately assert is the FULL STARTUP-distro-boot-to-MEMBER
+      (the CN=2 proof loads the same executive via insmod + CLUSTER_START, the
+      light path), nor MEMBER against a real VAX (connection-manager$real-vax-join,
+      absent).
 
   - id: connection-manager$setcluevt
     kind: feature

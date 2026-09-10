@@ -1859,8 +1859,8 @@ static void join_learn_csid_from_membership(struct cnxman_join *j,
 	/* generation = the coordinator CSID's high 16 bits, READ FROM THE
 	 * WIRE -- never assumed, never hardcoded (INV-6). */
 	generation = (coord_csid >> 16) & 0xffffu;
-	own_csid = (generation << 16) |
-		   ((uint32_t)j->cl->params.scssystemid & 0x3ffu);
+	own_csid = vms_cm_csid_of(generation,
+				  (uint32_t)j->cl->params.scssystemid);
 	cnxman_join_csid_learned(j, own_csid);
 }
 

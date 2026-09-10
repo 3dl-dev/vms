@@ -95,3 +95,32 @@ if(OVMX_DAP_SANITIZE_OK)
     target_link_options(test_dnet_dap PRIVATE -fsanitize=address,undefined)
 endif()
 add_test(NAME vmsdecnet_dap_unit COMMAND test_dnet_dap)
+
+# rd vms-aac0: systematic ASan/UBSan fuzz + bound proof of the DECnet routing
+# RECEIVE path -- the router-hello decoder (SPEC-DERIVED, never met real wire),
+# the endnode-hello decoder, and the adjacency FSM. Before an OVMX node trades
+# DECnet adjacency with a LIVE real OpenVMS VAX peer, this proves no frame a peer
+# could send crashes / over-reads / drives UB in the receive path (>=200k fuzzed
+# inputs per decoder + >=200k adversarial FSM sequences), and asserts the live
+# two-way-HELLO -> UP path positively. Attacker-facing, so -- exactly like the
+# DAP fuzz above -- it is built WITH -fsanitize=address,undefined so an over-read
+# is a HARD failure. Warning-clean under -Werror.
+add_executable(test_dnet_routing_fuzz test_dnet_routing_fuzz.c)
+target_link_libraries(test_dnet_routing_fuzz PRIVATE vmsdecnet_routing)
+target_compile_options(test_dnet_routing_fuzz PRIVATE -Werror)
+# Add ASan/UBSan only where the toolchain can compile+LINK it (a musl/free-
+# standing cross may lack the sanitizer runtime); the harness's own bound
+# assertions still run everywhere, the sanitizer deepens the check on the host
+# gnu leg. Mirrors the OVMX_DAP_SANITIZE_OK probe above.
+if(NOT DEFINED OVMX_DAP_SANITIZE_OK)
+    include(CheckCSourceCompiles)
+    set(_rtfuzz_san_save "${CMAKE_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+    check_c_source_compiles("int main(void){return 0;}" OVMX_DAP_SANITIZE_OK)
+    set(CMAKE_REQUIRED_FLAGS "${_rtfuzz_san_save}")
+endif()
+if(OVMX_DAP_SANITIZE_OK)
+    target_compile_options(test_dnet_routing_fuzz PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_routing_fuzz PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_routing_fuzz_unit COMMAND test_dnet_routing_fuzz)

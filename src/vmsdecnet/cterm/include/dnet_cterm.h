@@ -348,6 +348,34 @@ int dnet_cterm_sc_connect_parse(const uint8_t *buf, size_t len,
 int dnet_cterm_sc_connect_object(const uint8_t *buf, size_t len);
 
 /*
+ * dnet_fal_access_decode - decode the ACCESS-CONTROL username+password+account
+ * from an inbound Session Control connect (rd vms-8c2, FAL/object-17).
+ *
+ * THE FAL COUNTERPART to dnet_cterm_sc_connect_parse, and its DELIBERATE
+ * OPPOSITE on one point: FAL authenticates from connect-time credentials
+ * (oracle docs/oracle/vax-copy-fal-dap.md §1 -- the COPY carries username +
+ * password in the access-control fields), so this decoder RETAINS the password
+ * into the caller's `password` buffer. The caller (the FAL server) MUST wipe
+ * that buffer the instant sysuaf_authenticate has consumed it. CTERM's parse
+ * keeps dropping the password; only FAL, which must, uses this entry -- so the
+ * "codec never retains a password" invariant the CTERM security case rests on
+ * is preserved for every non-FAL path.
+ *
+ * FULLY BOUNDED against attacker-controlled bytes (this runs before anyone has
+ * authenticated): never reads past buf[len-1], refuses (does not clip) an
+ * over-long counted field, and on ANY malformation leaves every output buffer
+ * EMPTY and returns a negative DNET_CTERM_E* -- no half-parsed credential can
+ * reach the authenticator. A connect that carries no access-control area
+ * returns DNET_CTERM_OK with all three buffers empty (the server then refuses:
+ * FAL admits no empty-credential session). Each cap must be >= 1; on success
+ * every buffer is NUL-terminated.
+ */
+int dnet_fal_access_decode(const uint8_t *buf, size_t len,
+                           char *userid, size_t useridcap,
+                           char *password, size_t passwordcap,
+                           char *account, size_t accountcap);
+
+/*
  * dnet_cterm_remote_port_info - render the VMS "Remote Port Info" string for a
  * decoded connect: "<decimal DECnet address>::<source user>", the shape the
  * oracle's SHOW TERMINAL printed ("Remote Port Info: 1025::SYSTEM", where 1025

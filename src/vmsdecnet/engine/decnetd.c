@@ -48,6 +48,7 @@
 #include <errno.h>
 #include <net/if.h>      /* if_nametoindex() */
 #include <poll.h>       /* the --cterm-server loop waits on wire + session */
+#include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +61,9 @@
 #include "dnet_engine.h"
 #include "dnet_cterm.h"     /* CTERM terminal-service protocol (--set-host-selftest) */
 #include "dnet_cterm_host.h" /* CTERM HOST session: $CREPRC -> LOGINOUT on RTAn: */
+#include "dnet_dap.h"       /* DAP message codec (--fal-* : COPY presentation layer) */
+#include "dnet_fal.h"       /* FAL server + COPY client (object 17, rd vms-8c2) */
+#include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
 #include "ssdef.h"          /* SS$_BADPARAM (isolation-seam refusal, vms-9ab) */
@@ -1618,6 +1622,371 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
     return rc;
 }
 
+/*
+ * ============== --fal-selftest / --fal-accept-test (rd vms-8c2) ==============
+ * The DECnet FILE ACCESS LISTENER (object 17) + the COPY node:: client, proven
+ * over a real NSP logical link (Ethernet + Phase IV routing header + NSP PDU)
+ * moved over a socketpair(2) -- the same wire path DECNETD uses on the live
+ * datalink, with the two blocking peers (FAL server + COPY client) running in
+ * two threads so their choreography is real, not stepped by the test.
+ *
+ * WHAT EACH PROVES, AND WHERE IT IS A HARD GATE:
+ *   --fal-selftest      NO executive needed, runs anywhere (the honest floor,
+ *                       like vms-b19 for SET HOST): (A) a COPY client emits a
+ *                       real object-17 Connect Initiate CARRYING the access-
+ *                       control username+password, and FAL REFUSES it with an
+ *                       NSP Disconnect when the credentials cannot be
+ *                       authenticated (no /dev/vms -> sysuaf_lookup fails ->
+ *                       SS$_INVLOGIN -> reject); (B) the DAP-over-NSP transport
+ *                       pump itself -- CONFIGURATION exchange + ACCESS + an
+ *                       honest STATUS(access-failed) for a missing file --
+ *                       round-trips end to end over the threaded socketpair.
+ *   --fal-accept-test   The FULL transfer, a HARD GATE wherever /dev/vms + the
+ *                       mounted ODS-2 SYSUAF are present (the booted image):
+ *                       real SYSUAF/Purdy auth (GUEST/GUEST accepted, a wrong
+ *                       password REFUSED, DISABLED refused by DISUSER), then a
+ *                       sequential file transferred BOTH directions (PUT then
+ *                       GET) through real DAP over the link and real RMS over
+ *                       the ACP, byte-verified. It FAILS honestly where the
+ *                       executive/SYSUAF is absent (INV-6) -- it does not
+ *                       degrade to a stub.
+ */
+struct fal_xport {
+    struct dnet_engine *eng;   /* this end's engine (owns the one link)         */
+    int      wfd, rfd;         /* this end's socketpair descriptors             */
+    dnet_tick_t *tick;         /* shared monotonic tick (per test run)          */
+};
+
+/* Ship one DAP message as an NSP data segment on the link. */
+static int fal_xport_send(void *ctx, const struct dnet_dap_msg *m)
+{
+    struct fal_xport *x = ctx;
+    uint8_t dap[DNET_DAP_MAX_MSG], frame[DNET_FRAME_MAX];
+    size_t  daplen = 0, flen = 0;
+    if (dnet_dap_encode(m, dap, sizeof dap, &daplen) != DNET_DAP_OK) return -1;
+    if (dnet_engine_link_send(x->eng, dap, daplen, frame, sizeof frame, &flen,
+                              (*x->tick)++) != 0)
+        return -1;
+    if (write(x->wfd, frame, flen) != (ssize_t)flen) return -1;
+    return 0;
+}
+
+/* Receive the next DAP message. Absorbs NSP acks and ships the ack owed for a
+ * received data segment (real NSP flow), so the caller sees only DAP messages.
+ * Returns 0 with *m filled, or -1 on a closed link / decode failure. */
+static int fal_xport_recv(void *ctx, struct dnet_dap_msg *m)
+{
+    struct fal_xport *x = ctx;
+    uint8_t rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    for (;;) {
+        ssize_t n = read(x->rfd, rxbuf, sizeof rxbuf);
+        if (n <= 0) return -1;
+        size_t rlen = 0; int has_reply = 0;
+        enum dnet_link_event ev = DNET_LINK_EV_NONE;
+        if (dnet_engine_link_rx(x->eng, (*x->tick)++, rxbuf, (size_t)n,
+                                reply, sizeof reply, &rlen, &has_reply, &ev) != 0)
+            return -1;
+        if (has_reply && write(x->wfd, reply, rlen) != (ssize_t)rlen) return -1;
+        if (ev == DNET_LINK_EV_DATA) {
+            size_t consumed = 0;
+            if (dnet_dap_decode(x->eng->rx_data, x->eng->rx_datalen, m, &consumed)
+                != DNET_DAP_OK)
+                return -1;
+            return 0;
+        }
+        if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF)
+            return -1;
+        /* ACK / NONE / connect events: absorb and keep reading. */
+    }
+}
+
+/*
+ * Bring up an object-17 link L->R carrying the access-control creds, and run
+ * FAL's connect-time auth gate on R. Returns 0 and leaves the link UP (both
+ * ends) when auth PASSED and R accepted; returns 1 (link refused, R sent a
+ * Disconnect Initiate that L saw) when auth FAILED; -1 on a wire error.
+ */
+static int fal_bringup(struct dnet_engine *L, struct dnet_engine *R,
+                       int sv0, int sv1, dnet_tick_t *tick,
+                       const char *user, const char *pass, uint32_t *auth_out)
+{
+    uint8_t conn[128], frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t  clen = 0, flen = 0, rxlen = 0, rlen = 0;
+    int has_reply = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+
+    /* The COPY client puts the NODE"user pw":: access string on the connect in
+     * the oracle's tag positions (object 17, format-0 dst; format-2 src; the
+     * access-control userid/password/account) via the proven builder. */
+    if (dnet_cterm_sc_connect_build(DNET_OBJ_FAL, "OVMXL", 0x021a, 0x2020,
+                                    user, pass, "", conn, sizeof conn, &clen) != 0)
+        return -1;
+    if (dnet_engine_link_open(L, 1, 11, 0x2001, conn, clen, 1459, 1,
+                              DNET_NSP_VER_41, frame, sizeof frame, &flen, (*tick)++) != 0 ||
+        move_frame(sv0, sv1, frame, flen, rxbuf, sizeof rxbuf, &rxlen) != 0 ||
+        dnet_engine_link_rx(R, (*tick)++, rxbuf, rxlen, reply, sizeof reply, &rlen,
+                            &has_reply, &ev) != 0 || ev != DNET_LINK_EV_CONNECT_IND)
+        return -1;
+
+    /* R is FAL: authenticate the connect BEFORE accepting (INV-6 -- no file is
+     * served on an unauthenticated connect). Bounded credentials never wiped
+     * before use are the FAL analogue of the CTERM no-auth gate. */
+    char who[DNET_FAL_USER_MAX + 1];
+    uint32_t auth = dnet_fal_connect_auth(R->link.conn_data, R->link.conn_len,
+                                          who, sizeof who);
+    if (auth_out) *auth_out = auth;
+
+    if (auth != SS$_NORMAL) {
+        /* Refuse: Disconnect Initiate (object rejected connect), L sees it. */
+        if (dnet_engine_link_close(R, DNET_LINK_REASON_OBJREJ, reply, sizeof reply,
+                                   &rlen, (*tick)++) != 0 ||
+            move_frame(sv1, sv0, reply, rlen, rxbuf, sizeof rxbuf, &rxlen) != 0 ||
+            dnet_engine_link_rx(L, (*tick)++, rxbuf, rxlen, frame, sizeof frame,
+                                &flen, &has_reply, &ev) != 0)
+            return -1;
+        return 1;   /* honest refusal proven */
+    }
+
+    /* Auth OK: accept -> Connect Confirm -> L sees the link RUN. */
+    if (dnet_engine_link_accept(R, 0x2002, reply, sizeof reply, &rlen, (*tick)++) != 0 ||
+        move_frame(sv1, sv0, reply, rlen, rxbuf, sizeof rxbuf, &rxlen) != 0 ||
+        dnet_engine_link_rx(L, (*tick)++, rxbuf, rxlen, frame, sizeof frame, &flen,
+                            &has_reply, &ev) != 0 || ev != DNET_LINK_EV_CONNECT_CONF ||
+        !dnet_link_is_up(&L->link) || !dnet_link_is_up(&R->link))
+        return -1;
+    return 0;   /* link UP */
+}
+
+/* Thread body: the FAL server side of one accepted session. */
+struct fal_server_arg { struct fal_xport xp; uint32_t status; };
+static void *fal_server_thread(void *v)
+{
+    struct fal_server_arg *a = v;
+    struct dnet_dap_transport t = { fal_xport_send, fal_xport_recv, &a->xp };
+    a->status = dnet_fal_server_run(&t);
+    return NULL;
+}
+
+static int run_fal_selftest(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-FALSELF, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+    struct dnet_engine L, R;
+    if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
+        fprintf(stderr, "DECNETD-E-FALSELF, engine init failed\n");
+        close(sv[0]); close(sv[1]); return 1;
+    }
+    int pass = 0, fail = 0;
+    dnet_tick_t tick = 100;
+
+    /* (A) THE HONEST FLOOR: a real object-17 connect carrying creds is REFUSED
+     * with an NSP disconnect when the credentials cannot be authenticated (no
+     * executive here, so sysuaf_lookup fails -> SS$_INVLOGIN). */
+    uint32_t auth = 0;
+    int br = fal_bringup(&L, &R, sv[0], sv[1], &tick, "GUEST", "GUEST", &auth);
+    if (br == 1 && auth != SS$_NORMAL) {
+        printf("DECNETD-I-FALSELF, object-17 connect carried the access-control"
+               " creds and FAL REFUSED it (status %08X) with an NSP disconnect --"
+               " no file served on an unauthenticated connect (INV-6)\n", auth);
+        pass++;
+    } else {
+        printf("DECNETD-E-FALSELF, expected an honest refusal of the unauthenticated"
+               " connect, got bringup=%d auth=%08X\n", br, auth);
+        fail++;
+    }
+
+    /* (B) THE TRANSPORT PUMP: bring a link UP bypassing the auth gate (this half
+     * proves the DAP-over-NSP threaded transport, not auth), and run a GET of a
+     * file the server cannot open (no ACP volume here) -- CONFIGURATION + ACCESS
+     * + an honest STATUS(access-failed) must round-trip end to end, and both
+     * peers return the honest miss. Fresh engines + a fresh socketpair: sub-test
+     * A left its engines with a closed (rejected) link. */
+    int sv2[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv2) != 0) { close(sv[0]); close(sv[1]); return 1; }
+    struct dnet_engine L2, R2;
+    dnet_engine_init(&L2, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0);
+    dnet_engine_init(&R2, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0);
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t flen = 0, rxlen = 0, rlen = 0; int has_reply = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    if (dnet_engine_link_open(&L2, 1, 11, 0x2003, NULL, 0, 1459, 1, DNET_NSP_VER_41,
+                              frame, sizeof frame, &flen, tick++) == 0 &&
+        move_frame(sv2[0], sv2[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R2, tick++, rxbuf, rxlen, reply, sizeof reply, &rlen,
+                            &has_reply, &ev) == 0 && ev == DNET_LINK_EV_CONNECT_IND &&
+        dnet_engine_link_accept(&R2, 0x2004, reply, sizeof reply, &rlen, tick++) == 0 &&
+        move_frame(sv2[1], sv2[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L2, tick++, rxbuf, rxlen, frame, sizeof frame, &flen,
+                            &has_reply, &ev) == 0 && dnet_link_is_up(&L2.link)) {
+        struct fal_server_arg sarg = { { &R2, sv2[1], sv2[1], &tick }, 0 };
+        pthread_t th;
+        if (pthread_create(&th, NULL, fal_server_thread, &sarg) == 0) {
+            struct fal_xport cxp = { &L2, sv2[0], sv2[0], &tick };
+            struct dnet_dap_transport ct = { fal_xport_send, fal_xport_recv, &cxp };
+            uint32_t cst = dnet_fal_client_get("OVMXR::DKA0:[X]NOPE.TXT",
+                                               "DKA0:[X]LOCAL.TXT", &ct);
+            pthread_join(th, NULL);
+            if (cst == SS$_NOSUCHFILE && sarg.status == SS$_NOSUCHFILE) {
+                printf("DECNETD-I-FALSELF, the DAP-over-NSP transport pump round-trips"
+                       " end to end over the threaded socketpair: CONFIGURATION +"
+                       " ACCESS + honest STATUS(access-failed) for a missing file,"
+                       " both peers return the honest miss\n");
+                pass++;
+            } else {
+                printf("DECNETD-E-FALSELF, transport pump did not return the honest"
+                       " miss (client %08X server %08X)\n", cst, sarg.status);
+                fail++;
+            }
+        } else { fail++; }
+    } else {
+        printf("DECNETD-E-FALSELF, could not bring the pump-test link up\n");
+        fail++;
+    }
+    close(sv2[0]); close(sv2[1]);
+
+    close(sv[0]); close(sv[1]);
+    printf("DECNETD-I-FALSELF, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass == 2) { printf("DECNETD-FAL-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-FAL-SELFTEST: FAIL\n");
+    return 1;
+}
+
+/* Compare a stored ODS-2 file's records to an expected multi-line body.
+ * Returns 1 on an exact match. Reads through RMS over the ACP (real file I/O). */
+static int fal_file_matches(const char *spec, const char *const *lines, int nlines)
+{
+    rms_textfile_t *tf = rms_textfile_open(spec);
+    if (!tf) return 0;
+    char buf[DNET_DAP_MAX_REC]; int too_long = 0, i = 0, ok = 1;
+    while (rms_textfile_getline(tf, buf, sizeof buf, &too_long)) {
+        if (i >= nlines || strcmp(buf, lines[i]) != 0) { ok = 0; break; }
+        i++;
+    }
+    rms_textfile_close(tf);
+    return ok && i == nlines;
+}
+
+static int run_fal_accept_test(void)
+{
+    printf("DECNETD-I-FALACCEPT, inbound FAL (object 17) COPY -> real SYSUAF auth"
+           " -> DAP/RMS transfer both directions (rd vms-8c2; oracle"
+           " docs/oracle/vax-copy-fal-dap.*)\n");
+    int pass = 0, fail = 0;
+/* Emit a labelled line on BOTH outcomes (the house style, matching CT_CHECK):
+ * the booted battery greps each assertion's PROPERTY message (a wrong password
+ * REFUSED, DISABLED refused, records BYTE-MATCH) as positive evidence the
+ * property was exercised, so a PASS must print its label too -- a fail-only
+ * print left those greps satisfiable only when the assertion FAILED (inverted). */
+#define FA_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    /* 1) AUTH IS REAL (the security core): the same SYSUAF/Purdy path LOGINOUT
+     * uses. A fake would pass the wrong password; only a real Purdy verify
+     * against the stored quadword refuses it. Fixtures are the shipped seed
+     * accounts (tools/mksysuaf.c): GUEST/GUEST valid; DISABLED/DISABLED valid
+     * password but DISUSER. */
+    FA_CHECK(dnet_fal_authenticate("GUEST", "GUEST") == SS$_NORMAL,
+             "GUEST with the correct password authenticates (real SYSUAF/Purdy)");
+    FA_CHECK(dnet_fal_authenticate("GUEST", "WRONGPW") == SS$_INVLOGIN,
+             "GUEST with a WRONG password is REFUSED (SS$_INVLOGIN) -- a fake would pass it");
+    FA_CHECK(dnet_fal_authenticate("NOSUCHUSER99", "x") == SS$_INVLOGIN,
+             "a nonexistent account is refused, indistinguishably from a bad password");
+    FA_CHECK(dnet_fal_authenticate("DISABLED", "DISABLED") == SS$_NOPRIV,
+             "DISABLED (correct password, DISUSER) is REFUSED -- a right password is not sufficient");
+
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+
+    /* 2) A COPY with a BAD password is REFUSED at connect over a real link
+     * (NSP disconnect, no session, no file). */
+    {
+        int sv[2]; socketpair(AF_UNIX, SOCK_DGRAM, 0, sv);
+        struct dnet_engine L, R; dnet_tick_t tick = 100; uint32_t auth = 0;
+        dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0);
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0);
+        int br = fal_bringup(&L, &R, sv[0], sv[1], &tick, "GUEST", "WRONGPW", &auth);
+        FA_CHECK(br == 1 && auth == SS$_INVLOGIN,
+                 "a COPY with a BAD password is REFUSED with an NSP disconnect (no file served)");
+        close(sv[0]); close(sv[1]);
+    }
+
+    /* 3) A COPY with the CORRECT creds transfers a sequential file BOTH
+     * directions, byte-verified through real RMS over the ACP. */
+    static const char *src_lines[] = {
+        "Hello from OVMXL node 1.10 - DAP/FAL transfer line one",
+        "Second line for a multi-record DAP data transfer",
+        "Third and final record"
+    };
+    const int nsrc = 3;
+    const char *SRC  = "SYS$SYSROOT:[SYSMGR]OVMXFAL_S.TXT";
+    const char *DEST = "SYS$SYSROOT:[SYSMGR]OVMXFAL_D.TXT";
+    const char *BACK = "SYS$SYSROOT:[SYSMGR]OVMXFAL_B.TXT";
+
+    /* Lay down the source file on the ODS-2 volume via RMS. */
+    int src_ok = (rms_textfile_write_line(SRC, src_lines[0]) == 0) &&
+                 (rms_textfile_append_line(SRC, src_lines[1]) == 0) &&
+                 (rms_textfile_append_line(SRC, src_lines[2]) == 0);
+    FA_CHECK(src_ok, "source file created on the ODS-2 volume via RMS over the ACP");
+
+    /* PUT: L copies SRC to the remote FAL, which stores it as DEST. */
+    if (src_ok) {
+        int sv[2]; socketpair(AF_UNIX, SOCK_DGRAM, 0, sv);
+        struct dnet_engine L, R; dnet_tick_t tick = 200; uint32_t auth = 0;
+        dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0);
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0);
+        int br = fal_bringup(&L, &R, sv[0], sv[1], &tick, "GUEST", "GUEST", &auth);
+        FA_CHECK(br == 0 && auth == SS$_NORMAL, "PUT: GUEST/GUEST connect accepted, link UP");
+        if (br == 0) {
+            struct fal_server_arg sarg = { { &R, sv[1], sv[1], &tick }, 0 };
+            pthread_t th; pthread_create(&th, NULL, fal_server_thread, &sarg);
+            struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
+            struct dnet_dap_transport ct = { fal_xport_send, fal_xport_recv, &cxp };
+            uint32_t cst = dnet_fal_client_put(SRC, DEST, &ct);
+            pthread_join(th, NULL);
+            FA_CHECK(cst == SS$_NORMAL && sarg.status == SS$_NORMAL,
+                     "PUT: DAP transfer completed on both peers");
+            FA_CHECK(fal_file_matches(DEST, src_lines, nsrc),
+                     "PUT: the STORED file's records BYTE-MATCH the source (real transfer)");
+        }
+        close(sv[0]); close(sv[1]);
+    }
+
+    /* GET: L copies DEST back from the remote FAL into BACK; byte-verify. */
+    {
+        int sv[2]; socketpair(AF_UNIX, SOCK_DGRAM, 0, sv);
+        struct dnet_engine L, R; dnet_tick_t tick = 300; uint32_t auth = 0;
+        dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0);
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0);
+        int br = fal_bringup(&L, &R, sv[0], sv[1], &tick, "GUEST", "GUEST", &auth);
+        FA_CHECK(br == 0 && auth == SS$_NORMAL, "GET: GUEST/GUEST connect accepted, link UP");
+        if (br == 0) {
+            struct fal_server_arg sarg = { { &R, sv[1], sv[1], &tick }, 0 };
+            pthread_t th; pthread_create(&th, NULL, fal_server_thread, &sarg);
+            struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
+            struct dnet_dap_transport ct = { fal_xport_send, fal_xport_recv, &cxp };
+            uint32_t cst = dnet_fal_client_get(DEST, BACK, &ct);
+            pthread_join(th, NULL);
+            FA_CHECK(cst == SS$_NORMAL && sarg.status == SS$_NORMAL,
+                     "GET: DAP transfer completed on both peers");
+            FA_CHECK(fal_file_matches(BACK, src_lines, nsrc),
+                     "GET: the FETCHED file's records BYTE-MATCH the source (real transfer)");
+        }
+        close(sv[0]); close(sv[1]);
+    }
+
+    printf("DECNETD-I-FALACCEPT, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-FAL-ACCEPT: PASS\n"); return 0; }
+    printf("DECNETD-FAL-ACCEPT: FAIL\n");
+    return 1;
+#undef FA_CHECK
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -1671,7 +2040,19 @@ static void usage(const char *argv0)
         "                      control returns with %%REM-S-END on LOGOUT.\n"
         "  --user NAME         with --set-host: CTERM access-control username\n"
         "                      (default SYSTEM; proxy/accounting only -- the\n"
-        "                      remote authenticates fresh; never from the env).\n",
+        "                      remote authenticates fresh; never from the env).\n"
+        "  --fal-selftest      run the FAL/COPY honest-floor proof and exit (no\n"
+        "                      executive needed): a COPY client emits a real\n"
+        "                      object-17 connect carrying the access-control\n"
+        "                      creds and FAL REFUSES it with an NSP disconnect\n"
+        "                      when they cannot be authenticated; and the\n"
+        "                      DAP-over-NSP transport pump round-trips over a\n"
+        "                      threaded socketpair (rd vms-8c2)\n"
+        "  --fal-accept-test   run the FULL inbound-FAL COPY proof and exit (a\n"
+        "                      HARD GATE on /dev/vms + the mounted SYSUAF): real\n"
+        "                      SYSUAF/Purdy auth (bad password REFUSED), then a\n"
+        "                      sequential file transferred BOTH directions\n"
+        "                      through real DAP + RMS over the ACP, byte-verified\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT);
 }
 
@@ -1693,6 +2074,8 @@ int main(int argc, char **argv)
     int cterm_server = 0;
     const char *set_host_to = NULL;       /* --set-host A.N : CTERM terminal client */
     const char *set_host_user = "SYSTEM"; /* --user : CTERM access-control name      */
+    int fal_self_test = 0;
+    int fal_accept_test = 0;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
@@ -1713,6 +2096,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--cterm-server")) cterm_server = 1;
         else if (!strcmp(argv[i], "--set-host") && i + 1 < argc) set_host_to = argv[++i];
         else if (!strcmp(argv[i], "--user") && i + 1 < argc)     set_host_user = argv[++i];
+        else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
+        else if (!strcmp(argv[i], "--fal-accept-test")) fal_accept_test = 1;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
             return 0;
@@ -1733,6 +2118,10 @@ int main(int argc, char **argv)
         return run_cterm_accept_test();
     if (isolation_test)
         return run_isolation_test();
+    if (fal_self_test)
+        return run_fal_selftest();
+    if (fal_accept_test)
+        return run_fal_accept_test();
 
     /* --set-host CLIENT self-sources its executor address from the node's DECnet
      * configuration (rd vms-f54) so DCL's SET HOST wiring need not know it. When

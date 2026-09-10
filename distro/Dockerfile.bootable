@@ -483,6 +483,28 @@ RUN cmake -B build-static \
     -DOVMX_SCS_DATALINK_EXECUTIVE=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
+# vms-843a: build the WRAPPED OpenSSH sshd (the real port, seam-anchored) as a
+# SHIPPED image. build-ssh-harness.sh is self-contained (vendors its own static
+# libcrypto via third-party/libcrypto/build-libcrypto.sh, links the OVMX archives
+# from build-static/ above) and emits a musl-STATIC wrapped sshd that dispatches
+# socket/bind/listen/accept + the SYSUAF/LOGINOUT/DCL session over the executive
+# via linker --wrap, with the RMS-ACP seam force-bound (ovmx_sshd_rms_bind.o) so
+# its SYSUAF reader actually opens SYS$SYSTEM:SYSUAF.DAT over the ACP (rd vms-9cc).
+# We take the SERVER (wrapped-sshd) binary; the aux server (TCPIP$INETD) launches
+# it `-i` over the executive-materialized connection on a booted system. This
+# fills the empty SYS$SYSTEM:VMSSSHD.EXE slot with the real wrapped-OpenSSH server
+# (the old libssh vmssshd.c never musl-static-linked, so nothing shipped there);
+# it does NOT retire that source (rd vms-16b). SOURCE_DATE_EPOCH is in the env for
+# the byte-reproducible-image gate; musl-static OpenSSH + LibreSSL are deterministic.
+RUN CC=musl-gcc WORK=/tmp/ovmx-ssh-ship \
+        sh third-party/openssh/build-ssh-harness.sh > /tmp/sshh-ship.log 2>&1 || \
+        { echo "FATAL: shipped SSH build failed"; tail -60 /tmp/sshh-ship.log; exit 1; } && \
+    SSSHD=$(sed -n 's/^OVMX_SRV_SSHD=//p' /tmp/sshh-ship.log | tail -1) && \
+    { [ -x "$SSSHD" ] || { echo "FATAL: wrapped sshd not produced ($SSSHD)"; exit 1; }; } && \
+    { readelf -d "$SSSHD" 2>/dev/null | grep -q NEEDED && \
+        { echo "FATAL: shipped VMSSSHD.EXE is not static"; exit 1; } || true; } && \
+    cp "$SSSHD" build-static/bin/VMSSSHD.EXE && chmod +x build-static/bin/VMSSSHD.EXE
+
 # TCC.EXE (vms-992e / self-host spine): the OVMX-native C compiler. Built by
 # tests/toolchain/mk_tcc_static.sh from the vendored third-party/tcc (tinycc's
 # own ./configure + `make tcc`, static musl) -- the SAME recipe + same bytes as
@@ -630,6 +652,17 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     cp build-static/bin/DECNETD.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/LIBRARIAN.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/OVMXDUMP       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # TCP/IP Services aux server + SSH (rd vms-843a). TCPIP$INETD.EXE +
+    # TCPIP$DAYTIME.EXE are built by BUILD_TOOLS but were never staged; VMSSSHD.EXE
+    # is the wrapped-OpenSSH server built + FATAL-gated in the ssh-harness RUN
+    # above. The shipped TCPIP$SERVICE.DAT keeps SSH DISABLED (a network-facing
+    # SSH server with default creds is an operator security-posture call) -- these
+    # images ship so the aux server CAN launch SSH once enabled, proven via the
+    # test-overlay booted e2e; the shipped default stays off. $-names single-quoted
+    # so the build shell does not expand them.
+    cp 'build-static/bin/TCPIP$INETD.EXE'   /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp 'build-static/bin/TCPIP$DAYTIME.EXE' /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/VMSSSHD.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # DECnet Phase IV: ship the NCP configuration utility on the running system
     # so an admin can build the node database (DEFINE NODE) + set the executor.
     # NCP.EXE is portable C and ships on BOTH arches (see the ovmx-images vax

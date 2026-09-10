@@ -49,6 +49,17 @@ $     EXIT
 $ ENDIF
 $!
 $ SAY "%TCPIP-I-STARTAUX, starting the auxiliary server (TCPIP$INETD) from ''SERVICE_DB'"
-$ RUN ''INETD_IMAGE'
-$ SAY "%TCPIP-I-AUXDONE, auxiliary server exited"
+$! The auxiliary server is a persistent master listener -- it must run as a
+$! DETACHED process (the RUN/DETACHED shape SYSTARTUP_VMS.COM documents), NOT a
+$! foreground RUN that would BLOCK system startup forever (rd vms-21b/843a). The
+$! EXECUTIVE assigns the process name TCPIP$INETD as it creates the process, so
+$! SHOW SYSTEM lists it and $GETJPI resolves it by name; a duplicate is refused
+$! to the caller (%RUN-F-CREPRC / -SYSTEM-F-DUPLNAM), making a re-run idempotent-
+$! safe. I/O goes to SYS$MANAGER:TCPIP$INETD.LOG (never the console).
+$ RUN /DETACHED -
+       /PROCESS_NAME=TCPIP$INETD -
+       /INPUT=NL: /OUTPUT=SYS$MANAGER:TCPIP$INETD.LOG -
+       /ERROR=SYS$MANAGER:TCPIP$INETD.LOG -
+       ''INETD_IMAGE'
+$ SAY "%TCPIP-I-AUXSTARTED, auxiliary server (TCPIP$INETD) started detached"
 $ EXIT

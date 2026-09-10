@@ -52,6 +52,7 @@
 #include "vms_kif.h"
 #include "ssdef.h"        /* SS$_NORMAL */
 #include "vms/logical.h"  /* lnm_* : point SYS$SYSDEVICE at the real system volume */
+#include "sysuaf.h"       /* sysuaf_lookup_st : in-process provisioning diagnostic */
 
 #define EXIT_SKIP   77
 #define SSH_PORT    2223                 /* distinct from the KEX test's 2222 */
@@ -288,7 +289,11 @@ static void password_login_of_valid_user_lands_in_dcl(char *out, size_t outsz)
 
     /* $MOUNT the real system volume + repoint SYS$SYSDEVICE at it (executive-global,
      * exec-inherited), saving the harness default to restore afterward. */
-    (void)vms_kif_acp_mount("VDA300:");
+    {
+        uint32_t mst = vms_kif_acp_mount("VDA300:");
+        printf("  [9cc-diag] vms_kif_acp_mount(\"VDA300:\") = 0x%08x (SS$_NORMAL=0x%08x)\n",
+               mst, (uint32_t)SS$_NORMAL);
+    }
     mgr = lnm_get_manager();
     if (mgr != NULL) {
         if (lnm_translate(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE",
@@ -300,6 +305,27 @@ static void password_login_of_valid_user_lands_in_dcl(char *out, size_t outsz)
         }
         lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", "VDA300:",
                    LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    }
+
+    /* [9cc-diag] Isolate mount-vs-LNM-vs-exec-inheritance IN-PROCESS before the
+     * fork: sysuaf_lookup_st walks the SAME LNM/ACP chain the sshd's
+     * __wrap_getpwnam->sysuaf_lookup uses. rms_st distinguishes a mount/ACP fault
+     * (SS$_NOSUCHDEV / RMS$_FNF) from record-not-found (RMS$_RNF). If this resolves
+     * SYSTEM here, provisioning is correct and any child failure is exec-specific;
+     * if it fails, rms_st names the failing layer. */
+    {
+        sysuaf_record_t drec;
+        uint32_t rms_st = 0;
+        int lk = sysuaf_lookup_st("SYSTEM", &drec, &rms_st);
+        char cur[256]; uint16_t cl = 0; uint32_t ca = 0;
+        printf("  [9cc-diag] in-process sysuaf_lookup_st(\"SYSTEM\") rc=%d rms_st=0x%08x\n",
+               lk, rms_st);
+        if (mgr != NULL &&
+            lnm_translate(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", cur, sizeof(cur),
+                          &cl, &ca) == SS$_NORMAL && cl < sizeof(cur)) {
+            cur[cl] = '\0';
+            printf("  [9cc-diag] SYS$SYSDEVICE now resolves to '%s'\n", cur);
+        }
     }
 
     /* askpass feeds the VALID SYSUAF password over SSH_ASKPASS (no controlling tty). */

@@ -1,0 +1,29 @@
+vms-aac0 — OVMX router-hello ACCEPTED by real OpenVMS VAX V7.3; first live OVMX<->real-VMS
+DECnet Phase IV adjacency.  RESULT: PASS.  (fix = rd vms-df5, 27-byte RSLIST-tail frame)
+Lab: pod vaxlab-3, isolated br0.  VAX1 = real OpenVMS VAX V7.3 endnode, 1.1, aa:00:04:00:01:04.
+     vax3 = OVMX L1 router, 1.42 (OVMXR3), aa:00:04:00:2a:04, DECNETD.router-fixed.EXE --router.
+
+═══ GATE A — ACCEPTANCE (frame now well-formed; no event 4.4) ═══
+OVMX router-hello on br0 is now 27 bytes (was 18).  DN length prefix 0x001b (was 0x0012):
+  21:25:19 aa:00:04:00:2a:04 > ab:00:00:04:00:00 DN(0x6003) router-hello l1rout vers 2 src 1.42 blksize 1498 pri 64 hello 5
+  0x0000:  1b00 0b02 0000 aa00 0400 2a04 02da 0540
+  0x0010:  0005 0000 0800 0000 0000 0000 0000 0000
+  routing msg (27B): 0b 02 00 00 aa 00 04 00 2a 04 02 da 05 40 00 05 00 00 | 08 00 00 00 00 00 00 00 00
+  fixed part idx0..17 (RFLAGS..MPD) UNCHANGED; trailing 9-byte E-LIST "08 00*8" now PRESENT.
+  Matches real-VMS specimen structure (real-router-hello-specimen.hex: 1b prefix + 08 00*8 tail; hello differs by config).
+VAX1 raised NO "packet format error" (event 4.4): grep -c on vax1 console = 0. The old 4.4 storm is gone.
+
+═══ GATE B — ADJACENCY (the PASS: VAX1 selects OVMX as DR) ═══
+VAX1 endnode-hello designated-router field flipped rtr 0.0 -> rtr 1.42 (captured in aac0-PASS.pcap):
+  BEFORE 21:21:44 aa:00:04:00:01:04 > ab:00:00:03:00:00 endnode-hello src 1.1 blksize 1498 rtr 0.0  hello 15 data 2
+  AFTER  21:25:29 aa:00:04:00:01:04 > ab:00:00:03:00:00 endnode-hello src 1.1 blksize 1498 rtr 1.42 hello 15 data 2
+VAX1 OPCOM confirms the adjacency (console vax1.log):
+  DECnet event 4.10, circuit up
+  DECnet event 4.15, adjacency up  /  Circuit QNA-0, Adjacent node = 1.42
+
+═══ CRASH CHECK — PASS ═══
+VAX1 stayed up: kept emitting endnode-hellos (rtr 1.42) every 15s through 21:27:00, logged OPCOM
+adjacency events, no bugcheck/halt. No peer crashed.
+
+Artifacts (this dir): aac0-PASS.pcap (full before->after, incl. OVMX 27B frame + VAX1 flip),
+  aac0-PASS-before.pcap (rtr 0.0 baseline). Oracle diff: router-hello-diff-analysis.txt.

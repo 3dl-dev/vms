@@ -43,8 +43,17 @@ $ IF HOSTNAME .EQS. "" THEN GOTO NO_HOST
 $ DOMAIN = P2
 $ IF DOMAIN .EQS. "" .AND. P1 .EQS. "" THEN INQUIRE DOMAIN "    Local domain name"
 $!
-$ DEFINE/SYSTEM/EXECUTIVE TCPIP$INET_HOST "''HOSTNAME'"
-$ IF DOMAIN .NES. "" THEN DEFINE/SYSTEM/EXECUTIVE TCPIP$INET_DOMAIN "''DOMAIN'"
+$! /SYSTEM alone puts these in the executive-resident SYSTEM logical-name table
+$! (dcl_cmd_io.c: SYSTEM -> the shared, executive-resident table -- shared by every
+$! process on the node, which is the "EXECUTIVE-mode SYSTEM logical" intent above).
+$! The OVMX logical-name model has no separate access-mode dimension, so DCL DEFINE
+$! takes /SYSTEM|/GROUP|/JOB scope qualifiers but NOT the real-VMS /EXECUTIVE_MODE
+$! access-mode qualifier -- passing /EXECUTIVE yielded %DCL-W-IVQUAL and the DEFINE
+$! silently did nothing (host/domain read back "(not configured)"). Adding
+$! /EXECUTIVE_MODE acceptance to DCL DEFINE is tracked separately; /SYSTEM is the
+$! correct OVMX spelling and achieves the executive-resident, node-shared intent.
+$ DEFINE/SYSTEM TCPIP$INET_HOST "''HOSTNAME'"
+$ IF DOMAIN .NES. "" THEN DEFINE/SYSTEM TCPIP$INET_DOMAIN "''DOMAIN'"
 $ SAY "%TCPIP-I-CORE, core environment set: host ''HOSTNAME', domain ''DOMAIN'"
 $!
 $! --- Interface address -------------------------------------------------------

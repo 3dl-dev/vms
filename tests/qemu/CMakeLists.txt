@@ -115,6 +115,13 @@ endforeach()
 # qemu_syssvc_tests still builds it via the GLOBAL target list.
 qemu_syssvc_add_test(test_arith_hparith ${CMAKE_CURRENT_SOURCE_DIR}/test_arith_hparith.c)
 
+# test_accvio_dispatch (vms-cc8, CHF rung-4, gap G6): the Alpha access-violation
+# -> SS$_ACCVIO condition bridge, the hardware sibling of test_arith_hparith.
+# Same rationale as arith_hparith for being test_accvio_* (not test_syssvc_*): an
+# Alpha-only libvms RTL signal primitive proven on the Alpha rig, not an
+# x86/arm /dev/vms facility.
+qemu_syssvc_add_test(test_accvio_dispatch ${CMAKE_CURRENT_SOURCE_DIR}/test_accvio_dispatch.c)
+
 # ---------------------------------------------------------------------------
 # RMS-over-ACP force-bind (rms_acp_bind.c) -- OPT-IN, not blanket (vms-5f0).
 #
@@ -187,6 +194,17 @@ if(TARGET test_arith_hparith AND CMAKE_SYSTEM_PROCESSOR STREQUAL "alpha")
     target_sources(test_arith_hparith PRIVATE
         ${CMAKE_SOURCE_DIR}/src/vmslink/arith_signal_bind.c)
     target_compile_options(test_arith_hparith PRIVATE -mieee -mfp-trap-mode=sui)
+endif()
+
+# test_accvio_dispatch (vms-cc8, CHF rung-4): like arith_hparith, Alpha-only and
+# needs its bridge constructor force-pulled under -static. accvio_signal_bind.c
+# as a PRIMARY object makes the strong ref to ovmx$accvio_signal_anchor that
+# extracts src/libvms/rtl/accvio_signal.o (and its image-start constructor) into
+# the static image; without it the auto-install CHECK fails. No FP-trap flags:
+# the fault here is a real memory access violation, not an arithmetic trap.
+if(TARGET test_accvio_dispatch AND CMAKE_SYSTEM_PROCESSOR STREQUAL "alpha")
+    target_sources(test_accvio_dispatch PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmslink/accvio_signal_bind.c)
 endif()
 
 # test_syssvc_rms_p3_acp (vms-045) drives the runtime Prolog-3 indexed WRITE+READ

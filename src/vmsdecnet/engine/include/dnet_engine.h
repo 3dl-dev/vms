@@ -48,6 +48,7 @@
 
 #include "dnet_hello.h"
 #include "dnet_adjacency.h"
+#include "dnet_router_hello.h" /* the Ethernet Router Hello codec (rd vms-0aba) */
 #include "dnet_link.h"      /* the NSP logical-link connection service (rung 2) */
 #include "dnet_nsp.h"       /* the NSP transport codec */
 
@@ -66,6 +67,18 @@ extern "C" {
  * oracle-captured (vms-3be specimen #1 dst) and DNA-documented. Defined in the
  * .c so it has a single storage definition. */
 extern const uint8_t DNET_HELLO_MCAST[DNET_ADDR_LEN];
+
+/* The Phase IV *router* HELLO multicast destination, AB-00-00-04-00-00 (the DNA
+ * "all end nodes" multicast: a ROUTER multicasts its router-hello here so every
+ * endnode on the segment hears it and can pick a designated router). This is
+ * the counterpart of DNET_HELLO_MCAST: the vms-3be oracle capture shows a real
+ * VAX ENDNODE sending its endnode-hello to AB-00-00-03-00-00 (the "all routers"
+ * multicast), which CORROBORATES the DNA assignment that a ROUTER sends the
+ * other direction, to AB-00-00-04-00-00. Defined in the .c (single storage
+ * definition). No router-hello wire specimen is oracle-committed (see
+ * dnet_router_hello.h); the destination is DNA-documented + endnode-corroborated,
+ * never fabricated. */
+extern const uint8_t DNET_ROUTER_HELLO_MCAST[DNET_ADDR_LEN];
 
 /*
  * Phase IV LONG DATA PACKET routing header (the header that carries an NSP PDU
@@ -120,6 +133,29 @@ struct dnet_engine {
     /* --- routing/adjacency state machine (rung-3 codec) --- */
     struct dnet_adjacency adj;
 
+    /* --- node role + designated-router state (rd vms-0a9) ---
+     * `node_type` is this engine's advertised Phase IV role in the low 2 bits of
+     * the HELLO IINFO byte: DNET_NODETYPE_ENDNODE (the default -- unchanged
+     * endnode behaviour) or DNET_NODETYPE_L1ROUTER when the daemon runs in
+     * --router mode. In router mode `router_priority` is the designated-router
+     * election priority we advertise (an operator config value, DNA default 64;
+     * NOT a fabricated wire byte -- it is a real field the operator sets).
+     *
+     * In ENDNODE mode the engine also does the endnode half of DR selection: on
+     * receiving a router-hello it records the highest-priority router it has
+     * heard as its designated router (`dr_id`, `dr_priority`, `have_dr`) and
+     * reflects that router in the NEIGHBOR field of the endnode-hellos it emits
+     * -- exactly the field a real Phase IV endnode flips from 0.0 to the DR's
+     * address once it selects one. With no router heard, `have_dr` stays 0 and
+     * the emitted endnode-hello names rtr 0.0 (byte-identical to the vms-3be
+     * oracle -- the DR reflection changes the wire ONLY after a real router-hello
+     * has been selected). */
+    uint8_t  node_type;            /* DNET_NODETYPE_ENDNODE / _L1ROUTER */
+    uint8_t  router_priority;      /* router mode: advertised DR-election priority */
+    int      have_dr;              /* endnode mode: a designated router is selected */
+    uint8_t  dr_id[DNET_ADDR_LEN]; /* endnode mode: selected DR's Ethernet id */
+    uint8_t  dr_priority;          /* endnode mode: selected DR's advertised priority */
+
     /* --- NSP logical-link connection service (rung 2, rd vms-c23) ---
      * One active logical link per engine instance is the rung-2 scope (a multi-
      * link port table is a later rung; OVMX design choice, not a protocol
@@ -136,6 +172,8 @@ struct dnet_engine {
     /* --- honest counters (reported on the VMS surface; no fabrication) --- */
     unsigned long hello_sent;
     unsigned long hello_recv;      /* well-formed endnode HELLOs accepted */
+    unsigned long router_hello_sent; /* router-mode: router-hellos we emitted */
+    unsigned long router_hello_recv; /* endnode-mode: router-hellos accepted */
     unsigned long frames_recv;     /* every frame handed to rx_frame */
     unsigned long frames_dropped;  /* wrong ethertype / own echo / undecodable */
     unsigned long adj_up_events;
@@ -182,16 +220,68 @@ int dnet_engine_build_hello_frame(const struct dnet_engine *e,
                                   uint8_t *frame_out, size_t cap, size_t *len_out);
 
 /*
+ * dnet_engine_set_router - flip this engine into Phase IV L1-ROUTER run-mode
+ * (rd vms-0a9). After this call the engine advertises IINFO node-type = L1
+ * router and dnet_engine_build_router_hello_frame() emits spec-faithful router-
+ * hellos. `priority` is the designated-router election priority to advertise
+ * (0 => DNET_ROUTER_PRIORITY_DEFAULT, the DNA-documented default 64; a real
+ * operator-set field, never a fabricated wire byte). Returns DNET_ENGINE_OK or
+ * DNET_ENGINE_EINVAL on a null argument. Idempotent. There is deliberately no
+ * inverse: an engine that must be an endnode is simply never set to router.
+ */
+#define DNET_ROUTER_PRIORITY_DEFAULT  64u  /* DNA Phase IV default router priority */
+int dnet_engine_set_router(struct dnet_engine *e, uint8_t priority);
+
+/* 1 if this engine is running as a router (node_type == L1 router), else 0. */
+int dnet_engine_is_router(const struct dnet_engine *e);
+
+/*
+ * dnet_engine_build_router_hello_frame - assemble the complete on-wire Phase IV
+ * ROUTER-HELLO Ethernet frame into `frame_out` (rd vms-0a9): a 14-byte Ethernet
+ * header (dst = DNET_ROUTER_HELLO_MCAST, the all-endnodes multicast; src = our
+ * Ethernet id; ethertype 0x6003 big-endian) followed by the router-hello payload
+ * from dnet_router_hello_encode(). Every emitted field is grounded from the DNA
+ * Phase IV routing spec + the decode struct and honest-zeroed where ungrounded
+ * (INV-6): rflags = router-hello control type, version = the oracle DNA version,
+ * IINFO node-type = L1 router (the bits that make an endnode treat us as a DR
+ * candidate), blksize + T3 = the oracle values, priority = our advertised
+ * DR-election priority, AREA/MPD = reserved-zero, and the opaque E-list EMPTY
+ * (we advertise no other routers heard rather than fabricate an E-list layout).
+ * Only valid when the engine is in router mode (else DNET_ENGINE_EINVAL).
+ *
+ * Writes the total frame length to *len_out. Returns DNET_ENGINE_OK,
+ * DNET_ENGINE_ENOSPACE if `cap` is too small, or DNET_ENGINE_EINVAL.
+ */
+int dnet_engine_build_router_hello_frame(const struct dnet_engine *e,
+                                         uint8_t *frame_out, size_t cap,
+                                         size_t *len_out);
+
+/*
+ * dnet_engine_router_hello_emitted - record that we emitted a router-hello at
+ * `now` (router mode): advance the T3 cadence (shared with the endnode path) and
+ * bump router_hello_sent. Mirrors dnet_engine_hello_emitted for the router role.
+ */
+void dnet_engine_router_hello_emitted(struct dnet_engine *e, dnet_tick_t now);
+
+/*
  * dnet_engine_rx_frame - consume one received full Ethernet frame (including the
  * 14-byte header, exactly as AF_PACKET SOCK_RAW / scs_datalink_recv() delivers
- * it) at time `now`. Validates the 0x6003 ethertype, ignores our own multicast
- * echo (src == my_id), decodes the endnode HELLO, and drives the adjacency SM.
+ * it) at time `now`. Validates the 0x6003 ethertype and ignores our own
+ * multicast echo (src == my_id), then dispatches on the routing control type:
+ *   - an ENDNODE-hello (rflags 0x0d) decodes and drives the adjacency SM (the
+ *     original behaviour); or
+ *   - a ROUTER-hello (rflags 0x0b) whose IINFO says L1/L2 router runs the
+ *     endnode DR-selection step (rd vms-0a9): the highest-priority router heard
+ *     becomes this endnode's designated router (have_dr/dr_id), which the next
+ *     endnode-hello then names in its NEIGHBOR field.
  *
- * Returns 1 if a HELLO was accepted and the neighbour SM advanced, 0 if the
- * frame was ignored (wrong ethertype, own echo, or not a decodable endnode
- * HELLO -- frames_dropped is bumped), or DNET_ENGINE_EINVAL on a null argument.
- * When non-NULL, *from_out receives the neighbour's Ethernet id and *state_out
- * its resulting adjacency state. Counters are updated in every case.
+ * Returns 1 if a HELLO was accepted (endnode-hello advanced the neighbour SM, or
+ * router-hello was accepted for DR-selection), 0 if the frame was ignored (wrong
+ * ethertype, own echo, or not a decodable/relevant HELLO -- frames_dropped is
+ * bumped), or DNET_ENGINE_EINVAL on a null argument. When non-NULL, *from_out
+ * receives the sender's Ethernet id and *state_out the sender's adjacency state
+ * (for a router-hello, that node's current adjacency state, unchanged here).
+ * Counters are updated in every case.
  */
 int dnet_engine_rx_frame(struct dnet_engine *e, dnet_tick_t now,
                          const uint8_t *frame, size_t len,

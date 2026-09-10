@@ -343,6 +343,139 @@ done:
 }
 
 /*
+ * ======================= --router --self-test ========================
+ * The router run-mode analogue of run_self_test (rd vms-0a9): a no-privilege,
+ * no-netdev, NO-REAL-NODE proof of the router-hello EMIT path. It stands up a
+ * ROUTER (R, --router) and an ENDNODE (E), and over a real socketpair(2):
+ *
+ *   1. R builds its spec-faithful router-hello frame (the exact bytes the live
+ *      datalink would put on AB-00-00-04-00-00) and ships them to E.
+ *   2. E consumes them through dnet_engine_rx_frame -- the same routing path the
+ *      live wire drives -- and SELECTS R as its designated router (E.have_dr,
+ *      dr_id == R's id): the endnode picked the router.
+ *   3. E now emits an endnode-hello that NAMES R in its rtr/neighbor field (the
+ *      passive-capture signal vms-aac0 will look for on real VAX wire), and we
+ *      ship it back to R.
+ *   4. R (a router) consumes E's endnode-hello and, because E now names R, the
+ *      two-way adjacency to E reaches UP -- the loop closes with no crash.
+ *
+ * This proves emit -> decode -> DR-selection -> reflected-neighbour end to end
+ * over genuine write(2)/read(2) of the actual encoded bytes, entirely between
+ * two OVMX engines. It touches NO real node (⭐⭐ never-crash-a-peer: the router-
+ * hello is proven safe HERE, in isolation, before any live emission).
+ *
+ * Returns 0 on PASS, 1 on FAIL.
+ */
+static int run_router_self_test(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, socketpair failed: %s\n",
+                strerror(errno));
+        return 1;
+    }
+
+    const uint8_t hwR[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x11 };
+    const uint8_t hwE[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x12 };
+    struct dnet_engine R, E;
+    /* router = 1.42 (OVMXR), endnode = 1.11 (OVMXE). */
+    if (dnet_engine_init(&R, 1, 42, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0 ||
+        dnet_engine_init(&E, 1, 11, "OVMXE", "EWA0", NULL, hwE, 0, 0, 0) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, engine init failed\n");
+        close(sv[0]); close(sv[1]);
+        return 1;
+    }
+    if (dnet_engine_set_router(&R, 64) != 0 || !dnet_engine_is_router(&R)) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, set_router failed\n");
+        close(sv[0]); close(sv[1]);
+        return 1;
+    }
+
+    int fail = 0;
+    uint8_t frame[DNET_FRAME_MAX];
+    uint8_t rxbuf[DNET_FRAME_MAX];
+    size_t flen = 0;
+    ssize_t n;
+    enum dnet_adj_state st = DNET_ADJ_DOWN;
+    uint8_t from[6];
+    dnet_tick_t now = 100;
+
+    /* 1) ROUTER emits its router-hello -> ENDNODE. The emitted node-type bits
+     *    must say "router" so an endnode treats it as a DR candidate. */
+    if (dnet_engine_build_router_hello_frame(&R, frame, sizeof(frame), &flen) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, build router-hello failed\n");
+        fail = 1; goto done;
+    }
+    /* Assert node-type bits on the wire == L1 router. IINFO is at payload
+     * offset 12 (the router-hello map, dnet_router_hello.h), payload starting at
+     * frame + ETH_HDRLEN; the low 2 bits carry the node type. */
+    if ((frame[DNET_ETH_HDRLEN + 12] & 0x03u) != DNET_NODETYPE_L1ROUTER) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, emitted node-type is not router\n");
+        fail = 1; goto done;
+    }
+    if (write(sv[0], frame, flen) != (ssize_t)flen) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, write failed: %s\n", strerror(errno));
+        fail = 1; goto done;
+    }
+    n = read(sv[1], rxbuf, sizeof(rxbuf));
+    if (n <= 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, read failed: %s\n", strerror(errno));
+        fail = 1; goto done;
+    }
+    /* 2) ENDNODE consumes it through the routing path and SELECTS R as its DR. */
+    if (dnet_engine_rx_frame(&E, now, rxbuf, (size_t)n, from, &st) != 1) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, E did not accept the router-hello\n");
+        fail = 1; goto done;
+    }
+    if (!E.have_dr || memcmp(E.dr_id, R.my_id, 6) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, E did not select R as its DR\n");
+        fail = 1; goto done;
+    }
+
+    /* 3) ENDNODE now emits an endnode-hello that NAMES R in its rtr field, and
+     *    4) ROUTER consumes it -> two-way adjacency to E reaches UP. */
+    if (dnet_engine_build_hello_frame(&E, frame, sizeof(frame), &flen) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, build E endnode-hello failed\n");
+        fail = 1; goto done;
+    }
+    /* The rtr/neighbor field is at endnode-hello payload offset 24 (dnet_hello.h
+     * map), payload starting at frame + ETH_HDRLEN; it must now name R. */
+    if (memcmp(frame + DNET_ETH_HDRLEN + 24, R.my_id, 6) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, E's endnode-hello does not name R\n");
+        fail = 1; goto done;
+    }
+    if (write(sv[1], frame, flen) != (ssize_t)flen) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, write2 failed\n");
+        fail = 1; goto done;
+    }
+    n = read(sv[0], rxbuf, sizeof(rxbuf));
+    if (n <= 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, read2 failed\n");
+        fail = 1; goto done;
+    }
+    st = DNET_ADJ_DOWN;
+    if (dnet_engine_rx_frame(&R, now + 1, rxbuf, (size_t)n, from, &st) != 1 ||
+        st != DNET_ADJ_UP) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, R did not reach UP with E (st=%d)\n",
+                (int)st);
+        fail = 1; goto done;
+    }
+
+done:
+    close(sv[0]);
+    close(sv[1]);
+    if (fail) {
+        printf("DECNETD-ROUTERTEST: FAIL\n");
+        return 1;
+    }
+    printf("DECNETD-I-ROUTERTEST, router run-mode proof PASSED"
+           " (router-hello emitted + node-type=router; endnode SELECTED it as DR"
+           " and named it in rtr; router reached UP -- all over a socketpair, NO"
+           " real node touched)\n");
+    return 0;
+}
+
+/*
  * ========================== --nsp-selftest ===========================
  * A no-privilege, no-netdev proof of the NSP LOGICAL-LINK connection service
  * (rd vms-c23, engine rung 2): two engines OPEN a logical link, exchange a data
@@ -1999,9 +2132,18 @@ static void usage(const char *argv0)
         "  --device DEV        VMS device label for the circuit (default EWA0)\n"
         "  --circuit CIRC      DECnet circuit name (default derived, e.g. EWA-0)\n"
         "  --hello-interval N  HELLO cadence T3 seconds (default %u, oracle vms-3be)\n"
+        "  --router            run as a Phase IV L1 ROUTER: advertise node-type\n"
+        "                      router and emit spec-faithful router-hellos to the\n"
+        "                      all-endnodes multicast, so an endnode selects this\n"
+        "                      node as its designated router (rd vms-0a9)\n"
+        "  --priority N        with --router: DR-election priority 0..255 (default\n"
+        "                      %u, the DNA-documented default)\n"
         "  --duration N        run N seconds then exit (default: until SIGINT/TERM)\n"
         "  --show-executor     print the NCP executor summary and exit (no socket)\n"
         "  --self-test         run the in-process tx/rx/adjacency proof and exit\n"
+        "                      (add --router for the router run-mode isolation\n"
+        "                      proof: emit->decode->endnode DR-selection over a\n"
+        "                      socketpair, no netdev, NO real node -- rd vms-0a9)\n"
         "                      (no CAP_NET_RAW, no netdev -- moves a real HELLO\n"
         "                      frame over a socketpair; DECnet analogue of\n"
         "                      scsd --dlm-selftest)\n"
@@ -2053,7 +2195,8 @@ static void usage(const char *argv0)
         "                      SYSUAF/Purdy auth (bad password REFUSED), then a\n"
         "                      sequential file transferred BOTH directions\n"
         "                      through real DAP + RMS over the ACP, byte-verified\n",
-        argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT);
+        argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT,
+        (unsigned)DNET_ROUTER_PRIORITY_DEFAULT);
 }
 
 int main(int argc, char **argv)
@@ -2076,6 +2219,8 @@ int main(int argc, char **argv)
     const char *set_host_user = "SYSTEM"; /* --user : CTERM access-control name      */
     int fal_self_test = 0;
     int fal_accept_test = 0;
+    int router_mode = 0;           /* --router: emit router-hellos, advertise L1 router */
+    int router_priority = 0;       /* --priority: DR-election priority (0 => DNA default 64) */
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
@@ -2098,6 +2243,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--user") && i + 1 < argc)     set_host_user = argv[++i];
         else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
         else if (!strcmp(argv[i], "--fal-accept-test")) fal_accept_test = 1;
+        else if (!strcmp(argv[i], "--router")) router_mode = 1;
+        else if (!strcmp(argv[i], "--priority") && i + 1 < argc)
+            router_priority = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
             return 0;
@@ -2108,6 +2256,10 @@ int main(int argc, char **argv)
         }
     }
 
+    /* --router --self-test: the router run-mode isolation proof (rd vms-0a9),
+     * no netdev, NO real node. Dispatched before the plain --self-test. */
+    if (router_mode && self_test)
+        return run_router_self_test();
     if (self_test)
         return run_self_test();
     if (nsp_self_test)
@@ -2149,6 +2301,17 @@ int main(int argc, char **argv)
     if (hello_interval < 1)
         hello_interval = (int)DNET_T3_DEFAULT;
 
+    /* --priority is only meaningful in --router mode, and is a single wire byte. */
+    if (router_priority < 0 || router_priority > 255) {
+        fprintf(stderr, "DECNETD-E-BADPRIO, --priority must be 0..255 (DR-election"
+                        " priority); got %d\n", router_priority);
+        return 1;
+    }
+    if (router_priority && !router_mode) {
+        fprintf(stderr, "DECNETD-E-BADPRIO, --priority requires --router\n");
+        return 1;
+    }
+
     /* --show-executor: report the identity/circuit this endnode would adopt and
      * exit, opening NO socket (needs no privilege). Analogue of scsd
      * --show-identity. */
@@ -2160,6 +2323,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "DECNETD-E-INIT, engine init failed\n");
             return 1;
         }
+        if (router_mode)
+            dnet_engine_set_router(&e, (uint8_t)router_priority);
         dnet_engine_show_executor(&e, stdout);
         dnet_engine_show_circuit(&e, stdout);
         return 0;
@@ -2207,6 +2372,11 @@ int main(int argc, char **argv)
         scs_datalink_close(sock);
         return 1;
     }
+    /* --router (rd vms-0a9): advertise an L1 router node-type and emit router-
+     * hellos on the T3 cadence instead of endnode-hellos, so a Phase IV endnode
+     * on the segment selects THIS node as its designated router. */
+    if (router_mode)
+        dnet_engine_set_router(&eng, (uint8_t)router_priority);
 
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
@@ -2220,9 +2390,10 @@ int main(int argc, char **argv)
      * engine below is its low-privilege DATALINK, and the AF_PACKET socket is
      * hidden behind the executive device face _NET: (Rule 1, vms-515 §3.3). */
     log_ts(stdout);
-    printf(" DECNETD-I-STARTED, NETACP up: DECnet Phase IV endnode on circuit %s"
+    printf(" DECNETD-I-STARTED, NETACP up: DECnet Phase IV %s on circuit %s"
            " (wire engine demoted to NETACP's datalink; AF_PACKET hidden behind"
-           " the _NET: device face, Rule 1)\n", eng.circuit);
+           " the _NET: device face, Rule 1)\n",
+           router_mode ? "L1 router" : "endnode", eng.circuit);
     dnet_engine_show_executor(&eng, stdout);
     dnet_engine_show_circuit(&eng, stdout);
     fflush(stdout);
@@ -2264,22 +2435,34 @@ int main(int argc, char **argv)
     while (!g_stop) {
         dnet_tick_t now = monotonic_sec();
 
-        /* T3 emission cadence: build + transmit our endnode HELLO. */
+        /* T3 emission cadence: build + transmit our HELLO. In --router mode this
+         * is a spec-faithful ROUTER-hello to the all-endnodes multicast (so an
+         * endnode selects us as its DR); otherwise the endnode-hello (rd vms-0a9). */
         if (dnet_engine_hello_due(&eng, now)) {
             size_t flen = 0;
-            if (dnet_engine_build_hello_frame(&eng, frame, sizeof(frame), &flen)
-                    == DNET_ENGINE_OK) {
+            int is_router = dnet_engine_is_router(&eng);
+            int built = is_router
+                ? dnet_engine_build_router_hello_frame(&eng, frame, sizeof(frame), &flen)
+                : dnet_engine_build_hello_frame(&eng, frame, sizeof(frame), &flen);
+            if (built == DNET_ENGINE_OK) {
+                const uint8_t *mcast = is_router ? DNET_ROUTER_HELLO_MCAST
+                                                 : DNET_HELLO_MCAST;
                 ssize_t sent = scs_datalink_send(sock, (int)ifindex,
-                                                 DNET_ETHERTYPE, DNET_HELLO_MCAST,
+                                                 DNET_ETHERTYPE, mcast,
                                                  frame, flen);
                 if (sent < 0) {
                     fprintf(stderr, "DECNETD-E-SENDFAIL, HELLO transmit failed: %s\n",
                             strerror(errno));
                 } else {
-                    dnet_engine_hello_emitted(&eng, now);
+                    if (is_router)
+                        dnet_engine_router_hello_emitted(&eng, now);
+                    else
+                        dnet_engine_hello_emitted(&eng, now);
                     log_ts(stdout);
-                    printf(" DECNETD-I-HELLOSENT, circuit %s seq=%lu bytes=%zd\n",
-                           eng.circuit, eng.hello_sent, sent);
+                    printf(" DECNETD-I-HELLOSENT, %s circuit %s seq=%lu bytes=%zd\n",
+                           is_router ? "router-hello" : "endnode-hello",
+                           eng.circuit,
+                           is_router ? eng.router_hello_sent : eng.hello_sent, sent);
                     fflush(stdout);
                 }
             }

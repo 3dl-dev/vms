@@ -483,6 +483,31 @@ static uint32_t mk_go(uint32_t epoch)
  * `csid` == 0 builds a burst with NEITHER offset carrying a shape-valid
  * value -- the "no coordinator CSID in this frame" case.
  */
+/* One cat-0x01 op-0x05 MEMBERSHIP RECORD, laid out exactly as the reference
+ * does (vms_cluster_codec_cm.h sec 5c): the constant tag, the SCSSYSTEMID the
+ * record is ABOUT, that member's boot time, its assigned CSID and the 0-based
+ * CSV index derived from that CSID's own slot. */
+static uint32_t mk_membrec(uint32_t sysid, uint32_t csid)
+{
+	vms_wire_buf_t w;
+	uint32_t n = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, 0x0041);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_TAG,
+			  VMS_CM_MEMBREC_TAG);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_SYSID,
+			  sysid);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_BOOT,
+			  0x2ac58434u);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_BOOT + 4u,
+			  0x00bc20ceu);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_CSID,
+			  csid);
+	vms_wire_put_le16(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_INDEX,
+			  (uint16_t)((csid & 0xffffu) - 1u));
+	return n;
+}
+
 static uint32_t mk_membership_csid(uint32_t csid, char form)
 {
 	vms_wire_buf_t w;
@@ -524,10 +549,30 @@ static uint32_t mk_release(uint32_t step, uint16_t send_msg)
 	return n;
 }
 
-/* One op-0x05 lock/resource-rebuild transaction (sec 4(o) rows 8-9). */
+/*
+ * One op-0x05 MEMBERSHIP RECORD from the coordinator (sec 4(o) rows 8-9 --
+ * these frames used to be modelled as opaque "lock/resource rebuild
+ * transactions"; the payload decode shows they are the membership pairing,
+ * vms_cluster_codec_cm.h sec 5c).
+ *
+ * It names THIS node and assigns it CSV slot 3, which is the slot the 0x0e
+ * nodemap these tests use has a bit for -- i.e. the frames the reference sends
+ * at this point in the join, carrying what the reference carries.
+ */
 static uint32_t mk_lockrb(uint16_t send_msg)
 {
-	return mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_LOCKRB, send_msg);
+	vms_wire_buf_t w;
+	uint32_t n = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, send_msg);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_TAG,
+			  VMS_CM_MEMBREC_TAG);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_SYSID,
+			  (uint32_t)OWN_SYSID);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_CSID,
+			  0x00010003u);
+	vms_wire_put_le16(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_INDEX, 2u);
+	return n;
 }
 
 /* The op-0x03 membership COMMIT -- the message a real VAX2 sent this node
@@ -824,7 +869,7 @@ static void test_reference_sequence(void)
 				CNXMAN_JOIN_RX_CONSUMED, "op 0x03 consumed");
 		ct_check_eq_u32(g.j.echoes_sent, 1u,
 				"op 0x03 COMMIT answered with the 0x81 echo");
-		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_LOCKRB, 0x0021);
+		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, 0x0021);
 		(void)join_feed(len);
 		ct_check_eq_u32(g.j.echoes_sent, 2u,
 				"op 0x05 rebuild txn answered too");
@@ -900,18 +945,25 @@ static void test_csid_no_coordinator_seen_stays_new(void)
 }
 
 /*
- * E30, byte-exact vectors from the real-VAX capture. VAX1's own record
- * (CSID 0x00010001, SCSSYSTEMID 1025, generation 1) taught the *coordinator's*
- * identity on the wire; this node's own SCSSYSTEMID (1027, the capture's
- * VAX3) combines with the WIRE-LEARNED generation to compute OVMX's own
- * CSID -- never the coordinator's value, never a copy.
+ * op-0x06 TEACHES A GENERATION AND MINTS NOTHING (rd vms-fc7).
+ *
+ * These three cases used to assert that this node DERIVED its own CSID as
+ * `generation << 16 | (SCSSYSTEMID & 0x3ff)` from a coordinator CSID read off
+ * an op-0x06. The reference refutes that construction outright: in
+ * tests/lab/captures/cn3-achieved-20260905.pcap the coordinator's op-0x05
+ * records pair SCSSYSTEMID 1986 with CSID 0x00010003 (CSV slot 3) while
+ * 1986 & 0x3ff is 962, and in op06-join-20260903.pcap 1026 is paired with
+ * 0x00010003 while 1026 & 0x3ff is 2. The rule is a round-robin CSV slot,
+ * which no joiner can compute -- so the derive is gone and the assertions
+ * below are the corrected ones: the burst is READ, its generation counted,
+ * and NO cluster system id is invented from it.
  */
-static void test_csid_wire_learned_form_a(void)
+static void test_op06_teaches_a_generation_only_form_a(void)
 {
 	uint32_t len;
 
-	printf("\n-- E30: form A (body[24:28]), capture-exact 0x00010001 -> "
-	       "generation 1 --\n");
+	printf("\n-- op-0x06 form A (body[24:28]): a generation, not an "
+	       "identity --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
@@ -922,26 +974,21 @@ static void test_csid_wire_learned_form_a(void)
 
 	ct_check_eq_u32(g.j.csid_unpinned, 0u,
 			"a shape-valid coordinator CSID WAS found");
-	/* E79: learning a CSID is NOT being admitted (sec 4(q): membership
-	 * "follows from the transition completing", and the reference joiner's
-	 * CSID is on the wire ~160 ms BEFORE its barrier opens). The node stays
-	 * pre-MEMBER until a real op-0x0c #12 commits. */
+	ct_check_eq_u32(g.j.generations_seen, 1u,
+			"... and counted as what it is: a generation");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"[ADMIT][CSID_LEARNED] records the CSID and does NOT "
-			"promote");
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "the CLUB learned it");
-	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
-			"(1 << 16) | (1027 & 0x3ff) = 0x00010003 -- computed, "
-			"not copied from the coordinator's 0x00010001");
+			"[ADMIT][CSID_LEARNED] promotes nothing");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"and NO cluster system id is minted from it -- the "
+			"assignment is the coordinator's round-robin CSV slot, "
+			"which this node cannot compute");
 }
 
-/* The same mechanism through the OTHER measured offset (body[36:40]), with
- * the capture's other real value (VAX3's own re-asserted CSID). */
-static void test_csid_wire_learned_form_b(void)
+static void test_op06_teaches_a_generation_only_form_b(void)
 {
 	uint32_t len;
 
-	printf("\n-- E30: form B (body[36:40]), capture-exact 0x00010003 --\n");
+	printf("\n-- op-0x06 form B (body[36:40]): likewise --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
@@ -950,36 +997,131 @@ static void test_csid_wire_learned_form_b(void)
 	len = mk_membership_csid(0x00010003u, 'B');
 	(void)join_feed(len);
 
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"form B also fires the CSID cell -- and, like form A, "
-			"promotes nothing (E79)");
-	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
-			"same computed CSID via the other offset");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "promotes nothing");
+	ct_check_eq_u32(g.j.generations_seen, 1u, "a generation, counted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"and still nothing minted");
 }
 
 /*
- * The generation is READ FROM THE WIRE, never hardcoded to the capture's
- * observed 1: a coordinator CSID whose generation is 7 makes this node
- * compute a CSID carrying 7, not 1.
+ * THE ADOPTION: op-0x05 is where a CSID really comes from. Byte-exact vectors
+ * from cn3 -- SCSSYSTEMID 1986 paired with CSID 0x00010003, CSV index 2.
  */
-static void test_csid_generation_never_fabricated(void)
+static void test_membrec_adopted_when_it_names_us(void)
 {
 	uint32_t len;
 
-	printf("\n-- E30: the generation is wire-learned, not baked in --\n");
+	printf("\n-- op-0x05: the cluster ASSIGNS this node its CSID --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
-	g.cl.params.scssystemid = 1027ull;
+	g.cl.params.scssystemid = 1986ull;   /* cn3's OVMXJ1 */
 
-	len = mk_membership_csid(0x00070005u, 'A'); /* generation 7, shape-valid */
+	len = mk_membrec(1986u, 0x00010003u);
 	(void)join_feed(len);
 
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"still records, still does not promote (E79)");
-	ct_check_eq_u32(g.cl.club.local_csid, 0x00070003u,
-			"(7 << 16) | (1027 & 0x3ff): the generation tracked the "
-			"wire value, not a constant 1");
+	ct_check_eq_u32(g.j.membrecs_seen, 1u, "the record parsed");
+	ct_check_eq_u32(g.j.membrecs_adopted, 1u, "... named us, and was adopted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "the CLUB holds a CSID");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
+			"and it is the ASSIGNED one -- CSV slot 3 -- not "
+			"1986 & 0x3ff = 962, which no nodemap byte could express");
+	ct_check_eq_u32(g.j.echoes_sent >= 1u, 1u,
+			"and the record is still ANSWERED (refusing a member "
+			"breaks the join, sec 4(p))");
+}
+
+static void test_membrec_about_another_member_is_not_adopted(void)
+{
+	uint32_t len;
+
+	printf("\n-- op-0x05 about somebody else is NOT our identity --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1986ull;
+
+	len = mk_membrec(MEMBER_SYSID, 0x00010001u);   /* the member's record */
+	(void)join_feed(len);
+
+	ct_check_eq_u32(g.j.membrecs_seen, 1u, "parsed");
+	ct_check_eq_u32(g.j.membrecs_adopted, 0u,
+			"and NOT taken as THIS node's identity");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"this node still holds no cluster system id");
+	/* But it IS filed against the block this CLUB holds for that system --
+	 * which is what later lets this node match it to a nodemap bit and
+	 * COUNT the cluster it is in. */
+	ct_check_eq_u32(g.j.membrecs_peer_learned, 1u,
+			"the record is filed on the peer it NAMES");
+	{
+		const struct vms_csb *peer =
+			cnxman_club_find_sysid(&g.cl.club, MEMBER_SYSID);
+
+		ct_check(peer != NULL && peer->csid_valid,
+			 "  that peer's block now carries a CSID");
+		if (peer != NULL)
+			ct_check_eq_u32((uint32_t)peer->csid, 0x00010001u,
+					"  ... the one the record named");
+	}
+
+	/* A system this node holds no block for is NOT invented. */
+	len = mk_membrec(4242u, 0x00010007u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.j.membrecs_unknown_peer, 1u,
+			"a record about a system with no block is counted and "
+			"dropped -- there is no \"system zero\"");
+}
+
+/*
+ * RE-ADOPTED, NEVER CACHED. p. 7-25: a rejoining system gets a NEW CSID and
+ * never its old one back -- measured on the oracle, where one SCSSYSTEMID took
+ * slot 4 and then slot 5 on its rejoin.
+ */
+static void test_membrec_readopted_on_a_new_assignment(void)
+{
+	uint32_t len;
+
+	printf("\n-- op-0x05: a new assignment REPLACES the old one --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1030ull;
+
+	len = mk_membrec(1030u, 0x00010004u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010004u, "slot 4 first");
+
+	len = mk_membrec(1030u, 0x00010005u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010005u,
+			"... and slot 5 on the rejoin -- re-adopted, not cached");
+	ct_check_eq_u32(g.j.membrecs_adopted, 2u, "both adoptions counted");
+}
+
+/* A record this codec will not stand behind teaches nothing -- and is still
+ * answered. */
+static void test_membrec_unusable_is_answered_not_adopted(void)
+{
+	uint32_t len;
+	vms_wire_buf_t w;
+
+	printf("\n-- op-0x05 that does not hold together: answered, not "
+	       "adopted --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1986ull;
+
+	len = mk_membrec(1986u, 0x00010003u);
+	/* break the 0-based index so it disagrees with the CSID's own slot */
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le16(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_INDEX, 7u);
+	(void)join_feed(len);
+
+	ct_check_eq_u32(g.j.membrecs_unusable, 1u, "refused by the codec");
+	ct_check_eq_u32(g.j.membrecs_adopted, 0u, "nothing adopted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "no identity taken");
 }
 
 /* The mechanism exists and the table cell is real -- exercised directly so
@@ -1506,6 +1648,20 @@ static void drive_to_state(enum cnxman_join_state s)
 		return;
 	}
 
+	/*
+	 * MEMBER IS REACHED THE REAL WAY, IN THE REAL ORDER (rd vms-fc7 /
+	 * vms-9c99). The coordinator sends the op-0x05 MEMBERSHIP RECORDS
+	 * BEFORE the transition open -- measured in cn3, where the op-0x05
+	 * burst (frames 230-233) precedes the op-0x09 (834) and the GO (849) --
+	 * so this node has adopted its assigned CSID by the time the nodemap
+	 * arrives, which is exactly what lets it find its own bit in it. The
+	 * bitmap below is 0x0e = {1,2,3} and the assigned slot is 3.
+	 */
+	if (s != CNXMAN_JOIN_BARRIER) {
+		len = mk_membrec((uint32_t)OWN_SYSID, 0x00010003u);
+		(void)join_feed(len);
+	}
+
 	len = mk_open_add(EPOCH, 0x0eu);
 	(void)join_feed(len);
 	len = mk_go(EPOCH);
@@ -1514,14 +1670,12 @@ static void drive_to_state(enum cnxman_join_state s)
 		return;
 
 	/*
-	 * E79: MEMBER IS NOW REACHED ONLY THE REAL WAY. This used to be a bare
-	 * cnxman_join_csid_learned() call, because the CSID cell promoted; it
-	 * does not any more (sec 4(q)), so the harness has to run the twelve
-	 * barrier steps and take the coordinator's op-0x0c #12 like a real
-	 * joiner. That is the point: if the barrier ever stops reaching MEMBER,
-	 * every cell of the [MEMBER] row goes untested and this walk says so.
+	 * The GO is the promotion (p. 7-42; cn3 shows a real cluster counting a
+	 * joiner from the GO with no op-0x0c ever sent to it). The twelve
+	 * barrier steps still run afterwards -- they are the lock-rebuild
+	 * synchronisation -- and are walked here so the [MEMBER] row's cells
+	 * are exercised on a node that really went through them.
 	 */
-	cnxman_join_csid_learned(&g.j, 0x00010003u);
 	{
 		uint32_t step;
 		uint16_t peer_msg = 0x0100;
@@ -2745,8 +2899,8 @@ static void test_e72_members_open_connection_supersedes_our_connect(void)
 	ct_check_eq_u32(n_sent_on(CM_CONID), 0u,
 			"and NOTHING went out on the connect that never opened");
 
-	/* INV-6: reaching ADMIT is not being a member. Only the cluster's own
-	 * op-0x06, carrying a real coordinator CSID, promotes this node. */
+	/* INV-6: reaching ADMIT is not being a member, and no identity has
+	 * been taken yet. */
 	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
 			"this node claims no membership yet");
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
@@ -2755,14 +2909,16 @@ static void test_e72_members_open_connection_supersedes_our_connect(void)
 	g.cl.params.scssystemid = 1027ull;   /* the capture's VAX3 */
 	len = mk_membership_csid(0x00010001u, 'A');
 	(void)join_feed(len);
-	/* E79: the record teaches the CSID and NOTHING MORE. Promotion is the
-	 * barrier's op-0x0c #12, tested in test_e79_member_only_on_commit(). */
+	/* rd vms-fc7: op-0x06 carries a GENERATION, not an assignment. It
+	 * teaches nothing this node may take as its own identity -- that is
+	 * op-0x05's job (test_membrec_adopted_when_it_names_us). */
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"the membership record teaches a CSID; it does NOT "
-			"make this node a member");
-	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
-			"... with the CSID computed from the WIRE-learned "
-			"generation and this node's real SCSSYSTEMID");
+			"the membership burst does NOT make this node a member");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"... and mints it no cluster system id either: the "
+			"assignment is the coordinator's round-robin CSV slot");
+	ct_check_eq_u32(g.j.generations_seen, 1u,
+			"the generation IS counted, as what it is");
 }
 
 static void test_e72_beat_advertises_on_the_open_it_missed(void)
@@ -2943,30 +3099,31 @@ static void test_post_admit_drive_to_member(void)
 			"each op-0x05 rebuild txn -> its own 0x81/0x05");
 
 	/* Row 10: the op-0x06 MEMBERSHIP burst. It is answered with the
-	 * opportunistic cat-0x04 ack, and it is the ONLY thing in this whole
-	 * dialogue that can make this node a member. */
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
-			"this node is still NEW: no op-0x06 has named a real "
-			"generation yet");
+	 * opportunistic cat-0x04 ack and carries a cluster GENERATION; the
+	 * identity itself came from the op-0x05 records above (rd vms-fc7). */
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u,
+			"the op-0x05 records DID name this node: it holds its "
+			"assigned cluster system id");
 	len = mk_membership_csid(MEMBER_CSID, 'A');
 	(void)join_feed(len);
 	/* E79: sec 4(u)'s ack is "never keyed to an opcode" -- the burst is
 	 * consumed here and its credit goes back through the CDT ledger. */
 	ct_check_eq_u32(g.j.acks_sent, 0u,
 			"op-0x06 draws NO opcode-keyed answer (E79)");
+	/* rd vms-fc7: the op-0x05 records above are where the identity came
+	 * from -- the cluster ASSIGNED this node CSV slot 3. The op-0x06 burst
+	 * that follows teaches a generation and mints nothing. */
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u,
-			"... and the WIRE-LEARNED generation gave this node a "
-			"CSID (E30)");
-	ct_check_eq_u32(g.cl.club.local_csid,
-			(unsigned long)((MEMBER_CSID & 0xffff0000u) |
-					(OWN_SYSID & 0x3ffu)),
-			"  == (the coordinator's own generation << 16) | our "
-			"REAL SCSSYSTEMID -- never copied, never templated");
-	/* E79: NOT YET. The CSID is learned; the transition has not even
-	 * opened. sec 4(q): membership follows the transition COMPLETING. */
+			"... and the op-0x05 records gave this node its CSID");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
+			"  == the ASSIGNED round-robin CSV slot, adopted off "
+			"the wire -- never derived from SCSSYSTEMID & 0x3ff, "
+			"which the reference refutes");
+	/* NOT YET: the transition has not even opened, so p. 7-42's tasks have
+	 * not run and nothing has decided this node's membership. */
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"the CSID is learned and this node is still NOT a "
-			"member -- the barrier has not even opened");
+			"the CSID is adopted and this node is still NOT a "
+			"member -- the transition has not even opened");
 
 	/* sec 4(p): the transition open is Phase 1 and is ACKNOWLEDGED. */
 	len = mk_open_add(EPOCH, 0x0eu);
@@ -3025,6 +3182,9 @@ static void test_post_admit_drive_to_member(void)
 		 "every send-msg# this node put on that connection is "
 		 "STRICTLY greater than the last -- the join's dialogue and "
 		 "the barrier's share one CSB and must share one counter");
+	/* rd vms-9c99: this node became a MEMBER at the GO -- p. 7-42's tasks
+	 * -- and the twelve steps it then walked are the lock-rebuild
+	 * synchronisation, not the thing that admitted it. */
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
 			"and this node is a MEMBER at the end of it");
 }
@@ -3090,14 +3250,23 @@ static void test_e85_barrier_survives_to_member(void)
 	bed_set_identity();          /* NO grounded body[24:26] -- as shipped */
 	drive_to_admit();
 
+	/* rd vms-fc7: the identity comes from the coordinator's op-0x05
+	 * membership record (slot 3, the bit the 0x0e nodemap below carries),
+	 * which is what the reference sends before the open. */
+	len = mk_lockrb(++peer_msg);
+	(void)join_feed(len);
 	len = mk_membership_csid(MEMBER_CSID, 'A');
 	(void)join_feed(len);
 	len = mk_open_add(EPOCH, 0x0eu);
 	(void)join_feed(len);
 	len = mk_go(EPOCH);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
-			"the GO put this node in [BARRIER]");
+	/* rd vms-9c99: the GO IS the commit (p. 7-42) -- the nodemap named this
+	 * node and its assigned slot was in it, so it is a member from here.
+	 * The twelve steps below are the lock-rebuild synchronisation it then
+	 * walks as a member, which is what the reference does. */
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"the GO committed Phase 2 and promoted this node");
 
 	connects_at_go = g.n_connect;
 	disconnects_at_go = g.n_disconnect;
@@ -3127,9 +3296,14 @@ static void test_e85_barrier_survives_to_member(void)
 		len = mk_release(step, ++peer_msg);
 		(void)join_feed(len);
 
+		/* rd vms-9c99: membership was decided at the GO, so this node
+		 * is ALREADY a member while it walks the rebuild barrier --
+		 * which is what the reference does (cn3: a real cluster counts
+		 * a joiner from the GO and never sends it an op-0x0c at all). */
 		if (step < CNXMAN_BARRIER_STEPS)
-			ct_check(g.j.state != CNXMAN_JOIN_MEMBER,
-				 "  not a MEMBER before op-0x0c #12");
+			ct_check(g.j.state == CNXMAN_JOIN_MEMBER,
+				 "  already a MEMBER while the rebuild barrier "
+				 "runs");
 	}
 
 	/* THE BARRIER COMPLETED -- withholding the close did not stall it. */
@@ -3138,8 +3312,8 @@ static void test_e85_barrier_survives_to_member(void)
 	ct_check_eq_u32(g.b.state, (unsigned long)CNXMAN_BARRIER_COMPLETE,
 			"release #12 completed the transition");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
-			"and MEMBER follows from THAT -- the real op-0x0c #12, "
-			"nothing synthetic (sec 4(q))");
+			"and this node is a MEMBER -- decided at the GO "
+			"(p. 7-42), unaffected by the withheld close");
 	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_NONE,
 			"with no failure recorded anywhere in it");
 
@@ -3202,8 +3376,13 @@ static void test_member_only_on_a_real_op06_csid(void)
 
 	len = mk_commit(++peer_msg);
 	(void)join_feed(len);
-	len = mk_lockrb(++peer_msg);
+	/* An op-0x05 record about ANOTHER member: real, answered, and NOT this
+	 * node's identity (rd vms-fc7). */
+	len = mk_membrec(1025u, 0x00010001u);
 	(void)join_feed(len);
+	ct_check_eq_u32(g.j.membrecs_adopted, 0u,
+			"no record has named this node, so it has adopted "
+			"nothing");
 
 	/* A burst with NEITHER measured offset carrying a shape-valid CSID. */
 	len = mk_membership_csid(0u, 'A');
@@ -3279,10 +3458,15 @@ static void test_e79_op06_burst_originates_nothing(void)
 			"...and the retired per-record ack counter never moved");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"255 membership records do not admit this node either");
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u,
-			"the CSID they DID teach is learned (E30) -- learning "
-			"an identity and being granted membership are "
-			"different facts (sec 4(q))");
+	/* rd vms-fc7: a burst -- however long -- carries a GENERATION, not an
+	 * assignment. 255 of them mint nothing; only an op-0x05 record naming
+	 * this node can give it a cluster system id. */
+	ct_check_eq_u32(g.j.generations_seen, 255u,
+			"all 255 generations are counted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"and NOT ONE of them gave this node an identity -- the "
+			"assignment is the coordinator's round-robin CSV slot, "
+			"which no burst carries");
 }
 
 /*
@@ -3294,15 +3478,18 @@ static void test_e79_member_only_on_the_op0c_commit(void)
 	uint32_t len, step;
 	uint16_t peer_msg = 0x0002;
 
-	printf("\n-- E79: MEMBER turns over on op-0x0c #12, not before --\n");
+	printf("\n-- vms-9c99: MEMBER turns over at the GO (p. 7-42), and the "
+	       "rebuild barrier that follows changes nothing --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
-	g.cl.params.scssystemid = 1027ull;
 
-	len = mk_membership_csid(0x00010001u, 'A');
+	/* The identity first: an op-0x05 record naming this node, slot 3 --
+	 * the bit the 0x0e nodemap below carries. */
+	len = mk_lockrb(++peer_msg);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "the CSID is learned");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u,
+			"the CSID is ADOPTED from the membership record");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"and this node is NOT a member on the strength of it");
 
@@ -3311,11 +3498,22 @@ static void test_e79_member_only_on_the_op0c_commit(void)
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"the Phase 1 open does not promote either");
 
+	/*
+	 * THE GO IS THE COMMIT. p. 7-42's tasks run here -- the nodemap into
+	 * the CSBs, the quorum, the count, this node's own CLUSTER flag -- and
+	 * the reference behaves accordingly: in cn3 a real cluster counted its
+	 * joiner from the GO for the remaining 600 s and never sent it a single
+	 * op-0x0c. A joiner that waited for op-0x0c #12 there would wait
+	 * forever while the cluster already counted it.
+	 */
 	len = mk_go(EPOCH);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
-			"the GO hands the wire to the barrier -- still not a "
-			"member, though Phase 2 has committed (p. 7-42)");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"the GO committed Phase 2 and THIS is the promotion");
+	ct_check_eq_u32(g.b.phase2_commits, 1u,
+			"... counted where Phase 2 really ran");
+	ct_check_eq_u32(g.b.commits, 0u,
+			"and no op-0x0c has been seen at all yet");
 
 	for (step = 1u; step < CNXMAN_BARRIER_STEPS; step++) {
 		char what[96];
@@ -3325,26 +3523,25 @@ static void test_e79_member_only_on_the_op0c_commit(void)
 		len = mk_release(step, ++peer_msg);
 		(void)join_feed(len);
 		snprintf(what, sizeof(what),
-			 "  after release #%u of 12: still NOT a member",
+			 "  after release #%u of 12: still a member, unchanged",
 			 (unsigned)step);
-		ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER, what);
+		ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER, what);
 	}
 	ct_check_eq_u32(g.b.commits, 0u,
-			"eleven releases have committed NOTHING: the count is "
-			"the only termination signal there is (sec 4(p))");
+			"eleven releases have completed NOTHING: the count is "
+			"still the only termination signal (sec 4(p))");
 
 	len = mk_step_ack(CNXMAN_BARRIER_STEPS, ++peer_msg);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
-			"the twelfth 0x81/0x0b ack is an ACK, not the release");
 
 	len = mk_release(CNXMAN_BARRIER_STEPS, ++peer_msg);
 	(void)join_feed(len);
 	ct_check_eq_u32(g.b.commits, 1u,
-			"op-0x0c #12 is the COMMIT -- one, counted where the "
-			"barrier really finished");
+			"op-0x0c #12 still ENDS the rebuild barrier -- one, "
+			"counted where the barrier really finished");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
-			"AND ONLY NOW does this node read MEMBER");
+			"and this node is STILL a member -- the barrier ending "
+			"neither granted nor withdrew anything");
 	ct_check_eq_u32(g.j.commits_not_ours, 0u,
 			"nothing about that transition contradicted it");
 }
@@ -3939,9 +4136,12 @@ int main(void)
 	test_reference_sequence();
 	test_disk_client_readback();
 	test_csid_no_coordinator_seen_stays_new();
-	test_csid_wire_learned_form_a();
-	test_csid_wire_learned_form_b();
-	test_csid_generation_never_fabricated();
+	test_op06_teaches_a_generation_only_form_a();
+	test_op06_teaches_a_generation_only_form_b();
+	test_membrec_adopted_when_it_names_us();
+	test_membrec_about_another_member_is_not_adopted();
+	test_membrec_readopted_on_a_new_assignment();
+	test_membrec_unusable_is_answered_not_adopted();
 	test_csid_learned_edge_exists();
 	test_lockdirwt_is_not_advertised();
 	test_no_invented_connect_data_or_descriptor();

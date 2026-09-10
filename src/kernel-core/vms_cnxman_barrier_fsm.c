@@ -496,6 +496,10 @@ static void barrier_commit_phase2(struct cnxman_barrier *b)
 
 	(void)cnxman_phase2_commit(b->cl, &in, &st, b->ops);
 
+	/* THE COMMIT the join FSM promotes on (rd vms-9c99): p. 7-42's tasks
+	 * have just run, so this node's membership is decided HERE. */
+	b->phase2_commits++;
+
 	b->nodemap_unmapped += st.nodemap_unmapped;
 	b->count_mismatch += st.count_mismatch;
 	b->bitmap_short += st.bitmap_short;
@@ -1079,6 +1083,23 @@ void cnxman_barrier_set_dlm(struct cnxman_barrier *b,
 int cnxman_barrier_phase2_committed(const struct cnxman_barrier *b)
 {
 	return (b != NULL && b->phase2_committed != 0u) ? 1 : 0;
+}
+
+uint32_t cnxman_barrier_phase2_commits(const struct cnxman_barrier *b,
+				       struct cnxman_barrier_commit *out)
+{
+	if (b == NULL)
+		return 0u;
+	if (out != NULL && b->phase2_commits != 0u) {
+		out->epoch = b->epoch;
+		out->tr_class = b->tr_class;
+		/* What the map said about US, written where the map was really
+		 * read -- the same Phase 2 that just ran. */
+		out->local_named = b->local_named;
+		out->local_in_map = b->local_in_map;
+		out->pad = 0u;
+	}
+	return b->phase2_commits;
 }
 
 uint32_t cnxman_barrier_commits(const struct cnxman_barrier *b,

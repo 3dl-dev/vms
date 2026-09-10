@@ -226,6 +226,106 @@ extern "C" {
  * ~11 sub-record shapes (ASCII name/transport fragments, all-zero padding)
  * that share the same two candidate offsets in other cycle positions.
  */
+/* ------------------------------------------------------------------ *
+ * sec 5c  cat-0x01 op-0x05 -- THE MEMBERSHIP RECORD
+ *
+ * The one frame that tells a joiner which CSID the cluster assigned it, and
+ * the ONLY grounded {SCSSYSTEMID -> CSID} pairing in the protocol. op-0x06
+ * carries a cluster GENERATION and nothing attributable; op-0x05 carries the
+ * pairing itself.
+ *
+ * GROUNDED, byte-exact, over every cat-0x01 op-0x05 frame in the two lab
+ * captures -- 5 in tests/lab/captures/cn3-achieved-20260905.pcap and 3 in
+ * op06-join-20260903.pcap, 8/8 agreeing on every field below:
+ *
+ *   body[16:20]  0x00000220   CONSTANT, 8/8 frames
+ *   body[20:24]  SCSSYSTEMID  LE32 -- the member this record is ABOUT
+ *   body[28:36]  boot time    VMS 64-bit absolute quadword (that member's
+ *                             incarnation)
+ *   body[36:40]  assigned CSID LE32 (hi = generation, lo = CSV slot)
+ *   body[40:42]  CSV index    LE16, 0-based == (CSID & 0xffff) - 1, 8/8
+ *   body[42:132] STALE BUFFER in the reference -- leftover strings
+ *                ("DECNET", "SYSTEM$VAX1", "DTI$SYSTEM$V") and VAX kernel
+ *                pointers, different in every frame. NOT reproduced (Rule 8:
+ *                another implementation's memory) and NOT interpreted; OVMX
+ *                zeroes it and COUNTS the omission (INV-6).
+ *
+ * The measured pairings are what settled rd vms-3a7c:
+ *
+ *   cn3       1025 -> 0x00010001 idx 0 | 1026 -> 0x00010002 idx 1
+ *             1986 -> 0x00010003 idx 2   <-- 1986 & 0x3ff = 962, NOT 3
+ *   op06-join 1025 -> 0x00010001 idx 0 | 1026 -> 0x00010003 idx 2
+ *                                          <-- 1026 & 0x3ff = 2, NOT 3
+ *
+ * i.e. the coordinator assigns a ROUND-ROBIN, MONOTONICALLY ADVANCING CSV
+ * slot, never SCSSYSTEMID & 0x3ff and never a sticky one.
+ *
+ * WHO GETS WHICH RECORDS, also measured (cn3): the coordinator sends the
+ * JOINER the FULL member set including the joiner's own record (frames
+ * 230-233, VAX2 -> OVMXJ1: 1986, 1025, 1026, 1986) and sends each
+ * already-PRESENT member only the DELTA (frame 235, VAX2 -> VAX1: 1986).
+ * ------------------------------------------------------------------ */
+#define VMS_OFB_CM_MEMBREC_TAG    16u /* body[16:20] LE32, constant below   */
+#define VMS_OFB_CM_MEMBREC_SYSID  20u /* body[20:24] LE32 SCSSYSTEMID       */
+#define VMS_OFB_CM_MEMBREC_BOOT   28u /* body[28:36] VMS absolute quadword  */
+#define VMS_OFB_CM_MEMBREC_CSID   36u /* body[36:40] LE32 assigned CSID     */
+#define VMS_OFB_CM_MEMBREC_INDEX  40u /* body[40:42] LE16, 0-based CSV index*/
+#define VMS_OFB_CM_MEMBREC_STALE  42u /* body[42:132] uninterpreted         */
+#define VMS_CM_MEMBREC_TAG   0x00000220u  /* 8/8 real frames                */
+
+/*
+ * One membership record, as this codec reads and writes it. Fixed-width and
+ * 64-bit-free (the boot time travels as a _lo/_hi pair) so the struct lays out
+ * identically on ILP32 elf32-vax and LP64 -- the same discipline
+ * vms_cluster_snapshot.h imposes.
+ */
+struct vms_cm_membership_rec {
+	uint32_t sysid;        /* SCSSYSTEMID this record is about            */
+	uint32_t csid;         /* the CSID the cluster assigned it            */
+	uint32_t boot_lo;      /* its boot time, low word                     */
+	uint32_t boot_hi;      /* ... high word                               */
+	uint16_t index;        /* 0-based CSV index, == (csid & 0xffff) - 1   */
+	uint8_t  boot_valid;   /* 0 = no boot time was carried/held           */
+	uint8_t  pad;
+};
+
+/*
+ * vms_cm_membership_rec_build - ORIGINATE one op-0x05 membership record.
+ *
+ * Every field must come from the emitting coordinator's OWN executive
+ * membership state -- the SCSSYSTEMID in the CSB, the CSID coord_assign_slot()
+ * really stamped on it, that member's real incarnation. This builder cannot
+ * check that and does not try; its caller (vms_cnxman_coord_fsm.c) is what
+ * makes it honest, exactly as for the nodemap.
+ *
+ * REFUSES rather than emitting a record it cannot stand behind: a zero
+ * SCSSYSTEMID, a CSID that fails the shared shape test, or a CSID whose CSV
+ * slot is 0 (p. 7-25: slot 0 is never used, and the 0-based index would
+ * underflow) are all VMS_CODEC_E_RANGE with NOTHING written.
+ *
+ * `boot_valid` clear leaves body[28:36] zero and is the caller's honest "this
+ * executive holds no incarnation for that member" -- never a fabricated time.
+ * body[42:132] is always zero: see sec 5c.
+ *
+ * STAMP with is_response=0.
+ */
+vms_codec_status_t vms_cm_membership_rec_build(const struct vms_cm_membership_rec *rec,
+					       uint8_t *out_body, uint32_t cap,
+					       uint32_t *written);
+
+/*
+ * vms_cm_membership_rec_parse - read one op-0x05 membership record.
+ *
+ * VMS_CODEC_E_CLASS unless this really is a cat-0x01 op-0x05.
+ * VMS_CODEC_E_RANGE when the record does not hold together -- the constant tag
+ * absent, a zero SCSSYSTEMID, a CSID that fails the shape test, or an index
+ * that disagrees with the CSID's own CSV slot. A record that fails ANY of
+ * those teaches nothing and must not be adopted: the whole point of this frame
+ * is that a joiner takes its identity from it.
+ */
+vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len,
+					       struct vms_cm_membership_rec *out);
+
 #define VMS_OFB_CM_MEMBERSHIP_CSID_A  24u /* body[24:28], form A          */
 #define VMS_OFB_CM_MEMBERSHIP_CSID_B  36u /* body[36:40], form B          */
 #define VMS_OFF_CM_MEMBERSHIP_CSID_A  (VMS_OFF_SYSAP_BODY + \
@@ -345,7 +445,16 @@ extern "C" {
 #define VMS_CM_OP_CONFIG       0x02u /* cat 0x01: config/topology           */
 #define VMS_CM_OP_COMMIT       0x03u /* cat 0x01: membership-commit txn     */
 #define VMS_CM_OP_ABORT        0x04u /* cat 0x01: transition abort, role 0x50*/
-#define VMS_CM_OP_LOCKRB       0x05u /* cat 0x01: lock/resource rebuild txn */
+/*
+ * cat 0x01 op 0x05: the MEMBERSHIP RECORD -- one {SCSSYSTEMID, boot time,
+ * assigned CSID, CSV index} tuple per member. This used to be called LOCKRB
+ * ("lock/resource rebuild txn") on the strength of its position in the join
+ * sequence; the payload decode (see sec 5c below) shows it is the membership
+ * pairing, and it is the ONLY frame in the protocol that tells a joiner WHICH
+ * CSID the cluster assigned IT. Renamed rather than aliased so no reader can
+ * hold the old meaning.
+ */
+#define VMS_CM_OP_MEMBREC      0x05u /* cat 0x01: MEMBERSHIP RECORD, sec 5c */
 #define VMS_CM_OP_MEMBERSHIP   0x06u /* cat 0x01: post-commit MEMBERSHIP burst*/
 #define VMS_CM_OP_XITION_REM   0x08u /* cat 0x01: class-0x03 transition open*/
 #define VMS_CM_OP_XITION_ADD   0x09u /* cat 0x01: class-0x02 transition open*/
@@ -962,6 +1071,85 @@ vms_codec_status_t vms_cm_params_build(uint16_t votes,
  */
 vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);
+
+/*
+ * vms_cm_membership_build - cat 0x01 op 0x06, ONE MEMBERSHIP record: this
+ * coordinator re-asserting its OWN CSID, which is the whole of what op-0x06
+ * has ever taught OVMX. Full grounding: docs/design-op06-membership-builder.md.
+ *
+ * WHY IT EXISTS. A joiner's ONLY route to a CSID is
+ * vms_cm_membership_coordinator_csid() below, and its only route to MEMBER is
+ * a CSID (vms_cnxman_phase2.c task 1 needs csb->csid_valid to find this
+ * node's own nodemap bit). With no builder, an OVMX coordinator could admit
+ * nobody: the 2-node genesis rig measured the founder at MEMBER and the
+ * joiner permanently NEW (rd vms-f6b).
+ *
+ * WHY IT IS NOT THE :715 FABRICATION. That note forbids a zero-filled
+ * op-0x06 on the premise that the burst carries a membership LIST, so zeros
+ * would assert an empty cluster. E30 falsified that premise and the captures
+ * refute it outright: 23 of 255 real op-0x06 frames in
+ * tests/lab/captures/op06-join-20260903.pcap -- and 23 of 254 in
+ * cn3-achieved-20260905.pcap, the burst OVMX itself consumed to reach CN=3 --
+ * carry an ENTIRELY ZERO body[24:132], interleaved through the burst (first at
+ * position 5 of 255, then every ~11 frames), in joins that SUCCEEDED. A zero
+ * payload is a shape the reference emits as a matter of course. The prohibition
+ * still stands for the two opcodes that note also names -- the op-0x05
+ * lock/resource rebuild burst and the ORIGINATING cat-0x02 op-0x0d record --
+ * and neither gains a builder here.
+ *
+ * WHAT IT WRITES, and the measurement behind each byte (509 real frames,
+ * two independent captures, two different clusters/coordinators/epochs):
+ *
+ *   body[8]     0x01                    category           509/509
+ *   body[9]     0x06                    opcode             509/509
+ *   body[12:16] `epoch`                 the CLUB's REAL transition epoch
+ *                                       (offset + role grounded 509/509;
+ *                                        the value is this node's own)
+ *   body[16]    VMS_CM_ROLE_COMMIT      0x20               509/509
+ *   body[17]    VMS_CM_CLASS_ADD        0x02               509/509
+ *   body[24:28] `coord_csid`            FORM A -- the offset that in both
+ *                                       captures carries ONLY the sender's
+ *                                       own genuine CSID, zero false
+ *                                       positives (24/24 and 24/24)
+ *
+ * and NOTHING else. Every other byte is left zero and its omission is the
+ * CALLER's to count:
+ *
+ *   body[10:12] uninitialised buffer residue in the reference ("AN", "RE",
+ *               "Xc", ...) -- sec 4(p) forbids reproducing it;
+ *   body[20:24] a per-frame countdown whose OFFSET is grounded but whose
+ *               SEMANTICS are not (0x00 is itself an observed value);
+ *   body[28:36] the incarnation quadword -- offset grounded, but the value is
+ *               this node's boot time, which lives in the port's identity
+ *               (pe_incarnation()) and is not reachable from a pure FSM TU;
+ *   body[40:132] the rest of whichever sub-record a frame carries -- not
+ *               grounded, and partly the reference's own kernel pointers,
+ *               which Rule 8 forbids reproducing.
+ *
+ * FORM A, NOT FORM B, deliberately: form A is the offset the reader tries
+ * FIRST, and it is the record in which a sender asserts ITS OWN CSID. Form B
+ * is used to re-assert OTHER members' records, which OVMX cannot honestly
+ * build -- it holds no incarnation for a peer, and inventing one is the
+ * E76/E78 vector that bugchecked two real VAXes.
+ *
+ * REFUSAL, NEVER A ZERO CSID (INV-6). `coord_csid` is put through the SAME
+ * shape test vms_cm_membership_coordinator_csid() applies on receive, so this
+ * builder and that reader can never disagree about what a CSID looks like. A
+ * value that fails it is VMS_CODEC_E_RANGE and NO FRAME IS BUILT: a burst
+ * naming no real CSID teaches a joiner nothing, and sending one anyway would
+ * put a shape on the wire this node does not have.
+ *
+ * ONE FRAME PER ADMISSION, not a burst. The joiner needs one. Integration note
+ * E78 records that a 254-frame membership burst is what provoked the ack storm
+ * that bugchecked VAX2 and kept it down; the fewest frames that carry the fact
+ * is both the honest minimum and the smallest crash surface.
+ *
+ * STAMP with is_response=0. txn stays 0: op-0x06 is a NOTIFICATION, never
+ * answered with an 0x81 (this file's own allowlist row, VMS_WIRE_ACT_CONSUME).
+ */
+vms_codec_status_t vms_cm_membership_build(uint32_t epoch, uint32_t coord_csid,
+					   uint8_t *out_body, uint32_t cap,
+					   uint32_t *written);
 
 /*
  * vms_cm_membership_coordinator_csid - E30 (falsified + replaced, real-VAX

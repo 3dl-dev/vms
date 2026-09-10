@@ -1729,6 +1729,35 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	struct vms_cm_params p;
 
 	j->peer_adverts++;
+
+	/*
+	 * op-0x02 IS NOT AN ADVERT -- IT IS A MEMBERSHIP REQUEST, AND IT IS THE
+	 * COORDINATOR'S (rd vms-f6b).
+	 *
+	 * Spec sec 4(p): a joiner "sends its op 0x02 to EXACTLY ONE peer", and
+	 * BEING ASKED is what makes the asked node the coordinator (book
+	 * pp. 7-37/7-38). vms_cnxman_coord_fsm.c's whole selection edge is
+	 * [IDLE|COMPLETE|ABANDONED][RX_TR_REQUEST], and RX_TR_REQUEST is
+	 * exactly this opcode.
+	 *
+	 * The router offers a body to the join FSM FIRST, so a CONSUMED here
+	 * ends its journey: this handler used to consume op-0x02 -- counting it
+	 * as a "peer advert" -- and the coordinator was never asked anything.
+	 * MEASURED on the 2-node genesis rig: both nodes put their op-0x02 on
+	 * the wire (RIG-*-JOINREC kind=2 cat=0x01 op=0x02), the peer's port and
+	 * SCS delivered it, and NEITHER node ever logged "proposing addition of
+	 * a system to the cluster" -- the admission timed out on both sides,
+	 * every time, for the whole run.
+	 *
+	 * NOT_MINE lets it fall through to the barrier (which does not claim
+	 * cat-0x01 op-0x02) and then to the coordinator, which does. It is
+	 * returned ONLY for this one opcode: op-0x01 is handled below and
+	 * op-0x14 has no other owner, so both stay consumed and neither becomes
+	 * an "unroutable frame" console line.
+	 */
+	if (e->env.opcode == VMS_CM_OP_CONFIG)
+		return CNXMAN_JOIN_RX_NOT_MINE;
+
 	if (e->env.opcode != VMS_CM_OP_PARAMS || e->from_csb < 0)
 		return CNXMAN_JOIN_RX_CONSUMED;
 	csb = cnxman_club_csb_at(&j->cl->club, (uint32_t)e->from_csb);
@@ -1752,10 +1781,97 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 
 /* op-0x03 COMMIT and each op-0x05 rebuild transaction: the grounded 0x81 echo,
  * with body[17] carrying THIS node's own current class (spec sec 4(r)). */
+/*
+ * THE ADOPTION (rd vms-fc7 / vms-9c99). A cat-0x01 op-0x05 membership record
+ * naming THIS node's own SCSSYSTEMID carries the CSID the cluster ASSIGNED it,
+ * and adopting it is the only correct thing to do with it.
+ *
+ * WHAT THIS REPLACES, AND WHY IT WAS WRONG. This node used to DERIVE its own
+ * CSID as `generation << 16 | (SCSSYSTEMID & 0x3ff)` off an op-0x06. The
+ * reference refutes that construction outright: in
+ * tests/lab/captures/cn3-achieved-20260905.pcap the coordinator assigns
+ * SCSSYSTEMID 1986 the CSID 0x00010003 -- CSV slot 3, the next free slot --
+ * while 1986 & 0x3ff is 962. A node carrying 962 has a CSV slot the nodemap
+ * byte cannot even express, so phase2_csb_in_nodemap() answers "unknown"
+ * forever and the node can never select itself into the cluster it has
+ * genuinely been admitted to. That is exactly what OVMX did on the real VAX.
+ *
+ * RE-ADOPTED, NEVER CACHED. p. 7-25: a rejoining system gets a NEW CSID and
+ * never its old one back -- measured on the oracle, where one SCSSYSTEMID took
+ * slot 4 and then slot 5 on its rejoin. So every admission adopts afresh;
+ * cnxman_club_learn_local_csid() overwrites, and nothing here short-circuits
+ * on "we already have one".
+ *
+ * NOTHING IS ADOPTED FROM A RECORD ABOUT SOMEBODY ELSE: the sysid at
+ * body[20:24] must be THIS node's own real SYSGEN SCSSYSTEMID.
+ */
+static void join_adopt_membership_rec(struct cnxman_join *j,
+				      const struct join_ev *e)
+{
+	struct vms_cm_membership_rec rec;
+
+	if (j->cl == NULL)
+		return;
+	if (vms_cm_membership_rec_parse(e->body, e->len, &rec) != VMS_CODEC_OK) {
+		/* Not a record this codec will stand behind (bad tag, bad
+		 * CSID shape, index disagreeing with the slot). Counted; the
+		 * echo below still goes out, because refusing to answer a
+		 * member breaks the join (sec 4(p)). */
+		j->membrecs_unusable++;
+		return;
+	}
+	j->membrecs_seen++;
+
+	if (rec.sysid != (uint32_t)j->cl->params.scssystemid) {
+		/*
+		 * A RECORD ABOUT ANOTHER MEMBER, AND WHY IT IS TAKEN.
+		 *
+		 * The coordinator sends a joiner the FULL member set (measured:
+		 * cn3 frames 230-233 carry 1986, 1025, 1026 to OVMXJ1), and
+		 * this is what that set is FOR. Each record NAMES the system it
+		 * is about, so filing its CSID on the block this CLUB already
+		 * holds for that SCSSYSTEMID is a read of what the frame says
+		 * -- not the op-0x06 ambiguity, where a burst carries a CSID
+		 * with no statement of whose it is.
+		 *
+		 * Without it this node knows its own slot and nobody else's,
+		 * cannot match any other CSB to a nodemap bit
+		 * (phase2_csb_in_nodemap needs csid_valid), and counts a
+		 * cluster of one while being a member of a cluster of two.
+		 *
+		 * A system this node holds NO block for is not invented: there
+		 * is no "system zero" (INV-6). The record is counted and
+		 * dropped.
+		 */
+		struct vms_csb *peer =
+			cnxman_club_find_sysid(&j->cl->club,
+					       (vms_scs_sysid_t)rec.sysid);
+
+		if (peer == NULL) {
+			j->membrecs_unknown_peer++;
+			return;
+		}
+		cnxman_csb_set_csid(peer, (vms_csid_t)rec.csid);
+		j->membrecs_peer_learned++;
+		return;
+	}
+
+	cnxman_join_csid_learned(j, (vms_csid_t)rec.csid);
+	j->membrecs_adopted++;
+	join_log(j, "%CNXMAN, the cluster assigned this node a cluster system "
+		    "id");
+}
+
 static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
 				       const struct join_ev *e)
 {
 	vms_codec_status_t st;
+
+	/* op-0x05 is a MEMBERSHIP RECORD before it is a thing to echo. Adopt
+	 * first, then answer -- the answer is unconditional either way. */
+	if (e->env.category == VMS_CM_CAT_CONFIG &&
+	    e->env.opcode == VMS_CM_OP_MEMBREC)
+		join_adopt_membership_rec(j, e);
 
 	if (!join_recipe_allowed(e->env.category, e->env.opcode,
 				 (uint16_t)VMS_CM_RECIPE_ECHO)) {
@@ -1856,12 +1972,28 @@ static void join_learn_csid_from_membership(struct cnxman_join *j,
 				    "this node's CSID was NOT learned");
 		return;
 	}
-	/* generation = the coordinator CSID's high 16 bits, READ FROM THE
-	 * WIRE -- never assumed, never hardcoded (INV-6). */
+	/*
+	 * A GENERATION, AND NOTHING MORE (rd vms-fc7).
+	 *
+	 * This used to compute `generation << 16 | (SCSSYSTEMID & 0x3ff)` and
+	 * adopt it as this node's own CSID. The reference refutes that
+	 * construction: the coordinator assigns a ROUND-ROBIN CSV slot, and in
+	 * tests/lab/captures/cn3-achieved-20260905.pcap SCSSYSTEMID 1986 was
+	 * assigned slot 3 while 1986 & 0x3ff is 962. Deriving 962 gave this
+	 * node a slot the nodemap byte cannot express, so it could never
+	 * select itself into a cluster that had really admitted it.
+	 *
+	 * The CSID is now ADOPTED from the op-0x05 membership record that
+	 * names this node (join_adopt_membership_rec), which is the only
+	 * grounded {SCSSYSTEMID -> CSID} pairing the protocol carries. What
+	 * op-0x06 is still good for is confirming that a cluster with a real
+	 * generation is out there -- counted, and nothing is minted from it.
+	 */
 	generation = (coord_csid >> 16) & 0xffffu;
-	own_csid = vms_cm_csid_of(generation,
-				  (uint32_t)j->cl->params.scssystemid);
-	cnxman_join_csid_learned(j, own_csid);
+	j->generations_seen++;
+	if (generation == 0u)
+		j->csid_unpinned++;
+	(void)own_csid;
 }
 
 static enum cnxman_join_rx join_h_membership(struct cnxman_join *j,
@@ -1958,7 +2090,9 @@ static enum cnxman_join_rx join_forward(struct cnxman_join *j,
  */
 static uint32_t join_barrier_commits(const struct cnxman_join *j)
 {
-	return cnxman_barrier_commits(j->barrier, NULL);
+	/* rd vms-9c99: PHASE 2, not op-0x0c #12 -- see
+	 * cnxman_barrier_phase2_commits()'s contract. */
+	return cnxman_barrier_phase2_commits(j->barrier, NULL);
 }
 
 static void join_post_commit(struct cnxman_join *j, uint32_t before,
@@ -1968,7 +2102,7 @@ static void join_post_commit(struct cnxman_join *j, uint32_t before,
 	struct join_ev e;
 
 	join_bzero(&c, (uint32_t)sizeof(c));
-	if (cnxman_barrier_commits(j->barrier, &c) == before)
+	if (cnxman_barrier_phase2_commits(j->barrier, &c) == before)
 		return;   /* nothing committed in that dispatch */
 
 	join_bzero(&e, (uint32_t)sizeof(e));
@@ -2982,7 +3116,7 @@ static enum cnxman_event join_event_of(const struct vms_cm_envelope *env)
 		case VMS_CM_OP_CONFIG:
 			return CNXMAN_EV_RX_CONFIG;
 		case VMS_CM_OP_COMMIT:
-		case VMS_CM_OP_LOCKRB:
+		case VMS_CM_OP_MEMBREC:
 			return CNXMAN_EV_RX_COMMIT;
 		case VMS_CM_OP_MEMBERSHIP:
 			return CNXMAN_EV_RX_MEMBERSHIP;

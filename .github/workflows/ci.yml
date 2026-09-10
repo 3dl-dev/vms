@@ -114,6 +114,7 @@ jobs:
       alpha_boot_runtime: ${{ steps.decide.outputs.alpha_boot_runtime }}
       alpha_activation: ${{ steps.decide.outputs.alpha_activation }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
+      tcpip: ${{ steps.decide.outputs.tcpip }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -228,6 +229,23 @@ jobs:
               - 'tools/cross-alpha-vms/**'
               - 'src/vmslink/**'
               - 'src/imgact/**'
+            # vms-21b: the TCP/IP aux-server launch mechanism + daytime cold-boot
+            # proof. Fires the tcpip-daytime-boot-e2e gate on any PR touching the
+            # aux server, its service images, the shipped/test SERVICE.DAT +
+            # SYSTARTUP, the boot image build, or the e2e/posture-guard tests.
+            # Scoped so unrelated PRs pay nothing for the ~heavy full-distro boot.
+            tcpip:
+              - '.github/workflows/**'
+              - 'src/vmstcpip/**'
+              - 'src/vmsrms/**'
+              - 'distro/Dockerfile.bootable'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYS$STARTUP/**'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM'
+              - 'distro/rootfs-test-tcpip/**'
+              - 'tests/qemu/run_tcpip_daytime_boot_e2e.sh'
+              - 'tests/qemu/test_tcpip_daytime_boot_e2e.sh'
+              - 'tests/integration/test_tcpip_posture_guard.sh'
             release:
               - '.github/workflows/**'
               - 'tools/cut-release.sh'
@@ -422,6 +440,7 @@ jobs:
               echo "alpha_boot_runtime=${{ steps.filter.outputs.alpha_boot_runtime }}"
               echo "alpha_activation=${{ steps.filter.outputs.alpha_activation }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
+              echo "tcpip=${{ steps.filter.outputs.tcpip }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -441,6 +460,7 @@ jobs:
               echo "alpha_boot_runtime=true"
               echo "alpha_activation=true"
               echo "vax_toolchain=true"
+              echo "tcpip=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -1683,6 +1703,60 @@ jobs:
           fi
           echo "Negative control confirmed: the gate correctly reddened (exit $rc) on a genuine version disagreement."
           exit 0
+
+  # -----------------------------------------------------------------------
+  # tcpip-daytime-boot-e2e (vms-21b): the aux server launches a SYS$SYSTEM:
+  # service image on a BOOTED distro. Proves the (B) ACP-stage launch fix end to
+  # end: a test-overlay build (OVMX_TEST_ENABLE_TCPIP=1) cold-boots with the aux
+  # server auto-started, TCPIP$INETD materializes SYS$SYSTEM:TCPIP$DAYTIME.EXE off
+  # the Files-11 ACP and execve's it, and an inbound connection to :13 gets the
+  # RFC 867 line back. DAYTIME is the minimal service (no auth/privsep/posture);
+  # SSH (vms-843a) is the second, harder service on this proven launch path.
+  # TRIGGER (vms-f834 hole-free form): PR touching tcpip -> runs (so the vms-21b
+  # PR is green-by-SHA); schedule/dispatch -> runs (main-side reds surface on the
+  # nightly, never a PR-only blind spot). Full-distro boot is too heavy for every
+  # unrelated main push, so it is path-filtered, NOT run on every != pull_request.
+  tcpip-daytime-boot-e2e:
+    name: TCP/IP daytime cold-boot e2e — aux server launches DAYTIME on a booted distro (vms-21b)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+            || (github.event_name == 'pull_request' && needs.changes.outputs.tcpip == 'true'))
+            && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build daytime test-overlay bootable image (OVMX_TEST_ENABLE_TCPIP=1)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot-tcpip:latest
+          build-args: |
+            OVMX_TEST_ENABLE_TCPIP=1
+          # Reuses the shared gha layer cache: only the late test-overlay layer
+          # differs from the shipped build, so the kernel + build-static layers are
+          # cache hits (fast rebuilds), the reason CI beats a cold rail build here.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Daytime cold-boot proof — INETD launches DAYTIME (ACP-stage), :13 answers RFC 867
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_DAYTIME_IMAGE=ovmx-boot-tcpip:latest \
+            tests/qemu/run_tcpip_daytime_boot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: tcpip_daytime_boot_e2e SKIPPED in CI — this gate must actually boot + probe :13, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
 
   # -----------------------------------------------------------------------
   # dcl-acceptance-e2e: BOOT-AND-RUN-COMMANDS DCL/SHOW acceptance gate.

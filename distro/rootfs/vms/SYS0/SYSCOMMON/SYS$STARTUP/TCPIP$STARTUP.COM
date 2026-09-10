@@ -35,18 +35,14 @@ $!
 $ INETD_IMAGE = "SYS$SYSTEM:TCPIP$INETD.EXE"
 $ SERVICE_DB  = "SYS$SYSTEM:TCPIP$SERVICE.DAT"
 $!
-$ IF F$SEARCH(SERVICE_DB) .EQS. ""
-$ THEN
-$     SAY "%TCPIP-W-NOSERVICEDB, service database ''SERVICE_DB' not found -- no services started"
-$     EXIT
-$ ENDIF
-$!
-$ IF F$SEARCH(INETD_IMAGE) .EQS. ""
-$ THEN
-$     SAY "%TCPIP-W-NOINETD, auxiliary server image ''INETD_IMAGE' not present -- TCP/IP services not started"
-$     SAY "                  (build tools/vms_tcpip_inetd -> TCPIP$INETD.EXE and stage it in SYS$SYSTEM)"
-$     EXIT
-$ ENDIF
+$! No F$SEARCH pre-check on these SYS$SYSTEM: filespecs (rd vms-21b): both are
+$! ODS-2-resident on the ACP-only system disk, and F$SEARCH of a $-in-name file
+$! over the Files-11 ACP does not resolve reliably (a DCL/RMS $SEARCH gap; tracked
+$! separately). The real operations report honestly WITHOUT the pre-check: RUN
+$! activates INETD.EXE via the DCL RUN ACP-stage path (a genuine %RUN-F- if it is
+$! absent), and TCPIP$INETD reads the service DB over the ACP itself (a genuine
+$! %TCPIP-F-NOSERVICEDB if it cannot). So a pre-check here only ADDS a false
+$! negative on the $-name; drop it and let the operations speak.
 $!
 $ SAY "%TCPIP-I-STARTAUX, starting the auxiliary server (TCPIP$INETD) from ''SERVICE_DB'"
 $! The auxiliary server is a persistent master listener -- it must run as a

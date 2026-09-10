@@ -98,6 +98,10 @@ $! build via --build-arg OVMX_TEST_ENABLE_TCPIP=1; the SHIPPED SYSTARTUP_VMS.COM
 $! is UNCHANGED, opens no port by default -- auto-start is an operator posture call).
 $! Bring the NIC up the ordinary VMS way (SLIRP's single guest lease 10.0.2.15),
 $! then start the auxiliary server so the enabled DAYTIME service answers inbound.
-$ @SYS$MANAGER:TCPIP$CONFIG OVMX OVMX.LOCAL ETH0: 10.0.2.15 255.255.255.0
+$! iface = the LINUX ifname (eth0): TCPIP$CONFIG's TCPIP SET INTERFACE does an
+$! ordinary SIOCSIFADDR against the substrate NIC by its kernel name, not the
+$! VMS-view name (ETH0:) -- passing "ETH0:" yielded %TCPIP-E-NOSUCHDEV. 10.0.2.15
+$! is QEMU SLIRP's conventional single-guest lease, reachable via the hostfwd.
+$ @SYS$MANAGER:TCPIP$CONFIG OVMX OVMX.LOCAL eth0 10.0.2.15 255.255.255.0
 $ @SYS$STARTUP:TCPIP$STARTUP
 $ EXIT

@@ -36,13 +36,20 @@
 #include <netinet/in.h>
 
 #include "vms/pcb.h"
+#include "rms/rms.h"        /* rms_stage_over_acp: read the DB off the ODS-2 ACP */
 #include "tcpip_inetd.h"
 
 /* Default service DB path when none is given on the command line. The running
+ * OVMX system resolves SYS$SYSTEM: through the Files-11 ACP; on a booted distro
+ * the DB is ODS-2-resident there (NOT on the Linux VFS), so main() stages it off
+ * the ACP via rms_stage_over_acp before reading (rd vms-21b) -- the same
+ * materialize-off-the-ACP the aux server does for the service images it launches.
+ * A LITERAL path (argv[1], leading '/') is read directly (the in-guest KE test
+ * harness's own fixture path). OLD literal below kept as the historical note.
  * OVMX system resolves SYS$SYSTEM: through the Files-11 ACP; this literal is the
  * rootfs staging path so the image is runnable in a plain build/test shell too. */
 #define DEFAULT_SERVICE_DB \
-    "/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT"
+    "SYS$SYSTEM:TCPIP$SERVICE.DAT"
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -90,11 +97,30 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    db_text = slurp(db_path);
-    if (!db_text) {
-        fprintf(stderr, "%%TCPIP-F-NOSERVICEDB, cannot read service database %s: %s\n",
-                db_path, strerror(errno));
-        return 1;
+    /* The DB lives at SYS$SYSTEM: on the ACP-only ODS-2 system disk (NOT on the
+     * boot initramfs Linux VFS), so a VMS-filespec path is materialized off the
+     * ACP into a tmpfs copy first (rms_stage_over_acp -- the shared vmsrms stager,
+     * vms-21b) and THAT is read. A leading-'/' path (the KE test's literal fixture)
+     * is read directly. Fail honestly if the DB is not on the ACP volume. */
+    {
+        static char staged_db[512];
+        const char *read_path = db_path;
+        if (db_path[0] != '/') {
+            uint32_t st = rms_stage_over_acp(db_path, "/tmp/ovmx_tcpip_service.dat");
+            if (!(st & 1u)) {          /* VMS status: low bit set == success */
+                fprintf(stderr, "%%TCPIP-F-NOSERVICEDB, cannot stage service database %s off the ACP (status %#x)\n",
+                        db_path, st);
+                return 1;
+            }
+            snprintf(staged_db, sizeof(staged_db), "/tmp/ovmx_tcpip_service.dat");
+            read_path = staged_db;
+        }
+        db_text = slurp(read_path);
+        if (!db_text) {
+            fprintf(stderr, "%%TCPIP-F-NOSERVICEDB, cannot read service database %s: %s\n",
+                    db_path, strerror(errno));
+            return 1;
+        }
     }
 
     nsvc = tcpip_inetd_parse_db(db_text, svcs, TCPIP_INETD_MAX_SERVICES);

@@ -434,6 +434,7 @@ lock-enq-immediate-grant-status-wrong
 lock-deq-status-wrong
 lock-convert-mode-not-updated
 dlm-xnode-mode-unvalidated
+dlm-xnode-redirect-target-dropped
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
@@ -1595,6 +1596,28 @@ EOF
         why)          echo "vms_lock_dlm_xnode_dispatch() stops bounds-checking the decoded request's lock mode: the up-front 'lkmode > LCK_K_EXMODE' refusal is forced always-false with a 0-AND prefix, so a request naming an out-of-range mode (LCK_K_EXMODE+1) is no longer refused with SS\$_BADPARAM at the door -- it falls through to the op switch and, for an ENQ that names a resource, returns SS\$_UNSUPPORTED (rung 1's honest decline) as though the mode were valid. A malformed cross-node message that should be rejected up front is instead accepted for dispatch. One guard neutered; the op switch, the empty-name check, and the unknown-op default are all untouched, so only the bad-mode assertion moves.";;
         require_fail) cat <<'EOF'
 bad lock mode -> SS$_BADPARAM
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    dlm-xnode-redirect-target-dropped)
+        case "$_f" in
+        facility)     echo "distributed lock manager -- the DIRECTORY REDIRECT of a mis-addressed cross-node ENQ (vms_lock.c enq_inbound_not_master, rd vms-b96)";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        # `xn->redirect_csid = target;` occurs ONCE in the file --
+        # enq_inbound_not_master()'s sole report of the redirect target -- so
+        # no range anchor is needed. Reached by exactly one suite:
+        # test_syssvc_dlm_xnode drives VMS_IOCTL_DLM_XNODE, and no other suite
+        # does (the cross-node handler has no public sys\$ entry point).
+        suites_red)   echo "test_syssvc_dlm_xnode";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "The engine still DECIDES to redirect a mis-addressed cross-node \$ENQ, but stops REPORTING which node to redirect to: enq_inbound_not_master() reports 0 instead of the master CSID it just read off the resource block, so the dispatch answers VMS_DLM_STS_REDIRECT with master_csid == 0 -- a redirect that names nobody. That is precisely the ungrounded answer INV-6 exists to stop: the wire arm would build a reply with no object behind it, and the requester would be told to re-address a request to node zero. The DECISION is untouched (the status is still REDIRECT) and so are the loop guard and the no-master decline, both of which report 0 legitimately -- so only the assertion about the target moves.";;
+        require_fail) cat <<'EOF'
+the redirect names the master the executive genuinely holds
 EOF
                       ;;
         knock_on_fail) echo "";;
@@ -6267,6 +6290,19 @@ apply_edit() {
         # requires. The op switch, the empty-name check, and the unknown-op
         # default are untouched, so ONLY "bad lock mode -> SS$_BADPARAM" reddens.
         sed -i 's|    if (req->lkmode > LCK_K_EXMODE)|    if (0 \&\& req->lkmode > LCK_K_EXMODE) /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
+    dlm-xnode-redirect-target-dropped)
+        # UNIQUE TEXT, no range anchor needed: `xn->redirect_csid = target;`
+        # occurs once in the file -- enq_inbound_not_master()'s sole report of
+        # the redirect target. Replacing the value with 0 leaves the DECISION
+        # intact (a->status is still derived from `target`, so the dispatch
+        # still answers VMS_DLM_STS_REDIRECT) and destroys only the ANSWER's
+        # content: a redirect naming nobody. After substitution the line reads
+        # `xn->redirect_csid = 0;`, which no longer contains the anchor text, so
+        # a second apply finds nothing -- the no-op selftest requires. The loop
+        # guard and the no-master decline both report 0 legitimately and are
+        # unaffected, so ONLY "the redirect names the master the executive
+        # genuinely holds" reddens.
+        sed -i 's|    xn->redirect_csid = target;|    xn->redirect_csid = 0; /* NEGCTL dlm-xnode-redirect-target-dropped */|' "$_file";;
     resdir-master-csid-not-reported)
         # `args.master_csid = res->master_csid;` is the ONLY assignment to
         # that field in the file (vms_ioctl_get_resmaster's sole copy-out),

@@ -727,6 +727,132 @@ static void directory_is_the_master(void)
 }
 
 /* ==========================================================================
+ * 3b. THE MIRROR: OVMX AS THE MIS-ADDRESSED NODE -- the directory REDIRECT
+ *     (rd vms-b96)
+ *
+ * Every leg above has OVMX as the REQUESTER. This one turns the exchange
+ * round: a peer sends OVMX a lock request for a tree OVMX does not master, and
+ * the REAL dispatch (vms_lock_dlm_xnode_dispatch) has to answer it. It used to
+ * decline blind; now it answers with the master's CSID -- Davis p. 6-31
+ * outcome 2, the same answer peer_receive() above gives OVMX.
+ *
+ * WHY THIS NEEDS N NODES AND CANNOT BE A SECOND R1. The assertion is not "the
+ * dispatch returned a number". It is that the CSID OVMX names is a system that,
+ * in the SIMULATED cluster's own state, really masters the tree -- and that it
+ * is a member this cluster can address at all. A single-node test can only
+ * check the value against the value it injected; here it is checked against a
+ * different system's facts.
+ * ========================================================================== */
+
+/*
+ * One simulated system sends OVMX a cat-02 op-01, delivered exactly as the DLM
+ * wire arm will deliver it (vms_dlm_scs.h §3.2: "AS A DIRECT CALL, no ioctl"),
+ * and the answer is read back the way the wire arm will read it: the dispatch's
+ * status plus the master_csid it filled in.
+ */
+static uint32_t peer_enqs_at_ovmx(uint32_t from_sys, const char *resnam,
+				  uint32_t req_lkid, vms_csid_t *out_target,
+				  uint32_t *out_master_lkid)
+{
+	struct vms_dlm_xnode_args x;
+	uint32_t st;
+
+	memset(&x, 0, sizeof(x));
+	x.op = VMS_DLM_OP_ENQ;
+	x.lkmode = LCK_K_EXMODE;
+	x.req_lkid = req_lkid;
+	x.req_csid = g_csid[from_sys];
+	strscpy(x.resnam, resnam, sizeof(x.resnam));
+
+	st = vms_lock_dlm_xnode_dispatch(&g_proc, &x);
+	if (out_target)
+		*out_target = x.master_csid;
+	if (out_master_lkid)
+		*out_master_lkid = x.master_lkid;
+	return st;
+}
+
+static void misaddressed_inbound_is_redirected(void)
+{
+	struct vms_dlm_proxy_post db;
+	vms_csid_t target = 0;
+	uint16_t hash = 0;
+	uint32_t lkid = 0, st, mlk = 0, frames_before;
+
+	printf("--- a peer mis-addresses OVMX: it is REDIRECTED to the real "
+	       "master ---\n");
+	reset_wire();
+
+	/* VAXB is the directory for this wire value; VAXA masters the tree.
+	 * OVMX takes a lock in it the long way round, so its lock database ends
+	 * up holding VAXA as the tree's master -- a value the CLUSTER gave it,
+	 * which is the only kind a redirect may name. */
+	ct_check(hash_routing_to(g_csid[1], &hash) == 0,
+		 "a wire value the vector routes to VAXB");
+	g_sim_master = g_csid[0];
+	g_sim_master_lkid = 0x00D1CE01u;
+	wire_teaches_hash("F11B$aSHARED9", hash);
+	st = do_enq("F11B$aSHARED9", LCK_K_EXMODE, &lkid);
+	ct_check(st == (uint32_t)SS__NORMAL && lkid != 0u,
+		 "OVMX takes a lock in the tree, mastered at VAXA");
+
+	frames_before = g_wire_n;
+
+	/* VAXC now sends OVMX a request for that tree. VAXA masters it, so the
+	 * request is mis-addressed -- the case a stale vector or a stale RSB on
+	 * the sender produces on a real wire. */
+	st = peer_enqs_at_ovmx(2u, "F11B$aSHARED9", 0x00C30001u, &target, &mlk);
+	ct_check_eq_u32(st, (uint32_t)VMS_DLM_STS_REDIRECT,
+			"*** OVMX REDIRECTS it (it used to decline blind) ***");
+	ct_check_eq_u32(target, g_sim_master,
+			"*** and names the system the SIMULATED CLUSTER really "
+			"has mastering the tree ***");
+	ct_check(which_sys(target) < SIM_N,
+		 "the target is a real member of this cluster, addressable on "
+		 "the LAN -- never a value nobody can reach");
+	ct_check_eq_u32(mlk, 0u,
+			"and no lock handle is echoed: OVMX holds none for it");
+
+	/* The value came out of the LOCK DATABASE, not out of the request. The
+	 * INV-6 chokepoint says the same thing about the same tree. */
+	memset(&db, 0, sizeof(db));
+	ct_check_eq_u32(vms_lock_dlm_proxy_refill_post(lkid, VMS_DLM_POST_ENQ,
+						       0u, &db),
+			(uint32_t)SS__NORMAL, "the lock database re-reads");
+	ct_check_eq_u32(db.master_csid, target,
+			"*** and the redirect target IS what the executive "
+			"holds for the tree ***");
+
+	/* A REPLY, not a forward: answering emitted nothing of its own. */
+	ct_check_eq_u32(g_wire_n, frames_before,
+			"*** the answer put NO frame on the LAN: a redirect is "
+			"a reply the connection manager carries, never a "
+			"forward this layer sends ***");
+
+	/* TERMINATION, at this node: the one hop that could turn round on
+	 * itself -- a request FROM the very system we would redirect to -- is
+	 * declined instead, so no A->B->A cycle exists to enter. */
+	target = 0xffffffffu;
+	st = peer_enqs_at_ovmx(0u /* VAXA, the master itself */,
+			       "F11B$aSHARED9", 0x00A00001u, &target, &mlk);
+	ct_check_eq_u32(st, (uint32_t)SS__UNSUPPORTED,
+			"*** a request from the master itself is DECLINED, not "
+			"bounced back to it ***");
+	ct_check_eq_u32(target, 0u, "and names nobody");
+
+	/* And a tree OVMX holds no master for names nobody at all -- the
+	 * directory its own vector resolves is NOT a master (INV-6). */
+	wire_teaches_hash("F11B$aUNHELD9", hash);
+	target = 0xffffffffu;
+	st = peer_enqs_at_ovmx(2u, "F11B$aUNHELD9", 0x00C30002u, &target, &mlk);
+	ct_check_eq_u32(st, (uint32_t)SS__UNSUPPORTED,
+			"a tree OVMX holds no master for is DECLINED");
+	ct_check_eq_u32(target, 0u,
+			"*** and the DIRECTORY the vector resolves is never "
+			"named as its master ***");
+}
+
+/* ==========================================================================
  * 4. A member departs while a request is outstanding
  * ========================================================================== */
 static void master_departs_mid_request(void)
@@ -780,6 +906,7 @@ int main(void)
 	novel_name_posts_nothing();
 	cross_node_enq_resolves_and_grants();
 	directory_is_the_master();
+	misaddressed_inbound_is_redirected();
 	master_departs_mid_request();
 
 	return ct_summary("dlm_requester");

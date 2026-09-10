@@ -663,6 +663,60 @@ static void test_redirect(void)
 }
 
 /* ==========================================================================
+ * 4b. THE REDIRECT BUDGET TERMINATES (rd vms-b96's other half)
+ *
+ * Now that a mis-addressed inbound request is ANSWERED with a master CSID
+ * (vms_lock.c's enq_inbound_not_master) rather than declined blind, the
+ * termination argument has two halves and this is the second one.
+ *
+ * A redirect is a REPLY, not a forward, so no chain of nodes can form on the
+ * wire -- but two systems whose weight vectors disagree could still ping-pong
+ * one request between them for ever. The bound that stops that lives HERE, in
+ * the requester: DLM_REQ_MAX_REDIRECTS answers followed and no more, after
+ * which the waiter is failed honestly instead of frame N+1 leaving this node.
+ * Assert the COUNT and the SILENCE, not the intent -- an unbounded build
+ * passes every other assertion in this file.
+ * ========================================================================== */
+static void test_redirect_budget_terminates(void)
+{
+	struct vms_dlm_proxy_post p;
+	uint32_t i, sent_before;
+
+	printf("-- an endless ping-pong of redirects TERMINATES at the "
+	       "budget\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_CR, 0x00A5u, 1, 0u);
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_DIR);
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+
+	/* Every answer names a DIFFERENT master, so nothing but the budget can
+	 * stop this: a build without one sends a frame per answer, for ever. */
+	for (i = 0; i < (uint32_t)DLM_REQ_MAX_REDIRECTS; i++)
+		ct_check(dlm_req_fsm_redirect(&g_fsm, g.lkb.lkid,
+					      (vms_csid_t)(CSID_MASTER + i)) ==
+			 DLM_REQ_OK,
+			 "a redirect WITHIN the budget is followed");
+	ct_check_eq_u32(g_fsm.redirects_followed,
+			(uint32_t)DLM_REQ_MAX_REDIRECTS,
+			"the budget's worth, and they were counted");
+
+	sent_before = g.n_sent;
+	ct_check(dlm_req_fsm_redirect(&g_fsm, g.lkb.lkid,
+				      (vms_csid_t)(CSID_MASTER +
+						   DLM_REQ_MAX_REDIRECTS)) !=
+		 DLM_REQ_OK,
+		 "*** the redirect PAST the budget is refused ***");
+	ct_check_eq_u32(g.n_sent, sent_before,
+			"*** and NOT ONE further frame went on the wire ***");
+	ct_check_eq_u32(g.fail_calls, 1u,
+			"the waiter was failed instead -- honestly");
+	ct_check(g.fail_why == DLM_REQ_FAIL_UNROUTABLE,
+		 "  with UNROUTABLE, never a fabricated success");
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 0u,
+			"and no request block was left outstanding");
+}
+
+/* ==========================================================================
  * 5. ASSUME (outcome 3): "you master it" -- promote, send nothing
  * ========================================================================== */
 static void test_assume_mastery(void)
@@ -1208,6 +1262,7 @@ int main(void)
 	test_completion_reads_the_lkb_not_the_frame();
 	test_hash_unknown_refuses();
 	test_redirect();
+	test_redirect_budget_terminates();
 	test_assume_mastery();
 	test_decline_reresolve_then_stop();
 	test_deny_at_master();

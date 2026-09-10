@@ -179,6 +179,15 @@ if(TARGET test_syssvc_crtl_rms_veneer)
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
 endif()
 
+# test_syssvc_crtl_rms_bigwrite (vms-126): the veneer-completeness proof (large
+# >64 KiB chunked writes + FAB$M_TMD delete-on-close temps). Same reusable veneer
+# TU as the base veneer proof; its strong sys$create/$search references pull the
+# vmsrms archive with no extra anchor.
+if(TARGET test_syssvc_crtl_rms_bigwrite)
+    target_sources(test_syssvc_crtl_rms_bigwrite PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
+endif()
+
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
 # condition bridge, end to end under -static. Alpha-only (the test honest-skips
 # on other arches), so its two extra needs are guarded on the alpha target:

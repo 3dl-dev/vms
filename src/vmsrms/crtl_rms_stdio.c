@@ -38,24 +38,13 @@ struct ovmx_crtl_file {
 
 /* ------------------------------------------------------------------ open ---- */
 
-OVMX_CRTL_FILE *ovmx_crtl_fopen(const char *path, const char *mode)
+/* Shared open/create + connect. `writing` selects sys$create vs sys$open.
+ * Returns a connected handle or NULL on any RMS failure. */
+static OVMX_CRTL_FILE *crtl_open_common(const char *path, int writing)
 {
-    if (!path || !mode)
-        return NULL;
-
-    int writing;
-    switch (mode[0]) {
-        case 'r': writing = 0; break;
-        case 'w': writing = 1; break;
-        default:
-            fprintf(stderr, "OVMX-CRTL-RMS: fopen(\"%s\",\"%s\"): unsupported mode "
-                            "(fail-honest, no POSIX fallback)\n", path, mode);
-            return NULL;                    /* 'a'/'r+'/... not yet veneered */
-    }
-
     OVMX_CRTL_FILE *fh = calloc(1, sizeof *fh);
     if (!fh) {
-        fprintf(stderr, "OVMX-CRTL-RMS: fopen(\"%s\"): oom\n", path);
+        fprintf(stderr, "OVMX-CRTL-RMS: open(\"%s\"): oom\n", path ? path : "(null)");
         return NULL;
     }
 
@@ -101,6 +90,23 @@ OVMX_CRTL_FILE *ovmx_crtl_fopen(const char *path, const char *mode)
     return fh;
 }
 
+OVMX_CRTL_FILE *ovmx_crtl_fopen(const char *path, const char *mode)
+{
+    if (!path || !mode)
+        return NULL;
+
+    int writing;
+    switch (mode[0]) {
+        case 'r': writing = 0; break;
+        case 'w': writing = 1; break;
+        default:
+            fprintf(stderr, "OVMX-CRTL-RMS: fopen(\"%s\",\"%s\"): unsupported mode "
+                            "(fail-honest, no POSIX fallback)\n", path, mode);
+            return NULL;                    /* 'a'/'r+'/... = random-access, vms-126 child */
+    }
+    return crtl_open_common(path, writing);
+}
+
 /* ------------------------------------------------------------------ write --- */
 
 size_t ovmx_crtl_fwrite(const void *ptr, size_t size, size_t nmemb,
@@ -110,21 +116,30 @@ size_t ovmx_crtl_fwrite(const void *ptr, size_t size, size_t nmemb,
         return 0;
 
     size_t nbytes = size * nmemb;
-    if (nbytes > 0xFFFF) {
-        /* One $PUT is one FIX record; rab$w_rsz is 16-bit. A larger request
-         * would need chunking into successive $PUTs — deferred to the child
-         * (the core port-test writes <= 8 KiB). Fail-honest short count. */
-        fprintf(stderr, "OVMX-CRTL-RMS: fwrite %zu bytes exceeds one-record cap "
-                        "(chunking deferred, vms-47e child)\n", nbytes);
-        return 0;
-    }
 
-    fh->rab.rab$l_rbf = (char *)ptr;
-    fh->rab.rab$w_rsz = (uint16_t)nbytes;
-    uint32_t st = sys$put(&fh->rab, 0, 0);
-    fprintf(stderr, "OVMX-CRTL-RMS: sys$put(%zu bytes) -> %u\n", nbytes, st);
-    if (st != RMS$_NORMAL)
-        return 0;                           /* fail-honest short count */
+    /* One $PUT is one FIX record and rab$w_rsz is 16-bit, so a request larger
+     * than 0xFFFF is CHUNKED into successive $PUTs (vms-126). This is
+     * byte-transparent: ovmx_crtl_fread is a 1-byte-per-$GET loop to RMS$_EOF,
+     * so it reconstructs the exact byte stream regardless of how many records it
+     * spans. An object/listing file (> 64 KiB) now writes through the veneer. */
+    const uint8_t *p = (const uint8_t *)ptr;
+    size_t remaining = nbytes;
+    while (remaining) {
+        uint16_t chunk = remaining > 0xFFFFu ? 0xFFFFu : (uint16_t)remaining;
+        fh->rab.rab$l_rbf = (char *)p;
+        fh->rab.rab$w_rsz = chunk;
+        uint32_t st = sys$put(&fh->rab, 0, 0);
+        if (st != RMS$_NORMAL) {
+            fprintf(stderr, "OVMX-CRTL-RMS: sys$put(%u bytes) -> %u (error, "
+                            "short count after %zu bytes)\n",
+                    chunk, st, nbytes - remaining);
+            return (nbytes - remaining) / size; /* whole members written so far */
+        }
+        p += chunk;
+        remaining -= chunk;
+    }
+    fprintf(stderr, "OVMX-CRTL-RMS: sys$put %zu bytes in %zu record(s) -> NORMAL\n",
+            nbytes, (nbytes + 0xFFFEu) / 0xFFFFu);
     return nmemb;
 }
 

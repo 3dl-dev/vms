@@ -222,6 +222,11 @@ for _s in socket connect bind listen accept accept4 dup dup2 read write close \
           getpeername getsockname setsockopt getsockopt shutdown fcntl poll ppoll; do
     SERVER_WRAP="$SERVER_WRAP -Wl,--wrap=$_s"
 done
+# vms-843a: --wrap=main injects the detached-daemon args (-D -e -f <config>) when
+# VMSSSHD is launched argv-less by OVMX DCL RUN (which cannot pass Unix argv). See
+# __wrap_main in ovmx_ssh_wrap.c: it fires only for the argv-less parent listener
+# (argc<=1); the re-exec'd privsep siblings always carry argv, so they pass through.
+SERVER_WRAP="$SERVER_WRAP -Wl,--wrap=main"
 # SERVER wrap into GLOBAL LIBS so sshd (listener) AND sshd-session/sshd-auth (which
 # do the connection I/O on the inherited veneer handle) ALL get the wraps -- every
 # link rule pulls $(LIBS). ssh is already built (stock, above) and is not a dep, so

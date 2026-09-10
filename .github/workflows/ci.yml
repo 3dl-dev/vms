@@ -909,6 +909,13 @@ jobs:
           # are declared in CMake (see set_tests_properties ... RESOURCE_LOCK).
           # NEVER drop a lock to speed a run -- an unlocked shared-state test is
           # a flaky test (Rule 8).
+          # rd vms-abf: enforce that the DECnet routing-receive-path crash-vector
+          # fuzz (vmsdecnet_routing_fuzz_unit) actually runs UNDER AddressSanitizer
+          # here. The -fsanitize flags are probe-gated in CMake, so a CI image
+          # without the ASan runtime would silently build it toothless and pass;
+          # this env makes that test RED instead (it self-checks __SANITIZE_ADDRESS__).
+          # This host leg (ubuntu gcc) has ASan, so it stays green with real teeth.
+          export OVMX_FUZZ_REQUIRE_SANITIZERS=1
           JOBS="$(nproc)"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             ctest --output-on-failure --parallel "$JOBS" -LE slow

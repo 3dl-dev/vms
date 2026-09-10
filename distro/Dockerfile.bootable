@@ -935,6 +935,26 @@ RUN mkdir -p /proof-stage/SYSEXE && \
 # read-back off the ODS-2 volume is proven by the QEMU ACP tests
 # tests/qemu/test_syssvc_dirlogical_acp.c / _rms_acp.c against a real /dev/vms;
 # extract is VMFS-only, so the build gate here is a genuine-ODS-2 presence gate.)
+# vms-21b daytime cold-boot PROOF overlay (TEST-ONLY; default OFF => the shipped
+# image is byte-identical). With --build-arg OVMX_TEST_ENABLE_TCPIP=1 the proof
+# build (a) stages the enabled TCPIP$SERVICE.DAT (DAYTIME on) into SYS$SYSTEM: --
+# it is not otherwise staged -- and (b) swaps SYSTARTUP_VMS.COM for the test
+# variant that brings the NIC up (TCPIP$CONFIG) and starts the aux server
+# (TCPIP$STARTUP) so DAYTIME answers on a cold boot. A default build (no
+# --build-arg) leaves /system-stage/vms UNTOUCHED, so vmsfs_master masters
+# byte-identical content to today (posture-neutral: shipped boot opens no port;
+# daytime-auto-start-by-default stays an operator posture call).
+ARG OVMX_TEST_ENABLE_TCPIP=0
+RUN if [ "$OVMX_TEST_ENABLE_TCPIP" = "1" ]; then \
+        cp 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT' \
+           /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp distro/rootfs-test-tcpip/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
+           /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
+        grep -q 'TCPIP\$STARTUP' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
+        echo "OK: OVMX_TEST_ENABLE_TCPIP=1 -- daytime cold-boot proof overlay staged (SERVICE.DAT + TCPIP$CONFIG/STARTUP)"; \
+    else \
+        echo "OVMX_TEST_ENABLE_TCPIP=0 -- shipped image (no TCP/IP auto-start, no port open)"; \
+    fi
 RUN /src/build-static/bin/vmsfs_master --ods2 master \
         /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 128 && \
     /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib.img > /tmp/distrib-list.txt && \

@@ -258,9 +258,19 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
                     && cp "$JOINT/${_vp}\$SHR.EXE" "$ST/vms/SYS0/SYSCOMMON/SYSLIB/${_vp}\$SHR.EXE" \
                     || { echo "FAIL: veneer producer $JOINT/${_vp}\$SHR.EXE missing"; exit 1; }
             done
-            cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VENEER_PROOF.COM \
-               "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
-            echo "   JOINT-E2E (VENEER): joint_e2e.exe -> SYS\$SYSEXE; DECC\$SHR + LIBOTS_SHR + full RMS producer graph (LIBVMSRMS/LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS\$SHR) -> SYS\$SHARE; VENEER-proof SYSTARTUP (independent DIRECTORY/FULL reader) staged"
+            # vms-3320: the FILE-OP veneer gate marks its joint dir (FILEOP_PROOF)
+            # so it stages its OWN independent-reader SYSTARTUP (DIRECTORY of the
+            # FOP*.DAT set) instead of the stdio VENEER one (PORTTEST.DAT). The
+            # producer graph staged just above is identical for both.
+            if [ -f "$JOINT/FILEOP_PROOF" ]; then
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_FILEOP_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (FILE-OP VENEER): joint_e2e.exe -> SYS\$SYSEXE; full RMS producer graph -> SYS\$SHARE; FILEOP-proof SYSTARTUP (independent DIRECTORY reader over creat/unlink/rename set) staged"
+            else
+                cp /repo/tools/cross-alpha/SYSTARTUP_VMS_VENEER_PROOF.COM \
+                   "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
+                echo "   JOINT-E2E (VENEER): joint_e2e.exe -> SYS\$SYSEXE; DECC\$SHR + LIBOTS_SHR + full RMS producer graph (LIBVMSRMS/LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS\$SHR) -> SYS\$SHARE; VENEER-proof SYSTARTUP (independent DIRECTORY/FULL reader) staged"
+            fi
         else
             cp /repo/tools/cross-alpha/SYSTARTUP_VMS_JOINT_PROOF.COM \
                "$ST/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"

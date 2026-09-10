@@ -69,4 +69,107 @@ size_t ovmx_crtl_fread(void *ptr, size_t size, size_t nmemb,
  * a close failure or a NULL handle. */
 int ovmx_crtl_fclose(OVMX_CRTL_FILE *fh);
 
+/* ======================================================================== *
+ * vms-3320: the file-op veneer beyond the stdio family. The alpha GCC PORT's
+ * DECC$SHR binds these decc$ file-ops to musl-POSIX (raw Linux-Alpha VFS
+ * callsys), NOT RMS -- so temp-file minting (open/creat), cleanup + the
+ * create->use->delete lifecycle (unlink/remove), atomic output finalization
+ * (rename), and directory enumeration (opendir/readdir/closedir) never reach
+ * the executive/ODS-2 volume (docs/design-gcc-port-surface-gaps-register.md
+ * §3.2). These veneers close that binding to the SAME proven RMS engine the
+ * stdio family rides -- sys$create/$open/$erase and, for the atomic rename, the
+ * executive ACP MODIFY!M_MOVE primitive (vms-de7) via the new sys$rename RMS
+ * service. FAIL-HONEST (INV-6 / Rule 9): every op returns the real RMS/SS$
+ * status; there is NO POSIX fallback on the executive-present runtime path.
+ *
+ * The port wiring aliases decc$open->ovmx_crtl_open, ... in the alpha DECC$SHR
+ * symbol vector (src/vmslink/mk_decc_shr.sh ALPHA_CRTL_RMS_USE block), exactly
+ * as the stdio family, and IN THEIR SORTED SLOT (never tail-appended -- IMGACT
+ * binds by sv# index; vms-b14).
+ * ======================================================================== */
+
+/* --- open/creat: POSIX-signature int-fd file minting over RMS -------------
+ * These return an int fd (the DEC C decc$open/creat ABI), NOT a FILE*. The fd
+ * indexes a small veneer-private RMS-handle table whose values start at a high
+ * base (OVMX_CRTL_FD_BASE) so they can NEVER be confused with a musl POSIX fd
+ * (an accidental musl read()/close() on one returns EBADF, honest, never a
+ * silent wrong success). The `oflag` bits are interpreted with the compile-
+ * target's own <fcntl.h> O_* values, so a caller compiled against the same
+ * (alpha musl / host) headers passes the flags this veneer expects.
+ *
+ * open:  O_CREAT set (or any write mode + a missing file via O_CREAT) ->
+ *        sys$create (mints a real ODS-2 version ;N with a genuine File ID);
+ *        else sys$open. O_RDONLY -> read stream; O_WRONLY/O_RDWR -> write.
+ * creat: == open(path, O_CREAT|O_WRONLY|O_TRUNC): always sys$create.
+ * Returns the fd (>= OVMX_CRTL_FD_BASE) or -1 on any RMS failure / table full. */
+#define OVMX_CRTL_FD_BASE  0x40000000
+#define OVMX_CRTL_FD_MAX   64
+/* NON-variadic (vms-3320): the DEC C decc$open prototype is variadic (the mode
+ * arg is optional), but this veneer IGNORES mode, so it takes two fixed args.
+ * A variadic definition SIGSEGV'd on alpha-dec-vms -- the VMS/Alpha varargs ABI
+ * (AI register + argument home-area) is a codegen path this cross-toolchain
+ * mishandles (x86_64/LP64 was clean, alpha/LP64 crashed on the FIRST call,
+ * before any output -- the classic x86_64-green/alpha-red variadic split). A
+ * caller that passes a 3rd (mode) arg is harmless: alpha passes it in a register
+ * the 2-arg callee never reads. */
+int ovmx_crtl_open(const char *path, int oflag);
+int ovmx_crtl_creat(const char *path, int mode);
+
+/* ovmx_crtl_fdclose: close an fd minted by ovmx_crtl_open/creat (sys$close +
+ * free the table slot). sys$close is what FINALIZES the ODS-2 header/FH2, so
+ * the created file's File ID becomes visible to an independent reader -- a
+ * created-but-never-closed file's FID only finalizes at clean image exit, which
+ * a crash (e.g. alpha vms-c5d) preempts, so a genuine port program MUST close
+ * explicitly (vms-3320). This IS vector-substituted onto decc$close in the
+ * alpha DECC$SHR (mk_decc_shr.sh), so a port's close(fd) reaches RMS.
+ * ⚠ It closes ONLY fds this veneer minted (>= OVMX_CRTL_FD_BASE); a foreign fd
+ * (socket/pipe) returns -1 fail-honest (INV-6: no silent POSIX fallback). Sound
+ * for a file-only compiler port; a socket-using port image would need the
+ * fd-close design extended -- flagged for that future case.
+ * Returns 0 on success, -1 on a bad/foreign fd or a close failure. */
+int ovmx_crtl_fdclose(int fd);
+
+/* --- unlink/remove: file deletion over sys$erase --------------------------
+ * Both remove the named file from the ODS-2 volume via sys$erase (IO$_DELETE:
+ * directory-entry removal + header/blocks deallocation). remove() is the ISO C
+ * spelling of the same file deletion. Returns 0 on success, -1 on any RMS
+ * failure (fail-honest; an independent DIRECTORY then shows the file GONE). */
+int ovmx_crtl_unlink(const char *path);
+int ovmx_crtl_remove(const char *path);
+
+/* --- rename: ATOMIC directory-entry re-link over sys$rename ---------------
+ * Drives the new sys$rename RMS service -> the executive ACP MODIFY!M_MOVE
+ * primitive (vms-de7): the file KEEPS its File ID and allocation; only the
+ * directory entry is re-linked (old {name,ver} removed, new {name,ver}
+ * inserted). This is decc$rename's "atomic output finalization" semantics
+ * (compiler writes NAME.tmp, then renames it over the final name) done
+ * faithfully -- NOT erase+create (which is non-atomic and mints a NEW FID). An
+ * independent DIRECTORY then shows the new name carrying the SAME File ID as
+ * the old had. Returns 0 on success, -1 on any RMS failure. */
+int ovmx_crtl_rename(const char *oldpath, const char *newpath);
+
+/* --- opendir/readdir/closedir: real ODS-2 directory enumeration -----------
+ * A DIR*-equivalent over the sys$parse+sys$search wildcard context (the SAME
+ * engine DCL DIRECTORY / F$SEARCH ride). opendir composes "<dirspec>*.*;*" and
+ * sys$parses it; each readdir is one sys$search step returning the next real
+ * ODS-2 directory entry (its filename + genuine File ID from rms_search_fid);
+ * closedir releases the executive wildcard context (rms_search_end) + frees the
+ * handle. Fail-honest: opendir NULL on a bad dir; readdir NULL at RMS$_NMF or
+ * on error. */
+typedef struct ovmx_crtl_dir OVMX_CRTL_DIR;
+
+/* Directory entry. d_name is FIRST (offset 0) so the common `ent->d_name`
+ * access is layout-robust; d_namlen and d_fileid follow. d_fileid is the
+ * GENUINE ODS-2 File-ID number the executive directory scan returned (an
+ * enumeration a musl-POSIX readdir on a raw VFS cannot produce). */
+struct ovmx_crtl_dirent {
+    char           d_name[256];   /* NAME.TYP;VER of the match (after the ']') */
+    unsigned short d_namlen;      /* length of d_name                          */
+    unsigned short d_fileid;      /* genuine ODS-2 File-ID number (rms_search_fid) */
+};
+
+OVMX_CRTL_DIR           *ovmx_crtl_opendir(const char *name);
+struct ovmx_crtl_dirent *ovmx_crtl_readdir(OVMX_CRTL_DIR *dirp);
+int                      ovmx_crtl_closedir(OVMX_CRTL_DIR *dirp);
+
 #endif /* __RMS_CRTL_STDIO_H */

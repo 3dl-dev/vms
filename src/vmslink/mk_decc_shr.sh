@@ -161,8 +161,33 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # Real VMS symbol vectors are APPEND-ONLY and NEVER renumbered; rewriting
     # the binding in the name's EXISTING slot keeps every sv# stable across the
     # two passes (the invariant the veneer block below already documents).
+    #
+    # vms-3320 EXTENDS this in-place rewrite to the file-op family beyond stdio:
+    # decc$open/creat/unlink/remove/rename/opendir/readdir/closedir are ALSO
+    # musl-alpha's OWN POSIX definitions (raw Linux-Alpha VFS callsys), never
+    # RMS -- so temp-file minting, cleanup, atomic finalization and directory
+    # enumeration never reach the executive/ODS-2 volume. Each is rewritten in
+    # its EXISTING enumerated slot to its veneer-alias form (ovmx_crtl_*), the
+    # SAME sv#-stable in-place substitution as the stdio four (NEVER tail-
+    # appended: IMGACT binds by sv# index; vms-b14). The names sort across
+    # the middle of the vector; rewriting the binding in each name's own slot
+    # keeps every sv# byte-stable vs the bootstrap pass.
+    #
+    # decc$close is the 9th file-op, needed so a decc$open/creat fd is CLOSED
+    # via RMS -- sys$close finalizes the ODS-2 header/FH2 so the File ID becomes
+    # visible to an independent reader (a created-but-never-closed file's FID
+    # only finalizes at clean image exit; on alpha the vms-c5d crash preempts
+    # that, so a genuine port program must close explicitly, vms-3320). Its
+    # veneer target is the OVMX-original name ovmx_crtl_fdclose (NOT ovmx_crtl_
+    # close -- the fd-close entry point), so it needs its own rewrite rule.
+    # ⚠ ovmx_crtl_fdclose only closes fds this veneer MINTED (>= OVMX_CRTL_FD_BASE);
+    # a foreign fd (socket/pipe) returns -1 fail-honest. Sound for a file-only
+    # compiler port; a socket-using port image would need the fd-close design
+    # extended (INV-6: no silent POSIX fallback) -- flagged for that future case.
     if [ -n "${ALPHA_CRTL_RMS_USE:-}" ]; then
-        sed -E 's,^decc\$(fopen|fwrite|fread|fclose)=PROCEDURE$,decc$\1/ovmx_crtl_\1=PROCEDURE,' \
+        sed -E \
+            -e 's,^decc\$(fopen|fwrite|fread|fclose|open|creat|unlink|remove|rename|opendir|readdir|closedir)=PROCEDURE$,decc$\1/ovmx_crtl_\1=PROCEDURE,' \
+            -e 's,^decc\$close=PROCEDURE$,decc$close/ovmx_crtl_fdclose=PROCEDURE,' \
             "$ALPHA_VEC" > "$ALPHA_VEC.f"
         mv "$ALPHA_VEC.f" "$ALPHA_VEC"
     fi
@@ -317,8 +342,17 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
           | awk '$NF ~ /^ovmx_crtl_/ { t=$(NF-1); if (t=="T"||t=="t"||t=="W"||t=="w") print $NF }' \
           | sort -u > "$VENEER_VEC"
         NVENEER=$(wc -l < "$VENEER_VEC")
-        [ "$NVENEER" -eq 4 ] || { echo "mk_decc_shr: FAIL expected 4 ovmx_crtl_ universals from crtl_rms_stdio.c, got $NVENEER: $(tr '\n' ' ' < "$VENEER_VEC")" >&2; exit 2; }
-        for want in ovmx_crtl_fopen ovmx_crtl_fwrite ovmx_crtl_fread ovmx_crtl_fclose; do
+        # vms-3320: the veneer defines the 4 stdio + 8 file-op entry points plus
+        # ovmx_crtl_fdclose (the 13th, the target of decc$close so a decc$open/
+        # creat fd closes via RMS and its ODS-2 File ID finalizes). Require the
+        # 13 SUBSTITUTED names by presence (never a hand-list drift) and a floor
+        # of 13 universals; any further internal ovmx_crtl_ helper is harmless
+        # dead weight (never exported), as musl's own fopen.o stays whole-archived.
+        [ "$NVENEER" -ge 13 ] || { echo "mk_decc_shr: FAIL expected >=13 ovmx_crtl_ universals from crtl_rms_stdio.c, got $NVENEER: $(tr '\n' ' ' < "$VENEER_VEC")" >&2; exit 2; }
+        for want in ovmx_crtl_fopen ovmx_crtl_fwrite ovmx_crtl_fread ovmx_crtl_fclose \
+                    ovmx_crtl_open ovmx_crtl_creat ovmx_crtl_unlink ovmx_crtl_remove \
+                    ovmx_crtl_rename ovmx_crtl_opendir ovmx_crtl_readdir ovmx_crtl_closedir \
+                    ovmx_crtl_fdclose; do
             grep -qx "$want" "$VENEER_VEC" || { echo "mk_decc_shr: FAIL crtl_rms_stdio.c did not define $want" >&2; exit 2; }
         done
         rm -f "$VENEER_VEC"
@@ -332,6 +366,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         # decc$strspn at runtime.
         ALPHA_VENEER_OBJ="$VENEER_OBJ"
         echo "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\$fopen/fwrite/fread/fclose -> ovmx_crtl_* (--use $ALPHA_CRTL_RMS_USE)"
+        echo "mk_decc_shr: CRTL->RMS file-op veneer wired (vms-3320): decc\$open/creat/unlink/remove/rename/opendir/readdir/closedir -> ovmx_crtl_*, decc\$close -> ovmx_crtl_fdclose (--use $ALPHA_CRTL_RMS_USE)"
     fi
 
     # Plain (non-decc$-decorated) names the decc$ filter above cannot catch,

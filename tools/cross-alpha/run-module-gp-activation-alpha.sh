@@ -65,6 +65,7 @@
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh gate        # same, explicit
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate # crtl_rms heap+RMS+stdio -> N=7 (non-veneer control)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate # vms-f49 rung 4: veneer write + INDEPENDENT ODS-2 File-ID reader
+#   tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate # vms-3320: open/creat/unlink/rename/opendir/readdir/closedir veneer + INDEPENDENT DIRECTORY reader
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate       # multi-.o cross-boundary -> N=5 (vms-bdd)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate  # SHIPPED packaging path -> N=3 (vms-410)
 #   tools/cross-alpha/run-module-gp-activation-alpha.sh selftest     # can-fail proof, no boot
@@ -364,6 +365,70 @@ assert_veneer() {
   return 1
 }
 
+# assert_fileop <console-log> -- THE TEETH for the vms-3320 CRTL->RMS FILE-OP
+# veneer proof (`crtl-rms-fileop-gate' mode). Extends the vms-f49 veneer proof
+# from the stdio family to open/creat/unlink/remove/rename/opendir/readdir/
+# closedir: the port image (crtl_rms3_test.c) creats FOPCRE.DAT, creats+unlinks
+# FOPDEL.DAT, creats+renames FOPSRC.DAT->FOPDST.DAT via the VECTOR-SUBSTITUTED
+# decc$* file-ops, then the boot's INDEPENDENT reader (DCL DIRECTORY over the
+# ACP -- a DIFFERENT accessor) inspects the volume. Pass iff, in the
+# INDEPENDENT-reader region:
+#   (b1) FOPCRE.DAT present WITH a nonzero ODS-2 File ID (creat landed);
+#   (b2) FOPDST.DAT present WITH a nonzero ODS-2 File ID (rename target landed);
+#   (b3) FOPDEL.DAT %DIRECT-W-NOFILES (unlink removed it);
+#   (b4) FOPSRC.DAT %DIRECT-W-NOFILES (rename moved it away);
+# AND (c) no activation-LOAD failure. The port program's own sentinel-7 self-
+# enumeration is informational only (a post-op cleanup crash cannot undo a
+# landing the independent reader already confirmed -- the vms-f49 banked-gate
+# discipline). Pure function over the transcript; shared by the boot + selftest.
+assert_fileop() {
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+
+  # (a) informational: the port image's own self-verify (sentinel 7 + OK line).
+  local port_ok seam mile_hex sentinel="?"
+  port_ok=$(grep -qaE "OVMX CRTL/RMS3 file-op test: OK" "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ] && [ "$(( mile_hex ))" -ge "$CEXIT1" ] && [ $(( ( $(( mile_hex )) - CEXIT1) % 8 )) -eq 0 ]; then
+    sentinel=$(( ( $(( mile_hex )) - CEXIT1) / 8 + 1 ))
+  fi
+
+  # (b) THE TEETH -- confine to the INDEPENDENT-reader region, then sub-region by
+  # the per-file "--- ... ---" markers so a token cannot leak across files.
+  local region cre_reg dst_reg del_reg src_reg
+  region=$(awk '/FILEOP-PROOF: === INDEPENDENT READER/{f=1} f{print} /FILEOP-PROOF: === END INDEPENDENT READER/{f=0}' "$log")
+  cre_reg=$(printf '%s\n' "$region" | awk '/created file FOPCRE.DAT/{f=1} f{print} /FILEOP-PROOF: CRE-STATUS/{f=0}')
+  dst_reg=$(printf '%s\n' "$region" | awk '/renamed target FOPDST.DAT/{f=1} f{print} /FILEOP-PROOF: DST-STATUS/{f=0}')
+  del_reg=$(printf '%s\n' "$region" | awk '/unlinked file FOPDEL.DAT/{f=1} f{print} /FILEOP-PROOF: DEL-STATUS/{f=0}')
+  src_reg=$(printf '%s\n' "$region" | awk '/rename source FOPSRC.DAT/{f=1} f{print} /FILEOP-PROOF: SRC-STATUS/{f=0}')
+
+  local cre_fid dst_fid cre_ok=0 dst_ok=0 del_ok=0 src_ok=0
+  cre_fid=$(printf '%s' "$cre_reg" | grep -aoE "FOPCRE\.DAT;[0-9]+[^A-Za-z]*File ID:[[:space:]]*\([0-9]+" | grep -oE '\([0-9]+' | tr -d '(' | tail -1)
+  dst_fid=$(printf '%s' "$dst_reg" | grep -aoE "FOPDST\.DAT;[0-9]+[^A-Za-z]*File ID:[[:space:]]*\([0-9]+" | grep -oE '\([0-9]+' | tr -d '(' | tail -1)
+  [ -n "$cre_fid" ] && [ "$cre_fid" -gt 0 ] && ! printf '%s' "$cre_reg" | grep -qaE "%DIRECT-W-NOFILES" && cre_ok=1
+  [ -n "$dst_fid" ] && [ "$dst_fid" -gt 0 ] && ! printf '%s' "$dst_reg" | grep -qaE "%DIRECT-W-NOFILES" && dst_ok=1
+  printf '%s' "$del_reg" | grep -qaE "%DIRECT-W-NOFILES" && del_ok=1
+  printf '%s' "$src_reg" | grep -qaE "%DIRECT-W-NOFILES" && src_ok=1
+
+  # (c) activation-LOAD failure only (a post-landing crash is not fatal here).
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+
+  echo "  (a) port self-verify (informational)      : port_ok=$port_ok  seam=${seam:-<ABSENT>}  sentinel=$sentinel (7 = full)"
+  echo "  (b) INDEPENDENT ACP reader (DIRECTORY):"
+  echo "      b1 creat  FOPCRE.DAT present, fid=${cre_fid:-<none>}  ok=$cre_ok"
+  echo "      b2 rename FOPDST.DAT present, fid=${dst_fid:-<none>}  ok=$dst_ok"
+  echo "      b3 unlink FOPDEL.DAT GONE (%DIRECT-W-NOFILES)         ok=$del_ok"
+  echo "      b4 rnsrc  FOPSRC.DAT GONE (%DIRECT-W-NOFILES)         ok=$src_ok"
+  echo "  (c) image activated (no load failure)     : ok=$err_ok"
+  [ "$err_ok" -eq 0 ] && echo "      offending: $(printf '%s' "$errs" | tr '\n' '|')"
+
+  [ "$cre_ok" -eq 1 ] && [ "$dst_ok" -eq 1 ] && [ "$del_ok" -eq 1 ] && [ "$src_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # build_joint_images -- build the N=3 milestone image (joint_main.c -> return 3)
 # and the SS$_NORMAL control (joint_main_ok.c -> return 0) with the SAME merged
@@ -425,6 +490,12 @@ build_joint_images() {
         || die "veneer build produced no ${_p}\$SHR.EXE in $out_n3 (JOINT_CRTL_RMS_VENEER=1 expected the full producer graph)"
       cp "$out_n3/${_p}\$SHR.EXE" "$WORK/joint/${_p}\$SHR.EXE"
     done
+    # vms-3320: carry the FILE-OP marker (dropped by build-joint-image.sh when
+    # JOINT_MAIN=crtl_rms3_test.c) into $WORK/joint so build-alpha-bootimage.sh
+    # stages the FILE-OP independent-reader SYSTARTUP (DIRECTORY of the FOP*.DAT
+    # set) instead of the stdio VENEER one (which reads PORTTEST.DAT). The
+    # selective staging above would otherwise drop it.
+    [ -f "$out_n3/FILEOP_PROOF" ] && cp "$out_n3/FILEOP_PROOF" "$WORK/joint/FILEOP_PROOF"
     log "step 1: joint images staged into $WORK/joint (VENEER milestone N=$WANT_SENTINEL + control + DECC\$SHR/LIBOTS + full RMS producer graph LIBVMSRMS/LIBVMS/LIBVMSFS/LIBVMSLNM/LIBVMSPROCESS/LIBVMSSYS\$SHR)"
   else
     log "step 1: joint images staged into $WORK/joint (milestone N=$WANT_SENTINEL + SS\$_NORMAL control + producers)"
@@ -466,7 +537,7 @@ run_boot_a() {
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 ${BOOT_APPEND_EXTRA:-}" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!
@@ -872,6 +943,133 @@ EOF
     grep -aE "VENEER-PROOF:|%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|%DIRECT|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -25 || echo "  (none captured)"
     echo "--- guest-kernel fault signature (if the image faulted) ---"
     grep -aiE "memory violation|segmentation|segfault|unaligned|Oops|BUG:|bad address|panic" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (no guest fault line captured)"
+    echo "--- last 60 console lines ---"
+    tail -60 "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    exit 1
+    ;;
+  crtl-rms-fileop-gate)
+    # vms-3320 (parent vms-b4f, blocks vms-fd1): the un-fakeable CRTL->RMS
+    # FILE-OP veneer proof -- open/creat/unlink/remove/rename/opendir/readdir/
+    # closedir beyond the stdio family. Same VENEER path as crtl-rms-veneer-gate
+    # (JOINT_CRTL_RMS_VENEER=1) but the MILESTONE image is crtl_rms3_test.c: it
+    # creats FOPCRE.DAT, creats+unlinks FOPDEL.DAT, creats+renames FOPSRC.DAT->
+    # FOPDST.DAT via the VECTOR-SUBSTITUTED decc$* file-ops (bound by sv# index
+    # to the crtl_rms_stdio.c veneer -> sys$create/$erase/$rename -> the ACP),
+    # leaving FOPCRE.DAT + FOPDST.DAT behind. The proof is an INDEPENDENT reader
+    # (DCL DIRECTORY over the ACP, a different accessor) seeing FOPCRE.DAT +
+    # FOPDST.DAT with genuine ODS-2 File IDs and FOPDEL.DAT/FOPSRC.DAT gone.
+    MILESTONE_MAIN=crtl_rms3_test.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    # Fault-capture: print the user PC of any fatal signal so a crash (e.g. the
+    # pre-existing veneer-build mallocng crash vms-c5d) can be mapped to a symbol
+    # (subtract the DECC$SHR +0x2c000 slide: file_off = VA - 0x20000000000 - 0x2c000).
+    export BOOT_APPEND_EXTRA="ignore_loglevel print-fatal-signals=1 loglevel=8"
+
+    # Prove assert_fileop has teeth before trusting a green boot (mirrors the
+    # crtl-rms-veneer-gate selftest discipline: a can-fail gate certifies nothing).
+    _st=$(mktemp -d); _fails=0
+    cat > "$_st/pass.log" <<'EOF'
+OVMX CRTL/RMS3 file-op test: OK (open+creat+unlink+rename+opendir+readdir+closedir over RMS) argc=1
+OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039
+FILEOP-PROOF: === INDEPENDENT READER: DIRECTORY over the ACP (a DIFFERENT accessor) ===
+FILEOP-PROOF: --- created file FOPCRE.DAT (must be present) ---
+FOPCRE.DAT;1                   File ID:  (21,1,0)
+FILEOP-PROOF: CRE-STATUS=%X00000001 SEVERITY=1
+FILEOP-PROOF: --- renamed target FOPDST.DAT (must be present, genuine File ID) ---
+FOPDST.DAT;1                   File ID:  (23,1,0)
+FILEOP-PROOF: DST-STATUS=%X00000001 SEVERITY=1
+FILEOP-PROOF: --- unlinked file FOPDEL.DAT (must be GONE) ---
+%DIRECT-W-NOFILES, no files found
+FILEOP-PROOF: DEL-STATUS=%X00018292 SEVERITY=0
+FILEOP-PROOF: --- rename source FOPSRC.DAT (must be GONE) ---
+%DIRECT-W-NOFILES, no files found
+FILEOP-PROOF: SRC-STATUS=%X00018292 SEVERITY=0
+FILEOP-PROOF: === END INDEPENDENT READER ===
+EOF
+    # NEGATIVE 1: creat did NOT land (independent reader sees FOPCRE.DAT gone). FAIL.
+    cat > "$_st/nocre.log" <<'EOF'
+FILEOP-PROOF: === INDEPENDENT READER: DIRECTORY over the ACP (a DIFFERENT accessor) ===
+FILEOP-PROOF: --- created file FOPCRE.DAT (must be present) ---
+%DIRECT-W-NOFILES, no files found
+FILEOP-PROOF: CRE-STATUS=%X00018292 SEVERITY=0
+FILEOP-PROOF: --- renamed target FOPDST.DAT (must be present, genuine File ID) ---
+FOPDST.DAT;1                   File ID:  (23,1,0)
+FILEOP-PROOF: DST-STATUS=%X00000001 SEVERITY=1
+FILEOP-PROOF: --- unlinked file FOPDEL.DAT (must be GONE) ---
+%DIRECT-W-NOFILES, no files found
+FILEOP-PROOF: --- rename source FOPSRC.DAT (must be GONE) ---
+%DIRECT-W-NOFILES, no files found
+FILEOP-PROOF: === END INDEPENDENT READER ===
+EOF
+    # NEGATIVE 2: unlink did NOT remove FOPDEL.DAT (reader still sees it). FAIL.
+    cat > "$_st/nodel.log" <<'EOF'
+FILEOP-PROOF: === INDEPENDENT READER: DIRECTORY over the ACP (a DIFFERENT accessor) ===
+FILEOP-PROOF: --- created file FOPCRE.DAT (must be present) ---
+FOPCRE.DAT;1                   File ID:  (21,1,0)
+FILEOP-PROOF: --- renamed target FOPDST.DAT (must be present, genuine File ID) ---
+FOPDST.DAT;1                   File ID:  (23,1,0)
+FILEOP-PROOF: --- unlinked file FOPDEL.DAT (must be GONE) ---
+FOPDEL.DAT;1                   File ID:  (22,1,0)
+FILEOP-PROOF: --- rename source FOPSRC.DAT (must be GONE) ---
+%DIRECT-W-NOFILES, no files found
+FILEOP-PROOF: === END INDEPENDENT READER ===
+EOF
+    # NEGATIVE 3: activation load failure -> FAIL even if a stale region parsed.
+    cat > "$_st/imgact.log" <<'EOF'
+%IMGACT-F-IMGNOTFND, image file not found LIBVMSRMS$SHR
+FILEOP-PROOF: === INDEPENDENT READER: DIRECTORY over the ACP (a DIFFERENT accessor) ===
+FILEOP-PROOF: --- created file FOPCRE.DAT (must be present) ---
+FOPCRE.DAT;1                   File ID:  (21,1,0)
+FILEOP-PROOF: --- renamed target FOPDST.DAT (must be present, genuine File ID) ---
+FOPDST.DAT;1                   File ID:  (23,1,0)
+FILEOP-PROOF: --- unlinked file FOPDEL.DAT (must be GONE) ---
+%DIRECT-W-NOFILES, no files found
+FILEOP-PROOF: --- rename source FOPSRC.DAT (must be GONE) ---
+%DIRECT-W-NOFILES, no files found
+FILEOP-PROOF: === END INDEPENDENT READER ===
+EOF
+    echo "-- fileop selftest 1/4: clean independent-reader proof must PASS --"
+    if assert_fileop "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- fileop selftest 2/4: creat did not land (FOPCRE gone) must FAIL --"
+    if assert_fileop "$_st/nocre.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- fileop selftest 3/4: unlink no-op (FOPDEL still present) must FAIL --"
+    if assert_fileop "$_st/nodel.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- fileop selftest 4/4: activation load failure must FAIL --"
+    if assert_fileop "$_st/imgact.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "fileop selftest failed -- assert_fileop cannot be trusted; aborting before the boot"
+    echo ""
+
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- activate the FILE-OP veneer image + run the INDEPENDENT DIRECTORY reader on the REAL executive"
+    run_boot_a
+    echo ""
+    echo "========================================================================"
+    echo "== vms-3320: CRTL->RMS FILE-OP veneer (open/creat/unlink/remove/rename/"
+    echo "== opendir/readdir/closedir) -> real ODS-2 effects, PROVEN by an INDEPENDENT"
+    echo "== ACP reader (DIRECTORY) on the real OVMX/Alpha executive (qemu-system-alpha"
+    echo "== + /dev/vms). Blocks vms-fd1 (the full alpha-dec-vms GCC port)."
+    echo "========================================================================"
+    grep -aE "FILEOP-PROOF:|OVMX CRTL/RMS3|OVMX-SEAM:|FOP...\.DAT|File ID:|%DIRECT|%IMGACT|%DCL-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    echo "------------------------------------------------------------------------"
+    if assert_fileop "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the FILE-OP veneer-wired port image's decc\$open/creat/unlink/rename/"
+      echo "      opendir/readdir/closedir genuinely reached the real Files-11 ODS-2 volume"
+      echo "      over the ACP -- an INDEPENDENT reader (DCL DIRECTORY, a different accessor"
+      echo "      than the writer's CRTL handle) saw FOPCRE.DAT + FOPDST.DAT with genuine ODS-2"
+      echo "      File IDs and FOPDEL.DAT/FOPSRC.DAT GONE, which a ramfs/POSIX write can never"
+      echo "      produce in the ACP directory. The 8 file-op decc\$ names bind by symbol-vector"
+      echo "      INDEX to the veneer (mk_decc_shr.sh in-place substitution, sv# stable)."
+      exit 0
+    fi
+    echo ""
+    echo "FAIL: the file-op veneer did NOT reach the real ODS-2 volume as expected (the"
+    echo "      INDEPENDENT reader disagreed: a created/renamed file missing a File ID, or a"
+    echo "      deleted/renamed-away file still present). Full log: $WORK/modgpA.log"
+    grep -aE "FILEOP-PROOF:|%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|%DIRECT|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -30 || echo "  (none captured)"
     echo "--- last 60 console lines ---"
     tail -60 "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
     exit 1

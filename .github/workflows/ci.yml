@@ -115,6 +115,7 @@ jobs:
       alpha_activation: ${{ steps.decide.outputs.alpha_activation }}
       vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
       tcpip: ${{ steps.decide.outputs.tcpip }}
+      ssh_boot: ${{ steps.decide.outputs.ssh_boot }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -247,6 +248,22 @@ jobs:
               - 'tests/qemu/test_tcpip_daytime_boot_e2e.sh'
               - 'tests/qemu/run_tcpip_reboot_e2e.sh'
               - 'tests/qemu/test_tcpip_reboot_e2e.sh'
+              - 'tests/integration/test_tcpip_posture_guard.sh'
+            # vms-843a: the wrapped-OpenSSH cold-boot proof. Fires the ssh-boot-e2e
+            # gate on any PR touching the wrapped sshd build/glue, the aux server it
+            # rides, the boot image build, the SSH test overlay, or the SSH e2e.
+            # Scoped so unrelated PRs pay nothing for the ~heavy full-distro SSH boot.
+            ssh_boot:
+              - '.github/workflows/**'
+              - 'third-party/openssh/**'
+              - 'src/vmsssh/**'
+              - 'src/vmstcpip/**'
+              - 'src/vmsrms/**'
+              - 'src/libvmssys/**'
+              - 'distro/Dockerfile.bootable'
+              - 'distro/rootfs-test-ssh/**'
+              - 'tests/qemu/run_ssh_boot_e2e.sh'
+              - 'tests/qemu/test_ssh_boot_e2e.sh'
               - 'tests/integration/test_tcpip_posture_guard.sh'
             release:
               - '.github/workflows/**'
@@ -447,6 +464,7 @@ jobs:
               echo "alpha_activation=${{ steps.filter.outputs.alpha_activation }}"
               echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
               echo "tcpip=${{ steps.filter.outputs.tcpip }}"
+              echo "ssh_boot=${{ steps.filter.outputs.ssh_boot }}"
             } >> "$GITHUB_OUTPUT"
           else
             {
@@ -467,6 +485,7 @@ jobs:
               echo "alpha_activation=true"
               echo "vax_toolchain=true"
               echo "tcpip=true"
+              echo "ssh_boot=true"
             } >> "$GITHUB_OUTPUT"
           fi
   # -----------------------------------------------------------------------
@@ -1772,6 +1791,59 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: tcpip_reboot_e2e SKIPPED in CI — this gate must actually double-boot + assert reapply/no-growth, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # ssh-boot-e2e (rd vms-843a): the SECOND, harder service on the proven (B)
+  # aux-launch path -- the wrapped OpenSSH sshd. INETD binds :22 over BGn:,
+  # ACP-stages SYS$SYSTEM:VMSSSHD.EXE off the ODS-2 disk, and execs sshd -i on
+  # the accepted connection; an inbound password login for a SYSUAF user must
+  # land an authenticated DCL session (SSH -> SYSUAF -> DCL) on a real cold boot.
+  # Same vms-f834 hole-free trigger + gha-cache pattern as the daytime job; a 77
+  # SKIP is a hard error (the gate must genuinely boot + ssh, never skip silently).
+  # SSH is staged ONLY by --build-arg OVMX_TEST_ENABLE_SSH=1 (layered-product; the
+  # shipped image ships no SSH), so this is the only build that opens :22.
+  # -----------------------------------------------------------------------
+  ssh-boot-e2e:
+    name: SSH cold-boot e2e — inbound ssh lands an authenticated DCL session on a booted distro (vms-843a)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+            || (github.event_name == 'pull_request' && needs.changes.outputs.ssh_boot == 'true'))
+            && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build SSH test-overlay bootable image (OVMX_TEST_ENABLE_SSH=1)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot-ssh:latest
+          build-args: |
+            OVMX_TEST_ENABLE_SSH=1
+          # Reuses the shared gha layer cache: only the late SSH build + overlay
+          # layers differ from the shipped build, so the kernel + early build-static
+          # layers are cache hits (the wrapped-sshd configure+make is the added cost).
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: SSH cold-boot proof — INETD launches VMSSSHD (ACP-stage, sshd -i), inbound ssh lands DCL
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_SSH_IMAGE=ovmx-boot-ssh:latest \
+            tests/qemu/run_ssh_boot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: ssh_boot_e2e SKIPPED in CI — this gate must actually boot + ssh, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

@@ -31,7 +31,7 @@ FAIL=0
 ok(){  echo "  PASS: $*"; }
 bad(){ echo "  FAIL: $*"; FAIL=1; }
 
-echo "=== test_tcpip_posture_guard (shipped default auto-starts no network service, rd vms-21b) ==="
+echo "=== test_tcpip_posture_guard (shipped default auto-starts no network service, rd vms-21b/vms-843a) ==="
 
 [ -f "$SYSTARTUP" ] || { echo "FATAL: shipped SYSTARTUP_VMS.COM not found at $SYSTARTUP"; exit 1; }
 [ -f "$SERVICE_DAT" ] || { echo "FATAL: shipped TCPIP\$SERVICE.DAT not found at $SERVICE_DAT"; exit 1; }
@@ -53,6 +53,17 @@ if [ -n "$ENABLED" ]; then
     printf '%s\n' "$ENABLED" | sed 's/^/      /'
 else
     ok "shipped TCPIP\$SERVICE.DAT ships with every service DISABLED (no enabled line)"
+fi
+
+# (c) SSH-specific posture (rd vms-843a): SSH-enable-by-default is a distinct,
+# higher-stakes operator decision than daytime (a network login authority, a
+# shared host key, cred exposure) -- so assert it EXPLICITLY, not only via (b).
+# An enabled SSH line is a non-comment line whose service token is 'SSH'.
+if grep -nE '^[[:space:]]*SSH[[:space:]]' "$SERVICE_DAT" >/dev/null 2>&1; then
+    bad "shipped TCPIP\$SERVICE.DAT ENABLES SSH -- SSH-enable-by-default is Baron-reserved (network login authority + shipped host key). Keep the SSH line commented; the SSH cold-boot proof enables it via the OVMX_TEST_ENABLE_SSH test overlay only."
+    grep -nE '^[[:space:]]*SSH[[:space:]]' "$SERVICE_DAT" | sed 's/^/      /'
+else
+    ok "shipped TCPIP\$SERVICE.DAT does NOT enable SSH (SSH is a layered product, off by default -- Baron-reserved)"
 fi
 
 echo "=== test_tcpip_posture_guard: $([ "$FAIL" = 0 ] && echo PASS || echo FAIL) ==="

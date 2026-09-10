@@ -643,6 +643,74 @@ static void test_joiner_originations(void)
 }
 
 /*
+ * vms_cm_membership_build: the builder, and the ONE property that matters --
+ * what it writes, THIS FILE's own reader reads back. Grounding:
+ * docs/design-op06-membership-builder.md.
+ */
+static void test_membership_build(void)
+{
+	uint8_t body[VMS_CM_BODY_LEN];
+	uint32_t written = 0, csid = 0, i, nonzero = 0;
+
+	printf("-- vms_cm_membership_build (op 0x06, form A) --\n");
+
+	/* A value that is not CSID-shaped is REFUSED, and nothing is written:
+	 * a burst naming no real CSID teaches a joiner nothing (INV-6). */
+	memset(body, 0xa5, sizeof(body));
+	ct_check(vms_cm_membership_build(6u, 0u, body, sizeof(body),
+					 &written) == VMS_CODEC_E_RANGE,
+		 "a zero CSID is refused, never emitted as a record");
+	ct_check(vms_cm_membership_build(6u, 0x63580001u, body, sizeof(body),
+					 &written) == VMS_CODEC_E_RANGE,
+		 "and so is a value that fails the SAME shape test the reader "
+		 "applies (0x6358nnnn is one of the capture's own false "
+		 "candidates)");
+
+	/* The real thing: VAX1's own CSID from the capture, epoch 6 -- the
+	 * epoch that capture's whole burst carries. */
+	memset(body, 0, sizeof(body));
+	ct_check(vms_cm_membership_build(6u, 0x00010001u, body, sizeof(body),
+					 &written) == VMS_CODEC_OK,
+		 "builds a membership record from a real CSID");
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  a full 132-byte body");
+	ct_check_eq_u32(body[VMS_OFB_CM_CATEGORY], VMS_CM_CAT_CONFIG,
+			"  body[8] category 0x01 (509/509 real frames)");
+	ct_check_eq_u32(body[VMS_OFB_CM_OPCODE], VMS_CM_OP_MEMBERSHIP,
+			"  body[9] opcode 0x06 (509/509)");
+	ct_check_eq_u32(body[VMS_OFB_CM_ROLE], VMS_CM_ROLE_COMMIT,
+			"  body[16] role 0x20 (509/509)");
+	ct_check_eq_u32(body[VMS_OFB_CM_CLASS], VMS_CM_CLASS_ADD,
+			"  body[17] class 0x02 (509/509)");
+	ct_check_eq_u32((uint32_t)body[VMS_OFB_CM_EPOCH], 6u,
+			"  body[12:16] the caller's real epoch");
+
+	/* THE ROUND TRIP: the builder and the reader share one form. */
+	ct_check(vms_cm_membership_coordinator_csid(body, VMS_CM_BODY_LEN,
+						    &csid) == VMS_CODEC_OK,
+		 "  and THIS FILE's own reader finds a CSID in it");
+	ct_check_eq_u32(csid, 0x00010001u,
+			"  ... the one that was put there -- one form, not two");
+
+	/*
+	 * NOTHING ELSE IS ASSERTED, counted the strictest way there is: every
+	 * NONZERO byte in the whole 132. For this input there are exactly
+	 * seven -- category, opcode, role, class, the epoch's one nonzero byte
+	 * (0x06 00 00 00) and the CSID's two (0x01 00 01 00). Any field this
+	 * builder ever grew would move this number and have to be justified.
+	 */
+	for (i = 0; i < VMS_CM_BODY_LEN; i++) {
+		if (body[i] != 0u)
+			nonzero++;
+	}
+	ct_check_eq_u32(nonzero, 7u,
+			"  and NOTHING else is written: every other byte of the "
+			"132 is an honest zero -- the shape 23 of 255 real "
+			"op-0x06 frames carry across their whole payload");
+	ct_check_eq_u32((uint32_t)body[VMS_OFB_CM_MEMBERSHIP_CSID_B], 0u,
+			"  form B is not written (no incarnation for a peer)");
+}
+
+/*
  * E30 (falsified + replaced by a real-VAX capture,
  * tests/lab/captures/op06-join-20260903.pcap, 257 op-0x06 frames): op-0x06
  * carries the EXISTING coordinator's own CSID, not the joiner's. This test
@@ -856,6 +924,7 @@ int main(void)
 	test_open_bitmap_span();   /* FC-P3.5 */
 
 	test_joiner_originations();     /* FC-P3.3 */
+	test_membership_build();              /* the op-0x06 builder */
 	test_membership_coordinator_csid();   /* E30 */
 
 	test_error_paths();

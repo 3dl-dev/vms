@@ -36,10 +36,25 @@
 #   A  OVMXA/1025  VOTES=1 EXPECTED_VOTES=1 VAXCLUSTER=2  -> quorum by own votes
 #   B  OVMXB/1026  VOTES=0                 VAXCLUSTER=2  -> can never found
 #
-# NEGATIVE CONTROL (RIG_NEGCTL=1): node A is given VOTES=0 too. Nothing else
-# changes. Neither node then satisfies quorum by its own votes, so neither may
-# found, so no cluster exists to join -- the run MUST NOT reach CN=2. That is
-# the teeth: it is what distinguishes a measured membership from a printed one.
+# THREE MODES (RIG_MODE), and the two controls are what give the proof teeth:
+#
+#   proof   (default) A founds, B joins, both reach MEMBER with CN=2.
+#
+#   negctl  node A is given VOTES=0 too. Nothing else changes. Neither node
+#           then satisfies quorum by its own votes, so neither may found, so no
+#           cluster exists to join: no node may reach MEMBER or hold a CSID.
+#           This is what distinguishes a measured genesis from a printed one.
+#
+#   ambig   node B is given SCSSYSTEMID 1030 instead of 1026. Nothing else
+#           changes. 1030 & 0x3ff = 6, while the CSV slot the coordinator would
+#           assign is 2 -- the two candidate CSID-assignment rules (rd vms-3a7c)
+#           DISAGREE about what to call this system, so the coordinator refuses
+#           the admission and emits NO op-0x06 membership record.
+#           This is the INV-6 control on the JOINER: with no real op-0x06 to
+#           learn a generation from, node B must stay NEW with no CSID and must
+#           NOT reach MEMBER. It is the same code and the same wire as the proof
+#           run, one SYSGEN digit apart -- so a MEMBER in the proof run can only
+#           have come from a real, wire-learned CSID.
 #
 # VERDICT: read only from the guests' own RIG-*-FINAL lines, which carry values
 # the guest read back out of the executive (INV-6).
@@ -49,7 +64,10 @@ set -uo pipefail
 OUT="${OUT_DIR:-/out}"
 mkdir -p "$OUT"
 
-NEGCTL="${RIG_NEGCTL:-0}"
+MODE="${RIG_MODE:-proof}"
+[ "${RIG_NEGCTL:-0}" = "1" ] && MODE=negctl   # back-compat with the first rig
+NEGCTL=0
+[ "$MODE" = "negctl" ] && NEGCTL=1
 GROUP="${RIG_GROUP:-2026}"
 RECNX="${RIG_RECNX:-8}"           # RECNXINTERVAL == the genesis discovery window
 # CLUSTER_CREDITS: the receive-buffer grant each port advertises at abs 95 of
@@ -64,7 +82,13 @@ WINDOW_B="${RIG_WINDOW_B:-110}"
 WALL="${RIG_WALL:-600}"
 
 VOTES_A=1
-[ "$NEGCTL" = "1" ] && VOTES_A=0
+[ "$MODE" = "negctl" ] && VOTES_A=0
+
+# Node B's SCSSYSTEMID. 1026 & 0x3ff == 2 == the CSV slot the coordinator
+# assigns it, so the two candidate CSID rules agree and the admission is
+# unambiguous. The `ambig` mode moves it to 1030 (& 0x3ff == 6) so they do not.
+SYSID_B=1026
+[ "$MODE" = "ambig" ] && SYSID_B=1030
 
 KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
@@ -74,10 +98,10 @@ QEMU=qemu-system-x86_64
 if [ -w /dev/kvm ]; then ACCEL="-accel kvm -cpu host"; else ACCEL="-accel tcg"; fi
 
 echo "=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ==="
-echo "mode=$( [ "$NEGCTL" = 1 ] && echo NEGATIVE-CONTROL || echo PROOF )"
+echo "mode=$MODE"
 echo "accel=${ACCEL#-accel } group=$GROUP recnx=${RECNX}s stagger=${STAGGER}s"
 echo "node A: OVMXA/1025 VOTES=$VOTES_A EXPECTED_VOTES=1 VAXCLUSTER=2"
-echo "node B: OVMXB/1026 VOTES=0          VAXCLUSTER=2"
+echo "node B: OVMXB/$SYSID_B VOTES=0          VAXCLUSTER=2"
 echo ""
 
 # --------------------------------------------------------------------------
@@ -128,7 +152,7 @@ echo "--- powering on node A (it must hear nobody for ${RECNX}s, then found) ---
 launch_node A OVMXA 1025 "$VOTES_A" 1 52:54:00:00:10:25 "$WINDOW_A"; PA=$LAUNCH_PID
 sleep "$STAGGER"
 echo "--- powering on node B (it must join what A formed) ---"
-launch_node B OVMXB 1026 0 1 52:54:00:00:10:26 "$WINDOW_B"; PB=$LAUNCH_PID
+launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$WINDOW_B"; PB=$LAUNCH_PID
 
 ( sleep "$WALL"; kill -9 "$PA" "$PB" 2>/dev/null ) & GUARD=$!
 wait "$PA" 2>/dev/null
@@ -190,7 +214,7 @@ anyone_claimed_membership() {
 
 echo ""
 echo "=========================================="
-if [ "$NEGCTL" = "1" ]; then
+if [ "$MODE" = "negctl" ]; then
 	if anyone_claimed_membership; then
 		echo "  NEGATIVE CONTROL FAILED: a node asserted membership or held"
 		echo "  a cluster system id with NO node holding quorum by its own"
@@ -207,6 +231,35 @@ if [ "$NEGCTL" = "1" ]; then
 	exit 0
 fi
 
+if [ "$MODE" = "ambig" ]; then
+	# A must still FOUND (nothing about genesis changed); B must NOT be
+	# admitted, must hold NO CSID and must NOT be a member.
+	if [ "$A_ROLE" != "founder" ] || [ "$A_MEMBER" != "1" ]; then
+		echo "  AMBIGUITY CONTROL INCONCLUSIVE: node A did not found, so"
+		echo "  there was no coordinator to refuse anything."
+		echo "  A: role=${A_ROLE:-?} member=${A_MEMBER:-?}"
+		echo "=========================================="
+		exit 1
+	fi
+	if [ "$B_MEMBER" = "1" ] || { [ -n "$B_CSID" ] && [ "$B_CSID" != "-" ]; }; then
+		echo "  AMBIGUITY CONTROL FAILED: node B reached MEMBER or holds a"
+		echo "  CSID (member=$B_MEMBER csid=$B_CSID) although the coordinator"
+		echo "  refused its admission and sent it no op-0x06 membership"
+		echo "  record. A membership with no wire-learned generation behind"
+		echo "  it is fabricated -- INV-6."
+		echo "=========================================="
+		exit 1
+	fi
+	echo "  AMBIGUITY CONTROL HELD (rd vms-3a7c): with node B's SCSSYSTEMID"
+	echo "  at 1030 the two candidate CSID-assignment rules disagree (slot 2"
+	echo "  vs 1030 & 0x3ff = 6), the coordinator refused the admission and"
+	echo "  sent NO op-0x06 -- and node B stayed NEW with no CSID and no"
+	echo "  membership. So the MEMBER the proof run reports for node B can"
+	echo "  only have come from a real, wire-learned generation."
+	echo "=========================================="
+	exit 0
+fi
+
 if cn2_reached && [ "$A_ROLE" = "founder" ] && [ "$B_ROLE" = "joiner" ]; then
 	echo "  GENESIS 2-NODE PROOF PASSED"
 	echo "  Node A founded a VMScluster and node B joined it: both"
@@ -216,9 +269,22 @@ if cn2_reached && [ "$A_ROLE" = "founder" ] && [ "$B_ROLE" = "joiner" ]; then
 fi
 
 echo "  GENESIS 2-NODE PROOF FAILED"
-echo "  A: role=${A_ROLE:-?} member=${A_MEMBER:-?} cn=${A_CN:-?}"
-echo "  B: role=${B_ROLE:-?} member=${B_MEMBER:-?} cn=${B_CN:-?}"
-if [ "$A_ROLE" = "founder" ] && [ "$A_MEMBER" = "1" ]; then
+echo "  A: role=${A_ROLE:-?} member=${A_MEMBER:-?} cn=${A_CN:-?} csid=${A_CSID:-?}"
+echo "  B: role=${B_ROLE:-?} member=${B_MEMBER:-?} cn=${B_CN:-?} csid=${B_CSID:-?}"
+if [ "$A_ROLE" = "founder" ] && [ "$A_MEMBER" = "1" ] && [ "$B_MEMBER" = "1" ]; then
+	echo ""
+	echo "  ADMISSION HELD, THE MEMBER COUNT DID NOT AGREE."
+	echo "  Node A founded generation 1, admitted node B and counts"
+	echo "  cn=${A_CN}; node B holds CSID ${B_CSID} -- which it can only have"
+	echo "  computed from a generation it read out of a real op-0x06 -- and"
+	echo "  its own executive reports MEMBER. What did NOT happen is node B"
+	echo "  counting the OTHER member: no grounded wire field associates a"
+	echo "  peer's SCSSYSTEMID with its CSID, so B holds no CSID for A, its"
+	echo "  CSB for A cannot be matched to a nodemap bit, and B's own"
+	echo "  executive says so -- '%CNXMAN, committed member count differs"
+	echo "  from the transition nodemap'. See"
+	echo "  docs/design-op06-membership-builder.md sec 8."
+elif [ "$A_ROLE" = "founder" ] && [ "$A_MEMBER" = "1" ]; then
 	echo "  (GENESIS itself HELD: node A founded with CSID ${A_CSID} and"
 	echo "   its executive reports MEMBER. What did not happen is node B's"
 	echo "   ADMISSION -- read RIG-B-JOINREC and the %CNXMAN transcript.)"

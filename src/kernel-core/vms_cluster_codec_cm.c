@@ -947,6 +947,30 @@ uint32_t vms_cm_csid_of(uint32_t generation, uint32_t scssystemid)
 	       (scssystemid & (uint32_t)VMS_CM_CSID_SYSID_MASK);
 }
 
+vms_codec_status_t vms_cm_membership_build(uint32_t epoch, uint32_t coord_csid,
+					   uint8_t *out_body, uint32_t cap,
+					   uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	/* INV-6: the SAME shape test the reader below applies, so a CSID this
+	 * builder would emit is by construction one that reader would accept --
+	 * and a value that is not a CSID never becomes a frame. */
+	if (!cm_csid_shape_ok(coord_csid))
+		return VMS_CODEC_E_RANGE;
+
+	st = cm_originate_begin(VMS_CM_OP_MEMBERSHIP, out_body, cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, epoch);
+	cm_put_tag(&w, VMS_CM_ROLE_COMMIT, VMS_CM_CLASS_ADD);
+	vms_wire_put_le32(&w, VMS_OFB_CM_MEMBERSHIP_CSID_A, coord_csid);
+
+	return cm_originate_end(&w, written);
+}
+
 vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *body,
 						uint32_t len,
 						uint32_t *out_csid)

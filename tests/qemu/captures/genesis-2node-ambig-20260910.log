@@ -1,0 +1,34 @@
+# 2-node cluster rig -- vms-3a7c AMBIGUITY CONTROL (node B SCSSYSTEMID 1030).
+# Same image, same pod, ONE SYSGEN digit different from the admission run.
+# The coordinator refuses, sends NO op-0x06, and node B stays NEW: so the
+# MEMBER + CSID node B reports in the admission run can only have come from
+# a real, wire-learned generation (INV-6).
+
+=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ===
+mode=ambig
+accel=kvm -cpu host group=2026 recnx=8s stagger=30s
+node A: OVMXA/1025 VOTES=1 EXPECTED_VOTES=1 VAXCLUSTER=2
+node B: OVMXB/1030 VOTES=0          VAXCLUSTER=2
+
+--- powering on node A (it must hear nobody for 8s, then found) ---
+--- powering on node B (it must join what A formed) ---
+
+=== node A: what its executive held (ttyS1) ===
+
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=1 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=1 quorum=1 cevotes=1 epoch=1 projections=agree
+RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1030 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-B-FINAL role=none member=0 state=JOINING csid=- cn=0 quorum=0 cevotes=0 epoch=0 projections=agree
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=founder member=1 cn=1 csid=0x00010001
+  node B: role=none member=0 cn=0 csid=-
+
+==========================================
+  AMBIGUITY CONTROL HELD (rd vms-3a7c): with node B's SCSSYSTEMID
+  at 1030 the two candidate CSID-assignment rules disagree (slot 2
+  vs 1030 & 0x3ff = 6), the coordinator refused the admission and
+  sent NO op-0x06 -- and node B stayed NEW with no CSID and no
+  membership. So the MEMBER the proof run reports for node B can
+  only have come from a real, wire-learned generation.
+==========================================

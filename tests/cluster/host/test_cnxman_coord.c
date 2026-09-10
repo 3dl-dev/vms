@@ -284,7 +284,22 @@ static void bed_init(uint32_t n_members)
 
 	memcpy(g.cl.params.scsnode, "OVMX01", 6);
 	g.cl.params.scsnode_len = 6;
-	g.cl.params.scssystemid = 0x000004000103ull;
+	/*
+	 * REAL SCSSYSTEMIDs, CONSISTENT WITH THIS BED'S OWN CSIDs (rd vms-3a7c).
+	 *
+	 * This bed used to carry LAN-address-shaped 48-bit values
+	 * (0x0000_0400_0103 and friends) while declaring CSV slots 1/2/3/4 for
+	 * the same systems -- and `slot != SCSSYSTEMID & 0x3ff` for every one of
+	 * them, which is a configuration the real lab has never had and the
+	 * coordinator now refuses (coord_csid_unambiguous). What the executive
+	 * actually puts in csb->sysid at runtime is the peer's SCSSYSTEMID, as
+	 * the port learned it (vms_scs_peer_at); the 2-node genesis rig read
+	 * back 1025 and 1026, and the real lab's cluster is 1025/1026/1027.
+	 * So the bed now uses those, and its CSID constants below are exactly
+	 * their low ten bits. This is a fixture made faithful, not a check
+	 * relaxed: every assertion in this file is unchanged.
+	 */
+	g.cl.params.scssystemid = 1027ull;   /* OWN_CSID  -> slot 3 */
 	g.cl.params.vaxcluster = 2;
 
 	local = cnxman_club_init(&g.cl);
@@ -295,13 +310,13 @@ static void bed_init(uint32_t n_members)
 	g.cl.club.epoch = START_EPOCH;
 
 	if (n_members >= 1)
-		(void)bed_member(0x000004000101ull, "VAX1", VAX1_CSID);
+		(void)bed_member(1025ull, "VAX1", VAX1_CSID);   /* slot 1 */
 	if (n_members >= 2)
-		(void)bed_member(0x000004000102ull, "VAX2", VAX2_CSID);
+		(void)bed_member(1026ull, "VAX2", VAX2_CSID);   /* slot 2 */
 
 	/* the joiner: a real CSB, no CSID, not selected -- but a real
 	 * connection (and so real dialogue state) all the same. */
-	joiner = cnxman_club_alloc_csb(&g.cl.club, 0x000004000104ull, 1);
+	joiner = cnxman_club_alloc_csb(&g.cl.club, 1028ull, 1);  /* JOIN_SLOT 4 */
 	bed_seed_dialogue(joiner);
 
 	g.rb_ops.outstanding = bed_rebuild_outstanding;
@@ -1298,18 +1313,152 @@ static void test_omissions_are_counted_not_faked(void)
 	bed_init(2);
 	drive_add_to_barrier(2);
 
-	ct_check_eq_u32(g.c.membership_burst_omitted, 1,
-			"the op 0x06 membership burst is omitted (its record "
-			"layout has no isolated offset)");
-	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBERSHIP), 0,
-			"and no empty membership burst was invented");
+	/*
+	 * The op-0x06 MEMBERSHIP record is no longer among the omissions: its
+	 * form-A CSID offset is grounded in two independent real-VAX captures
+	 * and it now ships (docs/design-op06-membership-builder.md). What is
+	 * still omitted from a record we DO send is the three ungrounded field
+	 * spans, and they are counted -- see
+	 * test_membership_record_is_built_from_real_state() below.
+	 */
+	ct_check_eq_u32(g.c.membership_burst_omitted, 0,
+			"nothing about the membership record was un-buildable "
+			"here: this coordinator holds a real CSID");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBERSHIP), 1,
+			"exactly ONE membership record, never the reference's "
+			"254-frame burst (integration note E78's crash vector)");
+	ct_check_eq_u32(g.c.membership_fields_omitted, 3,
+			"and its three ungrounded field spans -- the countdown, "
+			"the incarnation, the sub-record body -- are counted, "
+			"not guessed");
 	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_LOCKRB), 0,
-			"nor an empty op 0x05 lock-rebuild burst");
+			"the op 0x05 lock-rebuild burst is STILL omitted: its "
+			"payload field map is not grounded");
 	ct_check_eq_u32(g.c.open_cells_omitted, 3,
 			"the Phase 1 proposal's un-isolated cells are counted "
 			"per open (book p. 7-40)");
 	ct_check_eq_u32(g.c.relay_subject_omitted, 2,
 			"and the relay's subject field, per relay");
+}
+
+/*
+ * THE op-0x06 MEMBERSHIP RECORD, byte by byte against the two real-VAX
+ * captures. Full grounding: docs/design-op06-membership-builder.md.
+ *
+ * This is the frame that turns an admission into an identity the joiner can
+ * hold: its ONLY route to a CSID is a genuine CSID read out of an op-0x06,
+ * and its only route to MEMBER is a CSID. Every asserted byte below is either
+ * a value measured identical across 509 real frames (two captures, two
+ * clusters, two coordinators, two epochs) or a value read out of THIS node's
+ * own live CLUB -- never a constant chosen here.
+ */
+static void test_membership_record_is_built_from_real_state(void)
+{
+	const struct sent_frame *s;
+
+	printf("\n-- the op 0x06 membership record: grounded bytes, real "
+	       "state --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBERSHIP), 1,
+			"ONE record per admission (E78: the reference's "
+			"254-frame burst is what bugchecked VAX2)");
+	s = nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBERSHIP, 0);
+	ct_check(s != NULL, "and it was recorded");
+	if (s == NULL)
+		return;
+
+	ct_check_eq_u32(s->dst, JOIN_CSID,
+			"addressed to the joiner alone -- the only system that "
+			"needs to be taught a generation");
+	ct_check_eq_u32(s->was_response, 0,
+			"ORIGINATED, not a response: op 0x06 is a "
+			"notification (this codec's allowlist row is CONSUME)");
+
+	/* The header, byte-exact in 509 of 509 real frames. */
+	ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_ROLE), VMS_CM_ROLE_COMMIT,
+			"body[16] role 0x20 -- 509/509 real frames");
+	ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_CLASS), VMS_CM_CLASS_ADD,
+			"body[17] class 0x02 -- 509/509 real frames");
+	ct_check_eq_u32(sent_le32(s, VMS_OFF_CM_EPOCH), g.c.epoch,
+			"body[12:16] carries THIS transition's real epoch, "
+			"read back from the coordinator, never a constant");
+
+	/* The one payload field, and the fact that it is OUR OWN. */
+	ct_check_eq_u32(sent_le32(s, VMS_OFF_CM_MEMBERSHIP_CSID_A), OWN_CSID,
+			"body[24:28] form A carries THIS coordinator's own "
+			"real CSID -- the offset that in both captures carries "
+			"only the sender's own genuine CSID");
+	ct_check_eq_u32(sent_le32(s, VMS_OFF_CM_MEMBERSHIP_CSID_A),
+			(uint32_t)g.cl.club.local_csid,
+			"... and it is the CLUB's cell, not a copy of anything");
+
+	/* The honest omissions, asserted as ZERO on the wire. */
+	ct_check_eq_u32(sent_le32(s, VMS_OFF_SYSAP_BODY + 20u), 0u,
+			"body[20:24] countdown: offset grounded, semantics "
+			"not -- left zero, which is itself an observed value");
+	ct_check_eq_u32(sent_le32(s, VMS_OFF_SYSAP_BODY + 28u), 0u,
+			"body[28:32] incarnation low: no accessor for our own "
+			"incarnation from a pure FSM TU -- omitted, not guessed");
+	ct_check_eq_u32(sent_le32(s, VMS_OFF_SYSAP_BODY + 32u), 0u,
+			"body[32:36] incarnation high: likewise");
+	ct_check_eq_u32(sent_le32(s, VMS_OFF_CM_MEMBERSHIP_CSID_B), 0u,
+			"body[36:40] form B is NOT written: OVMX holds no "
+			"incarnation for a peer and will not assert one");
+	ct_check_eq_u32(sent_le16(s, VMS_OFF_SYSAP_BODY + 10u), 0u,
+			"body[10:12] is the reference's uninitialised buffer "
+			"residue and is NOT reproduced (sec 4(p))");
+
+	ct_check_eq_u32(g.c.memberships_sent, 1, "counted as originated");
+	ct_check_eq_u32(g.c.membership_fields_omitted, 3,
+			"and its three ungrounded spans counted as omitted");
+}
+
+/*
+ * THE vms-3a7c AMBIGUITY GATE. The coordinator stamps the subject with a
+ * round-robin CSV slot; the joiner will DERIVE its own CSID from its own
+ * SCSSYSTEMID. When those two numbers differ the joiner cannot find its own
+ * bit in the nodemap, and it would be admitted by the cluster while believing
+ * it was not. Until the oracle settles which rule is right, such a system is
+ * REFUSED -- loudly, with nothing stamped and nothing emitted.
+ */
+static void test_ambiguous_csid_assignment_refuses(void)
+{
+	struct vms_csb *joiner;
+
+	printf("\n-- a system the two CSID rules would name differently is "
+	       "refused (vms-3a7c) --\n");
+	bed_init(2);
+
+	/*
+	 * The joiner's SCSSYSTEMID is changed so that `sysid & 0x3ff` is 9
+	 * while the next free CSV slot is still JOIN_SLOT (4). Nothing else
+	 * about the bed changes.
+	 */
+	joiner = cnxman_club_csb_at(&g.cl.club, (uint32_t)bed_join_csb(2));
+	ct_check(joiner != NULL, "the joiner CSB is there");
+	if (joiner == NULL)
+		return;
+	joiner->sysid = (vms_scs_sysid_t)1033;   /* 1033 & 0x3ff == 9 != 4 */
+
+	{
+		uint8_t f[VMS_CM_FRAME_LEN];
+		uint32_t n = mk_join_request(f);
+
+		(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+	}
+
+	ct_check_eq_u32(g.n_sent, 0, "not one frame originated");
+	ct_check_eq_u32(g.c.last_refusal, CNXMAN_COORD_REF_CSID_AMBIG,
+			"refused because the assignment is ambiguous, not for "
+			"some other reason");
+	ct_check_eq_u32(g.c.csid_ambiguous, 1, "and the refusal is counted");
+	ct_check_eq_u32(joiner->csid_valid, 0,
+			"NOTHING was stamped on the subject: a refusal leaves "
+			"no half-admitted identity behind");
+	ct_check_eq_u32(g.cl.club.we_coordinate, 0, "the CLUB was not claimed");
+	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_IDLE, "still idle");
 }
 
 static void test_dlm_seam(void)
@@ -1492,6 +1641,8 @@ int main(void)
 
 	test_no_link_originates_nothing();
 	test_omissions_are_counted_not_faked();
+	test_membership_record_is_built_from_real_state();
+	test_ambiguous_csid_assignment_refuses();
 	test_dlm_seam();
 	test_dlm_told_when_abandoned();
 	test_foreign_frames_route_on();

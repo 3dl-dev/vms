@@ -322,13 +322,57 @@ static uint32_t coord_next_slot(struct cnxman_coord *c)
 }
 
 /* Stamp it. Sequence 1: this slot has never been used, and this implementation
- * never reuses one, so no higher sequence can arise here (p. 7-25). */
+ * never reuses one, so no higher sequence can arise here (p. 7-25).
+ *
+ * PROVISIONAL PENDING ORACLE (rd vms-3a7c). Which number belongs in the CSID's
+ * low word is NOT settled: this implementation uses the round-robin CSV slot
+ * (p. 7-25), and the competing candidate is the published construction's own
+ * `SCSSYSTEMID & 0x3ff`. Every real CSID this project has captured is
+ * consistent with BOTH, because the lab's SCSSYSTEMIDs are consecutive from
+ * 1025 (1025->1, 1026->2, 1027->3) -- no capture in the repository can separate
+ * them. Until one does, coord_csid_unambiguous() below refuses any admission
+ * for which the two rules would differ, so nothing this node stamps or emits
+ * can be made retroactively wrong by the answer.
+ * Full statement: docs/design-op06-membership-builder.md sec 5.
+ */
 static void coord_assign_slot(struct cnxman_coord *c, struct vms_csb *subject,
 			      uint32_t slot)
 {
 	cnxman_csb_set_csid(subject, (vms_csid_t)((1u << 16) | slot));
 	c->max_slot_seen = slot;
 	c->csids_assigned++;
+}
+
+/*
+ * THE AMBIGUITY GATE (rd vms-3a7c, and the reason the op-0x06 builder is safe
+ * to use at all).
+ *
+ * A joiner does not take its CSID off the wire. It reads a GENERATION out of a
+ * membership record and derives its own identity from its own SYSGEN state --
+ * `generation << 16 | SCSSYSTEMID & 0x3ff` (vms_cnxman_join_fsm.c,
+ * join_learn_csid_from_membership). Meanwhile THIS side stamps the subject's
+ * CSB with the CSV slot above, and that low word is the bit it sets in the
+ * transition nodemap. If the two numbers differ, the joiner looks for its own
+ * bit at one index while the coordinator asserted it at another, phase 2 finds
+ * nothing (vms_cnxman_phase2.c task 1) and the system is admitted by the
+ * cluster while believing it was not.
+ *
+ * So: admit only when the two candidate rules AGREE. Under that condition the
+ * CSID this node asserts is correct whichever way vms-3a7c settles, which is
+ * the only form of "safe toward a real VAX" available before the oracle exists.
+ * A disagreement is a REFUSAL with a named reason, not a guess -- and not a
+ * silent one: an operator reading the console learns exactly which system could
+ * not be named and why.
+ */
+static int coord_csid_unambiguous(const struct vms_csb *subject, uint32_t slot)
+{
+	uint32_t derived;
+
+	if (subject == NULL || !subject->sysid_valid)
+		return 0;   /* no SCSSYSTEMID: neither rule can be evaluated */
+	derived = (uint32_t)vms_cm_csid_of(1u, (uint32_t)subject->sysid) &
+		  0xffffu;
+	return derived == slot;
 }
 
 /* ==========================================================================
@@ -619,6 +663,70 @@ static void coord_send_commit(struct cnxman_coord *c, uint32_t i)
 	c->commits_sent++;
 }
 
+/*
+ * THE MEMBERSHIP RECORD (cat 0x01 op 0x06) -- the one frame that turns an
+ * admission into an identity the joiner can hold.
+ *
+ * Full grounding: docs/design-op06-membership-builder.md. In one line: the
+ * joiner's ONLY route to a CSID is a genuine CSID read out of an op-0x06, and
+ * its only route to MEMBER is a CSID -- so a coordinator that sends none can
+ * admit nobody. What goes out is THIS node's OWN real CSID, read from the CLUB
+ * (club->local_csid, the cell only cnxman_club_learn_local_csid() ever sets),
+ * at the form-A offset that in 48 of 48 CSID-bearing form-A frames across two
+ * independent real-VAX captures carries only the sender's own genuine CSID.
+ *
+ * ONE FRAME, TO THE SUBJECT ONLY. The reference sends a 254-frame burst; note
+ * E78 records that exactly such a burst provoked the ack storm that bugchecked
+ * VAX2 and kept it down. The joiner needs one record, so one is sent -- the
+ * honest minimum and the smallest crash surface (never crash a peer).
+ *
+ * NOTHING HERE FABRICATES. A CLUB with no learned CSID builds no frame: the
+ * builder's own shape test refuses, the omission is counted, and the admission
+ * proceeds without it (the joiner then stays NEW, which is the honest outcome
+ * and exactly what happened before this function existed).
+ */
+static void coord_send_membership(struct cnxman_coord *c, uint32_t i)
+{
+	struct vms_club *club = coord_club(c);
+	struct vms_csb *csb;
+	vms_csid_t dst;
+	uint32_t written = 0;
+
+	csb = coord_out_to(c, i, &dst);
+	if (csb == NULL)
+		return;
+	if (!club->local_csid_valid) {
+		/* We have no identity of our own to re-assert. Counted, never
+		 * substituted: a zero CSID is not a small membership record,
+		 * it is a false one. */
+		c->membership_burst_omitted++;
+		coord_log(c, "%CNXMAN, membership record omitted: this node "
+			     "holds no cluster system id to assert");
+		return;
+	}
+	if (vms_cm_membership_build(c->epoch, (uint32_t)club->local_csid,
+				    c->scratch, (uint32_t)sizeof(c->scratch),
+				    &written) != VMS_CODEC_OK) {
+		c->membership_burst_omitted++;
+		coord_note_send_failure(c,
+			"%CNXMAN, membership record could not be built");
+		return;
+	}
+	/* A NOTIFICATION, never answered with an 0x81 (this codec's own
+	 * allowlist row for cat-0x01 op-0x06 is CONSUME), so it originates
+	 * with txn 0 -- the same shape the barrier GO and the releases use. */
+	cnxman_envelope_originate(csb, c->scratch, CNXMAN_ENV_NOTIFY);
+	coord_emit(c, dst, written);
+	c->memberships_sent++;
+	/* The three grounded-offset fields this record leaves zero: the
+	 * body[20:24] countdown (offset grounded, semantics not), the
+	 * body[28:36] incarnation (this node's boot time lives in the port's
+	 * identity, which a pure FSM TU cannot reach) and the body[40:132]
+	 * sub-record body (not grounded, and partly the reference's own kernel
+	 * memory). Counted so the gap stays visible instead of being guessed. */
+	c->membership_fields_omitted += 3u;
+}
+
 static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 {
 	struct vms_csb *csb;
@@ -790,6 +898,20 @@ static void coord_try_go(struct cnxman_coord *c);
 
 static void coord_enter_open(struct cnxman_coord *c)
 {
+	/*
+	 * BETWEEN THE COMMIT AND THE OPEN -- the reference sequence's own place
+	 * for the membership record, and the last moment at which telling the
+	 * joiner its generation still lets it recognise its own bit in the
+	 * nodemap the open is about to carry.
+	 *
+	 * ADD-with-a-subject only. A REMOVE has no joiner to teach, and a
+	 * FOUNDING open (subject_csb < 0) has nobody on the interconnect at
+	 * all -- it must stay byte-for-byte silent, which is what makes genesis
+	 * a local act rather than an announcement.
+	 */
+	if (c->tr_class == VMS_CM_CLASS_ADD && c->subject_csb >= 0)
+		coord_send_membership(c, (uint32_t)c->subject_csb);
+
 	c->state = (uint8_t)CNXMAN_COORD_OPEN;
 	coord_fanout(c, coord_send_open);
 	/*
@@ -965,6 +1087,24 @@ static int coord_open_transition(struct cnxman_coord *c, uint8_t tr_class,
 				"express; transition not proposed");
 			return -1;
 		}
+		/*
+		 * vms-3a7c: the LAST gate before an identity is stamped, and
+		 * deliberately after the nodemap one -- a slot the wire cannot
+		 * express is refused for THAT reason, which is the stronger
+		 * statement. Admit only a system the two candidate CSID rules
+		 * name identically (coord_csid_unambiguous), so nothing this
+		 * node stamps can be made wrong by the oracle. A founding open
+		 * has no subject and assigns nothing, so it is not asked.
+		 */
+		if (subject != NULL &&
+		    !coord_csid_unambiguous(subject, subject_slot)) {
+			c->csid_ambiguous++;
+			(void)coord_refuse(c, CNXMAN_COORD_REF_CSID_AMBIG,
+				"%CNXMAN, this system's cluster system id "
+				"cannot be assigned unambiguously; membership "
+				"request not proposed");
+			return -1;
+		}
 		c->bitmap = map;
 		c->bitmap_valid = 1u;
 		c->bitmap_popcount = (uint8_t)cnxman_phase2_popcount8(map);
@@ -1007,6 +1147,8 @@ static void coord_begin_add(struct cnxman_coord *c, int32_t subject_csb)
 			"can name; membership request not proposed");
 		return;
 	}
+	/* The vms-3a7c ambiguity gate lives inside coord_open_transition(),
+	 * beside the assignment it guards. */
 	if (coord_open_transition(c, VMS_CM_CLASS_ADD, subject_csb, slot) != 0)
 		return;
 
@@ -1014,17 +1156,13 @@ static void coord_begin_add(struct cnxman_coord *c, int32_t subject_csb)
 	c->state = (uint8_t)CNXMAN_COORD_RELAY;
 	coord_fanout_relay(c);
 	/*
-	 * op 0x05 (lock-rebuild burst) and op 0x06 (MEMBERSHIP burst) belong
-	 * between the commit and the open in the reference sequence. Neither is
-	 * built here: the membership record's {SCSSYSTEMID, incarnation, CSID}
-	 * triple has no isolated offset, so a burst would assert an empty
-	 * cluster. The joiner therefore is not told the CSID assigned above.
-	 * Counted, said on the console once per transition, never faked.
+	 * op 0x05 (lock-rebuild burst) and op 0x06 (MEMBERSHIP) belong between
+	 * the commit and the open in the reference sequence, and that is where
+	 * they are: coord_enter_open() sends the membership record as its first
+	 * act. The op-0x05 lock/resource rebuild burst still has NO builder --
+	 * its payload field map is not grounded (codec header sec 5b) -- and is
+	 * still honestly absent.
 	 */
-	c->membership_burst_omitted++;
-	coord_log(c, "%CNXMAN, membership records omitted: their format is not "
-		     "established");
-
 	coord_try_commit(c);
 }
 
@@ -1109,7 +1247,19 @@ static void coord_h_commit_ack(struct cnxman_coord *c, const struct coord_msg *m
 		return;
 	}
 	if (m->from_csb != c->subject_csb) {
+		/*
+		 * SAY IT, ONCE. A transition that stalls here stalls forever
+		 * and, until this line existed, said nothing at all: the
+		 * counter was the only trace, and the counters are not
+		 * projected through any ioctl. An answer from a block other
+		 * than the one this transition is admitting is a real
+		 * diagnosis, not noise.
+		 */
 		c->unknown_peer++;
+		if (c->unknown_peer == 1u)
+			coord_log(c, "%CNXMAN, a membership commit was "
+				     "answered by a system this transition is "
+				     "not admitting");
 		return;
 	}
 	c->commit_acks++;
@@ -1402,7 +1552,19 @@ static enum cnxman_coord_rx coord_dispatch(struct cnxman_coord *c,
 
 	h = coord_table[c->state][ev];
 	if (h == NULL) {
+		/*
+		 * An empty cell, said out loud ONCE. "The coordinator was in a
+		 * state that has no edge for this message" and "the message
+		 * never arrived" are different diagnoses that a stalled
+		 * transition cannot otherwise be told apart from -- and the
+		 * counter that used to be the only trace is projected through
+		 * no ioctl (the executive has no console log of its own; see
+		 * integration note E69's reasoning for the join ring).
+		 */
 		c->ignored_events++;
+		if (c->ignored_events == 1u)
+			coord_log(c, "%CNXMAN, a transition message arrived in "
+				     "a state that has no edge for it");
 		return CNXMAN_COORD_RX_CONSUMED;
 	}
 	was_collision = (h == coord_h_collision) ||

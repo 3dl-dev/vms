@@ -246,6 +246,13 @@ enum cnxman_coord_refusal {
 	CNXMAN_COORD_REF_NO_NODEMAP = 4, /* a member's slot is outside that
 					  * byte: an open would LOSE it      */
 	CNXMAN_COORD_REF_BUSY       = 5, /* we are already coordinating one   */
+	CNXMAN_COORD_REF_CSID_AMBIG = 7, /* the CSV slot this coordinator would
+					  * assign and the CSID the joiner will
+					  * DERIVE for itself disagree, so the
+					  * admission cannot be named the same
+					  * way on both sides -- vms-3a7c,
+					  * docs/design-op06-membership-
+					  * builder.md sec 5                  */
 	CNXMAN_COORD_REF_NO_QUORUM  = 6  /* GENESIS only: this node's own
 					  * VOTES do not satisfy quorum, so it
 					  * may not FORM a cluster (p. 7-6)   */
@@ -357,6 +364,17 @@ struct cnxman_coord {
 	uint32_t open_cells_omitted;   /* Phase 1 cells with no known offset   */
 	uint32_t relay_subject_omitted;/* relays sent with no subject field    */
 	uint32_t membership_burst_omitted; /* op 0x06 we could not build       */
+	uint32_t memberships_sent;     /* op 0x06 MEMBERSHIP records ORIGINATED
+					* -- one per admission, never a burst
+					* (E78's crash vector)                */
+	uint32_t membership_fields_omitted; /* grounded-offset fields left zero
+					     * in a membership record we DID
+					     * send: the countdown, the
+					     * incarnation, the sub-record body
+					     * (design note sec 6)             */
+	uint32_t csid_ambiguous;       /* admissions REFUSED because the CSV
+					* slot and the joiner's self-derived
+					* CSID disagree (vms-3a7c)            */
 	uint32_t step_out_of_order;    /* a member reported a step we are not on*/
 	uint32_t step_duplicates;      /* a retransmitted step: acked, not counted*/
 	uint32_t epoch_mismatch;       /* a report for a different transition  */

@@ -964,6 +964,85 @@ vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);
 
 /*
+ * vms_cm_membership_build - cat 0x01 op 0x06, ONE MEMBERSHIP record: this
+ * coordinator re-asserting its OWN CSID, which is the whole of what op-0x06
+ * has ever taught OVMX. Full grounding: docs/design-op06-membership-builder.md.
+ *
+ * WHY IT EXISTS. A joiner's ONLY route to a CSID is
+ * vms_cm_membership_coordinator_csid() below, and its only route to MEMBER is
+ * a CSID (vms_cnxman_phase2.c task 1 needs csb->csid_valid to find this
+ * node's own nodemap bit). With no builder, an OVMX coordinator could admit
+ * nobody: the 2-node genesis rig measured the founder at MEMBER and the
+ * joiner permanently NEW (rd vms-f6b).
+ *
+ * WHY IT IS NOT THE :715 FABRICATION. That note forbids a zero-filled
+ * op-0x06 on the premise that the burst carries a membership LIST, so zeros
+ * would assert an empty cluster. E30 falsified that premise and the captures
+ * refute it outright: 23 of 255 real op-0x06 frames in
+ * tests/lab/captures/op06-join-20260903.pcap -- and 23 of 254 in
+ * cn3-achieved-20260905.pcap, the burst OVMX itself consumed to reach CN=3 --
+ * carry an ENTIRELY ZERO body[24:132], interleaved through the burst (first at
+ * position 5 of 255, then every ~11 frames), in joins that SUCCEEDED. A zero
+ * payload is a shape the reference emits as a matter of course. The prohibition
+ * still stands for the two opcodes that note also names -- the op-0x05
+ * lock/resource rebuild burst and the ORIGINATING cat-0x02 op-0x0d record --
+ * and neither gains a builder here.
+ *
+ * WHAT IT WRITES, and the measurement behind each byte (509 real frames,
+ * two independent captures, two different clusters/coordinators/epochs):
+ *
+ *   body[8]     0x01                    category           509/509
+ *   body[9]     0x06                    opcode             509/509
+ *   body[12:16] `epoch`                 the CLUB's REAL transition epoch
+ *                                       (offset + role grounded 509/509;
+ *                                        the value is this node's own)
+ *   body[16]    VMS_CM_ROLE_COMMIT      0x20               509/509
+ *   body[17]    VMS_CM_CLASS_ADD        0x02               509/509
+ *   body[24:28] `coord_csid`            FORM A -- the offset that in both
+ *                                       captures carries ONLY the sender's
+ *                                       own genuine CSID, zero false
+ *                                       positives (24/24 and 24/24)
+ *
+ * and NOTHING else. Every other byte is left zero and its omission is the
+ * CALLER's to count:
+ *
+ *   body[10:12] uninitialised buffer residue in the reference ("AN", "RE",
+ *               "Xc", ...) -- sec 4(p) forbids reproducing it;
+ *   body[20:24] a per-frame countdown whose OFFSET is grounded but whose
+ *               SEMANTICS are not (0x00 is itself an observed value);
+ *   body[28:36] the incarnation quadword -- offset grounded, but the value is
+ *               this node's boot time, which lives in the port's identity
+ *               (pe_incarnation()) and is not reachable from a pure FSM TU;
+ *   body[40:132] the rest of whichever sub-record a frame carries -- not
+ *               grounded, and partly the reference's own kernel pointers,
+ *               which Rule 8 forbids reproducing.
+ *
+ * FORM A, NOT FORM B, deliberately: form A is the offset the reader tries
+ * FIRST, and it is the record in which a sender asserts ITS OWN CSID. Form B
+ * is used to re-assert OTHER members' records, which OVMX cannot honestly
+ * build -- it holds no incarnation for a peer, and inventing one is the
+ * E76/E78 vector that bugchecked two real VAXes.
+ *
+ * REFUSAL, NEVER A ZERO CSID (INV-6). `coord_csid` is put through the SAME
+ * shape test vms_cm_membership_coordinator_csid() applies on receive, so this
+ * builder and that reader can never disagree about what a CSID looks like. A
+ * value that fails it is VMS_CODEC_E_RANGE and NO FRAME IS BUILT: a burst
+ * naming no real CSID teaches a joiner nothing, and sending one anyway would
+ * put a shape on the wire this node does not have.
+ *
+ * ONE FRAME PER ADMISSION, not a burst. The joiner needs one. Integration note
+ * E78 records that a 254-frame membership burst is what provoked the ack storm
+ * that bugchecked VAX2 and kept it down; the fewest frames that carry the fact
+ * is both the honest minimum and the smallest crash surface.
+ *
+ * STAMP with is_response=0. txn stays 0: op-0x06 is a NOTIFICATION, never
+ * answered with an 0x81 (this file's own allowlist row, VMS_WIRE_ACT_CONSUME).
+ */
+vms_codec_status_t vms_cm_membership_build(uint32_t epoch, uint32_t coord_csid,
+					   uint8_t *out_body, uint32_t cap,
+					   uint32_t *written);
+
+/*
  * vms_cm_membership_coordinator_csid - E30 (falsified + replaced, real-VAX
  * capture): read the SENDER's (the existing coordinator's) own CSID out of
  * a received cat-0x01 op-0x06 MEMBERSHIP burst frame.

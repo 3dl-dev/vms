@@ -1729,6 +1729,35 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	struct vms_cm_params p;
 
 	j->peer_adverts++;
+
+	/*
+	 * op-0x02 IS NOT AN ADVERT -- IT IS A MEMBERSHIP REQUEST, AND IT IS THE
+	 * COORDINATOR'S (rd vms-f6b).
+	 *
+	 * Spec sec 4(p): a joiner "sends its op 0x02 to EXACTLY ONE peer", and
+	 * BEING ASKED is what makes the asked node the coordinator (book
+	 * pp. 7-37/7-38). vms_cnxman_coord_fsm.c's whole selection edge is
+	 * [IDLE|COMPLETE|ABANDONED][RX_TR_REQUEST], and RX_TR_REQUEST is
+	 * exactly this opcode.
+	 *
+	 * The router offers a body to the join FSM FIRST, so a CONSUMED here
+	 * ends its journey: this handler used to consume op-0x02 -- counting it
+	 * as a "peer advert" -- and the coordinator was never asked anything.
+	 * MEASURED on the 2-node genesis rig: both nodes put their op-0x02 on
+	 * the wire (RIG-*-JOINREC kind=2 cat=0x01 op=0x02), the peer's port and
+	 * SCS delivered it, and NEITHER node ever logged "proposing addition of
+	 * a system to the cluster" -- the admission timed out on both sides,
+	 * every time, for the whole run.
+	 *
+	 * NOT_MINE lets it fall through to the barrier (which does not claim
+	 * cat-0x01 op-0x02) and then to the coordinator, which does. It is
+	 * returned ONLY for this one opcode: op-0x01 is handled below and
+	 * op-0x14 has no other owner, so both stay consumed and neither becomes
+	 * an "unroutable frame" console line.
+	 */
+	if (e->env.opcode == VMS_CM_OP_CONFIG)
+		return CNXMAN_JOIN_RX_NOT_MINE;
+
 	if (e->env.opcode != VMS_CM_OP_PARAMS || e->from_csb < 0)
 		return CNXMAN_JOIN_RX_CONSUMED;
 	csb = cnxman_club_csb_at(&j->cl->club, (uint32_t)e->from_csb);

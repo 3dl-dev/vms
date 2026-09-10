@@ -284,6 +284,10 @@ jobs:
               - 'src/ovmx_job_control/**'
               - 'src/vmslink/librarian.c'
               - 'src/vmslink/include/ovmx_olb.h'
+              - 'src/vmslink/mk_librarian.sh'
+              - 'src/vmslink/ovmx_link_rms_io.c'
+              - 'src/vmslink/ovmx_link_rms_io.h'
+              - 'src/imgact/test/run_librarian_native.sh'
               - 'tools/vms_login.c'
               - 'tools/loginout_display.c'
               - 'tools/loginout_display.h'
@@ -6210,6 +6214,43 @@ jobs:
               apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
               export CC=gcc ARCH=x86_64 WORK=/tmp/olb-native OLB_EXPECT=1
               sh /src/src/imgact/test/run_olb_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # librarian-native-x86_64 — LIBRARIAN.EXE runs AS an OVMX image (bead vms-1c2,
+  # self-host S3 spine, epic vms-59a). Unlike librarian-olb-native (which proves
+  # the linked PRODUCT runs, LIBRARIAN staying a host bootstrap tool), this job
+  # links librarian.c + the reused RMS I/O shim into a native PT_INTERP=IMGACT
+  # image (mk_librarian.sh, -DOVMX_OLB_RMS_IO) and IMGACT-ACTIVATES LIBRARIAN
+  # itself: it /CREATEs a real .OLB from two .OBJs reading each object via RMS
+  # (sys$open/$get) and writing the .OLB via RMS (sys$create/$put), proven by a
+  # trace + byte-count cross-check; a stock `ar t` lists both modules, native
+  # /LIST reads it back via RMS, and a bootstrap LINK consumes it into an image
+  # that activates (mul3(14)==42). This promotes LIBRARIAN to a native
+  # OVMX image like LINK/TCC/DCL — the S3-spine step toward MMK building a
+  # component INSIDE OVMX (vms-1df). Runner is x86_64 so alpine:3.20/amd64 runs
+  # natively — no QEMU.
+  # -----------------------------------------------------------------------
+  librarian-native-x86_64:
+    name: LIBRARIAN.EXE runs AS an OVMX image — /CREATE .OLB via RMS + Activate (self-host S3 spine, x86_64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: IMGACT activates native LIBRARIAN.EXE; it /CREATEs an .OLB via RMS, /LIST reads it back, LINK pulls a member (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/librarian-native LIBRARIAN_EXPECT=1
+              sh /src/src/imgact/test/run_librarian_native.sh
             '
 
   # -----------------------------------------------------------------------

@@ -33,6 +33,18 @@
 #include <strings.h>   /* strcasecmp */
 #endif
 
+#ifdef OVMX_OLB_RMS_IO
+/* When LIBRARIAN.EXE is built AS an OVMX-native image (mk_librarian.sh,
+ * -DOVMX_OLB_RMS_IO) its .OBJ reads and .OLB read/write route through OVMX RMS
+ * (sys$open/$get, sys$create/$put) instead of raw POSIX stdio, reusing the
+ * generic whole-file toolchain RMS shim that LINK.EXE's native image already
+ * uses (src/vmslink/ovmx_link_rms_io.{c,h}). The two functions needed here are
+ * whole-file slurp + whole-buffer write, exactly what that shim exposes. link.c
+ * and dcl_library.c are unaffected: neither defines OVMX_OLB_RMS_IO, so both
+ * keep the byte-identical host stdio path below. */
+#include "ovmx_link_rms_io.h"
+#endif
+
 #define OLB_AR_MAGIC     "!<arch>\n"
 #define OLB_AR_MAGIC_LEN 8
 #define OLB_AR_HDR_SIZE  60
@@ -76,6 +88,10 @@ static inline uint64_t olb__dec(const char *f, int len)
 /* ---- internal: slurp a whole file into a fresh buffer. ---- */
 static inline unsigned char *olb__slurp(const char *path, size_t *out_size)
 {
+#ifdef OVMX_OLB_RMS_IO
+    /* native LIBRARIAN.EXE: read the .OLB byte-exact via RMS (sys$open/$get). */
+    return (unsigned char *)ovmx_link_rms_slurp(path, out_size);
+#else
     FILE *fp = fopen(path, "rb");
     if (!fp) return NULL;
     if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return NULL; }
@@ -90,6 +106,7 @@ static inline unsigned char *olb__slurp(const char *path, size_t *out_size)
     fclose(fp);
     *out_size = (size_t)sz;
     return buf;
+#endif /* OVMX_OLB_RMS_IO */
 }
 
 /*
@@ -215,6 +232,27 @@ static inline void olb__field(char *dst, int width, const char *s)
     for (int i = l; i < width; i++) dst[i] = ' ';
 }
 
+/* ---- internal: a growable byte buffer so the whole .OLB image is assembled
+ * in memory and flushed once -- to a host FILE* (default) or, when
+ * OVMX_OLB_RMS_IO is defined (native LIBRARIAN.EXE), through RMS via
+ * ovmx_link_rms_write. Assembling then a single flush keeps the emitted bytes
+ * identical to the previous incremental-fwrite path (same appends, same order),
+ * so the ar-oracle and byte-identical-determinism tests are unaffected. ---- */
+struct olb__obuf { unsigned char *p; size_t len, cap; int err; };
+static inline void olb__put(struct olb__obuf *b, const void *src, size_t n)
+{
+    if (b->err) return;
+    if (b->len + n > b->cap) {
+        size_t ncap = b->cap ? b->cap : 1024;
+        while (ncap < b->len + n) ncap *= 2;
+        unsigned char *np = (unsigned char *)realloc(b->p, ncap);
+        if (!np) { b->err = 1; return; }
+        b->p = np; b->cap = ncap;
+    }
+    memcpy(b->p + b->len, src, n);
+    b->len += n;
+}
+
 /*
  * Write a complete .OLB (GNU ar container) from an in-memory member array.
  * Long member names (>15 chars) are emitted through a "//" string table, so a
@@ -253,15 +291,12 @@ static inline int olb_write(const char *path, const struct olb_member *members,
         longtab[longlen++] = '\n';
     }
 
-    FILE *fp = fopen(path, "wb");
-    if (!fp) { free(longtab); free(longoff); return OLB_ERR_OPEN; }
-
+    struct olb__obuf ob = { NULL, 0, 0, 0 };
     int rc = OLB_OK;
     char hdr[OLB_AR_HDR_SIZE];
+    static const char pad = '\n';
 
-    if (fwrite(OLB_AR_MAGIC, 1, OLB_AR_MAGIC_LEN, fp) != OLB_AR_MAGIC_LEN) {
-        rc = OLB_ERR_IO; goto done;
-    }
+    olb__put(&ob, OLB_AR_MAGIC, OLB_AR_MAGIC_LEN);
 
     /* Emit the "//" long-name table first (GNU convention) if any. */
     if (longlen) {
@@ -275,11 +310,9 @@ static inline int olb_write(const char *path, const struct olb_member *members,
         olb__field(hdr + 40, 8,  "0");        /* mode  */
         olb__field(hdr + 48, 10, szbuf);      /* size  */
         hdr[58] = '`'; hdr[59] = '\n';
-        if (fwrite(hdr, 1, OLB_AR_HDR_SIZE, fp) != OLB_AR_HDR_SIZE) {
-            rc = OLB_ERR_IO; goto done;
-        }
-        if (fwrite(longtab, 1, longlen, fp) != longlen) { rc = OLB_ERR_IO; goto done; }
-        if (longlen & 1) { if (fputc('\n', fp) == EOF) { rc = OLB_ERR_IO; goto done; } }
+        olb__put(&ob, hdr, OLB_AR_HDR_SIZE);
+        olb__put(&ob, longtab, longlen);
+        if (longlen & 1) olb__put(&ob, &pad, 1);
     }
 
     for (uint32_t i = 0; i < count; i++) {
@@ -299,20 +332,30 @@ static inline int olb_write(const char *path, const struct olb_member *members,
         olb__field(hdr + 40, 8,  "644");
         olb__field(hdr + 48, 10, szbuf);
         hdr[58] = '`'; hdr[59] = '\n';
-        if (fwrite(hdr, 1, OLB_AR_HDR_SIZE, fp) != OLB_AR_HDR_SIZE) {
-            rc = OLB_ERR_IO; goto done;
-        }
-        if (members[i].len &&
-            fwrite(members[i].data, 1, members[i].len, fp) != members[i].len) {
-            rc = OLB_ERR_IO; goto done;
-        }
-        if (members[i].len & 1) {
-            if (fputc('\n', fp) == EOF) { rc = OLB_ERR_IO; goto done; }
-        }
+        olb__put(&ob, hdr, OLB_AR_HDR_SIZE);
+        if (members[i].len) olb__put(&ob, members[i].data, members[i].len);
+        if (members[i].len & 1) olb__put(&ob, &pad, 1);
     }
 
+    if (ob.err) { rc = OLB_ERR_MEM; goto done; }
+
+    /* Flush the assembled image in one shot. */
+#ifdef OVMX_OLB_RMS_IO
+    /* native LIBRARIAN.EXE: write the .OLB byte-exact via RMS (sys$create/$put).
+     * sys$create mints a ";1" version suffix, exactly like LINK.EXE's image
+     * write; the harness cross-checks the RMS byte total against the file. */
+    rc = (ovmx_link_rms_write(path, ob.p, ob.len) == 0) ? OLB_OK : OLB_ERR_IO;
+#else
+    {
+        FILE *fp = fopen(path, "wb");
+        if (!fp) { rc = OLB_ERR_OPEN; goto done; }
+        if (ob.len && fwrite(ob.p, 1, ob.len, fp) != ob.len) rc = OLB_ERR_IO;
+        if (fclose(fp) != 0 && rc == OLB_OK) rc = OLB_ERR_IO;
+    }
+#endif
+
 done:
-    if (fclose(fp) != 0 && rc == OLB_OK) rc = OLB_ERR_IO;
+    free(ob.p);
     free(longtab);
     free(longoff);
     return rc;

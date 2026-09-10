@@ -5,14 +5,14 @@
 
 ## Inventory
 
-**448 surfaces catalogued** across 9 domains, each with a per-surface status.
+**449 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 22 | | real | 304 |
-| 🟢 implemented | 268 | | n/a | 93 |
+| ✅ verified | 22 | | real | 305 |
+| 🟢 implemented | 269 | | n/a | 93 |
 | 🟡 partial | 49 | | advisory | 45 |
 | 🟠 stub | 16 | | facade-risk | 6 |
 | 🔵 designed | 0 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **404 committed** — **290 met** (implemented/verified), 48 in progress (partial), 66 not started (absent/stub/designed).
+- **405 committed** — **291 met** (implemented/verified), 48 in progress (partial), 66 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -990,7 +990,7 @@ Absent. docs/compatibility-contract.md lists host-based (DSSA) volume shadowing 
 
 _Object/image format, activation, symbol vectors, LINK, LIBRARIAN, MACRO, MESSAGE, MMS/MMK, self-hosting compiler._
 
-`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡⬜⬜⬜`  —  22 surfaces catalogued (18 met · 1 in progress · 3 not started) · V1: 20 committed, 18 met
+`✅✅✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡⬜⬜⬜`  —  23 surfaces catalogued (19 met · 1 in progress · 3 not started) · V1: 21 committed, 19 met
 
 ### image-activation — Image Format + Activation (IMGACT, Shareable/Installed Images, TLS)
 <sub>scope: in · plan: vms-ade · ref: OpenVMS Linker Utility Manual; Programming Concepts Manual (image activation) · reviewed 2026-08-31</sub>
@@ -1008,16 +1008,17 @@ IMGACT.EXE activates images in-process via PT_INTERP (freestanding static-PIE); 
 | 🟢 | `image-activation$tls` | feature | Thread-Local Storage in activated images | implemented | real | in | `src/imgact/test/run_exec_tls.sh` — .vms$tls section; run_exec_tls.sh, run_tls_producer_over_crtl.sh. |
 
 ### librarian — LIBRARIAN (.OLB Object Libraries + .TLB/.HLB)
-<sub>scope: in · plan: vms-59a · ref: OpenVMS LIBRARIAN Utility Reference Manual; VSI OpenVMS DCL Dictionary (LIBRARY) · reviewed 2026-08-31</sub>
+<sub>scope: in · plan: vms-59a · ref: OpenVMS LIBRARIAN Utility Reference Manual; VSI OpenVMS DCL Dictionary (LIBRARY) · reviewed 2026-09-10</sub>
 
-LIBRARIAN.EXE now EXISTS and is built + installed to SYS$SYSTEM (was design-only at the last census). It creates/maintains .OLB object libraries — an OVMX-labeled `ar` container of .OBJ (ELF) members (Rule 8: VMS's LBR byte layout is unpublished) — with /CREATE /INSERT /DELETE /LIST /EXTRACT, and LINK.EXE resolves undefined symbols by selectively pulling members. The DCL LIBRARY command drives the same .OLB path plus OVMX text/help libraries (.TLB/.HLB, an OVMX "LBRO" format, Rule 8). Proven end-to-end (build .OLB → link → activate → run) and byte-identical-twice (reproducible archives).
+LIBRARIAN.EXE now EXISTS and is built + installed to SYS$SYSTEM (was design-only at the last census). It creates/maintains .OLB object libraries — an OVMX-labeled `ar` container of .OBJ (ELF) members (Rule 8: VMS's LBR byte layout is unpublished) — with /CREATE /INSERT /DELETE /LIST /EXTRACT, and LINK.EXE resolves undefined symbols by selectively pulling members. The DCL LIBRARY command drives the same .OLB path plus OVMX text/help libraries (.TLB/.HLB, an OVMX "LBRO" format, Rule 8). Proven end-to-end (build .OLB → link → activate → run) and byte-identical-twice (reproducible archives). LIBRARIAN.EXE now ALSO runs AS an OVMX-native image (like LINK/TCC/DCL): built by mk_librarian.sh (-DOVMX_OLB_RMS_IO) into a PT_INTERP=IMGACT.EXE image, it is IMGACT-activated and /CREATEs an .OLB reading each .OBJ and writing the .OLB through RMS (sys$open/$get, sys$create/$put), proven byte-exact by run_librarian_native.sh — the S3-spine step toward MMK building a component inside OVMX (vms-1df).
 
 
-<sub>4 items · 4 met · 0 in progress · 0 not started</sub>
+<sub>5 items · 5 met · 0 in progress · 0 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
 | 🟢 | `librarian$olb-utility` | utility | LIBRARIAN.EXE — build/maintain .OLB object libraries (/CREATE /INSERT /DELETE /LIST /EXTRACT) | implemented | real | in | `src/vmslink/librarian.c` — 337-line SYS$SYSTEM image; operations real. Proven end-to-end by src/imgact/test/run_olb_native.sh (LIBRARIAN → LINK selective pull → IMGACT activate → runs) and the ctest toolchain-olb-roundtrip; byte-identical determinism by tests/toolchain/run_mmk_component_build.sh. .OLB container is Rule-8 (see olb-container item). |
+| 🟢 | `librarian$native-image` | utility | LIBRARIAN.EXE runs AS a native OVMX image (IMGACT-activated), doing .OBJ→.OLB create through RMS | implemented | real | in | `src/imgact/test/run_librarian_native.sh` — vms-1c2: librarian.c + ovmx_olb.h carry #ifdef OVMX_OLB_RMS_IO seams (read_obj, olb__slurp, olb_write buffer-then-write, cmd_extract) that reuse LINK.EXE's whole-file RMS shim (ovmx_link_rms_io.c). mk_librarian.sh links a PT_INTERP=IMGACT image; run_librarian_native.sh (CI: librarian-native-x86_64) IMGACT-activates it, /CREATEs an .OLB reading .OBJs + writing the .OLB via sys$open/$get + sys$create/$put (byte-exact trace cross-check), a stock `ar t` + native /LIST + a bootstrap LINK consume it. Promotes LIBRARIAN to a native OVMX image like LINK/TCC/DCL (S3 spine → vms-1df). |
 | 🟢 | `librarian$dcl-library-cmd` | command | DCL LIBRARY command — /CREATE /INSERT /EXTRACT /LIST (/DELETE for .OLB) across .OLB/.TLB/.HLB | implemented | real | in | `src/vmsdcl/dcl_library.c` — Shares the .OLB reader/writer with LIBRARIAN.EXE via ovmx_olb.h. HELP reads the compiled .HLB directly (dcl_help.c). |
 | 🟢≈ | `librarian$olb-container` | struct | .OLB object-library on-disk container | implemented | advisory | in | `src/vmslink/include/ovmx_olb.h` — Standard `ar` archive of ELF .OBJ members — an OVMX design choice (Rule 8), NOT the unpublished VMS LBR byte layout. Inspectable by stock `ar t` (used as an independent test oracle); consumed by LINK.EXE's own ar reader. |
 | 🟢≈ | `librarian$text-help-container` | struct | .TLB text / .HLB help library on-disk format | implemented | advisory | in | `src/vmsdcl/include/dcl/hlb.h` — OVMX 'LBRO' key-indexed binary format (magic/type/module table) — an OVMX design choice (Rule 8), not VMS binary-compatible. Real create/insert/extract/list + HELP consumption. |

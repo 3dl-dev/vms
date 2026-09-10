@@ -564,6 +564,36 @@ struct vms_resmaster_args {
  */
 #define VMS_DLM_STS_QUEUED  0u
 
+/*
+ * The `status` an ENQ dispatch returns when this node is NOT the master for the
+ * named tree and DOES hold the CSID of the node that is: the DIRECTORY REDIRECT
+ * (rd vms-b96; Davis p. 6-31 outcome 2 -- the directory node "answers with the
+ * master, and the lock request then goes to that master").
+ *
+ * IT IS NOT AN SS$_ CONDITION VALUE, AND ITS BITS SAY SO. Bit 28 is the VMS
+ * condition-value architecture's customer-facility bit, so a value carrying it
+ * is by construction not a DIGITAL-assigned code and cannot alias any SS$_
+ * status this dispatch returns. Its low bit is clear, so a caller applying the
+ * ordinary VMS success test reads it as "not success" -- which is right:
+ * nothing was granted and nothing was queued. Same footing as
+ * VMS_DLM_STS_QUEUED above: a dispatch OUTCOME, not a completion status.
+ *
+ * ON THIS STATUS, AND ONLY ON IT, `master_csid` IS THE REDIRECT TARGET -- the
+ * master CSID the executive genuinely holds for the tree (the resource block's
+ * master_csid, written from a GRANT a master really sent or a directory reply
+ * the cluster really returned). It is never this node, never the requester, and
+ * NEVER the directory node this node's own weight vector resolved: a directory
+ * is not a master, and naming one as master is exactly the fabrication that
+ * made a real VAX install OVMX as the master of resources it did not master.
+ * When this node holds no master for the tree the dispatch declines
+ * SS$_UNSUPPORTED instead, and the requester re-resolves through its own
+ * current vector (bounded by DLM_REQ_MAX_REDIRECTS, vms_dlm_scs_fsm.h).
+ *
+ * `master_lkid` is left VMS_DLM_LKID_UNSET on a redirect: this node holds no
+ * lock for the request, so it echoes no handle (the fc8540ae INVLOCKID rule).
+ */
+#define VMS_DLM_STS_REDIRECT  0x10000008u
+
 struct vms_dlm_xnode_args {
     uint32_t op;                /* in: VMS_DLM_OP_* */
     uint32_t lkmode;            /* in: LCK$K_ mode (0..5) */
@@ -579,7 +609,11 @@ struct vms_dlm_xnode_args {
                                  * vms-904c) => 0 (VMS_DLM_STS_QUEUED: no completion
                                  * status posted yet -- a later GRANT carries
                                  * SS$_NORMAL); ENQ+NOQUEUE incompatible =>
-                                 * SS$_NOTQUEUED; higher rungs => SS$_UNSUPPORTED. */
+                                 * SS$_NOTQUEUED; ENQ at a node that does not
+                                 * master the tree but knows who does =>
+                                 * VMS_DLM_STS_REDIRECT, with master_csid the
+                                 * redirect target (rd vms-b96); higher rungs =>
+                                 * SS$_UNSUPPORTED. */
     /*
      * Cross-node contention outputs (DLM epic vms-7fa rung 3, vms-904c). Filled by
      * the ENQ path so the requester/daemon can act on a QUEUED request:

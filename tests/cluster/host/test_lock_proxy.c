@@ -75,6 +75,7 @@ uint32_t vms_local_csid = 1;
 #define CSID_LOCAL     1u    /* this node                                    */
 #define CSID_DIRECTORY 2u    /* the only directory-participating member       */
 #define CSID_MASTER    3u    /* the node the directory names as tree master   */
+#define CSID_REQUESTER 4u    /* a fourth member, whose request arrives HERE   */
 
 void vms_ast_notify_arrival(struct vms_proc *proc)
 {
@@ -791,6 +792,125 @@ static void no_cluster_arm_refuses(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * 7. THE DIRECTORY REDIRECT (rd vms-b96): an inbound cross-node request that
+ *    reached a node which does not master the tree is answered with the
+ *    MASTER'S CSID (Davis p. 6-31 outcome 2) instead of being declined blind.
+ *
+ * THE FOUR ASSERTIONS, and each one is a way the redirect could have been a
+ * LARP instead of an answer:
+ *
+ *   (a) IT REDIRECTS, AND TO THE RIGHT NODE. The target is the master THIS
+ *       EXECUTIVE HOLDS -- and it is arranged the only way it can be, by the
+ *       cluster GRANTING and naming that master, so the value under test came
+ *       off the wire into the lock database and back out again.
+ *   (b) IT MINTS NOTHING. A redirect is an answer, not a lock: no handle is
+ *       echoed and no lock appears on the resource for the requester. Two
+ *       masters for one tree is how a real cluster breaks (D-DLM-4).
+ *   (c) THE LOOP GUARD. A redirect that would send the request straight back
+ *       to the node that sent it is DECLINED, not sent. That is the only way
+ *       one hop of a reply-based redirect can turn round on itself.
+ *   (d) NO MASTER HELD, NO TARGET INVENTED. This node's own weight vector
+ *       resolves a DIRECTORY (CSID 2) for every name here. A directory is not
+ *       a master, so it is never named as one -- the request is declined and
+ *       master_csid stays 0. This is the assertion that fails on a build that
+ *       "helpfully" redirects to whatever dir_resolve returned.
+ * ================================================================ */
+static void inbound_redirect(void)
+{
+	const uint32_t MASTER_LKID = 0x00008888u;
+	struct vms_dlm_xnode_args x;
+	struct vms_resmaster_args rm;
+	struct vms_proc proc;
+	uint32_t lkid = 0, st;
+
+	printf("--- inbound REDIRECT: a mis-addressed cross-node $ENQ is told "
+	       "who masters the tree ---\n");
+	configure_remote_directory();
+	fm_init();
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	fm_install();
+	proc_init(&proc);
+
+	/*
+	 * Give this node a REAL master for the tree, the only way it can get
+	 * one: a $ENQ posts a lookup and the CLUSTER answers with a GRANT that
+	 * names the master. After this, res->master_csid is a value the cluster
+	 * supplied -- which is exactly (and only) what a redirect may name.
+	 */
+	st = do_enq(&proc, "REDIRTREE", LCK_K_EXMODE, 0, &lkid);
+	ct_check(st == SS__NORMAL && lkid != 0,
+		 "$ENQ posts a lookup for a tree mastered elsewhere");
+	ct_check_eq_u32(deliver_grant(&proc, lkid, LCK_K_EXMODE, MASTER_LKID,
+				      "REDIRTREE", NULL, 0, 0),
+			SS__NORMAL,
+			"the cluster GRANTS and names CSID 3 as the tree's master");
+
+	/* (a) THE REDIRECT. A fourth member asks US for a lock on that tree. */
+	memset(&x, 0, sizeof(x));
+	x.op = VMS_DLM_OP_ENQ;
+	x.lkmode = LCK_K_EXMODE;
+	x.req_lkid = 0x00A10001u;
+	x.req_csid = CSID_REQUESTER;
+	strscpy(x.resnam, "REDIRTREE", sizeof(x.resnam));
+	st = do_xnode(&proc, &x);
+	ct_check_eq_u32(st, (uint32_t)VMS_DLM_STS_REDIRECT,
+			"*** a mis-addressed inbound $ENQ REDIRECTS (it was "
+			"SS$_UNSUPPORTED) ***");
+	ct_check_eq_u32(x.master_csid, CSID_MASTER,
+			"*** and names the master THIS EXECUTIVE HOLDS -- not "
+			"the directory node its vector resolved ***");
+
+	/* (b) IT MINTS NOTHING. */
+	ct_check_eq_u32(x.master_lkid, 0u,
+			"no handle is echoed: this node holds no lock for it");
+	ct_check_eq_u32(x.queued, 0u, "and nothing was queued");
+	memset(&rm, 0, sizeof(rm));
+	strscpy(rm.resnam, "REDIRTREE", sizeof(rm.resnam));
+	vms_ioctl_get_resmaster(&proc, (unsigned long)(void *)&rm);
+	ct_check_eq_u32(rm.is_local_master, 0u,
+			"this node still does not master the tree");
+	ct_check_eq_u32(rm.n_granted, 0u,
+			"and granted NOTHING to the requester (D-DLM-4: never "
+			"two masters for one tree)");
+
+	/* (c) THE LOOP GUARD. */
+	memset(&x, 0, sizeof(x));
+	x.op = VMS_DLM_OP_ENQ;
+	x.lkmode = LCK_K_EXMODE;
+	x.req_lkid = 0x00A10002u;
+	x.req_csid = CSID_MASTER;      /* the very node we would redirect TO */
+	strscpy(x.resnam, "REDIRTREE", sizeof(x.resnam));
+	st = do_xnode(&proc, &x);
+	ct_check_eq_u32(st, (uint32_t)SS__UNSUPPORTED,
+			"*** a redirect that would bounce the request back to "
+			"its sender is DECLINED, never sent ***");
+	ct_check_eq_u32(x.master_csid, 0u, "and it names nobody");
+
+	/* (d) NO MASTER HELD, NO TARGET INVENTED. */
+	wire_learn("REDIRUNKNOWN");    /* the cluster named it; we master nothing */
+	memset(&x, 0, sizeof(x));
+	x.op = VMS_DLM_OP_ENQ;
+	x.lkmode = LCK_K_EXMODE;
+	x.req_lkid = 0x00A10003u;
+	x.req_csid = CSID_REQUESTER;
+	strscpy(x.resnam, "REDIRUNKNOWN", sizeof(x.resnam));
+	st = do_xnode(&proc, &x);
+	ct_check_eq_u32(st, (uint32_t)SS__UNSUPPORTED,
+			"an inbound request for a tree we hold no master for "
+			"is DECLINED");
+	ct_check_eq_u32(x.master_csid, 0u,
+			"*** and the DIRECTORY the vector resolved is NEVER "
+			"named as the master (INV-6) ***");
+
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the proxy releases");
+	vms_lock_dlm_set_requester_ops(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_proxy (FC-P4.4 proxy LKB, real engine, R1 host unit) ===\n");
@@ -800,5 +920,6 @@ int main(void)
 	proxy_idempotent_and_lkid_unset();
 	master_idempotent_retransmit();
 	no_cluster_arm_refuses();
+	inbound_redirect();
 	return ct_summary("test_lock_proxy");
 }

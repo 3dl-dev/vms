@@ -1973,7 +1973,104 @@ struct dlm_xnode_enq_out {
     uint32_t blocking_req_lkid;    /* OUT: the blocking holder's REQUESTER-side lock
                                     * handle -- the value a BLKAST names so the
                                     * holder node finds its ORIGIN record (H6). */
+    uint32_t not_master;           /* OUT: 1 when this node does NOT master the
+                                    * tree the inbound request named, so nothing
+                                    * was granted, queued or minted (vms-b96). */
+    uint32_t redirect_csid;        /* OUT: with not_master, the MASTER this node
+                                    * genuinely holds for the tree, read off the
+                                    * RSB at the moment of the answer -- 0 when
+                                    * it holds none and the answer is the honest
+                                    * decline (rd vms-b96). */
 };
+
+/*
+ * ==========================================================================
+ * THE DIRECTORY REDIRECT (rd vms-b96)
+ *
+ * A cross-node request can arrive at a node that does not master the tree: the
+ * SENDER's copy of the Lock Directory Weight Vector named us, or its resource
+ * block still names us from before a remaster. The published answer is neither
+ * to serve it nor to forward it -- it is to ANSWER WITH THE MASTER'S CSID and
+ * let the requester re-address (Davis p. 6-31 outcome 2; the book-grounding
+ * table's row D5, "answered by a grant only when the directory node is master
+ * ... otherwise by the master's CSID (redirect)"). The requester half of that
+ * exchange is already built and already bounded: dlm_req_fsm_redirect() ->
+ * h_redirect(), capped at DLM_REQ_MAX_REDIRECTS (vms_dlm_scs_fsm.h).
+ *
+ * WHY A REPLY AND NOT A FORWARD -- which is also the whole termination
+ * argument. A forward would build a chain of nodes (A->B->C->...) whose length
+ * no node on it can see, and a cycle between two disagreeing vectors would be a
+ * live retry storm on the wire: the exact failure this tree has already been
+ * burned by. A REPLY cannot chain. Exactly one node answers, the requester
+ * counts its OWN redirects, and that count is its own state. The bound is
+ * therefore structural, and the three refusals below close the only ways a
+ * single hop could still turn round on itself.
+ *
+ * WHAT MAY BE NAMED, AND IT IS EXACTLY ONE THING (INV-6). Only a master CSID
+ * THIS EXECUTIVE HOLDS: res->master_csid, written from a GRANT a master really
+ * sent (vms_lock_dlm_xnode_grant_recv) or from a directory reply the cluster
+ * really returned (vms_lock_dlm_record_master). The DIRECTORY node our own
+ * weight vector resolved is NOT a master and is never named as one -- "the
+ * directory for this name is D" is not an answer this reply carries, and
+ * asserting D as the master would be precisely the fabrication that made a real
+ * VAX install OVMX as the master of resources it did not master (memory
+ * cluster-promotion-gap). With no master held, the honest answer stays the
+ * decline, which the requester's FSM already turns into a bounded re-resolve
+ * through its own CURRENT vector (dq_reresolve: "a DECLINE is an ANSWER").
+ * ==========================================================================
+ */
+
+/*
+ * The CSID a redirect may name, or 0 when there is none to name honestly.
+ * Caller holds res->lock: the value is READ HERE, at the moment of the answer,
+ * rather than carried down from the routing decision that got us here.
+ */
+static uint32_t dlm_redirect_target(const struct vms_lock_resource *res,
+                                    uint32_t requester_csid)
+{
+    uint32_t master = res->master_csid;
+
+    if (master == 0)
+        return 0;                  /* we hold no master: nothing to name */
+    if (master == vms_local_csid)
+        return 0;                  /* it is us -- not this arm's case at all */
+    if (master == requester_csid)
+        return 0;                  /* the answer would send the request straight
+                                    * back to the node that sent it. "You master
+                                    * it" is a DIFFERENT answer (p. 6-31 outcome
+                                    * 3) that this reply has no grounded way to
+                                    * give, so decline instead of loop. */
+    return master;
+}
+
+/*
+ * Answer an INBOUND cross-node request for a tree this node does not master.
+ *
+ * Fills a->status, and xn->redirect_csid when there is a master to name. It
+ * never grants and never mints a lock: two masters for one tree is how a real
+ * cluster breaks (design §3.6 D-DLM-4). Caller holds a reference on `res` and
+ * releases it.
+ *
+ * `xn` IS NON-NULL BY CONSTRUCTION: the caller's OUTBOUND arm (`route == REMOTE
+ * && !xn`) returned before this one, so reaching here means the request came in
+ * from another node. There is no such thing as a local $ENQ that is "not the
+ * master" -- a local $ENQ for a remote-mastered tree posts a proxy instead.
+ */
+static void enq_inbound_not_master(struct vms_lock_resource *res,
+                                   struct vms_enq_args *a,
+                                   struct dlm_xnode_enq_out *xn)
+{
+    uint32_t target;
+
+    exec_lock(&res->lock);
+    target = dlm_redirect_target(res, a->owner_csid);
+    exec_unlock(&res->lock);
+
+    xn->not_master = 1;
+    xn->redirect_csid = target;
+    a->status = target ? (uint32_t)VMS_DLM_STS_REDIRECT
+                       : (uint32_t)SS__UNSUPPORTED;
+}
 
 static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
                             struct dlm_xnode_enq_out *xn)
@@ -2008,9 +2105,13 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
      *
      * A REMOTE route means the cluster masters this tree (or its directory node
      * does) and the request must GO THERE: a proxy LKB is created, the request
-     * is posted, and the caller sleeps on that LKB (FC-P4.4). A cross-node
-     * inbound request (xn set) never takes this path -- it arrived AT the
-     * master, which is this node by definition of having been sent here.
+     * is posted, and the caller sleeps on that LKB (FC-P4.4).
+     *
+     * A REMOTE route for an INBOUND cross-node request (xn set) means the
+     * sender addressed a node that does not master the tree. That is not served
+     * and it is not forwarded: it is answered with the master this node holds --
+     * the directory REDIRECT, rd vms-b96 -- or declined when it holds none. See
+     * "THE DIRECTORY REDIRECT" above enq_inbound_not_master().
      */
     {
         enum dlm_route route;
@@ -2031,10 +2132,11 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         }
         if (route == DLM_ROUTE_REMOTE) {
             /* An inbound cross-node request for a tree this node does not
-             * master is DECLINED (D-DLM-4), never served: two masters for one
-             * tree is how a real cluster breaks. */
+             * master is never SERVED (D-DLM-4). It is REDIRECTED to the master
+             * this node genuinely holds, or -- when it holds none -- declined
+             * honestly. See "THE DIRECTORY REDIRECT" above. */
+            enq_inbound_not_master(res, &args, xn);
             resource_release(res);
-            args.status = SS__UNSUPPORTED;
             goto out;
         }
     }
@@ -3583,6 +3685,14 @@ static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req,
  * the holder node's origin record. INV-6: a BLKAST with no matching holder record or
  * no registered blocking-AST routine declines SS$_UNSUPPORTED, never a faked AST.
  *
+ * THE DIRECTORY REDIRECT (rd vms-b96). An inbound ENQ for a tree this node does
+ * NOT master is no longer a blind decline. When the executive holds the tree's
+ * master CSID, the dispatch answers VMS_DLM_STS_REDIRECT with master_csid set to
+ * that node -- Davis p. 6-31 outcome 2, the directory node's "the master is X".
+ * When it holds none, SS$_UNSUPPORTED still, because the only other thing this
+ * node could name is the DIRECTORY its own vector resolved, and a directory is
+ * not a master (INV-6). Full reasoning at enq_inbound_not_master().
+ *
  * STILL FENCED HONESTLY (INV-6 -- SS$_UNSUPPORTED, never faked):
  *   - LVB replication (vms-d81), resource-directory consistency (vms-1bba),
  *     remastering (vms-6ee), distributed deadlock detection (vms-ec75).
@@ -3658,6 +3768,32 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         xn.req_lkid = req->req_lkid;    /* stamp the master lock with the
                                          * requester's own handle (H5) */
         vms_enq_core_ex(proc, &a, &xn);
+
+        /*
+         * NOT THE MASTER -- the directory REDIRECT (rd vms-b96). The request
+         * reached a node that does not master the tree. Two answers, both read
+         * out of the resource block at the moment of the answer and neither
+         * carried in from the request (INV-6):
+         *
+         *   VMS_DLM_STS_REDIRECT  we hold the tree's master, so master_csid IS
+         *                         that node -- Davis p. 6-31 outcome 2, "the
+         *                         master is X". The requester re-addresses, and
+         *                         its own redirect budget bounds the exchange.
+         *   SS$_UNSUPPORTED       we hold none, so we name nobody: master_csid 0.
+         *
+         * Either way nothing was granted, nothing was queued and this node holds
+         * NO lock for the request, so master_lkid stays unset rather than echoing
+         * a handle with no object behind it (the fc8540ae INVLOCKID rule). In
+         * particular master_csid is NOT set to this node below: saying "I am the
+         * master" about a tree this node does not master is the fabrication the
+         * whole redirect exists to stop.
+         */
+        if (xn.not_master) {
+            req->master_csid = xn.redirect_csid;
+            req->master_lkid = VMS_DLM_LKID_UNSET;
+            req->queued = 0;
+            return a.status;
+        }
 
         /* Hand the master's lock id back (the GRANT reply's master_lkid) and the
          * contention outputs. On a NOQUEUE decline a.lkid is 0. */

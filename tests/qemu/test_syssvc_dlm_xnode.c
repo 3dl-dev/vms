@@ -278,6 +278,61 @@ int main(void)
                            NULL, NULL, NULL, NULL, NULL, NULL);
     CHECK(st == SS_BADPARAM, "requester-side GRANT with no req_lkid -> SS$_BADPARAM");
 
+    /* ---- 5c. ⭐ THE DIRECTORY REDIRECT (rd vms-b96) --------------------------
+     * The mirror of 5b, and it needs no second node: 5b just made this executive
+     * hold a REAL remote master for RORIGIN1 -- res->master_csid == REQ_CSID_B,
+     * written from the GRANT the master genuinely sent over the wire, not from a
+     * test knob and not from an env crutch. So a cross-node $ENQ for that tree
+     * arriving HERE is genuinely MIS-ADDRESSED: this node is not its master.
+     *
+     * It used to be declined blind (SS$_UNSUPPORTED). It is now ANSWERED with
+     * the master's CSID -- Davis p. 6-31 outcome 2, "the directory node answers
+     * with the master, and the lock request then goes to that master". The
+     * answer is a REPLY, never a forward, so the exchange cannot chain across
+     * nodes; the one hop that could still turn round on itself -- a request FROM
+     * the node we would name -- is declined instead (the loop guard).
+     *
+     * INV-6: the CSID asserted here is read out of the resource block at the
+     * moment of the answer. Nothing this test supplies on the request can
+     * influence it; the ONLY way it got into the executive was the GRANT above.
+     * Issued as a direct ioctl because master_csid is a readback the
+     * freestanding vms_kif_dlm_xnode wrapper does not project.
+     */
+    {
+        struct vms_dlm_xnode_args rx;
+
+        /* (i) a THIRD node asks THIS node for a lock on a tree B masters. */
+        memset(&rx, 0, sizeof(rx));
+        rx.op = VMS_DLM_OP_ENQ;
+        rx.lkmode = LCK_K_EXMODE;
+        rx.req_lkid = 0x000B0001u;
+        rx.req_csid = REQ_CSID_C;
+        strncpy(rx.resnam, "RORIGIN1", sizeof(rx.resnam) - 1);
+        rx.status = 0xdeadbeefu;
+        CHECK(ioctl(fd, VMS_IOCTL_DLM_XNODE, &rx) == 0, "DLM_XNODE ioctl (redirect probe)");
+        CHECK(rx.status == VMS_DLM_STS_REDIRECT,
+              "⭐ a MIS-ADDRESSED cross-node ENQ is REDIRECTED (was SS$_UNSUPPORTED)");
+        /* negctl: dlm-xnode-redirect-target-dropped */
+        CHECK(rx.master_csid == REQ_CSID_B,
+              "the redirect names the master the executive genuinely holds");
+        CHECK(rx.master_lkid == 0,
+              "no lock handle is echoed: this node holds none for that request");
+        CHECK(rx.queued == 0, "and nothing was queued");
+
+        /* (ii) THE LOOP GUARD: the same request from the node we would name
+         * would be bounced straight back to its sender. Declined instead. */
+        memset(&rx, 0, sizeof(rx));
+        rx.op = VMS_DLM_OP_ENQ;
+        rx.lkmode = LCK_K_EXMODE;
+        rx.req_lkid = 0x000B0002u;
+        rx.req_csid = REQ_CSID_B;
+        strncpy(rx.resnam, "RORIGIN1", sizeof(rx.resnam) - 1);
+        CHECK(ioctl(fd, VMS_IOCTL_DLM_XNODE, &rx) == 0, "DLM_XNODE ioctl (loop-guard probe)");
+        CHECK(rx.status == SS_UNSUPPORTED,
+              "⭐ a redirect that would bounce the request back to its sender is DECLINED");
+        CHECK(rx.master_csid == 0, "and it names nobody -- no fabricated target");
+    }
+
     /* ---- 6. release the second lock; the resource is torn down -------------- */
     st = vms_kif_dlm_xnode(VMS_DLM_OP_DEQ, LCK_K_NLMODE, 0,
                            0, lkid_b, REQ_CSID_B, 0, res, NULL,

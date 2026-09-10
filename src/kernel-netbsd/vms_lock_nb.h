@@ -209,7 +209,9 @@ struct vms_dlm_xnode_args {
 	uint8_t  valblk[LCK_VALBLK_SIZE]; /* in: value block */
 	uint32_t status;            /* return: SS$_ status. granted=SS$_NORMAL;
 	                             * queued=VMS_DLM_STS_QUEUED (0); NOQUEUE decline=
-	                             * SS$_NOTQUEUED; response ops=SS$_UNSUPPORTED. */
+	                             * SS$_NOTQUEUED; not-the-master-but-we-know-who=
+	                             * VMS_DLM_STS_REDIRECT (master_csid = the target,
+	                             * rd vms-b96); response ops=SS$_UNSUPPORTED. */
 	uint32_t queued;            /* return: 1 = queued on the master (blocked) */
 	uint32_t blocking_csid;     /* return: cross-node holder to BLKAST (0 = none) */
 	uint32_t blocking_master_lkid; /* return: that holder's master lock handle */
@@ -233,6 +235,20 @@ struct vms_dlm_xnode_args {
  * SS$_NOTQUEUED. Mirrors src/kernel/vms_ioctl.h.
  */
 #define VMS_DLM_STS_QUEUED  0u
+
+/*
+ * The `status` an ENQ dispatch returns when this node is NOT the master for the
+ * named tree and holds the CSID of the node that is -- the DIRECTORY REDIRECT
+ * (rd vms-b96, Davis p. 6-31 outcome 2). Mirrors src/kernel/vms_ioctl.h, where
+ * the full contract lives; the shared src/kernel-core/vms_lock.c dispatch
+ * returns it, so it MUST exist here too (the #928 amd64-green-!=-twin trap).
+ * Not an SS$_ code: bit 28 is the condition-value architecture's
+ * customer-facility bit, so it cannot alias one. On this status ONLY,
+ * master_csid is the redirect target -- a master this executive genuinely
+ * holds, never the directory its own weight vector resolved (INV-6) -- and
+ * master_lkid stays VMS_DLM_LKID_UNSET because this node holds no lock for it.
+ */
+#define VMS_DLM_STS_REDIRECT  0x10000008u
 
 /* $DLM member departure. MUST match src/kernel/vms_ioctl.h byte-for-byte. See
  * there for the semantics + INV-6 contract; revised by FC-P4.3, which moved

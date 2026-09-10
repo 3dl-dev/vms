@@ -26,12 +26,11 @@ summary: >
   manager this builds on. Remaining work is DEPTH beyond the ENQ-class engine, not
   engine gaps: the concurrent-both-initiate deadlock proof (vms-04f — the
   global-min selection logic ships and is code-verified; the harness proves the
-  deterministic single-initiator slice), directory REDIRECT of a mis-addressed ENQ
-  (vms-b96 — today verify-and-reject), and a real app-process cross-node lock
+  deterministic single-initiator slice) and a real app-process cross-node lock
   ACQUISITION path (vms-d1f, post-1.0 — today cross-node locks are daemon-
   choreographed and CSID-keyed; an application $ENQ of a remotely-mastered resource
   still returns the honest SS$_UNSUPPORTED "0.4" stub).
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-10
 items:
   - id: cluster-dlm$cross-node-lock
     kind: feature
@@ -115,9 +114,49 @@ items:
       real queue/origin read; a dropped/ttl-expired probe reports no-deadlock, never
       a fabricated cycle (INV-6). DEPTH deferred beyond the engine (honest, tracked):
       the concurrent-both-initiate deadlock proof (vms-04f — logic shipped +
-      code-verified), directory REDIRECT (vms-b96), and a real app-process
-      cross-node acquisition path replacing the SS$_UNSUPPORTED "0.4" stub
-      (vms-d1f, post-1.0).
+      code-verified) and a real app-process cross-node acquisition path replacing
+      the SS$_UNSUPPORTED "0.4" stub (vms-d1f, post-1.0). The directory REDIRECT
+      that used to be listed here as deferred now SHIPS — see the
+      cluster-dlm$directory-redirect row below.
+  - id: cluster-dlm$directory-redirect
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Directory REDIRECT: a cross-node $ENQ that reaches a node which does not master the tree is answered with the master's CSID (Davis p. 6-31 outcome 2), not declined"
+    evidence: src/kernel-core/vms_lock.c
+    verified_against: "tests/cluster/host/test_lock_proxy.c (R1: the inbound dispatch decision — redirect target, loop guard, no-master decline, and that nothing is minted); tests/cluster/host/test_dlm_requester.c (R1: the requester's DLM_REQ_MAX_REDIRECTS budget really terminates a ping-pong); tests/cluster/sim/scenarios/dlm_requester.c (R2: the REAL engine against four simulated systems — the CSID OVMX names is the one the simulated cluster really has mastering the tree, and it is a member this cluster can address); tests/qemu/test_syssvc_dlm_xnode.c scenario 5c (real /dev/vms: a mis-addressed inbound ENQ returns VMS_DLM_STS_REDIRECT naming the master a real GRANT put in the lock database, and the loop guard declines). Negative control: tests/qemu/facility_defects.sh dlm-xnode-redirect-target-dropped."
+    notes: >
+      rd vms-b96, retiring the honest interim "verify-and-reject". Before this, an
+      inbound cross-node $ENQ for a tree this node does not master returned
+      SS$_UNSUPPORTED with no further information, so the requester learned nothing
+      and could only re-resolve blind. The engine now ANSWERS it: when the executive
+      holds the tree's master CSID it replies VMS_DLM_STS_REDIRECT with master_csid
+      set to that node — the book's outcome 2 — and the requester's already-shipping
+      redirect handler (vms_dlm_scs_fsm.c h_redirect) re-addresses.
+      IT IS A REPLY, NEVER A FORWARD. That is the termination argument: exactly one
+      node answers, so no chain of nodes can form and no cycle can be entered.
+      Three responder guards close the single hop: no master held -> decline; target
+      is this node -> decline; target is the REQUESTER -> decline (that answer would
+      bounce the request straight back). The requester's own DLM_REQ_MAX_REDIRECTS
+      budget bounds the exchange from the other end.
+      INV-6: the CSID named is read off the resource block at the moment of the
+      answer, and it can only have got there from a GRANT a master really sent or a
+      directory reply the cluster really returned. The DIRECTORY node this node's own
+      weight vector resolved is NEVER named as a master — a directory is not a master,
+      and asserting one as master is the fabrication that made a real VAX install OVMX
+      as the master of resources it did not master. There is no code path by which a
+      caller-supplied value reaches the target (the request's own master_csid input is
+      not read on the ENQ path), and the retired OVMX_DLM_ENQ_CSID env crutch has no
+      residual.
+      HONEST RESIDUAL, not papered: this is the ENGINE's decision and its readback.
+      The cat-0x82 reply codec grounds a GRANT shape and a DENY shape only
+      (vms_cluster_codec_dlm.h) — no grounded field carries another node's CSID — and
+      the master/directory-side wire arm (vms_dlm_scs.h's handle_request) is not
+      implemented in kernel-core yet. So no REDIRECT frame is emitted today, and none
+      is fabricated: until a reply shape is grounded from a capture, what leaves this
+      node is still the decline, which the requester's FSM correctly turns into a
+      bounded re-resolve. The over-the-wire multi-node redirect rides the
+      capture-gated rig with the rest of the retired multi-node DLM proofs (vms-1ee).
   - id: cluster-dlm$scs-transport
     kind: feature
     status: implemented

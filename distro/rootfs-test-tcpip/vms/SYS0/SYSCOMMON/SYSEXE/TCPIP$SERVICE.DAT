@@ -1,0 +1,9 @@
+! TCPIP$SERVICE.DAT -- TEST OVERLAY variant (rd vms-21b daytime cold-boot proof).
+! Staged into a test build ONLY via --build-arg OVMX_TEST_ENABLE_TCPIP=1; the
+! SHIPPED distro/rootfs SERVICE.DAT keeps every service DISABLED (operator posture).
+! DAYTIME is enabled here so the aux server launches TCPIP$DAYTIME.EXE and answers
+! inbound on :13, proving the (B) ACP-stage launch mechanism end to end.
+!
+!     service-name  port  image-filespec  [image-args...]
+!
+DAYTIME 13 SYS$SYSTEM:TCPIP$DAYTIME.EXE

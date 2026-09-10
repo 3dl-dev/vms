@@ -36,4 +36,14 @@
 ! spawns TCPIP$DAYTIME.EXE with the accepted connection as its SYS$INPUT/
 ! SYS$OUTPUT; the image writes the current date/time as a one-line ASCII string
 ! (RFC 867) and exits.
-DAYTIME 13 SYS$SYSTEM:TCPIP$DAYTIME.EXE
+! DAYTIME 13 SYS$SYSTEM:TCPIP$DAYTIME.EXE
+!   ^ DISABLED by default (rd vms-21b). The shipped default auto-starts NO network
+!     service: this line is commented AND SYSTARTUP_VMS.COM does not invoke
+!     @SYS$STARTUP:TCPIP$STARTUP, so TCPIP$INETD never runs and nothing binds a
+!     port out of the box. (It never actually served before either -- INETD was
+!     never staged/started -- so this is honest, not a regression.) Enabling a
+!     service by default = an operator security-posture call. The daytime
+!     cold-boot proof enables it via a TEST overlay
+!     (distro/rootfs-test-tcpip/, --build-arg OVMX_TEST_ENABLE_TCPIP=1), never
+!     the shipped image. tests/integration/test_tcpip_posture_guard.sh enforces
+!     this (reds if a future change ships an enabled service or wires TCPIP$STARTUP).

@@ -23,7 +23,11 @@ IMAGE="${OVMX_DAYTIME_IMAGE:-ovmx-boot-tcpip}"
 
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1 || [ "${OVMX_BUILD_BOOT_IMAGE:-0}" = "1" ]; then
     echo "--- building daytime test-overlay bootable image ($IMAGE, OVMX_TEST_ENABLE_TCPIP=1) ---"
-    docker build -t "$IMAGE" \
+    # BuildKit required: Dockerfile.bootable uses RUN --mount=type=secret (module
+    # signing key). No secret is supplied here -> the Dockerfile's else branch
+    # generates an ephemeral key (fine for a test-overlay image; the shipped
+    # release image's reproducibility is a separate gate).
+    DOCKER_BUILDKIT=1 docker build -t "$IMAGE" \
         --build-arg OVMX_TEST_ENABLE_TCPIP=1 \
         -f "$REPO_ROOT/distro/Dockerfile.bootable" "$REPO_ROOT" \
         || { echo "FATAL: daytime test-overlay image build failed"; exit 1; }

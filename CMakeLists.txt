@@ -418,6 +418,19 @@ if(BUILD_TESTS)
     set_tests_properties(job_control_ownership_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-21b posture guard: the SHIPPED distribution auto-starts NO network
+    # service (SSH / daytime / any). Enabling one by default is an operator
+    # security-posture call (Baron-reserved), not a silent code change. Source
+    # scan of distro/rootfs SYSTARTUP_VMS.COM + TCPIP$SERVICE.DAT -- reds if a
+    # future change wires TCPIP$STARTUP into shipped SYSTARTUP or ships an enabled
+    # service, forcing the enable-by-default decision to be explicit. Protects the
+    # posture from drift; behavior-neutrality-by-construction for the vms-21b
+    # additive service-image staging.
+    add_test(NAME tcpip_posture_guard
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_tcpip_posture_guard.sh)
+    set_tests_properties(tcpip_posture_guard PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # vms-3e9 standing gate: $CREPRC is the SOLE session-creation primitive --
     # no fork/execl/openpty/dup2 survives ABOVE the VMS layer in any session
     # caller, the mechanics really did move INTO $CREPRC, and the Wall-6

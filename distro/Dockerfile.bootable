@@ -946,12 +946,13 @@ RUN mkdir -p /proof-stage/SYSEXE && \
 # daytime-auto-start-by-default stays an operator posture call).
 ARG OVMX_TEST_ENABLE_TCPIP=0
 RUN if [ "$OVMX_TEST_ENABLE_TCPIP" = "1" ]; then \
-        cp 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT' \
+        cp 'distro/rootfs-test-tcpip/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT' \
            /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
         cp distro/rootfs-test-tcpip/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
            /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
         grep -q 'TCPIP\$STARTUP' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
-        echo "OK: OVMX_TEST_ENABLE_TCPIP=1 -- daytime cold-boot proof overlay staged (SERVICE.DAT + TCPIP$CONFIG/STARTUP)"; \
+        grep -qE '^DAYTIME ' /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/'TCPIP$SERVICE.DAT' && \
+        echo "OK: OVMX_TEST_ENABLE_TCPIP=1 -- daytime cold-boot proof overlay staged (enabled SERVICE.DAT + TCPIP$CONFIG/STARTUP)"; \
     else \
         echo "OVMX_TEST_ENABLE_TCPIP=0 -- shipped image (no TCP/IP auto-start, no port open)"; \
     fi

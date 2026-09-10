@@ -108,7 +108,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-09-09** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-09-10** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -121,7 +121,7 @@ only our forks target.
 | **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | in progress | 1 | 5 | 0 | 17% |
 | **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 3 | 0 | 0% |
 | **0.9** | Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain reach done. The last features land here. | planned | 0 | 0 | 0 | — |
-| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 27 | 19 | 4 | 59% |
+| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 29 | 20 | 5 | 59% |
 
 ### 1.0-gate workstreams (epic rollups)
 
@@ -132,9 +132,9 @@ only our forks target.
 | Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 16/23 | 2 |
 | Cluster configuration | `vms-098` | 0.5→0.9 | in progress | 5/18 | 9 |
 | TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 16/29 | 5 |
-| DECnet Phase IV | `vms-30e` | 0.9 | in progress | 12/36 | 9 |
+| DECnet Phase IV | `vms-30e` | 0.9 | in progress | 12/37 | 9 |
 | Kernel substrate | `vms-19e` | 0.5 | in progress | 5/8 | 1 |
-| VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 86/95 | 1 |
+| VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 86/96 | 1 |
 
 ### Per-milestone items (rd)
 
@@ -207,11 +207,13 @@ only our forks target.
 - `vms-4838` [inbox] REJOIN: drive op 0x02 CM readmission on the MEMBER-INITIATED VMS$VAXcluster connection (rejoiner=TARGET), not OVMX's own outbound joiner VC
 - `vms-ce7` [inbox] Complete diskless satellite boot: NISCS boot-time disk-server VC formation (no MOP load — VMB is ROM-resident) -> pure MSCP-served-disk-over-NISCA capture
 
-**1.0** — rel-1.0 (27/46 done)
+**1.0** — rel-1.0 (29/49 done)
 
+- `vms-015` [done] compat register: repoint drifted cluster-dlm evidence (src/vmsscs → src/kernel-core)
 - `vms-065` [done] Runtime parity: the VAX boot-to-DCL SIMH proof joins the release acceptance gate so every co-release includes a working VAX runtime
 - `vms-19e` [inbox] OVMX owns its kernel: self-built + curated + untainted + signed, with an in-tree home for VMS modules
 - `vms-1bd` [done] ODS-2 writer completeness: multi-block directories + created-file VAR records round-trip
+- `vms-1ee` [waiting] AUTHENTICITY: cluster-dlm$remaster-lvb-deadlock marked verified/real but its multi-node /dev/vms proof (H8-H11) was retired in #1052 — never re-established
 - `vms-1f6` [inbox] OPERATOR.LOG silently diverts to host /tmp on an ACP $PUT failure while returning SS$_NORMAL (masking fallback on the operator-audit trail)
 - `vms-30e` [inbox] DECnet Phase IV for OVMX — clean-room VMS-faithful networking layered product
 - `vms-449d` [inbox] DECnet Phase IV engine rung-1 — userspace AF_PACKET datalink + HELLO tx/rx + adjacency drive (Option B, Rule-1-hidden)
@@ -231,6 +233,7 @@ only our forks target.
 - `vms-6ef` [done] INITIALIZE writes a genuine ODS-2 volume (retire the VMFS/VFH2 bespoke writer)
 - `vms-6f5` [done] MOUNT mounts a real ODS-2 volume (home-block+SCB parse), not a getcwd/logical-name alias
 - `vms-72da` [done] netbsd-vax executive logical-name layer: PROVISION's STARTUP phase cannot create the system logicals SYS$STARTUP/SYS$LOGIN/SYS$UPDATE (%DCL-E-LNMFAIL) → RMS FNF on VMS$PHASES.DAT → infinite %DCL-E-IVLOGNAM loop; image RUNS + identity SYSTEM[1,4] is established, so this is the LNM-table facility on netbsd-vax, the new blocker to Username:
+- `vms-7f6` [done] compat register: repoint dead run_dlm_harness_*.sh verified_against citations (cluster-dlm + adjacent)
 - `vms-8cf` [done] VAX installer: AUTHORIZE.EXE cross-builds for elf32-vax (Decision A static-link)
 - `vms-945e` [done] every boot-required executive facility (proctab/CREPRC, lnm, mbx, ast, access) proven cross-process against the REAL /dev/vms on netbsd-vax (not just event flags; catches ILP32/float/ELF32 bugs amd64 can't)
 - `vms-9c6c` [blocked] R4 (capstone): CLUSTER_CONFIG_LAN.COM provisions OVMX into a cluster end-to-end (operator runs @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM ADD -> node JOINS -> SHOW CLUSTER shows it)
@@ -258,6 +261,7 @@ only our forks target.
 
 ### Shipped releases (git tags)
 
+- **V0.6-13** — Point release.
 - **V0.6-12** — Point release.
 - **V0.6-11** — The cluster claim, made good: a booted OpenVMX node joins a real, running OpenVMS Cluster and is counted as a member. On the lab's two-node VAXcluster, a fresh-booted OVMX node — with CAP_NET_RAW dropped, so the executive itself, not an ambient Linux capability, drove the Ethernet — brought up its cluster port, opened an SCS virtual circuit to a live VAX, connected the VMS$VAXcluster connection manager, and was admitted through the membership transition. The existing members' own accounting counted it: VAX1's F$GETSYI("CLUSTER_NODES") reported 3, sustained for the full ten-minute run; SHOW CLUSTER listed the node with STATUS=MEMBER; SDA showed a genuine, sequential Cluster System Block (CSID 00010003, following the VAXes' 00010001/00010002) with the member flag. The whole join runs inside the executive (vms.ko) — SCS, the connection manager, the PE/virtual-circuit transport, the DLM rebuild, and the state-transition barrier — not a userspace daemon. And it is crash-safe: both real VAXes stayed up the entire run with zero bugchecks, the release-gating invariant that OpenVMX must never emit a frame that can crash a peer. That safety is enforced two ways — a runtime emit-guard that drops any frame violating the measured crash-safe envelope, and a post-hoc wire-safety audit calibrated against 234k real cluster frames — after a hunt (E55–E85) that found and closed every crash-vector in the lab, never in production, the last being a transaction-close frame whose mandatory field OpenVMS asserts nonzero. Honest scope: this edition JOINS an existing cluster (it does not boot satellites or form a cluster from nothing); quorum votes are computed and displayed but not yet enforced; and the member committed the transition without an on-wire barrier-release frame, a tracked follow-on. Configure it the VMS way: @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM (docs/cluster-configuration.md).
 - **V0.6-10** — Three more rungs up the self-hosting and networking long poles, no cluster-participation claim. DECnet Phase IV gains a real transport: an NSP logical-link connection service — establish (Connect Initiate/Confirm), carry data segments with acknowledgement and in-order sequencing, tear down (Disconnect Initiate/Confirm), and give up honestly (retransmit then abandon as unreachable) — proven on the wire between two nodes, byte-identical, the layer SET HOST and file transfer will ride. VMS condition handling gains its third authentic rung: the real Alpha invocation-context primitives (LIB$GET_INVO_*) walk the genuine procedure-descriptor and register-save-area chain, so an unwind can transfer into an ancestor frame that armed no explicit anchor — the mechanism a bare 'return to main' and compiler exception handling need — replacing the last piece of emulation on the software path. And the compiler runtime's file layer gains a real RMS veneer: a C-RTL stdio surface that routes fopen/fwrite/fread/fclose to genuine RMS create/put/get/close over the executive ACP, proven un-fakeably — a file written through the veneer is then seen on the real Files-11 ODS-2 volume by an independent reader, with a genuine File ID and version a POSIX bootstrap cannot forge; wiring it into the alpha port image is scoped as tracked follow-on work.
@@ -269,7 +273,6 @@ only our forks target.
 - **V0.6-4** — Three increments up the networking and executive long poles, no version-gated feature removed. DECnet Phase IV grows a transport and a routing brain: an NSP codec (Connect Initiate oracle-verified byte-identical against the captured real-VAX specimen, the rest of the message set spec-derived from the public DNA NSP spec and labelled as such — no fabricated bytes), and a clock-injectable adjacency state machine that brings a neighbour up on a two-way HELLO handshake, holds it up while HELLOs arrive within the listen timer, and downs it on lapse — the hello cadence taken from the captured oracle. And the executive learns to complete a /NOWAIT subprocess honestly: a new VMS_IOCTL_SPAWN_NOTIFY facility sets the parent's event flag and queues its completion AST from the real executive as an indivisible part of recording the child's exit over /dev/vms (no userspace waitpid poll, fail-closed without /dev/vms), proven on the QEMU kernel harness and mirrored across the x86_64, NetBSD/VAX, and Alpha builds.
 - **V0.6-3** — Two long-pole milestones proven on the real runtime. SSH login is now VMS-faithful end to end: the unmodified OpenVMS OpenSSH port authenticates passwords against the binary SYSUAF (Purdy) and drops the session into LOGINOUT->DCL rather than a shell — all OVMX behavior enters through linker --wrap hooks, no fork of upstream OpenSSH — proven fail-closed against a real /dev/vms (a password login for a user with no SYSUAF record is refused; zero AF_UNIX fds in the handshake, INV-6). And the self-hosting toolchain clears its multi-file rung: the alpha-dec-vms GCC-port image STRICT-links a real 3-object program (no --allow-undefined; decc$free and the cross-.o libc surface all bound through DECC$SHR/LIBOTS) and activates for real on qemu-system-alpha over /dev/vms, returning full success — now guarded by a standing per-PR CI gate so it cannot regress.
 - **V0.6-2** — Two increments up the 1.0 networking and cluster-configuration long poles, no engine changes. DECnet Phase IV gets its first real engine code: a routing-layer endnode-HELLO codec that decodes every field of and byte-identically re-encodes the captured real-VAX oracle specimen (clean-room, derived only from the DNA Phase IV Routing spec plus the lab capture) — the foundation rung under the forthcoming NSP transport, adjacency state machine, and the engine go/no-go. And cluster identity can now be authored the VMS-canon way: CLUSTER_CONFIG_LAN.COM, with a CLUSTER_CONFIG.COM front end, drives SYSGEN SET + WRITE CURRENT to persist SCSNODE and SCSSYSTEMID into OVMXVMSSYS.PAR over the executive ACP, honestly declining the operations it does not yet implement, proven end-to-end against the booted DCL (authors an identity, rejects an over-long SCSNODE, reads it back from the store). It rides the SYS$INPUT-to-image and .PAR-write mechanisms that already shipped.
-- **V0.6-1** — Bug-fix patch: SPAWN now works in the booted runtime. In V0.6, DCL SPAWN failed with %DCL-F-CREPRC because a non-root interactive session's $CREPRC child tried to re-stamp a privileged identity the executive correctly refused; the child now inherits the creator's identity by continuation from its unforgeable parent (a new VMS_IOCTL_REGISTER_SUBPROCESS path), leaving the SS$_NOPRIV self-declaration guard intact. The VMS User Acceptance battery goes 62/66 → 66/66. Found by KVM runtime verification that CI's TCG-flake had masked.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

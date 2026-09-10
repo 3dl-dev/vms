@@ -140,11 +140,12 @@ static uint8_t *heap_exact(const uint8_t *src, size_t n)
  *       values (fixed-1/fixed/fixed+1, cap-1/cap/cap+1, giant, 0xffff) with a
  *       body length chosen to be truncated / exact / oversized independently of
  *       that prefix -- i.e. "valid length prefix but inconsistent DATA LENGTH",
- *       "elistlen at/above the MAX cap boundary", truncation at a field offset.
+ *       "router-list length at/above the MAX cap boundary", truncation at a
+ *       field offset.
  *   3 = structured with a random offset field zeroed/poked, to walk truncations
  *       and single-field corruptions of an otherwise plausible frame.
- * `fixed` is the codec's FIXED_MSG (18 router / 32 endnode); `maxvar` its
- * variable-field cap (MAX_ELIST / MAX_DATA). Layout-agnostic otherwise.
+ * `fixed` is the codec's FIXED_MSG (27 router / 32 endnode); `maxvar` its
+ * variable-field cap (MAX_RSLIST / MAX_DATA). Layout-agnostic otherwise.
  */
 static size_t gen_input(uint64_t *st, uint8_t *buf, unsigned fixed, unsigned maxvar)
 {
@@ -199,7 +200,7 @@ static void fuzz_router_hello(void)
         st += i;                                   /* independent per-iter stream */
         size_t n = gen_input(&st, buf,
                              DNET_ROUTER_HELLO_FIXED_MSG,
-                             DNET_ROUTER_HELLO_MAX_ELIST);
+                             DNET_ROUTER_HELLO_MAX_RSLIST);
 
         struct dnet_router_hello m;
         size_t consumed = 0xdeadbeef;
@@ -212,9 +213,9 @@ static void fuzz_router_hello(void)
             /* Output invariants on success. ASan/UBSan already proved no field
              * was read outside [buf, buf+n); these assert the CONTRACT. */
             int inv = (consumed <= n) &&
-                      (m.elist_len <= DNET_ROUTER_HELLO_MAX_ELIST) &&
+                      (m.rslist_count <= DNET_ROUTER_HELLO_MAX_RSLIST) &&
                       (consumed == (size_t)DNET_ROUTER_HELLO_LENPREFIX
-                                   + DNET_ROUTER_HELLO_FIXED_MSG + m.elist_len);
+                                   + DNET_ROUTER_HELLO_FIXED_MSG + m.rslist_count);
             if (!inv) { bad++; dump_hex("router", salt, i, buf, n); }
 
             /* Decode->encode->decode stability: a well-formed message survives
@@ -223,11 +224,12 @@ static void fuzz_router_hello(void)
             if (dnet_router_hello_encode(&m, re, sizeof re, &rl) == DNET_ROUTER_HELLO_OK) {
                 struct dnet_router_hello m2; size_t c2 = 0;
                 if (dnet_router_hello_decode(re, rl, &m2, &c2) == DNET_ROUTER_HELLO_OK) {
-                    int same = m2.elist_len == m.elist_len &&
+                    int same = m2.rslist_count == m.rslist_count &&
                                memcmp(m2.id, m.id, DNET_ADDR_LEN) == 0 &&
                                m2.rflags == m.rflags && m2.blksize == m.blksize &&
                                m2.priority == m.priority && m2.timer == m.timer &&
-                               memcmp(m2.elist, m.elist, m.elist_len) == 0;
+                               memcmp(m2.name, m.name, DNET_ROUTER_HELLO_NAME_LEN) == 0 &&
+                               memcmp(m2.rslist, m.rslist, m.rslist_count) == 0;
                     if (!same) { bad++; dump_hex("router-rt", salt, i, buf, n); }
                 } else { bad++; dump_hex("router-rt-dec", salt, i, buf, n); }
             }
@@ -462,8 +464,10 @@ static void liveness_router_hello_roundtrip(void)
     in.id[4] = 0x05; in.id[5] = 0x04;
     in.iinfo = DNET_NODETYPE_L1ROUTER; in.blksize = 1498;
     in.priority = 64; in.timer = 15;
-    in.elist_len = 4;
-    in.elist[0] = 0xaa; in.elist[1] = 0x00; in.elist[2] = 0x04; in.elist[3] = 0x02;
+    /* one 7-byte router-list entry (opaque filler) exercises the RSLIST tail */
+    in.rslist_count = DNET_ROUTER_HELLO_RSENTRY;
+    in.rslist[0] = 0xaa; in.rslist[1] = 0x00; in.rslist[2] = 0x04;
+    in.rslist[3] = 0x00; in.rslist[4] = 0x0a; in.rslist[5] = 0x08; in.rslist[6] = 0x00;
 
     uint8_t wire[64]; size_t wl = 0;
     CHECK(dnet_router_hello_encode(&in, wire, sizeof wire, &wl) == DNET_ROUTER_HELLO_OK,
@@ -472,9 +476,9 @@ static void liveness_router_hello_roundtrip(void)
     CHECK(dnet_router_hello_decode(wire, wl, &out, &consumed) == DNET_ROUTER_HELLO_OK,
           "router-hello decodes");
     CHECK(out.rflags == in.rflags && out.priority == in.priority &&
-          out.timer == in.timer && out.elist_len == in.elist_len &&
+          out.timer == in.timer && out.rslist_count == in.rslist_count &&
           memcmp(out.id, in.id, DNET_ADDR_LEN) == 0 &&
-          memcmp(out.elist, in.elist, in.elist_len) == 0,
+          memcmp(out.rslist, in.rslist, in.rslist_count) == 0,
           "router-hello round-trips encode->decode with identical fields");
 }
 

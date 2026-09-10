@@ -144,6 +144,15 @@ static void emit_roundtrip_and_nodetype(void)
     CHECK((frame[DNET_ETH_HDRLEN + 12] & 0x03u) == DNET_NODETYPE_L1ROUTER,
           "emitted IINFO node-type == L1 router (endnode would treat as DR candidate)");
 
+    /* RSLIST tail present: the DATA LENGTH prefix says 27 (0x1b), NOT the old
+     * 18-byte short frame a real VMS VAX rejected with event 4.4 (rd vms-df5). */
+    CHECK(frame[DNET_ETH_HDRLEN] == 0x1b && frame[DNET_ETH_HDRLEN + 1] == 0x00,
+          "emitted routing-message DATA LENGTH == 27 (0x1b) -- RSLIST tail present");
+    CHECK(frame[DNET_ETH_HDRLEN + 2 + 18] == 8,
+          "emitted RSLIST-length byte == 8 (n=0 tail)");
+    CHECK(frame[DNET_ETH_HDRLEN + 2 + 26] == 0,
+          "emitted RSLIST-count byte == 0 (no other routers reported)");
+
     /* ROUND-TRIP: decode the payload back and check every field against what the
      * engine advertises (a real Phase IV endnode must be able to parse it). */
     struct dnet_router_hello d;
@@ -161,7 +170,8 @@ static void emit_roundtrip_and_nodetype(void)
     CHECK(d.area == 0, "area honest-zero");
     CHECK(d.timer == R.adj.t3, "timer == advertised T3");
     CHECK(d.mpd == 0, "mpd reserved-zero");
-    CHECK(d.elist_len == 0, "E-list honest-empty (no fabricated router list)");
+    CHECK(d.rslist_len == 8 && d.rslist_count == 0,
+          "RSLIST tail honest-empty (n=0: length 8, count 0, no fabricated router list)");
 
     /* A non-router engine must refuse to build a router-hello. */
     struct dnet_engine E;
@@ -236,7 +246,7 @@ static void dr_selection_routing_path(void)
 }
 
 /* Fill a dnet_router_hello with fully-adversarial field values from the stream
- * (including elist_len well past the cap, to exercise the EBADLEN guard). */
+ * (including rslist_count well past the cap, to exercise the EBADLEN guard). */
 static void fuzz_fill_router(uint64_t *st, struct dnet_router_hello *r)
 {
     r->rflags   = (uint8_t)sm64(st);
@@ -250,11 +260,18 @@ static void fuzz_fill_router(uint64_t *st, struct dnet_router_hello *r)
     r->area     = (uint8_t)sm64(st);
     r->timer    = (uint16_t)sm64(st);
     r->mpd      = (uint8_t)sm64(st);
-    /* elist_len across the whole uint8_t range: 0..128 valid, 129..255 -> the
-     * EBADLEN reject path. elist[] filled fully so a valid memcpy is in-bounds. */
-    r->elist_len = (uint8_t)sm64(st);
-    for (int k = 0; k < DNET_ROUTER_HELLO_MAX_ELIST; k++)
-        r->elist[k] = (uint8_t)sm64(st);
+    /* RSLIST tail. rslist_len is a DERIVED wire byte -- the encoder recomputes
+     * it from rslist_count, so we set it adversarially here to prove the
+     * encoder IGNORES the caller's value and still emits a consistent frame.
+     * rslist_count spans the whole uint8_t range: 0..MAX_RSLIST valid,
+     * (MAX_RSLIST+1)..255 -> the EBADLEN reject path. name[]/rslist[] filled
+     * fully so a valid memcpy is in-bounds. */
+    r->rslist_len   = (uint8_t)sm64(st);
+    r->rslist_count = (uint8_t)sm64(st);
+    for (int k = 0; k < DNET_ROUTER_HELLO_NAME_LEN; k++)
+        r->name[k] = (uint8_t)sm64(st);
+    for (int k = 0; k < DNET_ROUTER_HELLO_MAX_RSLIST; k++)
+        r->rslist[k] = (uint8_t)sm64(st);
 }
 
 /* ---- 4a. ENCODE fuzz: adversarial fields + boundary output caps ---------- */
@@ -292,17 +309,20 @@ static void fuzz_encode(void)
                 CHECK(d.rflags == r.rflags && d.version == r.version &&
                       d.priority == r.priority && d.timer == r.timer &&
                       d.iinfo == r.iinfo && d.blksize == r.blksize &&
-                      d.elist_len == r.elist_len &&
+                      d.rslist_count == r.rslist_count &&
+                      d.rslist_len ==
+                          (uint8_t)(DNET_ROUTER_HELLO_RSLIST_HDR + r.rslist_count) &&
                       memcmp(d.id, r.id, DNET_ADDR_LEN) == 0 &&
-                      (r.elist_len == 0 ||
-                       memcmp(d.elist, r.elist, r.elist_len) == 0),
-                      "encode->decode round-trips every field");
+                      memcmp(d.name, r.name, DNET_ROUTER_HELLO_NAME_LEN) == 0 &&
+                      (r.rslist_count == 0 ||
+                       memcmp(d.rslist, r.rslist, r.rslist_count) == 0),
+                      "encode->decode round-trips every field (RSLIST tail normalised)");
             }
             free(dbuf);
         } else if (rc == DNET_ROUTER_HELLO_ENOSPACE) {
             nospace++;
         } else if (rc == DNET_ROUTER_HELLO_EBADLEN) {
-            badlen++;               /* elist_len past the cap: rejected, no memcpy */
+            badlen++;               /* rslist_count past the cap: rejected, no memcpy */
         }
         free(buf);
     }

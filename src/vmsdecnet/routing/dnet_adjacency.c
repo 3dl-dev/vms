@@ -3,7 +3,17 @@
  *                    (rd vms-b15). See dnet_adjacency.h for the full clean-room
  *                    provenance statement, the state diagram, and exactly which
  *                    timer value is oracle-captured (T3 = 15 s, vms-3be) versus
- *                    spec-derived (BCT3MULT, DNA Phase IV, not on the wire).
+ *                    spec-derived (BCT3MULT, DNA Phase IV -- a listen/holding
+ *                    timer multiplier applied by this SM, not a routing-message
+ *                    field). NB: BCT3MULT being absent from the wire does NOT
+ *                    mean the router-hello frame is short. On a router hello the
+ *                    AREA byte is followed DIRECTLY by TIMER (tcpdump rhellomsg
+ *                    -- no bct3mult byte between them), and the message then
+ *                    carries a MANDATORY RSLIST tail (RSLIST-length, 7-byte
+ *                    Name, RSLIST-count, router entries) after MPD. Omitting
+ *                    that tail -- not any bct3mult byte -- is what made a real
+ *                    VMS VAX reject OVMX's router hello with event 4.4; see
+ *                    dnet_router_hello.h (rd vms-df5).
  *
  * Pure, deterministic SM + timer logic over the rung-1 HELLO codec: no socket,
  * no thread, no allocation, no wall clock. The caller injects a monotonic tick

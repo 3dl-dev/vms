@@ -227,11 +227,13 @@ static void engine_fill_router_hello(const struct dnet_engine *e,
     r->area     = 0;
     r->timer    = e->adj.t3;                /* our advertised T3 cadence (oracle 15 s) */
     r->mpd      = 0;                         /* reserved / must-be-zero */
-    /* E-LIST: the opaque trailing router-list is carried uninterpreted by the
-     * codec and its sub-field layout is NOT reliably public (see
-     * dnet_router_hello.h). We advertise an EMPTY list -- an honest "no other
-     * routers reported" -- rather than fabricate an internal layout (INV-6). */
-    r->elist_len = 0;
+    /* RSLIST tail (mandatory on a conformant Phase IV router hello -- a real
+     * VMS VAX raises routing event 4.4 and never selects us if it is absent,
+     * rd vms-df5). We advertise n = 0: an honest "no other routers reported".
+     * The encoder derives the RSLIST-length byte (= 8) and emits the reserved
+     * 7-byte Name (memset-zero here) and RSLIST-count = 0, for a 27-byte
+     * routing message. No router-list entry is fabricated (INV-6). */
+    r->rslist_count = 0;
 }
 
 int dnet_engine_build_router_hello_frame(const struct dnet_engine *e,

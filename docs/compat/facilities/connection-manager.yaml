@@ -88,7 +88,7 @@ items:
     authenticity: real
     vms: "A node forms an OpenVMS Cluster from nothing when it has quorum by its own votes"
     evidence: src/kernel-core/vms_cnxman_coord_fsm.c
-    verified_against: "tests/qemu/run_cluster_genesis_2node.sh (real /dev/vms, KVM) — the founder reaches MEMBER, csid=(1<<16)|slot1, CN counted from real executive state; + host tests/cluster/host/test_cnxman_coord.c (the votes gate) and test_cnxman_genesis_negctl.c (VOTES=0 never mints)"
+    verified_against: "tests/qemu/run_cluster_genesis_2node.sh (real /dev/vms, KVM) — the founder reaches MEMBER, csid=(1<<16)|slot1, CN counted from real executive state; + host tests/cluster/host/test_cnxman_coord.c (the votes gate) and tests/cluster/host/test_cnxman_genesis_negctl.c (VOTES=0 never mints)"
     notes: >
       The authentic VMS formation algorithm (OpenVMS Cluster Systems ch. 7), NOT
       a fabricated default: a booting VAXCLUSTER=2 node founds generation-1 as
@@ -109,7 +109,7 @@ items:
     authenticity: real
     vms: "A coordinator ADMITS a joiner to full membership; the joiner adopts its assigned CSID and both count the cluster"
     evidence: src/kernel-core/vms_cnxman_coord_fsm.c
-    verified_against: "tests/qemu/run_cluster_genesis_2node.sh — SYMMETRIC CN=2 on two real /dev/vms executives (founder + joiner both MEMBER, node B counts 2), + the noderive control (sysid 1030 -> the executive ASSIGNS csid slot 2, a value the joiner cannot compute -> adopted not derived) + negctl; host tests/cluster/host/test_cnxman_coord.c (op-05 full-set/delta from CSB state) + test_cnxman_join.c (adopt/re-adopt) + test_codec_cm.c (op-05 round-trip)"
+    verified_against: "tests/qemu/run_cluster_genesis_2node.sh — SYMMETRIC CN=2 on two real /dev/vms executives (founder + joiner both MEMBER, node B counts 2), + the noderive control (sysid 1030 -> the executive ASSIGNS csid slot 2, a value the joiner cannot compute -> adopted not derived) + negctl; host tests/cluster/host/test_cnxman_coord.c (op-05 full-set/delta from CSB state) + tests/cluster/host/test_cnxman_join.c (adopt/re-adopt) + tests/cluster/host/test_codec_cm.c (op-05 round-trip)"
     notes: >
       The admission half of OVMX-as-founding-member. The coordinator sends the
       joiner the full member set (delta to present members) as cat-0x01 op-0x05

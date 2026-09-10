@@ -84,6 +84,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+#include <fcntl.h>           /* access(2) X_OK for the stage-once guard */
+#include <sys/stat.h>        /* mkdir(2) for the stage dir */
+#include "rms/rms.h"         /* rms_stage_over_acp: materialize a SYS$SYSTEM: image
+                              * off the ODS-2 ACP into a Linux-execve-able tmpfs
+                              * path (the shared stager DCL RUN + PID1 use) */
 #include "vms_bgsock.h"      /* the PROVEN server veneer: ovmx_bind/listen/accept
                               * + ovmx_materialize_fd + ovmx_socket_close */
 
@@ -254,6 +259,39 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
     }
     argv[argc] = NULL;
 
+    /* Resolve the service image to an execve-able Linux path. A VMS filespec
+     * (e.g. "SYS$SYSTEM:TCPIP$DAYTIME.EXE") names a file on the ACP-mounted ODS-2
+     * system disk -- which is NOT on the boot initramfs Linux VFS, so a raw
+     * execv() of it would ENOENT. Stage its GENUINE bytes off the ACP into a
+     * tmpfs path first (rms_stage_over_acp -- the same materialize-then-exec the
+     * executive already does for DCL RUN and for PID1's boot images), then execve
+     * the staged copy. A leading '/' is an already-Linux-reachable path (the
+     * in-guest test harness, or a future initramfs image) -- exec it directly, no
+     * staging. execve's argv[0] stays the VMS filespec so the service sees its
+     * faithful name. Staged once per image (X_OK guard). rms_stage_over_acp fails
+     * honestly (SS$_NOSUCHFILE / SS$_NOSUCHDEV) if the image is not on the ACP
+     * volume -- no fabricated launch (INV-6). */
+    const char *exec_path = svc->image;
+    char staged[TCPIP_INETD_PATH_MAX];
+    if (svc->image[0] != '/') {
+        const char *colon = strrchr(svc->image, ':');
+        const char *base  = colon ? colon + 1 : svc->image;
+        (void)mkdir("/tmp/ovmx_inetd", 0755);
+        if ((size_t)snprintf(staged, sizeof(staged), "/tmp/ovmx_inetd/%s", base)
+                >= sizeof(staged)) {
+            close(rfd); ovmx_socket_close(accepted_h);
+            errno = ENAMETOOLONG; return -1;
+        }
+        if (access(staged, X_OK) != 0) {
+            uint32_t st = rms_stage_over_acp(svc->image, staged);
+            if (!(st & 1u)) {                   /* VMS status: low bit set == success */
+                close(rfd); ovmx_socket_close(accepted_h);
+                errno = ENOENT; return -1;      /* image not on the ACP volume */
+            }
+        }
+        exec_path = staged;
+    }
+
     pid = fork();
     if (pid < 0) {
         int e = errno; close(rfd); errno = e; return -1;
@@ -266,7 +304,7 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
         if (dup2(rfd, STDOUT_FILENO) != STDOUT_FILENO) _exit(126); /* NEGCTL tcpip-inetd-reply-not-connected */
         if (rfd > STDERR_FILENO)
             close(rfd);
-        execv(svc->image, argv);
+        execv(exec_path, argv);
         _exit(127);                             /* execv failed */
     }
 

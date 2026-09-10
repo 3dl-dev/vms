@@ -20,6 +20,14 @@
  * full SSH-2 handshake, pubkey auth, and remote command therefore ride BGn: on the
  * SERVER side, through sshd's fork+exec+dup2, with NO AF_UNIX socketpair.
  *
+ * It then drives BOTH SYSUAF/Purdy password outcomes over that same wrapped sshd:
+ * an unknown user is REFUSED (fail-closed, needs only /dev/vms), and -- the RUNG-3
+ * step 3d capstone (rd vms-9cc) -- a VALID SYSUAF user (SYSTEM/MANAGER) authenticates
+ * by PASSWORD and LANDS IN a real interactive DCL session. The wrapped sshd resolves
+ * the REAL shipped SYS$SYSTEM:SYSUAF.DAT over the executive ACP on the real system
+ * volume VDA300: (see password_login_of_valid_user_lands_in_dcl) -- no /etc/passwd
+ * seed, no stubbed lookup; the SYSUAF resolution is genuinely exercised.
+ *
  * Honest Rule-9 skip: the wrapped sshd needs /dev/vms to bind over BGn:; with no
  * executive it cannot start, so the proof is honestly skipped, never faked.
  */
@@ -42,6 +50,8 @@
 #include <dirent.h>
 
 #include "vms_kif.h"
+#include "ssdef.h"        /* SS$_NORMAL */
+#include "vms/logical.h"  /* lnm_* : point SYS$SYSDEVICE at the real system volume */
 
 #define EXIT_SKIP   77
 #define SSH_PORT    2223                 /* distinct from the KEX test's 2222 */
@@ -170,10 +180,10 @@ static void dump_sshd_log(void)
  * linked). This drives the negative, runtime-light half of the proof end to
  * end: a PASSWORD login for a user with NO SYSUAF record must be REJECTED
  * (fail-closed, INV-6). It needs only /dev/vms -- no provisioned SYS$SYSTEM: /
- * DCL.EXE; the positive "valid SYSUAF user -> lands in DCL" proof is the
- * SYSTARTUP-provisioned 3d e2e (it needs a mounted SYS$SYSTEM: with a seeded
- * SYSUAF over the ACP + DCL.EXE). Returns 1 if the unknown-user password login
- * was correctly refused, 0 if it slipped through (a fabricated accept).
+ * DCL.EXE. The positive "valid SYSUAF user -> lands in DCL" half is the 3d capstone
+ * in password_login_of_valid_user_lands_in_dcl() below, which provisions the real
+ * system volume so SYS$SYSTEM:SYSUAF.DAT resolves over the ACP. Returns 1 if the
+ * unknown-user password login was correctly refused, 0 if it slipped through.
  */
 static int password_login_of_unknown_user_is_refused(void)
 {
@@ -224,6 +234,131 @@ static int password_login_of_unknown_user_is_refused(void)
     /* Refused == the client did NOT exit 0 AND no session command ran. */
     return !(WIFEXITED(cst) && WEXITSTATUS(cst) == 0)
            && strstr(buf, "SHOULD_NOT_RUN") == NULL;
+}
+
+/*
+ * vms-0cd RUNG-3 step 3d (rd vms-9cc): the POSITIVE capstone -- a VALID SYSUAF
+ * user (SYSTEM/MANAGER) authenticates by PASSWORD over the wrapped OpenSSH sshd
+ * and LANDS IN a real interactive DCL session over the executive BGn: connection,
+ * no AF_UNIX socketpair.
+ *
+ * Provisioning (the real-ACP part, INV-6): the wrapped sshd's __wrap_getpwnam ->
+ * sysuaf_lookup opens SYS$SYSTEM:SYSUAF.DAT over the Files-11 ACP. The KE harness's
+ * corpus_seed_lnm seeds SYS$SYSDEVICE=VDA0: -- a fixture volume with NO
+ * [SYS0.SYSCOMMON.SYSEXE] tree -- so the lookup fails ("Invalid user SYSTEM") in a
+ * bare process. VDA300: is the generated ODS-2 system volume (mkimage_ods2_sysvol)
+ * that masters [SYS0.SYSCOMMON.SYSEXE] holding the REAL shipped SYSUAF.DAT
+ * (SYSTEM/MANAGER, copied verbatim from distro/rootfs). So we $MOUNT VDA300: and
+ * repoint SYS$SYSDEVICE -> VDA300: at LNM$SYSTEM/EXEC scope -- exactly what
+ * STARTUP.COM's $MOUNT does at boot. corpus_seed_lnm's SYS$SYSROOT/SYS$SYSTEM are
+ * defined RELATIVE to SYS$SYSDEVICE, so flipping SYS$SYSDEVICE alone cascades the
+ * whole concealed-rooted chain to the real volume. EXEC scope (executive-global)
+ * so the SEPARATELY-EXEC'd sshd child inherits it -- process scope would not
+ * survive execve. Restored after the session so sibling suites in this shard see
+ * the original SYS$SYSDEVICE. This is a REAL ACP read of the real shipped SYSUAF --
+ * NO /etc/passwd seed for SYSTEM, NO stubbed lookup; the resolution that was never
+ * runtime-exercised before is genuinely driven here.
+ *
+ * The wrapped sshd verifies SYSTEM/MANAGER (SYSUAF/Purdy), __wrap_getpwnam sets
+ * pw_shell=DCL, ovmx_sshd_pre_drop_pw establishes the executive identity (or emits
+ * %OVMX-F-NOIDENT + exit, fail-closed) then prints the SYS$WELCOME banner, and
+ * __wrap_execve rewrites do_child's login-shell exec into `vmsdcl --login`. We feed
+ * a DCL command + LOGOUT on the session stdin and read the reply back; the marker
+ * in the client's stdout proves the command crossed the wrapped BGn: session channel
+ * into DCL's own interpreter (non-interactive DCL uses fgets with NO echo, so the
+ * marker proves execution, not an echoed input line). Captures the client's combined
+ * stdout/stderr into out[] for main()'s assertions.
+ */
+static void password_login_of_valid_user_lands_in_dcl(char *out, size_t outsz)
+{
+    const char *askpass = "/tmp/ovmx_askpass_ok";
+    const char *dclcmd = "WRITE SYS$OUTPUT \"OVMX_DCL_LANDED_9cc\"\nLOGOUT\n";
+    lnm_manager_t *mgr;
+    char saved_sysdev[256];
+    uint16_t saved_len = 0;
+    uint32_t saved_attr = 0;
+    int have_saved = 0;
+    int inpipe[2], outpipe[2];
+    pid_t cp;
+    size_t got = 0;
+    int cst = 0;
+
+    if (outsz == 0) return;
+    out[0] = '\0';
+
+    /* $MOUNT the real system volume + repoint SYS$SYSDEVICE at it (executive-global,
+     * exec-inherited), saving the harness default to restore afterward. */
+    (void)vms_kif_acp_mount("VDA300:");
+    mgr = lnm_get_manager();
+    if (mgr != NULL) {
+        if (lnm_translate(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE",
+                          saved_sysdev, sizeof(saved_sysdev),
+                          &saved_len, &saved_attr) == SS$_NORMAL &&
+            saved_len < sizeof(saved_sysdev)) {
+            saved_sysdev[saved_len] = '\0';
+            have_saved = 1;
+        }
+        lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", "VDA300:",
+                   LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
+    }
+
+    /* askpass feeds the VALID SYSUAF password over SSH_ASKPASS (no controlling tty). */
+    {
+        FILE *f = fopen(askpass, "w");
+        if (f) {
+            fputs("#!/bin/sh\nprintf '%s\\n' 'MANAGER'\n", f);
+            fclose(f);
+            chmod(askpass, 0755);
+        }
+    }
+
+    if (pipe(inpipe) == 0) {
+        if (pipe(outpipe) == 0) {
+            cp = fork();
+            if (cp == 0) {
+                setsid();               /* no controlling tty -> use askpass */
+                setenv("SSH_ASKPASS", askpass, 1);
+                setenv("SSH_ASKPASS_REQUIRE", "force", 1);
+                setenv("DISPLAY", ":0", 1);
+                dup2(inpipe[0], 0);
+                dup2(outpipe[1], 1);
+                dup2(outpipe[1], 2);
+                close(inpipe[0]); close(inpipe[1]);
+                close(outpipe[0]); close(outpipe[1]);
+                /* NO remote command: do_child execs the login shell (DCL for a
+                 * SYSUAF user), which __wrap_execve rewrites to `vmsdcl --login`;
+                 * DCL then reads our fed stdin. Password-only via the srvpw alias. */
+                {
+                    char *av[] = { (char *)SRV_SSH, "-F", (char *)SRV_SSHCFG,
+                                   (char *)"-l", (char *)"SYSTEM",
+                                   (char *)"srvpw", NULL };
+                    execv(SRV_SSH, av);
+                }
+                _exit(127);
+            }
+            close(inpipe[0]);
+            close(outpipe[1]);
+            (void)write(inpipe[1], dclcmd, strlen(dclcmd));
+            close(inpipe[1]);           /* EOF -> DCL exits even without LOGOUT */
+            for (;;) {
+                ssize_t n = read(outpipe[0], out + got, outsz - 1 - got);
+                if (n <= 0) break;
+                got += (size_t)n;
+                if (got >= outsz - 1) break;
+            }
+            out[got] = '\0';
+            close(outpipe[0]);
+            waitpid(cp, &cst, 0);
+            (void)cst;
+        } else {
+            close(inpipe[0]); close(inpipe[1]);
+        }
+    }
+
+    /* Restore the harness's SYS$SYSDEVICE so later suites in this shard are unaffected. */
+    if (mgr != NULL && have_saved)
+        lnm_create(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", saved_sysdev,
+                   saved_attr, LNM_MODE_EXEC);
 }
 
 int main(void)
@@ -322,6 +457,29 @@ int main(void)
      * drives it: a password login for an unknown SYSUAF user is REFUSED. */
     CHECK(password_login_of_unknown_user_is_refused(),
           "a PASSWORD login for a user with no SYSUAF record is REFUSED by the wrapped sshd -- SYSUAF/Purdy auth is wired and fails closed, no fabricated accept (vms-0cd 3c / INV-6)");
+
+    /* vms-0cd 3d (rd vms-9cc): the POSITIVE capstone -- a VALID SYSUAF user
+     * (SYSTEM/MANAGER) authenticates by PASSWORD over the wrapped sshd and lands
+     * in a real interactive DCL session over the BGn: connection. */
+    {
+        char dbuf[4096];
+        password_login_of_valid_user_lands_in_dcl(dbuf, sizeof(dbuf));
+
+        /* The capstone gate: a DCL command fed on the session stdin executed and
+         * its output returned -- only a real SYSUAF-authenticated login that reached
+         * DCL's interpreter produces this (empty/failed sessions have no marker). */
+        CHECK(strstr(dbuf, "OVMX_DCL_LANDED_9cc") != NULL,
+              "a DCL command fed on the SSH session stdin executed and its output returned -- a valid SYSUAF user (SYSTEM/MANAGER, resolved from the real SYS$SYSTEM:SYSUAF.DAT over the ACP) landed in a real interactive DCL session over the wrapped BGn: connection (vms-9cc capstone)");
+        CHECK(strstr(dbuf, "Welcome to") != NULL,
+              "the SYS$WELCOME banner reached the client -- the wrapped sshd established the authenticated VMS identity and ran the LOGINOUT pre-drop before handing the session to DCL (vms-0cd 3d)");
+        CHECK(strstr(dbuf, "OVMX-F-NOIDENT") == NULL,
+              "the executive did NOT refuse the SYSTEM identity -- SYSUAF/Purdy password auth + executive $SETIDENT succeeded, fail-closed (vms-0cd 3c / INV-6)");
+
+        if (strstr(dbuf, "OVMX_DCL_LANDED_9cc") == NULL) {
+            printf("  --- valid-user (SYSTEM) DCL session stdout: [%s] ---\n", dbuf);
+            dump_sshd_log();
+        }
+    }
 
     if (fail) {
         if (strstr(buf, "OVMX_SRV_OK") == NULL)

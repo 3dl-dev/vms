@@ -59,8 +59,16 @@ struct _invo_context_blk {
     void    *libicb$ih_pc;              /* IA64 instruction pointer */
     void    *libicb$ih_ip;              /* x86_64 instruction pointer */
 
+    /* Address of the CHF context block associated with a condition-dispatcher
+     * frame. libgcc/config/alpha/vms-unwind.h reads it as
+     *   chfctx = (CHFCTX *) icb.libicb$ph_chfctx_addr;
+     * after LIB$GET_INVO_CONTEXT fills the ICB (vms-8e8c, CHF rung-5). Added
+     * additively; libicb$reserved is shrunk by one pointer's width below so
+     * sizeof(INVO_CONTEXT_BLK) and every preceding field offset are unchanged. */
+    void    *libicb$ph_chfctx_addr;     /* -> CHFCTX for a dispatcher frame */
+
     /* Padding to ensure structure is large enough for all architectures */
-    uint8_t  libicb$reserved[512];
+    uint8_t  libicb$reserved[504];
 };
 
 typedef struct _invo_context_blk INVO_CONTEXT_BLK;

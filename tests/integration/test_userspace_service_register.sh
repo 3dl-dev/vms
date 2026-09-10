@@ -849,7 +849,23 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # Anchored + $-terminated so each excludes exactly its one file, never a
 # directory (src/internal/ is a generic musl dir; a future host-compilable file
 # added there must still be scanned).
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$"
+#
+# ONE MORE file-level exclusion (rd vms-8e8c, CHF rung-5):
+#   tools/cross-alpha-vms/include-surface/compile_vms_unwind.c
+# is the include-surface PROOF wrapper for the alpha-dec-vms GCC port's libgcc
+# EH source. It `#include`s vms-unwind.h, which is NOT a tree file: the proof
+# (tools/cross-alpha-vms/include-surface/run_include_surface_proof.sh) EXTRACTS
+# it VERBATIM + SHA256-pinned from the vendored gcc-14.2.0.tar.xz at proof-
+# runtime and compiles it there, with the real alpha-dec-vms cross cc1, against
+# the vms/ include shim. So this wrapper genuinely cannot compile standalone in
+# a host scan (`vms-unwind.h: No such file or directory`) -- its header only
+# exists inside the proof. What the exclusion costs is nothing this gate exists
+# to see: the wrapper defines only vms_unwind_proof_anchor (an address-taker to
+# force emission of the port's static routine) -- no sys$ symbol to certify.
+# Its real compile IS the include-surface proof gate. Anchored + $-terminated
+# so it excludes exactly this one file, never the include-surface directory (a
+# future host-compilable .c added there must still be scanned).
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

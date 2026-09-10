@@ -4025,67 +4025,46 @@ static void evax_apply_reloc(struct evax_input *in, int nin, int ii,
     }
 store_target:;
 
-    /* vms-430: strong-over-weak override for a SECTION-RELATIVE self-bind. The
-     * alpha-dec-vms back end binds a same-TU reference to a WEAK definition as a
-     * section-relative reloc that never names the symbol, so evax_find_sym's
-     * strong preference cannot reach it. If this resolved target (procedure
-     * descriptor S or code entry code_S) lands on a weak def that a strong def
-     * overrides, retarget it to the strong def — the only layer that can see a
-     * section-relative linkage-pair quad pointing at the overridden weak def
-     * (e.g. default_malloc's self-bind to __simple_malloc, redirected to
-     * mallocng). No-op for a symbol target (already strong via evax_find_sym) and
-     * for any address not naming an overridden weak def.
+    /* vms-f59 — strong-over-weak override at SYMBOL granularity (root fix; retires
+     * the vms-430 section-base heuristic AND the bounded vms-b14 __malloc_allzerop
+     * exception). The alpha-dec-vms back end binds a same-TU reference to a WEAK
+     * definition as a section-relative reloc that never names the symbol
+     * (r->to_section set, r->sym empty), so evax_find_sym's strong preference
+     * cannot reach it. musl-alpha overrides two such weaks with mallocng's strong
+     * defs — __malloc_allzerop (WEAK at $LINK$ offset 0 in calloc.o/__libc_calloc.o)
+     * and __libc_malloc_impl (WEAK at $LINK$ offset +0x30 in lite_malloc.o); leaving
+     * either weak live splits the heap between mallocng and a dead allocator and
+     * crashes (vms-864; the small-alloc __malloc_donate crash on the CRTL->RMS
+     * file-op veneer image, vms-c5d).
      *
-     * vms-b14 — CALLOC-FAMILY EXCEPTION (bounded, pending the root fix): a
-     * section-relative PDSC entry-field whose $CODE$ base is the overridden weak
-     * __malloc_allzerop (offset 0 of musl's calloc.o/__libc_calloc.o) is a REAL
-     * allocator (decc$_calloc64 / __libc_calloc at a small nonzero offset), NOT a
-     * weak_alias forwarder. The base-redirect sends it to strong __malloc_allzerop
-     * + its own addend, which lands back INSIDE the strong __malloc_allzerop code
-     * (the zero-helper) rather than the real calloc, so calling calloc jumps into
-     * the wrong routine and a_crash()es on the CRTL->RMS veneer path (the ONLY
-     * base-coincident relocs in the whole DECC$SHR link whose redirect lands in
-     * __malloc_allzerop are exactly these two — every other sibling forwards to
-     * its correct strong target, so redirecting them is right and the crtl_rms N=7
-     * heap/free path stays green). Detect precisely that case and LEAVE the reloc
-     * (store base + addend = the sibling's own real code). The structural
-     * discriminant is "base-only's redirect would land inside strong
-     * __malloc_allzerop"; a general fix (weak_alias-aware descriptor export) is
-     * tracked separately. */
-    {
-        uint64_t base_rt = evax_wredir_apply(redir, nredir, S);
-        int calloc_family = 0;
-        if (r->to_section >= 0 && base_rt != S) {
-            uint64_t store = base_rt + (uint64_t)r->addend;   /* base-only's value */
-            const struct evax_symbol *rown = NULL; uint64_t rown_off = 0;
-            for (int i5 = 0; i5 < nin; i5++)
-                for (int s5 = 0; s5 < in[i5].obj.nsym; s5++) {
-                    const struct evax_symbol *y = &in[i5].obj.sym[s5];
-                    if (!y->defined || !y->is_proc) continue;
-                    uint64_t ca = evax_sym_code_addr(in, i5, y);
-                    if (ca <= store && (!rown || ca >= rown_off)) { rown = y; rown_off = ca; }
-                }
-            /* target-owner: the sibling this section-relative reloc actually names
-             * (greatest defined offset <= addend in the reloc's own to_section). */
-            const struct evax_symbol *town = NULL; uint64_t town_off = 0;
-            for (int s2 = 0; s2 < o->nsym; s2++) {
-                const struct evax_symbol *y = &o->sym[s2];
-                if (!y->defined) continue;
-                if (y->psindx == (uint32_t)r->to_section && y->value <= (uint64_t)r->addend &&
-                    (!town || y->value >= town_off)) { town = y; town_off = y->value; }
-                if (y->is_proc && y->code_psindx == (uint32_t)r->to_section &&
-                    y->code_value <= (uint64_t)r->addend && (!town || y->code_value >= town_off)) { town = y; town_off = y->code_value; }
-            }
-            /* LEAVE only a DISTINCT sibling (not __malloc_allzerop's own self-bind)
-             * whose base-only redirect lands back inside strong __malloc_allzerop. */
-            calloc_family = (rown && strcmp(rown->name, "__malloc_allzerop") == 0 &&
-                             town && strcmp(town->name, "__malloc_allzerop") != 0);
-        }
-        if (!calloc_family) {
-            S      = base_rt;                                  /* base-only redirect */
-            if (have_code) code_S = evax_wredir_apply(redir, nredir, code_S);
-        }
-        /* calloc-family: leave S (and code_S) unredirected -> store base + addend */
+     * KEY: the reloc's NAMED target is base+addend = the referenced symbol's own
+     * placed address, NOT the section base at offset 0. Redirect at THAT exact
+     * address. evax_wredir_apply maps an overridden weak def's placed address to
+     * its strong def, so a reference to __malloc_allzerop OR __libc_malloc_impl (at
+     * ANY section offset) forwards to mallocng, while a DISTINCT strong sibling
+     * sharing the section — decc$_calloc64 / __libc_calloc at +0x18, __libc_malloc,
+     * the sole-def weak decc$_malloc64 — has an address that is not a weak->strong
+     * key and is left untouched. No section-base coincidence, no per-name exception,
+     * no .o alias metadata. The prior base-key redirect keyed on section offset 0:
+     * it over-dragged distinct siblings when the offset-0 symbol was an overridden
+     * weak (the vms-b14 a_crash, patched by a hardcoded name check) and SILENTLY
+     * MISSED __libc_malloc_impl (not at offset 0) — both fixed here without a
+     * discriminant. */
+    if (r->to_section >= 0) {
+        /* Section-relative self-bind: redirect the exact named target (base+addend).
+         * Shift S by the weak->strong delta so the store's S+addend lands on the
+         * strong def; a no-op (delta 0) when base+addend is not an overridden weak.
+         * (have_code is 0 for a section-relative target; code_S is unused here — a
+         * LINKAGE reloc always names a symbol and takes the branch below.) */
+        uint64_t tgt    = S + (uint64_t)r->addend;
+        uint64_t tgt_rt = evax_wredir_apply(redir, nredir, tgt);
+        S += (tgt_rt - tgt);
+    } else {
+        /* Symbol target: evax_find_sym already prefers a strong def, so S/code_S are
+         * normally strong already; redirect the exact descriptor + code-entry
+         * addresses as the safety net for a reference that named an overridden weak. */
+        S = evax_wredir_apply(redir, nredir, S);
+        if (have_code) code_S = evax_wredir_apply(redir, nredir, code_S);
     }
 
     /* Image-relative offset of the store slot (the site), for the .vms$rel table. */

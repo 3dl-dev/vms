@@ -135,6 +135,13 @@ cross_build() {
 build_kernel() {
   if [ -f "${ARTIFACTS_DIR}/netbsd-OVMX" ]; then
     log "MODULAR kernel artifact present -- NOT rebuilding (${ARTIFACTS_DIR}/netbsd-OVMX)"; return 0; fi
+  # rd vms-e77: reuse the shared substrate kernel primed by the CI job
+  # netbsd-vax-substrate-prime (mirrors run-boot.sh build_kernel sibling-reuse).
+  # netbsd-OVMX is the SAME modular kernel across facilities; restored read-only
+  # into boot-artifacts by the CI substrate cache, so a warm run skips build.sh here too.
+  if [ -f "${CACHE_DIR}/boot-artifacts/netbsd-OVMX" ]; then
+    log "reusing shared substrate kernel (boot-artifacts/netbsd-OVMX)"
+    mkdir -p "${ARTIFACTS_DIR}"; cp "${CACHE_DIR}/boot-artifacts/netbsd-OVMX" "${ARTIFACTS_DIR}/netbsd-OVMX"; return 0; fi
   ensure_src
   mkdir -p "${KBUILD_DIR}/obj" "${KBUILD_DIR}/tools" "${KBUILD_DIR}/dest" "${ARTIFACTS_DIR}"
   log "building the GENERIC+MODULAR NetBSD/vax kernel (build.sh; hard cap ${KBUILD_TIMEOUT}s)"

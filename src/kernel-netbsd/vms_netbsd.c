@@ -958,6 +958,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_ACP_FILEOP:
 	case VMS_IOCTL_GETVOL:
 	case VMS_IOCTL_DISK_RESOLVE:
+	case VMS_IOCTL_TERM_CREATE:
+	case VMS_IOCTL_TERM_DELETE:
+	case VMS_IOCTL_TERM_RESOLVE:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -982,6 +985,12 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_acp_getvol(proc, (unsigned long)uarg);     break;
 		case VMS_IOCTL_DISK_RESOLVE:
 			r = vms_ioctl_disk_resolve(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_TERM_CREATE:
+			r = vms_ioctl_term_create(proc, (unsigned long)uarg);    break;
+		case VMS_IOCTL_TERM_DELETE:
+			r = vms_ioctl_term_delete(proc, (unsigned long)uarg);    break;
+		case VMS_IOCTL_TERM_RESOLVE:
+			r = vms_ioctl_term_resolve(proc, (unsigned long)uarg);   break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

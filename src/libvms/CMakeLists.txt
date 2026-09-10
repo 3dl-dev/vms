@@ -68,6 +68,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_event.c
     syssvc/sys_time.c
     syssvc/sys_process.c
+    syssvc/sys_vterm.c
     syssvc/sys_memory.c
     syssvc/sys_logical.c
     syssvc/sys_ast.c

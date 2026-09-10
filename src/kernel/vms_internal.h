@@ -1297,6 +1297,18 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg);
  * /sys/block itself. SS$_NOSUCHDEV / SS$_IVDEVNAM as in the header.
  */
 long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
+
+/*
+ * Dynamic terminal units -- RTAn: create / delete / resolve (rd vms-f40).
+ * The PRODUCT door to vms_devtab_add_terminal()/_remove_terminal() below: an
+ * inbound DECnet SET HOST (Session Control object 42) mints its virtual
+ * terminal through the executive, and $CREPRC resolves the device NAME it was
+ * given to the substrate that backs it. See struct vms_terminal_args in
+ * vms_ioctl.h for the full reasoning. Defined in kernel-core/vms_devtab.c.
+ */
+long vms_ioctl_term_create(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_delete(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg);
 /*
  * Internal (non-ioctl) twin of disk_resolve for an in-executive caller: the
  * Files-11 ODS-2 ACP $MOUNT (vms-127) resolves a canonical disk-unit name to its

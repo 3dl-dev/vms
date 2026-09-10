@@ -45,6 +45,7 @@
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_phase2.h"
 #include "vms_cnxman_coord_fsm.h"
+#include "vms_cnxman_quorum.h"  /* GENESIS: the founding predicate, p. 7-6 */
 #include "vms_dlm_ldwv.h"   /* FC-P4.3: Phase 1 discards the directory */
 #include "vms_cluster_codec_cm.h"
 
@@ -342,16 +343,23 @@ static void coord_assign_slot(struct cnxman_coord *c, struct vms_csb *subject,
  * short.
  * ========================================================================== */
 
+/* Can this CSID be named in the grounded nodemap byte at all? Slot 0 is never
+ * used (p. 7-25) and the byte only reaches CNXMAN_PHASE2_BITMAP_SLOTS. The ONE
+ * spelling of that question: the map builder below asks it of a member, and
+ * the founding path asks it of the CSID it is about to mint, BEFORE minting
+ * anything. */
+static int coord_slot_expressible(vms_csid_t csid)
+{
+	uint32_t slot = (uint32_t)(csid & 0xffffu);
+
+	return slot != 0u && slot < CNXMAN_PHASE2_BITMAP_SLOTS;
+}
+
 static int coord_set_slot_bit(uint8_t *map, const struct vms_csb *csb)
 {
-	uint32_t slot;
-
-	if (!csb->csid_valid)
+	if (!csb->csid_valid || !coord_slot_expressible(csb->csid))
 		return -1;
-	slot = (uint32_t)(csb->csid & 0xffffu);
-	if (slot == 0u || slot >= CNXMAN_PHASE2_BITMAP_SLOTS)
-		return -1;
-	*map |= (uint8_t)(1u << slot);
+	*map |= (uint8_t)(1u << (uint32_t)(csb->csid & 0xffffu));
 	return 0;
 }
 
@@ -942,7 +950,14 @@ static int coord_open_transition(struct cnxman_coord *c, uint8_t tr_class,
 		struct vms_csb *subject = coord_csb_at(c, subject_csb);
 		uint8_t map = 0u;
 
-		if (subject == NULL ||
+		/*
+		 * `subject_csb < 0` is the FOUNDING open (cnxman_coord_found):
+		 * the only system it names is this one, so there is no joiner
+		 * to resolve and no slot to assign. Every other ADD is a
+		 * system asking to be admitted and MUST resolve to a real CSB
+		 * -- we will not invent one.
+		 */
+		if ((subject_csb >= 0 && subject == NULL) ||
 		    coord_build_nodemap(c, subject_slot, &map) != 0) {
 			(void)coord_refuse(c, CNXMAN_COORD_REF_NO_NODEMAP,
 				"%CNXMAN, a system's cluster system id falls "
@@ -954,8 +969,11 @@ static int coord_open_transition(struct cnxman_coord *c, uint8_t tr_class,
 		c->bitmap_valid = 1u;
 		c->bitmap_popcount = (uint8_t)cnxman_phase2_popcount8(map);
 		/* Book p. 7-25: a rejoining system gets a NEW CSID, never its
-		 * old one back -- so any csid already on this CSB is replaced. */
-		coord_assign_slot(c, subject, subject_slot);
+		 * old one back -- so any csid already on this CSB is replaced.
+		 * A founding open has no subject and assigns nothing: the
+		 * founder's own CSID was minted before this call. */
+		if (subject != NULL)
+			coord_assign_slot(c, subject, subject_slot);
 	}
 
 	coord_claim_club(c);
@@ -1436,6 +1454,161 @@ enum cnxman_coord_verdict cnxman_coord_propose_remove(struct cnxman_coord *c,
 	if (v == CNXMAN_COORD_DRIVE)
 		coord_begin_remove(c, subject_csb);
 	return v;
+}
+
+/* ==========================================================================
+ * GENESIS -- forming a cluster from nothing (docs/design-cluster-genesis.md)
+ *
+ * The documented formation algorithm: the first node up that satisfies quorum
+ * BY ITS OWN VOTES forms a single-node cluster as the founding member, takes
+ * cluster generation 1 and becomes its coordinator; every later node joins
+ * through it. It lives in THIS file because minting a CSID is the one thing
+ * only a coordinator does (see "CSID ASSIGNMENT" above), and it is expressed
+ * as an ordinary transition with an empty participant set -- the same
+ * degenerate 12 x (M-1) = 0 path a two-node cluster already takes when it
+ * loses its peer. Nothing new is sent, nothing new is committed: the SAME
+ * coord_open_transition() / coord_enter_open() / cnxman_phase2_commit() chain
+ * a real admission runs, with a nodemap naming exactly one system -- this one.
+ *
+ * INV-6. The founder asserts one value it did not learn from anybody: its own
+ * CSID. Every gate below exists to make that mint earned rather than assumed,
+ * and the quorum predicate is the load-bearing one -- the predecessor of this
+ * stack defaulted the local CSID to 1 unconditionally and became a phantom
+ * cluster of one (the note at cnxman_coord_select() above records it). A node
+ * whose VOTES are 0, or short of its own EXPECTED_VOTES' quorum, is REFUSED
+ * here and mints nothing, however it was called.
+ * ========================================================================== */
+
+static int coord_found_refuse(struct cnxman_coord *c,
+			      enum cnxman_coord_refusal why, const char *msg)
+{
+	(void)coord_refuse(c, why, msg);
+	return -1;
+}
+
+/*
+ * IS THERE ANYBODY OUT THERE? -- the interop-safety gate, and the one that
+ * keeps founding from ever competing with an existing cluster.
+ *
+ * A node founds only when it has found NOBODY: any other system this executive
+ * holds a CSB for -- a real VAX or another OVMX, discovered but not yet
+ * admitted, or already SELECTED into a membership -- means there is a cluster
+ * (or a system about to form one) to JOIN, and joining is what this node must
+ * do. Forming a singleton beside a system that is already there is a partition,
+ * and a partition is how the other side gets hurt.
+ *
+ * Deliberately the same condition the glue's own discovery gate applies, read
+ * here from the CLUB's real CSB table so it is the FSM that refuses -- not an
+ * ordering the caller has to remember to get right.
+ */
+static int coord_has_peer_csb(struct cnxman_coord *c)
+{
+	struct vms_club *club = coord_club(c);
+	uint32_t i;
+
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *csb = &club->csb[i];
+
+		if (!csb->in_use || (csb->flags & VMS_CSB_F_LOCAL) != 0u)
+			continue;
+		if (csb->sysid_valid ||
+		    (csb->flags & VMS_CSB_F_SELECTED) != 0u)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * The founding CSID: generation 1 -- p. 7-25's sequence starts at 1 and this
+ * slot has never been used, because there is no cluster yet -- over THIS
+ * node's own real SCSSYSTEMID (FC-P0.10 SYSGEN state). Assembled by the codec's
+ * one construction (vms_cm_csid_of), the same one the joiner's wire-learned
+ * CSID goes through, so a founder and a joiner cannot build a CSID differently.
+ */
+static vms_csid_t coord_genesis_csid(const struct cnxman_coord *c)
+{
+	return (vms_csid_t)vms_cm_csid_of(CNXMAN_COORD_GENESIS_GEN,
+					  (uint32_t)c->cl->params.scssystemid);
+}
+
+/* Every reason this node may NOT found, each one a read of real state. */
+static int coord_found_gate(struct cnxman_coord *c, vms_csid_t csid)
+{
+	struct vms_club *club = coord_club(c);
+
+	if (club->local_csid_valid)
+		return coord_found_refuse(c, CNXMAN_COORD_REF_BUSY,
+			"%CNXMAN, this node already holds a cluster system id; "
+			"it does not form a cluster");
+	if (coord_is_active(c) || club->transition_active)
+		return coord_found_refuse(c, CNXMAN_COORD_REF_BUSY,
+			"%CNXMAN, a VAXcluster state transition is already in "
+			"progress; not forming a cluster");
+	if (cnxman_club_local(club) == NULL)
+		return coord_found_refuse(c, CNXMAN_COORD_REF_NO_SUBJECT,
+			"%CNXMAN, no system block for this node; not forming a "
+			"cluster");
+	if (coord_has_peer_csb(c)) {
+		c->genesis_refused_peer++;
+		return coord_found_refuse(c, CNXMAN_COORD_REF_BUSY,
+			"%CNXMAN, another system is present; this node joins an "
+			"OpenVMS Cluster rather than forming one");
+	}
+	/*
+	 * THE PREDICATE. p. 7-6 applied to a proposed set of one: this node
+	 * founds only if its OWN configured VOTES already meet the quorum its
+	 * own EXPECTED_VOTES implies. cnxman_quorum_own_votes_suffice() is the
+	 * same arithmetic the running cluster recomputes with.
+	 */
+	if (!cnxman_quorum_own_votes_suffice(c->cl, (uint16_t *)0)) {
+		c->genesis_refused_noquorum++;
+		return coord_found_refuse(c, CNXMAN_COORD_REF_NO_QUORUM,
+			"%CNXMAN, this node does not have quorum by its own "
+			"votes; waiting to form or join an OpenVMS Cluster");
+	}
+	if (!coord_slot_expressible(csid))
+		return coord_found_refuse(c, CNXMAN_COORD_REF_NO_SLOT,
+			"%CNXMAN, this node's cluster system id falls outside "
+			"the membership map this protocol can express; not "
+			"forming a cluster");
+	return 0;
+}
+
+int cnxman_coord_found(struct cnxman_coord *c)
+{
+	struct vms_club *club;
+	vms_csid_t csid;
+
+	if (c == NULL || c->cl == NULL)
+		return -1;
+	c->last_refusal = (uint8_t)CNXMAN_COORD_REF_NONE;
+	club = coord_club(c);
+	csid = coord_genesis_csid(c);
+
+	if (coord_found_gate(c, csid) != 0)
+		return -1;
+
+	/* Earned: mint it, and record it exactly where a LEARNED one lands --
+	 * cnxman_club_learn_local_csid() is the ONE setter of local_csid_valid,
+	 * for a founder and a joiner alike. */
+	cnxman_club_learn_local_csid(club, csid);
+	c->genesis_opens++;
+	coord_log(c, "%CNXMAN, this node has quorum by its own votes: forming "
+		     "an OpenVMS Cluster");
+
+	if (coord_open_transition(c, VMS_CM_CLASS_ADD, -1, 0u) != 0)
+		return -1;
+	coord_enter_open(c);   /* no participants: Phase 1 is vacuously
+				* acknowledged, the GO commits Phase 2 and the
+				* twelve steps release against an empty census */
+
+	/*
+	 * The ANSWER IS READ BACK, never assumed: this node founded a cluster
+	 * only if phase2 really committed one, from the local CSB's own MEMBER
+	 * flag (vms_cnxman_phase2.c tasks 1/3/4). A caller that trusted the
+	 * return of the drive above would be asserting a membership.
+	 */
+	return c->phase2_committed ? 0 : -1;
 }
 
 static void coord_retry_deferred(struct cnxman_coord *c)

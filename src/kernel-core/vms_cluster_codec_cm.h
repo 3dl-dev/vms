@@ -249,6 +249,14 @@ extern "C" {
 #define VMS_CM_CSID_SHAPE_HI_MAX  0xFFu
 #define VMS_CM_CSID_SHAPE_LO_MASK 0xFC00u
 
+/*
+ * ... and the same fact stated as the CONSTRUCTION rather than as the test:
+ * the low word carries SCSSYSTEMID's bottom ten bits, which is precisely the
+ * complement of the mask above. Derived from it, never written twice, so the
+ * shape test and the builder can never disagree about how wide the field is.
+ */
+#define VMS_CM_CSID_SYSID_MASK ((uint16_t)~VMS_CM_CSID_SHAPE_LO_MASK)
+
 /* cat-0x02 op-0x0d DLM lock-resource rebuild record (sec 4(p) "Request
  * layout (GROUNDED)"). NOTE these offsets are NOT the cat-0x01 offsets
  * body[16]/body[18]/body[55] -- applying the cat-0x01 mutations here
@@ -980,6 +988,22 @@ vms_codec_status_t vms_cm_config_build(uint8_t *out_body, uint32_t cap,
 vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *body,
 						uint32_t len,
 						uint32_t *out_csid);
+
+/*
+ * vms_cm_csid_of - build a CSID from a generation and a SCSSYSTEMID, the one
+ * spelling of the published construction (generation << 16 | SCSSYSTEMID &
+ * 0x3FF, E30) the shape test above is derived from.
+ *
+ * NEITHER ARGUMENT MAY BE INVENTED, and this function cannot check that --
+ * its two callers are what make it honest. vms_cnxman_join_fsm.c takes the
+ * generation off a coordinator CSID it really read from a real op-0x06 and the
+ * SCSSYSTEMID from real SYSGEN state; vms_cnxman_coord_fsm.c's founding path
+ * takes generation 1 (a cluster formed from nothing) and the same SYSGEN
+ * SCSSYSTEMID, and only after the quorum predicate has passed. There is no
+ * third caller, and a CSID assembled anywhere else in the executive would be a
+ * placeholder -- the fabrication that bugchecked a real VAX.
+ */
+uint32_t vms_cm_csid_of(uint32_t generation, uint32_t scssystemid);
 
 /* ------------------------------------------------------------------ *
  * sec 6  The GROUNDED (SYSAP, category, opcode) allowlist -- codec DATA

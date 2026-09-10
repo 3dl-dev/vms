@@ -46,6 +46,22 @@ on:
   # result before it lands (full coverage before merge, zero per-PR latency).
   merge_group:
   workflow_dispatch:
+    inputs:
+      # vms-6e10 (parent vms-bde): P4 gdb-trace fast-path. When a manual run
+      # sets this true, ONLY the VAX substrate chain (netbsd-vax-simh +
+      # netbsd-vax-substrate-prime) and the P4 activation gate run; the entire
+      # heavy QEMU/Alpha/self-host/release matrix is skipped so a single P4
+      # iteration does not queue for hours. Default false -> a plain
+      # `gh workflow run ci.yml` is unchanged and still runs the full matrix.
+      # NOTE: gated in job `if:`s via `github.event.inputs.vax_p4_only` (a
+      # STRING for workflow_dispatch), NOT the `inputs.` context: a boolean
+      # input read through `inputs.` is a real boolean, and `boolean == 'true'`
+      # coerces to `1 == NaN` (always false) in GitHub expressions.
+      vax_p4_only:
+        description: 'P4-only fast-path: run only the VAX substrate chain + the P4 activation gate, skip the full heavy matrix (rd vms-6e10)'
+        type: boolean
+        required: false
+        default: false
   schedule:
     # Nightly full suite, 07:17 UTC. Runs every job unconditionally, including
     # the path-filtered heavy tiers and the harness negative controls lifted off
@@ -268,6 +284,10 @@ jobs:
               - 'src/ovmx_job_control/**'
               - 'src/vmslink/librarian.c'
               - 'src/vmslink/include/ovmx_olb.h'
+              - 'src/vmslink/mk_librarian.sh'
+              - 'src/vmslink/ovmx_link_rms_io.c'
+              - 'src/vmslink/ovmx_link_rms_io.h'
+              - 'src/imgact/test/run_librarian_native.sh'
               - 'tools/vms_login.c'
               - 'tools/loginout_display.c'
               - 'tools/loginout_display.h'
@@ -633,7 +653,7 @@ jobs:
   vaxharness-selftest:
     name: vax Harness Self-Test (rd vms-cf5)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -677,7 +697,7 @@ jobs:
   aarch64-system-boot:
     name: aarch64 System-Emulation Boot Proof (QEMU)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.aarch64_boot == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -741,7 +761,7 @@ jobs:
   build-and-test:
     name: Build & Test
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # vms-32e grew the register negative-control suite 49->62 controls and added a
     # per-control citation check, taking this job from ~17m (main) to ~20m+ on the
@@ -893,6 +913,13 @@ jobs:
           # are declared in CMake (see set_tests_properties ... RESOURCE_LOCK).
           # NEVER drop a lock to speed a run -- an unlocked shared-state test is
           # a flaky test (Rule 8).
+          # rd vms-abf: enforce that the DECnet routing-receive-path crash-vector
+          # fuzz (vmsdecnet_routing_fuzz_unit) actually runs UNDER AddressSanitizer
+          # here. The -fsanitize flags are probe-gated in CMake, so a CI image
+          # without the ASan runtime would silently build it toothless and pass;
+          # this env makes that test RED instead (it self-checks __SANITIZE_ADDRESS__).
+          # This host leg (ubuntu gcc) has ASan, so it stays green with real teeth.
+          export OVMX_FUZZ_REQUIRE_SANITIZERS=1
           JOBS="$(nproc)"
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             ctest --output-on-failure --parallel "$JOBS" -LE slow
@@ -914,7 +941,7 @@ jobs:
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
     # vms-46c) adds a three-boot expect-driven step to this job; the extra
@@ -1132,7 +1159,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1320,7 +1347,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1399,7 +1426,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1481,7 +1508,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1565,7 +1592,7 @@ jobs:
     # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -1697,7 +1724,7 @@ jobs:
   dcl-acceptance-e2e:
     name: DCL/SHOW acceptance gate — boot, run the commands a user types, assert VMS-faithful output
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -1743,7 +1770,7 @@ jobs:
   console-newline-spam-e2e:
     name: "Console boot — no echoed-RETURN newline spam before Username: (vms-dec)"
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -1794,7 +1821,7 @@ jobs:
   device-discovery-alternate-disk-e2e:
     name: "Alternate-disk boot — 2nd-disk device discovery reaches login (vms-9f5)"
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.boot == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -1850,7 +1877,7 @@ jobs:
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
     # cross-arch parity still enforced pre-merge (image-parity-gate stays on PR;
     # the full VAX build runs in the pre-merge full run).
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -1967,7 +1994,7 @@ jobs:
     # vms-fb8 tier-split: heavy Alpha co-release gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
     # cross-arch parity still enforced pre-merge in the full pre-merge run.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -2078,7 +2105,7 @@ jobs:
     # vms-fb8 tier-split: heavy PARTS demo e2e runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
 
@@ -2135,7 +2162,7 @@ jobs:
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -2194,7 +2221,7 @@ jobs:
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -2310,7 +2337,7 @@ jobs:
   kernel-executive-shard:
     name: Kernel Executive (vms.ko via /dev/vms, QEMU) — shard ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # Per shard: the fixed image build (gha layer cache, shared scope across
     # shards so it is built once and reused) + one QEMU boot over ~1/N suites.
@@ -2548,7 +2575,7 @@ jobs:
   kernel-executive-devtab-terminal:
     name: Kernel Executive — test_kmod_devtab_terminal (own VM, QEMU)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -2754,7 +2781,7 @@ jobs:
   # -----------------------------------------------------------------------
   kernel-executive-negative-control:
     name: Kernel Executive — Negative Control (proves the gate can fail)
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -3048,7 +3075,7 @@ jobs:
   netbsd-amd64-vms-crosscompile:
     name: NetBSD/amd64 vms module cross-compiles
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -3098,7 +3125,7 @@ jobs:
     # nightly now (QEMU-TCG on GitHub runners is too slow/variable for reliable
     # per-PR emulator tests). The per-PR NetBSD gate is the fast build-only
     # cross-compile job (netbsd-amd64-vms-crosscompile), no QEMU.
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 75    # a genuine cold TCG install is ~30-40min; rest is headroom
 
@@ -3157,7 +3184,7 @@ jobs:
     needs: [changes, netbsd-amd64-prime-cache]
     # NIGHTLY only (rd vms-2d9) — console-driven QEMU boot+drive, too flaky for
     # per-PR under TCG. The per-PR build gate is netbsd-amd64-vms-crosscompile.
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -3276,7 +3303,7 @@ jobs:
     needs: [changes, netbsd-amd64-prime-cache]
     # NIGHTLY only (rd vms-2d9) — console-driven QEMU build+modload+PING, too flaky
     # for per-PR under TCG. The per-PR build gate is netbsd-amd64-vms-crosscompile.
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -3407,7 +3434,7 @@ jobs:
   netbsd-amd64-eflag-facility:
     name: NetBSD/amd64 Event-Flag Facility (QEMU)
     needs: [changes, netbsd-amd64-prime-cache]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -3545,7 +3572,7 @@ jobs:
   netbsd-amd64-p4a-facilities-crossproc:
     name: NetBSD/amd64 Executive Cross-Process Proof (vms-f8a, QEMU)
     needs: [changes, netbsd-amd64-prime-cache]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -3635,7 +3662,7 @@ jobs:
   # -----------------------------------------------------------------------
   kernel-executive-facility-negative-controls-shard:
     name: Kernel Executive — Per-Facility Negative Controls (shard ${{ matrix.shard }}/${{ strategy.job-total }})
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # Budget per shard: roughly one Nth of the manifest's defects (the NR%n
     # partition below) plus the fixed image-build + positive-control cost
@@ -3737,7 +3764,7 @@ jobs:
   conformance:
     name: Conformance Tests
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -3798,7 +3825,7 @@ jobs:
   corpus-conformance:
     name: Corpus Conformance
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -3882,7 +3909,7 @@ jobs:
   static-analysis:
     name: Static Analysis
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.core == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -4058,7 +4085,7 @@ jobs:
     # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
     # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
     # so the per-PR loop stays fast; full coverage still runs before landing.
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -4109,7 +4136,7 @@ jobs:
   imgact-proof:
     name: IMGACT.EXE Activation Proof (musl)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -4150,7 +4177,7 @@ jobs:
   imgact-build-mode:
     name: OVMX_IMGACT Build Mode (musl)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-0b8 FIXED (was: LINK.EXE "not found" in link_native_graph). Root cause
     # was NOT a target-ordering bug: OVMX_IMGACT=ON injects
     # -Wl,--dynamic-linker=/vms/.../IMGACT.EXE into the GLOBAL CMAKE_EXE_LINKER_FLAGS,
@@ -4204,7 +4231,7 @@ jobs:
   imgact-x86_64:
     name: OVMX_IMGACT Build + Activate (musl, x86_64)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-0b8 FIXED — same host-tool PT_INTERP poisoning as imgact-build-mode
     # (LINK.EXE, a build-host tool, was given PT_INTERP=IMGACT.EXE via the global
     # CMAKE_EXE_LINKER_FLAGS in OVMX_IMGACT mode and could not exec during the
@@ -4244,7 +4271,7 @@ jobs:
   vmslink-mvp:
     name: LINK.EXE VMS-native Linker (MVP)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -4286,7 +4313,7 @@ jobs:
   vmslink-x86_64:
     name: LINK.EXE VMS-native Linker — x86_64 relocs (vms-8f5/cd1/2e4)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -4419,7 +4446,7 @@ jobs:
   decc-shr:
     name: DECC$SHR VMS-native C-RTL Shareable
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -4463,7 +4490,7 @@ jobs:
   link-native-cmake:
     name: VMS-native LINK.EXE Graph via CMake (OVMX_LINK_NATIVE)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -4516,7 +4543,7 @@ jobs:
   link-native-cmake-x86_64:
     name: VMS-native LINK.EXE Graph via CMake, x86_64 (OVMX_LINK_NATIVE)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -4560,7 +4587,7 @@ jobs:
   imgact-symvec:
     name: IMGACT.EXE Symbol-Vector Activation
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -4615,7 +4642,7 @@ jobs:
   imgact-vms-std-alpha:
     name: IMGACT VMS-standard Activation (Alpha)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -4662,7 +4689,7 @@ jobs:
   imgact-vax-backend:
     name: IMGACT elf32-vax symbol-vector backend build (vms-404 P2)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -4738,7 +4765,7 @@ jobs:
   alpha-toolchain-image:
     name: alpha-toolchain-image (vms-e7c5)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.alpha_toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.alpha_toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -4799,7 +4826,7 @@ jobs:
   musl-alpha-vms:
     name: musl alpha-dec-vms port — RUNG 1 build (vms-960)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
@@ -4885,7 +4912,7 @@ jobs:
   gcc-port-include-surface:
     name: GCC-port include surface — unpatched port source builds unchanged (vms-714c)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
@@ -4956,7 +4983,7 @@ jobs:
   joint-e2e-alpha-crt0:
     name: genuine alpha DECC$SHR — real port crt0 links zero-deferred (vms-864)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
@@ -5127,7 +5154,7 @@ jobs:
   alpha-rms-substrate:
     name: alpha RMS substrate — LIBVMSRMS$SHR + producer graph STRICT-link (vms-a7a)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -5200,7 +5227,7 @@ jobs:
   libvmssys-native:
     name: libvmssys VMS-native Link + Activate
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5243,7 +5270,7 @@ jobs:
   decc-shr-activate:
     name: DECC$SHR C-RTL Activation (musl init)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5286,7 +5313,7 @@ jobs:
   shareable-import-activate:
     name: Lib-Shareable Transitive Import Activation
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5315,7 +5342,7 @@ jobs:
   tls-producer-over-crtl:
     name: TLS Producer / C-RTL Coexistence Activation
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5344,7 +5371,7 @@ jobs:
   weak-import-activate:
     name: Weak-by-name Import (.vms$wimp) — LOGINOUT reaches RMS across the layer cycle
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -5390,7 +5417,7 @@ jobs:
   vmsprocess-native:
     name: vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5419,7 +5446,7 @@ jobs:
   vmslnm-native:
     name: vmslnm VMS-native Migration (LIBVMSLNM$SHR)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5448,7 +5475,7 @@ jobs:
   vmsfs-native:
     name: vmsfs VMS-native Migration (LIBVMSFS$SHR)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5477,7 +5504,7 @@ jobs:
   libvms-native:
     name: libvms VMS-native Migration (LIBVMS$SHR)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5506,7 +5533,7 @@ jobs:
   vmsrms-native:
     name: vmsrms VMS-native Migration (LIBVMSRMS$SHR)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5546,7 +5573,7 @@ jobs:
   multiobj-exec:
     name: Multi-Object main() Executable Link + Activate
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5594,7 +5621,7 @@ jobs:
   multiobj-exec-x86_64:
     name: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -5635,7 +5662,7 @@ jobs:
   rodata-reloc-x86_64:
     name: Read-only-section relocations (switch jump tables) — x86_64 (vms-a66)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -5657,7 +5684,7 @@ jobs:
   exec-tls:
     name: Executable-Own TLS Link + Activate
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5696,7 +5723,7 @@ jobs:
   dcl-native:
     name: DCL.EXE VMS-native Link + Activate (self-hosting S1)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5739,7 +5766,7 @@ jobs:
   dcl-native-x86_64:
     name: DCL.EXE VMS-native Link + Activate, x86_64 (vms-bdf done-condition)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -5775,7 +5802,7 @@ jobs:
   login-native:
     name: LOGINOUT.EXE VMS-native Link + Activate (login chain)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5817,7 +5844,7 @@ jobs:
   libcrypto-static-musl:
     name: Static libcrypto (musl) — hello-crypto probe
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.libcrypto == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.libcrypto == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -5853,7 +5880,7 @@ jobs:
   openssh-static-musl:
     name: "Static ssh (musl) — OpenSSH client on the OVMX veneer"
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.openssh == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.openssh == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -5900,7 +5927,7 @@ jobs:
   tcc-object-native:
     name: tcc Object LINK.EXE Compatibility (S2 crux, musl)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5954,7 +5981,7 @@ jobs:
   tcc-native:
     name: TCC.EXE VMS-native Link + Activate (self-hosting S2 endpoint)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -5995,7 +6022,7 @@ jobs:
   tcc-rms:
     name: TCC.EXE RMS File I/O (sys$open/$get read, sys$create/$put write)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -6053,7 +6080,7 @@ jobs:
   tcc-selfhost:
     name: TCC.EXE Self-Host Fixpoint (tcc compiles tcc inside OVMX, S2 summit)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -6105,7 +6132,7 @@ jobs:
   link-native:
     name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, arm64)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
     # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
     runs-on: ubuntu-24.04-arm
@@ -6140,7 +6167,7 @@ jobs:
   link-native-x86_64:
     name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, x86_64)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -6170,7 +6197,7 @@ jobs:
   librarian-olb-native-x86_64:
     name: LIBRARIAN.EXE .OLB + LINK.EXE Selective Pull + Activate (self-host spine #3, x86_64)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -6190,6 +6217,43 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # librarian-native-x86_64 — LIBRARIAN.EXE runs AS an OVMX image (bead vms-1c2,
+  # self-host S3 spine, epic vms-59a). Unlike librarian-olb-native (which proves
+  # the linked PRODUCT runs, LIBRARIAN staying a host bootstrap tool), this job
+  # links librarian.c + the reused RMS I/O shim into a native PT_INTERP=IMGACT
+  # image (mk_librarian.sh, -DOVMX_OLB_RMS_IO) and IMGACT-ACTIVATES LIBRARIAN
+  # itself: it /CREATEs a real .OLB from two .OBJs reading each object via RMS
+  # (sys$open/$get) and writing the .OLB via RMS (sys$create/$put), proven by a
+  # trace + byte-count cross-check; a stock `ar t` lists both modules, native
+  # /LIST reads it back via RMS, and a bootstrap LINK consumes it into an image
+  # that activates (mul3(14)==42). This promotes LIBRARIAN to a native
+  # OVMX image like LINK/TCC/DCL — the S3-spine step toward MMK building a
+  # component INSIDE OVMX (vms-1df). Runner is x86_64 so alpine:3.20/amd64 runs
+  # natively — no QEMU.
+  # -----------------------------------------------------------------------
+  librarian-native-x86_64:
+    name: LIBRARIAN.EXE runs AS an OVMX image — /CREATE .OLB via RMS + Activate (self-host S3 spine, x86_64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: IMGACT activates native LIBRARIAN.EXE; it /CREATEs an .OLB via RMS, /LIST reads it back, LINK pulls a member (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/librarian-native LIBRARIAN_EXPECT=1
+              sh /src/src/imgact/test/run_librarian_native.sh
+            '
+
+  # -----------------------------------------------------------------------
   # olb-symvec-native-x86_64 — Rung 1 of the VMS-native shareable-build
   # migration (rd vms-bf8, epic vms-a90; design-vms-native-shareable-build.md
   # C.4.1). LINK.EXE --shareable ROOTS its selective .OLB search at the
@@ -6204,7 +6268,7 @@ jobs:
   olb-symvec-native-x86_64:
     name: LINK.EXE --shareable seeds selective .OLB pull from --symbol-vector + Activate (VMS-native shareable Rung 1, x86_64)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -6247,7 +6311,7 @@ jobs:
   mmk-link-selfhost-fixpoint:
     name: MMK LINK.EXE self-host fixpoint — real LINK.EXE builds LINK.EXE, gen2==gen3 (self-hosting S4)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -6306,6 +6370,8 @@ jobs:
     # smoke) and VAX has no KVM -- 312s of un-accelerable emulation. Like
     # the heavy QEMU e2e, run it on NON-PR events only; the ILP32 width
     # proof stays per-PR via the elf32-vax cross-compile jobs.
+    # vms-6e10 KEEPER: intentionally NOT p4-only-gated -- this is the VAX
+    # substrate chain the P4 fast-path exists to run.
     if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -6343,6 +6409,139 @@ jobs:
           docker run --rm \
             -v "${{ github.workspace }}/.boot-cache/lab-vax:/cache" \
             ovmx-vax-lab negctl
+
+  # -----------------------------------------------------------------------
+  # netbsd-vax-substrate-prime (rd vms-e77, parent vms-bde). THE ONE WRITER of
+  # the shared OVMX/vax substrate cache. It builds the SIMH-VAX modular kernel
+  # (netbsd-OVMX) + the OVMX substrate (STARTUP.EXE, vms.kmod) ONCE per
+  # source-state via a REAL green `run-boot.sh sysboot' (build the substrate,
+  # boot NetBSD/vax under SIMH, master the OVMX system volume, boot PAST the
+  # installed-system gate to PROVISION.EXE + assert) and SAVEs boot-artifacts/
+  # + the modular-kernel marker. Every SIMH consumer job below RESTORES this
+  # cache read-only instead of rebuilding the ~7.5-min kernel itself.
+  #
+  # CORRECTNESS CRUX (rd vms-e77): the cache key hashes EVERY input that feeds
+  # the built substrate binaries -- the pinned NetBSD version, run-boot.sh, the
+  # cross-vax build scripts + Dockerfile + vendored tarballs, and the full
+  # src/{kernel-netbsd,kernel-core,ovmx_init} source trees -- so ANY
+  # substrate-source change busts the key and forces a fresh build. A stale
+  # kernel silently reused across a source change would give FALSE test results.
+  # Because run-boot.sh reuses boot-artifacts/netbsd-OVMX + STARTUP.EXE/vms.kmod
+  # WHEN PRESENT (it does not re-derive freshness from source), a restore-keys
+  # PREFIX hit (an OLDER substrate) would otherwise be reused and then re-SAVED
+  # under the new exact key -- canonising a stale substrate. The guard step
+  # below DISCARDS any inexact (restore-keys) restore so the prime always
+  # rebuilds fresh for a new source-state; only an EXACT key hit (same sources)
+  # is reused warm. Mirrors netbsd-amd64-prime-cache (the amd64 writer).
+  # -----------------------------------------------------------------------
+  netbsd-vax-substrate-prime:
+    name: NetBSD/vax OVMX substrate prime (modular kernel + STARTUP/vms.kmod)
+    # vms-e7c5 twin: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    needs: [changes, netbsd-vax-simh]
+    # vms-6e10 KEEPER: intentionally NOT p4-only-gated -- the P4 fast-path's
+    # whole purpose is to run this substrate prime (and the P4 gate below it).
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # The full NetBSD src tree + build.sh obj/tools are large, rebuildable scratch
+    # -> keep them OUT of the disk cache (a literal /tmp path).
+    env:
+      KBUILD_DIR: /tmp/ovmx-vax-kbuild
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # THE ONE WRITER of the shared substrate cache (full actions/cache:
+      # restore + save). Same key/path the restore-only consumer jobs use. The
+      # key hashes EVERY input that feeds the built substrate binaries, so any
+      # substrate-source or NetBSD-pin change busts it (correctness crux).
+      - name: Cache the OVMX/vax substrate (modular kernel + STARTUP.EXE + vms.kmod) — WRITER
+        id: substrate_cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
+
+      # CORRECTNESS GUARD (rd vms-e77): cache-hit is 'true' ONLY on an exact key
+      # match (identical substrate sources). A restore-keys PREFIX hit (an older
+      # substrate) or a total miss both leave cache-hit != 'true'. run-boot.sh
+      # reuses boot-artifacts/* WHEN PRESENT, so an older substrate restored via
+      # the prefix would be reused and re-SAVED under the new exact key. Discard
+      # it here so the prime always rebuilds fresh for a changed source-state;
+      # an exact hit (same sources) is kept and reused warm.
+      - name: Discard any inexact (restore-keys) substrate so the prime rebuilds fresh
+        if: steps.substrate_cache.outputs.cache-hit != 'true'
+        run: |
+          rm -rf .boot-cache/lab-vax/boot-artifacts \
+                 .boot-cache/lab-vax/.ovmx-modular-kernel-installed
+          echo "inexact substrate restore discarded — prime will rebuild the substrate from source"
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      # vms-e7c5 twin: PULL the source-hash-keyed prebuilt toolchain image from
+      # ghcr (zero ftp.gnu.org fetch). SOURCE_HASH is the exact same
+      # `git ls-files -s | sha256sum` over tools/cross-vax/{Dockerfile,*.tar.xz}
+      # that the vax-toolchain-image build-push job uses, so the tag matches the
+      # current sources. A missing tag (not yet seeded / registry hiccup) cleanly
+      # FALLS THROUGH to the gha-cached build below (BUILD_FALLBACK=1). Tags the
+      # result ovmx-cross-vax:latest either way, so downstream steps are unchanged.
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      # THE PRIME PROOF + WRITER PAYLOAD: a REAL green sysboot. This builds the
+      # full substrate (cross_build -> build_kernel -> master_system_volume ->
+      # ensure_modular_kernel -> make_boot_copy -> ensure_boot_install) into
+      # boot-artifacts/ + touches the modular-kernel marker, then boots NetBSD/vax
+      # under SIMH PAST the installed-system gate to the PROVISION.EXE exec and
+      # asserts it. Not stubbed: if it fails the prime FAILS and actions/cache
+      # SAVEs nothing (save only runs on job success) -- no bad cache is stored.
+      - name: "Prime — build the OVMX/vax substrate and prove it with a REAL boot to PROVISION.EXE"
+        run: tests/lab-vax/run-boot.sh sysboot
 
   # -----------------------------------------------------------------------
   # netbsd-vax-devvms (rd vms-f78bb, parent vms-476, epic vms-8e8; P4-B)
@@ -6400,7 +6599,7 @@ jobs:
   vax-toolchain-image:
     name: vax-toolchain-image (vms-e7c5 twin)
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.vax_toolchain == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.vax_toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -6451,8 +6650,8 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # Heavier than the smoke job: on a cold cache it also cross-builds a custom
     # MODULAR NetBSD/vax kernel with build.sh (vax GENERIC omits the module
@@ -6477,14 +6676,19 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache the built MODULAR kernel (4 MB) so the ~40-min build.sh runs only on
-      # a cold cache, keyed on the kernel-build inputs (the OVMX config + the vax
-      # module-wiring patch + the pinned NetBSD version).
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/devvms-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -6573,8 +6777,8 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -6593,13 +6797,19 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
-      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, eflag-artifacts)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/eflag-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-eflag-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -6706,8 +6916,8 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -6726,13 +6936,19 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
-      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, access-artifacts)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/access-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-access-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -6869,8 +7085,8 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -6889,13 +7105,19 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
-      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, proctab-artifacts)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/proctab-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-proctab-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -6959,8 +7181,8 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -6979,13 +7201,19 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache this job's OWN built MODULAR kernel (4 MB) so the ~40-min
-      # build.sh runs only on a cold cache, keyed on the kernel-build inputs.
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX, mbx-artifacts)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/mbx-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-mbx-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -7044,8 +7272,8 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     # The full NetBSD src tree + build.sh obj/tools are large, rebuildable scratch
@@ -7066,14 +7294,19 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      # Cache the built MODULAR kernel (4 MB) so the ~40-min build.sh runs only on
-      # a cold cache, keyed on the kernel-build inputs (shared with the sibling
-      # SIMH jobs -- the same kernel).
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -7163,8 +7396,8 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -7183,11 +7416,19 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -7273,8 +7514,8 @@ jobs:
     permissions:
       packages: read
       contents: read
-    needs: [changes, netbsd-vax-simh]
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
@@ -7293,11 +7534,19 @@ jobs:
           path: .boot-cache/lab-vax
           key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
 
-      - name: Cache the custom MODULAR vax kernel (netbsd-OVMX)
-        uses: actions/cache@v4
+      # rd vms-e77: RESTORE the shared OVMX/vax substrate (modular kernel +
+      # STARTUP.EXE + vms.kmod) built ONCE by netbsd-vax-substrate-prime. Read-
+      # only (this job never writes the cache). The key hashes every substrate-
+      # source input + the NetBSD pin, so any substrate change busts it and no
+      # stale kernel is ever silently reused across a source change (rd vms-e77).
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP/vms.kmod, restore-only)
+        uses: actions/cache/restore@v4
         with:
-          path: .boot-cache/lab-vax/boot-artifacts/netbsd-OVMX
-          key: vax-modular-kernel-netbsd10.1-${{ hashFiles('tools/cross-vax/build-vax-modular-kernel.sh') }}
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
 
       - name: Build the lab-vax image (SIMH + anita)
         run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
@@ -7367,7 +7616,7 @@ jobs:
   alpha-boot-login:
     name: OVMX/Alpha boots to an authenticated DCL $ over the ODS-2 ACP (vms-341)
     needs: changes
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -7441,7 +7690,7 @@ jobs:
   alpha-boot-mount:
     name: "OVMX/Alpha per-PR activation gate — boots, mounts DKA0:, activates the N=3 image, asserts $STATUS=%X0035A019 (vms-707/vms-c54)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # vms-c54: 150 (was 120) — the N=3 activation gate adds the alpha-dec-vms
     # toolchain build + joint-image build + activation on top of the boot, so it
@@ -7508,7 +7757,7 @@ jobs:
   alpha-crtl-rms-n7:
     name: "OVMX/Alpha crtl_rms -> N=7 activation gate — boots, activates the crtl_rms heap+RMS+stdio image on the real /dev/vms executive, asserts $STATUS=%X0035A039 (vms-1ef/vms-065c)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -7568,7 +7817,7 @@ jobs:
   alpha-crtl-rms-veneer:
     name: "OVMX/Alpha CRTL->RMS veneer gate — boots the veneer-wired crtl_rms image on the real /dev/vms executive, then an INDEPENDENT ACP reader (DIRECTORY/FULL) asserts PORTTEST.DAT;1 landed on the ODS-2 volume with a genuine File ID; validates the vms-1fc LLP64 width fix at runtime (vms-f49)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -7684,7 +7933,7 @@ jobs:
   alpha-mf-multifile:
     name: "OVMX/Alpha multi-.o STRICT-link activation gate — boots, activates a real multi-object program (mf_main.obj + mf_util.obj, cross-.o malloc/free/strlen/strcmp/memcpy) on the real /dev/vms executive, asserts $STATUS=%X0035A029 (vms-bdd)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -7753,7 +8002,7 @@ jobs:
   alpha-shipped-shareable-activation:
     name: "OVMX/Alpha ships + activates real VMS shareable images — SYSLIB-staged genuine DECC$SHR/LIBOTS$SHR via the ordinary packaging path, asserts $STATUS=%X0035A019 (vms-410)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -7810,7 +8059,7 @@ jobs:
   alpha-activation-selftest:
     name: "OVMX/Alpha N=3 activation gate — assert_activation() can-fail proof (vms-c54, Rule 7)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -7836,7 +8085,7 @@ jobs:
   alpha-dcl-acceptance:
     name: OVMX/Alpha DCL/SHOW acceptance — boot, run the commands a user types, assert VMS-faithful (vms-f2c)
     needs: changes
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -7895,7 +8144,7 @@ jobs:
   alpha-module-gp-activation:
     name: "OVMX/Alpha single-proc N=3 image activates on the real executive (vms-8208, gates the per-image-GP revert)"
     needs: changes
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -7973,7 +8222,7 @@ jobs:
   alpha-arith-hparith:
     name: OVMX/Alpha FP div-by-zero raises SS$_HPARITH over the CHF (vms-db3)
     needs: changes
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -8032,7 +8281,7 @@ jobs:
   alpha-syssvc-suite:
     name: OVMX/Alpha public sys$ API tier RUNS LP64 on qemu-system-alpha, no-new-vs-baseline (vms-341)
     needs: changes
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -8098,7 +8347,7 @@ jobs:
       packages: read
       contents: read
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -8264,7 +8513,7 @@ jobs:
       packages: read
       contents: read
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.exec_netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -8360,7 +8609,7 @@ jobs:
       packages: read
       contents: read
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -8440,7 +8689,7 @@ jobs:
       packages: read
       contents: read
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -8525,7 +8774,7 @@ jobs:
       packages: read
       contents: read
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.exec_netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -8671,7 +8920,7 @@ jobs:
       packages: read
       contents: read
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
@@ -8807,7 +9056,7 @@ jobs:
       packages: read
       contents: read
     needs: changes
-    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true' }}
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
 

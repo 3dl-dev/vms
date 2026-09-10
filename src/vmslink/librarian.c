@@ -61,6 +61,12 @@ static void module_name_from_path(const char *path, char *out, size_t out_sz)
 /* Read a whole .OBJ file into a fresh buffer. */
 static unsigned char *read_obj(const char *path, size_t *len)
 {
+#ifdef OVMX_OLB_RMS_IO
+    /* native LIBRARIAN.EXE: read the input object byte-exact via RMS
+     * (sys$open/$get), the same whole-file shim LINK.EXE's native image uses.
+     * The decl comes in transitively via ovmx_olb.h under OVMX_OLB_RMS_IO. */
+    return (unsigned char *)ovmx_link_rms_slurp(path, len);
+#else
     FILE *fp = fopen(path, "rb");
     if (!fp) return NULL;
     if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return NULL; }
@@ -75,6 +81,7 @@ static unsigned char *read_obj(const char *path, size_t *len)
     fclose(fp);
     *len = (size_t)sz;
     return buf;
+#endif /* OVMX_OLB_RMS_IO */
 }
 
 /* Append or replace a member in the array (case-insensitive by name). Takes
@@ -273,17 +280,24 @@ static int cmd_extract(char *lib, const char *modname, const char *outfile)
         snprintf(defname, sizeof defname, "%s.OBJ", want);
         outfile = defname;
     }
+    int rc = OLB_OK;
+#ifdef OVMX_OLB_RMS_IO
+    /* native LIBRARIAN.EXE: write the extracted module byte-exact via RMS
+     * (sys$create/$put); sys$create mints a ";1" version suffix. */
+    if (ovmx_link_rms_write(outfile, members[idx].data, members[idx].len) != 0)
+        rc = OLB_ERR_IO;
+#else
     FILE *out = fopen(outfile, "wb");
     if (!out) {
         fprintf(stderr, "%%LIBRAR-E-OPENOUT, error creating %s\n", outfile);
         olb_free(members, count);
         return SS$_FILACCERR;
     }
-    int rc = OLB_OK;
     if (members[idx].len &&
         fwrite(members[idx].data, 1, members[idx].len, out) != members[idx].len)
         rc = OLB_ERR_IO;
     if (fclose(out) != 0) rc = OLB_ERR_IO;
+#endif
     olb_free(members, count);
     if (rc != OLB_OK) {
         fprintf(stderr, "%%LIBRAR-E-WRITEERR, error writing %s\n", outfile);

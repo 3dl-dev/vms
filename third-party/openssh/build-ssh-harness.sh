@@ -162,6 +162,15 @@ OVMXINC="-I$ROOT/src/vmsssh -I$ROOT/src/libvms/include -I$ROOT/src/vmsprocess/in
     -c "$SRV_SRC/ovmx/ovmx_sshd_session.c" -o "$WORK/ov_adapt_session.o"
 "$CC" $OSSH_CFLAGS $OSSH_CPPFLAGS -I"$SRV_SRC" -I"$ROOT/src/vmsssh" \
     -c "$SRV_SRC/ovmx/ovmx_sshd_exec.c"    -o "$WORK/ov_adapt_exec.o"
+# vms-9cc: force-bind the RMS-over-ACP seam. The SYSUAF reader (sysuaf_lookup ->
+# libvms) reaches SYS$SYSTEM:SYSUAF.DAT through a #pragma weak seam (sys$open... /
+# ovmx_sysuaf_read_user); a weak undef ref does NOT pull sysuaf_live.o + the RMS
+# record services out of the OVMX archives, so without this anchor the wrapped
+# sshd's reader stays NULL and EVERY sysuaf_lookup bails "not found" before any
+# ACP call. Force-linked below (primary object, before --start-group) so the
+# member-pull binds the weak cells. No OpenSSH headers -- extern decls only.
+"$CC" -O2 -fdollars-in-identifiers -c "$HERE/ovmx/ovmx_sshd_rms_bind.c" \
+    -o "$WORK/ov_sshd_rms_bind.o"
 
 # The OVMX static archives the SYSUAF/RMS/executive stack links from -- built by
 # the earlier build-static (OVMX_STATIC musl) stage this harness's Dockerfile
@@ -224,7 +233,7 @@ done
 # ov_wrap_srv.o stays force-linked (the listener's transport wraps, proven). The
 # adapter archive + veneer + OVMX archives share ONE --start-group so on-demand
 # members and their cross-references (adapter -> sysuaf -> kif) all resolve.
-sed -i "s#^LIBS=#LIBS=$SERVER_WRAP $OVMX_SSHD_WRAP $WORK/ov_wrap_srv.o -Wl,--start-group $OVMX_SSHD_AR $VENEER $OVMXLIBS -Wl,--end-group -lm #" Makefile
+sed -i "s#^LIBS=#LIBS=$SERVER_WRAP $OVMX_SSHD_WRAP $WORK/ov_wrap_srv.o $WORK/ov_sshd_rms_bind.o -Wl,--start-group $OVMX_SSHD_AR $VENEER $OVMXLIBS -Wl,--end-group -lm #" Makefile
 echo "== SERVER: make sshd sshd-session sshd-auth (WRAPPED over BGn:) =="
 make -j"$(nproc 2>/dev/null || echo 2)" sshd sshd-session sshd-auth \
     >"$WORK/srv/make-server.log" 2>&1 || { echo "FAIL: SERVER make"; tail -50 "$WORK/srv/make-server.log"; exit 1; }

@@ -958,6 +958,169 @@ run_dcl_acceptance_battery() {
     golden_diff_report vax-show-process HOLLOW  vms-1f7   # omits Terminal/Base priority/Devices allocated; UIC not resolved to [SYSTEM]
 
     # =======================================================================
+    # DECnet CTERM (vms-f40) -- an inbound $ SET HOST reaches an AUTHENTICATED
+    # LOGINOUT prompt. Design §6-P4, ratification gates §7.1/§7.5; oracle
+    # docs/oracle/vax-sethost-cterm.* (rd vms-558).
+    #
+    # WHY THIS RUNS HERE, IN THE BOOTED IMAGE. The property is "a remote SET
+    # HOST is CHALLENGED, and REFUSED when the credentials are bad" -- which
+    # only means anything against the REAL executive (/dev/vms), the REAL
+    # SYS$SYSTEM:SYSUAF.DAT and the REAL LOGINOUT.EXE. On the build host there
+    # is no executive, and DECNETD.EXE --cterm-accept-test says so and fails
+    # (INV-6) rather than proving anything about a stub. This battery is the one
+    # place that runs byte-identically on x86_64, Alpha AND the VAX rail, which
+    # is also where a network login's Wall-6 ordering would break first.
+    #
+    # WHAT THE MODE DOES (src/vmsdecnet/engine/decnetd.c): opens a REAL NSP
+    # logical link to Session Control object 42 over a socketpair datalink,
+    # carrying a connect message byte-identical to the real VAX's; dispatches it
+    # through $CREPRC PRC$M_INTER|PRC$M_LOGINOUT onto an executive-minted RTAn:;
+    # then types three credential sets that MUST ALL BE REFUSED -- an unknown
+    # account, a real account with a wrong password, and (the sharpest) the
+    # DISABLED account with its CORRECT password, which only the SYSUAF DISUSER
+    # rule can refuse. It also $GETDVIs the session's RTAn: from a process that
+    # is NOT the session -- the §7.5 anti-LARP tell.
+    #
+    # IT IS RUN AS A FOREIGN COMMAND because DCL's RUN passes no arguments; that
+    # is the VMS way to pass one, not a shell escape.
+    #
+    # HARD GATE ON ALL THREE RAILS (rd vms-c1f). DECNETD.EXE is in the x86_64
+    # shipped image set (distro/Dockerfile.bootable), the VAX sysvol
+    # (tests/lab-vax/stage_sysvol.sh) and the Alpha boot image
+    # (tools/cross-alpha/build-alpha-bootimage.sh) -- every runtime this
+    # battery drives ships the image, so the "not on this runtime" note path
+    # below is UNREACHABLE in normal operation. It stays as a HARD FAILURE,
+    # not a note: if a staging regression ever drops DECNETD.EXE off a rail's
+    # runtime again, that is a real INV-6 hole (a shipped facility whose
+    # runtime cannot prove it) and must RED here, not silently pass because
+    # nothing ran.
+    local CTERM_OFF; CTERM_OFF=$(wc -c <"$LOG")
+    run_cmd 'DNETACC :== $SYS$SYSTEM:DECNETD.EXE'
+    send 'DNETACC --cterm-accept-test'
+    if wait_for 'IVIMAGE' 15 "$CTERM_OFF"; then
+        bad "CTERM [vms-f40]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-SET-HOST authentication proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
+    elif wait_for 'DECNETD-CTERM-ACCEPT:' 180 "$CTERM_OFF"; then
+        local CTSEG; CTSEG=$(tail -c "+$((CTERM_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: PASS' \
+            "CTERM [vms-f40]: an inbound SET HOST to object 42 reached an AUTHENTICATED LOGINOUT through \$CREPRC on an executive-minted RTAn:, and every bad credential was REFUSED (the mode prints one PASS/FAIL line per assertion above this verdict)"
+        must_have "$CTSEG" 'the inbound SET HOST is CHALLENGED' \
+            "CTERM [vms-f40]: LOGINOUT's own Username: prompt crossed the link -- the no-auth CTERM that answered with a bare \$ is gone"
+        must_have "$CTSEG" 'DISUSER IS HONOURED' \
+            "CTERM [vms-f40]: the DISABLED account is refused over CTERM with the CORRECT password -- the SYSUAF login-flag rule applies to a network login"
+        must_have "$CTSEG" 'a real DC$_TERM device row' \
+            "CTERM [vms-f40]: \$GETDVI on the session's RTAn: from a DIFFERENT process returns a real device row (§7.5 tell)"
+        must_not_have "$CTSEG" 'DECNETD-CTERM-ACCEPT: FAIL' \
+            "CTERM [vms-f40]: no assertion in the inbound-SET-HOST acceptance failed"
+        negctl "$CTSEG" 'DECNETD-I-CTERMACCEPT' "DECnet CTERM acceptance"
+    else
+        bad "CTERM [vms-f40]: DECNETD.EXE --cterm-accept-test produced no verdict line within 180s -- the inbound-SET-HOST authentication proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung session)"
+    fi
+    wait_for '$ ' 20 "$CTERM_OFF"
+
+    # SCOPE NOTE (rd vms-c1f): FAL's own auth proof (--fal-accept-test, rd
+    # vms-8c2/#1096) is NOT yet in this battery -- #1096 had not merged as of
+    # this section's hard-gate flip. DECNETD.EXE is now staged on all three
+    # rails, so once #1096 lands a FAL section here needs no rail-staging work
+    # of its own -- follow the SAME shape as CTERM above (assert on the verdict
+    # line, IVIMAGE means a real staging regression, never a silent note).
+
+    # =======================================================================
+    # DECnet NETACP ISOLATION (vms-9ab, P5) -- the A2/A8 security seam. Design
+    # vms-515 §3.4: attacker-controlled wire parsing runs at LOW privilege and
+    # hands NETACP's thin privileged control path only a VALIDATED, TYPED
+    # descriptor; the privileged path parses no attacker bytes. This mode is the
+    # NEGATIVE proof of that seam and needs NEITHER /dev/vms NOR CAP_NET_RAW --
+    # every case is refused at NETACP's privileged front door BEFORE it would
+    # mint a device or create a process, so it never depended on an executive
+    # either way. Hard gate on all three rails (rd vms-c1f), same as CTERM above.
+    local ISOL_OFF; ISOL_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --isolation-test'
+    if wait_for 'IVIMAGE' 15 "$ISOL_OFF"; then
+        bad "NETACP isolation [vms-9ab]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the A2/A8 privileged-path isolation proof DID NOT RUN (rd vms-c1f staged DECNETD.EXE onto every rail's runtime -- its absence here is a staging regression, not an expected gap)"
+    elif wait_for 'DECNETD-ISOLATION:' 60 "$ISOL_OFF"; then
+        local ISSEG; ISSEG=$(tail -c "+$((ISOL_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$ISSEG" 'DECNETD-ISOLATION: PASS' \
+            "NETACP isolation [vms-9ab]: the privileged control path refuses an UNVALIDATED or wrong-object descriptor with no device/process created, and every parse-rejected fuzz frame is refused there too (the A2/A8 seam holds on the shipped binary)"
+        must_have "$ISSEG" 'double-door fuzz' \
+            "NETACP isolation [vms-9ab]: a mutation-fuzz corpus the low-priv parse rejects is ALSO refused by the privileged path -- a hostile frame cannot reach session creation"
+        must_not_have "$ISSEG" 'DECNETD-ISOLATION: FAIL' \
+            "NETACP isolation [vms-9ab]: no isolation assertion failed"
+        negctl "$ISSEG" 'DECNETD-I-ISOLATION' "DECnet NETACP isolation"
+    else
+        bad "NETACP isolation [vms-9ab]: DECNETD.EXE --isolation-test produced no verdict line within 60s"
+    fi
+    wait_for '$ ' 20 "$ISOL_OFF"
+
+    # =======================================================================
+    # DECnet FILE COPY / FAL (vms-8c2) -- an inbound $ COPY node"user pw"::file
+    # authenticates the connect-carried credentials against the REAL SYSUAF and
+    # then moves a sequential file through DAP over the NSP link and RMS over the
+    # ODS-2 ACP, BOTH directions, byte-verified. Oracle
+    # docs/oracle/vax-copy-fal-dap.* (rd vms-cd3).
+    #
+    # WHY THIS RUNS HERE. The property is "a COPY with a BAD password is REFUSED,
+    # a COPY with the RIGHT password transfers the file, and the received bytes
+    # match the source" -- which only means anything against the REAL executive
+    # (/dev/vms), the REAL SYS$SYSTEM:SYSUAF.DAT (the seeded GUEST + DISABLED
+    # accounts) and REAL RMS on the mounted ODS-2 volume. On the build host there
+    # is no executive; DECNETD.EXE --fal-accept-test's auth checks then fail
+    # (INV-6) rather than proving anything about a stub. The honest floor -- a
+    # real object-17 connect carrying the creds, refused with an NSP disconnect
+    # when unauthenticated, plus the DAP transport pump -- is proven with no
+    # executive by --fal-selftest and by tests/vmsdecnet/test_dnet_dap (the DAP
+    # codec + FAL credential decoder, fuzzed ASan-clean).
+    #
+    # WHAT THE MODE DOES (src/vmsdecnet/engine/decnetd.c): authenticates the seed
+    # accounts through sysuaf_authenticate (Purdy) -- GUEST/GUEST accepted, a
+    # wrong password and DISABLED (DISUSER) refused; then opens a REAL object-17
+    # NSP link over a socketpair carrying the access-control creds, and runs the
+    # FAL server + COPY client (two threads) to PUT then GET a sequential file
+    # through DAP + RMS, byte-verifying the transferred records.
+    #
+    # HARD GATE where DECNETD.EXE ships (x86_64 image); a LOUD note where absent
+    # (the VAX/Alpha staging follow-on, same as CTERM). Never green because
+    # nothing ran.
+    local FAL_OFF; FAL_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --fal-accept-test'
+    if wait_for 'IVIMAGE' 15 "$FAL_OFF"; then
+        note "FAL COPY [vms-8c2]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the inbound-FAL COPY authentication + transfer proof DID NOT RUN here (hard gate on the rails that ship the image; staging into the VAX sysvol + Alpha boot image is tracked follow-on)"
+    elif wait_for 'DECNETD-FAL-ACCEPT:' 180 "$FAL_OFF"; then
+        local FALSEG; FALSEG=$(tail -c "+$((FAL_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$FALSEG" 'DECNETD-FAL-ACCEPT: PASS' \
+            "FAL COPY [vms-8c2]: inbound FAL authenticated the connect creds against the real SYSUAF and transferred a sequential file both directions through DAP + RMS, byte-verified (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$FALSEG" 'is REFUSED (SS$_INVLOGIN) -- a fake would pass it' \
+            "FAL COPY [vms-8c2]: a wrong password is REFUSED by real SYSUAF/Purdy -- a fake auth would have admitted it"
+        must_have "$FALSEG" 'a right password is not sufficient' \
+            "FAL COPY [vms-8c2]: DISABLED (correct password, DISUSER) is refused -- the SYSUAF login-flag rule applies to a network file access"
+        must_have "$FALSEG" 'BYTE-MATCH the source' \
+            "FAL COPY [vms-8c2]: the transferred file's records byte-match the source (a real transfer through RMS over the ACP, both directions)"
+        must_not_have "$FALSEG" 'DECNETD-FAL-ACCEPT: FAIL' \
+            "FAL COPY [vms-8c2]: no assertion in the inbound-FAL COPY acceptance failed"
+        negctl "$FALSEG" 'DECNETD-I-FALACCEPT' "DECnet FAL COPY acceptance"
+    else
+        bad "FAL COPY [vms-8c2]: DECNETD.EXE --fal-accept-test produced no verdict line within 180s -- the inbound-FAL COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
+    fi
+    wait_for '$ ' 20 "$FAL_OFF"
+
+    # The DECnet device FACE _NET: is executive-resident and cross-process real
+    # (vms-9ab, P5; design §2b/§7.5). $GETDVI it from DCL -- a process that is
+    # NOT NETACP -- and it resolves; the deep cross-process assertions (class,
+    # normalization, unowned) live in tests/qemu/test_kmod_devtab.c on the kmod
+    # leg. Gated on the node having a NIC (INV-6): where ETH0: exists _NET: does.
+    local NETDEV_OFF; NETDEV_OFF=$(wc -c <"$LOG")
+    run_cmd 'IF F$GETDVI("_NET:","EXISTS") THEN WRITE SYS$OUTPUT "OVMX-NET-FACE: _NET: EXISTS"'
+    run_cmd 'IF .NOT. F$GETDVI("_NET:","EXISTS") THEN WRITE SYS$OUTPUT "OVMX-NET-FACE: _NET: ABSENT"'
+    local NETSEG; NETSEG=$(tail -c "+$((NETDEV_OFF + 1))" "$LOG" | tr -d '\r')
+    if printf '%s' "$NETSEG" | grep -q 'OVMX-NET-FACE: _NET: EXISTS'; then
+        ok "NETACP device face [vms-9ab]: \$GETDVI _NET: from DCL (a non-NETACP process) resolves a real executive device -- the DECnet device face is cross-process real (§7.5 tell)"
+    elif printf '%s' "$NETSEG" | grep -q 'OVMX-NET-FACE: _NET: ABSENT'; then
+        note "NETACP device face [vms-9ab]: _NET: is ABSENT on this runtime -- honest only if this node has no primary NIC (INV-6: no NIC, no DECnet device face). If ETH0: exists here this is a FAILURE the kmod-leg test_kmod_devtab will red."
+    else
+        note "NETACP device face [vms-9ab]: F\$GETDVI _NET: produced no OVMX-NET-FACE line (older DCL F\$GETDVI EXISTS item, or no /dev/vms) -- the authoritative cross-process proof is test_kmod_devtab on the kmod leg"
+    fi
+    wait_for '$ ' 20 "$NETDEV_OFF"
+
+    # =======================================================================
     # SESSION PRIMITIVE (vms-3e9) -- $CREPRC creates the session, LOGINOUT
     # re-personas it. Design record docs/design/faithful-sessions-and-network-
     # subsystems.md §3.1/§6-P1, ratification gates §7.1/§7.5.

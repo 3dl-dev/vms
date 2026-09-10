@@ -113,6 +113,27 @@ extern "C" {
 #define IO$K_SOCK_STREAM    0   /* default: AF_INET/SOCK_STREAM TCP client */
 #define IO$K_SOCK_ICMP      1   /* AF_INET/SOCK_RAW/IPPROTO_ICMP (PING) */
 
+/*
+ * TERMINAL (TTn:/RTAn:/OPA0:) IO$_SETMODE line-discipline selector, passed in P2
+ * (vms-f54). IO$K_TT_NORMAL restores the interactive line discipline (canonical
+ * input, echo, signal keys); IO$K_TT_PASSALL puts the channel in PASS-ALL /
+ * pass-through mode -- every byte delivered raw, no local echo, no editing, no
+ * terminator processing -- which is what a $ SET HOST CTERM terminal client sets
+ * so the REMOTE session owns echo and editing (OpenVMS I/O User's Reference,
+ * terminal driver "Passall Mode" / TT$M_PASSALL). The executive's terminal
+ * driver maps the selector onto the substrate terminal; the channel is then
+ * driven by the ordinary IO$_READVBLK/IO$_WRITEVBLK.
+ *
+ * CLEAN-ROOM (CLAUDE.md Rule 8): the PASS-ALL BEHAVIOUR is the public,
+ * documented terminal characteristic; the byte-level IO$_SETMODE characteristics
+ * buffer layout is NOT published, so -- exactly as IO$K_SOCK_STREAM above -- OVMX
+ * defines its own P2 selector and LABELS it as OVMX's, never presented as a
+ * VMS-authentic parameter value. The termios that realises it lives in the
+ * executive terminal driver (src/libvms/syssvc/sys_qio.c), never in the caller.
+ */
+#define IO$K_TT_NORMAL      0   /* restore interactive line discipline           */
+#define IO$K_TT_PASSALL     1   /* pass-through: raw bytes, no echo/edit/filter   */
+
 /* Network modifiers */
 #define IO$M_NOW            0x0040  /* Bit 6: immediate (no wait) */
 #define IO$M_INTERRUPT      0x0080  /* Bit 7: interrupt message */

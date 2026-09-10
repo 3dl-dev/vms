@@ -1862,6 +1862,55 @@ struct vms_getvol_args {
 #define VMS_IOCTL_GETVOL _IOWR(VMS_IOC_MAGIC, 0x58, struct vms_getvol_args)
 
 /*
+ * DYNAMIC TERMINAL UNITS -- the RTAn: a network login session runs on
+ * (rd vms-f40, design docs/design/faithful-sessions-and-network-subsystems.md
+ * sec 3.2 / 6-P4; the device primitive itself landed as vms-f881).
+ *
+ * WHY AN IOCTL AND NOT A SYSFS KNOB. vms_devtab_add_terminal()/_remove_terminal()
+ * shipped reachable only from a TEST-ONLY module parameter, because their real
+ * caller had not landed. This is that caller's door: an inbound DECnet SET HOST
+ * (Session Control object 42) has to MINT a virtual terminal before it can
+ * create the session that runs LOGINOUT on it, and it has to do so through the
+ * executive -- an RTAn: that lived in the network daemon's own memory would be
+ * invisible to $GETDVI from any other process, which is precisely the LARP the
+ * design's sec-7.5 tell is written to catch.
+ *
+ * THE UNIT NUMBER IS THE EXECUTIVE'S TO CHOOSE. CREATE takes only the substrate
+ * backing and returns the NAME the executive assigned (RTA0:, RTA1:, ...),
+ * picked as the lowest free unit under the device-list lock. A caller that
+ * named its own unit could collide with another session's, or -- worse -- claim
+ * a name it had not been given; the device table is the only thing that knows
+ * what is free, exactly as it is for the served-disk rows.
+ *
+ * RESOLVE is the read $CREPRC needs: a session is created by DEVICE NAME
+ * ("create a process running LOGINOUT.EXE bound to RTA1:"), so the service that
+ * binds the terminal asks the executive which substrate device that name means,
+ * rather than being handed a path from above the VMS layer. Same shape, and the
+ * same reasoning, as VMS_IOCTL_DISK_RESOLVE above.
+ *
+ * OVMX CONSTRUCT, labelled (CLAUDE.md Rule 8): "the PTY behind a virtual
+ * terminal" has no VMS counterpart (real VMS mints RTAn: inside RTTDRIVER at
+ * NETACP's request and no public document describes an exchange for it). The
+ * DEVICE NAMING and characteristics are doc/oracle-derived (see vms_devtab.c
+ * and docs/oracle/vax73-terminal-device.md); this exchange is the OVMX side.
+ *
+ * Status: SS$_NORMAL; SS$_NOSUCHDEV (no such dynamic terminal, on
+ * DELETE/RESOLVE); SS$_IVDEVNAM (not a legal device name, or names something
+ * that is not a dynamically-created terminal); SS$_DEVALLOC (CREATE found no
+ * free RTAn: unit); SS$_INSFMEM.
+ */
+struct vms_terminal_args {
+    char     devnam[VMS_DEVNAM_SIZE];   /* CREATE: out. DELETE/RESOLVE: in.   */
+    char     backing[VMS_BACKING_SIZE]; /* CREATE: in. RESOLVE: out. e.g."pts/7" */
+    uint32_t status;                    /* return: SS$_ status                */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_TERM_CREATE  _IOWR(VMS_IOC_MAGIC, 0x59, struct vms_terminal_args)
+#define VMS_IOCTL_TERM_DELETE  _IOWR(VMS_IOC_MAGIC, 0x5a, struct vms_terminal_args)
+#define VMS_IOCTL_TERM_RESOLVE _IOWR(VMS_IOC_MAGIC, 0x5b, struct vms_terminal_args)
+
+/*
  * The kernel module and the userspace client compile these structures
  * separately, from this one header, and then pass them across the
  * /dev/vms boundary by raw address. If a field is ever reordered,
@@ -1897,6 +1946,8 @@ _Static_assert(sizeof(struct vms_diskresolve_args) == 48,
                "struct vms_diskresolve_args changed size -- disk unit resolution would decode at the wrong offsets");
 _Static_assert(sizeof(struct vms_getvol_args) == 60,
                "struct vms_getvol_args changed size -- $GETDVI volume items would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_terminal_args) == 40,
+               "struct vms_terminal_args changed size -- RTAn: create/delete/resolve would decode at the wrong offsets");
 
 _Static_assert(VMS_IOCTL_ASSIGN == 0xC0185650u,
                "VMS_IOCTL_ASSIGN encodes differently here than on the reference build");
@@ -1916,6 +1967,12 @@ _Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
                "VMS_IOCTL_DISK_RESOLVE encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_GETVOL == 0xC03C5658u,
                "VMS_IOCTL_GETVOL encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TERM_CREATE == 0xC0285659u,
+               "VMS_IOCTL_TERM_CREATE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TERM_DELETE == 0xC028565Au,
+               "VMS_IOCTL_TERM_DELETE encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TERM_RESOLVE == 0xC028565Bu,
+               "VMS_IOCTL_TERM_RESOLVE encodes differently here than on the reference build");
 
 /* ================================================================
  * Process table (executive-resident PCB directory)

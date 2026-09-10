@@ -848,8 +848,20 @@ wcrtomb=PROCEDURE,wcscoll=PROCEDURE,wcsftime=PROCEDURE,wcslen=PROCEDURE,wcsxfrm=
 wctob=PROCEDURE,wctype=PROCEDURE,wmemchr=PROCEDURE,wmemcmp=PROCEDURE,wmemcpy=PROCEDURE,\
 wmemmove=PROCEDURE,wmemset=PROCEDURE,writev=PROCEDURE,\
 \
-__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE"
+__copy_tls=PROCEDURE,__init_tp=PROCEDURE,ovmx_get_libc=PROCEDURE,\
+posix_openpt=PROCEDURE,grantpt=PROCEDURE,unlockpt=PROCEDURE,ptsname_r=PROCEDURE"
 
+# posix_openpt/grantpt/unlockpt/ptsname_r APPENDED for vms-f40 (append-only
+# -> prior consumers' vector indices unchanged, GSMATCH LEQUAL-compatible).
+# The VIRTUAL TERMINAL service (src/libvms/syssvc/sys_vterm.c) mints the RTAn:
+# an inbound DECnet $ SET HOST session runs on: it prepares the pseudo-terminal
+# pair that backs the device and then asks the executive to enter the row. That
+# is the ONE place in OVMX that opens a pty -- deliberately, below the VMS
+# layer, so no network daemon has to (see the file header) -- and these four are
+# the plain C-RTL entry points musl's libc.a defines for it, so DECC$SHR is the
+# right producer. ptsname_r is the GNU/musl form; the NetBSD substrate takes the
+# POSIX ptsname() branch in that file instead.
+#
 # fcntl APPENDED for vms-8019 (append-only -> prior consumers' vector indices
 # unchanged, GSMATCH LEQUAL-compatible). $CREPRC's creation handshake sets
 # FD_CLOEXEC on its report pipe so a concurrent exec in another thread of the

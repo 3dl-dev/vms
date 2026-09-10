@@ -645,6 +645,191 @@ int vms_devtab_add_terminal(const char *devnam, const char *pty_backing)
     return 0;
 }
 
+/*
+ * ===================== the RTAn: ioctl surface (rd vms-f40) =================
+ *
+ * vms_ioctl_term_create / _delete / _resolve -- the PRODUCT caller's door to
+ * the dynamic-terminal primitive above. Until this item the only way in was a
+ * TEST-ONLY module parameter (vms_module.c, OVMX_KTEST_DEVTAB_TERMINAL),
+ * because P4's caller had not landed; an inbound DECnet SET HOST now mints its
+ * virtual terminal HERE, in the executive, before $CREPRC creates the process
+ * that runs LOGINOUT on it.
+ *
+ * THE EXECUTIVE PICKS THE UNIT NUMBER. term_create_locked() scans RTA0:..
+ * RTA<max>: under the device-list lock and takes the first name the table does
+ * not hold. Two concurrent inbound sessions therefore cannot be handed the same
+ * unit, and a caller cannot ASK for a name -- if it could, a network daemon
+ * could claim RTA0: while another session was on it, or (the real hazard) hand
+ * $CREPRC a name the executive never gave it. The scan is the same
+ * "the table is the only thing that knows what is free" discipline the served-
+ * disk rows use.
+ *
+ * WHY NOT ONE SHARED HANDLER WITH AN OP FIELD: the three share a struct (like
+ * ALLOC/DALLOC share vms_alloc_args) but not a body, so a caller cannot flip a
+ * create into a delete by getting one field wrong.
+ */
+
+/* Highest RTAn: unit the executive will mint. Bounded on purpose: the caller
+ * is a NETWORK daemon serving UNAUTHENTICATED inbound connects, so "how many
+ * terminals can a peer make me create" must have an answer, and it must be a
+ * number rather than "until the allocator says no". 256 is the same order as
+ * the terminal unit space VMS itself uses and is far above any real SET HOST
+ * load; past it, CREATE fails honestly with SS$_DEVALLOC (INV-6) and the
+ * inbound connect is rejected rather than the node degraded. */
+#define VMS_RTA_MAX_UNITS  256
+
+/* Caller holds vms_device_list_lock. Fills `out` with the first free RTAn:
+ * name and returns SS__NORMAL, or SS__DEVALLOC when every unit is taken. */
+static uint32_t rta_next_free_locked(char *out, size_t outsz)
+{
+    unsigned unit;
+
+    for (unit = 0; unit < VMS_RTA_MAX_UNITS; unit++) {
+        char name[VMS_DEVNAM_SIZE];
+
+        snprintf(name, sizeof(name), "RTA%u:", unit);
+        if (devtab_lookup_locked(name))
+            continue;
+        strscpy(out, name, outsz);
+        return SS__NORMAL;
+    }
+    return SS__DEVALLOC;
+}
+
+long vms_ioctl_term_create(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_terminal_args args;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+    int rc;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.backing[VMS_BACKING_SIZE - 1] = '\0';
+    memset(args.devnam, 0, sizeof(args.devnam));
+
+    exec_lock(&vms_device_list_lock);
+    status = rta_next_free_locked(devnam, sizeof(devnam));
+    exec_unlock(&vms_device_list_lock);
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    /* vms_devtab_add_terminal takes the list lock itself; the window between
+     * the scan and the add is closed by its own -EEXIST check, which we
+     * surface as SS$_DEVALLOC (someone else took the unit) rather than
+     * pretending the create succeeded. */
+    rc = vms_devtab_add_terminal(devnam, args.backing);
+    if (rc == -EEXIST) {
+        args.status = SS__DEVALLOC;
+        goto out;
+    }
+    if (rc == -ENOMEM) {
+        args.status = SS__INSFMEM;
+        goto out;
+    }
+    if (rc != 0) {
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+
+    strscpy(args.devnam, devnam, sizeof(args.devnam));
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+long vms_ioctl_term_delete(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_terminal_args args;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+    int rc;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    memset(args.backing, 0, sizeof(args.backing));
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    /* vms_devtab_remove_terminal refuses any row that is not `dynamic_term`,
+     * so this can never withdraw OPA0: or a locally-probed row. */
+    rc = vms_devtab_remove_terminal(devnam);
+    args.status = (rc == 0) ? SS__NORMAL : SS__NOSUCHDEV;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_terminal_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    memset(args.backing, 0, sizeof(args.backing));
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        /* The console has no PTY backing to report, and a non-terminal row is
+         * a category error -- the same IVDEVNAM verdict disk_resolve gives for
+         * "that name is not a disk". */
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    strscpy(args.backing, dev->backing, sizeof(args.backing));
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    /* A dynamic terminal with NO recorded backing is a row nothing can bind a
+     * session to. Say so (INV-6) rather than hand back an empty string that a
+     * caller would turn into an open("/dev/") it cannot explain. */
+    args.status = args.backing[0] ? SS__NORMAL : SS__DEVOFFLINE;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 int vms_devtab_remove_terminal(const char *devnam)
 {
     struct vms_device *dev;
@@ -772,6 +957,74 @@ static void vms_devtab_probe_nic(void)
 
     pr_info("vms: ethernet unit %s -> %s (carrier %s)\n",
             VMS_NIC_DEVNAM, ifname, link_up ? "up" : "down");
+}
+
+/*
+ * The DECnet device FACE (rd vms-9ab, P5; design docs/design-decnet-ovmx.md §2b
+ * "L3-L4 VMS device face" + vms-515 §3.3). `_NET:` is the executive-resident
+ * name a process $ASSIGNs / $GETDVIs to reach DECnet -- the VMS DECnet template
+ * / network pseudo-device. NETACP (the privileged RUN/DETACHED session-control
+ * process) is the ACP that layers its Phase IV circuit and object dispatch over
+ * this device; the userspace AF_PACKET datalink binds the SAME primary net
+ * device ETH0: fronts (operator device-native-naming: one NIC discovered once,
+ * every consumer -- TCP/IP, the cluster port, DECnet -- binds the same record).
+ *
+ * BORN IN THE EXECUTIVE, like ETH0:/the disks/the console -- no process
+ * introduces it; it exists in the I/O database before /dev/vms does. That is
+ * what makes "$GETDVI _NET: from a DIFFERENT process returns a real device" the
+ * design's §7.5 CROSS-PROCESS TELL for DECnet, the same shape as the RTAn:
+ * proof: a green produced without the executive device table carrying this row
+ * would be a LARP.
+ *
+ * GATED ON THE NIC (INV-6). `_NET:` is entered ONLY when the node actually has
+ * the primary Ethernet unit ETH0: DECnet would ride; on a node with no NIC no
+ * `_NET:` is entered, so $ASSIGN/$GETDVI _NET: is SS$_NOSUCHDEV -- the honest
+ * "this node cannot do DECnet" state, never a fabricated device. Its existence
+ * is the device FACE being present, not a claim that a circuit is turned ON
+ * (that is NETACP's runtime state, read from NETACP, not asserted here).
+ *
+ * PROVENANCE (Rule 8, published-doc-derived; the `_NET:` name and template-
+ * device shape are VMS-authentic, from the DECnet for OpenVMS Networking
+ * Manual's network device, not an OVMX invention and not VSI-disasm):
+ *   - class DC$_SCOM, matching ETH0:/EWA0: (the DECnet device is a serial-
+ *     communications/LAN-class device);
+ *   - shareable = 1: `_NET:` is a TEMPLATE device -- many processes $ASSIGN it
+ *     concurrently for task-to-task logical links, exactly like ETH0: -- so the
+ *     shareable side of the ownership rule (a channel confers no ownership) is
+ *     the property test_kmod_devtab asserts on it.
+ */
+/* Stored in the CANONICAL physical form the table is keyed by (normalize_devnam:
+ * upper-case, trailing colon, NO leading underscore). The name a user types --
+ * `_NET:` (the design's/VMS's physical form) -- normalizes to exactly this, so
+ * $ASSIGN/$GETDVI of `_NET:` OR `NET:` both resolve here, as on VMS. */
+#define VMS_DECNET_DEVNAM  "NET:"   /* DECnet network/template pseudo-device */
+
+static void vms_devtab_probe_net(void)
+{
+    struct vms_device *net;
+    int have_nic;
+
+    /* Ride the SAME primary net device ETH0: was entered from. If the executive
+     * entered no ETH0: (no NIC), it enters no _NET: either -- honest INV-6. */
+    exec_lock(&vms_device_list_lock);
+    have_nic = devtab_lookup_locked(VMS_NIC_DEVNAM) != NULL;
+    exec_unlock(&vms_device_list_lock);
+    if (!have_nic) {
+        pr_info("vms: no Ethernet unit %s; DECnet device %s not created\n",
+                VMS_NIC_DEVNAM, VMS_DECNET_DEVNAM);
+        return;
+    }
+
+    net = vms_devtab_create(VMS_DECNET_DEVNAM, DC__SCOM, VMS_DT_UNKNOWN,
+                            1 /* shareable -- a template device */,
+                            0 /* devchar */, 0 /* width */, 0 /* page */);
+    if (!net) {
+        pr_warn("vms: out of memory creating DECnet device %s\n",
+                VMS_DECNET_DEVNAM);
+        return;
+    }
+    pr_info("vms: DECnet device face %s created (NETACP layers its circuit"
+            " over %s)\n", VMS_DECNET_DEVNAM, VMS_NIC_DEVNAM);
 }
 
 /*
@@ -907,6 +1160,14 @@ int vms_devtab_init(void)
      * the I/O database before /dev/vms does; no process introduces it.
      */
     vms_devtab_probe_nic();
+
+    /*
+     * Enter the DECnet device face _NET: over that NIC the same way (vms-9ab,
+     * P5). Gated on ETH0: existing, so a NIC-less node has no _NET: and
+     * $GETDVI _NET: is SS$_NOSUCHDEV (INV-6). Born here in the I/O database
+     * before /dev/vms; no process introduces it -- the §7.5 cross-process tell.
+     */
+    vms_devtab_probe_net();
 
     pr_info("vms: device table initialized, console terminal %s created\n",
             VMS_CONSOLE_DEVNAM);

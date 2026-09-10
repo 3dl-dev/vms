@@ -1804,6 +1804,24 @@ static int resolve_out_version(const char *dst_dir, const char *out_name,
 }
 
 /*
+ * copy_spec_has_node - does a filespec carry a DECnet node prefix
+ * (NODE::... or NODE"access"::...)? Detects a top-level "::" -- one that is not
+ * inside a quoted access-control string -- exactly as $FILESCAN sets FSCN$_NODE
+ * (src/libvms/syssvc/sys_filescan.c). Used only to route COPY down the DECnet
+ * FAL/DAP path vs. the local ODS-2 path; the full parse into user/password/spec
+ * happens in the FAL client (dnet_fal + dnet_cterm_sc_connect_build).
+ */
+static int copy_spec_has_node(const char *s)
+{
+    int in_quote = 0;
+    for (const char *p = s; *p; p++) {
+        if (*p == '"') { in_quote = !in_quote; continue; }
+        if (!in_quote && p[0] == ':' && p[1] == ':') return 1;
+    }
+    return 0;
+}
+
+/*
  * COPY - Copy file(s), with VMS wildcard source expansion and version
  * defaulting on the output.
  *
@@ -1822,6 +1840,27 @@ int cmd_copy(struct dcl_command *cmd)
     if (cmd->param_count < 2) {
         dcl_error("DCL", 2, "NOFILE", "missing source and/or destination");
         return SS$_BADPARAM;
+    }
+
+    /* ---- DECnet file COPY (NODE"user pw"::file), rd vms-8c2 --------------
+     * A node prefix on either side is a DECnet FAL/DAP transfer, NOT a local
+     * ODS-2 COPY. The transfer ENGINE is real and proven -- the FAL server
+     * (object 17) + the DAP codec + the COPY client (dnet_fal_client_put/get),
+     * exercised end to end over a real NSP logical link by DECNETD.EXE
+     * --fal-accept-test (real SYSUAF auth + real RMS both directions,
+     * byte-verified) and --fal-selftest (the honest floor: a real object-17
+     * connect carrying the access-control creds, refused with an NSP disconnect
+     * when unauthenticated). What is NOT yet wired is the OUTBOUND bridge FROM a
+     * DCL process TO the live datalink (a DCL COPY does not yet own a DECnet
+     * circuit; the same gap SET HOST's outbound client has -- decnet$set-host).
+     * So COPY reports honestly here rather than mis-copying a NODE:: spec as a
+     * local file or faking a transfer (INV-6 / Rule 9). Tracked follow-on:
+     * wire the FAL client into DCL over the datalink (rd vms-30e child). */
+    if (copy_spec_has_node(cmd->params[0]) || copy_spec_has_node(cmd->params[1])) {
+        printf("%%COPY-I-NETNOTWIRED, DECnet file COPY (FAL/DAP object 17) engine "
+               "is present and authenticated, but the outbound COPY-over-datalink "
+               "client is not yet wired into DCL on this system\n");
+        return SS$_ABORT;
     }
 
     int do_log      = dcl_has_qualifier(cmd, "LOG");

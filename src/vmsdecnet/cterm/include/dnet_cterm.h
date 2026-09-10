@@ -79,6 +79,17 @@ extern "C" {
 #define DNET_CTERM_OBJECT   42
 
 /*
+ * The well-known DNA Session Control object numbers NETACP's object table
+ * dispatches (design vms-515 §3.3; register sec 4). CTERM (42) is served today;
+ * TASK (0, task-to-task) and FAL (17, File Access Listener) are DECLARED so the
+ * executive object table can answer "a known object, not yet built" HONESTLY
+ * (INV-6: an unbuilt object is refused, never faked into a fabricated session).
+ */
+#define DNET_OBJ_TASK    0
+#define DNET_OBJ_FAL     17
+#define DNET_OBJ_CTERM   DNET_CTERM_OBJECT   /* 42 */
+
+/*
  * CTERM message types (OVMX-assigned within the CTERM namespace; spec-derived
  * from the public DNA CTERM functional description -- see the provenance block).
  * The first byte of every CTERM PDU. Split into the Foundation (session setup)
@@ -207,27 +218,231 @@ int dnet_cterm_decode(const uint8_t *buf, size_t len,
 int dnet_cterm_encode(const struct dnet_cterm_msg *msg,
                       uint8_t *buf, size_t cap, size_t *outlen);
 
+/* ======================================================================
+ * DNA Session Control CONNECT message -- the inbound SET HOST's addressing
+ * and access-control fields (rd vms-f40).
+ *
+ * ORACLE-GROUNDED (Rule 8): docs/oracle/vax-sethost-cterm.{md,pcap,wire.txt}
+ * (rd vms-558), a real OpenVMS VAX V7.3 -> V7.3 `$ SET HOST VAX2` captured on
+ * the lab bridge. The connect data of the Connect Initiate (pcap frame 5 and
+ * its retransmission frame 46) is, byte for byte, TWENTY bytes:
+ *
+ *     00 2a | 02 00 1a 02 20 20 06 'S' 'Y' 'S' 'T' 'E' 'M' | 27 00 00 00 00
+ *     ^^^^^   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^
+ *     DSTNAME  SRCNAME                                       MENUVER + the
+ *                                                            THREE ACCESS-
+ *                                                            CONTROL STRINGS
+ *
+ *   - DSTNAME  = FORMAT 0 (object number only), OBJTYPE 0x2a = 42 = CTERM.
+ *     NOTE the format byte is 0, NOT 1: OVMX's first cut (#1013) emitted
+ *     format 1 for "object number", which a real VAX would not have read as
+ *     an object at all. Corrected here against the specimen.
+ *   - SRCNAME  = FORMAT 2 (coded), OBJTYPE 0, GRPCODE 0x021a, USRCODE 0x2020,
+ *     then a COUNTED STRING of 6 bytes: "SYSTEM" -- the SOURCE end user.
+ *   - MENUVER  = 0x27 in the specimen, then FOUR ZERO BYTES: three (four with
+ *     USRDATA) EMPTY counted strings. i.e. RQSTRID, PASSWRD and ACCOUNT are
+ *     ALL EMPTY ON THE WIRE.
+ *
+ * THAT LAST FACT IS THE WHOLE SECURITY ARGUMENT OF vms-f40. The identity a
+ * SET HOST carries ("SYSTEM") arrives in the SOURCE DESCRIPTOR, and the
+ * access-control fields carry NOTHING -- there is no password on the wire to
+ * authenticate with, and the oracle's console transcript agrees: the remote
+ * prompts FRESH for Username AND Password and surfaces the carried identity
+ * only as `Remote Port Info: 1025::SYSTEM`. An implementation that logged a
+ * SET HOST in from the carried username would be admitting a session on ZERO
+ * credential material. So: the source identity is PROXY/ACCOUNTING info, and
+ * LOGINOUT authenticates from scratch.
+ *
+ * WE DELIBERATELY DO NOT RETAIN THE PASSWORD BYTES. The parser records that a
+ * PASSWRD field was present and how long it was, and drops its content on the
+ * floor. Nothing in OVMX may authenticate from it (the oracle says real VMS
+ * does not), so keeping attacker-supplied plaintext alive in a long-lived
+ * struct would be a liability with no consumer -- and its ABSENCE from the
+ * struct is what makes "OVMX cannot auto-login from the wire" a structural
+ * fact rather than a policy comment.
+ *
+ * EVERY FIELD IS BOUNDED. These bytes are ATTACKER-CONTROLLED (they arrive off
+ * the wire before anyone has authenticated), and "OVMX never crashes a peer"
+ * cuts both ways -- a malformed connect must be REJECTED cleanly, never
+ * over-read. The parser never reads past buf[len-1], caps every counted string
+ * and rejects (rather than truncates) an over-long one.
+ * ====================================================================== */
+
+/* DNA Session Control end-user descriptor FORMAT codes (oracle-confirmed for
+ * 0 and 2 by the frame above; 1 is the published named-task form). */
+#define DNET_SC_FMT_OBJECT  0   /* OBJTYPE only: a well-known object number  */
+#define DNET_SC_FMT_NAMED   1   /* OBJTYPE=0 + counted task/image name       */
+#define DNET_SC_FMT_CODED   2   /* OBJTYPE=0 + GRPCODE + USRCODE + name      */
+
+/* Counted-string cap. DNA counted strings are 1..255 bytes; a Session Control
+ * end-user name / access-control string longer than this is refused, not
+ * clipped -- a clipped identity that happens to resolve is exactly the class
+ * of bug this decoder must not have. */
+#define DNET_SC_MAX_STR     64
+
 /*
- * dnet_cterm_sc_connect_build - build the minimal DNA Session Control CONNECT
- * message that $ SET HOST puts in the NSP Connect Initiate's connect data to
- * address the remote CTERM object: a destination object descriptor naming
- * `dst_object` (DNET_CTERM_OBJECT for SET HOST), a source object descriptor
- * (object 0), and the access-control username/password/account as counted
- * strings. SPEC-DERIVED (public DNA Session Control connect format); the
- * access-control username field is the one the vms-3be capture observed carrying
- * plaintext "SYSTEM" in specimen #3 (register sec 4.6). `username`/`password`/
- * `account` may be NULL (encoded as zero-length). Writes the length to *outlen.
- * Returns DNET_CTERM_OK / ENOSPACE / EINVAL.
+ * A decoded Session Control CONNECT message. Everything here is UNTRUSTED
+ * input: it is what a peer sent us before authenticating.
+ */
+struct dnet_cterm_sc_connect {
+    /* Destination (what object the peer asked for; 42 = CTERM/SET HOST). */
+    uint8_t  dst_format;                    /* DNET_SC_FMT_*                 */
+    uint8_t  dst_object;                    /* object number (format 0)      */
+    char     dst_task[DNET_SC_MAX_STR + 1]; /* task name (formats 1/2)       */
+
+    /* Source end user -- PROXY / ACCOUNTING IDENTITY ONLY, NEVER A CREDENTIAL
+     * (see the block above). This is what becomes "Remote Port Info". */
+    uint8_t  src_format;
+    uint8_t  src_object;
+    uint16_t src_grpcode;                   /* format 2 group code           */
+    uint16_t src_usrcode;                   /* format 2 user code            */
+    char     src_user[DNET_SC_MAX_STR + 1]; /* e.g. "SYSTEM"                 */
+
+    /* Access control. Present in the message but EMPTY in the oracle. */
+    uint8_t  menuver;                       /* option byte (0x27 observed)   */
+    int      have_access_control;           /* the fields were present at all */
+    char     rqstrid[DNET_SC_MAX_STR + 1];  /* requestor id, usually empty   */
+    char     account[DNET_SC_MAX_STR + 1];  /* accounting string             */
+    /* PASSWRD: length + presence ONLY. The bytes are never retained -- see
+     * "WE DELIBERATELY DO NOT RETAIN THE PASSWORD BYTES" above. */
+    int      password_present;
+    uint8_t  password_len;
+};
+
+/*
+ * dnet_cterm_sc_connect_build - build the Session Control CONNECT message a
+ * $ SET HOST puts in the NSP Connect Initiate's connect data, in the
+ * ORACLE-OBSERVED shape: DSTNAME = format 0 + `dst_object`, SRCNAME =
+ * format 2 + objtype 0 + `src_grpcode`/`src_usrcode` + counted `src_user`,
+ * then the MENUVER byte and the RQSTRID / PASSWRD / ACCOUNT counted strings.
+ *
+ * `src_user` is the local user this SET HOST is FROM -- proxy/accounting info,
+ * exactly what the real VAX put there. `username`/`password`/`account` are the
+ * access-control fields; the oracle shows a plain `SET HOST node` sends all
+ * three EMPTY, so NULL/"" is the faithful call and what OVMX uses. (They exist
+ * because DNA carries them and `SET HOST node"user pass"` fills them in; OVMX
+ * never CONSUMES them on the inbound side -- LOGINOUT authenticates fresh.)
+ *
+ * Writes the length to *outlen. Returns DNET_CTERM_OK / ENOSPACE / EINVAL.
  */
 int dnet_cterm_sc_connect_build(uint8_t dst_object,
+                                const char *src_user,
+                                uint16_t src_grpcode, uint16_t src_usrcode,
                                 const char *username, const char *password,
                                 const char *account,
                                 uint8_t *buf, size_t cap, size_t *outlen);
+
+/*
+ * dnet_cterm_sc_connect_parse - decode a Session Control CONNECT message.
+ * Fully bounded: never reads past buf[len-1]; refuses (does not clip) an
+ * over-long counted string; refuses an unknown descriptor format. *out is
+ * zeroed first, so a failure leaves no half-filled identity behind.
+ * Returns DNET_CTERM_OK, or DNET_CTERM_ETRUNC / EBADLEN / EINVAL.
+ */
+int dnet_cterm_sc_connect_parse(const uint8_t *buf, size_t len,
+                                struct dnet_cterm_sc_connect *out);
 
 /* Parse the destination object number out of a Session Control connect message
  * (the inbound-Bind server dispatch: which object is being connected to).
  * Returns the object number (>=0) or DNET_CTERM_EINVAL on a malformed message. */
 int dnet_cterm_sc_connect_object(const uint8_t *buf, size_t len);
+
+/*
+ * dnet_fal_access_decode - decode the ACCESS-CONTROL username+password+account
+ * from an inbound Session Control connect (rd vms-8c2, FAL/object-17).
+ *
+ * THE FAL COUNTERPART to dnet_cterm_sc_connect_parse, and its DELIBERATE
+ * OPPOSITE on one point: FAL authenticates from connect-time credentials
+ * (oracle docs/oracle/vax-copy-fal-dap.md §1 -- the COPY carries username +
+ * password in the access-control fields), so this decoder RETAINS the password
+ * into the caller's `password` buffer. The caller (the FAL server) MUST wipe
+ * that buffer the instant sysuaf_authenticate has consumed it. CTERM's parse
+ * keeps dropping the password; only FAL, which must, uses this entry -- so the
+ * "codec never retains a password" invariant the CTERM security case rests on
+ * is preserved for every non-FAL path.
+ *
+ * FULLY BOUNDED against attacker-controlled bytes (this runs before anyone has
+ * authenticated): never reads past buf[len-1], refuses (does not clip) an
+ * over-long counted field, and on ANY malformation leaves every output buffer
+ * EMPTY and returns a negative DNET_CTERM_E* -- no half-parsed credential can
+ * reach the authenticator. A connect that carries no access-control area
+ * returns DNET_CTERM_OK with all three buffers empty (the server then refuses:
+ * FAL admits no empty-credential session). Each cap must be >= 1; on success
+ * every buffer is NUL-terminated.
+ */
+int dnet_fal_access_decode(const uint8_t *buf, size_t len,
+                           char *userid, size_t useridcap,
+                           char *password, size_t passwordcap,
+                           char *account, size_t accountcap);
+
+/*
+ * dnet_cterm_remote_port_info - render the VMS "Remote Port Info" string for a
+ * decoded connect: "<decimal DECnet address>::<source user>", the shape the
+ * oracle's SHOW TERMINAL printed ("Remote Port Info: 1025::SYSTEM", where 1025
+ * = area 1 node 1). `src_addr` is the peer's Phase IV address as the routing
+ * header carried it (executive/engine state -- NOT a value copied out of the
+ * connect message). Returns DNET_CTERM_OK or DNET_CTERM_ENOSPACE/EINVAL.
+ */
+int dnet_cterm_remote_port_info(const struct dnet_cterm_sc_connect *sc,
+                                uint16_t src_addr, char *out, size_t cap);
+
+/*
+ * ================= THE A2/A8 ISOLATION SEAM (design vms-515 §3.4) ============
+ *
+ * A VALIDATED, TYPED inbound-connect descriptor. This is the ONLY thing the
+ * privileged control path (NETACP's session creation -- dnet_cterm_host_open_desc,
+ * which mints an RTAn: and $CREPRCs LOGINOUT) is allowed to see. Attacker-
+ * controlled wire bytes are parsed at LOW privilege by
+ * dnet_conn_descriptor_from_wire() and NEVER cross into the privileged path.
+ *
+ * THE SEAM IS THE STRUCT'S SHAPE, not a promise:
+ *   - there is NO pointer to, and NO length of, the wire frame here -- the
+ *     privileged side has nothing raw to re-parse and cannot be handed a longer
+ *     or differently-shaped buffer than the parser already bounded;
+ *   - there are NO password bytes and no access-control material here -- the
+ *     parser measured and dropped them (dnet_cterm.c), so no credential a peer
+ *     supplied can reach a decision;
+ *   - every string is already bounded (DNET_SC_MAX_STR) and printable-filtered;
+ *   - `validated` is set ONLY by a successful bounded parse. A descriptor that
+ *     did not come out of the parser is all-zero, validated == 0, and the
+ *     privileged consumer REFUSES it (SS$_BADPARAM) rather than acting on a
+ *     zero object. A fuzzed/malformed frame therefore produces a descriptor the
+ *     privileged path rejects at its own front door -- it never mints a device
+ *     or creates a process from hostile input.
+ */
+struct dnet_conn_descriptor {
+    int      validated;       /* nonzero IFF produced by a successful bounded parse   */
+    int      dst_is_object;   /* 1 = well-known object (format 0); 0 = named task     */
+    uint8_t  dst_object;      /* destination object number (0..255), meaningful iff ^ */
+    uint16_t peer_addr;       /* engine-decoded routing address -- NOT wire-supplied  */
+    char     proxy_user[DNET_SC_MAX_STR + 1]; /* accounting/proxy identity ONLY       */
+    char     proxy_task[DNET_SC_MAX_STR + 1]; /* named-task target (format 1/2)       */
+};
+
+/*
+ * dnet_conn_descriptor_from_wire - the LOW-PRIVILEGE parse boundary. Decode the
+ * untrusted NSP-connect bytes with the fully-bounded dnet_cterm_sc_connect_parse
+ * and distil them into a validated descriptor. `peer_addr` is the engine's own
+ * decode of the routing header (executive/engine state, never a value the peer
+ * wrote into the connect), and is the ONLY address that reaches the descriptor.
+ *
+ * On success sets out->validated = 1 and returns DNET_CTERM_OK. On ANY parse
+ * failure *out is left all-zero (validated == 0) and the parser's negative
+ * error code is returned -- the caller must not, and cannot usefully, hand an
+ * unvalidated descriptor to the privileged path.
+ */
+int dnet_conn_descriptor_from_wire(const uint8_t *conn_data, size_t conn_len,
+                                   uint16_t peer_addr,
+                                   struct dnet_conn_descriptor *out);
+
+/*
+ * dnet_conn_descriptor_port_info - render "<addr>::<user>" (the oracle's Remote
+ * Port Info form) from a validated descriptor, for the accounting/human surface.
+ * Uses the descriptor's already-filtered proxy_user and engine-decoded peer_addr.
+ * Returns DNET_CTERM_OK or DNET_CTERM_EINVAL/ENOSPACE.
+ */
+int dnet_conn_descriptor_port_info(const struct dnet_conn_descriptor *desc,
+                                   char *out, size_t cap);
 
 /* ---- session state machine ---------------------------------------------- */
 

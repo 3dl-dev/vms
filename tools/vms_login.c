@@ -851,6 +851,39 @@ static int console_login(void)
             continue;
         }
 
+        /*
+         * PASSWORD-EXPIRATION ENFORCEMENT (vms-c6df). The password is correct
+         * and the account is enabled, but a SYSUAF password can still be
+         * EXPIRED -- admin-forced (UAI$M_PWD_EXPIRED) or its lifetime elapsed
+         * (UAF$Q_PWD_DATE + UAF$Q_PWD_LIFETIME in the past). Before vms-c6df an
+         * expired password logged in NORMALLY: a real authenticity + security
+         * hole (the last SYSUAF login-flag facade after vms-c8fa).
+         *
+         * VMS BEHAVIOUR is to FORCE the user to set a new password here (prompt
+         * NEW twice, rewrite the Purdy hash + UAF$Q_PWD_DATE, then proceed).
+         * That interactive force-change flow is NOT YET built (tracked as the
+         * vms-c6df force-change follow-up), and OVMX MUST NOT invent a VMS
+         * message or silently log the stale password in (CLAUDE.md Rule 10 /
+         * INV-6). So the HONEST FLOOR is a deliberate, DISCLOSED OVMX
+         * divergence: refuse the login with an %OVMX- facility diagnostic
+         * (a rejected-here condition is an OVMX event, not a VMS one -- the same
+         * reasoning start_session()'s %OVMX-F-NOIDENT uses). This is symmetric
+         * with the SSH path (src/vmsssh/sshd_auth.c), which likewise refuses.
+         * The gate stands BEFORE start_session(), so an expired account never
+         * sees the welcome banner, the identity stamp or the "$" prompt.
+         *
+         * This message IS shown only after the correct password authenticated,
+         * so it discloses nothing to an attacker who does not hold the password.
+         */
+        if (sysuaf_password_expired(&user_rec)) {
+            printf("\n%%OVMX-F-PWDEXPIRED, your password has expired and must "
+                   "be changed before you can log in;\n"
+                   "-OVMX-F-NOCHG, interactive password change is not yet "
+                   "available -- contact the system manager\n\n");
+            attempts++;
+            continue;
+        }
+
         /* --- Authentication successful --- */
         /* 'attempts' is the number of failed tries before this success --
          * the real "failures since last successful login" for this

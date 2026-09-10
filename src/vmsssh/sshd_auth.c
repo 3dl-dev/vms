@@ -42,6 +42,16 @@ int ovmx_sshd_check_login(const struct sysuaf_record *rec_opaque,
     if (!sysuaf_interactive_login_permitted(rec))
         return 0;
 
+    /* Password-expiration enforcement (vms-c6df), a THIRD gate distinct from the
+     * password check and the login-flag gate: an EXPIRED SYSUAF password
+     * (admin-forced UAI$M_PWD_EXPIRED, or lifetime elapsed) is refused even with
+     * the correct password. VMS force-change is interactive; that flow is not
+     * yet built for either front-end (tracked, vms-c6df follow-up), so this
+     * decision function refuses honestly rather than pass a stale password
+     * (INV-6) -- symmetric with the console LOGINOUT gate in tools/vms_login.c. */
+    if (sysuaf_password_expired(rec))
+        return 0;
+
     return 1;
 }
 

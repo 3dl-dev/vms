@@ -18,3 +18,23 @@ add_library(vmsdecnet_cterm STATIC dnet_cterm.c)
 target_include_directories(vmsdecnet_cterm PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+# vmsdecnet_cterm_host: the CTERM HOST SESSION (rd vms-f40) -- what an inbound
+# $ SET HOST actually reaches. DELIBERATELY A SEPARATE TARGET from the pure
+# codec above: this half calls VMS system services ($CREPRC) and the executive
+# (the RTAn: mint), so keeping it out of vmsdecnet_cterm makes the codec's
+# purity a build-enforced fact rather than a promise -- the unit test links the
+# codec alone and would stop linking the moment a service call leaked into it.
+#
+# It closes the no-auth hole the first CTERM cut opened: an inbound object-42
+# connect no longer openpty()s and fork()+execvp()s a shell, it mints an RTAn:
+# through the executive and creates a process running LOGINOUT.EXE on it via
+# $CREPRC PRC$M_INTER|PRC$M_LOGINOUT -- the SAME primitive the console login
+# uses -- so the remote user is CHALLENGED. Oracle: docs/oracle/
+# vax-sethost-cterm.* (rd vms-558) -- the carried node::user is proxy info,
+# LOGINOUT authenticates fresh.
+add_library(vmsdecnet_cterm_host STATIC dnet_cterm_host.c)
+target_include_directories(vmsdecnet_cterm_host PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(vmsdecnet_cterm_host PUBLIC vmsdecnet_cterm vms vmsfs vmssys)

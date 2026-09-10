@@ -10,8 +10,9 @@ summary: >
   LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points)
   are implemented but advisory: a thread-local handler_stack is walked LIFO
   in-process, not real machine-frame unwind. LIB$SIG_TO_STOP and
-  LIB$MATCH_COND are absent. chf$mech_array's savr0/savr1/frame fields are
-  zeroed placeholders (facade-risk for handlers that read them). SYS$UNWIND
+  LIB$MATCH_COND are absent. chf$mech_array's frame + depth are real (real
+  establisher frame + chain depth) and savr0 is written by lib$sig_to_ret;
+  only savr1 stays 0 (host C ABI exposes no VAX/Alpha R1). SYS$UNWIND
   and SYS$DCLEXH are documented simplified stubs. SYS$EXIV and SYS$SETEXV
   are absent.
 last_reviewed: 2026-08-31
@@ -23,7 +24,7 @@ items:
   - {id: lib$sig_to_ret, kind: routine, status: implemented, authenticity: advisory, vms: "Convert a signal to a return status", evidence: src/libvms/rtl/lib_signal.c}
   - {id: lib$sig_to_stop, kind: routine, status: absent, authenticity: n/a, vms: "Convert a signal to STOP severity"}
   - {id: lib$match_cond, kind: routine, status: absent, authenticity: n/a, vms: "Match a condition code against a list, ignoring severity"}
-  - {id: chf$mech_array, kind: struct, status: stub, authenticity: facade-risk, vms: "Condition-handler mechanism-args array (savr0/savr1/frame fields)", evidence: src/libvms/rtl/lib_signal.c, notes: "savr0/savr1/frame are zeroed placeholders; a handler reading them gets fake data"}
+  - {id: chf$mech_array, kind: struct, status: implemented, authenticity: advisory, vms: "Condition-handler mechanism-args array (savr0/savr1/frame fields)", evidence: src/libvms/rtl/lib_signal.c, notes: "vms-df8 sweep re-census: chf$ph_mch_frame + chf$is_mch_depth are REAL (establisher frame via __builtin_frame_address + real chain depth, lib_signal.c:258-259/351-352); chf$is_mch_savr0 is written by lib$sig_to_ret (lib_signal.c:485). Only chf$is_mch_savr1 stays 0 -- the host C ABI exposes no VAX/Alpha R1 to capture (documented gap, not fabrication). Was stale-flagged facade-risk."}
   - {id: sys$unwind, kind: routine, status: stub, authenticity: advisory, vms: "Unwind the call stack to an establisher", evidence: src/libvms/syssvc/sys_condition.c, notes: "documented simplified unwind"}
   - {id: sys$dclexh, kind: routine, status: stub, authenticity: advisory, vms: "Declare an exit handler", evidence: "src/libvms/syssvc/sys_process.c:1016"}
   - {id: sys$exiv, kind: routine, status: absent, authenticity: n/a, vms: "Declare an exit vector"}

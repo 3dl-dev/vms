@@ -432,6 +432,21 @@ if(BUILD_TESTS)
     set_tests_properties(creprc_session_primitive_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-f54: the OUTBOUND $ SET HOST CLIENT over a REAL veth datalink. Two real
+    # DECNETD.EXE engines: a --set-host client drives a genuine Connect Initiate
+    # to Session Control object 42, and main's $CREPRC-based --cterm-server
+    # answers. With an executive (/dev/vms) the client reaches the remote's FRESH
+    # LOGINOUT challenge and control returns with %REM-S-END; without one the
+    # client's link still reaches the server, which HONESTLY refuses (no
+    # unauthenticated shell -- INV-6). It SKIPS honestly (exit 77) when it cannot
+    # create the veth (no CAP_NET_ADMIN). The FULL authenticated leg is the
+    # workflow_dispatch proof run (a runner with CAP_NET + a real executive).
+    add_test(NAME decnet_set_host_client_live
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/decnet_set_host_live.sh)
+    set_tests_properties(decnet_set_host_client_live PROPERTIES
+        LABELS "integration;decnet" TIMEOUT 120 SKIP_RETURN_CODE 77
+        ENVIRONMENT "REPO=${CMAKE_CURRENT_SOURCE_DIR};DECNETD_BIN=$<TARGET_FILE:decnetd_exe>")
+
     # vms-2a9 standing gate: JOB_CONTROL is created by a registered STDRV
     # component (SYS$STARTUP:VMS$VMS.DAT, CONFIG phase), not a hardcoded
     # call from a site file. Source scan — no build artifacts needed. The
@@ -1127,8 +1142,30 @@ if(BUILD_TOOLS)
         vms_initialize       # INITIALIZE.EXE
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE
+        decnetd_exe          # DECNETD.EXE
         PARTS                # PARTS.EXE
+        ncp_exe              # NCP.EXE
     )
+    # NCP.EXE (rd vms-1e9): the DECnet Phase IV Network Control Program
+    # (SET/DEFINE/SHOW/CLEAR NODE, SET/SHOW EXECUTOR). Portable C (stdio + the
+    # node database) with no arch-specific code, so it ships on BOTH arches --
+    # the configuration surface a DECnet manager uses to build the node database.
+    # (The DECNETD.EXE network daemon is deliberately NOT in this aggregate yet:
+    # its AF_PACKET/PTY path needs the netbsd-vax userspace port + a booted proof
+    # before it ships -- tracked under vms-30e, not an allowlist gap.)
+
+    # DECNETD.EXE joins the aggregate on BOTH arches (rd vms-f40). It is not a
+    # diagnostic or a convenience: it is the DECnet Phase IV endnode, and it is
+    # what an inbound $ SET HOST arrives at. A system that claims to serve
+    # object 42 -- to create a LOGINOUT session for a remote user -- and does
+    # not ship the image that answers the connect would be claiming a facility
+    # the installed product does not have (INV-6). Its datalink is substrate-
+    # abstracted the same way the cluster's was (src/libdatalink: AF_PACKET on
+    # Linux, bpf(4) on NetBSD), so there is no Decision-A split here and this
+    # must never become an image-parity allowlist entry.
+    #
+    # Being SHIPPED is not being STARTED: nothing in the startup procedures
+    # runs it, exactly as staging LIBRARIAN.EXE does not start a librarian.
 
     # CNXTRACE.EXE is in the aggregate on PURPOSE, on both arches (E69). It
     # reads the connection manager's join transition ring out of the executive

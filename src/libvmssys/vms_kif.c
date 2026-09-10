@@ -1408,6 +1408,70 @@ uint32_t vms_kif_disk_resolve(const char *devnam, char *backing,
     return args.status;
 }
 
+/* ---- dynamic terminal units: RTAn: (rd vms-f40) ------------------------- */
+
+uint32_t vms_kif_terminal_create(const char *backing, char *devnam,
+                                 uint32_t devnam_size)
+{
+    struct vms_terminal_args args;
+
+    if (!backing || !devnam || devnam_size == 0)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.backing, backing, VMS_BACKING_SIZE - 1);
+    args.backing[VMS_BACKING_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_CREATE, &args);
+
+    /* The NAME is an OUTPUT and is copied only on success: a caller must never
+     * be able to proceed with a unit the executive did not actually mint. */
+    devnam[0] = '\0';
+    if (args.status & 1) {
+        vms_strncpy(devnam, args.devnam, devnam_size - 1);
+        devnam[devnam_size - 1] = '\0';
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_terminal_delete(const char *devnam)
+{
+    struct vms_terminal_args args;
+
+    if (!devnam)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_DELETE, &args);
+
+    return args.status;
+}
+
+uint32_t vms_kif_terminal_resolve(const char *devnam, char *backing,
+                                  uint32_t backing_size)
+{
+    struct vms_terminal_args args;
+
+    if (!devnam || !backing || backing_size == 0)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_RESOLVE, &args);
+
+    backing[0] = '\0';
+    if (args.status & 1) {
+        vms_strncpy(backing, args.backing, backing_size - 1);
+        backing[backing_size - 1] = '\0';
+    }
+    return args.status;
+}
+
 uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out)
 {
     struct vms_getvol_args args;

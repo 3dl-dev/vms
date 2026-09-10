@@ -316,6 +316,10 @@ target_include_directories(vms_tcpip_inetd PRIVATE
     ${CMAKE_SOURCE_DIR}/src/libvmssys
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/services
+    # rms/rms.h -- rms_stage_over_acp materializes a SYS$SYSTEM: service image off
+    # the ODS-2 ACP into an execve-able tmpfs path (vms-21b: the aux server launches
+    # ODS-2-resident images the VMS way, not a raw execv of an initramfs path).
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/include
 )
 
 target_compile_definitions(vms_tcpip_inetd PRIVATE
@@ -327,7 +331,7 @@ target_compile_options(vms_tcpip_inetd PRIVATE
     -Wall -Wextra
 )
 
-target_link_libraries(vms_tcpip_inetd PRIVATE vms pthread)
+target_link_libraries(vms_tcpip_inetd PRIVATE vms vmsrms pthread)
 
 set_target_properties(vms_tcpip_inetd PROPERTIES
     OUTPUT_NAME "TCPIP\$INETD"

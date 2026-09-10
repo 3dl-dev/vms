@@ -18,6 +18,12 @@
 #       STARTUP.EXE      the PID-1 image (also installed as /sbin/init off-disk;
 #                        present here so the SYSEXE tree matches an installed
 #                        volume)
+#       DECNETD.EXE      the DECnet Phase IV endnode (rd vms-c1f/vms-f40); the
+#                        image the shared DCL/SHOW acceptance battery's DECnet
+#                        CTERM section (--cterm-accept-test) hard-gates against
+#                        on this rail. Shipped, not started: no startup
+#                        procedure runs it. Its datalink is
+#                        src/libdatalink's NetBSD bpf(4) backend.
 #       SYSUAF.DAT       account database (binary $UAFDEF indexed Files-11 file;
 #                        arch-neutral by construction -- the LE codec serializes
 #                        every on-disk field via le16/le32/le64 over uint8[] byte
@@ -38,7 +44,7 @@
 #   SYS0/SYSCOMMON/SYSHLP/       HELPLIB.HLP (reused)
 #   SYS0/SYSCOMMON/SYSUPD/       PARTS_SETUP.COM (reused)
 #
-# Everything except the five .EXE images and SYSTARTUP_VMS.COM is copied
+# Everything except the six .EXE images and SYSTARTUP_VMS.COM is copied
 # VERBATIM from distro/rootfs/vms -- those files are architecture-independent
 # data/DCL (INV-DRIFT: one source of truth, no vax fork of the data).
 #
@@ -70,8 +76,8 @@
 #
 # Usage: stage_sysvol.sh [--distribution --kit <OVMX-OS-VAX.KIT>] \
 #                        <images-dir> <repo-root> <stage-out-dir>
-#   <images-dir> must contain the five ELF32-vax boot images by name:
-#     DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE
+#   <images-dir> must contain the six ELF32-vax boot images by name:
+#     DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE
 #   --distribution           stage the installer-media shape (see above)
 #   --kit <file>             path to the pre-built OVMX-OS-VAX.KIT to lay at
 #                            SYS$UPDATE: (REQUIRED with --distribution; the kit
@@ -100,7 +106,7 @@ STAGE="${3:?usage: $0 [--distribution --kit <kit>] <images-dir> <repo-root> <sta
 ROOTFS="$REPO/distro/rootfs/vms"
 VAX_SYSTARTUP="$REPO/distro/rootfs-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
 VAX_DISTRIB_SYSTARTUP="$REPO/distro/rootfs-distrib-only-vax/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM"
-BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE"
+BOOT_IMAGES="DCL.EXE PROVISION.EXE LOGINOUT.EXE JOB_CONTROL.EXE STARTUP.EXE DECNETD.EXE"
 KIT_DEST_NAME="OVMX-OS-VAX.KIT"
 
 die() { echo "[stage_sysvol] FATAL: $*" >&2; exit 1; }

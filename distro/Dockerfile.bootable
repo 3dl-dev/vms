@@ -633,11 +633,14 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # DECnet Phase IV: ship the NCP configuration utility on the running system
     # so an admin can build the node database (DEFINE NODE) + set the executor.
     # NCP.EXE is portable C and ships on BOTH arches (see the ovmx-images vax
-    # aggregate). The DECNETD.EXE network daemon is NOT staged yet: its AF_PACKET
-    # datalink + PTY login path need the netbsd-vax userspace port + a booted
-    # proof before it ships (rd vms-30e); staging it x86-only would be an unbuilt
-    # parity gap, which the #589 allowlist forbids. Plain `cp ... SYSEXE/` form so
-    # the image-parity scanner sees it.
+    # aggregate). DECNETD.EXE (staged above) is ALSO on all three rails now
+    # (rd vms-c1f): its raw-L2 datalink goes only through src/libdatalink's
+    # scs_datalink_* abstraction, which already ships both backends this
+    # facility needs -- AF_PACKET here and on Alpha (Linux-ABI), NetBSD bpf(4)
+    # on the VAX sysvol (tests/lab-vax/stage_sysvol.sh) -- so there was no
+    # unbuilt-parity gap to wait on; the earlier claim that DECNETD.EXE needed
+    # a netbsd-vax userspace port was a stale premise, corrected here. Plain
+    # `cp ... SYSEXE/` form so the image-parity scanner sees it.
     cp build-static/bin/NCP.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # TCC.EXE (compiler) + LINK.EXE (linker) -- the self-host toolchain on the
     # shipped disk (vms-992e). LINK.EXE comes from build-static (BUILD_TOOLS

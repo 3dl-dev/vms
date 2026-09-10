@@ -86,6 +86,11 @@ struct vms_pcb;
 extern struct vms_pcb *vms_pcb_get(void);
 extern struct vms_pcb *vms_pcb_init(uint64_t initial_privs);
 
+/* The live --set-host CI's nonzero format-2 source group/user codes, sourced
+ * from the running process (vms-15a/a70). Defined with run_set_host_loop; the
+ * --set-host-src-codes-selftest above it asserts the codes are nonzero. */
+static void sethost_src_codes(uint16_t *grp, uint16_t *usr);
+
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
  * bridge model that carries raw Phase IV multicast; SLIRP cannot, see
  * docs/decnet-provenance-register.md sec 4.2). */
@@ -772,6 +777,59 @@ done:
            " screen output + keystrokes + out-of-band -> Unbind -> clean"
            " disconnect over a real socketpair; every CTERM payload"
            " byte-identical)\n");
+    return 0;
+}
+
+/*
+ * ================ --set-host-src-codes-selftest (vms-15a/a70) ===============
+ * The live $ SET HOST client must NOT emit the zero/zero format-2 source codes
+ * real OpenVMS session control silently discards. This proves the CI the live
+ * --set-host path builds -- sethost_src_codes() feeding the exact
+ * dnet_cterm_sc_connect_build() call in run_set_host_loop -- carries a NONZERO
+ * group AND a nonzero user sourced from the running process, and round-trips as
+ * a well-formed format-2 connect to CTERM object 42. Runs anywhere: with no
+ * /dev/vms the codes come from the POSIX identity fallback (still nonzero).
+ */
+static int run_sethost_srccode_selftest(void)
+{
+    uint16_t grp = 0, usr = 0;
+    sethost_src_codes(&grp, &usr);
+    if (grp == 0 && usr == 0) {
+        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL"
+               " (source group/user are BOTH zero -- VMS would discard this CI)\n");
+        return 1;
+    }
+
+    uint8_t sc[128];
+    size_t sclen = 0;
+    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", grp, usr,
+                                    "", "", "", sc, sizeof(sc), &sclen) != DNET_CTERM_OK) {
+        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL (connect build failed)\n");
+        return 1;
+    }
+
+    struct dnet_cterm_sc_connect c;
+    if (dnet_cterm_sc_connect_parse(sc, sclen, &c) != DNET_CTERM_OK) {
+        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL (connect parse failed)\n");
+        return 1;
+    }
+    /* The CI must name CTERM object 42 (fmt-0 dst) with a fmt-2 source whose
+     * group AND user are the nonzero process identity we sourced. */
+    if (c.dst_object != DNET_CTERM_OBJECT ||
+        c.src_format != DNET_SC_FMT_CODED ||
+        c.src_grpcode == 0 || c.src_usrcode == 0 ||
+        c.src_grpcode != grp || c.src_usrcode != usr) {
+        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL"
+               " (dst_obj=%u src_fmt=%u grp=0x%04x usr=0x%04x)\n",
+               c.dst_object, c.src_format, c.src_grpcode, c.src_usrcode);
+        return 1;
+    }
+
+    printf("DECNETD-I-SETHOSTSRCCODES, live --set-host CI carries NONZERO"
+           " format-2 source codes group=0x%04x user=0x%04x (sourced from the"
+           " running process, not a template) -- VMS session control dispatches"
+           " it to CTERM object 42 instead of discarding it\n",
+           c.src_grpcode, c.src_usrcode);
     return 0;
 }
 
@@ -1501,6 +1559,49 @@ static int dnet_recv_route(struct dnet_engine *eng, int sock, unsigned ifindex,
  * READINESS (bytes still MOVE through $QIO) so the HELLO cadence + link tick keep
  * firing. On teardown control returns with the canonical %REM-S-END.
  */
+/*
+ * The format-2 SRCNAME group/user codes for the $ SET HOST Connect Initiate.
+ *
+ * vms-15a/a70: a CTERM CI whose format-2 source descriptor carries group 0 AND
+ * user 0 is SILENTLY DISCARDED by real OpenVMS VAX V7.3 session control -- it
+ * never reaches the CTERM (object 42) server, so no Connect Confirm returns and
+ * LOGINOUT is never spawned (proven on the isolated lab: VAX1 answers our DI
+ * with a DC but emits ZERO in response to the CI). Every ACCEPTED real-VAX CI
+ * carries NONZERO codes (oracle /lab/decnet-wireproof/real-cterm-ci.hex: two
+ * SYSTEM-sourced samples with DIFFERENT nonzero group/user -- they are the
+ * SOURCE PROCESS's own identity, which is why they vary per session; they are
+ * NOT a fixed constant and MENUVER 0x27 is accepted, so this was never a
+ * MENUVER bug).
+ *
+ * So the live client must source the codes from the RUNNING PROCESS, the way
+ * VMS does -- never a hardcoded template. The faithful source is the process
+ * UIC the executive holds: $GETJPI(JPI$_UIC) == vms_kif_getjpi_self()->uic,
+ * packed (group << 16) | member (INV-6: the value is executive state, read
+ * live, never plumbed frame-to-frame). If no executive identity is stamped on
+ * this process (a standalone DECNETD with no image activation / no /dev/vms),
+ * fall back to the real POSIX identity of the running process (gid -> group,
+ * uid -> member), and as a last resort its pid -- still the process's own
+ * identity, still nonzero, never an invented constant.
+ */
+static void sethost_src_codes(uint16_t *grp, uint16_t *usr)
+{
+    uint16_t g = 0, u = 0;
+    struct vms_procinfo pi;
+    if ((vms_kif_getjpi_self(&pi) & 1) && pi.uic != 0) {
+        g = (uint16_t)(pi.uic >> 16);      /* UIC group  */
+        u = (uint16_t)(pi.uic & 0xFFFF);   /* UIC member */
+    }
+    if (g == 0 && u == 0) {
+        g = (uint16_t)(getgid() & 0xFFFF);
+        u = (uint16_t)(getuid() & 0xFFFF);
+    }
+    /* Never emit the zero/zero pair VMS discards. */
+    if (g == 0) g = (uint16_t)(((unsigned)getpid()        & 0x7FFF) | 1);
+    if (u == 0) u = (uint16_t)((((unsigned)getpid() >> 15) & 0x7FFF) | 1);
+    *grp = g;
+    *usr = u;
+}
+
 static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
                              const char *peer_s, const char *user)
 {
@@ -1523,7 +1624,14 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
         user = "SYSTEM";
     uint8_t sc[128];
     size_t sclen = 0;
-    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, user, 0, 0, "", "", "",
+    /* The format-2 source group/user codes are the running process's own
+     * identity (executive UIC, else POSIX id) -- NONZERO, so VMS session
+     * control dispatches the CI to the CTERM server instead of discarding it
+     * (vms-15a/a70). See sethost_src_codes(). */
+    uint16_t src_grp = 0, src_usr = 0;
+    sethost_src_codes(&src_grp, &src_usr);
+    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, user, src_grp, src_usr,
+                                    "", "", "",
                                     sc, sizeof(sc), &sclen) != 0) {
         fprintf(stderr, "DECNETD-E-SCBUILD, CTERM connect-data build failed\n");
         return 1;
@@ -2155,6 +2263,10 @@ static void usage(const char *argv0)
         "                      whole terminal session: Bind, characteristics,\n"
         "                      screen output, keystrokes, out-of-band, Unbind,\n"
         "                      over a socketpair; every payload byte-identical)\n"
+        "  --set-host-src-codes-selftest  prove the live --set-host CI carries\n"
+        "                      NONZERO format-2 source group/user codes sourced\n"
+        "                      from the running process (vms-15a/a70: zero/zero is\n"
+        "                      silently discarded by real VMS session control)\n"
         "  --cterm-accept-test run the INBOUND SET HOST acceptance and exit: a\n"
         "                      real connect to Session Control object 42 is\n"
         "                      dispatched through the executive ($CREPRC\n"
@@ -2212,6 +2324,7 @@ int main(int argc, char **argv)
     int self_test = 0;
     int nsp_self_test = 0;
     int sethost_self_test = 0;
+    int sethost_srccode_test = 0;
     int cterm_accept_test = 0;
     int isolation_test = 0;
     int cterm_server = 0;
@@ -2236,6 +2349,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--self-test"))     self_test = 1;
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
+        else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
         else if (!strcmp(argv[i], "--isolation-test")) isolation_test = 1;
         else if (!strcmp(argv[i], "--cterm-server")) cterm_server = 1;
@@ -2266,6 +2380,8 @@ int main(int argc, char **argv)
         return run_nsp_selftest();
     if (sethost_self_test)
         return run_sethost_selftest();
+    if (sethost_srccode_test)
+        return run_sethost_srccode_selftest();
     if (cterm_accept_test)
         return run_cterm_accept_test();
     if (isolation_test)

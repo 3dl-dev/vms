@@ -124,3 +124,24 @@ if(OVMX_DAP_SANITIZE_OK)
     target_link_options(test_dnet_routing_fuzz PRIVATE -fsanitize=address,undefined)
 endif()
 add_test(NAME vmsdecnet_routing_fuzz_unit COMMAND test_dnet_routing_fuzz)
+
+# rd vms-0a9: isolation proof of the DECnet router run-mode EMIT path -- the
+# spec-faithful router-hello DECNETD emits in --router mode. Complements the
+# routing_fuzz RECEIVE-path proof above: it round-trips the emitted bytes,
+# asserts the emitted node-type says "router", drives an OVMX endnode's
+# DR-selection with those bytes (the endnode names the router in its rtr field),
+# and fuzzes the ENCODER under adversarial field/cap values + the emitted frame
+# arbitrarily mutated into the receive path (>=100k iters each). Attacker-facing
+# emit path that will one day reach a real VAX endnode, so -- like the fuzz above
+# -- it is built WITH -fsanitize=address,undefined and honours vms-abf's
+# OVMX_FUZZ_REQUIRE_SANITIZERS teeth-enforcement. NO real node is touched (all
+# in-process / OVMX<->OVMX). Links the ENGINE (build_router_hello_frame +
+# rx_frame). Warning-clean under -Werror.
+add_executable(test_dnet_router_emit_fuzz test_dnet_router_emit_fuzz.c)
+target_link_libraries(test_dnet_router_emit_fuzz PRIVATE vmsdecnet_engine)
+target_compile_options(test_dnet_router_emit_fuzz PRIVATE -Werror)
+if(OVMX_DAP_SANITIZE_OK)
+    target_compile_options(test_dnet_router_emit_fuzz PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_router_emit_fuzz PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_router_emit_fuzz_unit COMMAND test_dnet_router_emit_fuzz)

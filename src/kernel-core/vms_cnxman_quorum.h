@@ -85,6 +85,49 @@
 void cnxman_quorum_recompute(struct vms_club *club);
 
 /*
+ * The published formula, split into its two published steps so that every
+ * caller in the executive computes quorum with ONE implementation
+ * (single-ledger; a second copy is how a founding node and a running cluster
+ * come to disagree about what quorum is).
+ *
+ *   cnxman_quorum_cevotes()    p. 7-6 step 2: max{EXPECTED_VOTES; SUM VOTES;
+ *                              Old CEVOTES}, clamped to the CLUB's 16-bit
+ *                              field.
+ *   cnxman_quorum_of_cevotes() p. 7-6 step 3: (CEVOTES + 2) / 2.
+ *
+ * Both are pure arithmetic over values the CALLER has already read from real
+ * state; neither reads or writes a CLUB.
+ */
+uint16_t cnxman_quorum_cevotes(uint16_t old_cevotes, uint32_t expected_votes,
+			       uint32_t sum_votes);
+uint16_t cnxman_quorum_of_cevotes(uint16_t cevotes);
+
+/*
+ * FORMING FROM NOTHING -- does THIS node satisfy quorum on its OWN votes?
+ *
+ * The gate on cluster GENESIS (docs/design-cluster-genesis.md): the documented
+ * connection-manager formation algorithm lets the first node up form a
+ * single-node cluster as the founding member IFF it is a voting node whose own
+ * VOTES already meet the quorum its own EXPECTED_VOTES implies -- p. 7-6's
+ * three steps applied to a proposed set containing only this system.
+ *
+ * Returns nonzero when the node may found, and writes the quorum figure it was
+ * judged against to *out_quorum (0 and "no" for a NULL cluster or VOTES == 0).
+ * Reads nothing but real executive state: this node's SYSGEN VOTES /
+ * EXPECTED_VOTES and the CLUB's own Old CEVOTES.
+ *
+ * INV-6, and the reason this predicate is a function rather than an `if` at
+ * the one call site: the CSID a founding node mints is the one value in the
+ * whole stack that cannot be learned from anybody, so the condition that
+ * permits minting it is load-bearing and is proved on its own
+ * (tests/cluster/host/test_cnxman_genesis.c and its negctl). The predecessor
+ * of this stack defaulted the local CSID to 1 unconditionally and became a
+ * phantom cluster of one; the difference is exactly this function.
+ */
+int cnxman_quorum_own_votes_suffice(const struct vms_cluster *cl,
+				    uint16_t *out_quorum);
+
+/*
  * This node's own TRACKED QDSKVOTES (its SYSGEN quorum-disk vote count,
  * learned into the local CSB at cnxman_club_init() time -- always valid once
  * the CLUB exists). NOT folded into cevotes/quorum/quorum_lost -- see the

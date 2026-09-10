@@ -49,13 +49,80 @@ static int quorum_csb_present(const struct vms_csb *csb)
 	return csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN;
 }
 
+/*
+ * p. 7-6 step 2 as ARITHMETIC, with nothing read from a CLUB: New CEVOTES =
+ * max{EXPECTED_VOTES; SUM VOTES; Old CEVOTES}. It lives here, as one function
+ * two callers share, because the founding predicate below has to apply exactly
+ * the formula a running cluster's recompute applies -- a second copy of it is
+ * how a node ends up founding on a quorum the rest of the executive would not
+ * have agreed to.
+ */
+uint16_t cnxman_quorum_cevotes(uint16_t old_cevotes, uint32_t expected_votes,
+			       uint32_t sum_votes)
+{
+	uint32_t cevotes = (uint32_t)old_cevotes;
+
+	if (expected_votes > cevotes)
+		cevotes = expected_votes;
+	if (sum_votes > cevotes)
+		cevotes = sum_votes;
+	if (cevotes > 0xffffu)
+		cevotes = 0xffffu;  /* the CLUB field is 16 bits; VMS's own
+				     * VOTES/EXPECTED_VOTES SYSGEN params are
+				     * themselves 16-bit, so this clamp never
+				     * actually triggers */
+	return (uint16_t)cevotes;
+}
+
+/* p. 7-6 step 3: QUORUM = (New CEVOTES + 2) / 2. The ONE spelling of it. */
+uint16_t cnxman_quorum_of_cevotes(uint16_t cevotes)
+{
+	return (uint16_t)(((uint32_t)cevotes + 2u) / 2u);
+}
+
+/*
+ * THE FOUNDING PREDICATE (vms_cnxman_quorum.h SS "FORMING FROM NOTHING").
+ *
+ * Read entirely from executive state: this node's own SYSGEN VOTES and
+ * EXPECTED_VOTES (FC-P0.10, loaded before CLUSTER_START) and the CLUB's own
+ * Old CEVOTES, through the same two functions above that every recompute
+ * uses. Nothing about a peer is assumed: the sum of votes in the proposed set
+ * is this node's own VOTES, because the proposed set is this node alone.
+ *
+ * VOTES == 0 is refused FIRST and on its own terms. A non-voting node can
+ * never satisfy quorum by itself, and reaching the arithmetic with a zero
+ * would let an EXPECTED_VOTES of 0 (a cluster nobody configured) produce
+ * quorum 1 > 0 and still refuse -- correct, but by accident. The explicit
+ * refusal is what makes "a VOTES=0 node never founds" a property of this
+ * function rather than of the numbers it happens to be handed.
+ */
+int cnxman_quorum_own_votes_suffice(const struct vms_cluster *cl,
+				    uint16_t *out_quorum)
+{
+	uint16_t cevotes;
+	uint16_t quorum;
+
+	if (out_quorum != NULL)
+		*out_quorum = 0u;
+	if (cl == NULL || cl->params.votes == 0u)
+		return 0;
+
+	cevotes = cnxman_quorum_cevotes(cl->club.cevotes,
+					(uint32_t)cl->params.expected_votes,
+					(uint32_t)cl->params.votes);
+	quorum = cnxman_quorum_of_cevotes(cevotes);
+	if (out_quorum != NULL)
+		*out_quorum = quorum;
+	return (uint32_t)cl->params.votes >= (uint32_t)quorum;
+}
+
 void cnxman_quorum_recompute(struct vms_club *club)
 {
 	uint32_t i;
 	uint32_t max_expected = 0u;
 	uint32_t sum_votes = 0u;
 	uint32_t present_votes = 0u;
-	uint32_t new_cevotes;
+	uint16_t new_cevotes;
 
 	if (club == NULL)
 		return;
@@ -78,20 +145,16 @@ void cnxman_quorum_recompute(struct vms_club *club)
 	 * persisted field back into the max{}, rather than keeping a separate
 	 * running-max cache, is what makes the value never decrease on its
 	 * own (pp. 7-10/7-11) with no extra bookkeeping to keep in step.
+	 *
+	 * The max{} and the (CEVOTES+2)/2 are cnxman_quorum_cevotes() and
+	 * cnxman_quorum_of_cevotes() above -- the same two the founding
+	 * predicate uses, so there is exactly one spelling of each.
 	 */
-	new_cevotes = (uint32_t)club->cevotes;
-	if (max_expected > new_cevotes)
-		new_cevotes = max_expected;
-	if (sum_votes > new_cevotes)
-		new_cevotes = sum_votes;
-	if (new_cevotes > 0xffffu)
-		new_cevotes = 0xffffu;  /* the CLUB field is 16 bits; VMS's own
-					 * VOTES/EXPECTED_VOTES SYSGEN params
-					 * are themselves 16-bit, so this clamp
-					 * never actually triggers */
+	new_cevotes = cnxman_quorum_cevotes(club->cevotes, max_expected,
+					    sum_votes);
 
-	club->cevotes = (uint16_t)new_cevotes;
-	club->quorum = (uint16_t)((new_cevotes + 2u) / 2u);
+	club->cevotes = new_cevotes;
+	club->quorum = cnxman_quorum_of_cevotes(new_cevotes);
 	club->expected_votes = (uint16_t)max_expected;
 	club->quorum_lost = (uint8_t)(present_votes < (uint32_t)club->quorum);
 

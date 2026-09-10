@@ -49,6 +49,25 @@
 #include "dnet_router_hello.h"
 #include "dnet_adjacency.h"
 
+/* rd vms-abf: detect whether AddressSanitizer is actually compiled in. The
+ * -fsanitize flags are applied only if the CheckCSourceCompiles probe in
+ * CMakeLists succeeds; a CI image lacking the ASan runtime would silently
+ * disable them, leaving this crash-vector proof TOOTHLESS while still passing.
+ * When OVMX_FUZZ_REQUIRE_SANITIZERS is set (the gated CI leg sets it), the test
+ * HARD-FAILS unless ASan is active -- a toothless run reds instead of silently
+ * re-opening the receive-path crash vector. */
+#if defined(__SANITIZE_ADDRESS__)
+#  define OVMX_FUZZ_ASAN_ACTIVE 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define OVMX_FUZZ_ASAN_ACTIVE 1
+#  else
+#    define OVMX_FUZZ_ASAN_ACTIVE 0
+#  endif
+#else
+#  define OVMX_FUZZ_ASAN_ACTIVE 0
+#endif
+
 /* Iteration counts (each >= the 200k the item mandates; sized so the whole
  * ctest runs well under 60s even under ASan+UBSan -- see the measured runtime
  * reported in the item). */
@@ -462,8 +481,21 @@ static void liveness_router_hello_roundtrip(void)
 int main(void)
 {
     printf("test_dnet_routing_fuzz: DECnet routing receive-path fuzz (rd vms-aac0)\n");
-    printf("  base seed = 0x%016llx (replayable); built with -fsanitize=address,undefined\n",
-           (unsigned long long)BASE_SEED);
+    printf("  base seed = 0x%016llx (replayable); AddressSanitizer %s\n",
+           (unsigned long long)BASE_SEED,
+           OVMX_FUZZ_ASAN_ACTIVE ? "ACTIVE (teeth on)" : "NOT active (no teeth)");
+
+    /* rd vms-abf: in the gated CI leg (OVMX_FUZZ_REQUIRE_SANITIZERS=1), a run
+     * without ASan has no teeth -- an over-read would pass silently. Red loudly
+     * instead of re-opening the crash vector unnoticed. */
+    const char *require_san = getenv("OVMX_FUZZ_REQUIRE_SANITIZERS");
+    if (require_san && require_san[0] && !OVMX_FUZZ_ASAN_ACTIVE) {
+        fprintf(stderr,
+                "test_dnet_routing_fuzz: FAIL -- OVMX_FUZZ_REQUIRE_SANITIZERS is set but "
+                "this binary was built WITHOUT AddressSanitizer, so the receive-path "
+                "crash-vector proof has NO TEETH. Refusing to pass toothless (rd vms-abf).\n");
+        return 1;
+    }
 
     fuzz_router_hello();
     fuzz_endnode_hello();

@@ -937,6 +937,16 @@ static int cm_csid_shape_ok(uint32_t v)
 	       (lo & VMS_CM_CSID_SHAPE_LO_MASK) == 0u;
 }
 
+/* The construction itself (VMS_CM_CSID_SYSID_MASK in the header), so the two
+ * places that build a CSID -- the joiner computing its own from a wire-learned
+ * generation, and the founding coordinator minting generation 1 -- cannot
+ * drift apart. */
+uint32_t vms_cm_csid_of(uint32_t generation, uint32_t scssystemid)
+{
+	return ((generation & 0xffffu) << 16) |
+	       (scssystemid & (uint32_t)VMS_CM_CSID_SYSID_MASK);
+}
+
 vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *body,
 						uint32_t len,
 						uint32_t *out_csid)

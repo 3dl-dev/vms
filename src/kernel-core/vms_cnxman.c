@@ -270,6 +270,16 @@ struct vms_cnxman {
 	uint32_t reconnects_issued;
 	uint32_t peers_discovered;   /* E36: CSBs allocated from a real vc_up */
 
+	/* ---- GENESIS's discovery window (sec 7b) ----
+	 * `genesis_armed` is set at CLUSTER_START for a VAXCLUSTER=2 node with
+	 * nowhere to join, and `genesis_due_ms` is that instant plus
+	 * RECNXINTERVAL. Nothing may be FORMED before it elapses: an empty CSB
+	 * table at t=0 means the port has only just come up, not that this node
+	 * is alone. Cleared once a cluster has been founded. */
+	uint32_t genesis_due_ms;
+	uint8_t  genesis_armed;
+	uint8_t  pad_genesis[3];
+
 	/* E78: the p. 2-43 receive-buffer ledger, counted where it is paid. */
 	uint32_t credits_returned;        /* buffers really released to SCS   */
 	uint32_t credit_returns_refused;  /* no CDT, or nothing was held      */
@@ -1639,6 +1649,125 @@ static int cnxman_join_drive(struct vms_cnxman *cn)
 }
 
 /* ==========================================================================
+ * 7b. GENESIS -- "waiting to FORM or join an OpenVMS Cluster", the FORM half
+ *     (docs/design-cluster-genesis.md)
+ *
+ * A node needs a CSID to coordinate and only ever LEARNS one from a
+ * coordinator's op-0x06, so unless somebody may found, nobody can and two
+ * fresh executives wait for each other forever. The published formation
+ * algorithm says who may: the first node up whose OWN votes satisfy quorum.
+ * What it forms is an ORDINARY VMScluster -- the systems that join it
+ * afterwards, OVMX or real VAX, arrive on the ordinary join path.
+ *
+ * NOTHING HERE DECIDES QUORUM OR MEMBERSHIP. This section is only the
+ * SITUATIONAL half -- may this node ask at all, and has it waited long enough
+ * to have heard anybody who is out there -- and cnxman_coord_found()
+ * (vms_cnxman_coord_fsm.c SS8b) is the substantive gate and the actor: it
+ * applies the votes predicate, mints the CSID, and drives the SAME
+ * coordinator/phase2 chain a real admission runs. Every answer below is a read
+ * of executive state.
+ * ========================================================================== */
+
+/*
+ * THE DISCOVERY WINDOW, and why founding is not attempted at CLUSTER_START.
+ *
+ * "There is nobody to join" is only true if this node waited long enough to
+ * hear somebody. At CLUSTER_START the port has just come up: a member's HELLO
+ * has not been heard, no channel has formed, no VC is open, so the CSB table
+ * is legitimately empty -- and a node that founded on the strength of that
+ * emptiness would form a singleton beside a real VAX it was about to discover.
+ * That is the collision this window exists to prevent.
+ *
+ * Its length is RECNXINTERVAL, taken from the CLUB (SYSGEN's own value, or the
+ * published 20 s default cnxman_club_init() recorded as defaulted). Not a
+ * timer of this layer's invention: RECNXINTERVAL is precisely the executive's
+ * configured answer to "how long before a system's absence is real", and a
+ * founding decision may not be quicker to write a system off than the
+ * connection manager already is. The wait is spent doing the discovery it is a
+ * wait for -- cnxman_discover_peers() runs on every one-second beat.
+ */
+static void cnxman_genesis_arm(struct vms_cnxman *cn)
+{
+	uint32_t secs = cn->cl->club.recnxinterval;
+
+	cn->genesis_due_ms = cnxman_ops_now_ms(cn) + (secs * 1000u);
+	cn->genesis_armed = 1u;
+}
+
+static int cnxman_genesis_window_elapsed(struct vms_cnxman *cn)
+{
+	if (!cn->genesis_armed)
+		return 0;
+	return (int32_t)(cnxman_ops_now_ms(cn) - cn->genesis_due_ms) >= 0;
+}
+
+/*
+ * The situational gate. Every clause is a reason not to ASK, and each one is
+ * silent: none of them is an error, and a node that is simply not a founder
+ * must not say so once a second.
+ *
+ *   VAXCLUSTER == 2 ONLY. "Always a member" is the configuration that says
+ *   this node is to be in a cluster whether or not one is already there, and
+ *   forming one is how that is honoured when none is. VAXCLUSTER=1 means "a
+ *   member only when a cluster is PRESENT" -- from cold there is none present,
+ *   so a =1 node stays STANDALONE and never founds; it joins one that appears.
+ *
+ *   A JOIN IN FLIGHT, or a CSID already held, or membership already reached:
+ *   this node's identity is somebody else's to give, and asking again would at
+ *   best be noise.
+ *
+ *   A TARGET TO JOIN. The same question cnxman_join_drive() asks, asked again
+ *   because a join that could not be STARTED still means there is a system
+ *   there. (cnxman_coord_found() re-checks it against the CLUB itself, so the
+ *   guarantee does not rest on this ordering.)
+ *
+ *   QUORUM BY OWN VOTES, asked here too -- the same one function, not a second
+ *   formula -- so that the node which will never be a founder never reaches
+ *   found()'s refusal line. found() applies it again as the load-bearing gate.
+ */
+static int cnxman_genesis_may_ask(struct vms_cnxman *cn)
+{
+	const struct vms_cluster *cl = cn->cl;
+
+	if (cl->params.vaxcluster != 2u)
+		return 0;
+	if (cl->state == VMS_CLUSTER_MEMBER || cl->club.local_csid_valid)
+		return 0;
+	if (cn->join.state != (uint8_t)CNXMAN_JOIN_IDLE)
+		return 0;
+	if (cnxman_join_target_present(cn))
+		return 0;
+	if (!cnxman_quorum_own_votes_suffice(cl, (uint16_t *)0))
+		return 0;
+	return cnxman_genesis_window_elapsed(cn);
+}
+
+/* Returns nonzero iff this node really did become a member of a cluster it
+ * founded -- read back from cl->state, which only cnxman_phase2_commit() ever
+ * sets. */
+static int cnxman_try_genesis(struct vms_cnxman *cn)
+{
+	struct vms_cluster *cl = cn->cl;
+
+	if (!cnxman_genesis_may_ask(cn))
+		return 0;
+	if (cnxman_coord_found(&cn->coord) != 0)
+		return 0;   /* refused, logged and counted inside found() */
+
+	/*
+	 * The founded cluster's quorum figures, recomputed from the CSB table
+	 * phase2 just committed -- the local CSB is SELECTED now, so FC-P3.7's
+	 * walk has a member to count and club->cevotes/quorum/quorum_lost stop
+	 * being the pre-cluster zeroes. Real arithmetic over real state; the
+	 * PROPOSED cells stay untouched, because a founding transition had
+	 * nobody to propose anything to (E3).
+	 */
+	cnxman_quorum_recompute(&cl->club);
+	cn->genesis_armed = 0u;
+	return cl->state == VMS_CLUSTER_MEMBER;
+}
+
+/* ==========================================================================
  * 8. The fork thread's timer work handler (CONTRACT RULE 2: timers RUN here)
  * ========================================================================== */
 
@@ -1715,6 +1844,18 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 */
 		(void)cnxman_join_drive(cn);
 		/*
+		 * GENESIS, on the same beat and in the same order as at
+		 * CLUSTER_START: join what is there, and only if there is
+		 * nothing there -- and there has been nothing there for the
+		 * whole discovery window -- form one. This is where the FORM
+		 * half of "waiting to form or join an OpenVMS Cluster" is
+		 * actually decided; cnxman_start_join_or_wait() only ARMS the
+		 * window, because at CLUSTER_START nobody has had time to be
+		 * heard yet. Silent and cheap on every beat that is not a
+		 * founding one (cnxman_genesis_may_ask()).
+		 */
+		(void)cnxman_try_genesis(cn);
+		/*
 		 * E73: and on the SAME beat, tell every member this node has
 		 * an OPEN VMS$VAXcluster connection to what this node IS.
 		 * That is a per-CSB obligation of a connection manager, not a
@@ -1783,12 +1924,18 @@ static uint16_t cnxman_vc_grant(const struct vms_cluster *cl)
  *     WAITING -- VMS's own "waiting to form or join an OpenVMS Cluster" on
  *     OPA0:, which this emits once. The state stays JOINING and the sweep
  *     keeps looking. Non-blocking: SYSINIT's wait is a wait for an EVENT, not
- *     a sleep inside an ioctl, and the event is the peer sweep.
+ *     a sleep inside an ioctl, and the event is the peer sweep. And it is the
+ *     one setting that may FORM: "always a member" is what makes founding the
+ *     honouring of a configuration rather than an invention (sec 7b). A =1
+ *     node never founds -- "when a cluster is PRESENT" is false from cold.
  *
  * NOTHING HERE FABRICATES A MEMBERSHIP. Only phase2 ever sets
  * VMS_CLUSTER_MEMBER, and only from a real membership record naming this
- * node's own SCSSYSTEMID (integration note E30). This function's strongest
- * output is JOINING.
+ * node's own SCSSYSTEMID (integration note E30). That holds for GENESIS too:
+ * a founding node reaches MEMBER through the SAME coordinator/phase2 chain a
+ * joiner does (cnxman_try_genesis() above), never by assignment here. Absent a
+ * cluster to join and absent quorum by this node's own votes, this function's
+ * strongest output is still JOINING.
  */
 static void cnxman_start_join_or_wait(struct vms_cnxman *cn)
 {
@@ -1802,6 +1949,15 @@ static void cnxman_start_join_or_wait(struct vms_cnxman *cn)
 		cl->state = VMS_CLUSTER_JOINING;
 		cnxman_ops_log(cn, "%CNXMAN, waiting to form or join an "
 				   "OpenVMS Cluster");
+		/*
+		 * ... and the FORM half of that line is now a real
+		 * possibility, not just words: arm the discovery window, which
+		 * the reconnect beat spends looking for somebody to join and
+		 * at the end of which -- still alone, and with quorum by this
+		 * node's own votes -- cnxman_try_genesis() forms one. NOT
+		 * attempted here: nothing has had time to be heard yet.
+		 */
+		cnxman_genesis_arm(cn);
 	} else {
 		cl->state = VMS_CLUSTER_STANDALONE;
 	}

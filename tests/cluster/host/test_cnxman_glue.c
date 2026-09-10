@@ -719,6 +719,53 @@ static void test_glue_bindings(void)
 	check_has("vms_ast_notify_arrival(proc)",
 		  "... and wakes a hibernating reader exactly like it");
 
+	/*
+	 * GENESIS (docs/design-cluster-genesis.md). The DECISION is pure
+	 * kernel-core and is proved by execution at rung 1
+	 * (test_cnxman_genesis.c and its negctl, against
+	 * vms_cnxman_quorum.c + vms_cnxman_coord_fsm.c). What only a source
+	 * scan can hold is what THIS un-linkable file does around it: WHEN the
+	 * executive is allowed to ask, and that it never mints anything itself.
+	 *
+	 * Both are interop-safety properties, not conveniences. A node that
+	 * founded before it could have heard a real VAX would form a singleton
+	 * beside a live cluster; a glue that learned a CSID of its own would be
+	 * the phantom-cluster-of-one default all over again.
+	 */
+	check_has("if (cnxman_join_drive(cn))\n\t\treturn;\n\n"
+		  "\tif (cl->params.vaxcluster == 2u) {",
+		  "GENESIS: CLUSTER_START tries to JOIN and then, finding "
+		  "nobody, does NOT found -- nothing has had time to be heard");
+	check_has("cnxman_genesis_arm(cn);",
+		  "... it ARMS the discovery window instead");
+	check_has("uint32_t secs = cn->cl->club.recnxinterval;",
+		  "GENESIS: the window is RECNXINTERVAL -- the executive's own "
+		  "configured answer to \"how long before an absence is real\", "
+		  "never a timer this layer invented");
+	check_has("(void)cnxman_join_drive(cn);\n\t\t/*\n\t\t * GENESIS,",
+		  "GENESIS: on the beat the JOIN is driven FIRST and the "
+		  "founding attempt follows it -- join what is there, form only "
+		  "when there is nothing");
+	check_has("if (cl->params.vaxcluster != 2u)\n\t\treturn 0;",
+		  "GENESIS: only VAXCLUSTER=2 (\"always a member\") may form "
+		  "one; =1 is \"a member when a cluster is PRESENT\", and from "
+		  "cold there is none");
+	check_has("if (cnxman_join_target_present(cn))\n\t\treturn 0;",
+		  "GENESIS: a system this node could join -- a real VAX "
+		  "included -- means JOIN, never FORM");
+	check_has("if (!cnxman_quorum_own_votes_suffice(cl, (uint16_t *)0))",
+		  "GENESIS: quorum by this node's own votes is asked through "
+		  "the ONE shared predicate, not a second formula here");
+	check_has("return cnxman_genesis_window_elapsed(cn);",
+		  "GENESIS: ... and only once the discovery window has elapsed");
+	check_absent("cnxman_club_learn_local_csid",
+		     "GENESIS / INV-6: this glue NEVER learns or mints a CSID "
+		     "itself -- cnxman_coord_found() does, behind the votes "
+		     "gate, exactly where a joiner's learned one lands");
+	check_has("return cl->state == VMS_CLUSTER_MEMBER;",
+		  "GENESIS: whether a cluster was founded is READ BACK from "
+		  "the state only cnxman_phase2_commit() ever sets");
+
 	/* CLUB/CSB query -- CLUSTER_DIAG_CSB, SHOW CLUSTER, $GETSYI. */
 	check_has("int cnxman_get_club(struct vms_cluster *cl, struct vms_club_view *out)",
 		  "cnxman_get_club() is implemented");

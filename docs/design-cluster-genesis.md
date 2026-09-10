@@ -172,6 +172,47 @@ tightened, so it was gated. Baron's ruling:
   dir-ownership, ec75 deadlock) with every result read from **real executive
   state on both nodes** (INV-6) — restoring the retired `verified`.
 
+## As built (implementation deltas, operator correction 2026-09-10)
+
+The mechanism above is what shipped. Two clauses of the predicate were
+**tightened** on the operator's clustering-robustness correction — genesis is
+"OVMX can legitimately be the FIRST member of a normal VMScluster", never a
+second, OVMX-only kind of cluster, so nothing may risk a singleton forming
+beside a live coordinator (a real VAX included):
+
+1. **VAXCLUSTER = 2 only** (the note above said `>= 1`). "Always a member" is
+   the configuration that asks for a cluster whether or not one is present, so
+   forming one honours it. VAXCLUSTER = 1 is "a member only when a cluster is
+   PRESENT" — from cold there is none present, so a =1 node stays STANDALONE
+   and joins one when it appears. Strictly fewer founds than the note's rule.
+
+2. **A discovery window before the first attempt.** Founding is NOT attempted
+   at CLUSTER_START: the port has only just come up, so an empty CSB table then
+   means "nobody has been heard yet", not "nobody is there". `CLUSTER_START`
+   arms a window of **RECNXINTERVAL** — the executive's own configured answer
+   to "how long before a system's absence is real", not a new timer — and the
+   once-a-second reconnect beat (which is where discovery already runs) makes
+   the attempt when it elapses, still finding nobody. The beat also re-tries
+   forever, so a node that could not found at first (a peer came and went) can
+   still form later, which is what "waiting to form or join" means.
+
+Two further guarantees are enforced **inside** `cnxman_coord_found()` rather
+than only in the caller's ordering, so they cannot be lost to a future call
+site: any non-local CSB with a known SCSSYSTEMID (discovered OR admitted) makes
+this node JOIN rather than form (`genesis_refused_peer`), and a CSID whose CSV
+slot the grounded nodemap byte cannot name is refused rather than minted.
+
+There is **no founding-only membership path**: `cnxman_coord_found()` mints
+through `cnxman_club_learn_local_csid()` (the same and only setter the op-0x06
+learn path uses), opens an ordinary class-ADD transition through
+`coord_open_transition()`, and commits through `cnxman_phase2_commit()` — the
+same functions an admission from a real VAX runs. With no participants the
+transition emits **zero frames** (the existing degenerate 12 x (M-1) = 0 path).
+
+Tests: `tests/cluster/host/test_cnxman_genesis.c` (predicate truth table +
+end-to-end founding) and `tests/cluster/host/test_cnxman_genesis_negctl.c`
+(every refusal, each with the CLUB compared byte-for-byte before and after).
+
 ## References
 
 - `docs/compat/facilities/cluster-dlm.yaml` (the four downgraded rows + wire_format)

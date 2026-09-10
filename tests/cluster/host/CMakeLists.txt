@@ -252,6 +252,17 @@ cluster_host_test(test_codec_applmsg test_codec_applmsg.c)
 cluster_host_cnxman_test(test_cnxman_quorum      test_cnxman_quorum.c)
 cluster_host_cnxman_test(test_cluster_api_getsyi test_cluster_api_getsyi.c)
 
+# ---- Cluster GENESIS (docs/design-cluster-genesis.md): the founding path and,
+# more importantly, its refusals. Both join the SAME cluster_host_cnxman anchor
+# every sibling connection-manager test uses -- no allowlist, no per-test
+# exemption: the founding predicate and the coordinator's founding entry are
+# pure kernel-core (vms_cnxman_quorum.c, vms_cnxman_coord_fsm.c), so the whole
+# decision is provable here in milliseconds against the SHIPPING TUs.
+# The negctl is the INV-6 teeth: a node that may not found mints nothing, and
+# the CLUB is compared byte-for-byte before and after every refusal.
+cluster_host_cnxman_test(test_cnxman_genesis        test_cnxman_genesis.c)
+cluster_host_cnxman_test(test_cnxman_genesis_negctl test_cnxman_genesis_negctl.c)
+
 # ---- FC-P0.10: cluster SYSGEN parameters loaded into struct vms_cluster ----
 # Same host-pure discipline: vms_cluster_sysgen.c takes no kernel header and no
 # SS$_ vocabulary, so its negctl (VAXCLUSTER >= 1 with no SCSNODE -> refused,

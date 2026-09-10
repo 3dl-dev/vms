@@ -245,7 +245,10 @@ enum cnxman_coord_refusal {
 					  * assume 8 slots")                 */
 	CNXMAN_COORD_REF_NO_NODEMAP = 4, /* a member's slot is outside that
 					  * byte: an open would LOSE it      */
-	CNXMAN_COORD_REF_BUSY       = 5  /* we are already coordinating one   */
+	CNXMAN_COORD_REF_BUSY       = 5, /* we are already coordinating one   */
+	CNXMAN_COORD_REF_NO_QUORUM  = 6  /* GENESIS only: this node's own
+					  * VOTES do not satisfy quorum, so it
+					  * may not FORM a cluster (p. 7-6)   */
 };
 
 /* ==========================================================================
@@ -371,6 +374,15 @@ struct cnxman_coord {
 	uint32_t unknown_peer;         /* a frame from no CSB we could resolve */
 	uint32_t ignored_events;       /* no table cell: ignored and COUNTED   */
 
+	/* ---- GENESIS (SS9), both outcomes counted from a real call ---- */
+	uint32_t genesis_opens;        /* founding transitions really opened   */
+	uint32_t genesis_refused_noquorum; /* asked to found without quorum by
+					    * its own votes -- REFUSED, and the
+					    * count is the anti-LARP tripwire  */
+	uint32_t genesis_refused_peer;     /* asked to found with another system
+					    * present -- REFUSED: this node
+					    * JOINS, it does not compete       */
+
 	/* The one scratch buffer every built BODY goes through (design sec
 	 * 3.2.4: this FSM emits bodies, never a frame) -- in the context, not
 	 * on the stack: this code runs on a VAX kernel stack. */
@@ -463,6 +475,64 @@ void cnxman_coord_participant_lost(struct cnxman_coord *c, int32_t csb_index);
 /* Abandon the transition in progress (a Phase 1 rejection, or the glue
  * shutting the stack down). Idempotent; the DLM is told completed = 0. */
 void cnxman_coord_abandon(struct cnxman_coord *c, const char *why);
+
+/* ==========================================================================
+ * 8b. GENESIS -- forming a cluster from nothing (docs/design-cluster-genesis.md)
+ *
+ * The published formation algorithm: the first node up that satisfies quorum
+ * BY ITS OWN VOTES forms a single-node cluster as its founding member and
+ * coordinator, taking cluster generation 1; every later node joins THROUGH it
+ * on the ordinary op-0x02 path. Without this the executive cannot form a
+ * cluster at all -- a node needs a CSID to coordinate, and a CSID is only ever
+ * learned from a coordinator's op-0x06, so two fresh nodes deadlock.
+ *
+ * THIS IS NOT A SECOND KIND OF CLUSTER. What it forms is an ordinary
+ * VMScluster whose first member happens to be this executive; the systems that
+ * join it afterwards -- another OVMX node or a real VAX -- arrive on the SAME
+ * op-0x02 / relay / commit / Phase 1 / GO / barrier path, are admitted by the
+ * SAME coordinator code below, and are committed by the SAME
+ * cnxman_phase2_commit(). There is no founding-only branch anywhere past this
+ * function: it opens a transition and then IS the coordinator, exactly as
+ * being asked by a joiner makes it one.
+ *
+ * WHAT IT IS NOT. It is not "stamp yourself a member". It opens a REAL
+ * transition (class ADD, subject none, nodemap = this node alone) and runs the
+ * SAME Phase 1 / GO / Phase 2 / twelve-step chain every admission runs; the
+ * membership it ends with is set by cnxman_phase2_commit() out of this node's
+ * own CSB, exactly as a joiner's is. With no participants there is nothing to
+ * propose to, so not one frame goes on the wire -- the identical degenerate
+ * path a two-node cluster takes when it loses its peer.
+ *
+ * THE GATE (INV-6, and interop safety). Refused -- minting NOTHING and leaving
+ * this node's state untouched -- unless ALL of: no CSID already learned; no
+ * transition already in progress; a real local CSB; NO OTHER SYSTEM PRESENT AT
+ * ALL (any non-local CSB with a known SCSSYSTEMID, or already SELECTED, means
+ * there is something to JOIN -- a real VAX included -- and this node joins it
+ * instead of forming a competing cluster beside it); the node satisfies quorum
+ * on its own VOTES (cnxman_quorum_own_votes_suffice(), p. 7-6); and the CSID it
+ * would mint is nameable in the grounded nodemap byte. The votes gate is the
+ * load-bearing one for INV-6 -- a VOTES=0 node NEVER founds, however this is
+ * called -- and the peer gate is the load-bearing one for interop. Both
+ * refusals are counted (`genesis_refused_noquorum`, `genesis_refused_peer`).
+ *
+ * WHAT THIS FUNCTION DOES NOT DECIDE: *when* to ask. A booting node must not
+ * conclude "there is nobody here" faster than it can hear somebody -- the
+ * discovery window is the caller's (vms_cnxman.c's cnxman_try_genesis(), which
+ * waits out RECNXINTERVAL of real discovery beats first).
+ *
+ * Returns 0 only when phase2 really committed a membership -- read back from
+ * the executive's own state, never assumed. Nonzero otherwise, with
+ * `last_refusal` naming the reason and one %CNXMAN line saying it out loud.
+ * ========================================================================== */
+
+/* p. 7-25: the CSID sequence starts at 1, and a cluster formed from nothing has
+ * by definition never used this slot before, so a founder is always generation
+ * 1. A RE-formation after total cluster loss would have to advance it, which
+ * needs a generation that survives the loss -- this executive persists none,
+ * and inventing one is what INV-6 forbids (design note, "Generation source"). */
+#define CNXMAN_COORD_GENESIS_GEN 1u
+
+int cnxman_coord_found(struct cnxman_coord *c);
 
 /* ==========================================================================
  * 9. Readback

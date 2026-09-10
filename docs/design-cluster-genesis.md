@@ -1,10 +1,33 @@
-# Design: Executive OVMX-only cluster GENESIS (vms-3c3)
+# Design: Executive cluster GENESIS — OVMX as a first-class founding member (vms-3c3)
 
-**Status:** DESIGN — awaiting operator gate (authenticity call). Prerequisite for
-vms-1ee (real 2-node OVMX↔OVMX DLM proof).
+**Status:** APPROVED (Baron, 2026-09-10) — quorum-grounded gen-1 mint is the
+sanctioned mechanism. Prerequisite for vms-1ee (real 2-node DLM wire proof).
 **Date:** 2026-09-10. **Lane:** cluster.
 
-## The problem: two fresh OVMX executives cannot form a cluster
+## Framing: this is clustering ROBUSTNESS, not a separate platform
+
+The goal is **not** "OVMX-only clustering" (a dangerous framing — it implies a
+divergent OVMX-OVMX platform). The goal is **clustering robustness**: OVMX
+becomes a first-class VMScluster participant that can also be a **founding
+member**, via the *authentic* VMS connection-manager formation algorithm. The
+outcome we want is that **OVMX^n AND mixed (OVMX)^n·(OpenVMS)^m** clusters all
+work. Genesis is "OVMX can legitimately be the first member of a normal
+VMScluster," using the same mechanism a real VAX uses — not a new kind of cluster.
+
+**Two footguns this design actively prevents (hard requirements):**
+1. **No regression to OVMX↔real-VAX interop** (the CN=3 join). With no
+   genesis-eligible config the behavior is byte-identical to today.
+2. **No divergent OVMX-only code path.** `cnxman_try_genesis` reuses the SAME
+   `learn_local_csid` + coordinator + phase2 machinery the interop join uses.
+   And it **never founds a competing cluster** beside a present coordinator: it
+   fires only after `cnxman_join_drive()` finds no one to join, respecting VMS's
+   "waiting to form or join an OpenVMS Cluster" wait window — so an
+   eligible-by-votes OVMX node **joins** a present VAX (or OVMX) coordinator
+   rather than founding a rival singleton. (VAXCLUSTER=1 "when present" never
+   founds from cold; VAXCLUSTER=2 "always" may found only after the wait window
+   with quorum met by its own votes.)
+
+## The problem: a from-nothing cluster has no founder today
 
 The cross-node DLM wire is an OVMX-derived byte layout (Rule 8 — VSI does not
 publish the SCS lock-message layout; see `docs/compat/facilities/cluster-dlm.yaml`
@@ -46,7 +69,7 @@ There is no ioctl/test/lab seam that seeds a CSID (`cluster_api.c` only *reads*
 `local_csid`).
 
 This is **honest, not an overclaim.** The executive never fabricates membership;
-`connection-manager.yaml` makes no `verified` OVMX-only-cluster claim
+`connection-manager.yaml` makes no `verified` OVMX-founded-cluster claim
 (`$join`/`$boot-join` = `implemented`, `$real-vax-join` = `absent`). It is a
 missing *capability*, not an authenticity gap.
 
@@ -99,24 +122,23 @@ coordinate (op-0x02) and emits the op-0x06 the joiner learns its CSID from. The
 whole downstream stack (VC, SYSAP, DLM) is already symmetric, so the DLM proof
 then runs OVMX↔OVMX with no further join work.
 
-## The operator gate (why this is not just mine to build)
+## The operator gate — RESOLVED (Baron, 2026-09-10)
 
-Genesis is a **new externally-visible capability** ("OVMX forms its own
-clusters") and its mint touches the authenticity posture that #1052 tightened.
-The decision reserved to Baron:
+Genesis is a **new externally-visible capability** (OVMX can be the founding
+member of a VMScluster) and its mint touches the authenticity posture that #1052
+tightened, so it was gated. Baron's ruling:
 
-1. **Is quorum-grounded gen-1 founding the sanctioned mechanism?** (Recommended —
-   it is the documented VMS algorithm and INV-6-clean by the votes gate above.)
-2. **Generation source.** Gen 1 for a from-nothing founder is unambiguous. A
+1. **Quorum-grounded gen-1 founding is the SANCTIONED mechanism.** It is the
+   documented VMS formation algorithm and INV-6-clean by the votes gate above.
+2. **Scope: this is a 1.0 HEADLINE** — clustering robustness (OVMX^n and mixed
+   OVMX+OpenVMS), not accept-`implemented`. Build genesis now, then the 2-node
+   DLM proof on top.
+3. **Generation source.** Gen 1 for a from-nothing founder is unambiguous. A
    *re-formation* after total cluster loss should advance the generation; for
-   1.0's OVMX-only lab use, gen-1-from-cold is sufficient. Flag if reformation
-   generation must be persisted.
-3. **Scope for 1.0.** Is OVMX-only clustering a 1.0 headline, or is it acceptable
-   to accept `implemented` on the four cluster-dlm rows for 1.0 and schedule
-   genesis + the 2-node DLM proof as a post-1.0 epic? (vms-1ee already carries
-   this accept-vs-rebuild decision; this note supplies the real cost.)
+   1.0's lab use, gen-1-from-cold is sufficient. Flag if reformation generation
+   must be persisted (tracked, not blocking).
 
-## If sanctioned: implementation + test plan
+## Implementation + test plan
 
 - **Code:** a `cnxman_try_genesis()` guarded by the votes predicate, called from
   `cnxman_start_join_or_wait()` *after* `cnxman_join_drive()` returns false and
@@ -130,6 +152,18 @@ The decision reserved to Baron:
   default).
 - **Host unit:** genesis predicate truth table over (votes, expected_votes) in
   `tests/cluster/host/` (pure, CI-cheap).
+- **Interop-safety (footgun guards — the two Baron flagged):**
+  1. *No competing-cluster:* assert that when a coordinator (VAX or OVMX) is
+     discoverable, an eligible-by-votes node **joins** it and does NOT found a
+     rival singleton — i.e. `cnxman_try_genesis` fires only after
+     `cnxman_join_drive()` finds nothing, and honors the VAXCLUSTER wait window
+     (=1 never founds from cold; =2 founds only after the wait with own-vote
+     quorum).
+  2. *No interop regression:* the OVMX↔real-VAX join path is byte-unperturbed
+     with no genesis-eligible config (the CN=3 join behaves identically). Reuse
+     the existing single code path — genesis is a shared-mechanism addition, not
+     an OVMX-only branch — so this is an assertion + the existing cluster
+     interop/negctl gates staying green, not a new subsystem.
 - **The 2-node proof (vms-1ee):** hermetic QEMU `socket` mcast rig
   (run_dlm_h1_derisk.sh pattern) on the k3s-worker KVM pod (worker exposes
   /dev/kvm+vmx; workshop is OOM-barred by operator directive). Node A: VOTES=1,

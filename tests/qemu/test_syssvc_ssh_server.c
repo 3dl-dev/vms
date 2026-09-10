@@ -52,7 +52,6 @@
 #include "vms_kif.h"
 #include "ssdef.h"        /* SS$_NORMAL */
 #include "vms/logical.h"  /* lnm_* : point SYS$SYSDEVICE at the real system volume */
-#include "sysuaf.h"       /* sysuaf_lookup_st : in-process provisioning diagnostic */
 
 #define EXIT_SKIP   77
 #define SSH_PORT    2223                 /* distinct from the KEX test's 2222 */
@@ -307,21 +306,14 @@ static void password_login_of_valid_user_lands_in_dcl(char *out, size_t outsz)
                    LNM_ATTR_TERMINAL, LNM_MODE_EXEC);
     }
 
-    /* [9cc-diag] Isolate mount-vs-LNM-vs-exec-inheritance IN-PROCESS before the
-     * fork: sysuaf_lookup_st walks the SAME LNM/ACP chain the sshd's
-     * __wrap_getpwnam->sysuaf_lookup uses. rms_st distinguishes a mount/ACP fault
-     * (SS$_NOSUCHDEV / RMS$_FNF) from record-not-found (RMS$_RNF). If this resolves
-     * SYSTEM here, provisioning is correct and any child failure is exec-specific;
-     * if it fails, rms_st names the failing layer. */
-    {
-        sysuaf_record_t drec;
-        uint32_t rms_st = 0;
-        int lk = sysuaf_lookup_st("SYSTEM", &drec, &rms_st);
+    /* [9cc-diag] Confirm the provisioning took (cheap, no extra link): what
+     * SYS$SYSDEVICE resolves to after the flip. The SYSUAF read itself is proven
+     * by the sshd assertions below, not an in-process reader (which would drag
+     * the whole vmsrms+ODS2 codec into this suite and bloat the shared boot
+     * initramfs -- the reason rms_acp_bind is opt-in, not blanket). */
+    if (mgr != NULL) {
         char cur[256]; uint16_t cl = 0; uint32_t ca = 0;
-        printf("  [9cc-diag] in-process sysuaf_lookup_st(\"SYSTEM\") rc=%d rms_st=0x%08x\n",
-               lk, rms_st);
-        if (mgr != NULL &&
-            lnm_translate(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", cur, sizeof(cur),
+        if (lnm_translate(mgr, LNM_SYSTEM_TABLE, "SYS$SYSDEVICE", cur, sizeof(cur),
                           &cl, &ca) == SS$_NORMAL && cl < sizeof(cur)) {
             cur[cl] = '\0';
             printf("  [9cc-diag] SYS$SYSDEVICE now resolves to '%s'\n", cur);
@@ -477,12 +469,17 @@ int main(void)
     CHECK(!proc_has_afunix_socket(sd),
           "no AF_UNIX socket fd in the wrapped sshd process -- its listener, accepted connection, and materialized session fd are executive-resident, no fabricated socketpair (vms-0cd / INV-6)");
 
-    /* vms-0cd 3c: SYSUAF password auth is wired and fail-closed. A running
-     * wrapped sshd already proves the sys_auth_passwd shim linked (the build
-     * used -DCUSTOM_SYS_AUTH_PASSWD, which drops OpenSSH's own definition); this
-     * drives it: a password login for an unknown SYSUAF user is REFUSED. */
+    /* vms-0cd 3c: a PASSWORD login for an unknown SYSUAF user is REFUSED. NOTE
+     * (rd vms-9cc, the vacuous-negative guard): this refusal is only MEANINGFUL
+     * paired with the positive below. Until vms-9cc force-bound the RMS-ACP seam
+     * (ovmx_sshd_rms_bind.o), the wrapped sshd's SYSUAF reader was NULL and
+     * refused EVERY user without opening the file -- so this passed vacuously. The
+     * positive assertion below (a REAL SYSUAF user SYSTEM is Purdy-authenticated
+     * and lands in DCL over the SAME sshd) is what proves the reader actually
+     * opened SYSUAF; with that green, this refusal is genuinely "user absent from
+     * a read SYSUAF," not "reader inert." The two are asserted together. */
     CHECK(password_login_of_unknown_user_is_refused(),
-          "a PASSWORD login for a user with no SYSUAF record is REFUSED by the wrapped sshd -- SYSUAF/Purdy auth is wired and fails closed, no fabricated accept (vms-0cd 3c / INV-6)");
+          "a PASSWORD login for a user with no SYSUAF record is REFUSED by the wrapped sshd -- SYSUAF/Purdy auth fails closed (non-vacuous: the SYSTEM positive below proves the reader opened SYSUAF) (vms-0cd 3c / vms-9cc / INV-6)");
 
     /* vms-0cd 3d (rd vms-9cc): the POSITIVE capstone -- a VALID SYSUAF user
      * (SYSTEM/MANAGER) authenticates by PASSWORD over the wrapped sshd and lands

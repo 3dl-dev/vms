@@ -536,7 +536,7 @@ def _scrub(s: str) -> str:
 
 # Editorial one-liner for the next in-progress point release (INV-0 curation, like
 # RELEASE_NOTES). Version is DERIVED (latest tag + 1); this is just the theme.
-NEXT_POINT_THEME = "Cluster genesis (OpenVMX forms a cluster as a founding member), SSH-to-DCL over the executive, and DECnet routing hardening — landing now."
+NEXT_POINT_THEME = "Actively landing on the current line."
 
 
 def _next_point_release(releases: list[dict]):

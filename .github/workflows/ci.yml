@@ -8196,6 +8196,53 @@ jobs:
         run: ONLY_SUITE=test_arith_hparith tools/cross-alpha/run-syssvc-tests-alpha.sh
 
   # -----------------------------------------------------------------------
+  # alpha-accvio-dispatch (rd vms-cc8, CHF rung-4, gap G6). The hardware sibling
+  # of alpha-arith-hparith: a REAL Alpha access violation -- wild write ->
+  # SIGSEGV -> SS$_ACCVIO raised through the SAME dispatch_condition() -- searched
+  # through a SYS$SETEXV primary vector + the frame-handler chain in the authentic
+  # order and recovered via SYS$UNWIND (rung-2), PROVEN against a real
+  # qemu-system-alpha kernel trap path under -static (test_accvio_dispatch).
+  # Same tiering rationale as alpha-arith-hparith: Alpha-only, named off the
+  # test_syssvc_ glob, HEAVY-EMULATOR TIER (schedule || workflow_dispatch) since a
+  # full Alpha cross-build + boot is ~25-30 min of pure TCG. ONLY_SUITE runs
+  # exactly this one suite for a deterministic green-by-SHA reap; the conductor
+  # fires it on the frozen SHA and the nightly schedule catches drift on main.
+  # -----------------------------------------------------------------------
+  alpha-accvio-dispatch:
+    name: OVMX/Alpha access violation raises SS$_ACCVIO over the CHF (vms-cc8)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "ACCVIO gate — boot qemu-system-alpha, wild write -> SIGSEGV -> SS$_ACCVIO via dispatch_condition -> SYS$SETEXV primary vector + frame handler + SYS$UNWIND recovery, under -static"
+        run: ONLY_SUITE=test_accvio_dispatch tools/cross-alpha/run-syssvc-tests-alpha.sh
+
+  # -----------------------------------------------------------------------
   # alpha-syssvc-suite (rd vms-341, epic vms-8954). The STANDING green-by-SHA
   # proof that the OVMX public sys$ API tier (the whole test_syssvc_*/
   # test_imgact_* suite) RUNS LP64 under a REAL qemu-system-alpha kernel over

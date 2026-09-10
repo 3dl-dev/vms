@@ -60,20 +60,6 @@
 #include "lib$routines.h"
 
 /* ================================================================
- * SYS$GL_CALL_HANDL - exception-dispatcher sentinel cell (vms-8e8c, CHF
- * rung-5). libgcc/config/alpha/vms-unwind.h's DENOTES_EXC_DISPATCHER(PV)
- * compares a procedure value against the ADDRESS of this system global
- * (`extern int SYS$GL_CALL_HANDL;`). The real (linkable) definition lives here
- * so the symbol RESOLVES when the port's libgcc EH is linked against libvms.
- * COMPILE-SURFACE: only the definition (its ADDRESS) is required by this
- * increment; making a genuine dispatcher frame's procedure value compare equal
- * to this cell is the deferred runtime half (Alpha rail + vms-6fe/vms-e16),
- * which is why the cell is not yet populated by OVMX's own dispatch path.
- * ================================================================ */
-
-int SYS$GL_CALL_HANDL;
-
-/* ================================================================
  * Thread-local PDSC resolver (pc -> procedure descriptor).
  * ================================================================ */
 

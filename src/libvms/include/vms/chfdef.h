@@ -118,12 +118,18 @@ typedef struct chf$mech_array   CHF$MECH_ARRAY;
  *   #define DENOTES_EXC_DISPATCHER(PV) ((PV) == (ADDR)(REG) SYS$GL_CALL_HANDL)
  * comparing the procedure value against the address of this system global
  * cell. vms-unwind.h already declares it (`extern int SYS$GL_CALL_HANDL;`); it
- * is re-declared here so the CHF include surface carries the name, and a real
- * (linkable) definition lives in src/libvms/rtl/lib_invo.c so the symbol
- * RESOLVES when libgcc EH is linked. COMPILE-SURFACE: this increment only
- * requires the name to resolve; the runtime fidelity (a procedure value
- * actually comparing equal to this cell for genuine dispatcher frames) is the
- * deferred half, gated on the Alpha rail + vms-6fe/vms-e16.
+ * is re-declared here so the CHF include surface carries the name. That extern
+ * declaration is ALL the compile-surface increment needs: the include-surface
+ * proof compiles vms-unwind.h to assembly (-S) and never links.
+ *
+ * The real (linkable) DEFINITION is deliberately NOT emitted by this increment.
+ * A non-static global in libvms is auto-exported as a universal symbol of
+ * LIBVMS$SHR, whose vector is frozen (single-ledger / vms-1c86); adding one is
+ * an ABI expansion out of scope here. The cell is provided by the EH-carrying
+ * image at the deferred runtime rung (Alpha rail + vms-6fe/vms-e16), which is
+ * also where a genuine dispatcher frame's procedure value is made to compare
+ * equal to it - the fidelity half that a compile-surface increment does not
+ * attempt.
  */
 extern int SYS$GL_CALL_HANDL;
 

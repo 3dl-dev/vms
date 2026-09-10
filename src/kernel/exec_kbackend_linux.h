@@ -1186,6 +1186,32 @@ static int vms_lan_rx_thunk(struct sk_buff *skb, struct net_device *dev,
 	(void)dev;
 	(void)orig_dev;
 
+	/*
+	 * A packet_type handler is NOT the exclusive owner of the skb it is
+	 * handed. __netif_receive_skb_core delivers one frame to EVERY matching
+	 * handler, and every handler but the last receives it through
+	 * deliver_skb(), which takes an extra reference first -- so the moment
+	 * anything else is also listening on this interface (an AF_PACKET tap,
+	 * a bridge port, another protocol), this skb arrives SHARED. Pulling or
+	 * linearizing a shared skb is not a soft failure: pskb_expand_head()
+	 * asserts BUG_ON(skb_shared(skb)) and takes the whole host kernel down.
+	 *
+	 * MEASURED (rd vms-f6b, the 2-node genesis rig): with a passive
+	 * AF_PACKET capture bound to the same NIC, both guests panicked --
+	 * "kernel BUG at net/core/skbuff.c:2138 ... vms_lan_rx_thunk [vms]" --
+	 * on the FIRST 0x6007 frame they received. So `tcpdump` on a clustered
+	 * OVMX node crashed that node.
+	 *
+	 * skb_share_check() is the contract every in-tree ptype handler
+	 * observes: it returns this skb when we are the only owner, a private
+	 * clone when we are not, and NULL when the clone could not be made
+	 * (having freed the original) -- in which case there is honestly no
+	 * frame to present and the receive is dropped.
+	 */
+	skb = skb_share_check(skb, GFP_ATOMIC);
+	if (!skb)
+		return 0;
+
 	if (skb_linearize(skb))
 		goto drop;   /* OOM: cannot present one contiguous frame -- drop */
 

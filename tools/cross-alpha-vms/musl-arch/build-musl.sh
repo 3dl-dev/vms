@@ -337,6 +337,55 @@ NSYMS=$(grep -cE '[^[:space:]]' /tmp/nm.out || true)
 }
 echo "  OK      ${NM} read DST member '${MEMBER}' (DST on): ${NSYMS} symbol(s) enumerated"
 
+# ==========================================================================
+# PAGE-SIZE GATE (vms-c5d). alpha-dec-vms is a FIXED 8192-byte-page arch. musl's
+# mallocng derives its meta-area mmap/mprotect extent and per-slot placement from
+# PGSZ (= PAGE_SIZE). Before this fix the overlay shipped NO arch bits/limits.h,
+# so the build fell back to arch/generic/bits/limits.h (empty) -> PAGESIZE
+# undefined -> src/internal/libc.h defines PAGE_SIZE = libc.page_size, a RUNTIME
+# value set from the ELF auxv AT_PAGESZ. OVMX/VMS starts images via IMGACT/STARTUP
+# with no Linux auxv, so libc.page_size is 0, which malloc.c clamps to 4096. On
+# alpha's real 8KB pages that mis-sizing lands a struct-meta zero-init (memset,
+# ~sizeof(struct meta)) straddling an 8KB page boundary into an unmapped page ->
+# SIGSEGV on the FIRST small alloc (the crtl_rms veneer's ~1KB handle). Captured
+# fault frame: user PC=memset, dst=0x20001003fe0 fill=0 count=0x38, page bound
+# 0x20001004000 unmapped (vms-c5d note 2026-09-10T17:19Z).
+#
+# arch/alpha-dec-vms/bits/limits.h now pins `#define PAGESIZE 8192` — the
+# musl-canonical fixed-page-arch mechanism (cf. arch/or1k, the only other 8KB
+# musl arch). Assert the WHOLE header-resolution chain yields a COMPILE-TIME
+# 8192: a _Static_assert on the runtime libc.page_size lvalue would NOT compile,
+# which is precisely the pre-fix state, so this gate genuinely fails without the
+# fix. Uses the target compiler with musl's own include set (-nostdinc, mirroring
+# CFLAGS_ALL) in -fsyntax-only mode (no codegen -> no DST/EVAX emission).
+# ==========================================================================
+echo "== page-size gate (vms-c5d): PAGE_SIZE must be a compile-time 8192 on alpha-dec-vms =="
+PGSZ_HDR="arch/${TARGET}/bits/limits.h"
+if ! grep -qE '^[[:space:]]*#[[:space:]]*define[[:space:]]+PAGESIZE[[:space:]]+8192' "${PGSZ_HDR}"; then
+	echo "VERIFY FAIL (vms-c5d): ${PGSZ_HDR} does not pin '#define PAGESIZE 8192'." >&2
+	echo "  Without it mallocng uses the runtime libc.page_size path (=0 on OVMX, clamped 4096)" >&2
+	echo "  and straddles alpha's 8KB pages -> SIGSEGV on the first small alloc." >&2
+	exit 7
+fi
+cat > /tmp/pgsz.c <<'EOF'
+#include <limits.h>
+#ifndef PAGE_SIZE
+#error "PAGE_SIZE is not a compile-time constant: bits/limits.h did not pin PAGESIZE, so mallocng falls to the runtime libc.page_size path (=0 on OVMX -> clamped 4096) and straddles 8KB pages (vms-c5d)"
+#endif
+_Static_assert(PAGE_SIZE == 8192, "alpha-dec-vms is a fixed 8KB-page arch; PAGE_SIZE must be 8192 (vms-c5d)");
+int __vms_c5d_pgsz_ok = PAGE_SIZE;
+EOF
+if "${TARGET}-gcc" ${CC_FLAGS} -nostdinc -D_XOPEN_SOURCE=700 \
+	-Iarch/${TARGET} -Iarch/generic -Iobj/src/internal \
+	-Isrc/include -Isrc/internal -Iobj/include -Iinclude \
+	-fsyntax-only /tmp/pgsz.c 2>/tmp/pgsz.err; then
+	echo "  OK      PAGE_SIZE == 8192 (compile-time) — mallocng meta placement matches alpha's 8KB pages"
+else
+	echo "VERIFY FAIL (vms-c5d): PAGE_SIZE is not a compile-time 8192 through musl's own header set:" >&2
+	cat /tmp/pgsz.err >&2
+	exit 7
+fi
+
 if [ "$PARTIAL" = "1" ]; then
 	echo "=== vms-960 RUNG 1 VERIFY OK on a PARTIAL alpha-dec-vms libc.a (${NMEMB} members) ==="
 	echo "=== (failing members documented above; symbol-level proof is LINK.EXE) ==="

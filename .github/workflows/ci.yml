@@ -302,6 +302,10 @@ jobs:
               - 'src/ovmx_job_control/**'
               - 'src/vmslink/librarian.c'
               - 'src/vmslink/include/ovmx_olb.h'
+              - 'src/vmslink/mk_librarian.sh'
+              - 'src/vmslink/ovmx_link_rms_io.c'
+              - 'src/vmslink/ovmx_link_rms_io.h'
+              - 'src/imgact/test/run_librarian_native.sh'
               - 'tools/vms_login.c'
               - 'tools/loginout_display.c'
               - 'tools/loginout_display.h'
@@ -6287,6 +6291,43 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # librarian-native-x86_64 — LIBRARIAN.EXE runs AS an OVMX image (bead vms-1c2,
+  # self-host S3 spine, epic vms-59a). Unlike librarian-olb-native (which proves
+  # the linked PRODUCT runs, LIBRARIAN staying a host bootstrap tool), this job
+  # links librarian.c + the reused RMS I/O shim into a native PT_INTERP=IMGACT
+  # image (mk_librarian.sh, -DOVMX_OLB_RMS_IO) and IMGACT-ACTIVATES LIBRARIAN
+  # itself: it /CREATEs a real .OLB from two .OBJs reading each object via RMS
+  # (sys$open/$get) and writing the .OLB via RMS (sys$create/$put), proven by a
+  # trace + byte-count cross-check; a stock `ar t` lists both modules, native
+  # /LIST reads it back via RMS, and a bootstrap LINK consumes it into an image
+  # that activates (mul3(14)==42). This promotes LIBRARIAN to a native
+  # OVMX image like LINK/TCC/DCL — the S3-spine step toward MMK building a
+  # component INSIDE OVMX (vms-1df). Runner is x86_64 so alpine:3.20/amd64 runs
+  # natively — no QEMU.
+  # -----------------------------------------------------------------------
+  librarian-native-x86_64:
+    name: LIBRARIAN.EXE runs AS an OVMX image — /CREATE .OLB via RMS + Activate (self-host S3 spine, x86_64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: IMGACT activates native LIBRARIAN.EXE; it /CREATEs an .OLB via RMS, /LIST reads it back, LINK pulls a member (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/librarian-native LIBRARIAN_EXPECT=1
+              sh /src/src/imgact/test/run_librarian_native.sh
+            '
+
+  # -----------------------------------------------------------------------
   # olb-symvec-native-x86_64 — Rung 1 of the VMS-native shareable-build
   # migration (rd vms-bf8, epic vms-a90; design-vms-native-shareable-build.md
   # C.4.1). LINK.EXE --shareable ROOTS its selective .OLB search at the
@@ -7723,7 +7764,7 @@ jobs:
   alpha-boot-mount:
     name: "OVMX/Alpha per-PR activation gate — boots, mounts DKA0:, activates the N=3 image, asserts $STATUS=%X0035A019 (vms-707/vms-c54)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     # vms-c54: 150 (was 120) — the N=3 activation gate adds the alpha-dec-vms
     # toolchain build + joint-image build + activation on top of the boot, so it
@@ -7790,7 +7831,7 @@ jobs:
   alpha-crtl-rms-n7:
     name: "OVMX/Alpha crtl_rms -> N=7 activation gate — boots, activates the crtl_rms heap+RMS+stdio image on the real /dev/vms executive, asserts $STATUS=%X0035A039 (vms-1ef/vms-065c)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -7850,7 +7891,7 @@ jobs:
   alpha-crtl-rms-veneer:
     name: "OVMX/Alpha CRTL->RMS veneer gate — boots the veneer-wired crtl_rms image on the real /dev/vms executive, then an INDEPENDENT ACP reader (DIRECTORY/FULL) asserts PORTTEST.DAT;1 landed on the ODS-2 volume with a genuine File ID; validates the vms-1fc LLP64 width fix at runtime (vms-f49)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -7908,7 +7949,7 @@ jobs:
   alpha-mf-multifile:
     name: "OVMX/Alpha multi-.o STRICT-link activation gate — boots, activates a real multi-object program (mf_main.obj + mf_util.obj, cross-.o malloc/free/strlen/strcmp/memcpy) on the real /dev/vms executive, asserts $STATUS=%X0035A029 (vms-bdd)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -7977,7 +8018,7 @@ jobs:
   alpha-shipped-shareable-activation:
     name: "OVMX/Alpha ships + activates real VMS shareable images — SYSLIB-staged genuine DECC$SHR/LIBOTS$SHR via the ordinary packaging path, asserts $STATUS=%X0035A019 (vms-410)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
 
@@ -8034,7 +8075,7 @@ jobs:
   alpha-activation-selftest:
     name: "OVMX/Alpha N=3 activation gate — assert_activation() can-fail proof (vms-c54, Rule 7)"
     needs: changes
-    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

@@ -766,6 +766,28 @@ static void test_glue_bindings(void)
 		  "GENESIS: whether a cluster was founded is READ BACK from "
 		  "the state only cnxman_phase2_commit() ever sets");
 
+	/*
+	 * A MEMBER'S OWN MEMBERSHIP SURVIVES A LATER JOIN DRIVE (rd vms-f6b).
+	 *
+	 * The beat drives a join whenever a system is present and the join FSM
+	 * is idle, INCLUDING on a node that is already a member -- the
+	 * VMS$VAXcluster connection to a newly-appeared system is opened by the
+	 * same machinery from either side (E67). Writing JOINING unconditionally
+	 * therefore un-asserted a real membership: the local CSB still carried
+	 * MEMBER and the CLUB still carried this node's CSID, while cl->state --
+	 * the one cell SYI$_CLUSTER_MEMBER and SHOW CLUSTER read -- said JOINING.
+	 *
+	 * MEASURED on the 2-node genesis rig (tests/qemu/run_cluster_genesis_
+	 * 2node.sh): node A founded generation 1, was committed MEMBER by
+	 * phase 2, and reported member=0 the instant node B was powered on.
+	 */
+	check_has("if (cn->cl->state != VMS_CLUSTER_MEMBER)\n"
+		  "\t\tcn->cl->state = VMS_CLUSTER_JOINING;",
+		  "a join driven from a node that is ALREADY a member leaves "
+		  "its membership alone");
+	check_absent("\n\tcn->cl->state = VMS_CLUSTER_JOINING;\n\treturn 1;",
+		     "... and the unguarded downgrade is gone");
+
 	/* CLUB/CSB query -- CLUSTER_DIAG_CSB, SHOW CLUSTER, $GETSYI. */
 	check_has("int cnxman_get_club(struct vms_cluster *cl, struct vms_club_view *out)",
 		  "cnxman_get_club() is implemented");

@@ -1644,7 +1644,32 @@ static int cnxman_join_drive(struct vms_cnxman *cn)
 	if (cnxman_join_start(&cn->join) != 0)
 		return 0;
 
-	cn->cl->state = VMS_CLUSTER_JOINING;
+	/*
+	 * A MEMBER'S OWN MEMBERSHIP IS NOT IN QUESTION HERE (rd vms-f6b).
+	 *
+	 * This beat drives a join whenever a system is present and the join FSM
+	 * is idle -- including on a node that is ALREADY a member, because the
+	 * VMS$VAXcluster connection to a newly-appeared system is opened by the
+	 * same machinery from either side (E67). Writing JOINING unconditionally
+	 * therefore un-asserted a membership the executive genuinely holds: the
+	 * local CSB still carried MEMBER and the CLUB still carried this node's
+	 * CSID, but cl->state -- the ONE cell $GETSYI's SYI$_CLUSTER_MEMBER and
+	 * SHOW CLUSTER read -- said JOINING.
+	 *
+	 * MEASURED on the 2-node genesis rig: node A founded generation 1, was
+	 * committed MEMBER by phase 2, and then reported member=0 / JOINING the
+	 * moment node B was powered on -- the founder and coordinator of a live
+	 * cluster describing itself as not a member of it.
+	 *
+	 * Only phase 2 may write MEMBER (vms_cnxman_phase2.c), and only a real
+	 * transition may take it away; a join ATTEMPT is neither. So the state
+	 * is advanced to JOINING only from the states that are honestly weaker
+	 * than membership -- which leaves the VAXCLUSTER=1 STANDALONE -> JOINING
+	 * move intact, since a standalone node that finds a cluster really is
+	 * joining one.
+	 */
+	if (cn->cl->state != VMS_CLUSTER_MEMBER)
+		cn->cl->state = VMS_CLUSTER_JOINING;
 	return 1;
 }
 

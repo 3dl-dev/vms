@@ -1082,7 +1082,7 @@ run_dcl_acceptance_battery() {
         local FALSEG; FALSEG=$(tail -c "+$((FAL_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$FALSEG" 'DECNETD-FAL-ACCEPT: PASS' \
             "FAL COPY [vms-8c2]: inbound FAL authenticated the connect creds against the real SYSUAF and transferred a sequential file both directions through DAP + RMS, byte-verified (one PASS/FAIL line per assertion above this verdict)"
-        must_have "$FALSEG" 'is REFUSED (SS\$_INVLOGIN) -- a fake would pass it' \
+        must_have "$FALSEG" 'is REFUSED (SS$_INVLOGIN) -- a fake would pass it' \
             "FAL COPY [vms-8c2]: a wrong password is REFUSED by real SYSUAF/Purdy -- a fake auth would have admitted it"
         must_have "$FALSEG" 'a right password is not sufficient' \
             "FAL COPY [vms-8c2]: DISABLED (correct password, DISUSER) is refused -- the SYSUAF login-flag rule applies to a network file access"

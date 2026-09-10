@@ -54,11 +54,21 @@ $ python3 tools/cluster/cm_wire_safety_audit.py --ovmx-mac 52:54:00:00:00:f4 cn3
 | 855 | 18.9855 | VAX2→OVMX | 81/0b | barrier step ack |
 | 2311 | 230.7769 | VAX1→OVMX | 06/00 | quiet keepalive, ~211 s later — the connection is stable, not retried |
 
-Honest note: only **one** `op-0b`/ack pair is visible in this capture, and no
-`cat 0x01 op=0x0c` (barrier release) frame ever appears. The VAX admitted
-OVMXJ1 as MEMBER anyway (see below) — whatever completed the transition did
-not require an on-wire op-0c this run. Not asserting a 12-step barrier was
-walked; reporting only what the wire shows.
+Honest note: only **one** `op-0b`/ack pair reaches OVMXJ1, and no
+`cat 0x01 op=0x0c` (barrier release) frame is ever sent **to OVMXJ1**. The VAX
+admitted OVMXJ1 as MEMBER anyway (see below). Not asserting a 12-step barrier
+was walked toward OVMXJ1; reporting only what the wire shows.
+
+> **CORRECTION (rd vms-fc7, re-decoded 2026-09-10).** The sentence above was
+> originally written as "no `cat 0x01 op=0x0c` frame *ever appears*". That is
+> wrong at capture scope and the error mattered: **this capture contains 12
+> `01/0c` frames and 13 `01/0b` frames.** They belong to a *second, later*
+> transition — the **epoch-6 class-0x03 REMOVE at t+1584.23 s**, coordinated by
+> VAX1 between the two VAXes after OVMXJ1 departed — which walks the canonical
+> 12-step barrier in full (`01/0b` step N → `81/0b` ack → `01/0c` release N,
+> N = 1..12, step index in `body[16:20]`). The scoped claim — nothing toward
+> OVMXJ1 — stands. See `docs/design-op06-membership-builder.md` §10 for the
+> full trace and what actually commits the membership.
 
 ## The ground truth: VAX1 admits OVMXJ1
 

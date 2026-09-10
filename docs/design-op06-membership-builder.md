@@ -206,11 +206,57 @@ consecutive from 1025, so "next free slot" and "`sysid & 0x3ff`" produce the
 same number for every node in every capture we hold. That is the whole of
 vms-3a7c, and no capture in the repository can separate them.
 
-**Separating them needs one lab capture:** a real VMScluster admitting a node
-whose `SCSSYSTEMID & 0x3ff` is **not** the next free CSV slot — e.g. boot a
-member with SCSSYSTEMID 1030 into a two-member cluster (slots 1,2 taken). If
-its CSID comes back `0x00010003` the rule is round-robin; if `0x00010006` it is
-self-derive. That is the one-frame experiment that closes vms-3a7c.
+### cn3 looked like it should already settle it. Decoded — it does not
+
+`cn3-achieved-20260905.pcap` admits **OVMXJ1, SCSSYSTEMID 1986**, which is
+gloriously non-consecutive: `1986 & 0x3ff = 962 = 0x3C2`, while the next free
+CSV slot is 3. If the coordinator's assignment for OVMXJ1 were visible in that
+capture the two rules would predict `0x00010003` vs `0x000103C2` and the
+question would be over. It was decoded. It is not visible, for three
+independent reasons:
+
+1. **There is no pre-join baseline.** cn3 contains **zero** cat-0x01 op-0x06
+   frames before OVMXJ1 first speaks (t+15.247 s). All 254 are VAX2 → OVMXJ1
+   and start at t+18.933 s *because of* the join. All three CSIDs
+   (`0x00010001`, `0x00010002`, `0x00010003`) first appear **within one
+   millisecond of each other** in the burst's opening frames — so "a third CSID
+   appears when the new member arrives" is not observable; every CSID appears
+   then.
+
+2. **`0x00010003` is not OVMXJ1's, and the sibling capture proves it.**
+   `op06-join-20260903.pcap` has only **two** stations on the wire — 1025 and
+   1026, no third VAX at all — and its burst nonetheless asserts `0x00010003`
+   **×46** at the grounded form-B offset, the *identical* multiplicity cn3
+   shows. That record therefore belongs to a member of the coordinator's own
+   table which is **absent from the segment** (p. 7-25's retained CSB), and cn3
+   is re-asserting the same foreign record. The elimination argument ("three
+   stations, three CSIDs, so the third is the joiner's") fails on this.
+
+3. **A burst never carries the RECIPIENT's own CSID** — E30 restated from a
+   second angle, and visible directly in the pairing:
+
+   | burst | CSIDs at the grounded offsets | absent |
+   |---|---|---|
+   | VAX1 (1025) → VAX2 (1026) | `0x00010001` ×47, `0x00010003` ×46 | `0x00010002` — the recipient's own |
+   | VAX2 (1026) → OVMXJ1 (1986) | `0x00010001` ×47, `0x00010002` ×23, `0x00010003` ×46 | OVMXJ1's, whatever it is |
+
+   So OVMXJ1's assigned CSID is **not in cn3 at all**, under either rule.
+
+The negative check is consequently inconclusive rather than confirmatory:
+`0x000103C2` occurs **0 times** in all 11,478 SCA frames of cn3 — but since the
+burst structurally omits the recipient's own CSID, that absence is exactly what
+**both** rules predict.
+
+### The capture that does separate them — sharpened by the above
+
+Admit a node whose `SCSSYSTEMID & 0x3ff` is **not** the next free CSV slot (e.g.
+SCSSYSTEMID 1030 into a cluster holding slots 1 and 2) — and **capture the
+coordinator's op-0x06 burst toward an ALREADY-PRESENT member, not toward the
+joiner.** Point 3 above is why: the burst sent to the joiner omits precisely the
+record being sought. In that member-to-member burst a new low word appears:
+`3` means round-robin (p. 7-25), `6` means self-derive. One run, one frame, and
+it closes vms-3a7c — and the same run grounds the {SCSSYSTEMID → CSID}
+association §8 needs.
 
 ### The safety gate this note recommends (and the implementation uses)
 
@@ -343,11 +389,23 @@ Three candidate closures, for the record:
 **The capture that closes it.** The membership record's `{SCSSYSTEMID,
 incarnation, CSID}` triple (book p. 7-39) still has no isolated offset. What is
 needed is a capture in which a real coordinator's op-0x06 burst can be
-correlated to *which system each record is about* -- e.g. admit a fourth node to
-the lab cluster and diff the burst against the three-member one, so the records
-that appear are known to belong to the new member. The same run settles
-vms-3a7c if the new node's `SCSSYSTEMID & 0x3ff` is chosen NOT to equal the next
-free CSV slot (§5). **One lab run answers both questions.**
+correlated to *which system each record is about*: admit a node and diff the
+burst against the pre-admission one, so the record that APPEARS is known to
+belong to the new member.
+
+Two constraints the §5 decode of cn3 established the hard way, and which any
+such run must satisfy:
+
+* **capture the burst toward an ALREADY-PRESENT member, not toward the joiner**
+  -- a burst never carries its recipient's own CSID, so the burst to the new
+  node omits exactly the record being sought;
+* **capture a pre-admission baseline** -- cn3 has none (its op-0x06 traffic
+  begins only because of the join), which is why its three CSIDs all "first
+  appear" in the same millisecond and none of them can be attributed.
+
+Choose the new node's `SCSSYSTEMID & 0x3ff` NOT to equal the next free CSV slot
+and the same run also settles vms-3a7c (§5). **One lab run answers both
+questions.**
 
 ## 9. Scope this note does **not** claim
 

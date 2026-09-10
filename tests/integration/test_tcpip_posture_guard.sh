@@ -13,11 +13,13 @@
 # forcing that enable-by-default decision to be made explicitly (and this guard
 # updated deliberately) rather than drifting in.
 #
-# It asserts BEHAVIOR-NEUTRALITY BY CONSTRUCTION for vms-21b's additive change
-# (staging TCPIP$INETD.EXE/TCPIP$DAYTIME.EXE at SYS$SYSTEM: + the RUN/DETACHED
-# correctness fix): those files ship UNLAUNCHED because neither trigger above is
-# present. The daytime cold-boot proof enables TCP/IP only via a TEST overlay
-# (distro/rootfs-test-tcpip/, --build-arg OVMX_TEST_ENABLE_TCPIP=1), never the
+# It asserts BEHAVIOR-NEUTRALITY BY CONSTRUCTION for vms-21b: the shipped base
+# image carries NO aux-server image at all (TCP/IP Services is a layered product;
+# TCPIP$INETD.EXE/TCPIP$DAYTIME.EXE are staged only by the --build-arg
+# OVMX_TEST_ENABLE_TCPIP=1 test overlay, never the shipped rootfs), and even the
+# RUN/DETACHED launch path stays inert because neither trigger above is present in
+# the shipped SYSTARTUP_VMS.COM / TCPIP$SERVICE.DAT. The daytime cold-boot proof
+# enables TCP/IP only via that TEST overlay (distro/rootfs-test-tcpip/), never the
 # shipped rootfs. Cheap (grep-level, no boot).
 set -u
 REPO_ROOT=$(cd "$(dirname "$0")/../.." && pwd)

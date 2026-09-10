@@ -273,6 +273,69 @@ def test_real_x86_64_extraction_excludes_non_images(dockerfile_text):
     assert "PARTS_SETUP.COM" not in images
 
 
+# ---------------------------------------------------------------------------
+# Test-overlay exclusion (rd vms-21b): cp lines inside a `--build-arg`-gated
+# TEST-ONLY block are not part of the SHIPPED image set, and the exclusion is
+# NARROW (only the explicitly-listed test build args -- a cp in any other
+# conditional is still counted, so the gate keeps its teeth).
+# ---------------------------------------------------------------------------
+
+
+def _cite_shareables(body: str) -> str:
+    """Prefix synthetic Dockerfile text with a literal citation of every
+    LINK_NATIVE_SHAREABLES name so extract_x86_64_images' ground-source
+    _check_shareable_names_cited() precondition is satisfied."""
+    return "# shareables cited: " + " ".join(ip.LINK_NATIVE_SHAREABLES) + "\n" + body
+
+
+def test_test_overlay_block_cp_is_excluded_from_shipped_set():
+    text = _cite_shareables(
+        "RUN cp build-static/bin/SHIPPED.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/\n"
+        'ARG OVMX_TEST_ENABLE_TCPIP=0\n'
+        'RUN if [ "$OVMX_TEST_ENABLE_TCPIP" = "1" ]; then \\\n'
+        "        cp 'build-static/bin/OVERLAY_ONE.EXE' /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \\\n"
+        "        cp 'build-static/bin/OVERLAY_TWO.EXE' /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \\\n"
+        '        echo OK; \\\n'
+        "    else \\\n"
+        '        echo off; \\\n'
+        "    fi\n"
+    )
+    images = ip.extract_x86_64_images(text)
+    assert "SHIPPED.EXE" in images, "a normal shipped cp must still be counted"
+    assert "OVERLAY_ONE.EXE" not in images, "cp inside the test-overlay block must be excluded"
+    assert "OVERLAY_TWO.EXE" not in images, "every cp inside the test-overlay block must be excluded"
+
+
+def test_overlay_exclusion_is_narrow_other_conditional_still_counted():
+    """Teeth: a cp inside a conditional whose build arg is NOT a listed
+    test-overlay arg is STILL counted -- so a real x86_64-only shipped image
+    cannot be hidden from the gate merely by wrapping it in an `if`."""
+    text = _cite_shareables(
+        'RUN if [ "$SOME_OTHER_FLAG" = "1" ]; then \\\n'
+        "        echo start && \\\n"
+        "        cp build-static/bin/SNEAKY.EXE /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \\\n"
+        "        echo done; \\\n"
+        "    fi\n"
+    )
+    images = ip.extract_x86_64_images(text)
+    assert "SNEAKY.EXE" in images, (
+        "a cp inside a non-test-overlay conditional must still be counted -- "
+        "the overlay skip must be narrow to keep the gate's teeth"
+    )
+
+
+def test_real_dockerfile_stages_aux_server_only_in_overlay(dockerfile_text):
+    """The TCP/IP aux-server images are staged ONLY in the OVMX_TEST_ENABLE_TCPIP
+    overlay (layered-product model: the shipped base image ships no aux server),
+    so they must be absent from the x86_64 SHIPPED set even though their cp lines
+    are textually present in the Dockerfile."""
+    assert "TCPIP$INETD.EXE" in dockerfile_text, "guard: the overlay cp lines should exist to be excluded"
+    assert "TCPIP$DAYTIME.EXE" in dockerfile_text
+    images = ip.extract_x86_64_images(dockerfile_text)
+    assert "TCPIP$INETD.EXE" not in images
+    assert "TCPIP$DAYTIME.EXE" not in images
+
+
 def test_real_vax_extraction_finds_boot_chain_images(cmakelists_text, cut_release_vax_text):
     images = ip.extract_vax_images(cmakelists_text, cut_release_vax_text)
     for expected in (

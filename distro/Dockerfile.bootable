@@ -630,18 +630,16 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     cp build-static/bin/DECNETD.EXE    /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/LIBRARIAN.EXE  /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     cp build-static/bin/OVMXDUMP       /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    # TCP/IP aux server + its first service (rd vms-21b). TCPIP$INETD.EXE +
-    # TCPIP$DAYTIME.EXE are built by BUILD_TOOLS but were never staged into
-    # SYS$SYSTEM: -- so nothing could start the aux server or answer daytime on a
-    # booted distro (the daytime register row's shipped-launch gap). Stage them at
-    # SYS$SYSTEM: (the ODS-2 disk, the faithful VMS home); the aux server activates
-    # them the VMS way (ACP-stage->execve, vms-21b), NOT a raw execv of a Linux
-    # path. The shipped TCPIP$SERVICE.DAT is NOT auto-started (SYSTARTUP unchanged),
-    # so shipping these opens no port by default -- the daytime cold-boot proof runs
-    # via a test overlay; daytime-auto-start-by-default stays an operator posture
-    # call. $-names single-quoted so the build shell does not expand them.
-    cp 'build-static/bin/TCPIP$INETD.EXE'   /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
-    cp 'build-static/bin/TCPIP$DAYTIME.EXE' /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    # TCP/IP aux server + its first service (rd vms-21b): TCPIP$INETD.EXE +
+    # TCPIP$DAYTIME.EXE are deliberately NOT staged into the shipped base image.
+    # On real OpenVMS, TCP/IP Services is a LAYERED PRODUCT installed on top of the
+    # base OS -- the base system disk does not carry TCPIP$INETD. Faithful here: the
+    # shipped base image ships no aux-server image (and auto-starts nothing), so
+    # there is no x86_64-only shipped image for the cross-arch parity gate (vms-e1d)
+    # to flag. The daytime cold-boot PROOF stages both images via the test overlay
+    # below (--build-arg OVMX_TEST_ENABLE_TCPIP=1), which stands in for "TCP/IP
+    # Services configured + enabled"; a vax cross-build of the aux server is a
+    # separate downstream rung (the BGn: veneer over the NetBSD-vax substrate).
     # DECnet Phase IV: ship the NCP configuration utility on the running system
     # so an admin can build the node database (DEFINE NODE) + set the executor.
     # NCP.EXE is portable C and ships on BOTH arches (see the ovmx-images vax
@@ -936,25 +934,37 @@ RUN mkdir -p /proof-stage/SYSEXE && \
 # tests/qemu/test_syssvc_dirlogical_acp.c / _rms_acp.c against a real /dev/vms;
 # extract is VMFS-only, so the build gate here is a genuine-ODS-2 presence gate.)
 # vms-21b daytime cold-boot PROOF overlay (TEST-ONLY; default OFF => the shipped
-# image is byte-identical). With --build-arg OVMX_TEST_ENABLE_TCPIP=1 the proof
-# build (a) stages the enabled TCPIP$SERVICE.DAT (DAYTIME on) into SYS$SYSTEM: --
-# it is not otherwise staged -- and (b) swaps SYSTARTUP_VMS.COM for the test
-# variant that brings the NIC up (TCPIP$CONFIG) and starts the aux server
-# (TCPIP$STARTUP) so DAYTIME answers on a cold boot. A default build (no
-# --build-arg) leaves /system-stage/vms UNTOUCHED, so vmsfs_master masters
-# byte-identical content to today (posture-neutral: shipped boot opens no port;
-# daytime-auto-start-by-default stays an operator posture call).
+# image is byte-identical). This overlay stands in for "TCP/IP Services installed
+# + configured + enabled" -- the layered product that the shipped base OS does not
+# carry. With --build-arg OVMX_TEST_ENABLE_TCPIP=1 the proof build (a) stages the
+# aux-server images TCPIP$INETD.EXE + TCPIP$DAYTIME.EXE into SYS$SYSTEM: (built by
+# BUILD_TOOLS; NOT in the shipped base image -- see the SYSEXE staging block
+# above), (b) stages the enabled TCPIP$SERVICE.DAT (DAYTIME on), and (c) swaps
+# SYSTARTUP_VMS.COM for the test variant that brings the NIC up (TCPIP$CONFIG) and
+# starts the aux server (TCPIP$STARTUP) so DAYTIME answers on a cold boot. A
+# default build (no --build-arg) leaves /system-stage/vms UNTOUCHED, so vmsfs_master
+# masters byte-identical content to today (posture-neutral: shipped boot ships no
+# aux-server image, opens no port; TCP/IP-as-layered-product + daytime-auto-start
+# stay operator posture calls). The cross-arch image-parity gate (vms-e1d) scans
+# only the SHIPPED base-image staging, so these overlay-only images are correctly
+# excluded from the x86_64<->vax shipped-set comparison (see image_parity.py).
 ARG OVMX_TEST_ENABLE_TCPIP=0
 RUN if [ "$OVMX_TEST_ENABLE_TCPIP" = "1" ]; then \
         cp 'distro/rootfs-test-tcpip/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT' \
            /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
         cp distro/rootfs-test-tcpip/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
            /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
+        cp '/src/build-static/bin/TCPIP$INETD.EXE' \
+           /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
+        cp '/src/build-static/bin/TCPIP$DAYTIME.EXE' \
+           /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
         grep -q 'TCPIP\$STARTUP' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
         grep -qE '^DAYTIME ' /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/'TCPIP$SERVICE.DAT' && \
-        echo "OK: OVMX_TEST_ENABLE_TCPIP=1 -- daytime cold-boot proof overlay staged (enabled SERVICE.DAT + TCPIP$CONFIG/STARTUP)"; \
+        test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/'TCPIP$INETD.EXE' && \
+        test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/'TCPIP$DAYTIME.EXE' && \
+        echo "OK: OVMX_TEST_ENABLE_TCPIP=1 -- daytime cold-boot proof overlay staged (aux-server images + enabled SERVICE.DAT + TCPIP$CONFIG/STARTUP)"; \
     else \
-        echo "OVMX_TEST_ENABLE_TCPIP=0 -- shipped image (no TCP/IP auto-start, no port open)"; \
+        echo "OVMX_TEST_ENABLE_TCPIP=0 -- shipped image (no aux-server image, no TCP/IP auto-start, no port open)"; \
     fi
 RUN /src/build-static/bin/vmsfs_master --ods2 master \
         /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 128 && \

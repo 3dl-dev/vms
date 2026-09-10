@@ -902,6 +902,23 @@ struct cnxman_join {
 	uint32_t csid_unpinned;      /* ... from which no coordinator CSID
 				      * could be read (E30): no shape-valid
 				      * CSID at either measured offset yet    */
+	uint32_t generations_seen;   /* op-0x06 bursts that DID carry a real
+				      * generation -- counted, never minted
+				      * from (rd vms-fc7)                     */
+	/* ---- op-0x05, the MEMBERSHIP RECORD: where a CSID really comes from */
+	uint32_t membrecs_seen;      /* records this codec would stand behind  */
+	uint32_t membrecs_adopted;   /* ... that named THIS node, and were
+				      * adopted as its cluster system id      */
+	uint32_t membrecs_unusable;  /* records refused by the codec: bad tag,
+				      * bad CSID shape, index disagreeing with
+				      * the slot. Answered, never adopted     */
+	uint32_t membrecs_peer_learned; /* records about ANOTHER member, filed
+					 * on the block this CLUB already holds
+					 * for that SCSSYSTEMID -- which is what
+					 * lets this node COUNT the cluster     */
+	uint32_t membrecs_unknown_peer; /* ... about a system this node holds no
+					 * block for: counted and dropped, never
+					 * invented (INV-6)                     */
 	uint8_t  lockdirwt_unrepresentable; /* configured nonzero, no offset  */
 	uint8_t  pad3[3];
 	uint32_t lockdirwt_unpinned;

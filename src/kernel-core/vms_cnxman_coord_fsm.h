@@ -116,15 +116,14 @@
  * NOT originated, and each omission is COUNTED so it shows up in the
  * diagnostics rather than being discovered on a real cluster:
  *
- *   op 0x05 lock/resource-rebuild burst and op 0x06 MEMBERSHIP burst -- the
- *       membership record's {SCSSYSTEMID, incarnation, CSID} triple (book
- *       p. 7-39) has NO isolated offset in any capture (spec SS4(j) "RE gaps
- *       left in SS4j"). A zero-filled membership burst would assert an empty
- *       cluster to every member, so it is omitted. CONSEQUENCE, stated plainly:
- *       a node this coordinator admits completes the transition and appears in
- *       our CSBs, but is NOT TOLD the CSID we assigned it -- op 0x06 is how a
- *       joiner learns its own (FC-P3.3). Closing that needs the op-0x06 record
- *       layout from a capture; it is a LAB item, not a guess.
+ *   op 0x05 MEMBERSHIP RECORDS and the op 0x06 MEMBERSHIP burst ARE originated
+ *       now (rd vms-fc7): op 0x05 carries the grounded {SCSSYSTEMID, boot time,
+ *       assigned CSID, CSV index} pairing -- the full member set to the joiner,
+ *       the delta to each present member -- and op 0x06 carries this
+ *       coordinator's own CSID at the grounded form-A offset. What is still NOT
+ *       originated is the op-0x05 record's body[42:132], which is uninterpreted
+ *       stale buffer in the reference and is zeroed and counted here rather
+ *       than reproduced (Rule 8).
  *   the ORIGINATING form of the cat-0x02 op-0x0d rebuild record -- its L1
  *       region body[16:34] is only ever observed inbound. This file therefore
  *       does not PUSH rebuild records; it does the other half of the
@@ -246,13 +245,6 @@ enum cnxman_coord_refusal {
 	CNXMAN_COORD_REF_NO_NODEMAP = 4, /* a member's slot is outside that
 					  * byte: an open would LOSE it      */
 	CNXMAN_COORD_REF_BUSY       = 5, /* we are already coordinating one   */
-	CNXMAN_COORD_REF_CSID_AMBIG = 7, /* the CSV slot this coordinator would
-					  * assign and the CSID the joiner will
-					  * DERIVE for itself disagree, so the
-					  * admission cannot be named the same
-					  * way on both sides -- vms-3a7c,
-					  * docs/design-op06-membership-
-					  * builder.md sec 5                  */
 	CNXMAN_COORD_REF_NO_QUORUM  = 6  /* GENESIS only: this node's own
 					  * VOTES do not satisfy quorum, so it
 					  * may not FORM a cluster (p. 7-6)   */
@@ -372,9 +364,15 @@ struct cnxman_coord {
 					     * send: the countdown, the
 					     * incarnation, the sub-record body
 					     * (design note sec 6)             */
-	uint32_t csid_ambiguous;       /* admissions REFUSED because the CSV
-					* slot and the joiner's self-derived
-					* CSID disagree (vms-3a7c)            */
+	uint32_t membrecs_sent;        /* op-0x05 MEMBERSHIP RECORDS originated
+					* -- the full set to the joiner, the
+					* delta to each present member        */
+	uint32_t membrec_omitted;      /* a member this node holds no complete
+					* identity for: NO record sent for it */
+	uint32_t membrec_boot_omitted; /* records sent with body[28:36] zero --
+					* no incarnation held for that member */
+	uint32_t membrec_fields_omitted; /* body[42:132], the reference's stale
+					  * buffer, zeroed per record          */
 	uint32_t step_out_of_order;    /* a member reported a step we are not on*/
 	uint32_t step_duplicates;      /* a retransmitted step: acked, not counted*/
 	uint32_t epoch_mismatch;       /* a report for a different transition  */

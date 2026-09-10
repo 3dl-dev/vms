@@ -1,0 +1,21 @@
+# 2-node rig -- NO-DERIVE CONTROL (rd vms-3a7c). Node B's SCSSYSTEMID is
+# 1030, whose low ten bits are 6. Its executive reports CSID 0x00010002 --
+# CSV slot 2, the slot the COORDINATOR assigned. A value node B could not
+# have computed: it was ADOPTED from the op-0x05 membership record.
+
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=1 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=2 quorum=1 cevotes=1 epoch=2 projections=agree
+RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1030 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-B-FINAL role=joiner member=1 state=MEMBER csid=0x00010002 cn=2 quorum=0 cevotes=0 epoch=2 projections=agree
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=founder member=1 cn=2 csid=0x00010001
+  node B: role=joiner member=1 cn=2 csid=0x00010002
+
+==========================================
+  NO-DERIVE CONTROL HELD (rd vms-3a7c): node B's SCSSYSTEMID is
+  1030, whose low ten bits are 6 -- and its executive reports CSID
+  0x00010002, CSV slot 2, the slot the coordinator assigned. A value
+  it could not have computed: it was ADOPTED from the op-0x05
+  membership record, which is the rule the oracle settled.
+==========================================

@@ -16,7 +16,7 @@
 #
 # RIG_MODE selects the run: `proof` (A founds, B joins, CN=2), `negctl`
 # (VOTES=0 on both: nobody may found, so nobody may reach MEMBER or hold a
-# CSID) or `ambig` (node B's SCSSYSTEMID makes the two candidate CSID rules
+# CSID) or `noderive` (node B's SCSSYSTEMID makes the two candidate CSID rules
 # disagree: the coordinator refuses, sends no op-0x06, and node B must stay NEW
 # -- the INV-6 control proving a joiner's MEMBER comes only from a real
 # wire-learned generation).
@@ -31,10 +31,10 @@ spec:
   restartPolicy: Never
   containers:
     - name: rig
-      image: 192.168.2.43:30500/ovmx-genesis-rig:13
+      image: 192.168.2.43:30500/ovmx-genesis-rig:16
       imagePullPolicy: Always
       env:
-        # proof | negctl | ambig  -- see run_cluster_genesis_2node.sh
+        #  proof | negctl | ambig  -- see run_cluster_genesis_2node.sh
         - name: RIG_MODE
           value: "proof"
         - name: OUT_DIR

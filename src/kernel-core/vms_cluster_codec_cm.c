@@ -947,6 +947,89 @@ uint32_t vms_cm_csid_of(uint32_t generation, uint32_t scssystemid)
 	       (scssystemid & (uint32_t)VMS_CM_CSID_SYSID_MASK);
 }
 
+/* Is this record self-consistent enough to be worth anybody's identity? The
+ * ONE predicate, applied by the builder before a frame exists and by the
+ * parser before a joiner adopts, so the two can never disagree. */
+static int cm_membrec_ok(const struct vms_cm_membership_rec *r)
+{
+	uint32_t slot;
+
+	if (r->sysid == 0u || !cm_csid_shape_ok(r->csid))
+		return 0;
+	slot = r->csid & 0xffffu;
+	if (slot == 0u)                      /* p. 7-25: slot 0 is never used */
+		return 0;
+	return (uint32_t)r->index == slot - 1u;
+}
+
+vms_codec_status_t vms_cm_membership_rec_build(const struct vms_cm_membership_rec *rec,
+					       uint8_t *out_body, uint32_t cap,
+					       uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (rec == (const struct vms_cm_membership_rec *)0)
+		return VMS_CODEC_E_INVAL;
+	if (!cm_membrec_ok(rec))
+		return VMS_CODEC_E_RANGE;
+
+	st = cm_originate_begin(VMS_CM_OP_MEMBREC, out_body, cap, &w);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_TAG, VMS_CM_MEMBREC_TAG);
+	vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_SYSID, rec->sysid);
+	if (rec->boot_valid) {
+		vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_BOOT, rec->boot_lo);
+		vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_BOOT + 4u,
+				  rec->boot_hi);
+	}
+	vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_CSID, rec->csid);
+	vms_wire_put_le16(&w, VMS_OFB_CM_MEMBREC_INDEX, rec->index);
+	/* body[42:132] stays zero -- sec 5c. */
+
+	return cm_originate_end(&w, written);
+}
+
+vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len,
+					       struct vms_cm_membership_rec *out)
+{
+	struct vms_cm_envelope env;
+	struct vms_cm_membership_rec r;
+	vms_wire_view_t v;
+	vms_codec_status_t st;
+
+	if (out == (struct vms_cm_membership_rec *)0)
+		return VMS_CODEC_E_INVAL;
+
+	st = vms_cm_envelope_parse(body, len, &env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	if (env.category != VMS_CM_CAT_CONFIG || env.opcode != VMS_CM_OP_MEMBREC)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, body, len);
+	if (vms_wire_get_le32(&v, VMS_OFB_CM_MEMBREC_TAG) != VMS_CM_MEMBREC_TAG)
+		return vms_wire_view_ok(&v) ? VMS_CODEC_E_RANGE : v.err;
+
+	r.pad     = 0u;
+	r.sysid   = vms_wire_get_le32(&v, VMS_OFB_CM_MEMBREC_SYSID);
+	r.boot_lo = vms_wire_get_le32(&v, VMS_OFB_CM_MEMBREC_BOOT);
+	r.boot_hi = vms_wire_get_le32(&v, VMS_OFB_CM_MEMBREC_BOOT + 4u);
+	r.csid    = vms_wire_get_le32(&v, VMS_OFB_CM_MEMBREC_CSID);
+	r.index   = vms_wire_get_le16(&v, VMS_OFB_CM_MEMBREC_INDEX);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	r.boot_valid = (uint8_t)((r.boot_lo | r.boot_hi) != 0u);
+
+	if (!cm_membrec_ok(&r))
+		return VMS_CODEC_E_RANGE;
+
+	*out = r;
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_cm_membership_build(uint32_t epoch, uint32_t coord_csid,
 					   uint8_t *out_body, uint32_t cap,
 					   uint32_t *written)
@@ -1034,7 +1117,7 @@ static const struct vms_wire_allow_entry g_cm_allow_rows[] = {
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT,
 	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_ECHO,
 	  "cluster-protocol-spec.md sec 4(p)/4(r): op 0x03 membership commit" },
-	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_CONFIG, VMS_CM_OP_LOCKRB,
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC,
 	  VMS_WIRE_ACT_RESPOND, VMS_CM_RECIPE_ECHO,
 	  "cluster-protocol-spec.md sec 4(p)/4(r): op 0x05 lock/resource "
 	  "rebuild txn" },

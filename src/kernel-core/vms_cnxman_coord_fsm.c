@@ -324,15 +324,22 @@ static uint32_t coord_next_slot(struct cnxman_coord *c)
 /* Stamp it. Sequence 1: this slot has never been used, and this implementation
  * never reuses one, so no higher sequence can arise here (p. 7-25).
  *
- * PROVISIONAL PENDING ORACLE (rd vms-3a7c). Which number belongs in the CSID's
- * low word is NOT settled: this implementation uses the round-robin CSV slot
- * (p. 7-25), and the competing candidate is the published construction's own
- * `SCSSYSTEMID & 0x3ff`. Every real CSID this project has captured is
- * consistent with BOTH, because the lab's SCSSYSTEMIDs are consecutive from
- * 1025 (1025->1, 1026->2, 1027->3) -- no capture in the repository can separate
- * them. Until one does, coord_csid_unambiguous() below refuses any admission
- * for which the two rules would differ, so nothing this node stamps or emits
- * can be made retroactively wrong by the answer.
+ * SETTLED (rd vms-3a7c, closed by the lab oracle and by the op-0x05 records in
+ * both repository captures): the coordinator assigns the ROUND-ROBIN,
+ * MONOTONICALLY ADVANCING CSV slot, and never `SCSSYSTEMID & 0x3ff`. The
+ * measured pairings say so outright -- SCSSYSTEMID 1986 was assigned slot 3
+ * (cn3) and 1026 was assigned slot 3 (op06-join), neither of which its own
+ * SCSSYSTEMID can produce -- and the oracle adds that a slot is never reused
+ * within an incarnation: one SCSSYSTEMID took slot 4 and then slot 5 on its
+ * rejoin (p. 7-25: "a rejoining system gets a NEW CSID, never its old one
+ * back"). coord_next_slot() advances from max_slot_seen and never reuses a
+ * freed slot, which is exactly that rule.
+ *
+ * The joiner does not need to guess any of this: it ADOPTS the slot from the
+ * op-0x05 membership record (vms_cnxman_join_fsm.c). The interim
+ * "coord_csid_unambiguous" gate that used to stand here -- admit only when the
+ * two candidate rules agreed -- is GONE, and had to go: the oracle's own
+ * behaviour (1986 -> slot 3) is precisely a case it would have refused.
  * Full statement: docs/design-op06-membership-builder.md sec 5.
  */
 static void coord_assign_slot(struct cnxman_coord *c, struct vms_csb *subject,
@@ -341,38 +348,6 @@ static void coord_assign_slot(struct cnxman_coord *c, struct vms_csb *subject,
 	cnxman_csb_set_csid(subject, (vms_csid_t)((1u << 16) | slot));
 	c->max_slot_seen = slot;
 	c->csids_assigned++;
-}
-
-/*
- * THE AMBIGUITY GATE (rd vms-3a7c, and the reason the op-0x06 builder is safe
- * to use at all).
- *
- * A joiner does not take its CSID off the wire. It reads a GENERATION out of a
- * membership record and derives its own identity from its own SYSGEN state --
- * `generation << 16 | SCSSYSTEMID & 0x3ff` (vms_cnxman_join_fsm.c,
- * join_learn_csid_from_membership). Meanwhile THIS side stamps the subject's
- * CSB with the CSV slot above, and that low word is the bit it sets in the
- * transition nodemap. If the two numbers differ, the joiner looks for its own
- * bit at one index while the coordinator asserted it at another, phase 2 finds
- * nothing (vms_cnxman_phase2.c task 1) and the system is admitted by the
- * cluster while believing it was not.
- *
- * So: admit only when the two candidate rules AGREE. Under that condition the
- * CSID this node asserts is correct whichever way vms-3a7c settles, which is
- * the only form of "safe toward a real VAX" available before the oracle exists.
- * A disagreement is a REFUSAL with a named reason, not a guess -- and not a
- * silent one: an operator reading the console learns exactly which system could
- * not be named and why.
- */
-static int coord_csid_unambiguous(const struct vms_csb *subject, uint32_t slot)
-{
-	uint32_t derived;
-
-	if (subject == NULL || !subject->sysid_valid)
-		return 0;   /* no SCSSYSTEMID: neither rule can be evaluated */
-	derived = (uint32_t)vms_cm_csid_of(1u, (uint32_t)subject->sysid) &
-		  0xffffu;
-	return derived == slot;
 }
 
 /* ==========================================================================
@@ -727,6 +702,101 @@ static void coord_send_membership(struct cnxman_coord *c, uint32_t i)
 	c->membership_fields_omitted += 3u;
 }
 
+/*
+ * THE MEMBERSHIP RECORD (cat 0x01 op 0x05) -- the ONLY frame in the protocol
+ * that tells a system which CSID the cluster assigned it. Field map and its
+ * grounding: vms_cluster_codec_cm.h sec 5c.
+ *
+ * EXECUTIVE-BACKED, NOT WIRE-PLUMBING. Every field is READ OUT OF THE CSB this
+ * coordinator really holds for the member the record is about: its SCSSYSTEMID
+ * as the port learned it, the CSID coord_assign_slot() actually stamped on it,
+ * that CSID's own CSV slot for the index, and that member's real incarnation.
+ * Nothing is copied from another frame and nothing comes from a template -- a
+ * templated wire field is the recurring failure this project has caught ~10
+ * times, and here it would hand a peer somebody else's identity.
+ *
+ * A member this node does not hold a COMPLETE identity for gets NO record at
+ * all (counted). Half a record is worse than none: the joiner adopts what this
+ * frame says.
+ */
+static void coord_send_membrec(struct cnxman_coord *c, uint32_t to_csb,
+			       const struct vms_csb *about)
+{
+	struct vms_cm_membership_rec rec;
+	struct vms_csb *dst_csb;
+	vms_csid_t dst;
+	uint32_t written = 0;
+
+	dst_csb = coord_out_to(c, to_csb, &dst);
+	if (dst_csb == NULL)
+		return;
+	if (about == NULL || !about->sysid_valid || !about->csid_valid) {
+		c->membrec_omitted++;
+		return;
+	}
+
+	coord_bzero(&rec, (uint32_t)sizeof(rec));
+	rec.sysid   = (uint32_t)about->sysid;
+	rec.csid    = (uint32_t)about->csid;
+	rec.index   = (uint16_t)(((uint32_t)about->csid & 0xffffu) - 1u);
+	rec.boot_lo = (uint32_t)(about->incarnation & 0xffffffffu);
+	rec.boot_hi = (uint32_t)((about->incarnation >> 32) & 0xffffffffu);
+	rec.boot_valid = (uint8_t)(about->incarnation != 0u);
+	if (!rec.boot_valid)
+		c->membrec_boot_omitted++;
+
+	if (vms_cm_membership_rec_build(&rec, c->scratch,
+					(uint32_t)sizeof(c->scratch),
+					&written) != VMS_CODEC_OK) {
+		/* The record did not hold together (no CSV slot, a CSID that
+		 * fails the shared shape test): refused by the codec, counted
+		 * here, and NOT sent. */
+		c->membrec_omitted++;
+		return;
+	}
+	/* A REQUEST: the reference's op-0x05 carries a real (txn, token) pair
+	 * -- measured nonzero on all 8 real frames -- and is answered with the
+	 * grounded 0x81/0x05 echo. */
+	cnxman_envelope_originate(dst_csb, c->scratch, CNXMAN_ENV_REQUEST);
+	coord_emit(c, dst, written);
+	c->membrecs_sent++;
+	c->membrec_fields_omitted++;   /* body[42:132], sec 5c */
+}
+
+/*
+ * WHO GETS WHICH RECORDS -- measured on the reference (codec header sec 5c):
+ * the JOINER is sent the FULL member set, its own record included (that is how
+ * it learns its identity AND how it can count the cluster); every already
+ * PRESENT member is sent only the DELTA, the new system's record.
+ */
+static void coord_send_membership_set(struct cnxman_coord *c)
+{
+	struct vms_club *club = coord_club(c);
+	const struct vms_csb *subject;
+	uint32_t i;
+
+	if (c->subject_csb < 0)
+		return;
+	subject = coord_csb_at(c, c->subject_csb);
+	if (subject == NULL)
+		return;
+
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *m = &club->csb[i];
+
+		if (!m->in_use || !m->sysid_valid || !m->csid_valid)
+			continue;
+		coord_send_membrec(c, (uint32_t)c->subject_csb, m);
+	}
+	for (i = 0; i < club->n_csb; i++) {
+		if (!coord_is_participant(c, i))
+			continue;
+		if ((int32_t)i == c->subject_csb)
+			continue;
+		coord_send_membrec(c, i, subject);
+	}
+}
+
 static void coord_send_open(struct cnxman_coord *c, uint32_t i)
 {
 	struct vms_csb *csb;
@@ -909,8 +979,16 @@ static void coord_enter_open(struct cnxman_coord *c)
 	 * all -- it must stay byte-for-byte silent, which is what makes genesis
 	 * a local act rather than an announcement.
 	 */
-	if (c->tr_class == VMS_CM_CLASS_ADD && c->subject_csb >= 0)
+	if (c->tr_class == VMS_CM_CLASS_ADD && c->subject_csb >= 0) {
 		coord_send_membership(c, (uint32_t)c->subject_csb);
+		/*
+		 * ... and the MEMBERSHIP RECORDS themselves, which is what
+		 * actually gives the joiner an identity it can find in the
+		 * nodemap the open below is about to carry. op-0x06 teaches a
+		 * generation; op-0x05 teaches WHO IS WHICH SLOT.
+		 */
+		coord_send_membership_set(c);
+	}
 
 	c->state = (uint8_t)CNXMAN_COORD_OPEN;
 	coord_fanout(c, coord_send_open);
@@ -1085,24 +1163,6 @@ static int coord_open_transition(struct cnxman_coord *c, uint8_t tr_class,
 				"%CNXMAN, a system's cluster system id falls "
 				"outside the membership map this protocol can "
 				"express; transition not proposed");
-			return -1;
-		}
-		/*
-		 * vms-3a7c: the LAST gate before an identity is stamped, and
-		 * deliberately after the nodemap one -- a slot the wire cannot
-		 * express is refused for THAT reason, which is the stronger
-		 * statement. Admit only a system the two candidate CSID rules
-		 * name identically (coord_csid_unambiguous), so nothing this
-		 * node stamps can be made wrong by the oracle. A founding open
-		 * has no subject and assigns nothing, so it is not asked.
-		 */
-		if (subject != NULL &&
-		    !coord_csid_unambiguous(subject, subject_slot)) {
-			c->csid_ambiguous++;
-			(void)coord_refuse(c, CNXMAN_COORD_REF_CSID_AMBIG,
-				"%CNXMAN, this system's cluster system id "
-				"cannot be assigned unambiguously; membership "
-				"request not proposed");
 			return -1;
 		}
 		c->bitmap = map;

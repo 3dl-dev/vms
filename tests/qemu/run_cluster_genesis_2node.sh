@@ -88,7 +88,7 @@ VOTES_A=1
 # assigns it, so the two candidate CSID rules agree and the admission is
 # unambiguous. The `ambig` mode moves it to 1030 (& 0x3ff == 6) so they do not.
 SYSID_B=1026
-[ "$MODE" = "ambig" ] && SYSID_B=1030
+[ "$MODE" = "noderive" ] && SYSID_B=1030
 
 KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
@@ -231,31 +231,28 @@ if [ "$MODE" = "negctl" ]; then
 	exit 0
 fi
 
-if [ "$MODE" = "ambig" ]; then
-	# A must still FOUND (nothing about genesis changed); B must NOT be
-	# admitted, must hold NO CSID and must NOT be a member.
+if [ "$MODE" = "noderive" ]; then
+	# A must found; B must be ADMITTED and must hold the ASSIGNED slot 2 --
+	# which 1030 & 0x3ff = 6 could never have produced.
 	if [ "$A_ROLE" != "founder" ] || [ "$A_MEMBER" != "1" ]; then
-		echo "  AMBIGUITY CONTROL INCONCLUSIVE: node A did not found, so"
-		echo "  there was no coordinator to refuse anything."
-		echo "  A: role=${A_ROLE:-?} member=${A_MEMBER:-?}"
+		echo "  NO-DERIVE CONTROL INCONCLUSIVE: node A did not found."
 		echo "=========================================="
 		exit 1
 	fi
-	if [ "$B_MEMBER" = "1" ] || { [ -n "$B_CSID" ] && [ "$B_CSID" != "-" ]; }; then
-		echo "  AMBIGUITY CONTROL FAILED: node B reached MEMBER or holds a"
-		echo "  CSID (member=$B_MEMBER csid=$B_CSID) although the coordinator"
-		echo "  refused its admission and sent it no op-0x06 membership"
-		echo "  record. A membership with no wire-learned generation behind"
-		echo "  it is fabricated -- INV-6."
+	if [ "$B_MEMBER" != "1" ] || [ "$B_CSID" != "0x00010002" ]; then
+		echo "  NO-DERIVE CONTROL FAILED: node B (SCSSYSTEMID 1030) reports"
+		echo "  member=$B_MEMBER csid=$B_CSID. It must hold 0x00010002 -- the"
+		echo "  CSV slot the coordinator ASSIGNED it. Anything else means the"
+		echo "  identity was computed locally rather than adopted off the"
+		echo "  wire (1030 & 0x3ff = 6 would give 0x00010006)."
 		echo "=========================================="
 		exit 1
 	fi
-	echo "  AMBIGUITY CONTROL HELD (rd vms-3a7c): with node B's SCSSYSTEMID"
-	echo "  at 1030 the two candidate CSID-assignment rules disagree (slot 2"
-	echo "  vs 1030 & 0x3ff = 6), the coordinator refused the admission and"
-	echo "  sent NO op-0x06 -- and node B stayed NEW with no CSID and no"
-	echo "  membership. So the MEMBER the proof run reports for node B can"
-	echo "  only have come from a real, wire-learned generation."
+	echo "  NO-DERIVE CONTROL HELD (rd vms-3a7c): node B's SCSSYSTEMID is"
+	echo "  1030, whose low ten bits are 6 -- and its executive reports CSID"
+	echo "  $B_CSID, CSV slot 2, the slot the coordinator assigned. A value"
+	echo "  it could not have computed: it was ADOPTED from the op-0x05"
+	echo "  membership record, which is the rule the oracle settled."
 	echo "=========================================="
 	exit 0
 fi

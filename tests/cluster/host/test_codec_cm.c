@@ -643,6 +643,91 @@ static void test_joiner_originations(void)
 }
 
 /*
+ * vms_cm_membership_rec_build / _parse: the op-0x05 MEMBERSHIP RECORD, against
+ * the capture's own byte-exact vectors (vms_cluster_codec_cm.h sec 5c).
+ */
+static void test_membership_rec(void)
+{
+	struct vms_cm_membership_rec rec, got;
+	uint8_t body[VMS_CM_BODY_LEN];
+	uint32_t written = 0, i, nonzero = 0;
+
+	printf("-- vms_cm_membership_rec_build/_parse (op 0x05) --\n");
+
+	/* cn3's own pairing: SCSSYSTEMID 1986 -> CSID 0x00010003, index 2. */
+	memset(&rec, 0, sizeof(rec));
+	rec.sysid = 1986u;
+	rec.csid  = 0x00010003u;
+	rec.index = 2u;
+	rec.boot_lo = 0x2ac58434u;
+	rec.boot_hi = 0x00bc20ceu;
+	rec.boot_valid = 1u;
+
+	memset(body, 0, sizeof(body));
+	ct_check(vms_cm_membership_rec_build(&rec, body, sizeof(body),
+					     &written) == VMS_CODEC_OK,
+		 "builds cn3's own 1986 -> 0x00010003 pairing");
+	ct_check_eq_u32(written, VMS_CM_BODY_LEN, "  a full 132-byte body");
+	ct_check_eq_u32(body[VMS_OFB_CM_CATEGORY], VMS_CM_CAT_CONFIG,
+			"  body[8] = 0x01");
+	ct_check_eq_u32(body[VMS_OFB_CM_OPCODE], VMS_CM_OP_MEMBREC,
+			"  body[9] = 0x05");
+	ct_check_eq_u32((uint32_t)body[VMS_OFB_CM_MEMBREC_TAG + 1], 0x02u,
+			"  body[16:20] carries the constant 0x00000220 seen in "
+			"8/8 real frames");
+
+	/* THE ROUND TRIP: what the builder writes, this file's own reader
+	 * reads -- one shared form, exactly as the reference lays it out. */
+	ct_check(vms_cm_membership_rec_parse(body, VMS_CM_BODY_LEN,
+					     &got) == VMS_CODEC_OK,
+		 "  and the reader takes it back");
+	ct_check_eq_u32(got.sysid, 1986u, "    the SCSSYSTEMID it is about");
+	ct_check_eq_u32(got.csid, 0x00010003u, "    the ASSIGNED CSID");
+	ct_check_eq_u32(got.index, 2u, "    the 0-based CSV index");
+	ct_check_eq_u32(got.boot_lo, 0x2ac58434u, "    the boot time, low");
+	ct_check_eq_u32(got.boot_hi, 0x00bc20ceu, "    ... and high");
+	ct_check_eq_u32(got.boot_valid, 1u, "    marked held");
+
+	/* body[42:132] -- the reference's stale buffer -- is ZERO here. */
+	for (i = VMS_OFB_CM_MEMBREC_STALE; i < VMS_CM_BODY_LEN; i++) {
+		if (body[i] != 0u)
+			nonzero++;
+	}
+	ct_check_eq_u32(nonzero, 0u,
+		"  body[42:132] is entirely zero: the reference's leftover "
+		"strings and kernel pointers are NOT reproduced (Rule 8)");
+
+	/* REFUSALS -- a record that does not hold together is never built. */
+	rec.index = 7u;   /* disagrees with the CSID's own slot */
+	ct_check(vms_cm_membership_rec_build(&rec, body, sizeof(body),
+					     &written) == VMS_CODEC_E_RANGE,
+		 "an index that disagrees with the CSID's slot is refused");
+	rec.index = 2u; rec.sysid = 0u;
+	ct_check(vms_cm_membership_rec_build(&rec, body, sizeof(body),
+					     &written) == VMS_CODEC_E_RANGE,
+		 "a zero SCSSYSTEMID is refused");
+	rec.sysid = 1986u; rec.csid = 0x00010000u; rec.index = 0xffffu;
+	ct_check(vms_cm_membership_rec_build(&rec, body, sizeof(body),
+					     &written) == VMS_CODEC_E_RANGE,
+		 "CSV slot 0 is refused (p. 7-25: slot 0 is never used)");
+
+	/* op06-join's pairing, which is what refutes SCSSYSTEMID & 0x3ff:
+	 * 1026 -> slot 3, while 1026 & 0x3ff is 2. */
+	memset(&rec, 0, sizeof(rec));
+	rec.sysid = 1026u; rec.csid = 0x00010003u; rec.index = 2u;
+	ct_check(vms_cm_membership_rec_build(&rec, body, sizeof(body),
+					     &written) == VMS_CODEC_OK,
+		 "op06-join's 1026 -> slot 3 pairing builds too -- the slot a "
+		 "joiner could never have derived from its own SCSSYSTEMID");
+	ct_check(vms_cm_membership_rec_parse(body, VMS_CM_BODY_LEN,
+					     &got) == VMS_CODEC_OK,
+		 "  and round-trips");
+	ct_check_eq_u32(got.boot_valid, 0u,
+			"  with no boot time held, body[28:36] is zero and the "
+			"reader says so rather than inventing a time");
+}
+
+/*
  * vms_cm_membership_build: the builder, and the ONE property that matters --
  * what it writes, THIS FILE's own reader reads back. Grounding:
  * docs/design-op06-membership-builder.md.
@@ -924,6 +1009,7 @@ int main(void)
 	test_open_bitmap_span();   /* FC-P3.5 */
 
 	test_joiner_originations();     /* FC-P3.3 */
+	test_membership_rec();                /* the op-0x05 record   */
 	test_membership_build();              /* the op-0x06 builder */
 	test_membership_coordinator_csid();   /* E30 */
 

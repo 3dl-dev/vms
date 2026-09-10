@@ -1,18 +1,4 @@
-# 2-node cluster rig -- VOTES=0 NEGATIVE CONTROL, re-run against the
-# op-0x06 builder (rd vms-f6b). Same image ovmx-genesis-rig:13, same pod.
-# With no node holding quorum by its own votes, nobody founds, nobody is
-# admitted, and no node holds a CSID.
-
-=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ===
-mode=negctl
-accel=kvm -cpu host group=2026 recnx=8s stagger=30s
-node A: OVMXA/1025 VOTES=0 EXPECTED_VOTES=1 VAXCLUSTER=2
-node B: OVMXB/1026 VOTES=0          VAXCLUSTER=2
-
---- powering on node A (it must hear nobody for 8s, then found) ---
---- powering on node B (it must join what A formed) ---
-
-=== node A: what its executive held (ttyS1) ===
+# 2-node rig -- VOTES=0 NEGATIVE CONTROL, re-run against the op-05 fix.
 
 RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
 RIG-A-FINAL role=none member=0 state=JOINING csid=- cn=0 quorum=0 cevotes=0 epoch=0 projections=agree

@@ -1331,9 +1331,20 @@ static void test_omissions_are_counted_not_faked(void)
 			"and its three ungrounded field spans -- the countdown, "
 			"the incarnation, the sub-record body -- are counted, "
 			"not guessed");
-	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_LOCKRB), 0,
-			"the op 0x05 lock-rebuild burst is STILL omitted: its "
-			"payload field map is not grounded");
+	/*
+	 * op-0x05 is the MEMBERSHIP RECORD (vms_cluster_codec_cm.h sec 5c), and
+	 * the coordinator now sends them: the FULL member set to the joiner and
+	 * the DELTA to each already-present member, which is what the reference
+	 * does. With two members plus the joiner that is 3 + 2 = 5 ... plus the
+	 * local node's own record to the joiner = 6.
+	 */
+	ct_check_eq_u32(g.c.membrecs_sent,
+			count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC),
+			"every membership record counted is a record that "
+			"really went out");
+	ct_check_eq_u32(g.c.membrec_fields_omitted, g.c.membrecs_sent,
+			"and each one counts body[42:132] -- the reference's "
+			"stale buffer -- as omitted, never reproduced");
 	ct_check_eq_u32(g.c.open_cells_omitted, 3,
 			"the Phase 1 proposal's un-isolated cells are counted "
 			"per open (book p. 7-40)");
@@ -1416,49 +1427,142 @@ static void test_membership_record_is_built_from_real_state(void)
 }
 
 /*
- * THE vms-3a7c AMBIGUITY GATE. The coordinator stamps the subject with a
- * round-robin CSV slot; the joiner will DERIVE its own CSID from its own
- * SCSSYSTEMID. When those two numbers differ the joiner cannot find its own
- * bit in the nodemap, and it would be admitted by the cluster while believing
- * it was not. Until the oracle settles which rule is right, such a system is
- * REFUSED -- loudly, with nothing stamped and nothing emitted.
+ * THE op-0x05 MEMBERSHIP RECORDS: full set to the joiner, delta to each
+ * present member -- the distribution the reference uses (cn3: frames 230-233
+ * VAX2 -> OVMXJ1 carry 1986/1025/1026/1986, frame 235 VAX2 -> VAX1 carries only
+ * the new member). Every field is a projection of the coordinator's real CSB
+ * state, which is what this test pins.
  */
-static void test_ambiguous_csid_assignment_refuses(void)
+static void test_membership_records_are_projected_from_the_csbs(void)
+{
+	const struct sent_frame *s;
+	uint32_t i, to_join = 0, to_vax1 = 0, to_vax2 = 0, saw_join_own = 0;
+
+	printf("\n-- op 0x05: the membership records, from real CSB state --\n");
+	bed_init(2);
+	drive_add_to_barrier(2);
+
+	for (i = 0; i < g.n_sent; i++) {
+		if (g.sent[i].category != VMS_CM_CAT_CONFIG ||
+		    g.sent[i].opcode != VMS_CM_OP_MEMBREC)
+			continue;
+		if (g.sent[i].dst == JOIN_CSID) to_join++;
+		else if (g.sent[i].dst == VAX1_CSID) to_vax1++;
+		else if (g.sent[i].dst == VAX2_CSID) to_vax2++;
+	}
+	ct_check_eq_u32(to_join, 4u,
+			"the JOINER is sent the FULL member set -- local, VAX1, "
+			"VAX2 and its own record");
+	ct_check_eq_u32(to_vax1, 1u, "VAX1 is sent only the DELTA");
+	ct_check_eq_u32(to_vax2, 1u, "... and so is VAX2");
+
+	for (i = 0; i < g.n_sent; i++) {
+		uint32_t sysid, csid, idx;
+
+		if (g.sent[i].category != VMS_CM_CAT_CONFIG ||
+		    g.sent[i].opcode != VMS_CM_OP_MEMBREC)
+			continue;
+		s = &g.sent[i];
+		sysid = sent_le32(s, VMS_OFF_SYSAP_BODY +
+				     VMS_OFB_CM_MEMBREC_SYSID);
+		csid  = sent_le32(s, VMS_OFF_SYSAP_BODY +
+				     VMS_OFB_CM_MEMBREC_CSID);
+		idx   = sent_le16(s, VMS_OFF_SYSAP_BODY +
+				     VMS_OFB_CM_MEMBREC_INDEX);
+		ct_check_eq_u32(sent_le32(s, VMS_OFF_SYSAP_BODY +
+					     VMS_OFB_CM_MEMBREC_TAG),
+				VMS_CM_MEMBREC_TAG,
+				"  the constant tag, 8/8 real frames");
+		ct_check_eq_u32(idx, (csid & 0xffffu) - 1u,
+				"  the CSV index is derived from the CSID's own "
+				"slot, never carried separately");
+		{
+			const struct vms_csb *about =
+				cnxman_club_find_sysid(&g.cl.club,
+						       (vms_scs_sysid_t)sysid);
+
+			ct_check(about != NULL,
+				 "  the record names a system this CLUB really "
+				 "holds a block for");
+			if (about != NULL)
+				ct_check_eq_u32(csid, (uint32_t)about->csid,
+					"  ... and carries THAT block's real "
+					"CSID -- read from executive state, "
+					"never templated");
+		}
+		if (sysid == 1028u && s->dst == JOIN_CSID) {
+			saw_join_own = 1u;
+			ct_check_eq_u32(csid, JOIN_CSID,
+					"  the joiner's OWN record carries the "
+					"slot this coordinator just assigned it");
+		}
+	}
+	ct_check_eq_u32(saw_join_own, 1u,
+			"the joiner is told its own identity -- without it, it "
+			"can never find its bit in the nodemap");
+	ct_check_eq_u32(g.c.membrec_omitted, 0u,
+			"no member was skipped for want of a complete identity");
+}
+
+/*
+ * A SLOT NO JOINER COULD HAVE DERIVED (rd vms-3a7c, settled).
+ *
+ * The oracle and both repository captures agree that the coordinator assigns
+ * the round-robin CSV slot: SCSSYSTEMID 1986 was assigned slot 3, and 1026 was
+ * assigned slot 3, neither of which `SCSSYSTEMID & 0x3ff` can produce. This
+ * test pins that OVMX does the same and, crucially, that it ADMITS such a
+ * system rather than refusing it -- the interim "admit only when the two
+ * candidate rules agree" gate would have refused exactly the case the oracle
+ * shows real VMS performing.
+ */
+static void test_slot_is_assigned_not_derivable(void)
 {
 	struct vms_csb *joiner;
 
-	printf("\n-- a system the two CSID rules would name differently is "
-	       "refused (vms-3a7c) --\n");
+	printf("\n-- the assigned CSV slot is the coordinator's, not the "
+	       "joiner's arithmetic --\n");
 	bed_init(2);
 
-	/*
-	 * The joiner's SCSSYSTEMID is changed so that `sysid & 0x3ff` is 9
-	 * while the next free CSV slot is still JOIN_SLOT (4). Nothing else
-	 * about the bed changes.
-	 */
 	joiner = cnxman_club_csb_at(&g.cl.club, (uint32_t)bed_join_csb(2));
 	ct_check(joiner != NULL, "the joiner CSB is there");
 	if (joiner == NULL)
 		return;
-	joiner->sysid = (vms_scs_sysid_t)1033;   /* 1033 & 0x3ff == 9 != 4 */
+	/* 1030 & 0x3ff == 6, while the next free CSV slot is JOIN_SLOT (4). */
+	joiner->sysid = (vms_scs_sysid_t)1030;
 
+	drive_add_to_barrier(2);
+
+	ct_check_eq_u32(g.c.last_refusal, CNXMAN_COORD_REF_NONE,
+			"the admission is NOT refused: a SCSSYSTEMID that "
+			"cannot derive its own slot is the ordinary case");
+	ct_check_eq_u32(joiner->csid_valid, 1u, "the joiner was stamped");
+	ct_check_eq_u32((uint32_t)joiner->csid, JOIN_CSID,
+			"... with the ROUND-ROBIN slot 4 -- not 1030 & 0x3ff "
+			"= 6, which is what the reference refutes");
+
+	/* And the record that goes to the joiner carries exactly that. */
 	{
-		uint8_t f[VMS_CM_FRAME_LEN];
-		uint32_t n = mk_join_request(f);
+		const struct sent_frame *s;
+		uint32_t i, found = 0;
 
-		(void)coord_feed(&g.c, f, n, bed_join_csb(2));
+		for (i = 0; i < g.n_sent; i++) {
+			if (g.sent[i].category != VMS_CM_CAT_CONFIG ||
+			    g.sent[i].opcode != VMS_CM_OP_MEMBREC)
+				continue;
+			s = &g.sent[i];
+			if (sent_le32(s, VMS_OFF_SYSAP_BODY +
+					 VMS_OFB_CM_MEMBREC_SYSID) != 1030u)
+				continue;
+			found = 1;
+			ct_check_eq_u32(sent_le32(s, VMS_OFF_SYSAP_BODY +
+						     VMS_OFB_CM_MEMBREC_CSID),
+					JOIN_CSID,
+					"the op-0x05 record TELLS it that slot "
+					"-- which is the only way it could "
+					"know");
+		}
+		ct_check_eq_u32(found, 1u, "and such a record went out");
 	}
-
-	ct_check_eq_u32(g.n_sent, 0, "not one frame originated");
-	ct_check_eq_u32(g.c.last_refusal, CNXMAN_COORD_REF_CSID_AMBIG,
-			"refused because the assignment is ambiguous, not for "
-			"some other reason");
-	ct_check_eq_u32(g.c.csid_ambiguous, 1, "and the refusal is counted");
-	ct_check_eq_u32(joiner->csid_valid, 0,
-			"NOTHING was stamped on the subject: a refusal leaves "
-			"no half-admitted identity behind");
-	ct_check_eq_u32(g.cl.club.we_coordinate, 0, "the CLUB was not claimed");
-	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_IDLE, "still idle");
 }
 
 static void test_dlm_seam(void)
@@ -1642,7 +1746,8 @@ int main(void)
 	test_no_link_originates_nothing();
 	test_omissions_are_counted_not_faked();
 	test_membership_record_is_built_from_real_state();
-	test_ambiguous_csid_assignment_refuses();
+	test_membership_records_are_projected_from_the_csbs();
+	test_slot_is_assigned_not_derivable();
 	test_dlm_seam();
 	test_dlm_told_when_abandoned();
 	test_foreign_frames_route_on();

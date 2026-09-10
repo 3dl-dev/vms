@@ -1,4 +1,14 @@
-# The cat-0x01 op-0x06 MEMBERSHIP builder — field-by-field grounding
+# The cat-0x01 membership frames — op-0x05 and op-0x06, field by field
+
+> **STATUS (rd vms-fc7 / vms-3a7c / vms-9c99, 2026-09-10): both closed.** The
+> op-0x05 MEMBERSHIP RECORD -- not op-0x06 -- carries the grounded
+> {SCSSYSTEMID -> CSID} pairing, and it is what a joiner adopts its identity
+> from. §5 was rewritten when the lab oracle and the op-0x05 decode settled the
+> assignment rule (round-robin CSV slot); §11 records what shipped and the
+> symmetric CN=2 it produced. The interim "ambiguity gate" §5 proposed is GONE
+> -- the oracle's own behaviour is a case it would have refused.
+
+## (original title) The cat-0x01 op-0x06 MEMBERSHIP builder
 
 **rd vms-f6b (rig) / vms-1ee (DLM proof) / vms-3a7c (CSID assignment, open).**
 Status: **an honest burst IS buildable.** This note is the evidence for that
@@ -515,3 +525,84 @@ M≥3 ADDs simply behave differently from the M=2 case both captures show.
 | Code fix warranted from this? | **No.** The barrier and Phase 2 models both match the wire. |
 | Doc correction warranted? | **Yes** — `cn3-achieved-20260905.md`'s "no op-0c ever appears" is corrected in place. |
 | Anything left open? | Why VAX1 skipped the epoch-5 barrier (needs the 3-VAX ADD run), and whether the join FSM's op-0c #12 promotion gate should move to the GO (an E79 decision, not a decode question). |
+
+---
+
+## 11. What shipped, and the symmetric CN=2 it produced (rd vms-fc7 / vms-9c99)
+
+Three changes, together:
+
+**(a) The coordinator originates op-0x05 membership records.**
+`vms_cm_membership_rec_build()` writes only the grounded fields (§5c) and
+`coord_send_membership_set()` distributes them the way the reference does --
+the FULL member set to the joiner, the DELTA to each already-present member.
+Every field is a projection of the CSB this coordinator really holds: the
+SCSSYSTEMID the port learned, the CSID `coord_assign_slot()` actually stamped,
+that CSID's own slot for the index, that member's real incarnation. A member
+this node holds no complete identity for gets NO record (counted). Its
+`body[42:132]` -- uninterpreted stale buffer in the reference -- is emitted
+ZERO and counted, never reproduced (Rule 8).
+
+**(b) The joiner ADOPTS rather than derives.** `join_adopt_membership_rec()`
+takes the CSID out of the record that names its own SCSSYSTEMID, re-adopting on
+every admission and caching nothing (p. 7-25: a rejoining system gets a NEW
+CSID). Records about OTHER members are filed on the block this CLUB already
+holds for that SCSSYSTEMID -- which is what lets a joiner COUNT the cluster --
+and a record about a system it holds no block for is counted and dropped, never
+invented. The old `generation << 16 | (SCSSYSTEMID & 0x3ff)` self-derive is
+gone; op-0x06 now only confirms a generation, counted.
+
+**(c) The joiner promotes at the GO, not at op-0x0c #12** (§10b). The barrier
+gains `phase2_commits`, moved by `barrier_commit_phase2()`, and the join FSM
+promotes on that -- the same criterion membership and the coordinator already
+use. A real VAX commits an ADD with no on-wire op-0x0c to the joiner, so the
+old trigger was an interop hang.
+
+**The interim §5 ambiguity gate was REMOVED**, and had to be: it admitted a
+system only when the round-robin slot and `SCSSYSTEMID & 0x3ff` agreed, and the
+oracle's own behaviour (1986 -> slot 3) is exactly a case it would have refused.
+
+### Measured, on two real executives (rig on the k3s worker, KVM)
+
+```
+RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=2 epoch=2 projections=agree
+RIG-B-FINAL role=joiner  member=1 state=MEMBER csid=0x00010002 cn=2 epoch=2 projections=agree
+  GENESIS 2-NODE PROOF PASSED
+```
+
+Node B's own CSB table now names both systems:
+
+```
+RIG-B-CSB i=0 node=OVMXB sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-     sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+```
+
+and its transcript says how it got there:
+
+```
+%CNXMAN, the cluster assigned this node a cluster system id
+%CNXMAN, this node is a member of the cluster
+%CNXMAN, this node is now a VAXcluster member
+%CNXMAN, system 0000000000000402 was added to the cluster
+```
+
+### The controls
+
+* **no-derive** (`RIG_MODE=noderive`): node B's SCSSYSTEMID is **1030**, whose
+  low ten bits are **6** -- and its executive reports CSID **0x00010002**, CSV
+  slot **2**, the slot the coordinator assigned. A value it could not have
+  computed, so the identity was demonstrably ADOPTED off the wire. HELD.
+* **negctl** (VOTES=0 on both): neither founds, neither reaches MEMBER, neither
+  holds a CSID. HELD.
+
+### Two things this run does NOT claim
+
+* **Node B's quorum arithmetic is still empty** (`quorum=0 cevotes=0`). B counts
+  both members but has not learned node A's VOTES, which ride op-0x01 PARAMS
+  rather than the membership record. Out of scope here; recorded, not hidden.
+* **Node A logs two "unroutable VMS$VAXcluster frame" lines** -- node B's
+  `0x81/0x05` echoes of the records A sent it. The response is correctly
+  *answered* by B; A's coordinator simply owns no edge for a 0x81/0x05 and says
+  so rather than inventing one. Counted and honest; closing it means grounding
+  what a coordinator does with that echo, which no capture shows.

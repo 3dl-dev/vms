@@ -561,11 +561,14 @@ RUN if [ "$OVMX_TEST_ENABLE_SSH" = "1" ]; then \
         "$KEYGEN" -t ed25519 -f /ovmxsshsrv/etc/hostkey -N "" -q && chmod 600 /ovmxsshsrv/etc/hostkey && \
         printf '%s\n' \
             '# OVMX SSH cold-boot proof sshd_config (rd vms-843a, TEST OVERLAY only).' \
-            '# Launched by TCPIP$INETD in inetd mode (sshd -i): the aux server binds :22' \
-            '# over BGn:, accepts, and hands the connection on stdin/stdout; sshd -i' \
-            '# services that one connection. AddressFamily inet -- BGn: is AF_INET.' \
-            'HostKey /ovmxsshsrv/etc/hostkey' \
+            '# Runs as a DETACHED daemon (sshd -D, the vms-9cc-proven model): sshd' \
+            '# itself binds :22 and listen/accepts over the executive BGn: seam. The' \
+            '# args (-D -e -f this-file) are injected by __wrap_main (ovmx_ssh_wrap.c)' \
+            '# since OVMX DCL RUN cannot pass argv. AddressFamily inet -- BGn: is AF_INET.' \
+            'Port 22' \
+            'ListenAddress 0.0.0.0' \
             'AddressFamily inet' \
+            'HostKey /ovmxsshsrv/etc/hostkey' \
             'PasswordAuthentication yes' \
             'PubkeyAuthentication yes' \
             'PermitRootLogin yes' \
@@ -1055,31 +1058,29 @@ RUN if [ "$OVMX_TEST_ENABLE_TCPIP" = "1" ]; then \
         echo "OVMX_TEST_ENABLE_TCPIP=0 -- shipped image (no aux-server image, no TCP/IP auto-start, no port open)"; \
     fi
 # vms-843a SSH cold-boot PROOF overlay (TEST-ONLY; default OFF => shipped image
-# ships no SSH). With --build-arg OVMX_TEST_ENABLE_SSH=1 the proof build stages
-# the aux server TCPIP$INETD.EXE + the wrapped OpenSSH server VMSSSHD.EXE into
-# SYS$SYSTEM: (ODS-2), swaps in the SSH-enabled SERVICE.DAT (one active line,
-# SSH 22 SYS$SYSTEM:VMSSSHD.EXE -i -f ...) + the SSH overlay SYSTARTUP (brings the
-# NIC up + starts TCPIP$STARTUP). INETD then binds :22 over BGn:, ACP-stages
-# VMSSSHD.EXE, and launches sshd -i on the accepted connection. The privsep
-# siblings + host key + sshd_config are placed on the initramfs (below). A default
-# build leaves /system-stage/vms untouched (posture-neutral: shipped ships no SSH,
-# opens no port; SSH-as-layered-product + SSH-enable stay operator posture calls).
+# ships no SSH). With --build-arg OVMX_TEST_ENABLE_SSH=1 the proof build stages the
+# wrapped OpenSSH server VMSSSHD.EXE into SYS$SYSTEM: (ODS-2) + swaps in the SSH
+# overlay SYSTARTUP (brings the NIC up, then @SYS$STARTUP:TCPIP$SSH_STARTUP). SSH is
+# a DETACHED DAEMON (real VMS runs it via TCPIP$SSH_STARTUP RUN/DETACHED, not as an
+# inetd service): TCPIP$SSH_STARTUP RUN/DETACHEDs SYS$SYSTEM:VMSSSHD.EXE, which DCL
+# RUN ACP-stages off the ODS-2 disk (the proven vms-21b rms_stage_over_acp path)
+# and activates; __wrap_main injects `-D -e -f <config>` (RUN can't pass argv), so
+# sshd binds :22 + listen/accepts over BGn: itself (the vms-9cc-proven -D model).
+# The privsep siblings + host key + sshd_config are placed on the initramfs (below).
+# No INETD here -- SSH is not an inetd accept-handoff service. A default build
+# leaves /system-stage/vms untouched (posture-neutral: shipped ships no SSH, opens
+# no port; SSH-as-layered-product + SSH-enable stay operator posture calls).
 # image_parity.py (vms-e1d) excludes this --build-arg-gated block from the shipped
-# set, so VMSSSHD.EXE/TCPIP$INETD.EXE here are not x86_64-only shipped drift.
+# set, so VMSSSHD.EXE here is not x86_64-only shipped drift.
 RUN if [ "$OVMX_TEST_ENABLE_SSH" = "1" ]; then \
-        cp 'distro/rootfs-test-ssh/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT' \
-           /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
         cp distro/rootfs-test-ssh/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
            /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
-        cp '/src/build-static/bin/TCPIP$INETD.EXE' \
-           /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
         cp /src/build-static/bin/VMSSSHD.EXE \
            /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-        grep -q 'TCPIP\$STARTUP' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
-        grep -qE '^SSH ' /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/'TCPIP$SERVICE.DAT' && \
-        test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/'TCPIP$INETD.EXE' && \
+        grep -q 'TCPIP\$SSH_STARTUP' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
         test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/VMSSSHD.EXE && \
-        echo "OK: OVMX_TEST_ENABLE_SSH=1 -- SSH cold-boot proof overlay staged (TCPIP$INETD.EXE + VMSSSHD.EXE at SYS$SYSTEM:, SSH-enabled SERVICE.DAT + TCPIP$CONFIG/STARTUP)"; \
+        test -f '/system-stage/vms/SYS0/SYSCOMMON/SYS$STARTUP/TCPIP$SSH_STARTUP.COM' && \
+        echo "OK: OVMX_TEST_ENABLE_SSH=1 -- SSH cold-boot proof overlay staged (VMSSSHD.EXE at SYS$SYSTEM:, detached-daemon SYSTARTUP -> TCPIP$SSH_STARTUP)"; \
     else \
         echo "OVMX_TEST_ENABLE_SSH=0 -- shipped image (no SSH image, no auto-start, no port open)"; \
     fi

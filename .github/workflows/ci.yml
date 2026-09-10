@@ -262,6 +262,7 @@ jobs:
               - 'src/libvmssys/**'
               - 'distro/Dockerfile.bootable'
               - 'distro/rootfs-test-ssh/**'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYS$STARTUP/**'
               - 'tests/qemu/run_ssh_boot_e2e.sh'
               - 'tests/qemu/test_ssh_boot_e2e.sh'
               - 'tests/integration/test_tcpip_posture_guard.sh'

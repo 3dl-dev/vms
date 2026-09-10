@@ -71,15 +71,16 @@ else
     bad "executive never attached within 120s"
 fi
 
-# The SSH overlay SYSTARTUP brings the NIC up (TCPIP$CONFIG) and starts the aux
-# server (TCPIP$STARTUP) during LPMAIN, before the login prompt.
-if wait_for '%TCPIP-I-AUXSTARTED' 180; then
-    ok "aux server (TCPIP\$INETD) started detached on cold boot"
+# The SSH overlay SYSTARTUP brings the NIC up (TCPIP$CONFIG) and starts the SSH
+# server (TCPIP$SSH_STARTUP -> RUN/DETACHED VMSSSHD.EXE, sshd -D) during LPMAIN,
+# before the login prompt.
+if wait_for '%SSH-I-SRVSTARTED' 180; then
+    ok "SSH server (VMSSSHD) started detached on cold boot"
 else
-    bad "aux server never started (TCPIP\$CONFIG / TCPIP\$STARTUP) -- see console tail"
+    bad "SSH server never started (TCPIP\$CONFIG / TCPIP\$SSH_STARTUP) -- see console tail"
 fi
 
-sleep 5                                 # let the listener bind :22 over BGn:
+sleep 5                                 # let sshd bind :22 + listen over BGn:
 
 # Inbound SSH: password login as SYSTEM (SYSUAF password MANAGER), non-interactive,
 # feeding one DCL WRITE + LOGOUT on stdin. A landed DCL session echoes the marker.

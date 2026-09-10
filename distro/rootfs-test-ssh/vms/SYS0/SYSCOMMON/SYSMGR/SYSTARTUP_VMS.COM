@@ -109,5 +109,5 @@ $! class NIC regardless of whether the kernel named it eth0/ens0/enp0s2. 10.0.2.
 $! is QEMU SLIRP's conventional single-guest lease, reachable via the hostfwd.
 $ @SYS$MANAGER:TCPIP$CONFIG OVMX OVMX.LOCAL SE0 10.0.2.15 255.255.255.0
 $ TCPIP SHOW INTERFACE      ! diagnostic: confirm SE0 came up with 10.0.2.15 on the console
-$ @SYS$STARTUP:TCPIP$STARTUP
+$ @SYS$STARTUP:TCPIP$SSH_STARTUP    ! start the wrapped OpenSSH sshd as a detached daemon (vms-843a)
 $ EXIT

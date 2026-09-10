@@ -55,15 +55,17 @@ else
     ok "shipped TCPIP\$SERVICE.DAT ships with every service DISABLED (no enabled line)"
 fi
 
-# (c) SSH-specific posture (rd vms-843a): SSH-enable-by-default is a distinct,
-# higher-stakes operator decision than daytime (a network login authority, a
-# shared host key, cred exposure) -- so assert it EXPLICITLY, not only via (b).
-# An enabled SSH line is a non-comment line whose service token is 'SSH'.
-if grep -nE '^[[:space:]]*SSH[[:space:]]' "$SERVICE_DAT" >/dev/null 2>&1; then
-    bad "shipped TCPIP\$SERVICE.DAT ENABLES SSH -- SSH-enable-by-default is Baron-reserved (network login authority + shipped host key). Keep the SSH line commented; the SSH cold-boot proof enables it via the OVMX_TEST_ENABLE_SSH test overlay only."
-    grep -nE '^[[:space:]]*SSH[[:space:]]' "$SERVICE_DAT" | sed 's/^/      /'
+# (c) SSH-specific posture (rd vms-843a): SSH runs as a DETACHED DAEMON started by
+# @SYS$STARTUP:TCPIP$SSH_STARTUP (not an inetd service), so the shipped SSH-off
+# posture is: the shipped SYSTARTUP must NOT invoke TCPIP$SSH_STARTUP. SSH-enable-
+# by-default is a distinct, higher-stakes operator decision than daytime (a network
+# login authority + a shipped host key), so assert it EXPLICITLY. A DCL invocation
+# is a non-comment line ('$' col 1, not '$!') naming TCPIP$SSH_STARTUP.
+if grep -nE '^\$[^!].*TCPIP\$SSH_STARTUP' "$SYSTARTUP" >/dev/null 2>&1; then
+    bad "shipped SYSTARTUP_VMS.COM INVOKES @SYS\$STARTUP:TCPIP\$SSH_STARTUP -- that auto-starts the SSH daemon at boot (network login authority + shipped host key, Baron-reserved). The SSH cold-boot proof enables SSH via the OVMX_TEST_ENABLE_SSH test overlay only; if enabling SSH by default is intended, make it explicit and update this guard."
+    grep -nE '^\$[^!].*TCPIP\$SSH_STARTUP' "$SYSTARTUP" | sed 's/^/      /'
 else
-    ok "shipped TCPIP\$SERVICE.DAT does NOT enable SSH (SSH is a layered product, off by default -- Baron-reserved)"
+    ok "shipped SYSTARTUP_VMS.COM does NOT invoke TCPIP\$SSH_STARTUP (SSH daemon not auto-started -- SSH is a layered product, off by default, Baron-reserved)"
 fi
 
 echo "=== test_tcpip_posture_guard: $([ "$FAIL" = 0 ] && echo PASS || echo FAIL) ==="

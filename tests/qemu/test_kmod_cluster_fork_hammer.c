@@ -373,6 +373,7 @@ int main(void)
 
         CHECK(io_sub > 0,
               "cf_io_post accepted real served-I/O submissions");
+        /* negctl: fork-worker-start-reports-success-unstarted */
         CHECK(io_calls > 0,
               "the WORKER kthread really ran the blocking I/O callback "
               "(this is where exec_blockdev_read_block sits on a served unit)");
@@ -421,6 +422,7 @@ int main(void)
          * tests/lab/tools/run_mscp_srv_io_jitter_gate.sh (the FC-P6.6 plan
          * row's R4 leg).
          */
+        /* negctl: fork-worker-start-reports-success-unstarted */
         CHECK(result_ll(result, "WORK_DURING_IO") > 0,
               "THE FIX, MEASURED: the fork thread kept dispatching WHILE a served "
               "I/O was blocking on the worker -- it is no longer behind the disk");

@@ -547,7 +547,8 @@ pe-vc-snapshot-fabricates-circuit
 scs-cdt-snapshot-fabricates-connection
 cnxman-csb-snapshot-fabricates-member
 getsyi-csid-reported-without-valid
-fork-work-dispatch-uncounted"
+fork-work-dispatch-uncounted
+fork-worker-start-reports-success-unstarted"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -659,6 +660,26 @@ allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
 EOF
                       ;;
+        esac;;
+
+    fork-worker-start-reports-success-unstarted)
+        case "$_f" in
+        facility)     echo "cluster fork served-I/O worker start (vms_cluster_fork_worker_start, FC-P6.6, vms-ci)";;
+        targets)      echo "kernel-core/vms_cluster_fork_bind.c";;
+        suites_red)   echo "test_kmod_cluster_fork_hammer";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cluster_fork_worker_start() short-circuits its exec_kthread_create with '0 &&', so status stays 0 (success), ioworker_started is set and it returns SS__NORMAL -- but the FC-P6.6 I/O worker kthread is NEVER spawned. The 'reports success while doing nothing' class: WORKER_START=1, IO_HANDLER_CALLS=0. Submissions are still accepted (cf_io_post queues them, io_sub stays green), but no worker runs the blocking callback, so the fork thread has nothing to dispatch alongside. Create call is unique; short-circuited text differs after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the WORKER kthread really ran the blocking I/O callback (this is where exec_blockdev_read_block sits on a served unit)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+THE FIX, MEASURED: the fork thread kept dispatching WHILE a served I/O was blocking on the worker -- it is no longer behind the disk
+EOF
+                      ;;
+        knock_on_why)  echo "with no worker kthread running the blocking I/O, there is no in-flight served I/O for the fork thread to dispatch alongside, so WORK_DURING_IO stays 0.";;
         esac;;
 
     fork-work-dispatch-uncounted)
@@ -6273,6 +6294,11 @@ apply_edit() {
         # Unique increment; dropping it leaves the counter at 0 (convergence
         # never reached). Gone after apply, so a 2nd apply is a no-op (selftest).
         sed -i 's|f->st.work_dispatched++;|/* NEGCTL fork-work-dispatch-uncounted: increment dropped */|' "$_file";;
+    fork-worker-start-reports-success-unstarted)
+        # Short-circuit the (unique) ioworker exec_kthread_create with 0 && so
+        # status stays 0 (success) but the create is never evaluated -> no kthread.
+        # After apply the LHS text differs, so a 2nd apply is a no-op (selftest).
+        sed -i 's|status = exec_kthread_create(\&b->ioworker, cfb_io_thread, b,|status = 0 \&\& exec_kthread_create(\&b->ioworker, cfb_io_thread, b, /* NEGCTL fork-worker-start-reports-success-unstarted */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

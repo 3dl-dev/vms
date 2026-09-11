@@ -1,0 +1,47 @@
+OVMX THIRD-PARTY SOFTWARE NOTICES AND WRITTEN OFFER
+===================================================
+
+OVMX is distributed under the GNU General Public License, version 2 (see the
+GNU GPL v2 text below). This distribution image also includes, or statically
+links, the third-party components listed here. Their license texts and
+copyright notices are reproduced below, as required for lawful redistribution.
+
+Bundled / shipped third-party components in this image and kit:
+
+  * Linux kernel (vmlinuz)  -- GNU GPL v2 (GPL-2.0-only). Built from pinned,
+    unmodified upstream kernel.org source; OVMX device drivers are overlaid
+    in-tree.
+  * vms.ko (the OVMX executive kernel module)  -- GNU GPL v2; OVMX's own code.
+  * tinycc / TCC.EXE (the bootstrap C compiler)  -- GNU LGPL v2.1. The shipped
+    TCC.EXE binary is unmodified upstream tinycc, statically linked.
+  * musl libc  -- MIT license. Statically linked into every OVMX .EXE image.
+
+(OpenSSH and LibreSSL are NOT included in this image; when a future release ships
+them, their BSD/ISC and OpenSSL/SSLeay notices will be added here.)
+
+
+WRITTEN OFFER OF CORRESPONDING SOURCE (GPL v2 section 3 / LGPL v2.1 section 4)
+----------------------------------------------------------------------------
+
+The complete corresponding source code for every GPL- and LGPL-licensed
+component in this distribution -- the Linux kernel, vms.ko, tinycc, and OVMX
+itself -- is available, for a period of at least three (3) years from the date
+of this distribution, as follows:
+
+  * OVMX (including vms.ko and OVMX's own sources), the exact pinned Linux
+    kernel version, and the exact pinned tinycc source, are all published in the
+    OVMX source repository, from which this image was built. The tinycc source
+    is additionally included in that repository under third-party/tcc/src/.
+
+  * A copy of the complete corresponding source may also be requested in writing
+    from the OVMX distributor. (Distributor contact / repository URL: TO BE
+    FILLED IN BY THE PUBLISHER AT RELEASE -- this offer is not valid until a
+    concrete source location and/or contact address is supplied here.)
+
+For the statically-linked LGPL v2.1 component (tinycc / TCC.EXE), the complete
+corresponding source and the OVMX object files or build recipe sufficient to
+relink a modified tinycc are available from the same source repository, as
+required by LGPL v2.1 section 6.
+
+The full license texts follow.
+

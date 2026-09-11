@@ -457,6 +457,7 @@ run_boot_a() {
   set +e
   timeout --kill-after="$TIMEOUT_GRACE" "$DOCKER_TIMEOUT" docker run --rm \
     --name "$cname" --memory=8g --cpus="$(nproc)" \
+    -e BOOT_APPEND_EXTRA="${BOOT_APPEND_EXTRA:-}" \
     -v "$WORK":/work "$BOOT_IMG" bash -euo pipefail -c '
       BT="'"$BOOT_TIMEOUT"'"
       cd /work
@@ -465,8 +466,11 @@ run_boot_a() {
       # OVMX_IMGACT_SEAM=1: surface the EXECUTIVE-recorded completion $STATUS per
       # activated image (GETEXIT(SEL_SELF)); the DCL RUN fork path collapses the
       # POSIX exit, so the seam is the truth for the returned value.
+      # BOOT_APPEND_EXTRA (vms-3c1 diagnostic): extra Linux/Alpha kernel params,
+      # e.g. "ignore_loglevel print-fatal-signals=1 loglevel=8" to dump the user
+      # SIGSEGV pc/ra/sp/faultVA to the console (no gdb on this rail).
       timeout "$BT" qemu-system-alpha -M clipper -smp 1 -m 1024 -vga none -nic none \
-          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1" \
+          -kernel vmlinux-boot -append "console=ttyS0 panic=-1 OVMX_IMGACT_SEAM=1 ${BOOT_APPEND_EXTRA}" \
           -drive file=modgpA.img,format=raw,if=virtio \
           -nographic -no-reboot <"$FIFO" > modgpA.raw 2>&1 &
       QP=$!

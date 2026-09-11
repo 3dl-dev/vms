@@ -76,6 +76,29 @@ extern "C" {
  * SYSAP envelope category/opcode this item reads within the DLM SYSAP
  * (spec §4(j), §4(p) "cat 0x02"). abs = body + 72.
  * ------------------------------------------------------------------ */
+/* ------------------------------------------------------------------ *
+ * BODY-RELATIVE OFFSETS, and why this file needs both spellings (rd vms-1ee)
+ *
+ * Every DLM field below is documented in terms of `body[...]` and then given a
+ * FRAME-absolute constant, because the codec was written against captured
+ * frames. But the only inbound path in the executive is
+ * scs_sysap_ops.message -> cnxman_vc_message(), which hands a SYSAP its OWN
+ * 132 bytes and nothing below them (design sec 3.2.4). Handing a
+ * frame-absolute parser a SYSAP body is exactly integration note E73: it does
+ * not fail loudly, it silently refuses every real inbound message -- which is
+ * how a live run lost VAX1's whole CM dialogue.
+ *
+ * So the offsets exist in both spellings, DERIVED from one another so they can
+ * never drift, and each parser has two entry points over ONE implementation:
+ *   *_parse       takes a captured FRAME (and its vms_frame_info class), and
+ *                 slices the body off it;
+ *   *_parse_body  takes the 132 bytes SCS really delivers.
+ * The BUILDERS need no such pair: they already write into a caller's frame
+ * buffer at absolute offsets and the FSM sends `txframe + VMS_OFF_SYSAP_BODY`
+ * (vms_dlm_scs_fsm.c), which is the same slice from the other side.
+ * ------------------------------------------------------------------ */
+#define VMS_OFB_FROM_FRAME(off)   ((off) - VMS_OFF_SYSAP_BODY)
+
 #define VMS_OFF_DLM_CAT           80u  /* body[8]  category: 0x02 req       */
 #define VMS_OFF_DLM_OP            81u  /* body[9]  opcode                   */
 
@@ -146,6 +169,15 @@ enum vms_lck_mode {
 #define VMS_OFF_DLM_NAME_MARKER   118u  /* body[46]    u8, const 0x03       */
 #define VMS_OFF_DLM_NAME_LEN      119u  /* body[47]    u8,     spec row     */
 #define VMS_OFF_DLM_NAME          120u  /* body[48..]  ASCII,  spec row     */
+
+#define VMS_OFB_DLM_CAT         VMS_OFB_FROM_FRAME(VMS_OFF_DLM_CAT)
+#define VMS_OFB_DLM_OP          VMS_OFB_FROM_FRAME(VMS_OFF_DLM_OP)
+#define VMS_OFB_DLM_REQ_LKID    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REQ_LKID)
+#define VMS_OFB_DLM_MASTER_LKID VMS_OFB_FROM_FRAME(VMS_OFF_DLM_MASTER_LKID)
+#define VMS_OFB_DLM_MODE        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_MODE)
+#define VMS_OFB_DLM_NAME_MARKER VMS_OFB_FROM_FRAME(VMS_OFF_DLM_NAME_MARKER)
+#define VMS_OFB_DLM_NAME_LEN    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_NAME_LEN)
+#define VMS_OFB_DLM_NAME        VMS_OFB_FROM_FRAME(VMS_OFF_DLM_NAME)
 
 #define VMS_DLM_NAME_MARKER_CONST 0x03u
 /* Longest observed resource name is 22 bytes ("F11B$aSYSDSK1     *" family,
@@ -219,6 +251,24 @@ struct vms_dlm_enq_response {
  * the wire shape is identical (spec §4(f).1: "The CONVERT 0x07 request
  * carries the new mode here", same body[30]).
  */
+/*
+ * THE BODY ENTRIES (rd vms-1ee). Same fields, same implementation, taking the
+ * 132 bytes SCS actually delivers to a SYSAP (design sec 3.2.4) instead of a
+ * captured frame. There is no vms_frame_info parameter because there is no
+ * frame to classify: a body that arrives on the VMS$VAXcluster connection is
+ * already known to be one, and inventing header bytes to re-derive that would
+ * be putting bytes on a frame nobody sent. The category/opcode checks each
+ * core already performs are what reject a body that is not what it claims.
+ */
+vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body,
+						  uint32_t len,
+						  uint8_t *opcode_out,
+						  struct vms_dlm_enq_request *out);
+vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body,
+						   uint32_t len,
+						   struct vms_dlm_enq_response *out);
+vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len,
+					       uint16_t *out);
 vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
 					     const struct vms_frame_info *fi,
 					     uint8_t *opcode_out,
@@ -318,6 +368,7 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
  * (`dir_lookup_misaddressed`, vms_dlm_ldwv.h SS5).
  * ------------------------------------------------------------------ */
 #define VMS_OFF_DLM_DIR_HASH      82u  /* body[10:12] LE u16, INFERRED     */
+#define VMS_OFB_DLM_DIR_HASH    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DIR_HASH)
 
 /*
  * Read the directory hash out of any cat-0x02 frame that carries it.
@@ -349,6 +400,8 @@ vms_codec_status_t vms_dlm_req_csid(const struct vms_sca_hdr *hdr, uint16_t *out
 /* Request-layout invariants (spec §4(p), GROUNDED). */
 #define VMS_OFF_DLM_REBUILD_INV1    84u /* body[12:14] LE u16, invariant 0x0001 */
 #define VMS_OFF_DLM_REBUILD_INV2    86u /* body[14:16] LE u16, invariant 0x0003 */
+#define VMS_OFB_DLM_REBUILD_INV1 VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REBUILD_INV1)
+#define VMS_OFB_DLM_REBUILD_INV2 VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REBUILD_INV2)
 #define VMS_DLM_REBUILD_INV1_CONST 0x0001u
 #define VMS_DLM_REBUILD_INV2_CONST 0x0003u
 
@@ -382,6 +435,10 @@ struct vms_dlm_rebuild_record {
  * invariants, and lifts out the whole body (for the verbatim-echo response
  * builder below) plus the resource name as a convenience.
  */
+/* The body entry (rd vms-1ee); declared here, where the record type exists. */
+vms_codec_status_t vms_dlm_rebuild_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_rebuild_record *out);
+
 vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 					 const struct vms_frame_info *fi,
 					 struct vms_dlm_rebuild_record *out);

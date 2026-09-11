@@ -455,6 +455,88 @@ static void test_dir_hash_accessor(void)
 	ct_check_eq_u32(hash, 0xA5A5u, "  writing nothing");
 }
 
+/*
+ * ==========================================================================
+ * THE E73 REGRESSION GUARD (rd vms-1ee): a SYSAP BODY parses, and the
+ * frame-absolute entry refuses the very same bytes.
+ *
+ * cnxman_vc_message() hands a SYSAP its own 132 bytes and nothing below them
+ * (design sec 3.2.4). Handing those bytes to a frame-absolute parser is exactly
+ * integration note E73 -- it does not fail loudly, it silently refuses every
+ * real inbound message, which is how a live run lost a whole CM dialogue. This
+ * pins BOTH halves: the body entry reads the same fields the frame entry does,
+ * and the frame entry on a bare body is a refusal, not a misparse.
+ * ==========================================================================
+ */
+static void test_body_entries_are_what_scs_delivers(void)
+{
+	const struct vms_fixture *f = fixture("dlm-enq-request-pw");
+	struct vms_frame_info fi;
+	struct vms_dlm_enq_request from_frame, from_body;
+	uint8_t op_frame = 0, op_body = 0;
+	const uint8_t *body;
+	uint32_t blen;
+	uint16_t h_frame = 0, h_body = 0;
+
+	printf("-- rd vms-1ee: the BODY entries, over the same implementation\n");
+	ct_check(f != NULL, "fixture loads");
+	if (f == NULL)
+		return;
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "the captured FRAME classifies");
+
+	/* The slice SCS would deliver. */
+	body = f->bytes + VMS_OFF_SYSAP_BODY;
+	blen = f->wire_len - VMS_OFF_SYSAP_BODY;
+
+	ct_check(vms_dlm_enq_request_parse(f->bytes, f->wire_len, &fi,
+					   &op_frame, &from_frame) ==
+		 VMS_CODEC_OK, "the FRAME entry parses the capture");
+	ct_check(vms_dlm_enq_request_parse_body(body, blen, &op_body,
+						&from_body) == VMS_CODEC_OK,
+		 "and the BODY entry parses the 132 bytes SCS delivers");
+
+	/* ONE implementation: the two must agree field for field. */
+	ct_check_eq_u32(op_body, op_frame, "  same opcode");
+	ct_check_eq_u32(from_body.mode, from_frame.mode, "  same mode");
+	ct_check_eq_u32(from_body.req_pid_or_lkid, from_frame.req_pid_or_lkid,
+			"  same req_pid/lkid");
+	ct_check_eq_u32(from_body.master_lkid, from_frame.master_lkid,
+			"  same master_lkid");
+	ct_check_eq_u32(from_body.name_len, from_frame.name_len,
+			"  same name_len");
+	ct_check(from_body.name_len == from_frame.name_len &&
+		 memcmp(from_body.name, from_frame.name, from_body.name_len) == 0,
+		 "  same resource name -- one implementation, two ways in");
+
+	ct_check(vms_dlm_dir_hash_parse(f->bytes, f->wire_len, &fi, &h_frame) ==
+		 vms_dlm_dir_hash_parse_body(body, blen, &h_body),
+		 "  the hash accessor agrees on both paths");
+	ct_check_eq_u32(h_body, h_frame, "  ... and on the value");
+
+	/*
+	 * *** THE GUARD. *** The frame entry, handed the bare body, must
+	 * REFUSE. If this ever starts succeeding, a frame-absolute parser has
+	 * begun reading a body at the wrong offsets -- E73, silently.
+	 */
+	{
+		struct vms_frame_info bogus;
+		uint8_t op = 0;
+		struct vms_dlm_enq_request r;
+
+		ct_check(vms_frame_classify(body, blen, &bogus) !=
+			 VMS_CODEC_OK,
+			 "a bare SYSAP body does not classify as a frame -- "
+			 "there is no ethertype at abs 12 to read");
+		memset(&bogus, 0, sizeof(bogus));
+		bogus.cls = VMS_FCLS_SCS_MSG;   /* the most generous case */
+		ct_check(vms_dlm_enq_request_parse(body, blen, &bogus, &op,
+						   &r) != VMS_CODEC_OK,
+			 "and even then the FRAME entry REFUSES the bare body "
+			 "rather than misreading it (E73)");
+	}
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -473,6 +555,7 @@ int main(void)
 	test_allowlist_rows();
 	test_no_builder_accepts_a_placeholder_lock_id();
 	test_dir_hash_accessor();
+	test_body_entries_are_what_scs_delivers();
 
 	return ct_summary("test_codec_dlm");
 }

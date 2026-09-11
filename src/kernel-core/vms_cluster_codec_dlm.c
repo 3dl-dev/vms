@@ -36,20 +36,19 @@ static vms_codec_status_t dlm_name_get(vms_wire_view_t *v, uint8_t *len_out,
 {
 	uint8_t len;
 
-	len = vms_wire_get_u8(v, VMS_OFF_DLM_NAME_LEN);
+	len = vms_wire_get_u8(v, VMS_OFB_DLM_NAME_LEN);
 	if (!vms_wire_view_ok(v))
 		return v->err;
 	if (len > VMS_DLM_NAME_MAX)
 		return VMS_CODEC_E_RANGE;
 	*len_out = len;
-	vms_wire_get_bytes(v, VMS_OFF_DLM_NAME, len, name_out);
+	vms_wire_get_bytes(v, VMS_OFB_DLM_NAME, len, name_out);
 	if (!vms_wire_view_ok(v))
 		return v->err;
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
-					     const struct vms_frame_info *fi,
+vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t len,
 					     uint8_t *opcode_out,
 					     struct vms_dlm_enq_request *out)
 {
@@ -58,12 +57,12 @@ vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
 	vms_codec_status_t st;
 
 	if (out == (struct vms_dlm_enq_request *)0 ||
-	    opcode_out == (uint8_t *)0 || !dlm_class_ok(fi))
+	    opcode_out == (uint8_t *)0)
 		return VMS_CODEC_E_CLASS;
 
-	vms_wire_view_init(&v, frame, len);
-	cat = vms_wire_get_u8(&v, VMS_OFF_DLM_CAT);
-	op = vms_wire_get_u8(&v, VMS_OFF_DLM_OP);
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	if (vms_wire_is_response(cat) || (cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
@@ -71,14 +70,14 @@ vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
 	if (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT)
 		return VMS_CODEC_E_CLASS;
 
-	out->mode = vms_wire_get_u8(&v, VMS_OFF_DLM_MODE);
-	out->req_pid_or_lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_REQ_LKID);
-	out->master_lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_MASTER_LKID);
+	out->mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	out->req_pid_or_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
 	/* body[10:12]: the SENDER's own directory hash for the root name. A
 	 * request that carried one is where a receiver LEARNS it (FC-P4.3,
 	 * Davis p. 6-50); the flag is what tells the caller it may be learned
 	 * at all, because "0" and "absent" are different facts. */
-	out->dir_hash = vms_wire_get_le16(&v, VMS_OFF_DLM_DIR_HASH);
+	out->dir_hash = vms_wire_get_le16(&v, VMS_OFB_DLM_DIR_HASH);
 	out->dir_hash_valid = 1u;
 	if (!vms_wire_view_ok(&v))
 		return v.err;
@@ -134,8 +133,7 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	return VMS_CODEC_OK;
 }
 
-vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len,
-					      const struct vms_frame_info *fi,
+vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body, uint32_t len,
 					      struct vms_dlm_enq_response *out)
 {
 	vms_wire_view_t v;
@@ -143,12 +141,12 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
 	uint32_t lkid;
 	vms_codec_status_t st;
 
-	if (out == (struct vms_dlm_enq_response *)0 || !dlm_class_ok(fi))
+	if (out == (struct vms_dlm_enq_response *)0)
 		return VMS_CODEC_E_CLASS;
 
-	vms_wire_view_init(&v, frame, len);
-	cat = vms_wire_get_u8(&v, VMS_OFF_DLM_CAT);
-	op = vms_wire_get_u8(&v, VMS_OFF_DLM_OP);
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	if (!vms_wire_is_response(cat) || (cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
@@ -156,9 +154,9 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
 	if (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT)
 		return VMS_CODEC_E_CLASS;
 
-	lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_REQ_LKID);
-	out->master_lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_MASTER_LKID);
-	mode = vms_wire_get_u8(&v, VMS_OFF_DLM_MODE);
+	lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
+	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
+	mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
@@ -265,19 +263,18 @@ vms_codec_status_t vms_dlm_req_csid(const struct vms_sca_hdr *hdr, uint16_t *out
  * See the header for the p. 6-50 grounding and the INFERRED offset.
  * ------------------------------------------------------------------ */
 
-vms_codec_status_t vms_dlm_dir_hash_parse(const uint8_t *frame, uint32_t len,
-					  const struct vms_frame_info *fi,
+vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len,
 					  uint16_t *out)
 {
 	vms_wire_view_t v;
 	uint8_t cat;
 	uint16_t hash;
 
-	if (out == (uint16_t *)0 || !dlm_class_ok(fi))
+	if (out == (uint16_t *)0)
 		return VMS_CODEC_E_CLASS;
 
-	vms_wire_view_init(&v, frame, len);
-	cat = vms_wire_get_u8(&v, VMS_OFF_DLM_CAT);
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	/* Requests (0x02) and responses (0x82) alike: the value is a property
@@ -286,7 +283,7 @@ vms_codec_status_t vms_dlm_dir_hash_parse(const uint8_t *frame, uint32_t len,
 	if ((cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
 		return VMS_CODEC_E_CLASS;
 
-	hash = vms_wire_get_le16(&v, VMS_OFF_DLM_DIR_HASH);
+	hash = vms_wire_get_le16(&v, VMS_OFB_DLM_DIR_HASH);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	*out = hash;
@@ -297,8 +294,7 @@ vms_codec_status_t vms_dlm_dir_hash_parse(const uint8_t *frame, uint32_t len,
  * op 0x0d lock-resource rebuild record -- GROUNDED, spec §4(p)
  * ------------------------------------------------------------------ */
 
-vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
-					 const struct vms_frame_info *fi,
+vms_codec_status_t vms_dlm_rebuild_parse_body(const uint8_t *body, uint32_t len,
 					 struct vms_dlm_rebuild_record *out)
 {
 	vms_wire_view_t v;
@@ -306,12 +302,12 @@ vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 	uint16_t inv1, inv2;
 	vms_codec_status_t st;
 
-	if (out == (struct vms_dlm_rebuild_record *)0 || !dlm_class_ok(fi))
+	if (out == (struct vms_dlm_rebuild_record *)0)
 		return VMS_CODEC_E_CLASS;
 
-	vms_wire_view_init(&v, frame, len);
-	cat = vms_wire_get_u8(&v, VMS_OFF_DLM_CAT);
-	op = vms_wire_get_u8(&v, VMS_OFF_DLM_OP);
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	if (vms_wire_is_response(cat) || (cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
@@ -319,8 +315,8 @@ vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 	if (op != VMS_DLM_WIREOP_REBUILD)
 		return VMS_CODEC_E_CLASS;
 
-	inv1 = vms_wire_get_le16(&v, VMS_OFF_DLM_REBUILD_INV1);
-	inv2 = vms_wire_get_le16(&v, VMS_OFF_DLM_REBUILD_INV2);
+	inv1 = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_INV1);
+	inv2 = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_INV2);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	if (inv1 != VMS_DLM_REBUILD_INV1_CONST || inv2 != VMS_DLM_REBUILD_INV2_CONST)
@@ -329,7 +325,7 @@ vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 	/* The whole body span, verbatim -- the exact source the response
 	 * recipe's "memcpy 132 bytes" copies. Body starts at abs
 	 * VMS_OFF_SYSAP_BODY (72). */
-	vms_wire_get_bytes(&v, VMS_OFF_SYSAP_BODY, VMS_DLM_REBUILD_ECHO_LEN,
+	vms_wire_get_bytes(&v, 0u, VMS_DLM_REBUILD_ECHO_LEN,
 			   out->body);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
@@ -450,3 +446,91 @@ const struct vms_wire_allow_table vms_dlm_allow_table = {
 	vms_dlm_allow_rows,
 	(uint16_t)(sizeof(vms_dlm_allow_rows) / sizeof(vms_dlm_allow_rows[0]))
 };
+
+/* ------------------------------------------------------------------ *
+ * THE FRAME-ABSOLUTE ENTRIES, over the SAME implementation.
+ *
+ * Each one checks the class the way a captured frame allows (vms_frame_info)
+ * and then slices the SYSAP body off and hands it to the core above. One set
+ * of field reads, two ways in -- so a body parsed off the wire and a frame
+ * parsed out of a capture can never disagree about where a field is.
+ * ------------------------------------------------------------------ */
+
+/* A frame is long enough to have a body at all, and the body it has. */
+static vms_codec_status_t dlm_body_of(const uint8_t *frame, uint32_t len,
+				      const uint8_t **out_body,
+				      uint32_t *out_len)
+{
+	if (frame == (const uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (len <= (uint32_t)VMS_OFF_SYSAP_BODY)
+		return VMS_CODEC_E_SHORT;
+	*out_body = frame + VMS_OFF_SYSAP_BODY;
+	*out_len = len - (uint32_t)VMS_OFF_SYSAP_BODY;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
+					     const struct vms_frame_info *fi,
+					     uint8_t *opcode_out,
+					     struct vms_dlm_enq_request *out)
+{
+	const uint8_t *body;
+	uint32_t blen;
+	vms_codec_status_t st;
+
+	if (!dlm_class_ok(fi))
+		return VMS_CODEC_E_CLASS;
+	st = dlm_body_of(frame, len, &body, &blen);
+	if (st != VMS_CODEC_OK)
+		return st;
+	return vms_dlm_enq_request_parse_body(body, blen, opcode_out, out);
+}
+
+vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len,
+					      const struct vms_frame_info *fi,
+					      struct vms_dlm_enq_response *out)
+{
+	const uint8_t *body;
+	uint32_t blen;
+	vms_codec_status_t st;
+
+	if (!dlm_class_ok(fi))
+		return VMS_CODEC_E_CLASS;
+	st = dlm_body_of(frame, len, &body, &blen);
+	if (st != VMS_CODEC_OK)
+		return st;
+	return vms_dlm_enq_response_parse_body(body, blen, out);
+}
+
+vms_codec_status_t vms_dlm_dir_hash_parse(const uint8_t *frame, uint32_t len,
+					  const struct vms_frame_info *fi,
+					  uint16_t *out)
+{
+	const uint8_t *body;
+	uint32_t blen;
+	vms_codec_status_t st;
+
+	if (!dlm_class_ok(fi))
+		return VMS_CODEC_E_CLASS;
+	st = dlm_body_of(frame, len, &body, &blen);
+	if (st != VMS_CODEC_OK)
+		return st;
+	return vms_dlm_dir_hash_parse_body(body, blen, out);
+}
+
+vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
+					 const struct vms_frame_info *fi,
+					 struct vms_dlm_rebuild_record *out)
+{
+	const uint8_t *body;
+	uint32_t blen;
+	vms_codec_status_t st;
+
+	if (!dlm_class_ok(fi))
+		return VMS_CODEC_E_CLASS;
+	st = dlm_body_of(frame, len, &body, &blen);
+	if (st != VMS_CODEC_OK)
+		return st;
+	return vms_dlm_rebuild_parse_body(body, blen, out);
+}

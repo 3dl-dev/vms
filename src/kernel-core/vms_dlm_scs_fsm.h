@@ -511,6 +511,19 @@ uint32_t dlm_req_fsm_peer_gone(struct dlm_req_fsm *f, vms_csid_t csid);
  * OVMX can address a directory lookup at all. Returns the number of hashes
  * learned from this frame (0 or 1).
  */
+/*
+ * THE BODY ENTRIES (rd vms-1ee) -- what the live receive path calls, because
+ * SCS delivers a SYSAP its own 132 bytes (design sec 3.2.4). Same behaviour as
+ * the frame entries over the same codec cores; see vms_cluster_codec_dlm.h's
+ * body-relative note for why both spellings exist.
+ */
+enum dlm_req_status dlm_req_fsm_reply_body(struct dlm_req_fsm *f,
+					   vms_csid_t from_csid,
+					   uint32_t correlated_lkid,
+					   const uint8_t *body, uint32_t len);
+uint32_t dlm_req_fsm_observe_body(struct dlm_req_fsm *f, const uint8_t *body,
+				  uint32_t len);
+
 uint32_t dlm_req_fsm_observe(struct dlm_req_fsm *f, const uint8_t *frame,
 			     uint32_t len);
 

@@ -646,6 +646,92 @@ static void rig_verdict(const struct node_cfg *c, const struct rig_sample *s)
 	fflush(stdout);
 }
 
+/* ==========================================================================
+ * 6b. THE LOCK PROBE (rd vms-1ee) -- what the DLM really does on a node that
+ *     is a cluster member.
+ *
+ * Run on BOTH nodes, against the SAME resource name, AFTER membership has
+ * settled. It measures three things and asserts none of them:
+ *
+ *   1. THE NON-REGRESSION THAT MATTERS MOST. Installing the DLM's wire arm
+ *      puts the engine's requester ops in place for the first time. If the
+ *      engine's directory resolver were installed with them, EVERY first $ENQ
+ *      on a clustered node would return SS$_UNSUPPORTED -- the ACP's volume
+ *      lock included -- and the node would stop mounting SYS$DISK. A granted
+ *      lock here is that break not happening, measured on a real executive
+ *      that is really a cluster member.
+ *
+ *   2. WHO MASTERS IT, read back from the lock database rather than assumed.
+ *      With no groundable directory hash (see vms_dlm_scs.c) each member
+ *      masters the name locally, and BOTH nodes reporting is_local_master=1
+ *      for the same name is that honesty debt MEASURED instead of described.
+ *
+ *   3. WHETHER ANY LOCK IS HELD FOR A REMOTE CSID -- remote_holder_csid, the
+ *      genuine cross-node-mastering readback. 0 on both nodes is the honest
+ *      state of the cross-node path today.
+ * ========================================================================== */
+#define RIG_DLM_RESNAM "OVMX$DLMPROBE"
+
+static uint32_t rig_dlm_enq(int fd, const char *resnam, uint32_t *lkid_out)
+{
+	struct vms_enq_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkmode = LCK_K_EXMODE;
+	snprintf(a.resnam, sizeof(a.resnam), "%s", resnam);
+	if (ioctl(fd, VMS_IOCTL_ENQ, &a) != 0)
+		return 0u;
+	*lkid_out = a.lkid;
+	return a.status;
+}
+
+static uint32_t rig_dlm_deq(int fd, uint32_t lkid)
+{
+	struct vms_deq_args d;
+
+	memset(&d, 0, sizeof(d));
+	d.lkid = lkid;
+	if (ioctl(fd, VMS_IOCTL_DEQ, &d) != 0)
+		return 0u;
+	return d.status;
+}
+
+static uint32_t rig_dlm_resmaster(int fd, const char *resnam,
+				  struct vms_resmaster_args *rm)
+{
+	memset(rm, 0, sizeof(*rm));
+	snprintf(rm->resnam, sizeof(rm->resnam), "%s", resnam);
+	if (ioctl(fd, VMS_IOCTL_GET_RESMASTER, rm) != 0)
+		return 0u;
+	return rm->status;
+}
+
+static void rig_dlm_probe(int fd, const struct node_cfg *c)
+{
+	struct vms_resmaster_args rm;
+	uint32_t lkid = 0, st;
+
+	st = rig_dlm_enq(fd, RIG_DLM_RESNAM, &lkid);
+	printf("RIG-%s-DLM-ENQ res=%s status=%u lkid=0x%08x\n",
+	       c->tag, RIG_DLM_RESNAM, (unsigned)st, (unsigned)lkid);
+
+	if (rig_dlm_resmaster(fd, RIG_DLM_RESNAM, &rm) != 0u)
+		printf("RIG-%s-DLM-RES found=%u local_csid=0x%08x "
+		       "master_csid=0x%08x is_local_master=%u dir_csid=0x%08x "
+		       "n_granted=%u remote_holder_csid=0x%08x\n",
+		       c->tag, (unsigned)rm.found, (unsigned)rm.local_csid,
+		       (unsigned)rm.master_csid, (unsigned)rm.is_local_master,
+		       (unsigned)rm.dir_csid, (unsigned)rm.n_granted,
+		       (unsigned)rm.remote_holder_csid);
+	else
+		printf("RIG-%s-DLM-RES unavailable\n", c->tag);
+
+	if (lkid != 0u)
+		printf("RIG-%s-DLM-DEQ status=%u\n", c->tag,
+		       (unsigned)rig_dlm_deq(fd, lkid));
+	fflush(stdout);
+}
+
 static int rig_poll(int fd, const struct node_cfg *c)
 {
 	struct rig_sample s;
@@ -658,6 +744,7 @@ static int rig_poll(int fd, const struct node_cfg *c)
 	}
 	rig_sample_take(fd, &s);
 	rig_verdict(c, &s);
+	rig_dlm_probe(fd, c);
 	rig_dump_port(fd, c);
 	rig_dump_conn(fd, c);
 	rig_dump_join(fd, c);

@@ -780,6 +780,28 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
  * 6. The transition boundaries and a departure
  * ========================================================================== */
 
+/*
+ * TELL THE LOCK ENGINE WHO THIS NODE IS (vms_dlm_master.h §1b).
+ *
+ * The engine's `vms_local_csid` is each substrate's insmod placeholder until
+ * something binds it to the cluster's own assignment, and nothing did: measured
+ * on the two-node rig, both MEMBERs -- holding CSIDs 0x00010001 and 0x00010002
+ * -- reported local_csid=0x00000001 through GET_RESMASTER. An outbound request
+ * would have named CSID 1 as the requester from every node.
+ *
+ * The CLUB is where the assignment lives, and `local_csid_valid` is what says
+ * it is real; an unlearned CSID overwrites nothing. Run on the arm's own beat
+ * and at every transition boundary, because those are the two moments the CLUB
+ * can have learned one -- a genesis that founds generation 1, or an admission
+ * that assigns a slot.
+ */
+static void dlm_arm_sync_local_csid(struct vms_dlm_scs *d)
+{
+	if (d->cl == NULL || !d->cl->club.local_csid_valid)
+		return;
+	vms_lock_dlm_set_local_csid((uint32_t)d->cl->club.local_csid);
+}
+
 static void dlm_arm_transition_begin(void *ctx,
 				     const struct cnxman_transition *tr)
 {
@@ -809,6 +831,10 @@ static void dlm_arm_transition_end(void *ctx,
 	if (d == NULL)
 		return;
 	d->transitions_ended++;
+	/* A transition is one of the two moments the CLUB can have learned this
+	 * node's CSID (the other is genesis); tell the engine at once rather
+	 * than waiting for the next beat. */
+	dlm_arm_sync_local_csid(d);
 }
 
 static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)
@@ -856,6 +882,7 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 	if (w->kind == (uint16_t)CF_WORK_TIMER) {
 		if (w->arg0 != DLM_ARM_TIMER_BEAT)
 			return;   /* an identity this layer never armed */
+		dlm_arm_sync_local_csid(d);
 		(void)dlm_req_fsm_tick(&d->req);
 		dlm_arm_arm_beat(d);
 		return;

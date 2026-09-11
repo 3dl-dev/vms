@@ -214,6 +214,19 @@ static void arm_bindings(void)
 	    "the engine's POST op is installed regardless -- harmless with no "
 	    "resolver, and ready when the gap closes");
 
+	/*
+	 * THIS NODE'S CLUSTER IDENTITY. The engine's vms_local_csid is each
+	 * substrate's insmod placeholder until something binds it to the
+	 * cluster's own assignment -- measured on the two-node rig, BOTH MEMBERs
+	 * reported local_csid=0x00000001 while really holding 0x00010001 and
+	 * 0x00010002. The arm syncs it from the CLUB, at the two moments the
+	 * CLUB can have learned one.
+	 */
+	has("vms_lock_dlm_set_local_csid((uint32_t)d->cl->club.local_csid)",
+	    "the engine's CSID is synced from the CLUB's own assignment");
+	has("if (d->cl == NULL || !d->cl->club.local_csid_valid)",
+	    "... and ONLY when the cluster has really assigned one (INV-6)");
+
 	/* CONDITION 4 and the honest floors. */
 	has("if (!vms_lock_dlm_have_delivery_proc())",
 	    "vms-c27 cond.4: no delivery proc, no service");

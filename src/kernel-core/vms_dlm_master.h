@@ -81,6 +81,35 @@ void vms_lock_dlm_set_delivery_proc(void *proc);
 int vms_lock_dlm_have_delivery_proc(void);
 
 /* ==========================================================================
+ * 1b. THIS NODE'S CLUSTER IDENTITY, AS THE LOCK ENGINE HOLDS IT
+ *
+ * The engine reads one cluster global, `vms_local_csid`: it is what
+ * GET_RESMASTER reports as this node's CSID, what an outbound cross-node
+ * request would name as the REQUESTER, and what "is this master us?" compares
+ * against. Its definition lives in each substrate's module rind, and its
+ * initial value there is an insmod PLACEHOLDER (1) whose own comment says the
+ * real CSID is "assigned by the connection manager at cluster join" -- a
+ * binding that was never made.
+ *
+ * MEASURED ON THE 2-NODE RIG (rd vms-1ee): with both executives MEMBERs of a
+ * real cluster holding CSIDs 0x00010001 and 0x00010002, GET_RESMASTER reported
+ * local_csid=0x00000001 on BOTH. The lock engine did not know who it was, and
+ * an outbound request would have asserted CSID 1 on the wire from every node --
+ * a fabricated identity (INV-6), and the exact "placeholder that reads like
+ * data" class that bugchecked a real VAX.
+ *
+ * So the DLM's wire arm SYNCS it from the CLUB, which is where the cluster's
+ * own assignment lives (cl->club.local_csid, valid only when
+ * local_csid_valid). A zero or unlearned CSID does NOT overwrite anything: an
+ * identity the cluster has not assigned yet is an identity this node does not
+ * have, and the standalone placeholder stays exactly as it was.
+ * ========================================================================== */
+void vms_lock_dlm_set_local_csid(uint32_t csid);
+
+/* What the engine currently believes, for the same readback discipline. */
+uint32_t vms_lock_dlm_local_csid(void);
+
+/* ==========================================================================
  * 2. One inbound request, as the master sees it
  *
  * Every field is read by the wire arm out of a RECEIVED frame through codec

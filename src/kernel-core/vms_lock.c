@@ -1977,6 +1977,34 @@ int vms_lock_dlm_have_delivery_proc(void)
 }
 
 /*
+ * THIS NODE'S CLUSTER IDENTITY (vms_dlm_master.h §1b states the whole case).
+ *
+ * `vms_local_csid` starts life as each substrate's insmod placeholder; the
+ * cluster's real assignment lives in the connection manager's CLUB, and this is
+ * how it reaches the lock engine. A zero is REFUSED rather than stored: 0 means
+ * "unmastered" throughout this file, so it is not an identity, and an identity
+ * the cluster has not assigned is one this node does not have.
+ */
+void vms_lock_dlm_set_local_csid(uint32_t csid)
+{
+    if (csid == 0u)
+        return;
+    exec_lock(&vms_dlm_req_ops_lock);
+    vms_local_csid = csid;
+    exec_unlock(&vms_dlm_req_ops_lock);
+}
+
+uint32_t vms_lock_dlm_local_csid(void)
+{
+    uint32_t csid;
+
+    exec_lock(&vms_dlm_req_ops_lock);
+    csid = vms_local_csid;
+    exec_unlock(&vms_dlm_req_ops_lock);
+    return csid;
+}
+
+/*
  * The GRANTED MODE, read off the LKB the engine just minted -- not echoed back
  * from the request. They are equal today (the engine grants exactly the mode it
  * was asked for), and that is exactly why reading it matters: an asserted wire

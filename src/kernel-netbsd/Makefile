@@ -80,6 +80,9 @@ SRCS=		vms_netbsd.c \
 		vms_cnxman_join_fsm.c \
 		vms_cnxman_diag.c \
 		vms_cnxman.c \
+		vms_cluster_codec_dlm.c \
+		vms_dlm_scs_fsm.c \
+		vms_dlm_scs.c \
 		vms_mscp_srv_fsm.c \
 		vms_mscp_srv.c \
 		vms_mscp_srv_io.c \

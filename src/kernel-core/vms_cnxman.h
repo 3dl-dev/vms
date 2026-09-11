@@ -287,6 +287,26 @@ enum cnxman_cluster_event {
  * ========================================================================== */
 void cnxman_set_dlm(struct vms_cluster *cl, const struct dlm_scs_role_ops *ops);
 
+/*
+ * SEND one cat-0x02 BODY to a member, ADDRESSED BY CSID (rd vms-1ee).
+ *
+ * The DLM's one way out. `body` is the 132 bytes the arm built through the
+ * codec; this resolves the member's CSB, applies the split-brain gate (nothing
+ * DLM leaves this node for a system that has not advertised a software-version
+ * token byte-identical to our own), stamps the dialogue's envelope and hands it
+ * to SCS. Returns 0 when it really went, and -1 -- counted, logged -- when the
+ * member has no connection, is not proven to run this implementation, or SCS
+ * refused it. Never a substituted destination.
+ *
+ * WHY BY CSID, WHEN THE BARRIER MUST USE `send_csb`. A DLM destination is a
+ * member the LOCK DATABASE named -- the tree's master, or the weight vector's
+ * directory answer -- so it is an identity the executive genuinely holds. The
+ * barrier's twelve steps are addressed at whoever sent the transition, which a
+ * participant has no grounded way to name by CSID (integration note E73).
+ */
+int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
+		    const uint8_t *body, uint32_t len);
+
 /* ==========================================================================
  * 5b. The interface to the DISK CLASS DRIVER (FC-P7.1)
  *

@@ -64,6 +64,8 @@
 #include "vms_scs.h"           /* FC-P2.4: vms_scs_start + the CONN snapshots */
 #include "vms_mscp_srv.h"      /* FC-P6.3: the MSCP disk server (CLUSTER_START step 5) */
 #include "vms_mscp_cl.h"       /* FC-P7.1: the MSCP disk class driver (step 6) */
+#include "vms_dlm_scs.h"       /* rd vms-1ee: the lock manager's WIRE ARM       */
+#include "vms_dlm_master.h"    /* ... and the DELIVERY PROC it serves on         */
 
 /*
  * Device class codes. Values mirror src/libvms/include/dcdef.h so the
@@ -2813,7 +2815,6 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
     struct vms_cluster *cl = vms_cluster_node();
     int status;
 
-    (void)proc;
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
@@ -2825,6 +2826,20 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
         status = vms_scs_start(cl);
     if (status == SS__NORMAL)
         status = vms_cnxman_start(cl);
+    if (status == SS__NORMAL) {
+        /*
+         * THE DELIVERY PROC (rd vms-c27, RULED). A lock the cluster asks this
+         * node to grant has to be owned by a real process, and the ruling names
+         * THIS one -- the process that issued CLUSTER_START, i.e. STARTUP.EXE,
+         * which is process-permanent. It is the OWNER, not the mode source: the
+         * engine stamps a cross-node LKB PSL_C_KERNEL so no local image rundown
+         * can release a lock another node holds (vms_dlm_master.h states all
+         * four binding conditions). Registered BEFORE the arm is started, so no
+         * inbound request can find the arm up and the owner missing.
+         */
+        vms_lock_dlm_set_delivery_proc(proc);
+        status = vms_dlm_scs_start(cl);
+    }
     if (status == SS__NORMAL)
         status = vms_mscp_srv_start(cl);
     if (status == SS__NORMAL)

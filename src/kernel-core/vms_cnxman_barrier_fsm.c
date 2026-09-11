@@ -803,6 +803,18 @@ static void barrier_h_rebuild(struct cnxman_barrier *b,
 	req.from_csid = m->from_valid ? m->from_csid : (vms_csid_t)0;
 	req.category = m->env.category;
 	req.opcode = m->env.opcode;
+	{
+		/* The trust fact, read off the SENDER'S OWN CSB (rd vms-1ee).
+		 * The lock manager's arm refuses to serve a system that has not
+		 * proved it runs this implementation, and it may not re-derive
+		 * that question -- so the block that holds the answer supplies
+		 * it. A record with no CSB behind it is not proven, which is
+		 * the same thing as not proven (INV-6). */
+		const struct vms_csb *from = barrier_csb_at(b, m->from_csb);
+
+		req.peer_is_ours = (uint8_t)(from != NULL ? from->peer_is_ours
+							  : 0u);
+	}
 	/* The received FRAME, which is what every vms_cluster_codec_cm.h
 	 * accessor takes: the DLM reads it through those and never by offset
 	 * (vms_dlm_scs.h SS3). */

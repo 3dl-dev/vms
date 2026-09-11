@@ -116,7 +116,27 @@ struct dlm_scs_request {
 	vms_scs_sysid_t from_sysid;
 	uint8_t        category;     /* SCA category, e.g. 0x02 */
 	uint8_t        opcode;       /* e.g. 0x01 ENQ/lookup, 0x0d rebuild record */
-	uint8_t        pad[2];
+	/*
+	 * DID THE SENDER PROVE IT RUNS THIS IMPLEMENTATION? (rd vms-1ee.)
+	 *
+	 * Read by the CONNECTION MANAGER off the sender's CSB
+	 * (`peer_is_ours`, derived where both software-version tokens are in
+	 * scope -- cnxman_csb_set_swver), and handed here rather than
+	 * re-derived, because a layer that re-decides a trust question is a
+	 * layer that can decide it differently.
+	 *
+	 * WHY THE DLM CARES AND NOBODY ELSE DOES. OVMX's cat-0x02 arm is
+	 * grounded against its OWN protocol; §4(f).1 grounds the ENQ/CONVERT
+	 * request and its grant/deny reply shape and nothing else, and the
+	 * completion/commit table is explicitly PROVISIONAL. Sending any of that
+	 * at a real VAX's lock manager is how LOCKMGRERR and INVLOCKID happened.
+	 * So the arm serves -- and the connection manager emits -- only between
+	 * systems whose advertised version token is byte-identical to our own.
+	 * 0 covers BOTH "advertised something else" and "advertised nothing":
+	 * neither is proof (INV-6).
+	 */
+	uint8_t        peer_is_ours;
+	uint8_t        pad;
 	const uint8_t *body;
 	uint32_t       len;
 };

@@ -1523,8 +1523,25 @@ static int dnet_recv_route(struct dnet_engine *eng, int sock, unsigned ifindex,
         memcmp(rxbuf + 6, eng->my_id, DNET_ADDR_LEN) == 0)
         return DNET_LINK_EV_NONE;   /* our own transmitted frame */
 
-    int is_nsp = ((size_t)n > (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX) &&
-                 rxbuf[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX] == DNET_RFLAG_LONG_DATA;
+    /* Is this a long-data (NSP-bearing) frame? Skip the optional Phase IV
+     * intra-Ethernet pad (a leading 0x80-bit byte = (byte & 0x7f) bytes) before
+     * reading the RFLG -- real VMS prepends a 0x81 pad on unicast routed data, so
+     * the RFLG is NOT at a fixed offset -- and mask the intra-Ethernet flag off
+     * the RFLG (a real VAX sends its Connect Confirm / data back with RFLG 0x26,
+     * where the CI carried 0x2e). Getting either wrong drops every unicast reply
+     * from the VAX as if it were a HELLO (a70-A: the CC was on the wire but
+     * writes_recv stayed 0). */
+    int is_nsp = 0;
+    {
+        size_t dpos = (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX;
+        if ((size_t)n > dpos) {
+            const uint8_t *dp = rxbuf + dpos;
+            size_t drem = (size_t)n - dpos;
+            size_t dpad = (drem >= 1 && (dp[0] & 0x80)) ? (size_t)(dp[0] & 0x7f) : 0;
+            if (drem > dpad && DNET_RFLAG_IS_LONG_DATA(dp[dpad]))
+                is_nsp = 1;
+        }
+    }
     if (is_nsp) {
         if (memcmp(rxbuf, eng->my_id, DNET_ADDR_LEN) != 0)
             return DNET_LINK_EV_NONE;   /* unicast for another node */

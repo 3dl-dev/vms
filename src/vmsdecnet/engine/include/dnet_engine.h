@@ -106,6 +106,19 @@ extern const uint8_t DNET_ROUTER_HELLO_MCAST[DNET_ADDR_LEN];
  * the pad and counts everything after it (specimen #3: 0x0033 = 51 = 1 pad +
  * 21 rhdr + 29 NSP), exactly as the endnode-HELLO frame carries one. */
 #define DNET_RFLAG_LONG_DATA    0x2e   /* long data packet routing flags (specimen #3) */
+/* The long-data RFLG carries an "intra-Ethernet" flag bit (0x08) that VARIES by
+ * direction on the wire: the originator sets it (OVMX's CI + the accepted VAX CI
+ * are 0x2e), and a real OpenVMS VAX CLEARS it on the frames it sends back (its
+ * Connect Confirm and data segments are 0x26 -- captured on the isolated lab,
+ * a70-A). NSP-frame recognition must therefore mask this flag off, or every
+ * unicast reply from a real VAX is misclassified as a non-NSP frame and dropped
+ * (writes_recv stays 0, no CC ever consumed). Only the observed-varying bit is
+ * masked; the rest of the RFLG still distinguishes a long-data packet from a
+ * HELLO (0x0d) / router-hello (0x0b). */
+#define DNET_RFLAG_INTRA_ETH    0x08
+#define DNET_RFLAG_IS_LONG_DATA(r) \
+    (((uint8_t)(r) & (uint8_t)~DNET_RFLAG_INTRA_ETH) == \
+     (DNET_RFLAG_LONG_DATA & (uint8_t)~DNET_RFLAG_INTRA_ETH))
 #define DNET_DATA_PAD_BYTE      0x81   /* Phase IV intra-Ethernet routing pad: 0x80|len(1) */
 #define DNET_DATA_PAD_LEN       1      /* one pad byte, per specimen #3 (0x81 = length 1) */
 #define DNET_DATA_LENPREFIX     2      /* data-link LE length prefix */

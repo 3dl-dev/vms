@@ -521,6 +521,36 @@ target_include_directories(test_libvms_conformance_constants PRIVATE
 add_test(NAME test_libvms_conformance_constants
          COMMAND test_libvms_conformance_constants)
 
+# vms-801.5 -- VMS ABI struct LAYOUT-stability gate. Pins sizeof + representative
+# offsets for FAB/RAB/NAM + the dsc$descriptor_* family + ILE3/ILE2 to values
+# DERIVED from the documented VMS field order under the LP64 C-ABI (not read back
+# from the header), plus public-prefix stability and the LP64-divergence tripwire.
+# It is NOT a real-VMS binary-compat audit (there is no binary boundary: producer
+# crtl_rms_stdio.c and consumer sys$create are both OVMX code from these headers;
+# LP64 8-byte pointers are deliberate). It is a regression lock protecting the
+# exact structs vms-801.6's RTL (CLI$/LIB$TPARSE/SYS$FILESCAN) will build on.
+# Pure header test -- needs the libvms and vmsrms include dirs (rms/fab.h etc.),
+# same as test_conformance_constants, so not via libvms_add_test().
+add_executable(test_libvms_conformance_layout
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_conformance_layout.c)
+target_include_directories(test_libvms_conformance_layout PRIVATE
+    ${VMS_INCLUDE_DIR}
+    ${VMS_RMS_INCLUDE_DIR})
+add_test(NAME test_libvms_conformance_layout
+         COMMAND test_libvms_conformance_layout)
+
+# vms-801.5 non-fakeness proof (conductor non-negotiable): a _Static_assert gate
+# is only real if it can FAIL. This runner compiles the audit clean (must pass)
+# then again with -DLAYOUT_GATE_INJECT_DRIFT (a deliberately-drifted ILE3 that
+# MUST fail to compile), proving the pins reject a shifted layout rather than
+# tautologically matching the header. Same pattern as vms-7b7's CALLDEFER gate.
+add_test(NAME test_libvms_struct_layout_gate
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/run_struct_layout_gate.sh
+                 ${CMAKE_C_COMPILER}
+                 ${CMAKE_CURRENT_SOURCE_DIR}/test_conformance_layout.c
+                 ${VMS_INCLUDE_DIR}
+                 ${VMS_RMS_INCLUDE_DIR})
+
 # vms-0d75 -- reflexive Ctrl/T status line. Compiles the PRODUCTION renderer
 # (src/vmsdcl/dcl_terminal.c) directly and drives dcl_format_ctrl_t_status()
 # against a struct vms_procinfo -- the executive's real $GETJPI contract --

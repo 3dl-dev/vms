@@ -222,11 +222,15 @@ static void test_sc_connect(void)
                                       "", "", "", buf, sizeof(buf), &n)
               == DNET_CTERM_OK,
           "OVMX builds a SET HOST connect for object 42");
-    check(n == sizeof(k_oracle_sc_connect) - 1 &&
+    check(n == sizeof(k_oracle_sc_connect) &&
           memcmp(buf, k_oracle_sc_connect, n) == 0,
-          "OVMX's connect data is BYTE-IDENTICAL to the real VAX's, through the"
-          " three empty access-control strings (the specimen's trailing 4th zero"
-          " is USRDATA, which OVMX does not send)");
+          "OVMX's connect data is BYTE-IDENTICAL to the real VAX's IN FULL --"
+          " MENUVER 0x27 + RQSTRID/PASSWRD/ACCOUNT/USRDATA all empty"
+          " (27 00 00 00 00). Emitting only the first THREE fields (omitting the"
+          " trailing USRDATA) left the block 1 byte short of every accepted real"
+          " form; real OpenVMS session control read past end-of-data and SILENTLY"
+          " discarded the Connect Initiate -- no reject, no counter, no LOGINOUT"
+          " (vms-a70 direction A root cause)");
     check(dnet_cterm_sc_connect_object(buf, n) == DNET_CTERM_OBJECT,
           "the object-number dispatch reads 42 back out of OVMX's own connect");
 

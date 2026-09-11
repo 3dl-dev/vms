@@ -412,14 +412,30 @@ int dnet_cterm_sc_connect_build(uint8_t dst_object,
     if (r < 0) return DNET_CTERM_ENOSPACE;
     off += (size_t)r;
 
-    /* MENUVER + the three access-control strings. A plain SET HOST sends them
-     * empty, exactly as the specimen does. */
+    /* MENUVER + the counted access-control strings RQSTRID, PASSWRD, ACCOUNT --
+     * then, for CTERM (object 42) ONLY, a fourth counted USRDATA field. The two
+     * services carry a DIFFERENT number of connect-data fields on the real wire:
+     *   - FAL (object 17): MENUVER 0x27 + RQSTRID + PASSWRD + ACCOUNT (THREE),
+     *     the real COPY capture in docs/oracle/vax-copy-fal-dap.md §1, accepted.
+     *   - CTERM (object 42): MENUVER 0x27 + RQSTRID + PASSWRD + ACCOUNT + USRDATA
+     *     (FOUR), the real SET HOST Sample A + the k_oracle_sc_connect specimen.
+     * OVMX emitted only three for CTERM too -- one byte short of every accepted
+     * CTERM form; real OpenVMS session control read past end-of-data on the
+     * missing USRDATA field and SILENTLY DISCARDED the Connect Initiate: no
+     * reject, no counter, no OPCOM event, no LOGINOUT (proven on the isolated
+     * lab -- VAX1 answered a disconnect in 165us and registered 1.42 as a fully
+     * reachable adjacency, yet gave the 3-field CI zero response; vms-a70 dirA).
+     * Clean-room: the connect-data layout is the uncopyrightable protocol fact;
+     * the C is OVMX's own. */
     if (off + 1 > cap) return DNET_CTERM_ENOSPACE;
     buf[off++] = SC_MENUVER_OBSERVED;
 
     r = put_string(buf, cap, off, username); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
     r = put_string(buf, cap, off, password); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
     r = put_string(buf, cap, off, account);  if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
+    if (dst_object == DNET_CTERM_OBJECT) {
+        r = put_string(buf, cap, off, NULL); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;  /* CTERM USRDATA, empty */
+    }
 
     if (outlen)
         *outlen = off;

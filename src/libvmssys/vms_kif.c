@@ -1169,6 +1169,31 @@ uint32_t vms_kif_cluster_diag_join(struct vms_cluster_diag_join_args *args)
 }
 
 /*
+ * vms_kif_cluster_diag_dlm - VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c). The lock
+ * manager's WIRE ARM: what it really emitted, what the connection manager
+ * really carried for it, and where a posted request really ended. Read-only,
+ * and the same shape and discipline as the four diagnostics above.
+ *
+ * `args->status` is the executive's own answer INCLUDING the honest
+ * SS$_NOSUCHDEV for a node with no DLM arm -- and the row stays all-zero then.
+ * A caller must render that as "there is no wire arm", never as a ledger of
+ * zeros, because "emitted none" and "has no emitter" are different facts and
+ * only one of them is evidence (INV-6).
+ */
+uint32_t vms_kif_cluster_diag_dlm(struct vms_cluster_diag_dlm_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_CLUSTER_DIAG_DLM, args);
+
+    return args->status;
+}
+
+/*
  * vms_kif_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9). $GETSYI's
  * cluster item codes, read from the connection manager's CLUB. WIRED:
  * sys$getsyi/sys$getsyiw (src/libvms/syssvc/sys_misc.c) answer

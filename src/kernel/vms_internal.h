@@ -1237,6 +1237,11 @@ long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
  * against vms_cluster_node()'s real vms_cnxman.c objects. Read-only; the
  * executive has no console log, so this is how the lab sees what the join did. */
 long vms_ioctl_cluster_diag_join(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c): the lock manager's WIRE ARM,
+ * projected under the fork mutex from vms_cluster_node()'s real struct
+ * vms_dlm_scs. The half of the cross-node proof a packet capture cannot give:
+ * which executive's arm emitted the op-0x03/op-0x04 on the segment. */
+long vms_ioctl_cluster_diag_dlm(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8): $SETCLUEVT's executive-side
  * registration against vms_cluster_node()'s struct vms_cnxman. */
 long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);

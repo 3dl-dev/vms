@@ -77,6 +77,22 @@ struct node_cfg {
 	 * not.
 	 */
 	const char *swver;
+	/*
+	 * Run the CROSS-NODE phase after the membership window (section 6c).
+	 * Off by default, so every existing mode of the rig behaves exactly as
+	 * it did: the phase takes cluster-wide locks and makes the peer emit at
+	 * this node, which has no business happening in a run measuring
+	 * genesis.
+	 */
+	unsigned    xnode;
+	/*
+	 * Seconds to stay up AFTER this node's own cross-node work, before the
+	 * survival verdict. It is what makes the last verdict line mean "still
+	 * sane after the PEER'S frames landed" rather than "still sane after my
+	 * own" -- the two nodes finish their phases at slightly different
+	 * moments, and this is the overlap that covers the difference.
+	 */
+	unsigned    linger;
 };
 
 static void cfg_defaults(struct node_cfg *c)
@@ -89,6 +105,8 @@ static void cfg_defaults(struct node_cfg *c)
 	c->cluster_credits = 32u;   /* VMS's own CLUSTER_CREDITS default */
 	c->swver = "OVMX0.6";
 	c->window = 90u;
+	c->xnode = 0u;
+	c->linger = 30u;
 }
 
 /* One "--name=value" argument. Returns 0 if it was consumed. */
@@ -115,6 +133,8 @@ static int cfg_take(struct node_cfg *c, const char *arg)
 	TAKE_U("credits", cluster_credits)
 	TAKE_STR("swver", swver)
 	TAKE_U("window", window)
+	TAKE_U("xnode", xnode)
+	TAKE_U("linger", linger)
 #undef TAKE_U
 #undef TAKE_STR
 	return -1;
@@ -672,12 +692,26 @@ static void rig_verdict(const struct node_cfg *c, const struct rig_sample *s)
  * ========================================================================== */
 #define RIG_DLM_RESNAM "OVMX$DLMPROBE"
 
-static uint32_t rig_dlm_enq(int fd, const char *resnam, uint32_t *lkid_out)
+/*
+ * One $ENQ at EX, ASYNC, with an optional blocking-AST routine.
+ *
+ * ASYNC IS NOT A CONVENIENCE. A SYNC ($ENQW, LCK_M_SYNC) request for a resource
+ * mastered on the PEER sleeps inside the executive until the master's grant
+ * arrives, and vms_lock.c's enq_wait_sync deliberately runs NO deadlock search
+ * for a proxy LKB (the local wait-for graph cannot see the other node) -- so a
+ * run in which the cross-node path did not work would HANG instead of reporting
+ * what happened. Async returns with the request outstanding and leaves this
+ * program to POLL the executive for the outcome, which is the only thing it is
+ * ever allowed to print.
+ */
+static uint32_t rig_dlm_enq(int fd, const char *resnam, uint64_t blkastadr,
+			    uint32_t *lkid_out)
 {
 	struct vms_enq_args a;
 
 	memset(&a, 0, sizeof(a));
 	a.lkmode = LCK_K_EXMODE;
+	a.blkastadr = blkastadr;
 	snprintf(a.resnam, sizeof(a.resnam), "%s", resnam);
 	if (ioctl(fd, VMS_IOCTL_ENQ, &a) != 0)
 		return 0u;
@@ -711,7 +745,7 @@ static void rig_dlm_probe(int fd, const struct node_cfg *c)
 	struct vms_resmaster_args rm;
 	uint32_t lkid = 0, st;
 
-	st = rig_dlm_enq(fd, RIG_DLM_RESNAM, &lkid);
+	st = rig_dlm_enq(fd, RIG_DLM_RESNAM, 0u, &lkid);
 	printf("RIG-%s-DLM-ENQ res=%s status=%u lkid=0x%08x\n",
 	       c->tag, RIG_DLM_RESNAM, (unsigned)st, (unsigned)lkid);
 
@@ -732,9 +766,458 @@ static void rig_dlm_probe(int fd, const struct node_cfg *c)
 	fflush(stdout);
 }
 
+/* ==========================================================================
+ * 6c. THE CROSS-NODE PHASE (rd vms-94c; the emit half is vms-d7a3 / #1165)
+ *
+ * WHAT THE LOCAL PROBE ABOVE CANNOT REACH, AND WHY THIS EXISTS. The probe
+ * enqueues ONE name on both nodes and both master it LOCALLY, so the arm's
+ * cross-node emit paths -- the requester's op-0x03 $DEQ and the master's
+ * op-0x04 BLOCKING AST -- are never entered. Rung A" (the OVMX-own directory
+ * hash, src/kernel-core/vms_dlm_scs.c) is what changed that: in an
+ * all-proven-OVMX cluster a root name's directory hash is grounded, the Lock
+ * Directory Weight Vector resolves it to ONE member, and a name whose entry
+ * names the PEER is genuinely mastered THERE.
+ *
+ * THE THREE THINGS THIS PHASE MEASURES, AND IT ASSERTS NONE OF THEM:
+ *
+ *   1. THAT A LOCK REALLY CROSSED. Not "a frame went out" -- that the
+ *      executive's own lock database on this node reports the resource
+ *      mastered by a CSID that is NOT this node's (master_csid != local_csid,
+ *      is_local_master == 0), a value that reached the RSB only because the
+ *      MASTER'S OWN GRANT carried it (vms_lock.c grant_recv). A local-mastered
+ *      name reads exactly the opposite, which is what makes the readback a
+ *      measurement rather than a decoration.
+ *
+ *   2. THAT THE ARM EMITTED. VMS_IOCTL_CLUSTER_DIAG_DLM projects the counters
+ *      the running arm incremented AT THE MOMENT IT SENT, plus the connection
+ *      manager's own independent count one layer down. A pcap proves a byte
+ *      reached the segment; only these prove which executive put it there.
+ *
+ *   3. THAT THE RECEIVER SURVIVED. Both frames land on a peer whose arm has no
+ *      receive half for either opcode yet -- the counted gap vms_dlm_scs.c
+ *      names in "THE RELEASE'S RECEIVE HALF". The measurement is that the peer
+ *      DECLINES them (its `unparsed` rises) and goes on being a member: the
+ *      never-crash-a-peer property, taken against a live peer executive rather
+ *      than a host unit test.
+ *
+ * THE CANDIDATE NAMES ARE PER-NODE ("OVMXA$Xnn" on A, "OVMXB$Xnn" on B), and
+ * that is load-bearing. With a shared set, both nodes would scan the SAME name
+ * at the same moment, each taking an EX lock the other's request then blocks
+ * on -- and the run would be measuring a race between two scans instead of the
+ * routing. Disjoint sets remove the race WITHOUT telling either node where any
+ * name routes: that is still discovered, name by name, from GET_RESMASTER.
+ *
+ * NOTHING HERE COMPUTES A HASH OR A ROUTE. This program does not know, and
+ * must not know, which member the directory names for a name; it enqueues and
+ * READS BACK. A rig that predicted the answer would pass on a build whose
+ * routing was broken in exactly the way it predicted (Rule 8, INV-6).
+ * ========================================================================== */
+
+#define RIG_XN_CANDIDATES   16u    /* how many names to try before giving up  */
+#define RIG_XN_GRANT_WAIT   40u    /* x RIG_XN_POLL_MS: the cross-node wait   */
+#define RIG_XN_POLL_MS      250u
+
+struct rig_xnode {
+	char     name[32];        /* the peer-mastered name, or "" if none    */
+	uint32_t tried;           /* candidates enqueued before one crossed   */
+	uint32_t local_csid;      /* THIS node, as the executive reported it  */
+	uint32_t master_csid;     /* the PEER that masters `name`             */
+	uint32_t dir_csid;        /* the directory node the vector named      */
+	uint32_t hold_lkid;       /* the granted cross-node lock              */
+	uint32_t hold_mode;       /* ...at the mode the executive granted     */
+	uint32_t contend_lkid;    /* the second, incompatible request         */
+	int      found;
+};
+
+/*
+ * THE BLOCKING-AST ROUTINE this node registers on its cross-node $ENQ.
+ *
+ * A real address of a real function in this image, because that is what $ENQ's
+ * blkastadr IS: the routine the executive calls when a lock this process holds
+ * begins to block somebody. The executive stores it on the proxy LKB, and if
+ * the arm's receive half ever consumes the master's op-0x04 it queues a genuine
+ * user-mode AST carrying it (vms_lock.c vms_lock_dlm_xnode_blkast_recv), which
+ * this program then drains with VMS_IOCTL_DELIVERAST and prints. So a delivery,
+ * if one happens, is proven by the executive HANDING BACK THIS ROUTINE'S OWN
+ * ADDRESS -- not by a counter this program chose to believe.
+ *
+ * It is never called: this rig has no AST dispatcher. Registering 0 instead
+ * would make the delivery path decline honestly and prove nothing either way,
+ * so a real address is registered and its arrival (or absence) is measured.
+ */
+static void rig_blkast_routine(unsigned long prm)
+{
+	(void)prm;
+}
+
+static void rig_msleep(unsigned ms)
+{
+	struct timespec ts;
+
+	ts.tv_sec = (time_t)(ms / 1000u);
+	ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
+	(void)nanosleep(&ts, NULL);
+}
+
+/* This node's own candidate name for index `i`. See the per-node note above. */
+static void rig_xn_name(const struct node_cfg *c, unsigned i, char *out,
+			size_t n)
+{
+	snprintf(out, n, "OVMX%s$X%02u", c->tag, i);
+}
+
+/*
+ * Is this name mastered by a node that is NOT us? The executive's own answer
+ * and nothing else: a master CSID it genuinely holds, that differs from the
+ * local one. `master_csid == 0` is UNMASTERED, which is a different fact from
+ * "the peer masters it" -- conflating them is precisely the fabrication the
+ * readback exists to prevent.
+ */
+static int rig_xn_is_peer_mastered(const struct vms_resmaster_args *rm)
+{
+	return rm->found != 0u && rm->local_csid != 0u &&
+	       rm->master_csid != 0u &&
+	       rm->master_csid != rm->local_csid &&
+	       rm->is_local_master == 0u;
+}
+
+/*
+ * Poll GET_RESMASTER until the executive holds a MASTER for this name, or the
+ * deadline passes. The wait is the cross-node ROUND TRIP, not a timer: a
+ * master CSID reaches this node's resource block only when the master's own
+ * grant reply lands. A name this node masters itself answers on the first read.
+ */
+static void rig_xn_wait_master(int fd, const char *name,
+			       struct vms_resmaster_args *rm)
+{
+	unsigned t;
+
+	for (t = 0; t < RIG_XN_GRANT_WAIT; t++) {
+		if (rig_dlm_resmaster(fd, name, rm) != 0u &&
+		    rm->master_csid != 0u)
+			return;
+		rig_msleep(RIG_XN_POLL_MS);
+	}
+	(void)rig_dlm_resmaster(fd, name, rm);
+}
+
+/* The granted mode the executive holds for a lock ($GETLKI), or 0 if it has
+ * no such lock. Never inferred from the $ENQ that asked for it: an async
+ * request reports the mode REQUESTED, and the two differ until the grant. */
+static uint32_t rig_xn_granted_mode(int fd, uint32_t lkid)
+{
+	struct vms_getlki_args g;
+
+	memset(&g, 0, sizeof(g));
+	g.lkid = lkid;
+	if (ioctl(fd, VMS_IOCTL_GETLKI, &g) != 0 || g.status != SS_NORMAL)
+		return 0u;
+	return g.granted_mode;
+}
+
+static void rig_xn_print_res(const struct node_cfg *c, const char *what,
+			     const char *name,
+			     const struct vms_resmaster_args *rm)
+{
+	printf("RIG-%s-XN-%s res=%s found=%u local_csid=0x%08x "
+	       "dir_csid=0x%08x master_csid=0x%08x is_local_master=%u "
+	       "n_granted=%u remote_holder_csid=0x%08x\n",
+	       c->tag, what, name, (unsigned)rm->found,
+	       (unsigned)rm->local_csid, (unsigned)rm->dir_csid,
+	       (unsigned)rm->master_csid, (unsigned)rm->is_local_master,
+	       (unsigned)rm->n_granted, (unsigned)rm->remote_holder_csid);
+	fflush(stdout);
+}
+
+/*
+ * Try ONE candidate: $ENQ it EX (async, with a blocking-AST routine), wait for
+ * the executive to hold a master, and classify from what it holds.
+ *
+ * A name this node masters itself is RELEASED again before the next candidate,
+ * so the scan leaves no lock behind on a resource it is not using -- and so
+ * the peer's own scan, which never touches these names, cannot be affected by
+ * this one at all. Returns 1 when the candidate is the cross-node subject.
+ */
+static int rig_xn_try(int fd, const struct node_cfg *c, unsigned i,
+		      struct rig_xnode *xn)
+{
+	struct vms_resmaster_args rm;
+	char name[32];
+	uint32_t lkid = 0u, st;
+
+	rig_xn_name(c, i, name, sizeof(name));
+	st = rig_dlm_enq(fd, name, (uint64_t)(uintptr_t)rig_blkast_routine,
+			 &lkid);
+	xn->tried++;
+	if (st != SS_NORMAL || lkid == 0u) {
+		printf("RIG-%s-XN-ENQ res=%s status=%u lkid=0x%08x "
+		       "(not enqueued -- the executive refused, honestly)\n",
+		       c->tag, name, (unsigned)st, (unsigned)lkid);
+		fflush(stdout);
+		return 0;
+	}
+
+	rig_xn_wait_master(fd, name, &rm);
+	if (!rig_xn_is_peer_mastered(&rm)) {
+		rig_xn_print_res(c, "LOCAL", name, &rm);
+		(void)rig_dlm_deq(fd, lkid);
+		return 0;
+	}
+
+	snprintf(xn->name, sizeof(xn->name), "%s", name);
+	xn->local_csid  = rm.local_csid;
+	xn->master_csid = rm.master_csid;
+	xn->dir_csid    = rm.dir_csid;
+	xn->hold_lkid   = lkid;
+	xn->hold_mode   = rig_xn_granted_mode(fd, lkid);
+	xn->found       = 1;
+	rig_xn_print_res(c, "PEER", name, &rm);
+	printf("RIG-%s-XN-HOLD res=%s lkid=0x%08x granted_mode=%u "
+	       "master_csid=0x%08x tried=%u\n",
+	       c->tag, xn->name, (unsigned)xn->hold_lkid,
+	       (unsigned)xn->hold_mode, (unsigned)xn->master_csid,
+	       (unsigned)xn->tried);
+	fflush(stdout);
+	return 1;
+}
+
+/* Scan this node's own candidate set for one the PEER masters. */
+static void rig_xn_find(int fd, const struct node_cfg *c, struct rig_xnode *xn)
+{
+	unsigned i;
+
+	memset(xn, 0, sizeof(*xn));
+	for (i = 0; i < RIG_XN_CANDIDATES; i++)
+		if (rig_xn_try(fd, c, i, xn))
+			return;
+	printf("RIG-%s-XN-HOLD NONE (no candidate of this node's own %u names "
+	       "was mastered by the peer -- the directory resolved every one "
+	       "to this node, or the vector is not usable)\n",
+	       c->tag, (unsigned)RIG_XN_CANDIDATES);
+	fflush(stdout);
+}
+
+/*
+ * THE CONTENDER -- what makes the MASTER owe a BLOCKING AST.
+ *
+ * A second $ENQ at EX on the SAME name. It is a second cross-node request from
+ * this node to the master, and at the master it meets a granted EX held FOR
+ * THIS NODE'S CSID: incompatible, so the master QUEUES it and its arm sends an
+ * op-0x04 to the holder -- which is this node (vms_lock.c's cross-node BLKAST
+ * directive, vms_dlm_scs.c dlm_arm_send_blkast).
+ *
+ * WHY BOTH SIDES OF THE CONFLICT ARE THIS NODE. On a TWO-node cluster the
+ * master's remote holder and its remote contender can only be the same peer:
+ * the master itself is the other node. They are nonetheless two DIFFERENT lock
+ * blocks with two different handles, which is exactly the conflict a BLKAST
+ * exists for -- VMS notifies a HOLDER, not a node.
+ *
+ * NO LCK_M_NOQUEUE: the request must QUEUE, because "queued" is the master-side
+ * state that owes the AST. It is never granted (the holder is this program and
+ * it does not release first), which is expected and is why the $ENQ is async.
+ */
+static void rig_xn_contend(int fd, const struct node_cfg *c,
+			   struct rig_xnode *xn)
+{
+	struct vms_resmaster_args rm;
+	uint32_t lkid = 0u, st;
+
+	if (!xn->found)
+		return;
+	st = rig_dlm_enq(fd, xn->name, (uint64_t)(uintptr_t)rig_blkast_routine,
+			 &lkid);
+	xn->contend_lkid = lkid;
+	printf("RIG-%s-XN-CONTEND res=%s status=%u lkid=0x%08x mode=EX "
+	       "(a second, incompatible cross-node request at the master)\n",
+	       c->tag, xn->name, (unsigned)st, (unsigned)lkid);
+	fflush(stdout);
+
+	rig_msleep(3000u);   /* let the master's op-0x04 make the round trip */
+	if (rig_dlm_resmaster(fd, xn->name, &rm) != 0u)
+		rig_xn_print_res(c, "AFTER-CONTEND", xn->name, &rm);
+	printf("RIG-%s-XN-CONTEND-MODE lkid=0x%08x granted_mode=%u "
+	       "(0/NL = still queued at the master, which is the state that "
+	       "owes the blocking AST)\n",
+	       c->tag, (unsigned)lkid, (unsigned)rig_xn_granted_mode(fd, lkid));
+	fflush(stdout);
+}
+
+/*
+ * Drain this process's user-mode AST queue and print every AST the executive
+ * hands back. A blocking AST that was really delivered shows up here carrying
+ * rig_blkast_routine's own address; nothing else in this program queues one.
+ *
+ * An EMPTY queue is printed as such and is NOT a failure of this function: the
+ * arm's op-0x04 RECEIVE half is a counted gap today (vms_dlm_scs.c), so the
+ * honest expectation is zero, and the value of draining anyway is that the day
+ * the receive half lands, this same rig measures the delivery.
+ */
+static unsigned rig_xn_drain_asts(int fd, const struct node_cfg *c)
+{
+	struct vms_ast_args a;
+	unsigned n = 0, guard;
+
+	for (guard = 0; guard < 16u; guard++) {
+		memset(&a, 0, sizeof(a));
+		if (ioctl(fd, VMS_IOCTL_DELIVERAST, &a) != 0)
+			break;
+		if (a.status != SS_NORMAL || a.astadr == 0u)
+			break;
+		printf("RIG-%s-XN-AST astadr=0x%llx astprm=0x%llx acmode=%u "
+		       "is_blkast_routine=%d\n",
+		       c->tag, (unsigned long long)a.astadr,
+		       (unsigned long long)a.astprm, (unsigned)a.acmode,
+		       a.astadr == (uint64_t)(uintptr_t)rig_blkast_routine);
+		n++;
+	}
+	printf("RIG-%s-XN-ASTS delivered=%u\n", c->tag, n);
+	fflush(stdout);
+	return n;
+}
+
+/*
+ * THE RELEASE -- what puts a real op-0x03 $DEQ on the wire.
+ *
+ * The HOLDER is released first and it is the one that crosses: it holds a
+ * MASTER HANDLE (the lock id the master's own grant reply assigned), and the
+ * codec refuses to build a $DEQ without one -- the fc8540ae INVLOCKID lesson.
+ * The CONTENDER is released after, and it deliberately does NOT cross: it was
+ * never granted, so this node holds no master handle for it, so the arm counts
+ * `releases_no_wire_op` and sends nothing. Both outcomes are printed, because
+ * the refusal is as much a measurement as the emission.
+ */
+static void rig_xn_release(int fd, const struct node_cfg *c,
+			   struct rig_xnode *xn)
+{
+	if (!xn->found)
+		return;
+	if (xn->hold_lkid != 0u)
+		printf("RIG-%s-XN-DEQ-HOLD res=%s lkid=0x%08x status=%u "
+		       "(this is the $DEQ that must cross as op-0x03)\n",
+		       c->tag, xn->name, (unsigned)xn->hold_lkid,
+		       (unsigned)rig_dlm_deq(fd, xn->hold_lkid));
+	if (xn->contend_lkid != 0u)
+		printf("RIG-%s-XN-DEQ-CONTEND lkid=0x%08x status=%u "
+		       "(no master handle: the arm must refuse the wire op and "
+		       "count it, not invent one)\n",
+		       c->tag, (unsigned)xn->contend_lkid,
+		       (unsigned)rig_dlm_deq(fd, xn->contend_lkid));
+	fflush(stdout);
+}
+
+/* The arm's own emit ledger, read back from the executive (INV-6). `phase`
+ * names WHEN the reading was taken so two of them can be differenced. */
+static void rig_dump_dlm(int fd, const struct node_cfg *c, const char *phase)
+{
+	struct vms_cluster_diag_dlm_args a;
+	const struct vms_dlm_scs_view_wire *v = &a.dlm;
+
+	memset(&a, 0, sizeof(a));
+	if (ioctl(fd, VMS_IOCTL_CLUSTER_DIAG_DLM, &a) != 0 ||
+	    a.status != SS_NORMAL) {
+		printf("RIG-%s-DLM at=%s unavailable status=%u "
+		       "(the executive holds no DLM wire arm)\n",
+		       c->tag, phase, (unsigned)a.status);
+		fflush(stdout);
+		return;
+	}
+	printf("RIG-%s-DLM at=%s connected=%u lockdirwt=%u gen=%u "
+	       "proxy_lkbs=%u req_sent=%u req_received=%u grants_sent=%u "
+	       "grants_received=%u declined=%u\n",
+	       c->tag, phase, (unsigned)v->connected, (unsigned)v->lockdirwt,
+	       (unsigned)v->rebuild_generation, (unsigned)v->proxy_lkbs,
+	       (unsigned)v->req_sent, (unsigned)v->req_received,
+	       (unsigned)v->grants_sent, (unsigned)v->grants_received,
+	       (unsigned)v->declined);
+	printf("RIG-%s-DLM-EMIT at=%s releases_sent=%u releases_no_wire_op=%u "
+	       "blkasts_sent=%u blkasts_no_wire_op=%u blkasts_received=%u "
+	       "blkasts_delivered=%u queued_no_reply=%u unparsed=%u "
+	       "foreign_refused=%u\n",
+	       c->tag, phase, (unsigned)v->releases_sent,
+	       (unsigned)v->releases_no_wire_op, (unsigned)v->blkasts_sent,
+	       (unsigned)v->blkasts_no_wire_op, (unsigned)v->blkasts_received,
+	       (unsigned)v->blkasts_delivered, (unsigned)v->queued_no_reply,
+	       (unsigned)v->unparsed, (unsigned)v->foreign_refused);
+	printf("RIG-%s-DLM-LEG at=%s sends=%u sends_refused=%u frames_rx=%u "
+	       "replies_sent=%u declined=%u\n",
+	       c->tag, phase, (unsigned)v->leg_sends,
+	       (unsigned)v->leg_sends_refused, (unsigned)v->leg_frames_rx,
+	       (unsigned)v->leg_replies_sent, (unsigned)v->leg_declined);
+	/*
+	 * The post path's four endings. Printed on its own line because when a
+	 * frame does NOT go out this is the line that says WHICH silence it
+	 * was -- and a proof that cannot distinguish "the queue refused" from
+	 * "the lock was gone by the time the fork thread rebuilt the request"
+	 * is a proof that will be read as the wrong one.
+	 */
+	printf("RIG-%s-DLM-POST at=%s queued=%u unqueued=%u lock_gone=%u "
+	       "refused=%u\n",
+	       c->tag, phase, (unsigned)v->posts_queued,
+	       (unsigned)v->posts_unqueued, (unsigned)v->posts_lock_gone,
+	       (unsigned)v->posts_refused);
+	fflush(stdout);
+}
+
+/*
+ * The phase, in the order the frames have to happen in: find a peer-mastered
+ * name and hold it, contend to make the master owe a BLKAST, then release the
+ * holder so a $DEQ crosses the other way. The ledger is read before and after
+ * so the run reports a DIFFERENCE rather than a total.
+ */
+static void rig_xnode_phase(int fd, const struct node_cfg *c,
+			    struct rig_xnode *xn)
+{
+	rig_dump_dlm(fd, c, "before");
+	rig_xn_find(fd, c, xn);
+	if (!xn->found) {
+		rig_dump_dlm(fd, c, "after");
+		return;
+	}
+	rig_xn_contend(fd, c, xn);
+	(void)rig_xn_drain_asts(fd, c);
+	rig_xn_release(fd, c, xn);
+	rig_msleep(2000u);       /* let this node's own op-0x03 land */
+	rig_dump_dlm(fd, c, "after");
+}
+
+/*
+ * THE SURVIVAL LINE. Printed AFTER the phase, and after a LINGER long enough
+ * for the PEER's frames to have arrived here -- because the property being
+ * measured is not "this node emitted", it is "the node that RECEIVED an
+ * op-0x03 and an op-0x04 it has no receive half for is still a sane member".
+ * The counters are re-read here rather than remembered, so the line reports
+ * what the executive holds at that moment (INV-6).
+ */
+static void rig_xn_survival(int fd, const struct node_cfg *c, unsigned linger_s)
+{
+	unsigned t;
+
+	for (t = 0; t < linger_s; t++)
+		rig_msleep(1000u);
+	rig_dump_dlm(fd, c, "survival");
+}
+
+/*
+ * THE RUN, in the order the proof needs.
+ *
+ * The verdict line is printed TWICE and that is deliberate. The first is the
+ * GENESIS verdict: membership as it stood when the discovery window closed,
+ * which is what the original rig measured and is unchanged. The second comes
+ * after the cross-node phase and after a linger long enough for the PEER's
+ * op-0x03 and op-0x04 to have arrived here -- so it says something the first
+ * cannot: that a node which RECEIVED two frames its arm has no receive half
+ * for is still a member, still counting two nodes, and still has its two
+ * membership projections agreeing.
+ *
+ * The host verdict reads the LAST such line, so in a run with a cross-node
+ * phase it is reading the post-frame one -- which is exactly the assertion the
+ * never-crash-a-peer proof needs -- and in a run without one the two lines are
+ * the same reading taken twice.
+ */
 static int rig_poll(int fd, const struct node_cfg *c)
 {
 	struct rig_sample s;
+	struct rig_xnode xn;
 	unsigned t;
 
 	for (t = 0; t < c->window; t++) {
@@ -745,6 +1228,14 @@ static int rig_poll(int fd, const struct node_cfg *c)
 	rig_sample_take(fd, &s);
 	rig_verdict(c, &s);
 	rig_dlm_probe(fd, c);
+
+	if (c->xnode) {
+		rig_xnode_phase(fd, c, &xn);
+		rig_xn_survival(fd, c, c->linger);
+		rig_sample_take(fd, &s);
+		rig_verdict(c, &s);   /* the SURVIVAL reading -- see above */
+	}
+
 	rig_dump_port(fd, c);
 	rig_dump_conn(fd, c);
 	rig_dump_join(fd, c);

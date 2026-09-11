@@ -2405,6 +2405,31 @@ void vms_cnxman_stop(struct vms_cluster *cl)
  * 10. CLUB / CSB query -- CLUSTER_DIAG_CSB, SHOW CLUSTER, $GETSYI (vms_cnxman.h SS6)
  * ========================================================================== */
 
+/*
+ * The DLM leg's five traffic counters (vms_cnxman.h). Read straight out of the
+ * live struct vms_cnxman this connection manager has been incrementing at the
+ * two places it touches cat-0x02 traffic -- cnxman_dlm_send above and
+ * cnxman_dlm_rx above it. Caller holds the fork mutex; nothing is computed.
+ *
+ * A connection manager that is not up leaves the five at 0 -- which is correct
+ * and not a fabrication, because the arm's own snapshot has already answered
+ * SS$_NOSUCHDEV for that case before this can be reached.
+ */
+void cnxman_project_dlm_leg(const struct vms_cluster *cl,
+			    struct vms_dlm_scs_view *out)
+{
+	const struct vms_cnxman *cn;
+
+	if (cl == NULL || out == NULL || cl->cnxman == NULL)
+		return;
+	cn = cl->cnxman;
+	out->leg_sends         = cn->dlm_sends;
+	out->leg_sends_refused = cn->dlm_sends_refused;
+	out->leg_frames_rx     = cn->dlm_frames_rx;
+	out->leg_replies_sent  = cn->dlm_replies_sent;
+	out->leg_declined      = cn->dlm_declined;
+}
+
 int cnxman_get_club(struct vms_cluster *cl, struct vms_club_view *out)
 {
 	if (cl == NULL || out == NULL)

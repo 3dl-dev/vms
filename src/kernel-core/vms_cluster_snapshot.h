@@ -378,8 +378,86 @@ struct vms_dlm_scs_view {
 	uint32_t declined;              /* honest declines: neither master nor directory */
 	uint32_t rebuild_records_in;    /* op-0d records received */
 	uint32_t rebuild_records_out;
+
+	/*
+	 * THE EMIT LEDGER (rd vms-94c). The two cross-node frames the arm
+	 * ORIGINATES -- the requester's op-0x03 $DEQ and the master's op-0x04
+	 * BLKAST -- each beside the refusal counter that is its honest
+	 * alternative. They are projected here for ONE reason: a frame seen on a
+	 * pcap proves a byte went out; only the counter the ARM ITSELF
+	 * incremented proves THIS executive is what emitted it. Every field is
+	 * read out of the live struct vms_dlm_scs / struct dlm_req_fsm the
+	 * running arm has been incrementing (INV-6) -- never recomputed here,
+	 * and never inferred from a frame count.
+	 *
+	 * The *_no_wire_op pair is load-bearing, not decoration: a gate that
+	 * closes (not all-OVMX, RULE C, no route, a lock id the codec refuses)
+	 * raises the refusal and sends NOTHING, so a run where the emit did not
+	 * happen says WHY rather than reading as a silent zero.
+	 */
+	uint32_t releases_sent;         /* op-0x03 $DEQ frames really emitted   */
+	uint32_t releases_no_wire_op;   /* a $DEQ that could NOT go out          */
+	uint32_t blkasts_sent;          /* op-0x04 BLKASTs really emitted        */
+	uint32_t blkasts_no_wire_op;    /* a holder we could not honestly notify */
+	uint32_t blkasts_received;      /* op-0x04 frames this node took in      */
+	uint32_t blkasts_delivered;     /* ...that fired a REAL user-mode AST    */
+	uint32_t queued_no_reply;       /* inbound requests genuinely QUEUED at  */
+					 /* this master -- the state that owes a  */
+					 /* BLKAST                                */
+	/*
+	 * THE RECEIVE HALF'S HONEST DECLINE (vms_dlm_scs.c "THE RELEASE'S
+	 * RECEIVE HALF"). An inbound op-0x03 is parsed as an ENQ/CONVERT, the
+	 * codec's opcode gate rejects it, and it is counted here with NOTHING
+	 * done. This counter rising on the node that RECEIVED a peer's $DEQ, on
+	 * a node that is still a member and still projecting agreement, IS the
+	 * never-crash-a-peer measurement: the frame arrived, the executive
+	 * declined it, and the node lived.
+	 */
+	uint32_t unparsed;              /* inbound cat-02 bodies this arm could  */
+					 /* not parse -- today's op-0x03 decline  */
+	uint32_t foreign_refused;       /* RULE C: the sender is not proven ours */
+
+	/*
+	 * THE CONNECTION MANAGER'S OWN COUNT OF THE SAME TRAFFIC -- a SECOND,
+	 * INDEPENDENT executive read, taken one layer down (vms_cnxman.c's
+	 * cnxman_dlm_send / cnxman_dlm_rx), of the events the arm counters above
+	 * describe from the arm's side.
+	 *
+	 * It is here because two projections of one fact can be COMPARED, and a
+	 * disagreement is information: `leg_sends` below the arm's
+	 * releases_sent + blkasts_sent means frames the arm believes it emitted
+	 * never reached a connection, and `leg_frames_rx` with a matching
+	 * `leg_declined` is the receiving side of the same frame the emitting
+	 * node's counter claims. Neither is derived from the other.
+	 */
+	uint32_t leg_sends;             /* originations the CM really performed  */
+	uint32_t leg_sends_refused;     /* ...and the ones it would not: no CSB, */
+					 /* no connection, or RULE C's emit half  */
+	uint32_t leg_frames_rx;         /* cat-02 bodies the CM routed to the arm*/
+	uint32_t leg_replies_sent;      /* answers the arm produced, really sent */
+	uint32_t leg_declined;          /* the arm declined; nothing was sent    */
+
+	/*
+	 * THE POST PATH, at each of the four places one can end (rd vms-94c).
+	 *
+	 * The engine posts a request from PROCESS context and the arm transmits
+	 * it on the FORK thread, rebuilding it from the lock database in
+	 * between (vms_dlm_scs.c dlm_arm_post / dlm_arm_run_post). So between
+	 * "the engine asked" and "a frame left" there are three ways to stop,
+	 * and without them projected a run in which nothing was emitted reads
+	 * as a silent zero in `releases_sent` with no way to tell WHICH silence
+	 * it was: the queue refused, the lock was gone by refill time, or the
+	 * FSM declined. `posts_lock_gone` in particular is the one a $DEQ can
+	 * hit by construction -- the operation being transmitted is the one
+	 * that destroys the object the transmission is rebuilt from -- and a
+	 * proof run has to be able to SAY that rather than deduce it.
+	 */
+	uint32_t posts_queued;          /* handed to the fork thread            */
+	uint32_t posts_unqueued;        /* the fork queue would not take it     */
+	uint32_t posts_lock_gone;       /* refill found no proxy: abandoned     */
+	uint32_t posts_refused;         /* the FSM refused: nothing was sent    */
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 48,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 120,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

@@ -2475,6 +2475,53 @@ long vms_ioctl_cluster_diag_join(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
+ * The CLUSTER_DIAG_DLM row struct (vms_ioctl.h / vms_lock_nb.h) is a
+ * BYTE-IDENTICAL duplicate of vms_cluster_snapshot.h's vms_dlm_scs_view -- the
+ * same shape as the four DIAG siblings above, and the same tripwire against a
+ * future edit to either copy.
+ */
+_Static_assert(sizeof(struct vms_dlm_scs_view) ==
+               sizeof(struct vms_dlm_scs_view_wire),
+               "vms_dlm_scs_view / vms_dlm_scs_view_wire layout drifted");
+
+/*
+ * vms_ioctl_cluster_diag_dlm - VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c). The
+ * lock manager's WIRE ARM, projected by vms_dlm_scs_snapshot() (vms_dlm_scs.c)
+ * out of the live struct vms_dlm_scs and its embedded requester FSM under the
+ * fork mutex.
+ *
+ * This is the half of the cross-node proof a packet capture cannot give: the
+ * pcap shows a frame on the segment, these counters show which executive's arm
+ * put it there. It adds no state of its own -- only the copyin/copyout -- and a
+ * node whose arm has never started answers SS$_NOSUCHDEV with the row left
+ * all-zero, never a zero that could be read as "emitted none" (INV-6).
+ */
+long vms_ioctl_cluster_diag_dlm(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_diag_dlm_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    struct vms_dlm_scs_view v;
+    uint32_t status;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    memset(&v, 0, sizeof(v));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    status = (uint32_t)vms_dlm_scs_snapshot(cl, &v);
+    if (status == SS__NORMAL)
+        memcpy(&args.dlm, &v, sizeof(args.dlm));
+    else
+        pr_info("vms: CLUSTER_DIAG_DLM -> SS$ %u\n", (unsigned)status);
+
+    args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * csb_member_state_name - the ONE string VMS_IOCTL_CLUSTER_MEMBER_GET's
  * `state` column carries for a CSB, and the strongest TRUE thing that column
  * can say about it.

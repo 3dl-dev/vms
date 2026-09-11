@@ -963,6 +963,10 @@ long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
  * against vms_cluster_node()'s real vms_cnxman.c objects. Read-only; the
  * executive has no console log, so this is how the lab sees what the join did. */
 long vms_ioctl_cluster_diag_join(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c): mirror of the src/kernel/
+ * vms_internal.h decl -- the lock manager's WIRE ARM, projected under the fork
+ * mutex from vms_cluster_node()'s real struct vms_dlm_scs. */
+long vms_ioctl_cluster_diag_dlm(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): mirror of the src/kernel/vms_internal.h
  * decl -- $GETSYI's cluster item codes projected from the CLUB. */

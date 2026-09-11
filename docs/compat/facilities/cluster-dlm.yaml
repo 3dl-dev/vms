@@ -58,13 +58,22 @@ items:
       node granted EX by the PEER master, granted_mode=5, grants_received=1) and
       never-crash-a-peer (both survive the peer's frames, projections=agree) — the
       first real multi-node proof since the #1052 retirement, partially discharging
-      the vms-1ee caveat for the acquire/grant path. STILL PENDING (vms-c72, the
-      receive arm): the BLKAST/$DEQ OVER-THE-WIRE DELIVERY — in the 2-node run op-04
-      (BLKAST) and op-03 ($DEQ) are EMITTED (blkasts_sent=1, on the wire) but the
-      peer's inbound dispatch does not yet route them (blkasts_received=0 /
-      delivered=0, declined unparsed, which is WHY never-crash held), so the "BLKAST
-      is DELIVERED over SCS" behavior above is proven single-node-injection
-      (scenario 7/H6), not yet 2-node. No fake
+      the vms-1ee caveat for the acquire/grant path. NOW FULLY DISCHARGED for the
+      acquire/grant/notify/release lifecycle (vms-c72 receive arm #1181 + round-trip
+      lab proof #1183, tests/lab/captures/xnode-dlm-2node-resmaster-clean-20260911.log):
+      the receive arm routes inbound op-03 ($DEQ) -> master-side release and op-04
+      (BLKAST) -> a real user-mode AST on the remote holder, and a live 2-node run
+      proves the FULL emit->receive->deliver round-trip: blkasts_received>0 +
+      blkasts_delivered>0 (BLKAST really delivered, not just emitted, superseding the
+      earlier single-node-injection-only note), and a DIRECT master-side release
+      readback — on node B (master) the granted queue goes n_granted 1->0 with
+      remote_holder cleared AFTER B processes A's inbound $DEQ (counter_rose=1 gates
+      the sample to post-processing), the resource still present (found=1): the LKB
+      actually left the master's granted queue, a lock-DB STATE delta, not a return
+      code. Composed with the in-process assertion (test_dlm_recv_arm: master copy
+      GONE, real engine) this answers return-value!=state at both the unit and live
+      2-node levels. Only remaster/LVB + distributed-deadlock stay deferred
+      (cluster-dlm$remaster-lvb-deadlock, vms-727). No fake
       grants OR blocks — a queued request is a real lock on the master's queue that
       releases only on a real $DEQ (INV-6).
   - id: cluster-dlm$async-reply-wire
@@ -92,9 +101,14 @@ items:
       RE-ESTABLISHED 2-node (#1174, tests/lab/captures/xnode-dlm-2node-20260911.log):
       the async GRANT-reply crosses the live wire and completes on the requester
       (grants_received=1 on both nodes, NL->EX read back on the real 2-node cluster)
-      — partially discharging vms-1ee for the grant-reply path. The queued-reply +
-      deferred-GRANT-on-$DEQ delivery awaits the receive arm (vms-c72; op-03 $DEQ
-      emit itself becomes reachable in #1178). No fabricated wire reply or
+      — partially discharging vms-1ee for the grant-reply path. NOW FULLY DISCHARGED:
+      the receive arm (vms-c72, #1181) routes the inbound op-03 $DEQ (emit reachable
+      since #1178) to the master-side release and the op-04 BLKAST to a real user-mode
+      AST, and the live 2-node round-trip (#1183) shows the async replies delivered
+      end-to-end — blkasts_delivered>0 and the inbound $DEQ empties the master's
+      granted queue n_granted 1->0 (direct resmaster readback, counter_rose=1 gated).
+      The full async emit->receive->deliver wire is proven 2-node, not just the
+      grant-reply half. No fabricated wire reply or
       grant (INV-6).
   - id: cluster-dlm$remaster-lvb-deadlock
     kind: feature

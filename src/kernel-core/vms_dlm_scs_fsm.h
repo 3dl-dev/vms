@@ -37,9 +37,13 @@
  *      cannot carry one across two frames, because it does not have anywhere to
  *      put it.
  *   2. EVERY FRAME IS BUILT FROM A FRESH `refill_post`. The first
- *      transmission, every retransmit, every retry at a new target, and above
- *      all the COMPLETION that names the master's handle. Not one of them is
- *      built from the reply that arrived a microsecond earlier.
+ *      transmission, every retransmit, and every retry at a new target. Not
+ *      one of them is built from the reply that arrived a microsecond
+ *      earlier. (The post-grant COMPLETION that used to be the sharpest
+ *      example of this rule is gone -- see §"WHAT IS GROUNDED" -- because the
+ *      real protocol has no such frame. The rule is unchanged; it now has one
+ *      fewer frame to apply to, which is the safest direction for it to
+ *      move.)
  *   3. AN ANSWER GOES INTO THE LOCK DATABASE BEFORE IT IS USED. When the
  *      directory names a master, the FSM calls `ops->record_master` and then
  *      REFILLS; the retry's destination and its `master_csid` field come back
@@ -60,39 +64,65 @@
  *     op 0x01 ENQ request, op 0x07 CONVERT request  (spec §4(f).1)
  *     the cat-0x82 reply's GRANT vs DENY shape       (spec §4(f).1)
  *
- *   PROVISIONAL, built here and MARKED as provisional:
- *     op 0x04 completion + op 0x03 commit. Field-forensics, not spec (codec
- *     header). They are sent because the lab observed the pair completing a
- *     real grant, and every field in them is read out of the executive; if
- *     FC-P5.2 re-maps the opcodes, this is a table edit.
+ *   AND THAT IS THE WHOLE OUTBOUND SET, INCLUDING AFTER A GRANT.
  *
- *   NOT GROUNDED, and therefore NOT PUT ON THE WIRE BY THIS FILE:
+ *     An earlier revision sent a PROVISIONAL "op 0x04 completion + op 0x03
+ *     commit" pair once a grant landed. The vms-c03 capture of a real 2-node
+ *     OpenVMS VAX 7.3 cluster showed that pair does not exist: 0x03 is $DEQ,
+ *     0x04 is BLKAST, 0x06 carries the value block, and a real requester
+ *     answers a grant with NO frame whatsoever (vms_cluster_codec_dlm.h's
+ *     supersession note). So the pair is gone from this file, which makes
+ *     OVMX emit strictly FEWER frame shapes than before -- a divergence
+ *     REDUCTION, not a lost capability.
  *
- *     THE RELEASE (a cross-node $DEQ). There is no grounded cat-0x02 opcode
- *     for it -- §4(f).1 grounds ENQ and CONVERT and nothing else, and the
- *     ioctl family's `VMS_DLM_OP_DEQ == 3` is a DISPATCH selector that happens
- *     to collide with the PROVISIONAL commit opcode 0x03. Guessing it is
- *     exactly the class of guess that produced LOCKMGRERR on two real VAXes.
- *     So a POST_DEQ is REFUSED (DLM_REQ_E_NOWIREOP) and COUNTED in
- *     `releases_no_wire_op` -- a measured, reportable gap, not a silent one.
- *     THIS IS THE OPEN HALF OF INTEGRATION NOTE E6. Rundown now COLLECTS
- *     the release and posts it from a blockable context (the foundation
- *     commit's lock_sweep_run); what it cannot yet do is put it on the wire,
- *     and that needs an opcode from the lab, not from this file.
+ *     THE GRANT IS THE TERMINAL SETTLE. `grant_recv` puts the master's handle
+ *     in the executive's lock record and the block goes straight to
+ *     ST_GRANTED with `settled` set, which the beat skips. Nothing is owed,
+ *     nothing is retransmitted, and no request slot is held open for an
+ *     acknowledgement -- so a granted lock is immediately usable (a CONVERT
+ *     posts and transmits) and immediately releasable (a $DEQ post frees the
+ *     block). Nothing is stranded at the far end either: the DLM's inbound
+ *     arm (vms_dlm_scs.c) serves only ENQ/CONVERT/REBUILD and DECLINES
+ *     everything else, so no OVMX master ever consumed the pair.
  *
- *     THE VALUE BLOCK. The codec grounds no cat-0x02 LVB field. The write
- *     crossing is therefore NOT transmitted (`lvb_write_no_wire_field`), and an
- *     inbound grant is handed to the engine with `valblk_present = 0`, which
- *     makes the engine leave the proxy's own value block alone rather than
- *     overwrite it with zeros (vms_dlm_proxy.h `struct vms_dlm_proxy_grant`).
- *     Sixteen zeros presented as an LVB is a placeholder that reads exactly
- *     like data, which is the worst kind.
+ *   GROUNDED IN THE CODEC, BUT NOT TRANSMITTED BY THIS ARM:
  *
- *     THE BLOCKING AST's own frame shape, and the DIRECTORY's outcome-2/3
- *     reply shapes. This file has an ENTRY POINT for each -- the model needs
- *     them and the simulator drives them -- but no PARSER, because there is
- *     nothing to parse against. FC-P4.8's classifier may only raise them from a
- *     grounded source, and FC-P5.2's capture is what grounds the rest.
+ *     THE RELEASE (a cross-node $DEQ), op 0x03. vms-c03 grounded the opcode
+ *     and vms_cluster_codec_dlm.h now carries a real parser and a real
+ *     builder for it. What has NOT happened is the separate, lab-gated step
+ *     of letting this arm put one on a live cluster's wire: a new outbound
+ *     frame shape is a peer-crash vector until a real peer has been seen to
+ *     take it (memory ovmx-never-crashes-a-peer), and that proof belongs to
+ *     its own item. So a POST_DEQ is still REFUSED (DLM_REQ_E_NOWIREOP) and
+ *     still COUNTED in `releases_no_wire_op` -- a measured, reportable gap,
+ *     not a silent one, and no longer a gap in the FIELD MAP. THIS REMAINS
+ *     THE OPEN HALF OF INTEGRATION NOTE E6: rundown COLLECTS the release and
+ *     posts it from a blockable context (lock_sweep_run); what it does not
+ *     yet do is transmit it.
+ *
+ *     THE VALUE BLOCK, op 0x06. vms-c03 grounded the 16 bytes at body[36:52]
+ *     and the codec has an ACCESSOR for them; it deliberately has no builder,
+ *     because the four bytes ahead of the block are not pinned by any capture
+ *     and composing a whole op-0x06 frame would mean minting them. So the
+ *     write crossing is still NOT transmitted (`lvb_write_no_wire_field`), and
+ *     an inbound grant is still handed to the engine with `valblk_present = 0`
+ *     -- the op-0x01 grant genuinely carries no value block -- which makes the
+ *     engine leave the proxy's own block alone rather than overwrite it with
+ *     zeros (vms_dlm_proxy.h `struct vms_dlm_proxy_grant`). Sixteen zeros
+ *     presented as an LVB is a placeholder that reads exactly like data, which
+ *     is the worst kind.
+ *
+ *     THE BLOCKING AST, op 0x04. Grounded by vms-c03 and parseable by the
+ *     codec, which identifies its lock by `master_lkid` and by nothing else
+ *     (the reference frame's readable body[48] resource name is STALE BUFFER
+ *     belonging to another lock, and the codec refuses to read it). This
+ *     file's BLKAST entry point still takes a lock id rather than a frame:
+ *     FC-P4.8's classifier is what must raise it from the parsed frame, and
+ *     that wiring is its own item.
+ *
+ *     THE DIRECTORY's outcome-2/3 reply shapes. This file has an ENTRY POINT
+ *     for each -- the model needs them and the simulator drives them -- but no
+ *     PARSER, because there is still nothing grounded to parse against.
  *
  * ==========================================================================
  * CONTEXT (design §3.2.6, E42/E45)
@@ -309,11 +339,16 @@ struct dlm_req {
 	uint8_t    redirects;      /* declines/redirects followed so far       */
 
 	/*
-	 * Nothing is outstanding: the grant arrived AND its completion/commit
-	 * pair really went out. The block lives on as this arm's wire record of
-	 * a cross-node lock we hold (so a BLKAST, a CONVERT or a duplicate
-	 * grant has something to land on), but the beat must not keep
-	 * retransmitting a completion that was already answered.
+	 * NOTHING IS OUTSTANDING ON THE WIRE FOR THIS BLOCK.
+	 *
+	 * Set the moment a grant arrives: a real VMS requester answers a grant
+	 * with no frame at all (the vms-c03 supersession, see §"WHAT IS
+	 * GROUNDED"), so the grant IS the terminal settle. The block lives on
+	 * as this arm's wire record of a cross-node lock we hold -- so a
+	 * BLKAST, a CONVERT or a duplicate grant has something to land on --
+	 * but the beat (§12) skips it, which is what guarantees there is no
+	 * ladder running, no retransmit pending, and no slot held open waiting
+	 * for an acknowledgement.
 	 */
 	uint8_t    settled;
 	uint8_t    pad[3];
@@ -374,8 +409,10 @@ struct dlm_req_fsm {
 	uint32_t redirects_followed;  /* outcome 2 -> retry at the named master*/
 	uint32_t masteries_assumed;   /* outcome 3                             */
 	uint32_t declines_reresolved; /* a decline -> re-resolve -> retry      */
-	uint32_t completions_sent;    /* op 0x04 + op 0x03, PROVISIONAL        */
-	uint32_t completions_resent;  /* a duplicate grant re-completed        */
+	uint32_t grants_settled;      /* grants that reached the terminal      */
+				       /* settled state (§"WHAT IS GROUNDED"):  */
+				       /* the grant IS the settle, no frame     */
+				       /* follows it                            */
 	uint32_t blkasts_rx;
 	uint32_t blkasts_delivered;   /* a REAL user-mode AST was queued       */
 	uint32_t blkasts_undeliverable;

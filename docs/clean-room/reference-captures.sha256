@@ -48,3 +48,6 @@ f0b8b49818f74912f82b1851c3c6f9cd71437d3eae07ebd0b8a5bfc76e6e16f8  cluster/captur
 4c49c9d0b0dc0ec64d80e1a77d4fa7e6cc632e188b0dd6c5c3dea8a40926aba7  clean-cluster/captures/formation-attempt1-vaxa-solo.pcap
 486e4ad7fdd45bc6310f92b98100e63045703dcdde83e0f45ae5c4758e24264d  clean-cluster/captures/formation-clean-2node.pcap
 2a1dac703601cc6561fbdb462e95f47d094a20dcc00f7e8a005020c4c0a10e22  clean-cluster/captures/nodeA-config-cluster-enable.pcap
+751babb1fd6df7f933b071803489b73001c10bb6ae8b001c42eef963ab297bba  tests/lab/captures/vms-c03-dlm-opcodes-20260911/dlm-blk2-20260911.pcap
+e2e2be59f93d23233fbfa7a9c2bf6f936f3313c23c16054ead85c494b5be72eb  tests/lab/captures/vms-c03-dlm-opcodes-20260911/dlm-deq-20260911.pcap
+6ac0de0512f7b6111da4397dae6a8ee516781164a65db53d24d3b0fa89861c0c  tests/lab/captures/vms-c03-dlm-opcodes-20260911/dlm-lvb3-20260911.pcap

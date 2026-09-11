@@ -167,7 +167,7 @@ job executed inside the guest.
 
 | TU | Verdict |
 |---|---|
-| `vms_cluster_codec_dlm.c` | REAL-DEFECT (needs DLM peer). Note `vms_dlm_completion_build()`'s **lock-id refusal** (the `fc8540ae` hard lesson) is precisely the assertion worth reddening. |
+| `vms_cluster_codec_dlm.c` | REAL-DEFECT (needs DLM peer). Note the **lock-id refusal** (the `fc8540ae` hard lesson) is precisely the assertion worth reddening — it now lives in `vms_dlm_deq_build()` / `vms_dlm_blkast_build()` and on the PARSE side too, `vms_dlm_completion_build()` having been retired by the vms-c03 supersession (the completion/commit pair was a phantom). |
 | `vms_dlm_scs_fsm.c` | REAL-DEFECT (needs DLM peer) |
 | `vms_cluster_codec_mscp.c` | REAL-DEFECT (needs MSCP peer) |
 | `vms_mscp_cl.c`, `vms_mscp_cl_conn_fsm.c`, `vms_mscp_cl_fsm.c`, `vms_mscp_cl_io_fsm.c` | REAL-DEFECT (needs a serving peer) |

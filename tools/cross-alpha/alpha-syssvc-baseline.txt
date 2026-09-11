@@ -31,12 +31,14 @@ test_syssvc_imgact_nonres    # A: LINK.EXE symbol-vector, x86/arm-only (link.c) 
 test_syssvc_imgact_realimg   # A: LINK.EXE symbol-vector, x86/arm-only (link.c) — N/A on Alpha static
 test_syssvc_imgact_tls       # A: LINK.EXE symbol-vector, x86/arm-only (link.c) — N/A on Alpha static
 #
-# ---- (B) subject image not cross-buildable for Alpha yet (rd vms-d9c3) ---------
+# ---- (B) subject image not cross-buildable for Alpha yet (rd vms-41f) ---------
 # These fork/exec a subject image that does not cross-build for Alpha yet, so
 # pass=0 (the suite cannot start). Remove from this list once the subject is
 # staged for Alpha.
 test_syssvc_mmk_build        # B: needs MMK.EXE/TCC.EXE self-host (does not cross-build for Alpha yet)
 test_syssvc_ssh_kex          # B: needs sshd glibc-static cross for Alpha (not built yet)
+test_syssvc_spawn_pipeline   # B: PIPESTAGE.EXE (tests/qemu/pipe_stage.c) not cross-staged for Alpha (pass=0, suite cannot start); $CREPRC/SPAWN/$STATUS facility PROVEN on Alpha same run by spawn_users 13/0 — rd vms-41f
+test_syssvc_tcpip_daytime    # B: shipped TCPIP$DAYTIME.EXE (tools/vms_tcpip_daytime.c) not cross-staged for Alpha (image-missing ENOENT, not a facility defect); accept->materialize-fd->fork/exec launch path PROVEN on Alpha same run by tcpip_inetd 7/7 — rd vms-41f
 #
 # ---- (C) harness/emulator environment — not an LP64 sys$ bug -------------------
 # getdvi/showdev: fail ONLY on ETH0: — the qemu-system-alpha boot is `-nic none`
@@ -44,6 +46,7 @@ test_syssvc_ssh_kex          # B: needs sshd glibc-static cross for Alpha (not b
 # before /init. Needs a different NIC model / slimmer disk set (rd vms-7ee).
 test_syssvc_getdvi           # C: ETH0: absent (boot -nic none, clipper 6-virtio hang) — rd vms-7ee
 test_syssvc_showdev          # C: ETH0: absent (boot -nic none, clipper 6-virtio hang) — rd vms-7ee
+test_syssvc_l2_datalink      # C: raw-L2 (AF_PACKET/SOCK_RAW) needs a non-loopback NIC; Alpha boots -nic none (same clipper 6-virtio-hang root as getdvi/showdev) — SKIPs 77 (0/0), no wrong-output — rd vms-7ee
 # ssh_server: the WRAPPED sshd cannot bind a real host port / accept an inbound
 # TCP session because the Alpha boot is `-nic none` (same -nic-none root cause as
 # getdvi/showdev). The FACILITY is proven present here: the INV-6 assertion "no

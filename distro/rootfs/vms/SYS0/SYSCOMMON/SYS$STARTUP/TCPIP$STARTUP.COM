@@ -34,13 +34,15 @@ $ SAY ""
 $!
 $! --- Reapply the persisted TCP/IP configuration (rd vms-b97) -----------------
 $! Real VMS TCPIP$STARTUP reapplies the operator's saved configuration so a
-$! configured node comes back configured after a reboot. Read the SYS$SYSTEM:
-$! config stores over the Files-11 ACP and re-apply each record with /REAPPLY
-$! (apply-only -- the SET verbs do the live effect but do NOT re-write the store,
-$! so it does not grow every boot). This runs BEFORE the auxiliary server so the
-$! interface + routes are up before any listener binds (the ordering note below).
-$! A store that does not exist yet is skipped honestly inside TCPIP$REAPPLY.
-$ @SYS$STARTUP:TCPIP$REAPPLY
+$! configured node comes back configured after a reboot. TCPIP REAPPLY reads the
+$! SYS$SYSTEM: config stores over the Files-11 ACP (via rms_textfile -- the SAME
+$! mechanism the TCPIP SET verbs wrote them with, so the read is consistent, unlike
+$! a DCL OPEN/READ of a runtime-written store) and re-applies each record with
+$! /REAPPLY (apply-only -- the live effect, but NOT a re-write of the store, so it
+$! does not grow every boot). Runs BEFORE the auxiliary server so the interface +
+$! routes are up before any listener binds. A store that does not exist yet is a
+$! honest no-op.
+$ TCPIP REAPPLY
 $!
 $ INETD_IMAGE = "SYS$SYSTEM:TCPIP$INETD.EXE"
 $ SERVICE_DB  = "SYS$SYSTEM:TCPIP$SERVICE.DAT"

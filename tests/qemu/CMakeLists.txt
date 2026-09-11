@@ -169,6 +169,21 @@ foreach(_anchored
     endif()
 endforeach()
 
+# test_syssvc_tcpip_inetd (R4 G1, rd vms-8bd): the inetd engine's spawn now drops
+# to a per-service run-as identity, so the suite compiles the identity TU + the
+# SHARED sshd identity/credential seams it reuses (ssh_ident.c / cred_drop.c) and
+# needs their headers + sysuaf.h on its include path. The G1 assertions inject mock
+# tables (no live /dev/vms), so no rms_acp_bind anchor is required.
+if(TARGET test_syssvc_tcpip_inetd)
+    target_sources(test_syssvc_tcpip_inetd PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmstcpip/services/tcpip_inetd_ident.c
+        ${CMAKE_SOURCE_DIR}/src/vmsssh/ssh_ident.c
+        ${CMAKE_SOURCE_DIR}/src/vmsssh/cred_drop.c)
+    target_include_directories(test_syssvc_tcpip_inetd PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsssh
+        ${CMAKE_SOURCE_DIR}/src/libvms/include)
+endif()
+
 # test_syssvc_crtl_rms_veneer (vms-47e): the C RTL stdio->RMS veneer proof.
 # The suite drives src/vmsrms/crtl_rms_stdio.c (ovmx_crtl_fopen/fwrite/fread/
 # fclose -> sys$create/$put/$get/$close), so compile that veneer TU into this

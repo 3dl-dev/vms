@@ -315,8 +315,11 @@ int main(void)
     }
 
     /* ---- Accept the inbound connection and SPAWN the standalone image ---- */
+    /* identity_fn = NULL: this suite proves DAYTIME launches over the executive
+     * (ACP-stage -> execve) and answers RFC 867, not the R4 G1 identity drop (which
+     * is unit-tested in test_syssvc_tcpip_inetd + proven on the booted runtime). */
     memset(&peer, 0, sizeof(peer));
-    svc_pid = tcpip_inetd_accept_dispatch(listen_h, &svcs[0], &peer);
+    svc_pid = tcpip_inetd_accept_dispatch(listen_h, &svcs[0], &peer, NULL);
     CHECK(svc_pid > 0,
           "accept fires on the inbound connect and the auxiliary server spawns the REAL standalone TCPIP$DAYTIME.EXE");
 

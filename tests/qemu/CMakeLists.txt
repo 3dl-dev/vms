@@ -161,7 +161,8 @@ foreach(_anchored
         test_syssvc_rightslist
         test_syssvc_setuai
         test_syssvc_loginout_acp
-        test_syssvc_tcpip_host_acp)
+        test_syssvc_tcpip_host_acp
+        test_syssvc_tcpip_config_acp)
     if(TARGET ${_anchored})
         target_sources(${_anchored} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)

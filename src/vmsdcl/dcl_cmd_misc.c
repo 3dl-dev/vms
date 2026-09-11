@@ -1558,12 +1558,11 @@ static const char *tcpip_lookup_linux_name(const struct tcpip_ifmap *map,
     return NULL;
 }
 
-/* Path for VMS TCPIP config files */
-#define TCPIP_CONFIG_DIR VMS_SYSTEM_DIR
-#define TCPIP_HOST_DAT    TCPIP_CONFIG_DIR "/TCPIP$HOST.DAT"
-#define TCPIP_NS_DAT      TCPIP_CONFIG_DIR "/TCPIP$NAMESERVICE.DAT"
-#define TCPIP_IF_DAT      TCPIP_CONFIG_DIR "/TCPIP$INTERFACE.DAT"
-#define TCPIP_ROUTE_DAT   TCPIP_CONFIG_DIR "/TCPIP$ROUTE.DAT"
+/* The TCPIP config stores (TCPIP$HOST/NAMESERVICE/INTERFACE/ROUTE.DAT) are now
+ * persisted the VMS way -- RMS over the Files-11 ACP at SYS$SYSTEM: (rms_textfile,
+ * vms-402/vms-210) -- so there is no local config directory to create. The old
+ * VMS_SYSTEM_DIR="/vms" fopen paths (the retired POSIX passthrough, vms-37e) are
+ * gone: they wrote nothing on the booted runtime. */
 
 /*
  * TCPIP SHOW INTERFACE [/FULL] - Display network interfaces with VMS names.
@@ -1847,14 +1846,6 @@ static int cmd_tcpip_show_version(struct dcl_command *cmd)
 }
 
 /*
- * Ensure the TCPIP config directory exists.
- */
-static void tcpip_ensure_config_dir(void)
-{
-    mkdir(TCPIP_CONFIG_DIR, 0755);
-}
-
-/*
  * TCPIP SET HOST hostname /ADDRESS=ip
  * Adds an entry to TCPIP$HOST.DAT and /etc/hosts.
  */
@@ -1943,19 +1934,22 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
 
     const char *domain = dcl_qualifier_value(cmd, "DOMAIN");
 
-    tcpip_ensure_config_dir();
-
-    /* Write to TCPIP$NAMESERVICE.DAT */
-    FILE *fp = fopen(TCPIP_NS_DAT, "w");
-    if (fp) {
-        fprintf(fp, "SERVER=%s\n", server);
-        if (domain)
-            fprintf(fp, "DOMAIN=%s\n", domain);
-        fclose(fp);
+    /* Persist to TCPIP$NAMESERVICE.DAT the VMS way -- RMS over the Files-11 ACP
+     * (rms_textfile, the vms-402 pattern), superseding any prior record. The old
+     * fopen() targeted VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms" -- the retired POSIX
+     * passthrough (vms-37e) -- so on the booted runtime it wrote nothing. SERVER
+     * supersedes (write_line), DOMAIN appends (append_line). SYS$SYSTEM: resolves
+     * through LNM$FILE_DEV; fail-honest with no executive/ACP volume (INV-6). */
+    char nsline[512];
+    snprintf(nsline, sizeof(nsline), "SERVER=%.255s", server);
+    int ns_db_ok = (rms_textfile_write_line("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT", nsline) == 0);
+    if (ns_db_ok && domain) {
+        snprintf(nsline, sizeof(nsline), "DOMAIN=%.255s", domain);
+        ns_db_ok = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT", nsline) == 0);
     }
 
-    /* Also write /etc/resolv.conf */
-    fp = fopen("/etc/resolv.conf", "w");
+    /* Also update the substrate resolver (best-effort; root-only file). */
+    FILE *fp = fopen("/etc/resolv.conf", "w");
     if (fp) {
         if (domain)
             fprintf(fp, "domain %s\n", domain);
@@ -1963,6 +1957,11 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
         fclose(fp);
     }
 
+    if (!ns_db_ok) {
+        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$NAMESERVICE.DAT not "
+               "recorded (name service not persisted to the VMS database)\n");
+        return SS$_ABORT;
+    }
     printf("%%TCPIP-I-INFO, name service configured\n");
     return SS$_NORMAL;
 }
@@ -2064,15 +2063,18 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
         }
     }
 
-    /* Persist to TCPIP$INTERFACE.DAT */
-    tcpip_ensure_config_dir();
-    FILE *fp = fopen(TCPIP_IF_DAT, "a");
-    if (fp) {
-        fprintf(fp, "%s %s", ifname, host_ip);
+    /* Persist to TCPIP$INTERFACE.DAT via RMS over the Files-11 ACP (rms_textfile,
+     * the vms-402 pattern) -- the old fopen() targeted the retired /vms passthrough
+     * (vms-37e), dead on the booted runtime. SYS$SYSTEM: via LNM$FILE_DEV;
+     * fail-honest with no executive (the executive-absent case is already reported
+     * by the TCPIP$INET_HOSTADDR NOEXEC path below -- same cause, one message). */
+    {
+        char ifline[512];
         if (netmask)
-            fprintf(fp, " %s", netmask);
-        fprintf(fp, "\n");
-        fclose(fp);
+            snprintf(ifline, sizeof(ifline), "%.63s %.63s %.63s", ifname, host_ip, netmask);
+        else
+            snprintf(ifline, sizeof(ifline), "%.63s %.63s", ifname, host_ip);
+        (void)rms_textfile_append_line("SYS$SYSTEM:TCPIP$INTERFACE.DAT", ifline);
     }
 
     /* Record the host address in the VMS-faithful TCPIP$INET_HOSTADDR SYSTEM
@@ -2210,30 +2212,35 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
             applied = 1;
     }
 
-    /* Persist the recorded route to TCPIP$ROUTE.DAT (reapplied at boot). */
-    tcpip_ensure_config_dir();
-    FILE *fp = fopen(TCPIP_ROUTE_DAT, "a");
-    if (fp) {
-        if (is_default) {
-            fprintf(fp, "DEFAULT %s\n", gateway);
-        } else {
-            fprintf(fp, "%s %s", destination, gateway);
-            if (netmask)
-                fprintf(fp, " %s", netmask);
-            fprintf(fp, "\n");
-        }
-        fclose(fp);
-    }
+    /* Persist the recorded route to TCPIP$ROUTE.DAT via RMS over the Files-11 ACP
+     * (rms_textfile_append_line, the vms-402 pattern) -- the old fopen() targeted
+     * the retired /vms passthrough (vms-37e), dead on the booted runtime, so the
+     * "recorded" claim below was a lie there. SYS$SYSTEM: via LNM$FILE_DEV;
+     * fail-honest with no executive/ACP volume. */
+    char rtline[512];
+    if (is_default)
+        snprintf(rtline, sizeof(rtline), "DEFAULT %.63s", gateway);
+    else if (netmask)
+        snprintf(rtline, sizeof(rtline), "%.63s %.63s %.63s", destination, gateway, netmask);
+    else
+        snprintf(rtline, sizeof(rtline), "%.63s %.63s", destination, gateway);
+    int rt_recorded = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$ROUTE.DAT", rtline) == 0);
 
     /* Report the ACTUAL outcome (INV-6: never claim "route added" when the live
-     * apply failed or was skipped for lack of privilege). */
+     * apply failed or was skipped for lack of privilege, and never claim it was
+     * "recorded" when the ACP write did not land). */
     if (applied) {
         printf("%%TCPIP-I-INFO, route added\n");
         return SS$_NORMAL;
     }
     if (!privileged) {
-        printf("%%TCPIP-W-NOTAPPLIED, route recorded in TCPIP$ROUTE.DAT but not "
-               "applied to the live routing table (requires NET_ADMIN)\n");
+        if (rt_recorded)
+            printf("%%TCPIP-W-NOTAPPLIED, route recorded in TCPIP$ROUTE.DAT "
+                   "(reapplied at boot) but not applied to the live routing table "
+                   "now (requires NET_ADMIN)\n");
+        else
+            printf("%%TCPIP-W-PRIVREQ, route not applied (requires NET_ADMIN) and "
+                   "not recorded (executive absent -- TCPIP$ROUTE.DAT unreachable)\n");
         return SS$_NOPRIV;
     }
     return SS$_ABORT;                   /* privileged, but the substrate apply failed */

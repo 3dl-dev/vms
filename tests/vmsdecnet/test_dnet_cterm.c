@@ -86,19 +86,36 @@ static void test_codec(void)
 
     struct dnet_cterm_msg m;
 
-    memset(&m, 0, sizeof(m));
-    m.type = DNET_CTERM_MSG_BIND; m.ver_v = 1; m.mode = DNET_CTERM_MODE_COMMAND;
-    strcpy(m.name, "OVMX1$RTA1:");
-    rt(&m, "Bind encodes");
-    { uint8_t b[DNET_CTERM_MAX_PDU]; size_t n; struct dnet_cterm_msg o;
-      dnet_cterm_encode(&m, b, sizeof(b), &n); dnet_cterm_decode(b, n, &o, NULL);
-      check(strcmp(o.name, "OVMX1$RTA1:") == 0 && o.mode == DNET_CTERM_MODE_COMMAND,
-            "Bind name + mode survive the round-trip"); }
-
-    memset(&m, 0, sizeof(m));
-    m.type = DNET_CTERM_MSG_BIND_ACCEPT; m.ver_v = 1; m.status = 0;
-    strcpy(m.name, "VAX1");
-    rt(&m, "Bind Accept encodes");
+    /* Bind / Bind Accept no longer ride the general dnet_cterm_encode/decode
+     * PDU set -- rd vms-bd0 replaced them with the real DNA foundation
+     * short-TLV + msgtype-9-envelope codec (dnet_cterm_found_*), oracle-
+     * anchored byte-for-byte in test_foundation_oracle() below. A generic
+     * (non-oracle) round-trip of that codec lives here instead, matching the
+     * shape of every other case in this function. */
+    {
+        uint8_t buf[32]; size_t n = 0;
+        uint8_t mc = 0, pc = 0, vl = 0, val[8];
+        uint8_t v[4] = { 0xAA, 0xBB, 0xCC, 0xDD };
+        check(dnet_cterm_found_short_build(7, DNET_CTERM_FOUND_PARAM_OBSERVED,
+                  v, 4, 12, buf, sizeof(buf), &n) == DNET_CTERM_OK,
+              "Foundation short-TLV encodes");
+        check(dnet_cterm_found_short_parse(buf, n, &mc, &pc, val, sizeof(val),
+                  &vl, NULL) == DNET_CTERM_OK &&
+              mc == 7 && pc == DNET_CTERM_FOUND_PARAM_OBSERVED && vl == 4 &&
+              memcmp(val, v, 4) == 0,
+              "Foundation short-TLV round-trips (msg-code/param-code/value)");
+    }
+    {
+        uint8_t buf[64]; size_t n = 0;
+        uint8_t b[6] = { 1, 2, 3, 4, 5, 6 };
+        uint16_t lf = 0; const uint8_t *body = NULL; size_t blen = 0; int match = 0;
+        check(dnet_cterm_found_envelope_build(6, b, 6, buf, sizeof(buf), &n)
+                  == DNET_CTERM_OK, "Foundation msgtype-9 envelope encodes");
+        check(dnet_cterm_found_envelope_parse(buf, n, &lf, &body, &blen, &match)
+                  == DNET_CTERM_OK &&
+              lf == 6 && blen == 6 && memcmp(body, b, 6) == 0 && match,
+              "Foundation envelope round-trips (len field + body)");
+    }
 
     memset(&m, 0, sizeof(m));
     m.type = DNET_CTERM_MSG_UNBIND; m.reason = DNET_CTERM_UNBIND_NORMAL;
@@ -151,9 +168,9 @@ static void test_codec(void)
     m.type = DNET_CTERM_MSG_WRITE_COMPLETE; rt(&m, "Write Complete encodes");
 
     /* A truncated PDU decodes as an honest error, never a fabricated message. */
-    { uint8_t t[1] = { DNET_CTERM_MSG_BIND }; struct dnet_cterm_msg o;
+    { uint8_t t[1] = { DNET_CTERM_MSG_UNBIND }; struct dnet_cterm_msg o;
       check(dnet_cterm_decode(t, sizeof(t), &o, NULL) == DNET_CTERM_ETRUNC,
-            "a truncated Bind is rejected ETRUNC (no fabrication)"); }
+            "a truncated Unbind is rejected ETRUNC (no fabrication)"); }
     { uint8_t bad[1] = { 200 }; struct dnet_cterm_msg o;
       check(dnet_cterm_decode(bad, sizeof(bad), &o, NULL) == DNET_CTERM_EBADTYPE,
             "an unknown message type is rejected EBADTYPE"); }
@@ -469,6 +486,193 @@ static void test_sc_connect(void)
     }
 }
 
+/*
+ * THE FOUNDATION ORACLE SPECIMENS (rd vms-bd0). Captured on vaxlab-3: a real
+ * VAX1<->VAX2 `$ SET HOST` that reached a live DCL prompt --
+ * real-cterm-ci.pcap (default terminal, PAGE=24) and cterm-oracle-wid8.pcap
+ * (SET TERMINAL/PAGE=48 on the client). Every array below is the CTERM
+ * payload of one NSP "data seg" frame, i.e. the frame's bytes from absolute
+ * offset 47 onward (Ethernet14 + DLlen2 + pad1 + routing21 + NSP9), copied
+ * verbatim -- these are the ORACLE, and every assertion below is measured
+ * against them, never against what OVMX happens to build.
+ */
+static const uint8_t k_oracle_found_host_seg1[] = {
+    0x01, 0x02, 0x04, 0x00, 0x07, 0x00, 0x10, 0x00
+};
+static const uint8_t k_oracle_found_client_seg1[] = {
+    0x04, 0x02, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t k_oracle_found_host_seg2[] = {
+    0x09, 0x00, 0x17, 0x00,
+    0x01, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x02, 0x10, 0x1e, 0x03, 0x04, 0xfe, 0xff, 0xef,
+    0x00, 0x06, 0x00, 0x0b, 0x00, 0x08, 0x02, 0x02, 0x00
+};
+/* default-terminal client seg 2 (real-cterm-ci.pcap, both sessions, byte-
+ * identical): WIDTH=132, PAGE=24. */
+static const uint8_t k_oracle_found_client_seg2_default[] = {
+    0x09, 0x00, 0x35, 0x00, 0x01, 0x00, 0x01, 0x04,
+    0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x02, 0xf2, 0x03, 0x02, 0x02, 0xc0,
+    0x03, 0x03, 0x04, 0xfe, 0xff, 0xef, 0x00, 0x04,
+    0x18, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00,
+    0x18, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00
+};
+/* SET TERMINAL/PAGE=48 client seg 2 (cterm-oracle-wid8.pcap): WIDTH=132,
+ * PAGE=48 -- a single-byte diff from the default specimen (verified by a
+ * programmatic hex diff of the two captures: the ONLY payload byte that
+ * differs is the PAGE low byte), which is what resolves the PAGE field. */
+static const uint8_t k_oracle_found_client_seg2_page48[] = {
+    0x09, 0x00, 0x35, 0x00, 0x01, 0x00, 0x01, 0x04,
+    0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x02, 0xf2, 0x03, 0x02, 0x02, 0xc0,
+    0x03, 0x03, 0x04, 0xfe, 0xff, 0xef, 0x00, 0x04,
+    0x18, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00,
+    0x30, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00
+};
+
+static void test_foundation_oracle(void)
+{
+    printf("[found] the REAL DNA CTERM foundation messages, byte-exact"
+           " against a captured VAX<->VAX SET HOST (rd vms-bd0)\n");
+
+    uint8_t buf[128]; size_t n = 0;
+
+    /* ---- 1. OVMX BUILDS byte-identical to the oracle, both directions ---- */
+    check(dnet_cterm_found_host_start_build(buf, sizeof(buf), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_host_seg1) &&
+          memcmp(buf, k_oracle_found_host_seg1, n) == 0,
+          "host's seg-1 Start is BYTE-IDENTICAL to the real VAX host's"
+          " (msg-code 1, param 0x02, value 00 07 00 10, 8 bytes total)");
+
+    check(dnet_cterm_found_client_start_build(buf, sizeof(buf), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_client_seg1) &&
+          memcmp(buf, k_oracle_found_client_seg1, n) == 0,
+          "client's seg-1 response is BYTE-IDENTICAL to the real VAX"
+          " client's (msg-code 4, value 00 07 00 00, 17 bytes total)");
+
+    check(dnet_cterm_found_host_seg2_build(buf, sizeof(buf), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_host_seg2) &&
+          memcmp(buf, k_oracle_found_host_seg2, n) == 0,
+          "host's seg-2 envelope (msgtype 9, len field 23, 31-byte fixed"
+          " body) is BYTE-IDENTICAL to the real VAX host's");
+
+    check(dnet_cterm_found_client_termchar_build(132, 24, buf, sizeof(buf), &n)
+              == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_client_seg2_default) &&
+          memcmp(buf, k_oracle_found_client_seg2_default, n) == 0,
+          "client's seg-2 envelope (WIDTH=132, PAGE=24) is BYTE-IDENTICAL to"
+          " the real VAX client's default-terminal specimen"
+          " (real-cterm-ci.pcap)");
+
+    check(dnet_cterm_found_client_termchar_build(132, 48, buf, sizeof(buf), &n)
+              == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_client_seg2_page48) &&
+          memcmp(buf, k_oracle_found_client_seg2_page48, n) == 0,
+          "client's seg-2 envelope (WIDTH=132, PAGE=48) is BYTE-IDENTICAL to"
+          " the real VAX client's SET TERMINAL/PAGE=48 specimen"
+          " (cterm-oracle-wid8.pcap) -- a single byte differs from the"
+          " default specimen and it is the byte OVMX also changes");
+
+    /* ---- 2. OVMX DECODES the real specimens correctly -------------------- */
+    {
+        uint8_t mc = 0, pc = 0, vl = 0, val[DNET_CTERM_FOUND_VALUE_MAX];
+        check(dnet_cterm_found_short_parse(k_oracle_found_host_seg1,
+                  sizeof(k_oracle_found_host_seg1), &mc, &pc, val, sizeof(val),
+                  &vl, NULL) == DNET_CTERM_OK &&
+              mc == 0x01 && pc == 0x02 && vl == 4 &&
+              memcmp(val, (uint8_t[]){0x00,0x07,0x00,0x10}, 4) == 0,
+              "decode of the real host seg-1 specimen recovers"
+              " msg-code=1 / param=0x02 / value=00 07 00 10");
+        check(dnet_cterm_found_short_parse(k_oracle_found_client_seg1,
+                  sizeof(k_oracle_found_client_seg1), &mc, &pc, val, sizeof(val),
+                  &vl, NULL) == DNET_CTERM_OK &&
+              mc == 0x04 && pc == 0x02 && vl == 4 &&
+              memcmp(val, (uint8_t[]){0x00,0x07,0x00,0x00}, 4) == 0,
+              "decode of the real client seg-1 specimen recovers"
+              " msg-code=4 / param=0x02 / value=00 07 00 00");
+    }
+    {
+        uint16_t width = 0, page = 0;
+        check(dnet_cterm_found_client_termchar_parse(k_oracle_found_client_seg2_default,
+                  sizeof(k_oracle_found_client_seg2_default), &width, &page)
+                  == DNET_CTERM_OK && width == 132 && page == 24,
+              "decode of the real default client seg-2 specimen recovers"
+              " WIDTH=132 / PAGE=24");
+        check(dnet_cterm_found_client_termchar_parse(k_oracle_found_client_seg2_page48,
+                  sizeof(k_oracle_found_client_seg2_page48), &width, &page)
+                  == DNET_CTERM_OK && width == 132 && page == 48,
+              "decode of the real PAGE=48 client seg-2 specimen recovers"
+              " WIDTH=132 / PAGE=48");
+    }
+    {
+        uint16_t lf = 0; const uint8_t *body = NULL; size_t blen = 0; int match = 0;
+        check(dnet_cterm_found_envelope_parse(k_oracle_found_host_seg2,
+                  sizeof(k_oracle_found_host_seg2), &lf, &body, &blen, &match)
+                  == DNET_CTERM_OK && lf == 23 && blen == 31 && !match,
+              "the host seg-2 envelope's length-field/body-length"
+              " DISCREPANCY (23 vs 31) is surfaced, not hidden or 'fixed'");
+        check(dnet_cterm_found_envelope_parse(k_oracle_found_client_seg2_default,
+                  sizeof(k_oracle_found_client_seg2_default), &lf, &body, &blen,
+                  &match) == DNET_CTERM_OK && lf == 53 && blen == 53 && match,
+              "the client seg-2 envelope's length field DOES equal its body"
+              " length (unlike the host's)");
+    }
+
+    /* ---- 3. BOUNDED against truncated/mutated real bytes ------------------
+     * Both decoders in this codec run on wire bytes that may not have been
+     * authenticated yet. Mutate the real specimens (never pure noise alone --
+     * seeded from real bytes reaches the accepting paths, per the sc-connect
+     * fuzz above) and require a DEFINED status every time: no crash (ASan/
+     * UBSan catch that), no undefined return code. */
+    {
+        unsigned seed = 0xf0011d0;
+        long undefined = 0, accepted_short = 0, accepted_env = 0;
+        int iter;
+        for (iter = 0; iter < 100000; iter++) {
+            uint8_t mbuf[64];
+            size_t mlen = sizeof(k_oracle_found_client_seg2_default) + 8;
+            if (mlen > sizeof(mbuf)) mlen = sizeof(mbuf);
+            size_t j;
+            for (j = 0; j < mlen; j++)
+                mbuf[j] = j < sizeof(k_oracle_found_client_seg2_default)
+                              ? k_oracle_found_client_seg2_default[j]
+                              : (uint8_t)(rand_r(&seed) & 0xff);
+            if ((rand_r(&seed) & 3) == 0)
+                mlen = rand_r(&seed) % sizeof(mbuf);
+            int muts = 1 + (int)(rand_r(&seed) % 3);
+            int m;
+            for (m = 0; m < muts && mlen; m++)
+                mbuf[rand_r(&seed) % mlen] = (uint8_t)(rand_r(&seed) & 0xff);
+
+            uint8_t mc, pc, vl, val[DNET_CTERM_FOUND_VALUE_MAX];
+            int rc1 = dnet_cterm_found_short_parse(mbuf, mlen, &mc, &pc, val,
+                                                    sizeof(val), &vl, NULL);
+            if (rc1 == DNET_CTERM_OK) accepted_short++;
+            else if (rc1 != DNET_CTERM_ETRUNC && rc1 != DNET_CTERM_EBADLEN &&
+                     rc1 != DNET_CTERM_EINVAL) undefined++;
+
+            uint16_t lf; const uint8_t *body; size_t blen; int match;
+            int rc2 = dnet_cterm_found_envelope_parse(mbuf, mlen, &lf, &body,
+                                                       &blen, &match);
+            if (rc2 == DNET_CTERM_OK) accepted_env++;
+            else if (rc2 != DNET_CTERM_ETRUNC && rc2 != DNET_CTERM_EINVAL &&
+                     rc2 != DNET_CTERM_EBADTYPE) undefined++;
+        }
+        check(undefined == 0,
+              "mutation fuzz: 100000 mutated foundation specimens each get a"
+              " DEFINED status from both decoders -- no undefined answer");
+        check(accepted_short > 0 && accepted_env > 0,
+              "mutation fuzz: the corpus reaches the accepting path of both"
+              " decoders (not all-reject)");
+    }
+}
+
 /* ---- 2. session FSM (raw CTERM PDUs, no NSP) ----------------------------- */
 static void test_session(void)
 {
@@ -484,13 +688,18 @@ static void test_session(void)
     uint8_t pdu[DNET_CTERM_MAX_PDU]; size_t n = 0;
     enum dnet_cterm_event ev;
 
-    /* terminal -> Bind -> host connect indication. */
+    /* terminal -> Bind -> host connect indication. Real DNA foundation
+     * phase carries no terminal-name field (rd vms-bd0); "OVMX2$RTA1:" is
+     * accepted for call-site compatibility only and never reaches the wire
+     * -- see the byte-exact oracle proof in test_foundation_oracle(). */
     check(dnet_cterm_bind(&term, "OVMX2$RTA1:", pdu, sizeof(pdu), &n) == DNET_CTERM_OK,
           "terminal builds Bind");
     check(dnet_cterm_state_of(&term) == DNET_CTERM_S_BINDING, "terminal -> BINDING");
     check(dnet_cterm_rx(&host, pdu, n, &ev) == DNET_CTERM_OK && ev == DNET_CTERM_EV_BIND_IND,
           "host sees BIND indication");
-    check(strcmp(host.peer_name, "OVMX2$RTA1:") == 0, "host learned the terminal name");
+    check(host.found_bind_seen == 1,
+          "host recorded the inbound foundation Bind (real DNA short-TLV,"
+          " no name field on the wire -- rd vms-bd0)");
 
     /* host -> Bind Accept -> terminal bound. */
     check(dnet_cterm_bind_accept(&host, "VAX1", pdu, sizeof(pdu), &n) == DNET_CTERM_OK,
@@ -886,6 +1095,7 @@ int main(void)
     printf("test_dnet_cterm: DECnet Phase IV CTERM (Command Terminal / SET HOST)\n");
     test_codec();
     test_sc_connect();
+    test_foundation_oracle();
     test_session();
     test_engine_e2e();
     test_client_response_fuzz();

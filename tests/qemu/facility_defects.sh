@@ -542,7 +542,8 @@ multiuser-stage-shared-not-peruser
 tcpip-config-hostaddr-not-defined
 tcpip-inetd-reply-not-connected
 tcpip-daytime-reply-not-formatted
-l2-open-bypasses-phy-io"
+l2-open-bypasses-phy-io
+pe-vc-snapshot-fabricates-circuit"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -654,6 +655,23 @@ allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
 EOF
                       ;;
+        esac;;
+
+    pe-vc-snapshot-fabricates-circuit)
+        case "$_f" in
+        facility)     echo "PE port VC diagnostic snapshot (VMS_CLUSTER_DIAG_PORT_VC, vms-ci)";;
+        targets)      echo "kernel-core/vms_pe.c";;
+        suites_red)   echo "test_kmod_cluster_vc_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_pe_vc_snapshot()'s 'cl->pe == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV, so a VC row the executive does not hold (an index far past the table, or no port up) is reported as a live circuit -- the INV-6 fabrication class (a placeholder reported real). The all-zero row is untouched, so only the STATUS lies; the index-0 real-VC and no-circuit-all-zero branches read other paths and stay green. Range-scoped substitution: only the one return in vms_pe_vc_snapshot changes, gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+row VC, index far past any table: SS$_NOSUCHDEV, not a crash
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     l2-open-bypasses-phy-io)
@@ -6154,6 +6172,11 @@ apply_edit() {
         # Unique text (l2_priv_check's PHY_IO gate). Drop the mask test so the
         # check is always true; original term is gone, so a 2nd apply is a no-op.
         sed -i 's|bool ok = (cur_privs \& VMS_PRV_M_PHY_IO) != 0;|bool ok = true; /* NEGCTL l2-open-bypasses-phy-io */|' "$_file";;
+    pe-vc-snapshot-fabricates-circuit)
+        # Range-scoped to vms_pe_vc_snapshot so the file's other SS__NOSUCHDEV
+        # returns are untouched; after apply that return is SS__NORMAL, so a 2nd
+        # apply finds no SS__NOSUCHDEV in that function (no-op selftest).
+        sed -i '/^int vms_pe_vc_snapshot(/,/^}/ s|return SS__NOSUCHDEV;|return SS__NORMAL; /* NEGCTL pe-vc-snapshot-fabricates-circuit */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

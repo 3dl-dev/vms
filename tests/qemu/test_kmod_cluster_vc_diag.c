@@ -155,6 +155,7 @@ static int run_suite(int fd)
     }
 
     /* Row VC past the table's high-water mark: SS$_NOSUCHDEV, honestly. */
+    /* negctl: pe-vc-snapshot-fabricates-circuit */
     CHECK(diag_port(fd, VMS_CLUSTER_DIAG_PORT_VC, 999999u, &a) == 0 &&
           a.status != SS_NORMAL,
           "row VC, index far past any table: SS$_NOSUCHDEV, not a crash");

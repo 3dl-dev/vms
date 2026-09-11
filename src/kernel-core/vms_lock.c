@@ -713,8 +713,18 @@ uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t hash16)
  *                             with no cluster stack is alone: it is trivially
  *                             the directory and the master for everything, and
  *                             single-node locking is untouched.
- *   no wire-learned hash   -> SS$_UNSUPPORTED. Never a computed hash, never a
- *                             probe, never a placeholder (the whole point).
+ *   not all-OVMX           -> *out_csid = 0 (this node), SS$_NORMAL. A mixed
+ *                             OVMX+VAX cluster (or a vector mid-transition)
+ *                             masters locally, exactly as before any resolver
+ *                             existed -- the all-OVMX gate (vms-3e3), so no
+ *                             interop regression and nothing routed at a system
+ *                             we cannot prove runs this implementation.
+ *   no wire-learned hash   -> in an all-OVMX cluster, GROUND it with OVMX's own
+ *                             directory hash (rung A", design SS3.6) and resolve
+ *                             the grounded value; if it cannot be grounded,
+ *                             SS$_UNSUPPORTED. Never DEC's function, never a
+ *                             probe, never a computed placeholder against a real
+ *                             VAX (the whole point; the 90b3bbbd storm).
  *   vector unusable        -> SS$_UNSUPPORTED (mid-transition, or the vector
  *                             was refused; vms_dlm_ldwv.h SS3).
  *   otherwise              -> the vector's answer; 0 means THIS node.
@@ -747,8 +757,39 @@ static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
     if (ops.dir_resolve == NULL)
         return SS__NORMAL;                 /* cluster of one: nothing to resolve */
 
-    if (!res->hash_known)
-        return SS__UNSUPPORTED;            /* INV-6: wire-learned or nothing */
+    /*
+     * THE ALL-OVMX GATE (vms-3e3, rung A"). Cross-node directory resolution --
+     * and the hash grounding just below -- is live ONLY while every cluster
+     * member is proven-OVMX. When a member cannot be proven ours (a mixed
+     * OVMX+VAX cluster) or the vector is mid-transition, this node masters the
+     * name LOCALLY, exactly as it did before any resolver was installed: no
+     * routing toward a system this executive cannot prove runs this
+     * implementation, and so no interop regression. (RULE C guards the send
+     * side too; this keeps the miss off the wire entirely and returns a real
+     * answer -- "this node" -- rather than a refusal.)
+     */
+    if (ops.dir_groundable != NULL && !ops.dir_groundable(ops.ctx))
+        return SS__NORMAL;                 /* not all-OVMX: this node masters it */
+
+    if (!res->hash_known) {
+        uint16_t h = 0u;
+        /*
+         * No wire-learned hash for this root name (a name OVMX is the first in
+         * the cluster to touch: its own volume/file locks). We are all-OVMX, so
+         * ground it with OVMX's OWN directory hash (rung A", design SS3.6) --
+         * deterministic and identical on every OVMX node, gated so it never
+         * reaches a real VAX. If it cannot be grounded, refuse honestly rather
+         * than fabricate a hash -- never a computed placeholder (the 90b3bbbd
+         * storm). This refusal is unreachable while dir_ground is bound and the
+         * gate held, but it is the honest floor if it ever is not.
+         */
+        if (ops.dir_ground == NULL ||
+            ops.dir_ground(ops.ctx, res->name,
+                           (uint32_t)strnlen(res->name, sizeof(res->name)),
+                           &h) != SS__NORMAL)
+            return SS__UNSUPPORTED;        /* INV-6: wire-learned, OVMX-grounded, or nothing */
+        (void)dir_hash_store(res, h);      /* sets res->hash16 + hash_known */
+    }
 
     gen = (ops.dir_generation != NULL) ? ops.dir_generation(ops.ctx) : 0u;
     if (res->dir_valid && res->dir_gen == gen) {

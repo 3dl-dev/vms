@@ -386,25 +386,38 @@ static void dlm_arm_run_post(struct vms_dlm_scs *d, uint16_t kind,
 		d->posts_refused++;
 }
 
+/* The engine's directory ops are defined below, after their long rationale;
+ * forward-declared here because bind_engine_ops takes their addresses. */
+static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint16_t hash16,
+					uint32_t *out_csid);
+static uint32_t dlm_arm_eng_dir_generation(void *ctx);
+static int dlm_arm_eng_dir_groundable(void *ctx);
+static uint32_t dlm_arm_eng_dir_ground(void *ctx, const char *name,
+				       uint32_t name_len, uint16_t *out_hash16);
+
 static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 {
 	d->eng_ops.post           = dlm_arm_post;
-	/* The directory ops are installed by vms_dlm_scs_start ONLY if a root
-	 * name's hash can be grounded -- see the long note above
-	 * dlm_arm_eng_dir_resolve for why it cannot be today, and what would
-	 * break if it were installed anyway. */
-	d->eng_ops.dir_resolve    = NULL;
-	d->eng_ops.dir_generation = NULL;
+	/* All directory ops are installed unconditionally: the all-OVMX gate is
+	 * now DYNAMIC (dir_groundable), checked by the engine at resolve time, not
+	 * a one-shot decision at start. In a mixed or single-node configuration the
+	 * gate reads 0 and the engine masters locally exactly as before -- see the
+	 * long note above dlm_arm_eng_dir_resolve (rung A", vms-3e3). */
+	d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;
+	d->eng_ops.dir_generation = dlm_arm_eng_dir_generation;
+	d->eng_ops.dir_groundable = dlm_arm_eng_dir_groundable;
+	d->eng_ops.dir_ground     = dlm_arm_eng_dir_ground;
 	d->eng_ops.ctx            = d;
 }
 
 /*
  * ===========================================================================
- * THE ENGINE'S DIRECTORY RESOLVER IS DELIBERATELY *NOT* INSTALLED, AND THIS
- * BLOCK IS WHY (rd vms-1ee; the measured finding, not an omission).
+ * THE ENGINE'S DIRECTORY RESOLVER IS NOW INSTALLED, BEHIND THE ALL-OVMX GATE
+ * (rung A", design SS3.6; vms-3e3, conductor-ratified). This block records the
+ * bootstrap deadlock it resolves and exactly why the resolution is safe.
  * ===========================================================================
  *
- * WHAT THE ENGINE DOES WITH ONE. vms_lock.c's dir_resolve() refuses, BEFORE it
+ * THE DEADLOCK, AS MEASURED. vms_lock.c's dir_resolve() refuses, BEFORE it
  * ever calls this op, when the resource block carries no WIRE-LEARNED hash:
  *
  *     if (!res->hash_known)
@@ -417,44 +430,46 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
  * node has never seen on the wire. tests/cluster/host/test_lock_dir.c pins both
  * halves already.
  *
- * WHY THAT CANNOT BE TURNED ON TODAY -- THE HASH BOOTSTRAP DEADLOCK. A hash
- * reaches a resource block from exactly one place: a cat-0x02 frame somebody
- * ELSE sent (Davis p. 6-50, vms_lock_dlm_learn_dir_hash). In a cluster with a
- * real VAX in it, hashes flow constantly and OVMX learns them -- but RULE C
- * forbids routing DLM traffic to a system that has not proved it runs this
- * implementation, so they cannot be used. In an OVMX-ONLY cluster RULE C
- * permits the routing, but no member can originate the FIRST cat-0x02 frame:
- * doing so needs a hash, computing one is Rule-8-forbidden (the function is not
- * published, and a wrong value made a real VAX install OVMX as master of
- * resources it did not master -- the 35/s grant storm), and this tree
- * originates no op-0x0d rebuild record either. Both configurations therefore
- * dead-end, and the dead end is UPSTREAM of this file.
+ * THE BOOTSTRAP DEADLOCK. A wire-learned hash reaches a resource block from
+ * exactly one place: a cat-0x02 frame somebody ELSE sent (Davis p. 6-50,
+ * vms_lock_dlm_learn_dir_hash). With a real VAX in the cluster hashes flow, but
+ * RULE C forbids routing DLM traffic to a system not proven to run this
+ * implementation. In an OVMX-ONLY cluster RULE C permits it, but no member can
+ * originate the FIRST cat-0x02 frame: doing so needs a hash, and computing DEC's
+ * is Rule-8-forbidden (the function is unpublished, and a wrong value made a
+ * real VAX install OVMX as master of resources it did not master -- the 35/s
+ * grant storm). Without a source for the first hash, the whole cross-node path
+ * dead-ends UPSTREAM of this file, and installing this op naively would refuse
+ * EVERY first $ENQ -- the ACP volume lock, RMS, the XQP -- and stop a two-node
+ * OVMX cluster from mounting SYS$DISK.
  *
- * WHAT WOULD HAPPEN IF IT WERE INSTALLED ANYWAY. Not "no cross-node locking" --
- * NO LOCKING AT ALL. Every first $ENQ on a clustered node, for any name, would
- * return SS$_UNSUPPORTED: the ACP's volume lock, RMS, the XQP. A booted
- * two-node OVMX cluster would stop mounting SYS$DISK. That is a functional
- * break, and shipping one to enable an unreachable path would be the worst
- * possible trade.
+ * THE RESOLUTION -- rung A", ratified (vms-3e3). An all-proven-OVMX cluster has
+ * no real VAX to mis-address and no DEC compatibility to honour on its own
+ * private names, so it may originate the first hash with OVMX's OWN directory
+ * hash (vms_dlm_ovmx_dir_hash above): deterministic, identical on every OVMX
+ * node, documented as OVMX's own. Two gates keep it exactly as narrow as the
+ * ruling requires:
  *
- * SO THE ARM INSTALLS `post` AND NOTHING ELSE, AND SAYS SO. `post` is harmless
- * without a resolver -- the engine only posts on a REMOTE route, and with no
- * resolver there is none -- and it is installed so the day the bootstrap gap is
- * closed, closing it is one line here plus the two adapters below, which are
- * written, compiled and ready.
+ *   - dir_groundable (the all-OVMX gate) is DYNAMIC. When any member cannot be
+ *     proven OVMX, the engine masters names locally exactly as before any
+ *     resolver existed -- so a mixed OVMX+VAX cluster and a node booting alone
+ *     see NO change, and nothing is routed at, or grounded toward, a real VAX.
+ *     This is the anti-regression guarantee; it is why installing the resolver
+ *     no longer breaks SYS$DISK mount.
+ *   - dir_ground grounds ONLY names never seen on the wire, and ONLY when the
+ *     gate holds. A name WITH a wire-learned hash still routes by the received
+ *     value (dir_resolve), never a computed one.
  *
- * THE REMAINING HONESTY DEBT, STATED PLAINLY. With no resolver the engine takes
- * its "cluster of one" path and masters each resource locally on first use, so
- * two OVMX members can each master the same name. Nothing about that reaches
- * the wire -- no frame asserts it, GET_RESMASTER reports what this node really
- * decided -- but it is not cluster-wide mastering and must not be described as
- * such. It is also exactly the behaviour every OVMX cluster shipped to date
- * has had (no requester ops were installed anywhere before this file existed),
- * so this arm changes nothing about it; it only names it.
+ * This is exactly parallel to the LDWV all-zero fallback (Option-A): that
+ * grounds the VECTOR for an all-OVMX cluster; this grounds the HASH. Both are
+ * OVMX bridges for all-OVMX clusters; real-VMS DLM-directory interop stays
+ * deferred to FC-P3.2 (oracle-grounded), and neither claims it. INV-6.
  *
- * The resolution is an architecture decision, not this file's: it needs a
- * GROUNDED source for a root name's directory hash between proven-OVMX
- * members. Escalated with the arm.
+ * REMAINING HONESTY DEBT: in an all-OVMX cluster the OVMX hash names a single
+ * master per name on every node, which IS cluster-wide mastering; but the value
+ * is OVMX's own, so it must never be described as VMS-directory-compatible. In a
+ * mixed cluster the old floor stands: each node may master a novel name locally
+ * (not cluster-wide) -- unchanged, and named, not hidden.
  */
 static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint16_t hash16,
 					uint32_t *out_csid)
@@ -473,14 +488,71 @@ static uint32_t dlm_arm_eng_dir_generation(void *ctx)
 }
 
 /*
- * The one switch. It reads 0 for the reason above, and it is a FUNCTION rather
- * than a comment so that turning it on is a reviewed edit in one place and so
- * that the adapters above are referenced, compiled and type-checked rather than
- * quietly rotting behind an #if 0.
+ * OVMX'S OWN 16-BIT DIRECTORY HASH (rung A", design SS3.6; vms-3e3).
+ *
+ * This is OVMX's own function, and it is documented as OVMX's own. It is NOT
+ * DEC's directory hash -- that function is unpublished and Rule-8-forbidden to
+ * reproduce, and it is never needed here because this value NEVER reaches a real
+ * VAX (the all-OVMX gate below, plus RULE C on the send side). It reuses the
+ * FNV-1a spelling the lock manager already computes over a resource name for its
+ * own hash table (vms_lock.c resource_hash_key: offset basis 2166136261,
+ * prime 16777619), folded to 16 bits -- a public, well-understood function of
+ * the NAME BYTES, chosen precisely because it bears no relationship to DEC's.
+ *
+ * The only property that matters for correctness is CONSISTENCY (p. 6-32): every
+ * OVMX node must map a given name to the same 16-bit value, so all members agree
+ * on the master. That holds by construction -- every node runs this one function
+ * over the same bytes -- with no dependence on byte order (each byte is folded
+ * in on its own).
  */
-static int dlm_arm_directory_is_groundable(void)
+static uint16_t vms_dlm_ovmx_dir_hash(const char *name, uint32_t len)
 {
-	return 0;   /* no grounded source for a root name's hash -- see above */
+	uint32_t h = 2166136261u;     /* FNV-1a offset basis */
+	uint32_t i;
+
+	if (name == NULL)
+		return 0u;
+	for (i = 0u; i < len; i++) {
+		h ^= (uint32_t)(unsigned char)name[i];
+		h *= 16777619u;           /* FNV-1a prime */
+	}
+	return (uint16_t)((h >> 16) ^ (h & 0xFFFFu));   /* fold 32 -> 16 */
+}
+
+/*
+ * THE ALL-OVMX GATE, as the engine sees it (vms-3e3). Cross-node resolution and
+ * hash grounding are live ONLY while every member is proven-OVMX -- read
+ * dynamically from the connection manager's own vector, so a VAX joining turns
+ * both off and a VAX leaving turns them back on with no code path to go stale.
+ * When this reads 0 the engine masters names locally exactly as an unclustered
+ * node does: the anti-regression guarantee for mixed OVMX+VAX clusters.
+ */
+static int dlm_arm_eng_dir_groundable(void *ctx)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (d == NULL || d->cl == NULL)
+		return 0;
+	return vms_ldwv_all_ovmx(&d->cl->club.ldwv);
+}
+
+/*
+ * GROUND a root name's directory hash -- the deliberately-forbidden name->hash
+ * op (vms_dlm_proxy.h), permitted ONLY behind the gate. It refuses unless the
+ * cluster is all-proven-OVMX, so the name->hash step never runs with a real VAX
+ * present -- the 90b3bbbd storm was a real cluster and this cannot touch one.
+ * The value is OVMX's own (above), and it makes no claim of real-VMS directory
+ * compatibility (that is FC-P3.2, oracle-grounded). INV-6.
+ */
+static uint32_t dlm_arm_eng_dir_ground(void *ctx, const char *name,
+				       uint32_t name_len, uint16_t *out_hash16)
+{
+	if (out_hash16 == NULL || name == NULL)
+		return SS__BADPARAM;
+	if (!dlm_arm_eng_dir_groundable(ctx))
+		return SS__UNSUPPORTED;   /* not all-OVMX: never ground here */
+	*out_hash16 = vms_dlm_ovmx_dir_hash(name, name_len);
+	return SS__NORMAL;
 }
 
 /* ==========================================================================
@@ -913,10 +985,6 @@ int vms_dlm_scs_start(struct vms_cluster *cl)
 
 	dlm_arm_bind_req_ops(d);
 	dlm_arm_bind_engine_ops(d);
-	if (dlm_arm_directory_is_groundable()) {
-		d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;
-		d->eng_ops.dir_generation = dlm_arm_eng_dir_generation;
-	}
 	dlm_arm_bind_role(d);
 	dlm_req_fsm_init(&d->req, &d->req_ops);
 

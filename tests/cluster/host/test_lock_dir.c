@@ -125,6 +125,49 @@ static void cm_reset(uint32_t dir_csid)
 	cm.generation = 1u;
 }
 
+/* ----------------------------------------------------------------
+ * The grounding ops (rung A", vms-3e3): the all-OVMX gate and the gated
+ * name->hash op, as the connection manager supplies them to the engine. The
+ * MOCK hash is a fixed value -- test_dlm_ldwv.c pins the gate itself and the
+ * arm pins the OVMX hash function; here we pin how vms_lock.c USES the ops.
+ * ---------------------------------------------------------------- */
+static int      cm_groundable_flag;   /* the all-OVMX gate's dynamic answer */
+static uint32_t cm_ground_calls;
+#define CM_GROUND_HASH 0x1234u
+
+static int cm_dir_groundable(void *ctx)
+{
+	(void)ctx;
+	return cm_groundable_flag;
+}
+
+static uint32_t cm_dir_ground(void *ctx, const char *name, uint32_t len,
+			      uint16_t *out_hash16)
+{
+	(void)ctx; (void)name; (void)len;
+	cm_ground_calls++;
+	if (!cm_groundable_flag)
+		return (uint32_t)SS__UNSUPPORTED;   /* never ground off-gate */
+	*out_hash16 = (uint16_t)CM_GROUND_HASH;
+	return (uint32_t)SS__NORMAL;
+}
+
+static void cm_install_grounding(int groundable)
+{
+	struct vms_dlm_requester_ops ops;
+
+	memset(&ops, 0, sizeof(ops));
+	ops.post = cm_post;
+	ops.dir_resolve = cm_dir_resolve;
+	ops.dir_generation = cm_dir_generation;
+	ops.dir_groundable = cm_dir_groundable;
+	ops.dir_ground = cm_dir_ground;
+	ops.ctx = &cm;
+	cm_groundable_flag = groundable;
+	cm_ground_calls = 0u;
+	vms_lock_dlm_set_requester_ops(&ops);
+}
+
 /* ================================================================
  * Harness
  * ================================================================ */
@@ -459,6 +502,79 @@ static void learned_hash_survives_reclaim(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * 7. ALL-OVMX (rung A", vms-3e3): a root name no one has named on the wire is
+ *    GROUNDED with OVMX's own hash and routed -- the bootstrap deadlock closed.
+ * ================================================================ */
+static void all_ovmx_grounds_a_novel_root(void)
+{
+	struct vms_proc proc;
+	struct vms_resmaster_args rm;
+	uint32_t lkid = 0, st;
+
+	printf("--- all-OVMX: a novel root is GROUNDED with OVMX's own hash and routes ---\n");
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	cm_reset(CSID_DIRECTORY);        /* the vector names a remote directory */
+	cm_install_grounding(1);         /* the all-OVMX gate holds */
+	proc_init(&proc);
+
+	st = do_enq(&proc, "OVMXOWNVOL", LCK_K_EXMODE, &lkid);
+	ct_check_eq_u32(cm_ground_calls, 1u,
+			"the engine GROUNDED the novel name (the all-OVMX gate held)");
+	ct_check_eq_u32(cm.last_hash, (uint16_t)CM_GROUND_HASH,
+			"and resolved the OVMX-grounded value, not a wire value");
+	ct_check_eq_u32(st, SS__NORMAL,
+			"$ENQ is ACCEPTED -- the deadlock that returned SS$_UNSUPPORTED "
+			"for every novel name is closed");
+	ct_check_eq_u32((unsigned long)cm.posts, 1u,
+			"exactly one request left, for the resolved directory");
+	ct_check_eq_u32(cm.last_post.dst_csid, CSID_DIRECTORY, "addressed to it");
+
+	read_resmaster("OVMXOWNVOL", &rm);
+	ct_check_eq_u32(rm.dir_csid, CSID_DIRECTORY,
+			"the readback reports a real, cluster-wide directory");
+	vms_lock_cleanup();
+}
+
+/* ================================================================
+ * 8. MIXED OVMX+VAX (gate closed): the SAME novel name masters LOCALLY, never
+ *    refused and never grounded -- footgun #1 (no interop regression) held.
+ * ================================================================ */
+static void mixed_cluster_masters_a_novel_root_locally(void)
+{
+	struct vms_proc proc;
+	struct vms_resmaster_args rm;
+	uint32_t lkid = 0, st;
+
+	printf("--- mixed OVMX+VAX (gate closed): a novel root masters LOCALLY, not refused ---\n");
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	cm_reset(CSID_DIRECTORY);
+	cm_install_grounding(0);         /* a member could NOT be proven OVMX */
+	proc_init(&proc);
+
+	st = do_enq(&proc, "OVMXOWNVOL2", LCK_K_EXMODE, &lkid);
+	ct_check(st == SS__NORMAL && lkid != 0,
+		 "$ENQ GRANTS -- the honest floor, exactly as before any resolver "
+		 "existed: no interop regression, SYS$DISK still mounts");
+	ct_check_eq_u32(cm_ground_calls, 0u,
+			"the OVMX hash was NEVER computed -- the gate is closed with a "
+			"member we cannot prove is OVMX (condition 1)");
+	ct_check_eq_u32(cm.resolve_calls, 0u,
+			"the vector was not consulted: nothing routed toward a real VAX");
+	ct_check_eq_u32((unsigned long)cm.posts, 0u, "and NOTHING was put on the wire");
+
+	read_resmaster("OVMXOWNVOL2", &rm);
+	ct_check_eq_u32(rm.master_csid, CSID_LOCAL, "this node masters it locally");
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "and it releases");
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_dir (FC-P4.3 dir_resolve in the real engine, R1) ===\n");
@@ -468,5 +584,7 @@ int main(void)
 	conflicting_learn_is_counted();
 	generation_invalidates_the_cache();
 	learned_hash_survives_reclaim();
+	all_ovmx_grounds_a_novel_root();
+	mixed_cluster_masters_a_novel_root_locally();
 	return ct_summary("test_lock_dir");
 }

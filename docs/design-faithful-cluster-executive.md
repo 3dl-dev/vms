@@ -933,6 +933,55 @@ Decisions:
   cluster to touch (its own private volumes/files) is `SS$_UNSUPPORTED`;
   every shared name, membership, directory duty and mastering are
   unaffected, and the rebuild chain (P4.6, P5.3–5.5) proceeds.
+  **Rung A" — OVMX's own directory hash, for an all-proven-OVMX cluster only
+  (vms-3e3, ratified 2026-09-11).** The residual above -- a root name OVMX is
+  the first in the cluster to touch, so no wire hash exists -- has one more
+  honest resolution when EVERY member is proven-OVMX, and it needs neither DEC's
+  function nor an operator Rule-8 exception. In that configuration there is no
+  real VAX to mis-address and no DEC directory to be compatible with on a
+  member's own private names, so OVMX may originate the first hash with its OWN
+  16-bit directory hash: FNV-1a over the resource-name bytes folded to 16 (the
+  same public function the lock manager already uses for its resource hash
+  table, `vms_lock.c` `resource_hash_key`), documented here as OVMX's own and
+  bearing no relation to DEC's unpublished function. Its only correctness
+  requirement is consistency (p. 6-32) -- every OVMX node maps a name to the
+  same value, which holds by construction because every node runs the one
+  function -- so all OVMX members agree on the master.
+
+  This is **exactly parallel to the LDWV all-zero fallback (Option-A)**: that
+  grounds the *vector* for an all-OVMX cluster without a real VAX's LOCKDIRWT;
+  this grounds the *hash* for an all-OVMX cluster without DEC's hash function.
+  Both are OVMX bridges for all-OVMX clusters; real-VMS DLM-directory interop
+  stays deferred to FC-P3.2 (oracle-grounded), and neither claims it (INV-6).
+
+  It carries FIVE binding conditions, and it is safe only because of them:
+  1. **Gated to all-proven-OVMX only.** `vms_ldwv_all_ovmx()` (a stricter guard
+     than the split-brain gate: it refuses a foreign member even when the
+     vector built with learned weights) governs it, checked DYNAMICALLY at
+     resolve time. A member that cannot be proven OVMX turns grounding off and
+     the engine masters names locally exactly as before -- so a mixed OVMX+VAX
+     cluster and a lone node see NO change (no interop regression), and the
+     name->hash step never runs with a real VAX present. This is why it does not
+     reopen the 90b3bbbd hazard: that broke a REAL cluster, and this can never
+     touch one.
+  2. **Deterministic and identical across all OVMX nodes** -- by construction.
+  3. **Rule-8 clean-room:** OVMX's own function, documented as OVMX's own here
+     and in the research note; not reverse-engineered from DEC's.
+  4. **Honestly labelled a bridge:** "OVMX-own directory hash for all-OVMX
+     clusters; real-VMS DLM-directory interop deferred to FC-P3.2." Never a
+     claim of real-VMS directory compatibility.
+  5. **It unblocks the cross-node rungs; it does NOT flip compat rows.** The
+     `cluster-dlm` rows flip verified only on a real multi-node /dev/vms proof
+     (the #1052 bar), never on the hash existing.
+
+  It reverses, under exactly this gate, the "no `dir_resolve` variant that takes
+  a NAME" prohibition stated in `vms_dlm_proxy.h`: the new `dir_ground(name)` op
+  IS that shape, admissible only because conditions 1 and 3 remove the failure
+  mode the prohibition guards against. Implemented in `vms_lock.c` `dir_resolve`
+  (the all-OVMX gate + grounding) and `vms_dlm_scs.c` (`vms_dlm_ovmx_dir_hash`,
+  `dlm_arm_eng_dir_ground`), pinned by `tests/cluster/host/test_dlm_ldwv.c`
+  (the gate) and `test_lock_dir.c` (grounds all-OVMX / masters locally mixed).
+
 - **D-DLM-3 — directory-node role is built anyway** (for LOCKDIRWT>0 later,
   and because the rebuild pushes records at whichever node the cluster
   chooses): a stored directory table, populated from rebuild records and

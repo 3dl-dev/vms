@@ -177,6 +177,14 @@ uint32_t vms_ldwv_generation(const struct vms_ldwv *v);
  * test (p. 6-31) and the order self-check's predicate (SS5). */
 int vms_ldwv_is_ours(const struct vms_ldwv *v, uint16_t hash16);
 
+/* THE ALL-OVMX GATE (vms-3e3, rung A"). Nonzero iff this vector is authoritative
+ * and EVERY member is proven-OVMX. The one call that decides whether OVMX's own
+ * directory hash may be grounded for a name never seen on the wire, and whether
+ * cross-node routing is live at all -- dynamic (a VAX joining flips it off), and
+ * resting on the same survey as the split-brain gate (#1138). See the definition
+ * for why this is safe where a name->hash op is otherwise forbidden (design SS3.6). */
+int vms_ldwv_all_ovmx(const struct vms_ldwv *v);
+
 /* ==========================================================================
  * 5. The CLUB-facing half
  * ========================================================================== */

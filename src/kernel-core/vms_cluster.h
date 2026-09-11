@@ -505,7 +505,12 @@ struct vms_ldwv {
 				   * diagnostic can say which reading it rests on,
 				   * rather than the fact being invisible. */
 	uint8_t  n_members;    /* systems represented, for the diagnostics    */
-	uint8_t  pad;
+	uint8_t  any_foreign;  /* 1 = a member could NOT be proven OVMX. THE
+				* ALL-OVMX GATE (vms-3e3): the OVMX-own directory
+				* hash (rung A", design SS3.6) is grounded ONLY when
+				* this is 0. Set from the same survey that feeds the
+				* split-brain gate (#1138), so the two rest on one
+				* reading of the member set, never two. */
 	uint32_t entry[VMS_LDWV_MAX_ENTRIES];  /* CSIDs; own entries read 0   */
 };
 

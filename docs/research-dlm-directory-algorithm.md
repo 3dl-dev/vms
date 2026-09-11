@@ -174,6 +174,23 @@ Its hash is unknown and cannot be computed. Options, in order:
   volumes/files. Membership, directory-node duty, mastering of assigned
   trees, and locking on every shared name are unaffected. This is the
   honest floor, and it is narrow.
+- (e) **OVMX's own directory hash, for an all-proven-OVMX cluster only**
+  (rung A"; vms-3e3, ratified 2026-09-11). When every member is proven-OVMX
+  there is no real VAX to mis-address and no DEC directory to match on a
+  member's own private names, so OVMX may originate the first hash with its
+  OWN function — FNV-1a over the name bytes folded to 16 bits (the public
+  function `vms_lock.c` `resource_hash_key` already uses for its hash table),
+  documented as OVMX's own, not DEC's. It needs neither (b)'s probe nor (c)'s
+  Rule-8 exception, because it is not DEC's hash and never reaches a real VAX:
+  it is gated by `vms_ldwv_all_ovmx()` (dynamic, stricter than the split-brain
+  gate) and by RULE C on the send side. Exactly parallel to the LDWV all-zero
+  fallback (Option-A): that grounds the vector for an all-OVMX cluster, this
+  grounds the hash. It is a **bridge** — real-VMS DLM-directory interop stays
+  deferred to FC-P3.2 (oracle-grounded), option (c) — and it flips no compat
+  rows (those need a real multi-node /dev/vms proof, the #1052 bar). This is
+  the option (d) residual's resolution for the all-OVMX case; (d) remains the
+  floor when a member cannot be proven OVMX. Full rationale + the five binding
+  conditions: `docs/design-faithful-cluster-executive.md` §3.6 rung A".
 
 **Recommendation: proceed with rung A + A′ immediately (FC-P4.3 is
 buildable); run FC-P4.2's two checks; put (c) to the operator with the

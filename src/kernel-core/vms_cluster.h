@@ -316,6 +316,30 @@ struct vms_csb {
 
 	/* ---- the SCS connection this CSB's state describes (p. 7-23) ---- */
 	uint32_t sw_version;        /* software version as advertised, 0 if unknown */
+	/*
+	 * THE PEER'S OWN ADVERTISED SOFTWARE VERSION (rd vms-1ee), the 8-byte
+	 * token it put in its SCS formation body at abs 72 (spec SS4(g)), copied
+	 * out of the port's circuit -- never inferred, never defaulted. It is
+	 * the TRUST ANCHOR for "is this member running the same implementation
+	 * we are": a real VAX advertises its real "VMS Vx.y" here, and anything
+	 * that is not byte-identical to THIS node's own advertised token is, as
+	 * far as this executive can honestly say, not OVMX.
+	 *
+	 * `peer_swver_len` 0 is the honest "this member has advertised nothing",
+	 * which is NOT the same as "it is one of us" -- see the LDWV gate in
+	 * vms_dlm_ldwv.h SS3.
+	 */
+	uint8_t  peer_swver[VMS_CLUSTER_SWVER_LEN];
+	uint8_t  peer_swver_len;
+	/*
+	 * ... and the ONE derived question anybody asks of it: is that token
+	 * byte-identical to the one THIS node advertises? Derived where both
+	 * are in scope (cnxman_csb_set_swver) so no reader re-decides it, and
+	 * so no version literal is needed anywhere (INV-1). 0 covers BOTH
+	 * "advertised something else" and "advertised nothing": neither is
+	 * proof, and the split-brain gate treats them the same.
+	 */
+	uint8_t  peer_is_ours;
 	/* Our VMS$VAXcluster CDT to this CM. Written ONLY by
 	 * cnxman_csb_bind_connection() (vms_cnxman_csb.h), because adopting a
 	 * connection and restarting this block's dialogue counters on it are the

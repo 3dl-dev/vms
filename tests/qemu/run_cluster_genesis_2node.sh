@@ -76,6 +76,9 @@ RECNX="${RIG_RECNX:-8}"           # RECNXINTERVAL == the genesis discovery windo
 # first run of this rig measured -- both VCs OPEN, credits_send=0, and not one
 # sequenced frame in either direction. 32 is VMS's own default.
 CREDITS="${RIG_CREDITS:-32}"
+# This build's own advertised software token (spec SS4(g)); the split-brain
+# gate (rd vms-1ee) proves two nodes are the same implementation by it.
+SWVER="${RIG_SWVER:-OVMX0.6}"
 STAGGER="${RIG_STAGGER:-30}"      # seconds between powering on A and B
 WINDOW_A="${RIG_WINDOW_A:-150}"   # how long each node polls the executive
 WINDOW_B="${RIG_WINDOW_B:-110}"
@@ -114,7 +117,8 @@ node_cmdline() {
 	echo "console=ttyS0 net.ifnames=0 biosdevname=0 panic=-1 loglevel=7" \
 	     "ovmx.tag=$1 ovmx.scsnode=$2 ovmx.sysid=$3 ovmx.votes=$4" \
 	     "ovmx.expected_votes=$5 ovmx.vaxcluster=2 ovmx.group=$GROUP" \
-	     "ovmx.recnx=$RECNX ovmx.credits=$CREDITS ovmx.window=$6"
+	     "ovmx.recnx=$RECNX ovmx.credits=$CREDITS ovmx.swver=$SWVER" \
+	     "ovmx.window=$6"
 }
 
 # Node A holds the segment open; node B dials in. A is powered on first

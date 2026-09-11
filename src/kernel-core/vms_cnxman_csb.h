@@ -234,6 +234,15 @@ void cnxman_csb_set_params(struct vms_csb *csb, uint16_t votes,
 void cnxman_csb_set_lockdirwt(struct vms_csb *csb, uint8_t lockdirwt);
 
 /*
+ * Record the peer's OWN advertised software version (rd vms-1ee): the token it
+ * really put in its formation body, copied out of the port's circuit. `len` 0
+ * clears it back to "has advertised nothing", which is the honest state for a
+ * circuit whose identity has not been learned -- never a default string.
+ */
+void cnxman_csb_set_swver(struct vms_csb *csb, const uint8_t *swver,
+			  uint8_t len, const uint8_t *own, uint8_t own_len);
+
+/*
  * The port-dependent number the REMOTE connection manager supplies for the
  * reconnect timeout (p. 7-30). Absent until the remote actually supplies it;
  * see cnxman_recnx_period_secs() for what absence means.

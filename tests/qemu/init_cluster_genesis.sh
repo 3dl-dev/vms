@@ -41,6 +41,7 @@ VAXCLUSTER=$(cmdline_val ovmx.vaxcluster)
 GROUP=$(cmdline_val ovmx.group)
 RECNX=$(cmdline_val ovmx.recnx)
 CREDITS=$(cmdline_val ovmx.credits)
+SWVER=$(cmdline_val ovmx.swver)
 WINDOW=$(cmdline_val ovmx.window)
 
 [ -z "$TAG" ] && TAG=X
@@ -48,6 +49,7 @@ WINDOW=$(cmdline_val ovmx.window)
 [ -z "$GROUP" ] && GROUP=0
 [ -z "$RECNX" ] && RECNX=20
 [ -z "$CREDITS" ] && CREDITS=32
+[ -z "$SWVER" ] && SWVER=OVMX0.6
 [ -z "$WINDOW" ] && WINDOW=90
 
 echo ""
@@ -93,6 +95,7 @@ cluster_node \
 	--group="$GROUP" \
 	--recnx="$RECNX" \
 	--credits="$CREDITS" \
+	--swver="$SWVER" \
 	--window="$WINDOW" \
 	> /dev/ttyS1 2>&1
 

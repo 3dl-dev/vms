@@ -63,7 +63,14 @@ enum vms_ldwv_status {
 	VMS_LDWV_E_NOVEC     = 2,  /* no vector, or not authoritative right now */
 	VMS_LDWV_E_TOOBIG    = 3,  /* the weighted set exceeds the storage bound*/
 	VMS_LDWV_E_WEIGHTS   = 4,  /* some LOCKDIRWTs learned, some not         */
-	VMS_LDWV_E_NOMEMBERS = 5   /* no selected member with a learned CSID    */
+	VMS_LDWV_E_NOMEMBERS = 5,  /* no selected member with a learned CSID    */
+	/*
+	 * THE SPLIT-BRAIN GATE (rd vms-1ee). The all-zero fallback below was
+	 * asked for on a cluster this executive cannot prove is all-OVMX: some
+	 * member has advertised a software version that is not this node's own,
+	 * or has advertised none at all. REFUSED -- see the header's SS3.
+	 */
+	VMS_LDWV_E_FOREIGN   = 6
 };
 
 /* ==========================================================================
@@ -79,7 +86,15 @@ struct vms_ldwv_member {
 	uint8_t    lockdirwt;        /* LEARNED, meaningful only if valid   */
 	uint8_t    lockdirwt_valid;
 	uint8_t    is_local;         /* this system: its entries read 0     */
-	uint8_t    pad;
+	/*
+	 * Is this member PROVABLY running the same implementation we are --
+	 * i.e. did it advertise a software version byte-identical to our own
+	 * (rd vms-1ee)? Three-valued in effect: 1 = yes; 0 = either it
+	 * advertised something else, or it advertised nothing. Both of the
+	 * zero cases mean the same thing here: NOT PROVEN, and the all-zero
+	 * fallback must not fire on a cluster with one in it.
+	 */
+	uint8_t    is_ovmx;
 };
 
 /* ==========================================================================

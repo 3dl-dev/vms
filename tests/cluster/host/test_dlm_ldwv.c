@@ -62,6 +62,9 @@ static void member_from(struct vms_ldwv_member *m, const struct sysdesc *d,
 	m->lockdirwt = d->lockdirwt;
 	m->lockdirwt_valid = d->lockdirwt_valid;
 	m->is_local = (uint8_t)(is_local ? 1 : 0);
+	/* These member sets model an all-OVMX cluster; the split-brain gate
+	 * (rd vms-1ee) is exercised on its own, below. */
+	m->is_ovmx = 1u;
 }
 
 /* Build ONE system's copy of the vector from the same ordered member set. */
@@ -338,6 +341,7 @@ static void discard_and_refusals(void)
 			m3[2].csid = CSID_C;
 			m3[2].lockdirwt = 10;
 			m3[2].lockdirwt_valid = 1;
+			m3[2].is_ovmx = 1u;
 			vms_ldwv_init(&v);
 			ct_check_eq_u32((unsigned long)vms_ldwv_build(&v, m3, 3u),
 					(unsigned long)VMS_LDWV_E_TOOBIG,
@@ -367,6 +371,10 @@ static struct vms_csb *add_member(struct vms_cluster *cl, vms_csid_t csid,
 	cnxman_csb_set_csid(csb, csid);
 	if (weight_valid)
 		cnxman_csb_set_lockdirwt(csb, weight);
+	/* An OVMX peer: it advertised byte-for-byte what we advertise. The
+	 * split-brain gate's own case, below, is the one that does not. */
+	cnxman_csb_set_swver(csb, (const uint8_t *)"OVMX0.6", 7u,
+			     (const uint8_t *)"OVMX0.6", 7u);
 	cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER));
 	if (local)
 		cnxman_csb_set_flags(csb, VMS_CSB_F_LOCAL);
@@ -594,6 +602,136 @@ static void club_local_withhold_refused_when_a_peer_advertised(void)
 	ct_check(cl.club.ldwv.valid == 0u, "no vector is left behind");
 }
 
+/*
+ * ==========================================================================
+ * THE SPLIT-BRAIN GATE'S TEETH (rd vms-1ee) -- the REFUSAL is what is asserted.
+ *
+ * A gate that can only demonstrate the permitted case is not a gate. This is
+ * the NEGATIVE control: a cluster with a member advertising a NON-OVMX
+ * software version -- a real VAX's own "VMS V7.3" -- and the assertion is that
+ * the all-zero fallback is REFUSED and NO vector is produced.
+ *
+ * WHY IT MATTERS. A real VAX exchanges real LOCKDIRWTs with its own kind and
+ * computes a WEIGHTED directory. OVMX cannot read those weights (no wire byte
+ * is pinned, FC-P3.2), so if it applied its all-zero fallback anyway the two
+ * would resolve the same resource name to DIFFERENT directory nodes -- two
+ * directories, two masters, one lock. With no vector, vms_ldwv_resolve()
+ * cannot answer and no cross-node DLM request can be routed at all, which is
+ * the safe outcome and the one asserted here.
+ *
+ * THE TRUST ANCHOR is a REAL ADVERTISED FIELD, not an inference: the 8-byte
+ * software version the peer itself put in its SCS formation body (spec
+ * SS4(g)), which cnxman_csb_set_swver() compares against the token THIS node
+ * advertises. Advertising nothing is not proof either, and the third case
+ * below pins that.
+ * ==========================================================================
+ */
+static void club_split_brain_gate_refuses_a_foreign_member(void)
+{
+	struct vms_cluster cl;
+	struct cnxman_ops ops;
+	struct fake_cnx f;
+	struct vms_csb *local, *peer;
+
+	printf("--- rd vms-1ee TEETH: a NON-OVMX member -> the fallback is "
+	       "REFUSED ---\n");
+
+	/* --- case 1: the peer advertises a REAL VAX version --- */
+	memset(&cl, 0, sizeof(cl));
+	fake_ops_init(&ops, &f);
+	cl.params.lockdirwt = 1u;
+	cl.params.scssystemid = (vms_scs_sysid_t)1025;
+	memcpy(cl.params.sw_version, "OVMX0.6", 7);
+	cl.params.sw_version_len = 7u;
+	local = cnxman_club_init(&cl);
+	ct_check(local != NULL, "the CLUB has its local CSB");
+	if (local == NULL)
+		return;
+	cnxman_csb_set_csid(local, CSID_A);
+	cnxman_csb_set_flags(local, (uint16_t)(VMS_CSB_F_SELECTED |
+					       VMS_CSB_F_MEMBER));
+
+	peer = cnxman_club_alloc_csb(&cl.club, (vms_scs_sysid_t)CSID_B, 1);
+	ct_check(peer != NULL, "a peer joined");
+	if (peer == NULL)
+		return;
+	cnxman_csb_set_csid(peer, CSID_B);
+	cnxman_csb_set_flags(peer, (uint16_t)(VMS_CSB_F_SELECTED |
+					      VMS_CSB_F_MEMBER));
+	/* A REAL VAX's own advertised token. */
+	cnxman_csb_set_swver(peer, (const uint8_t *)"VMS V7.3", 8u,
+			     (const uint8_t *)"OVMX0.6", 7u);
+	ct_check_eq_u32(peer->peer_is_ours, 0u,
+			"the peer is NOT running this implementation, and the "
+			"CSB says so from what it ADVERTISED");
+
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_E_FOREIGN,
+			"*** THE REFUSAL FIRES *** -- the all-zero fallback is "
+			"NOT applied on a cluster with a non-OVMX member");
+	ct_check_eq_u32(cl.club.ldwv.n, 0u,
+			"and NO vector exists -- so vms_ldwv_resolve() cannot "
+			"answer and NO cross-node DLM request can be routed");
+	ct_check(cl.club.ldwv.valid == 0u, "nothing is left behind");
+	ct_check_eq_u32(cl.club.ldwv_build_refused, 1u, "the refusal is counted");
+	ct_check(f.logs > 0u, "and a console line names it");
+
+	/* --- case 2: a peer that advertised NOTHING is not proof either --- */
+	memset(&cl, 0, sizeof(cl));
+	fake_ops_init(&ops, &f);
+	cl.params.lockdirwt = 1u;
+	cl.params.scssystemid = (vms_scs_sysid_t)1025;
+	memcpy(cl.params.sw_version, "OVMX0.6", 7);
+	cl.params.sw_version_len = 7u;
+	local = cnxman_club_init(&cl);
+	if (local == NULL)
+		return;
+	cnxman_csb_set_csid(local, CSID_A);
+	cnxman_csb_set_flags(local, (uint16_t)(VMS_CSB_F_SELECTED |
+					       VMS_CSB_F_MEMBER));
+	peer = cnxman_club_alloc_csb(&cl.club, (vms_scs_sysid_t)CSID_B, 1);
+	if (peer == NULL)
+		return;
+	cnxman_csb_set_csid(peer, CSID_B);
+	cnxman_csb_set_flags(peer, (uint16_t)(VMS_CSB_F_SELECTED |
+					      VMS_CSB_F_MEMBER));
+	/* nothing advertised at all */
+	cnxman_csb_set_swver(peer, (const uint8_t *)0, 0u,
+			     (const uint8_t *)"OVMX0.6", 7u);
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_E_FOREIGN,
+			"a member that advertised NOTHING is refused too -- "
+			"silence is not proof of kinship");
+
+	/* --- case 3: the permitted case still works, so the gate is a gate
+	 *     and not a wall --- */
+	memset(&cl, 0, sizeof(cl));
+	fake_ops_init(&ops, &f);
+	cl.params.lockdirwt = 1u;
+	cl.params.scssystemid = (vms_scs_sysid_t)1025;
+	memcpy(cl.params.sw_version, "OVMX0.6", 7);
+	cl.params.sw_version_len = 7u;
+	local = cnxman_club_init(&cl);
+	if (local == NULL)
+		return;
+	cnxman_csb_set_csid(local, CSID_A);
+	cnxman_csb_set_flags(local, (uint16_t)(VMS_CSB_F_SELECTED |
+					       VMS_CSB_F_MEMBER));
+	peer = cnxman_club_alloc_csb(&cl.club, (vms_scs_sysid_t)CSID_B, 1);
+	if (peer == NULL)
+		return;
+	cnxman_csb_set_csid(peer, CSID_B);
+	cnxman_csb_set_flags(peer, (uint16_t)(VMS_CSB_F_SELECTED |
+					      VMS_CSB_F_MEMBER));
+	cnxman_csb_set_swver(peer, (const uint8_t *)"OVMX0.6", 7u,
+			     (const uint8_t *)"OVMX0.6", 7u);
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK,
+			"an ALL-OVMX cluster still builds -- the gate refuses "
+			"the mixed case, not every case");
+	ct_check_eq_u32(cl.club.ldwv.n, 2u, "one entry per system");
+}
+
 int main(void)
 {
 	printf("=== test_dlm_ldwv (FC-P4.3 lock directory weight vector, R1) ===\n");
@@ -606,5 +744,6 @@ int main(void)
 	club_build_refusal();
 	club_local_withhold_builds_when_peers_unknown();
 	club_local_withhold_refused_when_a_peer_advertised();
+	club_split_brain_gate_refuses_a_foreign_member();
 	return ct_summary("test_dlm_ldwv");
 }

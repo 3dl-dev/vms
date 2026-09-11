@@ -1,0 +1,17 @@
+# LDWV all-zero fallback + SPLIT-BRAIN GATE (rd vms-1ee) -- 2 real executives
+# Image ovmx-genesis-rig:19 on k3s-worker under KVM.
+
+Both nodes advertise their own software token (spec 4(g)):
+  RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=1 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32 swver=OVMX0.6
+  RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1026 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32 swver=OVMX0.6
+
+Both executives build the directory vector -- the gate PERMITS all-OVMX:
+  node A: %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+  node B: %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+
+No FOREIGN refusal on either node (both are provably the same implementation).
+
+Cluster unaffected:
+  RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=2 quorum=1 cevotes=1 epoch=2 projections=agree
+  RIG-B-FINAL role=joiner member=1 state=MEMBER csid=0x00010002 cn=2 quorum=0 cevotes=0 epoch=2 projections=agree
+    GENESIS 2-NODE PROOF PASSED

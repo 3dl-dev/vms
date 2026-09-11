@@ -66,6 +66,17 @@ struct node_cfg {
 	 */
 	unsigned    cluster_credits;
 	unsigned    window;       /* how long to poll, seconds                */
+	/*
+	 * This node's OWN advertised software version -- the token STARTUP.EXE
+	 * carries down from the userland SSOT and the port puts in its
+	 * formation body (spec SS4(g)). It is this build declaring what it is,
+	 * which is exactly what the field is for; it is NEVER a version read
+	 * off a peer. rd vms-1ee: it is also the split-brain gate's trust
+	 * anchor -- two nodes advertising the same token are provably the same
+	 * implementation, and a real VAX advertising "VMS V7.3" is provably
+	 * not.
+	 */
+	const char *swver;
 };
 
 static void cfg_defaults(struct node_cfg *c)
@@ -76,6 +87,7 @@ static void cfg_defaults(struct node_cfg *c)
 	c->vaxcluster = 2u;
 	c->recnxinterval = 20u;
 	c->cluster_credits = 32u;   /* VMS's own CLUSTER_CREDITS default */
+	c->swver = "OVMX0.6";
 	c->window = 90u;
 }
 
@@ -101,6 +113,7 @@ static int cfg_take(struct node_cfg *c, const char *arg)
 	TAKE_U("group", group)
 	TAKE_U("recnx", recnxinterval)
 	TAKE_U("credits", cluster_credits)
+	TAKE_STR("swver", swver)
 	TAKE_U("window", window)
 #undef TAKE_U
 #undef TAKE_STR
@@ -186,10 +199,23 @@ static void sysgen_fill(struct vms_sysgen_load_args *a,
 	a->vaxcluster     = (uint8_t)c->vaxcluster;
 	a->cluster_credits = (uint16_t)c->cluster_credits;
 	a->auth_group     = (uint16_t)c->group;
-	/* The software-identity token STARTUP.EXE would carry down from the
-	 * userland SSOT. This rig has no OVMX userland, so it supplies none
-	 * rather than inventing a version string: sw_version_len 0 is the
-	 * executive's own honest "no token supplied" (vms_ioctl.h). */
+	/*
+	 * The software-identity token STARTUP.EXE carries down from the
+	 * userland SSOT. This rig has no OVMX userland, so the token rides the
+	 * kernel command line instead -- still THIS build declaring what it is,
+	 * never a value read off a peer. Without it this node advertises
+	 * nothing, and a peer cannot prove it is the same implementation: the
+	 * split-brain gate (rd vms-1ee) then correctly refuses to build the
+	 * directory at all.
+	 */
+	{
+		size_t n = strlen(c->swver);
+
+		if (n > sizeof(a->sw_version))
+			n = sizeof(a->sw_version);
+		memcpy(a->sw_version, c->swver, n);
+		a->sw_version_len = (uint8_t)n;
+	}
 }
 
 static int rig_sysgen_load(int fd, const struct node_cfg *c)
@@ -203,10 +229,11 @@ static int rig_sysgen_load(int fd, const struct node_cfg *c)
 		return -1;
 	}
 	printf("RIG-%s-SYSGEN status=%u scsnode=%s sysid=%u votes=%u "
-	       "expected_votes=%u vaxcluster=%u group=%u recnx=%u credits=%u\n",
+	       "expected_votes=%u vaxcluster=%u group=%u recnx=%u credits=%u "
+	       "swver=%s\n",
 	       c->tag, (unsigned)a.status, c->scsnode, c->scssystemid,
 	       c->votes, c->expected_votes, c->vaxcluster, c->group,
-	       c->recnxinterval, c->cluster_credits);
+	       c->recnxinterval, c->cluster_credits, c->swver);
 	fflush(stdout);
 	return a.status == SS_NORMAL ? 0 : -1;
 }

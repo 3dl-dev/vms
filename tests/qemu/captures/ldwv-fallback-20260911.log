@@ -1,0 +1,18 @@
+# LDWV local-withhold fallback (rd vms-1ee) -- RUNTIME PROOF, 2 real executives
+# Image ovmx-genesis-rig:17 on k3s-worker under KVM.
+
+BEFORE (every run of this session, both nodes):
+  %CNXMAN, lock directory weight vector not rebuilt: LOCKDIRWT known for some members and not others
+
+AFTER (this run):
+  node A:
+    [   35.739754] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+  node B:
+    [    5.721612] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+
+  occurrences of "not rebuilt" on either node: 0
+
+AND THE CLUSTER IS UNCHANGED (no regression):
+  RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=2 quorum=1 cevotes=1 epoch=2 projections=agree
+  RIG-B-FINAL role=joiner member=1 state=MEMBER csid=0x00010002 cn=2 quorum=0 cevotes=0 epoch=2 projections=agree
+    GENESIS 2-NODE PROOF PASSED

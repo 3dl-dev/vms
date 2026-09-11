@@ -47,9 +47,13 @@ done
 # Config/startup procedures + the shipped-DISABLED service database (posture: the kit
 # ships every service disabled; enabling one is an operator call, guarded by
 # tests/integration/test_tcpip_posture_guard.sh).
-cp "$RFS_MGR/TCPIP\$CONFIG.COM"      "$STAGE/SYSMGR/TCPIP\$CONFIG.COM"
-cp "$RFS_STARTUP/TCPIP\$STARTUP.COM" "$STAGE/SYS\$STARTUP/TCPIP\$STARTUP.COM"
-cp "$RFS_EXE/TCPIP\$SERVICE.DAT"     "$STAGE/SYSEXE/TCPIP\$SERVICE.DAT"
+cp "$RFS_MGR/TCPIP\$CONFIG.COM"       "$STAGE/SYSMGR/TCPIP\$CONFIG.COM"
+cp "$RFS_STARTUP/TCPIP\$STARTUP.COM"  "$STAGE/SYS\$STARTUP/TCPIP\$STARTUP.COM"
+# TCPIP$STARTUP.COM @-calls SYS$STARTUP:TCPIP$REAPPLY to reapply the persisted
+# config at startup (rd vms-b97), so the kit MUST carry it -- otherwise a
+# kit-installed TCP/IP would hit a missing procedure on startup.
+cp "$RFS_STARTUP/TCPIP\$REAPPLY.COM"  "$STAGE/SYS\$STARTUP/TCPIP\$REAPPLY.COM"
+cp "$RFS_EXE/TCPIP\$SERVICE.DAT"      "$STAGE/SYSEXE/TCPIP\$SERVICE.DAT"
 
 "$PACK" pack "$KIT_OUT" "$STAGE" "$PRODUCT_NAME"
 echo "OK: built TCP/IP Services layered-product kit at $KIT_OUT ($PRODUCT_NAME)"

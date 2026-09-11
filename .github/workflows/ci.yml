@@ -245,6 +245,8 @@ jobs:
               - 'distro/rootfs-test-tcpip/**'
               - 'tests/qemu/run_tcpip_daytime_boot_e2e.sh'
               - 'tests/qemu/test_tcpip_daytime_boot_e2e.sh'
+              - 'tests/qemu/run_tcpip_reboot_e2e.sh'
+              - 'tests/qemu/test_tcpip_reboot_e2e.sh'
               - 'tests/integration/test_tcpip_posture_guard.sh'
             release:
               - '.github/workflows/**'
@@ -1758,6 +1760,18 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: tcpip_daytime_boot_e2e SKIPPED in CI — this gate must actually boot + probe :13, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: Config-survives-reboot proof — TCPIP$REAPPLY reapplies persisted config, store does not grow (vms-b97)
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_DAYTIME_IMAGE=ovmx-boot-tcpip:latest \
+            tests/qemu/run_tcpip_reboot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: tcpip_reboot_e2e SKIPPED in CI — this gate must actually double-boot + assert reapply/no-growth, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

@@ -37,7 +37,8 @@ trap 'rm -f "$KIT"' EXIT
 # (1) Manifest names every TCP/IP Services component (the kit is COMPLETE).
 LISTING="$("$PACK" list "$KIT" 2>&1)"
 for name in 'TCPIP$INETD.EXE' 'TCPIP$DAYTIME.EXE' 'TCPIP$CONFIG.EXE' \
-            'TCPIP$SERVICE.DAT' 'TCPIP$CONFIG.COM' 'TCPIP$STARTUP.COM'; do
+            'TCPIP$SERVICE.DAT' 'TCPIP$CONFIG.COM' 'TCPIP$STARTUP.COM' \
+            'TCPIP$REAPPLY.COM'; do
     if printf '%s\n' "$LISTING" | grep -qF "$name"; then ok "kit manifest names $name"
     else bad "kit manifest MISSING $name"; fi
 done
@@ -50,7 +51,8 @@ if ! "$PACK" extract "$KIT" "$OUT" >/dev/null 2>&1; then bad "kit extract failed
 for src in "$BIN/TCPIP\$INETD.EXE" "$BIN/TCPIP\$DAYTIME.EXE" "$BIN/TCPIP\$CONFIG.EXE" \
            "$ROOTFS/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP\$SERVICE.DAT" \
            "$ROOTFS/vms/SYS0/SYSCOMMON/SYSMGR/TCPIP\$CONFIG.COM" \
-           "$ROOTFS/vms/SYS0/SYSCOMMON/SYS\$STARTUP/TCPIP\$STARTUP.COM"; do
+           "$ROOTFS/vms/SYS0/SYSCOMMON/SYS\$STARTUP/TCPIP\$STARTUP.COM" \
+           "$ROOTFS/vms/SYS0/SYSCOMMON/SYS\$STARTUP/TCPIP\$REAPPLY.COM"; do
     base="$(basename "$src")"
     found="$(find "$OUT" -type f -name "$base" 2>/dev/null | head -1)"
     if [ -n "$found" ] && cmp -s "$src" "$found"; then ok "round-trip byte-exact: $base"

@@ -80,6 +80,7 @@
 #include "vms_cluster_sysgen.h" /* E78: SYSGEN CLUSTER_CREDITS, the VC grant */
 #include "vms_scs.h"            /* the SYSAP surface this glue registers on */
 #include "vms_scs_fsm.h"        /* enum scs_close_reason (E29) */
+#include "vms_cluster_codec_dlm.h" /* rd vms-1ee: VMS_DLM_CAT_REQUEST, the DLM leg */
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_join_fsm.h"
@@ -298,6 +299,29 @@ struct vms_cnxman {
 	 * because a carrier is built and handed to SCS in one unbroken step.
 	 */
 	uint8_t carrier[VMS_CM_BODY_LEN];
+
+	/* ==================================================================
+	 * The DLM's wire arm (vms_cnxman.h §5, rd vms-1ee)
+	 *
+	 * The arm is installed by cnxman_set_dlm(), which also hands it to the
+	 * barrier and the coordinator for the transition callbacks. This is the
+	 * SAME pointer, kept here because steady-state cat-0x02 traffic arrives
+	 * outside any transition and has to be routed by this file.
+	 * ================================================================== */
+	const struct dlm_scs_role_ops *dlm;
+
+	/* The DLM's outbound scratch. In the context, never on the stack, for
+	 * the same reason `carrier` is: this runs on a VAX kernel stack. A body
+	 * is built into it, stamped and handed to SCS in one unbroken step. */
+	uint8_t  dlm_tx[VMS_CM_BODY_LEN];
+	uint8_t  dlm_reply[VMS_CM_BODY_LEN];
+
+	uint32_t dlm_frames_rx;        /* cat-0x02 bodies routed to the arm  */
+	uint32_t dlm_replies_sent;     /* answers the arm produced, sent     */
+	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
+	uint32_t dlm_sends;            /* originations the arm asked for     */
+	uint32_t dlm_sends_refused;    /* no CSB / no connection             */
+	uint32_t dlm_foreign_refused;  /* RULE C: the peer is not proven ours*/
 };
 
 /* ==========================================================================
@@ -1198,6 +1222,143 @@ static void cnxman_credit_carrier(struct vms_cnxman *cn,
 /* Defined below, beside the beat that also calls it (rd vms-1ee). */
 static void cnxman_sync_peer_swver(struct vms_cnxman *cn);
 
+/* ==========================================================================
+ * 8b. THE DLM's LEG (rd vms-1ee; vms_cnxman.h §5)
+ *
+ * Steady-state cat-0x02 traffic arrives OUTSIDE any transition, so it cannot be
+ * routed by the barrier (which owns the op-0x0d rebuild record inside one).
+ * These three functions are the whole of the connection manager's part in it:
+ * hand the body to the arm, send back what the arm produced, and -- on the way
+ * out -- resolve the destination and stamp the envelope.
+ * ========================================================================== */
+
+/*
+ * RULE C, THE EMISSION HALF (vms_dlm_scs.c states the whole rule).
+ *
+ * A system that has not advertised a software-version token byte-identical to
+ * our own has not proved it runs this implementation, and OVMX's cat-0x02 arm
+ * is grounded against its own protocol. A completion frame at a real VAX's lock
+ * manager bugchecked it with INVLOCKID; a mis-shifted rebuild response produced
+ * LOCKMGRERR on two more. So nothing DLM leaves this node for such a system --
+ * counted and logged, never silently dropped and never sent anyway.
+ *
+ * The Lock Directory Weight Vector's own FOREIGN refusal (vms_dlm_ldwv.h)
+ * already stops the ROUTING before a frame is ever built. This is the teeth
+ * under it: a gate that is only upstream is a gate that one new call site
+ * bypasses.
+ */
+static int cnxman_dlm_peer_proven(struct vms_cnxman *cn,
+				  const struct vms_csb *csb)
+{
+	if (csb != NULL && csb->peer_is_ours)
+		return 1;
+	cn->dlm_foreign_refused++;
+	cnxman_ops_log(cn, "%CNXMAN, refusing to send a lock-manager message "
+			   "to a system that has not proved it runs this "
+			   "implementation");
+	return 0;
+}
+
+/*
+ * The DLM's ORIGINATION path (vms_dlm_scs.c's `send`). Addressed by CSID --
+ * which the arm may do, and the barrier may not, because a DLM destination is
+ * a member the LOCK DATABASE named (res->master_csid / the weight vector's
+ * answer), i.e. an identity the executive genuinely holds, not one a
+ * participant would have to infer (E73).
+ */
+int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
+		    const uint8_t *body, uint32_t len)
+{
+	struct vms_cnxman *cn;
+	struct vms_csb *csb;
+
+	if (cl == NULL || cl->cnxman == NULL || cl->scs == NULL || body == NULL)
+		return -1;
+	if (len != VMS_CM_BODY_LEN)
+		return -1;
+	cn = cl->cnxman;
+
+	csb = cnxman_club_find_csid(&cl->club, dst_csid);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u) {
+		/* No connection to that member: an honest refusal to transmit,
+		 * never a substituted destination (INV-6). */
+		cn->dlm_sends_refused++;
+		return -1;
+	}
+	if (!cnxman_dlm_peer_proven(cn, csb))
+		return -1;
+
+	memcpy(cn->dlm_tx, body, VMS_CM_BODY_LEN);
+	/* An origination the peer WILL answer, so this dialogue mints a fresh
+	 * transaction token for it (E85) and assigns the next send-msg#. */
+	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST);
+	if (scs_send_msg(cl->scs, csb->cdt_conid, cn->dlm_tx,
+			 VMS_CM_BODY_LEN) != (int)SS__NORMAL) {
+		cn->dlm_sends_refused++;
+		return -1;
+	}
+	cn->dlm_sends++;
+	return 0;
+}
+
+/*
+ * The DLM's RECEIVE leg. Returns 1 when the arm CLAIMED the body (answered it,
+ * or answered it with the honest silence), 0 when this is not DLM traffic at
+ * all, and -1 when the arm declined -- which is counted here and leaves the
+ * frame unanswered rather than answered by somebody who does not hold the state.
+ */
+static int cnxman_dlm_rx(struct vms_cnxman *cn, const struct vms_cm_envelope *env,
+			 const uint8_t *body, uint32_t len,
+			 struct vms_csb *csb, vms_csid_t from_csid,
+			 int from_valid)
+{
+	struct dlm_scs_request req;
+	struct dlm_scs_reply reply;
+	uint32_t written = 0;
+
+	if (cn->dlm == NULL || cn->dlm->handle_request == NULL)
+		return 0;
+	if ((env->category & (uint8_t)~VMS_WIRE_RESPONSE_BIT) !=
+	    (uint8_t)VMS_DLM_CAT_REQUEST)
+		return 0;
+
+	memset(&req, 0, sizeof(req));
+	req.from_csid = from_valid ? from_csid : (vms_csid_t)0;
+	req.category  = env->category;
+	req.opcode    = env->opcode;
+	req.body      = body;
+	req.len       = len;
+	/* The trust fact, read off the CSB where it was derived and handed
+	 * over rather than re-decided downstream (vms_dlm_scs.h). */
+	req.peer_is_ours = (uint8_t)(csb != NULL ? csb->peer_is_ours : 0u);
+
+	reply.body = cn->dlm_reply;
+	reply.cap  = (uint32_t)sizeof(cn->dlm_reply);
+	reply.len  = 0u;
+
+	cn->dlm_frames_rx++;
+	if (cn->dlm->handle_request(cn->dlm->ctx, &req, &reply) != 0) {
+		cn->dlm_declined++;
+		return -1;
+	}
+	if (reply.len == 0u)
+		return 1;   /* handled; the honest silence */
+	if (csb == NULL || reply.len != VMS_CM_BODY_LEN)
+		return 1;
+	/* RULE A: the answer goes back on the request's OWN connection,
+	 * correlated with the transaction it answers. The DLM never writes
+	 * body[0:8], so the wrapper echoes the request's txn/token over the
+	 * body the lock manager produced. */
+	if (vms_cm_body_build(body, len, cn->dlm_reply, reply.len, cn->dlm_tx,
+			      (uint32_t)sizeof(cn->dlm_tx),
+			      &written) != VMS_CODEC_OK)
+		return 1;
+	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_RESPONSE);
+	if (cnxman_ops_respond(cn, cn->dlm_tx, written) == 0)
+		cn->dlm_replies_sent++;
+	return 1;
+}
+
 static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 			   const uint8_t *body, uint32_t len)
 {
@@ -1209,6 +1370,8 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	int from_valid = 0;
 	uint8_t before[VMS_CLUB_MAX_CSB];
 	enum cnxman_join_rx jrx;
+	struct vms_cm_envelope env;
+	int env_ok;
 
 	if (csb != NULL) {
 		from_csb = (int32_t)cnxman_club_csb_index(club, csb);
@@ -1241,12 +1404,9 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	 * cnxman_csb_dialogue_heard() keeps a MAXIMUM, so a retransmit at a
 	 * lower number cannot walk it back.
 	 */
-	if (csb != NULL) {
-		struct vms_cm_envelope env;
-
-		if (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK)
-			cnxman_csb_dialogue_heard(csb, env.send_msg);
-	}
+	env_ok = (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK);
+	if (csb != NULL && env_ok)
+		cnxman_csb_dialogue_heard(csb, env.send_msg);
 
 	/*
 	 * THE IDENTITY FACTS MUST BE CURRENT AT THE DECISION POINT (rd vms-1ee).
@@ -1297,6 +1457,27 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 			cnxman_glue_preload_proposed(cn);
 			cnxman_notify_membership_changes(cn, before);
 			return 0;
+		}
+	}
+
+	/*
+	 * THE DLM, LAST (rd vms-1ee). Last on purpose: the op-0x0d rebuild
+	 * record that arrives INSIDE a transition belongs to the barrier, which
+	 * owns the grounded verbatim-echo recipe for it (spec §4(p), 1367/1367
+	 * real responses reconstructed byte-for-byte). Offering cat-0x02 to the
+	 * lock manager first would take that record away from the recipe that is
+	 * proven against real traffic. What reaches here is steady-state DLM
+	 * traffic -- an ENQ, a CONVERT, a release, a reply -- which arrives
+	 * outside any transition and which no other FSM has a cell for.
+	 */
+	if (env_ok) {
+		int drx = cnxman_dlm_rx(cn, &env, body, len, csb, from_csid,
+					from_valid);
+
+		if (drx != 0) {
+			cnxman_glue_preload_proposed(cn);
+			cnxman_notify_membership_changes(cn, before);
+			return drx < 0 ? 1 : 0;
 		}
 	}
 
@@ -2360,6 +2541,9 @@ void cnxman_set_dlm(struct vms_cluster *cl, const struct dlm_scs_role_ops *ops)
 	vms_cluster_fork_enter(cl);
 	cnxman_barrier_set_dlm(&cn->barrier, ops);
 	cnxman_coord_set_dlm(&cn->coord, ops);
+	/* ... and THIS file's own copy, for the steady-state cat-0x02 traffic
+	 * that arrives outside any transition (cnxman_dlm_rx). */
+	cn->dlm = ops;
 	vms_cluster_fork_leave(cl);
 }
 

@@ -42,6 +42,7 @@
 #include "exec_hash.h"        /* exec_hash_* (the resource database)          */
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
+#include "vms_dlm_master.h"   /* the MASTER-side door + the delivery proc      */
 
 /*
  * Deadlock re-scan interval for a lock blocked in-kernel (sync $ENQW).
@@ -1931,6 +1932,261 @@ uint32_t vms_lock_dlm_proxy_blkast_recv(uint32_t req_lkid)
 }
 
 /* ================================================================
+ * THE MASTER-SIDE DOOR (vms_dlm_master.h; rd vms-1ee, vms-c27)
+ *
+ * The wire arm is a kernel-core cluster TU and may not include the substrate's
+ * vms_ioctl.h twin, so it cannot name `struct vms_dlm_xnode_args` or
+ * `struct vms_proc`. This section is the translation, in the one translation
+ * unit that sees both vocabularies -- the same division vms_lock_dlm_proxy_-
+ * grant_recv() above already draws for the requester side.
+ * ================================================================ */
+
+/*
+ * THE DELIVERY PROC (rd vms-c27, RULED). The process that issued
+ * VMS_IOCTL_CLUSTER_START -- STARTUP.EXE, process-permanent -- owns the
+ * master-side LKBs this node creates for remote requesters. It is the OWNER and
+ * NOT the mode source: see the acmode stamp in vms_enq_core_ex, which records
+ * PSL_C_KERNEL for a cross-node request precisely so a local image rundown on
+ * this node cannot release a lock another node holds.
+ *
+ * Guarded by the same lock the requester ops use: both are install-once,
+ * read-per-request pointers into state the cluster owns.
+ */
+static struct vms_proc *dlm_delivery_proc;   /* NULL = no cluster receive path */
+
+void vms_lock_dlm_set_delivery_proc(void *proc)
+{
+    exec_lock(&vms_dlm_req_ops_lock);
+    dlm_delivery_proc = (struct vms_proc *)proc;
+    exec_unlock(&vms_dlm_req_ops_lock);
+}
+
+static struct vms_proc *dlm_delivery_proc_get(void)
+{
+    struct vms_proc *p;
+
+    exec_lock(&vms_dlm_req_ops_lock);
+    p = dlm_delivery_proc;
+    exec_unlock(&vms_dlm_req_ops_lock);
+    return p;
+}
+
+int vms_lock_dlm_have_delivery_proc(void)
+{
+    return dlm_delivery_proc_get() != NULL;
+}
+
+/*
+ * THIS NODE'S CLUSTER IDENTITY (vms_dlm_master.h §1b states the whole case).
+ *
+ * `vms_local_csid` starts life as each substrate's insmod placeholder; the
+ * cluster's real assignment lives in the connection manager's CLUB, and this is
+ * how it reaches the lock engine. A zero is REFUSED rather than stored: 0 means
+ * "unmastered" throughout this file, so it is not an identity, and an identity
+ * the cluster has not assigned is one this node does not have.
+ */
+void vms_lock_dlm_set_local_csid(uint32_t csid)
+{
+    if (csid == 0u)
+        return;
+    exec_lock(&vms_dlm_req_ops_lock);
+    vms_local_csid = csid;
+    exec_unlock(&vms_dlm_req_ops_lock);
+}
+
+uint32_t vms_lock_dlm_local_csid(void)
+{
+    uint32_t csid;
+
+    exec_lock(&vms_dlm_req_ops_lock);
+    csid = vms_local_csid;
+    exec_unlock(&vms_dlm_req_ops_lock);
+    return csid;
+}
+
+/*
+ * The GRANTED MODE, read off the LKB the engine just minted -- not echoed back
+ * from the request. They are equal today (the engine grants exactly the mode it
+ * was asked for), and that is exactly why reading it matters: an asserted wire
+ * field whose value came from the request rather than from the lock database is
+ * the frame-to-frame plumbing INV-6 exists to stop, and it stays correct the day
+ * the engine grants something else. 0xff means "no such lock", which the caller
+ * treats as nothing to assert.
+ */
+static uint8_t dlm_master_read_lkb(uint32_t master_lkid, uint32_t *req_lkid)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    uint8_t mode;
+
+    *req_lkid = VMS_DLM_LKID_UNSET;
+    lock = lock_find_by_id(master_lkid);
+    if (lock == NULL)
+        return 0xffu;
+    res = lock->resource;
+    exec_lock(&res->lock);
+    mode = (uint8_t)lock->granted_mode;
+    *req_lkid = lock->req_lkid;
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return mode;
+}
+
+/* A request this executive can act on at all: a named sender, a handle the
+ * sender minted, and (for ENQ/CONVERT) a resource name. Refused rather than
+ * defaulted -- a lock tagged with CSID 0 would name no owner (condition 2). */
+static int dlm_master_request_ok(const struct vms_dlm_master_request *r)
+{
+    if (r == NULL)
+        return 0;
+    if (r->req_csid == 0u || r->req_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    if (r->op != VMS_DLM_MREQ_DEQ && r->resnam[0] == '\0')
+        return 0;
+    if (r->op == VMS_DLM_MREQ_DEQ && r->master_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    return 1;
+}
+
+static void dlm_master_fill_args(const struct vms_dlm_master_request *r,
+                                 struct vms_dlm_xnode_args *a)
+{
+    memset(a, 0, sizeof(*a));
+    a->lkmode      = r->lkmode;
+    a->flags       = r->flags;
+    a->req_csid    = r->req_csid;
+    a->req_lkid    = r->req_lkid;
+    a->master_lkid = r->master_lkid;
+    strscpy(a->resnam, r->resnam, sizeof(a->resnam));
+    if (r->valblk_present) {
+        memcpy(a->valblk, r->valblk, LCK_VALBLK_SIZE);
+        a->flags |= LCK_M_VALBLK;
+    }
+}
+
+/* ENQ / CONVERT: turn the engine's status + outputs into the FACT the arm
+ * needs. Every value copied here was written by the dispatch out of a real LKB
+ * or RSB; nothing is composed from the request. */
+static void dlm_master_result_enq(uint32_t status,
+                                  const struct vms_dlm_xnode_args *a,
+                                  struct vms_dlm_master_result *out)
+{
+    if (status == (uint32_t)VMS_DLM_STS_REDIRECT) {
+        out->outcome = (uint8_t)VMS_DLM_MASTER_REDIRECT;
+        out->redirect_csid = a->master_csid;
+        return;
+    }
+    if (status == SS__NOTQUEUED) {
+        out->outcome = (uint8_t)VMS_DLM_MASTER_DENIED;
+        return;
+    }
+    if (status == (uint32_t)VMS_DLM_STS_QUEUED && a->queued) {
+        uint32_t held_for_lkid = VMS_DLM_LKID_UNSET;
+
+        (void)dlm_master_read_lkb(a->master_lkid, &held_for_lkid);
+        out->outcome = (uint8_t)VMS_DLM_MASTER_QUEUED;
+        out->master_lkid = a->master_lkid;
+        out->req_lkid = held_for_lkid;
+        out->blocking_csid = a->blocking_csid;
+        out->blocking_master_lkid = a->blocking_master_lkid;
+        out->blocking_req_lkid = a->blocking_req_lkid;
+        return;
+    }
+    if (status == SS__NORMAL && a->master_lkid != VMS_DLM_LKID_UNSET) {
+        uint32_t held_for_lkid = VMS_DLM_LKID_UNSET;
+        uint8_t mode = dlm_master_read_lkb(a->master_lkid, &held_for_lkid);
+
+        if (mode == 0xffu || held_for_lkid == VMS_DLM_LKID_UNSET) {
+            /* The lock went away between the grant and this read, or it
+             * carries no requester handle to name in a reply. Nothing to
+             * assert about it, so nothing is asserted (INV-6). */
+            out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+            return;
+        }
+        out->outcome = (uint8_t)VMS_DLM_MASTER_GRANTED;
+        out->master_lkid = a->master_lkid;
+        out->req_lkid = held_for_lkid;
+        out->granted_mode = mode;
+        return;
+    }
+    out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+}
+
+/* DEQ: the release itself, plus the deferred GRANT it may have flipped. The
+ * dispatch reports that flip through the fields that are otherwise 0 on a DEQ
+ * (see vms_lock_dlm_xnode_deq); this names them for what they are. */
+static void dlm_master_result_deq(uint32_t status,
+                                  const struct vms_dlm_xnode_args *a,
+                                  struct vms_dlm_master_result *out)
+{
+    if (status != SS__NORMAL) {
+        out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+        return;
+    }
+    out->outcome = (uint8_t)VMS_DLM_MASTER_RELEASED;
+    if (!a->queued)
+        return;
+    out->deferred_grant = 1u;
+    out->deferred_csid = a->blocking_csid;
+    out->deferred_master_lkid = a->blocking_master_lkid;
+    out->deferred_req_lkid = a->req_lkid;
+    out->deferred_mode = (uint8_t)a->lkmode;
+}
+
+static uint32_t dlm_master_op_to_xnode(uint32_t op)
+{
+    switch (op) {
+    case VMS_DLM_MREQ_CONVERT:  /* the engine's ENQ path serves a convert's
+                                 * cross-node form; the wire opcode is the
+                                 * arm's business, not the engine's */
+    case VMS_DLM_MREQ_ENQ:
+        return VMS_DLM_OP_ENQ;
+    case VMS_DLM_MREQ_DEQ:
+        return VMS_DLM_OP_DEQ;
+    default:
+        return 0u;
+    }
+}
+
+uint32_t vms_lock_dlm_master_serve(const struct vms_dlm_master_request *r,
+                                   struct vms_dlm_master_result *out)
+{
+    struct vms_dlm_xnode_args a;
+    struct vms_proc *proc;
+    uint32_t xop, status;
+
+    if (out == NULL)
+        return SS__BADPARAM;
+    memset(out, 0, sizeof(*out));
+    out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+
+    if (!dlm_master_request_ok(r))
+        return SS__BADPARAM;
+    xop = dlm_master_op_to_xnode(r->op);
+    if (xop == 0u)
+        return SS__BADPARAM;
+
+    /*
+     * CONDITION 4 (rd vms-c27): no delivery proc, no service. A master-side LKB
+     * must be owned by a real process; with none registered this executive
+     * REFUSES rather than granting a lock nothing can account for.
+     */
+    proc = dlm_delivery_proc_get();
+    if (proc == NULL)
+        return SS__NORMAL;   /* out->outcome is REFUSED -- honest, counted */
+
+    dlm_master_fill_args(r, &a);
+    a.op = xop;
+    status = vms_lock_dlm_xnode_dispatch(proc, &a);
+
+    if (xop == VMS_DLM_OP_DEQ)
+        dlm_master_result_deq(status, &a, out);
+    else
+        dlm_master_result_enq(status, &a, out);
+    return SS__NORMAL;
+}
+
+/* ================================================================
  * ioctl handlers
  * ================================================================ */
 
@@ -2195,10 +2451,37 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
      * records the caller's current mode. Note this is the ACCESS mode
      * (0-3), NOT the lock mode in requested_mode/granted_mode (NL..EX, 0-5).
      * See docs/design-image-rundown-resource-classes.md.
+     *
+     * *** EXCEPT FOR A LOCK HELD FOR ANOTHER SYSTEM (rd vms-c27 condition 1).
+     * ***
+     * A cross-node request (`xn` set) is served on the DELIVERY PROC -- the
+     * process that issued VMS_IOCTL_CLUSTER_START, i.e. STARTUP.EXE. That
+     * process is the OWNER of the resulting master-side LKB; it is NOT the
+     * MODE SOURCE, and taking `proc->current_mode` here would be exactly the
+     * conflation the ruling forbids: a remote system's lock would inherit
+     * whatever mode STARTUP happened to be in, and a local image rundown on
+     * THIS node could then release a lock another node still holds.
+     *
+     * The mode is therefore PSL_C_KERNEL: process-permanent, outside every
+     * local image's rundown scope (vms_proc_rundown_locks releases acmode >=
+     * min_acmode, and image rundown passes PSL_C_USER). That is the correct
+     * lifetime, because a remote lock's release is driven by ITS OWNER
+     * LEAVING THE CLUSTER -- the per-CSID departure path keyed on
+     * lock->req_csid (rd vms-4d3) -- and by nothing local at all.
+     *
+     * HONEST OMISSION (INV-6): the requester's OWN access mode is not carried
+     * by any grounded field of the DLM request (struct vms_dlm_xnode_args has
+     * the LOCK mode and the flags, and no access mode), so this executive does
+     * not know it and does not guess one. When a capture grounds such a field,
+     * THIS is the line that reads it.
      */
-    exec_lock(&proc->mode_lock);
-    lock->acmode = proc->current_mode;
-    exec_unlock(&proc->mode_lock);
+    if (xn != NULL) {
+        lock->acmode = PSL_C_KERNEL;
+    } else {
+        exec_lock(&proc->mode_lock);
+        lock->acmode = proc->current_mode;
+        exec_unlock(&proc->mode_lock);
+    }
 
     if (args.flags & LCK_M_VALBLK)
         memcpy(lock->valblk, args.valblk, LCK_VALBLK_SIZE);
@@ -2815,16 +3098,18 @@ static void dlm_proxies_master_departed(struct vms_lock_resource *res,
     }
 }
 
-long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
+/*
+ * The sweep itself, callable from kernel-core (vms_dlm_master.h): the DLM's
+ * wire arm learns a departure as a DIRECT CALL from the connection manager, not
+ * through an ioctl, so the ioctl below and the arm run the SAME code.
+ */
+void vms_lock_dlm_member_departed(uint32_t departed_csid, uint32_t *found)
 {
-    struct vms_dlm_depart_args args;
     struct vms_lock_resource *res;
     int bkt;
 
-    (void)proc;
-    memset(&args, 0, sizeof(args));
-    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
-        return -EFAULT;
+    if (found != NULL)
+        *found = 0u;
 
     exec_lock(&vms_res_hash_lock);
 
@@ -2839,17 +3124,30 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
         exec_lock(&res->lock);
         res->dir_valid = 0;
         res->dir_csid = 0;
-        if (args.departed_csid != 0 && res->master_csid == args.departed_csid) {
+        if (departed_csid != 0 && res->master_csid == departed_csid) {
             res->master_csid = 0;
-            args.found = 1;
+            if (found != NULL)
+                *found = 1u;
         }
-        dlm_proxies_master_departed(res, args.departed_csid);
+        dlm_proxies_master_departed(res, departed_csid);
         exec_unlock(&res->lock);
     }
 
-    args.members_live = 0;   /* the CLUB's fact, not this engine's */
     exec_unlock(&vms_res_hash_lock);
+}
 
+long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dlm_depart_args args;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    vms_lock_dlm_member_departed(args.departed_csid, &args.found);
+
+    args.members_live = 0;   /* the CLUB's fact, not this engine's */
     args.status = SS__NORMAL;
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;

@@ -275,6 +275,14 @@ COPY src/kernel-core/vms_mscp_cl_conn_fsm.c  /netbsd/guest-src/kernel-core/vms_m
 COPY src/kernel-core/vms_mscp_cl_conn_fsm.h  /netbsd/guest-src/kernel-core/vms_mscp_cl_conn_fsm.h
 COPY src/kernel-core/vms_mscp_cl.c           /netbsd/guest-src/kernel-core/vms_mscp_cl.c
 COPY src/kernel-core/vms_mscp_cl.h           /netbsd/guest-src/kernel-core/vms_mscp_cl.h
+# rd vms-1ee: the lock manager's WIRE ARM -- the binding that joins the lock
+# engine's requester/master seams to the connection manager's cat-0x02 traffic.
+COPY src/kernel-core/vms_cluster_codec_dlm.c /netbsd/guest-src/kernel-core/vms_cluster_codec_dlm.c
+COPY src/kernel-core/vms_cluster_codec_dlm.h /netbsd/guest-src/kernel-core/vms_cluster_codec_dlm.h
+COPY src/kernel-core/vms_dlm_scs_fsm.c       /netbsd/guest-src/kernel-core/vms_dlm_scs_fsm.c
+COPY src/kernel-core/vms_dlm_scs_fsm.h       /netbsd/guest-src/kernel-core/vms_dlm_scs_fsm.h
+COPY src/kernel-core/vms_dlm_scs.c           /netbsd/guest-src/kernel-core/vms_dlm_scs.c
+COPY src/kernel-core/vms_dlm_master.h        /netbsd/guest-src/kernel-core/vms_dlm_master.h
 COPY src/kernel-netbsd/vms_lan_netbsd.c      /netbsd/guest-src/kmod/vms_lan_netbsd.c
 # FC-P0.4: cluster_seam.c (the R3 substrate-contract self-test for the cluster
 # seam, called from vms_netbsd.c's MODULE_CMD_INIT) lives under

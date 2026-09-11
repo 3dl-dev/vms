@@ -546,7 +546,8 @@ l2-open-bypasses-phy-io
 pe-vc-snapshot-fabricates-circuit
 scs-cdt-snapshot-fabricates-connection
 cnxman-csb-snapshot-fabricates-member
-getsyi-csid-reported-without-valid"
+getsyi-csid-reported-without-valid
+fork-work-dispatch-uncounted"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -658,6 +659,26 @@ allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
 EOF
                       ;;
+        esac;;
+
+    fork-work-dispatch-uncounted)
+        case "$_f" in
+        facility)     echo "cluster fork work-dispatch accounting (cf_deliver_work, FC-P6, vms-ci)";;
+        targets)      echo "kernel-core/vms_cluster_fork.c";;
+        suites_red)   echo "test_kmod_cluster_fork_hammer";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cf_deliver_work() drops 'f->st.work_dispatched++', so the executive's OWN drain-convergence rule (work_dispatched >= work_posted) never converges: WORK_DISPATCHED stays 0 while WORK_POSTED climbs. A value-not-decision mutation (precedent: the kstat-*-mismapped entries). The frames are still delivered -- RX_DISPATCHED is a different counter and stays correct -- so only the work-accounting assertions redden, not the rx-frame one (minimality). The increment text is unique; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+every posted work item was dispatched exactly once (no lost wakeup, no stuck poster)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+cf_stats converged (dispatched >= enqueued/posted) within the 2s bound -- no lost wakeup
+EOF
+                      ;;
+        knock_on_why)  echo "the same dropped increment makes DRAIN_OK (the dispatched>=posted convergence) fail alongside the exact-once work-dispatch count.";;
         esac;;
 
     getsyi-csid-reported-without-valid)
@@ -6248,6 +6269,10 @@ apply_edit() {
         # Unique guard text (the SYI$_NODE_CSID learned-CSID guard); forcing it
         # if(1) asserts node_csid_valid with no learned CSID. Gone after apply.
         sed -i 's|if (club->local_csid_valid) {|if (1 /* NEGCTL getsyi-csid-reported-without-valid */) {|' "$_file";;
+    fork-work-dispatch-uncounted)
+        # Unique increment; dropping it leaves the counter at 0 (convergence
+        # never reached). Gone after apply, so a 2nd apply is a no-op (selftest).
+        sed -i 's|f->st.work_dispatched++;|/* NEGCTL fork-work-dispatch-uncounted: increment dropped */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

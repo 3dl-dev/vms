@@ -321,6 +321,7 @@ int main(void)
           "the process-context poster kthread's cf_post() calls were accepted "
           "(CONTRACT RULE 14.1's process-context-poster row) on the SAME CPU as the flood");
 
+    /* negctl: fork-work-dispatch-uncounted */
     CHECK(result_ll(result, "DRAIN_OK") == 1,
           "cf_stats converged (dispatched >= enqueued/posted) within the 2s bound -- "
           "no lost wakeup");
@@ -331,6 +332,7 @@ int main(void)
 
     work_posted = result_ll(result, "WORK_POSTED");
     work_dispatched = result_ll(result, "WORK_DISPATCHED");
+    /* negctl: fork-work-dispatch-uncounted */
     CHECK(work_dispatched == work_posted,
           "every posted work item was dispatched exactly once (no lost wakeup, no stuck poster)");
 

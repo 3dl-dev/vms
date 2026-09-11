@@ -28,7 +28,7 @@
  * and a real requester answers a grant with NO frame at all -- so the arm no
  * longer emits it. The assertions moved rather than weakened: the fresh-read
  * proof now runs on the post-grant CONVERT (a frame that really exists), and
- * `check_only_enq_or_convert_was_sent()` is run over EVERY scenario so a
+ * `check_only_grounded_opcodes_were_sent()` is run over EVERY scenario so a
  * reintroduced phantom frame reddens this file wherever it comes back.
  *
  * Every captured frame also records a SNAPSHOT of the fake LKB as it stood at
@@ -92,6 +92,14 @@ struct fake_engine {
 	struct sent_frame sent[MAX_SENT];
 	uint32_t n_sent;
 	int      send_fails;
+
+	/*
+	 * THE ALL-OVMX GATE, as the connection manager answers it
+	 * (vms_ldwv_all_ovmx). 1 == every member is proven to run this
+	 * implementation, which is the only configuration a frame shape OVMX
+	 * has never been watched to emit may be addressed at.
+	 */
+	int all_ovmx;
 
 	/* the directory vector */
 	vms_csid_t dir_answer;
@@ -194,6 +202,11 @@ static int fe_dir_resolve(void *ctx, uint16_t hash16, vms_csid_t *out_csid)
 static uint32_t fe_dir_generation(void *ctx)
 {
 	return ((struct fake_engine *)ctx)->dir_generation;
+}
+
+static int fe_all_ovmx(void *ctx)
+{
+	return ((struct fake_engine *)ctx)->all_ovmx;
 }
 
 static int fe_record_master(void *ctx, const char *resnam, uint32_t req_lkid,
@@ -303,12 +316,14 @@ static void fe_reset(const char *resnam, uint32_t lkmode, uint16_t hash,
 	g.dir_answer = CSID_DIR;
 	g.dir_generation = 1u;
 	g.now_ms = 1000u;
+	g.all_ovmx = 1;   /* the scenarios below are an OVMX-only cluster */
 
 	memset(&g_ops, 0, sizeof(g_ops));
 	g_ops.send = fe_send;
 	g_ops.refill_post = fe_refill;
 	g_ops.dir_resolve = fe_dir_resolve;
 	g_ops.dir_generation = fe_dir_generation;
+	g_ops.all_ovmx = fe_all_ovmx;
 	g_ops.record_master = fe_record_master;
 	g_ops.assume_mastery = fe_assume;
 	g_ops.grant_recv = fe_grant;
@@ -364,6 +379,22 @@ static int parse_request(const struct sent_frame *s, uint8_t *opcode_out,
 	return 0;
 }
 
+/* A captured frame, parsed as an op-0x03 $DEQ through the SHIPPING codec --
+ * which is also the gate that says it IS one (cat 0x02, op 0x03, neither lock
+ * id unset). Never by byte arithmetic. */
+static int parse_deq(const struct sent_frame *s, struct vms_dlm_deq *out)
+{
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	struct vms_frame_info fi;
+	uint32_t len = splice(s, frame);
+
+	if (vms_frame_classify(frame, len, &fi) != VMS_CODEC_OK)
+		return -1;
+	if (vms_dlm_deq_parse(frame, len, &fi, out) != VMS_CODEC_OK)
+		return -1;
+	return 0;
+}
+
 /* The opcode of a captured frame, read through the codec's own published
  * offset. Used to assert what this arm did NOT emit as well as what it did. */
 static uint8_t sent_opcode(const struct sent_frame *s)
@@ -379,14 +410,18 @@ static uint8_t sent_opcode(const struct sent_frame *s)
 /*
  * *** THE SUPERSESSION GUARD. ***
  *
- * Not one frame this arm emitted may be anything but an ENQ or a CONVERT.
- * That is stronger than "the completion emit was deleted": it would catch a
- * reintroduction anywhere -- a new handler, a new timeout path, a merge that
- * resurrected the pair -- and it is checked after every scenario below rather
- * than in one place, because a phantom frame that only appears on the retry
- * ladder is exactly the kind nobody looks for.
+ * Not one frame this arm emitted may be anything but an ENQ (0x01), a CONVERT
+ * (0x07) or a $DEQ (0x03) -- the three opcodes it is BOTH grounded for and
+ * cleared to transmit. That is stronger than "the completion emit was deleted":
+ * it catches a reintroduction anywhere -- a new handler, a new timeout path, a
+ * merge that resurrected the phantom pair -- and it catches this arm
+ * originating a shape that belongs to the MASTER (an op-0x04 BLKAST) or one
+ * whose builder deliberately does not exist (op-0x06's value block). It is
+ * checked after every scenario below rather than in one place, because a
+ * phantom frame that only appears on the retry ladder is the kind nobody looks
+ * for.
  */
-static void check_only_enq_or_convert_was_sent(const char *label)
+static void check_only_grounded_opcodes_were_sent(const char *label)
 {
 	uint32_t i;
 	char what[160];
@@ -394,18 +429,19 @@ static void check_only_enq_or_convert_was_sent(const char *label)
 	for (i = 0; i < g.n_sent; i++) {
 		uint8_t op = sent_opcode(&g.sent[i]);
 
-		if (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT) {
+		if (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT &&
+		    op != VMS_DLM_WIREOP_DEQ) {
 			snprintf(what, sizeof(what),
 				 "%s: frame %u carries opcode 0x%02x -- this "
-				 "arm emits ONLY op 0x01 / op 0x07",
+				 "arm emits ONLY op 0x01 / 0x07 / 0x03",
 				 label, (unsigned)i, (unsigned)op);
 			ct_check(0, what);
 			return;
 		}
 	}
 	snprintf(what, sizeof(what),
-		 "%s: all %u emitted frame(s) are op 0x01 / op 0x07 -- no "
-		 "post-grant completion, no commit, nothing else",
+		 "%s: all %u emitted frame(s) are op 0x01 / 0x07 / 0x03 -- no "
+		 "completion, no commit, no BLKAST, nothing else",
 		 label, (unsigned)g.n_sent);
 	ct_check(1, what);
 }
@@ -507,6 +543,65 @@ static void check_frame_traces_to_lkb(const struct sent_frame *s,
 	}
 }
 
+/*
+ * *** THE RELEASE'S OWN TRACE-TO-THE-LKB PROOF (rd vms-d7a3). ***
+ *
+ * Same method as check_frame_traces_to_lkb, on the three fields a $DEQ has:
+ * re-derive each from the LKB snapshot taken at send time and require the frame
+ * to be its image. And then the NEGATIVE half, which is what makes it a field
+ * map rather than a wish: the resource NAME must NOT be on the frame (a real
+ * DEQ names its lock by lock-id; the reference frame's body[46] is
+ * uninitialised), and the directory HASH must not be either.
+ */
+static void check_deq_traces_to_lkb(const struct sent_frame *s,
+				    const char *label)
+{
+	struct vms_dlm_deq d;
+	const struct fake_lkb *l = &s->lkb_at_send;
+	size_t namelen = strlen(l->resnam);
+	char what[160];
+	uint32_t i;
+	int name_on_wire = 0;
+
+	snprintf(what, sizeof(what), "%s: parses as a grounded op-0x03 $DEQ",
+		 label);
+	if (parse_deq(s, &d) != 0) {
+		ct_check(0, what);
+		return;
+	}
+	ct_check(1, what);
+
+	snprintf(what, sizeof(what), "%s: body[20:24] == the LKB's own lock id",
+		 label);
+	ct_check_eq_u32(d.req_lkid, l->lkid, what);
+
+	snprintf(what, sizeof(what),
+		 "%s: body[24:28] == the LKB's MASTER handle (what the master's "
+		 "own grant recorded -- never a placeholder)", label);
+	ct_check_eq_u32(d.master_lkid, l->master_lkid, what);
+
+	snprintf(what, sizeof(what),
+		 "%s: body[30] == the mode the LKB holds as it is released",
+		 label);
+	ct_check_eq_u32(d.mode, l->lkmode, what);
+
+	snprintf(what, sizeof(what),
+		 "%s: the resource NAME is NOT on the wire -- a DEQ names its "
+		 "lock by lock-id and by nothing else", label);
+	if (namelen > 0u) {
+		for (i = 0; i + namelen <= s->len; i++) {
+			if (memcmp(s->body + i, l->resnam, namelen) == 0)
+				name_on_wire = 1;
+		}
+	}
+	ct_check(!name_on_wire, what);
+
+	snprintf(what, sizeof(what),
+		 "%s: no directory hash rides a release (it is addressed to "
+		 "the MASTER the lock database names)", label);
+	ct_check_eq_u32(read_dir_hash(s), 0u, what);
+}
+
 /* ==========================================================================
  * Reply frames, built with the SHIPPING codec's own response builders
  * ========================================================================== */
@@ -597,7 +692,7 @@ static void test_full_path(void)
 	ct_check_eq_u32(g.n_sent, 1u,
 			"*** ONE frame total: the lookup. NOTHING was emitted "
 			"in answer to the grant ***");
-	check_only_enq_or_convert_was_sent("full path");
+	check_only_grounded_opcodes_were_sent("full path");
 	ct_check_eq_u32(g_fsm.grants_settled, 1u,
 			"the grant reached the terminal settled state");
 	check_settled_terminal(g.lkb.lkid, "full path");
@@ -699,33 +794,41 @@ static void test_granted_lock_is_usable_and_releasable(void)
 	ct_check_eq_u32(g.n_sent, n,
 			"  and the beat leaves the re-settled block alone");
 
-	/* ---- RELEASABLE: the $DEQ post frees the block, no leak ---- */
+	/* ---- RELEASABLE: the $DEQ is EMITTED, and the block freed ---- */
+	n = g.n_sent;
+	g.lkb.lkmode = VMS_LCK_NL;   /* the mode this lock holds as it goes */
 	post_from_lkb(&p, VMS_DLM_POST_DEQ, CSID_MASTER);
-	(void)dlm_req_fsm_post(&g_fsm, &p);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "*** the $DEQ is TRANSMITTED (rd vms-d7a3) ***");
+	ct_check_eq_u32(g.n_sent, n + 1u, "  one frame went out");
+	ct_check_eq_u32(sent_opcode(&g.sent[n]), VMS_DLM_WIREOP_DEQ,
+			"  and it is a grounded op-0x03 $DEQ");
+	ct_check_eq_u32(g.sent[n].dst, CSID_MASTER,
+			"  addressed to the MASTER, never to a directory node");
+	check_deq_traces_to_lkb(&g.sent[n], "release");
+	ct_check_eq_u32(g_fsm.releases_sent, 1u, "  counted as sent");
+	ct_check_eq_u32(g_fsm.releases_no_wire_op, 0u,
+			"  and NOT counted as a gap");
+
 	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 0u,
 			"*** the $DEQ released the block: NO leaked req slot ***");
 	ct_check(dlm_req_fsm_find(&g_fsm, g.lkb.lkid) == NULL,
 		 "  and the handle finds nothing");
-	check_only_enq_or_convert_was_sent("usable-and-releasable");
+	check_only_grounded_opcodes_were_sent("usable-and-releasable");
 
 	/*
-	 * AND THE RELEASE IS NOW GROUNDED AT THE CODEC. This arm does not yet
-	 * TRANSMIT one (a new outbound frame shape is a peer-crash vector until
-	 * a real peer has been seen to take it; that proof is its own item),
-	 * but vms-c03 ended the FIELD-MAP half of the gap: a $DEQ for THIS
-	 * lock's real handles builds, and the same builder still refuses the
-	 * placeholder that bugchecked a VAX.
+	 * THE CODEC-LEVEL REFUSAL IS STILL THE FLOOR UNDER THE EMIT. The same
+	 * builder the FSM just used refuses the placeholder that bugchecked a
+	 * real VAX with INVLOCKID (fc8540ae) -- so "the arm emits a release
+	 * now" can never become "the arm emits a release naming lock 0".
 	 */
-	ct_check_eq_u32(g_fsm.releases_no_wire_op, 1u,
-			"the unsent release is COUNTED, not silent");
 	memset(&d, 0, sizeof(d));
 	d.req_lkid = g.lkb.lkid;
 	d.master_lkid = 0x0C0FFEE0u;
 	d.mode = VMS_LCK_NL;
 	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &len) ==
 		 VMS_CODEC_OK,
-		 "*** and the codec CAN now build a grounded op-0x03 $DEQ for "
-		 "this lock's real handles (vms-c03) ***");
+		 "the codec builds a grounded op-0x03 for real handles");
 	d.master_lkid = VMS_DLM_LKID_UNSET;
 	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &len) ==
 		 VMS_CODEC_E_INVAL,
@@ -812,7 +915,7 @@ static void test_post_grant_frame_reads_the_lkb_not_the_frame(void)
 	ct_check_eq_u32(req.master_lkid, 0x33333333u,
 			"*** carrying the handle the executive holds NOW ***");
 
-	check_only_enq_or_convert_was_sent("anti-LARP");
+	check_only_grounded_opcodes_were_sent("anti-LARP");
 }
 
 /* ==========================================================================
@@ -1056,39 +1159,162 @@ static void test_convert(void)
 }
 
 /* ==========================================================================
- * 9. The RELEASE: this arm does not transmit one, and says so
+ * 9. THE RELEASE'S GATES -- the NEGATIVE CONTROLS (rd vms-d7a3)
  *
- * vms-c03 grounded op 0x03 as $DEQ and the codec now builds one (proved in
- * test_granted_lock_is_usable_and_releasable). Letting THIS arm put a release
- * on a live cluster's wire is a separate, lab-gated step, so the refusal
- * stands -- COUNTED, which is what makes it a reportable gap and not a silent
- * one.
+ * The positive case (a real op-0x03 built from the LKB and sent to the master)
+ * is proved in test_granted_lock_is_usable_and_releasable. THIS is the half
+ * that has teeth: every way a release must NOT reach a wire. Each one is
+ * checked by the pair (nothing sent, the gap counted) -- because a gate that
+ * only stops the frame, without saying so, is indistinguishable from a bug.
+ *
+ * A regression that widens any gate reddens this function.
  * ========================================================================== */
-static void test_release_is_honestly_unsent(void)
+
+/* Drive one granted cross-node lock to the point of release. Returns the
+ * frame count at which the release is about to be posted. */
+static uint32_t release_setup(uint32_t master_lkid)
 {
 	struct vms_dlm_proxy_post p;
 	uint8_t frame[VMS_CM_FRAME_LEN];
-	uint32_t len, n;
+	uint32_t len;
 
-	printf("-- a cross-node release is not transmitted by this arm, and is "
-	       "COUNTED (E6's open half)\n");
 	fe_reset("F11B$aSYSDSK1", VMS_LCK_EX, 0x00ccu, 1, CSID_MASTER);
-
 	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
 	(void)dlm_req_fsm_post(&g_fsm, &p);
-	len = make_grant(frame, g.lkb.lkid, 0x0888u, VMS_LCK_EX);
+	len = make_grant(frame, g.lkb.lkid, master_lkid, VMS_LCK_EX);
 	(void)dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len);
-	n = g.n_sent;
+	return g.n_sent;
+}
+
+/* Post the release and assert that NOTHING went out and the gap was counted. */
+static void expect_release_refused(uint32_t n_before, const char *label)
+{
+	struct vms_dlm_proxy_post p;
+	char what[192];
 
 	post_from_lkb(&p, VMS_DLM_POST_DEQ, CSID_MASTER);
-	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_E_NOWIREOP,
-		 "the release is REFUSED by this arm, not quietly transmitted");
-	ct_check_eq_u32(g.n_sent, n, "*** nothing went on the wire ***");
-	ct_check_eq_u32(g_fsm.releases_no_wire_op, 1u,
-			"counted -- a measured gap, not a silent one");
-	ct_check_eq_u32(g.logs > 0u ? 1u : 0u, 1u, "and said out loud");
-	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 0u,
-			"the wire record is dropped: we no longer hold it");
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+
+	snprintf(what, sizeof(what), "%s: *** NOTHING went on the wire ***",
+		 label);
+	ct_check_eq_u32(g.n_sent, n_before, what);
+
+	snprintf(what, sizeof(what), "%s: the refusal is COUNTED", label);
+	ct_check_eq_u32(g_fsm.releases_no_wire_op, 1u, what);
+
+	snprintf(what, sizeof(what), "%s: and nothing is counted as sent",
+		 label);
+	ct_check_eq_u32(g_fsm.releases_sent, 0u, what);
+
+	snprintf(what, sizeof(what),
+		 "%s: the wire record is dropped: we no longer hold the lock",
+		 label);
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 0u, what);
+}
+
+static void test_release_gates(void)
+{
+	uint32_t n;
+
+	printf("-- the release's NEGATIVE CONTROLS: every way a $DEQ must not "
+	       "reach a wire\n");
+
+	/*
+	 * (a) RULE C. The connection manager refuses to transmit DLM traffic to
+	 * a system whose advertised software version is not byte-identical to
+	 * ours (cnxman_dlm_peer_proven / csb->peer_is_ours), and a refused
+	 * `send` is exactly how that reaches this object. The gate itself is
+	 * driven against the real derivation in test_dlm_scs_arm.c; what is
+	 * proved HERE is that the FSM takes the refusal as a refusal -- no
+	 * retry, no second frame, nothing recorded as sent.
+	 */
+	n = release_setup(0x0888u);
+	g.send_fails = 1;                 /* what an unproven peer looks like */
+	expect_release_refused(n, "RULE C (the peer is not proven ours)");
+	ct_check_eq_u32(g_fsm.send_failures, 1u,
+			"  the connection manager's refusal is counted too");
+
+	/*
+	 * (b) THE ALL-OVMX GATE. op 0x03 is grounded but has never been watched
+	 * to leave OVMX for a real peer, so it may not be addressed at a
+	 * cluster that is not all-proven-OVMX -- even one whose members each
+	 * hold an open connection.
+	 */
+	n = release_setup(0x0888u);
+	g.all_ovmx = 0;
+	expect_release_refused(n, "the all-OVMX gate (a mixed cluster)");
+	ct_check_eq_u32(g.logs > 0u ? 1u : 0u, 1u, "  and said out loud");
+
+	/*
+	 * (b') THE GATE IS FAIL-CLOSED. An arm wired with no `all_ovmx` op at
+	 * all holds no proof that every member is ours, and "nobody told us"
+	 * may not read as "go ahead".
+	 */
+	n = release_setup(0x0888u);
+	g_ops.all_ovmx = NULL;
+	dlm_req_fsm_init(&g_fsm, &g_ops);   /* rebind: same ops, gate absent */
+	{
+		struct vms_dlm_proxy_post p;
+
+		/* the block went with the re-init, so this is the untracked
+		 * release path -- which must be gated identically */
+		post_from_lkb(&p, VMS_DLM_POST_DEQ, CSID_MASTER);
+		(void)dlm_req_fsm_post(&g_fsm, &p);
+	}
+	ct_check_eq_u32(g.n_sent, n,
+			"an ABSENT all-OVMX op is CLOSED, not permissive "
+			"(untracked release path)");
+	ct_check_eq_u32(g_fsm.releases_no_wire_op, 1u, "  and counted");
+	g_ops.all_ovmx = fe_all_ovmx;
+
+	/*
+	 * (c) THE CODEC's LOCK-ID REFUSAL, reached through the FSM. A lock the
+	 * master never named has master_lkid 0 in the lock database, and a
+	 * release naming lock 0 is not a release. This is the fc8540ae
+	 * placeholder path: the value that bugchecked a real VAX with
+	 * INVLOCKID cannot be reached even by a caller that wants it, because
+	 * the only source for the field is the LKB and the codec refuses the
+	 * one value the LKB uses for "not a real lock yet".
+	 */
+	n = release_setup(0x0888u);
+	g.lkb.master_lkid = 0u;           /* the master never named one */
+	expect_release_refused(n, "a release naming lock 0 (fc8540ae)");
+	ct_check_eq_u32(g_fsm.codec_failures, 1u,
+			"  the codec refused to BUILD it -- counted");
+
+	/*
+	 * (d) NO ROUTE. The lock database names no destination, so there is
+	 * nobody to release it at.
+	 */
+	n = release_setup(0x0888u);
+	{
+		struct vms_dlm_proxy_post p;
+
+		post_from_lkb(&p, VMS_DLM_POST_DEQ, 0u);
+		p.dst_csid = 0u;
+		(void)dlm_req_fsm_post(&g_fsm, &p);
+	}
+	ct_check_eq_u32(g.n_sent, n, "no route: *** nothing went on the wire ***");
+	ct_check_eq_u32(g_fsm.releases_no_wire_op, 1u, "  counted");
+	ct_check_eq_u32(g_fsm.dir_unresolved, 1u,
+			"  and the REASON is counted where it was decided");
+
+	/*
+	 * AND THE POSITIVE CONTROL, same setup, gates open: the negative cases
+	 * above must be the GATES talking, not a release path that never works.
+	 */
+	n = release_setup(0x0888u);
+	{
+		struct vms_dlm_proxy_post p;
+
+		post_from_lkb(&p, VMS_DLM_POST_DEQ, CSID_MASTER);
+		ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+			 "*** gates open: the same release IS transmitted ***");
+	}
+	ct_check_eq_u32(g.n_sent, n + 1u, "  one op-0x03 frame went out");
+	check_deq_traces_to_lkb(&g.sent[n], "gates-open release");
+	ct_check_eq_u32(g_fsm.releases_no_wire_op, 0u, "  and no gap counted");
+	check_only_grounded_opcodes_were_sent("release gates");
 }
 
 /* ==========================================================================
@@ -1261,7 +1487,7 @@ static void test_duplicate_grant(void)
 	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
 			"*** still ONE request block ***");
 	check_settled_terminal(g.lkb.lkid, "after 21 duplicate grants");
-	check_only_enq_or_convert_was_sent("duplicate grant");
+	check_only_grounded_opcodes_were_sent("duplicate grant");
 }
 
 /* ==========================================================================
@@ -1514,7 +1740,7 @@ int main(void)
 	test_decline_reresolve_then_stop();
 	test_deny_at_master();
 	test_convert();
-	test_release_is_honestly_unsent();
+	test_release_gates();
 	test_blkast();
 	test_lvb();
 	test_retransmit_idempotency();

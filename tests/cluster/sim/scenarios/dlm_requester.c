@@ -462,12 +462,29 @@ static uint32_t eng_dir_generation(void *ctx)
 	return fsm_dir_generation(NULL);
 }
 
+/*
+ * THE ALL-OVMX GATE, as this simulator can honestly answer it (rd vms-d7a3).
+ * Every node in this rig IS an OVMX executive -- there is no simulated VAX and
+ * no foreign software version anywhere in it -- so the gate the connection
+ * manager would compute over the real weight vector reads OPEN here, by
+ * construction rather than by assumption. Binding it is what keeps the R2 rung
+ * driving the same configuration the R1 rung does; leaving it NULL would make
+ * the FSM fail-close on a frame shape this rig is entitled to emit, and the
+ * difference would show up as a counter nobody was looking at.
+ */
+static int fsm_all_ovmx(void *ctx)
+{
+	(void)ctx;
+	return 1;
+}
+
 static void bind_everything(void)
 {
 	struct vms_dlm_requester_ops eng;
 
 	memset(&g_fsm_ops, 0, sizeof(g_fsm_ops));
 	g_fsm_ops.send = fsm_send;
+	g_fsm_ops.all_ovmx = fsm_all_ovmx;
 	g_fsm_ops.refill_post = fsm_refill;
 	g_fsm_ops.dir_resolve = fsm_dir_resolve;
 	g_fsm_ops.dir_generation = fsm_dir_generation;

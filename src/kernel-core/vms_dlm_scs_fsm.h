@@ -62,6 +62,8 @@
  *
  *   GROUNDED, and therefore BUILT and SENT here:
  *     op 0x01 ENQ request, op 0x07 CONVERT request  (spec §4(f).1)
+ *     op 0x03 $DEQ, the cross-node RELEASE           (vms-c03, and see the
+ *                                                     TWO GATES note below)
  *     the cat-0x82 reply's GRANT vs DENY shape       (spec §4(f).1)
  *
  *   AND THAT IS THE WHOLE OUTBOUND SET, INCLUDING AFTER A GRANT.
@@ -85,20 +87,45 @@
  *     arm (vms_dlm_scs.c) serves only ENQ/CONVERT/REBUILD and DECLINES
  *     everything else, so no OVMX master ever consumed the pair.
  *
- *   GROUNDED IN THE CODEC, BUT NOT TRANSMITTED BY THIS ARM:
+ *   THE RELEASE (a cross-node $DEQ), op 0x03, AND THE TWO GATES IT RIDES
+ *   BEHIND (rd vms-d7a3). vms-c03 grounded the opcode from a real 2-node
+ *   OpenVMS VAX 7.3 cluster and vms_cluster_codec_dlm.h carries a real parser
+ *   and a real builder for it, so this arm now TRANSMITS one: a POST_DEQ
+ *   builds an op-0x03 naming the lock by the proxy LKB's own handle, the
+ *   master's handle as the grant recorded it, and the mode the LKB holds as it
+ *   is released -- three executive reads out of one fresh `refill_post`, and
+ *   no other field, because a real DEQ carries no resource name (the reference
+ *   frame's body[46] holds uninitialised bytes that differ between two
+ *   specimens in one capture, which is the proof it is not a field).
  *
- *     THE RELEASE (a cross-node $DEQ), op 0x03. vms-c03 grounded the opcode
- *     and vms_cluster_codec_dlm.h now carries a real parser and a real
- *     builder for it. What has NOT happened is the separate, lab-gated step
- *     of letting this arm put one on a live cluster's wire: a new outbound
- *     frame shape is a peer-crash vector until a real peer has been seen to
- *     take it (memory ovmx-never-crashes-a-peer), and that proof belongs to
- *     its own item. So a POST_DEQ is still REFUSED (DLM_REQ_E_NOWIREOP) and
- *     still COUNTED in `releases_no_wire_op` -- a measured, reportable gap,
- *     not a silent one, and no longer a gap in the FIELD MAP. THIS REMAINS
- *     THE OPEN HALF OF INTEGRATION NOTE E6: rundown COLLECTS the release and
- *     posts it from a blockable context (lock_sweep_run); what it does not
- *     yet do is transmit it.
+ *   GROUNDED IS NOT CLEARED, so the emission is gated TWICE and neither gate
+ *   is this object's to relax (memory ovmx-never-crashes-a-peer):
+ *
+ *     1. THE ALL-OVMX GATE, `ops->all_ovmx` -- every member of this cluster
+ *        proven to run this implementation. A frame shape no real VAX has yet
+ *        been WATCHED to accept may not be addressed at one. An ABSENT op
+ *        reads CLOSED: "nobody told us" and "every member is ours" are
+ *        different facts, and only one of them may put a new shape on a wire.
+ *     2. RULE C, per destination, in the CONNECTION MANAGER under `ops->send`
+ *        (`csb->peer_is_ours`). Two gates, two layers, neither a substitute
+ *        for the other -- a gate that is only upstream is a gate one new call
+ *        site bypasses.
+ *
+ *   A release that either gate (or a missing route, or a lock id the codec
+ *   refuses) stops is COUNTED in `releases_no_wire_op` and NOTHING is sent;
+ *   one that goes out is counted in `releases_sent`. That closes the open half
+ *   of integration note E6 -- rundown already COLLECTED the release and posted
+ *   it from a blockable context (lock_sweep_run); this is the transmission --
+ *   for an all-OVMX cluster, and leaves it honestly counted everywhere else.
+ *
+ *   THE RECEIVE HALF IS A SEPARATE RUNG AND IS NOT CLAIMED HERE. OVMX's master
+ *   arm (vms_dlm_scs.c) serves op 0x01/0x07/0x0d and DECLINES an inbound
+ *   op-0x03 -- counted, never acted on -- so a release that reaches an OVMX
+ *   master today changes exactly as much lock state as it did when it was
+ *   never sent: none. The emission is what this item lands; consuming one is
+ *   its own item, with its own proof.
+ *
+ *   GROUNDED IN THE CODEC, BUT NOT TRANSMITTED BY THIS ARM:
  *
  *     THE VALUE BLOCK, op 0x06. vms-c03 grounded the 16 bytes at body[36:52]
  *     and the codec has an ACCESSOR for them; it deliberately has no builder,
@@ -270,6 +297,20 @@ struct dlm_req_ops {
 	 * vector is detected rather than remembered. */
 	uint32_t (*dir_generation)(void *ctx);
 
+	/*
+	 * IS EVERY MEMBER OF THIS CLUSTER PROVEN TO RUN THIS IMPLEMENTATION?
+	 * Production: vms_ldwv_all_ovmx() over the connection manager's own
+	 * vector -- the SAME one fact the engine's `dir_groundable` reads, so a
+	 * VAX joining closes both and a VAX leaving reopens both with no code
+	 * path to go stale.
+	 *
+	 * It gates the frame shapes this arm has grounded but never yet watched
+	 * a real peer take (today: the op-0x03 release). Non-zero means open.
+	 * A NULL op is CLOSED -- see §"WHAT IS GROUNDED" for why an absent
+	 * answer may not be read as a permissive one.
+	 */
+	int (*all_ovmx)(void *ctx);
+
 	/* --- the engine ACTIONS (vms_dlm_proxy.h) --- */
 
 	/* Outcome 2: record the master the directory named, THEN refill. */
@@ -402,6 +443,7 @@ struct dlm_req_fsm {
 	uint32_t converts_posted;
 	uint32_t lookups_sent;        /* addressed to a DIRECTORY node         */
 	uint32_t requests_sent;       /* addressed to a MASTER                 */
+	uint32_t releases_sent;       /* op-0x03 $DEQ frames really emitted    */
 	uint32_t retransmits;
 	uint32_t grants_rx;
 	uint32_t grants_duplicate;    /* a grant for an already-granted request*/
@@ -421,7 +463,15 @@ struct dlm_req_fsm {
 	/* The refusals -- each one a place this file declines to fabricate. */
 	uint32_t hash_unknown_refused;   /* a lookup with no wire-learned hash */
 	uint32_t dir_unresolved;         /* the vector gave no directory node  */
-	uint32_t releases_no_wire_op;    /* $DEQ: no grounded opcode (E6)      */
+	uint32_t releases_no_wire_op;    /* a $DEQ this arm could NOT put on   */
+					  /* the wire: the all-OVMX gate closed,*/
+					  /* no route, no master handle, or the */
+					  /* connection manager (RULE C)        */
+					  /* refused it. Nothing was sent.      */
+	uint32_t posts_no_wireop;        /* a post whose operation has NO wire */
+					  /* opcode at all -- unreachable for   */
+					  /* the three the engine posts, kept   */
+					  /* as a refusal, never a fall-through */
 	uint32_t lvb_write_no_wire_field;/* the LVB write crossing, unsent     */
 	uint32_t lock_gone;              /* refill found no proxy: abandoned   */
 	uint32_t no_slot;

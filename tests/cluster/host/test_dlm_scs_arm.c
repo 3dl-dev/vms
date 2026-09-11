@@ -21,6 +21,11 @@
  *        - the RULE C gate is BELOW the op-0x0d rebuild branch (a real VAX's
  *          rebuild record must still reach the grounded verbatim echo; gating it
  *          would make the barrier skip the echo and strand that VAX);
+ *        - the all-OVMX gate is ABOVE the BLKAST emit, and RULE C is ABOVE the
+ *          port (rd vms-d7a3: the master now ORIGINATES an op-0x04 blocking AST
+ *          at a remote holder, and a new outbound frame shape that could reach
+ *          a system this tree has not proved runs this implementation is the
+ *          whole peer-crash vector this program exists to not have);
  *        - the DLM receive leg is AFTER the join/barrier/coordinator dispatch
  *          (so the barrier keeps the op-0x0d record it owns inside a
  *          transition);
@@ -242,8 +247,61 @@ static void arm_bindings(void)
 	has("if (!vms_lock_dlm_have_delivery_proc())",
 	    "vms-c27 cond.4: no delivery proc, no service");
 	has("d->no_delivery_proc++", "... counted");
+
+	/*
+	 * ===================================================================
+	 * THE BLOCKING AST IS EMITTED (op 0x04, rd vms-d7a3), AND EVERY FIELD
+	 * OF IT IS AN EXECUTIVE READ.
+	 *
+	 * This is the half of the item this file can prove: the arm is not
+	 * host-linkable, so what is asserted is the SOURCING and the GATE
+	 * ORDER, read out of the shipped text. The codec builder it calls is
+	 * driven with real values by test_codec_dlm.c, and the trust fact the
+	 * emission gate turns on is driven against the real derivation at the
+	 * top of this file.
+	 *
+	 * A regression that sources a lock id from the REQUEST instead of the
+	 * blocking LKB, that invents the OBSERVED-not-pinned mode context, or
+	 * that reaches the port without passing the two gates, reddens this.
+	 * ===================================================================
+	 */
+	has("vms_dlm_blkast_build(&b, d->txframe",
+	    "the BLKAST frame is built by the SHIPPING codec, never by hand");
+	has("b.master_lkid    = r->blocking_master_lkid;",
+	    "body[24:28] is the BLOCKING LKB's own lock id, as this master "
+	    "minted it -- read off the granted queue, never echoed");
+	has("b.req_lkid       = r->blocking_req_lkid;",
+	    "body[20:24] is the HOLDER's own handle, stamped on that LKB when "
+	    "this master served the holder's request");
+	has("b.mode_ctx_valid = 0u;",
+	    "the OBSERVED-but-NOT-PINNED mode context at body[30:32] is "
+	    "OMITTED -- the honest omission, never two invented bytes");
+	absent("b.mode_ctx[",
+	       "... and nothing writes a value into it either");
+	has("dlm_arm_send(d, (vms_csid_t)r->blocking_csid,",
+	    "it is sent to the HOLDER's own CSID, through the seam that "
+	    "applies RULE C per destination (cnxman_dlm_send)");
+	has("if (!dlm_arm_all_ovmx(d) || dlm_arm_build_blkast(d, r) != 0 ||",
+	    "... and ONLY when the cluster is all-proven-OVMX: the gate is "
+	    "evaluated BEFORE a frame is even built");
+	before("if (!dlm_arm_all_ovmx(d)",
+	       "dlm_arm_send(d, (vms_csid_t)r->blocking_csid",
+	       "the all-OVMX gate is UPSTREAM of the send, not beside it");
 	has("d->blkasts_no_wire_op++",
-	    "a blocking AST with no grounded frame shape is COUNTED, not sent");
+	    "every way the notification can fail to go out -- off-gate, no "
+	    "route, RULE C, a refused lock id -- is COUNTED, nothing sent");
+	has("d->blkasts_sent++",
+	    "... and one that really went out is counted separately");
+	absent("scs_send_msg",
+	       "*** the arm never reaches the PORT directly: every byte it "
+	       "originates goes through cnxman_dlm_send, which is where RULE "
+	       "C's emission half lives ***");
+
+	/* The requester FSM's own new-shape gate reads the SAME fact. */
+	has("d->req_ops.all_ovmx        = dlm_arm_all_ovmx_op;",
+	    "the requester arm's op-0x03 gate is bound to the same all-OVMX "
+	    "fact (one function, no cached copy), so the release and the "
+	    "BLKAST cannot disagree about who may be emitted at");
 
 	/* The departure path reaches the engine as a direct call. */
 	has("vms_lock_dlm_member_departed((uint32_t)csid, &found)",
@@ -265,6 +323,14 @@ static void cnxman_legs(void)
 	has("if (!cnxman_dlm_peer_proven(cn, csb))",
 	    "RULE C's EMISSION half: nothing DLM leaves for an unproven system");
 	has("cn->dlm_foreign_refused++", "... and that refusal is counted");
+	/* ORDER, because this is the gate under BOTH new emits (rd vms-d7a3):
+	 * the release the requester arm originates and the BLKAST the master
+	 * arm originates both arrive here, and both must be refused before a
+	 * byte reaches the port. */
+	before("if (!cnxman_dlm_peer_proven(cn, csb))",
+	       "scs_send_msg(cl->scs, csb->cdt_conid, cn->dlm_tx",
+	       "*** RULE C is evaluated BEFORE a byte reaches the port -- the "
+	       "one gate under every DLM origination, old and new ***");
 	has("cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST)",
 	    "an origination stamps a fresh transaction on the peer's dialogue");
 	has("cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_RESPONSE)",

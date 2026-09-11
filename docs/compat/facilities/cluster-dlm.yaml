@@ -52,7 +52,19 @@ items:
       request (GETLKI flips NL->EX). Exercised on real /dev/vms single-node with an
       injected cross-node CSID (tests/qemu/test_syssvc_dlm_xnode.c x86_64 + Alpha
       LP64); the two-node H5/H6 QEMU harnesses that proved the over-the-wire path
-      were retired in #1052 — multi-node runtime proof pending (vms-1ee). No fake
+      were retired in #1052 — multi-node runtime proof pending (vms-1ee).
+      RE-ESTABLISHED 2-node (#1174, tests/lab/captures/xnode-dlm-2node-20260911.log):
+      a live two-node cluster proves cross-node $ENQ->GRANT bidirectionally (each
+      node granted EX by the PEER master, granted_mode=5, grants_received=1) and
+      never-crash-a-peer (both survive the peer's frames, projections=agree) — the
+      first real multi-node proof since the #1052 retirement, partially discharging
+      the vms-1ee caveat for the acquire/grant path. STILL PENDING (vms-c72, the
+      receive arm): the BLKAST/$DEQ OVER-THE-WIRE DELIVERY — in the 2-node run op-04
+      (BLKAST) and op-03 ($DEQ) are EMITTED (blkasts_sent=1, on the wire) but the
+      peer's inbound dispatch does not yet route them (blkasts_received=0 /
+      delivered=0, declined unparsed, which is WHY never-crash held), so the "BLKAST
+      is DELIVERED over SCS" behavior above is proven single-node-injection
+      (scenario 7/H6), not yet 2-node. No fake
       grants OR blocks — a queued request is a real lock on the master's queue that
       releases only on a real $DEQ (INV-6).
   - id: cluster-dlm$async-reply-wire
@@ -76,7 +88,13 @@ items:
       The requester-side receive is exercised single-node on real /dev/vms
       (tests/qemu/test_syssvc_dlm_xnode.c, injected CSID); the former two-node A<->B
       run_dlm_harness_h5.sh proof (SCSD-I-DLMPEND/DLMDEFER/DLMH5FLIP) was retired in
-      #1052 — multi-node wire proof pending (vms-1ee). No fabricated wire reply or
+      #1052 — multi-node wire proof pending (vms-1ee).
+      RE-ESTABLISHED 2-node (#1174, tests/lab/captures/xnode-dlm-2node-20260911.log):
+      the async GRANT-reply crosses the live wire and completes on the requester
+      (grants_received=1 on both nodes, NL->EX read back on the real 2-node cluster)
+      — partially discharging vms-1ee for the grant-reply path. The queued-reply +
+      deferred-GRANT-on-$DEQ delivery awaits the receive arm (vms-c72; op-03 $DEQ
+      emit itself becomes reachable in #1178). No fabricated wire reply or
       grant (INV-6).
   - id: cluster-dlm$remaster-lvb-deadlock
     kind: feature

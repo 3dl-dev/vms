@@ -299,4 +299,9 @@ else
 fi
 
 echo
+echo "== vms-7b7: CALLED-deferred-external hardening gate =="
+sh "$(dirname "$0")/run_calldefer_gate.sh" \
+    || { echo "FAIL: vms-7b7 calldefer gate (LINK.EXE must warn on a CALLED deferred external)"; exit 1; }
+
+echo
 echo "ALL LINK.EXE MVP CHECKS PASSED"

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # vms-7b7 negctl: LINK.EXE must WARN (%LINK-W-CALLDEFER) when a deferred external
 # under --allow-undefined is reached by a CALL-site reloc (rel32 CALL/JMP -> a
 # latent activation crash: the call parks rel32=0), and stay SILENT for a

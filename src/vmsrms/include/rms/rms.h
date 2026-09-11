@@ -33,6 +33,13 @@ uint32_t sys$open(void *fab, void (*err)(void *), void (*suc)(void *));       /*
 uint32_t sys$close(void *fab, void (*err)(void *), void (*suc)(void *));      /* Close file */
 uint32_t sys$create(void *fab, void (*err)(void *), void (*suc)(void *));     /* Create new file */
 uint32_t sys$erase(void *fab, void (*err)(void *), void (*suc)(void *));      /* Delete file */
+/* sys$rename (vms-3320) - atomically rename/move a file: the old FAB names the
+ * source spec, the new FAB the target spec. Drives the executive ACP
+ * MODIFY!IO$M_MOVE (vms-de7) -- a directory-entry re-link that KEEPS the file's
+ * File ID + allocation (NOT erase+create). Four-argument VMS form: SYS$RENAME
+ * old_fab,[err],[suc],new_fab (VSI OpenVMS RMS Reference). Fail-honest RMS$_. */
+uint32_t sys$rename(void *old_fab, void (*err)(void *), void (*suc)(void *),
+                    void *new_fab);
 uint32_t sys$display(void *fab, void (*err)(void *), void (*suc)(void *));    /* Display file attributes */
 uint32_t sys$extend(void *fab, void (*err)(void *), void (*suc)(void *));     /* Extend file allocation */
 

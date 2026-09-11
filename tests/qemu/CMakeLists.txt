@@ -188,6 +188,35 @@ if(TARGET test_syssvc_crtl_rms_bigwrite)
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
 endif()
 
+# test_syssvc_crtl_rms_fileops (vms-3c1): the x86_64 arch-discriminator for the
+# crtl_rms3 alpha-dec-vms SIGSEGV -- drives crtl_rms3's exact file-op sequence
+# (creat/close, open/close, unlink, rename, opendir/readdir/closedir) through
+# the SAME reusable veneer TU as the stdio + bigwrite proofs above, so a
+# heap-buffer-overflow/use-after-free/double-free reachable from the veneer,
+# the RMS engine, or the kernel ACP handler on x86_64 aborts under ASan with a
+# named file:line. Its strong sys$create reference pulls the vmsrms archive
+# with no extra anchor.
+if(TARGET test_syssvc_crtl_rms_fileops)
+    target_sources(test_syssvc_crtl_rms_fileops PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
+    # ASan/UBSan: a decisive signal for vms-3c1 needs a NAMED fault line, not
+    # just a bare SIGSEGV. Probe-gated exactly like tests/vmsdecnet/
+    # CMakeLists.txt's OVMX_DAP_SANITIZE_OK (a musl-static cross may lack the
+    # sanitizer runtime; this target links the same -static musl toolchain as
+    # every other qemu_syssvc_add_test target, so probe with -static too).
+    include(CheckCSourceCompiles)
+    set(_fileops_san_save "${CMAKE_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "-static -fsanitize=address,undefined")
+    check_c_source_compiles("int main(void){return 0;}" OVMX_FILEOPS_SANITIZE_OK)
+    set(CMAKE_REQUIRED_FLAGS "${_fileops_san_save}")
+    if(OVMX_FILEOPS_SANITIZE_OK)
+        target_compile_options(test_syssvc_crtl_rms_fileops PRIVATE
+            -fsanitize=address,undefined -g)
+        target_link_options(test_syssvc_crtl_rms_fileops PRIVATE
+            -fsanitize=address,undefined)
+    endif()
+endif()
+
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
 # condition bridge, end to end under -static. Alpha-only (the test honest-skips
 # on other arches), so its two extra needs are guarded on the alpha target:

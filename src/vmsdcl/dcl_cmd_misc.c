@@ -2113,16 +2113,23 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* Check for root/NET_ADMIN privilege */
-    if (geteuid() != 0) {
+    /* Apply the route to the LIVE routing table. This requires NET_ADMIN; without
+     * it the route is only recorded (persisted below) and never applied, so we
+     * must NOT later claim it was added (INV-6). `applied` tracks whether the
+     * live routing table actually changed. */
+    int privileged = (geteuid() == 0);
+    int applied = 0;
+    if (!privileged) {
         printf("%%TCPIP-W-PRIVREQ, operation requires NET_ADMIN privilege\n");
-        /* Still persist to config file */
+        /* route NOT applied to the live table; only persisted below */
     } else {
-        /* Use ip route add command */
+        /* Use ip route replace. Do NOT swallow ip's diagnostic (no 2>/dev/null)
+         * and do NOT discard its exit status: a failed apply must be reported,
+         * not papered over as success. */
         char route_cmd[512];
         if (is_default) {
             snprintf(route_cmd, sizeof(route_cmd),
-                     "ip route replace default via %s 2>/dev/null", gateway);
+                     "ip route replace default via %s", gateway);
         } else {
             if (netmask) {
                 /* Convert dotted netmask to CIDR prefix length */
@@ -2135,18 +2142,22 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
                     mask_val <<= 1;
                 }
                 snprintf(route_cmd, sizeof(route_cmd),
-                         "ip route replace %s/%d via %s 2>/dev/null",
+                         "ip route replace %s/%d via %s",
                          destination, prefix, gateway);
             } else {
                 snprintf(route_cmd, sizeof(route_cmd),
-                         "ip route replace %s via %s 2>/dev/null",
+                         "ip route replace %s via %s",
                          destination, gateway);
             }
         }
-        (void)system(route_cmd);
+        int rc = system(route_cmd);
+        if (rc != 0)
+            printf("%%TCPIP-E-ROUTEERR, could not add route (ip route replace failed, status %d)\n", rc);
+        else
+            applied = 1;
     }
 
-    /* Persist to TCPIP$ROUTE.DAT */
+    /* Persist the recorded route to TCPIP$ROUTE.DAT (reapplied at boot). */
     tcpip_ensure_config_dir();
     FILE *fp = fopen(TCPIP_ROUTE_DAT, "a");
     if (fp) {
@@ -2161,8 +2172,18 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
         fclose(fp);
     }
 
-    printf("%%TCPIP-I-INFO, route added\n");
-    return SS$_NORMAL;
+    /* Report the ACTUAL outcome (INV-6: never claim "route added" when the live
+     * apply failed or was skipped for lack of privilege). */
+    if (applied) {
+        printf("%%TCPIP-I-INFO, route added\n");
+        return SS$_NORMAL;
+    }
+    if (!privileged) {
+        printf("%%TCPIP-W-NOTAPPLIED, route recorded in TCPIP$ROUTE.DAT but not "
+               "applied to the live routing table (requires NET_ADMIN)\n");
+        return SS$_NOPRIV;
+    }
+    return SS$_ABORT;                   /* privileged, but the substrate apply failed */
 }
 
 /*

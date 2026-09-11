@@ -67,6 +67,24 @@ target_link_libraries(test_dnet_nodedb PRIVATE vmsdecnet_nodedb)
 target_compile_options(test_dnet_nodedb PRIVATE -Werror)
 add_test(NAME vmsdecnet_nodedb_unit COMMAND test_dnet_nodedb)
 
+# rd vms-f52: the DECnet OBJECT database (SET/DEFINE/SHOW/CLEAR/PURGE OBJECT).
+# Library unit test: number-keyed set/update, object-name uniqueness, name/number
+# resolution, FILE bounds, ascending-number SHOW ordering, persistence round-trip
+# + corrupt-file handling. Warning-clean under -Werror.
+add_executable(test_dnet_objectdb test_dnet_objectdb.c)
+target_link_libraries(test_dnet_objectdb PRIVATE vmsdecnet_objectdb)
+target_compile_options(test_dnet_objectdb PRIVATE -Werror)
+add_test(NAME vmsdecnet_objectdb_unit COMMAND test_dnet_objectdb)
+
+# NCP.EXE OBJECT command dispatch, end-to-end against the shipped binary (rd
+# vms-f52): the FIRST command-dispatch test for NCP.EXE -- SET/DEFINE/SHOW/CLEAR/
+# PURGE OBJECT over a temp DB (OVMX_DECNET_OBJECTDB), asserting persistence across
+# invocations + honest errors. No socket/privilege/dev-vms.
+add_test(NAME vmsdecnet_ncp_object
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_dnet_ncp_object.sh)
+set_tests_properties(vmsdecnet_ncp_object PROPERTIES
+    ENVIRONMENT "NCP_EXE=$<TARGET_FILE:ncp_exe>")
+
 # rd vms-8c2: the DAP (Data Access Protocol) message codec + the FAL access-
 # control credential decoder behind $ COPY node::file. Proves (1) every served
 # DAP message round-trips encode->decode, (2) blocked messages walk in a single

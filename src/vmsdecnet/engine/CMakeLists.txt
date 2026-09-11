@@ -79,3 +79,13 @@ set_target_properties(decnetd_exe PROPERTIES
     SUFFIX ".EXE"
 )
 install(TARGETS decnetd_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
+
+# vms-15a/a70 regression: the live $ SET HOST client must emit NONZERO format-2
+# source group/user codes (sourced from the running process), never the
+# zero/zero pair real OpenVMS session control silently discards. The selftest
+# builds the CI exactly as run_set_host_loop does and asserts nonzero codes; it
+# runs anywhere (no /dev/vms -> POSIX identity fallback, still nonzero).
+if(BUILD_TESTS)
+    add_test(NAME decnetd_sethost_src_codes
+             COMMAND decnetd_exe --set-host-src-codes-selftest)
+endif()

@@ -257,6 +257,23 @@ PORT image's DECC$SHR (a build sub-project — the alpha-dec-vms port world has 
 `vms_kif`/RMS substrate yet; the `vms-47e` child, §3.1). Until that lands, the
 alpha port image's own file writes are still musl-POSIX → Linux-Alpha VFS.
 
+> **UPDATE (vms-3320, blocks vms-fd1):** the CRTL→RMS veneer is now extended
+> **beyond the stdio family** to the eight file-ops the GCC-port driver leans on:
+> `open`/`creat` (temp-file minting → `sys$create`/`sys$open`), `unlink`/`remove`
+> (cleanup → `sys$erase`), `rename` (atomic output finalization → the new
+> `sys$rename` RMS service → executive ACP `IO$_MODIFY!IO$M_MOVE`, vms-de7: a
+> directory-entry re-link that KEEPS the File ID, NOT erase+create), and
+> `opendir`/`readdir`/`closedir` (directory enumeration → `sys$parse`+`sys$search`
+> + `rms_search_fid`). All eight are added to `src/vmsrms/crtl_rms_stdio.c` and
+> **vector-substituted into the alpha DECC$SHR in their sorted sv# slots**
+> (`mk_decc_shr.sh` ALPHA_CRTL_RMS_USE block, in-place — never tail-appended;
+> sv# skew is the vms-b14/vms-f49 trap). Proven un-fakeably on the real executive
+> by an INDEPENDENT ACP reader for each op (`tests/qemu/test_syssvc_crtl_rms_veneer.c`,
+> 40/40 — incl. rename keeping the SAME File ID), and wired as the alpha activation
+> gate `crtl-rms-fileop-gate` (`crtl_rms3_test.c` + an independent DIRECTORY reader).
+> This closes the **PORT-CRTL binding** for the file-op family; the compiler driver's
+> temp-file/cleanup/dir-enum now reach real RMS/ODS-2, not musl-POSIX.
+
 > **rd-ID caveat (Rule 10):** this table's "rd item" column reads `vms-1b5`, but
 > in rd `vms-1b5` is actually the *decc$feature* item; the RMS-beyond-stdio item
 > is **`vms-2e72`**. Doc↔rd cross-wiring for the conductor to reconcile.

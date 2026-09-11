@@ -7948,6 +7948,64 @@ jobs:
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate
 
   # -----------------------------------------------------------------------
+  # alpha-crtl-rms-fileop (vms-3320, parent vms-b4f, blocks vms-fd1): the
+  # UN-FAKEABLE CRTL->RMS FILE-OP veneer gate -- extends alpha-crtl-rms-veneer
+  # from the stdio family to open/creat/unlink/remove/rename/opendir/readdir/
+  # closedir. The port image (crtl_rms3_test.c) creats FOPCRE.DAT, creats+unlinks
+  # FOPDEL.DAT, creats+renames FOPSRC.DAT->FOPDST.DAT via the VECTOR-SUBSTITUTED
+  # decc$* file-ops (bound by symbol-vector INDEX to the crtl_rms_stdio.c veneer
+  # -> sys$create/$erase/$rename over the ACP), then an INDEPENDENT reader (DCL
+  # DIRECTORY, a different accessor) asserts FOPCRE.DAT + FOPDST.DAT present with
+  # genuine ODS-2 File IDs and FOPDEL.DAT/FOPSRC.DAT gone -- something a ramfs/
+  # POSIX write can never produce in the ACP directory. Runs a 4-case can-fail
+  # selftest before the boot. Same alpha_activation PR trigger + toolchain images.
+  # -----------------------------------------------------------------------
+  alpha-crtl-rms-fileop:
+    name: "OVMX/Alpha CRTL->RMS file-op veneer gate — boots the veneer-wired crtl_rms3 image on the real /dev/vms executive; its decc$open/creat/unlink/rename/opendir/readdir/closedir reach the ODS-2 ACP, then an INDEPENDENT DIRECTORY reader asserts the created+renamed files landed with genuine File IDs and the deleted+renamed-away files are gone (vms-3320, blocks vms-fd1)"
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "CRTL->RMS file-op veneer gate — qemu-system-alpha boots the veneer-wired crtl_rms3 image on the real /dev/vms executive; its decc$open/creat/unlink/rename/opendir/readdir/closedir drive sys$create/$open/$erase/$rename/$parse/$search over the ODS-2 ACP, then an INDEPENDENT reader (DCL DIRECTORY, a different accessor than the writer's CRTL handle) asserts FOPCRE.DAT + FOPDST.DAT landed with genuine ODS-2 File IDs and FOPDEL.DAT/FOPSRC.DAT are gone; runs a 4-case can-fail selftest before the boot"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate
+
+  # -----------------------------------------------------------------------
   # alpha-mf-multifile (vms-bdd): the MULTI-.O STRICT-link + activation gate --
   # the rung above alpha-crtl-rms-n7 (which is single-object). The milestone
   # image is a genuine multi-object program: mf_main.obj calls ACROSS the .o

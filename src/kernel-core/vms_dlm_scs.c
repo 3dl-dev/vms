@@ -60,9 +60,13 @@
  *     BLKAST invented from a GUESSED opcode is how LOCKMGRERR happened; this
  *     one is read off a real cluster's wire and off a real LKB.
  *   - THE RELEASE ($DEQ, op 0x03) is emitted by the REQUESTER arm behind the
- *     same two gates (vms_dlm_scs_fsm.h). What this file does NOT do is
- *     CONSUME one: the master side below serves op 0x01/0x07/0x0d and declines
- *     an inbound op-0x03, counted -- see "THE RELEASE'S RECEIVE HALF" below.
+ *     same two gates (vms_dlm_scs_fsm.h), and is now also CONSUMED: an inbound
+ *     op-0x03 from a proven-OVMX peer reaches the engine's master-side door and
+ *     really releases the LKB this node holds for that peer (rd vms-c72, "THE
+ *     RELEASE'S RECEIVE HALF" below). An inbound op-0x04 likewise reaches the
+ *     requester FSM and fires the holder's REAL blocking AST. What is still
+ *     owed and counted rather than sent is the DEFERRED GRANT a release earns
+ *     for a queued waiter -- see dlm_arm_count_deferred_grant.
  *   - THE VALUE BLOCK has no grounded cat-0x02 BUILDER (op 0x06's body[32:36]
  *     is unpinned), so a write crossing is not transmitted and an inbound grant
  *     is handed to the engine with `valblk_present = 0`, which makes the engine
@@ -144,6 +148,8 @@ struct vms_dlm_scs {
 	uint32_t blkasts_sent;        /* op-0x04 blocking ASTs really emitted,*/
 				       /* built from the blocking LKB's own two*/
 				       /* lock ids (rd vms-d7a3)              */
+	uint32_t releases_received;   /* op-0x03 $DEQs that really RELEASED a */
+				       /* master-side LKB of ours (rd vms-c72) */
 	uint32_t declined;            /* the honest floor, per vms_dlm_scs.h  */
 
 	/* The refusals. Each one is a place this file will not fabricate. */
@@ -152,6 +158,13 @@ struct vms_dlm_scs {
 	uint32_t blkasts_no_wire_op;  /* a holder we cannot honestly notify:   */
 				       /* off-gate, no route, RULE C, or a lock*/
 				       /* id the codec refuses. Nothing sent.  */
+	uint32_t releases_refused;    /* an inbound $DEQ naming no lock this   */
+				       /* node holds FOR THAT SENDER. Nothing  */
+				       /* released, nothing answered.          */
+	uint32_t deferred_grants_no_wire_op; /* a release really flipped a     */
+				       /* queued cross-node waiter to granted, */
+				       /* and this master has no grounded way  */
+				       /* to ORIGINATE that grant (RULE A).    */
 	uint32_t codec_failures;
 	uint32_t unparsed;
 
@@ -988,31 +1001,129 @@ static int dlm_arm_serve_enq(struct vms_dlm_scs *d,
 }
 
 /*
- * THE RELEASE'S RECEIVE HALF, AND THE DEFERRED GRANT, ARE NOT HERE -- STATED,
- * NOT IMPLIED (rd vms-d7a3 scoped this file to the BLKAST emit).
+ * THE RELEASE'S RECEIVE HALF (rd vms-c72), master side.
  *
- * op 0x03 is now grounded (vms-c03) and the REQUESTER arm transmits one. This
- * file does not yet CONSUME one: `dlm_arm_handle_request` below parses an
- * inbound cat-0x02 request as an ENQ/CONVERT, and the codec's own opcode gate
- * rejects an op-0x03 body, so the frame is counted (`unparsed`, then the
- * connection manager's `dlm_declined`) and NOTHING is done with it. That is a
- * counted gap, and it is the smallest possible one: an inbound release changes
- * exactly as much master-side lock state as it did when no release was ever
- * sent -- none -- so nothing regressed and nothing is faked.
+ * A peer that held a lock THIS node masters has released it. The engine already
+ * implements every part of that -- VMS_DLM_MREQ_DEQ, the release itself, and
+ * the report of the queued cross-node waiter it flipped to granted
+ * (vms_dlm_master.h) -- and what was missing was this file calling it from a
+ * RECEIVED FRAME. This is that call.
  *
- * Two consequences follow and both are deliberate:
- *   - a queued cross-node request is never flipped to granted by a wire event,
- *     so there is no DEFERRED GRANT for this file to originate. The engine
- *     computes one (`vms_dlm_master_result.deferred_*`) because the ioctl path
- *     genuinely drives releases; emitting it belongs with the receive half.
- *   - the master keeps a cross-node LKB until its holder DEPARTS, exactly as
- *     before.
+ * WHAT IS ASSERTED, AND WHERE EACH VALUE COMES FROM (RULE B / INV-6):
+ *   req_csid     the CONNECTION MANAGER's identification of the sender (spec
+ *                §4(a)). The DLM body carries no CSID field at all, and it is
+ *                what the engine checks the lock's own tag against -- a peer
+ *                may not release a lock held for another node (proven in
+ *                tests/cluster/host/test_lock_host.c).
+ *   req_lkid     body[20:24], through the codec: the releaser's OWN handle.
+ *   master_lkid  body[24:28], through the codec: OUR handle, which is what
+ *                names the LKB to release. A zero in EITHER field is refused by
+ *                the codec before this function ever sees the frame (the
+ *                fc8540ae INVLOCKID lesson, applied on the receive side too).
+ *   lkmode       body[30], carried as the mode being released.
  *
- * The MASTER-side engine door (vms_dlm_master.h) implements all of it --
- * VMS_DLM_MREQ_DEQ, the release, the deferred-grant report -- because the
- * ENGINE genuinely does those things. What is missing is this file calling it
- * from a received frame, which is its own rung with its own proof.
+ * NOTHING IS DEFAULTED. No resource name is read (a real $DEQ carries none) and
+ * `valblk_present` stays 0, so the master's own value block is LEFT ALONE
+ * rather than overwritten with sixteen zeros that would read exactly like data.
  */
+static void dlm_arm_fill_deq_req(const struct dlm_scs_request *in,
+				 const struct vms_dlm_deq *q,
+				 struct vms_dlm_master_request *out)
+{
+	memset(out, 0, sizeof(*out));
+	out->op = VMS_DLM_MREQ_DEQ;
+	out->req_csid = (uint32_t)in->from_csid;
+	out->req_lkid = q->req_lkid;
+	out->master_lkid = q->master_lkid;
+	out->lkmode = q->mode;
+}
+
+/*
+ * THE DEFERRED GRANT THIS RELEASE MAY HAVE EARNED -- OWED, COUNTED, AND NOT
+ * ORIGINATED.
+ *
+ * When the release flips a queued cross-node waiter to granted, the engine says
+ * so and the flip is REAL: that waiter's lock is on this master's granted queue
+ * from this moment. Telling it, though, would mean ORIGINATING a cat-0x82 grant
+ * at a system that did not just ask -- and §4(f).1 grounds the grant shape as
+ * the ANSWER TO A REQUEST, correlated by the connection manager's own
+ * transaction envelope (RULE A). An uncorrelated reply is exactly what a real
+ * VAX rejects, so this executive does not invent one.
+ *
+ * The waiter is not stranded by that silence: its own request is still
+ * outstanding at this master, its retransmit ladder is still running, and the
+ * engine's cross-node ENQ is idempotent on (req_csid, req_lkid) -- so the next
+ * retransmission finds the lock GRANTED and is answered with a real, correlated
+ * grant built from the LKB. If the ladder is spent first, the requester fails
+ * its $ENQW with a real status rather than waiting forever. Either way the
+ * counter below says how many grants this master owed, which is the measurement
+ * the origination rung needs.
+ */
+static void dlm_arm_count_deferred_grant(struct vms_dlm_scs *d,
+					 const struct vms_dlm_master_result *r)
+{
+	if (r->deferred_grant && r->deferred_csid != 0u)
+		d->deferred_grants_no_wire_op++;
+}
+
+/* One inbound op-0x03 $DEQ, served as the tree's master. It is a CONSUME, not a
+ * RESPOND (the codec's allowlist rows say so: no cat-0x82 answer to a release
+ * appears anywhere in the reference capture), so no reply is ever staged and
+ * `reply->len` stays 0 -- the honest silence vms_dlm_scs.h names. */
+static int dlm_arm_serve_deq(struct vms_dlm_scs *d,
+			     const struct dlm_scs_request *in)
+{
+	struct vms_dlm_deq q;
+	struct vms_dlm_master_request mr;
+	struct vms_dlm_master_result res;
+
+	if (vms_dlm_deq_parse_body(in->body, in->len, &q) != VMS_CODEC_OK) {
+		d->unparsed++;
+		return -1;
+	}
+	if (!vms_lock_dlm_have_delivery_proc()) {
+		/* CONDITION 4 (rd vms-c27): no process owns the master-side
+		 * LKBs, so there is nothing of ours to release. */
+		d->no_delivery_proc++;
+		return -1;
+	}
+	dlm_arm_fill_deq_req(in, &q, &mr);
+	if (vms_lock_dlm_master_serve(&mr, &res) != SS__NORMAL) {
+		d->releases_refused++;
+		return -1;
+	}
+
+	d->req_received++;
+	if ((enum vms_dlm_master_outcome)res.outcome !=
+	    VMS_DLM_MASTER_RELEASED) {
+		/* REFUSED: the handle named no lock this node holds for THAT
+		 * sender. Nothing was released and nothing is answered. */
+		d->releases_refused++;
+		return -1;
+	}
+	d->releases_received++;
+	dlm_arm_count_deferred_grant(d, &res);
+	return 0;
+}
+
+/*
+ * THE BLOCKING AST's RECEIVE HALF (rd vms-c72), holder side -- the other end of
+ * this file's own op-0x04 emit.
+ *
+ * Everything below the parse already existed and was already proven: the
+ * requester FSM's BLKAST event, and `dlm_arm_blkast_deliver` -> the engine's
+ * `vms_lock_dlm_proxy_blkast_recv`, which fires the REAL user-mode AST the
+ * holder registered. What was missing was the frame reaching it. The FSM's
+ * body-taking entry does the codec parse (and inherits its refusal of a zero
+ * lock id) and finds the proxy by the handle THIS node minted, so no value from
+ * the frame is ever used as anything but a key into our own lock records.
+ */
+static int dlm_arm_deliver_blkast(struct vms_dlm_scs *d,
+				  const struct dlm_scs_request *in)
+{
+	return dlm_req_fsm_blkast_body(&d->req, in->from_csid, in->body,
+				       in->len) == DLM_REQ_OK ? 0 : -1;
+}
 
 /* A cat-0x82 reply to something THIS node asked for. */
 static int dlm_arm_handle_reply(struct vms_dlm_scs *d,
@@ -1091,6 +1202,23 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 		return dlm_arm_handle_reply(d, req);
 	if (req->category != (uint8_t)VMS_DLM_CAT_REQUEST)
 		return -1;
+
+	/*
+	 * THE TWO LOCK-ID-ONLY OPS (rd vms-c72), routed on the opcode the
+	 * connection manager read off the frame -- the same field the op-0x0d
+	 * branch above routes on. Each re-checks the category and the opcode
+	 * from the BODY ITSELF inside the codec, so this switch cannot deliver
+	 * a body that is not what the envelope claimed.
+	 *
+	 * BOTH ARE BELOW RULE C, which is the whole reason the gate sits where
+	 * it does: an op-0x03 creates (well, destroys) real lock state and an
+	 * op-0x04 fires a real user-mode AST, and neither may happen for a
+	 * system that has not proved it runs this implementation.
+	 */
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)
+		return dlm_arm_serve_deq(d, req);
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_BLKAST)
+		return dlm_arm_deliver_blkast(d, req);
 
 	if (vms_dlm_enq_request_parse_body(req->body, req->len, &wireop, &e) !=
 	    VMS_CODEC_OK) {
@@ -1347,6 +1475,10 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->blkasts_no_wire_op  = d->blkasts_no_wire_op;
 	out->blkasts_received    = d->req.blkasts_rx;
 	out->blkasts_delivered   = d->req.blkasts_delivered;
+	out->blkasts_unparsed    = d->req.blkasts_unparsed;
+	out->releases_received   = d->releases_received;
+	out->releases_refused    = d->releases_refused;
+	out->deferred_grants_owed = d->deferred_grants_no_wire_op;
 	out->queued_no_reply     = d->queued_no_reply;
 	out->unparsed            = d->unparsed;
 	out->foreign_refused     = d->foreign_refused;

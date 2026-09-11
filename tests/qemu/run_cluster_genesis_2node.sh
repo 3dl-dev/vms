@@ -66,12 +66,14 @@
 #           two frames the arm's emit half (rd vms-d7a3) builds and which no
 #           2-node run had yet entered.
 #
-#           IT IS ALSO THE NEVER-CRASH-A-PEER PROOF. The arm has no RECEIVE
-#           half for either opcode (vms_dlm_scs.c, "THE RELEASE'S RECEIVE
-#           HALF"): both frames arrive at a peer that must DECLINE them,
-#           counted, and go on being a member. So this mode asserts, after the
-#           frames, that both nodes still report member=1 cn=2 with their two
-#           membership projections agreeing and neither console panicked.
+#           IT IS ALSO THE RECEIVE PROOF AND THE NEVER-CRASH-A-PEER PROOF.
+#           Since rd vms-c72 the arm CONSUMES both opcodes, so each peer's
+#           frames must show up as ACTIONS on the receiving node's own lock
+#           database -- releases_received (a $DEQ that really released an LKB)
+#           and blkasts_received -- and BOTH nodes must still report member=1
+#           cn=2 with their two membership projections agreeing and neither
+#           console panicked. Acting on a peer's frame is a strictly harder
+#           survival claim than declining it.
 #
 # VERDICT: read only from the guests' own RIG-* lines, which carry values the
 # guest read back out of the executive (INV-6).
@@ -376,6 +378,17 @@ if [ "$MODE" = "xnode" ]; then
 	B_BLK=$(num "$(dlm_field B EMIT after blkasts_sent)")
 	A_UNP=$(num "$(dlm_field A EMIT survival unparsed)")
 	B_UNP=$(num "$(dlm_field B EMIT survival unparsed)")
+	# The RECEIVE ledger (rd vms-c72): what the PEER's op-0x03/op-0x04 did to
+	# THIS node's lock database. Read off the node's own RIG-*-DLM-RECV /
+	# -DLM-EMIT lines, never inferred from the sender's counters.
+	A_RRX=$(num "$(dlm_field A RECV survival releases_received)")
+	B_RRX=$(num "$(dlm_field B RECV survival releases_received)")
+	A_RRF=$(num "$(dlm_field A RECV survival releases_refused)")
+	B_RRF=$(num "$(dlm_field B RECV survival releases_refused)")
+	A_BRX=$(num "$(dlm_field A EMIT survival blkasts_received)")
+	B_BRX=$(num "$(dlm_field B EMIT survival blkasts_received)")
+	A_BDL=$(num "$(dlm_field A EMIT survival blkasts_delivered)")
+	B_BDL=$(num "$(dlm_field B EMIT survival blkasts_delivered)")
 	A_GONE=$(num "$(dlm_field A POST survival lock_gone)")
 	B_GONE=$(num "$(dlm_field B POST survival lock_gone)")
 	A_PROJ=$(final_field A projections); B_PROJ=$(final_field B projections)
@@ -389,6 +402,10 @@ if [ "$MODE" = "xnode" ]; then
 	printf "    B: peer-mastered=%s master_csid=%s releases_sent=%s blkasts_sent=%s unparsed=%s projections=%s\n" \
 		"${B_XRES:-none}" "${B_XMAS:-?}" "$B_REL" "$B_BLK" "$B_UNP" "${B_PROJ:-?}"
 	printf "    WIRE: op-0x03 deq frames=%s  op-0x04 blkast frames=%s\n" "$W_DEQ" "$W_BLK"
+	printf "    RECEIVED: A releases=%s (refused %s) blkasts=%s (delivered %s)\n" \
+		"$A_RRX" "$A_RRF" "$A_BRX" "$A_BDL"
+	printf "              B releases=%s (refused %s) blkasts=%s (delivered %s)\n" \
+		"$B_RRX" "$B_RRF" "$B_BRX" "$B_BDL"
 	echo ""
 
 	XFAIL=0
@@ -456,15 +473,29 @@ if [ "$MODE" = "xnode" ]; then
 		echo "  capture, so the arm's blkasts_sent cannot be corroborated."
 		XFAIL=1
 	fi
-	# (4) THE NEVER-CRASH-A-PEER ASSERTION. Each node must have RECEIVED
-	#     the peer's two frames and declined them: `unparsed` counts exactly
-	#     the inbound cat-0x02 bodies the arm could not parse, and the only
-	#     ones on this wire are op-0x03 and op-0x04.
-	if [ "$A_UNP" -lt 2 ] || [ "$B_UNP" -lt 2 ]; then
-		echo "  FAILED (4): a node did not record receiving BOTH of the"
-		echo "  peer's cross-node frames (A unparsed=$A_UNP B unparsed=$B_UNP;"
-		echo "  one op-0x03 + one op-0x04 each). Without the receive, the"
-		echo "  survival below proves nothing about them."
+	# (4) THE RECEIVE ASSERTION, AND THE NEVER-CRASH-A-PEER ASSERTION WITH
+	#     IT. Until rd vms-c72 the arm had no receive half, so this gate read
+	#     the DECLINE (`unparsed` >= 2 per node) -- "the frame arrived, the
+	#     executive refused it, and the node lived". The arm now DELIVERS
+	#     both opcodes, so the same two frames must show up as ACTIONS on the
+	#     receiving node's own lock database instead:
+	#       releases_received  a peer's $DEQ really released an LKB here
+	#                          (releases_refused is its honest alternative --
+	#                          reported, and not accepted as the receive);
+	#       blkasts_received   a peer's BLKAST really reached this arm.
+	#     `unparsed` staying put is now the tell that nothing was DECLINED.
+	if [ "$A_RRX" -lt 1 ] || [ "$B_RRX" -lt 1 ]; then
+		echo "  FAILED (4a): a node did not record RELEASING a lock on the"
+		echo "  peer's $DEQ (A releases_received=$A_RRX refused=$A_RRF;"
+		echo "  B releases_received=$B_RRX refused=$B_RRF). The frame may"
+		echo "  have arrived, but this executive's lock database did not"
+		echo "  move, which is what the receive half exists to do."
+		XFAIL=1
+	fi
+	if [ "$A_BRX" -lt 1 ] || [ "$B_BRX" -lt 1 ]; then
+		echo "  FAILED (4b): a node did not record RECEIVING the peer's"
+		echo "  op-0x04 BLKAST (A blkasts_received=$A_BRX delivered=$A_BDL;"
+		echo "  B blkasts_received=$B_BRX delivered=$B_BDL)."
 		XFAIL=1
 	fi
 	# (5) ...and survived them, in the executive's own words.
@@ -502,11 +533,15 @@ if [ "$MODE" = "xnode" ]; then
 	held "$( { [ "$A_REL" -ge 1 ] && [ "$B_REL" -ge 1 ] && [ "$W_DEQ" -ge 1 ]; } \
 		&& echo 1 || echo 0)" \
 		"op-0x03 \$DEQ emitted by both arms AND seen on the wire"
-	held "$( { [ "$A_UNP" -ge 1 ] && [ "$B_UNP" -ge 1 ] && \
-		 ! console_panicked A && ! console_panicked B; } \
+	held "$( { [ "$A_RRX" -ge 1 ] && [ "$B_RRX" -ge 1 ] && \
+		 [ "$A_BRX" -ge 1 ] && [ "$B_BRX" -ge 1 ]; } \
 		&& echo 1 || echo 0)" \
-		"NEVER CRASH A PEER: each node RECEIVED a frame it has no receive half"
-	echo "              for, DECLINED it (counted), and stayed a sane member"
+		"the RECEIVE half ran: each node's own lock database moved on the"
+	echo "              peer's op-0x03 (\$DEQ released) and op-0x04 (BLKAST taken in)"
+	held "$( { ! console_panicked A && ! console_panicked B; } \
+		&& echo 1 || echo 0)" \
+		"NEVER CRASH A PEER: both nodes ACTED on the peer's cross-node"
+	echo "              frames and stayed sane members (no bugcheck, no panic)"
 	echo ""
 
 	if [ "$XFAIL" = "0" ]; then

@@ -401,20 +401,45 @@ struct vms_dlm_scs_view {
 	uint32_t blkasts_no_wire_op;    /* a holder we could not honestly notify */
 	uint32_t blkasts_received;      /* op-0x04 frames this node took in      */
 	uint32_t blkasts_delivered;     /* ...that fired a REAL user-mode AST    */
+
+	/*
+	 * THE RECEIVE LEDGER (rd vms-c72). The emit ledger above says a frame
+	 * left THIS executive; these say a peer's frame was ACTED ON by it --
+	 * the other half of the round trip, and the half a pcap cannot show at
+	 * all, because "the bytes arrived" and "the lock database changed" are
+	 * different facts.
+	 *
+	 * `releases_received` rises only when the engine really released a
+	 * master-side LKB; `releases_refused` is its honest alternative (the
+	 * handle named no lock this node holds FOR THAT SENDER, or there was no
+	 * delivery proc to own one). `blkasts_unparsed` is the codec's own
+	 * refusal, including the zero-lock-id one.
+	 *
+	 * `deferred_grants_owed` is deliberately NOT a success: a release that
+	 * flips a queued cross-node waiter to granted leaves this master owing
+	 * that waiter a GRANT it has no grounded way to originate (an
+	 * uncorrelated cat-0x82 reply is what a real VAX rejects). The waiter's
+	 * own retransmit finds the lock granted; this counter is what makes the
+	 * owed grant visible instead of silent.
+	 */
+	uint32_t releases_received;     /* op-0x03 $DEQs that really released    */
+	uint32_t releases_refused;      /* ...and the ones naming no lock of ours*/
+	uint32_t blkasts_unparsed;      /* op-0x04 bodies the codec refused      */
+	uint32_t deferred_grants_owed;  /* a real flip this master cannot yet    */
+					 /* announce (RULE A)                    */
 	uint32_t queued_no_reply;       /* inbound requests genuinely QUEUED at  */
 					 /* this master -- the state that owes a  */
 					 /* BLKAST                                */
 	/*
-	 * THE RECEIVE HALF'S HONEST DECLINE (vms_dlm_scs.c "THE RELEASE'S
-	 * RECEIVE HALF"). An inbound op-0x03 is parsed as an ENQ/CONVERT, the
-	 * codec's opcode gate rejects it, and it is counted here with NOTHING
-	 * done. This counter rising on the node that RECEIVED a peer's $DEQ, on
-	 * a node that is still a member and still projecting agreement, IS the
-	 * never-crash-a-peer measurement: the frame arrived, the executive
-	 * declined it, and the node lived.
+	 * THE ARM'S HONEST DECLINE. A cat-0x02 body this arm could not read as
+	 * any shape it serves -- including an op-0x03 whose lock ids the codec
+	 * refuses. It is NO LONGER where a peer's $DEQ lands: since rd vms-c72
+	 * an inbound op-0x03 is routed and served (`releases_received` /
+	 * `releases_refused` above), so this counter rising for one now means a
+	 * malformed release, not an unimplemented one.
 	 */
 	uint32_t unparsed;              /* inbound cat-02 bodies this arm could  */
-					 /* not parse -- today's op-0x03 decline  */
+					 /* not parse                             */
 	uint32_t foreign_refused;       /* RULE C: the sender is not proven ours */
 
 	/*
@@ -457,7 +482,7 @@ struct vms_dlm_scs_view {
 	uint32_t posts_lock_gone;       /* refill found no proxy: abandoned     */
 	uint32_t posts_refused;         /* the FSM refused: nothing was sent    */
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 120,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 136,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

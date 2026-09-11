@@ -4157,9 +4157,27 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         return a.status;
     }
     case VMS_DLM_OP_DEQ:
-        /* A request that names a resource must actually name one. */
-        if (req->resnam[0] == '\0')
-            return SS__BADPARAM;
+        /*
+         * NO RESOURCE NAME IS REQUIRED HERE, AND THAT IS THE PROTOCOL'S OWN
+         * SHAPE (rd vms-c72).
+         *
+         * A release is a LOCK-ID-ONLY message: the grounded op-0x03 frame
+         * carries body[20:24] (the releaser's handle) and body[24:28] (ours)
+         * and NO name at all -- the codec refuses to read one, because the
+         * bytes a real $DEQ leaves at body[46:] belong to whatever last used
+         * the buffer (vms_cluster_codec_dlm.h). vms_lock_dlm_xnode_deq below
+         * identifies the lock by `master_lkid` and authorizes it by
+         * `req_csid`, and never looks at `resnam`.
+         *
+         * The check that used to stand here therefore refused a well-formed
+         * wire release for a field the operation does not use and the wire
+         * does not carry; only the ioctl path (whose userspace caller happened
+         * to have a name) ever satisfied it. The master seam's own validator
+         * has always said so -- dlm_master_request_ok exempts a DEQ from the
+         * name requirement -- and this makes the engine agree with it. The
+         * ENQ and REBUILD branches keep their check: those frames DO carry a
+         * name, and acting on one without it would be acting on no resource.
+         */
         return vms_lock_dlm_xnode_deq(req);
     case VMS_DLM_OP_GRANT:
         /* REQUESTER-SIDE GRANT RECEIVE (vms-6ca, H5). A GRANT / queued-reply the

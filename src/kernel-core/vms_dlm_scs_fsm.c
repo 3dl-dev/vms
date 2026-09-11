@@ -1444,6 +1444,47 @@ enum dlm_req_status dlm_req_fsm_reply_body(struct dlm_req_fsm *f,
 			   &e);
 }
 
+/*
+ * THE BLOCKING AST's RECEIVE HALF (rd vms-c72), as SCS delivers it: 132 bytes,
+ * category 0x02, opcode 0x04. It is the body twin of dlm_req_fsm_blkast() and
+ * exists for the same reason dlm_req_fsm_reply_body() does -- the frame-taking
+ * entry cannot be reached from the live receive path (integration note E73).
+ *
+ * THE LOCK IS FOUND BY A HANDLE THIS EXECUTIVE MINTED. body[20:24] is the
+ * HOLDER's own lock id -- the value this node put on its own op-0x01 request
+ * and that the master stamped on the LKB it granted -- so `dq_find` looks up a
+ * request of OURS by OUR OWN key. The master's handle at body[24:28] is read by
+ * the codec and asserted about nothing: this arm has no table keyed by it.
+ *
+ * THREE REFUSALS, EACH COUNTED AND NONE OF THEM A FABRICATION:
+ *   - a body the codec will not parse (wrong category, wrong opcode, or EITHER
+ *     lock id zero -- the fc8540ae refusal lives in the codec and this entry
+ *     inherits it) raises `blkasts_unparsed` and delivers nothing;
+ *   - a parsed BLKAST naming no request of ours raises `replies_unmatched`
+ *     (dq_entry) and delivers nothing -- an AST is never fired at a lock this
+ *     node cannot name;
+ *   - a holder that registered no blocking AST is the ENGINE's answer, not
+ *     this layer's: h_blkast counts `blkasts_undeliverable`.
+ */
+enum dlm_req_status dlm_req_fsm_blkast_body(struct dlm_req_fsm *f,
+					    vms_csid_t from_csid,
+					    const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_blkast b;
+
+	(void)from_csid;   /* the sender is the master; the LOCK is the key */
+	if (f == (struct dlm_req_fsm *)0 || body == (const uint8_t *)0)
+		return DLM_REQ_E_INVAL;
+	if (!dq_ops_ok(f))
+		return DLM_REQ_E_INVAL;
+
+	if (vms_dlm_blkast_parse_body(body, len, &b) != VMS_CODEC_OK) {
+		f->blkasts_unparsed++;
+		return DLM_REQ_E_CODEC;
+	}
+	return dlm_req_fsm_blkast(f, b.req_lkid);
+}
+
 uint32_t dlm_req_fsm_observe(struct dlm_req_fsm *f, const uint8_t *frame,
 			     uint32_t len)
 {

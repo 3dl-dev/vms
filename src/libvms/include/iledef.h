@@ -39,14 +39,16 @@ extern "C" {
 /* ================================================================
  * ILE3 — Standard item list entry (3 address fields)
  *
- * Layout (12 bytes on 32-bit VMS, 16 bytes on 64-bit with padding):
+ * Layout (12 bytes on 32-bit VMS; 24 bytes under OVMX's LP64 model, where the
+ * two address fields are native 8-byte pointers — see
+ * tests/libvms/test_conformance_layout.c, vms-801.5):
  *
- *   +0  ile3$w_length       WORD  — Buffer length (bytes)
- *   +2  ile3$w_code         WORD  — Item code (e.g. JPI$_USERNAME)
- *   +4  ile3$ps_bufaddr     LONG  — Address of buffer to receive data
- *   +8  ile3$ps_retlen_addr LONG  — Address of word to receive length
+ *   +0   ile3$w_length       WORD — Buffer length (bytes)
+ *   +2   ile3$w_code         WORD — Item code (e.g. JPI$_USERNAME)
+ *   +8   ile3$ps_bufaddr     PTR  — Address of buffer to receive data (+4 pad)
+ *   +16  ile3$ps_retlen_addr PTR  — Address of word to receive length
  *                                   (NULL if not needed)
- *  +12  (next entry or terminator)
+ *   +24  (next entry or terminator)
  *
  * The terminator entry has both ile3$w_length and ile3$w_code = 0.
  * ================================================================ */
@@ -64,10 +66,10 @@ typedef struct _ile3 {
  * Used by services such as SYS$FILESCAN that return a list of
  * output descriptors rather than filling caller-supplied buffers.
  *
- *   +0  ile2$w_length   WORD  — Length of data (set by service)
- *   +2  ile2$w_code     WORD  — Item code
- *   +4  ile2$ps_bufaddr LONG  — Address of data (set by service)
- *   +8  (next entry or terminator)
+ *   +0   ile2$w_length   WORD — Length of data (set by service)
+ *   +2   ile2$w_code     WORD — Item code
+ *   +8   ile2$ps_bufaddr PTR  — Address of data (set by service; +4 pad, LP64)
+ *   +16  (next entry or terminator)
  * ================================================================ */
 
 typedef struct _ile2 {

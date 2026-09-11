@@ -310,8 +310,37 @@ enum vms_ldwv_status vms_ldwv_build(struct vms_ldwv *v,
 
 	v->n_members = (uint8_t)((s.n_members > 255u) ? 255u : s.n_members);
 	v->weights_learned = s.any_learned;
+	v->any_foreign = s.any_foreign;   /* the all-OVMX gate's input (vms-3e3) */
 	v->valid = 1u;
 	return VMS_LDWV_OK;
+}
+
+/*
+ * THE ALL-OVMX GATE (vms-3e3, rung A"). 1 iff this vector is authoritative AND
+ * every member it represents was proven-OVMX (`peer_is_ours`, carried into the
+ * survey as `is_ovmx`). It is the single call that decides whether OVMX's own
+ * directory hash may be grounded and whether cross-node routing is live:
+ *
+ *   - It rests on the SAME survey as the split-brain gate (#1138), so a foreign
+ *     member is refused by BOTH from one reading of the member set.
+ *   - It is DYNAMIC: recomputed from the current vector, so a VAX joining flips
+ *     it to 0 (grounding stops, routing falls back to local) and a VAX leaving
+ *     flips it back -- no install-time snapshot to go stale.
+ *   - A vector that is not valid (mid-transition, or refused by the split-brain
+ *     gate) is NOT all-OVMX: grounding waits rather than guesses.
+ *
+ * This is exactly parallel to the LDWV all-zero fallback (Option-A): that grounds
+ * the VECTOR for an all-OVMX cluster without a real VAX's LOCKDIRWT; this gates
+ * grounding the HASH for an all-OVMX cluster without DEC's hash function. Neither
+ * is ever computed or used when a member cannot be proven OVMX, so neither can
+ * reach or mis-address a real VAX (design SS3.6; the 90b3bbbd storm was a real
+ * cluster and this can never touch one).
+ */
+int vms_ldwv_all_ovmx(const struct vms_ldwv *v)
+{
+	if (v == NULL)
+		return 0;
+	return (v->valid && v->n_members > 0u && !v->any_foreign) ? 1 : 0;
 }
 
 /* ==========================================================================

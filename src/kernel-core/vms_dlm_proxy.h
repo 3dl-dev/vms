@@ -204,6 +204,57 @@ struct vms_dlm_requester_ops {
 	 */
 	uint32_t (*dir_generation)(void *ctx);
 
+	/*
+	 * THE ALL-OVMX GATE (vms-3e3, rung A"). "Is this node in a cluster whose
+	 * every member is proven-OVMX, right now?" Nonzero yes.
+	 *
+	 * It is what makes the two ops below -- and cross-node routing itself --
+	 * DYNAMIC and safe. The engine consults it BEFORE it grounds a hash or
+	 * acts on a resolved remote master: when it reads 0 (a member cannot be
+	 * proven OVMX, or the vector is mid-transition), the engine masters the
+	 * name LOCALLY exactly as an unclustered node does -- never routing to,
+	 * and never grounding a hash that could reach, a system this executive
+	 * cannot prove runs this implementation. A mixed OVMX+VAX cluster and a
+	 * node booting alone therefore see EXACTLY the behaviour they saw before
+	 * any resolver existed: no interop regression. Absent (NULL) reads as 0.
+	 */
+	int (*dir_groundable)(void *ctx);
+
+	/*
+	 * GROUND A ROOT NAME'S DIRECTORY HASH -- rung A" (design SS3.6), and the
+	 * ONE op in this interface that takes a resource NAME.
+	 *
+	 * READ THIS BEFORE USING IT. `dir_resolve` above states, correctly, that
+	 * there is "deliberately no variant of this op that takes a resource NAME
+	 * -- an op that took a name would be an op somebody could implement by
+	 * hashing it, which is exactly the thing that broke a real cluster (commit
+	 * 90b3bbbd)." This op is that forbidden shape. It exists because the vms-3e3
+	 * ruling permits ONE narrow, gated exception, and its safety rests entirely
+	 * on the gate, not on the hash:
+	 *
+	 *   - The implementation MUST return SS$_UNSUPPORTED unless dir_groundable()
+	 *     is true. So the name->hash step runs ONLY in an all-proven-OVMX
+	 *     cluster -- never with a real VAX present. 90b3bbbd broke a REAL
+	 *     cluster by mis-mastering against a VAX's directory; with no VAX in the
+	 *     membership that failure mode cannot occur.
+	 *   - The value returned is OVMX's OWN 16-bit directory hash (documented as
+	 *     OVMX's own, not DEC's, in docs/research-dlm-directory-algorithm.md and
+	 *     design SS3.6). It is deterministic and identical on every OVMX node
+	 *     because every node runs this one function, so all OVMX members agree
+	 *     on the master for a name -- the actual requirement (p. 6-32). It makes
+	 *     no claim of real-VMS directory compatibility; that is deferred to
+	 *     FC-P3.2 (oracle-grounded).
+	 *   - It grounds ONLY root names never seen on the wire (a name WITH a
+	 *     wire-learned hash never reaches here -- dir_resolve serves it). In an
+	 *     all-OVMX cluster that is a member's own private volumes/files.
+	 *
+	 * Same non-block/no-re-enter contract as dir_resolve. SS$_NORMAL + a written
+	 * *out_hash16 on success; any other return means "not grounded", and the
+	 * engine then masters the name locally (the honest floor), never guesses.
+	 */
+	uint32_t (*dir_ground)(void *ctx, const char *name, uint32_t name_len,
+			       uint16_t *out_hash16);
+
 	void *ctx;
 };
 

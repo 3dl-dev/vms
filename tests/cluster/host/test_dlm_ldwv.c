@@ -732,6 +732,59 @@ static void club_split_brain_gate_refuses_a_foreign_member(void)
 	ct_check_eq_u32(cl.club.ldwv.n, 2u, "one entry per system");
 }
 
+/*
+ * THE ALL-OVMX GATE (vms-3e3, rung A"): vms_ldwv_all_ovmx() decides whether
+ * OVMX's own directory hash may be grounded. Its whole job is to be a STRICTER
+ * guard than the split-brain gate: a foreign member with a LEARNED weight passes
+ * the split-brain gate (there is no unknown weight to refuse) yet must NOT read
+ * as all-OVMX, so the OVMX hash is never computed with a real VAX present.
+ */
+static void all_ovmx_gate_governs_grounding(void)
+{
+	struct vms_ldwv v;
+	struct vms_ldwv_member m[3];
+
+	printf("--- rd vms-1ee: the all-OVMX gate governs OVMX-hash grounding ---\n");
+
+	/* An unbuilt vector is never all-OVMX: grounding waits, never guesses. */
+	vms_ldwv_init(&v);
+	ct_check_eq_u32((unsigned long)vms_ldwv_all_ovmx(&v), 0u,
+			"an invalid/unbuilt vector is NOT all-OVMX");
+	ct_check_eq_u32((unsigned long)vms_ldwv_all_ovmx(NULL), 0u,
+			"NULL is not all-OVMX");
+
+	/* Two proven-OVMX members, no weights advertised -> all-zero fallback. */
+	memset(m, 0, sizeof(m));
+	m[0].csid = CSID_A; m[0].is_local = 1u; m[0].is_ovmx = 1u;
+	m[1].csid = CSID_B;                     m[1].is_ovmx = 1u;
+	vms_ldwv_init(&v);
+	ct_check_eq_u32((unsigned long)vms_ldwv_build(&v, m, 2u),
+			(unsigned long)VMS_LDWV_OK, "an all-OVMX cluster builds");
+	ct_check_eq_u32(v.any_foreign, 0u, "the vector recorded no foreign member");
+	ct_check_eq_u32((unsigned long)vms_ldwv_all_ovmx(&v), 1u,
+			"*** all-OVMX -> the OVMX directory hash MAY be grounded ***");
+
+	/* THE STRICT CASE. A foreign member (a real VAX) with a LEARNED weight, and
+	 * every weight learned, so there is no unknown weight for the split-brain
+	 * gate to refuse: the vector BUILDS. The all-OVMX gate must still read 0. */
+	memset(m, 0, sizeof(m));
+	m[0].csid = CSID_A; m[0].is_local = 1u; m[0].is_ovmx = 1u;
+	m[0].lockdirwt = 1u; m[0].lockdirwt_valid = 1u;
+	m[1].csid = CSID_B; m[1].is_ovmx = 0u;   /* a real VAX: cannot prove ours */
+	m[1].lockdirwt = 1u; m[1].lockdirwt_valid = 1u;
+	vms_ldwv_init(&v);
+	ct_check_eq_u32((unsigned long)vms_ldwv_build(&v, m, 2u),
+			(unsigned long)VMS_LDWV_OK,
+			"a foreign member with a LEARNED weight PASSES the split-brain "
+			"gate -- the vector builds");
+	ct_check_eq_u32(v.any_foreign, 1u,
+			"but the vector records that a member could not be proven OVMX");
+	ct_check_eq_u32((unsigned long)vms_ldwv_all_ovmx(&v), 0u,
+			"*** NOT all-OVMX -> grounding REFUSED even though the vector "
+			"built: the gate is STRICTER than the split-brain gate, so the "
+			"OVMX hash is never computed against a real VAX ***");
+}
+
 int main(void)
 {
 	printf("=== test_dlm_ldwv (FC-P4.3 lock directory weight vector, R1) ===\n");
@@ -745,5 +798,6 @@ int main(void)
 	club_local_withhold_builds_when_peers_unknown();
 	club_local_withhold_refused_when_a_peer_advertised();
 	club_split_brain_gate_refuses_a_foreign_member();
+	all_ovmx_gate_governs_grounding();
 	return ct_summary("test_dlm_ldwv");
 }

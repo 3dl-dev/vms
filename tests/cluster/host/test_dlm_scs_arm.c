@@ -194,25 +194,36 @@ static void arm_bindings(void)
 	       "learning emits nothing (Davis p. 6-50)");
 
 	/*
-	 * THE HASH BOOTSTRAP DEADLOCK, pinned as a PROPERTY of the shipped file
-	 * rather than as a comment. Installing the engine's directory resolver
-	 * is what turns on vms_lock.c's "no wire-learned hash -> SS$_UNSUPPORTED"
-	 * refusal (tests/cluster/host/test_lock_dir.c pins that), and no member
-	 * of an OVMX-only cluster can originate the first cat-0x02 frame that
-	 * would teach anyone a hash. Installing it would therefore break EVERY
-	 * first $ENQ on a clustered node -- the ACP's volume lock included -- to
-	 * enable a path that still could not run. So it is not installed, the
-	 * switch is a reviewed function rather than a silent omission, and the
-	 * adapters behind it are compiled and ready.
+	 * THE HASH BOOTSTRAP DEADLOCK IS RESOLVED behind the all-OVMX gate (rung
+	 * A", vms-3e3), pinned as a PROPERTY of the shipped file. The deadlock was:
+	 * installing the resolver turns on vms_lock.c's "no wire-learned hash ->
+	 * SS$_UNSUPPORTED" refusal, and no OVMX-only member can originate the first
+	 * cat-0x02 frame to teach a hash. The resolution: an all-proven-OVMX cluster
+	 * grounds the first hash with OVMX's OWN directory hash -- never DEC's, never
+	 * toward a real VAX -- and a mixed/single configuration masters locally
+	 * exactly as before (no interop regression). All four directory ops are now
+	 * installed unconditionally; the gate that keeps grounding narrow is DYNAMIC.
 	 */
-	has("if (dlm_arm_directory_is_groundable()) {",
-	    "the engine's directory resolver is installed ONLY behind a named "
-	    "groundability switch");
-	has("return 0;   /* no grounded source for a root name's hash",
-	    "... which reads 0 today: no grounded source for a root name's hash");
+	has("d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;",
+	    "the engine's directory resolver IS installed (rung A\" resolved)");
+	has("d->eng_ops.dir_groundable = dlm_arm_eng_dir_groundable;",
+	    "... behind the DYNAMIC all-OVMX gate, not a one-shot start switch");
+	has("d->eng_ops.dir_ground     = dlm_arm_eng_dir_ground;",
+	    "... with the gated name->hash grounding op installed too");
+	has("return vms_ldwv_all_ovmx(&d->cl->club.ldwv);",
+	    "the gate reads the connection manager's own vector -- all members "
+	    "proven-OVMX, dynamically");
+	has("if (!dlm_arm_eng_dir_groundable(ctx))\n\t\treturn SS__UNSUPPORTED;",
+	    "dir_ground REFUSES unless the all-OVMX gate holds -- never a name->hash "
+	    "against a real VAX (the 90b3bbbd storm cannot recur)");
+	has("*out_hash16 = vms_dlm_ovmx_dir_hash(name, name_len);",
+	    "... and the grounded value is OVMX's OWN directory hash, not DEC's");
+	has("h *= 16777619u;           /* FNV-1a prime */",
+	    "OVMX's own hash is FNV-1a over the name bytes, folded to 16 -- clean-"
+	    "room, deterministic, identical on every OVMX node");
 	has("d->eng_ops.post           = dlm_arm_post;",
-	    "the engine's POST op is installed regardless -- harmless with no "
-	    "resolver, and ready when the gap closes");
+	    "the engine's POST op is installed too -- the remote route it serves is "
+	    "now reachable behind the gate");
 
 	/*
 	 * THIS NODE'S CLUSTER IDENTITY. The engine's vms_local_csid is each

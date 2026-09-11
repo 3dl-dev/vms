@@ -1358,6 +1358,7 @@ struct vms_dlm_scs_view_wire {
     /* The receive ledger (rd vms-c72): a peer's op-0x03/op-0x04 ACTED ON by
      * this executive, which is the half a pcap cannot show. */
     uint32_t releases_received;
+    uint32_t valblk_writes_received;   /* op-0x06 LVB writes applied (vms-727) */
     uint32_t releases_refused;
     uint32_t blkasts_unparsed;
     uint32_t deferred_grants_owed;
@@ -1377,7 +1378,7 @@ struct vms_dlm_scs_view_wire {
     uint32_t posts_lock_gone;
     uint32_t posts_refused;
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 136,
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 140,
                "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
 
 struct vms_cluster_diag_dlm_args {
@@ -1385,7 +1386,7 @@ struct vms_cluster_diag_dlm_args {
     uint32_t pad0;
     struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
 };
-_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 144,
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 148,
                "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 /*
  * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
@@ -1396,12 +1397,14 @@ _Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 144,
  *
  * rd vms-c72 grew the row by the four RECEIVE-ledger counters (128 -> 144), so
  * the encoded value moved 0xC080566E -> 0xC090566E -- deliberately, with this
- * assert updated in the same commit. A diagnostic image built from another
+ * assert updated in the same commit. rd vms-727 then appended
+ * `valblk_writes_received` (144 -> 148), moving it 0xC090566E -> 0xC094566E --
+ * again deliberately, in this commit. A diagnostic image built from another
  * tree therefore fails LOUDLY (ENOTTY) rather than reading a shorter row as
  * data, which is the behaviour this assert exists to guarantee.
  */
 #define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
-_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC090566Eu,
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC094566Eu,
                "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
 
 /*

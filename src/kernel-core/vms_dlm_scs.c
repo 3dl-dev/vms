@@ -150,6 +150,8 @@ struct vms_dlm_scs {
 				       /* lock ids (rd vms-d7a3)              */
 	uint32_t releases_received;   /* op-0x03 $DEQs that really RELEASED a */
 				       /* master-side LKB of ours (rd vms-c72) */
+	uint32_t valblk_writes_received; /* op-0x06 CONVERTs that really wrote */
+				       /* a master resource's value block (727)*/
 	uint32_t declined;            /* the honest floor, per vms_dlm_scs.h  */
 
 	/* The refusals. Each one is a place this file will not fabricate. */
@@ -1125,6 +1127,42 @@ static int dlm_arm_deliver_blkast(struct vms_dlm_scs *d,
 				       in->len) == DLM_REQ_OK ? 0 : -1;
 }
 
+/*
+ * THE VALUE-BLOCK WRITE's RECEIVE HALF (rd vms-727), master side -- the other
+ * end of this file's own op-0x06 emit. A remote holder demoted a lock it holds
+ * at a write mode and flushed the value block; this replicates that WIRE value
+ * into the master resource. Like the $DEQ receive it is a CONSUME (the capture
+ * carries no cat-0x82 answer to an op-0x06), so nothing is ever staged. The
+ * engine authorizes by cluster identity: the block lands only on a lock this
+ * node holds FOR the sender (vms_lock_dlm_master_apply_valblk), so a frame's
+ * value is never used as anything but the payload for a lock the sender owns.
+ */
+static int dlm_arm_serve_valblk(struct vms_dlm_scs *d,
+				const struct dlm_scs_request *in)
+{
+	struct vms_dlm_valblk_convert c;
+
+	if (vms_dlm_valblk_convert_parse_body(in->body, in->len, &c) !=
+	    VMS_CODEC_OK) {
+		d->unparsed++;
+		return -1;
+	}
+	if (!vms_lock_dlm_have_delivery_proc()) {
+		d->no_delivery_proc++;
+		return -1;
+	}
+	if (vms_lock_dlm_master_apply_valblk(in->from_csid, c.master_lkid,
+					     c.valblk) != SS__NORMAL) {
+		/* The handle named no lock this node holds for THAT sender:
+		 * a peer may not write another node's value block. */
+		d->declined++;
+		return -1;
+	}
+	d->req_received++;
+	d->valblk_writes_received++;
+	return 0;
+}
+
 /* A cat-0x82 reply to something THIS node asked for. */
 static int dlm_arm_handle_reply(struct vms_dlm_scs *d,
 				const struct dlm_scs_request *in)
@@ -1219,6 +1257,8 @@ static int dlm_arm_handle_request(void *ctx, const struct dlm_scs_request *req,
 		return dlm_arm_serve_deq(d, req);
 	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_BLKAST)
 		return dlm_arm_deliver_blkast(d, req);
+	if (req->opcode == (uint8_t)VMS_DLM_WIREOP_CONVERT_VALBLK)
+		return dlm_arm_serve_valblk(d, req);
 
 	if (vms_dlm_enq_request_parse_body(req->body, req->len, &wireop, &e) !=
 	    VMS_CODEC_OK) {
@@ -1477,6 +1517,7 @@ static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
 	out->blkasts_delivered   = d->req.blkasts_delivered;
 	out->blkasts_unparsed    = d->req.blkasts_unparsed;
 	out->releases_received   = d->releases_received;
+	out->valblk_writes_received = d->valblk_writes_received;
 	out->releases_refused    = d->releases_refused;
 	out->deferred_grants_owed = d->deferred_grants_no_wire_op;
 	out->queued_no_reply     = d->queued_no_reply;

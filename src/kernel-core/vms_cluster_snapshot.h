@@ -423,6 +423,8 @@ struct vms_dlm_scs_view {
 	 * owed grant visible instead of silent.
 	 */
 	uint32_t releases_received;     /* op-0x03 $DEQs that really released    */
+	uint32_t valblk_writes_received;/* op-0x06 CONVERTs that really wrote a  */
+					 /* master resource's value block (727)  */
 	uint32_t releases_refused;      /* ...and the ones naming no lock of ours*/
 	uint32_t blkasts_unparsed;      /* op-0x04 bodies the codec refused      */
 	uint32_t deferred_grants_owed;  /* a real flip this master cannot yet    */
@@ -482,7 +484,7 @@ struct vms_dlm_scs_view {
 	uint32_t posts_lock_gone;       /* refill found no proxy: abandoned     */
 	uint32_t posts_refused;         /* the FSM refused: nothing was sent    */
 };
-_Static_assert(sizeof(struct vms_dlm_scs_view) == 136,
+_Static_assert(sizeof(struct vms_dlm_scs_view) == 140,
 	       "vms_dlm_scs_view is a cross-substrate ABI struct");
 
 #endif /* OVMX_VMS_CLUSTER_SNAPSHOT_H */

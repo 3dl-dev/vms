@@ -2242,6 +2242,51 @@ uint32_t vms_lock_dlm_master_serve(const struct vms_dlm_master_request *r,
     return SS__NORMAL;
 }
 
+/*
+ * vms_lock_dlm_master_apply_valblk - the op-0x06 RECEIVE half, master side
+ * (vms-727). A remote holder demoted a lock it holds at a write mode (PW/EX)
+ * with LCK$M_VALBLK and flushed the value block on an op-0x06 CONVERT frame;
+ * this replicates that WIRE value into the MASTER resource so a subsequent
+ * $ENQ on this (the mastering) node reads the updated block -- the same LVB
+ * cross-node write the $DEQ path already does (vms_lock_dlm_xnode_deq), reached
+ * from the convert frame instead of a release.
+ *
+ * AUTHORIZED EXACTLY LIKE THE DEQ MASTER-SERVE, by cluster identity not local
+ * proc: the block is written only into a lock the master genuinely holds FOR
+ * the sending CSID. A local lock (req_csid == 0), a lock held for a different
+ * CSID, or a PROXY LKB (our own image of a lock someone else masters) is
+ * refused SS$_IVLOCKID -- a peer may not write another node's value block. The
+ * lock is NOT released or re-queued (a demote keeps the lock granted at the
+ * lower mode); only res->valblk moves, keyed on the writer's real write intent.
+ */
+uint32_t vms_lock_dlm_master_apply_valblk(uint32_t req_csid, uint32_t master_lkid,
+                                          const uint8_t *valblk)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+
+    if (valblk == NULL || master_lkid == VMS_DLM_LKID_UNSET || req_csid == 0u)
+        return SS__BADPARAM;
+
+    lock = lock_find_by_id(master_lkid);   /* takes a reference */
+    if (!lock)
+        return SS__IVLOCKID;
+    if (lock->proxy || lock->req_csid == 0 || lock->req_csid != req_csid) {
+        lock_put(lock);
+        return SS__IVLOCKID;
+    }
+
+    res = lock->resource;
+    exec_lock(&res->lock);
+    /* !waiting: a queued request has not written the block; only a real
+     * granted holder's demote flushes it (mirrors the xnode_deq guard). */
+    if (!lock->waiting)
+        memcpy(res->valblk, valblk, LCK_VALBLK_SIZE);
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return SS__NORMAL;
+}
+
 /* ================================================================
  * ioctl handlers
  * ================================================================ */

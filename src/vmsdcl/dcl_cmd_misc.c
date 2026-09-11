@@ -1933,22 +1933,29 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
     }
 
     const char *domain = dcl_qualifier_value(cmd, "DOMAIN");
+    /* /REAPPLY = apply-only: perform the live effect but do NOT write the store.
+     * The boot reapply (TCPIP$REAPPLY.COM) passes it so re-applying persisted config
+     * does not re-append to the store (no growth across reboots, vms-b679). */
+    int reapply = dcl_has_qualifier(cmd, "REAPPLY");
 
-    /* Persist to TCPIP$NAMESERVICE.DAT the VMS way -- RMS over the Files-11 ACP
-     * (rms_textfile, the vms-402 pattern), superseding any prior record. The old
-     * fopen() targeted VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms" -- the retired POSIX
-     * passthrough (vms-37e) -- so on the booted runtime it wrote nothing. SERVER
-     * supersedes (write_line), DOMAIN appends (append_line). SYS$SYSTEM: resolves
-     * through LNM$FILE_DEV; fail-honest with no executive/ACP volume (INV-6). */
-    char nsline[512];
-    snprintf(nsline, sizeof(nsline), "SERVER=%.255s", server);
-    int ns_db_ok = (rms_textfile_write_line("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT", nsline) == 0);
-    if (ns_db_ok && domain) {
-        snprintf(nsline, sizeof(nsline), "DOMAIN=%.255s", domain);
-        ns_db_ok = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT", nsline) == 0);
+    /* PERSIST (unless /REAPPLY): TCPIP$NAMESERVICE.DAT the VMS way -- RMS over the
+     * Files-11 ACP (rms_textfile, the vms-402 pattern), superseding any prior record.
+     * The old fopen() targeted VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms" -- the retired
+     * POSIX passthrough (vms-37e) -- so on the booted runtime it wrote nothing.
+     * SERVER supersedes (write_line), DOMAIN appends (append_line). SYS$SYSTEM:
+     * resolves through LNM$FILE_DEV; fail-honest with no executive/ACP (INV-6). */
+    int ns_db_ok = 1;
+    if (!reapply) {
+        char nsline[512];
+        snprintf(nsline, sizeof(nsline), "SERVER=%.255s", server);
+        ns_db_ok = (rms_textfile_write_line("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT", nsline) == 0);
+        if (ns_db_ok && domain) {
+            snprintf(nsline, sizeof(nsline), "DOMAIN=%.255s", domain);
+            ns_db_ok = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT", nsline) == 0);
+        }
     }
 
-    /* Also update the substrate resolver (best-effort; root-only file). */
+    /* APPLY: update the substrate resolver (best-effort; root-only file). */
     FILE *fp = fopen("/etc/resolv.conf", "w");
     if (fp) {
         if (domain)
@@ -1981,6 +1988,9 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
     const char *ifname = cmd->params[2];
     const char *host_ip = dcl_qualifier_value(cmd, "HOST");
     const char *netmask = dcl_qualifier_value(cmd, "NETWORK_MASK");
+    /* /REAPPLY = apply-only (boot reapply, vms-b679): do the live effect but do
+     * NOT write the store, so re-applying persisted config does not grow it. */
+    int reapply = dcl_has_qualifier(cmd, "REAPPLY");
 
     if (!host_ip) {
         dcl_error("TCPIP", 2, "NOKEYW",
@@ -2063,12 +2073,13 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
         }
     }
 
-    /* Persist to TCPIP$INTERFACE.DAT via RMS over the Files-11 ACP (rms_textfile,
-     * the vms-402 pattern) -- the old fopen() targeted the retired /vms passthrough
-     * (vms-37e), dead on the booted runtime. SYS$SYSTEM: via LNM$FILE_DEV;
-     * fail-honest with no executive (the executive-absent case is already reported
-     * by the TCPIP$INET_HOSTADDR NOEXEC path below -- same cause, one message). */
-    {
+    /* PERSIST (unless /REAPPLY): TCPIP$INTERFACE.DAT via RMS over the Files-11 ACP
+     * (rms_textfile, the vms-402 pattern) -- the old fopen() targeted the retired
+     * /vms passthrough (vms-37e), dead on the booted runtime. SYS$SYSTEM: via
+     * LNM$FILE_DEV; fail-honest with no executive (the executive-absent case is
+     * already reported by the TCPIP$INET_HOSTADDR NOEXEC path below -- same cause,
+     * one message). The boot reapply passes /REAPPLY (apply-only, no re-append). */
+    if (!reapply) {
         char ifline[512];
         if (netmask)
             snprintf(ifline, sizeof(ifline), "%.63s %.63s %.63s", ifname, host_ip, netmask);
@@ -2212,23 +2223,28 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
             applied = 1;
     }
 
-    /* Persist the recorded route to TCPIP$ROUTE.DAT via RMS over the Files-11 ACP
-     * (rms_textfile_append_line, the vms-402 pattern) -- the old fopen() targeted
-     * the retired /vms passthrough (vms-37e), dead on the booted runtime, so the
-     * "recorded" claim below was a lie there. SYS$SYSTEM: via LNM$FILE_DEV;
-     * fail-honest with no executive/ACP volume. */
-    char rtline[512];
-    if (is_default)
-        snprintf(rtline, sizeof(rtline), "DEFAULT %.63s", gateway);
-    else if (netmask)
-        snprintf(rtline, sizeof(rtline), "%.63s %.63s %.63s", destination, gateway, netmask);
-    else
-        snprintf(rtline, sizeof(rtline), "%.63s %.63s", destination, gateway);
-    int rt_recorded = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$ROUTE.DAT", rtline) == 0);
+    /* PERSIST (unless /REAPPLY): the recorded route to TCPIP$ROUTE.DAT via RMS
+     * over the Files-11 ACP (rms_textfile_append_line, the vms-402 pattern) -- the
+     * old fopen() targeted the retired /vms passthrough (vms-37e), dead on the
+     * booted runtime, so the "recorded" claim below was a lie there. SYS$SYSTEM:
+     * via LNM$FILE_DEV; fail-honest with no executive/ACP volume. /REAPPLY is
+     * apply-only (the boot reapply, vms-b679) -- re-apply without re-appending. */
+    int reapply = dcl_has_qualifier(cmd, "REAPPLY");
+    int rt_recorded = 0;
+    if (!reapply) {
+        char rtline[512];
+        if (is_default)
+            snprintf(rtline, sizeof(rtline), "DEFAULT %.63s", gateway);
+        else if (netmask)
+            snprintf(rtline, sizeof(rtline), "%.63s %.63s %.63s", destination, gateway, netmask);
+        else
+            snprintf(rtline, sizeof(rtline), "%.63s %.63s", destination, gateway);
+        rt_recorded = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$ROUTE.DAT", rtline) == 0);
+    }
 
     /* Report the ACTUAL outcome (INV-6: never claim "route added" when the live
      * apply failed or was skipped for lack of privilege, and never claim it was
-     * "recorded" when the ACP write did not land). */
+     * "recorded" when the ACP write did not land or was skipped by /REAPPLY). */
     if (applied) {
         printf("%%TCPIP-I-INFO, route added\n");
         return SS$_NORMAL;
@@ -2238,6 +2254,9 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
             printf("%%TCPIP-W-NOTAPPLIED, route recorded in TCPIP$ROUTE.DAT "
                    "(reapplied at boot) but not applied to the live routing table "
                    "now (requires NET_ADMIN)\n");
+        else if (reapply)
+            printf("%%TCPIP-W-PRIVREQ, route not applied (requires NET_ADMIN); "
+                   "not recorded (/REAPPLY)\n");
         else
             printf("%%TCPIP-W-PRIVREQ, route not applied (requires NET_ADMIN) and "
                    "not recorded (executive absent -- TCPIP$ROUTE.DAT unreachable)\n");

@@ -818,6 +818,20 @@ static void rig_dlm_probe(int fd, const struct node_cfg *c)
 #define RIG_XN_CANDIDATES   16u    /* how many names to try before giving up  */
 #define RIG_XN_GRANT_WAIT   40u    /* x RIG_XN_POLL_MS: the cross-node wait   */
 #define RIG_XN_POLL_MS      250u
+/*
+ * The direct release proof's AFTER-poll window (6c below) MUST exceed
+ * RIG_XN_GRANT_WAIT by a wide margin, not equal it. This node's own release
+ * is sequenced AFTER its own watch-for-the-peer's-hold scan, which is itself
+ * bounded by RIG_XN_GRANT_WAIT and, on a node with nothing to watch, runs to
+ * that FULL timeout before returning -- so the PEER's own AFTER-poll can be
+ * watching for a release that, structurally, may not fire until nearly
+ * RIG_XN_GRANT_WAIT after that peer's own before-sample. A same-length AFTER
+ * window is a coin flip on that skew (measured: it missed a real, already
+ * wire-sent release by a slim margin on top of the 10s timeout). This is
+ * rig-scheduling patience, not a looser correctness bar -- the assertion (an
+ * actual counter rise, backed by an actual state re-read) is unchanged.
+ */
+#define RIG_XN_CLEAN_AFTER_WAIT 160u  /* x RIG_XN_POLL_MS = 40s */
 
 struct rig_xnode {
 	char     name[32];        /* the peer-mastered name, or "" if none    */
@@ -1195,6 +1209,237 @@ static void rig_xnode_phase(int fd, const struct node_cfg *c,
 	rig_dump_dlm(fd, c, "after");
 }
 
+/* ==========================================================================
+ * 6c. THE DIRECT MASTER-SIDE RELEASE PROOF (rd vms-c72 conductor gap-close).
+ *
+ * The prior attempt bracketed the WRONG event with a MUDDIED resource: it
+ * sampled GET_RESMASTER around whichever node's OWN release happened to run
+ * next, on the SAME contended name (`xn`) that also carries a second,
+ * incompatible request from the holder itself (rig_xn_contend) -- so a
+ * released grant can be immediately refilled by that second request's
+ * deferred grant, and n_granted never moves even though the specific LKB
+ * that held it really left.
+ *
+ * THE FIX is two changes, both required:
+ *
+ *   1. A DEDICATED, SINGLE-HOLDER resource, in its own candidate namespace
+ *      ("OVMX<tag>$R%02u", disjoint from the contended "$X" series) that
+ *      NEVER gets a second $ENQ. n_granted on it can only ever be 0 or 1,
+ *      so a 1->0 delta can only mean the one holder released.
+ *
+ *   2. THE RIGHT BRACKET. BEFORE is sampled once this node has confirmed the
+ *      PEER already holds a granted lock on a name in ITS OWN candidate
+ *      series that resolved to this node as master -- i.e. found via a
+ *      read-only scan of the peer's namespace (Rule 8: no hash is computed,
+ *      only read back). AFTER is sampled only once THIS node's own
+ *      `releases_received` counter has RISEN past the baseline taken right
+ *      after BEFORE -- i.e. only once this executive has actually PROCESSED
+ *      the peer's op-0x03 for some release. Sequencing the RELEASE of this
+ *      node's own held candidate strictly BEFORE the wait-for-rise poll (not
+ *      before the BEFORE sample, which only discovers the peer's resource
+ *      and never waits on a release) is what avoids the two-node
+ *      deadlock-to-timeout a naive "wait first" ordering produces.
+ *
+ * Two independent roles run in the SAME process, because a 2-node rig cannot
+ * know in advance which name routes which way:
+ *   HOLDER role:  own $R-candidate the peer masters -> hold, then release.
+ *   WATCHER role: peer's $R-namespace, a candidate THIS node masters -> the
+ *                 BEFORE/AFTER delta lives here.
+ * Both roles are symmetric across the two nodes, exactly like the xnode
+ * phase's own find/contend: which node ends up holding which resource is
+ * discovered from the executive, never assumed.
+ * ========================================================================== */
+
+/* This node's own candidate name for the dedicated, single-holder series. */
+static void rig_xn_clean_name(const struct node_cfg *c, unsigned i, char *out,
+			      size_t n)
+{
+	snprintf(out, n, "OVMX%s$R%02u", c->tag, i);
+}
+
+struct rig_xn_clean_holder {
+	char     name[32];   /* this node's own held candidate ("" if none) */
+	uint32_t lkid;
+	int      held;
+};
+
+/*
+ * HOLDER role: scan this node's own $R-series (same discovery method as
+ * rig_xn_try -- GET_RESMASTER readback, Rule 8) for one the PEER masters,
+ * and hold it with NO second $ENQ, so it is a genuine single-holder
+ * resource. Candidates this node masters itself are released immediately,
+ * same as rig_xn_try.
+ */
+static void rig_xn_clean_hold(int fd, const struct node_cfg *c,
+			      struct rig_xn_clean_holder *h)
+{
+	struct vms_resmaster_args rm;
+	unsigned i;
+
+	memset(h, 0, sizeof(*h));
+	for (i = 0; i < RIG_XN_CANDIDATES; i++) {
+		char name[32];
+		uint32_t lkid = 0u, st;
+
+		rig_xn_clean_name(c, i, name, sizeof(name));
+		st = rig_dlm_enq(fd, name, 0u, &lkid);
+		if (st != SS_NORMAL || lkid == 0u)
+			continue;
+		rig_xn_wait_master(fd, name, &rm);
+		if (!rig_xn_is_peer_mastered(&rm)) {
+			(void)rig_dlm_deq(fd, lkid);
+			continue;
+		}
+		snprintf(h->name, sizeof(h->name), "%s", name);
+		h->lkid = lkid;
+		h->held = 1;
+		printf("RIG-%s-RESCLEAN-HOLD res=%s lkid=0x%08x master_csid=0x%08x "
+		       "(single holder, no contender -- the direct-release "
+		       "subject)\n",
+		       c->tag, h->name, (unsigned)h->lkid,
+		       (unsigned)rm.master_csid);
+		fflush(stdout);
+		return;
+	}
+	printf("RIG-%s-RESCLEAN-HOLD NONE (no dedicated candidate was mastered "
+	       "by the peer)\n", c->tag);
+	fflush(stdout);
+}
+
+/* Release the dedicated resource this node holds -- the $DEQ that must cross
+ * as op-0x03 with no contender queued behind it. */
+static void rig_xn_clean_release(int fd, const struct node_cfg *c,
+				 const struct rig_xn_clean_holder *h)
+{
+	if (!h->held)
+		return;
+	printf("RIG-%s-RESCLEAN-DEQ res=%s lkid=0x%08x status=%u\n",
+	       c->tag, h->name, (unsigned)h->lkid,
+	       (unsigned)rig_dlm_deq(fd, h->lkid));
+	fflush(stdout);
+}
+
+struct rig_xn_clean_watch {
+	char     name[32];
+	uint32_t base_rx;
+	int      have;
+};
+
+/*
+ * WATCHER role, BEFORE half: scan the PEER's $R-namespace (read-only
+ * GET_RESMASTER, Rule 8 -- no hash computed) for a candidate THIS node
+ * masters with EXACTLY ONE granted lock. This is discovery only -- it waits
+ * for the peer's own HOLD to land, never for a release -- so it cannot
+ * deadlock against the peer's identical sequence.
+ */
+static void rig_xn_clean_watch_before(int fd, const struct node_cfg *c,
+				      struct rig_xn_clean_watch *w)
+{
+	const char *peer_tag = (c->tag[0] == 'A') ? "B" : "A";
+	struct vms_resmaster_args rm;
+	struct vms_cluster_diag_dlm_args a;
+	unsigned t, i;
+	int ok = 0;
+
+	memset(w, 0, sizeof(*w));
+	for (t = 0; t < RIG_XN_GRANT_WAIT && !ok; t++) {
+		for (i = 0; i < RIG_XN_CANDIDATES; i++) {
+			snprintf(w->name, sizeof(w->name), "OVMX%s$R%02u",
+				 peer_tag, i);
+			if (rig_dlm_resmaster(fd, w->name, &rm) != 0u &&
+			    rm.found != 0u && rm.is_local_master != 0u &&
+			    rm.n_granted == 1u) {
+				ok = 1;
+				break;
+			}
+		}
+		if (!ok)
+			rig_msleep(RIG_XN_POLL_MS);
+	}
+	if (!ok) {
+		printf("RIG-%s-RESMASTER-BEFORE NONE (masters no dedicated "
+		       "peer-namespace candidate with exactly one outstanding "
+		       "grant)\n", c->tag);
+		fflush(stdout);
+		return;
+	}
+	printf("RIG-%s-RESMASTER-BEFORE res=%s found=%u is_local_master=%u "
+	       "n_granted=%u remote_holder_csid=0x%08x\n",
+	       c->tag, w->name, (unsigned)rm.found, (unsigned)rm.is_local_master,
+	       (unsigned)rm.n_granted, (unsigned)rm.remote_holder_csid);
+	fflush(stdout);
+
+	memset(&a, 0, sizeof(a));
+	w->base_rx = (ioctl(fd, VMS_IOCTL_CLUSTER_DIAG_DLM, &a) == 0 &&
+		      a.status == SS_NORMAL) ? a.dlm.releases_received : 0u;
+	w->have = 1;
+}
+
+/*
+ * WATCHER role, AFTER half. Called only once THIS node has already sent its
+ * own release (see rig_xn_clean_phase) -- polls THIS node's own
+ * `releases_received` for a rise past the baseline, which can only mean the
+ * PEER's op-0x03 for the resource `w->name` names was actually PROCESSED,
+ * and only then re-samples GET_RESMASTER. `counter_rose` is printed
+ * explicitly: a stale AFTER (never having risen) must never be misread as a
+ * clean delta.
+ */
+static void rig_xn_clean_watch_after(int fd, const struct node_cfg *c,
+				     const struct rig_xn_clean_watch *w)
+{
+	struct vms_resmaster_args rm;
+	struct vms_cluster_diag_dlm_args a;
+	uint32_t cur_rx = w->base_rx;
+	int rose = 0;
+	unsigned t;
+
+	if (!w->have)
+		return;
+	for (t = 0; t < RIG_XN_CLEAN_AFTER_WAIT; t++) {
+		memset(&a, 0, sizeof(a));
+		if (ioctl(fd, VMS_IOCTL_CLUSTER_DIAG_DLM, &a) == 0 &&
+		    a.status == SS_NORMAL) {
+			cur_rx = a.dlm.releases_received;
+			if (cur_rx != w->base_rx) {
+				rose = 1;
+				break;
+			}
+		}
+		rig_msleep(RIG_XN_POLL_MS);
+	}
+	(void)rig_dlm_resmaster(fd, w->name, &rm);
+	printf("RIG-%s-RESMASTER-AFTER res=%s found=%u is_local_master=%u "
+	       "n_granted=%u remote_holder_csid=0x%08x releases_received=%u "
+	       "base_releases_received=%u counter_rose=%d\n",
+	       c->tag, w->name, (unsigned)rm.found, (unsigned)rm.is_local_master,
+	       (unsigned)rm.n_granted, (unsigned)rm.remote_holder_csid,
+	       (unsigned)cur_rx, (unsigned)w->base_rx, rose);
+	fflush(stdout);
+}
+
+/*
+ * THE DIRECT RELEASE PROOF, end to end on this node: hold my own dedicated
+ * candidate (if the peer masters one), discover the peer's dedicated
+ * candidate I master and sample BEFORE, release MY OWN holder (my op-0x03,
+ * for the PEER's watcher to observe), then poll for the PEER's op-0x03
+ * against the resource I master and sample AFTER.
+ *
+ * Run AFTER rig_xnode_phase has fully completed its own release (see
+ * rig_poll) so this node's releases_received baseline below is never
+ * polluted by that unrelated resource's release racing in late.
+ */
+static void rig_xn_clean_phase(int fd, const struct node_cfg *c)
+{
+	struct rig_xn_clean_holder h;
+	struct rig_xn_clean_watch w;
+
+	rig_msleep(1000u);   /* let the xnode phase's own release settle */
+	rig_xn_clean_hold(fd, c, &h);
+	rig_xn_clean_watch_before(fd, c, &w);
+	rig_xn_clean_release(fd, c, &h);
+	rig_xn_clean_watch_after(fd, c, &w);
+}
+
 /*
  * THE SURVIVAL LINE. Printed AFTER the phase, and after a LINGER long enough
  * for the PEER's frames to have arrived here -- because the property being
@@ -1246,6 +1491,7 @@ static int rig_poll(int fd, const struct node_cfg *c)
 
 	if (c->xnode) {
 		rig_xnode_phase(fd, c, &xn);
+		rig_xn_clean_phase(fd, c);
 		rig_xn_survival(fd, c, c->linger);
 		rig_sample_take(fd, &s);
 		rig_verdict(c, &s);   /* the SURVIVAL reading -- see above */

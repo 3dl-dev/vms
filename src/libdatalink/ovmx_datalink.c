@@ -459,6 +459,29 @@ int scs_datalink_open(const char *ifname, uint16_t ethertype)
         errno = e;
         return -1;
     }
+
+    /* Promiscuous reception. Without it, bpf(4) delivers only the frames the NIC
+     * itself accepts -- its factory hardware unicast address, broadcast, and any
+     * joined multicast groups. A DECnet/SCS node's real receive address is its
+     * ALGORITHMIC MAC (aa:00:04:00:<node> for DECnet, the SCSSYSTEMID-derived
+     * address for SCS), which is NOT the interface's factory address, so a
+     * UNICAST frame sent TO that algorithmic address -- e.g. a CTERM Connect
+     * Confirm to aa:00:04:00:<node> -- never reaches bpf and the node appears
+     * deaf to every unicast reply (writes_recv stays 0). The Linux AF_PACKET
+     * backend already receives all frames of the bound ethertype regardless of
+     * destination (protocol delivery), so this makes the bpf backend fulfil the
+     * "both backends see the same traffic" contract this file promises below; the
+     * ethertype BPF filter that follows plus the caller's own destination-MAC
+     * check (dnet_recv_route) keep only the frames actually addressed here.
+     * Non-fatal: if the interface cannot enter promiscuous mode the prior
+     * behaviour is unchanged (broadcast/multicast still received), so no working
+     * path regresses -- only unicast-to-algorithmic-MAC reception is enabled. */
+    if (ioctl(fd, BIOCPROMISC, NULL) < 0) {
+        /* Breadcrumb only; unicast reception to the algorithmic MAC may fail. */
+        fprintf(stderr, "ovmx_datalink: BIOCPROMISC on %s failed: %s "
+                        "(unicast-to-algorithmic-MAC reception may not work)\n",
+                ifname, strerror(errno));
+    }
     /* The CALLER's frame builders already set the source MAC (and every other
      * header field) themselves; without this, bpf overwrites the source
      * address on write(2) with the interface's own, which is usually the

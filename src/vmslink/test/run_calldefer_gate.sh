@@ -8,10 +8,15 @@
 set -uo pipefail
 CC=${CC:-gcc}
 HERE=$(cd "$(dirname "$0")" && pwd); LINKDIR=$(cd "$HERE/.." && pwd)
+REPO=$(cd "$LINKDIR/../.." && pwd)
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
-# Host LINK.EXE = add_executable(vmslink link.c). Single TU.
-"$CC" -O2 -o "$W/LINK.EXE" "$LINKDIR/link.c" \
+# Host LINK.EXE = the CMake `vmslink` target: add_executable(vmslink link.c),
+# target_include_directories PRIVATE include, -DIMGACT_INTERP_PATH=... . link.c
+# is a single TU (it #includes evax_read.c). Mirror those flags here.
+"$CC" -O2 -DIMGACT_INTERP_PATH=/run/ovmx-boot/IMGACT.EXE \
+  -I"$LINKDIR/include" -I"$REPO/src/libvms/include" \
+  -o "$W/LINK.EXE" "$LINKDIR/link.c" \
   || { echo "FAIL: could not build host LINK.EXE from link.c"; exit 1; }
 
 # Fixture 1: a CALL to an undefined function -> a PLT32/CALL-site reloc against

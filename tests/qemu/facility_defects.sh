@@ -544,7 +544,8 @@ tcpip-inetd-reply-not-connected
 tcpip-daytime-reply-not-formatted
 l2-open-bypasses-phy-io
 pe-vc-snapshot-fabricates-circuit
-scs-cdt-snapshot-fabricates-connection"
+scs-cdt-snapshot-fabricates-connection
+cnxman-csb-snapshot-fabricates-member"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -656,6 +657,23 @@ allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
 EOF
                       ;;
+        esac;;
+
+    cnxman-csb-snapshot-fabricates-member)
+        case "$_f" in
+        facility)     echo "CNXMAN CSB membership diagnostic snapshot (VMS_CLUSTER_DIAG_CSB_CSB, vms-ci)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_kmod_cluster_membership_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_get_csb()'s 'cl->cnxman == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV, so an index far past the club's high-water mark answers SS__NORMAL -- a member row the executive does not hold, reported live. memset(out,0) precedes the guard so the row reads all-zero (only the STATUS lies); the CLUB path (cnxman_club_csb_at, the ternary's second SS__NOSUCHDEV) is untouched, so the all-zero-row check and CLUB assertions stay green (minimality). The sed matches only the guard's standalone return statement, not the ternary; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an index far past the high-water mark refuses (SS$_NOSUCHDEV), never a wrapped/aliased row
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     scs-cdt-snapshot-fabricates-connection)
@@ -6202,6 +6220,12 @@ apply_edit() {
         # Range-scoped to vms_scs_cdt_snapshot (single SS__NOSUCHDEV at :750);
         # after apply it is SS__NORMAL, so a 2nd apply finds none (no-op selftest).
         sed -i '/^int vms_scs_cdt_snapshot(/,/^}/ s|return SS__NOSUCHDEV;|return SS__NORMAL; /* NEGCTL scs-cdt-snapshot-fabricates-connection */|' "$_file";;
+    cnxman-csb-snapshot-fabricates-member)
+        # Range-scoped to cnxman_get_csb. The function has TWO (int)SS__NOSUCHDEV
+        # returns; the exact standalone `return (int)SS__NOSUCHDEV;` matches ONLY
+        # the cl->cnxman==NULL guard, not the `? SS__NORMAL : (int)SS__NOSUCHDEV`
+        # ternary (different surrounding text). Gone after apply (no-op re-apply).
+        sed -i '/^int cnxman_get_csb(/,/^}/ s|return (int)SS__NOSUCHDEV;|return (int)SS__NORMAL; /* NEGCTL cnxman-csb-snapshot-fabricates-member */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

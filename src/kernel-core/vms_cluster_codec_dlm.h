@@ -31,7 +31,33 @@
  * the CALLER (the FSM, FC-P4.6/FC-P5.3, O5-tier) is what must source these
  * fields from the executive's actual lock records, never a counter.
  *
- * GROUNDED vs PROVISIONAL, at a glance:
+ * THE SUPERSESSION THIS FILE PROMISED, AND WHY IT IS A DIVERGENCE *REDUCTION*
+ * (rd vms-fa7 / vms-002 / vms-858, from the vms-c03 capture set).
+ *
+ * The previous revision of this comment carried a PROVISIONAL "completion
+ * 0x04 + commit 0x03" pair, lifted from field-forensics rather than from a
+ * console-correlated capture, and said in as many words that re-mapping the
+ * cat-0x02 op semantics from a fresh capture was "the plan, not a
+ * regression". That capture now exists -- a private 2-node real OpenVMS
+ * VAX 7.3 cluster, every frame correlated by `master_lkid` to the `$ENQ`
+ * that drove it (tests/lab/captures/vms-c03-dlm-opcodes-20260911/,
+ * GROUNDING.md) -- and it says the pair was a PHANTOM:
+ *
+ *     op 0x03 is $DEQ.     It is not a "commit".
+ *     op 0x04 is BLKAST.   It is not a "completion".
+ *     op 0x06 is the CONVERT that carries the lock VALUE BLOCK.
+ *     THERE IS NO SEPARATE COMPLETION OR COMMIT OPCODE AT ALL. A real
+ *     requester's grant is simply the op-0x01 cat-0x82 response; nothing
+ *     follows it on the wire.
+ *
+ * So `struct vms_dlm_completion` and `vms_dlm_completion_build()` are GONE,
+ * not renamed. Deleting them makes OVMX emit STRICTLY FEWER frame shapes
+ * than before and strictly fewer than it used to invent: two frames a real
+ * VMS requester never sends are no longer sendable at all, which is the
+ * cheapest kind of fidelity there is (memory ovmx-never-crashes-a-peer: the
+ * frames you cannot build are the ones that cannot bugcheck a peer).
+ *
+ * GROUNDED vs OBSERVED, at a glance:
  *   - op 0x01 ENQ / op 0x07 CONVERT request+response (mode, req_lkid/PID,
  *     master_lkid, resource name, grant-vs-deny shape) -- GROUNDED, spec
  *     §4(f).1, pinned by a six-value one-variable-diff method on a live
@@ -39,28 +65,33 @@
  *   - op 0x0d lock-resource rebuild record request+response -- GROUNDED,
  *     spec §4(p), the recipe reconstructs 1367/1367 real responses
  *     byte-for-byte with zero residuals.
- *   - op 0x04 / op 0x03 completion+commit -- PROVISIONAL. The published
- *     spec (docs/cluster-protocol-spec.md §5(dlm)) does NOT ground a
- *     cat-0x02 completion body at all. The field positions here are
- *     carried over from repeated field-forensics sessions recorded in
- *     operator memory cluster-promotion-gap.md (pm14-pm16) -- explicitly
- *     NOT this codec's normal source of truth (design §3.9: "never
- *     re-derive an offset from a pcap instead of the spec"). They are
- *     included, clearly marked PROVISIONAL, because FC-P5.2 is EXPECTED to
- *     re-map cat-0x02 op semantics from a fresh console-correlated capture
- *     (this item's own plan-table gate: "LAB (P5.1 may re-map op
- *     semantics; the table is data)") -- superseding this table is the
- *     plan, not a regression.
- *   - BLKAST (asynchronous block notification) and the 16-byte LKSB VALBLK
- *     (lock value block) -- NOT IMPLEMENTED. Spec §5(dlm) is explicit that
- *     the VALBLK round-trip was "not exercised (driver requested no
- *     VALBLK)" and no BLKAST wire capture exists at all in the published
- *     spec. Per INV-6 ("honest omission over a placeholder"), this codec
- *     defines no struct field and no accessor for either -- a function
- *     that always returns VMS_CODEC_E_CLASS would invite a caller to
- *     forget to check it; an absent function cannot be forgotten-and-called.
- *     A later item grounds these from a real capture before this file grows
- *     them.
+ *   - op 0x03 $DEQ and op 0x04 BLKAST: the two lock-id fields and the mode
+ *     byte -- GROUNDED, vms-c03, each byte correlated to the driving $ENQ.
+ *   - op 0x06 CONVERT-with-VALBLK: the 16-byte value block at body[36:52]
+ *     -- GROUNDED, vms-c03 (the driver's own `WROTEBYVAX1XXXXX` pattern
+ *     appears there verbatim on the real wire).
+ *   - ONE field is OBSERVED-BUT-NOT-PINNED and is labelled so everywhere it
+ *     appears: the BLKAST mode-context pair at body[30:32]. Two samples in
+ *     one capture read 0x01,0x05 and a third (a different lock) read
+ *     0x01,0x00, which is not a one-variable diff. It is therefore carried
+ *     behind an explicit `mode_ctx_valid` opt-in, exactly like the
+ *     directory hash: a caller that does not hold real executive values for
+ *     it writes NOTHING there. A later capture upgrades the label.
+ *
+ * TWO THINGS THIS FILE STILL REFUSES TO DO, and they are not oversights:
+ *   - There is NO op-0x06 BUILDER. The value block's position is grounded,
+ *     but body[32:36] ahead of it varies per request in a way no capture
+ *     pins, so composing a whole op-0x06 frame would mean minting those
+ *     four bytes. There is an ACCESSOR (read what a peer really sent) and
+ *     no builder (INV-6: nowhere to put a value nobody produced) -- the
+ *     same asymmetry the directory hash already has.
+ *   - There is no resource-NAME field on a BLKAST. The vms-c03 BLKAST frame
+ *     does have readable ASCII at body[48] -- `F11B$aSYSDSK1` -- and it is
+ *     STALE BUFFER, not a field: the resource the frame is actually about
+ *     (`OVMXBLK2`) appears in the capture ONLY in the op-0x01 ENQ. A BLKAST
+ *     names its lock by `master_lkid` and by nothing else. Reading body[48]
+ *     there would be the purest form of the bug this file exists to
+ *     prevent: a wire field that looks like data and is not.
  */
 #ifndef OVMX_VMS_CLUSTER_CODEC_DLM_H
 #define OVMX_VMS_CLUSTER_CODEC_DLM_H
@@ -123,9 +154,15 @@ extern "C" {
 #define VMS_DLM_WIREOP_CONVERT      0x07u  /* lock mode CONVERT                 */
 #define VMS_DLM_WIREOP_REBUILD      0x0du  /* join-time lock-resource rebuild rec*/
 
-/* Opcodes -- PROVISIONAL, NOT spec-grounded; see the file doc comment. */
-#define VMS_DLM_WIREOP_COMPLETE_PROVISIONAL 0x04u
-#define VMS_DLM_WIREOP_COMMIT_PROVISIONAL   0x03u
+/*
+ * Opcodes -- GROUNDED by the vms-c03 capture set (see the file doc comment's
+ * supersession note). The values that used to live at 0x03 and 0x04 in this
+ * table ("commit" and "completion") were phantoms; these are what a real
+ * OpenVMS VAX 7.3 cluster actually puts there.
+ */
+#define VMS_DLM_WIREOP_DEQ          0x03u  /* cross-node lock RELEASE ($DEQ)    */
+#define VMS_DLM_WIREOP_BLKAST       0x04u  /* master -> remote holder blocking AST*/
+#define VMS_DLM_WIREOP_CONVERT_VALBLK 0x06u /* CONVERT carrying the value block */
 
 /*
  * Lock modes -- GROUNDED, spec §4(f).1 body[30] (abs 102): a clean
@@ -146,9 +183,9 @@ enum vms_lck_mode {
  * never assigns lkid 0 to an established lock -- every cross-node path
  * there (`lkid == 0`, `req->req_lkid == 0`, `req->master_lkid != 0`, ...)
  * treats 0 as "not a real lock yet". This codec uses the SAME convention
- * to refuse a completion/commit build whose lock-id field looks unset
- * rather than a real LKB/RSB handle (the fc8540ae lesson, see file doc
- * comment).
+ * to refuse any build -- and, for the lock-id-only messages, any PARSE --
+ * whose lock-id field looks unset rather than a real LKB/RSB handle (the
+ * fc8540ae lesson, see file doc comment).
  *
  * The engine states the same constant in src/kernel-core/vms_dlm_proxy.h, where
  * the proxy-LKB paths refuse to post or accept it (FC-P4.4). The guard below
@@ -469,54 +506,179 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 			       uint8_t *frame, uint32_t cap, uint32_t *written);
 
 /* ------------------------------------------------------------------ *
- * op 0x04 / op 0x03 completion + commit -- PROVISIONAL, NOT spec-grounded.
- * See the file doc comment for why this table exists despite that, and
- * FC-P5.2 which is expected to supersede it from a fresh capture.
+ * op 0x03 $DEQ, op 0x04 BLKAST, op 0x06 CONVERT-with-VALBLK
+ * -- GROUNDED, rd vms-fa7 / vms-002 / vms-858, capture set
+ *    tests/lab/captures/vms-c03-dlm-opcodes-20260911/ (GROUNDING.md).
+ *
+ * ALL THREE REUSE THE ENQ HEADER POSITIONS. That is not an assumption
+ * carried over from op 0x01: it is what the capture shows. Each frame's
+ * body[24:28] is byte-identical to the `master_lkid` of the op-0x01 ENQ
+ * that created the very lock the operation is about, and each frame's
+ * body[20:24] is byte-identical to the requester handle the op-0x01
+ * cat-0x82 GRANT assigned. So no new lock-id offsets are defined here --
+ * defining a second spelling of body[20]/body[24] would be inventing a
+ * disagreement. The offsets above ARE these offsets.
+ *
+ *   DEQ    (0x03) dlm-deq-20260911.pcap  f14  VAX1 -> vax2
+ *          master_lkid 0x3a0004eb == the f12 ENQ for resource 'OVMXDEQ1'
+ *          req_lkid    0x080001cd == the f13 GRANT's assigned handle
+ *          body[30]    0x00 (NL)  -- the lock's mode as it is released
+ *          NO RESOURCE NAME: body[46] does not hold the 0x03 name marker
+ *          (it holds uninitialised bytes, 0x9a on this specimen and 0x00 on
+ *          the second DEQ in the same capture -- which is itself the proof
+ *          that it is not a field). A DEQ names its lock by lock-id.
+ *
+ *   BLKAST (0x04) dlm-blk2-20260911.pcap f58  vax2 -> VAX1 (master->holder)
+ *          master_lkid 0x590004e3 == the f18 EX-holder ENQ for 'OVMXBLK2'
+ *          req_lkid    0x0a0003af == the holder's own local handle
+ *          body[30:32] OBSERVED 0x01,0x05 -- NOT PINNED, see below
+ *          NO RESOURCE NAME: body[48] reads 'F11B$aSYSDSK1' and that is a
+ *          STALE BUFFER, not a field (the frame's real resource,
+ *          'OVMXBLK2', appears in the capture ONLY in the op-0x01 ENQ).
+ *
+ *          WHAT IS *NOT* CLAIMED ABOUT 0x04. The same captures contain
+ *          op-0x04 frames in the OTHER direction carrying master_lkid 0
+ *          (dlm-lvb3 f8/f11, dlm-blk2 f14/f17). Nothing correlates those
+ *          to a lock, so this codec does not say what they are: the
+ *          parser REFUSES a zero lock id rather than reporting "a BLKAST
+ *          for lock 0", and the BLKAST semantics grounded here are
+ *          exactly the master->holder case the capture drove and no more.
+ *
+ *   VALBLK (0x06) dlm-lvb3-20260911.pcap f14  VAX1 -> vax2
+ *          master_lkid 0x2b000489 == the f12 ENQ for resource 'OVMXLVB3'
+ *          body[36:52] == 'WROTEBYVAX1XXXXX', the exact 16 bytes the
+ *          driver placed at LKSB+8 before converting EX->NL with
+ *          LCK$M_VALBLK. That is the lock value block, byte for byte.
  * ------------------------------------------------------------------ */
-#define VMS_OFF_DLM_COMPLETE_STATUS       84u /* body[12:16] LE u32, PROVISIONAL */
-#define VMS_OFF_DLM_COMPLETE_MASTER_LKID  92u /* body[20:24] LE u32, PROVISIONAL */
-#define VMS_OFF_DLM_COMPLETE_REQ_LKID     96u /* body[24:28] LE u32, PROVISIONAL */
 
-/* Constant observed across the forensics sessions at body[12:16]; carries
- * no known meaning beyond "present on every completion seen" (PROVISIONAL,
- * memory cluster-promotion-gap.md pm(14)/pm(15)). */
-#define VMS_DLM_COMPLETE_STATUS_CONST 0x00030001u
+/* body[36:52] (abs 108): the 16-byte lock value block on an op-0x06. */
+#define VMS_OFF_DLM_VALBLK        108u
+#define VMS_OFB_DLM_VALBLK      VMS_OFB_FROM_FRAME(VMS_OFF_DLM_VALBLK)
+/* The LKSB's value block is 16 bytes (LKSB is 24; the block lives at
+ * LKSB+8). Spelled locally because this header stays self-contained for the
+ * pure host codec build -- vms_dlm_proxy.h states the same 16 for the
+ * engine side. */
+#define VMS_DLM_VALBLK_WIRE_LEN    16u
 
-struct vms_dlm_completion {
-	uint32_t master_lkid; /* LKB: the master's granted lock-id for this  */
-			       /* lock -- MUST be sourced from a real grant   */
-			       /* this node received (e.g. the req_lkid field */
-			       /* of vms_dlm_enq_response after a GRANT),     */
-			       /* never a counter or a constant                */
-	uint32_t req_lkid;    /* LKB: this node's own local lock-id for the  */
-			       /* same lock                                   */
-	uint8_t  name_len;
-	uint8_t  name[VMS_DLM_NAME_MAX];
+/*
+ * body[30:32] (abs 102): the BLKAST's mode-context pair.
+ *
+ * OBSERVED, NOT PINNED, and deliberately kept distinct from the GROUNDED
+ * lock-mode byte that shares body[30] on an ENQ/CONVERT/DEQ. Two BLKAST
+ * frames for the contended lock read 0x01,0x05; a third, for a different
+ * (F11B$a) lock, read 0x01,0x00. Three samples across two locks is not a
+ * one-variable diff, so this codec will not claim to know what the pair
+ * means. It is carried, labelled, and opt-in on the builder.
+ */
+#define VMS_OFF_DLM_BLKAST_MODE_CTX      VMS_OFF_DLM_MODE
+#define VMS_OFB_DLM_BLKAST_MODE_CTX      VMS_OFB_DLM_MODE
+#define VMS_DLM_BLKAST_MODE_CTX_LEN       2u
+
+/*
+ * A cross-node lock RELEASE (op 0x03). Both lock ids are REQUIRED to be
+ * real: this codec refuses VMS_DLM_LKID_UNSET in either, on the parse side
+ * as well as the build side. A release naming lock 0 is not a release, and
+ * a peer that acted on one would be acting on nothing.
+ */
+struct vms_dlm_deq {
+	uint32_t req_lkid;     /* body[20:24]: our own handle, post-grant   */
+	uint32_t master_lkid;  /* body[24:28]: the master's handle          */
+	uint8_t  mode;         /* body[30]:    the mode being released      */
 };
 
 /*
- * Build a completion (op VMS_DLM_WIREOP_COMPLETE_PROVISIONAL) or commit (op
- * VMS_DLM_WIREOP_COMMIT_PROVISIONAL) frame. REFUSES (VMS_CODEC_E_INVAL) if
- * `c->master_lkid` or `c->req_lkid` is VMS_DLM_LKID_UNSET (0) -- the
- * fc8540ae hard lesson: a completion referencing a lock id the master
- * never granted crashes the master with INVLOCKID, and every OVMX build
- * that has ever placed a real value at this field sourced it from a lock
- * this node was actually granted; a zero can only be an unsourced
- * placeholder. This check does not and cannot prove a nonzero value is
- * genuinely real -- that discipline belongs to the FSM caller, which must
- * read `master_lkid` off the executive's own lock state, never mint one.
+ * A blocking AST (op 0x04), master -> the remote holder whose lock is in
+ * the way. It identifies its lock by lock-id and by NOTHING else -- there
+ * is no name field here, on purpose (see the section comment).
  */
-vms_codec_status_t vms_dlm_completion_build(const struct vms_dlm_completion *c,
-					    uint8_t op,
-					    uint8_t *frame, uint32_t cap,
-					    uint32_t *written);
+struct vms_dlm_blkast {
+	uint32_t req_lkid;     /* body[20:24]: the HOLDER's local handle    */
+	uint32_t master_lkid;  /* body[24:28]: the blocked lock's master id */
+
+	/* body[30:32] -- OBSERVED, NOT PINNED. On a parse these are simply
+	 * the two bytes the peer sent. On a BUILD they are written ONLY when
+	 * `mode_ctx_valid` is set, which a caller may set only if it holds
+	 * real executive mode values for them; otherwise the builder leaves
+	 * the span untouched, the same honest-omission rule the directory
+	 * hash follows. */
+	uint8_t  mode_ctx[VMS_DLM_BLKAST_MODE_CTX_LEN];
+	uint8_t  mode_ctx_valid;
+};
+
+/*
+ * The value block a peer's op-0x06 CONVERT carried, plus the lock it
+ * belongs to. READ ONLY -- there is no builder (file doc comment).
+ */
+struct vms_dlm_valblk_convert {
+	uint32_t req_lkid;     /* body[20:24]                               */
+	uint32_t master_lkid;  /* body[24:28]                               */
+	uint8_t  mode;         /* body[30]: the mode converted TO           */
+	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];  /* body[36:52]           */
+};
+
+/*
+ * Parse an op-0x03 $DEQ. Refuses anything that is not a cat-0x02 request
+ * with opcode 0x03, and refuses a frame whose `master_lkid` or `req_lkid`
+ * is VMS_DLM_LKID_UNSET -- the capture contains real cat-0x02 frames with
+ * a zero there, and "the peer sent zero" and "the peer named a lock" are
+ * different facts. `*out` is written only on VMS_CODEC_OK.
+ */
+vms_codec_status_t vms_dlm_deq_parse_body(const uint8_t *body, uint32_t len,
+					  struct vms_dlm_deq *out);
+vms_codec_status_t vms_dlm_deq_parse(const uint8_t *frame, uint32_t len,
+				     const struct vms_frame_info *fi,
+				     struct vms_dlm_deq *out);
+
+/*
+ * Build an op-0x03 $DEQ into `frame` at its abs offsets (the same division
+ * of labour as vms_dlm_enq_request_build: this writes the DLM body span
+ * only). REFUSES (VMS_CODEC_E_INVAL) if either lock id is
+ * VMS_DLM_LKID_UNSET -- the fc8540ae hard lesson, unchanged by the
+ * supersession: it was a lock-id field that bugchecked a real VAX with
+ * INVLOCKID, and a release is a lock-id-only message, so it is ALL such
+ * fields. The caller must have read both ids off the executive's own lock
+ * record; this check refuses only the one value that structurally cannot
+ * be a real assigned handle.
+ */
+vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
+				     uint8_t *frame, uint32_t cap,
+				     uint32_t *written);
+
+/* Parse an op-0x04 BLKAST. Same lock-id refusal as the DEQ parser. */
+vms_codec_status_t vms_dlm_blkast_parse_body(const uint8_t *body, uint32_t len,
+					     struct vms_dlm_blkast *out);
+vms_codec_status_t vms_dlm_blkast_parse(const uint8_t *frame, uint32_t len,
+					const struct vms_frame_info *fi,
+					struct vms_dlm_blkast *out);
+
+/* Build an op-0x04 BLKAST. Same lock-id refusal as the DEQ builder; the
+ * OBSERVED mode-context pair rides only when `b->mode_ctx_valid` is set. */
+vms_codec_status_t vms_dlm_blkast_build(const struct vms_dlm_blkast *b,
+					uint8_t *frame, uint32_t cap,
+					uint32_t *written);
+
+/*
+ * Read the lock value block a peer's op-0x06 CONVERT carried. Accessor
+ * only, by design: see the file doc comment for why there is no builder.
+ * Same cat/op gate and same lock-id refusal as the two parsers above.
+ */
+vms_codec_status_t
+vms_dlm_valblk_convert_parse_body(const uint8_t *body, uint32_t len,
+				  struct vms_dlm_valblk_convert *out);
+vms_codec_status_t
+vms_dlm_valblk_convert_parse(const uint8_t *frame, uint32_t len,
+			     const struct vms_frame_info *fi,
+			     struct vms_dlm_valblk_convert *out);
 
 /* ------------------------------------------------------------------ *
  * The (SYSAP, category, opcode) allowlist rows this item contributes
- * (vms_cluster_codec.h §6). Only the GROUNDED ops (ENQ/CONVERT/REBUILD)
- * are listed -- the PROVISIONAL completion/commit ops are deliberately
- * NOT in this table: an allowlist row asserts "grounded in the reference"
- * (spec §4(p)), which the completion body is not.
+ * (vms_cluster_codec.h §6). Every GROUNDED op is listed and nothing else:
+ * a row asserts "grounded in the reference", so the three vms-c03 ops join
+ * the table now that a real cluster's own frames ground them, and each
+ * cites the capture that did it. They are CONSUME, not RESPOND: the
+ * capture contains no cat-0x82 reply to any of the three -- a real VMS
+ * master never answers a $DEQ, a BLKAST or a value-block convert -- and a
+ * RESPOND row would be claiming a response recipe nobody has seen.
  * ------------------------------------------------------------------ */
 extern const struct vms_wire_allow_entry vms_dlm_allow_rows[];
 extern const struct vms_wire_allow_table vms_dlm_allow_table;

@@ -43,8 +43,18 @@ V2_LOGICAL = b"\xaa\x00\x04\x00\x02\x04"   # VAX2 cluster-logical LAVC addr
 # identical to src/libvms/include/lckdef.h LCK$K_*.
 LOCK_MODES = {0: "NL", 1: "CR", 2: "CW", 3: "PR", 4: "PW", 5: "EX"}
 
-# cat 0x02 = steady-state DLM (4(j)); opcode within the category (this file):
-DLM_OPS = {0x01: "ENQ (new lock request)", 0x07: "CONVERT (mode change)"}
+# cat 0x02 = steady-state DLM (4(j)); opcode within the category (this file).
+# 0x03 / 0x04 / 0x06 grounded by the vms-c03 capture set in
+# tests/lab/captures/vms-c03-dlm-opcodes-20260911/ (GROUNDING.md), each frame
+# correlated by master_lkid to the $ENQ that created its lock. The codec's
+# earlier "commit 0x03" / "completion 0x04" were field-forensics phantoms.
+DLM_OPS = {
+    0x01: "ENQ (new lock request)",
+    0x03: "DEQ (lock release)",
+    0x04: "BLKAST (blocking AST)",
+    0x06: "CONVERT + VALBLK (value-block write)",
+    0x07: "CONVERT (mode change)",
+}
 
 
 def read_pcap(path):

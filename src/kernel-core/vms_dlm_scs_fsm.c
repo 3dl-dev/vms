@@ -125,9 +125,20 @@ static void dq_free(struct dlm_req *r)
  * which is the only shape a wire field ever arrives in here.
  * ========================================================================== */
 
-/* VMS_DLM_POST_* -> the GROUNDED cat-0x02 wire opcode, or 0 for "none".
- * A release has NO grounded opcode (header §"WHAT IS GROUNDED"), and 0 is how
- * that is said -- not a guess at 0x03, which is the PROVISIONAL commit. */
+/*
+ * VMS_DLM_POST_* -> the wire opcode THIS ARM TRANSMITS, or 0 for "none".
+ *
+ * A release still maps to 0, but the REASON changed and the distinction
+ * matters. It used to be "there is no grounded opcode for a $DEQ"; vms-c03
+ * ended that -- the codec now grounds op 0x03 as $DEQ, with a builder and a
+ * parser, from a real cluster's own frames. What has NOT happened is the
+ * separate, lab-gated step of letting this arm put a release on a live wire
+ * (the downstream item owns that, with its own real-VAX proof, because a new
+ * outbound frame shape is a peer-crash vector until a peer has been seen to
+ * take it). So the refusal stays, counted in `releases_no_wire_op`, and it
+ * stays HONEST: nothing here guesses, and nothing here transmits an opcode
+ * this arm has not been cleared to transmit.
+ */
 static uint8_t dq_wireop(uint32_t post_op)
 {
 	if (post_op == VMS_DLM_POST_ENQ)
@@ -290,66 +301,37 @@ static enum dlm_req_status dq_refill_transmit(struct dlm_req_fsm *f,
 }
 
 /* ==========================================================================
- * 3. The completion / commit pair (op 0x04 + op 0x03, PROVISIONAL)
+ * 3. SETTLE ON GRANT -- the terminal state of a successful request
  *
- * TWO FRAMES, TWO FRESH READS. The one field that killed a cluster is
- * master_lkid, so it is read out of the lock database immediately before each
- * frame is built -- never taken off the grant that arrived a microsecond
- * earlier. The codec refuses a zero in either lock-id field (fc8540ae), which
- * is the second gate behind this one.
+ * THE GRANT IS THE ANSWER AND NOTHING FOLLOWS IT. An earlier build sent a
+ * "completion + commit" pair here, built from a PROVISIONAL op-0x04/0x03
+ * table. The vms-c03 capture of a real 2-node OpenVMS VAX 7.3 cluster showed
+ * that pair was a phantom: 0x03 is $DEQ, 0x04 is BLKAST, and a real requester
+ * answers a grant with NO frame at all (vms_cluster_codec_dlm.h's supersession
+ * note). So the frames are gone, and with them the only post-grant state this
+ * FSM ever had to wait on.
+ *
+ * WHAT REPLACES THEM IS NOT A GAP. Reaching ST_GRANTED with `settled` set IS
+ * the terminal state: the beat skips a settled block (§12), so there is
+ * nothing retransmitting, nothing counting down a ladder, and nothing holding
+ * a request slot open for an acknowledgement that was never going to come.
+ * The one thing that MUST still happen -- the master's handle landing in the
+ * executive's own lock record -- happened in `ops->grant_recv` before this
+ * runs, which is where it always belonged; it never needed a frame to carry
+ * it back to the node that sent it.
+ *
+ * NOTHING IS STRANDED AT THE OTHER END EITHER: the DLM's inbound arm
+ * (vms_dlm_scs.c) serves only ENQ/CONVERT/REBUILD and DECLINES everything
+ * else, so no OVMX master ever consumed the pair, and no real VMS master ever
+ * expected it.
  * ========================================================================== */
-static enum dlm_req_status dq_send_one_completion(struct dlm_req_fsm *f,
-						  struct dlm_req *r,
-						  uint8_t wireop)
+static void dq_settle(struct dlm_req_fsm *f, struct dlm_req *r)
 {
-	struct vms_dlm_proxy_post p;
-	struct vms_dlm_completion c;
-	uint32_t written = 0u;
-
-	dq_bzero(&p, (uint32_t)sizeof(p));
-	if (f->ops->refill_post(f->ops->ctx, r->req_lkid, r->post_op,
-				r->dst_csid, &p) != 0) {
-		f->lock_gone++;
-		return DLM_REQ_E_NOLOCK;
-	}
-
-	dq_bzero(&c, (uint32_t)sizeof(c));
-	c.master_lkid = p.master_lkid;   /* the MASTER's handle, from the LKB */
-	c.req_lkid    = p.req_lkid;      /* ours, from the same read          */
-	c.name_len    = dq_name_from_post(&p, c.name);
-
-	dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
-	if (vms_dlm_completion_build(&c, wireop, f->txframe,
-				     (uint32_t)sizeof(f->txframe),
-				     &written) != VMS_CODEC_OK) {
-		/* The codec refused -- which for this builder means a lock id
-		 * the executive has not (yet) got. Never patched around. */
-		f->codec_failures++;
-		return DLM_REQ_E_CODEC;
-	}
-	return dq_emit(f, r->dst_csid);
-}
-
-static enum dlm_req_status dq_send_completion(struct dlm_req_fsm *f,
-					      struct dlm_req *r)
-{
-	enum dlm_req_status st;
-
-	st = dq_send_one_completion(f, r,
-				    (uint8_t)VMS_DLM_WIREOP_COMPLETE_PROVISIONAL);
-	if (st != DLM_REQ_OK)
-		return st;
-	st = dq_send_one_completion(f, r,
-				    (uint8_t)VMS_DLM_WIREOP_COMMIT_PROVISIONAL);
-	if (st != DLM_REQ_OK)
-		return st;
-
-	r->sent_ms  = dq_now(f);
-	r->tries    = 0u;
-	r->settled  = 1u;   /* nothing outstanding: the beat leaves it alone */
-	r->frames_tx += 2u;
-	f->completions_sent++;
-	return DLM_REQ_OK;
+	r->sent_ms = dq_now(f);   /* the beat's clock, left coherent          */
+	r->tries   = 0u;          /* no ladder is running on a settled block  */
+	r->settled = 1u;          /* nothing outstanding: the beat skips it   */
+	r->state   = (uint8_t)DLM_REQ_ST_GRANTED;
+	f->grants_settled++;
 }
 
 /* ==========================================================================
@@ -513,10 +495,15 @@ static void h_post_convert_granted(struct dlm_req_fsm *f, struct dq_ev *e)
 }
 
 /*
- * A RELEASE. There is no grounded cat-0x02 opcode for one (header §"WHAT IS
- * GROUNDED"), so nothing goes on the wire -- but the WIRE RECORD goes away,
- * because the requester really is releasing the lock and a stale record of a
- * lock we no longer hold is its own kind of fabrication.
+ * A RELEASE. This arm does not transmit one (see dq_wireop for why, and for
+ * what changed with vms-c03), so nothing goes on the wire -- but the WIRE
+ * RECORD goes away, because the requester really is releasing the lock and a
+ * stale record of a lock we no longer hold is its own kind of fabrication.
+ *
+ * THE SLOT IS FREED ON EVERY PATH THROUGH HERE. That is what makes a granted
+ * lock RELEASABLE without a completion round trip: the block settled on the
+ * grant, and a $DEQ post takes it straight back to ST_IDLE. There is no
+ * intermediate "completing" state for a release to get stuck behind.
  */
 static void h_post_deq(struct dlm_req_fsm *f, struct dq_ev *e)
 {
@@ -563,15 +550,24 @@ static void h_grant(struct dlm_req_fsm *f, struct dq_ev *e)
 	f->grants_rx++;
 	r->dst_csid     = e->from_csid;   /* the master, as the frame said     */
 	r->to_directory = 0u;
-	r->tries        = 0u;
-	r->settled      = 0u;
-	r->state        = (uint8_t)DLM_REQ_ST_GRANTED;
-	e->st = dq_send_completion(f, r);
+	dq_settle(f, r);                  /* the grant IS the terminal settle  */
+	e->st = DLM_REQ_OK;
 }
 
-/* A grant for a lock we have already completed: the master did not see our
- * completion. Re-apply it (the engine is idempotent on the key) and answer
- * again -- one reply per received frame, which is what makes it not a storm. */
+/*
+ * A grant for a lock we are already holding: the master retransmitted, most
+ * likely because its own reply ladder had not been quiesced yet. RE-APPLY it
+ * (the engine is idempotent on the key, D-DLM-5) and settle again. The
+ * re-apply is the whole point and it is not a formality: it is a fresh
+ * `grant_recv` with the handle THIS frame carried, so a master that reassigned
+ * the lock id is followed, in the lock database, without this object having
+ * remembered the old one.
+ *
+ * NOTHING IS SENT BACK. A duplicate grant needs no answer because a grant
+ * needs no answer (see §3) -- so a retransmitting master cannot pump this node
+ * into emitting a frame per received frame, which is the shape every storm in
+ * this campaign has had.
+ */
 static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	struct vms_dlm_proxy_grant g;
@@ -587,10 +583,9 @@ static void h_grant_dup(struct dlm_req_fsm *f, struct dq_ev *e)
 		e->st = DLM_REQ_E_NOLOCK;
 		return;
 	}
-	e->r->settled = 0u;
-	e->st = dq_send_completion(f, e->r);
-	if (e->st == DLM_REQ_OK)
-		f->completions_resent++;
+	e->r->dst_csid = e->from_csid;
+	dq_settle(f, e->r);
+	e->st = DLM_REQ_OK;
 }
 
 /*
@@ -618,9 +613,17 @@ static void h_deny_master(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	f->denies_rx++;
 	if (e->r->post_op == VMS_DLM_POST_CONVERT) {
-		/* A refused CONVERT leaves the lock at its old mode: the lock
-		 * is still real, so the wire record stays with it. */
-		e->r->state = (uint8_t)DLM_REQ_ST_GRANTED;
+		/*
+		 * A refused CONVERT leaves the lock at its old mode: the lock
+		 * is still real, so the wire record stays with it -- SETTLED,
+		 * because the refusal is the answer and nothing is outstanding
+		 * any more. Leaving it unsettled would hand the beat a block
+		 * with no frame owed, which is the "dangling state waiting on
+		 * an ack" shape the supersession removed everywhere else.
+		 */
+		e->r->settled = 1u;
+		e->r->tries   = 0u;
+		e->r->state   = (uint8_t)DLM_REQ_ST_GRANTED;
 		if (f->ops->fail != (void (*)(void *, uint32_t,
 					      enum dlm_req_fail_reason))0)
 			f->ops->fail(f->ops->ctx, e->r->req_lkid,
@@ -770,12 +773,21 @@ static void h_timeout_request(struct dlm_req_fsm *f, struct dq_ev *e)
 }
 
 /*
- * The completion did not go out. Retry it -- but a GRANTED lock is REAL, so
- * when the ladder is spent the request is NOT failed: the wire record is
- * dropped and the fact is counted. A timeout may not take away a lock the
- * master granted (the engine holds the same rule).
+ * A deadline on a lock this node HOLDS.
+ *
+ * Since the supersession (§3) a grant settles immediately, and the beat skips
+ * a settled block -- so the only way to arrive here is the one path that
+ * leaves ST_GRANTED with `settled` clear: a CONVERT on a held lock whose frame
+ * could not be transmitted (h_post_convert_granted's failure branch). The
+ * convert is still owed, so it is retried from a FRESH executive read, exactly
+ * like any other outstanding request.
+ *
+ * WHAT IS DIFFERENT FROM h_timeout_request IS THE END OF THE LADDER: a GRANTED
+ * lock is REAL, so a spent ladder may NOT fail it. The wire record is dropped
+ * and the fact is counted; the lock itself is the engine's, and the engine
+ * holds the same rule. A timeout may not take away a lock the master granted.
  */
-static void h_timeout_completion(struct dlm_req_fsm *f, struct dq_ev *e)
+static void h_timeout_granted(struct dlm_req_fsm *f, struct dq_ev *e)
 {
 	struct dlm_req *r = e->r;
 
@@ -785,11 +797,20 @@ static void h_timeout_completion(struct dlm_req_fsm *f, struct dq_ev *e)
 		e->st = DLM_REQ_OK;
 		return;
 	}
+	e->st = dq_refill_transmit(f, r);
+	if (e->st == DLM_REQ_OK) {
+		f->retransmits++;
+		return;
+	}
+	if (e->st == DLM_REQ_E_NOLOCK) {
+		dq_free(r);   /* the lock went away under us: abandon quietly */
+		return;
+	}
+	/* Refused before a frame was built, so dq_transmit counted no try.
+	 * Count one here so the ladder still terminates (h_timeout_request
+	 * carries the same argument at length). */
 	if (r->tries < 0xffu)
 		r->tries++;
-	e->st = dq_send_completion(f, r);
-	if (e->st == DLM_REQ_OK)
-		f->completions_resent++;
 }
 
 /* ---- a member left ----------------------------------------------------- */
@@ -854,7 +875,7 @@ static const dq_handler_t dq_table[DLM_REQ_ST__COUNT][DLM_REQ_EV__COUNT] = {
 		[DLM_REQ_EV_DEQ]       = h_post_deq,
 		[DLM_REQ_EV_GRANT]     = h_grant_dup,
 		[DLM_REQ_EV_BLKAST]    = h_blkast,
-		[DLM_REQ_EV_TIMEOUT]   = h_timeout_completion,
+		[DLM_REQ_EV_TIMEOUT]   = h_timeout_granted,
 		[DLM_REQ_EV_PEER_GONE] = h_peer_gone_granted
 	}
 };
@@ -1306,10 +1327,10 @@ uint32_t dlm_req_fsm_tick(struct dlm_req_fsm *f)
 			continue;   /* settled: the answer arrived and was sent */
 		if ((uint32_t)(now - r->sent_ms) < DLM_REQ_RETRY_MS)
 			continue;
-		before = f->retransmits + f->completions_resent;
+		before = f->retransmits;
 		dq_bzero(&e, (uint32_t)sizeof(e));
 		(void)dq_dispatch(f, r, DLM_REQ_EV_TIMEOUT, &e);
-		if (f->retransmits + f->completions_resent != before)
+		if (f->retransmits != before)
 			sent++;
 	}
 	return sent;

@@ -3,7 +3,8 @@
  * test_codec_dlm.c - cat-0x02 (DLM) codec entries, rung R1 (FC-P4.5).
  *
  * Four groups:
- *   1. Fixture round trip: ENQ request/grant/deny/CONVERT -- parse each
+ *   1. Fixture round trip: ENQ request/grant/deny/CONVERT, and the three
+ *      vms-c03 ops ($DEQ 0x03, BLKAST 0x04, value-block CONVERT 0x06) -- parse each
  *      into the typed struct, build back from ONLY the typed fields (never
  *      the fixture buffer), and assert every CITED byte of the DLM body
  *      span (abs 72-204) is reproduced exactly. The shared header/envelope
@@ -17,9 +18,12 @@
  *      byte-for-byte, spec §4(p).
  *   3. The allowlist rows this item contributes validate structurally
  *      (vms_wire_allow_table_validate) and resolve the grounded ops.
- *   4. THE HARD-LESSON TEST: no completion/commit builder accepts a
- *      literal/placeholder (zero) lock id -- the fc8540ae INVLOCKID
- *      crash, encoded as a permanent regression test.
+ *   4. THE HARD-LESSON TEST: no lock-id-bearing builder accepts a
+ *      literal/placeholder (zero) lock id, and the lock-id-ONLY messages
+ *      refuse one on the PARSE side too -- the fc8540ae INVLOCKID crash,
+ *      encoded as a permanent regression test. The frames it used to cover
+ *      (the PROVISIONAL completion/commit pair) turned out not to exist; the
+ *      guard moved onto the real ops that live at those opcodes.
  */
 #include "cluster_fixture.h"
 #include "cluster_test.h"
@@ -216,12 +220,229 @@ static void test_convert_request(void)
 	assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY, f->wire_len, "dlm-convert-request");
 }
 
+/* ---- group 1b: the vms-c03 ops -- $DEQ, BLKAST, value-block CONVERT ---- */
+
+/*
+ * op 0x03 = $DEQ. The fixture's every cited byte IS a byte of
+ * dlm-deq-20260911.pcap f14 (its .spec header carries the frame-by-frame
+ * correlation), so parsing it and building it back proves the field map
+ * against a real OpenVMS VAX 7.3 cluster's own release frame.
+ */
+static void test_deq_release(void)
+{
+	const struct vms_fixture *f = fixture("dlm-deq-release");
+	struct vms_frame_info fi;
+	struct vms_dlm_deq d;
+	uint8_t built[256];
+	uint32_t written = 0;
+
+	printf("-- dlm-deq-release: op 0x03 is $DEQ (vms-c03, f14 of "
+	       "dlm-deq-20260911.pcap)\n");
+	ct_check(f != NULL, "fixture loads");
+	if (f == NULL)
+		return;
+
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "classifies without error");
+	ct_check(vms_dlm_deq_parse(f->bytes, f->wire_len, &fi, &d) ==
+		 VMS_CODEC_OK, "parses as a $DEQ");
+	ct_check_eq_u32(d.master_lkid, 0x3a0004ebu,
+			"  body[24:28] == 0x3a0004eb, the master handle the "
+			"driving ENQ for 'OVMXDEQ1' carried");
+	ct_check_eq_u32(d.req_lkid, 0x080001cdu,
+			"  body[20:24] == 0x080001cd, the handle the GRANT "
+			"assigned this requester");
+	ct_check_eq_u32(d.mode, VMS_LCK_NL, "  body[30] == NL, the released mode");
+
+	memset(built, 0xAA, sizeof(built));
+	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
+		 VMS_CODEC_OK, "builds back from the typed struct");
+	assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY, f->wire_len,
+				 "dlm-deq-release");
+
+	/* A real $DEQ carries no resource name, so the builder must leave the
+	 * name span alone. Checked positively, not just by the fixture's
+	 * silence: the poison byte survives where an ENQ would have written
+	 * the 0x03 marker. */
+	ct_check_eq_u32(built[VMS_OFF_DLM_NAME_MARKER], 0xAAu,
+			"*** the builder writes NO name marker: a $DEQ names "
+			"its lock by lock-id, and body[46] is not a field ***");
+}
+
+/*
+ * op 0x04 = BLKAST, and THE GUARD: the reference frame has a readable
+ * resource name at body[48] that belongs to a DIFFERENT lock. The codec must
+ * have no way to surface it. That is asserted here the only way an absent
+ * field can be: the struct has no name member (a compile-time fact a reviewer
+ * can see) and the builder leaves the span untouched (a runtime fact).
+ */
+static void test_blkast(void)
+{
+	const struct vms_fixture *f = fixture("dlm-blkast");
+	struct vms_frame_info fi;
+	struct vms_dlm_blkast b;
+	uint8_t built[256];
+	uint32_t written = 0;
+
+	printf("-- dlm-blkast: op 0x04 is BLKAST (vms-c03, f58 of "
+	       "dlm-blk2-20260911.pcap)\n");
+	ct_check(f != NULL, "fixture loads");
+	if (f == NULL)
+		return;
+
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "classifies without error");
+	ct_check(vms_dlm_blkast_parse(f->bytes, f->wire_len, &fi, &b) ==
+		 VMS_CODEC_OK, "parses as a BLKAST");
+	ct_check_eq_u32(b.master_lkid, 0x590004e3u,
+			"  body[24:28] == 0x590004e3, the master handle the EX "
+			"holder's ENQ for 'OVMXBLK2' carried");
+	ct_check_eq_u32(b.req_lkid, 0x0a0003afu,
+			"  body[20:24] == 0x0a0003af, the holder's own handle");
+
+	/* OBSERVED, not pinned -- asserted as "the two bytes the peer sent",
+	 * which is all the codec claims about them. */
+	ct_check(b.mode_ctx_valid == 1u && b.mode_ctx[0] == 0x01u &&
+		 b.mode_ctx[1] == 0x05u,
+		 "  body[30:32] is reported verbatim (OBSERVED 0x01,0x05 -- the "
+		 "codec does not claim to know what the pair means)");
+
+	memset(built, 0xAA, sizeof(built));
+	ct_check(vms_dlm_blkast_build(&b, built, sizeof(built), &written) ==
+		 VMS_CODEC_OK, "builds back from the typed struct");
+	assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY, f->wire_len,
+				 "dlm-blkast");
+
+	/* *** THE INV-6 GUARD. *** */
+	ct_check_eq_u32(built[VMS_OFF_DLM_NAME_MARKER], 0xAAu,
+			"*** no name marker is built: the reference BLKAST's "
+			"body[48] 'F11B$aSYSDSK1' is STALE BUFFER, not this "
+			"frame's resource ***");
+	ct_check_eq_u32(built[VMS_OFF_DLM_NAME], 0xAAu,
+			"*** and no name byte either ***");
+
+	/* The OBSERVED pair is OPT-IN: a caller with no real executive values
+	 * for it writes nothing there, exactly like the directory hash. */
+	b.mode_ctx_valid = 0u;
+	memset(built, 0xAA, sizeof(built));
+	ct_check(vms_dlm_blkast_build(&b, built, sizeof(built), &written) ==
+		 VMS_CODEC_OK, "builds with mode_ctx_valid clear");
+	ct_check(built[VMS_OFF_DLM_BLKAST_MODE_CTX] == 0xAAu &&
+		 built[VMS_OFF_DLM_BLKAST_MODE_CTX + 1u] == 0xAAu,
+		 "*** and writes NOTHING at body[30:32]: an OBSERVED field is "
+		 "omitted honestly, never defaulted ***");
+}
+
+/*
+ * op 0x06 = the CONVERT that carries the lock value block. The proof is the
+ * driver's own 16-byte pattern appearing verbatim at body[36:52].
+ */
+static void test_valblk_convert(void)
+{
+	const struct vms_fixture *f = fixture("dlm-valblk-convert");
+	struct vms_frame_info fi;
+	struct vms_dlm_valblk_convert c;
+
+	printf("-- dlm-valblk-convert: op 0x06 carries the LVB (vms-c03, f14 of "
+	       "dlm-lvb3-20260911.pcap)\n");
+	ct_check(f != NULL, "fixture loads");
+	if (f == NULL)
+		return;
+
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "classifies without error");
+	ct_check(vms_dlm_valblk_convert_parse(f->bytes, f->wire_len, &fi, &c) ==
+		 VMS_CODEC_OK, "parses as a value-block CONVERT");
+	ct_check_eq_u32(c.master_lkid, 0x2b000489u,
+			"  body[24:28] == 0x2b000489, the master handle the "
+			"driving ENQ for 'OVMXLVB3' carried");
+	ct_check_eq_u32(c.req_lkid, 0x270001cdu,
+			"  body[20:24] == the handle the GRANT assigned");
+	ct_check_eq_u32(c.mode, VMS_LCK_NL,
+			"  body[30] == NL: this is the convert DOWN from EX");
+	ct_check(memcmp(c.valblk, "WROTEBYVAX1XXXXX",
+			VMS_DLM_VALBLK_WIRE_LEN) == 0,
+		 "*** body[36:52] IS the 16 bytes the driver wrote at LKSB+8, "
+		 "verbatim off a real wire ***");
+
+	/*
+	 * An op-0x07 CONVERT is NOT an op-0x06: the two are the same family and
+	 * different semantics, and conflating them would make the codec read a
+	 * value block out of a frame that carries none.
+	 */
+	{
+		const struct vms_fixture *cv = fixture("dlm-convert-request");
+		struct vms_frame_info cfi;
+		struct vms_dlm_valblk_convert junk;
+
+		if (cv != NULL &&
+		    vms_frame_classify(cv->bytes, cv->wire_len, &cfi) ==
+			    VMS_CODEC_OK) {
+			memset(&junk, 0xA5, sizeof(junk));
+			ct_check(vms_dlm_valblk_convert_parse(cv->bytes,
+							      cv->wire_len,
+							      &cfi, &junk) ==
+				 VMS_CODEC_E_CLASS,
+				 "an op-0x07 CONVERT is REFUSED by the op-0x06 "
+				 "accessor (same family, different semantics)");
+			ct_check_eq_u32(junk.master_lkid, 0xA5A5A5A5u,
+					"  and the caller's struct is untouched");
+		}
+	}
+}
+
+/*
+ * THE SUPERSESSION, asserted rather than merely documented. The phantom ops
+ * are gone as VALUES: 0x03 and 0x04 now mean $DEQ and BLKAST, and a parser for
+ * one refuses the other's frame. A tree that quietly kept a "completion 0x04"
+ * alive somewhere would show up here as a parse that succeeds when it must
+ * not.
+ */
+static void test_superseded_opcodes_are_one_meaning_each(void)
+{
+	const struct vms_fixture *deq = fixture("dlm-deq-release");
+	const struct vms_fixture *blk = fixture("dlm-blkast");
+	struct vms_frame_info fi;
+	struct vms_dlm_deq d;
+	struct vms_dlm_blkast b;
+	uint8_t op = 0;
+	struct vms_dlm_enq_request req;
+
+	printf("-- one opcode, one meaning: 0x03 is $DEQ and 0x04 is BLKAST, "
+	       "and neither is anything else\n");
+	if (deq == NULL || blk == NULL) {
+		ct_check(0, "both fixtures load");
+		return;
+	}
+
+	ct_check(VMS_DLM_WIREOP_DEQ == 0x03u && VMS_DLM_WIREOP_BLKAST == 0x04u &&
+		 VMS_DLM_WIREOP_CONVERT_VALBLK == 0x06u,
+		 "the opcode values are the captured ones");
+
+	(void)vms_frame_classify(deq->bytes, deq->wire_len, &fi);
+	ct_check(vms_dlm_blkast_parse(deq->bytes, deq->wire_len, &fi, &b) ==
+		 VMS_CODEC_E_CLASS,
+		 "the BLKAST parser REFUSES a $DEQ frame");
+	ct_check(vms_dlm_enq_request_parse(deq->bytes, deq->wire_len, &fi, &op,
+					   &req) == VMS_CODEC_E_CLASS,
+		 "and so does the ENQ/CONVERT parser");
+
+	(void)vms_frame_classify(blk->bytes, blk->wire_len, &fi);
+	ct_check(vms_dlm_deq_parse(blk->bytes, blk->wire_len, &fi, &d) ==
+		 VMS_CODEC_E_CLASS,
+		 "the $DEQ parser REFUSES a BLKAST frame");
+}
+
 static void test_fixture_roundtrips(void)
 {
 	test_enq_request_pw();
 	test_enq_grant();
 	test_enq_deny();
 	test_convert_request();
+	test_deq_release();
+	test_blkast();
+	test_valblk_convert();
+	test_superseded_opcodes_are_one_meaning_each();
 }
 
 /* ---- group 2: op-0d rebuild-record echo recipe ------------------------ */
@@ -285,14 +506,37 @@ static void test_allowlist_rows(void)
 	ct_check(e != NULL && e->action == VMS_WIRE_ACT_RESPOND,
 		 "op 0x0d (rebuild) resolves to RESPOND");
 
-	/* The PROVISIONAL completion/commit ops are DELIBERATELY absent --
-	 * the allowlist asserts "grounded in the reference" (spec §4(p)),
-	 * which the completion body is not. */
+	/*
+	 * The three vms-c03 ops joined the table when a real cluster's own
+	 * frames grounded them. They are CONSUME, not RESPOND: the capture set
+	 * contains no cat-0x82 reply to any of the three, so a RESPOND row
+	 * would be asserting a response recipe nobody has ever seen.
+	 */
+	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
+				VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_DEQ);
+	ct_check(e != NULL && e->action == VMS_WIRE_ACT_CONSUME &&
+		 e->recipe == 0u,
+		 "op 0x03 ($DEQ) resolves to CONSUME with no response recipe");
+
+	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
+				VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_BLKAST);
+	ct_check(e != NULL && e->action == VMS_WIRE_ACT_CONSUME &&
+		 e->recipe == 0u,
+		 "op 0x04 (BLKAST) resolves to CONSUME with no response recipe");
+
 	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
 				VMS_DLM_CAT_REQUEST,
-				VMS_DLM_WIREOP_COMPLETE_PROVISIONAL);
-	ct_check(e == NULL,
-		 "op 0x04 (PROVISIONAL completion) is NOT in the allowlist");
+				VMS_DLM_WIREOP_CONVERT_VALBLK);
+	ct_check(e != NULL && e->action == VMS_WIRE_ACT_CONSUME &&
+		 e->recipe == 0u,
+		 "op 0x06 (value-block CONVERT) resolves to CONSUME");
+
+	/* Still ungrounded, still absent: an allowlist row asserts "grounded in
+	 * the reference", and op 0x05 / 0x09 / 0x0a appear in the vms-c03
+	 * captures without any correlation that says what they mean. */
+	e = vms_wire_allow_find(&vms_dlm_allow_table, VMS_SYSAP_VMS_VAXCLUSTER,
+				VMS_DLM_CAT_REQUEST, 0x05u);
+	ct_check(e == NULL, "op 0x05 (seen but ungrounded) is NOT in the table");
 }
 
 /* ---- group 4: THE HARD-LESSON TEST ------------------------------------ */
@@ -307,59 +551,105 @@ static void test_allowlist_rows(void)
  */
 static void test_no_builder_accepts_a_placeholder_lock_id(void)
 {
-	struct vms_dlm_completion c;
+	struct vms_dlm_deq d;
+	struct vms_dlm_blkast b;
+	struct vms_dlm_valblk_convert c;
+	const struct vms_fixture *f;
+	uint8_t poisoned[256];
 	uint8_t built[256];
 	uint32_t written = 0;
 
-	printf("-- THE HARD LESSON: no completion/commit builder accepts a "
-	       "placeholder lock id (fc8540ae INVLOCKID crash, regression-locked)\n");
+	printf("-- THE HARD LESSON: no lock-id-bearing builder accepts a "
+	       "placeholder lock id (fc8540ae INVLOCKID crash, "
+	       "regression-locked across the supersession)\n");
 
-	memset(&c, 0, sizeof(c));
-	c.master_lkid = 0x00020017u; /* a plausible real LKB handle */
-	c.req_lkid = 0x00010042u;
-	c.name_len = 8;
-	memcpy(c.name, "OVMXAAAA", 8);
+	/*
+	 * THE PHANTOM IS GONE, THE GUARD IS NOT. The frames this test used to
+	 * cover -- the PROVISIONAL "completion 0x04 / commit 0x03" pair -- do
+	 * not exist on a real wire and no longer exist in this codec. The
+	 * lesson they taught does: the $DEQ and the BLKAST that really do live
+	 * at those opcodes are lock-id-ONLY messages, so a placeholder there is
+	 * strictly worse than it was on a completion.
+	 */
+	memset(&d, 0, sizeof(d));
+	d.master_lkid = 0x00020017u;   /* plausible real LKB handles */
+	d.req_lkid = 0x00010042u;
+	d.mode = VMS_LCK_NL;
+	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
+		 VMS_CODEC_OK,
+		 "  a $DEQ with two real nonzero lock ids builds");
 
-	/* Sanity: a completion with two REAL nonzero ids builds fine, on
-	 * both ops -- proves the refusal below is about the zero, not a
-	 * blanket rejection. */
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
-					  built, sizeof(built), &written)
-		 == VMS_CODEC_OK,
-		 "  a completion with two real nonzero lock ids builds");
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMMIT_PROVISIONAL,
-					  built, sizeof(built), &written)
-		 == VMS_CODEC_OK,
-		 "  a commit with two real nonzero lock ids builds");
+	d.master_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
+		 VMS_CODEC_E_INVAL, "  master_lkid==0 REFUSED on $DEQ (0x03)");
+	d.master_lkid = 0x00020017u;
+	d.req_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
+		 VMS_CODEC_E_INVAL, "  req_lkid==0 REFUSED on $DEQ (0x03)");
+	d.master_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(vms_dlm_deq_build(&d, built, sizeof(built), &written) ==
+		 VMS_CODEC_E_INVAL,
+		 "  both lock ids 0 REFUSED (they do not cancel out)");
 
-	/* The fc8540ae shape: master_lkid == the placeholder 0. */
-	c.master_lkid = VMS_DLM_LKID_UNSET;
-	c.req_lkid = 0x00010042u;
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
-					  built, sizeof(built), &written)
-		 == VMS_CODEC_E_INVAL,
-		 "  master_lkid==0 REFUSED on completion (op 0x04)");
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMMIT_PROVISIONAL,
-					  built, sizeof(built), &written)
-		 == VMS_CODEC_E_INVAL,
-		 "  master_lkid==0 REFUSED on commit (op 0x03)");
+	memset(&b, 0, sizeof(b));
+	b.master_lkid = 0x00020017u;
+	b.req_lkid = 0x00010042u;
+	ct_check(vms_dlm_blkast_build(&b, built, sizeof(built), &written) ==
+		 VMS_CODEC_OK,
+		 "  a BLKAST with two real nonzero lock ids builds");
+	b.master_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(vms_dlm_blkast_build(&b, built, sizeof(built), &written) ==
+		 VMS_CODEC_E_INVAL, "  master_lkid==0 REFUSED on BLKAST (0x04)");
+	b.master_lkid = 0x00020017u;
+	b.req_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(vms_dlm_blkast_build(&b, built, sizeof(built), &written) ==
+		 VMS_CODEC_E_INVAL, "  req_lkid==0 REFUSED on BLKAST (0x04)");
 
-	/* req_lkid==0 is refused too -- both lock-id fields carry the same
-	 * "not a real lock" sentinel. */
-	c.master_lkid = 0x00020017u;
-	c.req_lkid = VMS_DLM_LKID_UNSET;
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
-					  built, sizeof(built), &written)
-		 == VMS_CODEC_E_INVAL,
-		 "  req_lkid==0 REFUSED on completion (op 0x04)");
+	/* A refused build writes NOTHING -- the caller's frame is untouched,
+	 * so a caller that ignored the status cannot transmit a half-built
+	 * frame carrying a real opcode and a zero lock id. */
+	memset(built, 0xAA, sizeof(built));
+	(void)vms_dlm_blkast_build(&b, built, sizeof(built), &written);
+	ct_check_eq_u32(built[VMS_OFF_DLM_OP], 0xAAu,
+			"*** a refused build wrote NO byte at all ***");
 
-	/* Both zero at once -- must not builds "because they cancel out". */
-	c.master_lkid = VMS_DLM_LKID_UNSET;
-	c.req_lkid = VMS_DLM_LKID_UNSET;
-	ct_check(vms_dlm_completion_build(&c, VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
-					  built, sizeof(built), &written)
-		 == VMS_CODEC_E_INVAL,
-		 "  both lock ids 0 REFUSED");
+	/*
+	 * AND THE SAME REFUSAL ON THE PARSE SIDE, which the completion codec
+	 * never had. These three ops name their lock by lock-id and by nothing
+	 * else, so "the peer sent zero" may not be surfaced as "the peer named
+	 * a lock". The vms-c03 blk capture really does contain cat-0x02 op-0x04
+	 * frames with a zero there.
+	 */
+	f = fixture("dlm-blkast");
+	if (f != NULL) {
+		struct vms_frame_info fi;
+
+		memcpy(poisoned, f->bytes, f->wire_len);
+		memset(poisoned + VMS_OFF_DLM_MASTER_LKID, 0, 4);
+		(void)vms_frame_classify(poisoned, f->wire_len, &fi);
+		memset(&b, 0xA5, sizeof(b));
+		ct_check(vms_dlm_blkast_parse(poisoned, f->wire_len, &fi, &b) !=
+			 VMS_CODEC_OK,
+			 "*** a BLKAST frame whose master_lkid is 0 is REFUSED "
+			 "by the PARSER, not reported as lock 0 ***");
+		ct_check_eq_u32(b.master_lkid, 0xA5A5A5A5u,
+				"  and the caller's struct is untouched");
+	}
+
+	f = fixture("dlm-valblk-convert");
+	if (f != NULL) {
+		struct vms_frame_info fi;
+
+		memcpy(poisoned, f->bytes, f->wire_len);
+		memset(poisoned + VMS_OFF_DLM_REQ_LKID, 0, 4);
+		(void)vms_frame_classify(poisoned, f->wire_len, &fi);
+		memset(&c, 0xA5, sizeof(c));
+		ct_check(vms_dlm_valblk_convert_parse(poisoned, f->wire_len,
+						      &fi, &c) != VMS_CODEC_OK,
+			 "a value-block CONVERT with an unset lock id is "
+			 "REFUSED: an LVB with no lock to attach it to is not "
+			 "a value block");
+	}
 
 	/* The GRANT builder carries the same guard on req_lkid (the value
 	 * this codec is about to hand a peer as "the lock-id I assigned

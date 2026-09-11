@@ -2,9 +2,11 @@
 /*
  * vms_cluster_codec_dlm.c - cat-0x02 (DLM) typed codec entries (FC-P4.5).
  *
- * Read vms_cluster_codec_dlm.h first: it draws the GROUNDED/PROVISIONAL
- * line field by field and carries the fc8540ae hard-lesson doc comment
- * that motivates the lock-id refusal in vms_dlm_completion_build().
+ * Read vms_cluster_codec_dlm.h first: it draws the GROUNDED/OBSERVED line
+ * field by field, records the vms-c03 supersession (the "completion 0x04 +
+ * commit 0x03" pair was a phantom; 0x03 is $DEQ, 0x04 is BLKAST, 0x06
+ * carries the value block), and carries the fc8540ae hard-lesson doc
+ * comment that motivates the lock-id refusals below.
  *
  * Pure, like the parent TU and the HELLO family file: no state, no
  * allocation, no substrate call, no libc beyond the vms_wire_* primitives
@@ -377,55 +379,221 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 }
 
 /* ------------------------------------------------------------------ *
- * op 0x04 / op 0x03 completion + commit -- PROVISIONAL (see header)
+ * op 0x03 $DEQ / op 0x04 BLKAST / op 0x06 CONVERT-with-VALBLK
+ * -- GROUNDED, vms-c03 capture set. Read the header's section comment
+ *    first: it names the pcap, the frame and the correlating $ENQ for
+ *    every offset below, and it says which ONE field is only OBSERVED.
  * ------------------------------------------------------------------ */
 
-vms_codec_status_t vms_dlm_completion_build(const struct vms_dlm_completion *c,
-					    uint8_t op,
-					    uint8_t *frame, uint32_t cap,
-					    uint32_t *written)
+/*
+ * The shared preamble of all three: gate the category and the opcode, then
+ * read the two lock ids -- which are the SAME body[20]/body[24] the ENQ
+ * family uses (header section comment: the capture proves it, byte for
+ * byte, against the driving $ENQ).
+ *
+ * THE PARSE-SIDE LOCK-ID REFUSAL. These three messages identify their lock
+ * by lock-id and by nothing else, so a zero in either field leaves the
+ * message meaning nothing at all. The vms-c03 captures contain real cat-0x02
+ * op-0x04 frames with master_lkid == 0; handing one up as "a BLKAST for lock
+ * 0" would be manufacturing a referent. Refused instead.
+ */
+static vms_codec_status_t dlm_lkid_pair_get(vms_wire_view_t *v, uint8_t want_op,
+					    uint32_t *req_lkid,
+					    uint32_t *master_lkid)
+{
+	uint8_t cat, op;
+
+	cat = vms_wire_get_u8(v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	if (vms_wire_is_response(cat) || (cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
+		return VMS_CODEC_E_CLASS;
+	if (op != want_op)
+		return VMS_CODEC_E_CLASS;
+
+	*req_lkid = vms_wire_get_le32(v, VMS_OFB_DLM_REQ_LKID);
+	*master_lkid = vms_wire_get_le32(v, VMS_OFB_DLM_MASTER_LKID);
+	if (!vms_wire_view_ok(v))
+		return v->err;
+	if (*req_lkid == VMS_DLM_LKID_UNSET ||
+	    *master_lkid == VMS_DLM_LKID_UNSET)
+		return VMS_CODEC_E_RANGE;
+	return VMS_CODEC_OK;
+}
+
+/* The mirror of the above for a builder: cat/op plus the two lock ids,
+ * with the fc8540ae refusal applied before a single byte is written. */
+static vms_codec_status_t dlm_lkid_pair_put(vms_wire_buf_t *w, uint8_t op,
+					    uint32_t req_lkid,
+					    uint32_t master_lkid)
+{
+	if (req_lkid == VMS_DLM_LKID_UNSET ||
+	    master_lkid == VMS_DLM_LKID_UNSET)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_put_u8(w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(w, VMS_OFF_DLM_OP, op);
+	vms_wire_put_le32(w, VMS_OFF_DLM_REQ_LKID, req_lkid);
+	vms_wire_put_le32(w, VMS_OFF_DLM_MASTER_LKID, master_lkid);
+	return vms_wire_buf_ok(w) ? VMS_CODEC_OK : w->err;
+}
+
+vms_codec_status_t vms_dlm_deq_parse_body(const uint8_t *body, uint32_t len,
+					  struct vms_dlm_deq *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_deq d;
+	vms_codec_status_t st;
+
+	if (out == (struct vms_dlm_deq *)0)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, body, len);
+	st = dlm_lkid_pair_get(&v, VMS_DLM_WIREOP_DEQ, &d.req_lkid,
+			       &d.master_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/* body[30]: the mode the lock is released FROM. The mode byte's
+	 * offset is the ac4-grounded one; the vms-c03 DEQ reads 0x00 (NL)
+	 * there, matching the mode its own op-0x01 grant assigned. */
+	d.mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+
+	/* NO NAME IS READ. body[46] is not the 0x03 marker on a real DEQ and
+	 * body[47:] is uninitialised (header section comment). */
+	*out = d;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_deq_build(const struct vms_dlm_deq *d,
+				     uint8_t *frame, uint32_t cap,
+				     uint32_t *written)
 {
 	vms_wire_buf_t w;
+	vms_codec_status_t st;
 
-	if (c == (const struct vms_dlm_completion *)0)
-		return VMS_CODEC_E_INVAL;
-	if (op != VMS_DLM_WIREOP_COMPLETE_PROVISIONAL &&
-	    op != VMS_DLM_WIREOP_COMMIT_PROVISIONAL)
-		return VMS_CODEC_E_INVAL;
-	if (c->name_len > VMS_DLM_NAME_MAX)
-		return VMS_CODEC_E_INVAL;
-
-	/*
-	 * THE HARD-LESSON GATE. A zero here is never a real LKB/RSB handle
-	 * (vms_lock.c's own convention; see the file header doc comment).
-	 * fc8540ae shipped a completion with master_lkid == a literal
-	 * placeholder and bugchecked a real VAX with INVLOCKID; this codec
-	 * cannot detect every possible fabricated nonzero value, but it can
-	 * and does refuse the one value that structurally can never be a
-	 * real assigned lock-id.
-	 */
-	if (c->master_lkid == VMS_DLM_LKID_UNSET ||
-	    c->req_lkid == VMS_DLM_LKID_UNSET)
+	if (d == (const struct vms_dlm_deq *)0)
 		return VMS_CODEC_E_INVAL;
 
 	vms_wire_buf_init(&w, frame, cap);
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
 
-	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, op);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_COMPLETE_STATUS,
-			  VMS_DLM_COMPLETE_STATUS_CONST);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_COMPLETE_MASTER_LKID, c->master_lkid);
-	vms_wire_put_le32(&w, VMS_OFF_DLM_COMPLETE_REQ_LKID, c->req_lkid);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_MARKER, VMS_DLM_NAME_MARKER_CONST);
-	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, c->name_len);
-	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, c->name_len, c->name);
+	st = dlm_lkid_pair_put(&w, VMS_DLM_WIREOP_DEQ, d->req_lkid,
+			       d->master_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, d->mode);
+	/* The name span is deliberately left untouched: a real DEQ carries
+	 * no resource name, so writing one would be adding a field the
+	 * reference does not have. */
 
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)
 		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_blkast_parse_body(const uint8_t *body, uint32_t len,
+					     struct vms_dlm_blkast *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_blkast b;
+	vms_codec_status_t st;
+
+	if (out == (struct vms_dlm_blkast *)0)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, body, len);
+	st = dlm_lkid_pair_get(&v, VMS_DLM_WIREOP_BLKAST, &b.req_lkid,
+			       &b.master_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/* body[30:32] -- OBSERVED, NOT PINNED. Reported verbatim, flagged as
+	 * present, and NOT interpreted as a lock mode anywhere. */
+	vms_wire_get_bytes(&v, VMS_OFB_DLM_BLKAST_MODE_CTX,
+			   VMS_DLM_BLKAST_MODE_CTX_LEN, b.mode_ctx);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	b.mode_ctx_valid = 1u;
+
+	/* NO NAME IS READ. body[48] on the reference BLKAST holds a stale
+	 * 'F11B$aSYSDSK1' that belongs to a different lock entirely. */
+	*out = b;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_blkast_build(const struct vms_dlm_blkast *b,
+					uint8_t *frame, uint32_t cap,
+					uint32_t *written)
+{
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (b == (const struct vms_dlm_blkast *)0)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+
+	st = dlm_lkid_pair_put(&w, VMS_DLM_WIREOP_BLKAST, b->req_lkid,
+			       b->master_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	/*
+	 * body[30:32] ONLY when the caller says it holds real executive
+	 * values for the pair. No `else` branch, deliberately: this field is
+	 * OBSERVED, not pinned, and two bytes written there from nothing
+	 * would be exactly the kind of plausible-looking invention that the
+	 * directory hash's own no-builder rule exists to prevent.
+	 */
+	if (b->mode_ctx_valid)
+		vms_wire_put_bytes(&w, VMS_OFF_DLM_BLKAST_MODE_CTX,
+				   VMS_DLM_BLKAST_MODE_CTX_LEN, b->mode_ctx);
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}
+
+/*
+ * op 0x06: the value-block accessor. There is NO vms_dlm_valblk_convert_build
+ * in this file and its absence is the point -- see the header's doc comment
+ * ("body[32:36] ahead of it varies per request in a way no capture pins").
+ */
+vms_codec_status_t
+vms_dlm_valblk_convert_parse_body(const uint8_t *body, uint32_t len,
+				  struct vms_dlm_valblk_convert *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_valblk_convert c;
+	vms_codec_status_t st;
+
+	if (out == (struct vms_dlm_valblk_convert *)0)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, body, len);
+	st = dlm_lkid_pair_get(&v, VMS_DLM_WIREOP_CONVERT_VALBLK, &c.req_lkid,
+			       &c.master_lkid);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	c.mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	vms_wire_get_bytes(&v, VMS_OFB_DLM_VALBLK, VMS_DLM_VALBLK_WIRE_LEN,
+			   c.valblk);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+
+	*out = c;
 	return VMS_CODEC_OK;
 }
 
@@ -440,6 +608,16 @@ const struct vms_wire_allow_entry vms_dlm_allow_rows[] = {
 	  VMS_WIRE_ACT_RESPOND, 2u, "spec §4(f).1" },
 	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_REBUILD,
 	  VMS_WIRE_ACT_RESPOND, 3u, "spec §4(p) cat 0x02 op 0x0d" },
+	/* CONSUME, recipe 0: the vms-c03 capture contains no cat-0x82 reply to
+	 * any of these three. Claiming RESPOND would be claiming a response
+	 * recipe no reference cluster has ever been seen to use. */
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_DEQ,
+	  VMS_WIRE_ACT_CONSUME, 0u, "vms-c03 dlm-deq-20260911.pcap f14" },
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST, VMS_DLM_WIREOP_BLKAST,
+	  VMS_WIRE_ACT_CONSUME, 0u, "vms-c03 dlm-blk2-20260911.pcap f58" },
+	{ VMS_SYSAP_VMS_VAXCLUSTER, VMS_DLM_CAT_REQUEST,
+	  VMS_DLM_WIREOP_CONVERT_VALBLK,
+	  VMS_WIRE_ACT_CONSUME, 0u, "vms-c03 dlm-lvb3-20260911.pcap f14" },
 };
 
 const struct vms_wire_allow_table vms_dlm_allow_table = {
@@ -533,4 +711,53 @@ vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 	if (st != VMS_CODEC_OK)
 		return st;
 	return vms_dlm_rebuild_parse_body(body, blen, out);
+}
+
+vms_codec_status_t vms_dlm_deq_parse(const uint8_t *frame, uint32_t len,
+				     const struct vms_frame_info *fi,
+				     struct vms_dlm_deq *out)
+{
+	const uint8_t *body;
+	uint32_t blen;
+	vms_codec_status_t st;
+
+	if (!dlm_class_ok(fi))
+		return VMS_CODEC_E_CLASS;
+	st = dlm_body_of(frame, len, &body, &blen);
+	if (st != VMS_CODEC_OK)
+		return st;
+	return vms_dlm_deq_parse_body(body, blen, out);
+}
+
+vms_codec_status_t vms_dlm_blkast_parse(const uint8_t *frame, uint32_t len,
+					const struct vms_frame_info *fi,
+					struct vms_dlm_blkast *out)
+{
+	const uint8_t *body;
+	uint32_t blen;
+	vms_codec_status_t st;
+
+	if (!dlm_class_ok(fi))
+		return VMS_CODEC_E_CLASS;
+	st = dlm_body_of(frame, len, &body, &blen);
+	if (st != VMS_CODEC_OK)
+		return st;
+	return vms_dlm_blkast_parse_body(body, blen, out);
+}
+
+vms_codec_status_t
+vms_dlm_valblk_convert_parse(const uint8_t *frame, uint32_t len,
+			     const struct vms_frame_info *fi,
+			     struct vms_dlm_valblk_convert *out)
+{
+	const uint8_t *body;
+	uint32_t blen;
+	vms_codec_status_t st;
+
+	if (!dlm_class_ok(fi))
+		return VMS_CODEC_E_CLASS;
+	st = dlm_body_of(frame, len, &body, &blen);
+	if (st != VMS_CODEC_OK)
+		return st;
+	return vms_dlm_valblk_convert_parse_body(body, blen, out);
 }

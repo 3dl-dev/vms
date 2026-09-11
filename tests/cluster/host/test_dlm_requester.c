@@ -15,12 +15,21 @@
  *
  * A requester that cached ANY field -- the mode, the resource name, the
  * master's handle, the hash -- would keep sending the OLD value and this file
- * would go red. The single most important case is `master_lkid` on the
- * completion, because a completion carrying a lock id that came off a frame
- * instead of out of the lock database is literally what bugchecked a real VAX
- * with INVLOCKID and took the cluster down (commit fc8540ae): the test sets the
- * fake LKB's master handle to a value DIFFERENT from the one the grant frame
- * carried, and then asserts the completion carries the LKB's.
+ * would go red. The single most important case is `master_lkid` on a
+ * POST-GRANT frame, because a frame carrying a lock id that came off another
+ * frame instead of out of the lock database is literally what bugchecked a
+ * real VAX with INVLOCKID and took the cluster down (commit fc8540ae): the
+ * test sets the fake LKB's master handle to a value DIFFERENT from the one the
+ * grant frame carried, and then asserts the next frame carries the LKB's.
+ *
+ * THE SUPERSESSION (vms-c03, rd vms-fa7). This file used to interrogate a
+ * post-grant "completion 0x04 + commit 0x03" pair. A real 2-node OpenVMS VAX
+ * 7.3 capture showed that pair does not exist -- 0x03 is $DEQ, 0x04 is BLKAST,
+ * and a real requester answers a grant with NO frame at all -- so the arm no
+ * longer emits it. The assertions moved rather than weakened: the fresh-read
+ * proof now runs on the post-grant CONVERT (a frame that really exists), and
+ * `check_only_enq_or_convert_was_sent()` is run over EVERY scenario so a
+ * reintroduced phantom frame reddens this file wherever it comes back.
  *
  * Every captured frame also records a SNAPSHOT of the fake LKB as it stood at
  * send time, and `check_frame_traces_to_lkb()` re-derives all six wire fields
@@ -355,21 +364,74 @@ static int parse_request(const struct sent_frame *s, uint8_t *opcode_out,
 	return 0;
 }
 
-/* The completion/commit pair has no parser in the codec (it is PROVISIONAL and
- * carries no round trip), so this reads its three declared fields through the
- * codec's OWN published offsets rather than open-coded numbers. */
-static int read_completion(const struct sent_frame *s, uint8_t *op_out,
-			   uint32_t *master_lkid, uint32_t *req_lkid)
+/* The opcode of a captured frame, read through the codec's own published
+ * offset. Used to assert what this arm did NOT emit as well as what it did. */
+static uint8_t sent_opcode(const struct sent_frame *s)
 {
 	uint8_t frame[VMS_CM_FRAME_LEN];
 	vms_wire_view_t v;
 	uint32_t len = splice(s, frame);
 
 	vms_wire_view_init(&v, frame, len);
-	*op_out = vms_wire_get_u8(&v, VMS_OFF_DLM_OP);
-	*master_lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_COMPLETE_MASTER_LKID);
-	*req_lkid = vms_wire_get_le32(&v, VMS_OFF_DLM_COMPLETE_REQ_LKID);
-	return vms_wire_view_ok(&v) ? 0 : -1;
+	return vms_wire_get_u8(&v, VMS_OFF_DLM_OP);
+}
+
+/*
+ * *** THE SUPERSESSION GUARD. ***
+ *
+ * Not one frame this arm emitted may be anything but an ENQ or a CONVERT.
+ * That is stronger than "the completion emit was deleted": it would catch a
+ * reintroduction anywhere -- a new handler, a new timeout path, a merge that
+ * resurrected the pair -- and it is checked after every scenario below rather
+ * than in one place, because a phantom frame that only appears on the retry
+ * ladder is exactly the kind nobody looks for.
+ */
+static void check_only_enq_or_convert_was_sent(const char *label)
+{
+	uint32_t i;
+	char what[160];
+
+	for (i = 0; i < g.n_sent; i++) {
+		uint8_t op = sent_opcode(&g.sent[i]);
+
+		if (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT) {
+			snprintf(what, sizeof(what),
+				 "%s: frame %u carries opcode 0x%02x -- this "
+				 "arm emits ONLY op 0x01 / op 0x07",
+				 label, (unsigned)i, (unsigned)op);
+			ct_check(0, what);
+			return;
+		}
+	}
+	snprintf(what, sizeof(what),
+		 "%s: all %u emitted frame(s) are op 0x01 / op 0x07 -- no "
+		 "post-grant completion, no commit, nothing else",
+		 label, (unsigned)g.n_sent);
+	ct_check(1, what);
+}
+
+/*
+ * A request block reached its TERMINAL state: ST_GRANTED, settled, with no
+ * ladder running. This is the whole post-grant contract in one predicate.
+ */
+static void check_settled_terminal(uint32_t lkid, const char *label)
+{
+	const struct dlm_req *r = dlm_req_fsm_find(&g_fsm, lkid);
+	char what[160];
+
+	snprintf(what, sizeof(what), "%s: the block is ST_GRANTED", label);
+	ct_check(r != NULL && r->state == (uint8_t)DLM_REQ_ST_GRANTED, what);
+	if (r == NULL)
+		return;
+
+	snprintf(what, sizeof(what),
+		 "%s: *** settled -- nothing is outstanding on the wire ***",
+		 label);
+	ct_check(r->settled == 1u, what);
+
+	snprintf(what, sizeof(what),
+		 "%s: no retry ladder is running (tries == 0)", label);
+	ct_check_eq_u32(r->tries, 0u, what);
 }
 
 /* Is the 16-bit directory hash physically present at body[10:12]? A frame that
@@ -485,7 +547,12 @@ static uint32_t make_deny(uint8_t *frame, uint32_t pid_echo,
 }
 
 /* ==========================================================================
- * 1. The full path: lookup -> grant -> completion + commit
+ * 1. The full path: directory lookup -> grant -> SETTLED, and that is all
+ *
+ * The grant is the terminal settle. Nothing follows it on the wire, because
+ * the vms-c03 capture of a real OpenVMS VAX 7.3 cluster shows a real
+ * requester sends nothing after one (the "completion 0x04 + commit 0x03" pair
+ * this arm used to emit was a phantom).
  * ========================================================================== */
 static void test_full_path(void)
 {
@@ -493,10 +560,9 @@ static void test_full_path(void)
 	uint8_t frame[VMS_CM_FRAME_LEN];
 	uint32_t len;
 	const struct dlm_req *r;
-	uint8_t op = 0;
-	uint32_t mlk = 0, rlk = 0;
 
-	printf("-- full path: directory lookup -> grant -> completion/commit\n");
+	printf("-- full path: directory lookup -> grant -> SETTLED (nothing "
+	       "follows a grant)\n");
 	fe_reset("F11B$aSYSDSK1", VMS_LCK_PW, 0x1234u, 1, 0u);
 
 	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_DIR);
@@ -527,44 +593,171 @@ static void test_full_path(void)
 			"  valblk_present is 0: no grounded LVB field, so the "
 			"engine keeps the proxy's own block");
 
-	ct_check_eq_u32(g_fsm.completions_sent, 1u,
-			"a completion/commit PAIR went out");
-	ct_check_eq_u32(g.n_sent, 3u, "three frames total (lookup + 2)");
+	/* *** THE SETTLE-ON-GRANT ASSERTION. *** */
+	ct_check_eq_u32(g.n_sent, 1u,
+			"*** ONE frame total: the lookup. NOTHING was emitted "
+			"in answer to the grant ***");
+	check_only_enq_or_convert_was_sent("full path");
+	ct_check_eq_u32(g_fsm.grants_settled, 1u,
+			"the grant reached the terminal settled state");
+	check_settled_terminal(g.lkb.lkid, "full path");
 
-	ct_check(read_completion(&g.sent[1], &op, &mlk, &rlk) == 0 &&
-		 op == VMS_DLM_WIREOP_COMPLETE_PROVISIONAL,
-		 "frame 2 is the op-0x04 completion");
-	ct_check_eq_u32(mlk, 0x00ABCDEFu,
-			"  its master handle is the LKB's (which the grant set)");
-	ct_check_eq_u32(rlk, g.lkb.lkid, "  its req handle is the LKB's");
+	/*
+	 * NO DANGLING STATE WAITING ON AN ACK. A settled block is skipped by
+	 * the beat, so a hundred beats produce no frame and no failure -- the
+	 * property the removed completion ladder violated by construction (it
+	 * retransmitted a frame no master was ever going to answer).
+	 */
+	{
+		uint32_t beats, ticks_that_sent = 0;
 
-	ct_check(read_completion(&g.sent[2], &op, &mlk, &rlk) == 0 &&
-		 op == VMS_DLM_WIREOP_COMMIT_PROVISIONAL,
-		 "frame 3 is the op-0x03 commit");
+		for (beats = 0; beats < 100u; beats++) {
+			g.now_ms += DLM_REQ_RETRY_MS + 1u;
+			ticks_that_sent += dlm_req_fsm_tick(&g_fsm);
+		}
+		ct_check_eq_u32(ticks_that_sent, 0u,
+				"100 beats: the beat never had anything to do");
+		ct_check_eq_u32(g.n_sent, 1u,
+				"*** still ONE frame -- no retransmit ladder, "
+				"no completion retry, no timeout ***");
+		ct_check_eq_u32(g.fail_calls, 0u,
+				"and the waiter was never failed");
+	}
+	check_settled_terminal(g.lkb.lkid, "full path after 100 beats");
 
+	/* NO LEAKED SLOT: exactly one block, recording the master it heard
+	 * from. */
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
+			"exactly ONE request block is held");
 	r = dlm_req_fsm_find(&g_fsm, g.lkb.lkid);
-	ct_check(r != NULL && r->state == (uint8_t)DLM_REQ_ST_GRANTED,
-		 "the request block is now ST_GRANTED");
+	ct_check(r != NULL && r->dst_csid == CSID_DIR,
+		 "and it records the MASTER the grant came from");
 }
 
 /* ==========================================================================
- * 2. *** THE ANTI-LARP ASSERTION ***
+ * 1b. A GRANTED LOCK IS USABLE AND RELEASABLE -- with no completion round
+ *     trip anywhere in sight.
  *
- * The completion is built from a FRESH read of the lock database, not from the
- * grant frame. Proved by making the two DIFFER: the fake engine's grant handler
- * records the master's handle and then the test changes it, so a completion
- * that carried the FRAME's value would be visibly wrong.
+ * "The emit is gone" is not the claim. The claim is that the post-grant path
+ * is COMPLETE: the lock the grant produced can be CONVERTED (a real op-0x07
+ * goes out, every field built from a fresh executive read), and it can be
+ * RELEASED (the $DEQ post is taken on the granted path and the block returns
+ * to IDLE with no slot leaked). Neither is blocked behind an acknowledgement,
+ * because there is no acknowledgement.
  * ========================================================================== */
-static void test_completion_reads_the_lkb_not_the_frame(void)
+static void test_granted_lock_is_usable_and_releasable(void)
 {
 	struct vms_dlm_proxy_post p;
+	struct vms_dlm_enq_request req;
+	struct vms_dlm_deq d;
 	uint8_t frame[VMS_CM_FRAME_LEN];
-	uint32_t len, refills_before;
-	uint8_t op = 0;
-	uint32_t mlk = 0, rlk = 0;
+	uint8_t opcode = 0;
+	uint32_t len, n;
 
-	printf("-- the completion's master handle comes from the LKB "
-	       "(fc8540ae)\n");
+	printf("-- a lock granted with NO completion round trip is usable and "
+	       "releasable\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_CR, 0x0155u, 1, CSID_MASTER);
+
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+	len = make_grant(frame, g.lkb.lkid, 0x0C0FFEE0u, VMS_LCK_CR);
+	ct_check(dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len) ==
+		 DLM_REQ_OK, "the grant is accepted");
+	ct_check_eq_u32(g.n_sent, 1u,
+			"the ENQ is the only frame: no completion followed");
+	check_settled_terminal(g.lkb.lkid, "granted");
+
+	/* ---- USABLE: a CONVERT on the settled lock really transmits ---- */
+	n = g.n_sent;
+	g.lkb.lkmode = VMS_LCK_EX;   /* the $ENQ raised the requested mode */
+	post_from_lkb(&p, VMS_DLM_POST_CONVERT, CSID_MASTER);
+	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_OK,
+		 "*** a CONVERT on the settled lock is taken ***");
+	ct_check_eq_u32(g.n_sent, n + 1u, "and one frame went out");
+	ct_check(parse_request(&g.sent[n], &opcode, &req) == 0 &&
+		 opcode == VMS_DLM_WIREOP_CONVERT, "  it is op 0x07");
+	ct_check_eq_u32(req.master_lkid, 0x0C0FFEE0u,
+			"  carrying the master handle the GRANT put in the LKB "
+			"-- read back out of the executive, not remembered");
+	check_frame_traces_to_lkb(&g.sent[n], "post-grant convert");
+
+	/* The master refuses the convert: the lock stays real, at its old mode,
+	 * and the block SETTLES again rather than waiting on anything. */
+	len = make_deny(frame, g.lkb.lkid, 0x0C0FFEE0u, "F11B$aSYSDSK1");
+	ct_check(dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len) ==
+		 DLM_REQ_OK, "a refused convert is an ANSWER, not a hang");
+	check_settled_terminal(g.lkb.lkid, "after a refused convert");
+	n = g.n_sent;
+	{
+		uint32_t beats;
+
+		for (beats = 0; beats < 16u; beats++) {
+			g.now_ms += DLM_REQ_RETRY_MS + 1u;
+			(void)dlm_req_fsm_tick(&g_fsm);
+		}
+	}
+	ct_check_eq_u32(g.n_sent, n,
+			"  and the beat leaves the re-settled block alone");
+
+	/* ---- RELEASABLE: the $DEQ post frees the block, no leak ---- */
+	post_from_lkb(&p, VMS_DLM_POST_DEQ, CSID_MASTER);
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 0u,
+			"*** the $DEQ released the block: NO leaked req slot ***");
+	ct_check(dlm_req_fsm_find(&g_fsm, g.lkb.lkid) == NULL,
+		 "  and the handle finds nothing");
+	check_only_enq_or_convert_was_sent("usable-and-releasable");
+
+	/*
+	 * AND THE RELEASE IS NOW GROUNDED AT THE CODEC. This arm does not yet
+	 * TRANSMIT one (a new outbound frame shape is a peer-crash vector until
+	 * a real peer has been seen to take it; that proof is its own item),
+	 * but vms-c03 ended the FIELD-MAP half of the gap: a $DEQ for THIS
+	 * lock's real handles builds, and the same builder still refuses the
+	 * placeholder that bugchecked a VAX.
+	 */
+	ct_check_eq_u32(g_fsm.releases_no_wire_op, 1u,
+			"the unsent release is COUNTED, not silent");
+	memset(&d, 0, sizeof(d));
+	d.req_lkid = g.lkb.lkid;
+	d.master_lkid = 0x0C0FFEE0u;
+	d.mode = VMS_LCK_NL;
+	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &len) ==
+		 VMS_CODEC_OK,
+		 "*** and the codec CAN now build a grounded op-0x03 $DEQ for "
+		 "this lock's real handles (vms-c03) ***");
+	d.master_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(vms_dlm_deq_build(&d, frame, sizeof(frame), &len) ==
+		 VMS_CODEC_E_INVAL,
+		 "  while still refusing the fc8540ae placeholder");
+}
+
+/* ==========================================================================
+ * 2. *** THE ANTI-LARP ASSERTION ***, after the supersession
+ *
+ * The rule is unchanged: a master handle on the wire comes from a FRESH read
+ * of the lock database, never from the grant frame that arrived a microsecond
+ * earlier. What changed is which frame carries it. The completion this test
+ * used to interrogate does not exist on a real wire (vms-c03), so the proof
+ * moved to the frame that DOES follow a grant when the executive has more to
+ * say: the post-grant CONVERT.
+ *
+ * The method is identical and it is the only one that can prove the claim:
+ * MAKE THE TWO VALUES DIFFER. The grant frame says 0x11111111, the engine
+ * records it, and then a REMASTER moves the executive's own record to
+ * 0x22222222 before the next frame is built. A requester that cached the
+ * grant's value is visibly wrong here.
+ * ========================================================================== */
+static void test_post_grant_frame_reads_the_lkb_not_the_frame(void)
+{
+	struct vms_dlm_proxy_post p;
+	struct vms_dlm_enq_request req;
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint32_t len, refills_before, n;
+	uint8_t opcode = 0;
+
+	printf("-- a post-grant frame's master handle comes from the LKB, not "
+	       "from the grant (fc8540ae)\n");
 	fe_reset("LNM$CWLOGICALS", VMS_LCK_EX, 0x4321u, 1, CSID_MASTER);
 
 	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
@@ -572,32 +765,54 @@ static void test_completion_reads_the_lkb_not_the_frame(void)
 	ct_check_eq_u32(g_fsm.requests_sent, 1u,
 			"a known master gets a REQUEST, not a lookup");
 
-	/*
-	 * The grant frame says 0x11111111. The engine (our fake) records it,
-	 * and then a REMASTER changes the executive's own record to
-	 * 0x22222222 before the completion is built. Only a build that RE-READS
-	 * can carry 0x22222222.
-	 */
 	len = make_grant(frame, g.lkb.lkid, 0x11111111u, VMS_LCK_EX);
-	g.send_fails = 1;   /* make the completion fail so we control the retry */
 	(void)dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len);
-	g.send_fails = 0;
 	ct_check_eq_u32(g.lkb.master_lkid, 0x11111111u,
 			"the engine recorded the grant's handle");
+	ct_check_eq_u32(g.n_sent, 1u,
+			"and answered it with NO frame (the grant settles)");
 
-	g.lkb.master_lkid = 0x22222222u;   /* the executive's truth moves */
-	refills_before = g.refills;
-	g.now_ms += DLM_REQ_RETRY_MS + 1u;
-	(void)dlm_req_fsm_tick(&g_fsm);
+	/* ---- part 1: the POST path ---- */
+	g.lkb.master_lkid = 0x22222222u;   /* a remaster: the truth moves */
+	n = g.n_sent;
 
-	ct_check(g.refills > refills_before,
-		 "the retry RE-READ the lock database");
-	ct_check(g.n_sent >= 3u, "the completion pair went out on the retry");
-	ct_check(read_completion(&g.sent[g.n_sent - 2u], &op, &mlk, &rlk) == 0,
-		 "the completion parses");
-	ct_check_eq_u32(mlk, 0x22222222u,
+	post_from_lkb(&p, VMS_DLM_POST_CONVERT, CSID_MASTER);
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+
+	ct_check_eq_u32(g.n_sent, n + 1u, "one convert frame went out");
+	ct_check(parse_request(&g.sent[n], &opcode, &req) == 0 &&
+		 opcode == VMS_DLM_WIREOP_CONVERT, "it parses as op 0x07");
+	ct_check_eq_u32(req.master_lkid, 0x22222222u,
 			"*** it carries the LKB's CURRENT handle, NOT the "
-			"grant frame's ***");
+			"0x11111111 the grant frame carried ***");
+	check_frame_traces_to_lkb(&g.sent[n], "post-remaster convert");
+
+	/*
+	 * ---- part 2: the RETRANSMIT path, where the FSM does its OWN read ----
+	 *
+	 * Part 1 proves the FSM did not reach back for the grant frame's value;
+	 * the post it built from was filled by the engine. This part closes the
+	 * other half: when the FSM retransmits on its own initiative, it calls
+	 * `refill_post` and builds from THAT. Move the executive's truth a
+	 * second time with no post in sight, and require the retransmitted
+	 * frame to follow.
+	 */
+	g.lkb.master_lkid = 0x33333333u;
+	refills_before = g.refills;
+	n = g.n_sent;
+
+	g.now_ms += DLM_REQ_RETRY_MS + 1u;
+	ct_check_eq_u32(dlm_req_fsm_tick(&g_fsm), 1u,
+			"the unanswered convert is retransmitted by the beat");
+	ct_check(g.refills > refills_before,
+		 "*** and the retransmit RE-READ the lock database ***");
+	ct_check_eq_u32(g.n_sent, n + 1u, "one more frame went out");
+	ct_check(parse_request(&g.sent[n], &opcode, &req) == 0 &&
+		 opcode == VMS_DLM_WIREOP_CONVERT, "it is op 0x07 again");
+	ct_check_eq_u32(req.master_lkid, 0x33333333u,
+			"*** carrying the handle the executive holds NOW ***");
+
+	check_only_enq_or_convert_was_sent("anti-LARP");
 }
 
 /* ==========================================================================
@@ -841,7 +1056,13 @@ static void test_convert(void)
 }
 
 /* ==========================================================================
- * 9. The RELEASE: no grounded opcode, so nothing is sent and it is COUNTED
+ * 9. The RELEASE: this arm does not transmit one, and says so
+ *
+ * vms-c03 grounded op 0x03 as $DEQ and the codec now builds one (proved in
+ * test_granted_lock_is_usable_and_releasable). Letting THIS arm put a release
+ * on a live cluster's wire is a separate, lab-gated step, so the refusal
+ * stands -- COUNTED, which is what makes it a reportable gap and not a silent
+ * one.
  * ========================================================================== */
 static void test_release_is_honestly_unsent(void)
 {
@@ -849,8 +1070,8 @@ static void test_release_is_honestly_unsent(void)
 	uint8_t frame[VMS_CM_FRAME_LEN];
 	uint32_t len, n;
 
-	printf("-- a cross-node release has NO grounded opcode (E6's open "
-	       "half)\n");
+	printf("-- a cross-node release is not transmitted by this arm, and is "
+	       "COUNTED (E6's open half)\n");
 	fe_reset("F11B$aSYSDSK1", VMS_LCK_EX, 0x00ccu, 1, CSID_MASTER);
 
 	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
@@ -861,7 +1082,7 @@ static void test_release_is_honestly_unsent(void)
 
 	post_from_lkb(&p, VMS_DLM_POST_DEQ, CSID_MASTER);
 	ct_check(dlm_req_fsm_post(&g_fsm, &p) == DLM_REQ_E_NOWIREOP,
-		 "the release is REFUSED, not guessed at opcode 0x03");
+		 "the release is REFUSED by this arm, not quietly transmitted");
 	ct_check_eq_u32(g.n_sent, n, "*** nothing went on the wire ***");
 	ct_check_eq_u32(g_fsm.releases_no_wire_op, 1u,
 			"counted -- a measured gap, not a silent one");
@@ -1008,14 +1229,39 @@ static void test_duplicate_grant(void)
 	(void)dlm_req_fsm_post(&g_fsm, &p);
 	len = make_grant(frame, g.lkb.lkid, 0x0bbbu, VMS_LCK_EX);
 	(void)dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len);
-	ct_check_eq_u32(g_fsm.completions_sent, 1u, "the first pair went out");
+	ct_check_eq_u32(g_fsm.grants_settled, 1u, "the first grant settled");
+	ct_check_eq_u32(g.n_sent, 1u, "one frame: the ENQ");
 
+	/* The master retransmits. The executive's record moves first, so the
+	 * re-apply can be seen to be a real re-apply and not a no-op. */
+	g.lkb.master_lkid = 0u;
 	(void)dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len);
 	ct_check_eq_u32(g_fsm.grants_duplicate, 1u, "the duplicate is counted");
-	ct_check_eq_u32(g_fsm.completions_resent, 1u,
-			"and answered again -- ONE reply per received frame");
+	ct_check_eq_u32(g.grant_calls, 2u,
+			"and RE-APPLIED to the engine (idempotent on the key)");
+	ct_check_eq_u32(g.lkb.master_lkid, 0x0bbbu,
+			"  which put the handle THIS frame carried back in the "
+			"lock database");
+	ct_check_eq_u32(g_fsm.grants_settled, 2u, "and settled again");
+
+	/* *** THE STORM THAT CANNOT START. *** A retransmitting master used to
+	 * pump one completion PAIR out of this arm per received frame. Now a
+	 * duplicate grant costs zero frames, however many arrive. */
+	ct_check_eq_u32(g.n_sent, 1u,
+			"*** the duplicate drew NO frame: a retransmitting "
+			"master cannot pump this node ***");
+	{
+		uint32_t i;
+
+		for (i = 0; i < 20u; i++)
+			(void)dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame,
+						len);
+	}
+	ct_check_eq_u32(g.n_sent, 1u, "  nor did twenty more of them");
 	ct_check_eq_u32(dlm_req_fsm_outstanding(&g_fsm), 1u,
 			"*** still ONE request block ***");
+	check_settled_terminal(g.lkb.lkid, "after 21 duplicate grants");
+	check_only_enq_or_convert_was_sent("duplicate grant");
 }
 
 /* ==========================================================================
@@ -1259,7 +1505,8 @@ int main(void)
 {
 	printf("== FC-P4.6 R1: the DLM requester FSM ==\n");
 	test_full_path();
-	test_completion_reads_the_lkb_not_the_frame();
+	test_granted_lock_is_usable_and_releasable();
+	test_post_grant_frame_reads_the_lkb_not_the_frame();
 	test_hash_unknown_refuses();
 	test_redirect();
 	test_redirect_budget_terminates();

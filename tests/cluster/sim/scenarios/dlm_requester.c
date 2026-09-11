@@ -171,10 +171,20 @@ static struct vms_proc g_proc;
 static vms_csid_t g_sim_master;
 /* what handle that simulated master assigns */
 static uint32_t g_sim_master_lkid;
-/* the completions/commits the simulated master received */
-static uint32_t g_completions_rx;
-static uint32_t g_commits_rx;
-static uint32_t g_completion_master_lkid;
+/*
+ * WHAT THE SIMULATED MASTER RECEIVED THAT IS NOT AN ENQ OR A CONVERT.
+ *
+ * This used to count a post-grant "completion 0x04 + commit 0x03" pair. The
+ * vms-c03 capture of a real 2-node OpenVMS VAX 7.3 cluster showed that pair
+ * does not exist (0x03 is $DEQ, 0x04 is BLKAST, 0x06 carries the value block,
+ * and a real requester answers a grant with NO frame). So the counter inverted
+ * its job: it now records any frame OVMX put on the simulated LAN that is not
+ * one of the two opcodes this arm is cleared to emit, and every scenario
+ * asserts it is zero. A reintroduced phantom frame reddens this leg wherever
+ * it comes back -- which is more than "we deleted the call site" can claim.
+ */
+static uint32_t g_unexpected_ops_rx;
+static uint8_t  g_unexpected_op_first;
 /* the routing self-check's verdict, from the RECEIVER's own vector */
 static uint32_t g_lookups_landed;
 static uint32_t g_lookups_misaddressed;
@@ -253,19 +263,18 @@ static void peer_receive(uint32_t sys, const uint8_t *body, uint32_t len)
 	if (vms_frame_classify(frame, flen, &fi) != VMS_CODEC_OK)
 		return;
 
-	/* The completion/commit pair has no parser (PROVISIONAL), so its
-	 * opcode and its master handle are read through the codec's own
-	 * published offsets. */
+	/*
+	 * THE SUPERSESSION GUARD, at the RECEIVER. Read the opcode through the
+	 * codec's own published offset and record anything that is not one of
+	 * the two this arm is cleared to emit -- a $DEQ, a BLKAST, a value-block
+	 * convert, or a resurrected phantom would all land here.
+	 */
 	vms_wire_view_init(&v, frame, flen);
 	op = vms_wire_get_u8(&v, VMS_OFF_DLM_OP);
-	if (op == VMS_DLM_WIREOP_COMPLETE_PROVISIONAL) {
-		g_completions_rx++;
-		g_completion_master_lkid =
-			vms_wire_get_le32(&v, VMS_OFF_DLM_COMPLETE_MASTER_LKID);
-		return;
-	}
-	if (op == VMS_DLM_WIREOP_COMMIT_PROVISIONAL) {
-		g_commits_rx++;
+	if (op != VMS_DLM_WIREOP_ENQ && op != VMS_DLM_WIREOP_CONVERT) {
+		if (g_unexpected_ops_rx == 0u)
+			g_unexpected_op_first = op;
+		g_unexpected_ops_rx++;
 		return;
 	}
 
@@ -574,11 +583,30 @@ static int hash_routing_to(vms_csid_t want, uint16_t *out)
 static void reset_wire(void)
 {
 	g_wire_n = 0;
-	g_completions_rx = 0;
-	g_commits_rx = 0;
-	g_completion_master_lkid = 0;
+	g_unexpected_ops_rx = 0;
+	g_unexpected_op_first = 0;
 	g_lookups_landed = 0;
 	g_lookups_misaddressed = 0;
+}
+
+/*
+ * Every scenario ends here. `g_unexpected_ops_rx` counts frames the simulated
+ * peers received that are neither op 0x01 nor op 0x07 -- so this is the R2
+ * statement of the same contract test_dlm_requester.c states at R1: after a
+ * grant, OVMX puts NOTHING on the LAN.
+ */
+static void check_no_phantom_frames(const char *label)
+{
+	char what[192];
+
+	snprintf(what, sizeof(what),
+		 "%s: *** every frame OVMX put on the LAN is op 0x01 / op 0x07 "
+		 "-- no post-grant completion, no commit ***", label);
+	if (g_unexpected_ops_rx != 0u)
+		printf("   unexpected opcode 0x%02x seen %u time(s)\n",
+		       (unsigned)g_unexpected_op_first,
+		       (unsigned)g_unexpected_ops_rx);
+	ct_check(g_unexpected_ops_rx == 0u, what);
 }
 
 /* ==========================================================================
@@ -616,6 +644,7 @@ static void cross_node_enq_resolves_and_grants(void)
 	uint8_t opcode = 0;
 	uint16_t hash = 0;
 	uint32_t lkid = 0, st, flen;
+	uint32_t settled_before = g_fsm.grants_settled;
 
 	printf("--- lookup -> directory -> master -> grant -> completion "
 	       "---\n");
@@ -681,13 +710,53 @@ static void cross_node_enq_resolves_and_grants(void)
 	ct_check_eq_u32(db.to_directory, 0u,
 			"and no longer needs the directory for this tree");
 
-	/* And the completion the master received names THAT handle -- read out
-	 * of the lock database, not off the grant frame. */
-	ct_check_eq_u32(g_completions_rx, 1u, "the master got the completion");
-	ct_check_eq_u32(g_commits_rx, 1u, "and the commit");
-	ct_check_eq_u32(g_completion_master_lkid, db.master_lkid,
-			"*** and its master handle IS the one the lock "
-			"database holds -- the executive's, not the frame's ***");
+	/*
+	 * *** SETTLE ON GRANT, through the REAL chain. ***
+	 *
+	 * Two frames crossed the simulated LAN -- the lookup and the request --
+	 * and the grant ended the exchange. The master got nothing back, which
+	 * is what a real OpenVMS master gets back (vms-c03), and the requester
+	 * arm's block is in its terminal settled state with no slot held open
+	 * for an acknowledgement that is never coming.
+	 */
+	check_no_phantom_frames("cross-node enq");
+	ct_check_eq_u32(g_wire_n, 2u,
+			"*** exactly TWO frames total: lookup + request. The "
+			"grant was answered with silence ***");
+	ct_check_eq_u32(g_fsm.grants_settled, settled_before + 1u,
+			"the requester arm settled on the grant");
+	{
+		const struct dlm_req *r = dlm_req_fsm_find(&g_fsm, lkid);
+
+		/*
+		 * ST_GRANTED + settled is the terminal state, and `settled` is
+		 * the load-bearing half: the beat skips a settled block, so the
+		 * retry counter cannot start a ladder whatever it holds. It is
+		 * deliberately NOT asserted here (R1 does that): this harness
+		 * delivers the peer's reply RE-ENTRANTLY inside ops->send, so
+		 * the outer dq_transmit resumes and counts its own try after
+		 * the settle. A real executive cannot do that -- ops->send
+		 * hands the body to the connection manager for the fork thread
+		 * and must not wait (vms_dlm_scs_fsm.h SSCONTEXT) -- so this is
+		 * an artifact of the simulated LAN being a function call, not a
+		 * property of the object under test. What matters is proved
+		 * directly below: 32 beats, zero frames.
+		 */
+		ct_check(r != NULL && r->state == (uint8_t)DLM_REQ_ST_GRANTED &&
+			 r->settled == 1u,
+			 "  its block is ST_GRANTED and SETTLED");
+	}
+
+	/* And the beat leaves it alone for good: no dangling retransmit. */
+	{
+		uint32_t i, before = g_wire_n;
+
+		for (i = 0; i < 32u; i++)
+			(void)dlm_req_fsm_tick(&g_fsm);
+		ct_check_eq_u32(g_wire_n, before,
+				"*** 32 beats later, still not one further "
+				"frame ***");
+	}
 }
 
 /* ==========================================================================
@@ -699,6 +768,7 @@ static void directory_is_the_master(void)
 	struct vms_dlm_proxy_post db;
 	uint16_t hash = 0;
 	uint32_t lkid = 0, st;
+	uint32_t settled_before = g_fsm.grants_settled;
 
 	printf("--- outcome 1: the directory node masters it, one round trip "
 	       "---\n");
@@ -721,9 +791,12 @@ static void directory_is_the_master(void)
 	memset(&db, 0, sizeof(db));
 	(void)vms_lock_dlm_proxy_refill_post(lkid, VMS_DLM_POST_ENQ, 0u, &db);
 	ct_check_eq_u32(db.master_lkid, 0x00BEEF01u, "with the master's handle");
-	ct_check_eq_u32(g_completions_rx, 1u, "and the completion went back");
-	ct_check_eq_u32(g_completion_master_lkid, db.master_lkid,
-			"and the completion carried the executive's value");
+	check_no_phantom_frames("directory is the master");
+	ct_check_eq_u32(g_wire_n, 1u,
+			"*** ONE frame for the whole exchange: the lookup. A "
+			"grant ends it ***");
+	ct_check_eq_u32(g_fsm.grants_settled, settled_before + 1u,
+			"and the arm settled on it");
 }
 
 /* ==========================================================================
@@ -850,6 +923,7 @@ static void misaddressed_inbound_is_redirected(void)
 	ct_check_eq_u32(target, 0u,
 			"*** and the DIRECTORY the vector resolves is never "
 			"named as its master ***");
+	check_no_phantom_frames("misaddressed inbound");
 }
 
 /* ==========================================================================
@@ -884,6 +958,7 @@ static void master_departs_mid_request(void)
 	do_getlki(lkid, &gk);
 	ct_check_eq_u32(gk.granted_mode, (uint32_t)LCK_K_NLMODE,
 			"*** and the proxy was NOT granted anything ***");
+	check_no_phantom_frames("master departs");
 }
 
 int main(void)

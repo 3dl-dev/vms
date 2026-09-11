@@ -103,7 +103,15 @@ struct ldwv_survey {
 	uint8_t  any_unknown;    /* a member with no learned LOCKDIRWT      */
 	uint8_t  any_learned;    /* a member WITH a learned LOCKDIRWT       */
 	uint8_t  all_zero;       /* every learned weight is 0               */
-	uint8_t  pad;
+	/*
+	 * THE GATE (rd vms-1ee). Kept SEPARATE from `any_learned` because it is
+	 * the whole safety condition of the local-withhold fallback below: has
+	 * any member OTHER THAN THIS ONE advertised a real LOCKDIRWT?
+	 */
+	uint8_t  any_peer_learned;
+	uint8_t  local_learned;  /* ... and did WE contribute one            */
+	uint8_t  local_withheld; /* the fallback fired: ours was withheld    */
+	uint8_t  pad[2];
 };
 
 static void ldwv_survey_init(struct ldwv_survey *s)
@@ -120,8 +128,59 @@ static void ldwv_survey_add(struct ldwv_survey *s, const struct vms_ldwv_member 
 		return;
 	}
 	s->any_learned = 1u;
+	if (m->is_local)
+		s->local_learned = 1u;
+	else
+		s->any_peer_learned = 1u;   /* THE GATE's input */
 	if (m->lockdirwt != 0u)
 		s->all_zero = 0u;
+}
+
+/*
+ * ==========================================================================
+ * THE LOCAL-WITHHOLD FALLBACK (rd vms-1ee, conductor-ruled) -- and its gate.
+ *
+ * THE PROBLEM IT SOLVES. cnxman_club_init() marks THIS node's LOCKDIRWT
+ * learned, from SYSGEN. A REMOTE node's can never be learned: no wire byte has
+ * been pinned to carry it (cnxman_csb_set_lockdirwt()'s own note, FC-P3.2). So
+ * every multi-node cluster is a MIXTURE -- one learned weight, N unknown -- the
+ * vector is refused, vms_ldwv_resolve() cannot answer, and NO cross-node DLM
+ * request can be routed at all. Measured on the live 2-node rig: both
+ * executives reported the vector unbuilt, in every run.
+ *
+ * THE FALLBACK. When the ONLY learned weight is our own, withhold it. The
+ * member set then reads all-unknown, p. 6-32's all-zero rule applies, and every
+ * node lays down one entry per system in CSV order -- the ONE directory every
+ * node computes identically. That is the published fallback, not a
+ * convenience: a vector is only useful if it is the SAME vector everywhere.
+ *
+ * *** THE GATE, AND WHY IT IS THE WHOLE SAFETY ARGUMENT. *** The fallback fires
+ * ONLY when NO PEER has advertised a weight. The instant one has,
+ * `any_peer_learned` is set and this does nothing -- the mixture is refused
+ * exactly as before. That case is SPLIT-BRAIN territory: a peer that advertised
+ * a real LOCKDIRWT is computing a WEIGHTED vector, and a node that answered it
+ * with an all-zero one would resolve the same resource to a DIFFERENT directory
+ * node. Two directories for one resource is two masters for one lock, which is
+ * lock corruption and exactly the class of fault that must never reach a peer.
+ * So: all peers unknown -> the shared all-zero reading; any peer known -> we do
+ * not participate, and say so.
+ *
+ * IT AUTO-RETIRES. When FC-P3.2 pins the LOCKDIRWT wire byte, peers advertise,
+ * `any_peer_learned` becomes true and this stops firing on its own -- the real
+ * weighted vector takes over with no code change here.
+ * ==========================================================================
+ */
+static void ldwv_survey_finish(struct ldwv_survey *s)
+{
+	if (s->any_unknown && s->any_learned && !s->any_peer_learned) {
+		/* Only our own weight is in the way, and no peer can supply
+		 * one. Withhold ours so the reading is the shared one. */
+		s->any_learned = 0u;
+		s->local_learned = 0u;
+		s->local_withheld = 1u;
+	}
+	if (s->any_unknown && !s->any_learned)
+		s->all_zero = 1u;
 }
 
 /*
@@ -162,10 +221,9 @@ uint32_t vms_ldwv_entry_count(const struct vms_ldwv_member *m,
 	ldwv_survey_init(&s);
 	for (i = 0u; i < n_members; i++)
 		ldwv_survey_add(&s, &m[i]);
+	ldwv_survey_finish(&s);
 	if (s.any_unknown && s.any_learned)
 		return 0u;      /* unlayoutable; vms_ldwv_build says why */
-	if (s.any_unknown)
-		s.all_zero = 1u;
 	for (i = 0u; i < n_members; i++)
 		s.entries += ldwv_member_entries(&m[i], (int)s.all_zero);
 	if (all_zero != NULL)
@@ -211,8 +269,7 @@ enum vms_ldwv_status vms_ldwv_build(struct vms_ldwv *v,
 	ldwv_survey_init(&s);
 	for (i = 0u; i < n_members; i++)
 		ldwv_survey_add(&s, &m[i]);
-	if (s.any_unknown && !s.any_learned)
-		s.all_zero = 1u;
+	ldwv_survey_finish(&s);
 	if (!(s.any_unknown && s.any_learned)) {
 		for (i = 0u; i < n_members; i++)
 			s.entries += ldwv_member_entries(&m[i], (int)s.all_zero);
@@ -349,8 +406,7 @@ static void ldwv_survey_club(const struct vms_club *club, struct ldwv_survey *s)
 		ldwv_survey_add(s, &m);
 		slot = next;
 	}
-	if (s->any_unknown && !s->any_learned)
-		s->all_zero = 1u;
+	ldwv_survey_finish(s);
 	if (s->any_unknown && s->any_learned)
 		return;   /* unlayoutable; the verdict says why */
 
@@ -425,6 +481,17 @@ enum vms_ldwv_status cnxman_ldwv_rebuild(struct vms_club *club,
 
 	club->ldwv.n_members = (uint8_t)((s.n_members > 255u) ? 255u : s.n_members);
 	club->ldwv.weights_learned = s.any_learned;
+	/*
+	 * SAY IT WHEN THE FALLBACK FIRED (rd vms-1ee). A vector built on the
+	 * unadvertised reading is a DIFFERENT fact from one built on real
+	 * weights, and an operator reading OPA0: has to be able to tell them
+	 * apart -- `weights_learned` records it for a reader, this records it
+	 * for a human. One line per rebuild, not per lookup.
+	 */
+	if (s.local_withheld)
+		ldwv_log(ops, "%CNXMAN, lock directory weight vector built on "
+			      "the unadvertised reading: no system has "
+			      "advertised a LOCKDIRWT");
 	club->ldwv.valid = 1u;
 	return VMS_LDWV_OK;
 }

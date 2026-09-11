@@ -451,13 +451,26 @@ static void club_build_refusal(void)
 	struct cnxman_ops ops;
 	struct fake_cnx f;
 
+	/*
+	 * THE SPLIT-BRAIN CASE, AND THE TEETH ON THE vms-1ee FALLBACK.
+	 *
+	 * The advertiser here is a PEER, not this node. That is the difference
+	 * that matters: a peer which has advertised a real LOCKDIRWT is
+	 * computing a WEIGHTED vector, so a node that answered with an
+	 * all-zero one would resolve the same resource to a DIFFERENT
+	 * directory node -- two directories for one resource, two masters for
+	 * one lock. The local-withhold fallback MUST NOT fire here, and this
+	 * case is what proves it does not.
+	 */
 	printf("--- a CLUB whose weights disagree in kind gets NO vector ---\n");
 	memset(&cl, 0, sizeof(cl));
 	fake_ops_init(&ops, &f);
 	(void)cnxman_club_init(&cl);
 
-	ct_check(add_member(&cl, CSID_A, 3, 1, 1) != NULL, "A advertised LOCKDIRWT 3");
-	ct_check(add_member(&cl, CSID_B, 0, 0, 0) != NULL, "B has advertised none");
+	ct_check(add_member(&cl, CSID_A, 3, 1, 0) != NULL,
+		 "a PEER advertised LOCKDIRWT 3");
+	ct_check(add_member(&cl, CSID_B, 0, 0, 1) != NULL,
+		 "and this node (local) has none of its own");
 
 	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
 			(unsigned long)VMS_LDWV_E_WEIGHTS, "the rebuild is refused");
@@ -469,40 +482,22 @@ static void club_build_refusal(void)
 }
 
 /* ==========================================================================
- * 7. THE REAL CLUSTER PATH (rd vms-1ee) -- and why no multi-node OVMX cluster
- *    can build this vector today.
+ * 7. THE REAL CLUSTER PATH (rd vms-1ee): the local-withhold fallback, and the
+ *    gate that keeps it off the split-brain case.
  *
- * The cases above hand-build member sets. This one reproduces the ONE
- * configuration every real multi-node OVMX cluster is actually in, using the
- * same two calls the executive itself makes:
- *
- *   cnxman_club_init()  -- which marks the LOCAL CSB's LOCKDIRWT LEARNED, from
- *                          SYSGEN (vms_cnxman_csb.c: cnxman_csb_set_lockdirwt
- *                          (local, cl->params.lockdirwt));
- *   a DISCOVERED PEER   -- whose LOCKDIRWT can never be learned, because no
- *                          wire byte has been pinned to carry it for a remote
- *                          system (cnxman_csb_set_lockdirwt's own comment:
- *                          "Absent until FC-P3.2 pins which wire byte carries
- *                          it for a REMOTE system").
- *
- * That is a MIXTURE -- one learned weight, one unknown -- and a mixture is
- * refused (VMS_LDWV_E_WEIGHTS, section 3 above). It is refused for a good
- * reason: the vector is a SHARED routing table, and a node that laid its own
- * real LOCKDIRWT into a vector while guessing everyone else's would route to a
- * different directory node than its peers do.
- *
- * THE CONSEQUENCE, which is what this test exists to pin: with no vector,
- * vms_ldwv_resolve() cannot answer, so vms_lock.c's dir_resolve() fails, so
- * dlm_resolve_master() never returns DLM_ROUTE_REMOTE for a local $ENQ -- and
- * NO cross-node DLM request can be routed at all, on any multi-node OVMX
- * cluster, however complete the wire arm above it is. Measured on the live
- * 2-node rig: BOTH executives print "%CNXMAN, lock directory weight vector not
- * rebuilt: LOCKDIRWT known for some members and not others".
- *
- * The value of LOCKDIRWT does not matter -- 0 is still a LEARNED 0 -- so this
- * cannot be configured around.
+ * These two cases reproduce the ONE configuration every real multi-node OVMX
+ * cluster is in, using the executive's own two calls -- cnxman_club_init(),
+ * which marks the LOCAL CSB's LOCKDIRWT learned from SYSGEN, and a DISCOVERED
+ * PEER, whose LOCKDIRWT can never be learned because no wire byte has been
+ * pinned to carry it for a remote system (FC-P3.2).
  * ========================================================================== */
-static void club_real_two_node_cluster_cannot_build(void)
+
+/*
+ * ALL PEERS UNKNOWN -> the fallback fires and the vector BUILDS all-zero.
+ * Before rd vms-1ee this was refused as a mixture, which left every multi-node
+ * cluster with no directory at all and therefore no cross-node DLM routing.
+ */
+static void club_local_withhold_builds_when_peers_unknown(void)
 {
 	struct vms_cluster cl;
 	struct cnxman_ops ops;
@@ -510,16 +505,15 @@ static void club_real_two_node_cluster_cannot_build(void)
 	struct vms_csb *local;
 	uint32_t w;
 
-	printf("--- rd vms-1ee: a REAL 2-node cluster cannot build the vector "
-	       "---\n");
+	printf("--- rd vms-1ee: all peers unknown -> withhold ours, build "
+	       "all-zero ---\n");
 
-	for (w = 0u; w <= 1u; w++) {
-		char what[128];
+	for (w = 0u; w <= 3u; w += 3u) {
+		char what[136];
 
 		memset(&cl, 0, sizeof(cl));
 		fake_ops_init(&ops, &f);
-		/* SYSGEN's own LOCKDIRWT, exactly as STARTUP.EXE loads it. */
-		cl.params.lockdirwt = (uint8_t)w;
+		cl.params.lockdirwt = (uint8_t)w;   /* SYSGEN's own value */
 		cl.params.scssystemid = (vms_scs_sysid_t)1025;
 		local = cnxman_club_init(&cl);
 		ct_check(local != NULL, "the CLUB has its local CSB");
@@ -530,51 +524,74 @@ static void club_real_two_node_cluster_cannot_build(void)
 						       VMS_CSB_F_MEMBER));
 		ct_check_eq_u32(local->lockdirwt_valid, 1u,
 				"  the LOCAL weight is LEARNED, from SYSGEN");
-
-		/* The peer, exactly as a join produces it: a real CSB, a real
-		 * CSID, a member -- and no LOCKDIRWT, because none can be
-		 * learned off the wire. */
 		ct_check(add_member(&cl, CSID_B, 0, 0, 0) != NULL,
 			 "  a discovered peer, whose weight cannot be learned");
 
 		snprintf(what, sizeof(what),
-			 "  LOCKDIRWT=%u: the vector is REFUSED as a mixture -- "
-			 "so no cross-node DLM request can be routed",
-			 (unsigned)w);
+			 "  SYSGEN LOCKDIRWT=%u: ours is WITHHELD and the "
+			 "vector BUILDS -- the one directory every node "
+			 "computes identically", (unsigned)w);
 		ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club,
 								   &ops),
-				(unsigned long)VMS_LDWV_E_WEIGHTS, what);
-		ct_check_eq_u32(cl.club.ldwv.n, 0u,
-				"  and nothing was laid down");
+				(unsigned long)VMS_LDWV_OK, what);
+		ct_check_eq_u32(cl.club.ldwv.n, 2u,
+				"  one entry per system (p. 6-32's all-zero "
+				"rule)");
+		ct_check_eq_u32(cl.club.ldwv.weights_learned, 0u,
+				"  and the vector RECORDS that it rests on the "
+				"unadvertised reading -- never claiming a "
+				"weight it does not have");
+		ct_check_eq_u32(cl.club.ldwv_build_refused, 0u,
+				"  no refusal was counted");
 	}
+}
 
-	/*
-	 * THE SHAPE OF THE FIX, pinned as a fact rather than implemented here:
-	 * the SAME two members with NO learned weight anywhere DO build, by
-	 * p. 6-32's all-zero rule, and produce one entry per system -- a vector
-	 * every node would compute identically. Whether the local node should
-	 * withhold its own SYSGEN weight to reach that reading is a routing
-	 * decision, not a test's call.
-	 */
+/*
+ * *** THE TEETH. *** The instant ONE PEER advertises a real LOCKDIRWT the
+ * fallback must NOT fire: that peer is computing a weighted vector, and an
+ * all-zero answer would send the same resource to a different directory node.
+ * Two directories for one resource is two masters for one lock.
+ *
+ * Note the local node here HAS a weight of its own too -- the realistic shape,
+ * since SYSGEN always gives it one. What decides the outcome is purely whether
+ * a PEER has advertised.
+ */
+static void club_local_withhold_refused_when_a_peer_advertised(void)
+{
+	struct vms_cluster cl;
+	struct cnxman_ops ops;
+	struct fake_cnx f;
+	struct vms_csb *local;
+
+	printf("--- rd vms-1ee TEETH: one peer advertised -> the fallback is "
+	       "REFUSED ---\n");
 	memset(&cl, 0, sizeof(cl));
 	fake_ops_init(&ops, &f);
+	cl.params.lockdirwt = 2u;
+	cl.params.scssystemid = (vms_scs_sysid_t)1025;
 	local = cnxman_club_init(&cl);
-	if (local != NULL) {
-		local->lockdirwt_valid = 0u;   /* the hypothetical */
-		cnxman_csb_set_csid(local, CSID_A);
-		cnxman_csb_set_flags(local, (uint16_t)(VMS_CSB_F_SELECTED |
-						       VMS_CSB_F_MEMBER));
-		(void)add_member(&cl, CSID_B, 0, 0, 0);
-		ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club,
-								   &ops),
-				(unsigned long)VMS_LDWV_OK,
-				"  with NO weight learned anywhere the same two "
-				"members DO build (p. 6-32's all-zero rule)");
-		ct_check_eq_u32(cl.club.ldwv.n, 2u, "  one entry per system");
-		ct_check_eq_u32(cl.club.ldwv.weights_learned, 0u,
-				"  and it records that it rests on the "
-				"unadvertised reading");
-	}
+	ct_check(local != NULL, "the CLUB has its local CSB");
+	if (local == NULL)
+		return;
+	cnxman_csb_set_csid(local, CSID_A);
+	cnxman_csb_set_flags(local, (uint16_t)(VMS_CSB_F_SELECTED |
+					       VMS_CSB_F_MEMBER));
+
+	/* One peer HAS advertised -- and one has not, so it is still a
+	 * mixture. The advertiser is what closes the gate. */
+	ct_check(add_member(&cl, CSID_B, 3, 1, 0) != NULL,
+		 "a peer advertised LOCKDIRWT 3");
+	ct_check(add_member(&cl, CSID_C, 0, 0, 0) != NULL,
+		 "another peer has advertised none");
+
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_E_WEIGHTS,
+			"the vector is REFUSED -- an all-zero answer to a peer "
+			"computing a WEIGHTED one is two directories for one "
+			"resource");
+	ct_check_eq_u32(cl.club.ldwv.n, 0u, "and nothing was laid down");
+	ct_check_eq_u32(cl.club.ldwv_build_refused, 1u, "the refusal is counted");
+	ct_check(cl.club.ldwv.valid == 0u, "no vector is left behind");
 }
 
 int main(void)
@@ -587,6 +604,7 @@ int main(void)
 	discard_and_refusals();
 	club_build_csv_order();
 	club_build_refusal();
-	club_real_two_node_cluster_cannot_build();
+	club_local_withhold_builds_when_peers_unknown();
+	club_local_withhold_refused_when_a_peer_advertised();
 	return ct_summary("test_dlm_ldwv");
 }

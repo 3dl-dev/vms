@@ -1156,6 +1156,109 @@ static int dq_frame_name(const uint8_t *frame, uint32_t len,
 	return -1;
 }
 
+/* The body twin of dq_frame_name (rd vms-1ee): the same three shapes, read out
+ * of the 132 bytes SCS delivers instead of a captured frame. */
+static int dq_body_name(const uint8_t *body, uint32_t len, char *out)
+{
+	struct vms_dlm_enq_request req;
+	struct vms_dlm_enq_response rsp;
+	struct vms_dlm_rebuild_record rec;
+	uint8_t opcode = 0u;
+
+	if (vms_dlm_enq_request_parse_body(body, len, &opcode, &req) ==
+	    VMS_CODEC_OK) {
+		if (req.name_len == 0u)
+			return -1;
+		dq_name_to_cstr(req.name, req.name_len, out);
+		return 0;
+	}
+	if (vms_dlm_rebuild_parse_body(body, len, &rec) == VMS_CODEC_OK) {
+		if (rec.name_len == 0u)
+			return -1;
+		dq_name_to_cstr(rec.name, rec.name_len, out);
+		return 0;
+	}
+	if (vms_dlm_enq_response_parse_body(body, len, &rsp) == VMS_CODEC_OK) {
+		if (rsp.name_len == 0u)
+			return -1;
+		dq_name_to_cstr(rsp.name, rsp.name_len, out);
+		return 0;
+	}
+	return -1;
+}
+
+/*
+ * THE INBOUND ENTRIES SCS ACTUALLY REACHES (rd vms-1ee).
+ *
+ * cnxman_vc_message() hands a SYSAP its own 132 bytes and nothing below them
+ * (design sec 3.2.4), so the frame-taking entries above cannot be called from
+ * the live receive path at all -- handing them a body is integration note E73,
+ * which does not fail loudly, it silently refuses every real message. These
+ * take what SCS delivers. No frame is synthesised around the body to make a
+ * classifier pass: a body that arrived on the VMS$VAXcluster connection is
+ * already known to be one, and the codec's own category/opcode checks are what
+ * reject a body that is not what it claims.
+ */
+uint32_t dlm_req_fsm_observe_body(struct dlm_req_fsm *f, const uint8_t *body,
+				  uint32_t len)
+{
+	char name[VMS_DLM_NAME_MAX + 1u];
+	uint16_t hash = 0u;
+
+	if (f == (struct dlm_req_fsm *)0 || body == (const uint8_t *)0)
+		return 0u;
+	if (f->ops == (const struct dlm_req_ops *)0 ||
+	    f->ops->learn_dir_hash == (int (*)(void *, const char *,
+					       uint16_t))0)
+		return 0u;
+	if (vms_dlm_dir_hash_parse_body(body, len, &hash) != VMS_CODEC_OK)
+		return 0u;
+	if (dq_body_name(body, len, name) != 0)
+		return 0u;
+	if (f->ops->learn_dir_hash(f->ops->ctx, name, hash) != 0)
+		return 0u;
+	f->hashes_learned++;
+	return 1u;
+}
+
+enum dlm_req_status dlm_req_fsm_reply_body(struct dlm_req_fsm *f,
+					   vms_csid_t from_csid,
+					   uint32_t correlated_lkid,
+					   const uint8_t *body, uint32_t len)
+{
+	struct vms_dlm_enq_response rsp;
+	struct dlm_req *r;
+	struct dq_ev e;
+
+	if (f == (struct dlm_req_fsm *)0 || body == (const uint8_t *)0)
+		return DLM_REQ_E_INVAL;
+	if (!dq_ops_ok(f))
+		return DLM_REQ_E_INVAL;
+
+	if (vms_dlm_enq_response_parse_body(body, len, &rsp) != VMS_CODEC_OK) {
+		f->replies_unparsed++;
+		return DLM_REQ_E_CODEC;
+	}
+
+	/* Every cat-0x02 body is a chance to learn a hash (E49). */
+	(void)dlm_req_fsm_observe_body(f, body, len);
+
+	r = dq_match_reply(f, correlated_lkid, &rsp);
+	if (r == (struct dlm_req *)0) {
+		f->replies_unmatched++;
+		return DLM_REQ_E_NOLOCK;
+	}
+
+	dq_bzero(&e, (uint32_t)sizeof(e));
+	e.rsp = &rsp;
+	e.from_csid = from_csid;
+	return dq_dispatch(f, r,
+			   rsp.outcome == VMS_DLM_ENQ_GRANTED
+				   ? DLM_REQ_EV_GRANT
+				   : DLM_REQ_EV_DENY,
+			   &e);
+}
+
 uint32_t dlm_req_fsm_observe(struct dlm_req_fsm *f, const uint8_t *frame,
 			     uint32_t len)
 {

@@ -3693,9 +3693,14 @@ static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req,
  * node could name is the DIRECTORY its own vector resolved, and a directory is
  * not a master (INV-6). Full reasoning at enq_inbound_not_master().
  *
- * STILL FENCED HONESTLY (INV-6 -- SS$_UNSUPPORTED, never faked):
- *   - LVB replication (vms-d81), resource-directory consistency (vms-1bba),
- *     remastering (vms-6ee), distributed deadlock detection (vms-ec75).
+ * NO LONGER FENCED (comment corrected, rd vms-1ee). This note used to say LVB
+ * replication (vms-d81), resource-directory consistency (vms-1bba),
+ * remastering (vms-6ee) and distributed deadlock detection (vms-ec75) were
+ * answered SS$_UNSUPPORTED. They are not: the switch below implements ALL SIX
+ * ops -- ENQ, GRANT, DEQ, BLKAST, REBUILD and DLKSRCH -- and there is no
+ * SS$_UNSUPPORTED arm left in it. The rungs those items name are reachable in
+ * the engine; what they still lack is a wire arm to reach the engine ACROSS
+ * nodes (src/kernel-core/vms_dlm_scs.c, still absent).
  *
  * The request is VALIDATED so a malformed message is rejected (SS$_BADPARAM)
  * rather than silently dropped -- the same discipline vms_enq_core applies.

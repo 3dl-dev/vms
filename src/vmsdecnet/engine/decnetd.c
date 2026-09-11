@@ -47,6 +47,7 @@
  */
 #include <errno.h>
 #include <net/if.h>      /* if_nametoindex() */
+#include <ifaddrs.h>    /* getifaddrs(): auto-detect the primary NIC (no argv) */
 #include <poll.h>       /* the --cterm-server loop waits on wire + session */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
@@ -98,6 +99,51 @@ static void sethost_src_codes(uint16_t *grp, uint16_t *usr);
 
 static volatile sig_atomic_t g_stop = 0;
 static void on_signal(int signo) { (void)signo; g_stop = 1; }
+
+/*
+ * decnet_autodetect_iface - the datalink interface the persistent daemon binds
+ * when SYS$MANAGER:STARTNET.COM starts it with no argv (rd vms-a70 direction B).
+ *
+ * VMS RUN passes an image no argv, so the detached NETACP cannot be told
+ * --iface; and the compile-time DECNETD_DEFAULT_IFACE ("br0") is a DEV-LAB
+ * bridge name that does not exist inside a booted node's own network namespace
+ * (there the primary NIC is eth0/ETH0:). So when no --iface is given, pick the
+ * FIRST up, non-loopback interface that has a link-layer (Ethernet) address --
+ * the primary NIC, the same one the executive's DECnet device face _NET: rides
+ * (src/kernel-core/vms_devtab.c vms_devtab_probe_net). Returns 1 and fills buf
+ * on success, 0 if nothing suitable was found (caller keeps the compiled
+ * default). Multi-NIC circuit selection (NCP SET EXECUTOR/CIRCUIT to a specific
+ * line) is a follow-on; a single-NIC node -- the booted-OVMX case -- resolves
+ * unambiguously here. Pure enumeration: opens no socket, needs no privilege.
+ */
+static int decnet_autodetect_iface(char *buf, size_t sz)
+{
+#if defined(AF_PACKET)
+    struct ifaddrs *ifs = NULL, *p;
+    int found = 0;
+
+    if (!buf || sz == 0 || getifaddrs(&ifs) != 0)
+        return 0;
+    for (p = ifs; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_PACKET)
+            continue;                       /* only link-layer (L2) entries   */
+        if (p->ifa_flags & IFF_LOOPBACK)
+            continue;                       /* never lo                       */
+        if (!(p->ifa_flags & IFF_UP))
+            continue;                       /* must be up                     */
+        if (p->ifa_name && p->ifa_name[0]) {
+            snprintf(buf, sz, "%s", p->ifa_name);
+            found = 1;
+            break;                          /* first match: the primary NIC   */
+        }
+    }
+    freeifaddrs(ifs);
+    return found;
+#else
+    (void)buf; (void)sz;
+    return 0;
+#endif
+}
 
 /* A monotonic seconds tick -- the unit the engine's T3/listen timers use. */
 static dnet_tick_t monotonic_sec(void)
@@ -2397,7 +2443,11 @@ static void usage(const char *argv0)
         "                      invented; with neither the flag nor a configured\n"
         "                      executor the daemon exits (INV-6).\n"
         "  --name NAME         NCP node name (1..6 chars; default OVMX)\n"
-        "  --iface IFNAME      datalink interface (default %s)\n"
+        "  --iface IFNAME      datalink interface. If omitted, the primary NIC is\n"
+        "                      AUTO-DETECTED (first up, non-loopback L2 interface --\n"
+        "                      the one the executive's _NET: rides), so the daemon\n"
+        "                      STARTNET.COM runs with no argv binds the right NIC;\n"
+        "                      falls back to %s only if detection finds nothing\n"
         "  --device DEV        VMS device label for the circuit (default EWA0)\n"
         "  --circuit CIRC      DECnet circuit name (default derived, e.g. EWA-0)\n"
         "  --hello-interval N  HELLO cadence T3 seconds (default %u, oracle vms-3be)\n"
@@ -2482,6 +2532,7 @@ static void usage(const char *argv0)
 int main(int argc, char **argv)
 {
     const char *ifname = DECNETD_DEFAULT_IFACE;
+    int ifname_explicit = 0;      /* did the caller pin --iface?             */
     const char *addr_s = NULL;
     const char *name = "OVMX";
     const char *device = "EWA0";
@@ -2517,7 +2568,7 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
         else if (!strcmp(argv[i], "--name") && i + 1 < argc)    name = argv[++i];
-        else if (!strcmp(argv[i], "--iface") && i + 1 < argc)   ifname = argv[++i];
+        else if (!strcmp(argv[i], "--iface") && i + 1 < argc)   { ifname = argv[++i]; ifname_explicit = 1; }
         else if (!strcmp(argv[i], "--device") && i + 1 < argc)  device = argv[++i];
         else if (!strcmp(argv[i], "--circuit") && i + 1 < argc) circuit = argv[++i];
         else if (!strcmp(argv[i], "--hello-interval") && i + 1 < argc)
@@ -2577,6 +2628,17 @@ int main(int argc, char **argv)
     if ((router_mode || set_host_to) && !cterm_server_explicit)
         cterm_server = 0;
 
+    /* RESOLVE THE DATALINK INTERFACE. When --iface was not given (the persistent
+     * NETACP daemon STARTNET.COM starts with no argv), auto-detect the primary
+     * NIC rather than binding the compile-time "br0" -- inside a booted node's
+     * netns the NIC is eth0/ETH0:, not the dev-lab bridge (rd vms-a70 direction
+     * B, gap B). Explicit --iface (the veth/lab harness) always wins; if
+     * detection finds nothing the compiled default stands and the open below
+     * fails honestly. */
+    static char ifname_auto[IF_NAMESIZE];
+    if (!ifname_explicit && decnet_autodetect_iface(ifname_auto, sizeof(ifname_auto)))
+        ifname = ifname_auto;
+
     /* SELF-SOURCE the executor address from the node's DECnet configuration
      * (executor.dat, rd vms-f54) whenever --address was not given -- for the
      * --set-host CLIENT (so DCL's SET HOST wiring need not know it), for the
@@ -2597,6 +2659,20 @@ int main(int argc, char **argv)
      * resolve_node_identity discipline: a wrong identity must never be made up). */
     unsigned area = 0, node = 0;
     if (!addr_s || parse_addr(addr_s, &area, &node) != 0) {
+        /* BARE AUTO-START on an UNCONFIGURED node (argc == 1: the persistent
+         * NETACP daemon SYS$MANAGER:STARTNET.COM launches with no argv, having
+         * found no executor address in the node's DECnet configuration). This is
+         * NOT an error -- an unconfigured node simply runs no DECnet. Exit CLEAN
+         * (success), logging the honest no-op, so STARTNET's RUN/DETACHED leaves
+         * neither a failed process nor a %DCL abort on the boot console (INV-6).
+         * An EXPLICIT invocation (any flag: --set-host, --show-executor, --router,
+         * ...) with no resolvable address is still the caller's error below. */
+        if (argc == 1) {
+            printf("DECNETD-I-NOCONFIG, DECnet is not configured on this node"
+                   " (no executor address); NETACP not started\n");
+            fflush(stdout);
+            return 0;
+        }
         fprintf(stderr, "DECNETD-E-NOADDRESS, a valid --address AREA.NODE is"
                         " required (1..63 . 1..1023); refusing to invent an"
                         " executor address\n");
@@ -2639,6 +2715,11 @@ int main(int argc, char **argv)
          * --show-executor opens no socket, so it never actually serves here. */
         printf("Inbound SET HOST (object 42) = %s\n",
                cterm_server ? "served (CTERM -> LOGINOUT)" : "not served");
+        /* The Linux datalink the daemon WOULD bind (auto-detected primary NIC
+         * unless --iface pinned it) -- the dry-run readout of gap-B resolution;
+         * no socket is opened here. */
+        printf("Datalink interface = %s%s\n", ifname,
+               ifname_explicit ? " (--iface)" : " (auto-detected primary NIC)");
         return 0;
     }
 

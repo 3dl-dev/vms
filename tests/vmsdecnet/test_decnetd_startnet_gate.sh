@@ -75,6 +75,23 @@ check_serve "a --router does NOT serve inbound (routing only)"                  
 check_serve "--no-cterm-server forces serve OFF"                                 "= not served" --no-cterm-server
 check_serve "an explicit --router --cterm-server DOES serve"                     "= served"     --router --cterm-server
 
+# --- 3b. IFACE resolution (gap B): argv-less daemon auto-detects the primary NIC
+#         instead of the compile-time "br0" (which is absent in a booted netns) ----
+iface_line() { "$BIN" --show-executor "$@" 2>&1 | grep "Datalink interface"; }
+# explicit --iface is echoed verbatim and tagged (--iface)
+if iface_line --iface lo | grep -q "= lo (--iface)"; then
+    ok "explicit --iface is honoured and reported"
+else
+    bad "explicit --iface lo not reported (got: $(iface_line --iface lo))"
+fi
+# no --iface: auto-detect a REAL, non-loopback interface that exists on this host
+auto="$(iface_line | sed -n 's/^Datalink interface = \([^ ]*\) (auto-detected.*/\1/p')"
+if [ -n "$auto" ] && [ "$auto" != "lo" ] && [ -e "/sys/class/net/$auto" ]; then
+    ok "no --iface: auto-detects a real primary NIC ($auto), not the dev-lab br0"
+else
+    bad "auto-detect should pick a real non-lo NIC (got: '$auto', line: $(iface_line))"
+fi
+
 # --- 4. INV-6: a garbage executor.dat is NOT a configured address ---------------
 printf 'garbage not an executor line\n' > "$OVMX_DECNET_EXECUTOR"
 out="$("$BIN" --show-executor 2>&1)"; rc=$?

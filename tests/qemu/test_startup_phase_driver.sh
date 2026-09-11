@@ -264,22 +264,23 @@ record "no %RMS-E-FNF during boot (phase driver's OPENs all found their files)" 
 if printf '%s' "$BOOT_LOG" | grep -qF '%DCL-E-OPENIN'; then rc=1; else rc=0; fi
 record "no %DCL-E-OPENIN during boot" "$rc"
 
-# --- DECnet STARTNET ran at LPBETA and gated honestly (rd vms-a70 direction B) --
-# The LPBETA VMS$VMS.DAT component @SYS$MANAGER:STARTNET runs during boot. The
-# mastered distribution disk carries NO configured DECnet executor address, so
-# STARTNET must take its honest "not configured" branch: it announces itself and
-# reports %DECNET-I-NOTCONFIGURED (INV-6 -- an unconfigured node starts no NETACP
-# and says so; it does NOT fabricate a running daemon). Its appearance in the
-# boot console is proof the LPBETA component actually ran from the phase driver.
+# --- DECnet STARTNET ran at LPBETA, CLEANLY (rd vms-a70 direction B) -----------
+# The LPBETA VMS$VMS.DAT component @SYS$MANAGER:STARTNET runs during boot and
+# RUN/DETACHEDs NETACP. Its announcement on the boot console proves the LPBETA
+# component actually ran from the phase driver.
 if printf '%s' "$BOOT_LOG" | grep -qF 'DECnet Phase IV -- Startup (STARTNET)'; then rc=0; else rc=1; fi
 record "STARTNET.COM ran at LPBETA (its startup announcement is on the boot console)" "$rc"
 
-if printf '%s' "$BOOT_LOG" | grep -qF '%DECNET-I-NOTCONFIGURED'; then rc=0; else rc=1; fi
-record "unconfigured disk: STARTNET honestly reports DECnet not configured (no fabricated NETACP, INV-6)" "$rc"
+# INV-6 + boot cleanliness: the mastered disk carries NO DECnet executor address,
+# so NETACP self-checks and no-ops -- but STARTNET must do this WITHOUT polluting
+# the boot console. There must be NO %DCL abort and NO %DECNETD-E-NOADDRESS: the
+# gate is inside NETACP (detached), not a foreground probe whose nonzero exit DCL
+# would announce as %DCL-E-ABORT (the regression this guards, vms-a70).
+if printf '%s' "$BOOT_LOG" | grep -qE '%DCL-[EF]-ABORT'; then rc=1; else rc=0; fi
+record "STARTNET leaves NO %DCL-E-ABORT on the boot console (gate is in NETACP, not a foreground probe)" "$rc"
 
-# It must NOT claim NETACP started on a node with no executor address.
-if printf '%s' "$BOOT_LOG" | grep -qF '%DECNET-I-NETACPSTARTED'; then rc=1; else rc=0; fi
-record "unconfigured disk: STARTNET did NOT claim NETACP started" "$rc"
+if printf '%s' "$BOOT_LOG" | grep -qF 'DECNETD-E-NOADDRESS'; then rc=1; else rc=0; fi
+record "STARTNET leaves NO %DECNETD-E-NOADDRESS on the boot console (unconfigured = clean no-op, not an error)" "$rc"
 
 echo ""
 echo "=========================================="

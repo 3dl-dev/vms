@@ -221,6 +221,66 @@ static inline int tcpip_inetd_listen(const struct tcpip_service *svc)
     return s;
 }
 
+/* Resolve a service's image-filespec to an execve-able Linux path in
+ * out[0..out_sz). A VMS filespec (e.g. "SYS$SYSTEM:TCPIP$DAYTIME.EXE") names a
+ * file on the ACP-mounted ODS-2 system disk -- NOT on the boot initramfs Linux
+ * VFS -- so its GENUINE bytes are staged off the ACP into a tmpfs path
+ * (rms_stage_over_acp -- the same materialize-then-exec the executive already
+ * does for DCL RUN and for PID1's boot images), staged once per image (X_OK
+ * guard on the staged copy). A leading '/' is an already-Linux-reachable path
+ * (the in-guest test harness, or a future initramfs image) -- copied through,
+ * no staging. Returns 0 with the resolved path in `out`; -1 with errno on a
+ * name too long (ENAMETOOLONG) or a stage failure (ENOENT -- image not on the
+ * ACP volume). No fabrication (INV-6): a stageable image or an honest failure. */
+static inline int tcpip_inetd_resolve_image(const struct tcpip_service *svc,
+                                            char *out, size_t out_sz)
+{
+    if (!svc || !out || out_sz == 0) { errno = EINVAL; return -1; }
+
+    if (svc->image[0] == '/') {                 /* already Linux-reachable */
+        if ((size_t)snprintf(out, out_sz, "%s", svc->image) >= out_sz) {
+            errno = ENAMETOOLONG; return -1;
+        }
+        return 0;
+    }
+
+    {
+        const char *colon = strrchr(svc->image, ':');
+        const char *base  = colon ? colon + 1 : svc->image;
+        (void)mkdir("/tmp/ovmx_inetd", 0755);
+        if ((size_t)snprintf(out, out_sz, "/tmp/ovmx_inetd/%s", base) >= out_sz) {
+            errno = ENAMETOOLONG; return -1;
+        }
+        if (access(out, X_OK) != 0) {
+            uint32_t st = rms_stage_over_acp(svc->image, out);
+            if (!(st & 1u)) {                   /* VMS status: low bit set == success */
+                errno = ENOENT; return -1;      /* image not on the ACP volume */
+            }
+        }
+    }
+    return 0;
+}
+
+/* Bind-time PRE-FLIGHT: can this service's image actually be staged and
+ * executed? The auxiliary server must NOT bind a well-known port for a service
+ * it cannot deliver -- a "bound but unserviceable" facade in which the operator
+ * sees the service listening while every client connect is silently dropped
+ * when spawn's staging/execv fails (INV-6). Real TCPIP$INETD validates a
+ * service's image when the service is enabled; this is the OVMX analogue. The
+ * control loop calls this after a successful listen and refuses to advertise a
+ * service that fails it. Returns 0 if the image resolves to an executable Linux
+ * path; -1 with errno otherwise. Side effect: stages the image once (X_OK
+ * guard), so the first real connection is not slowed by staging. */
+static inline int tcpip_inetd_preflight(const struct tcpip_service *svc)
+{
+    char path[TCPIP_INETD_PATH_MAX];
+    if (tcpip_inetd_resolve_image(svc, path, sizeof(path)) < 0)
+        return -1;                              /* errno preserved */
+    if (access(path, X_OK) != 0)
+        return -1;                              /* errno (EACCES/ENOENT) preserved */
+    return 0;
+}
+
 /* Spawn the configured service image on an ALREADY-ACCEPTED connection handle:
  * materialize the accepted BG channel as a real executive-backed fd, then
  * fork()+execv() the service image with that fd as its SYS$INPUT (stdin) and
@@ -259,38 +319,17 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
     }
     argv[argc] = NULL;
 
-    /* Resolve the service image to an execve-able Linux path. A VMS filespec
-     * (e.g. "SYS$SYSTEM:TCPIP$DAYTIME.EXE") names a file on the ACP-mounted ODS-2
-     * system disk -- which is NOT on the boot initramfs Linux VFS, so a raw
-     * execv() of it would ENOENT. Stage its GENUINE bytes off the ACP into a
-     * tmpfs path first (rms_stage_over_acp -- the same materialize-then-exec the
-     * executive already does for DCL RUN and for PID1's boot images), then execve
-     * the staged copy. A leading '/' is an already-Linux-reachable path (the
-     * in-guest test harness, or a future initramfs image) -- exec it directly, no
-     * staging. execve's argv[0] stays the VMS filespec so the service sees its
-     * faithful name. Staged once per image (X_OK guard). rms_stage_over_acp fails
-     * honestly (SS$_NOSUCHFILE / SS$_NOSUCHDEV) if the image is not on the ACP
-     * volume -- no fabricated launch (INV-6). */
-    const char *exec_path = svc->image;
+    /* Resolve the service image to an execve-able Linux path (staging its bytes
+     * off the ACP-mounted ODS-2 disk for a VMS filespec, or passing a leading-'/'
+     * path through). execve's argv[0] stays the VMS filespec so the service sees
+     * its faithful name. Resolution fails honestly (ENOENT/ENAMETOOLONG) rather
+     * than fabricating a launch (INV-6) -- the SAME check the control loop's
+     * pre-flight runs before it agrees to advertise the service. */
     char staged[TCPIP_INETD_PATH_MAX];
-    if (svc->image[0] != '/') {
-        const char *colon = strrchr(svc->image, ':');
-        const char *base  = colon ? colon + 1 : svc->image;
-        (void)mkdir("/tmp/ovmx_inetd", 0755);
-        if ((size_t)snprintf(staged, sizeof(staged), "/tmp/ovmx_inetd/%s", base)
-                >= sizeof(staged)) {
-            close(rfd); ovmx_socket_close(accepted_h);
-            errno = ENAMETOOLONG; return -1;
-        }
-        if (access(staged, X_OK) != 0) {
-            uint32_t st = rms_stage_over_acp(svc->image, staged);
-            if (!(st & 1u)) {                   /* VMS status: low bit set == success */
-                close(rfd); ovmx_socket_close(accepted_h);
-                errno = ENOENT; return -1;      /* image not on the ACP volume */
-            }
-        }
-        exec_path = staged;
+    if (tcpip_inetd_resolve_image(svc, staged, sizeof(staged)) < 0) {
+        int e = errno; close(rfd); ovmx_socket_close(accepted_h); errno = e; return -1;
     }
+    const char *exec_path = staged;
 
     pid = fork();
     if (pid < 0) {

@@ -218,6 +218,27 @@ int main(int argc, char *argv[])
           strcmp(svcs[0].args, SVC_MARKER) == 0,
           "TCPIP$SERVICE.DAT parses to the ECHO service (port, image, args)");
 
+    /* ---- Bind-time PRE-FLIGHT (rd vms-f00) -------------------------------
+     * The auxiliary server must not ADVERTISE a service it cannot deliver: a
+     * service whose image resolves to an executable path passes pre-flight; one
+     * whose image is missing FAILS it, so the control loop refuses to bind the
+     * port (no bound-but-unserviceable facade, INV-6). Pre-flight is pure image
+     * resolution + access(X_OK) for an absolute path -- it needs NO executive,
+     * so this assertion runs on every platform, including the no-/dev/vms SKIP
+     * path below. The configured ECHO image is THIS binary (an absolute,
+     * executable path), so it MUST pass; a bogus absolute path MUST fail. */
+    CHECK(tcpip_inetd_preflight(&svcs[0]) == 0,
+          "pre-flight PASSES for a service whose image is executable (this binary)");
+    {
+        struct tcpip_service bogus = svcs[0];
+        strncpy(bogus.image, "/nonexistent/OVMX-NO-SUCH-SERVICE.EXE",
+                sizeof(bogus.image) - 1);
+        bogus.image[sizeof(bogus.image) - 1] = '\0';
+        errno = 0;
+        CHECK(tcpip_inetd_preflight(&bogus) < 0,
+              "pre-flight FAILS for a service whose image cannot be staged/executed (no bound-but-unserviceable facade)");
+    }
+
     if (!executive_present()) {
         /*
          * NO EXECUTIVE: the veneer's ovmx_socket() (and thus the auxiliary

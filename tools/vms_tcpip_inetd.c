@@ -144,6 +144,20 @@ int main(int argc, char *argv[])
             pfd[i].fd = -1;
             continue;
         }
+        /* Pre-flight: refuse to ADVERTISE a service whose image cannot be staged
+         * or executed. Otherwise the port binds, the operator sees the service
+         * "listening", and every client connect is silently dropped when spawn's
+         * staging/execv fails -- a bound-but-unserviceable facade (INV-6). The
+         * executive is up (listen just bound over BGn:), so a stage failure here
+         * genuinely means the image is not on the ACP volume, not an absent
+         * executive (that path already short-circuited with NOSUCHDEV above). */
+        if (tcpip_inetd_preflight(&svcs[i]) < 0) {
+            fprintf(stderr, "%%TCPIP-W-NOIMAGE, service %s port %u: image %s cannot be staged (%s) -- not bound\n",
+                    svcs[i].name, (unsigned)svcs[i].port, svcs[i].image, strerror(errno));
+            (void)ovmx_socket_close(listen_h[i]);
+            pfd[i].fd = -1;
+            continue;
+        }
         pfd[i].fd = ovmx_readyfd(listen_h[i]);  /* executive readiness fd for poll() */
         pfd[i].events = POLLIN;
         printf("%%TCPIP-I-BOUND, service %s listening on port %u (image %s)\n",

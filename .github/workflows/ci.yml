@@ -7566,6 +7566,129 @@ jobs:
         run: tests/lab-vax/run-boot.sh sysboot-negctl
 
   # -----------------------------------------------------------------------
+  # vax-shr-activation-selftest (rd vms-d4a, epic vms-404 P4). The CHEAP
+  # per-PR half of the P4 gate: run-shr-activation-vax.sh `selftest` drives
+  # the SAME assert_shr_activation() the heavy boot uses against crafted
+  # console-log fixtures -- a good transcript passes; a wrong purdy-hash
+  # value, a missing sentinel line, and an IMGACT activation failure each RED
+  # it. Pure bash, no toolchain image, no boot -> seconds. It proves the
+  # gate's TEETH are intact on every PR touching the shr-activation surface,
+  # independent of the heavy nightly SIMH boot below (Rule 7: an enforcement
+  # mechanism ships its own rejection test).
+  # -----------------------------------------------------------------------
+  vax-shr-activation-selftest:
+    name: "VAX P4 shareable-activation gate -- assert_shr_activation() can-fail proof (rd vms-d4a, Rule 7)"
+    needs: changes
+    if: ${{ github.event_name == 'pull_request' && needs.changes.outputs.netbsd_vax == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: "Selftest -- the value-sensitive purdy-hash assertion rejects a wrong hash, a missing sentinel line, and an IMGACT activation failure (no build, no boot, seconds)"
+        run: tools/cross-vax/run-shr-activation-vax.sh selftest
+
+  # -----------------------------------------------------------------------
+  # vax-shr-activation (rd vms-d4a, epic vms-404 P4; docs/design/
+  # vax-symbol-vector-imgact.md P4). THE ANTI-LARP RUNTIME PROOF: a shipped
+  # OVMX VAX shareable ACTIVATES on the real SIMH VAX rail. IMGACT.EXE
+  # (elf32-vax, rd vms-73b2/vms-33b) activates CONSUMER.EXE (LINKVAX.EXE
+  # `--executable`, PT_INTERP=IMGACT.EXE, never ld.elf_so) which imports
+  # `purdy_s_hash` from the SHIPPED LIBVMS$SHR.EXE (rd vms-c7f7, `.vms$sv`,
+  # UNMODIFIED build-vax-shareable-graph.sh) -- a REAL cross-shareable
+  # universal-symbol call -- and prints the real OpenVMS "VAX V1" oracle
+  # vector's value-sensitive result over a REAL write(2) syscall (this gate's
+  # tiny P4BOOT$SHR.EXE runtime shim), landing on the SIMH console transcript.
+  #
+  # VAX has no $STATUS/OVMX-SEAM channel (Alpha-only, src/imgact/imgact.c) --
+  # see run-shr-activation-vax.sh's header for why the value-sensitive proof
+  # is the consumer's own console print instead, mirroring the Alpha shipped-
+  # shareable gate's DISCIPLINE (rd vms-410/#1075), not its literal mechanism.
+  #
+  # Same gating/shape as netbsd-vax-sysboot: NIGHTLY (schedule) + manual
+  # dispatch ONLY -- this reuses that job's own `run-boot.sh sysboot`
+  # prerequisite internally (run-shr-activation-vax.sh `ensure_substrate`),
+  # so it needs netbsd-vax-simh to prime the shared 10.1 disk cache exactly
+  # as netbsd-vax-sysboot does. `selftest` runs first (Rule 7) so a broken
+  # assertion never gets a chance to rubber-stamp the real boot.
+  # -----------------------------------------------------------------------
+  vax-shr-activation:
+    name: "OVMX/VAX ships + activates a real VMS shareable image on SIMH -- IMGACT resolves .vms$sv + a real cross-shareable purdy_s_hash call runs (rd vms-d4a)"
+    permissions:
+      packages: read
+      contents: read
+    needs: [changes, netbsd-vax-simh, netbsd-vax-substrate-prime]
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Restore the cached NetBSD/vax disk (primed by netbsd-vax-simh)
+        uses: actions/cache/restore@v4
+        with:
+          path: .boot-cache/lab-vax
+          key: lab-vax-netbsd10.1-simh2e0d51e-anitav2_18-${{ hashFiles('tests/lab-vax/Dockerfile', 'tests/lab-vax/entrypoint.sh') }}
+
+      # rd vms-e77: restore the shared OVMX/vax substrate primed by
+      # netbsd-vax-substrate-prime (read-only) so run-shr-activation's
+      # ensure_substrate reuses boot-artifacts/netbsd-OVMX + STARTUP.EXE +
+      # vms.kmod and skips the ~7.5min modular-kernel build. Same key/path the
+      # other consumers use; keyed on all substrate-source inputs.
+      - name: Restore the shared OVMX/vax substrate (modular kernel + STARTUP.EXE + vms.kmod)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .boot-cache/lab-vax/boot-artifacts
+          key: vax-substrate-netbsd10.1-${{ hashFiles('tests/netbsd/netbsd_version.env', 'tests/lab-vax/run-boot.sh', 'tools/cross-vax/build-vax-modular-kernel.sh', 'tools/cross-vax/build-ovmx-init-vax.sh', 'tools/cross-vax/build-devvms-vax.sh', 'tools/cross-vax/Dockerfile', 'tools/cross-vax/*.tar.xz', 'src/kernel-netbsd/**', 'src/kernel-core/**', 'src/ovmx_init/**') }}
+          restore-keys: |
+            vax-substrate-netbsd10.1-
+
+      - name: Build the lab-vax image (SIMH + anita)
+        run: docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: "Shr-activation gate — build the artifacts, master the proof volume, boot SIMH, assert the value-sensitive cross-shareable call ran (selftest runs first)"
+        run: tools/cross-vax/run-shr-activation-vax.sh gate
+
+  # -----------------------------------------------------------------------
   # vax-dcl-acceptance (rd vms-f2c, epic vms-8954). Co-release ACCEPTANCE PARITY,
   # the VAX third of {x86_64, Alpha, VAX}: the SAME ground-source DCL/SHOW
   # acceptance battery x86_64 runs (dcl-acceptance-e2e) and Alpha runs

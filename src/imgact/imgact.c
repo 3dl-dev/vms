@@ -65,6 +65,16 @@
 #ifndef O_RDWR
 #define O_RDWR 2
 #endif
+#ifdef OVMX_IMGACT_BIND_TRACE
+/* rd vms-d4a option (a): the diagnostic bind-trace opens /dev/console O_WRONLY|
+ * O_NOCTTY (NetBSD/vax values), same as the CONSUMER proof's channel (0). */
+#ifndef O_WRONLY
+#define O_WRONLY 1
+#endif
+#ifndef O_NOCTTY
+#define O_NOCTTY 0x8000
+#endif
+#endif
 
 /* The system disk the activator reads images from. On real OpenVMS this is the
  * discovered SYS$SYSDEVICE, not a compile-time constant. IMGACT no longer bakes
@@ -353,6 +363,35 @@ static void vms_fatal(const char *ident, const char *text, const char *detail)
 		xstrcat(line, "\n");
 		eputs(line);
 	}
+#ifdef OVMX_IMGACT_BIND_TRACE
+	/* vms-d4a option (a): IMGACT's eputs above goes to fd 2, which is NOT
+	 * console-wired for a RUN'd child -- so an IMGACT activation failure is
+	 * SILENT on the console (why no %IMGACT-F ever surfaced). Mirror the reason
+	 * to /dev/console directly. Fires ONLY on an actual IMGACT failure, which
+	 * during a healthy boot happens only for the CONSUMER activation (the boot
+	 * images activate cleanly), so it does not interleave with boot milestones.
+	 * Diagnostic reason text only -- never the purdy hash. */
+	{
+		char cl[512];
+		cl[0] = 0;
+		xstrcat(cl, "OVMX-IMGACT-FAIL: %IMGACT-F-");
+		xstrcat(cl, ident);
+		xstrcat(cl, ", ");
+		xstrcat(cl, text);
+		if (detail) {
+			xstrcat(cl, " (file: ");
+			xstrcat(cl, detail);
+			xstrcat(cl, ")");
+		}
+		xstrcat(cl, "\n");
+		long cfd = sys_openat("/dev/console", O_WRONLY | O_NOCTTY);
+		if (cfd >= 0) {
+			sys_write((int)cfd, cl, xstrlen(cl));
+			if (cfd > 2)
+				sys_close((int)cfd);
+		}
+	}
+#endif
 }
 
 /* IMGACT condition-value severities: fatal exits use a nonzero status. */
@@ -1742,6 +1781,38 @@ static void imgact_fill_import(unsigned long cell, unsigned long PV,
 }
 #endif  /* __alpha__ */
 
+#ifdef OVMX_IMGACT_BIND_TRACE
+/* vms-d4a option (a): imgact_u32_hex8 is defined later in the file; the
+ * bind-trace uses it, so forward-declare it here. */
+static void imgact_u32_hex8(char *out, uint32_t v);
+/* Is the CURRENTLY-ACTIVATING image CONSUMER? Match a SUBSTRING of g_argv0 --
+ * the VMS `RUN SYS$SYSTEM:CONSUMER` path is not a plain '/'-basename (an
+ * earlier '/'-basename == "CONSU" guard never matched, so the trace stayed
+ * silent). Substring scoping still fires ONLY for CONSUMER, so the trace never
+ * interleaves with the boot images' activations (STARTUP/PROVISION/LOGINOUT/
+ * DCL). */
+static int imgact_bt_is_consumer(void)
+{
+	const char *a = g_argv0 ? g_argv0 : "";
+	for (; *a; a++)
+		if (a[0] == 'C' && a[1] == 'O' && a[2] == 'N' && a[3] == 'S' &&
+		    a[4] == 'U' && a[5] == 'M' && a[6] == 'E' && a[7] == 'R')
+			return 1;
+	return 0;
+}
+/* Emit one already-composed diagnostic line on /dev/console (open direct: a
+ * RUN'd child's fd 1/2 are not console-wired on NetBSD). */
+static void imgact_bt_emit(const char *line)
+{
+	long cfd = sys_openat("/dev/console", O_WRONLY | O_NOCTTY);
+	if (cfd >= 0) {
+		sys_write((int)cfd, line, xstrlen(line));
+		if (cfd > 2)
+			sys_close((int)cfd);
+	}
+}
+#endif
+
 /* Bind every .vms$imp import at `ih` into image `base`: map each named producer
  * (recursively — transitive imports), GSMATCH-resolve the universal by vector
  * index, and store the run-time address into the importing image's GOT cell.
@@ -1752,6 +1823,24 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 {
 	if (ih->magic != OVMX_IMP_MAGIC)
 		die_imgfmterr(whoami);
+#ifdef OVMX_IMGACT_BIND_TRACE
+	/* vms-d4a option (a): CONSUMER-scoped bind-imports ENTRY trace. Tells
+	 * "bind_imports never ran for CONSUMER" (no ENTER line) apart from "ran but
+	 * count=0" (ENTER with count=0) apart from "ran + stored" (a BIND line
+	 * follows). Also surfaces the actual g_argv0 the RUN path set. */
+	if (imgact_bt_is_consumer()) {
+		char cnt[9], line[224];
+		imgact_u32_hex8(cnt, (uint32_t)ih->count);
+		line[0] = '\0';
+		xstrcat(line, "OVMX-IMGACT-BIND-ENTER: who=");
+		xstrcat(line, whoami ? whoami : "?");
+		xstrcat(line, " argv0=");
+		xstrcat(line, g_argv0 ? g_argv0 : "?");
+		xstrcat(line, " count=0x"); xstrcat(line, cnt);
+		xstrcat(line, "\n");
+		imgact_bt_emit(line);
+	}
+#endif
 	const struct ovmx_imp_entry *ie =
 		(const struct ovmx_imp_entry *)((const char *)ih + sizeof *ih);
 	const char *names = (const char *)ih + ih->names_off;
@@ -1789,6 +1878,27 @@ static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 			sys_exit(IMGACT_EXIT_FAIL);
 		}
 		*(unsigned long *)(base + ie[k].patch_off) = addr;
+#ifdef OVMX_IMGACT_BIND_TRACE
+		/* rd vms-d4a option (a): per-import bind for the CONSUMER activation
+		 * ONLY (imgact_bt_is_consumer), on /dev/console. ADDRESSES ONLY
+		 * (base/cell/val) -- never the purdy hash -- so it CANNOT fake the
+		 * value-sensitive golden gate; assert_shr_activation is unchanged.
+		 * val should equal p->base + purdy's static .vms$sv value. */
+		if (imgact_bt_is_consumer()) {
+			char hb[9], hc[9], hv[9], line[224];
+			imgact_u32_hex8(hb, (uint32_t)p->base);
+			imgact_u32_hex8(hc, (uint32_t)(base + ie[k].patch_off));
+			imgact_u32_hex8(hv, (uint32_t)addr);
+			line[0] = '\0';
+			xstrcat(line, "OVMX-IMGACT-BIND: prod=");
+			xstrcat(line, soname);
+			xstrcat(line, " base=0x"); xstrcat(line, hb);
+			xstrcat(line, " cell=0x"); xstrcat(line, hc);
+			xstrcat(line, " val=0x");  xstrcat(line, hv);
+			xstrcat(line, "\n");
+			imgact_bt_emit(line);
+		}
+#endif
 #endif
 	}
 }

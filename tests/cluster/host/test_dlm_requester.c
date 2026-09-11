@@ -75,6 +75,8 @@ struct fake_lkb {
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
 	uint16_t dir_hash;
 	uint8_t  hash_known;
+	uint8_t  write_valblk;   /* engine marks a demote-from-write convert as an
+				  * op-0x06 value-block write (vms-727)         */
 };
 
 struct sent_frame {
@@ -184,6 +186,7 @@ static int fe_refill(void *ctx, uint32_t req_lkid, uint32_t op,
 	out->dir_hash       = e->lkb.dir_hash;
 	out->dir_hash_known = e->lkb.hash_known;
 	out->to_directory   = (e->lkb.master_csid == 0u) ? 1u : 0u;
+	out->write_valblk   = e->lkb.write_valblk;
 	return 0;
 }
 
@@ -1369,7 +1372,14 @@ static void test_lvb(void)
 	uint8_t frame[VMS_CM_FRAME_LEN];
 	uint32_t i, len;
 
-	printf("-- the LVB write crossing is an HONEST OMISSION, and counted\n");
+	/*
+	 * CASE A: an ENQ that carries a value block does NOT write it on the
+	 * wire and is NOT an unsent "write crossing" -- an ENQ (and any
+	 * non-demoting request) READS the block on grant; only a demote from a
+	 * write mode WRITES it (vms-727). So the block rides in the post, never
+	 * on the frame, and no counter moves.
+	 */
+	printf("-- an ENQ reads the LVB (block in the post, never on the wire)\n");
 	fe_reset("F11B$aSYSDSK1", VMS_LCK_EX, 0x00eeu, 1, CSID_MASTER);
 	for (i = 0; i < VMS_DLM_VALBLK_LEN; i++)
 		g.lkb.valblk[i] = (uint8_t)(0xA0u + i);
@@ -1378,8 +1388,10 @@ static void test_lvb(void)
 	ct_check(p.valblk[0] == 0xA0u,
 		 "the post carries the LKB's real value block");
 	(void)dlm_req_fsm_post(&g_fsm, &p);
-	ct_check_eq_u32(g_fsm.lvb_write_no_wire_field, 1u,
-			"the unsent write crossing is COUNTED");
+	ct_check_eq_u32(g_fsm.lvb_write_no_wire_field, 0u,
+			"an ENQ is not a write crossing -- nothing unsent");
+	ct_check_eq_u32(g_fsm.lvb_writes_sent, 0u,
+			"and nothing was written to the wire");
 	check_frame_traces_to_lkb(&g.sent[0], "enq with a value block");
 
 	/* And an inbound grant must not zero the proxy's block. */
@@ -1390,6 +1402,45 @@ static void test_lvb(void)
 			"valblk_present = 0");
 	ct_check(g.lkb.valblk[0] == 0xA0u,
 		 "*** so the proxy's own value block SURVIVED the grant ***");
+
+	/*
+	 * CASE B: a CONVERT the engine marked as a value-block WRITE (a demote
+	 * from a write mode with LCK$M_VALBLK) goes out as a grounded op-0x06
+	 * CONVERT-with-VALBLK, and THE BLOCK IS ON THE WIRE, verbatim -- the
+	 * write crossing that used to be dropped now crosses (vms-727).
+	 */
+	printf("-- a demote-from-write CONVERT writes the LVB (op-0x06 on the wire)\n");
+	fe_reset("OVMXLV01", VMS_LCK_NL, 0x00eeu, 1, CSID_MASTER);
+	g.lkb.master_lkid = 0x04000669u;   /* the master named it */
+	g.lkb.lkmode = VMS_LCK_NL;          /* converting DOWN to NL */
+	g.lkb.write_valblk = 1u;            /* the engine's demote-from-write mark */
+	for (i = 0; i < VMS_DLM_VALBLK_LEN; i++)
+		g.lkb.valblk[i] = (uint8_t)(0xB0u + i);
+
+	post_from_lkb(&p, VMS_DLM_POST_CONVERT, CSID_MASTER);
+	ct_check(p.write_valblk == 1u, "the post is marked a value-block write");
+	(void)dlm_req_fsm_post(&g_fsm, &p);
+	ct_check_eq_u32(g_fsm.lvb_writes_sent, 1u,
+			"*** the op-0x06 value-block write was EMITTED ***");
+	ct_check_eq_u32(g_fsm.lvb_write_no_wire_field, 0u,
+			"and nothing was dropped");
+
+	{
+		struct vms_frame_info fi;
+		struct vms_dlm_valblk_convert c;
+
+		len = splice(&g.sent[g.n_sent - 1u], frame);
+		ct_check(vms_frame_classify(frame, len, &fi) == VMS_CODEC_OK &&
+			 vms_dlm_valblk_convert_parse(frame, len, &fi, &c) ==
+				 VMS_CODEC_OK,
+			 "the emitted frame parses as an op-0x06 value-block CONVERT");
+		ct_check_eq_u32(c.master_lkid, 0x04000669u,
+				"  body[24:28] == the LKB's master handle");
+		ct_check_eq_u32(c.mode, VMS_LCK_NL,
+				"  body[30] == the mode converted TO (NL)");
+		ct_check(memcmp(c.valblk, g.lkb.valblk, VMS_DLM_VALBLK_LEN) == 0,
+			 "*** body[36:52] IS the LKB's value block, on the wire ***");
+	}
 }
 
 /* ==========================================================================

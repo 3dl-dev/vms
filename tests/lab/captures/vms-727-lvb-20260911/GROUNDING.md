@@ -132,3 +132,22 @@ receiver-correctness-critical — the builder cannot bugcheck a peer
 (never-crash-a-peer). The remaining SCS-scope question about body[32] (per-VC vs
 per-node) does not gate the build: the value is sender-private and stamped
 front==back, so any LKB-sourced value is faithful and safe.
+
+## C6/C7 — the EMIT TRIGGER, wire-confirmed
+
+Before a LIVE op-0x06 emit, the TRIGGER had to be grounded too: WHEN does a real
+VAX put op-0x06 on the wire vs a plain op-0x07? Emitting op-0x06 on the wrong
+transition would make an OVMX holder write the master's value block where real
+VMS would not — a real-VAX-interop data-fidelity regression, worse than a crash.
+Two more captures pinned it:
+
+| variant | convert | op VAX1->master | note |
+|---|---|---|---|
+| C6 (`c6-demote-ex-to-cr.pcap`) | EX(5)->CR(1), LCK$M_VALBLK | **0x06** | body[30]=0x01 (target CR, NOT NL); valblk `DEMOTEEXTOCRXXXX` verbatim; serial 0x20, same shape |
+| C7 (`c7-upconvert-cr-to-ex.pcap`) | CR(1)->EX(5), LCK$M_VALBLK | **0x07** | up-convert; the master's grant-back block was all-zero, NOT `UPCONVCRTOEXXXXX` — a real VAX ignored a write attempted from a read-mode holder |
+
+**Trigger, from the wire:** op-0x06 fires on a CONVERT that DEMOTES a lock held at
+a write mode (PW/EX) with LCK$M_VALBLK — to ANY lower mode (CR as well as NL), NOT
+on up-converts or read-mode holders. This is exactly the condition the engine
+sets `write_valblk` on (dlm_proxy_fill_post); the wire arm emits op-0x06 iff that
+flag is set. Drivers: `dlm-drivers/DLMLVB6.MAR`, `DLMLVB7.MAR`.

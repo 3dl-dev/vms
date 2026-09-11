@@ -232,6 +232,21 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
      * makes the two CSIDs equal.
      */
     p->to_directory = (lock->master_csid == 0u && res->master_csid == 0u) ? 1u : 0u;
+    /*
+     * Does this transmission WRITE the value block to the master (op-0x06)?
+     * The lock-manager rule, WIRE-CONFIRMED (vms-727): the value block is
+     * flushed on a CONVERT that DEMOTES a lock held at a write mode (PW/EX)
+     * with LCK$M_VALBLK set. Target mode need not be NL -- a real VAX EX->CR
+     * demote emitted op-0x06 -- so the test is "requested < granted", not
+     * "requested == NL". An up-convert or a read-mode holder writes nothing
+     * (a real VAX ignored a write attempted from a CR holder). Only CONVERT
+     * is claimed here; a DEQ-time value-block write was not captured and is
+     * not asserted, so a DEQ still crosses as a plain op-0x03.
+     */
+    p->write_valblk = (op == VMS_DLM_POST_CONVERT &&
+                       (lock->flags & LCK_M_VALBLK) &&
+                       lock->granted_mode >= LCK_K_PWMODE &&
+                       lock->requested_mode < lock->granted_mode) ? 1u : 0u;
 }
 
 /*

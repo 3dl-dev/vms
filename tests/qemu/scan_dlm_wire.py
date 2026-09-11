@@ -38,15 +38,24 @@ OFF_DLM_OP = 81             # VMS_OFF_DLM_OP
 CAT_DLM_REQUEST = 0x02
 RESPONSE_BIT = 0x80
 
-# src/kernel-core/vms_cluster_codec_dlm.h, the wire-op block.
+# src/kernel-core/vms_cluster_codec_dlm.h, the wire-op block. 0x06 is
+# VMS_DLM_WIREOP_CONVERT_VALBLK -- the CONVERT that carries the lock value
+# block (rd vms-727) -- NOT a grant; VMS never puts a grant in its own cat-0x02
+# opcode (a grant is the op-0x01/0x07 cat-0x82 RESPONSE, see the codec header).
 OPNAMES = {
     0x01: "enq",
     0x03: "deq",         # the cross-node RELEASE (vms-c03)
     0x04: "blkast",      # the master->holder BLOCKING AST (vms-c03)
-    0x06: "grant",
+    0x06: "valblk",       # CONVERT-with-VALBLK, the op-0x06 LVB write (vms-727)
     0x07: "convert",
     0x0d: "rebuild",
 }
+
+# src/kernel-core/vms_cluster_codec_dlm.h VMS_OFF_DLM_MASTER_LKID / _VALBLK.
+OFF_DLM_MASTER_LKID = 96     # body[24:28] LE u32
+OFF_DLM_VALBLK = 108         # body[36:52], 16 bytes
+DLM_VALBLK_LEN = 16
+WIREOP_CONVERT_VALBLK = 0x06
 
 
 def pcap_records(blob):
@@ -86,6 +95,30 @@ def dlm_opcode(pkt):
     return (cat & RESPONSE_BIT, pkt[OFF_DLM_OP])
 
 
+def mac_str(pkt, off):
+    return ":".join("%02x" % b for b in pkt[off:off + 6])
+
+
+def op06_detail(pkt):
+    """For an op-0x06 CONVERT-with-VALBLK REQUEST frame: the fields the
+    return-contract evidence needs, decoded from this codebase's own
+    published offsets -- never guessed off a hexdump. None if the frame is
+    too short to hold them."""
+    if len(pkt) < OFF_DLM_VALBLK + DLM_VALBLK_LEN:
+        return None
+    master_lkid = struct.unpack_from("<I", pkt, OFF_DLM_MASTER_LKID)[0]
+    valblk = pkt[OFF_DLM_VALBLK:OFF_DLM_VALBLK + DLM_VALBLK_LEN]
+    return {
+        "eth_dst": mac_str(pkt, 0),
+        "eth_src": mac_str(pkt, 6),
+        "master_lkid": master_lkid,
+        "valblk_hex": valblk.hex(),
+        # 0x21 (not 0x20): a literal space would split this token when the
+        # host script's `tr ' ' '\n'` scraper tokenises the line.
+        "valblk_ascii": "".join(chr(b) if 0x21 <= b < 0x7f else "." for b in valblk),
+    }
+
+
 def scan(path):
     try:
         with open(path, "rb") as fh:
@@ -95,6 +128,7 @@ def scan(path):
 
     sca = 0
     counts = {}
+    op06_frames = []
     for pkt in pcap_records(blob):
         if not is_sca(pkt):
             continue
@@ -105,11 +139,33 @@ def scan(path):
         resp, op = got
         key = "%s%s" % (OPNAMES.get(op, "op%02x" % op), "-resp" if resp else "")
         counts[key] = counts.get(key, 0) + 1
+        if op == WIREOP_CONVERT_VALBLK and not resp:
+            detail = op06_detail(pkt)
+            if detail is not None:
+                op06_frames.append(detail)
 
     if not counts:
-        return "%s: sca_frames=%d dlm=none" % (path, sca)
-    body = " ".join("%s=%d" % (k, counts[k]) for k in sorted(counts))
-    return "%s: sca_frames=%d %s" % (path, sca, body)
+        lines = ["%s: sca_frames=%d dlm=none" % (path, sca)]
+    else:
+        body = " ".join("%s=%d" % (k, counts[k]) for k in sorted(counts))
+        lines = ["%s: sca_frames=%d %s" % (path, sca, body)]
+
+    # THE OP-0x06 WIRE-FRAME EVIDENCE (rd vms-727 return contract): every
+    # value below is decoded straight off the frame bytes this node's own
+    # passive capture recorded, at the codec's own published offsets --
+    # nothing here is asserted, only reported alongside the gate.
+    # NOTE: these detail lines are prefixed "op06_" (never bare "master_lkid="
+    # or "valblk=") so the host script's `key=value` scrapers -- which sum
+    # every token matching a bare opcode-count key across this whole blob --
+    # cannot mistake a hex value block for another opcode's count.
+    for d in op06_frames[:8]:
+        lines.append(
+            "  OP06 op06_eth_src=%s op06_eth_dst=%s op06_master_lkid=0x%08x "
+            "op06_valblk_hex=%s op06_valblk_ascii=%s"
+            % (d["eth_src"], d["eth_dst"], d["master_lkid"],
+               d["valblk_hex"], d["valblk_ascii"])
+        )
+    return "\n".join(lines)
 
 
 def main(argv):

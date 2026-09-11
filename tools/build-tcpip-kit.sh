@@ -47,9 +47,12 @@ done
 # Config/startup procedures + the shipped-DISABLED service database (posture: the kit
 # ships every service disabled; enabling one is an operator call, guarded by
 # tests/integration/test_tcpip_posture_guard.sh).
-cp "$RFS_MGR/TCPIP\$CONFIG.COM"      "$STAGE/SYSMGR/TCPIP\$CONFIG.COM"
-cp "$RFS_STARTUP/TCPIP\$STARTUP.COM" "$STAGE/SYS\$STARTUP/TCPIP\$STARTUP.COM"
-cp "$RFS_EXE/TCPIP\$SERVICE.DAT"     "$STAGE/SYSEXE/TCPIP\$SERVICE.DAT"
+cp "$RFS_MGR/TCPIP\$CONFIG.COM"       "$STAGE/SYSMGR/TCPIP\$CONFIG.COM"
+cp "$RFS_STARTUP/TCPIP\$STARTUP.COM"  "$STAGE/SYS\$STARTUP/TCPIP\$STARTUP.COM"
+cp "$RFS_EXE/TCPIP\$SERVICE.DAT"      "$STAGE/SYSEXE/TCPIP\$SERVICE.DAT"
+# NB: config reapply at startup (TCPIP$STARTUP runs "TCPIP REAPPLY", rd vms-b97) is
+# a DCL sub-verb inside DCL.EXE -- it ships in the base OS kit, not here; no separate
+# procedure to stage.
 
 "$PACK" pack "$KIT_OUT" "$STAGE" "$PRODUCT_NAME"
 echo "OK: built TCP/IP Services layered-product kit at $KIT_OUT ($PRODUCT_NAME)"

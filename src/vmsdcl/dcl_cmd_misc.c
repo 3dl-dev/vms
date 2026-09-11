@@ -2265,6 +2265,146 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
     return SS$_ABORT;                   /* privileged, but the substrate apply failed */
 }
 
+/* ================================================================== */
+/*   TCPIP REAPPLY -- reapply the persisted config at startup (vms-b97) */
+/* ================================================================== */
+/*
+ * The boot reader for the config-persistence tree (vms-a0b2). TCPIP$STARTUP.COM
+ * runs "TCPIP REAPPLY" so a configured node comes back configured after a reboot.
+ *
+ * WHY A C SUB-VERB, NOT A DCL OPEN/READ .COM: the config stores are written by
+ * the SET verbs via rms_textfile (RMS over the Files-11 ACP, vms-210/vms-402). A
+ * DCL OPEN/READ of those runtime-written SYS$SYSTEM: stores proved UNRELIABLE at
+ * the SYSTARTUP context (it read nothing though the file was present + TYPE-able).
+ * Reading them back via rms_textfile -- the SAME mechanism that WROTE them -- is
+ * consistent by construction. Each record is reapplied by calling the very SET
+ * verb that would apply it, with /REAPPLY (apply-only: it performs the live
+ * effect but does NOT re-write the store, so the store never grows across boots).
+ * A missing store is an honest no-op (rms_textfile_open -> NULL -> skip).
+ *
+ * The per-store summary "%TCPIP-I-REAPPLY, reapplied N ... from <store>" carries
+ * the count actually read, so it can only appear if the reader genuinely read the
+ * store -- never a trivially-true signal (the boot e2e's teeth key on it).
+ */
+
+/* Append one qualifier (name[, value]) to a synthetic command. */
+static void tcpip_reapply_add_qual(struct dcl_command *c, const char *name,
+                                   const char *value)
+{
+    int i = c->qualifier_count;
+    if (i >= (int)(sizeof(c->qualifiers) / sizeof(c->qualifiers[0]))) return;
+    strncpy(c->qualifiers[i].name, name, sizeof(c->qualifiers[i].name) - 1);
+    c->qualifiers[i].name[sizeof(c->qualifiers[i].name) - 1] = '\0';
+    c->qualifiers[i].value[0] = '\0';
+    if (value) {
+        strncpy(c->qualifiers[i].value, value, sizeof(c->qualifiers[i].value) - 1);
+        c->qualifiers[i].value[sizeof(c->qualifiers[i].value) - 1] = '\0';
+    }
+    c->qualifiers[i].negated = 0;
+    c->qualifier_count = i + 1;
+}
+
+/* Reapply TCPIP$INTERFACE.DAT records: "ifname addr [mask]". Returns count. */
+static int tcpip_reapply_interfaces(void)
+{
+    rms_textfile_t *tf = rms_textfile_open("SYS$SYSTEM:TCPIP$INTERFACE.DAT");
+    if (!tf) return 0;                          /* missing store -> honest no-op */
+    char line[512]; int too_long = 0, n = 0;
+    while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+        if (too_long) continue;
+        char ifn[64], addr[64], mask[64];
+        int nf = sscanf(line, "%63s %63s %63s", ifn, addr, mask);
+        if (nf < 2 || ifn[0] == '!' || ifn[0] == '#') continue;
+        struct dcl_command sc; memset(&sc, 0, sizeof(sc));
+        strncpy(sc.params[0], "SET", sizeof(sc.params[0]) - 1);
+        strncpy(sc.params[1], "INTERFACE", sizeof(sc.params[1]) - 1);
+        strncpy(sc.params[2], ifn, sizeof(sc.params[2]) - 1);
+        sc.param_count = 3;
+        tcpip_reapply_add_qual(&sc, "REAPPLY", NULL);
+        tcpip_reapply_add_qual(&sc, "HOST", addr);
+        if (nf >= 3) tcpip_reapply_add_qual(&sc, "NETWORK_MASK", mask);
+        (void)cmd_tcpip_set_interface(&sc);
+        n++;
+    }
+    rms_textfile_close(tf);
+    if (n > 0)
+        printf("%%TCPIP-I-REAPPLY, reapplied %d interface(s) from TCPIP$INTERFACE.DAT\n", n);
+    return n;
+}
+
+/* Reapply TCPIP$ROUTE.DAT records: "DEFAULT gw" | "dest gw [mask]". Returns count. */
+static int tcpip_reapply_routes(void)
+{
+    rms_textfile_t *tf = rms_textfile_open("SYS$SYSTEM:TCPIP$ROUTE.DAT");
+    if (!tf) return 0;
+    char line[512]; int too_long = 0, n = 0;
+    while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+        if (too_long) continue;
+        char f0[64], gw[64], mask[64];
+        int nf = sscanf(line, "%63s %63s %63s", f0, gw, mask);
+        if (nf < 2 || f0[0] == '!' || f0[0] == '#') continue;
+        struct dcl_command sc; memset(&sc, 0, sizeof(sc));
+        strncpy(sc.params[0], "SET", sizeof(sc.params[0]) - 1);
+        strncpy(sc.params[1], "ROUTE", sizeof(sc.params[1]) - 1);
+        sc.param_count = 2;
+        tcpip_reapply_add_qual(&sc, "REAPPLY", NULL);
+        tcpip_reapply_add_qual(&sc, "GATEWAY", gw);
+        if (strcmp(f0, "DEFAULT") == 0) {
+            tcpip_reapply_add_qual(&sc, "DEFAULT", NULL);
+        } else {
+            tcpip_reapply_add_qual(&sc, "DESTINATION", f0);
+            if (nf >= 3) tcpip_reapply_add_qual(&sc, "NETWORK_MASK", mask);
+        }
+        (void)cmd_tcpip_set_route(&sc);
+        n++;
+    }
+    rms_textfile_close(tf);
+    if (n > 0)
+        printf("%%TCPIP-I-REAPPLY, reapplied %d route(s) from TCPIP$ROUTE.DAT\n", n);
+    return n;
+}
+
+/* Reapply TCPIP$NAMESERVICE.DAT: "SERVER=ip" then optional "DOMAIN=x". Returns count. */
+static int tcpip_reapply_nameservice(void)
+{
+    rms_textfile_t *tf = rms_textfile_open("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT");
+    if (!tf) return 0;
+    char line[512]; int too_long = 0;
+    char server[256] = "", domain[256] = "";
+    while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+        if (too_long) continue;
+        if (strncmp(line, "SERVER=", 7) == 0) {
+            strncpy(server, line + 7, sizeof(server) - 1); server[sizeof(server) - 1] = '\0';
+        } else if (strncmp(line, "DOMAIN=", 7) == 0) {
+            strncpy(domain, line + 7, sizeof(domain) - 1); domain[sizeof(domain) - 1] = '\0';
+        }
+    }
+    rms_textfile_close(tf);
+    if (server[0] == '\0') return 0;
+    struct dcl_command sc; memset(&sc, 0, sizeof(sc));
+    strncpy(sc.params[0], "SET", sizeof(sc.params[0]) - 1);
+    strncpy(sc.params[1], "NAME_SERVICE", sizeof(sc.params[1]) - 1);
+    sc.param_count = 2;
+    tcpip_reapply_add_qual(&sc, "REAPPLY", NULL);
+    tcpip_reapply_add_qual(&sc, "SYSTEM", NULL);
+    tcpip_reapply_add_qual(&sc, "SERVER", server);
+    if (domain[0] != '\0') tcpip_reapply_add_qual(&sc, "DOMAIN", domain);
+    (void)cmd_tcpip_set_name_service(&sc);
+    printf("%%TCPIP-I-REAPPLY, reapplied name service from TCPIP$NAMESERVICE.DAT (server %s)\n", server);
+    return 1;
+}
+
+/* TCPIP REAPPLY -- reapply all persisted config (interfaces, then routes, then
+ * name service) from the ACP stores. Called by TCPIP$STARTUP at boot. */
+static int cmd_tcpip_reapply(struct dcl_command *cmd)
+{
+    (void)cmd;
+    tcpip_reapply_interfaces();
+    tcpip_reapply_routes();
+    tcpip_reapply_nameservice();
+    return SS$_NORMAL;
+}
+
 /*
  * TCPIP - TCP/IP Services command with SHOW and SET subcommands.
  */
@@ -2276,6 +2416,12 @@ int cmd_tcpip(struct dcl_command *cmd)
     }
 
     const char *subcmd = cmd->params[0];
+
+    if (dcl_match_command(subcmd, "REAPPLY", 3)) {
+        /* TCPIP REAPPLY -- reapply persisted config from the ACP stores (vms-b97);
+         * TCPIP$STARTUP runs this at boot. */
+        return cmd_tcpip_reapply(cmd);
+    }
 
     if (dcl_match_command(subcmd, "SHOW", 2)) {
         /* TCPIP SHOW <what> */

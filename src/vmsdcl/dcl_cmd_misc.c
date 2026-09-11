@@ -42,6 +42,7 @@
 #include "dcl/disk_logical.h"
 #include "dcl/help.h"
 #include "dcl/dcl_rms.h"     /* dcl_rms_read_* -- the HELP ACP read seam (vms-4ac) */
+#include "rms_textfile.h"    /* rms_textfile_* -- RMS text I/O over the Files-11 ACP (vms-274) */
 #include "ssdef.h"
 #include "ovmx_layout.h"
 #include "vms/logical.h"
@@ -1780,6 +1781,42 @@ static int tcpip_print_hosts_from_file(const char *path,
     return count;
 }
 
+/* Read the VMS host database (TCPIP$HOST.DAT) the VMS way: RMS record reads
+ * through the Files-11 ACP (rms_textfile, vms-274), NOT a fopen() of the retired
+ * /vms passthrough (VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms", vms-37e) which reaches
+ * nothing on the booted runtime. SYS$SYSTEM: is resolved through LNM$FILE_DEV.
+ * Fail-honest: no ACP volume / no executive -> NULL handle -> no VMS-DB hosts
+ * shown (never a /vms fallback, INV-6). Same record shape as the writer:
+ * space-padded address + hostname. */
+static int tcpip_print_hosts_from_vms_store(struct tcpip_host_entry *shown,
+                                            int count)
+{
+    rms_textfile_t *tf = rms_textfile_open("SYS$SYSTEM:TCPIP$HOST.DAT");
+    if (!tf) return count;
+
+    char line[512];
+    int too_long = 0;
+    while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+        if (too_long) continue;
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\0') continue;
+
+        char addr[128], hostname[256];
+        if (sscanf(p, "%127s %255s", addr, hostname) >= 2) {
+            if (count < TCPIP_MAX_HOST_ENTRIES &&
+                !tcpip_host_already_shown(shown, count, addr, hostname)) {
+                printf("%-16s%s\n", addr, hostname);
+                strncpy(shown[count].addr, addr, sizeof(shown[count].addr) - 1);
+                strncpy(shown[count].name, hostname, sizeof(shown[count].name) - 1);
+                count++;
+            }
+        }
+    }
+    rms_textfile_close(tf);
+    return count;
+}
+
 static int cmd_tcpip_show_host(struct dcl_command *cmd)
 {
     (void)cmd;
@@ -1791,7 +1828,7 @@ static int cmd_tcpip_show_host(struct dcl_command *cmd)
     int count = 0;
     if (shown) {
         count = tcpip_print_hosts_from_file("/etc/hosts", shown, count);
-        tcpip_print_hosts_from_file(TCPIP_HOST_DAT, shown, count);
+        tcpip_print_hosts_from_vms_store(shown, count);
         free(shown);
     }
 
@@ -1846,20 +1883,36 @@ static int cmd_tcpip_set_host(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    tcpip_ensure_config_dir();
+    /* Persist the host entry to the VMS-faithful TCPIP$HOST.DAT the VMS way: an
+     * RMS $PUT-at-EOF append through the Files-11 ACP (rms_textfile_append_line --
+     * the OPERATOR.LOG writer idiom, vms-274; $CREATEs the file if absent). The
+     * prior fopen() targeted VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms" -- the RETIRED
+     * POSIX passthrough (vms-37e) -- so on the booted runtime it silently wrote
+     * nothing while still printing "host added"; the ACP write reaches the genuine
+     * ODS-2 SYS$SYSTEM: volume. SYS$SYSTEM: is resolved through LNM$FILE_DEV
+     * (honours DEFINE/SYSTEM SYS$SYSTEM). Fail-honest (INV-6): with no executive /
+     * no mounted ACP volume it returns -1 and we report that, never a fake success.
+     * Same space-padded record shape SHOW HOST parses. */
+    char rec[512];
+    /* Bound the hostname to the same width SHOW HOST reads back (%255s), so the
+     * record can never truncate. */
+    snprintf(rec, sizeof(rec), "%-16s%.255s", address, hostname);
+    int host_db_ok = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$HOST.DAT", rec) == 0);
 
-    /* Write to TCPIP$HOST.DAT */
-    FILE *fp = fopen(TCPIP_HOST_DAT, "a");
+    /* Best-effort substrate-side resolver convenience (root-only file; unrelated
+     * to the VMS host database above). */
+    FILE *fp = fopen("/etc/hosts", "a");
     if (fp) {
         fprintf(fp, "%-16s%s\n", address, hostname);
         fclose(fp);
     }
 
-    /* Also append to /etc/hosts for Linux DNS resolution */
-    fp = fopen("/etc/hosts", "a");
-    if (fp) {
-        fprintf(fp, "%-16s%s\n", address, hostname);
-        fclose(fp);
+    if (!host_db_ok) {
+        /* The VMS host database could not be written (no executive / no mounted
+         * ACP volume). Report it honestly rather than claim the host was added. */
+        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$HOST.DAT not updated "
+               "(host \"%s\" not persisted to the VMS host database)\n", hostname);
+        return SS$_ABORT;
     }
 
     printf("%%TCPIP-I-INFO, host \"%s\" added\n", hostname);

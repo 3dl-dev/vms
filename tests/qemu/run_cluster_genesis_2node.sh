@@ -56,8 +56,25 @@
 #           run, one SYSGEN digit apart -- so a MEMBER in the proof run can only
 #           have come from a real, wire-learned CSID.
 #
-# VERDICT: read only from the guests' own RIG-*-FINAL lines, which carry values
-# the guest read back out of the executive (INV-6).
+#   xnode   (rd vms-94c) the proof run, PLUS a cross-node DLM phase after
+#           membership settles. Each node scans its OWN candidate name set,
+#           finds one the PEER masters (read back from GET_RESMASTER, never
+#           computed), takes an EX lock on it across the wire, contends with a
+#           second incompatible request so the master owes a BLOCKING AST, and
+#           then releases the holder so a $DEQ crosses. What that makes happen
+#           on the wire is an op-0x03 and an op-0x04 IN EACH DIRECTION -- the
+#           two frames the arm's emit half (rd vms-d7a3) builds and which no
+#           2-node run had yet entered.
+#
+#           IT IS ALSO THE NEVER-CRASH-A-PEER PROOF. The arm has no RECEIVE
+#           half for either opcode (vms_dlm_scs.c, "THE RELEASE'S RECEIVE
+#           HALF"): both frames arrive at a peer that must DECLINE them,
+#           counted, and go on being a member. So this mode asserts, after the
+#           frames, that both nodes still report member=1 cn=2 with their two
+#           membership projections agreeing and neither console panicked.
+#
+# VERDICT: read only from the guests' own RIG-* lines, which carry values the
+# guest read back out of the executive (INV-6).
 
 set -uo pipefail
 
@@ -84,6 +101,21 @@ WINDOW_A="${RIG_WINDOW_A:-150}"   # how long each node polls the executive
 WINDOW_B="${RIG_WINDOW_B:-110}"
 WALL="${RIG_WALL:-600}"
 
+# rd vms-94c. The cross-node phase runs AFTER each node's membership window, so
+# the two windows must END together or one node would do its cross-node work
+# against a peer that has already powered off. B is started STAGGER seconds
+# late, so its window is that much shorter and both phases begin at the same
+# wall moment. LINGER then keeps each node up past its OWN phase, which is what
+# makes the survival verdict a statement about the PEER's frames.
+XNODE=0
+LINGER="${RIG_LINGER:-45}"
+if [ "$MODE" = "xnode" ]; then
+	XNODE=1
+	WINDOW_A="${RIG_WINDOW_A:-150}"
+	WINDOW_B="${RIG_WINDOW_B:-$((WINDOW_A - STAGGER))}"
+	WALL="${RIG_WALL:-900}"
+fi
+
 VOTES_A=1
 [ "$MODE" = "negctl" ] && VOTES_A=0
 
@@ -103,6 +135,7 @@ if [ -w /dev/kvm ]; then ACCEL="-accel kvm -cpu host"; else ACCEL="-accel tcg"; 
 echo "=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ==="
 echo "mode=$MODE"
 echo "accel=${ACCEL#-accel } group=$GROUP recnx=${RECNX}s stagger=${STAGGER}s"
+[ "$XNODE" = "1" ] && echo "cross-node phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s, linger=${LINGER}s)"
 echo "node A: OVMXA/1025 VOTES=$VOTES_A EXPECTED_VOTES=1 VAXCLUSTER=2"
 echo "node B: OVMXB/$SYSID_B VOTES=0          VAXCLUSTER=2"
 echo ""
@@ -118,7 +151,7 @@ node_cmdline() {
 	     "ovmx.tag=$1 ovmx.scsnode=$2 ovmx.sysid=$3 ovmx.votes=$4" \
 	     "ovmx.expected_votes=$5 ovmx.vaxcluster=2 ovmx.group=$GROUP" \
 	     "ovmx.recnx=$RECNX ovmx.credits=$CREDITS ovmx.swver=$SWVER" \
-	     "ovmx.window=$6"
+	     "ovmx.window=$6 ovmx.xnode=$XNODE ovmx.linger=$LINGER"
 }
 
 # Node A holds the segment open; node B dials in. A is powered on first
@@ -183,11 +216,45 @@ for N in A B; do
 		echo "reconstructed pcap: $OUT/node${N}.pcap ($(wc -c < "$OUT/node${N}.pcap") bytes)"
 done
 
+# THE WIRE HALF of the cross-node evidence (rd vms-94c). Decodes the cat-0x02
+# opcode of every 0x6007 frame each node's PASSIVE probe captured, using this
+# codebase's own published offsets (tests/qemu/scan_dlm_wire.py). It says a byte
+# reached the segment and nothing more; which executive emitted it is the
+# RIG-*-DLM-EMIT counters' question, and both are printed.
+WIRE_SCAN=""
+if command -v python3 >/dev/null 2>&1 && [ -r /scan_dlm_wire.py ]; then
+	echo ""
+	echo "=== cat-0x02 opcodes ON THE WIRE (each node's own passive capture) ==="
+	for N in A B; do
+		[ -s "$OUT/node${N}.pcap" ] || continue
+		L=$(python3 /scan_dlm_wire.py "$OUT/node${N}.pcap" 2>&1) || true
+		echo "$L"
+		WIRE_SCAN="$WIRE_SCAN $L"
+	done
+fi
+
+# How many frames of one opcode the captures showed, summed over both nodes'
+# probes. Each probe sees BOTH directions (an AF_PACKET socket is delivered the
+# interface's outgoing frames as well as its incoming ones), so a frame that
+# really crossed appears in both -- which is why this is a >0 gate and never a
+# count the verdict quotes as "how many were sent". That number is the arm's.
+wire_saw() {
+	echo "$WIRE_SCAN" | tr ' ' '\n' | sed -n "s/^$1=//p" \
+		| awk '{s+=$1} END {print s+0}'
+}
+
 # `RIG-<tag>-FINAL <key>=<value>`: pull one key out of one node's verdict line.
+#
+# THE `tr -d '\r'` IS NOT COSMETIC. The guest writes these lines to a serial
+# TTY, whose line discipline translates \n to \r\n -- so the LAST field on every
+# line arrives here with a carriage return glued to its value. A comparison
+# against "agree" then fails on a node that really did report `agree`, and the
+# run reports a disagreement it never measured. It cost one full rig run
+# (rd vms-94c) to find, and every extractor below strips it for that reason.
 final_field() {
 	# $1=tag $2=key
 	grep -a "RIG-$1-FINAL" "$OUT/node$1.ttyS1.log" 2>/dev/null | tail -n 1 \
-		| tr ' ' '\n' | sed -n "s/^$2=//p" | tail -n 1
+		| tr -d '\r' | tr ' ' '\n' | sed -n "s/^$2=//p" | tail -n 1
 }
 
 echo ""
@@ -214,6 +281,41 @@ anyone_claimed_membership() {
 	[ "$A_MEMBER" = "1" ] || [ "$B_MEMBER" = "1" ] || \
 	{ [ -n "$A_CSID" ] && [ "$A_CSID" != "-" ]; } || \
 	{ [ -n "$B_CSID" ] && [ "$B_CSID" != "-" ]; }
+}
+
+# --------------------------------------------------------------------------
+# rd vms-94c: pulling the cross-node facts out of the guests' own output
+#
+# Every one of these reads a line the GUEST printed from a value it had just
+# read back out of its executive. Nothing here is computed from the rig's
+# configuration, and nothing is inferred from one node's line about the other.
+# --------------------------------------------------------------------------
+
+# One `key=value` off a named RIG line. $1=tag $2=line-marker $3=key
+# $4=which occurrence (head/tail). An absent line yields the empty string,
+# which every caller below renders as "?" rather than as a zero.
+rig_field() {
+	grep -a "RIG-$1-$2 " "$OUT/node$1.ttyS1.log" 2>/dev/null | "${4:-tail}" -n 1 \
+		| tr -d '\r' | tr ' ' '\n' | sed -n "s/^$3=//p" | tail -n 1
+}
+
+# One `key=value` off a DLM ledger line taken at a named phase.
+# $1=tag $2=line-suffix (EMIT|LEG|POST) $3=phase $4=key
+dlm_field() {
+	grep -a "RIG-$1-DLM-$2 at=$3 " "$OUT/node$1.ttyS1.log" 2>/dev/null \
+		| tail -n 1 | tr -d '\r' | tr ' ' '\n' | sed -n "s/^$4=//p" | tail -n 1
+}
+
+# A number the guest printed, or 0 when the line is absent. Used ONLY for
+# comparisons that are already reported verbatim beside them.
+num() { case "$1" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+
+# Did this node's console take a bugcheck? The strings are the executive's own
+# and the kernel's own; a clean run has none of them. This is the half of the
+# never-crash-a-peer proof that a missing line could otherwise hide.
+console_panicked() {
+	grep -aqE 'Kernel panic|BUG: |Oops: |general protection|%CNXMAN, bugcheck|CLUEXIT' \
+		"$OUT/node$1.console.log" 2>/dev/null
 }
 
 echo ""
@@ -259,6 +361,172 @@ if [ "$MODE" = "noderive" ]; then
 	echo "  membership record, which is the rule the oracle settled."
 	echo "=========================================="
 	exit 0
+fi
+
+if [ "$MODE" = "xnode" ]; then
+	# ---- the six facts, each read off a guest line ----------------------
+	A_XRES=$(rig_field A XN-HOLD res);   B_XRES=$(rig_field B XN-HOLD res)
+	A_XMAS=$(rig_field A XN-HOLD master_csid)
+	B_XMAS=$(rig_field B XN-HOLD master_csid)
+	A_REL=$(num "$(dlm_field A EMIT after releases_sent)")
+	B_REL=$(num "$(dlm_field B EMIT after releases_sent)")
+	A_RNW=$(num "$(dlm_field A EMIT after releases_no_wire_op)")
+	B_RNW=$(num "$(dlm_field B EMIT after releases_no_wire_op)")
+	A_BLK=$(num "$(dlm_field A EMIT after blkasts_sent)")
+	B_BLK=$(num "$(dlm_field B EMIT after blkasts_sent)")
+	A_UNP=$(num "$(dlm_field A EMIT survival unparsed)")
+	B_UNP=$(num "$(dlm_field B EMIT survival unparsed)")
+	A_GONE=$(num "$(dlm_field A POST survival lock_gone)")
+	B_GONE=$(num "$(dlm_field B POST survival lock_gone)")
+	A_PROJ=$(final_field A projections); B_PROJ=$(final_field B projections)
+	W_DEQ=$(wire_saw deq); W_BLK=$(wire_saw blkast)
+
+	echo "  CROSS-NODE DLM RUN (rd vms-94c) -- every value below was read"
+	echo "  back out of the node's own executive, except the two WIRE counts,"
+	echo "  which come from the nodes' own passive captures:"
+	printf "    A: peer-mastered=%s master_csid=%s releases_sent=%s blkasts_sent=%s unparsed=%s projections=%s\n" \
+		"${A_XRES:-none}" "${A_XMAS:-?}" "$A_REL" "$A_BLK" "$A_UNP" "${A_PROJ:-?}"
+	printf "    B: peer-mastered=%s master_csid=%s releases_sent=%s blkasts_sent=%s unparsed=%s projections=%s\n" \
+		"${B_XRES:-none}" "${B_XMAS:-?}" "$B_REL" "$B_BLK" "$B_UNP" "${B_PROJ:-?}"
+	printf "    WIRE: op-0x03 deq frames=%s  op-0x04 blkast frames=%s\n" "$W_DEQ" "$W_BLK"
+	echo ""
+
+	XFAIL=0
+	# (1) The cluster must still be the cluster.
+	if ! cn2_reached; then
+		echo "  FAILED (1): the two nodes do not both report MEMBER with CN=2"
+		echo "  AFTER the cross-node phase -- so nothing measured after it"
+		echo "  can be attributed to a working cluster."
+		XFAIL=1
+	fi
+	# (2) A name must be mastered on the PEER, on both nodes, and the peer
+	#     it names must be the OTHER node's real CSID. This is the routing
+	#     fact; without it no frame that follows is cross-node at all.
+	if [ -z "$A_XRES" ] || [ -z "$B_XRES" ]; then
+		echo "  FAILED (2): a node found no resource its PEER masters. Rung"
+		echo "  A\" did not route a name off-node, so the emit paths were"
+		echo "  never entered. Read the RIG-*-XN-LOCAL lines: they carry the"
+		echo "  dir_csid the executive resolved for each candidate."
+		XFAIL=1
+	elif [ "$A_XMAS" != "$B_CSID" ] || [ "$B_XMAS" != "$A_CSID" ]; then
+		echo "  FAILED (2): the master CSID a node read back for its"
+		echo "  cross-node resource is not the OTHER node's CSID"
+		echo "  (A saw $A_XMAS, B holds $B_CSID; B saw $B_XMAS, A holds $A_CSID)."
+		XFAIL=1
+	fi
+	# (3a) The RELEASE, counted by the ARM THAT SENT IT, and seen on the wire.
+	if [ "$A_REL" -lt 1 ] || [ "$B_REL" -lt 1 ]; then
+		echo "  FAILED (3a): an op-0x03 \$DEQ was not emitted by both arms"
+		echo "  (A=$A_REL B=$B_REL)."
+		if [ "$A_RNW" = "0" ] && [ "$B_RNW" = "0" ] && \
+		   { [ "$A_GONE" -gt 0 ] || [ "$B_GONE" -gt 0 ]; }; then
+			echo ""
+			echo "  AND THE ARM NEVER GOT AS FAR AS REFUSING: releases_no_wire_op"
+			echo "  is 0 on both, so the \$DEQ never reached the requester FSM at"
+			echo "  all -- it died one step earlier, at posts_lock_gone"
+			echo "  (A=$A_GONE B=$B_GONE). The engine posts a release to the FORK"
+			echo "  thread carrying only the lock id, and the fork thread REBUILDS"
+			echo "  the request from the lock database (vms_dlm_scs.c"
+			echo "  dlm_arm_run_post -> vms_lock_dlm_proxy_refill_post). For a"
+			echo "  \$DEQ that rebuild can never succeed: the operation being"
+			echo "  transmitted is the one that destroys the proxy LKB it would be"
+			echo "  rebuilt from, and vms_deq_core tears that LKB down as soon as"
+			echo "  the post is queued. This is a PRODUCT GAP the rig measured,"
+			echo "  not a rig failure, and it is reported rather than worked"
+			echo "  around."
+		fi
+		XFAIL=1
+	fi
+	if [ "$W_DEQ" -lt 1 ]; then
+		echo "  FAILED (3a-wire): no op-0x03 frame appears in either node's"
+		echo "  capture. The executive counter and the wire agree that none"
+		echo "  crossed."
+		XFAIL=1
+	fi
+	# (3b) The BLOCKING AST, same two independent readings.
+	if [ "$A_BLK" -lt 1 ] || [ "$B_BLK" -lt 1 ]; then
+		echo "  FAILED (3b): an op-0x04 BLKAST was not emitted by both arms"
+		echo "  (A=$A_BLK B=$B_BLK). A master owes one only when a remote"
+		echo "  request QUEUES behind a lock held for a remote CSID -- check"
+		echo "  queued_no_reply and blkasts_no_wire_op on the same line."
+		XFAIL=1
+	fi
+	if [ "$W_BLK" -lt 1 ]; then
+		echo "  FAILED (3b-wire): no op-0x04 frame appears in either node's"
+		echo "  capture, so the arm's blkasts_sent cannot be corroborated."
+		XFAIL=1
+	fi
+	# (4) THE NEVER-CRASH-A-PEER ASSERTION. Each node must have RECEIVED
+	#     the peer's two frames and declined them: `unparsed` counts exactly
+	#     the inbound cat-0x02 bodies the arm could not parse, and the only
+	#     ones on this wire are op-0x03 and op-0x04.
+	if [ "$A_UNP" -lt 2 ] || [ "$B_UNP" -lt 2 ]; then
+		echo "  FAILED (4): a node did not record receiving BOTH of the"
+		echo "  peer's cross-node frames (A unparsed=$A_UNP B unparsed=$B_UNP;"
+		echo "  one op-0x03 + one op-0x04 each). Without the receive, the"
+		echo "  survival below proves nothing about them."
+		XFAIL=1
+	fi
+	# (5) ...and survived them, in the executive's own words.
+	if [ "$A_PROJ" != "agree" ] || [ "$B_PROJ" != "agree" ]; then
+		echo "  FAILED (5): a node's two membership projections DISAGREE"
+		echo "  after the frames arrived (A=$A_PROJ B=$B_PROJ)."
+		XFAIL=1
+	fi
+	for N in A B; do
+		if console_panicked "$N"; then
+			echo "  FAILED (5): node $N's console shows a bugcheck/panic."
+			XFAIL=1
+		fi
+	done
+
+	# ---- what HELD, itemised, pass or fail ------------------------------
+	#
+	# A red run is not an absence of evidence. The five properties below are
+	# independent, and a run that establishes four of them has established
+	# four of them -- saying so is the difference between a proof campaign and
+	# a pass/fail light. Each line is printed from the same executive-read
+	# variables the gates above tested, so it cannot drift from the verdict.
+	held() { [ "$1" = "1" ] && echo "  HELD        $2" || echo "  NOT PROVEN  $2"; }
+	echo "  --- what this run established ---"
+	held "$( { cn2_reached && [ "$A_PROJ" = agree ] && [ "$B_PROJ" = agree ]; } \
+		&& echo 1 || echo 0)" \
+		"both nodes MEMBER, CN=2, projections agree AFTER the phase"
+	held "$( { [ -n "$A_XRES" ] && [ -n "$B_XRES" ] && \
+		 [ "$A_XMAS" = "$B_CSID" ] && [ "$B_XMAS" = "$A_CSID" ]; } \
+		&& echo 1 || echo 0)" \
+		"a lock genuinely CROSSED: each node holds EX on a name its PEER masters"
+	held "$( { [ "$A_BLK" -ge 1 ] && [ "$B_BLK" -ge 1 ] && [ "$W_BLK" -ge 1 ]; } \
+		&& echo 1 || echo 0)" \
+		"op-0x04 BLKAST emitted by both arms AND seen on the wire"
+	held "$( { [ "$A_REL" -ge 1 ] && [ "$B_REL" -ge 1 ] && [ "$W_DEQ" -ge 1 ]; } \
+		&& echo 1 || echo 0)" \
+		"op-0x03 \$DEQ emitted by both arms AND seen on the wire"
+	held "$( { [ "$A_UNP" -ge 1 ] && [ "$B_UNP" -ge 1 ] && \
+		 ! console_panicked A && ! console_panicked B; } \
+		&& echo 1 || echo 0)" \
+		"NEVER CRASH A PEER: each node RECEIVED a frame it has no receive half"
+	echo "              for, DECLINED it (counted), and stayed a sane member"
+	echo ""
+
+	if [ "$XFAIL" = "0" ]; then
+		echo "  CROSS-NODE DLM PROOF PASSED (rd vms-94c)"
+		echo "  Each node took an EX lock on a resource ITS PEER masters --"
+		echo "  read back from the executive as master_csid=<the peer>,"
+		echo "  is_local_master=0 -- contended with a second incompatible"
+		echo "  request, and released. The arms report the two frames they"
+		echo "  really emitted (op-0x03 \$DEQ, op-0x04 BLKAST), each peer"
+		echo "  reports having RECEIVED and honestly DECLINED them, and both"
+		echo "  nodes are still MEMBERs with CN=2 and agreeing projections"
+		echo "  afterwards. NEVER CRASH A PEER: held, against a live peer"
+		echo "  executive."
+		echo "=========================================="
+		exit 0
+	fi
+	echo "=========================================="
+	echo "--- node A console tail ---"; tail -n 40 "$OUT/nodeA.console.log" 2>/dev/null
+	echo "--- node B console tail ---"; tail -n 40 "$OUT/nodeB.console.log" 2>/dev/null
+	exit 1
 fi
 
 if cn2_reached && [ "$A_ROLE" = "founder" ] && [ "$B_ROLE" = "joiner" ]; then

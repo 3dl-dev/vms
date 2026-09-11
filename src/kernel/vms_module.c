@@ -2063,6 +2063,17 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      */
     if (cmd == VMS_IOCTL_CLUSTER_DIAG_JOIN)
         return vms_ioctl_cluster_diag_join(NULL, arg);
+    /*
+     * rd vms-94c joins the same DISPATCH-ALWAYS group, for the same reason as
+     * E47 and E69: the DLM arm's emit ledger is a read-only projection of real
+     * executive state (struct vms_dlm_scs under the fork mutex), and the run
+     * that most needs to read it is one where the cross-node path did NOT work
+     * -- exactly the run where gating behind a registration would turn an
+     * honest "the arm never started" (SS$_NOSUCHDEV) into an -ESRCH the caller
+     * cannot tell apart from a broken ioctl.
+     */
+    if (cmd == VMS_IOCTL_CLUSTER_DIAG_DLM)
+        return vms_ioctl_cluster_diag_dlm(NULL, arg);
 
     /* All other ioctls require a registered process */
     proc = vms_proc_find_or_err();

@@ -474,6 +474,18 @@ uint32_t vms_kif_cluster_diag_csb(struct vms_cluster_diag_csb_args *args);
 uint32_t vms_kif_cluster_diag_join(struct vms_cluster_diag_join_args *args);
 
 /*
+ * vms_kif_cluster_diag_dlm - VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c): the lock
+ * manager's WIRE ARM -- its emit ledger, the connection manager's own
+ * independent count of the same cat-0x02 traffic, and the four endings a
+ * posted request can have. Same terms as the four above: read-only, the
+ * wrapper interprets nothing, and SS$_NOSUCHDEV with an all-zero row is the
+ * honest answer on a node whose DLM arm has not started -- which must NOT be
+ * rendered as "it emitted nothing" (INV-6).
+ * WIRED: SYS$SYSTEM:CNXTRACE.EXE (tools/vms_cnxtrace.c).
+ */
+uint32_t vms_kif_cluster_diag_dlm(struct vms_cluster_diag_dlm_args *args);
+
+/*
  * vms_kif_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): $GETSYI's
  * cluster item codes, projected from the connection manager's CLUB. WIRED:
  * sys$getsyi/sys$getsyiw (src/libvms/syssvc/sys_misc.c) answer every cluster

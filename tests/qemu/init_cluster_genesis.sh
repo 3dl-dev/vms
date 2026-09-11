@@ -43,6 +43,11 @@ RECNX=$(cmdline_val ovmx.recnx)
 CREDITS=$(cmdline_val ovmx.credits)
 SWVER=$(cmdline_val ovmx.swver)
 WINDOW=$(cmdline_val ovmx.window)
+# rd vms-94c: run the CROSS-NODE phase after the membership window, and how
+# long to stay up afterwards so the PEER's op-0x03/op-0x04 land while this
+# node is still running and can be read.
+XNODE=$(cmdline_val ovmx.xnode)
+LINGER=$(cmdline_val ovmx.linger)
 
 [ -z "$TAG" ] && TAG=X
 [ -z "$VAXCLUSTER" ] && VAXCLUSTER=2
@@ -51,6 +56,8 @@ WINDOW=$(cmdline_val ovmx.window)
 [ -z "$CREDITS" ] && CREDITS=32
 [ -z "$SWVER" ] && SWVER=OVMX0.6
 [ -z "$WINDOW" ] && WINDOW=90
+[ -z "$XNODE" ] && XNODE=0
+[ -z "$LINGER" ] && LINGER=30
 
 echo ""
 echo "=== OVMX cluster GENESIS rig: node $TAG ($SCSNODE/$SYSID) ==="
@@ -68,8 +75,14 @@ echo "eth0 mac=$MAC"
 # ---- passive wire capture (never a transmitter) ------------------------------
 # recv-only: this rig must never put a frame on the segment that the executive
 # did not build. The pcap is evidence, not traffic.
+# The capture must outlive everything the node does, or the very frames the
+# run exists to catch fall outside it. The cross-node phase (rd vms-94c) runs
+# AFTER the membership window and is followed by the linger, so its budget is
+# added explicitly rather than left to the old window+20 slack.
+CAPSECS=$((WINDOW + 20))
+[ "$XNODE" = "1" ] && CAPSECS=$((WINDOW + LINGER + 220))
 if [ -x /bin/sca_l2probe ]; then
-	sca_l2probe recv eth0 $((WINDOW + 20)) /tmp/$TAG.pcap >/tmp/cap.log 2>&1 &
+	sca_l2probe recv eth0 "$CAPSECS" /tmp/$TAG.pcap >/tmp/cap.log 2>&1 &
 fi
 
 # ---- load the real executive -------------------------------------------------
@@ -97,6 +110,8 @@ cluster_node \
 	--credits="$CREDITS" \
 	--swver="$SWVER" \
 	--window="$WINDOW" \
+	--xnode="$XNODE" \
+	--linger="$LINGER" \
 	> /dev/ttyS1 2>&1
 
 # ---- the executive's own transcript ------------------------------------------

@@ -376,6 +376,23 @@ int cnxman_join_owns_disk_client(struct vms_cluster *cl, vms_scs_sysid_t dst);
  * ========================================================================== */
 int cnxman_get_club(struct vms_cluster *cl, struct vms_club_view *out);
 
+/*
+ * THE DLM LEG'S OWN TRAFFIC COUNTERS (rd vms-94c), written into the five
+ * `leg_*` fields of `out` and NOTHING else in it.
+ *
+ * These are the connection manager's count of the cat-0x02 frames it really
+ * put on a connection and really routed to the arm -- one layer BELOW the
+ * arm's own emit counters, and therefore an independent second reading of the
+ * same events. The DLM arm's snapshot calls this so a cross-node proof can
+ * compare the two rather than trust either (INV-6).
+ *
+ * NO LOCKING OF ITS OWN: the caller holds the fork mutex, exactly as
+ * cnxman_club_project()'s callers do. It is a plain copy of five counters and
+ * touches nothing else.
+ */
+void cnxman_project_dlm_leg(const struct vms_cluster *cl,
+			    struct vms_dlm_scs_view *out);
+
 /* Walk the CSB table by index; SS$_NOSUCHDEV past the end. */
 int cnxman_get_csb(struct vms_cluster *cl, uint32_t index,
 		   struct vms_csb_view *out);

@@ -24,6 +24,14 @@
 #   docker build -f tests/qemu/Dockerfile.cluster-genesis-2node -t ovmx-genesis-rig .
 #   docker run --rm --device /dev/kvm ovmx-genesis-rig            # the CN=2 proof
 #   docker run --rm --device /dev/kvm -e RIG_NEGCTL=1 ovmx-genesis-rig  # teeth
+#   docker run --rm --device /dev/kvm -e RIG_MODE=xnode ovmx-genesis-rig
+#       ^ rd vms-94c: the CROSS-NODE DLM run. After CN=2 settles, each node
+#         takes an EX lock on a resource the PEER masters, contends with a
+#         second incompatible request, and releases -- driving the arm's
+#         op-0x03 $DEQ and op-0x04 BLKAST emits (rd vms-d7a3) in BOTH
+#         directions. It is also the never-crash-a-peer proof: neither opcode
+#         has a receive half yet, so each node must DECLINE the peer's frames,
+#         counted, and still be a member with CN=2 afterwards.
 # Exit 0 = the asserted outcome held, 1 = it did not.
 
 FROM ubuntu:24.04
@@ -39,6 +47,7 @@ RUN apt-get update && \
         busybox-static \
         cpio \
         musl-tools linux-libc-dev \
+        python3-minimal \
         "$QEMU_PKG" \
     && rm -rf /var/lib/apt/lists/*
 
@@ -92,6 +101,10 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules \
     echo "Initramfs: $(ls -lh /initramfs.cpio.gz | awk '{print $5}')"
 
 COPY tests/qemu/run_cluster_genesis_2node.sh /run_cluster_genesis_2node.sh
-RUN chmod +x /run_cluster_genesis_2node.sh
+# rd vms-94c: the wire half of the cross-node evidence. Runs on the HOST side of
+# the rig (not in a guest) over the reconstructed pcaps, decoding the cat-0x02
+# opcode with this codebase's own published offsets.
+COPY tests/qemu/scan_dlm_wire.py /scan_dlm_wire.py
+RUN chmod +x /run_cluster_genesis_2node.sh /scan_dlm_wire.py
 
 CMD ["/run_cluster_genesis_2node.sh"]

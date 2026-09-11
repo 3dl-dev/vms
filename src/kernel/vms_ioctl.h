@@ -1300,6 +1300,99 @@ _Static_assert(VMS_IOCTL_CLUSTER_DIAG_JOIN == 0xC420566Du,
                "VMS_IOCTL_CLUSTER_DIAG_JOIN encodes differently than the reference build");
 
 /*
+ * VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c). The lock manager's WIRE ARM read
+ * back: SDA's `SHOW LOCK`/`SHOW CLUSTER` have no column for it, because no
+ * other lock manager has a distributed arm whose emissions are gated the way
+ * this one's are -- so this is OVMX's own diagnostic and is named as such.
+ *
+ * WHY IT EXISTS, and why a pcap was not enough. The cross-node proof has to
+ * answer two DIFFERENT questions:
+ *
+ *   "did a byte reach the segment?"  -- a packet capture answers that, and the
+ *       rig already reconstructs one per node from the passive probe.
+ *   "is THIS EXECUTIVE'S ARM what emitted it?" -- nothing on the wire answers
+ *       that. A frame on a shared segment could have come from anywhere, and a
+ *       test harness that built one itself would look identical. Only the
+ *       counter the arm incremented AT THE MOMENT IT SENT proves authorship.
+ *
+ * So this ioctl projects struct vms_dlm_scs and its embedded requester FSM --
+ * the live objects the running arm has been incrementing -- through
+ * vms_dlm_scs_snapshot() under the fork mutex. It computes nothing, it holds
+ * nothing, and a node whose arm has not started is SS$_NOSUCHDEV with an
+ * all-zero row rather than a zero that could be mistaken for "sent none"
+ * (INV-6, rule 2 of vms_cluster_snapshot.h).
+ *
+ * The row struct mirrors src/kernel-core/vms_cluster_snapshot.h's
+ * vms_dlm_scs_view byte-for-byte -- the same "ONE facility source, duplicated
+ * struct declaration" shape as the CLUSTER_DIAG_PORT/_CONN/_CSB rows, because
+ * this header must stay includable with no kernel-core dependency. The
+ * duplication is pinned by a _Static_assert in src/kernel-core/vms_devtab.c.
+ *
+ * There is no `row` selector: the arm has exactly one projection. `pad0` keeps
+ * the row 8-byte aligned as every other args struct here does.
+ */
+struct vms_dlm_scs_view_wire {
+    uint8_t  lockdirwt;
+    uint8_t  rebuild_phase;
+    uint8_t  connected;
+    uint8_t  pad0;
+    uint32_t rebuild_generation;
+    uint32_t proxy_lkbs;
+    uint32_t mastered_resources;
+    uint32_t directory_entries;
+    uint32_t req_sent;
+    uint32_t req_received;
+    uint32_t grants_sent;
+    uint32_t grants_received;
+    uint32_t declined;
+    uint32_t rebuild_records_in;
+    uint32_t rebuild_records_out;
+    /* The emit ledger -- see vms_cluster_snapshot.h for why each refusal
+     * counter sits beside the emission it is the honest alternative to. */
+    uint32_t releases_sent;
+    uint32_t releases_no_wire_op;
+    uint32_t blkasts_sent;
+    uint32_t blkasts_no_wire_op;
+    uint32_t blkasts_received;
+    uint32_t blkasts_delivered;
+    uint32_t queued_no_reply;
+    uint32_t unparsed;
+    uint32_t foreign_refused;
+    /* The connection manager's own, independent count of the same traffic. */
+    uint32_t leg_sends;
+    uint32_t leg_sends_refused;
+    uint32_t leg_frames_rx;
+    uint32_t leg_replies_sent;
+    uint32_t leg_declined;
+    /* The post path's four endings -- see vms_cluster_snapshot.h for why a
+     * $DEQ can hit posts_lock_gone by construction. */
+    uint32_t posts_queued;
+    uint32_t posts_unqueued;
+    uint32_t posts_lock_gone;
+    uint32_t posts_refused;
+};
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 120,
+               "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
+
+struct vms_cluster_diag_dlm_args {
+    uint32_t status;                     /* return: SS$_ status              */
+    uint32_t pad0;
+    struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 128,
+               "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
+/*
+ * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
+ * above). The encoded value below was computed for THIS struct's size -- _IOWR
+ * folds sizeof(type) into the command word, so appending a counter silently
+ * changes the ioctl NUMBER, and this assert is what turns that into a build
+ * failure instead of an ENOTTY on a booted node.
+ */
+#define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC080566Eu,
+               "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
+
+/*
  * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, docs/plan-faithful-cluster-executive.md).
  * STARTUP.EXE's own case of SYSBOOT: hands the cluster SYSGEN parameters and
  * the CLUSTER_AUTHORIZE record it read off SYS$SYSTEM:OVMXVMSSYS.PAR

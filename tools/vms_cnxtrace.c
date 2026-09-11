@@ -50,7 +50,7 @@
 #include <string.h>
 
 #include "ssdef.h"          /* SS$_NORMAL / SS$_NOSUCHDEV -- the ONE table */
-#include "vms_kif.h"        /* vms_kif_cluster_diag_join + the args struct */
+#include "vms_kif.h"        /* vms_kif_cluster_diag_join/_dlm + the args structs */
 #include "cnxtrace_names.h" /* the ordinal->name tables (drift-gated) */
 
 /* Mirrors of the two kernel-core vocabularies this renderer switches on
@@ -279,6 +279,69 @@ static unsigned cnxtrace_walk(unsigned limit)
     return printed;
 }
 
+/*
+ * THE LOCK MANAGER'S WIRE ARM, printed after the join transcript (rd vms-94c).
+ *
+ * It belongs in THIS image for the reason the image exists at all: the
+ * executive has no console log, so a cross-node lock problem is wire-invisible
+ * in exactly the way a stalled join was. A pcap shows that a cat-0x02 frame
+ * crossed; it cannot show which node's arm built it, why an expected one was
+ * never built, or where a posted request died between the $DEQ that asked for
+ * it and the fork thread that would have sent it. These counters can, and they
+ * are the executive's own -- incremented at the moment each thing happened.
+ *
+ * SS$_NOSUCHDEV is a real and common state (no cluster, or before
+ * CLUSTER_START) and is printed as itself. It is NOT rendered as a row of
+ * zeros: "this node has no wire arm" and "this node's arm emitted nothing" are
+ * different facts, and printing the first as the second would put a fabricated
+ * measurement in a lab transcript (INV-6).
+ */
+static void cnxtrace_print_dlm(void)
+{
+    struct vms_cluster_diag_dlm_args a;
+    const struct vms_dlm_scs_view_wire *v = &a.dlm;
+    uint32_t st;
+
+    memset(&a, 0, sizeof(a));
+    st = vms_kif_cluster_diag_dlm(&a);
+    if (st == SS$_NOSUCHDEV) {
+        printf("%%CNXTRACE-I-NODLM, this node has no lock-manager wire arm: "
+               "there is no emit ledger to print\n");
+        return;
+    }
+    if (st != SS$_NORMAL) {
+        printf("%%CNXTRACE-W-NODLMREAD, the executive refused the DLM arm "
+               "read (SS$ %u)\n", (unsigned)st);
+        return;
+    }
+
+    printf("%%CNXTRACE-I-DLM, lock-manager wire arm: connected=%u lockdirwt=%u "
+           "gen=%u proxy_lkbs=%u\n",
+           (unsigned)v->connected, (unsigned)v->lockdirwt,
+           (unsigned)v->rebuild_generation, (unsigned)v->proxy_lkbs);
+    printf("%%CNXTRACE-I-DLMREQ, requests sent=%u received=%u grants sent=%u "
+           "received=%u declined=%u\n",
+           (unsigned)v->req_sent, (unsigned)v->req_received,
+           (unsigned)v->grants_sent, (unsigned)v->grants_received,
+           (unsigned)v->declined);
+    printf("%%CNXTRACE-I-DLMEMIT, releases sent=%u none=%u  blkasts sent=%u "
+           "none=%u rx=%u delivered=%u  queued=%u unparsed=%u foreign=%u\n",
+           (unsigned)v->releases_sent, (unsigned)v->releases_no_wire_op,
+           (unsigned)v->blkasts_sent, (unsigned)v->blkasts_no_wire_op,
+           (unsigned)v->blkasts_received, (unsigned)v->blkasts_delivered,
+           (unsigned)v->queued_no_reply, (unsigned)v->unparsed,
+           (unsigned)v->foreign_refused);
+    printf("%%CNXTRACE-I-DLMPOST, posts queued=%u unqueued=%u lock_gone=%u "
+           "refused=%u\n",
+           (unsigned)v->posts_queued, (unsigned)v->posts_unqueued,
+           (unsigned)v->posts_lock_gone, (unsigned)v->posts_refused);
+    printf("%%CNXTRACE-I-DLMLEG, connection manager: sends=%u refused=%u "
+           "frames_rx=%u replies_sent=%u declined=%u\n",
+           (unsigned)v->leg_sends, (unsigned)v->leg_sends_refused,
+           (unsigned)v->leg_frames_rx, (unsigned)v->leg_replies_sent,
+           (unsigned)v->leg_declined);
+}
+
 int main(int argc, char **argv)
 {
     struct vms_cluster_diag_join_args probe;
@@ -308,6 +371,7 @@ int main(int argc, char **argv)
     }
 
     printed = cnxtrace_walk(limit);
+    cnxtrace_print_dlm();
     printf("%%CNXTRACE-I-END, %u records printed\n", printed);
     return 0;
 }

@@ -1154,18 +1154,38 @@ int vms_dlm_scs_post_request(struct vms_cluster *cl, vms_csid_t dst_csid,
  * 10. Readback -- the same values a diagnostic projects (INV-6)
  * ========================================================================== */
 
-int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)
+/*
+ * THE EMIT LEDGER (rd vms-94c). Every field is a counter THIS arm incremented
+ * at the moment the thing happened -- `d->` for the master half, `d->req` for
+ * the requester FSM -- copied out, never recomputed and never derived from a
+ * frame count. Caller holds the fork mutex.
+ *
+ * Why it is projected at all: a pcap proves a byte reached the segment; only
+ * these prove that THIS executive's arm is what put it there.
+ */
+static void dlm_arm_project_emits(const struct vms_dlm_scs *d,
+				  struct vms_dlm_scs_view *out)
 {
-	struct vms_dlm_scs *d;
+	out->releases_sent       = d->req.releases_sent;
+	out->releases_no_wire_op = d->req.releases_no_wire_op;
+	out->blkasts_sent        = d->blkasts_sent;
+	out->blkasts_no_wire_op  = d->blkasts_no_wire_op;
+	out->blkasts_received    = d->req.blkasts_rx;
+	out->blkasts_delivered   = d->req.blkasts_delivered;
+	out->queued_no_reply     = d->queued_no_reply;
+	out->unparsed            = d->unparsed;
+	out->foreign_refused     = d->foreign_refused;
+	out->posts_queued        = d->posts_queued;
+	out->posts_unqueued      = d->posts_unqueued;
+	out->posts_lock_gone     = d->posts_lock_gone;
+	out->posts_refused       = d->posts_refused;
+}
 
-	if (cl == NULL || out == NULL)
-		return (int)SS__BADPARAM;
-	memset(out, 0, sizeof(*out));
-	if (cl->dlm == NULL)
-		return (int)SS__NOSUCHDEV;
-	d = cl->dlm;
-
-	vms_cluster_fork_enter(cl);
+/* The arm's own state and the request/grant tallies it has really seen. */
+static void dlm_arm_project_state(const struct vms_cluster *cl,
+				  const struct vms_dlm_scs *d,
+				  struct vms_dlm_scs_view *out)
+{
 	out->lockdirwt          = (uint8_t)cl->params.lockdirwt;
 	out->rebuild_generation = vms_ldwv_generation(&cl->club.ldwv);
 	/* "the VMS$VAXcluster CDT carrying cat-02 is open" -- read as the CLUB's
@@ -1179,6 +1199,27 @@ int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)
 	out->grants_received    = d->req.grants_rx;
 	out->declined           = d->declined + d->foreign_refused +
 				  d->no_delivery_proc;
+}
+
+int vms_dlm_scs_snapshot(struct vms_cluster *cl, struct vms_dlm_scs_view *out)
+{
+	struct vms_dlm_scs *d;
+
+	if (cl == NULL || out == NULL)
+		return (int)SS__BADPARAM;
+	memset(out, 0, sizeof(*out));
+	if (cl->dlm == NULL)
+		return (int)SS__NOSUCHDEV;
+	d = cl->dlm;
+
+	vms_cluster_fork_enter(cl);
+	dlm_arm_project_state(cl, d, out);
+	dlm_arm_project_emits(d, out);
+	/* The SECOND, independent reading of the same traffic, taken one layer
+	 * down in the connection manager (vms_cnxman.h). Not derived from the
+	 * arm's counters above: a disagreement between the two is information a
+	 * cross-node proof is entitled to see. */
+	cnxman_project_dlm_leg(cl, out);
 	vms_cluster_fork_leave(cl);
 	return (int)SS__NORMAL;
 }

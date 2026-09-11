@@ -16,10 +16,14 @@
 #
 # RIG_MODE selects the run: `proof` (A founds, B joins, CN=2), `negctl`
 # (VOTES=0 on both: nobody may found, so nobody may reach MEMBER or hold a
-# CSID) or `noderive` (node B's SCSSYSTEMID makes the two candidate CSID rules
+# CSID), `noderive` (node B's SCSSYSTEMID makes the two candidate CSID rules
 # disagree: the coordinator refuses, sends no op-0x06, and node B must stay NEW
 # -- the INV-6 control proving a joiner's MEMBER comes only from a real
-# wire-learned generation).
+# wire-learned generation), or `xnode` (rd vms-94c: the proof run PLUS a
+# cross-node DLM phase -- each node takes an EX lock on a resource the PEER
+# masters, contends, and releases, which drives the arm's op-0x03 $DEQ and
+# op-0x04 BLKAST emits in both directions and then asserts both nodes are still
+# MEMBERs with CN=2 after receiving frames neither has a receive half for).
 apiVersion: v1
 kind: Pod
 metadata:
@@ -31,12 +35,12 @@ spec:
   restartPolicy: Never
   containers:
     - name: rig
-      image: 192.168.2.43:30500/ovmx-genesis-rig:20
+      image: 192.168.2.43:30500/ovmx-genesis-rig:24
       imagePullPolicy: Always
       env:
-        #  proof | negctl | ambig  -- see run_cluster_genesis_2node.sh
+        #  proof | negctl | noderive | xnode  -- see run_cluster_genesis_2node.sh
         - name: RIG_MODE
-          value: "proof"
+          value: "xnode"
         - name: OUT_DIR
           value: /lab/genesis-rig-out
       securityContext:

@@ -1090,12 +1090,137 @@ static void test_client_response_fuzz(void)
            ITERS, ITERS, nsp_accepts, ct_accepts);
 }
 
+/*
+ * THE vms-6165 CLIENT FSM ORACLE SPECIMENS. Every array is the CTERM payload
+ * (frame bytes from absolute offset 47) of one NSP "data seg" of the ACCEPTED
+ * VAX2->VAX1 SET HOST in real-cterm-ci.pcap (link id 8194, the golden session
+ * that reached a live DCL '$'), copied verbatim.
+ */
+/* Client seg-3 (#44) and seg-4 (#46): the two fixed 09-envelopes after termchar. */
+static const uint8_t k_oracle_found_client_seg3[] = {
+    0x09, 0x00, 0x0b, 0x00, 0x17, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t k_oracle_found_client_seg4[] = {
+    0x09, 0x00, 0x16, 0x00, 0x13, 0x0c, 0x01, 0x00, 0x06, 0x00, 0x00,
+    0x00, 0x18, 0x00, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00, 0x18,
+    0x00, 0x32, 0x00, 0x00
+};
+/* Host read-characteristics solicit (#51) and the client's reply (#53), both
+ * echoing read handle 04 34. */
+static const uint8_t k_oracle_readattr_solicit[] = {
+    0x09, 0x00, 0x18, 0x00, 0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x27,
+    0x00, 0x0c, 0x00, 0x04, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x0c, 0x00, 0x00, 0x00
+};
+static const uint8_t k_oracle_readchar_reply[] = {
+    0x09, 0x00, 0x1a, 0x00, 0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x01,
+    0x00, 0x06, 0x00, 0x00, 0x00, 0x18, 0x00, 0x42, 0x20, 0x84, 0x00,
+    0xa0, 0x02, 0x00, 0x18, 0x00, 0x32, 0x00, 0x00
+};
+/* Host 02-08 screen write of the Username: prompt (#54); its displayed text. */
+static const uint8_t k_oracle_write_username[] = {
+    0x09, 0x00, 0x1d, 0x00, 0x02, 0x08, 0xb0, 0x00, 0x84, 0x00, 0x0c,
+    0x00, 0x14, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d,
+    0x0a, 0x55, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x3a, 0x20
+};
+static const uint8_t k_username_text[] = {
+    0x0d, 0x0a, 0x55, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x3a, 0x20
+};
+/* Client READ DATA for "SYSTEM"<CR> (#57). */
+static const uint8_t k_oracle_read_data_system[] = {
+    0x09, 0x00, 0x0f, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06,
+    0x00, 0x53, 0x59, 0x53, 0x54, 0x45, 0x4d, 0x0d
+};
+
+static void test_client_foundation_fsm(void)
+{
+    printf("[fsm] the vms-6165 host-speaks-first client foundation sequence +"
+           " terminal-I/O classifier, driven by fed real host specimens\n");
+
+    struct dnet_cterm_session s;
+    uint8_t out[128]; size_t n = 0; int prog = 0;
+
+    check(dnet_cterm_session_init(&s, DNET_CTERM_ROLE_TERMINAL) == DNET_CTERM_OK,
+          "client session init");
+    check(dnet_cterm_client_open(&s) == DNET_CTERM_OK &&
+          dnet_cterm_state_of(&s) == DNET_CTERM_S_BINDING,
+          "client_open arms the FSM (CLOSED -> BINDING) and sends nothing");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "HOST-FIRST: the client sends NOTHING until the host speaks");
+
+    check(dnet_cterm_client_found_rx(&s, k_oracle_found_host_seg1,
+              sizeof(k_oracle_found_host_seg1), &prog) == DNET_CTERM_OK && prog,
+          "host seg-1 advances the foundation gate");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg1) &&
+          memcmp(out, k_oracle_found_client_seg1, n) == 0,
+          "client replies with the BYTE-EXACT seg-1 (client_start)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "client then WAITS for the host's config envelope");
+
+    check(dnet_cterm_client_found_rx(&s, k_oracle_found_host_seg2,
+              sizeof(k_oracle_found_host_seg2), &prog) == DNET_CTERM_OK && prog,
+          "host's first 09-envelope advances the config gate");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg2_default) &&
+          memcmp(out, k_oracle_found_client_seg2_default, n) == 0,
+          "client burst #1 = BYTE-EXACT seg-2 termchar (WIDTH=132/PAGE=24)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg3) &&
+          memcmp(out, k_oracle_found_client_seg3, n) == 0,
+          "client burst #2 = BYTE-EXACT seg-3");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg4) &&
+          memcmp(out, k_oracle_found_client_seg4, n) == 0,
+          "client burst #3 = BYTE-EXACT seg-4");
+    check(dnet_cterm_is_bound(&s),
+          "after seg-4 the session is BOUND (foundation complete)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "no further foundation messages once BOUND");
+
+    /* Terminal-I/O classifier (BOUND phase). */
+    enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
+    uint8_t txt[128]; size_t tl = 0; uint8_t h[2] = { 0, 0 };
+    check(dnet_cterm_found_terminal_rx(k_oracle_write_username,
+              sizeof(k_oracle_write_username), &tk, txt, sizeof(txt), &tl, h)
+              == DNET_CTERM_OK && tk == DNET_CTERM_TK_WRITE &&
+          tl == sizeof(k_username_text) &&
+          memcmp(txt, k_username_text, tl) == 0,
+          "a 02-08 host write is classified WRITE, text = '\\r\\nUsername: '");
+    check(dnet_cterm_found_terminal_rx(k_oracle_readattr_solicit,
+              sizeof(k_oracle_readattr_solicit), &tk, NULL, 0, NULL, h)
+              == DNET_CTERM_OK && tk == DNET_CTERM_TK_READ_ATTR &&
+          h[0] == 0x04 && h[1] == 0x34,
+          "a 0f-00 host solicit is classified READ_ATTR, handle = 04 34");
+    check(dnet_cterm_found_client_readchar_build(h, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_readchar_reply) &&
+          memcmp(out, k_oracle_readchar_reply, n) == 0,
+          "the client's read-characteristics reply echoes handle 04 34,"
+          " BYTE-EXACT to the oracle (#53)");
+    check(dnet_cterm_found_read_data_build((const uint8_t *)"SYSTEM", 6, 0x0d,
+              out, sizeof(out), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_read_data_system) &&
+          memcmp(out, k_oracle_read_data_system, n) == 0,
+          "client READ DATA for 'SYSTEM'<CR> is BYTE-EXACT to the oracle (#57)");
+
+    /* Bounded against a truncated envelope: never over-read, classify OTHER. */
+    check(dnet_cterm_found_terminal_rx(k_oracle_write_username, 3, &tk,
+              txt, sizeof(txt), &tl, h) != DNET_CTERM_OK ||
+          tk == DNET_CTERM_TK_NONE || tk == DNET_CTERM_TK_OTHER,
+          "a 3-byte truncated envelope is refused/OTHER, never over-read");
+}
+
 int main(void)
 {
     printf("test_dnet_cterm: DECnet Phase IV CTERM (Command Terminal / SET HOST)\n");
     test_codec();
     test_sc_connect();
     test_foundation_oracle();
+    test_client_foundation_fsm();
     test_session();
     test_engine_e2e();
     test_client_response_fuzz();

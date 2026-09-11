@@ -1749,49 +1749,83 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             case DNET_LINK_EV_CONNECT_CONF:
                 log_ts(stdout);
                 printf(" DECNETD-I-LINKUP, logical link to %u.%u is RUN --"
-                       " sending CTERM Bind\n", parea, pnode);
+                       " awaiting host foundation (host speaks first)\n",
+                       parea, pnode);
                 fflush(stdout);
-                if (dnet_cterm_bind(&term, "OVMX$RTA1:", cpdu, sizeof(cpdu), &clen) != 0 ||
-                    cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0) {
-                    fprintf(stderr, "DECNETD-E-BIND, could not send CTERM Bind\n");
+                /* rd vms-6165: the real wire's CTERM foundation is HOST-FIRST.
+                 * Arm the client FSM and WAIT -- do NOT send a bind. The host
+                 * sends its seg-1; run_set_host's DATA handler drives replies. */
+                if (dnet_cterm_client_open(&term) != 0) {
+                    fprintf(stderr, "DECNETD-E-CTERMOPEN, could not arm CTERM"
+                                    " client foundation\n");
                     rc = 1; done = 1;
                 }
                 break;
             case DNET_LINK_EV_DATA: {
-                enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
-                if (dnet_cterm_rx(&term, eng->rx_data, eng->rx_datalen, &cev)
-                        != DNET_CTERM_OK)
+                if (dnet_cterm_state_of(&term) == DNET_CTERM_S_BINDING) {
+                    /* FOUNDATION PHASE (rd vms-6165): consume the host's
+                     * foundation message, then drain every client reply now due
+                     * (client seg-1, then the seg-2/3/4 burst). WIDTH/PAGE are
+                     * the captured 132/24 so every emitted byte is oracle-exact. */
+                    int prog = 0;
+                    if (dnet_cterm_client_found_rx(&term, eng->rx_data,
+                                                   eng->rx_datalen, &prog)
+                            != DNET_CTERM_OK)
+                        break;
+                    for (;;) {
+                        int frc = dnet_cterm_client_found_next(&term, 132, 24,
+                                                               cpdu, sizeof(cpdu),
+                                                               &clen);
+                        if (frc != DNET_CTERM_OK || clen == 0)
+                            break;
+                        if (cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0) {
+                            fprintf(stderr, "DECNETD-E-FOUND, could not send a"
+                                            " CTERM foundation reply\n");
+                            rc = 1; done = 1;
+                            break;
+                        }
+                    }
+                    if (!done && dnet_cterm_is_bound(&term) && !session_bound_ever) {
+                        session_bound_ever = 1;
+                        log_ts(stdout);
+                        printf(" DECNETD-I-BOUND, CTERM foundation negotiated --"
+                               " terminal session BOUND on circuit %s\n",
+                               eng->circuit);
+                        fflush(stdout);
+                        /* Hand echo/editing to the REMOTE session: pass-all the
+                         * LOCAL terminal through the executive driver. */
+                        sethost_set_line(ch_in, 1);
+                        passall_on = 1;
+                    }
                     break;
-                if (cev == DNET_CTERM_EV_BOUND) {
-                    session_bound_ever = 1;
-                    log_ts(stdout);
-                    printf(" DECNETD-I-BOUND, CTERM terminal session bound on"
-                           " circuit %s -- terminal is live\n", eng->circuit);
-                    fflush(stdout);
-                    /* Advertise our characteristics (VT100-class, 80x24). */
-                    if (dnet_cterm_send_characteristics(&term, 4, 80, 24,
-                            DNET_CTERM_CH_ECHO | DNET_CTERM_CH_WRAP,
-                            cpdu, sizeof(cpdu), &clen) == 0)
-                        cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
-                    /* Put the LOCAL terminal into PASS-ALL through the executive
-                     * terminal driver ($QIO IO$_SETMODE) so the REMOTE session
-                     * owns echo/editing. On a pipe/redirect the driver no-ops. */
-                    sethost_set_line(ch_in, 1);
-                    passall_on = 1;
-                } else if (cev == DNET_CTERM_EV_WRITE) {
-                    if (term.last.datalen) {
+                }
+
+                /* BOUND: real terminal I/O, all inside 09-envelopes. */
+                enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
+                uint8_t txt[DNET_CTERM_MAX_DATA];
+                size_t txtlen = 0;
+                uint8_t rhandle[2] = { 0, 0 };
+                if (dnet_cterm_found_terminal_rx(eng->rx_data, eng->rx_datalen,
+                                                 &tk, txt, sizeof(txt), &txtlen,
+                                                 rhandle) != DNET_CTERM_OK)
+                    break;
+                if (tk == DNET_CTERM_TK_WRITE) {
+                    term.writes_recv++;
+                    if (txtlen) {
                         struct _iosb iosb;
                         (void)sys$qiow(0, ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
-                                       term.last.data, (uint32_t)term.last.datalen,
-                                       0, 0, 0, 0);
+                                       txt, (uint32_t)txtlen, 0, 0, 0, 0);
                     }
-                } else if (cev == DNET_CTERM_EV_UNBOUND) {
-                    log_ts(stdout);
-                    printf(" DECNETD-I-UNBOUND, host released the terminal"
-                           " session on circuit %s\n", eng->circuit);
-                    fflush(stdout);
-                    done = 1;
+                } else if (tk == DNET_CTERM_TK_READ_ATTR) {
+                    /* Host solicited terminal characteristics: answer with the
+                     * oracle read-characteristics reply, echoing its handle. */
+                    if (dnet_cterm_found_client_readchar_build(rhandle, cpdu,
+                                                               sizeof(cpdu),
+                                                               &clen) == 0)
+                        cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
                 }
+                /* TK_OTHER / TK_NONE: NSP-ack only (dnet_recv_route already did),
+                 * nothing to display or answer. */
                 break;
             }
             case DNET_LINK_EV_DISCONNECT:
@@ -1817,10 +1851,14 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                                     inbuf, (uint32_t)sizeof(inbuf), 0, 0, 0, 0);
             uint32_t rn = (rst & 1) ? iosb.iosb$l_dev_depend : 0;
             if ((rst & 1) && rn > 0) {
-                /* Real keystrokes -> CTERM Read Data (terminator CR). */
-                if (dnet_cterm_read_data(&term, inbuf, (size_t)rn, 0x0d,
-                                         cpdu, sizeof(cpdu), &clen) == 0)
+                /* Real keystrokes -> CTERM Read Data (terminator CR), in the
+                 * oracle's enveloped form (rd vms-6165: 09-envelope wrapping
+                 * 03 00 00 00 00 00 <len> <bytes> <term>). */
+                if (dnet_cterm_found_read_data_build(inbuf, (size_t)rn, 0x0d,
+                                                     cpdu, sizeof(cpdu), &clen) == 0) {
+                    term.reads_sent++;
                     cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
+                }
             } else {
                 /* Local EOF (SS$_ENDOFFILE) or a channel error: stop soliciting
                  * input but KEEP the link open so the host's remaining output

@@ -385,6 +385,7 @@ int main(void)
          * nothing goes missing -- which is the property the reserved
          * completion work item exists to give.
          */
+        /* negctl: fork-worker-start-reports-success-unstarted */
         CHECK(result_ll(result, "IO_COMPLETED") + result_ll(result, "IO_ABANDONED")
                   == io_sub,
               "every ACCEPTED submission is accounted for exactly once: "

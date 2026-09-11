@@ -677,9 +677,10 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 THE FIX, MEASURED: the fork thread kept dispatching WHILE a served I/O was blocking on the worker -- it is no longer behind the disk
+every ACCEPTED submission is accounted for exactly once: completed, or abandoned by the worker stop
 EOF
                       ;;
-        knock_on_why)  echo "with no worker kthread running the blocking I/O, there is no in-flight served I/O for the fork thread to dispatch alongside, so WORK_DURING_IO stays 0.";;
+        knock_on_why)  echo "with no worker kthread running the blocking I/O, there is no in-flight served I/O for the fork thread to dispatch alongside (WORK_DURING_IO stays 0), and the accepted submissions are never completed nor abandoned-by-worker-stop, so the accounting assertion also reddens.";;
         esac;;
 
     fork-work-dispatch-uncounted)

@@ -401,6 +401,19 @@ int main(void)
     setvbuf(stdout, NULL, _IOLBF, 0);
     static char out[131072];
 
+    /*
+     * A BROKEN PIPE MUST BE A NAMED FAILURE, NOT A DEAD TEST (vms-b5b /
+     * test_syssvc_showterm.c). This suite writes to pipes shared with a
+     * DCL.EXE session child; if that child has already exited (e.g. a
+     * launch or registration failure) the parent's next write hits
+     * SIGPIPE, and the default disposition SIGKILLs the whole suite mid-run
+     * -- which hides every assertion after that point, including the ones
+     * this suite exists to make. With the signal ignored, that same write
+     * instead falls into a checked `if (write(...) != ...)` branch below
+     * and reports a named failure.
+     */
+    signal(SIGPIPE, SIG_IGN);
+
     printf("=== test_syssvc_spawn_users: SPAWN visibility + interactive/"
            "subprocess classification ===\n");
 

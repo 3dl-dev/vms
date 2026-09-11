@@ -170,10 +170,23 @@ int main(int argc, char *argv[])
     }
 
     /* The auxiliary-server accept loop: poll the listeners, dispatch the ready
-     * ones to their configured service image, reap exited services. */
+     * ones to their configured service image, reap exited services. `live` counts
+     * spawned service children so the loop can cap concurrency (rd vms-bb4, R4 G2). */
+    int live = 0;
     while (!g_stop) {
         int r, st;
         pid_t w;
+
+        /* Fork-flood back-pressure (R4 G2): at the child cap, stop selecting the
+         * listeners for POLLIN so new connections queue in the listen backlog
+         * instead of forking an unbounded number of children. Re-enabled as soon
+         * as a child exits and `live` drops back below TCPIP_INETD_MAXCHILD. */
+        {
+            short ev = tcpip_inetd_may_accept(live) ? POLLIN : 0;
+            for (i = 0; i < nsvc; i++)
+                if (pfd[i].fd >= 0)
+                    pfd[i].events = ev;
+        }
 
         r = poll(pfd, (nfds_t)nsvc, 1000);
         if (r < 0) {
@@ -183,11 +196,12 @@ int main(int argc, char *argv[])
         for (i = 0; i < nsvc && r > 0; i++) {
             if (pfd[i].fd < 0 || !(pfd[i].revents & POLLIN))
                 continue;
-            (void)tcpip_inetd_accept_dispatch(listen_h[i], &svcs[i], NULL);
+            if (tcpip_inetd_accept_dispatch(listen_h[i], &svcs[i], NULL) > 0)
+                live++;                         /* a service child was spawned */
         }
-        /* Reap any finished service images (non-blocking). */
+        /* Reap any finished service images (non-blocking); each exit frees a slot. */
         while ((w = waitpid(-1, &st, WNOHANG)) > 0)
-            ;
+            if (live > 0) live--;
     }
 
     for (i = 0; i < nsvc; i++)

@@ -239,6 +239,21 @@ int main(int argc, char *argv[])
               "pre-flight FAILS for a service whose image cannot be staged/executed (no bound-but-unserviceable facade)");
     }
 
+    /* ---- Fork-flood back-pressure gate (rd vms-bb4, R4 G2) ----------------
+     * The auxiliary server caps concurrent service children at
+     * TCPIP_INETD_MAXCHILD; below the cap it accepts, at/above the cap it applies
+     * back-pressure (stops selecting listeners) so a hostile client cannot fork-
+     * bomb it once a reading/slow service is enabled. Pure arithmetic -- no
+     * executive needed, runs on every platform. */
+    CHECK(tcpip_inetd_may_accept(0) == 1,
+          "fork-flood gate: accept when idle (0 children)");
+    CHECK(tcpip_inetd_may_accept(TCPIP_INETD_MAXCHILD - 1) == 1,
+          "fork-flood gate: accept just below the child cap");
+    CHECK(tcpip_inetd_may_accept(TCPIP_INETD_MAXCHILD) == 0,
+          "fork-flood gate: back-pressure AT the child cap (no unbounded fork)");
+    CHECK(tcpip_inetd_may_accept(TCPIP_INETD_MAXCHILD + 10) == 0,
+          "fork-flood gate: back-pressure above the child cap");
+
     if (!executive_present()) {
         /*
          * NO EXECUTIVE: the veneer's ovmx_socket() (and thus the auxiliary

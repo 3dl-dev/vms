@@ -111,6 +111,16 @@
 #define TCPIP_INETD_PATH_MAX     256
 #define TCPIP_INETD_ARGS_MAX     256
 
+/* Concurrency ceiling for spawned service children (rd vms-bb4, R4 G2). Real
+ * TCPIP$INETD caps concurrent service processes; without a cap, a hostile client
+ * that opens connections faster than a reading/slow service exits accumulates
+ * children unboundedly -- a fork-bomb-via-network the moment a reading service
+ * (the SSH rung) is enabled. The control loop counts live children and applies
+ * accept BACK-PRESSURE at the cap (stops selecting the listeners for POLLIN, so
+ * new SYNs queue in the listen backlog) until a child exits. Faithful: a
+ * concurrency limit, not a Linux sandbox. */
+#define TCPIP_INETD_MAXCHILD     64
+
 struct tcpip_service {
     char     name[TCPIP_INETD_NAME_MAX];
     uint16_t port;
@@ -377,6 +387,17 @@ static inline pid_t tcpip_inetd_accept_dispatch(int listen_h,
     if (peer)
         *peer = pa;
     return tcpip_inetd_spawn(a, svc);
+}
+
+/* The fork-flood back-pressure gate (rd vms-bb4, R4 G2): may the auxiliary server
+ * accept another inbound connection, given `live_children` service processes
+ * currently running? Returns 0 at/above TCPIP_INETD_MAXCHILD -- the control loop
+ * then stops selecting its listeners for POLLIN, so new connections queue in the
+ * listen backlog instead of forking an unbounded number of children, until a
+ * child exits and the count drops back below the cap. */
+static inline int tcpip_inetd_may_accept(int live_children)
+{
+    return live_children < TCPIP_INETD_MAXCHILD;
 }
 
 #endif /* _OVMX_TCPIP_INETD_H */

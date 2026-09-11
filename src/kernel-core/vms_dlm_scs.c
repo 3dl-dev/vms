@@ -389,14 +389,73 @@ static void dlm_arm_run_post(struct vms_dlm_scs *d, uint16_t kind,
 static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 {
 	d->eng_ops.post           = dlm_arm_post;
-	d->eng_ops.dir_resolve    = NULL;   /* filled below: different signature */
+	/* The directory ops are installed by vms_dlm_scs_start ONLY if a root
+	 * name's hash can be grounded -- see the long note above
+	 * dlm_arm_eng_dir_resolve for why it cannot be today, and what would
+	 * break if it were installed anyway. */
+	d->eng_ops.dir_resolve    = NULL;
 	d->eng_ops.dir_generation = NULL;
 	d->eng_ops.ctx            = d;
 }
 
-/* The engine's resolver has its own signature (uint32_t *csid, SS$_ return);
- * the FSM's has the cluster's (vms_csid_t *, 0/non-zero). Two thin adapters
- * over ONE vector read, rather than one adapter that lies about a type. */
+/*
+ * ===========================================================================
+ * THE ENGINE'S DIRECTORY RESOLVER IS DELIBERATELY *NOT* INSTALLED, AND THIS
+ * BLOCK IS WHY (rd vms-1ee; the measured finding, not an omission).
+ * ===========================================================================
+ *
+ * WHAT THE ENGINE DOES WITH ONE. vms_lock.c's dir_resolve() refuses, BEFORE it
+ * ever calls this op, when the resource block carries no WIRE-LEARNED hash:
+ *
+ *     if (!res->hash_known)
+ *             return SS__UNSUPPORTED;       // INV-6: wire-learned or nothing
+ *
+ * and vms_dlm_proxy.h states the consequence as the design's own rule: "ABSENT
+ * (NULL) MEANS 'NO CLUSTER', NOT 'REFUSE' ... It is only when a resolver IS
+ * installed that a resource with no wire-learned hash is refused." So
+ * installing this op is what turns the refusal on, for EVERY root name this
+ * node has never seen on the wire. tests/cluster/host/test_lock_dir.c pins both
+ * halves already.
+ *
+ * WHY THAT CANNOT BE TURNED ON TODAY -- THE HASH BOOTSTRAP DEADLOCK. A hash
+ * reaches a resource block from exactly one place: a cat-0x02 frame somebody
+ * ELSE sent (Davis p. 6-50, vms_lock_dlm_learn_dir_hash). In a cluster with a
+ * real VAX in it, hashes flow constantly and OVMX learns them -- but RULE C
+ * forbids routing DLM traffic to a system that has not proved it runs this
+ * implementation, so they cannot be used. In an OVMX-ONLY cluster RULE C
+ * permits the routing, but no member can originate the FIRST cat-0x02 frame:
+ * doing so needs a hash, computing one is Rule-8-forbidden (the function is not
+ * published, and a wrong value made a real VAX install OVMX as master of
+ * resources it did not master -- the 35/s grant storm), and this tree
+ * originates no op-0x0d rebuild record either. Both configurations therefore
+ * dead-end, and the dead end is UPSTREAM of this file.
+ *
+ * WHAT WOULD HAPPEN IF IT WERE INSTALLED ANYWAY. Not "no cross-node locking" --
+ * NO LOCKING AT ALL. Every first $ENQ on a clustered node, for any name, would
+ * return SS$_UNSUPPORTED: the ACP's volume lock, RMS, the XQP. A booted
+ * two-node OVMX cluster would stop mounting SYS$DISK. That is a functional
+ * break, and shipping one to enable an unreachable path would be the worst
+ * possible trade.
+ *
+ * SO THE ARM INSTALLS `post` AND NOTHING ELSE, AND SAYS SO. `post` is harmless
+ * without a resolver -- the engine only posts on a REMOTE route, and with no
+ * resolver there is none -- and it is installed so the day the bootstrap gap is
+ * closed, closing it is one line here plus the two adapters below, which are
+ * written, compiled and ready.
+ *
+ * THE REMAINING HONESTY DEBT, STATED PLAINLY. With no resolver the engine takes
+ * its "cluster of one" path and masters each resource locally on first use, so
+ * two OVMX members can each master the same name. Nothing about that reaches
+ * the wire -- no frame asserts it, GET_RESMASTER reports what this node really
+ * decided -- but it is not cluster-wide mastering and must not be described as
+ * such. It is also exactly the behaviour every OVMX cluster shipped to date
+ * has had (no requester ops were installed anywhere before this file existed),
+ * so this arm changes nothing about it; it only names it.
+ *
+ * The resolution is an architecture decision, not this file's: it needs a
+ * GROUNDED source for a root name's directory hash between proven-OVMX
+ * members. Escalated with the arm.
+ */
 static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint16_t hash16,
 					uint32_t *out_csid)
 {
@@ -411,6 +470,17 @@ static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint16_t hash16,
 static uint32_t dlm_arm_eng_dir_generation(void *ctx)
 {
 	return dlm_arm_dir_generation(ctx);
+}
+
+/*
+ * The one switch. It reads 0 for the reason above, and it is a FUNCTION rather
+ * than a comment so that turning it on is a reviewed edit in one place and so
+ * that the adapters above are referenced, compiled and type-checked rather than
+ * quietly rotting behind an #if 0.
+ */
+static int dlm_arm_directory_is_groundable(void)
+{
+	return 0;   /* no grounded source for a root name's hash -- see above */
 }
 
 /* ==========================================================================
@@ -816,8 +886,10 @@ int vms_dlm_scs_start(struct vms_cluster *cl)
 
 	dlm_arm_bind_req_ops(d);
 	dlm_arm_bind_engine_ops(d);
-	d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;
-	d->eng_ops.dir_generation = dlm_arm_eng_dir_generation;
+	if (dlm_arm_directory_is_groundable()) {
+		d->eng_ops.dir_resolve    = dlm_arm_eng_dir_resolve;
+		d->eng_ops.dir_generation = dlm_arm_eng_dir_generation;
+	}
 	dlm_arm_bind_role(d);
 	dlm_req_fsm_init(&d->req, &d->req_ops);
 

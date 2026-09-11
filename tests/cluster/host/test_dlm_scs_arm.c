@@ -193,6 +193,27 @@ static void arm_bindings(void)
 	       "... and the directory hash is learned from ANY sender, because "
 	       "learning emits nothing (Davis p. 6-50)");
 
+	/*
+	 * THE HASH BOOTSTRAP DEADLOCK, pinned as a PROPERTY of the shipped file
+	 * rather than as a comment. Installing the engine's directory resolver
+	 * is what turns on vms_lock.c's "no wire-learned hash -> SS$_UNSUPPORTED"
+	 * refusal (tests/cluster/host/test_lock_dir.c pins that), and no member
+	 * of an OVMX-only cluster can originate the first cat-0x02 frame that
+	 * would teach anyone a hash. Installing it would therefore break EVERY
+	 * first $ENQ on a clustered node -- the ACP's volume lock included -- to
+	 * enable a path that still could not run. So it is not installed, the
+	 * switch is a reviewed function rather than a silent omission, and the
+	 * adapters behind it are compiled and ready.
+	 */
+	has("if (dlm_arm_directory_is_groundable()) {",
+	    "the engine's directory resolver is installed ONLY behind a named "
+	    "groundability switch");
+	has("return 0;   /* no grounded source for a root name's hash",
+	    "... which reads 0 today: no grounded source for a root name's hash");
+	has("d->eng_ops.post           = dlm_arm_post;",
+	    "the engine's POST op is installed regardless -- harmless with no "
+	    "resolver, and ready when the gap closes");
+
 	/* CONDITION 4 and the honest floors. */
 	has("if (!vms_lock_dlm_have_delivery_proc())",
 	    "vms-c27 cond.4: no delivery proc, no service");

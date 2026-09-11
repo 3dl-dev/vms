@@ -99,6 +99,29 @@ struct vms_dlm_scs {
 
 	struct dlm_req_fsm           req;      /* the pure requester FSM      */
 	struct dlm_req_ops           req_ops;  /* its doors, bound below      */
+
+	/*
+	 * THE RELEASE QUEUE (rd vms-49f8) and the lock that makes it a thread
+	 * crossing. Everything else this arm posts is REBUILT on the fork
+	 * thread from the lock database; a $DEQ cannot be, because the $DEQ is
+	 * what destroys the lock block (vms_dlm_scs_fsm.h §12). So a release is
+	 * SNAPSHOTTED here in the releaser's own context -- out of the post the
+	 * engine just filled from the live LKB -- and the fork thread emits
+	 * from that.
+	 *
+	 * THE LOCK, AND WHY IT IS THIS CLASS AND NOT THE FORK MUTEX. The
+	 * stager runs in process context ($DEQ's own thread, and image
+	 * rundown's sweep) and the claimer runs on the fork thread, so the
+	 * queue needs mutual exclusion of its own. It may NOT be the fork mutex:
+	 * design §3.3 forbids a lock-manager path from taking it, which is the
+	 * very reason the post is queued rather than sent inline. exec_lock_t is
+	 * the engine's own class (res->lock) and the fork thread already nests
+	 * it under the fork mutex on every refill, so the order fork mutex ->
+	 * this lock is the established one; nothing takes the fork mutex while
+	 * holding this, and the critical sections are a struct copy.
+	 */
+	struct dlm_relq              relq;
+	exec_lock_t                  relq_lock;
 	struct vms_dlm_requester_ops eng_ops;  /* the engine's door to us     */
 	struct dlm_scs_role_ops      role;     /* the CM's door to us         */
 
@@ -137,6 +160,13 @@ struct vms_dlm_scs {
 	uint32_t posts_unqueued;      /* the fork queue would not take it     */
 	uint32_t posts_lock_gone;     /* the proxy was released in between    */
 	uint32_t posts_refused;       /* the FSM refused: nothing was sent    */
+
+	/* The RELEASE path's own three (rd vms-49f8). A release is staged, not
+	 * rebuilt, so it fails in different places than a request does. */
+	uint32_t releases_staged;     /* snapshotted from a live proxy LKB    */
+	uint32_t releases_no_slot;    /* the queue was full: NOTHING staged,  */
+				       /* and the releaser is told so          */
+	uint32_t releases_stale;      /* a work item naming no staged release */
 
 	uint32_t transitions_begun;
 	uint32_t transitions_ended;
@@ -351,6 +381,106 @@ static uint16_t dlm_arm_op_to_work_kind(uint32_t op)
 	}
 }
 
+/* ---- the release queue, each half under the arm's own lock ------------- */
+
+static enum dlm_req_status dlm_arm_relq_stage(struct vms_dlm_scs *d,
+					      const struct vms_dlm_proxy_post *p,
+					      uint32_t *slot, uint32_t *seq)
+{
+	enum dlm_req_status st;
+
+	exec_lock(&d->relq_lock);
+	st = dlm_relq_stage(&d->relq, p, slot, seq);
+	exec_unlock(&d->relq_lock);
+	return st;
+}
+
+static enum dlm_req_status dlm_arm_relq_claim(struct vms_dlm_scs *d,
+					      uint32_t slot, uint32_t seq,
+					      struct vms_dlm_proxy_post *out)
+{
+	enum dlm_req_status st;
+
+	exec_lock(&d->relq_lock);
+	st = dlm_relq_claim(&d->relq, slot, seq, out);
+	exec_unlock(&d->relq_lock);
+	return st;
+}
+
+static void dlm_arm_relq_abandon(struct vms_dlm_scs *d, uint32_t slot,
+				 uint32_t seq)
+{
+	exec_lock(&d->relq_lock);
+	dlm_relq_abandon(&d->relq, slot, seq);
+	exec_unlock(&d->relq_lock);
+}
+
+/* Hand ONE work item to the fork thread. Nonzero means it was not taken, and
+ * then the caller still owns whatever it staged for that item. */
+static int dlm_arm_queue_work(struct vms_dlm_scs *d, uint16_t kind,
+			      uint32_t arg0, uint32_t arg1)
+{
+	struct cf_work w;
+
+	memset(&w, 0, sizeof(w));
+	w.owner = (uint16_t)CF_OWNER_DLM;
+	w.kind  = kind;
+	w.arg0  = arg0;
+	w.arg1  = arg1;
+	if (cf_post(d->cl->fork, &w) != CF_OK) {
+		d->posts_unqueued++;
+		return -1;
+	}
+	d->posts_queued++;
+	return 0;
+}
+
+/*
+ * A RELEASE IS STAGED, NOT REBUILT (rd vms-49f8).
+ *
+ * `p` is the post vms_lock.c's dlm_proxy_fill_post() filled from the LIVE proxy
+ * LKB under res->lock, a few instructions before vms_deq_core tears that LKB
+ * down (or, on the rundown path, before lock_teardown_locked does). It is the
+ * LAST moment at which this release exists in the lock database, and this is
+ * the function that keeps it: the four fields a cat-0x02 op-0x03 asserts are
+ * snapshotted into the arm's own queue, and the fork thread emits from that.
+ *
+ * THIS IS WHY THE op-0x03 EMIT HAS A CALLER AT ALL. Before this, the work item
+ * carried only the lock id and the fork thread called `refill_post` -- which
+ * answered SS$_IVLOCKID, correctly, because the lock was already gone. The
+ * measurement on the live 2-node rig was `releases_sent=0` with
+ * `posts_lock_gone=2`: not a gate refusing, a caller that could never arrive.
+ *
+ * The work item carries the (slot, generation) pair and NOT the release's
+ * fields: what crosses to the fork thread is a handle to executive state this
+ * arm holds, never wire content copied into a message.
+ */
+static uint32_t dlm_arm_post_release(struct vms_dlm_scs *d,
+				     const struct vms_dlm_proxy_post *p)
+{
+	uint32_t slot = 0u, seq = 0u;
+	enum dlm_req_status st;
+
+	st = dlm_arm_relq_stage(d, p, &slot, &seq);
+	if (st == DLM_REQ_E_NOSLOT) {
+		/* Nothing staged and nothing sent: the releaser is told, and the
+		 * master's belief that it still holds the lock is the
+		 * departure/rebuild machinery's to reconcile -- exactly as
+		 * vms_lock.c's $DEQ already documents for a failed post. */
+		d->releases_no_slot++;
+		return SS__INSFMEM;
+	}
+	if (st != DLM_REQ_OK)
+		return SS__BADPARAM;
+	d->releases_staged++;
+
+	if (dlm_arm_queue_work(d, DLM_ARM_WORK_POST_DEQ, slot, seq) != 0) {
+		dlm_arm_relq_abandon(d, slot, seq);
+		return SS__INSFMEM;
+	}
+	return SS__NORMAL;
+}
+
 /*
  * THE ENGINE POSTED A REQUEST, FROM PROCESS CONTEXT ($ENQ's own thread).
  *
@@ -371,11 +501,15 @@ static uint16_t dlm_arm_op_to_work_kind(uint32_t op)
  * on another thread. A lock released in between makes the refill fail and the
  * transmission is abandoned -- which is correct, because there is no longer a
  * lock to send a frame about.
+ *
+ * AND THE ONE OPERATION THAT CANNOT WORK THAT WAY IS THE RELEASE (rd vms-49f8).
+ * A $DEQ does not leave a lock behind to re-read: it IS the teardown. So a
+ * release takes the staged path above instead -- snapshotted here, in the
+ * releaser's own context, while the LKB is still real.
  */
 static uint32_t dlm_arm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
-	struct cf_work w;
 	uint16_t kind;
 
 	if (d == NULL || d->cl == NULL || p == NULL)
@@ -386,31 +520,53 @@ static uint32_t dlm_arm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 	if (kind == 0u)
 		return SS__BADPARAM;
 
-	memset(&w, 0, sizeof(w));
-	w.owner = (uint16_t)CF_OWNER_DLM;
-	w.kind  = kind;
-	w.arg0  = p->req_lkid;
-	w.arg1  = p->dst_csid;
-	if (cf_post(d->cl->fork, &w) != CF_OK) {
-		d->posts_unqueued++;
-		return SS__INSFMEM;
-	}
-	d->posts_queued++;
-	return SS__NORMAL;
+	if (kind == DLM_ARM_WORK_POST_DEQ)
+		return dlm_arm_post_release(d, p);
+
+	return dlm_arm_queue_work(d, kind, p->req_lkid,
+				  (uint32_t)p->dst_csid) == 0 ?
+	       (uint32_t)SS__NORMAL : (uint32_t)SS__INSFMEM;
 }
 
-/* The fork-thread half of the post: rebuild it from the lock database, then
- * drive the FSM. Every non-OK outcome is the FSM's own counted refusal. */
+/* The fork-thread half of an ENQ/CONVERT post: rebuild it from the lock
+ * database, then drive the FSM. Every non-OK outcome is the FSM's own counted
+ * refusal. A RELEASE never arrives here -- it has no lock left to rebuild from
+ * and takes dlm_arm_run_release below. */
 static void dlm_arm_run_post(struct vms_dlm_scs *d, uint16_t kind,
 			     uint32_t req_lkid, uint32_t dst_csid)
 {
 	struct vms_dlm_proxy_post p;
 	uint32_t op = dlm_arm_work_kind_to_op(kind);
 
-	if (op == 0u)
+	if (op == 0u || op == VMS_DLM_POST_DEQ)
 		return;
 	if (dlm_arm_refill_post(d, req_lkid, op, (vms_csid_t)dst_csid, &p) != 0) {
 		d->posts_lock_gone++;
+		return;
+	}
+	if (dlm_req_fsm_post(&d->req, &p) != DLM_REQ_OK)
+		d->posts_refused++;
+}
+
+/*
+ * The fork-thread half of a RELEASE: CLAIM the snapshot this work item names
+ * and drive the FSM from it. The gates are untouched and all of them are
+ * downstream of here -- dlm_req_fsm_post applies the all-OVMX gate and the
+ * codec's lock-id refusal, and cnxman_dlm_send applies RULE C per destination --
+ * so a staged release toward a system this executive cannot prove runs this
+ * implementation is still counted and still not emitted.
+ *
+ * A claim that names no staged release (a duplicate work item, or a queue reset
+ * by a cluster stop) emits NOTHING and is counted: a release is transmitted once
+ * or not at all.
+ */
+static void dlm_arm_run_release(struct vms_dlm_scs *d, uint32_t slot,
+				uint32_t seq)
+{
+	struct vms_dlm_proxy_post p;
+
+	if (dlm_arm_relq_claim(d, slot, seq, &p) != DLM_REQ_OK) {
+		d->releases_stale++;
 		return;
 	}
 	if (dlm_req_fsm_post(&d->req, &p) != DLM_REQ_OK)
@@ -1059,6 +1215,14 @@ static void dlm_arm_work_handler(void *ctx, const struct cf_work *w)
 		dlm_arm_arm_beat(d);
 		return;
 	}
+	/* A release names a STAGED snapshot (arg0 = slot, arg1 = generation);
+	 * every other post names a LOCK to rebuild from (arg0 = lock id, arg1 =
+	 * destination). Two work kinds, two sources, neither of them a wire
+	 * value carried across the context switch. */
+	if (w->kind == (uint16_t)DLM_ARM_WORK_POST_DEQ) {
+		dlm_arm_run_release(d, w->arg0, w->arg1);
+		return;
+	}
 	dlm_arm_run_post(d, w->kind, w->arg0, w->arg1);
 }
 
@@ -1087,6 +1251,11 @@ int vms_dlm_scs_start(struct vms_cluster *cl)
 	dlm_arm_bind_engine_ops(d);
 	dlm_arm_bind_role(d);
 	dlm_req_fsm_init(&d->req, &d->req_ops);
+
+	/* The release queue, empty, BEFORE the engine's ops are installed below
+	 * -- the first $DEQ can arrive the instant they are. */
+	exec_lock_init(&d->relq_lock);
+	dlm_relq_init(&d->relq);
 
 	(void)cf_set_work_handler(cl->fork, CF_OWNER_DLM, dlm_arm_work_handler,
 				  d);
@@ -1123,6 +1292,12 @@ void vms_dlm_scs_stop(struct vms_cluster *cl)
 
 	cf_timer_cancel(cl->fork, CF_OWNER_DLM, DLM_ARM_TIMER_BEAT, 0u);
 	(void)cf_set_work_handler(cl->fork, CF_OWNER_DLM, NULL, NULL);
+
+	/* A release still staged when the cluster stops is NOT transmitted:
+	 * there is no connection left to transmit it on, and inventing one is
+	 * the thing this stack does not do. It dies with the queue, and the
+	 * master's view is the departure/rebuild machinery's to reconcile. */
+	exec_lock_destroy(&d->relq_lock);
 
 	cl->dlm = NULL;
 	exec_free(d);

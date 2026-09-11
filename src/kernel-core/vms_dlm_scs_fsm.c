@@ -1550,3 +1550,171 @@ const char *dlm_req_state_name(enum dlm_req_state s)
 	default:                 return "?";
 	}
 }
+
+/* ==========================================================================
+ * 13. THE RELEASE QUEUE (rd vms-49f8)
+ *
+ * The thread crossing a $DEQ needs and no other operation does: the release
+ * DESTROYS the lock block a later refill would read, so the fork thread emits
+ * from what the engine really read at release time. The header's §12 carries
+ * the full rationale -- above all why a snapshot of a completed release is not
+ * a cache, and why the record holds four fields and not a post's worth.
+ *
+ * Pure: no lock, no clock, no call out. The glue owns the instance and the
+ * serialisation.
+ * ========================================================================== */
+
+void dlm_relq_init(struct dlm_relq *q)
+{
+	if (q == (struct dlm_relq *)0)
+		return;
+	dq_bzero(q, (uint32_t)sizeof(*q));
+	q->next_seq = 1u;   /* 0 is "no staging": never handed out */
+}
+
+/* The next generation stamp. Wraps past 0, because 0 is the free marker and a
+ * slot stamped 0 would be claimable by a work item that named nothing. */
+static uint32_t relq_next_seq(struct dlm_relq *q)
+{
+	uint32_t s = q->next_seq++;
+
+	if (q->next_seq == 0u)
+		q->next_seq = 1u;
+	return s == 0u ? 1u : s;
+}
+
+/* The first free slot, or DLM_RELQ_SLOTS when the queue is full. */
+static uint32_t relq_free_slot(const struct dlm_relq *q)
+{
+	uint32_t i;
+
+	for (i = 0u; i < DLM_RELQ_SLOTS; i++) {
+		if (q->slot[i].busy == 0u)
+			return i;
+	}
+	return DLM_RELQ_SLOTS;
+}
+
+/*
+ * Is this post a RELEASE this queue may stage? A post of another operation does
+ * not belong here (those refill), and a release with no handle of our own is
+ * the engine's own refusal mirrored -- the value that is never a lock id.
+ */
+static int relq_post_is_release(const struct vms_dlm_proxy_post *p)
+{
+	return p != (const struct vms_dlm_proxy_post *)0 &&
+	       p->op == VMS_DLM_POST_DEQ &&
+	       p->req_lkid != VMS_DLM_LKID_UNSET;
+}
+
+/* The snapshot itself: four executive reads out of the post, and nothing else
+ * is copied -- see the header's "FOUR FIELDS" note. */
+static void relq_record_from_post(struct dlm_relq_rec *rec,
+				  const struct vms_dlm_proxy_post *p)
+{
+	rec->req_lkid    = p->req_lkid;
+	rec->master_lkid = p->master_lkid;
+	rec->dst_csid    = p->dst_csid;
+	rec->mode        = (uint8_t)p->lkmode;
+}
+
+enum dlm_req_status dlm_relq_stage(struct dlm_relq *q,
+				   const struct vms_dlm_proxy_post *p,
+				   uint32_t *out_slot, uint32_t *out_seq)
+{
+	uint32_t i;
+
+	if (q == (struct dlm_relq *)0 || out_slot == (uint32_t *)0 ||
+	    out_seq == (uint32_t *)0)
+		return DLM_REQ_E_INVAL;
+	if (!relq_post_is_release(p))
+		return DLM_REQ_E_INVAL;
+
+	i = relq_free_slot(q);
+	if (i >= DLM_RELQ_SLOTS) {
+		q->full_refused++;
+		return DLM_REQ_E_NOSLOT;
+	}
+
+	dq_bzero(&q->slot[i], (uint32_t)sizeof(q->slot[i]));
+	relq_record_from_post(&q->slot[i].rec, p);
+	q->slot[i].seq  = relq_next_seq(q);
+	q->slot[i].busy = 1u;
+	q->staged++;
+
+	*out_slot = i;
+	*out_seq  = q->slot[i].seq;
+	return DLM_REQ_OK;
+}
+
+/* Does (slot, seq) name a staged release? The whole anti-double-emit rule. */
+static int relq_slot_matches(const struct dlm_relq *q, uint32_t slot,
+			     uint32_t seq)
+{
+	return slot < DLM_RELQ_SLOTS && seq != 0u &&
+	       q->slot[slot].busy != 0u && q->slot[slot].seq == seq;
+}
+
+static void relq_slot_free(struct dlm_relq *q, uint32_t slot)
+{
+	dq_bzero(&q->slot[slot], (uint32_t)sizeof(q->slot[slot]));
+}
+
+/*
+ * The post the FSM takes, built from the record ALONE. Zeroed first, so every
+ * field a release does not carry is a zero this function wrote rather than a
+ * value some earlier request left behind: `to_directory` 0 (a release is
+ * addressed to the master), `dir_hash_known` 0 (a release carries no directory
+ * index), no resource name and no value block.
+ */
+static void relq_post_from_record(struct vms_dlm_proxy_post *out,
+				  const struct dlm_relq_rec *rec)
+{
+	dq_bzero(out, (uint32_t)sizeof(*out));
+	out->op          = VMS_DLM_POST_DEQ;
+	out->dst_csid    = rec->dst_csid;
+	out->req_lkid    = rec->req_lkid;
+	out->master_lkid = rec->master_lkid;
+	out->lkmode      = rec->mode;
+}
+
+enum dlm_req_status dlm_relq_claim(struct dlm_relq *q, uint32_t slot,
+				   uint32_t seq, struct vms_dlm_proxy_post *out)
+{
+	if (q == (struct dlm_relq *)0 || out == (struct vms_dlm_proxy_post *)0)
+		return DLM_REQ_E_INVAL;
+	if (!relq_slot_matches(q, slot, seq)) {
+		q->stale_refused++;
+		return DLM_REQ_E_NOLOCK;
+	}
+
+	relq_post_from_record(out, &q->slot[slot].rec);
+	relq_slot_free(q, slot);
+	q->claimed++;
+	return DLM_REQ_OK;
+}
+
+void dlm_relq_abandon(struct dlm_relq *q, uint32_t slot, uint32_t seq)
+{
+	if (q == (struct dlm_relq *)0)
+		return;
+	if (!relq_slot_matches(q, slot, seq)) {
+		q->stale_refused++;
+		return;
+	}
+	relq_slot_free(q, slot);
+	q->abandoned++;
+}
+
+uint32_t dlm_relq_pending(const struct dlm_relq *q)
+{
+	uint32_t i, n = 0u;
+
+	if (q == (const struct dlm_relq *)0)
+		return 0u;
+	for (i = 0u; i < DLM_RELQ_SLOTS; i++) {
+		if (q->slot[i].busy != 0u)
+			n++;
+	}
+	return n;
+}

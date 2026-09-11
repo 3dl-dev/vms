@@ -1559,6 +1559,31 @@ struct pe_vc *pe_fsm_vc_by_sysid(struct pe_fsm *f, vms_scs_sysid_t sysid)
 	return NULL;
 }
 
+int pe_fsm_peer_swver(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
+		      uint32_t cap, uint8_t *out_len)
+{
+	struct pe_vc *vc = pe_fsm_vc_by_sysid(f, sysid);
+	uint32_t i, n;
+
+	if (out == NULL || out_len == NULL || cap == 0u)
+		return -1;
+	*out_len = 0u;
+	if (vc == NULL || !vc->peer_ident_valid)
+		return -1;   /* no formation body arrived: we were not told */
+
+	n = (uint32_t)VMS_SCS_START_SWVER_LEN;
+	if (n > cap)
+		n = cap;
+	/* Trailing blanks/NULs are padding, not content (SS4(g) blank-pads). */
+	while (n > 0u && (vc->peer_swver[n - 1u] == (uint8_t)' ' ||
+			  vc->peer_swver[n - 1u] == 0u))
+		n--;
+	for (i = 0; i < n; i++)
+		out[i] = vc->peer_swver[i];
+	*out_len = (uint8_t)n;
+	return 0;
+}
+
 static struct pe_vc *vc_by_channel(struct pe_fsm *f, uint32_t ch_index)
 {
 	uint32_t i;

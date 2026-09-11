@@ -615,6 +615,14 @@ int pe_send_refusal(struct vms_pe *pe, vms_scs_sysid_t dst,
 		       : (int)SS__NOSUCHDEV;
 }
 
+int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
+		  uint32_t cap, uint8_t *out_len)
+{
+	if (pe == (struct vms_pe *)0)
+		return -1;
+	return pe_fsm_peer_swver(&pe->fsm, sysid, out, cap, out_len);
+}
+
 int pe_addr(struct vms_pe *pe, vms_scs_sysid_t dst, struct vms_scs_addr *out)
 {
 	if (pe == (struct vms_pe *)0 || out == (struct vms_scs_addr *)0)

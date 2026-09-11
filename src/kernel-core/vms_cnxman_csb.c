@@ -721,6 +721,36 @@ void cnxman_csb_set_lockdirwt(struct vms_csb *csb, uint8_t lockdirwt)
 	csb->lockdirwt_valid = 1u;
 }
 
+void cnxman_csb_set_swver(struct vms_csb *csb, const uint8_t *swver,
+			  uint8_t len, const uint8_t *own, uint8_t own_len)
+{
+	uint32_t i;
+	int same;
+
+	if (csb == NULL)
+		return;
+	if (swver == NULL || len == 0u) {
+		for (i = 0; i < (uint32_t)VMS_CLUSTER_SWVER_LEN; i++)
+			csb->peer_swver[i] = 0u;
+		csb->peer_swver_len = 0u;
+		csb->peer_is_ours = 0u;   /* nothing advertised is not proof */
+		return;
+	}
+	if (len > (uint8_t)VMS_CLUSTER_SWVER_LEN)
+		len = (uint8_t)VMS_CLUSTER_SWVER_LEN;
+	for (i = 0; i < (uint32_t)VMS_CLUSTER_SWVER_LEN; i++)
+		csb->peer_swver[i] = (i < (uint32_t)len) ? swver[i] : 0u;
+	csb->peer_swver_len = len;
+
+	/* THE DERIVATION, in the one place both tokens are in scope. */
+	same = (own != NULL && own_len != 0u && own_len == len);
+	for (i = 0; same && i < (uint32_t)len; i++) {
+		if (own[i] != swver[i])
+			same = 0;
+	}
+	csb->peer_is_ours = (uint8_t)(same ? 1 : 0);
+}
+
 void cnxman_csb_set_remote_port_secs(struct vms_csb *csb, uint32_t secs)
 {
 	if (csb == NULL)

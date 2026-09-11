@@ -364,6 +364,10 @@ int pe_send_refusal(struct vms_pe *pe, vms_scs_sysid_t dst,
  */
 int pe_incarnation(struct vms_pe *pe, uint32_t *lo, uint32_t *hi);
 
+/* The software version `sysid` really advertised (vms_pe_fsm.h). rd vms-1ee. */
+int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
+		  uint32_t cap, uint8_t *out_len);
+
 /*
  * THE THIRD SERVICE -- BLOCK TRANSFER (FC-P6.1). Same E9 bridge shape as the
  * two above: these are the frozen glue-facing names, and the REAL, R1-tested

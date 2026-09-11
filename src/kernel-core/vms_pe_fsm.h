@@ -1701,6 +1701,17 @@ void pe_fsm_vc_event(struct pe_fsm *f, uint32_t index, enum pe_event ev);
 struct pe_vc *pe_fsm_vc_at(struct pe_fsm *f, uint32_t index);
 struct pe_vc *pe_fsm_vc_by_sysid(struct pe_fsm *f, vms_scs_sysid_t sysid);
 
+/*
+ * The software version `sysid` ADVERTISED in its own formation body (spec
+ * SS4(g) abs 72) -- the token a real VAX fills with its real "VMS Vx.y". Copies
+ * at most `cap` bytes and writes the significant length. Returns 0 only when a
+ * real 106-byte START/STACK actually arrived from that system (peer_ident_valid);
+ * anything else is the honest "this executive has not been told", never a
+ * default (INV-6). rd vms-1ee: the split-brain gate's trust anchor.
+ */
+int pe_fsm_peer_swver(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
+		      uint32_t cap, uint8_t *out_len);
+
 /* Project one circuit into the frozen cross-substrate view (INV-6: what was
  * never learned stays zero with its flag clear). */
 void pe_fsm_vc_project(const struct pe_fsm *f, const struct pe_vc *vc,

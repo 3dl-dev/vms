@@ -1195,6 +1195,9 @@ static void cnxman_credit_carrier(struct vms_cnxman *cn,
  * cnxman_vc_message() so that the credit carrier runs on EVERY outcome --
  * including the frame no FSM claimed, which still consumed a real buffer and
  * still owes the peer its credit back. */
+/* Defined below, beside the beat that also calls it (rd vms-1ee). */
+static void cnxman_sync_peer_swver(struct vms_cnxman *cn);
+
 static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 			   const uint8_t *body, uint32_t len)
 {
@@ -1244,6 +1247,24 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 		if (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK)
 			cnxman_csb_dialogue_heard(csb, env.send_msg);
 	}
+
+	/*
+	 * THE IDENTITY FACTS MUST BE CURRENT AT THE DECISION POINT (rd vms-1ee).
+	 *
+	 * This used to run only on the once-a-second beat, and that was a real
+	 * ordering bug: a transition's Phase 2 rebuilds the directory vector,
+	 * and on the live rig the COORDINATOR reached that rebuild before any
+	 * beat had copied the joiner's advertised version into its CSB. It read
+	 * "not proven", the split-brain gate refused -- correctly, on the fact
+	 * it had -- and the founder was left with no vector while the joiner,
+	 * whose own rebuild happened a beat later, had one.
+	 *
+	 * A gate is only as good as the freshness of what it reads. Syncing
+	 * here makes every CM frame -- and therefore every transition step that
+	 * can trigger a rebuild -- see the identities the port has actually
+	 * learned. It is a walk of at most 96 CSBs on a low-rate path.
+	 */
+	cnxman_sync_peer_swver(cn);
 
 	jrx = cnxman_join_rx_body(&cn->join, body, len, from_csid, from_valid,
 				  from_csb);
@@ -1601,6 +1622,45 @@ static uint32_t cnxman_discover_peers(struct vms_cnxman *cn)
 }
 
 /*
+ * SYNC EACH MEMBER'S ADVERTISED SOFTWARE VERSION FROM THE PORT (rd vms-1ee).
+ *
+ * The token a peer put in its own formation body lives on the port's circuit
+ * (vms_pe_fsm.h, spec SS4(g)); the CLUB is where every OTHER layer reads member
+ * facts from. This copies the one to the other on the beat, and copies NOTHING
+ * when the port has not been told -- cnxman_csb_set_swver() then records the
+ * honest "advertised nothing", which the split-brain gate treats exactly like
+ * "advertised something else" (vms_dlm_ldwv.h SS3).
+ *
+ * The comparison against THIS node's own token happens inside the setter, the
+ * one place both are in scope, so no version literal appears anywhere in the
+ * executive (INV-1).
+ */
+static void cnxman_sync_peer_swver(struct vms_cnxman *cn)
+{
+	struct vms_club *club = &cn->cl->club;
+	uint32_t i;
+
+	if (cn->cl->pe == NULL)
+		return;
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *csb = &club->csb[i];
+		uint8_t sw[VMS_CLUSTER_SWVER_LEN];
+		uint8_t len = 0u;
+
+		if (!csb->in_use || !csb->sysid_valid)
+			continue;
+		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
+			continue;   /* our own token is not advertised to us */
+		if (pe_peer_swver(cn->cl->pe, csb->sysid, sw,
+				  (uint32_t)sizeof(sw), &len) != 0)
+			len = 0u;
+		cnxman_csb_set_swver(csb, len ? sw : (const uint8_t *)0, len,
+				     cn->cl->params.sw_version,
+				     cn->cl->params.sw_version_len);
+	}
+}
+
+/*
  * Is there a system this node could join THROUGH right now? The same question
  * join_select_target() asks (a non-local CSB carrying a real SCSSYSTEMID) --
  * asked here so the glue can decide whether to drive a join at all, instead of
@@ -1857,6 +1917,9 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * last beat has a CSB before the reconnect ladder and the join
 		 * look at the CLUB on this same beat. */
 		(void)cnxman_discover_peers(cn);
+		/* ... and keep each member's advertised identity current, so
+		 * the LDWV's split-brain gate reads a fresh fact (vms-1ee). */
+		cnxman_sync_peer_swver(cn);
 		/*
 		 * E71: EVERY beat, not only a beat that discovered something
 		 * new. "Waiting to form or join an OpenVMS Cluster" is a

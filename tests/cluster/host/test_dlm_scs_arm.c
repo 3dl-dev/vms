@@ -359,6 +359,76 @@ static void arm_bindings(void)
 	    "fact (one function, no cached copy), so the release and the "
 	    "BLKAST cannot disagree about who may be emitted at");
 
+	/*
+	 * ===================================================================
+	 * THE RECEIVE HALF IS WIRED (op 0x03 and op 0x04, rd vms-c72), AND
+	 * BOTH PATHS ARE BELOW RULE C.
+	 *
+	 * Measured on the live 2-node rig, both emits fired and the PEER threw
+	 * them away: the inbound dispatch routed ONLY op-0x01/op-0x07 to the
+	 * engine and everything else fell to a counted decline
+	 * (blkasts_received=0, blkasts_delivered=0, unparsed rising). The
+	 * codec could parse both already -- the gap was the ROUTING and the
+	 * engine-delivery call.
+	 *
+	 * What a source scan is the right tool for is exactly what is pinned
+	 * here: that the two opcodes are routed at all, that each reaches the
+	 * right engine door, and that BOTH sit BELOW the RULE C gate -- an
+	 * op-0x03 destroys real lock state and an op-0x04 fires a real
+	 * user-mode AST, and neither may happen for a system that has not
+	 * proved it runs this implementation. What those doors DO to real lock
+	 * state is driven end-to-end against the REAL engine, the REAL FSM and
+	 * the REAL codec in test_dlm_recv_arm.c.
+	 * ===================================================================
+	 */
+	has("if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)",
+	    "an inbound op-0x03 $DEQ is ROUTED, not declined unparsed");
+	has("return dlm_arm_serve_deq(d, req);",
+	    "... to the master-side serve path");
+	has("if (req->opcode == (uint8_t)VMS_DLM_WIREOP_BLKAST)",
+	    "an inbound op-0x04 BLKAST is ROUTED too");
+	has("return dlm_arm_deliver_blkast(d, req);",
+	    "... to the holder-side delivery path");
+	before("if (!dlm_arm_peer_is_ours(d, req))",
+	       "if (req->opcode == (uint8_t)VMS_DLM_WIREOP_DEQ)",
+	       "*** RULE C is evaluated BEFORE the inbound $DEQ is served -- a "
+	       "release from an unproven system releases NOTHING ***");
+	before("if (!dlm_arm_peer_is_ours(d, req))",
+	       "if (req->opcode == (uint8_t)VMS_DLM_WIREOP_BLKAST)",
+	       "*** RULE C is evaluated BEFORE the inbound BLKAST -- an AST is "
+	       "never fired on behalf of an unproven system ***");
+
+	/* The $DEQ's fields, and where each one comes from (RULE B). */
+	has("vms_dlm_deq_parse_body(in->body, in->len, &q)",
+	    "the release is read by the SHIPPING codec, never by hand -- which "
+	    "is also what refuses a zero lock id in either field (fc8540ae)");
+	has("out->req_csid = (uint32_t)in->from_csid;",
+	    "WHO IS RELEASING comes from the connection manager's own "
+	    "identification of the sender, never from the body");
+	has("out->master_lkid = q->master_lkid;",
+	    "body[24:28] -- OUR handle -- is what names the LKB to release");
+	has("out->req_lkid = q->req_lkid;",
+	    "body[20:24] is the releaser's own handle");
+	has("out->op = VMS_DLM_MREQ_DEQ;",
+	    "... and the request is typed a RELEASE, with no resource name "
+	    "composed for it: a real op-0x03 carries none, and the engine "
+	    "identifies the lock by handle");
+	has("vms_lock_dlm_master_serve(&mr, &res)",
+	    "the parsed release reaches the ENGINE's master-side door");
+	has("d->releases_received++",
+	    "a release the engine really performed is counted");
+	has("d->releases_refused++",
+	    "... and one naming no lock of ours is counted as a refusal, "
+	    "never silently treated as a success");
+	has("d->deferred_grants_no_wire_op++",
+	    "a release that FLIPPED a queued waiter counts the grant this "
+	    "master now owes it");
+
+	/* The BLKAST's receive path. */
+	has("dlm_req_fsm_blkast_body(&d->req, in->from_csid, in->body,",
+	    "the BLKAST body goes to the requester FSM's own entry, which "
+	    "parses it and finds the proxy by the handle THIS node minted");
+
 	/* The departure path reaches the engine as a direct call. */
 	has("vms_lock_dlm_member_departed((uint32_t)csid, &found)",
 	    "a departure sweeps the engine's orphaned lock state directly");

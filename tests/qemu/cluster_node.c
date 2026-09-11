@@ -793,12 +793,14 @@ static void rig_dlm_probe(int fd, const struct node_cfg *c)
  *      manager's own independent count one layer down. A pcap proves a byte
  *      reached the segment; only these prove which executive put it there.
  *
- *   3. THAT THE RECEIVER SURVIVED. Both frames land on a peer whose arm has no
- *      receive half for either opcode yet -- the counted gap vms_dlm_scs.c
- *      names in "THE RELEASE'S RECEIVE HALF". The measurement is that the peer
- *      DECLINES them (its `unparsed` rises) and goes on being a member: the
- *      never-crash-a-peer property, taken against a live peer executive rather
- *      than a host unit test.
+ *   3. THAT THE RECEIVER ACTED, AND SURVIVED. Since rd vms-c72 the arm has a
+ *      receive half for both opcodes, so the measurement is no longer a
+ *      decline: the peer's own RIG-*-DLM-RECV line reports releases_received
+ *      (a $DEQ that really released an LKB in ITS lock database) and its EMIT
+ *      line reports blkasts_received/blkasts_delivered -- and the node goes on
+ *      being a member. That is the never-crash-a-peer property taken against a
+ *      live peer executive that ACTED on the frame rather than refusing it,
+ *      which is the strictly harder claim.
  *
  * THE CANDIDATE NAMES ARE PER-NODE ("OVMXA$Xnn" on A, "OVMXB$Xnn" on B), and
  * that is load-bearing. With a shared set, both nodes would scan the SAME name
@@ -1138,6 +1140,19 @@ static void rig_dump_dlm(int fd, const struct node_cfg *c, const char *phase)
 	       (unsigned)v->blkasts_no_wire_op, (unsigned)v->blkasts_received,
 	       (unsigned)v->blkasts_delivered, (unsigned)v->queued_no_reply,
 	       (unsigned)v->unparsed, (unsigned)v->foreign_refused);
+	/*
+	 * THE RECEIVE LEDGER (rd vms-c72), on its own line because it is the
+	 * half the emitting node's counters and a pcap both CANNOT show: what a
+	 * PEER's op-0x03/op-0x04 did to THIS executive's lock database. A rig
+	 * run where releases_sent rose on one node and releases_received stayed
+	 * 0 on the other is precisely the gap this item closed, and it has to be
+	 * readable as a number rather than inferred.
+	 */
+	printf("RIG-%s-DLM-RECV at=%s releases_received=%u releases_refused=%u "
+	       "blkasts_unparsed=%u deferred_grants_owed=%u\n",
+	       c->tag, phase, (unsigned)v->releases_received,
+	       (unsigned)v->releases_refused, (unsigned)v->blkasts_unparsed,
+	       (unsigned)v->deferred_grants_owed);
 	printf("RIG-%s-DLM-LEG at=%s sends=%u sends_refused=%u frames_rx=%u "
 	       "replies_sent=%u declined=%u\n",
 	       c->tag, phase, (unsigned)v->leg_sends,

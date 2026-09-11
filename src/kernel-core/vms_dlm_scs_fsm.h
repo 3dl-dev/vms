@@ -458,6 +458,8 @@ struct dlm_req_fsm {
 	uint32_t blkasts_rx;
 	uint32_t blkasts_delivered;   /* a REAL user-mode AST was queued       */
 	uint32_t blkasts_undeliverable;
+	uint32_t blkasts_unparsed;    /* an op-0x04 body the codec refused --  */
+				       /* wrong cat/op, or a zero lock id       */
 	uint32_t hashes_learned;      /* body[10:12] -> the resource block     */
 
 	/* The refusals -- each one a place this file declines to fabricate. */
@@ -572,13 +574,36 @@ enum dlm_req_status dlm_req_fsm_decline(struct dlm_req_fsm *f,
 
 /*
  * A BLOCKING AST arrived for the lock `req_lkid` -- the master has a
- * conflicting request queued behind ours. NO GROUNDED cat-0x02 BLKAST SHAPE
- * EXISTS (the codec says so and defines no parser), so this is an explicit
- * entry point; the handle it names is OUR OWN, so the object is found by a
- * value this executive minted.
+ * conflicting request queued behind ours. The handle it names is OUR OWN, so
+ * the object is found by a value this executive minted.
+ *
+ * This is the HANDLE-taking entry: whatever recognised the event supplies the
+ * lock id. The op-0x04 wire shape became grounded with the vms-c03 capture and
+ * the codec now parses it, so the live receive path uses the BODY-taking entry
+ * below; this one remains for a caller that already holds the handle (and is
+ * what that entry calls once the codec has produced it).
  */
 enum dlm_req_status dlm_req_fsm_blkast(struct dlm_req_fsm *f,
 				       uint32_t req_lkid);
+
+/*
+ * THE SAME EVENT AS SCS REALLY DELIVERS IT (rd vms-c72): the cat-0x02 op-0x04
+ * body, 132 bytes, from the master. Parsed through the codec -- which is what
+ * applies the category/opcode gate and the fc8540ae refusal of a zero lock id
+ * in either field -- and then dispatched by the handle at body[20:24], which is
+ * the one this node minted for its own proxy.
+ *
+ * `from_csid` is the sender as the connection manager identified it. It is
+ * deliberately NOT used to find the lock: the LOCK is the key, and this arm
+ * keeps no table addressed by the master's CSID.
+ *
+ * Returns DLM_REQ_OK only when a real blocking AST was delivered to a real
+ * holder. Every other return means NOTHING was delivered, and one counter says
+ * which refusal it was.
+ */
+enum dlm_req_status dlm_req_fsm_blkast_body(struct dlm_req_fsm *f,
+					    vms_csid_t from_csid,
+					    const uint8_t *body, uint32_t len);
 
 /* A member left the cluster. Every request outstanding at it is FAILED with a
  * real path-lost status, so no $ENQW waits for an answer that cannot come. A

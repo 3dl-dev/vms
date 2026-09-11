@@ -331,6 +331,13 @@ static void cnxtrace_print_dlm(void)
            (unsigned)v->blkasts_received, (unsigned)v->blkasts_delivered,
            (unsigned)v->queued_no_reply, (unsigned)v->unparsed,
            (unsigned)v->foreign_refused);
+    /* The RECEIVE half (rd vms-c72): what a PEER's op-0x03/op-0x04 did to this
+     * executive's own lock database. `owed` is not a success -- it counts the
+     * deferred grants this master cannot yet announce. */
+    printf("%%CNXTRACE-I-DLMRECV, releases received=%u refused=%u  blkasts "
+           "unparsed=%u  deferred grants owed=%u\n",
+           (unsigned)v->releases_received, (unsigned)v->releases_refused,
+           (unsigned)v->blkasts_unparsed, (unsigned)v->deferred_grants_owed);
     printf("%%CNXTRACE-I-DLMPOST, posts queued=%u unqueued=%u lock_gone=%u "
            "refused=%u\n",
            (unsigned)v->posts_queued, (unsigned)v->posts_unqueued,

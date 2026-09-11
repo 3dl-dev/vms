@@ -733,6 +733,33 @@ set_tests_properties(cluster_host_test_dlm_deq_reachable PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-c72: the op-0x03/op-0x04 RECEIVE half really moves lock state ----
+# The mirror of test_dlm_deq_reachable above, on the same two library recipes
+# and for the same reason: the emit was proven and the RECEIVE was declined
+# unparsed on the live rig. It drives the SHIPPING engine doors the arm's
+# dispatch calls -- vms_lock_dlm_master_serve() for an inbound $DEQ and
+# dlm_req_fsm_blkast_body() for an inbound BLKAST -- with frames the SHIPPING
+# codec built, and asserts the lock database moved (a released master copy, a
+# real user-mode AST on a real holder), which no parse-level test can see.
+add_executable(test_dlm_recv_arm test_dlm_recv_arm.c)
+target_include_directories(test_dlm_recv_arm PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_recv_arm PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_recv_arm PRIVATE
+    cluster_host_lock cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_recv_arm PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_recv_arm COMMAND test_dlm_recv_arm)
+set_tests_properties(cluster_host_test_dlm_recv_arm PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- FC-P7.1: the MSCP disk CLASS DRIVER, against the REAL FC-P6.3 server ----
 # Three real, shipping objects in one host process: FC-P7.1's class driver
 # (vms_mscp_cl_io_fsm.c, driving FC-P3.4's real discovery FSM), FC-P6.3's real

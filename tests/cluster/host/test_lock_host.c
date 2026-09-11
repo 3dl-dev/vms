@@ -244,10 +244,133 @@ static void lock_stress(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * rd vms-c27 CONDITION 1 -- "the delivery proc is the OWNER, not the MODE
+ * SOURCE". The cross-node DLM receive path serves a peer's $ENQ on the
+ * DELIVERY PROC (the process that issued VMS_IOCTL_CLUSTER_START). If the
+ * resulting master-side LKB took that process's current_mode, a local image
+ * rundown on THIS node would release a lock ANOTHER NODE still holds -- the
+ * master would silently drop a grant it had already acknowledged on the wire.
+ *
+ * These are the TEETH of that binding, driven through the real engine:
+ *   - the delivery proc is put at PSL_C_USER (the worst case: exactly the mode
+ *     an inherited acmode would have picked up),
+ *   - it holds one genuinely LOCAL USER-mode lock AND one lock created for a
+ *     REMOTE requester (vms_lock_dlm_xnode_dispatch, req_csid set),
+ *   - image rundown runs on it (PSL_C_USER, what vms_access.c passes),
+ *   - the LOCAL lock MUST be gone (proving rundown really ran and really does
+ *     release USER-mode locks on this very process -- the discriminator),
+ *   - the REMOTE-held lock MUST survive, still held for its peer's CSID, and
+ *     the peer's own cross-node $DEQ must still release it.
+ * ================================================================ */
+#define C27_REMOTE_CSID 0x00020005u
+#define C27_REMOTE_LKID 0x0000beefu
+
+static uint32_t do_resmaster(struct vms_proc *proc, const char *resnam,
+			     struct vms_resmaster_args *rm)
+{
+	memset(rm, 0, sizeof(*rm));
+	strscpy(rm->resnam, resnam, sizeof(rm->resnam));
+	vms_ioctl_get_resmaster(proc, (unsigned long)(void *)rm);
+	return rm->status;
+}
+
+static uint32_t xnode_enq(struct vms_proc *delivery, const char *resnam,
+			  uint32_t *master_lkid_out)
+{
+	struct vms_dlm_xnode_args req;
+	uint32_t st;
+
+	memset(&req, 0, sizeof(req));
+	req.op = VMS_DLM_OP_ENQ;
+	req.lkmode = LCK_K_EXMODE;
+	req.req_csid = C27_REMOTE_CSID;
+	req.req_lkid = C27_REMOTE_LKID;
+	strscpy(req.resnam, resnam, sizeof(req.resnam));
+	st = vms_lock_dlm_xnode_dispatch(delivery, &req);
+	*master_lkid_out = req.master_lkid;
+	return st;
+}
+
+static uint32_t xnode_deq(struct vms_proc *delivery, const char *resnam,
+			  uint32_t master_lkid)
+{
+	struct vms_dlm_xnode_args req;
+
+	memset(&req, 0, sizeof(req));
+	req.op = VMS_DLM_OP_DEQ;
+	req.req_csid = C27_REMOTE_CSID;
+	req.req_lkid = C27_REMOTE_LKID;
+	req.master_lkid = master_lkid;
+	strscpy(req.resnam, resnam, sizeof(req.resnam));
+	return vms_lock_dlm_xnode_dispatch(delivery, &req);
+}
+
+static void remote_lkb_is_outside_image_rundown(void)
+{
+	struct vms_proc delivery;
+	struct vms_resmaster_args rm;
+	uint32_t local_lkid = 0, master_lkid = 0, status;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms-c27 cond.1: vms_lock_init");
+		return;
+	}
+	proc_init(&delivery);
+
+	/* The delivery proc is running an image at USER mode when the peer's
+	 * request arrives. Nothing about that may reach the remote LKB. */
+	delivery.current_mode = PSL_C_USER;
+
+	status = do_enq(&delivery, "C27_LOCAL_RES", LCK_K_EXMODE, 0, &local_lkid);
+	ct_check(status == SS__NORMAL && local_lkid != 0,
+		 "vms-c27 cond.1: delivery proc holds a LOCAL USER-mode lock");
+
+	status = xnode_enq(&delivery, "C27_REMOTE_RES", &master_lkid);
+	ct_check(status == SS__NORMAL && master_lkid != 0,
+		 "vms-c27 cond.1: cross-node $ENQ granted on the delivery proc "
+		 "(real vms_lock_dlm_xnode_dispatch)");
+
+	status = do_resmaster(&delivery, "C27_REMOTE_RES", &rm);
+	ct_check(status == SS__NORMAL && rm.found &&
+		 rm.remote_holder_csid == C27_REMOTE_CSID,
+		 "vms-c27 cond.2: the master's lock record names the REMOTE "
+		 "requester's CSID (GET_RESMASTER readback, not a fabrication)");
+
+	/* Image rundown on the delivery proc -- exactly what vms_access.c does
+	 * when an image on this process runs down. */
+	vms_proc_rundown_locks(&delivery, PSL_C_USER);
+
+	/* Discriminator: rundown really ran, and really does release the
+	 * USER-mode locks of THIS process. */
+	ct_check(do_deq(&delivery, local_lkid) == SS__IVLOCKID,
+		 "vms-c27 cond.1 DISCRIMINATOR: image rundown DID release the "
+		 "delivery proc's own USER-mode lock");
+
+	/* Teeth: the lock held for a peer is NOT in that scope. */
+	status = do_resmaster(&delivery, "C27_REMOTE_RES", &rm);
+	ct_check(status == SS__NORMAL && rm.found && rm.n_granted == 1 &&
+		 rm.remote_holder_csid == C27_REMOTE_CSID,
+		 "vms-c27 cond.1 TEETH: the REMOTE-held LKB SURVIVED image "
+		 "rundown, still granted and still held for the peer's CSID");
+
+	/* And it is still a live lock, releasable only by its real owner's
+	 * cross-node $DEQ (vms-4d3 will add the per-CSID departure path). */
+	ct_check(xnode_deq(&delivery, "C27_REMOTE_RES", master_lkid) == SS__NORMAL,
+		 "vms-c27 cond.1: the peer's own cross-node $DEQ releases it");
+
+	status = do_resmaster(&delivery, "C27_REMOTE_RES", &rm);
+	ct_check(status == SS__NORMAL && rm.n_granted == 0,
+		 "vms-c27 cond.1: no grant remains after the peer's $DEQ");
+
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_host (vms_lock.c, the real engine, R1 host unit) ===\n");
 	lock_basic();
 	lock_stress();
+	remote_lkb_is_outside_image_rundown();
 	return ct_summary("test_lock_host");
 }

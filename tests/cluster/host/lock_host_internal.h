@@ -257,5 +257,11 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                      struct vms_dlm_xnode_args *req);
+/*
+ * Image rundown's lock release. In the real kernel this is called by
+ * vms_access.c (image rundown) with PSL_C_USER; a host test calls it directly
+ * to prove which locks are, and are NOT, in an image's rundown scope.
+ */
+void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode);
 
 #endif /* OVMX_LOCK_HOST_INTERNAL_H */

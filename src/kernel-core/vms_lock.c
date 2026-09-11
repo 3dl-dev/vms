@@ -2195,10 +2195,37 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
      * records the caller's current mode. Note this is the ACCESS mode
      * (0-3), NOT the lock mode in requested_mode/granted_mode (NL..EX, 0-5).
      * See docs/design-image-rundown-resource-classes.md.
+     *
+     * *** EXCEPT FOR A LOCK HELD FOR ANOTHER SYSTEM (rd vms-c27 condition 1).
+     * ***
+     * A cross-node request (`xn` set) is served on the DELIVERY PROC -- the
+     * process that issued VMS_IOCTL_CLUSTER_START, i.e. STARTUP.EXE. That
+     * process is the OWNER of the resulting master-side LKB; it is NOT the
+     * MODE SOURCE, and taking `proc->current_mode` here would be exactly the
+     * conflation the ruling forbids: a remote system's lock would inherit
+     * whatever mode STARTUP happened to be in, and a local image rundown on
+     * THIS node could then release a lock another node still holds.
+     *
+     * The mode is therefore PSL_C_KERNEL: process-permanent, outside every
+     * local image's rundown scope (vms_proc_rundown_locks releases acmode >=
+     * min_acmode, and image rundown passes PSL_C_USER). That is the correct
+     * lifetime, because a remote lock's release is driven by ITS OWNER
+     * LEAVING THE CLUSTER -- the per-CSID departure path keyed on
+     * lock->req_csid (rd vms-4d3) -- and by nothing local at all.
+     *
+     * HONEST OMISSION (INV-6): the requester's OWN access mode is not carried
+     * by any grounded field of the DLM request (struct vms_dlm_xnode_args has
+     * the LOCK mode and the flags, and no access mode), so this executive does
+     * not know it and does not guess one. When a capture grounds such a field,
+     * THIS is the line that reads it.
      */
-    exec_lock(&proc->mode_lock);
-    lock->acmode = proc->current_mode;
-    exec_unlock(&proc->mode_lock);
+    if (xn != NULL) {
+        lock->acmode = PSL_C_KERNEL;
+    } else {
+        exec_lock(&proc->mode_lock);
+        lock->acmode = proc->current_mode;
+        exec_unlock(&proc->mode_lock);
+    }
 
     if (args.flags & LCK_M_VALBLK)
         memcpy(lock->valblk, args.valblk, LCK_VALBLK_SIZE);

@@ -1030,8 +1030,33 @@ static void test_client_response_fuzz(void)
         check(ct_slen[0] && ct_slen[1] && ct_slen[2], "seed: CTERM Bind-Accept/Write/Unbind built");
     }
 
+    /* HOST-ROLE rx seeds (rd vms-8b36): the client->host PDUs a BOUND inbound
+     * server accepts -- a Bind (BIND_IND), a Read Data (keystrokes), an OOB
+     * (^C). Fuzzing MUTATED versions of these INTO the host FSM is the
+     * never-crash-a-peer proof for the inbound $ SET HOST server path (the
+     * existing CTERM fuzz below drives only the TERMINAL role). */
+    uint8_t h_seed[3][DNET_CTERM_MAX_PDU];
+    size_t  h_slen[3] = {0,0,0};
+    {
+        struct dnet_cterm_session ts, hs;
+        uint8_t ba[DNET_CTERM_MAX_PDU]; size_t bn = 0;
+        enum dnet_cterm_event ev;
+        dnet_cterm_session_init(&ts, DNET_CTERM_ROLE_TERMINAL);
+        dnet_cterm_session_init(&hs, DNET_CTERM_ROLE_HOST);
+        dnet_cterm_bind(&ts, "OVMX$RTA1:", h_seed[0], sizeof(h_seed[0]), &h_slen[0]);
+        dnet_cterm_rx(&hs, h_seed[0], h_slen[0], &ev);              /* host BIND_IND */
+        dnet_cterm_bind_accept(&hs, "VAX2", ba, sizeof(ba), &bn);
+        dnet_cterm_rx(&ts, ba, bn, &ev);                            /* terminal BOUND */
+        dnet_cterm_read_data(&ts, (const uint8_t *)"SHOW TIME", 9, 0x0d,
+                             h_seed[1], sizeof(h_seed[1]), &h_slen[1]);
+        dnet_cterm_oob(&ts, 0x03, h_seed[2], sizeof(h_seed[2]), &h_slen[2]);
+        check(h_slen[0] && h_slen[1] && h_slen[2],
+              "seed: client->host Bind/Read-Data/OOB PDUs built (host-role fuzz)");
+    }
+
     unsigned st = 0xf54c0de;
     int nsp_accepts = 0, ct_accepts = 0, undefined = 0, consumed_over = 0;
+    int host_accepts = 0, ft_undef = 0, fc_undef = 0;   /* rd vms-8b36 host-role + foundation-parser fuzz */
     const int ITERS = 60000;
     for (int i = 0; i < ITERS; i++) {
         /* --- NSP decode fuzz (dnet_nsp_decode) --- */
@@ -1080,14 +1105,91 @@ static void test_client_response_fuzz(void)
         }
         int crc = dnet_cterm_rx(&t, cb, cl, &ev);      /* must not crash */
         if (crc == DNET_CTERM_OK) ct_accepts++;
+
+        /* --- HOST-ROLE CTERM rx fuzz (rd vms-8b36): the inbound-SERVER FSM a
+         *     real VAX's bytes hit. A BOUND host fed MUTATED client bytes must
+         *     never crash (ASan/UBSan) -- the never-crash-a-peer proof for the
+         *     inbound path #1162 enables. --- */
+        {
+            struct dnet_cterm_session ht, hh;
+            uint8_t bp[DNET_CTERM_MAX_PDU], ba[DNET_CTERM_MAX_PDU];
+            size_t bn0 = 0, ban = 0; enum dnet_cterm_event hev;
+            dnet_cterm_session_init(&ht, DNET_CTERM_ROLE_TERMINAL);
+            dnet_cterm_session_init(&hh, DNET_CTERM_ROLE_HOST);
+            dnet_cterm_bind(&ht, "OVMX$RTA1:", bp, sizeof(bp), &bn0);
+            dnet_cterm_rx(&hh, bp, bn0, &hev);                  /* hh -> BIND_IND */
+            dnet_cterm_bind_accept(&hh, "VAX2", ba, sizeof(ba), &ban);  /* hh BOUND */
+
+            uint8_t hb[DNET_CTERM_MAX_PDU + 64]; size_t hl;
+            if ((fz_next(&st) & 7) == 0) {
+                hl = fz_next(&st) % 40;
+                for (size_t j = 0; j < hl; j++) hb[j] = fz_next(&st);
+            } else {
+                int s = fz_next(&st) % 3;
+                hl = h_slen[s];
+                memcpy(hb, h_seed[s], hl);
+                mutate(hb, &hl, sizeof(hb), &st);
+            }
+            int hrc = dnet_cterm_rx(&hh, hb, hl, &hev);   /* HOST must not crash */
+            if (hrc == DNET_CTERM_OK) host_accepts++;
+        }
+
+        /* --- foundation BOUND-phase parsers the block above does NOT cover
+         *     (rd vms-8b36): found_terminal_rx + found_client_termchar_parse,
+         *     mutated real seg-2 envelope specimens; every input a DEFINED
+         *     status, no over-read. --- */
+        {
+            uint8_t fb[128]; size_t fl;
+            if ((fz_next(&st) & 7) == 0) {
+                fl = fz_next(&st) % 48;
+                for (size_t j = 0; j < fl; j++) fb[j] = fz_next(&st);
+            } else {
+                fl = sizeof(k_oracle_found_client_seg2_default);
+                if (fl > sizeof(fb)) fl = sizeof(fb);
+                memcpy(fb, k_oracle_found_client_seg2_default, fl);
+                mutate(fb, &fl, sizeof(fb), &st);
+            }
+            enum dnet_cterm_found_term_kind fkind;
+            uint8_t ftext[64]; size_t ftlen = 0; uint8_t fhandle[2];
+            int frc = dnet_cterm_found_terminal_rx(fb, fl, &fkind, ftext,
+                                                   sizeof(ftext), &ftlen, fhandle);
+            /* A DEFINED status is any code in the CTERM enum (OK/ETRUNC/EBADLEN/
+             * ENOSPACE/EINVAL/EBADTYPE) -- these parsers may propagate a
+             * sub-decoder's code; an UNDEFINED value (outside the enum) or a
+             * crash is the only failure, same discipline as the NSP fuzz. */
+            if (!(frc == DNET_CTERM_OK || frc == DNET_CTERM_ETRUNC ||
+                  frc == DNET_CTERM_EBADLEN || frc == DNET_CTERM_ENOSPACE ||
+                  frc == DNET_CTERM_EINVAL || frc == DNET_CTERM_EBADTYPE))
+                ft_undef++;
+            uint16_t fw = 0, fp = 0;
+            int prc = dnet_cterm_found_client_termchar_parse(fb, fl, &fw, &fp);
+            if (!(prc == DNET_CTERM_OK || prc == DNET_CTERM_ETRUNC ||
+                  prc == DNET_CTERM_EBADLEN || prc == DNET_CTERM_ENOSPACE ||
+                  prc == DNET_CTERM_EINVAL || prc == DNET_CTERM_EBADTYPE))
+                fc_undef++;
+        }
     }
     check(undefined == 0, "every NSP decode returned a DEFINED status (no crash, no undefined code)");
     check(consumed_over == 0, "no accepting NSP decode claimed to consume past the buffer");
     check(nsp_accepts > 0, "fuzz corpus reaches accepting NSP decodes (not all-reject)");
     check(ct_accepts  > 0, "fuzz corpus reaches accepting CTERM rx (not all-reject)");
-    printf("  fuzz: %d NSP + %d CTERM iterations, all decodes returned a defined"
-           " status (nsp_accepts=%d cterm_accepts=%d)\n",
-           ITERS, ITERS, nsp_accepts, ct_accepts);
+    /* rd vms-8b36: the HOST-role (inbound-server) FSM + the two foundation
+     * BOUND-phase parsers, under the same mutation fuzz + ASan/UBSan. The
+     * no-crash guarantee is enforced by the sanitizers on every iteration; these
+     * assert the corpus reached the host's accepting path and neither foundation
+     * parser ever returned an undefined status on a mutated/short input. */
+    check(host_accepts > 0,
+          "fuzz corpus reaches accepting HOST-role CTERM rx -- the inbound-server"
+          " FSM (never-crash-a-peer proof, rd vms-8b36)");
+    check(ft_undef == 0,
+          "found_terminal_rx: every mutated envelope gets a DEFINED CTERM status"
+          " -- no crash, no over-read, no undefined value");
+    check(fc_undef == 0,
+          "found_client_termchar_parse: every mutated envelope gets a DEFINED"
+          " status -- no crash, no over-read");
+    printf("  fuzz: %d NSP + %d CTERM(term) + %d CTERM(host) iterations, all"
+           " decodes DEFINED (nsp_accepts=%d cterm_accepts=%d host_accepts=%d)\n",
+           ITERS, ITERS, ITERS, nsp_accepts, ct_accepts, host_accepts);
 }
 
 /*

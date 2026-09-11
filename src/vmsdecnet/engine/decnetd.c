@@ -1619,6 +1619,33 @@ static void sethost_src_codes(uint16_t *grp, uint16_t *usr)
     *usr = u;
 }
 
+/*
+ * Try to satisfy one outstanding host read-solicit from the buffered local
+ * input queue (rd vms-6165). Returns 1 if a line was dequeued and sent as a
+ * CTERM Read Data, 0 if the queue has no complete line yet (the caller should
+ * remember the solicit and retry once more input arrives or EOF fires), or -1
+ * if the send itself failed (same as any other link-send failure).
+ */
+static int sethost_send_queued_line(struct dnet_cterm_session *term,
+                                    struct dnet_cterm_inq *inq,
+                                    struct dnet_engine *eng, int sock,
+                                    unsigned ifindex, dnet_tick_t now,
+                                    uint8_t *cpdu, size_t cpdu_cap)
+{
+    uint8_t line[DNET_CTERM_MAX_DATA];
+    size_t linelen = 0;
+    if (!dnet_cterm_inq_dequeue(inq, line, sizeof(line), &linelen))
+        return 0;
+    size_t clen = 0;
+    if (dnet_cterm_found_read_data_build(line, linelen, 0x0d, cpdu, cpdu_cap,
+                                         &clen) != 0)
+        return -1;
+    if (cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0)
+        return -1;
+    term->reads_sent++;
+    return 1;
+}
+
 static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
                              const char *peer_s, const char *user)
 {
@@ -1701,6 +1728,15 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
     fflush(stdout);
 
     int passall_on = 0, stdin_eof = 0, done = 0, rc = 0, session_bound_ever = 0;
+    /* rd vms-6165: CTERM input is PROMPT-DRIVEN. Local stdin is buffered here,
+     * never dumped on BOUND, and released ONE LINE PER HOST SOLICIT (a 02-08
+     * TK_START_READ). `read_pending` remembers a solicit that arrived before
+     * the queue had a complete line, so the next terminal read (or EOF) can
+     * satisfy it immediately instead of waiting for another solicit that will
+     * never come (the host is already blocked in its own read). */
+    struct dnet_cterm_inq inq;
+    dnet_cterm_inq_init(&inq);
+    int read_pending = 0;
 
     while (!g_stop && !done) {
         now = monotonic_sec();
@@ -1836,6 +1872,31 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                         (void)sys$qiow(0, ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
                                        txt, (uint32_t)txtlen, 0, 0, 0, 0);
                     }
+                } else if (tk == DNET_CTERM_TK_START_READ) {
+                    /* rd vms-6165: a 02-08 is PROMPT-AND-READ -- display the
+                     * prompt text, THEN answer with exactly one queued input
+                     * line. One solicit -> one line, never more, never before
+                     * this arrives. If the queue has no complete line yet
+                     * (interactive typing still in flight), remember the
+                     * solicit and satisfy it the moment one becomes available. */
+                    term.writes_recv++;
+                    if (txtlen) {
+                        struct _iosb iosb;
+                        (void)sys$qiow(0, ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
+                                       txt, (uint32_t)txtlen, 0, 0, 0, 0);
+                    }
+                    int srr = sethost_send_queued_line(&term, &inq, eng, sock,
+                                                       ifindex, now, cpdu,
+                                                       sizeof(cpdu));
+                    if (srr < 0) {
+                        fprintf(stderr, "DECNETD-E-READDATA, could not send"
+                                        " CTERM Read Data\n");
+                        rc = 1; done = 1;
+                    } else if (srr == 0) {
+                        read_pending = 1;
+                    } else {
+                        read_pending = 0;
+                    }
                 } else if (tk == DNET_CTERM_TK_READ_ATTR) {
                     /* Host solicited terminal characteristics: answer with the
                      * oracle read-characteristics reply, echoing its handle. */
@@ -1871,24 +1932,45 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                                     inbuf, (uint32_t)sizeof(inbuf), 0, 0, 0, 0);
             uint32_t rn = (rst & 1) ? iosb.iosb$l_dev_depend : 0;
             if ((rst & 1) && rn > 0) {
-                /* Real keystrokes -> CTERM Read Data (terminator CR), in the
-                 * oracle's enveloped form (rd vms-6165: 09-envelope wrapping
-                 * 03 00 00 00 00 00 <len> <bytes> <term>). */
-                if (dnet_cterm_found_read_data_build(inbuf, (size_t)rn, 0x0d,
-                                                     cpdu, sizeof(cpdu), &clen) == 0) {
-                    term.reads_sent++;
-                    cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
-                }
+                /* rd vms-6165: local keystrokes are BUFFERED, never sent
+                 * immediately -- CTERM input is prompt-gated (see the queue's
+                 * doc comment in dnet_cterm.h). Only actually emit a Read Data
+                 * if a host solicit is already outstanding (read_pending). */
+                (void)dnet_cterm_inq_feed(&inq, inbuf, (size_t)rn);
             } else {
-                /* Local EOF (SS$_ENDOFFILE) or a channel error: stop soliciting
-                 * input but KEEP the link open so the host's remaining output
-                 * drains. The session ends on the host's Unbind, a link drop,
-                 * or --duration. */
+                /* Local EOF (SS$_ENDOFFILE) or a channel error: stop polling
+                 * for more input but KEEP THE LINK UP -- whatever is already
+                 * queued (a canned/redirected stdin fully read at once) is
+                 * still dequeued one line per solicit, and the host's
+                 * remaining output still drains. The session ends on the
+                 * host's Unbind, a link drop, or --duration -- NEVER on
+                 * stdin EOF by itself (rd vms-6165 lab iter 2: tearing down
+                 * here is what caused the blast-then-quit bug). */
                 stdin_eof = 1;
+                dnet_cterm_inq_eof(&inq);
                 log_ts(stdout);
-                printf(" DECNETD-I-EOF, local input closed -- draining remote"
-                       " output on circuit %s\n", eng->circuit);
+                printf(" DECNETD-I-EOF, local input closed -- %zu byte(s) still"
+                       " queued, draining remote output on circuit %s\n",
+                       inq.len, eng->circuit);
                 fflush(stdout);
+            }
+            /* A host solicit may already be waiting on a line that was not
+             * available yet -- satisfy it now if the queue (or EOF) supplied
+             * one. Loop: EOF can make several trailing lines available, but a
+             * solicit is only EVER outstanding one at a time (the host waits
+             * for our reply before prompting again), so this fires at most
+             * once per solicit. */
+            if (read_pending) {
+                int srr = sethost_send_queued_line(&term, &inq, eng, sock,
+                                                   ifindex, now, cpdu,
+                                                   sizeof(cpdu));
+                if (srr < 0) {
+                    fprintf(stderr, "DECNETD-E-READDATA, could not send"
+                                    " CTERM Read Data\n");
+                    rc = 1; done = 1;
+                } else if (srr == 1) {
+                    read_pending = 0;
+                }
             }
         }
     }

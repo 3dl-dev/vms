@@ -444,7 +444,9 @@ int dnet_cterm_found_read_data_build(const uint8_t *data, size_t len,
  * opcode bytes. */
 enum dnet_cterm_found_term_kind {
     DNET_CTERM_TK_NONE = 0,   /* not a recognised 09-envelope (ignore)          */
-    DNET_CTERM_TK_WRITE,      /* host screen output (02 08 / 07 72) -> display  */
+    DNET_CTERM_TK_WRITE,      /* host WRITE-only screen output (07 72) -> display */
+    DNET_CTERM_TK_START_READ, /* host prompt-and-read (02 08): display text AND  */
+                              /*   solicit exactly one input line (rd vms-6165)  */
     DNET_CTERM_TK_READ_ATTR,  /* host read-characteristics solicit (0f 00)      */
     DNET_CTERM_TK_OTHER       /* a recognised 09-envelope we only NSP-ack        */
 };
@@ -455,10 +457,11 @@ enum dnet_cterm_found_term_kind {
  * the displayable text; for a READ_ATTR, extract the 2-byte read handle.
  *
  *   *kind      -> which envelope this is (see enum above).
- *   text / *textlen (WRITE only, may be NULL) -> the screen bytes to display,
- *              bounded by textcap. For a 02-08 write these are the body bytes
- *              from offset 17 (the oracle-fixed text offset); for a 07-72 write
- *              the record markers (07 72 02 01 0d) and NUL separators are
+ *   text / *textlen (WRITE and START_READ, may be NULL) -> the screen bytes to
+ *              display, bounded by textcap. For a 02-08 START_READ these are the
+ *              body bytes from offset 17 (the oracle-fixed text offset -- the
+ *              prompt to show before soliciting one input line); for a 07-72
+ *              WRITE the record markers (07 72 02 01 0d) and NUL separators are
  *              stripped and the readable text copied out (best-effort -- flagged
  *              for lab confirmation).
  *   handle (READ_ATTR only, may be NULL) -> the 2-byte handle to echo back.
@@ -472,6 +475,56 @@ int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
                                  enum dnet_cterm_found_term_kind *kind,
                                  uint8_t *text, size_t textcap, size_t *textlen,
                                  uint8_t handle[2]);
+
+/*
+ * ---- Terminal-input queue (rd vms-6165: CTERM input is PROMPT-DRIVEN) -----
+ *
+ * The oracle (real-cterm-ci.pcap, link 8194) shows every host 02-08 message
+ * (a TK_START_READ, above) directly soliciting exactly ONE client 03-00 Read
+ * Data reply -- there is no distinct "Start Read" opcode; the WRITE-with-text
+ * message *is* the solicit. Frame pairs: seg7 "Username: " -> client seg6
+ * "SYSTEM"; seg8 "Password: " -> client seg7 "system"; the "$ " DCL prompt ->
+ * client's command line. A client that sends input BEFORE a solicit arrives
+ * (rd vms-6165 lab iter 2: OVMX blasted its whole stdin as one segment ~19.5ms
+ * before the Username: prompt existed on the wire) is a genuine LOGINOUT
+ * read-timeout (%LOGIN-F-CMDINPUT), not a protocol reject.
+ *
+ * This queue buffers raw local-terminal bytes as they arrive and releases
+ * them ONE LINE AT A TIME, only when the caller explicitly asks (a pull, not
+ * a push) -- so nothing is ever emitted ahead of a solicit by construction.
+ * A line ends at the first CR or LF; a CRLF/LFCR pair collapses to one
+ * terminator, and the terminator itself is dropped (the Read Data envelope
+ * carries its own, oracle-fixed 0x0d). Local EOF does NOT discard whatever is
+ * still queued: dnet_cterm_inq_eof() only marks that any bytes remaining
+ * without a terminator are the FINAL line, still dequeuable.
+ */
+#define DNET_CTERM_INQ_CAP   4096u   /* local-input queue capacity, bytes */
+
+struct dnet_cterm_inq {
+    uint8_t buf[DNET_CTERM_INQ_CAP];
+    size_t  len;
+    int     eof;
+};
+
+/* Reset the queue to empty, not-EOF. */
+void dnet_cterm_inq_init(struct dnet_cterm_inq *q);
+
+/* Append `n` raw bytes read from the local terminal to the tail of the queue.
+ * Bytes beyond DNET_CTERM_INQ_CAP are refused (returns the count actually
+ * appended, which may be less than n -- never overruns the buffer). */
+size_t dnet_cterm_inq_feed(struct dnet_cterm_inq *q, const uint8_t *bytes, size_t n);
+
+/* Mark local input EOF. Does not clear or discard anything already queued. */
+void dnet_cterm_inq_eof(struct dnet_cterm_inq *q);
+
+/* Dequeue ONE line from the front of the queue (terminator stripped, never
+ * included in `line`). Returns 1 and fills line / *linelen when a complete line
+ * (or, after EOF, a final unterminated remainder) is available; returns 0
+ * (queue not touched) when there is nothing to hand back yet -- the caller
+ * must wait for the next dnet_cterm_inq_feed() or dnet_cterm_inq_eof(). Never
+ * overruns `line`; a line longer than linecap is truncated to linecap. */
+int dnet_cterm_inq_dequeue(struct dnet_cterm_inq *q, uint8_t *line,
+                           size_t linecap, size_t *linelen);
 
 /* ======================================================================
  * DNA Session Control CONNECT message -- the inbound SET HOST's addressing

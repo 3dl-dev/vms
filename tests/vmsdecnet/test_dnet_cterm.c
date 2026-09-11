@@ -1187,10 +1187,11 @@ static void test_client_foundation_fsm(void)
     uint8_t txt[128]; size_t tl = 0; uint8_t h[2] = { 0, 0 };
     check(dnet_cterm_found_terminal_rx(k_oracle_write_username,
               sizeof(k_oracle_write_username), &tk, txt, sizeof(txt), &tl, h)
-              == DNET_CTERM_OK && tk == DNET_CTERM_TK_WRITE &&
+              == DNET_CTERM_OK && tk == DNET_CTERM_TK_START_READ &&
           tl == sizeof(k_username_text) &&
           memcmp(txt, k_username_text, tl) == 0,
-          "a 02-08 host write is classified WRITE, text = '\\r\\nUsername: '");
+          "a 02-08 host write IS the read-solicit (rd vms-6165): classified"
+          " START_READ, text = '\\r\\nUsername: '");
     check(dnet_cterm_found_terminal_rx(k_oracle_readattr_solicit,
               sizeof(k_oracle_readattr_solicit), &tk, NULL, 0, NULL, h)
               == DNET_CTERM_OK && tk == DNET_CTERM_TK_READ_ATTR &&
@@ -1214,6 +1215,81 @@ static void test_client_foundation_fsm(void)
           "a 3-byte truncated envelope is refused/OTHER, never over-read");
 }
 
+/*
+ * rd vms-6165: the local-terminal input queue must be PROMPT-DRIVEN -- one
+ * host Start-Read solicit dequeues exactly one buffered line, nothing is ever
+ * emitted before the first solicit (the API is pull-only: feed()/eof() never
+ * produce output on their own, only dequeue() does), and local stdin EOF
+ * never discards what is still queued (the lab iter-2 bug: OVMX blasted its
+ * entire stdin as one segment before the host's Username: prompt existed on
+ * the wire, then closed stdin -- both halves of that bug are covered here).
+ */
+static void test_terminal_input_queue(void)
+{
+    printf("[inq] rd vms-6165 prompt-gated terminal-input queue\n");
+
+    struct dnet_cterm_inq q;
+    dnet_cterm_inq_init(&q);
+    uint8_t line[64]; size_t ll = 0;
+
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an empty queue with no solicit yet dequeues nothing");
+
+    /* Canned/redirected stdin: the whole script arrives (and EOFs) before any
+     * host solicit -- exactly the lab scenario. NO line may be emitted just
+     * because it was fed; only an explicit dequeue() releases one. */
+    static const uint8_t script[] = "SYSTEM\r\nsystem\r\nSHOW SYSTEM\r\nLOGOUT";
+    check(dnet_cterm_inq_feed(&q, script, sizeof(script) - 1) == sizeof(script) - 1,
+          "feed() buffers all of a canned script and reports full acceptance");
+    dnet_cterm_inq_eof(&q);
+    check(q.eof == 1,
+          "stdin EOF only marks the queue -- feed()/eof() alone never emit"
+          " anything (no output before the first solicit)");
+
+    /* Solicit #1 -> dequeues "SYSTEM" (CRLF terminator dropped). */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "SYSTEM", 6) == 0,
+          "1st solicit dequeues exactly the 1st queued line, 'SYSTEM',"
+          " CRLF terminator stripped");
+    /* Solicit #2 -> dequeues "system" (the next line, in order). */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "system", 6) == 0,
+          "2nd solicit dequeues the NEXT queued line, 'system' -- in order,"
+          " one line per solicit");
+    /* Solicit #3 -> "SHOW SYSTEM". */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 11 && memcmp(line, "SHOW SYSTEM", 11) == 0,
+          "3rd solicit dequeues 'SHOW SYSTEM'");
+    /* Solicit #4 -> "LOGOUT" is unterminated (script ends without a CR/LF),
+     * but EOF already fired, so it is still dequeuable as the final line --
+     * stdin EOF does NOT tear down the session / lose the last line. */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "LOGOUT", 6) == 0,
+          "post-EOF, the final unterminated remainder 'LOGOUT' still"
+          " dequeues -- EOF never discards buffered input");
+    /* Solicit #5: nothing left, and EOF -> no false line manufactured. */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an exhausted post-EOF queue dequeues nothing (never fabricates a"
+          " line)");
+
+    /* Interactive pacing: no line is available until a solicit arrives, and
+     * feed() alone (no dequeue) still emits nothing -- confirmed by re-using
+     * the same probe as above. Then a live host solicit + a still-open
+     * (no-EOF) session: partial input without a terminator is NOT released
+     * early (the host must not receive a half-typed line). */
+    dnet_cterm_inq_init(&q);
+    check(dnet_cterm_inq_feed(&q, (const uint8_t *)"SYS", 3) == 3 &&
+          dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an interactive partial line with no terminator and no EOF is"
+          " NOT released early");
+    check(dnet_cterm_inq_feed(&q, (const uint8_t *)"TEM\r", 4) == 4,
+          "the terminator arriving completes the line");
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "SYSTEM", 6) == 0,
+          "the solicit now dequeues the complete 'SYSTEM' line, session"
+          " never closed for lack of EOF");
+}
+
 int main(void)
 {
     printf("test_dnet_cterm: DECnet Phase IV CTERM (Command Terminal / SET HOST)\n");
@@ -1221,6 +1297,7 @@ int main(void)
     test_sc_connect();
     test_foundation_oracle();
     test_client_foundation_fsm();
+    test_terminal_input_queue();
     test_session();
     test_engine_e2e();
     test_client_response_fuzz();

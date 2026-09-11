@@ -500,6 +500,67 @@ int dnet_cterm_found_read_data_build(const uint8_t *data, size_t len,
 /* The two write-opcode prefixes the oracle showed for host screen output. */
 #define DNET_CTERM_WR02_TEXT_OFF 17u   /* 02-08 write: text begins at body[17] */
 
+/* ---- Terminal-input queue (rd vms-6165 prompt-gated pacing) -------------- */
+
+void dnet_cterm_inq_init(struct dnet_cterm_inq *q)
+{
+    if (!q)
+        return;
+    q->len = 0;
+    q->eof = 0;
+}
+
+size_t dnet_cterm_inq_feed(struct dnet_cterm_inq *q, const uint8_t *bytes, size_t n)
+{
+    if (!q || !bytes)
+        return 0;
+    size_t room = (q->len < DNET_CTERM_INQ_CAP) ? DNET_CTERM_INQ_CAP - q->len : 0;
+    size_t take = n < room ? n : room;
+    if (take) {
+        memcpy(q->buf + q->len, bytes, take);
+        q->len += take;
+    }
+    return take;
+}
+
+void dnet_cterm_inq_eof(struct dnet_cterm_inq *q)
+{
+    if (q)
+        q->eof = 1;
+}
+
+int dnet_cterm_inq_dequeue(struct dnet_cterm_inq *q, uint8_t *line,
+                           size_t linecap, size_t *linelen)
+{
+    if (!q || !line)
+        return 0;
+    size_t i;
+    for (i = 0; i < q->len; i++)
+        if (q->buf[i] == 0x0d || q->buf[i] == 0x0a)
+            break;
+    size_t linebytes, consume;
+    if (i < q->len) {
+        linebytes = i;
+        consume = i + 1;                       /* drop the terminator */
+        /* Collapse a CRLF / LFCR pair into a single terminator. */
+        if (consume < q->len &&
+            ((q->buf[i] == 0x0d && q->buf[consume] == 0x0a) ||
+             (q->buf[i] == 0x0a && q->buf[consume] == 0x0d)))
+            consume++;
+    } else if (q->eof && q->len > 0) {
+        linebytes = q->len;                    /* final unterminated line */
+        consume = q->len;
+    } else {
+        return 0;                              /* no complete line yet */
+    }
+    size_t copy = linebytes > linecap ? linecap : linebytes;
+    memcpy(line, q->buf, copy);
+    if (linelen) *linelen = copy;
+    memmove(q->buf, q->buf + consume, q->len - consume);
+    q->len -= consume;
+    return 1;
+}
+
 int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
                                  enum dnet_cterm_found_term_kind *kind,
                                  uint8_t *text, size_t textcap, size_t *textlen,
@@ -521,9 +582,14 @@ int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
         return DNET_CTERM_OK;
     }
 
-    /* 02 08 -> screen WRITE; text is the body from the fixed offset 17. */
+    /* 02 08 -> PROMPT-AND-READ (Start Read): display the prompt text (body from
+     * the fixed offset 17) AND solicit exactly one input line. The oracle pairs
+     * every 02-08 with exactly one client 03-00 Read Data (#54->#57 Username,
+     * #58->#60 Password, #72->#75 command, #77->#80 LOGOUT); flags at body[2:3]
+     * carry echo/noecho (0x00b0 echo, 0x00b8 noecho) -- recorded, not acted on
+     * here. Input is PROMPT-GATED: the client must NOT send before this arrives. */
     if (body[0] == 0x02 && body[1] == 0x08) {
-        if (kind) *kind = DNET_CTERM_TK_WRITE;
+        if (kind) *kind = DNET_CTERM_TK_START_READ;
         if (text && textcap && body_len > DNET_CTERM_WR02_TEXT_OFF) {
             size_t n = body_len - DNET_CTERM_WR02_TEXT_OFF;
             if (n > textcap) n = textcap;

@@ -1090,12 +1090,214 @@ static void test_client_response_fuzz(void)
            ITERS, ITERS, nsp_accepts, ct_accepts);
 }
 
+/*
+ * THE vms-6165 CLIENT FSM ORACLE SPECIMENS. Every array is the CTERM payload
+ * (frame bytes from absolute offset 47) of one NSP "data seg" of the ACCEPTED
+ * VAX2->VAX1 SET HOST in real-cterm-ci.pcap (link id 8194, the golden session
+ * that reached a live DCL '$'), copied verbatim.
+ */
+/* Client seg-3 (#44) and seg-4 (#46): the two fixed 09-envelopes after termchar. */
+static const uint8_t k_oracle_found_client_seg3[] = {
+    0x09, 0x00, 0x0b, 0x00, 0x17, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t k_oracle_found_client_seg4[] = {
+    0x09, 0x00, 0x16, 0x00, 0x13, 0x0c, 0x01, 0x00, 0x06, 0x00, 0x00,
+    0x00, 0x18, 0x00, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00, 0x18,
+    0x00, 0x32, 0x00, 0x00
+};
+/* Host read-characteristics solicit (#51) and the client's reply (#53), both
+ * echoing read handle 04 34. */
+static const uint8_t k_oracle_readattr_solicit[] = {
+    0x09, 0x00, 0x18, 0x00, 0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x27,
+    0x00, 0x0c, 0x00, 0x04, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x0c, 0x00, 0x00, 0x00
+};
+static const uint8_t k_oracle_readchar_reply[] = {
+    0x09, 0x00, 0x1a, 0x00, 0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x01,
+    0x00, 0x06, 0x00, 0x00, 0x00, 0x18, 0x00, 0x42, 0x20, 0x84, 0x00,
+    0xa0, 0x02, 0x00, 0x18, 0x00, 0x32, 0x00, 0x00
+};
+/* Host 02-08 screen write of the Username: prompt (#54); its displayed text. */
+static const uint8_t k_oracle_write_username[] = {
+    0x09, 0x00, 0x1d, 0x00, 0x02, 0x08, 0xb0, 0x00, 0x84, 0x00, 0x0c,
+    0x00, 0x14, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d,
+    0x0a, 0x55, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x3a, 0x20
+};
+static const uint8_t k_username_text[] = {
+    0x0d, 0x0a, 0x55, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x3a, 0x20
+};
+/* Client READ DATA for "SYSTEM"<CR> (#57). */
+static const uint8_t k_oracle_read_data_system[] = {
+    0x09, 0x00, 0x0f, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06,
+    0x00, 0x53, 0x59, 0x53, 0x54, 0x45, 0x4d, 0x0d
+};
+
+static void test_client_foundation_fsm(void)
+{
+    printf("[fsm] the vms-6165 host-speaks-first client foundation sequence +"
+           " terminal-I/O classifier, driven by fed real host specimens\n");
+
+    struct dnet_cterm_session s;
+    uint8_t out[128]; size_t n = 0; int prog = 0;
+
+    check(dnet_cterm_session_init(&s, DNET_CTERM_ROLE_TERMINAL) == DNET_CTERM_OK,
+          "client session init");
+    check(dnet_cterm_client_open(&s) == DNET_CTERM_OK &&
+          dnet_cterm_state_of(&s) == DNET_CTERM_S_BINDING,
+          "client_open arms the FSM (CLOSED -> BINDING) and sends nothing");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "HOST-FIRST: the client sends NOTHING until the host speaks");
+
+    check(dnet_cterm_client_found_rx(&s, k_oracle_found_host_seg1,
+              sizeof(k_oracle_found_host_seg1), &prog) == DNET_CTERM_OK && prog,
+          "host seg-1 advances the foundation gate");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg1) &&
+          memcmp(out, k_oracle_found_client_seg1, n) == 0,
+          "client replies with the BYTE-EXACT seg-1 (client_start)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "client then WAITS for the host's config envelope");
+
+    check(dnet_cterm_client_found_rx(&s, k_oracle_found_host_seg2,
+              sizeof(k_oracle_found_host_seg2), &prog) == DNET_CTERM_OK && prog,
+          "host's first 09-envelope advances the config gate");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg2_default) &&
+          memcmp(out, k_oracle_found_client_seg2_default, n) == 0,
+          "client burst #1 = BYTE-EXACT seg-2 termchar (WIDTH=132/PAGE=24)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg3) &&
+          memcmp(out, k_oracle_found_client_seg3, n) == 0,
+          "client burst #2 = BYTE-EXACT seg-3");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg4) &&
+          memcmp(out, k_oracle_found_client_seg4, n) == 0,
+          "client burst #3 = BYTE-EXACT seg-4");
+    check(dnet_cterm_is_bound(&s),
+          "after seg-4 the session is BOUND (foundation complete)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "no further foundation messages once BOUND");
+
+    /* Terminal-I/O classifier (BOUND phase). */
+    enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
+    uint8_t txt[128]; size_t tl = 0; uint8_t h[2] = { 0, 0 };
+    check(dnet_cterm_found_terminal_rx(k_oracle_write_username,
+              sizeof(k_oracle_write_username), &tk, txt, sizeof(txt), &tl, h)
+              == DNET_CTERM_OK && tk == DNET_CTERM_TK_START_READ &&
+          tl == sizeof(k_username_text) &&
+          memcmp(txt, k_username_text, tl) == 0,
+          "a 02-08 host write IS the read-solicit (rd vms-6165): classified"
+          " START_READ, text = '\\r\\nUsername: '");
+    check(dnet_cterm_found_terminal_rx(k_oracle_readattr_solicit,
+              sizeof(k_oracle_readattr_solicit), &tk, NULL, 0, NULL, h)
+              == DNET_CTERM_OK && tk == DNET_CTERM_TK_READ_ATTR &&
+          h[0] == 0x04 && h[1] == 0x34,
+          "a 0f-00 host solicit is classified READ_ATTR, handle = 04 34");
+    check(dnet_cterm_found_client_readchar_build(h, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_readchar_reply) &&
+          memcmp(out, k_oracle_readchar_reply, n) == 0,
+          "the client's read-characteristics reply echoes handle 04 34,"
+          " BYTE-EXACT to the oracle (#53)");
+    check(dnet_cterm_found_read_data_build((const uint8_t *)"SYSTEM", 6, 0x0d,
+              out, sizeof(out), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_read_data_system) &&
+          memcmp(out, k_oracle_read_data_system, n) == 0,
+          "client READ DATA for 'SYSTEM'<CR> is BYTE-EXACT to the oracle (#57)");
+
+    /* Bounded against a truncated envelope: never over-read, classify OTHER. */
+    check(dnet_cterm_found_terminal_rx(k_oracle_write_username, 3, &tk,
+              txt, sizeof(txt), &tl, h) != DNET_CTERM_OK ||
+          tk == DNET_CTERM_TK_NONE || tk == DNET_CTERM_TK_OTHER,
+          "a 3-byte truncated envelope is refused/OTHER, never over-read");
+}
+
+/*
+ * rd vms-6165: the local-terminal input queue must be PROMPT-DRIVEN -- one
+ * host Start-Read solicit dequeues exactly one buffered line, nothing is ever
+ * emitted before the first solicit (the API is pull-only: feed()/eof() never
+ * produce output on their own, only dequeue() does), and local stdin EOF
+ * never discards what is still queued (the lab iter-2 bug: OVMX blasted its
+ * entire stdin as one segment before the host's Username: prompt existed on
+ * the wire, then closed stdin -- both halves of that bug are covered here).
+ */
+static void test_terminal_input_queue(void)
+{
+    printf("[inq] rd vms-6165 prompt-gated terminal-input queue\n");
+
+    struct dnet_cterm_inq q;
+    dnet_cterm_inq_init(&q);
+    uint8_t line[64]; size_t ll = 0;
+
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an empty queue with no solicit yet dequeues nothing");
+
+    /* Canned/redirected stdin: the whole script arrives (and EOFs) before any
+     * host solicit -- exactly the lab scenario. NO line may be emitted just
+     * because it was fed; only an explicit dequeue() releases one. */
+    static const uint8_t script[] = "SYSTEM\r\nsystem\r\nSHOW SYSTEM\r\nLOGOUT";
+    check(dnet_cterm_inq_feed(&q, script, sizeof(script) - 1) == sizeof(script) - 1,
+          "feed() buffers all of a canned script and reports full acceptance");
+    dnet_cterm_inq_eof(&q);
+    check(q.eof == 1,
+          "stdin EOF only marks the queue -- feed()/eof() alone never emit"
+          " anything (no output before the first solicit)");
+
+    /* Solicit #1 -> dequeues "SYSTEM" (CRLF terminator dropped). */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "SYSTEM", 6) == 0,
+          "1st solicit dequeues exactly the 1st queued line, 'SYSTEM',"
+          " CRLF terminator stripped");
+    /* Solicit #2 -> dequeues "system" (the next line, in order). */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "system", 6) == 0,
+          "2nd solicit dequeues the NEXT queued line, 'system' -- in order,"
+          " one line per solicit");
+    /* Solicit #3 -> "SHOW SYSTEM". */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 11 && memcmp(line, "SHOW SYSTEM", 11) == 0,
+          "3rd solicit dequeues 'SHOW SYSTEM'");
+    /* Solicit #4 -> "LOGOUT" is unterminated (script ends without a CR/LF),
+     * but EOF already fired, so it is still dequeuable as the final line --
+     * stdin EOF does NOT tear down the session / lose the last line. */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "LOGOUT", 6) == 0,
+          "post-EOF, the final unterminated remainder 'LOGOUT' still"
+          " dequeues -- EOF never discards buffered input");
+    /* Solicit #5: nothing left, and EOF -> no false line manufactured. */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an exhausted post-EOF queue dequeues nothing (never fabricates a"
+          " line)");
+
+    /* Interactive pacing: no line is available until a solicit arrives, and
+     * feed() alone (no dequeue) still emits nothing -- confirmed by re-using
+     * the same probe as above. Then a live host solicit + a still-open
+     * (no-EOF) session: partial input without a terminator is NOT released
+     * early (the host must not receive a half-typed line). */
+    dnet_cterm_inq_init(&q);
+    check(dnet_cterm_inq_feed(&q, (const uint8_t *)"SYS", 3) == 3 &&
+          dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an interactive partial line with no terminator and no EOF is"
+          " NOT released early");
+    check(dnet_cterm_inq_feed(&q, (const uint8_t *)"TEM\r", 4) == 4,
+          "the terminator arriving completes the line");
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "SYSTEM", 6) == 0,
+          "the solicit now dequeues the complete 'SYSTEM' line, session"
+          " never closed for lack of EOF");
+}
+
 int main(void)
 {
     printf("test_dnet_cterm: DECnet Phase IV CTERM (Command Terminal / SET HOST)\n");
     test_codec();
     test_sc_connect();
     test_foundation_oracle();
+    test_client_foundation_fsm();
+    test_terminal_input_queue();
     test_session();
     test_engine_e2e();
     test_client_response_fuzz();

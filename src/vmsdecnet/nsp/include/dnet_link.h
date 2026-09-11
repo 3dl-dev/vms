@@ -112,7 +112,8 @@ enum dnet_link_event {
     DNET_LINK_EV_DATA,           /* a data segment arrived (payload in the *in msg) */
     DNET_LINK_EV_ACK,            /* an acknowledgement arrived */
     DNET_LINK_EV_DISCONNECT,     /* peer disconnected (DI in): link CLOSED */
-    DNET_LINK_EV_DISCONNECT_CONF /* our disconnect confirmed (DC in): link CLOSED */
+    DNET_LINK_EV_DISCONNECT_CONF,/* our disconnect confirmed (DC in): link CLOSED */
+    DNET_LINK_EV_LINK_SERVICE    /* peer sent a link-service credit grant (rd vms-6165) */
 };
 
 /* Return codes (distinct namespace from the codec's DNET_NSP_E*). */
@@ -178,6 +179,12 @@ struct dnet_link {
     uint16_t recv_seq;      /* highest in-order segment number we have received */
     uint16_t send_ack;      /* highest of our segments the peer has acknowledged */
 
+    /* Other-data subchannel (link service / interrupt), rd vms-6165. NSP numbers
+     * these separately from data segments; oth_recv is how many other-data
+     * messages we have received (so a link-service/ils-ack ACKNUM is real link
+     * state, never templated -- INV-6). */
+    uint16_t oth_recv;      /* count of other-data (LS/interrupt) msgs received */
+
     /* Connect data (access control / session-control payload), retained so a CI
      * retransmit is byte-identical to the original. Opaque to NSP. */
     uint16_t conn_len;
@@ -236,6 +243,19 @@ int dnet_link_accept(struct dnet_link *lk, struct dnet_nsp_msg *out,
  */
 int dnet_link_send_data(struct dnet_link *lk, const uint8_t *data, size_t len,
                         struct dnet_nsp_msg *out, dnet_tick_t now);
+
+/*
+ * Build a LINK SERVICE credit-grant PDU on a RUN link (rd vms-6165). NSP
+ * requires the connection initiator to send this immediately after the Connect
+ * Confirm: it acks the other-data subchannel and opens the initial data-segment
+ * flow-control window, and it is what makes a real OpenVMS peer STOP
+ * retransmitting its CC and begin sending. Builds `10 <dst> <src> <ACKNUM>
+ * <LSFLAGS=0x01> <FCVAL=0x00>` into *out; ACKNUM = 0x8000 | oth_recv (real link
+ * state, never templated). Returns DNET_LINK_OK, DNET_LINK_ESTATE if not RUN,
+ * or DNET_LINK_EINVAL.
+ */
+int dnet_link_link_service(struct dnet_link *lk, struct dnet_nsp_msg *out,
+                           dnet_tick_t now);
 
 /*
  * Initiate a clean disconnect (RUN or CI_SENT or CR_RCVD -> DI_SENT). Builds the

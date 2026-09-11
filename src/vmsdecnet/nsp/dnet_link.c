@@ -176,6 +176,33 @@ int dnet_link_disconnect(struct dnet_link *lk, uint16_t reason,
     return DNET_LINK_OK;
 }
 
+int dnet_link_link_service(struct dnet_link *lk, struct dnet_nsp_msg *out,
+                           dnet_tick_t now)
+{
+    (void)now;
+    if (!lk || !out)
+        return DNET_LINK_EINVAL;
+    if (lk->state != DNET_LINK_RUN)
+        return DNET_LINK_ESTATE;
+
+    memset(out, 0, sizeof(*out));
+    out->type    = DNET_NSP_T_LS;
+    out->msgflg  = DNET_NSP_MSGFLG_LS;
+    out->dstaddr = lk->remote_addr;
+    out->srcaddr = lk->local_addr;
+    /* ACKNUM acks the other-data subchannel: how many LS/interrupt messages we
+     * have received (0 right after CC -> 0x8000). Real link state (INV-6). */
+    out->has_acknum = 1;
+    out->acknum  = (uint16_t)(DNET_NSP_ACK_QUAL | (lk->oth_recv & DNET_LINK_SEQ_MASK));
+    /* LSFLAGS/FCVAL reproduced verbatim from the oracle (real-cterm-ci.pcap):
+     * a data-segment flow request, delta 0 -- exactly what the real VAX client
+     * sent to open the window and unblock its peer's foundation data. */
+    out->ls_flags = DNET_NSP_LSFLAGS_DATA_REQ;   /* 0x01 */
+    out->fc_val   = 0;                            /* 0x00 */
+    out->datalen  = 0;
+    return DNET_LINK_OK;
+}
+
 /* Build a Disconnect Confirm reply for a received Disconnect Initiate. */
 static void build_dc(const struct dnet_link *lk, uint16_t reason,
                      struct dnet_nsp_msg *out)
@@ -310,6 +337,49 @@ int dnet_link_rx(struct dnet_link *lk, const struct dnet_nsp_msg *in,
         lk->state = DNET_LINK_CLOSED;
         if (event)
             *event = DNET_LINK_EV_DISCONNECT_CONF;
+        return DNET_LINK_OK;
+
+    case DNET_NSP_T_LS:
+        /* Peer's link-service credit grant (rd vms-6165). Count it on the
+         * other-data subchannel, absorb any piggybacked data ack, and reply
+         * with an other-data ack (ils-ack) acking it -- matches the real
+         * client's #039 (ACKNUM = 0x8000 | oth_recv). Never crash a peer: an
+         * LS outside RUN or for another link is ignored honestly. */
+        if (lk->state != DNET_LINK_RUN)
+            return DNET_LINK_OK;
+        if (in->dstaddr != lk->local_addr)
+            return DNET_LINK_OK;
+        lk->oth_recv = (uint16_t)((lk->oth_recv + 1) & DNET_LINK_SEQ_MASK);
+        if (in->has_acknum && (in->acknum & DNET_NSP_ACK_QUAL)) {
+            lk->send_ack = (uint16_t)(in->acknum & DNET_LINK_SEQ_MASK);
+            lk->acks_recv++;
+        }
+        if (reply) {
+            memset(reply, 0, sizeof(*reply));
+            reply->type       = DNET_NSP_T_OTHACK;
+            reply->msgflg     = DNET_NSP_MSGFLG_OTHACK;
+            reply->dstaddr    = lk->remote_addr;
+            reply->srcaddr    = lk->local_addr;
+            reply->has_acknum = 1;
+            reply->acknum     = (uint16_t)(DNET_NSP_ACK_QUAL |
+                                           (lk->oth_recv & DNET_LINK_SEQ_MASK));
+            if (has_reply)
+                *has_reply = 1;
+            lk->acks_sent++;
+        }
+        if (event)
+            *event = DNET_LINK_EV_LINK_SERVICE;
+        return DNET_LINK_OK;
+
+    case DNET_NSP_T_OTHACK:
+        /* Peer acked our link service on the other-data subchannel. Absorb it;
+         * no reply, no state change. */
+        if (lk->state != DNET_LINK_RUN)
+            return DNET_LINK_OK;
+        if (in->dstaddr != lk->local_addr)
+            return DNET_LINK_OK;
+        if (in->has_acknum && (in->acknum & DNET_NSP_ACK_QUAL))
+            lk->acks_recv++;
         return DNET_LINK_OK;
 
     default:

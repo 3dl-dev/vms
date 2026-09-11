@@ -5,7 +5,7 @@
 # never-called (data/reference-only) deferred external (a legitimate import).
 # Enforcement bundles its proof: this proves the gate FIRES on the dangerous case
 # AND ALLOWS the safe case (a gate that can't distinguish is a fake gate).
-set -uo pipefail
+set -u
 CC=${CC:-gcc}
 HERE=$(cd "$(dirname "$0")" && pwd); LINKDIR=$(cd "$HERE/.." && pwd)
 REPO=$(cd "$LINKDIR/../.." && pwd)

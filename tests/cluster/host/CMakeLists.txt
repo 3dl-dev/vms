@@ -701,6 +701,38 @@ set_tests_properties(cluster_host_test_lock_dir PROPERTIES
     TIMEOUT 60
 )
 
+# ---- rd vms-49f8: the op-0x03 $DEQ has a REACHABLE caller ----
+# The ONE host test that puts the REAL lock engine, the REAL release queue, the
+# REAL requester FSM and the REAL codec on one path: a real $ENQ makes a proxy
+# LKB, a real grant lands the master's handle on it, a real $DEQ destroys it,
+# and the frame that leaves has to be the image of what the lock database held
+# an instant earlier. It is the only rung that can see the bug this item fixed
+# -- the emit was proven by test_dlm_requester and had no production caller.
+#
+# It therefore links BOTH library recipes: cluster_host_lock (the engine, whose
+# lock_shim/ redirection must come FIRST on the include path) and
+# cluster_host_dlm (the FSM + codec, built -DOVMX_CLUSTER_HOST). The two meet
+# only in this test's own TU, which names vms_internal.h and vms_dlm_scs_fsm.h
+# together -- possible since the codec's opcodes were renamed WIREOP (vms-fa7).
+add_executable(test_dlm_deq_reachable test_dlm_deq_reachable.c vms_frame_compose.c)
+target_include_directories(test_dlm_deq_reachable PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_deq_reachable PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_deq_reachable PRIVATE
+    cluster_host_lock cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_deq_reachable PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_deq_reachable COMMAND test_dlm_deq_reachable)
+set_tests_properties(cluster_host_test_dlm_deq_reachable PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
 # ---- FC-P7.1: the MSCP disk CLASS DRIVER, against the REAL FC-P6.3 server ----
 # Three real, shipping objects in one host process: FC-P7.1's class driver
 # (vms_mscp_cl_io_fsm.c, driving FC-P3.4's real discovery FSM), FC-P6.3's real

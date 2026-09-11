@@ -1727,6 +1727,192 @@ static void test_untransmittable_request_terminates(void)
 		 "every refused attempt was counted");
 }
 
+
+/* ==========================================================================
+ * 23. THE RELEASE QUEUE (rd vms-49f8) -- the object that gives the op-0x03
+ *     emit a reachable caller
+ *
+ * Section 9 above proves the emit and its gates by handing the FSM a release
+ * post. THE BUG was that production never could: a $DEQ destroys the proxy LKB
+ * it would be rebuilt from, so the fork thread's `refill_post` answered "no such
+ * lock" and nothing was ever sent (`releases_sent=0`, `posts_lock_gone=2` on the
+ * live 2-node rig). `struct dlm_relq` is the thread crossing that fixes it: the
+ * release is SNAPSHOTTED in the releaser's own context, out of the post the
+ * engine just read from the live LKB, and the fork thread emits from that.
+ *
+ * This section is the queue's own R1. The end-to-end proof -- a REAL $ENQ, a
+ * REAL grant, a REAL $DEQ through vms_lock.c -- is test_dlm_deq_reachable.c.
+ * ========================================================================== */
+
+/* What the engine's post looks like for a release of the current fake LKB. */
+static void release_post(struct vms_dlm_proxy_post *p, vms_csid_t dst)
+{
+	post_from_lkb(p, VMS_DLM_POST_DEQ, dst);
+}
+
+static void test_relq_snapshot_is_the_lkb_read(void)
+{
+	struct vms_dlm_proxy_post p, out;
+	struct dlm_relq q;
+	uint32_t slot = 0u, seq = 0u;
+
+	printf("-- the release queue: a snapshot of the LKB read, and NOTHING "
+	       "a release does not carry\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_PW, 0x00abu, 1, CSID_MASTER);
+	g.lkb.master_lkid = 0x0ABCDEF0u;
+	dlm_relq_init(&q);
+
+	release_post(&p, CSID_MASTER);
+	ct_check(dlm_relq_stage(&q, &p, &slot, &seq) == DLM_REQ_OK,
+		 "a release post is staged");
+	ct_check(seq != 0u, "  under a non-zero generation (0 is 'free')");
+	ct_check_eq_u32(dlm_relq_pending(&q), 1u, "  and is pending");
+	ct_check_eq_u32(q.staged, 1u, "  counted");
+
+	ct_check(dlm_relq_claim(&q, slot, seq, &out) == DLM_REQ_OK,
+		 "the fork thread claims it");
+	ct_check_eq_u32(out.op, VMS_DLM_POST_DEQ, "  as a RELEASE");
+	ct_check_eq_u32(out.req_lkid, g.lkb.lkid,
+			"  carrying the proxy LKB's own handle");
+	ct_check_eq_u32(out.master_lkid, 0x0ABCDEF0u,
+			"  the master's handle as the LKB held it");
+	ct_check_eq_u32(out.lkmode, g.lkb.lkmode,
+			"  the mode the LKB was released at");
+	ct_check_eq_u32(out.dst_csid, CSID_MASTER, "  addressed to the master");
+
+	/*
+	 * *** THE STRUCTURAL OMISSION. *** A release carries no resource name,
+	 * no value block, no directory index -- those are fields of a REQUEST.
+	 * They are not in the record, so they cannot be in the post, so no later
+	 * edit can put a stale one on a wire.
+	 */
+	ct_check(out.resnam[0] == '\0',
+		 "*** the claimed post carries NO resource name ***");
+	ct_check_eq_u32(out.dir_hash_known, 0u, "  no directory hash");
+	ct_check_eq_u32(out.to_directory, 0u,
+			"  and it is not a directory lookup");
+	{
+		uint32_t i, nz = 0u;
+
+		for (i = 0; i < VMS_DLM_VALBLK_LEN; i++)
+			nz += out.valblk[i] != 0u ? 1u : 0u;
+		ct_check_eq_u32(nz, 0u, "  and no value block");
+	}
+
+	ct_check_eq_u32(dlm_relq_pending(&q), 0u, "the slot is given back");
+	ct_check_eq_u32(q.claimed, 1u, "the claim is counted");
+}
+
+static void test_relq_refusals(void)
+{
+	struct vms_dlm_proxy_post p, out;
+	struct dlm_relq q;
+	uint32_t slot = 0u, seq = 0u, i;
+
+	printf("-- the release queue's REFUSALS: not a release, no room, "
+	       "claimed twice\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_EX, 0x00acu, 1, CSID_MASTER);
+	dlm_relq_init(&q);
+
+	/* Only a release belongs here: everything else refills. */
+	post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+	ct_check(dlm_relq_stage(&q, &p, &slot, &seq) == DLM_REQ_E_INVAL,
+		 "an ENQ post is REFUSED: only a release is staged");
+
+	/* The engine's own lock-id rule, mirrored. */
+	release_post(&p, CSID_MASTER);
+	p.req_lkid = VMS_DLM_LKID_UNSET;
+	ct_check(dlm_relq_stage(&q, &p, &slot, &seq) == DLM_REQ_E_INVAL,
+		 "a release with no handle of ours is REFUSED (never lock 0)");
+	ct_check_eq_u32(dlm_relq_pending(&q), 0u, "nothing was staged");
+
+	/* FULL is a counted refusal, never an eviction: an evicted release is a
+	 * lock the master still believes we hold. */
+	for (i = 0; i < DLM_RELQ_SLOTS; i++) {
+		release_post(&p, CSID_MASTER);
+		p.req_lkid = 0x3000u + i;
+		ct_check(dlm_relq_stage(&q, &p, &slot, &seq) == DLM_REQ_OK,
+			 i == 0u ? "the queue fills with real releases" :
+				   "  (another slot taken)");
+	}
+	release_post(&p, CSID_MASTER);
+	p.req_lkid = 0x4000u;
+	ct_check(dlm_relq_stage(&q, &p, &slot, &seq) == DLM_REQ_E_NOSLOT,
+		 "*** one past capacity is REFUSED ***");
+	ct_check_eq_u32(q.full_refused, 1u, "  counted");
+	ct_check_eq_u32(dlm_relq_pending(&q), DLM_RELQ_SLOTS,
+			"  and nothing already staged was evicted");
+
+	/* A staging is claimed ONCE. */
+	ct_check(dlm_relq_claim(&q, 0u, q.slot[0].seq, &out) == DLM_REQ_OK,
+		 "the first slot claims");
+	ct_check(dlm_relq_claim(&q, 0u, out.req_lkid, &out) != DLM_REQ_OK,
+		 "*** a second claim of the same slot names NOTHING ***");
+	ct_check(q.stale_refused > 0u, "  and is counted, never guessed");
+
+	/* An abandoned staging gives the slot back and emits nothing. */
+	release_post(&p, CSID_MASTER);
+	p.req_lkid = 0x5000u;
+	ct_check(dlm_relq_stage(&q, &p, &slot, &seq) == DLM_REQ_OK,
+		 "a fresh staging takes the freed slot");
+	dlm_relq_abandon(&q, slot, seq);
+	ct_check_eq_u32(q.abandoned, 1u,
+			"abandoning it (the fork queue refused the work item) "
+			"is COUNTED");
+	ct_check(dlm_relq_claim(&q, slot, seq, &out) != DLM_REQ_OK,
+		 "  and it can never be claimed afterwards");
+}
+
+/*
+ * *** THE REACHABILITY PROPERTY, at the FSM's own rung. *** The LKB is
+ * DESTROYED between the staging and the claim -- which is exactly what a $DEQ
+ * does -- and the op-0x03 still goes out, built from the snapshot, while a
+ * refill of the same handle fails. This is the shape of the bug and the shape
+ * of the fix in one scenario.
+ */
+static void test_relq_survives_the_lkb(void)
+{
+	struct vms_dlm_proxy_post p, claimed;
+	struct dlm_relq q;
+	uint32_t slot = 0u, seq = 0u, n;
+	struct vms_dlm_deq d;
+
+	printf("-- a staged release SURVIVES the LKB's death and still emits\n");
+	fe_reset("F11B$aSYSDSK1", VMS_LCK_CR, 0x00adu, 1, CSID_MASTER);
+	g.lkb.master_lkid = 0x0DEFACE0u;
+	dlm_relq_init(&q);
+
+	release_post(&p, CSID_MASTER);
+	ct_check(dlm_relq_stage(&q, &p, &slot, &seq) == DLM_REQ_OK,
+		 "the release is staged while the LKB is still real");
+
+	g.lkb.exists = 0;   /* the $DEQ tore it down */
+	{
+		struct vms_dlm_proxy_post refilled;
+
+		ct_check(fe_refill(&g, p.req_lkid, VMS_DLM_POST_DEQ,
+				   CSID_MASTER, &refilled) != 0,
+			 "*** a refill now FAILS -- the old path's dead end ***");
+	}
+
+	n = g.n_sent;
+	ct_check(dlm_relq_claim(&q, slot, seq, &claimed) == DLM_REQ_OK,
+		 "the fork thread claims the snapshot instead");
+	ct_check(dlm_req_fsm_post(&g_fsm, &claimed) == DLM_REQ_OK,
+		 "*** and the FSM really transmits the op-0x03 ***");
+	ct_check_eq_u32(g.n_sent, n + 1u, "  one frame went out");
+	ct_check_eq_u32(sent_opcode(&g.sent[n]), VMS_DLM_WIREOP_DEQ,
+			"  a grounded op-0x03 $DEQ");
+	ct_check(parse_deq(&g.sent[n], &d) == 0, "  it parses through the codec");
+	ct_check_eq_u32(d.master_lkid, 0x0DEFACE0u,
+			"  naming the master's handle the LKB held at release");
+	ct_check_eq_u32(d.mode, VMS_LCK_CR,
+			"  and the mode it was really released at");
+	ct_check_eq_u32(g_fsm.releases_sent, 1u, "counted as sent");
+	ct_check_eq_u32(g_fsm.releases_no_wire_op, 0u, "and not as a gap");
+	check_only_grounded_opcodes_were_sent("staged release");
+}
+
 int main(void)
 {
 	printf("== FC-P4.6 R1: the DLM requester FSM ==\n");
@@ -1752,5 +1938,8 @@ int main(void)
 	test_correlation();
 	test_repost_adopts_new_routing();
 	test_untransmittable_request_terminates();
+	test_relq_snapshot_is_the_lkb_read();
+	test_relq_refusals();
+	test_relq_survives_the_lkb();
 	return ct_summary("test_dlm_requester");
 }

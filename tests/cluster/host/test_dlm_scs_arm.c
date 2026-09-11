@@ -297,6 +297,62 @@ static void arm_bindings(void)
 	       "originates goes through cnxman_dlm_send, which is where RULE "
 	       "C's emission half lives ***");
 
+	/*
+	 * ===================================================================
+	 * THE RELEASE IS STAGED, NOT REBUILT (rd vms-49f8) -- and the ORDER is
+	 * the whole fix.
+	 *
+	 * Every other post is queued by lock id and REBUILT on the fork thread
+	 * from the lock database (asserted above). A $DEQ cannot be: the release
+	 * IS the destruction of the proxy LKB, so the rebuild answered "no such
+	 * lock" and #1165's op-0x03 emit had NO reachable caller at all
+	 * (measured on the live 2-node rig: releases_sent=0, posts_lock_gone=2).
+	 *
+	 * What is pinned here is what a source scan is the right tool for: that
+	 * the SNAPSHOT is taken BEFORE the work item is queued -- i.e. in the
+	 * releaser's own context, while the LKB is still real -- and that the
+	 * fork thread's DEQ branch CLAIMS that snapshot instead of refilling.
+	 * The behaviour those two lines produce is driven end-to-end against the
+	 * REAL engine, the REAL queue, the REAL FSM and the REAL codec in
+	 * test_dlm_deq_reachable.c.
+	 * ===================================================================
+	 */
+	has("return dlm_arm_post_release(d, p);",
+	    "a RELEASE takes the staged path, not the rebuild path");
+	has("st = dlm_arm_relq_stage(d, p, &slot, &seq);",
+	    "... which SNAPSHOTS the post the engine just read from the live "
+	    "LKB");
+	before("st = dlm_arm_relq_stage(d, p, &slot, &seq);",
+	       "if (dlm_arm_queue_work(d, DLM_ARM_WORK_POST_DEQ, slot, seq) != 0)",
+	       "*** the snapshot is taken BEFORE the work is queued -- in the "
+	       "releaser's own context, which is the last moment the lock "
+	       "exists ***");
+	has("dlm_arm_relq_abandon(d, slot, seq);",
+	    "a work item the fork queue would not take gives the slot back -- "
+	    "no staged release is orphaned");
+	has("st = dlm_relq_claim(&d->relq, slot, seq, out);",
+	    "the fork thread CLAIMS the snapshot");
+	before("dlm_arm_run_release(d, w->arg0, w->arg1);",
+	       "dlm_arm_run_post(d, w->kind, w->arg0, w->arg1);",
+	       "... and the work handler routes a release to the claim BEFORE "
+	       "the rebuild path it must never take");
+	has("if (op == 0u || op == VMS_DLM_POST_DEQ)",
+	    "*** the rebuild path REFUSES a release outright: there is no lock "
+	    "left to read, and a frame about a lock that no longer exists is a "
+	    "frame with no object behind it ***");
+	has("d->releases_staged++",
+	    "a staged release is counted");
+	has("d->releases_no_slot++",
+	    "... a queue-full refusal is counted, and NOTHING is sent");
+	has("d->releases_stale++",
+	    "... and a work item naming no staged release emits nothing, "
+	    "counted (a release goes out once or not at all)");
+	has("exec_lock_init(&d->relq_lock);",
+	    "the queue is a THREAD CROSSING and carries its own executive lock "
+	    "-- never the fork mutex, which a lock-manager path may not take");
+	has("dlm_relq_init(&d->relq);",
+	    "... and it starts empty, before the engine's ops are installed");
+
 	/* The requester FSM's own new-shape gate reads the SAME fact. */
 	has("d->req_ops.all_ovmx        = dlm_arm_all_ovmx_op;",
 	    "the requester arm's op-0x03 gate is bound to the same all-OVMX "

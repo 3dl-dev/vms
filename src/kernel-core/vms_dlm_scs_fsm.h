@@ -629,6 +629,136 @@ const struct dlm_req *dlm_req_fsm_find(const struct dlm_req_fsm *f,
 uint32_t dlm_req_fsm_outstanding(const struct dlm_req_fsm *f);
 const char *dlm_req_state_name(enum dlm_req_state s);
 
+/* ==========================================================================
+ * 12. THE RELEASE QUEUE -- how a $DEQ survives the death of its own LKB
+ *     (rd vms-49f8)
+ *
+ * THE BUG THIS OBJECT EXISTS FOR, as measured on the live 2-node rig (PR #1174:
+ * `releases_sent=0`, `releases_no_wire_op=0`, `posts_lock_gone=2`). Every other
+ * outbound DLM frame is built on the fork thread from a FRESH executive read --
+ * the glue queues the lock id, and `ops->refill_post` re-reads the proxy LKB at
+ * the moment of transmission (§"THE ANTI-LARP PRIMITIVE", vms_dlm_proxy.h).
+ * That discipline is exactly right for an ENQ, a CONVERT and every retransmit,
+ * and it is IMPOSSIBLE for a release: the $DEQ *is* the destruction of the
+ * proxy LKB. vms_deq_core tears the lock block down as soon as the post is
+ * queued, so by the time the fork thread ran there was nothing left to read and
+ * the transmission was (correctly, given what it knew) abandoned. The op-0x03
+ * emit below it had no reachable caller at all. Image rundown
+ * (dlm_release_batch_post) died the same way.
+ *
+ * THE FIX, AND WHY IT IS NOT A CACHE. A release is not an outstanding request
+ * whose fields can still move: it is a COMPLETED EVENT. At the instant the
+ * engine fills the post -- under res->lock, from the live LKB, through the one
+ * INV-6 chokepoint dlm_proxy_fill_post() -- this node has given up its stake in
+ * a remote-mastered lock, and none of the four values that describe that act
+ * can ever change again (no convert can follow a release; the master's handle
+ * was established by the master's own grant). So the fork thread emits from a
+ * SNAPSHOT of that moment, and the snapshot is the truth: refilling later could
+ * only ever produce "no such lock", which is not a fresher answer, it is no
+ * answer. This queue is the thread crossing, nothing more -- process context
+ * stages, the fork thread claims, and the frame is built from what the engine
+ * really read.
+ *
+ * FOUR FIELDS, AND THE OMISSIONS ARE STRUCTURAL. A record carries the proxy
+ * LKB's own handle, the master's handle for it, the mode it held as it went,
+ * and the master's CSID -- which is precisely what a cat-0x02 op-0x03 asserts
+ * (vms_cluster_codec_dlm.h) plus where to send it. It deliberately does NOT
+ * carry the resource name, the value block or the directory hash: those are
+ * fields of a REQUEST, they have no grounded place on a release, and a snapshot
+ * that held them would be a snapshot a later edit could put on a wire. What is
+ * not in the record cannot be asserted.
+ *
+ * WHAT IS STILL REFUSED. Nothing here relaxes a gate. A record whose
+ * `master_lkid` is 0 -- a lock the master never named -- reaches the codec's
+ * fc8540ae refusal exactly as before and NOTHING is sent (the placeholder lock
+ * id that bugchecked a real VAX with INVLOCKID). The all-OVMX gate and RULE C
+ * are applied by dlm_req_fsm_post() on the fork thread, after the claim, so a
+ * staged release toward a peer this executive cannot prove runs this
+ * implementation is still counted and dropped, never emitted.
+ *
+ * PURE, AND LOCKED BY ITS OWNER. This object makes no call, takes no lock and
+ * reads no clock; the GLUE (vms_dlm_scs.c) owns one, serialises every call on
+ * its own executive lock, and is the only thing that knows about threads. The
+ * `seq` stamp is what makes a claim safe: a slot is claimed only by the exact
+ * (index, generation) pair that was staged, so a stale or duplicated work item
+ * finds nothing and is counted rather than emitting a release twice.
+ * ========================================================================== */
+
+/*
+ * Releases that may be in flight between process context and the fork thread at
+ * once. An OVMX design value (no published VMS limit is in this project's
+ * sources): four times the engine's own rundown batch, so a full process
+ * rundown sweep stages without refusing, and small enough that the whole queue
+ * is a few hundred bytes inside the arm's single allocation. A FULL queue is an
+ * honest counted refusal -- never an evicted release, because an evicted
+ * release is a lock the master still believes we hold.
+ */
+#define DLM_RELQ_SLOTS 16u
+
+/* One release, as the executive really performed it. */
+struct dlm_relq_rec {
+	uint32_t req_lkid;     /* the proxy LKB's own handle (never 0)        */
+	uint32_t master_lkid;  /* the master's handle, as its grant recorded  */
+	uint32_t dst_csid;     /* the MASTER -- a release never goes to a
+				* directory node                              */
+	uint8_t  mode;         /* the mode the LKB held as it was released    */
+	uint8_t  pad[3];
+};
+
+struct dlm_relq_slot {
+	struct dlm_relq_rec rec;
+	uint32_t seq;          /* the generation this staging minted; 0 free  */
+	uint8_t  busy;
+	uint8_t  pad[3];
+};
+
+struct dlm_relq {
+	struct dlm_relq_slot slot[DLM_RELQ_SLOTS];
+	uint32_t next_seq;
+
+	/* Counted facts, every one a thing that really happened. */
+	uint32_t staged;        /* releases snapshotted from a live LKB       */
+	uint32_t claimed;       /* ... and really handed to the FSM           */
+	uint32_t abandoned;     /* staged, but the fork queue would not take
+				 * the work item: the slot is given back      */
+	uint32_t full_refused;  /* no slot: NOTHING is staged, nothing sent   */
+	uint32_t stale_refused; /* a claim whose (index, generation) names no
+				 * staged release -- counted, never guessed   */
+};
+
+/* Reset to an empty queue. Stages nothing and frees nothing. */
+void dlm_relq_init(struct dlm_relq *q);
+
+/*
+ * SNAPSHOT one release out of the post the engine just filled from the live
+ * proxy LKB, and return the (slot, generation) pair that names it.
+ *
+ * `p` must be a VMS_DLM_POST_DEQ post carrying a real req_lkid; anything else is
+ * DLM_REQ_E_INVAL and nothing is staged. DLM_REQ_E_NOSLOT means the queue is
+ * full: the caller must report a failure to the releaser, because no frame will
+ * be built for a release that was never staged.
+ */
+enum dlm_req_status dlm_relq_stage(struct dlm_relq *q,
+				   const struct vms_dlm_proxy_post *p,
+				   uint32_t *out_slot, uint32_t *out_seq);
+
+/*
+ * CLAIM the release named by (`slot`, `seq`), freeing the slot, and write it out
+ * as the post the requester FSM takes -- op VMS_DLM_POST_DEQ, the four recorded
+ * values, and ZEROS everywhere else, so no request-shaped field can ride a
+ * release. DLM_REQ_E_NOLOCK when that pair names no staged release.
+ */
+enum dlm_req_status dlm_relq_claim(struct dlm_relq *q, uint32_t slot,
+				   uint32_t seq, struct vms_dlm_proxy_post *out);
+
+/* Give back a slot whose work item never made it to the fork thread. Counted
+ * as abandoned: a release that was staged and then dropped is a gap, and a gap
+ * is a number, not a silence. */
+void dlm_relq_abandon(struct dlm_relq *q, uint32_t slot, uint32_t seq);
+
+/* How many releases are staged and not yet claimed. */
+uint32_t dlm_relq_pending(const struct dlm_relq *q);
+
 #ifdef __cplusplus
 }
 #endif

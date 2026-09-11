@@ -566,9 +566,11 @@ vms_codec_status_t vms_dlm_blkast_build(const struct vms_dlm_blkast *b,
 }
 
 /*
- * op 0x06: the value-block accessor. There is NO vms_dlm_valblk_convert_build
- * in this file and its absence is the point -- see the header's doc comment
- * ("body[32:36] ahead of it varies per request in a way no capture pins").
+ * op 0x06 CONVERT-with-VALBLK: parse (read the value block a peer sent) and,
+ * since vms-727, build (emit our own holder's value-block flush). body[32:36]
+ * is no longer un-pinned: body[34]=0x01 is the cat-0x02 request stamp and
+ * body[32]=body[52] is a per-lock SERIAL sourced from the LKB -- see the
+ * header's op-0x06 BUILD layout comment.
  */
 vms_codec_status_t
 vms_dlm_valblk_convert_parse_body(const uint8_t *body, uint32_t len,
@@ -588,12 +590,74 @@ vms_dlm_valblk_convert_parse_body(const uint8_t *body, uint32_t len,
 		return st;
 
 	c.mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
+	c.serial = vms_wire_get_u8(&v, VMS_OFB_DLM_VALBLK_SERIAL);
 	vms_wire_get_bytes(&v, VMS_OFB_DLM_VALBLK, VMS_DLM_VALBLK_WIRE_LEN,
 			   c.valblk);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 
 	*out = c;
+	return VMS_CODEC_OK;
+}
+
+/*
+ * Build an op-0x06 CONVERT-with-VALBLK. Mirrors the DEQ/BLKAST builders: the
+ * two lock ids must be real (a value-block flush naming lock 0 is nothing).
+ * Every byte written is grounded (vms-727) -- the SERIAL from the LKB, the
+ * value block from the LKB, and constants verified byte-for-byte across the
+ * five real-wire captures. body[56:88] is zero-filled: the real sender pads
+ * it with uninitialised stack, which is not a field to reproduce.
+ */
+vms_codec_status_t vms_dlm_valblk_convert_build(const struct vms_dlm_valblk_convert *c,
+						uint8_t *frame, uint32_t cap,
+						uint32_t *written)
+{
+	vms_wire_buf_t w;
+
+	if (c == (const struct vms_dlm_valblk_convert *)0)
+		return VMS_CODEC_E_INVAL;
+	if (c->req_lkid == VMS_DLM_LKID_UNSET ||
+	    c->master_lkid == VMS_DLM_LKID_UNSET)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_CONVERT_VALBLK);
+	vms_wire_put_le16(&w, VMS_OFF_DLM_VALBLK_HDR1, VMS_DLM_VALBLK_HDR1_VAL);
+	vms_wire_put_le16(&w, VMS_OFF_DLM_VALBLK_HDR2, VMS_DLM_VALBLK_HDR2_VAL);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, c->req_lkid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, c->master_lkid);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_FLAG, VMS_DLM_VALBLK_FLAG_VAL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_MODE, c->mode);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_SERIAL, c->serial);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_REQSTAMP, VMS_DLM_VALBLK_REQSTAMP_VAL);
+	vms_wire_put_bytes(&w, VMS_OFF_DLM_VALBLK, VMS_DLM_VALBLK_WIRE_LEN,
+			   c->valblk);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_SERIAL2, c->serial);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_TAG2, VMS_DLM_VALBLK_TAG2_VAL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_PAD, VMS_DLM_VALBLK_PAD_VAL);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_VALBLK_PAD + 1u, VMS_DLM_VALBLK_PAD_VAL);
+	/*
+	 * body[56:88] is uninitialised sender buffer on the real wire, not a
+	 * field. Write clean zeros explicitly (rather than trust a caller-
+	 * zeroed scratch) so the emit never leaks our own memory AND so the
+	 * length claim below is bounds-checked: this run fails the buffer if
+	 * `cap` cannot hold the full op-0x06 body.
+	 */
+	{
+		static const uint8_t zeros[VMS_DLM_VALBLK_BODY_LEN - 56u] = { 0 };
+		vms_wire_put_bytes(&w,
+				   VMS_OFF_SYSAP_BODY + 56u,
+				   (uint32_t)sizeof(zeros), zeros);
+	}
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_OFF_SYSAP_BODY + VMS_DLM_VALBLK_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 

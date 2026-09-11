@@ -545,7 +545,8 @@ tcpip-daytime-reply-not-formatted
 l2-open-bypasses-phy-io
 pe-vc-snapshot-fabricates-circuit
 scs-cdt-snapshot-fabricates-connection
-cnxman-csb-snapshot-fabricates-member"
+cnxman-csb-snapshot-fabricates-member
+getsyi-csid-reported-without-valid"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -657,6 +658,23 @@ allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
 EOF
                       ;;
+        esac;;
+
+    getsyi-csid-reported-without-valid)
+        case "$_f" in
+        facility)     echo "cluster SYI\$_NODE_CSID projection (vms_ioctl_cluster_getsyi, vms-ci E30)";;
+        targets)      echo "kernel-core/vms_cluster_api.c";;
+        suites_red)   echo "test_syssvc_cluster_negctl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cluster_api_getsyi_project() forces the SYI\$_NODE_CSID block always-taken (the 'if (club->local_csid_valid)' learned-CSID guard becomes 'if (1)'), so node_csid_valid is asserted with NO learned CSID -- integration-note E30's exact fabrication (0 means 'none assigned', never 'node zero'). Called unconditionally by vms_ioctl_cluster_getsyi even with cl->cnxman==NULL. node_csid stays 0 (never learned); only the VALID flag lies. Guard text is unique in the file; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+... node_csid_valid CLEAR -- the cluster assigned no CSID, and 0 means 'none assigned', never 'node zero'
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     cnxman-csb-snapshot-fabricates-member)
@@ -6226,6 +6244,10 @@ apply_edit() {
         # the cl->cnxman==NULL guard, not the `? SS__NORMAL : (int)SS__NOSUCHDEV`
         # ternary (different surrounding text). Gone after apply (no-op re-apply).
         sed -i '/^int cnxman_get_csb(/,/^}/ s|return (int)SS__NOSUCHDEV;|return (int)SS__NORMAL; /* NEGCTL cnxman-csb-snapshot-fabricates-member */|' "$_file";;
+    getsyi-csid-reported-without-valid)
+        # Unique guard text (the SYI$_NODE_CSID learned-CSID guard); forcing it
+        # if(1) asserts node_csid_valid with no learned CSID. Gone after apply.
+        sed -i 's|if (club->local_csid_valid) {|if (1 /* NEGCTL getsyi-csid-reported-without-valid */) {|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

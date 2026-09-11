@@ -135,6 +135,7 @@ static void check_getsyi_ioctl(void)
           "... cluster_member == 0 (this node is not a member)");
     CHECK(a.cluster_nodes == 0u,
           "... cluster_nodes == 0 (the CLUB counts nobody)");
+    /* negctl: getsyi-csid-reported-without-valid */
     CHECK(a.node_csid_valid == 0u && a.node_csid == 0u,
           "... node_csid_valid CLEAR -- the cluster assigned no CSID, and 0 "
           "means 'none assigned', never 'node zero'");

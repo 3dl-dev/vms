@@ -12,6 +12,11 @@
 #include "tcpip_inetd_ident.h"
 
 #include <stddef.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <errno.h>
+#include <string.h>
+#include <unistd.h>
 
 #include "sysuaf.h"     /* sysuaf_lookup, sysuaf_record_privileges, sysuaf_record_t */
 #include "vms_kif.h"    /* vms_kif_setident -- the real executive setident ioctl    */
@@ -23,6 +28,31 @@
 static const struct ovmx_ident_syscalls tcpip_inetd_ident_real = {
     .fn_setident = vms_kif_setident,
 };
+
+/*
+ * Fail-closed diagnostic (rd vms-8bd). On a launch refusal the service image is
+ * never execv'd, so its %OVMX-F- line has nowhere to go and the connecting client
+ * (and the daytime cold-boot proof) just sees an empty read -- indistinguishable
+ * from a dozen other launch failures. This writes the SPECIFIC refusal to BOTH
+ * the auxiliary server's stderr (fd 2 -> SYS$MANAGER:TCPIP$INETD.LOG when detached,
+ * an ops record) AND, when this runs in the spawned child (fd 1 is the accepted
+ * connection socket at this point in tcpip_inetd_spawn), to the client -- so the
+ * reason a fail-closed service did not launch is observable rather than silent.
+ * A fail-closed service reporting WHY it is unavailable is not a secret leak; the
+ * accounts and privileges named are the shipped seed. write()/dprintf go straight
+ * to the fd (no stdio buffering to lose before _exit). */
+static void inetd_ident_diag(const char *fmt, ...)
+{
+    char buf[256];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    size_t len = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
+    (void)!write(STDERR_FILENO, buf, len);
+    (void)!write(STDOUT_FILENO, buf, len);
+}
 
 int tcpip_inetd_apply_identity(const char *username, uint32_t uic,
                                uint32_t uic_group, uint32_t uic_member,
@@ -36,14 +66,22 @@ int tcpip_inetd_apply_identity(const char *username, uint32_t uic,
     /* (1) Stamp the EXECUTIVE identity (survives execv). Fail-closed on refusal
      *     (even status), including the /dev/vms-absent case. */
     uint32_t ist = 0;
-    if (ovmx_ssh_establish_identity(username, uic, privs, ident_sc, &ist) != 0)
+    if (ovmx_ssh_establish_identity(username, uic, privs, ident_sc, &ist) != 0) {
+        inetd_ident_diag("%%OVMX-F-NOIDENT, executive refused run-as identity "
+                         "'%s' [%u,%u] (status %#x)\n",
+                         username, uic >> 16, uic & 0xFFFFu, (unsigned)ist);
         return -1;
+    }
 
     /* (2) Drop Linux credentials to the account's UIC (clear groups, setgid
      *     BEFORE setuid, verify -- ordering + fail-closed enforced by
      *     ovmx_cred_drop_to_uic). A partial drop is a failed drop. */
-    if (ovmx_cred_drop_to_uic(uic_group, uic_member, cred_sc) != 0)
+    if (ovmx_cred_drop_to_uic(uic_group, uic_member, cred_sc) != 0) {
+        inetd_ident_diag("%%OVMX-F-NOUIC, credential drop to [%u,%u] failed "
+                         "for '%s': %s\n",
+                         uic_group, uic_member, username, strerror(errno));
         return -1;
+    }
 
     return 0;
 }
@@ -54,13 +92,24 @@ int tcpip_inetd_establish_service_identity(const char *user,
 {
     /* No configured account -> fail-closed. A service with no identity must NOT
      * launch (and must NEVER inherit INETD's SYSTEM/all-privs -- that is G1). */
-    if (user == NULL || user[0] == '\0')
+    if (user == NULL || user[0] == '\0') {
+        inetd_ident_diag("%%OVMX-F-NOACCT, service has no run-as account "
+                         "configured -- not launched (fail-closed, never SYSTEM)\n");
         return -1;
+    }
 
-    /* Resolve the account in SYSUAF. Unknown/unreadable -> fail-closed. */
+    /* Resolve the account in SYSUAF. Unknown/unreadable -> fail-closed. The RMS
+     * status distinguishes "account not in SYSUAF" from "SYSUAF unreadable over
+     * the ACP" -- the two runtime-resolve failures we most need to tell apart. */
     sysuaf_record_t rec;
-    if (sysuaf_lookup(user, &rec) != 0)
+    uint32_t rms_st = 0;
+    int lst = sysuaf_lookup_st(user, &rec, &rms_st);
+    if (lst != 0) {
+        inetd_ident_diag("%%OVMX-F-NOUSER, SYSUAF lookup of run-as account "
+                         "'%s' failed (rc %d, RMS %#x) -- not launched\n",
+                         user, lst, (unsigned)rms_st);
         return -1;
+    }
 
     uint32_t uic   = ((uint32_t)rec.uic_group << 16) | (rec.uic_member & 0xFFFFu);
     uint64_t privs = sysuaf_record_privileges(&rec);

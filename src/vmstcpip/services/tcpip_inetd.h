@@ -78,6 +78,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -389,6 +390,21 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
         if (identity_fn != NULL && identity_fn(svc) != 0)
             _exit(125);                         /* fail-closed: identity not established */
         execv(exec_path, argv);
+        /* execv returned -> it FAILED. STDOUT is the accepted socket (dup2
+         * succeeded above), so report to the client + INETD.LOG which image
+         * could not start rather than closing on an empty read (rd vms-8bd
+         * diagnostic; distinguishes an execv failure from an identity refusal). */
+        {
+            char eb[256];
+            int en = snprintf(eb, sizeof(eb),
+                              "%%OVMX-F-NOSTART, service image %s could not be "
+                              "launched: %s\n", exec_path, strerror(errno));
+            if (en > 0) {
+                size_t el = (en < (int)sizeof(eb)) ? (size_t)en : sizeof(eb) - 1;
+                (void)!write(STDERR_FILENO, eb, el);
+                (void)!write(STDOUT_FILENO, eb, el);
+            }
+        }
         _exit(127);                             /* execv failed */
     }
 

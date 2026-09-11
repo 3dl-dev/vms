@@ -202,6 +202,25 @@ int main(void)
         check(memcmp(got_dst, peer_id, 6) == 0 && memcmp(got_src, S.my_id, 6) == 0,
               "round-trip recovers DSTID/SRCID across the pad");
 
+        /* A real VAX clears the intra-Ethernet flag on the frames it sends back:
+         * its Connect Confirm / data segments carry RFLG 0x26 where OVMX's CI
+         * carried 0x2e. The receive path MUST still parse them as NSP (a70-A: the
+         * CC was on the wire but was misclassified as a HELLO and dropped). Flip
+         * the RFLG (after the pad, at ETH+LENPREFIX+PAD_LEN) to 0x26 and re-parse. */
+        {
+            uint8_t vframe[DNET_FRAME_MAX];
+            memcpy(vframe, dframe, dlen);
+            uint8_t *vrflg = &vframe[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + DNET_DATA_PAD_LEN];
+            check(*vrflg == DNET_RFLAG_LONG_DATA, "sanity: RFLG is 0x2e before the flip");
+            *vrflg = (uint8_t)(DNET_RFLAG_LONG_DATA & ~DNET_RFLAG_INTRA_ETH); /* 0x26, VAX-reply form */
+            const uint8_t *vpdu = NULL; size_t vplen = 0;
+            check(dnet_engine_parse_data_frame(vframe, dlen, NULL, NULL, &vpdu, &vplen)
+                      == DNET_ENGINE_OK,
+                  "a VAX-reply RFLG (0x26, intra-Ethernet flag cleared) still parses as NSP");
+            check(vplen == sizeof(nsp) && vpdu && memcmp(vpdu, nsp, sizeof(nsp)) == 0,
+                  "the 0x26 frame's NSP PDU is recovered byte-identical");
+        }
+
         /* a MULTICAST endnode-HELLO must NOT carry the pad. */
         uint8_t hframe[DNET_FRAME_MAX];
         size_t hlen = 0;

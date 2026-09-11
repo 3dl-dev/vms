@@ -508,7 +508,10 @@ int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
         return DNET_ENGINE_EINVAL;
 
     const uint8_t *rh = p + pad;              /* routing header after the pad */
-    if (rh[0] != DNET_RFLAG_LONG_DATA)        /* not a long-data frame (e.g. a HELLO) */
+    /* Accept the long-data RFLG masking the intra-Ethernet flag: a real VAX
+     * clears it on its replies (0x26) where OVMX/the initiator sets it (0x2e).
+     * A HELLO (0x0d) / router-hello (0x0b) still fails this test. */
+    if (!DNET_RFLAG_IS_LONG_DATA(rh[0]))      /* not a long-data frame (e.g. a HELLO) */
         return DNET_ENGINE_EINVAL;
 
     if (dst_id_out)

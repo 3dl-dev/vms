@@ -431,6 +431,20 @@ if(BUILD_TESTS)
     set_tests_properties(tcpip_posture_guard PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
 
+    # vms-f394: the TCP/IP Services layered product packs into a DISTINCT product kit
+    # (ovmx-tcpip.kit) -- its own kit, separate from the base-OS ovmx-os.kit, as real
+    # OpenVMS ships TCP/IP Services as a layered product. Built via the same
+    # ovmx_kit_pack factory tool (tools/build-tcpip-kit.sh) and proven pack->list->
+    # extract->byte-exact (the ovmx-os.kit gate applied to the layered product). This
+    # is the PRODUCT half of vms-f394; the release-stream wiring + PRODUCT-INSTALL are
+    # a separate rung + the layered-product-vs-appliance posture gate. SKIPs honestly
+    # under BUILD_TOOLS=OFF (ovmx_kit_pack / TCPIP$*.EXE absent); runs for real in the
+    # BUILD_TOOLS=ON Build&Test job.
+    add_test(NAME tcpip_kit_roundtrip
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_tcpip_kit_roundtrip.sh ${CMAKE_BINARY_DIR}/bin)
+    set_tests_properties(tcpip_kit_roundtrip PROPERTIES
+        LABELS "integration;tcpip" TIMEOUT 120)
+
     # vms-3e9 standing gate: $CREPRC is the SOLE session-creation primitive --
     # no fork/execl/openpty/dup2 survives ABOVE the VMS layer in any session
     # caller, the mechanics really did move INTO $CREPRC, and the Wall-6

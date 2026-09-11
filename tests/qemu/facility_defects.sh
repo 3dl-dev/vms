@@ -541,7 +541,8 @@ loginout-acp-auth-from-ods2
 multiuser-stage-shared-not-peruser
 tcpip-config-hostaddr-not-defined
 tcpip-inetd-reply-not-connected
-tcpip-daytime-reply-not-formatted"
+tcpip-daytime-reply-not-formatted
+l2-open-bypasses-phy-io"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -653,6 +654,26 @@ allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
 EOF
                       ;;
+        esac;;
+
+    l2-open-bypasses-phy-io)
+        case "$_f" in
+        facility)     echo "L2 raw SCS datalink PHY_IO privilege gate (VMS_IOCTL_L2_OPEN, vms-1e4)";;
+        targets)      echo "kernel-core/vms_l2.c";;
+        suites_red)   echo "test_syssvc_l2_datalink";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "l2_priv_check() stops gating the raw SCS datalink on real PHY_IO: the check 'ok = (cur_privs & VMS_PRV_M_PHY_IO) != 0' becomes 'ok = true', so VMS_IOCTL_L2_OPEN admits a caller WITHOUT PHY_IO and mints a handle -- the CAP_NET_RAW-class self-authorization the executive exists to refuse. The nonexistent-interface and byte-exact frame assertions read other paths and stay green; only the AUTH GATE reddens. After substitution the original term is gone, so a second apply is a no-op (selftest).";;
+        require_fail) cat <<'EOF'
+L2_OPEN without PHY_IO -> SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+L2_OPEN without PHY_IO mints no handle
+EOF
+                      ;;
+        knock_on_why)  echo "the always-true priv-check returns SS\$_NORMAL instead of SS\$_NOPRIV AND mints a handle, so both the OPEN-refused and no-handle assertions redden together.";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -6129,6 +6150,10 @@ apply_edit() {
     case "$_d" in
     access-mode-escalation)
         sed -i 's|if (!(proc->cur_privs \& PRV_M_CMKRNL)) {|if (0 /* NEGCTL access-mode-escalation */) {|' "$_file";;
+    l2-open-bypasses-phy-io)
+        # Unique text (l2_priv_check's PHY_IO gate). Drop the mask test so the
+        # check is always true; original term is gone, so a 2nd apply is a no-op.
+        sed -i 's|bool ok = (cur_privs \& VMS_PRV_M_PHY_IO) != 0;|bool ok = true; /* NEGCTL l2-open-bypasses-phy-io */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

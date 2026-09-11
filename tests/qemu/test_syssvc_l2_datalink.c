@@ -177,7 +177,9 @@ int main(void)
         CHECK(sp_st == SS_NORMAL, "$SETPRV disable PHY_IO -> SS$_NORMAL");
 
         st = vms_kif_l2_open(ifname, 0x6007u, &h2, &ix2, NULL);
+        /* negctl: l2-open-bypasses-phy-io */
         CHECK(st == SS_NOPRIV, "L2_OPEN without PHY_IO -> SS$_NOPRIV");
+        /* negctl: l2-open-bypasses-phy-io */
         CHECK(h2 == 0, "L2_OPEN without PHY_IO mints no handle");
 
         sp_st = vms_kif_setprv(VMS_PRV_M_PHY_IO, 1 /* enable */, 0 /* temporary */, NULL);

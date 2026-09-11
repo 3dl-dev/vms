@@ -404,6 +404,17 @@ int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
                            dnet_tick_t now);
 
 /*
+ * dnet_engine_link_service - build the NSP LINK SERVICE credit-grant frame the
+ * connection initiator must send right after the Connect Confirm (rd vms-6165):
+ * it acks the other-data subchannel and opens the flow-control window, which is
+ * what makes a real OpenVMS peer stop retransmitting its CC and start sending.
+ * Wraps dnet_link_link_service() into a full data frame. Requires a RUN link.
+ */
+int dnet_engine_link_service(struct dnet_engine *e,
+                             uint8_t *frame_out, size_t cap, size_t *len_out,
+                             dnet_tick_t now);
+
+/*
  * dnet_engine_link_tick - advance the active link's timers at time `now`
  * (Connect Initiate retransmission and its give-up budget). If the FSM decides
  * to (re)transmit, builds the frame into frame_out and sets *has_out = 1. The

@@ -1749,12 +1749,32 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             case DNET_LINK_EV_CONNECT_CONF:
                 log_ts(stdout);
                 printf(" DECNETD-I-LINKUP, logical link to %u.%u is RUN --"
-                       " awaiting host foundation (host speaks first)\n",
-                       parea, pnode);
+                       " sending NSP link-service (credit) then awaiting host"
+                       " foundation\n", parea, pnode);
                 fflush(stdout);
-                /* rd vms-6165: the real wire's CTERM foundation is HOST-FIRST.
-                 * Arm the client FSM and WAIT -- do NOT send a bind. The host
-                 * sends its seg-1; run_set_host's DATA handler drives replies. */
+                /* rd vms-6165: NSP requires the INITIATOR to send a LINK SERVICE
+                 * right after the CC -- it acks the CC + opens the flow-control
+                 * window, and ONLY THEN does a real VAX send its foundation
+                 * data. Without it VAX1 loops re-sending the CC (writes_recv=0).
+                 * This is the NSP layer; foundation CONTENT stays host-first. */
+                {
+                    uint8_t lsf[DNET_FRAME_MAX];
+                    size_t lslen = 0;
+                    if (dnet_engine_link_service(eng, lsf, sizeof(lsf), &lslen, now)
+                            == DNET_ENGINE_OK) {
+                        uint8_t dst[DNET_ADDR_LEN];
+                        memcpy(dst, lsf, DNET_ADDR_LEN);   /* routing dst the FSM wrote */
+                        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
+                                          dst, lsf, lslen);
+                    } else {
+                        fprintf(stderr, "DECNETD-E-LINKSVC, could not send NSP"
+                                        " link-service credit grant\n");
+                        rc = 1; done = 1;
+                        break;
+                    }
+                }
+                /* Arm the CTERM client FSM and WAIT -- the host sends its
+                 * foundation seg-1; the DATA handler drives the client replies. */
                 if (dnet_cterm_client_open(&term) != 0) {
                     fprintf(stderr, "DECNETD-E-CTERMOPEN, could not arm CTERM"
                                     " client foundation\n");

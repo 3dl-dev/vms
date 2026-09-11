@@ -118,11 +118,18 @@ extern "C" {
 
 /* Concrete MSGFLG values used by this codec. */
 #define DNET_NSP_MSGFLG_DATA    0x60    /* data segment, BOM+EOM (single segment) */
+#define DNET_NSP_MSGFLG_LS      0x10    /* link service (other-data subchannel)  */
 #define DNET_NSP_MSGFLG_ACK     0x04    /* data acknowledgement */
+#define DNET_NSP_MSGFLG_OTHACK  0x14    /* other-data (link-service/interrupt) ack */
 #define DNET_NSP_MSGFLG_CI      0x18    /* connect initiate  (oracle-verified) */
 #define DNET_NSP_MSGFLG_CC      0x28    /* connect confirm   (spec-derived) */
 #define DNET_NSP_MSGFLG_DI      0x38    /* disconnect initiate (spec-derived) */
 #define DNET_NSP_MSGFLG_DC      0x48    /* disconnect confirm  (spec-derived) */
+
+/* Link Service FCVAL_INT (low 2 bits of LSFLAGS): 1 = data-segment request. The
+ * oracle client's post-CC LS carries LSFLAGS=0x01, FCVAL=0x00 (real-cterm-
+ * ci.pcap: `10 <dst> <src> 00 80 01 00`) -- reproduced verbatim (rd vms-6165). */
+#define DNET_NSP_LSFLAGS_DATA_REQ  0x01
 
 /* A standard NSP disconnect-complete reason code (DNA Phase IV NSP), carried in
  * the DC REASON field when a Disconnect Initiate is confirmed normally. */
@@ -146,7 +153,9 @@ enum dnet_nsp_type {
     DNET_NSP_T_CI,          /* connect initiate */
     DNET_NSP_T_CC,          /* connect confirm */
     DNET_NSP_T_DI,          /* disconnect initiate */
-    DNET_NSP_T_DC           /* disconnect confirm */
+    DNET_NSP_T_DC,          /* disconnect confirm */
+    DNET_NSP_T_LS,          /* link service (other-data subchannel, rd vms-6165) */
+    DNET_NSP_T_OTHACK       /* other-data ack (link-service/interrupt ack)        */
 };
 
 /* Generous cap on the opaque higher-layer payload an NSP PDU can carry. */
@@ -167,6 +176,11 @@ struct dnet_nsp_msg {
 
     /* Data segment */
     uint16_t segnum;        /* SEGNUM field (segment no. + BOM/EOM/DLY flags) */
+
+    /* Link Service (DNET_NSP_T_LS): flow-control request on the other-data
+     * subchannel. ACKNUM (below) is mandatory and acks other-data received. */
+    uint8_t  ls_flags;      /* LSFLAGS byte (FCVAL_INT/FCMOD; oracle 0x01)     */
+    int8_t   fc_val;        /* FCVAL byte (segment-count delta; oracle 0x00)   */
 
     /* Piggyback / acknowledgement fields */
     uint8_t  has_acknum;    /* data segment or data-ack: ACKNUM present */

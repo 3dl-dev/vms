@@ -95,12 +95,19 @@ is why `openssl`/`libssl-dev` is a required category-A-adjacent dep.
 `olddefconfig` + `overlay-ovmx-drivers.sh` + openssl module signing. Folding those
 in adds, beyond A/B/C above:
 
-- `merge_config.sh` — a **bash** script (`#!/bin/bash`). This is the one place the
-  OVMX build path reaches for bash today; either provide bash for config-merge, or
-  (cheaper, faithful to the dash finding) port/confirm it under POSIX sh. Tracked as
-  a follow-on decision, not a category change.
+- `merge_config.sh` — **VERIFIED POSIX sh, not bash.** At the exact pinned tag
+  `v6.12.103` the script is `#!/bin/sh`, parses clean under `dash -n`, and has no
+  bashisms (fetched from kernel.org stable cgit and checked, 2026-09-11). So the
+  config-merge step needs **no bash** either — it runs under the same POSIX `sh`
+  as the core build. (An earlier draft of this doc guessed `#!/bin/bash` for it;
+  that was wrong — corrected here after checking the source.)
 - `overlay-ovmx-drivers.sh` — copies OVMX driver sources in; standard sh + cp/ln.
 - `openssl` — module signing (already surfaced via `asn1_compiler`/`extract-cert`).
+
+**Net: the OVMX kernel-build path requires NO bash** — the core build ran under
+`dash`, and `merge_config.sh` (its only config-merge script) is POSIX `sh`. The
+"GNV-scale POSIX layer" needs a POSIX `sh`, full stop; a bash port is not on the
+critical path for building the kernel.
 
 ## Implication for the self-host ladder
 

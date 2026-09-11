@@ -38,6 +38,7 @@
 
 #include "vms_internal.h"     /* -> lock_shim/vms_internal.h -> lock_host_internal.h */
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h -> exec_kbackend_host.h */
+#include "vms_dlm_master.h"   /* the MASTER-side door the DLM's wire arm uses */
 
 #include <pthread.h>
 #include <stdio.h>
@@ -366,11 +367,161 @@ static void remote_lkb_is_outside_image_rundown(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * THE MASTER-SIDE DOOR (vms_dlm_master.h) -- what the DLM's wire arm actually
+ * calls, driven against the REAL engine.
+ *
+ * The arm itself (src/kernel-core/vms_dlm_scs.c) is not host-linkable -- it
+ * names exec_kbackend.h and the fork API, the same reason vms_cnxman.c is not,
+ * and its wiring is proven by tests/cluster/host/test_dlm_scs_arm.c. What IS
+ * host-testable, and is the half that decides what goes on the wire, is this
+ * door: given a peer's request, what does the engine really do, and is what the
+ * door reports READ OUT OF THE LOCK THAT RESULTED?
+ * ================================================================ */
+#define MD_PEER_A   0x00010002u
+#define MD_PEER_B   0x00010003u
+#define MD_LKID_A   0x0000a1a1u
+#define MD_LKID_B   0x0000b2b2u
+
+static void md_fill(struct vms_dlm_master_request *r, uint32_t op,
+		    uint32_t csid, uint32_t lkid, uint32_t lkmode,
+		    uint32_t flags, const char *resnam)
+{
+	memset(r, 0, sizeof(*r));
+	r->op = op;
+	r->req_csid = csid;
+	r->req_lkid = lkid;
+	r->lkmode = lkmode;
+	r->flags = flags;
+	strscpy(r->resnam, resnam, sizeof(r->resnam));
+}
+
+/* CONDITION 4 (rd vms-c27): no delivery proc, no service -- and, decisively,
+ * NO LOCK. A master-side LKB must be owned by a real process; refusing is the
+ * honest floor, and a refusal that had quietly created lock state anyway would
+ * be the worst of both. */
+static void master_door_refuses_without_a_delivery_proc(void)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result res;
+	struct vms_resmaster_args rm;
+	struct vms_proc probe;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "master door: vms_lock_init");
+		return;
+	}
+	proc_init(&probe);
+	vms_lock_dlm_set_delivery_proc(NULL);
+
+	ct_check(vms_lock_dlm_have_delivery_proc() == 0,
+		 "vms-c27 cond.4: no delivery proc is registered");
+
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_A, MD_LKID_A, LCK_K_EXMODE, 0,
+		"MD_NOPROC_RES");
+	ct_check(vms_lock_dlm_master_serve(&r, &res) == SS__NORMAL &&
+		 res.outcome == (uint8_t)VMS_DLM_MASTER_REFUSED,
+		 "vms-c27 cond.4: a peer's $ENQ is REFUSED with no delivery proc");
+
+	ct_check(do_resmaster(&probe, "MD_NOPROC_RES", &rm) == SS__NORMAL &&
+		 rm.found == 0u,
+		 "vms-c27 cond.4: ... and NO lock state was created for it");
+
+	vms_lock_cleanup();
+}
+
+/* The four outcomes the arm turns into wire shapes, each from a real lock. */
+static void master_door_reports_what_the_engine_did(void)
+{
+	struct vms_dlm_master_request r;
+	struct vms_dlm_master_result granted, denied, queued, released;
+	struct vms_proc delivery;
+	struct vms_resmaster_args rm;
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "master door: vms_lock_init");
+		return;
+	}
+	proc_init(&delivery);
+	delivery.current_mode = PSL_C_USER;
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	/* GRANTED. */
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_A, MD_LKID_A, LCK_K_EXMODE, 0,
+		"MD_RES");
+	ct_check(vms_lock_dlm_master_serve(&r, &granted) == SS__NORMAL &&
+		 granted.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
+		 granted.master_lkid != 0u,
+		 "master door: a compatible cross-node $ENQ is GRANTED with a "
+		 "real master handle");
+	ct_check(granted.req_lkid == MD_LKID_A,
+		 "master door: the requester handle the grant reply carries is "
+		 "READ BACK off the LKB the engine stamped (INV-6), not echoed");
+	ct_check(granted.granted_mode == (uint8_t)LCK_K_EXMODE,
+		 "master door: the granted MODE is read off that LKB too");
+	ct_check(do_resmaster(&delivery, "MD_RES", &rm) == SS__NORMAL &&
+		 rm.remote_holder_csid == MD_PEER_A,
+		 "master door: the lock database names the REMOTE holder's CSID");
+
+	/* DENIED -- a second peer, NOQUEUE, incompatible. */
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_B, MD_LKID_B, LCK_K_EXMODE,
+		LCK_M_NOQUEUE, "MD_RES");
+	ct_check(vms_lock_dlm_master_serve(&r, &denied) == SS__NORMAL &&
+		 denied.outcome == (uint8_t)VMS_DLM_MASTER_DENIED &&
+		 denied.master_lkid == 0u,
+		 "master door: NOQUEUE + incompatible is DENIED, and names no "
+		 "lock handle -- because this node holds no lock for it");
+
+	/* QUEUED -- the same request without NOQUEUE is a REAL lock on a REAL
+	 * waiting queue, and it names the holder that blocks it. */
+	md_fill(&r, VMS_DLM_MREQ_ENQ, MD_PEER_B, MD_LKID_B, LCK_K_EXMODE, 0,
+		"MD_RES");
+	ct_check(vms_lock_dlm_master_serve(&r, &queued) == SS__NORMAL &&
+		 queued.outcome == (uint8_t)VMS_DLM_MASTER_QUEUED &&
+		 queued.master_lkid != 0u,
+		 "master door: an incompatible cross-node $ENQ is QUEUED on the "
+		 "master's real waiting queue");
+	ct_check(queued.blocking_csid == MD_PEER_A &&
+		 queued.blocking_master_lkid == granted.master_lkid &&
+		 queued.blocking_req_lkid == MD_LKID_A,
+		 "master door: ... and names the REMOTE holder that blocks it "
+		 "(the BLKAST target), read off the blocking LKB");
+
+	/* CROSS-NODE AUTHORIZATION IS BY CLUSTER IDENTITY. Peer B may not
+	 * release a lock the master holds for peer A. */
+	md_fill(&r, VMS_DLM_MREQ_DEQ, MD_PEER_B, MD_LKID_B, 0, 0, "MD_RES");
+	r.master_lkid = granted.master_lkid;
+	ct_check(vms_lock_dlm_master_serve(&r, &released) == SS__NORMAL &&
+		 released.outcome == (uint8_t)VMS_DLM_MASTER_REFUSED,
+		 "master door: a peer may NOT release a lock held for another "
+		 "node's CSID");
+
+	/* RELEASED, by its real owner -- and the release FLIPS the queued
+	 * waiter, which is the deferred grant the master would owe it. */
+	md_fill(&r, VMS_DLM_MREQ_DEQ, MD_PEER_A, MD_LKID_A, 0, 0, "MD_RES");
+	r.master_lkid = granted.master_lkid;
+	ct_check(vms_lock_dlm_master_serve(&r, &released) == SS__NORMAL &&
+		 released.outcome == (uint8_t)VMS_DLM_MASTER_RELEASED,
+		 "master door: the holder's own release is RELEASED");
+	ct_check(released.deferred_grant == 1u &&
+		 released.deferred_csid == MD_PEER_B &&
+		 released.deferred_req_lkid == MD_LKID_B &&
+		 released.deferred_master_lkid == queued.master_lkid &&
+		 released.deferred_mode == (uint8_t)LCK_K_EXMODE,
+		 "master door: ... and it FLIPPED the queued cross-node waiter "
+		 "to granted, naming it for the deferred GRANT");
+
+	vms_lock_dlm_set_delivery_proc(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_host (vms_lock.c, the real engine, R1 host unit) ===\n");
 	lock_basic();
 	lock_stress();
 	remote_lkb_is_outside_image_rundown();
+	master_door_refuses_without_a_delivery_proc();
+	master_door_reports_what_the_engine_did();
 	return ct_summary("test_lock_host");
 }

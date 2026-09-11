@@ -164,6 +164,16 @@ target_include_directories(test_cnxman_diag PRIVATE ${CMAKE_SOURCE_DIR}/tools)
 # (mixed/unknown weights, capacity). Pure, so it runs in milliseconds.
 cluster_host_cnxman_test(test_dlm_ldwv test_dlm_ldwv.c)
 
+# rd vms-1ee: the DLM's WIRE ARM (vms_dlm_scs.c). The arm itself is not
+# host-linkable (exec_kbackend.h + the fork API, test_cnxman_glue.c's own
+# precedent), so this is the two-proof shape: the TRUST ANCHOR the split-brain
+# gate reads, driven against the real vms_cnxman_csb.c derivation, and the
+# WIRING + ITS ORDER read out of the three shipping files that carry it.
+cluster_host_cnxman_test(test_dlm_scs_arm test_dlm_scs_arm.c)
+target_compile_definitions(test_dlm_scs_arm PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+
 # FC-P3.15's own done-condition: prove NO CNXMAN TU writes below body offset 0
 # (design sec 3.2.4 ruling E1). OVMX_KCORE_DIR lets the test open the real
 # src/kernel-core/*.c sources for the source-level scan (proof 2/3) -- a real

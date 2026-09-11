@@ -2388,10 +2388,14 @@ static int run_fal_accept_test(void)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-        "usage: %s --address AREA.NODE [options]\n"
-        "  --address A.N       DECnet Phase IV executor address (REQUIRED;\n"
-        "                      1..63 . 1..1023). No identity is invented if\n"
-        "                      omitted -- the daemon exits (INV-6).\n"
+        "usage: %s [--address AREA.NODE] [options]\n"
+        "  --address A.N       DECnet Phase IV executor address (1..63 . 1..1023).\n"
+        "                      If omitted it is SELF-SOURCED from the node's DECnet\n"
+        "                      configuration (executor.dat, written by NCP SET/DEFINE\n"
+        "                      EXECUTOR ADDRESS) -- the way STARTNET.COM starts the\n"
+        "                      persistent daemon with no argv. No identity is ever\n"
+        "                      invented; with neither the flag nor a configured\n"
+        "                      executor the daemon exits (INV-6).\n"
         "  --name NAME         NCP node name (1..6 chars; default OVMX)\n"
         "  --iface IFNAME      datalink interface (default %s)\n"
         "  --device DEV        VMS device label for the circuit (default EWA0)\n"
@@ -2443,6 +2447,13 @@ static void usage(const char *argv0)
         "                      process running LOGINOUT.EXE on an RTAn: for it.\n"
         "                      The remote user is AUTHENTICATED by LOGINOUT --\n"
         "                      this daemon spawns nothing and knows no password.\n"
+        "                      This is the DEFAULT for the persistent endnode\n"
+        "                      daemon (NETACP serves object 42); the flag is kept\n"
+        "                      for an explicit ROUTER that should also serve.\n"
+        "  --no-cterm-server   do NOT serve inbound $ SET HOST -- route only. For a\n"
+        "                      routing/capture invocation that wants no LOGINOUT\n"
+        "                      surface. (A --router or --set-host invocation is\n"
+        "                      already routing/client-only unless serve is pinned.)\n"
         "  --set-host A.N      $ SET HOST CLIENT: open a CTERM terminal session\n"
         "                      to Session Control object 42 on remote node A.N and\n"
         "                      bridge THIS process's VMS terminal channel to it\n"
@@ -2484,7 +2495,18 @@ int main(int argc, char **argv)
     int sethost_srccode_test = 0;
     int cterm_accept_test = 0;
     int isolation_test = 0;
-    int cterm_server = 0;
+    /* The persistent node daemon (NETACP) SERVES inbound $ SET HOST by default
+     * -- serving object 42 is what a DECnet ancillary control process does, and
+     * RUN/DETACHED (VMS semantics: an image parameter, never argv) cannot pass a
+     * mode flag to the detached daemon SYS$MANAGER:STARTNET.COM starts, exactly
+     * as TCPIP$STARTUP starts TCPIP$INETD with no args and it reads its own
+     * SYS$SYSTEM:TCPIP$SERVICE.DAT (rd vms-a70 direction B). Serving is a strict
+     * SUPERSET of routing: it is dormant until a peer sends an object-42 connect,
+     * and mints nothing without the executive (fail-honest, INV-6). A ROUTER is
+     * routing-only unless it is told otherwise, and --no-cterm-server forces it
+     * off for a routing/capture invocation. */
+    int cterm_server = 1;
+    int cterm_server_explicit = 0;        /* did the caller pin serve on/off?      */
     const char *set_host_to = NULL;       /* --set-host A.N : CTERM terminal client */
     const char *set_host_user = "SYSTEM"; /* --user : CTERM access-control name      */
     int fal_self_test = 0;
@@ -2509,7 +2531,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
         else if (!strcmp(argv[i], "--isolation-test")) isolation_test = 1;
-        else if (!strcmp(argv[i], "--cterm-server")) cterm_server = 1;
+        else if (!strcmp(argv[i], "--cterm-server")) { cterm_server = 1; cterm_server_explicit = 1; }
+        else if (!strcmp(argv[i], "--no-cterm-server")) { cterm_server = 0; cterm_server_explicit = 1; }
         else if (!strcmp(argv[i], "--set-host") && i + 1 < argc) set_host_to = argv[++i];
         else if (!strcmp(argv[i], "--user") && i + 1 < argc)     set_host_user = argv[++i];
         else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
@@ -2548,12 +2571,21 @@ int main(int argc, char **argv)
     if (fal_accept_test)
         return run_fal_accept_test();
 
-    /* --set-host CLIENT self-sources its executor address from the node's DECnet
-     * configuration (rd vms-f54) so DCL's SET HOST wiring need not know it. When
-     * no --address was given, read it from executor.dat; if that is absent the
-     * NOADDRESS error below fires -- still never an invented address. */
+    /* A router routes and a --set-host CLIENT bridges a terminal; neither is a
+     * NETACP that serves inbound object-42 sessions unless the caller pins it on.
+     * The persistent ENDNODE daemon serves by default (see cterm_server above). */
+    if ((router_mode || set_host_to) && !cterm_server_explicit)
+        cterm_server = 0;
+
+    /* SELF-SOURCE the executor address from the node's DECnet configuration
+     * (executor.dat, rd vms-f54) whenever --address was not given -- for the
+     * --set-host CLIENT (so DCL's SET HOST wiring need not know it), for the
+     * persistent NETACP daemon SYS$MANAGER:STARTNET.COM starts with no argv
+     * (rd vms-a70 direction B), and for --show-executor. If executor.dat is
+     * absent the NOADDRESS error below fires -- DECnet is simply not configured
+     * on this node, and no address is ever invented (INV-6). */
     static char sethost_addrbuf[16];
-    if (set_host_to && !addr_s) {
+    if (!addr_s) {
         unsigned ea = 0, en = 0;
         if (sethost_source_executor(&ea, &en) == 0) {
             snprintf(sethost_addrbuf, sizeof(sethost_addrbuf), "%u.%u", ea, en);
@@ -2600,6 +2632,13 @@ int main(int argc, char **argv)
             dnet_engine_set_router(&e, (uint8_t)router_priority);
         dnet_engine_show_executor(&e, stdout);
         dnet_engine_show_circuit(&e, stdout);
+        /* Report, honestly, whether the persistent daemon would SERVE inbound
+         * $ SET HOST -- the serve decision STARTNET.COM's NETACP inherits (the
+         * endnode daemon serves object 42 by default; a router or --set-host
+         * client, or --no-cterm-server, does not). This is a dry-run readout:
+         * --show-executor opens no socket, so it never actually serves here. */
+        printf("Inbound SET HOST (object 42) = %s\n",
+               cterm_server ? "served (CTERM -> LOGINOUT)" : "not served");
         return 0;
     }
 
@@ -2669,6 +2708,16 @@ int main(int argc, char **argv)
            router_mode ? "L1 router" : "endnode", eng.circuit);
     dnet_engine_show_executor(&eng, stdout);
     dnet_engine_show_circuit(&eng, stdout);
+    /* Say, honestly, whether this NETACP serves inbound $ SET HOST. When it
+     * does, an inbound object-42 connect reaches LOGINOUT on an executive-minted
+     * RTAn: (one session at a time); the remote user authenticates fresh. */
+    log_ts(stdout);
+    if (cterm_server)
+        printf(" DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session"
+               " Control object 42 -> LOGINOUT on RTAn:); one session at a time\n");
+    else
+        printf(" DECNETD-I-ROUTEONLY, NOT serving inbound $ SET HOST"
+               " (routing only)\n");
     fflush(stdout);
 
     /* --set-host CLIENT (rd vms-f54): the OUTBOUND half of $ SET HOST. It opens

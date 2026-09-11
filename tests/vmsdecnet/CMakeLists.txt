@@ -163,3 +163,13 @@ if(OVMX_DAP_SANITIZE_OK)
     target_link_options(test_dnet_router_emit_fuzz PRIVATE -fsanitize=address,undefined)
 endif()
 add_test(NAME vmsdecnet_router_emit_fuzz_unit COMMAND test_dnet_router_emit_fuzz)
+
+# The DECnet startup GATE + serve-default decision SYS$MANAGER:STARTNET.COM
+# relies on (rd vms-a70 direction B): --show-executor self-sources the executor
+# address and exits SUCCESS iff DECnet is configured (the gate STARTNET branches
+# on), and the persistent endnode daemon serves inbound object 42 by default.
+# Runs the shipped DECNETD.EXE on the host -- no socket, no /dev/vms, no privilege.
+add_test(NAME vmsdecnet_startnet_gate
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_decnetd_startnet_gate.sh)
+set_tests_properties(vmsdecnet_startnet_gate PROPERTIES
+    ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:decnetd_exe>")

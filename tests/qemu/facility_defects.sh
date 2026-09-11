@@ -543,7 +543,8 @@ tcpip-config-hostaddr-not-defined
 tcpip-inetd-reply-not-connected
 tcpip-daytime-reply-not-formatted
 l2-open-bypasses-phy-io
-pe-vc-snapshot-fabricates-circuit"
+pe-vc-snapshot-fabricates-circuit
+scs-cdt-snapshot-fabricates-connection"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -655,6 +656,26 @@ allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
 EOF
                       ;;
+        esac;;
+
+    scs-cdt-snapshot-fabricates-connection)
+        case "$_f" in
+        facility)     echo "SCS CDT diagnostic snapshot (VMS_CLUSTER_DIAG_CONN_CDT, vms-ci)";;
+        targets)      echo "kernel-core/vms_scs.c";;
+        suites_red)   echo "test_kmod_cluster_conn_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_scs_cdt_snapshot()'s 'cl->scs == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV (range-scoped, only that one return), so every CDL index answers SS__NORMAL -- a placeholder connection reported as live. memset(out,0) precedes the guard, so rows read back all-zero: an index far past any CDL reports SS__NORMAL, and the projected rows carry local_conid==0 (the wire's 'not bound yet' value) reported as real. INV-6 fabrication. After apply the return is SS__NORMAL, gone from the function (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+row CDT, index far past any CDL: SS$_NOSUCHDEV, not a crash
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+every projected CDT row carries a real minted Local Con.ID, never 0 (the wire's own 'not bound yet' value)
+EOF
+                      ;;
+        knock_on_why)  echo "the same always-NORMAL guard both answers a far-past index SS__NORMAL (require_fail) AND projects zero-conid rows as live (the walk sees 'live' rows with local_conid==0).";;
         esac;;
 
     pe-vc-snapshot-fabricates-circuit)
@@ -6177,6 +6198,10 @@ apply_edit() {
         # returns are untouched; after apply that return is SS__NORMAL, so a 2nd
         # apply finds no SS__NOSUCHDEV in that function (no-op selftest).
         sed -i '/^int vms_pe_vc_snapshot(/,/^}/ s|return SS__NOSUCHDEV;|return SS__NORMAL; /* NEGCTL pe-vc-snapshot-fabricates-circuit */|' "$_file";;
+    scs-cdt-snapshot-fabricates-connection)
+        # Range-scoped to vms_scs_cdt_snapshot (single SS__NOSUCHDEV at :750);
+        # after apply it is SS__NORMAL, so a 2nd apply finds none (no-op selftest).
+        sed -i '/^int vms_scs_cdt_snapshot(/,/^}/ s|return SS__NOSUCHDEV;|return SS__NORMAL; /* NEGCTL scs-cdt-snapshot-fabricates-connection */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

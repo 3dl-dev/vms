@@ -35,7 +35,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: rig
-      image: 192.168.2.43:30500/ovmx-genesis-rig:25
+      image: 192.168.2.43:30500/ovmx-genesis-rig:30
       imagePullPolicy: Always
       env:
         #  proof | negctl | noderive | xnode  -- see run_cluster_genesis_2node.sh

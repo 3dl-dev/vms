@@ -511,6 +511,62 @@ if [ "$MODE" = "xnode" ]; then
 		fi
 	done
 
+	# (6) THE DIRECT MASTER-SIDE RELEASE PROOF (rd vms-c72, conductor
+	#     ledger-bar gap-close). A DEDICATED single-holder resource's
+	#     GET_RESMASTER, sampled on the MASTER once BEFORE the release and
+	#     again only once its own `releases_received` counter has RISEN --
+	#     never on the counter alone (return-value != state trap).
+	A_RMB_RES=$(rig_field A RESMASTER-BEFORE res)
+	B_RMB_RES=$(rig_field B RESMASTER-BEFORE res)
+	A_RMB_NG=$(num "$(rig_field A RESMASTER-BEFORE n_granted)")
+	B_RMB_NG=$(num "$(rig_field B RESMASTER-BEFORE n_granted)")
+	A_RMA_NG=$(num "$(rig_field A RESMASTER-AFTER n_granted)")
+	B_RMA_NG=$(num "$(rig_field B RESMASTER-AFTER n_granted)")
+	A_RMA_FOUND=$(num "$(rig_field A RESMASTER-AFTER found)")
+	B_RMA_FOUND=$(num "$(rig_field B RESMASTER-AFTER found)")
+	A_RMA_ROSE=$(rig_field A RESMASTER-AFTER counter_rose)
+	B_RMA_ROSE=$(rig_field B RESMASTER-AFTER counter_rose)
+
+	echo "  DIRECT RELEASE PROOF (rd vms-c72):"
+	printf "    A: BEFORE res=%s n_granted=%s  AFTER n_granted=%s found=%s counter_rose=%s\n" \
+		"${A_RMB_RES:-none}" "$A_RMB_NG" "$A_RMA_NG" "$A_RMA_FOUND" "${A_RMA_ROSE:-?}"
+	printf "    B: BEFORE res=%s n_granted=%s  AFTER n_granted=%s found=%s counter_rose=%s\n" \
+		"${B_RMB_RES:-none}" "$B_RMB_NG" "$B_RMA_NG" "$B_RMA_FOUND" "${B_RMA_ROSE:-?}"
+
+	# A node is a SUBJECT once its own BEFORE found a single holder (n_granted
+	# read >=1); CLEAN means that holder is later gone AND the release was
+	# actually observed (counter_rose=1); a REAL BUG is the counter rising
+	# while the holder is still shown present -- reported, never masked.
+	DIRECT_SUBJECT=0; DIRECT_PASS=0; DIRECT_BUG=0
+	for N in A B; do
+		eval "ng=\$${N}_RMB_NG; rose=\$${N}_RMA_ROSE; ang=\$${N}_RMA_NG; afound=\$${N}_RMA_FOUND"
+		if [ "$ng" -ge 1 ] 2>/dev/null; then
+			DIRECT_SUBJECT=1
+			if [ "$rose" = "1" ] && [ "$ang" -ge 1 ] 2>/dev/null; then
+				echo "  REAL BUG (6): node $N's master-side queue STILL shows the"
+				echo "  holder present (n_granted=$ang) after releases_received"
+				echo "  rose -- the return-value != state trap: the release path"
+				echo "  reported success but the LKB never left the granted queue."
+				DIRECT_BUG=1
+			elif [ "$rose" = "1" ] && { [ "$ang" = "0" ] || [ "$afound" = "0" ]; }; then
+				DIRECT_PASS=1
+			fi
+		fi
+	done
+	if [ "$DIRECT_BUG" = "1" ]; then
+		XFAIL=1
+	elif [ "$DIRECT_SUBJECT" = "0" ]; then
+		echo "  INCONCLUSIVE (6): neither node found a dedicated single-holder"
+		echo "  resource its peer mastered -- the direct delta was never"
+		echo "  bracketed."
+		XFAIL=1
+	elif [ "$DIRECT_PASS" = "0" ]; then
+		echo "  INCONCLUSIVE (6): a subject was found but releases_received"
+		echo "  never rose within the poll window -- the peer's DEQ was never"
+		echo "  observed as processed."
+		XFAIL=1
+	fi
+
 	# ---- what HELD, itemised, pass or fail ------------------------------
 	#
 	# A red run is not an absence of evidence. The five properties below are
@@ -542,6 +598,11 @@ if [ "$MODE" = "xnode" ]; then
 		&& echo 1 || echo 0)" \
 		"NEVER CRASH A PEER: both nodes ACTED on the peer's cross-node"
 	echo "              frames and stayed sane members (no bugcheck, no panic)"
+	held "$( { [ "$DIRECT_BUG" = "0" ] && [ "$DIRECT_PASS" = "1" ]; } \
+		&& echo 1 || echo 0)" \
+		"the DIRECT release delta: a dedicated single-holder resource's"
+	echo "              master-side queue shows the holder GONE after"
+	echo "              releases_received rose -- not just the counter"
 	echo ""
 
 	if [ "$XFAIL" = "0" ]; then

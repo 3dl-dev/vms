@@ -357,17 +357,28 @@ RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
 # vermagic (guaranteed -- same build) and an EMPTY modinfo `depends` (so
 # finit_module, which resolves no dependencies, loads it in one shot rather than
 # failing -- a load failure would collapse Boot C into Boot B and prove nothing).
-# x86_64 defconfig builds many such modules; we take the first dependency-free
-# one deterministically. Signing is not required for the test (SIG_FORCE is off,
-# and the assertion is about /dev/vms absence, not taint) but we sign it with
-# the OVMX key for consistency with the harvested OVMX modules.
+# CRITICAL (vms-c6b2): the module must also LOAD WITHOUT HARDWARE -- its
+# module_init() must register into a subsystem (crypto/fs/nls/net), NOT probe a
+# device. A device driver whose probe finds no hardware returns -ENODEV, so
+# finit_module fails with ENODEV and Boot C silently collapses into Boot B (halt
+# at "error loading system file - VMS.KO / No such device", not the intended
+# "device did not open"). This bit us when #1062 (vms-ddc) set
+# CONFIG_SCSI_LOWLEVEL=y, which built SCSI HBA drivers as =m with an empty
+# `depends` -- one sorted ahead of the benign module and was picked, -ENODEV'ing
+# in the virtio-only guest. So we EXCLUDE ./drivers/* entirely (where hardware
+# probes live) and skip any module carrying a hardware-binding alias
+# (pci:/usb:/acpi:/of:/hid:/platform:), then take the first such module
+# deterministically. Signing is not required for the test (SIG_FORCE is off, and
+# the assertion is about /dev/vms absence, not taint) but we sign it with the
+# OVMX key for consistency with the harvested OVMX modules.
 RUN KEY=/usr/src/linux/ovmx-module-signing-key.pem; \
     STUB=""; \
-    for ko in $(find . -name '*.ko' ! -name 'vms.ko' ! -path './drivers/ovmx/*' | sort); do \
+    for ko in $(find . -name '*.ko' ! -name 'vms.ko' ! -path './drivers/*' | sort); do \
         [ -z "$(modinfo -F depends "$ko")" ] || continue; \
+        modinfo -F alias "$ko" 2>/dev/null | grep -qE '^(pci|usb|acpi|of|hid|platform):' && continue; \
         STUB="$ko"; break; \
     done; \
-    [ -n "$STUB" ] || { echo "FAIL: no dependency-free stock .ko found for the NODEV negative control (vms-165); x86_64 defconfig should build several"; exit 1; }; \
+    [ -n "$STUB" ] || { echo "FAIL: no dependency-free, hardware-independent stock .ko found for the NODEV negative control (vms-165/vms-c6b2); a modular kernel builds crypto/fs/nls modules that qualify -- if none, the config went all-builtin and the stub source must be reconsidered"; exit 1; }; \
     cp "$STUB" /kernel-out/nodev-stub.ko; \
     if [ -z "$(modinfo -F signer /kernel-out/nodev-stub.ko 2>/dev/null)" ]; then \
         ./scripts/sign-file sha256 "$KEY" "$KEY" /kernel-out/nodev-stub.ko || { echo "FAIL: could not sign nodev-stub.ko (vms-165)"; exit 1; }; \

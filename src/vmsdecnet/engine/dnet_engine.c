@@ -438,12 +438,21 @@ int dnet_engine_build_data_frame(const struct dnet_engine *e,
     frame_out[13] = (uint8_t)(DNET_ETHERTYPE & 0xff);
 
     uint8_t *p = frame_out + DNET_ETH_HDRLEN;
-    /* Data-link 2-byte LE length prefix = routing header + NSP PDU (everything
-     * after the prefix), matching the specimen-#3 framing. */
-    uint16_t rlen = (uint16_t)(DNET_DATA_RHDR_LEN + pdu_len);
+    /* Data-link 2-byte LE length prefix = pad + routing header + NSP PDU
+     * (everything after the prefix), matching the specimen-#3 framing (the
+     * captured VAX CI's prefix 0x0033 = 51 = 1 pad + 21 rhdr + 29 NSP). */
+    uint16_t rlen = (uint16_t)(DNET_DATA_PAD_LEN + DNET_DATA_RHDR_LEN + pdu_len);
     p[0] = (uint8_t)(rlen & 0xff);
     p[1] = (uint8_t)((rlen >> 8) & 0xff);
     p += DNET_DATA_LENPREFIX;
+
+    /* Phase IV intra-Ethernet PADDING field (rd vms-a70). Real VMS prepends this
+     * before the routing-flags byte on UNICAST routed data frames and silently
+     * DISCARDS a unicast CI that lacks it at the routing layer; emitting it makes
+     * our CI byte-identical to the captured VAX wire (specimen #3: 0x81). HELLO /
+     * router-hello control multicasts stay padless -- they are built elsewhere
+     * (dnet_engine_build_hello_frame / router-hello encoder), never this path. */
+    *p++ = DNET_DATA_PAD_BYTE;
 
     /* 21-byte long-data routing header. */
     p[0] = DNET_RFLAG_LONG_DATA;      /* RFLG */
@@ -472,7 +481,9 @@ int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
 {
     if (!frame || !nsp_pdu || !pdu_len)
         return DNET_ENGINE_EINVAL;
-    if (len < DNET_DATA_NSP_OFF)
+    /* Enough for the Ethernet header + the LE length prefix (rlen bounds the
+     * routing message below; pad + routing header are validated against it). */
+    if (len < (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX)
         return DNET_ENGINE_EINVAL;
     uint16_t etype = (uint16_t)((frame[12] << 8) | frame[13]);
     if (etype != DNET_ETHERTYPE)
@@ -481,20 +492,32 @@ int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
     const uint8_t *p = frame + DNET_ETH_HDRLEN;
     uint16_t rlen = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
     p += DNET_DATA_LENPREFIX;
-    if (p[0] != DNET_RFLAG_LONG_DATA)     /* not a long-data frame (e.g. a HELLO) */
+    /* The declared routing message must fit the captured frame. After this,
+     * [p, p+rlen) is entirely within the frame -- safe to inspect. */
+    if ((size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + rlen > len)
         return DNET_ENGINE_EINVAL;
-    /* The declared routing length must cover the fixed header and fit the frame. */
-    if (rlen < DNET_DATA_RHDR_LEN ||
-        (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + rlen > len)
+
+    /* Strip an optional Phase IV intra-Ethernet PADDING field (rd vms-a70): a
+     * leading byte with the 0x80 bit set is a pad field of (byte & 0x7f) bytes
+     * total. Real VMS and OVMX both prepend one (0x81) on unicast routed data
+     * frames; tolerate its absence so a legacy padless frame still parses. */
+    size_t pad = 0;
+    if (rlen >= 1 && (p[0] & 0x80))
+        pad = (size_t)(p[0] & 0x7f);
+    if ((size_t)rlen < pad + DNET_DATA_RHDR_LEN)   /* room for pad + routing header */
+        return DNET_ENGINE_EINVAL;
+
+    const uint8_t *rh = p + pad;              /* routing header after the pad */
+    if (rh[0] != DNET_RFLAG_LONG_DATA)        /* not a long-data frame (e.g. a HELLO) */
         return DNET_ENGINE_EINVAL;
 
     if (dst_id_out)
-        memcpy(dst_id_out, p + 3, DNET_ADDR_LEN);
+        memcpy(dst_id_out, rh + 3, DNET_ADDR_LEN);
     if (src_id_out)
-        memcpy(src_id_out, p + 11, DNET_ADDR_LEN);
+        memcpy(src_id_out, rh + 11, DNET_ADDR_LEN);
 
-    *nsp_pdu = p + DNET_DATA_RHDR_LEN;
-    *pdu_len = (size_t)(rlen - DNET_DATA_RHDR_LEN);
+    *nsp_pdu = rh + DNET_DATA_RHDR_LEN;
+    *pdu_len = (size_t)(rlen - pad - DNET_DATA_RHDR_LEN);
     return DNET_ENGINE_OK;
 }
 

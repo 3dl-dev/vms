@@ -85,19 +85,36 @@ extern const uint8_t DNET_ROUTER_HELLO_MCAST[DNET_ADDR_LEN];
  * node-to-node, as distinct from the endnode-HELLO control frame). Grounded on
  * the vms-3be NSP capture (docs/decnet-provenance-register.md sec 4.6, specimen
  * #3): the 21-byte long-data header preceding that Connect Initiate is
- *   RFLG(1)=0x2e  D-reserved(2)=00 00  DSTID(6)  S-reserved(2)=00 00  SRCID(6)
- *   nextl(1)  visit(1)  svc-class(1)  proto(1).
- * OVMX builds this minimal single-hop form (no optional Phase IV padding field,
- * which the specimen carried as 0x81 -- an OVMX-labelled omission, not a
- * protocol requirement between two OVMX endnodes; multi-hop forwarding / the
- * full routing-data codec is a later routing rung). The NSP PDU (dnet_nsp)
- * follows the header. Data-link 2-byte LE length prefix precedes the header,
- * exactly as the endnode-HELLO frame carries one. */
+ *   PAD(1)=0x81  RFLG(1)=0x2e  D-reserved(2)=00 00  DSTID(6)  S-reserved(2)=00 00
+ *   SRCID(6)  nextl(1)  visit(1)  svc-class(1)  proto(1).
+ * The routing message opens with the Phase IV intra-Ethernet PADDING field the
+ * specimen carried as 0x81 (0x80 = padding-present | 0x01 = one byte total,
+ * the count byte its own only byte), then the 21-byte long-data routing header.
+ *
+ * rd vms-a70 (real VAX<->VAX capture, direction A): real VMS SILENTLY DISCARDS
+ * a unicast Connect Initiate that OMITS this pad at the routing layer -- the CI
+ * never reaches session control, so no conn-confirm and no LOGINOUT. OVMX
+ * therefore EMITS the pad on unicast routed data frames (build_data_frame) and
+ * STRIPS it on receive (parse_data_frame), matching the captured VAX wire byte
+ * for byte. It is a UNICAST-routed-data-frame field ONLY: the endnode-HELLO and
+ * router-hello control MULTICASTS are padless on the real wire (vms-3be /
+ * vms-df5 specimens) and stay padless here -- they are built by
+ * dnet_engine_build_hello_frame / the router-hello encoder, never this path.
+ * The clean-room provenance is the uncopyrightable DNA Phase IV routing pad
+ * format plus the captured VAX frame; the C is OVMX's own. The NSP PDU
+ * (dnet_nsp) follows the header; the data-link 2-byte LE length prefix precedes
+ * the pad and counts everything after it (specimen #3: 0x0033 = 51 = 1 pad +
+ * 21 rhdr + 29 NSP), exactly as the endnode-HELLO frame carries one. */
 #define DNET_RFLAG_LONG_DATA    0x2e   /* long data packet routing flags (specimen #3) */
+#define DNET_DATA_PAD_BYTE      0x81   /* Phase IV intra-Ethernet routing pad: 0x80|len(1) */
+#define DNET_DATA_PAD_LEN       1      /* one pad byte, per specimen #3 (0x81 = length 1) */
 #define DNET_DATA_LENPREFIX     2      /* data-link LE length prefix */
 #define DNET_DATA_RHDR_LEN      21     /* RFLG+2+DSTID(6)+2+SRCID(6)+nextl+visit+svc+proto */
-/* Byte offset of the NSP PDU within a full data frame we build/parse. */
-#define DNET_DATA_NSP_OFF       (DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + DNET_DATA_RHDR_LEN)
+/* Byte offset of the NSP PDU within a full data frame WE BUILD (which always
+ * emits the 1-byte pad). The receive path tolerates a padless legacy frame and
+ * locates the PDU dynamically, so this is the builder's sizing constant. */
+#define DNET_DATA_NSP_OFF       (DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + \
+                                 DNET_DATA_PAD_LEN + DNET_DATA_RHDR_LEN)
 
 /* NCP node names are 1..6 characters (DNA Phase IV). +1 for the NUL. */
 #define DNET_NODENAME_MAX   6

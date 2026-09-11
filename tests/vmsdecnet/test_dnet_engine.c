@@ -167,6 +167,55 @@ int main(void)
 
     close(sv[0]); close(sv[1]);
 
+    /* --- 5. Phase IV intra-Ethernet PADDING on UNICAST data frames (rd vms-a70).
+     * A unicast routed data frame MUST lead the routing message with 0x81 (real
+     * VMS discards a padless CI); a multicast HELLO MUST stay padless; and a
+     * build(+pad) -> parse(strip) round-trip must recover the NSP PDU intact. */
+    printf("  --- unicast pad (0x81) present; multicast HELLO padless; round-trip ---\n");
+    {
+        static const uint8_t peer_id[6] = { 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04 }; /* 1.1 */
+        static const uint8_t nsp[5] = { 0x18, 0x00, 0x00, 0x01, 0x20 }; /* opaque NSP bytes */
+        uint8_t dframe[DNET_FRAME_MAX];
+        size_t dlen = 0;
+        check(dnet_engine_build_data_frame(&S, peer_id, nsp, sizeof(nsp),
+                                           dframe, sizeof(dframe), &dlen) == DNET_ENGINE_OK,
+              "build_data_frame(unicast) ok");
+        /* routing message begins at ETH(14)+LENPREFIX(2) = 16. */
+        check(dframe[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX] == DNET_DATA_PAD_BYTE,
+              "unicast data frame leads the routing message with the 0x81 pad byte");
+        check(dframe[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + DNET_DATA_PAD_LEN]
+                  == DNET_RFLAG_LONG_DATA,
+              "RFLG (0x2e) follows the pad byte");
+        /* LE length prefix counts pad + routing header + NSP. */
+        uint16_t rlen = (uint16_t)(dframe[DNET_ETH_HDRLEN]
+                                   | (dframe[DNET_ETH_HDRLEN + 1] << 8));
+        check(rlen == DNET_DATA_PAD_LEN + DNET_DATA_RHDR_LEN + sizeof(nsp),
+              "length prefix includes the pad byte (== 1 + 21 + pdu_len)");
+
+        /* round-trip: parse strips the pad and recovers the exact NSP PDU. */
+        const uint8_t *rpdu = NULL; size_t rplen = 0;
+        uint8_t got_src[6], got_dst[6];
+        check(dnet_engine_parse_data_frame(dframe, dlen, got_src, got_dst, &rpdu, &rplen)
+                  == DNET_ENGINE_OK, "parse_data_frame strips the pad and parses");
+        check(rplen == sizeof(nsp) && rpdu && memcmp(rpdu, nsp, sizeof(nsp)) == 0,
+              "round-trip NSP PDU byte-identical (send-pad -> receive-strip)");
+        check(memcmp(got_dst, peer_id, 6) == 0 && memcmp(got_src, S.my_id, 6) == 0,
+              "round-trip recovers DSTID/SRCID across the pad");
+
+        /* a MULTICAST endnode-HELLO must NOT carry the pad. */
+        uint8_t hframe[DNET_FRAME_MAX];
+        size_t hlen = 0;
+        check(dnet_engine_build_hello_frame(&S, hframe, sizeof(hframe), &hlen)
+                  == DNET_ENGINE_OK, "build_hello_frame ok");
+        check(hframe[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX] != DNET_DATA_PAD_BYTE
+              && (hframe[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX] & 0x80) == 0,
+              "multicast HELLO stays padless (no 0x81, no 0x80 pad-flag)");
+        /* and a HELLO must still be rejected by the data-frame parser. */
+        const uint8_t *hp; size_t hpl;
+        check(dnet_engine_parse_data_frame(hframe, hlen, NULL, NULL, &hp, &hpl)
+                  == DNET_ENGINE_EINVAL, "a HELLO frame is still rejected by parse_data_frame");
+    }
+
     if (failures == 0) { printf("test_dnet_engine: ALL CHECKS PASSED\n"); return 0; }
     printf("test_dnet_engine: %d CHECK(S) FAILED\n", failures);
     return 1;

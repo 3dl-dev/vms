@@ -31,14 +31,15 @@ pass=0; fail=0
 chk(){ if eval "$2"; then echo "  PASS: $1"; pass=$((pass+1)); else echo "  FAIL: $1"; fail=$((fail+1)); fi; }
 
 # Link the CALLED-deferred fixture: expect %LINK-W-CALLDEFER naming the symbol.
-"$W/LINK.EXE" --executable --allow-undefined --transfer _start "$W/CALL.EXE" "$W/call.o" > "$W/call.out" 2>&1 || true
-echo "--- CALLED-deferred link output ---"; grep -iE "CALLDEFER|DEFEXT|DEFERRED|usage" "$W/call.out" | head
+# (output via -o; inputs positional — see link.c argv parsing.)
+"$W/LINK.EXE" -o "$W/CALL.EXE" --executable --allow-undefined --transfer _start "$W/call.o" > "$W/call.out" 2>&1 || true
+echo "--- CALLED-deferred link output (full) ---"; cat "$W/call.out"
 chk "CALLED deferred external fires %LINK-W-CALLDEFER"      "grep -q 'CALLDEFER' '$W/call.out'"
 chk "  ...and names the called symbol (ovmx_missing_call)"  "grep -q 'ovmx_missing_call' '$W/call.out'"
 
 # Link the never-called-deferred fixture: expect NO CALLDEFER (still a legit defer).
-"$W/LINK.EXE" --executable --allow-undefined --transfer _start "$W/DATA.EXE" "$W/data.o" > "$W/data.out" 2>&1 || true
-echo "--- never-called-deferred link output ---"; grep -iE "CALLDEFER|DEFEXT|DEFERRED|usage" "$W/data.out" | head
+"$W/LINK.EXE" -o "$W/DATA.EXE" --executable --allow-undefined --transfer _start "$W/data.o" > "$W/data.out" 2>&1 || true
+echo "--- never-called-deferred link output (full) ---"; cat "$W/data.out"
 chk "never-called deferred ref does NOT fire CALLDEFER"     "! grep -q 'CALLDEFER' '$W/data.out'"
 
 echo "=== calldefer gate: $pass passed, $fail failed ==="

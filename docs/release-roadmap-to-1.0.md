@@ -108,7 +108,7 @@ only our forks target.
 
 ## Live status — generated
 
-> Reconciled from rd (source of truth) **as of 2026-09-10** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
+> Reconciled from rd (source of truth) **as of 2026-09-12** by `tools/roadmap/reconcile.py`. Milestones are the `rel-*` labels; workstreams are the 1.0-gate epics rolled up over their child items. Re-derive any line from `rd show <id>` before acting on it.
 
 ### Milestone ladder
 
@@ -121,7 +121,7 @@ only our forks target.
 | **0.7** | Cluster wire fidelity — the SCS/MSCP connection manager answers a real VAX byte-for-byte. | in progress | 1 | 5 | 0 | 17% |
 | **0.8** | Rejoin and satellite boot — a removed node rejoins under its own identity; diskless satellites boot from a served disk. | planned | 0 | 3 | 0 | 0% |
 | **0.9** | Feature-complete — a voting member joins, serves genuine ODS-2 storage, holds locks, and evacuates a live node; TCP/IP, DECnet, and the self-hosting toolchain reach done. The last features land here. | planned | 0 | 0 | 0 | — |
-| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 32 | 25 | 8 | 56% |
+| **1.0** | Hardened and proven — feature-frozen on 0.9: authenticity enforced by the executive, not by convention, and the whole system proven on real hardware and in extended cluster interop against a real VAX. The release you trust; fixes only. | 1.0 goal | 37 | 25 | 6 | 60% |
 
 ### 1.0-gate workstreams (epic rollups)
 
@@ -129,10 +129,10 @@ only our forks target.
 |---|---|---|---|---:|---:|
 | Executive substrate | `vms-6b8` | 0.5 | in progress | 18/22 | 0 |
 | Command-surface parity | `vms-8ad` | continuous | in progress | 41/74 | 0 |
-| Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 17/23 | 2 |
+| Self-hosting toolchain | `vms-678` | 0.5→0.9 | in progress | 17/23 | 1 |
 | Cluster configuration | `vms-098` | 0.5→0.9 | in progress | 5/18 | 9 |
-| TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 17/31 | 5 |
-| DECnet Phase IV | `vms-30e` | 0.9 | in progress | 15/39 | 9 |
+| TCP/IP networking | `vms-67f` | 0.5→0.9 | in progress | 19/44 | 7 |
+| DECnet Phase IV | `vms-30e` | 0.9 | in progress | 22/51 | 9 |
 | Kernel substrate | `vms-19e` | 0.5 | in progress | 5/8 | 1 |
 | VAX as a first-class platform | `vms-8e8` | 0.5→0.9 | in progress | 86/96 | 1 |
 
@@ -207,7 +207,7 @@ only our forks target.
 - `vms-4838` [inbox] REJOIN: drive op 0x02 CM readmission on the MEMBER-INITIATED VMS$VAXcluster connection (rejoiner=TARGET), not OVMX's own outbound joiner VC
 - `vms-ce7` [inbox] Complete diskless satellite boot: NISCS boot-time disk-server VC formation (no MOP load — VMB is ROM-resident) -> pure MSCP-served-disk-over-NISCA capture
 
-**1.0** — rel-1.0 (32/57 done)
+**1.0** — rel-1.0 (37/62 done)
 
 - `vms-015` [done] compat register: repoint drifted cluster-dlm evidence (src/vmsscs → src/kernel-core)
 - `vms-065` [done] Runtime parity: the VAX boot-to-DCL SIMH proof joins the release acceptance gate so every co-release includes a working VAX runtime
@@ -216,7 +216,7 @@ only our forks target.
 - `vms-1ee` [blocked] AUTHENTICITY: cluster-dlm$remaster-lvb-deadlock marked verified/real but its multi-node /dev/vms proof (H8-H11) was retired in #1052 — never re-established
 - `vms-1f6` [inbox] OPERATOR.LOG silently diverts to host /tmp on an ACP $PUT failure while returning SS$_NORMAL (masking fallback on the operator-audit trail)
 - `vms-30e` [inbox] DECnet Phase IV for OVMX — clean-room VMS-faithful networking layered product
-- `vms-3a7c` [waiting] ARCH-DECISION(blocks vms-1ee): reconcile CSID low-word — self-computed (sysid&MASK) vs coordinator round-robin CSV slot; must agree before the 2-node DLM proof addresses members by CSID
+- `vms-3a7c` [done] ARCH-DECISION(blocks vms-1ee): reconcile CSID low-word — self-computed (sysid&MASK) vs coordinator round-robin CSV slot; must agree before the 2-node DLM proof addresses members by CSID
 - `vms-3c3` [done] PREREQ(vms-1ee): executive cluster GENESIS — OVMX can be the FOUNDING member of a VMScluster (authentic VMS formation, quorum-grounded real CSID); one shared path with OVMX↔VAX join, NOT a separate platform
 - `vms-449d` [inbox] DECnet Phase IV engine rung-1 — userspace AF_PACKET datalink + HELLO tx/rx + adjacency drive (Option B, Rule-1-hidden)
 - `vms-476` [done] P4-B: the OVMX executive builds + loads on NetBSD-VAX under SIMH (/dev/vms live)
@@ -224,6 +224,7 @@ only our forks target.
 - `vms-4834` [inbox] VAX installer: faithful-install model (media boots full OS -> PCSI kit -> bootable VAX system disk -> DCL), the netbsd-vax analog of the x86_64 installer (vms-718/vms-37f)
 - `vms-496` [done] DCL DIRECTORY / SET DEFAULT resolve through ODS-2 (real MFD, versions, FIDs) — structurally kills vms-272
 - `vms-4b9` [done] SCA block data transfer — MSCP READ block streaming (un-defer vms-941; format decoded from vaxlab-9)
+- `vms-4d3` [inbox] vms-1ee rung: PER-CSID remote-LKB cleanup — a departing CSID (without STARTUP dying) releases EXACTLY its remote LKBs + remaster/rebuild, via the membership/split-brain path (not only proc-gone)
 - `vms-5eb` [done] Runtime SYS$DISK is host-FS passthrough, not real ODS-2 (faithfulness gap)
 - `vms-600` [blocked] OVMX becomes a real MSCP$DISK server: a VAX joins the cluster and mounts a disk served by OVMX
 - `vms-63a` [done] exec-from-vmsfs on netbsd-vax: a real vmsfs vnode pager (VOP_BMAP over the shared kernel-core retrieval-map + VOP_STRATEGY to devvp + UBC/getpages) so an ELF32-vax image (PROVISION.EXE) demand-pages + RUNS off the mounted ODS-2 volume — replaces vop_getpages_desc=genfs_eopnotsupp in vmsfs_vfsops.c
@@ -235,23 +236,26 @@ only our forks target.
 - `vms-6ef` [done] INITIALIZE writes a genuine ODS-2 volume (retire the VMFS/VFH2 bespoke writer)
 - `vms-6f5` [done] MOUNT mounts a real ODS-2 volume (home-block+SCB parse), not a getcwd/logical-name alias
 - `vms-72da` [done] netbsd-vax executive logical-name layer: PROVISION's STARTUP phase cannot create the system logicals SYS$STARTUP/SYS$LOGIN/SYS$UPDATE (%DCL-E-LNMFAIL) → RMS FNF on VMS$PHASES.DAT → infinite %DCL-E-IVLOGNAM loop; image RUNS + identity SYSTEM[1,4] is established, so this is the LNM-table facility on netbsd-vax, the new blocker to Username:
-- `vms-77c` [inbox] PREREQ(CN=2/vms-1ee): op-0x06 MEMBERSHIP-burst BUILDER — a founded OVMX coordinator ADMITS a joiner (grounded from the real-VAX capture); founder can found but not admit today
+- `vms-77c` [done] PREREQ(CN=2/vms-1ee): op-0x06 MEMBERSHIP-burst BUILDER — a founded OVMX coordinator ADMITS a joiner (grounded from the real-VAX capture); founder can found but not admit today
 - `vms-7f6` [done] compat register: repoint dead run_dlm_harness_*.sh verified_against citations (cluster-dlm + adjacent)
 - `vms-80c` [blocked] compat: ssh$server-daemon row cites the RETIRING libssh C-reimpl (vmssshd.c), note falsely claims 'wraps OpenSSH' — should point at the wrapped-OpenSSH server once vms-16b retires the second stack
 - `vms-8cf` [done] VAX installer: AUTHORIZE.EXE cross-builds for elf32-vax (Decision A static-link)
 - `vms-9115` [inbox] EPIC: Cluster robustness — OVMX as first-class FOUNDING member (authentic VMS formation) so OVMX^n AND mixed (OVMX)^n·(OpenVMS)^m clusters work (1.0 headline)
 - `vms-945e` [done] every boot-required executive facility (proctab/CREPRC, lnm, mbx, ast, access) proven cross-process against the REAL /dev/vms on netbsd-vax (not just event flags; catches ILP32/float/ELF32 bugs amd64 can't)
 - `vms-9c6c` [blocked] R4 (capstone): CLUSTER_CONFIG_LAN.COM provisions OVMX into a cluster end-to-end (operator runs @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM ADD -> node JOINS -> SHOW CLUSTER shows it)
+- `vms-9c99` [done] DESIGN-CHANGE (conductor-ruled): OVMX join-FSM self-promotion must commit at the GO/phase-2, NOT wait for op-0c#12 (E79 revised — a real VAX ADDs with no on-wire op-0c → joiner would hang = interop regression)
 - `vms-a1c` [done] DECnet Phase IV engine GO/NO-GO — AF_DECnet forward-port vs userspace-NSP/AF_PACKET fallback
 - `vms-a662` [done] Cluster-interop gate: OVMX's on-disk vmsfs is 'ODS-2-INSPIRED', NOT genuine ODS-2 (src/kernel/vmsfs/vmsfs_ondisk.h) — so a REAL VAX cannot MOUNT an OVMX MSCP-served volume. This blocks the vms-600 'a real VAX mounts the served unit and reads files' acceptance and any volume-level interop. Serving real blocks is easy (fd-agnostic); serving a volume a real VMS node can actually USE requires genuine ODS-2 content. This is the true prerequisite for authentic cluster storage sharing.
-- `vms-aac0` [active] DECnet Phase IV live oracle adjacency — lab VAX SHOW ADJACENT NODES lists the OVMX node
+- `vms-aac0` [done] DECnet Phase IV live oracle adjacency — lab VAX SHOW ADJACENT NODES lists the OVMX node
 - `vms-af7a` [done] RMS read/write for SYS$DISK resolves through ODS-2 (FID->header->FM2 extents->VAR), not POSIX open(2)
 - `vms-b15` [inbox] DECnet Phase IV adjacency state machine — hello cadence, listen timer, up/down
 - `vms-bd70` [done] Boot-image master emits a real ODS-2 system disk; runtime boots from it to login (ATOMIC ANCHOR)
 - `vms-c23` [done] DECnet Phase IV engine rung-2 — NSP logical-link connection service (Connect Initiate/Confirm, data/ack, disconnect) over the live datalink
+- `vms-c27` [inbox] PREREQ(vms-1ee arm): the master-side cross-node receive needs a delivery PROC to own locks held for a remote system (dispatch refuses NULL proc; fork thread has none)
 - `vms-c2c` [done] VAX installer: vax OS kit packaging (OVMX-OS-VAX.KIT)
 - `vms-cde6` [done] VAX installer: INITIALIZE.EXE cross-builds for elf32-vax (Decision A static-link)
 - `vms-ci` [inbox] EPIC: Cluster Interop — OVMX joins a real VMScluster
+- `vms-d0d` [inbox] Follow-on(symmetric CN=2): joiner learns peer VOTES via op-01 PARAMS -> quorum arithmetic (B's cevotes/quorum are empty; it counts members but not votes)
 - `vms-d0e5` [blocked] VAX installer: two-disk SIMH lab harness drives OVMX$INSTALL.COM menu to completion
 - `vms-d13` [done] VAX installer: SYSGEN.EXE cross-builds for elf32-vax (Decision A static-link)
 - `vms-d21` [blocked] R3: real CLUSTER_AUTHORIZE.DAT format + authoring (group# + password -> grounded HELLO credential; replace the minimal stand-in so OVMX joins an ARBITRARY cluster)
@@ -265,10 +269,12 @@ only our forks target.
 - `vms-f10` [inbox] VAX first-class in the unified build + release stream — co-release parity across aarch64/x86_64/alpha/VAX
 - `vms-f1d` [done] VAX installer R4 capstone e2e: install -> separate SIMH session -> boot target alone -> login -> PRODUCT SHOW
 - `vms-f3d0` [done] compat: ssh$remote-login/ssh$identity-terminal-map notes overstate — 'authenticated interactive DCL / SYSUAF auth' had ZERO positive runtime proof (existing test = pubkey-as-root→/bin/sh); SYSUAF only in the negative path
-- `vms-f6b` [blocked] vms-1ee rung: hermetic 2-node OVMX socket-mcast KVM rig on k3s-worker (boots 2 genesis-formed OVMX executives, one L2, real /dev/vms both) — the DLM-proof vehicle
+- `vms-f6b` [done] vms-1ee rung: hermetic 2-node OVMX socket-mcast KVM rig on k3s-worker (boots 2 genesis-formed OVMX executives, one L2, real /dev/vms both) — the DLM-proof vehicle
+- `vms-fcb` [inbox] PREREQ(vms-1ee): Lock Directory Weight Vector can't build in a multi-node cluster — a REMOTE node's LOCKDIRWT can't be learned (FC-P3.2 unpinned) -> dir_resolve fails -> no cross-node ENQ routes
 
 ### Shipped releases (git tags)
 
+- **V0.6-15** — Point release.
 - **V0.6-14** — Cluster genesis and networking hardening. OpenVMX becomes a first-class founding cluster member: the executive can now FORM a VMScluster from nothing (authentic VMS formation, quorum-grounded) — a genesis, not only a join of an existing cluster — running on the real executive-resident membership machinery. A cluster crash-fix closes a host-kernel panic on a clustered node's shared network buffer and a founder self-demotion. Networking: a valid SYSUAF user now lands at a DCL prompt over the wrapped OpenSSH sshd end to end (real ACP SYSUAF authentication, the earlier pubkey-root overclaim dropped from the register), the DECnet routing receive path gains ASan/UBSan fuzzing and bound proofs with CI-enforced sanitizer teeth, and the libdatalink DECnet datalink is wire-proven on live NetBSD/VAX. Honest scope: interoperation with a REAL VAX cluster — a genuine VAX joining and mounting OpenVMX-served storage — remains in progress and unproven.
 - **V0.6-13** — DECnet Phase IV file COPY, and a substrate-agnostic login frontier. Authenticated inbound SET HOST -> LOGINOUT is now a hard release gate on all three rails (x86_64, Alpha, and VAX) — the interactive-login frontier no longer depends on the substrate. DECnet Phase IV file COPY (FAL/DAP) lands: an object-17 FAL server, a DAP codec, and a COPY client, authenticated against the real SYSUAF/Purdy, transferring over RMS-on-the-executive-ACP and byte-verified in both directions, with a Phase IV configuration and usage guide. And a compatibility-register honesty pass: four cluster distributed-lock-manager rows whose multi-node proof harness had been retired were downgraded from verified to implemented (re-establishment tracked as a follow-on), so the surface states only what a live test currently proves.
 - **V0.6-12** — DECnet Phase IV SET HOST reaches an authenticated interactive login. An inbound SET HOST session now runs the full connect-through-LOGINOUT dialogue (P0-P5) bidirectionally against the real binary SYSUAF, so a remote terminal lands at a genuine DCL prompt with full SYSUAF login-flag authenticity. Alpha activates its symbol-vector shareables on the live executive; the VAX rail builds them, with runtime activation isolated to a cross-image cross-call marshalling bug (tracked RED). Plus CI-backlog optimization across the release gates.
@@ -280,7 +286,6 @@ only our forks target.
 - **V0.6-6** — Executive robustness on the /NOWAIT subprocess path. LIB$SPAWN's asynchronous completion now fires even when a subprocess is killed WITHOUT calling $EXIT — a SIGKILL, a crash, a segfault — where before the parent would wait forever: the executive delivers an SS$_ABORT completion at reap time (setting the parent's event flag and queuing its AST) as it reclaims the dead child, at both reclaim points, so a /NOWAIT LIB$SPAWN is now safe against abnormal child termination. Also hardens the test surface: a cross-process publish-versus-translate race in the mailbox-by-logical-name harness is fixed deterministically (a real happens-before handshake, not a timeout), proven quiet across repeated runs.
 - **V0.6-5** — Two more rungs, one on each of the networking and self-hosting long poles. DECnet Phase IV gains its router-hello codec — the L1/L2 router variant of the routing HELLO (spec-derived from the public DNA Phase IV routing spec and cross-checked against public tooling, its trailing router-list carried as opaque bytes rather than fabricated, and flagged to promote once a real router specimen is captured) — so the adjacency layer can now see routers, not just endnodes. And GCC self-hosting clears its pipeline rung: the executive drives a real multi-stage subprocess pipeline the VMS way — each stage spawned /NOWAIT via SYS$CREPRC, its completion signalled by the executive's event-flag/AST facility, its $STATUS read back by process id and checked before the next stage launches, inter-stage data flowing over an RMS scratch file — proven end to end on the QEMU kernel harness against a real /dev/vms (a four-stage chain runs in order; a mid-chain failure halts the pipeline). The GCC driver's process model now works on OVMX; only the real compiler-stage images remain to be dropped in behind it.
 - **V0.6-4** — Three increments up the networking and executive long poles, no version-gated feature removed. DECnet Phase IV grows a transport and a routing brain: an NSP codec (Connect Initiate oracle-verified byte-identical against the captured real-VAX specimen, the rest of the message set spec-derived from the public DNA NSP spec and labelled as such — no fabricated bytes), and a clock-injectable adjacency state machine that brings a neighbour up on a two-way HELLO handshake, holds it up while HELLOs arrive within the listen timer, and downs it on lapse — the hello cadence taken from the captured oracle. And the executive learns to complete a /NOWAIT subprocess honestly: a new VMS_IOCTL_SPAWN_NOTIFY facility sets the parent's event flag and queues its completion AST from the real executive as an indivisible part of recording the child's exit over /dev/vms (no userspace waitpid poll, fail-closed without /dev/vms), proven on the QEMU kernel harness and mirrored across the x86_64, NetBSD/VAX, and Alpha builds.
-- **V0.6-3** — Two long-pole milestones proven on the real runtime. SSH login is now VMS-faithful end to end: the unmodified OpenVMS OpenSSH port authenticates passwords against the binary SYSUAF (Purdy) and drops the session into LOGINOUT->DCL rather than a shell — all OVMX behavior enters through linker --wrap hooks, no fork of upstream OpenSSH — proven fail-closed against a real /dev/vms (a password login for a user with no SYSUAF record is refused; zero AF_UNIX fds in the handshake, INV-6). And the self-hosting toolchain clears its multi-file rung: the alpha-dec-vms GCC-port image STRICT-links a real 3-object program (no --allow-undefined; decc$free and the cross-.o libc surface all bound through DECC$SHR/LIBOTS) and activates for real on qemu-system-alpha over /dev/vms, returning full success — now guarded by a standing per-PR CI gate so it cannot regress.
 
 ### rd-labeling gaps (fix these to keep the source accurate)
 

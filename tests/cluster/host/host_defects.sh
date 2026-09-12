@@ -66,6 +66,31 @@
 # seventh TU named by the item that grew this manifest; see its own defect
 # entry below for the shape.)
 #
+# GROWN (vms-b2a) to Bucket E: the ten MSCP/DLM TUs (vms_cluster_codec_dlm.c,
+# vms_dlm_scs_fsm.c, vms_cluster_codec_mscp.c, vms_mscp_cl.c,
+# vms_mscp_cl_conn_fsm.c, vms_mscp_cl_fsm.c, vms_mscp_cl_io_fsm.c,
+# vms_mscp_srv.c, vms_mscp_srv_fsm.c, vms_mscp_srv_io.c). Three of these
+# (vms_mscp_cl.c, vms_mscp_srv.c, vms_mscp_srv_io.c) are GLUE that names
+# exec_kbackend.h and so is never compiled by any host target -- their
+# existing suites (test_mscp_cl.c, test_mscp_srv.c) instead source-scan the
+# SHIPPING file at runtime (the same two-proof shape test_cnxman_glue.c
+# established). For those three, apply_edit inserts one forbidden substring
+# rather than disarming a guard: the suite's own NEGATIVE half already reads
+# "this substring must NEVER appear in the glue" (the pure layer must own
+# the property, not the fork-context glue), so making it appear is the
+# minimal single-property injection for a file nothing ever compiles here.
+#
+#   dlm-lkid-guard-disabled              vms_cluster_codec_dlm.c
+#   dlm-requester-hash-refusal-uncounted vms_dlm_scs_fsm.c
+#   codec-mscp-gus-tail2-invented        vms_cluster_codec_mscp.c
+#   mscp-cl-glue-device-name-leaked      vms_mscp_cl.c
+#   mscp-cl-conn-refusal-uncounted       vms_mscp_cl_conn_fsm.c
+#   mscp-cl-fsm-unit-uncounted           vms_mscp_cl_fsm.c
+#   mscp-cl-io-empty-cell-uncounted      vms_mscp_cl_io_fsm.c
+#   mscp-srv-glue-end-message-leaked     vms_mscp_srv.c
+#   mscp-srv-fsm-writeprotect-uncounted  vms_mscp_srv_fsm.c
+#   mscp-srv-io-worker-registers-handler vms_mscp_srv_io.c
+#
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
@@ -75,7 +100,17 @@ codec-blk-no-trailer-not-honest
 barrier-bit0-uncounted
 phase2-count-mismatch-uncounted
 recnx-last-gasp-uncounted
-ldwv-refusal-uncounted"
+ldwv-refusal-uncounted
+dlm-lkid-guard-disabled
+dlm-requester-hash-refusal-uncounted
+codec-mscp-gus-tail2-invented
+mscp-cl-glue-device-name-leaked
+mscp-cl-conn-refusal-uncounted
+mscp-cl-fsm-unit-uncounted
+mscp-cl-io-empty-cell-uncounted
+mscp-srv-glue-end-message-leaked
+mscp-srv-fsm-writeprotect-uncounted
+mscp-srv-io-worker-registers-handler"
 
 # ---------------------------------------------------------------------------
 # Metadata (same field meanings as tests/qemu/facility_defects.sh):
@@ -203,6 +238,144 @@ EOF
                       ;;
         esac;;
 
+    dlm-lkid-guard-disabled)
+        case "$_f" in
+        facility)     echo "dlm_lkid_pair_put()'s fc8540ae INVLOCKID guard (the 'no lock-id-bearing builder accepts a placeholder lock id' rule test_codec_dlm.c's own header names as THE HARD LESSON -- a placeholder lock id crashed a real VAX)";;
+        targets)      echo "kernel-core/vms_cluster_codec_dlm.c";;
+        suites_red)   echo "test_codec_dlm";;
+        isolation)    echo "isolated";;
+        why)          echo "dlm_lkid_pair_put()'s shared guard ('req_lkid == VMS_DLM_LKID_UNSET || master_lkid == VMS_DLM_LKID_UNSET -> VMS_CODEC_E_INVAL'), which both vms_dlm_deq_build() and vms_dlm_blkast_build() call before writing a single byte, is disarmed. A $DEQ or BLKAST naming lock-id 0 -- the exact fc8540ae shape -- is built and sent instead of refused.";;
+        require_fail) cat <<'EOF'
+  master_lkid==0 REFUSED on $DEQ (0x03)
+  req_lkid==0 REFUSED on $DEQ (0x03)
+  both lock ids 0 REFUSED (they do not cancel out)
+  master_lkid==0 REFUSED on BLKAST (0x04)
+  req_lkid==0 REFUSED on BLKAST (0x04)
+*** a refused build wrote NO byte at all ***
+EOF
+                      ;;
+        esac;;
+
+    dlm-requester-hash-refusal-uncounted)
+        case "$_f" in
+        facility)     echo "the DLM requester's directory-lookup refusal accounting (dq_route_check(): a lookup with no wire-learned hash must be COUNTED, the property that cures the grant storm)";;
+        targets)      echo "kernel-core/vms_dlm_scs_fsm.c";;
+        suites_red)   echo "test_dlm_requester";;
+        isolation)    echo "isolated";;
+        why)          echo "dq_route_check()'s 'f->hash_unknown_refused++;' in the to-directory/no-known-hash branch is dropped -- range-anchored to that FIRST site only, leaving the second (the redirect-resolve path's own copy) untouched. The refusal itself (DLM_REQ_E_NOHASH, nothing sent) still fires -- only the count goes silent. This route check is the SAME one both a fresh post AND every retransmit of an already-outstanding request run through, so both scenarios in the suite redden -- MEASURED, not merely the one the docstring first names.";;
+        require_fail) cat <<'EOF'
+counted
+every refused attempt was counted
+EOF
+                      ;;
+        esac;;
+
+    codec-mscp-gus-tail2-invented)
+        case "$_f" in
+        facility)     echo "vms_mscp_gus_end_build()'s INV-6 honesty rule for the undecoded GUS END tail (body[50:52] must stay the zero the initial put_zero left it, never an invented value)";;
+        targets)      echo "kernel-core/vms_cluster_codec_mscp.c";;
+        suites_red)   echo "test_codec_mscp";;
+        isolation)    echo "isolated";;
+        why)          echo "an extra vms_wire_put_le16() is inserted right after the OBSERVED body[48:50] tail write, stamping a fabricated 0xBEEF into body[50:52] -- the second half of the tail the header doc comment says must stay zero because it is undecoded, never invented.";;
+        require_fail) cat <<'EOF'
+body[50:52] is left zero, never invented
+EOF
+                      ;;
+        esac;;
+
+    mscp-cl-glue-device-name-leaked)
+        case "$_f" in
+        facility)     echo "the FC-P7.1 class-driver glue's own negative-half discipline (test_mscp_cl.c's test_glue_source(): the glue must derive NO device name of its own -- the pure driver spells it, not vms_mscp_cl.c)";;
+        targets)      echo "kernel-core/vms_mscp_cl.c";;
+        suites_red)   echo "test_mscp_cl";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_mscp_cl.c is not host-linkable (it names exec_kbackend.h), so its properties are proved by a source-scan of the SHIPPING file; a '$DUA' literal is inserted into the file, which is exactly the property test_glue_source()'s negative half exists to catch -- the glue spelling a device name instead of reading one the pure driver already derived.";;
+        require_fail) cat <<'EOF'
+and it spells NO device name -- the pure driver derives it from values this file read out of the executive
+EOF
+                      ;;
+        esac;;
+
+    mscp-cl-conn-refusal-uncounted)
+        case "$_f" in
+        facility)     echo "the E64 connect-admission FSM's refusal accounting (h_present_sweep(): a connect the port declined must be COUNTED, and the leg backed off, not silently retried)";;
+        targets)      echo "kernel-core/vms_mscp_cl_conn_fsm.c";;
+        suites_red)   echo "test_mscp_cl_conn";;
+        isolation)    echo "isolated";;
+        why)          echo "h_present_sweep()'s 'c->connect_refusals++;' in the ops->connect()-returned-failure branch is dropped -- range-anchored to that SECOND site only, leaving the first (ops/ops->connect == NULL) untouched. The refusal itself (the leg goes back to IDLE, no conid is kept) still fires -- only the count an operator or a later retry-backoff check reads goes silent.";;
+        require_fail) cat <<'EOF'
+the refusal is counted
+the next beat does NOT retry a second later
+EOF
+                      ;;
+        esac;;
+
+    mscp-cl-fsm-unit-uncounted)
+        case "$_f" in
+        facility)     echo "the FC-P3.4 discovery FSM's unit-enumeration accounting (vms_mscp_cl_fsm_on_gus_end(): each GUS END walked must be COUNTED, matching src/vmsscs/scs_mscp.c's own observed enumeration)";;
+        targets)      echo "kernel-core/vms_mscp_cl_fsm.c";;
+        suites_red)   echo "test_mscp_cl_fsm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_mscp_cl_fsm_on_gus_end()'s 'f->units_found++;' is dropped. The walk cursor (f->next_unit, read from the peer's own answer) still advances correctly and the caller's unit struct is still filled in -- only the running count of units discovered goes silent, in EVERY test that walks more than one unit -- MEASURED: the suite's own multi-unit walk asserts the final tally by name, not merely the single-unit case the docstring first names.";;
+        require_fail) cat <<'EOF'
+one unit counted
+exactly the two AVAILABLE units were counted, not the OFFLINE terminator
+EOF
+                      ;;
+        esac;;
+
+    mscp-cl-io-empty-cell-uncounted)
+        case "$_f" in
+        facility)     echo "the class driver's dispatch-table empty-cell accounting (cl_dispatch(): an event a state has no edge for must be COUNTED, never silently dropped)";;
+        targets)      echo "kernel-core/vms_mscp_cl_io_fsm.c";;
+        suites_red)   echo "test_mscp_cl";;
+        isolation)    echo "isolated";;
+        why)          echo "cl_dispatch()'s 'f->ignored_events++;' in the empty-table-cell branch (a valid state/event pair with no handler) is dropped -- range-anchored to that site only, leaving the out-of-range guard's own copy above it untouched. The event is still discarded (no handler is invoked) -- only the count goes silent.";;
+        require_fail) cat <<'EOF'
+and the empty cell was COUNTED
+EOF
+                      ;;
+        esac;;
+
+    mscp-srv-glue-end-message-leaked)
+        case "$_f" in
+        facility)     echo "the FC-P6.3 server glue's own negative-half discipline (test_mscp_srv.c's test_glue_source(): the glue must build NO end message of its own -- the pure server composes it, not vms_mscp_srv.c)";;
+        targets)      echo "kernel-core/vms_mscp_srv.c";;
+        suites_red)   echo "test_mscp_srv";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_mscp_srv.c is not host-linkable (it names exec_kbackend.h), so its properties are proved by a source-scan of the SHIPPING file; an '_end_build' literal is inserted into the file, which is exactly the property test_glue_source()'s negative half exists to catch -- the glue composing an end message instead of handing the transfer to the pure server that does.";;
+        require_fail) cat <<'EOF'
+and it builds NO end message
+EOF
+                      ;;
+        esac;;
+
+    mscp-srv-fsm-writeprotect-uncounted)
+        case "$_f" in
+        facility)     echo "the server's Table B-2 write-protect refusal accounting (srv_write_protect_status()'s caller: a WRITE refused for hardware or software protection must be COUNTED)";;
+        targets)      echo "kernel-core/vms_mscp_srv_fsm.c";;
+        suites_red)   echo "test_mscp_srv";;
+        isolation)    echo "isolated";;
+        why)          echo "the WRITE-opcode branch's 'f->write_protect_refusals++;' is dropped. The refusal itself (status 0x2006/WRITE_PROT, zero bytes claimed, no buffer named, nothing written) still fires exactly as Table B-2 requires -- only the count an operator reads back goes silent.";;
+        require_fail) cat <<'EOF'
+the refusal is counted
+EOF
+                      ;;
+        esac;;
+
+    mscp-srv-io-worker-registers-handler)
+        case "$_f" in
+        facility)     echo "FC-P6.6's own negative-half discipline (test_mscp_srv.c's test_glue_source(): the WORKER TU must register NO fork-context handler, or it could become fork-context code and stall the HELLO cadence design SS3.2.6 forbids)";;
+        targets)      echo "kernel-core/vms_mscp_srv_io.c";;
+        suites_red)   echo "test_mscp_srv";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_mscp_srv_io.c is not host-linkable (it names exec_kbackend.h), so its properties are proved by a source-scan of the SHIPPING file; a 'cf_set_work_handler' literal is inserted into the file, which is exactly the property test_glue_source()'s negative half exists to catch -- the worker TU registering a fork-context handler, which design SS3.2.6 forbids for anything that calls the blocking block seam.";;
+        require_fail) cat <<'EOF'
+and the worker TU registers NO fork-context handler, so it cannot become fork-context code
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -274,6 +447,106 @@ apply_edit() {
         # already gone, so cmd_apply's pristine-compare reports BROKEN
         # FIXTURE rather than silently moving on to the second occurrence.
         sed -i '/^\tldwv_survey_club(club, &s);$/,/^\t\treturn st;$/ s|club->ldwv_build_refused++;|/* NEGCTL ldwv-refusal-uncounted: the refusal is not counted */|' "$_file";;
+
+    dlm-lkid-guard-disabled)
+        # dlm_lkid_pair_put()'s guard is split across two source lines
+        # (`if (req_lkid == ... ||` then `master_lkid == ...)` on the next),
+        # so absorbing the FIRST line's `||` into a `0 &&` disarms the WHOLE
+        # two-line condition with a single-line sed -- the second line then
+        # reads as `0 && master_lkid == VMS_DLM_LKID_UNSET)`, always false,
+        # with no edit needed there at all. The sibling guard in
+        # vms_dlm_enq_response_build_grant_valblk folds both lock ids onto
+        # ONE line (`... || master_lkid == ...)` with no line break), so this
+        # exact multi-token line (ending in `||` with nothing after) cannot
+        # match it -- it is unique in the file.
+        sed -i 's@^\tif (req_lkid == VMS_DLM_LKID_UNSET ||$@\tif (0 \&\& /* NEGCTL dlm-lkid-guard-disabled: the fc8540ae guard no longer refuses */@' "$_file";;
+
+    dlm-requester-hash-refusal-uncounted)
+        # `f->hash_unknown_refused++;` occurs TWICE in this file (this
+        # to-directory route-check refusal, and the redirect-resolve path's
+        # own copy) -- IDENTICAL text, so range-anchored (facility_defects.sh
+        # devtab-owner-not-recorded precedent) to the unique guard line that
+        # immediately precedes THIS occurrence. The range END is the
+        # `return DLM_REQ_E_NOHASH;` two lines below the target (NOT the
+        # target text itself, ldwv's own precedent): idempotency-safe,
+        # because a second apply's range still resolves to this same narrow
+        # window but finds no `f->hash_unknown_refused++;` left inside it to
+        # replace.
+        sed -i '/if (to_directory && !p->dir_hash_known) {/,/return DLM_REQ_E_NOHASH;/ s|f->hash_unknown_refused++;|/* NEGCTL dlm-requester-hash-refusal-uncounted: the refusal is not counted */|' "$_file";;
+
+    codec-mscp-gus-tail2-invented)
+        # The OBSERVED body[48:50] tail write is unique in this file (and the
+        # $-anchored, whole-line pattern) -- appending an EXTRA statement on
+        # the SAME line fabricates the "undecoded, never invented" half two
+        # bytes further in, instead of leaving it at the zero the function's
+        # own initial put_zero() left there. Idempotency-safe: the anchor is
+        # itself consumed by the edit (the line no longer ends where the `$`
+        # anchor requires), so a second apply matches nothing.
+        sed -i 's@^\tvms_wire_put_le16(&w, VMS_OFF_MSCP_GUS_E_TAIL, VMS_MSCP_GUS_TAIL_OBSERVED);$@\tvms_wire_put_le16(\&w, VMS_OFF_MSCP_GUS_E_TAIL, VMS_MSCP_GUS_TAIL_OBSERVED); vms_wire_put_le16(\&w, VMS_OFF_MSCP_GUS_E_TAIL + 2, 0xBEEFu); /* NEGCTL codec-mscp-gus-tail2-invented: the undecoded tail half is invented, not left zero */@' "$_file";;
+
+    mscp-cl-glue-device-name-leaked)
+        # vms_mscp_cl.c is not host-linkable (exec_kbackend.h) -- its own
+        # suite (test_mscp_cl.c) proves its properties by SOURCE-SCANNING the
+        # shipping file, including the negative half "the glue spells NO
+        # `$DUA` device name". Nothing here is compiled for the host suite,
+        # so extending the file's own unique trailing #include line with a
+        # trailing comment carrying the forbidden literal is the minimal
+        # single-property injection. Idempotency-safe: the $-anchored,
+        # whole-line pattern is consumed by the edit, so a second apply
+        # matches nothing.
+        sed -i 's@^#include "vms_mscp_cl.h"$@#include "vms_mscp_cl.h"  /* NEGCTL mscp-cl-glue-device-name-leaked: this file must never spell a $DUA device name */@' "$_file";;
+
+    mscp-cl-conn-refusal-uncounted)
+        # `c->connect_refusals++;` occurs THREE times in this file (the
+        # ops/ops->connect==NULL branch, the ops->connect()-failed branch
+        # this defect targets, and a third site in a different handler) --
+        # range-anchored to the unique guard line immediately preceding the
+        # SECOND occurrence. The range END is the `conn_goto(...)` line right
+        # after the target (NOT the target text itself, ldwv's own
+        # precedent): idempotency-safe, because a second apply's range still
+        # resolves to this same narrow window but finds nothing left inside
+        # it to replace.
+        sed -i '/if (c->ops->connect(c->ops->ctx, p->sysid, &conid) != 0 ||/,/conn_goto(c, p, MSCP_CL_CONN_IDLE, now);/ s|c->connect_refusals++;|/* NEGCTL mscp-cl-conn-refusal-uncounted: the refusal is not counted */|' "$_file";;
+
+    mscp-cl-fsm-unit-uncounted)
+        # `f->units_found++;` is unique in this file.
+        sed -i 's|f->units_found++;|/* NEGCTL mscp-cl-fsm-unit-uncounted: the unit is not counted */|' "$_file";;
+
+    mscp-cl-io-empty-cell-uncounted)
+        # `f->ignored_events++;` occurs TWICE in this file (the out-of-range
+        # state/event guard, and the empty-table-cell branch this defect
+        # targets) -- range-anchored to the unique `h == (cl_handler_t)0`
+        # guard line immediately preceding the SECOND occurrence, so the
+        # first (out-of-range) is untouched.
+        sed -i '/if (h == (cl_handler_t)0) {/,/f->ignored_events++;/ s|f->ignored_events++;|/* NEGCTL mscp-cl-io-empty-cell-uncounted: the empty cell is not counted */|' "$_file";;
+
+    mscp-srv-glue-end-message-leaked)
+        # vms_mscp_srv.c is not host-linkable (exec_kbackend.h) -- its own
+        # suite (test_mscp_srv.c) source-scans the shipping file, including
+        # the negative half "the glue builds NO end message (`_end_build`)".
+        # Extending the file's own unique trailing #include line with a
+        # trailing comment carrying the forbidden literal is the minimal
+        # single-property injection. Idempotency-safe: the $-anchored,
+        # whole-line pattern is consumed by the edit, so a second apply
+        # matches nothing.
+        sed -i 's@^#include "vms_mscp_srv.h"$@#include "vms_mscp_srv.h"  /* NEGCTL mscp-srv-glue-end-message-leaked: this file must never call an _end_build composer */@' "$_file";;
+
+    mscp-srv-fsm-writeprotect-uncounted)
+        # `f->write_protect_refusals++;` is unique in this file.
+        sed -i 's|f->write_protect_refusals++;|/* NEGCTL mscp-srv-fsm-writeprotect-uncounted: the refusal is not counted */|' "$_file";;
+
+    mscp-srv-io-worker-registers-handler)
+        # vms_mscp_srv_io.c is not host-linkable (exec_kbackend.h) -- its own
+        # suite (test_mscp_srv.c) source-scans the shipping file, including
+        # the negative half "the worker TU registers NO fork-context handler
+        # (`cf_set_work_handler`/`cf_set_rx_handler`)". Extending the file's
+        # own unique #include "vms_mscp_srv_fsm.h" line (ASCII-only, unlike
+        # the neighboring exec_kbackend.h include's UTF-8 section-mark
+        # comment) with a trailing comment carrying the forbidden literal is
+        # the minimal single-property injection. Idempotency-safe: the
+        # $-anchored, whole-line pattern is consumed by the edit, so a second
+        # apply matches nothing.
+        sed -i 's@^#include "vms_mscp_srv_fsm.h"  /\* MSCP_SRV_BLOCK_SIZE, enum mscp_srv_io_op    \*/$@#include "vms_mscp_srv_fsm.h"  /* MSCP_SRV_BLOCK_SIZE, enum mscp_srv_io_op    */  /* NEGCTL mscp-srv-io-worker-registers-handler: this file must never call cf_set_work_handler */@' "$_file";;
 
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2

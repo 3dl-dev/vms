@@ -222,6 +222,26 @@ if [ "$OK" -eq 1 ]; then
     fi
 fi
 
+# --- VMS$VMS.DAT REGISTERS STARTNET at LPBETA (rd vms-a70) -------------------
+# Because STARTNET self-gates SILENT on an unconfigured node (above), its LPBETA
+# component leaves no console trace on this boot -- so prove the registration
+# itself is present in the phase table the driver reads. This is the positive
+# proof that STARTNET IS wired into the boot at LPBETA (a dropped registration
+# line would be caught here, where the silent-no-op runtime check cannot see it).
+if [ "$OK" -eq 1 ]; then
+    CMD_OFFSET=$(wc -c <"$CONSOLE_LOG")
+    send 'TYPE SYS$STARTUP:VMS$VMS.DAT'
+    if wait_for '$ ' 15 "$CMD_OFFSET"; then rc=0; else rc=1; fi
+    record "TYPE SYS\$STARTUP:VMS\$VMS.DAT returns" "$rc"
+
+    if [ "$rc" -eq 0 ]; then
+        SEG=$(tail -c "+$((CMD_OFFSET + 1))" "$CONSOLE_LOG" | tr -d '\r')
+        # A phase line naming both the LPBETA phase and STARTNET.COM.
+        if printf '%s' "$SEG" | grep -qiE 'LPBETA[[:space:]].*STARTNET'; then r1=0; else r1=1; fi
+        record "VMS\$VMS.DAT registers @SYS\$MANAGER:STARTNET at the LPBETA phase" "$r1"
+    fi
+fi
+
 # --- DIRECTORY SYS$MANAGER:OVMX.CONF: must find nothing ---------------------
 if [ "$OK" -eq 1 ]; then
     CMD_OFFSET=$(wc -c <"$CONSOLE_LOG")
@@ -264,20 +284,29 @@ record "no %RMS-E-FNF during boot (phase driver's OPENs all found their files)" 
 if printf '%s' "$BOOT_LOG" | grep -qF '%DCL-E-OPENIN'; then rc=1; else rc=0; fi
 record "no %DCL-E-OPENIN during boot" "$rc"
 
-# --- DECnet STARTNET ran at LPBETA, CLEANLY (rd vms-a70 direction B) -----------
-# The LPBETA VMS$VMS.DAT component @SYS$MANAGER:STARTNET runs during boot and
-# RUN/DETACHEDs NETACP. Its announcement on the boot console proves the LPBETA
-# component actually ran from the phase driver.
-if printf '%s' "$BOOT_LOG" | grep -qF 'DECnet Phase IV -- Startup (STARTNET)'; then rc=0; else rc=1; fi
-record "STARTNET.COM ran at LPBETA (its startup announcement is on the boot console)" "$rc"
+# --- DECnet STARTNET at LPBETA is a faithful SILENT no-op when UNCONFIGURED ----
+# (rd vms-a70 direction B). The LPBETA VMS$VMS.DAT component @SYS$MANAGER:STARTNET
+# runs during boot, but real OpenVMS runs NO DECnet on an unconfigured node --
+# STARTNET is invoked only when the Phase IV databases exist. The mastered disk
+# carries NO DECnet configuration (no SYS$SYSTEM:NETNODE_LOCAL.DAT), so on this
+# boot STARTNET must gate itself OFF with a pure DCL F$SEARCH and stay SILENT:
+# launch no NETACP and print NOTHING to the pristine boot console the vms-1fb
+# oracle pins. (The daemon serve-decision matrix is proven at the unit level by
+# tests/vmsdecnet/test_decnetd_startnet_gate.sh; the configured -> serve path by
+# the live inbound-SET-HOST bracket -- neither belongs on this unconfigured boot.)
+#
+# What we assert here is the LPBETA component ran AND self-gated cleanly: no
+# %DECNET-I-STARTNET announcement, no NETACP %RUN-S-PROC_ID, no %DCL abort, and
+# no %DECNETD-E-NOADDRESS. A foreground DECNETD probe whose nonzero exit DCL would
+# render as %DCL-E-ABORT is exactly the pollution this guards against (vms-a70).
+if printf '%s' "$BOOT_LOG" | grep -qF 'DECnet Phase IV -- Startup (STARTNET)'; then rc=1; else rc=0; fi
+record "STARTNET is SILENT on an unconfigured boot (no DECnet startup announcement -- faithful: real VMS runs no STARTNET unconfigured)" "$rc"
 
-# INV-6 + boot cleanliness: the mastered disk carries NO DECnet executor address,
-# so NETACP self-checks and no-ops -- but STARTNET must do this WITHOUT polluting
-# the boot console. There must be NO %DCL abort and NO %DECNETD-E-NOADDRESS: the
-# gate is inside NETACP (detached), not a foreground probe whose nonzero exit DCL
-# would announce as %DCL-E-ABORT (the regression this guards, vms-a70).
+if printf '%s' "$BOOT_LOG" | grep -qF '%DECNET-I-STARTNET'; then rc=1; else rc=0; fi
+record "STARTNET launches NO NETACP on an unconfigured boot (no %DECNET-I-STARTNET on the console)" "$rc"
+
 if printf '%s' "$BOOT_LOG" | grep -qE '%DCL-[EF]-ABORT'; then rc=1; else rc=0; fi
-record "STARTNET leaves NO %DCL-E-ABORT on the boot console (gate is in NETACP, not a foreground probe)" "$rc"
+record "STARTNET leaves NO %DCL-E-ABORT on the boot console (config check is a DCL F\$SEARCH, not a foreground probe)" "$rc"
 
 if printf '%s' "$BOOT_LOG" | grep -qF 'DECNETD-E-NOADDRESS'; then rc=1; else rc=0; fi
 record "STARTNET leaves NO %DECNETD-E-NOADDRESS on the boot console (unconfigured = clean no-op, not an error)" "$rc"

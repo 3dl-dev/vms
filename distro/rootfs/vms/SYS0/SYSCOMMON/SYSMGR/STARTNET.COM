@@ -20,15 +20,23 @@ $! runs it there -- LPBETA is after LPMAIN's INSTALL ADDs, which NETACP's
 $! shareable dependencies need, and before END's console login); it can also be
 $! @-invoked by hand after NCP configures the executor address.
 $!
-$! THE GATE lives in NETACP, not here (INV-6, CLAUDE.md Rule 9 -- honest .COM,
-$! vms-297). DECnet is served ONLY when an executor address is configured, exactly
-$! as real VMS runs no DECnet until NCP DEFINE EXECUTOR ADDRESS has. This procedure
-$! does not FOREGROUND-probe the config: a synchronous image whose "not configured"
-$! exit DCL would announce as %DCL-E-ABORT would pollute the boot console (and it
-$! is not an error). Instead NETACP self-checks: launched detached with no argv, it
-$! self-sources the executor address and, finding none, logs %DECNETD-I-NOCONFIG to
-$! SYS$MANAGER:NETACP.LOG and exits cleanly -- it does NOT serve, and nothing is
-$! fabricated. With an address configured it serves inbound object 42.
+$! THE GATE (INV-6, CLAUDE.md Rule 9 -- honest .COM, vms-297). Real OpenVMS runs
+$! NO DECnet at boot until the node has been configured: SYSTARTUP invokes STARTNET
+$! only when the Phase IV databases exist. OVMX matches that faithfully -- if the
+$! local node database (SYS$SYSTEM:NETNODE_LOCAL.DAT, written by NCP SET/DEFINE
+$! EXECUTOR) is absent, DECnet is not configured, so STARTNET is a SILENT no-op:
+$! it launches NO NETACP and prints NOTHING to the boot console (an unconfigured
+$! node running no DECnet is not an error, and must not pollute the pristine boot
+$! console the vms-1fb oracle pins). The check is a pure DCL lexical (F$SEARCH),
+$! NEVER a foreground image probe -- a synchronous DECNETD run whose "not
+$! configured" exit DCL would render as %DCL-E-ABORT is exactly the pollution this
+$! avoids (vms-a70). NETACP ALSO self-checks (defense in depth): launched detached
+$! with no argv it self-sources the executor address and, finding none, logs a
+$! not-configured note to SYS$MANAGER:NETACP.LOG and exits cleanly -- so even a
+$! stray launch serves nothing and fabricates nothing. Arming the configured
+$! branch (writing NETNODE_LOCAL.DAT + the substrate executor.dat NCP/DECNETD
+$! read) is the DECnet-configure / inbound-SET-HOST bracket rung under vms-30e;
+$! this procedure's configured path is exercised there, not by the default image.
 $!
 $! INV-6 (fail-honest, no facade): NETACP opens its 0x6003 datalink as a raw
 $! AF_PACKET socket on the primary NIC (auto-detected -- the same NIC the
@@ -45,6 +53,13 @@ $!   @SYS$MANAGER:STARTNET
 $!
 $ SET NOON
 $ SAY := WRITE SYS$OUTPUT
+$!
+$! GATE: DECnet is configured only if the local node database exists. If not,
+$! STARTNET is a faithful SILENT no-op -- launch nothing, print nothing (real VMS
+$! runs no STARTNET on an unconfigured node; the boot console stays pristine).
+$! F$SEARCH is a pure DCL lexical -- no image runs, so no %DCL-E-ABORT.
+$ IF F$SEARCH("SYS$SYSTEM:NETNODE_LOCAL.DAT") .EQS. "" THEN GOTO no_decnet
+$!
 $ SAY ""
 $ SAY "        OVMX DECnet Phase IV -- Startup (STARTNET)"
 $ SAY ""
@@ -56,15 +71,17 @@ $! default -- the same shape TCPIP$STARTUP uses to start TCPIP$INETD, which read
 $! its own service DB. The EXECUTIVE assigns the process name NETACP as it creates
 $! the process, so SHOW SYSTEM lists it and $GETJPI resolves it by name; a
 $! duplicate is refused to the caller (%RUN-F-CREPRC / -SYSTEM-F-DUPLNAM), making
-$! a re-run idempotent-safe. Status (served / %DECNETD-I-NOCONFIG / a NOSOCKET
-$! failure) goes to SYS$MANAGER:NETACP.LOG, never the console.
+$! a re-run idempotent-safe. Per-process status (served / not-configured / a
+$! NOSOCKET failure) goes to SYS$MANAGER:NETACP.LOG, never the console.
 $ RUN /DETACHED -
        /PROCESS_NAME=NETACP -
        /INPUT=NL: /OUTPUT=SYS$MANAGER:NETACP.LOG -
        /ERROR=SYS$MANAGER:NETACP.LOG -
        SYS$SYSTEM:DECNETD.EXE
-$ SAY "%DECNET-I-STARTNET, NETACP launched detached -- it serves inbound $ SET HOST"
-$ SAY "  when a DECnet executor address is configured (NCP SET EXECUTOR ADDRESS);"
-$ SAY "  otherwise it logs %DECNETD-I-NOCONFIG to SYS$MANAGER:NETACP.LOG and stops."
+$ SAY "%DECNET-I-STARTNET, NETACP launched detached to serve inbound $ SET HOST."
 $ SAY ""
+$ EXIT
+$!
+$ no_decnet:
+$! DECnet not configured -- nothing to do, and nothing on the console.
 $ EXIT

@@ -541,7 +541,14 @@ loginout-acp-auth-from-ods2
 multiuser-stage-shared-not-peruser
 tcpip-config-hostaddr-not-defined
 tcpip-inetd-reply-not-connected
-tcpip-daytime-reply-not-formatted"
+tcpip-daytime-reply-not-formatted
+l2-open-bypasses-phy-io
+pe-vc-snapshot-fabricates-circuit
+scs-cdt-snapshot-fabricates-connection
+cnxman-csb-snapshot-fabricates-member
+getsyi-csid-reported-without-valid
+fork-work-dispatch-uncounted
+fork-worker-start-reports-success-unstarted"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -653,6 +660,138 @@ allowlist would have passed silently, which is precisely the failure this
 round was re-dispatched to fix.
 EOF
                       ;;
+        esac;;
+
+    fork-worker-start-reports-success-unstarted)
+        case "$_f" in
+        facility)     echo "cluster fork served-I/O worker start (vms_cluster_fork_worker_start, FC-P6.6, vms-ci)";;
+        targets)      echo "kernel-core/vms_cluster_fork_bind.c";;
+        suites_red)   echo "test_kmod_cluster_fork_hammer";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cluster_fork_worker_start() short-circuits its exec_kthread_create with '0 &&', so status stays 0 (success), ioworker_started is set and it returns SS__NORMAL -- but the FC-P6.6 I/O worker kthread is NEVER spawned. The 'reports success while doing nothing' class: WORKER_START=1, IO_HANDLER_CALLS=0. Submissions are still accepted (cf_io_post queues them, io_sub stays green), but no worker runs the blocking callback, so the fork thread has nothing to dispatch alongside. Create call is unique; short-circuited text differs after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the WORKER kthread really ran the blocking I/O callback (this is where exec_blockdev_read_block sits on a served unit)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+THE FIX, MEASURED: the fork thread kept dispatching WHILE a served I/O was blocking on the worker -- it is no longer behind the disk
+every ACCEPTED submission is accounted for exactly once: completed, or abandoned by the worker stop
+EOF
+                      ;;
+        knock_on_why)  echo "with no worker kthread running the blocking I/O, there is no in-flight served I/O for the fork thread to dispatch alongside (WORK_DURING_IO stays 0), and the accepted submissions are never completed nor abandoned-by-worker-stop, so the accounting assertion also reddens.";;
+        esac;;
+
+    fork-work-dispatch-uncounted)
+        case "$_f" in
+        facility)     echo "cluster fork work-dispatch accounting (cf_deliver_work, FC-P6, vms-ci)";;
+        targets)      echo "kernel-core/vms_cluster_fork.c";;
+        suites_red)   echo "test_kmod_cluster_fork_hammer";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cf_deliver_work() drops 'f->st.work_dispatched++', so the executive's OWN drain-convergence rule (work_dispatched >= work_posted) never converges: WORK_DISPATCHED stays 0 while WORK_POSTED climbs. A value-not-decision mutation (precedent: the kstat-*-mismapped entries). The frames are still delivered -- RX_DISPATCHED is a different counter and stays correct -- so only the work-accounting assertions redden, not the rx-frame one (minimality). The increment text is unique; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+every posted work item was dispatched exactly once (no lost wakeup, no stuck poster)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+cf_stats converged (dispatched >= enqueued/posted) within the 2s bound -- no lost wakeup
+EOF
+                      ;;
+        knock_on_why)  echo "the same dropped increment makes DRAIN_OK (the dispatched>=posted convergence) fail alongside the exact-once work-dispatch count.";;
+        esac;;
+
+    getsyi-csid-reported-without-valid)
+        case "$_f" in
+        facility)     echo "cluster SYI\$_NODE_CSID projection (vms_ioctl_cluster_getsyi, vms-ci E30)";;
+        targets)      echo "kernel-core/vms_cluster_api.c";;
+        suites_red)   echo "test_syssvc_cluster_negctl";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cluster_api_getsyi_project() forces the SYI\$_NODE_CSID block always-taken (the 'if (club->local_csid_valid)' learned-CSID guard becomes 'if (1)'), so node_csid_valid is asserted with NO learned CSID -- integration-note E30's exact fabrication (0 means 'none assigned', never 'node zero'). Called unconditionally by vms_ioctl_cluster_getsyi even with cl->cnxman==NULL. node_csid stays 0 (never learned); only the VALID flag lies. Guard text is unique in the file; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+... node_csid_valid CLEAR -- the cluster assigned no CSID, and 0 means 'none assigned', never 'node zero'
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    cnxman-csb-snapshot-fabricates-member)
+        case "$_f" in
+        facility)     echo "CNXMAN CSB membership diagnostic snapshot (VMS_CLUSTER_DIAG_CSB_CSB, vms-ci)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_kmod_cluster_membership_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_get_csb()'s 'cl->cnxman == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV, so an index far past the club's high-water mark answers SS__NORMAL -- a member row the executive does not hold, reported live. memset(out,0) precedes the guard so the row reads all-zero (only the STATUS lies); the CLUB path (cnxman_club_csb_at, the ternary's second SS__NOSUCHDEV) is untouched, so the all-zero-row check and CLUB assertions stay green (minimality). The sed matches only the guard's standalone return statement, not the ternary; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+an index far past the high-water mark refuses (SS$_NOSUCHDEV), never a wrapped/aliased row
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    scs-cdt-snapshot-fabricates-connection)
+        case "$_f" in
+        facility)     echo "SCS CDT diagnostic snapshot (VMS_CLUSTER_DIAG_CONN_CDT, vms-ci)";;
+        targets)      echo "kernel-core/vms_scs.c";;
+        suites_red)   echo "test_kmod_cluster_conn_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_scs_cdt_snapshot()'s 'cl->scs == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV (range-scoped, only that one return), so every CDL index answers SS__NORMAL -- a placeholder connection reported as live. memset(out,0) precedes the guard, so rows read back all-zero: an index far past any CDL reports SS__NORMAL, and the projected rows carry local_conid==0 (the wire's 'not bound yet' value) reported as real. INV-6 fabrication. After apply the return is SS__NORMAL, gone from the function (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+row CDT, index far past any CDL: SS$_NOSUCHDEV, not a crash
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+every projected CDT row carries a real minted Local Con.ID, never 0 (the wire's own 'not bound yet' value)
+EOF
+                      ;;
+        knock_on_why)  echo "the same always-NORMAL guard both answers a far-past index SS__NORMAL (require_fail) AND projects zero-conid rows as live (the walk sees 'live' rows with local_conid==0).";;
+        esac;;
+
+    pe-vc-snapshot-fabricates-circuit)
+        case "$_f" in
+        facility)     echo "PE port VC diagnostic snapshot (VMS_CLUSTER_DIAG_PORT_VC, vms-ci)";;
+        targets)      echo "kernel-core/vms_pe.c";;
+        suites_red)   echo "test_kmod_cluster_vc_diag";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_pe_vc_snapshot()'s 'cl->pe == NULL' guard returns SS__NORMAL instead of SS__NOSUCHDEV, so a VC row the executive does not hold (an index far past the table, or no port up) is reported as a live circuit -- the INV-6 fabrication class (a placeholder reported real). The all-zero row is untouched, so only the STATUS lies; the index-0 real-VC and no-circuit-all-zero branches read other paths and stay green. Range-scoped substitution: only the one return in vms_pe_vc_snapshot changes, gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+row VC, index far past any table: SS$_NOSUCHDEV, not a crash
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    l2-open-bypasses-phy-io)
+        case "$_f" in
+        facility)     echo "L2 raw SCS datalink PHY_IO privilege gate (VMS_IOCTL_L2_OPEN, vms-1e4)";;
+        targets)      echo "kernel-core/vms_l2.c";;
+        suites_red)   echo "test_syssvc_l2_datalink";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "l2_priv_check() stops gating the raw SCS datalink on real PHY_IO: the check 'ok = (cur_privs & VMS_PRV_M_PHY_IO) != 0' becomes 'ok = true', so VMS_IOCTL_L2_OPEN admits a caller WITHOUT PHY_IO and mints a handle -- the CAP_NET_RAW-class self-authorization the executive exists to refuse. The nonexistent-interface and byte-exact frame assertions read other paths and stay green; only the AUTH GATE reddens. After substitution the original term is gone, so a second apply is a no-op (selftest).";;
+        require_fail) cat <<'EOF'
+L2_OPEN without PHY_IO -> SS$_NOPRIV
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+L2_OPEN without PHY_IO mints no handle
+EOF
+                      ;;
+        knock_on_why)  echo "the always-true priv-check returns SS\$_NORMAL instead of SS\$_NOPRIV AND mints a handle, so both the OPEN-refused and no-handle assertions redden together.";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -6129,6 +6268,38 @@ apply_edit() {
     case "$_d" in
     access-mode-escalation)
         sed -i 's|if (!(proc->cur_privs \& PRV_M_CMKRNL)) {|if (0 /* NEGCTL access-mode-escalation */) {|' "$_file";;
+    l2-open-bypasses-phy-io)
+        # Unique text (l2_priv_check's PHY_IO gate). Drop the mask test so the
+        # check is always true; original term is gone, so a 2nd apply is a no-op.
+        sed -i 's|bool ok = (cur_privs \& VMS_PRV_M_PHY_IO) != 0;|bool ok = true; /* NEGCTL l2-open-bypasses-phy-io */|' "$_file";;
+    pe-vc-snapshot-fabricates-circuit)
+        # Range-scoped to vms_pe_vc_snapshot so the file's other SS__NOSUCHDEV
+        # returns are untouched; after apply that return is SS__NORMAL, so a 2nd
+        # apply finds no SS__NOSUCHDEV in that function (no-op selftest).
+        sed -i '/^int vms_pe_vc_snapshot(/,/^}/ s|return SS__NOSUCHDEV;|return SS__NORMAL; /* NEGCTL pe-vc-snapshot-fabricates-circuit */|' "$_file";;
+    scs-cdt-snapshot-fabricates-connection)
+        # Range-scoped to vms_scs_cdt_snapshot (single SS__NOSUCHDEV at :750);
+        # after apply it is SS__NORMAL, so a 2nd apply finds none (no-op selftest).
+        sed -i '/^int vms_scs_cdt_snapshot(/,/^}/ s|return SS__NOSUCHDEV;|return SS__NORMAL; /* NEGCTL scs-cdt-snapshot-fabricates-connection */|' "$_file";;
+    cnxman-csb-snapshot-fabricates-member)
+        # Range-scoped to cnxman_get_csb. The function has TWO (int)SS__NOSUCHDEV
+        # returns; the exact standalone `return (int)SS__NOSUCHDEV;` matches ONLY
+        # the cl->cnxman==NULL guard, not the `? SS__NORMAL : (int)SS__NOSUCHDEV`
+        # ternary (different surrounding text). Gone after apply (no-op re-apply).
+        sed -i '/^int cnxman_get_csb(/,/^}/ s|return (int)SS__NOSUCHDEV;|return (int)SS__NORMAL; /* NEGCTL cnxman-csb-snapshot-fabricates-member */|' "$_file";;
+    getsyi-csid-reported-without-valid)
+        # Unique guard text (the SYI$_NODE_CSID learned-CSID guard); forcing it
+        # if(1) asserts node_csid_valid with no learned CSID. Gone after apply.
+        sed -i 's|if (club->local_csid_valid) {|if (1 /* NEGCTL getsyi-csid-reported-without-valid */) {|' "$_file";;
+    fork-work-dispatch-uncounted)
+        # Unique increment; dropping it leaves the counter at 0 (convergence
+        # never reached). Gone after apply, so a 2nd apply is a no-op (selftest).
+        sed -i 's|f->st.work_dispatched++;|/* NEGCTL fork-work-dispatch-uncounted: increment dropped */|' "$_file";;
+    fork-worker-start-reports-success-unstarted)
+        # Short-circuit the (unique) ioworker exec_kthread_create with 0 && so
+        # status stays 0 (success) but the create is never evaluated -> no kthread.
+        # After apply the LHS text differs, so a 2nd apply is a no-op (selftest).
+        sed -i 's|status = exec_kthread_create(\&b->ioworker, cfb_io_thread, b,|status = 0 \&\& exec_kthread_create(\&b->ioworker, cfb_io_thread, b, /* NEGCTL fork-worker-start-reports-success-unstarted */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

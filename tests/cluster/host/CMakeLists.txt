@@ -80,6 +80,47 @@ cluster_host_test(test_codec_hello      test_codec_hello.c)
 cluster_host_test(test_codec_vc         test_codec_vc.c)
 cluster_host_test(test_codec_dlm        test_codec_dlm.c)
 
+# rd vms-5339: never-crash-a-peer fuzz of the DLM (+ CM PARAMS) wire decoders.
+# To catch an over-read INSIDE the codec, the codec itself must be sanitizer-
+# instrumented, so this builds a TWIN of the codec sources WITH
+# -fsanitize=address,undefined (guarded -- a musl/freestanding cross may lack
+# the runtime) and links the fuzz against that twin, leaving the shared
+# cluster_host_codec (used by every other test) untouched. Where the sanitizer
+# is unavailable the fuzz still runs against the plain codec (exact-sized malloc
+# still bounds each input); the sanitizer turns an over-read into a HARD failure.
+include(CheckCSourceCompiles)
+set(_dlmfz_save "${CMAKE_REQUIRED_FLAGS}")
+set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+check_c_source_compiles("int main(void){return 0;}" OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+set(CMAKE_REQUIRED_FLAGS "${_dlmfz_save}")
+
+add_executable(fuzz_codec_dlm fuzz_codec_dlm.c)
+target_include_directories(fuzz_codec_dlm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+    add_library(cluster_host_codec_fuzzsan STATIC
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_hello.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_vc.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_dlm.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_scs.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_cm.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_mscp.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_blk.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_mscp_cl_fsm.c
+    )
+    target_include_directories(cluster_host_codec_fuzzsan PUBLIC
+        ${CMAKE_SOURCE_DIR}/src/kernel-core)
+    target_compile_options(cluster_host_codec_fuzzsan PRIVATE -fsanitize=address,undefined)
+    target_compile_options(fuzz_codec_dlm PRIVATE -fsanitize=address,undefined)
+    target_link_options(fuzz_codec_dlm PRIVATE -fsanitize=address,undefined)
+    target_link_libraries(fuzz_codec_dlm PRIVATE cluster_host_codec_fuzzsan)
+else()
+    target_link_libraries(fuzz_codec_dlm PRIVATE cluster_host_codec)
+endif()
+add_test(NAME cluster_host_fuzz_codec_dlm COMMAND fuzz_codec_dlm)
+set_tests_properties(cluster_host_fuzz_codec_dlm PROPERTIES
+    LABELS "unit;cluster;codec;fuzz" TIMEOUT 180)
+
 # ---- FC-P3.6: the CLUB/CSB model, the ten-state ladder, the reconnect FSM ----
 # Built from src/kernel-core with -DOVMX_CLUSTER_HOST -- the SAME sources both
 # kmods compile, with no kernel headers and no seam. That is the whole point of

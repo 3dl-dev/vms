@@ -75,12 +75,17 @@ int dnet_nodespec_parse(const char *spec, struct dnet_nodespec *out)
     if (in_quote) return DNET_CTERM_EBADLEN;      /* unterminated "..."      */
     if (!dcolon)  return DNET_NODESPEC_NONODE;    /* no node -> local path   */
 
+    /* From here every failure jumps to `fail`, which re-zeros *out so no
+     * half-parsed field -- above all no partial credential -- ever survives a
+     * non-OK return (INV-6, the same guarantee dnet_fal_access_decode makes). */
+    int rc;
+
     /* 2. The file part is everything after "::"; it must be non-empty. */
     const char *fs = dcolon + 2;
     size_t fslen = strlen(fs);
-    if (fslen == 0) return DNET_CTERM_EINVAL;                 /* "node::"    */
-    int rc = take(out->filespec, sizeof out->filespec, fs, fs + fslen);
-    if (rc != DNET_CTERM_OK) return rc;
+    if (fslen == 0) { rc = DNET_CTERM_EINVAL; goto fail; }    /* "node::"    */
+    rc = take(out->filespec, sizeof out->filespec, fs, fs + fslen);
+    if (rc != DNET_CTERM_OK) goto fail;
 
     /* 3. The node part is [spec, dcolon); its node NAME runs up to the first
      *    quote (or to "::" if there is no access string). */
@@ -91,9 +96,9 @@ int dnet_nodespec_parse(const char *spec, struct dnet_nodespec *out)
         if (*p == '"') { q = p; break; }
 
     const char *nameend = q ? q : npend;
-    if (nameend == np) return DNET_CTERM_EINVAL;              /* no node name */
+    if (nameend == np) { rc = DNET_CTERM_EINVAL; goto fail; } /* no node name */
     rc = take(out->node, sizeof out->node, np, nameend);
-    if (rc != DNET_CTERM_OK) return rc;
+    if (rc != DNET_CTERM_OK) goto fail;
 
     /* 4. No access string: done. */
     if (!q) return DNET_CTERM_OK;
@@ -108,7 +113,7 @@ int dnet_nodespec_parse(const char *spec, struct dnet_nodespec *out)
     while (p < npend) {
         if (*p == '"') {
             if (p + 1 < npend && p[1] == '"') {              /* escaped quote */
-                if (bi + 1 >= sizeof body) return DNET_CTERM_EBADLEN;
+                if (bi + 1 >= sizeof body) { rc = DNET_CTERM_EBADLEN; goto fail; }
                 body[bi++] = '"';
                 p += 2;
                 continue;
@@ -117,16 +122,24 @@ int dnet_nodespec_parse(const char *spec, struct dnet_nodespec *out)
             p++;
             break;
         }
-        if (bi + 1 >= sizeof body) return DNET_CTERM_EBADLEN;
+        if (bi + 1 >= sizeof body) { rc = DNET_CTERM_EBADLEN; goto fail; }
         body[bi++] = *p++;
     }
-    if (!closed) return DNET_CTERM_EBADLEN;   /* access string not closed     */
+    if (!closed) { rc = DNET_CTERM_EBADLEN; goto fail; } /* access not closed */
 
     /* Only whitespace may follow the closing quote before "::". */
     for (; p < npend; p++)
-        if (!isspace((unsigned char)*p)) return DNET_CTERM_EINVAL;
+        if (!isspace((unsigned char)*p)) { rc = DNET_CTERM_EINVAL; goto fail; }
 
-    return split_access(body, bi, out);
+    rc = split_access(body, bi, out);
+    if (rc != DNET_CTERM_OK) goto fail;
+    return DNET_CTERM_OK;
+
+fail:
+    /* Wipe any partially-parsed field (node/filespec/username/...) so a failed
+     * parse never hands a half-decoded credential back to the caller. */
+    memset(out, 0, sizeof *out);
+    return rc;
 }
 
 int dnet_copy_plan(const char *src, const char *dst, struct dnet_copy_plan *out)

@@ -35,6 +35,14 @@ items:
       tests/qemu/test_cluster_conn.sh drives CLUSTER_DIAG_CONN against a real
       /dev/vms. NOT claimed: a graded two-node OVMX connection over the wire, or
       any interoperation with a real VAX — R4-multi-node and R5 are lab-deferred.
+      NEVER-CRASH-A-PEER (vms-5339/#1200+#1202), build-enforced: the whole cluster
+      peer-RECEIVE decode surface -- the DLM body decoders + CM PARAMS + the
+      hello/scs/cm/vc/blk frame codecs (24 decoders; MSCP gate-deferred) -- is
+      fuzzed under ASan/UBSan (~3M inputs total) as a CI gate: no over-read / OOB /
+      UB / crash on any malformed, truncated, or hostile peer frame, and each fuzz
+      asserts dispatch-count>0 (non-vacuity) so a silently-never-reached decoder
+      fails the gate rather than shipping a green facade (INV-6). Locks the
+      never-crash-a-peer invariant as a build-time fact, not an aspiration.
 
   - id: scs$datagram-service
     kind: feature

@@ -93,6 +93,12 @@ struct node_cfg {
 	 * moments, and this is the overlap that covers the difference.
 	 */
 	unsigned    linger;
+	/*
+	 * Run the QUORUM-HANG phase after the membership window (section 6e,
+	 * rd vms-b6d). Off by default: it depends on the rig PARTITIONING the
+	 * segment under it, which no other mode does.
+	 */
+	unsigned    qhang;
 };
 
 static void cfg_defaults(struct node_cfg *c)
@@ -107,6 +113,7 @@ static void cfg_defaults(struct node_cfg *c)
 	c->window = 90u;
 	c->xnode = 0u;
 	c->linger = 30u;
+	c->qhang = 0u;
 }
 
 /* One "--name=value" argument. Returns 0 if it was consumed. */
@@ -135,6 +142,7 @@ static int cfg_take(struct node_cfg *c, const char *arg)
 	TAKE_U("window", window)
 	TAKE_U("xnode", xnode)
 	TAKE_U("linger", linger)
+	TAKE_U("qhang", qhang)
 #undef TAKE_U
 #undef TAKE_STR
 	return -1;
@@ -1846,6 +1854,276 @@ static void rig_lvbrd_phase(int fd, const struct node_cfg *c)
 	}
 }
 
+/* ==========================================================================
+ * 6e. THE QUORUM HANG (rd vms-b6d, FC-P8.1)
+ *
+ * WHAT THIS PHASE MEASURES, and why it can only be measured on two real nodes.
+ *
+ * The executive must STALL a clustered lock grant while this node's cluster has
+ * lost quorum, and complete that same request when quorum returns (Davis p. 7-4:
+ * the system "blocks activity and waits for quorum to be regained"). The stall
+ * is NOT an error return, so the evidence is a STATE DELTA and never a status
+ * code: the lock exists, it is not granted, and later it IS -- read back from
+ * $GETLKI, with the CLUB's own quorum figures read beside it at each step.
+ *
+ * The rig PARTITIONS the segment (tests/qemu/segment_relay.py drops whole frames
+ * for a window, then forwards again). Nothing in the guest is told that this
+ * happened: each node discovers it the way a real system does -- its channel
+ * stops hearing HELLOs, the circuit fails, the peer's CSB leaves OPEN and its
+ * votes stop counting as PRESENT. So the quorum this phase acts on is the
+ * executive's own arithmetic over its own CSB table, and both nodes are read the
+ * same way.
+ *
+ * THE TWO NODES ARE THE PROOF AND ITS CONTROL, IN ONE RUN:
+ *   node A  VOTES=1 EXPECTED_VOTES=1: after the cut its own single vote still
+ *           meets QUORUM=1, so it never enters a hang and its request must be
+ *           GRANTED IMMEDIATELY. That is the no-spurious-stall control -- a
+ *           build that froze on "a peer went away" rather than on "I lost
+ *           quorum" fails here.
+ *   node B  VOTES=0: its quorum rests entirely on A's learned vote (rd vms-d0d),
+ *           so the cut takes it below QUORUM and its request must STALL.
+ *
+ * This phase asserts nothing. It prints, at each step, what the executive held.
+ * ========================================================================== */
+
+#define RIG_QH_POLL_MS      500u
+#define RIG_QH_WAIT_LOST    240u   /* x POLL_MS = 120s to observe the loss   */
+#define RIG_QH_WAIT_BACK    300u   /* x POLL_MS = 150s to observe the regain */
+#define RIG_QH_WAIT_GRANT    60u   /* x POLL_MS = 30s for the stalled grant  */
+#define RIG_QH_CANDIDATES     8u   /* names scanned for one this node masters */
+
+struct rig_qhang {
+	char     name[32];    /* a name THIS node masters (see rig_qh_pick)    */
+	uint32_t anchor_lkid; /* an NL lock held on it for the whole phase     */
+	uint32_t held_lkid;   /* the EX taken with quorum, released in the hang */
+	uint32_t stalled_lkid;/* the EX asked for during the hang              */
+	int      found;
+};
+
+/* This node's own CLUB, or a zeroed view when the read failed. */
+static int rig_qh_club(int fd, struct vms_club_view_wire *club)
+{
+	memset(club, 0, sizeof(*club));
+	return rig_read_club(fd, club) == 0;
+}
+
+/* One QH line: the CLUB's quorum figures at a named moment. Every field is an
+ * executive read; `qlost` is the flag FC-P3.7 computes and FC-P8.1 acts on. */
+static void rig_qh_print_club(const struct node_cfg *c, const char *at,
+			      const struct vms_club_view_wire *club)
+{
+	printf("RIG-%s-QH-CLUB at=%s state=%u nodes=%u cevotes=%u quorum=%u "
+	       "qlost=%u expected=%u\n",
+	       c->tag, at, (unsigned)club->state,
+	       (unsigned)club->cluster_nodes, (unsigned)club->cevotes,
+	       (unsigned)club->quorum, (unsigned)club->quorum_lost,
+	       (unsigned)club->expected_votes);
+	fflush(stdout);
+}
+
+/*
+ * Poll the CLUB until quorum_lost reads `want`, or the deadline passes.
+ * Returns the polls it took, 0 when it never did -- printed as the miss it is
+ * rather than proceeding as though it had happened.
+ */
+static unsigned rig_qh_wait_qlost(int fd, unsigned want, unsigned max_polls,
+				  struct vms_club_view_wire *out)
+{
+	unsigned t;
+
+	for (t = 0; t < max_polls; t++) {
+		if (rig_qh_club(fd, out) && out->quorum_lost == (uint8_t)want)
+			return t + 1u;
+		rig_msleep(RIG_QH_POLL_MS);
+	}
+	(void)rig_qh_club(fd, out);
+	return 0u;
+}
+
+/*
+ * PICK A NAME THIS NODE MASTERS, AND ANCHOR IT. Two reasons, both load-bearing:
+ *
+ *   1. THE GRANT DECISION MUST BE THIS NODE'S. A $ENQ for a tree the PEER
+ *      masters is not decided here at all -- it becomes a proxy request the
+ *      peer answers (vms_dlm_quorum.h names this limit) -- and during a
+ *      partition it would sit unanswered for want of a WIRE, which looks
+ *      exactly like a stall and would prove nothing about quorum.
+ *   2. THE RESOURCE MUST SURVIVE THE CUT. The NL lock left holding it keeps the
+ *      RSB -- and with it the mastery this node established while the cluster
+ *      was whole -- alive for the whole phase, so the request made during the
+ *      hang takes the LOCAL path it would have taken anyway. NL is compatible
+ *      with every mode (the compat matrix's first row), so the anchor can never
+ *      be the reason a later request waits: if the EX below is not granted,
+ *      quorum is the only thing left that can explain it.
+ *
+ * The mastery is READ BACK from GET_RESMASTER (is_local_master), never assumed
+ * from the name.
+ */
+static void rig_qh_pick(int fd, const struct node_cfg *c, struct rig_qhang *q)
+{
+	unsigned i;
+
+	memset(q, 0, sizeof(*q));
+	for (i = 0; i < RIG_QH_CANDIDATES; i++) {
+		struct vms_resmaster_args rm;
+		char name[32];
+		uint32_t lkid = 0u, st;
+
+		snprintf(name, sizeof(name), "QH_%s%u", c->tag, i);
+		st = rig_dlm_enq_peek_valblk(fd, name, LCK_K_NLMODE, &lkid,
+					     NULL);
+		if (st != SS_NORMAL || lkid == 0u) {
+			printf("RIG-%s-QH-PICK res=%s status=%u (not enqueued; "
+			       "next candidate)\n", c->tag, name, (unsigned)st);
+			fflush(stdout);
+			continue;
+		}
+		rig_xn_wait_master(fd, name, &rm);
+		printf("RIG-%s-QH-PICK res=%s found=%u local_csid=0x%08x "
+		       "master_csid=0x%08x is_local_master=%u dir_csid=0x%08x\n",
+		       c->tag, name, (unsigned)rm.found, (unsigned)rm.local_csid,
+		       (unsigned)rm.master_csid, (unsigned)rm.is_local_master,
+		       (unsigned)rm.dir_csid);
+		fflush(stdout);
+		if (rm.found && rm.is_local_master) {
+			snprintf(q->name, sizeof(q->name), "%s", name);
+			q->anchor_lkid = lkid;      /* HELD: see above */
+			q->found = 1;
+			return;
+		}
+		(void)rig_dlm_deq(fd, lkid);
+	}
+}
+
+/* One $ENQ at EX on the anchored name, and what the executive DID with it --
+ * read back from $GETLKI, never inferred from the ioctl's own status. */
+static void rig_qh_request(int fd, const struct node_cfg *c, const char *at,
+			   const struct rig_qhang *q, uint32_t *lkid_out)
+{
+	uint32_t lkid = 0u, st, granted;
+
+	st = rig_dlm_enq(fd, q->name, 0u, &lkid);
+	granted = (lkid != 0u) ? rig_xn_granted_mode(fd, lkid) : 0u;
+	printf("RIG-%s-QH-ENQ at=%s res=%s status=%u lkid=0x%08x "
+	       "granted_mode=%u (EX=5; SS$_NORMAL with granted_mode 0 is a "
+	       "request that EXISTS and is NOT granted -- the stall)\n",
+	       c->tag, at, q->name, (unsigned)st, (unsigned)lkid,
+	       (unsigned)granted);
+	fflush(stdout);
+	*lkid_out = lkid;
+}
+
+/* Poll one lock until it is granted at EX, or the deadline passes. */
+static unsigned rig_qh_wait_granted(int fd, uint32_t lkid, unsigned max_polls)
+{
+	unsigned t;
+
+	for (t = 0; t < max_polls; t++) {
+		if (rig_xn_granted_mode(fd, lkid) == LCK_K_EXMODE)
+			return t + 1u;
+		rig_msleep(RIG_QH_POLL_MS);
+	}
+	return 0u;
+}
+
+/*
+ * Step 1, WITH QUORUM: the same request this phase will make again during the
+ * hang, made while the cluster is whole. Without this baseline a stall proves
+ * only that this rig cannot take a lock.
+ */
+static void rig_qh_before(int fd, const struct node_cfg *c, struct rig_qhang *q)
+{
+	struct vms_club_view_wire club;
+
+	(void)rig_qh_club(fd, &club);
+	rig_qh_print_club(c, "before", &club);
+	rig_qh_request(fd, c, "before", q, &q->held_lkid);
+}
+
+/*
+ * Step 2: the segment has been cut. Wait for THIS node's own executive to
+ * notice -- node B loses quorum (its votes were A's), node A does not (its own
+ * vote still meets QUORUM=1) -- and then make the request. Both outcomes are
+ * the measurement; the rig asserts neither.
+ */
+static void rig_qh_during(int fd, const struct node_cfg *c,
+			  struct rig_qhang *q)
+{
+	struct vms_club_view_wire club;
+	unsigned polls;
+
+	polls = rig_qh_wait_qlost(fd, 1u, RIG_QH_WAIT_LOST, &club);
+	printf("RIG-%s-QH-LOSS observed=%d polls=%u (the executive's own "
+	       "quorum_lost, after the segment was cut)\n",
+	       c->tag, (club.quorum_lost != 0), polls);
+	rig_qh_print_club(c, "during", &club);
+
+	/* A RELEASE DURING A HANG MUST STILL WORK -- first, so that what
+	 * follows cannot be blamed on this node's own held lock. */
+	if (q->held_lkid != 0u)
+		printf("RIG-%s-QH-DEQ at=during lkid=0x%08x status=%u (giving a "
+		       "lock back during a hang must succeed)\n",
+		       c->tag, (unsigned)q->held_lkid,
+		       (unsigned)rig_dlm_deq(fd, q->held_lkid));
+	fflush(stdout);
+
+	/* ... and THE request: EX on a resource this node masters, with no
+	 * holder but its own NL anchor. Granted or stalled is now a statement
+	 * about quorum and nothing else. */
+	rig_qh_request(fd, c, "during", q, &q->stalled_lkid);
+}
+
+/*
+ * Step 3: the segment is healed. The peer's circuit comes back, its votes are
+ * PRESENT again, and a request that stalled must complete BY ITSELF -- the same
+ * lock id, never re-issued.
+ */
+static void rig_qh_after(int fd, const struct node_cfg *c,
+			 const struct rig_qhang *q)
+{
+	struct vms_club_view_wire club;
+	unsigned polls, gpolls;
+
+	polls = rig_qh_wait_qlost(fd, 0u, RIG_QH_WAIT_BACK, &club);
+	printf("RIG-%s-QH-REGAIN observed=%d polls=%u\n",
+	       c->tag, (club.quorum_lost == 0), polls);
+	rig_qh_print_club(c, "after", &club);
+
+	gpolls = (q->stalled_lkid != 0u)
+		 ? rig_qh_wait_granted(fd, q->stalled_lkid, RIG_QH_WAIT_GRANT)
+		 : 0u;
+	printf("RIG-%s-QH-AFTER res=%s lkid=0x%08x granted_mode=%u polls=%u "
+	       "(the SAME request, completed -- EX=5)\n",
+	       c->tag, q->name, (unsigned)q->stalled_lkid,
+	       (unsigned)(q->stalled_lkid
+			  ? rig_xn_granted_mode(fd, q->stalled_lkid) : 0u),
+	       gpolls);
+	fflush(stdout);
+}
+
+static void rig_qhang_phase(int fd, const struct node_cfg *c)
+{
+	struct rig_qhang q;
+
+	printf("RIG-%s-QH-PHASE begin (FC-P8.1: the quorum hang)\n", c->tag);
+	fflush(stdout);
+	rig_qh_pick(fd, c, &q);
+	if (!q.found) {
+		printf("RIG-%s-QH-PHASE NONE (no candidate of this node's own "
+		       "%u names is mastered HERE -- nothing this node's own "
+		       "grant decision governs, so nothing to measure)\n",
+		       c->tag, RIG_QH_CANDIDATES);
+		fflush(stdout);
+		return;
+	}
+	rig_qh_before(fd, c, &q);
+	rig_qh_during(fd, c, &q);
+	rig_qh_after(fd, c, &q);
+	printf("RIG-%s-QH-PHASE end res=%s anchor=0x%08x\n",
+	       c->tag, q.name, (unsigned)q.anchor_lkid);
+	fflush(stdout);
+}
+
 /*
  * THE SURVIVAL LINE. Printed AFTER the phase, and after a LINGER long enough
  * for the PEER's frames to have arrived here -- because the property being
@@ -1894,6 +2172,12 @@ static int rig_poll(int fd, const struct node_cfg *c)
 	rig_sample_take(fd, &s);
 	rig_verdict(c, &s);
 	rig_dlm_probe(fd, c);
+
+	if (c->qhang) {
+		rig_qhang_phase(fd, c);
+		rig_sample_take(fd, &s);
+		rig_verdict(c, &s);   /* the post-hang reading */
+	}
 
 	if (c->xnode) {
 		rig_xnode_phase(fd, c, &xn);

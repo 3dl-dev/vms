@@ -23,7 +23,12 @@
 # cross-node DLM phase -- each node takes an EX lock on a resource the PEER
 # masters, contends, and releases, which drives the arm's op-0x03 $DEQ and
 # op-0x04 BLKAST emits in both directions and then asserts both nodes are still
-# MEMBERs with CN=2 after receiving frames neither has a receive half for).
+# MEMBERs with CN=2 after receiving frames neither has a receive half for), or
+# `qhang` (rd vms-b6d, FC-P8.1: the proof run PLUS a PARTITION -- the rig cuts
+# its own segment, node B loses the quorum that rested on A's learned vote and
+# must STALL a clustered $ENQ while node A, still meeting QUORUM on its own
+# vote, grants the identical request; when the segment heals B's SAME stalled
+# request must complete).
 apiVersion: v1
 kind: Pod
 metadata:
@@ -35,12 +40,13 @@ spec:
   restartPolicy: Never
   containers:
     - name: rig
-      image: 192.168.2.43:30500/ovmx-genesis-rig:37
+      image: 192.168.2.43:30500/ovmx-genesis-rig:b6d3
       imagePullPolicy: Always
       env:
-        #  proof | negctl | noderive | xnode  -- see run_cluster_genesis_2node.sh
+        #  proof | negctl | noderive | xnode | qhang
+        #  -- see run_cluster_genesis_2node.sh
         - name: RIG_MODE
-          value: "xnode"
+          value: "qhang"
         - name: OUT_DIR
           value: /lab/genesis-rig-out
       securityContext:

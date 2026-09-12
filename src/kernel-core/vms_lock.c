@@ -43,6 +43,7 @@
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
 #include "vms_dlm_master.h"   /* the MASTER-side door + the delivery proc      */
+#include "vms_dlm_quorum.h"   /* the QUORUM GATE on the grant decision (FC-P8.1) */
 
 /*
  * Deadlock re-scan interval for a lock blocked in-kernel (sync $ENQW).
@@ -130,6 +131,17 @@ exec_lock_t vms_res_hash_lock;
 static struct vms_dlm_requester_ops vms_dlm_req_ops;
 static exec_lock_t vms_dlm_req_ops_lock;
 
+/*
+ * THE QUORUM GATE (FC-P8.1, rd vms-b6d; the whole contract is in
+ * vms_dlm_quorum.h). NULL until the connection manager's DLM arm installs it at
+ * cluster start, and NULL again at stop -- so a node with no cluster can never
+ * stall a lock for want of a quorum it was never part of. The engine keeps NO
+ * quorum state of its own: this is a pointer to the connection manager's own
+ * predicate, asked afresh at every grant decision (INV-6).
+ */
+static struct vms_quorum_ops vms_quorum_gate_ops;
+static exec_lock_t vms_quorum_gate_lock;
+
 /* ================================================================
  * Cluster membership does NOT live here (FC-P3.9)
  * ================================================================
@@ -151,6 +163,7 @@ int vms_lock_init(void)
     exec_lock_init(&vms_lock_id_lock);
     exec_lock_init(&vms_res_hash_lock);
     exec_lock_init(&vms_dlm_req_ops_lock);
+    exec_lock_init(&vms_quorum_gate_lock);
     exec_rbtree_init(&vms_lock_id_tree);
     exec_hash_init(vms_res_hash);
     return 0;
@@ -182,6 +195,43 @@ static struct vms_dlm_requester_ops dlm_req_ops_get(void)
     o = vms_dlm_req_ops;
     exec_unlock(&vms_dlm_req_ops_lock);
     return o;
+}
+
+/* ================================================================
+ * THE QUORUM HANG (FC-P8.1, rd vms-b6d) -- contract in vms_dlm_quorum.h
+ * ================================================================ */
+
+void vms_lock_set_quorum_ops(const struct vms_quorum_ops *ops)
+{
+    exec_lock(&vms_quorum_gate_lock);
+    if (ops)
+        vms_quorum_gate_ops = *ops;
+    else
+        memset(&vms_quorum_gate_ops, 0, sizeof(vms_quorum_gate_ops));
+    exec_unlock(&vms_quorum_gate_lock);
+}
+
+/*
+ * IS THIS NODE IN A QUORUM HANG RIGHT NOW? The one place the engine asks, and
+ * it asks the CONNECTION MANAGER -- it holds no quorum state of its own to
+ * consult (INV-6). No gate installed (no cluster) is "no", never a guess.
+ *
+ * The ops snapshot is taken under the gate lock so a concurrent cluster stop
+ * cannot tear the pointer out from under the call; the callee then reads the
+ * live CLUB (vms_dlm_quorum.h SS CONCURRENCY explains why it does so without the
+ * fork mutex).
+ */
+static int quorum_hang_active(void)
+{
+    struct vms_quorum_ops o;
+
+    exec_lock(&vms_quorum_gate_lock);
+    o = vms_quorum_gate_ops;
+    exec_unlock(&vms_quorum_gate_lock);
+
+    if (o.hang == NULL)
+        return 0;
+    return o.hang(o.ctx) != 0;
 }
 
 /*
@@ -331,6 +381,7 @@ void vms_lock_cleanup(void)
      * mutex_destroy on NetBSD -- paired with the exec_lock_init in
      * vms_lock_init). */
     exec_lock_destroy(&vms_dlm_req_ops_lock);
+    exec_lock_destroy(&vms_quorum_gate_lock);
     exec_lock_destroy(&vms_res_hash_lock);
     exec_lock_destroy(&vms_lock_id_lock);
 }
@@ -1005,6 +1056,12 @@ static int check_deadlock(struct vms_lock_entry *lock,
             {
                 struct vms_lock_entry *their_lock;
                 exec_list_for_each_entry(their_lock, &granted->proc->locks, proc_list) {
+                    /* A QUORUM-STALLED wait is not a wait-FOR edge (FC-P8.1):
+                     * it is blocked on the cluster's votes, not on a lock any
+                     * process in this graph holds, and following it would
+                     * manufacture cycles out of a cluster-wide stall. */
+                    if (their_lock->quorum_stall)
+                        continue;
                     if (their_lock->waiting && sp < MAX_DEADLOCK_DEPTH) {
                         if (their_lock->proc == origin_proc) {
                             exec_unlock(&granted->proc->lock_list_lock);
@@ -1081,6 +1138,17 @@ static void try_grant_waiters(struct vms_lock_resource *res)
     struct vms_lock_entry *waiter, *tmp;
 
     exec_list_for_each_entry_safe(waiter, tmp, &res->waiting, res_waiting) {
+        /*
+         * A QUORUM-STALLED waiter is not grantable by a release (FC-P8.1). Its
+         * wait has nothing to do with this resource's holders, so letting some
+         * other process's $DEQ grant it would be the executive granting a
+         * clustered lock during a quorum hang -- the exact thing the hang
+         * exists to prevent. Only vms_lock_quorum_resume() clears the mark, and
+         * FIFO order is preserved either way (this `break` is the same one the
+         * incompatible case takes).
+         */
+        if (waiter->quorum_stall)
+            break;
         if (lock_compatible(res, waiter->requested_mode, NULL)) {
             /* Grant it */
             exec_list_del(&waiter->res_waiting);
@@ -1423,6 +1491,13 @@ void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode)
  * proxy would invent a cycle. Distributed deadlock search is its own mechanism
  * (rung H11 / FC-P5.6).
  *
+ * A QUORUM-STALLED request waits here on the same terms (FC-P8.1): the wake
+ * comes from vms_lock_quorum_resume() on the regain edge, and the deadlock
+ * re-scan is skipped for exactly the proxy's reason -- the thing it waits for is
+ * the cluster's votes, which no wait-for graph contains. This wait is UNBOUNDED
+ * by design. A VMScluster that has lost quorum hangs until quorum returns; a
+ * timeout here would be OVMX inventing a failure VMS does not have.
+ *
  * WAIT MODEL. This is the executive's synchronous wait, expressed in the shim's
  * cv-idiom (design record §3, the wait/wake seam): the waiter holds res->lock --
  * the SAME lock that guards the predicate (lock->grant_state) and that every
@@ -1472,7 +1547,7 @@ static int enq_wait_sync(struct vms_lock_resource *res,
          * detection for this still-waiting request; otherwise (signal wake or a
          * grant that raced in) fall through and re-test the predicate at the top.
          */
-        if (timed_out && !lock->proxy && lock->waiting &&
+        if (timed_out && !lock->proxy && !lock->quorum_stall && lock->waiting &&
             lock->grant_state == 0 && check_deadlock(lock, 0)) {
             exec_list_del(&lock->res_waiting);
             lock->waiting = 0;
@@ -2468,6 +2543,7 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     struct vms_enq_args args = *io;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    int stalled;
 
     if (args.lkmode > LCK_K_EXMODE) {
         args.status = SS__BADPARAM;
@@ -2629,9 +2705,21 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     proc->lock_count++;
     exec_unlock(&proc->lock_list_lock);
 
+    /*
+     * THE QUORUM HANG, ASKED ONCE, BEFORE THE GRANT DECISION (FC-P8.1, rd
+     * vms-b6d; contract in vms_dlm_quorum.h). Read outside res->lock because
+     * the answer comes from the CONNECTION MANAGER's club, not from anything
+     * this resource knows -- and read for every request, including an inbound
+     * cross-node one: a node that has lost quorum must not grant to a peer
+     * either. A stalled request is QUEUED, exactly as an incompatible one is;
+     * it is never refused, because a quorum hang is a stall and not an error
+     * (p. 7-4, "blocks activity and waits for quorum to be regained").
+     */
+    stalled = quorum_hang_active();
+
     /* Try to grant */
     exec_lock(&res->lock);
-    if (lock_compatible(res, args.lkmode, NULL)) {
+    if (!stalled && lock_compatible(res, args.lkmode, NULL)) {
         /* Granted immediately */
         if (xn)
             xn->queued = 0;
@@ -2659,8 +2747,16 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
             memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
         args.status = SS__NORMAL;
     } else {
-        /* Not compatible */
-        if (args.flags & LCK_M_NOQUEUE) {
+        /*
+         * Not compatible -- or not grantable AT ALL while quorum is lost.
+         *
+         * LCK$M_NOQUEUE IS NOT CONSULTED DURING A HANG. NOQUEUE says "do not
+         * queue me behind a HOLDER"; a quorum hang has no holder to queue
+         * behind, and answering SS$_NOTQUEUED would hand the caller a
+         * FAILURE where a real VAX hands it a wait. The flag resumes its
+         * ordinary meaning the moment quorum does.
+         */
+        if (!stalled && (args.flags & LCK_M_NOQUEUE)) {
             exec_unlock(&res->lock);
 
             /* Clean up */
@@ -2677,6 +2773,13 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         } else {
             /* Queue the request */
             lock->waiting = 1;
+            /*
+             * WHY the request waits, recorded on the request. A quorum-stalled
+             * waiter is not waiting for a HOLDER, so it is not an edge in any
+             * wait-for graph (check_deadlock skips it) and try_grant_waiters
+             * will not grant it until vms_lock_quorum_resume() clears the mark.
+             */
+            lock->quorum_stall = (uint8_t)(stalled ? 1 : 0);
             lock->grant_state = 0;
             exec_list_add_tail(&lock->res_waiting, &res->waiting);
 
@@ -2686,8 +2789,13 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
              * shares the delivery proc while representing a DIFFERENT cluster
              * owner, so it would false-positive; distributed deadlock detection is
              * a later rung (vms-ec75), honestly out of scope here.
+             *
+             * Skipped for a QUORUM-STALLED request too, and for the same kind of
+             * reason: it is blocked on the cluster's votes, not on another
+             * process's lock, so there is no cycle for the detector to find and
+             * any answer it gave would be about the wrong graph.
              */
-            if (!xn && check_deadlock(lock, 0)) {
+            if (!xn && !stalled && check_deadlock(lock, 0)) {
                 exec_list_del(&lock->res_waiting);
                 exec_unlock(&res->lock);
 
@@ -3001,6 +3109,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
     struct vms_enq_args args;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    int hang, stalled;
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -3036,7 +3145,22 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
 
     res = lock->resource;
 
+    /* Asked before res->lock, for the reason vms_enq_core_ex states: the answer
+     * belongs to the connection manager, not to this resource. */
+    hang = quorum_hang_active();
+
     exec_lock(&res->lock);
+
+    /*
+     * A QUORUM HANG STALLS AN UP-CONVERSION (FC-P8.1). Asking for a STRONGER
+     * mode is an acquisition by another name, and during a hang the executive
+     * grants no new strength. A DOWN-conversion (or a convert to the mode
+     * already held) is the opposite -- it gives strength BACK, which is
+     * something a node must always be able to do while it waits for quorum, or
+     * a hung cluster could never be left in a state its rebuild can use. Same
+     * rule as $DEQ, which a hang never touches at all.
+     */
+    stalled = (hang && args.lkmode > lock->granted_mode);
 
     /* Update blocking AST address if provided */
     if (args.blkastadr)
@@ -3047,7 +3171,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
         memcpy(res->valblk, args.valblk, LCK_VALBLK_SIZE);
 
     /* Check compatibility (exclude self) */
-    if (lock_compatible(res, args.lkmode, lock)) {
+    if (!stalled && lock_compatible(res, args.lkmode, lock)) {
         /* Immediate conversion */
         lock->granted_mode = args.lkmode;
 
@@ -3061,19 +3185,22 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
             memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
         args.status = SS__NORMAL;
     } else {
-        if (args.flags & LCK_M_NOQUEUE) {
+        /* NOQUEUE is not consulted during a hang -- see vms_enq_core_ex. */
+        if (!stalled && (args.flags & LCK_M_NOQUEUE)) {
             exec_unlock(&res->lock);
             args.status = SS__NOTQUEUED;
         } else {
             /* Move to waiting list, keep granted mode until converted */
             lock->requested_mode = args.lkmode;
             lock->waiting = 1;
+            lock->quorum_stall = (uint8_t)(stalled ? 1 : 0);
             lock->grant_state = 0;
             exec_list_del(&lock->res_granted);
             exec_list_add_tail(&lock->res_waiting, &res->waiting);
 
-            /* Check deadlock */
-            if (check_deadlock(lock, 0)) {
+            /* Check deadlock (not for a quorum-stalled convert: it waits on
+             * the cluster's votes, which are in no wait-for graph). */
+            if (!stalled && check_deadlock(lock, 0)) {
                 /* Undo: move back to granted */
                 exec_list_del(&lock->res_waiting);
                 lock->waiting = 0;
@@ -3267,6 +3394,51 @@ void vms_lock_dlm_member_departed(uint32_t departed_csid, uint32_t *found)
         exec_unlock(&res->lock);
     }
 
+    exec_unlock(&vms_res_hash_lock);
+}
+
+/*
+ * Clear the quorum-stall mark on every waiter of ONE resource. Caller holds
+ * res->lock. Nothing else about the request changes: it keeps its place in the
+ * FIFO, its requested mode, its value block and (for a convert) the mode it
+ * still holds -- the stall is lifted, the request is not re-made.
+ */
+static void quorum_unstall_waiters(struct vms_lock_resource *res)
+{
+    struct vms_lock_entry *waiter;
+
+    exec_list_for_each_entry(waiter, &res->waiting, res_waiting)
+        waiter->quorum_stall = 0;
+}
+
+/*
+ * vms_lock_quorum_resume - QUORUM IS BACK (FC-P8.1, rd vms-b6d; contract in
+ * vms_dlm_quorum.h).
+ *
+ * The whole of the resume: lift the marks, then run the ORDINARY waiter pass on
+ * each resource. There is no separate "ungrant/regrant" path and no saved
+ * request to replay -- the stalled requests never left the waiting queue, so
+ * what completes them is the same try_grant_waiters() a $DEQ uses, delivering
+ * the same completion AST to an async waiter and the same wake to a synchronous
+ * one. A request that was ALSO behind an incompatible holder simply stays
+ * queued for that holder, which is correct: the hang is over, its wait is not.
+ *
+ * Called on the fork thread from the connection manager's regain edge, with the
+ * same lock order vms_lock_dlm_member_departed() already uses (resource hash
+ * outside, per-resource inside).
+ */
+void vms_lock_quorum_resume(void)
+{
+    struct vms_lock_resource *res;
+    int bkt;
+
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        exec_lock(&res->lock);
+        quorum_unstall_waiters(res);
+        try_grant_waiters(res);
+        exec_unlock(&res->lock);
+    }
     exec_unlock(&vms_res_hash_lock);
 }
 

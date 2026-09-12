@@ -48,6 +48,10 @@ WINDOW=$(cmdline_val ovmx.window)
 # node is still running and can be read.
 XNODE=$(cmdline_val ovmx.xnode)
 LINGER=$(cmdline_val ovmx.linger)
+# rd vms-b6d: run the QUORUM-HANG phase after the membership window. It needs
+# the capture (and this node) to outlive a segment cut AND its heal, which is
+# why it extends CAPSECS below on its own terms.
+QHANG=$(cmdline_val ovmx.qhang)
 
 [ -z "$TAG" ] && TAG=X
 [ -z "$VAXCLUSTER" ] && VAXCLUSTER=2
@@ -58,6 +62,7 @@ LINGER=$(cmdline_val ovmx.linger)
 [ -z "$WINDOW" ] && WINDOW=90
 [ -z "$XNODE" ] && XNODE=0
 [ -z "$LINGER" ] && LINGER=30
+[ -z "$QHANG" ] && QHANG=0
 
 echo ""
 echo "=== OVMX cluster GENESIS rig: node $TAG ($SCSNODE/$SYSID) ==="
@@ -81,6 +86,7 @@ echo "eth0 mac=$MAC"
 # added explicitly rather than left to the old window+20 slack.
 CAPSECS=$((WINDOW + 20))
 [ "$XNODE" = "1" ] && CAPSECS=$((WINDOW + LINGER + 220))
+[ "$QHANG" = "1" ] && CAPSECS=$((WINDOW + 360))
 if [ -x /bin/sca_l2probe ]; then
 	sca_l2probe recv eth0 "$CAPSECS" /tmp/$TAG.pcap >/tmp/cap.log 2>&1 &
 fi
@@ -112,6 +118,7 @@ cluster_node \
 	--window="$WINDOW" \
 	--xnode="$XNODE" \
 	--linger="$LINGER" \
+	--qhang="$QHANG" \
 	> /dev/ttyS1 2>&1
 
 # ---- the executive's own transcript ------------------------------------------

@@ -24,6 +24,13 @@
 #   docker build -f tests/qemu/Dockerfile.cluster-genesis-2node -t ovmx-genesis-rig .
 #   docker run --rm --device /dev/kvm ovmx-genesis-rig            # the CN=2 proof
 #   docker run --rm --device /dev/kvm -e RIG_NEGCTL=1 ovmx-genesis-rig  # teeth
+#   docker run --rm --device /dev/kvm -e RIG_MODE=qhang ovmx-genesis-rig
+#       ^ rd vms-b6d (FC-P8.1): THE QUORUM HANG. After CN=2 settles the rig
+#         PARTITIONS the segment. Node B (VOTES=0, whose quorum rests on A's
+#         learned vote) must compute the loss from its own CSB table and STALL
+#         a clustered $ENQ -- queued, no grant, and no error status -- while
+#         node A (VOTES=1, still meeting QUORUM=1) grants the identical request
+#         at once. When the segment heals, B's SAME request must complete.
 #   docker run --rm --device /dev/kvm -e RIG_MODE=xnode ovmx-genesis-rig
 #       ^ rd vms-94c: the CROSS-NODE DLM run. After CN=2 settles, each node
 #         takes an EX lock on a resource the PEER masters, contends with a
@@ -105,6 +112,11 @@ COPY tests/qemu/run_cluster_genesis_2node.sh /run_cluster_genesis_2node.sh
 # the rig (not in a guest) over the reconstructed pcaps, decoding the cat-0x02
 # opcode with this codebase's own published offsets.
 COPY tests/qemu/scan_dlm_wire.py /scan_dlm_wire.py
-RUN chmod +x /run_cluster_genesis_2node.sh /scan_dlm_wire.py
+# rd vms-b6d: the L2 segment WITH A CUT IN IT. In RIG_MODE=qhang node B's
+# netdev dials this instead of node A directly, and it drops whole frames for a
+# window -- a partition the guests are never told about and must discover the
+# way a real system does. Host side of the rig; never in a guest.
+COPY tests/qemu/segment_relay.py /segment_relay.py
+RUN chmod +x /run_cluster_genesis_2node.sh /scan_dlm_wire.py /segment_relay.py
 
 CMD ["/run_cluster_genesis_2node.sh"]

@@ -164,6 +164,9 @@ struct vms_lock_entry {
 	struct vms_lock_resource *resource;
 	struct vms_proc          *proc;
 	int                       waiting;
+	uint8_t                   quorum_stall;   /* FC-P8.1 (rd vms-b6d): queued by
+	                                           * the QUORUM HANG, not by a holder.
+	                                           * Mirror of both kernel twins. */
 	int                       refcount;
 	exec_cv_t                 wait_wq;
 	int                       grant_state;

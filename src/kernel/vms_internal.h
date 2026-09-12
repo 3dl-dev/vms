@@ -470,6 +470,19 @@ struct vms_lock_entry {
     struct vms_lock_resource *resource;
     struct vms_proc     *proc;
     int                 waiting;        /* 1 if on waiting list */
+    uint8_t             quorum_stall;   /* THE QUORUM HANG (FC-P8.1, rd vms-b6d,
+                                         * src/kernel-core/vms_dlm_quorum.h). 1 =
+                                         * this request is on the waiting queue
+                                         * because the CLUSTER has lost quorum,
+                                         * NOT because a holder blocks it. It is
+                                         * therefore not an edge in any wait-for
+                                         * graph (check_deadlock skips it) and no
+                                         * $DEQ may grant it -- only
+                                         * vms_lock_quorum_resume() clears it, on
+                                         * the connection manager's regain edge.
+                                         * Mirrored in src/kernel-netbsd/
+                                         * vms_internal.h and tests/cluster/host/
+                                         * lock_host_internal.h. */
     int                 refcount;       /* reference count for safe lookup */
     wait_queue_head_t   wait_wq;        /* sync ENQ ($ENQW): blocker sleeps here */
     int                 grant_state;    /* sync wake: 0=pending, SS__NORMAL=granted,

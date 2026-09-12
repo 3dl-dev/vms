@@ -413,6 +413,14 @@ struct vms_lock_entry {
 	struct vms_lock_resource *resource;
 	struct vms_proc     *proc;
 	int                 waiting;        /* 1 if on the waiting list */
+	uint8_t             quorum_stall;   /* THE QUORUM HANG (FC-P8.1, rd vms-b6d):
+	                                     * 1 = queued because the CLUSTER lost
+	                                     * quorum, not because a holder blocks it;
+	                                     * no $DEQ may grant it and it is no
+	                                     * wait-for edge. Cleared only by
+	                                     * vms_lock_quorum_resume(). Mirror of the
+	                                     * Linux twin; contract in
+	                                     * src/kernel-core/vms_dlm_quorum.h. */
 	int                 refcount;       /* reference count for safe lookup */
 	exec_cv_t           wait_wq;        /* sync ENQ ($ENQW): blocker sleeps here */
 	int                 grant_state;    /* sync wake: 0=pending, SS__NORMAL=granted,

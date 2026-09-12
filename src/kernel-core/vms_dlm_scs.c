@@ -86,6 +86,8 @@
 #include "vms_dlm_ldwv.h"
 #include "vms_dlm_master.h"
 #include "vms_dlm_proxy.h"
+#include "vms_dlm_quorum.h"
+#include "vms_cnxman_quorum.h"
 #include "vms_dlm_scs.h"
 #include "vms_dlm_scs_fsm.h"
 
@@ -186,6 +188,13 @@ struct vms_dlm_scs {
 	uint32_t transitions_begun;
 	uint32_t transitions_ended;
 	uint32_t members_departed;
+
+	/* THE QUORUM HANG (FC-P8.1, rd vms-b6d). Two counts of things that
+	 * really happened on this node: the connection manager told this arm
+	 * quorum was lost, and told it quorum was back and the stalled requests
+	 * were released. */
+	uint32_t quorum_hangs_entered;
+	uint32_t quorum_resumes;
 };
 
 /* ==========================================================================
@@ -1365,12 +1374,57 @@ static void dlm_arm_member_departed(void *ctx, vms_csid_t csid)
 	vms_lock_dlm_member_departed((uint32_t)csid, &found);
 }
 
+/* ==========================================================================
+ * 6b. THE QUORUM HANG (FC-P8.1, rd vms-b6d)
+ *
+ * Two directions, and this arm is the only place they meet -- which is the
+ * point. The lock engine may not read a CLUB and the connection manager may not
+ * call the lock engine; both go through the DLM's wire arm, exactly as the
+ * departure sweep and the local-CSID sync already do.
+ * ========================================================================== */
+
+/*
+ * THE GATE, asked by the lock engine at every grant decision (vms_dlm_quorum.h).
+ * It is one call: the connection manager's own predicate over its own CLUB. No
+ * arithmetic and no copy of a quorum figure lives in this arm or in the engine
+ * -- if this function could answer from anything but real club state, the answer
+ * would be a fabrication (INV-6).
+ */
+static int dlm_arm_quorum_hang(void *ctx)
+{
+	const struct vms_cluster *cl = (const struct vms_cluster *)ctx;
+
+	return cnxman_quorum_hang_active(cl);
+}
+
+/*
+ * THE EDGE, told to this arm by the connection manager on the fork thread. The
+ * LOSS edge needs nothing done -- the gate above already answers "hang" to every
+ * request that arrives from that instant -- so it is only counted. The REGAIN
+ * edge is the one with work: the requests that stalled are still sitting on
+ * their resources' waiting queues, and the engine's sweep releases them.
+ */
+static void dlm_arm_quorum_changed(void *ctx, int quorum_lost)
+{
+	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
+
+	if (d == NULL)
+		return;
+	if (quorum_lost) {
+		d->quorum_hangs_entered++;
+		return;
+	}
+	d->quorum_resumes++;
+	vms_lock_quorum_resume();
+}
+
 static void dlm_arm_bind_role(struct vms_dlm_scs *d)
 {
 	d->role.transition_begin = dlm_arm_transition_begin;
 	d->role.handle_request   = dlm_arm_handle_request;
 	d->role.transition_end   = dlm_arm_transition_end;
 	d->role.member_departed  = dlm_arm_member_departed;
+	d->role.quorum_changed   = dlm_arm_quorum_changed;
 	d->role.ctx              = d;
 }
 
@@ -1450,6 +1504,21 @@ int vms_dlm_scs_start(struct vms_cluster *cl)
 	cnxman_set_dlm(cl, &d->role);
 	vms_lock_dlm_set_requester_ops(&d->eng_ops);
 
+	/*
+	 * ... and the QUORUM GATE (FC-P8.1), installed on the same beat and for
+	 * the same reason: from here on this node is part of a cluster, so its
+	 * lock grants are subject to that cluster's votes. The ctx is the
+	 * CLUSTER, not this arm -- the predicate is a read of the CLUB and has
+	 * no business reaching anything else.
+	 */
+	{
+		struct vms_quorum_ops qops;
+
+		qops.hang = dlm_arm_quorum_hang;
+		qops.ctx  = cl;
+		vms_lock_set_quorum_ops(&qops);
+	}
+
 	dlm_arm_arm_beat(d);
 	return (int)SS__NORMAL;
 }
@@ -1472,6 +1541,17 @@ void vms_dlm_scs_stop(struct vms_cluster *cl)
 	vms_lock_dlm_set_requester_ops(NULL);
 	cnxman_set_dlm(cl, NULL);
 	vms_lock_dlm_set_delivery_proc(NULL);
+	/*
+	 * The gate goes with them. A node whose cluster has stopped is not a
+	 * node in a quorum hang -- it is a node with no cluster, which is a real
+	 * VMS configuration that locks perfectly well. Removing the ops also
+	 * removes every pointer into `cl` before it can be freed.
+	 */
+	vms_lock_set_quorum_ops(NULL);
+	/* ... and nothing may stay stalled on a quorum that no longer applies to
+	 * this node: the requests queued by the hang are released here, through
+	 * the same sweep a regain uses. */
+	vms_lock_quorum_resume();
 
 	cf_timer_cancel(cl->fork, CF_OWNER_DLM, DLM_ARM_TIMER_BEAT, 0u);
 	(void)cf_set_work_handler(cl->fork, CF_OWNER_DLM, NULL, NULL);

@@ -523,7 +523,19 @@ struct vms_club {
 	uint8_t    local_csid_valid; /* 0 = still NEW; issues no DLM traffic */
 	uint8_t    shutdown;         /* the CLUB's SHUTDOWN flag (p. 7-49) */
 	uint8_t    quorum_lost;      /* CEVOTES < QUORUM right now (FC-P3.7 sets) */
-	uint8_t    pad0;
+	/*
+	 * THE ENFORCEMENT LATCH (FC-P8.1, rd vms-b6d). Set the first time this
+	 * node, as a COMMITTED member whose own CSB counts, actually PERCEIVED
+	 * quorum -- p. 7-4's "cluster activity proceeds while the available
+	 * votes are >= QUORUM". Only from that moment on is a subsequent
+	 * quorum_lost a real LOSS rather than arithmetic that has not finished:
+	 * a member that has not yet learned its peers' PARAMS honestly computes
+	 * QUORUM=(0+2)/2=1 over an empty vote set and shows quorum_lost=1, and
+	 * freezing on THAT would hang every single join. So enforcement reads
+	 * this latch, never the raw flag. Cleared only by cnxman_club_init() --
+	 * a new cluster life earns its own perception of quorum.
+	 */
+	uint8_t    quorum_armed;
 	int32_t    local_csb;        /* index of the local system's CSB, -1 = none */
 
 	/* ---- effective quorum data (p. 7-26/7-49). FC-P3.7 computes these;

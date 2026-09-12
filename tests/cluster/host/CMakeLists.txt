@@ -774,6 +774,34 @@ set_tests_properties(cluster_host_test_lock_dir PROPERTIES
     TIMEOUT 60
 )
 
+# ---- FC-P8.1 (rd vms-b6d): THE QUORUM HANG, engine + CLUB on one path ----
+# The rung that can see this item at all: to make the engine stall, the test has
+# to make a REAL struct vms_club genuinely lose its votes, and the engine has to
+# ask for that fact through the REAL gate (vms_dlm_quorum.h). So it links BOTH
+# recipes -- cluster_host_lock (the engine; lock_shim/ FIRST on the include
+# path) and cluster_host_cnxman (the quorum arithmetic + the CSB table, built
+# -DOVMX_CLUSTER_HOST) -- which meet only in this test's own TU, exactly as
+# test_dlm_deq_reachable below does it.
+add_executable(test_lock_quorum_hang test_lock_quorum_hang.c)
+target_include_directories(test_lock_quorum_hang PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_lock_quorum_hang PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_lock_quorum_hang PRIVATE
+    cluster_host_lock cluster_host_cnxman Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_lock_quorum_hang PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME cluster_host_test_lock_quorum_hang COMMAND test_lock_quorum_hang)
+set_tests_properties(cluster_host_test_lock_quorum_hang PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;cnxman"
+    TIMEOUT 60
+)
+
 # ---- rd vms-49f8: the op-0x03 $DEQ has a REACHABLE caller ----
 # The ONE host test that puts the REAL lock engine, the REAL release queue, the
 # REAL requester FSM and the REAL codec on one path: a real $ENQ makes a proxy

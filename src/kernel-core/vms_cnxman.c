@@ -890,11 +890,15 @@ static void cnxman_log_membership_change(struct vms_cnxman *cn,
 	cnxman_ops_log(cn, line);
 }
 
+/* SS7b, below: the quorum arithmetic applied to a membership that just moved. */
+static void cnxman_quorum_apply(struct vms_cnxman *cn);
+
 static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 					     const uint8_t *before)
 {
 	struct vms_club *club = &cn->cl->club;
 	uint32_t i;
+	int changed = 0;
 
 	for (i = 0; i < club->n_csb; i++) {
 		struct vms_csb *csb = &club->csb[i];
@@ -908,7 +912,19 @@ static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 		cnxman_log_membership_change(cn, csb, after);
 		cnxman_deliver_cluevt(cn, after ? CNXMAN_CLUEVT_ADD
 						: CNXMAN_CLUEVT_REMOVE);
+		changed = 1;
 	}
+
+	/*
+	 * A MEMBERSHIP CHANGE IS A VOTE CHANGE (FC-P8.1). p. 7-6 recomputes the
+	 * quorum algorithm over the selected set; the set just changed, so the
+	 * figures -- and whether this node still perceives quorum -- change with
+	 * it. Recomputed HERE, at the moment the change is observed, rather than
+	 * only on the next beat, so a node stops granting within the same
+	 * message that removed the votes it was relying on.
+	 */
+	if (changed)
+		cnxman_quorum_apply(cn);
 }
 
 /* ==========================================================================
@@ -1624,6 +1640,18 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 	}
 
 	cnxman_join_closed(&cn->join, local_conid, reason);
+
+	/*
+	 * THE VOTES WENT WITH THE CONNECTION (FC-P8.1). p. 7-30 keeps a system's
+	 * MEMBERSHIP across the reconnect window -- so this is not a membership
+	 * change and the notify path above never sees it -- but the votes of a
+	 * system this node cannot currently reach are not AVAILABLE to it
+	 * (p. 7-4/7-5), which is exactly the reading FC-P3.7's PRESENT test
+	 * already makes. Recomputing here is what turns a lost circuit into a
+	 * quorum hang at the moment the circuit is lost, rather than one beat
+	 * later.
+	 */
+	cnxman_quorum_apply(cn);
 }
 
 static void cnxman_vc_send_failed(void *ctx, vms_conid_t local_conid,
@@ -2008,6 +2036,57 @@ static int cnxman_genesis_may_ask(struct vms_cnxman *cn)
 	return cnxman_genesis_window_elapsed(cn);
 }
 
+/* ==========================================================================
+ * 7b. THE QUORUM ARITHMETIC, APPLIED (FC-P3.7 computes it; FC-P8.1 acts on it)
+ *
+ * FC-P3.7 left club->quorum_lost computed and unread: nothing in the executive
+ * acted on it, so a node that lost quorum went on granting locks freely -- the
+ * opposite of a VMScluster, which STALLS (p. 7-4). These three functions are
+ * where the connection manager closes that loop, and the whole of what they do
+ * is: recompute, notice whether the ENFORCEABLE answer changed, and tell the
+ * DLM arm. The stalling itself belongs to the lock engine (vms_dlm_quorum.h).
+ * ========================================================================== */
+
+/* Say it on OPA0: and tell the DLM arm. The loss line is the one the design
+ * quotes (SS3.7); the regain line is OVMX's own honest wording, because this
+ * stack does not put words in VMS's mouth it has not read. */
+static void cnxman_quorum_announce(struct vms_cnxman *cn, int hang)
+{
+	cnxman_ops_log(cn, hang ? "%CNXMAN, quorum lost, blocking activity"
+				: "%CNXMAN, quorum regained, resuming activity");
+	if (cn->dlm != NULL && cn->dlm->quorum_changed != NULL)
+		cn->dlm->quorum_changed(cn->dlm->ctx, hang);
+}
+
+/*
+ * Recompute, latch, and announce any change in what this node ENFORCES.
+ *
+ * The recompute and the latch are cnxman_quorum_member_recompute() -- the SAME
+ * call the joiner's PARAMS-learn and Phase 2's commit make (rd vms-d0d), with
+ * the same refusal on a node that is not a committed member. There is one
+ * spelling of "recompute my own quorum", and this adds only the EDGE on top of
+ * it: what changed, and who needs telling.
+ *
+ * The edge is measured with cnxman_quorum_hang_active() on BOTH sides, never
+ * with the raw quorum_lost flag: the raw flag flips to 1 on every node that has
+ * not yet learned a peer's votes, and announcing THAT would hang every join.
+ */
+static void cnxman_quorum_apply(struct vms_cnxman *cn)
+{
+	int before, after;
+
+	if (cn == NULL || cn->cl == NULL)
+		return;
+
+	before = cnxman_quorum_hang_active(cn->cl);
+	if (!cnxman_quorum_member_recompute(cn->cl))
+		return;                 /* not a member: nothing to enforce */
+	after = cnxman_quorum_hang_active(cn->cl);
+
+	if (after != before)
+		cnxman_quorum_announce(cn, after);
+}
+
 /* Returns nonzero iff this node really did become a member of a cluster it
  * founded -- read back from cl->state, which only cnxman_phase2_commit() ever
  * sets. */
@@ -2029,6 +2108,10 @@ static int cnxman_try_genesis(struct vms_cnxman *cn)
 	 * nobody to propose anything to (E3).
 	 */
 	cnxman_quorum_recompute(&cl->club);
+	/* ... and the founding node LATCHES its perception of quorum here
+	 * (FC-P8.1): from this moment a later quorum_lost is a real LOSS and not
+	 * arithmetic that has not finished. */
+	cnxman_quorum_apply(cn);
 	cn->genesis_armed = 0u;
 	return cl->state == VMS_CLUSTER_MEMBER;
 }
@@ -2137,6 +2220,18 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
 		for (i = 0; i < n; i++)
 			cnxman_act_on_recnx_rec(cn, &recs[i]);
+		/*
+		 * LAST ON THE BEAT, AND ON EVERY BEAT (FC-P8.1): the quorum
+		 * arithmetic over whatever the sweep above left the CSB table
+		 * looking like. The two prompt hooks (a membership change, a
+		 * closed circuit) make the common cases immediate; this one is
+		 * what makes the answer TRUE rather than merely usually-true,
+		 * because a CSB can also change state from a reconnect ladder
+		 * that expired here, on this beat, with no message involved.
+		 * Idempotent and cheap -- a walk of at most 96 CSBs, and it
+		 * announces only when the enforceable answer actually moved.
+		 */
+		cnxman_quorum_apply(cn);
 		break;
 	case CNXMAN_TIMER_JOIN:
 		cnxman_join_timer(&cn->join);

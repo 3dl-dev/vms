@@ -837,8 +837,12 @@ static int fake_dlm_request(void *ctx, const struct dlm_scs_request *req,
 	return 0;
 }
 
+/* Designated initialisers: the role ops grow (quorum_changed, FC-P8.1), and a
+ * positional list silently shifts every field when they do. */
 static const struct dlm_scs_role_ops g_fake_dlm = {
-	fake_dlm_begin, fake_dlm_request, fake_dlm_end, NULL, NULL
+	.transition_begin = fake_dlm_begin,
+	.handle_request   = fake_dlm_request,
+	.transition_end   = fake_dlm_end,
 };
 
 static void test_dlm_seam(void)

@@ -188,6 +188,24 @@ struct dlm_scs_role_ops {
 	 */
 	void (*member_departed)(void *ctx, vms_csid_t csid);
 
+	/*
+	 * THE QUORUM EDGE (FC-P8.1, rd vms-b6d). The connection manager has just
+	 * recomputed the quorum arithmetic and the ENFORCEABLE answer CHANGED:
+	 * `quorum_lost` nonzero means this node has entered a real quorum hang
+	 * (it had perceived quorum and has now lost it -- never the honest
+	 * arithmetic-not-finished zero of a join, which cnxman_quorum_hang_active
+	 * filters out), zero means quorum is back.
+	 *
+	 * It is an EDGE, not a poll: it fires only when the answer changes, on
+	 * the fork thread, from the recompute that observed it. The arm's job on
+	 * the regain edge is to release the requests the hang stalled; on the
+	 * loss edge there is nothing to do, because the gate the lock engine
+	 * consults (vms_dlm_quorum.h) is already answering "hang" to every new
+	 * request. Optional: a NULL leaves the engine ungated, which is what a
+	 * node with no DLM arm should be.
+	 */
+	void (*quorum_changed)(void *ctx, int quorum_lost);
+
 	void *ctx;
 };
 

@@ -216,6 +216,7 @@ static void suite_cdt_negctl(int fd)
     int any_row = 0, any_zero_conid = 0;
 
     /* A slot far past any CDL: SS$_NOSUCHDEV and an all-zero row. */
+    /* negctl: scs-cdt-snapshot-fabricates-connection */
     CHECK(diag_conn(fd, VMS_CLUSTER_DIAG_CONN_CDT, 999999u, &a) == 0 &&
           a.status != SS_NORMAL,
           "row CDT, index far past any CDL: SS$_NOSUCHDEV, not a crash");
@@ -246,6 +247,7 @@ static void suite_cdt_negctl(int fd)
     CHECK(any_bound_without_flag == 0,
           "no CDT row reports a remote Con.ID the executive never learned");
     if (any_row) {
+        /* negctl: scs-cdt-snapshot-fabricates-connection */
         CHECK(any_zero_conid == 0,
               "every projected CDT row carries a real minted Local Con.ID, "
               "never 0 (the wire's own 'not bound yet' value)");

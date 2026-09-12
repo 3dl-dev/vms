@@ -40,6 +40,7 @@
 #include "vms_cnxman_barrier_fsm.h"
 #include "vms_cnxman_join_fsm.h"
 #include "vms_cnxman_diag.h"
+#include "vms_cnxman_quorum.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_cluster_codec_mscp.h"
 #include "vms_mscp_cl_fsm.h"
@@ -1776,6 +1777,22 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	 */
 	cnxman_csb_set_params(csb, p.votes, csb->expected_votes,
 			      csb->qdskvotes);
+
+	/*
+	 * AND THE ARITHMETIC RUNS ON WHAT WAS JUST LEARNED (rd vms-d0d).
+	 *
+	 * Filing the peer's VOTES and stopping there is what left node B of the
+	 * live 2-node cluster counting two members with CEVOTES/QUORUM 0 while
+	 * node A's real votes sat in B's own CSB table (#1119): the joiner's
+	 * Phase 2 has no coordinator proposal to copy, so nothing else on its
+	 * path ever computes them. cnxman_quorum_member_recompute() applies
+	 * p. 7-6 to this node's own table and REFUSES unless this node is
+	 * genuinely a member with its own params in it, so a record arriving
+	 * before admission still asserts nothing (INV-6). This row is live in
+	 * every state including [MEMBER], which is where the peer's once-a-beat
+	 * PARAMS keeps arriving, so a vote CHANGE is picked up too.
+	 */
+	(void)cnxman_quorum_member_recompute(j->cl);
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 

@@ -370,14 +370,52 @@ static void print_club_line(const struct node_cfg *c, unsigned elapsed,
 	csid_str(coord, sizeof(coord), club->coordinator_csid,
 		 club->coordinator_valid);
 	printf("RIG-%s-CLUB t=%us state=%s(%u) role=%s csid=%s coord=%s "
-	       "nodes=%u cevotes=%u quorum=%u expected=%u epoch=%u "
+	       "nodes=%u cevotes=%u quorum=%u qlost=%u expected=%u epoch=%u "
 	       "n_csb=%u transition=%u bitmap=0x%08x\n",
 	       c->tag, elapsed, cluster_state_name(club->state),
 	       (unsigned)club->state, rig_role_name(club), local, coord,
 	       (unsigned)club->cluster_nodes, (unsigned)club->cevotes,
-	       (unsigned)club->quorum, (unsigned)club->expected_votes,
+	       (unsigned)club->quorum, (unsigned)club->quorum_lost,
+	       (unsigned)club->expected_votes,
 	       (unsigned)club->epoch, (unsigned)rig_members.n_members,
 	       (unsigned)club->transition_active, (unsigned)club->bitmap[0]);
+}
+
+/*
+ * WHERE THE QUORUM ARITHMETIC'S INPUTS COME FROM (rd vms-d0d).
+ *
+ * The CLUB line above prints the ANSWER (CEVOTES/QUORUM). This prints the
+ * SUMMANDS: each CSB's own VOTES and -- decisively -- whether the executive
+ * flags them as LEARNED. A peer's votes_valid is set only by a real op-0x01
+ * PARAMS record arriving from that peer (cnxman_csb_set_params), so these rows
+ * are what distinguishes "this node summed a vote it was told about" from "this
+ * node's own EXPECTED_VOTES happened to produce the same number".
+ *
+ * Read from VMS_IOCTL_CLUSTER_DIAG_CSB row=_CSB, the executive's own CSB
+ * projection: the rig computes nothing and asserts nothing here.
+ */
+static void print_csb_votes_rows(const struct node_cfg *c, int fd)
+{
+	uint32_t i;
+
+	for (i = 0; i < rig_members.n_members; i++) {
+		struct vms_cluster_diag_csb_args a;
+		char csid[16];
+
+		memset(&a, 0, sizeof(a));
+		a.row = VMS_CLUSTER_DIAG_CSB_CSB;
+		a.index = i;
+		if (ioctl(fd, VMS_IOCTL_CLUSTER_DIAG_CSB, &a) != 0)
+			return;
+		if (a.status != SS_NORMAL)
+			return;
+		csid_str(csid, sizeof(csid), a.csb.csid, a.csb.csid_valid);
+		printf("RIG-%s-CSBQ i=%u csid=%s votes=%u votes_valid=%u "
+		       "selected=%u member=%u state=%u\n",
+		       c->tag, (unsigned)i, csid, (unsigned)a.csb.votes,
+		       (unsigned)a.csb.votes_valid, (unsigned)a.csb.is_selected,
+		       (unsigned)a.csb.is_member, (unsigned)a.csb.state);
+	}
 }
 
 static void print_getsyi_line(const struct node_cfg *c,
@@ -616,7 +654,7 @@ static void rig_sample_take(int fd, struct rig_sample *s)
 	s->ok = 1;
 }
 
-static void rig_report(const struct node_cfg *c, unsigned elapsed,
+static void rig_report(const struct node_cfg *c, int fd, unsigned elapsed,
 		       const struct rig_sample *s)
 {
 	if (!s->ok) {
@@ -628,6 +666,7 @@ static void rig_report(const struct node_cfg *c, unsigned elapsed,
 	print_club_line(c, elapsed, &s->club);
 	print_getsyi_line(c, &s->syi);
 	print_member_rows(c);
+	print_csb_votes_rows(c, fd);
 	fflush(stdout);
 }
 
@@ -657,12 +696,12 @@ static void rig_verdict(const struct node_cfg *c, const struct rig_sample *s)
 	csid_str(csid, sizeof(csid), s->club.local_csid, s->club.local_csid_valid);
 
 	printf("RIG-%s-FINAL role=%s member=%d state=%s csid=%s cn=%u "
-	       "quorum=%u cevotes=%u epoch=%u projections=%s\n",
+	       "quorum=%u cevotes=%u qlost=%u epoch=%u projections=%s\n",
 	       c->tag, rig_role_name(&s->club), member,
 	       cluster_state_name(s->club.state), csid,
 	       (unsigned)s->club.cluster_nodes, (unsigned)s->club.quorum,
-	       (unsigned)s->club.cevotes, (unsigned)s->club.epoch,
-	       mismatch ? "DISAGREE" : "agree");
+	       (unsigned)s->club.cevotes, (unsigned)s->club.quorum_lost,
+	       (unsigned)s->club.epoch, mismatch ? "DISAGREE" : "agree");
 	fflush(stdout);
 }
 
@@ -1850,7 +1889,7 @@ static int rig_poll(int fd, const struct node_cfg *c)
 	for (t = 0; t < c->window; t++) {
 		sleep(1);
 		rig_sample_take(fd, &s);
-		rig_report(c, t + 1u, &s);
+		rig_report(c, fd, t + 1u, &s);
 	}
 	rig_sample_take(fd, &s);
 	rig_verdict(c, &s);

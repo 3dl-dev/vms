@@ -334,6 +334,57 @@ static void test_edge(void)
 			"edge: the un-advertised CSB is skipped, not counted as 0");
 }
 
+/*
+ * ==========================================================================
+ * 9. cnxman_quorum_member_recompute(): the trigger a RUNNING node uses on
+ *    itself (rd vms-d0d), and the two conditions that make it honest.
+ *
+ * The arithmetic above is the same either way; what is tested here is WHEN a
+ * node may apply it to itself. An admitted node has to, because p. 7-42 task 2
+ * only copies a coordinator's proposal and it never made one -- and a node that
+ * is NOT a member must not, because a quorum computed before admission is a
+ * local-only number no other system agreed to (INV-6).
+ * ==========================================================================
+ */
+static void test_member_recompute_gate(void)
+{
+	struct vms_club *club = reset_cluster(0, 0);   /* a non-voting joiner */
+	struct vms_csb *peer;
+
+	printf("[quorum] the member-recompute gate (rd vms-d0d)\n");
+
+	peer = add_member(club, 0x2000ull, 1, 0, 1);
+	ct_check(peer != NULL, "gate: the peer's advertised VOTES are learned");
+
+	/* (a) not a member yet: refused outright, nothing written. */
+	g_cl.state = VMS_CLUSTER_JOINING;
+	ct_check_eq_u32((unsigned long)cnxman_quorum_member_recompute(&g_cl), 0u,
+			"gate: a JOINING node does not compute a quorum");
+	ct_check_eq_u32(club->cevotes, 0, "gate: CEVOTES untouched");
+	ct_check_eq_u32(club->quorum, 0, "gate: QUORUM untouched");
+
+	/* (b) a member, but this node's own CSB is not in the selected set:
+	 * a sum that omits the local system is refused, not published. */
+	g_cl.state = VMS_CLUSTER_MEMBER;
+	ct_check_eq_u32((unsigned long)cnxman_quorum_member_recompute(&g_cl), 0u,
+			"gate: refused while the LOCAL CSB is not selected");
+	ct_check_eq_u32(club->quorum, 0, "gate: still untouched");
+
+	/* (c) a real member with its own params in the table: the arithmetic
+	 * runs, over votes that really arrived. */
+	select_local(club);
+	ct_check_eq_u32((unsigned long)cnxman_quorum_member_recompute(&g_cl), 1u,
+			"gate: an admitted member recomputes");
+	ct_check_eq_u32(club->cevotes, 1,
+			"gate: CEVOTES = max{0; 0 + 1; 0} -- the peer's real vote");
+	ct_check_eq_u32(club->quorum, 1, "gate: QUORUM = (1+2)/2 = 1");
+	ct_check(!club->quorum_lost, "gate: the peer is OPEN, so 1 >= 1");
+
+	/* (d) NULL: changes nothing, says so. */
+	ct_check_eq_u32((unsigned long)cnxman_quorum_member_recompute(NULL), 0u,
+			"gate: a NULL cluster computes nothing");
+}
+
 int main(void)
 {
 	test_five_node_worked_example();
@@ -344,6 +395,7 @@ int main(void)
 	test_quorum_disk_tracked_not_folded_in();
 	test_ovmx_nonvoting_contribution();
 	test_edge();
+	test_member_recompute_gate();
 
 	return ct_summary("test_cnxman_quorum");
 }

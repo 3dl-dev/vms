@@ -1605,6 +1605,51 @@ static void test_unowned_frame_is_not_mine(void)
  * here fails this test.
  * ========================================================================== */
 
+/*
+ * [ADMIT] -> the transition. MEMBER IS REACHED THE REAL WAY, IN THE REAL ORDER
+ * (rd vms-fc7 / vms-9c99). The coordinator sends the op-0x05 MEMBERSHIP RECORDS
+ * BEFORE the transition open -- measured in cn3, where the op-0x05 burst
+ * (frames 230-233) precedes the op-0x09 (834) and the GO (849) -- so this node
+ * has adopted its assigned CSID by the time the nodemap arrives, which is
+ * exactly what lets it find its own bit in it. The bitmap below is 0x0e =
+ * {1,2,3} and the assigned slot is 3. `adopt_membrec` is 0 for the scenario
+ * that stops at [BARRIER] without ever being named.
+ */
+static void drive_admit_to_barrier(int adopt_membrec)
+{
+	uint32_t len;
+
+	if (adopt_membrec) {
+		len = mk_membrec((uint32_t)OWN_SYSID, 0x00010003u);
+		(void)join_feed(len);
+	}
+	len = mk_open_add(EPOCH, 0x0eu);
+	(void)join_feed(len);
+	len = mk_go(EPOCH);
+	(void)join_feed(len);
+}
+
+/*
+ * The GO is the promotion (p. 7-42; cn3 shows a real cluster counting a joiner
+ * from the GO with no op-0x0c ever sent to it). The twelve barrier steps still
+ * run afterwards -- they are the lock-rebuild synchronisation -- and are walked
+ * here so the [MEMBER] row's cells are exercised on a node that really went
+ * through them.
+ */
+static void drive_barrier_to_member(void)
+{
+	uint32_t step;
+	uint16_t peer_msg = 0x0100;
+	uint32_t len;
+
+	for (step = 1u; step <= CNXMAN_BARRIER_STEPS; step++) {
+		len = mk_step_ack(step, ++peer_msg);
+		(void)join_feed(len);
+		len = mk_release(step, ++peer_msg);
+		(void)join_feed(len);
+	}
+}
+
 /* Put the FSM into `state` with the bed freshly initialised. */
 static void drive_to_state(enum cnxman_join_state s)
 {
@@ -1648,45 +1693,11 @@ static void drive_to_state(enum cnxman_join_state s)
 		return;
 	}
 
-	/*
-	 * MEMBER IS REACHED THE REAL WAY, IN THE REAL ORDER (rd vms-fc7 /
-	 * vms-9c99). The coordinator sends the op-0x05 MEMBERSHIP RECORDS
-	 * BEFORE the transition open -- measured in cn3, where the op-0x05
-	 * burst (frames 230-233) precedes the op-0x09 (834) and the GO (849) --
-	 * so this node has adopted its assigned CSID by the time the nodemap
-	 * arrives, which is exactly what lets it find its own bit in it. The
-	 * bitmap below is 0x0e = {1,2,3} and the assigned slot is 3.
-	 */
-	if (s != CNXMAN_JOIN_BARRIER) {
-		len = mk_membrec((uint32_t)OWN_SYSID, 0x00010003u);
-		(void)join_feed(len);
-	}
-
-	len = mk_open_add(EPOCH, 0x0eu);
-	(void)join_feed(len);
-	len = mk_go(EPOCH);
-	(void)join_feed(len);
+	drive_admit_to_barrier(s != CNXMAN_JOIN_BARRIER);
 	if (s == CNXMAN_JOIN_BARRIER)
 		return;
 
-	/*
-	 * The GO is the promotion (p. 7-42; cn3 shows a real cluster counting a
-	 * joiner from the GO with no op-0x0c ever sent to it). The twelve
-	 * barrier steps still run afterwards -- they are the lock-rebuild
-	 * synchronisation -- and are walked here so the [MEMBER] row's cells
-	 * are exercised on a node that really went through them.
-	 */
-	{
-		uint32_t step;
-		uint16_t peer_msg = 0x0100;
-
-		for (step = 1u; step <= CNXMAN_BARRIER_STEPS; step++) {
-			len = mk_step_ack(step, ++peer_msg);
-			(void)join_feed(len);
-			len = mk_release(step, ++peer_msg);
-			(void)join_feed(len);
-		}
-	}
+	drive_barrier_to_member();
 }
 
 /* Fire `ev` at the FSM in whatever state it is in. Returns 0 if the event was
@@ -3774,6 +3785,130 @@ static void test_peer_params_land_in_the_senders_own_csb(void)
 }
 
 /* ==========================================================================
+ * rd vms-d0d: THE ADMITTED NODE DOES THE QUORUM ARITHMETIC ITSELF
+ *
+ * WHAT THIS LOCKS. On the live 2-node cluster node B reached MEMBER, counted
+ * both systems, and reported CEVOTES/QUORUM 0 for the whole run (#1119) -- with
+ * node A's real advertised VOTES sitting in B's own CSB table the entire time.
+ * p. 7-42 task 2 is a copy of the COORDINATOR's proposed cells, and an admitted
+ * node never ran a proposal, so nothing on the joiner's path applied p. 7-6 at
+ * all. The three cases below pin the whole fix and its INV-6 boundary:
+ *
+ *   1. a record arriving before admission computes NOTHING -- a quorum before
+ *      membership is precisely the local-only fabrication that is forbidden;
+ *   2. votes learned BEFORE the commit are in the figures the commit produces;
+ *   3. votes learned (or CHANGED) AFTER it move them, because the peer keeps
+ *      advertising and [MEMBER] still routes its op-0x01 here.
+ *
+ * Every number below is arithmetic over VOTES that arrived on a real op-0x01
+ * from a real sender -- the same walk the founder runs at genesis.
+ * ========================================================================== */
+
+static void test_quorum_is_never_asserted_before_membership(void)
+{
+	struct vms_csb *other;
+	uint32_t len;
+
+	printf("\n-- vms-d0d: a peer's VOTES before admission compute NO "
+	       "quorum (INV-6) --\n");
+	bed_init();
+	bed_set_identity();
+	other = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	if (other == NULL)
+		return;
+
+	len = mk_peer_params(2u, 1u);
+	(void)join_feed_from(other, OTHER_CSID, len);
+
+	ct_check_eq_u32(other->votes, 2u,
+			"the record was LEARNED -- the peer's real votes are "
+			"in the CSB");
+	ct_check(g.cl.state != VMS_CLUSTER_MEMBER,
+		 "... but this node is not a member of anything yet");
+	ct_check_eq_u32(g.cl.club.cevotes, 0u,
+			"so CEVOTES stays honestly unwritten -- a node that "
+			"has not been admitted has no membership to compute a "
+			"quorum over");
+	ct_check_eq_u32(g.cl.club.quorum, 0u, "... and QUORUM likewise");
+	ct_check_eq_u32(g.cl.club.quorum_lost, 0u,
+			"... and it does not claim to have LOST a quorum it "
+			"never had");
+}
+
+static void test_votes_learned_before_the_commit_are_in_the_commit(void)
+{
+	uint32_t len;
+
+	printf("\n-- vms-d0d: VOTES advertised before the GO are in the "
+	       "figures Phase 2 commits --\n");
+	drive_to_state(CNXMAN_JOIN_ADMIT);
+
+	len = mk_peer_params(1u, 1u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.member_csb->votes, 1u,
+			"the member advertised one vote while this node was "
+			"still waiting to be admitted");
+	ct_check_eq_u32(g.cl.club.quorum, 0u,
+			"nothing is computed from it yet (still [ADMIT])");
+
+	drive_admit_to_barrier(1);
+	drive_barrier_to_member();
+
+	ct_check_eq_u32(g.cl.state, (unsigned long)VMS_CLUSTER_MEMBER,
+			"the GO committed this node as a member (p. 7-42)");
+	ct_check_eq_u32(g.cl.club.cevotes, 1u,
+			"and Phase 2 computed CEVOTES = max{EXPECTED_VOTES 0; "
+			"SUM VOTES 1; Old CEVOTES 0} from the CSB table it "
+			"just selected");
+	ct_check_eq_u32(g.cl.club.quorum, 1u, "QUORUM = (1 + 2) / 2 = 1");
+}
+
+static void test_joiner_recomputes_on_every_advert_it_learns(void)
+{
+	struct vms_csb *other;
+	uint32_t len;
+
+	printf("\n-- vms-d0d: an admitted node's CEVOTES/QUORUM track the "
+	       "VOTES its peers advertise --\n");
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	other = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	if (other == NULL)
+		return;
+
+	ct_check_eq_u32(g.j.state, (unsigned long)CNXMAN_JOIN_MEMBER,
+			"the join really reached [MEMBER]");
+	ct_check_eq_u32(g.cl.club.cevotes, 0u,
+			"with nobody having advertised a vote yet, CEVOTES is "
+			"0 -- this node's own SYSGEN VOTES really are 0 and an "
+			"unheard peer contributes nothing (never a guess)");
+
+	len = mk_peer_params(1u, 1u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.member_csb->votes, 1u,
+			"the member's op-0x01 landed in its own CSB");
+	ct_check_eq_u32(g.cl.club.cevotes, 1u,
+			"and the SAME dispatch recomputed CEVOTES from the "
+			"table: 0 (this node) + 1 (the member)");
+	ct_check_eq_u32(g.cl.club.quorum, 1u, "QUORUM = (1 + 2) / 2 = 1");
+
+	len = mk_peer_params(2u, 1u);
+	(void)join_feed_from(other, OTHER_CSID, len);
+	ct_check_eq_u32(g.cl.club.cevotes, 3u,
+			"the second member's two votes are summed in too "
+			"(0 + 1 + 2), from ITS own CSB");
+	ct_check_eq_u32(g.cl.club.quorum, 2u, "QUORUM = (3 + 2) / 2 = 2");
+
+	/* pp. 7-10/7-11: the value cannot decrease by itself. A member that
+	 * re-advertises FEWER votes lowers the sum, but Old CEVOTES is read
+	 * back into the max{} and holds the line. */
+	len = mk_peer_params(0u, 1u);
+	(void)join_feed_from(other, OTHER_CSID, len);
+	ct_check_eq_u32(other->votes, 0u, "the peer's CSB took the new record");
+	ct_check_eq_u32(g.cl.club.cevotes, 3u,
+			"CEVOTES did not decrease by itself (pp. 7-10/7-11)");
+}
+
+/* ==========================================================================
  * E80: THE MEMBER THAT DOES NOT ANSWER THE MEMBERSHIP REQUEST
  *
  * WHAT THESE LOCK. On the live 2-node cluster the same build reached the
@@ -4187,6 +4322,9 @@ int main(void)
 	test_per_peer_covers_every_member();
 	test_per_peer_beat_asserts_no_membership();
 	test_peer_params_land_in_the_senders_own_csb();
+	test_quorum_is_never_asserted_before_membership();
+	test_votes_learned_before_the_commit_are_in_the_commit();
+	test_joiner_recomputes_on_every_advert_it_learns();
 	test_e80_a_silent_member_is_re_issued_to_the_next();
 	test_e80_a_member_that_proposes_is_never_re_issued_away_from();
 	test_e80_an_ack_alone_is_not_an_answer();

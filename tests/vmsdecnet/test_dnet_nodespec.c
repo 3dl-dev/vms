@@ -8,9 +8,16 @@
  * as the node separator), the no-node local-path case, and the INV-6 refusals
  * (unterminated access string, over-long field, empty node/file, a stray token
  * after the access string, control bytes). Pure logic; no socket / privilege.
+ *
+ * Plus a FUZZ + bounds proof (the attacker-facing-parser bar the project holds
+ * dnet_dap/dnet_fal_access_decode to): these parse an UNTRUSTED COPY argument
+ * that carries an access-control PASSWORD, so 200k mutated specs must never
+ * over-read (ASan/UBSan, added by the CMake target where the toolchain has it),
+ * never leak a half-parsed credential on failure, and never overflow a field.
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "dnet_nodespec.h"
 
@@ -22,6 +29,98 @@ static void check(int cond, const char *what)
         failures++;
 }
 #define EQ(a, b) (strcmp((a), (b)) == 0)
+
+/* Alphabet biased to the metacharacters that drive the parser's branches (quote
+ * toggle, "::", the access-string field split, the "" escape) plus a NUL and a
+ * control byte -- pure 0..255 noise almost never forms a "::" or a quote, so it
+ * would leave the interesting paths unexercised. */
+static const char FZ_ALPHA[] = {
+    '"', ':', ':', ' ', ' ', 'A', 'B', 'a', 'b', '1', '2', '.',
+    '[', ']', '$', '\\', '\t', '\0', '/', ';', '-'
+};
+#define FZ_A ((int)sizeof FZ_ALPHA)
+
+static void fz_fill(char *s, int cap)
+{
+    int n = rand() % cap;                 /* 0 .. cap-1 chars, then NUL */
+    for (int k = 0; k < n; k++)
+        s[k] = FZ_ALPHA[rand() % FZ_A];
+    s[n] = '\0';
+}
+
+/* A parse result other than OK must leave NOTHING behind -- above all no
+ * partial credential (INV-6 clean-on-failure). NONODE also returns *out zeroed. */
+static int ns_dirty_on_fail(const struct dnet_nodespec *ns)
+{
+    return ns->node[0] || ns->username[0] || ns->password[0] ||
+           ns->account[0] || ns->filespec[0] || ns->has_access;
+}
+/* On success every field must be NUL-terminated inside its buffer (no overflow;
+ * the last byte of each fixed buffer is the terminator slot and must be NUL). */
+static int ns_unbounded_on_ok(const struct dnet_nodespec *ns)
+{
+    return ns->node[sizeof ns->node - 1] || ns->username[sizeof ns->username - 1] ||
+           ns->password[sizeof ns->password - 1] ||
+           ns->account[sizeof ns->account - 1] ||
+           ns->filespec[sizeof ns->filespec - 1];
+}
+
+static void test_nodespec_fuzz(void)
+{
+    struct dnet_nodespec ns;
+    unsigned bad = 0, total = 0;
+    srand(0xC0DE);
+    for (int i = 0; i < 200000; i++) {
+        char s[40];
+        fz_fill(s, (int)sizeof s - 1);
+        int rc = dnet_nodespec_parse(s, &ns);
+        total++;
+        if (rc == DNET_CTERM_OK) { if (ns_unbounded_on_ok(&ns)) bad++; }
+        else                     { if (ns_dirty_on_fail(&ns))   bad++; }
+    }
+    check(bad == 0 && total == 200000,
+          "nodespec: 200k fuzzed specs -- no leak-on-failure, no field overflow, no crash");
+
+    /* Truncation walk of a valid credentialed spec: every prefix is handled
+     * without an over-read (ASan enforces) and never leaks on the failing ones. */
+    const char *valid = "VAX1\"SYSTEM SECRET FIELDTEST\"::DISK$U:[X]REMOTE.TXT";
+    int clean = 1;
+    for (size_t p = 0; p <= strlen(valid); p++) {
+        char pre[80];
+        memcpy(pre, valid, p); pre[p] = '\0';
+        int rc = dnet_nodespec_parse(pre, &ns);
+        if (rc != DNET_CTERM_OK && ns_dirty_on_fail(&ns)) clean = 0;
+    }
+    check(clean, "nodespec: every truncated prefix of a valid spec -- clean, no over-read, no leak");
+}
+
+static void test_copy_plan_fuzz(void)
+{
+    struct dnet_copy_plan cp;
+    unsigned bad = 0, total = 0;
+    srand(0xF00D);
+    for (int i = 0; i < 200000; i++) {
+        char a[36], b[36];
+        fz_fill(a, (int)sizeof a - 1);
+        fz_fill(b, (int)sizeof b - 1);
+        int rc = dnet_copy_plan(a, b, &cp);
+        total++;
+        if (rc == DNET_CTERM_OK) {
+            if (cp.node[sizeof cp.node - 1] || cp.username[sizeof cp.username - 1] ||
+                cp.password[sizeof cp.password - 1] || cp.account[sizeof cp.account - 1] ||
+                cp.remote_spec[sizeof cp.remote_spec - 1] ||
+                cp.local_spec[sizeof cp.local_spec - 1])
+                bad++;
+        } else {
+            /* clean-on-failure: no credential / field survives a non-OK plan */
+            if (cp.node[0] || cp.username[0] || cp.password[0] || cp.account[0] ||
+                cp.remote_spec[0] || cp.local_spec[0] || cp.has_access)
+                bad++;
+        }
+    }
+    check(bad == 0 && total == 200000,
+          "copy_plan: 200k fuzzed arg pairs -- no leak-on-failure, no field overflow, no crash");
+}
 
 int main(void)
 {
@@ -167,6 +266,10 @@ int main(void)
     check(dnet_copy_plan(NULL, "B", &cp) == DNET_CTERM_EINVAL, "null src refused");
     check(dnet_copy_plan("A::X", NULL, &cp) == DNET_CTERM_EINVAL, "null dst refused");
     check(dnet_copy_plan("A::X", "B", NULL) == DNET_CTERM_EINVAL, "null out refused");
+
+    /* ===================== fuzz + bounds proof ============================= */
+    test_nodespec_fuzz();
+    test_copy_plan_fuzz();
 
     printf("%s: %d failure(s)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;

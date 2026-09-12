@@ -94,6 +94,20 @@ target_include_directories(test_dnet_nodespec PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include)  # dnet_cterm.h: caps + codes
 target_compile_options(test_dnet_nodespec PRIVATE -Werror)
+# The splitter parses an untrusted COPY argument carrying an access-control
+# password, so its fuzz is held to the same bar as the DAP decoder: build it
+# WITH -fsanitize=address,undefined where the toolchain can (a musl/freestanding
+# cross may lack the runtime -- the fuzz's own leak/bounds assertions still run
+# everywhere; the sanitizer turns an over-read into a HARD failure on the host).
+include(CheckCSourceCompiles)
+set(_ns_san_save "${CMAKE_REQUIRED_FLAGS}")
+set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+check_c_source_compiles("int main(void){return 0;}" OVMX_NODESPEC_SANITIZE_OK)
+set(CMAKE_REQUIRED_FLAGS "${_ns_san_save}")
+if(OVMX_NODESPEC_SANITIZE_OK)
+    target_compile_options(test_dnet_nodespec PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_nodespec PRIVATE -fsanitize=address,undefined)
+endif()
 add_test(NAME vmsdecnet_nodespec_unit COMMAND test_dnet_nodespec)
 
 # rd vms-8c2: the DAP (Data Access Protocol) message codec + the FAL access-

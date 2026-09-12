@@ -806,12 +806,13 @@ jobs:
         with:
           path: /var/cache/apt/archives
           # Cache-key hygiene, not a correctness fix (vms-fb9 r7, vms-ecf r5):
-          # strace, then libssh-dev, were added to the install list below.
-          # restore-keys already falls back to any apt-${{ runner.os }}-
-          # prefix, so apt-get install would still succeed and fetch them on a
-          # stale-key cache hit -- this bump only avoids re-downloading them
-          # every run.
-          key: apt-${{ runner.os }}-cmake-gcc-readline-strace-libssh
+          # strace, then libssh-dev, then rsync (vms-8e7, for the host cluster
+          # mutation gate's working-copy injection), were added to the install
+          # list below. restore-keys already falls back to any
+          # apt-${{ runner.os }}- prefix, so apt-get install would still
+          # succeed and fetch them on a stale-key cache hit -- this bump only
+          # avoids re-downloading them every run.
+          key: apt-${{ runner.os }}-cmake-gcc-readline-strace-libssh-rsync
           restore-keys: apt-${{ runner.os }}-
 
       # libssh-dev IS NOT OPTIONAL FOR THIS JOB, and the reason is a gate
@@ -847,7 +848,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake gcc make libc6-dev libreadline-dev strace libcap2-bin \
-            libssh-dev musl-tools ccache
+            libssh-dev musl-tools ccache rsync
 
       - name: Cache CMake build
         uses: actions/cache@v4
@@ -948,6 +949,18 @@ jobs:
           else
             ctest --output-on-failure --parallel "$JOBS"
           fi
+
+      # vms-8e7: the R1 host cluster mutation gate. The 46 tests/cluster/host
+      # suites ctest just ran above have no negative control proving any of
+      # them can go red -- this is the first one. Host-native (cmake build +
+      # run against src/kernel-core alone, no /dev/vms/QEMU), so it belongs in
+      # THIS job rather than a QEMU-boot job. Reuses the `build` dir the
+      # "Configure"/"Build" steps above already produced (its positive-control
+      # rebuild of test_cnxman_genesis_negctl is then a no-op if unchanged),
+      # and does its defect injection against a private rsync'd copy of the
+      # tree -- the checkout this job is running from is never mutated.
+      - name: Host cluster mutation gate (R1 negctl, tests/cluster/host)
+        run: tests/cluster/host/run_host_negctl.sh
 
   # -----------------------------------------------------------------------
   # Job 3: Persistent boot smoke test (QEMU)

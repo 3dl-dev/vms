@@ -6096,6 +6096,61 @@ jobs:
             '
 
   # -----------------------------------------------------------------------
+  # mmk-native — self-host spine residual (bead vms-ec70, epic vms-16d
+  # "self-host S3: MMK+LIBRARIAN+assembler as OVMX-native"). Builds the
+  # MadGoat MMK build engine (tests/corpus/tier3-mmk) AS a VMS-native
+  # EXECUTABLE image (MMK.EXE, via the new src/vmslink/mk_mmk.sh recipe: 19
+  # objects compiled with the proven freestanding musl CFLAGS, linked via
+  # LINK.EXE --executable --use {DECC$SHR + the six OVMX shareables}).
+  # IMGACT.EXE activates MMK.EXE (no ld / no ld.so), and the ACTIVATED image
+  # opens a real multi-TU descrip.mms (OVMXRT.MMS) through OVMX RMS, parses
+  # it with the real lib$table_parse engine + the vms-486 grammar, and
+  # resolves the correct compile -> archive -> link plan in /NOACTION,
+  # byte-identical across two independent runs.
+  #
+  # SCOPE (Rule 9 / INV-6, see run_mmk_native.sh's own header): this proves
+  # MMK built + activated as an OVMX image and genuinely functional
+  # (conditions 1-2 of vms-16d). MMK's persistent mailbox-driven DCL
+  # exec-drive (actually RUNNING that resolved plan) needs a real /dev/vms
+  # executive — $CREMBX fails SS$_NOSUCHDEV in this container's host-mode
+  # /vms — and is NOT attempted here; that rides the QEMU
+  # test_syssvc_mmk_build.c suite (today against the static `mmk_native`
+  # CMake target — swapping it to this OVMX-native MMK.EXE is a follow-on).
+  #
+  # MMK_EXPECT_LINK (mirrors TCC_EXPECT_LINK above): set to 1 here
+  # (BLOCKING) — the producer-graph + emit_executable toolchain is complete,
+  # so a LINK.EXE failure on MMK.EXE's own build is a real regression.
+  # -----------------------------------------------------------------------
+  mmk-native:
+    name: MMK.EXE VMS-native Link + Activate (self-hosting spine residual)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build MMK.EXE VMS-native, activate it, resolve a real multi-TU descrip.mms through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/mmk-native MMK_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_mmk_native.sh
+            '
+
+  # -----------------------------------------------------------------------
   # tcc-rms — S2 RMS I/O proof (bead vms-4ba.5, epic vms-4ba). Sibling of
   # tcc-native: same six-producer graph + TCC.EXE build (mk_tcc.sh now also
   # compiles the OVMX RMS I/O shim, third-party/tcc/ovmx/ovmx_rms_io.c, and

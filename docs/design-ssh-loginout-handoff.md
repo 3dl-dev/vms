@@ -102,3 +102,60 @@ unchanged: an inbound `ssh SYSTEM@` lands a real DCL `$` (`OVMX_DCL_LANDED_843a`
 5. Keep the SSH overlay/posture (shipped SSH-off) + the OPA0: diagnostic; the
    `ssh-boot-e2e` goes green when the inbound login lands DCL.
 </content>
+
+---
+
+## GROUNDED VERIFICATION + refined build (2026-09-12, vms-16b greenlit)
+
+vms-16b is DECIDED (retire the SSH C-reimpl second login stack; route SSH through
+the SAME LOGINOUT/$CREPRC primitive console login + DECnet SET HOST/CTERM use).
+Conductor endorsed **Option A** for this increment. Re-verified the primitive
+against origin/main by reading the code (not a summary):
+
+- **The primitive EXISTS and is proven.** `src/vmsdecnet/cterm/dnet_cterm_host.c`
+  (`dnet_cterm_host_open_desc`) does exactly: `ovmx_vterm_create(devnam,&master_fd)`
+  (line 121) → set `master_fd` `O_NONBLOCK` → `sys$creprc(&pid, LOGINOUT, RTAn:,
+  RTAn:, RTAn:, NULL,NULL,NULL, 0,0,0, PRC$M_INTER|PRC$M_LOGINOUT)` (line 151) →
+  pump the network ⇄ `master_fd` (`dnet_cterm_host_read`/`_write`). `ovmx_vterm_create`
+  is implemented at `src/libvms/syssvc/sys_vterm.c:55`; `sys$creprc` honours the
+  terminal descriptors + `PRC$M_LOGINOUT` (`src/libvms/syssvc/sys_process.c:843`,
+  `creprc_bind_terminal`). Gated by `tests/integration/test_creprc_session_primitive.sh`.
+  (A prior exploration summary claimed this did not exist — that was wrong; the code
+  is on origin/main.)
+
+- **The build is LOCALIZED to the session shim.** sshd's session child already has
+  fd 0/1 wired to the SSH channel (a Linux pty slave for interactive, or the
+  materialized BGn: socket via `ovmx_materialize_fd`). So the handoff replaces the
+  body of `third-party/openssh/ovmx/ovmx_sshd_exec.c` `__wrap_execve` (the DCL branch,
+  line 42-63): instead of `__real_execve(DCL,…)`, the session child
+  `ovmx_vterm_create()`s a terminal, `sys$creprc(LOGINOUT, <vterm>×3,
+  PRC$M_INTER|PRC$M_LOGINOUT)`, then select()-pumps fd0→master_fd and master_fd→fd1
+  until EOF, then `_exit`s the child's status. This is the DECnet daemon loop with
+  the "network side" = the SSH-provided fd. It RETIRES the raw-execve DCL activation
+  (the vms-16b target) and the `pw_shell=DCL.EXE` / `ovmx_sshd_dcl_login_argv` shim.
+
+- **The one open question — how LOGINOUT gets the SSH-authed identity (Option A).**
+  LOGINOUT (`tools/vms_login.c:908`) ignores argv and is purely interactive
+  (username/password prompt). `sys$creprc` passes an IMAGE, not argv, so the
+  authenticated username cannot ride argv. Two faithful mechanisms, pick one:
+    1. **Executive-conveyed (recommended):** the SSH shim, post-auth, stamps the
+       authenticated identity onto the minted vterm / created process via the
+       executive the same way console login's identity flows (a per-session
+       executive attribute or a SYSTEM logical scoped to the created PID), and
+       LOGINOUT gains a **network-login mode** that, when that attribute is present,
+       trusts it, SKIPS the password read, does the SYSUAF lookup for that username,
+       stamps + `start_session` + activates DCL. No credential is forged (SSH already
+       consumed the auth exchange against the SAME SYSUAF/Purdy authority).
+    2. **LOGINOUT-does-auth (Option B, deferred):** pass no identity (DECnet-identical,
+       `uic=0`), let LOGINOUT challenge over the vterm; the SSH keyboard-interactive
+       exchange is bridged to LOGINOUT's prompt. More consolidation, bigger sshd
+       auth re-architecture, non-standard SSH shape. Follow-on.
+  Recommendation stands: mechanism (1) for this increment. The net-new code is a
+  LOGINOUT network-login mode (`tools/vms_login.c`, ~the console_login path minus the
+  password read) + the shim's vterm/creprc/pump body — both bounded, both testable.
+
+- **Proof (unchanged reap bar):** `tests/qemu/test_ssh_boot_e2e.sh` — an inbound
+  `ssh SYSTEM@` (pw MANAGER) lands a real DCL `$` and echoes `OVMX_DCL_LANDED_843a`;
+  wrong password never reaches DCL. Iterate on the heavy rail like the daytime e2e.
+  Shipped stays SSH-off (posture guard). No compat status flip without this e2e green
+  by SHA (enforcing e2e = implemented; the register SSH rows stay honest until then).

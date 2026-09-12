@@ -3796,7 +3796,19 @@ jobs:
       # Revisit the number empirically if shards still balloon at 3.
       max-parallel: 3
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+        # SHARD-COUNT BUMP 10 -> 20 (vms-6ea Bucket-A landing). MEASURED on
+        # run 34627048896: with the manifest at 138 defects (~14/shard at 10
+        # shards) SEVEN of ten shards were KILLED at exactly 50.0m -- they hit
+        # timeout-minutes above (conclusion "cancelled", not "failure"), while
+        # the three that finished ran 5m/23m/47m for the SAME ~14 defects. That
+        # 10x spread is runner-contention starvation, not a per-defect logic
+        # bug: a starved shard at ~3.4m/defect * 14 + fixed cost overruns 50m.
+        # Per this job's own standing rule ("raise the shard count, never
+        # delete a defect to fit"): 138 / 20 = ~7/shard -> ~29m even at the
+        # measured starved rate, comfortably inside 50m. The partition is
+        # `NR % job-total`, so this list is the ONLY line to touch. Revisit
+        # (raise again) as the manifest grows.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
 
     steps:
       - name: Checkout

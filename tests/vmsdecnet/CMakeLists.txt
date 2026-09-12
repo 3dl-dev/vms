@@ -26,6 +26,17 @@ add_test(NAME vmsdecnet_link_unit COMMAND test_dnet_link)
 # an out-of-band ^Y, and Unbind -- as real on-wire NSP data frames over a
 # socketpair, every CTERM payload byte-identical. SPEC-DERIVED (no oracle
 # specimen; register sec 4.7). Warning-clean under -Werror.
+# rd vms-ea8/vms-6a4: node-filespec splitter (NODE"user pw acct"::spec) that
+# feeds the FAL/DAP COPY client. Pure logic -- compile the splitter TU directly
+# (no FAL/RMS/auth link stack needed for a syntax-only unit).
+add_executable(test_dnet_nodespec test_dnet_nodespec.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_nodespec.c)
+target_include_directories(test_dnet_nodespec PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include)  # dnet_cterm.h: caps + codes
+target_compile_options(test_dnet_nodespec PRIVATE -Werror)
+add_test(NAME vmsdecnet_nodespec_unit COMMAND test_dnet_nodespec)
+
 add_executable(test_dnet_cterm test_dnet_cterm.c)
 target_link_libraries(test_dnet_cterm PRIVATE vmsdecnet_engine vmsdecnet_cterm)
 target_include_directories(test_dnet_cterm PRIVATE

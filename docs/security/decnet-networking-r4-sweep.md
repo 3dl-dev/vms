@@ -4,21 +4,24 @@
 
 **Scope:** the **inbound-facing DECnet networking attack surface** — untrusted bytes arriving from a remote DECnet peer over the wire. Non-overlapping with the SCS/cluster sweep (vms-414). rd vms-2947.
 
-**Grounded on:** `origin/main` @ `d7824ca3`. Every decoder in the target files was traced by hand for bounds, fuzz coverage, authentication, isolation, resource exhaustion, and privilege.
+**Grounded on:** originally `origin/main` @ `d7824ca3` (2026-09-11); **re-grounded on `origin/main` @ `723472af` (2026-09-12)** — see the dated **§6 Update** for what changed since the inbound enabler and the FAL COPY command layer merged. Every decoder in the target files was traced by hand for bounds, fuzz coverage, authentication, isolation, resource exhaustion, and privilege.
 
 **Deliverable shape:** findings + posture recommendation. **Report, not fix** — real gaps are filed as rd items (listed below), not patched in place.
+
+> **Status (2026-09-12):** posture **RULED — Option 1** (memory-safety + authentication boundary; not privilege-isolated / DoS-hardened / confidential), and the R4 hard-gate is **MET** — the two blocking gaps landed in V0.6-15 (**G1** per-service persona #1177, **G2** MAXCHILD #1171). This doc is now the standing record of the surface; **§6** re-grounds it on current main.
 
 ---
 
 ## 0. A scope fact that changes the reading (measure-first)
 
-On **current origin/main**, the inbound CTERM server is **opt-in and not auto-started**:
-- `cterm_server` defaults to `0` (`src/vmsdecnet/engine/decnetd.c:2487`); enabled only by an explicit `--cterm-server` flag.
-- No `SYS$STARTUP`/`.COM` launches `DECNETD.EXE` on origin/main.
+**Updated 2026-09-12 — the inbound enabler merged (#1162).** On current `origin/main` the persistent NETACP daemon **serves inbound object 42 by default** (`cterm_server = 1`, `src/vmsdecnet/engine/decnetd.c`) and is auto-started at boot by `SYS$MANAGER:STARTNET.COM` (registered at the LPBETA phase). **The activation is config-gated, and that gate is the key posture fact:** STARTNET is a **silent no-op unless the node has been configured for DECnet** — it runs nothing and prints nothing until NCP `SET/DEFINE EXECUTOR` has written `SYS$SYSTEM:NETNODE_LOCAL.DAT` (`STARTNET.COM`, a pure-DCL `F$SEARCH` gate). So:
 
-The **inbound enabler (PR #1162, `work/vms-a70-inbound-sethost`, in flight — not yet merged)** changes this: it makes the persistent NETACP daemon **serve object 42 by default** and auto-start at boot **when a DECnet executor address is configured** (`SYS$MANAGER:STARTNET.COM`, gated on NCP `SET EXECUTOR ADDRESS`). **This sweep assesses the surface as #1162 activates it** — that live inbound listen surface is the R4-relevant exposure — while recording that on current main the surface is dormant. The posture below applies to the 1.0 target (with #1162); it must not be read as "already exposed on main."
+- **A default/fresh install is DORMANT** — no inbound DECnet listener exists until an operator explicitly configures the executor address. The surface is **not exposed out of the box**.
+- **Once configured, the live inbound listen surface is active** — that is the R4-relevant exposure this sweep assesses. NETACP additionally self-checks (defense in depth): launched with no executor address it logs a not-configured note and serves nothing.
 
-**Also latent (honest scoping):** the FAL object-17 server is wired only into the `--fal-*` socketpair self-tests, **never into the live `--cterm-server` datalink loop** (`decnetd.c:2133,2164`). On the live wire the **only** inbound object served is **CTERM 42**. FAL's gaps (G3) are latent until FAL is live-wired.
+This *strengthens* the earlier framing (the pre-#1162 draft treated the enabler as in-flight): the exposure is opt-in by configuration, not automatic on every boot.
+
+**Also latent (unchanged, honest scoping):** the FAL object-17 **server** is wired only into the `--fal-*` socketpair self-tests, **never into the live inbound datalink loop**. On the live wire the **only** inbound object served is **CTERM 42**. FAL's gaps (G3) are latent until the FAL server is live-wired. (The FAL *client* — the outbound `$ COPY` command layer added since this draft — is covered in §6; it is outbound/local-initiated, not inbound wire surface.)
 
 ---
 
@@ -70,8 +73,9 @@ One-session-at-a-time (`host_active`, `decnetd.c:2883`) over a **single** engine
 ### G3 — FAL post-auth authorization gap **(CONFIRMED — latent)** → rd vms-d85
 Authentication is real, but after it `dnet_fal_server_run` serves files via `rms_textfile_open(spec)` **with the daemon's own identity — no persona to the authenticated UIC, and no filespec confinement** (`dnet_fal.c:283-285`). An authenticated user could GET/PUT any path the daemon (system) can reach. **Latent** — FAL is not live-wired (§0) — but this **must be closed before FAL object-17 is exposed on the live datalink** (persona to the authenticated UIC + `$CHKPRO`/filespec confinement).
 
-### G4 — Minor fuzz coverage gaps **(LOW)** → rd vms-8b36
-The **host-role** `dnet_cterm_rx` FSM arm (the actual inbound-server role) and `found_terminal_rx` / `found_client_termchar_parse` are not mutation-fuzzed — memory safety is covered by the shared codec + terminal-role fuzz, but host-role state transitions and those outbound-client parsers rest on oracle round-trip only. Cheap to close (extend the existing mutation harness to the host role).
+### G4 — Minor fuzz coverage gaps **(LOW) — CLOSED 2026-09-12** → rd vms-8b36
+*Originally:* the **host-role** `dnet_cterm_rx` FSM arm (the actual inbound-server role) and `found_terminal_rx` / `found_client_termchar_parse` were not mutation-fuzzed — memory safety was covered by the shared codec + terminal-role fuzz, but host-role state transitions and those parsers rested on oracle round-trip only.
+**Closed:** #1175 added host-role `dnet_cterm_rx` mutation fuzz plus the `found_terminal_rx` / `found_client_termchar_parse` fuzz (`test_dnet_cterm.c`: `host_accepts` / `ft_undef` / `fc_undef`); #1197 added the node-filespec splitter / COPY-plan ASan/UBSan fuzz (`test_dnet_nodespec.c`, 400k inputs), which additionally **surfaced and fixed** a clean-on-reject credential-leak in `dnet_nodespec_parse`. The inbound host-role FSM and the new outbound-COPY parser are now both mutation-fuzzed under sanitizers.
 
 ---
 
@@ -100,4 +104,21 @@ Recommendation: **option 1** is the honest, shippable posture for 1.0, with G1/G
 | vms-aef | G1 no OS privilege separation | posture-defining | before "security boundary" ruling |
 | vms-6af1 | G2 inbound DoS (no rate-limit/timeout) | medium (service denial) | before "security boundary" ruling |
 | vms-d85 | G3 FAL post-auth authorization/confinement | high-when-exposed | before FAL live-wire |
-| vms-8b36 | G4 host-role/outbound-parser fuzz gaps | low | hardening backlog |
+| vms-8b36 | G4 host-role/outbound-parser fuzz gaps | low | **CLOSED** (#1175 host-role fuzz + #1197 splitter/COPY-plan fuzz) |
+
+---
+
+## 6. Update — re-grounded on current main (2026-09-12)
+
+This sweep was first written on `d7824ca3`, before the inbound enabler and the FAL COPY command layer merged. Re-grounded on `723472af`; nothing below changes the **posture**, which stands as ruled (**Option 1**, gate **MET**). The corrections are factual accuracy on a live gate doc.
+
+**1. Inbound activation merged (#1162) — dormant-by-default (see the rewritten §0).** The persistent NETACP daemon now serves object 42 by default (`cterm_server = 1`) and auto-starts via `SYS$MANAGER:STARTNET.COM` at LPBETA — but **config-gated**: STARTNET is a silent no-op until NCP `SET/DEFINE EXECUTOR` writes `SYS$SYSTEM:NETNODE_LOCAL.DAT` (pure-DCL `F$SEARCH` gate). A fresh install is **dormant** (no listener until an operator configures DECnet). This **strengthens** the posture — the inbound surface is opt-in by configuration, not automatic on every boot — and the silent gate keeps the boot console clean (the vms-1fb oracle enforces it).
+
+**2. G4 closed (#1175 + #1197).** The host-role `dnet_cterm_rx` FSM arm and the foundation/terminal parsers are now mutation-fuzzed (#1175), and the new node-filespec parser is ASan/UBSan-fuzzed (#1197). See §3 G4. The fuzz **earned its keep**: #1197's fuzz surfaced a clean-on-reject **credential-leak** in `dnet_nodespec_parse` (a mid-parse rejection could leave a half-parsed username in the output) and it was fixed to re-zero the output on every non-OK return — matching `dnet_fal_access_decode`'s existing guarantee.
+
+**3. New surface: the outbound `$ COPY` command layer (#1193 / #1196 / #1197) — outbound/local, not inbound wire.** A DCL `COPY NODE"user pw"::file local` is decomposed by `dnet_nodespec_parse` + `dnet_copy_plan` (fal lib) and would drive the object-17 connect + `dnet_fal_client_get/put`. Classification for this sweep:
+   - **Not inbound attack surface.** The parser eats a **local** command argument (from a DCL process), not untrusted bytes off the wire; direction/creds are decided locally. It is in-scope here only because it is new credential-handling code.
+   - **Credential handling is hardened.** The FAL access password is a real credential (unlike CTERM, where LOGINOUT re-authenticates and the connect password is empty), so the `--copy` activation **refuses a password on argv** (`%DECNETD-E-COPYPW` — it would be world-readable in `/proc/<pid>/cmdline`) and reads it only from an inherited `--password-fd`; the splitter is clean-on-reject (item 2) and fuzzed. This is a **decided credential posture** (no password on argv; fd/pipe only; refuse the fork-fallback), not an ad-hoc choice.
+   - **The live transfer is not wired** — `run_copy_loop` validates the plan + enforces the posture, then reports `%DECNETD-I-COPYNOTWIRED` honestly (a DCL process does not yet own a live DECnet circuit to carry DAP). The **inbound** FAL object-17 server likewise remains latent (§0). So **G3 (FAL post-auth authorization/confinement) is still latent** and still gates FAL live-wire, unchanged.
+
+**Net:** the boundary described in §2–§4 holds and is now **more** accurate — dormant-by-default inbound activation, one previously-open fuzz gap (G4) closed, and a new credential-handling path added with its posture enforced. **Posture unchanged: Option 1, gate met.** The remaining "raise the boundary" backlog is still G1 (vms-aef) / G2 (vms-6af1, hard-gate piece landed) / G3 (vms-d85, before FAL live-wire); the DECnet **live legs** that would exercise more of this surface (inbound SET HOST bracket, live outbound COPY transport, FAL server live-wire, task-to-task) are all gated on the **vms-101** build-host/lab.

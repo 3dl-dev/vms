@@ -169,6 +169,7 @@ static void suite_csb_negctl(int fd)
     struct vms_cluster_diag_csb_args a;
     uint32_t i, any_valid = 0;
 
+    /* negctl: cnxman-csb-snapshot-fabricates-member */
     CHECK(diag_csb(fd, VMS_CLUSTER_DIAG_CSB_CSB, 99999u, &a) == 0 &&
           a.status != SS_NORMAL,
           "an index far past the high-water mark refuses (SS$_NOSUCHDEV), "

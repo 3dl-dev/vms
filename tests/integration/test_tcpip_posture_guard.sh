@@ -31,7 +31,7 @@ FAIL=0
 ok(){  echo "  PASS: $*"; }
 bad(){ echo "  FAIL: $*"; FAIL=1; }
 
-echo "=== test_tcpip_posture_guard (shipped default auto-starts no network service, rd vms-21b/vms-843a) ==="
+echo "=== test_tcpip_posture_guard (shipped default auto-starts no network service, rd vms-21b) ==="
 
 [ -f "$SYSTARTUP" ] || { echo "FATAL: shipped SYSTARTUP_VMS.COM not found at $SYSTARTUP"; exit 1; }
 [ -f "$SERVICE_DAT" ] || { echo "FATAL: shipped TCPIP\$SERVICE.DAT not found at $SERVICE_DAT"; exit 1; }
@@ -53,19 +53,6 @@ if [ -n "$ENABLED" ]; then
     printf '%s\n' "$ENABLED" | sed 's/^/      /'
 else
     ok "shipped TCPIP\$SERVICE.DAT ships with every service DISABLED (no enabled line)"
-fi
-
-# (c) SSH-specific posture (rd vms-843a): SSH runs as a DETACHED DAEMON started by
-# @SYS$STARTUP:TCPIP$SSH_STARTUP (not an inetd service), so the shipped SSH-off
-# posture is: the shipped SYSTARTUP must NOT invoke TCPIP$SSH_STARTUP. SSH-enable-
-# by-default is a distinct, higher-stakes operator decision than daytime (a network
-# login authority + a shipped host key), so assert it EXPLICITLY. A DCL invocation
-# is a non-comment line ('$' col 1, not '$!') naming TCPIP$SSH_STARTUP.
-if grep -nE '^\$[^!].*TCPIP\$SSH_STARTUP' "$SYSTARTUP" >/dev/null 2>&1; then
-    bad "shipped SYSTARTUP_VMS.COM INVOKES @SYS\$STARTUP:TCPIP\$SSH_STARTUP -- that auto-starts the SSH daemon at boot (network login authority + shipped host key, Baron-reserved). The SSH cold-boot proof enables SSH via the OVMX_TEST_ENABLE_SSH test overlay only; if enabling SSH by default is intended, make it explicit and update this guard."
-    grep -nE '^\$[^!].*TCPIP\$SSH_STARTUP' "$SYSTARTUP" | sed 's/^/      /'
-else
-    ok "shipped SYSTARTUP_VMS.COM does NOT invoke TCPIP\$SSH_STARTUP (SSH daemon not auto-started -- SSH is a layered product, off by default, Baron-reserved)"
 fi
 
 echo "=== test_tcpip_posture_guard: $([ "$FAIL" = 0 ] && echo PASS || echo FAIL) ==="

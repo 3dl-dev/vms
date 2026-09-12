@@ -47,6 +47,7 @@
  */
 #include <errno.h>
 #include <net/if.h>      /* if_nametoindex() */
+#include <ifaddrs.h>    /* getifaddrs(): auto-detect the primary NIC (no argv) */
 #include <poll.h>       /* the --cterm-server loop waits on wire + session */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
@@ -98,6 +99,51 @@ static void sethost_src_codes(uint16_t *grp, uint16_t *usr);
 
 static volatile sig_atomic_t g_stop = 0;
 static void on_signal(int signo) { (void)signo; g_stop = 1; }
+
+/*
+ * decnet_autodetect_iface - the datalink interface the persistent daemon binds
+ * when SYS$MANAGER:STARTNET.COM starts it with no argv (rd vms-a70 direction B).
+ *
+ * VMS RUN passes an image no argv, so the detached NETACP cannot be told
+ * --iface; and the compile-time DECNETD_DEFAULT_IFACE ("br0") is a DEV-LAB
+ * bridge name that does not exist inside a booted node's own network namespace
+ * (there the primary NIC is eth0/ETH0:). So when no --iface is given, pick the
+ * FIRST up, non-loopback interface that has a link-layer (Ethernet) address --
+ * the primary NIC, the same one the executive's DECnet device face _NET: rides
+ * (src/kernel-core/vms_devtab.c vms_devtab_probe_net). Returns 1 and fills buf
+ * on success, 0 if nothing suitable was found (caller keeps the compiled
+ * default). Multi-NIC circuit selection (NCP SET EXECUTOR/CIRCUIT to a specific
+ * line) is a follow-on; a single-NIC node -- the booted-OVMX case -- resolves
+ * unambiguously here. Pure enumeration: opens no socket, needs no privilege.
+ */
+static int decnet_autodetect_iface(char *buf, size_t sz)
+{
+#if defined(AF_PACKET)
+    struct ifaddrs *ifs = NULL, *p;
+    int found = 0;
+
+    if (!buf || sz == 0 || getifaddrs(&ifs) != 0)
+        return 0;
+    for (p = ifs; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_PACKET)
+            continue;                       /* only link-layer (L2) entries   */
+        if (p->ifa_flags & IFF_LOOPBACK)
+            continue;                       /* never lo                       */
+        if (!(p->ifa_flags & IFF_UP))
+            continue;                       /* must be up                     */
+        if (p->ifa_name && p->ifa_name[0]) {
+            snprintf(buf, sz, "%s", p->ifa_name);
+            found = 1;
+            break;                          /* first match: the primary NIC   */
+        }
+    }
+    freeifaddrs(ifs);
+    return found;
+#else
+    (void)buf; (void)sz;
+    return 0;
+#endif
+}
 
 /* A monotonic seconds tick -- the unit the engine's T3/listen timers use. */
 static dnet_tick_t monotonic_sec(void)
@@ -2388,12 +2434,20 @@ static int run_fal_accept_test(void)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-        "usage: %s --address AREA.NODE [options]\n"
-        "  --address A.N       DECnet Phase IV executor address (REQUIRED;\n"
-        "                      1..63 . 1..1023). No identity is invented if\n"
-        "                      omitted -- the daemon exits (INV-6).\n"
+        "usage: %s [--address AREA.NODE] [options]\n"
+        "  --address A.N       DECnet Phase IV executor address (1..63 . 1..1023).\n"
+        "                      If omitted it is SELF-SOURCED from the node's DECnet\n"
+        "                      configuration (executor.dat, written by NCP SET/DEFINE\n"
+        "                      EXECUTOR ADDRESS) -- the way STARTNET.COM starts the\n"
+        "                      persistent daemon with no argv. No identity is ever\n"
+        "                      invented; with neither the flag nor a configured\n"
+        "                      executor the daemon exits (INV-6).\n"
         "  --name NAME         NCP node name (1..6 chars; default OVMX)\n"
-        "  --iface IFNAME      datalink interface (default %s)\n"
+        "  --iface IFNAME      datalink interface. If omitted, the primary NIC is\n"
+        "                      AUTO-DETECTED (first up, non-loopback L2 interface --\n"
+        "                      the one the executive's _NET: rides), so the daemon\n"
+        "                      STARTNET.COM runs with no argv binds the right NIC;\n"
+        "                      falls back to %s only if detection finds nothing\n"
         "  --device DEV        VMS device label for the circuit (default EWA0)\n"
         "  --circuit CIRC      DECnet circuit name (default derived, e.g. EWA-0)\n"
         "  --hello-interval N  HELLO cadence T3 seconds (default %u, oracle vms-3be)\n"
@@ -2443,6 +2497,13 @@ static void usage(const char *argv0)
         "                      process running LOGINOUT.EXE on an RTAn: for it.\n"
         "                      The remote user is AUTHENTICATED by LOGINOUT --\n"
         "                      this daemon spawns nothing and knows no password.\n"
+        "                      This is the DEFAULT for the persistent endnode\n"
+        "                      daemon (NETACP serves object 42); the flag is kept\n"
+        "                      for an explicit ROUTER that should also serve.\n"
+        "  --no-cterm-server   do NOT serve inbound $ SET HOST -- route only. For a\n"
+        "                      routing/capture invocation that wants no LOGINOUT\n"
+        "                      surface. (A --router or --set-host invocation is\n"
+        "                      already routing/client-only unless serve is pinned.)\n"
         "  --set-host A.N      $ SET HOST CLIENT: open a CTERM terminal session\n"
         "                      to Session Control object 42 on remote node A.N and\n"
         "                      bridge THIS process's VMS terminal channel to it\n"
@@ -2471,6 +2532,7 @@ static void usage(const char *argv0)
 int main(int argc, char **argv)
 {
     const char *ifname = DECNETD_DEFAULT_IFACE;
+    int ifname_explicit = 0;      /* did the caller pin --iface?             */
     const char *addr_s = NULL;
     const char *name = "OVMX";
     const char *device = "EWA0";
@@ -2484,7 +2546,18 @@ int main(int argc, char **argv)
     int sethost_srccode_test = 0;
     int cterm_accept_test = 0;
     int isolation_test = 0;
-    int cterm_server = 0;
+    /* The persistent node daemon (NETACP) SERVES inbound $ SET HOST by default
+     * -- serving object 42 is what a DECnet ancillary control process does, and
+     * RUN/DETACHED (VMS semantics: an image parameter, never argv) cannot pass a
+     * mode flag to the detached daemon SYS$MANAGER:STARTNET.COM starts, exactly
+     * as TCPIP$STARTUP starts TCPIP$INETD with no args and it reads its own
+     * SYS$SYSTEM:TCPIP$SERVICE.DAT (rd vms-a70 direction B). Serving is a strict
+     * SUPERSET of routing: it is dormant until a peer sends an object-42 connect,
+     * and mints nothing without the executive (fail-honest, INV-6). A ROUTER is
+     * routing-only unless it is told otherwise, and --no-cterm-server forces it
+     * off for a routing/capture invocation. */
+    int cterm_server = 1;
+    int cterm_server_explicit = 0;        /* did the caller pin serve on/off?      */
     const char *set_host_to = NULL;       /* --set-host A.N : CTERM terminal client */
     const char *set_host_user = "SYSTEM"; /* --user : CTERM access-control name      */
     int fal_self_test = 0;
@@ -2495,7 +2568,7 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
         else if (!strcmp(argv[i], "--name") && i + 1 < argc)    name = argv[++i];
-        else if (!strcmp(argv[i], "--iface") && i + 1 < argc)   ifname = argv[++i];
+        else if (!strcmp(argv[i], "--iface") && i + 1 < argc)   { ifname = argv[++i]; ifname_explicit = 1; }
         else if (!strcmp(argv[i], "--device") && i + 1 < argc)  device = argv[++i];
         else if (!strcmp(argv[i], "--circuit") && i + 1 < argc) circuit = argv[++i];
         else if (!strcmp(argv[i], "--hello-interval") && i + 1 < argc)
@@ -2509,7 +2582,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
         else if (!strcmp(argv[i], "--isolation-test")) isolation_test = 1;
-        else if (!strcmp(argv[i], "--cterm-server")) cterm_server = 1;
+        else if (!strcmp(argv[i], "--cterm-server")) { cterm_server = 1; cterm_server_explicit = 1; }
+        else if (!strcmp(argv[i], "--no-cterm-server")) { cterm_server = 0; cterm_server_explicit = 1; }
         else if (!strcmp(argv[i], "--set-host") && i + 1 < argc) set_host_to = argv[++i];
         else if (!strcmp(argv[i], "--user") && i + 1 < argc)     set_host_user = argv[++i];
         else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
@@ -2548,12 +2622,32 @@ int main(int argc, char **argv)
     if (fal_accept_test)
         return run_fal_accept_test();
 
-    /* --set-host CLIENT self-sources its executor address from the node's DECnet
-     * configuration (rd vms-f54) so DCL's SET HOST wiring need not know it. When
-     * no --address was given, read it from executor.dat; if that is absent the
-     * NOADDRESS error below fires -- still never an invented address. */
+    /* A router routes and a --set-host CLIENT bridges a terminal; neither is a
+     * NETACP that serves inbound object-42 sessions unless the caller pins it on.
+     * The persistent ENDNODE daemon serves by default (see cterm_server above). */
+    if ((router_mode || set_host_to) && !cterm_server_explicit)
+        cterm_server = 0;
+
+    /* RESOLVE THE DATALINK INTERFACE. When --iface was not given (the persistent
+     * NETACP daemon STARTNET.COM starts with no argv), auto-detect the primary
+     * NIC rather than binding the compile-time "br0" -- inside a booted node's
+     * netns the NIC is eth0/ETH0:, not the dev-lab bridge (rd vms-a70 direction
+     * B, gap B). Explicit --iface (the veth/lab harness) always wins; if
+     * detection finds nothing the compiled default stands and the open below
+     * fails honestly. */
+    static char ifname_auto[IF_NAMESIZE];
+    if (!ifname_explicit && decnet_autodetect_iface(ifname_auto, sizeof(ifname_auto)))
+        ifname = ifname_auto;
+
+    /* SELF-SOURCE the executor address from the node's DECnet configuration
+     * (executor.dat, rd vms-f54) whenever --address was not given -- for the
+     * --set-host CLIENT (so DCL's SET HOST wiring need not know it), for the
+     * persistent NETACP daemon SYS$MANAGER:STARTNET.COM starts with no argv
+     * (rd vms-a70 direction B), and for --show-executor. If executor.dat is
+     * absent the NOADDRESS error below fires -- DECnet is simply not configured
+     * on this node, and no address is ever invented (INV-6). */
     static char sethost_addrbuf[16];
-    if (set_host_to && !addr_s) {
+    if (!addr_s) {
         unsigned ea = 0, en = 0;
         if (sethost_source_executor(&ea, &en) == 0) {
             snprintf(sethost_addrbuf, sizeof(sethost_addrbuf), "%u.%u", ea, en);
@@ -2565,6 +2659,20 @@ int main(int argc, char **argv)
      * resolve_node_identity discipline: a wrong identity must never be made up). */
     unsigned area = 0, node = 0;
     if (!addr_s || parse_addr(addr_s, &area, &node) != 0) {
+        /* BARE AUTO-START on an UNCONFIGURED node (argc == 1: the persistent
+         * NETACP daemon SYS$MANAGER:STARTNET.COM launches with no argv, having
+         * found no executor address in the node's DECnet configuration). This is
+         * NOT an error -- an unconfigured node simply runs no DECnet. Exit CLEAN
+         * (success), logging the honest no-op, so STARTNET's RUN/DETACHED leaves
+         * neither a failed process nor a %DCL abort on the boot console (INV-6).
+         * An EXPLICIT invocation (any flag: --set-host, --show-executor, --router,
+         * ...) with no resolvable address is still the caller's error below. */
+        if (argc == 1) {
+            printf("DECNETD-I-NOCONFIG, DECnet is not configured on this node"
+                   " (no executor address); NETACP not started\n");
+            fflush(stdout);
+            return 0;
+        }
         fprintf(stderr, "DECNETD-E-NOADDRESS, a valid --address AREA.NODE is"
                         " required (1..63 . 1..1023); refusing to invent an"
                         " executor address\n");
@@ -2600,6 +2708,18 @@ int main(int argc, char **argv)
             dnet_engine_set_router(&e, (uint8_t)router_priority);
         dnet_engine_show_executor(&e, stdout);
         dnet_engine_show_circuit(&e, stdout);
+        /* Report, honestly, whether the persistent daemon would SERVE inbound
+         * $ SET HOST -- the serve decision STARTNET.COM's NETACP inherits (the
+         * endnode daemon serves object 42 by default; a router or --set-host
+         * client, or --no-cterm-server, does not). This is a dry-run readout:
+         * --show-executor opens no socket, so it never actually serves here. */
+        printf("Inbound SET HOST (object 42) = %s\n",
+               cterm_server ? "served (CTERM -> LOGINOUT)" : "not served");
+        /* The Linux datalink the daemon WOULD bind (auto-detected primary NIC
+         * unless --iface pinned it) -- the dry-run readout of gap-B resolution;
+         * no socket is opened here. */
+        printf("Datalink interface = %s%s\n", ifname,
+               ifname_explicit ? " (--iface)" : " (auto-detected primary NIC)");
         return 0;
     }
 
@@ -2669,6 +2789,16 @@ int main(int argc, char **argv)
            router_mode ? "L1 router" : "endnode", eng.circuit);
     dnet_engine_show_executor(&eng, stdout);
     dnet_engine_show_circuit(&eng, stdout);
+    /* Say, honestly, whether this NETACP serves inbound $ SET HOST. When it
+     * does, an inbound object-42 connect reaches LOGINOUT on an executive-minted
+     * RTAn: (one session at a time); the remote user authenticates fresh. */
+    log_ts(stdout);
+    if (cterm_server)
+        printf(" DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session"
+               " Control object 42 -> LOGINOUT on RTAn:); one session at a time\n");
+    else
+        printf(" DECNETD-I-ROUTEONLY, NOT serving inbound $ SET HOST"
+               " (routing only)\n");
     fflush(stdout);
 
     /* --set-host CLIENT (rd vms-f54): the OUTBOUND half of $ SET HOST. It opens

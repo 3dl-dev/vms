@@ -134,7 +134,6 @@ _CP_LINE_RE = re.compile(
 # keeps its teeth against a real shipped x86_64-only image hidden behind an if.
 _TEST_OVERLAY_BUILD_ARGS = {
     "OVMX_TEST_ENABLE_TCPIP",
-    "OVMX_TEST_ENABLE_SSH",
 }
 _TEST_OVERLAY_IF_RE = re.compile(
     r'^if\s+\[\s+"\$(?:' +

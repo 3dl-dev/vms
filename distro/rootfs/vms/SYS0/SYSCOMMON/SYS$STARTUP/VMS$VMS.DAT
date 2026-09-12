@@ -62,4 +62,20 @@
 ! ever being created (tests/qemu/test_job_control_negctl.sh proves exactly
 ! that against a real boot).
 !
+! DECnet Phase IV (rd vms-a70 direction B). STARTNET.COM starts the network
+! ancillary control process (NETACP = SYS$SYSTEM:DECNETD.EXE, detached) ONLY when
+! an executor address is configured (NCP SET EXECUTOR ADDRESS); an unconfigured
+! node starts nothing and says so. NETACP then serves inbound $ SET HOST
+! (Session Control object 42 -> LOGINOUT on an executive-minted RTAn:).
+!
+! PHASE = LPBETA, for the SAME dependency reason JOB_CONTROL is at END: NETACP
+! (DECNETD.EXE) resolves its shareable-image dependencies (LIBVMS, LIBVMSRMS)
+! through dynamic activation, which needs SYSTARTUP_VMS.COM's Priority 1 INSTALL
+! ADD registrations -- and SYSTARTUP_VMS.COM is the last real action of the
+! LPMAIN phase. LPBETA runs strictly AFTER LPMAIN completes (so the INSTALL ADDs
+! are done) and before END's console login loop, bringing the network up before
+! the login prompt. Its sibling network layered product (TCP/IP) starts the same
+! declarative way, from SYS$STARTUP:TCPIP$STARTUP.COM.
+!
+LPBETA SYS$MANAGER:STARTNET.COM
 END SYS$STARTUP:JOB_CONTROL_STARTUP.COM

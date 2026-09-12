@@ -162,7 +162,13 @@ foreach(_anchored
         test_syssvc_setuai
         test_syssvc_loginout_acp
         test_syssvc_tcpip_host_acp
-        test_syssvc_tcpip_config_acp)
+        test_syssvc_tcpip_config_acp
+        # test_syssvc_tcpip_service_db (#878, vms-71b): reaches the persistent
+        # INETD service database over the ACP ONLY through the rms_textfile weak
+        # seam (tcpip_service_db.h -> rms_textfile_write_line/append_line/getline),
+        # so it needs the same force-bind as tcpip_config_acp or every store/read
+        # returns -1 with no honest RMS status.
+        test_syssvc_tcpip_service_db)
     if(TARGET ${_anchored})
         target_sources(${_anchored} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)

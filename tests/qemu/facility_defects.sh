@@ -541,7 +541,8 @@ loginout-acp-auth-from-ods2
 multiuser-stage-shared-not-peruser
 tcpip-config-hostaddr-not-defined
 tcpip-inetd-reply-not-connected
-tcpip-daytime-reply-not-formatted"
+tcpip-daytime-reply-not-formatted
+tcpip-svcdb-enable-not-persisted"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -5923,6 +5924,23 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    tcpip-svcdb-enable-not-persisted)
+        case "$_f" in
+        facility)     echo "TCP/IP Services PERSISTENT INETD SERVICE DATABASE (#878) -- the service-database management engine (tcpip_service_db.h, vms-71b) the DCL \`TCPIP {SET,SHOW,ENABLE,DISABLE,DELETE} SERVICE\` verbs drive. TCPIP\$INETD binds every ENABLED service in SYS\$SYSTEM:TCPIP\$SERVICE.DAT, which it reads over the Files-11 ACP at aux-server start; these verbs edit that database THE VMS WAY and PERSIST the change over the ACP (rms_textfile_*), so a DCL-enabled service survives reboot and is reapplied on the next TCPIP\$INETD start. Proven by test_syssvc_tcpip_service_db, which persists through the engine and reads back through the INDEPENDENT aux-server parser (tcpip_inetd_parse_db). With no executive the persistent WRITE fails TCPIP_SVCDB_ENOEXEC honestly, never a per-process fake.";;
+        targets)      echo "vmstcpip/mgmt/tcpip_service_db.h";;
+        suites_red)   echo "test_syssvc_tcpip_service_db";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "tcpip_svcdb_set_at() sets a NEWLY-created service's enabled flag from the caller's request with 'recs[i].enabled = (enable_flag == TCPIP_SVC_ENABLE) ? 1 : 0;'. The mutation forces it to 'recs[i].enabled = 0;', so a fresh SET SERVICE /ENABLE persists the record DISABLED. The store still succeeds and the record is still persisted, and the OTHER paths are untouched: the separate ENABLE SERVICE verb (tcpip_svcdb_enable_at, step 3), the re-SET of an already-enabled service (the else branch, step 5), the define-DISABLED-and-retained assertions (step 2, which expect disabled anyway), the DISABLE/DELETE/NOSUCH and the dismount-ENOEXEC assertions all stay green. ONLY the assertion that a fresh SET SERVICE /ENABLE is visible to the aux server reddens -- the exact enablement-on-create-not-persisted regression. One assignment neutralised.";;
+        require_fail) cat <<'EOF'
+the aux-server parser sees the ENABLED DAYTIME (port/user/image byte-exact) on the persisted bytes
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
     bgsock-recv-length-zeroed)
         case "$_f" in
         facility)     echo "BSD-sockets RTL veneer over BGn: -- the ovmx_recv() receive path of the OVMX sockets veneer (src/vmstcpip/sockets/vms_bgsock.c, vms-22a prereq), the DECC\$SOCKET-equivalent middle layer between an application's standard socket()/send()/recv() and the executive-resident BGn: driver. The app speaks ONLY sockets; the veneer translates them into the public \$ASSIGN TCPIP\$DEVICE: + \$QIO ops. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive (ovmx_socket -> ENODEV).";;
@@ -7173,6 +7191,18 @@ apply_edit() {
         # in test_syssvc_tcpip_daytime (which does not include this formatter)
         # reddens the well-formed-reply assertion.
         sed -i 's|n = strftime(out, outlen, TCPIP_DAYTIME_RFC867_FMT, &tmv); /\* NEGCTL tcpip-daytime-reply-not-formatted \*/|n = (size_t)snprintf(out, outlen, "X"); /* NEGCTL tcpip-daytime-reply-not-formatted */|' "$_file";;
+
+    tcpip-svcdb-enable-not-persisted)
+        # Force a NEWLY-created service's enable flag off in tcpip_svcdb_set_at():
+        # 'recs[i].enabled = (enable_flag == TCPIP_SVC_ENABLE) ? 1 : 0;' -> '... = 0;',
+        # so a fresh SET SERVICE /ENABLE persists the record DISABLED. Anchored on
+        # its own NEGCTL comment so the text is unique (the identical else-branch
+        # line carries no comment and is never matched); after substitution the
+        # original expression with that comment is gone, making a second apply the
+        # no-op the selftest requires. The store still succeeds and the separate
+        # ENABLE verb + the re-SET-of-an-already-enabled path stay green, so only
+        # the "aux server sees the freshly SET+ENABLEd service" assertion reddens.
+        sed -i 's|recs\[i\].enabled = (enable_flag == TCPIP_SVC_ENABLE) ? 1 : 0; /\* NEGCTL tcpip-svcdb-enable-not-persisted \*/|recs[i].enabled = 0; /* NEGCTL tcpip-svcdb-enable-not-persisted */|' "$_file";;
 
     bgsock-recv-length-zeroed)
         # Zero the received byte count in ovmx_recv(), anchored on its own NEGCTL

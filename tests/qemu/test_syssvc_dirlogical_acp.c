@@ -72,7 +72,17 @@
 #define SYSUAF_LEN 512
 static const uint8_t SYSUAF_PROLOG3[] = {
     0x03, 0x00, 0x02, 0x00, 0x01, 0x00, 0x03, 0x00,
-    0x10, 0x00, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00,
+    /* byte 10 = P3_FP_OFF_ALLOC_NEXT (u32 write high-water, "next free VBN"): it
+     * scales with the file, so it tracks the shipped account set. 0x1c (28) was
+     * the 7-account seed; the shipped SYSUAF now carries the low-priv
+     * TCPIP$DAYTIME service account (rd vms-8bd, R4 G1) -> 8 accounts -> 0x1f
+     * (31). This is a benign allocation-cursor advance, NOT a prolog change: the
+     * $UAFDEF Prolog-3 structure is intact (mksysuaf's RMS engine authored it and
+     * a full RMS readback resolves every account, TCPIP$DAYTIME included). The
+     * golden is regenerated alongside SYSUAF.DAT -- same "regen both together"
+     * discipline as RIGHTSLIST. Re-derive after any account-set change:
+     * `xxd -l 16 distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/SYSUAF.DAT`. */
+    0x10, 0x00, 0x1f, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 #define ODS2_FH2_M_DIRECTORY 0x2000u

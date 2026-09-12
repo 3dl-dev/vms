@@ -4,6 +4,12 @@
 ! DAYTIME is enabled here so the aux server launches TCPIP$DAYTIME.EXE and answers
 ! inbound on :13, proving the (B) ACP-stage launch mechanism end to end.
 !
-!     service-name  port  image-filespec  [image-args...]
+!     service-name  port  [run-as-user]  image-filespec  [image-args...]
 !
-DAYTIME 13 SYS$SYSTEM:TCPIP$DAYTIME.EXE
+! run-as-user (optional) is a SYSUAF username the auxiliary server drops to
+! (UIC + authorized privileges) before executing the service image (rd vms-8bd,
+! R4 G1). It is the token with no colon or slash; the image-filespec always
+! carries a device colon, so the two never collide. DAYTIME runs as the
+! low-privilege TCPIP$DAYTIME service account, NOT SYSTEM.
+!
+DAYTIME 13 TCPIP$DAYTIME SYS$SYSTEM:TCPIP$DAYTIME.EXE

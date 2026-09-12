@@ -78,6 +78,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -124,6 +125,8 @@
 struct tcpip_service {
     char     name[TCPIP_INETD_NAME_MAX];
     uint16_t port;
+    char     user[TCPIP_INETD_NAME_MAX];    /* per-service run-as account (SYSUAF
+                                             * username, R4 G1); "" = none configured */
     char     image[TCPIP_INETD_PATH_MAX];   /* argv[0]: the service image */
     char     args[TCPIP_INETD_ARGS_MAX];    /* whitespace-separated extra argv */
 };
@@ -179,8 +182,21 @@ static inline int tcpip_inetd_parse_db(const char *text,
             continue;
         s.port = (uint16_t)port;
 
-        tok = strtok_r(NULL, " \t", &save);         /* image-filespec */
+        /* Next token is either a per-service run-as USERNAME (R4 G1) or the
+         * image-filespec. Disambiguate structurally: an image filespec always
+         * carries device/path punctuation (a VMS "SYS$SYSTEM:..." has ':', a
+         * Linux "/path" has '/'), a VMS username never does. So a token with
+         * neither ':' nor '/' is the run-as account and the image is the token
+         * after it; a token with either is the image and no account is
+         * configured. This keeps the older "name port image [args]" format
+         * parsing unchanged (user stays ""). */
+        tok = strtok_r(NULL, " \t", &save);
         if (!tok) continue;
+        if (strchr(tok, ':') == NULL && strchr(tok, '/') == NULL) {
+            strncpy(s.user, tok, sizeof(s.user) - 1);
+            tok = strtok_r(NULL, " \t", &save);     /* image-filespec */
+            if (!tok) continue;
+        }
         strncpy(s.image, tok, sizeof(s.image) - 1);
 
         /* Any remaining tokens are the image's arguments (kept as a single
@@ -291,14 +307,27 @@ static inline int tcpip_inetd_preflight(const struct tcpip_service *svc)
     return 0;
 }
 
+/* Per-service identity establishment, run in the forked child before execv
+ * (rd vms-8bd, R4 G1). It must drop the child from INETD's SYSTEM/all-privs
+ * identity to the service's configured run-as account and return 0, or return
+ * <0 to FAIL-CLOSED (the child then _exit()s WITHOUT execv -- the service is not
+ * launched, and NEVER inherits SYSTEM). The production image passes the real
+ * establisher (tcpip_inetd_establish_service_identity, tcpip_inetd_ident.c); a
+ * transport test may pass NULL to skip the drop (identity is proven separately by
+ * the ident unit test + the booted-runtime e2e, not the transport round-trip). */
+typedef int (*tcpip_inetd_identity_fn)(const struct tcpip_service *svc);
+
 /* Spawn the configured service image on an ALREADY-ACCEPTED connection handle:
  * materialize the accepted BG channel as a real executive-backed fd, then
  * fork()+execv() the service image with that fd as its SYS$INPUT (stdin) and
- * SYS$OUTPUT (stdout) -- the inetd contract. The parent closes its copy of the
- * accepted handle (the connection stays alive on the child's materialized fd,
- * whose last-reference $DASSGN drives the FIN, vms-0cd) and returns the child
- * pid (> 0), or -1 with errno on failure. */
-static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service *svc)
+ * SYS$OUTPUT (stdout) -- the inetd contract. In the child, before execv, drop to
+ * the service's run-as identity via `identity_fn` (fail-closed: if it returns <0
+ * the service is NOT launched, R4 G1); NULL skips the drop (transport tests only).
+ * The parent closes its copy of the accepted handle (the connection stays alive on
+ * the child's materialized fd, whose last-reference $DASSGN drives the FIN,
+ * vms-0cd) and returns the child pid (> 0), or -1 with errno on failure. */
+static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service *svc,
+                                      tcpip_inetd_identity_fn identity_fn)
 {
     int rfd;
     pid_t pid;
@@ -353,7 +382,33 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
         if (dup2(rfd, STDOUT_FILENO) != STDOUT_FILENO) _exit(126); /* NEGCTL tcpip-inetd-reply-not-connected */
         if (rfd > STDERR_FILENO)
             close(rfd);
+        /* R4 G1: drop from INETD's SYSTEM/all-privs identity to the service's
+         * configured run-as account BEFORE execv. FAIL-CLOSED -- if the identity
+         * cannot be established (no account, unknown account, executive refused,
+         * or the credential drop failed) the service is NOT launched; it never
+         * runs as SYSTEM. (identity_fn NULL = transport test, no drop.) */
+        if (identity_fn != NULL && identity_fn(svc) != 0)
+            _exit(125);                         /* fail-closed: identity not established */
         execv(exec_path, argv);
+        /* execv returned -> it FAILED. Two sinks, asymmetric (R4 posture, #1168):
+         * the FULL detail (which image, errno) to stderr -> SYS$MANAGER:TCPIP$INETD.LOG
+         * (an operator record), and a GENERIC "service unavailable" to the accepted
+         * socket (STDOUT, dup2'd above) -- an unauthenticated client is not told the
+         * image path or errno. Distinguishes an execv failure from an identity
+         * refusal in the operator log without leaking internals to the client
+         * (rd vms-8bd). */
+        {
+            char eb[256];
+            int en = snprintf(eb, sizeof(eb),
+                              "%%OVMX-F-NOSTART, service image %s could not be "
+                              "launched: %s\n", exec_path, strerror(errno));
+            if (en > 0) {
+                size_t el = (en < (int)sizeof(eb)) ? (size_t)en : sizeof(eb) - 1;
+                (void)!write(STDERR_FILENO, eb, el);
+            }
+            static const char generic[] = "%OVMX-F-NOSVC, service unavailable\n";
+            (void)!write(STDOUT_FILENO, generic, sizeof(generic) - 1);
+        }
         _exit(127);                             /* execv failed */
     }
 
@@ -366,13 +421,15 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
 }
 
 /* Accept one inbound connection on a listening handle and dispatch it to the
- * configured service image. Blocks in ovmx_accept() until a client connects.
- * On success returns the spawned service's pid (> 0) and, if `peer` is
- * non-NULL, fills it with the client's address. Returns -1 with errno on
- * failure (ENODEV = no /dev/vms). */
+ * configured service image, dropping to the service's run-as identity in the
+ * spawned child via `identity_fn` (fail-closed, R4 G1; NULL = transport test).
+ * Blocks in ovmx_accept() until a client connects. On success returns the
+ * spawned service's pid (> 0) and, if `peer` is non-NULL, fills it with the
+ * client's address. Returns -1 with errno on failure (ENODEV = no /dev/vms). */
 static inline pid_t tcpip_inetd_accept_dispatch(int listen_h,
                                                 const struct tcpip_service *svc,
-                                                struct sockaddr_in *peer)
+                                                struct sockaddr_in *peer,
+                                                tcpip_inetd_identity_fn identity_fn)
 {
     int a;
     struct sockaddr_in pa;
@@ -386,7 +443,7 @@ static inline pid_t tcpip_inetd_accept_dispatch(int listen_h,
         return -1;                              /* errno (ENODEV) preserved */
     if (peer)
         *peer = pa;
-    return tcpip_inetd_spawn(a, svc);
+    return tcpip_inetd_spawn(a, svc, identity_fn);
 }
 
 /* The fork-flood back-pressure gate (rd vms-bb4, R4 G2): may the auxiliary server

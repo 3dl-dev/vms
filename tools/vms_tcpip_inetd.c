@@ -38,6 +38,17 @@
 #include "vms/pcb.h"
 #include "rms/rms.h"        /* rms_stage_over_acp: read the DB off the ODS-2 ACP */
 #include "tcpip_inetd.h"
+#include "tcpip_inetd_ident.h"  /* R4 G1: per-service run-as identity drop before execv */
+
+/* The production identity hook: drop the spawned child to the service's
+ * configured SYSUAF run-as account (executive setident + Linux cred drop),
+ * fail-closed. Passed to accept_dispatch so tcpip_inetd_spawn establishes it in
+ * the child before execv -- never launches a service as INETD's SYSTEM/all-privs
+ * identity (rd vms-8bd). */
+static int inetd_drop_identity(const struct tcpip_service *svc)
+{
+    return tcpip_inetd_establish_service_identity(svc->user, NULL, NULL);
+}
 
 /* Default service DB path when none is given on the command line. The running
  * OVMX system resolves SYS$SYSTEM: through the Files-11 ACP; on a booted distro
@@ -196,7 +207,11 @@ int main(int argc, char *argv[])
         for (i = 0; i < nsvc && r > 0; i++) {
             if (pfd[i].fd < 0 || !(pfd[i].revents & POLLIN))
                 continue;
-            if (tcpip_inetd_accept_dispatch(listen_h[i], &svcs[i], NULL) > 0)
+            /* Drop the spawned child to the service's run-as identity (G1,
+             * inetd_drop_identity) AND count it toward the concurrency cap so the
+             * back-pressure gate (G2) can stop accepting at MAXCHILD. */
+            if (tcpip_inetd_accept_dispatch(listen_h[i], &svcs[i], NULL,
+                                            inetd_drop_identity) > 0)
                 live++;                         /* a service child was spawned */
         }
         /* Reap any finished service images (non-blocking); each exit frees a slot. */

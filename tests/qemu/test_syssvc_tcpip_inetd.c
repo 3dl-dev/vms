@@ -60,6 +60,7 @@
  * -- the same idiom test_syssvc_tcpip_ping.c uses for tcpip_ping.h -- because
  * src/vmstcpip/services is not on the QEMU test -I path (only .../sockets is). */
 #include "../../src/vmstcpip/services/tcpip_inetd.h"
+#include "../../src/vmstcpip/services/tcpip_inetd_ident.h"  /* R4 G1 fail-closed identity drop */
 
 #define EXIT_SKIP   77
 #define INETD_PORT  15007                       /* the well-known port under test */
@@ -71,6 +72,25 @@ static int pass = 0, fail = 0;
     if (cond) { printf("  PASS: %s\n", msg); pass++; } \
     else { printf("  FAIL: %s\n", msg); fail++; } \
 } while (0)
+
+/* ---- R4 G1 fail-closed identity-drop mocks (no /dev/vms) --------------------
+ * The security property: if the executive REFUSES the run-as identity, the drop
+ * must fail and the Linux credential drop must NOT be attempted (fail-closed
+ * short-circuit) -- the service is never launched, never as SYSTEM. */
+static uint32_t g_ident_ret;            /* status mock_setident returns (odd=accept) */
+static int      g_cred_attempted;       /* set if the cred table was touched at all */
+static uid_t    g_uid;                  /* tracks the last mock setuid, for the verify */
+static gid_t    g_gid;                  /* tracks the last mock setgid, for the verify */
+static uint32_t mock_setident(const char *u, uint32_t uic, uint64_t p)
+{ (void)u; (void)uic; (void)p; return g_ident_ret; }
+static int mock_setgroups(size_t n, const gid_t *l)
+{ (void)n; (void)l; g_cred_attempted = 1; return 0; }
+static int mock_setgid(gid_t g) { g_gid = g; g_cred_attempted = 1; return 0; }
+static int mock_setuid(uid_t u) { g_uid = u; g_cred_attempted = 1; return 0; }
+static uid_t mock_getuid(void)  { return g_uid; }
+static uid_t mock_geteuid(void) { return g_uid; }
+static gid_t mock_getgid(void)  { return g_gid; }
+static gid_t mock_getegid(void) { return g_gid; }
 
 /* -----------------------------------------------------------------------
  * SERVICE-IMAGE MODE. When this binary is re-exec'd by the auxiliary server
@@ -215,8 +235,30 @@ int main(int argc, char *argv[])
     CHECK(nsvc == 1 && svcs[0].port == INETD_PORT &&
           strcmp(svcs[0].name, "ECHO") == 0 &&
           strcmp(svcs[0].image, self) == 0 &&
-          strcmp(svcs[0].args, SVC_MARKER) == 0,
-          "TCPIP$SERVICE.DAT parses to the ECHO service (port, image, args)");
+          strcmp(svcs[0].args, SVC_MARKER) == 0 &&
+          svcs[0].user[0] == '\0',
+          "TCPIP$SERVICE.DAT parses to the ECHO service (port, image, args; no run-as account)");
+
+    /* ---- R4 G1 run-as-USER field parse (rd vms-8bd) ----------------------
+     * The daytime cold-boot line format is "NAME port USERNAME image": the
+     * auxiliary server drops to USERNAME before launching the image. Parse must
+     * populate svc.user from the token that carries no ':' and no '/', and take
+     * the following ':'-bearing token as the image (the exact shape of the
+     * shipped/overlay DAYTIME line). This is the structural disambiguation the
+     * e2e depends on, grounded here rather than only in CI. */
+    {
+        struct tcpip_service u[TCPIP_INETD_MAX_SERVICES];
+        const char *udb =
+            "! run-as-user line\n"
+            "DAYTIME 13 TCPIP$DAYTIME SYS$SYSTEM:TCPIP$DAYTIME.EXE\n";
+        int un = tcpip_inetd_parse_db(udb, u, TCPIP_INETD_MAX_SERVICES);
+        CHECK(un == 1 && u[0].port == 13 &&
+              strcmp(u[0].name, "DAYTIME") == 0 &&
+              strcmp(u[0].user, "TCPIP$DAYTIME") == 0 &&
+              strcmp(u[0].image, "SYS$SYSTEM:TCPIP$DAYTIME.EXE") == 0 &&
+              u[0].args[0] == '\0',
+              "R4 G1: 'NAME port USERNAME image' parses the run-as account and the image (never conflated)");
+    }
 
     /* ---- Bind-time PRE-FLIGHT (rd vms-f00) -------------------------------
      * The auxiliary server must not ADVERTISE a service it cannot deliver: a
@@ -253,6 +295,37 @@ int main(int argc, char *argv[])
           "fork-flood gate: back-pressure AT the child cap (no unbounded fork)");
     CHECK(tcpip_inetd_may_accept(TCPIP_INETD_MAXCHILD + 10) == 0,
           "fork-flood gate: back-pressure above the child cap");
+
+    /* ---- R4 G1 fail-closed identity drop (rd vms-8bd) ---------------------
+     * The service must NOT launch (and NEVER as SYSTEM) unless its configured
+     * run-as identity is fully established. Pure policy over mock tables -- no
+     * executive needed, runs on every platform. */
+    {
+        struct ovmx_ident_syscalls mid = { .fn_setident = mock_setident };
+        struct ovmx_cred_syscalls  mcd = {
+            .fn_setgroups = mock_setgroups, .fn_setgid = mock_setgid,
+            .fn_setuid = mock_setuid, .fn_getuid = mock_getuid,
+            .fn_geteuid = mock_geteuid, .fn_getgid = mock_getgid,
+            .fn_getegid = mock_getegid,
+        };
+        /* An empty run-as account: fail-closed, never a SYSTEM fallback. */
+        CHECK(tcpip_inetd_establish_service_identity("", &mid, &mcd) != 0,
+              "R4 G1: a service with NO configured run-as account fails CLOSED (never SYSTEM)");
+        /* Executive REFUSES the identity (even status) -> apply fails closed AND
+         * the credential drop is never attempted (short-circuit). */
+        g_ident_ret = 0;            /* even = refused */
+        g_cred_attempted = 0;
+        CHECK(tcpip_inetd_apply_identity("SVC", 0x00800085u, 128, 133, 0,
+                                         &mid, &mcd) != 0,
+              "R4 G1: a REFUSED executive identity fails CLOSED (service not launched)");
+        CHECK(g_cred_attempted == 0,
+              "R4 G1: on a refused identity the Linux credential drop is NOT attempted (fail-closed short-circuit)");
+        /* Executive ACCEPTS (odd) + creds verify -> the drop succeeds. */
+        g_ident_ret = 1;            /* odd = accepted */
+        CHECK(tcpip_inetd_apply_identity("SVC", 0x00800085u, 128, 133, 0,
+                                         &mid, &mcd) == 0,
+              "R4 G1: an accepted identity + verified cred drop succeeds");
+    }
 
     if (!executive_present()) {
         /*
@@ -295,7 +368,12 @@ int main(int argc, char *argv[])
 
     /* ---- Accept the inbound connection and SPAWN the service image ------- */
     memset(&peer, 0, sizeof(peer));
-    svc_pid = tcpip_inetd_accept_dispatch(listen_h, &svcs[0], &peer);
+    /* identity_fn = NULL: this suite proves the TRANSPORT (accept -> spawn ->
+     * byte round-trip through the executive), not the R4 G1 identity drop -- the
+     * drop's fail-closed policy is unit-tested below (tcpip_inetd_apply_identity
+     * with mock tables) and proven end-to-end on the booted runtime, so the echo
+     * service here launches without a SYSUAF-resolved persona. */
+    svc_pid = tcpip_inetd_accept_dispatch(listen_h, &svcs[0], &peer, NULL);
     CHECK(svc_pid > 0,
           "accept fires on the inbound connect and the auxiliary server spawns the configured service image");
 

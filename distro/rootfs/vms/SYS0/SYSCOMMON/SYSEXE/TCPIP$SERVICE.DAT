@@ -13,13 +13,22 @@
 !
 ! One ENABLED service per line:
 !
-!     service-name  port  image-filespec  [image-args...]
+!     service-name  port  [run-as-user]  image-filespec  [image-args...]
 !
 ! separated by whitespace. "port" is the decimal TCP port the auxiliary server
-! binds over the executive BGn: seam; "image-filespec" is the service image the
-! auxiliary server runs on an inbound connection (with the accepted connection
-! as its SYS$INPUT/SYS$OUTPUT); any trailing tokens are passed to the image as
-! arguments. Lines beginning with "!" and blank lines are comments/ignored.
+! binds over the executive BGn: seam. "run-as-user" is OPTIONAL: a SYSUAF
+! username the auxiliary server drops to (its UIC + authorized privileges) via
+! vms_kif_setident before executing the service image (rd vms-8bd, R4 G1) -- so
+! a service runs under its own low-privilege account, never SYSTEM. It is
+! identified positionally as the token that carries NO device colon and NO
+! slash; because "image-filespec" always carries a device colon
+! (e.g. SYS$SYSTEM:...), the two never collide. A line with no run-as-user token
+! FAILS CLOSED: the auxiliary server refuses to launch that service rather than
+! run it privileged (fail-closed is the security fix, not a SYSTEM fallback).
+! "image-filespec" is the service image the auxiliary server runs on an inbound
+! connection (with the accepted connection as its SYS$INPUT/SYS$OUTPUT); any
+! trailing tokens are passed to the image as arguments. Lines beginning with
+! "!" and blank lines are comments/ignored.
 !
 ! To enable a service, add its line here; the auxiliary server binds it when
 ! @SYS$STARTUP:TCPIP$STARTUP starts TCPIP$INETD.EXE.
@@ -28,15 +37,15 @@
 ! It is listed here but commented out until VMSSSHD.EXE ships in the bootable
 ! image; uncomment to enable once present (do NOT fake an unbound service).
 !
-! SSH   22  SYS$SYSTEM:VMSSSHD.EXE
+! SSH   22  TCPIP$SSH  SYS$SYSTEM:VMSSSHD.EXE
 !
 ! DAYTIME (RFC 867), rd vms-477 -- the first ENABLED service: a genuine
 ! standalone image (TCPIP$DAYTIME.EXE) the auxiliary server launches end to end
 ! over the executive. On an inbound connection to port 13 the auxiliary server
-! spawns TCPIP$DAYTIME.EXE with the accepted connection as its SYS$INPUT/
-! SYS$OUTPUT; the image writes the current date/time as a one-line ASCII string
-! (RFC 867) and exits.
-! DAYTIME 13 SYS$SYSTEM:TCPIP$DAYTIME.EXE
+! drops to the TCPIP$DAYTIME service account and spawns TCPIP$DAYTIME.EXE with
+! the accepted connection as its SYS$INPUT/SYS$OUTPUT; the image writes the
+! current date/time as a one-line ASCII string (RFC 867) and exits.
+! DAYTIME 13 TCPIP$DAYTIME SYS$SYSTEM:TCPIP$DAYTIME.EXE
 !   ^ DISABLED by default (rd vms-21b). The shipped default auto-starts NO network
 !     service: this line is commented AND SYSTARTUP_VMS.COM does not invoke
 !     @SYS$STARTUP:TCPIP$STARTUP, so TCPIP$INETD never runs and nothing binds a

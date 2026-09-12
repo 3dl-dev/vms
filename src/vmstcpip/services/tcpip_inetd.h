@@ -65,9 +65,13 @@
  * SCOPE (this rung). Bind + listen + accept + spawn over IPv4/loopback for the
  * services named in TCPIP$SERVICE.DAT; one accepted connection dispatched to
  * the configured image at a time per listener (the classic inetd wait model).
+ * SINCE SHIPPED (R4, no longer deferred): per-service run-as identity -- each
+ * spawned service drops to its configured SYSUAF account before execv,
+ * fail-closed (rd vms-8bd, tcpip_inetd_ident.c); and a concurrency cap --
+ * TCPIP_INETD_MAXCHILD with accept back-pressure (rd vms-bb4).
  * DEFERRED honestly to later rungs (NOT faked here): the persistent binary
  * service database (#878), UDP/dgram services, the "nowait" concurrent model,
- * per-service run-as/user identity, and access-control lists.
+ * and access-control lists.
  */
 
 #ifndef _OVMX_TCPIP_INETD_H

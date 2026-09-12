@@ -85,6 +85,32 @@
 void cnxman_quorum_recompute(struct vms_club *club);
 
 /*
+ * RECOMPUTE IF -- AND ONLY IF -- THIS NODE IS REALLY A MEMBER (rd vms-d0d).
+ *
+ * The trigger a running node uses on itself, for the two events that can change
+ * the answer: a transition COMMIT (design SS3.7 "recomputed on transitions",
+ * p. 7-42) and a member's PARAMS record arriving in between (SS3.7 "the CLUB
+ * tracks CEVOTES/QUORUM from every member's advertised VOTES ... from day one
+ * so $GETSYI reports truth").
+ *
+ * It exists because the ADMITTED node has no other source for these figures:
+ * p. 7-42 task 2's proposed->effective copy carries the COORDINATOR's
+ * arithmetic, and a joiner never ran one -- so without this it counts its
+ * fellow members and reports CEVOTES/QUORUM 0 while the peer's real advertised
+ * VOTES sit in its own CSB table. Here it does what the founding node does at
+ * genesis: applies p. 7-6 to the votes the executive really holds.
+ *
+ * INV-6: runs only when cl->state is VMS_CLUSTER_MEMBER (which only a real
+ * Phase 2 commit of a real MEMBER flag ever sets) AND this node's own local CSB
+ * is in the selected, params-learned set. Otherwise it changes NOTHING and
+ * returns 0 -- an un-computed quorum stays honestly absent rather than becoming
+ * a zero, or a local-only number, that the rest of the cluster never agreed to.
+ *
+ * Returns nonzero iff the recompute really ran. A NULL cluster changes nothing.
+ */
+int cnxman_quorum_member_recompute(struct vms_cluster *cl);
+
+/*
  * The published formula, split into its two published steps so that every
  * caller in the executive computes quorum with ONE implementation
  * (single-ledger; a second copy is how a founding node and a running cluster

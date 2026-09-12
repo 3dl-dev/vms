@@ -16,6 +16,7 @@
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_phase2.h"
+#include "vms_cnxman_quorum.h"   /* task 2: the admitted node's own arithmetic */
 #include "vms_dlm_ldwv.h"   /* task 5: the lock directory weight vector */
 
 /* ==========================================================================
@@ -272,6 +273,28 @@ uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
 	phase2_commit_quorum(club);
 	members = phase2_commit_count(club, in, st, ops);
 	phase2_commit_local_membership(cl, ops);
+
+	/*
+	 * TASK 2, FINISHED FOR A NODE THAT HAD NOTHING TO COPY (rd vms-d0d).
+	 *
+	 * The copy above is the proposal's -- the coordinator's arithmetic. An
+	 * ADMITTED node never ran one, so on its path task 2 moves nothing and
+	 * its CEVOTES/QUORUM stay the pre-cluster zeroes even though the
+	 * members' advertised VOTES are sitting in its own CSB table (measured
+	 * on the live 2-node cluster, #1119). Here -- after task 1 has written
+	 * the SELECTED flags and task 4 has made this node's membership real,
+	 * which is what makes the walk's input a COMMITTED membership rather
+	 * than a proposed one -- p. 7-6 is applied to that table, exactly as a
+	 * founding node applies it to its own.
+	 *
+	 * It cannot contradict the copy: club->cevotes is read back in as "Old
+	 * CEVOTES" (pp. 7-10/7-11, the value cannot decrease by itself), so a
+	 * coordinator's committed proposal is the floor of the result, never
+	 * overwritten by a smaller one. And it asserts nothing on a node whose
+	 * own membership task 4 did NOT establish: the callee refuses outright.
+	 */
+	(void)cnxman_quorum_member_recompute(cl);
+
 	phase2_commit_ldwv(club, ops);
 
 	club->last_transition_ms = phase2_now(ops);

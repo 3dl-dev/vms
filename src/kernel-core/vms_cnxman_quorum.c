@@ -165,6 +165,58 @@ void cnxman_quorum_recompute(struct vms_club *club)
 	club->qdisk_votes = cnxman_quorum_qdskvotes(club);
 }
 
+/*
+ * THE RUNNING NODE'S RECOMPUTE TRIGGER (rd vms-d0d).
+ *
+ * cnxman_quorum_recompute() above is the arithmetic; this is the ONE predicate
+ * that says a node may run it on itself. It exists because a JOINER has no
+ * other way to hold quorum figures at all: p. 7-42 task 2 copies the PROPOSED
+ * cells to the effective ones, and the proposed cells are the COORDINATOR's
+ * arithmetic -- a node that was admitted never ran one, so on the live 2-node
+ * cluster node B counted both members and carried CEVOTES/QUORUM of zero while
+ * node A's real VOTES sat learned in B's own CSB table (measured, #1119).
+ *
+ * The answer is NOT to assert a quorum at commit: it is to do on the joiner
+ * exactly what the founder does at genesis -- walk THIS node's own CSB table
+ * and apply p. 7-6 to the votes really in it. Every summand is a CSB that
+ * received a real PARAMS record (csb->params_valid, enforced by the walk); a
+ * peer that has not advertised contributes nothing, so the figure can be
+ * INCOMPLETE but is never INVENTED.
+ *
+ * THE TWO CONDITIONS, and why each one is load-bearing (INV-6):
+ *
+ *   - cl->state == VMS_CLUSTER_MEMBER. Only phase2_commit_local_membership()
+ *     ever sets it, and only from the LOCAL CSB really carrying MEMBER. A node
+ *     that is merely connected to a cluster, or joining one, has no membership
+ *     to compute a quorum over, and a quorum published before admission is the
+ *     local-only fabrication this invariant names outright.
+ *   - the LOCAL CSB itself counts. Its VOTES/EXPECTED_VOTES are this node's own
+ *     SYSGEN parameters, learned at cnxman_club_init(); if they are not in the
+ *     table this node cannot even state its own contribution, and a sum that
+ *     silently omits the local system is worse than no sum.
+ *
+ * Idempotent (the recompute is), so every caller may fire it on every event
+ * that could change the answer: design SS3.7's "recomputed on transitions"
+ * plus each PARAMS record a member advertises in between.
+ *
+ * Returns nonzero iff the arithmetic really ran.
+ */
+int cnxman_quorum_member_recompute(struct vms_cluster *cl)
+{
+	const struct vms_club *club;
+
+	if (cl == NULL || cl->state != VMS_CLUSTER_MEMBER)
+		return 0;
+	club = &cl->club;
+	if (club->local_csb < 0 || (uint32_t)club->local_csb >= club->n_csb)
+		return 0;
+	if (!quorum_csb_counts(&club->csb[(uint32_t)club->local_csb]))
+		return 0;
+
+	cnxman_quorum_recompute(&cl->club);
+	return 1;
+}
+
 uint16_t cnxman_quorum_qdskvotes(const struct vms_club *club)
 {
 	const struct vms_csb *local;

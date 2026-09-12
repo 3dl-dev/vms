@@ -346,6 +346,24 @@ cluster_host_cnxman_test(test_cluster_api_getsyi test_cluster_api_getsyi.c)
 cluster_host_cnxman_test(test_cnxman_genesis        test_cnxman_genesis.c)
 cluster_host_cnxman_test(test_cnxman_genesis_negctl test_cnxman_genesis_negctl.c)
 
+# host_defects.sh selftest (vms-8e7): the STATIC anchor-drift check for the
+# host-native mutation manifest that pairs with test_cnxman_genesis_negctl
+# above -- a real sed(1) injection into a throwaway copy of src/kernel-core,
+# proving the anchor still matches and that re-applying it is refused as a
+# BROKEN FIXTURE rather than silently landing nothing. Fast (no compile, no
+# run of the suite itself): that claim belongs ONLY to
+# tests/cluster/host/run_host_negctl.sh, which rebuilds and runs the real
+# target and is therefore NOT wired to a bare `ctest` invocation (see its own
+# header; it runs as its own CI step in the Build & Test job).
+add_test(
+    NAME cluster_host_defects_selftest
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/host_defects.sh selftest ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(cluster_host_defects_selftest PROPERTIES
+    LABELS "unit;cluster;cluster_host;negctl"
+    TIMEOUT 30
+)
+
 # ---- FC-P0.10: cluster SYSGEN parameters loaded into struct vms_cluster ----
 # Same host-pure discipline: vms_cluster_sysgen.c takes no kernel header and no
 # SS$_ vocabulary, so its negctl (VAXCLUSTER >= 1 with no SCSNODE -> refused,

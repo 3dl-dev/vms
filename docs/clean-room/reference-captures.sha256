@@ -51,3 +51,4 @@ f0b8b49818f74912f82b1851c3c6f9cd71437d3eae07ebd0b8a5bfc76e6e16f8  cluster/captur
 751babb1fd6df7f933b071803489b73001c10bb6ae8b001c42eef963ab297bba  tests/lab/captures/vms-c03-dlm-opcodes-20260911/dlm-blk2-20260911.pcap
 e2e2be59f93d23233fbfa7a9c2bf6f936f3313c23c16054ead85c494b5be72eb  tests/lab/captures/vms-c03-dlm-opcodes-20260911/dlm-deq-20260911.pcap
 6ac0de0512f7b6111da4397dae6a8ee516781164a65db53d24d3b0fa89861c0c  tests/lab/captures/vms-c03-dlm-opcodes-20260911/dlm-lvb3-20260911.pcap
+69c572a633685525c967cf5035fe8232c5f7a24924cc47d2e2a2619a12200b44  tests/lab/captures/vms-727-lvb-20260911/c2-seq.pcap

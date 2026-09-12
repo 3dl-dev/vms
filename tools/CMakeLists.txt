@@ -40,6 +40,14 @@ set_target_properties(vms_login PROPERTIES
 )
 install(TARGETS vms_login RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
+# vms-843a / vms-16b (Option A): the SSH->DCL network-login AUTHORIZATION
+# decision (loginout_network_permit) is proven FAIL-CLOSED host-side -- no
+# executive, no live SSH -- the DECnet --*-selftest floor pattern. Runs
+# anywhere (Docker/CI); the live SSH->authenticated-DCL bracket is lab-gated
+# (vms-101), and the session-establish wiring is the tracked follow-on.
+add_test(NAME loginout_network_permit_selftest
+         COMMAND vms_login --network-permit-selftest)
+
 # HELP.EXE (vms-01b): the standalone image form of HELP. HELP is primarily a
 # DCL built-in (src/vmsdcl: cmd_help -> dcl_help.c); this image exists so the
 # INSTALLED SYS$SYSTEM:HELP.EXE can be run directly from a target device, the

@@ -902,11 +902,126 @@ static int console_login(void)
     return 1;
 }
 
+/* ================================================================== */
+/* NETWORK-LOGIN AUTHORIZATION (vms-843a / vms-16b, design               */
+/* docs/design-ssh-loginout-handoff.md, Option A)                        */
+/*                                                                       */
+/* The faithful SSH->DCL handoff routes an inbound SSH session through    */
+/* the ONE login primitive console login + DECnet SET HOST/CTERM use:     */
+/* $CREPRC(LOGINOUT.EXE, <vterm>, PRC$M_INTER|PRC$M_LOGINOUT). SSH        */
+/* authenticated the user IN-PROTOCOL (cryptographic pubkey/password vs   */
+/* the SAME SYSUAF/Purdy authority, proven vms-9cc), so LOGINOUT does NOT  */
+/* re-read a password on this path (Option A -- stripping SSH's crypto    */
+/* auth for a LOGINOUT re-challenge would be a security regression, and    */
+/* is not how OpenVMS TCPIP$SSH works). What LOGINOUT DOES enforce, given  */
+/* the pre-authenticated user's SYSUAF record, is the account's           */
+/* NETWORK-class login gates -- fail-closed, granting nothing beyond what  */
+/* SYSUAF says (the persona is built from the record, so a permitted user  */
+/* gets EXACTLY its own UIC/privileges).                                   */
+/*                                                                        */
+/* loginout_network_permit() is the pure AUTHORIZATION DECISION, split     */
+/* from the session-establish (persona + DCL activation) so it can be      */
+/* proven fail-closed host-side with constructed records, WITHOUT a live   */
+/* SSH connection or executive (the --network-permit-selftest below, the   */
+/* DECnet --*-selftest floor pattern). The live SSH->authenticated-DCL     */
+/* bracket is lab-gated (vms-101); the session-establish wiring + the      */
+/* executive identity conveyance are the tracked follow-on -- this is the  */
+/* authorization floor, honestly not yet wired into a live login path.     */
+/*                                                                        */
+/* Returns 1 to PERMIT the network login, 0 to REFUSE (fail-closed).       */
+/* ------------------------------------------------------------------ */
+int loginout_network_permit(const sysuaf_record_t *rec)
+{
+    if (!rec)
+        return 0;                                 /* fail-closed on a null record */
+
+    /* Account-level enable gate (DISUSER/DISACNT) -- applies to every login
+     * class; the SAME check console_login makes after the password. */
+    if (!sysuaf_interactive_login_permitted(rec))
+        return 0;
+
+    /* NETWORK-class gate: UAI$M_DISNETWORK disables network logins for this
+     * account (AUTHORIZE /FLAGS=DISNETWORK). Read from the record's flag names,
+     * the same source sysuaf_interactive_login_permitted reads. */
+    if (sysuaf_flags_to_mask(rec->flags) & UAI$M_DISNETWORK)
+        return 0;
+
+    /* Expired password -> refuse, symmetric with the SSH path
+     * (src/vmsssh/sshd_auth.c) and console_login: a correct in-protocol auth
+     * does not excuse an expired SYSUAF password (the interactive force-change
+     * flow is not built; refusing is the honest floor, not a silent pass). */
+    if (sysuaf_password_expired(rec))
+        return 0;
+
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* --network-permit-selftest: prove the network-login authorization    */
+/* decision is FAIL-CLOSED, host-side, with no executive or live SSH    */
+/* (the DECnet --*-selftest floor). Exit 0 = all pass, 1 = any fail.    */
+/* ------------------------------------------------------------------ */
+static int run_network_permit_selftest(void)
+{
+    int pass = 0, fail = 0;
+    sysuaf_record_t r;
+
+#define NP_CHECK(cond, msg) do { \
+    if (cond) { printf("  PASS: %s\n", msg); pass++; } \
+    else      { printf("  FAIL: %s\n", msg); fail++; } \
+} while (0)
+
+    printf("=== loginout --network-permit-selftest (vms-843a Option-A auth floor) ===\n");
+
+    /* A clean, enabled account with network logins allowed -> PERMIT. */
+    memset(&r, 0, sizeof(r));
+    NP_CHECK(loginout_network_permit(&r) == 1,
+             "a clean enabled account is permitted a network login (no password re-read)");
+
+    /* DISNETWORK -> REFUSE (the network-class gate). */
+    memset(&r, 0, sizeof(r));
+    snprintf(r.flags, sizeof(r.flags), "DISNETWORK");
+    NP_CHECK(loginout_network_permit(&r) == 0,
+             "a DISNETWORK account is refused a network login (fail-closed)");
+
+    /* DISUSER -> REFUSE (account-level disable). */
+    memset(&r, 0, sizeof(r));
+    snprintf(r.flags, sizeof(r.flags), "DISUSER");
+    NP_CHECK(loginout_network_permit(&r) == 0,
+             "a DISUSER account is refused");
+
+    /* DISACNT -> REFUSE (account-level disable). */
+    memset(&r, 0, sizeof(r));
+    snprintf(r.flags, sizeof(r.flags), "DISACNT");
+    NP_CHECK(loginout_network_permit(&r) == 0,
+             "a DISACNT account is refused");
+
+    /* Expired password -> REFUSE (symmetric with the SSH path). The expiry
+     * flag lives in the RAW record read by sysuaf_password_expired(). */
+    memset(&r, 0, sizeof(r));
+    sysuaf__put_le32(r.raw.uaf$l_flags, UAI$M_PWD_EXPIRED);
+    NP_CHECK(loginout_network_permit(&r) == 0,
+             "an account with an EXPIRED password is refused (no silent pass)");
+
+    /* A NULL record -> REFUSE. */
+    NP_CHECK(loginout_network_permit(NULL) == 0,
+             "a NULL record is refused (fail-closed)");
+
+    printf("=== --network-permit-selftest: %d passed, %d failed ===\n", pass, fail);
+#undef NP_CHECK
+    return fail > 0 ? 1 : 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 int main(int argc, char *argv[])
 {
+    /* Host/CI selftest hooks (no executive, no live rail) run and exit
+     * before the login bootstrap -- the DECnet --*-selftest pattern. */
+    if (argc > 1 && strcmp(argv[1], "--network-permit-selftest") == 0)
+        return run_network_permit_selftest();
+
     (void)argc; (void)argv;
 
     /* Bootstrap VMS namespace — each exec'd process needs its own

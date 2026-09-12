@@ -121,6 +121,38 @@ add_test(NAME cluster_host_fuzz_codec_dlm COMMAND fuzz_codec_dlm)
 set_tests_properties(cluster_host_fuzz_codec_dlm PROPERTIES
     LABELS "unit;cluster;codec;fuzz" TIMEOUT 180)
 
+# rd vms-5339 (cont.): the REST of the untrusted peer-receive decode surface
+# (hello / scs / cm / vc / blk), each an independent never-crash-a-peer gate
+# linking the SAME sanitizer twin defined above (or the plain codec where the
+# sanitizer runtime is unavailable). Shared helpers: fuzz_common.h.
+function(cluster_host_fuzz name)
+    add_executable(${name} ${name}.c)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    # cluster_host_fixture provides the valid-frame corpus the frame+fi fuzzers
+    # seed from (fz_fixture_frame_fuzz); the defs point it at the fixture dir +
+    # clean-room manifest, exactly as cluster_host_test does.
+    target_link_libraries(${name} PRIVATE cluster_host_fixture)
+    target_compile_definitions(${name} PRIVATE
+        OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+        OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}")
+    if(OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+        target_compile_options(${name} PRIVATE -fsanitize=address,undefined)
+        target_link_options(${name} PRIVATE -fsanitize=address,undefined)
+        target_link_libraries(${name} PRIVATE cluster_host_codec_fuzzsan)
+    else()
+        target_link_libraries(${name} PRIVATE cluster_host_codec)
+    endif()
+    add_test(NAME cluster_host_${name} COMMAND ${name})
+    set_tests_properties(cluster_host_${name} PROPERTIES
+        LABELS "unit;cluster;codec;fuzz" TIMEOUT 180)
+endfunction()
+
+cluster_host_fuzz(fuzz_codec_hello)
+cluster_host_fuzz(fuzz_codec_scs)
+cluster_host_fuzz(fuzz_codec_cm)
+cluster_host_fuzz(fuzz_codec_vc)
+cluster_host_fuzz(fuzz_codec_blk)
+
 # ---- FC-P3.6: the CLUB/CSB model, the ten-state ladder, the reconnect FSM ----
 # Built from src/kernel-core with -DOVMX_CLUSTER_HOST -- the SAME sources both
 # kmods compile, with no kernel headers and no seam. That is the whole point of

@@ -179,41 +179,6 @@ int __wrap_dup(int oldfd)
         return ovmx_materialize_fd(oldfd);   /* a fresh real fd on the connection */
     return __real_dup(oldfd);
 }
-
-/* vms-843a: default-args injection for the DETACHED SSH daemon on a booted OVMX
- * distro. Real OpenVMS runs SSH as a detached daemon (TCPIP$SSH_STARTUP does
- * RUN/DETACHED), NOT as an inetd accept-handoff service -- and vms-9cc proved the
- * wrapped sshd in `-D` mode (sshd itself bind/listen/accepts over BGn:, the model
- * this wrap is built for). But OVMX DCL RUN cannot pass Unix argv (its RUN Image
- * qualifiers are oracle-verbatim: /DEBUG, /NODEBUG only), so a VMS-launched
- * `RUN/DETACHED SYS$SYSTEM:VMSSSHD.EXE` reaches main() argv-less. When that happens
- * (argc <= 1) inject the daemon args: -D (stay in the foreground of the detached
- * process -- no double-daemonize), -e (log to stderr, which TCPIP$SSH_STARTUP
- * routes to OPA0: so it reaches the console for diagnosis), and -f the overlay
- * sshd_config. The privsep siblings sshd-session/sshd-auth are NEVER argv-less
- * (sshd always re-execs them WITH argv carrying the privsep descriptors), so this
- * fires ONLY for the externally-launched parent listener, never a child; and a
- * caller that DOES pass args (the KE-test's explicit `sshd -D -e -f ...`) keeps
- * them. Bound by -Wl,--wrap=main in the SERVER tree link (build-ssh-harness.sh). */
-#define OVMX_SSHD_DAEMON_CONFIG "/ovmxsshsrv/etc/sshd_config"
-/* OpenSSH's main is int main(int, char **); the C runtime still passes envp in a
- * 3rd register, but a 2-arg main (and this 2-arg __real_main alias) ignores it --
- * environ is global. Keep the signature matching sshd.c to avoid any ABI mismatch. */
-extern int __real_main(int argc, char **argv);
-int __wrap_main(int argc, char **argv)
-{
-    if (argc <= 1) {
-        static char *dargv[6];
-        dargv[0] = (argv && argv[0]) ? argv[0] : (char *)"VMSSSHD.EXE";
-        dargv[1] = (char *)"-D";
-        dargv[2] = (char *)"-e";
-        dargv[3] = (char *)"-f";
-        dargv[4] = (char *)OVMX_SSHD_DAEMON_CONFIG;
-        dargv[5] = NULL;
-        return __real_main(5, dargv);
-    }
-    return __real_main(argc, argv);
-}
 #endif /* OVMX_WRAP_SERVER */
 
 ssize_t __wrap_read(int fd, void *buf, size_t n)

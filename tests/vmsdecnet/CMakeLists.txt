@@ -26,17 +26,6 @@ add_test(NAME vmsdecnet_link_unit COMMAND test_dnet_link)
 # an out-of-band ^Y, and Unbind -- as real on-wire NSP data frames over a
 # socketpair, every CTERM payload byte-identical. SPEC-DERIVED (no oracle
 # specimen; register sec 4.7). Warning-clean under -Werror.
-# rd vms-ea8/vms-6a4: node-filespec splitter (NODE"user pw acct"::spec) that
-# feeds the FAL/DAP COPY client. Pure logic -- compile the splitter TU directly
-# (no FAL/RMS/auth link stack needed for a syntax-only unit).
-add_executable(test_dnet_nodespec test_dnet_nodespec.c
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_nodespec.c)
-target_include_directories(test_dnet_nodespec PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include
-    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include)  # dnet_cterm.h: caps + codes
-target_compile_options(test_dnet_nodespec PRIVATE -Werror)
-add_test(NAME vmsdecnet_nodespec_unit COMMAND test_dnet_nodespec)
-
 add_executable(test_dnet_cterm test_dnet_cterm.c)
 target_link_libraries(test_dnet_cterm PRIVATE vmsdecnet_engine vmsdecnet_cterm)
 target_include_directories(test_dnet_cterm PRIVATE
@@ -174,3 +163,13 @@ if(OVMX_DAP_SANITIZE_OK)
     target_link_options(test_dnet_router_emit_fuzz PRIVATE -fsanitize=address,undefined)
 endif()
 add_test(NAME vmsdecnet_router_emit_fuzz_unit COMMAND test_dnet_router_emit_fuzz)
+
+# The DECnet startup GATE + serve-default decision SYS$MANAGER:STARTNET.COM
+# relies on (rd vms-a70 direction B): --show-executor self-sources the executor
+# address and exits SUCCESS iff DECnet is configured (the gate STARTNET branches
+# on), and the persistent endnode daemon serves inbound object 42 by default.
+# Runs the shipped DECNETD.EXE on the host -- no socket, no /dev/vms, no privilege.
+add_test(NAME vmsdecnet_startnet_gate
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_decnetd_startnet_gate.sh)
+set_tests_properties(vmsdecnet_startnet_gate PROPERTIES
+    ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:decnetd_exe>")

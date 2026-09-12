@@ -17,7 +17,7 @@
 # is authenticated before any file is served (INV-6, the no-auth-FAL analogue of
 # the CTERM hole); a bad password is refused by real Purdy. NO
 # fork/exec/openpty/dup2, NO raw-fd/raw-termios file mechanics.
-add_library(vmsdecnet_fal STATIC dnet_fal.c dnet_nodespec.c)
+add_library(vmsdecnet_fal STATIC dnet_fal.c)
 target_include_directories(vmsdecnet_fal PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

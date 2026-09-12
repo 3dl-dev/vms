@@ -414,15 +414,7 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake gcc make musl-tools linux-libc-dev \
     kmod cpio binutils libelf1 \
-    curl perl ca-certificates patch \
     && rm -rf /var/lib/apt/lists/*
-# curl/perl/ca-certificates/patch: BUILD-TIME deps of the vms-843a wrapped-OpenSSH
-# harness ONLY (third-party/openssh/build-ssh-harness.sh fetches the OpenSSH
-# tarball + builds the vendored static libcrypto with perl). Used only under
-# --build-arg OVMX_TEST_ENABLE_SSH=1; the shipped build skips the SSH step, and
-# none of these land in the shipped artifact (kernel + initramfs + ODS-2 disk) or
-# the separate ubuntu test-harness runner stage. Same set the KE-test harness
-# (tests/qemu/Dockerfile) installs for the identical build.
 
 # The from-source OVMX kernel (vms-448): its built tree (for external module
 # builds) + the bzImage that becomes the bootable vmlinuz + the exact
@@ -528,59 +520,6 @@ RUN CC=musl-gcc sh tests/toolchain/mk_tcc_static.sh build-static/bin/TCC.EXE
 # proves the MMK->TCC->LINK->IMGACT chain against a real executive.
 RUN cmake -B build-static -DBUILD_TESTS=ON >/dev/null && \
     cmake --build build-static --target mmk_native --parallel $(nproc) 2>&1
-
-# -- vms-843a: wrapped OpenSSH sshd (VMSSSHD.EXE) + privsep tree, TEST OVERLAY ONLY.
-# On real OpenVMS, SSH is a LAYERED PRODUCT -- the shipped base OS image ships no
-# SSH. So VMSSSHD.EXE and its privsep tree are built + staged only when
-# --build-arg OVMX_TEST_ENABLE_SSH=1 (the SSH cold-boot proof), which stands in
-# for "SSH configured + enabled" (SSH-enable is an operator posture call,
-# Baron-reserved). The build is heavy (build-ssh-harness.sh configure+make of
-# OpenSSH), so it is gated OFF by default -- shipped and daytime builds skip it
-# entirely and stay unchanged. The wrapped sshd's transport rides the executive
-# BGn: seam and its auth is SYSUAF/Purdy (vms-0cd; --wrap hooks, unmodified
-# OpenSSH source). OpenSSH 10.0p1 re-execs its privsep siblings sshd-session/
-# sshd-auth at the configure-baked absolute path /ovmxsshsrv/libexec and needs
-# the privsep dir /ovmxsshsrv/empty, so those + a fresh host key + the sshd_config
-# are assembled at /ovmxsshsrv here and copied onto the INITRAMFS (the booted
-# Linux VFS) in the initramfs-slim stage below. VMSSSHD.EXE itself rides the
-# proven SYS$SYSTEM: ACP-stage launch path (vms-21b); the privsep self-re-exec is
-# SSH-specific residue beside that mechanism (rd vms-843a, conductor ruling).
-ARG OVMX_TEST_ENABLE_SSH=0
-RUN if [ "$OVMX_TEST_ENABLE_SSH" = "1" ]; then \
-        CC=musl-gcc WORK=/tmp/ovmx-ssh sh third-party/openssh/build-ssh-harness.sh > /tmp/sshh.log 2>&1 \
-            || { echo "FATAL: SSH harness build failed"; tail -80 /tmp/sshh.log; exit 1; } && \
-        SSSHD=$(sed -n 's/^OVMX_SRV_SSHD=//p' /tmp/sshh.log | tail -1) && \
-        KEYGEN=$(sed -n 's/^OVMX_KEX_KEYGEN=//p' /tmp/sshh.log | tail -1) && \
-        { [ -n "$SSSHD" ] && [ -x "$SSSHD" ]; } || { echo "FATAL: OVMX_SRV_SSHD ($SSSHD) not built"; exit 1; } && \
-        { [ -x /ovmxsshsrv/libexec/sshd-session ] && [ -x /ovmxsshsrv/libexec/sshd-auth ]; } \
-            || { echo "FATAL: privsep siblings missing at /ovmxsshsrv/libexec"; exit 1; } && \
-        cp "$SSSHD" build-static/bin/VMSSSHD.EXE && chmod +x build-static/bin/VMSSSHD.EXE && \
-        if readelf -d build-static/bin/VMSSSHD.EXE 2>/dev/null | grep -q NEEDED; then \
-            echo "FATAL: VMSSSHD.EXE is not musl-static (has DT_NEEDED)"; exit 1; fi && \
-        mkdir -p /ovmxsshsrv/etc /ovmxsshsrv/empty && chmod 755 /ovmxsshsrv/empty && \
-        "$KEYGEN" -t ed25519 -f /ovmxsshsrv/etc/hostkey -N "" -q && chmod 600 /ovmxsshsrv/etc/hostkey && \
-        printf '%s\n' \
-            '# OVMX SSH cold-boot proof sshd_config (rd vms-843a, TEST OVERLAY only).' \
-            '# Runs as a DETACHED daemon (sshd -D, the vms-9cc-proven model): sshd' \
-            '# itself binds :22 and listen/accepts over the executive BGn: seam. The' \
-            '# args (-D -e -f this-file) are injected by __wrap_main (ovmx_ssh_wrap.c)' \
-            '# since OVMX DCL RUN cannot pass argv. AddressFamily inet -- BGn: is AF_INET.' \
-            'Port 22' \
-            'ListenAddress 0.0.0.0' \
-            'AddressFamily inet' \
-            'HostKey /ovmxsshsrv/etc/hostkey' \
-            'PasswordAuthentication yes' \
-            'PubkeyAuthentication yes' \
-            'PermitRootLogin yes' \
-            'KbdInteractiveAuthentication no' \
-            'StrictModes no' \
-            'LogLevel VERBOSE' \
-            'Subsystem sftp internal-sftp' \
-            > /ovmxsshsrv/etc/sshd_config && \
-        echo "OK: OVMX_TEST_ENABLE_SSH=1 -- VMSSSHD.EXE built (musl-static) + /ovmxsshsrv assembled (privsep siblings + host key + sshd_config)"; \
-    else \
-        echo "OVMX_TEST_ENABLE_SSH=0 -- no SSH built (shipped base ships no SSH; layered-product posture)"; \
-    fi
 
 # -- System tree staging (OS kit + distribution image source) -----------------
 # All OVMX binaries assembled into a /vms tree. This is BUILD staging only --
@@ -1056,33 +995,6 @@ RUN if [ "$OVMX_TEST_ENABLE_TCPIP" = "1" ]; then \
     else \
         echo "OVMX_TEST_ENABLE_TCPIP=0 -- shipped image (no aux-server image, no TCP/IP auto-start, no port open)"; \
     fi
-# vms-843a SSH cold-boot PROOF overlay (TEST-ONLY; default OFF => shipped image
-# ships no SSH). With --build-arg OVMX_TEST_ENABLE_SSH=1 the proof build stages the
-# wrapped OpenSSH server VMSSSHD.EXE into SYS$SYSTEM: (ODS-2) + swaps in the SSH
-# overlay SYSTARTUP (brings the NIC up, then @SYS$STARTUP:TCPIP$SSH_STARTUP). SSH is
-# a DETACHED DAEMON (real VMS runs it via TCPIP$SSH_STARTUP RUN/DETACHED, not as an
-# inetd service): TCPIP$SSH_STARTUP RUN/DETACHEDs SYS$SYSTEM:VMSSSHD.EXE, which DCL
-# RUN ACP-stages off the ODS-2 disk (the proven vms-21b rms_stage_over_acp path)
-# and activates; __wrap_main injects `-D -e -f <config>` (RUN can't pass argv), so
-# sshd binds :22 + listen/accepts over BGn: itself (the vms-9cc-proven -D model).
-# The privsep siblings + host key + sshd_config are placed on the initramfs (below).
-# No INETD here -- SSH is not an inetd accept-handoff service. A default build
-# leaves /system-stage/vms untouched (posture-neutral: shipped ships no SSH, opens
-# no port; SSH-as-layered-product + SSH-enable stay operator posture calls).
-# image_parity.py (vms-e1d) excludes this --build-arg-gated block from the shipped
-# set, so VMSSSHD.EXE here is not x86_64-only shipped drift.
-RUN if [ "$OVMX_TEST_ENABLE_SSH" = "1" ]; then \
-        cp distro/rootfs-test-ssh/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM \
-           /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
-        cp /src/build-static/bin/VMSSSHD.EXE \
-           /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ && \
-        grep -q 'TCPIP\$SSH_STARTUP' /system-stage/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM && \
-        test -f /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/VMSSSHD.EXE && \
-        test -f '/system-stage/vms/SYS0/SYSCOMMON/SYS$STARTUP/TCPIP$SSH_STARTUP.COM' && \
-        echo "OK: OVMX_TEST_ENABLE_SSH=1 -- SSH cold-boot proof overlay staged (VMSSSHD.EXE at SYS$SYSTEM:, detached-daemon SYSTARTUP -> TCPIP$SSH_STARTUP)"; \
-    else \
-        echo "OVMX_TEST_ENABLE_SSH=0 -- shipped image (no SSH image, no auto-start, no port open)"; \
-    fi
 RUN /src/build-static/bin/vmsfs_master --ods2 master \
         /boot/ovmx-distrib.img OVMXSYS /system-stage/vms 128 && \
     /src/build-static/bin/vmsfs_master --ods2 list /boot/ovmx-distrib.img > /tmp/distrib-list.txt && \
@@ -1258,28 +1170,6 @@ RUN mkdir -p /initramfs-slim/dev /initramfs-slim/proc /initramfs-slim/sys \
     # name "slim" explicitly (tests/qemu/test_distrib_boot.sh and friends)
     # keep working -- both names carry byte-identical content, produced by
     # this one pack step, not a second build.
-    # vms-843a: SSH overlay ONLY -- place the wrapped-sshd privsep tree on the
-    # INITRAMFS (the booted Linux VFS) at the OpenSSH configure-baked /ovmxsshsrv
-    # paths, so VMSSSHD.EXE (ACP-staged from SYS$SYSTEM: by INETD) can re-exec its
-    # privsep siblings sshd-session/sshd-auth (--libexecdir=/ovmxsshsrv/libexec),
-    # use the privsep dir /ovmxsshsrv/empty, and read the host key + sshd_config.
-    # A shipped build (OVMX_TEST_ENABLE_SSH=0) copies nothing -> the initramfs is
-    # unchanged and stays byte-reproducible (vms-d73). Done before the mtime
-    # normalize + cpio pack so these entries are normalized + packed too.
-    if [ "$OVMX_TEST_ENABLE_SSH" = "1" ]; then \
-        cp -a /ovmxsshsrv /initramfs-slim/ovmxsshsrv && \
-        { [ -x /initramfs-slim/ovmxsshsrv/libexec/sshd-session ] && \
-          [ -x /initramfs-slim/ovmxsshsrv/libexec/sshd-auth ] && \
-          [ -f /initramfs-slim/ovmxsshsrv/etc/hostkey ] && \
-          [ -f /initramfs-slim/ovmxsshsrv/etc/sshd_config ]; } \
-            || { echo "FATAL: SSH privsep tree incomplete on initramfs"; exit 1; } && \
-        printf '%s\n' \
-            'root:x:0:0:root:/:/bin/false' \
-            'sshd:x:74:74:sshd privsep:/ovmxsshsrv/empty:/bin/false' \
-            > /initramfs-slim/etc/passwd && \
-        printf '%s\n' 'root:x:0:' 'sshd:x:74:' > /initramfs-slim/etc/group && \
-        echo "OK: SSH privsep tree + /etc/passwd sshd privsep user staged on initramfs (/ovmxsshsrv: siblings + host key + sshd_config)"; \
-    else echo "OVMX_TEST_ENABLE_SSH=0 -- no SSH tree on initramfs (shipped)"; fi && \
     find /initramfs-slim -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} + && \
     cd /initramfs-slim && find . | sort | cpio -o -H newc --reproducible 2>/dev/null | gzip -n > /boot/initramfs-ovmx.cpio.gz && \
     cp /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx-slim.cpio.gz && \
@@ -1358,13 +1248,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # kmod: provides `modinfo`, which tests/qemu/test_intree_modules.sh (vms-934)
 # runs on the shipped vms.ko to prove it is stamped intree=Y. Test
 # tooling only (CLAUDE.md Rule 9 distinction), like `expect` above.
-# openssh-client + sshpass: the DRIVER side of the vms-843a SSH cold-boot proof
-# (tests/qemu/test_ssh_boot_e2e.sh) -- a standard client connects inbound to the
-# OVMX guest's wrapped sshd over the QEMU hostfwd. Test tooling only; the shipped
-# OVMX artifact is the kernel + initramfs + ODS-2 disk, not this ubuntu harness.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio expect kmod \
-    openssh-client sshpass \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz

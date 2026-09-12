@@ -37,7 +37,7 @@
 # scope; that machinery belongs to the item that grows DEFECTS to cover the
 # other 17 Bucket D/E TUs.
 #
-# THE ONE DEFECT
+# THE ONE DEFECT (vms-8e7)
 #
 #   coord-genesis-refusal-uncounted   src/kernel-core/vms_cnxman_coord_fsm.c
 #   drops the `c->genesis_refused_noquorum++;` counter bump inside the
@@ -50,9 +50,32 @@
 #   accumulates toward a mint", proven only by a counter nobody would notice
 #   is wrong from the refusal's rc/state/CLUB-unchanged side alone.
 #
+# GROWN (vms-55e) to six more Bucket-D TUs, each the same shape: one minimal
+# single-property mutation, isolated to ONE existing R1 suite, with its
+# require_fail set MEASURED (not guessed) against a real host build --
+#
+#   codec-vc-zero-incarnation-not-refused    vms_cluster_codec_vc.c
+#   codec-cm-short-body-not-refused          vms_cluster_codec_cm.c
+#   codec-blk-no-trailer-not-honest          vms_cluster_codec_blk.c
+#   barrier-bit0-uncounted                   vms_cnxman_barrier_fsm.c
+#   phase2-count-mismatch-uncounted          vms_cnxman_phase2.c
+#   recnx-last-gasp-uncounted                vms_cnxman_recnx_fsm.c
+#   ldwv-refusal-uncounted                   vms_dlm_ldwv.c
+#
+# (vms_dlm_ldwv.c above -- FC-P4.3's Lock Directory Weight Vector -- was the
+# seventh TU named by the item that grew this manifest; see its own defect
+# entry below for the shape.)
+#
 SELF="$0"
 
-DEFECTS="coord-genesis-refusal-uncounted"
+DEFECTS="coord-genesis-refusal-uncounted
+codec-vc-zero-incarnation-not-refused
+codec-cm-short-body-not-refused
+codec-blk-no-trailer-not-honest
+barrier-bit0-uncounted
+phase2-count-mismatch-uncounted
+recnx-last-gasp-uncounted
+ldwv-refusal-uncounted"
 
 # ---------------------------------------------------------------------------
 # Metadata (same field meanings as tests/qemu/facility_defects.sh):
@@ -86,6 +109,100 @@ EOF
                       ;;
         esac;;
 
+    codec-vc-zero-incarnation-not-refused)
+        case "$_f" in
+        facility)     echo "the §4(i).B incarnation-echo INV-6 gate in vms_scs_seq_stamp() (test_codec_vc.c's E66 case: a zero incarnation is never an honest value to stamp)";;
+        targets)      echo "kernel-core/vms_cluster_codec_vc.c";;
+        suites_red)   echo "test_codec_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_scs_seq_stamp()'s 'incarnation == 0 -> VMS_CODEC_E_INVAL' refusal is disabled, so a zero incarnation -- which appears in 0 of 239,981 reference frames -- is stamped onto the wire like any other value instead of being refused.";;
+        require_fail) cat <<'EOF'
+a zero incarnation is REFUSED, never written
+and the refused frame's span was not touched at all
+EOF
+                      ;;
+        esac;;
+
+    codec-cm-short-body-not-refused)
+        case "$_f" in
+        facility)     echo "vms_cm_body_build()'s body_len length gate (the DLM-reply wrapper must never tail-pad a short caller buffer)";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_body_build()'s 'body_len != VMS_CM_BODY_LEN -> VMS_CODEC_E_INVAL' refusal is disabled, so a body one byte short of the 132-byte SYSAP body is wrapped and sent anyway instead of being refused.";;
+        require_fail) cat <<'EOF'
+  a short body is rejected rather than tail-padded with whatever the caller's buffer held
+EOF
+                      ;;
+        esac;;
+
+    codec-blk-no-trailer-not-honest)
+        case "$_f" in
+        facility)     echo "vms_blk_trailer_parse()'s 'no trailer' honesty rule (design's TRAP 1: frame_len == inner_frame_len means nothing was piggybacked, not an error)";;
+        targets)      echo "kernel-core/vms_cluster_codec_blk.c";;
+        suites_red)   echo "test_pe_block";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_blk_trailer_parse()'s early 'frame_len <= inner_frame_len -> VMS_CODEC_OK, no trailer' return is disabled, so the exact-length case that legitimately carries no piggyback falls through to the length arithmetic below and is refused VMS_CODEC_E_SHORT instead of being answered as the common, honest, no-trailer case. (A real READ end message always carries at least the 28-byte header, so this path is only exercised by TRAP 1's own synthetic case -- a receiver bounding the frame at the message's OWN declared length, which never sees the trailer at all.)";;
+        require_fail) cat <<'EOF'
+parsing with the DECLARED bound is not an error
+EOF
+                      ;;
+        esac;;
+
+    barrier-bit0-uncounted)
+        case "$_f" in
+        facility)     echo "the barrier's nodemap bit-0 instrumentation (book p. 7-25: CSV slot 0 is never used, so a set bit 0 is a width tell that must be COUNTED, never silently folded into the popcount)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "the barrier's 'b->bitmap_bit0++;' instrumentation, taken when an OPEN/ADD's nodemap byte has the impossible bit 0 set, is dropped. The bitmap is still read and processed identically -- only the counter that tells an operator the impossible bit fired goes silent.";;
+        require_fail) cat <<'EOF'
+the impossible bit is counted
+EOF
+                      ;;
+        esac;;
+
+    phase2-count-mismatch-uncounted)
+        case "$_f" in
+        facility)     echo "the p. 7-42 Phase 2 commit's count-mismatch accounting (phase2_commit_count(): a disagreement between the committed CSB count and the wire's own popcount is the tell for a nodemap byte too narrow to read)";;
+        targets)      echo "kernel-core/vms_cnxman_phase2.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "phase2_commit_count()'s 'st->count_mismatch++;' is dropped from the branch that fires when the committed member count differs from the transition's own nodemap popcount. The count itself (and the %CNXMAN log line) is still computed and logged correctly -- only the counter an operator or a later test reads back goes silent.";;
+        require_fail) cat <<'EOF'
+and the disagreement with the nodemap is COUNTED -- which is exactly the width tell
+counted
+EOF
+                      ;;
+        esac;;
+
+    recnx-last-gasp-uncounted)
+        case "$_f" in
+        facility)     echo "the p. 7-29/7-49 last-gasp accounting (cnxman_recnx_shutdown(): the SHUTDOWN datagram this node emits to the peers it is leaving must be counted, not just sent)";;
+        targets)      echo "kernel-core/vms_cnxman_recnx_fsm.c";;
+        suites_red)   echo "test_cnxman_recnx";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_recnx_shutdown()'s 'r->last_gasps++;' is dropped. The CLUB/CSB SHUTDOWN flags are still set and the last-gasp record is still emitted to the caller -- only the counter that tells an operator one was sent goes silent.";;
+        require_fail) cat <<'EOF'
+counted once
+EOF
+                      ;;
+        esac;;
+
+    ldwv-refusal-uncounted)
+        case "$_f" in
+        facility)     echo "the p. 6-33 Lock Directory Weight Vector's refusal accounting (cnxman_ldwv_rebuild(): a mixed-kind or foreign-member refusal must be counted, the rd vms-1ee split-brain teeth)";;
+        targets)      echo "kernel-core/vms_dlm_ldwv.c";;
+        suites_red)   echo "test_dlm_ldwv";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_ldwv_rebuild()'s 'club->ldwv_build_refused++;' in the survey-verdict refusal branch (VMS_LDWV_E_WEIGHTS/VMS_LDWV_E_FOREIGN) is dropped -- range-anchored to that FIRST refusal site only, leaving the second (ldwv_fill_club's own VMS_LDWV_E_TOOBIG path) untouched. The refusal itself (no vector left behind, the %CNXMAN log line) still fires -- only the count goes silent.";;
+        require_fail) cat <<'EOF'
+and counted in the CLUB
+the refusal is counted
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -108,6 +225,56 @@ apply_edit() {
         # 1) -- no line anchor needed. The refusal three lines below is left
         # completely alone.
         sed -i 's|c->genesis_refused_noquorum++;|/* NEGCTL coord-genesis-refusal-uncounted: the refusal is not counted */|' "$_file";;
+
+    codec-vc-zero-incarnation-not-refused)
+        # `if (incarnation == 0u)` is unique in this file (the credit-return
+        # gate a few functions down reads `c->incarnation`, a different
+        # literal) -- disarmed, not deleted, so the parameter stays used.
+        sed -i 's|if (incarnation == 0u)|if (0 \&\& incarnation == 0u) /* NEGCTL codec-vc-zero-incarnation-not-refused */|' "$_file";;
+
+    codec-cm-short-body-not-refused)
+        # `if (body_len != VMS_CM_BODY_LEN)` is unique in this file.
+        sed -i 's|if (body_len != VMS_CM_BODY_LEN)|if (0 \&\& body_len != VMS_CM_BODY_LEN) /* NEGCTL codec-cm-short-body-not-refused */|' "$_file";;
+
+    codec-blk-no-trailer-not-honest)
+        # `if (frame_len <= inner_frame_len)` is unique in this file.
+        sed -i 's|if (frame_len <= inner_frame_len)|if (0 \&\& frame_len <= inner_frame_len) /* NEGCTL codec-blk-no-trailer-not-honest */|' "$_file";;
+
+    barrier-bit0-uncounted)
+        # `b->bitmap_bit0++;` is unique in this file, and it is the
+        # braceless body of an `if (...)`. An empty COMPOUND statement
+        # (`{ }`), not a bare `;` -- this library builds -Wall -Wextra
+        # -Werror, and a lone `;` after `if` trips -Werror=empty-body. `{ }`
+        # is a legal, warning-free empty statement.
+        sed -i 's|b->bitmap_bit0++;|{ } /* NEGCTL barrier-bit0-uncounted: the impossible bit is not counted */|' "$_file";;
+
+    phase2-count-mismatch-uncounted)
+        # `st->count_mismatch++;` occurs ONCE in this file (the other
+        # counters phase2_commit_count() bumps -- bitmap_short,
+        # m_above_grounded -- have their own, differently-named lines), so no
+        # range anchor is needed: grep -c is 1.
+        sed -i 's|st->count_mismatch++;|/* NEGCTL phase2-count-mismatch-uncounted: the disagreement is not counted */|' "$_file";;
+
+    recnx-last-gasp-uncounted)
+        # `r->last_gasps++;` is unique in this file.
+        sed -i 's|r->last_gasps++;|/* NEGCTL recnx-last-gasp-uncounted: the last gasp is not counted */|' "$_file";;
+
+    ldwv-refusal-uncounted)
+        # `club->ldwv_build_refused++;` occurs TWICE in this file (the
+        # survey-verdict refusal this defect targets, and ldwv_fill_club's
+        # own VMS_LDWV_E_TOOBIG refusal a few lines later) -- IDENTICAL text,
+        # so a plain sed would mutate both and trip two properties at once.
+        # Range-anchored (facility_defects.sh's devtab-owner-not-recorded
+        # precedent), NOT `0,/re/` first-match: the range starts at
+        # `ldwv_survey_club(club, &s);` (unique, immediately precedes the
+        # verdict call) and ends at the FIRST `return st;` after it, which is
+        # the closing statement of the block this defect targets and stops
+        # short of the second occurrence entirely. Also idempotency-safe: a
+        # second apply finds the range's own `club->ldwv_build_refused++;`
+        # already gone, so cmd_apply's pristine-compare reports BROKEN
+        # FIXTURE rather than silently moving on to the second occurrence.
+        sed -i '/^\tldwv_survey_club(club, &s);$/,/^\t\treturn st;$/ s|club->ldwv_build_refused++;|/* NEGCTL ldwv-refusal-uncounted: the refusal is not counted */|' "$_file";;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;

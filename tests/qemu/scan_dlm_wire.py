@@ -57,6 +57,24 @@ OFF_DLM_VALBLK = 108         # body[36:52], 16 bytes
 DLM_VALBLK_LEN = 16
 WIREOP_CONVERT_VALBLK = 0x06
 
+# The LVB READ crossing (rd vms-727, #1190): a GRANT reply (cat=0x82, op=0x01)
+# carries the master's value block when the record marker is present. Same
+# VMS_OFF_DLM_MASTER_LKID / OFF_DLM_VALBLK field positions as the op-0x06
+# write above (vms_cluster_codec_dlm.h vms_dlm_enq_response_build_grant_valblk
+# writes exactly those two spans); the marker that discriminates it from a
+# PLAIN grant is its own pair of constants, read off the same header:
+#   VMS_OFF_DLM_VALBLK_FLAG (100, body[28])   == VMS_DLM_GRANT_VALBLK_FLAG_VAL (0x10)
+#   VMS_OFF_DLM_VALBLK_SERIAL (104, body[32]) == VMS_DLM_GRANT_VALBLK_REC_VAL (0x00fa0001,
+#       little-endian bytes 01 00 fa 00 -- body[34]==0xfa is the cat-0x82 reply stamp)
+# never a byte position guessed off a hexdump -- the C parser
+# (vms_dlm_enq_response_parse_body) checks these same two fields, in this
+# same order, before it will even attempt to read a name out of the frame.
+OFF_DLM_GRANT_VALBLK_FLAG = 100
+GRANT_VALBLK_FLAG_VAL = 0x10
+OFF_DLM_GRANT_VALBLK_SERIAL = 104
+GRANT_VALBLK_REC_VAL = 0x00fa0001
+WIREOP_ENQ = 0x01
+
 
 def pcap_records(blob):
     """Yield each record's packet bytes. Handles both endiannesses."""
@@ -119,6 +137,28 @@ def op06_detail(pkt):
     }
 
 
+def op01_grant_valblk_detail(pkt):
+    """For a cat-0x82 op-0x01 GRANT reply frame: the marker + fields the LVB
+    READ crossing evidence needs (rd vms-727, #1190), decoded from this
+    codebase's own published offsets. None if the frame is too short, or the
+    marker does not match -- a plain grant (no value block) is not this."""
+    if len(pkt) < OFF_DLM_VALBLK + DLM_VALBLK_LEN:
+        return None
+    flag = pkt[OFF_DLM_GRANT_VALBLK_FLAG]
+    rec = struct.unpack_from("<I", pkt, OFF_DLM_GRANT_VALBLK_SERIAL)[0]
+    if flag != GRANT_VALBLK_FLAG_VAL or rec != GRANT_VALBLK_REC_VAL:
+        return None
+    master_lkid = struct.unpack_from("<I", pkt, OFF_DLM_MASTER_LKID)[0]
+    valblk = pkt[OFF_DLM_VALBLK:OFF_DLM_VALBLK + DLM_VALBLK_LEN]
+    return {
+        "eth_dst": mac_str(pkt, 0),
+        "eth_src": mac_str(pkt, 6),
+        "master_lkid": master_lkid,
+        "valblk_hex": valblk.hex(),
+        "valblk_ascii": "".join(chr(b) if 0x21 <= b < 0x7f else "." for b in valblk),
+    }
+
+
 def scan(path):
     try:
         with open(path, "rb") as fh:
@@ -129,6 +169,7 @@ def scan(path):
     sca = 0
     counts = {}
     op06_frames = []
+    op01_frames = []
     for pkt in pcap_records(blob):
         if not is_sca(pkt):
             continue
@@ -143,6 +184,15 @@ def scan(path):
             detail = op06_detail(pkt)
             if detail is not None:
                 op06_frames.append(detail)
+        if op == WIREOP_ENQ and resp:
+            detail = op01_grant_valblk_detail(pkt)
+            if detail is not None:
+                # A SEPARATE bare count from "enq-resp" (which counts every
+                # grant, valblk or not): the LVB READ crossing gate needs to
+                # know a grant carrying a real value block crossed, not just
+                # that some grant did.
+                counts["op01valblk"] = counts.get("op01valblk", 0) + 1
+                op01_frames.append(detail)
 
     if not counts:
         lines = ["%s: sca_frames=%d dlm=none" % (path, sca)]
@@ -162,6 +212,17 @@ def scan(path):
         lines.append(
             "  OP06 op06_eth_src=%s op06_eth_dst=%s op06_master_lkid=0x%08x "
             "op06_valblk_hex=%s op06_valblk_ascii=%s"
+            % (d["eth_src"], d["eth_dst"], d["master_lkid"],
+               d["valblk_hex"], d["valblk_ascii"])
+        )
+
+    # THE OP-0x01 GRANT-WITH-VALBLK WIRE-FRAME EVIDENCE (rd vms-727 LVB READ
+    # crossing, #1190): same "op06_"-style prefix discipline as above, for the
+    # same reason -- these are detail fields, never a bare opcode-count key.
+    for d in op01_frames[:8]:
+        lines.append(
+            "  OP01 op01_eth_src=%s op01_eth_dst=%s op01_master_lkid=0x%08x "
+            "op01_valblk_hex=%s op01_valblk_ascii=%s"
             % (d["eth_src"], d["eth_dst"], d["master_lkid"],
                d["valblk_hex"], d["valblk_ascii"])
         )

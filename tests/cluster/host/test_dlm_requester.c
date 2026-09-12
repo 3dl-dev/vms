@@ -625,6 +625,25 @@ static uint32_t make_grant(uint8_t *frame, uint32_t req_lkid,
 	return VMS_CM_FRAME_LEN;
 }
 
+/* A GRANT that RETURNS THE MASTER'S VALUE BLOCK (vms-727, the LVB READ
+ * crossing) -- built by the SHIPPING grant-with-valblk builder. */
+static uint32_t make_grant_valblk(uint8_t *frame, uint32_t req_lkid,
+				  uint32_t master_lkid, uint8_t mode,
+				  const uint8_t *valblk)
+{
+	struct vms_cm_link link;
+	uint32_t written = 0;
+
+	memset(&link, 0, sizeof(link));
+	memset(frame, 0, VMS_CM_FRAME_LEN);
+	(void)vms_frame_compose_link(&link, frame, VMS_CM_FRAME_LEN, &written);
+	(void)vms_dlm_enq_response_build_grant_valblk(req_lkid, master_lkid, mode,
+						      valblk, frame,
+						      VMS_CM_FRAME_LEN, &written);
+	frame[VMS_OFF_DLM_CAT] = (uint8_t)(VMS_DLM_CAT_REQUEST | 0x80u);
+	return VMS_CM_FRAME_LEN;
+}
+
 static uint32_t make_deny(uint8_t *frame, uint32_t pid_echo,
 			  uint32_t master_lkid, const char *name)
 {
@@ -1440,6 +1459,72 @@ static void test_lvb(void)
 				"  body[30] == the mode converted TO (NL)");
 		ct_check(memcmp(c.valblk, g.lkb.valblk, VMS_DLM_VALBLK_LEN) == 0,
 			 "*** body[36:52] IS the LKB's value block, on the wire ***");
+	}
+
+	/*
+	 * CASE C: THE LVB READ CROSSING (vms-727). A grant that RETURNS the
+	 * master's value block is recognised by the codec, and h_grant hands it to
+	 * the engine as valblk_present=1 -- so the engine records the master's
+	 * block on the proxy. The proof is a STATE DELTA: the proxy's block was one
+	 * value before the grant and is the MASTER'S after it.
+	 */
+	printf("-- a grant that carries the master's LVB applies it (the READ crossing)\n");
+	{
+		static const uint8_t master_block[VMS_DLM_VALBLK_LEN] =
+			{ 'W','R','O','T','E','B','Y','V','A','X','1','X','X','X','X','X' };
+
+		fe_reset("OVMXLV01", VMS_LCK_EX, 0x00efu, 1, CSID_MASTER);
+		/* the proxy starts with a DIFFERENT (stale) block, so an apply is
+		 * observable as a change, not a coincidence. */
+		for (i = 0; i < VMS_DLM_VALBLK_LEN; i++)
+			g.lkb.valblk[i] = 0x11u;
+
+		post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+		(void)dlm_req_fsm_post(&g_fsm, &p);
+
+		len = make_grant_valblk(frame, g.lkb.lkid, 0x0abcu, VMS_LCK_EX,
+					master_block);
+		ct_check(dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len) ==
+			 DLM_REQ_OK, "the grant-with-valblk is accepted");
+		ct_check_eq_u32(g.last_grant.valblk_present, 1u,
+				"*** the grant is handed to the engine with "
+				"valblk_present = 1 ***");
+		ct_check(memcmp(g.last_grant.valblk, master_block,
+				VMS_DLM_VALBLK_LEN) == 0,
+			 "  the block handed over IS the master's, byte for byte");
+		ct_check(memcmp(g.lkb.valblk, master_block, VMS_DLM_VALBLK_LEN) == 0,
+			 "*** STATE DELTA: the proxy's value block is now the "
+			 "MASTER'S (0x11.. -> 'WROTEBYVAX1XXXXX') ***");
+
+		/*
+		 * THE NEVER-CORRUPT GATE. When the engine holds no proxy this grant
+		 * can belong to (grant_recv refuses -- the real path's SS$_IVLOCKID),
+		 * the FSM records NOTHING: it counts the reply UNMATCHED and the proxy
+		 * block is left exactly as it was, never overwritten by a block for a
+		 * lock this node does not hold.
+		 */
+		{
+			uint32_t unmatched0;
+
+			fe_reset("OVMXLV01", VMS_LCK_EX, 0x00f0u, 1, CSID_MASTER);
+			for (i = 0; i < VMS_DLM_VALBLK_LEN; i++)
+				g.lkb.valblk[i] = 0x22u;
+			post_from_lkb(&p, VMS_DLM_POST_ENQ, CSID_MASTER);
+			(void)dlm_req_fsm_post(&g_fsm, &p);
+			unmatched0 = g_fsm.replies_unmatched;
+			g.grant_refuse = 1;   /* the engine owns no such lock */
+
+			len = make_grant_valblk(frame, g.lkb.lkid, 0x0abcu, VMS_LCK_EX,
+						master_block);
+			(void)dlm_req_fsm_reply(&g_fsm, CSID_MASTER, 0u, frame, len);
+			ct_check_eq_u32(g_fsm.replies_unmatched, unmatched0 + 1u,
+					"a grant the engine refuses is UNMATCHED "
+					"(the never-corrupt gate)");
+			ct_check(g.lkb.valblk[0] == 0x22u,
+				 "*** the proxy's block was NOT overwritten by a grant "
+				 "the engine refused ***");
+			g.grant_refuse = 0;
+		}
 	}
 }
 

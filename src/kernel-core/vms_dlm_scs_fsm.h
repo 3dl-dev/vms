@@ -125,19 +125,23 @@
  *   never sent: none. The emission is what this item lands; consuming one is
  *   its own item, with its own proof.
  *
- *   GROUNDED IN THE CODEC, BUT NOT TRANSMITTED BY THIS ARM:
+ *   THE VALUE BLOCK, BOTH CROSSINGS NOW WIRED (vms-727). vms-c03 grounded the
+ *   16 bytes at body[36:52]; the own-lab campaign then pinned the framing on
+ *   both sides:
+ *     - THE WRITE, op 0x06. body[32:36] is a per-lock SERIAL (body[32]) plus
+ *       the cat-0x02 request stamp (body[34]=0x01), so the op-0x06 builder
+ *       exists and this arm EMITS a holder's value-block flush on a demote
+ *       from write mode (the codec's vms_dlm_valblk_convert_build).
+ *     - THE READ, op 0x01 grant. A grant that returns the master resource's
+ *       block carries it at the SAME body[36:52], marked by the grounded
+ *       grant-with-valblk record (body[28]=0x10, body[32:36]=01 00 fa 00, the
+ *       cat-0x82 REPLY stamp shape). The codec recognises it and h_grant hands
+ *       the block to the engine as `valblk_present = 1`; a plain or stale grant
+ *       still leaves the proxy's own block ALONE (never sixteen zeros read as
+ *       data). The master returns the block ONLY when the resource holds a
+ *       non-zero one (vms_dlm_master_result.valblk_present).
  *
- *     THE VALUE BLOCK, op 0x06. vms-c03 grounded the 16 bytes at body[36:52]
- *     and the codec has an ACCESSOR for them; it deliberately has no builder,
- *     because the four bytes ahead of the block are not pinned by any capture
- *     and composing a whole op-0x06 frame would mean minting them. So the
- *     write crossing is still NOT transmitted (`lvb_write_no_wire_field`), and
- *     an inbound grant is still handed to the engine with `valblk_present = 0`
- *     -- the op-0x01 grant genuinely carries no value block -- which makes the
- *     engine leave the proxy's own block alone rather than overwrite it with
- *     zeros (vms_dlm_proxy.h `struct vms_dlm_proxy_grant`). Sixteen zeros
- *     presented as an LVB is a placeholder that reads exactly like data, which
- *     is the worst kind.
+ *   GROUNDED IN THE CODEC, BUT NOT TRANSMITTED BY THIS ARM:
  *
  *     THE BLOCKING AST, op 0x04. Grounded by vms-c03 and parseable by the
  *     codec, which identifies its lock by `master_lkid` and by nothing else

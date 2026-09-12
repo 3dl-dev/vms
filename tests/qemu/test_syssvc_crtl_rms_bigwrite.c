@@ -158,6 +158,7 @@ int main(void)
         size_t nr = rbuf ? ovmx_crtl_fread(rbuf, 1, BIG_SIZE, rf) : 0;
         check(nr == (size_t)BIG_SIZE,
               "1g: ovmx_crtl_fread reads all 200000 bytes back ($GET loop over N records)");
+        /* negctl: crtl-fwrite-chunk-loop-stops-early */
         check(rbuf && memcmp(buf, rbuf, BIG_SIZE) == 0,
               "1h: the chunked round-trip is byte-exact across record boundaries");
         ovmx_crtl_fclose(rf);

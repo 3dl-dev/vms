@@ -187,6 +187,7 @@ int main(void)
         check(ovmx_crtl_fdclose(dfd) == 0, "3b: ovmx_crtl_fdclose -> sys$close NORMAL");
     check(ovmx_crtl_unlink(FOPDEL) == 0, "3c: ovmx_crtl_unlink -> sys$erase NORMAL");
     check(search_one(FOPDEL ";*", NULL) == 0,
+          /* negctl: crtl-unlink-fabricates-erase */
           "3d: independent sys$search sees the unlinked file GONE");
 
     /* ================================================================= *

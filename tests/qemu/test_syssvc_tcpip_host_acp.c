@@ -144,6 +144,7 @@ int main(void)
         make_record(rec, sizeof(rec), "10.2.2.2", "BETA");
         int rc = rms_textfile_append_line(HOST_SPEC, rec);
         check(rc == 0, "second host record appended over the ACP");
+        /* negctl: textfile-append-overwrites-not-eof */
         check(host_store_has(HOST_SPEC, "10.2.2.2", "BETA") &&
               host_store_has(HOST_SPEC, "10.1.1.1", "ALPHA"),
               "both host records survive -- SET HOST adds, it does not supersede");

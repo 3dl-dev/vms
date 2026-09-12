@@ -210,6 +210,7 @@ int main(void)
         unsigned char *rbuf = calloc(1, PT_SIZE);
         size_t nr = rbuf ? ovmx_crtl_fread(rbuf, 1, PT_SIZE, rf) : 0;
         check(nr == (size_t)PT_SIZE, "4b: ovmx_crtl_fread reads all 8192 bytes back (sys$get)");
+        /* negctl: crtl-fwrite-bypasses-rms */
         check(rbuf && memcmp(buf, rbuf, PT_SIZE) == 0,
               "4c: the RMS round-trip is byte-exact (FIX mrs=0 put / mrs=1 get)");
         ovmx_crtl_fclose(rf);

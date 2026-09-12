@@ -176,6 +176,7 @@ int main(void)
 
                 CHECK(euid != 0, "A: the subprocess is genuinely NON-ROOT (the runtime SPAWN condition)");
                 CHECK(reg == 1, "A: VMS_IOCTL_REGISTER_SUBPROCESS was accepted");
+                /* negctl: register-subprocess-identity-self-declared */
                 CHECK(strcmp(user, SYS_NAME) == 0,
                       "A: the subprocess INHERITED the creator's user name (SYSTEM) -- a readback, not a self-declaration");
                 CHECK(uic == SYS_UIC,

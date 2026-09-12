@@ -446,4 +446,12 @@
 # with a constant "X", so the image emits a non-empty malformed line and still
 # exits cleanly while the accept/spawn/exit assertions stay green and only the
 # independent RFC 867 shape assertion reddens. See its entry in facility_defects.sh.
-110
+#
+# Raised to 150 by vms-45a's 11 non-cluster negctl-coverage-paydown defects
+# (devtab-io-error-not-charged, setexit-status-not-recorded,
+# spawn-notify-flag-not-set, register-subprocess-identity-self-declared,
+# libspawn-prcnam-dropped, crtl-fwrite-bypasses-rms, rms-open-no-file-access-enq,
+# rms-record-lock-not-enqueued, crtl-fwrite-chunk-loop-stops-early,
+# crtl-unlink-fabricates-erase, textfile-append-overwrites-not-eof) -- see each
+# entry in facility_defects.sh for what it covers and why.
+150

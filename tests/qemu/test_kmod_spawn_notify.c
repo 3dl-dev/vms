@@ -271,6 +271,7 @@ int main(void)
             CHECK(st == SS_NORMAL, "parent arms on an already-exited child");
             CHECK(completed == 1,
                   "arm reports completed == 1 (delivered immediately, race closed)");
+            /* negctl: spawn-notify-flag-not-set */
             CHECK(do_readef_set(fd, EFN_B) == 1,
                   "the executive SET the completion flag immediately");
 

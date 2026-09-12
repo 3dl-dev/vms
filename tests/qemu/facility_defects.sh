@@ -549,7 +549,18 @@ scs-cdt-snapshot-fabricates-connection
 cnxman-csb-snapshot-fabricates-member
 getsyi-csid-reported-without-valid
 fork-work-dispatch-uncounted
-fork-worker-start-reports-success-unstarted"
+fork-worker-start-reports-success-unstarted
+devtab-io-error-not-charged
+setexit-status-not-recorded
+spawn-notify-flag-not-set
+register-subprocess-identity-self-declared
+libspawn-prcnam-dropped
+crtl-fwrite-bypasses-rms
+rms-open-no-file-access-enq
+rms-record-lock-not-enqueued
+crtl-fwrite-chunk-loop-stops-early
+crtl-unlink-fabricates-erase
+textfile-append-overwrites-not-eof"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -793,6 +804,269 @@ L2_OPEN without PHY_IO mints no handle
 EOF
                       ;;
         knock_on_why)  echo "the always-true priv-check returns SS\$_NORMAL instead of SS\$_NOPRIV AND mints a handle, so both the OPEN-refused and no-handle assertions redden together.";;
+        esac;;
+
+    devtab-io-error-not-charged)
+        case "$_f" in
+        facility)     echo "device error accounting: SHOW ERROR / F\$GETDVI(...,\"ERRCNT\") sourced from the executive's real ACP block-I/O error path (vms_devtab_note_io_error, vms-5f82)";;
+        targets)      echo "kernel-core/vms_devtab.c";;
+        suites_red)   echo "test_kmod_errcnt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_devtab_note_io_error() drops its own increment ('dev->errcnt++;'), so a genuine ACP block-read failure on the unit's backing device is never charged to it -- the writer side of the SHOW ERROR / \$GETDVI ERRCNT field goes silent while the reader keeps working. The unique increment text is gone after substitution (no-op re-apply). Baseline readability, the mount-refusal status, and the INV-6 no-speculative-bump assertion (a SUCCESSFUL read must not move the count) all read other paths and stay green -- only the count-moved-by-one/two assertions redden.";;
+        require_fail) cat <<'EOF'
+one genuine ACP block-read failure incremented VDA100: ERRCNT by exactly one
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a second block-read failure moved VDA100: ERRCNT to +2 (a real counter)
+$DEVICE_SCAN reports VDA100: with the same non-zero ERRCNT SHOW ERROR would print
+EOF
+                      ;;
+        knock_on_why)  echo "the same dropped increment means the count never leaves zero across BOTH injected failures, so the second-failure assertion (which checks it moved to +2) reddens identically, and \$DEVICE_SCAN's projection of that same field (cmd_show_error's own reader) reports the same wrong (zero) value.";;
+        esac;;
+
+    setexit-status-not-recorded)
+        case "$_f" in
+        facility)     echo "\$EXIT/\$STATUS cross-process readback (VMS_IOCTL_GETEXIT by VMS PID / by Linux pid, vms-707/vms-e9a)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_kmod_exit test_syssvc_spawn_pipeline";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_getexit()'s 'args.condition = target->exit_status;' (the shared read after the SELF/PID/LINUX_PID selector switch) is narrowed to a ternary that passes the SELF case through untouched but masks every CROSS-PROCESS read (SEL_PID, SEL_LINUX_PID) down to VMS_STS_M_SUCCESS -- only the success/fail bit survives, the rest of the condition value is fabricated zero. A same-process \$STATUS round-trip (test_kmod_exit's self checks) is completely unaffected (SEL_SELF is untouched), and any cross-process read whose real condition happens to collapse to exactly 0 or 1 under that mask reads back correctly by construction -- which is why only the specific non-trivial test vectors below redden, not every cross-process assertion in the file. One line replaced by a different one-line expression; the original assignment text is gone, so a second apply is a no-op (selftest).";;
+        require_fail) cat <<'EOF'
+B reads back the EXACT condition value A recorded
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+RUN reads back the EXACT recorded condition value (0x0035A019, NOT a POSIX-collapsed 0x1)
+the failing stage's actual $STATUS (SS$_ABORT) is surfaced
+EOF
+                      ;;
+        knock_on_why)  echo "the same success-bit-only mask reddens every cross-process \$STATUS reader whose real condition value is not exactly 0 or 1: test_kmod_exit's own SEL_PID cross-process check (require_fail, COND_CHILD) and its SEL_LINUX_PID RUN-fork-path check (COND_RUN3, a knock-on in the SAME suite), and test_syssvc_spawn_pipeline's SEL_PID readback of the failing stage's SS\$_ABORT status (a knock-on in the WIDENED suite). Every other assertion in both suites -- the self round-trip in test_kmod_exit Part 1, the pipeline's pass/fail branch decision (which only consults the preserved success bit), and the happy-path pipeline stages (whose real condition is exactly SS\$_NORMAL=1, which the mask reproduces exactly) -- reads a value the mask does not disturb and stays green.";;
+        esac;;
+
+    spawn-notify-flag-not-set)
+        case "$_f" in
+        facility)     echo "\$CREPRC/LIB\$SPAWN /NOWAIT immediate completion delivery (vms_ioctl_spawn_notify's already-exited branch, vms-e9a B1)";;
+        targets)      echo "kernel-core/vms_proctab.c";;
+        suites_red)   echo "test_kmod_spawn_notify";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_ioctl_spawn_notify()'s ARM-AFTER-EXIT branch calls 'spawn_notify_deliver(proc, args.efn, args.astadr, args.astprm, acmode);' when the child already recorded its exit; the mutation substitutes VMS_EF_NONE for args.efn on THIS call site only, so spawn_notify_deliver's own 'if (efn != VMS_EF_NONE)' guard skips setting the parent's completion event flag for the immediate-delivery path. The completion AST (unconditional on astadr, untouched) still queues, and the ARM-BEFORE-EXIT path (setexit's OWN call site to the same shared function, a few lines away in a different function) is a DIFFERENT call and keeps its real efn -- so \$WAITFR-based delivery (Path 1) is completely unaffected and never blocks. Only the immediate-completion READEF check reddens. Call-site-scoped substitution; the original argument is gone at that one call, so a second apply is a no-op (selftest).";;
+        require_fail) cat <<'EOF'
+the executive SET the completion flag immediately
+EOF
+                      ;;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
+        esac;;
+
+    register-subprocess-identity-self-declared)
+        case "$_f" in
+        facility)     echo "\$CREPRC/SPAWN SUBPROCESS identity-by-continuation (VMS_IOCTL_REGISTER_SUBPROCESS, vms-19e9)";;
+        targets)      echo "kernel/vms_module.c";;
+        suites_red)   echo "test_syssvc_creprc_inherit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dev_ioctl()'s REGISTER_SUBPROCESS dispatch calls 'vms_ioctl_register(arg, true, false)' (inherit_identity=true, share_pid=false); the mutation flips inherit_identity to false, so a subprocess registers exactly like a bare REGISTER -- no UIC/username/privilege continuation from its real_parent. The subprocess still gets a genuinely FRESH, distinct VMS PID (share_pid was already false) and VMS_IOCTL_REGISTER_SUBPROCESS itself still returns SS\$_NORMAL, so the PID-freshness and registration-accepted assertions stay green; only the inherited-identity fields (user name, UIC, privilege mask) read the pre-continuation (unnamed/unprivileged) defaults instead of the creator's row. The security-half guard (a non-root self-declared SYSTEM identity is refused) is a completely different code path (vms_ioctl_setident) and is untouched. Unique call-site text; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+A: the subprocess INHERITED the creator's user name (SYSTEM) -- a readback, not a self-declaration
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+A: the subprocess inherited the creator's UIC [1,4]
+A: the subprocess inherited the creator's privilege mask, SETPRV/SYSPRV included
+EOF
+                      ;;
+        knock_on_why)  echo "the same inherit_identity=false flip means EVERY field continuation was supposed to carry from the creator's row -- user name, UIC, and privilege mask -- reads the fresh-registration default instead; all three are the same single property (identity continuation disabled), not three separate defects.";;
+        esac;;
+
+    libspawn-prcnam-dropped)
+        case "$_f" in
+        facility)     echo "LIB\$SPAWN's \$CREPRC child names itself under the caller's requested prcnam (vms-e9a B0)";;
+        targets)      echo "libvms/syssvc/sys_process.c";;
+        suites_red)   echo "test_syssvc_libspawn_reg";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "sys\$creprc()'s created-process body only calls 'vms_kif_setprn(child_prcnam)' 'if ((rep.status & 1) && child_prcnam[0])'; the mutation prefixes that guard with '0 &&', so \$SETPRN is never issued and the subprocess registers (vms_kif_register_subprocess, untouched) but stays UNNAMED in the executive's table. rep.status and the minted VMS pid are unaffected (the guard change only skips the naming call), so lib\$spawn/NOWAIT itself still reports success with a real pid; only every BY-NAME reader of that subprocess -- \$GETJPI-by-prcnam directly, and \$GETJPI-by-pid's own prcnam field readback -- finds nothing to report. Unique guard text; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+the lib$spawn'd subprocess is EXECUTIVE-REGISTERED (resolvable BY prcnam)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+the subprocess carries the requested prcnam
+$GETJPI-by-name and lib$spawn agree on the executive VMS pid
+$GETJPI-by-pid resolves the same registered subprocess
+EOF
+                      ;;
+        knock_on_why)  echo "the same skipped \$SETPRN means the subprocess is unnamed everywhere: the by-name lookup that anchors require_fail fails outright, so the two assertions that read fields off ITS result (the prcnam string, the cross-check pid) fail with it, and the separate by-VMS-pid lookup finds a real PCB but with no prcnam ever stamped on it, so its own prcnam comparison also reddens -- one missing \$SETPRN call, four readers of its effect.";;
+        esac;;
+
+    crtl-fwrite-bypasses-rms)
+        case "$_f" in
+        facility)     echo "C RTL stdio->RMS veneer \$PUT (ovmx_crtl_fwrite over sys\$put, vms-47e)";;
+        targets)      echo "vmsrms/crtl_rms_stdio.c";;
+        suites_red)   echo "test_syssvc_crtl_rms_veneer";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_crtl_fwrite()'s chunk loop replaces 'uint32_t st = sys\$put(&fh->rab, 0, 0);' with a hardcoded RMS\$_NORMAL, so the veneer reports every byte written without ever issuing the real \$PUT. sys\$create (fopen) still genuinely creates the file and its real directory entry (untouched), so the independent ACP directory search and on-disk header proofs (sections 2 and 3 of the suite) still find a real, correctly-versioned, zero-length file -- only its CONTENT is fabricated. The write call's own reported count is the fabricated success too, so fwrite's immediate return value coincidentally still matches the requested count; the lie surfaces only when something reads the bytes back. Unique call; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+4c: the RMS round-trip is byte-exact (FIX mrs=0 put / mrs=1 get)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+4b: ovmx_crtl_fread reads all 8192 bytes back (sys$get)
+EOF
+                      ;;
+        knock_on_why)  echo "with the real \$PUT never issued the file is genuinely zero-length on disk, so the read-back \$GET loop hits RMS\$_EOF immediately (0 bytes, not 8192) -- the SAME never-written content, observed first as a short read (knock_on_fail) and then as a byte-exact-comparison failure against the deterministic payload (require_fail). The creation, directory-search, and on-disk-header assertions (sections 1-3) never touch the CONTENT and stay green.";;
+        esac;;
+
+    rms-open-no-file-access-enq)
+        case "$_f" in
+        facility)     echo "RMS file-level share arbitration behind the real DLM: the sys\$open/sys\$create file-access \$ENQ seam (rms_file_lock_acquire, vms-50e)";;
+        targets)      echo "vmsrms/rms_core.c";;
+        suites_red)   echo "test_syssvc_rms_filelock";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_file_lock_acquire() still issues the REAL vms_kif_enq() for the file-access lock -- so DLM grant/conflict arbitration between two opens of the same file is completely untouched -- but the mutation empties its 'h->access_lkid = lkid;' success arm (braceless-if, replaced with an empty compound statement to avoid -Werror=empty-body), so the GRANTED lock ID is never stashed on the handle. The handle-visible lkid is therefore always 0: unintrospectable via GETLKI, indistinguishable from a second concurrent holder's own lkid, and never \$DEQ'd by sys\$close (whose release path also reads h->access_lkid) -- so the real DLM lock LEAKS past close. Unique statement; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+open#1 holds a real file-access lkid
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+GETLKI: open#1's lock is a REAL granted EX lock on the FID resource
+open#2 (PR) now succeeds once open#1's EX lock is released
+open#2 holds its OWN distinct lkid (two real locks, not one shared flag)
+GETLKI: open#1's lock still granted PR while open#2's PR coexists
+GETLKI: open#2's lock is a REAL, independently granted PR lock
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+ONE ROOT CAUSE, MEASURED THROUGH EVERY READER of h->access_lkid. The real DLM
+grant/conflict decisions are untouched (open#2's genuine RMS$_SHR refusal while
+open#1 holds EX, and its retry once released relative to the ACTUAL lock, are
+never asked here) -- what breaks is every consumer of the NEVER-STASHED lkid:
+GETLKI on it reads an always-invalid id instead of the real grant (first
+knock-on); sys$close's own release path reads the same always-zero field, so
+it never $DEQs the real lock, which LEAKS -- so the retry that real VMS closes
+out (open#2 (PR) now succeeds once open#1's EX lock is released) still
+conflicts against the leaked lock (second knock-on); and Test B's two
+concurrent PR holders both read lkid 0 (indistinguishable, and GETLKI on
+either finds no real record), reddening its own three assertions (the
+remaining knock-ons). All six texts are the SAME missing assignment, observed
+at every place code reads the field it should have set.
+EOF
+                      ;;
+        esac;;
+
+    rms-record-lock-not-enqueued)
+        case "$_f" in
+        facility)     echo "RMS RECORD-level locking behind the real DLM: the default \$get locking-read seam (rms_reclock_after_locate, vms-0dd)";;
+        targets)      echo "vmsrms/rms_record.c";;
+        suites_red)   echo "test_syssvc_rms_reclock";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_reclock_after_locate() still issues the REAL vms_kif_enq() for the per-record EX lock on a default (locking) \$get -- so a SECOND stream's conflicting \$get still gets the genuine RMS\$_RLK/RMS\$_OK_RLK/NORMAL answers the RAB\$M_NLK/RAB\$M_RLK read-modifier table specifies -- but the mutation empties its 'rab->_rec_lock_lkid = lkid;' success arm (braceless-if, replaced with an empty compound statement), so the HOLDING stream never remembers its own granted record lkid. Braceless-if empty-body substitution, same idiom as rms-open-no-file-access-enq; unique statement, gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+rab1 stashed a real record lkid
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+GETLKI: rab1's record lock is a REAL granted EX lock
+GETLKI: record lock's parent_id == the file-access lock (vms-0dd half a)
+rab1 holds a fresh record lkid on rrn=1
+rab1 (holder) sys$update(rrn=1) -> NORMAL
+rab1 (holder) sys$delete(rrn=1) -> NORMAL
+rab2 default $get(rrn=0), refused earlier with RMS$_RLK, now succeeds
+EOF
+                      ;;
+        knock_on_why)  cat <<'EOF'
+ONE ROOT CAUSE, MEASURED THROUGH EVERY READER of rab->_rec_lock_lkid. The real
+DLM conflict/read-through/dirty-read behaviour for the SECOND stream (rab2) is
+completely untouched -- its own lkid tracking and every RMS$_RLK / RMS$_OK_RLK
+/ NORMAL answer it gets are unaffected and stay green. What breaks is every
+place rab1 (the holder) consults its OWN never-stashed lkid: GETLKI on it
+(always invalid instead of the real EX grant) and the parent-linkage check
+(the same call); the SAME empty arm fires again on rab1's next $get(rrn=1),
+so its fresh lkid is ALSO never stashed; $UPDATE/$DELETE's own
+rms_reclock_require_held() gate reads that same always-zero field and refuses
+both with RMS$_CUR instead of granting them; and because rms_impl_get's own
+release-before-relocate step ALSO reads the never-stashed field, the real
+rrn=0 lock is never $DEQ'd when rab1 moves to rrn=1 -- it leaks, so rab2's
+later retry (which real VMS's release would have let through) still conflicts.
+Six symptoms, one dropped assignment.
+EOF
+                      ;;
+        esac;;
+
+    crtl-fwrite-chunk-loop-stops-early)
+        case "$_f" in
+        facility)     echo "C RTL stdio->RMS veneer chunked large-write completion (ovmx_crtl_fwrite's >64KiB multi-\$PUT loop, vms-126)";;
+        targets)      echo "vmsrms/crtl_rms_stdio.c";;
+        suites_red)   echo "test_syssvc_crtl_rms_bigwrite";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_crtl_fwrite()'s chunk loop condition 'while (remaining)' is narrowed to 'while (remaining == nbytes)', which is true only on the very FIRST iteration (before any bytes are subtracted) -- so the loop always exits after exactly one real \$PUT (one FIX record, up to 0xFFFF bytes) regardless of how much was requested, yet the function's own unconditional trailing 'return nmemb;' still reports the FULL requested count. A request of nbytes <= 0xFFFF (test_syssvc_crtl_rms_veneer's 8192-byte write) needs only one iteration under the CORRECT condition too, so it is completely unaffected; only a write that genuinely needs a SECOND \$PUT (this suite's 200000-byte write, > 3 FIX records) silently loses every byte past the first chunk. Unique loop header; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+1h: the chunked round-trip is byte-exact across record boundaries
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+1g: ovmx_crtl_fread reads all 200000 bytes back ($GET loop over N records)
+EOF
+                      ;;
+        knock_on_why)  echo "with only the first 0xFFFF-byte chunk genuinely \$PUT, the file's real on-disk length is far short of 200000 bytes, so the read-back \$GET loop runs out of real records early (a short read, the knock-on) and the subsequent byte-for-byte comparison against the full deterministic payload fails (require_fail) -- the same truncated write, observed first as a short count and then as a content mismatch. The write call's OWN reported count (1b), the creation, and the independent-reader/on-disk-header proofs (1a, 1c-1f) never inspect the actual byte length and stay green.";;
+        esac;;
+
+    crtl-unlink-fabricates-erase)
+        case "$_f" in
+        facility)     echo "C RTL stdio->RMS veneer unlink/remove (ovmx_crtl_unlink over sys\$erase, vms-3c1/vms-3320)";;
+        targets)      echo "vmsrms/crtl_rms_stdio.c";;
+        suites_red)   echo "test_syssvc_crtl_rms_fileops";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "ovmx_crtl_unlink() replaces 'uint32_t st = sys\$erase(&fab, 0, 0);' with a hardcoded RMS\$_NORMAL, so the veneer reports every unlink/remove as successful without ever asking the ACP to delete the directory entry -- the file survives, unerased, on the real volume. Because the caller-visible return value is the SAME fabricated success the real erase would also have reported here (the file genuinely exists and a real erase WOULD succeed), the immediate call-site check cannot tell the difference; only an INDEPENDENT reader that looks for the file afterward can. Unique call; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+3d: independent sys$search sees the unlinked file GONE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+5f: readdir agrees the op-3 unlink and op-4 rename-source are GONE (same self-check crtl_rms3 performs before its sentinel-7 return)
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME never-erased FOPDEL.DAT is invisible to the immediate call-site check (which only reads the fabricated return code, unaffected) but visible to BOTH independent readers that later look for it by name: the direct sys\$search right after the unlink (require_fail) and the later opendir/readdir enumeration pass that re-checks the same file is gone (knock_on_fail) -- one un-erased file, found twice.";;
+        esac;;
+
+    textfile-append-overwrites-not-eof)
+        case "$_f" in
+        facility)     echo "shared per-boot RMS text-store APPEND positioning (rms_textfile_append_line's RAB\$M_EOF seek, vms-274) -- TCPIP\$ROUTE/INTERFACE/NAMESERVICE/HOST.DAT persistence, vms-210/vms-402";;
+        targets)      echo "libvms/rtl/rms_textfile.c";;
+        suites_red)   echo "test_syssvc_tcpip_config_acp test_syssvc_tcpip_host_acp";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "rms_textfile_append_line()'s own \$PUT call, 'int rc = rmstf_put(&fab, line, RAB\$M_EOF);', drops the RAB\$M_EOF record-access modifier (replaced with a plain 0, textually identical to rms_textfile_write_line's OWN \$PUT call a few lines below) -- so an append against a file that ALREADY holds a record overwrites it instead of positioning past end-of-file. A FIRST append to a brand-new (just-\$CREATEd) file is unaffected -- there is nothing yet to overwrite -- which is why test_syssvc_loginout_acp's single OPERATOR.LOG append (this suite's only OTHER caller of rms_textfile_append_line) never reddens: it only ever appends once to a fresh file. Only a SECOND append against a file that already holds a record -- exercised here by TCPIP\$ROUTE.DAT's two records and TCPIP\$HOST.DAT's two records -- silently loses the earlier one. rmstf_put()'s own \$put status is still genuinely NORMAL (a write really landed, just at the wrong position), so every call-site's own rc==0 check is unaffected; only an independent re-read that expects BOTH records to coexist reddens. Unique call; gone after substitution (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+both host records survive -- SET HOST adds, it does not supersede
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+both route records read back off the ODS-2 volume -- append, not supersede
+the DOMAIN record appends after the SERVER record
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME dropped RAB\$M_EOF fires at every SECOND-or-later append in either suite: TCPIP\$HOST.DAT's second SET HOST overwrites the first host record (require_fail); TCPIP\$ROUTE.DAT's second SET ROUTE overwrites the first route record (first knock-on); and TCPIP\$NAMESERVICE.DAT's later DOMAIN append (which lands on a file rms_textfile_write_line already populated with one SERVER record) overwrites THAT record instead of adding a second one (second knock-on). rms_textfile_write_line itself, the single-append OPERATOR.LOG/LASTLOGIN paths in test_syssvc_loginout_acp, and every dismount/fail-honest assertion in both suites never exercise a second append against an already-populated file and stay green.";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -6210,7 +6484,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "The mutation makes vms_bg_forkinherit_consume's lookup never match (if (0 && ...)), so the child's registration finds no fork-time record and falls back to the #815 real_parent-at-registration snapshot. In test_syssvc_bg_fork_close_inherit the parent CLOSES the accepted channel right after the fork, so by the time the child registers the channel is gone: the child's ovmx_materialize_fd returns SS\$_IVCHAN, and its byte-exact round-trip fails. The no-executive honest-skip and the accept/listener assertions stay green -- only the child's inherit-and-round-trip assertion reddens. This is the eager-fork-inheritance anchor: disable the fork-time capture and the accept->fork->close race is lost. One condition zeroed.";;
+        why)          echo "The mutation makes vms_bg_forkinherit_consume's lookup never match (if (0 && ...)), so the child's registration finds no fork-time record and falls back to the #815 real_parent-at-registration snapshot. In test_syssvc_bg_fork_close_inherit the parent CLOSES the accepted channel right after the fork, so by the time the child registers the channel is gone: the child's ovmx_materialize_fd returns SS\$_IVCHAN, and its byte-exact round-trip fails. The no-executive honest-skip and the accept/listener assertions stay green -- only the child's inherit-and-round-trip assertion reddens. This is the eager-fork-inheritance anchor: disable the fork-time capture and the accept->fork->close race is lost. One condition zeroed. NOTE (vms-45a survey): test_syssvc_bg_fork_inherit's own plain-fork/fork+exec cases do NOT detect this mutation -- their parent never closes the channel before the child registers, so vms_proc_inherit_channels's #815 real_parent fallback (untouched by this defect) captures the still-open channel live and both cases stay green; that suite is DEFERRED (see facility_defects.sh header note near vms-45a) pending either a fork-time-vs-#815 discriminating fixture or accepting the shared vms_bg_capture_channels/vms_bg_adopt_channels primitives (which would also redden THIS suite) as its anchor point.";;
         require_fail) cat <<'EOF'
 the forked+exec'd child materialized the inherited connection and round-tripped BYTE-EXACT, though the parent CLOSED it right after the fork -- eager fork-time inheritance (vms-0cd)
 EOF
@@ -6318,6 +6592,62 @@ apply_edit() {
         # status stays 0 (success) but the create is never evaluated -> no kthread.
         # After apply the LHS text differs, so a 2nd apply is a no-op (selftest).
         sed -i 's|status = exec_kthread_create(\&b->ioworker, cfb_io_thread, b,|status = 0 \&\& exec_kthread_create(\&b->ioworker, cfb_io_thread, b, /* NEGCTL fork-worker-start-reports-success-unstarted */|' "$_file";;
+    devtab-io-error-not-charged)
+        # Unique increment (vms_devtab_note_io_error's own errcnt bump); dropping
+        # it leaves the counter unmoved. Gone after apply (no-op re-apply).
+        sed -i 's|dev->errcnt++;|/* NEGCTL devtab-io-error-not-charged: increment dropped */|' "$_file";;
+    setexit-status-not-recorded)
+        # Unique line (vms_ioctl_getexit's shared post-switch read); narrowed to
+        # a ternary that passes SEL_SELF through and masks every cross-process
+        # read (SEL_PID/SEL_LINUX_PID) to just the success bit. The original
+        # unconditional assignment text is gone after apply (no-op re-apply).
+        sed -i 's|    args.condition  = target->exit_status;|    args.condition  = (args.select == VMS_JPI_SEL_SELF) ? target->exit_status : (target->exit_status \& VMS_STS_M_SUCCESS); /* NEGCTL setexit-status-not-recorded */|' "$_file";;
+    spawn-notify-flag-not-set)
+        # Call-site-scoped: only the ARM-AFTER-EXIT (already-exited) branch's
+        # own spawn_notify_deliver() call substitutes VMS_EF_NONE for args.efn,
+        # so its shared 'if (efn != VMS_EF_NONE)' guard skips the flag-set for
+        # THIS call only. The ARM-BEFORE-EXIT path's own (different) call site
+        # is untouched. Original argument gone after apply (no-op re-apply).
+        sed -i 's|spawn_notify_deliver(proc, args.efn, args.astadr, args.astprm, acmode);|spawn_notify_deliver(proc, VMS_EF_NONE, args.astadr, args.astprm, acmode); /* NEGCTL spawn-notify-flag-not-set */|' "$_file";;
+    register-subprocess-identity-self-declared)
+        # Unique call-site text (REGISTER_SUBPROCESS's own dispatch); flips
+        # inherit_identity true->false so a subprocess registers like a bare
+        # REGISTER (share_pid stays false -- the PID is still genuinely fresh).
+        # Gone after apply (no-op re-apply).
+        sed -i 's|return vms_ioctl_register(arg, true, false);|return vms_ioctl_register(arg, false, false); /* NEGCTL register-subprocess-identity-self-declared */|' "$_file";;
+    libspawn-prcnam-dropped)
+        # Unique guard (sys$creprc's own $SETPRN gate); '0 &&' makes it
+        # structurally unreachable so the created subprocess never gets named.
+        # Gone after apply (no-op re-apply).
+        sed -i 's|if ((rep.status \& 1) \&\& child_prcnam\[0\])|if (0 \&\& (rep.status \& 1) \&\& child_prcnam[0]) /* NEGCTL libspawn-prcnam-dropped */|' "$_file";;
+    crtl-fwrite-bypasses-rms)
+        # Unique call (ovmx_crtl_fwrite's own $PUT); the real call is replaced
+        # with a hardcoded NORMAL, so no bytes are ever really written. Gone
+        # after apply (no-op re-apply).
+        sed -i 's|uint32_t st = sys\$put(&fh->rab, 0, 0);|uint32_t st = RMS$_NORMAL; /* NEGCTL crtl-fwrite-bypasses-rms: sys$put skipped */|' "$_file";;
+    rms-open-no-file-access-enq)
+        # Braceless-if success arm: empty {} (not a bare comment) avoids
+        # -Werror=empty-body. Unique text; gone after apply (no-op re-apply).
+        sed -i 's|        h->access_lkid = lkid;|        { } /* NEGCTL rms-open-no-file-access-enq: lkid not stashed */|' "$_file";;
+    rms-record-lock-not-enqueued)
+        # Braceless-if success arm, same idiom as rms-open-no-file-access-enq.
+        # Unique text; gone after apply (no-op re-apply).
+        sed -i 's|        rab->_rec_lock_lkid = lkid;|        { } /* NEGCTL rms-record-lock-not-enqueued: lkid not stashed */|' "$_file";;
+    crtl-fwrite-chunk-loop-stops-early)
+        # Unique loop header (ovmx_crtl_fwrite's chunk loop); narrowed so the
+        # loop body runs exactly once regardless of how many chunks remain.
+        # Gone after apply (no-op re-apply).
+        sed -i 's|    while (remaining) {|    while (remaining == nbytes) { /* NEGCTL crtl-fwrite-chunk-loop-stops-early */|' "$_file";;
+    crtl-unlink-fabricates-erase)
+        # Unique call (ovmx_crtl_unlink's own $ERASE); the real call is
+        # replaced with a hardcoded NORMAL, so the file is never really erased.
+        # Gone after apply (no-op re-apply).
+        sed -i 's|uint32_t st = sys\$erase(&fab, 0, 0);|uint32_t st = RMS$_NORMAL; /* NEGCTL crtl-unlink-fabricates-erase: sys$erase skipped */|' "$_file";;
+    textfile-append-overwrites-not-eof)
+        # Unique call (rms_textfile_append_line's own $PUT); drops RAB$M_EOF so
+        # an append against an already-populated file overwrites its record
+        # instead of positioning past EOF. Gone after apply (no-op re-apply).
+        sed -i 's|int rc = rmstf_put(&fab, line, RAB\$M_EOF);|int rc = rmstf_put(\&fab, line, 0); /* NEGCTL textfile-append-overwrites-not-eof */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

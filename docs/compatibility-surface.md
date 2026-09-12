@@ -11,12 +11,12 @@
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 310 |
-| 🟢 implemented | 273 | | n/a | 93 |
+| ✅ verified | 24 | | real | 311 |
+| 🟢 implemented | 274 | | n/a | 92 |
 | 🟡 partial | 48 | | advisory | 45 |
 | 🟠 stub | 16 | | facade-risk | 6 |
 | 🔵 designed | 0 | |  |  |
-| ⬜ absent | 93 | |  |  |
+| ⬜ absent | 92 | |  |  |
 
 Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 designed · ⬜ absent · ⚠ facade-risk (INV-6/Draper) · ≈ advisory.
 
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **410 committed** — **297 met** (implemented/verified), 47 in progress (partial), 66 not started (absent/stub/designed).
+- **410 committed** — **298 met** (implemented/verified), 47 in progress (partial), 65 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 8 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 
@@ -859,7 +859,7 @@ Full UAF account record storage and Purdy/hashed password authentication are rea
 
 _SCS, NISCA/NISCS, connection manager/quorum, cluster-wide DLM, MSCP serving, cluster-wide logicals, shadowing._
 
-`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜⬜⬜`  —  29 surfaces catalogued (21 met · 2 in progress · 6 not started) · V1: 28 committed, 21 met
+`✅✅🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟢🟡🟡⬜⬜⬜⬜`  —  29 surfaces catalogued (22 met · 2 in progress · 5 not started) · V1: 28 committed, 22 met
 
 ### cluster-dlm — Cluster-wide Distributed Lock Manager
 <sub>scope: in · plan: vms-694 · ref: OpenVMS Cluster Systems manual; $ENQ/$DEQ/$GETLKI system services · reviewed 2026-09-10</sub>
@@ -938,13 +938,13 @@ The connection manager is EXECUTIVE-RESIDENT (vms_cnxman.c and four pure FSMs in
 MSCP disk SERVING IS NOT BUILT. It lived in the userspace SCS daemon, which FC-P3.9 deleted (the operator's 2026-09-02 clustering reset); the executive-resident replacement is FC-P6.x and unbuilt. What DOES exist is the CLIENT half the executive's own cluster join drives: the MSCP codec and the served-unit discovery FSM. TMSCP tape serving is not evidenced.
 
 
-<sub>4 items · 2 met · 0 in progress · 2 not started</sub>
+<sub>4 items · 3 met · 0 in progress · 1 not started</sub>
 
 | | Surface | Kind | VMS | Status | Auth | Scope | Evidence / notes |
 |---|---|---|---|---|---|---|---|
-| 🟢 | `mscp-serve$disk-read-write` | feature | MSCP disk-serving controller: READ/WRITE command responder | implemented | real | in | `src/kernel-core/vms_mscp_srv.c` — EXECUTIVE-RESIDENT SERVER LANDED (FC-P6.3), earning back the capability the 2026-09-02 reset voided when it deleted the userspace daemon (src/vmsscs/scs_mscp_srv.c). `vms_mscp_srv_fsm.c` (UQB/HQB/HRB, the Controller-Available/Online state machine) + `vms_mscp_srv.c` glue serve the executive's own mounted volumes via `exec_blockdev_*`/the ACP as `$<ALLOCLASS>$DUAn`; SCC/GUS/ONLINE/READ/WRITE built+parsed through the FC-P6.2 codec at measured lengths; MSCP$DISK LISTENs only when a serveable unit exists; write-protect honest (ST.WPR with the real Table B-2 reason sub-code, zero blocks written). status=implemented, authenticity=real, NOT verified: R1 = test_mscp_srv (167 checks) + R4-lite = FC-P3.4's real class-driver discovery FSM walks this real server end-to-end (SCC x2 + MD.NXU walk, 2 units). NOT YET: R5 real-VAX MOUNT (FC-P6.4, lab-deferred); the WRITE block-transfer INITIATION direction is lab-ungrounded (READ, what a MOUNT needs, is fully grounded); MSCP_SERVE_ALL bit semantics undecoded (any non-zero = serve). `mscp-serve$online-end` stays stub (no byte-exact oracle).
+| 🟢 | `mscp-serve$disk-read-write` | feature | MSCP disk-serving controller: READ/WRITE command responder | implemented | real | in | `src/kernel-core/vms_mscp_srv.c` — EXECUTIVE-RESIDENT SERVER LANDED (FC-P6.3), earning back the capability the 2026-09-02 reset voided when it deleted the userspace daemon (src/vmsscs/scs_mscp_srv.c). `vms_mscp_srv_fsm.c` (UQB/HQB/HRB, the Controller-Available/Online state machine) + `vms_mscp_srv.c` glue serve the executive's own mounted volumes via `exec_blockdev_*`/the ACP as `$<ALLOCLASS>$DUAn`; SCC/GUS/ONLINE/READ/WRITE built+parsed through the FC-P6.2 codec at measured lengths; MSCP$DISK LISTENs only when a serveable unit exists; write-protect honest (ST.WPR with the real Table B-2 reason sub-code, zero blocks written). status=implemented, authenticity=real, NOT verified: R1 = test_mscp_srv (167 checks) + R4-lite = FC-P3.4's real class-driver discovery FSM walks this real server end-to-end (SCC x2 + MD.NXU walk, 2 units). NOT YET: R5 real-VAX MOUNT (FC-P6.4, lab-deferred); the WRITE block-transfer INITIATION direction is lab-ungrounded (READ, what a MOUNT needs, is fully grounded); MSCP_SERVE_ALL bit semantics undecoded (any non-zero = serve). `mscp-serve$online-end` is implemented (real serve-side handler) but below verified — no byte-exact real-VAX-accepted oracle yet.
  |
-| ⬜ | `mscp-serve$online-end` | feature | ONLINE END (0x89) response | absent | n/a | in | `docs/cluster-protocol-spec.md` — Retired with the server above (FC-P3.9). It was book-only and unproven even then (laid out from Table A-7 with no capture in the corpus containing one -- the captured joiner never mounts); the layout survives as spec.
+| 🟢 | `mscp-serve$online-end` | feature | ONLINE END (0x89) response | implemented | real | in | `src/kernel-core/vms_mscp_srv_fsm.c` — Executive-resident serve-side handler (vms-600), no longer book-only: h_cmd_online (vms_mscp_srv_fsm.c) parses an inbound ONLINE command and srv_send_online_end builds+sends the 44-byte ONLINE-END via the codec's vms_mscp_online_end_build ("44 bytes MEASURED"). The P.UNFL echo runs serve-side (host_unfl | unit_flags, host_unfl recorded on the HQB from the host's own ONLINE cmd) and P.UNTI = (SCSSYSTEMID<<16)|unit. GROUNDED on vaxlab-9: the 44-byte measured length, the P.UNFL echo rule, and P.UNTI. NOT verified: there is no byte-exact capture of OVMX's OWN ONLINE-END being ACCEPTED by a real VAX end-to-end (SCC + GUS have goldens; ONLINE-END does not) -- that is the R5 mount-acceptance lab run (vms-36a8/vms-600), so this stays implemented, below verified, until the oracle capture exists.
  |
 | 🟢 | `mscp-serve$client-discovery` | feature | MSCP$DISK client: connect, and walk the member's served units | implemented | real | in | `src/kernel-core/vms_mscp_cl_fsm.c` — FC-P3.4/FC-P3.3, executive-resident. The joining node opens its own MSCP$DISK client connection to the member it is joining through and walks the served units, which is a real obligation of the documented join sequence (wire spec §4(L)(c)), not a diagnostic. Every field it emits is built by the MSCP codec (vms_cluster_codec_mscp.c) from state the FSM holds; no offset is written outside the codec TU. PROVEN AT R1/R2: tests/cluster/host/test_mscp_cl_fsm.c and test_codec_mscp.c (byte-exact against the in-tree fixtures), plus the simulator's join scenarios. NOT claimed: mounting a real VAX-served disk, which needs both a real member and the server half -- R5, lab-deferred.
  |

@@ -85,6 +85,17 @@ add_test(NAME vmsdecnet_ncp_object
 set_tests_properties(vmsdecnet_ncp_object PROPERTIES
     ENVIRONMENT "NCP_EXE=$<TARGET_FILE:ncp_exe>")
 
+# rd vms-ea8/vms-6a4: node-filespec splitter (NODE"user pw acct"::spec) that
+# feeds the FAL/DAP COPY client. Pure logic -- compile the splitter TU directly
+# (no FAL/RMS/auth link stack needed for a syntax-only unit).
+add_executable(test_dnet_nodespec test_dnet_nodespec.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_nodespec.c)
+target_include_directories(test_dnet_nodespec PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include)  # dnet_cterm.h: caps + codes
+target_compile_options(test_dnet_nodespec PRIVATE -Werror)
+add_test(NAME vmsdecnet_nodespec_unit COMMAND test_dnet_nodespec)
+
 # rd vms-8c2: the DAP (Data Access Protocol) message codec + the FAL access-
 # control credential decoder behind $ COPY node::file. Proves (1) every served
 # DAP message round-trips encode->decode, (2) blocked messages walk in a single

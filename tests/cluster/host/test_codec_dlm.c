@@ -364,6 +364,47 @@ static void test_valblk_convert(void)
 			VMS_DLM_VALBLK_WIRE_LEN) == 0,
 		 "*** body[36:52] IS the 16 bytes the driver wrote at LKSB+8, "
 		 "verbatim off a real wire ***");
+	ct_check_eq_u32(c.serial, 0x1fu,
+			"  body[32] SERIAL == 0x1f (per-lock, == body[52]); "
+			"grounded vms-727, no longer un-pinned");
+
+	/*
+	 * THE BYTE-IDENTICAL BUILD PROOF (vms-727). Build an op-0x06 frame back
+	 * from ONLY the typed struct and assert every CITED byte of this real
+	 * capture is reproduced exactly -- the strongest form of grounding:
+	 * the builder emits the real wire, byte for byte, not an assertion that
+	 * it would. Poison the whole buffer first so anything the builder does
+	 * NOT write shows up as a mismatch on a cited byte.
+	 */
+	{
+		uint8_t built[256];
+		uint32_t written = 0;
+		uint32_t i;
+		int tail_all_zero = 1;
+
+		memset(built, 0xAA, sizeof(built));
+		ct_check(vms_dlm_valblk_convert_build(&c, built, sizeof(built),
+						      &written) == VMS_CODEC_OK,
+			 "builds an op-0x06 back from the typed struct");
+		assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY,
+					 f->wire_len, "dlm-valblk-convert");
+		ct_check_eq_u32(built[VMS_OFF_DLM_VALBLK_SERIAL],
+				built[VMS_OFF_DLM_VALBLK_SERIAL2],
+				"*** the SERIAL is stamped identically at "
+				"body[32] and body[52] (front == back) ***");
+		/* body[56:88] is stale sender buffer on the wire; the builder
+		 * must emit clean ZEROS there, never our own memory -- checked
+		 * positively against the 0xAA poison. */
+		for (i = VMS_OFF_SYSAP_BODY + 56u;
+		     i < VMS_OFF_SYSAP_BODY + VMS_DLM_VALBLK_BODY_LEN; i++)
+			if (built[i] != 0x00u)
+				tail_all_zero = 0;
+		ct_check(tail_all_zero == 1,
+			 "*** body[56:88] is zero-filled, NOT the VAX stack "
+			 "garbage the real sender pads with (anti-stale-buffer) ***");
+		ct_check_eq_u32(written, VMS_OFF_SYSAP_BODY + VMS_DLM_VALBLK_BODY_LEN,
+				"  written length is the full op-0x06 body");
+	}
 
 	/*
 	 * An op-0x07 CONVERT is NOT an op-0x06: the two are the same family and
@@ -612,6 +653,30 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 	(void)vms_dlm_blkast_build(&b, built, sizeof(built), &written);
 	ct_check_eq_u32(built[VMS_OFF_DLM_OP], 0xAAu,
 			"*** a refused build wrote NO byte at all ***");
+
+	/* The op-0x06 value-block CONVERT builder (vms-727) takes the same
+	 * refusal: a value block naming lock 0 has nothing to attach to. */
+	{
+		struct vms_dlm_valblk_convert vc;
+
+		memset(&vc, 0, sizeof(vc));
+		vc.master_lkid = 0x00020017u;
+		vc.req_lkid = 0x00010042u;
+		vc.mode = VMS_LCK_NL;
+		vc.serial = 0x1fu;
+		ct_check(vms_dlm_valblk_convert_build(&vc, built, sizeof(built),
+						      &written) == VMS_CODEC_OK,
+			 "  an op-0x06 with two real lock ids builds");
+		vc.master_lkid = VMS_DLM_LKID_UNSET;
+		ct_check(vms_dlm_valblk_convert_build(&vc, built, sizeof(built),
+						      &written) == VMS_CODEC_E_INVAL,
+			 "  master_lkid==0 REFUSED on op-0x06 value-block CONVERT");
+		vc.master_lkid = 0x00020017u;
+		vc.req_lkid = VMS_DLM_LKID_UNSET;
+		ct_check(vms_dlm_valblk_convert_build(&vc, built, sizeof(built),
+						      &written) == VMS_CODEC_E_INVAL,
+			 "  req_lkid==0 REFUSED on op-0x06 value-block CONVERT");
+	}
 
 	/*
 	 * AND THE SAME REFUSAL ON THE PARSE SIDE, which the completion codec

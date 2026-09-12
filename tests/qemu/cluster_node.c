@@ -1161,10 +1161,18 @@ static void rig_dump_dlm(int fd, const struct node_cfg *c, const char *phase)
 	 * run where releases_sent rose on one node and releases_received stayed
 	 * 0 on the other is precisely the gap this item closed, and it has to be
 	 * readable as a number rather than inferred.
+	 *
+	 * `valblk_writes_received` (rd vms-727) sits right beside it: a peer's
+	 * op-0x06 CONVERT-with-VALBLK that this executive's master-side apply
+	 * (vms_lock_dlm_master_apply_valblk) really wrote into a resource block
+	 * it masters -- the receive-ledger fact neither a pcap nor the sender's
+	 * own emit counters can show.
 	 */
-	printf("RIG-%s-DLM-RECV at=%s releases_received=%u releases_refused=%u "
+	printf("RIG-%s-DLM-RECV at=%s releases_received=%u "
+	       "valblk_writes_received=%u releases_refused=%u "
 	       "blkasts_unparsed=%u deferred_grants_owed=%u\n",
 	       c->tag, phase, (unsigned)v->releases_received,
+	       (unsigned)v->valblk_writes_received,
 	       (unsigned)v->releases_refused, (unsigned)v->blkasts_unparsed,
 	       (unsigned)v->deferred_grants_owed);
 	printf("RIG-%s-DLM-LEG at=%s sends=%u sends_refused=%u frames_rx=%u "
@@ -1440,6 +1448,142 @@ static void rig_xn_clean_phase(int fd, const struct node_cfg *c)
 	rig_xn_clean_watch_after(fd, c, &w);
 }
 
+/* ==========================================================================
+ * 6d. THE VALUE-BLOCK WRITE PROOF (rd vms-727), ON ITS OWN DEDICATED RESOURCE.
+ *
+ * The op-0x06 demote-from-write CONVERT must NOT run on the resource the
+ * xnode phase's BLKAST/DEQ scenario (`xn`, the "$X" series) is exercising:
+ * demoting that SAME holder mid-flow perturbs the contender's own blocking-
+ * AST wait (measured: it drove blkasts_received to 0 on both nodes in a run
+ * that otherwise held). That is exactly the lesson the DIRECT release proof
+ * (6c above) already learned about the contended resource, applied again --
+ * a dedicated, disjoint candidate series ("OVMX<tag>$L%02u"), a single
+ * holder, no contender, never touching `xn`.
+ * ========================================================================== */
+
+/* This node's own candidate name for the dedicated LVB-write series. */
+static void rig_xn_lvb_name(const struct node_cfg *c, unsigned i, char *out,
+			    size_t n)
+{
+	snprintf(out, n, "OVMX%s$L%02u", c->tag, i);
+}
+
+struct rig_xn_lvb_holder {
+	char     name[32];   /* this node's own held candidate ("" if none) */
+	uint32_t lkid;
+	int      held;
+};
+
+/*
+ * Scan this node's own dedicated $L-series (same discovery method as
+ * rig_xn_clean_hold -- GET_RESMASTER readback, Rule 8) for one the PEER
+ * masters, and hold it EX with NO second $ENQ: a genuine single-holder
+ * resource nothing else in this rig ever touches.
+ */
+static void rig_xn_lvb_hold(int fd, const struct node_cfg *c,
+			    struct rig_xn_lvb_holder *h)
+{
+	struct vms_resmaster_args rm;
+	unsigned i;
+
+	memset(h, 0, sizeof(*h));
+	for (i = 0; i < RIG_XN_CANDIDATES; i++) {
+		char name[32];
+		uint32_t lkid = 0u, st;
+
+		rig_xn_lvb_name(c, i, name, sizeof(name));
+		st = rig_dlm_enq(fd, name, 0u, &lkid);
+		if (st != SS_NORMAL || lkid == 0u)
+			continue;
+		rig_xn_wait_master(fd, name, &rm);
+		if (!rig_xn_is_peer_mastered(&rm)) {
+			(void)rig_dlm_deq(fd, lkid);
+			continue;
+		}
+		snprintf(h->name, sizeof(h->name), "%s", name);
+		h->lkid = lkid;
+		h->held = 1;
+		printf("RIG-%s-LVBHOLD res=%s lkid=0x%08x master_csid=0x%08x "
+		       "(dedicated single holder, no contender -- the op-0x06 "
+		       "subject)\n",
+		       c->tag, h->name, (unsigned)h->lkid,
+		       (unsigned)rm.master_csid);
+		fflush(stdout);
+		return;
+	}
+	printf("RIG-%s-LVBHOLD NONE (no dedicated candidate was mastered by "
+	       "the peer)\n", c->tag);
+	fflush(stdout);
+}
+
+/*
+ * THE VALUE-BLOCK WRITE (rd vms-727): the demote-from-write CONVERT that must
+ * emit op-0x06. The transition is EX -> CR carrying LCK$M_VALBLK, exactly
+ * the demote the own-lab capture grounded as the op-0x06 trigger (vms-727
+ * c6: "a real VAX EX->CR demote emitted op-0x06, target CR not NL" -- an
+ * up-convert or a read-mode holder's block is never sent). The pattern is a
+ * fixed 16-byte ASCII string, chosen only to be recognisable in a hexdump;
+ * nothing about it is minted onto a wire field INV-6 would otherwise leave
+ * silent -- the codec carries it in the ONE body range (body[36:52])
+ * grounded as caller-supplied.
+ */
+static const char rig_lvb_pattern[] = "OVMXLVBWRITE0001"; /* 16 bytes + NUL */
+
+static uint32_t rig_dlm_convert_valblk(int fd, uint32_t lkid, uint32_t lkmode,
+					const char *pattern16)
+{
+	struct vms_enq_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkid = lkid;
+	a.lkmode = lkmode;
+	a.flags = LCK_M_CONVERT | LCK_M_VALBLK;
+	memcpy(a.valblk, pattern16, LCK_VALBLK_SIZE);
+	if (ioctl(fd, VMS_IOCTL_CONVERT, &a) != 0)
+		return 0u;
+	return a.status;
+}
+
+static void rig_xn_lvb_write(int fd, const struct node_cfg *c,
+			      const struct rig_xn_lvb_holder *h)
+{
+	uint32_t st;
+
+	if (!h->held)
+		return;
+	st = rig_dlm_convert_valblk(fd, h->lkid, LCK_K_CRMODE, rig_lvb_pattern);
+	printf("RIG-%s-LVBWRITE res=%s lkid=0x%08x status=%u mode=CR "
+	       "pattern=%.16s (the demote-from-write that must emit op-0x06)\n",
+	       c->tag, h->name, (unsigned)h->lkid, (unsigned)st,
+	       rig_lvb_pattern);
+	fflush(stdout);
+	rig_msleep(2000u);   /* let the op-0x06 round trip to the master */
+}
+
+/* Release the dedicated LVB resource this node holds -- tidy-up, not part
+ * of the proof (the demote already put op-0x06 on the wire). */
+static void rig_xn_lvb_release(int fd, const struct node_cfg *c,
+			       const struct rig_xn_lvb_holder *h)
+{
+	if (!h->held)
+		return;
+	printf("RIG-%s-LVBDEQ res=%s lkid=0x%08x status=%u\n",
+	       c->tag, h->name, (unsigned)h->lkid,
+	       (unsigned)rig_dlm_deq(fd, h->lkid));
+	fflush(stdout);
+}
+
+/* THE VALUE-BLOCK WRITE PROOF, end to end on this node, entirely on its own
+ * dedicated resource: hold, write+demote (the op-0x06 emit), release. */
+static void rig_xn_lvb_phase(int fd, const struct node_cfg *c)
+{
+	struct rig_xn_lvb_holder h;
+
+	rig_xn_lvb_hold(fd, c, &h);
+	rig_xn_lvb_write(fd, c, &h);
+	rig_xn_lvb_release(fd, c, &h);
+}
+
 /*
  * THE SURVIVAL LINE. Printed AFTER the phase, and after a LINGER long enough
  * for the PEER's frames to have arrived here -- because the property being
@@ -1492,6 +1636,7 @@ static int rig_poll(int fd, const struct node_cfg *c)
 	if (c->xnode) {
 		rig_xnode_phase(fd, c, &xn);
 		rig_xn_clean_phase(fd, c);
+		rig_xn_lvb_phase(fd, c);
 		rig_xn_survival(fd, c, c->linger);
 		rig_sample_take(fd, &s);
 		rig_verdict(c, &s);   /* the SURVIVAL reading -- see above */

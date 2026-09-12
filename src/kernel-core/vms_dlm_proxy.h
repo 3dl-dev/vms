@@ -144,6 +144,21 @@ struct vms_dlm_proxy_post {
 	 * the common case, so the engine states which it meant.
 	 */
 	uint8_t  to_directory;
+
+	/*
+	 * Does this convert WRITE the lock value block to the master (an op-0x06
+	 * CONVERT-with-VALBLK) rather than the plain op-0x07 CONVERT? Set by the
+	 * engine at post time, because the engine holds the LKB and the rule is a
+	 * lock-manager fact, not a wire fact: the value block is written on a
+	 * convert that DEMOTES a lock held at a write mode (PW/EX) with
+	 * LCK$M_VALBLK set. WIRE-CONFIRMED, not just documented (vms-727): a real
+	 * VAX EX->CR demote with LCK$M_VALBLK put an op-0x06 on the wire (target
+	 * mode CR, not only NL), and a CR->EX up-convert did NOT (op-0x07, and the
+	 * master ignored the read-mode holder's block). The wire arm must not
+	 * re-derive this from mode numbers -- it has no LKB -- so the engine states
+	 * it, exactly like `to_directory` and `dir_hash_known`.
+	 */
+	uint8_t  write_valblk;
 };
 
 /*

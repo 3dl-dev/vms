@@ -209,6 +209,41 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 	struct vms_dlm_enq_request req;
 	uint32_t written = 0u;
 
+	/*
+	 * THE VALUE-BLOCK WRITE CROSSING (op-0x06). When the engine marked this
+	 * post as a value-block write (a convert that demotes a PW/EX holder with
+	 * LCK$M_VALBLK -- wire-confirmed, vms-727), it goes out as the grounded
+	 * op-0x06 CONVERT-with-VALBLK, carrying the LKB's real block, instead of a
+	 * plain op-0x07 that would silently drop the write and leave a real-VAX
+	 * reader with a stale value. body[32]/[52] (the sender-private per-lock
+	 * serial) is left 0, exactly as the ENQ builder omits body[32:36]: a peer
+	 * routes by master_lkid and provably accepts a zero there.
+	 */
+	if (p->write_valblk) {
+		struct vms_dlm_valblk_convert c;
+		uint32_t i;
+
+		dq_bzero(&c, (uint32_t)sizeof(c));
+		c.req_lkid    = p->req_lkid;
+		c.master_lkid = p->master_lkid;
+		c.mode        = (uint8_t)p->lkmode;   /* the mode converted TO */
+		c.serial      = 0u;                   /* honest omission, as the ENQ */
+		for (i = 0u; i < VMS_DLM_VALBLK_WIRE_LEN; i++)
+			c.valblk[i] = p->valblk[i];
+
+		dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
+		if (vms_dlm_valblk_convert_build(&c, f->txframe,
+						 (uint32_t)sizeof(f->txframe),
+						 &written) != VMS_CODEC_OK) {
+			/* A write crossing the arm could NOT put on the wire. */
+			f->lvb_write_no_wire_field++;
+			f->codec_failures++;
+			return DLM_REQ_E_CODEC;
+		}
+		f->lvb_writes_sent++;
+		return DLM_REQ_OK;
+	}
+
 	dq_bzero(&req, (uint32_t)sizeof(req));
 	req.mode            = (uint8_t)p->lkmode;
 	req.req_pid_or_lkid = p->req_lkid;      /* our own executive handle */
@@ -216,24 +251,6 @@ static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
 	req.dir_hash        = p->dir_hash;
 	req.dir_hash_valid  = p->dir_hash_known;
 	req.name_len        = dq_name_from_post(p, req.name);
-
-	/*
-	 * THE LOCK VALUE BLOCK IS NOT HERE, and that is deliberate. `p->valblk`
-	 * holds the LKB's real bytes, but no cat-0x02 LVB field is grounded
-	 * (vms_cluster_codec_dlm.h), so there is nowhere honest to put them.
-	 * Counted, so the omission is a number in a diagnostic rather than a
-	 * silence.
-	 */
-	{
-		uint32_t i;
-
-		for (i = 0u; i < VMS_DLM_VALBLK_LEN; i++) {
-			if (p->valblk[i] != 0u) {
-				f->lvb_write_no_wire_field++;
-				break;
-			}
-		}
-	}
 
 	dq_bzero(f->txframe, (uint32_t)sizeof(f->txframe));
 	if (vms_dlm_enq_request_build(&req, wireop, f->txframe,

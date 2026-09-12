@@ -561,6 +561,66 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 #define VMS_DLM_VALBLK_WIRE_LEN    16u
 
 /*
+ * op-0x06 CONVERT-with-VALBLK BUILD layout -- grounded vms-727 (own-lab
+ * vaxlab-4, 5 real-wire captures c1..c5, byte-verified). The frame is a
+ * cat-0x02 REQUEST, VAX1->master, holder converting its lock DOWN and
+ * flushing the value block. Fields, by body offset (body[N] = abs 72+N):
+ *
+ *   body[12:14] = 0x0001, body[14:16] = 0x0002   -- op-0x06 header words,
+ *       constant in every capture (distinct from the rebuild op's 0x0001/
+ *       0x0003 pair; grounded per-op, not shared).
+ *   body[28]    = 0x13                            -- op-0x06 request flag,
+ *       constant (an ENQ request carries 0x11 here; op-0x06 carries 0x13).
+ *   body[30]    = mode                            -- the mode converted TO
+ *       (0x00/NL on the captured EX->NL convert-down); the same body[30]
+ *       lock-mode field the ENQ/DEQ builders already write.
+ *   body[32]    = SERIAL  -- a per-LOCK request serial the executive assigns
+ *       at ENQ and carries through every frame for that lock (the ENQ
+ *       REQUEST for the same lock shows the identical body[32:36]). INFERRED
+ *       provenance: equals the low byte of the lock's ENQ request id in
+ *       both captures that expose it (0x2020021b->0x1b, 0x2020021f->0x1f;
+ *       2/2). Re-stamped at body[52] (front==back). Sourced from the LKB;
+ *       it is NOT resource/mode/name/valblk/per-write derived (proven: it
+ *       is constant across three writes to one held lock, and advances only
+ *       across distinct lock instances).
+ *   body[34]    = 0x01    -- the cat-0x02 REQUEST stamp at the RESULT_STAMP
+ *       position (a REPLY carries 0xfa/0xf9 here; a request carries 0x01,
+ *       seen identically on the ENQ request for the same lock).
+ *   body[36:52] = the 16-byte value block (VMS_OFF_DLM_VALBLK, above).
+ *   body[52]    = SERIAL (== body[32]); body[53] = 0x02; body[54:56] = 0x2020
+ *       -- the closing bracket, constant across all five varied captures
+ *       (so a stable field, NOT stale buffer).
+ *   body[56:88] = uninitialised sender buffer on the real wire (VAX P1 stack
+ *       addresses 0x7ff8...., inconsistent between captures) -- NOT a field.
+ *       The builder ZERO-FILLS this span rather than emit our own stack: an
+ *       honest omission, never a minted or leaked value.
+ *
+ * SAFETY: the ENQ builder does not populate body[32:36] at all, yet peers
+ * accept our ENQ frames (the cross-node proof holds), so body[32:36] is not
+ * receiver-correctness-critical -- a SERIAL sourced from the LKB (or zero)
+ * cannot bugcheck a peer (INV: never-crash-a-peer).
+ */
+#define VMS_OFF_DLM_VALBLK_HDR1   84u  /* body[12:14] LE u16, const 0x0001 */
+#define VMS_OFF_DLM_VALBLK_HDR2   86u  /* body[14:16] LE u16, const 0x0002 */
+#define VMS_OFF_DLM_VALBLK_FLAG  100u  /* body[28]    u8,     const 0x13   */
+#define VMS_OFF_DLM_VALBLK_SERIAL 104u /* body[32]    u8,  per-lock SERIAL */
+#define VMS_OFF_DLM_VALBLK_REQSTAMP 106u /* body[34]  u8,     const 0x01   */
+#define VMS_OFF_DLM_VALBLK_SERIAL2 124u /* body[52]   u8,  == body[32]     */
+#define VMS_OFF_DLM_VALBLK_TAG2  125u  /* body[53]    u8,     const 0x02   */
+#define VMS_OFF_DLM_VALBLK_PAD   126u  /* body[54:56] two bytes, const 0x20*/
+#define VMS_DLM_VALBLK_HDR1_VAL   0x0001u
+#define VMS_DLM_VALBLK_HDR2_VAL   0x0002u
+#define VMS_DLM_VALBLK_FLAG_VAL   0x13u
+#define VMS_DLM_VALBLK_REQSTAMP_VAL 0x01u
+#define VMS_DLM_VALBLK_TAG2_VAL   0x02u
+#define VMS_DLM_VALBLK_PAD_VAL    0x20u
+#define VMS_OFB_DLM_VALBLK_SERIAL  VMS_OFB_FROM_FRAME(VMS_OFF_DLM_VALBLK_SERIAL)
+/* Full op-0x06 body length on the wire (through the stale-buffer tail the
+ * real sender pads to). The builder writes the grounded fields and zero-fills
+ * to here. */
+#define VMS_DLM_VALBLK_BODY_LEN   88u
+
+/*
  * body[30:32] (abs 102): the BLKAST's mode-context pair.
  *
  * OBSERVED, NOT PINNED, and deliberately kept distinct from the GROUNDED
@@ -606,13 +666,18 @@ struct vms_dlm_blkast {
 };
 
 /*
- * The value block a peer's op-0x06 CONVERT carried, plus the lock it
- * belongs to. READ ONLY -- there is no builder (file doc comment).
+ * The value block an op-0x06 CONVERT carries, plus the lock it belongs to.
+ * Both a PARSE target (read what a peer sent) and, since vms-727, a BUILD
+ * source (emit our own holder's value-block flush on a cross-node convert-
+ * down). `serial` is the per-lock request serial at body[32]==body[52]
+ * (see the op-0x06 BUILD layout comment above); on a parse it is the byte
+ * the peer sent, on a build it is sourced from the emitting LKB.
  */
 struct vms_dlm_valblk_convert {
 	uint32_t req_lkid;     /* body[20:24]                               */
 	uint32_t master_lkid;  /* body[24:28]                               */
 	uint8_t  mode;         /* body[30]: the mode converted TO           */
+	uint8_t  serial;       /* body[32]==body[52]: per-lock SERIAL (INFERRED)*/
 	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];  /* body[36:52]           */
 };
 
@@ -658,9 +723,8 @@ vms_codec_status_t vms_dlm_blkast_build(const struct vms_dlm_blkast *b,
 					uint32_t *written);
 
 /*
- * Read the lock value block a peer's op-0x06 CONVERT carried. Accessor
- * only, by design: see the file doc comment for why there is no builder.
- * Same cat/op gate and same lock-id refusal as the two parsers above.
+ * Read the lock value block an op-0x06 CONVERT carried. Same cat/op gate and
+ * same lock-id refusal as the two parsers above.
  */
 vms_codec_status_t
 vms_dlm_valblk_convert_parse_body(const uint8_t *body, uint32_t len,
@@ -669,6 +733,19 @@ vms_codec_status_t
 vms_dlm_valblk_convert_parse(const uint8_t *frame, uint32_t len,
 			     const struct vms_frame_info *fi,
 			     struct vms_dlm_valblk_convert *out);
+
+/*
+ * Build an op-0x06 CONVERT-with-VALBLK (vms-727). Refuses VMS_DLM_LKID_UNSET
+ * in either lock id, exactly like the DEQ/BLKAST builders. Writes the
+ * grounded op-0x06 fields (see the BUILD layout comment) from `c`, sourcing
+ * the per-lock SERIAL at body[32]==body[52] from `c->serial`, and ZERO-FILLS
+ * body[56:88] rather than emit sender-buffer garbage. `*written` is the full
+ * VMS_DLM_VALBLK_BODY_LEN-based frame length. Never populates body[10:12]:
+ * the value-block convert is routed by master_lkid, not by a directory hash.
+ */
+vms_codec_status_t vms_dlm_valblk_convert_build(const struct vms_dlm_valblk_convert *c,
+						uint8_t *frame, uint32_t cap,
+						uint32_t *written);
 
 /* ------------------------------------------------------------------ *
  * The (SYSAP, category, opcode) allowlist rows this item contributes

@@ -392,7 +392,14 @@ if [ "$MODE" = "xnode" ]; then
 	A_GONE=$(num "$(dlm_field A POST survival lock_gone)")
 	B_GONE=$(num "$(dlm_field B POST survival lock_gone)")
 	A_PROJ=$(final_field A projections); B_PROJ=$(final_field B projections)
-	W_DEQ=$(wire_saw deq); W_BLK=$(wire_saw blkast)
+	W_DEQ=$(wire_saw deq); W_BLK=$(wire_saw blkast); W_VBW=$(wire_saw valblk)
+	# rd vms-727: the op-0x06 CONVERT-with-VALBLK receive ledger. Read off
+	# the node's own RIG-*-DLM-RECV line, right beside releases_received
+	# (never inferred from the sender's own emit counters).
+	A_LVBST=$(rig_field A LVBWRITE status)
+	B_LVBST=$(rig_field B LVBWRITE status)
+	A_VBW=$(num "$(dlm_field A RECV survival valblk_writes_received)")
+	B_VBW=$(num "$(dlm_field B RECV survival valblk_writes_received)")
 
 	echo "  CROSS-NODE DLM RUN (rd vms-94c) -- every value below was read"
 	echo "  back out of the node's own executive, except the two WIRE counts,"
@@ -401,11 +408,16 @@ if [ "$MODE" = "xnode" ]; then
 		"${A_XRES:-none}" "${A_XMAS:-?}" "$A_REL" "$A_BLK" "$A_UNP" "${A_PROJ:-?}"
 	printf "    B: peer-mastered=%s master_csid=%s releases_sent=%s blkasts_sent=%s unparsed=%s projections=%s\n" \
 		"${B_XRES:-none}" "${B_XMAS:-?}" "$B_REL" "$B_BLK" "$B_UNP" "${B_PROJ:-?}"
-	printf "    WIRE: op-0x03 deq frames=%s  op-0x04 blkast frames=%s\n" "$W_DEQ" "$W_BLK"
+	printf "    WIRE: op-0x03 deq frames=%s  op-0x04 blkast frames=%s  op-0x06 valblk frames=%s\n" \
+		"$W_DEQ" "$W_BLK" "$W_VBW"
 	printf "    RECEIVED: A releases=%s (refused %s) blkasts=%s (delivered %s)\n" \
 		"$A_RRX" "$A_RRF" "$A_BRX" "$A_BDL"
 	printf "              B releases=%s (refused %s) blkasts=%s (delivered %s)\n" \
 		"$B_RRX" "$B_RRF" "$B_BRX" "$B_BDL"
+	printf "    LVB WRITE (rd vms-727): A demote-status=%s  B demote-status=%s\n" \
+		"${A_LVBST:-?}" "${B_LVBST:-?}"
+	printf "              A valblk_writes_received=%s  B valblk_writes_received=%s\n" \
+		"$A_VBW" "$B_VBW"
 	echo ""
 
 	XFAIL=0
@@ -510,6 +522,40 @@ if [ "$MODE" = "xnode" ]; then
 			XFAIL=1
 		fi
 	done
+	# (5b) THE VALUE-BLOCK WRITE CROSSING (rd vms-727). Each node demoted its
+	#      cross-node EX grant to CR carrying a 16-byte pattern in the value
+	#      block, which must emit op-0x06 to the PEER that masters it. Two
+	#      independent facts, same shape as (3a)/(4a) above:
+	#        ON THE WIRE      an op-0x06 CONVERT-with-VALBLK frame really
+	#                         reached the segment (scan_dlm_wire.py, a byte
+	#                         reached the wire -- says nothing about receipt);
+	#        APPLIED          the MASTER's own valblk_writes_received counter
+	#                         rose -- the receive-ledger fact that it is the
+	#                         one that really wrote the block into the RSB
+	#                         it masters, which no pcap can show.
+	#      Never-crash is already covered by (5) above: this assertion only
+	#      adds whether the write was APPLIED, not whether the peer survived
+	#      receiving it.
+	if [ "$A_LVBST" != "1" ] || [ "$B_LVBST" != "1" ]; then
+		echo "  FAILED (5b): a node's own demote-from-write CONVERT did not"
+		echo "  report SS\$_NORMAL (A status=$A_LVBST B status=$B_LVBST) --"
+		echo "  see the RIG-*-LVBWRITE line for whether it even found a"
+		echo "  peer-mastered lock to demote."
+		XFAIL=1
+	fi
+	if [ "$W_VBW" -lt 1 ]; then
+		echo "  FAILED (5b-wire): no op-0x06 CONVERT-with-VALBLK frame appears"
+		echo "  in either node's own passive capture."
+		XFAIL=1
+	fi
+	if [ "$A_VBW" -lt 1 ] || [ "$B_VBW" -lt 1 ]; then
+		echo "  FAILED (5b-applied): a node's own diag does not show it"
+		echo "  APPLIED a peer's op-0x06 value-block write (A"
+		echo "  valblk_writes_received=$A_VBW B valblk_writes_received=$B_VBW)."
+		echo "  The frame may have reached the wire, but the receiving"
+		echo "  executive's resource block did not move."
+		XFAIL=1
+	fi
 
 	# (6) THE DIRECT MASTER-SIDE RELEASE PROOF (rd vms-c72, conductor
 	#     ledger-bar gap-close). A DEDICATED single-holder resource's
@@ -603,6 +649,11 @@ if [ "$MODE" = "xnode" ]; then
 		"the DIRECT release delta: a dedicated single-holder resource's"
 	echo "              master-side queue shows the holder GONE after"
 	echo "              releases_received rose -- not just the counter"
+	held "$( { [ "$A_VBW" -ge 1 ] && [ "$B_VBW" -ge 1 ] && [ "$W_VBW" -ge 1 ]; } \
+		&& echo 1 || echo 0)" \
+		"op-0x06 CONVERT-with-VALBLK (rd vms-727): a demote-from-write really"
+	echo "              crossed and the MASTER's own diag shows it APPLIED the"
+	echo "              peer's value block, seen on the wire and never a crash"
 	echo ""
 
 	if [ "$XFAIL" = "0" ]; then
@@ -615,7 +666,10 @@ if [ "$MODE" = "xnode" ]; then
 		echo "  reports having RECEIVED and honestly DECLINED them, and both"
 		echo "  nodes are still MEMBERs with CN=2 and agreeing projections"
 		echo "  afterwards. NEVER CRASH A PEER: held, against a live peer"
-		echo "  executive."
+		echo "  executive. Each node also demoted its cross-node EX grant"
+		echo "  to CR carrying a value block (rd vms-727): op-0x06 crossed"
+		echo "  on the wire AND the master's own diag shows it APPLIED the"
+		echo "  peer's write."
 		echo "=========================================="
 		exit 0
 	fi

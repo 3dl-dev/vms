@@ -5,7 +5,7 @@ origin:    spec-composed
 spec:      tests/lab/captures/vms-c03-dlm-opcodes-20260911/GROUNDING.md (op 0x06 = CONVERT carrying the LVB, frame f14)
 capture:   dlm-lvb3-20260911.pcap
 wire-len:  204
-sha256:    4707333fa8f9310fef3d7776cb5d9722f68cc7c59a530ef554499433104b8520
+sha256:    3741fcad5241c8c259298b2aac064edc4b55f8c386bb210755649ef9674da405
 %bytes
 ; abs 0-71: plausible classifying prefix only -- see dlm-deq-release.spec.
 @0    08 00 2b 78 56 b9          ; eth dst: VAX2 HW MAC (the master)
@@ -33,21 +33,43 @@ sha256:    4707333fa8f9310fef3d7776cb5d9722f68cc7c59a530ef554499433104b8520
                                  ; carries the value block; distinct from the
                                  ; op-0x07 CONVERT, which does not and which
                                  ; is the one that draws a cat-0x82 reply
+@84   01 00 02 00                ; body[12:16] op-0x06 header words 0x0001,
+                                 ; 0x0002 -- constant in every op-0x06 frame
+                                 ; (grounded vms-727; the rebuild op carries
+                                 ; 0x0001,0x0003 here, so this is per-op)
 @92   cd 01 00 27                ; body[20:24] req_lkid 0x270001cd == the
                                  ; requester handle f13's GRANT assigned
 @96   89 04 00 2b                ; body[24:28] master_lkid 0x2b000489 == the
                                  ; master handle f12's ENQ for 'OVMXLVB3'
                                  ; carried
+@100  13                         ; body[28] op-0x06 request flag 0x13 -- an ENQ
+                                 ; request carries 0x11 here (grounded vms-727)
 @102  00                         ; body[30] mode NL(0) -- converted DOWN from
                                  ; EX, which is the crossing that writes the
                                  ; block back to the master
+@104  1f                         ; body[32] per-lock SERIAL. INFERRED (vms-727):
+                                 ; the low byte of the lock's ENQ request id,
+                                 ; carried through every frame for this lock and
+                                 ; re-stamped at body[52]. Constant across three
+                                 ; writes to one held lock; advances only across
+                                 ; distinct locks -- NOT a valblk sequence.
+@106  01                         ; body[34] cat-0x02 REQUEST stamp 0x01 (a REPLY
+                                 ; carries 0xfa/0xf9 here; grounded vms-727)
 @108  57 52 4f 54 45 42 59 56    ; body[36:52] THE 16-BYTE LOCK VALUE BLOCK:
 @116  41 58 31 58 58 58 58 58    ; 'WROTEBYVAX1XXXXX', byte for byte the
                                  ; pattern the driver placed at LKSB+8
+@124  1f 02 20 20                ; body[52:56] the closing bracket: SERIAL
+                                 ; (== body[32]) then 0x02,0x20,0x20 -- constant
+                                 ; across all five vms-727 captures, so a stable
+                                 ; field, not stale buffer.
 ;
-; DELIBERATELY NOT CITED: body[32:36], the four bytes immediately ahead of the
-; block. They read 1f 00 01 00 here and 1e 00 01 00 on the other op-0x06
-; frames in the capture set -- the low byte tracks a per-request index, which
-; no capture pins. That is exactly why vms_cluster_codec_dlm.c has an op-0x06
-; ACCESSOR and no op-0x06 BUILDER: composing a whole frame would mean minting
-; these four bytes, and INV-6 has nothing to mint them from.
+; body[32:36] and body[52:56] were UN-CITED before vms-727 ("the low byte
+; tracks a per-request index, which no capture pins"). The vms-727 own-lab
+; campaign (5 real-wire one-variable-diff captures, byte-verified) pinned them:
+; body[34]=0x01 is the request stamp, body[32]==body[52] is a per-LOCK serial
+; sourced from the LKB, and the surrounding bytes are op-0x06 constants. So the
+; op-0x06 BUILDER now exists (vms_dlm_valblk_convert_build) -- every byte is
+; sourced from the LKB or grounded, none minted (INV-6). body[56:88] stays
+; UN-CITED: it is uninitialised sender buffer on the real wire (VAX P1 stack
+; addresses, inconsistent between captures), which the builder zero-fills
+; rather than reproduce.

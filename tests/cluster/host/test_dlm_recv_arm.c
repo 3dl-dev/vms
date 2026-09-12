@@ -768,6 +768,132 @@ static void a_zero_master_lkid_is_refused(void)
 			"  and no engine call was composed from it");
 }
 
+/* ==========================================================================
+ * 3. THE VALUE BLOCK's RECEIVE HALF: an inbound op-0x06 MOVES the master's
+ *    value block (rd vms-727)
+ *
+ * A peer holds a lock here at a write mode and flushes its value block on a
+ * demote (an op-0x06 CONVERT-with-VALBLK). The proof is the same caliber as the
+ * $DEQ's: not a counter, but the LOCK DATABASE MOVED -- the master resource's
+ * value block, read back through the engine's own grant path, now HOLDS the
+ * peer's bytes where it held zeros before.
+ * ========================================================================== */
+
+/* Build a REAL op-0x06 through the shipping builder. */
+static int build_valblk_convert(uint8_t *frame, uint32_t req_lkid,
+				uint32_t master_lkid, uint8_t mode,
+				const uint8_t *valblk)
+{
+	struct vms_dlm_valblk_convert c;
+	uint32_t written = 0;
+
+	memset(&c, 0, sizeof(c));
+	c.req_lkid = req_lkid;
+	c.master_lkid = master_lkid;
+	c.mode = mode;
+	c.serial = 0u;
+	memcpy(c.valblk, valblk, VMS_DLM_VALBLK_WIRE_LEN);
+	memset(frame, 0, VMS_CM_FRAME_LEN);
+	return vms_dlm_valblk_convert_build(&c, frame, VMS_CM_FRAME_LEN,
+					    &written) == VMS_CODEC_OK ? 0 : -1;
+}
+
+/* Read the master resource's value block back the way the engine hands it out:
+ * a LOCAL NL grant with LCK_M_VALBLK (NL is compatible with any held mode, so
+ * it is granted at once and copies res->valblk into the caller's LKSB). */
+static void master_read_valblk(struct vms_proc *proc, const char *resnam,
+			       uint8_t out[VMS_DLM_VALBLK_WIRE_LEN])
+{
+	struct vms_enq_args e;
+
+	memset(&e, 0, sizeof(e));
+	e.lkmode = LCK_K_NLMODE;
+	e.flags = LCK_M_VALBLK;
+	strscpy(e.resnam, resnam, sizeof(e.resnam));
+	vms_ioctl_enq(proc, (unsigned long)(void *)&e);
+	memcpy(out, e.valblk, VMS_DLM_VALBLK_WIRE_LEN);
+}
+
+static void inbound_valblk_convert_writes_the_master_block(void)
+{
+	const uint32_t PEER_A_LKID = 0x0C0C0001u;
+	static const uint8_t PATTERN[VMS_DLM_VALBLK_WIRE_LEN] =
+		"WROTEBYPEERAXXXX";
+	uint8_t frame[VMS_CM_FRAME_LEN];
+	uint8_t before[VMS_DLM_VALBLK_WIRE_LEN];
+	uint8_t after[VMS_DLM_VALBLK_WIRE_LEN];
+	struct vms_dlm_valblk_convert q;
+	struct vms_dlm_master_result granted;
+	struct vms_proc delivery;
+
+	printf("-- an inbound op-0x06 WRITES the master value block (rd vms-727) "
+	       "--\n");
+	vms_local_csid = CSID_LOCAL;
+	if (vms_lock_init() != 0) {
+		ct_check(0, "master: vms_lock_init");
+		return;
+	}
+	proc_init(&delivery);
+	delivery.current_mode = PSL_C_USER;
+	vms_lock_dlm_set_delivery_proc(&delivery);
+
+	master_enq(CSID_PEER_A, PEER_A_LKID, LCK_K_EXMODE, 0u, "RECV_LVB1",
+		   &granted);
+	ct_check(granted.outcome == (uint8_t)VMS_DLM_MASTER_GRANTED &&
+		 granted.master_lkid != 0u,
+		 "a peer's $ENQ made a REAL master-side LKB here, held at EX");
+
+	master_read_valblk(&delivery, "RECV_LVB1", before);
+	ct_check(before[0] == 0u,
+		 "the master's value block starts empty (no write yet)");
+
+	if (build_valblk_convert(frame, PEER_A_LKID, granted.master_lkid,
+				 (uint8_t)LCK_K_NLMODE, PATTERN) != 0) {
+		ct_check(0, "the shipping builder produced an op-0x06");
+		goto out;
+	}
+	ct_check(1, "the shipping builder produced an op-0x06 naming BOTH real "
+		    "handles and carrying the block");
+	ct_check(vms_dlm_valblk_convert_parse_body(body_of(frame),
+						   VMS_CM_BODY_LEN, &q) ==
+		 VMS_CODEC_OK,
+		 "the shipping parser read it back as a grounded op-0x06 body");
+	ct_check_eq_u32(q.master_lkid, granted.master_lkid,
+			"  body[24:28] is OUR handle -- the LKB whose block moves");
+
+	/* *** THE DELIVERY *** authorized by cluster identity (PEER_A holds it). */
+	ct_check(vms_lock_dlm_master_apply_valblk(CSID_PEER_A, q.master_lkid,
+						  q.valblk) == SS__NORMAL,
+		 "*** the inbound op-0x06 is SERVED, not declined: the engine "
+		 "APPLIED the value block ***");
+
+	/* *** THE TEETH *** -- the master's block really moved. */
+	master_read_valblk(&delivery, "RECV_LVB1", after);
+	ct_check(memcmp(after, PATTERN, VMS_DLM_VALBLK_WIRE_LEN) == 0,
+		 "*** the master resource's value block now HOLDS the peer's "
+		 "bytes: the lock database MOVED, not a counter ***");
+
+	/* NEGATIVE: a different peer may not write this lock's block. */
+	{
+		static const uint8_t IMPOSTOR[VMS_DLM_VALBLK_WIRE_LEN] =
+			"IMPOSTORXXXXXXXX";
+		uint8_t still[VMS_DLM_VALBLK_WIRE_LEN];
+
+		ct_check(vms_lock_dlm_master_apply_valblk(CSID_PEER_B,
+							  q.master_lkid,
+							  IMPOSTOR) != SS__NORMAL,
+			 "a peer that does NOT hold the lock is REFUSED "
+			 "(SS$_IVLOCKID): no writing another node's block");
+		master_read_valblk(&delivery, "RECV_LVB1", still);
+		ct_check(memcmp(still, PATTERN, VMS_DLM_VALBLK_WIRE_LEN) == 0,
+			 "*** and the block is UNCHANGED by the refused write ***");
+	}
+
+out:
+	vms_lock_dlm_set_delivery_proc(NULL);
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_dlm_recv_arm (rd vms-c72: the DLM arm's RECEIVE half, "
@@ -781,6 +907,8 @@ int main(void)
 	a_release_reports_the_waiter_it_flipped();
 	a_peer_may_not_release_another_nodes_lock();
 	a_zero_master_lkid_is_refused();
+
+	inbound_valblk_convert_writes_the_master_block();
 
 	return ct_summary("test_dlm_recv_arm");
 }

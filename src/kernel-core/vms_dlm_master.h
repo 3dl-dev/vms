@@ -228,6 +228,17 @@ struct vms_dlm_master_result {
 uint32_t vms_lock_dlm_master_serve(const struct vms_dlm_master_request *r,
 				   struct vms_dlm_master_result *out);
 
+/*
+ * The op-0x06 CONVERT-with-VALBLK RECEIVE half (vms-727): replicate a remote
+ * holder's flushed value block into the MASTER resource it named. Authorized by
+ * cluster identity exactly like the DEQ master-serve -- the block is written
+ * only into a lock this node holds FOR `req_csid`; a local lock, a lock held for
+ * another CSID, or a proxy LKB is refused SS$_IVLOCKID. Returns SS$_NORMAL on a
+ * real write, an error otherwise. Does not release or re-queue the lock.
+ */
+uint32_t vms_lock_dlm_master_apply_valblk(uint32_t req_csid, uint32_t master_lkid,
+					  const uint8_t *valblk);
+
 /* ==========================================================================
  * 4. A member left
  *

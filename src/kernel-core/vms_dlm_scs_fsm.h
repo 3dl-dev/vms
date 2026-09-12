@@ -474,7 +474,8 @@ struct dlm_req_fsm {
 					  /* opcode at all -- unreachable for   */
 					  /* the three the engine posts, kept   */
 					  /* as a refusal, never a fall-through */
-	uint32_t lvb_write_no_wire_field;/* the LVB write crossing, unsent     */
+	uint32_t lvb_write_no_wire_field;/* a write crossing the codec refused */
+	uint32_t lvb_writes_sent;        /* op-0x06 CONVERT-with-VALBLK emitted */
 	uint32_t lock_gone;              /* refill found no proxy: abandoned   */
 	uint32_t no_slot;
 	uint32_t codec_failures;

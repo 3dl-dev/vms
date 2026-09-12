@@ -192,10 +192,18 @@ items:
       state: per-node VOTES come from each CSB's advertised PARAMS record and are
       NOT counted until `params_valid` is set -- an un-advertised VOTES is not an
       advertised zero. EXPECTED_VOTES is this node's own SYSGEN value.
-      TRACKING ONLY, and this is the honest limit: the figures are computed and
-      readable, but nothing in the tree yet BLOCKS on lost quorum -- no cluster
-      state transition is gated on it -- because a booted node has never been a
-      member. Quorum ENFORCEMENT is a later item.
+      Recompute runs on the JOINER too, not just the founder (vms-d0d/#1201): a
+      member does the SAME arithmetic on the VOTES it learned from the peer's
+      op-01 PARAMS, so a symmetric CN=2 non-founder reports real CEVOTES/QUORUM,
+      not uncomputed zeros.
+      ENFORCEMENT NOW EXISTS (vms-b6d/#1203) -- the earlier "tracking only, nothing
+      blocks on lost quorum" limit is RETIRED: on real quorum loss the executive
+      STALLS clustered $ENQ grants on the wait queue (VMS quorum-hang -- SS$_NORMAL,
+      granted_mode=0, not an error, not a fabricated grant; $DEQ still works) and
+      RESUMES the same request on regain. Join-transient safe via a quorum_armed
+      latch (enforce only after quorum was once perceived, so the honest-zero join
+      window never freezes); quorum read live from the club via an include-free
+      seam (INV-6, no cached copy). Live 2-node evacuate->stall->resume proven.
       PROVEN AT R1: test_cnxman_quorum.c reproduces the documented worked
       example. R5 (agreement with a real VAX's own figures) lab-deferred.
 

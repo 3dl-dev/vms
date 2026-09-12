@@ -111,6 +111,43 @@ WALL="${RIG_WALL:-600}"
 # makes the survival verdict a statement about the PEER's frames.
 XNODE=0
 LINGER="${RIG_LINGER:-45}"
+# rd vms-b6d (FC-P8.1): the QUORUM-HANG run. See the block comment above
+# qhang_schedule() below for the timing and what each number is chosen against.
+QHANG=0
+CUT_AT=0
+HEAL_AT=0
+if [ "$MODE" = "qhang" ]; then
+	QHANG=1
+	#
+	# THE SCHEDULE, AND WHAT EACH NUMBER IS CHOSEN AGAINST. Three of the
+	# executive's own timers decide it, and getting any of them backwards
+	# produces a run that measures nothing:
+	#
+	#   RECNXINTERVAL (45s here) is BOTH the genesis discovery window AND
+	#     p. 7-30's reconnect hold. As the discovery window it means node A
+	#     founds 45s after ITS cluster starts -- and genesis is refused while
+	#     any peer is audible, so THE STAGGER MUST EXCEED IT or node B
+	#     arrives first and neither node ever founds (measured: a 30s stagger
+	#     against a 45s window left both nodes JOINING forever). As the
+	#     reconnect hold it is the budget the heal has to land inside, or the
+	#     peer is removed from the membership instead of reconnected.
+	#   The channel listen timeout (20s, vms_pe_fsm.h) is how long after the
+	#     cut a node's own executive takes to NOTICE it. So the cut must be
+	#     at least that long before anything can be observed, and the heal
+	#     must come after the observation but inside the reconnect hold.
+	#   The windows are sized so both nodes ENTER the quorum-hang phase
+	#     before the cut: A at WINDOW_A after its own boot, B at
+	#     WINDOW_A - STAGGER after its later one, which is the same wall
+	#     moment.
+	#
+	RECNX="${RIG_RECNX:-45}"
+	STAGGER="${RIG_STAGGER:-55}"     # > RECNX, or nobody founds
+	WINDOW_A="${RIG_WINDOW_A:-85}"
+	WINDOW_B="${RIG_WINDOW_B:-$((WINDOW_A - STAGGER))}"
+	WALL="${RIG_WALL:-900}"
+	CUT_AT="${RIG_CUT_AT:-100}"      # both phases have begun by now
+	HEAL_AT="${RIG_HEAL_AT:-145}"    # 20s to notice + margin, inside the hold
+fi
 if [ "$MODE" = "xnode" ]; then
 	XNODE=1
 	WINDOW_A="${RIG_WINDOW_A:-150}"
@@ -130,6 +167,7 @@ SYSID_B=1026
 KERNEL=/boot/vmlinuz
 INITRD=/initramfs.cpio.gz
 SEGMENT_PORT=16009   # the loopback TCP port carrying the L2 segment
+RELAY_PORT=16010     # qhang mode: node B dials THIS, and the relay dials A
 
 QEMU=qemu-system-x86_64
 if [ -w /dev/kvm ]; then ACCEL="-accel kvm -cpu host"; else ACCEL="-accel tcg"; fi
@@ -153,7 +191,8 @@ node_cmdline() {
 	     "ovmx.tag=$1 ovmx.scsnode=$2 ovmx.sysid=$3 ovmx.votes=$4" \
 	     "ovmx.expected_votes=$5 ovmx.vaxcluster=2 ovmx.group=$GROUP" \
 	     "ovmx.recnx=$RECNX ovmx.credits=$CREDITS ovmx.swver=$SWVER" \
-	     "ovmx.window=$6 ovmx.xnode=$XNODE ovmx.linger=$LINGER"
+	     "ovmx.window=$6 ovmx.xnode=$XNODE ovmx.linger=$LINGER" \
+	     "ovmx.qhang=$QHANG"
 }
 
 # Node A holds the segment open; node B dials in. A is powered on first
@@ -162,6 +201,12 @@ segment_netdev() {
 	# $1 = node tag
 	if [ "$1" = "A" ]; then
 		echo "socket,id=net0,listen=127.0.0.1:${SEGMENT_PORT}"
+	elif [ "$QHANG" = "1" ]; then
+		# THE PARTITION (rd vms-b6d). B's frames go to segment_relay.py,
+		# which forwards them to A -- except during its cut window, when
+		# it drops them. Neither guest is told; each discovers the loss
+		# the way a real system does, by its channel timing out.
+		echo "socket,id=net0,connect=127.0.0.1:${RELAY_PORT}"
 	else
 		echo "socket,id=net0,connect=127.0.0.1:${SEGMENT_PORT}"
 	fi
@@ -189,6 +234,22 @@ launch_node() {
 
 echo "--- powering on node A (it must hear nobody for ${RECNX}s, then found) ---"
 launch_node A OVMXA 1025 "$VOTES_A" 1 52:54:00:00:10:25 "$WINDOW_A"; PA=$LAUNCH_PID
+
+# THE SEGMENT, WITH A CUT IN IT (rd vms-b6d). Started between the two power-ons
+# so its clock and node A's are within a second of each other: the cut must land
+# AFTER both nodes have finished their membership window and entered the
+# quorum-hang phase, and the heal must land while the peer's CSB is still inside
+# its RECNXINTERVAL reconnect hold (p. 7-30) -- which is why RECNX is 45s in this
+# mode and the cut is ~45s long.
+RELAY_PID=0
+if [ "$QHANG" = "1" ]; then
+	echo "--- starting the segment relay (cut at t=${CUT_AT}s, heal at t=${HEAL_AT}s) ---"
+	python3 /segment_relay.py --listen-port "$RELAY_PORT" \
+		--connect-port "$SEGMENT_PORT" \
+		--cut-at "$CUT_AT" --heal-at "$HEAL_AT" \
+		> "$OUT/relay.log" 2>&1 &
+	RELAY_PID=$!
+fi
 sleep "$STAGGER"
 echo "--- powering on node B (it must join what A formed) ---"
 launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$WINDOW_B"; PB=$LAUNCH_PID
@@ -197,10 +258,17 @@ launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$WINDOW_B"; PB=$LAUNCH_PID
 wait "$PA" 2>/dev/null
 wait "$PB" 2>/dev/null
 kill "$GUARD" 2>/dev/null
+[ "$RELAY_PID" != "0" ] && kill "$RELAY_PID" 2>/dev/null
 
 # --------------------------------------------------------------------------
 # Reading the guests' executive readback
 # --------------------------------------------------------------------------
+
+if [ "$QHANG" = "1" ] && [ -s "$OUT/relay.log" ]; then
+	echo ""
+	echo "=== the segment (rig-side fact: when the wire carried, and when it did not) ==="
+	cat "$OUT/relay.log"
+fi
 
 for N in A B; do
 	echo ""
@@ -361,6 +429,148 @@ if [ "$MODE" = "noderive" ]; then
 	echo "  $B_CSID, CSV slot 2, the slot the coordinator assigned. A value"
 	echo "  it could not have computed: it was ADOPTED from the op-0x05"
 	echo "  membership record, which is the rule the oracle settled."
+	echo "=========================================="
+	exit 0
+fi
+
+if [ "$MODE" = "qhang" ]; then
+	# ---------------------------------------------------------------
+	# rd vms-b6d (FC-P8.1): THE QUORUM HANG, and its control, in one run.
+	#
+	# Every value below is a field the GUEST printed from a read of its own
+	# executive: the CLUB's quorum_lost, and $GETLKI's granted_mode for a
+	# lock the executive really holds. The rig computes none of them, and
+	# the only thing it contributes is relay.log's account of when the wire
+	# stopped carrying -- which is printed above, separately, because it is
+	# a fact about the segment and not about any executive.
+	# ---------------------------------------------------------------
+	qh_field() {   # $1=tag $2=line-suffix $3=at-phase $4=key
+		grep -a "RIG-$1-QH-$2 at=$3 " "$OUT/node$1.ttyS1.log" 2>/dev/null \
+			| tail -n 1 | tr -d '\r' | tr ' ' '\n' \
+			| sed -n "s/^$4=//p" | tail -n 1
+	}
+	qh_line() {    # $1=tag $2=line-suffix $3=key
+		grep -a "RIG-$1-QH-$2 " "$OUT/node$1.ttyS1.log" 2>/dev/null \
+			| tail -n 1 | tr -d '\r' | tr ' ' '\n' \
+			| sed -n "s/^$3=//p" | tail -n 1
+	}
+
+	A_QLOST=$(qh_field A CLUB during qlost);  B_QLOST=$(qh_field B CLUB during qlost)
+	A_QUOR=$(qh_field A CLUB during quorum);  B_QUOR=$(qh_field B CLUB during quorum)
+	A_BEF=$(qh_field A ENQ before granted_mode)
+	B_BEF=$(qh_field B ENQ before granted_mode)
+	A_DUR=$(qh_field A ENQ during granted_mode)
+	B_DUR=$(qh_field B ENQ during granted_mode)
+	A_DURST=$(qh_field A ENQ during status)
+	B_DURST=$(qh_field B ENQ during status)
+	B_DEQ=$(qh_field B DEQ during status)
+	B_LOSS=$(qh_line B LOSS observed)
+	B_BACK=$(qh_line B REGAIN observed)
+	B_AFT=$(qh_line B AFTER granted_mode)
+	B_RES=$(qh_line B AFTER res)
+
+	echo "  QUORUM-HANG RUN (rd vms-b6d) -- granted_mode 5 = EX granted,"
+	echo "  0 = the request exists and is NOT granted (the stall):"
+	printf "    A (VOTES=1, keeps quorum): during qlost=%s quorum=%s  \$ENQ before=%s during=%s (status %s)\n" \
+		"${A_QLOST:-?}" "${A_QUOR:-?}" "${A_BEF:-?}" "${A_DUR:-?}" "${A_DURST:-?}"
+	printf "    B (VOTES=0, loses it):     during qlost=%s quorum=%s  \$ENQ before=%s during=%s (status %s)\n" \
+		"${B_QLOST:-?}" "${B_QUOR:-?}" "${B_BEF:-?}" "${B_DUR:-?}" "${B_DURST:-?}"
+	printf "    B: loss observed=%s  release during the hang=%s  regain observed=%s  after=%s on %s\n" \
+		"${B_LOSS:-?}" "${B_DEQ:-?}" "${B_BACK:-?}" "${B_AFT:-?}" "${B_RES:-?}"
+	echo ""
+
+	QFAIL=0
+	# (0) The rig must have produced the condition at all. A run where B
+	#     never lost quorum measures nothing -- and says so rather than
+	#     passing on an assertion it never tested.
+	if [ "$B_LOSS" != "1" ] || [ "$B_QLOST" != "1" ]; then
+		echo "  INCONCLUSIVE (0): node B never observed a quorum loss."
+		echo "  The segment cut did not reach its executive as one, so"
+		echo "  nothing below was tested. Read the RIG-B-QH-CLUB lines"
+		echo "  and relay.log together."
+		QFAIL=1
+	fi
+	# (1) THE BASELINE. Both nodes must have been granted the same request
+	#     while the cluster was whole.
+	if [ "$A_BEF" != "5" ] || [ "$B_BEF" != "5" ]; then
+		echo "  INCONCLUSIVE (1): a node was not granted its EX lock"
+		echo "  BEFORE the cut (A=$A_BEF B=$B_BEF). Without that baseline a"
+		echo "  later stall would prove only that this rig cannot lock."
+		QFAIL=1
+	fi
+	# (2) THE STALL: queued, with no error status.
+	if [ "$B_DUR" = "5" ]; then
+		echo "  FAILED (2): node B GRANTED a clustered \$ENQ while its own"
+		echo "  executive reported quorum_lost=1. That is the fabrication"
+		echo "  this item exists to remove: a VMScluster that has lost"
+		echo "  quorum stalls (p. 7-4), it does not keep granting."
+		QFAIL=1
+	elif [ "$B_DUR" != "0" ]; then
+		echo "  FAILED (2): node B's request during the hang is in"
+		echo "  neither state -- granted_mode=$B_DUR."
+		QFAIL=1
+	fi
+	if [ "$B_DURST" != "1" ]; then
+		echo "  FAILED (2b): node B's \$ENQ during the hang returned"
+		echo "  status=$B_DURST, not SS\$_NORMAL(1). A quorum hang is a"
+		echo "  STALL, not an error return: the caller must be left"
+		echo "  waiting, never handed a failure VMS does not have."
+		QFAIL=1
+	fi
+	# (3) RELEASES ARE NOT GATED. A node must always be able to give a lock
+	#     back while it waits for quorum.
+	if [ "$B_DEQ" != "1" ]; then
+		echo "  FAILED (3): node B could not \$DEQ a lock it held from"
+		echo "  before the loss (status=$B_DEQ). The hang gates GRANTS, and"
+		echo "  must leave every release path alone."
+		QFAIL=1
+	fi
+	# (4) THE CONTROL: node A kept quorum on its own vote, so it must NOT
+	#     have stalled. This is what separates "stalls on quorum loss" from
+	#     "stalls whenever a peer goes away".
+	if [ "$A_QLOST" != "0" ]; then
+		echo "  INCONCLUSIVE (4): node A also reported quorum_lost=$A_QLOST,"
+		echo "  so this run has no un-hung node to control against."
+		QFAIL=1
+	elif [ "$A_DUR" != "5" ]; then
+		echo "  FAILED (4): node A, WHICH STILL HAS QUORUM (its own VOTES=1"
+		echo "  meets QUORUM=$A_QUOR), did not get its lock granted"
+		echo "  (granted_mode=$A_DUR). The gate is freezing on a departed"
+		echo "  peer rather than on a lost quorum."
+		QFAIL=1
+	fi
+	# (5) THE RESUME: the SAME request completes when quorum returns.
+	if [ "$B_BACK" != "1" ]; then
+		echo "  FAILED (5): node B never saw quorum return after the heal,"
+		echo "  so the resume could not be measured. Its stalled request is"
+		echo "  still outstanding -- which is the correct behaviour for a"
+		echo "  node that still has no quorum, and an untested resume."
+		QFAIL=1
+	elif [ "$B_AFT" != "5" ]; then
+		echo "  FAILED (5): node B regained quorum but its stalled request"
+		echo "  was NOT granted (granted_mode=$B_AFT). The stall has no"
+		echo "  release path -- which is worse than not stalling."
+		QFAIL=1
+	fi
+	# (6) ...and nobody crashed.
+	for N in A B; do
+		if console_panicked "$N"; then
+			echo "  FAILED (6): node $N's console shows a panic/bugcheck."
+			QFAIL=1
+		fi
+	done
+
+	if [ "$QFAIL" != "0" ]; then
+		echo "=========================================="
+		exit 1
+	fi
+	echo "  QUORUM-HANG PROOF PASSED (rd vms-b6d, FC-P8.1):"
+	echo "  the segment was cut; node B's executive computed the quorum"
+	echo "  loss from its OWN CSB table (qlost=1, quorum=$B_QUOR) and STALLED a"
+	echo "  clustered \$ENQ -- SS\$_NORMAL, a real lock id, granted_mode 0 --"
+	echo "  while still honouring a \$DEQ; node A, which kept quorum on its"
+	echo "  own vote, granted the identical request at once; and when the"
+	echo "  segment healed B's SAME stalled request completed at EX."
 	echo "=========================================="
 	exit 0
 fi

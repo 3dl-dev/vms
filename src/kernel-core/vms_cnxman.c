@@ -281,6 +281,27 @@ struct vms_cnxman {
 	uint8_t  genesis_armed;
 	uint8_t  pad_genesis[3];
 
+	/*
+	 * THE QUORUM HANG this node has ALREADY ANNOUNCED (FC-P8.1, sec 7b).
+	 * 0 at CLUSTER_START, which is the truth: a node that has not formed or
+	 * joined anything is not in a hang.
+	 *
+	 * It is what makes the edge LEVEL-TRIGGERED rather than a before/after
+	 * pair taken around one recompute -- and that distinction cost a live
+	 * 2-node run. The quorum arithmetic has THREE callers (this file's beat,
+	 * the joiner's op-01 PARAMS learn and Phase 2's commit, rd vms-d0d), and
+	 * on the rig it was the PARAMS-learn that cleared quorum_lost when the
+	 * partition healed. A comparator that read "before" at the top of its
+	 * own recompute therefore saw no change at all, announced nothing, and
+	 * left the stalled request stalled on a node that had quorum again.
+	 * Comparing against what was last ANNOUNCED cannot miss that, whichever
+	 * path did the arithmetic.
+	 */
+	uint8_t  quorum_hang_announced;
+	uint8_t  pad_quorum[3];
+	uint32_t quorum_hangs;        /* times this node entered a hang  */
+	uint32_t quorum_resumes;      /* ... and came back out of one    */
+
 	/* E78: the p. 2-43 receive-buffer ledger, counted where it is paid. */
 	uint32_t credits_returned;        /* buffers really released to SCS   */
 	uint32_t credit_returns_refused;  /* no CDT, or nothing was held      */
@@ -2067,24 +2088,36 @@ static void cnxman_quorum_announce(struct vms_cnxman *cn, int hang)
  * spelling of "recompute my own quorum", and this adds only the EDGE on top of
  * it: what changed, and who needs telling.
  *
- * The edge is measured with cnxman_quorum_hang_active() on BOTH sides, never
- * with the raw quorum_lost flag: the raw flag flips to 1 on every node that has
- * not yet learned a peer's votes, and announcing THAT would hang every join.
+ * The edge is measured with cnxman_quorum_hang_active(), never with the raw
+ * quorum_lost flag: the raw flag flips to 1 on every node that has not yet
+ * learned a peer's votes, and announcing THAT would hang every join.
  */
 static void cnxman_quorum_apply(struct vms_cnxman *cn)
 {
-	int before, after;
+	int now;
 
 	if (cn == NULL || cn->cl == NULL)
 		return;
 
-	before = cnxman_quorum_hang_active(cn->cl);
-	if (!cnxman_quorum_member_recompute(cn->cl))
-		return;                 /* not a member: nothing to enforce */
-	after = cnxman_quorum_hang_active(cn->cl);
+	(void)cnxman_quorum_member_recompute(cn->cl);
 
-	if (after != before)
-		cnxman_quorum_announce(cn, after);
+	/*
+	 * LEVEL-TRIGGERED, against what was last ANNOUNCED -- never against a
+	 * value read just before this function's own recompute. See
+	 * `quorum_hang_announced` in struct vms_cnxman for the live run that
+	 * settled it: another caller's recompute can clear the hang between two
+	 * beats, and an edge measured around ONE recompute simply never sees it.
+	 */
+	now = cnxman_quorum_hang_active(cn->cl);
+	if (now == (int)cn->quorum_hang_announced)
+		return;
+
+	cn->quorum_hang_announced = (uint8_t)(now ? 1 : 0);
+	if (now)
+		cn->quorum_hangs++;
+	else
+		cn->quorum_resumes++;
+	cnxman_quorum_announce(cn, now);
 }
 
 /* Returns nonzero iff this node really did become a member of a cluster it

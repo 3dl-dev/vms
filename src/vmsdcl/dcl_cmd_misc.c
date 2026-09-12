@@ -43,6 +43,7 @@
 #include "dcl/help.h"
 #include "dcl/dcl_rms.h"     /* dcl_rms_read_* -- the HELP ACP read seam (vms-4ac) */
 #include "rms_textfile.h"    /* rms_textfile_* -- RMS text I/O over the Files-11 ACP (vms-274) */
+#include "../vmstcpip/mgmt/tcpip_service_db.h" /* TCPIP {SET,SHOW,ENABLE,DISABLE,DELETE} SERVICE engine (#878, vms-71b) */
 #include "ssdef.h"
 #include "ovmx_layout.h"
 #include "vms/logical.h"
@@ -2405,6 +2406,162 @@ static int cmd_tcpip_reapply(struct dcl_command *cmd)
     return SS$_NORMAL;
 }
 
+/* ------------------------------------------------------------------ *
+ * The PERSISTENT INETD SERVICE DATABASE management surface (#878, vms-71b).
+ *
+ * TCPIP$INETD binds and serves every ENABLED service in SYS$SYSTEM:TCPIP$SERVICE.DAT,
+ * which it reads over the Files-11 ACP at aux-server start. These verbs edit that
+ * database THE VMS WAY and persist the change over the ACP (tcpip_service_db.h),
+ * so a DCL-enabled service survives reboot and is reapplied on the next
+ * TCPIP$INETD start -- no hand-editing of the file. Fail-honest with no
+ * executive (%TCPIP-W-NOEXEC), never a fake success (INV-6).
+ * ------------------------------------------------------------------ */
+
+/* Map a tcpip_svcdb_* return code onto an honest DCL status; 0 == success. */
+static int tcpip_svcdb_report(int rc, const char *name)
+{
+    switch (rc) {
+    case TCPIP_SVCDB_OK:
+        return SS$_NORMAL;
+    case TCPIP_SVCDB_ENOEXEC:
+        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$SERVICE.DAT not updated "
+               "(service \"%s\" not persisted to the VMS service database)\n", name);
+        return SS$_ABORT;
+    case TCPIP_SVCDB_EFULL:
+        printf("%%TCPIP-E-TOOMANY, service database is full (max %d services)\n",
+               TCPIP_SVCDB_MAX);
+        return SS$_ABORT;
+    case TCPIP_SVCDB_ENOSUCH:
+        printf("%%TCPIP-W-NOSUCHSER, service \"%s\" is not defined\n", name);
+        return SS$_ABORT;
+    default:
+        printf("%%TCPIP-E-BADPARAM, invalid service parameters\n");
+        return SS$_BADPARAM;
+    }
+}
+
+/*
+ * TCPIP SET SERVICE name /PORT=n /FILE=image [/USER_NAME=acct] [/ENABLE | /DISABLE]
+ * Defines or updates a service in the persistent database. A new service is
+ * DISABLED by default (operator posture); /ENABLE defines-and-enables it. An
+ * existing service keeps its enabled state unless /ENABLE or /DISABLE is given.
+ */
+static int cmd_tcpip_set_service(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 3) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing service name - usage: TCPIP SET SERVICE name /PORT=n /FILE=image");
+        return SS$_BADPARAM;
+    }
+    const char *name  = cmd->params[2];
+    const char *ports = dcl_qualifier_value(cmd, "PORT");
+    const char *image = dcl_qualifier_value(cmd, "FILE");
+    const char *user  = dcl_qualifier_value(cmd, "USER_NAME");
+
+    if (!ports) {
+        dcl_error("TCPIP", 2, "NOKEYW", "missing /PORT qualifier");
+        return SS$_BADPARAM;
+    }
+    if (!image) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing /FILE qualifier (the service image filespec)");
+        return SS$_BADPARAM;
+    }
+    errno = 0;
+    long port = strtol(ports, NULL, 10);
+    if (errno != 0 || port <= 0 || port > 65535) {
+        dcl_error("TCPIP", 2, "BADPARAM", "invalid /PORT value - \\%s\\", ports);
+        return SS$_BADPARAM;
+    }
+
+    int enable_flag = TCPIP_SVC_KEEP;
+    if (dcl_has_qualifier(cmd, "ENABLE"))
+        enable_flag = TCPIP_SVC_ENABLE;
+    else if (dcl_has_qualifier(cmd, "DISABLE"))
+        enable_flag = TCPIP_SVC_DISABLE;
+
+    int rc = tcpip_svcdb_set(name, (uint16_t)port, user, image, NULL, enable_flag);
+    int st = tcpip_svcdb_report(rc, name);
+    if (rc == TCPIP_SVCDB_OK)
+        printf("%%TCPIP-I-INFO, service \"%s\" defined (effective at next TCPIP$INETD start)\n",
+               name);
+    return st;
+}
+
+/*
+ * TCPIP ENABLE SERVICE name  /  TCPIP DISABLE SERVICE name
+ * Toggle a defined service's enabled state and persist.
+ */
+static int cmd_tcpip_enable_service(struct dcl_command *cmd, int on)
+{
+    if (cmd->param_count < 3) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing service name - usage: TCPIP %s SERVICE name",
+                  on ? "ENABLE" : "DISABLE");
+        return SS$_BADPARAM;
+    }
+    const char *name = cmd->params[2];
+    int rc = tcpip_svcdb_enable(name, on);
+    int st = tcpip_svcdb_report(rc, name);
+    if (rc == TCPIP_SVCDB_OK)
+        printf("%%TCPIP-I-INFO, service \"%s\" %s (effective at next TCPIP$INETD start)\n",
+               name, on ? "enabled" : "disabled");
+    return st;
+}
+
+/*
+ * TCPIP DELETE SERVICE name
+ * Remove a service from the persistent database.
+ */
+static int cmd_tcpip_delete_service(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 3) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing service name - usage: TCPIP DELETE SERVICE name");
+        return SS$_BADPARAM;
+    }
+    const char *name = cmd->params[2];
+    int rc = tcpip_svcdb_delete(name);
+    int st = tcpip_svcdb_report(rc, name);
+    if (rc == TCPIP_SVCDB_OK)
+        printf("%%TCPIP-I-INFO, service \"%s\" deleted\n", name);
+    return st;
+}
+
+/*
+ * TCPIP SHOW SERVICE [name]
+ * List the defined services and their enabled state from the persistent
+ * database. Honest %TCPIP-W-NOEXEC-style note if the database cannot be read.
+ */
+static int cmd_tcpip_show_service(struct dcl_command *cmd)
+{
+    const char *filter = (cmd->param_count >= 3) ? cmd->params[2] : NULL;
+    struct tcpip_svcdb_rec recs[TCPIP_SVCDB_MAX];
+    int n = tcpip_svcdb_load(recs, TCPIP_SVCDB_MAX);
+    int shown = 0;
+
+    printf("\n  Service         Port   State     Run-as            Image\n");
+    printf("  --------------- ------ --------- ----------------- --------------------------\n");
+    for (int i = 0; i < n; i++) {
+        if (filter && strcasecmp(recs[i].name, filter) != 0)
+            continue;
+        printf("  %-15s %5u  %-8s  %-16s  %s\n",
+               recs[i].name, (unsigned)recs[i].port,
+               recs[i].enabled ? "Enabled" : "Disabled",
+               recs[i].user[0] ? recs[i].user : "-",
+               recs[i].image);
+        shown++;
+    }
+    if (shown == 0) {
+        if (filter)
+            printf("  %%TCPIP-W-NOSUCHSER, service \"%s\" is not defined\n", filter);
+        else
+            printf("  (no services defined in %s)\n", TCPIP_SVCDB_SPEC);
+    }
+    printf("\n");
+    return SS$_NORMAL;
+}
+
 /*
  * TCPIP - TCP/IP Services command with SHOW and SET subcommands.
  */
@@ -2443,6 +2600,8 @@ int cmd_tcpip(struct dcl_command *cmd)
             return cmd_tcpip_show_version(cmd);
         if (dcl_match_command(what, "CONFIGURATION", 4))
             return cmd_tcpip_show_configuration(cmd);
+        if (dcl_match_command(what, "SERVICE", 4))
+            return cmd_tcpip_show_service(cmd);
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SHOW keyword - \\%s\\", what);
@@ -2467,10 +2626,29 @@ int cmd_tcpip(struct dcl_command *cmd)
             return cmd_tcpip_set_interface(cmd);
         if (dcl_match_command(what, "ROUTE", 3))
             return cmd_tcpip_set_route(cmd);
+        if (dcl_match_command(what, "SERVICE", 3))
+            return cmd_tcpip_set_service(cmd);
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SET keyword - \\%s\\", what);
         return SS$_IVKEYW;
+    }
+
+    if (dcl_match_command(subcmd, "ENABLE", 2) ||
+        dcl_match_command(subcmd, "DISABLE", 3) ||
+        dcl_match_command(subcmd, "DELETE", 3)) {
+        /* TCPIP {ENABLE,DISABLE,DELETE} SERVICE name -- persistent service DB (#878) */
+        if (cmd->param_count < 2 ||
+            !dcl_match_command(cmd->params[1], "SERVICE", 4)) {
+            dcl_error("TCPIP", 2, "NOKEYW",
+                      "usage: TCPIP %s SERVICE name", subcmd);
+            return SS$_BADPARAM;
+        }
+        if (dcl_match_command(subcmd, "ENABLE", 2))
+            return cmd_tcpip_enable_service(cmd, 1);
+        if (dcl_match_command(subcmd, "DISABLE", 3))
+            return cmd_tcpip_enable_service(cmd, 0);
+        return cmd_tcpip_delete_service(cmd);
     }
 
     dcl_error("TCPIP", 2, "IVKEYW",

@@ -67,4 +67,43 @@ struct dnet_nodespec {
  */
 int dnet_nodespec_parse(const char *spec, struct dnet_nodespec *out);
 
+/*
+ * dnet_copy_plan - decide the direction of a two-argument DECnet file COPY.
+ *
+ * A `COPY <src> <dst>` where exactly ONE side carries a DECnet node prefix is an
+ * outbound FAL/DAP transfer; the side WITHOUT a node is the local file:
+ *   - remote SOURCE  -> GET  (remote -> local): out->is_get = 1
+ *   - remote DEST    -> PUT  (local -> remote): out->is_get = 0
+ * The remote side's node + access-control creds + node-stripped spec are lifted
+ * into `out` (via dnet_nodespec_parse); the local side is taken verbatim as the
+ * local file spec (the splitter reports a no-node spec as DNET_NODESPEC_NONODE
+ * without parsing a filespec, so the raw local argument is used).
+ *
+ * This is the COPY-command policy layer the FAL client + the object-17 connect
+ * builder sit behind; it feeds dnet_cterm_sc_connect_build (creds) and
+ * dnet_fal_client_get/put (remote_spec/local_spec).
+ */
+struct dnet_copy_plan {
+    int  is_get;                                 /* 1 GET remote->local, 0 PUT local->remote */
+    char node[DNET_NODESPEC_MAXNODE + 1];        /* the remote node                          */
+    char username[DNET_SC_MAX_STR + 1];          /* access-control creds, from the remote    */
+    char password[DNET_SC_MAX_STR + 1];          /* spec's "..." string ("" if none)         */
+    char account[DNET_SC_MAX_STR + 1];
+    char remote_spec[DNET_NODESPEC_MAXFILE + 1]; /* node-stripped remote file spec           */
+    char local_spec[DNET_NODESPEC_MAXFILE + 1];  /* the local file spec (verbatim)           */
+    int  has_access;                             /* 1 iff the remote carried a "..." string  */
+};
+
+/*
+ * Plan a COPY. Returns:
+ *   DNET_CTERM_OK        - exactly one side is remote; *out filled.
+ *   DNET_CTERM_EINVAL    - null arg, OR neither side has a node (a local COPY, not
+ *                          this path), OR BOTH sides have a node (node-to-node
+ *                          COPY is not this outbound-client path).
+ *   DNET_CTERM_EBADLEN   - a field over its bound (propagated from the splitter,
+ *                          or the local spec too long).
+ * Any other splitter error (an unterminated access string, etc.) is propagated.
+ */
+int dnet_copy_plan(const char *src, const char *dst, struct dnet_copy_plan *out);
+
 #endif /* DNET_NODESPEC_H */

@@ -129,6 +129,45 @@ int main(void)
     check(dnet_nodespec_parse(NULL, &ns) == DNET_CTERM_EINVAL, "null spec refused");
     check(dnet_nodespec_parse("N::X", NULL) == DNET_CTERM_EINVAL, "null out refused");
 
+    /* ================= dnet_copy_plan: COPY direction policy ================= */
+    struct dnet_copy_plan cp;
+
+    /* --- 12. remote SOURCE -> GET (remote -> local) --- */
+    rc = dnet_copy_plan("VAX1\"SYSTEM SECRET\"::DISK$U:[X]REMOTE.TXT", "LOCAL.TXT", &cp);
+    check(rc == DNET_CTERM_OK, "COPY remote-src local-dst plans");
+    check(cp.is_get == 1, "  is_get == 1 (remote source -> GET)");
+    check(EQ(cp.node, "VAX1"), "  node = VAX1");
+    check(EQ(cp.username, "SYSTEM") && EQ(cp.password, "SECRET"), "  creds lifted from the remote");
+    check(EQ(cp.remote_spec, "DISK$U:[X]REMOTE.TXT"), "  remote_spec node-stripped");
+    check(EQ(cp.local_spec, "LOCAL.TXT"), "  local_spec verbatim");
+    check(cp.has_access == 1, "  has_access == 1");
+
+    /* --- 13. remote DEST -> PUT (local -> remote) --- */
+    rc = dnet_copy_plan("LOCAL.TXT", "MARS\"GUEST OPEN\"::[000000]OUT.DAT", &cp);
+    check(rc == DNET_CTERM_OK, "COPY local-src remote-dst plans");
+    check(cp.is_get == 0, "  is_get == 0 (remote dest -> PUT)");
+    check(EQ(cp.node, "MARS") && EQ(cp.username, "GUEST") && EQ(cp.password, "OPEN"),
+          "  node + creds from the remote dest");
+    check(EQ(cp.remote_spec, "[000000]OUT.DAT"), "  remote_spec node-stripped");
+    check(EQ(cp.local_spec, "LOCAL.TXT"), "  local_spec verbatim");
+
+    /* --- 14. remote with NO access string (node bare) --- */
+    rc = dnet_copy_plan("OVMXR3::A.TXT", "B.TXT", &cp);
+    check(rc == DNET_CTERM_OK && cp.is_get == 1 && cp.has_access == 0 &&
+          cp.username[0] == '\0' && EQ(cp.node, "OVMXR3") && EQ(cp.remote_spec, "A.TXT"),
+          "COPY bare-node remote source -> GET, no creds");
+
+    /* --- 15. refusals --- */
+    rc = dnet_copy_plan("LOCAL.TXT", "OTHER.TXT", &cp);
+    check(rc == DNET_CTERM_EINVAL, "both-local COPY refused (not a DECnet transfer)");
+    rc = dnet_copy_plan("A::X", "B::Y", &cp);
+    check(rc == DNET_CTERM_EINVAL, "node-to-node COPY refused (not the outbound-client path)");
+    rc = dnet_copy_plan("N\"unterminated::X", "LOCAL.TXT", &cp);
+    check(rc == DNET_CTERM_EBADLEN, "splitter error on a side is propagated");
+    check(dnet_copy_plan(NULL, "B", &cp) == DNET_CTERM_EINVAL, "null src refused");
+    check(dnet_copy_plan("A::X", NULL, &cp) == DNET_CTERM_EINVAL, "null dst refused");
+    check(dnet_copy_plan("A::X", "B", NULL) == DNET_CTERM_EINVAL, "null out refused");
+
     printf("%s: %d failure(s)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
 }

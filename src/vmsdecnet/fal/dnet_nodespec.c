@@ -128,3 +128,40 @@ int dnet_nodespec_parse(const char *spec, struct dnet_nodespec *out)
 
     return split_access(body, bi, out);
 }
+
+int dnet_copy_plan(const char *src, const char *dst, struct dnet_copy_plan *out)
+{
+    if (!src || !dst || !out) return DNET_CTERM_EINVAL;
+    memset(out, 0, sizeof *out);
+
+    struct dnet_nodespec s, d;
+    int rs = dnet_nodespec_parse(src, &s);
+    if (rs != DNET_CTERM_OK && rs != DNET_NODESPEC_NONODE) return rs;
+    int rd = dnet_nodespec_parse(dst, &d);
+    if (rd != DNET_CTERM_OK && rd != DNET_NODESPEC_NONODE) return rd;
+
+    int src_remote = (rs == DNET_CTERM_OK);
+    int dst_remote = (rd == DNET_CTERM_OK);
+    /* Exactly one side must be remote: a local->local COPY is not this path, and
+     * a node->node COPY is not the outbound-client path either. */
+    if (src_remote == dst_remote) return DNET_CTERM_EINVAL;
+
+    const struct dnet_nodespec *rem = src_remote ? &s : &d;
+    const char *local_arg = src_remote ? dst : src;
+
+    out->is_get = src_remote;                 /* remote source -> GET remote->local */
+    out->has_access = rem->has_access;
+    /* Same field capacities as dnet_nodespec, so these copies cannot overflow. */
+    memcpy(out->node,        rem->node,     sizeof out->node);
+    memcpy(out->username,    rem->username, sizeof out->username);
+    memcpy(out->password,    rem->password, sizeof out->password);
+    memcpy(out->account,     rem->account,  sizeof out->account);
+    memcpy(out->remote_spec, rem->filespec, sizeof out->remote_spec);
+
+    /* The local side is taken verbatim (the splitter does not parse a no-node
+     * spec's filespec), bounds-checked against the same limit. */
+    size_t ll = strlen(local_arg);
+    if (ll + 1 > sizeof out->local_spec) return DNET_CTERM_EBADLEN;
+    memcpy(out->local_spec, local_arg, ll + 1);
+    return DNET_CTERM_OK;
+}

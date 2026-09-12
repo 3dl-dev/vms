@@ -32,15 +32,22 @@ static const struct ovmx_ident_syscalls tcpip_inetd_ident_real = {
 /*
  * Fail-closed diagnostic (rd vms-8bd). On a launch refusal the service image is
  * never execv'd, so its %OVMX-F- line has nowhere to go and the connecting client
- * (and the daytime cold-boot proof) just sees an empty read -- indistinguishable
- * from a dozen other launch failures. This writes the SPECIFIC refusal to BOTH
- * the auxiliary server's stderr (fd 2 -> SYS$MANAGER:TCPIP$INETD.LOG when detached,
- * an ops record) AND, when this runs in the spawned child (fd 1 is the accepted
- * connection socket at this point in tcpip_inetd_spawn), to the client -- so the
- * reason a fail-closed service did not launch is observable rather than silent.
- * A fail-closed service reporting WHY it is unavailable is not a secret leak; the
- * accounts and privileges named are the shipped seed. write()/dprintf go straight
- * to the fd (no stdio buffering to lose before _exit). */
+ * just sees an empty read -- indistinguishable from a dozen other launch failures.
+ *
+ * TWO SINKS, DELIBERATELY ASYMMETRIC (R4 posture, #1168):
+ *  - stderr (fd 2 -> SYS$MANAGER:TCPIP$INETD.LOG when the aux server is detached):
+ *    the FULL operator detail -- account, UIC, raw RMS status, errno. This is an
+ *    operator log on the protected system disk; the detail is exactly what an
+ *    admin needs to fix a mis-seeded service account.
+ *  - the accepted connection socket (fd 1, in the spawned child): a GENERIC
+ *    "service unavailable" only. Writing the SYSUAF/cred internals (which account,
+ *    which RMS status, which errno) to an UNAUTHENTICATED :13 client would be the
+ *    mild information disclosure this project's own R4 TCP/IP sweep flags, so the
+ *    client is told the service is unavailable and nothing about why.
+ *
+ * write() goes straight to the fd (no stdio buffering to lose before _exit). fd 1
+ * is only the socket in the spawned child; in the unit test it is the test's
+ * stdout, where the generic line is harmless. */
 static void inetd_ident_diag(const char *fmt, ...)
 {
     char buf[256];
@@ -50,8 +57,11 @@ static void inetd_ident_diag(const char *fmt, ...)
     va_end(ap);
     if (n < 0) return;
     size_t len = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
-    (void)!write(STDERR_FILENO, buf, len);
-    (void)!write(STDOUT_FILENO, buf, len);
+    (void)!write(STDERR_FILENO, buf, len);        /* full detail -> INETD.LOG   */
+
+    static const char generic[] =
+        "%OVMX-F-NOSVC, service unavailable\n";    /* generic -> the client      */
+    (void)!write(STDOUT_FILENO, generic, sizeof(generic) - 1);
 }
 
 int tcpip_inetd_apply_identity(const char *username, uint32_t uic,

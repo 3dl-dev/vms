@@ -315,6 +315,13 @@ add_executable(vms_tcpip_inetd
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/services/tcpip_inetd_ident.c
     ${CMAKE_SOURCE_DIR}/src/vmsssh/ssh_ident.c
     ${CMAKE_SOURCE_DIR}/src/vmsssh/cred_drop.c
+    # Force-bind anchor: sysuaf.c weak-references ovmx_sysuaf_read_user/_uic (the
+    # real SYSUAF-over-ACP readers in vmsrms/sysuaf_live.o); a weak ref does NOT
+    # extract the archive member, so without this strong reference the per-service
+    # persona drop's sysuaf_lookup() returns -1/RMS=0 at runtime (the account never
+    # resolves) even though LIBVMSRMS is linked. Same trap dcl/loginout/decnetd
+    # close with their own *_rms_bind.c anchors (rd vms-8bd).
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/services/tcpip_inetd_rms_bind.c
 )
 
 target_include_directories(vms_tcpip_inetd PRIVATE

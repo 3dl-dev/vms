@@ -390,10 +390,13 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
         if (identity_fn != NULL && identity_fn(svc) != 0)
             _exit(125);                         /* fail-closed: identity not established */
         execv(exec_path, argv);
-        /* execv returned -> it FAILED. STDOUT is the accepted socket (dup2
-         * succeeded above), so report to the client + INETD.LOG which image
-         * could not start rather than closing on an empty read (rd vms-8bd
-         * diagnostic; distinguishes an execv failure from an identity refusal). */
+        /* execv returned -> it FAILED. Two sinks, asymmetric (R4 posture, #1168):
+         * the FULL detail (which image, errno) to stderr -> SYS$MANAGER:TCPIP$INETD.LOG
+         * (an operator record), and a GENERIC "service unavailable" to the accepted
+         * socket (STDOUT, dup2'd above) -- an unauthenticated client is not told the
+         * image path or errno. Distinguishes an execv failure from an identity
+         * refusal in the operator log without leaking internals to the client
+         * (rd vms-8bd). */
         {
             char eb[256];
             int en = snprintf(eb, sizeof(eb),
@@ -402,8 +405,9 @@ static inline pid_t tcpip_inetd_spawn(int accepted_h, const struct tcpip_service
             if (en > 0) {
                 size_t el = (en < (int)sizeof(eb)) ? (size_t)en : sizeof(eb) - 1;
                 (void)!write(STDERR_FILENO, eb, el);
-                (void)!write(STDOUT_FILENO, eb, el);
             }
+            static const char generic[] = "%OVMX-F-NOSVC, service unavailable\n";
+            (void)!write(STDOUT_FILENO, generic, sizeof(generic) - 1);
         }
         _exit(127);                             /* execv failed */
     }

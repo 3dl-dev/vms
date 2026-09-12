@@ -88,4 +88,9 @@ install(TARGETS decnetd_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 if(BUILD_TESTS)
     add_test(NAME decnetd_sethost_src_codes
              COMMAND decnetd_exe --set-host-src-codes-selftest)
+    # rd vms-ea8/vms-6a4: the OUTBOUND $ COPY command layer floor -- copy_plan
+    # direction/creds/spec derivation (GET + PUT) and the parsed creds driving a
+    # real object-17 connect refused without auth, both directions. No executive.
+    add_test(NAME decnetd_copy_selftest
+             COMMAND decnetd_exe --copy-selftest)
 endif()

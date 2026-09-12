@@ -64,6 +64,7 @@
 #include "dnet_cterm_host.h" /* CTERM HOST session: $CREPRC -> LOGINOUT on RTAn: */
 #include "dnet_dap.h"       /* DAP message codec (--fal-* : COPY presentation layer) */
 #include "dnet_fal.h"       /* FAL server + COPY client (object 17, rd vms-8c2) */
+#include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
@@ -2431,6 +2432,184 @@ static int run_fal_accept_test(void)
 #undef FA_CHECK
 }
 
+/*
+ * ================== --copy-selftest (rd vms-ea8/vms-6a4) ====================
+ * The OUTBOUND $ COPY command layer that sits on top of the FAL client: the
+ * node-filespec splitter + the copy-direction plan (dnet_copy_plan) that turn a
+ * `COPY <src> <dst>` argument pair into {direction, node, creds, remote/local
+ * spec}, then feed the object-17 connect builder + dnet_fal_client_get/put.
+ *
+ * This is the HONEST FLOOR (no executive, runs anywhere), the COPY analogue of
+ * --fal-selftest: it proves (A) copy_plan derives the right direction + node +
+ * access-control creds + node-stripped specs for a remote-SOURCE (GET) and a
+ * remote-DEST (PUT) argument pair, and (B) the creds copy_plan parsed out of the
+ * spec really drive a REAL object-17 Connect Initiate that FAL refuses with an
+ * NSP disconnect when they cannot be authenticated (no /dev/vms here) -- for
+ * BOTH directions, over the same threaded socketpair path DECNETD uses on the
+ * live datalink. The AUTHENTICATED full GET/PUT transfer of a plan's specs is
+ * the domain of --fal-accept-test (the hard gate on /dev/vms + the mounted
+ * SYSUAF); this floor never fakes a transfer (INV-6).
+ */
+static int copy_plan_refused_without_auth(const struct dnet_copy_plan *plan,
+                                           const char *label)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-COPYSELF, socketpair failed: %s\n", strerror(errno));
+        return -1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+    struct dnet_engine L, R;
+    int rc = -1;
+    if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) == 0 &&
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) == 0) {
+        dnet_tick_t tick = 100;
+        uint32_t auth = 0;
+        int br = fal_bringup(&L, &R, sv[0], sv[1], &tick,
+                             plan->username, plan->password, &auth);
+        if (br == 1 && auth != SS$_NORMAL) {
+            printf("DECNETD-I-COPYSELF, %s: the creds copy_plan parsed drove a real"
+                   " object-17 connect, REFUSED (status %08X) without auth (INV-6)\n",
+                   label, auth);
+            rc = 0;
+        } else {
+            printf("DECNETD-E-COPYSELF, %s: expected an honest refusal of the"
+                   " unauthenticated connect, got bringup=%d auth=%08X\n",
+                   label, br, auth);
+            rc = 1;
+        }
+    } else {
+        fprintf(stderr, "DECNETD-E-COPYSELF, engine init failed\n");
+        rc = -1;
+    }
+    close(sv[0]); close(sv[1]);
+    return rc;
+}
+
+static int run_copy_selftest(void)
+{
+    int pass = 0, fail = 0;
+#define CP_CHECK(cond, msg) do { \
+        if (cond) { printf("  PASS: %s\n", (msg)); pass++; } \
+        else      { printf("  FAIL: %s\n", (msg)); fail++; } } while (0)
+
+    /* (A) copy_plan direction/creds/spec derivation, GET and PUT. */
+    struct dnet_copy_plan get_plan, put_plan;
+    int rg = dnet_copy_plan("VAX1\"GUEST SECRET\"::DISK$U:[X]REMOTE.TXT",
+                            "LOCAL.TXT", &get_plan);
+    CP_CHECK(rg == 0 && get_plan.is_get == 1 &&
+             !strcmp(get_plan.node, "VAX1") &&
+             !strcmp(get_plan.username, "GUEST") &&
+             !strcmp(get_plan.password, "SECRET") &&
+             !strcmp(get_plan.remote_spec, "DISK$U:[X]REMOTE.TXT") &&
+             !strcmp(get_plan.local_spec, "LOCAL.TXT"),
+             "COPY remote-source -> GET plan (direction, node, creds, specs)");
+
+    int rp = dnet_copy_plan("LOCAL.TXT",
+                            "VAX1\"GUEST SECRET\"::DISK$U:[X]REMOTE.TXT", &put_plan);
+    CP_CHECK(rp == 0 && put_plan.is_get == 0 &&
+             !strcmp(put_plan.node, "VAX1") &&
+             !strcmp(put_plan.remote_spec, "DISK$U:[X]REMOTE.TXT") &&
+             !strcmp(put_plan.local_spec, "LOCAL.TXT"),
+             "COPY remote-dest -> PUT plan (direction, node, specs)");
+
+    /* refusals are structural, no wire needed */
+    struct dnet_copy_plan tmp;
+    CP_CHECK(dnet_copy_plan("A.TXT", "B.TXT", &tmp) == DNET_CTERM_EINVAL,
+             "both-local COPY refused (not a DECnet transfer)");
+    CP_CHECK(dnet_copy_plan("A::X", "B::Y", &tmp) == DNET_CTERM_EINVAL,
+             "node-to-node COPY refused (not the outbound-client path)");
+
+    /* (B) the parsed creds drive a real, honestly-refused object-17 connect,
+     * for BOTH directions (integration: copy_plan -> connect builder -> engine). */
+    if (rg == 0) {
+        int r = copy_plan_refused_without_auth(&get_plan, "GET-plan creds");
+        if (r < 0) return 1;
+        CP_CHECK(r == 0, "GET-plan creds drive a real object-17 connect, refused without auth");
+    }
+    if (rp == 0) {
+        int r = copy_plan_refused_without_auth(&put_plan, "PUT-plan creds");
+        if (r < 0) return 1;
+        CP_CHECK(r == 0, "PUT-plan creds drive a real object-17 connect, refused without auth");
+    }
+
+    printf("DECNETD-I-COPYSELF, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-COPY-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-COPY-SELFTEST: FAIL\n");
+    return 1;
+#undef CP_CHECK
+}
+
+/*
+ * run_copy_loop - the LIVE outbound $ COPY over the datalink (rd vms-ea8).
+ *
+ * Builds the copy plan from the two COPY arguments, ENFORCES the credential
+ * posture, then would drive dnet_fal_client_get/put over a datalink-backed DAP
+ * transport to object 17 on the remote node.
+ *
+ * CREDENTIAL POSTURE (a DECIDED rule, not a facade): the FAL access-control
+ * PASSWORD is a REAL credential (unlike SET HOST, where LOGINOUT authenticates
+ * fresh and the connect password is empty). It MUST NOT appear on argv -- argv
+ * is world-readable in /proc/<pid>/cmdline under a fork/exec activation -- so:
+ *   - a password embedded in the COPY spec's access string is REFUSED here; the
+ *     command line carries at most NODE"username"::spec, never the password;
+ *   - the password is read from the inherited fd named by --password-fd, which
+ *     the in-process image activator hands over without it ever crossing a
+ *     process boundary in the clear.
+ * The node-stripped spec + username + account come from the plan; the password
+ * comes from the fd; together they build the object-17 connect.
+ *
+ * The outbound datalink-backed DAP transport itself (a DCL process owning a live
+ * DECnet circuit to carry the FAL client's DAP over AF_PACKET) is the build-host
+ * / inbound-bracket rung and is NOT wired here yet -- so with the plan validated
+ * and the posture enforced, this reports honestly and does not fake a transfer
+ * (INV-6, exactly as dcl_cmd_file.c reports %COPY-I-NETNOTWIRED today). The
+ * host+CI proof of the command layer is --copy-selftest; the authenticated
+ * transfer is --fal-accept-test.
+ */
+static int run_copy_loop(const char *src, const char *dst, int password_fd)
+{
+    struct dnet_copy_plan plan;
+    int r = dnet_copy_plan(src, dst, &plan);
+    if (r != DNET_CTERM_OK) {
+        fprintf(stderr, "DECNETD-E-COPYSPEC, could not parse the COPY specs"
+                        " (one side must be NODE\"user\"::file; status %d)\n", r);
+        return 1;
+    }
+
+    /* POSTURE: never accept the password on the command line. */
+    if (plan.password[0] != '\0') {
+        fprintf(stderr, "DECNETD-E-COPYPW, the FAL password must not appear on the"
+                        " command line (it would be world-readable in"
+                        " /proc/<pid>/cmdline); pass NODE\"username\"::file and"
+                        " supply the password on the fd named by --password-fd\n");
+        return 1;
+    }
+    if (plan.has_access && password_fd < 0) {
+        fprintf(stderr, "DECNETD-E-COPYPW, an access-control username was given"
+                        " but no --password-fd; refusing (no password source)\n");
+        return 1;
+    }
+
+    log_ts(stdout);
+    printf(" DECNETD-I-COPYPLAN, %s %s%s%s::%s <-> local %s\n",
+           plan.is_get ? "GET" : "PUT",
+           plan.node,
+           plan.has_access ? "\"" : "", plan.has_access ? plan.username : "",
+           plan.remote_spec, plan.local_spec);
+    fflush(stdout);
+
+    /* The outbound datalink-backed DAP transport is the build-host-gated rung. */
+    fprintf(stderr, "DECNETD-I-COPYNOTWIRED, the outbound FAL COPY-over-datalink"
+                    " transport is not wired on this system -- the plan is valid"
+                    " and the credential path is enforced, but a DCL process does"
+                    " not yet own a live DECnet circuit to carry DAP (rd vms-ea8,"
+                    " build-host-gated with the inbound bracket)\n");
+    (void)password_fd;
+    return 1;
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
@@ -2524,7 +2703,21 @@ static void usage(const char *argv0)
         "                      HARD GATE on /dev/vms + the mounted SYSUAF): real\n"
         "                      SYSUAF/Purdy auth (bad password REFUSED), then a\n"
         "                      sequential file transferred BOTH directions\n"
-        "                      through real DAP + RMS over the ACP, byte-verified\n",
+        "                      through real DAP + RMS over the ACP, byte-verified\n"
+        "  --copy-selftest     run the OUTBOUND COPY command-layer floor and exit\n"
+        "                      (no executive): copy_plan derives the right\n"
+        "                      direction + node + creds + specs for a remote-source\n"
+        "                      (GET) and remote-dest (PUT) pair, and those parsed\n"
+        "                      creds drive a real object-17 connect refused without\n"
+        "                      auth -- both directions (rd vms-ea8/vms-6a4)\n"
+        "  --copy SRC DST      OUTBOUND $ COPY over DECnet: exactly one of SRC/DST\n"
+        "                      is NODE\"username\"::file (the remote), the other is\n"
+        "                      local. The FAL PASSWORD is NEVER taken here -- it is\n"
+        "                      a real credential and must not sit in argv (world-\n"
+        "                      readable /proc); supply it on --password-fd. The\n"
+        "                      outbound datalink transport is build-host-gated.\n"
+        "  --password-fd N     with --copy: read the FAL access-control password\n"
+        "                      from inherited fd N (never from argv or the env)\n",
         argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT,
         (unsigned)DNET_ROUTER_PRIORITY_DEFAULT);
 }
@@ -2562,6 +2755,10 @@ int main(int argc, char **argv)
     const char *set_host_user = "SYSTEM"; /* --user : CTERM access-control name      */
     int fal_self_test = 0;
     int fal_accept_test = 0;
+    int copy_self_test = 0;               /* --copy-selftest : COPY command-layer floor */
+    const char *copy_src = NULL;          /* --copy <src> <dst> : outbound FAL COPY      */
+    const char *copy_dst = NULL;
+    int copy_password_fd = -1;            /* --password-fd N : the FAL password source   */
     int router_mode = 0;           /* --router: emit router-hellos, advertise L1 router */
     int router_priority = 0;       /* --priority: DR-election priority (0 => DNA default 64) */
 
@@ -2588,6 +2785,13 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--user") && i + 1 < argc)     set_host_user = argv[++i];
         else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
         else if (!strcmp(argv[i], "--fal-accept-test")) fal_accept_test = 1;
+        else if (!strcmp(argv[i], "--copy-selftest")) copy_self_test = 1;
+        else if (!strcmp(argv[i], "--copy") && i + 2 < argc) {
+            copy_src = argv[++i];
+            copy_dst = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--password-fd") && i + 1 < argc)
+            copy_password_fd = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--router")) router_mode = 1;
         else if (!strcmp(argv[i], "--priority") && i + 1 < argc)
             router_priority = atoi(argv[++i]);
@@ -2621,6 +2825,10 @@ int main(int argc, char **argv)
         return run_fal_selftest();
     if (fal_accept_test)
         return run_fal_accept_test();
+    if (copy_self_test)
+        return run_copy_selftest();
+    if (copy_src)
+        return run_copy_loop(copy_src, copy_dst, copy_password_fd);
 
     /* A router routes and a --set-host CLIENT bridges a terminal; neither is a
      * NETACP that serves inbound object-42 sessions unless the caller pins it on.

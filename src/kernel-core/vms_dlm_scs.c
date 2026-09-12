@@ -823,12 +823,27 @@ static int dlm_arm_reply_grant(struct vms_dlm_scs *d,
 			       struct dlm_scs_reply *reply)
 {
 	uint32_t written = 0;
+	vms_codec_status_t rc;
 
 	memset(d->txframe, 0, sizeof(d->txframe));
-	if (vms_dlm_enq_response_build_grant(r->req_lkid, r->master_lkid,
+	/*
+	 * THE LVB READ CROSSING (vms-727). When the master resource holds a
+	 * value block (result->valblk_present), the grant RETURNS it -- the
+	 * grant-with-valblk builder -- so the requester's $ENQ(VALBLK)/$GETLKI
+	 * reads the master's LVB back. Otherwise the plain grant, unchanged and
+	 * proven cross-node. Every byte of either frame is read off the LKB/RSB
+	 * the engine stamped or is a grounded constant; none is composed.
+	 */
+	if (r->valblk_present)
+		rc = vms_dlm_enq_response_build_grant_valblk(r->req_lkid,
+					     r->master_lkid, r->granted_mode,
+					     r->valblk, d->txframe,
+					     (uint32_t)sizeof(d->txframe), &written);
+	else
+		rc = vms_dlm_enq_response_build_grant(r->req_lkid, r->master_lkid,
 					     r->granted_mode, d->txframe,
-					     (uint32_t)sizeof(d->txframe),
-					     &written) != VMS_CODEC_OK) {
+					     (uint32_t)sizeof(d->txframe), &written);
+	if (rc != VMS_CODEC_OK) {
 		d->codec_failures++;
 		return -1;
 	}

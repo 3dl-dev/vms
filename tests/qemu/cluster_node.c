@@ -1584,6 +1584,229 @@ static void rig_xn_lvb_phase(int fd, const struct node_cfg *c)
 	rig_xn_lvb_release(fd, c, &h);
 }
 
+/* ==========================================================================
+ * 6e. THE VALUE-BLOCK READ CROSSING (rd vms-727), ON ITS OWN DEDICATED
+ * RESOURCE -- the symmetric mirror of 6d above. 6d proved a HOLDER's demote
+ * carries a value block TO the master over op-0x06; this proves a PEER's
+ * cross-node $ENQ...LCK$M_VALBLK carries the master's OWN value block BACK,
+ * in the grant reply (the op-0x01 grant-with-valblk record the codec builds,
+ * rd #1190).
+ *
+ * A dedicated, disjoint literal name ("OVMXA$RD01") -- never the "$X"/"$L"/
+ * "$R" series 6b/6c/6d already exercise (the collateral-assertion collision
+ * #1187 hit is exactly why this stays off every other scenario's resource).
+ *
+ * NEITHER NODE IS HARD-WIRED WRITER OR READER. Both nodes run this identical
+ * function; which one masters the literal name is the directory hash's
+ * answer, read back (Rule 8), never assumed from a node's own tag. The
+ * discovery probe is NL mode -- compatible with anything already granted on
+ * either side of this race, so it can never queue regardless of which node's
+ * probe reaches the (still-forming) resource first.
+ */
+#define RIG_LVBRD_RESNAM   "OVMXA$RD01"
+#define RIG_LVBRD_POLL_MS  1000u
+#define RIG_LVBRD_POLL_MAX 90u     /* 90s -- the two nodes' windows are sized
+				    * to reach this phase at the same wall
+				    * moment (run_cluster_genesis_2node.sh),
+				    * so this is slack, not the sync mechanism */
+
+/* 16 bytes + NUL, same convention as rig_lvb_pattern above. */
+static const char rig_lvbrd_pattern[] = "OVMXLVBREAD00001";
+
+/*
+ * A fresh (non-CONVERT) $ENQ carrying LCK$M_VALBLK with an ALL-ZERO block.
+ * Per the engine's local-grant path (vms_lock.c enq_core_ex): a zero-valued
+ * block on grant means READ the resource's value block into this lock,
+ * rather than write one -- this is the genuine $ENQ...LCK$M_VALBLK "peek"
+ * both the discovery probe and the reader's real read use.
+ */
+static uint32_t rig_dlm_enq_peek_valblk(int fd, const char *resnam,
+					uint32_t lkmode, uint32_t *lkid_out,
+					uint8_t *valblk_out)
+{
+	struct vms_enq_args a;
+
+	memset(&a, 0, sizeof(a));
+	a.lkmode = lkmode;
+	a.flags = LCK_M_VALBLK;
+	snprintf(a.resnam, sizeof(a.resnam), "%s", resnam);
+	if (ioctl(fd, VMS_IOCTL_ENQ, &a) != 0)
+		return 0u;
+	*lkid_out = a.lkid;
+	if (valblk_out)
+		memcpy(valblk_out, a.valblk, LCK_VALBLK_SIZE);
+	return a.status;
+}
+
+/*
+ * A 16-byte value block rendered as ASCII, unprintable bytes shown as '.' --
+ * the same convention scan_dlm_wire.py's op06_detail/op01 detail use
+ * (0x21..0x7e, deliberately EXCLUDING the literal space 0x20: it would split
+ * this token when the host script's own `tr ' ' '\n'` scraper tokenises the
+ * printed line), so a hexdump is never the only way to read what crossed.
+ */
+static void rig_lvbrd_ascii(const uint8_t *v, char *out, size_t n)
+{
+	size_t i;
+
+	for (i = 0; i < LCK_VALBLK_SIZE && i + 1 < n; i++)
+		out[i] = (v[i] >= 0x21 && v[i] < 0x7f) ? (char)v[i] : '.';
+	out[i] = '\0';
+}
+
+static int rig_lvbrd_is_pattern(const uint8_t *v)
+{
+	return memcmp(v, rig_lvbrd_pattern, LCK_VALBLK_SIZE) == 0;
+}
+
+/*
+ * Poll $GETLKI until a cross-node request has actually RESOLVED, not merely
+ * been accepted into the proxy LKB (fc8540ae-adjacent lesson, applied here):
+ * the ENQ ioctl for a resource this node does not master returns ASYNC, with
+ * the grant reply still in flight over the wire (rig_dlm_enq's own doc
+ * comment says as much). `lock->granted_mode` reads 0 until that reply is
+ * processed -- and since the mode requested here is CR (1), never NL (0),
+ * "still 0" and "genuinely granted" cannot be confused the way they can for
+ * an NL request (see the XN-CONTEND-MODE comment elsewhere in this file for
+ * that ambiguity). Returns 1 once resolved, 0 on timeout -- never guesses.
+ */
+#define RIG_LVBRD_GRANT_WAIT 12u   /* x RIG_XN_POLL_MS: 3s cap PER ATTEMPT --
+				    * a CR request is always compatible with
+				    * the writer's held CR, so real resolution
+				    * is one round trip; bounded here only so
+				    * a genuine failure cannot blow the outer
+				    * RIG_LVBRD_POLL_MAX loop's own budget */
+
+static int rig_lvbrd_wait_granted(int fd, uint32_t lkid)
+{
+	unsigned t;
+
+	for (t = 0; t < RIG_LVBRD_GRANT_WAIT; t++) {
+		struct vms_getlki_args g;
+
+		memset(&g, 0, sizeof(g));
+		g.lkid = lkid;
+		if (ioctl(fd, VMS_IOCTL_GETLKI, &g) == 0 &&
+		    g.status == SS_NORMAL && g.granted_mode == LCK_K_CRMODE)
+			return 1;
+		rig_msleep(RIG_XN_POLL_MS);
+	}
+	return 0;
+}
+
+/*
+ * THE READER'S HALF: this node does NOT master the name. Poll -- a fresh
+ * $ENQ...LCK$M_VALBLK (a genuine NEW cross-node request each attempt, never
+ * the same stale lkid: a lock's own cached value block is only ever the
+ * snapshot taken at ITS OWN grant, vms_lock.c never re-pushes a later
+ * writer's update to an already-granted holder), mode CR so it is always
+ * compatible with the writer's held CR (rig_lvbrd_write_and_hold) and never
+ * queues -- WAIT for that grant to genuinely resolve, THEN $GETLKI, exactly
+ * as the task's own read step is worded -- until the master's write is seen,
+ * or the deadline passes. A miss is printed as a miss (INV-6): fabricating a
+ * match this run never measured is the placeholder that crashed a real VAX.
+ */
+static void rig_lvbrd_read_phase(int fd, const struct node_cfg *c)
+{
+	struct vms_getlki_args g;
+	uint8_t valblk[LCK_VALBLK_SIZE];
+	char ascii[LCK_VALBLK_SIZE + 1];
+	uint32_t lkid = 0u, enq_st = 0u, getlki_st = 0u;
+	unsigned attempt;
+	int matched = 0;
+
+	memset(valblk, 0, sizeof(valblk));
+	for (attempt = 0; attempt < RIG_LVBRD_POLL_MAX; attempt++) {
+		uint8_t zero[LCK_VALBLK_SIZE];
+
+		memset(zero, 0, sizeof(zero));
+		enq_st = rig_dlm_enq_peek_valblk(fd, RIG_LVBRD_RESNAM,
+						 LCK_K_CRMODE, &lkid, zero);
+		if (enq_st == SS_NORMAL && lkid != 0u) {
+			(void)rig_lvbrd_wait_granted(fd, lkid);
+			memset(&g, 0, sizeof(g));
+			g.lkid = lkid;
+			if (ioctl(fd, VMS_IOCTL_GETLKI, &g) == 0) {
+				getlki_st = g.status;
+				memcpy(valblk, g.valblk, sizeof(valblk));
+			}
+			(void)rig_dlm_deq(fd, lkid);
+			matched = rig_lvbrd_is_pattern(valblk);
+			if (matched)
+				break;
+		}
+		rig_msleep(RIG_LVBRD_POLL_MS);
+	}
+
+	rig_lvbrd_ascii(valblk, ascii, sizeof(ascii));
+	printf("RIG-%s-GETLKI res=%s valblk_ascii=%s matched=%d attempts=%u "
+	       "enq_status=%u getlki_status=%u (cross-node $ENQ...LCK$M_VALBLK "
+	       "read of the peer master's value block, rd vms-727)\n",
+	       c->tag, RIG_LVBRD_RESNAM, ascii, matched, attempt + 1u,
+	       (unsigned)enq_st, (unsigned)getlki_st);
+	fflush(stdout);
+}
+
+/*
+ * THE WRITER'S HALF: this node masters the name. Convert the discovery
+ * probe's own NL grant up to CR carrying the pattern (the same
+ * demote-with-valblk mechanic 6d's rig_dlm_convert_valblk already proved,
+ * reused verbatim) and HOLD -- no DEQ. This is entirely local (this node IS
+ * the master, so vms_lock.c applies the value straight to res->valblk; no
+ * wire op is expected or needed for this half), and the resource must
+ * survive, written, for the rest of this node's run so the peer's read can
+ * find it.
+ */
+static void rig_lvbrd_write_and_hold(int fd, const struct node_cfg *c,
+				     uint32_t probe_lkid)
+{
+	uint32_t st;
+
+	st = rig_dlm_convert_valblk(fd, probe_lkid, LCK_K_CRMODE,
+				    rig_lvbrd_pattern);
+	printf("RIG-%s-LVBRDHOLD res=%s lkid=0x%08x status=%u mode=CR "
+	       "pattern=%.16s (this node IS the master for the READ crossing "
+	       "-- writes+holds the value block for the peer's cross-node "
+	       "read, rd vms-727)\n",
+	       c->tag, RIG_LVBRD_RESNAM, (unsigned)probe_lkid, (unsigned)st,
+	       rig_lvbrd_pattern);
+	fflush(stdout);
+}
+
+static void rig_lvbrd_phase(int fd, const struct node_cfg *c)
+{
+	struct vms_resmaster_args rm;
+	uint32_t probe_lkid = 0u, st;
+
+	st = rig_dlm_enq_peek_valblk(fd, RIG_LVBRD_RESNAM, LCK_K_NLMODE,
+				     &probe_lkid, NULL);
+	if (st != SS_NORMAL || probe_lkid == 0u) {
+		printf("RIG-%s-LVBRD-PROBE res=%s status=%u (not enqueued)\n",
+		       c->tag, RIG_LVBRD_RESNAM, (unsigned)st);
+		fflush(stdout);
+		return;
+	}
+	rig_xn_wait_master(fd, RIG_LVBRD_RESNAM, &rm);
+
+	if (rm.found && rm.is_local_master) {
+		rig_lvbrd_write_and_hold(fd, c, probe_lkid);
+		/* deliberately no DEQ: res->valblk must survive, written, for
+		 * the peer's cross-node read for the rest of this node's run */
+	} else if (rig_xn_is_peer_mastered(&rm)) {
+		printf("RIG-%s-LVBRD-PEER res=%s master_csid=0x%08x (the peer "
+		       "masters this name -- this node is the READER)\n",
+		       c->tag, RIG_LVBRD_RESNAM, (unsigned)rm.master_csid);
+		fflush(stdout);
+		(void)rig_dlm_deq(fd, probe_lkid);
+		rig_lvbrd_read_phase(fd, c);
+	} else {
+		printf("RIG-%s-LVBRD NONE (the executive could not resolve a "
+		       "master for %s)\n", c->tag, RIG_LVBRD_RESNAM);
+		fflush(stdout);
+		(void)rig_dlm_deq(fd, probe_lkid);
+	}
+}
+
 /*
  * THE SURVIVAL LINE. Printed AFTER the phase, and after a LINGER long enough
  * for the PEER's frames to have arrived here -- because the property being
@@ -1637,6 +1860,7 @@ static int rig_poll(int fd, const struct node_cfg *c)
 		rig_xnode_phase(fd, c, &xn);
 		rig_xn_clean_phase(fd, c);
 		rig_xn_lvb_phase(fd, c);
+		rig_lvbrd_phase(fd, c);
 		rig_xn_survival(fd, c, c->linger);
 		rig_sample_take(fd, &s);
 		rig_verdict(c, &s);   /* the SURVIVAL reading -- see above */

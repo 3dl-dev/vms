@@ -221,6 +221,12 @@ enum vms_lck_mode {
  * spec §4(f).1 row 47); a generous bound, not a second grounded fact. */
 #define VMS_DLM_NAME_MAX          32u
 
+/* The LKSB's value block is 16 bytes (LKSB is 24; the block lives at LKSB+8).
+ * Spelled locally because this header stays self-contained for the pure host
+ * codec build -- vms_dlm_proxy.h states the same 16 for the engine side.
+ * Defined here (ahead of the response struct that embeds it, vms-727). */
+#define VMS_DLM_VALBLK_WIRE_LEN    16u
+
 /*
  * A parsed/to-be-built ENQ (op 0x01) or CONVERT (op 0x07) REQUEST.
  * `req_pid_or_lkid` carries the DUAL meaning spec §4(f).1 grounds at
@@ -280,6 +286,20 @@ struct vms_dlm_enq_response {
 	uint8_t  granted_mode;  /* GRANTED: the mode now held; DENIED: 0     */
 	uint8_t  name_len;      /* DENIED only -- GRANTED carries no name    */
 	uint8_t  name[VMS_DLM_NAME_MAX];
+
+	/*
+	 * THE LVB READ CROSSING (vms-727). A GRANT reply carries the master
+	 * resource's current 16-byte value block when the record marker is
+	 * present (body[28]==0x10 AND body[32:36]=={01 00 fa 00}, the grounded
+	 * grant-with-valblk shape -- distinct from the op-0x06 write's 0x13/
+	 * per-lock-SERIAL shape). `valblk_present` 0 means the grant carried no
+	 * block, and the requester's own proxy value block is then LEFT ALONE.
+	 * The exact-match marker is what keeps a STALE-BUFFER grant (body[36:52]
+	 * a prior frame's leftover, body[34]==0xf9) from being mis-read as a
+	 * value block -- the codec header's stale-buffer trap, applied here.
+	 */
+	uint8_t  valblk_present;
+	uint8_t  valblk[VMS_DLM_VALBLK_WIRE_LEN];
 };
 
 /*
@@ -343,6 +363,24 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
 vms_codec_status_t vms_dlm_enq_response_build_grant(uint32_t req_lkid,
 						    uint32_t master_lkid,
 						    uint8_t granted_mode,
+						    uint8_t *frame, uint32_t cap,
+						    uint32_t *written);
+
+/*
+ * Build a GRANT reply THAT RETURNS THE MASTER'S VALUE BLOCK (vms-727, the LVB
+ * READ crossing). Identical to build_grant in its req_lkid/master_lkid/mode
+ * fields, plus the grounded grant-with-valblk record: the HDR words body[12:16],
+ * the record flag body[28]=0x10, the reply stamp body[34]=0xfa, and the 16-byte
+ * `valblk` at body[36:52] (read from the master RESOURCE, never composed). The
+ * sequence/stale tail body[52:88] is zero-filled. `valblk` must be non-NULL;
+ * both lock ids are REFUSED at VMS_DLM_LKID_UNSET (the fc8540ae rule). Callers
+ * use this ONLY when the master resource holds a real (non-zero) block; sixteen
+ * zeros presented as an LVB is the placeholder INV-6 forbids.
+ */
+vms_codec_status_t vms_dlm_enq_response_build_grant_valblk(uint32_t req_lkid,
+						    uint32_t master_lkid,
+						    uint8_t granted_mode,
+						    const uint8_t *valblk,
 						    uint8_t *frame, uint32_t cap,
 						    uint32_t *written);
 
@@ -554,11 +592,8 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 /* body[36:52] (abs 108): the 16-byte lock value block on an op-0x06. */
 #define VMS_OFF_DLM_VALBLK        108u
 #define VMS_OFB_DLM_VALBLK      VMS_OFB_FROM_FRAME(VMS_OFF_DLM_VALBLK)
-/* The LKSB's value block is 16 bytes (LKSB is 24; the block lives at
- * LKSB+8). Spelled locally because this header stays self-contained for the
- * pure host codec build -- vms_dlm_proxy.h states the same 16 for the
- * engine side. */
-#define VMS_DLM_VALBLK_WIRE_LEN    16u
+/* VMS_DLM_VALBLK_WIRE_LEN (16) is defined near VMS_DLM_NAME_MAX above -- ahead
+ * of the response struct that embeds it. */
 
 /*
  * op-0x06 CONVERT-with-VALBLK BUILD layout -- grounded vms-727 (own-lab
@@ -619,6 +654,38 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
  * real sender pads to). The builder writes the grounded fields and zero-fills
  * to here. */
 #define VMS_DLM_VALBLK_BODY_LEN   88u
+
+/*
+ * THE GRANT-WITH-VALBLK RECORD (vms-727, the LVB READ crossing).
+ *
+ * A cat-0x82 op-0x01 GRANT reply that returns the master resource's current
+ * value block carries it at the SAME body[36:52] the op-0x06 write uses, but
+ * with a DISTINCT surrounding record -- the reply shape, not the request shape:
+ *
+ *   body[28]    = 0x10   -- the grant-with-valblk record flag (contrast the
+ *       op-0x06 write's 0x13 and a plain ENQ request's 0x11). CONSTANT across
+ *       nine+ real grant-with-valblk frames spanning c1/c2/c4/c5/c6/c7 and the
+ *       vms-c03 dlm-blk2/dlm-deq/dlm-lvb3 captures.
+ *   body[32:36] = 01 00 fa 00 -- CONSTANT across all nine+ (UNLIKE the write's
+ *       per-lock SERIAL): body[32]=0x01, body[34]=0xfa is the cat-0x82 REPLY
+ *       stamp (the write's RESULT_STAMP position, which a REQUEST carries 0x01
+ *       and a REPLY 0xfa/0xf9 -- grounded in the op-0x06 spec comment above).
+ *       Nothing here is minted or per-request derived, so no peer-crash risk.
+ *   body[36:52] = the 16-byte value block, read from the master RESOURCE
+ *       (VMS_OFF_DLM_VALBLK, the write's own offset).
+ *   body[52:88] = a sequence-like word at body[52:54] (varies across captures,
+ *       an SCS-layer counter this DLM codec does not own) then stale buffer.
+ *       ZERO-FILLED by the builder -- an honest omission, exactly as the
+ *       op-0x06 builder zero-fills its own body[56:88] tail.
+ */
+#define VMS_DLM_GRANT_VALBLK_FLAG_VAL     0x10u  /* body[28] grant-valblk flag  */
+/*
+ * body[32:36] as one LE32 == 01 00 fa 00: body[32]=0x01 (const, NOT a per-lock
+ * SERIAL -- the whole word is constant across nine+ grant-with-valblk captures),
+ * body[34]=0xfa the cat-0x82 REPLY stamp. Written and matched as a unit so the
+ * builder's own output round-trips through the parser (body[33]/[35] pinned 0).
+ */
+#define VMS_DLM_GRANT_VALBLK_REC_VAL      0x00fa0001u
 
 /*
  * body[30:32] (abs 102): the BLKAST's mode-context pair.

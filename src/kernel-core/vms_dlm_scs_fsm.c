@@ -25,6 +25,16 @@ static void dq_bzero(void *p, uint32_t n)
 		b[i] = 0u;
 }
 
+static void dq_memcpy(void *dst, const void *src, uint32_t n)
+{
+	uint8_t *d = (uint8_t *)dst;
+	const uint8_t *s = (const uint8_t *)src;
+	uint32_t i;
+
+	for (i = 0u; i < n; i++)
+		d[i] = s[i];
+}
+
 /* Copy a NUL-terminated resource name out of a post into a codec name field.
  * Returns the length placed. The post's `resnam` came from the RSB. */
 static uint8_t dq_name_from_post(const struct vms_dlm_proxy_post *p,
@@ -711,10 +721,18 @@ static void h_grant(struct dlm_req_fsm *f, struct dq_ev *e)
 	g.master_csid  = e->from_csid;         /* the frame's SCA source      */
 	g.granted_mode = e->rsp->granted_mode; /* codec body[30]              */
 	/*
-	 * valblk_present stays 0: no grounded cat-0x02 LVB field exists, so
-	 * the engine leaves the proxy's own value block alone instead of
-	 * overwriting it with sixteen zeros that would read exactly like data.
+	 * THE LVB READ CROSSING (vms-727). When the grant reply carried the
+	 * master's value block (the codec recognised the grounded
+	 * grant-with-valblk record and set `valblk_present`), hand it to the
+	 * engine, which records it on the proxy LKB so a later $GETLKI reads the
+	 * master's block back. When it did NOT (a plain grant, or a stale-buffer
+	 * grant the codec refused), valblk_present stays 0 and the engine leaves
+	 * the proxy's own block ALONE -- never sixteen zeros read as data.
 	 */
+	if (e->rsp->valblk_present) {
+		g.valblk_present = 1u;
+		dq_memcpy(g.valblk, e->rsp->valblk, VMS_DLM_VALBLK_WIRE_LEN);
+	}
 
 	if (f->ops->grant_recv(f->ops->ctx, &g) != 0) {
 		/* The engine holds no proxy this grant can belong to. Nothing

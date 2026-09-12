@@ -2120,6 +2120,36 @@ static void dlm_master_fill_args(const struct vms_dlm_master_request *r,
     }
 }
 
+/*
+ * THE LVB READ CROSSING, master side (vms-727). Read the master RESOURCE's
+ * current value block by the master lock-id -- READ ONLY: it takes the resource
+ * lock, copies res->valblk, and touches nothing. Returns 1 when the block is
+ * non-zero (the resource genuinely holds a value block), 0 otherwise. A grant
+ * returns the block only on a 1, so the requester never receives sixteen zeros
+ * dressed as data (INV-6). This never sets LCK_M_VALBLK and so never travels the
+ * write path -- reading the LVB back to a requester must not perturb it.
+ */
+static uint8_t dlm_master_read_valblk(uint32_t master_lkid, uint8_t *out)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    int i;
+    uint8_t has = 0u;
+
+    memset(out, 0, LCK_VALBLK_SIZE);
+    lock = lock_find_by_id(master_lkid);
+    if (lock == NULL)
+        return 0u;
+    res = lock->resource;
+    exec_lock(&res->lock);
+    memcpy(out, res->valblk, LCK_VALBLK_SIZE);
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    for (i = 0; i < LCK_VALBLK_SIZE; i++)
+        if (out[i]) { has = 1u; break; }
+    return has;
+}
+
 /* ENQ / CONVERT: turn the engine's status + outputs into the FACT the arm
  * needs. Every value copied here was written by the dispatch out of a real LKB
  * or RSB; nothing is composed from the request. */
@@ -2163,6 +2193,9 @@ static void dlm_master_result_enq(uint32_t status,
         out->master_lkid = a->master_lkid;
         out->req_lkid = held_for_lkid;
         out->granted_mode = mode;
+        /* The LVB read crossing (vms-727): return the resource's block when it
+         * holds one, so the requester's grant carries the master's LVB back. */
+        out->valblk_present = dlm_master_read_valblk(a->master_lkid, out->valblk);
         return;
     }
     out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;

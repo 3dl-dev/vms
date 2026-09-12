@@ -557,6 +557,75 @@ if [ "$MODE" = "xnode" ]; then
 		XFAIL=1
 	fi
 
+	# (5c) THE VALUE-BLOCK READ CROSSING (rd vms-727, #1190) -- the symmetric
+	#      mirror of (5b): a PEER's cross-node $ENQ...LCK$M_VALBLK must come
+	#      back carrying the MASTER's own value block, in the grant reply
+	#      (the op-0x01 grant-with-valblk record). Neither node is hard-wired
+	#      writer or reader -- the resource's own directory hash decides that
+	#      at run time (rig_lvbrd_phase), so this reads BOTH nodes' lines and
+	#      classifies by what each one actually reported, never by tag.
+	#        WRITE-AND-HOLD  exactly one node's RIG-*-LVBRDHOLD reports
+	#                        SS$_NORMAL: it mastered the dedicated name and
+	#                        wrote+held the pattern for the other to read;
+	#        WIRE            an op-0x01 GRANT-with-valblk frame really
+	#                        reached the segment (scan_dlm_wire.py's own
+	#                        op01valblk counter -- a byte reached the wire,
+	#                        says nothing about receipt);
+	#        READ-APPLIED    the OTHER node's RIG-*-GETLKI reports matched=1
+	#                        with the exact pattern -- read back off ITS OWN
+	#                        $GETLKI, not inferred from the writer's side.
+	A_RDHOLD_ST=$(rig_field A LVBRDHOLD status)
+	B_RDHOLD_ST=$(rig_field B LVBRDHOLD status)
+	A_RD_MATCHED=$(rig_field A GETLKI matched)
+	B_RD_MATCHED=$(rig_field B GETLKI matched)
+	A_RD_ASCII=$(rig_field A GETLKI valblk_ascii)
+	B_RD_ASCII=$(rig_field B GETLKI valblk_ascii)
+	W_OP01=$(wire_saw op01valblk)
+	LVBRD_PATTERN="OVMXLVBREAD00001"
+
+	echo "  LVB READ CROSSING (rd vms-727, #1190):"
+	printf "    A: LVBRDHOLD-status=%s GETLKI-matched=%s GETLKI-ascii=%s\n" \
+		"${A_RDHOLD_ST:-none}" "${A_RD_MATCHED:-none}" "${A_RD_ASCII:-none}"
+	printf "    B: LVBRDHOLD-status=%s GETLKI-matched=%s GETLKI-ascii=%s\n" \
+		"${B_RDHOLD_ST:-none}" "${B_RD_MATCHED:-none}" "${B_RD_ASCII:-none}"
+	printf "    WIRE: op-0x01 grant-with-valblk frames=%s\n" "$W_OP01"
+
+	LVBRD_WRITER=0
+	if [ "$A_RDHOLD_ST" = "1" ] && [ "$B_RDHOLD_ST" != "1" ]; then
+		LVBRD_WRITER=1
+	elif [ "$B_RDHOLD_ST" = "1" ] && [ "$A_RDHOLD_ST" != "1" ]; then
+		LVBRD_WRITER=1
+	fi
+
+	LVBRD_READER=0
+	if [ "$A_RD_MATCHED" = "1" ] && [ "$A_RD_ASCII" = "$LVBRD_PATTERN" ]; then
+		LVBRD_READER=1
+	fi
+	if [ "$B_RD_MATCHED" = "1" ] && [ "$B_RD_ASCII" = "$LVBRD_PATTERN" ]; then
+		LVBRD_READER=1
+	fi
+
+	if [ "$LVBRD_WRITER" != "1" ]; then
+		echo "  FAILED (5c-write): exactly one node must report"
+		echo "  RIG-*-LVBRDHOLD status=1 (it mastered the dedicated name"
+		echo "  and wrote+held the pattern) -- see the RIG-*-LVBRD-PEER /"
+		echo "  RIG-*-LVBRD lines above for which node found what."
+		XFAIL=1
+	fi
+	if [ "$W_OP01" -lt 1 ]; then
+		echo "  FAILED (5c-wire): no op-0x01 GRANT-with-valblk frame"
+		echo "  appears in either node's own passive capture."
+		XFAIL=1
+	fi
+	if [ "$LVBRD_READER" != "1" ]; then
+		echo "  FAILED (5c-applied): neither node's own RIG-*-GETLKI"
+		echo "  reports matched=1 with the exact written pattern"
+		echo "  ($LVBRD_PATTERN) -- the peer's cross-node \$ENQ never"
+		echo "  read the master's value block back, or read the wrong"
+		echo "  one."
+		XFAIL=1
+	fi
+
 	# (6) THE DIRECT MASTER-SIDE RELEASE PROOF (rd vms-c72, conductor
 	#     ledger-bar gap-close). A DEDICATED single-holder resource's
 	#     GET_RESMASTER, sampled on the MASTER once BEFORE the release and
@@ -654,6 +723,12 @@ if [ "$MODE" = "xnode" ]; then
 		"op-0x06 CONVERT-with-VALBLK (rd vms-727): a demote-from-write really"
 	echo "              crossed and the MASTER's own diag shows it APPLIED the"
 	echo "              peer's value block, seen on the wire and never a crash"
+	held "$( { [ "$LVBRD_WRITER" = "1" ] && [ "$LVBRD_READER" = "1" ] && \
+		 [ "$W_OP01" -ge 1 ]; } && echo 1 || echo 0)" \
+		"LVB READ crossing (rd vms-727, #1190): the master's write was read"
+	echo "              back over a cross-node \$ENQ...LCK\$M_VALBLK, seen on the"
+	echo "              wire as an op-0x01 grant-with-valblk and confirmed by the"
+	echo "              reader's own \$GETLKI"
 	echo ""
 
 	if [ "$XFAIL" = "0" ]; then
@@ -669,7 +744,12 @@ if [ "$MODE" = "xnode" ]; then
 		echo "  executive. Each node also demoted its cross-node EX grant"
 		echo "  to CR carrying a value block (rd vms-727): op-0x06 crossed"
 		echo "  on the wire AND the master's own diag shows it APPLIED the"
-		echo "  peer's write."
+		echo "  peer's write. And on a separate dedicated resource, the"
+		echo "  symmetric LVB READ crossing held too (rd vms-727, #1190):"
+		echo "  the node the directory made master wrote+held a pattern,"
+		echo "  the peer's cross-node \$ENQ...LCK\$M_VALBLK grant carried it"
+		echo "  back as an op-0x01 record seen on the wire, and the peer's"
+		echo "  own \$GETLKI confirms it read exactly what was written."
 		echo "=========================================="
 		exit 0
 	fi

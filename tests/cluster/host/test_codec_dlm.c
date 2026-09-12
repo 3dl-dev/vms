@@ -433,6 +433,99 @@ static void test_valblk_convert(void)
 }
 
 /*
+ * op 0x01 GRANT that RETURNS THE MASTER'S VALUE BLOCK -- the LVB READ crossing
+ * (vms-727). The proof is the same 16-byte pattern the requester wrote earlier
+ * coming BACK in the master's grant at body[36:52], and the builder reproducing
+ * the real grant-with-valblk frame byte for byte.
+ */
+static void test_grant_valblk(void)
+{
+	const struct vms_fixture *f = fixture("dlm-grant-valblk");
+	struct vms_frame_info fi;
+	struct vms_dlm_enq_response resp;
+
+	printf("-- dlm-grant-valblk: op 0x01 GRANT carries the LVB back "
+	       "(vms-727, c2-seq.pcap grant reply)\n");
+	ct_check(f != NULL, "fixture loads");
+	if (f == NULL)
+		return;
+
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "classifies without error");
+	ct_check(vms_dlm_enq_response_parse(f->bytes, f->wire_len, &fi, &resp) ==
+		 VMS_CODEC_OK, "parses as an ENQ response");
+	ct_check(resp.outcome == VMS_DLM_ENQ_GRANTED,
+		 "  the value-block grant is a GRANT, not misread as a DENY "
+		 "(mode is NL but the record marker resolves the shape)");
+	ct_check(resp.valblk_present == 1,
+		 "  valblk_present == 1: the grant-with-valblk record was seen");
+	ct_check(memcmp(resp.valblk, "WROTEBYVAX1XXXXX",
+			VMS_DLM_VALBLK_WIRE_LEN) == 0,
+		 "*** body[36:52] IS the 16 bytes the requester wrote, returned "
+		 "by the master in the grant, verbatim off a real wire ***");
+	ct_check_eq_u32(resp.req_lkid, 0x0a0003a4u,
+			"  body[20:24] == 0x0a0003a4, the requester handle "
+			"(SDA Lock id 0A0003A4)");
+	ct_check_eq_u32(resp.master_lkid, 0x570001b7u,
+			"  body[24:28] == 0x570001b7, the master handle for "
+			"'OVMXLV01'");
+
+	/*
+	 * THE BYTE-IDENTICAL BUILD PROOF (vms-727). Build the grant back from
+	 * ONLY req_lkid/master_lkid/mode + the 16-byte block and assert every
+	 * CITED byte of the real capture is reproduced exactly. Poison the whole
+	 * buffer first so anything the builder does NOT write shows as a mismatch.
+	 */
+	{
+		uint8_t built[256];
+		uint32_t written = 0;
+
+		memset(built, 0xAA, sizeof(built));
+		ct_check(vms_dlm_enq_response_build_grant_valblk(resp.req_lkid,
+				resp.master_lkid, resp.granted_mode, resp.valblk,
+				built, sizeof(built), &written) == VMS_CODEC_OK,
+			 "builds the grant-with-valblk back from the typed fields");
+		assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY,
+					 f->wire_len, "dlm-grant-valblk");
+		ct_check_eq_u32(written, VMS_OFF_SYSAP_BODY + VMS_DLM_VALBLK_BODY_LEN,
+				"  written length is the full grant-valblk body");
+
+		/* A grant-id of 0 is not a grant (the fc8540ae rule). */
+		ct_check(vms_dlm_enq_response_build_grant_valblk(VMS_DLM_LKID_UNSET,
+				resp.master_lkid, resp.granted_mode, resp.valblk,
+				built, sizeof(built), &written) == VMS_CODEC_E_INVAL,
+			 "  refuses req_lkid 0; refuses master_lkid 0 likewise");
+		ct_check(vms_dlm_enq_response_build_grant_valblk(resp.req_lkid,
+				VMS_DLM_LKID_UNSET, resp.granted_mode, resp.valblk,
+				built, sizeof(built), &written) == VMS_CODEC_E_INVAL,
+			 "  refuses master_lkid 0");
+	}
+
+	/*
+	 * A PLAIN grant (dlm-enq-grant) carries NO value block: the record marker
+	 * is absent, so the parser leaves valblk_present 0 and the requester's own
+	 * block is left alone. This is the stale-buffer guard's positive control.
+	 */
+	{
+		const struct vms_fixture *pg = fixture("dlm-enq-grant");
+		struct vms_frame_info pfi;
+		struct vms_dlm_enq_response pr;
+
+		if (pg != NULL &&
+		    vms_frame_classify(pg->bytes, pg->wire_len, &pfi) == VMS_CODEC_OK) {
+			memset(&pr, 0xA5, sizeof(pr));
+			ct_check(vms_dlm_enq_response_parse(pg->bytes, pg->wire_len,
+							    &pfi, &pr) == VMS_CODEC_OK,
+				 "a plain grant still parses");
+			ct_check(pr.outcome == VMS_DLM_ENQ_GRANTED &&
+				 pr.valblk_present == 0,
+				 "*** a plain grant carries valblk_present == 0 "
+				 "(no record marker -> the proxy block is left alone) ***");
+		}
+	}
+}
+
+/*
  * THE SUPERSESSION, asserted rather than merely documented. The phantom ops
  * are gone as VALUES: 0x03 and 0x04 now mean $DEQ and BLKAST, and a parser for
  * one refuses the other's frame. A tree that quietly kept a "completion 0x04"
@@ -483,6 +576,7 @@ static void test_fixture_roundtrips(void)
 	test_deq_release();
 	test_blkast();
 	test_valblk_convert();
+	test_grant_valblk();
 	test_superseded_opcodes_are_one_meaning_each();
 }
 

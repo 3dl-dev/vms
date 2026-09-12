@@ -209,6 +209,18 @@ struct vms_dlm_master_result {
 	uint32_t deferred_csid;
 	uint32_t deferred_req_lkid;
 	uint32_t deferred_master_lkid;
+
+	/*
+	 * GRANTED, THE LVB READ CROSSING (vms-727). The master RESOURCE's current
+	 * value block, read off the RSB after the grant. `valblk_present` is 1
+	 * ONLY when that block is non-zero -- the master then returns it in the
+	 * grant reply so the requester's $ENQ(VALBLK)/$GETLKI reads it back. A
+	 * resource with no block leaves this 0 and the reply carries none:
+	 * sixteen zeros presented as an LVB is the placeholder INV-6 forbids.
+	 */
+	uint8_t  valblk_present;
+	uint8_t  valblk_pad[3];
+	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
 };
 
 /*

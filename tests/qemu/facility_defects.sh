@@ -6212,13 +6212,13 @@ EOF
 
     bg-recv-length-zeroed)
         case "$_f" in
-        facility)     echo "INET pseudo-device BGn: -- the IO\$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
-        targets)      echo "kernel/vms_bg.c";;
+        facility)     echo "INET pseudo-device BGn: -- the IO\$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel-core/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
+        targets)      echo "kernel-core/vms_bg.c";;
         suites_red)   echo "test_syssvc_bg_echo test_syssvc_ssh_kex";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed.";;
+        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed. RE-ANCHORED (vms-387): vms_ioctl_bg_recv itself moved from kernel/vms_bg.c to the substrate-agnostic kernel-core/vms_bg.c (the BGn: core/rind split, vms-9951); its own body and the a->len write-back are otherwise unchanged, so only 'targets' below was corrected, not the sed.";;
         require_fail) cat <<'EOF'
 BG $QIO IO$_READVBLK returns the exact bytes the echo peer sent back
 EOF
@@ -6351,13 +6351,13 @@ EOF
 
     bgsock-poll-always-ready)
         case "$_f" in
-        facility)     echo "BSD-sockets RTL veneer over BGn: -- the executive readiness POLL FD (vms_bg.c, VMS_IOCTL_BG_POLLFD, vms-22a). vms.ko hands userspace a real, readiness-ONLY Linux pollable fd whose .poll delegates to the executive socket's own poll, so an event loop (OpenSSH's clientloop/serverloop) can poll()/select() on the BGn: connection while data still moves only through IO\$_READVBLK / IO\$_WRITEVBLK. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
-        targets)      echo "kernel/vms_bg.c";;
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- the executive readiness POLL FD (vms_bg_pollfd.c, VMS_IOCTL_BG_POLLFD, vms-22a). vms.ko hands userspace a real, readiness-ONLY Linux pollable fd whose .poll delegates to the executive socket's own poll, so an event loop (OpenSSH's clientloop/serverloop) can poll()/select() on the BGn: connection while data still moves only through IO\$_READVBLK / IO\$_WRITEVBLK. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
+        targets)      echo "kernel/vms_bg_pollfd.c";;
         suites_red)   echo "test_syssvc_bgsock_poll";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_bg_pollfd_poll() delegates to the host socket's own poll so the fd reports readable ONLY when the socket really is. The mutation returns EPOLLIN|EPOLLOUT unconditionally (ignoring the socket state), so poll() reports the fd readable BEFORE any data has arrived -- reddening exactly the 'NOT readable before any data' assertion, while the readable-after-send poll and the byte-exact read stay green (data still flows). One return replaced.";;
+        why)          echo "vms_bg_pollfd_poll() delegates to the host socket's own poll so the fd reports readable ONLY when the socket really is. The mutation returns EPOLLIN|EPOLLOUT unconditionally (ignoring the socket state), so poll() reports the fd readable BEFORE any data has arrived -- reddening exactly the 'NOT readable before any data' assertion, while the readable-after-send poll and the byte-exact read stay green (data still flows). One return replaced. RE-ANCHORED (vms-387): the readiness-poll fd was split out of vms_bg.c into its own Linux-only rind file kernel/vms_bg_pollfd.c (vms-9951, core/rind split); vms_bg_pollfd_poll's own body and its pre-existing NEGCTL marker are unchanged, so only 'targets' below was corrected.";;
         require_fail) cat <<'EOF'
 poll() reports NOT readable before any data arrives (readiness reflects the socket)
 EOF
@@ -6368,13 +6368,13 @@ EOF
 
     bgsock-getname-addr-zeroed)
         case "$_f" in
-        facility)     echo "BSD-sockets RTL veneer over BGn: -- getsockname/getpeername (vms_ioctl_bg_getname, VMS_IOCTL_BG_GETNAME, IO\$_SENSEMODE) in the executive BGn: driver (src/kernel/vms_bg.c, OpenSSH de-veneer Tier A vms-4bf). The executive reads the connected socket's local/peer address STRAIGHT FROM THE HOST KERNEL SOCKET (kernel_getsockname/kernel_getpeername), so an unmodified OpenSSH getpeername() records the TRUE remote IP for known_hosts, never an AF_UNIX socketpair peer. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
-        targets)      echo "kernel/vms_bg.c";;
+        facility)     echo "BSD-sockets RTL veneer over BGn: -- getsockname/getpeername (vms_ioctl_bg_getname, VMS_IOCTL_BG_GETNAME, IO\$_SENSEMODE) in the executive BGn: driver (src/kernel-core/vms_bg.c, OpenSSH de-veneer Tier A vms-4bf). The executive reads the connected socket's local/peer address STRAIGHT FROM THE HOST KERNEL SOCKET (kernel_getsockname/kernel_getpeername), so an unmodified OpenSSH getpeername() records the TRUE remote IP for known_hosts, never an AF_UNIX socketpair peer. \$ASSIGN TCPIP\$DEVICE: fails SS\$_NOSUCHDEV with no executive.";;
+        targets)      echo "kernel-core/vms_bg.c";;
         suites_red)   echo "test_syssvc_bgsock_peername";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_bg_getname() copies the kernel socket's sin_addr into the answer the veneer hands getpeername/getsockname. The mutation zeroes it ('args.sin_addr = sin->sin_addr.s_addr;' -> 'args.sin_addr = 0;'), so getpeername/getsockname report 0.0.0.0 -- reddening exactly the 'returns the REAL remote IP' and 'local 127.0.0.1' address assertions, while the port, sockopt round-trips and non-blocking EAGAIN stay green (family and port are still copied). One assignment zeroed.";;
+        why)          echo "vms_ioctl_bg_getname() copies the kernel socket's sin_addr into the answer the veneer hands getpeername/getsockname. The mutation zeroes it, so getpeername/getsockname report 0.0.0.0 -- reddening exactly the 'returns the REAL remote IP' and 'local 127.0.0.1' address assertions, while the port, sockopt round-trips and non-blocking EAGAIN stay green (family and port are still copied). One field zeroed. RE-ANCHORED (vms-387): the seam refactor (exec_kbackend) moved the raw 'sin->sin_addr.s_addr' copy INTO the shared exec_socket_getname() helper, used by three other call sites (bind-time getname, accept, and vms_bg_datafd.c's [bgconn] getname -- the latter already has its own isolated defect, bgconn-getname-addr-zeroed) -- mutating the seam would blow this defect's 'isolated' scope. vms_ioctl_bg_getname() itself moved from kernel/vms_bg.c to kernel-core/vms_bg.c (vms-9951 core/rind split) and now zeroes args.sin_addr itself, right after exec_socket_getname fills it and before the status write, so only this ioctl's own answer is corrupted.";;
         require_fail) cat <<'EOF'
 getpeername() returns the REAL remote IP 127.0.0.1 (known_hosts sees the true host, not an AF_UNIX peer)
 ovmx_getsockname() returns the local 127.0.0.1:<ephemeral> endpoint
@@ -6748,12 +6748,18 @@ apply_edit() {
     lock-deq-status-wrong)
         # RANGE-ANCHORED to vms_deq_core's own body (the $DEQ logic; vms-233
         # moved it out of vms_ioctl_deq, now a thin copyin/copyout wrapper, so
-        # the success status line lives here). `args.status = SS__NORMAL;` at
-        # this exact 4-space indentation also appears in vms_ioctl_convert's own
-        # fallthrough path (same text, same indentation). vms_deq_core is
-        # defined BEFORE vms_ioctl_convert in this file, so the range closes at
-        # its own `}` and excludes convert's copy.
-        sed -i '/^static long vms_deq_core/,/^}$/ s|^    args\.status = SS__NORMAL;$|    args.status = SS__IVLOCKID; /* NEGCTL lock-deq-status-wrong */|' "$_file";;
+        # the success status line lives here). RE-ANCHORED (vms-387): a proxy
+        # LKB's own post-to-master status (deq_proxy_release) now feeds this
+        # same write via `proxy_st`, so the line is `args.status = proxy_st;`,
+        # not the old literal `= SS__NORMAL;` (that text is gone from this
+        # function entirely). Blanking proxy_st outright would drop the only
+        # read of it and trip -Wunused-but-set-variable under -Werror, so the
+        # mutation keeps proxy_st live and only corrupts the LOCAL-lock success
+        # case (proxy_st == SS__NORMAL) to SS__IVLOCKID, leaving a proxy's own
+        # (non-NORMAL) master-reported status passed through unchanged -- same
+        # observable effect the old defect had, since every suite here releases
+        # LOCAL locks.
+        sed -i '/^static long vms_deq_core/,/^}$/ s|^    args\.status = proxy_st;|    args.status = (proxy_st == SS__NORMAL) ? SS__IVLOCKID : proxy_st; /* NEGCTL lock-deq-status-wrong */|' "$_file";;
     lock-convert-mode-not-updated)
         # RANGE-ANCHORED to vms_ioctl_convert's own body. `lock->granted_mode
         # = args.lkmode;` at 8-space indent also appears in $ENQ's
@@ -6978,7 +6984,15 @@ apply_edit() {
         # The ONE edit, and it is the pre-vms-47b source line restored:
         # PRC$M_DETACH is read and thrown away. `(void)stsflg;` keeps the
         # parameter used so the mutation is about behaviour, not warnings.
-        sed -i 's|^    const int detached = (stsflg & PRC\$M_DETACH) != 0;$|    const int detached = 0; (void)stsflg; /* NEGCTL run-detached-not-detached */|' "$_file";;
+        # RE-ANCHORED (vms-387): the source since grew an INTERACTIVE-implies-
+        # detached path (`|| interactive`), and `interactive` (itself derived
+        # from stsflg) is read again further down this function, so blanket
+        # `(void)stsflg;` is gone -- stsflg is still live via `interactive`/
+        # `loginout`. Drop only PRC$M_DETACH's own contribution, leaving
+        # `interactive` as the sole source of detached-ness, so a bare
+        # PRC$M_DETACH request (interactive false) no longer detaches while
+        # $RUN/interactive activation is untouched.
+        sed -i 's@^    const int detached    = ((stsflg & PRC\$M_DETACH) != 0) || interactive;$@    const int detached    = interactive; /* NEGCTL run-detached-not-detached: PRC$M_DETACH no longer detaches */@' "$_file";;
 
     run-image-qualifier-refused)
         # The ONE edit, and it is the shipped-and-reverted source line
@@ -7082,7 +7096,13 @@ apply_edit() {
         # requires. This is the whole continuation property in one store; the
         # identity copy above it becomes dead because the caller derives when
         # shared_vms_pid is 0.
-        sed -i 's|^        shared_vms_pid = parent->vms_pid;$|        shared_vms_pid = 0; /* NEGCTL register-continue-identity-dropped: image does not continue its activator */|' "$_file";;
+        # RE-ANCHORED (vms-387): the assignment now sits at 12-space indent as
+        # the sole (braceless) body of `if (share_pid)` -- a bare comment in
+        # its place would leave a dangling `if` that silently pulls the next
+        # statement (`inherited = true;`) into its body (-Werror=empty-body
+        # territory), so the body is replaced with an empty `{ }` block
+        # instead of blanked to a comment or a lone `;`.
+        sed -i 's|^            shared_vms_pid = parent->vms_pid;$|            { } /* NEGCTL register-continue-identity-dropped: shared_vms_pid stays 0, CONTINUE no longer shares the activator'"'"'s VMS PID */|' "$_file";;
     scratch-dir-owner-not-system)
         # Single-line, uniquely-anchored inside test_syssvc_scratch_
         # writable.c's OWN provisioning duplicate (see this defect's
@@ -7695,13 +7715,22 @@ apply_edit() {
         sed -i 's@return sock->ops->poll(file, sock, wait);  /\* NEGCTL bgsock-poll-always-ready \*/@return (EPOLLIN | EPOLLOUT); /* NEGCTL bgsock-poll-always-ready */@' "$_file";;
 
     bgsock-getname-addr-zeroed)
-        # Zero the peer/local address the executive copies out of the kernel
-        # socket in vms_ioctl_bg_getname(), anchored on its own NEGCTL comment so
-        # the text is unique: 'args.sin_addr = sin->sin_addr.s_addr;' -> '= 0;'.
-        # getpeername/getsockname then report 0.0.0.0. After substitution the
-        # delegating assignment with that comment is gone, so a second apply is a
-        # no-op -- BROKEN FIXTURE, as selftest requires.
-        sed -i 's@args.sin_addr   = sin->sin_addr.s_addr;     /\* NEGCTL bgsock-getname-addr-zeroed \*/@args.sin_addr   = 0; /* NEGCTL bgsock-getname-addr-zeroed */@' "$_file";;
+        # RE-ANCHORED (vms-387): the raw 'sin_addr = sin->sin_addr.s_addr'
+        # copy moved OUT of vms_ioctl_bg_getname() and into the shared
+        # exec_socket_getname() seam helper (exec_kbackend_linux.h), used by
+        # three other call sites -- mutating it there would blow this
+        # defect's 'isolated' scope. vms_ioctl_bg_getname()'s own body now
+        # only sets args.status after the call, still carrying its original
+        # NEGCTL placeholder comment (`args.status = rc ? SS__ABORT :
+        # SS__NORMAL;   /* NEGCTL bgsock-getname-addr-zeroed */`, UNIQUE in
+        # the file). Anchored on that exact line, insert a zeroing of
+        # args.sin_addr (already filled by exec_socket_getname above) ahead
+        # of it -- the same "zero after the seam call, before status" idiom
+        # bgconn-getname-addr-zeroed already uses in vms_bg_datafd.c. After
+        # substitution the anchor text no longer starts at 4-space indent
+        # (it now follows "args.sin_addr = 0; "), so a second apply is the
+        # no-op the selftest requires.
+        sed -i 's|    args\.status = rc ? SS__ABORT : SS__NORMAL;   /\* NEGCTL bgsock-getname-addr-zeroed \*/|    args.sin_addr = 0; args.status = rc ? SS__ABORT : SS__NORMAL;   /* NEGCTL bgsock-getname-addr-zeroed */|' "$_file";;
 
     bgsock-exec-handle-not-readopted)
         # Disable the lazy re-adopt in sock_get: a handle first seen post-exec

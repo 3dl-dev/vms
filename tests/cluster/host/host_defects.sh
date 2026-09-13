@@ -110,7 +110,8 @@ mscp-cl-fsm-unit-uncounted
 mscp-cl-io-empty-cell-uncounted
 mscp-srv-glue-end-message-leaked
 mscp-srv-fsm-writeprotect-uncounted
-mscp-srv-io-worker-registers-handler"
+mscp-srv-io-worker-registers-handler
+join-own-connect-not-suppressed"
 
 # ---------------------------------------------------------------------------
 # Metadata (same field meanings as tests/qemu/facility_defects.sh):
@@ -376,6 +377,29 @@ EOF
                       ;;
         esac;;
 
+    join-own-connect-not-suppressed)
+        case "$_f" in
+        facility)     echo "the sec 4(O.11) REJOIN topology in join_open_cm() (the drive must ride the VMS$VAXcluster connection the EXECUTIVE already holds for the pair -- book p. 7-23 -- instead of opening a redundant second one and moving its own op-0x02 onto it)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_open_cm()'s 'if (join_cm_take_held(j)) return;' -- the read of the target CSB's own cdt_conid before step 4 dials -- is disarmed, so this node opens its OWN VMS\$VAXcluster connect even when the executive already holds the pair's one. The glue binds cdt_conid the instant SCS mints an outbound Con.ID, so that second connect also re-binds the executive's record away from the live member-initiated CDT and the op-0x02 that starts admission never reaches it: exactly the sec 4(O.11) rejoin failure. The first-join arm is untouched (nothing is dialling an unknown system, so cdt_conid is 0 and both behaviours are identical).";;
+        require_fail) cat <<'EOF'
+this node opens NO VMS$VAXcluster connect of its own when the executive already holds the pair's one
+... its whole outbound census is the MSCP$DISK disk-client leg
+... and the suppression is COUNTED, once
+... and said on the console
+the drive runs on the MEMBER-INITIATED Con.ID
+... and the executive's own record was never re-bound away from it
+admission started
+three cat-0x01 originations on the member's connection
+MODEL first (sec 4(o) row 1)
+... then PARAMS (row 2)
+... then op-0x02, the request that starts admission, on the MEMBER-INITIATED connection and not on one of this node's own
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -547,6 +571,16 @@ apply_edit() {
         # $-anchored, whole-line pattern is consumed by the edit, so a second
         # apply matches nothing.
         sed -i 's@^#include "vms_mscp_srv_fsm.h"  /\* MSCP_SRV_BLOCK_SIZE, enum mscp_srv_io_op    \*/$@#include "vms_mscp_srv_fsm.h"  /* MSCP_SRV_BLOCK_SIZE, enum mscp_srv_io_op    */  /* NEGCTL mscp-srv-io-worker-registers-handler: this file must never call cf_set_work_handler */@' "$_file";;
+
+    join-own-connect-not-suppressed)
+        # `if (join_cm_take_held(j))` is unique in this file (the function's
+        # own definition a few lines above is `static int
+        # join_cm_take_held(struct cnxman_join *j)`, a different literal).
+        # Disarmed with `0 &&` rather than deleted, so the helper stays
+        # referenced and the file still builds -Wall -Wextra -Werror.
+        # Idempotency-safe: the edit consumes the pattern, so a second apply
+        # matches nothing and cmd_apply reports BROKEN FIXTURE.
+        sed -i 's|if (join_cm_take_held(j))|if (0 \&\& join_cm_take_held(j)) /* NEGCTL join-own-connect-not-suppressed: this node dials even when the executive already holds the connection */|' "$_file";;
 
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2

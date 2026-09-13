@@ -4720,6 +4720,56 @@ unit `tests/vmsscs/test_scsd_wire.c`; code
 `src/vmsscs/scsd.c` (`cm_rejoin_target_mode`, step 7/8 branch, `SCSD-I-CMREADMIT`
 proactive burst, `SCSD-I-CMCONFIG2`).
 
+**UPDATE (2026-09-13, `vms-4838` — the same property RE-DERIVED into the
+EXECUTIVE; the `scsd.c` locus above is GONE).** Everything above was implemented
+in `src/vmsscs/scsd.c`, the userspace daemon FC-P3.9 DELETED (the 2026-09-02
+clustering reset; `src/vmsscs/` does not exist on `main`, see
+`tests/lab/README.md` "the SCSD probe these tools drive is GONE"). Live
+clustering is executive-resident (`vms.ko`, `src/kernel-core/vms_cnxman_*`), so
+the fix had to be re-derived there — and the re-derivation CHANGED ITS SHAPE in
+one load-bearing way:
+
+- **There is no rejoin flag, and there must not be one.** `scsd.c` gated on
+  `ovmx_prior.valid`, a *persisted prior-admission sidecar*. The SUCCESS
+  oracle's rejoiner had just CRASHED: its executive holds no record of a prior
+  cluster, so a rejoiner cannot read a rejoin condition out of its own state and
+  any flag claiming one would be fabricated (INV-6). The asymmetry the oracle
+  measures lives on the SURVIVOR's side — §4(y)/p. 7-30 has each member holding
+  a CSB for the departed node inside its reconnect window and dialling it "once
+  a second" — so the pair's ONE `VMS$VAXcluster` connection already exists by
+  the time the returning node's drive reaches step 4.
+- **So the executive rule is a READ, not a mode:** at step 4 the join asks the
+  target CSB whether the executive already holds a connection for this pair
+  (`csb->cdt_conid`, p. 7-23's "the state of the SCS connection between the
+  local SYS$CLUSTER and the [remote] one", written by the glue for an accepted
+  connection exactly as for one this node opened) and, if it does and the ladder
+  has not given that block up (p. 7-24 DISCONNECT/DEAD), **opens none of its
+  own** and drives MODEL/PARAMS/op-0x02 on that Con.ID. On a FIRST join nothing
+  is dialling an unknown system, `cdt_conid` is 0, and the E67 reference drive
+  is bit-identical to before.
+- **What the redundant connect really cost, in the executive:** the glue binds
+  `cdt_conid` the instant SCS mints an outbound Con.ID, so the second connect
+  also re-bound the executive's own record OFF the live member-initiated CDT —
+  i.e. it did not merely add a connection to the wire, it moved the admission
+  onto the wrong one.
+- **Loci:** `src/kernel-core/vms_cnxman_join_fsm.c` (`join_cm_take_held()`, and
+  `join_open_cm()` consulting it before dialling; the counter
+  `cm_connect_suppressed`). The once-a-second beat already made this read (E72,
+  `join_cm_sync_with_csb()`); the gap was that step 4's FIRST entry did not.
+- **Rungs proven:** R1 `tests/cluster/host/test_cnxman_join.c` (the rejoin
+  topology, a first-join control and an abandoned-CSB bound) with the
+  kill-switch control as an exact-red-set mutation gate
+  (`host_defects.sh: join-own-connect-not-suppressed`, driver
+  `run_host_negctl.sh`); R2 `tests/cluster/sim/scenarios/cnxman_join.c` replays
+  the REJOIN sequence on the virtual clock off the manifest-hashed specimens and
+  asserts the whole admission — through the barrier hand-off and the p. 7-42
+  Phase 2 commit — rides the member-initiated Con.ID with ZERO outbound
+  `VMS$VAXcluster` connects. **R4/R5 (live evacuate→rejoin on a real VAX
+  cluster) is NOT yet run for the executive path** and is not claimed here: the
+  `rejoin_arm_lab2.sh` bracket above drives the deleted daemon, and the booted-
+  node instrument (`labjoin_booted.sh`) has a first-join arm only. The
+  member-non-reciprocation frontier (`vms-694`) is unaffected by this change.
+
 #### 4(O.13) On the member connection the rejoiner's add-member advertisement is model→params→config as THREE CONTIGUOUS SYSAP messages with NO standalone cat-0x04 ahead of the op 0x02 — OVMX inserted one, shifting the config to sms=4; removing it makes the op 0x02 byte-match the oracle but STILL does not re-admit (GROUNDED, SUCCESS oracle + live vaxlab-11 bracket, `vms-71d`, 2026-08-10)
 
 **Frame.** §4(O.12) put OVMX's op 0x02 on the member-initiated connection (the

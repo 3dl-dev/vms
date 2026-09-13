@@ -1148,6 +1148,11 @@ static int join_open(struct cnxman_join *j, const uint8_t *local_name,
  * opened it (defined with the other step-5 handlers, below). */
 static void join_cm_advertise(struct cnxman_join *j);
 
+/* Forward: reconcile this join with what the executive records on the target
+ * CSB -- the Con.ID it holds and whether that connection is OPEN (defined with
+ * the once-a-second beat, below). */
+static void join_cm_sync_with_csb(struct cnxman_join *j, struct vms_csb *csb);
+
 /*
  * Our VMS$VAXcluster connect could not be put on the wire (E71). This is NOT
  * the p. 2-25 version gate -- no connect data reached a peer, no peer judged
@@ -1173,12 +1178,85 @@ static void join_cm_connect_refused(struct cnxman_join *j)
 }
 
 /*
+ * DOES THE EXECUTIVE ALREADY HOLD THIS PAIR'S VMS$VAXcluster CONNECTION?
+ * (spec sec 4(O.11) -- the REJOIN shape, re-derived into the executive.)
+ *
+ * WHAT THE REJOIN ORACLE MEASURES. In the crash-rejoin capture
+ * (vax3-class03-crash-REJOIN-SUCCESS) the rejoining system opens ONLY its
+ * SCS$DIRECTORY and MSCP$DISK connections and NEVER opens a VMS$VAXcluster
+ * connect of its own: BOTH surviving members open VMS$VAXcluster CONNECT_REQ
+ * *to* it, it answers as the TARGET, and its op-0x02 CONFIG and the whole
+ * 0x04/0x03/0x05/0x06 reciprocation ride the MEMBER-INITIATED connection.
+ *
+ * WHY THAT IS NOT A "REJOIN MODE" TO IMPLEMENT, and must not be. The rejoiner
+ * had just crashed: its executive holds NO record of a prior cluster, so it
+ * has no rejoin condition to read and any flag claiming one would be invented
+ * (INV-6). What it does have is p. 7-30 on the OTHER side -- each survivor
+ * still holds a CSB for it inside the reconnect window and "will attempt once
+ * a second to establish another connection" -- so by the time the rejoiner has
+ * resolved two names and walked a member's disks, the pair's one connection
+ * ALREADY EXISTS and the executive holds it. The oracle's topology is that
+ * fact, not a decision the rejoiner made about its own past.
+ *
+ * SO THIS IS A READ, and the same read the once-a-second beat has always made
+ * (join_cm_sync_with_csb, E72): book p. 7-23 makes the CSB the record of "the
+ * state of the SCS connection between the local SYS$CLUSTER and the ... system
+ * associated with the CSB", the glue writes `cdt_conid` at the instant SCS
+ * mints it -- for a connect this node issued, for one the CSB ladder issued,
+ * and for one this node ACCEPTED -- and there is exactly one VMS$VAXcluster
+ * connection per pair of systems. A connection the executive holds is
+ * therefore THIS step's outcome, and issuing a second one would both put a
+ * redundant CONNECT_REQ on the wire and re-bind `cdt_conid` away from the
+ * live member-initiated CDT, moving op-0x02 onto the wrong connection.
+ *
+ * A CSB the ladder has GIVEN UP ON (p. 7-24 DISCONNECT/DEAD) is not a
+ * connection to ride, so its Con.ID is not taken and this node opens its own
+ * exactly as before. And on a FIRST join nothing is dialling an unknown
+ * system: `cdt_conid` is 0, this returns 0, and the E67 drive is unchanged.
+ *
+ * Returns nonzero when the executive's own connection was taken -- in which
+ * case this node opens NONE of its own.
+ */
+static int join_cm_take_held(struct cnxman_join *j)
+{
+	struct vms_csb *csb = join_target_csb(j);
+	uint8_t before;
+
+	if (csb == NULL || csb->cdt_conid == 0u || join_csb_abandoned(csb))
+		return 0;
+
+	j->cm_connect_suppressed++;
+	if (j->cm_connect_suppressed == 1u)
+		join_log(j, "%CNXMAN, the executive already holds this pair's "
+			    "VMS$VAXcluster connection: this node opens none of "
+			    "its own and drives its admission on that one");
+
+	/* The beat's own reconciliation, made here at the instant the drive
+	 * first needs the connection: adopt the Con.ID, and if the ladder
+	 * already calls it OPEN, advertise on it now. */
+	before = j->state;
+	join_cm_sync_with_csb(j, csb);
+	if (j->state != before)
+		return 1;   /* the drive moved on the executive's connection */
+
+	/* It is not OPEN yet. That is the wait state, and it is the same wait
+	 * as for a connect of our own: the CDT_OPEN for this Con.ID, or the
+	 * CSB standing OPEN on a beat, is what ends it (E72). */
+	join_goto(j, CNXMAN_JOIN_VC_CONNECT);
+	join_arm_watch(j);
+	return 1;
+}
+
+/*
  * Step 4: the VMS$VAXcluster VC. There is exactly ONE such connection per pair
  * of systems and either side may open it (E67; spec sec 4(L)(1) describes the
  * leg the reference joiner won, and the same capture shows it accepting the
  * other). If the member's inbound connect already arrived and this join
  * adopted it, opening a second one here would give the pair two -- so the
- * adopted one IS this step's outcome and the burst goes out on it now.
+ * adopted one IS this step's outcome and the burst goes out on it now. The
+ * executive's own record is consulted for the same reason and in the same
+ * breath (join_cm_take_held, above): a connection this join never saw
+ * announced is still this pair's connection.
  *
  * The 16-byte connect data is the Connection Managers' version handshake
  * (p. 2-25) and is the caller's or nothing -- see "REFUSES TO INVENT", C.
@@ -1192,6 +1270,8 @@ static void join_open_cm(struct cnxman_join *j)
 		join_cm_advertise(j);
 		return;
 	}
+	if (join_cm_take_held(j))
+		return;
 	if (cd == NULL) {
 		j->conndata_omitted++;
 		join_log(j, "%CNXMAN, no SCA connect data configured: the "

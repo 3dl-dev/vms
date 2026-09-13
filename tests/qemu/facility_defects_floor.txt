@@ -462,4 +462,8 @@
 # defect_field case, apply_edit case, and the two anchor comments in those
 # suites); both suites revert to unanchored pending a real append-EOF
 # assertion, tracked separately.
-149
+#
+# Raised to 150 by rms-dirfind-exact-version-ignored (vms-b8a2 unblocked the
+# ';N'-bearing anchor text for test_syssvc_rms_workload's A4/A6 assertions;
+# see its entry in facility_defects.sh for what it covers and why).
+150

@@ -559,8 +559,7 @@ crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
 crtl-fwrite-chunk-loop-stops-early
-crtl-unlink-fabricates-erase
-textfile-append-overwrites-not-eof"
+crtl-unlink-fabricates-erase"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1046,27 +1045,6 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "the SAME never-erased FOPDEL.DAT is invisible to the immediate call-site check (which only reads the fabricated return code, unaffected) but visible to BOTH independent readers that later look for it by name: the direct sys\$search right after the unlink (require_fail) and the later opendir/readdir enumeration pass that re-checks the same file is gone (knock_on_fail) -- one un-erased file, found twice.";;
-        esac;;
-
-    textfile-append-overwrites-not-eof)
-        case "$_f" in
-        facility)     echo "shared per-boot RMS text-store APPEND positioning (rms_textfile_append_line's RAB\$M_EOF seek, vms-274) -- TCPIP\$ROUTE/INTERFACE/NAMESERVICE/HOST.DAT persistence, vms-210/vms-402";;
-        targets)      echo "libvms/rtl/rms_textfile.c";;
-        suites_red)   echo "test_syssvc_tcpip_config_acp test_syssvc_tcpip_host_acp";;
-        blind_suites) echo "";;
-        blind_why)    echo "";;
-        isolation)    echo "isolated";;
-        why)          echo "rms_textfile_append_line()'s own \$PUT call, 'int rc = rmstf_put(&fab, line, RAB\$M_EOF);', drops the RAB\$M_EOF record-access modifier (replaced with a plain 0, textually identical to rms_textfile_write_line's OWN \$PUT call a few lines below) -- so an append against a file that ALREADY holds a record overwrites it instead of positioning past end-of-file. A FIRST append to a brand-new (just-\$CREATEd) file is unaffected -- there is nothing yet to overwrite -- which is why test_syssvc_loginout_acp's single OPERATOR.LOG append (this suite's only OTHER caller of rms_textfile_append_line) never reddens: it only ever appends once to a fresh file. Only a SECOND append against a file that already holds a record -- exercised here by TCPIP\$ROUTE.DAT's two records and TCPIP\$HOST.DAT's two records -- silently loses the earlier one. rmstf_put()'s own \$put status is still genuinely NORMAL (a write really landed, just at the wrong position), so every call-site's own rc==0 check is unaffected; only an independent re-read that expects BOTH records to coexist reddens. Unique call; gone after substitution (no-op re-apply).";;
-        require_fail) cat <<'EOF'
-both host records survive -- SET HOST adds, it does not supersede
-EOF
-                      ;;
-        knock_on_fail) cat <<'EOF'
-both route records read back off the ODS-2 volume -- append, not supersede
-the DOMAIN record appends after the SERVER record
-EOF
-                      ;;
-        knock_on_why)  echo "the SAME dropped RAB\$M_EOF fires at every SECOND-or-later append in either suite: TCPIP\$HOST.DAT's second SET HOST overwrites the first host record (require_fail); TCPIP\$ROUTE.DAT's second SET ROUTE overwrites the first route record (first knock-on); and TCPIP\$NAMESERVICE.DAT's later DOMAIN append (which lands on a file rms_textfile_write_line already populated with one SERVER record) overwrites THAT record instead of adding a second one (second knock-on). rms_textfile_write_line itself, the single-append OPERATOR.LOG/LASTLOGIN paths in test_syssvc_loginout_acp, and every dismount/fail-honest assertion in both suites never exercise a second append against an already-populated file and stay green.";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -6643,11 +6621,6 @@ apply_edit() {
         # replaced with a hardcoded NORMAL, so the file is never really erased.
         # Gone after apply (no-op re-apply).
         sed -i 's|uint32_t st = sys\$erase(&fab, 0, 0);|uint32_t st = RMS$_NORMAL; /* NEGCTL crtl-unlink-fabricates-erase: sys$erase skipped */|' "$_file";;
-    textfile-append-overwrites-not-eof)
-        # Unique call (rms_textfile_append_line's own $PUT); drops RAB$M_EOF so
-        # an append against an already-populated file overwrites its record
-        # instead of positioning past EOF. Gone after apply (no-op re-apply).
-        sed -i 's|int rc = rmstf_put(&fab, line, RAB\$M_EOF);|int rc = rmstf_put(\&fab, line, 0); /* NEGCTL textfile-append-overwrites-not-eof */|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

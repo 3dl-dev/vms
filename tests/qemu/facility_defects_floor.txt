@@ -454,4 +454,12 @@
 # rms-record-lock-not-enqueued, crtl-fwrite-chunk-loop-stops-early,
 # crtl-unlink-fabricates-erase, textfile-append-overwrites-not-eof) -- see each
 # entry in facility_defects.sh for what it covers and why.
-150
+#
+# Lowered back to 149 by vms-45a's removal of textfile-append-overwrites-not-eof:
+# runtime-proven a FAKE GATE -- injecting it did not redden either suite named
+# in its own suites_red (test_syssvc_tcpip_config_acp, test_syssvc_tcpip_host_acp),
+# an INV-6 decorative-control violation. Removed entirely (DEFECTS entry,
+# defect_field case, apply_edit case, and the two anchor comments in those
+# suites); both suites revert to unanchored pending a real append-EOF
+# assertion, tracked separately.
+149

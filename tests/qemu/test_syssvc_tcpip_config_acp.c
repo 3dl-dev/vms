@@ -132,7 +132,6 @@ int main(void)
         int rc1 = rms_textfile_append_line(ROUTE_SPEC, "DEFAULT 10.0.2.2");
         int rc2 = rms_textfile_append_line(ROUTE_SPEC, "192.168.0.0 10.0.2.9 255.255.0.0");
         check(rc1 == 0 && rc2 == 0, "two SET ROUTE records appended to TCPIP$ROUTE.DAT over the ACP");
-        /* negctl: textfile-append-overwrites-not-eof */
         check(count_records_with(ROUTE_SPEC, "DEFAULT 10.0.2.2") == 1 &&
               count_records_with(ROUTE_SPEC, "192.168.0.0 10.0.2.9 255.255.0.0") == 1,
               "both route records read back off the ODS-2 volume -- append, not supersede");

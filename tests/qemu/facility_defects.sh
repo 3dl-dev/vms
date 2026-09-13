@@ -4599,38 +4599,51 @@ EOF
         case "$_f" in
         facility)     echo "image-activation identity continuation (VMS_IOCTL_REGISTER_CONTINUE, src/kernel/vms_module.c vms_proc_continue_identity) -- OVMX's fork-per-image made invisible to VMS (vms-4d7, Option B)";;
         targets)      echo "kernel/vms_module.c";;
-        suites_red)   echo "test_syssvc_identcont";;
+        suites_red)   echo "test_syssvc_identcont test_syssvc_creprc_inherit";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_proc_continue_identity() stops SHARING the parent's VMS PID (\`shared_vms_pid = 0\` instead of \`= parent->vms_pid\`), so REGISTER_CONTINUE falls all the way back to the derive-from-capable() path -- exactly the pre-fix behaviour where an activated image got a fresh PCB and a privilege mask derived from CAP_SYS_ADMIN (never SYSPRV) instead of continuing its DCL. The identity copy above it is now dead: with vms_pid 0 the caller derives, so SYSTEM's RUN AUTHORIZE loses SYSPRV again. The register_continue ioctl still returns SS\$_NORMAL (the registration itself succeeds), which is why CONTINUE_STATUS=1 stays green -- only the IDENTITY it should have carried is gone, the same facade shape as the other *-not-recorded entries.";;
+        why)          echo "vms_proc_continue_identity() zeroes the UNCONDITIONAL privilege copy at its source (\`proc->cur_privs = 0\` instead of \`= parent->cur_privs\`, inside the parent->mode_lock), so an activated image (REGISTER_CONTINUE, share_pid) and a \$CREPRC subprocess (REGISTER_SUBPROCESS) both register successfully (inherited=true, CONTINUE_STATUS=1) but carry privs 0 instead of the privilege mask the executive should have carried forward from their activator/creator. This RE-ANCHORS the defect at the identity/privilege copy SITE itself (vms-387 FINDING 1): the prior \`shared_vms_pid = 0\` mutation left the identity copy fully intact and only stopped PID sharing, so it reddened test_kmod_exit's PID-share check and never touched test_syssvc_identcont -- leaving identcont ORPHANED with no can-fail anchor. Because the copy is shared by both the image-continue and the subprocess-inherit entry points (share_pid is the ONLY branch that differs, and it is forbidden as a re-anchor -- it is a PID lie, not an identity one), the honest can-fail set is BOTH consumers: test_syssvc_identcont (its SYSPRV parent's image loses SYSPRV; its FIELD parent's image loses the reduced mask) AND test_syssvc_creprc_inherit (its non-root subprocess loses the SYS_PRIVS mask it should have inherited from the executive, not from capable()). The register/subprocess ioctls still return SS\$_NORMAL, which is why the CONTINUE_STATUS / REGISTER_SUBPROCESS-accepted / user-name / UIC assertions all stay green -- only the PRIVILEGE half of the continued identity is gone.";;
         require_fail) cat <<'EOF'
 A: the continued image holds the PARENT's SYSPRV mask -- a readback, not a claim, and it never called setident
-A: AUTHORIZE printed its banner -- the continued image was ADMITTED
-A: the continued image was never refused
-A: AUTHORIZE exited 0 for the admitted session
+A: the subprocess inherited the creator's privilege mask, SETPRV/SYSPRV included
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
+A: AUTHORIZE printed its banner -- the continued image was ADMITTED
+A: the continued image was never refused
+A: AUTHORIZE exited 0 for the admitted session
 B: the continued image holds the PARENT's REDUCED mask, with SYSPRV genuinely absent -- privileges did not reappear
 EOF
                       ;;
         knock_on_why) cat <<'EOF'
-ONE PROPERTY -- "an activated image continues its activator's identity" -- read
-in BOTH directions. Scenario A (require_fail) reads it upward: a SYSPRV parent's
-image must hold SYSPRV it never asked for; with the sharing removed the image
-derives an enforced-but-not-SYSPRV mask, so its SELF_PRIVS readback, AUTHORIZE's
-admission banner, the "never refused" check and the exit-0 check all go red at
-once -- one missing identity, four dependent observations. Scenario B (this
-knock-on) reads the SAME property downward: a parent that setident'd DOWN to
-FIELD must have its image inherit the REDUCED mask, so B's SELF_PRIVS readback
-compares against FIELD_PRIVS and also moves when the mask is derived instead of
-continued. B's REFUSAL assertions (NAOFIL/PRV, banner-absent, rc=1) stay GREEN
-under this defect -- the derived enforced mask lacks SYSPRV just as FIELD does,
-so AUTHORIZE refuses either way -- which is why only B's readback is named here
-and not B's refusal. CONTINUE_STATUS=1 stays green in both scenarios: the
-REGISTER_CONTINUE ioctl still succeeds, it just no longer continues. MEASURED
-red set is exactly these five assertions and no others.
+ONE PROPERTY -- "a continued/inherited image carries its activator's privilege
+mask from the executive, never derived from capable()" -- read at two entry
+points that share the SAME copy site.
+
+test_syssvc_identcont exercises the image-CONTINUE entry (share_pid). Its
+require_fail readback ("the continued image holds the PARENT's SYSPRV mask")
+goes red because cur_privs is now 0, and three dependent A observations follow
+from that one missing mask: with no SYSPRV the continued RUN AUTHORIZE cannot
+open SYSUAF, so its admission banner is absent, the %UAF-E-NAOFIL refusal
+appears (the "never refused" check flips), and AUTHORIZE exits 1 not 0 -- the
+three knock-ons above. Scenario B reads the same property downward: a parent
+that setident'd DOWN to FIELD must have its image inherit the REDUCED mask, so
+B's SELF_PRIVS readback (knock-on) moves off FIELD_PRIVS to 0. B's REFUSAL
+assertions (NAOFIL/PRV, banner-absent, rc=1) stay GREEN -- a zero mask lacks
+SYSPRV just as FIELD does, so AUTHORIZE refuses either way.
+
+test_syssvc_creprc_inherit exercises the subprocess-INHERIT entry (share_pid
+false, REGISTER_SUBPROCESS). Its require_fail readback ("the subprocess
+inherited the creator's privilege mask, SETPRV/SYSPRV included") goes red for
+the same reason: the child dropped to a non-root Linux credential, so its only
+possible source of SYS_PRIVS is the executive copy this defect zeroed. Its
+user-name, UIC, VMS-PID-distinct and REGISTER_SUBPROCESS-accepted assertions
+stay GREEN (username/uic are copied on separate lines, untouched; the ioctl
+still succeeds), and Scenario B (a non-root child still cannot self-declare a
+privileged name -> SS\$_NOPRIV) is unaffected because that guard is elsewhere.
+MEASURED red set is exactly the two require_fail readbacks plus the four
+knock-ons above, and no others.
 EOF
                       ;;
         esac;;
@@ -7116,16 +7129,21 @@ apply_edit() {
         # match inside the range and is the no-op selftest requires.
         sed -i '/^    proc = vms_proc_find_or_err();$/,/^        return 0;$/ s|^        args.vms_pid = proc->vms_pid;$|        /* NEGCTL register-adopt-pid-not-reported: vms_pid not copied back on adopt */|' "$_file";;
     register-continue-identity-dropped)
-        # UNIQUE TEXT: `shared_vms_pid = parent->vms_pid;` occurs once, at
-        # 8-space indentation inside vms_proc_continue_identity()'s hash walk.
-        # Forcing it to 0 makes vms_proc_continue_identity() report "no parent
-        # to continue", so REGISTER_CONTINUE falls back to derive-from-capable()
-        # -- the pre-fix behaviour. After substitution the `= parent->vms_pid;`
-        # text is gone, so a second apply finds no match: the no-op selftest
-        # requires. This is the whole continuation property in one store; the
-        # identity copy above it becomes dead because the caller derives when
-        # shared_vms_pid is 0.
-        sed -i 's|^        shared_vms_pid = parent->vms_pid;$|        shared_vms_pid = 0; /* NEGCTL register-continue-identity-dropped: image does not continue its activator */|' "$_file";;
+        # UNIQUE TEXT: `proc->cur_privs  = parent->cur_privs;` (two spaces
+        # around the second `=`) occurs once, at 8-space indentation inside
+        # vms_proc_continue_identity()'s hash walk -- the UNCONDITIONAL identity/
+        # privilege copy an activated image (and a $CREPRC subprocess) inherits
+        # from its activator. Zeroing the copy drops the continued/inherited
+        # privilege mask at its SOURCE: the image still registers (inherited=
+        # true, CONTINUE_STATUS=1) but carries privs 0 instead of the parent's,
+        # so it fails EXACTLY where the executive should have carried SYSPRV.
+        # This re-anchors the defect at the copy SITE itself (vms-387 FINDING 1):
+        # the prior `shared_vms_pid = 0` mutation left the identity copy intact
+        # and only stopped PID sharing, so it reddened test_kmod_exit's PID-share
+        # check and never touched test_syssvc_identcont -- an orphan. After this
+        # substitution the `= parent->cur_privs;` text is gone, so a second apply
+        # finds no match: the no-op selftest requires.
+        sed -i 's|^        proc->cur_privs  = parent->cur_privs;$|        proc->cur_privs  = 0; /* NEGCTL register-continue-identity-dropped: continued/inherited image loses the parent'"'"'s privilege mask at the copy site */|' "$_file";;
     scratch-dir-owner-not-system)
         # Single-line, uniquely-anchored inside test_syssvc_scratch_
         # writable.c's OWN provisioning duplicate (see this defect's

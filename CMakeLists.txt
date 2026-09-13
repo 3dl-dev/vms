@@ -326,6 +326,7 @@ if(BUILD_TESTS)
     # (the SHIPPING vms_pe_fsm.c) rather than compiling a copy.
     add_subdirectory(tests/cluster/sim)
     add_subdirectory(tests/vmsdecnet)  # DECnet Phase IV codec (vms-851)
+    add_subdirectory(tests/vmstcpip)   # TCP/IP SERVICE.DAT parser fuzz (vms-deb3)
     add_subdirectory(tests/ovmx_init)
     add_subdirectory(tests/tools)
 

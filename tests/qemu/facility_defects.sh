@@ -6271,7 +6271,7 @@ EOF
     bg-recv-length-zeroed)
         case "$_f" in
         facility)     echo "INET pseudo-device BGn: -- the IO\$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
-        targets)      echo "kernel/vms_bg.c";;
+        targets)      echo "kernel-core/vms_bg.c";;
         suites_red)   echo "test_syssvc_bg_echo test_syssvc_ssh_kex";;
         blind_suites) echo "";;
         blind_why)    echo "";;

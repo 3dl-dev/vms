@@ -559,7 +559,8 @@ crtl-fwrite-bypasses-rms
 rms-open-no-file-access-enq
 rms-record-lock-not-enqueued
 crtl-fwrite-chunk-loop-stops-early
-crtl-unlink-fabricates-erase"
+crtl-unlink-fabricates-erase
+rms-dirfind-exact-version-ignored"
 
 # ---------------------------------------------------------------------------
 # SCOPE, DECLARED
@@ -1045,6 +1046,26 @@ EOF
 EOF
                       ;;
         knock_on_why)  echo "the SAME never-erased FOPDEL.DAT is invisible to the immediate call-site check (which only reads the fabricated return code, unaffected) but visible to BOTH independent readers that later look for it by name: the direct sys\$search right after the unlink (require_fail) and the later opendir/readdir enumeration pass that re-checks the same file is gone (knock_on_fail) -- one un-erased file, found twice.";;
+        esac;;
+
+    rms-dirfind-exact-version-ignored)
+        case "$_f" in
+        facility)     echo "RMS/ACP directory-find exact-version lookup (acp_dirfind_scan_cb, vms-1b5)";;
+        targets)      echo "kernel-core/vmsfs_acp.c";;
+        suites_red)   echo "test_syssvc_rms_workload";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "acp_dirfind_scan_cb()'s exact-version gate 'if (version == c->want_ver)' is forced always-true, so an explicit-version open (WKOBJ.OBJ;N) stops comparing the scanned entry's version at all and matches -- and stops the walk on -- whichever directory entry the scan reaches FIRST for that name, instead of the one actually requested. ODS-2 directory blocks are scanned newest-version-first (proven by this same suite's B5 enumeration order, ';2 and ;1'), so the first entry reached is always the highest version. WKOBJ.OBJ;1 (A4) then wrongly resolves the ;2 entry and reads back 'V2' instead of 'V1', and WKOBJ.OBJ;3 (A6, no such version) wrongly matches that same real ;2 entry and reports RMS\$_NORMAL instead of RMS\$_FNF. WKOBJ.OBJ;2 (A5) happens to BE the first-scanned entry already, so it still resolves correctly by coincidence, and the versionless want_ver==0 path (A1-A3) is a completely different branch, untouched -- so only A4/A6 redden (minimality). The comparison text is gone after substitution, so a second apply is a no-op (selftest; vms-b8a2 unblocked this ';N'-bearing anchor).";;
+        require_fail) cat <<'EOF'
+sys$open WKOBJ.OBJ;1 still reads the ;1 payload 'V1'
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+sys$open WKOBJ.OBJ;3 (no such version) -> RMS$_FNF (fail-honest)
+EOF
+                      ;;
+        knock_on_why)  echo "the SAME always-true version-match gate lets an explicit-version open resolve against whichever entry the scan reaches first (the newest version, since ODS-2 directory blocks are scanned newest-first) instead of the version actually asked for: A4's request for the OLDER ;1 wrongly returns the newer ;2 payload (require_fail), and A6's request for a NONEXISTENT ;3 wrongly matches that same newest real entry and reports NORMAL instead of RMS\$_FNF (knock_on_fail) -- both off the one bypassed comparison.";;
         esac;;
 
     setprv-grants-unauthorized)
@@ -6621,6 +6642,14 @@ apply_edit() {
         # replaced with a hardcoded NORMAL, so the file is never really erased.
         # Gone after apply (no-op re-apply).
         sed -i 's|uint32_t st = sys\$erase(&fab, 0, 0);|uint32_t st = RMS$_NORMAL; /* NEGCTL crtl-unlink-fabricates-erase: sys$erase skipped */|' "$_file";;
+    rms-dirfind-exact-version-ignored)
+        # UNIQUE TEXT, no range anchor needed: `if (version == c->want_ver) {`
+        # occurs once, in acp_dirfind_scan_cb's exact-version branch. Forcing it
+        # always-true drops the version comparison entirely, so an explicit-
+        # version open matches whichever entry the scan reaches first. The
+        # comparison text is gone after apply, so a second apply is a no-op
+        # (selftest).
+        sed -i 's|if (version == c->want_ver) {|if (1 /* NEGCTL rms-dirfind-exact-version-ignored */) {|' "$_file";;
     setprv-grants-unauthorized)
         # Unique text (vms_ioctl_setprv's authorized-subset intersection); the
         # replacement drops the `& proc->perm_privs` term, so a second apply

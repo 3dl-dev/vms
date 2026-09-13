@@ -1,5 +1,33 @@
 # rd vms-4838 (REJOIN-AS-TARGET) — live EVACUATE->REJOIN proof, 2026-09-13
 
+> ## ⚠ CORRECTION / RETRACTION (2026-09-13, supersedes the WIRE claims below)
+>
+> The vms-c06 determination found this run's **live-WIRE evidence is DEFECTIVE and is
+> RETRACTED** — do NOT read the "zero own outbound VMS$VAXcluster connect" claim as proof:
+> - **`connect_req_from_self=0` is VACUOUS.** The rig captures RECEIVE-ONLY
+>   (`tests/qemu/init_cluster_genesis.sh` `sca_l2probe recv eth0`), so node B's own
+>   capture can never contain B's own transmit — a self-sourced frame is unobservable
+>   by construction, not absent. And `nodeA.pcap` (which *does* see B's TX) shows B
+>   **DID** open its own `VMS$VAXcluster CONNECT_REQ` on its rejoin boot (t=37.913);
+>   `cm_connect_suppressed` fired but adopted B's OWN earlier connection, not A's.
+> - **`connect_req_from_peer=5` is unfiltered.** `scan_connect_wire.py` does not filter
+>   by SYSAP; 4 of the 5 were `SCS$DIRECTORY`, only 1 was `VMS$VAXcluster`.
+>
+> **WHAT STILL STANDS** (unaffected): the `join_cm_take_held()` fix's HOST
+> (`test_cnxman_join`, 612 checks) + SIM (44 checks) correctness proofs, that it is
+> non-regressing (first-join bit-identical), and that it is **never-crash** on a real
+> crash+reboot cycle (no panic/bugcheck on either node — that part of this run holds).
+>
+> **WHAT IS UNVALIDATED:** the connection-adoption WIRE behavior — deferred to a
+> CORRECTED-RIG proof (transmit-capture + SYSAP filter; rig-fix filed separately) bundled
+> with the real end-to-end blocker.
+>
+> **END-TO-END member=1/cn2** is blocked not by "member non-reciprocation (vms-694)"
+> (vms-694 is a DONE epic) but by **vms-fc7**: node A's coordinator is stuck in
+> `CNXMAN_COORD_BARRIER` (`cnxman_coord_participant_lost()` unwired — the barrier is
+> never released when a participant dies), a latent stall present even on the passing
+> genesis proof. Tracked as vms-c06 → re-pointed to vms-fc7.
+
 Run on the 2-node OVMX genesis rig (`tests/qemu/`), branch
 `work/vms-4838-rejoin-target`, new `RIG_MODE=rejoin` instrument, own-lab QEMU
 under KVM. Image built from `tests/qemu/Dockerfile.cluster-genesis-2node` at
@@ -30,25 +58,27 @@ Node B's two boots ride a reconnect-tolerant segment relay
 and persists the whole run; node B's leg drops and reconnects across the
 evacuation.
 
-## Result: the fix's mechanism is PROVEN live; a SEPARATE known frontier (vms-694) blocks full admission
+## Result: never-crash held live; the WIRE claim is RETRACTED (see the correction block above); end-to-end blocked by vms-fc7
 
-Two independent readings, both off round 2 (the REJOIN boot):
+Off round 2 (the REJOIN boot):
 
 - **Executive's own log** (`join_cm_take_held()`'s `join_log`, reaching
   console/dmesg in real time): `nodeB-r2.console.log` t=59.2s —
   `%CNXMAN, the executive already holds this pair's VMS$VAXcluster
   connection: this node opens none of its own and drives its admission on
-  that one`. This IS `cm_connect_suppressed` firing, read straight off the
-  executive.
-- **The wire**, decoded with `scan_connect_wire.py` (new; published-offset
-  SCS connection-control layout, content=110/ctrl_type=0) against node B's
-  OWN passive capture of round 2 (`nodeB-round2.pcap`):
-  `connect_req_from_self=0 connect_req_from_peer=5`. Zero VMS$VAXcluster
-  CONNECT_REQ frames sourced from B's own MAC; 5 from A's (A's once-a-second
-  redial during the outage, arriving after B rebooted).
+  that one`. This shows `cm_connect_suppressed` firing — but note it adopted
+  B's OWN earlier connection (conid `0x8ad90005`, `nodeA.pcap` t=37.913), not
+  A's, so it does NOT establish that op-02 rode a member-initiated connection.
+- **The wire claim is RETRACTED** (see the correction block at the top): the
+  `connect_req_from_self=0` reading is vacuous — the capture is receive-only,
+  so B's own transmit is unobservable, and `nodeA.pcap` shows B DID open its
+  own `VMS$VAXcluster CONNECT_REQ` on rejoin. `connect_req_from_peer=5` is
+  unfiltered by SYSAP (4 were `SCS$DIRECTORY`). This run does NOT prove B
+  opened none of its own connects; a corrected-rig proof (transmit-capture +
+  SYSAP filter) is required and is deferred.
 
-Both agree: on the real rejoin, node B did **not** open a VMS$VAXcluster
-connect of its own.
+What this run DOES establish live: never-crash across a real crash+reboot
+cycle (no panic/bugcheck on either node).
 
 **But** node B never reaches MEMBER within its window. `nodeB-r2.console.log`
 t=65.4s: `%CNXMAN, membership request to the selected member not answered` /

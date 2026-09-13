@@ -78,7 +78,16 @@ items:
       PROVEN AT R1/R2: tests/cluster/host/test_cnxman_join.c (op-05 adopt, the
       four joiner cases, slot-not-derivable) per transition; the simulator replays
       the reference joiner. R4 for OVMX^n: the two-node genesis rig
-      (tests/qemu/run_cluster_genesis_2node.sh). Joining a REAL VAX to MEMBER stays
+      (tests/qemu/run_cluster_genesis_2node.sh). REJOIN now live-proven 2-node
+      own-lab (k3s-worker): a node evacuated (kill -9) and relaunched with the same
+      SYSGEN identity, while the survivor holds its CSB inside RECNXINTERVAL,
+      reaches member=1/cn2 (vms-4838/#1216 + vms-c06/#1218, RIG_MODE=rejoin). The
+      rejoiner drives readmission on the MEMBER-INITIATED VMS$VAXcluster connection
+      (join_cm_take_held reads the executive record + suppresses a second connect),
+      wire-confirmed on a transmit-capturing rig (vms-175/#1217): its own capture
+      sees self-TX (connect_req_from_self=4) yet vaxcluster_connect_req_from_self=0
+      is a REAL zero. NOT verified: no oracle byte-gate and no real-VAX rejoin
+      (own-lab OVMX<->OVMX only). Joining a REAL VAX to MEMBER stays
       lab-deferred (connection-manager$real-vax-join, absent) and still needs E31
       (the VMS$VAXcluster connect-data identity) so a real VAX does not REJECT it.
 
@@ -159,7 +168,16 @@ items:
       Quorum cells are copied proposed->effective only from REAL running CLUB
       values; asserting a quorum of zero is refused outright.
       PROVEN AT R1/R2: test_cnxman_barrier.c, test_cnxman_coord.c, and the
-      simulator's 3-8 node join/departure loops. NOT claimed: a barrier run
+      simulator's 3-8 node join/departure loops. BARRIER-RELEASE now live-proven +
+      HARD-asserted on the 2-node genesis proof (vms-c06/#1218): the coordinator's
+      barrier releases (participant_lost + coordinator_lost wired off the CSB
+      connectivity-loss ladder; the founder's JOIN FSM routes foreign barrier steps
+      on instead of eating them; a committed member no longer self-admits op-0x02),
+      RIG_MODE=proof 6/6 with the release hard-asserted, no coordinator role-swap.
+      The earlier latent barrier-stall was BENIGN for the shipped ops (all commit
+      PRE-barrier — no V0.6-16 recall) and is now fixed. OPEN (vms-f7c): a joined
+      member that LATER coordinates a transition still has op-0b steps consumed one
+      FSM short — latent, cannot arise on the 2-node rig. NOT claimed: a barrier run
       against a real VAX coordinator (R5, lab-deferred).
 
   - id: connection-manager$reconnect

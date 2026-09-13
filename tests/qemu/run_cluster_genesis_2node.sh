@@ -401,10 +401,19 @@ if command -v python3 >/dev/null 2>&1 && [ -r /scan_dlm_wire.py ]; then
 fi
 
 # How many frames of one opcode the captures showed, summed over both nodes'
-# probes. Each probe sees BOTH directions (an AF_PACKET socket is delivered the
-# interface's outgoing frames as well as its incoming ones), so a frame that
-# really crossed appears in both -- which is why this is a >0 gate and never a
-# count the verdict quotes as "how many were sent". That number is the arm's.
+# probes. A frame that really crossed the wire is delivered to the RECEIVING
+# node's own probe as an ordinary incoming frame regardless of anything else,
+# so summing both nodes' pcaps always counts it at least once -- which is why
+# this is a >0 gate and never a count the verdict quotes as "how many were
+# sent". That number is the arm's.
+# (Since rd vms-175's ETH_P_ALL transmit-capture fix, the SENDING node's own
+# probe sees the SAME frame too, tagged dir=TX in sca_l2probe's own log --
+# before that fix a protocol-specific AF_PACKET bind only ever reached the
+# kernel's RECEIVE fan-out, so a sender's own probe could NOT see its own
+# transmit. This gate never depended on that -- it only needed the receiving
+# side's ordinary incoming capture -- so it was not itself vacuous; it is
+# corrected here only because the OLD comment claimed self-TX visibility
+# that did not exist yet.)
 wire_saw() {
 	echo "$WIRE_SCAN" | tr ' ' '\n' | sed -n "s/^$1=//p" \
 		| awk '{s+=$1} END {print s+0}'
@@ -695,9 +704,15 @@ if [ "$MODE" = "rejoin" ]; then
 	#   VMS's own unpublished internals (Rule 8), the SAME classification
 	#   the executive's own parser applies (VMS_FCLS_SCS_CONN_CTRL,
 	#   content=110, src/kernel-core/vms_cluster_codec.h/.c) narrowed to
-	#   ctrl_type==0 (CONNECT_REQ). The Ethernet source address is an
-	#   ordinary 802.3 field, not a VMS wire field, and says WHO put the
-	#   frame on the wire.
+	#   ctrl_type==0 (CONNECT_REQ), AND FURTHER NARROWED BY SYSAP NAME (rd
+	#   vms-175) -- content=110/ctrl_type=0 alone matches ANY connection's
+	#   CONNECT_REQ (SCS$DIRECTORY dials one per lookup), so the count this
+	#   gate reads is scan_connect_wire.py's vaxcluster_connect_req_*
+	#   fields, which decode the frame's own two 16-byte SYSAP names (abs
+	#   76/92) and isolate VMS$VAXcluster specifically -- the ONE
+	#   connection join_cm_take_held() is about. The Ethernet source
+	#   address is an ordinary 802.3 field, not a VMS wire field, and says
+	#   WHO put the frame on the wire.
 	#
 	# HONEST FINDING FROM THIS RIG'S OWN TIMING (recorded, not smoothed
 	# over): node A's redial reliably WINS the race in this topology (A
@@ -734,10 +749,13 @@ if [ "$MODE" = "rejoin" ]; then
 		echo "=== node B's REJOIN-round capture: VMS\$VAXcluster CONNECT_REQ census ==="
 		echo "$CONNECT_SCAN"
 	fi
+	# vaxcluster_connect_req_* (not the generic connect_req_*): isolates
+	# VMS$VAXcluster's own CONNECT_REQ frames from the SCS$DIRECTORY dials
+	# that share the same content=110/ctrl_type=0 shape (rd vms-175).
 	B_CONNECT_FROM_SELF=$(num "$(echo "$CONNECT_SCAN" | \
-		sed -n 's/.*connect_req_from_self=\([0-9]*\).*/\1/p' | tail -n1)")
+		sed -n 's/.*vaxcluster_connect_req_from_self=\([0-9]*\).*/\1/p' | tail -n1)")
 	B_CONNECT_FROM_PEER=$(num "$(echo "$CONNECT_SCAN" | \
-		sed -n 's/.*connect_req_from_peer=\([0-9]*\).*/\1/p' | tail -n1)")
+		sed -n 's/.*vaxcluster_connect_req_from_peer=\([0-9]*\).*/\1/p' | tail -n1)")
 
 	echo ""
 	echo "  REJOIN RUN (rd vms-4838) -- state read back after node B's SECOND"
@@ -749,7 +767,7 @@ if [ "$MODE" = "rejoin" ]; then
 		"${B_ROLE:-?}" "${B_MEMBER:-?}" "${B_CN:-?}" "${B_CSID:-?}"
 	printf "    node B's own executive: round1 cm_connect_suppressed-fired=%s  round2(REJOIN)=%s\n" \
 		"$R1_SUPPRESSED" "$R2_SUPPRESSED"
-	printf "    node B's own REJOIN-round capture: CONNECT_REQ from itself=%s  from peer=%s\n" \
+	printf "    node B's own REJOIN-round capture: VMS\$VAXcluster CONNECT_REQ from itself=%s  from peer=%s\n" \
 		"$B_CONNECT_FROM_SELF" "$B_CONNECT_FROM_PEER"
 
 	RFAIL=0
@@ -1220,6 +1238,37 @@ if [ "$MODE" = "xnode" ]; then
 	echo "--- node A console tail ---"; tail -n 40 "$OUT/nodeA.console.log" 2>/dev/null
 	echo "--- node B console tail ---"; tail -n 40 "$OUT/nodeB.console.log" 2>/dev/null
 	exit 1
+fi
+
+# --------------------------------------------------------------------------
+# rd vms-c06 BARRIER-RELEASE DIAGNOSTIC (NON-FAILING). node A's own CLUB
+# projection (RIG-A-CLUB, cluster_node.c print_club_line off
+# vms_club_view_wire.transition_active) carries `transition`: 1 while the
+# coordinator is inside a CNXMAN_COORD_BARRIER round, 0 once
+# coord_try_release() has actually let it go. Every genesis run measured so
+# far (tests/lab/captures/xnode-dlm-2node-20260911.log, RIG-A-CLUB lines from
+# node B's admission through t=150s+) shows node A's OWN transition holding
+# at 1 for the rest of its polling window -- the coordinator opens the
+# barrier for B's admission but never finishes releasing it. CN=2/MEMBER is
+# still reached on both sides (the barrier stall does not block admission),
+# so this is reported HONESTLY as a latent gap (rd vms-c06) rather than
+# hidden.
+#
+# THIS IS A DIAGNOSTIC, NOT A GATE, ON PURPOSE. The stall is real and
+# UNFIXED until vms-c06 lands; turning this into a hard assertion today would
+# red main's own genesis proof for everyone, for a defect this item did not
+# introduce and is not chartered to fix. Once vms-c06's fix is in, flip the
+# `if` below to fail the run (e.g. `RFAIL=1; ... exit 1`) so a regression of
+# the barrier-release path is caught for real.
+A_TRANSITION=$(rig_field A CLUB transition)
+echo ""
+if [ "$A_TRANSITION" = "0" ]; then
+	echo "  BARRIER-RELEASE: REACHED (node A's own transition=0 -- the"
+	echo "  coordinator's barrier round completed)"
+else
+	echo "  BARRIER-RELEASE: NOT REACHED (transition=${A_TRANSITION:-?}) --"
+	echo "  latent coordinator-barrier stall, tracked rd vms-c06. Diagnostic"
+	echo "  only; does not fail this proof (see comment above)."
 fi
 
 if cn2_reached && [ "$A_ROLE" = "founder" ] && [ "$B_ROLE" = "joiner" ]; then

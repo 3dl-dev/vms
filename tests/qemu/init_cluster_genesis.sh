@@ -77,9 +77,15 @@ sleep 1
 MAC=$(cat /sys/class/net/eth0/address 2>/dev/null)
 echo "eth0 mac=$MAC"
 
-# ---- passive wire capture (never a transmitter) ------------------------------
-# recv-only: this rig must never put a frame on the segment that the executive
-# did not build. The pcap is evidence, not traffic.
+# ---- passive wire capture (this rig never transmits) --------------------
+# sca_l2probe itself never puts a frame on the segment -- the pcap is
+# evidence, not traffic. Since rd vms-175 it binds ETH_P_ALL rather than
+# 0x6007 specifically, which is what lets it see the executive's OWN
+# transmitted 0x6007 frames (dir=TX in its own log) alongside what it
+# receives off the wire (dir=RX): a protocol-specific bind only ever reaches
+# the kernel's RECEIVE fan-out, so a self-sourced connect this node's own
+# vms.ko opened would have been invisible to this same node's capture of
+# itself -- see sca_l2probe.c for the mechanism.
 # The capture must outlive everything the node does, or the very frames the
 # run exists to catch fall outside it. The cross-node phase (rd vms-94c) runs
 # AFTER the membership window and is followed by the linger, so its budget is

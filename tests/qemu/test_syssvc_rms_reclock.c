@@ -182,6 +182,7 @@ static void test_reclock(void)
     rab1.rab$l_ubf = buf1; rab1.rab$w_usz = sizeof(buf1) - 1;
     st = sys$get(&rab1, 0, 0);
     check(st == RMS$_NORMAL, "rab1 default $get(rrn=0) -> NORMAL");
+    /* negctl: rms-record-lock-not-enqueued */
     check(rab1._rec_lock_lkid != 0, "rab1 stashed a real record lkid");
     lkid1_rec0 = rab1._rec_lock_lkid;
 

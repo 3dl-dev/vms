@@ -446,4 +446,20 @@
 # with a constant "X", so the image emits a non-empty malformed line and still
 # exits cleanly while the accept/spawn/exit assertions stay green and only the
 # independent RFC 867 shape assertion reddens. See its entry in facility_defects.sh.
-110
+#
+# Raised to 150 by vms-45a's 11 non-cluster negctl-coverage-paydown defects
+# (devtab-io-error-not-charged, setexit-status-not-recorded,
+# spawn-notify-flag-not-set, register-subprocess-identity-self-declared,
+# libspawn-prcnam-dropped, crtl-fwrite-bypasses-rms, rms-open-no-file-access-enq,
+# rms-record-lock-not-enqueued, crtl-fwrite-chunk-loop-stops-early,
+# crtl-unlink-fabricates-erase, textfile-append-overwrites-not-eof) -- see each
+# entry in facility_defects.sh for what it covers and why.
+#
+# Lowered back to 149 by vms-45a's removal of textfile-append-overwrites-not-eof:
+# runtime-proven a FAKE GATE -- injecting it did not redden either suite named
+# in its own suites_red (test_syssvc_tcpip_config_acp, test_syssvc_tcpip_host_acp),
+# an INV-6 decorative-control violation. Removed entirely (DEFECTS entry,
+# defect_field case, apply_edit case, and the two anchor comments in those
+# suites); both suites revert to unanchored pending a real append-EOF
+# assertion, tracked separately.
+149

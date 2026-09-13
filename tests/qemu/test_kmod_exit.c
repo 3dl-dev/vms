@@ -283,6 +283,7 @@ int main(void)
                 int rc = do_getexit(fd, VMS_JPI_SEL_PID, rep.vms_pid, &ge);
                 CHECK(rc == 0 && ge.status == SS_NORMAL,
                       "process B reads A's completion status by VMS PID");
+                /* negctl: setexit-status-not-recorded */
                 CHECK(rc == 0 && ge.condition == COND_CHILD,
                       "B reads back the EXACT condition value A recorded");
                 CHECK(rc == 0 && ge.has_exited == 1,

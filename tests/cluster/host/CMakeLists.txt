@@ -219,6 +219,10 @@ cluster_host_cnxman_test(test_cnxman_recnx   test_cnxman_recnx.c)
 # source here, never a kernel-core object.
 cluster_host_cnxman_test(test_cnxman_barrier test_cnxman_barrier.c vms_frame_compose.c)  # FC-P3.5
 cluster_host_cnxman_test(test_cnxman_coord   test_cnxman_coord.c vms_frame_compose.c)    # FC-P3.12
+# rd vms-c06: the two halves of a transition CLOSED ON EACH OTHER -- the real
+# coordinator FSM and the real participant barrier FSM exchanging only bodies
+# they originated themselves. No composed frames, so no vms_frame_compose.c.
+cluster_host_cnxman_test(test_cnxman_barrier_loop test_cnxman_barrier_loop.c)   # vms-c06
 # FC-P3.3: the join. Same terms; it also needs the MSCP end-message builders
 # (already in cluster_host_codec, which cluster_host_cnxman links).
 cluster_host_cnxman_test(test_cnxman_join    test_cnxman_join.c vms_frame_compose.c)     # FC-P3.3

@@ -1,0 +1,688 @@
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+Booting from ROM..c[?7l[2J[    0.000000] Linux version 6.8.0-139-generic (buildd@lcy02-amd64-036) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, GNU ld (GNU Binutils for Ubuntu) 2.42) #139-Ubuntu SMP PREEMPT_DYNAMIC Sat Aug  1 03:52:05 UTC 2026 (Ubuntu 6.8.0-139.139-generic 6.8.12)
+[    0.000000] Command line: console=ttyS0 net.ifnames=0 biosdevname=0 panic=-1 loglevel=7 ovmx.tag=B ovmx.scsnode=OVMXB ovmx.sysid=1026 ovmx.votes=0 ovmx.expected_votes=1 ovmx.vaxcluster=2 ovmx.group=2026 ovmx.recnx=8 ovmx.credits=32 ovmx.swver=OVMX0.6 ovmx.window=110 ovmx.xnode=0 ovmx.linger=45 ovmx.qhang=0
+[    0.000000] KERNEL supported cpus:
+[    0.000000]   Intel GenuineIntel
+[    0.000000]   AMD AuthenticAMD
+[    0.000000]   Hygon HygonGenuine
+[    0.000000]   Centaur CentaurHauls
+[    0.000000]   zhaoxin   Shanghai  
+[    0.000000] BIOS-provided physical RAM map:
+[    0.000000] BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
+[    0.000000] BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
+[    0.000000] BIOS-e820: [mem 0x0000000000100000-0x000000001ffdffff] usable
+[    0.000000] BIOS-e820: [mem 0x000000001ffe0000-0x000000001fffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000feffc000-0x00000000feffffff] reserved
+[    0.000000] BIOS-e820: [mem 0x00000000fffc0000-0x00000000ffffffff] reserved
+[    0.000000] NX (Execute Disable) protection: active
+[    0.000000] APIC: Static calls initialized
+[    0.000000] SMBIOS 3.0.0 present.
+[    0.000000] DMI: QEMU Ubuntu 24.04 PC v2 (i440FX + PIIX, arch_caps fix, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+[    0.000000] Hypervisor detected: KVM
+[    0.000000] kvm-clock: Using msrs 4b564d01 and 4b564d00
+[    0.000001] kvm-clock: using sched offset of 187877726 cycles
+[    0.000003] clocksource: kvm-clock: mask: 0xffffffffffffffff max_cycles: 0x1cd42e4dffb, max_idle_ns: 881590591483 ns
+[    0.000006] tsc: Detected 3695.964 MHz processor
+[    0.000344] last_pfn = 0x1ffe0 max_arch_pfn = 0x400000000
+[    0.000563] MTRR map: 4 entries (3 fixed + 1 variable; max 19), built from 8 variable MTRRs
+[    0.000573] x86/PAT: Configuration [0-7]: WB  WC  UC- UC  WB  WP  UC- WT  
+[    0.005858] found SMP MP-table at [mem 0x000f5480-0x000f548f]
+[    0.005871] Using GB pages for direct mapping
+[    0.005967] RAMDISK: [mem 0x1f9ee000-0x1ffdffff]
+[    0.005996] ACPI: Early table checksum verification disabled
+[    0.006001] ACPI: RSDP 0x00000000000F5290 000014 (v00 BOCHS )
+[    0.006005] ACPI: RSDT 0x000000001FFE1C93 000034 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.006010] ACPI: FACP 0x000000001FFE1B47 000074 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.006015] ACPI: DSDT 0x000000001FFE0040 001B07 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.006018] ACPI: FACS 0x000000001FFE0000 000040
+[    0.006020] ACPI: APIC 0x000000001FFE1BBB 000078 (v03 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.006023] ACPI: HPET 0x000000001FFE1C33 000038 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.006026] ACPI: WAET 0x000000001FFE1C6B 000028 (v01 BOCHS  BXPC     00000001 BXPC 00000001)
+[    0.006028] ACPI: Reserving FACP table memory at [mem 0x1ffe1b47-0x1ffe1bba]
+[    0.006029] ACPI: Reserving DSDT table memory at [mem 0x1ffe0040-0x1ffe1b46]
+[    0.006030] ACPI: Reserving FACS table memory at [mem 0x1ffe0000-0x1ffe003f]
+[    0.006031] ACPI: Reserving APIC table memory at [mem 0x1ffe1bbb-0x1ffe1c32]
+[    0.006031] ACPI: Reserving HPET table memory at [mem 0x1ffe1c33-0x1ffe1c6a]
+[    0.006032] ACPI: Reserving WAET table memory at [mem 0x1ffe1c6b-0x1ffe1c92]
+[    0.007706] No NUMA configuration found
+[    0.007708] Faking a node at [mem 0x0000000000000000-0x000000001ffdffff]
+[    0.007715] NODE_DATA(0) allocated [mem 0x1f9c3000-0x1f9edfff]
+[    0.007865] Zone ranges:
+[    0.007866]   DMA      [mem 0x0000000000001000-0x0000000000ffffff]
+[    0.007868]   DMA32    [mem 0x0000000001000000-0x000000001ffdffff]
+[    0.007869]   Normal   empty
+[    0.007870]   Device   empty
+[    0.007870] Movable zone start for each node
+[    0.007872] Early memory node ranges
+[    0.007872]   node   0: [mem 0x0000000000001000-0x000000000009efff]
+[    0.007873]   node   0: [mem 0x0000000000100000-0x000000001ffdffff]
+[    0.007875] Initmem setup node 0 [mem 0x0000000000001000-0x000000001ffdffff]
+[    0.008047] On node 0, zone DMA: 1 pages in unavailable ranges
+[    0.008082] On node 0, zone DMA: 97 pages in unavailable ranges
+[    0.009520] On node 0, zone DMA32: 32 pages in unavailable ranges
+[    0.011509] ACPI: PM-Timer IO Port: 0x608
+[    0.011538] ACPI: LAPIC_NMI (acpi_id[0xff] dfl dfl lint[0x1])
+[    0.011648] IOAPIC[0]: apic_id 0, version 17, address 0xfec00000, GSI 0-23
+[    0.011653] ACPI: INT_SRC_OVR (bus 0 bus_irq 0 global_irq 2 dfl dfl)
+[    0.011655] ACPI: INT_SRC_OVR (bus 0 bus_irq 5 global_irq 5 high level)
+[    0.011656] ACPI: INT_SRC_OVR (bus 0 bus_irq 9 global_irq 9 high level)
+[    0.011657] ACPI: INT_SRC_OVR (bus 0 bus_irq 10 global_irq 10 high level)
+[    0.011657] ACPI: INT_SRC_OVR (bus 0 bus_irq 11 global_irq 11 high level)
+[    0.011661] ACPI: Using ACPI (MADT) for SMP configuration information
+[    0.011662] ACPI: HPET id: 0x8086a201 base: 0xfed00000
+[    0.011666] TSC deadline timer available
+[    0.011666] smpboot: Allowing 1 CPUs, 0 hotplug CPUs
+[    0.011702] kvm-guest: APIC: eoi() replaced with kvm_guest_apic_eoi_write()
+[    0.011764] PM: hibernation: Registered nosave memory: [mem 0x00000000-0x00000fff]
+[    0.011766] PM: hibernation: Registered nosave memory: [mem 0x0009f000-0x000fffff]
+[    0.011767] [mem 0x20000000-0xfeffbfff] available for PCI devices
+[    0.011768] Booting paravirtualized kernel on KVM
+[    0.011770] clocksource: refined-jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1910969940391419 ns
+[    0.011781] setup_percpu: NR_CPUS:8192 nr_cpumask_bits:1 nr_cpu_ids:1 nr_node_ids:1
+[    0.012119] percpu: Embedded 86 pages/cpu s229376 r8192 d114688 u2097152
+[    0.012208] kvm-guest: PV spinlocks disabled, single CPU
+[    0.012210] Kernel command line: console=ttyS0 net.ifnames=0 biosdevname=0 panic=-1 loglevel=7 ovmx.tag=B ovmx.scsnode=OVMXB ovmx.sysid=1026 ovmx.votes=0 ovmx.expected_votes=1 ovmx.vaxcluster=2 ovmx.group=2026 ovmx.recnx=8 ovmx.credits=32 ovmx.swver=OVMX0.6 ovmx.window=110 ovmx.xnode=0 ovmx.linger=45 ovmx.qhang=0
+[    0.012421] Unknown kernel command line parameters "biosdevname=0", will be passed to user space.
+[    0.012440] random: crng init done
+[    0.012521] Dentry cache hash table entries: 65536 (order: 7, 524288 bytes, linear)
+[    0.012563] Inode-cache hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    0.012653] Fallback order for Node 0: 0 
+[    0.012656] Built 1 zonelists, mobility grouping on.  Total pages: 128736
+[    0.012657] Policy zone: DMA32
+[    0.012661] mem auto-init: stack:all(zero), heap alloc:on, heap free:off
+[    0.013539] Memory: 453944K/523768K available (22528K kernel code, 4441K rwdata, 14428K rodata, 4932K init, 4776K bss, 69568K reserved, 0K cma-reserved)
+[    0.014181] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+[    0.014202] ftrace: allocating 58336 entries in 228 pages
+[    0.022027] ftrace: allocated 228 pages with 4 groups
+[    0.022780] Dynamic Preempt: voluntary
+[    0.023019] rcu: Preemptible hierarchical RCU implementation.
+[    0.023021] rcu: 	RCU restricting CPUs from NR_CPUS=8192 to nr_cpu_ids=1.
+[    0.023023] 	Trampoline variant of Tasks RCU enabled.
+[    0.023023] 	Rude variant of Tasks RCU enabled.
+[    0.023023] 	Tracing variant of Tasks RCU enabled.
+[    0.023024] rcu: RCU calculated value of scheduler-enlistment delay is 100 jiffies.
+[    0.023024] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=1
+[    0.023032] RCU Tasks: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.023033] RCU Tasks Rude: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.023034] RCU Tasks Trace: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.025764] NR_IRQS: 524544, nr_irqs: 256, preallocated irqs: 16
+[    0.026031] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    0.026454] Console: colour *CGA 80x25
+[    0.026619] printk: legacy console [ttyS0] enabled
+[    0.772895] ACPI: Core revision 20230628
+[    0.777687] clocksource: hpet: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604467 ns
+[    0.788071] APIC: Switch to symmetric I/O mode setup
+[    0.794570] x2apic enabled
+[    0.800212] APIC: Switched APIC routing to: physical x2apic
+[    0.810143] ..TIMER: vector=0x30 apic1=0 pin1=2 apic2=-1 pin2=-1
+[    0.817501] clocksource: tsc-early: mask: 0xffffffffffffffff max_cycles: 0x6a8ce2c4a8e, max_idle_ns: 881590695206 ns
+[    0.829950] Calibrating delay loop (skipped) preset value.. 7391.92 BogoMIPS (lpj=3695964)
+[    0.832642] x86/cpu: User Mode Instruction Prevention (UMIP) activated
+[    0.834333] Last level iTLB entries: 4KB 0, 2MB 0, 4MB 0
+[    0.834947] Last level dTLB entries: 4KB 0, 2MB 0, 4MB 0, 1GB 0
+[    0.835974] Spectre V1 : Mitigation: usercopy/swapgs barriers and __user pointer sanitization
+[    0.836966] Spectre V2 : Spectre BHI mitigation: SW BHB clearing on vm exit
+[    0.837950] Spectre V2 : Spectre BHI mitigation: SW BHB clearing on syscall
+[    0.838948] Spectre V2 : Mitigation: Enhanced / Automatic IBRS
+[    0.839947] Spectre V2 : Spectre v2 / PBRSB-eIBRS: Retire a single CALL on VMEXIT
+[    0.840948] RETBleed: Mitigation: Enhanced IBRS
+[    0.841952] Spectre V2 : mitigation: Enabling conditional Indirect Branch Prediction Barrier
+[    0.842948] Speculative Store Bypass: Mitigation: Speculative Store Bypass disabled via prctl
+[    0.843957] MMIO Stale Data: Mitigation: Clear CPU buffers
+[    0.844949] SRBDS: Unknown: Dependent on hypervisor status
+[    0.846949] active return thunk: its_return_thunk
+[    0.847949] ITS: Mitigation: Aligned branch/return thunks
+[    0.849992] x86/fpu: Supporting XSAVE feature 0x001: 'x87 floating point registers'
+[    0.850949] x86/fpu: Supporting XSAVE feature 0x002: 'SSE registers'
+[    0.851947] x86/fpu: Supporting XSAVE feature 0x004: 'AVX registers'
+[    0.852949] x86/fpu: Supporting XSAVE feature 0x008: 'MPX bounds registers'
+[    0.853953] x86/fpu: Supporting XSAVE feature 0x010: 'MPX CSR'
+[    0.854952] x86/fpu: Supporting XSAVE feature 0x200: 'Protection Keys User registers'
+[    0.855951] x86/fpu: xstate_offset[2]:  576, xstate_sizes[2]:  256
+[    0.856949] x86/fpu: xstate_offset[3]:  832, xstate_sizes[3]:   64
+[    0.857950] x86/fpu: xstate_offset[4]:  896, xstate_sizes[4]:   64
+[    0.858948] x86/fpu: xstate_offset[9]:  960, xstate_sizes[9]:    8
+[    0.859948] x86/fpu: Enabled xstate features 0x21f, context size is 968 bytes, using 'compacted' format.
+[    0.893945] Freeing SMP alternatives memory: 48K
+[    0.893951] pid_max: default: 32768 minimum: 301
+[    0.895057] LSM: initializing lsm=lockdown,capability,landlock,yama,apparmor,integrity
+[    0.895989] landlock: Up and running.
+[    0.896949] Yama: becoming mindful.
+[    0.897988] AppArmor: AppArmor initialized
+[    0.898988] Mount-cache hash table entries: 1024 (order: 1, 8192 bytes, linear)
+[    0.899953] Mountpoint-cache hash table entries: 1024 (order: 1, 8192 bytes, linear)
+[    0.901421] smpboot: CPU0: Intel(R) Core(TM) i9-10900K CPU @ 3.70GHz (family: 0x6, model: 0xa5, stepping: 0x5)
+[    0.902103] Performance Events: Skylake events, full-width counters, Intel PMU driver.
+[    0.902967] ... version:                2
+[    0.903955] ... bit width:              48
+[    0.904955] ... generic registers:      4
+[    0.905955] ... value mask:             0000ffffffffffff
+[    0.906955] ... max period:             00007fffffffffff
+[    0.907955] ... fixed-purpose events:   3
+[    0.908955] ... event mask:             000000070000000f
+[    0.910063] signal: max sigframe size: 3632
+[    0.911028] rcu: Hierarchical SRCU implementation.
+[    0.911955] rcu: 	Max phase no-delay instances is 400.
+[    0.914085] smp: Bringing up secondary CPUs ...
+[    0.914966] smp: Brought up 1 node, 1 CPU
+[    0.915957] smpboot: Max logical packages: 1
+[    0.916955] smpboot: Total of 1 processors activated (7391.92 BogoMIPS)
+[    0.918340] devtmpfs: initialized
+[    0.918994] x86/mm: Memory block size: 128MB
+[    0.920510] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+[    0.920968] futex hash table entries: 256 (order: 2, 16384 bytes, linear)
+[    0.922025] pinctrl core: initialized pinctrl subsystem
+[    0.923362] PM: RTC time: 05:04:41, date: 2026-09-13
+[    0.924732] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.925138] DMA: preallocated 128 KiB GFP_KERNEL pool for atomic allocations
+[    0.925974] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA pool for atomic allocations
+[    0.926986] DMA: preallocated 128 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+[    0.927975] audit: initializing netlink subsys (disabled)
+[    0.929155] thermal_sys: Registered thermal governor 'fair_share'
+[    0.929157] thermal_sys: Registered thermal governor 'bang_bang'
+[    0.929966] audit: type=2000 audit(1789275880.573:1): state=initialized audit_enabled=0 res=1
+[    0.931961] thermal_sys: Registered thermal governor 'step_wise'
+[    0.931962] thermal_sys: Registered thermal governor 'user_space'
+[    0.932957] thermal_sys: Registered thermal governor 'power_allocator'
+[    0.933982] cpuidle: using governor ladder
+[    0.935968] cpuidle: using governor menu
+[    0.937122] acpiphp: ACPI Hot Plug PCI Controller Driver version: 0.5
+[    0.938382] PCI: Using configuration type 1 for base access
+[    0.939123] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    0.963993] HugeTLB: registered 1.00 GiB page size, pre-allocated 0 pages
+[    0.964954] HugeTLB: 16380 KiB vmemmap can be freed for a 1.00 GiB page
+[    0.965955] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    0.966955] HugeTLB: 28 KiB vmemmap can be freed for a 2.00 MiB page
+[    0.969229] ACPI: Added _OSI(Module Device)
+[    0.969959] ACPI: Added _OSI(Processor Device)
+[    0.970958] ACPI: Added _OSI(Processor Aggregator Device)
+[    0.972468] ACPI: 1 ACPI AML tables successfully acquired and loaded
+[    0.973991] ACPI: _OSC evaluation for CPUs failed, trying _PDC
+[    0.975039] ACPI: Interpreter enabled
+[    0.975969] ACPI: PM: (supports S0 S3 S4 S5)
+[    0.976955] ACPI: Using IOAPIC for interrupt routing
+[    0.978031] PCI: Using host bridge windows from ACPI; if necessary, use "pci=nocrs" and report a bug
+[    0.978955] PCI: Using E820 reservations for host bridge windows
+[    0.980127] ACPI: Enabled 2 GPEs in block 00 to 0F
+[    0.983553] ACPI: PCI Root Bridge [PCI0] (domain 0000 [bus 00-ff])
+[    0.983962] acpi PNP0A03:00: _OSC: OS supports [ASPM ClockPM Segments MSI EDR HPX-Type3]
+[    0.984958] acpi PNP0A03:00: _OSC: not requesting OS control; OS requires [ExtendedConfig ASPM ClockPM MSI]
+[    0.985976] acpi PNP0A03:00: fail to add MMCONFIG information, can't access extended configuration space under this bridge
+[    0.987370] acpiphp: Slot [2] registered
+[    0.988009] acpiphp: Slot [3] registered
+[    0.989004] acpiphp: Slot [4] registered
+[    0.990010] acpiphp: Slot [5] registered
+[    0.991002] acpiphp: Slot [6] registered
+[    0.992018] acpiphp: Slot [7] registered
+[    0.993012] acpiphp: Slot [8] registered
+[    0.994005] acpiphp: Slot [9] registered
+[    0.995005] acpiphp: Slot [10] registered
+[    0.996002] acpiphp: Slot [11] registered
+[    0.997008] acpiphp: Slot [12] registered
+[    0.998007] acpiphp: Slot [13] registered
+[    0.999015] acpiphp: Slot [14] registered
+[    1.000027] acpiphp: Slot [15] registered
+[    1.001006] acpiphp: Slot [16] registered
+[    1.002006] acpiphp: Slot [17] registered
+[    1.003001] acpiphp: Slot [18] registered
+[    1.004004] acpiphp: Slot [19] registered
+[    1.005003] acpiphp: Slot [20] registered
+[    1.006016] acpiphp: Slot [21] registered
+[    1.007003] acpiphp: Slot [22] registered
+[    1.008006] acpiphp: Slot [23] registered
+[    1.009031] acpiphp: Slot [24] registered
+[    1.010010] acpiphp: Slot [25] registered
+[    1.011003] acpiphp: Slot [26] registered
+[    1.012012] acpiphp: Slot [27] registered
+[    1.013010] acpiphp: Slot [28] registered
+[    1.014009] acpiphp: Slot [29] registered
+[    1.015003] acpiphp: Slot [30] registered
+[    1.016022] acpiphp: Slot [31] registered
+[    1.017005] PCI host bridge to bus 0000:00
+[    1.017956] pci_bus 0000:00: root bus resource [io  0x0000-0x0cf7 window]
+[    1.018961] pci_bus 0000:00: root bus resource [io  0x0d00-0xffff window]
+[    1.019956] pci_bus 0000:00: root bus resource [mem 0x000a0000-0x000bffff window]
+[    1.020958] pci_bus 0000:00: root bus resource [mem 0x20000000-0xfebfffff window]
+[    1.021965] pci_bus 0000:00: root bus resource [mem 0x100000000-0x17fffffff window]
+[    1.022961] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    1.024150] pci 0000:00:00.0: [8086:1237] type 00 class 0x060000 conventional PCI endpoint
+[    1.027074] pci 0000:00:01.0: [8086:7000] type 00 class 0x060100 conventional PCI endpoint
+[    1.030157] pci 0000:00:01.1: [8086:7010] type 00 class 0x010180 conventional PCI endpoint
+[    1.032864] pci 0000:00:01.1: BAR 4 [io  0xc020-0xc02f]
+[    1.033163] pci 0000:00:01.1: BAR 0 [io  0x01f0-0x01f7]: legacy IDE quirk
+[    1.033957] pci 0000:00:01.1: BAR 1 [io  0x03f6]: legacy IDE quirk
+[    1.034955] pci 0000:00:01.1: BAR 2 [io  0x0170-0x0177]: legacy IDE quirk
+[    1.035956] pci 0000:00:01.1: BAR 3 [io  0x0376]: legacy IDE quirk
+[    1.037634] pci 0000:00:01.3: [8086:7113] type 00 class 0x068000 conventional PCI endpoint
+[    1.039815] pci 0000:00:01.3: quirk: [io  0x0600-0x063f] claimed by PIIX4 ACPI
+[    1.040016] pci 0000:00:01.3: quirk: [io  0x0700-0x070f] claimed by PIIX4 SMB
+[    1.042431] pci 0000:00:02.0: [1af4:1000] type 00 class 0x020000 conventional PCI endpoint
+[    1.045019] pci 0000:00:02.0: BAR 0 [io  0xc000-0xc01f]
+[    1.046012] pci 0000:00:02.0: BAR 1 [mem 0xfebff000-0xfebfffff]
+[    1.047111] pci 0000:00:02.0: BAR 4 [mem 0xfebf8000-0xfebfbfff 64bit pref]
+[    1.105298] ACPI: PCI: Interrupt link LNKA configured for IRQ 10
+[    1.106186] ACPI: PCI: Interrupt link LNKB configured for IRQ 10
+[    1.107202] ACPI: PCI: Interrupt link LNKC configured for IRQ 11
+[    1.108212] ACPI: PCI: Interrupt link LNKD configured for IRQ 11
+[    1.109160] ACPI: PCI: Interrupt link LNKS configured for IRQ 9
+[    1.110478] iommu: Default domain type: Translated
+[    1.110954] iommu: DMA domain TLB invalidation policy: lazy mode
+[    1.112309] SCSI subsystem initialized
+[    1.113019] ACPI: bus type USB registered
+[    1.113980] usbcore: registered new interface driver usbfs
+[    1.114978] usbcore: registered new interface driver hub
+[    1.115974] usbcore: registered new device driver usb
+[    1.116986] pps_core: LinuxPPS API ver. 1 registered
+[    1.117955] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    1.118968] PTP clock support registered
+[    1.120046] EDAC MC: Ver: 3.0.0
+[    1.121724] NetLabel: Initializing
+[    1.121955] NetLabel:  domain hash size = 128
+[    1.122954] NetLabel:  protocols = UNLABELED CIPSOv4 CALIPSO
+[    1.123983] NetLabel:  unlabeled traffic allowed by default
+[    1.125011] mctp: management component transport protocol core
+[    1.125957] NET: Registered PF_MCTP protocol family
+[    1.126965] PCI: Using ACPI for IRQ routing
+[    1.128425] vgaarb: loaded
+[    1.129132] hpet0: at MMIO 0xfed00000, IRQs 2, 8, 0
+[    1.129955] hpet0: 3 comparators, 64-bit 100.000000 MHz counter
+[    1.133987] clocksource: Switched to clocksource kvm-clock
+[    1.139272] VFS: Disk quotas dquot_6.6.0
+[    1.143625] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    1.153384] AppArmor: AppArmor Filesystem Enabled
+[    1.159203] pnp: PnP ACPI init
+[    1.163516] pnp: PnP ACPI: found 7 devices
+[    1.173026] clocksource: acpi_pm: mask: 0xffffff max_cycles: 0xffffff, max_idle_ns: 2085701024 ns
+[    1.181304] NET: Registered PF_INET protocol family
+[    1.188141] IP idents hash table entries: 8192 (order: 4, 65536 bytes, linear)
+[    1.204334] tcp_listen_portaddr_hash hash table entries: 256 (order: 0, 4096 bytes, linear)
+[    1.212809] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    1.219378] TCP established hash table entries: 4096 (order: 3, 32768 bytes, linear)
+[    1.228406] TCP bind hash table entries: 4096 (order: 5, 131072 bytes, linear)
+[    1.236560] TCP: Hash tables configured (established 4096 bind 4096)
+[    1.246002] MPTCP token hash table entries: 512 (order: 2, 12288 bytes, linear)
+[    1.253374] UDP hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    1.259567] UDP-Lite hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    1.266257] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    1.273741] NET: Registered PF_XDP protocol family
+[    1.278291] pci_bus 0000:00: resource 4 [io  0x0000-0x0cf7 window]
+[    1.285101] pci_bus 0000:00: resource 5 [io  0x0d00-0xffff window]
+[    1.292349] pci_bus 0000:00: resource 6 [mem 0x000a0000-0x000bffff window]
+[    1.301053] pci_bus 0000:00: resource 7 [mem 0x20000000-0xfebfffff window]
+[    1.307607] pci_bus 0000:00: resource 8 [mem 0x100000000-0x17fffffff window]
+[    1.316756] pci 0000:00:01.0: PIIX3: Enabling Passive Release
+[    1.322624] pci 0000:00:00.0: Limiting direct PCI/PCI transfers
+[    1.328789] PCI: CLS 0 bytes, default 64
+[    1.334377] Trying to unpack rootfs image as initramfs...
+[    1.340064] clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x6a8ce2c4a8e, max_idle_ns: 881590695206 ns
+[    1.359242] Initialise system trusted keyrings
+[    1.370069] Key type blacklist registered
+[    1.382070] workingset: timestamp_bits=36 max_order=17 bucket_order=0
+[    1.399960] zbud: loaded
+[    1.405175] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    1.416079] fuse: init (API version 7.39)
+[    1.426118] integrity: Platform Keyring initialized
+[    1.436979] integrity: Machine keyring initialized
+[    1.460041] Key type asymmetric registered
+[    1.466582] Freeing initrd memory: 6088K
+[    1.472694] Asymmetric key parser 'x509' registered
+[    1.476959] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 243)
+[    1.483059] io scheduler mq-deadline registered
+[    1.489441] shpchp: Standard Hot Plug PCI Controller Driver version: 0.4
+[    1.497850] input: Power Button as /devices/LNXSYSTM:00/LNXPWRBN:00/input/input0
+[    1.507755] ACPI: button: Power Button [PWRF]
+[    1.524448] ACPI: \_SB_.LNKB: Enabled at IRQ 10
+[    1.532387] Serial: 8250/16550 driver, 32 ports, IRQ sharing enabled
+[    1.570338] 00:03: ttyS2 at I/O 0x3e8 (irq = 4, base_baud = 115200) is a 16550A
+[    1.607412] 00:04: ttyS1 at I/O 0x2f8 (irq = 3, base_baud = 115200) is a 16550A
+[    1.642809] 00:05: ttyS0 at I/O 0x3f8 (irq = 4, base_baud = 115200) is a 16550A
+[    1.650681] Linux agpgart interface v0.103
+[    1.656256] loop: module loaded
+[    1.660274] scsi host0: ata_piix
+[    1.663381] scsi host1: ata_piix
+[    1.666133] ata1: PATA max MWDMA2 cmd 0x1f0 ctl 0x3f6 bmdma 0xc020 irq 14 lpm-pol 0
+[    1.673562] ata2: PATA max MWDMA2 cmd 0x170 ctl 0x376 bmdma 0xc028 irq 15 lpm-pol 0
+[    1.681817] ACPI: bus type drm_connector registered
+[    1.686428] tun: Universal TUN/TAP device driver, 1.6
+[    1.696764] PPP generic driver version 2.4.2
+[    1.701542] i8042: PNP: PS/2 Controller [PNP0303:KBD,PNP0f13:MOU] at 0x60,0x64 irq 1,12
+[    1.714541] serio: i8042 KBD port at 0x60,0x64 irq 1
+[    1.718728] serio: i8042 AUX port at 0x60,0x64 irq 12
+[    1.726293] mousedev: PS/2 mouse device common for all mice
+[    1.732514] input: AT Translated Set 2 keyboard as /devices/platform/i8042/serio0/input/input1
+[    1.740974] rtc_cmos 00:06: RTC can wake from S4
+[    1.748481] rtc_cmos 00:06: registered as rtc0
+[    1.755258] rtc_cmos 00:06: setting system clock to 2026-09-13T05:04:42 UTC (1789275882)
+[    1.766627] rtc_cmos 00:06: alarms up to one day, y3k, 242 bytes nvram, hpet irqs
+[    1.776312] i2c_dev: i2c /dev entries driver
+[    1.780048] device-mapper: core: CONFIG_IMA_DISABLE_HTABLE is disabled. Duplicate IMA measurements will not be recorded in the IMA log.
+[    1.791670] device-mapper: uevent: version 1.0.3
+[    1.799372] device-mapper: ioctl: 4.48.0-ioctl (2023-03-01) initialised: dm-devel@redhat.com
+[    1.809803] intel_pstate: CPU model not supported
+[    1.814417] ledtrig-cpu: registered to indicate activity on CPUs
+[    1.821061] drop_monitor: Initializing network drop monitor service
+[    1.834685] NET: Registered PF_INET6 protocol family
+[    1.846290] Segment Routing with IPv6
+[    1.849400] In-situ OAM (IOAM) with IPv6
+[    1.853759] NET: Registered PF_PACKET protocol family
+[    1.859134] Key type dns_resolver registered
+[    1.863392] IPI shorthand broadcast: enabled
+[    1.869667] registered taskstats version 1
+[    1.875500] Loading compiled-in X.509 certificates
+[    1.880164] Loaded X.509 cert 'Build time autogenerated kernel key: 65a2441d98c8a817e997fff77c85e3c2a2878aa1'
+[    1.890964] Loaded X.509 cert 'Canonical Ltd. Live Patch Signing 2025 Kmod: d541cef61dc7e793b7eb7e899970a2eef0b5dc8c'
+[    1.900163] Loaded X.509 cert 'Canonical Ltd. Live Patch Signing: 14df34d1a87cf37625abec039ef2bf521249b969'
+[    1.910245] Loaded X.509 cert 'Canonical Ltd. Kernel Module Signing 2025 Kmod: 4627603d2357a2a3f81006370894c221175893e9'
+[    1.921397] Loaded X.509 cert 'Canonical Ltd. Kernel Module Signing: 88f752e560a1e0737e31163a466ad7b70a850c19'
+[    1.931702] blacklist: Loading compiled-in revocation X.509 certificates
+[    1.938701] Loaded X.509 cert 'Canonical Ltd. Secure Boot Signing: 61482aa2830d0ab2ad5af10b7250da9033ddcef0'
+[    1.952067] Loaded X.509 cert 'Canonical Ltd. Secure Boot Signing (2017): 242ade75ac4a15e50d50c84b0d45ff3eae707a03'
+[    1.964481] Loaded X.509 cert 'Canonical Ltd. Secure Boot Signing (ESM 2018): 365188c1d374d6b07c3c8f240f8ef722433d6a8b'
+[    1.975050] Loaded X.509 cert 'Canonical Ltd. Secure Boot Signing (2019): c0746fd6c5da3ae827864651ad66ae47fe24b3e8'
+[    1.984455] Loaded X.509 cert 'Canonical Ltd. Secure Boot Signing (2021 v1): a8d54bbb3825cfb94fa13c9f8a594a195c107b8d'
+[    1.993781] Loaded X.509 cert 'Canonical Ltd. Secure Boot Signing (2021 v2): 4cf046892d6fd3c9a5b03f98d845f90851dc6a8c'
+[    2.003100] Loaded X.509 cert 'Canonical Ltd. Secure Boot Signing (2021 v3): 100437bb6de6e469b581e61cd66bce3ef4ed53af'
+[    2.021498] Loaded X.509 cert 'Canonical Ltd. Secure Boot Signing (Ubuntu Core 2019): c1d57b8f6b743f23ee41f4f7ee292f06eecadfb9'
+[    2.037239] Key type .fscrypt registered
+[    2.041470] Key type fscrypt-provisioning registered
+[    2.046204] Key type encrypted registered
+[    2.049733] AppArmor: AppArmor sha256 policy hashing enabled
+[    2.055063] ima: No TPM chip found, activating TPM-bypass!
+[    2.060169] Loading compiled-in module X.509 certificates
+[    2.065094] Loaded X.509 cert 'Build time autogenerated kernel key: 65a2441d98c8a817e997fff77c85e3c2a2878aa1'
+[    2.073534] ima: Allocated hash algorithm: sha256
+[    2.078821] ima: No architecture policies found
+[    2.082870] evm: Initialising EVM extended attributes:
+[    2.088625] evm: security.selinux
+[    2.091474] evm: security.SMACK64
+[    2.095080] evm: security.SMACK64EXEC
+[    2.100175] evm: security.SMACK64TRANSMUTE
+[    2.105095] evm: security.SMACK64MMAP
+[    2.108873] evm: security.apparmor
+[    2.113590] evm: security.ima
+[    2.116220] evm: security.capability
+[    2.119536] evm: HMAC attrs: 0x1
+[    2.122771] PM:   Magic number: 10:37:62
+[    2.130737] RAS: Correctable Errors collector initialized.
+[    2.136433] Unstable clock detected, switching default tracing clock to "global"
+[    2.136433] If you want to keep using the local clock, then add:
+[    2.136433]   "trace_clock=local"
+[    2.136433] on the kernel command line
+[    2.160057] clk: Disabling unused clocks
+[    2.167139] Freeing unused decrypted memory: 2028K
+[    2.170678] Freeing unused kernel image (initmem) memory: 4932K
+[    2.174846] Write protecting the kernel read-only data: 38912k
+[    2.180536] Freeing unused kernel image (rodata/data gap) memory: 1956K
+[    2.198527] x86/mm: Checked W+X mappings: passed, no W+X pages found.
+[    2.202259] Run /init as init process
+
+=== OVMX cluster GENESIS rig: node B (OVMXB/1026) ===
+Kernel: 6.8.0-139-generic (x86_64)
+eth0 mac=52:54:00:00:10:26
+[    3.228967] virtio_net virtio0 eth0: entered promiscuous mode
+[    3.238541] vms: loading out-of-tree module taints kernel.
+[    3.245354] vms: module verification failed: signature and/or required key missing - tainting kernel
+[    3.264231] vms: initializing VMS kernel module
+[    3.267305] vms: ethernet unit ETH0: -> eth0 (carrier up)
+[    3.272629] vms: DECnet device face NET: created (NETACP layers its circuit over ETH0:)
+[    3.277393] vms: device table initialized, console terminal OPA0: created
+[    3.282380] vms: system identity constant SYSTEM [1,4] privileges=ALL established by the executive
+[    3.287712] vms: logical-name arena ready (512 entries, 1208352 bytes)
+[    3.292411] vms: mailbox table initialized
+[    3.295995] vms: ODS-2 ACP mounted-volume table initialized
+[    3.299613] vms: /dev/vms registered successfully
+vms.ko loaded; /dev/vms present
+[    4.324898] vms: cluster port unit PEA0: -> eth0
+[    4.327941] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[    5.059594] protocol 6007 is buggy, dev eth0
+[    5.067135] %PEA0, channel verified
+[    5.067140] protocol 6007 is buggy, dev eth0
+[    5.074388] protocol 6007 is buggy, dev eth0
+[    5.078695] protocol 6007 is buggy, dev eth0
+[    5.083013] protocol 6007 is buggy, dev eth0
+[    5.089294] protocol 6007 is buggy, dev eth0
+[    5.092553] %PEA0, virtual circuit open
+[    5.345628] %CNXMAN, a connection manager was discovered on the interconnect
+[    5.353543] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[    5.368327] protocol 6007 is buggy, dev eth0
+[    5.418758] protocol 6007 is buggy, dev eth0
+[    5.423868] protocol 6007 is buggy, dev eth0
+[    5.427700] protocol 6007 is buggy, dev eth0
+[    5.645949] %CNXMAN, the cluster assigned this node a cluster system id
+[    5.694895] %CNXMAN, this node is a member of the cluster
+[    5.698399] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[    5.707486] %CNXMAN, VAXcluster state transition in progress
+[    5.712356] %CNXMAN, this node is now a VAXcluster member
+[    5.715536] %CNXMAN, system 0000000000000402 was added to the cluster
+[    5.721127] %CNXMAN, system 0000000000000401 was added to the cluster
+[    6.225013] %CNXMAN, completed VAXcluster state transition
+[    6.272409] %CNXMAN, proposing addition of a system to the cluster
+[    6.359957] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[    6.364238] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[    6.368389] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[    6.423852] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[    9.536579] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   10.457011] net_ratelimit: 112 callbacks suppressed
+[   10.457015] protocol 6007 is buggy, dev eth0
+[   10.463552] protocol 6007 is buggy, dev eth0
+[   11.211898] protocol 6007 is buggy, dev eth0
+[   12.505006] protocol 6007 is buggy, dev eth0
+[   12.508298] protocol 6007 is buggy, dev eth0
+[   13.253143] protocol 6007 is buggy, dev eth0
+[   14.553025] protocol 6007 is buggy, dev eth0
+[   14.557670] protocol 6007 is buggy, dev eth0
+[   14.769356] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   15.307037] protocol 6007 is buggy, dev eth0
+[   16.601006] protocol 6007 is buggy, dev eth0
+[   16.603837] protocol 6007 is buggy, dev eth0
+[   17.351243] protocol 6007 is buggy, dev eth0
+[   18.649030] protocol 6007 is buggy, dev eth0
+[   18.656479] protocol 6007 is buggy, dev eth0
+[   19.398255] protocol 6007 is buggy, dev eth0
+[   19.980111] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   20.697011] protocol 6007 is buggy, dev eth0
+[   20.701383] protocol 6007 is buggy, dev eth0
+[   21.450556] protocol 6007 is buggy, dev eth0
+[   22.745027] protocol 6007 is buggy, dev eth0
+[   22.749112] protocol 6007 is buggy, dev eth0
+[   23.497091] protocol 6007 is buggy, dev eth0
+[   24.792984] protocol 6007 is buggy, dev eth0
+[   24.797050] protocol 6007 is buggy, dev eth0
+[   25.237779] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   25.543005] protocol 6007 is buggy, dev eth0
+[   26.840956] protocol 6007 is buggy, dev eth0
+[   26.845173] protocol 6007 is buggy, dev eth0
+[   27.591932] protocol 6007 is buggy, dev eth0
+[   28.889014] protocol 6007 is buggy, dev eth0
+[   28.891767] protocol 6007 is buggy, dev eth0
+[   29.640296] protocol 6007 is buggy, dev eth0
+[   30.456934] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   30.937015] protocol 6007 is buggy, dev eth0
+[   30.940399] protocol 6007 is buggy, dev eth0
+[   31.689763] protocol 6007 is buggy, dev eth0
+[   32.985037] protocol 6007 is buggy, dev eth0
+[   32.987865] protocol 6007 is buggy, dev eth0
+[   33.733528] protocol 6007 is buggy, dev eth0
+[   35.033009] protocol 6007 is buggy, dev eth0
+[   35.038984] protocol 6007 is buggy, dev eth0
+[   35.702648] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   35.781841] protocol 6007 is buggy, dev eth0
+[   37.081008] protocol 6007 is buggy, dev eth0
+[   37.083843] protocol 6007 is buggy, dev eth0
+[   37.827940] protocol 6007 is buggy, dev eth0
+[   37.831169] protocol 6007 is buggy, dev eth0
+[   37.835154] protocol 6007 is buggy, dev eth0
+[   37.838989] protocol 6007 is buggy, dev eth0
+[   37.883738] protocol 6007 is buggy, dev eth0
+[   38.186814] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   40.953482] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   41.177015] net_ratelimit: 23 callbacks suppressed
+[   41.177019] protocol 6007 is buggy, dev eth0
+[   41.184317] protocol 6007 is buggy, dev eth0
+[   41.927353] protocol 6007 is buggy, dev eth0
+[   43.225008] protocol 6007 is buggy, dev eth0
+[   43.228559] protocol 6007 is buggy, dev eth0
+[   43.976205] protocol 6007 is buggy, dev eth0
+[   45.273026] protocol 6007 is buggy, dev eth0
+[   45.276255] protocol 6007 is buggy, dev eth0
+[   46.021511] protocol 6007 is buggy, dev eth0
+[   46.188230] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   47.321004] protocol 6007 is buggy, dev eth0
+[   47.325398] protocol 6007 is buggy, dev eth0
+[   48.070519] protocol 6007 is buggy, dev eth0
+[   49.368983] protocol 6007 is buggy, dev eth0
+[   49.374072] protocol 6007 is buggy, dev eth0
+[   50.119959] protocol 6007 is buggy, dev eth0
+[   51.419279] protocol 6007 is buggy, dev eth0
+[   51.422681] protocol 6007 is buggy, dev eth0
+[   51.426320] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   52.170666] protocol 6007 is buggy, dev eth0
+[   53.465005] protocol 6007 is buggy, dev eth0
+[   53.467817] protocol 6007 is buggy, dev eth0
+[   54.214139] protocol 6007 is buggy, dev eth0
+[   55.513004] protocol 6007 is buggy, dev eth0
+[   55.516619] protocol 6007 is buggy, dev eth0
+[   56.272335] protocol 6007 is buggy, dev eth0
+[   56.693966] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   57.560994] protocol 6007 is buggy, dev eth0
+[   57.564087] protocol 6007 is buggy, dev eth0
+[   58.313878] protocol 6007 is buggy, dev eth0
+[   59.609025] protocol 6007 is buggy, dev eth0
+[   59.612058] protocol 6007 is buggy, dev eth0
+[   60.359349] protocol 6007 is buggy, dev eth0
+[   61.657011] protocol 6007 is buggy, dev eth0
+[   61.660539] protocol 6007 is buggy, dev eth0
+[   61.952344] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   62.411888] protocol 6007 is buggy, dev eth0
+[   63.705024] protocol 6007 is buggy, dev eth0
+[   63.708830] protocol 6007 is buggy, dev eth0
+[   64.454134] protocol 6007 is buggy, dev eth0
+[   65.753061] protocol 6007 is buggy, dev eth0
+[   65.759288] protocol 6007 is buggy, dev eth0
+[   66.505112] protocol 6007 is buggy, dev eth0
+[   67.197816] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   67.800989] protocol 6007 is buggy, dev eth0
+[   67.805797] protocol 6007 is buggy, dev eth0
+[   68.549578] protocol 6007 is buggy, dev eth0
+[   69.571351] protocol 6007 is buggy, dev eth0
+[   69.574605] protocol 6007 is buggy, dev eth0
+[   69.580667] protocol 6007 is buggy, dev eth0
+[   69.628622] protocol 6007 is buggy, dev eth0
+[   69.931645] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   71.896992] net_ratelimit: 23 callbacks suppressed
+[   71.896996] protocol 6007 is buggy, dev eth0
+[   71.914322] protocol 6007 is buggy, dev eth0
+[   72.435946] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   72.647662] protocol 6007 is buggy, dev eth0
+[   73.945032] protocol 6007 is buggy, dev eth0
+[   73.950851] protocol 6007 is buggy, dev eth0
+[   74.694596] protocol 6007 is buggy, dev eth0
+[   75.992959] protocol 6007 is buggy, dev eth0
+[   75.996084] protocol 6007 is buggy, dev eth0
+[   76.741305] protocol 6007 is buggy, dev eth0
+[   77.661867] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   78.040999] protocol 6007 is buggy, dev eth0
+[   78.044583] protocol 6007 is buggy, dev eth0
+[   78.793410] protocol 6007 is buggy, dev eth0
+[   80.089004] protocol 6007 is buggy, dev eth0
+[   80.094168] protocol 6007 is buggy, dev eth0
+[   80.840839] protocol 6007 is buggy, dev eth0
+[   82.137032] protocol 6007 is buggy, dev eth0
+[   82.140779] protocol 6007 is buggy, dev eth0
+[   82.902160] protocol 6007 is buggy, dev eth0
+[   82.906746] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   84.185001] protocol 6007 is buggy, dev eth0
+[   84.188610] protocol 6007 is buggy, dev eth0
+[   84.935264] protocol 6007 is buggy, dev eth0
+[   86.233190] protocol 6007 is buggy, dev eth0
+[   86.236775] protocol 6007 is buggy, dev eth0
+[   86.982579] protocol 6007 is buggy, dev eth0
+[   88.137826] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   88.280980] protocol 6007 is buggy, dev eth0
+[   88.283580] protocol 6007 is buggy, dev eth0
+[   89.032077] protocol 6007 is buggy, dev eth0
+[   90.329001] protocol 6007 is buggy, dev eth0
+[   90.332044] protocol 6007 is buggy, dev eth0
+[   91.077818] protocol 6007 is buggy, dev eth0
+[   92.376987] protocol 6007 is buggy, dev eth0
+[   92.380323] protocol 6007 is buggy, dev eth0
+[   93.128655] protocol 6007 is buggy, dev eth0
+[   93.369404] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   94.424942] protocol 6007 is buggy, dev eth0
+[   94.428937] protocol 6007 is buggy, dev eth0
+[   95.174606] protocol 6007 is buggy, dev eth0
+[   96.474391] protocol 6007 is buggy, dev eth0
+[   96.477238] protocol 6007 is buggy, dev eth0
+[   97.223791] protocol 6007 is buggy, dev eth0
+[   98.521020] protocol 6007 is buggy, dev eth0
+[   98.526101] protocol 6007 is buggy, dev eth0
+[   98.630598] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   99.270247] protocol 6007 is buggy, dev eth0
+[  100.569030] protocol 6007 is buggy, dev eth0
+[  100.574175] protocol 6007 is buggy, dev eth0
+[  101.318014] protocol 6007 is buggy, dev eth0
+[  101.321541] protocol 6007 is buggy, dev eth0
+[  101.488503] net_ratelimit: 10 callbacks suppressed
+[  101.488510] protocol 6007 is buggy, dev eth0
+[  101.593024] protocol 6007 is buggy, dev eth0
+[  101.650504] protocol 6007 is buggy, dev eth0
+[  101.653623] protocol 6007 is buggy, dev eth0
+[  101.657092] protocol 6007 is buggy, dev eth0
+[  101.662286] protocol 6007 is buggy, dev eth0
+[  101.710577] protocol 6007 is buggy, dev eth0
+[  101.714633] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[  101.714639] protocol 6007 is buggy, dev eth0
+[  101.770513] protocol 6007 is buggy, dev eth0
+[  101.773666] protocol 6007 is buggy, dev eth0
+[  103.890190] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[  106.712996] net_ratelimit: 9 callbacks suppressed
+[  106.713000] protocol 6007 is buggy, dev eth0
+[  106.718980] protocol 6007 is buggy, dev eth0
+[  107.461383] protocol 6007 is buggy, dev eth0
+[  108.761012] protocol 6007 is buggy, dev eth0
+[  108.763702] protocol 6007 is buggy, dev eth0
+[  109.101396] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[  109.512403] protocol 6007 is buggy, dev eth0
+[  110.808985] protocol 6007 is buggy, dev eth0
+[  110.811732] protocol 6007 is buggy, dev eth0
+[  111.557871] protocol 6007 is buggy, dev eth0
+[  112.856981] protocol 6007 is buggy, dev eth0
+[  112.860412] protocol 6007 is buggy, dev eth0
+[  113.606746] protocol 6007 is buggy, dev eth0
+[  114.333015] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[  114.905015] protocol 6007 is buggy, dev eth0
+[  114.908948] protocol 6007 is buggy, dev eth0
+[  115.655140] protocol 6007 is buggy, dev eth0
+[  116.953013] protocol 6007 is buggy, dev eth0
+[  116.957272] protocol 6007 is buggy, dev eth0
+[  117.702290] protocol 6007 is buggy, dev eth0
+[  119.001022] protocol 6007 is buggy, dev eth0
+[  119.007382] protocol 6007 is buggy, dev eth0
+[  119.578377] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[  119.595265] protocol 6007 is buggy, dev eth0
+[  119.607792] protocol 6007 is buggy, dev eth0
+[  119.620169] protocol 6007 is buggy, dev eth0
+[  119.632797] vms: CLUSTER_DIAG_PORT row 1 index 1 -> SS$ 2680
+[  119.647804] vms: CLUSTER_DIAG_PORT row 2 index 1 -> SS$ 2680
+[  119.687418] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[  119.764000] protocol 6007 is buggy, dev eth0
+[  121.048954] protocol 6007 is buggy, dev eth0
+[  121.052251] protocol 6007 is buggy, dev eth0
+[  121.801183] protocol 6007 is buggy, dev eth0
+[  123.098758] protocol 6007 is buggy, dev eth0
+[  125.147800] net_ratelimit: 2 callbacks suppressed
+[  125.147804] protocol 6007 is buggy, dev eth0
+[  125.159512] protocol 6007 is buggy, dev eth0
+[  125.897971] protocol 6007 is buggy, dev eth0
+[  127.195360] protocol 6007 is buggy, dev eth0
+[  127.206898] protocol 6007 is buggy, dev eth0
+[  127.950922] protocol 6007 is buggy, dev eth0
+[  129.241395] protocol 6007 is buggy, dev eth0
+[  129.251081] protocol 6007 is buggy, dev eth0
+[  129.991749] protocol 6007 is buggy, dev eth0
+[  131.294112] protocol 6007 is buggy, dev eth0
+[  131.303077] protocol 6007 is buggy, dev eth0
+[  132.076873] protocol 6007 is buggy, dev eth0
+[  132.399705] ACPI: PM: Preparing to enter system sleep state S5
+[  132.403615] reboot: Power down

@@ -932,6 +932,34 @@ struct cnxman_join {
 	 * vms-4838-rejoin-2node-20260913).
 	 */
 	uint32_t foreign_transition_frames;
+	/*
+	 * op-0x02 REQUESTS THIS NODE WITHHELD BECAUSE IT IS ALREADY A MEMBER
+	 * (rd vms-c06).
+	 *
+	 * The member that receives a JOIN CLUSTER request becomes the
+	 * coordinator of an admission transition for the sender (pp. 7-37/7-38).
+	 * A node the executive already records as a committed member -- cl->state
+	 * MEMBER and a real CLUB local CSID -- has nothing to be admitted to, so
+	 * it asks nobody, and the request it did not send is counted here rather
+	 * than left as silence.
+	 *
+	 * MEASURED: the founder of the live 2-node rig sent one anyway, and 1 run
+	 * in 3 the voteless node it had just admitted took the job, re-admitted
+	 * it at a new CSID and became its coordinator -- role=joiner
+	 * csid=0x00010003 coord=0x00010002 epoch=3 on the only node that could
+	 * hold quorum (proof-run1-roleswap-nodeAB, 2026-09-13).
+	 */
+	uint32_t admission_withheld;
+	/*
+	 * CSIDs OFFERED TO A NODE THAT ALREADY HOLDS ONE AS A MEMBER, REFUSED.
+	 *
+	 * A rejoining system takes a new CSID (p. 7-25) because it is being
+	 * admitted; a system already in the cluster is not, and the slot every
+	 * nodemap addresses it by is not a peer's to move. Counted, announced
+	 * once, never adopted. The same CSID arriving again is not a
+	 * reassignment and is not counted here.
+	 */
+	uint32_t csid_reassign_refused;
 
 	/* ---- the honest omissions, each visible in the diagnostics ---- */
 	uint32_t membership_records; /* op-0x06 bursts received               */

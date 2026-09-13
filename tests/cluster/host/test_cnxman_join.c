@@ -4515,6 +4515,222 @@ static void test_e80_only_a_connected_member_is_re_issued_to(void)
 	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u, "nothing was emitted");
 }
 
+/* ==========================================================================
+ * rd vms-c06: A NODE THAT IS ALREADY IN THE CLUSTER IS A SERVER, NOT A
+ * SUPPLICANT
+ *
+ * THE WALL, live on the 2-node genesis rig (capture
+ * tests/lab/captures/vms-c06-rejoin-2node-20260913/proof-run1-roleswap-nodeAB).
+ * Node A -- VOTES=1, the ONLY node that can hold quorum -- founded generation 1
+ * at t=8 s (role=founder csid=0x00010001 epoch=1), discovered node B, admitted
+ * it as B's coordinator ... and then, on the join the connection-manager beat
+ * drives to every newly-appeared system (rd vms-f6b), sent B an op-0x02. B's
+ * console 0.05 s later: "proposing addition of a system to the cluster"; A's:
+ * "the cluster assigned this node a cluster system id", "this node is now a
+ * VAXcluster member". A was read back holding role=joiner csid=0x00010003
+ * coord=0x00010002 epoch=3 -- the founder re-joined UNDER the voteless node it
+ * had just admitted, and the cluster's only vote was now a follower.
+ *
+ * It was a COIN TOSS, not a certainty: in the two runs that passed, the same
+ * op-0x02 went out and B happened to be mid-transition and answered "another
+ * system is coordinating a state transition; deferring". So the fix is not a
+ * timing change -- it is that the request must never be made.
+ *
+ * The two edges below are the two halves: a member ASKS nobody, and a member
+ * ACCEPTS no new identity. Each has its negative control, because a gate that
+ * also silenced a real joiner would be worse than the defect.
+ * ========================================================================== */
+
+/* The executive state a FOUNDER really holds: cnxman_coord_found() minted the
+ * CSID into the CLUB and cnxman_phase2_commit() wrote MEMBER. Those two
+ * writers are not in this bed, so their EFFECT is set up here -- and the FSM
+ * under test reads only the effect. */
+static void bed_make_committed_member(vms_csid_t csid)
+{
+	cnxman_club_learn_local_csid(&g.cl.club, csid);
+	g.cl.state = VMS_CLUSTER_MEMBER;
+}
+
+/* Did this node put a cat-0x01 op-0x02 on ANY connection? */
+static uint32_t n_sent_catop(uint8_t cat, uint8_t op)
+{
+	uint32_t i, n = 0u;
+
+	for (i = 0; i < g.n_sent; i++) {
+		if (g.sent[i].len == VMS_CM_BODY_LEN &&
+		    g.sent[i].body[VMS_OFB_CM_CATEGORY] == cat &&
+		    g.sent[i].body[VMS_OFB_CM_OPCODE] == op)
+			n++;
+	}
+	return n;
+}
+
+static void test_c06_a_member_asks_nobody_to_admit_it(void)
+{
+	uint32_t len;
+
+	printf("\n-- vms-c06: a committed member sends NO op-0x02 --\n");
+	bed_init();
+	bed_set_identity();
+	bed_make_committed_member(0x00010001u);
+
+	drive_to_admit();   /* the same drive -- it just must not end in ADMIT */
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADVERTISE,
+			"the join stays in [ADVERTISE]: there is no request "
+			"outstanding, so there is no silence clock to start");
+	ct_check_eq_u32(g.j.config_sent, 0u, "no op-0x02 was built");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 0u,
+			"... and none reached the wire on any connection");
+	ct_check_eq_u32(g.j.admission_withheld, 1u,
+			"the request NOT made is counted, not left as silence");
+	ct_check(bed_logged("asks nobody to admit it"),
+		 "... and said once on OPA0:");
+
+	/* NON-VACUITY: the gate silences the ASK and nothing else. This node
+	 * still owes the new system its identity (E73), and still says it. */
+	ct_check_eq_u32(g.j.model_sent, 1u, "the op-0x14 MODEL still went out");
+	ct_check_eq_u32(g.j.params_sent, 1u, "the op-0x01 PARAMS still went out");
+
+	/* And the withholding is not a failure: nothing about this join broke,
+	 * and no membership was un-asserted (the E80 clock is what would have
+	 * walked the cluster declining members for not answering a question
+	 * nobody was asked). */
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS + 2u);
+	ct_check_eq_u32(g.j.requests_unanswered, 0u, "nobody is declined");
+	ct_check_eq_u32(g.j.attempts_exhausted, 0u, "no attempt is exhausted");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADVERTISE, "and it stays there");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u,
+			"INV-6: the founder still holds the CSID it founded on");
+	ct_check_eq_u32(g.cl.state, (uint32_t)VMS_CLUSTER_MEMBER,
+			"... and is still a member of its own cluster");
+
+	/*
+	 * ... and the OUTCOME the live run inverted: an op-0x05 from the new
+	 * system naming this node at a different slot moves nothing. Asserted
+	 * as an outcome rather than through one mechanism -- [ADVERTISE] has no
+	 * [CSID_LEARNED] cell AND the cell that does have one refuses a
+	 * reassignment (test_c06_a_members_csid_is_not_reassigned) -- so this
+	 * check survives either one being re-plumbed.
+	 */
+	len = mk_membrec((uint32_t)OWN_SYSID, 0x00010003u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u,
+			"the founder's slot is not moved by the system it "
+			"admitted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "and is still held");
+}
+
+/* THE CONTROL: the same drive on a node the executive does NOT call a member
+ * asks, exactly as before. The gate reads state; it is not a removed feature. */
+static void test_c06_a_joiner_still_asks(void)
+{
+	printf("\n-- vms-c06 control: a real joiner still sends its op-0x02 --\n");
+	bed_init();
+	bed_set_identity();
+
+	drive_to_admit();
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "it reaches [ADMIT]");
+	ct_check_eq_u32(g.j.config_sent, 1u, "one op-0x02 was built");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 1u,
+			"... and it is on the wire");
+	ct_check_eq_u32(g.j.admission_withheld, 0u, "nothing was withheld");
+
+	/* And the CONJUNCTION is load-bearing: a node that holds a CSID but
+	 * has NOT been committed (an admission that has not finished) is still
+	 * a joiner and still asks. */
+	bed_init();
+	bed_set_identity();
+	cnxman_club_learn_local_csid(&g.cl.club, 0x00010003u);
+	g.cl.state = VMS_CLUSTER_JOINING;
+	drive_to_admit();
+	ct_check_eq_u32(g.j.config_sent, 1u,
+			"a CSID without a commitment is not membership");
+	ct_check_eq_u32(g.j.admission_withheld, 0u, "so nothing is withheld");
+}
+
+static void test_c06_a_members_csid_is_not_reassigned(void)
+{
+	uint32_t len;
+
+	printf("\n-- vms-c06: a committed member keeps the CSID it holds --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+
+	/*
+	 * The admission this node really ran: it was assigned slot 1, and the
+	 * transition that committed made it a member. [ADMIT] is the state the
+	 * live founder's join was in when the second assignment arrived, and it
+	 * is the state whose table HAS the [CSID_LEARNED] cell -- so this is
+	 * where the gate is reachable and where it is proven.
+	 */
+	len = mk_membrec((uint32_t)OWN_SYSID, 0x00010001u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u, "slot 1 adopted");
+	ct_check_eq_u32(g.j.membrecs_adopted, 1u, "... and counted");
+	g.cl.state = VMS_CLUSTER_MEMBER;   /* what phase2 does on the commit */
+
+	/* The op-0x05 that named node A and carried slot 3 in the live run. */
+	len = mk_membrec((uint32_t)OWN_SYSID, 0x00010003u);
+	(void)join_feed(len);
+
+	ct_check_eq_u32(g.j.membrecs_seen, 2u, "the record parsed");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u,
+			"the CLUB still holds the identity this node really "
+			"has -- not the one a peer offered it");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "... and it is valid");
+	ct_check_eq_u32(g.j.csid_reassign_refused, 1u,
+			"the reassignment is counted");
+	ct_check_eq_u32(g.j.membrecs_adopted, 1u,
+			"and NOT reported as a second adoption: `adopted` is "
+			"read back from the CLUB, never from the attempt");
+	ct_check(bed_logged("keeps the one the cluster assigned it"),
+		 "... and said once on OPA0:");
+	ct_check(g.j.echoes_sent >= 1u,
+		 "the record is still ANSWERED -- refusing a member breaks the "
+		 "join (sec 4(p))");
+
+	/* The SAME CSID again is not a reassignment and is not counted. */
+	len = mk_membrec((uint32_t)OWN_SYSID, 0x00010001u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.j.csid_reassign_refused, 1u, "still one");
+	ct_check_eq_u32(g.j.membrecs_adopted, 2u,
+			"re-asserting what this node already holds IS an "
+			"adoption of the same fact");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u, "unchanged");
+}
+
+/* THE CONTROL, and p. 7-25's own rule: a system that is BEING admitted takes
+ * the new CSID -- including a rejoiner that gets a different slot than it had.
+ * (test_membrec_readopted_on_a_new_assignment proves the slot-4 -> slot-5
+ * rejoin; this proves the gate does not touch it.) */
+static void test_c06_a_rejoiner_still_takes_a_new_csid(void)
+{
+	uint32_t len;
+
+	printf("\n-- vms-c06 control: a system being admitted still adopts --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1030ull;
+
+	len = mk_membrec(1030u, 0x00010004u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010004u, "slot 4 adopted");
+
+	/* ... and the rejoin's NEW slot, with the old one still in the CLUB
+	 * and cl->state not yet MEMBER: this is the vms-c06 rejoin payoff's own
+	 * shape, and it must be untouched. */
+	len = mk_membrec(1030u, 0x00010005u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010005u,
+			"slot 5 on the rejoin -- re-adopted, not refused");
+	ct_check_eq_u32(g.j.csid_reassign_refused, 0u, "nothing was refused");
+	ct_check_eq_u32(g.j.membrecs_adopted, 2u, "both adoptions counted");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -4587,6 +4803,10 @@ int main(void)
 	test_e80_all_declined_backs_off_then_asks_again();
 	test_e80_a_decline_with_no_name_says_so();
 	test_e80_only_a_connected_member_is_re_issued_to();
+	test_c06_a_member_asks_nobody_to_admit_it();
+	test_c06_a_joiner_still_asks();
+	test_c06_a_members_csid_is_not_reassigned();
+	test_c06_a_rejoiner_still_takes_a_new_csid();
 
 	return ct_summary("test_cnxman_join");
 }

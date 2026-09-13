@@ -1241,34 +1241,39 @@ if [ "$MODE" = "xnode" ]; then
 fi
 
 # --------------------------------------------------------------------------
-# rd vms-c06 BARRIER-RELEASE DIAGNOSTIC (NON-FAILING). node A's own CLUB
-# projection (RIG-A-CLUB, cluster_node.c print_club_line off
+# rd vms-c06 BARRIER-RELEASE ASSERTION (HARD). Node A's own CLUB projection
+# (RIG-A-CLUB, cluster_node.c print_club_line off
 # vms_club_view_wire.transition_active) carries `transition`: 1 while the
 # coordinator is inside a CNXMAN_COORD_BARRIER round, 0 once
-# coord_try_release() has actually let it go. Every genesis run measured so
-# far (tests/lab/captures/xnode-dlm-2node-20260911.log, RIG-A-CLUB lines from
-# node B's admission through t=150s+) shows node A's OWN transition holding
-# at 1 for the rest of its polling window -- the coordinator opens the
-# barrier for B's admission but never finishes releasing it. CN=2/MEMBER is
-# still reached on both sides (the barrier stall does not block admission),
-# so this is reported HONESTLY as a latent gap (rd vms-c06) rather than
-# hidden.
+# coord_try_release() has actually let it go. It is node A's OWN executive
+# talking about its OWN coordinator -- a readback, not a rig label (INV-6).
 #
-# THIS IS A DIAGNOSTIC, NOT A GATE, ON PURPOSE. The stall is real and
-# UNFIXED until vms-c06 lands; turning this into a hard assertion today would
-# red main's own genesis proof for everyone, for a defect this item did not
-# introduce and is not chartered to fix. Once vms-c06's fix is in, flip the
-# `if` below to fail the run (e.g. `RFAIL=1; ... exit 1`) so a regression of
-# the barrier-release path is caught for real.
+# WHAT IT USED TO SAY, AND WHY IT IS A GATE NOW. Every genesis run measured
+# before vms-c06 (tests/lab/captures/xnode-dlm-2node-20260911.log, RIG-A-CLUB
+# from node B's admission through t=150 s+) showed this holding at 1 for the
+# rest of the run: the coordinator opened the barrier for B's admission and
+# never finished releasing it, because the joiner's op-0x0b step reports were
+# being eaten one FSM short of it (cnxman_join_rx_body's "NOT OURS TO EAT").
+# CN=2 was still reached, so it was reported as a non-failing diagnostic rather
+# than hidden. vms-c06 fixed the release, and a barrier that stalls again is a
+# real regression of a path a rejoin depends on -- so it now FAILS the run.
 A_TRANSITION=$(rig_field A CLUB transition)
 echo ""
 if [ "$A_TRANSITION" = "0" ]; then
 	echo "  BARRIER-RELEASE: REACHED (node A's own transition=0 -- the"
 	echo "  coordinator's barrier round completed)"
 else
-	echo "  BARRIER-RELEASE: NOT REACHED (transition=${A_TRANSITION:-?}) --"
-	echo "  latent coordinator-barrier stall, tracked rd vms-c06. Diagnostic"
-	echo "  only; does not fail this proof (see comment above)."
+	echo "  BARRIER-RELEASE: NOT REACHED (transition=${A_TRANSITION:-?})"
+	echo "  The coordinator opened a barrier round for the admission and"
+	echo "  never released it -- rd vms-c06's own defect, back. Read node A's"
+	echo "  %CNXMAN transcript and the op-0x0b step reports on its CSB."
+	echo "  GENESIS 2-NODE PROOF FAILED (barrier release)"
+	echo "=========================================="
+	echo "--- node A console tail ---"
+	tail -n 40 "$OUT/nodeA.console.log" 2>/dev/null
+	echo "--- node B console tail ---"
+	tail -n 40 "$OUT/nodeB.console.log" 2>/dev/null
+	exit 1
 fi
 
 if cn2_reached && [ "$A_ROLE" = "founder" ] && [ "$B_ROLE" = "joiner" ]; then

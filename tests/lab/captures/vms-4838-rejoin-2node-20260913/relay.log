@@ -1,0 +1,9 @@
+RELAY up: listening on 16010, dialing 127.0.0.1:16009; reconnect-b=True
+RELAY waiting for node B's first connection
+RELAY node B connected
+RELAY node A connected -- the segment is up
+RELAY round 1 ended (node B's leg closed)
+RELAY waiting up to 90s for node B to reconnect (round 2)
+RELAY node B reconnected (round 2)
+RELAY round 2 ended (node B's leg closed)
+RELAY waiting up to 90s for node B to reconnect (round 3)

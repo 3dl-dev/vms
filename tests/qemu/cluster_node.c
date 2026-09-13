@@ -2168,6 +2168,21 @@ static int rig_poll(int fd, const struct node_cfg *c)
 		sleep(1);
 		rig_sample_take(fd, &s);
 		rig_report(c, fd, t + 1u, &s);
+		/*
+		 * rd vms-4838 (REJOIN-AS-TARGET): a periodic CDT snapshot, not
+		 * just the one at the very end of the run. p. 7-30's reconnect
+		 * hold has the SURVIVOR redial "ANOTHER connection" once a
+		 * second while a member is away -- a genuinely NEW Con.ID, not
+		 * the dead one reused -- so this is not a same-conid check; it
+		 * is a bracket. Sampled on the SURVIVOR (node A) across an
+		 * evacuation window, it is the executive's own CDT table
+		 * showing whether a connection to the departed peer exists at
+		 * all at each five-second mark, which is what turns "node A
+		 * kept dialling" from a design-doc claim into something this
+		 * rig actually read back.
+		 */
+		if ((t + 1u) % 5u == 0u)
+			rig_dump_conn(fd, c);
 	}
 	rig_sample_take(fd, &s);
 	rig_verdict(c, &s);

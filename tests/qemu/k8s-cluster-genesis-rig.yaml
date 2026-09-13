@@ -28,7 +28,14 @@
 # its own segment, node B loses the quorum that rested on A's learned vote and
 # must STALL a clustered $ENQ while node A, still meeting QUORUM on its own
 # vote, grants the identical request; when the segment heals B's SAME stalled
-# request must complete).
+# request must complete), or `rejoin` (rd vms-4838, REJOIN-AS-TARGET: after
+# CN=2 settles, node B is EVACUATED -- its own QEMU process killed, no
+# graceful shutdown -- while node A still holds its CSB inside
+# RECNXINTERVAL, then relaunched with the SAME SYSGEN identity; it must
+# adopt node A's member-initiated VMS$VAXcluster connection instead of
+# opening a second one -- node B's own passive capture of the rejoin boot
+# must show ZERO VMS$VAXcluster CONNECT_REQ frames from its own MAC -- and
+# both nodes must end at MEMBER, CN=2).
 apiVersion: v1
 kind: Pod
 metadata:
@@ -40,13 +47,13 @@ spec:
   restartPolicy: Never
   containers:
     - name: rig
-      image: 192.168.2.43:30500/ovmx-genesis-rig:b6d3
+      image: 192.168.2.43:30500/ovmx-genesis-rig:4838-1
       imagePullPolicy: Always
       env:
-        #  proof | negctl | noderive | xnode | qhang
+        #  proof | negctl | noderive | xnode | qhang | rejoin
         #  -- see run_cluster_genesis_2node.sh
         - name: RIG_MODE
-          value: "qhang"
+          value: "rejoin"
         - name: OUT_DIR
           value: /lab/genesis-rig-out
       securityContext:

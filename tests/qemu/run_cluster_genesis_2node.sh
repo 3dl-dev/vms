@@ -56,6 +56,19 @@
 #           run, one SYSGEN digit apart -- so a MEMBER in the proof run can only
 #           have come from a real, wire-learned CSID.
 #
+#   rejoin  (rd vms-4838, REJOIN-AS-TARGET) node B joins normally, is then
+#           EVACUATED (its own QEMU process killed -9, no graceful shutdown)
+#           while node A still holds its CSB inside RECNXINTERVAL, and is
+#           relaunched with the SAME SYSGEN identity -- a real reboot, not a
+#           network blackout. join_cm_take_held() (vms_cnxman_join_fsm.c)
+#           must have node B adopt node A's member-initiated VMS$VAXcluster
+#           connection instead of opening a second one: node B's OWN passive
+#           capture of its rejoin boot must show ZERO VMS$VAXcluster
+#           CONNECT_REQ frames sourced from its own MAC, and both nodes must
+#           end at MEMBER, CN=2. Node B's two boots go through the
+#           reconnect-tolerant segment relay (segment_relay.py --reconnect-b),
+#           since node A's own netdev is never restarted.
+#
 #   xnode   (rd vms-94c) the proof run, PLUS a cross-node DLM phase after
 #           membership settles. Each node scans its OWN candidate name set,
 #           finds one the PEER masters (read back from GET_RESMASTER, never
@@ -148,6 +161,30 @@ if [ "$MODE" = "qhang" ]; then
 	CUT_AT="${RIG_CUT_AT:-100}"      # both phases have begun by now
 	HEAL_AT="${RIG_HEAL_AT:-145}"    # 20s to notice + margin, inside the hold
 fi
+# rd vms-4838 (REJOIN-AS-TARGET): the EVACUATE->REJOIN run. Node B's own QEMU
+# process is killed and relaunched with the SAME SYSGEN identity, so this
+# reuses qhang's proven RECNX/STAGGER pair (RECNXINTERVAL must survive the
+# whole evacuation dwell, and the stagger must exceed it or node A never
+# founds) but drives an actual process kill + relaunch instead of a segment
+# cut.
+REJOIN=0
+MEMBER_SEEN=0
+if [ "$MODE" = "rejoin" ]; then
+	REJOIN=1
+	RECNX="${RIG_RECNX:-45}"
+	STAGGER="${RIG_STAGGER:-55}"        # > RECNX, or node A never founds
+	WINDOW_A="${RIG_WINDOW_A:-200}"     # must outlive both of node B's boots
+	B_WINDOW1="${RIG_B_WINDOW1:-45}"    # node B's FIRST boot: only needs to
+					     # reach MEMBER before this rig kills it
+	B_WINDOW2="${RIG_B_WINDOW2:-60}"    # node B's REJOIN boot: long enough to
+					     # settle and dump its own diagnostics
+	WAIT_MEMBER_TIMEOUT="${RIG_WAIT_MEMBER_TIMEOUT:-40}"
+	POST_MEMBER_SETTLE="${RIG_POST_MEMBER_SETTLE:-3}"
+	# > the 20s channel-listen timeout (so node A's executive really NOTICES
+	# the departure before the heal), < RECNX (so its CSB is still held).
+	EVAC_DWELL="${RIG_EVAC_DWELL:-25}"
+	WALL="${RIG_WALL:-420}"
+fi
 if [ "$MODE" = "xnode" ]; then
 	XNODE=1
 	WINDOW_A="${RIG_WINDOW_A:-150}"
@@ -176,6 +213,7 @@ echo "=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ==="
 echo "mode=$MODE"
 echo "accel=${ACCEL#-accel } group=$GROUP recnx=${RECNX}s stagger=${STAGGER}s"
 [ "$XNODE" = "1" ] && echo "cross-node phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s, linger=${LINGER}s)"
+[ "$REJOIN" = "1" ] && echo "rejoin phase: ON (B_WINDOW1=${B_WINDOW1}s evac_dwell=${EVAC_DWELL}s B_WINDOW2=${B_WINDOW2}s)"
 echo "node A: OVMXA/1025 VOTES=$VOTES_A EXPECTED_VOTES=1 VAXCLUSTER=2"
 echo "node B: OVMXB/$SYSID_B VOTES=0          VAXCLUSTER=2"
 echo ""
@@ -201,11 +239,15 @@ segment_netdev() {
 	# $1 = node tag
 	if [ "$1" = "A" ]; then
 		echo "socket,id=net0,listen=127.0.0.1:${SEGMENT_PORT}"
-	elif [ "$QHANG" = "1" ]; then
-		# THE PARTITION (rd vms-b6d). B's frames go to segment_relay.py,
-		# which forwards them to A -- except during its cut window, when
-		# it drops them. Neither guest is told; each discovers the loss
-		# the way a real system does, by its channel timing out.
+	elif [ "$QHANG" = "1" ] || [ "$REJOIN" = "1" ]; then
+		# THE PARTITION (rd vms-b6d) or THE RECONNECT-TOLERANT LEG
+		# (rd vms-4838). B's frames go to segment_relay.py, which
+		# forwards them to A -- either dropping them during a cut
+		# window (qhang), or, in --reconnect-b mode (rejoin), tolerating
+		# node B's own QEMU process being killed and a fresh one
+		# reconnecting here while node A's own leg stays up throughout.
+		# Neither guest is told anything either way; each discovers
+		# what happened the way a real system does.
 		echo "socket,id=net0,connect=127.0.0.1:${RELAY_PORT}"
 	else
 		echo "socket,id=net0,connect=127.0.0.1:${SEGMENT_PORT}"
@@ -215,7 +257,11 @@ segment_netdev() {
 LAUNCH_PID=0
 launch_node() {
 	# $1=tag $2=scsnode $3=sysid $4=votes $5=expected_votes $6=mac $7=window
+	# $8=outbase (optional; defaults to node<tag>) -- lets RIG_MODE=rejoin
+	# keep node B's two boots in their own file sets instead of the second
+	# one clobbering the first.
 	local tag="$1" mac="$6"
+	local outbase="${8:-node${tag}}"
 	local append; append=$(node_cmdline "$1" "$2" "$3" "$4" "$5" "$7")
 	local netdev; netdev=$(segment_netdev "$tag")
 
@@ -225,9 +271,9 @@ launch_node() {
 		-m 512M -smp 1 -nographic -no-reboot -nodefaults \
 		-netdev "$netdev" \
 		-device "virtio-net-pci,netdev=net0,mac=${mac},romfile=" \
-		-serial "file:$OUT/node${tag}.console.log" \
-		-serial "file:$OUT/node${tag}.ttyS1.log" \
-		-serial "file:$OUT/node${tag}.pcap.b64" \
+		-serial "file:$OUT/${outbase}.console.log" \
+		-serial "file:$OUT/${outbase}.ttyS1.log" \
+		-serial "file:$OUT/${outbase}.pcap.b64" \
 		>/dev/null 2>&1 &
 	LAUNCH_PID=$!
 }
@@ -250,15 +296,66 @@ if [ "$QHANG" = "1" ]; then
 		> "$OUT/relay.log" 2>&1 &
 	RELAY_PID=$!
 fi
+if [ "$REJOIN" = "1" ]; then
+	echo "--- starting the segment relay (reconnect-tolerant: node B may evacuate and rejoin) ---"
+	python3 /segment_relay.py --listen-port "$RELAY_PORT" \
+		--connect-port "$SEGMENT_PORT" --reconnect-b \
+		> "$OUT/relay.log" 2>&1 &
+	RELAY_PID=$!
+fi
 sleep "$STAGGER"
-echo "--- powering on node B (it must join what A formed) ---"
-launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$WINDOW_B"; PB=$LAUNCH_PID
+
+if [ "$REJOIN" = "1" ]; then
+	echo "--- powering on node B, round 1 (first join) ---"
+	launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$B_WINDOW1" nodeB-r1
+	PB1=$LAUNCH_PID
+
+	echo "--- waiting up to ${WAIT_MEMBER_TIMEOUT}s for node B to reach MEMBER ---"
+	SECS=0
+	while [ "$SECS" -lt "$WAIT_MEMBER_TIMEOUT" ]; do
+		if grep -aq "RIG-B-CLUB.*state=MEMBER" "$OUT/nodeB-r1.ttyS1.log" 2>/dev/null; then
+			MEMBER_SEEN=1
+			break
+		fi
+		sleep 1
+		SECS=$((SECS + 1))
+	done
+	if [ "$MEMBER_SEEN" = "1" ]; then
+		echo "    node B reached MEMBER at ~t=${SECS}s of its own boot; settling ${POST_MEMBER_SETTLE}s"
+		sleep "$POST_MEMBER_SETTLE"
+	else
+		echo "    node B never reached MEMBER within ${WAIT_MEMBER_TIMEOUT}s -- evacuating anyway"
+	fi
+
+	echo "--- EVACUATING node B (kill -9; node A holds its CSB and keeps dialing for ${EVAC_DWELL}s) ---"
+	kill -9 "$PB1" 2>/dev/null
+	wait "$PB1" 2>/dev/null
+	sleep "$EVAC_DWELL"
+
+	echo "--- powering on node B, round 2 (REJOIN, same SYSGEN identity) ---"
+	launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$B_WINDOW2" nodeB-r2
+	PB=$LAUNCH_PID
+else
+	echo "--- powering on node B (it must join what A formed) ---"
+	launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$WINDOW_B"
+	PB=$LAUNCH_PID
+fi
 
 ( sleep "$WALL"; kill -9 "$PA" "$PB" 2>/dev/null ) & GUARD=$!
 wait "$PA" 2>/dev/null
 wait "$PB" 2>/dev/null
 kill "$GUARD" 2>/dev/null
 [ "$RELAY_PID" != "0" ] && kill "$RELAY_PID" 2>/dev/null
+
+# RIG_MODE=rejoin: the generic helpers below read $OUT/node<tag>.*; point node
+# B's at its REJOIN round (r2) -- the state under test -- while r1's files
+# stay on disk under their own names for anyone reading the first-join
+# baseline.
+if [ "$REJOIN" = "1" ]; then
+	for ext in console.log ttyS1.log pcap.b64; do
+		[ -f "$OUT/nodeB-r2.$ext" ] && cp "$OUT/nodeB-r2.$ext" "$OUT/nodeB.$ext"
+	done
+fi
 
 # --------------------------------------------------------------------------
 # Reading the guests' executive readback
@@ -573,6 +670,162 @@ if [ "$MODE" = "qhang" ]; then
 	echo "  segment healed B's SAME stalled request completed at EX."
 	echo "=========================================="
 	exit 0
+fi
+
+if [ "$MODE" = "rejoin" ]; then
+	# ---------------------------------------------------------------
+	# rd vms-4838 (REJOIN-AS-TARGET): EVACUATE -> REJOIN, live.
+	#
+	# TWO INDEPENDENT READINGS OF THE SAME FACT, neither inferred from the
+	# other:
+	#
+	#   THE EXECUTIVE'S OWN WORDS. join_cm_take_held() logs EXACTLY ONCE
+	#   per join, THROUGH THIS NODE'S OWN ops->log (pr_info on Linux,
+	#   reaching the guest's console/dmesg in real time -- not just at
+	#   poweroff), the instant cm_connect_suppressed becomes nonzero:
+	#   "%CNXMAN, the executive already holds this pair's VMS$VAXcluster
+	#   connection: this node opens none of its own...". This IS
+	#   cm_connect_suppressed, read straight off the executive (INV-6) --
+	#   no new ioctl needed, because the counter's own activation is
+	#   already narrated on the channel this rig already captures.
+	#
+	#   THE WIRE. node B's OWN passive capture of its REJOIN boot,
+	#   decoded with this codebase's own published SCS connection-control
+	#   layout (scan_connect_wire.py) -- never a guessed offset, never
+	#   VMS's own unpublished internals (Rule 8), the SAME classification
+	#   the executive's own parser applies (VMS_FCLS_SCS_CONN_CTRL,
+	#   content=110, src/kernel-core/vms_cluster_codec.h/.c) narrowed to
+	#   ctrl_type==0 (CONNECT_REQ). The Ethernet source address is an
+	#   ordinary 802.3 field, not a VMS wire field, and says WHO put the
+	#   frame on the wire.
+	#
+	# HONEST FINDING FROM THIS RIG'S OWN TIMING (recorded, not smoothed
+	# over): node A's redial reliably WINS the race in this topology (A
+	# boots first and has been dialling since t=0), so the SAME
+	# suppression line also fires on an ORDINARY first join here -- which
+	# the fix's own commit says is correct ("either side may open it").
+	# That means round 1's own console is NOT usable as a
+	# zero-suppression control in THIS rig; it is reported below, honestly,
+	# rather than papered over. The claim this run actually proves is the
+	# one that matters at R4: the SAME correct mechanism fires across a
+	# REAL guest crash and reboot, on the real executive, and the cluster
+	# comes back to MEMBER/CN=2 because of it.
+	# ---------------------------------------------------------------
+	SUPPRESS_MSG="the executive already holds this pair's VMS\$VAXcluster connection"
+	echo ""
+	echo "=== node B round 1 (first join, before evacuation) -- ttyS1 tail ==="
+	tail -n 40 "$OUT/nodeB-r1.ttyS1.log" 2>/dev/null || echo "(no output)"
+
+	R1_SUPPRESSED=0
+	grep -aq "$SUPPRESS_MSG" "$OUT/nodeB-r1.console.log" 2>/dev/null && R1_SUPPRESSED=1
+	R2_SUPPRESSED=0
+	grep -aq "$SUPPRESS_MSG" "$OUT/nodeB-r2.console.log" 2>/dev/null && R2_SUPPRESSED=1
+
+	MAC_A="52:54:00:00:10:25"
+	MAC_B="52:54:00:00:10:26"
+
+	CONNECT_SCAN=""
+	if command -v python3 >/dev/null 2>&1 && [ -r /scan_connect_wire.py ] \
+	   && [ -s "$OUT/nodeB.pcap" ]; then
+		CONNECT_SCAN=$(python3 /scan_connect_wire.py \
+			--self-mac "$MAC_B" --peer-mac "$MAC_A" \
+			"$OUT/nodeB.pcap" 2>&1) || true
+		echo ""
+		echo "=== node B's REJOIN-round capture: VMS\$VAXcluster CONNECT_REQ census ==="
+		echo "$CONNECT_SCAN"
+	fi
+	B_CONNECT_FROM_SELF=$(num "$(echo "$CONNECT_SCAN" | \
+		sed -n 's/.*connect_req_from_self=\([0-9]*\).*/\1/p' | tail -n1)")
+	B_CONNECT_FROM_PEER=$(num "$(echo "$CONNECT_SCAN" | \
+		sed -n 's/.*connect_req_from_peer=\([0-9]*\).*/\1/p' | tail -n1)")
+
+	echo ""
+	echo "  REJOIN RUN (rd vms-4838) -- state read back after node B's SECOND"
+	echo "  boot, same SYSGEN identity as its first (round 1 member reached: "
+	echo "  ${MEMBER_SEEN}):"
+	printf "    node A: role=%s member=%s cn=%s csid=%s\n" \
+		"${A_ROLE:-?}" "${A_MEMBER:-?}" "${A_CN:-?}" "${A_CSID:-?}"
+	printf "    node B: role=%s member=%s cn=%s csid=%s\n" \
+		"${B_ROLE:-?}" "${B_MEMBER:-?}" "${B_CN:-?}" "${B_CSID:-?}"
+	printf "    node B's own executive: round1 cm_connect_suppressed-fired=%s  round2(REJOIN)=%s\n" \
+		"$R1_SUPPRESSED" "$R2_SUPPRESSED"
+	printf "    node B's own REJOIN-round capture: CONNECT_REQ from itself=%s  from peer=%s\n" \
+		"$B_CONNECT_FROM_SELF" "$B_CONNECT_FROM_PEER"
+
+	RFAIL=0
+	if [ "$MEMBER_SEEN" != "1" ]; then
+		echo "  INCONCLUSIVE (0): node B never reached MEMBER on its FIRST"
+		echo "  boot, so there was no real membership to evacuate. Nothing"
+		echo "  below was tested."
+		RFAIL=1
+	fi
+	if [ "$R2_SUPPRESSED" != "1" ]; then
+		echo "  FAILED (1a): node B's own executive did NOT log"
+		echo "  cm_connect_suppressed firing on its REJOIN boot -- see its"
+		echo "  round-2 console tail for what it did instead."
+		RFAIL=1
+	fi
+	if [ ! -s "$OUT/nodeB.pcap" ]; then
+		echo "  INCONCLUSIVE (1b): node B's REJOIN-round capture is missing or"
+		echo "  empty -- the wire half of this proof cannot be read."
+		RFAIL=1
+	elif [ "$B_CONNECT_FROM_SELF" != "0" ]; then
+		echo "  FAILED (1b): node B's own REJOIN-round capture shows"
+		echo "  $B_CONNECT_FROM_SELF VMS\$VAXcluster CONNECT_REQ frame(s) FROM"
+		echo "  ITS OWN MAC -- it opened a connect of its own instead of"
+		echo "  suppressing it, which is the exact fabrication this fix"
+		echo "  removes."
+		RFAIL=1
+	fi
+	if ! cn2_reached; then
+		echo "  NOT REACHED (2): the two nodes do not both report MEMBER"
+		echo "  with CN=2 after node B's rejoin. See RIG-B-JOINREC on the"
+		echo "  round-2 transcript above for where the drive stalled -- a"
+		echo "  stall AT op-0x02 on the MEMBER-INITIATED connection (i.e."
+		echo "  cm_connect_suppressed already fired, from BOTH readings"
+		echo "  above) with NO member reciprocation is the KNOWN relocated"
+		echo "  frontier rd vms-694 (the member's own recv_seq freeze), NOT"
+		echo "  a defect in THIS fix -- report the exact RIG-B-JOINREC/"
+		echo "  RIG-B-CDT rows rather than forcing a verdict."
+		RFAIL=1
+	fi
+	for LABEL in A B-r1 B-r2; do
+		case "$LABEL" in
+			A) F="$OUT/nodeA.console.log" ;;
+			*) F="$OUT/node${LABEL}.console.log" ;;
+		esac
+		if grep -aqE 'Kernel panic|BUG: |Oops: |general protection|%CNXMAN, bugcheck|CLUEXIT' "$F" 2>/dev/null; then
+			echo "  FAILED (3): node $LABEL's console shows a panic/bugcheck."
+			RFAIL=1
+		fi
+	done
+
+	echo ""
+	echo "  (honest note: round 1 (first join) ALSO shows"
+	echo "  cm_connect_suppressed-fired=$R1_SUPPRESSED in this rig's topology --"
+	echo "  node A's redial reliably wins the race here, so a plain first join"
+	echo "  is not a zero-suppression control on this segment. Per the fix's"
+	echo "  own design either side may open the one VMS\$VAXcluster connection;"
+	echo "  the property under test is that the SAME mechanism holds across a"
+	echo "  REAL crash+reboot, not which side wins a race.)"
+	if [ "$RFAIL" = "0" ]; then
+		echo "  REJOIN-AS-TARGET PROOF PASSED (rd vms-4838):"
+		echo "  node B was evacuated (kill -9, no graceful shutdown) and"
+		echo "  relaunched with the SAME SYSGEN identity while node A held"
+		echo "  its CSB inside RECNXINTERVAL. On that REJOIN boot, node B's"
+		echo "  own executive logged cm_connect_suppressed firing AND its own"
+		echo "  passive capture shows ZERO VMS\$VAXcluster CONNECT_REQ frames"
+		echo "  sourced from its own MAC -- it did not open a connect of its"
+		echo "  own -- and both nodes report MEMBER with CN=2 afterwards."
+		echo "  Neither node's console panicked."
+		echo "=========================================="
+		exit 0
+	fi
+	echo "=========================================="
+	echo "--- node A console tail ---"; tail -n 40 "$OUT/nodeA.console.log" 2>/dev/null
+	echo "--- node B round1 console tail ---"; tail -n 40 "$OUT/nodeB-r1.console.log" 2>/dev/null
+	echo "--- node B round2 console tail ---"; tail -n 40 "$OUT/nodeB-r2.console.log" 2>/dev/null
+	exit 1
 fi
 
 if [ "$MODE" = "xnode" ]; then

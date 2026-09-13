@@ -144,6 +144,12 @@ int main(void)
         make_record(rec, sizeof(rec), "10.2.2.2", "BETA");
         int rc = rms_textfile_append_line(HOST_SPEC, rec);
         check(rc == 0, "second host record appended over the ACP");
+        /* The host-store read-back rides rms_textfile_open()+getline over the
+         * ODS-2 ACP; if that reader ever misframes the stream-LF records (reads
+         * them as VARIABLE) this two-record survival check garbles and reddens.
+         * The tcpip stores carry no tcpip-distinct product code -- this shared
+         * reader is their can-fail anchor (vms-387/FINDING-2). */
+        /* negctl: loginout-acp-auth-from-ods2 */
         check(host_store_has(HOST_SPEC, "10.2.2.2", "BETA") &&
               host_store_has(HOST_SPEC, "10.1.1.1", "ALPHA"),
               "both host records survive -- SET HOST adds, it does not supersede");

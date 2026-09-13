@@ -750,6 +750,20 @@ struct cnxman_join {
 	 * the executive's reconnect apparatus had opened one this FSM had no
 	 * other way of learning about. */
 	uint32_t cm_resynced;
+	/*
+	 * STEP 4 REACHED, AND THIS NODE OPENED NOTHING, because the executive
+	 * already held this pair's one VMS$VAXcluster connection (spec
+	 * sec 4(O.11); book p. 7-23 makes the CSB the record of that
+	 * connection). It is the REJOIN shape, counted: a surviving member
+	 * holds a CSB for this node inside its p. 7-30 reconnect window and
+	 * dials once a second while this node is still resolving names and
+	 * walking the member's disks, so by the time the drive reaches step 4
+	 * the connection exists and a second one would be this node's own
+	 * invention rather than the cluster's. On a FIRST join nothing is
+	 * dialling an unknown system, `cdt_conid` is 0, and this stays 0 --
+	 * which is exactly the E67 reference join, unchanged.
+	 */
+	uint32_t cm_connect_suppressed;
 	/* The reconnect timeout period ran out (FAIL_TIMEOUT): the attempt was
 	 * released and this node went back to waiting for a cluster. */
 	uint32_t connect_windows_expired;

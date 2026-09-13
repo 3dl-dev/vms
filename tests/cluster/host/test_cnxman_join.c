@@ -87,6 +87,14 @@ struct bed {
 	uint8_t          inq[MAX_INQ][VMS_SCS_PROCNAME_LEN];
 	uint32_t         n_inq;
 	uint32_t         n_connect;
+	/*
+	 * ... and how many of those were VMS$VAXcluster CONNECT_REQs this node
+	 * put on the wire ITSELF. The rejoin oracle's whole connect census is
+	 * this number (spec sec 4(O.11): a crash-rejoiner opens SCS$DIRECTORY
+	 * and MSCP$DISK and NOTHING else), so it is counted separately from the
+	 * disk-client leg rather than inferred from `last_remote`.
+	 */
+	uint32_t         n_connect_cm;
 	uint8_t          last_local[VMS_SCS_PROCNAME_LEN];
 	uint8_t          last_remote[VMS_SCS_PROCNAME_LEN];
 	int              last_had_conndata;
@@ -138,6 +146,9 @@ static int bed_connect(void *ctx, vms_scs_sysid_t dst,
 	if (g.fail_connect)
 		return -1;
 	g.n_connect++;
+	if (memcmp(remote_name, cnxman_join_name_vaxcluster,
+		   VMS_SCS_PROCNAME_LEN) == 0)
+		g.n_connect_cm++;
 	memcpy(g.last_local, local_name, VMS_SCS_PROCNAME_LEN);
 	memcpy(g.last_remote, remote_name, VMS_SCS_PROCNAME_LEN);
 	g.last_had_conndata = (conndata != NULL);
@@ -2469,6 +2480,191 @@ static void test_beat_adopts_the_connection_the_executive_holds(void)
 		 "... with the burst going out on the adopted connection");
 }
 
+/* ==========================================================================
+ * THE REJOIN SHAPE (spec sec 4(O.11)) -- THIS NODE OPENS NOTHING WHEN THE
+ * EXECUTIVE ALREADY HOLDS THE PAIR'S CONNECTION
+ *
+ * THE ORACLE. vax3-class03-crash-REJOIN-SUCCESS: the rejoining system's whole
+ * outbound connect census is SCS$DIRECTORY and MSCP$DISK -- it never opens a
+ * VMS$VAXcluster connect of its own. Both surviving members open
+ * VMS$VAXcluster CONNECT_REQ *to* it, it answers as the TARGET, and its
+ * op-0x02 CONFIG and the 0x04/0x03/0x05/0x06 reciprocation all ride the
+ * member-initiated connection.
+ *
+ * WHY THAT HAPPENS, AND WHY NO "REJOIN FLAG" MAY BE INVENTED FOR IT. The
+ * rejoiner had crashed: its executive holds no record of any prior cluster, so
+ * there is no rejoin condition for it to read and a flag claiming one would be
+ * fabricated (INV-6). The asymmetry is on the OTHER side -- p. 7-30 has each
+ * survivor still holding a CSB for this node inside its reconnect window and
+ * attempting a connection "once a second" -- so the pair's ONE connection
+ * already exists by the time this node's drive reaches step 4. This node's
+ * only obligation is to READ that (p. 7-23: the CSB is the record of the
+ * connection) instead of opening a second one.
+ *
+ * WHAT THE SECOND ONE COSTS, which is why this is not cosmetic: the glue binds
+ * `cdt_conid` the instant SCS mints an outbound Con.ID, so a redundant connect
+ * moves the executive's own record OFF the live member-initiated CDT -- and
+ * the op-0x02 that starts admission goes out on the wrong connection, which is
+ * exactly the sec 4(O.11) failure this rung exists to close.
+ * ========================================================================== */
+
+/*
+ * What vms_cnxman.c does when a member opens its VMS$VAXcluster connection to
+ * this node BEFORE this node has anything to join through (the p. 7-30
+ * reconnect drive of a survivor, landing during this node's boot): the CSB is
+ * ensured and the join's acceptance policy is asked, the ladder is told
+ * CONNECT_RCVD (p. 7-24 REACCEPT), the Con.ID SCS minted is bound to the
+ * block, and the ladder and the join are told the CDT came up.
+ */
+static void member_dials_this_node_first(void)
+{
+	ct_check_eq_u32((uint32_t)cnxman_join_connect_req(&g.j, MEMBER_SYSID,
+							  ACC_CM_CONID, NULL,
+							  0u),
+			0u, "the member's inbound connect is ACCEPTED (the "
+			    "Rule of Total Connectivity, sec 4(y))");
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONNECT_RCVD, &g.ops);
+	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONN_OPEN, &g.ops);
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_opened(&g.j, ACC_CM_CONID);
+}
+
+/* The rest of the drive, unchanged: the directory round, the disk-client
+ * connect and the walk to its Unit-Offline terminator. */
+static void drive_the_rest_to_admission(void)
+{
+	uint32_t len;
+
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, MSCP_CONID);
+
+	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+}
+
+static void test_rejoin_admission_rides_the_member_initiated_connection(void)
+{
+	printf("\n-- sec 4(O.11): the admission rides the connection the "
+	       "executive already holds --\n");
+	bed_init();
+	bed_set_identity();
+
+	/* The survivor dials this node while it is still booting -- before
+	 * CLUSTER_START, so this join has no target to compare the offer with
+	 * and does NOT adopt it through the accept path. The only record of
+	 * that connection is the one the EXECUTIVE keeps. */
+	member_dials_this_node_first();
+	ct_check_eq_u32(g.j.cm_other_member, 1u,
+			"with no target yet the offer is counted, not adopted");
+	ct_check_eq_u32(g.j.cm_adopted, 0u, "... so nothing was adopted");
+	ct_check_eq_u32(g.j.cm_conid, 0u,
+			"... and this join holds no Con.ID of its own");
+	ct_check_eq_u32(g.member_csb->cdt_conid, ACC_CM_CONID,
+			"but the EXECUTIVE holds the pair's connection");
+
+	drive_the_rest_to_admission();
+
+	/* THE ORACLE'S CONNECT CENSUS. */
+	ct_check_eq_u32(g.n_connect_cm, 0u,
+			"this node opens NO VMS$VAXcluster connect of its own "
+			"when the executive already holds the pair's one");
+	ct_check_eq_u32(g.n_connect, 1u,
+			"... its whole outbound census is the MSCP$DISK "
+			"disk-client leg");
+	ct_check_eq_u32(g.j.cm_connect_suppressed, 1u,
+			"... and the suppression is COUNTED, once");
+	ct_check(bed_logged("opens none of its own"),
+		 "... and said on the console");
+
+	/* THE ADMISSION, ON THAT CONNECTION. */
+	ct_check_eq_u32(g.j.cm_conid, ACC_CM_CONID,
+			"the drive runs on the MEMBER-INITIATED Con.ID");
+	ct_check_eq_u32(g.member_csb->cdt_conid, ACC_CM_CONID,
+			"... and the executive's own record was never re-bound "
+			"away from it");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "admission started");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
+			"three cat-0x01 originations on the member's "
+			"connection");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL), "MODEL first (sec 4(o) row 1)");
+	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS), "... then PARAMS (row 2)");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "... then op-0x02, the request that starts admission, on the "
+		 "MEMBER-INITIATED connection and not on one of this node's own");
+	ct_check_eq_u32(n_sent_on(CM_CONID), 0u,
+			"and nothing at all was put on a connection of ours: "
+			"there is not one");
+	ct_check_eq_u32(g.j.send_failures, 0u, "every origination was taken");
+
+	/* INV-6: reaching ADMIT is not being a member. */
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"this node claims no membership yet");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"... and no CSID has been learned");
+}
+
+/*
+ * THE CONTROL, and the reason this is a READ rather than a mode: with nothing
+ * dialling this node -- a FIRST join, where no member holds a CSB for a system
+ * it has never seen -- `cdt_conid` is 0, nothing is suppressed, and this node
+ * opens its own VMS$VAXcluster connect exactly as the E67 reference joiner
+ * did. A blanket "the joiner never dials" would deadlock precisely here.
+ */
+static void test_first_join_still_opens_its_own_connection(void)
+{
+	printf("\n-- sec 4(O.11) control: a FIRST join still dials --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+
+	ct_check_eq_u32(g.j.cm_connect_suppressed, 0u,
+			"nothing was suppressed: the executive held no "
+			"connection to this member");
+	ct_check_eq_u32(g.n_connect_cm, 1u,
+			"this node opened its OWN VMS$VAXcluster connect");
+	ct_check_eq_u32(g.j.cm_conid, CM_CONID, "... and drives on it");
+	ct_check(sent_on_is(CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "... with op-0x02 on it, as the reference first join measured");
+}
+
+/*
+ * A CSB the ladder has GIVEN UP ON is not a connection to ride (p. 7-24
+ * DISCONNECT/DEAD). Its Con.ID is stale, so this node opens its own -- the
+ * suppression is bounded by the executive's own verdict on the connection,
+ * not by the mere presence of a number in the block.
+ */
+static void test_an_abandoned_csb_does_not_suppress_the_connect(void)
+{
+	printf("\n-- sec 4(O.11) bound: an abandoned CSB suppresses nothing "
+	       "--\n");
+	bed_init();
+	bed_set_identity();
+
+	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
+	g.member_csb->state = (uint8_t)VMS_CNXMAN_CSB_DEAD;
+
+	drive_the_rest_to_admission();
+	ct_check_eq_u32(g.j.cm_connect_suppressed, 0u,
+			"a Con.ID on a block the ladder gave up on is not a "
+			"connection this node may ride");
+	ct_check_eq_u32(g.n_connect_cm, 1u, "... so this node opens its own");
+}
+
 /*
  * The burst mask, not the lifetime counters. After a reconnect the new
  * connection has carried nothing, however much the old one carried.
@@ -4306,6 +4502,9 @@ int main(void)
 	test_retrying_never_fabricates_a_join();
 	test_expired_reconnect_window_ends_the_attempt_honestly();
 	test_beat_adopts_the_connection_the_executive_holds();
+	test_rejoin_admission_rides_the_member_initiated_connection();
+	test_first_join_still_opens_its_own_connection();
+	test_an_abandoned_csb_does_not_suppress_the_connect();
 	test_reoffer_is_per_connection_not_per_lifetime();
 	test_e77_a_new_connection_opens_at_send_msg_1();
 	test_e77_a_skewed_dialogue_is_not_stamped();

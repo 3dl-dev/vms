@@ -3109,6 +3109,22 @@ static uint32_t join_ev_aux(enum cnxman_event ev, const struct join_ev *e)
 }
 
 /*
+ * Does this table connect that event to that state at all? (rd vms-c06.)
+ *
+ * Asked BEFORE the dispatch, and only about the transition family, so that a
+ * frame another FSM owns is routed on instead of being eaten by an empty cell
+ * -- see cnxman_join_rx_body()'s "NOT OURS TO EAT" block.
+ */
+static int join_has_cell(uint8_t state, enum cnxman_event ev)
+{
+	if ((unsigned)state >= (unsigned)CNXMAN_JOIN_STATE__COUNT)
+		return 0;
+	if ((unsigned)ev >= (unsigned)CNXMAN_EV__COUNT)
+		return 0;
+	return join_table[state][ev] != NULL;
+}
+
+/*
  * EVERY [state][event] pair this FSM evaluates passes through here, so ONE
  * record per dispatch is a complete transcript of the machine -- including the
  * EMPTY CELLS, which are the interesting ones: an event the evidence does not
@@ -3579,9 +3595,42 @@ enum cnxman_join_rx cnxman_join_rx_body(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_NOT_MINE;
 	}
 
-	/* E80: recorded BEFORE the dispatch, so it is a fact about the frame
-	 * that arrived rather than about what a handler did with it. */
+	/* E80: recorded BEFORE the dispatch -- and before the routing verdict
+	 * below -- so it stays a fact about the frame that arrived rather than
+	 * about what any handler did with it. */
 	join_note_admission_progress(j, ev, &e);
+
+	/*
+	 * A TRANSITION FRAME THIS TABLE HAS NO EDGE FOR IS NOT OURS TO EAT
+	 * (rd vms-c06).
+	 *
+	 * The join's table rule -- "an empty cell is ignored and COUNTED" -- is
+	 * right for the join's OWN events and wrong for everybody else's: a
+	 * state-transition frame belongs to the barrier (FC-P3.5) or to the
+	 * coordinator (FC-P3.12), and this FSM is offered it FIRST only because
+	 * the glue routes join -> barrier -> coordinator (vms_cnxman.c
+	 * cnxman_vc_route). Returning CONSUMED for a frame this table does
+	 * nothing with does not ignore it -- it DESTROYS it, and the FSM that
+	 * owes an answer never learns it arrived.
+	 *
+	 * That is not a hypothetical. A node that FOUNDED its cluster never
+	 * reaches CNXMAN_JOIN_MEMBER, the only state whose RX_BARRIER cell
+	 * forwards; on the live 2-node rig the joiner's op-0x0b step reports
+	 * were therefore eaten here, the coordinator never sent a release, and
+	 * the barrier stood open for the rest of the run.
+	 *
+	 * So: no cell, and it is somebody else's family => NOT_MINE. The
+	 * cells that DO exist are untouched -- join_forward() still hands the
+	 * frame to the barrier itself and answers CONSUMED, so a frame is never
+	 * delivered twice.
+	 */
+	if (join_is_barrier_frame(&e.env) && !join_has_cell(j->state, ev)) {
+		j->foreign_transition_frames++;
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_NOT_MINE, 0,
+				  join_diag_catop(&e.env));
+		return CNXMAN_JOIN_RX_NOT_MINE;
+	}
 
 	{
 		uint32_t before = join_barrier_commits(j);

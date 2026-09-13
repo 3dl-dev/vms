@@ -1713,8 +1713,13 @@ static void drive_to_state(enum cnxman_join_state s)
 
 /* Fire `ev` at the FSM in whatever state it is in. Returns 0 if the event was
  * deliverable at all (every one below is). */
-static void fire(enum cnxman_event ev)
+/* Returns the routing verdict for the events that carry a BODY, so the table
+ * walk can assert not just what was counted but where the frame WENT
+ * (rd vms-c06). CNXMAN_JOIN_RX_CONSUMED for the entry points that take no
+ * body -- they are always this FSM's own. */
+static enum cnxman_join_rx fire(enum cnxman_event ev)
 {
+	enum cnxman_join_rx rx = CNXMAN_JOIN_RX_CONSUMED;
 	uint32_t len;
 
 	switch (ev) {
@@ -1751,11 +1756,11 @@ static void fire(enum cnxman_event ev)
 		break;
 	case CNXMAN_EV_RX_CONFIG:
 		len = mk_peer_params(1u, 0x0080);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_COMMIT:
 		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0081);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_MEMBERSHIP:
 		/* No coordinator CSID in this fixture: exercising the cell
@@ -1763,36 +1768,37 @@ static void fire(enum cnxman_event ev)
 		 * so it must not perturb the state this generic driver put
 		 * the FSM in. */
 		len = mk_membership_csid(0u, 'A');
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_CLOSE:
 		len = mk_cm(VMS_CM_CAT_MEMBERSHIP, VMS_CM_OP_CLOSE, 0x0082);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_TR_OPEN:
 		len = mk_open_add(EPOCH, 0x0eu);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_TR_GO:
 		len = mk_go(EPOCH);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_BARRIER:
 		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER_REL, 0x0083);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_BARRIER_ACK:
 		len = mk_cm((uint8_t)(VMS_CM_CAT_CONFIG | 0x80u),
 			    VMS_CM_OP_BARRIER, 0x0084);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_REBUILD:
 		len = mk_cm(VMS_CM_CAT_DLM, VMS_CM_OP_DLM_REBUILD, 0x0085);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	default:
 		break;
 	}
+	return rx;
 }
 
 /* The events this FSM's entry points can actually deliver. The four the shared
@@ -1896,10 +1902,35 @@ static const uint8_t expect[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	[CNXMAN_JOIN_FAILED] = { 0 },
 };
 
+/*
+ * WHOSE FRAME IS IT? (rd vms-c06.)
+ *
+ * These five events arrive as STATE-TRANSITION frames, which belong to the
+ * barrier (FC-P3.5) or the coordinator (FC-P3.12). This table is offered them
+ * first only because the glue routes join -> barrier -> coordinator, so an
+ * empty cell here means "not mine" -- the frame must go ON, and be counted as
+ * a frame this table declined rather than as one of its own events ignored.
+ * Eating them is what left a founder's coordinator with a barrier nobody could
+ * ever release.
+ */
+static int ev_belongs_to_another_fsm(enum cnxman_event ev)
+{
+	switch (ev) {
+	case CNXMAN_EV_RX_TR_OPEN:
+	case CNXMAN_EV_RX_TR_GO:
+	case CNXMAN_EV_RX_BARRIER:
+	case CNXMAN_EV_RX_BARRIER_ACK:
+	case CNXMAN_EV_RX_REBUILD:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 static void test_every_table_cell(void)
 {
 	unsigned st, k;
-	unsigned populated = 0, empty = 0;
+	unsigned populated = 0, empty = 0, routed_on = 0;
 	int all_ok = 1;
 
 	printf("\n-- the table: every [state][event] cell, populated and "
@@ -1908,7 +1939,8 @@ static void test_every_table_cell(void)
 	for (st = 0; st < (unsigned)CNXMAN_JOIN_STATE__COUNT; st++) {
 		for (k = 0; k < sizeof(walked) / sizeof(walked[0]); k++) {
 			enum cnxman_event ev = walked[k];
-			uint32_t before;
+			uint32_t before, foreign_before;
+			enum cnxman_join_rx rx;
 			int want = expect[st][ev];
 
 			drive_to_state((enum cnxman_join_state)st);
@@ -1920,7 +1952,8 @@ static void test_every_table_cell(void)
 				continue;
 			}
 			before = g.j.ignored_events;
-			fire(ev);
+			foreign_before = g.j.foreign_transition_frames;
+			rx = fire(ev);
 
 			if (want) {
 				populated++;
@@ -1930,6 +1963,25 @@ static void test_every_table_cell(void)
 					       cnxman_join_state_name(
 						       (enum cnxman_join_state)st),
 					       (unsigned)ev);
+					all_ok = 0;
+				}
+			} else if (ev_belongs_to_another_fsm(ev)) {
+				/* An empty cell for somebody else's frame:
+				 * ROUTED ON, counted as declined, and never
+				 * counted as one of this table's own ignored
+				 * events. */
+				empty++;
+				routed_on++;
+				if (rx != CNXMAN_JOIN_RX_NOT_MINE ||
+				    g.j.foreign_transition_frames ==
+					    foreign_before ||
+				    g.j.ignored_events != before) {
+					printf("  FAIL [%s][%u] is empty and "
+					       "not this FSM's frame, but it "
+					       "was not routed on (rx=%u)\n",
+					       cnxman_join_state_name(
+						       (enum cnxman_join_state)st),
+					       (unsigned)ev, (unsigned)rx);
 					all_ok = 0;
 				}
 			} else {
@@ -1948,7 +2000,10 @@ static void test_every_table_cell(void)
 	}
 	ct_check(all_ok, "every table cell behaves as the specification says");
 	printf("     (%u populated edges exercised, %u empty cells proved "
-	       "ignored-and-counted)\n", populated, empty);
+	       "ignored-or-routed-on, of which %u are another FSM's frames "
+	       "this table declined)\n", populated, empty, routed_on);
+	ct_check(routed_on > 0u,
+		 "the walk really reached the not-mine cells (rd vms-c06)");
 	ct_check(populated >= 50u,
 		 "the walk really covered the whole populated table");
 }

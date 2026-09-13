@@ -1541,6 +1541,53 @@ static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
 }
 
 /*
+ * A SYSTEM IN A RUNNING TRANSITION HAS JUST BECOME UNREACHABLE (rd vms-c06).
+ *
+ * Book p. 7-41: the coordinator abandons a transition on any rejection or
+ * connectivity loss -- and p. 7-42: after the GO it cannot be abandoned, so
+ * the lost system is dropped from the census and the remaining members are
+ * released. Both halves of that live in the FSMs
+ * (cnxman_coord_participant_lost / cnxman_barrier_coordinator_lost); until
+ * this function existed NEITHER HAD A PRODUCTION CALLER, so a transition whose
+ * peer died stood open for the life of the node -- the exact failure spec
+ * sec 4(p) says times a transition out and drops healthy members.
+ *
+ * ONE EVENT, BOTH HALVES, because this node can be running either role (or, in
+ * a multi-node cluster, both at once for different transitions): the system
+ * that just went away may be one this node owes releases to, or the one this
+ * node is waiting on for a release. The FSMs decide what the loss MEANS --
+ * this only reports that it happened, from the CSB the executive really
+ * resolved the connection to. No CSB, no report: a loss this node cannot
+ * attribute to a system is never attributed to one (INV-6).
+ *
+ * IDEMPOTENT BY CONSTRUCTION. cnxman_coord_participant_lost() returns at once
+ * for a block that is not (or is no longer) a participant, and
+ * cnxman_barrier_coordinator_lost() for a barrier that is not running -- so
+ * the close path and the reconnect beat may both report the same loss.
+ */
+static void cnxman_transition_peer_lost(struct vms_cnxman *cn,
+					struct vms_csb *csb)
+{
+	int32_t idx;
+
+	if (cn == NULL || cn->cl == NULL || csb == NULL)
+		return;
+	idx = (int32_t)cnxman_club_csb_index(&cn->cl->club, csb);
+
+	/* The COORDINATOR half: that system owed this node barrier steps. */
+	cnxman_coord_participant_lost(&cn->coord, idx);
+
+	/*
+	 * The PARTICIPANT half, and only when the block that went away is the
+	 * one this node's barrier is taking its transition FROM. A barrier
+	 * abandoned because some OTHER member lost its circuit would abandon a
+	 * transition whose coordinator is alive and still releasing steps.
+	 */
+	if (cn->barrier.coordinator_csb == idx)
+		cnxman_barrier_coordinator_lost(&cn->barrier);
+}
+
+/*
  * THE PEER ANSWERED "NO", AND BOTH HALVES OF THIS FILE HAVE TO HEAR IT (E81).
  *
  * A rejected VMS$VAXcluster connect is a fact about the SYSTEM, so it belongs to
@@ -1598,6 +1645,15 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 	 * reason SCS gave, not an interpretation of it. */
 	cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_CLOSED, (int32_t)reason,
 			 (uint32_t)local_conid);
+
+	/*
+	 * FIRST, and for EVERY close including a rejection (rd vms-c06): a
+	 * transition in flight has to hear about the loss BEFORE the CSB ladder
+	 * below proposes a new one. The other order refuses the removal with
+	 * CNXMAN_COORD_REF_BUSY -- the coordinator is still holding the
+	 * transition this very loss has just made unfinishable.
+	 */
+	cnxman_transition_peer_lost(cn, csb);
 
 	if (reason == (uint32_t)SCS_CLOSE_REJECTED) {
 		cnxman_vc_rejected(cn, csb, local_conid, reason);
@@ -2190,6 +2246,13 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 		break;
 	}
 	case CNXMAN_CSB_ACT_PROPOSE_TRANSITION:
+		/*
+		 * rd vms-c06: the beat is the ONLY path for a system that went
+		 * silent without its CDT ever closing (p. 7-30's window
+		 * expiring on its own), so the loss is reported here too --
+		 * and, as on the close path, BEFORE the removal is proposed.
+		 */
+		cnxman_transition_peer_lost(cn, csb);
 		(void)cnxman_coord_propose_remove(&cn->coord,
 						  (int32_t)rec->csb_index);
 		cnxman_glue_preload_proposed(cn);

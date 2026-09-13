@@ -910,6 +910,28 @@ struct cnxman_join {
 	uint32_t send_failures;
 	uint32_t codec_failures;
 	uint32_t ignored_events;     /* [state][event] with no edge: COUNTED  */
+	/*
+	 * TRANSITION FRAMES THIS TABLE HAS NO EDGE FOR, ROUTED ON (rd vms-c06).
+	 *
+	 * A state-transition frame (an open, a GO, a barrier step or release, a
+	 * step acknowledgement, a rebuild record) belongs to the barrier
+	 * (FC-P3.5) or to the coordinator (FC-P3.12); this FSM only ever
+	 * FORWARDS one, from the cells that say `join_forward`. In every other
+	 * state the honest answer is "not mine" -- the frame goes on to the FSM
+	 * that owns it -- and it is counted HERE rather than in
+	 * `ignored_events`, because "the join declined to eat somebody else's
+	 * frame" and "the join saw its own event in the wrong state" are
+	 * different facts.
+	 *
+	 * MEASURED, and the reason this counter exists: a FOUNDER's join never
+	 * reaches CNXMAN_JOIN_MEMBER (it joined through nobody), so on the live
+	 * 2-node rig every op-0x0b barrier step the joiner reported was
+	 * swallowed by this table's empty cell and the coordinator -- the FSM
+	 * that owes the release -- never saw one. The barrier stood open from
+	 * the first admission to the end of the run (capture
+	 * vms-4838-rejoin-2node-20260913).
+	 */
+	uint32_t foreign_transition_frames;
 
 	/* ---- the honest omissions, each visible in the diagnostics ---- */
 	uint32_t membership_records; /* op-0x06 bursts received               */

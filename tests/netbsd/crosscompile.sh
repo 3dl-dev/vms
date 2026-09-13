@@ -138,6 +138,23 @@ SRCS=(
     "$CORE/vms_scs_fsm.c"
     "$CORE/vms_scs_dir.c"
     "$CORE/vms_scs.c"
+    # rd vms-c06: the CONNECTION MANAGER. These are in
+    # src/kernel-netbsd/Makefile's SRCS and were the largest hole in this
+    # hand-maintained list -- ~13 500 lines of shared cluster core that no
+    # per-PR gate compiled for NetBSD at all. The barrier-release fix that
+    # added them touched vms_cnxman.c and vms_cnxman_join_fsm.c, and a
+    # substrate break in either is exactly the asymmetric red this list
+    # exists to catch.
+    "$CORE/vms_cluster_codec_cm.c"
+    "$CORE/vms_cnxman_csb.c"
+    "$CORE/vms_cnxman_recnx_fsm.c"
+    "$CORE/vms_cnxman_quorum.c"
+    "$CORE/vms_cnxman_phase2.c"
+    "$CORE/vms_cnxman_barrier_fsm.c"
+    "$CORE/vms_cnxman_coord_fsm.c"
+    "$CORE/vms_cnxman_join_fsm.c"
+    "$CORE/vms_cnxman_diag.c"
+    "$CORE/vms_cnxman.c"
 )
 
 # ---- teeth check ---------------------------------------------------------
@@ -169,4 +186,4 @@ echo "LD  vms.kmod.o (relocatable)"
 echo "CHK guest-payload staging (tests/netbsd/Dockerfile completeness)"
 OVMX_REPO="$REPO" bash "$REPO/tests/netbsd/check_guest_payload.sh"
 
-echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c, vms_lnm.c, vms_pe.c, vms_scs.c + the SCS FSM/directory/codec) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"
+echo "PASS: the OVMX/NetBSD vms module + shared src/kernel-core facilities (vms_eflag.c, vms_ast.c, vms_access.c, vms_mbx.c, vms_proctab.c, vms_lock.c, vms_lnm.c, vms_pe.c, vms_scs.c + the SCS FSM/directory/codec + the CONNECTION MANAGER: CLUB/CSB, reconnect, quorum, Phase 2, barrier, coordinator, join, glue) cross-compile and link for NetBSD/amd64 (${#SRCS[@]} TUs)"

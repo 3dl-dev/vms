@@ -8276,8 +8276,24 @@ cmd_coverage() {
             { defect_field "$_aname" require_fail; defect_field "$_aname" knock_on_fail; } \
                 | tr -d '"\\' | tr -s ' ' | grep -v '^ *$' >"$_anch_tmp/txt.$_aname"
         fi
-        _aseg=$(sed -n "$((_aln + 1)),$((_aln + 12))p" "$_cov_tests/$_af" \
-                | tr '\n\t' '  ' | sed 's/;.*//' | tr -d '"\\' | tr -s ' ')
+        # Bound the window to the anchored STATEMENT: accumulate lines from
+        # just below the anchor until one ENDS in ';' (a statement terminator,
+        # optionally followed by a trailing block comment), or 12 lines max for
+        # a multi-line ct_check(...). vms-b8a2: the old `sed 's/;.*//'` cut at
+        # the FIRST ';' anywhere in the joined window, which truncates a
+        # require_fail label that itself contains a ';' -- e.g. a VMS version
+        # spec "FOO.DAT;1" or ";N" syntax inside the assertion's string -- so
+        # the grep below could never find it (this is why rms_workload could not
+        # be anchored, vms-ac3). A statement ';' is at end-of-line; a ';' inside
+        # a string literal is mid-line, so end-of-line anchoring keeps both the
+        # single-statement bound AND the full label text.
+        _aseg=$(awk -v s="$((_aln + 1))" '
+                NR < s { next }
+                { print }
+                /;[[:space:]]*(\/\*.*\*\/[[:space:]]*)?$/ { exit }
+                NR >= s + 11 { exit }
+            ' "$_cov_tests/$_af" \
+                | tr '\n\t' '  ' | tr -d '"\\' | tr -s ' ')
         printf '%s\n' "$_aseg" | grep -qF -f "$_anch_tmp/txt.$_aname" \
             || echo "$_af:$_aln anchors '$_aname' but the statement under it names none of" \
                     "that defect's require_fail/knock_on_fail texts." >>"$_anch_tmp/fail"

@@ -6212,13 +6212,13 @@ EOF
 
     bg-recv-length-zeroed)
         case "$_f" in
-        facility)     echo "INET pseudo-device BGn: -- the IO\$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel-core/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
-        targets)      echo "kernel-core/vms_bg.c";;
+        facility)     echo "INET pseudo-device BGn: -- the IO\$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
+        targets)      echo "kernel/vms_bg.c";;
         suites_red)   echo "test_syssvc_bg_echo test_syssvc_ssh_kex";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed. RE-ANCHORED (vms-387): vms_ioctl_bg_recv itself moved from kernel/vms_bg.c to the substrate-agnostic kernel-core/vms_bg.c (the BGn: core/rind split, vms-9951); its own body and the a->len write-back are otherwise unchanged, so only 'targets' below was corrected, not the sed.";;
+        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed.";;
         require_fail) cat <<'EOF'
 BG $QIO IO$_READVBLK returns the exact bytes the echo peer sent back
 EOF
@@ -7096,13 +7096,7 @@ apply_edit() {
         # requires. This is the whole continuation property in one store; the
         # identity copy above it becomes dead because the caller derives when
         # shared_vms_pid is 0.
-        # RE-ANCHORED (vms-387): the assignment now sits at 12-space indent as
-        # the sole (braceless) body of `if (share_pid)` -- a bare comment in
-        # its place would leave a dangling `if` that silently pulls the next
-        # statement (`inherited = true;`) into its body (-Werror=empty-body
-        # territory), so the body is replaced with an empty `{ }` block
-        # instead of blanked to a comment or a lone `;`.
-        sed -i 's|^            shared_vms_pid = parent->vms_pid;$|            { } /* NEGCTL register-continue-identity-dropped: shared_vms_pid stays 0, CONTINUE no longer shares the activator'"'"'s VMS PID */|' "$_file";;
+        sed -i 's|^        shared_vms_pid = parent->vms_pid;$|        shared_vms_pid = 0; /* NEGCTL register-continue-identity-dropped: image does not continue its activator */|' "$_file";;
     scratch-dir-owner-not-system)
         # Single-line, uniquely-anchored inside test_syssvc_scratch_
         # writable.c's OWN provisioning duplicate (see this defect's

@@ -8024,6 +8024,23 @@ cmd_coverage() {
         fi
     fi
 
+    # --- 0c. derived scope-out: the R1 host ladder's OWNED domain (vms-181)
+    # NOT a static SCOPE_OUT_UNITS global -- sourced LIVE, every run, from
+    # tests/cluster/host/host_defects.sh's own `owned` subcommand, so the two
+    # gates cannot drift apart silently. cmd_coverage is called two ways:
+    # normally as `cmd_coverage <src-root> <tests-qemu>` (repo root = the
+    # parent of <src-root>), and from cmd_selftest as `cmd_coverage
+    # "$_st_repo/src" "$_st_repo/tests/qemu"` -- same shape, same derivation.
+    _cov_reporoot=$(dirname "$_cov_root")
+    _cov_hostdefects="$_cov_reporoot/tests/cluster/host/host_defects.sh"
+    _scope_out_units=""
+    if [ -f "$_cov_hostdefects" ]; then
+        _scope_out_units=$(sh "$_cov_hostdefects" owned | tr '\n' ' ')
+    else
+        echo "FAIL: cannot derive the R1 host ladder's scope-out: $_cov_hostdefects is missing"
+        _cov_rc=1
+    fi
+
     # --- 1. translation units -------------------------------------------
     # Executive facility .c files live in BOTH src/kernel/ (the Linux glue +
     # the not-yet-extracted facilities) AND src/kernel-core/ (the
@@ -8033,6 +8050,10 @@ cmd_coverage() {
     # to the shared core. Headers (exec_*.h) are not translation units and are
     # skipped by the *.c glob. The kernel-core glob may legitimately be empty on
     # a tree before any facility has moved (`[ -f ]` guards that).
+    #
+    # A TU in the derived scope-out above (_scope_out_units, vms-181) is
+    # exempted here: it is OWNED and floored by tests/cluster/host/
+    # host_defects.sh's own cmd_coverage instead, not by this one.
     _missing=""
     for _cov_c in "$_cov_root"/kernel/*.c "$_cov_root"/kernel-core/*.c; do
         [ -f "$_cov_c" ] || continue
@@ -8042,7 +8063,11 @@ cmd_coverage() {
         esac
         case " $_all_targets " in
             *" $_rel "*) ;;
-            *) _missing="$_missing $_rel";;
+            *)
+                case " $_scope_out_units " in
+                    *" $_rel "*) ;;
+                    *) _missing="$_missing $_rel";;
+                esac;;
         esac
     done
     if [ -n "$_missing" ]; then
@@ -8055,6 +8080,16 @@ cmd_coverage() {
         echo "PASS: every src/{kernel,kernel-core}/*.c translation unit is named by some defect's targets declaration"
     fi
 
+    if [ -n "$_scope_out_units" ]; then
+        _n_scope_out=$(echo $_scope_out_units | wc -w)
+        echo "SCOPE-OUT (DERIVED LIVE, vms-181): $_n_scope_out translation unit(s) OWNED by"
+        echo "  the R1 host ladder (tests/cluster/host/host_defects.sh 'owned') -- peer-"
+        echo "  requiring cluster FSMs/codecs a single-node VAXCLUSTER=0 QEMU guest cannot"
+        echo "  reach, covered-or-still-red by that script's OWN coverage check (vms-181),"
+        echo "  re-derived every run so the two gates cannot drift apart:"
+        for _cov_su in $_scope_out_units; do echo "    $_cov_su"; done
+    fi
+
     # --- 3. scope consistency (checked before printing the exclusion) ----
     _bad_scope=""
     for _cov_dir in $SCOPE_OUT_UNIT_DIRS; do
@@ -8065,6 +8100,14 @@ cmd_coverage() {
                 *" $_rel "*) _bad_scope="$_bad_scope $_rel";;
             esac
         done
+    done
+    # Same consistency rule for the derived scope-out (vms-181): a TU the R1
+    # host ladder claims to own must not ALSO be named by a defect here --
+    # if it is, the two gates disagree about who floors it.
+    for _cov_u in $_scope_out_units; do
+        case " $_all_targets " in
+            *" $_cov_u "*) _bad_scope="$_bad_scope $_cov_u";;
+        esac
     done
     if [ -n "$_bad_scope" ]; then
         echo "FAIL: declared OUT OF SCOPE but named by a defect:$_bad_scope"

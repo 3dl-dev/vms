@@ -114,6 +114,60 @@ mscp-srv-io-worker-registers-handler
 join-own-connect-not-suppressed"
 
 # ---------------------------------------------------------------------------
+# HOST_OWNED_UNITS (vms-181, 2026-09-13)
+#
+# The cluster-family kernel-core translation-unit domain THIS ladder OWNS --
+# every cluster-family TU under src/kernel-core/ MINUS the 6 Bucket-A TUs
+# tests/qemu/facility_defects.sh already reaches single-node (vms_cluster_
+# api.c, vms_cluster_fork.c, vms_cluster_fork_bind.c, vms_cnxman.c,
+# vms_pe.c, vms_scs.c). Those 6 execute on a lone QEMU guest with no peer at
+# all, so that gate covers them; every TU below executes only against a REAL
+# peer that speaks SCA back (a join, a barrier, a directory lookup, an MSCP
+# server accepting a connect) -- something a single-node VAXCLUSTER=0 QEMU
+# guest structurally cannot produce -- so it is THIS ladder's to floor.
+#
+# STATIC, not derived from a directory listing: peer-vs-single-node is a
+# human judgment call, not a mechanical property of a file's name or
+# location (docs/design/negctl-coverage-paydown.md SS0.1). `cmd_owned` below
+# hands this list, live, to facility_defects.sh's cmd_coverage, which trusts
+# it as ITS derived scope-out for section 1 -- a TU named here is this
+# ladder's coverage problem (cmd_coverage below), not that script's.
+# ---------------------------------------------------------------------------
+HOST_OWNED_UNITS="kernel-core/vms_cluster_codec.c
+kernel-core/vms_cluster_codec_blk.c
+kernel-core/vms_cluster_codec_cm.c
+kernel-core/vms_cluster_codec_dlm.c
+kernel-core/vms_cluster_codec_hello.c
+kernel-core/vms_cluster_codec_mscp.c
+kernel-core/vms_cluster_codec_scs.c
+kernel-core/vms_cluster_codec_vc.c
+kernel-core/vms_cluster_emit_guard.c
+kernel-core/vms_cluster_sysgen.c
+kernel-core/vms_cnxman_barrier_fsm.c
+kernel-core/vms_cnxman_coord_fsm.c
+kernel-core/vms_cnxman_csb.c
+kernel-core/vms_cnxman_diag.c
+kernel-core/vms_cnxman_join_fsm.c
+kernel-core/vms_cnxman_phase2.c
+kernel-core/vms_cnxman_quorum.c
+kernel-core/vms_cnxman_recnx_fsm.c
+kernel-core/vms_dlm_ldwv.c
+kernel-core/vms_dlm_scs.c
+kernel-core/vms_dlm_scs_fsm.c
+kernel-core/vms_mscp_cl.c
+kernel-core/vms_mscp_cl_conn_fsm.c
+kernel-core/vms_mscp_cl_fsm.c
+kernel-core/vms_mscp_cl_io_fsm.c
+kernel-core/vms_mscp_srv.c
+kernel-core/vms_mscp_srv_fsm.c
+kernel-core/vms_mscp_srv_io.c
+kernel-core/vms_pe_fsm.c
+kernel-core/vms_scs_dir.c
+kernel-core/vms_scs_fsm.c"
+
+cmd_owned() { echo "$HOST_OWNED_UNITS"; }
+
+# ---------------------------------------------------------------------------
 # Metadata (same field meanings as tests/qemu/facility_defects.sh):
 #   facility     human-readable name of the property under test.
 #   targets      source files, relative to a src/ root, the mutation edits.
@@ -647,6 +701,42 @@ cmd_apply() {
 }
 
 # ---------------------------------------------------------------------------
+# cmd_coverage (vms-181)
+#
+# "Every cluster-family TU this R1 host ladder OWNS (HOST_OWNED_UNITS,
+# above) has a host-native negative control" -- the same translation-unit
+# coverage idea as tests/qemu/facility_defects.sh's cmd_coverage section 1,
+# but scoped to just the 31 TUs this ladder claims: THAT script floors
+# "every executive facility"; this one only has to floor "the domain I said
+# I owned". CAN-FAIL, hard-RED: HOST_OWNED_UNITS is compared against
+# DEFECTS' own `targets` fields, not declared once and trusted, so adding an
+# entry above with no matching defect turns this red immediately. See
+# cmd_selftest's negative-control meta-check (INV-6) for the proof this can
+# actually go red.
+# ---------------------------------------------------------------------------
+cmd_coverage() {
+    _cov_all_targets=""
+    for _cov_d in $DEFECTS; do
+        _cov_all_targets="$_cov_all_targets $(defect_field "$_cov_d" targets)"
+    done
+
+    _cov_missing=""
+    for _cov_u in $HOST_OWNED_UNITS; do
+        case " $_cov_all_targets " in
+            *" $_cov_u "*) ;;
+            *) _cov_missing="$_cov_missing $_cov_u";;
+        esac
+    done
+
+    if [ -n "$_cov_missing" ]; then
+        echo "FAIL: HOST_OWNED_UNITS translation unit(s) with NO host-native negative control:$_cov_missing"
+        return 1
+    fi
+    echo "PASS: every HOST_OWNED_UNITS translation unit is named by some defect's targets declaration"
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # cmd_selftest <repo-root>
 #
 # STATIC, like facility_defects.sh's own selftest: proves the sed anchor
@@ -726,12 +816,38 @@ cmd_selftest() {
         done
     done
 
+    # -----------------------------------------------------------------------
+    # Negative control for cmd_coverage itself (vms-181, INV-6): a coverage
+    # gate that has never been shown able to go red is exactly the
+    # "tautology with printf calls" problem this file's own header opens
+    # with. Run cmd_coverage's logic once with HOST_OWNED_UNITS augmented by
+    # a path no defect could ever cover, and assert it (a) fails and
+    # (b) names that exact path. Run inside a subshell so the augmented list
+    # never leaks into the real HOST_OWNED_UNITS anything else here reads.
+    # -----------------------------------------------------------------------
+    _st_bogus="kernel-core/__negctl_bogus__.c"
+    _st_cov_out=$( (HOST_OWNED_UNITS="$HOST_OWNED_UNITS
+$_st_bogus"; cmd_coverage) 2>&1 )
+    _st_cov_rc=$?
+    if [ "$_st_cov_rc" -eq 0 ]; then
+        echo "FAIL: cmd_coverage did not go red when HOST_OWNED_UNITS was augmented with a"
+        echo "      path no defect could ever cover ($_st_bogus) -- the coverage check has no teeth."
+        _st_rc=1
+    elif ! printf '%s' "$_st_cov_out" | grep -qF "$_st_bogus"; then
+        echo "FAIL: cmd_coverage went red under the augmented HOST_OWNED_UNITS, but its"
+        echo "      output did not name $_st_bogus -- it failed for the wrong reason."
+        _st_rc=1
+    else
+        echo "  ok: cmd_coverage's own negative control fires (a bogus owned unit reddens it, named)"
+    fi
+
     if [ "$_st_rc" -eq 0 ]; then
         echo "PASS: every defect's sed mutation injects into the current tree (executed,"
         echo "      real sed + cmp against a throwaway copy), its injection-landed check"
-        echo "      demonstrably fires on a no-op re-apply, and every require_fail text"
+        echo "      demonstrably fires on a no-op re-apply, every require_fail text"
         echo "      appears literally in its suite's source (a text search, not a run --"
-        echo "      only run_host_negctl.sh actually builds and runs anything)."
+        echo "      only run_host_negctl.sh actually builds and runs anything), and"
+        echo "      cmd_coverage's own negative control (vms-181) is proven able to fire."
     fi
     return $_st_rc
 }
@@ -740,6 +856,8 @@ case "${1:-}" in
     list)     shift; cmd_list "$@";;
     field)    shift; cmd_field "$@";;
     apply)    shift; cmd_apply "$@";;
+    owned)    shift; cmd_owned "$@";;
+    coverage) shift; cmd_coverage "$@";;
     selftest) shift; cmd_selftest "$@";;
-    *)  echo "usage: host_defects.sh {list|field|apply|selftest} ..." >&2; exit 2;;
+    *)  echo "usage: host_defects.sh {list|field|apply|owned|coverage|selftest} ..." >&2; exit 2;;
 esac

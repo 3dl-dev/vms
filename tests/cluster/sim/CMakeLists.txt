@@ -109,6 +109,18 @@ target_include_directories(test_sim_mscp_write PRIVATE
 cluster_sim_test(test_sim_dlm_directory scenarios/dlm_directory.c)
 target_link_libraries(test_sim_dlm_directory PRIVATE cluster_host_cnxman)
 
+# rd vms-ci.6 (the V1.0 R5 release gate): the ROLLING-EVACUATION harness. A
+# workload is moved off a departing member onto a survivor and the cluster
+# STAYS UP -- proven as the shipping quorum ENFORCEMENT (cnxman_quorum_*, needs
+# cluster_host_cnxman) verdict on each survivor's own CLUB, corroborated by the
+# survivors HOLDING their PE circuits (cluster_sim_core) across the departure's
+# real last gasp. The workload itself and its lock remaster are a documented
+# stub (rd vms-sys / vms-1ee); the sequence + survivor-takeover preconditions +
+# "stays up" enforcement check are host-proven now. Same "add the file, then ONE
+# line here" path as dlm_directory above.
+cluster_sim_test(test_sim_rolling_evacuation scenarios/rolling_evacuation.c)
+target_link_libraries(test_sim_rolling_evacuation PRIVATE cluster_host_cnxman)
+
 # FC-P4.6's rung-R2 leg: the REAL lock engine (vms_lock.c on FC-P4.9's host
 # backend), the REAL requester FSM and the REAL Lock Directory Weight Vector in
 # one host process, against SIMULATED master/directory systems. It proves the

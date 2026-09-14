@@ -846,7 +846,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_devtab_remove_terminal() gates the unlink on the row being a genuine dynamic terminal (\`if (dynamic_term) exec_list_del(&dev->list);\` then \`if (!dynamic_term) return -ENODEV;\`). Guarding that gate to \`if (0 && dynamic_term)\` makes the withdrawal a permanent no-op: the RTAn: row is never unlinked and the call returns -ENODEV, so a minted terminal can never be torn down -- the executive leaks the unit and \$GETDVI keeps resolving RTA0: after the session ended. The MINT side is untouched (the row is still created with dynamic_term=1, DC\$_TERM class, OPA0-shape devchar), so every creation/characteristics/\$ASSIGN-owner/PTY-round-trip assertion stays green; and the OPA0: (console) removal-refused check stays green because the console is not dynamic_term and is correctly still refused. Only the two withdrawal assertions redden. The original \`if (dynamic_term)\` text is gone after substitution (no-op re-apply, selftest).";;
+        why)          echo "vms_devtab_remove_terminal() classifies the row it looked up (\`dynamic_term = (dev->dynamic_term != 0);\`) and then, only for a genuine dynamic terminal, unlinks it (\`if (dynamic_term) exec_list_del(&dev->list);\`) and frees it, else returns -ENODEV. Forcing that LOCAL classification to 0 (\`dynamic_term = 0;\`) makes remove treat EVERY row as non-dynamic: the unlink is skipped and the call returns -ENODEV before exec_free(), so a minted RTAn: terminal can never be torn down -- the executive leaks the unit and \$GETDVI keeps resolving RTA0: after the session ended. This is a CLEAN no-op withdrawal, not a use-after-free: the row is neither unlinked nor freed, so the guest survives and only the withdrawal assertions redden. (Guarding the \`if (dynamic_term)\` gate instead would skip the unlink but still reach exec_free() on a still-linked node -> rc=139 SIGSEGV, a fatal defect -- rejected for that reason.) The MINT side is untouched (the row is still created with dynamic_term=1, DC\$_TERM class, OPA0-shape devchar), so every creation/characteristics/\$ASSIGN-owner/PTY-round-trip assertion stays green; and the OPA0: (console) removal-refused check stays green because the console is genuinely non-dynamic and is correctly still refused. Only the two withdrawal assertions redden. The original \`dynamic_term = (dev->dynamic_term != 0);\` text is gone after substitution (no-op re-apply, selftest).";;
         require_fail) cat <<'EOF'
 vms_devtab_remove_terminal("RTA0:") withdraws the unit it minted
 EOF
@@ -6661,12 +6661,17 @@ apply_edit() {
         # it leaves the counter unmoved. Gone after apply (no-op re-apply).
         sed -i 's|dev->errcnt++;|/* NEGCTL devtab-io-error-not-charged: increment dropped */|' "$_file";;
     devtab-terminal-withdrawal-not-honored)
-        # UNIQUE TEXT: `if (dynamic_term)` occurs once, in
-        # vms_devtab_remove_terminal()'s unlink gate. Guarding it to
-        # `if (0 && dynamic_term)` makes the unlink a no-op, so the call returns
-        # -ENODEV and the RTAn: row is never withdrawn. The original text is gone
-        # after substitution (no-op re-apply, selftest).
-        sed -i 's|    if (dynamic_term)|    if (0 \&\& dynamic_term) /* NEGCTL devtab-terminal-withdrawal-not-honored */|' "$_file";;
+        # UNIQUE TEXT: `dynamic_term = (dev->dynamic_term != 0);` occurs once, in
+        # vms_devtab_remove_terminal(). Forcing the LOCAL classification to 0
+        # makes remove treat EVERY row as non-dynamic: `if (dynamic_term)` skips
+        # the exec_list_del (no unlink) and `if (!dynamic_term)` returns -ENODEV
+        # BEFORE exec_free() -- a clean no-op withdrawal, NOT a use-after-free.
+        # (Guarding the `if (dynamic_term)` gate instead would skip the unlink but
+        # still fall through to exec_free() on a still-linked node -> rc=139 SIGSEGV,
+        # a FATAL defect that kills the guest; this local-classification form keeps
+        # it non-fatal so only the two withdrawal assertions redden.) The original
+        # text is gone after substitution (no-op re-apply, selftest).
+        sed -i 's|    dynamic_term = (dev->dynamic_term != 0);|    dynamic_term = 0; /* NEGCTL devtab-terminal-withdrawal-not-honored: remove classifies every row non-dynamic -> -ENODEV, no unlink/free */|' "$_file";;
     setexit-status-not-recorded)
         # Unique line (vms_ioctl_getexit's shared post-switch read); narrowed to
         # a ternary that passes SEL_SELF through and masks every cross-process

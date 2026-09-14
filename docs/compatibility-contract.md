@@ -35,7 +35,7 @@ The reference platform is **OpenVMS Alpha V8.4** (the last DEC/VSI supported ver
 
 ### What Is Permanently Out of Scope
 
-See Section 7 for the complete list. Summary: binary compatibility, VAX-specific APIs, Itanium-specific APIs, cluster services, DECwindows/Motif, MACRO-32 assembly calling conventions, OpenVMS POSIX subsystem, ACMS transaction processing, DECnet networking APIs, and kernel-mode privileged services.
+See Section 7 for the complete list. Summary: binary compatibility, VAX-specific APIs, Itanium-specific APIs, DECwindows/Motif, MACRO-32 assembly calling conventions, OpenVMS POSIX subsystem, ACMS transaction processing, and kernel-mode privileged services. (Cluster services and DECnet/TCP/IP networking are **not** excluded — they are Tier-1 project pillars actively built as executive-resident subsystems and layered products; only a subset of their programmatic C-API surface remains partial, detailed in Section 7 and the Compatibility Surface Register.)
 
 ---
 
@@ -454,7 +454,7 @@ The 75 codes defined cover:
 - All codes required by the `$VMS_STATUS_*` macro contract
 - The most frequently tested codes in typical VMS C programs
 
-**Gap analysis**: The codes absent from OVMX's `ssdef.h` are codes for hardware faults, device driver errors, cluster operations, security auditing, and other services that are permanently out of scope. Code that tests for these absent codes will see them as undefined symbols at compile time, which is the correct and detectable failure mode.
+**Gap analysis**: The codes absent from OVMX's `ssdef.h` are codes for hardware faults, device driver errors, and other services outside the currently-implemented surface. Code that tests for these absent codes will see them as undefined symbols at compile time, which is the correct and detectable failure mode.
 
 The status bit layout (facility, severity, message number) in `stsdef.h` is complete and matches the Alpha ABI. Programs that construct or decompose status codes programmatically using the STS$_ macros will work correctly regardless of which specific codes are defined.
 
@@ -549,7 +549,7 @@ uint16_t _last_rec_size;
 
 ## 7. What Will Never Be Supported
 
-The following are permanently excluded from OVMX's compatibility scope. Programs that require these cannot be ported without substantial modification.
+The following are excluded from OVMX's compatibility scope; programs that require these cannot be ported without substantial modification. Note that two areas once listed here — **Clustering** and **Networking (DECnet / TCP/IP)** — have since moved into scope and are actively built; their subsections below are retained with corrections explaining what is now real and what remains a genuine gap.
 
 ### Hardware and Architecture
 
@@ -567,10 +567,27 @@ The following are permanently excluded from OVMX's compatibility scope. Programs
 
 ### Clustering
 
-- **OpenVMS Cluster services**: SYS$CRMPSC with global sections, SYS$LCKPAG cluster locks, CSID-based SYS$GETSYI queries for remote nodes.
-- **Distributed Lock Manager (cluster-wide)**: sys$enq with `ENQ$M_NODLCKBLK` or cross-node locks.
-- **Galaxy services**: SYS$GALAXY_*, hardware partitions.
-- **Clusterwide logical names**: LNM$M_CLUSTERWIDE flag silently degrades to system-wide.
+**Correction — clustering is *not* permanently out of scope.** OpenVMS Cluster
+services are a Tier-1 project pillar (`vms-ci`) and are actively built as an
+**executive-resident** subsystem: the CNXMAN connection manager, SCS transport,
+a cluster-wide Distributed Lock Manager, and MSCP disk serving all ship, and a
+three-node cluster has been demonstrated (`docs/demos/cluster-cn3.md`).
+Cross-node `sys$enq`/`sys$deq` run against the executive DLM. The single source
+of truth for real vs. partial vs. absent is the Compatibility Surface Register
+(`docs/compat/facilities/cluster-dlm.yaml`, `connection-manager.yaml`,
+`scs.yaml`, `mscp-serve.yaml`).
+
+The following cluster-related **programmatic C-API** items remain **absent or
+degraded** today (per the register) — these are the honest current gaps, not
+permanent exclusions:
+
+- **Cluster-wide logical names**: the `LNM$M_CLUSTERWIDE` flag degrades to
+  system-wide scope; no cross-member replication is built
+  (`cluster-logicals.yaml`, absent).
+- **Cluster-wide global sections**: `$MGBLSC`/`$CRMPSC` with cluster scope
+  (`cluster-logicals.yaml`, absent).
+- **Galaxy services**: `SYS$GALAXY_*` and hardware partitions (Galaxy lock-table
+  headers exist, but the services are not implemented).
 
 ### Subsystems
 
@@ -584,15 +601,32 @@ The following are permanently excluded from OVMX's compatibility scope. Programs
 
 ### Networking
 
-- **DECnet**: SYS$QIO with IO$_ACCESS to "_NLA0:", "_NET:", network object services. Programs that open DECnet connections via logical unit numbers or task-to-task communication.
-- **UCX/TCPIP Services (QIO interface)**: Low-level socket operations through SYS$QIO with TCPIP channels. The high-level C socket library (`#include <socket.h>` on VMS) may work through POSIX, but QIO-based TCP/IP does not apply.
-- **LAT**: Local Area Transport.
+**Correction — DECnet and TCP/IP are *not* permanently out of scope.** Both are
+in scope and actively built as layered products: DECnet Phase IV is a Tier-1
+pillar (`vms-30e`) and TCP/IP Services is a layered-product epic (`vms-67f`). See
+the register (`docs/compat/facilities/decnet.yaml`, `tcpip-services.yaml`,
+`ssh.yaml`) and the operator guides
+(`docs/decnet-configuration-guide.md`, `docs/tcpip-configuration-guide.md`) for
+the full real vs. partial vs. absent breakdown.
+
+- **DECnet Phase IV** (real, partial): `NCP` node configuration, outbound
+  `SET HOST` (CTERM — proven live against a real OpenVMS VAX V7.3), inbound
+  authenticated `SET HOST`, and inbound file `COPY` via FAL/DAP all run over an
+  executive-resident DECnet engine. **Still absent**: generic task-to-task
+  programmatic logical-link `$QIO` to a DECnet object, and the outbound DCL
+  `COPY NODE::` datalink bridge.
+- **TCP/IP Services** (real, partial): TCP `$QIO` over the executive `BGn:` INET
+  device, a BSD-sockets RTL veneer, `TCPIP$CONFIG`, the `TCPIP` management verb,
+  `PING`, `TELNET`/`FTP` clients, and a wrapped OpenSSH server all ship (IPv4
+  literal only). **Still absent**: a BIND resolver, DHCP, multiple interfaces,
+  and a raw NIC-level (`EWA0:`) data path.
+- **LAT**: Local Area Transport remains out of scope.
 
 ### CLI and Command Definitions
 
 - **CDU**: Command Definition Utility-compiled command tables for use with CLI$ services. The OVMX DCL parser does not consume CDU-format command definition files.
 - **FDL**: File Definition Language for controlled file creation via `sys$create` with XAB chains defining RMS structure. Partial support only.
-- **DCL commands not listed in Section 3.7**: ACCOUNTING, ANALYZE, ATTACH, BACKUP, CONVERT, DIFFERENCES, DISMOUNT, DUMP, INITIALIZE, INSTALL, LOGI, MACRO, MOUNT, PATCH, PRINT, SUBMIT, WAIT.
+- **DCL command breadth**: OVMX implements 58 of the ~150 DCL verbs — a real breadth gap, but the implemented verbs are genuine, not facades. The single source of truth is `docs/compat/facilities/dcl-verbs.yaml` (see also `docs/dcl-commands.md`). Verbs previously listed here as excluded — ACCOUNTING, ANALYZE, ATTACH, BACKUP, CONVERT, DIFFERENCES, DISMOUNT, DUMP, INITIALIZE, INSTALL, MOUNT, PRINT, SUBMIT, WAIT — are now present (each partial to varying degrees; PRINT/SUBMIT enqueue but there is no batch/print engine). Genuinely absent verbs include ALLOCATE/DEALLOCATE, PATCH, DEBUG, MERGE, the `MACRO` assembler, and the native `START/QUEUE`/`STOP/QUEUE`/`INITIALIZE/QUEUE` spellings (queue management is reshaped as `SET QUEUE`).
 
 ### Other
 

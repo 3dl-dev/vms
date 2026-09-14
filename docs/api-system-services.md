@@ -449,12 +449,16 @@ uint32_t sys$cancel(uint16_t chan);
 
 **Return Values:** Always returns `SS$_NORMAL`.
 
-**Description:** Stub — returns `SS$_NORMAL` without canceling anything.
-The current OVMX I/O model completes all operations synchronously before
-returning, so there are no pending operations to cancel.
+**Description:** Known gap (facade-risk, tracked vms-c8c) — returns
+`SS$_NORMAL` without canceling anything. Note that OVMX `sys$qio` is genuinely
+**asynchronous** (io_uring; see `sys_qio.c`/`sys_uring.c`), so pending async I/O
+on a channel *can* exist — this no-op does **not** cancel it. A real `sys$cancel`
+must `io_uring_prep_cancel` the channel's in-flight requests and complete each
+IOSB with `SS$_CANCEL`, firing the AST/event flag.
 
-**VMS Compatibility:** Not functionally compatible. Asynchronous I/O
-cancellation is deferred to a future implementation.
+**VMS Compatibility:** Not functionally compatible. The earlier rationale that
+the I/O model is synchronous no longer holds — the async model can leave pending
+operations; genuine cancellation is a tracked follow-on (vms-c8c).
 
 ---
 
@@ -1427,8 +1431,8 @@ uint32_t sys$suspend(
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `pidadr` | `const uint32_t *` | No | PID to suspend; NULL = current process |
-| `prcnam` | `const struct dsc$descriptor_s *` | No | Process name; currently ignored |
+| `pidadr` | `const uint32_t *` | No | VMS PID of the target, resolved by the executive; NULL = current process |
+| `prcnam` | `const struct dsc$descriptor_s *` | No | Process name; resolved by the executive when `pidadr` is NULL |
 
 **Return Values:**
 
@@ -1437,8 +1441,11 @@ uint32_t sys$suspend(
 | `SS$_NORMAL` | Signal sent |
 | `SS$_NONEXPR` | Process does not exist |
 
-**Description:** Sends `SIGSTOP` to the target process. Resume with
-`sys$resume`.
+**Description:** The target is resolved in the executive by `pidadr` (VMS PID)
+or `prcnam` (process name), the same way `sys$delprc` resolves — a process the
+executive does not carry returns `SS$_NONEXPR` (vms-904), no longer a raw
+`kill()` on a VMS PID mis-cast as a Linux PID. `SIGSTOP` is then delivered to
+the resolved process. Resume with `sys$resume`.
 
 ---
 
@@ -1483,8 +1490,8 @@ uint32_t sys$forcex(
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `pidadr` | `const uint32_t *` | No | Target PID; NULL = current process |
-| `prcnam` | `const struct dsc$descriptor_s *` | No | Process name; currently ignored |
+| `pidadr` | `const uint32_t *` | No | VMS PID of the target, resolved by the executive; NULL = current process |
+| `prcnam` | `const struct dsc$descriptor_s *` | No | Process name; resolved by the executive when `pidadr` is NULL |
 | `code` | `uint32_t` | Yes | Exit status code to force |
 
 **Return Values:**
@@ -1497,8 +1504,11 @@ uint32_t sys$forcex(
 **Description:**
 
 If `pidadr` and `prcnam` are both NULL, calls `sys$exit(code)` on the current
-process. Otherwise sends `SIGUSR1` to the target process. Note that the `code`
-is only used when forcing exit on the calling process.
+process. Otherwise the target is resolved in the executive by `pidadr` (VMS PID)
+or `prcnam` (process name) — the same way `sys$delprc` resolves, returning
+`SS$_NONEXPR` for a process the executive does not carry (vms-904) — and
+`SIGUSR1` is delivered to the resolved process. Note that the `code` is only used
+when forcing exit on the calling process.
 
 **VMS Compatibility:** On real VMS, `sys$forcex` sends the exit status to the
 target's image exit handler. OVMX uses `SIGUSR1` which does not carry the
@@ -1523,8 +1533,8 @@ uint32_t sys$setpri(
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `pidadr` | `const uint32_t *` | No | Target PID; currently ignored (always operates on current process) |
-| `prcnam` | `const struct dsc$descriptor_s *` | No | Process name; currently ignored |
+| `pidadr` | `const uint32_t *` | No | VMS PID of the target, resolved by the executive; NULL = current process |
+| `prcnam` | `const struct dsc$descriptor_s *` | No | Process name; resolved by the executive when `pidadr` is NULL |
 | `pri` | `uint32_t` | Yes | New priority (0=lowest, 31=highest) |
 | `prvpri` | `uint32_t *` | No | Receives previous priority |
 
@@ -1533,16 +1543,21 @@ uint32_t sys$setpri(
 | Status | Meaning |
 |--------|---------|
 | `SS$_NORMAL` | Priority set |
+| `SS$_NONEXPR` | Target process does not exist |
 | `SS$_NOPRIV` | `setpriority()` failed (likely insufficient privilege) |
 
 **Description:**
 
-Maps VMS priority (0-31) to Linux nice values (-20 to 19):
-VMS 31 (highest) → nice -20; VMS 0 (lowest) → nice 19.
-Only affects the calling process regardless of `pidadr`.
+The target is resolved in the executive by `pidadr` (VMS PID) or `prcnam`
+(process name), the same way `sys$delprc` resolves — a process the executive
+does not carry returns `SS$_NONEXPR`, no longer a silent success that changed the
+*caller's* own priority (vms-dff7). Priority maps VMS priority (0-31) to Linux
+nice values (-20 to 19): VMS 31 (highest) → nice -20; VMS 0 (lowest) → nice 19,
+applied to the resolved process via `setpriority()`.
 
-**VMS Compatibility:** Cannot set priority on other processes. Priority
-increases (below current nice value) typically require root on Linux.
+**VMS Compatibility:** Sets priority on the resolved target process. Priority
+increases (a lower nice value) typically require privilege on Linux, which
+surfaces as `SS$_NOPRIV`.
 
 ---
 

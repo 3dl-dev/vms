@@ -30,7 +30,9 @@ Commands are registered in the `builtin_verbs[]` table. VMS file specifications,
 | DUMP | DU | Display file contents in hex/ASCII |
 | EDIT | ED | Invoke the text editor |
 | EXIT | EX | Terminate command procedure or session |
+| FTP | FTP | Transfer files to/from a remote host (TCP/IP client) |
 | HELP | HE | Display help information |
+| INITIALIZE | INIT | Initialize (format) a volume |
 | INQUIRE | INQ | Read input and assign to symbol |
 | INSTALL | INST | Manage known images |
 | LIBRARY | LIB | Manage text/help/object libraries |
@@ -41,6 +43,7 @@ Commands are registered in the `builtin_verbs[]` table. VMS file specifications,
 | MOUNT | MOU | Mount a volume on a device |
 | OPEN | OP | Open a file for I/O |
 | PHONE | PHO | Interactive conversation utility |
+| PING | PIN | Send ICMP echo requests to a host (TCP/IP) |
 | PIPE | PIP | Execute a DCL pipeline |
 | PRINT | PRI | Queue a file for printing |
 | PRODUCT | PROD | Software product management |
@@ -61,6 +64,7 @@ Commands are registered in the `builtin_verbs[]` table. VMS file specifications,
 | SYSGEN | SYSG | System parameter utility |
 | SYSMAN | SYSM | System management utility |
 | TCPIP | TCP | TCP/IP network management |
+| TELNET | TEL | Connect to a remote host (TCP/IP TELNET client) |
 | TYPE | TY | Display file contents |
 | WAIT | WA | Wait for a time interval |
 | WRITE | WR | Write a record to a file |
@@ -1068,6 +1072,58 @@ TCPIP subcommand [parameters]
 
 **VMS Compatibility:** Partial. Implements the most common TCPIP management subcommands.
 
+### TELNET
+
+Connect to a remote host with the TCP/IP TELNET client.
+
+```
+TELNET host [port]
+```
+
+**Parameters:**
+- host -- Remote host (dotted-quad IPv4 literal; no name resolution)
+- port -- (Optional) TCP port (default 23)
+
+Opens an interactive TELNET session over the executive `BGn:` device
+(`$ASSIGN TCPIP$DEVICE:` + `$QIO`).
+
+**VMS Compatibility:** Partial. Client only; IPv4 literal only.
+
+### FTP
+
+Transfer files to or from a remote host with the TCP/IP FTP client.
+
+```
+FTP host [port]
+```
+
+**Parameters:**
+- host -- Remote host (dotted-quad IPv4 literal; no name resolution)
+- port -- (Optional) TCP port (default 21)
+
+Connects over the executive `BGn:` device.
+
+**VMS Compatibility:** Partial. Client only; IPv4 literal only.
+
+### PING
+
+Send ICMP echo requests to a host and report the results.
+
+```
+PING host [/COUNT=n]
+```
+
+**Parameters:**
+- host -- Target host (dotted-quad IPv4 literal; no name resolution)
+
+**Qualifiers:**
+- `/COUNT=n` -- Number of echo requests (default 4)
+
+Sends real ICMP echo requests over a raw socket on the executive `BGn:` device.
+If the `BGn:` device is unavailable, reports `%PING-E-NONET` / `SS$_NOSUCHDEV`.
+
+**VMS Compatibility:** Partial. IPv4 literal only.
+
 ---
 
 ## System Utilities
@@ -1233,6 +1289,24 @@ DISMOUNT device:
 
 **VMS Compatibility:** Partial.
 
+### INITIALIZE
+
+Initialize (format) a volume, writing a fresh file structure via `INITIALIZE.EXE`.
+
+```
+INITIALIZE device: volume-label
+```
+
+**Parameters:**
+- device: -- Device to initialize
+- volume-label -- Volume label to write
+
+Both the device and a volume label are required; an optional size (in MB) may be
+supplied. Note this is the volume-initialize verb — queue initialization is
+reshaped as `SET QUEUE` (there is no native `INITIALIZE/QUEUE`).
+
+**VMS Compatibility:** Partial.
+
 ### PHONE
 
 Interactive conversation utility.
@@ -1328,7 +1402,7 @@ SYSMAN [subcommand]
 
 **Fully compatible commands** -- These behave identically to their VMS counterparts for standard usage: APPEND, CLOSE, CONTINUE, COPY, CREATE, DEFINE, DEASSIGN, DELETE, DIRECTORY, EXIT, HELP, INQUIRE, LOGOUT, OPEN, PIPE, PURGE, READ, RECALL, RUN, SEARCH, SET DEFAULT, SET VERIFY, SHOW DEFAULT, SHOW LOGICAL, SHOW TIME, SPAWN, TYPE, WAIT, WRITE.
 
-**Partially compatible commands** -- These work but lack some VMS-specific features: ANALYZE, ASSIGN (single table), ATTACH, BACKUP, CONVERT, DIFFERENCES, DUMP, EDIT, INSTALL, LIBRARY, LINK, MAIL, MONITOR, MOUNT/DISMOUNT, PRODUCT, REPLY/REQUEST, SORT, SYSGEN, SYSMAN, SET (various subcommands), SHOW (various subcommands), TCPIP.
+**Partially compatible commands** -- These work but lack some VMS-specific features: ANALYZE, ASSIGN (single table), ATTACH, BACKUP, CONVERT, DIFFERENCES, DUMP, EDIT, INSTALL, LIBRARY, LINK, MAIL, MONITOR, MOUNT/DISMOUNT, PRODUCT, REPLY/REQUEST, SORT, SYSGEN, SYSMAN, SET (various subcommands), SHOW (various subcommands), TCPIP, TELNET, FTP, PING, INITIALIZE.
 
 **Submit-only commands** -- The job or file is really enqueued, but there is no batch engine: nothing ever dequeues and runs or prints it: PRINT, SUBMIT.
 

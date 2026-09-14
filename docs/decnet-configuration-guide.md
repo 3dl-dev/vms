@@ -154,7 +154,8 @@ driver) — never raw `tcsetattr`/`cfmakeraw` above the VMS layer. An optional
 (`docs/oracle/vax-sethost-cterm.console.txt`). If `DECNETD.EXE` is not staged
 on the system disk, `SET HOST` reports
 `%SET-I-NOTAVAIL, DECnet is not available on this system` rather than faking a
-session. Register row: `decnet$set-host`, **partial/real**.
+session. Register row: `decnet$set-host`, **implemented/real** — proven live
+against a real OpenVMS VAX V7.3 (see [Honest state](#honest-state) below).
 
 ### Inbound: an authenticated LOGINOUT, not an auto-login
 
@@ -173,15 +174,23 @@ consumed as a credential — `LOGINOUT` always prompts a fresh `Username:` and
 
 ### Honest state
 
-OVMX-to-OVMX `SET HOST` (client driving a genuine Connect Initiate to object
-42 and the server refusing honestly without an executive) is proven in
-`tests/integration/decnet_set_host_live.sh`. **Not yet proven:** the full
-authenticated round trip (client → real remote `LOGINOUT` challenge →
-`%REM-S-END`) against a *live VAX* in the loop, and a CI leg carrying both
-`CAP_NET` and a real `/dev/vms` executive with `DECNETD.EXE` staged into the
-boot image — both tracked as follow-ons on the `decnet$set-host` register row.
-Only one CTERM session at a time is supported, and there is no
-read-solicitation byte-transparent pump yet on the inbound side.
+**Outbound `SET HOST` is proven live against a real OpenVMS VAX V7.3**
+(rd vms-a70, capture `tests/lab/captures/decnet-sethost-dcl-20260911/`). OVMX's
+`SET HOST` client drove the full sequence — Connect Initiate → Connect Confirm →
+NSP Link Service credit grant → CTERM foundation negotiation (byte-exact against
+the oracle) → the real VAX `LOGINOUT` challenge → an authenticated live DCL that
+ran commands (`F$GETSYI(NODENAME)`=`VAX1`, `SHOW SYSTEM` returning VAX1's live
+process table, including the session's own `_RTA1:` process) → clean `LOGOUT` +
+NSP disconnect. The earlier CTERM-Bind facade is retired: the foundation/Bind
+protocol was re-grounded byte-for-byte on that real-VAX oracle. OVMX-to-OVMX
+`SET HOST` is separately proven in
+`tests/integration/decnet_set_host_live.sh`.
+
+**Not yet proven:** the *inbound* live-VAX bracket — a real VAX initiating
+`SET HOST` **into** OVMX-as-CTERM-server, reaching OVMX's own `LOGINOUT` on an
+`RTAn:` (the `decnet$cterm-session-auth` row; tracked as vms-a70 direction B).
+Only one CTERM session at a time is supported, and there is no read-solicitation
+byte-transparent pump yet on the inbound side.
 
 ## 4. File access — COPY over DECnet (FAL/DAP)
 
@@ -265,12 +274,14 @@ second ledger).
 | Inbound SET HOST (CTERM session auth) | implemented | real | §3 above. Fresh LOGINOUT auth; one session at a time; no live-VAX bracket proof yet. |
 | NETACP device face (`_NET:` + object dispatch) | implemented | real | Executive-resident, cross-process real; object registry query and the `NETACP.EXE` rename are follow-ons. |
 | Wire-parsing isolation (A2/A8) | implemented | real | Attacker bytes never reach NETACP's privileged path unvalidated. |
-| Outbound SET HOST (client) | partial | real | §3 above. OVMX↔OVMX proven; live-VAX + full-executive CI leg is a tracked follow-on. |
+| Outbound SET HOST (client) | implemented | real | §3 above. Proven live against a real OpenVMS VAX V7.3 (vms-a70) — full authenticated CTERM session to a live DCL. |
 | `NODE"acc"::` filespec syntax | partial | real | Parses and reconstructs; DCL `COPY` acts on it but reports `%COPY-I-NETNOTWIRED` — the outbound transfer bridge is a follow-on (rd vms-ea8). |
 
 **Bottom line for an operator today:** you can configure node identity and a
-node database with `NCP`; log in to a remote OVMX node with outbound or inbound
-`SET HOST` (each side authenticating through the real LOGINOUT/SYSUAF path); and
+node database with `NCP`; log in with outbound `SET HOST` — proven all the way
+to an authenticated live DCL on a real OpenVMS VAX V7.3 — or accept an inbound
+`SET HOST` into OVMX (each side authenticating through the real LOGINOUT/SYSUAF
+path); and
 **receive** a file from a remote node into OVMX over an authenticated inbound
 FAL/DAP transfer. You cannot yet **initiate** a file transfer with DCL `COPY`
 over `NODE::` (it reports `%COPY-I-NETNOTWIRED`; the outbound bridge is rd

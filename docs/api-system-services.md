@@ -112,9 +112,9 @@ value of `sys$qio` itself.
 - [sys$wfland](#syswfland) — Wait for all flags in a set (AND)
 - [sys$synch](#syssynch) — Synchronize with async service completion
 - [sys$readef](#sysreadef) — Read event flag cluster state
-- [sys$ascefc](#sysascefc) — Associate common event flag cluster (stub)
-- [sys$dacefc](#sysdacefc) — Disassociate from common event flag cluster (stub)
-- [sys$dlcefc](#sysdlcefc) — Delete common event flag cluster (stub)
+- [sys$ascefc](#sysascefc) — Associate common event flag cluster
+- [sys$dacefc](#sysdacefc) — Disassociate from common event flag cluster
+- [sys$dlcefc](#sysdlcefc) — Delete common event flag cluster
 
 ### Time Services
 - [sys$gettim](#sysgettim) — Get current system time
@@ -775,7 +775,7 @@ uint32_t sys$readef(uint32_t efn, uint32_t *state);
 
 ### sys$ascefc
 
-**Associate common event flag cluster (stub)**
+**Associate common event flag cluster**
 
 ```c
 uint32_t sys$ascefc(
@@ -786,39 +786,38 @@ uint32_t sys$ascefc(
 );
 ```
 
-**Return Values:** Always returns `SS$_NORMAL`.
+**Return Values:** Status from the executive (`vms_kif_ascefc`).
 
-**VMS Compatibility:** Stub implementation. Common event flag cluster
-sharing between processes (flags 64-127) is not implemented. All parameters
-are ignored.
+**VMS Compatibility:** Executive-backed via `/dev/vms`. See
+`src/libvms/syssvc/sys_event.c`.
 
 ---
 
 ### sys$dacefc
 
-**Disassociate from common event flag cluster (stub)**
+**Disassociate from common event flag cluster**
 
 ```c
 uint32_t sys$dacefc(uint32_t efn);
 ```
 
-**Return Values:** Always returns `SS$_NORMAL`.
+**Return Values:** Status from the executive (`vms_kif_dacefc`).
 
-**VMS Compatibility:** Stub. See `sys$ascefc`.
+**VMS Compatibility:** Executive-backed. See `sys$ascefc`.
 
 ---
 
 ### sys$dlcefc
 
-**Delete common event flag cluster (stub)**
+**Delete common event flag cluster**
 
 ```c
 uint32_t sys$dlcefc(const struct dsc$descriptor_s *name);
 ```
 
-**Return Values:** Always returns `SS$_NORMAL`.
+**Return Values:** Status from the executive (`vms_kif_dlcefc`).
 
-**VMS Compatibility:** Stub. See `sys$ascefc`.
+**VMS Compatibility:** Executive-backed. See `sys$ascefc`.
 
 ---
 
@@ -2526,10 +2525,10 @@ in `<ssdef.h>`.
 
 ### Thread Safety
 
-All system services that access shared state use pthread mutexes. The PCB
-channel table, event flag clusters, AST queues, logical name table, and lock
-manager table are all protected by their respective locks. Services are safe
-to call from multiple threads simultaneously.
+Services that access PCB-resident state (channel table, AST queues,
+privilege masks) use pthread mutexes and are safe to call from multiple
+threads. Event flags and the lock manager are executive-resident (reached
+via `/dev/vms`), not PCB state — see below.
 
 ### PCB (Per-Process Control Block)
 
@@ -2538,13 +2537,16 @@ Most system services retrieve or update per-process state through the
 block. The PCB stores:
 
 - Channel table (I/O channel assignments)
-- Event flag clusters (128 flags in 4 clusters)
 - AST queues (one per access mode)
 - Process identity (PID, UIC, username, process name)
 - Privilege masks (current and permanent)
 - Exit handler list
 - io_uring state (for QIO)
 - Default directory
+
+Event flags (all 128, local and common) and the lock manager live in the
+executive (`src/kernel-core/vms_eflag.c`, the DLM in `vms.ko`), reached through
+`/dev/vms` — the PCB holds no event-flag or lock state.
 
 ### io_uring and Async I/O
 

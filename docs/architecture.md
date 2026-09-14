@@ -43,7 +43,7 @@ invariant — see rule 8 in `CLAUDE.md`. Captured protocol specimens and their d
 
 ```
 Layer 7 ─ System Integration
-           SSH, PAM, init scripts
+           SSH, init scripts
            [distro/rootfs/]
 
 Layer 6 ─ Boot & Init
@@ -52,11 +52,11 @@ Layer 6 ─ Boot & Init
 
 Layer 5 ─ Kernel Extensions
            VMS semantics in kernel space
-           [vms.ko, vmsfs.ko]
+           [vms.ko]
 
 Layer 4 ─ User Interface
-           DCL shell (HELP is a DCL built-in), login, help image, SSH auth
-           [vmsdcl, vms_login, vms_help, vms_ssh_auth]
+           DCL shell (HELP is a DCL built-in), login, help image
+           [vmsdcl, vms_login, vms_help]
 
 Layer 3 ─ File Services
            Record management, VMS filesystem, logical names
@@ -98,13 +98,11 @@ libvmssys (freestanding, static only)
 
 tools/
   ├── vms_login  (+ libvms, standalone SHA-256)
-  ├── vms_help   (HELP.EXE — thin wrapper over the shared DCL help engine
-  │               src/vmsdcl/dcl_help.c; HELP is primarily a DCL built-in)
-  └── vms_ssh_auth (+ libvms, standalone SHA-256)
+  └── vms_help   (HELP.EXE — thin wrapper over the shared DCL help engine
+                  src/vmsdcl/dcl_help.c; HELP is primarily a DCL built-in)
 
 kernel/ (out-of-tree, separate build)
-  ├── vms.ko    (access, ast, eflag, lock)
-  └── vmsfs.ko  (super, inode, file, dir, version)
+  └── vms.ko    (access, ast, eflag, lock)
 ```
 
 ## Boot Sequence
@@ -122,7 +120,7 @@ docker build -f Dockerfile.bootable -o dist .
         ├── Mount: proc, sysfs, devtmpfs, devpts, tmpfs
         ├── opcom_kmsg_start() -- /dev/kmsg -> SYS$MANAGER:OPERATOR.LOG
         │     bridge (vms-32a, docs/design-opcom-executive-logging.md):
-        │     reformats vms.ko/vmsfs.ko's own printk records as bare
+        │     reformats vms.ko's own printk records as bare
         │     "%OVMX-<S>-<IDENT>, text" lines, ahead of the module loads
         │     below so their init-time records are replayed, not missed.
         │     SYSKRNL (Linux-kernel-layer) lines (module-taint warnings,
@@ -139,7 +137,7 @@ docker build -f Dockerfile.bootable -o dist .
         │     doc for the route-by-default filter, the OPERATOR.LOG-only
         │     destination, and the one measured vms:/vmsfs: prefix
         │     collision.
-        ├── Load: vms.ko, vmsfs.ko
+        ├── Load: vms.ko
         ├── Generate /etc/passwd, /etc/group from sysuaf.dat
         └── exec /sbin/init (ovmx_init) — PID 1, BOOTSTRAP ONLY (vms-9b7)
               │  PID 1 does NOT read SYSUAF and is NOT SYSTEM. It holds only what
@@ -255,7 +253,7 @@ conversion, so the file has one answer and the API has one answer.
 ```
 User types command via SSH
   │
-  ├── sshd authenticates via vms_ssh_auth + PAM
+  ├── sshd (OpenSSH port, src/vmsssh) authenticates
   ├── Spawns vms_login
   │     ├── Validates against sysuaf.dat
   │     ├── Executes SYLOGIN.COM (system-wide)
@@ -276,7 +274,7 @@ User types command via SSH
         │
         └── System calls route through:
               libvms (syssvc/) → vmsprocess → libvmssys → Linux kernel
-                                                            └── vms.ko / vmsfs.ko
+                                                            └── vms.ko
 ```
 
 ## Key Files by Component
@@ -291,6 +289,5 @@ User types command via SSH
 | vmsrms | `src/vmsrms/rms_core.c` | `include/rms/rms.h` | librms |
 | vmsdcl | `src/vmsdcl/dcl_main.c` | `include/dcl/context.h` | vmsdcl |
 | kernel | `src/kernel/vms_module.c` | `vms_internal.h` | vms.ko |
-| vmsfs.ko | `src/kernel/vmsfs/vmsfs_super.c` | `vmsfs.h` | vmsfs.ko |
 | ovmx_init | `src/ovmx_init/ovmx_init.c` | — | ovmx_init |
 | vms_login | `tools/vms_login.c` | — | vms_login |

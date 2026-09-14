@@ -2,7 +2,7 @@
 
 A concise, honest read for a human evaluator: what actually works in OVMX as of the
 V0.6 release, and what does not yet. Every claim below is grounded in the source and in
-the per-surface register. For the exhaustive, per-surface inventory (408 surfaces across
+the per-surface register. For the exhaustive, per-surface inventory (459 surfaces across
 9 domains, each with a status and an authenticity rating), see
 [`compatibility-surface.md`](compatibility-surface.md). This page is the prose overview;
 that register is the ground truth.
@@ -86,8 +86,7 @@ family is proven fabrication-free, with real structural gaps tracked as a gated 
 
 ## TCP/IP networking
 
-TCP/IP is treated as a VMS-faithful **layered product**, and at 0.6 only part of it is
-present.
+TCP/IP is treated as a VMS-faithful **layered product**.
 
 - **Configuration/management plane — built.** OVMX IP can be configured the VMS way:
   `TCPIP$CONFIG` plus `TCPIP SET INTERFACE` / `SHOW CONFIGURATION` record the host name,
@@ -97,14 +96,13 @@ present.
   per-process fake. (Register: `tcpip-services`.)
 - **The DCL `TCPIP` verb** answers `SHOW INTERFACE`/`ROUTE` from substrate introspection
   and drives the durable config path authentically.
+- **Data plane — built.** The `BGn:` INET pseudo-device, a BSD-sockets RTL veneer, and
+  the NIC as VMS device `ETH0:` are real; `TELNET`/`FTP`/`PING`, `TCPIP$INETD`, and
+  `DAYTIME` are real. **SSH** login rides this stack. (Register: `tcpip-services`, `ssh`.)
 
-**What's not there yet:** the **data plane** — a NIC exposed as a VMS device
-(`EWA0:`/`BGn:`), a UCX QIO network path, and a usable socket API — is absent (the VM
-currently boots with `-nic none`). **SSH** login is consequently not reachable yet; it is
-gated entirely on the TCP/IP stack and arrives with it. **DECnet Phase IV** is greenfield
-(`SET HOST` honestly reports unavailability; only the `NODE"acc"::` filespec *syntax*
-parses, with nothing downstream acting on it). TCP/IP data plane and DECnet are both
-1.0-line work.
+**DECnet Phase IV:** `SET HOST`, routing HELLO/adjacency, and NSP transport are real;
+FAL/DAP file COPY is partial; task-to-task DECnet programming is absent. (Register:
+`decnet`.)
 
 ---
 

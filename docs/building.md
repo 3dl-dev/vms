@@ -66,20 +66,24 @@ cmake --build build-static -j$(nproc)
 Builds a minimal Linux system with OVMX as the userspace.
 
 ```bash
-# Build kernel + initramfs (outputs to dist/)
+# Build kernel + initramfs (outputs to dist/boot/)
 docker build -f distro/Dockerfile.bootable -o dist .
 
 # Boot with QEMU
-./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+./distro/boot/run-qemu.sh dist/boot/vmlinuz dist/boot/initramfs-ovmx.cpio.gz
 
 # Custom memory (default 512M)
-MEMORY=1G ./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+MEMORY=1G ./distro/boot/run-qemu.sh dist/boot/vmlinuz dist/boot/initramfs-ovmx.cpio.gz
 ```
 
 The bootable image includes:
-- Stock Ubuntu kernel (vmlinuz)
-- Initramfs with busybox, static OVMX binaries, kernel modules
-- `init-wrapper.sh` as PID 1: mounts filesystems, loads vms.ko + vmsfs.ko, launches ovmx_init
+- A kernel.org kernel (6.12.103, pinned + integrity-checked), built from source
+  with the OVMX modules (`vms.ko`) overlaid in-tree — not a stock Ubuntu kernel
+  package
+- Initramfs with static OVMX binaries and kernel modules
+- `STARTUP.EXE` (`ovmx_init`) itself as `/init`, i.e. PID 1 — no wrapper script.
+  `vmsfs.ko` has been retired; the ODS-2 filesystem codec is compiled into
+  `vms.ko` and served through the Files-11 ACP.
 
 ## Base OS vs. Layered Products (kits)
 
@@ -116,11 +120,8 @@ identical layered-product kit pattern.
 Built out-of-tree against installed kernel headers. Not integrated into CMake.
 
 ```bash
-# Main VMS module (access control, ASTs, event flags, locks)
+# Main VMS module (access control, ASTs, event flags, locks, ODS-2/Files-11 ACP)
 make -C src/kernel
-
-# VMS filesystem module
-make -C src/kernel/vmsfs
 
 # Specify kernel version
 make -C src/kernel KDIR=/lib/modules/6.8.0-50-generic/build
@@ -146,12 +147,12 @@ Boots a QEMU VM, loads vms.ko, runs test programs, captures serial output.
 tests/qemu/run_tests.sh
 ```
 
-Test programs (5 total, 62 assertions):
+Test programs (see `tests/qemu/` for the full, growing list), including:
 - `test_kmod_access` — access control via ioctl
 - `test_kmod_ast` — AST delivery
-- `test_kmod_eflag` — event flag operations
-- `test_kmod_lock` — lock manager
-- `test_kmod_vmsfs` — VMS filesystem operations
+- `test_kmod_eflag` / `test_kmod_eflag_mproc` — event flag operations (single- and multi-process)
+- `test_kmod_lock` / `test_kmod_lock_mproc` / `test_kmod_lock_sync` — lock manager
+- `test_kmod_disk` — ODS-2/Files-11 ACP disk operations
 
 ### Integration Tests
 

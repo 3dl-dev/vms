@@ -561,7 +561,10 @@ Display software license information.
 
 ### SHOW CLUSTER
 
-Display cluster information (returns "not a member of a cluster").
+Display cluster information. Reads real cluster membership from the
+executive (`vms_kif_cluster_get_members`); if the system is a cluster
+member it prints the actual member table (nodes, CSIDs, status), otherwise
+`%SYSTEM-I-NOTMEMBER`.
 
 ### SHOW NETWORK
 
@@ -765,7 +768,12 @@ SET TIME=dd-mmm-yyyy:hh:mm:ss
 
 ### SET HOST
 
-Connect to a remote system (stub).
+```
+SET HOST node
+```
+
+Outbound DECnet remote login (CTERM) to another node. Real, not a stub —
+see `src/vmsdcl/dcl_cmd_set.c` (`cmd_set_host`).
 
 ### SET AUDIT
 
@@ -1005,7 +1013,10 @@ SUBMIT filespec
 - `/NOTIFY` -- Notify on completion
 - `/JOB_NAME=name` -- Job name
 
-**VMS Compatibility:** Fully compatible.
+**VMS Compatibility:** Submit-only. The job is really enqueued (a real
+`QMAN$MASTER.DAT` entry), but there is no batch engine — nothing ever
+dequeues and runs it. A procedure that submits a job and waits on it hangs
+forever.
 
 ### PRINT
 
@@ -1022,7 +1033,8 @@ PRINT filespec
 - `/JOB_NAME=name` -- Job name
 - `/AFTER=time` -- Delay execution
 
-**VMS Compatibility:** Fully compatible.
+**VMS Compatibility:** Submit-only, same as SUBMIT — the entry is queued but
+nothing ever dequeues and prints it.
 
 ---
 
@@ -1204,7 +1216,10 @@ MOUNT device: [volume-label] [logical-name]
 - `/SYSTEM` -- System-wide mount
 - `/FOREIGN` -- Mount without file structure validation
 
-Maps to Linux mount/bind operations.
+Mounts the ODS-2 volume executive-global through the Files-11 ACP
+(`vms_kif_acp_mount` over `/dev/vms`) — not a Linux `mount(2)`/bind of a
+passthrough filesystem. Every process that `ASSIGN`s the unit sees the same
+mounted volume.
 
 **VMS Compatibility:** Partial.
 
@@ -1311,9 +1326,11 @@ SYSMAN [subcommand]
 
 ## VMS Compatibility Notes
 
-**Fully compatible commands** -- These behave identically to their VMS counterparts for standard usage: APPEND, CLOSE, CONTINUE, COPY, CREATE, DEFINE, DEASSIGN, DELETE, DIRECTORY, EXIT, HELP, INQUIRE, LOGOUT, OPEN, PIPE, PRINT, PURGE, READ, RECALL, RUN, SEARCH, SET DEFAULT, SET VERIFY, SHOW DEFAULT, SHOW LOGICAL, SHOW TIME, SPAWN, SUBMIT, TYPE, WAIT, WRITE.
+**Fully compatible commands** -- These behave identically to their VMS counterparts for standard usage: APPEND, CLOSE, CONTINUE, COPY, CREATE, DEFINE, DEASSIGN, DELETE, DIRECTORY, EXIT, HELP, INQUIRE, LOGOUT, OPEN, PIPE, PURGE, READ, RECALL, RUN, SEARCH, SET DEFAULT, SET VERIFY, SHOW DEFAULT, SHOW LOGICAL, SHOW TIME, SPAWN, TYPE, WAIT, WRITE.
 
 **Partially compatible commands** -- These work but lack some VMS-specific features: ANALYZE, ASSIGN (single table), ATTACH, BACKUP, CONVERT, DIFFERENCES, DUMP, EDIT, INSTALL, LIBRARY, LINK, MAIL, MONITOR, MOUNT/DISMOUNT, PRODUCT, REPLY/REQUEST, SORT, SYSGEN, SYSMAN, SET (various subcommands), SHOW (various subcommands), TCPIP.
+
+**Submit-only commands** -- The job or file is really enqueued, but there is no batch engine: nothing ever dequeues and runs or prints it: PRINT, SUBMIT.
 
 **Stub commands** -- These are recognized but provide minimal or no functionality: PHONE.
 

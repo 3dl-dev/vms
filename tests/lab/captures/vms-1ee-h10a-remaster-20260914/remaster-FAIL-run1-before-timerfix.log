@@ -1,0 +1,202 @@
+RIG-B-JOINREC seq=2 t=4299 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-B-JOINREC seq=3 t=4340 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=2544828421
+RIG-B-JOINREC seq=4 t=4340 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=2544828421
+RIG-B-JOINREC seq=5 t=4340 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=2544828421
+RIG-B-JOINREC seq=6 t=4340 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=2544828421
+RIG-B-JOINREC seq=7 t=4340 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=2544828421
+RIG-B-JOINREC seq=8 t=4381 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x81 op=0x03 rx=0 rc=0 aux=2544828421
+RIG-B-JOINREC seq=9 t=4381 rep=0 kind=0 state=5->5 event=21 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=10 t=4422 rep=0 kind=0 state=5->5 event=2 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=11 t=4422 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x81 op=0x05 rx=0 rc=0 aux=2544828421
+RIG-B-JOINREC seq=12 t=4422 rep=0 kind=0 state=5->5 event=21 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=13 t=4422 rep=0 kind=0 state=5->5 event=12 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=65538
+RIG-B-JOINREC seq=14 t=4425 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x81 op=0x05 rx=0 rc=0 aux=2544828421
+RIG-B-JOINREC seq=15 t=4425 rep=0 kind=0 state=5->5 event=21 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=16 t=4425 rep=0 kind=0 state=5->5 event=5 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=17 t=4475 rep=0 kind=0 state=5->6 event=6 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=18 t=4477 rep=0 kind=0 state=6->7 event=23 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=2
+RIG-B-JOINREC seq=19 t=4515 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=20 t=4515 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=21 t=4556 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=22 t=4556 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=23 t=4600 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=24 t=4600 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=25 t=4642 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=26 t=4642 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=27 t=4685 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=28 t=4685 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=29 t=4685 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=30 t=4726 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=31 t=4726 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=32 t=4767 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=33 t=4767 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=34 t=4808 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=35 t=4808 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=36 t=4849 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=37 t=4849 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=38 t=4890 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=39 t=4890 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=40 t=4931 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=41 t=4931 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=42 t=4972 rep=0 kind=0 state=7->7 event=8 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=43 t=4974 rep=0 kind=0 state=7->7 event=7 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=44 t=5372 rep=0 kind=0 state=7->7 event=14 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=45 t=13697 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-B-JOINREC seq=46 t=13744 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-B-JOINREC seq=47 t=13744 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-B-JOINREC seq=48 t=13964 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+===DMESG-B-BEGIN===
+[    0.751804] SCSI subsystem initialized
+[    0.970925] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 243)
+[    2.495357] vms: loading out-of-tree module taints kernel.
+[    2.497192] vms: module verification failed: signature and/or required key missing - tainting kernel
+[    2.511076] vms: initializing VMS kernel module
+[    2.512688] vms: ethernet unit ETH0: -> eth0 (carrier up)
+[    2.514321] vms: DECnet device face NET: created (NETACP layers its circuit over ETH0:)
+[    2.516635] vms: device table initialized, console terminal OPA0: created
+[    2.518752] vms: system identity constant SYSTEM [1,4] privileges=ALL established by the executive
+[    2.521599] vms: logical-name arena ready (512 entries, 1208352 bytes)
+[    2.523709] vms: mailbox table initialized
+[    2.525004] vms: ODS-2 ACP mounted-volume table initialized
+[    2.526885] vms: /dev/vms registered successfully
+[    3.537734] vms: cluster port unit PEA0: -> eth0
+[    3.539298] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[    4.065597] %PEA0, channel verified
+[    4.074780] %PEA0, virtual circuit open
+[    4.586971] %CNXMAN, a connection manager was discovered on the interconnect
+[    4.591008] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[    4.853445] %CNXMAN, the cluster assigned this node a cluster system id
+[    4.898383] %CNXMAN, this node is a member of the cluster
+[    4.900420] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[    4.904236] %CNXMAN, VAXcluster state transition in progress
+[    4.906756] %CNXMAN, this node is now a VAXcluster member
+[    4.908679] %CNXMAN, system 0000000000000402 was added to the cluster
+[    4.910958] %CNXMAN, system 0000000000000401 was added to the cluster
+[    5.403318] %CNXMAN, completed VAXcluster state transition
+[    8.655325] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   13.773309] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   18.886707] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   24.007714] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   29.131451] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   34.249425] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   39.363514] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   44.487932] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   49.602020] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   54.731018] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   59.847745] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   64.963642] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   70.080904] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   75.212794] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   75.234658] vms: CLUSTER_DIAG_PORT row 1 index 1 -> SS$ 2680
+[   75.242051] vms: CLUSTER_DIAG_PORT row 2 index 1 -> SS$ 2680
+[   75.260241] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+===DMESG-B-END===
+reconstructed pcap: /out/nodeA.pcap (78060 bytes)
+reconstructed pcap: /out/nodeB.pcap (72070 bytes)
+
+=== cat-0x02 opcodes ON THE WIRE (each node's own passive capture) ===
+/out/nodeA.pcap: sca_frames=578 deq=2 enq=2 enq-resp=2
+/out/nodeB.pcap: sca_frames=538 deq=2 enq=2 enq-resp=2
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=founder member=1 cn=1 csid=0x00010001
+  node B: role=joiner member=1 cn=2 csid=0x00010002
+
+==========================================
+
+=== rd vms-1ee (H10a): the autonomous remaster -- every value below
+    was read back out of node A's own executive ===
+    discovered  : res=OVMXA$M01 master_csid_before=0x00010002
+    departure   : observed=1 nodes_after=1
+    re-mastered : enq_status=1 lkid=0x00000004 is_local_master=0 master_csid_after=0x00010002 remastered=0
+
+  FAILED (3): the same name did not re-master onto node A
+  (enq_status=1 lkid=0x00000004 is_local_master=0
+  master_csid_before=0x00010002 master_csid_after=0x00010002).
+==========================================
+--- node A console tail ---
+[  114.023631] protocol 6007 is buggy, dev eth0
+[  116.069915] protocol 6007 is buggy, dev eth0
+[  116.071919] protocol 6007 is buggy, dev eth0
+[  118.117974] protocol 6007 is buggy, dev eth0
+[  118.119735] protocol 6007 is buggy, dev eth0
+[  120.165937] protocol 6007 is buggy, dev eth0
+[  120.168143] protocol 6007 is buggy, dev eth0
+[  122.213955] protocol 6007 is buggy, dev eth0
+[  122.216384] protocol 6007 is buggy, dev eth0
+[  124.261865] protocol 6007 is buggy, dev eth0
+[  124.263617] protocol 6007 is buggy, dev eth0
+[  126.309913] protocol 6007 is buggy, dev eth0
+[  126.312544] protocol 6007 is buggy, dev eth0
+[  128.357865] protocol 6007 is buggy, dev eth0
+[  128.359529] protocol 6007 is buggy, dev eth0
+[  130.406018] protocol 6007 is buggy, dev eth0
+[  130.407870] protocol 6007 is buggy, dev eth0
+[  130.409467] %PEA0, no HELLO within the listen timeout, channel lost
+[  130.409471] %PEA0, channel lost, virtual circuit closed
+[  130.411875] %CNXMAN, lost connection to a cluster member, reconnecting
+[  130.416154] %CNXMAN, lost the VMS$VAXcluster connection before this node was admitted: waiting for it to come back
+[  130.419622] vms: SCS path lost to system 0:1026 -> SS$ 2692
+[  131.429934] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[  132.453902] protocol 6007 is buggy, dev eth0
+[  134.501901] protocol 6007 is buggy, dev eth0
+[  136.549844] protocol 6007 is buggy, dev eth0
+[  138.597884] %CNXMAN, reconnect interval expired, proposing removal
+[  138.600160] %CNXMAN, proposing removal of a system from the cluster
+[  138.602392] %CNXMAN, completed VAXcluster state transition
+[  138.604346] %CNXMAN, the reconnect interval expired with no VMS$VAXcluster connection to the member: this node is NOT a cluster member
+[  138.608495] protocol 6007 is buggy, dev eth0
+[  139.514440] %CNXMAN, cross-node lock release NOT transmitted: the wire record is dropped and the gap is counted
+[  139.531279] vms: CLUSTER_DIAG_PORT row 1 index 1 -> SS$ 2680
+[  139.538293] vms: CLUSTER_DIAG_PORT row 2 index 1 -> SS$ 2680
+[  139.558003] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[  139.621952] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[  140.645888] protocol 6007 is buggy, dev eth0
+[  142.694006] protocol 6007 is buggy, dev eth0
+[  144.714215] ACPI: PM: Preparing to enter system sleep state S5
+[  144.716328] reboot: Power down
+--- node B console tail ---
+[   60.844542] protocol 6007 is buggy, dev eth0
+[   61.408103] protocol 6007 is buggy, dev eth0
+[   62.892870] protocol 6007 is buggy, dev eth0
+[   62.897281] protocol 6007 is buggy, dev eth0
+[   63.456637] protocol 6007 is buggy, dev eth0
+[   64.940062] protocol 6007 is buggy, dev eth0
+[   64.942171] protocol 6007 is buggy, dev eth0
+[   64.963642] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   65.503866] protocol 6007 is buggy, dev eth0
+[   66.988754] protocol 6007 is buggy, dev eth0
+[   66.990310] protocol 6007 is buggy, dev eth0
+[   67.552765] protocol 6007 is buggy, dev eth0
+[   68.574042] protocol 6007 is buggy, dev eth0
+[   68.575645] protocol 6007 is buggy, dev eth0
+[   68.577461] protocol 6007 is buggy, dev eth0
+[   68.620120] protocol 6007 is buggy, dev eth0
+[   69.141074] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   70.080904] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   71.083028] net_ratelimit: 23 callbacks suppressed
+[   71.083032] protocol 6007 is buggy, dev eth0
+[   71.086457] protocol 6007 is buggy, dev eth0
+[   71.647712] protocol 6007 is buggy, dev eth0
+[   73.132272] protocol 6007 is buggy, dev eth0
+[   73.134069] protocol 6007 is buggy, dev eth0
+[   73.695687] protocol 6007 is buggy, dev eth0
+[   75.182048] protocol 6007 is buggy, dev eth0
+[   75.183624] protocol 6007 is buggy, dev eth0
+[   75.212794] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   75.234658] vms: CLUSTER_DIAG_PORT row 1 index 1 -> SS$ 2680
+[   75.242051] vms: CLUSTER_DIAG_PORT row 2 index 1 -> SS$ 2680
+[   75.260241] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+[   75.743802] protocol 6007 is buggy, dev eth0
+[   77.228617] protocol 6007 is buggy, dev eth0
+[   77.230203] protocol 6007 is buggy, dev eth0
+[   77.793815] protocol 6007 is buggy, dev eth0
+[   79.276975] protocol 6007 is buggy, dev eth0
+[   79.281416] protocol 6007 is buggy, dev eth0
+[   79.841522] protocol 6007 is buggy, dev eth0
+[   80.045132] ACPI: PM: Preparing to enter system sleep state S5
+[   80.047265] reboot: Power down
+----------------------------------------------------------------------
+[run-on-rail] pod=ovmx-remaster-1789412146-22796-q8lrk node=k3s-worker exit=1
+
+[exited with code 0]

@@ -88,6 +88,20 @@
 #           console panicked. Acting on a peer's frame is a strictly harder
 #           survival claim than declining it.
 #
+#   remaster (rd vms-1ee, DLM rung H10a re-established, executive-resident)
+#           the proof run, PLUS node B's process simply EXITS on its own after
+#           its (shorter) window -- no last-gasp announcement, no kill -9.
+#           Node A, left running, discovers (before B leaves) a name B
+#           genuinely masters, then relies on nothing but its own
+#           connectivity-loss ladder to notice the departure: RECNXINTERVAL's
+#           reconnect hold expires unanswered, the coordinator's transition
+#           genuinely REMOVES node B's CSB, and that removal fires the DLM
+#           arm's member_departed callback as a DIRECT CALL from
+#           cnxman_notify_membership_changes() (vms_cnxman.c) -- never an
+#           ioctl issued on the departed peer's behalf. Node A then re-$ENQs
+#           the SAME name and reads GET_RESMASTER back to prove it now
+#           masters it locally: the autonomous remaster, unassisted.
+#
 # VERDICT: read only from the guests' own RIG-* lines, which carry values the
 # guest read back out of the executive (INV-6).
 
@@ -191,6 +205,35 @@ if [ "$MODE" = "xnode" ]; then
 	WINDOW_B="${RIG_WINDOW_B:-$((WINDOW_A - STAGGER))}"
 	WALL="${RIG_WALL:-900}"
 fi
+# rd vms-1ee (DLM rung H10a re-established, executive-resident). Node B joins
+# normally and then simply exits -- its own cluster_node poll loop ends and it
+# powers off, a REAL departure with no last-gasp announcement and no kill -9 --
+# and node A, left running, is given nothing but its own connectivity-loss
+# ladder to notice with: RECNXINTERVAL's reconnect hold expires with nobody
+# answering, the coordinator's transition genuinely REMOVES node B's CSB from
+# membership, and cnxman_notify_membership_changes() (vms_cnxman.c) fires the
+# DLM arm's member_departed callback AS A DIRECT CALL. Node A's own remaster
+# phase (cluster_node.c section 6f) discovers a name B masters BEFORE this, then
+# polls its own CLUB for cluster_nodes==1, then re-$ENQs the SAME name and reads
+# GET_RESMASTER back to prove it now masters it locally.
+#
+# REMASTER_A/REMASTER_B are per-node (node_cmdline below selects by tag): only
+# the SURVIVOR (A) runs the phase -- the node that is itself departing has
+# nothing to observe.
+REMASTER=0
+REMASTER_A=0
+REMASTER_B=0
+if [ "$MODE" = "remaster" ]; then
+	REMASTER=1
+	REMASTER_A=1
+	# B must be alive when A's OWN settle window ends (so rig_rm_find's
+	# discovery finds it still up), then exit well before A's own
+	# departure-wait budget (RIG_RM_DEPART_WAIT_MAX = 180s, cluster_node.c)
+	# is spent -- comfortable margin on a real process exit, not a kill.
+	WINDOW_A="${RIG_WINDOW_A:-40}"
+	WINDOW_B="${RIG_WINDOW_B:-70}"
+	WALL="${RIG_WALL:-420}"
+fi
 
 VOTES_A=1
 [ "$MODE" = "negctl" ] && VOTES_A=0
@@ -214,6 +257,7 @@ echo "mode=$MODE"
 echo "accel=${ACCEL#-accel } group=$GROUP recnx=${RECNX}s stagger=${STAGGER}s"
 [ "$XNODE" = "1" ] && echo "cross-node phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s, linger=${LINGER}s)"
 [ "$REJOIN" = "1" ] && echo "rejoin phase: ON (B_WINDOW1=${B_WINDOW1}s evac_dwell=${EVAC_DWELL}s B_WINDOW2=${B_WINDOW2}s)"
+[ "$REMASTER" = "1" ] && echo "remaster phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s -- B exits on its own, A watches)"
 echo "node A: OVMXA/1025 VOTES=$VOTES_A EXPECTED_VOTES=1 VAXCLUSTER=2"
 echo "node B: OVMXB/$SYSID_B VOTES=0          VAXCLUSTER=2"
 echo ""
@@ -225,12 +269,15 @@ echo ""
 # The SYSGEN identity rides the kernel command line; the initramfs is symmetric.
 node_cmdline() {
 	# $1=tag $2=scsnode $3=sysid $4=votes $5=expected_votes $6=window
+	local rm=0
+	[ "$1" = "A" ] && rm="$REMASTER_A"
+	[ "$1" = "B" ] && rm="$REMASTER_B"
 	echo "console=ttyS0 net.ifnames=0 biosdevname=0 panic=-1 loglevel=7" \
 	     "ovmx.tag=$1 ovmx.scsnode=$2 ovmx.sysid=$3 ovmx.votes=$4" \
 	     "ovmx.expected_votes=$5 ovmx.vaxcluster=2 ovmx.group=$GROUP" \
 	     "ovmx.recnx=$RECNX ovmx.credits=$CREDITS ovmx.swver=$SWVER" \
 	     "ovmx.window=$6 ovmx.xnode=$XNODE ovmx.linger=$LINGER" \
-	     "ovmx.qhang=$QHANG"
+	     "ovmx.qhang=$QHANG ovmx.remaster=$rm"
 }
 
 # Node A holds the segment open; node B dials in. A is powered on first
@@ -1235,6 +1282,84 @@ if [ "$MODE" = "xnode" ]; then
 		exit 0
 	fi
 	echo "=========================================="
+	echo "--- node A console tail ---"; tail -n 40 "$OUT/nodeA.console.log" 2>/dev/null
+	echo "--- node B console tail ---"; tail -n 40 "$OUT/nodeB.console.log" 2>/dev/null
+	exit 1
+fi
+
+# --------------------------------------------------------------------------
+# rd vms-1ee (DLM rung H10a re-established): THE AUTONOMOUS REMASTER.
+#
+# This mode's own verdict, read entirely off node A's RIG-A-REMASTER-* lines
+# (cluster_node.c section 6f). It does NOT fall through to the generic
+# cn2_reached() check below: by the time this phase completes, node B has
+# genuinely departed and node A correctly reports cn=1 -- a cn2_reached()
+# failure here would be measuring the wrong thing.
+# --------------------------------------------------------------------------
+if [ "$MODE" = "remaster" ]; then
+	RM_BEFORE_RES=$(rig_field A REMASTER-BEFORE res)
+	RM_MC_BEFORE=$(rig_field A REMASTER-BEFORE master_csid)
+	RM_DEPARTED=$(rig_field A REMASTER-DEPARTED observed)
+	RM_NODES=$(rig_field A REMASTER-DEPARTED nodes)
+	RM_ENQ_STATUS=$(rig_field A REMASTER-AFTER enq_status)
+	RM_LKID=$(rig_field A REMASTER-AFTER lkid)
+	RM_LOCAL=$(rig_field A REMASTER-AFTER is_local_master)
+	RM_MC_AFTER=$(rig_field A REMASTER-AFTER master_csid_after)
+	RM_REMASTERED=$(rig_field A REMASTER-AFTER remastered)
+
+	echo ""
+	echo "=== rd vms-1ee (H10a): the autonomous remaster -- every value below"
+	echo "    was read back out of node A's own executive ==="
+	printf "    discovered  : res=%s master_csid_before=%s\n" \
+		"${RM_BEFORE_RES:-?}" "${RM_MC_BEFORE:-?}"
+	printf "    departure   : observed=%s nodes_after=%s\n" \
+		"${RM_DEPARTED:-?}" "${RM_NODES:-?}"
+	printf "    re-mastered : enq_status=%s lkid=%s is_local_master=%s master_csid_after=%s remastered=%s\n" \
+		"${RM_ENQ_STATUS:-?}" "${RM_LKID:-?}" "${RM_LOCAL:-?}" \
+		"${RM_MC_AFTER:-?}" "${RM_REMASTERED:-?}"
+	echo ""
+
+	XFAIL=0
+	if [ -z "$RM_BEFORE_RES" ] || [ "$RM_BEFORE_RES" = "NONE" ]; then
+		echo "  FAILED (1): node A found no resource its peer genuinely"
+		echo "  mastered before departing -- nothing this phase can measure."
+		XFAIL=1
+	fi
+	if [ "$RM_DEPARTED" != "1" ]; then
+		echo "  FAILED (2): node A's own CLUB never dropped to one member --"
+		echo "  the departure was never observed by this node's own"
+		echo "  connectivity-loss ladder within the wait."
+		XFAIL=1
+	fi
+	if [ "$RM_REMASTERED" != "1" ]; then
+		echo "  FAILED (3): the same name did not re-master onto node A"
+		echo "  (enq_status=$RM_ENQ_STATUS lkid=$RM_LKID is_local_master=$RM_LOCAL"
+		echo "  master_csid_before=$RM_MC_BEFORE master_csid_after=$RM_MC_AFTER)."
+		XFAIL=1
+	fi
+	if console_panicked A; then
+		echo "  FAILED (4): node A's console shows a panic/bugcheck."
+		XFAIL=1
+	fi
+
+	echo "=========================================="
+	if [ "$XFAIL" = "0" ]; then
+		echo "  AUTONOMOUS REMASTER PROOF PASSED (rd vms-1ee, DLM rung H10a"
+		echo "  re-established, executive-resident):"
+		echo "  node B joined, node A discovered a name node B genuinely"
+		echo "  mastered, node B's process then exited with NO announcement"
+		echo "  and no kill -9 -- node A's OWN connectivity-loss ladder"
+		echo "  (RECNXINTERVAL's reconnect hold, then the coordinator's"
+		echo "  transition) removed node B from membership entirely on its"
+		echo "  own, that removal fired the DLM arm's member_departed"
+		echo "  callback as a DIRECT CALL from cnxman_notify_membership_changes"
+		echo "  (vms_cnxman.c) -- never an ioctl this rig issued on the"
+		echo "  departed peer's behalf -- and the SAME name re-mastered onto"
+		echo "  node A on its very next use. Autonomous, unassisted, and read"
+		echo "  back from the executive at every step (INV-6)."
+		echo "=========================================="
+		exit 0
+	fi
 	echo "--- node A console tail ---"; tail -n 40 "$OUT/nodeA.console.log" 2>/dev/null
 	echo "--- node B console tail ---"; tail -n 40 "$OUT/nodeB.console.log" 2>/dev/null
 	exit 1

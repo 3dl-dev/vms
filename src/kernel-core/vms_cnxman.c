@@ -914,6 +914,27 @@ static void cnxman_log_membership_change(struct vms_cnxman *cn,
 /* SS7b, below: the quorum arithmetic applied to a membership that just moved. */
 static void cnxman_quorum_apply(struct vms_cnxman *cn);
 
+/*
+ * A CSB just left membership (after == 0, before == 1): tell the DLM's wire
+ * arm AS A DIRECT CALL, exactly the seam dlm_scs_role_ops.member_departed
+ * documents ("this is how the connection manager reaches it as a direct
+ * call rather than through an ioctl") and cnxman_quorum_announce already
+ * uses for the quorum edge, just below. Read from the CSB the transition
+ * really removed -- never a CSID this glue invents (INV-6). A CSB with no
+ * learned CSID (csid_valid clear) names nobody honestly, so nothing is
+ * reported for it: the engine's departure sweep needs a real identity to
+ * key on, not zero standing in for "unknown".
+ */
+static void cnxman_notify_member_departed(struct vms_cnxman *cn,
+					   const struct vms_csb *csb)
+{
+	if (cn->dlm == NULL || cn->dlm->member_departed == NULL)
+		return;
+	if (!csb->csid_valid)
+		return;
+	cn->dlm->member_departed(cn->dlm->ctx, csb->csid);
+}
+
 static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 					     const uint8_t *before)
 {
@@ -933,6 +954,8 @@ static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 		cnxman_log_membership_change(cn, csb, after);
 		cnxman_deliver_cluevt(cn, after ? CNXMAN_CLUEVT_ADD
 						: CNXMAN_CLUEVT_REMOVE);
+		if (!after)
+			cnxman_notify_member_departed(cn, csb);
 		changed = 1;
 	}
 
@@ -2313,9 +2336,30 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * any other. Idempotent per (peer, connection).
 		 */
 		cnxman_join_advertise_peers(&cn->join);
-		n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
-		for (i = 0; i < n; i++)
-			cnxman_act_on_recnx_rec(cn, &recs[i]);
+		/*
+		 * THE SAME BEFORE/AFTER BRACKET cnxman_vc_message() TAKES ROUND A
+		 * DISPATCH, taken here for exactly the reason the quorum comment
+		 * just below already names: a CSB can leave membership from the
+		 * reconnect ladder ALONE, entirely on this beat, WITH NO MESSAGE
+		 * INVOLVED (cnxman_act_on_recnx_rec's PROPOSE_TRANSITION runs the
+		 * coordinator/barrier synchronously to completion when there is
+		 * nobody left to negotiate with). Until this bracket existed, a
+		 * departure driven purely by RECNXINTERVAL expiry never reached
+		 * cnxman_notify_membership_changes() at all -- so $SETCLUEVT and
+		 * the DLM arm's member_departed hook (rd vms-1ee, H10a) fired for
+		 * a message-driven removal but never for a timeout-driven one,
+		 * which is the MORE common real departure (a system that crashed
+		 * or lost power announces nothing).
+		 */
+		{
+			uint8_t rbefore[VMS_CLUB_MAX_CSB];
+
+			cnxman_membership_snapshot(&cn->cl->club, rbefore);
+			n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
+			for (i = 0; i < n; i++)
+				cnxman_act_on_recnx_rec(cn, &recs[i]);
+			cnxman_notify_membership_changes(cn, rbefore);
+		}
 		/*
 		 * LAST ON THE BEAT, AND ON EVERY BEAT (FC-P8.1): the quorum
 		 * arithmetic over whatever the sweep above left the CSB table
@@ -2326,6 +2370,9 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * that expired here, on this beat, with no message involved.
 		 * Idempotent and cheap -- a walk of at most 96 CSBs, and it
 		 * announces only when the enforceable answer actually moved.
+		 * (cnxman_notify_membership_changes() above already calls this
+		 * when IT saw a change; a second, idempotent call here is what
+		 * keeps this line true regardless of whether that bracket ran.)
 		 */
 		cnxman_quorum_apply(cn);
 		break;

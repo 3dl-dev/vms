@@ -1,5 +1,14 @@
 # Conductor — live pointer (re-derive the rest from rd / gh / git; do not maintain a parallel state layer)
 
+> **⚠ STALE SNAPSHOT — do not trust the state below; RE-DERIVE before acting (flagged 2026-09-14).**
+> This file froze at "Shipped V0.5-5" (2026-08-27) but the latest release on `origin/main` is
+> **V0.6-16** — ~30 point releases on. Everything below (shipped/accreting/in-flight/programs) is a
+> stale execution pointer, not current truth. Re-derive the live world now:
+> `git tag -l 'V*' --sort=creatordate | tail`, `gh pr list --state open`,
+> `git log --oneline origin/main`, `rd ready`, `rd gates`. Per the continuation-identity rule
+> (user CLAUDE.md), this pointer is intentionally NOT refreshed to a fabricated "current" state —
+> a live-pointer file must be re-derived each tick, not read as stored fact.
+
 > **Internal orchestration state — not product documentation.** This file is the OVMX
 > agent-swarm's live execution pointer, not documentation of the OVMX product. It lives
 > under `docs/internal/`; do not cite it from user-facing docs.

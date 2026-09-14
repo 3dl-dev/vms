@@ -1,5 +1,15 @@
 # DCL Verb Fidelity Scoreboard (Phase 0, vms-6f4)
 
+> **⚠ SNAPSHOT as of 2026-08-11 — the hand-counts below are stale; the authoritative source is the
+> compat register (flagged 2026-09-14).** This board duplicates status that the register now owns:
+> its "54 verbs" and `48 · 4 · 1 · 1` bucket tally predate the register's current verb set (58 verbs
+> as of the 2026-09-14 register), the SET HOST DECnet upgrade, and the newer networking verbs. Per
+> the single-ledger invariant (INV-LEDGER; see `docs/design-compat-surface-register.md` §1), **this scoreboard should be
+> GENERATED from the register** (`docs/compat/facilities/dcl-verbs.yaml` + `dcl-qualifiers.yaml`),
+> the same way `docs/compatibility-surface.md` is rendered by `tools/compat/render_compat.py` — not
+> hand-maintained. Until it is wired to a generator, trust the register for live status and read the
+> tally below only as a dated snapshot. Do not update the numbers here by hand; update the register.
+>
 > Re-derived 2026-08-11 by reading every verb handler in `src/vmsdcl/dcl_cmd_*.c`,
 > `dcl_backup.c`, and `dcl_library.c` against the 54-verb table in
 > `src/vmsdcl/dcl_builtin.c`. This is a **raw observation**, not a frozen

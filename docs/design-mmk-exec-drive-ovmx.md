@@ -1,12 +1,23 @@
 # MMK exec-drive on OVMX — design record (vms-b23, self-host spine #4)
 
-Status: **BLOCKED as scoped** — the mailbox + write-attention-AST drive MMK's
-`build_target.c` actually uses cannot be completed with the three facilities
-this item was filed against (`vms-98c` lib$spawn, `vms-e0b` mailbox IPC,
-`vms-9003` write-attention AST). Wiring the seam exposes **three further
-executive/DCL gaps** the three prereqs each proved a *primitive* for but never
-proved *in composition*. This record states the gaps with evidence, gives the
-one achievable interim design, and tees up the transport decision.
+Status: **UNBLOCKED — design A (VMS-faithful mailbox + write-attention AST drive) LANDED**
+*(status corrected 2026-09-14; the prior "BLOCKED as scoped" line is stale)*. The three
+executive/DCL gaps this record identified as prerequisites have since been built on
+`origin/main`: async AST delivery to a hibernating process (vms-feb, `src/kernel-core/vms_ast.c`
+— a `SIGRTMIN+mode` signal wakes a blocked process), non-blocking mailbox read `IO$M_NOW`
+(vms-5df, `src/kernel-core/vms_mbx.c`), and DCL reading/writing over a mailbox (vms-786). With
+those in place the self-host spine landed the full drive: per `docs/design-self-host-spine5-mmk-component.md`,
+**the shipped MMK.EXE now drives compile → archive → LINK → activate entirely in-guest over its
+mailbox DCL** (spine #6 vms-d1b, #7 vms-6be/vms-725). The gap analysis and the interim design B
+below are retained as history. Re-derive live rung state from `rd dep tree vms-59a`.
+
+*(Original record, retained for context:)* — the mailbox + write-attention-AST drive MMK's
+`build_target.c` actually uses could not, at the time of writing, be completed with the three
+facilities this item was filed against (`vms-98c` lib$spawn, `vms-e0b` mailbox IPC,
+`vms-9003` write-attention AST). Wiring the seam exposed **three further executive/DCL gaps**
+the three prereqs each proved a *primitive* for but never proved *in composition* (since closed;
+see the status note above). This record states the gaps with evidence, gives the one achievable
+interim design, and tees up the transport decision.
 
 Clean-room (Rule 8): all of this is derived from MMK's own public `sp_mgr.c` /
 `build_target.c` and the OpenVMS System Services / I/O User's Reference. The

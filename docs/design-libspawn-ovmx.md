@@ -1,6 +1,13 @@
 # LIB$SPAWN / SYS$CREPRC subprocess pipeline for OVMX — design record
 
-Status: **design only, no implementation**. Written for the GCC lane (epic `vms-da0`)
+Status: **LANDED** *(status corrected 2026-09-14; the prior "design only, no implementation"
+line contradicts this doc's own §2 backfill table and §5 ladder)*. The executive/DCL
+prerequisites this doc scoped are implemented on `origin/main`: async AST delivery to a
+hibernating process (vms-feb, `src/kernel-core/vms_ast.c`), the cross-process write-attention
+AST (vms-9003), non-blocking mailbox read `IO$M_NOW` (vms-5df), DCL over a mailbox
+(vms-786), and bidirectional cross-process mailbox command/response (vms-e0b) — each proven
+against real `/dev/vms`. The spawn pipeline itself landed as `src/gcc_host/ovmx_spawn_pipeline.c`
+(+ `include/ovmx_spawn_pipeline.h`). Written for the GCC lane (epic `vms-da0`)
 ahead of its predicted F2 wall — the GCC driver's `cpp → cc1 → as → ld`/`collect2`
 pipeline, which on real VMS is built entirely on `LIB$SPAWN`/`SYS$CREPRC`, never
 Unix `vfork`/`execve`. Routed per the main/ACP conductor's contract note on

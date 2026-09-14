@@ -19,7 +19,7 @@ summary: >
   was deliberately removed by design (vms-2b8) as a good anti-facade precedent,
   not a gap to fill. Rights-database and auditing services belong to other
   facilities (system-management domain).
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: sys$setprv, kind: routine, status: implemented, authenticity: real, vms: "Enable/disable process privileges", evidence: src/libvms/syssvc/sys_misc.c, notes: "executive-authoritative via vms_kif_setprv: authorizes against the permanent/authorized mask (SS$_NOTALLPRIV / SS$_NOPRIV), owns the state, fails honestly if /dev/vms unreachable (INV-6); PCB is a cache, not the authority"}
   - {id: sys$chkpro, kind: routine, status: implemented, authenticity: advisory, vms: "Check protection (system/owner/group/world) against an access mask", evidence: "src/libvms/syssvc/sys_security.c:151", notes: "correct SOGW compute logic; zero OVMX callers currently invoke it"}

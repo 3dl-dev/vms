@@ -7,14 +7,15 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-801
 summary: >
-  starlet.h/lib headers declare 207 LIB$ symbols with no stub markers
-  remaining. Broad genuine coverage across arithmetic/bit ops, char-scan,
+  116 distinct LIB$ entry points are implemented across rtl/lib_*.c (the
+  LIB$ include surface declares 254 symbols; 1 stub marker remains in
+  lib$routines.h). Broad genuine coverage across arithmetic/bit ops, char-scan,
   CLI/spawn (incl. a real CLI$ FSM parser), date/time, queue, symbol, tree,
   VM, translation tables, output, event flags, logical names, and misc
   groups. Notable named gaps: LIB$ISHFT/ISHFTC, LIB$TRIM, LIB$DO_COMMAND,
   LIB$SFREE_WAIT. LIB$TPARSE/LIB$TABLE_PARSE — formerly the known gap — are
   now a real FSM with backtracking (vms-9f6, CLOSED).
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: lib$_arith_bitops, kind: routine, status: partial, authenticity: real, vms: "Arithmetic/bit-manipulation group (LIB$ADDX, LIB$SUBX, LIB$BBSS/BBCC, LIB$EMUL, ...; VMS ships ~16)", evidence: src/libvms/rtl/lib_arith.c, notes: "14/16 present"}
   - {id: lib$ishft, kind: routine, status: absent, authenticity: n/a, vms: "Arithmetic/logical shift"}
@@ -37,4 +38,4 @@ items:
   - {id: lib$sfree_wait, kind: routine, status: absent, authenticity: n/a, vms: "Wait for and free a string cell"}
   - {id: lib$tparse, kind: routine, status: implemented, authenticity: real, vms: "Table-driven character scanner", evidence: src/libvms/rtl/lib_tparse.c, notes: "real FSM with backtracking; formerly the known gap, closed vms-9f6"}
   - {id: lib$table_parse, kind: routine, status: implemented, authenticity: real, vms: "Table-driven parse entry point", evidence: src/libvms/rtl/lib_tparse.c}
-  - {id: lib$_other, kind: routine, status: partial, authenticity: real, vms: "Remaining LIB$ routines beyond the groups enumerated above (VMS ships ~450+ total LIB$ entry points; OVMX header declares 207, all backed by real implementations except the named gaps in this file)", evidence: src/libvms/rtl/, scope_1_0: stretch, notes: "broad genuine coverage; no stub markers remain in the 207 declared"}
+  - {id: lib$_other, kind: routine, status: partial, authenticity: real, vms: "Remaining LIB$ routines beyond the groups enumerated above (VMS ships ~450+ total LIB$ entry points; OVMX implements 116 in rtl/lib_*.c, all backed by real implementations except the named gaps in this file)", evidence: src/libvms/rtl/, scope_1_0: stretch, notes: "broad genuine coverage; 116 distinct LIB$ symbols defined across rtl/lib_*.c"}

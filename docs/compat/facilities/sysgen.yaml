@@ -9,7 +9,7 @@ summary: >
   VMS ships ~600 tunable SYSGEN parameters; OVMX has a thin, genuinely
   dynamic, file-backed subset. AUTOGEN (the feedback-driven parameter
   computation utility) has no separate implementation.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
-  - {id: sysgen$params,   kind: feature, status: partial, authenticity: real, vms: "Dynamic, file-backed SYSGEN parameters (PQL_* quotas, GBLPAGES, etc.)", evidence: tools/vms_sysgen.c, notes: "RE-CENSUS 2026-08-31: unchanged. ~6 of ~600 VMS tunables; thin but genuinely dynamic (SET/SHOW round-trips to a real parameter file), not a facade."}
-  - {id: sysgen$autogen,  kind: utility, status: absent,  authenticity: n/a,  vms: "AUTOGEN — feedback-driven SYSGEN parameter computation utility", evidence: "", notes: "No separate implementation found."}
+  - {id: sysgen$params,   kind: feature, status: partial, authenticity: real, vms: "Dynamic, file-backed SYSGEN parameters (PQL_* quotas, GBLPAGES, etc.)", evidence: tools/vms_sysgen.c, notes: "Re-census 2026-09-14: unchanged. A thin subset of the ~600 VMS tunables; genuinely dynamic (SET/SHOW round-trips to a real binary parameter file over vmsfs, not a bare Linux path), not a facade. WRITE CURRENT persists."}
+  - {id: sysgen$autogen,  kind: utility, status: absent,  authenticity: n/a,  vms: "AUTOGEN — feedback-driven SYSGEN parameter computation utility", evidence: "", notes: "No separate implementation found on origin/main."}

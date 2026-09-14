@@ -1,31 +1,46 @@
 # Condition Handling Facility. See docs/design-compat-surface-register.md.
 facility: chf
-name: "Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND)"
+name: "Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)"
 domain: programming-interfaces
-vms_ref: "OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS RTL LIB$ Manual"
+vms_ref: "OpenVMS Programming Concepts Manual — Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual"
 scope_1_0: in
 tier: 1
-plan_ref: vms-801
+plan_ref: vms-2e72
 summary: >
-  LIB$ESTABLISH/REVERT/SIGNAL/STOP/SIG_TO_RET (5 of ~8 core CHF entry points)
-  are implemented but advisory: a thread-local handler_stack is walked LIFO
-  in-process, not real machine-frame unwind. LIB$SIG_TO_STOP and
-  LIB$MATCH_COND are absent. chf$mech_array's frame + depth are real (real
-  establisher frame + chain depth) and savr0 is written by lib$sig_to_ret;
-  only savr1 stays 0 (host C ABI exposes no VAX/Alpha R1). SYS$UNWIND
-  and SYS$DCLEXH are documented simplified stubs. SYS$EXIV and SYS$SETEXV
-  are absent.
-last_reviewed: 2026-08-31
+  Real 4-stage condition dispatch (design-chf-condition-handling.md, rungs 1-5):
+  dispatch_condition() searches the PRIMARY software exception vector, then the
+  LIB$ESTABLISH frame-handler chain, then the SECONDARY and LAST-CHANCE vectors,
+  in the authentic order (lib_signal.c). LIB$ESTABLISH/REVERT/SIGNAL/STOP/
+  SIG_TO_RET (5 of ~8 core LIB$ CHF entry points) are implemented; the chain is
+  thread-local single-mode userspace (documented, not a per-process fake of a
+  shared facility). SYS$UNWIND is a real frame transfer (rung-2, vms-8802):
+  honors newpc, abandons intervening frames via setjmp/longjmp into an armed
+  VMS$UNWIND_ANCHOR, and on an anchorless ancestor reconstructs the frame by
+  walking the genuine Alpha call chain (PDSC+RSA) through the LIB$GET_*_INVO
+  primitives (rung-3, vms-1fa). SYS$SETEXV establishes the primary/secondary/
+  last-chance vectors (rung-1, vms-2e72). Hardware faults are bridged to
+  conditions through the SAME dispatcher: SS$_HPARITH from SIGFPE (arith bridge,
+  vms-db3) and SS$_ACCVIO from SIGSEGV/SIGBUS/SIGILL (rung-4, vms-cc8), both
+  Alpha. SYS$DCLEXH registers a real PCB exit handler run LIFO by SYS$EXIT.
+  chf$mech_array frame+depth+savr0 are real; only savr1 stays 0 (host C ABI
+  exposes no VAX/Alpha R1). LIB$SIG_TO_STOP, LIB$MATCH_COND and SYS$EXIV remain
+  absent. Not oracle-verified (local corpus self-tests only, tests/corpus/
+  tier1-examples/lib_establish.c / lib_sig_to.c / sys_unwind.c) -> implemented,
+  not verified.
+last_reviewed: 2026-09-14
 items:
-  - {id: lib$establish, kind: routine, status: implemented, authenticity: advisory, vms: "Establish a condition handler", evidence: src/libvms/rtl/lib_signal.c, notes: "thread-local handler_stack walked in-process, not real machine-frame unwind"}
+  - {id: lib$establish, kind: routine, status: implemented, authenticity: advisory, vms: "Establish a condition handler", evidence: src/libvms/rtl/lib_signal.c, notes: "thread-local frame-handler chain, searched in the authentic 4-stage order by dispatch_condition(); single-mode userspace, not executive-resident"}
   - {id: lib$revert, kind: routine, status: implemented, authenticity: advisory, vms: "Revert to the previous condition handler", evidence: src/libvms/rtl/lib_signal.c}
-  - {id: lib$signal, kind: routine, status: implemented, authenticity: advisory, vms: "Signal a condition", evidence: src/libvms/rtl/lib_signal.c}
+  - {id: lib$signal, kind: routine, status: implemented, authenticity: advisory, vms: "Signal a condition", evidence: src/libvms/rtl/lib_signal.c, notes: "public entry to dispatch_condition() (PRIMARY vector -> frame chain -> SECONDARY -> LAST-CHANCE)"}
   - {id: lib$stop, kind: routine, status: implemented, authenticity: advisory, vms: "Signal a condition and force program exit if unhandled", evidence: src/libvms/rtl/lib_signal.c}
-  - {id: lib$sig_to_ret, kind: routine, status: implemented, authenticity: advisory, vms: "Convert a signal to a return status", evidence: src/libvms/rtl/lib_signal.c}
+  - {id: lib$sig_to_ret, kind: routine, status: implemented, authenticity: advisory, vms: "Convert a signal to a return status", evidence: src/libvms/rtl/lib_signal.c, notes: "writes chf$is_mch_savr0 = the signalled condition name"}
   - {id: lib$sig_to_stop, kind: routine, status: absent, authenticity: n/a, vms: "Convert a signal to STOP severity"}
   - {id: lib$match_cond, kind: routine, status: absent, authenticity: n/a, vms: "Match a condition code against a list, ignoring severity"}
-  - {id: chf$mech_array, kind: struct, status: implemented, authenticity: advisory, vms: "Condition-handler mechanism-args array (savr0/savr1/frame fields)", evidence: src/libvms/rtl/lib_signal.c, notes: "vms-df8 sweep re-census: chf$ph_mch_frame + chf$is_mch_depth are REAL (establisher frame via __builtin_frame_address + real chain depth, lib_signal.c:258-259/351-352); chf$is_mch_savr0 is written by lib$sig_to_ret (lib_signal.c:485). Only chf$is_mch_savr1 stays 0 -- the host C ABI exposes no VAX/Alpha R1 to capture (documented gap, not fabrication). Was stale-flagged facade-risk."}
-  - {id: sys$unwind, kind: routine, status: stub, authenticity: advisory, vms: "Unwind the call stack to an establisher", evidence: src/libvms/syssvc/sys_condition.c, notes: "documented simplified unwind"}
-  - {id: sys$dclexh, kind: routine, status: stub, authenticity: advisory, vms: "Declare an exit handler", evidence: "src/libvms/syssvc/sys_process.c:1016"}
+  - {id: lib$_get_invo_context, kind: routine, status: implemented, authenticity: real, vms: "Invocation-context primitives (LIB$GET_CURR_INVO_CONTEXT, LIB$GET_PREV_INVO_CONTEXT, LIB$GET_INVO_CONTEXT, LIB$GET_INVO_HANDLE, LIB$GET_PREV_INVO_HANDLE)", evidence: src/libvms/rtl/lib_invo.c, notes: "Alpha (CHF rung-3, vms-1fa): walks the genuine Alpha call chain (PDSC+RSA, Alpha Calling Standard) so perform_unwind() can resume into an anchorless ancestor"}
+  - {id: chf$mech_array, kind: struct, status: implemented, authenticity: advisory, vms: "Condition-handler mechanism-args array (savr0/savr1/frame fields)", evidence: src/libvms/rtl/lib_signal.c, notes: "chf$ph_mch_frame + chf$is_mch_depth are real (establisher frame via __builtin_frame_address + real chain depth); chf$is_mch_savr0 is written by lib$sig_to_ret. Only chf$is_mch_savr1 stays 0 -- the host C ABI exposes no VAX/Alpha R1 to capture (documented gap, not fabrication)"}
+  - {id: sys$unwind, kind: routine, status: implemented, authenticity: advisory, vms: "Unwind the call stack to an establisher, transferring control (optionally to newpc)", evidence: src/libvms/syssvc/sys_condition.c, notes: "rung-2 (vms-8802): records a deferred unwind (target depth + newpc) that the dispatcher performs on the requesting handler's return -- real frame transfer via setjmp/longjmp into an armed VMS$UNWIND_ANCHOR, or an Alpha PDSC/RSA walk (lib_invo.c) for an anchorless ancestor. Single-mode userspace; not executive-resident"}
+  - {id: sys$setexv, kind: routine, status: implemented, authenticity: advisory, vms: "Set a software exception vector (primary/secondary/last-chance)", evidence: src/libvms/syssvc/sys_setexv.c, notes: "rung-1 (vms-2e72): establishes/clears the thread-local exc_vector[] the dispatcher consults around the frame-handler chain; acmode validated/recorded but single effective slot participates (single-mode userspace, honest, not a per-process fake)"}
+  - {id: sys$dclexh, kind: routine, status: implemented, authenticity: advisory, vms: "Declare an exit handler", evidence: src/libvms/syssvc/sys_process.c, notes: "registers a real exit-handler desblk in the PCB (LIFO, PCB_MAX_EXIT_HANDLERS cap -> SS$_EXQUOTA); run in LIFO order by sys$exit. Per-process (PCB), not executive-resident"}
+  - {id: ss$_hparith_bridge, kind: feature, status: implemented, authenticity: real, vms: "Hardware arithmetic trap raises SS$_HPARITH through the CHF dispatcher", evidence: src/libvms/rtl/arith_signal.c, notes: "Alpha (vms-db3): SIGFPE image-start handler decodes sc_fpcr sticky bits into the Alpha exception-summary byte (si_code is lossy) and signals a faithful SS$_HPARITH through dispatch_condition()"}
+  - {id: ss$_accvio_bridge, kind: feature, status: implemented, authenticity: real, vms: "Hardware access violation raises SS$_ACCVIO through the CHF dispatcher", evidence: src/libvms/rtl/accvio_signal.c, notes: "Alpha (CHF rung-4, vms-cc8): SIGSEGV/SIGBUS/SIGILL image-start handler builds the public OpenVMS access-violation signal array and dispatches SS$_ACCVIO through the same dispatch_condition() as software conditions"}
   - {id: sys$exiv, kind: routine, status: absent, authenticity: n/a, vms: "Declare an exit vector"}
-  - {id: sys$setexv, kind: routine, status: absent, authenticity: n/a, vms: "Set an exception vector"}

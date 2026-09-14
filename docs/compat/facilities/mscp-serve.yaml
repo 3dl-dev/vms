@@ -6,12 +6,18 @@ vms_ref: "MSCP/TMSCP protocol (Systems Application A); OpenVMS Cluster Systems m
 scope_1_0: in
 plan_ref: vms-6e1
 summary: >
-  MSCP disk SERVING IS NOT BUILT. It lived in the userspace SCS daemon, which
-  FC-P3.9 deleted (the operator's 2026-09-02 clustering reset); the
-  executive-resident replacement is FC-P6.x and unbuilt. What DOES exist is the
-  CLIENT half the executive's own cluster join drives: the MSCP codec and the
-  served-unit discovery FSM. TMSCP tape serving is not evidenced.
-last_reviewed: 2026-09-03
+  MSCP disk SERVING is now BUILT executive-resident (FC-P6.3), earning back the
+  capability the operator's 2026-09-02 clustering reset voided when FC-P3.9
+  deleted the userspace SCS daemon (src/vmsscs/scs_mscp_srv.c). The server is
+  vms_mscp_srv_fsm.c (UQB/HQB/HRB Controller-Available/Online state machine) +
+  vms_mscp_srv.c/vms_mscp_srv_io.c glue, serving the executive's own mounted
+  volumes over exec_blockdev_*/the ACP; it is built in all three kernel targets
+  (src/kernel/Makefile, src/kernel-netbsd/Makefile,
+  distro/kernel/drivers-ovmx/vms/Kbuild). status=implemented, NOT verified — no
+  byte-exact real-VAX MOUNT-acceptance oracle yet (R5, lab-deferred). The CLIENT
+  half the executive's own cluster join drives (MSCP codec + served-unit
+  discovery FSM) also exists. TMSCP tape serving is not evidenced.
+last_reviewed: 2026-09-14
 items:
   - id: mscp-serve$disk-read-write
     kind: feature

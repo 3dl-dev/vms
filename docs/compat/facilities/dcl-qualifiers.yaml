@@ -7,13 +7,16 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-8ad
 summary: >
-  Per-verb qualifier validation (Phase 1, vms-097). The parser now rejects any
+  Per-verb qualifier validation (Phase 1, vms-097). The parser rejects any
   qualifier not in a verb's table with the authentic %DCL-W-IVQUAL (or
-  %DCL-W-IVKEYW) BEFORE the handler runs, structurally — 46 of the 58 builtin
-  verbs carry a validating table (29 real q_* tables + 17 q_none reject-all);
-  12 verbs remain accept-all (quals == NULL). A real CLI$-callable CDU compiler
-  exists for external images but is not used to generate the builtin tables.
-last_reviewed: 2026-08-31
+  %DCL-W-IVKEYW) BEFORE the handler runs, structurally. Re-censused 2026-09-14
+  against origin/main: 46 of the 58 builtin verbs carry a validating table (29
+  real q_* tables + 17 q_none reject-all); 12 verbs remain accept-all
+  (quals == NULL). Since the prior census DEASSIGN and DEFINE gained real q_*
+  tables (DIFFERENCES moved to q_none), so the real-table set is now exactly 29.
+  A real CLI$-callable CDU compiler exists for external images but is not used to
+  generate the builtin tables.
+last_reviewed: 2026-09-14
 items:
   - id: dcl-qualifiers$ivqual-enforcement
     kind: feature
@@ -22,7 +25,7 @@ items:
     vms: "Unknown /QUALIFIER on a verb -> %DCL-W-IVQUAL; bad keyword -> %DCL-W-IVKEYW, before the handler runs"
     evidence: src/vmsdcl/dcl_parser.c:448
     verified_against: "tests/dcl/test_ivqual_gate_structural.sh — anti-cheat tripwire: revert the .quals wiring and every IVQUAL/IVKEYW assertion goes red; positive controls (real /LOG,/KEEP,/REVERSE,/DATE=MODIFIED still pass) plus authentic $STATUS %X000008F0 (IVQUAL) / %X000008F4 (IVKEYW)"
-    notes: "dcl_validate_qualifiers() (dcl_parser.c) is the structural enforcement point; called from dispatch (dcl_exec.c) before every handler. Closes the universal silent-accept hole for the retrofit tranche."
+    notes: "dcl_validate_qualifiers() (dcl_parser.c:448) is the structural enforcement point; called from dispatch (dcl_exec.c) before every handler. Closes the universal silent-accept hole for the retrofit tranche."
 
   - id: dcl-qualifiers$verb-coverage
     kind: feature
@@ -30,7 +33,7 @@ items:
     authenticity: real
     vms: "Per-verb qualifier tables validating every DCL verb's /QUALIFIER grammar"
     evidence: src/vmsdcl/dcl_builtin.c
-    notes: "29 verbs carry a real q_* qualifier table (ANALYZE ASSIGN ATTACH BACKUP CONVERT COPY CREATE DEASSIGN DEFINE DELETE DIRECTORY DUMP INQUIRE LINK MOUNT OPEN PING PRINT PRODUCT PURGE RECALL RENAME REPLY SEARCH SORT SPAWN STOP SUBMIT TYPE); 17 more use q_none (empty table = reject-all, honest over-restriction for verbs whose VMS qualifiers OVMX has not retrofit). 46 of 58 validate."
+    notes: "29 verbs carry a real q_* qualifier table (ANALYZE ASSIGN ATTACH BACKUP CONVERT COPY CREATE DEASSIGN DEFINE DELETE DIRECTORY DUMP INQUIRE LINK MOUNT OPEN PING PRINT PRODUCT PURGE RECALL RENAME REPLY SEARCH SORT SPAWN STOP SUBMIT TYPE); 17 more use q_none (empty table = reject-all, honest over-restriction for verbs whose VMS qualifiers OVMX has not retrofit); 12 remain quals == NULL (accept-all). 46 of 58 validate."
 
   - id: dcl-qualifiers$zero-validation-verbs
     kind: feature
@@ -38,7 +41,7 @@ items:
     authenticity: facade-risk
     vms: "Qualifier validation for the accept-all verbs (SET, SHOW, RUN, MAIL, READ, WRITE, INSTALL, LIBRARY, TCPIP, TELNET, FTP, HELP)"
     evidence: src/vmsdcl/dcl_parser.c:451
-    notes: "12 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit'), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all. The remaining ~10 are the Phase-1 follow-up (vms-097)."
+    notes: "12 verbs still have quals == NULL in builtin_verbs[]; dcl_validate_qualifiers() returns SS$_NORMAL for them ('not retrofit', dcl_parser.c:451), so any /QUALIFIER is silently accepted rather than rejected with IVQUAL. SET/SHOW mitigate at the sub-verb level (cmd_set_password/accounting/volume run their own shim validators; unknown SET/SHOW keywords still get IVKEYW), and HELP is deliberately accept-all (a /token after HELP is a qualifier TOPIC, vms-01b). The remaining ones are the Phase-1 follow-up (vms-097)."
 
   - id: dcl-qualifiers$per-verb-depth
     kind: feature

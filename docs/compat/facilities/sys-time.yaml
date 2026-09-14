@@ -11,7 +11,7 @@ summary: >
   ASCTIM/GETUTC are real conversions. SYS$SETIMR/CANTIM are process-local POSIX
   timers, not queued through an executive timer facility. SYS$SCHDWK and
   SYS$GETTIM_PREC are absent.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: sys$gettim, kind: routine, status: implemented, authenticity: real, vms: "Get current system time (64-bit quadword)", evidence: src/libvms/syssvc/sys_time.c}
   - {id: sys$numtim, kind: routine, status: implemented, authenticity: real, vms: "Convert quadword time to a numeric time vector", evidence: src/libvms/syssvc/sys_time.c}

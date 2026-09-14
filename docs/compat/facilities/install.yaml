@@ -10,10 +10,10 @@ summary: >
   real. The PCSI kit byte layout is an OVMX-invented format, correctly
   labelled as such (clean-room posture — public docs don't publish PCSI's
   byte-level layout). Install -> boot -> login is CI-gated and verified.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: pcsi$kit_format,      kind: struct,   status: implemented, authenticity: advisory, vms: "PCSI kit byte layout", evidence: src/libvms/include/ovmx_kit_format.h, notes: "OVMX-invented format, explicitly labelled as an OVMX design choice (public PCSI docs don't publish byte-level layout) — correct clean-room posture, not presented as VMS-authentic"}
   - {id: dcl$product_install,  kind: command,  status: implemented, authenticity: real,     vms: "PRODUCT INSTALL <name> /SOURCE=<kit> [/DESTINATION=<devdir>]", evidence: src/product/product.c}
   - {id: dcl$product_show,     kind: command,  status: implemented, authenticity: real,     vms: "PRODUCT SHOW PRODUCT / PRODUCT SHOW HISTORY [/DESTINATION=<devdir>]", evidence: src/product/product.c}
   - {id: install$syscommon_root, kind: feature, status: implemented, authenticity: real,    vms: "[SYS0.SYSCOMMON]-rooted install target layout", evidence: src/product/product.c, plan_ref: vms-96ec, notes: "/DESTINATION target boots to login"}
-  - {id: install$boot_login_e2e, kind: feature, status: verified,   authenticity: real,     vms: "End-to-end install -> boot -> login gate", evidence: ".github/workflows/ci.yml:1495", verified_against: "CI job install-boot-e2e (ci.yml:1495, vms-96ec) — runs tests/qemu/run_install_boot_e2e.sh on non-PR events; FATAL if the gate is skipped (never a silent skip). Re-census 2026-08-31 refreshed the line ref (was :752)."}
+  - {id: install$boot_login_e2e, kind: feature, status: verified,   authenticity: real,     vms: "End-to-end install -> boot -> login gate", evidence: ".github/workflows/ci.yml:1458", verified_against: "CI job install-boot-e2e (ci.yml:1458, vms-96ec) — runs tests/qemu/run_install_boot_e2e.sh on non-PR events (push/merge_group/schedule/workflow_dispatch); a real PRODUCT INSTALL of a kit, boot of the installed target, and login. Re-census 2026-09-14: job present, line ref refreshed (was :1495)."}

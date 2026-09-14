@@ -11,6 +11,31 @@ a full `origin/main` surface inventory + rd vms-a1c (engine ruling) + rd vms-515
 (`docs/design/faithful-sessions-and-network-subsystems.md`, NETACP/RTAn:/object-dispatch
 architecture).
 
+> **Update 2026-09-14 — two grounding corrections (this doc stays CURRENT):**
+> 1. **The cluster-`scsd` analogy is stale.** The **2026-09-02 cluster reset**
+>    deleted the userspace SCS daemon (`src/vmsscs/`, `scsd.c`) and moved the
+>    cluster (SCS/CNXMAN/DLM) **into the executive** (`vms.ko`, `src/kernel-core/`).
+>    So the cluster is no longer "a userspace socket hidden behind the device
+>    face" — DECnet's NETACP engine now *deliberately diverges* from the cluster
+>    here, staying a low-privilege **userspace** engine (§2's own reasoning: DECnet
+>    has no DLM survival/timing need). The only piece still shared with the old
+>    `scsd` is the **generic raw-L2 datalink abstraction**, which survived the
+>    reset as `src/libdatalink/include/scs_datalink.h`
+>    (`scs_datalink_{open,send,recv}`, engine-agnostic). Read "fork `src/vmsscs/`"
+>    below as "consume `scs_datalink` directly" — which is exactly what the landed
+>    engine does.
+> 2. **This lane is no longer greenfield.** Much of the design below has LANDED in
+>    `src/vmsdecnet/` (the NETACP daemon `engine/decnetd.c`, HELLO/adjacency
+>    `routing/`, NSP `nsp/`, CTERM `cterm/`, FAL `fal/`, DAP `dap/`, NCP node/object
+>    DBs `ncp/`), and outbound `SET HOST` is implemented (`vms-f54`,
+>    `src/vmsdcl/dcl_cmd_set.c:1746`). Re-derive current per-rung status from the
+>    compat register + `src/vmsdecnet/`; §3's "total greenfield" snapshot is
+>    historical. **The companion file `docs/design/faithful-sessions-and-network-
+>    subsystems.md` (rd vms-515) is NOT tracked on `origin/main`** — the NETACP
+>    model it held is now recorded in `src/vmsdecnet/engine/decnetd.c`'s header and
+>    `docs/decnet-provenance-register.md` §6; treat the file-path cites below as
+>    pointers to those.
+
 ---
 
 ## 1. What we are building
@@ -29,10 +54,13 @@ to restore on a modern kernel, so "engine = what the Linux kernel provides" cann
 way it is for TCP/IP. rd vms-a1c therefore rules the engine is a **userspace Phase IV NSP +
 routing + datalink implementation over `AF_PACKET SOCK_RAW`** (ethertype **0x6003**,
 **AA-00-04-00-xx-yy** MACs derived from `area.node`), written clean-room from the public DNA
-Phase IV specs, forking the proven `src/vmsscs/` LAVC datalink pattern. This is the same shape as
-the cluster's `scsd`: a userspace socket **hidden entirely behind the executive device face**
-(§2b), never exposed above the VMS layer. See `docs/design/faithful-sessions-and-network-
-subsystems.md` (rd vms-515) §2 Finding B and §3.4 for the full architecture and the isolation
+Phase IV specs, over the generic raw-L2 datalink abstraction
+`src/libdatalink/include/scs_datalink.h` (the raw-Ethernet pattern the old `scsd`
+established; the daemon itself was retired in the 2026-09-02 cluster reset, but the
+engine-agnostic datalink survived and DECnet consumes it directly). The `AF_PACKET`
+socket is **hidden entirely behind the executive device face** (§2b), never exposed
+above the VMS layer. See `src/vmsdecnet/engine/decnetd.c` (the landed NETACP) and
+`docs/decnet-provenance-register.md` §6 for the full architecture and the isolation
 rationale (the wire-parsing engine must not run at NETACP's privilege — §2b/§4 below).
 
 **Phase IV, not Phase V.** DECnet-Plus (Phase V / OSI, `NCL`, DECnet-over-IP) is explicitly
@@ -54,10 +82,13 @@ The DECnet-specific differences from TCP/IP:
   survival-across-death or cluster-timing need that would justify moving it into `vms.ko`, unlike
   the cluster's DLM) — owns a **userspace Phase IV NSP + routing + datalink engine over
   `AF_PACKET SOCK_RAW`** (ethertype **0x6003**, **AA-00-04-00-xx-yy** MACs derived from
-  `area.node`), forking the proven `src/vmsscs/` LAVC datalink pattern. The `AF_PACKET` socket is
-  **hidden entirely behind the executive device face** (§2b) — exactly as the cluster's `scsd`
-  socket is hidden behind the SCS surface — so nothing above the VMS layer ever sees a Linux
-  socket. Attacker-controlled wire parsing (NSP/CTERM codecs, adjacency state machine) runs at low
+  `area.node`), over the generic raw-L2 datalink abstraction
+  `src/libdatalink/include/scs_datalink.h`. The `AF_PACKET` socket is
+  **hidden entirely behind the executive device face** (§2b) — the same "hide the raw
+  socket behind a VMS surface" discipline the retired `scsd` used (note the cluster
+  itself is now executive-resident in `vms.ko`, so DECnet's userspace engine diverges
+  from it deliberately, per this section) — so nothing above the VMS layer ever sees a
+  Linux socket. Attacker-controlled wire parsing (NSP/CTERM codecs, adjacency state machine) runs at low
   privilege and hands NETACP's thin, privileged control path only a validated, typed connection
   descriptor (vms-515 §3.4) — the wire engine is never itself privileged.
 - **Rule 8 (clean-room) — built field-by-field from public DNA Phase IV specs, no shortcut.**
@@ -103,11 +134,14 @@ internal; only the interactive-terminal objects do.
 oracle, and DECnet-over-IP is a Phase-V feature. Real Phase IV over Ethernet is the only path
 that both *is* authentic and *proves* it against a real VAX/Alpha on the segment.
 
-## 3. Current state (origin/main inventory, 2026-08-11)
+## 3. Current state (origin/main inventory, 2026-08-11 — **snapshot; see the 2026-09-14 update note above**)
 
-**Total greenfield.** No implementation anywhere in `src/`.
+**Total greenfield** *(as of 2026-08-11; no longer true — the lane has since landed
+much of §4 in `src/vmsdecnet/`, and outbound `SET HOST` is implemented, `vms-f54`)*.
+No implementation anywhere in `src/`.
 - `SET HOST` is a stub: prints "%SET-I-NOTAVAIL, DECnet is not available on this system"
-  (`src/vmsdcl/dcl_cmd_set.c:1542`).
+  (`src/vmsdcl/dcl_cmd_set.c:1542`) *(now implemented — `dcl_cmd_set.c:1746`, falling
+  back to NOTAVAIL only when no DECnet is running)*.
 - `NODE::` filespec parsing exists but is **syntactic only** — `rms_parse.c:173` sets
   `NAM$M_NODE`; `vmsfs_translate.c:81-131` + `filespec.h:17` parse `NODE"acc"::dev:[dir]file`
   and can reconstruct it — **nothing downstream acts on the node** (no remote open). This is the
@@ -115,7 +149,11 @@ that both *is* authentic and *proves* it against a real VAX/Alpha on the segment
 - Roadmap prose only (`roadmap-source-compat.md` Phase 13; `design-authenticity-roadmap.md` C9).
 - The **cluster stack** borrows DECnet-style logical MACs (`AA-00-04-00-<node>`,
   `cluster-protocol-spec.md`) — provenance-relevant, but not a DECnet impl.
-- **Reuse:** `src/vmsscs/` is the working raw-Ethernet + executive-device template to fork from.
+- **Reuse:** the generic raw-Ethernet datalink abstraction
+  `src/libdatalink/include/scs_datalink.h` (`scs_datalink_{open,send,recv}`,
+  engine-agnostic; it survived the 2026-09-02 cluster reset that deleted
+  `src/vmsscs/`). The DECnet engine consumes it directly — see
+  `src/vmsdecnet/engine/decnetd.c`.
 
 ## 4. Architecture (layers, bottom-up)
 
@@ -132,7 +170,8 @@ that both *is* authentic and *proves* it against a real VAX/Alpha on the segment
 - **L1–L2 engine = NETACP's userspace Phase IV datalink, clean-room from the DNA specs.**
   Datalink (0x6003, AA-00-04 MAC from `area.node`, Phase IV multicasts AB-00-00-03/04-00-00), NSP
   logical links + flow control, and Phase IV routing/HELLO adjacency are built clean-room over
-  `AF_PACKET SOCK_RAW`, forking the `src/vmsscs/` LAVC datalink pattern (ruling vms-a1c — Linux
+  `AF_PACKET SOCK_RAW`, on the generic `scs_datalink` raw-L2 abstraction
+  (`src/libdatalink/include/scs_datalink.h`; ruling vms-a1c — Linux
   dropped `AF_DECnet` in 6.1, so there is no in-kernel stack left to ride or forward-port on a
   modern kernel). This engine is **NETACP's low-privilege datalink internal**, never exposed
   above the device face (vms-515 §3.3/§3.4).

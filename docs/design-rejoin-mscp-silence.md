@@ -1,5 +1,27 @@
 # Diagnosis — the JS_MSCP_CONNECT "silence" is the Rule of Total Connectivity (vms-694)
 
+> ## ⛔ SUPERSEDED (2026-09-14) — diagnosis vindicated; `scsd`/`src/vmsscs/` fix-framing retired
+>
+> This is a **book-grounded root-cause diagnosis** (Davis ch.7 "JOIN CLUSTER",
+> the Rule of Total Connectivity), not a current implementation map. It predates
+> the **2026-09-02 cluster reset**, which deleted the userspace SCS daemon
+> (`src/vmsscs/`, `scsd.c`, `SCSD.EXE`) and its tests (`tests/vmsscs/`) and moved
+> join/rejoin **into the executive** (`vms.ko`, `src/kernel-core/`). The
+> `scsd.c:NNN`, `enum join_step`, `OVMX_JOIN_SEQ` and `tests/vmsscs/test_scsd_wire.c`
+> references below all point at code that no longer exists.
+>
+> **Successor (current, executive-resident):** first-join admission is
+> `src/kernel-core/vms_cnxman_join_fsm.c` (`join_table[][]`, FC-P3.3); the
+> reconnect/rejoin loop is `vms_cnxman_recnx_fsm.c` (FC-P3.6). The bidirectional
+> "Rule of Total Connectivity" this doc diagnosed is exactly what those FSMs
+> enforce.
+>
+> **The diagnosis was BORNE OUT and shipped** — cluster admission is bidirectional
+> and the joiner must serve the coordinator's drive; **CN=3/MEMBER was achieved
+> (V0.6-11; `docs/demos/cluster-cn3.md`)**. Keep this doc as the clean-room
+> derivation of that requirement; treat its file/daemon references and
+> "not-yet-shipped" framing as historical.
+
 **Status:** GROUNDED DIAGNOSIS + bounded proposed fix. No wire-visible change shipped
 in this branch (the fix needs a live-lab bracket to satisfy guardrail 23; see §6).
 

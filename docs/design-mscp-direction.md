@@ -1,5 +1,30 @@
 # MSCP support — design & direction (vms-54f)
 
+> ## ⛔ SUPERSEDED (2026-09-14) — MSCP server moved into the executive; `src/vmsscs/scs_mscp_srv.c`/`scsd.c` retired
+>
+> This is an **MSCP/DSA wire-research + direction record** (Davis ch.4–5,
+> clean-room), not a current file map. It predates the **2026-09-02 cluster
+> reset**, which deleted the userspace SCS daemon (`src/vmsscs/`, `scsd.c`) and
+> the userspace responder `src/vmsscs/scs_mscp_srv.c`, moving the MSCP disk
+> server **into the executive** (`vms.ko`, `src/kernel-core/`). Every
+> `src/vmsscs/scs_mscp_srv.c`, `scsd.c` and `tests/vmsscs/` reference below —
+> including the 2026-08-31 inline update note — points at code that no longer
+> exists.
+>
+> **Successor (current, executive-resident):** the server is
+> `src/kernel-core/vms_mscp_srv.c` (glue/registration, FC-P6.3) + the pure
+> `mscp_srv_fsm` in `vms_mscp_srv_fsm.{c,h}` + block I/O in `vms_mscp_srv_io.c`;
+> the on-wire MSCP frames are `src/kernel-core/vms_cluster_codec_mscp.{c,h}`; the
+> served-volume table is the ODS-2 ACP's single mounted-volume table (read, not
+> owned). Client side: `vms_mscp_cl*.c`.
+>
+> **Keep this doc for its clean-room DSA/MSCP protocol research** (message-type
+> decode, mount ordering Fig 4-38, the SCC/GUS/ONLINE/READ handshake), which
+> remains the grounding the executive server implements. Treat file:line
+> references and deferred/implemented status lines as historical — re-derive
+> current MSCP status from the compat register (`mscp-serve.yaml`) and the
+> `src/kernel-core/vms_mscp_srv*` code.
+
 **Status:** investigation output, 2026-08-05. Owner item: vms-54f (MSCP investigation:
 decode the unidentified SCA message types and decide what OVMX must serve).
 Blocks: vms-ecff (type 10), vms-07a (types 8/9).

@@ -580,7 +580,7 @@ rms-dirfind-exact-version-ignored"
 # scoping out.
 # ---------------------------------------------------------------------------
 SCOPE_OUT_UNIT_DIRS=""
-SCOPE_OUT_SUITES="test_syssvc_ssh_kex"
+SCOPE_OUT_SUITES="test_syssvc_ssh_kex test_kmod_cluster_seam"
 
 scope_out_why() {
     cat <<'EOF'
@@ -598,6 +598,25 @@ turns it red honestly. Its value is as an integration acceptance test, kept and
 run; it is simply not a per-facility negctl target, so it is declared out of the
 coverage gate rather than carried as a fake anchor (INV-6). Prior state: it was
 named ONLY by bg-recv-length-zeroed, whose claim over it was stale/non-reddening.
+
+test_kmod_cluster_seam -- the FC-P0.2 SUBSTRATE-CONTRACT conformance test, not a
+VMS executive facility. It proves the Linux kbackend BINDINGS satisfy the seam
+contract the executive is built ON (exec_kbackend_linux.h §14-18: dev_add_pack /
+dev_queue_xmit / dev_mc_add / kthread / timer_list / ktime), driven through a
+TEST-ONLY harness (vms_module.c, #if OVMX_KTEST_CLUSTER_SEAM). The only
+cluster_seam-exclusive code IS that harness -- not a mutable product facility.
+Every primitive it exercises is a SHARED substrate primitive: exec_lan_open/
+hwaddr/mtu/link_up/mc_add are used by src/kernel-core/vms_pe.c (product), which
+feeds the cluster VC/SCS/membership snapshots that the product suites
+test_kmod_cluster_*_diag already anchor (pe-vc-snapshot-fabricates-circuit et
+al.); the kthread/timer/time primitives are pervasive. So a defect in any of them
+reddens those PRODUCT suites, not the seam in isolation -- there is no isolatable
+per-facility negctl to anchor here, and scoping it out opens NO coverage hole:
+the substrate's correctness is proven positively by this seam test AND
+transitively by every facility suite that would fail if a binding broke. A
+per-facility product negctl would be a category error (no VMS facility sits
+behind it to fault-inject) -- the exact self-declaration/harness-isolation class
+Rule 9 / vms-49f distinguishes from runtime behavioral proof.
 EOF
 }
 

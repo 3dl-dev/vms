@@ -87,6 +87,9 @@
 #include "rms/rms.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
+#include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors (used by sysvol_stage.h) */
+#include "sysvol_stage.h" /* shared VDA300: mount/write-over-ACP/OVMX_SYSDEVICE
+                             staging of the activated MMK.EXE subject (vms-c09f) */
 
 #define EXIT_SKIP 77
 
@@ -281,6 +284,24 @@ int main(int argc, char **argv)
     if (!$VMS_STATUS_SUCCESS(mst)) {
         printf("  FAIL: could not mount %s for the build volume (0x%08X)\n",
                ODS2_UNIT, mst);
+        return 1;
+    }
+
+    /* Stage the ACTIVATED MMK.EXE SUBJECT onto the system volume over the ACP
+     * (vms-c09f). MMK.EXE is now an OVMX-native IMGACT-activated image: execl()
+     * hands the kernel the /vms POSIX copy for the PT_LOAD/PT_INTERP mmap, but
+     * IMGACT then re-reads the GENUINE main-image bytes off OVMX_SYSDEVICE:
+     * [SYS0.SYSCOMMON.SYSEXE]MMK.EXE THROUGH the ACP (imgsrc_open) -- there is NO
+     * /vms fallback for a MAIN image, so a subject not on the volume fails
+     * %IMGACT-F-IMGNOTFND (what a bare activated MMK.EXE hit before this). This
+     * mounts VDA300:, writes the subject there, and points IMGACT at it via
+     * OVMX_SYSDEVICE -- which the forked child below inherits. The build files
+     * (author'd on VDA0: above) are unaffected: MMK opens them by full VDA0: spec. */
+    const char *mmk_base = strrchr(mmk_path(), '/');
+    mmk_base = mmk_base ? mmk_base + 1 : mmk_path();
+    if (sysvol_stage_subject(mmk_path(), mmk_base) != 0) {
+        printf("  FAIL: could not stage the activated MMK.EXE subject onto %s "
+               "[SYS0.SYSCOMMON.SYSEXE] over the ACP (vms-c09f)\n", SYSVOL_UNIT);
         return 1;
     }
 

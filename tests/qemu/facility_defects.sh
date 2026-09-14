@@ -467,6 +467,7 @@ kstat-deadlock-mismapped
 kstat-ivlockid-mismapped
 kstat-cvtungrant-mismapped
 assign-terminal-bypasses-executive
+net-qio-fakes-io
 dcl-submit-owner-fabricated
 dcl-print-owner-fabricated
 dcl-logout-user-fabricated
@@ -4237,6 +4238,26 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    net-qio-fakes-io)
+        case "$_f" in
+        facility)     echo "\$QIO on the DECnet device face _NET: (qio_net_op, src/libvms/syssvc/sys_qio.c) -- the a1-1 skeleton of the task-to-task logical-link I/O path (rd vms-799/vms-dda)";;
+        targets)      echo "libvms/syssvc/sys_qio.c";;
+        suites_red)   echo "test_syssvc_net_assign";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "qio_net_op()'s recognized-logical-link case returns SS\$_DEVOFFLINE ('the device face resolved, the NETACP broker I/O path is not wired yet, a1-2') for IO\$_ACCESS/DEACCESS/READVBLK/WRITEVBLK; the mutation replaces that status with SS\$_NORMAL, so \$QIO on a RESOLVED _NET: channel reports a task-to-task read/connect SUCCEEDED while no broker exists to carry it -- the INV-6 fabrication class (an I/O reported real over an unwired path). \$ASSIGN _NET: itself (sys_assign.c, a different file) plus the honest-fail and negative-control assertions read other paths and stay green; only the two 'fails honest SS\$_DEVOFFLINE' \$QIO assertions redden. The st assignment is range-scoped to qio_net_op (SS\$_DEVOFFLINE occurs elsewhere in the file); gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+a1-1: $QIO IO$_READVBLK on _NET: fails honest SS$_DEVOFFLINE
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a1-1: $QIO IO$_ACCESS on _NET: fails honest SS$_DEVOFFLINE
+EOF
+                      ;;
+        knock_on_why)  echo "the same fabricated SS\$_NORMAL makes the IO\$_ACCESS assertion fail alongside the IO\$_READVBLK one -- one substituted status, both recognized-function readers in qio_net_op.";;
+        esac;;
+
     # -----------------------------------------------------------------------
     # THE SIX USER-NAME FABRICATIONS (vms-cb5 / vms-f39 / vms-f42d)
     #
@@ -7085,6 +7106,9 @@ apply_edit() {
 
     assign-terminal-bypasses-executive)
         sed -i 's|        if (devres.is_terminal) {|        if (0 \&\& devres.is_terminal) { /* NEGCTL assign-terminal-bypasses-executive */|' "$_file";;
+
+    net-qio-fakes-io)
+        sed -i '/^static uint32_t qio_net_op(/,/^}/ s|st = SS\$_DEVOFFLINE;|st = SS\$_NORMAL; /* NEGCTL net-qio-fakes-io */|' "$_file";;
 
     # The six user-name fabrications. Each restores ONE deleted fallback.
     # RANGE-ANCHORED to the function that owns the site: `const char *user =

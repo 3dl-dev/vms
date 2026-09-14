@@ -27,6 +27,8 @@
 #include "starlet.h"
 #include "descrip.h"
 #include "ssdef.h"
+#include "iodef.h"
+#include "iosbdef.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
 
@@ -104,6 +106,24 @@ int main(void)
 
     if (st == SS$_NORMAL) {
         CHECK(chan != 0, "_NET: assign yielded a valid channel (the DECnet device face resolved)");
+
+        /* a1-1 (rd vms-799): $QIO on the resolved _NET: channel routes through
+         * qio_net_op. The NETACP broker (Option 1, transport T1) is not wired
+         * yet, so a logical-link function fails HONESTLY with SS$_DEVOFFLINE --
+         * the device resolved, the I/O path is inactive -- never SS$_IVCHAN
+         * (which would claim a bad channel) and never a fabricated transfer
+         * (Rule 9/INV-6). a1-2 fills each function in place. */
+        struct _iosb nio;
+        uint32_t rst = sys$qio(0, chan, IO$_READVBLK, &nio, NULL, 0,
+                               NULL, 0, 0, 0, 0, 0);
+        /* negctl: net-qio-fakes-io */
+        CHECK(rst == SS$_DEVOFFLINE,
+              "a1-1: $QIO IO$_READVBLK on _NET: fails honest SS$_DEVOFFLINE (broker unwired), not SS$_IVCHAN/a fake");
+        uint32_t ast = sys$qio(0, chan, IO$_ACCESS, &nio, NULL, 0,
+                               NULL, 0, 0, 0, 0, 0);
+        /* negctl: net-qio-fakes-io */
+        CHECK(ast == SS$_DEVOFFLINE,
+              "a1-1: $QIO IO$_ACCESS on _NET: fails honest SS$_DEVOFFLINE (broker unwired)");
 
         uint16_t chan2 = 0;
         uint32_t st2 = sys$assign(&net, &chan2, 0, NULL);

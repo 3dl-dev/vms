@@ -799,3 +799,18 @@ int vms$$chan_is_bg(uint16_t chan) {
     if (!pcb->channels[chan].in_use) return 0;
     return (pcb->channels[chan].flags & PCB_CHAN_BG) ? 1 : 0;
 }
+
+/*
+ * vms$$chan_is_net - Internal helper: is this channel the DECnet device face
+ * _NET: (rd vms-799)? Used by sys$qio to route the $QIO logical-link functions
+ * to qio_net_op (the NETACP broker path) instead of the fd-based path -- a
+ * _NET: channel's fd is always -1, since the link lives in the executive/NETACP.
+ */
+int vms$$chan_is_net(uint16_t chan) {
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
+
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb) return 0;
+    if (!pcb->channels[chan].in_use) return 0;
+    return (pcb->channels[chan].flags & PCB_CHAN_NET) ? 1 : 0;
+}

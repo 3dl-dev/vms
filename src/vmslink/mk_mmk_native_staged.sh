@@ -44,10 +44,15 @@ REPO=$1; SYSEXE=$2; SYSLIB=$3; MODE=${4:-full}; LINK_EXE_ARG=$5
 
 CC=${CC:-musl-gcc}
 case "${ARCH:-$(uname -m)}" in
-    aarch64|arm64) ARCH=aarch64 ;;
-    x86_64|amd64)  ARCH=x86_64 ;;
+    aarch64|arm64) ARCH=aarch64; ARCHFLAG="-mno-outline-atomics" ;;
+    x86_64|amd64)  ARCH=x86_64;  ARCHFLAG="-mtls-dialect=gnu2" ;;
     *) echo "mk_mmk_native_staged.sh: unsupported arch $(uname -m)" >&2; exit 1 ;;
 esac
+# mk_mmk.sh's DEFAULT CFLAGS carry the aarch64-only -mno-outline-atomics (invalid
+# on x86_64). Pass the arch-correct flag explicitly, matching lib_build_graph.sh's
+# producer CFLAGS (-mtls-dialect=gnu2 on x86_64, vms-cb5f), so the 19 MMK objects
+# compile on x86_64 too -- the aarch64 default broke the first x86_64 build (vms-c09f).
+MMK_CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE $ARCHFLAG"
 export CC ARCH
 
 # The dir layout lib_build_graph.sh's build_producer_graph() reads (same names
@@ -106,7 +111,7 @@ else
 fi
 
 echo "--- mk_mmk_native_staged: linking MMK.EXE (mk_mmk.sh: 19 objects, LINK.EXE --executable --use {7 shareables}) ---"
-CC="$CC" WORK="$WORK/mk-mmk" sh "$LINK_DIR/mk_mmk.sh" \
+CC="$CC" CFLAGS="$MMK_CFLAGS" WORK="$WORK/mk-mmk" sh "$LINK_DIR/mk_mmk.sh" \
     "$MK_LINK" "$SYSEXE/MMK.EXE" \
     "$SYSLIB/DECC\$SHR.EXE" "$SYSLIB/LIBVMS\$SHR.EXE" "$SYSLIB/LIBVMSPROCESS\$SHR.EXE" \
     "$SYSLIB/LIBVMSFS\$SHR.EXE" "$SYSLIB/LIBVMSLNM\$SHR.EXE" "$SYSLIB/LIBVMSRMS\$SHR.EXE" \

@@ -1,5 +1,29 @@
 # Rejoin CM state map: OVMX's readmission against the book's JOIN protocol
 
+> ## ⛔ SUPERSEDED (2026-09-14) — userspace-`scsd`/`src/vmsscs/` model retired
+>
+> This is a **clean-room CM-state-machine mapping / lab-capture research record**,
+> not a current implementation map. It predates the **2026-09-02 cluster reset**,
+> which deleted the userspace SCS daemon (`src/vmsscs/`, `scsd.c`) and its unit
+> tests (`tests/vmsscs/test_scsd_wire.c`) and moved the connection manager
+> **into the executive** (`vms.ko`, `src/kernel-core/`). Every `scsd.c`,
+> `src/vmsscs/`, `tests/vmsscs/` and `SCSD.EXE` reference below — and the
+> `scsd-*.log` lab captures it is grounded on — points at a daemon that no longer
+> exists.
+>
+> **Successor (current, executive-resident):** the RECNXINTERVAL/TIMVCFAIL
+> reconnect loop and last-gasp emission are now the pure FSM in
+> `src/kernel-core/vms_cnxman_recnx_fsm.c` (FC-P3.6), over the CSB ladder in
+> `vms_cnxman_csb.c`; first-join admission is `vms_cnxman_join_fsm.c`; the
+> DLM/MSCP/VC codecs are `src/kernel-core/vms_cluster_codec_*.c`.
+>
+> **Keep this doc for its book-grounded CM state-machine mapping** (the Rule-8
+> Davis page-cite analysis of readmission vs first-join, the coordinator-asymmetry
+> findings), which remains the clean-room derivation the executive FSMs implement.
+> Treat all file/daemon/log references and the "still stalls / not yet solved"
+> framing as historical — CN=3/MEMBER was achieved (shipped V0.6-11; see
+> `docs/demos/cluster-cn3.md`).
+
 **Status:** design record, `vms-f61` (2026-08-11). Written under the operator's standing
 ruling to STOP wire byte-diffing the rejoin and instead map OVMX's connection-manager
 behaviour against the documented SCA / connection-manager state machine, then implement

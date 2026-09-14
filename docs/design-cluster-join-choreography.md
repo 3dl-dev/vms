@@ -1,6 +1,30 @@
 # OVMX cluster-join dir-CLIENT choreography (vms-760, NEW→MEMBER)
 
-**Status:** grounded + byte-verified 2026-07-29; implementation in progress.
+> ## ⛔ SUPERSEDED (2026-09-14) — implementation moved into the executive; `OVMX_JOIN_SEQ`/`scsd` framing is dead
+>
+> This is a **byte-verified wire-research record**, not a current implementation
+> map. It predates the **2026-09-02 cluster reset**, which deleted the userspace
+> SCS daemon (`src/vmsscs/`, `scsd.c`) and moved cluster join **into the
+> executive** (`vms.ko`, `src/kernel-core/`). The `OVMX_JOIN_SEQ` env-gated
+> sequencer, the "NOT yet coded"/"stalls at NEW" status, and the `scsd.c ~1765`
+> lookup-responder reference below all describe code that no longer exists.
+>
+> **Successor (current, executive-resident):** the JOIN is now the pure state
+> machine in `src/kernel-core/vms_cnxman_join_fsm.c` (`join_table[][]`, FC-P3.3),
+> driven from `vms_cnxman.c` (`cnxman_try_genesis`). Its own header records the
+> two structural safeties this research established — **lookup-before-connect is
+> unreachable to violate**, and the exact "firing the `MSCP$DISK` connect before
+> resolving the name froze a real member's `recv_ack`" observation from §"Why
+> OVMX stalls at NEW" below.
+>
+> **The research below was VINDICATED and shipped.** The 2→3 conclusion — *the
+> joiner drives the entire connection set; the member only answers* (§"DEFINITIVE
+> 2→3 REFERENCE") — is exactly what the executive join FSM implements, and **CN=3
+> was achieved (shipped V0.6-11; see `docs/demos/cluster-cn3.md`)**. Keep this doc
+> as the clean-room, pcap-grounded derivation of that FSM; ignore its
+> implementation-status and file-path claims.
+
+**Status:** grounded + byte-verified 2026-07-29; implementation in progress. *(historical — see the SUPERSEDED banner above; the join now lives in `vms_cnxman_join_fsm.c`.)*
 **Provenance:** clean-room — `formation-clean-2node.pcap` wire observation + public
 OpenVMS docs only (CLAUDE.md Rule 8). Every offset/value below was decoded by
 Con.ID pair from the clean 2-node formation (joiner MAC `08:00:2b:94:ca:47`),

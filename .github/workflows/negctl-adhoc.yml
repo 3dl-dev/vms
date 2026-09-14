@@ -36,7 +36,13 @@ jobs:
   negctl-adhoc:
     name: negctl adhoc — prove the named defects in one isolated job (real /dev/vms)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The adhoc path runs the FULL ~124-suite pristine control UNSHARDED, plus one
+    # full-suite boot per named defect. Under TCG contention a single 124-suite
+    # boot can take ~2700s (measured 89/124 in 1800s), so worst case ≈ 250s build
+    # + 2700 pristine + 2700 defect ≈ 94m. 100m gives margin. This does NOT touch
+    # the sharded CI negctl gate (kernel-executive-facility-negative-controls-shard,
+    # 22 shards @ 50m, NEGCTL_WALL unset ⇒ still 1800): that gate stays tight.
+    timeout-minutes: 100
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -44,6 +50,10 @@ jobs:
       - name: Inject each named defect and assert its exact red set against a real /dev/vms
         env:
           CONTAINER_ENGINE: docker
+          # Adhoc-only per-boot wall raise (vms-926 lineage): the full unsharded
+          # pristine + defect boots need >1800s under contention. Ceiling only —
+          # an uncontended boot still finishes in ~250s and never reaches it.
+          NEGCTL_WALL: "2700"
           # Advisory emission only; not uploaded or compared (matches ci.yml, vms-49f).
           FACILITY_NEGCTL_RECORD_OUT: ${{ runner.temp }}/facility_negctl_observed.tsv
         run: |

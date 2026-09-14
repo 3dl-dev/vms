@@ -47,19 +47,27 @@ Layer 7 ─ System Integration
            [distro/rootfs/]
 
 Layer 6 ─ Boot & Init
-           Static binaries, initramfs, QEMU boot
-           [ovmx_init, init-wrapper.sh, run-qemu.sh]
+           Static binaries, initramfs, QEMU boot. PID 1 IS the ovmx_init
+           binary, deployed as STARTUP.EXE — there is no wrapper script.
+           [STARTUP.EXE (ovmx_init), run-qemu.sh, Dockerfile.bootable]
 
-Layer 5 ─ Kernel Extensions
-           VMS semantics in kernel space
-           [vms.ko]
+Layer 5 ─ The Executive (kernel-resident)
+           The whole VMS executive in kernel space, reached through
+           /dev/vms: locks, event flags, ASTs, access modes, mailboxes,
+           the process table, the device table, the logical-name manager,
+           the Files-11 ODS-2 ACP, and the executive-resident VMScluster
+           stack (SCS / CNXMAN / DLM).
+           [vms.ko = src/kernel (Linux glue) + src/kernel-core (facilities)]
 
 Layer 4 ─ User Interface
            DCL shell (HELP is a DCL built-in), login, help image
            [vmsdcl, vms_login, vms_help]
 
-Layer 3 ─ File Services
-           Record management, VMS filesystem, logical names
+Layer 3 ─ File & Name Services (user-space clients of the executive)
+           RMS record management; ODS-2 filespec translation / codec
+           helpers; a logical-name client veneer. The ODS-2 volume I/O and
+           the logical-name tables themselves live in the executive
+           (Layer 5); these libraries call in over /dev/vms.
            [vmsrms, vmsfs, vmslnm]
 
 Layer 2 ─ VMS Runtime
@@ -84,11 +92,13 @@ libvmssys (freestanding, static only)
   │     │
   │     └── libvms (+ pthread, math)
   │           │
-  │           ├── vmslnm (+ pthread) — per-process tables only;
-  │           │     no daemon (deleted, vms-a4b); executive-resident
-  │           │     placement is an open ruling, see vms-ln0
+  │           ├── vmslnm (+ pthread) — client veneer over the executive
+  │           │     logical-name manager (src/kernel-core/vms_lnm.c, in
+  │           │     vms.ko); no daemon (VMS has none). The tables are
+  │           │     executive-resident and shared cross-process via /dev/vms.
   │           │     │
-  │           │     └── vmsfs
+  │           │     └── vmsfs — ODS-2 filespec translation + codec helpers
+  │           │           │      (the volume I/O itself is the executive ACP)
   │           │           │
   │           │           └── vmsrms
   │           │
@@ -101,8 +111,15 @@ tools/
   └── vms_help   (HELP.EXE — thin wrapper over the shared DCL help engine
                   src/vmsdcl/dcl_help.c; HELP is primarily a DCL built-in)
 
-kernel/ (out-of-tree, separate build)
-  └── vms.ko    (access, ast, eflag, lock)
+kernel/ (the executive — src/kernel Linux glue + src/kernel-core facilities;
+         built in-tree via drivers/ovmx/ for the distro kernel, and
+         out-of-tree against installed headers for the QEMU test harness)
+  └── vms.ko    access modes, ASTs, event flags, mailboxes, the process
+                table, the device table, the LOCK MANAGER, the logical-name
+                manager, the Files-11 ODS-2 ACP, and the executive-resident
+                VMScluster stack (SCS / CNXMAN / DLM). Reached via /dev/vms.
+                (On NetBSD/VAX the same src/kernel-core builds as the
+                vms.kmod module — see docs/building-multiarch.md.)
 ```
 
 ## Boot Sequence
@@ -112,75 +129,73 @@ OpenVMX has exactly one runtime: the real-kernel/QEMU path (CLAUDE.md Rule 9).
 initramfs — it is not itself a runtime.
 
 ```
-docker build -f Dockerfile.bootable -o dist .
-./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+docker build -f distro/Dockerfile.bootable -o dist .
+./distro/boot/run-qemu.sh dist/boot/vmlinuz dist/boot/initramfs-ovmx.cpio.gz
   │
-  ├── QEMU boots Linux kernel
-  └── Kernel unpacks initramfs, runs /init (init-wrapper.sh)
-        ├── Mount: proc, sysfs, devtmpfs, devpts, tmpfs
-        ├── opcom_kmsg_start() -- /dev/kmsg -> SYS$MANAGER:OPERATOR.LOG
-        │     bridge (vms-32a, docs/design-opcom-executive-logging.md):
+  ├── QEMU boots the Linux kernel
+  └── Kernel unpacks the initramfs and runs /init directly — which IS
+      STARTUP.EXE (the ovmx_init binary), PID 1. There is NO wrapper
+      script and NO busybox (init-wrapper.sh is retired): PID 1 does the
+      bootstrap itself (vms-9b7, vms-2f0). BOOTSTRAP ONLY — it does not
+      install, INITIALIZE or provision. PID 1 does NOT read SYSUAF and is
+      NOT SYSTEM; it holds only what the executive derived from root's
+      credentials at registration (UIC [0,0], empty username).
+        ├── mount the Linux base layer (proc, sysfs, devtmpfs, devpts, tmpfs)
+        ├── ovmx_boot_load_module("vms") → finit_module(2) loads vms.ko;
+        │     executive_attach opens /dev/vms (the executive I/O + device table)
+        ├── opcom_kmsg_start() -- a detached thread that reads /dev/kmsg and
         │     reformats vms.ko's own printk records as bare
-        │     "%OVMX-<S>-<IDENT>, text" lines, ahead of the module loads
-        │     below so their init-time records are replayed, not missed.
-        │     SYSKRNL (Linux-kernel-layer) lines (module-taint warnings,
-        │     hrtimer, ...) are RE-STYLED too, as "%SYSKRNL-<S>-KERNEL,
-        │     text" -- not suppressed, since they carry real operator-
-        │     relevant information. BOTH facilities go to OPERATOR.LOG
-        │     ONLY -- this bridge never opens /dev/console at all (PR
-        │     #358/vms-2213 pins the exact console facility+ident sequence
-        │     against the OpenVMS oracle, produced entirely by the boot
-        │     orchestrator below; routing EITHER facility's kmsg lines to
-        │     the console broke that pinned sequence twice -- PR #365,
-        │     rounds 1 and 2). Routine INFO-level device/bus-probe chatter
-        │     is dropped as genuinely operator-worthless. See the design
-        │     doc for the route-by-default filter, the OPERATOR.LOG-only
-        │     destination, and the one measured vms:/vmsfs: prefix
-        │     collision.
-        ├── Load: vms.ko
-        ├── Generate /etc/passwd, /etc/group from sysuaf.dat
-        └── exec /sbin/init (ovmx_init) — PID 1, BOOTSTRAP ONLY (vms-9b7)
-              │  PID 1 does NOT read SYSUAF and is NOT SYSTEM. It holds only what
-              │  the executive derived from root's credentials at registration
-              │  (UIC [0,0], empty username). It reaches shared libraries and stops.
-              ├── executive_attach (/dev/vms) → vmsfs device table
-              ├── if no system disk: provision dirs + copy initramfs backup (a file copy)
-              ├── lnm_setup_defaults + init_search_paths (SYS$SYSTEM:, SYS$SHARE: resolve)
-              ├── (no logical name daemon — deleted, vms-a4b; VMS has no such process)
-              └── exec SYS$SYSTEM:PROVISION.EXE — where PID 1 used to exec DCL.EXE
-                    │  The startup process. EXEC_INIT's shape (vms-a17e): vms.ko
-                    │  constructs the SYSTEM identity itself, from constants it owns
-                    │  (VMS_SYSTEM_UIC [1,4], VMS_PRV_M_SYSTEM_ALL) -- the OPA0:
-                    │  device-table precedent applied to identity. This image reads
-                    │  SYSUAF for NEITHER of the two fields that used to feed
-                    │  setident; its ONE remaining SYSUAF read (sysuaf_read_line/
-                    │  sysuaf_parse_line, vms-9b7) is home-directory provisioning.
-                    ├── vms_kif_establish_system() → the executive stamps SYSTEM
-                    │     [1,4]/ALL onto THIS process (no username/uic/privs args --
-                    │     nothing for this process to have supplied)
-                    ├── provision home directories + system-tree ownership
-                    │     (also the "does SYSUAF have a SYSTEM account at all"
-                    │     continuity check -- #278's halt, now riding this read)
-                    └── exec DCL.EXE on SYS$MANAGER:STARTUP.COM — SAME PROCESS.
-                          exec(2) preserves the executive's SYSTEM identity, so
-                          STARTUP.COM / SYSTARTUP_VMS.COM run under SYSTEM, exactly
-                          as OpenVMS (STARTUP runs as SYSTEM).
-                          │
-                          └── SYSTARTUP_VMS.COM → @SYS$STARTUP:JOB_CONTROL_STARTUP.COM
-                                RUN/DETACHED/PROCESS_NAME=JOB_CONTROL (vms-47b's
-                                mechanism) creates JOB_CONTROL.EXE
-                                (src/ovmx_job_control/ovmx_job_control.c) as a
-                                DETACHED process — NOT PID 1's child — with
-                                /INPUT /OUTPUT /ERROR pointed at the physical
-                                console (/dev/console). JOB_CONTROL owns the
-                                console session from here on (vms-8d2):
-                                  └── fork/exec SYS$SYSTEM:LOGINOUT.EXE
-                                        (tools/vms_login.c) on the console,
-                                        forever, with retry/backoff on repeated
-                                        failure. LOGINOUT is SYSUAF's FIRST
-                                        reader for an authenticated identity,
-                                        matching OpenVMS. Login shells (vmsdcl)
-                                        launch under the authenticated session.
+        │     "%OVMX-<S>-<IDENT>, text" lines (started right after the module
+        │     load so init-time records are replayed, not missed). SYSKRNL
+        │     (Linux-kernel-layer) lines (module-taint warnings, hrtimer, ...)
+        │     are RE-STYLED too, as "%SYSKRNL-<S>-KERNEL, text" -- not
+        │     suppressed, since they carry real operator-relevant information.
+        │     BOTH facilities go to SYS$MANAGER:OPERATOR.LOG ONLY -- this
+        │     bridge never opens /dev/console at all (routing EITHER facility's
+        │     kmsg lines to the console broke the oracle-pinned boot sequence
+        │     twice -- PR #365, rounds 1 and 2). Routine INFO-level
+        │     device/bus-probe chatter is dropped as operator-worthless. See
+        │     the design subsection below and design-opcom-executive-logging.md.
+        ├── mount the pre-installed ODS-2 system disk over the executive
+        │     Files-11 ACP ($ASSIGN + IO$_ACCESS/READVBLK) -- NO /vms
+        │     passthrough (retired). If there is no valid installed system disk
+        │     PID 1 HALTS honestly (%OVMX-F-EXECINIT) rather than provisioning
+        │     one -- a booting VMS system finds its disk or stops.
+        ├── lnm_setup_defaults + init_search_paths (SYS$SYSTEM:, SYS$SHARE:)
+        └── exec SYS$SYSTEM:PROVISION.EXE — the startup process (where PID 1
+              │  used to exec DCL.EXE). Every shareable .EXE is activated by
+              │  IMGACT.EXE (src/imgact/), the static-PIE image activator named
+              │  as the PT_INTERP of the image: it maps the image and resolves
+              │  its .vms$sv symbol vector against the shareable images. (See
+              │  docs/design-imgact-vms-activation-context.md.)
+              ├── vms_kif_establish_system() → the executive stamps SYSTEM
+              │     [1,4]/ALL onto THIS process from constants vms.ko owns
+              │     (VMS_SYSTEM_UIC [1,4], VMS_PRV_M_SYSTEM_ALL) -- no
+              │     username/uic/privs args for this process to have supplied.
+              ├── provision home directories + system-tree ownership. This is
+              │     PROVISION.EXE's ONE SYSUAF read (sysuaf_read_line/
+              │     sysuaf_parse_line, vms-9b7) -- home-directory provisioning,
+              │     also the "does SYSUAF have a SYSTEM account at all" check.
+              └── exec DCL.EXE on SYS$MANAGER:STARTUP.COM — SAME PROCESS.
+                    exec(2) preserves the executive's SYSTEM identity, so
+                    STARTUP.COM / SYSTARTUP_VMS.COM run under SYSTEM, exactly
+                    as OpenVMS (STARTUP runs as SYSTEM).
+                    │
+                    └── SYSTARTUP_VMS.COM → @SYS$STARTUP:JOB_CONTROL_STARTUP.COM
+                          RUN/DETACHED/PROCESS_NAME=JOB_CONTROL (vms-47b's
+                          mechanism) creates JOB_CONTROL.EXE
+                          (src/ovmx_job_control/ovmx_job_control.c) as a
+                          DETACHED process — NOT PID 1's child — with
+                          /INPUT /OUTPUT /ERROR pointed at the physical
+                          console (/dev/console). JOB_CONTROL owns the
+                          console session from here on (vms-8d2):
+                            └── fork/exec SYS$SYSTEM:LOGINOUT.EXE
+                                  (tools/vms_login.c) on the console,
+                                  forever, with retry/backoff on repeated
+                                  failure. LOGINOUT is SYSUAF's FIRST
+                                  reader for an authenticated identity,
+                                  matching OpenVMS. Login shells (vmsdcl)
+                                  launch under the authenticated session.
 
 STARTUP.EXE (PID 1) returns from run_startup() once STARTUP.COM has finished —
 by which point JOB_CONTROL already owns the console — and then waits
@@ -270,11 +285,15 @@ User types command via SSH
         │     └── External? → fork/exec with VMS-style status return
         │
         ├── File ops route through:
-        │     vmsrms → vmsfs → vmslnm (logical name translation)
+        │     vmsrms (RMS) → the executive Files-11 ODS-2 ACP over /dev/vms
+        │       ($ASSIGN + IO$_ACCESS/READVBLK/WRITEVBLK — no /vms
+        │       passthrough). Logical names resolve against the executive
+        │       LNM; vmslnm is the client veneer, vmsfs the filespec / ODS-2
+        │       codec helper.
         │
-        └── System calls route through:
-              libvms (syssvc/) → vmsprocess → libvmssys → Linux kernel
-                                                            └── vms.ko
+        └── System services route through:
+              libvms (syssvc/) → vmsprocess → libvmssys → the executive
+                via /dev/vms (vms.ko)
 ```
 
 ## Key Files by Component
@@ -288,6 +307,8 @@ User types command via SSH
 | vmsfs | `src/vmsfs/vmsfs_translate.c` | `include/vmsfs/filespec.h` | libvmsfs |
 | vmsrms | `src/vmsrms/rms_core.c` | `include/rms/rms.h` | librms |
 | vmsdcl | `src/vmsdcl/dcl_main.c` | `include/dcl/context.h` | vmsdcl |
-| kernel | `src/kernel/vms_module.c` | `vms_internal.h` | vms.ko |
-| ovmx_init | `src/ovmx_init/ovmx_init.c` | — | ovmx_init |
+| executive (Linux glue) | `src/kernel/vms_module.c` | `vms_internal.h` | vms.ko |
+| executive (facilities) | `src/kernel-core/*.c` (locks, EF, AST, mailbox, proctab, devtab, LNM, ODS-2 ACP, cluster) | `src/kernel/vms_acp.h`, … | (into vms.ko / vms.kmod) |
+| image activator | `src/imgact/imgact.c` | `src/imgact/arch/<a>/imgact_arch.h` | IMGACT.EXE |
+| ovmx_init (PID 1) | `src/ovmx_init/ovmx_init.c` | — | STARTUP.EXE |
 | vms_login | `tools/vms_login.c` | — | vms_login |

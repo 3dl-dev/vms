@@ -19,15 +19,20 @@ nothing.
 
 OVMX is a genuine VMScluster participant, not a simulation of one.
 
-- **Distributed lock manager — complete (ENQ class).** A cross-node `$ENQ` grants,
-  blocks on contention, and grants-on-release on the mastering node; the blocking AST
-  fires over the wire on the real holder; the lock value block replicates both ways;
-  resources dynamically remaster to a survivor on graceful departure (directory *and*
-  lock state rebuilt from the survivor's real origin records); a node refuses to master
-  a resource it is not the directory for; and cross-node deadlocks are detected by a
+- **Distributed lock manager — the ENQ class, executive-resident.** A cross-node `$ENQ`
+  grants, blocks on contention, and grants-on-release on the mastering node; the blocking
+  AST fires over the wire on the real holder; the lock value block replicates both ways;
+  resources dynamically remaster to a survivor on graceful departure (directory *and* lock
+  state rebuilt from the survivor's real origin records); a node refuses to master a
+  resource it is not the directory for; and cross-node deadlocks are detected by a
   distributed edge-chasing search that aborts a single deterministic victim with
-  `SS$_DEADLOCK`. Proven on a real `/dev/vms` executive across the H0–H11 QEMU
-  harnesses. (Register: `cluster-dlm`.)
+  `SS$_DEADLOCK`. The full op set runs on a real `/dev/vms` executive (single-node dispatch
+  is a standing gate); the multi-node H-series QEMU harnesses that first proved the
+  over-the-wire path were **retired** in the executive-resident pivot, and a live **two-node**
+  cluster has since re-established the cross-node `$ENQ`→GRANT and BLKAST round-trip on real
+  executive state. The register carries these rows as *implemented* — remaster/LVB and
+  distributed deadlock detection await a multi-node runtime re-proof, tracked as `vms-1ee`.
+  (Register: `cluster-dlm`.)
 - **RMS behind the DLM.** File-sharing and record-level locking go through the real
   distributed lock manager — no `flock` fallback.
 - **Cluster membership in the executive.** `SHOW CLUSTER` and `$GETSYI` read the real

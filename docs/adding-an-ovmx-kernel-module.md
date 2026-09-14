@@ -1,7 +1,9 @@
 # Adding an OVMX kernel module
 
 `drivers/ovmx/` is OVMX's in-tree home for kernel modules. It is a **menu**, not
-a hard-coded `vms.ko` + `vmsfs.ko` pair: adding a module is a fixed, three-step
+a hard-wired single module: today the only module it carries is the executive
+`vms.ko` (the ODS-2/Files-11 ACP is compiled into it — the old `vmsfs.ko` was
+retired, vms-165), but adding a module is a fixed, three-step
 motion, after which the new module inherits the properties the owns-kernel work
 established — it builds **in-tree** (`modinfo intree=Y`, so loading it does not
 set `TAINT_OUT_OF_TREE`, vms-934) and is **signed** with the OVMX signing key
@@ -119,8 +121,9 @@ Building a signed, in-tree `.ko` is automatic. **Which initramfs it ships in**
 is a deliberate product choice — the FAT/SLIM initramfs staging in
 `distro/Dockerfile.bootable` copies the specific modules a given boot needs. Add
 your `cp …/<mod>.ko …/lib/modules/` there if and when the runtime should load
-it. (The two executive-critical modules, `vms.ko` and `vmsfs.ko`, are staged and
-gated explicitly; a new module is additive.)
+it. (The executive-critical module, `vms.ko` — the sole executive module, with
+the ODS-2/Files-11 ACP compiled in — is staged and gated explicitly; a new
+module is additive.)
 
 ## Verifying your change
 

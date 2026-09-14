@@ -24,10 +24,11 @@ sudo apt install docker.io
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `BUILD_TESTS` | ON | Build test programs |
-| `BUILD_TOOLS` | ON | Build vms_login, vms_help, vms_ssh_auth |
-| `BUILD_FUSE` | OFF | Build FUSE ODS-2 driver (not yet implemented) |
-| `OVMX_STATIC` | OFF | Static linking with musl-gcc |
+| `BUILD_TESTS` | ON (OFF when cross-compiling) | Build test programs |
+| `BUILD_TOOLS` | ON | Build the VMS tools (vms_login/LOGINOUT, vms_help/HELP.EXE, vms_authorize/AUTHORIZE, vms_mail, vms_monitor, vms_initialize, PRODUCT.EXE, mksysuaf, mkrightslist, …) |
+| `BUILD_FUSE` | OFF | Build the optional dev-only FUSE ODS-2 driver (requires libfuse) — a convenience for inspecting volumes on the host; NOT the runtime path, which is the kernel-resident Files-11 ACP |
+| `OVMX_STATIC` | OFF | Build all libraries as static and link statically (musl-gcc; suitable for initramfs) |
+| `OVMX_IMGACT` | OFF | Build shareable images with `PT_INTERP=IMGACT.EXE` (musl, QEMU only; mutually exclusive with `OVMX_STATIC`) |
 | `CMAKE_BUILD_TYPE` | — | Debug, Release, RelWithDebInfo |
 
 ## Development Build
@@ -45,7 +46,7 @@ cmake --build build -j$(nproc)
 
 **Outputs** in `build/`:
 - Libraries: `libvms.so`, `libvmsprocess.so`, `libvmslnm.so`, `libvmsfs.so`, `librms.so`, `libvmssys.a`
-- Executables: `vmsdcl`, `vms_login`, `vms_help`, `vms_ssh_auth`, `ovmx_init`
+- Executables: `vmsdcl`, `vms_login`, `vms_help`, `vms_authorize`, `vms_mail`, `vms_monitor`, `vms_initialize`, `ovmx_init` (deployed as `STARTUP.EXE`)
 - Tests: `test_vmssys_*`, integration tests
 
 ## Static Build
@@ -117,10 +118,20 @@ identical layered-product kit pattern.
 
 ## Kernel Modules
 
-Built out-of-tree against installed kernel headers. Not integrated into CMake.
+The executive is a single kernel module, `vms.ko`. Its substrate-agnostic
+facilities live in `src/kernel-core/`; `src/kernel/` holds the Linux glue (the
+`/dev/vms` char device + backend primitives). For the distro kernel it is built
+**in-tree** under `drivers/ovmx/` (see
+[`adding-an-ovmx-kernel-module.md`](adding-an-ovmx-kernel-module.md)); the
+standalone build below is out-of-tree against installed headers, used by the
+QEMU test harness. It is not integrated into CMake. There is no separate
+`vmsfs.ko` — the ODS-2 codec and Files-11 ACP are compiled into `vms.ko` (the
+`vmsfs.ko` VFS mount was retired, vms-165).
 
 ```bash
-# Main VMS module (access control, ASTs, event flags, locks, ODS-2/Files-11 ACP)
+# The VMS executive: access modes, ASTs, event flags, mailboxes, the process
+# table, the device table, the lock manager, the logical-name manager, the
+# ODS-2/Files-11 ACP, and the executive-resident cluster stack (SCS/CNXMAN/DLM)
 make -C src/kernel
 
 # Specify kernel version

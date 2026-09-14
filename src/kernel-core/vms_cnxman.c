@@ -2566,10 +2566,13 @@ void vms_cnxman_stop(struct vms_cluster *cl)
 	 * reconnect period. */
 	if (cnxman_recnx_shutdown(&cn->recnx, &rec, 1) == 1u &&
 	    rec.action == (uint8_t)CNXMAN_CSB_ACT_LAST_GASP && cl->pe != NULL) {
-		/* The datagram itself is a PORT-level frame (wire spec
-		 * SS4(O.30)); FC-P0.9's vms_pe.h owns building and sending
-		 * it. No last-gasp builder is wired into this glue yet -- an
-		 * honest gap, not a fabricated send. */
+		/* recnx_shutdown decided there are peers to tell (p. 7-29);
+		 * the datagram itself is a PORT-level frame (wire spec
+		 * SS4(O.30)) that FC-P0.9's vms_pe.h owns. Emit it now. The
+		 * builder's at-most-once guard makes vms_pe_stop's own teardown
+		 * emit a no-op if this already went, so a clean CLUSTER_STOP
+		 * that runs both puts exactly one gasp on the wire. */
+		(void)pe_send_last_gasp(cl->pe);
 	}
 
 	if (cl->scs != NULL) {

@@ -683,6 +683,18 @@ static void test_last_gasp(void)
 		 "the CONFIGURED token is carried at abs 68 (SS4(O.30))");
 	ct_check_eq_u32(g_fsm.nonce_absent, 0,
 			"and nothing is counted as absent");
+
+	/* AT MOST ONCE per port lifecycle (p. 7-29 -- a node leaves once). On a
+	 * clean CLUSTER_STOP the connection manager's departure path and the
+	 * port teardown both reach the builder; the guard makes the second a
+	 * benign no-op so exactly one gasp goes on the wire. */
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0,
+			"a second call is a benign no-op, not a failure");
+	ct_check_eq_u32(g_fake.n_frames, 0,
+			"and puts NO second gasp on the wire");
+	ct_check_eq_u32(g_fsm.last_gasps_built, 1,
+			"still counted exactly once");
 }
 
 /* ------------------------------------------------------------------ *

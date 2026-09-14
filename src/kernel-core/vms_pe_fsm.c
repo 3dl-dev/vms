@@ -1366,6 +1366,15 @@ int pe_fsm_send_last_gasp(struct pe_fsm *f)
 
 	if (f == NULL)
 		return -1;
+	/* AT MOST ONCE per port lifecycle: a node leaves the cluster once
+	 * (p. 7-29). On a clean CLUSTER_STOP both the connection manager's
+	 * departure path (vms_cnxman_stop) and the port teardown (vms_pe_stop)
+	 * reach this builder; this guard makes whichever runs second a benign
+	 * no-op, so exactly one gasp goes on the wire regardless of order. The
+	 * counter is reset to 0 when a fresh port is allocated (vms_pe_start),
+	 * so a later rejoin+leave announces again. */
+	if (f->last_gasps_built != 0u)
+		return 0;
 	if (!pe_may_send(f) || !f->id.mcast_valid)
 		return -1;
 

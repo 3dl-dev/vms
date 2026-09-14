@@ -3035,10 +3035,22 @@ static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
     }
 
     /* Read the password (if any) from the inherited fd, never from argv. Bounded;
-     * a trailing newline is stripped; the buffer is wiped after the transfer. */
+     * a trailing newline is stripped; the buffer is wiped after the transfer.
+     *
+     * CLEARTEXT TRANSMISSION (codeql cpp/cleartext-transmission, BY DESIGN):
+     * this password IS carried to the remote FAL in the object-17 Session Control
+     * CONNECT (copy_client_run -> dnet_cterm_sc_connect_build), where FAL
+     * authenticates it -- that is how DECnet Phase IV FAL access control works
+     * (the oracle §1 shows the credentials in the connect; the OPPOSITE of CTERM,
+     * whose connect creds are empty). DECnet Phase IV has NO transport encryption;
+     * OVMX is a CLEAN-ROOM FAITHFUL reproduction (Rule 8) and cannot encrypt what
+     * the wire protocol defines as cleartext -- the same property the shipped
+     * inbound FAL server (decnet$fal, --fal-accept-test) already has. OVMX's own
+     * hardening is orthogonal and present: the password never touches argv (fd
+     * handoff), is bounded, and is wiped immediately after the connect is built. */
     char password[DNET_SC_MAX_STR + 1] = {0};
     if (plan.has_access && password_fd >= 0) {
-        ssize_t got = read(password_fd, password, sizeof password - 1);
+        ssize_t got = read(password_fd, password, sizeof password - 1); // codeql[cpp/cleartext-transmission]
         if (got < 0) {
             fprintf(stderr, "DECNETD-E-COPYPW, could not read the password from"
                             " fd %d: %s\n", password_fd, strerror(errno));

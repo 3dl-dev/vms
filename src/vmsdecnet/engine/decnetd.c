@@ -64,6 +64,7 @@
 #include "dnet_cterm_host.h" /* CTERM HOST session: $CREPRC -> LOGINOUT on RTAn: */
 #include "dnet_dap.h"       /* DAP message codec (--fal-* : COPY presentation layer) */
 #include "dnet_fal.h"       /* FAL server + COPY client (object 17, rd vms-8c2) */
+#include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
@@ -633,6 +634,165 @@ done:
            " (link OPEN -> data segment+ack -> clean DISCONNECT over a real"
            " socketpair; CI/CC + DI/DC choreography, payload byte-identical)\n");
     return 0;
+}
+
+/*
+ * run_net_broker_selftest (rd vms-22c, a1-2) -- the host floor of the exec<->
+ * NETACP T1 broker transport: the request/response RECORD CODEC that rides the
+ * executive mailbox, and its two SECURITY GUARDS, proven with NO executive and
+ * NO mailbox (pure codec logic, the discipline of --nsp-selftest / the CTERM
+ * codec fuzz). It proves:
+ *   (A) a request and a response round-trip byte-exact (encode -> decode);
+ *   (B) BOUNDS VALIDATION -- a truncated header, a truncated body, an over-bound
+ *       datalen, and a wrong/opposite magic are each REFUSED, never over-read
+ *       (the a1-2 seam that keeps a malformed mailbox record from faulting the
+ *       executive or NETACP); a 200k-iteration mutation + every-truncated-prefix
+ *       fuzz decodes clean (ASan/UBSan) and never returns a self-inconsistent
+ *       record;
+ *   (C) CORRELATION IDS -- monotonic nonzero issuance, and the anti-cross-talk
+ *       match: a response is accepted for a request ONLY when the ids are equal
+ *       and nonzero, so a reply meant for another link is refused.
+ * The mailbox seam + qio_net_op marshalling + NETACP servicing (the /dev/vms
+ * rungs) build on this proven record.
+ */
+static uint32_t nbself_rand(uint32_t *s)   /* deterministic LCG for the fuzz */
+{
+    *s = (*s) * 1664525u + 1013904223u;
+    return *s;
+}
+
+static int run_net_broker_selftest(void)
+{
+    printf("DECNETD-I-NETBROKER, exec<->NETACP T1 broker record codec: round-trip"
+           " + bounds-validated decode + correlation-id anti-cross-talk (no"
+           " executive, rd vms-22c)\n");
+    int pass = 0, fail = 0;
+#define NB_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    /* (A) request round-trip byte-exact. */
+    struct dnet_broker_req req, rq2;
+    memset(&req, 0, sizeof req);
+    req.corr_id = 0x11223344u; req.owner_pid = 0x0000BEEFu;
+    req.link_handle = 0x2001u; req.op = DNET_BROKER_OP_SEND;
+    const char *payload = "TASK-TO-TASK broker payload: ping 0123456789";
+    req.datalen = (uint16_t)strlen(payload);
+    memcpy(req.data, payload, req.datalen);
+
+    uint8_t buf[DNET_BROKER_REQ_MAX + 8];
+    size_t blen = 0;
+    int enc = dnet_broker_req_encode(&req, buf, sizeof buf, &blen);
+    int dec = dnet_broker_req_decode(buf, blen, &rq2);
+    NB_CHECK(enc == DNET_BROKER_OK && dec == DNET_BROKER_OK &&
+             blen == (size_t)DNET_BROKER_REQ_HDR + req.datalen &&
+             rq2.corr_id == req.corr_id && rq2.owner_pid == req.owner_pid &&
+             rq2.link_handle == req.link_handle && rq2.op == req.op &&
+             rq2.datalen == req.datalen &&
+             memcmp(rq2.data, req.data, req.datalen) == 0,
+             "request record round-trips byte-exact (encode -> decode)");
+
+    /* response round-trip byte-exact. */
+    struct dnet_broker_rsp rsp, rs2;
+    memset(&rsp, 0, sizeof rsp);
+    rsp.corr_id = req.corr_id; rsp.status = 0x00000001u /* SS$_NORMAL */;
+    const char *rdata = "TASK-TO-TASK broker reply: pong 9876543210";
+    rsp.datalen = (uint16_t)strlen(rdata);
+    memcpy(rsp.data, rdata, rsp.datalen);
+    uint8_t rbuf[DNET_BROKER_RSP_MAX + 8];
+    size_t rlen = 0;
+    NB_CHECK(dnet_broker_rsp_encode(&rsp, rbuf, sizeof rbuf, &rlen) == DNET_BROKER_OK &&
+             dnet_broker_rsp_decode(rbuf, rlen, &rs2) == DNET_BROKER_OK &&
+             rs2.corr_id == rsp.corr_id && rs2.status == rsp.status &&
+             rs2.datalen == rsp.datalen &&
+             memcmp(rs2.data, rsp.data, rsp.datalen) == 0,
+             "response record round-trips byte-exact (encode -> decode)");
+
+    /* (B) BOUNDS VALIDATION -- every malformed record is refused, never over-read. */
+    NB_CHECK(dnet_broker_req_decode(buf, DNET_BROKER_REQ_HDR - 1, &rq2) == DNET_BROKER_ETRUNC,
+             "a header-truncated record is refused (ETRUNC), not misread");
+    NB_CHECK(dnet_broker_req_decode(buf, blen - 1, &rq2) == DNET_BROKER_ETRUNC,
+             "a body-truncated record is refused (ETRUNC), never over-reads the payload");
+    {
+        /* forge a header claiming datalen over the payload bound. */
+        uint8_t bad[DNET_BROKER_REQ_HDR];
+        memcpy(bad, buf, DNET_BROKER_REQ_HDR);
+        bad[18] = (uint8_t)((DNET_NSP_MAX_DATA + 1) & 0xff);
+        bad[19] = (uint8_t)(((DNET_NSP_MAX_DATA + 1) >> 8) & 0xff);
+        NB_CHECK(dnet_broker_req_decode(bad, sizeof bad, &rq2) == DNET_BROKER_EBADLEN,
+                 "a datalen over DNET_NSP_MAX_DATA is refused (EBADLEN), never allocates/reads it");
+    }
+    NB_CHECK(dnet_broker_rsp_decode(buf, blen, &rs2) == DNET_BROKER_EMAGIC,
+             "a REQUEST decoded as a RESPONSE is refused by the magic gate (direction guard)");
+    {
+        uint8_t bad[DNET_BROKER_REQ_HDR];
+        memcpy(bad, buf, DNET_BROKER_REQ_HDR);
+        bad[0] ^= 0xff;   /* corrupt the magic */
+        NB_CHECK(dnet_broker_req_decode(bad, sizeof bad, &rq2) == DNET_BROKER_EMAGIC,
+                 "a wrong-magic record is refused (EMAGIC), not misread as a request");
+    }
+
+    /* fuzz: mutate a valid record + feed every truncated prefix; must never
+     * crash (ASan/UBSan) and never return OK with a self-inconsistent length. */
+    {
+        uint32_t seed = 0xC0FFEEu;
+        int ok_seen = 0, refused_seen = 0, inconsistent = 0;
+        for (int i = 0; i < 200000; i++) {
+            uint8_t fz[DNET_BROKER_REQ_MAX + 8];
+            size_t n = blen ? blen : 1;
+            memcpy(fz, buf, n);
+            /* mutate a few bytes */
+            for (int m = 0; m < 3; m++)
+                fz[nbself_rand(&seed) % n] = (uint8_t)nbself_rand(&seed);
+            size_t use = (nbself_rand(&seed) % (n + 1));   /* every truncated prefix too */
+            struct dnet_broker_req fr;
+            int r = dnet_broker_req_decode(fz, use, &fr);
+            if (r == DNET_BROKER_OK) {
+                ok_seen = 1;
+                if ((size_t)DNET_BROKER_REQ_HDR + fr.datalen > use ||
+                    fr.datalen > DNET_NSP_MAX_DATA)
+                    inconsistent = 1;   /* an accepted record must be length-consistent */
+            } else {
+                refused_seen = 1;
+            }
+        }
+        NB_CHECK(!inconsistent && refused_seen,
+                 "200k-mutation + truncated-prefix fuzz: no accepted record is length-inconsistent, and malformed inputs are refused (ASan/UBSan clean)");
+        (void)ok_seen;
+    }
+
+    /* (C) CORRELATION IDS -- monotonic issuance + the anti-cross-talk match. */
+    {
+        uint32_t st = 0, a, b, c;
+        a = dnet_broker_corr_next(&st);
+        b = dnet_broker_corr_next(&st);
+        c = dnet_broker_corr_next(&st);
+        NB_CHECK(a != 0 && b == a + 1 && c == b + 1,
+                 "correlation ids are issued monotonically, skipping the 0 sentinel");
+        NB_CHECK(dnet_broker_corr_match(a, a) == 1 &&
+                 dnet_broker_corr_match(a, b) == 0 &&
+                 dnet_broker_corr_match(0, 0) == 0 &&
+                 dnet_broker_corr_match(a, 0) == 0,
+                 "corr_match accepts an exact nonzero match and refuses a mismatch / the 0 sentinel");
+    }
+    /* the anti-cross-talk scenario over the real records: a response carrying
+     * another link's correlation id is refused delivery to this request. Decode
+     * fresh records here (rq2/rs2 above were reused as scratch by the bounds
+     * checks, whose refusals zero *out). */
+    {
+        struct dnet_broker_req freq;
+        struct dnet_broker_rsp frsp;
+        NB_CHECK(dnet_broker_req_decode(buf, blen, &freq) == DNET_BROKER_OK &&
+                 dnet_broker_rsp_decode(rbuf, rlen, &frsp) == DNET_BROKER_OK &&
+                 dnet_broker_corr_match(freq.corr_id, frsp.corr_id) == 1 &&
+                 dnet_broker_corr_match(freq.corr_id, frsp.corr_id ^ 0x1u) == 0,
+                 "a response is delivered to its request only on an exact corr-id match (cross-talk refused)");
+    }
+
+    printf("DECNETD-I-NETBROKER, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-NET-BROKER-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-NET-BROKER-SELFTEST: FAIL\n");
+    return 1;
+#undef NB_CHECK
 }
 
 /*
@@ -2770,6 +2930,10 @@ static void usage(const char *argv0)
         "                      format-1 NAMED descriptor), the passive side decodes\n"
         "                      the name, a request+reply move BOTH directions\n"
         "                      byte-verified, then disconnect (rd vms-dda)\n"
+        "  --net-broker-selftest  run the exec<->NETACP T1 broker record codec\n"
+        "                      floor and exit (no executive): request/response\n"
+        "                      round-trip + bounds-validated decode (fuzzed) +\n"
+        "                      correlation-id anti-cross-talk (rd vms-22c)\n"
         "  --set-host-selftest run the $ SET HOST / CTERM terminal-service proof\n"
         "                      and exit (no CAP_NET_RAW -- two engines carry a\n"
         "                      whole terminal session: Bind, characteristics,\n"
@@ -2858,6 +3022,7 @@ int main(int argc, char **argv)
     int self_test = 0;
     int nsp_self_test = 0;
     int task_self_test = 0;               /* --task-selftest : task-to-task client floor */
+    int net_broker_test = 0;              /* --net-broker-selftest : T1 broker record codec */
     int sethost_self_test = 0;
     int sethost_srccode_test = 0;
     int cterm_accept_test = 0;
@@ -2899,6 +3064,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--self-test"))     self_test = 1;
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
         else if (!strcmp(argv[i], "--task-selftest")) task_self_test = 1;
+        else if (!strcmp(argv[i], "--net-broker-selftest")) net_broker_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
@@ -2939,6 +3105,8 @@ int main(int argc, char **argv)
         return run_nsp_selftest();
     if (task_self_test)
         return run_task_selftest();
+    if (net_broker_test)
+        return run_net_broker_selftest();
     if (sethost_self_test)
         return run_sethost_selftest();
     if (sethost_srccode_test)

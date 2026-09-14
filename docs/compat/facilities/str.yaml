@@ -11,7 +11,7 @@ summary: >
   Descriptor-based string routines. OVMX declares 23 of the ~85 STR$ routines VMS
   ships; the 23 present are all real. Remaining routines are absent (compile-time
   detectable — the correct failure mode for source compat).
-last_reviewed: 2026-08-13
+last_reviewed: 2026-09-14
 items:
   - {id: str$copy_dx,             kind: routine, status: implemented, authenticity: real, vms: "Copy source string into a CLASS_S/CLASS_D descriptor (pad/truncate)", evidence: src/libvms/rtl/str_routines.c}
   - {id: str$copy_r,              kind: routine, status: implemented, authenticity: real, vms: "Copy from length+address pair", evidence: src/libvms/rtl/str_routines.c}

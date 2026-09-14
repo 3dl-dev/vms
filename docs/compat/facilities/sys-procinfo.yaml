@@ -13,7 +13,7 @@ summary: >
   vms_kif_getjpi_pid by VMS PID, or self) — cross-process, not a per-process
   fake. GETSYI cluster items (SCSNODE/SCSSYSTEMID/CLUSTER_MEMBER) read the
   executive membership block.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: sys$getjpi, kind: routine, status: implemented, authenticity: real, vms: "Get job/process information (single item)", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam (caller's UIC group), VMS PID, or self"}
   - {id: sys$getjpiw, kind: routine, status: implemented, authenticity: real, vms: "Get job/process information (waits for completion)", evidence: src/libvms/syssvc/sys_process.c}

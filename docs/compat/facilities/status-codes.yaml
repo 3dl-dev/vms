@@ -16,13 +16,13 @@ summary: >
   "unknown status code" and an unknown facility to "NONAME" — no invented
   VMS-shaped text. Facility number registry: 6 facilities decoded in
   facility_name() (SYSTEM,RMS,CLI,LIB,MTH,OTS); unknown facilities decode to
-  generic NONAME. starlet.h declares only ~86-192 sys$ symbols vs several
+  generic NONAME. starlet.h declares only 109 sys$ symbols vs several
   hundred in real VMS.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: stsdef$_bitfield, kind: struct, status: implemented, authenticity: real, vms: "STS$V/M/S_* bitfield layout + $VMS_STATUS_SUCCESS success-test macro", evidence: src/libvms/include/stsdef.h, notes: "matches the documented VSI status-value bitfield layout; not oracle-verified (no lab/conformance capture pins it), so implemented not verified"}
   - {id: ssdef$_codes, kind: status-block, status: partial, authenticity: real, vms: "SS$_ condition-value constants (VMS ships ~500+)", evidence: src/libvms/include/ssdef.h, notes: "111 defined; common/executive subset, long tail absent"}
   - {id: rmsdef$_codes, kind: status-block, status: partial, authenticity: real, vms: "RMS$_ condition-value constants (VMS ships ~200+)", evidence: src/libvms/include/rmsdef.h, notes: "83 defined"}
   - {id: sys$getmsg_text_table, kind: routine, status: partial, authenticity: advisory, vms: "Message text table consumed by SYS$GETMSG (VMS ships real text for ~176 SS$+RMS$ codes)", evidence: src/libvms/status.c, notes: "51 codes (44 SS$ + 8 RMS$) carry real text in known_codes[]; a code not in the table decodes honestly to 'unknown status code' and an unknown facility to 'NONAME' — degrades honestly, no invented text. Ident audit vs oracle tracked vms-916."}
   - {id: facility_registry, kind: status-block, status: stub, authenticity: real, vms: "FACILITY_* facility-number registry (VMS defines ~300+)", evidence: src/libvms/syssvc/sys_msg.c, notes: "facility_name() decodes 6 (SYSTEM,RMS,CLI,LIB,MTH,OTS); unknown facilities decode to generic NONAME, honestly"}
-  - {id: starlet$_symbol_coverage, kind: status-block, status: partial, authenticity: n/a, vms: "starlet.h SYS$ symbol declarations (real VMS: several hundred)", evidence: src/libvms/include/starlet.h, notes: "~86-192 sys$ symbols declared depending on build config, vs several hundred in real VMS"}
+  - {id: starlet$_symbol_coverage, kind: status-block, status: partial, authenticity: n/a, vms: "starlet.h SYS$ symbol declarations (real VMS: several hundred)", evidence: src/libvms/include/starlet.h, notes: "109 distinct sys$ symbols declared, vs several hundred in real VMS"}

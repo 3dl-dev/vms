@@ -14,7 +14,7 @@ summary: >
   in activated images are real. Image container byte layout
   (.vms$sv/.vms$imp/.vms$rel/.vms$tls) is covered under the symbol-vectors
   facility.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: image-activation$imgact-pt-interp, kind: feature, status: verified, authenticity: real, vms: "IMGACT.EXE image activation via PT_INTERP", evidence: "src/imgact/imgact.c", verified_against: "src/imgact/test/ activation scripts incl. run_test.sh, run_test_x86_64.sh and run_test_alpha.sh / run_vms_std_activation_alpha.sh", notes: "Freestanding static-PIE, per-arch start.S (x86_64/aarch64/alpha)."}
   - {id: image-activation$symvec-activation, kind: feature, status: verified, authenticity: real, vms: "Symbol-vector-based activation of shareable images (DCL, LOGINOUT, TCC, all shareables)", evidence: "src/imgact/test/run_symvec_activation.sh", verified_against: "run_symvec_activation.sh + run_dcl_native.sh, run_login_native.sh, run_shareable_import_activation.sh, run_decc_shr_activation.sh, run_weak_import_activation.sh", notes: "Activation behavior real; symbol-vector byte layout is advisory (Rule 8) — see symbol-vectors facility."}

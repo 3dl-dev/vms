@@ -11,6 +11,6 @@ summary: >
   GAS-syntax only, not MACRO-32. (Note: the Alpha object toolchain reads GAS-
   produced native EVAX objects — see object-format — but that is not a MACRO-32
   compiler.)
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: macro$macro-32-assembler, kind: utility, status: absent, authenticity: n/a, vms: "MACRO-32 assembler / compiler", evidence: "docs/compatibility-contract.md", scope_1_0: out, notes: "Explicit compatibility-contract decision: TCC integrated assembler is GAS-syntax only; MACRO-32 out of scope."}

@@ -12,7 +12,7 @@ summary: >
   the facnam facility-name override by rewriting the %FACILITY token of the
   formatted message (vms-7a2), no longer silently discarding it. SYS$SNDJBC is
   absent.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: sys$fao, kind: routine, status: implemented, authenticity: real, vms: "Formatted ASCII output (buffer form)", evidence: src/libvms/syssvc/sys_fao.c}
   - {id: sys$faol, kind: routine, status: implemented, authenticity: real, vms: "Formatted ASCII output (arg-list form)", evidence: src/libvms/syssvc/sys_fao.c}

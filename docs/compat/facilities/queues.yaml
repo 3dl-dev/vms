@@ -11,8 +11,10 @@ summary: >
   VMS binary time), and SUBMIT/PRINT enqueue real entries — but nothing ever
   dequeues and runs a batch job, so this facility is partial and no item is
   verified. Queue-management verb syntax deviates from VMS (SET QUEUE/START
-  etc. rather than START/QUEUE).
-last_reviewed: 2026-08-31
+  etc. rather than START/QUEUE). Re-censused 2026-09-14 against origin/main:
+  unchanged — the entry state machine can mark an entry EXECUTING
+  (vmsqueue.c:567) but there is still no dequeue-and-execute path.
+last_reviewed: 2026-09-14
 items:
   - id: queues$manager
     kind: subsystem
@@ -44,7 +46,7 @@ items:
     authenticity: n/a
     vms: "Batch execution engine — dequeues and runs submitted batch jobs"
     evidence: src/vmsqueue/vmsqueue.c
-    notes: "Honestly documented absence: jobs queue but are never dequeued/run (no dequeue-and-execute path in vmsqueue or ovmx_job_control, which is boot plumbing). Any software or SYSTARTUP procedure that submits a batch job and waits on it hangs forever. The 1.0 gap for this facility."
+    notes: "Honestly documented absence: jobs queue and an entry can be marked EXECUTING (vmsqueue.c:567) but are never actually dequeued/run (no dequeue-and-execute path in vmsqueue or ovmx_job_control, which is $CREPRC(LOGINOUT) boot plumbing). Any software or SYSTARTUP procedure that submits a batch job and waits on it hangs forever. The 1.0 gap for this facility."
 
   - id: queues$queue-verb-syntax
     kind: command
@@ -68,4 +70,4 @@ items:
     authenticity: real
     vms: "JOB_CONTROL — detached-process job control plumbing"
     evidence: src/ovmx_job_control/ovmx_job_control.c
-    notes: "ovmx_job_control (JOB_CONTROL.EXE): real detached-process boot plumbing, not the VMS batch queue execution engine."
+    notes: "ovmx_job_control (JOB_CONTROL.EXE): real detached-process boot plumbing via $CREPRC(LOGINOUT.EXE), not the VMS batch queue execution engine."

@@ -12,7 +12,7 @@ summary: >
   Files-11 ACP $MOUNT (vms-165), not a setuid mount(2). GETDVI/DEVICE_SCAN now read the
   executive I/O database (vms-dv1); GETDVI is real for the 14 of 48 DVI$_ items OVMX
   implements, and the rest honestly return zero rather than fabricating a value.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: sys$getdvi, kind: routine, status: partial, authenticity: real, vms: "Get device/volume information (synchronous)", evidence: src/libvms/syssvc/sys_device.c, notes: "14 of 48 defined DVI$_ items real: DEVNAM/UNIT/DEVTYPE/DEVCLASS/DEVCHAR/REFCNT/ERRCNT/OPCNT/PID/OWNUIC/AVAILABLE/BLOCKSIZE/FULLDEVNAM/ALLDEVNAM"}
   - {id: sys$getdviw, kind: routine, status: partial, authenticity: real, vms: "Get device/volume information (with event flag wait)", evidence: src/libvms/syssvc/sys_device.c, notes: "same 14-of-48 DVI$_ coverage as sys$getdvi"}

@@ -9,20 +9,24 @@ tier: 1
 plan_ref: vms-801
 summary: >
   Record Management Services entry points, FAB/RAB/NAM/XAB control blocks, and the
-  three file organizations. Sequential and Relative are real end to end. Cross-process
-  locking, formerly the facility-wide gap (vms-407), is now real on the ACP path:
-  file-level share arbitration (vms-50e) and per-record locking (vms-0dd) both run
-  through the executive DLM ($ENQ/$DEQ, RMS$_RLK on conflict). Indexed (ISAM) is
-  multi-key over the ACP path: alternate keys are authored from the XABKEY chain and
-  read by key-of-reference via SIDR descent (honest narrower gap: index key compression
-  is rejected fail-honest, RMS$_PLG). (Non-ACP/POSIX-defer handles hold no lock, honestly
-  documented.)
-last_reviewed: 2026-09-09
+  three file organizations. On the executive-present path every $OPEN/$CREATE/$ERASE
+  drives the Files-11 ODS-2 ACP ($ASSIGN + IO$_ACCESS/IO$_CREATE/IO$_DELETE), with the
+  pre-flip POSIX open()/creat() body kept only as the honest executive-absent fallback
+  (rms_acp_absent -> rms_posix_*, vms-5f0). Sequential and Relative are real end to end.
+  Cross-process locking, formerly the facility-wide gap (vms-407), is now real on the ACP
+  path: file-level share arbitration (vms-50e) and per-record locking (vms-0dd) both run
+  through the executive DLM ($ENQ/$DEQ, RMS$_RLK on conflict). Indexed (ISAM) is multi-key
+  over the ACP path: alternate keys are authored from the XABKEY chain and read by
+  key-of-reference via SIDR descent (honest narrower gap: index key compression is
+  rejected fail-honest, RMS$_PLG). The stdio CRTL veneer (fopen/fread/fwrite) is a thin
+  binding over these same $ entry points, not raw POSIX (vms-47e/126/3c1). (Non-ACP/
+  POSIX-defer handles hold no lock, honestly documented.)
+last_reviewed: 2026-09-14
 items:
   # --- Entry points: open/create/erase ---
-  - {id: sys$open,       kind: routine, status: implemented, authenticity: real, vms: "Open an existing file", evidence: src/vmsrms/rms_core.c, notes: "local open() on caller fd; filespec resolves via executive LNM$SYSTEM (vms-96e2)"}
-  - {id: sys$create,     kind: routine, status: implemented, authenticity: real, vms: "Create a new file", evidence: src/vmsrms/rms_core.c, notes: "local open()/creat() on caller fd"}
-  - {id: sys$erase,      kind: routine, status: implemented, authenticity: real, vms: "Delete a file", evidence: src/vmsrms/rms_core.c, notes: "local unlink() on caller fd"}
+  - {id: sys$open,       kind: routine, status: implemented, authenticity: real, vms: "Open an existing file", evidence: src/vmsrms/rms_core.c, notes: "executive-present path is $ASSIGN + IO$_ACCESS over the Files-11 ODS-2 ACP (rms_acp_open_file); filespec composes through executive directory/concealed logicals (vms-f05). rms_posix_open is the executive-absent fallback only (vms-5f0)"}
+  - {id: sys$create,     kind: routine, status: implemented, authenticity: real, vms: "Create a new file", evidence: src/vmsrms/rms_core.c, notes: "executive-present path is IO$_CREATE(+ACCESS) of a fresh versioned file over the ACP (vms-bc7), fanning through directory/concealed logicals; rms_posix_create is the executive-absent fallback (vms-5f0). Active investigation: create into a user subdirectory ([USERS.GUEST]) can return RMS-E-CRE (vms-93b) — the common top-level/system-dir case is real"}
+  - {id: sys$erase,      kind: routine, status: implemented, authenticity: real, vms: "Delete a file", evidence: src/vmsrms/rms_core.c, notes: "executive-present path is IO$_DELETE over the ACP; rms_posix_erase (local unlink) is the executive-absent fallback"}
   # --- Entry points: connect/disconnect/control ---
   - {id: sys$close,      kind: routine, status: implemented, authenticity: real, vms: "Close a file", evidence: src/vmsrms/rms_core.c}
   - {id: sys$connect,    kind: routine, status: implemented, authenticity: real, vms: "Connect a RAB to an open FAB", evidence: src/vmsrms/rms_core.c}
@@ -40,6 +44,8 @@ items:
   # --- Entry points: parse/search ---
   - {id: sys$parse,      kind: routine, status: partial, authenticity: real, vms: "Parse a filespec against defaults", evidence: src/vmsrms/rms_parse.c, notes: "device-field logical names resolve iteratively through the executive LNM$FILE_DEV incl. concealed/rooted attrs (vms-d8e, vms-240); remaining gap is an executive device/volume DB (vms-dv1)"}
   - {id: sys$search,     kind: routine, status: implemented, authenticity: real, vms: "Wildcard directory search", evidence: src/vmsrms/rms_search.c, notes: "ACP $SEARCH; distinguishes RMS$_DNF (no such dir) from RMS$_NMF (no match)"}
+  # --- C RTL stdio veneer over RMS (corpus surface: fopen/fread/fwrite hit RMS, not raw POSIX) ---
+  - {id: crtl$rms_stdio_veneer, kind: feature, status: implemented, authenticity: real, vms: "C RTL stdio FILE* (fopen/fwrite/fread/fclose) as a thin veneer over RMS", evidence: src/vmsrms/crtl_rms_stdio.c, notes: "vms-47e/126/3c1: fopen/fwrite/fread/fclose drive sys$create/$open/$connect/$put/$get/$close against the real ODS-2 volume over the ACP (do-it-like-VMS: CRTL is a thin RMS veneer, not musl POSIX). Byte-exact FIX put/read + fail-honest no-POSIX-fallback; chunked >64KiB writes + delete-on-close temps (vms-126). Proven by tests/qemu/test_syssvc_crtl_rms_veneer.c (host ctest, not a real-VMS oracle -> implemented, not verified)"}
   # --- Cross-process locking (was the facility-wide gap; now real on the ACP path) ---
   - {id: rms$file_share_locking, kind: feature, status: implemented, authenticity: real, vms: "File-level share/access arbitration (FAB fac/shr flags)", evidence: src/vmsrms/rms_core.c, notes: "vms-50e: sys$open/create map fab$b_fac/fab$b_shr to a DLM lock mode (NL/CR/CW/PR/PW/EX) $ENQ'd on the file's FID with NOQUEUE; RMS$_FLK on a real conflict, $DEQ'd at sys$close"}
   - {id: rms$record_locking, kind: feature, status: implemented, authenticity: real, vms: "Cross-process record locking (RAB rop modifiers)", evidence: src/vmsrms/rms_record.c, notes: "vms-0dd: per-record $ENQ, a child of the FAB file-access lock, arbitrated by the executive DLM; the one honest degradation is the non-ACP/POSIX-defer handle (access_lkid==0), which holds nothing and passes status through"}
@@ -57,5 +63,5 @@ items:
   # --- File organizations ---
   - {id: rms$org_sequential, kind: feature, status: implemented, authenticity: real, vms: "Sequential file organization", evidence: src/vmsrms/rms_seq.c, notes: "all 7 record formats incl. VFC control area, VAR word-alignment"}
   - {id: rms$org_relative,   kind: feature, status: implemented, authenticity: real, vms: "Relative file organization", evidence: src/vmsrms/rms_rel.c, notes: "status-byte cells; record locking now via the DLM (see rms$record_locking)"}
-  - {id: rms$org_indexed,    kind: feature, status: implemented, authenticity: real, vms: "Indexed (ISAM) file organization", evidence: src/vmsrms/rms_prolog3.c, notes: "genuine Files-11 Prolog-3 over the ACP: primary + alternate keys authored from the XABKEY chain (rms_idx_author_p3, rms_core.c:1940/2137) and read by key-of-reference via SIDR descent (rms_p3_get_by_key, rms_prolog3.c:389). Honest narrower gap: index key compression rejected fail-honest (RMS$_PLG). The primary-key-only limitation was the DEAD .rms_idx sidecar (executive-absent defer, vms-165), not the live path (corrected vms-df8)"}
-  - {id: rms$isam_alternate_key, kind: feature, status: implemented, authenticity: real, vms: "ISAM alternate-key access (RAB$B_REF)", evidence: src/vmsrms/rms_prolog3.c, notes: "RAB$B_REF key-of-reference is real over the ACP: secondaries authored from the XABKEY chain, read via SIDR descent (rms_p3_get_by_key -> rms_p3_sidr_lookup). Proven byte-exact by tests/vmsrms/test_prolog3_seckey.c (create + add secondary + rebind sees 2 keys + SIDR byte-exact across bucket splits/dup/delete-purge; host-runnable ctest vmsrms_prolog3_seckey). Was falsely reported absent/facade-risk against the dead rms_idx.c sidecar (corrected vms-df8)"}
+  - {id: rms$org_indexed,    kind: feature, status: implemented, authenticity: real, vms: "Indexed (ISAM) file organization", evidence: src/vmsrms/rms_prolog3.c, notes: "genuine Files-11 Prolog-3 over the ACP: primary + alternate keys authored from the XABKEY chain (rms_idx_author_p3) and read by key-of-reference via SIDR descent (rms_p3_get_by_key). Honest narrower gap: index key compression rejected fail-honest (RMS$_PLG). The primary-key-only limitation was the DEAD .rms_idx sidecar (executive-absent defer, vms-165), not the live path (corrected vms-df8)"}
+  - {id: rms$isam_alternate_key, kind: feature, status: implemented, authenticity: real, vms: "ISAM alternate-key access (RAB$B_REF)", evidence: src/vmsrms/rms_prolog3.c, notes: "RAB$B_REF key-of-reference is real over the ACP: secondaries authored from the XABKEY chain, read via SIDR descent (rms_p3_get_by_key -> rms_p3_sidr_lookup). Proven byte-exact by tests/vmsrms/test_prolog3_seckey.c (create + add secondary + rebind sees 2 keys + SIDR byte-exact across bucket splits/dup/delete-purge; host-runnable ctest -> implemented, not a real-VMS oracle). Was falsely reported absent/facade-risk against the dead rms_idx.c sidecar (corrected vms-df8)"}

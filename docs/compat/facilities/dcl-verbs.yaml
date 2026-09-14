@@ -7,21 +7,23 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-8ad
 summary: >
-  OVMX's static builtin_verbs[] dispatch table (dcl_builtin.c) carries 58 verbs
-  against VMS's ~150 (SET/SHOW count as ~30-subverb umbrellas each, not single
-  verbs). Breadth is catalogued as items rather than one row per verb; each
-  notable missing verb family and the SET/SHOW umbrella depth get their own
-  item. Since the last census CALL/SUBROUTINE and DECK/EOD landed as real
-  constructs (see dcl-scripting.yaml), retiring two former facade-risk rows.
-last_reviewed: 2026-08-31
+  OVMX's static builtin_verbs[] dispatch table (dcl_builtin.c:401) carries 58
+  verbs against VMS's ~150 (SET/SHOW count as ~30-subverb umbrellas each, not
+  single verbs). Breadth is catalogued as items rather than one row per verb;
+  each notable missing verb family and the SET/SHOW umbrella depth get their own
+  item. Re-censused 2026-09-14 against origin/main: verb count unchanged at 58;
+  SET HOST is now a real outbound DECnet CTERM connection (vms-f54), upgraded
+  from absent; SET/SHOW umbrella depth re-measured at 20 real SET sub-handlers /
+  29 real SHOW sub-handlers.
+last_reviewed: 2026-09-14
 items:
   - id: dcl-verbs$breadth
     kind: feature
     status: partial
     authenticity: real
     vms: "~150 DCL verbs (VMS DCL Dictionary), SET/SHOW as ~30-subverb umbrellas each"
-    evidence: src/vmsdcl/dcl_builtin.c
-    notes: "58 of ~150 verbs present in builtin_verbs[] (ACCOUNTING ANALYZE APPEND ASSIGN ATTACH BACKUP CLOSE CONTINUE CONVERT COPY CREATE DEASSIGN DEFINE DELETE DIFFERENCES DIRECTORY DISMOUNT DUMP EDIT EXIT FTP HELP INITIALIZE INQUIRE INSTALL LIBRARY LINK LOGOUT MAIL MONITOR MOUNT OPEN PHONE PING PIPE PRINT PRODUCT PURGE READ RECALL RENAME REPLY REQUEST RUN SEARCH SET SHOW SORT SPAWN STOP SUBMIT SYSGEN SYSMAN TCPIP TELNET TYPE WAIT WRITE). Real breadth gap, not a facade."
+    evidence: src/vmsdcl/dcl_builtin.c:401
+    notes: "58 of ~150 verbs present in builtin_verbs[] (ACCOUNTING ANALYZE APPEND ASSIGN ATTACH BACKUP CLOSE CONTINUE CONVERT COPY CREATE DEASSIGN DEFINE DELETE DIFFERENCES DIRECTORY DISMOUNT DUMP EDIT EXIT FTP HELP INQUIRE INSTALL INITIALIZE LIBRARY LINK LOGOUT MAIL MONITOR MOUNT OPEN PHONE PING PIPE PRINT PRODUCT PURGE RECALL READ RENAME REPLY REQUEST RUN SEARCH SET SHOW SORT SPAWN STOP SUBMIT SYSGEN SYSMAN TCPIP TELNET TYPE WAIT WRITE). Real breadth gap, not a facade."
 
   - id: dcl-verbs$call-subroutine
     kind: command
@@ -29,8 +31,8 @@ items:
     authenticity: real
     vms: "CALL / SUBROUTINE / ENDSUBROUTINE — command-procedure subroutine calls"
     scope_1_0: in
-    evidence: src/vmsdcl/dcl_exec.c:1354
-    notes: "Landed since last census: CALL transfers to a labelled SUBROUTINE block with its own command level and P1-P8, RETURN propagates status (dcl_exec.c:1354/1367/1377, dcl_script.c). Exercised by tests/dcl/test_scripting_status_call_deck.sh."
+    evidence: src/vmsdcl/dcl_exec.c:1367
+    notes: "CALL transfers to a labelled SUBROUTINE block with its own command level and P1-P8; SUBROUTINE/ENDSUBROUTINE markers at dcl_exec.c:1367/1377 act as EXIT for a fallen-into block; RETURN propagates status (dcl_script.c). Exercised by tests/dcl/test_scripting_status_call_deck.sh. See dcl-scripting.yaml."
 
   - id: dcl-verbs$deck-eod
     kind: command
@@ -39,7 +41,16 @@ items:
     vms: "DECK / $EOD — in-stream data deck delimiting"
     scope_1_0: in
     evidence: src/vmsdcl/dcl_cmd_process.c:1659
-    notes: "Landed since last census (vms-3983): DECK suspends the first-'$'-line terminator so an in-stream data block is read verbatim to the EOD sentinel (default $EOD; DECK/DOLLAR=string names another). Former facade-risk (data lines mis-parsed as commands) retired. See dcl-scripting.yaml."
+    notes: "DECK (vms-3983) suspends the first-'$'-line terminator so an in-stream data block is read verbatim to the EOD sentinel (default $EOD; DECK/DOLLAR=string names another; deck_term at dcl_cmd_process.c:1665). Former facade-risk (data lines mis-parsed as commands) retired. See dcl-scripting.yaml."
+
+  - id: dcl-verbs$set-host
+    kind: command
+    status: partial
+    authenticity: real
+    vms: "SET HOST — DECnet/LAT terminal connection to another node"
+    scope_1_0: in
+    evidence: src/vmsdcl/dcl_cmd_set.c:1765
+    notes: "Landed since last census (vms-f54, #1093): SET HOST <node> opens a real interactive DECnet CTERM session to Session Control object 42 (cmd_set_host, dcl_cmd_set.c:1765), resolving the node from DECnet config; /USERNAME sets the CTERM access-control name. Honest failure when DECNETD.EXE is not staged (DECnet not available -> error, no fake session). Partial: outbound DECnet only; LAT SET HOST and inbound not via this verb. Depends on the DECnet lane (see decnet facility)."
 
   - id: dcl-verbs$queue-verbs
     kind: command
@@ -56,15 +67,6 @@ items:
     authenticity: n/a
     vms: "ALLOCATE / DEALLOCATE — device allocation verbs"
     scope_1_0: in
-
-  - id: dcl-verbs$set-host
-    kind: command
-    status: absent
-    authenticity: n/a
-    vms: "SET HOST — DECnet/LAT terminal connection to another node"
-    scope_1_0: in
-    evidence: src/vmsdcl/dcl_cmd_set.c
-    notes: "A cmd_set_host SET sub-verb exists but the DECnet/LAT terminal-connection semantics depend on the networking lane (out until DECnet/LAT land)."
 
   - id: dcl-verbs$patch
     kind: command
@@ -101,5 +103,5 @@ items:
     status: partial
     authenticity: real
     vms: "SET (~30 sub-verbs) / SHOW (~30 sub-verbs) umbrella depth"
-    evidence: src/vmsdcl/dcl_cmd_set.c:2145
-    notes: "SET dispatches 22 real sub-handlers (DEFAULT PROMPT VERIFY TERMINAL PROTECTION PASSWORD ON/NOON SYMBOL MESSAGE CONTROL PROCESS FILE UIC WORKING_SET TIME HOST AUDIT ACCOUNTING VOLUME ENTRY QUEUE) rejecting unknown keywords with %DCL-W-IVKEYW; SHOW dispatches 28 real sub-handlers (dcl_cmd_show.c). Each real, not facaded, but short of VMS's ~30-each full set."
+    evidence: src/vmsdcl/dcl_cmd_set.c
+    notes: "Re-measured 2026-09-14 on origin/main: SET dispatches 20 real cmd_set_* sub-handlers (ACCOUNTING AUDIT CONTROL DEFAULT ENTRY FILE HOST MESSAGE PASSWORD PROCESS PROMPT PROTECTION QUEUE SYMBOL TERMINAL TIME UIC VERIFY VOLUME WORKING_SET), rejecting unknown keywords with %DCL-W-IVKEYW; SHOW dispatches 29 real cmd_show_* sub-handlers (dcl_cmd_show.c: ACCOUNTING AUDIT CLUSTER CPU DEFAULT DEVICE ENTRY ERROR INTRUSION LICENSE LOGICAL MEMORY NETWORK PROCESS PROCESS_PRIVILEGES PROCESS_QUOTAS PROTECTION QUEUE QUOTA ROOT STATUS SYMBOL SYSTEM TERMINAL TIME TRANSLATION USERS VERIFY WORKING_SET). Each real, not facaded, but short of VMS's ~30-each full set."

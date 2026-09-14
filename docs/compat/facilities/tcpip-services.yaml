@@ -29,7 +29,7 @@ summary: >
   DCL-enabled service survives reboot and is reapplied on the next TCPIP$INETD
   start (was hand-edit-only). Deferred honestly: DHCP, multiple interfaces /
   TCPIP$INET_HOSTADDRn, and a raw NIC-as-VMS-device data path (EWA0:).
-last_reviewed: 2026-09-12
+last_reviewed: 2026-09-14
 items:
   - {id: tcpip-services$bg-inet-device, kind: feature, status: verified, authenticity: real, vms: "INET pseudo-device BGn: — $ASSIGN TCPIP$DEVICE: + $QIO (IO$_SETMODE/IO$_ACCESS/IO$_READVBLK/IO$_WRITEVBLK/IO$_DEACCESS) TCP socket path, executive-resident", evidence: "src/kernel/vms_bg_datafd.c", verified_against: "tests/qemu/test_syssvc_bg_echo.c — a VMS program TCP round-trips a loopback echo via the public system services against a REAL /dev/vms (honest SS$_NOSUCHDEV/EXIT_SKIP with no executive); + the facility_defects negctl gate 'bg-recv-length-zeroed' (vms-527)", notes: "The socket is executive-resident (vms.ko), the analogue of the executive mailbox; no userspace socket, exactly as VMS BGn: is a driver not a library."}
   - {id: tcpip-services$sockets-veneer, kind: feature, status: implemented, authenticity: real, vms: "BSD-sockets RTL veneer (DECC$SOCKET) — socket/connect/send/recv translated to $QIO on BGn:", evidence: "src/vmstcpip/sockets/vms_bgsock.c", notes: "707-line veneer; app speaks only BSD sockets, never BGn:/$QIO. Exercised by the qemu harness (tests/qemu/CMakeLists.txt) alongside the BGn: driver; used by the wrapped OpenSSH clients/daemon."}

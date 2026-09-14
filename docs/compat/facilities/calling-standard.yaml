@@ -9,18 +9,20 @@ summary: >
   by-ref/by-value/by-descriptor passing, the standard data types, condition
   handling, and register/stack usage. OVMX implements enough for C on x86_64 and
   aarch64; the cross-language data-type surface (packed decimal, varying strings,
-  array descriptors, VAX float) is where it thins out.
-last_reviewed: 2026-08-13
+  array descriptors, VAX float) is where it thins out — the descriptor CLASS enum
+  is now fully declared in descrip.h, but only classes S/D are marshalled by any
+  RTL.
+last_reviewed: 2026-09-14
 items:
   - {id: cs$arg-passing, kind: feature, status: partial, authenticity: real, scope_1_0: in,
      vms: "Argument list: by reference / value / descriptor", evidence: src/libvms/include/descrip.h,
-     notes: "Works for C via the native host ABI; VMS's own item-list/arg-block conventions honored for descriptor args."}
+     notes: "Works for C via the native host ABI; VMS's own item-list/arg-block conventions honored for descriptor args. Real, not verified — no cross-language oracle is gated."}
   - {id: cs$data-types, kind: feature, status: partial, authenticity: real, scope_1_0: in,
      vms: "Standard data types passed across the call boundary", evidence: src/libvms/include/descrip.h,
-     notes: "Descriptor classes S/D real; classes A (array) and VS (varying string) absent; packed decimal absent; VAX F/D/G/H float unsupported (IEEE only). These block Fortran/COBOL/BASIC cross-calls."}
+     notes: "Descriptor classes S/D real and marshalled. descrip.h now DECLARES the full class enum (A/NCA/VS/VSA/SD/UBS/...) and dtype set, but no RTL operates on classes A (array) or VS (varying string) and packed decimal is unmarshalled (OTS$ CVT_T_P/CVT_P_T absent); VAX F/D/G/H float unsupported (IEEE only). These declared-but-unmarshalled types are what block Fortran/COBOL/BASIC cross-calls."}
   - {id: cs$condition-handling, kind: feature, status: partial, authenticity: advisory, scope_1_0: in,
      vms: "Condition-handling as part of the standard (handler search, unwind)", evidence: src/libvms/rtl/lib_signal.c,
-     notes: "In-process handler stack, not a real machine-frame unwind; SYS$UNWIND simplified. Cross-ref chf facility."}
+     notes: "In-process handler stack, not a real machine-frame unwind; SYS$UNWIND simplified. Cross-ref chf facility. Advisory: tracked honestly, not a faked full unwind."}
   - {id: cs$register-usage, kind: feature, status: partial, authenticity: advisory, scope_1_0: in,
      vms: "Register/stack usage conventions (VAX/Alpha/I64 calling standard)",
-     notes: "OVMX uses the host (x86_64/aarch64 SysV) ABI, honestly — not the VAX/Alpha VMS register convention; fine for recompiled C, wrong for binary/MACRO interop."}
+     notes: "OVMX uses the host (x86_64/aarch64 SysV) ABI, honestly — not the VAX/Alpha VMS register convention; fine for recompiled C, wrong for binary/MACRO interop. Advisory, not a facade."}

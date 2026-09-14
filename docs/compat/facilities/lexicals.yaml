@@ -7,11 +7,12 @@ scope_1_0: in
 tier: 1
 plan_ref: vms-8ad
 summary: >
-  41 of VMS's ~43 F$ lexical functions are present and real. Only
-  F$FID_TO_NAME is absent. The unknown-lexical error path returns an
-  authentic %DCL-W-IVFNAM, oracle-grounded. Re-censused 2026-08-31: the 41
-  registered F$ functions and the single F$FID_TO_NAME gap are unchanged.
-last_reviewed: 2026-08-31
+  41 F$ lexical functions are registered in the dispatch table
+  (dcl_lexical.c) and all real; of VMS's ~43 documented F$ lexicals only
+  F$FID_TO_NAME is absent. The unknown-lexical error path returns an authentic
+  %DCL-W-IVFNAM, oracle-grounded. Re-censused 2026-09-14 against origin/main:
+  the 41 registered F$ functions and the single F$FID_TO_NAME gap are unchanged.
+last_reviewed: 2026-09-14
 items:
   - id: lexicals$breadth
     kind: feature
@@ -19,7 +20,7 @@ items:
     authenticity: real
     vms: "~43 F$ lexical functions (DCL Dictionary)"
     evidence: src/vmsdcl/dcl_lexical.c
-    notes: "41 of ~43 present and real; only F$FID_TO_NAME absent."
+    notes: "41 present and real in the F$ dispatch table (CONTEXT CSID CUNITS CVSI CVTIME CVUI DELTA_TIME DEVICE DIRECTORY EDIT ELEMENT ENVIRONMENT EXTRACT FAO FILE_ATTRIBUTES GETDVI GETJPI GETQUI GETSYI IDENTIFIER INTEGER LENGTH LICENSE LOCATE LOGICAL MESSAGE MODE MULTIPATH PARSE PID PRIVILEGE PROCESS SEARCH SETPRV STRING TIME TRNLNM TYPE UNIQUE USER VERIFY); only F$FID_TO_NAME absent."
 
   - id: f$fid_to_name
     kind: lexical
@@ -33,9 +34,9 @@ items:
     status: verified
     authenticity: real
     vms: "F$SETPRV(priv-states) — enable/disable process privileges, returning prior state"
-    evidence: src/vmsdcl/dcl_lexical.c:3119
+    evidence: src/vmsdcl/dcl_lexical.c:3399
     verified_against: "lab-Alpha OpenVMS Alpha V8.4 oracle, 11-AUG-2026: F$SETPRV(\"NOOPER,GROUP\") -> \"OPER,GROUP\""
-    notes: "Routes through vms_kif_setprv directly."
+    notes: "lex_setprv (dcl_lexical.c:3399) routes through vms_kif_setprv directly (dcl_lexical.c:3462)."
 
   - id: f$csid
     kind: lexical
@@ -79,4 +80,4 @@ items:
     authenticity: real
     vms: "Referencing an unknown F$ lexical returns %DCL-W-IVFNAM"
     evidence: src/vmsdcl/dcl_lexical.c
-    notes: "Previously a facade; fixed and oracle-grounded to return the authentic IVFNAM condition."
+    notes: "Previously a facade; fixed and oracle-grounded to return the authentic IVFNAM condition. F$BOGUS is the test sentinel exercising this path."

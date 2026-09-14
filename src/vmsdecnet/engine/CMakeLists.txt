@@ -43,6 +43,7 @@ target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include   # dnet_cterm.h (--set-host-selftest)
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/dap/include     # dnet_dap.h (--fal-* COPY presentation)
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include     # dnet_fal.h (--fal-* FAL server + client)
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/broker/include  # dnet_broker.h (--net-broker-selftest, T1)
     ${CMAKE_SOURCE_DIR}/src/libvms/include            # ovmx_identity.h, rms_textfile.h, ssdef.h
     ${CMAKE_SOURCE_DIR}/src/vmsfs/include             # transitive header of ovmx_identity.h
 )
@@ -68,7 +69,8 @@ find_package(Threads REQUIRED)
 # same way. Ordered after vmsdecnet_fal so its members satisfy the anchors.
 target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm
                                           vmsdecnet_cterm_host vmsdecnet_fal
-                                          vmsdecnet_dap ovmx_datalink
+                                          vmsdecnet_dap vmsdecnet_broker
+                                          ovmx_datalink
                                           vmsrms
                                           Threads::Threads)
 target_include_directories(decnetd_exe PRIVATE
@@ -100,4 +102,10 @@ if(BUILD_TESTS)
     # (Option 1, NETACP-brokered) will expose. No executive.
     add_test(NAME decnetd_task_selftest
              COMMAND decnetd_exe --task-selftest)
+    # rd vms-22c (a1-2): the exec<->NETACP T1 broker record codec floor -- request/
+    # response round-trip, bounds-validated decode (200k-mutation + truncated-prefix
+    # fuzz, ASan/UBSan-clean), and the correlation-id anti-cross-talk guard. No
+    # executive; the mailbox seam + qio_net_op + NETACP servicing build on it.
+    add_test(NAME decnetd_net_broker_selftest
+             COMMAND decnetd_exe --net-broker-selftest)
 endif()

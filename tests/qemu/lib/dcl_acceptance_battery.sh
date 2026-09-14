@@ -1112,6 +1112,39 @@ run_dcl_acceptance_battery() {
     fi
     wait_for '$ ' 20 "$FAL_OFF"
 
+    # =======================================================================
+    # DECnet OUTBOUND $ COPY (vms-ea8) -- the COMMAND-LAYER twin of the FAL
+    # section above. Where --fal-accept-test drives dnet_fal_client_put/get with
+    # hardcoded specs, --copy-accept-test enters through the DCL COPY verb's own
+    # parser (dnet_copy_plan) and drives copy_client_run -- the SAME outbound
+    # client run_copy_loop uses over the live datalink -- to an authenticated
+    # object-17 FAL server over an NSP link, moving a sequential file BOTH
+    # directions with the records byte-verified through real RMS over the ACP.
+    # Same property, same gate: only the REAL executive + SYSUAF + RMS make it
+    # mean anything; on the build host the auth fails honestly (INV-6). HARD GATE
+    # where DECNETD.EXE ships; a LOUD note where absent. Never green because
+    # nothing ran. (The live AF_PACKET drive to a real remote FAL is the
+    # lab-gated remainder, rd vms-a70/vms-101 -- as for the --set-host client.)
+    local COPY_OFF; COPY_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --copy-accept-test'
+    if wait_for 'IVIMAGE' 15 "$COPY_OFF"; then
+        note "outbound COPY [vms-ea8]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the outbound \$ COPY command-layer transfer proof DID NOT RUN here (hard gate on the rails that ship the image; VAX/Alpha staging is the same tracked follow-on as FAL)"
+    elif wait_for 'DECNETD-COPY-ACCEPT:' 180 "$COPY_OFF"; then
+        local COPYSEG; COPYSEG=$(tail -c "+$((COPY_OFF + 1))" "$LOG" | tr -d '\r')
+        must_have "$COPYSEG" 'DECNETD-COPY-ACCEPT: PASS' \
+            "outbound COPY [vms-ea8]: a COPY argument pair parsed by dnet_copy_plan drove the object-17 FAL client over an NSP link and transferred a sequential file both directions, byte-verified (one PASS/FAIL line per assertion above this verdict)"
+        must_have "$COPYSEG" 'parses to a PUT plan' \
+            "outbound COPY [vms-ea8]: COPY local->remote parses to a PUT plan through the DCL verb's own parser"
+        must_have "$COPYSEG" 'BYTE-MATCH the source' \
+            "outbound COPY [vms-ea8]: the transferred file's records byte-match the source (a real transfer through the COPY client, both directions)"
+        must_not_have "$COPYSEG" 'DECNETD-COPY-ACCEPT: FAIL' \
+            "outbound COPY [vms-ea8]: no assertion in the outbound-COPY acceptance failed"
+        negctl "$COPYSEG" 'DECNETD-I-COPYACCEPT' "DECnet outbound COPY acceptance"
+    else
+        bad "outbound COPY [vms-ea8]: DECNETD.EXE --copy-accept-test produced no verdict line within 180s -- the outbound-COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
+    fi
+    wait_for '$ ' 20 "$COPY_OFF"
+
     # The DECnet device FACE _NET: is executive-resident and cross-process real
     # (vms-9ab, P5; design §2b/§7.5). $GETDVI it from DCL -- a process that is
     # NOT NETACP -- and it resolves; the deep cross-process assertions (class,

@@ -56,6 +56,7 @@
 #include <string.h>
 #include <strings.h>    /* strcasecmp for --set-host node-name resolution */
 #include <sys/socket.h>
+#include <sys/time.h>   /* struct timeval for the datalink SO_RCVTIMEO (--copy) */
 #include <time.h>
 #include <unistd.h>
 
@@ -2541,34 +2542,475 @@ static int run_copy_selftest(void)
 #undef CP_CHECK
 }
 
+/* ============ outbound $ COPY client core (rd vms-ea8) =====================
+ *
+ * copy_client_run is the SINGLE outbound FAL (object 17) COPY client the DCL
+ * COPY verb drives, over EITHER substrate:
+ *   - a LIVE DECnet datalink (run_copy_loop: real AF_PACKET frames to a remote
+ *     node's FAL, the lab-gated path, mirroring the --set-host client), or
+ *   - a socketpair against a threaded OVMX FAL server (--copy-accept-test: the
+ *     CI/battery-provable ground truth -- a real file moved BOTH directions
+ *     through the SAME code path, byte-verified via RMS over the ACP).
+ *
+ * The substrate is the only difference, abstracted by struct copy_wire: txf()
+ * ships one built link frame; rxev() pumps one inbound frame through the
+ * engine's NSP link FSM and returns the resulting link event (leaving a
+ * delivered DAP segment in eng->rx_data on DNET_LINK_EV_DATA). The DAP
+ * presentation session itself is dnet_fal_client_get/put over a
+ * dnet_dap_transport that rides copy_wire -- UNCHANGED from the FAL client
+ * proven by --fal-accept-test; only the frame substrate differs. INV-6: no
+ * fabricated transfer -- a missing peer, a failed connect-auth, or an absent RMS
+ * volume all fail honestly.
+ *
+ * The datalink substrate (cw_dl_*) is thin glue over already-proven primitives
+ * (scs_datalink_send + dnet_recv_route, the same the --set-host client and the
+ * routing loop use); the novel logic (copy_client_run, the bring-up + DAP drive)
+ * is the code --copy-accept-test exercises end to end.
+ */
+struct copy_wire {
+    struct dnet_engine *eng;
+    int (*txf)(struct copy_wire *w, const uint8_t *frame, size_t len);
+    int (*rxev)(struct copy_wire *w, dnet_tick_t now); /* DNET_LINK_EV_* or -1 */
+    int      sp_wfd, sp_rfd;      /* socketpair ends (test)     */
+    int      dl_sock;            /* datalink fd (live)          */
+    unsigned dl_if;              /* datalink ifindex (live)     */
+    int      synthetic;          /* 1 => synthetic clock (test) */
+    dnet_tick_t clk;             /* synthetic tick counter      */
+};
+
+static dnet_tick_t cw_now(struct copy_wire *w)
+{
+    return w->synthetic ? w->clk++ : monotonic_sec();
+}
+
+/* --- socketpair substrate (the --copy-accept-test ground truth) --- */
+static int cw_sp_tx(struct copy_wire *w, const uint8_t *frame, size_t len)
+{
+    return write(w->sp_wfd, frame, len) == (ssize_t)len ? 0 : -1;
+}
+static int cw_sp_rx(struct copy_wire *w, dnet_tick_t now)
+{
+    uint8_t buf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    ssize_t n = read(w->sp_rfd, buf, sizeof buf);
+    if (n <= 0) return -1;
+    size_t rlen = 0; int has_reply = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    if (dnet_engine_link_rx(w->eng, now, buf, (size_t)n, reply, sizeof reply,
+                            &rlen, &has_reply, &ev) != DNET_ENGINE_OK)
+        return -1;
+    if (has_reply && write(w->sp_wfd, reply, rlen) != (ssize_t)rlen) return -1;
+    return (int)ev;
+}
+
+/* --- datalink substrate (the LIVE run_copy_loop path, lab-gated) --- */
+static int cw_dl_tx(struct copy_wire *w, const uint8_t *frame, size_t len)
+{
+    uint8_t dst[DNET_ADDR_LEN];
+    memcpy(dst, frame, DNET_ADDR_LEN);      /* the routing dst the FSM wrote */
+    return scs_datalink_send(w->dl_sock, (int)w->dl_if, DNET_ETHERTYPE,
+                             dst, frame, len) == 0 ? 0 : -1;
+}
+static int cw_dl_rx(struct copy_wire *w, dnet_tick_t now)
+{
+    uint8_t buf[DNET_FRAME_MAX];
+    /* dnet_recv_route filters our own echo + foreign/HELLO frames, drives the
+     * link FSM on an NSP frame for us, and ships any protocol reply itself. */
+    return dnet_recv_route(w->eng, w->dl_sock, w->dl_if, now, buf, sizeof buf);
+}
+
+/* The DAP presentation transport over copy_wire (the copy_wire twin of the
+ * fal_xport used by --fal-accept-test). */
+struct copy_dap_ctx { struct copy_wire *w; };
+static int copy_dap_send(void *ctx, const struct dnet_dap_msg *m)
+{
+    struct copy_wire *w = ((struct copy_dap_ctx *)ctx)->w;
+    uint8_t dap[DNET_DAP_MAX_MSG], frame[DNET_FRAME_MAX];
+    size_t  daplen = 0, flen = 0;
+    if (dnet_dap_encode(m, dap, sizeof dap, &daplen) != DNET_DAP_OK) return -1;
+    if (dnet_engine_link_send(w->eng, dap, daplen, frame, sizeof frame, &flen,
+                              cw_now(w)) != 0)
+        return -1;
+    return w->txf(w, frame, flen);
+}
+static int copy_dap_recv(void *ctx, struct dnet_dap_msg *m)
+{
+    struct copy_wire *w = ((struct copy_dap_ctx *)ctx)->w;
+    /* Bound a dead-peer hang on the LIVE datalink: cw_dl_rx returns NONE on each
+     * SO_RCVTIMEO lapse, so a remote that stops answering mid-DAP must not loop
+     * here forever. The socketpair test never yields NONE (it blocks or closes),
+     * so this cap is invisible to it; it only fires honestly on a live stall. */
+    int idle = 0;
+    for (;;) {
+        int ev = w->rxev(w, cw_now(w));
+        if (ev < 0) return -1;
+        if (ev == DNET_LINK_EV_DATA) {
+            size_t consumed = 0;
+            if (dnet_dap_decode(w->eng->rx_data, w->eng->rx_datalen, m, &consumed)
+                != DNET_DAP_OK)
+                return -1;
+            return 0;
+        }
+        if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF)
+            return -1;
+        if (ev == DNET_LINK_EV_NONE) {
+            if (++idle > 60) return -1;   /* ~2 min at SO_RCVTIMEO=2s: give up honestly */
+        } else {
+            idle = 0;   /* ACK / LINK_SERVICE: real NSP traffic, the peer is alive */
+        }
+    }
+}
+
+/*
+ * copy_client_run - open an object-17 FAL logical link to remote_area.node over
+ * `w`, then drive dnet_fal_client_get/put per the plan. The access-control
+ * username/account come from the plan; the PASSWORD is passed separately
+ * (never on argv -- see run_copy_loop). Returns the FAL transfer status, or
+ * SS$_ABORT if the link could not be established.
+ */
+static uint32_t copy_client_run(struct copy_wire *w,
+                                unsigned remote_area, unsigned remote_node,
+                                const struct dnet_copy_plan *plan,
+                                const char *password)
+{
+    struct dnet_engine *eng = w->eng;
+    uint8_t conn[192], frame[DNET_FRAME_MAX];
+    size_t  clen = 0, flen = 0;
+
+    /* The format-2 source group/user codes are the running process's own
+     * identity (NONZERO), so real VMS session control dispatches the CI to the
+     * FAL object instead of discarding it (vms-15a/a70). */
+    uint16_t grp = 0, usr = 0;
+    sethost_src_codes(&grp, &usr);
+    if (dnet_cterm_sc_connect_build(DNET_OBJ_FAL, eng->node_name, grp, usr,
+                                    plan->has_access ? plan->username : "",
+                                    password ? password : "",
+                                    plan->account, conn, sizeof conn, &clen) != 0)
+        return SS$_ABORT;
+
+    dnet_tick_t now = cw_now(w);
+    if (dnet_engine_link_open(eng, remote_area, remote_node, 0x2001, conn, clen,
+                              1459, 1, DNET_NSP_VER_41, frame, sizeof frame,
+                              &flen, now) != DNET_ENGINE_OK)
+        return SS$_ABORT;
+    if (w->txf(w, frame, flen) != 0) return SS$_ABORT;
+
+    /* Pump until the link is RUN (CC in), the object rejected us (DI in), or the
+     * Connect-Initiate give-up fires (link CLOSED). Drive the CI retransmit /
+     * give-up timers each iteration for the live datalink (no-op over the
+     * lockstep socketpair, where the CC returns on the first read). */
+    int up = 0;
+    for (int i = 0; i < 4096 && !up; i++) {
+        uint8_t tf[DNET_FRAME_MAX]; size_t tl = 0; int has = 0;
+        if (dnet_engine_link_tick(eng, cw_now(w), tf, sizeof tf, &tl, &has)
+                == DNET_ENGINE_OK && has)
+            w->txf(w, tf, tl);
+        int ev = w->rxev(w, cw_now(w));
+        if (ev < 0) break;
+        if (ev == DNET_LINK_EV_CONNECT_CONF && dnet_link_is_up(&eng->link)) { up = 1; break; }
+        if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF) break;
+        if (dnet_link_state_of(&eng->link) == DNET_LINK_CLOSED) break;
+    }
+    if (!up) return SS$_ABORT;
+
+    /* NSP requires the INITIATOR to send a LINK SERVICE right after the CC (it
+     * acks the CC + opens the flow-control window) before a real VAX will send
+     * DAP; harmless to an OVMX FAL peer, which absorbs it (rd vms-6165). */
+    now = cw_now(w);
+    if (dnet_engine_link_service(eng, frame, sizeof frame, &flen, now)
+            == DNET_ENGINE_OK)
+        (void)w->txf(w, frame, flen);
+
+    struct copy_dap_ctx dc = { w };
+    struct dnet_dap_transport t = { copy_dap_send, copy_dap_recv, &dc };
+    uint32_t status = plan->is_get
+        ? dnet_fal_client_get(plan->remote_spec, plan->local_spec, &t)
+        : dnet_fal_client_put(plan->local_spec, plan->remote_spec, &t);
+
+    now = cw_now(w);
+    if (dnet_engine_link_close(eng, DNET_LINK_REASON_NORMAL, frame, sizeof frame,
+                               &flen, now) == DNET_ENGINE_OK)
+        (void)w->txf(w, frame, flen);
+    return status;
+}
+
+/*
+ * copy_server_thread - the FAL (object 17) SERVER end of one --copy-accept-test
+ * session: receive the object-17 Connect Initiate, AUTHENTICATE the carried
+ * creds (dnet_fal_connect_auth -- the same SYSUAF/Purdy path LOGINOUT uses, no
+ * file served on a bad connect, INV-6), accept -> Connect Confirm, then serve
+ * the DAP session (dnet_fal_server_run) over the link. The exact server the
+ * live datalink would drive, run in-thread so the client's copy_client_run is a
+ * true black box.
+ */
+struct copy_server_arg { struct copy_wire w; uint32_t status; };
+static void *copy_server_thread(void *v)
+{
+    struct copy_server_arg *a = v;
+    struct copy_wire *w = &a->w;
+    struct dnet_engine *eng = w->eng;
+    uint8_t f[DNET_FRAME_MAX]; size_t fl = 0;
+    a->status = SS$_ABORT;
+
+    int got_ci = 0;
+    for (int i = 0; i < 4096 && !got_ci; i++) {
+        int ev = w->rxev(w, cw_now(w));
+        if (ev < 0) return NULL;
+        if (ev == DNET_LINK_EV_CONNECT_IND) got_ci = 1;
+    }
+    if (!got_ci) return NULL;
+
+    char who[DNET_FAL_USER_MAX + 1];
+    uint32_t auth = dnet_fal_connect_auth(eng->link.conn_data, eng->link.conn_len,
+                                          who, sizeof who);
+    if (auth != SS$_NORMAL) {
+        if (dnet_engine_link_close(eng, DNET_LINK_REASON_OBJREJ, f, sizeof f, &fl,
+                                   cw_now(w)) == DNET_ENGINE_OK)
+            (void)w->txf(w, f, fl);
+        a->status = auth;      /* honest refusal */
+        return NULL;
+    }
+    if (dnet_engine_link_accept(eng, 0x2002, f, sizeof f, &fl, cw_now(w))
+            != DNET_ENGINE_OK || w->txf(w, f, fl) != 0)
+        return NULL;
+
+    struct copy_dap_ctx dc = { w };
+    struct dnet_dap_transport t = { copy_dap_send, copy_dap_recv, &dc };
+    a->status = dnet_fal_server_run(&t);
+    return NULL;
+}
+
+/* Run one COPY through copy_client_run against a threaded FAL server over a
+ * socketpair datalink. Fills *client / *server with the two statuses. */
+static int copy_xfer_once(const struct dnet_copy_plan *plan, const char *password,
+                          uint32_t *client, uint32_t *server)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) return -1;
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+    static struct dnet_engine L, R;   /* static: large engine structs off-stack */
+    if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
+        close(sv[0]); close(sv[1]); return -1;
+    }
+    struct copy_server_arg sarg;
+    memset(&sarg, 0, sizeof sarg);
+    sarg.w.eng = &R; sarg.w.txf = cw_sp_tx; sarg.w.rxev = cw_sp_rx;
+    sarg.w.sp_wfd = sv[1]; sarg.w.sp_rfd = sv[1]; sarg.w.synthetic = 1; sarg.w.clk = 1000;
+    pthread_t th;
+    if (pthread_create(&th, NULL, copy_server_thread, &sarg) != 0) {
+        close(sv[0]); close(sv[1]); return -1;
+    }
+    struct copy_wire cw;
+    memset(&cw, 0, sizeof cw);
+    cw.eng = &L; cw.txf = cw_sp_tx; cw.rxev = cw_sp_rx;
+    cw.sp_wfd = sv[0]; cw.sp_rfd = sv[0]; cw.synthetic = 1; cw.clk = 100;
+    uint32_t cs = copy_client_run(&cw, 1, 11, plan, password);
+    pthread_join(th, NULL);
+    close(sv[0]); close(sv[1]);
+    if (client) *client = cs;
+    if (server) *server = sarg.status;
+    return 0;
+}
+
+/*
+ * run_copy_accept_test (rd vms-ea8) -- the BATTERY proof of the outbound $ COPY
+ * command layer: a real COPY argument pair is parsed by dnet_copy_plan (the same
+ * parser the DCL COPY verb uses) and driven through copy_client_run to an
+ * authenticated object-17 FAL server over an NSP link, moving a sequential file
+ * BOTH directions with the records byte-verified through real RMS over the ACP.
+ * The FAL analogue of --fal-accept-test, but entered through the COPY command's
+ * own plan rather than hardcoded specs. Needs /dev/vms + the mounted SYSUAF
+ * (GUEST/GUEST); it FAILS honestly where the executive is absent (INV-6).
+ */
+static int run_copy_accept_test(void)
+{
+    printf("DECNETD-I-COPYACCEPT, outbound $ COPY command layer (dnet_copy_plan)"
+           " -> object-17 FAL client over the NSP link -> real RMS transfer both"
+           " directions, byte-verified (rd vms-ea8)\n");
+    int pass = 0, fail = 0;
+#define CA_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    static const char *lines[] = {
+        "COPY line one over the outbound DCL client (vms-ea8)",
+        "COPY line two - a multi-record DAP data transfer",
+        "COPY line three and final"
+    };
+    const int nl = 3;
+    const char *SRC  = "SYS$SYSROOT:[SYSMGR]OVMXCOPY_S.TXT";
+    const char *DEST = "SYS$SYSROOT:[SYSMGR]OVMXCOPY_D.TXT";
+    const char *BACK = "SYS$SYSROOT:[SYSMGR]OVMXCOPY_B.TXT";
+
+    int src_ok = (rms_textfile_write_line(SRC, lines[0]) == 0) &&
+                 (rms_textfile_append_line(SRC, lines[1]) == 0) &&
+                 (rms_textfile_append_line(SRC, lines[2]) == 0);
+    CA_CHECK(src_ok, "source file created on the ODS-2 volume via RMS over the ACP");
+
+    /* PUT: $ COPY SRC OVMXR"GUEST GUEST"::DEST -> plan(is_get=0) -> copy_client_run. */
+    if (src_ok) {
+        char dstspec[320];
+        snprintf(dstspec, sizeof dstspec, "OVMXR\"GUEST GUEST\"::%s", DEST);
+        struct dnet_copy_plan plan;
+        int rp = dnet_copy_plan(SRC, dstspec, &plan);
+        CA_CHECK(rp == 0 && plan.is_get == 0 && !strcmp(plan.node, "OVMXR"),
+                 "COPY local->remote parses to a PUT plan (node OVMXR)");
+        if (rp == 0) {
+            uint32_t cs = 0, ss = 0;
+            if (copy_xfer_once(&plan, plan.password, &cs, &ss) == 0) {
+                CA_CHECK(cs == SS$_NORMAL && ss == SS$_NORMAL,
+                         "PUT: the COPY plan drove a full DAP transfer, both peers OK");
+                CA_CHECK(fal_file_matches(DEST, lines, nl),
+                         "PUT: the STORED file's records BYTE-MATCH the source (real transfer)");
+            } else { fail++; printf("  FAIL: PUT transfer harness setup\n"); }
+        }
+    }
+
+    /* GET: $ COPY OVMXR"GUEST GUEST"::DEST BACK -> plan(is_get=1) -> copy_client_run. */
+    {
+        char srcspec[320];
+        snprintf(srcspec, sizeof srcspec, "OVMXR\"GUEST GUEST\"::%s", DEST);
+        struct dnet_copy_plan plan;
+        int rg = dnet_copy_plan(srcspec, BACK, &plan);
+        CA_CHECK(rg == 0 && plan.is_get == 1 && !strcmp(plan.node, "OVMXR"),
+                 "COPY remote->local parses to a GET plan (node OVMXR)");
+        if (rg == 0) {
+            uint32_t cs = 0, ss = 0;
+            if (copy_xfer_once(&plan, plan.password, &cs, &ss) == 0) {
+                CA_CHECK(cs == SS$_NORMAL && ss == SS$_NORMAL,
+                         "GET: the COPY plan drove a full DAP transfer, both peers OK");
+                CA_CHECK(fal_file_matches(BACK, lines, nl),
+                         "GET: the FETCHED file's records BYTE-MATCH the source (real transfer)");
+            } else { fail++; printf("  FAIL: GET transfer harness setup\n"); }
+        }
+    }
+
+    printf("DECNETD-I-COPYACCEPT, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-COPY-ACCEPT: PASS\n"); return 0; }
+    printf("DECNETD-COPY-ACCEPT: FAIL\n");
+    return 1;
+#undef CA_CHECK
+}
+
+/*
+ * copy_noauth_server_thread - a TEST-DOUBLE FAL peer for the host transport
+ * proof: it accepts the object-17 connect WITHOUT authenticating (this half
+ * proves copy_client_run's bring-up + link-service + DAP transport, NOT auth --
+ * the auth gate is proven separately by --copy-selftest's refused-without-auth
+ * assertions and end to end by --copy-accept-test on a real SYSUAF). It receives
+ * the CI, accepts -> Connect Confirm, then serves the DAP session; a GET of a
+ * file it cannot open (no ACP volume on the build host) yields the honest
+ * STATUS(access-failed) that must round-trip back over the NSP link.
+ */
+static void *copy_noauth_server_thread(void *v)
+{
+    struct copy_server_arg *a = v;
+    struct copy_wire *w = &a->w;
+    struct dnet_engine *eng = w->eng;
+    uint8_t f[DNET_FRAME_MAX]; size_t fl = 0;
+    a->status = SS$_ABORT;
+
+    int got_ci = 0;
+    for (int i = 0; i < 4096 && !got_ci; i++) {
+        int ev = w->rxev(w, cw_now(w));
+        if (ev < 0) return NULL;
+        if (ev == DNET_LINK_EV_CONNECT_IND) got_ci = 1;
+    }
+    if (!got_ci) return NULL;
+    if (dnet_engine_link_accept(eng, 0x2002, f, sizeof f, &fl, cw_now(w))
+            != DNET_ENGINE_OK || w->txf(w, f, fl) != 0)
+        return NULL;
+
+    struct copy_dap_ctx dc = { w };
+    struct dnet_dap_transport t = { copy_dap_send, copy_dap_recv, &dc };
+    a->status = dnet_fal_server_run(&t);
+    return NULL;
+}
+
+/*
+ * run_copy_transport_selftest (rd vms-ea8) -- the HOST FLOOR for the outbound
+ * COPY client: proves copy_client_run itself (client-only bring-up over the
+ * datalink substrate: Connect Initiate -> await Connect Confirm -> NSP link
+ * service -> DAP session -> disconnect) drives a full DAP config + access +
+ * honest STATUS round-trip end to end over the copy_wire transport, against a
+ * threaded test-double FAL server, with NO executive and NO CAP_NET_RAW. A GET
+ * of a file the server cannot open must return the honest miss on BOTH peers --
+ * exactly the --fal-selftest transport-pump discipline, but through the SAME
+ * copy_client_run the live $ COPY uses. The authenticated byte-verified transfer
+ * is --copy-accept-test (needs /dev/vms + SYSUAF).
+ */
+static int run_copy_transport_selftest(void)
+{
+    printf("DECNETD-I-COPYXPORT, outbound COPY client transport pump: copy_client_run"
+           " brings up an object-17 link + DAP session over the NSP link, honest miss"
+           " round-trips (no executive, rd vms-ea8)\n");
+    int pass = 0, fail = 0;
+#define CX_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    struct dnet_copy_plan plan;
+    int rp = dnet_copy_plan("OVMXR::DKA0:[X]NOPE.TXT", "DKA0:[X]LOCAL.TXT", &plan);
+    CX_CHECK(rp == 0 && plan.is_get == 1, "COPY remote->local parses to a GET plan");
+    if (rp != 0) { printf("DECNETD-COPY-XPORT: FAIL\n"); return 1; }
+
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-COPYXPORT, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+    static struct dnet_engine L, R;
+    int setup_ok = (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) == 0 &&
+                    dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) == 0);
+    CX_CHECK(setup_ok, "two engines initialised");
+    if (setup_ok) {
+        struct copy_server_arg sarg;
+        memset(&sarg, 0, sizeof sarg);
+        sarg.w.eng = &R; sarg.w.txf = cw_sp_tx; sarg.w.rxev = cw_sp_rx;
+        sarg.w.sp_wfd = sv[1]; sarg.w.sp_rfd = sv[1]; sarg.w.synthetic = 1; sarg.w.clk = 1000;
+        pthread_t th;
+        if (pthread_create(&th, NULL, copy_noauth_server_thread, &sarg) == 0) {
+            struct copy_wire cw;
+            memset(&cw, 0, sizeof cw);
+            cw.eng = &L; cw.txf = cw_sp_tx; cw.rxev = cw_sp_rx;
+            cw.sp_wfd = sv[0]; cw.sp_rfd = sv[0]; cw.synthetic = 1; cw.clk = 100;
+            uint32_t cs = copy_client_run(&cw, 1, 11, &plan, "");
+            pthread_join(th, NULL);
+            CX_CHECK(cs == SS$_NOSUCHFILE && sarg.status == SS$_NOSUCHFILE,
+                     "copy_client_run brought the link up + drove the DAP session; the"
+                     " honest miss round-trips end to end (client + server both NOSUCHFILE)");
+        } else { fail++; printf("  FAIL: server thread create\n"); }
+    }
+    close(sv[0]); close(sv[1]);
+
+    printf("DECNETD-I-COPYXPORT, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-COPY-XPORT: PASS\n"); return 0; }
+    printf("DECNETD-COPY-XPORT: FAIL\n");
+    return 1;
+#undef CX_CHECK
+}
+
 /*
  * run_copy_loop - the LIVE outbound $ COPY over the datalink (rd vms-ea8).
  *
- * Builds the copy plan from the two COPY arguments, ENFORCES the credential
- * posture, then would drive dnet_fal_client_get/put over a datalink-backed DAP
- * transport to object 17 on the remote node.
+ * Parses the copy plan, ENFORCES the credential posture (below), resolves the
+ * remote node, then drives copy_client_run over the real datalink `sock`. The
+ * transfer core is the code --copy-accept-test proves byte-exact; the only
+ * lab-gated delta is reaching a real remote FAL over AF_PACKET (mirrors the
+ * --set-host client, rd vms-a70 / vms-101).
  *
  * CREDENTIAL POSTURE (a DECIDED rule, not a facade): the FAL access-control
  * PASSWORD is a REAL credential (unlike SET HOST, where LOGINOUT authenticates
  * fresh and the connect password is empty). It MUST NOT appear on argv -- argv
- * is world-readable in /proc/<pid>/cmdline under a fork/exec activation -- so:
- *   - a password embedded in the COPY spec's access string is REFUSED here; the
- *     command line carries at most NODE"username"::spec, never the password;
- *   - the password is read from the inherited fd named by --password-fd, which
- *     the in-process image activator hands over without it ever crossing a
- *     process boundary in the clear.
- * The node-stripped spec + username + account come from the plan; the password
- * comes from the fd; together they build the object-17 connect.
- *
- * The outbound datalink-backed DAP transport itself (a DCL process owning a live
- * DECnet circuit to carry the FAL client's DAP over AF_PACKET) is the build-host
- * / inbound-bracket rung and is NOT wired here yet -- so with the plan validated
- * and the posture enforced, this reports honestly and does not fake a transfer
- * (INV-6, exactly as dcl_cmd_file.c reports %COPY-I-NETNOTWIRED today). The
- * host+CI proof of the command layer is --copy-selftest; the authenticated
- * transfer is --fal-accept-test.
+ * is world-readable in /proc/<pid>/cmdline under a fork/exec activation -- so a
+ * password embedded in the COPY spec's access string is REFUSED here (the
+ * command line carries at most NODE"username"::spec), and the password is read
+ * from the inherited fd named by --password-fd, never crossing a process
+ * boundary in the clear.
  */
-static int run_copy_loop(const char *src, const char *dst, int password_fd)
+static int run_copy_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
+                         const char *src, const char *dst, int password_fd)
 {
     struct dnet_copy_plan plan;
     int r = dnet_copy_plan(src, dst, &plan);
@@ -2592,21 +3034,80 @@ static int run_copy_loop(const char *src, const char *dst, int password_fd)
         return 1;
     }
 
+    /* Read the password (if any) from the inherited fd, never from argv. Bounded;
+     * a trailing newline is stripped; the buffer is wiped after the transfer.
+     *
+     * CLEARTEXT TRANSMISSION (codeql cpp/cleartext-transmission, BY DESIGN):
+     * this password IS carried to the remote FAL in the object-17 Session Control
+     * CONNECT (copy_client_run -> dnet_cterm_sc_connect_build), where FAL
+     * authenticates it -- that is how DECnet Phase IV FAL access control works
+     * (the oracle §1 shows the credentials in the connect; the OPPOSITE of CTERM,
+     * whose connect creds are empty). DECnet Phase IV has NO transport encryption;
+     * OVMX is a CLEAN-ROOM FAITHFUL reproduction (Rule 8) and cannot encrypt what
+     * the wire protocol defines as cleartext -- the same property the shipped
+     * inbound FAL server (decnet$fal, --fal-accept-test) already has. OVMX's own
+     * hardening is orthogonal and present: the password never touches argv (fd
+     * handoff), is bounded, and is wiped immediately after the connect is built. */
+    char password[DNET_SC_MAX_STR + 1] = {0};
+    if (plan.has_access && password_fd >= 0) {
+        ssize_t got = read(password_fd, password, sizeof password - 1); // codeql[cpp/cleartext-transmission]
+        if (got < 0) {
+            fprintf(stderr, "DECNETD-E-COPYPW, could not read the password from"
+                            " fd %d: %s\n", password_fd, strerror(errno));
+            return 1;
+        }
+        password[got >= 0 ? (size_t)got : 0] = '\0';
+        size_t pl = strlen(password);
+        while (pl && (password[pl - 1] == '\n' || password[pl - 1] == '\r'))
+            password[--pl] = '\0';
+    }
+
+    /* Resolve the remote node NAME -> area.node (the node database the SET HOST
+     * client uses too); no address is ever invented (INV-6). */
+    unsigned rarea = 0, rnode = 0;
+    if (sethost_resolve_target(plan.node, &rarea, &rnode) != 0) {
+        fprintf(stderr, "DECNETD-E-NOSUCHNODE, COPY: cannot resolve node '%s'"
+                        " (not area.node, and not a NAME in the node database)\n",
+                plan.node);
+        return 1;
+    }
+
+    /* A process context is required for the local file's RMS channels, exactly
+     * as the --set-host client establishes one before $ASSIGN. */
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+
+    /* Bound the datalink recv so the synchronous DAP pump can drive CI retransmit
+     * / give-up timers rather than block forever waiting on an unreachable peer. */
+    struct timeval rcv_to = { 2, 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &rcv_to, sizeof rcv_to);
+
     log_ts(stdout);
-    printf(" DECNETD-I-COPYPLAN, %s %s%s%s::%s <-> local %s\n",
+    printf(" DECNETD-I-COPYPLAN, %s %s%s%s::%s <-> local %s (node %u.%u)\n",
            plan.is_get ? "GET" : "PUT",
            plan.node,
            plan.has_access ? "\"" : "", plan.has_access ? plan.username : "",
-           plan.remote_spec, plan.local_spec);
+           plan.remote_spec, plan.local_spec, rarea, rnode);
     fflush(stdout);
 
-    /* The outbound datalink-backed DAP transport is the build-host-gated rung. */
-    fprintf(stderr, "DECNETD-I-COPYNOTWIRED, the outbound FAL COPY-over-datalink"
-                    " transport is not wired on this system -- the plan is valid"
-                    " and the credential path is enforced, but a DCL process does"
-                    " not yet own a live DECnet circuit to carry DAP (rd vms-ea8,"
-                    " build-host-gated with the inbound bracket)\n");
-    (void)password_fd;
+    struct copy_wire w;
+    memset(&w, 0, sizeof w);
+    w.eng = eng; w.txf = cw_dl_tx; w.rxev = cw_dl_rx;
+    w.dl_sock = sock; w.dl_if = ifindex; w.synthetic = 0;
+
+    uint32_t status = copy_client_run(&w, rarea, rnode, &plan, password);
+    memset(password, 0, sizeof password);
+
+    log_ts(stdout);
+    if (status == SS$_NORMAL) {
+        printf(" DECNETD-I-COPYDONE, $ COPY %s completed (%08X)\n",
+               plan.is_get ? "GET" : "PUT", status);
+        fflush(stdout);
+        return 0;
+    }
+    printf(" DECNETD-W-COPYFAIL, $ COPY %s did not complete (status %08X) --"
+           " no file transferred (INV-6)\n", plan.is_get ? "GET" : "PUT", status);
+    fflush(stdout);
     return 1;
 }
 
@@ -2710,6 +3211,17 @@ static void usage(const char *argv0)
         "                      (GET) and remote-dest (PUT) pair, and those parsed\n"
         "                      creds drive a real object-17 connect refused without\n"
         "                      auth -- both directions (rd vms-ea8/vms-6a4)\n"
+        "  --copy-transport-selftest  run the outbound COPY client PUMP floor and\n"
+        "                      exit (no executive): copy_client_run brings up an\n"
+        "                      object-17 link + NSP link-service + DAP session over\n"
+        "                      the copy_wire transport against a test-double server,\n"
+        "                      an honest miss round-trips both peers (rd vms-ea8)\n"
+        "  --copy-accept-test  run the FULL outbound COPY transfer proof and exit\n"
+        "                      (a HARD GATE on /dev/vms + the mounted SYSUAF): a\n"
+        "                      COPY argument pair is parsed by copy_plan and driven\n"
+        "                      through the object-17 FAL client over an NSP link to\n"
+        "                      a threaded FAL server, moving a sequential file BOTH\n"
+        "                      directions, records byte-verified via RMS (vms-ea8)\n"
         "  --copy SRC DST      OUTBOUND $ COPY over DECnet: exactly one of SRC/DST\n"
         "                      is NODE\"username\"::file (the remote), the other is\n"
         "                      local. The FAL PASSWORD is NEVER taken here -- it is\n"
@@ -2756,6 +3268,8 @@ int main(int argc, char **argv)
     int fal_self_test = 0;
     int fal_accept_test = 0;
     int copy_self_test = 0;               /* --copy-selftest : COPY command-layer floor */
+    int copy_accept_test = 0;             /* --copy-accept-test : full COPY transfer proof */
+    int copy_xport_test = 0;              /* --copy-transport-selftest : COPY client pump floor */
     const char *copy_src = NULL;          /* --copy <src> <dst> : outbound FAL COPY      */
     const char *copy_dst = NULL;
     int copy_password_fd = -1;            /* --password-fd N : the FAL password source   */
@@ -2786,6 +3300,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
         else if (!strcmp(argv[i], "--fal-accept-test")) fal_accept_test = 1;
         else if (!strcmp(argv[i], "--copy-selftest")) copy_self_test = 1;
+        else if (!strcmp(argv[i], "--copy-accept-test")) copy_accept_test = 1;
+        else if (!strcmp(argv[i], "--copy-transport-selftest")) copy_xport_test = 1;
         else if (!strcmp(argv[i], "--copy") && i + 2 < argc) {
             copy_src = argv[++i];
             copy_dst = argv[++i];
@@ -2827,8 +3343,12 @@ int main(int argc, char **argv)
         return run_fal_accept_test();
     if (copy_self_test)
         return run_copy_selftest();
-    if (copy_src)
-        return run_copy_loop(copy_src, copy_dst, copy_password_fd);
+    if (copy_xport_test)
+        return run_copy_transport_selftest();
+    if (copy_accept_test)
+        return run_copy_accept_test();
+    /* --copy (run_copy_loop) needs the live datalink; dispatched after the socket
+     * is opened, beside the --set-host client (below). */
 
     /* A router routes and a --set-host CLIENT bridges a terminal; neither is a
      * NETACP that serves inbound object-42 sessions unless the caller pins it on.
@@ -3013,6 +3533,17 @@ int main(int argc, char **argv)
      * a CTERM terminal session to object 42 on the remote node and bridges THIS
      * process's VMS terminal channel to it, then returns -- it owns its own loop
      * and never falls through to the routing/inbound loop below. */
+    /* --copy CLIENT (rd vms-ea8): the OUTBOUND $ COPY over the live datalink. It
+     * opens an object-17 FAL logical link to the remote node, drives the DAP
+     * transfer, and returns -- it owns its own transfer and never falls through
+     * to the routing/inbound loop below. */
+    if (copy_src) {
+        int r = run_copy_loop(&eng, sock, ifindex, copy_src, copy_dst,
+                              copy_password_fd);
+        scs_datalink_close(sock);
+        return r;
+    }
+
     if (set_host_to) {
         unsigned ta = 0, tn = 0;
         if (sethost_resolve_target(set_host_to, &ta, &tn) != 0) {

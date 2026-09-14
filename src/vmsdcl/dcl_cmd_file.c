@@ -1822,6 +1822,121 @@ static int copy_spec_has_node(const char *s)
 }
 
 /*
+ * copy_dnet_split_access - strip the FAL access-control PASSWORD out of a COPY
+ * spec so it never reaches the client's argv (world-readable in
+ * /proc/<pid>/cmdline). NODE"user password [account]"::rest becomes
+ * out_spec = NODE"user"::rest (the proxy username stays -- it is not secret) and
+ * out_pw = the password, which the caller hands to the client over an inherited
+ * pipe fd. A spec with no "..." access string is copied verbatim with out_pw="".
+ * The account field (rarely used) is dropped here; a NODE"user"::file proxy
+ * access (no password) passes through with an empty password.
+ */
+static void copy_dnet_split_access(const char *spec, char *out_spec, size_t out_cap,
+                                   char *out_pw, size_t pw_cap)
+{
+    out_pw[0] = '\0';
+    const char *q1 = strchr(spec, '"');
+    const char *q2 = q1 ? strchr(q1 + 1, '"') : NULL;
+    if (!q1 || !q2) {                 /* no access string -- verbatim */
+        snprintf(out_spec, out_cap, "%s", spec);
+        return;
+    }
+    char acc[256];
+    size_t alen = (size_t)(q2 - (q1 + 1));
+    if (alen >= sizeof acc) alen = sizeof acc - 1;
+    memcpy(acc, q1 + 1, alen);
+    acc[alen] = '\0';
+
+    /* token 1 = user, token 2 = password (space-separated). */
+    char user[128] = "";
+    char *sp = acc;
+    while (*sp == ' ') sp++;
+    char *u = sp;
+    while (*sp && *sp != ' ') sp++;
+    size_t ulen = (size_t)(sp - u);
+    if (ulen >= sizeof user) ulen = sizeof user - 1;
+    memcpy(user, u, ulen);
+    user[ulen] = '\0';
+    while (*sp == ' ') sp++;
+    char *pw = sp, *pe = sp;
+    while (*pe && *pe != ' ') pe++;
+    size_t plen = (size_t)(pe - pw);
+    if (plen >= pw_cap) plen = pw_cap - 1;
+    memcpy(out_pw, pw, plen);
+    out_pw[plen] = '\0';
+
+    /* Rebuild NODE"user"::rest: node prefix (before q1) + "user" + rest (from q2+1). */
+    snprintf(out_spec, out_cap, "%.*s\"%s\"%s",
+             (int)(q1 - spec), spec, user, q2 + 1);
+}
+
+/*
+ * copy_dnet_activate (rd vms-ea8) - the OUTBOUND $ COPY node::file bridge. A
+ * NODE:: spec on either side is a DECnet FAL/DAP transfer: DCL activates
+ * SYS$SYSTEM:DECNETD.EXE --copy <src> <dst> on the caller's process (the SAME
+ * image activator RUN / SET HOST use), which opens a real object-17 logical link
+ * over the datalink and drives the FAL COPY client (dnet_fal_client_put/get).
+ * The FAL password is NEVER placed on argv: it is stripped from the spec and
+ * handed to the client over an inherited pipe fd (--password-fd). When
+ * DECNETD.EXE is not staged the command reports honestly (INV-6, no fake copy).
+ */
+static int copy_dnet_activate(struct dcl_context *ctx, const char *src, const char *dst)
+{
+    const char *img_spec = "SYS$SYSTEM:DECNETD.EXE";
+    char linux_path[1024], resolved[1024];
+    dcl_resolve_path(ctx, img_spec, linux_path, sizeof(linux_path));
+    if (!dcl_resolve_activatable(ctx, img_spec, linux_path,
+                                 resolved, sizeof(resolved))) {
+        printf("%%COPY-I-NETNOTAVAIL, DECnet file COPY (FAL/DAP object 17) is not"
+               " available on this system (SYS$SYSTEM:DECNETD.EXE is not staged)\n");
+        return SS$_ABORT;
+    }
+    strncpy(linux_path, resolved, sizeof(linux_path) - 1);
+    linux_path[sizeof(linux_path) - 1] = '\0';
+
+    char src_clean[1024], dst_clean[1024], src_pw[128], dst_pw[128];
+    copy_dnet_split_access(src, src_clean, sizeof(src_clean), src_pw, sizeof(src_pw));
+    copy_dnet_split_access(dst, dst_clean, sizeof(dst_clean), dst_pw, sizeof(dst_pw));
+    const char *pw = src_pw[0] ? src_pw : (dst_pw[0] ? dst_pw : "");
+
+    int pfd[2] = { -1, -1 };
+    char fdbuf[16] = "";
+    if (pw[0]) {
+        if (pipe(pfd) != 0) {
+            printf("%%COPY-F-NETPIPE, could not set up the DECnet password channel\n");
+            return SS$_ABORT;
+        }
+        size_t pl = strlen(pw);
+        if (write(pfd[1], pw, pl) != (ssize_t)pl) {
+            close(pfd[0]); close(pfd[1]);
+            printf("%%COPY-F-NETPIPE, could not pass the DECnet password\n");
+            return SS$_ABORT;
+        }
+        close(pfd[1]);                 /* EOF follows the password */
+        snprintf(fdbuf, sizeof(fdbuf), "%d", pfd[0]);
+    }
+
+    char *argv[8];
+    int argc = 0;
+    argv[argc++] = linux_path;
+    argv[argc++] = "--copy";
+    argv[argc++] = src_clean;
+    argv[argc++] = dst_clean;
+    if (fdbuf[0]) {
+        argv[argc++] = "--password-fd";
+        argv[argc++] = fdbuf;
+    }
+    argv[argc] = NULL;
+
+    int rc = dcl_activate_image(ctx, img_spec, linux_path, argv);
+
+    if (pfd[0] >= 0) close(pfd[0]);
+    memset(src_pw, 0, sizeof src_pw);   /* wipe the password copies */
+    memset(dst_pw, 0, sizeof dst_pw);
+    return rc;
+}
+
+/*
  * COPY - Copy file(s), with VMS wildcard source expansion and version
  * defaulting on the output.
  *
@@ -1842,26 +1957,19 @@ int cmd_copy(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* ---- DECnet file COPY (NODE"user pw"::file), rd vms-8c2 --------------
+    /* ---- DECnet file COPY (NODE"user pw"::file), rd vms-8c2 / vms-ea8 -----
      * A node prefix on either side is a DECnet FAL/DAP transfer, NOT a local
-     * ODS-2 COPY. The transfer ENGINE is real and proven -- the FAL server
-     * (object 17) + the DAP codec + the COPY client (dnet_fal_client_put/get),
-     * exercised end to end over a real NSP logical link by DECNETD.EXE
-     * --fal-accept-test (real SYSUAF auth + real RMS both directions,
-     * byte-verified) and --fal-selftest (the honest floor: a real object-17
-     * connect carrying the access-control creds, refused with an NSP disconnect
-     * when unauthenticated). What is NOT yet wired is the OUTBOUND bridge FROM a
-     * DCL process TO the live datalink (a DCL COPY does not yet own a DECnet
-     * circuit; the same gap SET HOST's outbound client has -- decnet$set-host).
-     * So COPY reports honestly here rather than mis-copying a NODE:: spec as a
-     * local file or faking a transfer (INV-6 / Rule 9). Tracked follow-on:
-     * wire the FAL client into DCL over the datalink (rd vms-30e child). */
-    if (copy_spec_has_node(cmd->params[0]) || copy_spec_has_node(cmd->params[1])) {
-        printf("%%COPY-I-NETNOTWIRED, DECnet file COPY (FAL/DAP object 17) engine "
-               "is present and authenticated, but the outbound COPY-over-datalink "
-               "client is not yet wired into DCL on this system\n");
-        return SS$_ABORT;
-    }
+     * ODS-2 COPY. DCL activates the outbound FAL COPY client (SYS$SYSTEM:
+     * DECNETD.EXE --copy) on this process -- the same image activator SET HOST
+     * and RUN use -- which opens a real object-17 logical link over the datalink
+     * and drives dnet_fal_client_put/get (the transfer core proven byte-exact by
+     * DECNETD.EXE --copy-accept-test in the booted battery, and host-proven by
+     * --copy-transport-selftest). The FAL password is stripped from the spec and
+     * handed over an inherited pipe fd, never argv. With DECNETD.EXE unstaged the
+     * bridge reports honestly (INV-6, no fake copy). The live-wire proof against
+     * a real remote FAL is lab-gated (rd vms-a70/vms-101), as for SET HOST. */
+    if (copy_spec_has_node(cmd->params[0]) || copy_spec_has_node(cmd->params[1]))
+        return copy_dnet_activate(ctx, cmd->params[0], cmd->params[1]);
 
     int do_log      = dcl_has_qualifier(cmd, "LOG");
     int do_confirm  = dcl_has_qualifier(cmd, "CONFIRM");

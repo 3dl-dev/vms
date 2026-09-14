@@ -93,4 +93,11 @@ if(BUILD_TESTS)
     # real object-17 connect refused without auth, both directions. No executive.
     add_test(NAME decnetd_copy_selftest
              COMMAND decnetd_exe --copy-selftest)
+    # rd vms-ea8: the OUTBOUND $ COPY client transport PUMP floor -- copy_client_run
+    # (the same client the live $ COPY drives) brings up an object-17 link + NSP
+    # link-service + a DAP session over the copy_wire transport against a threaded
+    # test-double server; an honest miss round-trips end to end. No executive (the
+    # authenticated byte-verified transfer is --copy-accept-test in the battery).
+    add_test(NAME decnetd_copy_transport_selftest
+             COMMAND decnetd_exe --copy-transport-selftest)
 endif()

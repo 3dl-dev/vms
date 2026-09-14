@@ -1,10 +1,14 @@
 # OVMX Authenticity Roadmap — Indistinguishable from OpenVMS
 
-> Status: **PROPOSED** (pillar `vms-898`, objective: total VMS commoditization).
-> Awaiting operator approval to build the rd work-item tree. This document is the
-> plan of record; on approval it becomes the parent spec for the re-decomposed
-> `vms-898` epic. No rd items exist yet for Milestones 1–3 — this doc IS the
-> pre-approval artifact.
+> Status: **APPROVED / ACTIVE** (pillar `vms-898`, objective: total VMS commoditization).
+> This document is the plan of record and the parent spec for the `vms-898` authenticity
+> epic. The rd work-item tree exists and is funded: `vms-898` (authenticity pillar) and
+> `vms-6b8` (executive process-control-by-PID authenticity lane) are active and cited across
+> the compat register (e.g. `docs/compat/facilities/kernel-executive.yaml`); the oracle
+> program (`vms-c38`) and the hollow-surface backlog (`vms-352/6b8e/1f7/ddc`) are its live
+> children. Re-derive current status via `rd show vms-898` + the compat register — do not read
+> milestone done-state off this doc. *(Corrected 2026-09-14: the prior "PROPOSED / no rd items
+> exist yet" banner was stale — the tree was built and funded.)*
 >
 > **Operator framing (2026-07-27):** "The entire UX has a bunch of tells. Help
 > facility isn't true to form, SET/SHOW are shallow, MONITOR/SYSGEN/SYSMAN feel

@@ -1,8 +1,11 @@
 # DCL Pipes and I/O Redirection — Design Document
 
 **Bead**: vms-h6e
-**Status**: Design and decomposition phase
-**Date**: 2026-02-19
+**Status**: **LANDED (PIPE implemented)** — *status corrected 2026-09-14; the "Current State"
+section below describes the pre-implementation `system()` stub and is retained as design history.*
+DCL `PIPE` is now real in `src/vmsdcl/dcl_cmd_process.c` (`cmd_pipe()` → `pipe_split_segments`,
+up to `PIPE_MAX_SEGMENTS`, creating genuinely new processes — not a `system()` shell escape).
+**Date**: 2026-02-19 (design) · 2026-09-14 (status re-grounded)
 
 ---
 
@@ -29,7 +32,7 @@ Key files:
 
 The lexer (dcl_lexer.c) **already tokenizes `|`** as `TOK_PIPE`. The parser (dcl_parser.c) handles `TOK_PIPE` by calling `collect_rest()` into `cmd->rest` — so the pipe character is recognized but not acted upon.
 
-There is a stub `cmd_pipe()` in `dcl_builtin.c` (line 1545). It currently takes all params and the `rest` field, concatenates them with ` | `, and calls `system()`. This is a Unix-shell escape, not VMS PIPE semantics.
+*(As-built note 2026-09-14: this describes the original stub, since replaced.)* There **was** a stub `cmd_pipe()` in `dcl_builtin.c` that concatenated params with ` | ` and called `system()` — a Unix-shell escape, not VMS PIPE semantics. On `origin/main` `cmd_pipe()` lives in `src/vmsdcl/dcl_cmd_process.c` and executes a real DCL pipeline (`pipe_split_segments`, genuinely separate processes); the `system()` escape is gone.
 
 The `cmd_define()` implementation stores logical names as DCL symbols (not as actual LNM entries). There is no mechanism today to redirect `SYS$OUTPUT` by redefining a logical name — `dcl_translate_logical()` does not consult the symbol table; it handles only a fixed set of well-known names.
 

@@ -1,7 +1,15 @@
 # Design record: Files-11 (ODS-2) as a genuine ACP/XQP in the executive
 
-Status: **RATIFIED ARCHITECTURE (operator ruling 2026-08-16) — design only,
-not yet built.** This record defines the target and decomposes the build-out.
+Status: **RATIFIED ARCHITECTURE (operator ruling 2026-08-16) — LANDED.** *(Status
+corrected 2026-09-14: the prior "design only, not yet built" line is stale.)* The ACP
+model this record specifies is built and register-verified on `origin/main`: runtime
+SYS$DISK is a genuine Files-11 ODS-2 volume reached via `$ASSIGN` + `IO$_ACCESS/READVBLK/
+WRITEVBLK` through the executive ACP (`src/kernel-core/vmsfs_acp.c`), with per-file SOGW
+protection enforced in `acp_check_access`; the legacy `vmsfs.ko` VFS driver and the
+`/vms` POSIX passthrough were retired (vms-165). Register: `docs/compat/facilities/ods2.yaml`
+rates `vmsfs$runtime_fs` **implemented/real** and `ods2$reader` **verified/real** (byte-exact
+vs a real OpenVMS VAX V7.3 volume). RMS runs over this ACP path (`rms-api.yaml`, `real`). This
+record defines the target and decomposes the build-out; re-derive residual gaps from the register.
 It **supersedes** the "Architecture A1" of `docs/design-ods2-runtime-flip.md`
 (keep RMS/DCL in userspace over a block-device *adapter*) and adopts a faithful
 realization of what that record called "A2" and rejected: a real Files-11

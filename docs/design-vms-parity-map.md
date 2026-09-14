@@ -1,5 +1,17 @@
 # VMS Command-Surface & Tools Parity Map
 
+> **⚠ STATUS TABLES RETIRED — superseded by the compat register (flagged 2026-09-14).** The
+> per-verb / per-lexical **status and count data** in this map (the "~54 verbs", "15/54 retrofit",
+> "35 F$ lexicals", bucket tallies, etc.) is a hand-maintained parallel ledger and has drifted from
+> ground truth. Per the single-ledger invariant (INV-LEDGER; see `docs/design-compat-surface-register.md` §1) the
+> authoritative source is the compat register — `docs/compat/facilities/*.yaml` (notably
+> `dcl-verbs.yaml`, `dcl-qualifiers.yaml`, `lexicals.yaml`); the register's own §1 states it
+> **absorbs this status data**. Render with `python3 tools/compat/render_compat.py`. **Do not read
+> or update counts here.** What is kept below as durable value is the *narrative gap analysis* — the
+> two-engine framing (qualifier grammar + logical-name/rooted-disk composition) and the sequenced
+> breadth/depth plan; treat every embedded number as illustrative-historical, re-derived from the
+> register.
+>
 > **Operator charge (2026-08-11):** "we killed the lies, which is good, but we still have a
 > hollow experience. we need significantly more command surface and depth, true to VMS … we
 > can't have facades, we must have real tools, parity with VMS. map that out."

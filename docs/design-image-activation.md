@@ -1,8 +1,18 @@
 # VMS Image Activation Design Specification
 
 **Bead**: vms-913.1
-**Status**: Authoritative reference for all vms-913.x implementation beads
-**Date**: 2026-03-06
+**Status**: Design record for the vms-913.x image activator. **As-built corrections (2026-09-14)** —
+this 2026-03-06 record predates three landings; treat its original text accordingly:
+> 1. **Symbol vectors ARE implemented.** IMGACT.EXE binds cross-image imports by vector index
+>    against a real `.vms$sv`/`.vms$imp` symbol vector; LINK.EXE emits genuine `.vms$sv`
+>    shareables (vms-c65). §12's "Symbol Vectors: Not implemented" is stale (corrected below).
+> 2. **There is one runtime: `vms.ko` / QEMU (CLAUDE.md Rule 9).** The Docker *runtime* layer was
+>    deleted; Docker survives only as build/test tooling. Every "Docker mode" passage below
+>    describing a live dual runtime is dead — the "Docker Mode" non-goal has been removed.
+> 3. **The `/vms/SYS0` POSIX passthrough is retired (vms-165).** Runtime SYS$DISK is a genuine
+>    Files-11 ODS-2 volume over the executive ACP, not a `/vms/SYS0/...` host directory tree.
+>    The installation-sequence directory diagram that built that tree has been removed.
+**Date**: 2026-03-06 (design) · 2026-09-14 (status re-grounded)
 
 ---
 
@@ -75,9 +85,10 @@ This means:
 
 ### Scope
 
-IMGACT.EXE is **QEMU-mode only**. Docker mode continues using glibc's
-`ld-linux-*.so` unchanged. The Docker build produces standard dynamically-linked
-ELF binaries for the Ubuntu runtime. The QEMU build produces musl-linked binaries
+IMGACT.EXE is the activator for the sole runtime: `vms.ko` / QEMU. *(2026-09-14: the
+original text scoped this "QEMU-mode only" alongside a Docker glibc runtime; the Docker
+runtime layer has since been deleted under CLAUDE.md Rule 9 — Docker remains build/test
+tooling only. There is no dual runtime.)* All OVMX executables are musl-linked and
 activated through IMGACT.EXE.
 
 ---
@@ -791,37 +802,14 @@ initramfs-ovmx.cpio.gz
 
 ### Installation Sequence
 
-```
-STARTUP.EXE detects blank disk
-    |
-    v
-Create VMS directory hierarchy:
-    /vms/SYS0/SYSCOMMON/SYSEXE/      (SYS$SYSTEM)
-    /vms/SYS0/SYSCOMMON/SYSLIB/      (SYS$SHARE / SYS$LIBRARY)
-    /vms/SYS0/SYSCOMMON/SYSMGR/      (SYS$MANAGER)
-    /vms/SYS0/SYSCOMMON/SYSHLP/      (SYS$HELP)
-    /vms/USERS/                       (SYS$USERS)
-    /vms/SYSTMP/                      (SYS$SCRATCH)
-    |
-    v
-Copy files from /vms_install/ to /vms/:
-    /vms_install/SYS$SYSTEM/* -> /vms/SYS0/SYSCOMMON/SYSEXE/
-    /vms_install/SYS$SHARE/*  -> /vms/SYS0/SYSCOMMON/SYSLIB/
-    /vms_install/SYS$MANAGER/* -> /vms/SYS0/SYSCOMMON/SYSMGR/
-    /vms_install/SYS$HELP/*   -> /vms/SYS0/SYSCOMMON/SYSHLP/
-    |
-    v
-Generate SYSTARTUP_VMS.COM (if not already present):
-    INSTALL ADD for each shareable image
-    Start VMSLNMD
-    |
-    v
-Write installation marker:
-    /vms/SYS0/SYSCOMMON/SYSEXE/VMS$INSTALL.DAT
-    |
-    v
-Continue normal boot (or reboot for clean state)
-```
+> **⚠ RETIRED DIAGRAM (removed 2026-09-14).** The original installation-sequence diagram here
+> showed STARTUP.EXE creating a `/vms/SYS0/SYSCOMMON/{SYSEXE,SYSLIB,SYSMGR,SYSHLP}` **POSIX
+> directory tree** and copying `/vms_install/` files into it — the `/vms` passthrough that
+> **vms-165 retired**. Runtime SYS$DISK is now a genuine Files-11 ODS-2 volume created and
+> populated through the executive ACP (`$ASSIGN` + `IO$_CREATE/ACCESS/WRITEVBLK`), addressed by
+> VMS filespec (SYS$SYSTEM:, SYS$SHARE:, …), not by host `/vms/SYS0/...` paths. For the current
+> install/boot model see `docs/design-files11-acp-executive.md`, `docs/design-init-scope.md`,
+> and the `install`/`boot` facility rows in the compat register.
 
 ### Slim Boot
 
@@ -1043,21 +1031,13 @@ of JMP instructions at known offsets that provides ABI stability across image
 versions. Callers jump to a vector slot, and the vector jumps to the actual
 function, allowing the function to move without changing the caller.
 
-**Not implemented.** ELF PLT/GOT provides equivalent indirect-call semantics.
-True symbol vectors would require a custom compiler backend or linker plugin to
-generate vector tables and redirect all external calls through them. The
-engineering cost is not justified when PLT/GOT achieves the same practical
-result (stable ABI for inter-image calls).
-
-### Docker Mode
-
-Docker mode continues using glibc's standard dynamic linker (`ld-linux-*.so`).
-IMGACT.EXE is not built, installed, or referenced in Docker builds. The Docker
-build uses `gcc` (not `musl-gcc`) and produces standard Ubuntu-compatible
-binaries.
-
-Rationale: Docker mode targets development and CI convenience. VMS-authentic
-image activation only matters for the bootable QEMU distribution.
+**Implemented** *(this section was originally "Not implemented — ELF PLT/GOT"; corrected
+2026-09-14).* OVMX now carries a real symbol vector: LINK.EXE emits genuine `.vms$sv`
+shareable images (vms-c65), and IMGACT.EXE binds cross-image imports **by vector index**
+against the `.vms$sv`/`.vms$imp` sections, folds globalvalues, and re-biases data pointers
+(`.vms$rel`). This is confirmed end-to-end for both x86_64/aarch64 and the `alpha-dec-vms`
+shareable path (real-IMGACT-confirmed). Where PLT/GOT is still used, it is an implementation
+detail of the loader, not the inter-image ABI.
 
 ### Replacing STARTUP.EXE
 

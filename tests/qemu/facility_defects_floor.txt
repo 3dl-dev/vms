@@ -469,4 +469,7 @@
 # Raised to 151 by devtab-terminal-withdrawal-not-honored (vms-387: re-anchor
 # test_kmod_devtab_terminal, previously an in-scope suite with no negctl anchor;
 # neuters vms_devtab_remove_terminal's dynamic_term unlink gate).
-151
+# Raised to 152 by bg-fork-channels-not-captured (vms-387: anchors the previously
+# DEFERRED test_syssvc_bg_fork_inherit at the shared vms_bg_capture_channels
+# primitive, the option the fork-inherit-disabled entry's own note proposed).
+152

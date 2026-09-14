@@ -178,6 +178,7 @@ int main(int argc, char **argv)
     int cst = 0;
     waitpid(c, &cst, 0);
     /* negctl: fork-inherit-disabled */
+    /* negctl: bg-fork-channels-not-captured */
     CHECK(WIFEXITED(cst) && WEXITSTATUS(cst) == 0,
           "the forked+exec'd child materialized the inherited connection and round-tripped BYTE-EXACT, "
           "though the parent CLOSED it right after the fork -- eager fork-time inheritance (vms-0cd)");

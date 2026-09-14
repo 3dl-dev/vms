@@ -534,6 +534,7 @@ bg-accept-socket-not-installed
 bg-materialize-fd-not-routed
 bgconn-getname-addr-zeroed
 fork-inherit-disabled
+bg-fork-channels-not-captured
 initialize-home-magic-not-written
 dirlogical-compose-drops-common-member
 dcl-acp-search-fid-fabricated
@@ -6557,6 +6558,27 @@ EOF
         knock_on_why)  echo "";;
         esac;;
 
+    bg-fork-channels-not-captured)
+        case "$_f" in
+        facility)     echo "INET pseudo-device BGn: -- the SHARED fork/subprocess BG-channel capture primitive (vms_bg_capture_channels, src/kernel-core/vms_bg.c, vms-0cd/#815). BOTH inheritance entry points funnel through it: the eager fork-time path (sched_process_fork -> vms_proc_capture_channels_for_task -> vms_bg_capture_channels) and the #815 real_parent-at-registration fallback (vms_bg_inherit -> vms_bg_capture_channels). It kref-snapshots a parent's open BG channels so a forked/exec'd child keeps the connection.";;
+        targets)      echo "kernel-core/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bg_fork_inherit test_syssvc_bg_fork_close_inherit";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_bg_capture_channels()'s snapshot loop is guarded to \`if (0) { ... }\`, so it captures NOTHING onto the child's list -- out stays empty and it returns 0 (a clean 'parent had no channels', not an error). No allocation, no socket ref taken, no list mutation: non-fatal by construction (the devtab-terminal rc=139 lesson -- a mutation must redden, not crash). Because BOTH entry points route through this ONE primitive, a child inherits no BG channel by EITHER path: test_syssvc_bg_fork_inherit's forked child and fork+exec'd child both fail to operate the (absent) inherited channel, and test_syssvc_bg_fork_close_inherit's child cannot materialize the connection its parent closed after the fork. This is the anchor the fork-inherit-disabled entry's own note proposes for the previously-DEFERRED test_syssvc_bg_fork_inherit: that suite does not detect the fork-time-only fork-inherit-disabled mutation (the #815 fallback covers its parent-stays-open case), but breaking the SHARED capture primitive reddens it honestly because both paths depend on it. The parent-side assertions (\$ASSIGN creates a channel, the parent operates its own channel) touch neither entry point and stay green; the accept/listener and no-executive-skip assertions in close_inherit likewise stay green. The original loop-header text is gone after substitution (no-op re-apply, selftest).";;
+        require_fail) cat <<'EOF'
+a FORKED child can operate the BG channel its parent created (executive fork-inheritance)
+the forked+exec'd child materialized the inherited connection and round-tripped BYTE-EXACT
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+a fork()+exec()'d child can operate the inherited BG channel (sshd privsep sshd-session)
+EOF
+                      ;;
+        knock_on_why)  echo "one broken primitive, two consumers. test_syssvc_bg_fork_inherit's plain-fork case (require_fail) and its fork+exec case (knock_on) both redden because the child's inherited-channel list is empty via both the fork-time and #815 paths. test_syssvc_bg_fork_close_inherit's single inherit-and-round-trip assertion (require_fail) reddens for the same reason -- its parent closes the accepted channel right after the fork, so with the eager fork-time capture emptied the child has nothing to materialize. Every other assertion in both suites reads a path this primitive does not feed (parent-side \$ASSIGN/operate, listener/accept handles, the no-executive honest skip) and stays green.";;
+        esac;;
+
     # -------------------------------------------------------------------
     # vms-6c6 / vms-165: the two vms-8b6/#284 cross-process mount-visibility
     # controls (vmsfs-mountvis-crossproc-resolve-disabled) and the
@@ -7884,6 +7906,14 @@ apply_edit() {
         # referenced (compiles clean) while forcing the loop to never set pend. After
         # substitution the original condition is gone, so a second apply is a no-op.
         sed -i 's|if (cur->tgid == tgid \&\& cur->pid_ref == pidref)|if (0 \&\& cur->tgid == tgid \&\& cur->pid_ref == pidref) /* NEGCTL fork-inherit-disabled */|' "$_file";;
+    bg-fork-channels-not-captured)
+        # Guard vms_bg_capture_channels()'s snapshot loop to `if (0) { ... }` so it
+        # captures NOTHING (out stays empty, returns 0 -- no alloc, no socket ref, no
+        # list mutation: non-fatal, unlike a use-after-free). BOTH inheritance paths
+        # (fork-time + #815) funnel through this one primitive, so a child inherits no
+        # BG channel by either path. The loop-header text is UNIQUE to this file;
+        # after substitution it is gone, so a second apply is a no-op (selftest).
+        sed -i 's|    list_for_each_entry(pch, \&parent->bg_channels, list) {|    list_for_each_entry(pch, \&parent->bg_channels, list) if (0) { /* NEGCTL bg-fork-channels-not-captured */|' "$_file";;
 
     initialize-home-magic-not-written)
         # UNIQUE TEXT: the home-block magic write in format_volume

@@ -1043,6 +1043,14 @@ struct vms_device {
     uint32_t            dynamic_term;
 
     /*
+     * The SSH-pre-authenticated user name a network daemon vouched for this
+     * RTAn: (rd vms-65b), stamped by VMS_IOCTL_TERM_SETLOGIN and read back by
+     * the $CREPRC(LOGINOUT) child bound here (VMS_IOCTL_TERM_GETLOGIN). Empty
+     * unless a privileged daemon stamped it. Written/read under `lock`.
+     */
+    char                netlogin_user[VMS_USERNAME_SIZE];
+
+    /*
      * Every channel currently assigned to this device, by any process.
      * The device has to know this to decide when implicit ownership
      * ends: it ends when the owner has no channel left, not when any
@@ -1327,6 +1335,8 @@ long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_create(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_delete(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg);
 /*
  * Internal (non-ioctl) twin of disk_resolve for an in-executive caller: the
  * Files-11 ODS-2 ACP $MOUNT (vms-127) resolves a canonical disk-unit name to its

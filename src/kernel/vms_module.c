@@ -2209,6 +2209,10 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_term_delete(proc, arg);
     case VMS_IOCTL_TERM_RESOLVE:
         return vms_ioctl_term_resolve(proc, arg);
+    case VMS_IOCTL_TERM_SETLOGIN:
+        return vms_ioctl_term_setlogin(proc, arg);
+    case VMS_IOCTL_TERM_GETLOGIN:
+        return vms_ioctl_term_getlogin(proc, arg);
     case VMS_IOCTL_SETTERM:
         return vms_ioctl_setterm(proc, arg);
 

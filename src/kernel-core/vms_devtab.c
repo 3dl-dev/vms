@@ -832,6 +832,132 @@ out:
     return 0;
 }
 
+/*
+ * vms_ioctl_term_setlogin - stamp a network daemon's PRE-AUTHENTICATED user
+ * name onto an RTAn: (rd vms-65b). The conveyance channel for the SSH ->
+ * $CREPRC(LOGINOUT) handoff: the daemon has already authenticated the user in
+ * its own protocol against the SAME SYSUAF authority, and vouches that here so
+ * LOGINOUT does not re-challenge on a session it created for that terminal.
+ *
+ * PRIVILEGED: only a caller holding CAP_SYS_ADMIN/SETPRV (a not-yet-dropped
+ * network daemon -- the same authority that establishes a run-as identity) may
+ * vouch, exactly like vms_ioctl_establish_system. The note is a NAME, never a
+ * credential, and only a dynamic terminal (an RTAn:, never OPA0:) may carry
+ * one. LOGINOUT still builds the persona from the binary SYSUAF record and
+ * grants nothing beyond it.
+ */
+long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_termlogin_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    args.username[VMS_USERNAME_SIZE - 1] = '\0';
+
+    if (!exec_current_is_privileged()) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        /* Only a dynamically-minted RTAn: carries a network-login note; a
+         * static row (OPA0:) or a non-terminal is a category error, the same
+         * IVDEVNAM verdict resolve gives. */
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    memset(dev->netlogin_user, 0, sizeof(dev->netlogin_user));
+    strscpy(dev->netlogin_user, args.username, sizeof(dev->netlogin_user));
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_term_getlogin - read back the network-login note for a terminal
+ * (rd vms-65b). An ordinary read (like RESOLVE, unprivileged): the LOGINOUT
+ * child bound to an RTAn: asks for ITS OWN terminal's note. An empty note is
+ * the honest "no network pre-authentication" (SS$_NORMAL, empty username), on
+ * which LOGINOUT falls back to the interactive prompt (fail-closed, INV-6) --
+ * NOT an error, because a terminal with no note is a perfectly ordinary
+ * console/DECnet terminal that authenticates its user itself.
+ */
+long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_termlogin_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    memset(args.username, 0, sizeof(args.username));
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    strscpy(args.username, dev->netlogin_user, sizeof(args.username));
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    /* Found: SS$_NORMAL whether or not a note is present -- the caller reads an
+     * empty username as "no network pre-auth" (the honest omission). */
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 int vms_devtab_remove_terminal(const char *devnam)
 {
     struct vms_device *dev;

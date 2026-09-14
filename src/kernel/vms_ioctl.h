@@ -2193,6 +2193,49 @@ _Static_assert(VMS_IOCTL_TERM_RESOLVE == 0xC028565Bu,
 #define VMS_USERNAME_SIZE 32
 
 /*
+ * NETWORK-LOGIN PRE-AUTHENTICATION NOTE on a dynamic terminal (rd vms-65b).
+ *
+ * The conveyance channel that lets an inbound network daemon which has ALREADY
+ * authenticated a user in its own protocol (SSH: cryptographic/Purdy password
+ * against the same SYSUAF authority) hand that user to a $CREPRC(LOGINOUT,
+ * RTAn:, PRC$M_LOGINOUT) session WITHOUT LOGINOUT re-challenging (Option A,
+ * design docs/design-ssh-loginout-handoff.md). Under PRC$M_LOGINOUT the creator
+ * stamps NO identity (sys_process.c) and $SETIDENT is self-targeted, so the
+ * daemon cannot reach into the LOGINOUT child; instead it stamps the
+ * pre-authenticated user name onto the RTAn: DEVICE record it minted, and the
+ * LOGINOUT child -- bound to that same terminal by creprc_bind_terminal --
+ * reads it back for ITS OWN terminal.
+ *
+ * SETLOGIN is CAP_SYS_ADMIN/SETPRV-gated (exec_current_is_privileged): only a
+ * trusted, not-yet-dropped network daemon may vouch a pre-authentication -- the
+ * same authority INETD/sshd hold to establish a run-as identity. The note is a
+ * user NAME, never a credential: LOGINOUT still builds the persona from the
+ * binary SYSUAF record and grants nothing beyond it. GETLOGIN is an ordinary
+ * read (like RESOLVE): absent/empty is the honest "no network pre-auth", on
+ * which LOGINOUT falls back to the interactive prompt (fail-closed, INV-6).
+ *
+ * A DEDICATED arg struct (not a widened vms_terminal_args) so the RTAn:
+ * create/delete/resolve request numbers and their frozen size are untouched.
+ * Placed after VMS_USERNAME_SIZE because the username field uses it.
+ */
+struct vms_termlogin_args {
+    char     devnam[VMS_DEVNAM_SIZE];     /* the RTAn: terminal (in)           */
+    char     username[VMS_USERNAME_SIZE]; /* SETLOGIN: in. GETLOGIN: out.      */
+    uint32_t status;                      /* return: SS$_ status               */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_TERM_SETLOGIN _IOWR(VMS_IOC_MAGIC, 0x5c, struct vms_termlogin_args)
+#define VMS_IOCTL_TERM_GETLOGIN _IOWR(VMS_IOC_MAGIC, 0x5d, struct vms_termlogin_args)
+
+_Static_assert(sizeof(struct vms_termlogin_args) == 56,
+               "struct vms_termlogin_args changed size -- RTAn: netlogin note would decode at the wrong offsets");
+_Static_assert(VMS_IOCTL_TERM_SETLOGIN == 0xC038565Cu,
+               "VMS_IOCTL_TERM_SETLOGIN encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TERM_GETLOGIN == 0xC038565Du,
+               "VMS_IOCTL_TERM_GETLOGIN encodes differently here than on the reference build");
+
+/*
  * Invoking CLI command-line bound (vms-f60d). OVMX DESIGN CHOICE
  * (CLAUDE.md Rule 8): 256 bytes holds the classic 255-character DCL
  * command line the OpenVMS User's Manual documents, plus a NUL for C

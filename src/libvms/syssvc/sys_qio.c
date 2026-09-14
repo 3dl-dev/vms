@@ -46,6 +46,7 @@ extern int vms$$chan_to_fd(uint16_t chan);
 extern uint32_t vms$$chan_exec_chan(uint16_t chan);
 extern int vms$$chan_is_mailbox(uint16_t chan);
 extern int vms$$chan_is_bg(uint16_t chan);
+extern int vms$$chan_is_net(uint16_t chan);
 
 /* Import from sys_uring.c */
 extern int vms_uring_init(void);
@@ -418,6 +419,64 @@ static uint32_t qio_bg_op(uint16_t chan, uint32_t func, void *iosb_ptr,
 }
 
 /*
+ * qio_net_op - the DECnet _NET: device $QIO path (rd vms-799, a1-1 SKELETON).
+ *
+ * $ASSIGN _NET: resolves the executive DECnet device face (a1-0), and this
+ * routes $QIO on that channel away from the fd-based path (its fd is -1). The
+ * logical-link data plane -- IO$_ACCESS (open/accept), IO$_READVBLK/WRITEVBLK
+ * (task-to-task data), IO$_DEACCESS (disconnect) -- is served by the NETACP
+ * broker (Option 1, transport T1), which is NOT wired yet (a1-2, rd vms-22c).
+ *
+ * Until the broker lands this classifies the _NET: channel + its function codes
+ * and FAILS HONESTLY: a recognized logical-link function returns SS$_DEVOFFLINE
+ * -- the device face exists but its NETACP is not carrying links yet, the honest
+ * "resolved device, inactive I/O path" status -- NOT SS$_IVCHAN (which would
+ * wrongly claim a bad channel) and NEVER a fabricated transfer (Rule 9/INV-6).
+ * An unrecognized function is SS$_ILLIOFUNC. a1-2 fills each function in place.
+ */
+static uint32_t qio_net_op(uint16_t chan, uint32_t func, void *iosb_ptr,
+                           uint32_t efn, void (*astadr)(uint32_t), uint32_t astprm) {
+    struct _iosb *iosb = (struct _iosb *)iosb_ptr;
+    uint32_t base_func = func & IO$M_FCODE;
+    uint32_t st;
+
+    (void)chan;
+
+    switch (base_func) {
+        case IO$_ACCESS:      /* open (connect) / accept a logical link */
+        case IO$_DEACCESS:    /* disconnect a logical link */
+        case IO$_READVBLK:    /* receive a task-to-task message */
+        case IO$_WRITEVBLK:   /* send a task-to-task message */
+            /* Recognized logical-link functions; the NETACP broker is not wired
+             * yet (a1-2). Fail honest: the device resolved, the I/O path is
+             * inactive (SS$_DEVOFFLINE), never a fake transfer (INV-6/Rule 9). */
+            st = SS$_DEVOFFLINE;
+            break;
+
+        case IO$_NOP:
+            st = SS$_NORMAL;
+            break;
+
+        default:
+            st = SS$_ILLIOFUNC;
+            break;
+    }
+
+    if (iosb) {
+        iosb->iosb$w_status = (uint16_t)st;
+        iosb->iosb$w_bcnt = 0;
+        iosb->iosb$l_dev_depend = 0;
+    }
+
+    if (st & 1) {
+        if (efn != 0) sys$setef(efn);
+        if (astadr) astadr(astprm);
+    }
+
+    return st;
+}
+
+/*
  * qio_validate_and_classify - Shared validation for sys$qio and sys$qiow.
  *
  * Resolves the channel to an fd, validates the function code and buffer,
@@ -608,6 +667,9 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
     if (vms$$chan_is_bg(chan))
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
 
+    if (vms$$chan_is_net(chan))
+        return qio_net_op(chan, func, iosb_ptr, efn, astadr, astprm);
+
     /* IO$_SETMODE line discipline on a terminal channel (vms-f54): the terminal
      * driver's home, dispatched before the read/write classifier (which rejects
      * SETMODE as SS$_ILLIOFUNC). Off a real tty it is a graceful no-op. */
@@ -656,6 +718,9 @@ uint32_t sys$qiow(uint32_t efn, uint16_t chan, uint32_t func,
 
     if (vms$$chan_is_bg(chan))
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);
+
+    if (vms$$chan_is_net(chan))
+        return qio_net_op(chan, func, iosb_ptr, efn, astadr, astprm);
 
     /* IO$_SETMODE line discipline on a terminal channel (vms-f54): see sys$qio. */
     if ((func & IO$M_FCODE) == IO$_SETMODE) {

@@ -311,6 +311,16 @@ int pe_send_msg_var(struct vms_pe *pe, vms_scs_sysid_t dst,
 int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
 	       const uint8_t *body, uint32_t len);
 
+/*
+ * Emit this node's clean-leave departure announcement (the last gasp, wire
+ * spec SS4(O.30) / p. 7-29). AT MOST ONCE per port lifecycle: both the
+ * connection manager's departure path (vms_cnxman_stop) and the port teardown
+ * (vms_pe_stop) may call this on a clean CLUSTER_STOP; the builder's guard
+ * makes the second a no-op. Best effort -- SS$_NORMAL whether a gasp went out
+ * or there was nothing to announce, SS$_NOSUCHDEV only when pe is NULL.
+ */
+int pe_send_last_gasp(struct vms_pe *pe);
+
 /* Register the upper layer (SCS). One registration per port; a second call
  * replaces it. */
 void pe_set_upper(struct vms_pe *pe, const struct pe_upper_ops *upper);

@@ -636,6 +636,123 @@ done:
 }
 
 /*
+ * run_task_selftest (rd vms-dda) -- the host floor of the DECnet TASK-TO-TASK
+ * client seam (the a1 ladder rung 1). It proves the generic NAMED-object logical
+ * link an application task uses -- $ASSIGN NODE::"TASK=name" + $QIO -- over the
+ * proven NSP link engine, with NO executive and NO CAP_NET_RAW:
+ *   - the active side opens a link by TASK NAME (format-1 NAMED descriptor, not a
+ *     hard-coded object number like CTERM 42 / FAL 17);
+ *   - the passive side DECODES that named descriptor byte-exact (the addressing a
+ *     NETACP object dispatcher matches against the object registry);
+ *   - a request and a reply move BOTH DIRECTIONS byte-identical (the
+ *     byte-transparent read/write pump the _NET: $QIO IO$_READVBLK/WRITEVBLK
+ *     broker will expose -- Option 1, NETACP-brokered).
+ * The DECnet analogue of --nsp-selftest (one-way, NULL descriptor) and the
+ * foundation the _NET: $QIO broker sits on. CLEAN-ROOM (Rule 8): format 1 is the
+ * published DNA named-task form; the link engine is OVMX's own.
+ */
+static int run_task_selftest(void)
+{
+    printf("DECNETD-I-TASKSELF, task-to-task logical link by NAMED object (TASK=):"
+           " connect -> passive decodes the name -> bidirectional byte-verified"
+           " message -> disconnect (no executive, rd vms-dda)\n");
+    int pass = 0, fail = 0;
+#define TK_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-TASKSELF, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+    struct dnet_engine L, R;
+    if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
+        fprintf(stderr, "DECNETD-E-TASKSELF, engine init failed\n");
+        close(sv[0]); close(sv[1]); return 1;
+    }
+
+    uint8_t conn[192], frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t clen = 0, flen = 0, rlen = 0, rxlen = 0; int has_reply = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    dnet_tick_t t = 10;
+    const char *TASK = "TESTECHO";
+
+    /* 1) active opens a NAMED task link -> CI -> passive CONNECT_IND. */
+    int opened =
+        dnet_cterm_sc_connect_build_task(TASK, "OVMXL", 0x021a, 0x2020, "", "", "",
+                                         conn, sizeof conn, &clen) == 0 &&
+        dnet_engine_link_open(&L, 1, 11, 0x2001, conn, clen, 1459, 1, DNET_NSP_VER_41,
+                              frame, sizeof frame, &flen, t++) == 0 &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen,
+                            &has_reply, &ev) == 0 && ev == DNET_LINK_EV_CONNECT_IND;
+    TK_CHECK(opened, "active opens a task-to-task link by name; passive sees CONNECT_IND");
+
+    /* 2) passive decodes the destination as the NAMED task, byte-exact. */
+    struct dnet_cterm_sc_connect sc;
+    int named_ok = opened &&
+        dnet_cterm_sc_connect_parse(R.link.conn_data, R.link.conn_len, &sc) == DNET_CTERM_OK &&
+        sc.dst_format == DNET_SC_FMT_NAMED && strcmp(sc.dst_task, TASK) == 0;
+    TK_CHECK(named_ok, "passive decodes the destination as NAMED task \"TESTECHO\" (format 1)");
+
+    /* 3) passive accepts -> CC -> active link RUN. */
+    int up = named_ok &&
+        dnet_engine_link_accept(&R, 0x2002, reply, sizeof reply, &rlen, t++) == 0 &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen,
+                            &has_reply, &ev) == 0 && ev == DNET_LINK_EV_CONNECT_CONF &&
+        dnet_link_is_up(&L.link) && dnet_link_is_up(&R.link);
+    TK_CHECK(up, "passive accepts; the task-to-task link is RUN both ends");
+
+    /* 4) active -> passive request, byte-identical (+ absorb the NSP ack). */
+    const char *req = "TASK-REQUEST: ping payload 0123456789";
+    int fwd = up &&
+        dnet_engine_link_send(&L, (const uint8_t *)req, strlen(req), frame, sizeof frame, &flen, t++) == 0 &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_DATA && R.rx_datalen == strlen(req) &&
+        memcmp(R.rx_data, req, R.rx_datalen) == 0 && has_reply &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_ACK;
+    TK_CHECK(fwd, "active->passive request byte-identical over the link (+ NSP ack)");
+
+    /* 5) passive -> active reply, byte-identical (the OTHER direction). */
+    const char *resp = "TASK-REPLY: pong payload 9876543210";
+    int rev = fwd &&
+        dnet_engine_link_send(&R, (const uint8_t *)resp, strlen(resp), reply, sizeof reply, &rlen, t++) == 0 &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_DATA && L.rx_datalen == strlen(resp) &&
+        memcmp(L.rx_data, resp, L.rx_datalen) == 0 && has_reply &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_ACK;
+    TK_CHECK(rev, "passive->active reply byte-identical (bidirectional task data)");
+
+    /* 6) active disconnects -> both CLOSED. */
+    int closed = rev &&
+        dnet_engine_link_close(&L, DNET_LINK_REASON_NORMAL, frame, sizeof frame, &flen, t++) == 0 &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_DISCONNECT && dnet_link_state_of(&R.link) == DNET_LINK_CLOSED &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen, &has_reply, &ev) == 0 &&
+        dnet_link_state_of(&L.link) == DNET_LINK_CLOSED;
+    TK_CHECK(closed, "active disconnects; both ends CLOSED");
+
+    close(sv[0]); close(sv[1]);
+    printf("DECNETD-I-TASKSELF, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass == 6) { printf("DECNETD-TASK-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-TASK-SELFTEST: FAIL\n");
+    return 1;
+#undef TK_CHECK
+}
+
+/*
  * ======================== --set-host-selftest ========================
  * A no-privilege, no-netdev proof of the CTERM (Command Terminal) protocol
  * behind $ SET HOST (rd vms-4d2, engine rung 3): two engines open an NSP logical
@@ -2648,6 +2765,11 @@ static void usage(const char *argv0)
         "  --nsp-selftest      run the NSP logical-link connection proof and exit\n"
         "                      (no CAP_NET_RAW -- two engines OPEN a link, move a\n"
         "                      data segment+ack, and DISCONNECT over a socketpair)\n"
+        "  --task-selftest     run the TASK-TO-TASK client floor and exit (no\n"
+        "                      executive): open a link by NAME (NODE::\"TASK=x\",\n"
+        "                      format-1 NAMED descriptor), the passive side decodes\n"
+        "                      the name, a request+reply move BOTH directions\n"
+        "                      byte-verified, then disconnect (rd vms-dda)\n"
         "  --set-host-selftest run the $ SET HOST / CTERM terminal-service proof\n"
         "                      and exit (no CAP_NET_RAW -- two engines carry a\n"
         "                      whole terminal session: Bind, characteristics,\n"
@@ -2735,6 +2857,7 @@ int main(int argc, char **argv)
     int show_executor_only = 0;
     int self_test = 0;
     int nsp_self_test = 0;
+    int task_self_test = 0;               /* --task-selftest : task-to-task client floor */
     int sethost_self_test = 0;
     int sethost_srccode_test = 0;
     int cterm_accept_test = 0;
@@ -2775,6 +2898,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--show-executor")) show_executor_only = 1;
         else if (!strcmp(argv[i], "--self-test"))     self_test = 1;
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
+        else if (!strcmp(argv[i], "--task-selftest")) task_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
@@ -2813,6 +2937,8 @@ int main(int argc, char **argv)
         return run_self_test();
     if (nsp_self_test)
         return run_nsp_selftest();
+    if (task_self_test)
+        return run_task_selftest();
     if (sethost_self_test)
         return run_sethost_selftest();
     if (sethost_srccode_test)

@@ -641,6 +641,21 @@ int dnet_cterm_sc_connect_build(uint8_t dst_object,
                                 uint8_t *buf, size_t cap, size_t *outlen);
 
 /*
+ * dnet_cterm_sc_connect_build_task - build a Session Control CONNECT to a NAMED
+ * task object (DNA format 1: objtype 0 + counted task name), the $ASSIGN
+ * NODE::"TASK=name" addressing for DECnet task-to-task (rd vms-dda). Same source
+ * + access-control fields as dnet_cterm_sc_connect_build, but the destination is
+ * a NAME and there is no object-42 USRDATA field. Returns DNET_CTERM_OK, or
+ * EINVAL / EBADLEN / ENOSPACE.
+ */
+int dnet_cterm_sc_connect_build_task(const char *dst_task,
+                                     const char *src_user,
+                                     uint16_t src_grpcode, uint16_t src_usrcode,
+                                     const char *username, const char *password,
+                                     const char *account,
+                                     uint8_t *buf, size_t cap, size_t *outlen);
+
+/*
  * dnet_cterm_sc_connect_parse - decode a Session Control CONNECT message.
  * Fully bounded: never reads past buf[len-1]; refuses (does not clip) an
  * over-long counted string; refuses an unknown descriptor format. *out is

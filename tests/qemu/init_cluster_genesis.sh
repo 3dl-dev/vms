@@ -52,6 +52,10 @@ LINGER=$(cmdline_val ovmx.linger)
 # the capture (and this node) to outlive a segment cut AND its heal, which is
 # why it extends CAPSECS below on its own terms.
 QHANG=$(cmdline_val ovmx.qhang)
+# rd vms-1ee (H10a): run the AUTONOMOUS REMASTER phase after the membership
+# window. Set on exactly one node (the survivor) by the host script -- see
+# cluster_node.c section 6f.
+REMASTER=$(cmdline_val ovmx.remaster)
 
 [ -z "$TAG" ] && TAG=X
 [ -z "$VAXCLUSTER" ] && VAXCLUSTER=2
@@ -63,6 +67,7 @@ QHANG=$(cmdline_val ovmx.qhang)
 [ -z "$XNODE" ] && XNODE=0
 [ -z "$LINGER" ] && LINGER=30
 [ -z "$QHANG" ] && QHANG=0
+[ -z "$REMASTER" ] && REMASTER=0
 
 echo ""
 echo "=== OVMX cluster GENESIS rig: node $TAG ($SCSNODE/$SYSID) ==="
@@ -93,6 +98,7 @@ echo "eth0 mac=$MAC"
 CAPSECS=$((WINDOW + 20))
 [ "$XNODE" = "1" ] && CAPSECS=$((WINDOW + LINGER + 220))
 [ "$QHANG" = "1" ] && CAPSECS=$((WINDOW + 360))
+[ "$REMASTER" = "1" ] && CAPSECS=$((WINDOW + 220))
 if [ -x /bin/sca_l2probe ]; then
 	sca_l2probe recv eth0 "$CAPSECS" /tmp/$TAG.pcap >/tmp/cap.log 2>&1 &
 fi
@@ -125,6 +131,7 @@ cluster_node \
 	--xnode="$XNODE" \
 	--linger="$LINGER" \
 	--qhang="$QHANG" \
+	--remaster="$REMASTER" \
 	> /dev/ttyS1 2>&1
 
 # ---- the executive's own transcript ------------------------------------------

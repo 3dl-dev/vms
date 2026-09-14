@@ -99,6 +99,15 @@ struct node_cfg {
 	 * segment under it, which no other mode does.
 	 */
 	unsigned    qhang;
+	/*
+	 * Run the AUTONOMOUS REMASTER phase after the membership window
+	 * (section 6f, rd vms-1ee H10a). SURVIVOR-ONLY: the rig sets this on
+	 * exactly one node (the one whose own window outlives the peer's real
+	 * departure), never both -- the phase measures what THIS node's
+	 * executive does when the PEER genuinely leaves, so a node that is
+	 * itself the one departing has nothing to observe.
+	 */
+	unsigned    remaster;
 };
 
 static void cfg_defaults(struct node_cfg *c)
@@ -114,6 +123,7 @@ static void cfg_defaults(struct node_cfg *c)
 	c->xnode = 0u;
 	c->linger = 30u;
 	c->qhang = 0u;
+	c->remaster = 0u;
 }
 
 /* One "--name=value" argument. Returns 0 if it was consumed. */
@@ -143,6 +153,7 @@ static int cfg_take(struct node_cfg *c, const char *arg)
 	TAKE_U("xnode", xnode)
 	TAKE_U("linger", linger)
 	TAKE_U("qhang", qhang)
+	TAKE_U("remaster", remaster)
 #undef TAKE_U
 #undef TAKE_STR
 	return -1;
@@ -2141,6 +2152,195 @@ static void rig_xn_survival(int fd, const struct node_cfg *c, unsigned linger_s)
 	rig_dump_dlm(fd, c, "survival");
 }
 
+/* ==========================================================================
+ * 6f. THE AUTONOMOUS REMASTER PROOF (rd vms-1ee, DLM rung H10a re-established
+ *     on the executive-resident stack).
+ *
+ * WHAT THIS PHASE MEASURES, and how it differs from every phase above it. 6b
+ * and 6c both hold a member count fixed for their whole run; this one changes
+ * it, for real, mid-run -- one node's own process genuinely exits (its
+ * cluster_node poll loop simply ends, closing /dev/vms, exactly as a crashed
+ * or rebooted VMS system's connection manager falls silent) -- and asks
+ * whether the SURVIVOR's executive, entirely on its own, notices and acts.
+ *
+ * NOTHING HERE INJECTS A DEPARTURE. The peer's process exit is a real event
+ * this rig produces by giving that node a shorter --window than the
+ * survivor's; from that point on, everything the survivor does is its own
+ * connectivity-loss ladder (vms_cnxman.c's RECNXINTERVAL reconnect hold, then
+ * the coordinator's PROPOSE_TRANSITION when the hold expires with nobody
+ * answering) -- the SAME machinery the `rejoin` mode's own reconnect leg
+ * already exercises, just left to run to its OTHER outcome: no reconnect, so
+ * the transition actually REMOVES the departed CSB from membership. That is
+ * what fires cnxman_notify_membership_changes()'s new call into
+ * dlm_scs_role_ops.member_departed (vms_cnxman.c) -- a DIRECT CALL, never an
+ * ioctl this rig issues on the peer's behalf.
+ *
+ * THE THREE THINGS MEASURED, IN ORDER, EACH READ OFF THE EXECUTIVE (INV-6):
+ *
+ *   1. BEFORE: a name in this node's OWN dedicated "$M" candidate series
+ *      (disjoint from every other phase's own namespace) that the PEER
+ *      genuinely masters, discovered the same read-back way rig_xn_find
+ *      already does -- never computed, never assumed from a node's tag.
+ *
+ *   2. THE DEPARTURE: this node's own CLUB reporting ONE member (itself),
+ *      polled for -- not a fixed sleep standing in for "it must be over by
+ *      now".
+ *
+ *   3. AFTER: a FRESH $ENQ on the SAME name, now that this node is the
+ *      cluster's sole survivor, and a GET_RESMASTER readback proving the
+ *      grant landed HERE (is_local_master=1, a DIFFERENT master_csid than
+ *      the departed peer's) -- the re-master, autonomous and unassisted.
+ * ========================================================================== */
+#define RIG_RM_CANDIDATES     16u
+#define RIG_RM_DEPART_POLL_MS 1000u
+#define RIG_RM_DEPART_WAIT_MAX 180u  /* x POLL_MS = 180s: RECNXINTERVAL's own
+				      * reconnect hold plus the transition/
+				      * barrier round trip that removes the
+				      * CSB once it expires unanswered */
+
+struct rig_remaster {
+	char     name[32];             /* the peer-mastered "$M" candidate    */
+	uint32_t master_csid_before;   /* the peer's CSID, as discovered      */
+	int      found;
+};
+
+/* This node's own candidate name for the dedicated remaster series --
+ * disjoint from $X/$R/$RD01/QH_ so this phase can never collide with
+ * another's held lock on the same name (the #1187 collateral-assertion
+ * lesson the $R series was itself split out to fix). */
+static void rig_rm_name(const struct node_cfg *c, unsigned i, char *out,
+			size_t n)
+{
+	snprintf(out, n, "OVMX%s$M%02u", c->tag, i);
+}
+
+/*
+ * Discover a candidate the PEER genuinely masters, then RELEASE the
+ * discovery hold at once. This phase's whole claim is that the SAME name
+ * re-masters on its NEXT use after the peer departs; still holding this
+ * node's own discovery lock across the departure would leave nothing idle
+ * to re-master, and would prove only that an already-granted lock survives
+ * a membership change (a different, already-covered claim).
+ */
+static void rig_rm_find(int fd, const struct node_cfg *c,
+			struct rig_remaster *rm)
+{
+	unsigned i;
+
+	memset(rm, 0, sizeof(*rm));
+	for (i = 0; i < RIG_RM_CANDIDATES; i++) {
+		struct vms_resmaster_args res;
+		char name[32];
+		uint32_t lkid = 0u, st;
+
+		rig_rm_name(c, i, name, sizeof(name));
+		st = rig_dlm_enq(fd, name, 0u, &lkid);
+		if (st != SS_NORMAL || lkid == 0u)
+			continue;
+		rig_xn_wait_master(fd, name, &res);
+		if (!rig_xn_is_peer_mastered(&res)) {
+			(void)rig_dlm_deq(fd, lkid);
+			continue;
+		}
+		(void)rig_dlm_deq(fd, lkid);
+		snprintf(rm->name, sizeof(rm->name), "%s", name);
+		rm->master_csid_before = res.master_csid;
+		rm->found = 1;
+		printf("RIG-%s-REMASTER-BEFORE res=%s master_csid=0x%08x "
+		       "dir_csid=0x%08x (the peer genuinely masters this name, "
+		       "read back before its departure)\n",
+		       c->tag, name, (unsigned)res.master_csid,
+		       (unsigned)res.dir_csid);
+		fflush(stdout);
+		return;
+	}
+	printf("RIG-%s-REMASTER-BEFORE NONE (no candidate of this node's own "
+	       "%u names routed to the peer -- nothing this phase can "
+	       "measure)\n", c->tag, RIG_RM_CANDIDATES);
+	fflush(stdout);
+}
+
+/* Poll this node's OWN CLUB until it counts one member (itself) -- the
+ * departed peer's CSB genuinely left CNXMAN's membership, never assumed from
+ * a timer standing in for the observation. */
+static unsigned rig_rm_wait_departed(int fd, const struct node_cfg *c,
+				     unsigned max_polls)
+{
+	unsigned t;
+	struct vms_club_view_wire club;
+
+	for (t = 0; t < max_polls; t++) {
+		if (rig_read_club(fd, &club) == 0 && club.cluster_nodes <= 1u) {
+			printf("RIG-%s-REMASTER-DEPARTED observed=1 polls=%u "
+			       "nodes=%u\n", c->tag, t + 1u,
+			       (unsigned)club.cluster_nodes);
+			fflush(stdout);
+			return t + 1u;
+		}
+		rig_msleep(RIG_RM_DEPART_POLL_MS);
+	}
+	printf("RIG-%s-REMASTER-DEPARTED observed=0 (the peer never left this "
+	       "node's own membership count within the wait)\n", c->tag);
+	fflush(stdout);
+	return 0u;
+}
+
+/*
+ * THE RE-MASTER. A fresh (never the discovery lkid, which was already
+ * released) $ENQ on the SAME name, now that this node is the cluster's sole
+ * survivor -- and the GET_RESMASTER readback that is the whole proof: this
+ * node holds a REAL grant (lkid != 0), the executive names THIS node as
+ * master (is_local_master), and the CSID it names is not the departed
+ * peer's. `remastered` is printed as the conjunction of those three real
+ * reads, never asserted independently of them.
+ */
+static void rig_rm_after(int fd, const struct node_cfg *c,
+			 const struct rig_remaster *rm)
+{
+	struct vms_resmaster_args res;
+	uint32_t lkid = 0u, st;
+	int remastered;
+
+	st = rig_dlm_enq(fd, rm->name, 0u, &lkid);
+	(void)rig_dlm_resmaster(fd, rm->name, &res);
+	remastered = (st == SS_NORMAL && lkid != 0u &&
+		     res.is_local_master != 0u &&
+		     res.master_csid != rm->master_csid_before);
+	printf("RIG-%s-REMASTER-AFTER res=%s enq_status=%u lkid=0x%08x "
+	       "master_csid_before=0x%08x master_csid_after=0x%08x "
+	       "is_local_master=%u remastered=%d\n",
+	       c->tag, rm->name, (unsigned)st, (unsigned)lkid,
+	       (unsigned)rm->master_csid_before, (unsigned)res.master_csid,
+	       (unsigned)res.is_local_master, remastered);
+	fflush(stdout);
+	if (lkid != 0u)
+		(void)rig_dlm_deq(fd, lkid);
+}
+
+static void rig_remaster_phase(int fd, const struct node_cfg *c)
+{
+	struct rig_remaster rm;
+
+	printf("RIG-%s-REMASTER-PHASE begin (rd vms-1ee, H10a: autonomous "
+	       "remaster on a peer's real departure)\n", c->tag);
+	fflush(stdout);
+	rig_rm_find(fd, c, &rm);
+	if (!rm.found) {
+		printf("RIG-%s-REMASTER-PHASE end res=none\n", c->tag);
+		fflush(stdout);
+		return;
+	}
+	if (rig_rm_wait_departed(fd, c, RIG_RM_DEPART_WAIT_MAX) == 0u) {
+		printf("RIG-%s-REMASTER-PHASE end res=%s departed=0\n",
+		       c->tag, rm.name);
+		fflush(stdout);
+		return;
+	}
+	rig_rm_after(fd, c, &rm);
+	printf("RIG-%s-REMASTER-PHASE end res=%s\n", c->tag, rm.name);
+	fflush(stdout);
+}
+
 /*
  * THE RUN, in the order the proof needs.
  *
@@ -2202,6 +2402,12 @@ static int rig_poll(int fd, const struct node_cfg *c)
 		rig_xn_survival(fd, c, c->linger);
 		rig_sample_take(fd, &s);
 		rig_verdict(c, &s);   /* the SURVIVAL reading -- see above */
+	}
+
+	if (c->remaster) {
+		rig_remaster_phase(fd, c);
+		rig_sample_take(fd, &s);
+		rig_verdict(c, &s);   /* the post-remaster reading */
 	}
 
 	rig_dump_port(fd, c);

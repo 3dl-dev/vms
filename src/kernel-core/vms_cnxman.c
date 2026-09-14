@@ -914,6 +914,27 @@ static void cnxman_log_membership_change(struct vms_cnxman *cn,
 /* SS7b, below: the quorum arithmetic applied to a membership that just moved. */
 static void cnxman_quorum_apply(struct vms_cnxman *cn);
 
+/*
+ * A CSB just left membership (after == 0, before == 1): tell the DLM's wire
+ * arm AS A DIRECT CALL, exactly the seam dlm_scs_role_ops.member_departed
+ * documents ("this is how the connection manager reaches it as a direct
+ * call rather than through an ioctl") and cnxman_quorum_announce already
+ * uses for the quorum edge, just below. Read from the CSB the transition
+ * really removed -- never a CSID this glue invents (INV-6). A CSB with no
+ * learned CSID (csid_valid clear) names nobody honestly, so nothing is
+ * reported for it: the engine's departure sweep needs a real identity to
+ * key on, not zero standing in for "unknown".
+ */
+static void cnxman_notify_member_departed(struct vms_cnxman *cn,
+					   const struct vms_csb *csb)
+{
+	if (cn->dlm == NULL || cn->dlm->member_departed == NULL)
+		return;
+	if (!csb->csid_valid)
+		return;
+	cn->dlm->member_departed(cn->dlm->ctx, csb->csid);
+}
+
 static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 					     const uint8_t *before)
 {
@@ -933,6 +954,8 @@ static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 		cnxman_log_membership_change(cn, csb, after);
 		cnxman_deliver_cluevt(cn, after ? CNXMAN_CLUEVT_ADD
 						: CNXMAN_CLUEVT_REMOVE);
+		if (!after)
+			cnxman_notify_member_departed(cn, csb);
 		changed = 1;
 	}
 

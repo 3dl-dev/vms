@@ -266,7 +266,6 @@ int main(void)
           "veneer-linked ssh completed the SSH handshake + session (exit 0)");
     CHECK(!saw_afunix,
           "NO AF_UNIX socket fd in the ssh process during the handshake -- the socketpair pump is EXCISED; bytes ride the executive seam, not a fabricated Unix socket (vms-9ac)");
-    /* negctl: bg-recv-length-zeroed */
     CHECK(strstr(buf, "OVMX_SSH_OK") != NULL,
           "the remote command output came back BYTE-EXACT over the veneer (real KEX proven)");
     if (strstr(buf, "OVMX_SSH_OK") == NULL) {

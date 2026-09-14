@@ -808,6 +808,61 @@ int dnet_cterm_sc_connect_build(uint8_t dst_object,
     return DNET_CTERM_OK;
 }
 
+/*
+ * dnet_cterm_sc_connect_build_task - build a Session Control CONNECT to a NAMED
+ * task object (DNA format 1: objtype 0 + a counted task name), the addressing
+ * that $ASSIGN NODE::"TASK=name" uses for DECnet task-to-task (rd vms-dda).
+ *
+ * Distinct from dnet_cterm_sc_connect_build (format 0, a well-known object
+ * NUMBER such as CTERM 42 / FAL 17): here the destination end user is a NAME,
+ * and there is NO CTERM USRDATA field (that fourth counted string is
+ * object-42-specific -- a task-to-task object is 0/NAMED). The source descriptor
+ * (format 2, coded group/user + source user) and the MENUVER + RQSTRID/PASSWRD/
+ * ACCOUNT access-control fields are identical to the object builder. CLEAN-ROOM
+ * (Rule 8): format 1 is the published DNA named-task form; the C is OVMX's own.
+ *
+ * Returns DNET_CTERM_OK, or DNET_CTERM_EINVAL (null/empty task), EBADLEN (a
+ * field over DNET_SC_MAX_STR), or DNET_CTERM_ENOSPACE.
+ */
+int dnet_cterm_sc_connect_build_task(const char *dst_task,
+                                     const char *src_user,
+                                     uint16_t src_grpcode, uint16_t src_usrcode,
+                                     const char *username, const char *password,
+                                     const char *account,
+                                     uint8_t *buf, size_t cap, size_t *outlen)
+{
+    if (!buf || !dst_task || !dst_task[0])
+        return DNET_CTERM_EINVAL;
+    if (strlen(dst_task) > DNET_SC_MAX_STR ||
+        (src_user && strlen(src_user) > DNET_SC_MAX_STR))
+        return DNET_CTERM_EBADLEN;
+
+    size_t off = 0;
+    long r;
+
+    /* DSTNAME: format 1 (NAMED), objtype 0, counted task name. */
+    r = sc_put_descriptor(buf, cap, off, DNET_SC_FMT_NAMED, 0, 0, 0, dst_task);
+    if (r < 0) return DNET_CTERM_ENOSPACE;
+    off += (size_t)r;
+
+    /* SRCNAME: format 2 (CODED) source end user -- same as the object builder. */
+    r = sc_put_descriptor(buf, cap, off, DNET_SC_FMT_CODED, 0,
+                          src_grpcode, src_usrcode, src_user ? src_user : "");
+    if (r < 0) return DNET_CTERM_ENOSPACE;
+    off += (size_t)r;
+
+    /* MENUVER + RQSTRID + PASSWRD + ACCOUNT (THREE; no CTERM USRDATA -- obj 0). */
+    if (off + 1 > cap) return DNET_CTERM_ENOSPACE;
+    buf[off++] = SC_MENUVER_OBSERVED;
+    r = put_string(buf, cap, off, username); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
+    r = put_string(buf, cap, off, password); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
+    r = put_string(buf, cap, off, account);  if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
+
+    if (outlen)
+        *outlen = off;
+    return DNET_CTERM_OK;
+}
+
 int dnet_cterm_sc_connect_parse(const uint8_t *buf, size_t len,
                                 struct dnet_cterm_sc_connect *out)
 {

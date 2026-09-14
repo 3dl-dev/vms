@@ -93,4 +93,11 @@ if(BUILD_TESTS)
     # real object-17 connect refused without auth, both directions. No executive.
     add_test(NAME decnetd_copy_selftest
              COMMAND decnetd_exe --copy-selftest)
+    # rd vms-dda: the TASK-TO-TASK client host floor -- open a logical link by NAME
+    # (format-1 NAMED descriptor, NODE::"TASK=x"), the passive side decodes the
+    # name, a request + reply move BOTH directions byte-verified, then disconnect.
+    # The generic-object addressing + bidirectional pump the _NET: $QIO broker
+    # (Option 1, NETACP-brokered) will expose. No executive.
+    add_test(NAME decnetd_task_selftest
+             COMMAND decnetd_exe --task-selftest)
 endif()

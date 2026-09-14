@@ -551,6 +551,7 @@ getsyi-csid-reported-without-valid
 fork-work-dispatch-uncounted
 fork-worker-start-reports-success-unstarted
 devtab-io-error-not-charged
+devtab-terminal-withdrawal-not-honored
 setexit-status-not-recorded
 spawn-notify-flag-not-set
 register-subprocess-identity-self-declared
@@ -835,6 +836,26 @@ $DEVICE_SCAN reports VDA100: with the same non-zero ERRCNT SHOW ERROR would prin
 EOF
                       ;;
         knock_on_why)  echo "the same dropped increment means the count never leaves zero across BOTH injected failures, so the second-failure assertion (which checks it moved to +2) reddens identically, and \$DEVICE_SCAN's projection of that same field (cmd_show_error's own reader) reports the same wrong (zero) value.";;
+        esac;;
+
+    devtab-terminal-withdrawal-not-honored)
+        case "$_f" in
+        facility)     echo "dynamic RTAn: terminal-unit teardown -- vms_devtab_remove_terminal() withdraws the executive-real terminal device SET TERMINAL/network login minted (vms-f881), so the RTAn: unit and its \$GETDVI visibility go away when the session ends";;
+        targets)      echo "kernel-core/vms_devtab.c";;
+        suites_red)   echo "test_kmod_devtab_terminal";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_devtab_remove_terminal() classifies the row it looked up (\`dynamic_term = (dev->dynamic_term != 0);\`) and then, only for a genuine dynamic terminal, unlinks it (\`if (dynamic_term) exec_list_del(&dev->list);\`) and frees it, else returns -ENODEV. Forcing that LOCAL classification to 0 (\`dynamic_term = 0;\`) makes remove treat EVERY row as non-dynamic: the unlink is skipped and the call returns -ENODEV before exec_free(), so a minted RTAn: terminal can never be torn down -- the executive leaks the unit and \$GETDVI keeps resolving RTA0: after the session ended. This is a CLEAN no-op withdrawal, not a use-after-free: the row is neither unlinked nor freed, so the guest survives and only the withdrawal assertions redden. (Guarding the \`if (dynamic_term)\` gate instead would skip the unlink but still reach exec_free() on a still-linked node -> rc=139 SIGSEGV, a fatal defect -- rejected for that reason.) The MINT side is untouched (the row is still created with dynamic_term=1, DC\$_TERM class, OPA0-shape devchar), so every creation/characteristics/\$ASSIGN-owner/PTY-round-trip assertion stays green; and the OPA0: (console) removal-refused check stays green because the console is genuinely non-dynamic and is correctly still refused. Only the two withdrawal assertions redden. The original \`dynamic_term = (dev->dynamic_term != 0);\` text is gone after substitution (no-op re-apply, selftest).";;
+        require_fail) cat <<'EOF'
+vms_devtab_remove_terminal("RTA0:") withdraws the unit it minted
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+RTA0: no longer exists after withdrawal
+EOF
+                      ;;
+        knock_on_why)  echo "one gate, two dependent observations: the neutered \`if (0 && dynamic_term)\` makes vms_devtab_remove_terminal return -ENODEV without unlinking, so the withdrawal call itself fails (require_fail) AND the follow-up \$GETDVI on RTA0: still resolves the leaked row instead of SS\$_NOSUCHDEV (knock_on). Every other assertion in the suite reads a path this gate does not touch -- the mint, the DC\$_TERM/devchar/width/page characteristics, the unowned->owned \$ASSIGN transition, the PTY byte round-trip (its backing is reported off the still-set dynamic_term flag at the GETPTY handler), the survives-owner-death release, and the OPA0: removal-refused check (the console is correctly refused either way) -- and all stay green.";;
         esac;;
 
     setexit-status-not-recorded)
@@ -6639,6 +6660,18 @@ apply_edit() {
         # Unique increment (vms_devtab_note_io_error's own errcnt bump); dropping
         # it leaves the counter unmoved. Gone after apply (no-op re-apply).
         sed -i 's|dev->errcnt++;|/* NEGCTL devtab-io-error-not-charged: increment dropped */|' "$_file";;
+    devtab-terminal-withdrawal-not-honored)
+        # UNIQUE TEXT: `dynamic_term = (dev->dynamic_term != 0);` occurs once, in
+        # vms_devtab_remove_terminal(). Forcing the LOCAL classification to 0
+        # makes remove treat EVERY row as non-dynamic: `if (dynamic_term)` skips
+        # the exec_list_del (no unlink) and `if (!dynamic_term)` returns -ENODEV
+        # BEFORE exec_free() -- a clean no-op withdrawal, NOT a use-after-free.
+        # (Guarding the `if (dynamic_term)` gate instead would skip the unlink but
+        # still fall through to exec_free() on a still-linked node -> rc=139 SIGSEGV,
+        # a FATAL defect that kills the guest; this local-classification form keeps
+        # it non-fatal so only the two withdrawal assertions redden.) The original
+        # text is gone after substitution (no-op re-apply, selftest).
+        sed -i 's|    dynamic_term = (dev->dynamic_term != 0);|    dynamic_term = 0; /* NEGCTL devtab-terminal-withdrawal-not-honored: remove classifies every row non-dynamic -> -ENODEV, no unlink/free */|' "$_file";;
     setexit-status-not-recorded)
         # Unique line (vms_ioctl_getexit's shared post-switch read); narrowed to
         # a ternary that passes SEL_SELF through and masks every cross-process

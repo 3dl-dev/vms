@@ -360,6 +360,10 @@ int main(int argc, char **argv)
     status = vms_kif_getdvi_devnam(CONSOLE_DEV, &info);
     CHECK(status == SS_NORMAL, "OPA0: is untouched by the refused removal");
 
+    /* The withdrawal rides vms_devtab_remove_terminal()'s dynamic_term unlink
+     * gate; neuter that gate and the minted RTAn: row can never be torn down,
+     * so this call and the follow-up SS_NOSUCHDEV check both redden. */
+    /* negctl: devtab-terminal-withdrawal-not-honored */
     CHECK(write_param(REMOVE_PARAM, RTA_DEV) == 0,
           "vms_devtab_remove_terminal(\"RTA0:\") withdraws the unit it minted");
     memset(&info, 0, sizeof(info));

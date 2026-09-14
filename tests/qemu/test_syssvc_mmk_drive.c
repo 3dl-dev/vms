@@ -343,10 +343,12 @@ int main(int argc, char **argv)
          * uses (the invoking CLI records the command line; the activated image
          * reads it), NOT the retired VMS_FOREIGN_CMD env shim: lib$get_foreign
          * now prefers the executive whenever /dev/vms answers, and only consults
-         * VMS_FOREIGN_CMD as the no-executive fallback. MMK.EXE is a bare static
-         * image (no IMGACT interpreter), so it re-REGISTERs onto this same PCB
-         * (EEXIST, context preserved) rather than REGISTER_CONTINUE-inheriting
-         * from a parent -- the setcli made here is what it reads. The env var is
+         * VMS_FOREIGN_CMD as the no-executive fallback. MMK.EXE is now the
+         * OVMX-native IMGACT-ACTIVATED image (vms-c09f): the harness execl()s it
+         * in place and the kernel loads IMGACT as PT_INTERP -- whether the
+         * activated image reads the setcli made here identically to the former
+         * bare static image (which re-REGISTERed onto this same PCB) over real
+         * /dev/vms is what the exec-drive proof now exercises. The env var is
          * kept only for that no-executive fallback, mirroring lib$get_foreign. */
         (void)vms_kif_setcli(1, fcmd);
         setenv("VMS_FOREIGN_CMD", fcmd, 1);

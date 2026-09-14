@@ -963,8 +963,12 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
          * channel the real runtime uses, not the retired VMS_FOREIGN_CMD env
          * shim (lib$get_foreign now prefers the executive whenever /dev/vms
          * answers and consults the env var only as the no-executive fallback).
-         * MMK.EXE is a bare static image, so it re-REGISTERs onto this same PCB
-         * (EEXIST, context preserved). The env var is kept only for that
+         * MMK.EXE is now the OVMX-native IMGACT-ACTIVATED image (vms-c09f): the
+         * harness execl()s it in place, the kernel loads IMGACT as PT_INTERP, and
+         * the activated MMK reads the fcmd from this same setcli'd PCB. Whether
+         * that exec-drive reads the CLI (and drives spawn+mailbox+WRTATTN-AST)
+         * identically to the former static image over real /dev/vms is exactly
+         * the convergence this suite now proves. The env var is kept only for the
          * no-executive fallback, mirroring lib$get_foreign. */
         (void)vms_kif_setcli(1, fcmd);
         setenv("VMS_FOREIGN_CMD", fcmd, 1);

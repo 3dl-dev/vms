@@ -579,14 +579,24 @@ rms-dirfind-exact-version-ignored"
 # scoping out.
 # ---------------------------------------------------------------------------
 SCOPE_OUT_UNIT_DIRS=""
-SCOPE_OUT_SUITES=""
+SCOPE_OUT_SUITES="test_syssvc_ssh_kex"
 
 scope_out_why() {
     cat <<'EOF'
-(none) -- vms-165 retired the vmsfs.ko VFS driver, which owned the only
-executive-independent suites this gate scoped out. Every derived suite now
-exercises an executive facility (the vms.ko lock manager / ASTs / event flags /
-access modes / Files-11 ACP), so there is nothing to declare out of scope.
+test_syssvc_ssh_kex -- a full OpenSSH end-to-end ACCEPTANCE test (its own header:
+"THE Rule-9 acceptance for the OpenSSH-on-veneer arc", vms-22a), not a
+single-facility negative control. A veneer-linked `ssh` runs a REAL SSH key
+exchange + pubkey auth + remote command against a stock in-guest `sshd` over the
+BSD-sockets veneer (ovmx_socket/ovmx_connect -> BGn: -> $QIO -> host loopback),
+and can EXIT_SKIP when no executive is present. It has NO isolatable single-site
+injection: runtime-MEASURED, it does not redden under bg-recv-length-zeroed (it
+does not use the classic vms_ioctl_bg_recv path) NOR under bgsock-recv-length-
+zeroed (both reddened exactly their own suites, ssh_kex stayed green) -- OpenSSH's
+own framing + retries absorb a single recv-length fault, so no per-facility defect
+turns it red honestly. Its value is as an integration acceptance test, kept and
+run; it is simply not a per-facility negctl target, so it is declared out of the
+coverage gate rather than carried as a fake anchor (INV-6). Prior state: it was
+named ONLY by bg-recv-length-zeroed, whose claim over it was stale/non-reddening.
 EOF
 }
 
@@ -6271,21 +6281,18 @@ EOF
     bg-recv-length-zeroed)
         case "$_f" in
         facility)     echo "INET pseudo-device BGn: -- the IO\$_READVBLK (recv) handler of the executive-resident BGn: driver (vms_ioctl_bg_recv, src/kernel/vms_bg.c, vms-527). The first network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs connect/send/recv/close to a TCP peer, and the socket lives IN the executive (host in-kernel socket API), not in userspace.";;
-        targets)      echo "kernel/vms_bg.c";;
-        suites_red)   echo "test_syssvc_bg_echo test_syssvc_ssh_kex";;
+        targets)      echo "kernel-core/vms_bg.c";;
+        suites_red)   echo "test_syssvc_bg_echo";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed.";;
+        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed. NOTE (vms-387): test_syssvc_ssh_kex was previously named here as a knock-on, but runtime measurement shows it does NOT redden under this defect -- its OpenSSH veneer rides ovmx_socket, not this classic vms_ioctl_bg_recv path, and OpenSSH's own framing absorbs a single recv-length fault. That stale/fake claim is removed; ssh_kex is a full E2E acceptance test declared in SCOPE_OUT_SUITES rather than carried as a fake anchor.";;
         require_fail) cat <<'EOF'
 BG $QIO IO$_READVBLK returns the exact bytes the echo peer sent back
 EOF
                       ;;
-        knock_on_fail) cat <<'EOF'
-the remote command output came back BYTE-EXACT over the veneer (real KEX proven)
-EOF
-                      ;;
-        knock_on_why)  echo "test_syssvc_ssh_kex drives the veneer-linked OpenSSH ssh through a REAL SSH KEX + session over BGn:; ssh's packet reads bottom out in this same vms_ioctl_bg_recv. Zeroing the recv count makes ssh read EOF mid-handshake, so the session never completes and OVMX_SSH_OK never returns -- the one-assignment fault reddens the KEX proof as a knock-on of the byte-count echo assertion.";;
+        knock_on_fail) echo "";;
+        knock_on_why)  echo "";;
         esac;;
 
     tcpip-ftp-get-length-dropped)

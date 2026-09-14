@@ -242,12 +242,13 @@ COPY . /src/repo/
 # (still a glob), not about which product image a suite needs.
 # BUILD_TOOLS=ON (vms-4c2): tools/CMakeLists.txt is only CONFIGURED here, not
 # fully built -- the --target list below still names exactly the binaries
-# this image needs, so flipping this on adds one requested target
-# (vms_authorize) without pulling vms_login/vms_mail/vms_monitor/etc. into
-# the build. OVMX_STATIC + BUILD_TOOLS=ON is not new ground: distro/
+# this image needs, so flipping this on adds only the requested targets
+# (vms_authorize; and vms_login -> LOGINOUT.EXE, the wrapped sshd's pw_shell
+# subject for test_syssvc_ssh_server) without pulling vms_mail/vms_monitor/etc.
+# into the build. OVMX_STATIC + BUILD_TOOLS=ON is not new ground: distro/
 # Dockerfile.bootable already builds the WHOLE tools/ tree this way for the
-# bootable distro image, so vms_authorize compiling static+musl here is
-# precedented, not a first attempt.
+# bootable distro image, so vms_authorize/vms_login compiling static+musl here
+# is precedented, not a first attempt.
 RUN cd /src/repo && \
     cmake -B build-static \
         -DCMAKE_C_COMPILER=musl-gcc \
@@ -255,7 +256,7 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
-    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     echo "--- PIPESTAGE.EXE (the stage image test_syssvc_spawn_pipeline drives, vms-e9a B2) ---" && \
@@ -679,6 +680,19 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE && \
     cp /initramfs/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
+    # LOGINOUT.EXE at SYS$SYSTEM (vms-29b) -- the session image the wrapped
+    # OpenSSH sshd's pw_shell now names (ovmx_sshd_loginout_path resolves
+    # SYS$SYSTEM:LOGINOUT.EXE). OpenSSH's allowed_user() stat()s pw_shell at auth
+    # time, so a valid SYSUAF user is REJECTED before the SYSUAF read unless this
+    # file exists -- test_syssvc_ssh_server's accept half. The handoff never
+    # execs it in a bare KE process (it $CREPRC's LOGINOUT, which fails closed
+    # with no /run/ovmx-boot staging); this only satisfies the shell-existence
+    # precondition, the faithful analogue of the DCL.EXE staging above. LOWERCASE
+    # basename to match vmsfs_to_linux_path's translation of the .EXE filename
+    # (the exact path the wrapped sshd stat()s: /vms/.../SYSEXE/loginout.exe).
+    { cp /src/repo/build-static/bin/LOGINOUT.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/loginout.exe || \
+      { echo "FATAL: LOGINOUT.EXE was not built into the static tree -- the wrapped sshd's pw_shell existence check (test_syssvc_ssh_server accept half) would reject every SYSUAF user"; exit 1; }; } && \
+    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/loginout.exe && \
     # TCPIP$DAYTIME.EXE at SYS$SYSTEM (vms-477) -- the REAL standalone RFC 867
     # service image the auxiliary server launches; test_syssvc_tcpip_daytime.c
     # execs it from this path (OVMX_DAYTIME default

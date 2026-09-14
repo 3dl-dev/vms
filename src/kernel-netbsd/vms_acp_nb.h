@@ -78,6 +78,13 @@
 #define VMS_BACKING_SIZE 16
 #endif
 
+/* Username field width -- matches src/kernel/vms_ioctl.h's VMS_USERNAME_SIZE
+ * (32). Guarded like the widths above so this header composes with any other
+ * /dev/vms contract header that also defines it. */
+#ifndef VMS_USERNAME_SIZE
+#define VMS_USERNAME_SIZE 32
+#endif
+
 /* FIB$L_ACCTL access-control flag + the IO$_ACCESS name buffer size --
  * byte-identical to src/kernel/vms_acp.h. */
 #define VMS_ACP_ACCTL_WRITE   0x00000001u
@@ -291,6 +298,15 @@ struct vms_terminal_args {
 	uint32_t pad;
 };
 
+/* Mirror of struct vms_termlogin_args (src/kernel/vms_ioctl.h) -- the RTAn:
+ * network-login pre-authentication note (rd vms-65b). Byte-identical layout. */
+struct vms_termlogin_args {
+	char     devnam[VMS_DEVNAM_SIZE];     /* the RTAn: terminal (in)         */
+	char     username[VMS_USERNAME_SIZE]; /* SETLOGIN: in. GETLOGIN: out.    */
+	uint32_t status;                      /* return: SS$_ status             */
+	uint32_t pad;
+};
+
 /* ================================================================
  * Request numbers -- same NR band as src/kernel/vms_acp.h (0x68-0x6F); the
  * NetBSD _IOWR encoding of type/nr/size legitimately differs in VALUE from
@@ -326,6 +342,8 @@ struct vms_terminal_args {
 #define VMS_IOCTL_TERM_CREATE    _IOWR(VMS_ACP_IOC_MAGIC, 0x59, struct vms_terminal_args)
 #define VMS_IOCTL_TERM_DELETE    _IOWR(VMS_ACP_IOC_MAGIC, 0x5a, struct vms_terminal_args)
 #define VMS_IOCTL_TERM_RESOLVE   _IOWR(VMS_ACP_IOC_MAGIC, 0x5b, struct vms_terminal_args)
+#define VMS_IOCTL_TERM_SETLOGIN  _IOWR(VMS_ACP_IOC_MAGIC, 0x5c, struct vms_termlogin_args)
+#define VMS_IOCTL_TERM_GETLOGIN  _IOWR(VMS_ACP_IOC_MAGIC, 0x5d, struct vms_termlogin_args)
 
 /*
  * Freeze the shared layouts -- see src/kernel/vms_acp.h's identical asserts:
@@ -363,11 +381,17 @@ _Static_assert(VMS_IOCTL_DISK_RESOLVE == 0xC0305657u,
                "VMS_IOCTL_DISK_RESOLVE encodes differently here than on the Linux reference build");
 _Static_assert(sizeof(struct vms_terminal_args) == 40,
                "struct vms_terminal_args changed size -- RTAn: create/delete/resolve would decode at the wrong offsets");
+_Static_assert(sizeof(struct vms_termlogin_args) == 56,
+               "struct vms_termlogin_args changed size -- RTAn: netlogin note would decode at the wrong offsets");
 _Static_assert(VMS_IOCTL_TERM_CREATE == 0xC0285659u,
                "VMS_IOCTL_TERM_CREATE encodes differently here than on the Linux reference build");
 _Static_assert(VMS_IOCTL_TERM_DELETE == 0xC028565Au,
                "VMS_IOCTL_TERM_DELETE encodes differently here than on the Linux reference build");
 _Static_assert(VMS_IOCTL_TERM_RESOLVE == 0xC028565Bu,
                "VMS_IOCTL_TERM_RESOLVE encodes differently here than on the Linux reference build");
+_Static_assert(VMS_IOCTL_TERM_SETLOGIN == 0xC038565Cu,
+               "VMS_IOCTL_TERM_SETLOGIN encodes differently here than on the Linux reference build");
+_Static_assert(VMS_IOCTL_TERM_GETLOGIN == 0xC038565Du,
+               "VMS_IOCTL_TERM_GETLOGIN encodes differently here than on the Linux reference build");
 
 #endif /* _VMS_ACP_NB_H */

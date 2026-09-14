@@ -665,6 +665,28 @@ uint32_t vms_kif_terminal_delete(const char *devnam);
 uint32_t vms_kif_terminal_resolve(const char *devnam, char *backing,
                                   uint32_t backing_size);
 
+/*
+ * Stamp / read the SSH-pre-authenticated network-login note on a dynamic
+ * terminal (rd vms-65b). setlogin is CAP_SYS_ADMIN/SETPRV-gated (a network
+ * daemon vouching a pre-authentication before it drops privilege); getlogin is
+ * an ordinary read. On getlogin, an EMPTY *username with SS$_NORMAL is the
+ * honest "no network pre-auth" -- the caller (LOGINOUT) then prompts.
+ *
+ * OVMX-UNWIRED: vms_kif_terminal_setlogin (vms-65b) -- the STAMP is emitted by
+ * the wrapped OpenSSH sshd (src/vmsssh/sshd_session.c, ovmx_sshd_pre_drop_pw),
+ * which is not a CMake product target: it is built as a separate musl-static
+ * binary by third-party/openssh/build-ssh-harness.sh and reached from OpenSSH's
+ * own main() through --wrap=permanently_set_uid, so the caller census (which
+ * follows the CMake product graph) cannot see the call -- the same footing as
+ * vms_kif_dlm_xnode above, whose caller (scsd) is likewise a separately-built
+ * daemon. The READ half (vms_kif_terminal_getlogin) IS census-wired: LOGINOUT
+ * (tools/vms_login.c) is a CMake product target and calls it. Retire this line
+ * if the wrapped-sshd sources ever join the census's product graph.
+ */
+uint32_t vms_kif_terminal_setlogin(const char *devnam, const char *username);
+uint32_t vms_kif_terminal_getlogin(const char *devnam, char *username,
+                                   uint32_t username_size);
+
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN
  * if the caller holds no such channel.

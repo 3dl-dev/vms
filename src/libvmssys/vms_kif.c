@@ -1497,6 +1497,45 @@ uint32_t vms_kif_terminal_resolve(const char *devnam, char *backing,
     return args.status;
 }
 
+uint32_t vms_kif_terminal_setlogin(const char *devnam, const char *username)
+{
+    struct vms_termlogin_args args;
+
+    if (!devnam || !username)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
+    args.username[VMS_USERNAME_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_SETLOGIN, &args);
+    return args.status;
+}
+
+uint32_t vms_kif_terminal_getlogin(const char *devnam, char *username,
+                                   uint32_t username_size)
+{
+    struct vms_termlogin_args args;
+
+    if (!devnam || !username || username_size == 0)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_GETLOGIN, &args);
+
+    username[0] = '\0';
+    if (args.status & 1) {
+        vms_strncpy(username, args.username, username_size - 1);
+        username[username_size - 1] = '\0';
+    }
+    return args.status;
+}
+
 uint32_t vms_kif_getvol(const char *devnam, struct vms_getvol_args *out)
 {
     struct vms_getvol_args args;

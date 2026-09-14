@@ -830,6 +830,47 @@ uint32_t sys$dclast(
 );
 
 /**
+ * sys$setcluevt - Set Cluster Event
+ *
+ * Arm (or, with astadr/event 0, disarm) a completion AST for a cluster
+ * membership change. The registration is the executive's (FC-P3.8); see
+ * src/libvms/syssvc/sys_cluevt.c for the single-slot / handle / acmode notes.
+ *
+ * @param event   CLUEVT$C_ADD or CLUEVT$C_REMOVE (0 disarms)
+ * @param astadr  AST routine to call on the event (0 disarms)
+ * @param astprm  AST parameter
+ * @param acmode  Access mode (accepted for source compatibility)
+ * @param handle  Optional quadword; receives an opaque cookie on a successful arm
+ *
+ * @return  SS$_NORMAL on success, SS$_NOSUCHDEV when CNXMAN is not started
+ */
+uint32_t sys$setcluevt(
+    unsigned int event,
+    void (*astadr)(void *),
+    uint64_t astprm,
+    unsigned int acmode,
+    unsigned int *handle
+);
+
+/**
+ * sys$clrcluevt - Clear Cluster Event
+ *
+ * Disarm the process's cluster-event AST (single-slot; addressed by handle or
+ * event, both accepted for source compatibility).
+ *
+ * @param handle  Optional quadword handle from $SETCLUEVT
+ * @param acmode  Access mode (accepted for source compatibility)
+ * @param event   Optional CLUEVT$C code to clear
+ *
+ * @return  SS$_NORMAL on success, SS$_NOSUCHDEV when CNXMAN is not started
+ */
+uint32_t sys$clrcluevt(
+    unsigned int *handle,
+    unsigned int acmode,
+    unsigned int event
+);
+
+/**
  * sys$setast - Enable or disable AST delivery
  *
  * @param enable  1 to enable, 0 to disable

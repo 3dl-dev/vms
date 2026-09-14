@@ -444,3 +444,5 @@ vms$$invo_walk_prev=PROCEDURE
 ovmx_vterm_create=PROCEDURE
 ovmx_vterm_delete=PROCEDURE
 sysuaf_password_expired=PROCEDURE
+sys$setcluevt=PROCEDURE
+sys$clrcluevt=PROCEDURE

@@ -106,6 +106,7 @@ echo "mk_libvms_shr: --use $DECC_SHR $PROC_SHR $SYS_SHR $FS_SHR"
 LIST="descrip status \
 syssvc/sys_assign syssvc/sys_mailbox syssvc/sys_qio syssvc/sys_uring syssvc/sys_event \
 syssvc/sys_time syssvc/sys_process syssvc/sys_memory syssvc/sys_logical syssvc/sys_ast \
+syssvc/sys_cluevt \
 syssvc/sys_lock syssvc/sys_misc syssvc/sys_security syssvc/sys_fao syssvc/sys_msg \
 syssvc/sys_filescan \
 syssvc/sys_float syssvc/sys_uai syssvc/sys_device syssvc/sys_operator syssvc/sys_condition \

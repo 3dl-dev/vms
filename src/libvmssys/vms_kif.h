@@ -506,15 +506,9 @@ uint32_t vms_kif_cluster_getsyi(struct vms_cluster_getsyi_args *args);
  * manager is not started, so a registration the executive cannot honour is
  * refused rather than silently accepted.
  *
- * OVMX-UNWIRED: vms_kif_cluster_setcluevt (vms-733) -- the EXECUTIVE side is
- * built and real (FC-P3.8: one registration per node, a genuine completion
- * AST queued on a genuine CNXMAN membership ADD/REMOVE, cleared at process
- * death), but no sys$ service issues it: src/libvms has no sys_cluevt.c and
- * starlet.h prototypes none of $SETCLUEVT/$CLRCLUEVT/$TSTCLUEVT --
- * cluevtdef.h carries only the CLUEVT$C_ constants. This wrapper is the
- * marshalling half those services will call; it exists now so the executive
- * registration is reachable and observable from userspace at all. vms-733
- * builds the services; DELETE this line then. */
+ * WIRED (vms-733): src/libvms/syssvc/sys_cluevt.c's $SETCLUEVT / $CLRCLUEVT
+ * services call this marshalling half; starlet.h prototypes them.
+ * $TSTCLUEVT stays unbuilt (no executive test-occurrence query to back it). */
 uint32_t vms_kif_cluster_setcluevt(uint32_t event_mask, uint64_t astadr,
                                    uint64_t astprm);
 

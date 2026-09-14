@@ -2336,9 +2336,30 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * any other. Idempotent per (peer, connection).
 		 */
 		cnxman_join_advertise_peers(&cn->join);
-		n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
-		for (i = 0; i < n; i++)
-			cnxman_act_on_recnx_rec(cn, &recs[i]);
+		/*
+		 * THE SAME BEFORE/AFTER BRACKET cnxman_vc_message() TAKES ROUND A
+		 * DISPATCH, taken here for exactly the reason the quorum comment
+		 * just below already names: a CSB can leave membership from the
+		 * reconnect ladder ALONE, entirely on this beat, WITH NO MESSAGE
+		 * INVOLVED (cnxman_act_on_recnx_rec's PROPOSE_TRANSITION runs the
+		 * coordinator/barrier synchronously to completion when there is
+		 * nobody left to negotiate with). Until this bracket existed, a
+		 * departure driven purely by RECNXINTERVAL expiry never reached
+		 * cnxman_notify_membership_changes() at all -- so $SETCLUEVT and
+		 * the DLM arm's member_departed hook (rd vms-1ee, H10a) fired for
+		 * a message-driven removal but never for a timeout-driven one,
+		 * which is the MORE common real departure (a system that crashed
+		 * or lost power announces nothing).
+		 */
+		{
+			uint8_t rbefore[VMS_CLUB_MAX_CSB];
+
+			cnxman_membership_snapshot(&cn->cl->club, rbefore);
+			n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
+			for (i = 0; i < n; i++)
+				cnxman_act_on_recnx_rec(cn, &recs[i]);
+			cnxman_notify_membership_changes(cn, rbefore);
+		}
 		/*
 		 * LAST ON THE BEAT, AND ON EVERY BEAT (FC-P8.1): the quorum
 		 * arithmetic over whatever the sweep above left the CSB table
@@ -2349,6 +2370,9 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * that expired here, on this beat, with no message involved.
 		 * Idempotent and cheap -- a walk of at most 96 CSBs, and it
 		 * announces only when the enforceable answer actually moved.
+		 * (cnxman_notify_membership_changes() above already calls this
+		 * when IT saw a change; a second, idempotent call here is what
+		 * keeps this line true regardless of whether that bracket ran.)
 		 */
 		cnxman_quorum_apply(cn);
 		break;

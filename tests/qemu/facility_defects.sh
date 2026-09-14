@@ -435,6 +435,7 @@ lock-deq-status-wrong
 lock-convert-mode-not-updated
 dlm-xnode-mode-unvalidated
 dlm-xnode-redirect-target-dropped
+setcluevt-registers-without-cnxman
 resdir-master-csid-not-reported
 devtab-owner-not-recorded
 devtab-alloc-not-recorded
@@ -2035,6 +2036,28 @@ EOF
                       ;;
         knock_on_fail) echo "";;
         knock_on_why)  echo "";;
+        esac;;
+
+    setcluevt-registers-without-cnxman)
+        case "$_f" in
+        facility)     echo "cluster-event registration (\$SETCLUEVT/\$CLRCLUEVT, VMS_IOCTL_CLUSTER_SETCLUEVT, FC-P3.8)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_syssvc_cluevt";;
+        blind_suites) echo "";;
+        blind_why)    echo "";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cnxman_cluevt_set()'s 'if (cl->cnxman == NULL) return SS\$_NOSUCHDEV' guard -- the refusal a node whose connection manager has not started owes a \$SETCLUEVT/\$CLRCLUEVT -- is flipped to SS\$_NORMAL, so a cluster-event AST is 'armed'/'cleared' with nothing that could ever queue it (INV-6 fabrication of a registration). Range-scoped to the function body, so the one NOSUCHDEV return there is unique; gone after apply (no-op re-apply).";;
+        require_fail) cat <<'EOF'
+$SETCLUEVT(ADD) with no connection manager -> SS$_NOSUCHDEV (arm refused by the executive, not fabricated)
+EOF
+                      ;;
+        knock_on_fail) cat <<'EOF'
+$SETCLUEVT(REMOVE) with no connection manager -> SS$_NOSUCHDEV
+$CLRCLUEVT(handle) with no connection manager -> SS$_NOSUCHDEV
+$CLRCLUEVT(event) with no connection manager -> SS$_NOSUCHDEV
+EOF
+                      ;;
+        knock_on_why)  echo "the same single fabricated-acceptance defect seen again: the REMOVE arm and both \$CLRCLUEVT forms all reach the identical cl->cnxman==NULL guard, so flipping it reddens all four together.";;
         esac;;
 
     resdir-master-csid-not-reported)
@@ -6867,6 +6890,15 @@ apply_edit() {
         # unaffected, so ONLY "the redirect names the master the executive
         # genuinely holds" reddens.
         sed -i 's|    xn->redirect_csid = target;|    xn->redirect_csid = 0; /* NEGCTL dlm-xnode-redirect-target-dropped */|' "$_file";;
+    setcluevt-registers-without-cnxman)
+        # Range-scoped to vms_cnxman_cluevt_set (its function name is unique --
+        # one definition); within it the sole `return (int)SS__NOSUCHDEV;` is the
+        # cl->cnxman==NULL refusal. Flipping it to SS__NORMAL fabricates a
+        # cluster-event registration on a node with no connection manager (the
+        # arm/clear returns before touching cn, so it builds and cannot crash).
+        # After apply that return is SS__NORMAL, so a 2nd apply finds no
+        # NOSUCHDEV in the function (no-op selftest).
+        sed -i '/^int vms_cnxman_cluevt_set/,/^}/ s|return (int)SS__NOSUCHDEV;|return (int)SS__NORMAL; /* NEGCTL setcluevt-registers-without-cnxman */|' "$_file";;
     resdir-master-csid-not-reported)
         # `args.master_csid = res->master_csid;` is the ONLY assignment to
         # that field in the file (vms_ioctl_get_resmaster's sole copy-out),

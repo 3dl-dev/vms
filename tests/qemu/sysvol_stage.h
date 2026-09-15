@@ -42,6 +42,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <dirent.h>
 
 /* THE SYSTEM VOLUME an activated image is resolved off (the discovered
  * OVMX_SYSDEVICE the harness points IMGACT at; vms-104). Mastered by
@@ -56,6 +57,16 @@
  * creates images under this DID. */
 static uint16_t g_sysexe_num __attribute__((unused)) = 0, g_sysexe_seq __attribute__((unused)) = 0;
 static uint8_t  g_sysexe_rvn __attribute__((unused)) = 0, g_sysexe_nmx __attribute__((unused)) = 0;
+/* [SYS0.SYSCOMMON.SYSLIB] on SYSVOL_UNIT — where the activated image's --use'd
+ * shareables (LIBVMS$SHR.EXE et al.) are resolved by IMGACT (vms-c09f). IMGACT's
+ * load_needed() resolves a SONAME to /vms/SYS0/SYSCOMMON/SYSLIB/<soname> and
+ * opens it via imgact_acp_open(g_acp_sysdevice, ...) — i.e. OFF the sysdevice
+ * VOLUME over the ACP (the "/vms" is the ODS-2 spelling on OVMX_SYSDEVICE, NOT a
+ * Linux POSIX read), so the shareables must LIVE on this volume, not lean on any
+ * /vms fallback. Only DECC$SHR.EXE is mastered here at image-build (mkimage_
+ * ods2_sysvol); the rest are staged at runtime by sysvol_stage_shareables_from(). */
+static uint16_t g_syslib_num __attribute__((unused)) = 0, g_syslib_seq __attribute__((unused)) = 0;
+static uint8_t  g_syslib_rvn __attribute__((unused)) = 0, g_syslib_nmx __attribute__((unused)) = 0;
 static int      g_sysvol_ready __attribute__((unused)) = 0;
 
 /* Walk MFD -> <dirs[0]>.DIR -> <dirs[1]>.DIR -> ... over the ACP on `chan`,
@@ -100,11 +111,19 @@ static int sysvol_prepare(void)
     uint32_t chan = 0;
     if (!$VMS_STATUS_SUCCESS(vms_kif_acp_assign(SYSVOL_UNIT, &chan)) || chan == 0)
         return -1;
-    static const char *const tree[] = { "SYS0", "SYSCOMMON", "SYSEXE", NULL };
-    uint32_t st = sysvol_resolve_dir_fid(chan, tree, &g_sysexe_num, &g_sysexe_seq,
+    static const char *const exe_tree[] = { "SYS0", "SYSCOMMON", "SYSEXE", NULL };
+    uint32_t st = sysvol_resolve_dir_fid(chan, exe_tree, &g_sysexe_num, &g_sysexe_seq,
                                          &g_sysexe_rvn, &g_sysexe_nmx);
+    if (!$VMS_STATUS_SUCCESS(st) || g_sysexe_num == 0) {
+        (void)vms_kif_dassgn(chan);
+        return -1;
+    }
+    /* Also resolve [SYS0.SYSCOMMON.SYSLIB] so shareables can be staged there. */
+    static const char *const lib_tree[] = { "SYS0", "SYSCOMMON", "SYSLIB", NULL };
+    st = sysvol_resolve_dir_fid(chan, lib_tree, &g_syslib_num, &g_syslib_seq,
+                                &g_syslib_rvn, &g_syslib_nmx);
     (void)vms_kif_dassgn(chan);
-    if (!$VMS_STATUS_SUCCESS(st) || g_sysexe_num == 0)
+    if (!$VMS_STATUS_SUCCESS(st) || g_syslib_num == 0)
         return -1;
     g_sysvol_ready = 1;
     return 0;
@@ -119,9 +138,10 @@ static int sysvol_prepare(void)
  * < len (imgact_acp_pread clamps at f.valid). Requires sysvol_prepare() first.
  * Returns 0 on success. */
 __attribute__((unused))
-static int sysvol_write_image(const char *name, const uint8_t *bytes, long len)
+static int sysvol_write_into(uint16_t dnum, uint16_t dseq, uint8_t drvn, uint8_t dnmx,
+                            const char *name, const uint8_t *bytes, long len)
 {
-    if (!g_sysvol_ready || len <= 0 || !name)
+    if (!g_sysvol_ready || len <= 0 || !name || dnum == 0)
         return -1;
     uint32_t chan = 0;
     if (!$VMS_STATUS_SUCCESS(vms_kif_acp_assign(SYSVOL_UNIT, &chan)) || chan == 0)
@@ -132,8 +152,8 @@ static int sysvol_write_image(const char *name, const uint8_t *bytes, long len)
         struct vms_acp_fileop_args df;
         memset(&df, 0, sizeof(df));
         df.chan = chan; df.func = VMS_ACP_FOP_DELETE; df.modifiers = VMS_ACP_M_DELETE;
-        df.did_num = g_sysexe_num; df.did_seq = g_sysexe_seq;
-        df.did_rvn = g_sysexe_rvn; df.did_nmx = g_sysexe_nmx;
+        df.did_num = dnum; df.did_seq = dseq;
+        df.did_rvn = drvn; df.did_nmx = dnmx;
         df.version = 0;   /* highest */
         strncpy(df.name, name, VMS_ACP_NAME_SIZE - 1);
         if (!$VMS_STATUS_SUCCESS(vms_kif_acp_fileop(&df)))
@@ -147,8 +167,8 @@ static int sysvol_write_image(const char *name, const uint8_t *bytes, long len)
     memset(&f, 0, sizeof(f));
     f.chan = chan; f.func = VMS_ACP_FOP_CREATE; f.modifiers = VMS_ACP_M_CREATE;
     f.kind = ODS2_FK_DATA_FIX;
-    f.did_num = g_sysexe_num; f.did_seq = g_sysexe_seq;
-    f.did_rvn = g_sysexe_rvn; f.did_nmx = g_sysexe_nmx;
+    f.did_num = dnum; f.did_seq = dseq;
+    f.did_rvn = drvn; f.did_nmx = dnmx;
     f.version = 1;
     strncpy(f.name, name, VMS_ACP_NAME_SIZE - 1);
     if (!$VMS_STATUS_SUCCESS(vms_kif_acp_fileop(&f))) {
@@ -159,8 +179,8 @@ static int sysvol_write_image(const char *name, const uint8_t *bytes, long len)
     struct vms_acp_access_args a;
     memset(&a, 0, sizeof(a));
     a.chan = chan;
-    a.did_num = g_sysexe_num; a.did_seq = g_sysexe_seq;
-    a.did_rvn = g_sysexe_rvn; a.did_nmx = g_sysexe_nmx;
+    a.did_num = dnum; a.did_seq = dseq;
+    a.did_rvn = drvn; a.did_nmx = dnmx;
     a.version = 0;   /* highest */
     a.acctl = VMS_ACP_ACCTL_WRITE;
     strncpy(a.name, name, VMS_ACP_NAME_SIZE - 1);
@@ -192,15 +212,34 @@ static int sysvol_write_image(const char *name, const uint8_t *bytes, long len)
     return ok ? 0 : -1;
 }
 
+/* Write `bytes` as [SYS0.SYSCOMMON.SYSEXE]<name> (an image/subject). */
+__attribute__((unused))
+static int sysvol_write_image(const char *name, const uint8_t *bytes, long len)
+{
+    return sysvol_write_into(g_sysexe_num, g_sysexe_seq, g_sysexe_rvn, g_sysexe_nmx,
+                             name, bytes, len);
+}
+
+/* Write `bytes` as [SYS0.SYSCOMMON.SYSLIB]<name> (a --use'd shareable). */
+__attribute__((unused))
+static int sysvol_write_syslib(const char *name, const uint8_t *bytes, long len)
+{
+    return sysvol_write_into(g_syslib_num, g_syslib_seq, g_syslib_rvn, g_syslib_nmx,
+                             name, bytes, len);
+}
+
 /* Read the whole file at `host_path` (a POSIX path -- the initramfs copy the
  * Dockerfile staged, which the Linux kernel also execve's) into a buffer and
  * write it onto SYSVOL_UNIT as [SYS0.SYSCOMMON.SYSEXE]<name> over the ACP. This
  * is the harness placing its subject image on the system disk -- exactly as
  * test_syssvc_mmk_build writes the OVMXRT it built onto the volume -- NOT a
  * runtime /vms fallback. Requires sysvol_prepare() first. Returns 0 on success. */
+/* Read the whole POSIX file at `host_path` into a malloc'd buffer (caller frees).
+ * Returns the byte count on success, -1 on error. */
 __attribute__((unused))
-static int sysvol_stage_host_image(const char *host_path, const char *name)
+static long sysvol_read_host(const char *host_path, uint8_t **out)
 {
+    *out = NULL;
     int fd = open(host_path, O_RDONLY);
     if (fd < 0)
         return -1;
@@ -215,9 +254,63 @@ static int sysvol_stage_host_image(const char *host_path, const char *name)
         got += n;
     }
     close(fd);
-    int rc = (got == sz) ? sysvol_write_image(name, buf, (long)sz) : -1;
+    if (got != sz) { free(buf); return -1; }
+    *out = buf;
+    return (long)sz;
+}
+
+__attribute__((unused))
+static int sysvol_stage_host_image(const char *host_path, const char *name)
+{
+    uint8_t *buf = NULL;
+    long len = sysvol_read_host(host_path, &buf);
+    if (len < 0)
+        return -1;
+    int rc = sysvol_write_image(name, buf, len);
     free(buf);
     return rc;
+}
+
+/* Stage every "*$SHR.EXE" shareable found in the POSIX directory `host_syslib_dir`
+ * (the initramfs SYS$LIBRARY the Dockerfile's full-mode mk_mmk_native_staged.sh
+ * built the OVMX shareable graph into) onto SYSVOL_UNIT [SYS0.SYSCOMMON.SYSLIB]
+ * over the ACP, so an activated image's IMGACT load_needed() resolves each
+ * --use'd shareable off the VOLUME (vms-c09f), not a /vms fallback. DECC$SHR.EXE
+ * is SKIPPED: it is mastered onto the volume at image-build (mkimage_ods2_sysvol)
+ * and an activated MMK already resolves it there -- overwriting it with the
+ * full-mode copy could diverge from the mastered bytes other consumers expect.
+ * Requires sysvol_prepare() first. Returns the number staged, or -1 on any error
+ * (so one shareable short reddens rather than silently activating a partial set). */
+__attribute__((unused))
+static int sysvol_stage_shareables_from(const char *host_syslib_dir)
+{
+    if (sysvol_prepare() != 0)
+        return -1;
+    DIR *d = opendir(host_syslib_dir);
+    if (!d)
+        return -1;
+    int staged = 0, err = 0;
+    struct dirent *de;
+    while ((de = readdir(d)) != NULL) {
+        const char *nm = de->d_name;
+        size_t nl = strlen(nm);
+        /* match "*$SHR.EXE" */
+        if (nl < 9 || strcmp(nm + nl - 8, "$SHR.EXE") != 0)
+            continue;
+        if (strcmp(nm, "DECC$SHR.EXE") == 0)
+            continue;                     /* mastered on the volume already */
+        char host[512];
+        snprintf(host, sizeof(host), "%s/%s", host_syslib_dir, nm);
+        uint8_t *buf = NULL;
+        long len = sysvol_read_host(host, &buf);
+        if (len < 0) { err = 1; break; }
+        int rc = sysvol_write_syslib(nm, buf, len);
+        free(buf);
+        if (rc != 0) { err = 1; break; }
+        staged++;
+    }
+    closedir(d);
+    return err ? -1 : staged;
 }
 
 /* Mount + resolve SYSVOL_UNIT, stage the activated subject image `host_path`

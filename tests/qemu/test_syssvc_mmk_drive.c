@@ -304,6 +304,15 @@ int main(int argc, char **argv)
                "[SYS0.SYSCOMMON.SYSEXE] over the ACP (vms-c09f)\n", SYSVOL_UNIT);
         return 1;
     }
+    /* Stage MMK's --use'd shareable graph onto the volume too: IMGACT resolves
+     * each SONAME off OVMX_SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB] over the ACP, so the
+     * whole closure must live on the volume, not lean on the /vms fallback
+     * (vms-c09f/#1241). DECC$SHR.EXE is mastered there already and skipped. */
+    if (sysvol_stage_shareables_from("/vms/SYS0/SYSCOMMON/SYSLIB") < 0) {
+        printf("  FAIL: could not stage MMK's --use'd shareable graph onto %s "
+               "[SYS0.SYSCOMMON.SYSLIB] over the ACP (vms-c09f/#1241)\n", SYSVOL_UNIT);
+        return 1;
+    }
 
     /* Author the description + rules files in VDA0:[OVMXDIR] through RMS
      * ($CREATE/$PUT -> the Files-11 ACP). The rule target is a BARE name (all

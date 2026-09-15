@@ -1041,6 +1041,17 @@ int main(int argc, char **argv)
           " [SYS0.SYSCOMMON.SYSEXE] over the ACP (IMGACT resolves the main image "
           "off the volume -- no /vms fallback, vms-c09f)");
 
+    /* Stage MMK's --use'd shareable graph (LIBVMS$SHR.EXE et al.) onto the volume
+     * too: IMGACT's load_needed() resolves each SONAME off OVMX_SYSDEVICE:
+     * [SYS0.SYSCOMMON.SYSLIB] over the ACP, so the whole closure must LIVE on the
+     * volume, not lean on the /vms SYSLIB fallback (vms-c09f, #1241). DECC$SHR.EXE
+     * is mastered there already and skipped; the rest come from the initramfs
+     * SYS$LIBRARY the Dockerfile's full-mode build produced. */
+    CHECK(sysvol_stage_shareables_from("/vms/SYS0/SYSCOMMON/SYSLIB") >= 0,
+          "staged MMK's --use'd shareable graph onto " SYSVOL_UNIT
+          " [SYS0.SYSCOMMON.SYSLIB] over the ACP (IMGACT resolves each shareable "
+          "off the volume, no /vms fallback, vms-c09f/#1241)");
+
     /* Stage the two producers the drive binds by VMS spec off the ODS-2 volume
      * THROUGH the ACP into /run/ovmx-boot (vms-104): the C run-time shareable
      * (LINK's --use SYS$SHARE:DECC$SHR.EXE) and the OVMX image activator (the

@@ -65,6 +65,7 @@
 #include "dnet_dap.h"       /* DAP message codec (--fal-* : COPY presentation layer) */
 #include "dnet_fal.h"       /* FAL server + COPY client (object 17, rd vms-8c2) */
 #include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
+#include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
@@ -634,6 +635,106 @@ done:
            " (link OPEN -> data segment+ack -> clean DISCONNECT over a real"
            " socketpair; CI/CC + DI/DC choreography, payload byte-identical)\n");
     return 0;
+}
+
+/*
+ * run_net_ncb_selftest (rd vms-22c, a1-2) -- the host floor of the DECnet
+ * Network Connect Block parser (dnet_ncb_parse): the LOCAL API connect string a
+ * task-to-task application hands $QIO IO$_ACCESS on a _NET: channel, which
+ * qio_net_op parses into {node, task/object} before building the (oracle-
+ * grounded) SC connect descriptor. Proves the documented connect-string forms
+ * parse and every malformed NCB is refused bounds-safe (never over-read) -- no
+ * executive needed (the NCB never touches the wire; it cannot crash a peer).
+ */
+static int run_net_ncb_selftest(void)
+{
+    printf("DECNETD-I-NETNCB, NCB connect-block parser (NODE::\"TASK=name\" ->"
+           " {node, task/object}) + bounds-safe refusal of malformed input (no"
+           " executive, spec-derived local API, rd vms-22c)\n");
+    int pass = 0, fail = 0;
+#define NC_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    struct dnet_ncb n;
+    /* documented forms (strlen avoids hand-counted length bugs) */
+#define NCB_S(str) (str), strlen(str), &n
+    NC_CHECK(dnet_ncb_parse(NCB_S("OVMXR::\"TASK=SERVER\"")) == DNET_NCB_OK &&
+             !strcmp(n.node, "OVMXR") && n.is_named && !strcmp(n.task, "SERVER"),
+             "NODE::\"TASK=name\" -> node + named task");
+    NC_CHECK(dnet_ncb_parse(NCB_S("1.11::\"TASK=ECHO\"")) == DNET_NCB_OK &&
+             !strcmp(n.node, "1.11") && n.is_named && !strcmp(n.task, "ECHO"),
+             "area.node literal target parses (1.11::\"TASK=ECHO\")");
+    NC_CHECK(dnet_ncb_parse(NCB_S("NODE::\"0=SVC\"")) == DNET_NCB_OK &&
+             !strcmp(n.node, "NODE") && n.is_named && !strcmp(n.task, "SVC"),
+             "NODE::\"0=name\" (object 0 named task) parses");
+    NC_CHECK(dnet_ncb_parse(NCB_S("NODE::\"17\"")) == DNET_NCB_OK &&
+             !strcmp(n.node, "NODE") && !n.is_named && n.object == 17,
+             "NODE::\"17\" -> a well-known object NUMBER");
+    NC_CHECK(dnet_ncb_parse(NCB_S("NODE::\"BARE\"")) == DNET_NCB_OK &&
+             n.is_named && !strcmp(n.task, "BARE"),
+             "NODE::\"bare\" -> a named object");
+    NC_CHECK(dnet_ncb_parse(NCB_S("NODE::SERVER")) == DNET_NCB_OK &&
+             !strcmp(n.node, "NODE") && n.is_named && !strcmp(n.task, "SERVER"),
+             "an unquoted object spec (NODE::SERVER) parses");
+
+    /* bounds-safe refusals -- never over-read */
+    NC_CHECK(dnet_ncb_parse("", 0, &n) == DNET_NCB_ETRUNC,
+             "empty NCB is refused (no \"::\")");
+    NC_CHECK(dnet_ncb_parse("NODE", 4, &n) == DNET_NCB_ETRUNC,
+             "a spec with no \"::\" is refused");
+    NC_CHECK(dnet_ncb_parse("::\"X\"", 5, &n) == DNET_NCB_ETRUNC,
+             "an empty node is refused");
+    NC_CHECK(dnet_ncb_parse("NODE::", 6, &n) == DNET_NCB_ETRUNC,
+             "an empty object spec is refused");
+    NC_CHECK(dnet_ncb_parse("NODE::\"\"", 8, &n) == DNET_NCB_ETRUNC,
+             "an empty quoted object spec is refused");
+    NC_CHECK(dnet_ncb_parse(NCB_S("THISNODENAMEISWAYTOOLONG::\"X\"")) == DNET_NCB_EBADLEN,
+             "an over-long node name is refused (EBADLEN, not truncated)");
+    NC_CHECK(dnet_ncb_parse(NCB_S("N::\"TASK=THISTASKNAMEISWAYTOOLONG\"")) == DNET_NCB_EBADLEN,
+             "an over-long task name is refused (EBADLEN)");
+    NC_CHECK(dnet_ncb_parse(NULL, 5, &n) == DNET_NCB_EINVAL,
+             "a null NCB is refused (EINVAL)");
+#undef NCB_S
+
+    /* fuzz: mutate a valid NCB + feed every truncated prefix; must never crash
+     * (ASan/UBSan) and never accept a self-inconsistent parse. */
+    {
+        const char *base = "OVMXR::\"TASK=SERVER\"";
+        size_t blen = strlen(base);
+        uint32_t seed = 0x1234abcdu;
+        int inconsistent = 0, refused = 0, accepted = 0;
+        for (int i = 0; i < 200000; i++) {
+            char fz[40];
+            memcpy(fz, base, blen);
+            for (int m = 0; m < 3; m++) {
+                seed = seed * 1664525u + 1013904223u;
+                fz[(seed >> 8) % blen] = (char)(seed & 0xff);
+            }
+            seed = seed * 1664525u + 1013904223u;
+            size_t use = (seed >> 8) % (blen + 1);   /* truncated prefixes too */
+            struct dnet_ncb fn;
+            int r = dnet_ncb_parse(fz, use, &fn);
+            if (r == DNET_NCB_OK) {
+                accepted = 1;
+                /* an accepted named parse must have a NUL-terminated bounded task */
+                if (fn.is_named && strnlen(fn.task, sizeof fn.task) >= sizeof fn.task)
+                    inconsistent = 1;
+                if (strnlen(fn.node, sizeof fn.node) >= sizeof fn.node)
+                    inconsistent = 1;
+            } else {
+                refused = 1;
+            }
+        }
+        NC_CHECK(!inconsistent && refused,
+                 "200k-mutation + truncated-prefix fuzz: no accepted parse is bounds-inconsistent, malformed refused (ASan/UBSan clean)");
+        (void)accepted;
+    }
+
+    printf("DECNETD-I-NETNCB, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-NET-NCB-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-NET-NCB-SELFTEST: FAIL\n");
+    return 1;
+#undef NC_CHECK
 }
 
 /*
@@ -3266,6 +3367,7 @@ int main(int argc, char **argv)
     int nsp_self_test = 0;
     int task_self_test = 0;               /* --task-selftest : task-to-task client floor */
     int net_broker_test = 0;              /* --net-broker-selftest : T1 broker record codec */
+    int net_ncb_test = 0;                 /* --net-ncb-selftest : NCB connect-block parser */
     int net_service_test = 0;             /* --net-service-selftest : broker service dispatch */
     int sethost_self_test = 0;
     int sethost_srccode_test = 0;
@@ -3309,6 +3411,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
         else if (!strcmp(argv[i], "--task-selftest")) task_self_test = 1;
         else if (!strcmp(argv[i], "--net-broker-selftest")) net_broker_test = 1;
+        else if (!strcmp(argv[i], "--net-ncb-selftest")) net_ncb_test = 1;
         else if (!strcmp(argv[i], "--net-service-selftest")) net_service_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
@@ -3352,6 +3455,8 @@ int main(int argc, char **argv)
         return run_task_selftest();
     if (net_broker_test)
         return run_net_broker_selftest();
+    if (net_ncb_test)
+        return run_net_ncb_selftest();
     if (net_service_test)
         return run_net_service_selftest();
     if (sethost_self_test)

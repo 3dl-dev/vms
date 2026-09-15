@@ -106,6 +106,11 @@ if(BUILD_TESTS)
     # response round-trip, bounds-validated decode (200k-mutation + truncated-prefix
     # fuzz, ASan/UBSan-clean), and the correlation-id anti-cross-talk guard. No
     # executive; the mailbox seam + qio_net_op + NETACP servicing build on it.
+    # rd vms-22c (a1-2): the NCB connect-block parser floor -- NODE::"TASK=name"
+    # -> {node, task/object}, bounds-safe refusal of malformed input, fuzzed. A
+    # spec-derived LOCAL API parser (never a wire field); no executive.
+    add_test(NAME decnetd_net_ncb_selftest
+             COMMAND decnetd_exe --net-ncb-selftest)
     add_test(NAME decnetd_net_broker_selftest
              COMMAND decnetd_exe --net-broker-selftest)
     # rd vms-22c (a1-2 integration): the NETACP broker SERVICE DISPATCH floor --

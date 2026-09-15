@@ -77,7 +77,7 @@ done
 # --- 3. The login banner must stay logical-driven -------------------
 # LOGINOUT and the SSH daemon must resolve SYS$WELCOME, not printf a
 # greeting. This is the regression that prompted the gate.
-for f in "$SRC_ROOT/tools/vms_login.c" "$SRC_ROOT/src/vmsssh/vmssshd.c"; do
+for f in "$SRC_ROOT/tools/vms_login.c"; do
     [ -f "$f" ] || continue
     if grep -qE 'ovmx_banner_welcome' "$f"; then
         echo "  OK: $(basename "$f") resolves SYS\$WELCOME"

@@ -227,20 +227,19 @@
 #     here whether or not CMake would configure it -- which is precisely why
 #     the compile set UNIONS the glob with the build's answer instead of
 #     replacing one with the other. A source guarded by an OPTIONAL
-#     third-party library still has to build: src/vmsssh/vmssshd.c includes
-#     <libssh/libssh.h>, and CMake does not configure src/vmsssh at all
-#     without libssh, so the build's answer alone would have DROPPED that file
-#     and retired this refusal silently. The glob keeps offering it, and an
-#     environment without libssh-dev makes this gate REFUSE rather than certify
-#     a universe with a hole in it (measured, vms-ecf r5 -- it reddened the CI
-#     Build & Test job, correctly; re-measured under the compile set with the
-#     libssh include made unresolvable, which refuses at 129 of 130). The fix
-#     taken was to install the dependency in the job that runs this gate, NOT
-#     to tolerate the short count; see the comment on that step in
-#     .github/workflows/ci.yml. If a future source genuinely cannot be compiled
-#     in any environment that runs this gate, the second legal answer is to
-#     extend SYMSCAN_EXCLUDE_DIR and say why HERE -- visibly, with what the
-#     exclusion costs -- never to skip the file quietly.
+#     third-party library still has to build. The historical example was
+#     src/vmsssh/vmssshd.c, which included <libssh/libssh.h>: CMake did not
+#     configure src/vmsssh at all without libssh, so the build's answer alone
+#     would have DROPPED that file and retired the refusal silently, while the
+#     glob kept offering it (measured, vms-ecf r5 -- it reddened the CI Build &
+#     Test job, correctly, until libssh-dev was installed in that job). That
+#     file has since been DELETED by the vms-d916 SSH-scaffold retirement, so
+#     the concrete example no longer lives in the tree -- but the glob-union
+#     design it motivated stands: the compile set must not shrink to whatever
+#     the current CMake configuration happens to build. If a future source
+#     genuinely cannot be compiled in any environment that runs this gate, the
+#     legal answer is to extend SYMSCAN_EXCLUDE_DIR and say why HERE --
+#     visibly, with what the exclusion costs -- never to skip the file quietly.
 #   - IT MAKES CMAKE A DEPENDENCY OF THIS GATE. A tree with a CMakeLists.txt
 #     that cmake cannot configure is a tree whose compile set is unknown, and
 #     this gate refuses rather than falling back to the glob -- the glob is the

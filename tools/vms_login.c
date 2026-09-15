@@ -903,8 +903,8 @@ static int console_login(void)
 }
 
 /* ================================================================== */
-/* NETWORK-LOGIN AUTHORIZATION (vms-843a / vms-16b, design               */
-/* docs/design-ssh-loginout-handoff.md, Option A)                        */
+/* NETWORK-LOGIN AUTHORIZATION (vms-843a / vms-16b, Option A; the real    */
+/* upstream OpenSSH port that binds this substrate is rd vms-9ef)         */
 /*                                                                       */
 /* The faithful SSH->DCL handoff routes an inbound SSH session through    */
 /* the ONE login primitive console login + DECnet SET HOST/CTERM use:     */

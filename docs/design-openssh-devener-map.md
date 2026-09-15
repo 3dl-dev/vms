@@ -1,5 +1,14 @@
 # OpenSSH as a DE-VENEER map of the OVMX VMS-compat surface
 
+> **✅ vms-d916 note (2026-09-15):** this doc is the FAITHFUL shape and stays. Its
+> thesis — build the compat ladder UP until UNMODIFIED OpenSSH dispatches every fd
+> call to the real DECC\$SOCKET/\$QIO(BGn:) surface, never hand-roll or minimally-
+> adapt-down — is exactly what Baron's 2026-09-15 anti-LARP ruling mandates, and
+> it is the live plan `rd vms-9ef`. Note only that any cite here to the retired
+> veneer harness (`build-openssh.sh`, `test/run_ssh_build.sh`, the `openssh-static-
+> musl` job, `test_syssvc_ssh_kex/ssh_server`) points at files DELETED by vms-d916;
+> the de-veneer LADDER those cites sat beside is unaffected and is the plan.
+
 > **LADDER RECONCILE (operator 2026-08-22, Rule 1 / `vms-ports-build-ladder`):**
 > this map is exactly the right shape. The deliverable is *"the OpenVMS OpenSSH
 > port builds on OVMX over a VMS-faithful DECC\$SOCKET / \$QIO(BGn:) surface +

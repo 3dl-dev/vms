@@ -2198,8 +2198,9 @@ _Static_assert(VMS_IOCTL_TERM_RESOLVE == 0xC028565Bu,
  * The conveyance channel that lets an inbound network daemon which has ALREADY
  * authenticated a user in its own protocol (SSH: cryptographic/Purdy password
  * against the same SYSUAF authority) hand that user to a $CREPRC(LOGINOUT,
- * RTAn:, PRC$M_LOGINOUT) session WITHOUT LOGINOUT re-challenging (Option A,
- * design docs/design-ssh-loginout-handoff.md). Under PRC$M_LOGINOUT the creator
+ * RTAn:, PRC$M_LOGINOUT) session WITHOUT LOGINOUT re-challenging (Option A; the
+ * network-login handoff is the landed substrate the real upstream OpenSSH port
+ * binds -- rd vms-9ef, network stamp rung rd vms-65b). Under PRC$M_LOGINOUT the creator
  * stamps NO identity (sys_process.c) and $SETIDENT is self-targeted, so the
  * daemon cannot reach into the LOGINOUT child; instead it stamps the
  * pre-authenticated user name onto the RTAn: DEVICE record it minted, and the

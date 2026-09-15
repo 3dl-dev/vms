@@ -85,7 +85,7 @@ sleep 5                                 # let sshd bind :22 + listen over BGn:
 # Inbound SSH: password login as SYSTEM (SYSUAF password MANAGER), non-interactive,
 # feeding one DCL WRITE + LOGOUT on stdin. A landed DCL session echoes the marker.
 SSH_ERR=/tmp/ssh-e2e-client.err
-RESP=$(sshpass -p MANAGER ssh \
+RESP=$(timeout 90 sshpass -p MANAGER ssh \
         -p "$HOSTPORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o PreferredAuthentications=password -o PubkeyAuthentication=no \
@@ -105,7 +105,7 @@ else
 fi
 
 # INV-6 negative-ish sanity: a bad password must NOT land in DCL (auth is real).
-BADRESP=$(sshpass -p WRONGPASS ssh \
+BADRESP=$(timeout 90 sshpass -p WRONGPASS ssh \
         -p "$HOSTPORT" \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o PreferredAuthentications=password -o PubkeyAuthentication=no \
@@ -124,7 +124,7 @@ fi
 
 if [ "$FAIL" != 0 ]; then
     echo "--- ssh client stderr ---"; tail -40 "$SSH_ERR" 2>/dev/null
-    echo "--- console tail ---"; tail -80 "$LOG" 2>/dev/null
+    echo "--- console tail (last 400 lines) ---"; tail -400 "$LOG" 2>/dev/null
 fi
 echo "=== test_ssh_boot_e2e: $([ "$FAIL" = 0 ] && echo PASS || echo FAIL) ==="
 exit "$FAIL"

@@ -30,9 +30,12 @@
  * executive to that same socket (the [bgconn] anon_inode, vms-0cd RUNG-3b);
  * the spawned service does ordinary read()/write() on its stdin/stdout and the
  * bytes transit the executive, never a host socketpair. This is the identical
- * mechanism a wrapped OpenSSH sshd uses to hand an accepted connection to its
- * per-session child (test_syssvc_ssh_server) -- which is precisely why this
- * rung unblocks vms-9ef.
+ * mechanism the real upstream OpenSSH sshd will use to hand an accepted
+ * connection to its per-session child once it is ported onto this substrate
+ * (rd vms-9ef) -- which is precisely why this rung unblocks that port. (The
+ * earlier hand-rolled wrapped-sshd stand-in and its test_syssvc_ssh_server
+ * proof were retired as LARP, vms-d916; the mechanism proven here is real and
+ * is exercised for real by the inetd path itself.)
  *
  * fork()+execv() OF THE CONFIGURED SERVICE IMAGE IS THE inetd CONTRACT, NOT A
  * HOST SHELL-OUT. The auxiliary server creates a process running the VMS image

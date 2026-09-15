@@ -1,5 +1,25 @@
 # OpenSSH sshd → VMS auth/session glue (OVMX) — 3c implementation design
 
+> ## ⛔ RETIRED / SUPERSEDED (rd vms-d916, 2026-09-15)
+> **This document describes the hand-rolled `--wrap` sshd glue that Baron ruled
+> LARP and that has now been DELETED** (`src/vmsssh/{vmssshd,sshd_session,sshd_auth}.c`,
+> `third-party/openssh/ovmx/ovmx_sshd_*.c`). Baron's ruling: *"you're supposed to
+> be building TCP/IP and OVMX up so the OpenVMS port of OpenSSH builds and runs.
+> you are not supposed to be … hacking up OpenSSH to work with your sloppy LARP."*
+> The `--wrap=permanently_set_uid` interposition, the `$CREPRC(LOGINOUT)` handoff
+> shim, and the byte-pump this doc specifies are exactly the condemned approach.
+>
+> **The faithful design is `docs/design-openssh-devener-map.md` + the real-port
+> tree `rd vms-9ef`:** raise the DECC\$SOCKET / \$QIO(BGn:) + C-RTL + PTY substrate
+> until STOCK upstream OpenSSH sshd builds and runs unmodified, then let its own
+> SYSUAF/PAM-style auth backend bind libvms's SYSUAF view and its session bind the
+> genuine network-login → LOGINOUT → DCL path (the executive `VMS_IOCTL_TERM_SETLOGIN`
+> / `GETLOGIN` stamp, `vms-65b`, is the real substrate rung). No `--wrap`, no pump,
+> no shim. The surviving unit-tested seams (`src/vmsssh/{ssh_ident,cred_drop,term_map}.c`)
+> are kept and re-homed onto the real port's needs, not this glue's.
+>
+> The rest of this file is preserved for history only; do not implement from it.
+
 > **Scope (rd vms-0cd, RUNG 3 step 3c).** How the ported OpenSSH **sshd**
 > authenticates against **SYSUAF** and launches a **LOGINOUT→DCL** session on the
 > OVMX guest, reusing the already-unit-tested `src/vmsssh/` glue. This is the

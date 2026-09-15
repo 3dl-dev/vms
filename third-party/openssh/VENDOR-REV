@@ -1,4 +1,4 @@
-Vendored package:  OpenSSH portable (clients: ssh, and later scp/sftp)
+Vendored package:  OpenSSH portable (the real upstream port target)
 Upstream:          OpenBSD OpenSSH portable release
 Primary URL:       https://cdn.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.0p1.tar.gz
 Mirror URL:        https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-10.0p1.tar.gz
@@ -13,80 +13,67 @@ License:           BSD / ISC — permissive OSS (see LICENCE in the extracted
                    legitimately vendorable and portable (this is precisely what
                    the VSI/HP OpenVMS SSH port did via GNV).
 
---------------------------------------------------------------------------------
-WHY OpenSSH portable, and the operator ruling (item vms-22a, parent vms-843)
---------------------------------------------------------------------------------
-Operator directive (2026-08-14): SSH is THE networking client that matters.
-Do NOT hand-roll SSH — crypto and protocol are security-critical. PORT the real
-OpenSSH (OpenBSD upstream + the portable tree, which has an OpenVMS-port lineage
-via GNV). The original vms-843 body (a minimal from-scratch SSH-2 server) is
-abandoned. Full plan: docs/design-openssh-port-ovmx.md.
+================================================================================
+STATUS (vms-d916, 2026-09-15): THE VENEER APPROACH IS RETIRED. THIS FILE NOW
+PINS ONLY THE UPSTREAM SOURCE, FOR THE REAL NATIVE PORT (rd vms-9ef).
+================================================================================
+Baron's ruling (2026-09-15): "you're supposed to be building TCP/IP and OVMX up
+so the OpenVMS port of OpenSSH builds and runs. you are not supposed to be hand
+hacking a local ssh or hacking up OpenSSH to work with your sloppy LARP."
 
-This item (vms-22a) lands the CLIENT half first — ssh, then scp/sftp — because
-the clients only CONNECT OUT and so ride the already-done BGn: client path
-(vms-527); they are unblocked by the (still-pending) BGn: server path the sshd
-swap (vms-0cd) needs.
+The earlier contents of this directory implemented exactly the condemned thing:
+a -DOVMX_VENEER patch set (sshconnect-veneer.patch, packet-veneer.patch), an
+ovmx_ssh_glue.{c,h} transport shim, an ovmx/ sshd wrap (ovmx_ssh_wrap.c +
+ovmx_sshd_*.c), and build-openssh.sh / test/run_ssh_build.sh that cross-built a
+musl-static ELF against that veneer. All of it has been DELETED. It was a
+stand-in, not the port — green-of-a-stand-in counts as nothing (INV-6). The
+retired CI job was openssh-static-musl; the retired server scaffold was
+src/vmsssh/vmssshd.c and its --wrap adapters (see rd vms-d916).
 
+WHAT SURVIVES, AND WHY THIS FILE STAYS
 --------------------------------------------------------------------------------
-WHY 10.0p1 (the exact pin), and the p2 mirror note
---------------------------------------------------------------------------------
-10.0 is the current OpenSSH major (portable p-series). The pin is BY SHA256 —
-that is the reproducibility invariant, not the file name. Note a mirror quirk
-observed 2026-08-14: the OpenBSD CDN serves openssh-10.0p2.tar.gz with BYTES
-IDENTICAL to openssh-10.0p1.tar.gz (same SHA256 021a2e70…, inner directory
-openssh-10.0p1), and — the deciding detail — the SOURCE ITSELF self-identifies
-as OpenSSH_10.0p2: the built binary prints "OpenSSH_10.0p2, LibreSSL 4.1.2" for
-`ssh -V` (SSH_VERSION in version.h is p2). So the CONTENT is the security-fixed
-p2 release; only the CDN's file name / inner-directory label reads p1. We pin
-the exact tarball name that resolves reproducibly (openssh-10.0p1.tar.gz) with
-its verified SHA256, and the acceptance test asserts the OpenSSH_10.0 banner so
-the real version is checked, not assumed.
+The operator directive that chose OpenSSH is UNCHANGED and is the whole point of
+the real port (item vms-22a, parent vms-843; superseded plan item vms-9ef):
 
-To move the pin (e.g. when the mirror publishes genuinely distinct p2 bytes, or
-a later 10.x lands): update Pinned version / Tarball SHA256 / Inner directory /
-URLs here AND the OSSH_VERSION / OSSH_SHA256 / OSSH_INNER defaults in
-build-openssh.sh, then rerun third-party/openssh/test/run_ssh_build.sh in the
-musl container to reconfirm the static build + the transport-shim compile-check.
+    "SSH is THE networking client/server that matters. Do NOT hand-roll SSH —
+     crypto and protocol are security-critical. PORT the real OpenSSH (OpenBSD
+     upstream + the portable tree, which has an OpenVMS-port lineage via GNV)."
 
---------------------------------------------------------------------------------
+The faithful target (rd vms-9ef) is that upstream tree compiled NATIVELY on the
+TCP/IP + OVMX substrate — against the genuine VMS C-RTL (DECC$SHR), the VMS
+socket API (DECC$SOCKET / $QIO over BGn:), a VMS PTY, and the genuine
+network-login -> LOGINOUT -> DCL path — shipping INSIDE the TCP/IP Services kit
+(vms-cb0). NO veneer, NO -DOVMX_VENEER patches, NO wrap/pump/shim: the substrate
+is raised until stock OpenSSH's own socket()/tcgetattr()/openpty()/etc. resolve
+to real VMS facilities. That work is decomposed under vms-9ef (R1-R4); it does
+not yet compile because the substrate is still being built up.
+
+This file is retained because the PIN is what the real port will fetch. The pin
+is BY SHA256 — that is the reproducibility invariant, not the file name. Mirror
+quirk observed 2026-08-14 (kept for whoever moves the pin): the OpenBSD CDN
+serves openssh-10.0p2.tar.gz with BYTES IDENTICAL to openssh-10.0p1.tar.gz (same
+SHA256 021a2e70…, inner directory openssh-10.0p1), and the source itself
+self-identifies as OpenSSH_10.0p2 (SSH_VERSION in version.h; `ssh -V` prints
+"OpenSSH_10.0p2"). So the CONTENT is the security-fixed p2 release; only the
+CDN's file name / inner-directory label reads p1. When the real port's fetch
+step is written it should pin the exact tarball name that resolves reproducibly
+(openssh-10.0p1.tar.gz) with its verified SHA256 and assert the OpenSSH_10.0
+banner so the real version is checked, not assumed. To move the pin (genuinely
+distinct p2 bytes, or a later 10.x): update Pinned version / Tarball SHA256 /
+Inner directory / URLs here and in whatever fetch step the vms-9ef port lands.
+
 LAYOUT — fetch-vendored, NOT a source copy in-tree (same model as libcrypto)
 --------------------------------------------------------------------------------
 Like third-party/libcrypto (and unlike third-party/tcc, a committed source
 copy), OpenSSH is a large, actively-developed tree; committing it wholesale
-would bloat the repo. This is a PINNED FETCH: build-openssh.sh fetches exactly
-this tarball, verifies it against the SHA256 above (mismatch = hard fail), and
-builds entirely out-of-tree (default /tmp) inside the project's containerized
-musl build tooling (alpine:3.20). Nothing is installed on the host and no build
-product ever lands in the repo (shared-host rule / "ALL deps containerized").
-
-  build-openssh.sh          fetch (SHA256-verified) + build the ssh client
-                            static against musl + the vendored libcrypto
-                            (third-party/libcrypto).
-  test/run_ssh_build.sh     acceptance: build static ssh; assert it is fully
-                            static + prints its version. CI job:
-                            openssh-static-musl.
-
-THE OVMX TRANSPORT + EVENT-LOOP SUBSTITUTION (onto the veneer)
---------------------------------------------------------------------------------
-ssh uses STANDARD BSD sockets; they resolve to the OVMX BSD-sockets veneer over
-BGn: (src/vmstcpip/sockets), which routes to the executive -- the app never
-speaks $QIO/TCPIP$DEVICE:, and there is no raw Linux socket(). Correct layering:
-
-  ssh  ->  socket()/connect()/poll()/read()/write()   [STANDARD BSD]
-        ->  OVMX veneer over BGn:  ->  $QIO  ->  vms.ko  ->  host TCP/IP
-
-This directory carries the OpenSSH-side port glue (ovmx/):
-  ovmx_ssh_glue.{c,h}     ovmx_ssh_connect() (transport, returns the veneer's
-                          real pollable readiness fd) + ovmx_ssh_read/write/
-                          sshbuf_read (packet I/O -> ovmx_recv/ovmx_send).
-  sshconnect-veneer.patch ssh_connect_direct -> ovmx_ssh_connect.
-  packet-veneer.patch     the 3 packet.c data-I/O sites -> the glue; poll/ppoll
-                          UNCHANGED (they poll the veneer readiness fd).
-All guarded by -DOVMX_VENEER. build-openssh.sh OVMX_VENEER=1 links ssh against
-the self-contained veneer object set (proven static-musl by openssh-static-musl).
-
-Follow-on: the real KEX handshake over a live /dev/vms is the QEMU proof (stage
-ssh + a stock sshd in the initramfs); then ssh as the IMGACT image; then scp/sftp.
+would bloat the repo. The real port will be a PINNED FETCH: fetch exactly this
+tarball, verify it against the SHA256 above (mismatch = hard fail), and build
+entirely out-of-tree inside the project's containerized build tooling. Nothing
+is installed on the host and no build product ever lands in the repo
+(shared-host rule / "ALL deps containerized"). The crypto foundation it links is
+the static musl libcrypto already proven by the libcrypto-static-musl CI job
+(third-party/libcrypto, LibreSSL) — that job is INDEPENDENT of the retired
+veneer and stays.
 
 --------------------------------------------------------------------------------
 Rule 8 / clean-room
@@ -94,7 +81,6 @@ Rule 8 / clean-room
 OpenSSH (BSD/ISC) and LibreSSL (ISC/OpenSSL-style) are permissive OSS we may
 legitimately read, port and adapt — Rule 8's HARD INVARIANT is about
 reverse-engineered VMS formats/protocols and VSI/HPE source/binaries, which we
-never touch. The VMS-facing surface the shim speaks (TCPIP$DEVICE:, the QIO
-function map, the 8-byte BGn: sockaddr) is from public VSI OpenVMS TCP/IP
-Services docs + the already-landed BGn: driver, and the shim is labeled an OVMX
-design choice — no VMS-authentic claim is made for it.
+never touch. The VMS-facing surface the port speaks (TCPIP$DEVICE:, the QIO
+function map, the BGn: sockaddr, the C-RTL/DECC$SOCKET contract) is from public
+VSI OpenVMS TCP/IP Services docs + the already-landed executive facilities.

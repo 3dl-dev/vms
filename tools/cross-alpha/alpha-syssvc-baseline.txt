@@ -36,7 +36,9 @@ test_syssvc_imgact_tls       # A: LINK.EXE symbol-vector, x86/arm-only (link.c) 
 # pass=0 (the suite cannot start). Remove from this list once the subject is
 # staged for Alpha.
 test_syssvc_mmk_build        # B: needs MMK.EXE/TCC.EXE self-host (does not cross-build for Alpha yet)
-test_syssvc_ssh_kex          # B: needs sshd glibc-static cross for Alpha (not built yet)
+# (test_syssvc_ssh_kex was DELETED with the SSH-veneer scaffold, vms-d916 — the
+#  full OpenSSH-on-veneer acceptance arc it ran was LARP, not the real port. It
+#  is no longer built for any arch, so it is removed from this baseline.)
 test_syssvc_spawn_pipeline   # B: PIPESTAGE.EXE (tests/qemu/pipe_stage.c) not cross-staged for Alpha (pass=0, suite cannot start); $CREPRC/SPAWN/$STATUS facility PROVEN on Alpha same run by spawn_users 13/0 — rd vms-41f
 test_syssvc_tcpip_daytime    # B: shipped TCPIP$DAYTIME.EXE (tools/vms_tcpip_daytime.c) not cross-staged for Alpha (image-missing ENOENT, not a facility defect); accept->materialize-fd->fork/exec launch path PROVEN on Alpha same run by tcpip_inetd 7/7 — rd vms-41f
 #
@@ -47,14 +49,11 @@ test_syssvc_tcpip_daytime    # B: shipped TCPIP$DAYTIME.EXE (tools/vms_tcpip_day
 test_syssvc_getdvi           # C: ETH0: absent (boot -nic none, clipper 6-virtio hang) — rd vms-7ee
 test_syssvc_showdev          # C: ETH0: absent (boot -nic none, clipper 6-virtio hang) — rd vms-7ee
 test_syssvc_l2_datalink      # C: raw-L2 (AF_PACKET/SOCK_RAW) needs a non-loopback NIC; Alpha boots -nic none (same clipper 6-virtio-hang root as getdvi/showdev) — SKIPs 77 (0/0), no wrong-output — rd vms-7ee
-# ssh_server: the WRAPPED sshd cannot bind a real host port / accept an inbound
-# TCP session because the Alpha boot is `-nic none` (same -nic-none root cause as
-# getdvi/showdev). The FACILITY is proven present here: the INV-6 assertion "no
-# fabricated AF_UNIX socket — the listener/accepted/materialized fds are
-# executive-resident" PASSES; only the three assertions that need an actual
-# network session (bind BGn: to a host port, client handshake+auth, byte-exact
-# round-trip) fail. Unbaseline once the Alpha boot gets a NIC (rd vms-67f).
-test_syssvc_ssh_server       # C: sshd network session needs a NIC (boot -nic none); INV-6 socket check PASSES — rd vms-67f
+# (test_syssvc_ssh_server was DELETED with the SSH-veneer scaffold, vms-d916 —
+#  it exercised the hand-rolled wrapped sshd, which was LARP, not the real
+#  upstream OpenSSH port. It is no longer built for any arch, so it is removed
+#  from this baseline. The executive-resident BGn: server-socket facility it
+#  used to touch is still proven by test_syssvc_bg_server.)
 # procnam/startup_service/initialize: emulator-timing FLAKY (observed flapping
 # pass<->fail across runs — e.g. initialize was 8/0 one run, 7/1 the next on a
 # single disk-state/timing assertion; procnam races on process-ceased-mid-call;

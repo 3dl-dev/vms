@@ -243,8 +243,8 @@ COPY . /src/repo/
 # BUILD_TOOLS=ON (vms-4c2): tools/CMakeLists.txt is only CONFIGURED here, not
 # fully built -- the --target list below still names exactly the binaries
 # this image needs, so flipping this on adds only the requested targets
-# (vms_authorize; and vms_login -> LOGINOUT.EXE, the wrapped sshd's pw_shell
-# subject for test_syssvc_ssh_server) without pulling vms_mail/vms_monitor/etc.
+# (vms_authorize; and vms_login -> LOGINOUT.EXE, the console/network login
+# image the syssvc login suites activate) without pulling vms_mail/vms_monitor/etc.
 # into the build. OVMX_STATIC + BUILD_TOOLS=ON is not new ground: distro/
 # Dockerfile.bootable already builds the WHOLE tools/ tree this way for the
 # bootable distro image, so vms_authorize/vms_login compiling static+musl here
@@ -389,86 +389,10 @@ RUN cd /src/repo && \
     echo "--- DECC\$SHR.EXE (C run-time shareable; --use producer + IMGACT resolves it, vms-725) ---" && \
     ls -la 'build-static/bin/DECC$SHR.EXE'
 
-# SSH transport proof harnesses: ONE unified build (third-party/openssh/
-# build-ssh-harness.sh, static musl + vendored libcrypto, SHA-pinned OpenSSH)
-# emits BOTH proofs' binaries and stages each at its runtime path:
-#   /ovmxssh    (vms-22a KEX, port 2222): veneer-linked `ssh` CLIENT + stock sshd
-#               -> test_syssvc_ssh_kex drives the CLIENT transport over BGn:.
-#   /ovmxsshsrv (vms-0cd, port 2223): STOCK ssh client + WRAPPED sshd (listen/
-#               accept + connection I/O over BGn:) -> test_syssvc_ssh_server drives
-#               the SERVER transport (a stock client connects inbound).
-# The wrapped sshd's listener binds a REAL host port (the IP stack is the host's),
-# so an ordinary client connects; the accepted connection reaches the fork+exec'd
-# sshd-session via #815 (channel inheritance) + #822 (self-describing handle).
-# ABSENCE is fatal -- a missing binary/key would silently turn a proof into a
-# no-op while the job stayed green.
-RUN cd /src/repo && \
-    CC=musl-gcc WORK=/tmp/ovmx-ssh \
-        sh third-party/openssh/build-ssh-harness.sh > /tmp/sshh.log 2>&1 || \
-        { echo "FATAL: SSH harness build failed"; tail -60 /tmp/sshh.log; exit 1; } && \
-    KSSH=$(sed -n 's/^OVMX_KEX_SSH=//p' /tmp/sshh.log | tail -1) && \
-    KSSHD=$(sed -n 's/^OVMX_KEX_SSHD=//p' /tmp/sshh.log | tail -1) && \
-    KEYGEN=$(sed -n 's/^OVMX_KEX_KEYGEN=//p' /tmp/sshh.log | tail -1) && \
-    SSSH=$(sed -n 's/^OVMX_SRV_SSH=//p' /tmp/sshh.log | tail -1) && \
-    SSSHD=$(sed -n 's/^OVMX_SRV_SSHD=//p' /tmp/sshh.log | tail -1) && \
-    mkdir -p /ovmxssh/etc /ovmxssh/libexec /ovmxssh/empty \
-             /ovmxsshsrv/etc /ovmxsshsrv/libexec /ovmxsshsrv/empty && \
-    chmod 755 /ovmxssh/empty /ovmxsshsrv/empty && \
-    cp "$KSSH" /ovmxssh/ssh && cp "$KSSHD" /ovmxssh/sshd && chmod +x /ovmxssh/ssh /ovmxssh/sshd && \
-    cp "$SSSH" /ovmxsshsrv/ssh && cp "$SSSHD" /ovmxsshsrv/sshd && chmod +x /ovmxsshsrv/ssh /ovmxsshsrv/sshd && \
-    ls -la /ovmxssh/libexec/sshd-session /ovmxssh/libexec/sshd-auth \
-           /ovmxsshsrv/libexec/sshd-session /ovmxsshsrv/libexec/sshd-auth && \
-    # Shared host + user keypairs (generated fresh, checked nowhere).
-    "$KEYGEN" -t ed25519 -f /ovmxssh/etc/hostkey -N "" -q && \
-    "$KEYGEN" -t ed25519 -f /ovmxssh/etc/userkey -N "" -q && \
-    cp /ovmxssh/etc/userkey.pub /ovmxssh/etc/authorized_keys && \
-    chmod 600 /ovmxssh/etc/hostkey /ovmxssh/etc/userkey /ovmxssh/etc/authorized_keys && \
-    cp /ovmxssh/etc/hostkey /ovmxssh/etc/userkey /ovmxssh/etc/authorized_keys /ovmxsshsrv/etc/ && \
-    chmod 600 /ovmxsshsrv/etc/hostkey /ovmxsshsrv/etc/userkey /ovmxsshsrv/etc/authorized_keys && \
-    # KEX (2222): wrapped client -> stock sshd.
-    printf '%s\n' \
-        'Port 2222' 'ListenAddress 127.0.0.1' 'HostKey /ovmxssh/etc/hostkey' \
-        'PidFile /ovmxssh/sshd.pid' 'AuthorizedKeysFile /ovmxssh/etc/authorized_keys' \
-        'StrictModes no' 'PubkeyAuthentication yes' 'PasswordAuthentication no' \
-        'LogLevel VERBOSE' 'Subsystem sftp internal-sftp' \
-        > /ovmxssh/etc/sshd_config && \
-    printf '%s\n' \
-        'Host testpeer' '  HostName 127.0.0.1' '  Port 2222' '  User root' \
-        '  IdentityFile /ovmxssh/etc/userkey' '  StrictHostKeyChecking no' \
-        '  UserKnownHostsFile /dev/null' '  IdentitiesOnly yes' \
-        > /ovmxssh/etc/ssh_config && \
-    # SERVER (2223): stock client -> WRAPPED sshd (listen/accept over BGn:).
-    # AddressFamily inet: the wrapped socket()/bind() ride BGn:, which is AF_INET
-    # only -- keep sshd off any AF_INET6 listener attempt. LogLevel DEBUG1 so a
-    # bind/listen failure over the veneer is fully traced in the captured stderr.
-    # PubkeyAuthentication yes keeps the transport proof; PasswordAuthentication
-    # yes activates the vms-0cd 3c SYSUAF/Purdy auth (the wrapped sshd links our
-    # sys_auth_passwd via -DCUSTOM_SYS_AUTH_PASSWD -- a link failure there would
-    # fail the build, so a running wrapped sshd already proves the shim is in).
-    # UsePAM no: we build --without-pam, and SYSUAF is the only account authority.
-    printf '%s\n' \
-        'Port 2223' 'ListenAddress 127.0.0.1' 'AddressFamily inet' \
-        'HostKey /ovmxsshsrv/etc/hostkey' \
-        'PidFile /ovmxsshsrv/sshd.pid' 'AuthorizedKeysFile /ovmxsshsrv/etc/authorized_keys' \
-        'StrictModes no' 'PubkeyAuthentication yes' 'PasswordAuthentication yes' \
-        'PermitRootLogin yes' 'UsePAM no' 'KbdInteractiveAuthentication no' \
-        'LogLevel DEBUG1' 'Subsystem sftp internal-sftp' \
-        > /ovmxsshsrv/etc/sshd_config && \
-    printf '%s\n' \
-        'Host srvpeer' '  HostName 127.0.0.1' '  Port 2223' '  User root' \
-        '  IdentityFile /ovmxsshsrv/etc/userkey' '  StrictHostKeyChecking no' \
-        '  UserKnownHostsFile /dev/null' '  IdentitiesOnly yes' \
-        'Host srvpw' '  HostName 127.0.0.1' '  Port 2223' \
-        '  PreferredAuthentications password' '  PubkeyAuthentication no' \
-        '  StrictHostKeyChecking no' '  UserKnownHostsFile /dev/null' \
-        '  NumberOfPasswordPrompts 1' \
-        > /ovmxsshsrv/etc/ssh_config && \
-    echo "--- /ovmxssh (KEX 2222) + /ovmxsshsrv (server 2223) staged ---" && \
-    ls -la /ovmxssh /ovmxsshsrv && \
-    { readelf -d /ovmxssh/ssh 2>/dev/null | grep -q NEEDED && \
-        { echo "FATAL: staged KEX ssh is not static"; exit 1; } || true; } && \
-    { readelf -d /ovmxsshsrv/sshd 2>/dev/null | grep -q NEEDED && \
-        { echo "FATAL: staged server sshd is not static"; exit 1; } || true; }
+# (The SSH transport-proof harness build + /ovmxssh|/ovmxsshsrv staging was
+# RETIRED with the SSH scaffold, vms-d916: it built the --wrap veneer over a
+# musl-static cross ELF, which Baron ruled LARP. The faithful SSH is the real
+# upstream OpenSSH port on the DECC$SOCKET/$QIO C-RTL substrate, vms-9ef.)
 
 # GENUINE ODS-2 codec proof (rd vms-dcd, epic vms-208). Stage the REAL-VAX
 # fixture as the ODS-2 volume the executive ACP ($MOUNT/$QIO over /dev/vms in
@@ -680,19 +604,6 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE && \
     cp /initramfs/bin/DCL.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
     chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE && \
-    # LOGINOUT.EXE at SYS$SYSTEM (vms-29b) -- the session image the wrapped
-    # OpenSSH sshd's pw_shell now names (ovmx_sshd_loginout_path resolves
-    # SYS$SYSTEM:LOGINOUT.EXE). OpenSSH's allowed_user() stat()s pw_shell at auth
-    # time, so a valid SYSUAF user is REJECTED before the SYSUAF read unless this
-    # file exists -- test_syssvc_ssh_server's accept half. The handoff never
-    # execs it in a bare KE process (it $CREPRC's LOGINOUT, which fails closed
-    # with no /run/ovmx-boot staging); this only satisfies the shell-existence
-    # precondition, the faithful analogue of the DCL.EXE staging above. LOWERCASE
-    # basename to match vmsfs_to_linux_path's translation of the .EXE filename
-    # (the exact path the wrapped sshd stat()s: /vms/.../SYSEXE/loginout.exe).
-    { cp /src/repo/build-static/bin/LOGINOUT.EXE /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/loginout.exe || \
-      { echo "FATAL: LOGINOUT.EXE was not built into the static tree -- the wrapped sshd's pw_shell existence check (test_syssvc_ssh_server accept half) would reject every SYSUAF user"; exit 1; }; } && \
-    chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/loginout.exe && \
     # TCPIP$DAYTIME.EXE at SYS$SYSTEM (vms-477) -- the REAL standalone RFC 867
     # service image the auxiliary server launches; test_syssvc_tcpip_daytime.c
     # execs it from this path (OVMX_DAYTIME default
@@ -887,30 +798,6 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
            /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/ || \
         { echo "FATAL: $f was not staged into the initramfs -- F\$IDENTIFIER reads the rights database now, and every identifier assertion would silently become a miss"; exit 1; }; \
     done && \
-    # SSH KEX proof staging (vms-22a): the veneer-linked ssh + stock sshd (+
-    # session/auth workers) + generated keys/config, plus the minimal account
-    # files sshd privilege separation needs (root = the login user, sshd = the
-    # privsep user). test_syssvc_ssh_kex starts sshd on 127.0.0.1 and drives the
-    # veneer ssh through a REAL KEX over BGn:. ABSENCE is fatal -- a missing
-    # binary/key would turn the KEX proof into a no-op while the job stayed green.
-    mkdir -p /initramfs/ovmxssh /initramfs/ovmxsshsrv /initramfs/etc /initramfs/root && \
-    cp -a /ovmxssh/. /initramfs/ovmxssh/ && \
-    cp -a /ovmxsshsrv/. /initramfs/ovmxsshsrv/ && \
-    chmod 755 /initramfs/ovmxssh/empty /initramfs/ovmxsshsrv/empty && \
-    printf '%s\n' \
-        'root:x:0:0:root:/root:/bin/sh' \
-        'sshd:x:74:74:sshd privsep:/ovmxssh/empty:/bin/false' \
-        > /initramfs/etc/passwd && \
-    printf '%s\n' 'root:x:0:' 'sshd:x:74:' > /initramfs/etc/group && \
-    ln -sf busybox /initramfs/bin/false && \
-    { [ -x /initramfs/ovmxssh/ssh ] && [ -x /initramfs/ovmxssh/sshd ] && \
-      [ -x /initramfs/ovmxssh/libexec/sshd-session ] && \
-      [ -f /initramfs/ovmxssh/etc/hostkey ] && \
-      [ -x /initramfs/ovmxsshsrv/ssh ] && [ -x /initramfs/ovmxsshsrv/sshd ] && \
-      [ -x /initramfs/ovmxsshsrv/libexec/sshd-session ] && \
-      [ -f /initramfs/ovmxsshsrv/etc/hostkey ] || \
-      { echo "FATAL: SSH harness (KEX + server) not fully staged into initramfs"; exit 1; }; } && \
-    echo "--- SSH harness (KEX /ovmxssh + server /ovmxsshsrv) staged into initramfs ---" && \
     # Init script (PID 1)
     cp /src/tests/qemu/init.sh /initramfs/init && \
     if [ "$NEGATIVE_CONTROL" = "1" ]; then \

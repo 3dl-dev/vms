@@ -150,8 +150,9 @@ printf '%s\n' 'static const char *evade_h(void) { return getenv("USER"); }' \
 expect_red "H: a reader of USER is caught -- the vms-b2e blind spot is closed"
 
 # --- I. LOGNAME is watched too ----------------------------------------------
-# It has no census entry as a reader and vmssshd is its only writer; the gate
-# must be WATCHING it rather than merely listing the names it happens to find.
+# It has no census entry as a reader and (since the vms-d916 retirement deleted
+# vmssshd, its former sole writer) no writer either; the gate must be WATCHING
+# it rather than merely listing the names it happens to find.
 fresh_tree
 printf '%s\n' 'static const char *evade_i(void) { return getenv("LOGNAME"); }' \
     >> "$SANDBOX/t/src/vmsdcl/dcl_main.c"

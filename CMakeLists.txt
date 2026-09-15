@@ -1100,14 +1100,12 @@ if(BUILD_TESTS)
     endif()  # TARGET PARTS
 endif()
 
-# vmssshd requires libssh — skip if headers not available
-find_path(LIBSSH_INCLUDE_DIR NAMES libssh/libssh.h)
-find_library(LIBSSH_LIBRARY NAMES ssh)
-if(LIBSSH_INCLUDE_DIR AND LIBSSH_LIBRARY)
-    add_subdirectory(src/vmsssh)
-else()
-    message(STATUS "libssh not found — vmssshd will not be built")
-endif()
+# The SSH scaffold (libssh vmssshd + the --wrap OpenSSH veneer) was RETIRED
+# (Baron 2026-09-15, vms-d916): the faithful SSH is the real upstream OpenSSH
+# port built native on the DECC$SOCKET/$QIO substrate (vms-9ef), not a reimpl or
+# wrapper. src/vmsssh/ no longer builds a daemon; its surviving substrate TUs
+# (ssh_ident.c, cred_drop.c, term_map.c) compile directly into their consumers
+# (TCPIP$INETD via tools/, and the tests/vmsssh unit tests).
 
 # IMGACT.EXE — the ELF interpreter itself (aarch64-only until bead vms-913.11).
 if(OVMX_IMGACT)

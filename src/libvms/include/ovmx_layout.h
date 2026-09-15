@@ -168,16 +168,13 @@
  * SYSUAF parsers of its own -- does not read SYSUAF at all. */
 #define VMS_PROVISION_PATH   "SYS$SYSTEM:PROVISION.EXE"
 #define VMS_LOGINOUT_PATH    "SYS$SYSTEM:LOGINOUT.EXE"
-/* ZERO READERS as of vms-47b: its only reader was STARTUP.EXE's
- * start_sshd(), deleted with the rest of PID 1's service starting. SSH is
- * cancelled (vms-02d) as a startup-procedure target, and no startup
- * procedure names this constant -- but src/vmsssh/CMakeLists.txt still
- * builds VMSSSHD.EXE when libssh is present, so "no image of this name
- * is built" is not a claim this file can make. A service is started from
- * SYS$MANAGER:SYSTARTUP_VMS.COM with RUN/DETACHED, which takes its image
- * as a filespec in the procedure -- so a new service needs no constant
- * here. */
-#define VMS_SSHD_PATH        "SYS$SYSTEM:VMSSSHD.EXE"
+/* VMS_SSHD_PATH DELETED (vms-d916): it had zero readers since vms-47b (its only
+ * reader was STARTUP.EXE's start_sshd(), removed with PID 1's service starting),
+ * and the hand-rolled VMSSSHD.EXE it named has now been RETIRED as LARP -- no
+ * image of that name is built any longer. The faithful SSH server is the real
+ * upstream OpenSSH port (vms-9ef), which ships inside the TCP/IP Services kit
+ * and is started, like any service, from SYS$MANAGER:SYSTARTUP_VMS.COM with
+ * RUN/DETACHED naming its image as a filespec -- needing no constant here. */
 #define VMS_AUTHORIZE_PATH   "SYS$SYSTEM:AUTHORIZE.EXE"
 #define VMS_INITIALIZE_PATH  "SYS$SYSTEM:INITIALIZE.EXE"
 

@@ -1,5 +1,14 @@
 # Design: Porting real OpenSSH to OVMX (server + clients)
 
+> **⚠ vms-d916 note (2026-09-15):** this doc's TOP-LEVEL direction — port the REAL
+> upstream OpenSSH, do not hand-roll — is the live plan and is now tracked under
+> `rd vms-9ef`. But any sections here that describe the interim `-DOVMX_VENEER`
+> patch set, `build-openssh.sh` / `test/run_ssh_build.sh`, the `--wrap` sshd, or
+> the `openssh-static-musl` CI job describe a RETIRED stand-in (Baron ruled the
+> veneer/wrap approach LARP; those files are deleted). Read the substrate-ladder
+> doc `docs/design-openssh-devener-map.md` as the authoritative build shape: raise
+> DECC\$SOCKET/\$QIO + C-RTL until STOCK OpenSSH links unmodified, no veneer.
+
 > **Status:** scope/plan (not implementation). Item: `vms-843` (redirected).
 > **Operator ruling (2026-08-14):** SSH is the networking client that matters.
 > **Do NOT hand-roll SSH** — crypto + protocol are security-critical. **Port the

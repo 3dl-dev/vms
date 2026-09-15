@@ -583,25 +583,10 @@ rms-dirfind-exact-version-ignored"
 # scoping out.
 # ---------------------------------------------------------------------------
 SCOPE_OUT_UNIT_DIRS=""
-SCOPE_OUT_SUITES="test_syssvc_ssh_kex test_kmod_cluster_seam"
+SCOPE_OUT_SUITES="test_kmod_cluster_seam"
 
 scope_out_why() {
     cat <<'EOF'
-test_syssvc_ssh_kex -- a full OpenSSH end-to-end ACCEPTANCE test (its own header:
-"THE Rule-9 acceptance for the OpenSSH-on-veneer arc", vms-22a), not a
-single-facility negative control. A veneer-linked `ssh` runs a REAL SSH key
-exchange + pubkey auth + remote command against a stock in-guest `sshd` over the
-BSD-sockets veneer (ovmx_socket/ovmx_connect -> BGn: -> $QIO -> host loopback),
-and can EXIT_SKIP when no executive is present. It has NO isolatable single-site
-injection: runtime-MEASURED, it does not redden under bg-recv-length-zeroed (it
-does not use the classic vms_ioctl_bg_recv path) NOR under bgsock-recv-length-
-zeroed (both reddened exactly their own suites, ssh_kex stayed green) -- OpenSSH's
-own framing + retries absorb a single recv-length fault, so no per-facility defect
-turns it red honestly. Its value is as an integration acceptance test, kept and
-run; it is simply not a per-facility negctl target, so it is declared out of the
-coverage gate rather than carried as a fake anchor (INV-6). Prior state: it was
-named ONLY by bg-recv-length-zeroed, whose claim over it was stale/non-reddening.
-
 test_kmod_cluster_seam -- the FC-P0.2 SUBSTRATE-CONTRACT conformance test, not a
 VMS executive facility. It proves the Linux kbackend BINDINGS satisfy the seam
 contract the executive is built ON (exec_kbackend_linux.h §14-18: dev_add_pack /
@@ -6371,7 +6356,7 @@ EOF
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed. NOTE (vms-387): test_syssvc_ssh_kex was previously named here as a knock-on, but runtime measurement shows it does NOT redden under this defect -- its OpenSSH veneer rides ovmx_socket, not this classic vms_ioctl_bg_recv path, and OpenSSH's own framing absorbs a single recv-length fault. That stale/fake claim is removed; ssh_kex is a full E2E acceptance test declared in SCOPE_OUT_SUITES rather than carried as a fake anchor.";;
+        why)          echo "vms_ioctl_bg_recv() reports the received byte count as 0 instead of the count the host kernel's kernel_recvmsg returned, so the echo comes back with a zero IOSB byte count (and the userspace wrapper then copies 0 bytes out). The read still returns SS\$_NORMAL -- a completed recv of nothing is not an error to the driver -- so only the byte-exact echo assertion sees it. One assignment zeroed. NOTE (vms-387): test_syssvc_ssh_kex was once named here as a knock-on, but runtime measurement showed it did NOT redden under this defect -- its OpenSSH veneer rode ovmx_socket, not this classic vms_ioctl_bg_recv path, and OpenSSH's own framing absorbs a single recv-length fault. That stale/fake claim was removed. The veneer-linked ssh_kex acceptance test has since been DELETED entirely by the vms-d916 SSH-scaffold retirement (the veneer arc it exercised was LARP, not the real OpenSSH port), so it is no longer named or scoped anywhere.";;
         require_fail) cat <<'EOF'
 BG $QIO IO$_READVBLK returns the exact bytes the echo peer sent back
 EOF
@@ -6555,15 +6540,14 @@ EOF
         case "$_f" in
         facility)     echo "INET pseudo-device BGn: SERVER path -- the IO\$_ACCESS|IO\$M_ACCEPT (accept) handler of the executive-resident BGn: driver (vms_ioctl_bg_accept, src/kernel-core/vms_bg.c, vms-698). The inbound half of the network facility: a VMS program \$ASSIGNs TCPIP\$DEVICE:, \$QIOs bind + listen, then accepts an inbound TCP connection onto a SECOND BG channel, and the accepted socket lives IN the executive (host in-kernel socket API, exec_socket_accept) exactly as the vms-527 client socket does.";;
         targets)      echo "kernel-core/vms_bg.c";;
-        suites_red)   echo "test_syssvc_bg_server test_syssvc_ssh_server";;
+        suites_red)   echo "test_syssvc_bg_server";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_ioctl_bg_accept() completes exec_socket_accept and reports SS\$_NORMAL, but the mutation RELEASES the accepted socket instead of installing it onto the target channel (tch->sock stays NULL) -- the executive-resident handoff the whole server path turns on. With the accepted holder dropped and set NULL, the SS\$_BADPARAM branch is skipped, so the accept still returns SS\$_NORMAL and the accept-status assertion stays green; but the accepted channel now carries no socket, so the subsequent IO\$_READVBLK and IO\$_WRITEVBLK on it both fail SS\$_IVCHAN -- reddening exactly the two accepted-channel assertions. It equally reddens test_syssvc_ssh_server's full-session assertion: with the accepted channel socketless, the wrapped sshd's session I/O over the accepted connection fails, so the stock client's remote command never returns OVMX_SRV_OK byte-exact and the session assertion fails; the bind/listen (a real host client's connect still completes against the listener) and the no-executive honest-skip stay green. The assign / setmode / bind / listen assertions all stay green. One install replaced by a release.";;
+        why)          echo "vms_ioctl_bg_accept() completes exec_socket_accept and reports SS\$_NORMAL, but the mutation RELEASES the accepted socket instead of installing it onto the target channel (tch->sock stays NULL) -- the executive-resident handoff the whole server path turns on. With the accepted holder dropped and set NULL, the SS\$_BADPARAM branch is skipped, so the accept still returns SS\$_NORMAL and the accept-status assertion stays green; but the accepted channel now carries no socket, so the subsequent IO\$_READVBLK and IO\$_WRITEVBLK on it both fail SS\$_IVCHAN -- reddening exactly the two accepted-channel assertions. The bind/listen (a real host client's connect still completes against the listener) and the no-executive honest-skip stay green. The assign / setmode / bind / listen assertions all stay green. One install replaced by a release. (The wrapped-sshd full-session knock-on assertion this defect once also reddened lived in test_syssvc_ssh_server, deleted with the vms-d916 SSH-scaffold retirement; the bg_server accepted-channel assertions are the surviving executive-resident proof.)";;
         require_fail) cat <<'EOF'
 the accepted BG channel returns the exact bytes the inbound client sent
 the accepted BG channel sends a reply back to the inbound client
-the remote command output came back BYTE-EXACT -- a real inbound session rode BGn: through sshd's fork+exec+dup2 (materialized executive fd) into sshd-session (vms-0cd)
 EOF
                       ;;
         knock_on_fail) echo "";;

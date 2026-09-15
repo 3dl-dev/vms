@@ -291,6 +291,7 @@ int main(void)
           "(newest version resolves)");
 
     st = open_first_rec(DIRSPEC "WKOBJ.OBJ;1", rec, sizeof(rec));
+    /* negctl: rms-dirfind-exact-version-ignored */
     check(st == RMS$_NORMAL && strcmp(rec, "V1") == 0,
           "A4: sys$open WKOBJ.OBJ;1 still reads the ;1 payload 'V1' -- both versions "
           "COEXIST (the VMS-versioning teeth a POSIX overwrite cannot fake)");
@@ -300,6 +301,7 @@ int main(void)
           "A5: sys$open WKOBJ.OBJ;2 reads 'V2' (explicit newest version)");
 
     st = open_first_rec(DIRSPEC "WKOBJ.OBJ;3", rec, sizeof(rec));
+    /* negctl: rms-dirfind-exact-version-ignored */
     check(st == RMS$_FNF,
           "A6: sys$open WKOBJ.OBJ;3 (no such version) -> RMS$_FNF (fail-honest)");
 

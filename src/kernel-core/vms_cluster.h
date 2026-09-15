@@ -316,6 +316,30 @@ struct vms_csb {
 
 	/* ---- the SCS connection this CSB's state describes (p. 7-23) ---- */
 	uint32_t sw_version;        /* software version as advertised, 0 if unknown */
+	/*
+	 * THE PEER'S OWN ADVERTISED SOFTWARE VERSION (rd vms-1ee), the 8-byte
+	 * token it put in its SCS formation body at abs 72 (spec SS4(g)), copied
+	 * out of the port's circuit -- never inferred, never defaulted. It is
+	 * the TRUST ANCHOR for "is this member running the same implementation
+	 * we are": a real VAX advertises its real "VMS Vx.y" here, and anything
+	 * that is not byte-identical to THIS node's own advertised token is, as
+	 * far as this executive can honestly say, not OVMX.
+	 *
+	 * `peer_swver_len` 0 is the honest "this member has advertised nothing",
+	 * which is NOT the same as "it is one of us" -- see the LDWV gate in
+	 * vms_dlm_ldwv.h SS3.
+	 */
+	uint8_t  peer_swver[VMS_CLUSTER_SWVER_LEN];
+	uint8_t  peer_swver_len;
+	/*
+	 * ... and the ONE derived question anybody asks of it: is that token
+	 * byte-identical to the one THIS node advertises? Derived where both
+	 * are in scope (cnxman_csb_set_swver) so no reader re-decides it, and
+	 * so no version literal is needed anywhere (INV-1). 0 covers BOTH
+	 * "advertised something else" and "advertised nothing": neither is
+	 * proof, and the split-brain gate treats them the same.
+	 */
+	uint8_t  peer_is_ours;
 	/* Our VMS$VAXcluster CDT to this CM. Written ONLY by
 	 * cnxman_csb_bind_connection() (vms_cnxman_csb.h), because adopting a
 	 * connection and restarting this block's dialogue counters on it are the
@@ -481,7 +505,12 @@ struct vms_ldwv {
 				   * diagnostic can say which reading it rests on,
 				   * rather than the fact being invisible. */
 	uint8_t  n_members;    /* systems represented, for the diagnostics    */
-	uint8_t  pad;
+	uint8_t  any_foreign;  /* 1 = a member could NOT be proven OVMX. THE
+				* ALL-OVMX GATE (vms-3e3): the OVMX-own directory
+				* hash (rung A", design SS3.6) is grounded ONLY when
+				* this is 0. Set from the same survey that feeds the
+				* split-brain gate (#1138), so the two rest on one
+				* reading of the member set, never two. */
 	uint32_t entry[VMS_LDWV_MAX_ENTRIES];  /* CSIDs; own entries read 0   */
 };
 
@@ -494,7 +523,19 @@ struct vms_club {
 	uint8_t    local_csid_valid; /* 0 = still NEW; issues no DLM traffic */
 	uint8_t    shutdown;         /* the CLUB's SHUTDOWN flag (p. 7-49) */
 	uint8_t    quorum_lost;      /* CEVOTES < QUORUM right now (FC-P3.7 sets) */
-	uint8_t    pad0;
+	/*
+	 * THE ENFORCEMENT LATCH (FC-P8.1, rd vms-b6d). Set the first time this
+	 * node, as a COMMITTED member whose own CSB counts, actually PERCEIVED
+	 * quorum -- p. 7-4's "cluster activity proceeds while the available
+	 * votes are >= QUORUM". Only from that moment on is a subsequent
+	 * quorum_lost a real LOSS rather than arithmetic that has not finished:
+	 * a member that has not yet learned its peers' PARAMS honestly computes
+	 * QUORUM=(0+2)/2=1 over an empty vote set and shows quorum_lost=1, and
+	 * freezing on THAT would hang every single join. So enforcement reads
+	 * this latch, never the raw flag. Cleared only by cnxman_club_init() --
+	 * a new cluster life earns its own perception of quorum.
+	 */
+	uint8_t    quorum_armed;
 	int32_t    local_csb;        /* index of the local system's CSB, -1 = none */
 
 	/* ---- effective quorum data (p. 7-26/7-49). FC-P3.7 computes these;

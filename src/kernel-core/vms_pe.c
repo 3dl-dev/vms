@@ -492,8 +492,11 @@ void vms_pe_stop(struct vms_cluster *cl)
 	/* SS4(O.30): announce the clean leave before tearing anything down --
 	 * pe_fsm_shutdown below stops the beat pe_may_send checks. Best
 	 * effort: with no identity to send from this is a documented no-op,
-	 * never a blocking failure of CLUSTER_STOP. */
-	(void)pe_fsm_send_last_gasp(&pe->fsm);
+	 * never a blocking failure of CLUSTER_STOP. Through pe_send_last_gasp so
+	 * the builder's at-most-once guard dedups against the connection
+	 * manager's own departure emit (vms_cnxman_stop) -- whichever ran first
+	 * already put the one gasp on the wire. */
+	(void)pe_send_last_gasp(pe);
 	pe_fsm_shutdown(&pe->fsm);
 
 	if (cl->fork != NULL) {
@@ -597,6 +600,24 @@ int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
 	return (int)pe_send_status(pe_vc_send_dg(&pe->fsm, dst, body, len));
 }
 
+/*
+ * pe_send_last_gasp - the clean-leave departure announcement (wire spec
+ * SS4(O.30), p. 7-29). The glue-facing one-line dereference into the pure
+ * builder pe_fsm_send_last_gasp, which owns the frame and its AT-MOST-ONCE
+ * guard (a node leaves once). Best effort: the builder is itself a documented
+ * no-op when this port holds no cluster identity to send from, so this never
+ * blocks a CLUSTER_STOP -- it returns SS$_NORMAL whether a gasp went out, was
+ * already sent, or there was nothing to announce, and SS$_NOSUCHDEV only when
+ * there is no port at all.
+ */
+int pe_send_last_gasp(struct vms_pe *pe)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	(void)pe_fsm_send_last_gasp(&pe->fsm);
+	return SS__NORMAL;
+}
+
 int pe_send_frame(struct vms_pe *pe, vms_scs_sysid_t dst,
 		  const uint8_t *frame, uint32_t len)
 {
@@ -613,6 +634,14 @@ int pe_send_refusal(struct vms_pe *pe, vms_scs_sysid_t dst,
 	return pe_vc_send_refusal_get(&pe->fsm, dst, out) == 0
 		       ? 0
 		       : (int)SS__NOSUCHDEV;
+}
+
+int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
+		  uint32_t cap, uint8_t *out_len)
+{
+	if (pe == (struct vms_pe *)0)
+		return -1;
+	return pe_fsm_peer_swver(&pe->fsm, sysid, out, cap, out_len);
 }
 
 int pe_addr(struct vms_pe *pe, vms_scs_sysid_t dst, struct vms_scs_addr *out)

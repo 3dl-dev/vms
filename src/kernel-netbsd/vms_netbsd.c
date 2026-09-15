@@ -961,6 +961,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_TERM_CREATE:
 	case VMS_IOCTL_TERM_DELETE:
 	case VMS_IOCTL_TERM_RESOLVE:
+	case VMS_IOCTL_TERM_SETLOGIN:
+	case VMS_IOCTL_TERM_GETLOGIN:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -991,6 +993,10 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_term_delete(proc, (unsigned long)uarg);    break;
 		case VMS_IOCTL_TERM_RESOLVE:
 			r = vms_ioctl_term_resolve(proc, (unsigned long)uarg);   break;
+		case VMS_IOCTL_TERM_SETLOGIN:
+			r = vms_ioctl_term_setlogin(proc, (unsigned long)uarg);  break;
+		case VMS_IOCTL_TERM_GETLOGIN:
+			r = vms_ioctl_term_getlogin(proc, (unsigned long)uarg);  break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}
@@ -1264,6 +1270,12 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CLUSTER_DIAG_JOIN:
 		return vms_facility_errno(
 		    vms_ioctl_cluster_diag_join(NULL, (unsigned long)data));
+	/* rd vms-94c: the DLM arm's emit ledger, same DISPATCH-ALWAYS terms --
+	 * a read-only projection of struct vms_dlm_scs under the fork mutex,
+	 * and the run that most needs it is one where the arm never started. */
+	case VMS_IOCTL_CLUSTER_DIAG_DLM:
+		return vms_facility_errno(
+		    vms_ioctl_cluster_diag_dlm(NULL, (unsigned long)data));
 
 	/*
 	 * Lock-manager facility (DLM, src/kernel-core/vms_lock.c) -- P4-A, rd

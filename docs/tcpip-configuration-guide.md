@@ -210,8 +210,11 @@ At 0.6 exactly one service is enabled by default:
 DAYTIME 13 SYS$SYSTEM:TCPIP$DAYTIME.EXE
 ```
 
-(An SSH line is present but commented out until `VMSSSHD.EXE` ships.) To enable
-a service, add or uncomment its line and restart `TCPIP$STARTUP`.
+(An SSH line is present but commented out by default: `VMSSSHD.EXE` **ships and
+works** — the shipped image simply does not auto-start it, an operator
+security-posture choice rather than a missing feature; see the SSH note under
+[Not yet supported at 0.6](#not-yet-supported-at-06).) To enable a service, add
+or uncomment its line and restart `TCPIP$STARTUP`.
 
 ---
 
@@ -233,9 +236,12 @@ $ SET HOST 192.168.1.10
 These appear in the design (`docs/design-tcpip-services-ovmx.md`) or in OpenVMS
 but are **not shipped** at 0.6. Do not rely on them:
 
-- **NIC as a VMS device (`EWA0:`/`EZAn:`).** The NIC is not exposed as a VMS
-  device; the bootable image runs with the substrate NIC only. `SHOW DEVICE
-  EWA0:` and `$ASSIGN EWA0:` do not work. (compat: `nic-device: absent`.)
+- **Raw NIC-as-VMS-device data path (`EWA0:`/`EZAn:`).** The NIC *is* exposed as
+  a VMS device — it surfaces as `ETH0:` (device-native naming, vms-9d2), so
+  `SHOW DEVICE ETH0:` / `$GETDVI ETH0:` resolve a real `DC$_SCOM` device. What is
+  still deferred is a raw NIC-level I/O path under the classic `EWA0:`/`EZAn:`
+  names; TCP data rides `BGn:` instead. (compat: `tcpip-services$nic-device:
+  implemented/real`; the raw path is `tcpip-services$deferred-rungs: absent`.)
 - **Name resolution / BIND resolver.** `PING`, `TELNET`, `FTP`, and `SET HOST`
   require dotted-quad IPv4 literals.
 - **DHCP / auto-configuration.**
@@ -245,7 +251,14 @@ but are **not shipped** at 0.6. Do not rely on them:
 - **`TCPIP` verb grammar beyond the subcommands listed above** — e.g.
   `SHOW DEVICE_SOCKET`, `SHOW COMMUNICATION`, `SHOW PROTOCOL`, `SET SERVICE`,
   `SET PROTOCOL`, `SET COMMUNICATION` are design-only.
-- **SSH / `VMSSSHD.EXE`** — commented out in the service DB; not in the image.
+- **SSH auto-start** — `VMSSSHD.EXE` **ships**: it is built and installed to
+  `SYS$SYSTEM:`, and a wrapped OpenSSH `sshd` authenticates a real SYSUAF user
+  (Purdy, over the Files-11 ACP) into an interactive DCL session over `BGn:`
+  (runtime-proven, vms-9cc). What is not yet wired is **auto-start**: the SSH
+  line is disabled by default in `TCPIP$SERVICE.DAT` as an operator
+  security-posture choice, so the shipped image does not launch it on boot
+  (vms-9ef). Uncomment the SSH line and restart `TCPIP$STARTUP` to run it.
+  (compat: `ssh$remote-login: implemented/real`.)
 - **Server daemons** (TELNET/FTP/SMTP/NTP/SNMP/LPD servers) — only the TELNET
   and FTP *clients* and the DAYTIME server exist. The wizard's "Server
   components" menu is a no-op.

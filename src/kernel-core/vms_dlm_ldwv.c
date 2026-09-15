@@ -103,6 +103,15 @@ struct ldwv_survey {
 	uint8_t  any_unknown;    /* a member with no learned LOCKDIRWT      */
 	uint8_t  any_learned;    /* a member WITH a learned LOCKDIRWT       */
 	uint8_t  all_zero;       /* every learned weight is 0               */
+	/*
+	 * THE GATE (rd vms-1ee). Kept SEPARATE from `any_learned` because it is
+	 * the whole safety condition of the local-withhold fallback below: has
+	 * any member OTHER THAN THIS ONE advertised a real LOCKDIRWT?
+	 */
+	uint8_t  any_peer_learned;
+	uint8_t  local_learned;  /* ... and did WE contribute one            */
+	uint8_t  local_withheld; /* the fallback fired: ours was withheld    */
+	uint8_t  any_foreign;    /* a member we cannot prove is OVMX         */
 	uint8_t  pad;
 };
 
@@ -115,13 +124,79 @@ static void ldwv_survey_init(struct ldwv_survey *s)
 static void ldwv_survey_add(struct ldwv_survey *s, const struct vms_ldwv_member *m)
 {
 	s->n_members++;
+	if (!m->is_ovmx)
+		s->any_foreign = 1u;   /* THE SPLIT-BRAIN GATE's input */
 	if (!m->lockdirwt_valid) {
 		s->any_unknown = 1u;
 		return;
 	}
 	s->any_learned = 1u;
+	if (m->is_local)
+		s->local_learned = 1u;
+	else
+		s->any_peer_learned = 1u;   /* THE GATE's input */
 	if (m->lockdirwt != 0u)
 		s->all_zero = 0u;
+}
+
+/*
+ * ==========================================================================
+ * THE LOCAL-WITHHOLD FALLBACK (rd vms-1ee, conductor-ruled) -- and its gate.
+ *
+ * THE PROBLEM IT SOLVES. cnxman_club_init() marks THIS node's LOCKDIRWT
+ * learned, from SYSGEN. A REMOTE node's can never be learned: no wire byte has
+ * been pinned to carry it (cnxman_csb_set_lockdirwt()'s own note, FC-P3.2). So
+ * every multi-node cluster is a MIXTURE -- one learned weight, N unknown -- the
+ * vector is refused, vms_ldwv_resolve() cannot answer, and NO cross-node DLM
+ * request can be routed at all. Measured on the live 2-node rig: both
+ * executives reported the vector unbuilt, in every run.
+ *
+ * THE FALLBACK. When the ONLY learned weight is our own, withhold it. The
+ * member set then reads all-unknown, p. 6-32's all-zero rule applies, and every
+ * node lays down one entry per system in CSV order -- the ONE directory every
+ * node computes identically. That is the published fallback, not a
+ * convenience: a vector is only useful if it is the SAME vector everywhere.
+ *
+ * *** THE GATE, AND WHY IT IS THE WHOLE SAFETY ARGUMENT. *** The fallback fires
+ * ONLY when NO PEER has advertised a weight. The instant one has,
+ * `any_peer_learned` is set and this does nothing -- the mixture is refused
+ * exactly as before. That case is SPLIT-BRAIN territory: a peer that advertised
+ * a real LOCKDIRWT is computing a WEIGHTED vector, and a node that answered it
+ * with an all-zero one would resolve the same resource to a DIFFERENT directory
+ * node. Two directories for one resource is two masters for one lock, which is
+ * lock corruption and exactly the class of fault that must never reach a peer.
+ * So: all peers unknown -> the shared all-zero reading; any peer known -> we do
+ * not participate, and say so.
+ *
+ * IT AUTO-RETIRES. When FC-P3.2 pins the LOCKDIRWT wire byte, peers advertise,
+ * `any_peer_learned` becomes true and this stops firing on its own -- the real
+ * weighted vector takes over with no code change here.
+ * ==========================================================================
+ */
+static void ldwv_survey_finish(struct ldwv_survey *s)
+{
+	/*
+	 * *** THE SPLIT-BRAIN GATE. *** The withhold fallback may fire ONLY on
+	 * a cluster every member of which is PROVABLY the same implementation
+	 * as this one. A member we cannot prove that of -- a real VAX
+	 * advertising "VMS V7.3", or anything that has advertised nothing --
+	 * is computing its directory from REAL LOCKDIRWTs it can exchange with
+	 * its own kind, while we would be computing one from all-zero. Two
+	 * readings of the vector is two directory nodes for one resource, which
+	 * is two masters for one lock. So we do not participate: no fallback,
+	 * no vector, no cross-node DLM routing, and the refusal is named.
+	 */
+	if (s->any_foreign)
+		return;
+	if (s->any_unknown && s->any_learned && !s->any_peer_learned) {
+		/* Only our own weight is in the way, and no peer can supply
+		 * one. Withhold ours so the reading is the shared one. */
+		s->any_learned = 0u;
+		s->local_learned = 0u;
+		s->local_withheld = 1u;
+	}
+	if (s->any_unknown && !s->any_learned)
+		s->all_zero = 1u;
 }
 
 /*
@@ -139,6 +214,8 @@ static enum vms_ldwv_status ldwv_survey_verdict(const struct ldwv_survey *s)
 	 * one-entry-per-system rule applies (research note SS1/SS4.1). A
 	 * MIXTURE is refused.
 	 */
+	if (s->any_foreign && s->any_unknown)
+		return VMS_LDWV_E_FOREIGN;
 	if (s->any_unknown && s->any_learned)
 		return VMS_LDWV_E_WEIGHTS;
 	if (s->entries == 0u)
@@ -162,10 +239,9 @@ uint32_t vms_ldwv_entry_count(const struct vms_ldwv_member *m,
 	ldwv_survey_init(&s);
 	for (i = 0u; i < n_members; i++)
 		ldwv_survey_add(&s, &m[i]);
+	ldwv_survey_finish(&s);
 	if (s.any_unknown && s.any_learned)
 		return 0u;      /* unlayoutable; vms_ldwv_build says why */
-	if (s.any_unknown)
-		s.all_zero = 1u;
 	for (i = 0u; i < n_members; i++)
 		s.entries += ldwv_member_entries(&m[i], (int)s.all_zero);
 	if (all_zero != NULL)
@@ -211,8 +287,7 @@ enum vms_ldwv_status vms_ldwv_build(struct vms_ldwv *v,
 	ldwv_survey_init(&s);
 	for (i = 0u; i < n_members; i++)
 		ldwv_survey_add(&s, &m[i]);
-	if (s.any_unknown && !s.any_learned)
-		s.all_zero = 1u;
+	ldwv_survey_finish(&s);
 	if (!(s.any_unknown && s.any_learned)) {
 		for (i = 0u; i < n_members; i++)
 			s.entries += ldwv_member_entries(&m[i], (int)s.all_zero);
@@ -235,8 +310,37 @@ enum vms_ldwv_status vms_ldwv_build(struct vms_ldwv *v,
 
 	v->n_members = (uint8_t)((s.n_members > 255u) ? 255u : s.n_members);
 	v->weights_learned = s.any_learned;
+	v->any_foreign = s.any_foreign;   /* the all-OVMX gate's input (vms-3e3) */
 	v->valid = 1u;
 	return VMS_LDWV_OK;
+}
+
+/*
+ * THE ALL-OVMX GATE (vms-3e3, rung A"). 1 iff this vector is authoritative AND
+ * every member it represents was proven-OVMX (`peer_is_ours`, carried into the
+ * survey as `is_ovmx`). It is the single call that decides whether OVMX's own
+ * directory hash may be grounded and whether cross-node routing is live:
+ *
+ *   - It rests on the SAME survey as the split-brain gate (#1138), so a foreign
+ *     member is refused by BOTH from one reading of the member set.
+ *   - It is DYNAMIC: recomputed from the current vector, so a VAX joining flips
+ *     it to 0 (grounding stops, routing falls back to local) and a VAX leaving
+ *     flips it back -- no install-time snapshot to go stale.
+ *   - A vector that is not valid (mid-transition, or refused by the split-brain
+ *     gate) is NOT all-OVMX: grounding waits rather than guesses.
+ *
+ * This is exactly parallel to the LDWV all-zero fallback (Option-A): that grounds
+ * the VECTOR for an all-OVMX cluster without a real VAX's LOCKDIRWT; this gates
+ * grounding the HASH for an all-OVMX cluster without DEC's hash function. Neither
+ * is ever computed or used when a member cannot be proven OVMX, so neither can
+ * reach or mis-address a real VAX (design SS3.6; the 90b3bbbd storm was a real
+ * cluster and this can never touch one).
+ */
+int vms_ldwv_all_ovmx(const struct vms_ldwv *v)
+{
+	if (v == NULL)
+		return 0;
+	return (v->valid && v->n_members > 0u && !v->any_foreign) ? 1 : 0;
 }
 
 /* ==========================================================================
@@ -302,6 +406,20 @@ static void ldwv_member_from_csb(const struct vms_csb *csb,
 	m->lockdirwt = csb->lockdirwt;
 	m->lockdirwt_valid = csb->lockdirwt_valid;
 	m->is_local = (uint8_t)((csb->flags & VMS_CSB_F_LOCAL) != 0u);
+	/*
+	 * PROVABLY ONE OF US, OR NOT (rd vms-1ee). THIS node is trivially the
+	 * same implementation as itself. Every other member has to have
+	 * ADVERTISED a software version byte-identical to our own -- the token
+	 * it really put in its formation body (spec SS4(g)), which a real VAX
+	 * fills with its real "VMS Vx.y". Advertising nothing is NOT proof, and
+	 * is treated exactly like advertising something else.
+	 *
+	 * No version literal appears here: the comparison is against the token
+	 * THIS node advertises, which the boot carried down from the userland
+	 * SSOT (INV-1). So the test cannot drift from what we actually claim to
+	 * be.
+	 */
+	m->is_ovmx = (uint8_t)(m->is_local ? 1 : csb->peer_is_ours);
 }
 
 /*
@@ -349,8 +467,7 @@ static void ldwv_survey_club(const struct vms_club *club, struct ldwv_survey *s)
 		ldwv_survey_add(s, &m);
 		slot = next;
 	}
-	if (s->any_unknown && !s->any_learned)
-		s->all_zero = 1u;
+	ldwv_survey_finish(s);
 	if (s->any_unknown && s->any_learned)
 		return;   /* unlayoutable; the verdict says why */
 
@@ -381,6 +498,10 @@ static enum vms_ldwv_status ldwv_fill_club(struct vms_club *club,
 static const char *ldwv_refusal_line(enum vms_ldwv_status st)
 {
 	switch (st) {
+	case VMS_LDWV_E_FOREIGN:
+		return "%CNXMAN, lock directory weight vector not rebuilt: a "
+		       "member is not running this implementation and its "
+		       "directory weights cannot be read";
 	case VMS_LDWV_E_WEIGHTS:
 		return "%CNXMAN, lock directory weight vector not rebuilt: "
 		       "LOCKDIRWT known for some members and not others";
@@ -425,6 +546,17 @@ enum vms_ldwv_status cnxman_ldwv_rebuild(struct vms_club *club,
 
 	club->ldwv.n_members = (uint8_t)((s.n_members > 255u) ? 255u : s.n_members);
 	club->ldwv.weights_learned = s.any_learned;
+	/*
+	 * SAY IT WHEN THE FALLBACK FIRED (rd vms-1ee). A vector built on the
+	 * unadvertised reading is a DIFFERENT fact from one built on real
+	 * weights, and an operator reading OPA0: has to be able to tell them
+	 * apart -- `weights_learned` records it for a reader, this records it
+	 * for a human. One line per rebuild, not per lookup.
+	 */
+	if (s.local_withheld)
+		ldwv_log(ops, "%CNXMAN, lock directory weight vector built on "
+			      "the unadvertised reading: no system has "
+			      "advertised a LOCKDIRWT");
 	club->ldwv.valid = 1u;
 	return VMS_LDWV_OK;
 }

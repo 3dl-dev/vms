@@ -111,8 +111,12 @@ static void bed_dlm_end(void *ctx, const struct cnxman_transition *tr,
 	g.dlm_last_completed = completed;
 }
 
+/* Designated initialisers: the role ops grow (quorum_changed, FC-P8.1), and a
+ * positional list silently shifts every field when they do. */
 static const struct dlm_scs_role_ops bed_dlm_ops = {
-	bed_dlm_begin, NULL, bed_dlm_end, NULL, &g
+	.transition_begin = bed_dlm_begin,
+	.transition_end   = bed_dlm_end,
+	.ctx              = &g,
 };
 
 /* A node exactly as it stands at CLUSTER_START: SYSGEN parameters loaded, the

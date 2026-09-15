@@ -209,7 +209,9 @@ struct vms_dlm_xnode_args {
 	uint8_t  valblk[LCK_VALBLK_SIZE]; /* in: value block */
 	uint32_t status;            /* return: SS$_ status. granted=SS$_NORMAL;
 	                             * queued=VMS_DLM_STS_QUEUED (0); NOQUEUE decline=
-	                             * SS$_NOTQUEUED; response ops=SS$_UNSUPPORTED. */
+	                             * SS$_NOTQUEUED; not-the-master-but-we-know-who=
+	                             * VMS_DLM_STS_REDIRECT (master_csid = the target,
+	                             * rd vms-b96); response ops=SS$_UNSUPPORTED. */
 	uint32_t queued;            /* return: 1 = queued on the master (blocked) */
 	uint32_t blocking_csid;     /* return: cross-node holder to BLKAST (0 = none) */
 	uint32_t blocking_master_lkid; /* return: that holder's master lock handle */
@@ -233,6 +235,20 @@ struct vms_dlm_xnode_args {
  * SS$_NOTQUEUED. Mirrors src/kernel/vms_ioctl.h.
  */
 #define VMS_DLM_STS_QUEUED  0u
+
+/*
+ * The `status` an ENQ dispatch returns when this node is NOT the master for the
+ * named tree and holds the CSID of the node that is -- the DIRECTORY REDIRECT
+ * (rd vms-b96, Davis p. 6-31 outcome 2). Mirrors src/kernel/vms_ioctl.h, where
+ * the full contract lives; the shared src/kernel-core/vms_lock.c dispatch
+ * returns it, so it MUST exist here too (the #928 amd64-green-!=-twin trap).
+ * Not an SS$_ code: bit 28 is the condition-value architecture's
+ * customer-facility bit, so it cannot alias one. On this status ONLY,
+ * master_csid is the redirect target -- a master this executive genuinely
+ * holds, never the directory its own weight vector resolved (INV-6) -- and
+ * master_lkid stays VMS_DLM_LKID_UNSET because this node holds no lock for it.
+ */
+#define VMS_DLM_STS_REDIRECT  0x10000008u
 
 /* $DLM member departure. MUST match src/kernel/vms_ioctl.h byte-for-byte. See
  * there for the semantics + INV-6 contract; revised by FC-P4.3, which moved
@@ -557,6 +573,60 @@ struct vms_cluster_diag_join_args {
 };
 
 /*
+ * VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c). Byte-for-byte the same row and
+ * args struct as src/kernel/vms_ioctl.h -- see that header for why the lock
+ * manager's WIRE ARM needs a readback a packet capture cannot substitute for,
+ * and for why each *_no_wire_op refusal sits beside the emission it replaces.
+ */
+struct vms_dlm_scs_view_wire {
+	uint8_t  lockdirwt;
+	uint8_t  rebuild_phase;
+	uint8_t  connected;
+	uint8_t  pad0;
+	uint32_t rebuild_generation;
+	uint32_t proxy_lkbs;
+	uint32_t mastered_resources;
+	uint32_t directory_entries;
+	uint32_t req_sent;
+	uint32_t req_received;
+	uint32_t grants_sent;
+	uint32_t grants_received;
+	uint32_t declined;
+	uint32_t rebuild_records_in;
+	uint32_t rebuild_records_out;
+	uint32_t releases_sent;
+	uint32_t releases_no_wire_op;
+	uint32_t blkasts_sent;
+	uint32_t blkasts_no_wire_op;
+	uint32_t blkasts_received;
+	uint32_t blkasts_delivered;
+	/* The receive ledger (rd vms-c72) -- see src/kernel/vms_ioctl.h. */
+	uint32_t releases_received;
+	uint32_t valblk_writes_received;   /* op-0x06 LVB writes applied (vms-727) */
+	uint32_t releases_refused;
+	uint32_t blkasts_unparsed;
+	uint32_t deferred_grants_owed;
+	uint32_t queued_no_reply;
+	uint32_t unparsed;
+	uint32_t foreign_refused;
+	uint32_t leg_sends;
+	uint32_t leg_sends_refused;
+	uint32_t leg_frames_rx;
+	uint32_t leg_replies_sent;
+	uint32_t leg_declined;
+	uint32_t posts_queued;
+	uint32_t posts_unqueued;
+	uint32_t posts_lock_gone;
+	uint32_t posts_refused;
+};
+
+struct vms_cluster_diag_dlm_args {
+	uint32_t status;
+	uint32_t pad0;
+	struct vms_dlm_scs_view_wire dlm;
+};
+
+/*
  * VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8). Byte-for-byte the same struct as
  * src/kernel/vms_ioctl.h -- see that header for $SETCLUEVT's registration
  * semantics and the process-death safety hook.
@@ -689,6 +759,8 @@ struct vms_cluster_getsyi_args {
 #define VMS_IOCTL_CLUSTER_GETSYI       _IOWR(VMS_LOCK_IOC_MAGIC, 0x6c, struct vms_cluster_getsyi_args)
 /* E69: NR 0x6d, same magic and NR byte as src/kernel/vms_ioctl.h. */
 #define VMS_IOCTL_CLUSTER_DIAG_JOIN    _IOWR(VMS_LOCK_IOC_MAGIC, 0x6d, struct vms_cluster_diag_join_args)
+/* rd vms-94c: NR 0x6e, same magic and NR byte as src/kernel/vms_ioctl.h. */
+#define VMS_IOCTL_CLUSTER_DIAG_DLM     _IOWR(VMS_LOCK_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -750,5 +822,9 @@ _Static_assert(sizeof(struct cnxman_diag_view_wire) == 1048,
                "cnxman_diag_view_wire changed size -- must match src/kernel/vms_ioctl.h");
 _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
                "vms_cluster_diag_join_args changed size -- VMS_IOCTL_CLUSTER_DIAG_JOIN ABI break");
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 140,
+               "vms_dlm_scs_view_wire changed size -- must match src/kernel/vms_ioctl.h");
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 148,
+               "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
 
 #endif /* _VMS_LOCK_NB_H */

@@ -413,6 +413,14 @@ struct vms_lock_entry {
 	struct vms_lock_resource *resource;
 	struct vms_proc     *proc;
 	int                 waiting;        /* 1 if on the waiting list */
+	uint8_t             quorum_stall;   /* THE QUORUM HANG (FC-P8.1, rd vms-b6d):
+	                                     * 1 = queued because the CLUSTER lost
+	                                     * quorum, not because a holder blocks it;
+	                                     * no $DEQ may grant it and it is no
+	                                     * wait-for edge. Cleared only by
+	                                     * vms_lock_quorum_resume(). Mirror of the
+	                                     * Linux twin; contract in
+	                                     * src/kernel-core/vms_dlm_quorum.h. */
 	int                 refcount;       /* reference count for safe lookup */
 	exec_cv_t           wait_wq;        /* sync ENQ ($ENQW): blocker sleeps here */
 	int                 grant_state;    /* sync wake: 0=pending, SS__NORMAL=granted,
@@ -809,6 +817,14 @@ struct vms_device {
 	uint32_t            dynamic_term;
 
 	/*
+	 * The SSH-pre-authenticated user name a network daemon vouched for this
+	 * RTAn: (rd vms-65b), stamped by VMS_IOCTL_TERM_SETLOGIN and read back by
+	 * the $CREPRC(LOGINOUT) child bound here (VMS_IOCTL_TERM_GETLOGIN). Empty
+	 * unless a privileged daemon stamped it. Written/read under `lock`.
+	 */
+	char                netlogin_user[VMS_USERNAME_SIZE];
+
+	/*
 	 * Every channel currently assigned to this device, by any process: the
 	 * device has to know this to decide when IMPLICIT ownership ends (when the
 	 * owner has no channel left, not when any channel is returned).
@@ -963,6 +979,10 @@ long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
  * against vms_cluster_node()'s real vms_cnxman.c objects. Read-only; the
  * executive has no console log, so this is how the lab sees what the join did. */
 long vms_ioctl_cluster_diag_join(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c): mirror of the src/kernel/
+ * vms_internal.h decl -- the lock manager's WIRE ARM, projected under the fork
+ * mutex from vms_cluster_node()'s real struct vms_dlm_scs. */
+long vms_ioctl_cluster_diag_dlm(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): mirror of the src/kernel/vms_internal.h
  * decl -- $GETSYI's cluster item codes projected from the CLUB. */
@@ -1061,6 +1081,8 @@ long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_create(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_delete(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg);
 int  vms_acp_dassgn(struct vms_proc *proc, uint32_t chan);
 void vms_acp_release_all(struct vms_proc *proc);
 /*

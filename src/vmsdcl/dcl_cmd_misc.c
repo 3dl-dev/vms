@@ -42,6 +42,8 @@
 #include "dcl/disk_logical.h"
 #include "dcl/help.h"
 #include "dcl/dcl_rms.h"     /* dcl_rms_read_* -- the HELP ACP read seam (vms-4ac) */
+#include "rms_textfile.h"    /* rms_textfile_* -- RMS text I/O over the Files-11 ACP (vms-274) */
+#include "../vmstcpip/mgmt/tcpip_service_db.h" /* TCPIP {SET,SHOW,ENABLE,DISABLE,DELETE} SERVICE engine (#878, vms-71b) */
 #include "ssdef.h"
 #include "ovmx_layout.h"
 #include "vms/logical.h"
@@ -1557,12 +1559,11 @@ static const char *tcpip_lookup_linux_name(const struct tcpip_ifmap *map,
     return NULL;
 }
 
-/* Path for VMS TCPIP config files */
-#define TCPIP_CONFIG_DIR VMS_SYSTEM_DIR
-#define TCPIP_HOST_DAT    TCPIP_CONFIG_DIR "/TCPIP$HOST.DAT"
-#define TCPIP_NS_DAT      TCPIP_CONFIG_DIR "/TCPIP$NAMESERVICE.DAT"
-#define TCPIP_IF_DAT      TCPIP_CONFIG_DIR "/TCPIP$INTERFACE.DAT"
-#define TCPIP_ROUTE_DAT   TCPIP_CONFIG_DIR "/TCPIP$ROUTE.DAT"
+/* The TCPIP config stores (TCPIP$HOST/NAMESERVICE/INTERFACE/ROUTE.DAT) are now
+ * persisted the VMS way -- RMS over the Files-11 ACP at SYS$SYSTEM: (rms_textfile,
+ * vms-402/vms-210) -- so there is no local config directory to create. The old
+ * VMS_SYSTEM_DIR="/vms" fopen paths (the retired POSIX passthrough, vms-37e) are
+ * gone: they wrote nothing on the booted runtime. */
 
 /*
  * TCPIP SHOW INTERFACE [/FULL] - Display network interfaces with VMS names.
@@ -1780,6 +1781,42 @@ static int tcpip_print_hosts_from_file(const char *path,
     return count;
 }
 
+/* Read the VMS host database (TCPIP$HOST.DAT) the VMS way: RMS record reads
+ * through the Files-11 ACP (rms_textfile, vms-274), NOT a fopen() of the retired
+ * /vms passthrough (VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms", vms-37e) which reaches
+ * nothing on the booted runtime. SYS$SYSTEM: is resolved through LNM$FILE_DEV.
+ * Fail-honest: no ACP volume / no executive -> NULL handle -> no VMS-DB hosts
+ * shown (never a /vms fallback, INV-6). Same record shape as the writer:
+ * space-padded address + hostname. */
+static int tcpip_print_hosts_from_vms_store(struct tcpip_host_entry *shown,
+                                            int count)
+{
+    rms_textfile_t *tf = rms_textfile_open("SYS$SYSTEM:TCPIP$HOST.DAT");
+    if (!tf) return count;
+
+    char line[512];
+    int too_long = 0;
+    while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+        if (too_long) continue;
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || *p == '\0') continue;
+
+        char addr[128], hostname[256];
+        if (sscanf(p, "%127s %255s", addr, hostname) >= 2) {
+            if (count < TCPIP_MAX_HOST_ENTRIES &&
+                !tcpip_host_already_shown(shown, count, addr, hostname)) {
+                printf("%-16s%s\n", addr, hostname);
+                strncpy(shown[count].addr, addr, sizeof(shown[count].addr) - 1);
+                strncpy(shown[count].name, hostname, sizeof(shown[count].name) - 1);
+                count++;
+            }
+        }
+    }
+    rms_textfile_close(tf);
+    return count;
+}
+
 static int cmd_tcpip_show_host(struct dcl_command *cmd)
 {
     (void)cmd;
@@ -1791,7 +1828,7 @@ static int cmd_tcpip_show_host(struct dcl_command *cmd)
     int count = 0;
     if (shown) {
         count = tcpip_print_hosts_from_file("/etc/hosts", shown, count);
-        tcpip_print_hosts_from_file(TCPIP_HOST_DAT, shown, count);
+        tcpip_print_hosts_from_vms_store(shown, count);
         free(shown);
     }
 
@@ -1807,14 +1844,6 @@ static int cmd_tcpip_show_version(struct dcl_command *cmd)
     (void)cmd;
     printf("OVMX TCP/IP Services %s\n", ovmx_product_version());
     return SS$_NORMAL;
-}
-
-/*
- * Ensure the TCPIP config directory exists.
- */
-static void tcpip_ensure_config_dir(void)
-{
-    mkdir(TCPIP_CONFIG_DIR, 0755);
 }
 
 /*
@@ -1846,20 +1875,36 @@ static int cmd_tcpip_set_host(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    tcpip_ensure_config_dir();
+    /* Persist the host entry to the VMS-faithful TCPIP$HOST.DAT the VMS way: an
+     * RMS $PUT-at-EOF append through the Files-11 ACP (rms_textfile_append_line --
+     * the OPERATOR.LOG writer idiom, vms-274; $CREATEs the file if absent). The
+     * prior fopen() targeted VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms" -- the RETIRED
+     * POSIX passthrough (vms-37e) -- so on the booted runtime it silently wrote
+     * nothing while still printing "host added"; the ACP write reaches the genuine
+     * ODS-2 SYS$SYSTEM: volume. SYS$SYSTEM: is resolved through LNM$FILE_DEV
+     * (honours DEFINE/SYSTEM SYS$SYSTEM). Fail-honest (INV-6): with no executive /
+     * no mounted ACP volume it returns -1 and we report that, never a fake success.
+     * Same space-padded record shape SHOW HOST parses. */
+    char rec[512];
+    /* Bound the hostname to the same width SHOW HOST reads back (%255s), so the
+     * record can never truncate. */
+    snprintf(rec, sizeof(rec), "%-16s%.255s", address, hostname);
+    int host_db_ok = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$HOST.DAT", rec) == 0);
 
-    /* Write to TCPIP$HOST.DAT */
-    FILE *fp = fopen(TCPIP_HOST_DAT, "a");
+    /* Best-effort substrate-side resolver convenience (root-only file; unrelated
+     * to the VMS host database above). */
+    FILE *fp = fopen("/etc/hosts", "a");
     if (fp) {
         fprintf(fp, "%-16s%s\n", address, hostname);
         fclose(fp);
     }
 
-    /* Also append to /etc/hosts for Linux DNS resolution */
-    fp = fopen("/etc/hosts", "a");
-    if (fp) {
-        fprintf(fp, "%-16s%s\n", address, hostname);
-        fclose(fp);
+    if (!host_db_ok) {
+        /* The VMS host database could not be written (no executive / no mounted
+         * ACP volume). Report it honestly rather than claim the host was added. */
+        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$HOST.DAT not updated "
+               "(host \"%s\" not persisted to the VMS host database)\n", hostname);
+        return SS$_ABORT;
     }
 
     printf("%%TCPIP-I-INFO, host \"%s\" added\n", hostname);
@@ -1889,20 +1934,30 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
     }
 
     const char *domain = dcl_qualifier_value(cmd, "DOMAIN");
+    /* /REAPPLY = apply-only: perform the live effect but do NOT write the store.
+     * The boot reapply (TCPIP$REAPPLY.COM) passes it so re-applying persisted config
+     * does not re-append to the store (no growth across reboots, vms-b679). */
+    int reapply = dcl_has_qualifier(cmd, "REAPPLY");
 
-    tcpip_ensure_config_dir();
-
-    /* Write to TCPIP$NAMESERVICE.DAT */
-    FILE *fp = fopen(TCPIP_NS_DAT, "w");
-    if (fp) {
-        fprintf(fp, "SERVER=%s\n", server);
-        if (domain)
-            fprintf(fp, "DOMAIN=%s\n", domain);
-        fclose(fp);
+    /* PERSIST (unless /REAPPLY): TCPIP$NAMESERVICE.DAT the VMS way -- RMS over the
+     * Files-11 ACP (rms_textfile, the vms-402 pattern), superseding any prior record.
+     * The old fopen() targeted VMS_SYSTEM_DIR = SYSDISK_MOUNT "/vms" -- the retired
+     * POSIX passthrough (vms-37e) -- so on the booted runtime it wrote nothing.
+     * SERVER supersedes (write_line), DOMAIN appends (append_line). SYS$SYSTEM:
+     * resolves through LNM$FILE_DEV; fail-honest with no executive/ACP (INV-6). */
+    int ns_db_ok = 1;
+    if (!reapply) {
+        char nsline[512];
+        snprintf(nsline, sizeof(nsline), "SERVER=%.255s", server);
+        ns_db_ok = (rms_textfile_write_line("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT", nsline) == 0);
+        if (ns_db_ok && domain) {
+            snprintf(nsline, sizeof(nsline), "DOMAIN=%.255s", domain);
+            ns_db_ok = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT", nsline) == 0);
+        }
     }
 
-    /* Also write /etc/resolv.conf */
-    fp = fopen("/etc/resolv.conf", "w");
+    /* APPLY: update the substrate resolver (best-effort; root-only file). */
+    FILE *fp = fopen("/etc/resolv.conf", "w");
     if (fp) {
         if (domain)
             fprintf(fp, "domain %s\n", domain);
@@ -1910,6 +1965,11 @@ static int cmd_tcpip_set_name_service(struct dcl_command *cmd)
         fclose(fp);
     }
 
+    if (!ns_db_ok) {
+        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$NAMESERVICE.DAT not "
+               "recorded (name service not persisted to the VMS database)\n");
+        return SS$_ABORT;
+    }
     printf("%%TCPIP-I-INFO, name service configured\n");
     return SS$_NORMAL;
 }
@@ -1929,6 +1989,9 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
     const char *ifname = cmd->params[2];
     const char *host_ip = dcl_qualifier_value(cmd, "HOST");
     const char *netmask = dcl_qualifier_value(cmd, "NETWORK_MASK");
+    /* /REAPPLY = apply-only (boot reapply, vms-b679): do the live effect but do
+     * NOT write the store, so re-applying persisted config does not grow it. */
+    int reapply = dcl_has_qualifier(cmd, "REAPPLY");
 
     if (!host_ip) {
         dcl_error("TCPIP", 2, "NOKEYW",
@@ -1990,21 +2053,40 @@ static int cmd_tcpip_set_interface(struct dcl_command *cmd)
                            strerror(errno));
                 }
             }
+
+            /* Bring the interface UP (idempotent). An address without IFF_UP does
+             * not receive packets -- SE0 showed State=Down and inbound daytime got
+             * no reply (rd vms-21b) -- so SET INTERFACE must enable it, exactly as
+             * the config engine's tcpip_cfg_apply_iface_addr does
+             * (src/vmstcpip/mgmt/tcpip_config.h). Re-init ifr with just the name,
+             * read current flags, OR in IFF_UP|IFF_RUNNING, write them back. */
+            memset(&ifr, 0, sizeof(ifr));
+            strncpy(ifr.ifr_name, linux_if, IFNAMSIZ - 1);
+            if (ioctl(sock, SIOCGIFFLAGS, &ifr) == 0) {
+                ifr.ifr_flags |= IFF_UP | IFF_RUNNING;
+                if (ioctl(sock, SIOCSIFFLAGS, &ifr) < 0)
+                    printf("%%TCPIP-W-IOERR, failed to bring interface up: %s\n",
+                           strerror(errno));
+            }
 #endif
 
             close(sock);
         }
     }
 
-    /* Persist to TCPIP$INTERFACE.DAT */
-    tcpip_ensure_config_dir();
-    FILE *fp = fopen(TCPIP_IF_DAT, "a");
-    if (fp) {
-        fprintf(fp, "%s %s", ifname, host_ip);
+    /* PERSIST (unless /REAPPLY): TCPIP$INTERFACE.DAT via RMS over the Files-11 ACP
+     * (rms_textfile, the vms-402 pattern) -- the old fopen() targeted the retired
+     * /vms passthrough (vms-37e), dead on the booted runtime. SYS$SYSTEM: via
+     * LNM$FILE_DEV; fail-honest with no executive (the executive-absent case is
+     * already reported by the TCPIP$INET_HOSTADDR NOEXEC path below -- same cause,
+     * one message). The boot reapply passes /REAPPLY (apply-only, no re-append). */
+    if (!reapply) {
+        char ifline[512];
         if (netmask)
-            fprintf(fp, " %s", netmask);
-        fprintf(fp, "\n");
-        fclose(fp);
+            snprintf(ifline, sizeof(ifline), "%.63s %.63s %.63s", ifname, host_ip, netmask);
+        else
+            snprintf(ifline, sizeof(ifline), "%.63s %.63s", ifname, host_ip);
+        (void)rms_textfile_append_line("SYS$SYSTEM:TCPIP$INTERFACE.DAT", ifline);
     }
 
     /* Record the host address in the VMS-faithful TCPIP$INET_HOSTADDR SYSTEM
@@ -2098,16 +2180,23 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
         return SS$_BADPARAM;
     }
 
-    /* Check for root/NET_ADMIN privilege */
-    if (geteuid() != 0) {
+    /* Apply the route to the LIVE routing table. This requires NET_ADMIN; without
+     * it the route is only recorded (persisted below) and never applied, so we
+     * must NOT later claim it was added (INV-6). `applied` tracks whether the
+     * live routing table actually changed. */
+    int privileged = (geteuid() == 0);
+    int applied = 0;
+    if (!privileged) {
         printf("%%TCPIP-W-PRIVREQ, operation requires NET_ADMIN privilege\n");
-        /* Still persist to config file */
+        /* route NOT applied to the live table; only persisted below */
     } else {
-        /* Use ip route add command */
+        /* Use ip route replace. Do NOT swallow ip's diagnostic (no 2>/dev/null)
+         * and do NOT discard its exit status: a failed apply must be reported,
+         * not papered over as success. */
         char route_cmd[512];
         if (is_default) {
             snprintf(route_cmd, sizeof(route_cmd),
-                     "ip route replace default via %s 2>/dev/null", gateway);
+                     "ip route replace default via %s", gateway);
         } else {
             if (netmask) {
                 /* Convert dotted netmask to CIDR prefix length */
@@ -2120,33 +2209,356 @@ static int cmd_tcpip_set_route(struct dcl_command *cmd)
                     mask_val <<= 1;
                 }
                 snprintf(route_cmd, sizeof(route_cmd),
-                         "ip route replace %s/%d via %s 2>/dev/null",
+                         "ip route replace %s/%d via %s",
                          destination, prefix, gateway);
             } else {
                 snprintf(route_cmd, sizeof(route_cmd),
-                         "ip route replace %s via %s 2>/dev/null",
+                         "ip route replace %s via %s",
                          destination, gateway);
             }
         }
-        (void)system(route_cmd);
+        int rc = system(route_cmd);
+        if (rc != 0)
+            printf("%%TCPIP-E-ROUTEERR, could not add route (ip route replace failed, status %d)\n", rc);
+        else
+            applied = 1;
     }
 
-    /* Persist to TCPIP$ROUTE.DAT */
-    tcpip_ensure_config_dir();
-    FILE *fp = fopen(TCPIP_ROUTE_DAT, "a");
-    if (fp) {
-        if (is_default) {
-            fprintf(fp, "DEFAULT %s\n", gateway);
+    /* PERSIST (unless /REAPPLY): the recorded route to TCPIP$ROUTE.DAT via RMS
+     * over the Files-11 ACP (rms_textfile_append_line, the vms-402 pattern) -- the
+     * old fopen() targeted the retired /vms passthrough (vms-37e), dead on the
+     * booted runtime, so the "recorded" claim below was a lie there. SYS$SYSTEM:
+     * via LNM$FILE_DEV; fail-honest with no executive/ACP volume. /REAPPLY is
+     * apply-only (the boot reapply, vms-b679) -- re-apply without re-appending. */
+    int reapply = dcl_has_qualifier(cmd, "REAPPLY");
+    int rt_recorded = 0;
+    if (!reapply) {
+        char rtline[512];
+        if (is_default)
+            snprintf(rtline, sizeof(rtline), "DEFAULT %.63s", gateway);
+        else if (netmask)
+            snprintf(rtline, sizeof(rtline), "%.63s %.63s %.63s", destination, gateway, netmask);
+        else
+            snprintf(rtline, sizeof(rtline), "%.63s %.63s", destination, gateway);
+        rt_recorded = (rms_textfile_append_line("SYS$SYSTEM:TCPIP$ROUTE.DAT", rtline) == 0);
+    }
+
+    /* Report the ACTUAL outcome (INV-6: never claim "route added" when the live
+     * apply failed or was skipped for lack of privilege, and never claim it was
+     * "recorded" when the ACP write did not land or was skipped by /REAPPLY). */
+    if (applied) {
+        printf("%%TCPIP-I-INFO, route added\n");
+        return SS$_NORMAL;
+    }
+    if (!privileged) {
+        if (rt_recorded)
+            printf("%%TCPIP-W-NOTAPPLIED, route recorded in TCPIP$ROUTE.DAT "
+                   "(reapplied at boot) but not applied to the live routing table "
+                   "now (requires NET_ADMIN)\n");
+        else if (reapply)
+            printf("%%TCPIP-W-PRIVREQ, route not applied (requires NET_ADMIN); "
+                   "not recorded (/REAPPLY)\n");
+        else
+            printf("%%TCPIP-W-PRIVREQ, route not applied (requires NET_ADMIN) and "
+                   "not recorded (executive absent -- TCPIP$ROUTE.DAT unreachable)\n");
+        return SS$_NOPRIV;
+    }
+    return SS$_ABORT;                   /* privileged, but the substrate apply failed */
+}
+
+/* ================================================================== */
+/*   TCPIP REAPPLY -- reapply the persisted config at startup (vms-b97) */
+/* ================================================================== */
+/*
+ * The boot reader for the config-persistence tree (vms-a0b2). TCPIP$STARTUP.COM
+ * runs "TCPIP REAPPLY" so a configured node comes back configured after a reboot.
+ *
+ * WHY A C SUB-VERB, NOT A DCL OPEN/READ .COM: the config stores are written by
+ * the SET verbs via rms_textfile (RMS over the Files-11 ACP, vms-210/vms-402). A
+ * DCL OPEN/READ of those runtime-written SYS$SYSTEM: stores proved UNRELIABLE at
+ * the SYSTARTUP context (it read nothing though the file was present + TYPE-able).
+ * Reading them back via rms_textfile -- the SAME mechanism that WROTE them -- is
+ * consistent by construction. Each record is reapplied by calling the very SET
+ * verb that would apply it, with /REAPPLY (apply-only: it performs the live
+ * effect but does NOT re-write the store, so the store never grows across boots).
+ * A missing store is an honest no-op (rms_textfile_open -> NULL -> skip).
+ *
+ * The per-store summary "%TCPIP-I-REAPPLY, reapplied N ... from <store>" carries
+ * the count actually read, so it can only appear if the reader genuinely read the
+ * store -- never a trivially-true signal (the boot e2e's teeth key on it).
+ */
+
+/* Append one qualifier (name[, value]) to a synthetic command. */
+static void tcpip_reapply_add_qual(struct dcl_command *c, const char *name,
+                                   const char *value)
+{
+    int i = c->qualifier_count;
+    if (i >= (int)(sizeof(c->qualifiers) / sizeof(c->qualifiers[0]))) return;
+    strncpy(c->qualifiers[i].name, name, sizeof(c->qualifiers[i].name) - 1);
+    c->qualifiers[i].name[sizeof(c->qualifiers[i].name) - 1] = '\0';
+    c->qualifiers[i].value[0] = '\0';
+    if (value) {
+        strncpy(c->qualifiers[i].value, value, sizeof(c->qualifiers[i].value) - 1);
+        c->qualifiers[i].value[sizeof(c->qualifiers[i].value) - 1] = '\0';
+    }
+    c->qualifiers[i].negated = 0;
+    c->qualifier_count = i + 1;
+}
+
+/* Reapply TCPIP$INTERFACE.DAT records: "ifname addr [mask]". Returns count. */
+static int tcpip_reapply_interfaces(void)
+{
+    rms_textfile_t *tf = rms_textfile_open("SYS$SYSTEM:TCPIP$INTERFACE.DAT");
+    if (!tf) return 0;                          /* missing store -> honest no-op */
+    char line[512]; int too_long = 0, n = 0;
+    while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+        if (too_long) continue;
+        char ifn[64], addr[64], mask[64];
+        int nf = sscanf(line, "%63s %63s %63s", ifn, addr, mask);
+        if (nf < 2 || ifn[0] == '!' || ifn[0] == '#') continue;
+        struct dcl_command sc; memset(&sc, 0, sizeof(sc));
+        strncpy(sc.params[0], "SET", sizeof(sc.params[0]) - 1);
+        strncpy(sc.params[1], "INTERFACE", sizeof(sc.params[1]) - 1);
+        strncpy(sc.params[2], ifn, sizeof(sc.params[2]) - 1);
+        sc.param_count = 3;
+        tcpip_reapply_add_qual(&sc, "REAPPLY", NULL);
+        tcpip_reapply_add_qual(&sc, "HOST", addr);
+        if (nf >= 3) tcpip_reapply_add_qual(&sc, "NETWORK_MASK", mask);
+        (void)cmd_tcpip_set_interface(&sc);
+        n++;
+    }
+    rms_textfile_close(tf);
+    if (n > 0)
+        printf("%%TCPIP-I-REAPPLY, reapplied %d interface(s) from TCPIP$INTERFACE.DAT\n", n);
+    return n;
+}
+
+/* Reapply TCPIP$ROUTE.DAT records: "DEFAULT gw" | "dest gw [mask]". Returns count. */
+static int tcpip_reapply_routes(void)
+{
+    rms_textfile_t *tf = rms_textfile_open("SYS$SYSTEM:TCPIP$ROUTE.DAT");
+    if (!tf) return 0;
+    char line[512]; int too_long = 0, n = 0;
+    while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+        if (too_long) continue;
+        char f0[64], gw[64], mask[64];
+        int nf = sscanf(line, "%63s %63s %63s", f0, gw, mask);
+        if (nf < 2 || f0[0] == '!' || f0[0] == '#') continue;
+        struct dcl_command sc; memset(&sc, 0, sizeof(sc));
+        strncpy(sc.params[0], "SET", sizeof(sc.params[0]) - 1);
+        strncpy(sc.params[1], "ROUTE", sizeof(sc.params[1]) - 1);
+        sc.param_count = 2;
+        tcpip_reapply_add_qual(&sc, "REAPPLY", NULL);
+        tcpip_reapply_add_qual(&sc, "GATEWAY", gw);
+        if (strcmp(f0, "DEFAULT") == 0) {
+            tcpip_reapply_add_qual(&sc, "DEFAULT", NULL);
         } else {
-            fprintf(fp, "%s %s", destination, gateway);
-            if (netmask)
-                fprintf(fp, " %s", netmask);
-            fprintf(fp, "\n");
+            tcpip_reapply_add_qual(&sc, "DESTINATION", f0);
+            if (nf >= 3) tcpip_reapply_add_qual(&sc, "NETWORK_MASK", mask);
         }
-        fclose(fp);
+        (void)cmd_tcpip_set_route(&sc);
+        n++;
+    }
+    rms_textfile_close(tf);
+    if (n > 0)
+        printf("%%TCPIP-I-REAPPLY, reapplied %d route(s) from TCPIP$ROUTE.DAT\n", n);
+    return n;
+}
+
+/* Reapply TCPIP$NAMESERVICE.DAT: "SERVER=ip" then optional "DOMAIN=x". Returns count. */
+static int tcpip_reapply_nameservice(void)
+{
+    rms_textfile_t *tf = rms_textfile_open("SYS$SYSTEM:TCPIP$NAMESERVICE.DAT");
+    if (!tf) return 0;
+    char line[512]; int too_long = 0;
+    char server[256] = "", domain[256] = "";
+    while (rms_textfile_getline(tf, line, sizeof(line), &too_long)) {
+        if (too_long) continue;
+        if (strncmp(line, "SERVER=", 7) == 0) {
+            strncpy(server, line + 7, sizeof(server) - 1); server[sizeof(server) - 1] = '\0';
+        } else if (strncmp(line, "DOMAIN=", 7) == 0) {
+            strncpy(domain, line + 7, sizeof(domain) - 1); domain[sizeof(domain) - 1] = '\0';
+        }
+    }
+    rms_textfile_close(tf);
+    if (server[0] == '\0') return 0;
+    struct dcl_command sc; memset(&sc, 0, sizeof(sc));
+    strncpy(sc.params[0], "SET", sizeof(sc.params[0]) - 1);
+    strncpy(sc.params[1], "NAME_SERVICE", sizeof(sc.params[1]) - 1);
+    sc.param_count = 2;
+    tcpip_reapply_add_qual(&sc, "REAPPLY", NULL);
+    tcpip_reapply_add_qual(&sc, "SYSTEM", NULL);
+    tcpip_reapply_add_qual(&sc, "SERVER", server);
+    if (domain[0] != '\0') tcpip_reapply_add_qual(&sc, "DOMAIN", domain);
+    (void)cmd_tcpip_set_name_service(&sc);
+    printf("%%TCPIP-I-REAPPLY, reapplied name service from TCPIP$NAMESERVICE.DAT (server %s)\n", server);
+    return 1;
+}
+
+/* TCPIP REAPPLY -- reapply all persisted config (interfaces, then routes, then
+ * name service) from the ACP stores. Called by TCPIP$STARTUP at boot. */
+static int cmd_tcpip_reapply(struct dcl_command *cmd)
+{
+    (void)cmd;
+    tcpip_reapply_interfaces();
+    tcpip_reapply_routes();
+    tcpip_reapply_nameservice();
+    return SS$_NORMAL;
+}
+
+/* ------------------------------------------------------------------ *
+ * The PERSISTENT INETD SERVICE DATABASE management surface (#878, vms-71b).
+ *
+ * TCPIP$INETD binds and serves every ENABLED service in SYS$SYSTEM:TCPIP$SERVICE.DAT,
+ * which it reads over the Files-11 ACP at aux-server start. These verbs edit that
+ * database THE VMS WAY and persist the change over the ACP (tcpip_service_db.h),
+ * so a DCL-enabled service survives reboot and is reapplied on the next
+ * TCPIP$INETD start -- no hand-editing of the file. Fail-honest with no
+ * executive (%TCPIP-W-NOEXEC), never a fake success (INV-6).
+ * ------------------------------------------------------------------ */
+
+/* Map a tcpip_svcdb_* return code onto an honest DCL status; 0 == success. */
+static int tcpip_svcdb_report(int rc, const char *name)
+{
+    switch (rc) {
+    case TCPIP_SVCDB_OK:
+        return SS$_NORMAL;
+    case TCPIP_SVCDB_ENOEXEC:
+        printf("%%TCPIP-W-NOEXEC, executive absent -- TCPIP$SERVICE.DAT not updated "
+               "(service \"%s\" not persisted to the VMS service database)\n", name);
+        return SS$_ABORT;
+    case TCPIP_SVCDB_EFULL:
+        printf("%%TCPIP-E-TOOMANY, service database is full (max %d services)\n",
+               TCPIP_SVCDB_MAX);
+        return SS$_ABORT;
+    case TCPIP_SVCDB_ENOSUCH:
+        printf("%%TCPIP-W-NOSUCHSER, service \"%s\" is not defined\n", name);
+        return SS$_ABORT;
+    default:
+        printf("%%TCPIP-E-BADPARAM, invalid service parameters\n");
+        return SS$_BADPARAM;
+    }
+}
+
+/*
+ * TCPIP SET SERVICE name /PORT=n /FILE=image [/USER_NAME=acct] [/ENABLE | /DISABLE]
+ * Defines or updates a service in the persistent database. A new service is
+ * DISABLED by default (operator posture); /ENABLE defines-and-enables it. An
+ * existing service keeps its enabled state unless /ENABLE or /DISABLE is given.
+ */
+static int cmd_tcpip_set_service(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 3) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing service name - usage: TCPIP SET SERVICE name /PORT=n /FILE=image");
+        return SS$_BADPARAM;
+    }
+    const char *name  = cmd->params[2];
+    const char *ports = dcl_qualifier_value(cmd, "PORT");
+    const char *image = dcl_qualifier_value(cmd, "FILE");
+    const char *user  = dcl_qualifier_value(cmd, "USER_NAME");
+
+    if (!ports) {
+        dcl_error("TCPIP", 2, "NOKEYW", "missing /PORT qualifier");
+        return SS$_BADPARAM;
+    }
+    if (!image) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing /FILE qualifier (the service image filespec)");
+        return SS$_BADPARAM;
+    }
+    errno = 0;
+    long port = strtol(ports, NULL, 10);
+    if (errno != 0 || port <= 0 || port > 65535) {
+        dcl_error("TCPIP", 2, "BADPARAM", "invalid /PORT value - \\%s\\", ports);
+        return SS$_BADPARAM;
     }
 
-    printf("%%TCPIP-I-INFO, route added\n");
+    int enable_flag = TCPIP_SVC_KEEP;
+    if (dcl_has_qualifier(cmd, "ENABLE"))
+        enable_flag = TCPIP_SVC_ENABLE;
+    else if (dcl_has_qualifier(cmd, "DISABLE"))
+        enable_flag = TCPIP_SVC_DISABLE;
+
+    int rc = tcpip_svcdb_set(name, (uint16_t)port, user, image, NULL, enable_flag);
+    int st = tcpip_svcdb_report(rc, name);
+    if (rc == TCPIP_SVCDB_OK)
+        printf("%%TCPIP-I-INFO, service \"%s\" defined (effective at next TCPIP$INETD start)\n",
+               name);
+    return st;
+}
+
+/*
+ * TCPIP ENABLE SERVICE name  /  TCPIP DISABLE SERVICE name
+ * Toggle a defined service's enabled state and persist.
+ */
+static int cmd_tcpip_enable_service(struct dcl_command *cmd, int on)
+{
+    if (cmd->param_count < 3) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing service name - usage: TCPIP %s SERVICE name",
+                  on ? "ENABLE" : "DISABLE");
+        return SS$_BADPARAM;
+    }
+    const char *name = cmd->params[2];
+    int rc = tcpip_svcdb_enable(name, on);
+    int st = tcpip_svcdb_report(rc, name);
+    if (rc == TCPIP_SVCDB_OK)
+        printf("%%TCPIP-I-INFO, service \"%s\" %s (effective at next TCPIP$INETD start)\n",
+               name, on ? "enabled" : "disabled");
+    return st;
+}
+
+/*
+ * TCPIP DELETE SERVICE name
+ * Remove a service from the persistent database.
+ */
+static int cmd_tcpip_delete_service(struct dcl_command *cmd)
+{
+    if (cmd->param_count < 3) {
+        dcl_error("TCPIP", 2, "NOKEYW",
+                  "missing service name - usage: TCPIP DELETE SERVICE name");
+        return SS$_BADPARAM;
+    }
+    const char *name = cmd->params[2];
+    int rc = tcpip_svcdb_delete(name);
+    int st = tcpip_svcdb_report(rc, name);
+    if (rc == TCPIP_SVCDB_OK)
+        printf("%%TCPIP-I-INFO, service \"%s\" deleted\n", name);
+    return st;
+}
+
+/*
+ * TCPIP SHOW SERVICE [name]
+ * List the defined services and their enabled state from the persistent
+ * database. Honest %TCPIP-W-NOEXEC-style note if the database cannot be read.
+ */
+static int cmd_tcpip_show_service(struct dcl_command *cmd)
+{
+    const char *filter = (cmd->param_count >= 3) ? cmd->params[2] : NULL;
+    struct tcpip_svcdb_rec recs[TCPIP_SVCDB_MAX];
+    int n = tcpip_svcdb_load(recs, TCPIP_SVCDB_MAX);
+    int shown = 0;
+
+    printf("\n  Service         Port   State     Run-as            Image\n");
+    printf("  --------------- ------ --------- ----------------- --------------------------\n");
+    for (int i = 0; i < n; i++) {
+        if (filter && strcasecmp(recs[i].name, filter) != 0)
+            continue;
+        printf("  %-15s %5u  %-8s  %-16s  %s\n",
+               recs[i].name, (unsigned)recs[i].port,
+               recs[i].enabled ? "Enabled" : "Disabled",
+               recs[i].user[0] ? recs[i].user : "-",
+               recs[i].image);
+        shown++;
+    }
+    if (shown == 0) {
+        if (filter)
+            printf("  %%TCPIP-W-NOSUCHSER, service \"%s\" is not defined\n", filter);
+        else
+            printf("  (no services defined in %s)\n", TCPIP_SVCDB_SPEC);
+    }
+    printf("\n");
     return SS$_NORMAL;
 }
 
@@ -2161,6 +2573,12 @@ int cmd_tcpip(struct dcl_command *cmd)
     }
 
     const char *subcmd = cmd->params[0];
+
+    if (dcl_match_command(subcmd, "REAPPLY", 3)) {
+        /* TCPIP REAPPLY -- reapply persisted config from the ACP stores (vms-b97);
+         * TCPIP$STARTUP runs this at boot. */
+        return cmd_tcpip_reapply(cmd);
+    }
 
     if (dcl_match_command(subcmd, "SHOW", 2)) {
         /* TCPIP SHOW <what> */
@@ -2182,6 +2600,8 @@ int cmd_tcpip(struct dcl_command *cmd)
             return cmd_tcpip_show_version(cmd);
         if (dcl_match_command(what, "CONFIGURATION", 4))
             return cmd_tcpip_show_configuration(cmd);
+        if (dcl_match_command(what, "SERVICE", 4))
+            return cmd_tcpip_show_service(cmd);
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SHOW keyword - \\%s\\", what);
@@ -2206,10 +2626,29 @@ int cmd_tcpip(struct dcl_command *cmd)
             return cmd_tcpip_set_interface(cmd);
         if (dcl_match_command(what, "ROUTE", 3))
             return cmd_tcpip_set_route(cmd);
+        if (dcl_match_command(what, "SERVICE", 3))
+            return cmd_tcpip_set_service(cmd);
 
         dcl_error("TCPIP", 2, "IVKEYW",
                   "unrecognized TCPIP SET keyword - \\%s\\", what);
         return SS$_IVKEYW;
+    }
+
+    if (dcl_match_command(subcmd, "ENABLE", 2) ||
+        dcl_match_command(subcmd, "DISABLE", 3) ||
+        dcl_match_command(subcmd, "DELETE", 3)) {
+        /* TCPIP {ENABLE,DISABLE,DELETE} SERVICE name -- persistent service DB (#878) */
+        if (cmd->param_count < 2 ||
+            !dcl_match_command(cmd->params[1], "SERVICE", 4)) {
+            dcl_error("TCPIP", 2, "NOKEYW",
+                      "usage: TCPIP %s SERVICE name", subcmd);
+            return SS$_BADPARAM;
+        }
+        if (dcl_match_command(subcmd, "ENABLE", 2))
+            return cmd_tcpip_enable_service(cmd, 1);
+        if (dcl_match_command(subcmd, "DISABLE", 3))
+            return cmd_tcpip_enable_service(cmd, 0);
+        return cmd_tcpip_delete_service(cmd);
     }
 
     dcl_error("TCPIP", 2, "IVKEYW",

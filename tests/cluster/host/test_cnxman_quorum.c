@@ -334,6 +334,155 @@ static void test_edge(void)
 			"edge: the un-advertised CSB is skipped, not counted as 0");
 }
 
+/*
+ * ==========================================================================
+ * 9. cnxman_quorum_member_recompute(): the trigger a RUNNING node uses on
+ *    itself (rd vms-d0d), and the two conditions that make it honest.
+ *
+ * The arithmetic above is the same either way; what is tested here is WHEN a
+ * node may apply it to itself. An admitted node has to, because p. 7-42 task 2
+ * only copies a coordinator's proposal and it never made one -- and a node that
+ * is NOT a member must not, because a quorum computed before admission is a
+ * local-only number no other system agreed to (INV-6).
+ * ==========================================================================
+ */
+static void test_member_recompute_gate(void)
+{
+	struct vms_club *club = reset_cluster(0, 0);   /* a non-voting joiner */
+	struct vms_csb *peer;
+
+	printf("[quorum] the member-recompute gate (rd vms-d0d)\n");
+
+	peer = add_member(club, 0x2000ull, 1, 0, 1);
+	ct_check(peer != NULL, "gate: the peer's advertised VOTES are learned");
+
+	/* (a) not a member yet: refused outright, nothing written. */
+	g_cl.state = VMS_CLUSTER_JOINING;
+	ct_check_eq_u32((unsigned long)cnxman_quorum_member_recompute(&g_cl), 0u,
+			"gate: a JOINING node does not compute a quorum");
+	ct_check_eq_u32(club->cevotes, 0, "gate: CEVOTES untouched");
+	ct_check_eq_u32(club->quorum, 0, "gate: QUORUM untouched");
+
+	/* (b) a member, but this node's own CSB is not in the selected set:
+	 * a sum that omits the local system is refused, not published. */
+	g_cl.state = VMS_CLUSTER_MEMBER;
+	ct_check_eq_u32((unsigned long)cnxman_quorum_member_recompute(&g_cl), 0u,
+			"gate: refused while the LOCAL CSB is not selected");
+	ct_check_eq_u32(club->quorum, 0, "gate: still untouched");
+
+	/* (c) a real member with its own params in the table: the arithmetic
+	 * runs, over votes that really arrived. */
+	select_local(club);
+	ct_check_eq_u32((unsigned long)cnxman_quorum_member_recompute(&g_cl), 1u,
+			"gate: an admitted member recomputes");
+	ct_check_eq_u32(club->cevotes, 1,
+			"gate: CEVOTES = max{0; 0 + 1; 0} -- the peer's real vote");
+	ct_check_eq_u32(club->quorum, 1, "gate: QUORUM = (1+2)/2 = 1");
+	ct_check(!club->quorum_lost, "gate: the peer is OPEN, so 1 >= 1");
+
+	/* (d) NULL: changes nothing, says so. */
+	ct_check_eq_u32((unsigned long)cnxman_quorum_member_recompute(NULL), 0u,
+			"gate: a NULL cluster computes nothing");
+}
+
+/*
+ * ==========================================================================
+ * 10. ENFORCEMENT: may the executive ACT on the arithmetic? (FC-P8.1, vms-b6d)
+ *
+ * The arithmetic above is what a node REPORTS. These cases are the gate on
+ * what it ENFORCES, and the whole point of the gate is case 1: during a join,
+ * quorum_lost reads 1 as the honest p. 7-6 answer over a vote set the node has
+ * not finished learning. A node that froze on THAT would freeze on every join,
+ * forever. So enforcement needs a committed member (enforce_ready) that has
+ * genuinely PERCEIVED quorum at least once (the armed latch) -- and only then
+ * does a quorum_lost mean the hang of p. 7-4.
+ * ==========================================================================
+ */
+static void test_enforcement_gate(void)
+{
+	struct vms_club *club = reset_cluster(1, 2);   /* this node: 1 vote of 2 */
+	struct vms_csb *peer;
+
+	printf("[quorum] ENFORCEMENT: the gate, the latch, and the hang\n");
+
+	/* --- 1. THE JOIN TRANSIENT. Nothing learned, nothing selected, and the
+	 * arithmetic over the empty set honestly says "lost". NOT a hang. --- */
+	cnxman_quorum_recompute(club);
+	ct_check(club->quorum_lost != 0,
+		 "join-transient: the raw flag IS set (honest empty-set answer)");
+	ct_check(!cnxman_quorum_enforce_ready(&g_cl),
+		 "join-transient: not enforce-ready (state is not MEMBER)");
+	ct_check(!cnxman_quorum_hang_active(&g_cl),
+		 "join-transient: NO hang -- the gate is what keeps every join "
+		 "from freezing on its own honest zero");
+
+	/* Even as a MEMBER, the local CSB must count before anything is acted
+	 * on: the figures were computed over a set this node is not in yet. */
+	g_cl.state = VMS_CLUSTER_MEMBER;
+	ct_check(!cnxman_quorum_enforce_ready(&g_cl),
+		 "member, local CSB not SELECTED: still not enforce-ready");
+	ct_check(!cnxman_quorum_hang_active(&g_cl),
+		 "member, local CSB not SELECTED: still NO hang");
+
+	/* --- 2. A MEMBER WITH VOTES BUT NO QUORUM YET. VOTES=1, EXPECTED=2:
+	 * enforce-ready, quorum_lost set -- and STILL not a hang, because this
+	 * node has never once perceived quorum (nothing to lose). --- */
+	select_local(club);
+	cnxman_quorum_recompute(club);
+	ct_check(cnxman_quorum_enforce_ready(&g_cl),
+		 "committed member with its own CSB counted: enforce-ready");
+	ct_check_eq_u32(club->quorum, 2, "1-of-2: QUORUM = (2+2)/2 = 2");
+	ct_check(club->quorum_lost != 0, "1-of-2: 1 < 2 -> the raw flag is set");
+	cnxman_quorum_arm_update(&g_cl);
+	ct_check(!club->quorum_armed,
+		 "1-of-2: NOT armed -- a node cannot lose what it never had");
+	ct_check(!cnxman_quorum_hang_active(&g_cl),
+		 "1-of-2: NO hang (never perceived quorum)");
+
+	/* --- 3. THE PEER ARRIVES. 2 of 2 present: quorum perceived, and THAT
+	 * is what arms enforcement. --- */
+	peer = add_member(club, 0x2000ull, 1, 2, 1);
+	ct_check(peer != NULL, "peer CSB allocated");
+	cnxman_quorum_recompute(club);
+	cnxman_quorum_arm_update(&g_cl);
+	ct_check(!club->quorum_lost, "2-of-2: quorum held");
+	ct_check(club->quorum_armed != 0,
+		 "2-of-2: ARMED -- this node has now perceived quorum");
+	ct_check(!cnxman_quorum_hang_active(&g_cl), "2-of-2: no hang, grants proceed");
+
+	/* --- 4. THE PEER GOES. CEVOTES cannot decrease (pp. 7-10/7-11), so
+	 * QUORUM stays 2 and 1 present is a REAL loss: the hang. --- */
+	peer->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_quorum_recompute(club);
+	cnxman_quorum_arm_update(&g_cl);
+	ct_check(club->quorum_lost != 0, "peer gone: 1 < 2 -> quorum lost");
+	ct_check(club->quorum_armed != 0, "peer gone: the latch does not unwind");
+	ct_check(cnxman_quorum_hang_active(&g_cl) != 0,
+		 "peer gone: THE QUORUM HANG is active");
+
+	/* --- 5. THE PEER RETURNS. The hang clears by itself -- it is derived,
+	 * not a second piece of state that could be forgotten. --- */
+	peer->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_quorum_recompute(club);
+	cnxman_quorum_arm_update(&g_cl);
+	ct_check(!club->quorum_lost, "peer back: quorum regained");
+	ct_check(!cnxman_quorum_hang_active(&g_cl), "peer back: the hang is over");
+
+	/* --- 6. LEAVING THE CLUSTER ends enforcement: a node with no cluster
+	 * is not a node in a hang, it is a node that locks locally. --- */
+	peer->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_quorum_recompute(club);
+	ct_check(cnxman_quorum_hang_active(&g_cl) != 0, "hang re-entered");
+	g_cl.state = VMS_CLUSTER_OFF;
+	ct_check(!cnxman_quorum_hang_active(&g_cl),
+		 "no longer a member: no hang, even armed and vote-short");
+
+	/* --- 7. NULL is a refusal, not a crash and not a "yes". --- */
+	ct_check(!cnxman_quorum_enforce_ready(NULL), "NULL cluster: not ready");
+	ct_check(!cnxman_quorum_hang_active(NULL), "NULL cluster: no hang");
+	cnxman_quorum_arm_update(NULL);   /* must not crash */
+}
+
 int main(void)
 {
 	test_five_node_worked_example();
@@ -344,6 +493,8 @@ int main(void)
 	test_quorum_disk_tracked_not_folded_in();
 	test_ovmx_nonvoting_contribution();
 	test_edge();
+	test_member_recompute_gate();
+	test_enforcement_gate();
 
 	return ct_summary("test_cnxman_quorum");
 }

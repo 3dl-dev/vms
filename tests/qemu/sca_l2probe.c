@@ -11,12 +11,34 @@
  *       <iface>'s HW MAC, payload carrying <marker>.
  *
  *   recv <iface> <seconds> <pcap_out>
- *       bind AF_PACKET/SOCK_RAW to 0x6007 on <iface>, join the group multicast
- *       (PACKET_MR_PROMISC so a flooded group frame is delivered even though it
- *       is not addressed to our unicast MAC), and for <seconds> log every
- *       received 0x6007 frame AND append it to <pcap_out> in libpcap format.
+ *       bind AF_PACKET/SOCK_RAW to ETH_P_ALL on <iface> (see "WHY ETH_P_ALL,
+ *       NOT 0x6007" below), join the group multicast (PACKET_MR_PROMISC so a
+ *       flooded group frame is delivered even though it is not addressed to
+ *       our unicast MAC), and for <seconds> log every 0x6007 frame the kernel
+ *       delivers -- both received AND this node's OWN transmitted frames on
+ *       <iface> -- AND append each to <pcap_out> in libpcap format.
  *       A frame whose ETH source differs from our own MAC is a PEER frame --
- *       proof the wire flooded another node's multicast to us.
+ *       proof the wire flooded another node's multicast to us. A frame whose
+ *       ETH source IS our own MAC is further split by `sll_pkttype`: TX (this
+ *       socket saw its OWN node transmit it) vs RX (looped back to us off the
+ *       wire, which a real LAN never does -- see run_cluster_genesis_2node.sh
+ *       for why the rig's netdev topology exists to make that impossible).
+ *
+ * WHY ETH_P_ALL, NOT 0x6007 (rd vms-175, the TRANSMIT-CAPTURE fix). Binding an
+ * AF_PACKET socket to a SPECIFIC protocol (as this tool used to: `socket(...,
+ * htons(SCA_ETHERTYPE))` + `sll_protocol = htons(SCA_ETHERTYPE)`) registers it
+ * in the kernel's `ptype_base` hash, which `netif_receive_skb()` walks for
+ * INCOMING frames ONLY. A locally transmitted frame is announced to sniffers
+ * through the SEPARATE `ptype_all` list inside `dev_queue_xmit_nit()` -- which
+ * only sockets bound to ETH_P_ALL are on. So the old `recv 0x6007` build could
+ * never see this node's own vms.ko (PEA0:) transmit, no matter how promiscuous
+ * -- "connect_req_from_self=0" on that build was true whether or not this node
+ * had opened a connect of its own, which is exactly the vacuous gate rd vms-175
+ * exists to close. Binding ETH_P_ALL puts this socket on `ptype_all`, so BOTH
+ * directions are delivered (tcpdump's ordinary default behaviour); the
+ * ethertype==0x6007 filter below narrows the flood back down in userspace, so
+ * every byte written to the pcap is still exactly what the wire (or this
+ * node's own transmit path) carried -- nothing here fabricates a frame class.
  *
  * WHY THIS EXISTS: H1's make-or-break unknown is whether a QEMU `socket`
  * (mcast) / listen-connect netdev faithfully FLOODS the 0x6007 group multicast
@@ -25,7 +47,7 @@
  * store -- so a red result points at the netdev, not the daemon. Once the
  * netdev is proven, the same `recv` runs PASSIVELY alongside SCSD in the full
  * harness to capture the pcap artifact (multiple AF_PACKET SOCK_RAW sockets on
- * one iface each get their own copy of every matching frame).
+ * one iface each get their own copy of every matching frame, TX included).
  *
  * It fabricates nothing: it prints verbatim what recvfrom() delivered and
  * writes those exact bytes to the pcap. Clean-room Rule 8: the frame it sends
@@ -179,7 +201,12 @@ static int do_send(const char *ifname, int count, int interval_ms, const char *m
 
 static int do_recv(const char *ifname, int seconds, const char *pcap_out)
 {
-    int fd = socket(AF_PACKET, SOCK_RAW, htons(SCA_ETHERTYPE));
+    /* ETH_P_ALL, not SCA_ETHERTYPE: see "WHY ETH_P_ALL, NOT 0x6007" above the
+     * do_send()/do_recv() split at the top of this file -- a protocol-specific
+     * bind only ever sees INCOMING frames, which is the TRANSMIT-CAPTURE gap
+     * rd vms-175 closes. The ethertype filter below narrows back to 0x6007
+     * frames in userspace, so the pcap still carries only what it always did. */
+    int fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (fd < 0) {
         fprintf(stderr, "SCA-L2PROBE-E-SOCKET, socket(AF_PACKET): %s "
                 "(needs CAP_NET_RAW)\n", strerror(errno));
@@ -188,12 +215,12 @@ static int do_recv(const char *ifname, int seconds, const char *pcap_out)
     int ifindex; uint8_t ourmac[6];
     if (get_ifindex_mac(fd, ifname, &ifindex, ourmac) != 0) return 1;
 
-    /* Bind to the interface + ethertype so only 0x6007 frames on this NIC are
-     * delivered. */
+    /* Bind to the interface, ALL protocols (see above) -- the ethertype gate
+     * is reapplied per-frame in the receive loop. */
     struct sockaddr_ll sa;
     memset(&sa, 0, sizeof(sa));
     sa.sll_family = AF_PACKET;
-    sa.sll_protocol = htons(SCA_ETHERTYPE);
+    sa.sll_protocol = htons(ETH_P_ALL);
     sa.sll_ifindex = ifindex;
     if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
         fprintf(stderr, "SCA-L2PROBE-E-BIND, bind(%s): %s\n", ifname, strerror(errno));
@@ -224,11 +251,15 @@ static int do_recv(const char *ifname, int seconds, const char *pcap_out)
     setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     time_t deadline = time(NULL) + seconds;
-    long total = 0, peer = 0;
-    int peer_seen = 0;
+    long total = 0, peer = 0, self_tx = 0, self_rx = 0;
+    int peer_seen = 0, self_tx_seen = 0;
     uint8_t buf[2048];
     while (time(NULL) < deadline) {
-        ssize_t n = recvfrom(fd, buf, sizeof(buf), 0, NULL, NULL);
+        struct sockaddr_ll from;
+        socklen_t fromlen = sizeof(from);
+        memset(&from, 0, sizeof(from));
+        ssize_t n = recvfrom(fd, buf, sizeof(buf), 0,
+                              (struct sockaddr *)&from, &fromlen);
         if (n < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) continue;
             fprintf(stderr, "SCA-L2PROBE-E-RECV, %s\n", strerror(errno));
@@ -236,15 +267,19 @@ static int do_recv(const char *ifname, int seconds, const char *pcap_out)
         }
         if (n < 14) continue;
         uint16_t et = (uint16_t)((buf[12] << 8) | buf[13]);
-        if (et != SCA_ETHERTYPE) continue; /* belt over the protocol bind */
+        if (et != SCA_ETHERTYPE) continue; /* the app-level narrow ETH_P_ALL
+                                             * needs now that bind() itself no
+                                             * longer filters by protocol */
         total++;
         if (pf) pcap_write(pf, buf, (size_t)n);
-        int is_peer = (memcmp(buf + 6, ourmac, 6) != 0);
+        int is_self = (memcmp(buf + 6, ourmac, 6) == 0);
+        int is_tx = (from.sll_pkttype == PACKET_OUTGOING);
         char sbuf[18], dbuf[18];
-        printf("SCA-L2PROBE-RX, %s src=%s dst=%s ethertype=0x%04x len=%zd\n",
-               is_peer ? "PEER" : "self", macs(buf + 6, sbuf), macs(buf + 0, dbuf), et, n);
+        printf("SCA-L2PROBE-RX, %s src=%s dst=%s ethertype=0x%04x len=%zd dir=%s\n",
+               is_self ? "self" : "PEER", macs(buf + 6, sbuf), macs(buf + 0, dbuf),
+               et, n, is_tx ? "TX" : "RX");
         fflush(stdout);
-        if (is_peer) {
+        if (!is_self) {
             peer++;
             if (!peer_seen) {
                 peer_seen = 1;
@@ -252,11 +287,23 @@ static int do_recv(const char *ifname, int seconds, const char *pcap_out)
                        macs(buf + 6, sbuf));
                 fflush(stdout);
             }
+        } else if (is_tx) {
+            self_tx++;
+            if (!self_tx_seen) {
+                self_tx_seen = 1;
+                printf("SCA-L2PROBE-SELFTX-OK, first SELF-TRANSMITTED 0x6007 "
+                       "frame observed on this node's own capture (the "
+                       "TRANSMIT-CAPTURE fix, rd vms-175)\n");
+                fflush(stdout);
+            }
+        } else {
+            self_rx++;
         }
     }
     if (pf) fclose(pf);
-    printf("SCA-L2PROBE-DONE, total_frames=%ld peer_frames=%ld peer_seen=%d\n",
-           total, peer, peer_seen);
+    printf("SCA-L2PROBE-DONE, total_frames=%ld peer_frames=%ld peer_seen=%d "
+           "self_tx_frames=%ld self_tx_seen=%d self_rx_frames=%ld\n",
+           total, peer, peer_seen, self_tx, self_tx_seen, self_rx);
     fflush(stdout);
     close(fd);
     return peer_seen ? 0 : 2; /* 2 = ran clean but saw no peer frame */

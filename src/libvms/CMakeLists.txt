@@ -72,6 +72,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     syssvc/sys_memory.c
     syssvc/sys_logical.c
     syssvc/sys_ast.c
+    syssvc/sys_cluevt.c
     syssvc/sys_lock.c
     syssvc/sys_misc.c
     syssvc/sys_security.c
@@ -83,6 +84,7 @@ add_library(vms ${OVMX_LIB_TYPE}
     rtl/lib_output.c
     rtl/lib_signal.c
     rtl/arith_signal.c
+    rtl/accvio_signal.c
     rtl/lib_invo.c
     rtl/lib_datetime.c
     rtl/lib_timer.c

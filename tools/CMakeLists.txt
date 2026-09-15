@@ -40,6 +40,14 @@ set_target_properties(vms_login PROPERTIES
 )
 install(TARGETS vms_login RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 
+# vms-843a / vms-16b (Option A): the SSH->DCL network-login AUTHORIZATION
+# decision (loginout_network_permit) is proven FAIL-CLOSED host-side -- no
+# executive, no live SSH -- the DECnet --*-selftest floor pattern. Runs
+# anywhere (Docker/CI); the live SSH->authenticated-DCL bracket is lab-gated
+# (vms-101), and the session-establish wiring is the tracked follow-on.
+add_test(NAME loginout_network_permit_selftest
+         COMMAND vms_login --network-permit-selftest)
+
 # HELP.EXE (vms-01b): the standalone image form of HELP. HELP is primarily a
 # DCL built-in (src/vmsdcl: cmd_help -> dcl_help.c); this image exists so the
 # INSTALLED SYS$SYSTEM:HELP.EXE can be run directly from a target device, the
@@ -309,6 +317,19 @@ install(TARGETS vms_tcpip_config RUNTIME DESTINATION ${VMS_SYSTEM_DIR})
 add_executable(vms_tcpip_inetd
     vms_tcpip_inetd.c
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets/vms_bgsock.c
+    # R4 G1 (rd vms-8bd): per-service run-as identity drop before execv. The
+    # identity TU + the SHARED sshd identity/credential primitives (Rule 10: reuse,
+    # do not duplicate the proven setident + fail-closed cred-drop logic).
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/services/tcpip_inetd_ident.c
+    ${CMAKE_SOURCE_DIR}/src/vmsssh/ssh_ident.c
+    ${CMAKE_SOURCE_DIR}/src/vmsssh/cred_drop.c
+    # Force-bind anchor: sysuaf.c weak-references ovmx_sysuaf_read_user/_uic (the
+    # real SYSUAF-over-ACP readers in vmsrms/sysuaf_live.o); a weak ref does NOT
+    # extract the archive member, so without this strong reference the per-service
+    # persona drop's sysuaf_lookup() returns -1/RMS=0 at runtime (the account never
+    # resolves) even though LIBVMSRMS is linked. Same trap dcl/loginout/decnetd
+    # close with their own *_rms_bind.c anchors (rd vms-8bd).
+    ${CMAKE_SOURCE_DIR}/src/vmstcpip/services/tcpip_inetd_rms_bind.c
 )
 
 target_include_directories(vms_tcpip_inetd PRIVATE
@@ -316,6 +337,13 @@ target_include_directories(vms_tcpip_inetd PRIVATE
     ${CMAKE_SOURCE_DIR}/src/libvmssys
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/sockets
     ${CMAKE_SOURCE_DIR}/src/vmstcpip/services
+    # rms/rms.h -- rms_stage_over_acp materializes a SYS$SYSTEM: service image off
+    # the ODS-2 ACP into an execve-able tmpfs path (vms-21b: the aux server launches
+    # ODS-2-resident images the VMS way, not a raw execv of an initramfs path).
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/include
+    # R4 G1: ssh_ident.h / cred_drop.h (the shared identity-drop seams) + sysuaf.h.
+    ${CMAKE_SOURCE_DIR}/src/vmsssh
+    ${CMAKE_SOURCE_DIR}/src/libvms/include
 )
 
 target_compile_definitions(vms_tcpip_inetd PRIVATE
@@ -327,7 +355,7 @@ target_compile_options(vms_tcpip_inetd PRIVATE
     -Wall -Wextra
 )
 
-target_link_libraries(vms_tcpip_inetd PRIVATE vms pthread)
+target_link_libraries(vms_tcpip_inetd PRIVATE vms vmsrms pthread)
 
 set_target_properties(vms_tcpip_inetd PROPERTIES
     OUTPUT_NAME "TCPIP\$INETD"

@@ -496,6 +496,10 @@ static void barrier_commit_phase2(struct cnxman_barrier *b)
 
 	(void)cnxman_phase2_commit(b->cl, &in, &st, b->ops);
 
+	/* THE COMMIT the join FSM promotes on (rd vms-9c99): p. 7-42's tasks
+	 * have just run, so this node's membership is decided HERE. */
+	b->phase2_commits++;
+
 	b->nodemap_unmapped += st.nodemap_unmapped;
 	b->count_mismatch += st.count_mismatch;
 	b->bitmap_short += st.bitmap_short;
@@ -799,6 +803,18 @@ static void barrier_h_rebuild(struct cnxman_barrier *b,
 	req.from_csid = m->from_valid ? m->from_csid : (vms_csid_t)0;
 	req.category = m->env.category;
 	req.opcode = m->env.opcode;
+	{
+		/* The trust fact, read off the SENDER'S OWN CSB (rd vms-1ee).
+		 * The lock manager's arm refuses to serve a system that has not
+		 * proved it runs this implementation, and it may not re-derive
+		 * that question -- so the block that holds the answer supplies
+		 * it. A record with no CSB behind it is not proven, which is
+		 * the same thing as not proven (INV-6). */
+		const struct vms_csb *from = barrier_csb_at(b, m->from_csb);
+
+		req.peer_is_ours = (uint8_t)(from != NULL ? from->peer_is_ours
+							  : 0u);
+	}
 	/* The received FRAME, which is what every vms_cluster_codec_cm.h
 	 * accessor takes: the DLM reads it through those and never by offset
 	 * (vms_dlm_scs.h SS3). */
@@ -1079,6 +1095,23 @@ void cnxman_barrier_set_dlm(struct cnxman_barrier *b,
 int cnxman_barrier_phase2_committed(const struct cnxman_barrier *b)
 {
 	return (b != NULL && b->phase2_committed != 0u) ? 1 : 0;
+}
+
+uint32_t cnxman_barrier_phase2_commits(const struct cnxman_barrier *b,
+				       struct cnxman_barrier_commit *out)
+{
+	if (b == NULL)
+		return 0u;
+	if (out != NULL && b->phase2_commits != 0u) {
+		out->epoch = b->epoch;
+		out->tr_class = b->tr_class;
+		/* What the map said about US, written where the map was really
+		 * read -- the same Phase 2 that just ran. */
+		out->local_named = b->local_named;
+		out->local_in_map = b->local_in_map;
+		out->pad = 0u;
+	}
+	return b->phase2_commits;
 }
 
 uint32_t cnxman_barrier_commits(const struct cnxman_barrier *b,

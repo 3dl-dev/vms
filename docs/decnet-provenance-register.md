@@ -362,6 +362,45 @@ benefit to this capture. The VAX oracle alone satisfies the done-condition (a VA
 confirmed running Phase IV); Alpha-side DECnet observation is deferred, tracked by this note, not
 a new item — pursue only if a future need specifically requires the 64-bit answer.
 
+### 4.6a Ethernet Router Hello — ORACLE-VERIFIED n=0 tail (`vms-df5`)
+
+**This subsection supersedes, for the Ethernet router-hello message, §4.6's "no router specimen"
+scope.** §4.6 captured only ENDNODE hellos (lab-2 VAX1 was an endnode). A later capture recorded a
+real **OpenVMS VAX V7.3 ROUTER** hello on the lab segment, which grounds the router-hello codec
+(`src/vmsdecnet/routing/dnet_router_hello.{c,h}`) and, in particular, resolves the wire-format bug
+that made a real VMS VAX raise routing **event 4.4 (packet format error)** against OVMX and never
+select it as designated router: OVMX previously emitted an **18-byte** routing message that stopped
+after MPD, but a conformant Phase IV router hello **always carries the RSLIST tail** after MPD.
+
+**Captured lone-L1-router (n=0) routing message, source 1.2 (27 bytes, DATA LENGTH = 0x1b):**
+```
+0b 02 00 00 aa 00 04 00 02 04 02 da 05 40 00 0f 00 00 08 00 00 00 00 00 00 00 00
+```
+Decode: RFLAGS=0x0b (control, router hello), TIVER=02 00 00, ID=aa:00:04:00:02:04 (node 1.2),
+IINFO=0x02 (L1 router), BLKSIZE=0x05da (1498, LE), PRIORITY=0x40 (64), AREA=0x00, TIMER=0x000f
+(15 s, LE — **AREA→TIMER is direct; there is no BCT3MULT byte on the wire**), MPD=0x00, then the
+**9-byte RSLIST tail** = `08` (RSLIST-length = 8 + 0) · `00 00 00 00 00 00 00` (7-byte reserved
+Name) · `00` (RSLIST-count = 0, no other routers reported). This matches, byte-for-byte, both the
+public tcpdump `print-decnet.c` `rhellomsg` fixed part and the public Linux
+`net/decnet/dn_dev.c dn_send_router_hello()` RSLIST-tail layout (RSLIST-length = 8 + 7·n, 7 zero
+Name bytes, RSLIST-count = 7·n, then n 7-byte entries), which are the DNA Phase IV protocol bytes.
+
+**Proven:** `tests/vmsdecnet/test_dnet_router_hello.c` holds these 27 bytes verbatim
+(`kOracleRoutingMsg`), decodes them, asserts every field, and asserts OVMX's encoder — both on a
+decode→re-encode and on a fresh lone-L1-router build — reproduces them **byte-for-byte**. The
+individual router-list ENTRY sub-fields (n > 0) remain spec-derived/opaque: the captured specimen
+advertised no other routers, so no entry bytes were observed (two-specimen promotion of the entry
+encoding awaits a multi-router capture).
+
+**Clean-room (Rule 8).** The 27-byte value is real VMS wire (protocol bytes, uncopyrightable). The
+Linux kernel encoder was consulted ONLY as an independent confirmation of the wire format; OVMX's
+codec is written in this repo's own field-append style and copies no kernel code. No VSI/HPE/DEC
+source or binary was disassembled or copied.
+
+**Retention.** Lab artifact, **not committed** (Rule 8 practice): the specimen hex is retained on
+the lab volume at `/lab/decnet-wireproof/real-router-hello-specimen.hex` and cited in-doc (the
+27 message bytes are reproduced above and in the test).
+
 ### 4.7 CTERM (Command Terminal / `$ SET HOST`) — provenance (`vms-4d2`, rung 3)
 
 **Landed:** `src/vmsdecnet/cterm/dnet_cterm.{c,h}` — the CTERM terminal-service protocol behind

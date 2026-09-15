@@ -1,0 +1,1746 @@
+=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ===
+mode=xnode
+accel=kvm -cpu host group=2026 recnx=8s stagger=30s
+cross-node phase: ON (windows A=150s B=120s, linger=45s)
+node A: OVMXA/1025 VOTES=1 EXPECTED_VOTES=1 VAXCLUSTER=2
+node B: OVMXB/1026 VOTES=0          VAXCLUSTER=2
+
+--- powering on node A (it must hear nobody for 8s, then found) ---
+--- powering on node B (it must join what A formed) ---
+
+=== node A: what its executive held (ttyS1) ===
+RIG-A-REGISTER status=1 vms_pid=0x10000001
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=1 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32 swver=OVMX0.6
+RIG-A-START status=1 port_up=1 state=2
+RIG-A-CLUB t=1s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=2s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=3s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=4s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=5s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=6s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=7s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=8s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=9s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=10s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=11s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=12s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=13s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=14s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=15s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=16s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=17s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=18s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=19s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=20s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=21s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=22s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=23s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=24s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=25s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=26s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=27s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=28s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=29s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=30s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=31s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=32s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=33s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=34s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=35s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=36s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=37s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=38s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=39s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=40s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=41s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=42s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=43s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=44s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=45s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=46s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=47s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=48s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=49s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=50s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=51s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=52s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=53s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=54s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=55s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=56s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=57s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=58s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=59s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=60s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=61s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=62s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=63s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=64s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=65s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=66s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=67s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=68s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=69s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=70s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=71s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=72s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=73s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=74s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=75s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=76s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=77s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=78s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=79s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=80s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=81s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=82s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=83s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=84s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=85s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=86s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=87s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=88s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=89s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=90s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=91s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=92s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=93s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=94s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=95s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=96s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=97s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=98s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=99s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=100s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=101s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=102s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=103s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=104s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=105s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=106s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=107s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=108s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=109s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=110s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=111s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=112s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=113s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=114s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=115s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=116s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=117s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=118s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=119s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=120s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=121s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=122s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=123s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=124s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=125s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=126s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=127s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=128s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=129s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=130s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=131s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=132s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=133s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=134s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=135s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=136s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=137s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=138s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=139s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=140s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=141s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=142s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=143s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=144s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=145s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=146s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=147s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=148s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=149s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=150s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=2 quorum=1 cevotes=1 epoch=2 projections=agree
+RIG-A-DLM-ENQ res=OVMX$DLMPROBE status=1 lkid=0x00000003
+RIG-A-DLM-RES found=1 local_csid=0x00010001 master_csid=0x00010002 is_local_master=0 dir_csid=0x00010002 n_granted=0 remote_holder_csid=0x00000000
+RIG-A-DLM-DEQ status=1
+RIG-A-DLM at=before connected=1 lockdirwt=0 gen=4 proxy_lkbs=0 req_sent=1 req_received=2 grants_sent=1 grants_received=1 declined=0
+RIG-A-DLM-EMIT at=before releases_sent=1 releases_no_wire_op=0 blkasts_sent=1 blkasts_no_wire_op=0 blkasts_received=0 blkasts_delivered=0 queued_no_reply=1 unparsed=0 foreign_refused=0
+RIG-A-DLM-RECV at=before releases_received=0 valblk_writes_received=0 releases_refused=0 blkasts_unparsed=0 deferred_grants_owed=0
+RIG-A-DLM-LEG at=before sends=3 sends_refused=0 frames_rx=3 replies_sent=1 declined=0
+RIG-A-DLM-POST at=before queued=2 unqueued=0 lock_gone=0 refused=0
+RIG-A-XN-PEER res=OVMXA$X00 found=1 local_csid=0x00010001 dir_csid=0x00010002 master_csid=0x00010002 is_local_master=0 n_granted=0 remote_holder_csid=0x00000000
+RIG-A-XN-HOLD res=OVMXA$X00 lkid=0x00000004 granted_mode=5 master_csid=0x00010002 tried=1
+RIG-A-XN-CONTEND res=OVMXA$X00 status=1 lkid=0x00000005 mode=EX (a second, incompatible cross-node request at the master)
+RIG-A-XN-AFTER-CONTEND res=OVMXA$X00 found=1 local_csid=0x00010001 dir_csid=0x00010002 master_csid=0x00010002 is_local_master=0 n_granted=0 remote_holder_csid=0x00000000
+RIG-A-XN-CONTEND-MODE lkid=0x00000005 granted_mode=0 (0/NL = still queued at the master, which is the state that owes the blocking AST)
+RIG-A-XN-AST astadr=0x403330 astprm=0x4 acmode=3 is_blkast_routine=1
+RIG-A-XN-ASTS delivered=1
+RIG-A-XN-DEQ-HOLD res=OVMXA$X00 lkid=0x00000004 status=1 (this is the $DEQ that must cross as op-0x03)
+RIG-A-XN-DEQ-CONTEND lkid=0x00000005 status=1 (no master handle: the arm must refuse the wire op and count it, not invent one)
+RIG-A-DLM at=after connected=1 lockdirwt=0 gen=4 proxy_lkbs=0 req_sent=4 req_received=4 grants_sent=1 grants_received=2 declined=0
+RIG-A-DLM-EMIT at=after releases_sent=2 releases_no_wire_op=1 blkasts_sent=1 blkasts_no_wire_op=0 blkasts_received=1 blkasts_delivered=1 queued_no_reply=2 unparsed=0 foreign_refused=0
+RIG-A-DLM-RECV at=after releases_received=1 valblk_writes_received=0 releases_refused=0 blkasts_unparsed=0 deferred_grants_owed=1
+RIG-A-DLM-LEG at=after sends=7 sends_refused=0 frames_rx=7 replies_sent=1 declined=0
+RIG-A-DLM-POST at=after queued=6 unqueued=0 lock_gone=0 refused=1
+RIG-A-RESCLEAN-HOLD res=OVMXA$R01 lkid=0x00000008 master_csid=0x00010002 (single holder, no contender -- the direct-release subject)
+RIG-A-RESMASTER-BEFORE NONE (masters no dedicated peer-namespace candidate with exactly one outstanding grant)
+RIG-A-RESCLEAN-DEQ res=OVMXA$R01 lkid=0x00000008 status=1
+RIG-A-LVBHOLD res=OVMXA$L01 lkid=0x0000000a master_csid=0x00010002 (dedicated single holder, no contender -- the op-0x06 subject)
+RIG-A-LVBWRITE res=OVMXA$L01 lkid=0x0000000a status=1 mode=CR pattern=OVMXLVBWRITE0001 (the demote-from-write that must emit op-0x06)
+RIG-A-LVBDEQ res=OVMXA$L01 lkid=0x0000000a status=1
+RIG-A-LVBRDHOLD res=OVMXA$RD01 lkid=0x0000000c status=1 mode=CR pattern=OVMXLVBREAD00001 (this node IS the master for the READ crossing -- writes+holds the value block for the peer's cross-node read, rd vms-727)
+RIG-A-DLM at=survival connected=1 lockdirwt=0 gen=4 proxy_lkbs=0 req_sent=7 req_received=13 grants_sent=5 grants_received=4 declined=0
+RIG-A-DLM-EMIT at=survival releases_sent=4 releases_no_wire_op=1 blkasts_sent=1 blkasts_no_wire_op=0 blkasts_received=1 blkasts_delivered=1 queued_no_reply=2 unparsed=0 foreign_refused=0
+RIG-A-DLM-RECV at=survival releases_received=5 valblk_writes_received=1 releases_refused=0 blkasts_unparsed=0 deferred_grants_owed=1
+RIG-A-DLM-LEG at=survival sends=12 sends_refused=0 frames_rx=18 replies_sent=5 declined=0
+RIG-A-DLM-POST at=survival queued=11 unqueued=0 lock_gone=0 refused=1
+RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=2 quorum=1 cevotes=1 epoch=2 projections=agree
+RIG-A-PORT open=1 link=1 mtu=1500 max_pktsz=1500 channels=1 vcs=1 rx=836 tx=849 tx_err=0 rx_drop_nobuf=0 rx_drop_class=0
+RIG-A-CHAN i=0 mac=52:54:00:00:10:26 state=4 sysid_valid=1 sysid=1026 hello_tx=187 hello_rx=279 pktsz=1500
+RIG-A-VC i=0 peer_sysid=1026 state=3 send_seq=285 recv_seq=271 peer_recv_ack=284 unacked=0 retx=0 rx_gaps=0 credits_send=32 credits_recv=0 down_reason=0
+RIG-A-SCS sbs=1 cdts=18 sysaps=3 dir_lookups_sent=34 dir_lookups_served=8 credit_stalls=0
+RIG-A-CDT i=0 local=SCS$DIRECTORY    remote= peer_sysid=0 conid=0x15c40001 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-A-CDT i=1 local=VMS$VAXcluster   remote= peer_sysid=0 conid=0x15c40002 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-A-CDT i=2 local=VMS$DISK_CL_DRVR remote= peer_sysid=0 conid=0x15c40003 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-A-JOIN state=5 failure=0 enabled=1 count=215 recorded=215 ignored=2
+RIG-A-JOINREC seq=0 t=34757 rep=0 kind=1 state=0->0 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1026
+RIG-A-JOINREC seq=1 t=34798 rep=0 kind=1 state=0->0 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=365166597
+RIG-A-JOINREC seq=2 t=34814 rep=0 kind=0 state=0->0 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1026
+RIG-A-JOINREC seq=3 t=34814 rep=0 kind=0 state=0->0 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=365166597
+RIG-A-JOINREC seq=4 t=34814 rep=1 kind=0 state=0->0 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=5 t=34814 rep=0 kind=0 state=0->0 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-A-JOINREC seq=6 t=34841 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33027
+RIG-A-JOINREC seq=7 t=34883 rep=1 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33029
+RIG-A-JOINREC seq=8 t=34899 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33033
+RIG-A-JOINREC seq=9 t=34949 rep=0 kind=0 state=0->0 event=7 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=10 t=35395 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=11 t=35396 rep=0 kind=2 state=1->1 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166597
+RIG-A-JOINREC seq=12 t=35396 rep=0 kind=2 state=1->1 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166597
+RIG-A-JOINREC seq=13 t=35443 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=14 t=35484 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=15 t=35525 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166599
+RIG-A-JOINREC seq=16 t=35525 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166599
+RIG-A-JOINREC seq=17 t=35525 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166599
+RIG-A-JOINREC seq=18 t=35525 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166599
+RIG-A-JOINREC seq=19 t=35525 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166599
+RIG-A-JOINREC seq=20 t=35575 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=21 t=35634 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=22 t=36552 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=23 t=41672 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=24 t=42568 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=25 t=49732 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=26 t=49776 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=27 t=49817 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=28 t=49858 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166602
+RIG-A-JOINREC seq=29 t=49858 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166602
+RIG-A-JOINREC seq=30 t=49858 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166602
+RIG-A-JOINREC seq=31 t=49858 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166602
+RIG-A-JOINREC seq=32 t=49858 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166602
+RIG-A-JOINREC seq=33 t=49905 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=34 t=49970 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=35 t=50876 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=36 t=56008 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=37 t=56892 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=38 t=64068 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=39 t=64109 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=40 t=64150 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=41 t=64191 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166604
+RIG-A-JOINREC seq=42 t=64191 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166604
+RIG-A-JOINREC seq=43 t=64191 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166604
+RIG-A-JOINREC seq=44 t=64191 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166604
+RIG-A-JOINREC seq=45 t=64191 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166604
+RIG-A-JOINREC seq=46 t=64240 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=47 t=64306 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=48 t=65212 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=49 t=70354 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=50 t=71228 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=51 t=78408 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=52 t=78450 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=53 t=78491 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=54 t=78532 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166608
+RIG-A-JOINREC seq=55 t=78532 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166608
+RIG-A-JOINREC seq=56 t=78532 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166608
+RIG-A-JOINREC seq=57 t=78532 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166608
+RIG-A-JOINREC seq=58 t=78532 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166608
+RIG-A-JOINREC seq=59 t=78589 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=60 t=78642 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=61 t=79548 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=62 t=84694 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=63 t=85564 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=64 t=92742 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=65 t=92783 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=66 t=92824 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=67 t=92865 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166610
+RIG-A-JOINREC seq=68 t=92865 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166610
+RIG-A-JOINREC seq=69 t=92865 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166610
+RIG-A-JOINREC seq=70 t=92865 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166610
+RIG-A-JOINREC seq=71 t=92865 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166610
+RIG-A-JOINREC seq=72 t=92912 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=73 t=92978 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=74 t=93884 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=75 t=99027 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=76 t=99900 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=77 t=107075 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=78 t=107117 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=79 t=107158 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=80 t=107199 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166614
+RIG-A-JOINREC seq=81 t=107199 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166614
+RIG-A-JOINREC seq=82 t=107199 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166614
+RIG-A-JOINREC seq=83 t=107199 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166614
+RIG-A-JOINREC seq=84 t=107199 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166614
+RIG-A-JOINREC seq=85 t=107262 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=86 t=107314 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=87 t=108220 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=88 t=113354 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=89 t=114236 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=90 t=121411 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=91 t=121453 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=92 t=121493 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=93 t=121535 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166616
+RIG-A-JOINREC seq=94 t=121535 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166616
+RIG-A-JOINREC seq=95 t=121535 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166616
+RIG-A-JOINREC seq=96 t=121535 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166616
+RIG-A-JOINREC seq=97 t=121535 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166616
+RIG-A-JOINREC seq=98 t=121582 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=99 t=121651 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=100 t=122556 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=101 t=127693 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=102 t=128572 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=103 t=135752 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=104 t=135794 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=105 t=135834 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=106 t=135876 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166620
+RIG-A-JOINREC seq=107 t=135876 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166620
+RIG-A-JOINREC seq=108 t=135876 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166620
+RIG-A-JOINREC seq=109 t=135876 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166620
+RIG-A-JOINREC seq=110 t=135876 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166620
+RIG-A-JOINREC seq=111 t=135927 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=112 t=135986 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=113 t=136892 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=114 t=142024 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=115 t=142908 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=116 t=150083 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=117 t=150131 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=118 t=150173 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=119 t=150214 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166622
+RIG-A-JOINREC seq=120 t=150214 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166622
+RIG-A-JOINREC seq=121 t=150214 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166622
+RIG-A-JOINREC seq=122 t=150214 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166622
+RIG-A-JOINREC seq=123 t=150214 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166622
+RIG-A-JOINREC seq=124 t=150261 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=125 t=150322 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=126 t=151228 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=127 t=156362 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=128 t=157244 rep=0 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=129 t=157446 rep=1 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-A-JOINREC seq=130 t=158269 rep=0 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=131 t=158273 rep=1 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33281
+RIG-A-JOINREC seq=132 t=158604 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=516
+RIG-A-JOINREC seq=133 t=159292 rep=0 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=134 t=160186 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-A-JOINREC seq=135 t=160316 rep=0 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=136 t=160752 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-A-JOINREC seq=137 t=161340 rep=0 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=138 t=161641 rep=0 kind=1 state=0->0 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=139 t=162364 rep=1 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=140 t=163807 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-A-JOINREC seq=141 t=164424 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=142 t=164465 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=143 t=164506 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=144 t=164551 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166626
+RIG-A-JOINREC seq=145 t=164551 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166626
+RIG-A-JOINREC seq=146 t=164551 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166626
+RIG-A-JOINREC seq=147 t=164551 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166626
+RIG-A-JOINREC seq=148 t=164551 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166626
+RIG-A-JOINREC seq=149 t=164602 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=150 t=164659 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=151 t=164700 rep=0 kind=1 state=5->5 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33281
+RIG-A-JOINREC seq=152 t=164829 rep=0 kind=1 state=5->5 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-A-JOINREC seq=153 t=165564 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=154 t=170700 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=155 t=171580 rep=3 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=156 t=174977 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33281
+RIG-A-JOINREC seq=157 t=175102 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-A-JOINREC seq=158 t=175372 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=518
+RIG-A-JOINREC seq=159 t=175676 rep=1 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=160 t=177379 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-A-JOINREC seq=161 t=177379 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-A-JOINREC seq=162 t=177652 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-A-JOINREC seq=163 t=177652 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-A-JOINREC seq=164 t=177724 rep=0 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=165 t=177914 rep=0 kind=1 state=0->0 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-A-JOINREC seq=166 t=178756 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=167 t=178798 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=168 t=178839 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=169 t=178881 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166628
+RIG-A-JOINREC seq=170 t=178882 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166628
+RIG-A-JOINREC seq=171 t=178882 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166628
+RIG-A-JOINREC seq=172 t=178882 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166628
+RIG-A-JOINREC seq=173 t=178882 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166628
+RIG-A-JOINREC seq=174 t=178928 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=175 t=178994 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=176 t=179900 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=177 t=185035 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=178 t=185916 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=179 t=193090 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=180 t=193133 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=181 t=193175 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=182 t=193216 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166630
+RIG-A-JOINREC seq=183 t=193216 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166630
+RIG-A-JOINREC seq=184 t=193216 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166630
+RIG-A-JOINREC seq=185 t=193216 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166630
+RIG-A-JOINREC seq=186 t=193216 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166630
+RIG-A-JOINREC seq=187 t=193263 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=188 t=193330 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=189 t=194236 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=190 t=199374 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=191 t=200252 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=192 t=207427 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=193 t=207470 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=194 t=207512 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=195 t=207554 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166634
+RIG-A-JOINREC seq=196 t=207554 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166634
+RIG-A-JOINREC seq=197 t=207554 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166634
+RIG-A-JOINREC seq=198 t=207554 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166634
+RIG-A-JOINREC seq=199 t=207554 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166634
+RIG-A-JOINREC seq=200 t=207604 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=201 t=207666 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=202 t=208572 rep=4 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=203 t=213705 rep=0 kind=0 state=5->0 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=204 t=214588 rep=6 kind=0 state=0->0 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=205 t=221762 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=206 t=221804 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=207 t=221845 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-A-JOINREC seq=208 t=221886 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=365166636
+RIG-A-JOINREC seq=209 t=221886 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=365166636
+RIG-A-JOINREC seq=210 t=221886 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=365166636
+RIG-A-JOINREC seq=211 t=221886 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=365166636
+RIG-A-JOINREC seq=212 t=221886 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=365166636
+RIG-A-JOINREC seq=213 t=221932 rep=0 kind=1 state=5->5 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-A-JOINREC seq=214 t=222002 rep=1 kind=0 state=5->5 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-A-JOINREC seq=215 t=222914 rep=1 kind=0 state=5->5 event=14 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+===DMESG-A-BEGIN===
+[    1.259909] SCSI subsystem initialized
+[    1.640914] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 243)
+[    3.468619] vms: loading out-of-tree module taints kernel.
+[    3.473237] vms: module verification failed: signature and/or required key missing - tainting kernel
+[    3.501008] vms: initializing VMS kernel module
+[    3.505095] vms: ethernet unit ETH0: -> eth0 (carrier up)
+[    3.510265] vms: DECnet device face NET: created (NETACP layers its circuit over ETH0:)
+[    3.517080] vms: device table initialized, console terminal OPA0: created
+[    3.523974] vms: system identity constant SYSTEM [1,4] privileges=ALL established by the executive
+[    3.531756] vms: logical-name arena ready (512 entries, 1208352 bytes)
+[    3.535943] vms: mailbox table initialized
+[    3.538665] vms: ODS-2 ACP mounted-volume table initialized
+[    3.542482] vms: /dev/vms registered successfully
+[    4.563677] vms: cluster port unit PEA0: -> eth0
+[    4.566674] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   12.770754] %CNXMAN, this node has quorum by its own votes: forming an OpenVMS Cluster
+[   12.776835] %CNXMAN, this node is a member of the cluster
+[   12.780076] %CNXMAN, completed VAXcluster state transition
+[   35.299557] %PEA0, channel verified
+[   35.346497] %PEA0, virtual circuit open
+[   35.733570] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   35.748789] %CNXMAN, proposing addition of a system to the cluster
+[   35.818230] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[   35.828550] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[   35.834477] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[   35.846098] %CNXMAN, system 0000000000000402 was added to the cluster
+[   36.322820] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   37.474749] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   42.594714] %CNXMAN, membership request to the selected member not answered
+[   42.598946] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   43.490777] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+[   50.658804] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   56.930763] %CNXMAN, membership request to the selected member not answered
+[   56.935637] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   64.994833] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   71.266770] %CNXMAN, membership request to the selected member not answered
+[   71.279360] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   79.330767] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   85.602765] %CNXMAN, membership request to the selected member not answered
+[   85.615080] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   93.666804] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   99.938703] %CNXMAN, membership request to the selected member not answered
+[   99.954056] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  108.002719] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  114.274701] %CNXMAN, membership request to the selected member not answered
+[  114.280311] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  122.338738] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  128.610777] %CNXMAN, membership request to the selected member not answered
+[  128.617009] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  136.675004] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  142.946720] %CNXMAN, membership request to the selected member not answered
+[  142.951440] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  151.010732] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  157.282797] %CNXMAN, membership request to the selected member not answered
+[  157.288047] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  162.575920] %CNXMAN, cross-node lock release NOT transmitted: the wire record is dropped and the gap is counted
+[  165.346722] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  171.618732] %CNXMAN, membership request to the selected member not answered
+[  171.624125] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  179.682736] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  185.954763] %CNXMAN, membership request to the selected member not answered
+[  185.960024] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  194.018777] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  200.290719] %CNXMAN, membership request to the selected member not answered
+[  200.301277] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  208.354834] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  214.626715] %CNXMAN, membership request to the selected member not answered
+[  214.631488] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[  222.690778] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  223.271936] vms: CLUSTER_DIAG_PORT row 1 index 1 -> SS$ 2680
+[  223.283685] vms: CLUSTER_DIAG_PORT row 2 index 1 -> SS$ 2680
+[  223.317855] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+===DMESG-A-END===
+
+=== node B: what its executive held (ttyS1) ===
+RIG-B-REGISTER status=1 vms_pid=0x10000001
+RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1026 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32 swver=OVMX0.6
+RIG-B-START status=1 port_up=1 state=2
+RIG-B-CLUB t=1s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=2 transition=0 bitmap=0x00000000
+RIG-B-GETSYI member=0 nodes=0 votes=0 quorum=0 csid=-
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=- state=LOCAL
+RIG-B-CSB i=1 node=-      sysid=1025 csid=- state=NEW
+RIG-B-CLUB t=2s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=3s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=4s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=5s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=6s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=7s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=8s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=9s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=10s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=11s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=12s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=13s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=14s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=15s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=16s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=17s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=18s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=19s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=20s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=21s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=22s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=23s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=24s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=25s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=26s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=27s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=28s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=29s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=30s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=31s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=32s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=33s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=34s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=35s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=36s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=37s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=38s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=39s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=40s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=41s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=42s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=43s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=44s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=45s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=46s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=47s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=48s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=49s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=50s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=51s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=52s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=53s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=54s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=55s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=56s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=57s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=58s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=59s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=60s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=61s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=62s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=63s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=64s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=65s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=66s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=67s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=68s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=69s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=70s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=71s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=72s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=73s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=74s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=75s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=76s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=77s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=78s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=79s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=80s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=81s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=82s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=83s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=84s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=85s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=86s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=87s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=88s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=89s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=90s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=91s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=92s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=93s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=94s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=95s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=96s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=97s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=98s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=99s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=100s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=101s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=102s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=103s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=104s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=105s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=106s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=107s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=108s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=109s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=110s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=111s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=112s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=113s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=114s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=115s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=116s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=117s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=118s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=119s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=120s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-FINAL role=joiner member=1 state=MEMBER csid=0x00010002 cn=2 quorum=0 cevotes=0 epoch=2 projections=agree
+RIG-B-DLM-ENQ res=OVMX$DLMPROBE status=1 lkid=0x00000001
+RIG-B-DLM-RES found=1 local_csid=0x00010002 master_csid=0x00010002 is_local_master=1 dir_csid=0x00010002 n_granted=1 remote_holder_csid=0x00000000
+RIG-B-DLM-DEQ status=1
+RIG-B-DLM at=before connected=1 lockdirwt=0 gen=2 proxy_lkbs=0 req_sent=0 req_received=0 grants_sent=0 grants_received=0 declined=0
+RIG-B-DLM-EMIT at=before releases_sent=0 releases_no_wire_op=0 blkasts_sent=0 blkasts_no_wire_op=0 blkasts_received=0 blkasts_delivered=0 queued_no_reply=0 unparsed=0 foreign_refused=0
+RIG-B-DLM-RECV at=before releases_received=0 valblk_writes_received=0 releases_refused=0 blkasts_unparsed=0 deferred_grants_owed=0
+RIG-B-DLM-LEG at=before sends=0 sends_refused=0 frames_rx=0 replies_sent=0 declined=0
+RIG-B-DLM-POST at=before queued=0 unqueued=0 lock_gone=0 refused=0
+RIG-B-XN-LOCAL res=OVMXB$X00 found=1 local_csid=0x00010002 dir_csid=0x00010002 master_csid=0x00010002 is_local_master=1 n_granted=1 remote_holder_csid=0x00000000
+RIG-B-XN-PEER res=OVMXB$X01 found=1 local_csid=0x00010002 dir_csid=0x00010001 master_csid=0x00010001 is_local_master=0 n_granted=0 remote_holder_csid=0x00000000
+RIG-B-XN-HOLD res=OVMXB$X01 lkid=0x00000003 granted_mode=5 master_csid=0x00010001 tried=2
+RIG-B-XN-CONTEND res=OVMXB$X01 status=1 lkid=0x00000004 mode=EX (a second, incompatible cross-node request at the master)
+RIG-B-XN-AFTER-CONTEND res=OVMXB$X01 found=1 local_csid=0x00010002 dir_csid=0x00010001 master_csid=0x00010001 is_local_master=0 n_granted=0 remote_holder_csid=0x00000000
+RIG-B-XN-CONTEND-MODE lkid=0x00000004 granted_mode=0 (0/NL = still queued at the master, which is the state that owes the blocking AST)
+RIG-B-XN-AST astadr=0x403330 astprm=0x3 acmode=3 is_blkast_routine=1
+RIG-B-XN-ASTS delivered=1
+RIG-B-XN-DEQ-HOLD res=OVMXB$X01 lkid=0x00000003 status=1 (this is the $DEQ that must cross as op-0x03)
+RIG-B-XN-DEQ-CONTEND lkid=0x00000004 status=1 (no master handle: the arm must refuse the wire op and count it, not invent one)
+RIG-B-DLM at=after connected=1 lockdirwt=0 gen=2 proxy_lkbs=0 req_sent=3 req_received=6 grants_sent=2 grants_received=1 declined=0
+RIG-B-DLM-EMIT at=after releases_sent=1 releases_no_wire_op=1 blkasts_sent=1 blkasts_no_wire_op=0 blkasts_received=1 blkasts_delivered=1 queued_no_reply=2 unparsed=0 foreign_refused=0
+RIG-B-DLM-RECV at=after releases_received=2 valblk_writes_received=0 releases_refused=0 blkasts_unparsed=0 deferred_grants_owed=1
+RIG-B-DLM-LEG at=after sends=5 sends_refused=0 frames_rx=8 replies_sent=2 declined=0
+RIG-B-DLM-POST at=after queued=4 unqueued=0 lock_gone=0 refused=1
+RIG-B-RESCLEAN-HOLD res=OVMXB$R00 lkid=0x00000008 master_csid=0x00010001 (single holder, no contender -- the direct-release subject)
+RIG-B-RESMASTER-BEFORE res=OVMXA$R01 found=1 is_local_master=1 n_granted=1 remote_holder_csid=0x00010001
+RIG-B-RESCLEAN-DEQ res=OVMXB$R00 lkid=0x00000008 status=1
+RIG-B-RESMASTER-AFTER res=OVMXA$R01 found=1 is_local_master=1 n_granted=0 remote_holder_csid=0x00000000 releases_received=3 base_releases_received=2 counter_rose=1
+RIG-B-LVBHOLD res=OVMXB$L01 lkid=0x0000000c master_csid=0x00010001 (dedicated single holder, no contender -- the op-0x06 subject)
+RIG-B-LVBWRITE res=OVMXB$L01 lkid=0x0000000c status=1 mode=CR pattern=OVMXLVBWRITE0001 (the demote-from-write that must emit op-0x06)
+RIG-B-LVBDEQ res=OVMXB$L01 lkid=0x0000000c status=1
+RIG-B-LVBRD-PEER res=OVMXA$RD01 master_csid=0x00010001 (the peer masters this name -- this node is the READER)
+RIG-B-GETLKI res=OVMXA$RD01 valblk_ascii=OVMXLVBREAD00001 matched=1 attempts=1 enq_status=1 getlki_status=1 (cross-node $ENQ...LCK$M_VALBLK read of the peer master's value block, rd vms-727)
+RIG-B-DLM at=survival connected=1 lockdirwt=0 gen=2 proxy_lkbs=0 req_sent=8 req_received=11 grants_sent=4 grants_received=5 declined=0
+RIG-B-DLM-EMIT at=survival releases_sent=5 releases_no_wire_op=1 blkasts_sent=1 blkasts_no_wire_op=0 blkasts_received=1 blkasts_delivered=1 queued_no_reply=2 unparsed=0 foreign_refused=0
+RIG-B-DLM-RECV at=survival releases_received=4 valblk_writes_received=1 releases_refused=0 blkasts_unparsed=0 deferred_grants_owed=1
+RIG-B-DLM-LEG at=survival sends=14 sends_refused=0 frames_rx=17 replies_sent=4 declined=0
+RIG-B-DLM-POST at=survival queued=13 unqueued=0 lock_gone=0 refused=1
+RIG-B-FINAL role=joiner member=1 state=MEMBER csid=0x00010002 cn=2 quorum=0 cevotes=0 epoch=2 projections=agree
+RIG-B-PORT open=1 link=1 mtu=1500 max_pktsz=1500 channels=1 vcs=1 rx=837 tx=837 tx_err=0 rx_drop_nobuf=0 rx_drop_class=0
+RIG-B-CHAN i=0 mac=52:54:00:00:10:25 state=4 sysid_valid=1 sysid=1025 hello_tx=188 hello_rx=281 pktsz=1500
+RIG-B-VC i=0 peer_sysid=1025 state=3 send_seq=272 recv_seq=284 peer_recv_ack=271 unacked=0 retx=0 rx_gaps=0 credits_send=32 credits_recv=0 down_reason=0
+RIG-B-SCS sbs=1 cdts=18 sysaps=3 dir_lookups_sent=8 dir_lookups_served=34 credit_stalls=0
+RIG-B-CDT i=0 local=SCS$DIRECTORY    remote= peer_sysid=0 conid=0xf3ef0001 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-B-CDT i=1 local=VMS$VAXcluster   remote= peer_sysid=0 conid=0xf3ef0002 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-B-CDT i=2 local=VMS$DISK_CL_DRVR remote= peer_sysid=0 conid=0xf3ef0003 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-B-JOIN state=7 failure=0 enabled=1 count=163 recorded=163 ignored=15
+RIG-B-JOINREC seq=0 t=4690 rep=0 kind=0 state=0->1 event=11 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=1 t=4774 rep=0 kind=0 state=1->1 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=2 t=4815 rep=0 kind=0 state=1->3 event=18 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1
+RIG-B-JOINREC seq=3 t=4856 rep=0 kind=1 state=3->3 event=255 detail=10 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526597
+RIG-B-JOINREC seq=4 t=4856 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526597
+RIG-B-JOINREC seq=5 t=4856 rep=0 kind=2 state=4->4 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526597
+RIG-B-JOINREC seq=6 t=4856 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x01 op=0x02 rx=0 rc=0 aux=4092526597
+RIG-B-JOINREC seq=7 t=4856 rep=0 kind=0 state=3->5 event=0 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526597
+RIG-B-JOINREC seq=8 t=4899 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x81 op=0x03 rx=0 rc=0 aux=4092526597
+RIG-B-JOINREC seq=9 t=4899 rep=0 kind=0 state=5->5 event=21 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=10 t=4941 rep=0 kind=0 state=5->5 event=2 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=11 t=4941 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x81 op=0x05 rx=0 rc=0 aux=4092526597
+RIG-B-JOINREC seq=12 t=4941 rep=0 kind=0 state=5->5 event=21 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=13 t=4941 rep=0 kind=0 state=5->5 event=12 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=65538
+RIG-B-JOINREC seq=14 t=4952 rep=0 kind=2 state=5->5 event=255 detail=0 cat=0x81 op=0x05 rx=0 rc=0 aux=4092526597
+RIG-B-JOINREC seq=15 t=4952 rep=0 kind=0 state=5->5 event=21 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=16 t=4952 rep=0 kind=0 state=5->5 event=5 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=17 t=5014 rep=0 kind=0 state=5->6 event=6 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=18 t=5017 rep=0 kind=0 state=6->7 event=23 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=2
+RIG-B-JOINREC seq=19 t=5454 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=20 t=5583 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=21 t=5625 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526599
+RIG-B-JOINREC seq=22 t=5625 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=23 t=5625 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526599
+RIG-B-JOINREC seq=24 t=5625 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=25 t=5625 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=26 t=5693 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526599
+RIG-B-JOINREC seq=27 t=5693 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526599
+RIG-B-JOINREC seq=28 t=5740 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=29 t=5885 rep=0 kind=0 state=7->7 event=14 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=30 t=19916 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=31 t=19957 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526602
+RIG-B-JOINREC seq=32 t=19957 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=33 t=19957 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526602
+RIG-B-JOINREC seq=34 t=19957 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=35 t=19957 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=36 t=20029 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526602
+RIG-B-JOINREC seq=37 t=20029 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526602
+RIG-B-JOINREC seq=38 t=20070 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=39 t=34249 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=40 t=34291 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526604
+RIG-B-JOINREC seq=41 t=34291 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=42 t=34291 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526604
+RIG-B-JOINREC seq=43 t=34291 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=44 t=34291 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=45 t=34365 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526604
+RIG-B-JOINREC seq=46 t=34365 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526604
+RIG-B-JOINREC seq=47 t=34406 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=48 t=48590 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=49 t=48631 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526608
+RIG-B-JOINREC seq=50 t=48631 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=51 t=48631 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526608
+RIG-B-JOINREC seq=52 t=48631 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=53 t=48631 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=54 t=48701 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526608
+RIG-B-JOINREC seq=55 t=48701 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526608
+RIG-B-JOINREC seq=56 t=48742 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=57 t=62923 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=58 t=62964 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526610
+RIG-B-JOINREC seq=59 t=62964 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=60 t=62964 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526610
+RIG-B-JOINREC seq=61 t=62964 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=62 t=62964 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=63 t=63037 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526610
+RIG-B-JOINREC seq=64 t=63037 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526610
+RIG-B-JOINREC seq=65 t=63079 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=66 t=77257 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=67 t=77298 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526614
+RIG-B-JOINREC seq=68 t=77298 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=69 t=77298 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526614
+RIG-B-JOINREC seq=70 t=77298 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=71 t=77298 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=72 t=77373 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526614
+RIG-B-JOINREC seq=73 t=77373 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526614
+RIG-B-JOINREC seq=74 t=77414 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=75 t=91593 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=76 t=91634 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526616
+RIG-B-JOINREC seq=77 t=91634 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=78 t=91634 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526616
+RIG-B-JOINREC seq=79 t=91634 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=80 t=91634 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=81 t=91709 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526616
+RIG-B-JOINREC seq=82 t=91709 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526616
+RIG-B-JOINREC seq=83 t=91750 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=84 t=105934 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=85 t=105975 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526620
+RIG-B-JOINREC seq=86 t=105975 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=87 t=105975 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526620
+RIG-B-JOINREC seq=88 t=105975 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=89 t=105975 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=90 t=106045 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526620
+RIG-B-JOINREC seq=91 t=106045 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526620
+RIG-B-JOINREC seq=92 t=106086 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=93 t=120272 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=94 t=120313 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526622
+RIG-B-JOINREC seq=95 t=120313 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=96 t=120313 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526622
+RIG-B-JOINREC seq=97 t=120313 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=98 t=120313 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=99 t=120381 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526622
+RIG-B-JOINREC seq=100 t=120381 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526622
+RIG-B-JOINREC seq=101 t=120422 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=102 t=127546 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33281
+RIG-B-JOINREC seq=103 t=127819 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=516
+RIG-B-JOINREC seq=104 t=128332 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-B-JOINREC seq=105 t=128374 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-B-JOINREC seq=106 t=128386 rep=1 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-B-JOINREC seq=107 t=130826 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=108 t=131031 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-B-JOINREC seq=109 t=131699 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-B-JOINREC seq=110 t=133906 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33281
+RIG-B-JOINREC seq=111 t=134609 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=112 t=134650 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526626
+RIG-B-JOINREC seq=113 t=134650 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=114 t=134650 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526626
+RIG-B-JOINREC seq=115 t=134650 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=116 t=134650 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=117 t=134717 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526626
+RIG-B-JOINREC seq=118 t=134717 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526626
+RIG-B-JOINREC seq=119 t=134758 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=120 t=134758 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-B-JOINREC seq=121 t=145035 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-B-JOINREC seq=122 t=145036 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=513
+RIG-B-JOINREC seq=123 t=145161 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33281
+RIG-B-JOINREC seq=124 t=145304 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=518
+RIG-B-JOINREC seq=125 t=147309 rep=0 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=515
+RIG-B-JOINREC seq=126 t=147479 rep=1 kind=1 state=7->7 event=255 detail=3 cat=0x00 op=0x00 rx=0 rc=0 aux=33281
+RIG-B-JOINREC seq=127 t=148940 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=128 t=148981 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526628
+RIG-B-JOINREC seq=129 t=148981 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=130 t=148981 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526628
+RIG-B-JOINREC seq=131 t=148981 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=132 t=148981 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=133 t=149053 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526628
+RIG-B-JOINREC seq=134 t=149053 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526628
+RIG-B-JOINREC seq=135 t=149094 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=136 t=163275 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=137 t=163316 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526630
+RIG-B-JOINREC seq=138 t=163316 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=139 t=163316 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526630
+RIG-B-JOINREC seq=140 t=163316 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=141 t=163316 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=142 t=163389 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526630
+RIG-B-JOINREC seq=143 t=163389 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526630
+RIG-B-JOINREC seq=144 t=163431 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=145 t=177612 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=146 t=177653 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526634
+RIG-B-JOINREC seq=147 t=177653 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=148 t=177653 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526634
+RIG-B-JOINREC seq=149 t=177653 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=150 t=177653 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=151 t=177725 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526634
+RIG-B-JOINREC seq=152 t=177725 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526634
+RIG-B-JOINREC seq=153 t=177766 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+RIG-B-JOINREC seq=154 t=191945 rep=0 kind=1 state=7->7 event=255 detail=5 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=155 t=191986 rep=0 kind=1 state=7->7 event=255 detail=11 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526636
+RIG-B-JOINREC seq=156 t=191986 rep=0 kind=0 state=7->7 event=22 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=1025
+RIG-B-JOINREC seq=157 t=191986 rep=0 kind=0 state=7->7 event=0 detail=0 cat=0x00 op=0x00 rx=0 rc=0 aux=4092526636
+RIG-B-JOINREC seq=158 t=191986 rep=1 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=0 rc=0 aux=0
+RIG-B-JOINREC seq=159 t=191986 rep=0 kind=0 state=7->7 event=20 detail=1 cat=0x00 op=0x00 rx=2 rc=0 aux=0
+RIG-B-JOINREC seq=160 t=192061 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x14 rx=0 rc=0 aux=4092526636
+RIG-B-JOINREC seq=161 t=192061 rep=0 kind=2 state=7->7 event=255 detail=0 cat=0x01 op=0x01 rx=0 rc=0 aux=4092526636
+RIG-B-JOINREC seq=162 t=192102 rep=0 kind=1 state=7->7 event=255 detail=4 cat=0x00 op=0x00 rx=0 rc=0 aux=1024
+===DMESG-B-BEGIN===
+[    1.268959] SCSI subsystem initialized
+[    1.650054] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 243)
+[    3.505524] vms: loading out-of-tree module taints kernel.
+[    3.509353] vms: module verification failed: signature and/or required key missing - tainting kernel
+[    3.530940] vms: initializing VMS kernel module
+[    3.535594] vms: ethernet unit ETH0: -> eth0 (carrier up)
+[    3.539498] vms: DECnet device face NET: created (NETACP layers its circuit over ETH0:)
+[    3.545907] vms: device table initialized, console terminal OPA0: created
+[    3.553024] vms: system identity constant SYSTEM [1,4] privileges=ALL established by the executive
+[    3.561804] vms: logical-name arena ready (512 entries, 1208352 bytes)
+[    3.568297] vms: mailbox table initialized
+[    3.571176] vms: ODS-2 ACP mounted-volume table initialized
+[    3.576242] vms: /dev/vms registered successfully
+[    4.597252] vms: cluster port unit PEA0: -> eth0
+[    4.601978] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[    5.359515] %PEA0, channel verified
+[    5.401918] %PEA0, virtual circuit open
+[    5.605328] %CNXMAN, a connection manager was discovered on the interconnect
+[    5.616543] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[    5.878031] %CNXMAN, the cluster assigned this node a cluster system id
+[    5.929939] %CNXMAN, this node is a member of the cluster
+[    5.936135] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[    5.944147] %CNXMAN, VAXcluster state transition in progress
+[    5.950246] %CNXMAN, this node is now a VAXcluster member
+[    5.953944] %CNXMAN, system 0000000000000402 was added to the cluster
+[    5.958862] %CNXMAN, system 0000000000000401 was added to the cluster
+[    6.562052] %CNXMAN, another system is coordinating a state transition; deferring
+[    6.877267] %CNXMAN, ready to consider a membership request again
+[   20.893901] %CNXMAN, another system is coordinating a state transition; deferring
+[   21.141237] %CNXMAN, ready to consider a membership request again
+[   35.227835] %CNXMAN, another system is coordinating a state transition; deferring
+[   35.405212] %CNXMAN, ready to consider a membership request again
+[   49.568039] %CNXMAN, another system is coordinating a state transition; deferring
+[   49.693233] %CNXMAN, ready to consider a membership request again
+[   63.900802] %CNXMAN, another system is coordinating a state transition; deferring
+[   64.349235] %CNXMAN, ready to consider a membership request again
+[   78.234671] %CNXMAN, another system is coordinating a state transition; deferring
+[   78.629252] %CNXMAN, ready to consider a membership request again
+[   92.570662] %CNXMAN, another system is coordinating a state transition; deferring
+[   92.885243] %CNXMAN, ready to consider a membership request again
+[  106.911575] %CNXMAN, another system is coordinating a state transition; deferring
+[  107.173252] %CNXMAN, ready to consider a membership request again
+[  121.249587] %CNXMAN, another system is coordinating a state transition; deferring
+[  121.453284] %CNXMAN, ready to consider a membership request again
+[  131.747388] %CNXMAN, cross-node lock release NOT transmitted: the wire record is dropped and the gap is counted
+[  135.586485] %CNXMAN, another system is coordinating a state transition; deferring
+[  135.725265] %CNXMAN, ready to consider a membership request again
+[  149.917369] %CNXMAN, another system is coordinating a state transition; deferring
+[  150.389216] %CNXMAN, ready to consider a membership request again
+[  164.252371] %CNXMAN, another system is coordinating a state transition; deferring
+[  164.653247] %CNXMAN, ready to consider a membership request again
+[  178.589273] %CNXMAN, another system is coordinating a state transition; deferring
+[  178.933260] %CNXMAN, ready to consider a membership request again
+[  192.922169] %CNXMAN, another system is coordinating a state transition; deferring
+[  193.189228] %CNXMAN, ready to consider a membership request again
+[  194.006753] vms: CLUSTER_DIAG_PORT row 1 index 1 -> SS$ 2680
+[  194.024156] vms: CLUSTER_DIAG_PORT row 2 index 1 -> SS$ 2680
+[  194.073365] vms: CLUSTER_DIAG_CONN row 1 index 3 -> SS$ 2680
+===DMESG-B-END===
+reconstructed pcap: /lab/vms-727-lvbread-out/nodeA.pcap (110600 bytes)
+reconstructed pcap: /lab/vms-727-lvbread-out/nodeB.pcap (112582 bytes)
+
+=== cat-0x02 opcodes ON THE WIRE (each node's own passive capture) ===
+/lab/vms-727-lvbread-out/nodeA.pcap: sca_frames=910 blkast=1 deq=5 enq=7 enq-resp=4 valblk=1
+  OP06 op06_eth_src=52:54:00:00:10:26 op06_eth_dst=52:54:00:00:10:25 op06_master_lkid=0x0000000b op06_valblk_hex=4f564d584c5642575249544530303031 op06_valblk_ascii=OVMXLVBWRITE0001
+/lab/vms-727-lvbread-out/nodeB.pcap: sca_frames=910 blkast=1 deq=4 enq=6 enq-resp=5 op01valblk=2 valblk=1
+  OP06 op06_eth_src=52:54:00:00:10:25 op06_eth_dst=52:54:00:00:10:26 op06_master_lkid=0x0000000a op06_valblk_hex=4f564d584c5642575249544530303031 op06_valblk_ascii=OVMXLVBWRITE0001
+  OP01 op01_eth_src=52:54:00:00:10:25 op01_eth_dst=52:54:00:00:10:26 op01_master_lkid=0x0000000d op01_valblk_hex=4f564d584c5642524541443030303031 op01_valblk_ascii=OVMXLVBREAD00001
+  OP01 op01_eth_src=52:54:00:00:10:25 op01_eth_dst=52:54:00:00:10:26 op01_master_lkid=0x0000000e op01_valblk_hex=4f564d584c5642524541443030303031 op01_valblk_ascii=OVMXLVBREAD00001
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=founder member=1 cn=2 csid=0x00010001
+  node B: role=joiner member=1 cn=2 csid=0x00010002
+
+==========================================
+  CROSS-NODE DLM RUN (rd vms-94c) -- every value below was read
+  back out of the node's own executive, except the two WIRE counts,
+  which come from the nodes' own passive captures:
+    A: peer-mastered=OVMXA$X00 master_csid=0x00010002 releases_sent=2 blkasts_sent=1 unparsed=0 projections=agree
+    B: peer-mastered=OVMXB$X01 master_csid=0x00010001 releases_sent=1 blkasts_sent=1 unparsed=0 projections=agree
+    WIRE: op-0x03 deq frames=9  op-0x04 blkast frames=2  op-0x06 valblk frames=2
+    RECEIVED: A releases=5 (refused 0) blkasts=1 (delivered 1)
+              B releases=4 (refused 0) blkasts=1 (delivered 1)
+    LVB WRITE (rd vms-727): A demote-status=1  B demote-status=1
+              A valblk_writes_received=1  B valblk_writes_received=1
+
+  LVB READ CROSSING (rd vms-727, #1190):
+    A: LVBRDHOLD-status=1 GETLKI-matched=none GETLKI-ascii=none
+    B: LVBRDHOLD-status=none GETLKI-matched=1 GETLKI-ascii=OVMXLVBREAD00001
+    WIRE: op-0x01 grant-with-valblk frames=2
+  DIRECT RELEASE PROOF (rd vms-c72):
+    A: BEFORE res=none n_granted=0  AFTER n_granted=0 found=0 counter_rose=?
+    B: BEFORE res=OVMXA$R01 n_granted=1  AFTER n_granted=0 found=1 counter_rose=1
+  --- what this run established ---
+  HELD        both nodes MEMBER, CN=2, projections agree AFTER the phase
+  HELD        a lock genuinely CROSSED: each node holds EX on a name its PEER masters
+  HELD        op-0x04 BLKAST emitted by both arms AND seen on the wire
+  HELD        op-0x03 $DEQ emitted by both arms AND seen on the wire
+  HELD        the RECEIVE half ran: each node's own lock database moved on the
+              peer's op-0x03 ($DEQ released) and op-0x04 (BLKAST taken in)
+  HELD        NEVER CRASH A PEER: both nodes ACTED on the peer's cross-node
+              frames and stayed sane members (no bugcheck, no panic)
+  HELD        the DIRECT release delta: a dedicated single-holder resource's
+              master-side queue shows the holder GONE after
+              releases_received rose -- not just the counter
+  HELD        op-0x06 CONVERT-with-VALBLK (rd vms-727): a demote-from-write really
+              crossed and the MASTER's own diag shows it APPLIED the
+              peer's value block, seen on the wire and never a crash
+  HELD        LVB READ crossing (rd vms-727, #1190): the master's write was read
+              back over a cross-node $ENQ...LCK$M_VALBLK, seen on the
+              wire as an op-0x01 grant-with-valblk and confirmed by the
+              reader's own $GETLKI
+
+  CROSS-NODE DLM PROOF PASSED (rd vms-94c)
+  Each node took an EX lock on a resource ITS PEER masters --
+  read back from the executive as master_csid=<the peer>,
+  is_local_master=0 -- contended with a second incompatible
+  request, and released. The arms report the two frames they
+  really emitted (op-0x03 $DEQ, op-0x04 BLKAST), each peer
+  reports having RECEIVED and honestly DECLINED them, and both
+  nodes are still MEMBERs with CN=2 and agreeing projections
+  afterwards. NEVER CRASH A PEER: held, against a live peer
+  executive. Each node also demoted its cross-node EX grant
+  to CR carrying a value block (rd vms-727): op-0x06 crossed
+  on the wire AND the master's own diag shows it APPLIED the
+  peer's write. And on a separate dedicated resource, the
+  symmetric LVB READ crossing held too (rd vms-727, #1190):
+  the node the directory made master wrote+held a pattern,
+  the peer's cross-node $ENQ...LCK$M_VALBLK grant carried it
+  back as an op-0x01 record seen on the wire, and the peer's
+  own $GETLKI confirms it read exactly what was written.
+==========================================

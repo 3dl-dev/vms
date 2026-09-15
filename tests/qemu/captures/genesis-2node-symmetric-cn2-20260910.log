@@ -1,0 +1,74 @@
+# 2-node cluster rig -- SYMMETRIC CN=2 (rd vms-f6b / vms-fc7 / vms-9c99).
+# Image ovmx-genesis-rig:16 on k3s-worker under KVM. Every value below is
+# read back out of that node's own executive through three projections that
+# are cross-checked against each other (INV-6).
+
+=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ===
+mode=proof
+accel=kvm -cpu host group=2026 recnx=8s stagger=30s
+node A: OVMXA/1025 VOTES=1 EXPECTED_VOTES=1 VAXCLUSTER=2
+node B: OVMXB/1026 VOTES=0          VAXCLUSTER=2
+
+--- powering on node A (it must hear nobody for 8s, then found) ---
+--- powering on node B (it must join what A formed) ---
+
+=== node A: what its executive held (ttyS1) ===
+
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=1 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-A-START status=1 port_up=1 state=2
+RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1026 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-B-START status=1 port_up=1 state=2
+
+--- node A, last executive poll ---
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=150s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=2 quorum=1 cevotes=1 epoch=2 projections=agree
+
+--- node B, last executive poll: IT COUNTS TWO ---
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-CLUB t=110s state=MEMBER(3) role=joiner csid=0x00010002 coord=0x00010001 nodes=2 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=2 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=0x00010001 state=MEMBER
+RIG-B-FINAL role=joiner member=1 state=MEMBER csid=0x00010002 cn=2 quorum=0 cevotes=0 epoch=2 projections=agree
+
+--- node A executive transcript ---
+      1 %CNXMAN, waiting to form or join an OpenVMS Cluster
+      1 %CNXMAN, this node has quorum by its own votes: forming an OpenVMS Cluster
+      1 %CNXMAN, this node is a member of the cluster
+      1 %CNXMAN, completed VAXcluster state transition
+      1 %CNXMAN, a connection manager was discovered on the interconnect
+      1 %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+      1 %CNXMAN, the cluster opened the VMS$VAXcluster connection to this node
+      1 %CNXMAN, proposing addition of a system to the cluster
+      2 %CNXMAN, an unroutable VMS$VAXcluster frame was received
+      1 %CNXMAN, lock directory weight vector not rebuilt: LOCKDIRWT known for some members and not others
+      1 %CNXMAN, system 0000000000000402 was added to the cluster
+      1 %CNXMAN, waiting to form or join an OpenVMS Cluster
+
+--- node B executive transcript ---
+      1 %CNXMAN, waiting to form or join an OpenVMS Cluster
+      1 %CNXMAN, a connection manager was discovered on the interconnect
+      1 %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+      1 %CNXMAN, the cluster assigned this node a cluster system id
+      1 %CNXMAN, another system is coordinating a state transition; deferring
+      1 %CNXMAN, this node is a member of the cluster
+      1 %CNXMAN, lock directory weight vector not rebuilt: LOCKDIRWT known for some members and not others
+      1 %CNXMAN, VAXcluster state transition in progress
+      1 %CNXMAN, this node is now a VAXcluster member
+      1 %CNXMAN, system 0000000000000402 was added to the cluster
+      1 %CNXMAN, system 0000000000000401 was added to the cluster
+      1 %CNXMAN, ready to consider a membership request again
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=founder member=1 cn=2 csid=0x00010001
+  node B: role=joiner member=1 cn=2 csid=0x00010002
+
+==========================================
+  GENESIS 2-NODE PROOF PASSED
+  Node A founded a VMScluster and node B joined it: both
+  executives report VMS_CLUSTER_MEMBER with CN=2.
+==========================================

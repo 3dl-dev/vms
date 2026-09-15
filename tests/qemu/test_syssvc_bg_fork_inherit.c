@@ -123,6 +123,10 @@ int main(int argc, char **argv)
     /* CASE 1: fork() -- the child is a new executive proc; it must still see the
      * parent's channel for a stock forking server to work. */
     uint32_t cfork = child_status_over_pipe(exec_chan, 0, argv[0]);
+    /* The child inherits the parent's BG channel via vms_bg_capture_channels (both
+     * the fork-time and #815 paths funnel through it); empty that capture and the
+     * child has no channel to operate. */
+    /* negctl: bg-fork-channels-not-captured */
     CHECK(cfork & 1,
           "a FORKED child can operate the BG channel its parent created (executive fork-inheritance)");
 

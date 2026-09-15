@@ -40,6 +40,7 @@
 #include "vms_cnxman_barrier_fsm.h"
 #include "vms_cnxman_join_fsm.h"
 #include "vms_cnxman_diag.h"
+#include "vms_cnxman_quorum.h"
 #include "vms_cluster_codec_cm.h"
 #include "vms_cluster_codec_mscp.h"
 #include "vms_mscp_cl_fsm.h"
@@ -771,9 +772,85 @@ void cnxman_join_advertise_peers(struct cnxman_join *j)
 	}
 }
 
+/* ==========================================================================
+ * IS THIS NODE ALREADY IN A CLUSTER? (rd vms-c06)
+ *
+ * Two executive cells, read together, and neither of them a flag this file
+ * keeps: `cl->state`, which ONLY cnxman_phase2_commit() ever writes MEMBER
+ * into, and the CLUB's own local CSID, which is written only by a real
+ * assignment (cnxman_club_learn_local_csid) or by a real founding
+ * (cnxman_coord_found). A node is in a cluster when the executive says both --
+ * it has been committed, and it holds the identity that commitment gave it
+ * (INV-6: a membership with no CSID behind it is not a membership, which is
+ * join_h_transition_done()'s own rule, applied here from the other side).
+ *
+ * WHAT IT IS FOR. This FSM is driven on an existing member too -- deliberately
+ * (vms_cnxman.c cnxman_join_drive, rd vms-f6b): the VMS$VAXcluster connection
+ * to a newly-appeared system is opened by the same machinery from either side,
+ * and a member still owes that system its identity. What a member does NOT owe
+ * it is a request to be admitted, and does not accept from it is a new
+ * identity. Those two edges ask this question; everything else in this file is
+ * unchanged.
+ * ========================================================================== */
+static int join_node_already_member(const struct cnxman_join *j)
+{
+	if (j == NULL || j->cl == NULL)
+		return 0;
+	return j->cl->state == VMS_CLUSTER_MEMBER &&
+	       j->cl->club.local_csid_valid != 0u;
+}
+
+/*
+ * A NODE THAT IS ALREADY IN THE CLUSTER ASKS NOBODY TO ADMIT IT (rd vms-c06).
+ *
+ * op-0x02 is the JOIN CLUSTER request, and the member that RECEIVES one
+ * BECOMES the coordinator of an admission transition for the sender (book
+ * pp. 7-37/7-38, and this file's own E80 reasoning). A node that is already a
+ * committed member has nothing to be admitted TO, so the request is not "one
+ * more attempt" -- it is an invitation to the cluster to re-admit a system it
+ * already holds, which is a transition nobody needed and an identity nobody
+ * should reassign.
+ *
+ * MEASURED, live on the 2-node genesis rig, and the reason this exists
+ * (tests/lab/captures/vms-c06-rejoin-2node-20260913/proof-run1-roleswap-nodeAB):
+ * node A -- VOTES=1, the only node that can hold quorum -- founded generation 1
+ * at t=8 s with role=founder csid=0x00010001, admitted node B at t=35.6 s as
+ * its coordinator ... and then, on the join its own beat had driven to the
+ * newly-appeared B, sent B an op-0x02. B's console: "proposing addition of a
+ * system to the cluster" 0.05 s later; A's: "the cluster assigned this node a
+ * cluster system id", then "this node is now a VAXcluster member". A was read
+ * back at t=31 s of the rig clock holding role=joiner csid=0x00010003
+ * coord=0x00010002 epoch=3 -- the founder re-joined UNDER the voteless node it
+ * had just admitted. In the two runs that passed, the SAME op-0x02 went out and
+ * B happened to be mid-transition and answered "another system is coordinating
+ * a state transition; deferring": a coin toss decided whether the cluster
+ * turned itself inside out.
+ *
+ * WITHHELD, NOT FAILED. Nothing is wrong with this join: its connection is
+ * open, its identity is out, and the node is a member already. It is counted
+ * and said out loud once, because a message this FSM would normally send and
+ * does not send has to be visible in the transcript rather than read as
+ * silence.
+ */
+static void join_withhold_admission(struct cnxman_join *j)
+{
+	j->admission_withheld++;
+	if (j->admission_withheld == 1u)
+		join_log(j, "%CNXMAN, this node is already a member of this "
+			    "cluster: it introduces itself to the new system "
+			    "and asks nobody to admit it");
+}
+
 static void join_send_config(struct cnxman_join *j)
 {
 	vms_codec_status_t st;
+
+	/* The choke point for op-0x02: the first one and every re-offer and
+	 * re-issue reach the wire through here, so the gate is asked here. */
+	if (join_node_already_member(j)) {
+		join_withhold_admission(j);
+		return;
+	}
 
 	st = vms_cm_config_build(j->scratch, (uint32_t)sizeof(j->scratch),
 				 NULL);
@@ -1147,6 +1224,11 @@ static int join_open(struct cnxman_join *j, const uint8_t *local_name,
  * opened it (defined with the other step-5 handlers, below). */
 static void join_cm_advertise(struct cnxman_join *j);
 
+/* Forward: reconcile this join with what the executive records on the target
+ * CSB -- the Con.ID it holds and whether that connection is OPEN (defined with
+ * the once-a-second beat, below). */
+static void join_cm_sync_with_csb(struct cnxman_join *j, struct vms_csb *csb);
+
 /*
  * Our VMS$VAXcluster connect could not be put on the wire (E71). This is NOT
  * the p. 2-25 version gate -- no connect data reached a peer, no peer judged
@@ -1172,12 +1254,85 @@ static void join_cm_connect_refused(struct cnxman_join *j)
 }
 
 /*
+ * DOES THE EXECUTIVE ALREADY HOLD THIS PAIR'S VMS$VAXcluster CONNECTION?
+ * (spec sec 4(O.11) -- the REJOIN shape, re-derived into the executive.)
+ *
+ * WHAT THE REJOIN ORACLE MEASURES. In the crash-rejoin capture
+ * (vax3-class03-crash-REJOIN-SUCCESS) the rejoining system opens ONLY its
+ * SCS$DIRECTORY and MSCP$DISK connections and NEVER opens a VMS$VAXcluster
+ * connect of its own: BOTH surviving members open VMS$VAXcluster CONNECT_REQ
+ * *to* it, it answers as the TARGET, and its op-0x02 CONFIG and the whole
+ * 0x04/0x03/0x05/0x06 reciprocation ride the MEMBER-INITIATED connection.
+ *
+ * WHY THAT IS NOT A "REJOIN MODE" TO IMPLEMENT, and must not be. The rejoiner
+ * had just crashed: its executive holds NO record of a prior cluster, so it
+ * has no rejoin condition to read and any flag claiming one would be invented
+ * (INV-6). What it does have is p. 7-30 on the OTHER side -- each survivor
+ * still holds a CSB for it inside the reconnect window and "will attempt once
+ * a second to establish another connection" -- so by the time the rejoiner has
+ * resolved two names and walked a member's disks, the pair's one connection
+ * ALREADY EXISTS and the executive holds it. The oracle's topology is that
+ * fact, not a decision the rejoiner made about its own past.
+ *
+ * SO THIS IS A READ, and the same read the once-a-second beat has always made
+ * (join_cm_sync_with_csb, E72): book p. 7-23 makes the CSB the record of "the
+ * state of the SCS connection between the local SYS$CLUSTER and the ... system
+ * associated with the CSB", the glue writes `cdt_conid` at the instant SCS
+ * mints it -- for a connect this node issued, for one the CSB ladder issued,
+ * and for one this node ACCEPTED -- and there is exactly one VMS$VAXcluster
+ * connection per pair of systems. A connection the executive holds is
+ * therefore THIS step's outcome, and issuing a second one would both put a
+ * redundant CONNECT_REQ on the wire and re-bind `cdt_conid` away from the
+ * live member-initiated CDT, moving op-0x02 onto the wrong connection.
+ *
+ * A CSB the ladder has GIVEN UP ON (p. 7-24 DISCONNECT/DEAD) is not a
+ * connection to ride, so its Con.ID is not taken and this node opens its own
+ * exactly as before. And on a FIRST join nothing is dialling an unknown
+ * system: `cdt_conid` is 0, this returns 0, and the E67 drive is unchanged.
+ *
+ * Returns nonzero when the executive's own connection was taken -- in which
+ * case this node opens NONE of its own.
+ */
+static int join_cm_take_held(struct cnxman_join *j)
+{
+	struct vms_csb *csb = join_target_csb(j);
+	uint8_t before;
+
+	if (csb == NULL || csb->cdt_conid == 0u || join_csb_abandoned(csb))
+		return 0;
+
+	j->cm_connect_suppressed++;
+	if (j->cm_connect_suppressed == 1u)
+		join_log(j, "%CNXMAN, the executive already holds this pair's "
+			    "VMS$VAXcluster connection: this node opens none of "
+			    "its own and drives its admission on that one");
+
+	/* The beat's own reconciliation, made here at the instant the drive
+	 * first needs the connection: adopt the Con.ID, and if the ladder
+	 * already calls it OPEN, advertise on it now. */
+	before = j->state;
+	join_cm_sync_with_csb(j, csb);
+	if (j->state != before)
+		return 1;   /* the drive moved on the executive's connection */
+
+	/* It is not OPEN yet. That is the wait state, and it is the same wait
+	 * as for a connect of our own: the CDT_OPEN for this Con.ID, or the
+	 * CSB standing OPEN on a beat, is what ends it (E72). */
+	join_goto(j, CNXMAN_JOIN_VC_CONNECT);
+	join_arm_watch(j);
+	return 1;
+}
+
+/*
  * Step 4: the VMS$VAXcluster VC. There is exactly ONE such connection per pair
  * of systems and either side may open it (E67; spec sec 4(L)(1) describes the
  * leg the reference joiner won, and the same capture shows it accepting the
  * other). If the member's inbound connect already arrived and this join
  * adopted it, opening a second one here would give the pair two -- so the
- * adopted one IS this step's outcome and the burst goes out on it now.
+ * adopted one IS this step's outcome and the burst goes out on it now. The
+ * executive's own record is consulted for the same reason and in the same
+ * breath (join_cm_take_held, above): a connection this join never saw
+ * announced is still this pair's connection.
  *
  * The 16-byte connect data is the Connection Managers' version handshake
  * (p. 2-25) and is the caller's or nothing -- see "REFUSES TO INVENT", C.
@@ -1191,6 +1346,8 @@ static void join_open_cm(struct cnxman_join *j)
 		join_cm_advertise(j);
 		return;
 	}
+	if (join_cm_take_held(j))
+		return;
 	if (cd == NULL) {
 		j->conndata_omitted++;
 		join_log(j, "%CNXMAN, no SCA connect data configured: the "
@@ -1499,6 +1656,28 @@ static void join_mscp_send_gus(struct cnxman_join *j)
 static void join_walk_complete(struct cnxman_join *j)
 {
 	j->mscp_walk_done = 1u;
+
+	/*
+	 * ... and a member stops HERE (rd vms-c06). [ADMIT] means "op-0x02 is
+	 * out; the member drives", and this node is sending no op-0x02
+	 * (join_withhold_admission). Entering that state anyway would start the
+	 * silence clock over a request that was never made, and its beat would
+	 * walk the cluster declining one member after another for not answering
+	 * a question nobody was asked.
+	 *
+	 * So the join stays in [ADVERTISE], which is exactly what it has become
+	 * for a node already in the cluster: the row that answers a member's
+	 * identity, its echoes, its membership bursts and its recurring close
+	 * poll -- a server, not a supplicant -- and whose empty transition cells
+	 * route the coordinator's own barrier steps on to the coordinator
+	 * (cnxman_join_rx_body's "NOT OURS TO EAT").
+	 */
+	if (join_node_already_member(j)) {
+		join_withhold_admission(j);
+		join_arm_watch(j);
+		return;
+	}
+
 	join_goto(j, CNXMAN_JOIN_ADMIT);
 	join_send_config(j);
 	join_arm_watch(j);
@@ -1729,6 +1908,35 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	struct vms_cm_params p;
 
 	j->peer_adverts++;
+
+	/*
+	 * op-0x02 IS NOT AN ADVERT -- IT IS A MEMBERSHIP REQUEST, AND IT IS THE
+	 * COORDINATOR'S (rd vms-f6b).
+	 *
+	 * Spec sec 4(p): a joiner "sends its op 0x02 to EXACTLY ONE peer", and
+	 * BEING ASKED is what makes the asked node the coordinator (book
+	 * pp. 7-37/7-38). vms_cnxman_coord_fsm.c's whole selection edge is
+	 * [IDLE|COMPLETE|ABANDONED][RX_TR_REQUEST], and RX_TR_REQUEST is
+	 * exactly this opcode.
+	 *
+	 * The router offers a body to the join FSM FIRST, so a CONSUMED here
+	 * ends its journey: this handler used to consume op-0x02 -- counting it
+	 * as a "peer advert" -- and the coordinator was never asked anything.
+	 * MEASURED on the 2-node genesis rig: both nodes put their op-0x02 on
+	 * the wire (RIG-*-JOINREC kind=2 cat=0x01 op=0x02), the peer's port and
+	 * SCS delivered it, and NEITHER node ever logged "proposing addition of
+	 * a system to the cluster" -- the admission timed out on both sides,
+	 * every time, for the whole run.
+	 *
+	 * NOT_MINE lets it fall through to the barrier (which does not claim
+	 * cat-0x01 op-0x02) and then to the coordinator, which does. It is
+	 * returned ONLY for this one opcode: op-0x01 is handled below and
+	 * op-0x14 has no other owner, so both stay consumed and neither becomes
+	 * an "unroutable frame" console line.
+	 */
+	if (e->env.opcode == VMS_CM_OP_CONFIG)
+		return CNXMAN_JOIN_RX_NOT_MINE;
+
 	if (e->env.opcode != VMS_CM_OP_PARAMS || e->from_csb < 0)
 		return CNXMAN_JOIN_RX_CONSUMED;
 	csb = cnxman_club_csb_at(&j->cl->club, (uint32_t)e->from_csb);
@@ -1747,15 +1955,131 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	 */
 	cnxman_csb_set_params(csb, p.votes, csb->expected_votes,
 			      csb->qdskvotes);
+
+	/*
+	 * AND THE ARITHMETIC RUNS ON WHAT WAS JUST LEARNED (rd vms-d0d).
+	 *
+	 * Filing the peer's VOTES and stopping there is what left node B of the
+	 * live 2-node cluster counting two members with CEVOTES/QUORUM 0 while
+	 * node A's real votes sat in B's own CSB table (#1119): the joiner's
+	 * Phase 2 has no coordinator proposal to copy, so nothing else on its
+	 * path ever computes them. cnxman_quorum_member_recompute() applies
+	 * p. 7-6 to this node's own table and REFUSES unless this node is
+	 * genuinely a member with its own params in it, so a record arriving
+	 * before admission still asserts nothing (INV-6). This row is live in
+	 * every state including [MEMBER], which is where the peer's once-a-beat
+	 * PARAMS keeps arriving, so a vote CHANGE is picked up too.
+	 */
+	(void)cnxman_quorum_member_recompute(j->cl);
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
 /* op-0x03 COMMIT and each op-0x05 rebuild transaction: the grounded 0x81 echo,
  * with body[17] carrying THIS node's own current class (spec sec 4(r)). */
+/*
+ * THE ADOPTION (rd vms-fc7 / vms-9c99). A cat-0x01 op-0x05 membership record
+ * naming THIS node's own SCSSYSTEMID carries the CSID the cluster ASSIGNED it,
+ * and adopting it is the only correct thing to do with it.
+ *
+ * WHAT THIS REPLACES, AND WHY IT WAS WRONG. This node used to DERIVE its own
+ * CSID as `generation << 16 | (SCSSYSTEMID & 0x3ff)` off an op-0x06. The
+ * reference refutes that construction outright: in
+ * tests/lab/captures/cn3-achieved-20260905.pcap the coordinator assigns
+ * SCSSYSTEMID 1986 the CSID 0x00010003 -- CSV slot 3, the next free slot --
+ * while 1986 & 0x3ff is 962. A node carrying 962 has a CSV slot the nodemap
+ * byte cannot even express, so phase2_csb_in_nodemap() answers "unknown"
+ * forever and the node can never select itself into the cluster it has
+ * genuinely been admitted to. That is exactly what OVMX did on the real VAX.
+ *
+ * RE-ADOPTED, NEVER CACHED. p. 7-25: a rejoining system gets a NEW CSID and
+ * never its old one back -- measured on the oracle, where one SCSSYSTEMID took
+ * slot 4 and then slot 5 on its rejoin. So every admission adopts afresh;
+ * cnxman_club_learn_local_csid() overwrites, and nothing here short-circuits
+ * on "we already have one".
+ *
+ * NOTHING IS ADOPTED FROM A RECORD ABOUT SOMEBODY ELSE: the sysid at
+ * body[20:24] must be THIS node's own real SYSGEN SCSSYSTEMID.
+ */
+static void join_adopt_membership_rec(struct cnxman_join *j,
+				      const struct join_ev *e)
+{
+	struct vms_cm_membership_rec rec;
+
+	if (j->cl == NULL)
+		return;
+	if (vms_cm_membership_rec_parse(e->body, e->len, &rec) != VMS_CODEC_OK) {
+		/* Not a record this codec will stand behind (bad tag, bad
+		 * CSID shape, index disagreeing with the slot). Counted; the
+		 * echo below still goes out, because refusing to answer a
+		 * member breaks the join (sec 4(p)). */
+		j->membrecs_unusable++;
+		return;
+	}
+	j->membrecs_seen++;
+
+	if (rec.sysid != (uint32_t)j->cl->params.scssystemid) {
+		/*
+		 * A RECORD ABOUT ANOTHER MEMBER, AND WHY IT IS TAKEN.
+		 *
+		 * The coordinator sends a joiner the FULL member set (measured:
+		 * cn3 frames 230-233 carry 1986, 1025, 1026 to OVMXJ1), and
+		 * this is what that set is FOR. Each record NAMES the system it
+		 * is about, so filing its CSID on the block this CLUB already
+		 * holds for that SCSSYSTEMID is a read of what the frame says
+		 * -- not the op-0x06 ambiguity, where a burst carries a CSID
+		 * with no statement of whose it is.
+		 *
+		 * Without it this node knows its own slot and nobody else's,
+		 * cannot match any other CSB to a nodemap bit
+		 * (phase2_csb_in_nodemap needs csid_valid), and counts a
+		 * cluster of one while being a member of a cluster of two.
+		 *
+		 * A system this node holds NO block for is not invented: there
+		 * is no "system zero" (INV-6). The record is counted and
+		 * dropped.
+		 */
+		struct vms_csb *peer =
+			cnxman_club_find_sysid(&j->cl->club,
+					       (vms_scs_sysid_t)rec.sysid);
+
+		if (peer == NULL) {
+			j->membrecs_unknown_peer++;
+			return;
+		}
+		cnxman_csb_set_csid(peer, (vms_csid_t)rec.csid);
+		j->membrecs_peer_learned++;
+		return;
+	}
+
+	cnxman_join_csid_learned(j, (vms_csid_t)rec.csid);
+
+	/*
+	 * ADOPTED IS WHAT THE CLUB NOW HOLDS, not what this handler asked for
+	 * (rd vms-c06). The [CSID_LEARNED] cell refuses to reassign the
+	 * identity of a node that is already a committed member, and a counter
+	 * that rose before asking the executive what happened would report an
+	 * adoption that did not occur. So the fact is read back from the one
+	 * cell that carries it.
+	 */
+	if (!j->cl->club.local_csid_valid ||
+	    j->cl->club.local_csid != (vms_csid_t)rec.csid)
+		return;
+
+	j->membrecs_adopted++;
+	join_log(j, "%CNXMAN, the cluster assigned this node a cluster system "
+		    "id");
+}
+
 static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
 				       const struct join_ev *e)
 {
 	vms_codec_status_t st;
+
+	/* op-0x05 is a MEMBERSHIP RECORD before it is a thing to echo. Adopt
+	 * first, then answer -- the answer is unconditional either way. */
+	if (e->env.category == VMS_CM_CAT_CONFIG &&
+	    e->env.opcode == VMS_CM_OP_MEMBREC)
+		join_adopt_membership_rec(j, e);
 
 	if (!join_recipe_allowed(e->env.category, e->env.opcode,
 				 (uint16_t)VMS_CM_RECIPE_ECHO)) {
@@ -1856,12 +2180,28 @@ static void join_learn_csid_from_membership(struct cnxman_join *j,
 				    "this node's CSID was NOT learned");
 		return;
 	}
-	/* generation = the coordinator CSID's high 16 bits, READ FROM THE
-	 * WIRE -- never assumed, never hardcoded (INV-6). */
+	/*
+	 * A GENERATION, AND NOTHING MORE (rd vms-fc7).
+	 *
+	 * This used to compute `generation << 16 | (SCSSYSTEMID & 0x3ff)` and
+	 * adopt it as this node's own CSID. The reference refutes that
+	 * construction: the coordinator assigns a ROUND-ROBIN CSV slot, and in
+	 * tests/lab/captures/cn3-achieved-20260905.pcap SCSSYSTEMID 1986 was
+	 * assigned slot 3 while 1986 & 0x3ff is 962. Deriving 962 gave this
+	 * node a slot the nodemap byte cannot express, so it could never
+	 * select itself into a cluster that had really admitted it.
+	 *
+	 * The CSID is now ADOPTED from the op-0x05 membership record that
+	 * names this node (join_adopt_membership_rec), which is the only
+	 * grounded {SCSSYSTEMID -> CSID} pairing the protocol carries. What
+	 * op-0x06 is still good for is confirming that a cluster with a real
+	 * generation is out there -- counted, and nothing is minted from it.
+	 */
 	generation = (coord_csid >> 16) & 0xffffu;
-	own_csid = vms_cm_csid_of(generation,
-				  (uint32_t)j->cl->params.scssystemid);
-	cnxman_join_csid_learned(j, own_csid);
+	j->generations_seen++;
+	if (generation == 0u)
+		j->csid_unpinned++;
+	(void)own_csid;
 }
 
 static enum cnxman_join_rx join_h_membership(struct cnxman_join *j,
@@ -1958,7 +2298,9 @@ static enum cnxman_join_rx join_forward(struct cnxman_join *j,
  */
 static uint32_t join_barrier_commits(const struct cnxman_join *j)
 {
-	return cnxman_barrier_commits(j->barrier, NULL);
+	/* rd vms-9c99: PHASE 2, not op-0x0c #12 -- see
+	 * cnxman_barrier_phase2_commits()'s contract. */
+	return cnxman_barrier_phase2_commits(j->barrier, NULL);
 }
 
 static void join_post_commit(struct cnxman_join *j, uint32_t before,
@@ -1968,7 +2310,7 @@ static void join_post_commit(struct cnxman_join *j, uint32_t before,
 	struct join_ev e;
 
 	join_bzero(&c, (uint32_t)sizeof(c));
-	if (cnxman_barrier_commits(j->barrier, &c) == before)
+	if (cnxman_barrier_phase2_commits(j->barrier, &c) == before)
 		return;   /* nothing committed in that dispatch */
 
 	join_bzero(&e, (uint32_t)sizeof(e));
@@ -2104,6 +2446,39 @@ static enum cnxman_join_rx join_h_csid_learned(struct cnxman_join *j,
 {
 	if (j->cl == NULL)
 		return CNXMAN_JOIN_RX_CONSUMED;
+
+	/*
+	 * A COMMITTED MEMBER'S IDENTITY IS NOT REASSIGNED BY A PEER (vms-c06).
+	 *
+	 * Re-adoption is the rule for a system that is BEING admitted -- p. 7-25:
+	 * a rejoining system gets a NEW CSID and never its old one back, which
+	 * is why join_adopt_membership_rec() never short-circuits on "we already
+	 * have one". A system that is already IN the cluster is not being
+	 * admitted to anything: it holds the CSID that cluster gave it, every
+	 * later nodemap addresses it by that slot, and the DLM names it by that
+	 * slot. Overwriting it on an unsolicited record would move this node to
+	 * a slot the rest of the cluster is not using.
+	 *
+	 * Measured: with the founder's op-0x02 withheld this cannot arise on the
+	 * 2-node rig at all, and before it was withheld this is the write that
+	 * turned node A's live csid=0x00010001 into 0x00010003. Both halves are
+	 * kept, because this one is the one that touches the identity.
+	 *
+	 * The same value arriving again is not a reassignment and is taken as
+	 * before (the setter is idempotent); a DIFFERENT one is counted, said
+	 * out loud once, and refused. Nothing is invented either way (INV-6).
+	 */
+	if (join_node_already_member(j) &&
+	    e->csid != j->cl->club.local_csid) {
+		j->csid_reassign_refused++;
+		if (j->csid_reassign_refused == 1u)
+			join_log(j, "%CNXMAN, a cluster system id was offered "
+				    "to this node while it already holds one "
+				    "as a member: it keeps the one the cluster "
+				    "assigned it");
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+
 	cnxman_club_learn_local_csid(&j->cl->club, e->csid);
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
@@ -2878,6 +3253,22 @@ static uint32_t join_ev_aux(enum cnxman_event ev, const struct join_ev *e)
 }
 
 /*
+ * Does this table connect that event to that state at all? (rd vms-c06.)
+ *
+ * Asked BEFORE the dispatch, and only about the transition family, so that a
+ * frame another FSM owns is routed on instead of being eaten by an empty cell
+ * -- see cnxman_join_rx_body()'s "NOT OURS TO EAT" block.
+ */
+static int join_has_cell(uint8_t state, enum cnxman_event ev)
+{
+	if ((unsigned)state >= (unsigned)CNXMAN_JOIN_STATE__COUNT)
+		return 0;
+	if ((unsigned)ev >= (unsigned)CNXMAN_EV__COUNT)
+		return 0;
+	return join_table[state][ev] != NULL;
+}
+
+/*
  * EVERY [state][event] pair this FSM evaluates passes through here, so ONE
  * record per dispatch is a complete transcript of the machine -- including the
  * EMPTY CELLS, which are the interesting ones: an event the evidence does not
@@ -2982,7 +3373,7 @@ static enum cnxman_event join_event_of(const struct vms_cm_envelope *env)
 		case VMS_CM_OP_CONFIG:
 			return CNXMAN_EV_RX_CONFIG;
 		case VMS_CM_OP_COMMIT:
-		case VMS_CM_OP_LOCKRB:
+		case VMS_CM_OP_MEMBREC:
 			return CNXMAN_EV_RX_COMMIT;
 		case VMS_CM_OP_MEMBERSHIP:
 			return CNXMAN_EV_RX_MEMBERSHIP;
@@ -3348,9 +3739,42 @@ enum cnxman_join_rx cnxman_join_rx_body(struct cnxman_join *j,
 		return CNXMAN_JOIN_RX_NOT_MINE;
 	}
 
-	/* E80: recorded BEFORE the dispatch, so it is a fact about the frame
-	 * that arrived rather than about what a handler did with it. */
+	/* E80: recorded BEFORE the dispatch -- and before the routing verdict
+	 * below -- so it stays a fact about the frame that arrived rather than
+	 * about what any handler did with it. */
 	join_note_admission_progress(j, ev, &e);
+
+	/*
+	 * A TRANSITION FRAME THIS TABLE HAS NO EDGE FOR IS NOT OURS TO EAT
+	 * (rd vms-c06).
+	 *
+	 * The join's table rule -- "an empty cell is ignored and COUNTED" -- is
+	 * right for the join's OWN events and wrong for everybody else's: a
+	 * state-transition frame belongs to the barrier (FC-P3.5) or to the
+	 * coordinator (FC-P3.12), and this FSM is offered it FIRST only because
+	 * the glue routes join -> barrier -> coordinator (vms_cnxman.c
+	 * cnxman_vc_route). Returning CONSUMED for a frame this table does
+	 * nothing with does not ignore it -- it DESTROYS it, and the FSM that
+	 * owes an answer never learns it arrived.
+	 *
+	 * That is not a hypothetical. A node that FOUNDED its cluster never
+	 * reaches CNXMAN_JOIN_MEMBER, the only state whose RX_BARRIER cell
+	 * forwards; on the live 2-node rig the joiner's op-0x0b step reports
+	 * were therefore eaten here, the coordinator never sent a release, and
+	 * the barrier stood open for the rest of the run.
+	 *
+	 * So: no cell, and it is somebody else's family => NOT_MINE. The
+	 * cells that DO exist are untouched -- join_forward() still hands the
+	 * frame to the barrier itself and answers CONSUMED, so a frame is never
+	 * delivered twice.
+	 */
+	if (join_is_barrier_frame(&e.env) && !join_has_cell(j->state, ev)) {
+		j->foreign_transition_frames++;
+		join_diag_arrival(j, CNXMAN_DIAG_EV_NONE,
+				  CNXMAN_DIAG_R_NOT_MINE, 0,
+				  join_diag_catop(&e.env));
+		return CNXMAN_JOIN_RX_NOT_MINE;
+	}
 
 	{
 		uint32_t before = join_barrier_commits(j);

@@ -239,9 +239,38 @@ trap 'rm -f "$OUTFILE" "$OUTFILE.raw" "$OUTFILE.map" "$OUTFILE.map.scoped" "$RUN
 run_harness() {
     _defect="$1"
     if [ -z "$_defect" ]; then
-        "$ENGINE" run --rm "$BASE_TAG" >"$OUTFILE.raw" 2>&1
+        # PRISTINE positive control. It runs the image's default CMD
+        # (/run_tests.sh) DIRECTLY -- it does NOT go through
+        # /inject_and_run.sh, which is the only place KE_WALL_TIMEOUT is
+        # raised (inject_and_run.sh:~278). Without this -e, run_tests.sh
+        # falls back to its 600s default (run_tests.sh:59) for the FULL,
+        # UNSHARDED ~124-suite pristine boot -- but the defect runs below
+        # get 1800s. Under CI/TCG contention the pristine boot overruns 600s,
+        # the guest is SIGTERM'd mid-run, and every suite AFTER the wall
+        # (init.sh's tail: test_syssvc_* from ~procnam on + all test_imgact_*)
+        # never executes and reports rc=MISSING -- a mass, intermittent
+        # false-red that looks like a build/staging drop but is a timeout.
+        # Give the pristine boot the SAME budget the defect runs have. The wall
+        # is env-configurable via NEGCTL_WALL (default 1800, unchanged for the
+        # sharded CI negctl gate, which runs ~7 defects/shard under a 50m job
+        # budget and must stay tight). The ADHOC path (negctl-adhoc.yml) sets
+        # NEGCTL_WALL=2700 + a 100m job budget: it runs the FULL ~124-suite
+        # pristine UNSHARDED, and measured 89/124 suites in 1800s (~20s/suite)
+        # means 124 needs ~2510s -- so 1800 intermittently overruns under TCG
+        # contention and 2700 gives headroom. Raising a per-boot CEILING never
+        # slows an uncontended boot (which still finishes in ~250s and never
+        # reaches the wall); it only lets a starved boot complete instead of
+        # SIGTERMing the run-order tail into a false-red rc=MISSING mass.
+        "$ENGINE" run --rm -e KE_WALL_TIMEOUT="${NEGCTL_WALL:-1800}" "$BASE_TAG" >"$OUTFILE.raw" 2>&1
     else
-        "$ENGINE" run --rm -e "FACILITY_DEFECT=$_defect" "$BASE_TAG" \
+        # Defect run: same env-configurable wall. inject_and_run.sh honours an
+        # inherited KE_WALL_TIMEOUT (its own default is also 1800), so passing it
+        # here keeps the sharded gate at 1800 (NEGCTL_WALL unset) while the adhoc
+        # gets 2700 -- pristine and each defect run boot the full suite set at the
+        # same cost, so both walls must move together or the flake just relocates
+        # from the pristine control to the first defect run.
+        "$ENGINE" run --rm -e "FACILITY_DEFECT=$_defect" \
+            -e KE_WALL_TIMEOUT="${NEGCTL_WALL:-1800}" "$BASE_TAG" \
             /inject_and_run.sh >"$OUTFILE.raw" 2>&1
     fi
     _rc=$?
@@ -429,6 +458,13 @@ echo "--- positive control: pristine image, every suite green ---"
 DEFECT_BAD=0
 run_harness ""
 BASE_RC=$?
+if [ "$BASE_RC" -eq 124 ]; then
+    # timeout(1)'s exit code: the QEMU wall (run_tests.sh) fired before the
+    # full suite finished, so the guest was SIGTERM'd mid-run and every suite
+    # AFTER the wall reports rc=MISSING below. Name it as a TIMEOUT, not a
+    # build/staging drop or a real red -- the mass rc=MISSING is the SYMPTOM.
+    bad "the PRISTINE boot hit the wall-clock TIMEOUT (rc=124) before completing -- the guest was killed mid-run; the rc=MISSING suites below are the run-order TAIL that never got to execute, NOT a build/staging drop. The pristine boot gets KE_WALL_TIMEOUT=${NEGCTL_WALL:-1800}s (raise NEGCTL_WALL, as the adhoc path does to 2700); if this still fires, the full ~$N_EXPECTED-suite boot needs a larger budget or the runner is badly starved."
+fi
 if [ "$BASE_RC" -ne 0 ]; then
     bad "the PRISTINE harness exited $BASE_RC; every negative control below would be meaningless"
 fi

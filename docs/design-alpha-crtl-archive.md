@@ -1,12 +1,16 @@
 # Alpha C-RTL archive — the DECC$SHR backing for `alpha-dec-vms` (GAP2-archive)
 
 **Status:** DECIDED — **Option A** (port musl's `arch/alpha-dec-vms` layer),
-operator ruling (Baron, 2026-08-23). Implementation routing in progress: the
-musl-arch-port couples to the OVMX Alpha executive (GAP3 / Alpha boot lane), so
-it sequences with GAP3; libgcc + the decoration-bridge layer + the DECC$SHR
-whole-archive (via the vms-c65 shareable emit) are the toolchain/LINK side that
-follow. **Owner routing:** conductor coordinates; the Alpha lane owns the
-executive-facing syscall backend.
+operator ruling (Baron, 2026-08-23). **Option A has LANDED** *(status corrected
+2026-09-14; the prior "implementation routing in progress" line is stale)*: the
+forked musl arch layer exists on `origin/main` at
+`tools/cross-alpha-vms/musl-arch/arch/alpha-dec-vms/` (atomics, setjmp, syscall
+stubs, `bits/`), and `src/vmslink/mk_alpha_shr.sh` builds the Alpha `DECC$SHR`
+through LINK.EXE's shareable path. The syscall layer still couples to the OVMX
+Alpha executive (GAP3 / Alpha boot lane), so runtime activation sequences with
+GAP3; re-derive residual libgcc/full-target-build state from `rd dep tree vms-da2c`
+and the compat register. **Owner routing:** conductor coordinates; the Alpha lane
+owns the executive-facing syscall backend.
 **Bead:** vms-da2c. **Blocks:** a runnable Alpha crt0 activation (the last
 non-Alpha-boot rung of the crt0 join).
 

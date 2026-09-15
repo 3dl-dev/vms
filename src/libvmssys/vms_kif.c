@@ -1169,6 +1169,31 @@ uint32_t vms_kif_cluster_diag_join(struct vms_cluster_diag_join_args *args)
 }
 
 /*
+ * vms_kif_cluster_diag_dlm - VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c). The lock
+ * manager's WIRE ARM: what it really emitted, what the connection manager
+ * really carried for it, and where a posted request really ended. Read-only,
+ * and the same shape and discipline as the four diagnostics above.
+ *
+ * `args->status` is the executive's own answer INCLUDING the honest
+ * SS$_NOSUCHDEV for a node with no DLM arm -- and the row stays all-zero then.
+ * A caller must render that as "there is no wire arm", never as a ledger of
+ * zeros, because "emitted none" and "has no emitter" are different facts and
+ * only one of them is evidence (INV-6).
+ */
+uint32_t vms_kif_cluster_diag_dlm(struct vms_cluster_diag_dlm_args *args)
+{
+    if (!args)
+        return SS$_BADPARAM;
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    args->status = 0;
+    KIF_CALL(VMS_IOCTL_CLUSTER_DIAG_DLM, args);
+
+    return args->status;
+}
+
+/*
  * vms_kif_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9). $GETSYI's
  * cluster item codes, read from the connection manager's CLUB. WIRED:
  * sys$getsyi/sys$getsyiw (src/libvms/syssvc/sys_misc.c) answer
@@ -1468,6 +1493,45 @@ uint32_t vms_kif_terminal_resolve(const char *devnam, char *backing,
     if (args.status & 1) {
         vms_strncpy(backing, args.backing, backing_size - 1);
         backing[backing_size - 1] = '\0';
+    }
+    return args.status;
+}
+
+uint32_t vms_kif_terminal_setlogin(const char *devnam, const char *username)
+{
+    struct vms_termlogin_args args;
+
+    if (!devnam || !username)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
+    args.username[VMS_USERNAME_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_SETLOGIN, &args);
+    return args.status;
+}
+
+uint32_t vms_kif_terminal_getlogin(const char *devnam, char *username,
+                                   uint32_t username_size)
+{
+    struct vms_termlogin_args args;
+
+    if (!devnam || !username || username_size == 0)
+        return 0x00000014; /* SS$_BADPARAM */
+
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.devnam, devnam, VMS_DEVNAM_SIZE - 1);
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    KIF_CALL(VMS_IOCTL_TERM_GETLOGIN, &args);
+
+    username[0] = '\0';
+    if (args.status & 1) {
+        vms_strncpy(username, args.username, username_size - 1);
+        username[username_size - 1] = '\0';
     }
     return args.status;
 }

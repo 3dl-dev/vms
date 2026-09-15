@@ -902,17 +902,229 @@ static int console_login(void)
     return 1;
 }
 
+/* ================================================================== */
+/* NETWORK-LOGIN AUTHORIZATION (vms-843a / vms-16b, design               */
+/* docs/design-ssh-loginout-handoff.md, Option A)                        */
+/*                                                                       */
+/* The faithful SSH->DCL handoff routes an inbound SSH session through    */
+/* the ONE login primitive console login + DECnet SET HOST/CTERM use:     */
+/* $CREPRC(LOGINOUT.EXE, <vterm>, PRC$M_INTER|PRC$M_LOGINOUT). SSH        */
+/* authenticated the user IN-PROTOCOL (cryptographic pubkey/password vs   */
+/* the SAME SYSUAF/Purdy authority, proven vms-9cc), so LOGINOUT does NOT  */
+/* re-read a password on this path (Option A -- stripping SSH's crypto    */
+/* auth for a LOGINOUT re-challenge would be a security regression, and    */
+/* is not how OpenVMS TCPIP$SSH works). What LOGINOUT DOES enforce, given  */
+/* the pre-authenticated user's SYSUAF record, is the account's           */
+/* NETWORK-class login gates -- fail-closed, granting nothing beyond what  */
+/* SYSUAF says (the persona is built from the record, so a permitted user  */
+/* gets EXACTLY its own UIC/privileges).                                   */
+/*                                                                        */
+/* loginout_network_permit() is the pure AUTHORIZATION DECISION, split     */
+/* from the session-establish (persona + DCL activation) so it can be      */
+/* proven fail-closed host-side with constructed records, WITHOUT a live   */
+/* SSH connection or executive (the --network-permit-selftest below, the   */
+/* DECnet --*-selftest floor pattern). The live SSH->authenticated-DCL     */
+/* bracket is lab-gated (vms-101); the session-establish wiring + the      */
+/* executive identity conveyance are the tracked follow-on -- this is the  */
+/* authorization floor, honestly not yet wired into a live login path.     */
+/*                                                                        */
+/* Returns 1 to PERMIT the network login, 0 to REFUSE (fail-closed).       */
+/* ------------------------------------------------------------------ */
+int loginout_network_permit(const sysuaf_record_t *rec)
+{
+    if (!rec)
+        return 0;                                 /* fail-closed on a null record */
+
+    /* Account-level enable gate (DISUSER/DISACNT) -- applies to every login
+     * class; the SAME check console_login makes after the password. */
+    if (!sysuaf_interactive_login_permitted(rec))
+        return 0;
+
+    /* NETWORK-class gate: UAI$M_DISNETWORK disables network logins for this
+     * account (AUTHORIZE /FLAGS=DISNETWORK). Read from the record's flag names,
+     * the same source sysuaf_interactive_login_permitted reads. */
+    if (sysuaf_flags_to_mask(rec->flags) & UAI$M_DISNETWORK)
+        return 0;
+
+    /* Expired password -> refuse, symmetric with the SSH path
+     * (src/vmsssh/sshd_auth.c) and console_login: a correct in-protocol auth
+     * does not excuse an expired SYSUAF password (the interactive force-change
+     * flow is not built; refusing is the honest floor, not a silent pass). */
+    if (sysuaf_password_expired(rec))
+        return 0;
+
+    return 1;
+}
+
+/* ------------------------------------------------------------------ */
+/* --network-permit-selftest: prove the network-login authorization    */
+/* decision is FAIL-CLOSED, host-side, with no executive or live SSH    */
+/* (the DECnet --*-selftest floor). Exit 0 = all pass, 1 = any fail.    */
+/* ------------------------------------------------------------------ */
+static int run_network_permit_selftest(void)
+{
+    int pass = 0, fail = 0;
+    sysuaf_record_t r;
+
+#define NP_CHECK(cond, msg) do { \
+    if (cond) { printf("  PASS: %s\n", msg); pass++; } \
+    else      { printf("  FAIL: %s\n", msg); fail++; } \
+} while (0)
+
+    printf("=== loginout --network-permit-selftest (vms-843a Option-A auth floor) ===\n");
+
+    /* A clean, enabled account with network logins allowed -> PERMIT. */
+    memset(&r, 0, sizeof(r));
+    NP_CHECK(loginout_network_permit(&r) == 1,
+             "a clean enabled account is permitted a network login (no password re-read)");
+
+    /* DISNETWORK -> REFUSE (the network-class gate). */
+    memset(&r, 0, sizeof(r));
+    snprintf(r.flags, sizeof(r.flags), "DISNETWORK");
+    NP_CHECK(loginout_network_permit(&r) == 0,
+             "a DISNETWORK account is refused a network login (fail-closed)");
+
+    /* DISUSER -> REFUSE (account-level disable). */
+    memset(&r, 0, sizeof(r));
+    snprintf(r.flags, sizeof(r.flags), "DISUSER");
+    NP_CHECK(loginout_network_permit(&r) == 0,
+             "a DISUSER account is refused");
+
+    /* DISACNT -> REFUSE (account-level disable). */
+    memset(&r, 0, sizeof(r));
+    snprintf(r.flags, sizeof(r.flags), "DISACNT");
+    NP_CHECK(loginout_network_permit(&r) == 0,
+             "a DISACNT account is refused");
+
+    /* Expired password -> REFUSE (symmetric with the SSH path). The expiry
+     * flag lives in the RAW record read by sysuaf_password_expired(). */
+    memset(&r, 0, sizeof(r));
+    sysuaf__put_le32(r.raw.uaf$l_flags, UAI$M_PWD_EXPIRED);
+    NP_CHECK(loginout_network_permit(&r) == 0,
+             "an account with an EXPIRED password is refused (no silent pass)");
+
+    /* A NULL record -> REFUSE. */
+    NP_CHECK(loginout_network_permit(NULL) == 0,
+             "a NULL record is refused (fail-closed)");
+
+    printf("=== --network-permit-selftest: %d passed, %d failed ===\n", pass, fail);
+#undef NP_CHECK
+    return fail > 0 ? 1 : 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* NETWORK-LOGIN SESSION ESTABLISH (vms-843a / vms-65b)                 */
+/*                                                                       */
+/* The live half of loginout_network_permit above: a LOGINOUT created   */
+/* by $CREPRC(LOGINOUT, RTAn:, PRC$M_INTER|PRC$M_LOGINOUT) for an        */
+/* inbound network session (SSH today; the daemon minted the RTAn: and   */
+/* stamped the pre-authenticated user onto it, rd vms-65b). Instead of   */
+/* prompting Username:/Password:, LOGINOUT reads the note off ITS OWN    */
+/* terminal, trusts the daemon's in-protocol authentication (Option A --  */
+/* SSH already authed the SAME SYSUAF/Purdy authority), and hands over    */
+/* the EXACT SAME start_session() the console login uses. The persona is  */
+/* still built from the binary SYSUAF record, so a permitted user gets    */
+/* precisely its own UIC/privileges and nothing more.                     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Read the network pre-authentication note off this LOGINOUT's own terminal.
+ * Returns 1 and fills *user (upcased SYSUAF key) when a daemon stamped a
+ * non-empty note on the RTAn: this session was created on; 0 otherwise --
+ * which is the ordinary console/DECnet case (no note), the honest fail-closed
+ * signal to fall back to the interactive prompt (INV-6).
+ */
+static int network_login_conveyed(char *user, size_t usz)
+{
+    struct vms_procinfo pi;
+    char note[VMS_USERNAME_SIZE];
+
+    if (user == NULL || usz == 0)
+        return 0;
+
+    /* Which terminal is this session on? The executive records it when
+     * $CREPRC binds the process (creprc_bind_terminal -> SETTERM); a session
+     * created on an RTAn: reports that name, a bare LOGINOUT.EXE at a shell
+     * reports none. Only a real terminal-bound session can carry a note. */
+    memset(&pi, 0, sizeof(pi));
+    if (!(vms_kif_getjpi_self(&pi) & 1) || pi.terminal[0] == '\0')
+        return 0;
+
+    /* Read the note for THAT terminal. Absent/empty -> no network pre-auth
+     * (an ordinary console or DECnet SET HOST terminal, which authenticates
+     * its user itself): prompt, do not fabricate an identity. */
+    note[0] = '\0';
+    if (!(vms_kif_terminal_getlogin(pi.terminal, note, sizeof(note)) & 1)
+            || note[0] == '\0')
+        return 0;
+
+    snprintf(user, usz, "%s", note);
+    return 1;
+}
+
+/*
+ * Establish the network session for the pre-authenticated `username`. Reads the
+ * binary SYSUAF record, applies the fail-closed network-login authorization
+ * (loginout_network_permit -- DISUSER/DISACNT/DISNETWORK/expired all REFUSE),
+ * and on permit hands over to start_session() (identity stamp + credential drop
+ * + DCL activation -- the SAME primitive, no password re-read). Returns on
+ * REFUSAL only (unknown user, unreadable SYSUAF, or a login-flag denial): the
+ * caller then ends the session, which is the fail-closed outcome -- the SSH
+ * transport already consumed the auth exchange, so there is nothing to prompt
+ * for and admitting the peer anyway would be the illegal third answer (Rule 10).
+ * On success start_session() execs DCL and never returns here.
+ */
+static int network_login(const char *username)
+{
+    sysuaf_record_t rec;
+    uint32_t uaf_st = 0;
+
+    memset(&rec, 0, sizeof(rec));
+    if (username == NULL || username[0] == '\0')
+        return 0;
+    if (sysuaf_lookup_st(username, &rec, &uaf_st) < 0)
+        return 0;                       /* unknown / unreadable -> refuse */
+    if (!loginout_network_permit(&rec))
+        return 0;                       /* DISUSER/DISNETWORK/expired -> refuse */
+
+    /* 0 failures: a pre-authenticated network session made no bad-password
+     * attempts against LOGINOUT (it never prompted). */
+    start_session(&rec, 0);             /* stamps identity, drops, execs DCL */
+    return 0;                           /* not reached */
+}
+
 /* ------------------------------------------------------------------ */
 /* Main                                                                */
 /* ------------------------------------------------------------------ */
 int main(int argc, char *argv[])
 {
+    /* Host/CI selftest hooks (no executive, no live rail) run and exit
+     * before the login bootstrap -- the DECnet --*-selftest pattern. */
+    if (argc > 1 && strcmp(argv[1], "--network-permit-selftest") == 0)
+        return run_network_permit_selftest();
+
     (void)argc; (void)argv;
 
     /* Bootstrap VMS namespace — each exec'd process needs its own
      * device table + LNM since these are in-process state. */
     vmsfs_device_add(SYSDISK_DEVICE, SYSDISK_MOUNT);
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
+
+    /*
+     * NETWORK LOGIN (vms-843a / vms-65b). If an inbound network daemon
+     * pre-authenticated a user and stamped it on this session's terminal
+     * (SSH: $CREPRC(LOGINOUT, RTAn:) after in-protocol SYSUAF auth), trust it
+     * and skip the prompt -- LOGINOUT is the ONE session-establish primitive
+     * for console, DECnet SET HOST and SSH. Absent (the common case) falls
+     * through to the interactive console prompt loop below, unchanged: the
+     * operator console and DECnet SET HOST both re-challenge on their own
+     * terminal, so their sessions carry no note and reach console_login().
+     */
+    {
+        char netuser[VMS_USERNAME_SIZE];
+        if (network_login_conveyed(netuser, sizeof(netuser)))
+            return network_login(netuser);
+    }
 
     return console_login();
 }

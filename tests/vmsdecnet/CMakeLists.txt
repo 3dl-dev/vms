@@ -67,6 +67,49 @@ target_link_libraries(test_dnet_nodedb PRIVATE vmsdecnet_nodedb)
 target_compile_options(test_dnet_nodedb PRIVATE -Werror)
 add_test(NAME vmsdecnet_nodedb_unit COMMAND test_dnet_nodedb)
 
+# rd vms-f52: the DECnet OBJECT database (SET/DEFINE/SHOW/CLEAR/PURGE OBJECT).
+# Library unit test: number-keyed set/update, object-name uniqueness, name/number
+# resolution, FILE bounds, ascending-number SHOW ordering, persistence round-trip
+# + corrupt-file handling. Warning-clean under -Werror.
+add_executable(test_dnet_objectdb test_dnet_objectdb.c)
+target_link_libraries(test_dnet_objectdb PRIVATE vmsdecnet_objectdb)
+target_compile_options(test_dnet_objectdb PRIVATE -Werror)
+add_test(NAME vmsdecnet_objectdb_unit COMMAND test_dnet_objectdb)
+
+# NCP.EXE OBJECT command dispatch, end-to-end against the shipped binary (rd
+# vms-f52): the FIRST command-dispatch test for NCP.EXE -- SET/DEFINE/SHOW/CLEAR/
+# PURGE OBJECT over a temp DB (OVMX_DECNET_OBJECTDB), asserting persistence across
+# invocations + honest errors. No socket/privilege/dev-vms.
+add_test(NAME vmsdecnet_ncp_object
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_dnet_ncp_object.sh)
+set_tests_properties(vmsdecnet_ncp_object PROPERTIES
+    ENVIRONMENT "NCP_EXE=$<TARGET_FILE:ncp_exe>")
+
+# rd vms-ea8/vms-6a4: node-filespec splitter (NODE"user pw acct"::spec) that
+# feeds the FAL/DAP COPY client. Pure logic -- compile the splitter TU directly
+# (no FAL/RMS/auth link stack needed for a syntax-only unit).
+add_executable(test_dnet_nodespec test_dnet_nodespec.c
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/dnet_nodespec.c)
+target_include_directories(test_dnet_nodespec PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/fal/include
+    ${CMAKE_SOURCE_DIR}/src/vmsdecnet/cterm/include)  # dnet_cterm.h: caps + codes
+target_compile_options(test_dnet_nodespec PRIVATE -Werror)
+# The splitter parses an untrusted COPY argument carrying an access-control
+# password, so its fuzz is held to the same bar as the DAP decoder: build it
+# WITH -fsanitize=address,undefined where the toolchain can (a musl/freestanding
+# cross may lack the runtime -- the fuzz's own leak/bounds assertions still run
+# everywhere; the sanitizer turns an over-read into a HARD failure on the host).
+include(CheckCSourceCompiles)
+set(_ns_san_save "${CMAKE_REQUIRED_FLAGS}")
+set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+check_c_source_compiles("int main(void){return 0;}" OVMX_NODESPEC_SANITIZE_OK)
+set(CMAKE_REQUIRED_FLAGS "${_ns_san_save}")
+if(OVMX_NODESPEC_SANITIZE_OK)
+    target_compile_options(test_dnet_nodespec PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_nodespec PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_nodespec_unit COMMAND test_dnet_nodespec)
+
 # rd vms-8c2: the DAP (Data Access Protocol) message codec + the FAL access-
 # control credential decoder behind $ COPY node::file. Proves (1) every served
 # DAP message round-trips encode->decode, (2) blocked messages walk in a single
@@ -124,3 +167,34 @@ if(OVMX_DAP_SANITIZE_OK)
     target_link_options(test_dnet_routing_fuzz PRIVATE -fsanitize=address,undefined)
 endif()
 add_test(NAME vmsdecnet_routing_fuzz_unit COMMAND test_dnet_routing_fuzz)
+
+# rd vms-0a9: isolation proof of the DECnet router run-mode EMIT path -- the
+# spec-faithful router-hello DECNETD emits in --router mode. Complements the
+# routing_fuzz RECEIVE-path proof above: it round-trips the emitted bytes,
+# asserts the emitted node-type says "router", drives an OVMX endnode's
+# DR-selection with those bytes (the endnode names the router in its rtr field),
+# and fuzzes the ENCODER under adversarial field/cap values + the emitted frame
+# arbitrarily mutated into the receive path (>=100k iters each). Attacker-facing
+# emit path that will one day reach a real VAX endnode, so -- like the fuzz above
+# -- it is built WITH -fsanitize=address,undefined and honours vms-abf's
+# OVMX_FUZZ_REQUIRE_SANITIZERS teeth-enforcement. NO real node is touched (all
+# in-process / OVMX<->OVMX). Links the ENGINE (build_router_hello_frame +
+# rx_frame). Warning-clean under -Werror.
+add_executable(test_dnet_router_emit_fuzz test_dnet_router_emit_fuzz.c)
+target_link_libraries(test_dnet_router_emit_fuzz PRIVATE vmsdecnet_engine)
+target_compile_options(test_dnet_router_emit_fuzz PRIVATE -Werror)
+if(OVMX_DAP_SANITIZE_OK)
+    target_compile_options(test_dnet_router_emit_fuzz PRIVATE -fsanitize=address,undefined)
+    target_link_options(test_dnet_router_emit_fuzz PRIVATE -fsanitize=address,undefined)
+endif()
+add_test(NAME vmsdecnet_router_emit_fuzz_unit COMMAND test_dnet_router_emit_fuzz)
+
+# The DECnet startup GATE + serve-default decision SYS$MANAGER:STARTNET.COM
+# relies on (rd vms-a70 direction B): --show-executor self-sources the executor
+# address and exits SUCCESS iff DECnet is configured (the gate STARTNET branches
+# on), and the persistent endnode daemon serves inbound object 42 by default.
+# Runs the shipped DECNETD.EXE on the host -- no socket, no /dev/vms, no privilege.
+add_test(NAME vmsdecnet_startnet_gate
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_decnetd_startnet_gate.sh)
+set_tests_properties(vmsdecnet_startnet_gate PROPERTIES
+    ENVIRONMENT "DECNETD_EXE=$<TARGET_FILE:decnetd_exe>")

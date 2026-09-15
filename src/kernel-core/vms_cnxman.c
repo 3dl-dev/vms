@@ -80,6 +80,7 @@
 #include "vms_cluster_sysgen.h" /* E78: SYSGEN CLUSTER_CREDITS, the VC grant */
 #include "vms_scs.h"            /* the SYSAP surface this glue registers on */
 #include "vms_scs_fsm.h"        /* enum scs_close_reason (E29) */
+#include "vms_cluster_codec_dlm.h" /* rd vms-1ee: VMS_DLM_CAT_REQUEST, the DLM leg */
 #include "vms_cnxman.h"
 #include "vms_cnxman_csb.h"
 #include "vms_cnxman_join_fsm.h"
@@ -280,6 +281,27 @@ struct vms_cnxman {
 	uint8_t  genesis_armed;
 	uint8_t  pad_genesis[3];
 
+	/*
+	 * THE QUORUM HANG this node has ALREADY ANNOUNCED (FC-P8.1, sec 7b).
+	 * 0 at CLUSTER_START, which is the truth: a node that has not formed or
+	 * joined anything is not in a hang.
+	 *
+	 * It is what makes the edge LEVEL-TRIGGERED rather than a before/after
+	 * pair taken around one recompute -- and that distinction cost a live
+	 * 2-node run. The quorum arithmetic has THREE callers (this file's beat,
+	 * the joiner's op-01 PARAMS learn and Phase 2's commit, rd vms-d0d), and
+	 * on the rig it was the PARAMS-learn that cleared quorum_lost when the
+	 * partition healed. A comparator that read "before" at the top of its
+	 * own recompute therefore saw no change at all, announced nothing, and
+	 * left the stalled request stalled on a node that had quorum again.
+	 * Comparing against what was last ANNOUNCED cannot miss that, whichever
+	 * path did the arithmetic.
+	 */
+	uint8_t  quorum_hang_announced;
+	uint8_t  pad_quorum[3];
+	uint32_t quorum_hangs;        /* times this node entered a hang  */
+	uint32_t quorum_resumes;      /* ... and came back out of one    */
+
 	/* E78: the p. 2-43 receive-buffer ledger, counted where it is paid. */
 	uint32_t credits_returned;        /* buffers really released to SCS   */
 	uint32_t credit_returns_refused;  /* no CDT, or nothing was held      */
@@ -298,6 +320,29 @@ struct vms_cnxman {
 	 * because a carrier is built and handed to SCS in one unbroken step.
 	 */
 	uint8_t carrier[VMS_CM_BODY_LEN];
+
+	/* ==================================================================
+	 * The DLM's wire arm (vms_cnxman.h §5, rd vms-1ee)
+	 *
+	 * The arm is installed by cnxman_set_dlm(), which also hands it to the
+	 * barrier and the coordinator for the transition callbacks. This is the
+	 * SAME pointer, kept here because steady-state cat-0x02 traffic arrives
+	 * outside any transition and has to be routed by this file.
+	 * ================================================================== */
+	const struct dlm_scs_role_ops *dlm;
+
+	/* The DLM's outbound scratch. In the context, never on the stack, for
+	 * the same reason `carrier` is: this runs on a VAX kernel stack. A body
+	 * is built into it, stamped and handed to SCS in one unbroken step. */
+	uint8_t  dlm_tx[VMS_CM_BODY_LEN];
+	uint8_t  dlm_reply[VMS_CM_BODY_LEN];
+
+	uint32_t dlm_frames_rx;        /* cat-0x02 bodies routed to the arm  */
+	uint32_t dlm_replies_sent;     /* answers the arm produced, sent     */
+	uint32_t dlm_declined;         /* the arm declined; nothing sent     */
+	uint32_t dlm_sends;            /* originations the arm asked for     */
+	uint32_t dlm_sends_refused;    /* no CSB / no connection             */
+	uint32_t dlm_foreign_refused;  /* RULE C: the peer is not proven ours*/
 };
 
 /* ==========================================================================
@@ -866,11 +911,36 @@ static void cnxman_log_membership_change(struct vms_cnxman *cn,
 	cnxman_ops_log(cn, line);
 }
 
+/* SS7b, below: the quorum arithmetic applied to a membership that just moved. */
+static void cnxman_quorum_apply(struct vms_cnxman *cn);
+
+/*
+ * A CSB just left membership (after == 0, before == 1): tell the DLM's wire
+ * arm AS A DIRECT CALL, exactly the seam dlm_scs_role_ops.member_departed
+ * documents ("this is how the connection manager reaches it as a direct
+ * call rather than through an ioctl") and cnxman_quorum_announce already
+ * uses for the quorum edge, just below. Read from the CSB the transition
+ * really removed -- never a CSID this glue invents (INV-6). A CSB with no
+ * learned CSID (csid_valid clear) names nobody honestly, so nothing is
+ * reported for it: the engine's departure sweep needs a real identity to
+ * key on, not zero standing in for "unknown".
+ */
+static void cnxman_notify_member_departed(struct vms_cnxman *cn,
+					   const struct vms_csb *csb)
+{
+	if (cn->dlm == NULL || cn->dlm->member_departed == NULL)
+		return;
+	if (!csb->csid_valid)
+		return;
+	cn->dlm->member_departed(cn->dlm->ctx, csb->csid);
+}
+
 static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 					     const uint8_t *before)
 {
 	struct vms_club *club = &cn->cl->club;
 	uint32_t i;
+	int changed = 0;
 
 	for (i = 0; i < club->n_csb; i++) {
 		struct vms_csb *csb = &club->csb[i];
@@ -884,7 +954,21 @@ static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
 		cnxman_log_membership_change(cn, csb, after);
 		cnxman_deliver_cluevt(cn, after ? CNXMAN_CLUEVT_ADD
 						: CNXMAN_CLUEVT_REMOVE);
+		if (!after)
+			cnxman_notify_member_departed(cn, csb);
+		changed = 1;
 	}
+
+	/*
+	 * A MEMBERSHIP CHANGE IS A VOTE CHANGE (FC-P8.1). p. 7-6 recomputes the
+	 * quorum algorithm over the selected set; the set just changed, so the
+	 * figures -- and whether this node still perceives quorum -- change with
+	 * it. Recomputed HERE, at the moment the change is observed, rather than
+	 * only on the next beat, so a node stops granting within the same
+	 * message that removed the votes it was relying on.
+	 */
+	if (changed)
+		cnxman_quorum_apply(cn);
 }
 
 /* ==========================================================================
@@ -1195,6 +1279,146 @@ static void cnxman_credit_carrier(struct vms_cnxman *cn,
  * cnxman_vc_message() so that the credit carrier runs on EVERY outcome --
  * including the frame no FSM claimed, which still consumed a real buffer and
  * still owes the peer its credit back. */
+/* Defined below, beside the beat that also calls it (rd vms-1ee). */
+static void cnxman_sync_peer_swver(struct vms_cnxman *cn);
+
+/* ==========================================================================
+ * 8b. THE DLM's LEG (rd vms-1ee; vms_cnxman.h §5)
+ *
+ * Steady-state cat-0x02 traffic arrives OUTSIDE any transition, so it cannot be
+ * routed by the barrier (which owns the op-0x0d rebuild record inside one).
+ * These three functions are the whole of the connection manager's part in it:
+ * hand the body to the arm, send back what the arm produced, and -- on the way
+ * out -- resolve the destination and stamp the envelope.
+ * ========================================================================== */
+
+/*
+ * RULE C, THE EMISSION HALF (vms_dlm_scs.c states the whole rule).
+ *
+ * A system that has not advertised a software-version token byte-identical to
+ * our own has not proved it runs this implementation, and OVMX's cat-0x02 arm
+ * is grounded against its own protocol. A completion frame at a real VAX's lock
+ * manager bugchecked it with INVLOCKID; a mis-shifted rebuild response produced
+ * LOCKMGRERR on two more. So nothing DLM leaves this node for such a system --
+ * counted and logged, never silently dropped and never sent anyway.
+ *
+ * The Lock Directory Weight Vector's own FOREIGN refusal (vms_dlm_ldwv.h)
+ * already stops the ROUTING before a frame is ever built. This is the teeth
+ * under it: a gate that is only upstream is a gate that one new call site
+ * bypasses.
+ */
+static int cnxman_dlm_peer_proven(struct vms_cnxman *cn,
+				  const struct vms_csb *csb)
+{
+	if (csb != NULL && csb->peer_is_ours)
+		return 1;
+	cn->dlm_foreign_refused++;
+	cnxman_ops_log(cn, "%CNXMAN, refusing to send a lock-manager message "
+			   "to a system that has not proved it runs this "
+			   "implementation");
+	return 0;
+}
+
+/*
+ * The DLM's ORIGINATION path (vms_dlm_scs.c's `send`). Addressed by CSID --
+ * which the arm may do, and the barrier may not, because a DLM destination is
+ * a member the LOCK DATABASE named (res->master_csid / the weight vector's
+ * answer), i.e. an identity the executive genuinely holds, not one a
+ * participant would have to infer (E73).
+ */
+int cnxman_dlm_send(struct vms_cluster *cl, vms_csid_t dst_csid,
+		    const uint8_t *body, uint32_t len)
+{
+	struct vms_cnxman *cn;
+	struct vms_csb *csb;
+
+	if (cl == NULL || cl->cnxman == NULL || cl->scs == NULL || body == NULL)
+		return -1;
+	if (len != VMS_CM_BODY_LEN)
+		return -1;
+	cn = cl->cnxman;
+
+	csb = cnxman_club_find_csid(&cl->club, dst_csid);
+	if (csb == NULL || !csb->in_use || csb->cdt_conid == 0u) {
+		/* No connection to that member: an honest refusal to transmit,
+		 * never a substituted destination (INV-6). */
+		cn->dlm_sends_refused++;
+		return -1;
+	}
+	if (!cnxman_dlm_peer_proven(cn, csb))
+		return -1;
+
+	memcpy(cn->dlm_tx, body, VMS_CM_BODY_LEN);
+	/* An origination the peer WILL answer, so this dialogue mints a fresh
+	 * transaction token for it (E85) and assigns the next send-msg#. */
+	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_REQUEST);
+	if (scs_send_msg(cl->scs, csb->cdt_conid, cn->dlm_tx,
+			 VMS_CM_BODY_LEN) != (int)SS__NORMAL) {
+		cn->dlm_sends_refused++;
+		return -1;
+	}
+	cn->dlm_sends++;
+	return 0;
+}
+
+/*
+ * The DLM's RECEIVE leg. Returns 1 when the arm CLAIMED the body (answered it,
+ * or answered it with the honest silence), 0 when this is not DLM traffic at
+ * all, and -1 when the arm declined -- which is counted here and leaves the
+ * frame unanswered rather than answered by somebody who does not hold the state.
+ */
+static int cnxman_dlm_rx(struct vms_cnxman *cn, const struct vms_cm_envelope *env,
+			 const uint8_t *body, uint32_t len,
+			 struct vms_csb *csb, vms_csid_t from_csid,
+			 int from_valid)
+{
+	struct dlm_scs_request req;
+	struct dlm_scs_reply reply;
+	uint32_t written = 0;
+
+	if (cn->dlm == NULL || cn->dlm->handle_request == NULL)
+		return 0;
+	if ((env->category & (uint8_t)~VMS_WIRE_RESPONSE_BIT) !=
+	    (uint8_t)VMS_DLM_CAT_REQUEST)
+		return 0;
+
+	memset(&req, 0, sizeof(req));
+	req.from_csid = from_valid ? from_csid : (vms_csid_t)0;
+	req.category  = env->category;
+	req.opcode    = env->opcode;
+	req.body      = body;
+	req.len       = len;
+	/* The trust fact, read off the CSB where it was derived and handed
+	 * over rather than re-decided downstream (vms_dlm_scs.h). */
+	req.peer_is_ours = (uint8_t)(csb != NULL ? csb->peer_is_ours : 0u);
+
+	reply.body = cn->dlm_reply;
+	reply.cap  = (uint32_t)sizeof(cn->dlm_reply);
+	reply.len  = 0u;
+
+	cn->dlm_frames_rx++;
+	if (cn->dlm->handle_request(cn->dlm->ctx, &req, &reply) != 0) {
+		cn->dlm_declined++;
+		return -1;
+	}
+	if (reply.len == 0u)
+		return 1;   /* handled; the honest silence */
+	if (csb == NULL || reply.len != VMS_CM_BODY_LEN)
+		return 1;
+	/* RULE A: the answer goes back on the request's OWN connection,
+	 * correlated with the transaction it answers. The DLM never writes
+	 * body[0:8], so the wrapper echoes the request's txn/token over the
+	 * body the lock manager produced. */
+	if (vms_cm_body_build(body, len, cn->dlm_reply, reply.len, cn->dlm_tx,
+			      (uint32_t)sizeof(cn->dlm_tx),
+			      &written) != VMS_CODEC_OK)
+		return 1;
+	cnxman_envelope_originate(csb, cn->dlm_tx, CNXMAN_ENV_RESPONSE);
+	if (cnxman_ops_respond(cn, cn->dlm_tx, written) == 0)
+		cn->dlm_replies_sent++;
+	return 1;
+}
+
 static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 			   const uint8_t *body, uint32_t len)
 {
@@ -1206,6 +1430,8 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	int from_valid = 0;
 	uint8_t before[VMS_CLUB_MAX_CSB];
 	enum cnxman_join_rx jrx;
+	struct vms_cm_envelope env;
+	int env_ok;
 
 	if (csb != NULL) {
 		from_csb = (int32_t)cnxman_club_csb_index(club, csb);
@@ -1238,12 +1464,27 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	 * cnxman_csb_dialogue_heard() keeps a MAXIMUM, so a retransmit at a
 	 * lower number cannot walk it back.
 	 */
-	if (csb != NULL) {
-		struct vms_cm_envelope env;
+	env_ok = (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK);
+	if (csb != NULL && env_ok)
+		cnxman_csb_dialogue_heard(csb, env.send_msg);
 
-		if (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK)
-			cnxman_csb_dialogue_heard(csb, env.send_msg);
-	}
+	/*
+	 * THE IDENTITY FACTS MUST BE CURRENT AT THE DECISION POINT (rd vms-1ee).
+	 *
+	 * This used to run only on the once-a-second beat, and that was a real
+	 * ordering bug: a transition's Phase 2 rebuilds the directory vector,
+	 * and on the live rig the COORDINATOR reached that rebuild before any
+	 * beat had copied the joiner's advertised version into its CSB. It read
+	 * "not proven", the split-brain gate refused -- correctly, on the fact
+	 * it had -- and the founder was left with no vector while the joiner,
+	 * whose own rebuild happened a beat later, had one.
+	 *
+	 * A gate is only as good as the freshness of what it reads. Syncing
+	 * here makes every CM frame -- and therefore every transition step that
+	 * can trigger a rebuild -- see the identities the port has actually
+	 * learned. It is a walk of at most 96 CSBs on a low-rate path.
+	 */
+	cnxman_sync_peer_swver(cn);
 
 	jrx = cnxman_join_rx_body(&cn->join, body, len, from_csid, from_valid,
 				  from_csb);
@@ -1279,6 +1520,27 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 		}
 	}
 
+	/*
+	 * THE DLM, LAST (rd vms-1ee). Last on purpose: the op-0x0d rebuild
+	 * record that arrives INSIDE a transition belongs to the barrier, which
+	 * owns the grounded verbatim-echo recipe for it (spec §4(p), 1367/1367
+	 * real responses reconstructed byte-for-byte). Offering cat-0x02 to the
+	 * lock manager first would take that record away from the recipe that is
+	 * proven against real traffic. What reaches here is steady-state DLM
+	 * traffic -- an ENQ, a CONVERT, a release, a reply -- which arrives
+	 * outside any transition and which no other FSM has a cell for.
+	 */
+	if (env_ok) {
+		int drx = cnxman_dlm_rx(cn, &env, body, len, csb, from_csid,
+					from_valid);
+
+		if (drx != 0) {
+			cnxman_glue_preload_proposed(cn);
+			cnxman_notify_membership_changes(cn, before);
+			return drx < 0 ? 1 : 0;
+		}
+	}
+
 	/* No FSM claimed it: an out-of-sequence or ungrounded frame. Counted,
 	 * never silently dropped (scs_sysap_ops.message's own contract). */
 	cn->frames_unrouted++;
@@ -1299,6 +1561,53 @@ static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
 		cnxman_credit_carrier(cn, local_conid,
 				      csb_by_conid(&cn->cl->club, local_conid));
 	return rc;
+}
+
+/*
+ * A SYSTEM IN A RUNNING TRANSITION HAS JUST BECOME UNREACHABLE (rd vms-c06).
+ *
+ * Book p. 7-41: the coordinator abandons a transition on any rejection or
+ * connectivity loss -- and p. 7-42: after the GO it cannot be abandoned, so
+ * the lost system is dropped from the census and the remaining members are
+ * released. Both halves of that live in the FSMs
+ * (cnxman_coord_participant_lost / cnxman_barrier_coordinator_lost); until
+ * this function existed NEITHER HAD A PRODUCTION CALLER, so a transition whose
+ * peer died stood open for the life of the node -- the exact failure spec
+ * sec 4(p) says times a transition out and drops healthy members.
+ *
+ * ONE EVENT, BOTH HALVES, because this node can be running either role (or, in
+ * a multi-node cluster, both at once for different transitions): the system
+ * that just went away may be one this node owes releases to, or the one this
+ * node is waiting on for a release. The FSMs decide what the loss MEANS --
+ * this only reports that it happened, from the CSB the executive really
+ * resolved the connection to. No CSB, no report: a loss this node cannot
+ * attribute to a system is never attributed to one (INV-6).
+ *
+ * IDEMPOTENT BY CONSTRUCTION. cnxman_coord_participant_lost() returns at once
+ * for a block that is not (or is no longer) a participant, and
+ * cnxman_barrier_coordinator_lost() for a barrier that is not running -- so
+ * the close path and the reconnect beat may both report the same loss.
+ */
+static void cnxman_transition_peer_lost(struct vms_cnxman *cn,
+					struct vms_csb *csb)
+{
+	int32_t idx;
+
+	if (cn == NULL || cn->cl == NULL || csb == NULL)
+		return;
+	idx = (int32_t)cnxman_club_csb_index(&cn->cl->club, csb);
+
+	/* The COORDINATOR half: that system owed this node barrier steps. */
+	cnxman_coord_participant_lost(&cn->coord, idx);
+
+	/*
+	 * The PARTICIPANT half, and only when the block that went away is the
+	 * one this node's barrier is taking its transition FROM. A barrier
+	 * abandoned because some OTHER member lost its circuit would abandon a
+	 * transition whose coordinator is alive and still releasing steps.
+	 */
+	if (cn->barrier.coordinator_csb == idx)
+		cnxman_barrier_coordinator_lost(&cn->barrier);
 }
 
 /*
@@ -1359,6 +1668,15 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 	 * reason SCS gave, not an interpretation of it. */
 	cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_CLOSED, (int32_t)reason,
 			 (uint32_t)local_conid);
+
+	/*
+	 * FIRST, and for EVERY close including a rejection (rd vms-c06): a
+	 * transition in flight has to hear about the loss BEFORE the CSB ladder
+	 * below proposes a new one. The other order refuses the removal with
+	 * CNXMAN_COORD_REF_BUSY -- the coordinator is still holding the
+	 * transition this very loss has just made unfinishable.
+	 */
+	cnxman_transition_peer_lost(cn, csb);
 
 	if (reason == (uint32_t)SCS_CLOSE_REJECTED) {
 		cnxman_vc_rejected(cn, csb, local_conid, reason);
@@ -1422,6 +1740,18 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 	}
 
 	cnxman_join_closed(&cn->join, local_conid, reason);
+
+	/*
+	 * THE VOTES WENT WITH THE CONNECTION (FC-P8.1). p. 7-30 keeps a system's
+	 * MEMBERSHIP across the reconnect window -- so this is not a membership
+	 * change and the notify path above never sees it -- but the votes of a
+	 * system this node cannot currently reach are not AVAILABLE to it
+	 * (p. 7-4/7-5), which is exactly the reading FC-P3.7's PRESENT test
+	 * already makes. Recomputing here is what turns a lost circuit into a
+	 * quorum hang at the moment the circuit is lost, rather than one beat
+	 * later.
+	 */
+	cnxman_quorum_apply(cn);
 }
 
 static void cnxman_vc_send_failed(void *ctx, vms_conid_t local_conid,
@@ -1601,6 +1931,45 @@ static uint32_t cnxman_discover_peers(struct vms_cnxman *cn)
 }
 
 /*
+ * SYNC EACH MEMBER'S ADVERTISED SOFTWARE VERSION FROM THE PORT (rd vms-1ee).
+ *
+ * The token a peer put in its own formation body lives on the port's circuit
+ * (vms_pe_fsm.h, spec SS4(g)); the CLUB is where every OTHER layer reads member
+ * facts from. This copies the one to the other on the beat, and copies NOTHING
+ * when the port has not been told -- cnxman_csb_set_swver() then records the
+ * honest "advertised nothing", which the split-brain gate treats exactly like
+ * "advertised something else" (vms_dlm_ldwv.h SS3).
+ *
+ * The comparison against THIS node's own token happens inside the setter, the
+ * one place both are in scope, so no version literal appears anywhere in the
+ * executive (INV-1).
+ */
+static void cnxman_sync_peer_swver(struct vms_cnxman *cn)
+{
+	struct vms_club *club = &cn->cl->club;
+	uint32_t i;
+
+	if (cn->cl->pe == NULL)
+		return;
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *csb = &club->csb[i];
+		uint8_t sw[VMS_CLUSTER_SWVER_LEN];
+		uint8_t len = 0u;
+
+		if (!csb->in_use || !csb->sysid_valid)
+			continue;
+		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
+			continue;   /* our own token is not advertised to us */
+		if (pe_peer_swver(cn->cl->pe, csb->sysid, sw,
+				  (uint32_t)sizeof(sw), &len) != 0)
+			len = 0u;
+		cnxman_csb_set_swver(csb, len ? sw : (const uint8_t *)0, len,
+				     cn->cl->params.sw_version,
+				     cn->cl->params.sw_version_len);
+	}
+}
+
+/*
  * Is there a system this node could join THROUGH right now? The same question
  * join_select_target() asks (a non-local CSB carrying a real SCSSYSTEMID) --
  * asked here so the glue can decide whether to drive a join at all, instead of
@@ -1767,6 +2136,69 @@ static int cnxman_genesis_may_ask(struct vms_cnxman *cn)
 	return cnxman_genesis_window_elapsed(cn);
 }
 
+/* ==========================================================================
+ * 7b. THE QUORUM ARITHMETIC, APPLIED (FC-P3.7 computes it; FC-P8.1 acts on it)
+ *
+ * FC-P3.7 left club->quorum_lost computed and unread: nothing in the executive
+ * acted on it, so a node that lost quorum went on granting locks freely -- the
+ * opposite of a VMScluster, which STALLS (p. 7-4). These three functions are
+ * where the connection manager closes that loop, and the whole of what they do
+ * is: recompute, notice whether the ENFORCEABLE answer changed, and tell the
+ * DLM arm. The stalling itself belongs to the lock engine (vms_dlm_quorum.h).
+ * ========================================================================== */
+
+/* Say it on OPA0: and tell the DLM arm. The loss line is the one the design
+ * quotes (SS3.7); the regain line is OVMX's own honest wording, because this
+ * stack does not put words in VMS's mouth it has not read. */
+static void cnxman_quorum_announce(struct vms_cnxman *cn, int hang)
+{
+	cnxman_ops_log(cn, hang ? "%CNXMAN, quorum lost, blocking activity"
+				: "%CNXMAN, quorum regained, resuming activity");
+	if (cn->dlm != NULL && cn->dlm->quorum_changed != NULL)
+		cn->dlm->quorum_changed(cn->dlm->ctx, hang);
+}
+
+/*
+ * Recompute, latch, and announce any change in what this node ENFORCES.
+ *
+ * The recompute and the latch are cnxman_quorum_member_recompute() -- the SAME
+ * call the joiner's PARAMS-learn and Phase 2's commit make (rd vms-d0d), with
+ * the same refusal on a node that is not a committed member. There is one
+ * spelling of "recompute my own quorum", and this adds only the EDGE on top of
+ * it: what changed, and who needs telling.
+ *
+ * The edge is measured with cnxman_quorum_hang_active(), never with the raw
+ * quorum_lost flag: the raw flag flips to 1 on every node that has not yet
+ * learned a peer's votes, and announcing THAT would hang every join.
+ */
+static void cnxman_quorum_apply(struct vms_cnxman *cn)
+{
+	int now;
+
+	if (cn == NULL || cn->cl == NULL)
+		return;
+
+	(void)cnxman_quorum_member_recompute(cn->cl);
+
+	/*
+	 * LEVEL-TRIGGERED, against what was last ANNOUNCED -- never against a
+	 * value read just before this function's own recompute. See
+	 * `quorum_hang_announced` in struct vms_cnxman for the live run that
+	 * settled it: another caller's recompute can clear the hang between two
+	 * beats, and an edge measured around ONE recompute simply never sees it.
+	 */
+	now = cnxman_quorum_hang_active(cn->cl);
+	if (now == (int)cn->quorum_hang_announced)
+		return;
+
+	cn->quorum_hang_announced = (uint8_t)(now ? 1 : 0);
+	if (now)
+		cn->quorum_hangs++;
+	else
+		cn->quorum_resumes++;
+	cnxman_quorum_announce(cn, now);
+}
+
 /* Returns nonzero iff this node really did become a member of a cluster it
  * founded -- read back from cl->state, which only cnxman_phase2_commit() ever
  * sets. */
@@ -1788,6 +2220,10 @@ static int cnxman_try_genesis(struct vms_cnxman *cn)
 	 * nobody to propose anything to (E3).
 	 */
 	cnxman_quorum_recompute(&cl->club);
+	/* ... and the founding node LATCHES its perception of quorum here
+	 * (FC-P8.1): from this moment a later quorum_lost is a real LOSS and not
+	 * arithmetic that has not finished. */
+	cnxman_quorum_apply(cn);
 	cn->genesis_armed = 0u;
 	return cl->state == VMS_CLUSTER_MEMBER;
 }
@@ -1833,6 +2269,13 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 		break;
 	}
 	case CNXMAN_CSB_ACT_PROPOSE_TRANSITION:
+		/*
+		 * rd vms-c06: the beat is the ONLY path for a system that went
+		 * silent without its CDT ever closing (p. 7-30's window
+		 * expiring on its own), so the loss is reported here too --
+		 * and, as on the close path, BEFORE the removal is proposed.
+		 */
+		cnxman_transition_peer_lost(cn, csb);
 		(void)cnxman_coord_propose_remove(&cn->coord,
 						  (int32_t)rec->csb_index);
 		cnxman_glue_preload_proposed(cn);
@@ -1857,6 +2300,9 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * last beat has a CSB before the reconnect ladder and the join
 		 * look at the CLUB on this same beat. */
 		(void)cnxman_discover_peers(cn);
+		/* ... and keep each member's advertised identity current, so
+		 * the LDWV's split-brain gate reads a fresh fact (vms-1ee). */
+		cnxman_sync_peer_swver(cn);
 		/*
 		 * E71: EVERY beat, not only a beat that discovered something
 		 * new. "Waiting to form or join an OpenVMS Cluster" is a
@@ -1890,9 +2336,45 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * any other. Idempotent per (peer, connection).
 		 */
 		cnxman_join_advertise_peers(&cn->join);
-		n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
-		for (i = 0; i < n; i++)
-			cnxman_act_on_recnx_rec(cn, &recs[i]);
+		/*
+		 * THE SAME BEFORE/AFTER BRACKET cnxman_vc_message() TAKES ROUND A
+		 * DISPATCH, taken here for exactly the reason the quorum comment
+		 * just below already names: a CSB can leave membership from the
+		 * reconnect ladder ALONE, entirely on this beat, WITH NO MESSAGE
+		 * INVOLVED (cnxman_act_on_recnx_rec's PROPOSE_TRANSITION runs the
+		 * coordinator/barrier synchronously to completion when there is
+		 * nobody left to negotiate with). Until this bracket existed, a
+		 * departure driven purely by RECNXINTERVAL expiry never reached
+		 * cnxman_notify_membership_changes() at all -- so $SETCLUEVT and
+		 * the DLM arm's member_departed hook (rd vms-1ee, H10a) fired for
+		 * a message-driven removal but never for a timeout-driven one,
+		 * which is the MORE common real departure (a system that crashed
+		 * or lost power announces nothing).
+		 */
+		{
+			uint8_t rbefore[VMS_CLUB_MAX_CSB];
+
+			cnxman_membership_snapshot(&cn->cl->club, rbefore);
+			n = cnxman_recnx_tick(&cn->recnx, recs, VMS_CLUB_MAX_CSB);
+			for (i = 0; i < n; i++)
+				cnxman_act_on_recnx_rec(cn, &recs[i]);
+			cnxman_notify_membership_changes(cn, rbefore);
+		}
+		/*
+		 * LAST ON THE BEAT, AND ON EVERY BEAT (FC-P8.1): the quorum
+		 * arithmetic over whatever the sweep above left the CSB table
+		 * looking like. The two prompt hooks (a membership change, a
+		 * closed circuit) make the common cases immediate; this one is
+		 * what makes the answer TRUE rather than merely usually-true,
+		 * because a CSB can also change state from a reconnect ladder
+		 * that expired here, on this beat, with no message involved.
+		 * Idempotent and cheap -- a walk of at most 96 CSBs, and it
+		 * announces only when the enforceable answer actually moved.
+		 * (cnxman_notify_membership_changes() above already calls this
+		 * when IT saw a change; a second, idempotent call here is what
+		 * keeps this line true regardless of whether that bracket ran.)
+		 */
+		cnxman_quorum_apply(cn);
 		break;
 	case CNXMAN_TIMER_JOIN:
 		cnxman_join_timer(&cn->join);
@@ -2131,10 +2613,13 @@ void vms_cnxman_stop(struct vms_cluster *cl)
 	 * reconnect period. */
 	if (cnxman_recnx_shutdown(&cn->recnx, &rec, 1) == 1u &&
 	    rec.action == (uint8_t)CNXMAN_CSB_ACT_LAST_GASP && cl->pe != NULL) {
-		/* The datagram itself is a PORT-level frame (wire spec
-		 * SS4(O.30)); FC-P0.9's vms_pe.h owns building and sending
-		 * it. No last-gasp builder is wired into this glue yet -- an
-		 * honest gap, not a fabricated send. */
+		/* recnx_shutdown decided there are peers to tell (p. 7-29);
+		 * the datagram itself is a PORT-level frame (wire spec
+		 * SS4(O.30)) that FC-P0.9's vms_pe.h owns. Emit it now. The
+		 * builder's at-most-once guard makes vms_pe_stop's own teardown
+		 * emit a no-op if this already went, so a clean CLUSTER_STOP
+		 * that runs both puts exactly one gasp on the wire. */
+		(void)pe_send_last_gasp(cl->pe);
 	}
 
 	if (cl->scs != NULL) {
@@ -2160,6 +2645,31 @@ void vms_cnxman_stop(struct vms_cluster *cl)
 /* ==========================================================================
  * 10. CLUB / CSB query -- CLUSTER_DIAG_CSB, SHOW CLUSTER, $GETSYI (vms_cnxman.h SS6)
  * ========================================================================== */
+
+/*
+ * The DLM leg's five traffic counters (vms_cnxman.h). Read straight out of the
+ * live struct vms_cnxman this connection manager has been incrementing at the
+ * two places it touches cat-0x02 traffic -- cnxman_dlm_send above and
+ * cnxman_dlm_rx above it. Caller holds the fork mutex; nothing is computed.
+ *
+ * A connection manager that is not up leaves the five at 0 -- which is correct
+ * and not a fabrication, because the arm's own snapshot has already answered
+ * SS$_NOSUCHDEV for that case before this can be reached.
+ */
+void cnxman_project_dlm_leg(const struct vms_cluster *cl,
+			    struct vms_dlm_scs_view *out)
+{
+	const struct vms_cnxman *cn;
+
+	if (cl == NULL || out == NULL || cl->cnxman == NULL)
+		return;
+	cn = cl->cnxman;
+	out->leg_sends         = cn->dlm_sends;
+	out->leg_sends_refused = cn->dlm_sends_refused;
+	out->leg_frames_rx     = cn->dlm_frames_rx;
+	out->leg_replies_sent  = cn->dlm_replies_sent;
+	out->leg_declined      = cn->dlm_declined;
+}
 
 int cnxman_get_club(struct vms_cluster *cl, struct vms_club_view *out)
 {
@@ -2297,6 +2807,9 @@ void cnxman_set_dlm(struct vms_cluster *cl, const struct dlm_scs_role_ops *ops)
 	vms_cluster_fork_enter(cl);
 	cnxman_barrier_set_dlm(&cn->barrier, ops);
 	cnxman_coord_set_dlm(&cn->coord, ops);
+	/* ... and THIS file's own copy, for the steady-state cat-0x02 traffic
+	 * that arrives outside any transition (cnxman_dlm_rx). */
+	cn->dlm = ops;
 	vms_cluster_fork_leave(cl);
 }
 

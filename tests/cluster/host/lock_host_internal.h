@@ -164,6 +164,9 @@ struct vms_lock_entry {
 	struct vms_lock_resource *resource;
 	struct vms_proc          *proc;
 	int                       waiting;
+	uint8_t                   quorum_stall;   /* FC-P8.1 (rd vms-b6d): queued by
+	                                           * the QUORUM HANG, not by a holder.
+	                                           * Mirror of both kernel twins. */
 	int                       refcount;
 	exec_cv_t                 wait_wq;
 	int                       grant_state;
@@ -257,5 +260,11 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg);
 uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                      struct vms_dlm_xnode_args *req);
+/*
+ * Image rundown's lock release. In the real kernel this is called by
+ * vms_access.c (image rundown) with PSL_C_USER; a host test calls it directly
+ * to prove which locks are, and are NOT, in an image's rundown scope.
+ */
+void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode);
 
 #endif /* OVMX_LOCK_HOST_INTERNAL_H */

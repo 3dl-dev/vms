@@ -321,6 +321,7 @@ int main(void)
           "the process-context poster kthread's cf_post() calls were accepted "
           "(CONTRACT RULE 14.1's process-context-poster row) on the SAME CPU as the flood");
 
+    /* negctl: fork-work-dispatch-uncounted */
     CHECK(result_ll(result, "DRAIN_OK") == 1,
           "cf_stats converged (dispatched >= enqueued/posted) within the 2s bound -- "
           "no lost wakeup");
@@ -331,6 +332,7 @@ int main(void)
 
     work_posted = result_ll(result, "WORK_POSTED");
     work_dispatched = result_ll(result, "WORK_DISPATCHED");
+    /* negctl: fork-work-dispatch-uncounted */
     CHECK(work_dispatched == work_posted,
           "every posted work item was dispatched exactly once (no lost wakeup, no stuck poster)");
 
@@ -371,6 +373,7 @@ int main(void)
 
         CHECK(io_sub > 0,
               "cf_io_post accepted real served-I/O submissions");
+        /* negctl: fork-worker-start-reports-success-unstarted */
         CHECK(io_calls > 0,
               "the WORKER kthread really ran the blocking I/O callback "
               "(this is where exec_blockdev_read_block sits on a served unit)");
@@ -382,6 +385,7 @@ int main(void)
          * nothing goes missing -- which is the property the reserved
          * completion work item exists to give.
          */
+        /* negctl: fork-worker-start-reports-success-unstarted */
         CHECK(result_ll(result, "IO_COMPLETED") + result_ll(result, "IO_ABANDONED")
                   == io_sub,
               "every ACCEPTED submission is accounted for exactly once: "
@@ -419,6 +423,7 @@ int main(void)
          * tests/lab/tools/run_mscp_srv_io_jitter_gate.sh (the FC-P6.6 plan
          * row's R4 leg).
          */
+        /* negctl: fork-worker-start-reports-success-unstarted */
         CHECK(result_ll(result, "WORK_DURING_IO") > 0,
               "THE FIX, MEASURED: the fork thread kept dispatching WHILE a served "
               "I/O was blocking on the worker -- it is no longer behind the disk");

@@ -1,0 +1,17 @@
+# 2-node rig -- VOTES=0 NEGATIVE CONTROL, re-run against the op-05 fix.
+
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-A-FINAL role=none member=0 state=JOINING csid=- cn=0 quorum=0 cevotes=0 epoch=0 projections=agree
+RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1026 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-B-FINAL role=none member=0 state=JOINING csid=- cn=0 quorum=0 cevotes=0 epoch=0 projections=agree
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=none member=0 cn=0 csid=-
+  node B: role=none member=0 cn=0 csid=-
+
+==========================================
+  NEGATIVE CONTROL HELD: with VOTES=0 on both nodes, neither
+  founded, neither reached MEMBER and neither holds a CSID.
+  The founder + CSID the proof run reports are therefore
+  measurements of real executive state, not constants.
+==========================================

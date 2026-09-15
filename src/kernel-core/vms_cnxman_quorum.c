@@ -165,6 +165,131 @@ void cnxman_quorum_recompute(struct vms_club *club)
 	club->qdisk_votes = cnxman_quorum_qdskvotes(club);
 }
 
+/* ==========================================================================
+ * ENFORCEMENT (FC-P8.1, rd vms-b6d) -- the three PURE predicates
+ *
+ * The arithmetic above answers "does this node have quorum?". These three
+ * answer "may the executive ACT on that answer?", which is a different
+ * question and the one the join-transient makes subtle. The contract, the
+ * page cites and the honest-zero hazard are in vms_cnxman_quorum.h SS
+ * "ENFORCEMENT".
+ * ========================================================================== */
+
+/*
+ * The LOCAL CSB, or NULL when the CLUB has none. One spelling, shared by the
+ * two predicates below and by cnxman_quorum_qdskvotes().
+ */
+static const struct vms_csb *quorum_local_csb(const struct vms_club *club)
+{
+	if (club == NULL || club->local_csb < 0)
+		return NULL;
+	if ((uint32_t)club->local_csb >= club->n_csb)
+		return NULL;
+	return &club->csb[(uint32_t)club->local_csb];
+}
+
+int cnxman_quorum_enforce_ready(const struct vms_cluster *cl)
+{
+	const struct vms_csb *local;
+
+	if (cl == NULL)
+		return 0;
+	if (cl->state != VMS_CLUSTER_MEMBER)
+		return 0;
+	local = quorum_local_csb(&cl->club);
+	if (local == NULL)
+		return 0;
+	/*
+	 * The SAME condition the arithmetic itself applies to a CSB before it
+	 * counts a vote (quorum_csb_counts above): in use, SELECTED, and its
+	 * PARAMS really learned. If this node's own block does not yet satisfy
+	 * it, club->quorum was computed over a set this node is not even in --
+	 * a figure to report, never one to act on.
+	 */
+	return quorum_csb_counts(local);
+}
+
+void cnxman_quorum_arm_update(struct vms_cluster *cl)
+{
+	if (cl == NULL)
+		return;
+	if (!cnxman_quorum_enforce_ready(cl))
+		return;
+	if (cl->club.quorum_lost)
+		return;
+	cl->club.quorum_armed = 1u;
+}
+
+int cnxman_quorum_hang_active(const struct vms_cluster *cl)
+{
+	if (cl == NULL)
+		return 0;
+	if (!cl->club.quorum_armed)
+		return 0;          /* never perceived quorum: still forming */
+	if (!cl->club.quorum_lost)
+		return 0;          /* has it now */
+	return cnxman_quorum_enforce_ready(cl);
+}
+
+/*
+ * THE RUNNING NODE'S RECOMPUTE TRIGGER (rd vms-d0d).
+ *
+ * cnxman_quorum_recompute() above is the arithmetic; this is the ONE predicate
+ * that says a node may run it on itself. It exists because a JOINER has no
+ * other way to hold quorum figures at all: p. 7-42 task 2 copies the PROPOSED
+ * cells to the effective ones, and the proposed cells are the COORDINATOR's
+ * arithmetic -- a node that was admitted never ran one, so on the live 2-node
+ * cluster node B counted both members and carried CEVOTES/QUORUM of zero while
+ * node A's real VOTES sat learned in B's own CSB table (measured, #1119).
+ *
+ * The answer is NOT to assert a quorum at commit: it is to do on the joiner
+ * exactly what the founder does at genesis -- walk THIS node's own CSB table
+ * and apply p. 7-6 to the votes really in it. Every summand is a CSB that
+ * received a real PARAMS record (csb->params_valid, enforced by the walk); a
+ * peer that has not advertised contributes nothing, so the figure can be
+ * INCOMPLETE but is never INVENTED.
+ *
+ * THE TWO CONDITIONS, and why each one is load-bearing (INV-6):
+ *
+ *   - cl->state == VMS_CLUSTER_MEMBER. Only phase2_commit_local_membership()
+ *     ever sets it, and only from the LOCAL CSB really carrying MEMBER. A node
+ *     that is merely connected to a cluster, or joining one, has no membership
+ *     to compute a quorum over, and a quorum published before admission is the
+ *     local-only fabrication this invariant names outright.
+ *   - the LOCAL CSB itself counts. Its VOTES/EXPECTED_VOTES are this node's own
+ *     SYSGEN parameters, learned at cnxman_club_init(); if they are not in the
+ *     table this node cannot even state its own contribution, and a sum that
+ *     silently omits the local system is worse than no sum.
+ *
+ * Idempotent (the recompute is), so every caller may fire it on every event
+ * that could change the answer: design SS3.7's "recomputed on transitions"
+ * plus each PARAMS record a member advertises in between.
+ *
+ * Returns nonzero iff the arithmetic really ran.
+ */
+int cnxman_quorum_member_recompute(struct vms_cluster *cl)
+{
+	/* THE TWO CONDITIONS ARE cnxman_quorum_enforce_ready() (FC-P8.1). They
+	 * were written twice -- once here, once for the enforcement gate -- and
+	 * they are the same two, so there is ONE spelling of them: a node may
+	 * run the arithmetic on itself exactly when it is entitled to act on
+	 * the result. A second copy is how the two come to disagree. */
+	if (!cnxman_quorum_enforce_ready(cl))
+		return 0;
+
+	cnxman_quorum_recompute(&cl->club);
+	/*
+	 * ... and the same arithmetic run LATCHES this node's perception of
+	 * quorum (FC-P8.1). It belongs here rather than at the callers because
+	 * the latch's whole meaning is "a member really ran the arithmetic and
+	 * really had quorum" -- which is precisely the event this function is.
+	 * A caller that could recompute WITHOUT arming would be a caller that
+	 * silently disarms enforcement.
+	 */
+	cnxman_quorum_arm_update(cl);
+	return 1;
+}
+
 uint16_t cnxman_quorum_qdskvotes(const struct vms_club *club)
 {
 	const struct vms_csb *local;
@@ -174,8 +299,8 @@ uint16_t cnxman_quorum_qdskvotes(const struct vms_club *club)
 	if ((uint32_t)club->local_csb >= club->n_csb)
 		return 0u;
 
-	local = &club->csb[(uint32_t)club->local_csb];
-	if (!local->in_use || !local->params_valid)
+	local = quorum_local_csb(club);
+	if (local == NULL || !local->in_use || !local->params_valid)
 		return 0u;
 	return local->qdskvotes;
 }

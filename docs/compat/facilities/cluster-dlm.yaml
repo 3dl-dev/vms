@@ -26,12 +26,11 @@ summary: >
   manager this builds on. Remaining work is DEPTH beyond the ENQ-class engine, not
   engine gaps: the concurrent-both-initiate deadlock proof (vms-04f — the
   global-min selection logic ships and is code-verified; the harness proves the
-  deterministic single-initiator slice), directory REDIRECT of a mis-addressed ENQ
-  (vms-b96 — today verify-and-reject), and a real app-process cross-node lock
+  deterministic single-initiator slice) and a real app-process cross-node lock
   ACQUISITION path (vms-d1f, post-1.0 — today cross-node locks are daemon-
   choreographed and CSID-keyed; an application $ENQ of a remotely-mastered resource
   still returns the honest SS$_UNSUPPORTED "0.4" stub).
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - id: cluster-dlm$cross-node-lock
     kind: feature
@@ -53,7 +52,28 @@ items:
       request (GETLKI flips NL->EX). Exercised on real /dev/vms single-node with an
       injected cross-node CSID (tests/qemu/test_syssvc_dlm_xnode.c x86_64 + Alpha
       LP64); the two-node H5/H6 QEMU harnesses that proved the over-the-wire path
-      were retired in #1052 — multi-node runtime proof pending (vms-1ee). No fake
+      were retired in #1052 — multi-node runtime proof pending (vms-1ee).
+      RE-ESTABLISHED 2-node (#1174, tests/lab/captures/xnode-dlm-2node-20260911.log):
+      a live two-node cluster proves cross-node $ENQ->GRANT bidirectionally (each
+      node granted EX by the PEER master, granted_mode=5, grants_received=1) and
+      never-crash-a-peer (both survive the peer's frames, projections=agree) — the
+      first real multi-node proof since the #1052 retirement, partially discharging
+      the vms-1ee caveat for the acquire/grant path. NOW FULLY DISCHARGED for the
+      acquire/grant/notify/release lifecycle (vms-c72 receive arm #1181 + round-trip
+      lab proof #1183, tests/lab/captures/xnode-dlm-2node-resmaster-clean-20260911.log):
+      the receive arm routes inbound op-03 ($DEQ) -> master-side release and op-04
+      (BLKAST) -> a real user-mode AST on the remote holder, and a live 2-node run
+      proves the FULL emit->receive->deliver round-trip: blkasts_received>0 +
+      blkasts_delivered>0 (BLKAST really delivered, not just emitted, superseding the
+      earlier single-node-injection-only note), and a DIRECT master-side release
+      readback — on node B (master) the granted queue goes n_granted 1->0 with
+      remote_holder cleared AFTER B processes A's inbound $DEQ (counter_rose=1 gates
+      the sample to post-processing), the resource still present (found=1): the LKB
+      actually left the master's granted queue, a lock-DB STATE delta, not a return
+      code. Composed with the in-process assertion (test_dlm_recv_arm: master copy
+      GONE, real engine) this answers return-value!=state at both the unit and live
+      2-node levels. Only remaster/LVB + distributed-deadlock stay deferred
+      (cluster-dlm$remaster-lvb-deadlock, vms-727). No fake
       grants OR blocks — a queued request is a real lock on the master's queue that
       releases only on a real $DEQ (INV-6).
   - id: cluster-dlm$async-reply-wire
@@ -77,7 +97,18 @@ items:
       The requester-side receive is exercised single-node on real /dev/vms
       (tests/qemu/test_syssvc_dlm_xnode.c, injected CSID); the former two-node A<->B
       run_dlm_harness_h5.sh proof (SCSD-I-DLMPEND/DLMDEFER/DLMH5FLIP) was retired in
-      #1052 — multi-node wire proof pending (vms-1ee). No fabricated wire reply or
+      #1052 — multi-node wire proof pending (vms-1ee).
+      RE-ESTABLISHED 2-node (#1174, tests/lab/captures/xnode-dlm-2node-20260911.log):
+      the async GRANT-reply crosses the live wire and completes on the requester
+      (grants_received=1 on both nodes, NL->EX read back on the real 2-node cluster)
+      — partially discharging vms-1ee for the grant-reply path. NOW FULLY DISCHARGED:
+      the receive arm (vms-c72, #1181) routes the inbound op-03 $DEQ (emit reachable
+      since #1178) to the master-side release and the op-04 BLKAST to a real user-mode
+      AST, and the live 2-node round-trip (#1183) shows the async replies delivered
+      end-to-end — blkasts_delivered>0 and the inbound $DEQ empties the master's
+      granted queue n_granted 1->0 (direct resmaster readback, counter_rose=1 gated).
+      The full async emit->receive->deliver wire is proven 2-node, not just the
+      grant-reply half. No fabricated wire reply or
       grant (INV-6).
   - id: cluster-dlm$remaster-lvb-deadlock
     kind: feature
@@ -85,7 +116,7 @@ items:
     authenticity: real
     vms: "LVB replication, dynamic remastering (directory + lock state), directory-ownership guard, distributed deadlock detection"
     evidence: src/kernel-core/vms_lock.c
-    verified_against: "PARTIAL coverage only — host units tests/cluster/host/test_dlm_ldwv.c (LVB read + wait-for visibility, injected/fake master) + tests/cluster/host/test_dlm_requester.c; N-node simulator scenarios tests/cluster/sim/scenarios/dlm_directory.c (directory routing) + tests/cluster/sim/scenarios/dlm_requester.c (simulated peers); tests/cluster/host/test_codec_dlm.c (REBUILD/DLKSRCH frame codec). The multi-node real-/dev/vms proofs (run_dlm_harness_h8/_h9/_h10/_h10b/_e84/_ec75.sh — LVB write/read crossing, dynamic remaster, directory-ownership refusal, distributed deadlock) were RETIRED with the userspace SCSD daemon in the #1052 executive-resident pivot and have NO real-/dev/vms multi-node successor today — status downgraded verified->implemented pending re-established proof (vms-1ee)."
+    verified_against: "PARTIAL coverage only — host units tests/cluster/host/test_dlm_ldwv.c (LVB read + wait-for visibility, injected/fake master) + tests/cluster/host/test_dlm_requester.c; N-node simulator scenarios tests/cluster/sim/scenarios/dlm_directory.c (directory routing) + tests/cluster/sim/scenarios/dlm_requester.c (simulated peers); tests/cluster/host/test_codec_dlm.c (REBUILD/DLKSRCH frame codec). The multi-node real-/dev/vms proofs (run_dlm_harness_h8/_h9/_h10/_h10b/_e84/_ec75.sh — LVB write/read crossing, dynamic remaster, directory-ownership refusal, distributed deadlock) were RETIRED with the userspace SCSD daemon in the #1052 executive-resident pivot; their gated multi-node successor through the now-landed SCS arm is still being re-established (vms-1ee; see the 2026-09-14 UPDATE below) — status stays verified->implemented pending that re-established proof. PROGRESS (rd vms-1ee): blocker 1 of 3 CLEARED. The Lock Directory Weight Vector now builds on a real multi-node cluster: when NO peer has advertised a LOCKDIRWT (none can -- no wire byte is pinned for a remote system, FC-P3.2) the local node WITHHOLDS its own SYSGEN weight so p. 6-32's all-zero reading applies cluster-wide, which is the one directory every node computes identically. Gated: the fallback is refused the instant ANY PEER advertises a real weight (split-brain: an all-zero answer to a peer computing a weighted vector is two directories for one resource). Proven on the live 2-node rig -- both executives now report the vector built on the unadvertised reading, where every previous run reported it not rebuilt (tests/qemu/captures/ldwv-fallback-20260911.log); teeth in tests/cluster/host/test_dlm_ldwv.c (club_local_withhold_builds_when_peers_unknown + club_local_withhold_refused_when_a_peer_advertised). UPDATE 2026-09-14 (re-census against origin/main b64d6b57): blockers (2) and (3) are now CLEARED IN CODE -- the SCS arm has LANDED. (2) src/kernel-core/vms_dlm_scs.c now EXISTS and is implemented (1668 lines, the dlm_arm_* family binding codec+FSM to SCS); it is built in all three targets (src/kernel/Makefile, src/kernel-netbsd/Makefile, distro/kernel/drivers-ovmx/vms/Kbuild) and STARTED from the executive (vms_dlm_scs_start at src/kernel-core/vms_devtab.c:2888), and it now has real callers on BOTH legs in src/kernel-core/vms_cnxman.c: the send-to-CSID origination entry cnxman_dlm_send() and the receive leg cnxman_dlm_rx() (invoked from the message-dispatch path, which hands an inbound DLM body to the arm's handle_request). (3) The DLM codec is no longer frame-absolute: src/kernel-core/vms_cluster_codec_dlm.c now exposes a body-relative *_parse_body(body,len,...) family (enq_request/enq_response/dir_hash/rebuild/deq/blkast/valblk) with frame-absolute entries layered over the SAME implementation (dlm_body_of slices at VMS_OFF_SYSAP_BODY), and the receive path parses the 132-byte SYSAP body directly, so DLM frames ARE parsed on receive -- the E73 body/frame mismatch is resolved. (The frame-level symbol the FSM header once cited, cnxman_barrier_rx_frame, still does not exist by that name; it is SUPERSEDED by the body-relative receive route cnxman_dlm_rx, not added.) Proof of the arm today: test_dlm_scs_arm (tests/cluster/host, the two-proof shape -- the arm is not host-linkable, so a driven trust-anchor against the real CSB derivation plus a wiring/order scan of the shipping files), plus live 2-node captures on disk (tests/lab/captures/dlm-arm-2node-20260911.log, ldwv-fallback/ldwv-splitbrain-gate-20260911, and the vms-727 LVB-crossing 2-node captures). REMAINING before this row can move past implemented: (a) a GATED live multi-node /dev/vms successor that exercises remaster (H10a/b) + LVB crossing (H8/H9) + distributed deadlock (H11) END-TO-END through the landed arm, as the replacement for the retired run_dlm_harness_h8/_h9/_h10/_h10b/_e84/_ec75 proofs -- the 2-node captures above are PRESENT but whether they fully discharge the remaster/deadlock slice is NOT confirmed in this census (state unverified, needs lane confirmation, vms-1ee); and (b) for verified specifically, a real-VAX DLM wire capture to replace the OVMX-DERIVED byte layout (Rule 8, 'NOT VMS-authentic' per the scs-transport row) with an oracle byte-gate. Status therefore stays IMPLEMENTED, not verified."
     notes: >
       The former "remain absent" cluster of the DLM epic. The code implements each
       part below and was originally proven on a live multi-node /dev/vms rail, but
@@ -115,9 +146,49 @@ items:
       real queue/origin read; a dropped/ttl-expired probe reports no-deadlock, never
       a fabricated cycle (INV-6). DEPTH deferred beyond the engine (honest, tracked):
       the concurrent-both-initiate deadlock proof (vms-04f — logic shipped +
-      code-verified), directory REDIRECT (vms-b96), and a real app-process
-      cross-node acquisition path replacing the SS$_UNSUPPORTED "0.4" stub
-      (vms-d1f, post-1.0).
+      code-verified) and a real app-process cross-node acquisition path replacing
+      the SS$_UNSUPPORTED "0.4" stub (vms-d1f, post-1.0). The directory REDIRECT
+      that used to be listed here as deferred now SHIPS — see the
+      cluster-dlm$directory-redirect row below.
+  - id: cluster-dlm$directory-redirect
+    kind: feature
+    status: implemented
+    authenticity: real
+    vms: "Directory REDIRECT: a cross-node $ENQ that reaches a node which does not master the tree is answered with the master's CSID (Davis p. 6-31 outcome 2), not declined"
+    evidence: src/kernel-core/vms_lock.c
+    verified_against: "tests/cluster/host/test_lock_proxy.c (R1: the inbound dispatch decision — redirect target, loop guard, no-master decline, and that nothing is minted); tests/cluster/host/test_dlm_requester.c (R1: the requester's DLM_REQ_MAX_REDIRECTS budget really terminates a ping-pong); tests/cluster/sim/scenarios/dlm_requester.c (R2: the REAL engine against four simulated systems — the CSID OVMX names is the one the simulated cluster really has mastering the tree, and it is a member this cluster can address); tests/qemu/test_syssvc_dlm_xnode.c scenario 5c (real /dev/vms: a mis-addressed inbound ENQ returns VMS_DLM_STS_REDIRECT naming the master a real GRANT put in the lock database, and the loop guard declines). Negative control: tests/qemu/facility_defects.sh dlm-xnode-redirect-target-dropped."
+    notes: >
+      rd vms-b96, retiring the honest interim "verify-and-reject". Before this, an
+      inbound cross-node $ENQ for a tree this node does not master returned
+      SS$_UNSUPPORTED with no further information, so the requester learned nothing
+      and could only re-resolve blind. The engine now ANSWERS it: when the executive
+      holds the tree's master CSID it replies VMS_DLM_STS_REDIRECT with master_csid
+      set to that node — the book's outcome 2 — and the requester's already-shipping
+      redirect handler (vms_dlm_scs_fsm.c h_redirect) re-addresses.
+      IT IS A REPLY, NEVER A FORWARD. That is the termination argument: exactly one
+      node answers, so no chain of nodes can form and no cycle can be entered.
+      Three responder guards close the single hop: no master held -> decline; target
+      is this node -> decline; target is the REQUESTER -> decline (that answer would
+      bounce the request straight back). The requester's own DLM_REQ_MAX_REDIRECTS
+      budget bounds the exchange from the other end.
+      INV-6: the CSID named is read off the resource block at the moment of the
+      answer, and it can only have got there from a GRANT a master really sent or a
+      directory reply the cluster really returned. The DIRECTORY node this node's own
+      weight vector resolved is NEVER named as a master — a directory is not a master,
+      and asserting one as master is the fabrication that made a real VAX install OVMX
+      as the master of resources it did not master. There is no code path by which a
+      caller-supplied value reaches the target (the request's own master_csid input is
+      not read on the ENQ path), and the retired OVMX_DLM_ENQ_CSID env crutch has no
+      residual.
+      HONEST RESIDUAL, not papered: this is the ENGINE's decision and its readback.
+      The cat-0x82 reply codec grounds a GRANT shape and a DENY shape only
+      (vms_cluster_codec_dlm.h) — no grounded field carries another node's CSID — and
+      the master/directory-side wire arm (vms_dlm_scs.h's handle_request) is not
+      implemented in kernel-core yet. So no REDIRECT frame is emitted today, and none
+      is fabricated: until a reply shape is grounded from a capture, what leaves this
+      node is still the decline, which the requester's FSM correctly turns into a
+      bounded re-resolve. The over-the-wire multi-node redirect rides the
+      capture-gated rig with the rest of the retired multi-node DLM proofs (vms-1ee).
   - id: cluster-dlm$scs-transport
     kind: feature
     status: implemented

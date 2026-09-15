@@ -14,6 +14,13 @@
 add_subdirectory(routing)
 add_subdirectory(nsp)
 
+# Broker layer (rd vms-22c, a1-2): the exec<->NETACP request/response record
+# codec for the _NET: $QIO broker (transport T1, mailbox-backed network ACP).
+# Pure bounds-validated record codec + correlation-id anti-cross-talk guard;
+# reuses the executive mailbox (no new ioctl). Depends on nsp for the payload
+# bound (DNET_NSP_MAX_DATA).
+add_subdirectory(broker)
+
 # NCP configuration surface (rd vms-1e9): the persisted node database + the
 # NCP.EXE Network Control Program (SET/DEFINE/SHOW/CLEAR NODE, SET/SHOW
 # EXECUTOR) -- the "configuration" pillar + the node NAME<->address resolution

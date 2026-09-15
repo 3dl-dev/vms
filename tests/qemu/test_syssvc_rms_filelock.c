@@ -102,6 +102,7 @@ static void test_conflicting_share(void)
     if (st != RMS$_NORMAL) return;
 
     lkid1 = fab_lkid(&fab1);
+    /* negctl: rms-open-no-file-access-enq */
     check(lkid1 != 0, "open#1 holds a real file-access lkid");
 
     gm = 0;

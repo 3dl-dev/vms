@@ -1,6 +1,12 @@
 # GCC-port surface gap register — DECC$SHR/CRTL (vms-3e4) + RMS (vms-126)
 
-> **Status:** SNAPSHOT, read-only analysis pass, 2026-08-31, grounded on `origin/main`
+> **Status:** SNAPSHOT as of **2026-08-31**, read-only analysis pass — **stale, re-derive before
+> trusting the numbers.** *(Flagged 2026-09-14.)* This snapshot predates the 2026-09-11 F2a
+> host-surface trio, which has since landed and is GREEN on `origin/main`:
+> `design-gcc-port-host-surface-demands.md` (rung-1, MEASURED), `-gaps.md` (rung-2, MEASURED),
+> and `-gate.md` (rung-3, GREEN 2026-09-11). Re-derive the live gap counts and rung state from
+> the compat register (`docs/compat/facilities/*.yaml`) + `rd dep tree vms-da0`, not from the
+> symbol tallies below. Grounded on `origin/main`
 > (local checkout `vms-054-alpha-port` is stale relative to it — see project MEMORY.md
 > standing confounder). Supersedes the numbers/state in the original gap analysis
 > (`docs/design-gcc-vms-port-surface-gaps.md`, 2026-08-22, PR #709) without replacing

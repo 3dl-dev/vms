@@ -1,0 +1,65 @@
+name: negctl-adhoc
+
+# Prove a SPECIFIC set of per-facility negative controls in ONE isolated job,
+# instead of waiting on (and paying for) the full 22-shard matrix inside the
+# 95-job CI run.
+#
+# WHY THIS EXISTS (vms-6ea Bucket-A landing). The sharded negctl program in
+# ci.yml is the standing gate; it runs the WHOLE manifest split across the
+# matrix, alongside the entire heavy CI tier. Two properties of that run make
+# it a poor fit for proving a handful of NEWLY ADDED defects on demand:
+#   1. Capacity: a shard shares the runner pool with ~90 other jobs, so a
+#      shard holding slow suites can hit its wall-clock cap (that is exactly
+#      why the matrix was bumped 10 -> 22 shards).
+#   2. The pristine positive control runs every suite, so an intermittently
+#      flaky suite (test_syssvc_mmk_build, vms-0660) can redden the pristine
+#      image and make run_facility_negctl.sh REFUSE a whole shard's negative
+#      controls -- silently dropping the per-defect proofs that shard carried.
+# Running the named defects ALONE, in one runner, both removes the contention
+# and shrinks the retry cost to a single ~30m job when the pristine flake does
+# bite. The driver is unchanged and still runs its real teeth (build vms.ko,
+# boot a real /dev/vms guest, inject each defect, assert the exact red set);
+# only the DEFECT SELECTION differs from a matrix shard.
+#
+# This is a manual, dispatch-only tool -- it is NOT a merge gate and does not
+# run on push or pull_request. The sharded ci.yml job remains the gate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      defects:
+        description: "Space-separated negctl defect ids (facility_defects.sh list) to prove in one isolated job"
+        required: false
+        default: "l2-open-bypasses-phy-io pe-vc-snapshot-fabricates-circuit scs-cdt-snapshot-fabricates-connection cnxman-csb-snapshot-fabricates-member getsyi-csid-reported-without-valid fork-work-dispatch-uncounted fork-worker-start-reports-success-unstarted"
+
+jobs:
+  negctl-adhoc:
+    name: negctl adhoc — prove the named defects in one isolated job (real /dev/vms)
+    runs-on: ubuntu-latest
+    # The adhoc path runs the FULL ~124-suite pristine control UNSHARDED, plus one
+    # full-suite boot per named defect. Under TCG contention a single 124-suite
+    # boot can take ~2700s (measured 89/124 in 1800s), so worst case ≈ 250s build
+    # + 2700 pristine + 2700 defect ≈ 94m. 100m gives margin. This does NOT touch
+    # the sharded CI negctl gate (kernel-executive-facility-negative-controls-shard,
+    # 22 shards @ 50m, NEGCTL_WALL unset ⇒ still 1800): that gate stays tight.
+    timeout-minutes: 100
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Inject each named defect and assert its exact red set against a real /dev/vms
+        env:
+          CONTAINER_ENGINE: docker
+          # Adhoc-only per-boot wall raise (vms-926 lineage): the full unsharded
+          # pristine + defect boots need >1800s under contention. Ceiling only —
+          # an uncontended boot still finishes in ~250s and never reaches it.
+          NEGCTL_WALL: "2700"
+          # Advisory emission only; not uploaded or compared (matches ci.yml, vms-49f).
+          FACILITY_NEGCTL_RECORD_OUT: ${{ runner.temp }}/facility_negctl_observed.tsv
+        run: |
+          set -eu
+          DEFECTS="${{ inputs.defects }}"
+          echo "adhoc negctl proof for:"
+          printf '%s\n' $DEFECTS | sed 's/^/  /'
+          # shellcheck disable=SC2086
+          tests/qemu/run_facility_negctl.sh $DEFECTS

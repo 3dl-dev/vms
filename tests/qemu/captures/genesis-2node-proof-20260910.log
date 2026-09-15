@@ -1,0 +1,116 @@
+# 2-node cluster GENESIS rig -- PROOF run, k3s-worker, image ovmx-genesis-rig:9
+# rd vms-f6b. Raw markers, each value read back out of that node's executive.
+
+=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ===
+mode=PROOF
+accel=kvm -cpu host group=2026 recnx=8s stagger=30s
+node A: OVMXA/1025 VOTES=1 EXPECTED_VOTES=1 VAXCLUSTER=2
+node B: OVMXB/1026 VOTES=0          VAXCLUSTER=2
+
+--- powering on node A (it must hear nobody for 8s, then found) ---
+--- powering on node B (it must join what A formed) ---
+
+=== node A: what its executive held (ttyS1) ===
+RIG-A-REGISTER status=1 vms_pid=0x10000001
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=1 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+
+RIG-A-REGISTER status=1 vms_pid=0x10000001
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=1 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-A-START status=1 port_up=1 state=2
+RIG-A-CLUB t=1s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=2s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=3s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=4s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=5s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=6s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=7s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=8s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=0 nodes=0 votes=1 quorum=0 csid=-
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=- state=LOCAL
+RIG-A-CLUB t=9s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CLUB t=10s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=1 cevotes=1 quorum=1 expected=1 epoch=1 n_csb=1 transition=0 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=1 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+...
+RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=1 quorum=1 cevotes=1 epoch=1 projections=agree
+RIG-A-PORT open=1 link=1 mtu=1500 max_pktsz=1500 channels=1 vcs=1 rx=648 tx=663 tx_err=0 rx_drop_nobuf=0 rx_drop_class=0
+RIG-A-CHAN i=0 mac=52:54:00:00:10:26 state=4 sysid_valid=1 sysid=1026 hello_tx=124 hello_rx=183 pktsz=1500
+RIG-A-VC i=0 peer_sysid=1026 state=3 send_seq=233 recv_seq=231 peer_recv_ack=232 unacked=0 retx=0 rx_gaps=0 credits_send=32 credits_recv=0 down_reason=0
+RIG-A-SCS sbs=1 cdts=20 sysaps=3 dir_lookups_sent=22 dir_lookups_served=16 credit_stalls=0
+RIG-A-CDT i=0 local=SCS$DIRECTORY    remote= peer_sysid=0 conid=0x157f0001 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-A-CDT i=1 local=VMS$VAXcluster   remote= peer_sysid=0 conid=0x157f0002 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-A-CDT i=2 local=VMS$DISK_CL_DRVR remote= peer_sysid=0 conid=0x157f0003 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+
+RIG-B-REGISTER status=1 vms_pid=0x10000001
+RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1026 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-B-START status=1 port_up=1 state=2
+RIG-B-CLUB t=1s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=2 transition=0 bitmap=0x00000000
+RIG-B-GETSYI member=0 nodes=0 votes=0 quorum=0 csid=-
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=- state=LOCAL
+RIG-B-CSB i=1 node=-      sysid=1025 csid=- state=OPEN
+RIG-B-CLUB t=2s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=2 transition=0 bitmap=0x00000000
+RIG-B-GETSYI member=0 nodes=0 votes=0 quorum=0 csid=-
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=- state=LOCAL
+RIG-B-CSB i=1 node=-      sysid=1025 csid=- state=OPEN
+RIG-B-CLUB t=3s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=2 transition=0 bitmap=0x00000000
+RIG-B-GETSYI member=0 nodes=0 votes=0 quorum=0 csid=-
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=- state=LOCAL
+RIG-B-CSB i=1 node=-      sysid=1025 csid=- state=OPEN
+RIG-B-CLUB t=4s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=2 transition=0 bitmap=0x00000000
+RIG-B-GETSYI member=0 nodes=0 votes=0 quorum=0 csid=-
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=- state=LOCAL
+RIG-B-CSB i=1 node=-      sysid=1025 csid=- state=OPEN
+RIG-B-CLUB t=5s state=JOINING(2) role=none csid=- coord=- nodes=0 cevotes=0 quorum=0 expected=0 epoch=0 n_csb=2 transition=0 bitmap=0x00000000
+RIG-B-GETSYI member=0 nodes=0 votes=0 quorum=0 csid=-
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=- state=LOCAL
+RIG-B-CSB i=1 node=-      sysid=1025 csid=- state=OPEN
+...
+RIG-B-FINAL role=none member=0 state=JOINING csid=- cn=0 quorum=0 cevotes=0 epoch=0 projections=agree
+RIG-B-PORT open=1 link=1 mtu=1500 max_pktsz=1500 channels=1 vcs=1 rx=606 tx=606 tx_err=0 rx_drop_nobuf=0 rx_drop_class=0
+RIG-B-CHAN i=0 mac=52:54:00:00:10:25 state=4 sysid_valid=1 sysid=1025 hello_tx=112 hello_rx=167 pktsz=1500
+RIG-B-VC i=0 peer_sysid=1025 state=3 send_seq=220 recv_seq=219 peer_recv_ack=219 unacked=0 retx=0 rx_gaps=0 credits_send=32 credits_recv=0 down_reason=0
+RIG-B-SCS sbs=1 cdts=19 sysaps=3 dir_lookups_sent=16 dir_lookups_served=20 credit_stalls=0
+RIG-B-CDT i=0 local=SCS$DIRECTORY    remote= peer_sysid=0 conid=0x8baf0001 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-B-CDT i=1 local=VMS$VAXcluster   remote= peer_sysid=0 conid=0x8baf0002 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+RIG-B-CDT i=2 local=VMS$DISK_CL_DRVR remote= peer_sysid=0 conid=0x8baf0003 state=1 mtype=0x5b send=0 recv=0 tx=0 rx=0
+
+--- node A executive transcript (%CNXMAN/%PEA0, deduplicated) ---
+
+--- node B executive transcript ---
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=founder member=1 cn=1 csid=0x00010001
+  node B: role=none member=0 cn=0 csid=-
+
+==========================================
+  GENESIS 2-NODE PROOF FAILED
+  A: role=founder member=1 cn=1
+  B: role=none member=0 cn=0
+  (GENESIS itself HELD: node A founded with CSID 0x00010001 and
+   its executive reports MEMBER. What did not happen is node B's
+   ADMISSION -- read RIG-B-JOINREC and the %CNXMAN transcript.)
+==========================================
+--- node A console tail ---
+[   35.032371] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   36.046646] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   41.166666] %CNXMAN, membership request to the selected member not answered
+[   41.172088] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   42.062705] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+[   49.230661] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   55.502648] %CNXMAN, membership request to the selected member not answered

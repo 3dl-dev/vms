@@ -10,16 +10,45 @@
  */
 
 #include <string.h>
+#include <stdio.h>
+#include <unistd.h>
 #include <pwd.h>
 
 #include "sshd_auth.h"
 #include "sysuaf.h"
 #include "str_util.h"
-#include "ovmx_layout.h"
+#include "ovmx_layout.h"      /* VMS_LOGINOUT_PATH, ovmx_boot_stage_exec_path */
+#include "vmsfs/filespec.h"   /* vmsfs_to_linux_path                          */
 
 /* The DCL image, as a Linux path OpenSSH's execve() can run (mirrors
- * vmssshd.c's DCL_SHELL_PATH). */
+ * vmssshd.c's DCL_SHELL_PATH). Retained for ovmx_sshd_dcl_* below; the login
+ * SHELL is now LOGINOUT.EXE (the session-establish primitive), not DCL. */
 #define OVMX_SSHD_DCL_PATH   VMS_SYSTEM_DIR "/DCL.EXE"
+
+/*
+ * Resolve SYS$SYSTEM:LOGINOUT.EXE to the Linux path that activates it -- the
+ * VMS filespec translation, then the boot-staging bridge when a staged copy is
+ * present -- the same resolution JOB_CONTROL and the DECnet CTERM host use
+ * (dnet_cterm_host.c cterm_host_loginout_path). Shared by the SSH session
+ * handoff (sshd_session.c: the $CREPRC image) and the getpwnam adapter below
+ * (pw_shell, so OpenSSH's shell-existence check targets the very image the
+ * session becomes). Returns 1 and fills *out on success, 0 on failure.
+ */
+int ovmx_sshd_loginout_path(char *out, size_t outsz)
+{
+    char staged[512];
+
+    if (out == NULL || outsz == 0)
+        return 0;
+    if (vmsfs_to_linux_path(VMS_LOGINOUT_PATH, out, outsz) != 1)
+        snprintf(out, outsz, "%s", VMS_LOGINOUT_PATH);
+    if (out[0] == '\0')
+        return 0;
+    if (ovmx_boot_stage_exec_path(out, staged, sizeof(staged)) &&
+        access(staged, X_OK) == 0)
+        snprintf(out, outsz, "%s", staged);
+    return 1;
+}
 
 /* ---- the login decision (unit-tested, no SYSUAF file needed) ------------- */
 
@@ -103,7 +132,21 @@ int ovmx_sshd_fill_passwd(const char *user, struct passwd *pw,
     strncpy(b->passwd, "x", sizeof(b->passwd) - 1);   /* unused: CUSTOM auth   */
     strncpy(b->gecos, rec.username, sizeof(b->gecos) - 1);
     strncpy(b->dir, "/", sizeof(b->dir) - 1);
-    strncpy(b->shell, OVMX_SSHD_DCL_PATH, sizeof(b->shell) - 1);
+    /* The login SHELL is LOGINOUT.EXE -- the session-establish image the SSH
+     * handoff $CREPRCs (sshd_session.c), NOT DCL. OpenSSH stats pw_shell for its
+     * shell-existence check, so it must name a path that exists on the VFS; the
+     * staged LOGINOUT.EXE is that path AND the image the session actually
+     * becomes. It is never execve'd here (the handoff runs in the pre-drop and
+     * _exits), so it is only the existence-check target -- but it is the honest
+     * one, not a decoy shell. On resolution failure keep the DCL path (no worse
+     * than before): the handoff itself then fails-closed. */
+    {
+        char shellpath[512];
+        if (ovmx_sshd_loginout_path(shellpath, sizeof(shellpath)))
+            strncpy(b->shell, shellpath, sizeof(b->shell) - 1);
+        else
+            strncpy(b->shell, OVMX_SSHD_DCL_PATH, sizeof(b->shell) - 1);
+    }
 
     memset(pw, 0, sizeof(*pw));
     pw->pw_name   = b->name;

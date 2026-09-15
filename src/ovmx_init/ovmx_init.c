@@ -1223,8 +1223,19 @@ _Static_assert(sizeof(((struct vms_sysgen_load_args *)0)->sw_version) ==
  * advertises what it granted (src/kernel-core/vms_pe_fsm.h SS4b) -- so a
  * default here can never become a promise the node cannot keep.
  *
- * The substitution is ANNOUNCED, never silent: an operator who sees this line
- * can make it permanent with one SYSGEN WRITE.
+ * The substitution is SILENT on the boot console -- exactly as SYSBOOT's
+ * built-in parameter table applies a default on real VMS: no per-parameter
+ * "absent, using default" line is narrated during boot. An earlier version
+ * (rd vms-c72/#1052) fprintf'd an %OVMX-I-NOPARAM announcement here; that put
+ * an OVMX-only line on the pristine boot console with no oracle backing, between
+ * %OVMX-I-SCSNODE and %STDRV-I-STARTUP, and the boot-console conformance gate
+ * (vms-1fb, tests/qemu/test_boot_conformance.sh) correctly rejected it. The
+ * VALUE fallback below STAYS -- it is the E60 fix that keeps CLUSTER_CREDITS
+ * from going out as 0 against a live cluster. (Durable follow-up: seed
+ * CLUSTER_CREDITS into the mastered OVMXVMSSYS.PAR so the fallback never fires
+ * on a fresh install, like a real VMS parameter file; a genuinely-absent param
+ * on an operator's older .PAR can then be surfaced via the kmsg->OPERATOR.LOG
+ * bridge rather than the console.)
  */
 static uint16_t cluster_credits_requested(void)
 {
@@ -1233,10 +1244,7 @@ static uint16_t cluster_credits_requested(void)
     if (sysgen_read_param("CLUSTER_CREDITS", &u32) == 0)
         return (uint16_t)u32;
 
-    fprintf(stderr,
-            "%%OVMX-I-NOPARAM, CLUSTER_CREDITS is absent from this system's"
-            " parameter file; using the SYSGEN default (%u)\n",
-            (unsigned)SYSGEN_DEFAULT_CLUSTER_CREDITS);
+    /* Silent default (SYSBOOT built-in-table behavior, vms-1fb); see above. */
     return (uint16_t)SYSGEN_DEFAULT_CLUSTER_CREDITS;
 }
 

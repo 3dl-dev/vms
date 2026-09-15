@@ -10,10 +10,10 @@ summary: >
   9-phase STDRV phased driver startup, PID 1 sequencing through
   STARTUP.COM-equivalent, and an OPCOM operator-log bridge. SYSGEN
   parameters consumed at boot are only as complete as the sysgen facility.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: sysboot$conversational, kind: feature, status: implemented, authenticity: real, vms: "Conversational SYSBOOT> — halt, SHOW/SET/USE/WRITE, CONTINUE", evidence: src/ovmx_init/sysboot.c}
   - {id: stdrv$phased_startup,   kind: feature, status: implemented, authenticity: real, vms: "STDRV phased driver startup — 9 phases via VMS$PHASES.DAT + VMS$VMS.DAT registry", evidence: "distro/rootfs/vms/SYS0/SYSCOMMON/SYS$STARTUP/VMS$PHASES.DAT", plan_ref: vms-21a}
   - {id: init$pid1_sequencing,   kind: feature, status: implemented, authenticity: real, vms: "PID 1 boot orchestration — SYSBOOT -> EXEC_INIT -> SYSINIT -> STARTUP", evidence: src/ovmx_init/ovmx_init.c}
-  - {id: opcom$boot_bridge,      kind: feature, status: implemented, authenticity: real, vms: "OPCOM operator-log message bridge at boot", evidence: src/ovmx_init/opcom_kmsg.c}
+  - {id: opcom$boot_bridge,      kind: feature, status: implemented, authenticity: real, vms: "OPCOM operator-log message bridge at boot", evidence: src/ovmx_init/opcom_kmsg.c, notes: "Re-census 2026-09-14: opcom_kmsg.c present; vms-98c2 additionally seeds OPERATOR.LOG from a durable spool rather than the lossy kernel ring."}
   - {id: boot$sysgen_params,     kind: feature, status: partial,     authenticity: real, vms: "SYSGEN parameters consumed at boot", evidence: tools/vms_sysgen.c, notes: "Bounded by sysgen facility's thin parameter set"}

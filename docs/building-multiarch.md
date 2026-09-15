@@ -158,7 +158,8 @@ docker build -f tests/lab-vax/Dockerfile -t ovmx-vax-lab tests/lab-vax
 tests/lab-vax/run-local.sh install
 
 # 3. Boot OVMX: ovmx_init (STARTUP.EXE) as PID 1, vms.kmod loaded (/dev/vms live),
-#    OpenVMX banner, vmsfs.kmod loaded, ODS-2 system disk (DUA0:) mounted.
+#    OpenVMX banner, ODS-2 system disk (DUA0:) mounted over the executive
+#    Files-11 ACP in vms.kmod (there is no separate vmsfs.kmod — vms-165).
 tests/lab-vax/run-boot.sh prove
 
 # Boot past the installed-system gate to PROVISION.EXE (mastered system volume):
@@ -171,7 +172,7 @@ tests/lab-vax/run-boot.sh acceptance
 Negative-control modes (`negctl`, `sysboot-negctl`) assert that milestones
 which *should not* appear (e.g. an ODS-2 MOUNT with no ODS-2 volume present) do
 not. Force rebuilds with `FORCE_CROSS_BUILD=1` (rebuilds `ovmx_init` /
-`vms.kmod` / `vmsfs.kmod`) and `FORCE_SYSVOL_BUILD=1` (rebuilds the five boot
+`vms.kmod`) and `FORCE_SYSVOL_BUILD=1` (rebuilds the five boot
 images).
 
 Inside SIMH the guest is booted single-user (required for securelevel-0
@@ -209,7 +210,7 @@ cmake --build build-vax -j$(nproc)
 Per-facility OVMX boot proofs (each boots the cached disk under SIMH and
 exercises one executive facility cross-process): `run-devvms.sh` (`/dev/vms`
 PING), `run-eflag.sh`, `run-access.sh`, `run-proctab.sh`, `run-mbx.sh`,
-`run-vmsfs.sh`.
+`run-devalloc.sh`, and `run-purdy.sh` (binary-SYSUAF Purdy authentication).
 
 ### VAX CI gates (`.github/workflows/ci.yml`)
 

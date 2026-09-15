@@ -159,18 +159,22 @@ SYMLIST="$BUILD_DIR/symlist.txt"
 "$VAXNM" --defined-only -g -P "$LIBVMS_A" 2>/dev/null \
     | awk 'NF>=2 && $1 !~ /:$/ {print $1, $2}' \
     | grep -v '^ovmx\$arith_signal_anchor ' \
+    | grep -v '^ovmx\$accvio_signal_anchor ' \
     > "$SYMLIST"
-# ovmx$arith_signal_anchor (src/libvms/rtl/arith_signal.c) is a
-# `__attribute__((used))` FORCE-PULL anchor -- its only purpose is to be
+# ovmx$arith_signal_anchor (src/libvms/rtl/arith_signal.c) and its sibling
+# ovmx$accvio_signal_anchor (src/libvms/rtl/accvio_signal.c, added by vms-cc8)
+# are `__attribute__((used))` FORCE-PULL anchors -- their only purpose is to be
 # `extern`-referenced by a companion "*_bind.c" TU (not built by this
 # standalone standalone target) so a *selective* (needed-symbols) static
-# linker drags arith_signal.c.o into a -static image (the pattern
-# src/vmslink/dcl_rms_bind.c documents). It is internal linker plumbing, not
+# linker drags the .c.o into a -static image (the pattern
+# src/vmslink/dcl_rms_bind.c documents). They are internal linker plumbing, not
 # genuine RTL API, and LINKVAX.EXE's global-symbol resolver (measured:
 # every other defined global in this same object, including its sibling
-# ovmx$arith_signal_installed, resolves fine) does not resolve it as a
-# universal in this whole-archive shareable build. Excluded rather than
-# force-exported for a symbol nothing is meant to consume as a universal.
+# ovmx$arith_signal_installed, resolves fine) does not resolve such an anchor as
+# a universal in this whole-archive shareable build. Excluded rather than
+# force-exported for symbols nothing is meant to consume as a universal.
+# NOTE: any future ovmx$*_signal_anchor force-pull anchor must be excluded here
+# the same way (it will otherwise red this gate as a %LINK-F unresolved universal).
 NSYM=$(wc -l < "$SYMLIST")
 [ "$NSYM" -gt 0 ] || { echo "FAIL: no defined global symbols found in libvms.a"; exit 1; }
 VEC="$BUILD_DIR/vec.txt"

@@ -294,6 +294,73 @@ static void test_engine_link_tick(void)
           "the retransmitted PDU is a Connect Initiate (the FSM's own, not a template)");
 }
 
+/* ---- link-service credit grant after CC (rd vms-6165) ------------------- */
+static void test_link_service(void)
+{
+    printf("[linksvc] initiator emits a byte-correct LINK SERVICE after the CC,"
+           " and ils-acks the peer's LINK SERVICE (rd vms-6165)\n");
+
+    /* Bring an initiator (A) to RUN via CI/CC, matching the oracle link ids
+     * (both 8193 = 0x2001, as the real VAX chose). */
+    struct dnet_link A;
+    check(dnet_link_init(&A, 0x2001, 0x0402, 100) == DNET_LINK_OK, "A init (LLA 8193)");
+    struct dnet_nsp_msg ci;
+    check(dnet_link_connect(&A, NULL, 0, 1459, 0x01, DNET_NSP_VER_41, &ci, 100)
+              == DNET_LINK_OK, "A connect()");
+    struct dnet_nsp_msg cc;
+    memset(&cc, 0, sizeof(cc));
+    cc.type = DNET_NSP_T_CC; cc.msgflg = DNET_NSP_MSGFLG_CC;
+    cc.dstaddr = 0x2001; cc.srcaddr = 0x2001; cc.segsize = 1459;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    check(dnet_link_rx(&A, &cc, 101, NULL, NULL, &ev) == DNET_LINK_OK &&
+          ev == DNET_LINK_EV_CONNECT_CONF && dnet_link_is_up(&A),
+          "A rx(CC) -> RUN");
+
+    /* THE FIX: right after CC, A emits a LINK SERVICE credit grant. */
+    struct dnet_nsp_msg ls;
+    check(dnet_link_link_service(&A, &ls, 101) == DNET_LINK_OK,
+          "A builds a LINK SERVICE after CC");
+    check(ls.type == DNET_NSP_T_LS && ls.msgflg == DNET_NSP_MSGFLG_LS &&
+          ls.dstaddr == 0x2001 && ls.srcaddr == 0x2001,
+          "LS is MSGFLG 0x10, dst=remote src=local");
+    check(ls.has_acknum && ls.acknum == 0x8000 &&
+          ls.ls_flags == 0x01 && ls.fc_val == 0x00,
+          "LS ACKNUM=0x8000 (ack-present, 0 other-data recv), LSFLAGS=0x01,"
+          " FCVAL=0x00 -- byte-exact to the oracle client's post-CC LS");
+
+    /* Encode it and confirm the exact 9 NSP bytes: 10 01 20 01 20 00 80 01 00. */
+    uint8_t enc[16]; size_t elen = 0;
+    static const uint8_t k_oracle_ls[] = {
+        0x10, 0x01, 0x20, 0x01, 0x20, 0x00, 0x80, 0x01, 0x00
+    };
+    check(dnet_nsp_encode(&ls, enc, sizeof(enc), &elen) == DNET_NSP_OK &&
+          elen == sizeof(k_oracle_ls) && memcmp(enc, k_oracle_ls, elen) == 0,
+          "encoded LS is byte-identical to the oracle (10 01 20 01 20 00 80 01 00)");
+
+    /* Decode of the oracle LS bytes recovers the fields. */
+    struct dnet_nsp_msg dec;
+    check(dnet_nsp_decode(k_oracle_ls, sizeof(k_oracle_ls), &dec, NULL) == DNET_NSP_OK &&
+          dec.type == DNET_NSP_T_LS && dec.acknum == 0x8000 &&
+          dec.ls_flags == 0x01 && dec.fc_val == 0,
+          "decode of the oracle LS recovers type=LS, ACKNUM, LSFLAGS, FCVAL");
+
+    /* The peer's LINK SERVICE arrives -> A ils-acks it (other-data ack),
+     * ACKNUM = 0x8000 | oth_recv (now 1), matching the client's #039. */
+    int has_reply = 0;
+    struct dnet_nsp_msg peer_ls, ils;
+    memset(&peer_ls, 0, sizeof(peer_ls));
+    peer_ls.type = DNET_NSP_T_LS; peer_ls.msgflg = DNET_NSP_MSGFLG_LS;
+    peer_ls.dstaddr = 0x2001; peer_ls.srcaddr = 0x2001;
+    peer_ls.has_acknum = 1; peer_ls.acknum = 0x8001;
+    peer_ls.ls_flags = 0x01; peer_ls.fc_val = 0;
+    check(dnet_link_rx(&A, &peer_ls, 102, &ils, &has_reply, &ev) == DNET_LINK_OK &&
+          ev == DNET_LINK_EV_LINK_SERVICE && has_reply,
+          "A rx(peer LS) -> LINK_SERVICE event + a reply");
+    check(ils.type == DNET_NSP_T_OTHACK && ils.msgflg == DNET_NSP_MSGFLG_OTHACK &&
+          (ils.acknum & DNET_NSP_ACK_QUAL) && (ils.acknum & 0x0fff) == 1,
+          "the reply is an other-data ack (0x14) acking other-data seg 1");
+}
+
 int main(void)
 {
     printf("test_dnet_link: DECnet Phase IV NSP logical-link connection service\n");
@@ -301,6 +368,7 @@ int main(void)
     test_retransmit();
     test_engine_e2e();
     test_engine_link_tick();
+    test_link_service();
     if (failures == 0) { printf("test_dnet_link: ALL CHECKS PASSED\n"); return 0; }
     printf("test_dnet_link: %d CHECK(S) FAILED\n", failures);
     return 1;

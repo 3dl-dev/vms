@@ -1,5 +1,16 @@
 # OVMX Lane Ownership Registry (cross-session coordination bus)
 
+> **⚠ STALE SNAPSHOT — the lane table below is out of date; RE-DERIVE the live lanes before
+> dispatching (flagged 2026-09-14).** Known drift: the **Cluster / VAT2** row owns `src/vmsscs/**`,
+> which **no longer exists** — the userspace SCS daemon was deleted in the 2026-09-02 cluster reset
+> (cluster is now executive-resident: CNXMAN/SCS/DLM in `src/kernel-core/**` + `vms.ko`). There is
+> no row for the now-active **DECnet** lane (`src/vmsdecnet/**`, anchor vms-30e) or the
+> **self-hosting / GCC-on-OVMX** lane (`src/gcc_host/**`, anchors vms-da0/vms-59a). The durable
+> ownership *rule* (one owner per hot file) still holds; the specific surface map does not.
+> Re-derive live lane state from `rd ready` / `rd show <lane-anchor>` + `gh pr list` each tick,
+> per the continuation-identity rule (user CLAUDE.md) — this map is not refreshed to a fabricated
+> current state.
+
 > **Internal orchestration state — not product documentation.** This registry coordinates
 > the OVMX agent-swarm's hot-file ownership, not the OVMX product. It lives under
 > `docs/internal/`; do not cite it from user-facing docs.

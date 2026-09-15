@@ -53,9 +53,12 @@ typedef struct ovmx_crtl_file OVMX_CRTL_FILE;
  * failure (fail-honest, no POSIX fallback). Unsupported modes -> NULL. */
 OVMX_CRTL_FILE *ovmx_crtl_fopen(const char *path, const char *mode);
 
-/* fwrite veneer: one byte-exact sys$put of (size*nmemb) bytes (FAB$C_FIX,
- * mrs=0). Returns the number of whole members written (nmemb on success, 0 on
- * failure) — the C fwrite contract. */
+/* fwrite veneer: a byte-exact sequence of sys$put record writes (FAB$C_FIX,
+ * mrs=0). A request larger than one 16-bit record (rab$w_rsz max 0xFFFF) is
+ * CHUNKED into successive $PUTs (vms-126) — byte-transparent, since the reader
+ * is a byte-loop $GET to EOF regardless of record boundaries. Returns the number
+ * of whole members written (nmemb on full success; the count actually written
+ * on a short/failed put) — the C fwrite contract. */
 size_t ovmx_crtl_fwrite(const void *ptr, size_t size, size_t nmemb,
                         OVMX_CRTL_FILE *fh);
 

@@ -710,6 +710,33 @@ static void test_glue_bindings(void)
 	check_has("cnxman_join_rejected(&cn->join",
 		  "... routed to the join's own REJECT handling");
 
+	/*
+	 * rd vms-c06: A LOST PEER REACHES THE TRANSITION THAT IS WAITING ON IT.
+	 *
+	 * Book p. 7-41/7-42 gives both halves of the answer and both live in the
+	 * FSMs -- and until this item NEITHER HAD A PRODUCTION CALLER, so a
+	 * transition whose peer died stood open for the life of the node while
+	 * every R1 test stayed green. These four lines are the wiring; the
+	 * BEHAVIOUR they trigger is proved by execution in test_cnxman_coord.c
+	 * (drop-and-release, abandon-before-the-GO) and test_cnxman_barrier.c.
+	 */
+	check_has("cnxman_coord_participant_lost(&cn->coord, idx)",
+		  "vms-c06: a connectivity loss reaches the COORDINATOR's census");
+	check_has("cnxman_barrier_coordinator_lost(&cn->barrier)",
+		  "vms-c06: ... and, when it was OUR coordinator, the "
+		  "PARTICIPANT half");
+	check_has("if (cn->barrier.coordinator_csb == idx)",
+		  "vms-c06: the participant half fires only for the block the "
+		  "barrier is taking its transition FROM");
+	check_has("cnxman_transition_peer_lost(cn, csb);\n\n"
+		  "\tif (reason == (uint32_t)SCS_CLOSE_REJECTED)",
+		  "vms-c06: EVERY close -- rejection included -- reports the "
+		  "loss, and does it BEFORE the ladder proposes a removal "
+		  "the coordinator would refuse as BUSY");
+	check_has("cnxman_transition_peer_lost(cn, csb);\n\t\t(void)cnxman_coord_propose_remove",
+		  "vms-c06: the reconnect beat reports it too -- the only path "
+		  "for a system that went silent without its CDT closing");
+
 	/* $SETCLUEVT. */
 	check_has("vms_cnxman_cluevt_set(", "the registration entry point exists");
 	check_has("vms_cnxman_proc_gone(", "the process-death safety hook exists");

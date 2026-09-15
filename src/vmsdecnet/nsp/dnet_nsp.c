@@ -50,12 +50,19 @@ static uint8_t nsp_classify(uint8_t msgflg)
 {
     switch (msgflg & DNET_NSP_CLASS_MASK) {
     case DNET_NSP_CLASS_DATA:
+        /* Within the data class, 0x10 = Link Service (other-data subchannel);
+         * a data segment carries the BOM/EOM bits (0x20/0x40). Distinguish by
+         * exact value so an LS is not mis-decoded as a zero-length data seg. */
+        if (msgflg == DNET_NSP_MSGFLG_LS)
+            return DNET_NSP_T_LS;
         return DNET_NSP_T_DATA;
     case DNET_NSP_CLASS_ACK:
-        /* 0x04 = data acknowledgement (this codec's scope). Other ack
-         * subtypes (0x14 other-data ack, 0x24 connect ack) are out of scope. */
+        /* 0x04 = data acknowledgement; 0x14 = other-data (link-service /
+         * interrupt) ack (rd vms-6165). 0x24 = connect ack, still out of scope. */
         if (msgflg == DNET_NSP_MSGFLG_ACK)
             return DNET_NSP_T_ACK;
+        if (msgflg == DNET_NSP_MSGFLG_OTHACK)
+            return DNET_NSP_T_OTHACK;
         return 0;
     case DNET_NSP_CLASS_CTL:
         switch (msgflg & DNET_NSP_CTL_SUBMASK) {
@@ -172,6 +179,36 @@ int dnet_nsp_decode(const uint8_t *buf, size_t len,
             return DNET_NSP_EBADLEN;  /* a data-ack carries no payload */
         break;
     }
+    case DNET_NSP_T_OTHACK: {
+        /* Other-data (link-service/interrupt) ack: mandatory ACKNUM, no data.
+         * (rd vms-6165 -- the client's ils-ack of the host's link service.) */
+        if (remain < 2)
+            return DNET_NSP_ETRUNC;
+        out->has_acknum = 1;
+        out->acknum = rd_le16(p);
+        p += 2;
+        /* Real frames are min-Ethernet-padded past the 7-byte PDU; consumed
+         * reports only the meaningful bytes, trailing pad is ignored. */
+        break;
+    }
+    case DNET_NSP_T_LS: {
+        /* Link Service: mandatory ACKNUM (other-data ack), then LSFLAGS(1) +
+         * FCVAL(1). ACKNUM's bit15 QUAL marks it present, as in a data-ack. */
+        if (remain < 2)
+            return DNET_NSP_ETRUNC;
+        out->has_acknum = 1;
+        out->acknum = rd_le16(p);
+        p += 2;
+        remain -= 2;
+        if (remain < 2)
+            return DNET_NSP_ETRUNC;   /* LSFLAGS + FCVAL are mandatory */
+        out->ls_flags = p[0];
+        out->fc_val   = (int8_t)p[1];
+        p += 2;
+        /* Trailing Ethernet min-frame padding (if any) is ignored; consumed
+         * reports the 9 meaningful bytes. */
+        break;
+    }
     default:
         return DNET_NSP_EBADTYPE;
     }
@@ -208,6 +245,16 @@ int dnet_nsp_encode(const struct dnet_nsp_msg *msg,
         if (msg->datalen != 0)
             return DNET_NSP_EBADLEN;          /* a data-ack carries no payload */
         need += 2 + (msg->has_ackoth ? 2 : 0);/* ACKNUM [ACKOTH] */
+        break;
+    case DNET_NSP_T_OTHACK:
+        if (msg->datalen != 0)
+            return DNET_NSP_EBADLEN;          /* an other-data ack carries none */
+        need += 2;                            /* ACKNUM */
+        break;
+    case DNET_NSP_T_LS:
+        if (msg->datalen != 0)
+            return DNET_NSP_EBADLEN;          /* a link service carries no data */
+        need += 2 + 2;                        /* ACKNUM + LSFLAGS + FCVAL */
         break;
     default:
         return DNET_NSP_EBADTYPE;
@@ -258,6 +305,17 @@ int dnet_nsp_encode(const struct dnet_nsp_msg *msg,
             wr_le16(p, msg->ackoth);
             p += 2;
         }
+        break;
+    case DNET_NSP_T_OTHACK:
+        wr_le16(p, msg->acknum);
+        p += 2;
+        break;
+    case DNET_NSP_T_LS:
+        wr_le16(p, msg->acknum);
+        p += 2;
+        p[0] = msg->ls_flags;
+        p[1] = (uint8_t)msg->fc_val;
+        p += 2;
         break;
     default:
         return DNET_NSP_EBADTYPE;

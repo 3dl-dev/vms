@@ -96,9 +96,14 @@ extern "C" {
  * group and the terminal-I/O group, per the CTERM protocol structure.
  */
 enum dnet_cterm_msgtype {
-    /* --- Foundation: establish / negotiate / release the terminal session --- */
-    DNET_CTERM_MSG_BIND        = 1,  /* terminal -> host: establish the session   */
-    DNET_CTERM_MSG_BIND_ACCEPT = 2,  /* host -> terminal: session accepted         */
+    /* --- Foundation: establish / negotiate / release the terminal session ---
+     * NOTE (rd vms-bd0): the actual Bind / Bind-Accept exchange no longer rides
+     * this general PDU set -- it is the REAL DNA short-TLV / msgtype-9-envelope
+     * foundation codec below (dnet_cterm_found_*), because on the real wire
+     * those messages reuse byte 1 and byte 4, and byte 4 collides with
+     * DNET_CTERM_MSG_CHARACTERISTICS here. Which codec applies is gated on
+     * session phase (dnet_cterm_rx), never guessed from the byte alone. Types 1
+     * and 2 are deliberately UNUSED in this enum so that fact stays visible. */
     DNET_CTERM_MSG_UNBIND      = 3,  /* either -> peer: release the session         */
     DNET_CTERM_MSG_CHARACTERISTICS = 4, /* either -> peer: terminal characteristics */
     /* --- terminal I/O ----------------------------------------------------- */
@@ -110,15 +115,6 @@ enum dnet_cterm_msgtype {
     DNET_CTERM_MSG_CLEAR_INPUT = 10, /* host -> terminal: flush type-ahead         */
     DNET_CTERM_MSG_DISCARD     = 11  /* host -> terminal: discard pending output   */
 };
-
-/* CTERM protocol version this OVMX implementation advertises in Bind (the DNA
- * CTERM version triple V.ECO.USER; OVMX-labelled values). */
-#define DNET_CTERM_VER_V        1
-#define DNET_CTERM_VER_ECO      0
-#define DNET_CTERM_VER_USER     0
-
-/* Bind mode: command-terminal mode (the only mode $ SET HOST uses). */
-#define DNET_CTERM_MODE_COMMAND 0
 
 /* Terminal-characteristics flag bits (OVMX-assigned; the DNA terminal
  * characteristics set, reduced to the ones SET HOST negotiates). */
@@ -143,7 +139,6 @@ enum dnet_cterm_msgtype {
 /* Bounds. A CTERM PDU rides in one NSP data segment; keep it well under the
  * negotiated segment size. Strings are counted (1-byte length + bytes). */
 #define DNET_CTERM_MAX_DATA     512   /* Write/Read payload cap                */
-#define DNET_CTERM_MAX_NAME     32    /* Bind terminal-identifier string cap   */
 #define DNET_CTERM_MAX_PROMPT   64    /* Start Read prompt cap                 */
 #define DNET_CTERM_MAX_PDU      (DNET_CTERM_MAX_DATA + 128) /* encoded PDU cap  */
 
@@ -163,12 +158,6 @@ enum dnet_cterm_msgtype {
  */
 struct dnet_cterm_msg {
     uint8_t  type;          /* enum dnet_cterm_msgtype */
-
-    /* Bind / Bind Accept */
-    uint8_t  ver_v, ver_eco, ver_user; /* CTERM protocol version triple */
-    uint8_t  mode;          /* Bind: DNET_CTERM_MODE_* */
-    uint8_t  status;        /* Bind Accept: 0 = accepted, else reject reason */
-    char     name[DNET_CTERM_MAX_NAME + 1]; /* terminal identifier (NUL-terminated) */
 
     /* Characteristics */
     uint8_t  term_type;     /* terminal type code (OVMX-labelled) */
@@ -217,6 +206,325 @@ int dnet_cterm_decode(const uint8_t *buf, size_t len,
  */
 int dnet_cterm_encode(const struct dnet_cterm_msg *msg,
                       uint8_t *buf, size_t cap, size_t *outlen);
+
+/* ======================================================================
+ * FOUNDATION MESSAGE CODEC -- the REAL DNA CTERM foundation exchange that a
+ * $ SET HOST rides before any terminal I/O flows (rd vms-bd0, epic vms-a70/
+ * vms-62a). This REPLACES the invented flat-Bind format above: OVMX used to
+ * emit a bare `00 00 00 0a` + "OVMX$RTA1:" device-name string and a discrete
+ * Bind-Accept/status PDU -- neither exists on the real wire, and emitting
+ * them is very likely why a real VMS CTERM object silently discarded OVMX's
+ * connect (vms-a70 direction A).
+ *
+ * ORACLE-GROUNDED (Rule 8), vaxlab-3, 2026-09-11: a real VAX1<->VAX2 $ SET
+ * HOST that reached a live DCL prompt, captured on the lab bridge --
+ * real-cterm-ci.pcap (default terminal, PAGE=24) and cterm-oracle-wid8.pcap
+ * (SET TERMINAL/PAGE=48 on the client, driving the one-byte diff that
+ * resolves the PAGE field). The CTERM payload of every "data seg" NSP frame
+ * begins 47 bytes into the Ethernet frame (Ethernet14 + DLlen2 + pad1 +
+ * routing21 + NSP9); every array below is that payload, copied verbatim.
+ *
+ * THE SHAPE, empirically (never disassembled/decompiled/copied -- read
+ * straight off the wire with tcpdump -XX and a hex diff between the two
+ * captures):
+ *
+ *   - seg 1 (the FIRST CTERM message each side ever sends) is a SHORT TLV:
+ *     [msg-code:1][param-code:1][param-len:1][value:param-len bytes], then
+ *     the sender's own choice of trailing zero padding out to a fixed total
+ *     segment length (8 bytes for the host's, 17 for the client's -- an
+ *     asymmetry recorded as observed, not rationalised: dnet_cterm_found_
+ *     short_build() reproduces it exactly rather than guessing a padding
+ *     rule from two samples). THE HOST (the SET HOST TARGET) SENDS FIRST --
+ *     msg-code 0x01, param-code 0x02, 4-byte value `00 07 00 10`; the CLIENT
+ *     (the SET HOST INITIATOR) replies second -- msg-code 0x04, same
+ *     param-code, value `00 07 00 00`. This inverts the old FSM's assumption
+ *     that the TERMINAL speaks first; dnet_cterm_bind()/bind_accept() below
+ *     do NOT yet reorder for it (see their comments and the vms-6165 note in
+ *     dnet_cterm.c).
+ *
+ *   - every later foundation message (seg 2, seg 3, seg 4, ... -- "seg 2+")
+ *     is wrapped in a fixed 4-byte envelope: `09 00` (msgtype 0x0009, LE)
+ *     followed by a length field (2 bytes, LE). For the CLIENT's seg-2
+ *     message the length field equals the exact remaining body length (53);
+ *     for the HOST's seg-2 message it does NOT (23 vs 31 actual remaining
+ *     bytes) -- an unresolved discrepancy the ground-truth capture flags
+ *     honestly (docs from vaxlab-3, cterm-foundation-spec.txt sec 3) rather
+ *     than papering over, so dnet_cterm_found_envelope_build() takes the
+ *     length field and the body length as TWO SEPARATE arguments and never
+ *     assumes they agree.
+ *
+ *   - within the CLIENT's seg-2 envelope body, exactly two fields are
+ *     RESOLVED (the rest is an opaque, apparently session-invariant blob,
+ *     byte-identical across every capture and reproduced here as a literal
+ *     constant, never fabricated): WIDTH, a 2-byte LE field at body offset
+ *     31-32 (both captures show 0x0084 = 132; not diff-confirmed -- the lab's
+ *     terminal was already at width 132 in both runs -- so this position is
+ *     a value/positional inference, flagged as such), and PAGE, a 2-byte LE
+ *     field at body offset 36-37, DIFF-CONFIRMED: 0x0018 = 24 (default) vs
+ *     0x0030 = 48 (after SET TERMINAL/PAGE=48 on the real VAX), verified by
+ *     a byte-for-byte diff of the two captures (the only two bytes that
+ *     differ between them are the NSP link-id fields and this one byte).
+ *     NOTE this PAGE offset is body-offset 36-37 (payload-absolute P40-P41);
+ *     an earlier hand-drafted note on the lab put it one byte earlier
+ *     (P39-P40) -- that number does not survive a programmatic hex diff of
+ *     the two pcaps and is superseded by the offsets in this file.
+ *
+ * SCOPE (this rung, vms-bd0): the codec only -- build/parse these exact
+ * byte shapes, proven byte-identical against the captured specimen in
+ * tests/vmsdecnet/test_dnet_cterm.c. Wiring the FULL foundation sequence
+ * (host-speaks-first ordering, the seg-3/seg-4 messages this capture did not
+ * decode, decnetd's actual SET HOST driver) is vms-6165.
+ *
+ * BOUNDED. Every parse function here runs on bytes that may have arrived off
+ * the wire before anyone has authenticated: never reads past `len`, and a
+ * param/body length that would overrun the caller's output buffer is
+ * refused (DNET_CTERM_EBADLEN), never silently clipped.
+ * ====================================================================== */
+
+/* The one param-code observed in both captured short-TLV foundation
+ * messages (host and client alike). Recorded as a named constant because it
+ * is a MEASURED wire fact, not because its meaning is understood. */
+#define DNET_CTERM_FOUND_PARAM_OBSERVED  0x02
+
+/* Bound on a short-TLV's value field. Both captured specimens carry a
+ * 4-byte value; this is sized generously (still small, still bounded) so a
+ * differently-shaped real specimen is refused cleanly rather than by luck. */
+#define DNET_CTERM_FOUND_VALUE_MAX  16
+
+/*
+ * dnet_cterm_found_short_build - build one seg-1-shaped short-TLV foundation
+ * message: [msg_code][param_code][value_len][value[0..value_len)], then
+ * zero-pad the output to `total_len` bytes (the oracle's own trailing
+ * padding -- reproduced literally, not derived from a guessed rule).
+ * Returns DNET_CTERM_OK, DNET_CTERM_ENOSPACE, or DNET_CTERM_EINVAL/EBADLEN.
+ */
+int dnet_cterm_found_short_build(uint8_t msg_code, uint8_t param_code,
+                                 const uint8_t *value, uint8_t value_len,
+                                 size_t total_len,
+                                 uint8_t *buf, size_t cap, size_t *outlen);
+
+/*
+ * dnet_cterm_found_short_parse - decode a short-TLV foundation message.
+ * Bounded: refuses (EBADLEN) a value_len that would overrun value_cap or run
+ * past `len` (ETRUNC), never reads past buf[len-1]. `consumed` (optional)
+ * receives 3 + value_len (the meaningful prefix; any trailing zero padding
+ * in `buf` is NOT consumed -- the caller's NSP segment already bounds the
+ * whole message). Returns DNET_CTERM_OK, DNET_CTERM_ETRUNC, DNET_CTERM_EBADLEN,
+ * or DNET_CTERM_EINVAL.
+ */
+int dnet_cterm_found_short_parse(const uint8_t *buf, size_t len,
+                                 uint8_t *msg_code, uint8_t *param_code,
+                                 uint8_t *value, size_t value_cap,
+                                 uint8_t *value_len, size_t *consumed);
+
+/*
+ * dnet_cterm_found_envelope_build - build a seg-2+-shaped msgtype-9 envelope:
+ * `09 00` + `len_field` (LE) + `body[0..body_len)`. `len_field` and
+ * `body_len` are DELIBERATELY SEPARATE arguments (see the provenance block
+ * above: the host's real envelope carries a length field that does not equal
+ * its own body length). Returns DNET_CTERM_OK, DNET_CTERM_ENOSPACE, or
+ * DNET_CTERM_EINVAL.
+ */
+int dnet_cterm_found_envelope_build(uint16_t len_field,
+                                    const uint8_t *body, size_t body_len,
+                                    uint8_t *buf, size_t cap, size_t *outlen);
+
+/*
+ * dnet_cterm_found_envelope_parse - decode a msgtype-9 envelope. Verifies the
+ * first two bytes are 0x0009 (LE); *len_field receives the embedded length
+ * field as sent (recorded, not trusted for framing); *body and *body_len
+ * point at the remaining bytes of `buf` (the ACTUAL bounded input, never the
+ * embedded length field, matches the framing this codec's own callers use --
+ * one foundation message per NSP data segment). *len_field_matches_body
+ * (optional) is set nonzero iff len_field == body_len, so a caller can
+ * observe the host-message discrepancy rather than have it hidden. Returns
+ * DNET_CTERM_OK, DNET_CTERM_ETRUNC, or DNET_CTERM_EINVAL.
+ */
+int dnet_cterm_found_envelope_parse(const uint8_t *buf, size_t len,
+                                    uint16_t *len_field,
+                                    const uint8_t **body, size_t *body_len,
+                                    int *len_field_matches_body);
+
+/*
+ * The three FIXED foundation messages the oracle captured with no
+ * session-variable content: the host's seg-1 Start (msg-code 1), the
+ * client's seg-1 response (msg-code 4), and the host's seg-2 envelope (its
+ * body is byte-identical across every capture examined). Each builds the
+ * literal oracle bytes -- no parameters, because none of these three varies
+ * with anything OVMX would plausibly choose. Returns DNET_CTERM_OK or
+ * DNET_CTERM_ENOSPACE.
+ */
+int dnet_cterm_found_host_start_build(uint8_t *buf, size_t cap, size_t *outlen);
+int dnet_cterm_found_client_start_build(uint8_t *buf, size_t cap, size_t *outlen);
+int dnet_cterm_found_host_seg2_build(uint8_t *buf, size_t cap, size_t *outlen);
+
+/*
+ * dnet_cterm_found_client_termchar_build - build the client's seg-2 envelope
+ * (terminal-characteristics negotiation) with WIDTH and PAGE substituted at
+ * their oracle-resolved offsets into the otherwise-fixed, oracle-captured
+ * body; every other byte is the literal specimen. `width`/`page` == 132/24
+ * reproduces real-cterm-ci.pcap byte-identically; 132/48 reproduces
+ * cterm-oracle-wid8.pcap byte-identically (both verified in
+ * tests/vmsdecnet/test_dnet_cterm.c). Returns DNET_CTERM_OK or
+ * DNET_CTERM_ENOSPACE.
+ */
+int dnet_cterm_found_client_termchar_build(uint16_t width, uint16_t page,
+                                           uint8_t *buf, size_t cap,
+                                           size_t *outlen);
+
+/*
+ * dnet_cterm_found_client_termchar_parse - decode a client seg-2 envelope and
+ * extract WIDTH/PAGE from their oracle-resolved offsets. Bounded: refuses
+ * (DNET_CTERM_ETRUNC) a body too short to hold both fields. Returns
+ * DNET_CTERM_OK, DNET_CTERM_ETRUNC, or DNET_CTERM_EINVAL.
+ */
+int dnet_cterm_found_client_termchar_parse(const uint8_t *buf, size_t len,
+                                           uint16_t *width, uint16_t *page);
+
+/* ======================================================================
+ * CLIENT FOUNDATION SEQUENCE + LIVE TERMINAL-I/O CODEC (rd vms-6165).
+ *
+ * ORACLE-GROUNDED (Rule 8), vaxlab-3 real-cterm-ci.pcap, the ACCEPTED
+ * VAX2(1.2)->VAX1(1.1) $ SET HOST that drove to a live DCL '$' (link id 8194,
+ * the golden session). Decoded byte-for-byte (see the full ordered timeline in
+ * the vms-6165 handoff). Every array below is copied verbatim from that
+ * capture -- NO field is invented; the ones whose meaning is not understood are
+ * reproduced literally, not rationalised (INV-6).
+ *
+ * WHAT THE ORACLE SHOWS (client == the SET HOST initiator, the role OVMX plays):
+ *   1. the HOST speaks first: it sends its seg-1 short-TLV (msg-code 0x01)
+ *      the instant the NSP link reaches RUN; the client REPLIES.
+ *   2. client seg-1  = dnet_cterm_found_client_start_build()   (msg-code 0x04)
+ *   3. after the host's first 09-envelope config message arrives, the client
+ *      bursts three 09-envelopes: seg-2 (termchar, WIDTH/PAGE), seg-3, seg-4.
+ *   4. the session is then BOUND; terminal I/O flows, ALSO inside 09-envelopes:
+ *        host  02 08 ... 0d 0a <text>   -> a screen WRITE (Username:/Password:/$ )
+ *        host  07 72 02 01 0d <text>    -> a formatted screen WRITE (banners)
+ *        host  0f 00 <handle> ...       -> a read-characteristics SOLICIT; the
+ *                                          client answers 0f 00 <same handle> +
+ *                                          its terminal characteristics
+ *        client 03 00 00 00 00 00 <len:2LE> <bytes> <term>  -> READ DATA (input)
+ *
+ * These functions serve the LIVE --set-host client (decnetd run_set_host_loop).
+ * They are DELIBERATELY SEPARATE from dnet_cterm_rx()/the flat spec-derived PDU
+ * set (which the OVMX<->OVMX self-tests still exercise): the real wire never
+ * uses the flat PDUs, so the live client speaks only the oracle bytes here.
+ * ====================================================================== */
+
+/* Client seg-3: the fixed 09-envelope the client sends after seg-2 (len field
+ * 0x000b; body byte-identical across the captured sessions). */
+int dnet_cterm_found_client_seg3_build(uint8_t *buf, size_t cap, size_t *outlen);
+
+/* Client seg-4: the fixed 09-envelope the client sends after seg-3 (len field
+ * 0x0016; carries the terminal-characteristics blob at the oracle's values --
+ * WIDTH/PAGE are left at the captured 132/24, not parameterised, to keep every
+ * byte oracle-identical: substituting them is un-oracle'd and deferred). */
+int dnet_cterm_found_client_seg4_build(uint8_t *buf, size_t cap, size_t *outlen);
+
+/* Client read-characteristics RESPONSE to a host 0f-00 solicit: the fixed
+ * 26-byte-body 09-envelope with the host's 2-byte read handle echoed at body
+ * offset 2-3 (the ONLY per-solicit-variable field the oracle shows -- #53
+ * echoes 04 34, #67 echoes 50 34, #70 echoes 51 34; everything else, WIDTH/PAGE
+ * included, is byte-identical). `handle` is the 2 bytes at body offset 2-3 of
+ * the host's 0f-00 solicit. Returns DNET_CTERM_OK or DNET_CTERM_ENOSPACE. */
+int dnet_cterm_found_client_readchar_build(const uint8_t handle[2],
+                                           uint8_t *buf, size_t cap,
+                                           size_t *outlen);
+
+/* Client READ DATA: the enveloped input line the terminal sends the host --
+ * 09-envelope wrapping `03 00 00 00 00 00 <datalen:2 LE> <data> <terminator>`
+ * (oracle #57 "SYSTEM"\r, #75 a DCL command\r). `datalen` counts `len` data
+ * bytes only, NOT the terminator (oracle-confirmed). Returns DNET_CTERM_OK,
+ * DNET_CTERM_ENOSPACE, or DNET_CTERM_EBADLEN/EINVAL. */
+int dnet_cterm_found_read_data_build(const uint8_t *data, size_t len,
+                                     uint8_t terminator,
+                                     uint8_t *buf, size_t cap, size_t *outlen);
+
+/* Kind of an inbound BOUND-phase 09-envelope, as classified by its body's
+ * opcode bytes. */
+enum dnet_cterm_found_term_kind {
+    DNET_CTERM_TK_NONE = 0,   /* not a recognised 09-envelope (ignore)          */
+    DNET_CTERM_TK_WRITE,      /* host WRITE-only screen output (07 72) -> display */
+    DNET_CTERM_TK_START_READ, /* host prompt-and-read (02 08): display text AND  */
+                              /*   solicit exactly one input line (rd vms-6165)  */
+    DNET_CTERM_TK_READ_ATTR,  /* host read-characteristics solicit (0f 00)      */
+    DNET_CTERM_TK_OTHER       /* a recognised 09-envelope we only NSP-ack        */
+};
+
+/*
+ * dnet_cterm_found_terminal_rx - classify one inbound BOUND-phase 09-envelope
+ * (the payload delivered out of an NSP data segment) and, for a WRITE, extract
+ * the displayable text; for a READ_ATTR, extract the 2-byte read handle.
+ *
+ *   *kind      -> which envelope this is (see enum above).
+ *   text / *textlen (WRITE and START_READ, may be NULL) -> the screen bytes to
+ *              display, bounded by textcap. For a 02-08 START_READ these are the
+ *              body bytes from offset 17 (the oracle-fixed text offset -- the
+ *              prompt to show before soliciting one input line); for a 07-72
+ *              WRITE the record markers (07 72 02 01 0d) and NUL separators are
+ *              stripped and the readable text copied out (best-effort -- flagged
+ *              for lab confirmation).
+ *   handle (READ_ATTR only, may be NULL) -> the 2-byte handle to echo back.
+ *
+ * FULLY BOUNDED: never reads past buf[len-1]; a body too short for its declared
+ * shape yields DNET_CTERM_TK_OTHER (never an over-read). Returns DNET_CTERM_OK
+ * on any well-formed input (kind says what it was), DNET_CTERM_ETRUNC/EINVAL on
+ * a null/too-short buffer.
+ */
+int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
+                                 enum dnet_cterm_found_term_kind *kind,
+                                 uint8_t *text, size_t textcap, size_t *textlen,
+                                 uint8_t handle[2]);
+
+/*
+ * ---- Terminal-input queue (rd vms-6165: CTERM input is PROMPT-DRIVEN) -----
+ *
+ * The oracle (real-cterm-ci.pcap, link 8194) shows every host 02-08 message
+ * (a TK_START_READ, above) directly soliciting exactly ONE client 03-00 Read
+ * Data reply -- there is no distinct "Start Read" opcode; the WRITE-with-text
+ * message *is* the solicit. Frame pairs: seg7 "Username: " -> client seg6
+ * "SYSTEM"; seg8 "Password: " -> client seg7 "system"; the "$ " DCL prompt ->
+ * client's command line. A client that sends input BEFORE a solicit arrives
+ * (rd vms-6165 lab iter 2: OVMX blasted its whole stdin as one segment ~19.5ms
+ * before the Username: prompt existed on the wire) is a genuine LOGINOUT
+ * read-timeout (%LOGIN-F-CMDINPUT), not a protocol reject.
+ *
+ * This queue buffers raw local-terminal bytes as they arrive and releases
+ * them ONE LINE AT A TIME, only when the caller explicitly asks (a pull, not
+ * a push) -- so nothing is ever emitted ahead of a solicit by construction.
+ * A line ends at the first CR or LF; a CRLF/LFCR pair collapses to one
+ * terminator, and the terminator itself is dropped (the Read Data envelope
+ * carries its own, oracle-fixed 0x0d). Local EOF does NOT discard whatever is
+ * still queued: dnet_cterm_inq_eof() only marks that any bytes remaining
+ * without a terminator are the FINAL line, still dequeuable.
+ */
+#define DNET_CTERM_INQ_CAP   4096u   /* local-input queue capacity, bytes */
+
+struct dnet_cterm_inq {
+    uint8_t buf[DNET_CTERM_INQ_CAP];
+    size_t  len;
+    int     eof;
+};
+
+/* Reset the queue to empty, not-EOF. */
+void dnet_cterm_inq_init(struct dnet_cterm_inq *q);
+
+/* Append `n` raw bytes read from the local terminal to the tail of the queue.
+ * Bytes beyond DNET_CTERM_INQ_CAP are refused (returns the count actually
+ * appended, which may be less than n -- never overruns the buffer). */
+size_t dnet_cterm_inq_feed(struct dnet_cterm_inq *q, const uint8_t *bytes, size_t n);
+
+/* Mark local input EOF. Does not clear or discard anything already queued. */
+void dnet_cterm_inq_eof(struct dnet_cterm_inq *q);
+
+/* Dequeue ONE line from the front of the queue (terminator stripped, never
+ * included in `line`). Returns 1 and fills line / *linelen when a complete line
+ * (or, after EOF, a final unterminated remainder) is available; returns 0
+ * (queue not touched) when there is nothing to hand back yet -- the caller
+ * must wait for the next dnet_cterm_inq_feed() or dnet_cterm_inq_eof(). Never
+ * overruns `line`; a line longer than linecap is truncated to linecap. */
+int dnet_cterm_inq_dequeue(struct dnet_cterm_inq *q, uint8_t *line,
+                           size_t linecap, size_t *linelen);
 
 /* ======================================================================
  * DNA Session Control CONNECT message -- the inbound SET HOST's addressing
@@ -331,6 +639,21 @@ int dnet_cterm_sc_connect_build(uint8_t dst_object,
                                 const char *username, const char *password,
                                 const char *account,
                                 uint8_t *buf, size_t cap, size_t *outlen);
+
+/*
+ * dnet_cterm_sc_connect_build_task - build a Session Control CONNECT to a NAMED
+ * task object (DNA format 1: objtype 0 + counted task name), the $ASSIGN
+ * NODE::"TASK=name" addressing for DECnet task-to-task (rd vms-dda). Same source
+ * + access-control fields as dnet_cterm_sc_connect_build, but the destination is
+ * a NAME and there is no object-42 USRDATA field. Returns DNET_CTERM_OK, or
+ * EINVAL / EBADLEN / ENOSPACE.
+ */
+int dnet_cterm_sc_connect_build_task(const char *dst_task,
+                                     const char *src_user,
+                                     uint16_t src_grpcode, uint16_t src_usrcode,
+                                     const char *username, const char *password,
+                                     const char *account,
+                                     uint8_t *buf, size_t cap, size_t *outlen);
 
 /*
  * dnet_cterm_sc_connect_parse - decode a Session Control CONNECT message.
@@ -479,8 +802,10 @@ enum dnet_cterm_event {
 /*
  * A CTERM session. Pure state: no socket. Holds the role, the FSM state, the
  * negotiated characteristics, and honest counters. `last` carries the most
- * recently decoded inbound message so the caller can read its fields after an
- * event (the delivered terminal payload is in last.data / last.datalen).
+ * recently decoded inbound TERMINAL-I/O message so the caller can read its
+ * fields after an event (the delivered terminal payload is in last.data /
+ * last.datalen); it is not used during the foundation phase (rd vms-bd0),
+ * which has no per-peer name field on the real wire (see dnet_cterm_bind()).
  */
 struct dnet_cterm_session {
     enum dnet_cterm_role  role;
@@ -492,9 +817,24 @@ struct dnet_cterm_session {
     uint32_t char_flags;
     uint8_t  term_type;
 
-    char     peer_name[DNET_CTERM_MAX_NAME + 1]; /* peer's Bind terminal id */
+    /* HOST role only: set once the real foundation short-TLV Bind (msg-code 4
+     * from the client) has been seen -- the guard dnet_cterm_bind_accept()
+     * checks before replying, replacing the old `last.type == BIND` check now
+     * that `last` no longer carries a foundation message (rd vms-bd0). */
+    int      found_bind_seen;
 
-    struct dnet_cterm_msg last;  /* last decoded inbound message (post-rx) */
+    /* TERMINAL (live --set-host client) role only, rd vms-6165: the host-speaks-
+     * first foundation sequencer state. found_host_start_seen is set when the
+     * host's seg-1 short-TLV (msg-code 0x01) arrives; found_host_config_seen
+     * when its first 09-envelope config message arrives; found_step tracks which
+     * client foundation message dnet_cterm_client_found_next() emits next
+     * (0=seg1 .. 4=done/BOUND). Driven ONLY by the vms-6165 client functions,
+     * never by dnet_cterm_rx()/the flat PDU path. */
+    int      found_host_start_seen;
+    int      found_host_config_seen;
+    int      found_step;
+
+    struct dnet_cterm_msg last;  /* last decoded inbound TERMINAL-I/O message */
 
     /* Honest counters (reported on the SET HOST surface; never fabricated). */
     unsigned long writes_sent, writes_recv;
@@ -508,17 +848,74 @@ struct dnet_cterm_session {
  */
 int dnet_cterm_session_init(struct dnet_cterm_session *s, enum dnet_cterm_role role);
 
+/* ---- LIVE --set-host client foundation FSM (rd vms-6165) ----------------
+ *
+ * The host-speaks-first foundation driver for the OUTBOUND $ SET HOST client.
+ * Unlike dnet_cterm_bind()/dnet_cterm_rx() (which keep the flat spec-derived
+ * OVMX<->OVMX self-test flow, and in which the TERMINAL wrongly speaks first),
+ * these reproduce the real wire: the client waits for the host, then replies.
+ */
+
 /*
- * dnet_cterm_bind - (TERMINAL role, CLOSED -> BINDING) build the Bind PDU that
- * opens a terminal session, advertising `term_name` as the terminal identifier.
+ * dnet_cterm_client_open - (TERMINAL role, CLOSED -> BINDING) arm the client
+ * foundation FSM once the NSP logical link reaches RUN. Sends NOTHING -- on the
+ * real wire the HOST sends the first foundation message; the client waits for
+ * it. Returns DNET_CTERM_OK, DNET_CTERM_ESTATE if not CLOSED/terminal, EINVAL.
+ */
+int dnet_cterm_client_open(struct dnet_cterm_session *s);
+
+/*
+ * dnet_cterm_client_found_rx - (TERMINAL role, BINDING) feed one inbound
+ * foundation message (host seg-1 short-TLV, or a host 09-envelope) to the
+ * client FSM. Records which host messages have been seen so
+ * dnet_cterm_client_found_next() can emit the client's replies in order. Does
+ * NOT decode the flat PDU set. `*progressed` (optional) is set nonzero iff this
+ * message advanced the foundation gate. Returns DNET_CTERM_OK, or a negative
+ * DNET_CTERM_E* on a null/undecodable message (never over-reads).
+ */
+int dnet_cterm_client_found_rx(struct dnet_cterm_session *s,
+                               const uint8_t *buf, size_t len, int *progressed);
+
+/*
+ * dnet_cterm_client_found_next - (TERMINAL role, BINDING) pull the NEXT client
+ * foundation PDU to send, given how far the host has driven the exchange:
+ *   step 0 + host seg-1 seen   -> client seg-1 (client_start), step 1
+ *   step 1 + host config seen  -> client seg-2 (termchar, `width`/`page`), step 2
+ *   step 2                     -> client seg-3, step 3
+ *   step 3                     -> client seg-4, step 4, state -> BOUND
+ * When nothing is due yet (still waiting on the host), returns DNET_CTERM_OK
+ * with *outlen == 0. The caller drains it (call until *outlen == 0) after each
+ * dnet_cterm_client_found_rx(). Returns DNET_CTERM_OK / ENOSPACE / ESTATE.
+ */
+int dnet_cterm_client_found_next(struct dnet_cterm_session *s,
+                                 uint16_t width, uint16_t page,
+                                 uint8_t *out, size_t cap, size_t *outlen);
+
+/*
+ * dnet_cterm_bind - (TERMINAL role, CLOSED -> BINDING) build the terminal's
+ * real foundation short-TLV message (rd vms-bd0: msg-code 4, the byte-exact
+ * oracle form dnet_cterm_found_client_start_build() emits). `term_name` is
+ * accepted for API compatibility with existing callers but is NOT on the
+ * real wire -- the foundation phase carries no terminal-name string -- and
+ * is ignored.
+ *
+ * KNOWN GAP (vms-6165): the oracle shows the HOST speaks first on the real
+ * wire (its msg-code-1 message), not the terminal; this FSM still has the
+ * terminal originate the exchange. Fixing that ordering, and wiring the
+ * seg-2+ envelope negotiation this simple 2-message FSM does not send at
+ * all, is the next rung's job -- this rung proves the byte encodings only.
  * Returns DNET_CTERM_OK, DNET_CTERM_ESTATE if not CLOSED/terminal, or E*.
  */
 int dnet_cterm_bind(struct dnet_cterm_session *s, const char *term_name,
                     uint8_t *out, size_t cap, size_t *outlen);
 
 /*
- * dnet_cterm_bind_accept - (HOST role, after a BIND_IND) build the Bind Accept
- * PDU (status 0), advertising `host_name`, and move the session to BOUND.
+ * dnet_cterm_bind_accept - (HOST role, after a BIND_IND) build the host's
+ * real foundation short-TLV message (rd vms-bd0: msg-code 1, the byte-exact
+ * oracle form dnet_cterm_found_host_start_build() emits), and move the
+ * session to BOUND. `host_name` is accepted for API compatibility but is NOT
+ * on the real wire and is ignored (see dnet_cterm_bind() above; same
+ * vms-6165 ordering gap applies).
  * Returns DNET_CTERM_OK, DNET_CTERM_ESTATE, or E*.
  */
 int dnet_cterm_bind_accept(struct dnet_cterm_session *s, const char *host_name,
@@ -577,11 +974,16 @@ int dnet_cterm_unbind(struct dnet_cterm_session *s, uint8_t reason,
 
 /*
  * dnet_cterm_rx - feed one inbound CTERM PDU (the payload delivered out of an NSP
- * data segment) into the session FSM. Decodes it into s->last, advances the
- * state, and reports the higher-layer event in *event (may be NULL). A message
- * invalid for the current state/role is reported honestly as DNET_CTERM_EV_NONE
- * with no fabricated transition. Returns DNET_CTERM_OK, or a negative
- * DNET_CTERM_E* on a null/undecodable PDU.
+ * data segment) into the session FSM. Before the session is BOUND, this
+ * decodes the real foundation short-TLV form (dnet_cterm_found_short_parse,
+ * rd vms-bd0) -- the byte a general dnet_cterm_decode() would read as
+ * DNET_CTERM_MSG_CHARACTERISTICS collides with the client's real foundation
+ * msg-code (4), so which decoder runs is gated on session phase, never
+ * guessed from the byte alone. Once BOUND, terminal-I/O PDUs decode into
+ * s->last as before. Reports the higher-layer event in *event (may be NULL).
+ * A message invalid for the current state/role is reported honestly as
+ * DNET_CTERM_EV_NONE with no fabricated transition. Returns DNET_CTERM_OK, or
+ * a negative DNET_CTERM_E* on a null/undecodable PDU.
  */
 int dnet_cterm_rx(struct dnet_cterm_session *s, const uint8_t *buf, size_t len,
                   enum dnet_cterm_event *event);

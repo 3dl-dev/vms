@@ -470,6 +470,19 @@ struct vms_lock_entry {
     struct vms_lock_resource *resource;
     struct vms_proc     *proc;
     int                 waiting;        /* 1 if on waiting list */
+    uint8_t             quorum_stall;   /* THE QUORUM HANG (FC-P8.1, rd vms-b6d,
+                                         * src/kernel-core/vms_dlm_quorum.h). 1 =
+                                         * this request is on the waiting queue
+                                         * because the CLUSTER has lost quorum,
+                                         * NOT because a holder blocks it. It is
+                                         * therefore not an edge in any wait-for
+                                         * graph (check_deadlock skips it) and no
+                                         * $DEQ may grant it -- only
+                                         * vms_lock_quorum_resume() clears it, on
+                                         * the connection manager's regain edge.
+                                         * Mirrored in src/kernel-netbsd/
+                                         * vms_internal.h and tests/cluster/host/
+                                         * lock_host_internal.h. */
     int                 refcount;       /* reference count for safe lookup */
     wait_queue_head_t   wait_wq;        /* sync ENQ ($ENQW): blocker sleeps here */
     int                 grant_state;    /* sync wake: 0=pending, SS__NORMAL=granted,
@@ -1030,6 +1043,14 @@ struct vms_device {
     uint32_t            dynamic_term;
 
     /*
+     * The SSH-pre-authenticated user name a network daemon vouched for this
+     * RTAn: (rd vms-65b), stamped by VMS_IOCTL_TERM_SETLOGIN and read back by
+     * the $CREPRC(LOGINOUT) child bound here (VMS_IOCTL_TERM_GETLOGIN). Empty
+     * unless a privileged daemon stamped it. Written/read under `lock`.
+     */
+    char                netlogin_user[VMS_USERNAME_SIZE];
+
+    /*
      * Every channel currently assigned to this device, by any process.
      * The device has to know this to decide when implicit ownership
      * ends: it ends when the owner has no channel left, not when any
@@ -1237,6 +1258,11 @@ long vms_ioctl_cluster_diag_csb(struct vms_proc *proc, unsigned long arg);
  * against vms_cluster_node()'s real vms_cnxman.c objects. Read-only; the
  * executive has no console log, so this is how the lab sees what the join did. */
 long vms_ioctl_cluster_diag_join(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c): the lock manager's WIRE ARM,
+ * projected under the fork mutex from vms_cluster_node()'s real struct
+ * vms_dlm_scs. The half of the cross-node proof a packet capture cannot give:
+ * which executive's arm emitted the op-0x03/op-0x04 on the segment. */
+long vms_ioctl_cluster_diag_dlm(struct vms_proc *proc, unsigned long arg);
 /* VMS_IOCTL_CLUSTER_SETCLUEVT (FC-P3.8): $SETCLUEVT's executive-side
  * registration against vms_cluster_node()'s struct vms_cnxman. */
 long vms_ioctl_cluster_setcluevt(struct vms_proc *proc, unsigned long arg);
@@ -1309,6 +1335,8 @@ long vms_ioctl_disk_resolve(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_create(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_delete(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg);
+long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg);
 /*
  * Internal (non-ioctl) twin of disk_resolve for an in-executive caller: the
  * Files-11 ODS-2 ACP $MOUNT (vms-127) resolves a canonical disk-unit name to its

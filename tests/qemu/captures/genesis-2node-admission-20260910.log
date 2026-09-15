@@ -1,0 +1,79 @@
+# 2-node cluster rig -- ADMISSION run with the op-0x06 MEMBERSHIP builder
+# rd vms-f6b / vms-1ee. Image ovmx-genesis-rig:13 on k3s-worker, KVM.
+# Every value is read back out of that node's executive (INV-6).
+
+=== OVMX 2-node cluster GENESIS rig (rd vms-f6b) ===
+mode=proof
+accel=kvm -cpu host group=2026 recnx=8s stagger=30s
+node A: OVMXA/1025 VOTES=1 EXPECTED_VOTES=1 VAXCLUSTER=2
+node B: OVMXB/1026 VOTES=0          VAXCLUSTER=2
+
+--- powering on node A (it must hear nobody for 8s, then found) ---
+--- powering on node B (it must join what A formed) ---
+
+=== node A: what its executive held (ttyS1) ===
+
+RIG-A-REGISTER status=1 vms_pid=0x10000001
+RIG-A-SYSGEN status=1 scsnode=OVMXA sysid=1025 votes=1 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-A-START status=1 port_up=1 state=2
+RIG-B-REGISTER status=1 vms_pid=0x10000001
+RIG-B-SYSGEN status=1 scsnode=OVMXB sysid=1026 votes=0 expected_votes=1 vaxcluster=2 group=2026 recnx=8 credits=32
+RIG-B-START status=1 port_up=1 state=2
+
+--- node A: the last executive poll ---
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-CLUB t=150s state=MEMBER(3) role=founder csid=0x00010001 coord=0x00010001 nodes=2 cevotes=1 quorum=1 expected=1 epoch=2 n_csb=2 transition=1 bitmap=0x00000000
+RIG-A-GETSYI member=1 nodes=2 votes=1 quorum=1 csid=0x00010001
+RIG-A-CSB i=0 node=OVMXA  sysid=1025 csid=0x00010001 state=MEMBER
+RIG-A-CSB i=1 node=-      sysid=1026 csid=0x00010002 state=MEMBER
+RIG-A-FINAL role=founder member=1 state=MEMBER csid=0x00010001 cn=2 quorum=1 cevotes=1 epoch=2 projections=agree
+RIG-A-VC i=0 peer_sysid=1026 state=3 send_seq=176 recv_seq=166 peer_recv_ack=175 unacked=0 retx=0 rx_gaps=0 credits_send=32 credits_recv=0 down_reason=0
+
+--- node B: the last executive poll ---
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=- state=OPEN
+RIG-B-CLUB t=110s state=MEMBER(3) role=member-no-coordinator csid=0x00010002 coord=- nodes=1 cevotes=0 quorum=0 expected=0 epoch=2 n_csb=2 transition=1 bitmap=0x00000006
+RIG-B-GETSYI member=1 nodes=1 votes=0 quorum=0 csid=0x00010002
+RIG-B-CSB i=0 node=OVMXB  sysid=1026 csid=0x00010002 state=MEMBER
+RIG-B-CSB i=1 node=-      sysid=1025 csid=- state=OPEN
+RIG-B-FINAL role=member-no-coordinator member=1 state=MEMBER csid=0x00010002 cn=1 quorum=0 cevotes=0 epoch=2 projections=agree
+RIG-B-VC i=0 peer_sysid=1025 state=3 send_seq=155 recv_seq=162 peer_recv_ack=154 unacked=0 retx=0 rx_gaps=0 credits_send=32 credits_recv=0 down_reason=0
+
+--- node A executive transcript (deduplicated) ---
+      1 [    4.410862] %CNXMAN, waiting to form or join an OpenVMS Cluster
+      1 [   12.605698] %CNXMAN, this node has quorum by its own votes: forming an OpenVMS Cluster
+      1 [   12.611065] %CNXMAN, this node is a member of the cluster
+      1 [   12.615896] %CNXMAN, completed VAXcluster state transition
+      1 [   35.134685] %PEA0, channel verified
+      1 [   35.175848] %PEA0, virtual circuit open
+      1 [   35.550915] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+      1 [   35.564915] %CNXMAN, proposing addition of a system to the cluster
+      1 [   35.634966] %CNXMAN, lock directory weight vector not rebuilt: LOCKDIRWT known for some members and not others
+      1 [   35.642545] %CNXMAN, system 0000000000000402 was added to the cluster
+      1 [   36.157725] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+      1 [   36.166274] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+      1 [   37.309688] %CNXMAN, waiting to form or join an OpenVMS Cluster
+      1 [   42.429688] %CNXMAN, membership request to the selected member not answered
+
+--- node B executive transcript (deduplicated) ---
+      1 [    4.408354] %CNXMAN, waiting to form or join an OpenVMS Cluster
+      1 [    5.181261] %PEA0, channel verified
+      1 [    5.222427] %PEA0, virtual circuit open
+      1 [    5.415705] %CNXMAN, a connection manager was discovered on the interconnect
+      1 [    5.424150] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+      1 [    5.722386] %CNXMAN, committed member count differs from the transition nodemap
+      1 [    5.727385] %CNXMAN, this node is a member of the cluster
+      1 [    5.733378] %CNXMAN, VAXcluster state transition in progress
+      1 [    5.737300] %CNXMAN, system 0000000000000402 was added to the cluster
+      1 [    6.377520] %CNXMAN, another system is coordinating a state transition; deferring
+      1 [    6.523366] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+      1 [    6.567629] %CNXMAN, ready to consider a membership request again
+      1 [   20.715407] %CNXMAN, another system is coordinating a state transition; deferring
+      1 [   20.839726] %CNXMAN, ready to consider a membership request again
+
+=== verdict inputs (each value was read out of that node's executive) ===
+  node A: role=founder member=1 cn=2 csid=0x00010001
+  node B: role=member-no-coordinator member=1 cn=1 csid=0x00010002
+
+==========================================

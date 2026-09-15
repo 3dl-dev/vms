@@ -455,7 +455,12 @@ the loop closes:
 1. **Kbuild host-tool inventory (§6.2).** Instrument a real `linux-6.12` build,
    capture every exec'd binary + shell feature. Pure investigation, no OVMX
    dependency, and it is the input that de-risks the single softest estimate.
-   **Highest-value early item.**
+   **Highest-value early item.** ✅ **DONE (vms-bab F0, 2026-09-11) — measured
+   result in [design-kernel-host-tool-inventory.md](design-kernel-host-tool-inventory.md):**
+   linux-6.12.103, 66,892 execve calls; a GCC+binutils, a **POSIX `sh` (dash — no
+   bash needed for the core build)**, ~35 coreutils, `gzip`/`bc`/`perl`(minimal)/
+   `cpio`/`kmod`/`openssl`, plus the ability to compile ~17 in-tree host tools
+   (`fixdep`/`objtool`/`modpost`/…). Bounded GNV-scale POSIX layer, not open-ended.
 2. **binutils-as-OVMX-image spike (F1).** binutils is the smaller, more portable
    half of the compiler port and is a prerequisite of GCC; standing up
    `as`/`ld`/`ar` as OVMX images is useful the moment it exists (it strengthens the

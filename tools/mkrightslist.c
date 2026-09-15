@@ -81,6 +81,13 @@ static const struct seed_id g_seed[] = {
     { "GUEST",       (128u << 16) | 129u, 0 },  /* [128,129]                     */
     { "USER1",       (128u << 16) | 130u, 0 },  /* [128,130]                     */
     { "USER2",       (128u << 16) | 131u, 0 },  /* [128,131]                     */
+    /* TCPIP$DAYTIME [128,134]: the low-priv TCP/IP service account INETD drops
+     * to before launching TCPIP$DAYTIME.EXE (rd vms-8bd, R4 G1). An active
+     * account gets its UIC identifier so F$IDENTIFIER resolves the name (the
+     * DISABLED account above is the deliberate exception -- disabled accounts
+     * carry no identifier). The persona drop itself reads SYSUAF, not
+     * RIGHTSLIST; this keeps the two seeds consistent. */
+    { "TCPIP$DAYTIME", (128u << 16) | 134u, 0 },  /* [128,134]                   */
 };
 
 static void build_record(const struct seed_id *s, rdb_identifier_record_t *out)

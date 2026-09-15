@@ -24,10 +24,11 @@ sudo apt install docker.io
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `BUILD_TESTS` | ON | Build test programs |
-| `BUILD_TOOLS` | ON | Build vms_login, vms_help, vms_ssh_auth |
-| `BUILD_FUSE` | OFF | Build FUSE ODS-2 driver (not yet implemented) |
-| `OVMX_STATIC` | OFF | Static linking with musl-gcc |
+| `BUILD_TESTS` | ON (OFF when cross-compiling) | Build test programs |
+| `BUILD_TOOLS` | ON | Build the VMS tools (vms_login/LOGINOUT, vms_help/HELP.EXE, vms_authorize/AUTHORIZE, vms_mail, vms_monitor, vms_initialize, PRODUCT.EXE, mksysuaf, mkrightslist, …) |
+| `BUILD_FUSE` | OFF | Build the optional dev-only FUSE ODS-2 driver (requires libfuse) — a convenience for inspecting volumes on the host; NOT the runtime path, which is the kernel-resident Files-11 ACP |
+| `OVMX_STATIC` | OFF | Build all libraries as static and link statically (musl-gcc; suitable for initramfs) |
+| `OVMX_IMGACT` | OFF | Build shareable images with `PT_INTERP=IMGACT.EXE` (musl, QEMU only; mutually exclusive with `OVMX_STATIC`) |
 | `CMAKE_BUILD_TYPE` | — | Debug, Release, RelWithDebInfo |
 
 ## Development Build
@@ -45,7 +46,7 @@ cmake --build build -j$(nproc)
 
 **Outputs** in `build/`:
 - Libraries: `libvms.so`, `libvmsprocess.so`, `libvmslnm.so`, `libvmsfs.so`, `librms.so`, `libvmssys.a`
-- Executables: `vmsdcl`, `vms_login`, `vms_help`, `vms_ssh_auth`, `ovmx_init`
+- Executables: `vmsdcl`, `vms_login`, `vms_help`, `vms_authorize`, `vms_mail`, `vms_monitor`, `vms_initialize`, `ovmx_init` (deployed as `STARTUP.EXE`)
 - Tests: `test_vmssys_*`, integration tests
 
 ## Static Build
@@ -66,20 +67,24 @@ cmake --build build-static -j$(nproc)
 Builds a minimal Linux system with OVMX as the userspace.
 
 ```bash
-# Build kernel + initramfs (outputs to dist/)
+# Build kernel + initramfs (outputs to dist/boot/)
 docker build -f distro/Dockerfile.bootable -o dist .
 
 # Boot with QEMU
-./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+./distro/boot/run-qemu.sh dist/boot/vmlinuz dist/boot/initramfs-ovmx.cpio.gz
 
 # Custom memory (default 512M)
-MEMORY=1G ./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+MEMORY=1G ./distro/boot/run-qemu.sh dist/boot/vmlinuz dist/boot/initramfs-ovmx.cpio.gz
 ```
 
 The bootable image includes:
-- Stock Ubuntu kernel (vmlinuz)
-- Initramfs with busybox, static OVMX binaries, kernel modules
-- `init-wrapper.sh` as PID 1: mounts filesystems, loads vms.ko + vmsfs.ko, launches ovmx_init
+- A kernel.org kernel (6.12.103, pinned + integrity-checked), built from source
+  with the OVMX modules (`vms.ko`) overlaid in-tree — not a stock Ubuntu kernel
+  package
+- Initramfs with static OVMX binaries and kernel modules
+- `STARTUP.EXE` (`ovmx_init`) itself as `/init`, i.e. PID 1 — no wrapper script.
+  `vmsfs.ko` has been retired; the ODS-2 filesystem codec is compiled into
+  `vms.ko` and served through the Files-11 ACP.
 
 ## Base OS vs. Layered Products (kits)
 
@@ -113,14 +118,21 @@ identical layered-product kit pattern.
 
 ## Kernel Modules
 
-Built out-of-tree against installed kernel headers. Not integrated into CMake.
+The executive is a single kernel module, `vms.ko`. Its substrate-agnostic
+facilities live in `src/kernel-core/`; `src/kernel/` holds the Linux glue (the
+`/dev/vms` char device + backend primitives). For the distro kernel it is built
+**in-tree** under `drivers/ovmx/` (see
+[`adding-an-ovmx-kernel-module.md`](adding-an-ovmx-kernel-module.md)); the
+standalone build below is out-of-tree against installed headers, used by the
+QEMU test harness. It is not integrated into CMake. There is no separate
+`vmsfs.ko` — the ODS-2 codec and Files-11 ACP are compiled into `vms.ko` (the
+`vmsfs.ko` VFS mount was retired, vms-165).
 
 ```bash
-# Main VMS module (access control, ASTs, event flags, locks)
+# The VMS executive: access modes, ASTs, event flags, mailboxes, the process
+# table, the device table, the lock manager, the logical-name manager, the
+# ODS-2/Files-11 ACP, and the executive-resident cluster stack (SCS/CNXMAN/DLM)
 make -C src/kernel
-
-# VMS filesystem module
-make -C src/kernel/vmsfs
 
 # Specify kernel version
 make -C src/kernel KDIR=/lib/modules/6.8.0-50-generic/build
@@ -146,12 +158,12 @@ Boots a QEMU VM, loads vms.ko, runs test programs, captures serial output.
 tests/qemu/run_tests.sh
 ```
 
-Test programs (5 total, 62 assertions):
+Test programs (see `tests/qemu/` for the full, growing list), including:
 - `test_kmod_access` — access control via ioctl
 - `test_kmod_ast` — AST delivery
-- `test_kmod_eflag` — event flag operations
-- `test_kmod_lock` — lock manager
-- `test_kmod_vmsfs` — VMS filesystem operations
+- `test_kmod_eflag` / `test_kmod_eflag_mproc` — event flag operations (single- and multi-process)
+- `test_kmod_lock` / `test_kmod_lock_mproc` / `test_kmod_lock_sync` — lock manager
+- `test_kmod_disk` — ODS-2/Files-11 ACP disk operations
 
 ### Integration Tests
 

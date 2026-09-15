@@ -30,7 +30,9 @@ Commands are registered in the `builtin_verbs[]` table. VMS file specifications,
 | DUMP | DU | Display file contents in hex/ASCII |
 | EDIT | ED | Invoke the text editor |
 | EXIT | EX | Terminate command procedure or session |
+| FTP | FTP | Transfer files to/from a remote host (TCP/IP client) |
 | HELP | HE | Display help information |
+| INITIALIZE | INIT | Initialize (format) a volume |
 | INQUIRE | INQ | Read input and assign to symbol |
 | INSTALL | INST | Manage known images |
 | LIBRARY | LIB | Manage text/help/object libraries |
@@ -41,6 +43,7 @@ Commands are registered in the `builtin_verbs[]` table. VMS file specifications,
 | MOUNT | MOU | Mount a volume on a device |
 | OPEN | OP | Open a file for I/O |
 | PHONE | PHO | Interactive conversation utility |
+| PING | PIN | Send ICMP echo requests to a host (TCP/IP) |
 | PIPE | PIP | Execute a DCL pipeline |
 | PRINT | PRI | Queue a file for printing |
 | PRODUCT | PROD | Software product management |
@@ -61,6 +64,7 @@ Commands are registered in the `builtin_verbs[]` table. VMS file specifications,
 | SYSGEN | SYSG | System parameter utility |
 | SYSMAN | SYSM | System management utility |
 | TCPIP | TCP | TCP/IP network management |
+| TELNET | TEL | Connect to a remote host (TCP/IP TELNET client) |
 | TYPE | TY | Display file contents |
 | WAIT | WA | Wait for a time interval |
 | WRITE | WR | Write a record to a file |
@@ -561,7 +565,10 @@ Display software license information.
 
 ### SHOW CLUSTER
 
-Display cluster information (returns "not a member of a cluster").
+Display cluster information. Reads real cluster membership from the
+executive (`vms_kif_cluster_get_members`); if the system is a cluster
+member it prints the actual member table (nodes, CSIDs, status), otherwise
+`%SYSTEM-I-NOTMEMBER`.
 
 ### SHOW NETWORK
 
@@ -765,7 +772,12 @@ SET TIME=dd-mmm-yyyy:hh:mm:ss
 
 ### SET HOST
 
-Connect to a remote system (stub).
+```
+SET HOST node
+```
+
+Outbound DECnet remote login (CTERM) to another node. Real, not a stub —
+see `src/vmsdcl/dcl_cmd_set.c` (`cmd_set_host`).
 
 ### SET AUDIT
 
@@ -1005,7 +1017,10 @@ SUBMIT filespec
 - `/NOTIFY` -- Notify on completion
 - `/JOB_NAME=name` -- Job name
 
-**VMS Compatibility:** Fully compatible.
+**VMS Compatibility:** Submit-only. The job is really enqueued (a real
+`QMAN$MASTER.DAT` entry), but there is no batch engine — nothing ever
+dequeues and runs it. A procedure that submits a job and waits on it hangs
+forever.
 
 ### PRINT
 
@@ -1022,7 +1037,8 @@ PRINT filespec
 - `/JOB_NAME=name` -- Job name
 - `/AFTER=time` -- Delay execution
 
-**VMS Compatibility:** Fully compatible.
+**VMS Compatibility:** Submit-only, same as SUBMIT — the entry is queued but
+nothing ever dequeues and prints it.
 
 ---
 
@@ -1055,6 +1071,58 @@ TCPIP subcommand [parameters]
 **TCPIP SET ROUTE** -- Add or remove routes
 
 **VMS Compatibility:** Partial. Implements the most common TCPIP management subcommands.
+
+### TELNET
+
+Connect to a remote host with the TCP/IP TELNET client.
+
+```
+TELNET host [port]
+```
+
+**Parameters:**
+- host -- Remote host (dotted-quad IPv4 literal; no name resolution)
+- port -- (Optional) TCP port (default 23)
+
+Opens an interactive TELNET session over the executive `BGn:` device
+(`$ASSIGN TCPIP$DEVICE:` + `$QIO`).
+
+**VMS Compatibility:** Partial. Client only; IPv4 literal only.
+
+### FTP
+
+Transfer files to or from a remote host with the TCP/IP FTP client.
+
+```
+FTP host [port]
+```
+
+**Parameters:**
+- host -- Remote host (dotted-quad IPv4 literal; no name resolution)
+- port -- (Optional) TCP port (default 21)
+
+Connects over the executive `BGn:` device.
+
+**VMS Compatibility:** Partial. Client only; IPv4 literal only.
+
+### PING
+
+Send ICMP echo requests to a host and report the results.
+
+```
+PING host [/COUNT=n]
+```
+
+**Parameters:**
+- host -- Target host (dotted-quad IPv4 literal; no name resolution)
+
+**Qualifiers:**
+- `/COUNT=n` -- Number of echo requests (default 4)
+
+Sends real ICMP echo requests over a raw socket on the executive `BGn:` device.
+If the `BGn:` device is unavailable, reports `%PING-E-NONET` / `SS$_NOSUCHDEV`.
+
+**VMS Compatibility:** Partial. IPv4 literal only.
 
 ---
 
@@ -1204,7 +1272,10 @@ MOUNT device: [volume-label] [logical-name]
 - `/SYSTEM` -- System-wide mount
 - `/FOREIGN` -- Mount without file structure validation
 
-Maps to Linux mount/bind operations.
+Mounts the ODS-2 volume executive-global through the Files-11 ACP
+(`vms_kif_acp_mount` over `/dev/vms`) — not a Linux `mount(2)`/bind of a
+passthrough filesystem. Every process that `ASSIGN`s the unit sees the same
+mounted volume.
 
 **VMS Compatibility:** Partial.
 
@@ -1215,6 +1286,24 @@ Dismount a volume from a device.
 ```
 DISMOUNT device:
 ```
+
+**VMS Compatibility:** Partial.
+
+### INITIALIZE
+
+Initialize (format) a volume, writing a fresh file structure via `INITIALIZE.EXE`.
+
+```
+INITIALIZE device: volume-label
+```
+
+**Parameters:**
+- device: -- Device to initialize
+- volume-label -- Volume label to write
+
+Both the device and a volume label are required; an optional size (in MB) may be
+supplied. Note this is the volume-initialize verb — queue initialization is
+reshaped as `SET QUEUE` (there is no native `INITIALIZE/QUEUE`).
 
 **VMS Compatibility:** Partial.
 
@@ -1311,9 +1400,11 @@ SYSMAN [subcommand]
 
 ## VMS Compatibility Notes
 
-**Fully compatible commands** -- These behave identically to their VMS counterparts for standard usage: APPEND, CLOSE, CONTINUE, COPY, CREATE, DEFINE, DEASSIGN, DELETE, DIRECTORY, EXIT, HELP, INQUIRE, LOGOUT, OPEN, PIPE, PRINT, PURGE, READ, RECALL, RUN, SEARCH, SET DEFAULT, SET VERIFY, SHOW DEFAULT, SHOW LOGICAL, SHOW TIME, SPAWN, SUBMIT, TYPE, WAIT, WRITE.
+**Fully compatible commands** -- These behave identically to their VMS counterparts for standard usage: APPEND, CLOSE, CONTINUE, COPY, CREATE, DEFINE, DEASSIGN, DELETE, DIRECTORY, EXIT, HELP, INQUIRE, LOGOUT, OPEN, PIPE, PURGE, READ, RECALL, RUN, SEARCH, SET DEFAULT, SET VERIFY, SHOW DEFAULT, SHOW LOGICAL, SHOW TIME, SPAWN, TYPE, WAIT, WRITE.
 
-**Partially compatible commands** -- These work but lack some VMS-specific features: ANALYZE, ASSIGN (single table), ATTACH, BACKUP, CONVERT, DIFFERENCES, DUMP, EDIT, INSTALL, LIBRARY, LINK, MAIL, MONITOR, MOUNT/DISMOUNT, PRODUCT, REPLY/REQUEST, SORT, SYSGEN, SYSMAN, SET (various subcommands), SHOW (various subcommands), TCPIP.
+**Partially compatible commands** -- These work but lack some VMS-specific features: ANALYZE, ASSIGN (single table), ATTACH, BACKUP, CONVERT, DIFFERENCES, DUMP, EDIT, INSTALL, LIBRARY, LINK, MAIL, MONITOR, MOUNT/DISMOUNT, PRODUCT, REPLY/REQUEST, SORT, SYSGEN, SYSMAN, SET (various subcommands), SHOW (various subcommands), TCPIP, TELNET, FTP, PING, INITIALIZE.
+
+**Submit-only commands** -- The job or file is really enqueued, but there is no batch engine: nothing ever dequeues and runs or prints it: PRINT, SUBMIT.
 
 **Stub commands** -- These are recognized but provide minimal or no functionality: PHONE.
 

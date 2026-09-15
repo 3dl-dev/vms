@@ -98,6 +98,15 @@
  * boot unit (DKA0:/SYS$SYSDEVICE) sets this; $DASSGN releases the exec_chan.
  */
 #define PCB_CHAN_FILE        0x0008  /* Channel is an ODS-2 ACP file/disk device */
+/*
+ * Channel is the DECnet device face _NET: (rd vms-cdee, a1-0). Like a BG or ACP
+ * file channel it is executive-resident: _NET: is a pre-existing shareable
+ * DC$_SCOM device born on the primary NIC (vms_devtab_probe_net), so $ASSIGN
+ * grants a channel to it via the GENERIC executive assign (vms_kif_assign),
+ * fd stays -1, and exec_chan holds the executive channel. $QIO routes through
+ * qio_net_op() to the NETACP broker once it lands (rd vms-799/vms-22c).
+ */
+#define PCB_CHAN_NET         0x0010  /* Channel is the DECnet _NET: device */
 
 struct pcb_channel {
     int         fd;         /* Linux file descriptor (-1 = unused) */

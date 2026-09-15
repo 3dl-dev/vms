@@ -260,7 +260,8 @@ int main(void)
     while ((de = readdir(d)) != NULL && n_names < 512) {
         if (strncmp(de->d_name, "test_syssvc_", 12) != 0 &&
             strncmp(de->d_name, "test_imgact_", 12) != 0 &&
-            strncmp(de->d_name, "test_arith_", 11) != 0)    /* vms-db3: Alpha-only arith-trap suites */
+            strncmp(de->d_name, "test_arith_", 11) != 0 &&  /* vms-db3: Alpha-only arith-trap suites */
+            strncmp(de->d_name, "test_accvio_", 12) != 0)   /* vms-cc8: Alpha-only access-violation suites */
             continue;
         names[n_names++] = strdup(de->d_name);
     }

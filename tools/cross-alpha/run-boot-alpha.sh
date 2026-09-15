@@ -312,6 +312,18 @@ run_acceptance_boot() {
   # Stage the shared battery where the in-container script can source it (/work).
   cp "$REPO/tests/qemu/lib/dcl_acceptance_battery.sh" "$WORK/dcl_acceptance_battery.sh" \
     || die "shared battery tests/qemu/lib/dcl_acceptance_battery.sh missing"
+  # Stage the oracle tooling + goldens in a repo-root-like tree so the battery's
+  # golden_diff gate (vms-c38) resolves OVMX_ORACLE_DIR and diff_surface.sh finds
+  # its sibling docs/oracle/golden ($REPO/../.. relative to tools/oracle). Mirrors
+  # run_dcl_acceptance_e2e.sh's /oracle mount. WITHOUT this the golden_diff
+  # surfaces red "surface/tooling not found" -- the Alpha leg never actually
+  # compared SHOW output against the oracle (it only NOTE'd the report-only ones).
+  rm -rf "$WORK/oracle"
+  mkdir -p "$WORK/oracle/tools" "$WORK/oracle/docs/oracle"
+  cp -a "$REPO/tools/oracle" "$WORK/oracle/tools/oracle" \
+    || die "oracle tooling tools/oracle missing"
+  cp -a "$REPO/docs/oracle/golden" "$WORK/oracle/docs/oracle/golden" \
+    || die "oracle goldens docs/oracle/golden missing"
   local cname="ovmx-alpha-accept-${tag}-$$"
   # The full battery (~10 commands) needs far longer than a boot-only run, so use
   # a generous qemu-run bound (QT); the CR-feed-to-Username loop keeps the shorter
@@ -336,6 +348,10 @@ run_acceptance_boot() {
       export EXPECTED_COMPAT_VERSION="'"$EXPECTED_COMPAT_VERSION"'"
       export EXPECTED_ARCH_NAME="'"$EXPECTED_ARCH_NAME"'"
       export VOLUME_LABEL="'"$VOLUME_LABEL"'"
+      # The oracle tooling staged into /work/oracle (repo-root-like) so the
+      # battery golden_diff gate compares SHOW output against the goldens; the
+      # relative fallback cannot reach tools/oracle from the /work-only mount.
+      export OVMX_ORACLE_DIR=/work/oracle/tools/oracle
       # qemu-system-alpha -M clipper RTC reads ~20 years off (emulator epoch
       # quirk); OVMX faithfully reports that guest clock, so the SHOW TIME battery
       # asserts a plausible year + HH:MM:SS here rather than pinning the host year

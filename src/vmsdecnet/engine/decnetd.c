@@ -47,6 +47,7 @@
  */
 #include <errno.h>
 #include <net/if.h>      /* if_nametoindex() */
+#include <ifaddrs.h>    /* getifaddrs(): auto-detect the primary NIC (no argv) */
 #include <poll.h>       /* the --cterm-server loop waits on wire + session */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
@@ -63,6 +64,8 @@
 #include "dnet_cterm_host.h" /* CTERM HOST session: $CREPRC -> LOGINOUT on RTAn: */
 #include "dnet_dap.h"       /* DAP message codec (--fal-* : COPY presentation layer) */
 #include "dnet_fal.h"       /* FAL server + COPY client (object 17, rd vms-8c2) */
+#include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
+#include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
@@ -86,6 +89,11 @@ struct vms_pcb;
 extern struct vms_pcb *vms_pcb_get(void);
 extern struct vms_pcb *vms_pcb_init(uint64_t initial_privs);
 
+/* The live --set-host CI's nonzero format-2 source group/user codes, sourced
+ * from the running process (vms-15a/a70). Defined with run_set_host_loop; the
+ * --set-host-src-codes-selftest above it asserts the codes are nonzero. */
+static void sethost_src_codes(uint16_t *grp, uint16_t *usr);
+
 /* Default datalink interface, matching scsd's br0 default (the lab-2 pod
  * bridge model that carries raw Phase IV multicast; SLIRP cannot, see
  * docs/decnet-provenance-register.md sec 4.2). */
@@ -93,6 +101,51 @@ extern struct vms_pcb *vms_pcb_init(uint64_t initial_privs);
 
 static volatile sig_atomic_t g_stop = 0;
 static void on_signal(int signo) { (void)signo; g_stop = 1; }
+
+/*
+ * decnet_autodetect_iface - the datalink interface the persistent daemon binds
+ * when SYS$MANAGER:STARTNET.COM starts it with no argv (rd vms-a70 direction B).
+ *
+ * VMS RUN passes an image no argv, so the detached NETACP cannot be told
+ * --iface; and the compile-time DECNETD_DEFAULT_IFACE ("br0") is a DEV-LAB
+ * bridge name that does not exist inside a booted node's own network namespace
+ * (there the primary NIC is eth0/ETH0:). So when no --iface is given, pick the
+ * FIRST up, non-loopback interface that has a link-layer (Ethernet) address --
+ * the primary NIC, the same one the executive's DECnet device face _NET: rides
+ * (src/kernel-core/vms_devtab.c vms_devtab_probe_net). Returns 1 and fills buf
+ * on success, 0 if nothing suitable was found (caller keeps the compiled
+ * default). Multi-NIC circuit selection (NCP SET EXECUTOR/CIRCUIT to a specific
+ * line) is a follow-on; a single-NIC node -- the booted-OVMX case -- resolves
+ * unambiguously here. Pure enumeration: opens no socket, needs no privilege.
+ */
+static int decnet_autodetect_iface(char *buf, size_t sz)
+{
+#if defined(AF_PACKET)
+    struct ifaddrs *ifs = NULL, *p;
+    int found = 0;
+
+    if (!buf || sz == 0 || getifaddrs(&ifs) != 0)
+        return 0;
+    for (p = ifs; p; p = p->ifa_next) {
+        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_PACKET)
+            continue;                       /* only link-layer (L2) entries   */
+        if (p->ifa_flags & IFF_LOOPBACK)
+            continue;                       /* never lo                       */
+        if (!(p->ifa_flags & IFF_UP))
+            continue;                       /* must be up                     */
+        if (p->ifa_name && p->ifa_name[0]) {
+            snprintf(buf, sz, "%s", p->ifa_name);
+            found = 1;
+            break;                          /* first match: the primary NIC   */
+        }
+    }
+    freeifaddrs(ifs);
+    return found;
+#else
+    (void)buf; (void)sz;
+    return 0;
+#endif
+}
 
 /* A monotonic seconds tick -- the unit the engine's T3/listen timers use. */
 static dnet_tick_t monotonic_sec(void)
@@ -343,6 +396,139 @@ done:
 }
 
 /*
+ * ======================= --router --self-test ========================
+ * The router run-mode analogue of run_self_test (rd vms-0a9): a no-privilege,
+ * no-netdev, NO-REAL-NODE proof of the router-hello EMIT path. It stands up a
+ * ROUTER (R, --router) and an ENDNODE (E), and over a real socketpair(2):
+ *
+ *   1. R builds its spec-faithful router-hello frame (the exact bytes the live
+ *      datalink would put on AB-00-00-04-00-00) and ships them to E.
+ *   2. E consumes them through dnet_engine_rx_frame -- the same routing path the
+ *      live wire drives -- and SELECTS R as its designated router (E.have_dr,
+ *      dr_id == R's id): the endnode picked the router.
+ *   3. E now emits an endnode-hello that NAMES R in its rtr/neighbor field (the
+ *      passive-capture signal vms-aac0 will look for on real VAX wire), and we
+ *      ship it back to R.
+ *   4. R (a router) consumes E's endnode-hello and, because E now names R, the
+ *      two-way adjacency to E reaches UP -- the loop closes with no crash.
+ *
+ * This proves emit -> decode -> DR-selection -> reflected-neighbour end to end
+ * over genuine write(2)/read(2) of the actual encoded bytes, entirely between
+ * two OVMX engines. It touches NO real node (⭐⭐ never-crash-a-peer: the router-
+ * hello is proven safe HERE, in isolation, before any live emission).
+ *
+ * Returns 0 on PASS, 1 on FAIL.
+ */
+static int run_router_self_test(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, socketpair failed: %s\n",
+                strerror(errno));
+        return 1;
+    }
+
+    const uint8_t hwR[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x11 };
+    const uint8_t hwE[6] = { 0x02, 0x00, 0x00, 0x00, 0x00, 0x12 };
+    struct dnet_engine R, E;
+    /* router = 1.42 (OVMXR), endnode = 1.11 (OVMXE). */
+    if (dnet_engine_init(&R, 1, 42, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0 ||
+        dnet_engine_init(&E, 1, 11, "OVMXE", "EWA0", NULL, hwE, 0, 0, 0) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, engine init failed\n");
+        close(sv[0]); close(sv[1]);
+        return 1;
+    }
+    if (dnet_engine_set_router(&R, 64) != 0 || !dnet_engine_is_router(&R)) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, set_router failed\n");
+        close(sv[0]); close(sv[1]);
+        return 1;
+    }
+
+    int fail = 0;
+    uint8_t frame[DNET_FRAME_MAX];
+    uint8_t rxbuf[DNET_FRAME_MAX];
+    size_t flen = 0;
+    ssize_t n;
+    enum dnet_adj_state st = DNET_ADJ_DOWN;
+    uint8_t from[6];
+    dnet_tick_t now = 100;
+
+    /* 1) ROUTER emits its router-hello -> ENDNODE. The emitted node-type bits
+     *    must say "router" so an endnode treats it as a DR candidate. */
+    if (dnet_engine_build_router_hello_frame(&R, frame, sizeof(frame), &flen) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, build router-hello failed\n");
+        fail = 1; goto done;
+    }
+    /* Assert node-type bits on the wire == L1 router. IINFO is at payload
+     * offset 12 (the router-hello map, dnet_router_hello.h), payload starting at
+     * frame + ETH_HDRLEN; the low 2 bits carry the node type. */
+    if ((frame[DNET_ETH_HDRLEN + 12] & 0x03u) != DNET_NODETYPE_L1ROUTER) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, emitted node-type is not router\n");
+        fail = 1; goto done;
+    }
+    if (write(sv[0], frame, flen) != (ssize_t)flen) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, write failed: %s\n", strerror(errno));
+        fail = 1; goto done;
+    }
+    n = read(sv[1], rxbuf, sizeof(rxbuf));
+    if (n <= 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, read failed: %s\n", strerror(errno));
+        fail = 1; goto done;
+    }
+    /* 2) ENDNODE consumes it through the routing path and SELECTS R as its DR. */
+    if (dnet_engine_rx_frame(&E, now, rxbuf, (size_t)n, from, &st) != 1) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, E did not accept the router-hello\n");
+        fail = 1; goto done;
+    }
+    if (!E.have_dr || memcmp(E.dr_id, R.my_id, 6) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, E did not select R as its DR\n");
+        fail = 1; goto done;
+    }
+
+    /* 3) ENDNODE now emits an endnode-hello that NAMES R in its rtr field, and
+     *    4) ROUTER consumes it -> two-way adjacency to E reaches UP. */
+    if (dnet_engine_build_hello_frame(&E, frame, sizeof(frame), &flen) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, build E endnode-hello failed\n");
+        fail = 1; goto done;
+    }
+    /* The rtr/neighbor field is at endnode-hello payload offset 24 (dnet_hello.h
+     * map), payload starting at frame + ETH_HDRLEN; it must now name R. */
+    if (memcmp(frame + DNET_ETH_HDRLEN + 24, R.my_id, 6) != 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, E's endnode-hello does not name R\n");
+        fail = 1; goto done;
+    }
+    if (write(sv[1], frame, flen) != (ssize_t)flen) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, write2 failed\n");
+        fail = 1; goto done;
+    }
+    n = read(sv[0], rxbuf, sizeof(rxbuf));
+    if (n <= 0) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, read2 failed\n");
+        fail = 1; goto done;
+    }
+    st = DNET_ADJ_DOWN;
+    if (dnet_engine_rx_frame(&R, now + 1, rxbuf, (size_t)n, from, &st) != 1 ||
+        st != DNET_ADJ_UP) {
+        fprintf(stderr, "DECNETD-E-ROUTERTEST, R did not reach UP with E (st=%d)\n",
+                (int)st);
+        fail = 1; goto done;
+    }
+
+done:
+    close(sv[0]);
+    close(sv[1]);
+    if (fail) {
+        printf("DECNETD-ROUTERTEST: FAIL\n");
+        return 1;
+    }
+    printf("DECNETD-I-ROUTERTEST, router run-mode proof PASSED"
+           " (router-hello emitted + node-type=router; endnode SELECTED it as DR"
+           " and named it in rtr; router reached UP -- all over a socketpair, NO"
+           " real node touched)\n");
+    return 0;
+}
+
+/*
  * ========================== --nsp-selftest ===========================
  * A no-privilege, no-netdev proof of the NSP LOGICAL-LINK connection service
  * (rd vms-c23, engine rung 2): two engines OPEN a logical link, exchange a data
@@ -448,6 +634,282 @@ done:
            " (link OPEN -> data segment+ack -> clean DISCONNECT over a real"
            " socketpair; CI/CC + DI/DC choreography, payload byte-identical)\n");
     return 0;
+}
+
+/*
+ * run_net_broker_selftest (rd vms-22c, a1-2) -- the host floor of the exec<->
+ * NETACP T1 broker transport: the request/response RECORD CODEC that rides the
+ * executive mailbox, and its two SECURITY GUARDS, proven with NO executive and
+ * NO mailbox (pure codec logic, the discipline of --nsp-selftest / the CTERM
+ * codec fuzz). It proves:
+ *   (A) a request and a response round-trip byte-exact (encode -> decode);
+ *   (B) BOUNDS VALIDATION -- a truncated header, a truncated body, an over-bound
+ *       datalen, and a wrong/opposite magic are each REFUSED, never over-read
+ *       (the a1-2 seam that keeps a malformed mailbox record from faulting the
+ *       executive or NETACP); a 200k-iteration mutation + every-truncated-prefix
+ *       fuzz decodes clean (ASan/UBSan) and never returns a self-inconsistent
+ *       record;
+ *   (C) CORRELATION IDS -- monotonic nonzero issuance, and the anti-cross-talk
+ *       match: a response is accepted for a request ONLY when the ids are equal
+ *       and nonzero, so a reply meant for another link is refused.
+ * The mailbox seam + qio_net_op marshalling + NETACP servicing (the /dev/vms
+ * rungs) build on this proven record.
+ */
+static uint32_t nbself_rand(uint32_t *s)   /* deterministic LCG for the fuzz */
+{
+    *s = (*s) * 1664525u + 1013904223u;
+    return *s;
+}
+
+static int run_net_broker_selftest(void)
+{
+    printf("DECNETD-I-NETBROKER, exec<->NETACP T1 broker record codec: round-trip"
+           " + bounds-validated decode + correlation-id anti-cross-talk (no"
+           " executive, rd vms-22c)\n");
+    int pass = 0, fail = 0;
+#define NB_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    /* (A) request round-trip byte-exact. */
+    struct dnet_broker_req req, rq2;
+    memset(&req, 0, sizeof req);
+    req.corr_id = 0x11223344u; req.owner_pid = 0x0000BEEFu;
+    req.link_handle = 0x2001u; req.op = DNET_BROKER_OP_SEND;
+    const char *payload = "TASK-TO-TASK broker payload: ping 0123456789";
+    req.datalen = (uint16_t)strlen(payload);
+    memcpy(req.data, payload, req.datalen);
+
+    uint8_t buf[DNET_BROKER_REQ_MAX + 8];
+    size_t blen = 0;
+    int enc = dnet_broker_req_encode(&req, buf, sizeof buf, &blen);
+    int dec = dnet_broker_req_decode(buf, blen, &rq2);
+    NB_CHECK(enc == DNET_BROKER_OK && dec == DNET_BROKER_OK &&
+             blen == (size_t)DNET_BROKER_REQ_HDR + req.datalen &&
+             rq2.corr_id == req.corr_id && rq2.owner_pid == req.owner_pid &&
+             rq2.link_handle == req.link_handle && rq2.op == req.op &&
+             rq2.datalen == req.datalen &&
+             memcmp(rq2.data, req.data, req.datalen) == 0,
+             "request record round-trips byte-exact (encode -> decode)");
+
+    /* response round-trip byte-exact. */
+    struct dnet_broker_rsp rsp, rs2;
+    memset(&rsp, 0, sizeof rsp);
+    rsp.corr_id = req.corr_id; rsp.status = 0x00000001u /* SS$_NORMAL */;
+    const char *rdata = "TASK-TO-TASK broker reply: pong 9876543210";
+    rsp.datalen = (uint16_t)strlen(rdata);
+    memcpy(rsp.data, rdata, rsp.datalen);
+    uint8_t rbuf[DNET_BROKER_RSP_MAX + 8];
+    size_t rlen = 0;
+    NB_CHECK(dnet_broker_rsp_encode(&rsp, rbuf, sizeof rbuf, &rlen) == DNET_BROKER_OK &&
+             dnet_broker_rsp_decode(rbuf, rlen, &rs2) == DNET_BROKER_OK &&
+             rs2.corr_id == rsp.corr_id && rs2.status == rsp.status &&
+             rs2.datalen == rsp.datalen &&
+             memcmp(rs2.data, rsp.data, rsp.datalen) == 0,
+             "response record round-trips byte-exact (encode -> decode)");
+
+    /* (B) BOUNDS VALIDATION -- every malformed record is refused, never over-read. */
+    NB_CHECK(dnet_broker_req_decode(buf, DNET_BROKER_REQ_HDR - 1, &rq2) == DNET_BROKER_ETRUNC,
+             "a header-truncated record is refused (ETRUNC), not misread");
+    NB_CHECK(dnet_broker_req_decode(buf, blen - 1, &rq2) == DNET_BROKER_ETRUNC,
+             "a body-truncated record is refused (ETRUNC), never over-reads the payload");
+    {
+        /* forge a header claiming datalen over the payload bound. */
+        uint8_t bad[DNET_BROKER_REQ_HDR];
+        memcpy(bad, buf, DNET_BROKER_REQ_HDR);
+        bad[18] = (uint8_t)((DNET_NSP_MAX_DATA + 1) & 0xff);
+        bad[19] = (uint8_t)(((DNET_NSP_MAX_DATA + 1) >> 8) & 0xff);
+        NB_CHECK(dnet_broker_req_decode(bad, sizeof bad, &rq2) == DNET_BROKER_EBADLEN,
+                 "a datalen over DNET_NSP_MAX_DATA is refused (EBADLEN), never allocates/reads it");
+    }
+    NB_CHECK(dnet_broker_rsp_decode(buf, blen, &rs2) == DNET_BROKER_EMAGIC,
+             "a REQUEST decoded as a RESPONSE is refused by the magic gate (direction guard)");
+    {
+        uint8_t bad[DNET_BROKER_REQ_HDR];
+        memcpy(bad, buf, DNET_BROKER_REQ_HDR);
+        bad[0] ^= 0xff;   /* corrupt the magic */
+        NB_CHECK(dnet_broker_req_decode(bad, sizeof bad, &rq2) == DNET_BROKER_EMAGIC,
+                 "a wrong-magic record is refused (EMAGIC), not misread as a request");
+    }
+
+    /* fuzz: mutate a valid record + feed every truncated prefix; must never
+     * crash (ASan/UBSan) and never return OK with a self-inconsistent length. */
+    {
+        uint32_t seed = 0xC0FFEEu;
+        int ok_seen = 0, refused_seen = 0, inconsistent = 0;
+        for (int i = 0; i < 200000; i++) {
+            uint8_t fz[DNET_BROKER_REQ_MAX + 8];
+            size_t n = blen ? blen : 1;
+            memcpy(fz, buf, n);
+            /* mutate a few bytes */
+            for (int m = 0; m < 3; m++)
+                fz[nbself_rand(&seed) % n] = (uint8_t)nbself_rand(&seed);
+            size_t use = (nbself_rand(&seed) % (n + 1));   /* every truncated prefix too */
+            struct dnet_broker_req fr;
+            int r = dnet_broker_req_decode(fz, use, &fr);
+            if (r == DNET_BROKER_OK) {
+                ok_seen = 1;
+                if ((size_t)DNET_BROKER_REQ_HDR + fr.datalen > use ||
+                    fr.datalen > DNET_NSP_MAX_DATA)
+                    inconsistent = 1;   /* an accepted record must be length-consistent */
+            } else {
+                refused_seen = 1;
+            }
+        }
+        NB_CHECK(!inconsistent && refused_seen,
+                 "200k-mutation + truncated-prefix fuzz: no accepted record is length-inconsistent, and malformed inputs are refused (ASan/UBSan clean)");
+        (void)ok_seen;
+    }
+
+    /* (C) CORRELATION IDS -- monotonic issuance + the anti-cross-talk match. */
+    {
+        uint32_t st = 0, a, b, c;
+        a = dnet_broker_corr_next(&st);
+        b = dnet_broker_corr_next(&st);
+        c = dnet_broker_corr_next(&st);
+        NB_CHECK(a != 0 && b == a + 1 && c == b + 1,
+                 "correlation ids are issued monotonically, skipping the 0 sentinel");
+        NB_CHECK(dnet_broker_corr_match(a, a) == 1 &&
+                 dnet_broker_corr_match(a, b) == 0 &&
+                 dnet_broker_corr_match(0, 0) == 0 &&
+                 dnet_broker_corr_match(a, 0) == 0,
+                 "corr_match accepts an exact nonzero match and refuses a mismatch / the 0 sentinel");
+    }
+    /* the anti-cross-talk scenario over the real records: a response carrying
+     * another link's correlation id is refused delivery to this request. Decode
+     * fresh records here (rq2/rs2 above were reused as scratch by the bounds
+     * checks, whose refusals zero *out). */
+    {
+        struct dnet_broker_req freq;
+        struct dnet_broker_rsp frsp;
+        NB_CHECK(dnet_broker_req_decode(buf, blen, &freq) == DNET_BROKER_OK &&
+                 dnet_broker_rsp_decode(rbuf, rlen, &frsp) == DNET_BROKER_OK &&
+                 dnet_broker_corr_match(freq.corr_id, frsp.corr_id) == 1 &&
+                 dnet_broker_corr_match(freq.corr_id, frsp.corr_id ^ 0x1u) == 0,
+                 "a response is delivered to its request only on an exact corr-id match (cross-talk refused)");
+    }
+
+    printf("DECNETD-I-NETBROKER, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-NET-BROKER-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-NET-BROKER-SELFTEST: FAIL\n");
+    return 1;
+#undef NB_CHECK
+}
+
+/*
+ * run_task_selftest (rd vms-dda) -- the host floor of the DECnet TASK-TO-TASK
+ * client seam (the a1 ladder rung 1). It proves the generic NAMED-object logical
+ * link an application task uses -- $ASSIGN NODE::"TASK=name" + $QIO -- over the
+ * proven NSP link engine, with NO executive and NO CAP_NET_RAW:
+ *   - the active side opens a link by TASK NAME (format-1 NAMED descriptor, not a
+ *     hard-coded object number like CTERM 42 / FAL 17);
+ *   - the passive side DECODES that named descriptor byte-exact (the addressing a
+ *     NETACP object dispatcher matches against the object registry);
+ *   - a request and a reply move BOTH DIRECTIONS byte-identical (the
+ *     byte-transparent read/write pump the _NET: $QIO IO$_READVBLK/WRITEVBLK
+ *     broker will expose -- Option 1, NETACP-brokered).
+ * The DECnet analogue of --nsp-selftest (one-way, NULL descriptor) and the
+ * foundation the _NET: $QIO broker sits on. CLEAN-ROOM (Rule 8): format 1 is the
+ * published DNA named-task form; the link engine is OVMX's own.
+ */
+static int run_task_selftest(void)
+{
+    printf("DECNETD-I-TASKSELF, task-to-task logical link by NAMED object (TASK=):"
+           " connect -> passive decodes the name -> bidirectional byte-verified"
+           " message -> disconnect (no executive, rd vms-dda)\n");
+    int pass = 0, fail = 0;
+#define TK_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-TASKSELF, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+    struct dnet_engine L, R;
+    if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
+        fprintf(stderr, "DECNETD-E-TASKSELF, engine init failed\n");
+        close(sv[0]); close(sv[1]); return 1;
+    }
+
+    uint8_t conn[192], frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t clen = 0, flen = 0, rlen = 0, rxlen = 0; int has_reply = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    dnet_tick_t t = 10;
+    const char *TASK = "TESTECHO";
+
+    /* 1) active opens a NAMED task link -> CI -> passive CONNECT_IND. */
+    int opened =
+        dnet_cterm_sc_connect_build_task(TASK, "OVMXL", 0x021a, 0x2020, "", "", "",
+                                         conn, sizeof conn, &clen) == 0 &&
+        dnet_engine_link_open(&L, 1, 11, 0x2001, conn, clen, 1459, 1, DNET_NSP_VER_41,
+                              frame, sizeof frame, &flen, t++) == 0 &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen,
+                            &has_reply, &ev) == 0 && ev == DNET_LINK_EV_CONNECT_IND;
+    TK_CHECK(opened, "active opens a task-to-task link by name; passive sees CONNECT_IND");
+
+    /* 2) passive decodes the destination as the NAMED task, byte-exact. */
+    struct dnet_cterm_sc_connect sc;
+    int named_ok = opened &&
+        dnet_cterm_sc_connect_parse(R.link.conn_data, R.link.conn_len, &sc) == DNET_CTERM_OK &&
+        sc.dst_format == DNET_SC_FMT_NAMED && strcmp(sc.dst_task, TASK) == 0;
+    TK_CHECK(named_ok, "passive decodes the destination as NAMED task \"TESTECHO\" (format 1)");
+
+    /* 3) passive accepts -> CC -> active link RUN. */
+    int up = named_ok &&
+        dnet_engine_link_accept(&R, 0x2002, reply, sizeof reply, &rlen, t++) == 0 &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen,
+                            &has_reply, &ev) == 0 && ev == DNET_LINK_EV_CONNECT_CONF &&
+        dnet_link_is_up(&L.link) && dnet_link_is_up(&R.link);
+    TK_CHECK(up, "passive accepts; the task-to-task link is RUN both ends");
+
+    /* 4) active -> passive request, byte-identical (+ absorb the NSP ack). */
+    const char *req = "TASK-REQUEST: ping payload 0123456789";
+    int fwd = up &&
+        dnet_engine_link_send(&L, (const uint8_t *)req, strlen(req), frame, sizeof frame, &flen, t++) == 0 &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_DATA && R.rx_datalen == strlen(req) &&
+        memcmp(R.rx_data, req, R.rx_datalen) == 0 && has_reply &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_ACK;
+    TK_CHECK(fwd, "active->passive request byte-identical over the link (+ NSP ack)");
+
+    /* 5) passive -> active reply, byte-identical (the OTHER direction). */
+    const char *resp = "TASK-REPLY: pong payload 9876543210";
+    int rev = fwd &&
+        dnet_engine_link_send(&R, (const uint8_t *)resp, strlen(resp), reply, sizeof reply, &rlen, t++) == 0 &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_DATA && L.rx_datalen == strlen(resp) &&
+        memcmp(L.rx_data, resp, L.rx_datalen) == 0 && has_reply &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_ACK;
+    TK_CHECK(rev, "passive->active reply byte-identical (bidirectional task data)");
+
+    /* 6) active disconnects -> both CLOSED. */
+    int closed = rev &&
+        dnet_engine_link_close(&L, DNET_LINK_REASON_NORMAL, frame, sizeof frame, &flen, t++) == 0 &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_DISCONNECT && dnet_link_state_of(&R.link) == DNET_LINK_CLOSED &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen, &has_reply, &ev) == 0 &&
+        dnet_link_state_of(&L.link) == DNET_LINK_CLOSED;
+    TK_CHECK(closed, "active disconnects; both ends CLOSED");
+
+    close(sv[0]); close(sv[1]);
+    printf("DECNETD-I-TASKSELF, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass == 6) { printf("DECNETD-TASK-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-TASK-SELFTEST: FAIL\n");
+    return 1;
+#undef TK_CHECK
 }
 
 /*
@@ -639,6 +1101,59 @@ done:
            " screen output + keystrokes + out-of-band -> Unbind -> clean"
            " disconnect over a real socketpair; every CTERM payload"
            " byte-identical)\n");
+    return 0;
+}
+
+/*
+ * ================ --set-host-src-codes-selftest (vms-15a/a70) ===============
+ * The live $ SET HOST client must NOT emit the zero/zero format-2 source codes
+ * real OpenVMS session control silently discards. This proves the CI the live
+ * --set-host path builds -- sethost_src_codes() feeding the exact
+ * dnet_cterm_sc_connect_build() call in run_set_host_loop -- carries a NONZERO
+ * group AND a nonzero user sourced from the running process, and round-trips as
+ * a well-formed format-2 connect to CTERM object 42. Runs anywhere: with no
+ * /dev/vms the codes come from the POSIX identity fallback (still nonzero).
+ */
+static int run_sethost_srccode_selftest(void)
+{
+    uint16_t grp = 0, usr = 0;
+    sethost_src_codes(&grp, &usr);
+    if (grp == 0 && usr == 0) {
+        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL"
+               " (source group/user are BOTH zero -- VMS would discard this CI)\n");
+        return 1;
+    }
+
+    uint8_t sc[128];
+    size_t sclen = 0;
+    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, "SYSTEM", grp, usr,
+                                    "", "", "", sc, sizeof(sc), &sclen) != DNET_CTERM_OK) {
+        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL (connect build failed)\n");
+        return 1;
+    }
+
+    struct dnet_cterm_sc_connect c;
+    if (dnet_cterm_sc_connect_parse(sc, sclen, &c) != DNET_CTERM_OK) {
+        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL (connect parse failed)\n");
+        return 1;
+    }
+    /* The CI must name CTERM object 42 (fmt-0 dst) with a fmt-2 source whose
+     * group AND user are the nonzero process identity we sourced. */
+    if (c.dst_object != DNET_CTERM_OBJECT ||
+        c.src_format != DNET_SC_FMT_CODED ||
+        c.src_grpcode == 0 || c.src_usrcode == 0 ||
+        c.src_grpcode != grp || c.src_usrcode != usr) {
+        printf("DECNETD-SETHOST-SRCCODES-SELFTEST: FAIL"
+               " (dst_obj=%u src_fmt=%u grp=0x%04x usr=0x%04x)\n",
+               c.dst_object, c.src_format, c.src_grpcode, c.src_usrcode);
+        return 1;
+    }
+
+    printf("DECNETD-I-SETHOSTSRCCODES, live --set-host CI carries NONZERO"
+           " format-2 source codes group=0x%04x user=0x%04x (sourced from the"
+           " running process, not a template) -- VMS session control dispatches"
+           " it to CTERM object 42 instead of discarding it\n",
+           c.src_grpcode, c.src_usrcode);
     return 0;
 }
 
@@ -1332,8 +1847,25 @@ static int dnet_recv_route(struct dnet_engine *eng, int sock, unsigned ifindex,
         memcmp(rxbuf + 6, eng->my_id, DNET_ADDR_LEN) == 0)
         return DNET_LINK_EV_NONE;   /* our own transmitted frame */
 
-    int is_nsp = ((size_t)n > (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX) &&
-                 rxbuf[DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX] == DNET_RFLAG_LONG_DATA;
+    /* Is this a long-data (NSP-bearing) frame? Skip the optional Phase IV
+     * intra-Ethernet pad (a leading 0x80-bit byte = (byte & 0x7f) bytes) before
+     * reading the RFLG -- real VMS prepends a 0x81 pad on unicast routed data, so
+     * the RFLG is NOT at a fixed offset -- and mask the intra-Ethernet flag off
+     * the RFLG (a real VAX sends its Connect Confirm / data back with RFLG 0x26,
+     * where the CI carried 0x2e). Getting either wrong drops every unicast reply
+     * from the VAX as if it were a HELLO (a70-A: the CC was on the wire but
+     * writes_recv stayed 0). */
+    int is_nsp = 0;
+    {
+        size_t dpos = (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX;
+        if ((size_t)n > dpos) {
+            const uint8_t *dp = rxbuf + dpos;
+            size_t drem = (size_t)n - dpos;
+            size_t dpad = (drem >= 1 && (dp[0] & 0x80)) ? (size_t)(dp[0] & 0x7f) : 0;
+            if (drem > dpad && DNET_RFLAG_IS_LONG_DATA(dp[dpad]))
+                is_nsp = 1;
+        }
+    }
     if (is_nsp) {
         if (memcmp(rxbuf, eng->my_id, DNET_ADDR_LEN) != 0)
             return DNET_LINK_EV_NONE;   /* unicast for another node */
@@ -1368,6 +1900,76 @@ static int dnet_recv_route(struct dnet_engine *eng, int sock, unsigned ifindex,
  * READINESS (bytes still MOVE through $QIO) so the HELLO cadence + link tick keep
  * firing. On teardown control returns with the canonical %REM-S-END.
  */
+/*
+ * The format-2 SRCNAME group/user codes for the $ SET HOST Connect Initiate.
+ *
+ * vms-15a/a70: a CTERM CI whose format-2 source descriptor carries group 0 AND
+ * user 0 is SILENTLY DISCARDED by real OpenVMS VAX V7.3 session control -- it
+ * never reaches the CTERM (object 42) server, so no Connect Confirm returns and
+ * LOGINOUT is never spawned (proven on the isolated lab: VAX1 answers our DI
+ * with a DC but emits ZERO in response to the CI). Every ACCEPTED real-VAX CI
+ * carries NONZERO codes (oracle /lab/decnet-wireproof/real-cterm-ci.hex: two
+ * SYSTEM-sourced samples with DIFFERENT nonzero group/user -- they are the
+ * SOURCE PROCESS's own identity, which is why they vary per session; they are
+ * NOT a fixed constant and MENUVER 0x27 is accepted, so this was never a
+ * MENUVER bug).
+ *
+ * So the live client must source the codes from the RUNNING PROCESS, the way
+ * VMS does -- never a hardcoded template. The faithful source is the process
+ * UIC the executive holds: $GETJPI(JPI$_UIC) == vms_kif_getjpi_self()->uic,
+ * packed (group << 16) | member (INV-6: the value is executive state, read
+ * live, never plumbed frame-to-frame). If no executive identity is stamped on
+ * this process (a standalone DECNETD with no image activation / no /dev/vms),
+ * fall back to the real POSIX identity of the running process (gid -> group,
+ * uid -> member), and as a last resort its pid -- still the process's own
+ * identity, still nonzero, never an invented constant.
+ */
+static void sethost_src_codes(uint16_t *grp, uint16_t *usr)
+{
+    uint16_t g = 0, u = 0;
+    struct vms_procinfo pi;
+    if ((vms_kif_getjpi_self(&pi) & 1) && pi.uic != 0) {
+        g = (uint16_t)(pi.uic >> 16);      /* UIC group  */
+        u = (uint16_t)(pi.uic & 0xFFFF);   /* UIC member */
+    }
+    if (g == 0 && u == 0) {
+        g = (uint16_t)(getgid() & 0xFFFF);
+        u = (uint16_t)(getuid() & 0xFFFF);
+    }
+    /* Never emit the zero/zero pair VMS discards. */
+    if (g == 0) g = (uint16_t)(((unsigned)getpid()        & 0x7FFF) | 1);
+    if (u == 0) u = (uint16_t)((((unsigned)getpid() >> 15) & 0x7FFF) | 1);
+    *grp = g;
+    *usr = u;
+}
+
+/*
+ * Try to satisfy one outstanding host read-solicit from the buffered local
+ * input queue (rd vms-6165). Returns 1 if a line was dequeued and sent as a
+ * CTERM Read Data, 0 if the queue has no complete line yet (the caller should
+ * remember the solicit and retry once more input arrives or EOF fires), or -1
+ * if the send itself failed (same as any other link-send failure).
+ */
+static int sethost_send_queued_line(struct dnet_cterm_session *term,
+                                    struct dnet_cterm_inq *inq,
+                                    struct dnet_engine *eng, int sock,
+                                    unsigned ifindex, dnet_tick_t now,
+                                    uint8_t *cpdu, size_t cpdu_cap)
+{
+    uint8_t line[DNET_CTERM_MAX_DATA];
+    size_t linelen = 0;
+    if (!dnet_cterm_inq_dequeue(inq, line, sizeof(line), &linelen))
+        return 0;
+    size_t clen = 0;
+    if (dnet_cterm_found_read_data_build(line, linelen, 0x0d, cpdu, cpdu_cap,
+                                         &clen) != 0)
+        return -1;
+    if (cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0)
+        return -1;
+    term->reads_sent++;
+    return 1;
+}
+
 static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex,
                              const char *peer_s, const char *user)
 {
@@ -1390,7 +1992,14 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
         user = "SYSTEM";
     uint8_t sc[128];
     size_t sclen = 0;
-    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, user, 0, 0, "", "", "",
+    /* The format-2 source group/user codes are the running process's own
+     * identity (executive UIC, else POSIX id) -- NONZERO, so VMS session
+     * control dispatches the CI to the CTERM server instead of discarding it
+     * (vms-15a/a70). See sethost_src_codes(). */
+    uint16_t src_grp = 0, src_usr = 0;
+    sethost_src_codes(&src_grp, &src_usr);
+    if (dnet_cterm_sc_connect_build(DNET_CTERM_OBJECT, user, src_grp, src_usr,
+                                    "", "", "",
                                     sc, sizeof(sc), &sclen) != 0) {
         fprintf(stderr, "DECNETD-E-SCBUILD, CTERM connect-data build failed\n");
         return 1;
@@ -1443,6 +2052,15 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
     fflush(stdout);
 
     int passall_on = 0, stdin_eof = 0, done = 0, rc = 0, session_bound_ever = 0;
+    /* rd vms-6165: CTERM input is PROMPT-DRIVEN. Local stdin is buffered here,
+     * never dumped on BOUND, and released ONE LINE PER HOST SOLICIT (a 02-08
+     * TK_START_READ). `read_pending` remembers a solicit that arrived before
+     * the queue had a complete line, so the next terminal read (or EOF) can
+     * satisfy it immediately instead of waiting for another solicit that will
+     * never come (the host is already blocked in its own read). */
+    struct dnet_cterm_inq inq;
+    dnet_cterm_inq_init(&inq);
+    int read_pending = 0;
 
     while (!g_stop && !done) {
         now = monotonic_sec();
@@ -1491,49 +2109,128 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
             case DNET_LINK_EV_CONNECT_CONF:
                 log_ts(stdout);
                 printf(" DECNETD-I-LINKUP, logical link to %u.%u is RUN --"
-                       " sending CTERM Bind\n", parea, pnode);
+                       " sending NSP link-service (credit) then awaiting host"
+                       " foundation\n", parea, pnode);
                 fflush(stdout);
-                if (dnet_cterm_bind(&term, "OVMX$RTA1:", cpdu, sizeof(cpdu), &clen) != 0 ||
-                    cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0) {
-                    fprintf(stderr, "DECNETD-E-BIND, could not send CTERM Bind\n");
+                /* rd vms-6165: NSP requires the INITIATOR to send a LINK SERVICE
+                 * right after the CC -- it acks the CC + opens the flow-control
+                 * window, and ONLY THEN does a real VAX send its foundation
+                 * data. Without it VAX1 loops re-sending the CC (writes_recv=0).
+                 * This is the NSP layer; foundation CONTENT stays host-first. */
+                {
+                    uint8_t lsf[DNET_FRAME_MAX];
+                    size_t lslen = 0;
+                    if (dnet_engine_link_service(eng, lsf, sizeof(lsf), &lslen, now)
+                            == DNET_ENGINE_OK) {
+                        uint8_t dst[DNET_ADDR_LEN];
+                        memcpy(dst, lsf, DNET_ADDR_LEN);   /* routing dst the FSM wrote */
+                        scs_datalink_send(sock, (int)ifindex, DNET_ETHERTYPE,
+                                          dst, lsf, lslen);
+                    } else {
+                        fprintf(stderr, "DECNETD-E-LINKSVC, could not send NSP"
+                                        " link-service credit grant\n");
+                        rc = 1; done = 1;
+                        break;
+                    }
+                }
+                /* Arm the CTERM client FSM and WAIT -- the host sends its
+                 * foundation seg-1; the DATA handler drives the client replies. */
+                if (dnet_cterm_client_open(&term) != 0) {
+                    fprintf(stderr, "DECNETD-E-CTERMOPEN, could not arm CTERM"
+                                    " client foundation\n");
                     rc = 1; done = 1;
                 }
                 break;
             case DNET_LINK_EV_DATA: {
-                enum dnet_cterm_event cev = DNET_CTERM_EV_NONE;
-                if (dnet_cterm_rx(&term, eng->rx_data, eng->rx_datalen, &cev)
-                        != DNET_CTERM_OK)
+                if (dnet_cterm_state_of(&term) == DNET_CTERM_S_BINDING) {
+                    /* FOUNDATION PHASE (rd vms-6165): consume the host's
+                     * foundation message, then drain every client reply now due
+                     * (client seg-1, then the seg-2/3/4 burst). WIDTH/PAGE are
+                     * the captured 132/24 so every emitted byte is oracle-exact. */
+                    int prog = 0;
+                    if (dnet_cterm_client_found_rx(&term, eng->rx_data,
+                                                   eng->rx_datalen, &prog)
+                            != DNET_CTERM_OK)
+                        break;
+                    for (;;) {
+                        int frc = dnet_cterm_client_found_next(&term, 132, 24,
+                                                               cpdu, sizeof(cpdu),
+                                                               &clen);
+                        if (frc != DNET_CTERM_OK || clen == 0)
+                            break;
+                        if (cterm_link_send(eng, sock, ifindex, cpdu, clen, now) != 0) {
+                            fprintf(stderr, "DECNETD-E-FOUND, could not send a"
+                                            " CTERM foundation reply\n");
+                            rc = 1; done = 1;
+                            break;
+                        }
+                    }
+                    if (!done && dnet_cterm_is_bound(&term) && !session_bound_ever) {
+                        session_bound_ever = 1;
+                        log_ts(stdout);
+                        printf(" DECNETD-I-BOUND, CTERM foundation negotiated --"
+                               " terminal session BOUND on circuit %s\n",
+                               eng->circuit);
+                        fflush(stdout);
+                        /* Hand echo/editing to the REMOTE session: pass-all the
+                         * LOCAL terminal through the executive driver. */
+                        sethost_set_line(ch_in, 1);
+                        passall_on = 1;
+                    }
                     break;
-                if (cev == DNET_CTERM_EV_BOUND) {
-                    session_bound_ever = 1;
-                    log_ts(stdout);
-                    printf(" DECNETD-I-BOUND, CTERM terminal session bound on"
-                           " circuit %s -- terminal is live\n", eng->circuit);
-                    fflush(stdout);
-                    /* Advertise our characteristics (VT100-class, 80x24). */
-                    if (dnet_cterm_send_characteristics(&term, 4, 80, 24,
-                            DNET_CTERM_CH_ECHO | DNET_CTERM_CH_WRAP,
-                            cpdu, sizeof(cpdu), &clen) == 0)
-                        cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
-                    /* Put the LOCAL terminal into PASS-ALL through the executive
-                     * terminal driver ($QIO IO$_SETMODE) so the REMOTE session
-                     * owns echo/editing. On a pipe/redirect the driver no-ops. */
-                    sethost_set_line(ch_in, 1);
-                    passall_on = 1;
-                } else if (cev == DNET_CTERM_EV_WRITE) {
-                    if (term.last.datalen) {
+                }
+
+                /* BOUND: real terminal I/O, all inside 09-envelopes. */
+                enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
+                uint8_t txt[DNET_CTERM_MAX_DATA];
+                size_t txtlen = 0;
+                uint8_t rhandle[2] = { 0, 0 };
+                if (dnet_cterm_found_terminal_rx(eng->rx_data, eng->rx_datalen,
+                                                 &tk, txt, sizeof(txt), &txtlen,
+                                                 rhandle) != DNET_CTERM_OK)
+                    break;
+                if (tk == DNET_CTERM_TK_WRITE) {
+                    term.writes_recv++;
+                    if (txtlen) {
                         struct _iosb iosb;
                         (void)sys$qiow(0, ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
-                                       term.last.data, (uint32_t)term.last.datalen,
-                                       0, 0, 0, 0);
+                                       txt, (uint32_t)txtlen, 0, 0, 0, 0);
                     }
-                } else if (cev == DNET_CTERM_EV_UNBOUND) {
-                    log_ts(stdout);
-                    printf(" DECNETD-I-UNBOUND, host released the terminal"
-                           " session on circuit %s\n", eng->circuit);
-                    fflush(stdout);
-                    done = 1;
+                } else if (tk == DNET_CTERM_TK_START_READ) {
+                    /* rd vms-6165: a 02-08 is PROMPT-AND-READ -- display the
+                     * prompt text, THEN answer with exactly one queued input
+                     * line. One solicit -> one line, never more, never before
+                     * this arrives. If the queue has no complete line yet
+                     * (interactive typing still in flight), remember the
+                     * solicit and satisfy it the moment one becomes available. */
+                    term.writes_recv++;
+                    if (txtlen) {
+                        struct _iosb iosb;
+                        (void)sys$qiow(0, ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
+                                       txt, (uint32_t)txtlen, 0, 0, 0, 0);
+                    }
+                    int srr = sethost_send_queued_line(&term, &inq, eng, sock,
+                                                       ifindex, now, cpdu,
+                                                       sizeof(cpdu));
+                    if (srr < 0) {
+                        fprintf(stderr, "DECNETD-E-READDATA, could not send"
+                                        " CTERM Read Data\n");
+                        rc = 1; done = 1;
+                    } else if (srr == 0) {
+                        read_pending = 1;
+                    } else {
+                        read_pending = 0;
+                    }
+                } else if (tk == DNET_CTERM_TK_READ_ATTR) {
+                    /* Host solicited terminal characteristics: answer with the
+                     * oracle read-characteristics reply, echoing its handle. */
+                    if (dnet_cterm_found_client_readchar_build(rhandle, cpdu,
+                                                               sizeof(cpdu),
+                                                               &clen) == 0)
+                        cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
                 }
+                /* TK_OTHER / TK_NONE: NSP-ack only (dnet_recv_route already did),
+                 * nothing to display or answer. */
                 break;
             }
             case DNET_LINK_EV_DISCONNECT:
@@ -1559,20 +2256,45 @@ static int run_set_host_loop(struct dnet_engine *eng, int sock, unsigned ifindex
                                     inbuf, (uint32_t)sizeof(inbuf), 0, 0, 0, 0);
             uint32_t rn = (rst & 1) ? iosb.iosb$l_dev_depend : 0;
             if ((rst & 1) && rn > 0) {
-                /* Real keystrokes -> CTERM Read Data (terminator CR). */
-                if (dnet_cterm_read_data(&term, inbuf, (size_t)rn, 0x0d,
-                                         cpdu, sizeof(cpdu), &clen) == 0)
-                    cterm_link_send(eng, sock, ifindex, cpdu, clen, now);
+                /* rd vms-6165: local keystrokes are BUFFERED, never sent
+                 * immediately -- CTERM input is prompt-gated (see the queue's
+                 * doc comment in dnet_cterm.h). Only actually emit a Read Data
+                 * if a host solicit is already outstanding (read_pending). */
+                (void)dnet_cterm_inq_feed(&inq, inbuf, (size_t)rn);
             } else {
-                /* Local EOF (SS$_ENDOFFILE) or a channel error: stop soliciting
-                 * input but KEEP the link open so the host's remaining output
-                 * drains. The session ends on the host's Unbind, a link drop,
-                 * or --duration. */
+                /* Local EOF (SS$_ENDOFFILE) or a channel error: stop polling
+                 * for more input but KEEP THE LINK UP -- whatever is already
+                 * queued (a canned/redirected stdin fully read at once) is
+                 * still dequeued one line per solicit, and the host's
+                 * remaining output still drains. The session ends on the
+                 * host's Unbind, a link drop, or --duration -- NEVER on
+                 * stdin EOF by itself (rd vms-6165 lab iter 2: tearing down
+                 * here is what caused the blast-then-quit bug). */
                 stdin_eof = 1;
+                dnet_cterm_inq_eof(&inq);
                 log_ts(stdout);
-                printf(" DECNETD-I-EOF, local input closed -- draining remote"
-                       " output on circuit %s\n", eng->circuit);
+                printf(" DECNETD-I-EOF, local input closed -- %zu byte(s) still"
+                       " queued, draining remote output on circuit %s\n",
+                       inq.len, eng->circuit);
                 fflush(stdout);
+            }
+            /* A host solicit may already be waiting on a line that was not
+             * available yet -- satisfy it now if the queue (or EOF) supplied
+             * one. Loop: EOF can make several trailing lines available, but a
+             * solicit is only EVER outstanding one at a time (the host waits
+             * for our reply before prompting again), so this fires at most
+             * once per solicit. */
+            if (read_pending) {
+                int srr = sethost_send_queued_line(&term, &inq, eng, sock,
+                                                   ifindex, now, cpdu,
+                                                   sizeof(cpdu));
+                if (srr < 0) {
+                    fprintf(stderr, "DECNETD-E-READDATA, could not send"
+                                    " CTERM Read Data\n");
+                    rc = 1; done = 1;
+                } else if (srr == 1) {
+                    read_pending = 0;
+                }
             }
         }
     }
@@ -1987,32 +2709,240 @@ static int run_fal_accept_test(void)
 #undef FA_CHECK
 }
 
+/*
+ * ================== --copy-selftest (rd vms-ea8/vms-6a4) ====================
+ * The OUTBOUND $ COPY command layer that sits on top of the FAL client: the
+ * node-filespec splitter + the copy-direction plan (dnet_copy_plan) that turn a
+ * `COPY <src> <dst>` argument pair into {direction, node, creds, remote/local
+ * spec}, then feed the object-17 connect builder + dnet_fal_client_get/put.
+ *
+ * This is the HONEST FLOOR (no executive, runs anywhere), the COPY analogue of
+ * --fal-selftest: it proves (A) copy_plan derives the right direction + node +
+ * access-control creds + node-stripped specs for a remote-SOURCE (GET) and a
+ * remote-DEST (PUT) argument pair, and (B) the creds copy_plan parsed out of the
+ * spec really drive a REAL object-17 Connect Initiate that FAL refuses with an
+ * NSP disconnect when they cannot be authenticated (no /dev/vms here) -- for
+ * BOTH directions, over the same threaded socketpair path DECNETD uses on the
+ * live datalink. The AUTHENTICATED full GET/PUT transfer of a plan's specs is
+ * the domain of --fal-accept-test (the hard gate on /dev/vms + the mounted
+ * SYSUAF); this floor never fakes a transfer (INV-6).
+ */
+static int copy_plan_refused_without_auth(const struct dnet_copy_plan *plan,
+                                           const char *label)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-COPYSELF, socketpair failed: %s\n", strerror(errno));
+        return -1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+    struct dnet_engine L, R;
+    int rc = -1;
+    if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) == 0 &&
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) == 0) {
+        dnet_tick_t tick = 100;
+        uint32_t auth = 0;
+        int br = fal_bringup(&L, &R, sv[0], sv[1], &tick,
+                             plan->username, plan->password, &auth);
+        if (br == 1 && auth != SS$_NORMAL) {
+            printf("DECNETD-I-COPYSELF, %s: the creds copy_plan parsed drove a real"
+                   " object-17 connect, REFUSED (status %08X) without auth (INV-6)\n",
+                   label, auth);
+            rc = 0;
+        } else {
+            printf("DECNETD-E-COPYSELF, %s: expected an honest refusal of the"
+                   " unauthenticated connect, got bringup=%d auth=%08X\n",
+                   label, br, auth);
+            rc = 1;
+        }
+    } else {
+        fprintf(stderr, "DECNETD-E-COPYSELF, engine init failed\n");
+        rc = -1;
+    }
+    close(sv[0]); close(sv[1]);
+    return rc;
+}
+
+static int run_copy_selftest(void)
+{
+    int pass = 0, fail = 0;
+#define CP_CHECK(cond, msg) do { \
+        if (cond) { printf("  PASS: %s\n", (msg)); pass++; } \
+        else      { printf("  FAIL: %s\n", (msg)); fail++; } } while (0)
+
+    /* (A) copy_plan direction/creds/spec derivation, GET and PUT. */
+    struct dnet_copy_plan get_plan, put_plan;
+    int rg = dnet_copy_plan("VAX1\"GUEST SECRET\"::DISK$U:[X]REMOTE.TXT",
+                            "LOCAL.TXT", &get_plan);
+    CP_CHECK(rg == 0 && get_plan.is_get == 1 &&
+             !strcmp(get_plan.node, "VAX1") &&
+             !strcmp(get_plan.username, "GUEST") &&
+             !strcmp(get_plan.password, "SECRET") &&
+             !strcmp(get_plan.remote_spec, "DISK$U:[X]REMOTE.TXT") &&
+             !strcmp(get_plan.local_spec, "LOCAL.TXT"),
+             "COPY remote-source -> GET plan (direction, node, creds, specs)");
+
+    int rp = dnet_copy_plan("LOCAL.TXT",
+                            "VAX1\"GUEST SECRET\"::DISK$U:[X]REMOTE.TXT", &put_plan);
+    CP_CHECK(rp == 0 && put_plan.is_get == 0 &&
+             !strcmp(put_plan.node, "VAX1") &&
+             !strcmp(put_plan.remote_spec, "DISK$U:[X]REMOTE.TXT") &&
+             !strcmp(put_plan.local_spec, "LOCAL.TXT"),
+             "COPY remote-dest -> PUT plan (direction, node, specs)");
+
+    /* refusals are structural, no wire needed */
+    struct dnet_copy_plan tmp;
+    CP_CHECK(dnet_copy_plan("A.TXT", "B.TXT", &tmp) == DNET_CTERM_EINVAL,
+             "both-local COPY refused (not a DECnet transfer)");
+    CP_CHECK(dnet_copy_plan("A::X", "B::Y", &tmp) == DNET_CTERM_EINVAL,
+             "node-to-node COPY refused (not the outbound-client path)");
+
+    /* (B) the parsed creds drive a real, honestly-refused object-17 connect,
+     * for BOTH directions (integration: copy_plan -> connect builder -> engine). */
+    if (rg == 0) {
+        int r = copy_plan_refused_without_auth(&get_plan, "GET-plan creds");
+        if (r < 0) return 1;
+        CP_CHECK(r == 0, "GET-plan creds drive a real object-17 connect, refused without auth");
+    }
+    if (rp == 0) {
+        int r = copy_plan_refused_without_auth(&put_plan, "PUT-plan creds");
+        if (r < 0) return 1;
+        CP_CHECK(r == 0, "PUT-plan creds drive a real object-17 connect, refused without auth");
+    }
+
+    printf("DECNETD-I-COPYSELF, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-COPY-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-COPY-SELFTEST: FAIL\n");
+    return 1;
+#undef CP_CHECK
+}
+
+/*
+ * run_copy_loop - the LIVE outbound $ COPY over the datalink (rd vms-ea8).
+ *
+ * Builds the copy plan from the two COPY arguments, ENFORCES the credential
+ * posture, then would drive dnet_fal_client_get/put over a datalink-backed DAP
+ * transport to object 17 on the remote node.
+ *
+ * CREDENTIAL POSTURE (a DECIDED rule, not a facade): the FAL access-control
+ * PASSWORD is a REAL credential (unlike SET HOST, where LOGINOUT authenticates
+ * fresh and the connect password is empty). It MUST NOT appear on argv -- argv
+ * is world-readable in /proc/<pid>/cmdline under a fork/exec activation -- so:
+ *   - a password embedded in the COPY spec's access string is REFUSED here; the
+ *     command line carries at most NODE"username"::spec, never the password;
+ *   - the password is read from the inherited fd named by --password-fd, which
+ *     the in-process image activator hands over without it ever crossing a
+ *     process boundary in the clear.
+ * The node-stripped spec + username + account come from the plan; the password
+ * comes from the fd; together they build the object-17 connect.
+ *
+ * The outbound datalink-backed DAP transport itself (a DCL process owning a live
+ * DECnet circuit to carry the FAL client's DAP over AF_PACKET) is the build-host
+ * / inbound-bracket rung and is NOT wired here yet -- so with the plan validated
+ * and the posture enforced, this reports honestly and does not fake a transfer
+ * (INV-6, exactly as dcl_cmd_file.c reports %COPY-I-NETNOTWIRED today). The
+ * host+CI proof of the command layer is --copy-selftest; the authenticated
+ * transfer is --fal-accept-test.
+ */
+static int run_copy_loop(const char *src, const char *dst, int password_fd)
+{
+    struct dnet_copy_plan plan;
+    int r = dnet_copy_plan(src, dst, &plan);
+    if (r != DNET_CTERM_OK) {
+        fprintf(stderr, "DECNETD-E-COPYSPEC, could not parse the COPY specs"
+                        " (one side must be NODE\"user\"::file; status %d)\n", r);
+        return 1;
+    }
+
+    /* POSTURE: never accept the password on the command line. */
+    if (plan.password[0] != '\0') {
+        fprintf(stderr, "DECNETD-E-COPYPW, the FAL password must not appear on the"
+                        " command line (it would be world-readable in"
+                        " /proc/<pid>/cmdline); pass NODE\"username\"::file and"
+                        " supply the password on the fd named by --password-fd\n");
+        return 1;
+    }
+    if (plan.has_access && password_fd < 0) {
+        fprintf(stderr, "DECNETD-E-COPYPW, an access-control username was given"
+                        " but no --password-fd; refusing (no password source)\n");
+        return 1;
+    }
+
+    log_ts(stdout);
+    printf(" DECNETD-I-COPYPLAN, %s %s%s%s::%s <-> local %s\n",
+           plan.is_get ? "GET" : "PUT",
+           plan.node,
+           plan.has_access ? "\"" : "", plan.has_access ? plan.username : "",
+           plan.remote_spec, plan.local_spec);
+    fflush(stdout);
+
+    /* The outbound datalink-backed DAP transport is the build-host-gated rung. */
+    fprintf(stderr, "DECNETD-I-COPYNOTWIRED, the outbound FAL COPY-over-datalink"
+                    " transport is not wired on this system -- the plan is valid"
+                    " and the credential path is enforced, but a DCL process does"
+                    " not yet own a live DECnet circuit to carry DAP (rd vms-ea8,"
+                    " build-host-gated with the inbound bracket)\n");
+    (void)password_fd;
+    return 1;
+}
+
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-        "usage: %s --address AREA.NODE [options]\n"
-        "  --address A.N       DECnet Phase IV executor address (REQUIRED;\n"
-        "                      1..63 . 1..1023). No identity is invented if\n"
-        "                      omitted -- the daemon exits (INV-6).\n"
+        "usage: %s [--address AREA.NODE] [options]\n"
+        "  --address A.N       DECnet Phase IV executor address (1..63 . 1..1023).\n"
+        "                      If omitted it is SELF-SOURCED from the node's DECnet\n"
+        "                      configuration (executor.dat, written by NCP SET/DEFINE\n"
+        "                      EXECUTOR ADDRESS) -- the way STARTNET.COM starts the\n"
+        "                      persistent daemon with no argv. No identity is ever\n"
+        "                      invented; with neither the flag nor a configured\n"
+        "                      executor the daemon exits (INV-6).\n"
         "  --name NAME         NCP node name (1..6 chars; default OVMX)\n"
-        "  --iface IFNAME      datalink interface (default %s)\n"
+        "  --iface IFNAME      datalink interface. If omitted, the primary NIC is\n"
+        "                      AUTO-DETECTED (first up, non-loopback L2 interface --\n"
+        "                      the one the executive's _NET: rides), so the daemon\n"
+        "                      STARTNET.COM runs with no argv binds the right NIC;\n"
+        "                      falls back to %s only if detection finds nothing\n"
         "  --device DEV        VMS device label for the circuit (default EWA0)\n"
         "  --circuit CIRC      DECnet circuit name (default derived, e.g. EWA-0)\n"
         "  --hello-interval N  HELLO cadence T3 seconds (default %u, oracle vms-3be)\n"
+        "  --router            run as a Phase IV L1 ROUTER: advertise node-type\n"
+        "                      router and emit spec-faithful router-hellos to the\n"
+        "                      all-endnodes multicast, so an endnode selects this\n"
+        "                      node as its designated router (rd vms-0a9)\n"
+        "  --priority N        with --router: DR-election priority 0..255 (default\n"
+        "                      %u, the DNA-documented default)\n"
         "  --duration N        run N seconds then exit (default: until SIGINT/TERM)\n"
         "  --show-executor     print the NCP executor summary and exit (no socket)\n"
         "  --self-test         run the in-process tx/rx/adjacency proof and exit\n"
+        "                      (add --router for the router run-mode isolation\n"
+        "                      proof: emit->decode->endnode DR-selection over a\n"
+        "                      socketpair, no netdev, NO real node -- rd vms-0a9)\n"
         "                      (no CAP_NET_RAW, no netdev -- moves a real HELLO\n"
         "                      frame over a socketpair; DECnet analogue of\n"
         "                      scsd --dlm-selftest)\n"
         "  --nsp-selftest      run the NSP logical-link connection proof and exit\n"
         "                      (no CAP_NET_RAW -- two engines OPEN a link, move a\n"
         "                      data segment+ack, and DISCONNECT over a socketpair)\n"
+        "  --task-selftest     run the TASK-TO-TASK client floor and exit (no\n"
+        "                      executive): open a link by NAME (NODE::\"TASK=x\",\n"
+        "                      format-1 NAMED descriptor), the passive side decodes\n"
+        "                      the name, a request+reply move BOTH directions\n"
+        "                      byte-verified, then disconnect (rd vms-dda)\n"
+        "  --net-broker-selftest  run the exec<->NETACP T1 broker record codec\n"
+        "                      floor and exit (no executive): request/response\n"
+        "                      round-trip + bounds-validated decode (fuzzed) +\n"
+        "                      correlation-id anti-cross-talk (rd vms-22c)\n"
         "  --set-host-selftest run the $ SET HOST / CTERM terminal-service proof\n"
         "                      and exit (no CAP_NET_RAW -- two engines carry a\n"
         "                      whole terminal session: Bind, characteristics,\n"
         "                      screen output, keystrokes, out-of-band, Unbind,\n"
         "                      over a socketpair; every payload byte-identical)\n"
+        "  --set-host-src-codes-selftest  prove the live --set-host CI carries\n"
+        "                      NONZERO format-2 source group/user codes sourced\n"
+        "                      from the running process (vms-15a/a70: zero/zero is\n"
+        "                      silently discarded by real VMS session control)\n"
         "  --cterm-accept-test run the INBOUND SET HOST acceptance and exit: a\n"
         "                      real connect to Session Control object 42 is\n"
         "                      dispatched through the executive ($CREPRC\n"
@@ -2032,6 +2962,13 @@ static void usage(const char *argv0)
         "                      process running LOGINOUT.EXE on an RTAn: for it.\n"
         "                      The remote user is AUTHENTICATED by LOGINOUT --\n"
         "                      this daemon spawns nothing and knows no password.\n"
+        "                      This is the DEFAULT for the persistent endnode\n"
+        "                      daemon (NETACP serves object 42); the flag is kept\n"
+        "                      for an explicit ROUTER that should also serve.\n"
+        "  --no-cterm-server   do NOT serve inbound $ SET HOST -- route only. For a\n"
+        "                      routing/capture invocation that wants no LOGINOUT\n"
+        "                      surface. (A --router or --set-host invocation is\n"
+        "                      already routing/client-only unless serve is pinned.)\n"
         "  --set-host A.N      $ SET HOST CLIENT: open a CTERM terminal session\n"
         "                      to Session Control object 42 on remote node A.N and\n"
         "                      bridge THIS process's VMS terminal channel to it\n"
@@ -2052,13 +2989,29 @@ static void usage(const char *argv0)
         "                      HARD GATE on /dev/vms + the mounted SYSUAF): real\n"
         "                      SYSUAF/Purdy auth (bad password REFUSED), then a\n"
         "                      sequential file transferred BOTH directions\n"
-        "                      through real DAP + RMS over the ACP, byte-verified\n",
-        argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT);
+        "                      through real DAP + RMS over the ACP, byte-verified\n"
+        "  --copy-selftest     run the OUTBOUND COPY command-layer floor and exit\n"
+        "                      (no executive): copy_plan derives the right\n"
+        "                      direction + node + creds + specs for a remote-source\n"
+        "                      (GET) and remote-dest (PUT) pair, and those parsed\n"
+        "                      creds drive a real object-17 connect refused without\n"
+        "                      auth -- both directions (rd vms-ea8/vms-6a4)\n"
+        "  --copy SRC DST      OUTBOUND $ COPY over DECnet: exactly one of SRC/DST\n"
+        "                      is NODE\"username\"::file (the remote), the other is\n"
+        "                      local. The FAL PASSWORD is NEVER taken here -- it is\n"
+        "                      a real credential and must not sit in argv (world-\n"
+        "                      readable /proc); supply it on --password-fd. The\n"
+        "                      outbound datalink transport is build-host-gated.\n"
+        "  --password-fd N     with --copy: read the FAL access-control password\n"
+        "                      from inherited fd N (never from argv or the env)\n",
+        argv0, DECNETD_DEFAULT_IFACE, (unsigned)DNET_T3_DEFAULT,
+        (unsigned)DNET_ROUTER_PRIORITY_DEFAULT);
 }
 
 int main(int argc, char **argv)
 {
     const char *ifname = DECNETD_DEFAULT_IFACE;
+    int ifname_explicit = 0;      /* did the caller pin --iface?             */
     const char *addr_s = NULL;
     const char *name = "OVMX";
     const char *device = "EWA0";
@@ -2068,19 +3021,39 @@ int main(int argc, char **argv)
     int show_executor_only = 0;
     int self_test = 0;
     int nsp_self_test = 0;
+    int task_self_test = 0;               /* --task-selftest : task-to-task client floor */
+    int net_broker_test = 0;              /* --net-broker-selftest : T1 broker record codec */
     int sethost_self_test = 0;
+    int sethost_srccode_test = 0;
     int cterm_accept_test = 0;
     int isolation_test = 0;
-    int cterm_server = 0;
+    /* The persistent node daemon (NETACP) SERVES inbound $ SET HOST by default
+     * -- serving object 42 is what a DECnet ancillary control process does, and
+     * RUN/DETACHED (VMS semantics: an image parameter, never argv) cannot pass a
+     * mode flag to the detached daemon SYS$MANAGER:STARTNET.COM starts, exactly
+     * as TCPIP$STARTUP starts TCPIP$INETD with no args and it reads its own
+     * SYS$SYSTEM:TCPIP$SERVICE.DAT (rd vms-a70 direction B). Serving is a strict
+     * SUPERSET of routing: it is dormant until a peer sends an object-42 connect,
+     * and mints nothing without the executive (fail-honest, INV-6). A ROUTER is
+     * routing-only unless it is told otherwise, and --no-cterm-server forces it
+     * off for a routing/capture invocation. */
+    int cterm_server = 1;
+    int cterm_server_explicit = 0;        /* did the caller pin serve on/off?      */
     const char *set_host_to = NULL;       /* --set-host A.N : CTERM terminal client */
     const char *set_host_user = "SYSTEM"; /* --user : CTERM access-control name      */
     int fal_self_test = 0;
     int fal_accept_test = 0;
+    int copy_self_test = 0;               /* --copy-selftest : COPY command-layer floor */
+    const char *copy_src = NULL;          /* --copy <src> <dst> : outbound FAL COPY      */
+    const char *copy_dst = NULL;
+    int copy_password_fd = -1;            /* --password-fd N : the FAL password source   */
+    int router_mode = 0;           /* --router: emit router-hellos, advertise L1 router */
+    int router_priority = 0;       /* --priority: DR-election priority (0 => DNA default 64) */
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
         else if (!strcmp(argv[i], "--name") && i + 1 < argc)    name = argv[++i];
-        else if (!strcmp(argv[i], "--iface") && i + 1 < argc)   ifname = argv[++i];
+        else if (!strcmp(argv[i], "--iface") && i + 1 < argc)   { ifname = argv[++i]; ifname_explicit = 1; }
         else if (!strcmp(argv[i], "--device") && i + 1 < argc)  device = argv[++i];
         else if (!strcmp(argv[i], "--circuit") && i + 1 < argc) circuit = argv[++i];
         else if (!strcmp(argv[i], "--hello-interval") && i + 1 < argc)
@@ -2090,14 +3063,28 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--show-executor")) show_executor_only = 1;
         else if (!strcmp(argv[i], "--self-test"))     self_test = 1;
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
+        else if (!strcmp(argv[i], "--task-selftest")) task_self_test = 1;
+        else if (!strcmp(argv[i], "--net-broker-selftest")) net_broker_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
+        else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
         else if (!strcmp(argv[i], "--isolation-test")) isolation_test = 1;
-        else if (!strcmp(argv[i], "--cterm-server")) cterm_server = 1;
+        else if (!strcmp(argv[i], "--cterm-server")) { cterm_server = 1; cterm_server_explicit = 1; }
+        else if (!strcmp(argv[i], "--no-cterm-server")) { cterm_server = 0; cterm_server_explicit = 1; }
         else if (!strcmp(argv[i], "--set-host") && i + 1 < argc) set_host_to = argv[++i];
         else if (!strcmp(argv[i], "--user") && i + 1 < argc)     set_host_user = argv[++i];
         else if (!strcmp(argv[i], "--fal-selftest")) fal_self_test = 1;
         else if (!strcmp(argv[i], "--fal-accept-test")) fal_accept_test = 1;
+        else if (!strcmp(argv[i], "--copy-selftest")) copy_self_test = 1;
+        else if (!strcmp(argv[i], "--copy") && i + 2 < argc) {
+            copy_src = argv[++i];
+            copy_dst = argv[++i];
+        }
+        else if (!strcmp(argv[i], "--password-fd") && i + 1 < argc)
+            copy_password_fd = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--router")) router_mode = 1;
+        else if (!strcmp(argv[i], "--priority") && i + 1 < argc)
+            router_priority = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) {
             usage(argv[0]);
             return 0;
@@ -2108,12 +3095,22 @@ int main(int argc, char **argv)
         }
     }
 
+    /* --router --self-test: the router run-mode isolation proof (rd vms-0a9),
+     * no netdev, NO real node. Dispatched before the plain --self-test. */
+    if (router_mode && self_test)
+        return run_router_self_test();
     if (self_test)
         return run_self_test();
     if (nsp_self_test)
         return run_nsp_selftest();
+    if (task_self_test)
+        return run_task_selftest();
+    if (net_broker_test)
+        return run_net_broker_selftest();
     if (sethost_self_test)
         return run_sethost_selftest();
+    if (sethost_srccode_test)
+        return run_sethost_srccode_selftest();
     if (cterm_accept_test)
         return run_cterm_accept_test();
     if (isolation_test)
@@ -2122,13 +3119,37 @@ int main(int argc, char **argv)
         return run_fal_selftest();
     if (fal_accept_test)
         return run_fal_accept_test();
+    if (copy_self_test)
+        return run_copy_selftest();
+    if (copy_src)
+        return run_copy_loop(copy_src, copy_dst, copy_password_fd);
 
-    /* --set-host CLIENT self-sources its executor address from the node's DECnet
-     * configuration (rd vms-f54) so DCL's SET HOST wiring need not know it. When
-     * no --address was given, read it from executor.dat; if that is absent the
-     * NOADDRESS error below fires -- still never an invented address. */
+    /* A router routes and a --set-host CLIENT bridges a terminal; neither is a
+     * NETACP that serves inbound object-42 sessions unless the caller pins it on.
+     * The persistent ENDNODE daemon serves by default (see cterm_server above). */
+    if ((router_mode || set_host_to) && !cterm_server_explicit)
+        cterm_server = 0;
+
+    /* RESOLVE THE DATALINK INTERFACE. When --iface was not given (the persistent
+     * NETACP daemon STARTNET.COM starts with no argv), auto-detect the primary
+     * NIC rather than binding the compile-time "br0" -- inside a booted node's
+     * netns the NIC is eth0/ETH0:, not the dev-lab bridge (rd vms-a70 direction
+     * B, gap B). Explicit --iface (the veth/lab harness) always wins; if
+     * detection finds nothing the compiled default stands and the open below
+     * fails honestly. */
+    static char ifname_auto[IF_NAMESIZE];
+    if (!ifname_explicit && decnet_autodetect_iface(ifname_auto, sizeof(ifname_auto)))
+        ifname = ifname_auto;
+
+    /* SELF-SOURCE the executor address from the node's DECnet configuration
+     * (executor.dat, rd vms-f54) whenever --address was not given -- for the
+     * --set-host CLIENT (so DCL's SET HOST wiring need not know it), for the
+     * persistent NETACP daemon SYS$MANAGER:STARTNET.COM starts with no argv
+     * (rd vms-a70 direction B), and for --show-executor. If executor.dat is
+     * absent the NOADDRESS error below fires -- DECnet is simply not configured
+     * on this node, and no address is ever invented (INV-6). */
     static char sethost_addrbuf[16];
-    if (set_host_to && !addr_s) {
+    if (!addr_s) {
         unsigned ea = 0, en = 0;
         if (sethost_source_executor(&ea, &en) == 0) {
             snprintf(sethost_addrbuf, sizeof(sethost_addrbuf), "%u.%u", ea, en);
@@ -2140,6 +3161,20 @@ int main(int argc, char **argv)
      * resolve_node_identity discipline: a wrong identity must never be made up). */
     unsigned area = 0, node = 0;
     if (!addr_s || parse_addr(addr_s, &area, &node) != 0) {
+        /* BARE AUTO-START on an UNCONFIGURED node (argc == 1: the persistent
+         * NETACP daemon SYS$MANAGER:STARTNET.COM launches with no argv, having
+         * found no executor address in the node's DECnet configuration). This is
+         * NOT an error -- an unconfigured node simply runs no DECnet. Exit CLEAN
+         * (success), logging the honest no-op, so STARTNET's RUN/DETACHED leaves
+         * neither a failed process nor a %DCL abort on the boot console (INV-6).
+         * An EXPLICIT invocation (any flag: --set-host, --show-executor, --router,
+         * ...) with no resolvable address is still the caller's error below. */
+        if (argc == 1) {
+            printf("DECNETD-I-NOCONFIG, DECnet is not configured on this node"
+                   " (no executor address); NETACP not started\n");
+            fflush(stdout);
+            return 0;
+        }
         fprintf(stderr, "DECNETD-E-NOADDRESS, a valid --address AREA.NODE is"
                         " required (1..63 . 1..1023); refusing to invent an"
                         " executor address\n");
@@ -2148,6 +3183,17 @@ int main(int argc, char **argv)
 
     if (hello_interval < 1)
         hello_interval = (int)DNET_T3_DEFAULT;
+
+    /* --priority is only meaningful in --router mode, and is a single wire byte. */
+    if (router_priority < 0 || router_priority > 255) {
+        fprintf(stderr, "DECNETD-E-BADPRIO, --priority must be 0..255 (DR-election"
+                        " priority); got %d\n", router_priority);
+        return 1;
+    }
+    if (router_priority && !router_mode) {
+        fprintf(stderr, "DECNETD-E-BADPRIO, --priority requires --router\n");
+        return 1;
+    }
 
     /* --show-executor: report the identity/circuit this endnode would adopt and
      * exit, opening NO socket (needs no privilege). Analogue of scsd
@@ -2160,8 +3206,22 @@ int main(int argc, char **argv)
             fprintf(stderr, "DECNETD-E-INIT, engine init failed\n");
             return 1;
         }
+        if (router_mode)
+            dnet_engine_set_router(&e, (uint8_t)router_priority);
         dnet_engine_show_executor(&e, stdout);
         dnet_engine_show_circuit(&e, stdout);
+        /* Report, honestly, whether the persistent daemon would SERVE inbound
+         * $ SET HOST -- the serve decision STARTNET.COM's NETACP inherits (the
+         * endnode daemon serves object 42 by default; a router or --set-host
+         * client, or --no-cterm-server, does not). This is a dry-run readout:
+         * --show-executor opens no socket, so it never actually serves here. */
+        printf("Inbound SET HOST (object 42) = %s\n",
+               cterm_server ? "served (CTERM -> LOGINOUT)" : "not served");
+        /* The Linux datalink the daemon WOULD bind (auto-detected primary NIC
+         * unless --iface pinned it) -- the dry-run readout of gap-B resolution;
+         * no socket is opened here. */
+        printf("Datalink interface = %s%s\n", ifname,
+               ifname_explicit ? " (--iface)" : " (auto-detected primary NIC)");
         return 0;
     }
 
@@ -2207,6 +3267,11 @@ int main(int argc, char **argv)
         scs_datalink_close(sock);
         return 1;
     }
+    /* --router (rd vms-0a9): advertise an L1 router node-type and emit router-
+     * hellos on the T3 cadence instead of endnode-hellos, so a Phase IV endnode
+     * on the segment selects THIS node as its designated router. */
+    if (router_mode)
+        dnet_engine_set_router(&eng, (uint8_t)router_priority);
 
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
@@ -2220,11 +3285,22 @@ int main(int argc, char **argv)
      * engine below is its low-privilege DATALINK, and the AF_PACKET socket is
      * hidden behind the executive device face _NET: (Rule 1, vms-515 §3.3). */
     log_ts(stdout);
-    printf(" DECNETD-I-STARTED, NETACP up: DECnet Phase IV endnode on circuit %s"
+    printf(" DECNETD-I-STARTED, NETACP up: DECnet Phase IV %s on circuit %s"
            " (wire engine demoted to NETACP's datalink; AF_PACKET hidden behind"
-           " the _NET: device face, Rule 1)\n", eng.circuit);
+           " the _NET: device face, Rule 1)\n",
+           router_mode ? "L1 router" : "endnode", eng.circuit);
     dnet_engine_show_executor(&eng, stdout);
     dnet_engine_show_circuit(&eng, stdout);
+    /* Say, honestly, whether this NETACP serves inbound $ SET HOST. When it
+     * does, an inbound object-42 connect reaches LOGINOUT on an executive-minted
+     * RTAn: (one session at a time); the remote user authenticates fresh. */
+    log_ts(stdout);
+    if (cterm_server)
+        printf(" DECNETD-I-CTERMLISTEN, serving inbound $ SET HOST (Session"
+               " Control object 42 -> LOGINOUT on RTAn:); one session at a time\n");
+    else
+        printf(" DECNETD-I-ROUTEONLY, NOT serving inbound $ SET HOST"
+               " (routing only)\n");
     fflush(stdout);
 
     /* --set-host CLIENT (rd vms-f54): the OUTBOUND half of $ SET HOST. It opens
@@ -2264,22 +3340,34 @@ int main(int argc, char **argv)
     while (!g_stop) {
         dnet_tick_t now = monotonic_sec();
 
-        /* T3 emission cadence: build + transmit our endnode HELLO. */
+        /* T3 emission cadence: build + transmit our HELLO. In --router mode this
+         * is a spec-faithful ROUTER-hello to the all-endnodes multicast (so an
+         * endnode selects us as its DR); otherwise the endnode-hello (rd vms-0a9). */
         if (dnet_engine_hello_due(&eng, now)) {
             size_t flen = 0;
-            if (dnet_engine_build_hello_frame(&eng, frame, sizeof(frame), &flen)
-                    == DNET_ENGINE_OK) {
+            int is_router = dnet_engine_is_router(&eng);
+            int built = is_router
+                ? dnet_engine_build_router_hello_frame(&eng, frame, sizeof(frame), &flen)
+                : dnet_engine_build_hello_frame(&eng, frame, sizeof(frame), &flen);
+            if (built == DNET_ENGINE_OK) {
+                const uint8_t *mcast = is_router ? DNET_ROUTER_HELLO_MCAST
+                                                 : DNET_HELLO_MCAST;
                 ssize_t sent = scs_datalink_send(sock, (int)ifindex,
-                                                 DNET_ETHERTYPE, DNET_HELLO_MCAST,
+                                                 DNET_ETHERTYPE, mcast,
                                                  frame, flen);
                 if (sent < 0) {
                     fprintf(stderr, "DECNETD-E-SENDFAIL, HELLO transmit failed: %s\n",
                             strerror(errno));
                 } else {
-                    dnet_engine_hello_emitted(&eng, now);
+                    if (is_router)
+                        dnet_engine_router_hello_emitted(&eng, now);
+                    else
+                        dnet_engine_hello_emitted(&eng, now);
                     log_ts(stdout);
-                    printf(" DECNETD-I-HELLOSENT, circuit %s seq=%lu bytes=%zd\n",
-                           eng.circuit, eng.hello_sent, sent);
+                    printf(" DECNETD-I-HELLOSENT, %s circuit %s seq=%lu bytes=%zd\n",
+                           is_router ? "router-hello" : "endnode-hello",
+                           eng.circuit,
+                           is_router ? eng.router_hello_sent : eng.hello_sent, sent);
                     fflush(stdout);
                 }
             }

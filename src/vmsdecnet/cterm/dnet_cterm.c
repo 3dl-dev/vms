@@ -1,19 +1,23 @@
 /*
  * dnet_cterm.c - DECnet Phase IV CTERM (Command Terminal) protocol: the
  *                terminal-service layered product behind $ SET HOST.
- *                See dnet_cterm.h for the full clean-room provenance (Rule 8):
- *                CTERM is ENTIRELY SPEC-DERIVED -- no oracle specimen exists
- *                (the vms-3be capture never completed a logical link), so the
- *                message-type codes and body layouts here are OVMX-assigned from
- *                the public DNA CTERM functional description and proven only by
- *                round-trip, never presented as oracle-verified bytes.
+ *                See dnet_cterm.h for the full clean-room provenance (Rule 8).
+ *
+ *                The FOUNDATION (session-setup) messages are now
+ *                ORACLE-GROUNDED (rd vms-bd0, real VAX1<->VAX2 $ SET HOST
+ *                capture on vaxlab-3) -- see the "FOUNDATION MESSAGE CODEC"
+ *                block in dnet_cterm.h for the full provenance and the
+ *                dnet_cterm_found_* functions below. The TERMINAL-I/O message
+ *                set below (Characteristics/Start Read/Read Data/OOB/Write/
+ *                Unbind) remains ENTIRELY SPEC-DERIVED -- no oracle specimen
+ *                exists for it yet -- and is proven only by round-trip, never
+ *                presented as oracle-verified bytes.
  *
  * On-wire CTERM PDU layouts (little-endian scalars; counted strings are a
  * 1-byte length followed by that many bytes). Every PDU begins with the 1-byte
- * message type (enum dnet_cterm_msgtype).
+ * message type (enum dnet_cterm_msgtype). Types 1/2 (the old invented Bind /
+ * Bind Accept) are gone from this switch -- see dnet_cterm_found_* instead.
  *
- *   Bind (1):            type, ver_v, ver_eco, ver_user, mode, name[counted]
- *   Bind Accept (2):     type, ver_v, ver_eco, ver_user, status, name[counted]
  *   Unbind (3):          type, reason
  *   Characteristics (4): type, term_type, width(LE2), page(LE2), char_flags(LE4)
  *   Start Read (5):      type, rd_flags(LE2), maxlen(LE2), timeout(LE2),
@@ -87,28 +91,6 @@ int dnet_cterm_encode(const struct dnet_cterm_msg *msg,
     buf[off++] = msg->type;
 
     switch (msg->type) {
-    case DNET_CTERM_MSG_BIND:
-        if (off + 4 > cap) return DNET_CTERM_ENOSPACE;
-        buf[off++] = msg->ver_v;
-        buf[off++] = msg->ver_eco;
-        buf[off++] = msg->ver_user;
-        buf[off++] = msg->mode;
-        r = put_string(buf, cap, off, msg->name);
-        if (r < 0) return DNET_CTERM_ENOSPACE;
-        off += (size_t)r;
-        break;
-
-    case DNET_CTERM_MSG_BIND_ACCEPT:
-        if (off + 4 > cap) return DNET_CTERM_ENOSPACE;
-        buf[off++] = msg->ver_v;
-        buf[off++] = msg->ver_eco;
-        buf[off++] = msg->ver_user;
-        buf[off++] = msg->status;
-        r = put_string(buf, cap, off, msg->name);
-        if (r < 0) return DNET_CTERM_ENOSPACE;
-        off += (size_t)r;
-        break;
-
     case DNET_CTERM_MSG_UNBIND:
         if (off + 1 > cap) return DNET_CTERM_ENOSPACE;
         buf[off++] = msg->reason;
@@ -184,28 +166,6 @@ int dnet_cterm_decode(const uint8_t *buf, size_t len,
     long r;
 
     switch (out->type) {
-    case DNET_CTERM_MSG_BIND:
-        if (off + 4 > len) return DNET_CTERM_ETRUNC;
-        out->ver_v    = buf[off++];
-        out->ver_eco  = buf[off++];
-        out->ver_user = buf[off++];
-        out->mode     = buf[off++];
-        r = get_string(buf, len, off, out->name, sizeof(out->name));
-        if (r < 0) return DNET_CTERM_ETRUNC;
-        off += (size_t)r;
-        break;
-
-    case DNET_CTERM_MSG_BIND_ACCEPT:
-        if (off + 4 > len) return DNET_CTERM_ETRUNC;
-        out->ver_v    = buf[off++];
-        out->ver_eco  = buf[off++];
-        out->ver_user = buf[off++];
-        out->status   = buf[off++];
-        r = get_string(buf, len, off, out->name, sizeof(out->name));
-        if (r < 0) return DNET_CTERM_ETRUNC;
-        off += (size_t)r;
-        break;
-
     case DNET_CTERM_MSG_UNBIND:
         if (off + 1 > len) return DNET_CTERM_ETRUNC;
         out->reason = buf[off++];
@@ -265,6 +225,412 @@ int dnet_cterm_decode(const uint8_t *buf, size_t len,
 
     if (consumed)
         *consumed = off;
+    return DNET_CTERM_OK;
+}
+
+/* ---- FOUNDATION message codec (rd vms-bd0) -------------------------------- */
+/*
+ * See the "FOUNDATION MESSAGE CODEC" block in dnet_cterm.h for the full
+ * oracle provenance of every constant below (vaxlab-3, real-cterm-ci.pcap /
+ * cterm-oracle-wid8.pcap). Every byte array here was copied verbatim off the
+ * wire; nothing below is a guessed or spec-derived value.
+ */
+
+int dnet_cterm_found_short_build(uint8_t msg_code, uint8_t param_code,
+                                 const uint8_t *value, uint8_t value_len,
+                                 size_t total_len,
+                                 uint8_t *buf, size_t cap, size_t *outlen)
+{
+    if (!buf || (value_len && !value))
+        return DNET_CTERM_EINVAL;
+    if (value_len > DNET_CTERM_FOUND_VALUE_MAX)
+        return DNET_CTERM_EBADLEN;
+    size_t meaningful = 3u + value_len;
+    size_t total = total_len > meaningful ? total_len : meaningful;
+    if (total > cap)
+        return DNET_CTERM_ENOSPACE;
+
+    buf[0] = msg_code;
+    buf[1] = param_code;
+    buf[2] = value_len;
+    if (value_len)
+        memcpy(buf + 3, value, value_len);
+    if (total > meaningful)
+        memset(buf + meaningful, 0, total - meaningful);
+
+    if (outlen)
+        *outlen = total;
+    return DNET_CTERM_OK;
+}
+
+int dnet_cterm_found_short_parse(const uint8_t *buf, size_t len,
+                                 uint8_t *msg_code, uint8_t *param_code,
+                                 uint8_t *value, size_t value_cap,
+                                 uint8_t *value_len, size_t *consumed)
+{
+    if (!buf || !msg_code || !param_code || !value_len)
+        return DNET_CTERM_EINVAL;
+    if (len < 3)
+        return DNET_CTERM_ETRUNC;
+
+    uint8_t vl = buf[2];
+    if (3u + vl > len)
+        return DNET_CTERM_ETRUNC;
+    if (vl > value_cap)
+        return DNET_CTERM_EBADLEN;   /* refuse, never clip */
+
+    *msg_code   = buf[0];
+    *param_code = buf[1];
+    *value_len  = vl;
+    if (vl && value)
+        memcpy(value, buf + 3, vl);
+    if (consumed)
+        *consumed = 3u + vl;
+    return DNET_CTERM_OK;
+}
+
+int dnet_cterm_found_envelope_build(uint16_t len_field,
+                                    const uint8_t *body, size_t body_len,
+                                    uint8_t *buf, size_t cap, size_t *outlen)
+{
+    if (!buf || (body_len && !body))
+        return DNET_CTERM_EINVAL;
+    if (4u + body_len > cap)
+        return DNET_CTERM_ENOSPACE;
+
+    buf[0] = 0x09;
+    buf[1] = 0x00;
+    put_u16(buf + 2, len_field);
+    if (body_len)
+        memcpy(buf + 4, body, body_len);
+
+    if (outlen)
+        *outlen = 4u + body_len;
+    return DNET_CTERM_OK;
+}
+
+int dnet_cterm_found_envelope_parse(const uint8_t *buf, size_t len,
+                                    uint16_t *len_field,
+                                    const uint8_t **body, size_t *body_len,
+                                    int *len_field_matches_body)
+{
+    if (!buf || !body || !body_len)
+        return DNET_CTERM_EINVAL;
+    if (len < 4)
+        return DNET_CTERM_ETRUNC;
+    if (buf[0] != 0x09 || buf[1] != 0x00)
+        return DNET_CTERM_EBADTYPE;
+
+    uint16_t lf = get_u16(buf + 2);
+    if (len_field)
+        *len_field = lf;
+    *body = buf + 4;
+    *body_len = len - 4;
+    if (len_field_matches_body)
+        *len_field_matches_body = (lf == (uint16_t)(len - 4)) ? 1 : 0;
+    return DNET_CTERM_OK;
+}
+
+/* The host's seg-1 Start: msg-code 1, param-code 0x02, value 00 07 00 10,
+ * zero-padded to 8 bytes total (oracle: both real-cterm-ci.pcap sessions and
+ * cterm-oracle-wid8.pcap, byte-identical). */
+static const uint8_t k_found_host_start_value[4] = { 0x00, 0x07, 0x00, 0x10 };
+
+int dnet_cterm_found_host_start_build(uint8_t *buf, size_t cap, size_t *outlen)
+{
+    return dnet_cterm_found_short_build(0x01, DNET_CTERM_FOUND_PARAM_OBSERVED,
+                                        k_found_host_start_value, 4, 8,
+                                        buf, cap, outlen);
+}
+
+/* The client's seg-1 response: msg-code 4, param-code 0x02, value
+ * 00 07 00 00, zero-padded to 17 bytes total (same three captures). */
+static const uint8_t k_found_client_start_value[4] = { 0x00, 0x07, 0x00, 0x00 };
+
+int dnet_cterm_found_client_start_build(uint8_t *buf, size_t cap, size_t *outlen)
+{
+    return dnet_cterm_found_short_build(0x04, DNET_CTERM_FOUND_PARAM_OBSERVED,
+                                        k_found_client_start_value, 4, 17,
+                                        buf, cap, outlen);
+}
+
+/* The host's seg-2 envelope: msgtype 9, len field 0x0017=23 (NOT equal to the
+ * 31-byte body that follows -- the discrepancy documented in dnet_cterm.h),
+ * body byte-identical across every capture examined (no session-variable
+ * content resolved in it). */
+static const uint8_t k_found_host_seg2_body[31] = {
+    0x01, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x02, 0x10, 0x1e, 0x03, 0x04, 0xfe, 0xff, 0xef,
+    0x00, 0x06, 0x00, 0x0b, 0x00, 0x08, 0x02, 0x02, 0x00
+};
+
+int dnet_cterm_found_host_seg2_build(uint8_t *buf, size_t cap, size_t *outlen)
+{
+    return dnet_cterm_found_envelope_build(0x0017, k_found_host_seg2_body,
+                                           sizeof(k_found_host_seg2_body),
+                                           buf, cap, outlen);
+}
+
+/* The client's seg-2 envelope body template: msgtype 9, len field 0x0035=53,
+ * EQUAL to its 53-byte body (unlike the host's). WIDTH lives at body offset
+ * 31-32 (2B LE, 0x0084=132 in every capture -- not diff-confirmed, see
+ * dnet_cterm.h); PAGE at body offset 36-37 (2B LE), DIFF-CONFIRMED 24 vs 48.
+ * The template below carries the default (132/24) values at those offsets;
+ * dnet_cterm_found_client_termchar_build() overwrites them. */
+static const uint8_t k_found_client_seg2_body_tmpl[53] = {
+    0x01, 0x00, 0x01, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x02, 0xf2, 0x03, 0x02, 0x02, 0xc0, 0x03, 0x03,
+    0x04, 0xfe, 0xff, 0xef, 0x00, 0x04, 0x18, 0x42, 0x20, 0x84, 0x00,
+    0xa0, 0x02, 0x00, 0x18, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    /* [31-32] WIDTH (LE, 2 bytes); [36-37] PAGE (LE, 2 bytes) -- overwritten
+     * by dnet_cterm_found_client_termchar_build() below. */
+};
+#define DNET_CTERM_FOUND_CLIENT_WIDTH_OFF  31
+#define DNET_CTERM_FOUND_CLIENT_PAGE_OFF   36
+
+int dnet_cterm_found_client_termchar_build(uint16_t width, uint16_t page,
+                                           uint8_t *buf, size_t cap,
+                                           size_t *outlen)
+{
+    uint8_t body[sizeof(k_found_client_seg2_body_tmpl)];
+
+    memcpy(body, k_found_client_seg2_body_tmpl, sizeof(body));
+    put_u16(body + DNET_CTERM_FOUND_CLIENT_WIDTH_OFF, width);
+    put_u16(body + DNET_CTERM_FOUND_CLIENT_PAGE_OFF, page);
+
+    return dnet_cterm_found_envelope_build(0x0035, body, sizeof(body),
+                                           buf, cap, outlen);
+}
+
+int dnet_cterm_found_client_termchar_parse(const uint8_t *buf, size_t len,
+                                           uint16_t *width, uint16_t *page)
+{
+    uint16_t lf;
+    const uint8_t *body;
+    size_t body_len;
+    int rc = dnet_cterm_found_envelope_parse(buf, len, &lf, &body, &body_len, NULL);
+    if (rc != DNET_CTERM_OK)
+        return rc;
+    if (body_len < DNET_CTERM_FOUND_CLIENT_PAGE_OFF + 2u)
+        return DNET_CTERM_ETRUNC;
+    if (width)
+        *width = get_u16(body + DNET_CTERM_FOUND_CLIENT_WIDTH_OFF);
+    if (page)
+        *page = get_u16(body + DNET_CTERM_FOUND_CLIENT_PAGE_OFF);
+    return DNET_CTERM_OK;
+}
+
+/* ---- vms-6165 live-client foundation + terminal-I/O codec ----------------
+ * Every literal below is copied byte-for-byte from real-cterm-ci.pcap link 8194
+ * (the accepted VAX2->VAX1 SET HOST that reached DCL). See dnet_cterm.h. */
+
+/* Client seg-3 body (11 bytes; oracle #44), envelope len field 0x000b. */
+static const uint8_t k_found_client_seg3_body[11] = {
+    0x17, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+int dnet_cterm_found_client_seg3_build(uint8_t *buf, size_t cap, size_t *outlen)
+{
+    return dnet_cterm_found_envelope_build(0x000b, k_found_client_seg3_body,
+                                           sizeof(k_found_client_seg3_body),
+                                           buf, cap, outlen);
+}
+
+/* Client seg-4 body (22 bytes; oracle #46), envelope len field 0x0016. Carries
+ * the terminal-characteristics blob at the captured WIDTH=132/PAGE=24 -- left
+ * literal (not parameterised) so every byte is oracle-identical. */
+static const uint8_t k_found_client_seg4_body[22] = {
+    0x13, 0x0c, 0x01, 0x00, 0x06, 0x00, 0x00, 0x00, 0x18, 0x00, 0x42,
+    0x20, 0x84, 0x00, 0xa0, 0x02, 0x00, 0x18, 0x00, 0x32, 0x00, 0x00
+};
+
+int dnet_cterm_found_client_seg4_build(uint8_t *buf, size_t cap, size_t *outlen)
+{
+    return dnet_cterm_found_envelope_build(0x0016, k_found_client_seg4_body,
+                                           sizeof(k_found_client_seg4_body),
+                                           buf, cap, outlen);
+}
+
+/* Client read-characteristics response body (26 bytes; oracle #53/#67/#70).
+ * Body offset 2-3 is the read handle echoed from the host's 0f-00 solicit; the
+ * template carries #53's 04 34 and is overwritten by the builder. */
+static const uint8_t k_found_client_readchar_body[26] = {
+    0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0x00,
+    0x00, 0x18, 0x00, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00, 0x18,
+    0x00, 0x32, 0x00, 0x00
+};
+#define DNET_CTERM_FOUND_READCHAR_HANDLE_OFF 2
+
+int dnet_cterm_found_client_readchar_build(const uint8_t handle[2],
+                                           uint8_t *buf, size_t cap,
+                                           size_t *outlen)
+{
+    uint8_t body[sizeof(k_found_client_readchar_body)];
+    memcpy(body, k_found_client_readchar_body, sizeof(body));
+    if (handle) {
+        body[DNET_CTERM_FOUND_READCHAR_HANDLE_OFF]     = handle[0];
+        body[DNET_CTERM_FOUND_READCHAR_HANDLE_OFF + 1] = handle[1];
+    }
+    return dnet_cterm_found_envelope_build(0x001a, body, sizeof(body),
+                                           buf, cap, outlen);
+}
+
+int dnet_cterm_found_read_data_build(const uint8_t *data, size_t len,
+                                     uint8_t terminator,
+                                     uint8_t *buf, size_t cap, size_t *outlen)
+{
+    if (!buf || (len && !data))
+        return DNET_CTERM_EINVAL;
+    if (len > DNET_CTERM_MAX_DATA)
+        return DNET_CTERM_EBADLEN;
+
+    /* body = 03 00 00 00 00 00 | datalen(LE2) | data | terminator */
+    uint8_t body[6 + 2 + DNET_CTERM_MAX_DATA + 1];
+    size_t b = 0;
+    body[b++] = 0x03; body[b++] = 0x00;
+    body[b++] = 0x00; body[b++] = 0x00; body[b++] = 0x00; body[b++] = 0x00;
+    put_u16(body + b, (uint16_t)len); b += 2;
+    if (len) { memcpy(body + b, data, len); b += len; }
+    body[b++] = terminator;
+
+    return dnet_cterm_found_envelope_build((uint16_t)b, body, b, buf, cap, outlen);
+}
+
+/* The two write-opcode prefixes the oracle showed for host screen output. */
+#define DNET_CTERM_WR02_TEXT_OFF 17u   /* 02-08 write: text begins at body[17] */
+
+/* ---- Terminal-input queue (rd vms-6165 prompt-gated pacing) -------------- */
+
+void dnet_cterm_inq_init(struct dnet_cterm_inq *q)
+{
+    if (!q)
+        return;
+    q->len = 0;
+    q->eof = 0;
+}
+
+size_t dnet_cterm_inq_feed(struct dnet_cterm_inq *q, const uint8_t *bytes, size_t n)
+{
+    if (!q || !bytes)
+        return 0;
+    size_t room = (q->len < DNET_CTERM_INQ_CAP) ? DNET_CTERM_INQ_CAP - q->len : 0;
+    size_t take = n < room ? n : room;
+    if (take) {
+        memcpy(q->buf + q->len, bytes, take);
+        q->len += take;
+    }
+    return take;
+}
+
+void dnet_cterm_inq_eof(struct dnet_cterm_inq *q)
+{
+    if (q)
+        q->eof = 1;
+}
+
+int dnet_cterm_inq_dequeue(struct dnet_cterm_inq *q, uint8_t *line,
+                           size_t linecap, size_t *linelen)
+{
+    if (!q || !line)
+        return 0;
+    size_t i;
+    for (i = 0; i < q->len; i++)
+        if (q->buf[i] == 0x0d || q->buf[i] == 0x0a)
+            break;
+    size_t linebytes, consume;
+    if (i < q->len) {
+        linebytes = i;
+        consume = i + 1;                       /* drop the terminator */
+        /* Collapse a CRLF / LFCR pair into a single terminator. */
+        if (consume < q->len &&
+            ((q->buf[i] == 0x0d && q->buf[consume] == 0x0a) ||
+             (q->buf[i] == 0x0a && q->buf[consume] == 0x0d)))
+            consume++;
+    } else if (q->eof && q->len > 0) {
+        linebytes = q->len;                    /* final unterminated line */
+        consume = q->len;
+    } else {
+        return 0;                              /* no complete line yet */
+    }
+    size_t copy = linebytes > linecap ? linecap : linebytes;
+    memcpy(line, q->buf, copy);
+    if (linelen) *linelen = copy;
+    memmove(q->buf, q->buf + consume, q->len - consume);
+    q->len -= consume;
+    return 1;
+}
+
+int dnet_cterm_found_terminal_rx(const uint8_t *buf, size_t len,
+                                 enum dnet_cterm_found_term_kind *kind,
+                                 uint8_t *text, size_t textcap, size_t *textlen,
+                                 uint8_t handle[2])
+{
+    if (kind)    *kind = DNET_CTERM_TK_NONE;
+    if (textlen) *textlen = 0;
+    if (!buf)
+        return DNET_CTERM_EINVAL;
+
+    uint16_t lf;
+    const uint8_t *body;
+    size_t body_len;
+    int rc = dnet_cterm_found_envelope_parse(buf, len, &lf, &body, &body_len, NULL);
+    if (rc != DNET_CTERM_OK)
+        return rc;              /* not a 09-envelope: leave kind == NONE */
+    if (body_len < 2) {
+        if (kind) *kind = DNET_CTERM_TK_OTHER;
+        return DNET_CTERM_OK;
+    }
+
+    /* 02 08 -> PROMPT-AND-READ (Start Read): display the prompt text (body from
+     * the fixed offset 17) AND solicit exactly one input line. The oracle pairs
+     * every 02-08 with exactly one client 03-00 Read Data (#54->#57 Username,
+     * #58->#60 Password, #72->#75 command, #77->#80 LOGOUT); flags at body[2:3]
+     * carry echo/noecho (0x00b0 echo, 0x00b8 noecho) -- recorded, not acted on
+     * here. Input is PROMPT-GATED: the client must NOT send before this arrives. */
+    if (body[0] == 0x02 && body[1] == 0x08) {
+        if (kind) *kind = DNET_CTERM_TK_START_READ;
+        if (text && textcap && body_len > DNET_CTERM_WR02_TEXT_OFF) {
+            size_t n = body_len - DNET_CTERM_WR02_TEXT_OFF;
+            if (n > textcap) n = textcap;
+            memcpy(text, body + DNET_CTERM_WR02_TEXT_OFF, n);
+            if (textlen) *textlen = n;
+        }
+        return DNET_CTERM_OK;
+    }
+
+    /* 07 72 -> formatted screen WRITE; strip the 5-byte record markers
+     * (07 72 02 01 0d) and NUL separators, copy the readable remainder.
+     * BEST-EFFORT (flagged for lab): banners are cosmetic, never gating. */
+    if (body[0] == 0x07 && body[1] == 0x72) {
+        if (kind) *kind = DNET_CTERM_TK_WRITE;
+        if (text && textcap) {
+            size_t o = 0, i = 0;
+            while (i < body_len && o < textcap) {
+                if (i + 5 <= body_len && body[i] == 0x07 && body[i+1] == 0x72 &&
+                    body[i+2] == 0x02 && body[i+3] == 0x01 && body[i+4] == 0x0d) {
+                    i += 5;                    /* skip a record marker */
+                    continue;
+                }
+                if (body[i] == 0x00) { i++; continue; }   /* drop NUL separators */
+                text[o++] = body[i++];
+            }
+            if (textlen) *textlen = o;
+        }
+        return DNET_CTERM_OK;
+    }
+
+    /* 0f 00 -> read-characteristics solicit; handle is at body offset 2-3. */
+    if (body[0] == 0x0f && body[1] == 0x00) {
+        if (kind) *kind = DNET_CTERM_TK_READ_ATTR;
+        if (handle) {
+            handle[0] = body_len > 2 ? body[2] : 0;
+            handle[1] = body_len > 3 ? body[3] : 0;
+        }
+        return DNET_CTERM_OK;
+    }
+
+    if (kind) *kind = DNET_CTERM_TK_OTHER;
     return DNET_CTERM_OK;
 }
 
@@ -412,11 +778,82 @@ int dnet_cterm_sc_connect_build(uint8_t dst_object,
     if (r < 0) return DNET_CTERM_ENOSPACE;
     off += (size_t)r;
 
-    /* MENUVER + the three access-control strings. A plain SET HOST sends them
-     * empty, exactly as the specimen does. */
+    /* MENUVER + the counted access-control strings RQSTRID, PASSWRD, ACCOUNT --
+     * then, for CTERM (object 42) ONLY, a fourth counted USRDATA field. The two
+     * services carry a DIFFERENT number of connect-data fields on the real wire:
+     *   - FAL (object 17): MENUVER 0x27 + RQSTRID + PASSWRD + ACCOUNT (THREE),
+     *     the real COPY capture in docs/oracle/vax-copy-fal-dap.md §1, accepted.
+     *   - CTERM (object 42): MENUVER 0x27 + RQSTRID + PASSWRD + ACCOUNT + USRDATA
+     *     (FOUR), the real SET HOST Sample A + the k_oracle_sc_connect specimen.
+     * OVMX emitted only three for CTERM too -- one byte short of every accepted
+     * CTERM form; real OpenVMS session control read past end-of-data on the
+     * missing USRDATA field and SILENTLY DISCARDED the Connect Initiate: no
+     * reject, no counter, no OPCOM event, no LOGINOUT (proven on the isolated
+     * lab -- VAX1 answered a disconnect in 165us and registered 1.42 as a fully
+     * reachable adjacency, yet gave the 3-field CI zero response; vms-a70 dirA).
+     * Clean-room: the connect-data layout is the uncopyrightable protocol fact;
+     * the C is OVMX's own. */
     if (off + 1 > cap) return DNET_CTERM_ENOSPACE;
     buf[off++] = SC_MENUVER_OBSERVED;
 
+    r = put_string(buf, cap, off, username); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
+    r = put_string(buf, cap, off, password); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
+    r = put_string(buf, cap, off, account);  if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
+    if (dst_object == DNET_CTERM_OBJECT) {
+        r = put_string(buf, cap, off, NULL); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;  /* CTERM USRDATA, empty */
+    }
+
+    if (outlen)
+        *outlen = off;
+    return DNET_CTERM_OK;
+}
+
+/*
+ * dnet_cterm_sc_connect_build_task - build a Session Control CONNECT to a NAMED
+ * task object (DNA format 1: objtype 0 + a counted task name), the addressing
+ * that $ASSIGN NODE::"TASK=name" uses for DECnet task-to-task (rd vms-dda).
+ *
+ * Distinct from dnet_cterm_sc_connect_build (format 0, a well-known object
+ * NUMBER such as CTERM 42 / FAL 17): here the destination end user is a NAME,
+ * and there is NO CTERM USRDATA field (that fourth counted string is
+ * object-42-specific -- a task-to-task object is 0/NAMED). The source descriptor
+ * (format 2, coded group/user + source user) and the MENUVER + RQSTRID/PASSWRD/
+ * ACCOUNT access-control fields are identical to the object builder. CLEAN-ROOM
+ * (Rule 8): format 1 is the published DNA named-task form; the C is OVMX's own.
+ *
+ * Returns DNET_CTERM_OK, or DNET_CTERM_EINVAL (null/empty task), EBADLEN (a
+ * field over DNET_SC_MAX_STR), or DNET_CTERM_ENOSPACE.
+ */
+int dnet_cterm_sc_connect_build_task(const char *dst_task,
+                                     const char *src_user,
+                                     uint16_t src_grpcode, uint16_t src_usrcode,
+                                     const char *username, const char *password,
+                                     const char *account,
+                                     uint8_t *buf, size_t cap, size_t *outlen)
+{
+    if (!buf || !dst_task || !dst_task[0])
+        return DNET_CTERM_EINVAL;
+    if (strlen(dst_task) > DNET_SC_MAX_STR ||
+        (src_user && strlen(src_user) > DNET_SC_MAX_STR))
+        return DNET_CTERM_EBADLEN;
+
+    size_t off = 0;
+    long r;
+
+    /* DSTNAME: format 1 (NAMED), objtype 0, counted task name. */
+    r = sc_put_descriptor(buf, cap, off, DNET_SC_FMT_NAMED, 0, 0, 0, dst_task);
+    if (r < 0) return DNET_CTERM_ENOSPACE;
+    off += (size_t)r;
+
+    /* SRCNAME: format 2 (CODED) source end user -- same as the object builder. */
+    r = sc_put_descriptor(buf, cap, off, DNET_SC_FMT_CODED, 0,
+                          src_grpcode, src_usrcode, src_user ? src_user : "");
+    if (r < 0) return DNET_CTERM_ENOSPACE;
+    off += (size_t)r;
+
+    /* MENUVER + RQSTRID + PASSWRD + ACCOUNT (THREE; no CTERM USRDATA -- obj 0). */
+    if (off + 1 > cap) return DNET_CTERM_ENOSPACE;
+    buf[off++] = SC_MENUVER_OBSERVED;
     r = put_string(buf, cap, off, username); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
     r = put_string(buf, cap, off, password); if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
     r = put_string(buf, cap, off, account);  if (r < 0) return DNET_CTERM_ENOSPACE; off += (size_t)r;
@@ -712,6 +1149,117 @@ int dnet_cterm_session_init(struct dnet_cterm_session *s, enum dnet_cterm_role r
     return DNET_CTERM_OK;
 }
 
+/* ---- vms-6165 live-client foundation FSM (host speaks first) ------------- */
+
+int dnet_cterm_client_open(struct dnet_cterm_session *s)
+{
+    if (!s)
+        return DNET_CTERM_EINVAL;
+    if (s->role != DNET_CTERM_ROLE_TERMINAL || s->state != DNET_CTERM_S_CLOSED)
+        return DNET_CTERM_ESTATE;
+    /* Arm and WAIT -- the host sends the first foundation message. */
+    s->state = DNET_CTERM_S_BINDING;
+    s->found_host_start_seen  = 0;
+    s->found_host_config_seen = 0;
+    s->found_step             = 0;
+    return DNET_CTERM_OK;
+}
+
+int dnet_cterm_client_found_rx(struct dnet_cterm_session *s,
+                               const uint8_t *buf, size_t len, int *progressed)
+{
+    if (progressed)
+        *progressed = 0;
+    if (!s || !buf)
+        return DNET_CTERM_EINVAL;
+    if (s->role != DNET_CTERM_ROLE_TERMINAL || s->state != DNET_CTERM_S_BINDING)
+        return DNET_CTERM_ESTATE;
+
+    /* A host 09-envelope config message (seg-2+) advances the config gate.
+     * Check the envelope shape FIRST -- the short-TLV parser would otherwise
+     * mis-read `09 00 <len> ...` as a bogus short-TLV. */
+    if (len >= 4 && buf[0] == 0x09 && buf[1] == 0x00) {
+        if (!s->found_host_config_seen) {
+            s->found_host_config_seen = 1;
+            if (progressed) *progressed = 1;
+        }
+        return DNET_CTERM_OK;
+    }
+
+    /* Otherwise the host's seg-1 short-TLV (msg-code 0x01). */
+    uint8_t msg_code, param_code, value_len;
+    uint8_t value[DNET_CTERM_FOUND_VALUE_MAX];
+    int rc = dnet_cterm_found_short_parse(buf, len, &msg_code, &param_code,
+                                          value, sizeof(value), &value_len, NULL);
+    if (rc != DNET_CTERM_OK)
+        return rc;
+    if (msg_code == 0x01 && !s->found_host_start_seen) {
+        s->found_host_start_seen = 1;
+        if (progressed) *progressed = 1;
+    }
+    return DNET_CTERM_OK;
+}
+
+int dnet_cterm_client_found_next(struct dnet_cterm_session *s,
+                                 uint16_t width, uint16_t page,
+                                 uint8_t *out, size_t cap, size_t *outlen)
+{
+    if (outlen)
+        *outlen = 0;
+    if (!s || !out)
+        return DNET_CTERM_EINVAL;
+    if (s->role != DNET_CTERM_ROLE_TERMINAL)
+        return DNET_CTERM_ESTATE;
+    /* Burst complete: seg-4 sent, session BOUND -- nothing more is due. */
+    if (s->found_step >= 4 && s->state == DNET_CTERM_S_BOUND)
+        return DNET_CTERM_OK;
+    if (s->state != DNET_CTERM_S_BINDING)
+        return DNET_CTERM_ESTATE;
+
+    switch (s->found_step) {
+    case 0:
+        /* seg-1: only after the host has spoken (host-speaks-first). */
+        if (!s->found_host_start_seen)
+            return DNET_CTERM_OK;   /* nothing due yet */
+        {
+            int rc = dnet_cterm_found_client_start_build(out, cap, outlen);
+            if (rc != DNET_CTERM_OK) return rc;
+        }
+        s->found_step = 1;
+        return DNET_CTERM_OK;
+    case 1:
+        /* seg-2 (termchar): only after the host's first config envelope. */
+        if (!s->found_host_config_seen)
+            return DNET_CTERM_OK;
+        {
+            int rc = dnet_cterm_found_client_termchar_build(width, page,
+                                                            out, cap, outlen);
+            if (rc != DNET_CTERM_OK) return rc;
+        }
+        s->width = width;
+        s->page  = page;
+        s->found_step = 2;
+        return DNET_CTERM_OK;
+    case 2:
+        {
+            int rc = dnet_cterm_found_client_seg3_build(out, cap, outlen);
+            if (rc != DNET_CTERM_OK) return rc;
+        }
+        s->found_step = 3;
+        return DNET_CTERM_OK;
+    case 3:
+        {
+            int rc = dnet_cterm_found_client_seg4_build(out, cap, outlen);
+            if (rc != DNET_CTERM_OK) return rc;
+        }
+        s->found_step = 4;
+        s->state = DNET_CTERM_S_BOUND;   /* foundation complete: terminal I/O */
+        return DNET_CTERM_OK;
+    default:
+        return DNET_CTERM_OK;            /* step 4: done, nothing to send */
+    }
+}
+
 int dnet_cterm_bind(struct dnet_cterm_session *s, const char *term_name,
                     uint8_t *out, size_t cap, size_t *outlen)
 {
@@ -720,18 +1268,12 @@ int dnet_cterm_bind(struct dnet_cterm_session *s, const char *term_name,
     if (s->role != DNET_CTERM_ROLE_TERMINAL || s->state != DNET_CTERM_S_CLOSED)
         return DNET_CTERM_ESTATE;
 
-    struct dnet_cterm_msg m;
-    memset(&m, 0, sizeof(m));
-    m.type     = DNET_CTERM_MSG_BIND;
-    m.ver_v    = DNET_CTERM_VER_V;
-    m.ver_eco  = DNET_CTERM_VER_ECO;
-    m.ver_user = DNET_CTERM_VER_USER;
-    m.mode     = DNET_CTERM_MODE_COMMAND;
-    if (term_name) {
-        strncpy(m.name, term_name, sizeof(m.name) - 1);
-        m.name[sizeof(m.name) - 1] = '\0';
-    }
-    int rc = dnet_cterm_encode(&m, out, cap, outlen);
+    /* rd vms-bd0: the real wire's foundation phase carries no terminal-name
+     * field at all -- term_name is accepted for call-site compatibility and
+     * ignored. See dnet_cterm.h for the vms-6165 host-speaks-first gap this
+     * still does not close. */
+    (void)term_name;
+    int rc = dnet_cterm_found_client_start_build(out, cap, outlen);
     if (rc != DNET_CTERM_OK)
         return rc;
     s->state = DNET_CTERM_S_BINDING;
@@ -743,23 +1285,16 @@ int dnet_cterm_bind_accept(struct dnet_cterm_session *s, const char *host_name,
 {
     if (!s || !out)
         return DNET_CTERM_EINVAL;
-    /* HOST accepts only after it has seen the inbound Bind (last.type == BIND). */
+    /* HOST accepts only after it has seen the inbound (real, rd vms-bd0)
+     * foundation Bind -- found_bind_seen, set by dnet_cterm_rx() below. */
     if (s->role != DNET_CTERM_ROLE_HOST || s->state != DNET_CTERM_S_CLOSED ||
-        s->last.type != DNET_CTERM_MSG_BIND)
+        !s->found_bind_seen)
         return DNET_CTERM_ESTATE;
 
-    struct dnet_cterm_msg m;
-    memset(&m, 0, sizeof(m));
-    m.type     = DNET_CTERM_MSG_BIND_ACCEPT;
-    m.ver_v    = DNET_CTERM_VER_V;
-    m.ver_eco  = DNET_CTERM_VER_ECO;
-    m.ver_user = DNET_CTERM_VER_USER;
-    m.status   = 0;   /* accepted */
-    if (host_name) {
-        strncpy(m.name, host_name, sizeof(m.name) - 1);
-        m.name[sizeof(m.name) - 1] = '\0';
-    }
-    int rc = dnet_cterm_encode(&m, out, cap, outlen);
+    /* host_name is accepted for call-site compatibility and ignored -- see
+     * dnet_cterm_bind() above; same real-wire fact applies. */
+    (void)host_name;
+    int rc = dnet_cterm_found_host_start_build(out, cap, outlen);
     if (rc != DNET_CTERM_OK)
         return rc;
     s->state = DNET_CTERM_S_BOUND;
@@ -913,6 +1448,40 @@ int dnet_cterm_rx(struct dnet_cterm_session *s, const uint8_t *buf, size_t len,
     if (!s || !buf)
         return DNET_CTERM_EINVAL;
 
+    /* FOUNDATION PHASE (rd vms-bd0): before the session is BOUND, CTERM
+     * speaks the real short-TLV foundation messages, not the general PDU set
+     * decoded below -- the client's real msg-code (4) collides on the wire
+     * with DNET_CTERM_MSG_CHARACTERISTICS, so which decoder applies is gated
+     * on role+state, never guessed from the byte alone (see dnet_cterm.h). */
+    if (s->role == DNET_CTERM_ROLE_HOST && s->state == DNET_CTERM_S_CLOSED) {
+        uint8_t msg_code, param_code, value_len;
+        uint8_t value[DNET_CTERM_FOUND_VALUE_MAX];
+        int rc = dnet_cterm_found_short_parse(buf, len, &msg_code, &param_code,
+                                              value, sizeof(value), &value_len, NULL);
+        if (rc != DNET_CTERM_OK)
+            return rc;
+        if (msg_code == 0x04) {
+            s->found_bind_seen = 1;
+            if (event)
+                *event = DNET_CTERM_EV_BIND_IND;
+        }
+        return DNET_CTERM_OK;
+    }
+    if (s->role == DNET_CTERM_ROLE_TERMINAL && s->state == DNET_CTERM_S_BINDING) {
+        uint8_t msg_code, param_code, value_len;
+        uint8_t value[DNET_CTERM_FOUND_VALUE_MAX];
+        int rc = dnet_cterm_found_short_parse(buf, len, &msg_code, &param_code,
+                                              value, sizeof(value), &value_len, NULL);
+        if (rc != DNET_CTERM_OK)
+            return rc;
+        if (msg_code == 0x01) {
+            s->state = DNET_CTERM_S_BOUND;
+            if (event)
+                *event = DNET_CTERM_EV_BOUND;
+        }
+        return DNET_CTERM_OK;
+    }
+
     struct dnet_cterm_msg m;
     int rc = dnet_cterm_decode(buf, len, &m, NULL);
     if (rc != DNET_CTERM_OK)
@@ -921,27 +1490,6 @@ int dnet_cterm_rx(struct dnet_cterm_session *s, const uint8_t *buf, size_t len,
     enum dnet_cterm_event ev = DNET_CTERM_EV_NONE;
 
     switch (m.type) {
-    case DNET_CTERM_MSG_BIND:
-        /* Only the HOST accepts an inbound Bind, and only while CLOSED. */
-        if (s->role == DNET_CTERM_ROLE_HOST && s->state == DNET_CTERM_S_CLOSED) {
-            s->last = m;   /* record so bind_accept() can validate + reply */
-            strncpy(s->peer_name, m.name, sizeof(s->peer_name) - 1);
-            s->peer_name[sizeof(s->peer_name) - 1] = '\0';
-            ev = DNET_CTERM_EV_BIND_IND;
-        }
-        break;
-
-    case DNET_CTERM_MSG_BIND_ACCEPT:
-        /* Only the TERMINAL that sent a Bind accepts a Bind Accept. */
-        if (s->role == DNET_CTERM_ROLE_TERMINAL && s->state == DNET_CTERM_S_BINDING) {
-            s->last = m;
-            strncpy(s->peer_name, m.name, sizeof(s->peer_name) - 1);
-            s->peer_name[sizeof(s->peer_name) - 1] = '\0';
-            s->state = DNET_CTERM_S_BOUND;
-            ev = DNET_CTERM_EV_BOUND;
-        }
-        break;
-
     case DNET_CTERM_MSG_CHARACTERISTICS:
         if (s->state == DNET_CTERM_S_BOUND) {
             s->last = m;
@@ -1029,8 +1577,6 @@ const char *dnet_cterm_state_name(enum dnet_cterm_state st)
 const char *dnet_cterm_msgtype_name(enum dnet_cterm_msgtype t)
 {
     switch (t) {
-    case DNET_CTERM_MSG_BIND:           return "BIND";
-    case DNET_CTERM_MSG_BIND_ACCEPT:    return "BIND-ACCEPT";
     case DNET_CTERM_MSG_UNBIND:         return "UNBIND";
     case DNET_CTERM_MSG_CHARACTERISTICS:return "CHARACTERISTICS";
     case DNET_CTERM_MSG_START_READ:     return "START-READ";

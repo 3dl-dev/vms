@@ -83,6 +83,16 @@ if ! grep -qE "ods2 master .* $VOLUME_LABEL " "$REPO/tests/lab-vax/run-boot.sh" 
     log "WARNING: run-boot.sh no longer masters the VAX system volume as '$VOLUME_LABEL' -- update VOLUME_LABEL"
 fi
 
+# SYSDEV: OVMX/NetBSD-vax names its MSCP system disk DUA0: -- the authentic
+# VMS-VAX MSCP/RQ device name (vms-9f5), not the virtio VDA0: the other arches
+# discover. The shared battery defaults to VDA0:; the VAX driver overrides it so
+# SHOW DEVICE / F$GETDVI / SHOW DEVICES assert the faithful VAX name. Verify the
+# device model still emits DUA0: as PRIMARY so this doesn't silently drift.
+export SYSDEV="DUA0:"
+if ! grep -qE 'DUA0.* is PRIMARY' "$REPO/src/kernel-netbsd/vms_blockdev_netbsd.c" 2>/dev/null; then
+    log "WARNING: vms_blockdev_netbsd.c no longer names the VAX system disk '$SYSDEV' as PRIMARY -- update SYSDEV"
+fi
+
 export CMD_TIMEOUT="${CMD_TIMEOUT:-30}"
 export BOOT_TIMEOUT="${BOOT_TIMEOUT:-300}"
 # SIMH's VAX TOY clock starts at a FIXED default epoch (measured: 1-JAN-2010),

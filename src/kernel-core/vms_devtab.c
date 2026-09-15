@@ -64,6 +64,8 @@
 #include "vms_scs.h"           /* FC-P2.4: vms_scs_start + the CONN snapshots */
 #include "vms_mscp_srv.h"      /* FC-P6.3: the MSCP disk server (CLUSTER_START step 5) */
 #include "vms_mscp_cl.h"       /* FC-P7.1: the MSCP disk class driver (step 6) */
+#include "vms_dlm_scs.h"       /* rd vms-1ee: the lock manager's WIRE ARM       */
+#include "vms_dlm_master.h"    /* ... and the DELIVERY PROC it serves on         */
 
 /*
  * Device class codes. Values mirror src/libvms/include/dcdef.h so the
@@ -823,6 +825,132 @@ long vms_ioctl_term_resolve(struct vms_proc *proc, unsigned long arg)
      * session to. Say so (INV-6) rather than hand back an empty string that a
      * caller would turn into an open("/dev/") it cannot explain. */
     args.status = args.backing[0] ? SS__NORMAL : SS__DEVOFFLINE;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_term_setlogin - stamp a network daemon's PRE-AUTHENTICATED user
+ * name onto an RTAn: (rd vms-65b). The conveyance channel for the SSH ->
+ * $CREPRC(LOGINOUT) handoff: the daemon has already authenticated the user in
+ * its own protocol against the SAME SYSUAF authority, and vouches that here so
+ * LOGINOUT does not re-challenge on a session it created for that terminal.
+ *
+ * PRIVILEGED: only a caller holding CAP_SYS_ADMIN/SETPRV (a not-yet-dropped
+ * network daemon -- the same authority that establishes a run-as identity) may
+ * vouch, exactly like vms_ioctl_establish_system. The note is a NAME, never a
+ * credential, and only a dynamic terminal (an RTAn:, never OPA0:) may carry
+ * one. LOGINOUT still builds the persona from the binary SYSUAF record and
+ * grants nothing beyond it.
+ */
+long vms_ioctl_term_setlogin(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_termlogin_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    args.username[VMS_USERNAME_SIZE - 1] = '\0';
+
+    if (!exec_current_is_privileged()) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        /* Only a dynamically-minted RTAn: carries a network-login note; a
+         * static row (OPA0:) or a non-terminal is a category error, the same
+         * IVDEVNAM verdict resolve gives. */
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    memset(dev->netlogin_user, 0, sizeof(dev->netlogin_user));
+    strscpy(dev->netlogin_user, args.username, sizeof(dev->netlogin_user));
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_term_getlogin - read back the network-login note for a terminal
+ * (rd vms-65b). An ordinary read (like RESOLVE, unprivileged): the LOGINOUT
+ * child bound to an RTAn: asks for ITS OWN terminal's note. An empty note is
+ * the honest "no network pre-authentication" (SS$_NORMAL, empty username), on
+ * which LOGINOUT falls back to the interactive prompt (fail-closed, INV-6) --
+ * NOT an error, because a terminal with no note is a perfectly ordinary
+ * console/DECnet terminal that authenticates its user itself.
+ */
+long vms_ioctl_term_getlogin(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_termlogin_args args;
+    struct vms_device *dev;
+    char devnam[VMS_DEVNAM_SIZE];
+    uint32_t status;
+
+    (void)proc;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    memset(args.username, 0, sizeof(args.username));
+
+    status = normalize_devnam(args.devnam, devnam, sizeof(devnam));
+    if (status != SS__NORMAL) {
+        args.status = status;
+        goto out;
+    }
+
+    exec_lock(&vms_device_list_lock);
+    dev = devtab_lookup_locked(devnam);
+    if (!dev) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    if (dev->devclass != DC__TERM || !dev->dynamic_term) {
+        exec_unlock(&vms_device_list_lock);
+        args.status = SS__IVDEVNAM;
+        goto out;
+    }
+    exec_lock(&dev->lock);
+    strscpy(args.username, dev->netlogin_user, sizeof(args.username));
+    exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    /* Found: SS$_NORMAL whether or not a note is present -- the caller reads an
+     * empty username as "no network pre-auth" (the honest omission). */
+    args.status = SS__NORMAL;
 
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -2473,6 +2601,53 @@ long vms_ioctl_cluster_diag_join(struct vms_proc *proc, unsigned long arg)
 }
 
 /*
+ * The CLUSTER_DIAG_DLM row struct (vms_ioctl.h / vms_lock_nb.h) is a
+ * BYTE-IDENTICAL duplicate of vms_cluster_snapshot.h's vms_dlm_scs_view -- the
+ * same shape as the four DIAG siblings above, and the same tripwire against a
+ * future edit to either copy.
+ */
+_Static_assert(sizeof(struct vms_dlm_scs_view) ==
+               sizeof(struct vms_dlm_scs_view_wire),
+               "vms_dlm_scs_view / vms_dlm_scs_view_wire layout drifted");
+
+/*
+ * vms_ioctl_cluster_diag_dlm - VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c). The
+ * lock manager's WIRE ARM, projected by vms_dlm_scs_snapshot() (vms_dlm_scs.c)
+ * out of the live struct vms_dlm_scs and its embedded requester FSM under the
+ * fork mutex.
+ *
+ * This is the half of the cross-node proof a packet capture cannot give: the
+ * pcap shows a frame on the segment, these counters show which executive's arm
+ * put it there. It adds no state of its own -- only the copyin/copyout -- and a
+ * node whose arm has never started answers SS$_NOSUCHDEV with the row left
+ * all-zero, never a zero that could be read as "emitted none" (INV-6).
+ */
+long vms_ioctl_cluster_diag_dlm(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_diag_dlm_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    struct vms_dlm_scs_view v;
+    uint32_t status;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    memset(&v, 0, sizeof(v));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    status = (uint32_t)vms_dlm_scs_snapshot(cl, &v);
+    if (status == SS__NORMAL)
+        memcpy(&args.dlm, &v, sizeof(args.dlm));
+    else
+        pr_info("vms: CLUSTER_DIAG_DLM -> SS$ %u\n", (unsigned)status);
+
+    args.status = status;
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
  * csb_member_state_name - the ONE string VMS_IOCTL_CLUSTER_MEMBER_GET's
  * `state` column carries for a CSB, and the strongest TRUE thing that column
  * can say about it.
@@ -2813,7 +2988,6 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
     struct vms_cluster *cl = vms_cluster_node();
     int status;
 
-    (void)proc;
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
         return -EFAULT;
@@ -2825,6 +2999,20 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
         status = vms_scs_start(cl);
     if (status == SS__NORMAL)
         status = vms_cnxman_start(cl);
+    if (status == SS__NORMAL) {
+        /*
+         * THE DELIVERY PROC (rd vms-c27, RULED). A lock the cluster asks this
+         * node to grant has to be owned by a real process, and the ruling names
+         * THIS one -- the process that issued CLUSTER_START, i.e. STARTUP.EXE,
+         * which is process-permanent. It is the OWNER, not the mode source: the
+         * engine stamps a cross-node LKB PSL_C_KERNEL so no local image rundown
+         * can release a lock another node holds (vms_dlm_master.h states all
+         * four binding conditions). Registered BEFORE the arm is started, so no
+         * inbound request can find the arm up and the owner missing.
+         */
+        vms_lock_dlm_set_delivery_proc(proc);
+        status = vms_dlm_scs_start(cl);
+    }
     if (status == SS__NORMAL)
         status = vms_mscp_srv_start(cl);
     if (status == SS__NORMAL)

@@ -65,6 +65,9 @@ vms-y := vms_module.o \
          vms_mscp_cl_io_fsm.o \
          vms_mscp_cl_conn_fsm.o \
          vms_mscp_cl.o \
+         vms_cluster_codec_dlm.o \
+         vms_dlm_scs_fsm.o \
+         vms_dlm_scs.o \
          vms_proctab.o \
          vmsfs_acp.o \
          ods2_reader.o \

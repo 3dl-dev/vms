@@ -2,7 +2,7 @@
 
 ## Mission
 
-Make OpenVMS free. OpenVMX is a **clean-room, open-source OpenVMS-compatible environment on Linux** that runs real VMS applications and **joins real VMSclusters** — so organizations can migrate off VMS Software Inc (VSI) node-by-node, at zero downtime and zero license cost.
+Make OpenVMS free. OpenVMX is a **clean-room, open-source OpenVMS-compatible environment on Linux** built to run real VMS applications and **join real VMSclusters** — so organizations can migrate off VMS Software Inc (VSI) node-by-node, at zero downtime and zero license cost. (Real-VMS-cluster join is the North Star target below, not yet a proven capability.)
 
 ### Naming: product and kernel
 

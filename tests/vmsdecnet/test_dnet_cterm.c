@@ -86,19 +86,36 @@ static void test_codec(void)
 
     struct dnet_cterm_msg m;
 
-    memset(&m, 0, sizeof(m));
-    m.type = DNET_CTERM_MSG_BIND; m.ver_v = 1; m.mode = DNET_CTERM_MODE_COMMAND;
-    strcpy(m.name, "OVMX1$RTA1:");
-    rt(&m, "Bind encodes");
-    { uint8_t b[DNET_CTERM_MAX_PDU]; size_t n; struct dnet_cterm_msg o;
-      dnet_cterm_encode(&m, b, sizeof(b), &n); dnet_cterm_decode(b, n, &o, NULL);
-      check(strcmp(o.name, "OVMX1$RTA1:") == 0 && o.mode == DNET_CTERM_MODE_COMMAND,
-            "Bind name + mode survive the round-trip"); }
-
-    memset(&m, 0, sizeof(m));
-    m.type = DNET_CTERM_MSG_BIND_ACCEPT; m.ver_v = 1; m.status = 0;
-    strcpy(m.name, "VAX1");
-    rt(&m, "Bind Accept encodes");
+    /* Bind / Bind Accept no longer ride the general dnet_cterm_encode/decode
+     * PDU set -- rd vms-bd0 replaced them with the real DNA foundation
+     * short-TLV + msgtype-9-envelope codec (dnet_cterm_found_*), oracle-
+     * anchored byte-for-byte in test_foundation_oracle() below. A generic
+     * (non-oracle) round-trip of that codec lives here instead, matching the
+     * shape of every other case in this function. */
+    {
+        uint8_t buf[32]; size_t n = 0;
+        uint8_t mc = 0, pc = 0, vl = 0, val[8];
+        uint8_t v[4] = { 0xAA, 0xBB, 0xCC, 0xDD };
+        check(dnet_cterm_found_short_build(7, DNET_CTERM_FOUND_PARAM_OBSERVED,
+                  v, 4, 12, buf, sizeof(buf), &n) == DNET_CTERM_OK,
+              "Foundation short-TLV encodes");
+        check(dnet_cterm_found_short_parse(buf, n, &mc, &pc, val, sizeof(val),
+                  &vl, NULL) == DNET_CTERM_OK &&
+              mc == 7 && pc == DNET_CTERM_FOUND_PARAM_OBSERVED && vl == 4 &&
+              memcmp(val, v, 4) == 0,
+              "Foundation short-TLV round-trips (msg-code/param-code/value)");
+    }
+    {
+        uint8_t buf[64]; size_t n = 0;
+        uint8_t b[6] = { 1, 2, 3, 4, 5, 6 };
+        uint16_t lf = 0; const uint8_t *body = NULL; size_t blen = 0; int match = 0;
+        check(dnet_cterm_found_envelope_build(6, b, 6, buf, sizeof(buf), &n)
+                  == DNET_CTERM_OK, "Foundation msgtype-9 envelope encodes");
+        check(dnet_cterm_found_envelope_parse(buf, n, &lf, &body, &blen, &match)
+                  == DNET_CTERM_OK &&
+              lf == 6 && blen == 6 && memcmp(body, b, 6) == 0 && match,
+              "Foundation envelope round-trips (len field + body)");
+    }
 
     memset(&m, 0, sizeof(m));
     m.type = DNET_CTERM_MSG_UNBIND; m.reason = DNET_CTERM_UNBIND_NORMAL;
@@ -151,9 +168,9 @@ static void test_codec(void)
     m.type = DNET_CTERM_MSG_WRITE_COMPLETE; rt(&m, "Write Complete encodes");
 
     /* A truncated PDU decodes as an honest error, never a fabricated message. */
-    { uint8_t t[1] = { DNET_CTERM_MSG_BIND }; struct dnet_cterm_msg o;
+    { uint8_t t[1] = { DNET_CTERM_MSG_UNBIND }; struct dnet_cterm_msg o;
       check(dnet_cterm_decode(t, sizeof(t), &o, NULL) == DNET_CTERM_ETRUNC,
-            "a truncated Bind is rejected ETRUNC (no fabrication)"); }
+            "a truncated Unbind is rejected ETRUNC (no fabrication)"); }
     { uint8_t bad[1] = { 200 }; struct dnet_cterm_msg o;
       check(dnet_cterm_decode(bad, sizeof(bad), &o, NULL) == DNET_CTERM_EBADTYPE,
             "an unknown message type is rejected EBADTYPE"); }
@@ -222,11 +239,15 @@ static void test_sc_connect(void)
                                       "", "", "", buf, sizeof(buf), &n)
               == DNET_CTERM_OK,
           "OVMX builds a SET HOST connect for object 42");
-    check(n == sizeof(k_oracle_sc_connect) - 1 &&
+    check(n == sizeof(k_oracle_sc_connect) &&
           memcmp(buf, k_oracle_sc_connect, n) == 0,
-          "OVMX's connect data is BYTE-IDENTICAL to the real VAX's, through the"
-          " three empty access-control strings (the specimen's trailing 4th zero"
-          " is USRDATA, which OVMX does not send)");
+          "OVMX's connect data is BYTE-IDENTICAL to the real VAX's IN FULL --"
+          " MENUVER 0x27 + RQSTRID/PASSWRD/ACCOUNT/USRDATA all empty"
+          " (27 00 00 00 00). Emitting only the first THREE fields (omitting the"
+          " trailing USRDATA) left the block 1 byte short of every accepted real"
+          " form; real OpenVMS session control read past end-of-data and SILENTLY"
+          " discarded the Connect Initiate -- no reject, no counter, no LOGINOUT"
+          " (vms-a70 direction A root cause)");
     check(dnet_cterm_sc_connect_object(buf, n) == DNET_CTERM_OBJECT,
           "the object-number dispatch reads 42 back out of OVMX's own connect");
 
@@ -465,6 +486,193 @@ static void test_sc_connect(void)
     }
 }
 
+/*
+ * THE FOUNDATION ORACLE SPECIMENS (rd vms-bd0). Captured on vaxlab-3: a real
+ * VAX1<->VAX2 `$ SET HOST` that reached a live DCL prompt --
+ * real-cterm-ci.pcap (default terminal, PAGE=24) and cterm-oracle-wid8.pcap
+ * (SET TERMINAL/PAGE=48 on the client). Every array below is the CTERM
+ * payload of one NSP "data seg" frame, i.e. the frame's bytes from absolute
+ * offset 47 onward (Ethernet14 + DLlen2 + pad1 + routing21 + NSP9), copied
+ * verbatim -- these are the ORACLE, and every assertion below is measured
+ * against them, never against what OVMX happens to build.
+ */
+static const uint8_t k_oracle_found_host_seg1[] = {
+    0x01, 0x02, 0x04, 0x00, 0x07, 0x00, 0x10, 0x00
+};
+static const uint8_t k_oracle_found_client_seg1[] = {
+    0x04, 0x02, 0x04, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t k_oracle_found_host_seg2[] = {
+    0x09, 0x00, 0x17, 0x00,
+    0x01, 0x00, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x01, 0x02, 0x10, 0x1e, 0x03, 0x04, 0xfe, 0xff, 0xef,
+    0x00, 0x06, 0x00, 0x0b, 0x00, 0x08, 0x02, 0x02, 0x00
+};
+/* default-terminal client seg 2 (real-cterm-ci.pcap, both sessions, byte-
+ * identical): WIDTH=132, PAGE=24. */
+static const uint8_t k_oracle_found_client_seg2_default[] = {
+    0x09, 0x00, 0x35, 0x00, 0x01, 0x00, 0x01, 0x04,
+    0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x02, 0xf2, 0x03, 0x02, 0x02, 0xc0,
+    0x03, 0x03, 0x04, 0xfe, 0xff, 0xef, 0x00, 0x04,
+    0x18, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00,
+    0x18, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00
+};
+/* SET TERMINAL/PAGE=48 client seg 2 (cterm-oracle-wid8.pcap): WIDTH=132,
+ * PAGE=48 -- a single-byte diff from the default specimen (verified by a
+ * programmatic hex diff of the two captures: the ONLY payload byte that
+ * differs is the PAGE low byte), which is what resolves the PAGE field. */
+static const uint8_t k_oracle_found_client_seg2_page48[] = {
+    0x09, 0x00, 0x35, 0x00, 0x01, 0x00, 0x01, 0x04,
+    0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x02, 0xf2, 0x03, 0x02, 0x02, 0xc0,
+    0x03, 0x03, 0x04, 0xfe, 0xff, 0xef, 0x00, 0x04,
+    0x18, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00,
+    0x30, 0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00
+};
+
+static void test_foundation_oracle(void)
+{
+    printf("[found] the REAL DNA CTERM foundation messages, byte-exact"
+           " against a captured VAX<->VAX SET HOST (rd vms-bd0)\n");
+
+    uint8_t buf[128]; size_t n = 0;
+
+    /* ---- 1. OVMX BUILDS byte-identical to the oracle, both directions ---- */
+    check(dnet_cterm_found_host_start_build(buf, sizeof(buf), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_host_seg1) &&
+          memcmp(buf, k_oracle_found_host_seg1, n) == 0,
+          "host's seg-1 Start is BYTE-IDENTICAL to the real VAX host's"
+          " (msg-code 1, param 0x02, value 00 07 00 10, 8 bytes total)");
+
+    check(dnet_cterm_found_client_start_build(buf, sizeof(buf), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_client_seg1) &&
+          memcmp(buf, k_oracle_found_client_seg1, n) == 0,
+          "client's seg-1 response is BYTE-IDENTICAL to the real VAX"
+          " client's (msg-code 4, value 00 07 00 00, 17 bytes total)");
+
+    check(dnet_cterm_found_host_seg2_build(buf, sizeof(buf), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_host_seg2) &&
+          memcmp(buf, k_oracle_found_host_seg2, n) == 0,
+          "host's seg-2 envelope (msgtype 9, len field 23, 31-byte fixed"
+          " body) is BYTE-IDENTICAL to the real VAX host's");
+
+    check(dnet_cterm_found_client_termchar_build(132, 24, buf, sizeof(buf), &n)
+              == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_client_seg2_default) &&
+          memcmp(buf, k_oracle_found_client_seg2_default, n) == 0,
+          "client's seg-2 envelope (WIDTH=132, PAGE=24) is BYTE-IDENTICAL to"
+          " the real VAX client's default-terminal specimen"
+          " (real-cterm-ci.pcap)");
+
+    check(dnet_cterm_found_client_termchar_build(132, 48, buf, sizeof(buf), &n)
+              == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_found_client_seg2_page48) &&
+          memcmp(buf, k_oracle_found_client_seg2_page48, n) == 0,
+          "client's seg-2 envelope (WIDTH=132, PAGE=48) is BYTE-IDENTICAL to"
+          " the real VAX client's SET TERMINAL/PAGE=48 specimen"
+          " (cterm-oracle-wid8.pcap) -- a single byte differs from the"
+          " default specimen and it is the byte OVMX also changes");
+
+    /* ---- 2. OVMX DECODES the real specimens correctly -------------------- */
+    {
+        uint8_t mc = 0, pc = 0, vl = 0, val[DNET_CTERM_FOUND_VALUE_MAX];
+        check(dnet_cterm_found_short_parse(k_oracle_found_host_seg1,
+                  sizeof(k_oracle_found_host_seg1), &mc, &pc, val, sizeof(val),
+                  &vl, NULL) == DNET_CTERM_OK &&
+              mc == 0x01 && pc == 0x02 && vl == 4 &&
+              memcmp(val, (uint8_t[]){0x00,0x07,0x00,0x10}, 4) == 0,
+              "decode of the real host seg-1 specimen recovers"
+              " msg-code=1 / param=0x02 / value=00 07 00 10");
+        check(dnet_cterm_found_short_parse(k_oracle_found_client_seg1,
+                  sizeof(k_oracle_found_client_seg1), &mc, &pc, val, sizeof(val),
+                  &vl, NULL) == DNET_CTERM_OK &&
+              mc == 0x04 && pc == 0x02 && vl == 4 &&
+              memcmp(val, (uint8_t[]){0x00,0x07,0x00,0x00}, 4) == 0,
+              "decode of the real client seg-1 specimen recovers"
+              " msg-code=4 / param=0x02 / value=00 07 00 00");
+    }
+    {
+        uint16_t width = 0, page = 0;
+        check(dnet_cterm_found_client_termchar_parse(k_oracle_found_client_seg2_default,
+                  sizeof(k_oracle_found_client_seg2_default), &width, &page)
+                  == DNET_CTERM_OK && width == 132 && page == 24,
+              "decode of the real default client seg-2 specimen recovers"
+              " WIDTH=132 / PAGE=24");
+        check(dnet_cterm_found_client_termchar_parse(k_oracle_found_client_seg2_page48,
+                  sizeof(k_oracle_found_client_seg2_page48), &width, &page)
+                  == DNET_CTERM_OK && width == 132 && page == 48,
+              "decode of the real PAGE=48 client seg-2 specimen recovers"
+              " WIDTH=132 / PAGE=48");
+    }
+    {
+        uint16_t lf = 0; const uint8_t *body = NULL; size_t blen = 0; int match = 0;
+        check(dnet_cterm_found_envelope_parse(k_oracle_found_host_seg2,
+                  sizeof(k_oracle_found_host_seg2), &lf, &body, &blen, &match)
+                  == DNET_CTERM_OK && lf == 23 && blen == 31 && !match,
+              "the host seg-2 envelope's length-field/body-length"
+              " DISCREPANCY (23 vs 31) is surfaced, not hidden or 'fixed'");
+        check(dnet_cterm_found_envelope_parse(k_oracle_found_client_seg2_default,
+                  sizeof(k_oracle_found_client_seg2_default), &lf, &body, &blen,
+                  &match) == DNET_CTERM_OK && lf == 53 && blen == 53 && match,
+              "the client seg-2 envelope's length field DOES equal its body"
+              " length (unlike the host's)");
+    }
+
+    /* ---- 3. BOUNDED against truncated/mutated real bytes ------------------
+     * Both decoders in this codec run on wire bytes that may not have been
+     * authenticated yet. Mutate the real specimens (never pure noise alone --
+     * seeded from real bytes reaches the accepting paths, per the sc-connect
+     * fuzz above) and require a DEFINED status every time: no crash (ASan/
+     * UBSan catch that), no undefined return code. */
+    {
+        unsigned seed = 0xf0011d0;
+        long undefined = 0, accepted_short = 0, accepted_env = 0;
+        int iter;
+        for (iter = 0; iter < 100000; iter++) {
+            uint8_t mbuf[64];
+            size_t mlen = sizeof(k_oracle_found_client_seg2_default) + 8;
+            if (mlen > sizeof(mbuf)) mlen = sizeof(mbuf);
+            size_t j;
+            for (j = 0; j < mlen; j++)
+                mbuf[j] = j < sizeof(k_oracle_found_client_seg2_default)
+                              ? k_oracle_found_client_seg2_default[j]
+                              : (uint8_t)(rand_r(&seed) & 0xff);
+            if ((rand_r(&seed) & 3) == 0)
+                mlen = rand_r(&seed) % sizeof(mbuf);
+            int muts = 1 + (int)(rand_r(&seed) % 3);
+            int m;
+            for (m = 0; m < muts && mlen; m++)
+                mbuf[rand_r(&seed) % mlen] = (uint8_t)(rand_r(&seed) & 0xff);
+
+            uint8_t mc, pc, vl, val[DNET_CTERM_FOUND_VALUE_MAX];
+            int rc1 = dnet_cterm_found_short_parse(mbuf, mlen, &mc, &pc, val,
+                                                    sizeof(val), &vl, NULL);
+            if (rc1 == DNET_CTERM_OK) accepted_short++;
+            else if (rc1 != DNET_CTERM_ETRUNC && rc1 != DNET_CTERM_EBADLEN &&
+                     rc1 != DNET_CTERM_EINVAL) undefined++;
+
+            uint16_t lf; const uint8_t *body; size_t blen; int match;
+            int rc2 = dnet_cterm_found_envelope_parse(mbuf, mlen, &lf, &body,
+                                                       &blen, &match);
+            if (rc2 == DNET_CTERM_OK) accepted_env++;
+            else if (rc2 != DNET_CTERM_ETRUNC && rc2 != DNET_CTERM_EINVAL &&
+                     rc2 != DNET_CTERM_EBADTYPE) undefined++;
+        }
+        check(undefined == 0,
+              "mutation fuzz: 100000 mutated foundation specimens each get a"
+              " DEFINED status from both decoders -- no undefined answer");
+        check(accepted_short > 0 && accepted_env > 0,
+              "mutation fuzz: the corpus reaches the accepting path of both"
+              " decoders (not all-reject)");
+    }
+}
+
 /* ---- 2. session FSM (raw CTERM PDUs, no NSP) ----------------------------- */
 static void test_session(void)
 {
@@ -480,13 +688,18 @@ static void test_session(void)
     uint8_t pdu[DNET_CTERM_MAX_PDU]; size_t n = 0;
     enum dnet_cterm_event ev;
 
-    /* terminal -> Bind -> host connect indication. */
+    /* terminal -> Bind -> host connect indication. Real DNA foundation
+     * phase carries no terminal-name field (rd vms-bd0); "OVMX2$RTA1:" is
+     * accepted for call-site compatibility only and never reaches the wire
+     * -- see the byte-exact oracle proof in test_foundation_oracle(). */
     check(dnet_cterm_bind(&term, "OVMX2$RTA1:", pdu, sizeof(pdu), &n) == DNET_CTERM_OK,
           "terminal builds Bind");
     check(dnet_cterm_state_of(&term) == DNET_CTERM_S_BINDING, "terminal -> BINDING");
     check(dnet_cterm_rx(&host, pdu, n, &ev) == DNET_CTERM_OK && ev == DNET_CTERM_EV_BIND_IND,
           "host sees BIND indication");
-    check(strcmp(host.peer_name, "OVMX2$RTA1:") == 0, "host learned the terminal name");
+    check(host.found_bind_seen == 1,
+          "host recorded the inbound foundation Bind (real DNA short-TLV,"
+          " no name field on the wire -- rd vms-bd0)");
 
     /* host -> Bind Accept -> terminal bound. */
     check(dnet_cterm_bind_accept(&host, "VAX1", pdu, sizeof(pdu), &n) == DNET_CTERM_OK,
@@ -817,8 +1030,33 @@ static void test_client_response_fuzz(void)
         check(ct_slen[0] && ct_slen[1] && ct_slen[2], "seed: CTERM Bind-Accept/Write/Unbind built");
     }
 
+    /* HOST-ROLE rx seeds (rd vms-8b36): the client->host PDUs a BOUND inbound
+     * server accepts -- a Bind (BIND_IND), a Read Data (keystrokes), an OOB
+     * (^C). Fuzzing MUTATED versions of these INTO the host FSM is the
+     * never-crash-a-peer proof for the inbound $ SET HOST server path (the
+     * existing CTERM fuzz below drives only the TERMINAL role). */
+    uint8_t h_seed[3][DNET_CTERM_MAX_PDU];
+    size_t  h_slen[3] = {0,0,0};
+    {
+        struct dnet_cterm_session ts, hs;
+        uint8_t ba[DNET_CTERM_MAX_PDU]; size_t bn = 0;
+        enum dnet_cterm_event ev;
+        dnet_cterm_session_init(&ts, DNET_CTERM_ROLE_TERMINAL);
+        dnet_cterm_session_init(&hs, DNET_CTERM_ROLE_HOST);
+        dnet_cterm_bind(&ts, "OVMX$RTA1:", h_seed[0], sizeof(h_seed[0]), &h_slen[0]);
+        dnet_cterm_rx(&hs, h_seed[0], h_slen[0], &ev);              /* host BIND_IND */
+        dnet_cterm_bind_accept(&hs, "VAX2", ba, sizeof(ba), &bn);
+        dnet_cterm_rx(&ts, ba, bn, &ev);                            /* terminal BOUND */
+        dnet_cterm_read_data(&ts, (const uint8_t *)"SHOW TIME", 9, 0x0d,
+                             h_seed[1], sizeof(h_seed[1]), &h_slen[1]);
+        dnet_cterm_oob(&ts, 0x03, h_seed[2], sizeof(h_seed[2]), &h_slen[2]);
+        check(h_slen[0] && h_slen[1] && h_slen[2],
+              "seed: client->host Bind/Read-Data/OOB PDUs built (host-role fuzz)");
+    }
+
     unsigned st = 0xf54c0de;
     int nsp_accepts = 0, ct_accepts = 0, undefined = 0, consumed_over = 0;
+    int host_accepts = 0, ft_undef = 0, fc_undef = 0;   /* rd vms-8b36 host-role + foundation-parser fuzz */
     const int ITERS = 60000;
     for (int i = 0; i < ITERS; i++) {
         /* --- NSP decode fuzz (dnet_nsp_decode) --- */
@@ -867,14 +1105,291 @@ static void test_client_response_fuzz(void)
         }
         int crc = dnet_cterm_rx(&t, cb, cl, &ev);      /* must not crash */
         if (crc == DNET_CTERM_OK) ct_accepts++;
+
+        /* --- HOST-ROLE CTERM rx fuzz (rd vms-8b36): the inbound-SERVER FSM a
+         *     real VAX's bytes hit. A BOUND host fed MUTATED client bytes must
+         *     never crash (ASan/UBSan) -- the never-crash-a-peer proof for the
+         *     inbound path #1162 enables. --- */
+        {
+            struct dnet_cterm_session ht, hh;
+            uint8_t bp[DNET_CTERM_MAX_PDU], ba[DNET_CTERM_MAX_PDU];
+            size_t bn0 = 0, ban = 0; enum dnet_cterm_event hev;
+            dnet_cterm_session_init(&ht, DNET_CTERM_ROLE_TERMINAL);
+            dnet_cterm_session_init(&hh, DNET_CTERM_ROLE_HOST);
+            dnet_cterm_bind(&ht, "OVMX$RTA1:", bp, sizeof(bp), &bn0);
+            dnet_cterm_rx(&hh, bp, bn0, &hev);                  /* hh -> BIND_IND */
+            dnet_cterm_bind_accept(&hh, "VAX2", ba, sizeof(ba), &ban);  /* hh BOUND */
+
+            uint8_t hb[DNET_CTERM_MAX_PDU + 64]; size_t hl;
+            if ((fz_next(&st) & 7) == 0) {
+                hl = fz_next(&st) % 40;
+                for (size_t j = 0; j < hl; j++) hb[j] = fz_next(&st);
+            } else {
+                int s = fz_next(&st) % 3;
+                hl = h_slen[s];
+                memcpy(hb, h_seed[s], hl);
+                mutate(hb, &hl, sizeof(hb), &st);
+            }
+            int hrc = dnet_cterm_rx(&hh, hb, hl, &hev);   /* HOST must not crash */
+            if (hrc == DNET_CTERM_OK) host_accepts++;
+        }
+
+        /* --- foundation BOUND-phase parsers the block above does NOT cover
+         *     (rd vms-8b36): found_terminal_rx + found_client_termchar_parse,
+         *     mutated real seg-2 envelope specimens; every input a DEFINED
+         *     status, no over-read. --- */
+        {
+            uint8_t fb[128]; size_t fl;
+            if ((fz_next(&st) & 7) == 0) {
+                fl = fz_next(&st) % 48;
+                for (size_t j = 0; j < fl; j++) fb[j] = fz_next(&st);
+            } else {
+                fl = sizeof(k_oracle_found_client_seg2_default);
+                if (fl > sizeof(fb)) fl = sizeof(fb);
+                memcpy(fb, k_oracle_found_client_seg2_default, fl);
+                mutate(fb, &fl, sizeof(fb), &st);
+            }
+            enum dnet_cterm_found_term_kind fkind;
+            uint8_t ftext[64]; size_t ftlen = 0; uint8_t fhandle[2];
+            int frc = dnet_cterm_found_terminal_rx(fb, fl, &fkind, ftext,
+                                                   sizeof(ftext), &ftlen, fhandle);
+            /* A DEFINED status is any code in the CTERM enum (OK/ETRUNC/EBADLEN/
+             * ENOSPACE/EINVAL/EBADTYPE) -- these parsers may propagate a
+             * sub-decoder's code; an UNDEFINED value (outside the enum) or a
+             * crash is the only failure, same discipline as the NSP fuzz. */
+            if (!(frc == DNET_CTERM_OK || frc == DNET_CTERM_ETRUNC ||
+                  frc == DNET_CTERM_EBADLEN || frc == DNET_CTERM_ENOSPACE ||
+                  frc == DNET_CTERM_EINVAL || frc == DNET_CTERM_EBADTYPE))
+                ft_undef++;
+            uint16_t fw = 0, fp = 0;
+            int prc = dnet_cterm_found_client_termchar_parse(fb, fl, &fw, &fp);
+            if (!(prc == DNET_CTERM_OK || prc == DNET_CTERM_ETRUNC ||
+                  prc == DNET_CTERM_EBADLEN || prc == DNET_CTERM_ENOSPACE ||
+                  prc == DNET_CTERM_EINVAL || prc == DNET_CTERM_EBADTYPE))
+                fc_undef++;
+        }
     }
     check(undefined == 0, "every NSP decode returned a DEFINED status (no crash, no undefined code)");
     check(consumed_over == 0, "no accepting NSP decode claimed to consume past the buffer");
     check(nsp_accepts > 0, "fuzz corpus reaches accepting NSP decodes (not all-reject)");
     check(ct_accepts  > 0, "fuzz corpus reaches accepting CTERM rx (not all-reject)");
-    printf("  fuzz: %d NSP + %d CTERM iterations, all decodes returned a defined"
-           " status (nsp_accepts=%d cterm_accepts=%d)\n",
-           ITERS, ITERS, nsp_accepts, ct_accepts);
+    /* rd vms-8b36: the HOST-role (inbound-server) FSM + the two foundation
+     * BOUND-phase parsers, under the same mutation fuzz + ASan/UBSan. The
+     * no-crash guarantee is enforced by the sanitizers on every iteration; these
+     * assert the corpus reached the host's accepting path and neither foundation
+     * parser ever returned an undefined status on a mutated/short input. */
+    check(host_accepts > 0,
+          "fuzz corpus reaches accepting HOST-role CTERM rx -- the inbound-server"
+          " FSM (never-crash-a-peer proof, rd vms-8b36)");
+    check(ft_undef == 0,
+          "found_terminal_rx: every mutated envelope gets a DEFINED CTERM status"
+          " -- no crash, no over-read, no undefined value");
+    check(fc_undef == 0,
+          "found_client_termchar_parse: every mutated envelope gets a DEFINED"
+          " status -- no crash, no over-read");
+    printf("  fuzz: %d NSP + %d CTERM(term) + %d CTERM(host) iterations, all"
+           " decodes DEFINED (nsp_accepts=%d cterm_accepts=%d host_accepts=%d)\n",
+           ITERS, ITERS, ITERS, nsp_accepts, ct_accepts, host_accepts);
+}
+
+/*
+ * THE vms-6165 CLIENT FSM ORACLE SPECIMENS. Every array is the CTERM payload
+ * (frame bytes from absolute offset 47) of one NSP "data seg" of the ACCEPTED
+ * VAX2->VAX1 SET HOST in real-cterm-ci.pcap (link id 8194, the golden session
+ * that reached a live DCL '$'), copied verbatim.
+ */
+/* Client seg-3 (#44) and seg-4 (#46): the two fixed 09-envelopes after termchar. */
+static const uint8_t k_oracle_found_client_seg3[] = {
+    0x09, 0x00, 0x0b, 0x00, 0x17, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+static const uint8_t k_oracle_found_client_seg4[] = {
+    0x09, 0x00, 0x16, 0x00, 0x13, 0x0c, 0x01, 0x00, 0x06, 0x00, 0x00,
+    0x00, 0x18, 0x00, 0x42, 0x20, 0x84, 0x00, 0xa0, 0x02, 0x00, 0x18,
+    0x00, 0x32, 0x00, 0x00
+};
+/* Host read-characteristics solicit (#51) and the client's reply (#53), both
+ * echoing read handle 04 34. */
+static const uint8_t k_oracle_readattr_solicit[] = {
+    0x09, 0x00, 0x18, 0x00, 0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x27,
+    0x00, 0x0c, 0x00, 0x04, 0x00, 0x01, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x0c, 0x00, 0x00, 0x00
+};
+static const uint8_t k_oracle_readchar_reply[] = {
+    0x09, 0x00, 0x1a, 0x00, 0x0f, 0x00, 0x04, 0x34, 0x00, 0x00, 0x01,
+    0x00, 0x06, 0x00, 0x00, 0x00, 0x18, 0x00, 0x42, 0x20, 0x84, 0x00,
+    0xa0, 0x02, 0x00, 0x18, 0x00, 0x32, 0x00, 0x00
+};
+/* Host 02-08 screen write of the Username: prompt (#54); its displayed text. */
+static const uint8_t k_oracle_write_username[] = {
+    0x09, 0x00, 0x1d, 0x00, 0x02, 0x08, 0xb0, 0x00, 0x84, 0x00, 0x0c,
+    0x00, 0x14, 0x00, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d,
+    0x0a, 0x55, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x3a, 0x20
+};
+static const uint8_t k_username_text[] = {
+    0x0d, 0x0a, 0x55, 0x73, 0x65, 0x72, 0x6e, 0x61, 0x6d, 0x65, 0x3a, 0x20
+};
+/* Client READ DATA for "SYSTEM"<CR> (#57). */
+static const uint8_t k_oracle_read_data_system[] = {
+    0x09, 0x00, 0x0f, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x06,
+    0x00, 0x53, 0x59, 0x53, 0x54, 0x45, 0x4d, 0x0d
+};
+
+static void test_client_foundation_fsm(void)
+{
+    printf("[fsm] the vms-6165 host-speaks-first client foundation sequence +"
+           " terminal-I/O classifier, driven by fed real host specimens\n");
+
+    struct dnet_cterm_session s;
+    uint8_t out[128]; size_t n = 0; int prog = 0;
+
+    check(dnet_cterm_session_init(&s, DNET_CTERM_ROLE_TERMINAL) == DNET_CTERM_OK,
+          "client session init");
+    check(dnet_cterm_client_open(&s) == DNET_CTERM_OK &&
+          dnet_cterm_state_of(&s) == DNET_CTERM_S_BINDING,
+          "client_open arms the FSM (CLOSED -> BINDING) and sends nothing");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "HOST-FIRST: the client sends NOTHING until the host speaks");
+
+    check(dnet_cterm_client_found_rx(&s, k_oracle_found_host_seg1,
+              sizeof(k_oracle_found_host_seg1), &prog) == DNET_CTERM_OK && prog,
+          "host seg-1 advances the foundation gate");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg1) &&
+          memcmp(out, k_oracle_found_client_seg1, n) == 0,
+          "client replies with the BYTE-EXACT seg-1 (client_start)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "client then WAITS for the host's config envelope");
+
+    check(dnet_cterm_client_found_rx(&s, k_oracle_found_host_seg2,
+              sizeof(k_oracle_found_host_seg2), &prog) == DNET_CTERM_OK && prog,
+          "host's first 09-envelope advances the config gate");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg2_default) &&
+          memcmp(out, k_oracle_found_client_seg2_default, n) == 0,
+          "client burst #1 = BYTE-EXACT seg-2 termchar (WIDTH=132/PAGE=24)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg3) &&
+          memcmp(out, k_oracle_found_client_seg3, n) == 0,
+          "client burst #2 = BYTE-EXACT seg-3");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_found_client_seg4) &&
+          memcmp(out, k_oracle_found_client_seg4, n) == 0,
+          "client burst #3 = BYTE-EXACT seg-4");
+    check(dnet_cterm_is_bound(&s),
+          "after seg-4 the session is BOUND (foundation complete)");
+    check(dnet_cterm_client_found_next(&s, 132, 24, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == 0,
+          "no further foundation messages once BOUND");
+
+    /* Terminal-I/O classifier (BOUND phase). */
+    enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
+    uint8_t txt[128]; size_t tl = 0; uint8_t h[2] = { 0, 0 };
+    check(dnet_cterm_found_terminal_rx(k_oracle_write_username,
+              sizeof(k_oracle_write_username), &tk, txt, sizeof(txt), &tl, h)
+              == DNET_CTERM_OK && tk == DNET_CTERM_TK_START_READ &&
+          tl == sizeof(k_username_text) &&
+          memcmp(txt, k_username_text, tl) == 0,
+          "a 02-08 host write IS the read-solicit (rd vms-6165): classified"
+          " START_READ, text = '\\r\\nUsername: '");
+    check(dnet_cterm_found_terminal_rx(k_oracle_readattr_solicit,
+              sizeof(k_oracle_readattr_solicit), &tk, NULL, 0, NULL, h)
+              == DNET_CTERM_OK && tk == DNET_CTERM_TK_READ_ATTR &&
+          h[0] == 0x04 && h[1] == 0x34,
+          "a 0f-00 host solicit is classified READ_ATTR, handle = 04 34");
+    check(dnet_cterm_found_client_readchar_build(h, out, sizeof(out), &n)
+              == DNET_CTERM_OK && n == sizeof(k_oracle_readchar_reply) &&
+          memcmp(out, k_oracle_readchar_reply, n) == 0,
+          "the client's read-characteristics reply echoes handle 04 34,"
+          " BYTE-EXACT to the oracle (#53)");
+    check(dnet_cterm_found_read_data_build((const uint8_t *)"SYSTEM", 6, 0x0d,
+              out, sizeof(out), &n) == DNET_CTERM_OK &&
+          n == sizeof(k_oracle_read_data_system) &&
+          memcmp(out, k_oracle_read_data_system, n) == 0,
+          "client READ DATA for 'SYSTEM'<CR> is BYTE-EXACT to the oracle (#57)");
+
+    /* Bounded against a truncated envelope: never over-read, classify OTHER. */
+    check(dnet_cterm_found_terminal_rx(k_oracle_write_username, 3, &tk,
+              txt, sizeof(txt), &tl, h) != DNET_CTERM_OK ||
+          tk == DNET_CTERM_TK_NONE || tk == DNET_CTERM_TK_OTHER,
+          "a 3-byte truncated envelope is refused/OTHER, never over-read");
+}
+
+/*
+ * rd vms-6165: the local-terminal input queue must be PROMPT-DRIVEN -- one
+ * host Start-Read solicit dequeues exactly one buffered line, nothing is ever
+ * emitted before the first solicit (the API is pull-only: feed()/eof() never
+ * produce output on their own, only dequeue() does), and local stdin EOF
+ * never discards what is still queued (the lab iter-2 bug: OVMX blasted its
+ * entire stdin as one segment before the host's Username: prompt existed on
+ * the wire, then closed stdin -- both halves of that bug are covered here).
+ */
+static void test_terminal_input_queue(void)
+{
+    printf("[inq] rd vms-6165 prompt-gated terminal-input queue\n");
+
+    struct dnet_cterm_inq q;
+    dnet_cterm_inq_init(&q);
+    uint8_t line[64]; size_t ll = 0;
+
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an empty queue with no solicit yet dequeues nothing");
+
+    /* Canned/redirected stdin: the whole script arrives (and EOFs) before any
+     * host solicit -- exactly the lab scenario. NO line may be emitted just
+     * because it was fed; only an explicit dequeue() releases one. */
+    static const uint8_t script[] = "SYSTEM\r\nsystem\r\nSHOW SYSTEM\r\nLOGOUT";
+    check(dnet_cterm_inq_feed(&q, script, sizeof(script) - 1) == sizeof(script) - 1,
+          "feed() buffers all of a canned script and reports full acceptance");
+    dnet_cterm_inq_eof(&q);
+    check(q.eof == 1,
+          "stdin EOF only marks the queue -- feed()/eof() alone never emit"
+          " anything (no output before the first solicit)");
+
+    /* Solicit #1 -> dequeues "SYSTEM" (CRLF terminator dropped). */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "SYSTEM", 6) == 0,
+          "1st solicit dequeues exactly the 1st queued line, 'SYSTEM',"
+          " CRLF terminator stripped");
+    /* Solicit #2 -> dequeues "system" (the next line, in order). */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "system", 6) == 0,
+          "2nd solicit dequeues the NEXT queued line, 'system' -- in order,"
+          " one line per solicit");
+    /* Solicit #3 -> "SHOW SYSTEM". */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 11 && memcmp(line, "SHOW SYSTEM", 11) == 0,
+          "3rd solicit dequeues 'SHOW SYSTEM'");
+    /* Solicit #4 -> "LOGOUT" is unterminated (script ends without a CR/LF),
+     * but EOF already fired, so it is still dequeuable as the final line --
+     * stdin EOF does NOT tear down the session / lose the last line. */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "LOGOUT", 6) == 0,
+          "post-EOF, the final unterminated remainder 'LOGOUT' still"
+          " dequeues -- EOF never discards buffered input");
+    /* Solicit #5: nothing left, and EOF -> no false line manufactured. */
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an exhausted post-EOF queue dequeues nothing (never fabricates a"
+          " line)");
+
+    /* Interactive pacing: no line is available until a solicit arrives, and
+     * feed() alone (no dequeue) still emits nothing -- confirmed by re-using
+     * the same probe as above. Then a live host solicit + a still-open
+     * (no-EOF) session: partial input without a terminator is NOT released
+     * early (the host must not receive a half-typed line). */
+    dnet_cterm_inq_init(&q);
+    check(dnet_cterm_inq_feed(&q, (const uint8_t *)"SYS", 3) == 3 &&
+          dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 0,
+          "an interactive partial line with no terminator and no EOF is"
+          " NOT released early");
+    check(dnet_cterm_inq_feed(&q, (const uint8_t *)"TEM\r", 4) == 4,
+          "the terminator arriving completes the line");
+    check(dnet_cterm_inq_dequeue(&q, line, sizeof(line), &ll) == 1 &&
+          ll == 6 && memcmp(line, "SYSTEM", 6) == 0,
+          "the solicit now dequeues the complete 'SYSTEM' line, session"
+          " never closed for lack of EOF");
 }
 
 int main(void)
@@ -882,6 +1397,9 @@ int main(void)
     printf("test_dnet_cterm: DECnet Phase IV CTERM (Command Terminal / SET HOST)\n");
     test_codec();
     test_sc_connect();
+    test_foundation_oracle();
+    test_client_foundation_fsm();
+    test_terminal_input_queue();
     test_session();
     test_engine_e2e();
     test_client_response_fuzz();

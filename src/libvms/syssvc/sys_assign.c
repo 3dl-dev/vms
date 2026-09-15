@@ -91,6 +91,16 @@ struct vms_device_result {
      * SS$_NOSUCHDEV -- no per-process fallback (CLAUDE.md Rule 9 / INV-6).
      */
     int  is_file;
+    /*
+     * vms-cdee (a1-0): nonzero if this name identifies the DECnet device face
+     * _NET: (or NET:). Like a BG or ACP file channel it is executive-resident:
+     * _NET: is a pre-existing shareable DC$_SCOM device born on the primary NIC
+     * (vms_devtab_probe_net), so $ASSIGN grants a channel to it through the
+     * GENERIC executive assign (vms_kif_assign) rather than creating a unit; the
+     * fd stays -1 and $QIO will route through qio_net_op() to the NETACP broker
+     * (rd vms-799/vms-22c). No NIC / no executive -> SS$_NOSUCHDEV, no fake.
+     */
+    int  is_net;
 };
 
 /*
@@ -113,6 +123,7 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
     result->is_terminal = 0;
     result->is_bg = 0;
     result->is_file = 0;
+    result->is_net = 0;
 
     if (!name || !name[0])
         return 0;
@@ -246,6 +257,19 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
             result->is_bg = 1;
             return 1;
         }
+    }
+
+    /*
+     * vms-cdee (a1-0): the DECnet device face _NET: (the leading underscore is
+     * the physical-name form the DECnet lane uses; NET: is the same device).
+     * The trailing ':' is already stripped above, so both arrive as "_NET"/"NET".
+     * A pre-existing executive device -- resolved by the generic exec assign, not
+     * created (unlike BG/mailbox). Gated on the primary NIC in the executive
+     * (no NIC -> the row does not exist -> vms_kif_assign fails SS$_NOSUCHDEV).
+     */
+    if (strcmp(upper, "_NET") == 0 || strcmp(upper, "NET") == 0) {
+        result->is_net = 1;
+        return 1;
     }
 
     return 0;  /* Not a recognized VMS device */
@@ -458,6 +482,48 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
             pcb->channels[slot].flags = PCB_CHAN_BG;
             pcb->channels[slot].mbx_peer_fd = -1;
             pcb->channels[slot].exec_chan = bg_exec_chan;
+            strncpy(pcb->channels[slot].devnam, name,
+                    sizeof(pcb->channels[slot].devnam) - 1);
+            pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
+            *chan = (uint16_t)slot;
+
+            pthread_mutex_unlock(&pcb->chan_lock);
+            return SS$_NORMAL;
+        }
+
+        if (devres.is_net) {
+            /*
+             * vms-cdee (a1-0): $ASSIGN _NET: -- the DECnet device face. Unlike
+             * BG/mailbox (which CREATE a fresh unit), _NET: is a pre-existing
+             * shareable DC$_SCOM template device born in the executive I/O
+             * database on the primary NIC (vms_devtab_probe_net); $ASSIGN just
+             * grants a channel to it through the GENERIC executive assign, the
+             * same path the console terminal uses. The channel's fd stays -1;
+             * $QIO will route through qio_net_op() to the NETACP broker once it
+             * lands (PCB_CHAN_NET, rd vms-799/vms-22c). No NIC / no executive ->
+             * vms_kif_assign returns SS$_NOSUCHDEV, no per-process fake (INV-6).
+             */
+            uint32_t net_exec_chan = 0;
+            uint32_t st = vms_kif_assign(name, &net_exec_chan);
+            if (!(st & 1)) {
+                /*
+                 * The DECnet device face is unavailable -- no executive, or no
+                 * primary NIC (the _NET: row is NIC-gated in vms_devtab_probe_net).
+                 * Report the honest $ASSIGN device-not-available status,
+                 * SS$_NOSUCHDEV, exactly as the BG/mailbox/file branches do; never
+                 * leak the raw transport status (the generic vms_kif_assign is
+                 * ungated and surfaces SS$_BUGCHECK with no /dev/vms). INV-6.
+                 */
+                pthread_mutex_unlock(&pcb->chan_lock);
+                return SS$_NOSUCHDEV;
+            }
+
+            pcb->channels[slot].fd = -1;
+            pcb->channels[slot].in_use = 1;
+            pcb->channels[slot].ref_count = 1;
+            pcb->channels[slot].flags = PCB_CHAN_NET;
+            pcb->channels[slot].mbx_peer_fd = -1;
+            pcb->channels[slot].exec_chan = net_exec_chan;
             strncpy(pcb->channels[slot].devnam, name,
                     sizeof(pcb->channels[slot].devnam) - 1);
             pcb->channels[slot].devnam[sizeof(pcb->channels[slot].devnam) - 1] = '\0';
@@ -732,4 +798,19 @@ int vms$$chan_is_bg(uint16_t chan) {
     if (!pcb) return 0;
     if (!pcb->channels[chan].in_use) return 0;
     return (pcb->channels[chan].flags & PCB_CHAN_BG) ? 1 : 0;
+}
+
+/*
+ * vms$$chan_is_net - Internal helper: is this channel the DECnet device face
+ * _NET: (rd vms-799)? Used by sys$qio to route the $QIO logical-link functions
+ * to qio_net_op (the NETACP broker path) instead of the fd-based path -- a
+ * _NET: channel's fd is always -1, since the link lives in the executive/NETACP.
+ */
+int vms$$chan_is_net(uint16_t chan) {
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
+
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb) return 0;
+    if (!pcb->channels[chan].in_use) return 0;
+    return (pcb->channels[chan].flags & PCB_CHAN_NET) ? 1 : 0;
 }

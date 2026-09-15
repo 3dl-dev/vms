@@ -80,6 +80,79 @@ cluster_host_test(test_codec_hello      test_codec_hello.c)
 cluster_host_test(test_codec_vc         test_codec_vc.c)
 cluster_host_test(test_codec_dlm        test_codec_dlm.c)
 
+# rd vms-5339: never-crash-a-peer fuzz of the DLM (+ CM PARAMS) wire decoders.
+# To catch an over-read INSIDE the codec, the codec itself must be sanitizer-
+# instrumented, so this builds a TWIN of the codec sources WITH
+# -fsanitize=address,undefined (guarded -- a musl/freestanding cross may lack
+# the runtime) and links the fuzz against that twin, leaving the shared
+# cluster_host_codec (used by every other test) untouched. Where the sanitizer
+# is unavailable the fuzz still runs against the plain codec (exact-sized malloc
+# still bounds each input); the sanitizer turns an over-read into a HARD failure.
+include(CheckCSourceCompiles)
+set(_dlmfz_save "${CMAKE_REQUIRED_FLAGS}")
+set(CMAKE_REQUIRED_FLAGS "-fsanitize=address,undefined")
+check_c_source_compiles("int main(void){return 0;}" OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+set(CMAKE_REQUIRED_FLAGS "${_dlmfz_save}")
+
+add_executable(fuzz_codec_dlm fuzz_codec_dlm.c)
+target_include_directories(fuzz_codec_dlm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+    add_library(cluster_host_codec_fuzzsan STATIC
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_hello.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_vc.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_dlm.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_scs.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_cm.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_mscp.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_cluster_codec_blk.c
+        ${CMAKE_SOURCE_DIR}/src/kernel-core/vms_mscp_cl_fsm.c
+    )
+    target_include_directories(cluster_host_codec_fuzzsan PUBLIC
+        ${CMAKE_SOURCE_DIR}/src/kernel-core)
+    target_compile_options(cluster_host_codec_fuzzsan PRIVATE -fsanitize=address,undefined)
+    target_compile_options(fuzz_codec_dlm PRIVATE -fsanitize=address,undefined)
+    target_link_options(fuzz_codec_dlm PRIVATE -fsanitize=address,undefined)
+    target_link_libraries(fuzz_codec_dlm PRIVATE cluster_host_codec_fuzzsan)
+else()
+    target_link_libraries(fuzz_codec_dlm PRIVATE cluster_host_codec)
+endif()
+add_test(NAME cluster_host_fuzz_codec_dlm COMMAND fuzz_codec_dlm)
+set_tests_properties(cluster_host_fuzz_codec_dlm PROPERTIES
+    LABELS "unit;cluster;codec;fuzz" TIMEOUT 180)
+
+# rd vms-5339 (cont.): the REST of the untrusted peer-receive decode surface
+# (hello / scs / cm / vc / blk), each an independent never-crash-a-peer gate
+# linking the SAME sanitizer twin defined above (or the plain codec where the
+# sanitizer runtime is unavailable). Shared helpers: fuzz_common.h.
+function(cluster_host_fuzz name)
+    add_executable(${name} ${name}.c)
+    target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    # cluster_host_fixture provides the valid-frame corpus the frame+fi fuzzers
+    # seed from (fz_fixture_frame_fuzz); the defs point it at the fixture dir +
+    # clean-room manifest, exactly as cluster_host_test does.
+    target_link_libraries(${name} PRIVATE cluster_host_fixture)
+    target_compile_definitions(${name} PRIVATE
+        OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+        OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}")
+    if(OVMX_CLUSTER_FUZZ_SANITIZE_OK)
+        target_compile_options(${name} PRIVATE -fsanitize=address,undefined)
+        target_link_options(${name} PRIVATE -fsanitize=address,undefined)
+        target_link_libraries(${name} PRIVATE cluster_host_codec_fuzzsan)
+    else()
+        target_link_libraries(${name} PRIVATE cluster_host_codec)
+    endif()
+    add_test(NAME cluster_host_${name} COMMAND ${name})
+    set_tests_properties(cluster_host_${name} PROPERTIES
+        LABELS "unit;cluster;codec;fuzz" TIMEOUT 180)
+endfunction()
+
+cluster_host_fuzz(fuzz_codec_hello)
+cluster_host_fuzz(fuzz_codec_scs)
+cluster_host_fuzz(fuzz_codec_cm)
+cluster_host_fuzz(fuzz_codec_vc)
+cluster_host_fuzz(fuzz_codec_blk)
+
 # ---- FC-P3.6: the CLUB/CSB model, the ten-state ladder, the reconnect FSM ----
 # Built from src/kernel-core with -DOVMX_CLUSTER_HOST -- the SAME sources both
 # kmods compile, with no kernel headers and no seam. That is the whole point of
@@ -146,6 +219,10 @@ cluster_host_cnxman_test(test_cnxman_recnx   test_cnxman_recnx.c)
 # source here, never a kernel-core object.
 cluster_host_cnxman_test(test_cnxman_barrier test_cnxman_barrier.c vms_frame_compose.c)  # FC-P3.5
 cluster_host_cnxman_test(test_cnxman_coord   test_cnxman_coord.c vms_frame_compose.c)    # FC-P3.12
+# rd vms-c06: the two halves of a transition CLOSED ON EACH OTHER -- the real
+# coordinator FSM and the real participant barrier FSM exchanging only bodies
+# they originated themselves. No composed frames, so no vms_frame_compose.c.
+cluster_host_cnxman_test(test_cnxman_barrier_loop test_cnxman_barrier_loop.c)   # vms-c06
 # FC-P3.3: the join. Same terms; it also needs the MSCP end-message builders
 # (already in cluster_host_codec, which cluster_host_cnxman links).
 cluster_host_cnxman_test(test_cnxman_join    test_cnxman_join.c vms_frame_compose.c)     # FC-P3.3
@@ -163,6 +240,16 @@ target_include_directories(test_cnxman_diag PRIVATE ${CMAKE_SOURCE_DIR}/tools)
 # order over real CSBs, the `hash16 mod n` index rule, and the two refusals
 # (mixed/unknown weights, capacity). Pure, so it runs in milliseconds.
 cluster_host_cnxman_test(test_dlm_ldwv test_dlm_ldwv.c)
+
+# rd vms-1ee: the DLM's WIRE ARM (vms_dlm_scs.c). The arm itself is not
+# host-linkable (exec_kbackend.h + the fork API, test_cnxman_glue.c's own
+# precedent), so this is the two-proof shape: the TRUST ANCHOR the split-brain
+# gate reads, driven against the real vms_cnxman_csb.c derivation, and the
+# WIRING + ITS ORDER read out of the three shipping files that carry it.
+cluster_host_cnxman_test(test_dlm_scs_arm test_dlm_scs_arm.c)
+target_compile_definitions(test_dlm_scs_arm PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
 
 # FC-P3.15's own done-condition: prove NO CNXMAN TU writes below body offset 0
 # (design sec 3.2.4 ruling E1). OVMX_KCORE_DIR lets the test open the real
@@ -262,6 +349,24 @@ cluster_host_cnxman_test(test_cluster_api_getsyi test_cluster_api_getsyi.c)
 # the CLUB is compared byte-for-byte before and after every refusal.
 cluster_host_cnxman_test(test_cnxman_genesis        test_cnxman_genesis.c)
 cluster_host_cnxman_test(test_cnxman_genesis_negctl test_cnxman_genesis_negctl.c)
+
+# host_defects.sh selftest (vms-8e7): the STATIC anchor-drift check for the
+# host-native mutation manifest that pairs with test_cnxman_genesis_negctl
+# above -- a real sed(1) injection into a throwaway copy of src/kernel-core,
+# proving the anchor still matches and that re-applying it is refused as a
+# BROKEN FIXTURE rather than silently landing nothing. Fast (no compile, no
+# run of the suite itself): that claim belongs ONLY to
+# tests/cluster/host/run_host_negctl.sh, which rebuilds and runs the real
+# target and is therefore NOT wired to a bare `ctest` invocation (see its own
+# header; it runs as its own CI step in the Build & Test job).
+add_test(
+    NAME cluster_host_defects_selftest
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/host_defects.sh selftest ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(cluster_host_defects_selftest PROPERTIES
+    LABELS "unit;cluster;cluster_host;negctl"
+    TIMEOUT 30
+)
 
 # ---- FC-P0.10: cluster SYSGEN parameters loaded into struct vms_cluster ----
 # Same host-pure discipline: vms_cluster_sysgen.c takes no kernel header and no
@@ -688,6 +793,93 @@ endif()
 add_test(NAME cluster_host_test_lock_dir COMMAND test_lock_dir)
 set_tests_properties(cluster_host_test_lock_dir PROPERTIES
     LABELS "unit;cluster;cluster_host;lock"
+    TIMEOUT 60
+)
+
+# ---- FC-P8.1 (rd vms-b6d): THE QUORUM HANG, engine + CLUB on one path ----
+# The rung that can see this item at all: to make the engine stall, the test has
+# to make a REAL struct vms_club genuinely lose its votes, and the engine has to
+# ask for that fact through the REAL gate (vms_dlm_quorum.h). So it links BOTH
+# recipes -- cluster_host_lock (the engine; lock_shim/ FIRST on the include
+# path) and cluster_host_cnxman (the quorum arithmetic + the CSB table, built
+# -DOVMX_CLUSTER_HOST) -- which meet only in this test's own TU, exactly as
+# test_dlm_deq_reachable below does it.
+add_executable(test_lock_quorum_hang test_lock_quorum_hang.c)
+target_include_directories(test_lock_quorum_hang PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_lock_quorum_hang PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_lock_quorum_hang PRIVATE
+    cluster_host_lock cluster_host_cnxman Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_lock_quorum_hang PRIVATE -Wall -Wextra)
+endif()
+
+add_test(NAME cluster_host_test_lock_quorum_hang COMMAND test_lock_quorum_hang)
+set_tests_properties(cluster_host_test_lock_quorum_hang PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;cnxman"
+    TIMEOUT 60
+)
+
+# ---- rd vms-49f8: the op-0x03 $DEQ has a REACHABLE caller ----
+# The ONE host test that puts the REAL lock engine, the REAL release queue, the
+# REAL requester FSM and the REAL codec on one path: a real $ENQ makes a proxy
+# LKB, a real grant lands the master's handle on it, a real $DEQ destroys it,
+# and the frame that leaves has to be the image of what the lock database held
+# an instant earlier. It is the only rung that can see the bug this item fixed
+# -- the emit was proven by test_dlm_requester and had no production caller.
+#
+# It therefore links BOTH library recipes: cluster_host_lock (the engine, whose
+# lock_shim/ redirection must come FIRST on the include path) and
+# cluster_host_dlm (the FSM + codec, built -DOVMX_CLUSTER_HOST). The two meet
+# only in this test's own TU, which names vms_internal.h and vms_dlm_scs_fsm.h
+# together -- possible since the codec's opcodes were renamed WIREOP (vms-fa7).
+add_executable(test_dlm_deq_reachable test_dlm_deq_reachable.c vms_frame_compose.c)
+target_include_directories(test_dlm_deq_reachable PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_deq_reachable PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_deq_reachable PRIVATE
+    cluster_host_lock cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_deq_reachable PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_deq_reachable COMMAND test_dlm_deq_reachable)
+set_tests_properties(cluster_host_test_dlm_deq_reachable PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
+    TIMEOUT 60
+)
+
+# ---- rd vms-c72: the op-0x03/op-0x04 RECEIVE half really moves lock state ----
+# The mirror of test_dlm_deq_reachable above, on the same two library recipes
+# and for the same reason: the emit was proven and the RECEIVE was declined
+# unparsed on the live rig. It drives the SHIPPING engine doors the arm's
+# dispatch calls -- vms_lock_dlm_master_serve() for an inbound $DEQ and
+# dlm_req_fsm_blkast_body() for an inbound BLKAST -- with frames the SHIPPING
+# codec built, and asserts the lock database moved (a released master copy, a
+# real user-mode AST on a real holder), which no parse-level test can see.
+add_executable(test_dlm_recv_arm test_dlm_recv_arm.c)
+target_include_directories(test_dlm_recv_arm PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lock_shim
+    ${OVMX_CLUSTER_CORE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/kernel
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_compile_definitions(test_dlm_recv_arm PRIVATE OVMX_CLUSTER_HOST)
+target_link_libraries(test_dlm_recv_arm PRIVATE
+    cluster_host_lock cluster_host_dlm Threads::Threads)
+if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(test_dlm_recv_arm PRIVATE -Wall -Wextra -Werror)
+endif()
+add_test(NAME cluster_host_test_dlm_recv_arm COMMAND test_dlm_recv_arm)
+set_tests_properties(cluster_host_test_dlm_recv_arm PROPERTIES
+    LABELS "unit;cluster;cluster_host;lock;dlm"
     TIMEOUT 60
 )
 

@@ -135,8 +135,14 @@ export IMGACT_INTERP_PATH
 if docker image inspect "$IMG" >/dev/null 2>&1; then
     echo "== [1/2] toolchain image $IMG already present — skipping build (prebuilt/pulled) =="
 else
-    echo "== [1/2] build the alpha-dec-vms cross toolchain image ($IMG) =="
-    docker build -t "$IMG" "$TC_DIR"
+    # vms-495e: instead of a bare `docker build` (which eats ~90 min every run on a
+    # rail worker with no ghcr access), go through ensure-toolchain-image.sh — it
+    # pulls a content-hash-keyed copy from the LAN 30500 registry if present
+    # (seconds), else builds once + pushes it so the NEXT run is cheap. Falls back
+    # to a plain build if the registry is unreachable, so CI/local behaviour is
+    # unchanged when the cache is absent.
+    echo "== [1/2] toolchain image $IMG absent — ensure-toolchain-image.sh (pull-cached-or-build+push, vms-495e) =="
+    IMG="$IMG" sh "$TC_DIR/ensure-toolchain-image.sh"
 fi
 
 echo "== [2/2] build the genuine alpha DECC\$SHR + link the joint-e2e proof (in-container) =="

@@ -87,6 +87,14 @@ struct bed {
 	uint8_t          inq[MAX_INQ][VMS_SCS_PROCNAME_LEN];
 	uint32_t         n_inq;
 	uint32_t         n_connect;
+	/*
+	 * ... and how many of those were VMS$VAXcluster CONNECT_REQs this node
+	 * put on the wire ITSELF. The rejoin oracle's whole connect census is
+	 * this number (spec sec 4(O.11): a crash-rejoiner opens SCS$DIRECTORY
+	 * and MSCP$DISK and NOTHING else), so it is counted separately from the
+	 * disk-client leg rather than inferred from `last_remote`.
+	 */
+	uint32_t         n_connect_cm;
 	uint8_t          last_local[VMS_SCS_PROCNAME_LEN];
 	uint8_t          last_remote[VMS_SCS_PROCNAME_LEN];
 	int              last_had_conndata;
@@ -138,6 +146,9 @@ static int bed_connect(void *ctx, vms_scs_sysid_t dst,
 	if (g.fail_connect)
 		return -1;
 	g.n_connect++;
+	if (memcmp(remote_name, cnxman_join_name_vaxcluster,
+		   VMS_SCS_PROCNAME_LEN) == 0)
+		g.n_connect_cm++;
 	memcpy(g.last_local, local_name, VMS_SCS_PROCNAME_LEN);
 	memcpy(g.last_remote, remote_name, VMS_SCS_PROCNAME_LEN);
 	g.last_had_conndata = (conndata != NULL);
@@ -483,6 +494,31 @@ static uint32_t mk_go(uint32_t epoch)
  * `csid` == 0 builds a burst with NEITHER offset carrying a shape-valid
  * value -- the "no coordinator CSID in this frame" case.
  */
+/* One cat-0x01 op-0x05 MEMBERSHIP RECORD, laid out exactly as the reference
+ * does (vms_cluster_codec_cm.h sec 5c): the constant tag, the SCSSYSTEMID the
+ * record is ABOUT, that member's boot time, its assigned CSID and the 0-based
+ * CSV index derived from that CSID's own slot. */
+static uint32_t mk_membrec(uint32_t sysid, uint32_t csid)
+{
+	vms_wire_buf_t w;
+	uint32_t n = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, 0x0041);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_TAG,
+			  VMS_CM_MEMBREC_TAG);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_SYSID,
+			  sysid);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_BOOT,
+			  0x2ac58434u);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_BOOT + 4u,
+			  0x00bc20ceu);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_CSID,
+			  csid);
+	vms_wire_put_le16(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_INDEX,
+			  (uint16_t)((csid & 0xffffu) - 1u));
+	return n;
+}
+
 static uint32_t mk_membership_csid(uint32_t csid, char form)
 {
 	vms_wire_buf_t w;
@@ -524,10 +560,30 @@ static uint32_t mk_release(uint32_t step, uint16_t send_msg)
 	return n;
 }
 
-/* One op-0x05 lock/resource-rebuild transaction (sec 4(o) rows 8-9). */
+/*
+ * One op-0x05 MEMBERSHIP RECORD from the coordinator (sec 4(o) rows 8-9 --
+ * these frames used to be modelled as opaque "lock/resource rebuild
+ * transactions"; the payload decode shows they are the membership pairing,
+ * vms_cluster_codec_cm.h sec 5c).
+ *
+ * It names THIS node and assigns it CSV slot 3, which is the slot the 0x0e
+ * nodemap these tests use has a bit for -- i.e. the frames the reference sends
+ * at this point in the join, carrying what the reference carries.
+ */
 static uint32_t mk_lockrb(uint16_t send_msg)
 {
-	return mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_LOCKRB, send_msg);
+	vms_wire_buf_t w;
+	uint32_t n = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, send_msg);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_TAG,
+			  VMS_CM_MEMBREC_TAG);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_SYSID,
+			  (uint32_t)OWN_SYSID);
+	vms_wire_put_le32(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_CSID,
+			  0x00010003u);
+	vms_wire_put_le16(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_INDEX, 2u);
+	return n;
 }
 
 /* The op-0x03 membership COMMIT -- the message a real VAX2 sent this node
@@ -824,7 +880,7 @@ static void test_reference_sequence(void)
 				CNXMAN_JOIN_RX_CONSUMED, "op 0x03 consumed");
 		ct_check_eq_u32(g.j.echoes_sent, 1u,
 				"op 0x03 COMMIT answered with the 0x81 echo");
-		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_LOCKRB, 0x0021);
+		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, 0x0021);
 		(void)join_feed(len);
 		ct_check_eq_u32(g.j.echoes_sent, 2u,
 				"op 0x05 rebuild txn answered too");
@@ -900,18 +956,25 @@ static void test_csid_no_coordinator_seen_stays_new(void)
 }
 
 /*
- * E30, byte-exact vectors from the real-VAX capture. VAX1's own record
- * (CSID 0x00010001, SCSSYSTEMID 1025, generation 1) taught the *coordinator's*
- * identity on the wire; this node's own SCSSYSTEMID (1027, the capture's
- * VAX3) combines with the WIRE-LEARNED generation to compute OVMX's own
- * CSID -- never the coordinator's value, never a copy.
+ * op-0x06 TEACHES A GENERATION AND MINTS NOTHING (rd vms-fc7).
+ *
+ * These three cases used to assert that this node DERIVED its own CSID as
+ * `generation << 16 | (SCSSYSTEMID & 0x3ff)` from a coordinator CSID read off
+ * an op-0x06. The reference refutes that construction outright: in
+ * tests/lab/captures/cn3-achieved-20260905.pcap the coordinator's op-0x05
+ * records pair SCSSYSTEMID 1986 with CSID 0x00010003 (CSV slot 3) while
+ * 1986 & 0x3ff is 962, and in op06-join-20260903.pcap 1026 is paired with
+ * 0x00010003 while 1026 & 0x3ff is 2. The rule is a round-robin CSV slot,
+ * which no joiner can compute -- so the derive is gone and the assertions
+ * below are the corrected ones: the burst is READ, its generation counted,
+ * and NO cluster system id is invented from it.
  */
-static void test_csid_wire_learned_form_a(void)
+static void test_op06_teaches_a_generation_only_form_a(void)
 {
 	uint32_t len;
 
-	printf("\n-- E30: form A (body[24:28]), capture-exact 0x00010001 -> "
-	       "generation 1 --\n");
+	printf("\n-- op-0x06 form A (body[24:28]): a generation, not an "
+	       "identity --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
@@ -922,26 +985,21 @@ static void test_csid_wire_learned_form_a(void)
 
 	ct_check_eq_u32(g.j.csid_unpinned, 0u,
 			"a shape-valid coordinator CSID WAS found");
-	/* E79: learning a CSID is NOT being admitted (sec 4(q): membership
-	 * "follows from the transition completing", and the reference joiner's
-	 * CSID is on the wire ~160 ms BEFORE its barrier opens). The node stays
-	 * pre-MEMBER until a real op-0x0c #12 commits. */
+	ct_check_eq_u32(g.j.generations_seen, 1u,
+			"... and counted as what it is: a generation");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"[ADMIT][CSID_LEARNED] records the CSID and does NOT "
-			"promote");
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "the CLUB learned it");
-	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
-			"(1 << 16) | (1027 & 0x3ff) = 0x00010003 -- computed, "
-			"not copied from the coordinator's 0x00010001");
+			"[ADMIT][CSID_LEARNED] promotes nothing");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"and NO cluster system id is minted from it -- the "
+			"assignment is the coordinator's round-robin CSV slot, "
+			"which this node cannot compute");
 }
 
-/* The same mechanism through the OTHER measured offset (body[36:40]), with
- * the capture's other real value (VAX3's own re-asserted CSID). */
-static void test_csid_wire_learned_form_b(void)
+static void test_op06_teaches_a_generation_only_form_b(void)
 {
 	uint32_t len;
 
-	printf("\n-- E30: form B (body[36:40]), capture-exact 0x00010003 --\n");
+	printf("\n-- op-0x06 form B (body[36:40]): likewise --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
@@ -950,36 +1008,131 @@ static void test_csid_wire_learned_form_b(void)
 	len = mk_membership_csid(0x00010003u, 'B');
 	(void)join_feed(len);
 
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"form B also fires the CSID cell -- and, like form A, "
-			"promotes nothing (E79)");
-	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
-			"same computed CSID via the other offset");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "promotes nothing");
+	ct_check_eq_u32(g.j.generations_seen, 1u, "a generation, counted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"and still nothing minted");
 }
 
 /*
- * The generation is READ FROM THE WIRE, never hardcoded to the capture's
- * observed 1: a coordinator CSID whose generation is 7 makes this node
- * compute a CSID carrying 7, not 1.
+ * THE ADOPTION: op-0x05 is where a CSID really comes from. Byte-exact vectors
+ * from cn3 -- SCSSYSTEMID 1986 paired with CSID 0x00010003, CSV index 2.
  */
-static void test_csid_generation_never_fabricated(void)
+static void test_membrec_adopted_when_it_names_us(void)
 {
 	uint32_t len;
 
-	printf("\n-- E30: the generation is wire-learned, not baked in --\n");
+	printf("\n-- op-0x05: the cluster ASSIGNS this node its CSID --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
-	g.cl.params.scssystemid = 1027ull;
+	g.cl.params.scssystemid = 1986ull;   /* cn3's OVMXJ1 */
 
-	len = mk_membership_csid(0x00070005u, 'A'); /* generation 7, shape-valid */
+	len = mk_membrec(1986u, 0x00010003u);
 	(void)join_feed(len);
 
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"still records, still does not promote (E79)");
-	ct_check_eq_u32(g.cl.club.local_csid, 0x00070003u,
-			"(7 << 16) | (1027 & 0x3ff): the generation tracked the "
-			"wire value, not a constant 1");
+	ct_check_eq_u32(g.j.membrecs_seen, 1u, "the record parsed");
+	ct_check_eq_u32(g.j.membrecs_adopted, 1u, "... named us, and was adopted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "the CLUB holds a CSID");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
+			"and it is the ASSIGNED one -- CSV slot 3 -- not "
+			"1986 & 0x3ff = 962, which no nodemap byte could express");
+	ct_check_eq_u32(g.j.echoes_sent >= 1u, 1u,
+			"and the record is still ANSWERED (refusing a member "
+			"breaks the join, sec 4(p))");
+}
+
+static void test_membrec_about_another_member_is_not_adopted(void)
+{
+	uint32_t len;
+
+	printf("\n-- op-0x05 about somebody else is NOT our identity --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1986ull;
+
+	len = mk_membrec(MEMBER_SYSID, 0x00010001u);   /* the member's record */
+	(void)join_feed(len);
+
+	ct_check_eq_u32(g.j.membrecs_seen, 1u, "parsed");
+	ct_check_eq_u32(g.j.membrecs_adopted, 0u,
+			"and NOT taken as THIS node's identity");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"this node still holds no cluster system id");
+	/* But it IS filed against the block this CLUB holds for that system --
+	 * which is what later lets this node match it to a nodemap bit and
+	 * COUNT the cluster it is in. */
+	ct_check_eq_u32(g.j.membrecs_peer_learned, 1u,
+			"the record is filed on the peer it NAMES");
+	{
+		const struct vms_csb *peer =
+			cnxman_club_find_sysid(&g.cl.club, MEMBER_SYSID);
+
+		ct_check(peer != NULL && peer->csid_valid,
+			 "  that peer's block now carries a CSID");
+		if (peer != NULL)
+			ct_check_eq_u32((uint32_t)peer->csid, 0x00010001u,
+					"  ... the one the record named");
+	}
+
+	/* A system this node holds no block for is NOT invented. */
+	len = mk_membrec(4242u, 0x00010007u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.j.membrecs_unknown_peer, 1u,
+			"a record about a system with no block is counted and "
+			"dropped -- there is no \"system zero\"");
+}
+
+/*
+ * RE-ADOPTED, NEVER CACHED. p. 7-25: a rejoining system gets a NEW CSID and
+ * never its old one back -- measured on the oracle, where one SCSSYSTEMID took
+ * slot 4 and then slot 5 on its rejoin.
+ */
+static void test_membrec_readopted_on_a_new_assignment(void)
+{
+	uint32_t len;
+
+	printf("\n-- op-0x05: a new assignment REPLACES the old one --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1030ull;
+
+	len = mk_membrec(1030u, 0x00010004u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010004u, "slot 4 first");
+
+	len = mk_membrec(1030u, 0x00010005u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010005u,
+			"... and slot 5 on the rejoin -- re-adopted, not cached");
+	ct_check_eq_u32(g.j.membrecs_adopted, 2u, "both adoptions counted");
+}
+
+/* A record this codec will not stand behind teaches nothing -- and is still
+ * answered. */
+static void test_membrec_unusable_is_answered_not_adopted(void)
+{
+	uint32_t len;
+	vms_wire_buf_t w;
+
+	printf("\n-- op-0x05 that does not hold together: answered, not "
+	       "adopted --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1986ull;
+
+	len = mk_membrec(1986u, 0x00010003u);
+	/* break the 0-based index so it disagrees with the CSID's own slot */
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le16(&w, VMS_OFF_SYSAP_BODY + VMS_OFB_CM_MEMBREC_INDEX, 7u);
+	(void)join_feed(len);
+
+	ct_check_eq_u32(g.j.membrecs_unusable, 1u, "refused by the codec");
+	ct_check_eq_u32(g.j.membrecs_adopted, 0u, "nothing adopted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "no identity taken");
 }
 
 /* The mechanism exists and the table cell is real -- exercised directly so
@@ -1463,6 +1616,51 @@ static void test_unowned_frame_is_not_mine(void)
  * here fails this test.
  * ========================================================================== */
 
+/*
+ * [ADMIT] -> the transition. MEMBER IS REACHED THE REAL WAY, IN THE REAL ORDER
+ * (rd vms-fc7 / vms-9c99). The coordinator sends the op-0x05 MEMBERSHIP RECORDS
+ * BEFORE the transition open -- measured in cn3, where the op-0x05 burst
+ * (frames 230-233) precedes the op-0x09 (834) and the GO (849) -- so this node
+ * has adopted its assigned CSID by the time the nodemap arrives, which is
+ * exactly what lets it find its own bit in it. The bitmap below is 0x0e =
+ * {1,2,3} and the assigned slot is 3. `adopt_membrec` is 0 for the scenario
+ * that stops at [BARRIER] without ever being named.
+ */
+static void drive_admit_to_barrier(int adopt_membrec)
+{
+	uint32_t len;
+
+	if (adopt_membrec) {
+		len = mk_membrec((uint32_t)OWN_SYSID, 0x00010003u);
+		(void)join_feed(len);
+	}
+	len = mk_open_add(EPOCH, 0x0eu);
+	(void)join_feed(len);
+	len = mk_go(EPOCH);
+	(void)join_feed(len);
+}
+
+/*
+ * The GO is the promotion (p. 7-42; cn3 shows a real cluster counting a joiner
+ * from the GO with no op-0x0c ever sent to it). The twelve barrier steps still
+ * run afterwards -- they are the lock-rebuild synchronisation -- and are walked
+ * here so the [MEMBER] row's cells are exercised on a node that really went
+ * through them.
+ */
+static void drive_barrier_to_member(void)
+{
+	uint32_t step;
+	uint16_t peer_msg = 0x0100;
+	uint32_t len;
+
+	for (step = 1u; step <= CNXMAN_BARRIER_STEPS; step++) {
+		len = mk_step_ack(step, ++peer_msg);
+		(void)join_feed(len);
+		len = mk_release(step, ++peer_msg);
+		(void)join_feed(len);
+	}
+}
+
 /* Put the FSM into `state` with the bed freshly initialised. */
 static void drive_to_state(enum cnxman_join_state s)
 {
@@ -1506,39 +1704,22 @@ static void drive_to_state(enum cnxman_join_state s)
 		return;
 	}
 
-	len = mk_open_add(EPOCH, 0x0eu);
-	(void)join_feed(len);
-	len = mk_go(EPOCH);
-	(void)join_feed(len);
+	drive_admit_to_barrier(s != CNXMAN_JOIN_BARRIER);
 	if (s == CNXMAN_JOIN_BARRIER)
 		return;
 
-	/*
-	 * E79: MEMBER IS NOW REACHED ONLY THE REAL WAY. This used to be a bare
-	 * cnxman_join_csid_learned() call, because the CSID cell promoted; it
-	 * does not any more (sec 4(q)), so the harness has to run the twelve
-	 * barrier steps and take the coordinator's op-0x0c #12 like a real
-	 * joiner. That is the point: if the barrier ever stops reaching MEMBER,
-	 * every cell of the [MEMBER] row goes untested and this walk says so.
-	 */
-	cnxman_join_csid_learned(&g.j, 0x00010003u);
-	{
-		uint32_t step;
-		uint16_t peer_msg = 0x0100;
-
-		for (step = 1u; step <= CNXMAN_BARRIER_STEPS; step++) {
-			len = mk_step_ack(step, ++peer_msg);
-			(void)join_feed(len);
-			len = mk_release(step, ++peer_msg);
-			(void)join_feed(len);
-		}
-	}
+	drive_barrier_to_member();
 }
 
 /* Fire `ev` at the FSM in whatever state it is in. Returns 0 if the event was
  * deliverable at all (every one below is). */
-static void fire(enum cnxman_event ev)
+/* Returns the routing verdict for the events that carry a BODY, so the table
+ * walk can assert not just what was counted but where the frame WENT
+ * (rd vms-c06). CNXMAN_JOIN_RX_CONSUMED for the entry points that take no
+ * body -- they are always this FSM's own. */
+static enum cnxman_join_rx fire(enum cnxman_event ev)
 {
+	enum cnxman_join_rx rx = CNXMAN_JOIN_RX_CONSUMED;
 	uint32_t len;
 
 	switch (ev) {
@@ -1575,11 +1756,11 @@ static void fire(enum cnxman_event ev)
 		break;
 	case CNXMAN_EV_RX_CONFIG:
 		len = mk_peer_params(1u, 0x0080);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_COMMIT:
 		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0081);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_MEMBERSHIP:
 		/* No coordinator CSID in this fixture: exercising the cell
@@ -1587,36 +1768,37 @@ static void fire(enum cnxman_event ev)
 		 * so it must not perturb the state this generic driver put
 		 * the FSM in. */
 		len = mk_membership_csid(0u, 'A');
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_CLOSE:
 		len = mk_cm(VMS_CM_CAT_MEMBERSHIP, VMS_CM_OP_CLOSE, 0x0082);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_TR_OPEN:
 		len = mk_open_add(EPOCH, 0x0eu);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_TR_GO:
 		len = mk_go(EPOCH);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_BARRIER:
 		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER_REL, 0x0083);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_BARRIER_ACK:
 		len = mk_cm((uint8_t)(VMS_CM_CAT_CONFIG | 0x80u),
 			    VMS_CM_OP_BARRIER, 0x0084);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	case CNXMAN_EV_RX_REBUILD:
 		len = mk_cm(VMS_CM_CAT_DLM, VMS_CM_OP_DLM_REBUILD, 0x0085);
-		(void)join_feed(len);
+		rx = join_feed(len);
 		break;
 	default:
 		break;
 	}
+	return rx;
 }
 
 /* The events this FSM's entry points can actually deliver. The four the shared
@@ -1720,10 +1902,35 @@ static const uint8_t expect[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	[CNXMAN_JOIN_FAILED] = { 0 },
 };
 
+/*
+ * WHOSE FRAME IS IT? (rd vms-c06.)
+ *
+ * These five events arrive as STATE-TRANSITION frames, which belong to the
+ * barrier (FC-P3.5) or the coordinator (FC-P3.12). This table is offered them
+ * first only because the glue routes join -> barrier -> coordinator, so an
+ * empty cell here means "not mine" -- the frame must go ON, and be counted as
+ * a frame this table declined rather than as one of its own events ignored.
+ * Eating them is what left a founder's coordinator with a barrier nobody could
+ * ever release.
+ */
+static int ev_belongs_to_another_fsm(enum cnxman_event ev)
+{
+	switch (ev) {
+	case CNXMAN_EV_RX_TR_OPEN:
+	case CNXMAN_EV_RX_TR_GO:
+	case CNXMAN_EV_RX_BARRIER:
+	case CNXMAN_EV_RX_BARRIER_ACK:
+	case CNXMAN_EV_RX_REBUILD:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 static void test_every_table_cell(void)
 {
 	unsigned st, k;
-	unsigned populated = 0, empty = 0;
+	unsigned populated = 0, empty = 0, routed_on = 0;
 	int all_ok = 1;
 
 	printf("\n-- the table: every [state][event] cell, populated and "
@@ -1732,7 +1939,8 @@ static void test_every_table_cell(void)
 	for (st = 0; st < (unsigned)CNXMAN_JOIN_STATE__COUNT; st++) {
 		for (k = 0; k < sizeof(walked) / sizeof(walked[0]); k++) {
 			enum cnxman_event ev = walked[k];
-			uint32_t before;
+			uint32_t before, foreign_before;
+			enum cnxman_join_rx rx;
 			int want = expect[st][ev];
 
 			drive_to_state((enum cnxman_join_state)st);
@@ -1744,7 +1952,8 @@ static void test_every_table_cell(void)
 				continue;
 			}
 			before = g.j.ignored_events;
-			fire(ev);
+			foreign_before = g.j.foreign_transition_frames;
+			rx = fire(ev);
 
 			if (want) {
 				populated++;
@@ -1754,6 +1963,25 @@ static void test_every_table_cell(void)
 					       cnxman_join_state_name(
 						       (enum cnxman_join_state)st),
 					       (unsigned)ev);
+					all_ok = 0;
+				}
+			} else if (ev_belongs_to_another_fsm(ev)) {
+				/* An empty cell for somebody else's frame:
+				 * ROUTED ON, counted as declined, and never
+				 * counted as one of this table's own ignored
+				 * events. */
+				empty++;
+				routed_on++;
+				if (rx != CNXMAN_JOIN_RX_NOT_MINE ||
+				    g.j.foreign_transition_frames ==
+					    foreign_before ||
+				    g.j.ignored_events != before) {
+					printf("  FAIL [%s][%u] is empty and "
+					       "not this FSM's frame, but it "
+					       "was not routed on (rx=%u)\n",
+					       cnxman_join_state_name(
+						       (enum cnxman_join_state)st),
+					       (unsigned)ev, (unsigned)rx);
 					all_ok = 0;
 				}
 			} else {
@@ -1772,7 +2000,10 @@ static void test_every_table_cell(void)
 	}
 	ct_check(all_ok, "every table cell behaves as the specification says");
 	printf("     (%u populated edges exercised, %u empty cells proved "
-	       "ignored-and-counted)\n", populated, empty);
+	       "ignored-or-routed-on, of which %u are another FSM's frames "
+	       "this table declined)\n", populated, empty, routed_on);
+	ct_check(routed_on > 0u,
+		 "the walk really reached the not-mine cells (rd vms-c06)");
 	ct_check(populated >= 50u,
 		 "the walk really covered the whole populated table");
 }
@@ -2304,6 +2535,191 @@ static void test_beat_adopts_the_connection_the_executive_holds(void)
 		 "... with the burst going out on the adopted connection");
 }
 
+/* ==========================================================================
+ * THE REJOIN SHAPE (spec sec 4(O.11)) -- THIS NODE OPENS NOTHING WHEN THE
+ * EXECUTIVE ALREADY HOLDS THE PAIR'S CONNECTION
+ *
+ * THE ORACLE. vax3-class03-crash-REJOIN-SUCCESS: the rejoining system's whole
+ * outbound connect census is SCS$DIRECTORY and MSCP$DISK -- it never opens a
+ * VMS$VAXcluster connect of its own. Both surviving members open
+ * VMS$VAXcluster CONNECT_REQ *to* it, it answers as the TARGET, and its
+ * op-0x02 CONFIG and the 0x04/0x03/0x05/0x06 reciprocation all ride the
+ * member-initiated connection.
+ *
+ * WHY THAT HAPPENS, AND WHY NO "REJOIN FLAG" MAY BE INVENTED FOR IT. The
+ * rejoiner had crashed: its executive holds no record of any prior cluster, so
+ * there is no rejoin condition for it to read and a flag claiming one would be
+ * fabricated (INV-6). The asymmetry is on the OTHER side -- p. 7-30 has each
+ * survivor still holding a CSB for this node inside its reconnect window and
+ * attempting a connection "once a second" -- so the pair's ONE connection
+ * already exists by the time this node's drive reaches step 4. This node's
+ * only obligation is to READ that (p. 7-23: the CSB is the record of the
+ * connection) instead of opening a second one.
+ *
+ * WHAT THE SECOND ONE COSTS, which is why this is not cosmetic: the glue binds
+ * `cdt_conid` the instant SCS mints an outbound Con.ID, so a redundant connect
+ * moves the executive's own record OFF the live member-initiated CDT -- and
+ * the op-0x02 that starts admission goes out on the wrong connection, which is
+ * exactly the sec 4(O.11) failure this rung exists to close.
+ * ========================================================================== */
+
+/*
+ * What vms_cnxman.c does when a member opens its VMS$VAXcluster connection to
+ * this node BEFORE this node has anything to join through (the p. 7-30
+ * reconnect drive of a survivor, landing during this node's boot): the CSB is
+ * ensured and the join's acceptance policy is asked, the ladder is told
+ * CONNECT_RCVD (p. 7-24 REACCEPT), the Con.ID SCS minted is bound to the
+ * block, and the ladder and the join are told the CDT came up.
+ */
+static void member_dials_this_node_first(void)
+{
+	ct_check_eq_u32((uint32_t)cnxman_join_connect_req(&g.j, MEMBER_SYSID,
+							  ACC_CM_CONID, NULL,
+							  0u),
+			0u, "the member's inbound connect is ACCEPTED (the "
+			    "Rule of Total Connectivity, sec 4(y))");
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONNECT_RCVD, &g.ops);
+	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONN_OPEN, &g.ops);
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_opened(&g.j, ACC_CM_CONID);
+}
+
+/* The rest of the drive, unchanged: the directory round, the disk-client
+ * connect and the walk to its Unit-Offline terminator. */
+static void drive_the_rest_to_admission(void)
+{
+	uint32_t len;
+
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, MSCP_CONID);
+
+	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_OFFLINE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+}
+
+static void test_rejoin_admission_rides_the_member_initiated_connection(void)
+{
+	printf("\n-- sec 4(O.11): the admission rides the connection the "
+	       "executive already holds --\n");
+	bed_init();
+	bed_set_identity();
+
+	/* The survivor dials this node while it is still booting -- before
+	 * CLUSTER_START, so this join has no target to compare the offer with
+	 * and does NOT adopt it through the accept path. The only record of
+	 * that connection is the one the EXECUTIVE keeps. */
+	member_dials_this_node_first();
+	ct_check_eq_u32(g.j.cm_other_member, 1u,
+			"with no target yet the offer is counted, not adopted");
+	ct_check_eq_u32(g.j.cm_adopted, 0u, "... so nothing was adopted");
+	ct_check_eq_u32(g.j.cm_conid, 0u,
+			"... and this join holds no Con.ID of its own");
+	ct_check_eq_u32(g.member_csb->cdt_conid, ACC_CM_CONID,
+			"but the EXECUTIVE holds the pair's connection");
+
+	drive_the_rest_to_admission();
+
+	/* THE ORACLE'S CONNECT CENSUS. */
+	ct_check_eq_u32(g.n_connect_cm, 0u,
+			"this node opens NO VMS$VAXcluster connect of its own "
+			"when the executive already holds the pair's one");
+	ct_check_eq_u32(g.n_connect, 1u,
+			"... its whole outbound census is the MSCP$DISK "
+			"disk-client leg");
+	ct_check_eq_u32(g.j.cm_connect_suppressed, 1u,
+			"... and the suppression is COUNTED, once");
+	ct_check(bed_logged("opens none of its own"),
+		 "... and said on the console");
+
+	/* THE ADMISSION, ON THAT CONNECTION. */
+	ct_check_eq_u32(g.j.cm_conid, ACC_CM_CONID,
+			"the drive runs on the MEMBER-INITIATED Con.ID");
+	ct_check_eq_u32(g.member_csb->cdt_conid, ACC_CM_CONID,
+			"... and the executive's own record was never re-bound "
+			"away from it");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "admission started");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
+			"three cat-0x01 originations on the member's "
+			"connection");
+	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_MODEL), "MODEL first (sec 4(o) row 1)");
+	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS), "... then PARAMS (row 2)");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "... then op-0x02, the request that starts admission, on the "
+		 "MEMBER-INITIATED connection and not on one of this node's own");
+	ct_check_eq_u32(n_sent_on(CM_CONID), 0u,
+			"and nothing at all was put on a connection of ours: "
+			"there is not one");
+	ct_check_eq_u32(g.j.send_failures, 0u, "every origination was taken");
+
+	/* INV-6: reaching ADMIT is not being a member. */
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"this node claims no membership yet");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"... and no CSID has been learned");
+}
+
+/*
+ * THE CONTROL, and the reason this is a READ rather than a mode: with nothing
+ * dialling this node -- a FIRST join, where no member holds a CSB for a system
+ * it has never seen -- `cdt_conid` is 0, nothing is suppressed, and this node
+ * opens its own VMS$VAXcluster connect exactly as the E67 reference joiner
+ * did. A blanket "the joiner never dials" would deadlock precisely here.
+ */
+static void test_first_join_still_opens_its_own_connection(void)
+{
+	printf("\n-- sec 4(O.11) control: a FIRST join still dials --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+
+	ct_check_eq_u32(g.j.cm_connect_suppressed, 0u,
+			"nothing was suppressed: the executive held no "
+			"connection to this member");
+	ct_check_eq_u32(g.n_connect_cm, 1u,
+			"this node opened its OWN VMS$VAXcluster connect");
+	ct_check_eq_u32(g.j.cm_conid, CM_CONID, "... and drives on it");
+	ct_check(sent_on_is(CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "... with op-0x02 on it, as the reference first join measured");
+}
+
+/*
+ * A CSB the ladder has GIVEN UP ON is not a connection to ride (p. 7-24
+ * DISCONNECT/DEAD). Its Con.ID is stale, so this node opens its own -- the
+ * suppression is bounded by the executive's own verdict on the connection,
+ * not by the mere presence of a number in the block.
+ */
+static void test_an_abandoned_csb_does_not_suppress_the_connect(void)
+{
+	printf("\n-- sec 4(O.11) bound: an abandoned CSB suppresses nothing "
+	       "--\n");
+	bed_init();
+	bed_set_identity();
+
+	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
+	g.member_csb->state = (uint8_t)VMS_CNXMAN_CSB_DEAD;
+
+	drive_the_rest_to_admission();
+	ct_check_eq_u32(g.j.cm_connect_suppressed, 0u,
+			"a Con.ID on a block the ladder gave up on is not a "
+			"connection this node may ride");
+	ct_check_eq_u32(g.n_connect_cm, 1u, "... so this node opens its own");
+}
+
 /*
  * The burst mask, not the lifetime counters. After a reconnect the new
  * connection has carried nothing, however much the old one carried.
@@ -2745,8 +3161,8 @@ static void test_e72_members_open_connection_supersedes_our_connect(void)
 	ct_check_eq_u32(n_sent_on(CM_CONID), 0u,
 			"and NOTHING went out on the connect that never opened");
 
-	/* INV-6: reaching ADMIT is not being a member. Only the cluster's own
-	 * op-0x06, carrying a real coordinator CSID, promotes this node. */
+	/* INV-6: reaching ADMIT is not being a member, and no identity has
+	 * been taken yet. */
 	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
 			"this node claims no membership yet");
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
@@ -2755,14 +3171,16 @@ static void test_e72_members_open_connection_supersedes_our_connect(void)
 	g.cl.params.scssystemid = 1027ull;   /* the capture's VAX3 */
 	len = mk_membership_csid(0x00010001u, 'A');
 	(void)join_feed(len);
-	/* E79: the record teaches the CSID and NOTHING MORE. Promotion is the
-	 * barrier's op-0x0c #12, tested in test_e79_member_only_on_commit(). */
+	/* rd vms-fc7: op-0x06 carries a GENERATION, not an assignment. It
+	 * teaches nothing this node may take as its own identity -- that is
+	 * op-0x05's job (test_membrec_adopted_when_it_names_us). */
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"the membership record teaches a CSID; it does NOT "
-			"make this node a member");
-	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
-			"... with the CSID computed from the WIRE-learned "
-			"generation and this node's real SCSSYSTEMID");
+			"the membership burst does NOT make this node a member");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"... and mints it no cluster system id either: the "
+			"assignment is the coordinator's round-robin CSV slot");
+	ct_check_eq_u32(g.j.generations_seen, 1u,
+			"the generation IS counted, as what it is");
 }
 
 static void test_e72_beat_advertises_on_the_open_it_missed(void)
@@ -2943,30 +3361,31 @@ static void test_post_admit_drive_to_member(void)
 			"each op-0x05 rebuild txn -> its own 0x81/0x05");
 
 	/* Row 10: the op-0x06 MEMBERSHIP burst. It is answered with the
-	 * opportunistic cat-0x04 ack, and it is the ONLY thing in this whole
-	 * dialogue that can make this node a member. */
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
-			"this node is still NEW: no op-0x06 has named a real "
-			"generation yet");
+	 * opportunistic cat-0x04 ack and carries a cluster GENERATION; the
+	 * identity itself came from the op-0x05 records above (rd vms-fc7). */
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u,
+			"the op-0x05 records DID name this node: it holds its "
+			"assigned cluster system id");
 	len = mk_membership_csid(MEMBER_CSID, 'A');
 	(void)join_feed(len);
 	/* E79: sec 4(u)'s ack is "never keyed to an opcode" -- the burst is
 	 * consumed here and its credit goes back through the CDT ledger. */
 	ct_check_eq_u32(g.j.acks_sent, 0u,
 			"op-0x06 draws NO opcode-keyed answer (E79)");
+	/* rd vms-fc7: the op-0x05 records above are where the identity came
+	 * from -- the cluster ASSIGNED this node CSV slot 3. The op-0x06 burst
+	 * that follows teaches a generation and mints nothing. */
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u,
-			"... and the WIRE-LEARNED generation gave this node a "
-			"CSID (E30)");
-	ct_check_eq_u32(g.cl.club.local_csid,
-			(unsigned long)((MEMBER_CSID & 0xffff0000u) |
-					(OWN_SYSID & 0x3ffu)),
-			"  == (the coordinator's own generation << 16) | our "
-			"REAL SCSSYSTEMID -- never copied, never templated");
-	/* E79: NOT YET. The CSID is learned; the transition has not even
-	 * opened. sec 4(q): membership follows the transition COMPLETING. */
+			"... and the op-0x05 records gave this node its CSID");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u,
+			"  == the ASSIGNED round-robin CSV slot, adopted off "
+			"the wire -- never derived from SCSSYSTEMID & 0x3ff, "
+			"which the reference refutes");
+	/* NOT YET: the transition has not even opened, so p. 7-42's tasks have
+	 * not run and nothing has decided this node's membership. */
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
-			"the CSID is learned and this node is still NOT a "
-			"member -- the barrier has not even opened");
+			"the CSID is adopted and this node is still NOT a "
+			"member -- the transition has not even opened");
 
 	/* sec 4(p): the transition open is Phase 1 and is ACKNOWLEDGED. */
 	len = mk_open_add(EPOCH, 0x0eu);
@@ -3025,6 +3444,9 @@ static void test_post_admit_drive_to_member(void)
 		 "every send-msg# this node put on that connection is "
 		 "STRICTLY greater than the last -- the join's dialogue and "
 		 "the barrier's share one CSB and must share one counter");
+	/* rd vms-9c99: this node became a MEMBER at the GO -- p. 7-42's tasks
+	 * -- and the twelve steps it then walked are the lock-rebuild
+	 * synchronisation, not the thing that admitted it. */
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
 			"and this node is a MEMBER at the end of it");
 }
@@ -3090,14 +3512,23 @@ static void test_e85_barrier_survives_to_member(void)
 	bed_set_identity();          /* NO grounded body[24:26] -- as shipped */
 	drive_to_admit();
 
+	/* rd vms-fc7: the identity comes from the coordinator's op-0x05
+	 * membership record (slot 3, the bit the 0x0e nodemap below carries),
+	 * which is what the reference sends before the open. */
+	len = mk_lockrb(++peer_msg);
+	(void)join_feed(len);
 	len = mk_membership_csid(MEMBER_CSID, 'A');
 	(void)join_feed(len);
 	len = mk_open_add(EPOCH, 0x0eu);
 	(void)join_feed(len);
 	len = mk_go(EPOCH);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
-			"the GO put this node in [BARRIER]");
+	/* rd vms-9c99: the GO IS the commit (p. 7-42) -- the nodemap named this
+	 * node and its assigned slot was in it, so it is a member from here.
+	 * The twelve steps below are the lock-rebuild synchronisation it then
+	 * walks as a member, which is what the reference does. */
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"the GO committed Phase 2 and promoted this node");
 
 	connects_at_go = g.n_connect;
 	disconnects_at_go = g.n_disconnect;
@@ -3127,9 +3558,14 @@ static void test_e85_barrier_survives_to_member(void)
 		len = mk_release(step, ++peer_msg);
 		(void)join_feed(len);
 
+		/* rd vms-9c99: membership was decided at the GO, so this node
+		 * is ALREADY a member while it walks the rebuild barrier --
+		 * which is what the reference does (cn3: a real cluster counts
+		 * a joiner from the GO and never sends it an op-0x0c at all). */
 		if (step < CNXMAN_BARRIER_STEPS)
-			ct_check(g.j.state != CNXMAN_JOIN_MEMBER,
-				 "  not a MEMBER before op-0x0c #12");
+			ct_check(g.j.state == CNXMAN_JOIN_MEMBER,
+				 "  already a MEMBER while the rebuild barrier "
+				 "runs");
 	}
 
 	/* THE BARRIER COMPLETED -- withholding the close did not stall it. */
@@ -3138,8 +3574,8 @@ static void test_e85_barrier_survives_to_member(void)
 	ct_check_eq_u32(g.b.state, (unsigned long)CNXMAN_BARRIER_COMPLETE,
 			"release #12 completed the transition");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
-			"and MEMBER follows from THAT -- the real op-0x0c #12, "
-			"nothing synthetic (sec 4(q))");
+			"and this node is a MEMBER -- decided at the GO "
+			"(p. 7-42), unaffected by the withheld close");
 	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_NONE,
 			"with no failure recorded anywhere in it");
 
@@ -3202,8 +3638,13 @@ static void test_member_only_on_a_real_op06_csid(void)
 
 	len = mk_commit(++peer_msg);
 	(void)join_feed(len);
-	len = mk_lockrb(++peer_msg);
+	/* An op-0x05 record about ANOTHER member: real, answered, and NOT this
+	 * node's identity (rd vms-fc7). */
+	len = mk_membrec(1025u, 0x00010001u);
 	(void)join_feed(len);
+	ct_check_eq_u32(g.j.membrecs_adopted, 0u,
+			"no record has named this node, so it has adopted "
+			"nothing");
 
 	/* A burst with NEITHER measured offset carrying a shape-valid CSID. */
 	len = mk_membership_csid(0u, 'A');
@@ -3279,10 +3720,15 @@ static void test_e79_op06_burst_originates_nothing(void)
 			"...and the retired per-record ack counter never moved");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"255 membership records do not admit this node either");
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u,
-			"the CSID they DID teach is learned (E30) -- learning "
-			"an identity and being granted membership are "
-			"different facts (sec 4(q))");
+	/* rd vms-fc7: a burst -- however long -- carries a GENERATION, not an
+	 * assignment. 255 of them mint nothing; only an op-0x05 record naming
+	 * this node can give it a cluster system id. */
+	ct_check_eq_u32(g.j.generations_seen, 255u,
+			"all 255 generations are counted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"and NOT ONE of them gave this node an identity -- the "
+			"assignment is the coordinator's round-robin CSV slot, "
+			"which no burst carries");
 }
 
 /*
@@ -3294,15 +3740,18 @@ static void test_e79_member_only_on_the_op0c_commit(void)
 	uint32_t len, step;
 	uint16_t peer_msg = 0x0002;
 
-	printf("\n-- E79: MEMBER turns over on op-0x0c #12, not before --\n");
+	printf("\n-- vms-9c99: MEMBER turns over at the GO (p. 7-42), and the "
+	       "rebuild barrier that follows changes nothing --\n");
 	bed_init();
 	bed_set_identity();
 	drive_to_admit();
-	g.cl.params.scssystemid = 1027ull;
 
-	len = mk_membership_csid(0x00010001u, 'A');
+	/* The identity first: an op-0x05 record naming this node, slot 3 --
+	 * the bit the 0x0e nodemap below carries. */
+	len = mk_lockrb(++peer_msg);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "the CSID is learned");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u,
+			"the CSID is ADOPTED from the membership record");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"and this node is NOT a member on the strength of it");
 
@@ -3311,11 +3760,22 @@ static void test_e79_member_only_on_the_op0c_commit(void)
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"the Phase 1 open does not promote either");
 
+	/*
+	 * THE GO IS THE COMMIT. p. 7-42's tasks run here -- the nodemap into
+	 * the CSBs, the quorum, the count, this node's own CLUSTER flag -- and
+	 * the reference behaves accordingly: in cn3 a real cluster counted its
+	 * joiner from the GO for the remaining 600 s and never sent it a single
+	 * op-0x0c. A joiner that waited for op-0x0c #12 there would wait
+	 * forever while the cluster already counted it.
+	 */
 	len = mk_go(EPOCH);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
-			"the GO hands the wire to the barrier -- still not a "
-			"member, though Phase 2 has committed (p. 7-42)");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"the GO committed Phase 2 and THIS is the promotion");
+	ct_check_eq_u32(g.b.phase2_commits, 1u,
+			"... counted where Phase 2 really ran");
+	ct_check_eq_u32(g.b.commits, 0u,
+			"and no op-0x0c has been seen at all yet");
 
 	for (step = 1u; step < CNXMAN_BARRIER_STEPS; step++) {
 		char what[96];
@@ -3325,26 +3785,25 @@ static void test_e79_member_only_on_the_op0c_commit(void)
 		len = mk_release(step, ++peer_msg);
 		(void)join_feed(len);
 		snprintf(what, sizeof(what),
-			 "  after release #%u of 12: still NOT a member",
+			 "  after release #%u of 12: still a member, unchanged",
 			 (unsigned)step);
-		ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER, what);
+		ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER, what);
 	}
 	ct_check_eq_u32(g.b.commits, 0u,
-			"eleven releases have committed NOTHING: the count is "
-			"the only termination signal there is (sec 4(p))");
+			"eleven releases have completed NOTHING: the count is "
+			"still the only termination signal (sec 4(p))");
 
 	len = mk_step_ack(CNXMAN_BARRIER_STEPS, ++peer_msg);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
-			"the twelfth 0x81/0x0b ack is an ACK, not the release");
 
 	len = mk_release(CNXMAN_BARRIER_STEPS, ++peer_msg);
 	(void)join_feed(len);
 	ct_check_eq_u32(g.b.commits, 1u,
-			"op-0x0c #12 is the COMMIT -- one, counted where the "
-			"barrier really finished");
+			"op-0x0c #12 still ENDS the rebuild barrier -- one, "
+			"counted where the barrier really finished");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
-			"AND ONLY NOW does this node read MEMBER");
+			"and this node is STILL a member -- the barrier ending "
+			"neither granted nor withdrew anything");
 	ct_check_eq_u32(g.j.commits_not_ours, 0u,
 			"nothing about that transition contradicted it");
 }
@@ -3574,6 +4033,130 @@ static void test_peer_params_land_in_the_senders_own_csb(void)
 	ct_check_eq_u32(g.member_csb->votes, 1u,
 			"the target's own record lands on the target");
 	ct_check_eq_u32(other->votes, 2u, "and does not disturb the other");
+}
+
+/* ==========================================================================
+ * rd vms-d0d: THE ADMITTED NODE DOES THE QUORUM ARITHMETIC ITSELF
+ *
+ * WHAT THIS LOCKS. On the live 2-node cluster node B reached MEMBER, counted
+ * both systems, and reported CEVOTES/QUORUM 0 for the whole run (#1119) -- with
+ * node A's real advertised VOTES sitting in B's own CSB table the entire time.
+ * p. 7-42 task 2 is a copy of the COORDINATOR's proposed cells, and an admitted
+ * node never ran a proposal, so nothing on the joiner's path applied p. 7-6 at
+ * all. The three cases below pin the whole fix and its INV-6 boundary:
+ *
+ *   1. a record arriving before admission computes NOTHING -- a quorum before
+ *      membership is precisely the local-only fabrication that is forbidden;
+ *   2. votes learned BEFORE the commit are in the figures the commit produces;
+ *   3. votes learned (or CHANGED) AFTER it move them, because the peer keeps
+ *      advertising and [MEMBER] still routes its op-0x01 here.
+ *
+ * Every number below is arithmetic over VOTES that arrived on a real op-0x01
+ * from a real sender -- the same walk the founder runs at genesis.
+ * ========================================================================== */
+
+static void test_quorum_is_never_asserted_before_membership(void)
+{
+	struct vms_csb *other;
+	uint32_t len;
+
+	printf("\n-- vms-d0d: a peer's VOTES before admission compute NO "
+	       "quorum (INV-6) --\n");
+	bed_init();
+	bed_set_identity();
+	other = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	if (other == NULL)
+		return;
+
+	len = mk_peer_params(2u, 1u);
+	(void)join_feed_from(other, OTHER_CSID, len);
+
+	ct_check_eq_u32(other->votes, 2u,
+			"the record was LEARNED -- the peer's real votes are "
+			"in the CSB");
+	ct_check(g.cl.state != VMS_CLUSTER_MEMBER,
+		 "... but this node is not a member of anything yet");
+	ct_check_eq_u32(g.cl.club.cevotes, 0u,
+			"so CEVOTES stays honestly unwritten -- a node that "
+			"has not been admitted has no membership to compute a "
+			"quorum over");
+	ct_check_eq_u32(g.cl.club.quorum, 0u, "... and QUORUM likewise");
+	ct_check_eq_u32(g.cl.club.quorum_lost, 0u,
+			"... and it does not claim to have LOST a quorum it "
+			"never had");
+}
+
+static void test_votes_learned_before_the_commit_are_in_the_commit(void)
+{
+	uint32_t len;
+
+	printf("\n-- vms-d0d: VOTES advertised before the GO are in the "
+	       "figures Phase 2 commits --\n");
+	drive_to_state(CNXMAN_JOIN_ADMIT);
+
+	len = mk_peer_params(1u, 1u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.member_csb->votes, 1u,
+			"the member advertised one vote while this node was "
+			"still waiting to be admitted");
+	ct_check_eq_u32(g.cl.club.quorum, 0u,
+			"nothing is computed from it yet (still [ADMIT])");
+
+	drive_admit_to_barrier(1);
+	drive_barrier_to_member();
+
+	ct_check_eq_u32(g.cl.state, (unsigned long)VMS_CLUSTER_MEMBER,
+			"the GO committed this node as a member (p. 7-42)");
+	ct_check_eq_u32(g.cl.club.cevotes, 1u,
+			"and Phase 2 computed CEVOTES = max{EXPECTED_VOTES 0; "
+			"SUM VOTES 1; Old CEVOTES 0} from the CSB table it "
+			"just selected");
+	ct_check_eq_u32(g.cl.club.quorum, 1u, "QUORUM = (1 + 2) / 2 = 1");
+}
+
+static void test_joiner_recomputes_on_every_advert_it_learns(void)
+{
+	struct vms_csb *other;
+	uint32_t len;
+
+	printf("\n-- vms-d0d: an admitted node's CEVOTES/QUORUM track the "
+	       "VOTES its peers advertise --\n");
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	other = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	if (other == NULL)
+		return;
+
+	ct_check_eq_u32(g.j.state, (unsigned long)CNXMAN_JOIN_MEMBER,
+			"the join really reached [MEMBER]");
+	ct_check_eq_u32(g.cl.club.cevotes, 0u,
+			"with nobody having advertised a vote yet, CEVOTES is "
+			"0 -- this node's own SYSGEN VOTES really are 0 and an "
+			"unheard peer contributes nothing (never a guess)");
+
+	len = mk_peer_params(1u, 1u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.member_csb->votes, 1u,
+			"the member's op-0x01 landed in its own CSB");
+	ct_check_eq_u32(g.cl.club.cevotes, 1u,
+			"and the SAME dispatch recomputed CEVOTES from the "
+			"table: 0 (this node) + 1 (the member)");
+	ct_check_eq_u32(g.cl.club.quorum, 1u, "QUORUM = (1 + 2) / 2 = 1");
+
+	len = mk_peer_params(2u, 1u);
+	(void)join_feed_from(other, OTHER_CSID, len);
+	ct_check_eq_u32(g.cl.club.cevotes, 3u,
+			"the second member's two votes are summed in too "
+			"(0 + 1 + 2), from ITS own CSB");
+	ct_check_eq_u32(g.cl.club.quorum, 2u, "QUORUM = (3 + 2) / 2 = 2");
+
+	/* pp. 7-10/7-11: the value cannot decrease by itself. A member that
+	 * re-advertises FEWER votes lowers the sum, but Old CEVOTES is read
+	 * back into the max{} and holds the line. */
+	len = mk_peer_params(0u, 1u);
+	(void)join_feed_from(other, OTHER_CSID, len);
+	ct_check_eq_u32(other->votes, 0u, "the peer's CSB took the new record");
+	ct_check_eq_u32(g.cl.club.cevotes, 3u,
+			"CEVOTES did not decrease by itself (pp. 7-10/7-11)");
 }
 
 /* ==========================================================================
@@ -3932,6 +4515,222 @@ static void test_e80_only_a_connected_member_is_re_issued_to(void)
 	ct_check_eq_u32(n_sent_on(OTHER_CONID), 0u, "nothing was emitted");
 }
 
+/* ==========================================================================
+ * rd vms-c06: A NODE THAT IS ALREADY IN THE CLUSTER IS A SERVER, NOT A
+ * SUPPLICANT
+ *
+ * THE WALL, live on the 2-node genesis rig (capture
+ * tests/lab/captures/vms-c06-rejoin-2node-20260913/proof-run1-roleswap-nodeAB).
+ * Node A -- VOTES=1, the ONLY node that can hold quorum -- founded generation 1
+ * at t=8 s (role=founder csid=0x00010001 epoch=1), discovered node B, admitted
+ * it as B's coordinator ... and then, on the join the connection-manager beat
+ * drives to every newly-appeared system (rd vms-f6b), sent B an op-0x02. B's
+ * console 0.05 s later: "proposing addition of a system to the cluster"; A's:
+ * "the cluster assigned this node a cluster system id", "this node is now a
+ * VAXcluster member". A was read back holding role=joiner csid=0x00010003
+ * coord=0x00010002 epoch=3 -- the founder re-joined UNDER the voteless node it
+ * had just admitted, and the cluster's only vote was now a follower.
+ *
+ * It was a COIN TOSS, not a certainty: in the two runs that passed, the same
+ * op-0x02 went out and B happened to be mid-transition and answered "another
+ * system is coordinating a state transition; deferring". So the fix is not a
+ * timing change -- it is that the request must never be made.
+ *
+ * The two edges below are the two halves: a member ASKS nobody, and a member
+ * ACCEPTS no new identity. Each has its negative control, because a gate that
+ * also silenced a real joiner would be worse than the defect.
+ * ========================================================================== */
+
+/* The executive state a FOUNDER really holds: cnxman_coord_found() minted the
+ * CSID into the CLUB and cnxman_phase2_commit() wrote MEMBER. Those two
+ * writers are not in this bed, so their EFFECT is set up here -- and the FSM
+ * under test reads only the effect. */
+static void bed_make_committed_member(vms_csid_t csid)
+{
+	cnxman_club_learn_local_csid(&g.cl.club, csid);
+	g.cl.state = VMS_CLUSTER_MEMBER;
+}
+
+/* Did this node put a cat-0x01 op-0x02 on ANY connection? */
+static uint32_t n_sent_catop(uint8_t cat, uint8_t op)
+{
+	uint32_t i, n = 0u;
+
+	for (i = 0; i < g.n_sent; i++) {
+		if (g.sent[i].len == VMS_CM_BODY_LEN &&
+		    g.sent[i].body[VMS_OFB_CM_CATEGORY] == cat &&
+		    g.sent[i].body[VMS_OFB_CM_OPCODE] == op)
+			n++;
+	}
+	return n;
+}
+
+static void test_c06_a_member_asks_nobody_to_admit_it(void)
+{
+	uint32_t len;
+
+	printf("\n-- vms-c06: a committed member sends NO op-0x02 --\n");
+	bed_init();
+	bed_set_identity();
+	bed_make_committed_member(0x00010001u);
+
+	drive_to_admit();   /* the same drive -- it just must not end in ADMIT */
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADVERTISE,
+			"the join stays in [ADVERTISE]: there is no request "
+			"outstanding, so there is no silence clock to start");
+	ct_check_eq_u32(g.j.config_sent, 0u, "no op-0x02 was built");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 0u,
+			"... and none reached the wire on any connection");
+	ct_check_eq_u32(g.j.admission_withheld, 1u,
+			"the request NOT made is counted, not left as silence");
+	ct_check(bed_logged("asks nobody to admit it"),
+		 "... and said once on OPA0:");
+
+	/* NON-VACUITY: the gate silences the ASK and nothing else. This node
+	 * still owes the new system its identity (E73), and still says it. */
+	ct_check_eq_u32(g.j.model_sent, 1u, "the op-0x14 MODEL still went out");
+	ct_check_eq_u32(g.j.params_sent, 1u, "the op-0x01 PARAMS still went out");
+
+	/* And the withholding is not a failure: nothing about this join broke,
+	 * and no membership was un-asserted (the E80 clock is what would have
+	 * walked the cluster declining members for not answering a question
+	 * nobody was asked). */
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS + 2u);
+	ct_check_eq_u32(g.j.requests_unanswered, 0u, "nobody is declined");
+	ct_check_eq_u32(g.j.attempts_exhausted, 0u, "no attempt is exhausted");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADVERTISE, "and it stays there");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u,
+			"INV-6: the founder still holds the CSID it founded on");
+	ct_check_eq_u32(g.cl.state, (uint32_t)VMS_CLUSTER_MEMBER,
+			"... and is still a member of its own cluster");
+
+	/*
+	 * ... and the OUTCOME the live run inverted: an op-0x05 from the new
+	 * system naming this node at a different slot moves nothing. Asserted
+	 * as an outcome rather than through one mechanism -- [ADVERTISE] has no
+	 * [CSID_LEARNED] cell AND the cell that does have one refuses a
+	 * reassignment (test_c06_a_members_csid_is_not_reassigned) -- so this
+	 * check survives either one being re-plumbed.
+	 */
+	len = mk_membrec((uint32_t)OWN_SYSID, 0x00010003u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u,
+			"the founder's slot is not moved by the system it "
+			"admitted");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "and is still held");
+}
+
+/* THE CONTROL: the same drive on a node the executive does NOT call a member
+ * asks, exactly as before. The gate reads state; it is not a removed feature. */
+static void test_c06_a_joiner_still_asks(void)
+{
+	printf("\n-- vms-c06 control: a real joiner still sends its op-0x02 --\n");
+	bed_init();
+	bed_set_identity();
+
+	drive_to_admit();
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "it reaches [ADMIT]");
+	ct_check_eq_u32(g.j.config_sent, 1u, "one op-0x02 was built");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 1u,
+			"... and it is on the wire");
+	ct_check_eq_u32(g.j.admission_withheld, 0u, "nothing was withheld");
+
+	/* And the CONJUNCTION is load-bearing: a node that holds a CSID but
+	 * has NOT been committed (an admission that has not finished) is still
+	 * a joiner and still asks. */
+	bed_init();
+	bed_set_identity();
+	cnxman_club_learn_local_csid(&g.cl.club, 0x00010003u);
+	g.cl.state = VMS_CLUSTER_JOINING;
+	drive_to_admit();
+	ct_check_eq_u32(g.j.config_sent, 1u,
+			"a CSID without a commitment is not membership");
+	ct_check_eq_u32(g.j.admission_withheld, 0u, "so nothing is withheld");
+}
+
+static void test_c06_a_members_csid_is_not_reassigned(void)
+{
+	uint32_t len;
+
+	printf("\n-- vms-c06: a committed member keeps the CSID it holds --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+
+	/*
+	 * The admission this node really ran: it was assigned slot 1, and the
+	 * transition that committed made it a member. [ADMIT] is the state the
+	 * live founder's join was in when the second assignment arrived, and it
+	 * is the state whose table HAS the [CSID_LEARNED] cell -- so this is
+	 * where the gate is reachable and where it is proven.
+	 */
+	len = mk_membrec((uint32_t)OWN_SYSID, 0x00010001u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u, "slot 1 adopted");
+	ct_check_eq_u32(g.j.membrecs_adopted, 1u, "... and counted");
+	g.cl.state = VMS_CLUSTER_MEMBER;   /* what phase2 does on the commit */
+
+	/* The op-0x05 that named node A and carried slot 3 in the live run. */
+	len = mk_membrec((uint32_t)OWN_SYSID, 0x00010003u);
+	(void)join_feed(len);
+
+	ct_check_eq_u32(g.j.membrecs_seen, 2u, "the record parsed");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u,
+			"the CLUB still holds the identity this node really "
+			"has -- not the one a peer offered it");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 1u, "... and it is valid");
+	ct_check_eq_u32(g.j.csid_reassign_refused, 1u,
+			"the reassignment is counted");
+	ct_check_eq_u32(g.j.membrecs_adopted, 1u,
+			"and NOT reported as a second adoption: `adopted` is "
+			"read back from the CLUB, never from the attempt");
+	ct_check(bed_logged("keeps the one the cluster assigned it"),
+		 "... and said once on OPA0:");
+	ct_check(g.j.echoes_sent >= 1u,
+		 "the record is still ANSWERED -- refusing a member breaks the "
+		 "join (sec 4(p))");
+
+	/* The SAME CSID again is not a reassignment and is not counted. */
+	len = mk_membrec((uint32_t)OWN_SYSID, 0x00010001u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.j.csid_reassign_refused, 1u, "still one");
+	ct_check_eq_u32(g.j.membrecs_adopted, 2u,
+			"re-asserting what this node already holds IS an "
+			"adoption of the same fact");
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010001u, "unchanged");
+}
+
+/* THE CONTROL, and p. 7-25's own rule: a system that is BEING admitted takes
+ * the new CSID -- including a rejoiner that gets a different slot than it had.
+ * (test_membrec_readopted_on_a_new_assignment proves the slot-4 -> slot-5
+ * rejoin; this proves the gate does not touch it.) */
+static void test_c06_a_rejoiner_still_takes_a_new_csid(void)
+{
+	uint32_t len;
+
+	printf("\n-- vms-c06 control: a system being admitted still adopts --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	g.cl.params.scssystemid = 1030ull;
+
+	len = mk_membrec(1030u, 0x00010004u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010004u, "slot 4 adopted");
+
+	/* ... and the rejoin's NEW slot, with the old one still in the CLUB
+	 * and cl->state not yet MEMBER: this is the vms-c06 rejoin payoff's own
+	 * shape, and it must be untouched. */
+	len = mk_membrec(1030u, 0x00010005u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.cl.club.local_csid, 0x00010005u,
+			"slot 5 on the rejoin -- re-adopted, not refused");
+	ct_check_eq_u32(g.j.csid_reassign_refused, 0u, "nothing was refused");
+	ct_check_eq_u32(g.j.membrecs_adopted, 2u, "both adoptions counted");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -3939,9 +4738,12 @@ int main(void)
 	test_reference_sequence();
 	test_disk_client_readback();
 	test_csid_no_coordinator_seen_stays_new();
-	test_csid_wire_learned_form_a();
-	test_csid_wire_learned_form_b();
-	test_csid_generation_never_fabricated();
+	test_op06_teaches_a_generation_only_form_a();
+	test_op06_teaches_a_generation_only_form_b();
+	test_membrec_adopted_when_it_names_us();
+	test_membrec_about_another_member_is_not_adopted();
+	test_membrec_readopted_on_a_new_assignment();
+	test_membrec_unusable_is_answered_not_adopted();
 	test_csid_learned_edge_exists();
 	test_lockdirwt_is_not_advertised();
 	test_no_invented_connect_data_or_descriptor();
@@ -3971,6 +4773,9 @@ int main(void)
 	test_retrying_never_fabricates_a_join();
 	test_expired_reconnect_window_ends_the_attempt_honestly();
 	test_beat_adopts_the_connection_the_executive_holds();
+	test_rejoin_admission_rides_the_member_initiated_connection();
+	test_first_join_still_opens_its_own_connection();
+	test_an_abandoned_csb_does_not_suppress_the_connect();
 	test_reoffer_is_per_connection_not_per_lifetime();
 	test_e77_a_new_connection_opens_at_send_msg_1();
 	test_e77_a_skewed_dialogue_is_not_stamped();
@@ -3987,6 +4792,9 @@ int main(void)
 	test_per_peer_covers_every_member();
 	test_per_peer_beat_asserts_no_membership();
 	test_peer_params_land_in_the_senders_own_csb();
+	test_quorum_is_never_asserted_before_membership();
+	test_votes_learned_before_the_commit_are_in_the_commit();
+	test_joiner_recomputes_on_every_advert_it_learns();
 	test_e80_a_silent_member_is_re_issued_to_the_next();
 	test_e80_a_member_that_proposes_is_never_re_issued_away_from();
 	test_e80_an_ack_alone_is_not_an_answer();
@@ -3995,6 +4803,10 @@ int main(void)
 	test_e80_all_declined_backs_off_then_asks_again();
 	test_e80_a_decline_with_no_name_says_so();
 	test_e80_only_a_connected_member_is_re_issued_to();
+	test_c06_a_member_asks_nobody_to_admit_it();
+	test_c06_a_joiner_still_asks();
+	test_c06_a_members_csid_is_not_reassigned();
+	test_c06_a_rejoiner_still_takes_a_new_csid();
 
 	return ct_summary("test_cnxman_join");
 }

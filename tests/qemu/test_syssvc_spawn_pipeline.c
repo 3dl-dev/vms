@@ -229,6 +229,7 @@ int main(void)
               "the pipeline returns a failure $STATUS when a stage fails");
         CHECK(r.failed_index == 1,
               "the driver reports the MID-chain stage (index 1) as the failure");
+        /* negctl: setexit-status-not-recorded */
         CHECK(r.failed_status == SS$_ABORT,
               "the failing stage's actual $STATUS (SS$_ABORT) is surfaced");
         CHECK(r.stages_run == 2,

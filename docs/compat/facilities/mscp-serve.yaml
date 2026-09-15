@@ -6,12 +6,18 @@ vms_ref: "MSCP/TMSCP protocol (Systems Application A); OpenVMS Cluster Systems m
 scope_1_0: in
 plan_ref: vms-6e1
 summary: >
-  MSCP disk SERVING IS NOT BUILT. It lived in the userspace SCS daemon, which
-  FC-P3.9 deleted (the operator's 2026-09-02 clustering reset); the
-  executive-resident replacement is FC-P6.x and unbuilt. What DOES exist is the
-  CLIENT half the executive's own cluster join drives: the MSCP codec and the
-  served-unit discovery FSM. TMSCP tape serving is not evidenced.
-last_reviewed: 2026-09-03
+  MSCP disk SERVING is now BUILT executive-resident (FC-P6.3), earning back the
+  capability the operator's 2026-09-02 clustering reset voided when FC-P3.9
+  deleted the userspace SCS daemon (src/vmsscs/scs_mscp_srv.c). The server is
+  vms_mscp_srv_fsm.c (UQB/HQB/HRB Controller-Available/Online state machine) +
+  vms_mscp_srv.c/vms_mscp_srv_io.c glue, serving the executive's own mounted
+  volumes over exec_blockdev_*/the ACP; it is built in all three kernel targets
+  (src/kernel/Makefile, src/kernel-netbsd/Makefile,
+  distro/kernel/drivers-ovmx/vms/Kbuild). status=implemented, NOT verified — no
+  byte-exact real-VAX MOUNT-acceptance oracle yet (R5, lab-deferred). The CLIENT
+  half the executive's own cluster join drives (MSCP codec + served-unit
+  discovery FSM) also exists. TMSCP tape serving is not evidenced.
+last_reviewed: 2026-09-14
 items:
   - id: mscp-serve$disk-read-write
     kind: feature
@@ -34,18 +40,27 @@ items:
       walk, 2 units). NOT YET: R5 real-VAX MOUNT (FC-P6.4, lab-deferred); the WRITE
       block-transfer INITIATION direction is lab-ungrounded (READ, what a MOUNT
       needs, is fully grounded); MSCP_SERVE_ALL bit semantics undecoded (any
-      non-zero = serve). `mscp-serve$online-end` stays stub (no byte-exact oracle).
+      non-zero = serve). `mscp-serve$online-end` is implemented (real serve-side
+      handler) but below verified — no byte-exact real-VAX-accepted oracle yet.
 
   - id: mscp-serve$online-end
     kind: feature
-    status: absent
-    authenticity: n/a
+    status: implemented
+    authenticity: real
     vms: "ONLINE END (0x89) response"
-    evidence: docs/cluster-protocol-spec.md
+    evidence: src/kernel-core/vms_mscp_srv_fsm.c
     notes: >
-      Retired with the server above (FC-P3.9). It was book-only and unproven even
-      then (laid out from Table A-7 with no capture in the corpus containing one --
-      the captured joiner never mounts); the layout survives as spec.
+      Executive-resident serve-side handler (vms-600), no longer book-only:
+      h_cmd_online (vms_mscp_srv_fsm.c) parses an inbound ONLINE command and
+      srv_send_online_end builds+sends the 44-byte ONLINE-END via the codec's
+      vms_mscp_online_end_build ("44 bytes MEASURED"). The P.UNFL echo runs
+      serve-side (host_unfl | unit_flags, host_unfl recorded on the HQB from the
+      host's own ONLINE cmd) and P.UNTI = (SCSSYSTEMID<<16)|unit. GROUNDED on
+      vaxlab-9: the 44-byte measured length, the P.UNFL echo rule, and P.UNTI.
+      NOT verified: there is no byte-exact capture of OVMX's OWN ONLINE-END being
+      ACCEPTED by a real VAX end-to-end (SCC + GUS have goldens; ONLINE-END does
+      not) -- that is the R5 mount-acceptance lab run (vms-36a8/vms-600), so this
+      stays implemented, below verified, until the oracle capture exists.
 
   - id: mscp-serve$client-discovery
     kind: feature

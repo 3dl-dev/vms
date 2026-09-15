@@ -1,0 +1,78 @@
+# k8s-cluster-genesis-rig.yaml - how the 2-node cluster GENESIS rig (rd vms-f6b)
+# is actually RUN. The rig image carries both guests and the runner, so the pod
+# is one container: the two QEMU guests live inside its netns and talk over a
+# loopback socket-mcast netdev. It therefore needs NO network privilege at all
+# -- the only host resource it wants is /dev/kvm (without it QEMU falls back to
+# TCG and the run takes minutes instead of seconds).
+#
+# It is pinned to k3s-worker because that is the node with /dev/kvm. It must
+# NEVER be scheduled onto, or interfere with, the vaxlab-* pods (real OpenVMS
+# VAX oracle nodes) sharing that worker: this rig creates no bridge, no tap and
+# no host network state, and its 0x6007 traffic never leaves the pod netns.
+#
+#   kubectl -n ovmx-lab apply -f tests/qemu/k8s-cluster-genesis-rig.yaml
+#   kubectl -n ovmx-lab logs -f ovmx-genesis-rig
+#   kubectl -n ovmx-lab delete pod ovmx-genesis-rig
+#
+# RIG_MODE selects the run: `proof` (A founds, B joins, CN=2), `negctl`
+# (VOTES=0 on both: nobody may found, so nobody may reach MEMBER or hold a
+# CSID), `noderive` (node B's SCSSYSTEMID makes the two candidate CSID rules
+# disagree: the coordinator refuses, sends no op-0x06, and node B must stay NEW
+# -- the INV-6 control proving a joiner's MEMBER comes only from a real
+# wire-learned generation), or `xnode` (rd vms-94c: the proof run PLUS a
+# cross-node DLM phase -- each node takes an EX lock on a resource the PEER
+# masters, contends, and releases, which drives the arm's op-0x03 $DEQ and
+# op-0x04 BLKAST emits in both directions and then asserts both nodes are still
+# MEMBERs with CN=2 after receiving frames neither has a receive half for), or
+# `qhang` (rd vms-b6d, FC-P8.1: the proof run PLUS a PARTITION -- the rig cuts
+# its own segment, node B loses the quorum that rested on A's learned vote and
+# must STALL a clustered $ENQ while node A, still meeting QUORUM on its own
+# vote, grants the identical request; when the segment heals B's SAME stalled
+# request must complete), or `rejoin` (rd vms-4838, REJOIN-AS-TARGET: after
+# CN=2 settles, node B is EVACUATED -- its own QEMU process killed, no
+# graceful shutdown -- while node A still holds its CSB inside
+# RECNXINTERVAL, then relaunched with the SAME SYSGEN identity; it must
+# adopt node A's member-initiated VMS$VAXcluster connection instead of
+# opening a second one -- node B's own passive capture of the rejoin boot
+# must show ZERO VMS$VAXcluster CONNECT_REQ frames from its own MAC -- and
+# both nodes must end at MEMBER, CN=2).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ovmx-genesis-rig
+  labels:
+    app: ovmx-genesis-rig
+spec:
+  nodeName: k3s-worker
+  restartPolicy: Never
+  containers:
+    - name: rig
+      image: 192.168.2.43:30500/ovmx-genesis-rig:4838-1
+      imagePullPolicy: Always
+      env:
+        #  proof | negctl | noderive | xnode | qhang | rejoin
+        #  -- see run_cluster_genesis_2node.sh
+        - name: RIG_MODE
+          value: "rejoin"
+        - name: OUT_DIR
+          value: /lab/genesis-rig-out
+      securityContext:
+        privileged: true            # /dev/kvm access; no network capability used
+      resources:
+        # Deliberately small REQUESTS: this worker is shared with the VAX
+        # lab and with CI, and the rig is timer-bound (the connection
+        # manager beats once a second), not CPU-bound. The limits let the
+        # two KVM guests burst when the node is idle.
+        requests: { cpu: "500m", memory: "2Gi" }
+        limits:   { cpu: "4", memory: "6Gi" }
+      volumeMounts:
+        - { name: kvm, mountPath: /dev/kvm }
+        - { name: lab, mountPath: /lab }
+  volumes:
+    - name: kvm
+      hostPath: { path: /dev/kvm, type: CharDevice }
+    # The shared lab PVC, so the guests' consoles, ttyS1 markers and pcaps
+    # OUTLIVE the pod. Everything this rig writes stays under its own
+    # genesis-rig-out/ subdirectory; it touches nothing the VAX lab owns.
+    - name: lab
+      persistentVolumeClaim: { claimName: vax-lab-pvc }

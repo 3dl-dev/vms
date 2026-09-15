@@ -750,6 +750,20 @@ struct cnxman_join {
 	 * the executive's reconnect apparatus had opened one this FSM had no
 	 * other way of learning about. */
 	uint32_t cm_resynced;
+	/*
+	 * STEP 4 REACHED, AND THIS NODE OPENED NOTHING, because the executive
+	 * already held this pair's one VMS$VAXcluster connection (spec
+	 * sec 4(O.11); book p. 7-23 makes the CSB the record of that
+	 * connection). It is the REJOIN shape, counted: a surviving member
+	 * holds a CSB for this node inside its p. 7-30 reconnect window and
+	 * dials once a second while this node is still resolving names and
+	 * walking the member's disks, so by the time the drive reaches step 4
+	 * the connection exists and a second one would be this node's own
+	 * invention rather than the cluster's. On a FIRST join nothing is
+	 * dialling an unknown system, `cdt_conid` is 0, and this stays 0 --
+	 * which is exactly the E67 reference join, unchanged.
+	 */
+	uint32_t cm_connect_suppressed;
 	/* The reconnect timeout period ran out (FAIL_TIMEOUT): the attempt was
 	 * released and this node went back to waiting for a cluster. */
 	uint32_t connect_windows_expired;
@@ -896,12 +910,79 @@ struct cnxman_join {
 	uint32_t send_failures;
 	uint32_t codec_failures;
 	uint32_t ignored_events;     /* [state][event] with no edge: COUNTED  */
+	/*
+	 * TRANSITION FRAMES THIS TABLE HAS NO EDGE FOR, ROUTED ON (rd vms-c06).
+	 *
+	 * A state-transition frame (an open, a GO, a barrier step or release, a
+	 * step acknowledgement, a rebuild record) belongs to the barrier
+	 * (FC-P3.5) or to the coordinator (FC-P3.12); this FSM only ever
+	 * FORWARDS one, from the cells that say `join_forward`. In every other
+	 * state the honest answer is "not mine" -- the frame goes on to the FSM
+	 * that owns it -- and it is counted HERE rather than in
+	 * `ignored_events`, because "the join declined to eat somebody else's
+	 * frame" and "the join saw its own event in the wrong state" are
+	 * different facts.
+	 *
+	 * MEASURED, and the reason this counter exists: a FOUNDER's join never
+	 * reaches CNXMAN_JOIN_MEMBER (it joined through nobody), so on the live
+	 * 2-node rig every op-0x0b barrier step the joiner reported was
+	 * swallowed by this table's empty cell and the coordinator -- the FSM
+	 * that owes the release -- never saw one. The barrier stood open from
+	 * the first admission to the end of the run (capture
+	 * vms-4838-rejoin-2node-20260913).
+	 */
+	uint32_t foreign_transition_frames;
+	/*
+	 * op-0x02 REQUESTS THIS NODE WITHHELD BECAUSE IT IS ALREADY A MEMBER
+	 * (rd vms-c06).
+	 *
+	 * The member that receives a JOIN CLUSTER request becomes the
+	 * coordinator of an admission transition for the sender (pp. 7-37/7-38).
+	 * A node the executive already records as a committed member -- cl->state
+	 * MEMBER and a real CLUB local CSID -- has nothing to be admitted to, so
+	 * it asks nobody, and the request it did not send is counted here rather
+	 * than left as silence.
+	 *
+	 * MEASURED: the founder of the live 2-node rig sent one anyway, and 1 run
+	 * in 3 the voteless node it had just admitted took the job, re-admitted
+	 * it at a new CSID and became its coordinator -- role=joiner
+	 * csid=0x00010003 coord=0x00010002 epoch=3 on the only node that could
+	 * hold quorum (proof-run1-roleswap-nodeAB, 2026-09-13).
+	 */
+	uint32_t admission_withheld;
+	/*
+	 * CSIDs OFFERED TO A NODE THAT ALREADY HOLDS ONE AS A MEMBER, REFUSED.
+	 *
+	 * A rejoining system takes a new CSID (p. 7-25) because it is being
+	 * admitted; a system already in the cluster is not, and the slot every
+	 * nodemap addresses it by is not a peer's to move. Counted, announced
+	 * once, never adopted. The same CSID arriving again is not a
+	 * reassignment and is not counted here.
+	 */
+	uint32_t csid_reassign_refused;
 
 	/* ---- the honest omissions, each visible in the diagnostics ---- */
 	uint32_t membership_records; /* op-0x06 bursts received               */
 	uint32_t csid_unpinned;      /* ... from which no coordinator CSID
 				      * could be read (E30): no shape-valid
 				      * CSID at either measured offset yet    */
+	uint32_t generations_seen;   /* op-0x06 bursts that DID carry a real
+				      * generation -- counted, never minted
+				      * from (rd vms-fc7)                     */
+	/* ---- op-0x05, the MEMBERSHIP RECORD: where a CSID really comes from */
+	uint32_t membrecs_seen;      /* records this codec would stand behind  */
+	uint32_t membrecs_adopted;   /* ... that named THIS node, and were
+				      * adopted as its cluster system id      */
+	uint32_t membrecs_unusable;  /* records refused by the codec: bad tag,
+				      * bad CSID shape, index disagreeing with
+				      * the slot. Answered, never adopted     */
+	uint32_t membrecs_peer_learned; /* records about ANOTHER member, filed
+					 * on the block this CLUB already holds
+					 * for that SCSSYSTEMID -- which is what
+					 * lets this node COUNT the cluster     */
+	uint32_t membrecs_unknown_peer; /* ... about a system this node holds no
+					 * block for: counted and dropped, never
+					 * invented (INV-6)                     */
 	uint8_t  lockdirwt_unrepresentable; /* configured nonzero, no offset  */
 	uint8_t  pad3[3];
 	uint32_t lockdirwt_unpinned;

@@ -311,6 +311,16 @@ int pe_send_msg_var(struct vms_pe *pe, vms_scs_sysid_t dst,
 int pe_send_dg(struct vms_pe *pe, vms_scs_sysid_t dst,
 	       const uint8_t *body, uint32_t len);
 
+/*
+ * Emit this node's clean-leave departure announcement (the last gasp, wire
+ * spec SS4(O.30) / p. 7-29). AT MOST ONCE per port lifecycle: both the
+ * connection manager's departure path (vms_cnxman_stop) and the port teardown
+ * (vms_pe_stop) may call this on a clean CLUSTER_STOP; the builder's guard
+ * makes the second a no-op. Best effort -- SS$_NORMAL whether a gasp went out
+ * or there was nothing to announce, SS$_NOSUCHDEV only when pe is NULL.
+ */
+int pe_send_last_gasp(struct vms_pe *pe);
+
 /* Register the upper layer (SCS). One registration per port; a second call
  * replaces it. */
 void pe_set_upper(struct vms_pe *pe, const struct pe_upper_ops *upper);
@@ -363,6 +373,10 @@ int pe_send_refusal(struct vms_pe *pe, vms_scs_sysid_t dst,
  * sampled clocks that could disagree.
  */
 int pe_incarnation(struct vms_pe *pe, uint32_t *lo, uint32_t *hi);
+
+/* The software version `sysid` really advertised (vms_pe_fsm.h). rd vms-1ee. */
+int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
+		  uint32_t cap, uint8_t *out_len);
 
 /*
  * THE THIRD SERVICE -- BLOCK TRANSFER (FC-P6.1). Same E9 bridge shape as the

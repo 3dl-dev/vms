@@ -64,6 +64,7 @@
 
 #define SS_NORMAL       1
 #define SS_IVCHAN       602
+#define SS_IVDEVNAM     608
 #define SS_NOSUCHDEV    2680
 
 #define DC_TERM         66      /* DC$_TERM */
@@ -124,6 +125,8 @@ struct owner_report {
     uint32_t own_vms_pid;
     uint32_t assign_status;
     uint32_t chan;
+    uint32_t netlogin_status;               /* VMS_IOCTL_TERM_GETLOGIN status  */
+    char     netlogin[VMS_USERNAME_SIZE];   /* the note B stamped, read by A    */
 };
 
 static int process_a(int wfd)
@@ -142,6 +145,13 @@ static int process_a(int wfd)
     }
 
     rep.assign_status = vms_kif_assign(RTA_DEV, &rep.chan);
+
+    /* vms-65b: read back the network-login note B stamped on RTA0: BEFORE
+     * forking us -- from A's OWN fresh /dev/vms fd. If the note lived in B's
+     * process memory rather than the shared executive device table, A would
+     * read nothing here (the §7.5 anti-LARP bind, applied to the note). */
+    rep.netlogin_status = vms_kif_terminal_getlogin(RTA_DEV, rep.netlogin,
+                                                    sizeof(rep.netlogin));
 
     if (write(wfd, &rep, sizeof(rep)) != (ssize_t)sizeof(rep))
         return 1;
@@ -261,6 +271,48 @@ int main(int argc, char **argv)
     CHECK(info.owner_pid == 0, "RTA0: starts unowned -- ownership is not stamped at creation");
 
     /* --------------------------------------------------------------
+     * 2b. THE NETWORK-LOGIN PRE-AUTH NOTE (rd vms-65b). A daemon vouches a
+     *     pre-authenticated user onto the RTAn: it minted (VMS_IOCTL_TERM_
+     *     SETLOGIN); the $CREPRC(LOGINOUT) child bound to that terminal reads
+     *     it back (VMS_IOCTL_TERM_GETLOGIN) and skips the prompt. Prove the
+     *     round trip through the REAL executive, the honest-omission floor,
+     *     and the guards -- then the cross-process read is proven in §3 below.
+     * -------------------------------------------------------------- */
+    {
+        char note[VMS_USERNAME_SIZE];
+
+        /* Fresh RTA0: carries no note -> empty, honest omission (NOT an error:
+         * an ordinary terminal authenticates its own user). LOGINOUT reads this
+         * as "no network pre-auth" and prompts (fail-closed, INV-6). */
+        memset(note, 0xAA, sizeof(note));
+        status = vms_kif_terminal_getlogin(RTA_DEV, note, sizeof(note));
+        CHECK(status == SS_NORMAL && note[0] == '\0',
+              "a fresh RTA0: has no network-login note (honest omission, not error)");
+
+        /* Stamp the pre-authenticated user (we are root here -> privileged). */
+        status = vms_kif_terminal_setlogin(RTA_DEV, "SYSTEM");
+        CHECK(status == SS_NORMAL,
+              "VMS_IOCTL_TERM_SETLOGIN stamps the pre-authenticated user onto RTA0:");
+
+        /* Read it back, same process, THROUGH /dev/vms (not process memory). */
+        memset(note, 0, sizeof(note));
+        status = vms_kif_terminal_getlogin(RTA_DEV, note, sizeof(note));
+        CHECK(status == SS_NORMAL && strcmp(note, "SYSTEM") == 0,
+              "VMS_IOCTL_TERM_GETLOGIN reads the stamped note back from the executive");
+
+        /* The console (OPA0:, a static non-dynamic terminal) is not a legal
+         * target for a network-login note -- the same IVDEVNAM category guard
+         * RESOLVE gives, so a daemon cannot vouch a user onto the operator's
+         * console. */
+        status = vms_kif_terminal_setlogin(CONSOLE_DEV, "SYSTEM");
+        CHECK(status == SS_IVDEVNAM,
+              "SETLOGIN refuses OPA0: (a note belongs only on a dynamic RTAn:)");
+        status = vms_kif_terminal_getlogin(CONSOLE_DEV, note, sizeof(note));
+        CHECK(status == SS_IVDEVNAM,
+              "GETLOGIN refuses OPA0: (the console carries no network-login note)");
+    }
+
+    /* --------------------------------------------------------------
      * 3. A DIFFERENT PROCESS takes RTA0:'s only channel. This is the
      *    §7.5 tell: the device must be real BEFORE this process ever asks
      *    for it, and cross-process visible without either side telling
@@ -299,6 +351,14 @@ int main(int argc, char **argv)
     }
     CHECK(rep.assign_status == SS_NORMAL && rep.chan != 0,
           "a DIFFERENT process ($ASSIGN from a fresh /dev/vms fd) takes RTA0:'s channel");
+
+    /* vms-65b: process A, from its OWN /dev/vms fd, read back the note B
+     * stamped on RTA0: before the fork. This is the §7.5 anti-LARP bind for
+     * the conveyance: a note held in B's process memory would come back empty
+     * here. It comes back "SYSTEM" -- the SSH-daemon-stamps / LOGINOUT-reads
+     * path, proven cross-process through the shared executive device table. */
+    CHECK(rep.netlogin_status == SS_NORMAL && strcmp(rep.netlogin, "SYSTEM") == 0,
+          "process A reads B's network-login note on RTA0: cross-process (B writes, A reads)");
 
     /* B reads RTA0: back cold -- nothing above told B what A's pid is
      * except the bare integer over the pipe (the SAME provenance
@@ -360,6 +420,10 @@ int main(int argc, char **argv)
     status = vms_kif_getdvi_devnam(CONSOLE_DEV, &info);
     CHECK(status == SS_NORMAL, "OPA0: is untouched by the refused removal");
 
+    /* The withdrawal rides vms_devtab_remove_terminal()'s dynamic_term unlink
+     * gate; neuter that gate and the minted RTAn: row can never be torn down,
+     * so this call and the follow-up SS_NOSUCHDEV check both redden. */
+    /* negctl: devtab-terminal-withdrawal-not-honored */
     CHECK(write_param(REMOVE_PARAM, RTA_DEV) == 0,
           "vms_devtab_remove_terminal(\"RTA0:\") withdraws the unit it minted");
     memset(&info, 0, sizeof(info));

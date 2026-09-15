@@ -159,6 +159,7 @@ int main(void)
     CHECK(status == SS_DEVNOTMOUNT,
           "$MOUNT of VDA100: with a failing home-block read is refused SS$_DEVNOTMOUNT");
     after1 = errcnt_of(TARGET_DEV);
+    /* negctl: devtab-io-error-not-charged */
     CHECK(after1 == base + 1,
           "one genuine ACP block-read failure incremented VDA100: ERRCNT by exactly one");
 

@@ -474,6 +474,18 @@ uint32_t vms_kif_cluster_diag_csb(struct vms_cluster_diag_csb_args *args);
 uint32_t vms_kif_cluster_diag_join(struct vms_cluster_diag_join_args *args);
 
 /*
+ * vms_kif_cluster_diag_dlm - VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c): the lock
+ * manager's WIRE ARM -- its emit ledger, the connection manager's own
+ * independent count of the same cat-0x02 traffic, and the four endings a
+ * posted request can have. Same terms as the four above: read-only, the
+ * wrapper interprets nothing, and SS$_NOSUCHDEV with an all-zero row is the
+ * honest answer on a node whose DLM arm has not started -- which must NOT be
+ * rendered as "it emitted nothing" (INV-6).
+ * WIRED: SYS$SYSTEM:CNXTRACE.EXE (tools/vms_cnxtrace.c).
+ */
+uint32_t vms_kif_cluster_diag_dlm(struct vms_cluster_diag_dlm_args *args);
+
+/*
  * vms_kif_cluster_getsyi - VMS_IOCTL_CLUSTER_GETSYI (FC-P3.9): $GETSYI's
  * cluster item codes, projected from the connection manager's CLUB. WIRED:
  * sys$getsyi/sys$getsyiw (src/libvms/syssvc/sys_misc.c) answer every cluster
@@ -494,15 +506,9 @@ uint32_t vms_kif_cluster_getsyi(struct vms_cluster_getsyi_args *args);
  * manager is not started, so a registration the executive cannot honour is
  * refused rather than silently accepted.
  *
- * OVMX-UNWIRED: vms_kif_cluster_setcluevt (vms-733) -- the EXECUTIVE side is
- * built and real (FC-P3.8: one registration per node, a genuine completion
- * AST queued on a genuine CNXMAN membership ADD/REMOVE, cleared at process
- * death), but no sys$ service issues it: src/libvms has no sys_cluevt.c and
- * starlet.h prototypes none of $SETCLUEVT/$CLRCLUEVT/$TSTCLUEVT --
- * cluevtdef.h carries only the CLUEVT$C_ constants. This wrapper is the
- * marshalling half those services will call; it exists now so the executive
- * registration is reachable and observable from userspace at all. vms-733
- * builds the services; DELETE this line then. */
+ * WIRED (vms-733): src/libvms/syssvc/sys_cluevt.c's $SETCLUEVT / $CLRCLUEVT
+ * services call this marshalling half; starlet.h prototypes them.
+ * $TSTCLUEVT stays unbuilt (no executive test-occurrence query to back it). */
 uint32_t vms_kif_cluster_setcluevt(uint32_t event_mask, uint64_t astadr,
                                    uint64_t astprm);
 
@@ -652,6 +658,28 @@ uint32_t vms_kif_terminal_create(const char *backing, char *devnam,
 uint32_t vms_kif_terminal_delete(const char *devnam);
 uint32_t vms_kif_terminal_resolve(const char *devnam, char *backing,
                                   uint32_t backing_size);
+
+/*
+ * Stamp / read the SSH-pre-authenticated network-login note on a dynamic
+ * terminal (rd vms-65b). setlogin is CAP_SYS_ADMIN/SETPRV-gated (a network
+ * daemon vouching a pre-authentication before it drops privilege); getlogin is
+ * an ordinary read. On getlogin, an EMPTY *username with SS$_NORMAL is the
+ * honest "no network pre-auth" -- the caller (LOGINOUT) then prompts.
+ *
+ * OVMX-UNWIRED: vms_kif_terminal_setlogin (vms-65b) -- the STAMP is emitted by
+ * the wrapped OpenSSH sshd (src/vmsssh/sshd_session.c, ovmx_sshd_pre_drop_pw),
+ * which is not a CMake product target: it is built as a separate musl-static
+ * binary by third-party/openssh/build-ssh-harness.sh and reached from OpenSSH's
+ * own main() through --wrap=permanently_set_uid, so the caller census (which
+ * follows the CMake product graph) cannot see the call -- the same footing as
+ * vms_kif_dlm_xnode above, whose caller (scsd) is likewise a separately-built
+ * daemon. The READ half (vms_kif_terminal_getlogin) IS census-wired: LOGINOUT
+ * (tools/vms_login.c) is a CMake product target and calls it. Retire this line
+ * if the wrapped-sshd sources ever join the census's product graph.
+ */
+uint32_t vms_kif_terminal_setlogin(const char *devnam, const char *username);
+uint32_t vms_kif_terminal_getlogin(const char *devnam, char *username,
+                                   uint32_t username_size);
 
 /* Set terminal characteristics through an assigned channel (the
  * $QIO IO$_SETMODE path). flags is a mask of VMS_TTSET_*; SS$_IVCHAN

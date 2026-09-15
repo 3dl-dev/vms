@@ -24,6 +24,10 @@ PASS: 130 defect(s) >= floor 110
 
 ### 0.1 `SCOPE_OUT_UNIT_DIRS` **cannot** scope out a `kernel-core` TU today
 
+**SUPERSEDED (vms-181) — see §3's note:** the "stay red" recommendation this
+section feeds no longer holds; a live-derived, other-gate-owned scope-out
+sidesteps the objection below.
+
 `cmd_coverage` section 1 (facility_defects.sh:7473-7493) walks
 `$root/kernel/*.c` and `$root/kernel-core/*.c` and tests membership in
 `$_all_targets` **and nothing else**. `SCOPE_OUT_UNIT_DIRS` is consulted only by
@@ -167,7 +171,7 @@ job executed inside the guest.
 
 | TU | Verdict |
 |---|---|
-| `vms_cluster_codec_dlm.c` | REAL-DEFECT (needs DLM peer). Note `vms_dlm_completion_build()`'s **lock-id refusal** (the `fc8540ae` hard lesson) is precisely the assertion worth reddening. |
+| `vms_cluster_codec_dlm.c` | REAL-DEFECT (needs DLM peer). Note the **lock-id refusal** (the `fc8540ae` hard lesson) is precisely the assertion worth reddening — it now lives in `vms_dlm_deq_build()` / `vms_dlm_blkast_build()` and on the PARSE side too, `vms_dlm_completion_build()` having been retired by the vms-c03 supersession (the completion/commit pair was a phantom). |
 | `vms_dlm_scs_fsm.c` | REAL-DEFECT (needs DLM peer) |
 | `vms_cluster_codec_mscp.c` | REAL-DEFECT (needs MSCP peer) |
 | `vms_mscp_cl.c`, `vms_mscp_cl_conn_fsm.c`, `vms_mscp_cl_fsm.c`, `vms_mscp_cl_io_fsm.c` | REAL-DEFECT (needs a serving peer) |
@@ -220,6 +224,15 @@ that does not redden gets reverted rather than kept.
 ---
 
 ## 3. Scope-out proposal
+
+**SUPERSEDED (vms-181, 2026-09-13):** the "stay red, pay it down" recommendation
+below was replaced by a two-gate design -- `tests/cluster/host/host_defects.sh`
+now declares (`HOST_OWNED_UNITS`) and floors (`cmd_coverage`) the 31
+peer-requiring cluster TUs itself, and `facility_defects.sh`'s own section 1
+derives that same list LIVE (`host_defects.sh owned`) as its scope-out instead
+of counting them missing. Kept below for the record of why a static
+`SCOPE_OUT_UNITS` was rejected; that objection does not apply to a live-derived
+scope-out owned by another gate's own coverage check.
 
 **Recommended: NONE. Do not add anything to `SCOPE_OUT_UNIT_DIRS` or
 `SCOPE_OUT_SUITES`.** §1 shows no TU qualifies, and §0.1 shows the machinery

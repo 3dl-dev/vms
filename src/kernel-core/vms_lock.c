@@ -42,6 +42,8 @@
 #include "exec_hash.h"        /* exec_hash_* (the resource database)          */
 #include "exec_rbtree.h"      /* exec_rbtree_* / exec_rb_* (lock-ID database) */
 #include "vms_dlm_proxy.h"    /* the PROXY-LKB requester seam (FC-P4.4) */
+#include "vms_dlm_master.h"   /* the MASTER-side door + the delivery proc      */
+#include "vms_dlm_quorum.h"   /* the QUORUM GATE on the grant decision (FC-P8.1) */
 
 /*
  * Deadlock re-scan interval for a lock blocked in-kernel (sync $ENQW).
@@ -129,6 +131,17 @@ exec_lock_t vms_res_hash_lock;
 static struct vms_dlm_requester_ops vms_dlm_req_ops;
 static exec_lock_t vms_dlm_req_ops_lock;
 
+/*
+ * THE QUORUM GATE (FC-P8.1, rd vms-b6d; the whole contract is in
+ * vms_dlm_quorum.h). NULL until the connection manager's DLM arm installs it at
+ * cluster start, and NULL again at stop -- so a node with no cluster can never
+ * stall a lock for want of a quorum it was never part of. The engine keeps NO
+ * quorum state of its own: this is a pointer to the connection manager's own
+ * predicate, asked afresh at every grant decision (INV-6).
+ */
+static struct vms_quorum_ops vms_quorum_gate_ops;
+static exec_lock_t vms_quorum_gate_lock;
+
 /* ================================================================
  * Cluster membership does NOT live here (FC-P3.9)
  * ================================================================
@@ -150,6 +163,7 @@ int vms_lock_init(void)
     exec_lock_init(&vms_lock_id_lock);
     exec_lock_init(&vms_res_hash_lock);
     exec_lock_init(&vms_dlm_req_ops_lock);
+    exec_lock_init(&vms_quorum_gate_lock);
     exec_rbtree_init(&vms_lock_id_tree);
     exec_hash_init(vms_res_hash);
     return 0;
@@ -181,6 +195,43 @@ static struct vms_dlm_requester_ops dlm_req_ops_get(void)
     o = vms_dlm_req_ops;
     exec_unlock(&vms_dlm_req_ops_lock);
     return o;
+}
+
+/* ================================================================
+ * THE QUORUM HANG (FC-P8.1, rd vms-b6d) -- contract in vms_dlm_quorum.h
+ * ================================================================ */
+
+void vms_lock_set_quorum_ops(const struct vms_quorum_ops *ops)
+{
+    exec_lock(&vms_quorum_gate_lock);
+    if (ops)
+        vms_quorum_gate_ops = *ops;
+    else
+        memset(&vms_quorum_gate_ops, 0, sizeof(vms_quorum_gate_ops));
+    exec_unlock(&vms_quorum_gate_lock);
+}
+
+/*
+ * IS THIS NODE IN A QUORUM HANG RIGHT NOW? The one place the engine asks, and
+ * it asks the CONNECTION MANAGER -- it holds no quorum state of its own to
+ * consult (INV-6). No gate installed (no cluster) is "no", never a guess.
+ *
+ * The ops snapshot is taken under the gate lock so a concurrent cluster stop
+ * cannot tear the pointer out from under the call; the callee then reads the
+ * live CLUB (vms_dlm_quorum.h SS CONCURRENCY explains why it does so without the
+ * fork mutex).
+ */
+static int quorum_hang_active(void)
+{
+    struct vms_quorum_ops o;
+
+    exec_lock(&vms_quorum_gate_lock);
+    o = vms_quorum_gate_ops;
+    exec_unlock(&vms_quorum_gate_lock);
+
+    if (o.hang == NULL)
+        return 0;
+    return o.hang(o.ctx) != 0;
 }
 
 /*
@@ -231,6 +282,21 @@ static void dlm_proxy_fill_post(const struct vms_lock_entry *lock,
      * makes the two CSIDs equal.
      */
     p->to_directory = (lock->master_csid == 0u && res->master_csid == 0u) ? 1u : 0u;
+    /*
+     * Does this transmission WRITE the value block to the master (op-0x06)?
+     * The lock-manager rule, WIRE-CONFIRMED (vms-727): the value block is
+     * flushed on a CONVERT that DEMOTES a lock held at a write mode (PW/EX)
+     * with LCK$M_VALBLK set. Target mode need not be NL -- a real VAX EX->CR
+     * demote emitted op-0x06 -- so the test is "requested < granted", not
+     * "requested == NL". An up-convert or a read-mode holder writes nothing
+     * (a real VAX ignored a write attempted from a CR holder). Only CONVERT
+     * is claimed here; a DEQ-time value-block write was not captured and is
+     * not asserted, so a DEQ still crosses as a plain op-0x03.
+     */
+    p->write_valblk = (op == VMS_DLM_POST_CONVERT &&
+                       (lock->flags & LCK_M_VALBLK) &&
+                       lock->granted_mode >= LCK_K_PWMODE &&
+                       lock->requested_mode < lock->granted_mode) ? 1u : 0u;
 }
 
 /*
@@ -315,6 +381,7 @@ void vms_lock_cleanup(void)
      * mutex_destroy on NetBSD -- paired with the exec_lock_init in
      * vms_lock_init). */
     exec_lock_destroy(&vms_dlm_req_ops_lock);
+    exec_lock_destroy(&vms_quorum_gate_lock);
     exec_lock_destroy(&vms_res_hash_lock);
     exec_lock_destroy(&vms_lock_id_lock);
 }
@@ -712,8 +779,18 @@ uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint16_t hash16)
  *                             with no cluster stack is alone: it is trivially
  *                             the directory and the master for everything, and
  *                             single-node locking is untouched.
- *   no wire-learned hash   -> SS$_UNSUPPORTED. Never a computed hash, never a
- *                             probe, never a placeholder (the whole point).
+ *   not all-OVMX           -> *out_csid = 0 (this node), SS$_NORMAL. A mixed
+ *                             OVMX+VAX cluster (or a vector mid-transition)
+ *                             masters locally, exactly as before any resolver
+ *                             existed -- the all-OVMX gate (vms-3e3), so no
+ *                             interop regression and nothing routed at a system
+ *                             we cannot prove runs this implementation.
+ *   no wire-learned hash   -> in an all-OVMX cluster, GROUND it with OVMX's own
+ *                             directory hash (rung A", design SS3.6) and resolve
+ *                             the grounded value; if it cannot be grounded,
+ *                             SS$_UNSUPPORTED. Never DEC's function, never a
+ *                             probe, never a computed placeholder against a real
+ *                             VAX (the whole point; the 90b3bbbd storm).
  *   vector unusable        -> SS$_UNSUPPORTED (mid-transition, or the vector
  *                             was refused; vms_dlm_ldwv.h SS3).
  *   otherwise              -> the vector's answer; 0 means THIS node.
@@ -746,8 +823,39 @@ static uint32_t dir_resolve(struct vms_lock_resource *res, uint32_t *out_csid)
     if (ops.dir_resolve == NULL)
         return SS__NORMAL;                 /* cluster of one: nothing to resolve */
 
-    if (!res->hash_known)
-        return SS__UNSUPPORTED;            /* INV-6: wire-learned or nothing */
+    /*
+     * THE ALL-OVMX GATE (vms-3e3, rung A"). Cross-node directory resolution --
+     * and the hash grounding just below -- is live ONLY while every cluster
+     * member is proven-OVMX. When a member cannot be proven ours (a mixed
+     * OVMX+VAX cluster) or the vector is mid-transition, this node masters the
+     * name LOCALLY, exactly as it did before any resolver was installed: no
+     * routing toward a system this executive cannot prove runs this
+     * implementation, and so no interop regression. (RULE C guards the send
+     * side too; this keeps the miss off the wire entirely and returns a real
+     * answer -- "this node" -- rather than a refusal.)
+     */
+    if (ops.dir_groundable != NULL && !ops.dir_groundable(ops.ctx))
+        return SS__NORMAL;                 /* not all-OVMX: this node masters it */
+
+    if (!res->hash_known) {
+        uint16_t h = 0u;
+        /*
+         * No wire-learned hash for this root name (a name OVMX is the first in
+         * the cluster to touch: its own volume/file locks). We are all-OVMX, so
+         * ground it with OVMX's OWN directory hash (rung A", design SS3.6) --
+         * deterministic and identical on every OVMX node, gated so it never
+         * reaches a real VAX. If it cannot be grounded, refuse honestly rather
+         * than fabricate a hash -- never a computed placeholder (the 90b3bbbd
+         * storm). This refusal is unreachable while dir_ground is bound and the
+         * gate held, but it is the honest floor if it ever is not.
+         */
+        if (ops.dir_ground == NULL ||
+            ops.dir_ground(ops.ctx, res->name,
+                           (uint32_t)strnlen(res->name, sizeof(res->name)),
+                           &h) != SS__NORMAL)
+            return SS__UNSUPPORTED;        /* INV-6: wire-learned, OVMX-grounded, or nothing */
+        (void)dir_hash_store(res, h);      /* sets res->hash16 + hash_known */
+    }
 
     gen = (ops.dir_generation != NULL) ? ops.dir_generation(ops.ctx) : 0u;
     if (res->dir_valid && res->dir_gen == gen) {
@@ -948,6 +1056,12 @@ static int check_deadlock(struct vms_lock_entry *lock,
             {
                 struct vms_lock_entry *their_lock;
                 exec_list_for_each_entry(their_lock, &granted->proc->locks, proc_list) {
+                    /* A QUORUM-STALLED wait is not a wait-FOR edge (FC-P8.1):
+                     * it is blocked on the cluster's votes, not on a lock any
+                     * process in this graph holds, and following it would
+                     * manufacture cycles out of a cluster-wide stall. */
+                    if (their_lock->quorum_stall)
+                        continue;
                     if (their_lock->waiting && sp < MAX_DEADLOCK_DEPTH) {
                         if (their_lock->proc == origin_proc) {
                             exec_unlock(&granted->proc->lock_list_lock);
@@ -1024,6 +1138,17 @@ static void try_grant_waiters(struct vms_lock_resource *res)
     struct vms_lock_entry *waiter, *tmp;
 
     exec_list_for_each_entry_safe(waiter, tmp, &res->waiting, res_waiting) {
+        /*
+         * A QUORUM-STALLED waiter is not grantable by a release (FC-P8.1). Its
+         * wait has nothing to do with this resource's holders, so letting some
+         * other process's $DEQ grant it would be the executive granting a
+         * clustered lock during a quorum hang -- the exact thing the hang
+         * exists to prevent. Only vms_lock_quorum_resume() clears the mark, and
+         * FIFO order is preserved either way (this `break` is the same one the
+         * incompatible case takes).
+         */
+        if (waiter->quorum_stall)
+            break;
         if (lock_compatible(res, waiter->requested_mode, NULL)) {
             /* Grant it */
             exec_list_del(&waiter->res_waiting);
@@ -1366,6 +1491,13 @@ void vms_proc_rundown_locks(struct vms_proc *proc, uint8_t min_acmode)
  * proxy would invent a cycle. Distributed deadlock search is its own mechanism
  * (rung H11 / FC-P5.6).
  *
+ * A QUORUM-STALLED request waits here on the same terms (FC-P8.1): the wake
+ * comes from vms_lock_quorum_resume() on the regain edge, and the deadlock
+ * re-scan is skipped for exactly the proxy's reason -- the thing it waits for is
+ * the cluster's votes, which no wait-for graph contains. This wait is UNBOUNDED
+ * by design. A VMScluster that has lost quorum hangs until quorum returns; a
+ * timeout here would be OVMX inventing a failure VMS does not have.
+ *
  * WAIT MODEL. This is the executive's synchronous wait, expressed in the shim's
  * cv-idiom (design record §3, the wait/wake seam): the waiter holds res->lock --
  * the SAME lock that guards the predicate (lock->grant_state) and that every
@@ -1415,7 +1547,7 @@ static int enq_wait_sync(struct vms_lock_resource *res,
          * detection for this still-waiting request; otherwise (signal wake or a
          * grant that raced in) fall through and re-test the predicate at the top.
          */
-        if (timed_out && !lock->proxy && lock->waiting &&
+        if (timed_out && !lock->proxy && !lock->quorum_stall && lock->waiting &&
             lock->grant_state == 0 && check_deadlock(lock, 0)) {
             exec_list_del(&lock->res_waiting);
             lock->waiting = 0;
@@ -1931,6 +2063,339 @@ uint32_t vms_lock_dlm_proxy_blkast_recv(uint32_t req_lkid)
 }
 
 /* ================================================================
+ * THE MASTER-SIDE DOOR (vms_dlm_master.h; rd vms-1ee, vms-c27)
+ *
+ * The wire arm is a kernel-core cluster TU and may not include the substrate's
+ * vms_ioctl.h twin, so it cannot name `struct vms_dlm_xnode_args` or
+ * `struct vms_proc`. This section is the translation, in the one translation
+ * unit that sees both vocabularies -- the same division vms_lock_dlm_proxy_-
+ * grant_recv() above already draws for the requester side.
+ * ================================================================ */
+
+/*
+ * THE DELIVERY PROC (rd vms-c27, RULED). The process that issued
+ * VMS_IOCTL_CLUSTER_START -- STARTUP.EXE, process-permanent -- owns the
+ * master-side LKBs this node creates for remote requesters. It is the OWNER and
+ * NOT the mode source: see the acmode stamp in vms_enq_core_ex, which records
+ * PSL_C_KERNEL for a cross-node request precisely so a local image rundown on
+ * this node cannot release a lock another node holds.
+ *
+ * Guarded by the same lock the requester ops use: both are install-once,
+ * read-per-request pointers into state the cluster owns.
+ */
+static struct vms_proc *dlm_delivery_proc;   /* NULL = no cluster receive path */
+
+void vms_lock_dlm_set_delivery_proc(void *proc)
+{
+    exec_lock(&vms_dlm_req_ops_lock);
+    dlm_delivery_proc = (struct vms_proc *)proc;
+    exec_unlock(&vms_dlm_req_ops_lock);
+}
+
+static struct vms_proc *dlm_delivery_proc_get(void)
+{
+    struct vms_proc *p;
+
+    exec_lock(&vms_dlm_req_ops_lock);
+    p = dlm_delivery_proc;
+    exec_unlock(&vms_dlm_req_ops_lock);
+    return p;
+}
+
+int vms_lock_dlm_have_delivery_proc(void)
+{
+    return dlm_delivery_proc_get() != NULL;
+}
+
+/*
+ * THIS NODE'S CLUSTER IDENTITY (vms_dlm_master.h §1b states the whole case).
+ *
+ * `vms_local_csid` starts life as each substrate's insmod placeholder; the
+ * cluster's real assignment lives in the connection manager's CLUB, and this is
+ * how it reaches the lock engine. A zero is REFUSED rather than stored: 0 means
+ * "unmastered" throughout this file, so it is not an identity, and an identity
+ * the cluster has not assigned is one this node does not have.
+ */
+void vms_lock_dlm_set_local_csid(uint32_t csid)
+{
+    if (csid == 0u)
+        return;
+    exec_lock(&vms_dlm_req_ops_lock);
+    vms_local_csid = csid;
+    exec_unlock(&vms_dlm_req_ops_lock);
+}
+
+uint32_t vms_lock_dlm_local_csid(void)
+{
+    uint32_t csid;
+
+    exec_lock(&vms_dlm_req_ops_lock);
+    csid = vms_local_csid;
+    exec_unlock(&vms_dlm_req_ops_lock);
+    return csid;
+}
+
+/*
+ * The GRANTED MODE, read off the LKB the engine just minted -- not echoed back
+ * from the request. They are equal today (the engine grants exactly the mode it
+ * was asked for), and that is exactly why reading it matters: an asserted wire
+ * field whose value came from the request rather than from the lock database is
+ * the frame-to-frame plumbing INV-6 exists to stop, and it stays correct the day
+ * the engine grants something else. 0xff means "no such lock", which the caller
+ * treats as nothing to assert.
+ */
+static uint8_t dlm_master_read_lkb(uint32_t master_lkid, uint32_t *req_lkid)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    uint8_t mode;
+
+    *req_lkid = VMS_DLM_LKID_UNSET;
+    lock = lock_find_by_id(master_lkid);
+    if (lock == NULL)
+        return 0xffu;
+    res = lock->resource;
+    exec_lock(&res->lock);
+    mode = (uint8_t)lock->granted_mode;
+    *req_lkid = lock->req_lkid;
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return mode;
+}
+
+/* A request this executive can act on at all: a named sender, a handle the
+ * sender minted, and (for ENQ/CONVERT) a resource name. Refused rather than
+ * defaulted -- a lock tagged with CSID 0 would name no owner (condition 2). */
+static int dlm_master_request_ok(const struct vms_dlm_master_request *r)
+{
+    if (r == NULL)
+        return 0;
+    if (r->req_csid == 0u || r->req_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    if (r->op != VMS_DLM_MREQ_DEQ && r->resnam[0] == '\0')
+        return 0;
+    if (r->op == VMS_DLM_MREQ_DEQ && r->master_lkid == VMS_DLM_LKID_UNSET)
+        return 0;
+    return 1;
+}
+
+static void dlm_master_fill_args(const struct vms_dlm_master_request *r,
+                                 struct vms_dlm_xnode_args *a)
+{
+    memset(a, 0, sizeof(*a));
+    a->lkmode      = r->lkmode;
+    a->flags       = r->flags;
+    a->req_csid    = r->req_csid;
+    a->req_lkid    = r->req_lkid;
+    a->master_lkid = r->master_lkid;
+    strscpy(a->resnam, r->resnam, sizeof(a->resnam));
+    if (r->valblk_present) {
+        memcpy(a->valblk, r->valblk, LCK_VALBLK_SIZE);
+        a->flags |= LCK_M_VALBLK;
+    }
+}
+
+/*
+ * THE LVB READ CROSSING, master side (vms-727). Read the master RESOURCE's
+ * current value block by the master lock-id -- READ ONLY: it takes the resource
+ * lock, copies res->valblk, and touches nothing. Returns 1 when the block is
+ * non-zero (the resource genuinely holds a value block), 0 otherwise. A grant
+ * returns the block only on a 1, so the requester never receives sixteen zeros
+ * dressed as data (INV-6). This never sets LCK_M_VALBLK and so never travels the
+ * write path -- reading the LVB back to a requester must not perturb it.
+ */
+static uint8_t dlm_master_read_valblk(uint32_t master_lkid, uint8_t *out)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+    int i;
+    uint8_t has = 0u;
+
+    memset(out, 0, LCK_VALBLK_SIZE);
+    lock = lock_find_by_id(master_lkid);
+    if (lock == NULL)
+        return 0u;
+    res = lock->resource;
+    exec_lock(&res->lock);
+    memcpy(out, res->valblk, LCK_VALBLK_SIZE);
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    for (i = 0; i < LCK_VALBLK_SIZE; i++)
+        if (out[i]) { has = 1u; break; }
+    return has;
+}
+
+/* ENQ / CONVERT: turn the engine's status + outputs into the FACT the arm
+ * needs. Every value copied here was written by the dispatch out of a real LKB
+ * or RSB; nothing is composed from the request. */
+static void dlm_master_result_enq(uint32_t status,
+                                  const struct vms_dlm_xnode_args *a,
+                                  struct vms_dlm_master_result *out)
+{
+    if (status == (uint32_t)VMS_DLM_STS_REDIRECT) {
+        out->outcome = (uint8_t)VMS_DLM_MASTER_REDIRECT;
+        out->redirect_csid = a->master_csid;
+        return;
+    }
+    if (status == SS__NOTQUEUED) {
+        out->outcome = (uint8_t)VMS_DLM_MASTER_DENIED;
+        return;
+    }
+    if (status == (uint32_t)VMS_DLM_STS_QUEUED && a->queued) {
+        uint32_t held_for_lkid = VMS_DLM_LKID_UNSET;
+
+        (void)dlm_master_read_lkb(a->master_lkid, &held_for_lkid);
+        out->outcome = (uint8_t)VMS_DLM_MASTER_QUEUED;
+        out->master_lkid = a->master_lkid;
+        out->req_lkid = held_for_lkid;
+        out->blocking_csid = a->blocking_csid;
+        out->blocking_master_lkid = a->blocking_master_lkid;
+        out->blocking_req_lkid = a->blocking_req_lkid;
+        return;
+    }
+    if (status == SS__NORMAL && a->master_lkid != VMS_DLM_LKID_UNSET) {
+        uint32_t held_for_lkid = VMS_DLM_LKID_UNSET;
+        uint8_t mode = dlm_master_read_lkb(a->master_lkid, &held_for_lkid);
+
+        if (mode == 0xffu || held_for_lkid == VMS_DLM_LKID_UNSET) {
+            /* The lock went away between the grant and this read, or it
+             * carries no requester handle to name in a reply. Nothing to
+             * assert about it, so nothing is asserted (INV-6). */
+            out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+            return;
+        }
+        out->outcome = (uint8_t)VMS_DLM_MASTER_GRANTED;
+        out->master_lkid = a->master_lkid;
+        out->req_lkid = held_for_lkid;
+        out->granted_mode = mode;
+        /* The LVB read crossing (vms-727): return the resource's block when it
+         * holds one, so the requester's grant carries the master's LVB back. */
+        out->valblk_present = dlm_master_read_valblk(a->master_lkid, out->valblk);
+        return;
+    }
+    out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+}
+
+/* DEQ: the release itself, plus the deferred GRANT it may have flipped. The
+ * dispatch reports that flip through the fields that are otherwise 0 on a DEQ
+ * (see vms_lock_dlm_xnode_deq); this names them for what they are. */
+static void dlm_master_result_deq(uint32_t status,
+                                  const struct vms_dlm_xnode_args *a,
+                                  struct vms_dlm_master_result *out)
+{
+    if (status != SS__NORMAL) {
+        out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+        return;
+    }
+    out->outcome = (uint8_t)VMS_DLM_MASTER_RELEASED;
+    if (!a->queued)
+        return;
+    out->deferred_grant = 1u;
+    out->deferred_csid = a->blocking_csid;
+    out->deferred_master_lkid = a->blocking_master_lkid;
+    out->deferred_req_lkid = a->req_lkid;
+    out->deferred_mode = (uint8_t)a->lkmode;
+}
+
+static uint32_t dlm_master_op_to_xnode(uint32_t op)
+{
+    switch (op) {
+    case VMS_DLM_MREQ_CONVERT:  /* the engine's ENQ path serves a convert's
+                                 * cross-node form; the wire opcode is the
+                                 * arm's business, not the engine's */
+    case VMS_DLM_MREQ_ENQ:
+        return VMS_DLM_OP_ENQ;
+    case VMS_DLM_MREQ_DEQ:
+        return VMS_DLM_OP_DEQ;
+    default:
+        return 0u;
+    }
+}
+
+uint32_t vms_lock_dlm_master_serve(const struct vms_dlm_master_request *r,
+                                   struct vms_dlm_master_result *out)
+{
+    struct vms_dlm_xnode_args a;
+    struct vms_proc *proc;
+    uint32_t xop, status;
+
+    if (out == NULL)
+        return SS__BADPARAM;
+    memset(out, 0, sizeof(*out));
+    out->outcome = (uint8_t)VMS_DLM_MASTER_REFUSED;
+
+    if (!dlm_master_request_ok(r))
+        return SS__BADPARAM;
+    xop = dlm_master_op_to_xnode(r->op);
+    if (xop == 0u)
+        return SS__BADPARAM;
+
+    /*
+     * CONDITION 4 (rd vms-c27): no delivery proc, no service. A master-side LKB
+     * must be owned by a real process; with none registered this executive
+     * REFUSES rather than granting a lock nothing can account for.
+     */
+    proc = dlm_delivery_proc_get();
+    if (proc == NULL)
+        return SS__NORMAL;   /* out->outcome is REFUSED -- honest, counted */
+
+    dlm_master_fill_args(r, &a);
+    a.op = xop;
+    status = vms_lock_dlm_xnode_dispatch(proc, &a);
+
+    if (xop == VMS_DLM_OP_DEQ)
+        dlm_master_result_deq(status, &a, out);
+    else
+        dlm_master_result_enq(status, &a, out);
+    return SS__NORMAL;
+}
+
+/*
+ * vms_lock_dlm_master_apply_valblk - the op-0x06 RECEIVE half, master side
+ * (vms-727). A remote holder demoted a lock it holds at a write mode (PW/EX)
+ * with LCK$M_VALBLK and flushed the value block on an op-0x06 CONVERT frame;
+ * this replicates that WIRE value into the MASTER resource so a subsequent
+ * $ENQ on this (the mastering) node reads the updated block -- the same LVB
+ * cross-node write the $DEQ path already does (vms_lock_dlm_xnode_deq), reached
+ * from the convert frame instead of a release.
+ *
+ * AUTHORIZED EXACTLY LIKE THE DEQ MASTER-SERVE, by cluster identity not local
+ * proc: the block is written only into a lock the master genuinely holds FOR
+ * the sending CSID. A local lock (req_csid == 0), a lock held for a different
+ * CSID, or a PROXY LKB (our own image of a lock someone else masters) is
+ * refused SS$_IVLOCKID -- a peer may not write another node's value block. The
+ * lock is NOT released or re-queued (a demote keeps the lock granted at the
+ * lower mode); only res->valblk moves, keyed on the writer's real write intent.
+ */
+uint32_t vms_lock_dlm_master_apply_valblk(uint32_t req_csid, uint32_t master_lkid,
+                                          const uint8_t *valblk)
+{
+    struct vms_lock_entry *lock;
+    struct vms_lock_resource *res;
+
+    if (valblk == NULL || master_lkid == VMS_DLM_LKID_UNSET || req_csid == 0u)
+        return SS__BADPARAM;
+
+    lock = lock_find_by_id(master_lkid);   /* takes a reference */
+    if (!lock)
+        return SS__IVLOCKID;
+    if (lock->proxy || lock->req_csid == 0 || lock->req_csid != req_csid) {
+        lock_put(lock);
+        return SS__IVLOCKID;
+    }
+
+    res = lock->resource;
+    exec_lock(&res->lock);
+    /* !waiting: a queued request has not written the block; only a real
+     * granted holder's demote flushes it (mirrors the xnode_deq guard). */
+    if (!lock->waiting)
+        memcpy(res->valblk, valblk, LCK_VALBLK_SIZE);
+    exec_unlock(&res->lock);
+    lock_put(lock);
+    return SS__NORMAL;
+}
+
+/* ================================================================
  * ioctl handlers
  * ================================================================ */
 
@@ -1973,7 +2438,104 @@ struct dlm_xnode_enq_out {
     uint32_t blocking_req_lkid;    /* OUT: the blocking holder's REQUESTER-side lock
                                     * handle -- the value a BLKAST names so the
                                     * holder node finds its ORIGIN record (H6). */
+    uint32_t not_master;           /* OUT: 1 when this node does NOT master the
+                                    * tree the inbound request named, so nothing
+                                    * was granted, queued or minted (vms-b96). */
+    uint32_t redirect_csid;        /* OUT: with not_master, the MASTER this node
+                                    * genuinely holds for the tree, read off the
+                                    * RSB at the moment of the answer -- 0 when
+                                    * it holds none and the answer is the honest
+                                    * decline (rd vms-b96). */
 };
+
+/*
+ * ==========================================================================
+ * THE DIRECTORY REDIRECT (rd vms-b96)
+ *
+ * A cross-node request can arrive at a node that does not master the tree: the
+ * SENDER's copy of the Lock Directory Weight Vector named us, or its resource
+ * block still names us from before a remaster. The published answer is neither
+ * to serve it nor to forward it -- it is to ANSWER WITH THE MASTER'S CSID and
+ * let the requester re-address (Davis p. 6-31 outcome 2; the book-grounding
+ * table's row D5, "answered by a grant only when the directory node is master
+ * ... otherwise by the master's CSID (redirect)"). The requester half of that
+ * exchange is already built and already bounded: dlm_req_fsm_redirect() ->
+ * h_redirect(), capped at DLM_REQ_MAX_REDIRECTS (vms_dlm_scs_fsm.h).
+ *
+ * WHY A REPLY AND NOT A FORWARD -- which is also the whole termination
+ * argument. A forward would build a chain of nodes (A->B->C->...) whose length
+ * no node on it can see, and a cycle between two disagreeing vectors would be a
+ * live retry storm on the wire: the exact failure this tree has already been
+ * burned by. A REPLY cannot chain. Exactly one node answers, the requester
+ * counts its OWN redirects, and that count is its own state. The bound is
+ * therefore structural, and the three refusals below close the only ways a
+ * single hop could still turn round on itself.
+ *
+ * WHAT MAY BE NAMED, AND IT IS EXACTLY ONE THING (INV-6). Only a master CSID
+ * THIS EXECUTIVE HOLDS: res->master_csid, written from a GRANT a master really
+ * sent (vms_lock_dlm_xnode_grant_recv) or from a directory reply the cluster
+ * really returned (vms_lock_dlm_record_master). The DIRECTORY node our own
+ * weight vector resolved is NOT a master and is never named as one -- "the
+ * directory for this name is D" is not an answer this reply carries, and
+ * asserting D as the master would be precisely the fabrication that made a real
+ * VAX install OVMX as the master of resources it did not master (memory
+ * cluster-promotion-gap). With no master held, the honest answer stays the
+ * decline, which the requester's FSM already turns into a bounded re-resolve
+ * through its own CURRENT vector (dq_reresolve: "a DECLINE is an ANSWER").
+ * ==========================================================================
+ */
+
+/*
+ * The CSID a redirect may name, or 0 when there is none to name honestly.
+ * Caller holds res->lock: the value is READ HERE, at the moment of the answer,
+ * rather than carried down from the routing decision that got us here.
+ */
+static uint32_t dlm_redirect_target(const struct vms_lock_resource *res,
+                                    uint32_t requester_csid)
+{
+    uint32_t master = res->master_csid;
+
+    if (master == 0)
+        return 0;                  /* we hold no master: nothing to name */
+    if (master == vms_local_csid)
+        return 0;                  /* it is us -- not this arm's case at all */
+    if (master == requester_csid)
+        return 0;                  /* the answer would send the request straight
+                                    * back to the node that sent it. "You master
+                                    * it" is a DIFFERENT answer (p. 6-31 outcome
+                                    * 3) that this reply has no grounded way to
+                                    * give, so decline instead of loop. */
+    return master;
+}
+
+/*
+ * Answer an INBOUND cross-node request for a tree this node does not master.
+ *
+ * Fills a->status, and xn->redirect_csid when there is a master to name. It
+ * never grants and never mints a lock: two masters for one tree is how a real
+ * cluster breaks (design §3.6 D-DLM-4). Caller holds a reference on `res` and
+ * releases it.
+ *
+ * `xn` IS NON-NULL BY CONSTRUCTION: the caller's OUTBOUND arm (`route == REMOTE
+ * && !xn`) returned before this one, so reaching here means the request came in
+ * from another node. There is no such thing as a local $ENQ that is "not the
+ * master" -- a local $ENQ for a remote-mastered tree posts a proxy instead.
+ */
+static void enq_inbound_not_master(struct vms_lock_resource *res,
+                                   struct vms_enq_args *a,
+                                   struct dlm_xnode_enq_out *xn)
+{
+    uint32_t target;
+
+    exec_lock(&res->lock);
+    target = dlm_redirect_target(res, a->owner_csid);
+    exec_unlock(&res->lock);
+
+    xn->not_master = 1;
+    xn->redirect_csid = target;
+    a->status = target ? (uint32_t)VMS_DLM_STS_REDIRECT
+                       : (uint32_t)SS__UNSUPPORTED;
+}
 
 static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
                             struct dlm_xnode_enq_out *xn)
@@ -1981,6 +2543,7 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     struct vms_enq_args args = *io;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    int stalled;
 
     if (args.lkmode > LCK_K_EXMODE) {
         args.status = SS__BADPARAM;
@@ -2008,9 +2571,13 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
      *
      * A REMOTE route means the cluster masters this tree (or its directory node
      * does) and the request must GO THERE: a proxy LKB is created, the request
-     * is posted, and the caller sleeps on that LKB (FC-P4.4). A cross-node
-     * inbound request (xn set) never takes this path -- it arrived AT the
-     * master, which is this node by definition of having been sent here.
+     * is posted, and the caller sleeps on that LKB (FC-P4.4).
+     *
+     * A REMOTE route for an INBOUND cross-node request (xn set) means the
+     * sender addressed a node that does not master the tree. That is not served
+     * and it is not forwarded: it is answered with the master this node holds --
+     * the directory REDIRECT, rd vms-b96 -- or declined when it holds none. See
+     * "THE DIRECTORY REDIRECT" above enq_inbound_not_master().
      */
     {
         enum dlm_route route;
@@ -2031,10 +2598,11 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         }
         if (route == DLM_ROUTE_REMOTE) {
             /* An inbound cross-node request for a tree this node does not
-             * master is DECLINED (D-DLM-4), never served: two masters for one
-             * tree is how a real cluster breaks. */
+             * master is never SERVED (D-DLM-4). It is REDIRECTED to the master
+             * this node genuinely holds, or -- when it holds none -- declined
+             * honestly. See "THE DIRECTORY REDIRECT" above. */
+            enq_inbound_not_master(res, &args, xn);
             resource_release(res);
-            args.status = SS__UNSUPPORTED;
             goto out;
         }
     }
@@ -2093,10 +2661,37 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
      * records the caller's current mode. Note this is the ACCESS mode
      * (0-3), NOT the lock mode in requested_mode/granted_mode (NL..EX, 0-5).
      * See docs/design-image-rundown-resource-classes.md.
+     *
+     * *** EXCEPT FOR A LOCK HELD FOR ANOTHER SYSTEM (rd vms-c27 condition 1).
+     * ***
+     * A cross-node request (`xn` set) is served on the DELIVERY PROC -- the
+     * process that issued VMS_IOCTL_CLUSTER_START, i.e. STARTUP.EXE. That
+     * process is the OWNER of the resulting master-side LKB; it is NOT the
+     * MODE SOURCE, and taking `proc->current_mode` here would be exactly the
+     * conflation the ruling forbids: a remote system's lock would inherit
+     * whatever mode STARTUP happened to be in, and a local image rundown on
+     * THIS node could then release a lock another node still holds.
+     *
+     * The mode is therefore PSL_C_KERNEL: process-permanent, outside every
+     * local image's rundown scope (vms_proc_rundown_locks releases acmode >=
+     * min_acmode, and image rundown passes PSL_C_USER). That is the correct
+     * lifetime, because a remote lock's release is driven by ITS OWNER
+     * LEAVING THE CLUSTER -- the per-CSID departure path keyed on
+     * lock->req_csid (rd vms-4d3) -- and by nothing local at all.
+     *
+     * HONEST OMISSION (INV-6): the requester's OWN access mode is not carried
+     * by any grounded field of the DLM request (struct vms_dlm_xnode_args has
+     * the LOCK mode and the flags, and no access mode), so this executive does
+     * not know it and does not guess one. When a capture grounds such a field,
+     * THIS is the line that reads it.
      */
-    exec_lock(&proc->mode_lock);
-    lock->acmode = proc->current_mode;
-    exec_unlock(&proc->mode_lock);
+    if (xn != NULL) {
+        lock->acmode = PSL_C_KERNEL;
+    } else {
+        exec_lock(&proc->mode_lock);
+        lock->acmode = proc->current_mode;
+        exec_unlock(&proc->mode_lock);
+    }
 
     if (args.flags & LCK_M_VALBLK)
         memcpy(lock->valblk, args.valblk, LCK_VALBLK_SIZE);
@@ -2110,9 +2705,21 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
     proc->lock_count++;
     exec_unlock(&proc->lock_list_lock);
 
+    /*
+     * THE QUORUM HANG, ASKED ONCE, BEFORE THE GRANT DECISION (FC-P8.1, rd
+     * vms-b6d; contract in vms_dlm_quorum.h). Read outside res->lock because
+     * the answer comes from the CONNECTION MANAGER's club, not from anything
+     * this resource knows -- and read for every request, including an inbound
+     * cross-node one: a node that has lost quorum must not grant to a peer
+     * either. A stalled request is QUEUED, exactly as an incompatible one is;
+     * it is never refused, because a quorum hang is a stall and not an error
+     * (p. 7-4, "blocks activity and waits for quorum to be regained").
+     */
+    stalled = quorum_hang_active();
+
     /* Try to grant */
     exec_lock(&res->lock);
-    if (lock_compatible(res, args.lkmode, NULL)) {
+    if (!stalled && lock_compatible(res, args.lkmode, NULL)) {
         /* Granted immediately */
         if (xn)
             xn->queued = 0;
@@ -2140,8 +2747,16 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
             memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
         args.status = SS__NORMAL;
     } else {
-        /* Not compatible */
-        if (args.flags & LCK_M_NOQUEUE) {
+        /*
+         * Not compatible -- or not grantable AT ALL while quorum is lost.
+         *
+         * LCK$M_NOQUEUE IS NOT CONSULTED DURING A HANG. NOQUEUE says "do not
+         * queue me behind a HOLDER"; a quorum hang has no holder to queue
+         * behind, and answering SS$_NOTQUEUED would hand the caller a
+         * FAILURE where a real VAX hands it a wait. The flag resumes its
+         * ordinary meaning the moment quorum does.
+         */
+        if (!stalled && (args.flags & LCK_M_NOQUEUE)) {
             exec_unlock(&res->lock);
 
             /* Clean up */
@@ -2158,6 +2773,13 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
         } else {
             /* Queue the request */
             lock->waiting = 1;
+            /*
+             * WHY the request waits, recorded on the request. A quorum-stalled
+             * waiter is not waiting for a HOLDER, so it is not an edge in any
+             * wait-for graph (check_deadlock skips it) and try_grant_waiters
+             * will not grant it until vms_lock_quorum_resume() clears the mark.
+             */
+            lock->quorum_stall = (uint8_t)(stalled ? 1 : 0);
             lock->grant_state = 0;
             exec_list_add_tail(&lock->res_waiting, &res->waiting);
 
@@ -2167,8 +2789,13 @@ static long vms_enq_core_ex(struct vms_proc *proc, struct vms_enq_args *io,
              * shares the delivery proc while representing a DIFFERENT cluster
              * owner, so it would false-positive; distributed deadlock detection is
              * a later rung (vms-ec75), honestly out of scope here.
+             *
+             * Skipped for a QUORUM-STALLED request too, and for the same kind of
+             * reason: it is blocked on the cluster's votes, not on another
+             * process's lock, so there is no cycle for the detector to find and
+             * any answer it gave would be about the wrong graph.
              */
-            if (!xn && check_deadlock(lock, 0)) {
+            if (!xn && !stalled && check_deadlock(lock, 0)) {
                 exec_list_del(&lock->res_waiting);
                 exec_unlock(&res->lock);
 
@@ -2482,6 +3109,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
     struct vms_enq_args args;
     struct vms_lock_entry *lock;
     struct vms_lock_resource *res;
+    int hang, stalled;
 
     memset(&args, 0, sizeof(args));
     if (exec_copyin(&args, (const void *)arg, sizeof(args)))
@@ -2517,7 +3145,22 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
 
     res = lock->resource;
 
+    /* Asked before res->lock, for the reason vms_enq_core_ex states: the answer
+     * belongs to the connection manager, not to this resource. */
+    hang = quorum_hang_active();
+
     exec_lock(&res->lock);
+
+    /*
+     * A QUORUM HANG STALLS AN UP-CONVERSION (FC-P8.1). Asking for a STRONGER
+     * mode is an acquisition by another name, and during a hang the executive
+     * grants no new strength. A DOWN-conversion (or a convert to the mode
+     * already held) is the opposite -- it gives strength BACK, which is
+     * something a node must always be able to do while it waits for quorum, or
+     * a hung cluster could never be left in a state its rebuild can use. Same
+     * rule as $DEQ, which a hang never touches at all.
+     */
+    stalled = (hang && args.lkmode > lock->granted_mode);
 
     /* Update blocking AST address if provided */
     if (args.blkastadr)
@@ -2528,7 +3171,7 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
         memcpy(res->valblk, args.valblk, LCK_VALBLK_SIZE);
 
     /* Check compatibility (exclude self) */
-    if (lock_compatible(res, args.lkmode, lock)) {
+    if (!stalled && lock_compatible(res, args.lkmode, lock)) {
         /* Immediate conversion */
         lock->granted_mode = args.lkmode;
 
@@ -2542,19 +3185,22 @@ long vms_ioctl_convert(struct vms_proc *proc, unsigned long arg)
             memcpy(args.valblk, lock->valblk, LCK_VALBLK_SIZE);
         args.status = SS__NORMAL;
     } else {
-        if (args.flags & LCK_M_NOQUEUE) {
+        /* NOQUEUE is not consulted during a hang -- see vms_enq_core_ex. */
+        if (!stalled && (args.flags & LCK_M_NOQUEUE)) {
             exec_unlock(&res->lock);
             args.status = SS__NOTQUEUED;
         } else {
             /* Move to waiting list, keep granted mode until converted */
             lock->requested_mode = args.lkmode;
             lock->waiting = 1;
+            lock->quorum_stall = (uint8_t)(stalled ? 1 : 0);
             lock->grant_state = 0;
             exec_list_del(&lock->res_granted);
             exec_list_add_tail(&lock->res_waiting, &res->waiting);
 
-            /* Check deadlock */
-            if (check_deadlock(lock, 0)) {
+            /* Check deadlock (not for a quorum-stalled convert: it waits on
+             * the cluster's votes, which are in no wait-for graph). */
+            if (!stalled && check_deadlock(lock, 0)) {
                 /* Undo: move back to granted */
                 exec_list_del(&lock->res_waiting);
                 lock->waiting = 0;
@@ -2713,16 +3359,18 @@ static void dlm_proxies_master_departed(struct vms_lock_resource *res,
     }
 }
 
-long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
+/*
+ * The sweep itself, callable from kernel-core (vms_dlm_master.h): the DLM's
+ * wire arm learns a departure as a DIRECT CALL from the connection manager, not
+ * through an ioctl, so the ioctl below and the arm run the SAME code.
+ */
+void vms_lock_dlm_member_departed(uint32_t departed_csid, uint32_t *found)
 {
-    struct vms_dlm_depart_args args;
     struct vms_lock_resource *res;
     int bkt;
 
-    (void)proc;
-    memset(&args, 0, sizeof(args));
-    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
-        return -EFAULT;
+    if (found != NULL)
+        *found = 0u;
 
     exec_lock(&vms_res_hash_lock);
 
@@ -2737,17 +3385,75 @@ long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
         exec_lock(&res->lock);
         res->dir_valid = 0;
         res->dir_csid = 0;
-        if (args.departed_csid != 0 && res->master_csid == args.departed_csid) {
+        if (departed_csid != 0 && res->master_csid == departed_csid) {
             res->master_csid = 0;
-            args.found = 1;
+            if (found != NULL)
+                *found = 1u;
         }
-        dlm_proxies_master_departed(res, args.departed_csid);
+        dlm_proxies_master_departed(res, departed_csid);
         exec_unlock(&res->lock);
     }
 
-    args.members_live = 0;   /* the CLUB's fact, not this engine's */
     exec_unlock(&vms_res_hash_lock);
+}
 
+/*
+ * Clear the quorum-stall mark on every waiter of ONE resource. Caller holds
+ * res->lock. Nothing else about the request changes: it keeps its place in the
+ * FIFO, its requested mode, its value block and (for a convert) the mode it
+ * still holds -- the stall is lifted, the request is not re-made.
+ */
+static void quorum_unstall_waiters(struct vms_lock_resource *res)
+{
+    struct vms_lock_entry *waiter;
+
+    exec_list_for_each_entry(waiter, &res->waiting, res_waiting)
+        waiter->quorum_stall = 0;
+}
+
+/*
+ * vms_lock_quorum_resume - QUORUM IS BACK (FC-P8.1, rd vms-b6d; contract in
+ * vms_dlm_quorum.h).
+ *
+ * The whole of the resume: lift the marks, then run the ORDINARY waiter pass on
+ * each resource. There is no separate "ungrant/regrant" path and no saved
+ * request to replay -- the stalled requests never left the waiting queue, so
+ * what completes them is the same try_grant_waiters() a $DEQ uses, delivering
+ * the same completion AST to an async waiter and the same wake to a synchronous
+ * one. A request that was ALSO behind an incompatible holder simply stays
+ * queued for that holder, which is correct: the hang is over, its wait is not.
+ *
+ * Called on the fork thread from the connection manager's regain edge, with the
+ * same lock order vms_lock_dlm_member_departed() already uses (resource hash
+ * outside, per-resource inside).
+ */
+void vms_lock_quorum_resume(void)
+{
+    struct vms_lock_resource *res;
+    int bkt;
+
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        exec_lock(&res->lock);
+        quorum_unstall_waiters(res);
+        try_grant_waiters(res);
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+}
+
+long vms_ioctl_dlm_member_depart(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_dlm_depart_args args;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+
+    vms_lock_dlm_member_departed(args.departed_csid, &args.found);
+
+    args.members_live = 0;   /* the CLUB's fact, not this engine's */
     args.status = SS__NORMAL;
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;
@@ -3583,9 +4289,22 @@ static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req,
  * the holder node's origin record. INV-6: a BLKAST with no matching holder record or
  * no registered blocking-AST routine declines SS$_UNSUPPORTED, never a faked AST.
  *
- * STILL FENCED HONESTLY (INV-6 -- SS$_UNSUPPORTED, never faked):
- *   - LVB replication (vms-d81), resource-directory consistency (vms-1bba),
- *     remastering (vms-6ee), distributed deadlock detection (vms-ec75).
+ * THE DIRECTORY REDIRECT (rd vms-b96). An inbound ENQ for a tree this node does
+ * NOT master is no longer a blind decline. When the executive holds the tree's
+ * master CSID, the dispatch answers VMS_DLM_STS_REDIRECT with master_csid set to
+ * that node -- Davis p. 6-31 outcome 2, the directory node's "the master is X".
+ * When it holds none, SS$_UNSUPPORTED still, because the only other thing this
+ * node could name is the DIRECTORY its own vector resolved, and a directory is
+ * not a master (INV-6). Full reasoning at enq_inbound_not_master().
+ *
+ * NO LONGER FENCED (comment corrected, rd vms-1ee). This note used to say LVB
+ * replication (vms-d81), resource-directory consistency (vms-1bba),
+ * remastering (vms-6ee) and distributed deadlock detection (vms-ec75) were
+ * answered SS$_UNSUPPORTED. They are not: the switch below implements ALL SIX
+ * ops -- ENQ, GRANT, DEQ, BLKAST, REBUILD and DLKSRCH -- and there is no
+ * SS$_UNSUPPORTED arm left in it. The rungs those items name are reachable in
+ * the engine; what they still lack is a wire arm to reach the engine ACROSS
+ * nodes (src/kernel-core/vms_dlm_scs.c, still absent).
  *
  * The request is VALIDATED so a malformed message is rejected (SS$_BADPARAM)
  * rather than silently dropped -- the same discipline vms_enq_core applies.
@@ -3659,6 +4378,32 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                          * requester's own handle (H5) */
         vms_enq_core_ex(proc, &a, &xn);
 
+        /*
+         * NOT THE MASTER -- the directory REDIRECT (rd vms-b96). The request
+         * reached a node that does not master the tree. Two answers, both read
+         * out of the resource block at the moment of the answer and neither
+         * carried in from the request (INV-6):
+         *
+         *   VMS_DLM_STS_REDIRECT  we hold the tree's master, so master_csid IS
+         *                         that node -- Davis p. 6-31 outcome 2, "the
+         *                         master is X". The requester re-addresses, and
+         *                         its own redirect budget bounds the exchange.
+         *   SS$_UNSUPPORTED       we hold none, so we name nobody: master_csid 0.
+         *
+         * Either way nothing was granted, nothing was queued and this node holds
+         * NO lock for the request, so master_lkid stays unset rather than echoing
+         * a handle with no object behind it (the fc8540ae INVLOCKID rule). In
+         * particular master_csid is NOT set to this node below: saying "I am the
+         * master" about a tree this node does not master is the fabrication the
+         * whole redirect exists to stop.
+         */
+        if (xn.not_master) {
+            req->master_csid = xn.redirect_csid;
+            req->master_lkid = VMS_DLM_LKID_UNSET;
+            req->queued = 0;
+            return a.status;
+        }
+
         /* Hand the master's lock id back (the GRANT reply's master_lkid) and the
          * contention outputs. On a NOQUEUE decline a.lkid is 0. */
         req->master_lkid = a.lkid;
@@ -3677,9 +4422,27 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
         return a.status;
     }
     case VMS_DLM_OP_DEQ:
-        /* A request that names a resource must actually name one. */
-        if (req->resnam[0] == '\0')
-            return SS__BADPARAM;
+        /*
+         * NO RESOURCE NAME IS REQUIRED HERE, AND THAT IS THE PROTOCOL'S OWN
+         * SHAPE (rd vms-c72).
+         *
+         * A release is a LOCK-ID-ONLY message: the grounded op-0x03 frame
+         * carries body[20:24] (the releaser's handle) and body[24:28] (ours)
+         * and NO name at all -- the codec refuses to read one, because the
+         * bytes a real $DEQ leaves at body[46:] belong to whatever last used
+         * the buffer (vms_cluster_codec_dlm.h). vms_lock_dlm_xnode_deq below
+         * identifies the lock by `master_lkid` and authorizes it by
+         * `req_csid`, and never looks at `resnam`.
+         *
+         * The check that used to stand here therefore refused a well-formed
+         * wire release for a field the operation does not use and the wire
+         * does not carry; only the ioctl path (whose userspace caller happened
+         * to have a name) ever satisfied it. The master seam's own validator
+         * has always said so -- dlm_master_request_ok exempts a DEQ from the
+         * name requirement -- and this makes the engine agree with it. The
+         * ENQ and REBUILD branches keep their check: those frames DO carry a
+         * name, and acting on one without it would be acting on no resource.
+         */
         return vms_lock_dlm_xnode_deq(req);
     case VMS_DLM_OP_GRANT:
         /* REQUESTER-SIDE GRANT RECEIVE (vms-6ca, H5). A GRANT / queued-reply the

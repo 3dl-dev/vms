@@ -167,6 +167,7 @@ int main(void)
     struct vms_procinfo sub;
     memset(&sub, 0, sizeof(sub));
     uint32_t sst = vms_kif_getjpi_prcnam(LSPWN_SUBJECT, &sub);
+    /* negctl: libspawn-prcnam-dropped */
     CHECK(sst & 1,
           "the lib$spawn'd subprocess is EXECUTIVE-REGISTERED (resolvable BY prcnam)");
     CHECK((sst & 1) && strcmp(sub.prcnam, LSPWN_SUBJECT) == 0,

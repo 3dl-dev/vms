@@ -326,6 +326,7 @@ if(BUILD_TESTS)
     # (the SHIPPING vms_pe_fsm.c) rather than compiling a copy.
     add_subdirectory(tests/cluster/sim)
     add_subdirectory(tests/vmsdecnet)  # DECnet Phase IV codec (vms-851)
+    add_subdirectory(tests/vmstcpip)   # TCP/IP SERVICE.DAT parser fuzz (vms-deb3)
     add_subdirectory(tests/ovmx_init)
     add_subdirectory(tests/tools)
 
@@ -417,6 +418,33 @@ if(BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(job_control_ownership_gate PROPERTIES
         LABELS "integration;authenticity" TIMEOUT 60)
+
+    # vms-21b posture guard: the SHIPPED distribution auto-starts NO network
+    # service (SSH / daytime / any). Enabling one by default is an operator
+    # security-posture call (Baron-reserved), not a silent code change. Source
+    # scan of distro/rootfs SYSTARTUP_VMS.COM + TCPIP$SERVICE.DAT -- reds if a
+    # future change wires TCPIP$STARTUP into shipped SYSTARTUP or ships an enabled
+    # service, forcing the enable-by-default decision to be explicit. Protects the
+    # posture from drift; behavior-neutrality-by-construction for the vms-21b
+    # additive service-image staging.
+    add_test(NAME tcpip_posture_guard
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_tcpip_posture_guard.sh)
+    set_tests_properties(tcpip_posture_guard PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
+    # vms-f394: the TCP/IP Services layered product packs into a DISTINCT product kit
+    # (ovmx-tcpip.kit) -- its own kit, separate from the base-OS ovmx-os.kit, as real
+    # OpenVMS ships TCP/IP Services as a layered product. Built via the same
+    # ovmx_kit_pack factory tool (tools/build-tcpip-kit.sh) and proven pack->list->
+    # extract->byte-exact (the ovmx-os.kit gate applied to the layered product). This
+    # is the PRODUCT half of vms-f394; the release-stream wiring + PRODUCT-INSTALL are
+    # a separate rung + the layered-product-vs-appliance posture gate. SKIPs honestly
+    # under BUILD_TOOLS=OFF (ovmx_kit_pack / TCPIP$*.EXE absent); runs for real in the
+    # BUILD_TOOLS=ON Build&Test job.
+    add_test(NAME tcpip_kit_roundtrip
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_tcpip_kit_roundtrip.sh ${CMAKE_BINARY_DIR}/bin)
+    set_tests_properties(tcpip_kit_roundtrip PROPERTIES
+        LABELS "integration;tcpip" TIMEOUT 120)
 
     # vms-3e9 standing gate: $CREPRC is the SOLE session-creation primitive --
     # no fork/execl/openpty/dup2 survives ABOVE the VMS layer in any session

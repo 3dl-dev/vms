@@ -25,7 +25,7 @@ summary: >
   target, never a silent change of the CALLER's own priority for any target
   (vms-dff7). SYS$CANCEL is a literal no-op returning SS$_NORMAL (facade-risk).
   SYS$SETPRN and SYS$PROCESS_SCAN are absent.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: sys$creprc, kind: routine, status: implemented, authenticity: real, vms: "Create a process", evidence: src/libvms/syssvc/sys_process.c, notes: "fork()+execve() + executive PCB registration; inherits identity; returns the executive-assigned VMS PID in pidadr"}
   - {id: sys$delprc, kind: routine, status: implemented, authenticity: real, vms: "Delete a process", evidence: src/libvms/syssvc/sys_process.c, notes: "target resolved through the executive by prcnam (caller's UIC group) or VMS PID; executive SS$_NONEXPR, never a raw kill on a Linux pid"}

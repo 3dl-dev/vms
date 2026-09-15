@@ -63,7 +63,14 @@ enum vms_ldwv_status {
 	VMS_LDWV_E_NOVEC     = 2,  /* no vector, or not authoritative right now */
 	VMS_LDWV_E_TOOBIG    = 3,  /* the weighted set exceeds the storage bound*/
 	VMS_LDWV_E_WEIGHTS   = 4,  /* some LOCKDIRWTs learned, some not         */
-	VMS_LDWV_E_NOMEMBERS = 5   /* no selected member with a learned CSID    */
+	VMS_LDWV_E_NOMEMBERS = 5,  /* no selected member with a learned CSID    */
+	/*
+	 * THE SPLIT-BRAIN GATE (rd vms-1ee). The all-zero fallback below was
+	 * asked for on a cluster this executive cannot prove is all-OVMX: some
+	 * member has advertised a software version that is not this node's own,
+	 * or has advertised none at all. REFUSED -- see the header's SS3.
+	 */
+	VMS_LDWV_E_FOREIGN   = 6
 };
 
 /* ==========================================================================
@@ -79,7 +86,15 @@ struct vms_ldwv_member {
 	uint8_t    lockdirwt;        /* LEARNED, meaningful only if valid   */
 	uint8_t    lockdirwt_valid;
 	uint8_t    is_local;         /* this system: its entries read 0     */
-	uint8_t    pad;
+	/*
+	 * Is this member PROVABLY running the same implementation we are --
+	 * i.e. did it advertise a software version byte-identical to our own
+	 * (rd vms-1ee)? Three-valued in effect: 1 = yes; 0 = either it
+	 * advertised something else, or it advertised nothing. Both of the
+	 * zero cases mean the same thing here: NOT PROVEN, and the all-zero
+	 * fallback must not fire on a cluster with one in it.
+	 */
+	uint8_t    is_ovmx;
 };
 
 /* ==========================================================================
@@ -161,6 +176,14 @@ uint32_t vms_ldwv_generation(const struct vms_ldwv *v);
  * node is the directory for that hash. The directory-node role's admission
  * test (p. 6-31) and the order self-check's predicate (SS5). */
 int vms_ldwv_is_ours(const struct vms_ldwv *v, uint16_t hash16);
+
+/* THE ALL-OVMX GATE (vms-3e3, rung A"). Nonzero iff this vector is authoritative
+ * and EVERY member is proven-OVMX. The one call that decides whether OVMX's own
+ * directory hash may be grounded for a name never seen on the wire, and whether
+ * cross-node routing is live at all -- dynamic (a VAX joining flips it off), and
+ * resting on the same survey as the split-brain gate (#1138). See the definition
+ * for why this is safe where a name->hash op is otherwise forbidden (design SS3.6). */
+int vms_ldwv_all_ovmx(const struct vms_ldwv *v);
 
 /* ==========================================================================
  * 5. The CLUB-facing half

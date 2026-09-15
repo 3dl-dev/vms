@@ -122,6 +122,25 @@ _CP_LINE_RE = re.compile(
     re.VERBOSE,
 )
 
+# TEST-OVERLAY build args (rd vms-21b). A `--build-arg <ARG>=1` block in
+# distro/Dockerfile.bootable stages TEST-ONLY content that is NOT part of any
+# shipped release artifact (releases build with the default arg value, 0). The
+# parity gate compares the SHIPPED base-image sets across arches, so cp lines
+# inside such a block must be excluded from the x86_64 set -- otherwise a
+# test-overlay-only image (e.g. the TCP/IP-Services layered-product aux server,
+# staged only when OVMX_TEST_ENABLE_TCPIP=1) would be falsely reported as an
+# x86_64-only *shipped* image. This is an explicit, closed set (not "any if
+# block"): a cp inside any OTHER shell conditional is still counted, so the gate
+# keeps its teeth against a real shipped x86_64-only image hidden behind an if.
+_TEST_OVERLAY_BUILD_ARGS = {
+    "OVMX_TEST_ENABLE_TCPIP",
+}
+_TEST_OVERLAY_IF_RE = re.compile(
+    r'^if\s+\[\s+"\$(?:' +
+    "|".join(re.escape(a) for a in sorted(_TEST_OVERLAY_BUILD_ARGS)) +
+    r')"\s*=\s*"1"\s*\]'
+)
+
 
 def _join_shell_continuations(text: str) -> str:
     """Collapse `... \\\n    ...` line continuations into single logical
@@ -169,7 +188,21 @@ def extract_x86_64_images(dockerfile_text: str) -> set[str]:
     _check_shareable_names_cited(dockerfile_text)
 
     images: set[str] = set()
+    in_test_overlay = False
     for cmd in _join_shell_continuations(dockerfile_text):
+        # A TEST-OVERLAY conditional (`if [ "$OVMX_TEST_ENABLE_TCPIP" = "1" ]; then
+        # ... fi`) stages test-only content that never ships in a release artifact,
+        # so cp lines within it are not part of the SHIPPED image set. Skip from the
+        # opening `if` through the matching `fi`. Only the explicitly-listed test
+        # build args trigger this -- a cp inside any other conditional is still
+        # counted (the gate keeps its teeth). See _TEST_OVERLAY_BUILD_ARGS.
+        if _TEST_OVERLAY_IF_RE.match(cmd.strip()):
+            in_test_overlay = True
+            continue
+        if in_test_overlay:
+            if cmd.strip() == "fi":
+                in_test_overlay = False
+            continue
         m = _CP_LINE_RE.match(cmd)
         if not m:
             continue

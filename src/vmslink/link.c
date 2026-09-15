@@ -1488,6 +1488,15 @@ static size_t g_syms_cap;          /* power of two */
  * default: a normal single-shareable build still fails hard on a dangling ref. */
 static int  g_allow_undef;
 static long g_deferred;            /* count of deferred (unresolved) externals */
+/* vms-7b7: of the deferred externals, how many are the target of a CALL-site
+ * reloc (rel32 CALL/JMP). A deferred import is safe ONLY for a reference that
+ * never executes; a CALLED deferred external is parked rel32=0 and CRASHES the
+ * instant the call site runs (getpagesize-in-ctor class; 237 such sites once
+ * hid in AS.EXE). LINK.EXE must not silently defer a CALLED undef — WARN, name
+ * them, so they are exported/backed rather than left as latent activation
+ * crashes. Counted here, reported at link end. */
+static long g_called_deferred;
+static int  is_call_reloc(uint32_t type);   /* fwd decl (defined below) */
 
 /* Diagnostic (vms-bfd6): with OVMX_LINK_DUMP_UNDEF set in the environment, name
  * every deferred external on stderr as "DEFERRED-UNDEF: <name>". This is the
@@ -1703,7 +1712,8 @@ static uint64_t placed_addr(struct obj *d, Elf_Sym *s)
 /* Resolve a relocation's symbol to a final image vaddr (local or cross-object).
  * Returns 0 for a deferred external under --allow-undefined (caller skips the
  * patch); otherwise dies on a dangling reference. */
-static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
+static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx,
+                            uint32_t reloc_type)
 {
     struct obj *o = &objs[oi];
     Elf_Sym *s = &o->sym[symidx];
@@ -1748,7 +1758,20 @@ static uint64_t resolve_ref(struct obj *objs, int nobj, int oi, uint32_t symidx)
          * re-checks gval_find() to suppress that. (vms-954) */
         { uint64_t gv; if (gval_find(nm, &gv)) return gv; }
         if (weak_has(nm)) return 0;   /* weak-undef resolves to 0 (ELF semantics) */
-        if (g_allow_undef) { dump_undef(nm); g_deferred++; return 0; }
+        if (g_allow_undef) {
+            dump_undef(nm); g_deferred++;
+            /* vms-7b7: a deferred external that is the target of a CALL reloc is
+             * a latent activation crash (rel32=0 -> call into 0). WARN + name it
+             * so it is exported/backed; a merely-referenced (non-call) deferred
+             * external stays a legitimate silent import. */
+            if (is_call_reloc(reloc_type)) {
+                g_called_deferred++;
+                fprintf(stderr, "%%LINK-W-CALLDEFER, CALLED deferred external "
+                        "'%s' (rel32=0 at a CALL site — latent crash if the call "
+                        "executes; export/back it, do not leave it deferred)\n", nm);
+            }
+            return 0;
+        }
         /* NAME THE SYMBOL. Without it this diagnostic says only that *a*
          * symbol did not bind, which turns "one libc call was added to an
          * OVMX library whose producer image does not export it" -- the
@@ -3031,7 +3054,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                  * image-relative address and record the slot in .vms$rel so
                  * the activator adds the load bias. A deferred external leaves
                  * the slot 0 (unbiased). (vms-004, folds in vms-a17) */
-                uint64_t s = resolve_ref(objs, nobj, i, ELF_R_SYM(rl->info));
+                uint64_t s = resolve_ref(objs, nobj, i, ELF_R_SYM(rl->info), ELF_R_TYPE(rl->info));
                 if (s == 0) continue;   /* deferred (counted in resolve_ref) */
                 uint64_t value = s + (uint64_t)rl->add;
                 ovmx_store_ptr(img + site, value);
@@ -3073,7 +3096,7 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
 #endif
                 } else {
                     uint64_t target =
-                        resolve_ref(objs, nobj, i, ELF_R_SYM(rl->info));
+                        resolve_ref(objs, nobj, i, ELF_R_SYM(rl->info), ELF_R_TYPE(rl->info));
                     if (target == 0) continue;  /* deferred external, skip patch */
                     target += (uint64_t)rl->add;
                     patch_pcrel(type, insn, site, target);
@@ -3432,6 +3455,15 @@ static void emit_shareable(struct obj *objs, int nobj, struct univ *uv, int nuni
                 "(deferred imports — satisfied by the C RTL / a companion "
                 "shareable at activation, vms-61f)\n",
                 g_deferred, g_deferred == 1 ? "" : "s");
+    /* vms-7b7: a deferred external is legitimate ONLY for a never-executed
+     * reference. Any that are CALLED (rel32=0 at a CALL site) are latent
+     * activation crashes — surface the count distinctly so the toolchain
+     * exports/backs them rather than shipping the silent facade. */
+    if (g_called_deferred)
+        fprintf(stderr, "%%LINK-W-CALLDEFER, %ld deferred external%s reached by a "
+                "CALL site (rel32=0 — latent activation crash; export/back the "
+                "symbol, do not leave it deferred)\n",
+                g_called_deferred, g_called_deferred == 1 ? "" : "s");
     free(rel_off); free(got); free(tls); free(imp); free(g_syms); g_syms = NULL;
     free(img);
 }

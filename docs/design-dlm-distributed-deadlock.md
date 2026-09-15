@@ -1,10 +1,33 @@
 # Design — DLM distributed deadlock detection (rung H11, `vms-ec75`)
 
-> Status: design for the last DLM rung. Extends the local wait-for-graph detector
-> (`check_deadlock`, `src/kernel-core/vms_lock.c`) to a **cluster-wide** detector:
-> a deadlock CYCLE whose edges cross nodes is detected, and exactly one victim's
-> waiting `$ENQ` is aborted with `SS$_DEADLOCK` (3594), breaking the cycle; the
-> other request proceeds once the victim releases.
+> **Status (updated 2026-09-14): LANDED as-built, executive-resident.** This
+> design shipped essentially unchanged. The distributed detector lives in the
+> executive (`vms.ko`, `src/kernel-core/`), NOT in the userspace `scsd` daemon
+> that was deleted in the 2026-09-02 cluster reset:
+> - Wire op `SCS_DLM_OP_DLKSRCH = 6` is defined in
+>   `src/kernel-core/vms_cluster_codec_dlm.{c,h}` and mirrored in the NetBSD
+>   substrate `src/kernel-netbsd/vms_lock_nb.h` (`VMS_DLM_OP_DLKSRCH 6u`).
+> - The VICTIM leg (the one mutating edge) is `vms_lock_dlm_xnode_dlksrch()`
+>   (`src/kernel-core/vms_lock.c`), dispatched from the DLM-over-SCS handler
+>   (`case VMS_DLM_OP_DLKSRCH`).
+> - The SEARCH legs are pure reads over the readback ioctls
+>   `VMS_IOCTL_DLM_ENUM_WAITS` (`vms_ioctl_dlm_enum_waits`, this rung) and
+>   `VMS_IOCTL_DLM_GET_GRANTED` (`vms_ioctl_dlm_get_granted`, H10b).
+>
+> ⚠ **Unsettled naming residue:** in-tree comments in `vms_lock.c` still describe
+> the read-only SEARCH orchestration as "orchestrated in `scsd`" — a stale word
+> for a daemon that no longer exists. The VICTIM mutation and the readback ioctls
+> are firmly executive-resident; where the read-only edge-chase *orchestration*
+> ultimately homes (executive worker vs. a cluster control task) should be
+> re-derived from the code, not from that comment. Treat the `scsd`-named
+> orchestration and the reconciliation checklist's `scsd.c` sites below as
+> historical.
+>
+> Original design intent (accurate as-built): extends the local wait-for-graph
+> detector (`check_deadlock`, `src/kernel-core/vms_lock.c`) to a **cluster-wide**
+> detector — a deadlock CYCLE whose edges cross nodes is detected, and exactly one
+> victim's waiting `$ENQ` is aborted with `SS$_DEADLOCK` (3594), breaking the
+> cycle; the other request proceeds once the victim releases.
 
 ## Clean-room provenance (CLAUDE.md Rule 8)
 
@@ -83,7 +106,7 @@ local `check_deadlock` instead — no probe needed.
 The chase must NOT be framed as the local detector's "find the holder's *process*
 `P`". A cross-node lock has no owning process — it is represented CSID-keyed:
 the **master** holds it in `res->granted` with `req_csid` = the holder's CSID, and
-the **home node** (the requester whose scsd issued the `$ENQ`) holds a
+the **home node** (the node that issued the cross-node `$ENQ`) holds a
 `vms_dlm_origin` record for each of its own outstanding requests (`grant_recv`
 creates one even for a queued reply, `granted_mode == NL` while pending, carrying
 `resnam` + `master_csid`). The distributed wait-for graph is therefore READABLE
@@ -164,11 +187,11 @@ concurrent bidirectional initiation.
 
 ## Minimal faithful proof (harness)
 
-A genuine 2-node cross-node cycle, built the SAME daemon-choreographed way every
-DLM rung's harness builds cross-node locks (scsd drives targeted `$ENQ`s keyed by
-`req_csid` via `OVMX_DLM_ENQ`/`OVMX_DLM_ENQ_CSID` — there is no "application
-process holds a cross-node lock"; the hold is CSID-keyed master-side state, which
-is all the chase reads):
+A genuine 2-node cross-node cycle, built the SAME way every DLM rung's harness
+builds cross-node locks (the cluster test harness drives targeted `$ENQ`s keyed by
+`req_csid` via the `OVMX_DLM_ENQ`/`OVMX_DLM_ENQ_CSID` ioctls straight into the
+executive — there is no "application process holds a cross-node lock"; the hold is
+CSID-keyed master-side state, which is all the chase reads):
 
 - CSID `A` holds `R_A` (a granted lock `req_csid=A` on `R_A`'s master), then a
   cross-node `$ENQ R_B` EX for `req_csid=A` → queues on `R_B`'s master behind `B`.
@@ -186,21 +209,23 @@ search fires.
 **Assert:** exactly **one** waiter's `$ENQ` returns `SS$_DEADLOCK` (the
 deterministic victim), the other stays queued (not aborted); the detection is the
 executive's own edge-chase over real wait-for state, every marker value read
-verbatim off the nodes' SCSD output (INV-6). The victim CSID is deterministic
-across runs.
+verbatim off the nodes' executive readback (`DLM_ENUM_WAITS`/`DLM_GET_GRANTED`,
+INV-6). The victim CSID is deterministic across runs.
 
 ## Reconciliation checklist (the traps this campaign taught)
 
-- **New op `SCS_DLM_OP_DLKSRCH` = 6 → all N places:** `scs_dlm.h` enum,
-  `scs_dlm.c` codec validator + `scs_dlm_op_name`, `vms_ioctl.h` `VMS_DLM_OP_*`
-  mirror **and** the NetBSD mirror `src/kernel-netbsd/vms_lock_nb.h` (the
-  amd64-green-≠-twin-proven trap, #928), `scsd.c` `static_assert`, `vms_lock.c`
-  dispatch.
+- **New op `SCS_DLM_OP_DLKSRCH` = 6 → all N places (as landed):**
+  `src/kernel-core/vms_cluster_codec_dlm.h` enum, `vms_cluster_codec_dlm.c` codec
+  validator + op-name, `src/kernel/vms_ioctl.h` `VMS_DLM_OP_*` mirror **and** the
+  NetBSD substrate mirror `src/kernel-netbsd/vms_lock_nb.h` (the
+  amd64-green-≠-twin-proven trap, #928), plus the `vms_lock.c` dispatch.
+  *(Pre-reset this named `scs_dlm.{h,c}` + `scsd.c static_assert`; those files were
+  deleted in the 2026-09-02 cluster reset.)*
 - **New cross-node SEND (the probe + the victim signal) → CHOKED SEND SITE
-  TABLE** entry in `scsd.c` (`scs_send_sites`, the #923 census trap), labelled
-  new-in-`vms-ec75`.
-- **Any new scsd-issued ioctl → census** (`kif_caller_census`): a `vms_kif_*`
-  wrapper that issues it, or an `OVMX-UNWIRED` declaration for a scsd-direct call.
+  TABLE** — the executive's send-site census (formerly `scs_send_sites` in
+  `scsd.c`, the #923 census trap), labelled new-in-`vms-ec75`.
+- **Any new cross-node ioctl → census** (`kif_caller_census`): a `vms_kif_*`
+  wrapper that issues it, or an `OVMX-UNWIRED` declaration for a direct call.
 - **Any `docs/compat/*.yaml` touched → `render_compat.py`** (the drift gate).
 - **INV-6:** every value on every marker is a REAL executive read; a dropped/
   ttl-expired probe reports "no deadlock found", never a fabricated cycle.

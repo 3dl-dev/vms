@@ -119,6 +119,9 @@ static const enum ref_step reference[] = {
 #define MEMBER_CSID  0x00010001u
 #define MSCP_CONID   0x4e620008u
 #define CM_CONID     0x4e620009u
+/* The Con.ID SCS mints for a VMS$VAXcluster connection the MEMBER opened and
+ * this node accepted -- the only one that exists in the rejoin replay below. */
+#define ACC_CM_CONID 0x4e62000au
 #define SIM_NODE     0u
 
 #define MAX_OBS 64
@@ -138,6 +141,14 @@ struct bed {
 	 * the VMS$VAXcluster connect on the wire, which is what happened on the
 	 * live join-e70refire run. */
 	int           refuse_cm_connect;
+	/*
+	 * WHICH CONNECTION EACH cat-0x01 ORIGINATION RODE (spec sec 4(O.11)).
+	 * The rejoin oracle's whole property is that the admission rides the
+	 * MEMBER-INITIATED connection, so the sequence alone cannot express it
+	 * -- the Con.ID must be counted.
+	 */
+	uint32_t      cm_sends_member;
+	uint32_t      cm_sends_own;
 	uint32_t      gus_cmds;      /* collapsed into one R_MSCP_GUS element */
 	uint32_t      logs;
 	char          last_log[160];
@@ -253,6 +264,10 @@ static int bed_send_msg(void *ctx, vms_conid_t conid, const uint8_t *body,
 	}
 	if (len != VMS_CM_BODY_LEN)
 		return 0;
+	if (conid == ACC_CM_CONID)
+		g.cm_sends_member++;
+	else if (conid == CM_CONID)
+		g.cm_sends_own++;
 	switch (body[VMS_OFB_CM_OPCODE]) {
 	case VMS_CM_OP_MODEL:  obs(R_CM_MODEL);  break;
 	case VMS_CM_OP_PARAMS: obs(R_CM_PARAMS); break;
@@ -697,6 +712,148 @@ static void test_a_transient_does_not_end_the_join(void)
 	ct_check_eq_u32(g.clock.overflows, 0u, "no timer was silently dropped");
 }
 
+/* ==========================================================================
+ * sec 4(O.11) -- THE REJOIN SHAPE, REPLAYED
+ *
+ * THE ORACLE (vax3-class03-crash-REJOIN-SUCCESS). A rejoining system's whole
+ * outbound connect census is SCS$DIRECTORY and MSCP$DISK: it opens NO
+ * VMS$VAXcluster connect of its own, answers the members' CONNECT_REQs as the
+ * TARGET, and drives op-0x02 plus the whole member-driven tail on the
+ * MEMBER-INITIATED connection.
+ *
+ * WHY IT IS THE SAME FSM WITH NO REJOIN MODE IN IT. The rejoiner had crashed;
+ * its executive holds no record of a prior cluster and has no rejoin condition
+ * to read (INV-6 forbids inventing one). The asymmetry is on the survivor's
+ * side -- p. 7-30 has it dialling this node once a second inside its reconnect
+ * window -- so the pair's ONE connection already exists when this node's drive
+ * reaches step 4, and this node's whole obligation is to READ that off the CSB
+ * (p. 7-23) rather than open a second one.
+ *
+ * WHY IT IS R2 AND NOT A SECOND R1: the same manifest-hashed specimens drive
+ * the member-driven tail on the virtual clock, and the assertion is again the
+ * ORDERED sequence -- this time the REJOIN sequence, which differs from the
+ * reference by exactly one missing element, the connect this node no longer
+ * makes -- plus the Con.ID every origination really rode.
+ * ========================================================================== */
+
+static const enum ref_step rejoin_reference[] = {
+	R_LOOKUP_MSCP, R_LOOKUP_VAXCLUSTER,
+	R_CONNECT_MSCP,          /* ... and NO R_CONNECT_VAXCLUSTER */
+	R_CM_MODEL, R_CM_PARAMS,
+	R_MSCP_SCC1, R_MSCP_SCC2, R_MSCP_GUS,
+	R_CM_CONFIG,
+	R_HANDOFF
+};
+
+/*
+ * What vms_cnxman.c does when a survivor's VMS$VAXcluster connect lands while
+ * this node is still booting -- before CLUSTER_START, so this join has no
+ * target to compare the offer with and the only record of that connection is
+ * the EXECUTIVE's: accept it, tell the ladder CONNECT_RCVD (p. 7-24 REACCEPT),
+ * bind the Con.ID SCS minted to the block, and tell both the ladder and the
+ * join that the CDT came up.
+ */
+static void member_dials_this_node_first(void)
+{
+	(void)cnxman_join_connect_req(&g.j, MEMBER_SYSID, ACC_CM_CONID, NULL,
+				      0u);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONNECT_RCVD, &g.ops);
+	cnxman_csb_bind_connection(g.member_csb, ACC_CM_CONID);
+	(void)cnxman_csb_dispatch(&g.cl.club, g.member_csb,
+				  CNXMAN_CSB_EV_CONN_OPEN, &g.ops);
+	cnxman_join_cm_accepted(&g.j, MEMBER_SYSID, ACC_CM_CONID);
+	cnxman_join_opened(&g.j, ACC_CM_CONID);
+}
+
+static void replay_rejoin(void)
+{
+	uint32_t len;
+
+	bed_init();
+	member_dials_this_node_first();
+
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       1);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, MSCP_CONID);
+	/* ... and step 4 opens NOTHING: the connection already exists. */
+
+	(void)feed_fixture("cm-params");
+
+	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_scc_end((uint16_t)(VMS_MSCP_CL_SCC_MSGID0 + 1u));
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
+			 VMS_MSCP_ST_OFFLINE);
+	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+
+	(void)feed_fixture("cm-commit-req");
+	(void)feed_fixture("cm-dlm-op0d-req");
+	(void)feed_fixture("cm-close-req");
+	(void)feed_fixture("cm-open-add-req");
+	len = mk_go_frame(0x0000000eu);
+	if (len != 0u)
+		(void)join_feed(g_synth, len);
+	if (cnxman_join_handed_off(&g.j))
+		obs(R_HANDOFF);
+}
+
+static void test_rejoin_sequence_matches_the_oracle(void)
+{
+	uint32_t n_ref = (uint32_t)(sizeof(rejoin_reference) /
+				    sizeof(rejoin_reference[0]));
+	uint32_t i;
+	int ok = 1;
+
+	printf("\n-- sec 4(O.11): the REJOIN sequence (the rejoiner dials "
+	       "nobody) --\n");
+	replay_rejoin();
+
+	for (i = 0; i < n_ref; i++) {
+		const char *got = (i < g.n_obs) ? ref_name[g.obs[i]] : "(none)";
+
+		printf("  %2u  want %-42s got %s\n", i,
+		       ref_name[rejoin_reference[i]], got);
+		if (i >= g.n_obs || g.obs[i] != rejoin_reference[i])
+			ok = 0;
+	}
+	ct_check(ok, "the join emits the REJOIN sequence, in order");
+	ct_check_eq_u32(g.n_obs, n_ref,
+			"... and emits nothing else -- in particular no "
+			"VMS$VAXcluster connect of its own");
+	ct_check_eq_u32(g.j.cm_connect_suppressed, 1u,
+			"the connect this node did NOT make is counted, once");
+}
+
+static void test_rejoin_admission_rides_the_member_connection(void)
+{
+	printf("\n-- sec 4(O.11): op-0x02 on the MEMBER-INITIATED Con.ID --\n");
+	ct_check_eq_u32(g.cm_sends_own, 0u,
+			"not one cat-0x01 origination rode a connection of "
+			"this node's own: there is not one");
+	ct_check(g.cm_sends_member >= 3u,
+		 "MODEL, PARAMS and the op-0x02 that starts admission all rode "
+		 "the connection the MEMBER opened");
+	ct_check_eq_u32(g.j.cm_conid, ACC_CM_CONID,
+			"... which is the Con.ID this join holds throughout");
+	ct_check_eq_u32(g.member_csb->cdt_conid, ACC_CM_CONID,
+			"... and the executive's own record was never re-bound "
+			"away from it");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
+			"and the whole admission completes on it, through to "
+			"the barrier hand-off");
+	ct_check(cnxman_barrier_phase2_committed(&g.b) != 0,
+		 "... with Phase 2 committed (book p. 7-42)");
+	ct_check_eq_u32(g.j.send_failures, 0u, "no send was refused");
+	ct_check_eq_u32(g.clock.overflows, 0u, "no timer was silently dropped");
+}
+
 int main(void)
 {
 	char err[512];
@@ -727,6 +884,8 @@ int main(void)
 	test_no_step_waited_on_a_timer();
 	test_honest_omissions_survive_the_replay();
 	test_a_transient_does_not_end_the_join();
+	test_rejoin_sequence_matches_the_oracle();
+	test_rejoin_admission_rides_the_member_connection();
 
 	printf("\n  NOTE (integration note E12): the plan row's named "
 	       "vax3-2to3-established-join\n"

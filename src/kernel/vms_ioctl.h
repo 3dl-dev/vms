@@ -564,6 +564,36 @@ struct vms_resmaster_args {
  */
 #define VMS_DLM_STS_QUEUED  0u
 
+/*
+ * The `status` an ENQ dispatch returns when this node is NOT the master for the
+ * named tree and DOES hold the CSID of the node that is: the DIRECTORY REDIRECT
+ * (rd vms-b96; Davis p. 6-31 outcome 2 -- the directory node "answers with the
+ * master, and the lock request then goes to that master").
+ *
+ * IT IS NOT AN SS$_ CONDITION VALUE, AND ITS BITS SAY SO. Bit 28 is the VMS
+ * condition-value architecture's customer-facility bit, so a value carrying it
+ * is by construction not a DIGITAL-assigned code and cannot alias any SS$_
+ * status this dispatch returns. Its low bit is clear, so a caller applying the
+ * ordinary VMS success test reads it as "not success" -- which is right:
+ * nothing was granted and nothing was queued. Same footing as
+ * VMS_DLM_STS_QUEUED above: a dispatch OUTCOME, not a completion status.
+ *
+ * ON THIS STATUS, AND ONLY ON IT, `master_csid` IS THE REDIRECT TARGET -- the
+ * master CSID the executive genuinely holds for the tree (the resource block's
+ * master_csid, written from a GRANT a master really sent or a directory reply
+ * the cluster really returned). It is never this node, never the requester, and
+ * NEVER the directory node this node's own weight vector resolved: a directory
+ * is not a master, and naming one as master is exactly the fabrication that
+ * made a real VAX install OVMX as the master of resources it did not master.
+ * When this node holds no master for the tree the dispatch declines
+ * SS$_UNSUPPORTED instead, and the requester re-resolves through its own
+ * current vector (bounded by DLM_REQ_MAX_REDIRECTS, vms_dlm_scs_fsm.h).
+ *
+ * `master_lkid` is left VMS_DLM_LKID_UNSET on a redirect: this node holds no
+ * lock for the request, so it echoes no handle (the fc8540ae INVLOCKID rule).
+ */
+#define VMS_DLM_STS_REDIRECT  0x10000008u
+
 struct vms_dlm_xnode_args {
     uint32_t op;                /* in: VMS_DLM_OP_* */
     uint32_t lkmode;            /* in: LCK$K_ mode (0..5) */
@@ -579,7 +609,11 @@ struct vms_dlm_xnode_args {
                                  * vms-904c) => 0 (VMS_DLM_STS_QUEUED: no completion
                                  * status posted yet -- a later GRANT carries
                                  * SS$_NORMAL); ENQ+NOQUEUE incompatible =>
-                                 * SS$_NOTQUEUED; higher rungs => SS$_UNSUPPORTED. */
+                                 * SS$_NOTQUEUED; ENQ at a node that does not
+                                 * master the tree but knows who does =>
+                                 * VMS_DLM_STS_REDIRECT, with master_csid the
+                                 * redirect target (rd vms-b96); higher rungs =>
+                                 * SS$_UNSUPPORTED. */
     /*
      * Cross-node contention outputs (DLM epic vms-7fa rung 3, vms-904c). Filled by
      * the ENQ path so the requester/daemon can act on a QUEUED request:
@@ -1264,6 +1298,114 @@ _Static_assert(sizeof(struct vms_cluster_diag_join_args) == 1056,
 #define VMS_IOCTL_CLUSTER_DIAG_JOIN _IOWR(VMS_IOC_MAGIC, 0x6d, struct vms_cluster_diag_join_args)
 _Static_assert(VMS_IOCTL_CLUSTER_DIAG_JOIN == 0xC420566Du,
                "VMS_IOCTL_CLUSTER_DIAG_JOIN encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_DIAG_DLM (rd vms-94c). The lock manager's WIRE ARM read
+ * back: SDA's `SHOW LOCK`/`SHOW CLUSTER` have no column for it, because no
+ * other lock manager has a distributed arm whose emissions are gated the way
+ * this one's are -- so this is OVMX's own diagnostic and is named as such.
+ *
+ * WHY IT EXISTS, and why a pcap was not enough. The cross-node proof has to
+ * answer two DIFFERENT questions:
+ *
+ *   "did a byte reach the segment?"  -- a packet capture answers that, and the
+ *       rig already reconstructs one per node from the passive probe.
+ *   "is THIS EXECUTIVE'S ARM what emitted it?" -- nothing on the wire answers
+ *       that. A frame on a shared segment could have come from anywhere, and a
+ *       test harness that built one itself would look identical. Only the
+ *       counter the arm incremented AT THE MOMENT IT SENT proves authorship.
+ *
+ * So this ioctl projects struct vms_dlm_scs and its embedded requester FSM --
+ * the live objects the running arm has been incrementing -- through
+ * vms_dlm_scs_snapshot() under the fork mutex. It computes nothing, it holds
+ * nothing, and a node whose arm has not started is SS$_NOSUCHDEV with an
+ * all-zero row rather than a zero that could be mistaken for "sent none"
+ * (INV-6, rule 2 of vms_cluster_snapshot.h).
+ *
+ * The row struct mirrors src/kernel-core/vms_cluster_snapshot.h's
+ * vms_dlm_scs_view byte-for-byte -- the same "ONE facility source, duplicated
+ * struct declaration" shape as the CLUSTER_DIAG_PORT/_CONN/_CSB rows, because
+ * this header must stay includable with no kernel-core dependency. The
+ * duplication is pinned by a _Static_assert in src/kernel-core/vms_devtab.c.
+ *
+ * There is no `row` selector: the arm has exactly one projection. `pad0` keeps
+ * the row 8-byte aligned as every other args struct here does.
+ */
+struct vms_dlm_scs_view_wire {
+    uint8_t  lockdirwt;
+    uint8_t  rebuild_phase;
+    uint8_t  connected;
+    uint8_t  pad0;
+    uint32_t rebuild_generation;
+    uint32_t proxy_lkbs;
+    uint32_t mastered_resources;
+    uint32_t directory_entries;
+    uint32_t req_sent;
+    uint32_t req_received;
+    uint32_t grants_sent;
+    uint32_t grants_received;
+    uint32_t declined;
+    uint32_t rebuild_records_in;
+    uint32_t rebuild_records_out;
+    /* The emit ledger -- see vms_cluster_snapshot.h for why each refusal
+     * counter sits beside the emission it is the honest alternative to. */
+    uint32_t releases_sent;
+    uint32_t releases_no_wire_op;
+    uint32_t blkasts_sent;
+    uint32_t blkasts_no_wire_op;
+    uint32_t blkasts_received;
+    uint32_t blkasts_delivered;
+    /* The receive ledger (rd vms-c72): a peer's op-0x03/op-0x04 ACTED ON by
+     * this executive, which is the half a pcap cannot show. */
+    uint32_t releases_received;
+    uint32_t valblk_writes_received;   /* op-0x06 LVB writes applied (vms-727) */
+    uint32_t releases_refused;
+    uint32_t blkasts_unparsed;
+    uint32_t deferred_grants_owed;
+    uint32_t queued_no_reply;
+    uint32_t unparsed;
+    uint32_t foreign_refused;
+    /* The connection manager's own, independent count of the same traffic. */
+    uint32_t leg_sends;
+    uint32_t leg_sends_refused;
+    uint32_t leg_frames_rx;
+    uint32_t leg_replies_sent;
+    uint32_t leg_declined;
+    /* The post path's four endings -- see vms_cluster_snapshot.h for why a
+     * $DEQ can hit posts_lock_gone by construction. */
+    uint32_t posts_queued;
+    uint32_t posts_unqueued;
+    uint32_t posts_lock_gone;
+    uint32_t posts_refused;
+};
+_Static_assert(sizeof(struct vms_dlm_scs_view_wire) == 140,
+               "vms_dlm_scs_view_wire changed size -- must match vms_dlm_scs_view");
+
+struct vms_cluster_diag_dlm_args {
+    uint32_t status;                     /* return: SS$_ status              */
+    uint32_t pad0;
+    struct vms_dlm_scs_view_wire dlm;    /* return: the arm's own projection */
+};
+_Static_assert(sizeof(struct vms_cluster_diag_dlm_args) == 148,
+               "vms_cluster_diag_dlm_args changed size -- VMS_IOCTL_CLUSTER_DIAG_DLM ABI break");
+/*
+ * NR 0x6e: the next unused number in this magic (0x6d is CLUSTER_DIAG_JOIN just
+ * above). The encoded value below was computed for THIS struct's size -- _IOWR
+ * folds sizeof(type) into the command word, so appending a counter silently
+ * changes the ioctl NUMBER, and this assert is what turns that into a build
+ * failure instead of an ENOTTY on a booted node.
+ *
+ * rd vms-c72 grew the row by the four RECEIVE-ledger counters (128 -> 144), so
+ * the encoded value moved 0xC080566E -> 0xC090566E -- deliberately, with this
+ * assert updated in the same commit. rd vms-727 then appended
+ * `valblk_writes_received` (144 -> 148), moving it 0xC090566E -> 0xC094566E --
+ * again deliberately, in this commit. A diagnostic image built from another
+ * tree therefore fails LOUDLY (ENOTTY) rather than reading a shorter row as
+ * data, which is the behaviour this assert exists to guarantee.
+ */
+#define VMS_IOCTL_CLUSTER_DIAG_DLM _IOWR(VMS_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
+_Static_assert(VMS_IOCTL_CLUSTER_DIAG_DLM == 0xC094566Eu,
+               "VMS_IOCTL_CLUSTER_DIAG_DLM encodes differently than the reference build");
 
 /*
  * VMS_IOCTL_SYSGEN_LOAD (FC-P0.10, docs/plan-faithful-cluster-executive.md).
@@ -2049,6 +2191,49 @@ _Static_assert(VMS_IOCTL_TERM_RESOLVE == 0xC028565Bu,
  * VMS never showed us (CLAUDE.md Rule 10).
  */
 #define VMS_USERNAME_SIZE 32
+
+/*
+ * NETWORK-LOGIN PRE-AUTHENTICATION NOTE on a dynamic terminal (rd vms-65b).
+ *
+ * The conveyance channel that lets an inbound network daemon which has ALREADY
+ * authenticated a user in its own protocol (SSH: cryptographic/Purdy password
+ * against the same SYSUAF authority) hand that user to a $CREPRC(LOGINOUT,
+ * RTAn:, PRC$M_LOGINOUT) session WITHOUT LOGINOUT re-challenging (Option A,
+ * design docs/design-ssh-loginout-handoff.md). Under PRC$M_LOGINOUT the creator
+ * stamps NO identity (sys_process.c) and $SETIDENT is self-targeted, so the
+ * daemon cannot reach into the LOGINOUT child; instead it stamps the
+ * pre-authenticated user name onto the RTAn: DEVICE record it minted, and the
+ * LOGINOUT child -- bound to that same terminal by creprc_bind_terminal --
+ * reads it back for ITS OWN terminal.
+ *
+ * SETLOGIN is CAP_SYS_ADMIN/SETPRV-gated (exec_current_is_privileged): only a
+ * trusted, not-yet-dropped network daemon may vouch a pre-authentication -- the
+ * same authority INETD/sshd hold to establish a run-as identity. The note is a
+ * user NAME, never a credential: LOGINOUT still builds the persona from the
+ * binary SYSUAF record and grants nothing beyond it. GETLOGIN is an ordinary
+ * read (like RESOLVE): absent/empty is the honest "no network pre-auth", on
+ * which LOGINOUT falls back to the interactive prompt (fail-closed, INV-6).
+ *
+ * A DEDICATED arg struct (not a widened vms_terminal_args) so the RTAn:
+ * create/delete/resolve request numbers and their frozen size are untouched.
+ * Placed after VMS_USERNAME_SIZE because the username field uses it.
+ */
+struct vms_termlogin_args {
+    char     devnam[VMS_DEVNAM_SIZE];     /* the RTAn: terminal (in)           */
+    char     username[VMS_USERNAME_SIZE]; /* SETLOGIN: in. GETLOGIN: out.      */
+    uint32_t status;                      /* return: SS$_ status               */
+    uint32_t pad;
+};
+
+#define VMS_IOCTL_TERM_SETLOGIN _IOWR(VMS_IOC_MAGIC, 0x5c, struct vms_termlogin_args)
+#define VMS_IOCTL_TERM_GETLOGIN _IOWR(VMS_IOC_MAGIC, 0x5d, struct vms_termlogin_args)
+
+_Static_assert(sizeof(struct vms_termlogin_args) == 56,
+               "struct vms_termlogin_args changed size -- RTAn: netlogin note would decode at the wrong offsets");
+_Static_assert(VMS_IOCTL_TERM_SETLOGIN == 0xC038565Cu,
+               "VMS_IOCTL_TERM_SETLOGIN encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_TERM_GETLOGIN == 0xC038565Du,
+               "VMS_IOCTL_TERM_GETLOGIN encodes differently here than on the reference build");
 
 /*
  * Invoking CLI command-line bound (vms-f60d). OVMX DESIGN CHOICE

@@ -6,29 +6,32 @@ scope_1_0: undecided
 plan_ref: vms-082
 summary: >
   VMS ships a large family of DEC/VSI compilers. OVMX has exactly one language —
-  C, via tcc (the self-hosting beachhead). Every other VMS language is absent;
-  which of them are in 1.0 scope is an operator call (vms-082) — the "run corpus
-  software" goal (R2) leans on Fortran/COBOL/BASIC, so this is not automatically
-  out-of-scope.
-last_reviewed: 2026-08-13
+  C, via tcc (the self-hosting beachhead; 549 files under third-party/tcc on
+  origin/main). Every other VMS language is absent — grep on origin/main finds no
+  FOR$/COB$/BAS$/PAS$ RTL and no MACRO-32 front-end. Which of them are in 1.0
+  scope is an operator call (vms-082); the "run corpus software" goal (R2) leans
+  on Fortran/COBOL/BASIC, so this is not automatically out-of-scope. Absent
+  languages fail at compile time — the correct failure mode, never a facade.
+last_reviewed: 2026-09-14
 items:
   - {id: c, kind: subsystem, status: implemented, authenticity: real, scope_1_0: in,
      vms: "DEC C / VSI C compiler", evidence: third-party/tcc,
-     notes: "tcc self-hosts inside OVMX (S2, gen2==gen3); independence beachhead, NOT full DEC C nor a perf compiler (rustc/Rust later). Source-compat is the C target."}
+     notes: "tcc self-hosts inside OVMX (S2, gen2==gen3); independence beachhead, NOT full DEC C nor a perf compiler (rustc/Rust later). Source-compat is the C target. Not 'verified' — no DEC C conformance oracle is gated."}
   - {id: macro32, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: out,
-     vms: "MACRO-32 assembler", notes: "Explicitly out of scope (compatibility-contract.md); tcc's integrated assembler is GAS-syntax only."}
+     vms: "MACRO-32 assembler", evidence: docs/compat/facilities/macro.yaml,
+     notes: "Explicitly out of scope (compatibility-contract.md); tcc's integrated assembler is GAS-syntax only. Cross-listed as the toolchain-domain MACRO-32 assembler row (facilities/macro.yaml)."}
   - {id: macro64, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: stretch,
-     vms: "MACRO-64 (Alpha) assembler", notes: "No native Alpha backend on main either."}
+     vms: "MACRO-64 (Alpha) assembler", notes: "No native Alpha backend on origin/main either; the Alpha object toolchain reads GAS-produced EVAX objects (object-format), not MACRO-64 source."}
   - {id: fortran, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
-     vms: "VAX/DEC/VSI Fortran (77/90/95)", notes: "Central to the scientific corpus. Needs FOR$ RTL + array descriptors + VAX-float support — all absent. Operator scope call."}
+     vms: "VAX/DEC/VSI Fortran (77/90/95)", notes: "Central to the scientific corpus. Needs FOR$ RTL + array descriptors (DSC$K_CLASS_A now DECLARED in descrip.h but unmarshalled) + VAX-float support — all absent. Operator scope call (vms-082)."}
   - {id: cobol, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
-     vms: "VAX/DEC COBOL", notes: "Central to the business corpus. Needs COB$ RTL + packed-decimal (OTS$ gap) + indexed-file multi-key (RMS gap). Operator scope call."}
+     vms: "VAX/DEC COBOL", notes: "Central to the business corpus. Needs COB$ RTL + packed-decimal (OTS$CVT_T_P/CVT_P_T absent per ots.yaml) + indexed-file multi-key (rms$isam_alternate_key absent per rms-api). Operator scope call (vms-082)."}
   - {id: basic, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
-     vms: "VAX/DEC BASIC", notes: "Needs BAS$ RTL + varying-string descriptors (descriptor class VS absent). Operator scope call."}
+     vms: "VAX/DEC BASIC", notes: "Needs BAS$ RTL + varying-string descriptors (DSC$K_CLASS_VS declared in descrip.h but no RTL operates on it). Operator scope call (vms-082)."}
   - {id: pascal, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
-     vms: "VAX/DEC Pascal", notes: "Needs PAS$ RTL. Operator scope call."}
+     vms: "VAX/DEC Pascal", notes: "Needs PAS$ RTL. Operator scope call (vms-082)."}
   - {id: cxx, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: undecided,
-     vms: "DEC / VSI C++", notes: "Operator scope call."}
+     vms: "DEC / VSI C++", notes: "Operator scope call (vms-082)."}
   - {id: ada, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: stretch,
      vms: "DEC Ada / GNAT Pro", notes: "Large; likely post-1.0."}
   - {id: pli, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: stretch,
@@ -36,5 +39,5 @@ items:
   - {id: bliss, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: stretch,
      vms: "BLISS", notes: "VMS's own systems-implementation language."}
   - {id: compilers$_other, kind: subsystem, status: absent, authenticity: n/a, scope_1_0: stretch,
-     vms: "DIBOL, RPG II, APL, CORAL 66, SCAN, DSM/MUMPS, DECTPU-as-language, …",
+     vms: "DIBOL, RPG II, APL, CORAL 66, SCAN, DSM/MUMPS, VAX LISP, DECTPU-as-language, …",
      notes: "The long tail of VMS languages; almost certainly post-1.0."}

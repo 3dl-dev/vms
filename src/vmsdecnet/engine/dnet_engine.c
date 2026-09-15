@@ -22,6 +22,13 @@
 const uint8_t DNET_HELLO_MCAST[DNET_ADDR_LEN] =
     { 0xab, 0x00, 0x00, 0x03, 0x00, 0x00 };
 
+/* AB-00-00-04-00-00: the Phase IV *all-endnodes* multicast a ROUTER sends its
+ * router-hello to (rd vms-0a9). DNA-documented and corroborated by the vms-3be
+ * oracle (a real endnode sends its endnode-hello to AB-00-00-03, the all-routers
+ * multicast -- the mirror of this). Single storage definition. */
+const uint8_t DNET_ROUTER_HELLO_MCAST[DNET_ADDR_LEN] =
+    { 0xab, 0x00, 0x00, 0x04, 0x00, 0x00 };
+
 /* The DEC HIORD prefix of a DECnet Phase IV Ethernet id: AA-00-04-00-<LE addr>.
  * (DNA Phase IV address<->id mapping; corroborated by the vms-3be specimen.) */
 static const uint8_t DNET_HIORD[4] = { 0xaa, 0x00, 0x04, 0x00 };
@@ -95,6 +102,12 @@ int dnet_engine_init(struct dnet_engine *e, unsigned area, unsigned node,
         memcpy(e->hw_mac, hw_mac, DNET_ADDR_LEN);
     e->blksize = blksize ? blksize : 1498; /* vms-3be advertised blksize */
 
+    /* Default role: a non-routing Phase IV endnode (the vms-3be oracle shape).
+     * --router mode flips this via dnet_engine_set_router(). have_dr stays 0 so
+     * our endnode-hello names rtr 0.0 until a router-hello is actually selected. */
+    e->node_type = DNET_NODETYPE_ENDNODE;
+    e->have_dr   = 0;
+
     /* Drive our own emission cadence + the neighbour listen timers off the
      * rung-3 adjacency SM. t3=0 selects the oracle default (15 s). */
     if (dnet_adj_init(&e->adj, e->my_id, t3, 0, now) != DNET_ADJ_OK)
@@ -126,8 +139,17 @@ static void engine_fill_hello(const struct dnet_engine *e,
      * prefix AA-00-04-00 followed by the LE address 00:00 (aa:00:04:00:00:00),
      * NOT six zero bytes. That is exactly what the vms-3be VAX put on the wire
      * (specimen #1 offsets 24..29), and matching it makes our HELLO byte-
-     * identical to the oracle. */
-    (void)dnet_id_from_addr(0, 0, h->neighbor);
+     * identical to the oracle.
+     *
+     * rd vms-0a9: once this endnode has SELECTED a designated router (heard a
+     * router-hello and picked the highest-priority router, see rx_frame), it
+     * names THAT router's Ethernet id here -- the "rtr" field a real Phase IV
+     * endnode flips from 0.0 to the DR's address. With no router selected
+     * (have_dr == 0) it stays the oracle-identical 0.0 id. */
+    if (e->have_dr)
+        memcpy(h->neighbor, e->dr_id, DNET_ADDR_LEN);
+    else
+        (void)dnet_id_from_addr(0, 0, h->neighbor);
     h->timer    = e->adj.t3;         /* our advertised T3 (seconds) */
     h->mpd      = 0;
     h->datalen  = 2;                 /* vms-3be: 2 bytes of test data */
@@ -163,6 +185,97 @@ int dnet_engine_build_hello_frame(const struct dnet_engine *e,
     return DNET_ENGINE_OK;
 }
 
+/* --- Phase IV ROUTER run-mode (rd vms-0a9) -------------------------------- */
+
+int dnet_engine_set_router(struct dnet_engine *e, uint8_t priority)
+{
+    if (!e)
+        return DNET_ENGINE_EINVAL;
+    e->node_type       = DNET_NODETYPE_L1ROUTER;
+    e->router_priority = priority ? priority
+                                  : (uint8_t)DNET_ROUTER_PRIORITY_DEFAULT;
+    return DNET_ENGINE_OK;
+}
+
+int dnet_engine_is_router(const struct dnet_engine *e)
+{
+    return e && e->node_type == DNET_NODETYPE_L1ROUTER;
+}
+
+/* Fill a decoded router-hello struct with THIS router's advertised identity.
+ * EVERY field is grounded from the DNA Phase IV routing spec + the decode struct,
+ * or honest-zeroed where ungrounded (INV-6, ⭐⭐ never-crash-a-peer: this frame
+ * may one day reach a real endnode, so no byte is fabricated). */
+static void engine_fill_router_hello(const struct dnet_engine *e,
+                                     struct dnet_router_hello *r)
+{
+    memset(r, 0, sizeof(*r));
+    r->rflags   = DNET_RFLAG_ROUTER_HELLO; /* 0x0b: control, msg type 5 (router hello) */
+    r->version  = 2;                        /* DNA version -- the vms-3be oracle value */
+    r->eco      = 0;
+    r->user_eco = 0;
+    memcpy(r->id, e->my_id, DNET_ADDR_LEN); /* AA-00-04-00-<LE addr>, grounded mapping */
+    /* IINFO node-type = L1 router: the bits that make an endnode treat us as a
+     * designated-router candidate. THE key field of this whole run-mode. */
+    r->iinfo    = DNET_NODETYPE_L1ROUTER;
+    r->blksize  = e->blksize;               /* oracle-advertised max receive block */
+    /* PRIORITY: our designated-router election priority -- a real routing field
+     * whose VALUE is an operator config (not a fabricated wire byte). */
+    r->priority = e->router_priority;
+    /* AREA: tcpdump documents this router-hello byte as "reserved"; the vms-3be
+     * endnode oracle emits 0 in its area field, so honest-omit -> 0. */
+    r->area     = 0;
+    r->timer    = e->adj.t3;                /* our advertised T3 cadence (oracle 15 s) */
+    r->mpd      = 0;                         /* reserved / must-be-zero */
+    /* RSLIST tail (mandatory on a conformant Phase IV router hello -- a real
+     * VMS VAX raises routing event 4.4 and never selects us if it is absent,
+     * rd vms-df5). We advertise n = 0: an honest "no other routers reported".
+     * The encoder derives the RSLIST-length byte (= 8) and emits the reserved
+     * 7-byte Name (memset-zero here) and RSLIST-count = 0, for a 27-byte
+     * routing message. No router-list entry is fabricated (INV-6). */
+    r->rslist_count = 0;
+}
+
+int dnet_engine_build_router_hello_frame(const struct dnet_engine *e,
+                                         uint8_t *frame_out, size_t cap,
+                                         size_t *len_out)
+{
+    if (!e || !frame_out)
+        return DNET_ENGINE_EINVAL;
+    if (e->node_type != DNET_NODETYPE_L1ROUTER)
+        return DNET_ENGINE_EINVAL;  /* only a router emits router-hellos */
+    if (cap < (size_t)DNET_ETH_HDRLEN + DNET_ETH_MIN_PAYLOAD)
+        return DNET_ENGINE_ENOSPACE;
+
+    /* 14-byte Ethernet II header: dst = all-endnodes multicast, src = our id,
+     * ethertype 0x6003 (big-endian on the wire). */
+    memcpy(frame_out, DNET_ROUTER_HELLO_MCAST, DNET_ADDR_LEN);   /* dst */
+    memcpy(frame_out + 6, e->my_id, DNET_ADDR_LEN);             /* src */
+    frame_out[12] = (uint8_t)((DNET_ETHERTYPE >> 8) & 0xff);    /* 0x60 */
+    frame_out[13] = (uint8_t)(DNET_ETHERTYPE & 0xff);          /* 0x03 */
+
+    struct dnet_router_hello r;
+    engine_fill_router_hello(e, &r);
+
+    size_t plen = 0;
+    int rc = dnet_router_hello_encode(&r, frame_out + DNET_ETH_HDRLEN,
+                                      cap - DNET_ETH_HDRLEN, &plen);
+    if (rc != DNET_ROUTER_HELLO_OK)
+        return (rc == DNET_ROUTER_HELLO_ENOSPACE) ? DNET_ENGINE_ENOSPACE
+                                                  : DNET_ENGINE_EINVAL;
+    if (len_out)
+        *len_out = (size_t)DNET_ETH_HDRLEN + plen;
+    return DNET_ENGINE_OK;
+}
+
+void dnet_engine_router_hello_emitted(struct dnet_engine *e, dnet_tick_t now)
+{
+    if (!e)
+        return;
+    dnet_adj_hello_emitted(&e->adj, now);   /* advance the shared T3 cadence */
+    e->router_hello_sent++;
+}
+
 int dnet_engine_rx_frame(struct dnet_engine *e, dnet_tick_t now,
                          const uint8_t *frame, size_t len,
                          uint8_t from_out[DNET_ADDR_LEN],
@@ -190,16 +303,71 @@ int dnet_engine_rx_frame(struct dnet_engine *e, dnet_tick_t now,
         return 0;
     }
 
+    /* Peek the routing control type (RFLAGS) to dispatch to the right codec.
+     * It sits at frame[ETH_HDR + LENPREFIX]; guard the read (the shared codec
+     * length prefix leaves at least LENPREFIX bytes, but not necessarily the
+     * RFLAGS byte after it). */
+    if (len < (size_t)DNET_ETH_HDRLEN + DNET_HELLO_LENPREFIX + 1) {
+        e->frames_dropped++;
+        return 0;
+    }
+    uint8_t rflags = frame[DNET_ETH_HDRLEN + DNET_HELLO_LENPREFIX];
+
+    /* --- ROUTER-hello: drive endnode designated-router selection (rd vms-0a9).
+     * An endnode picks the highest-priority router it has heard as its DR (ties
+     * broken by higher address, the DNA tie-break) and later names it in the
+     * NEIGHBOR field of its own endnode-hello (engine_fill_hello). This is the
+     * endnode half of the router run-mode: the field a real Phase IV endnode
+     * flips from rtr 0.0 to the DR's address. */
+    if (rflags == DNET_RFLAG_ROUTER_HELLO) {
+        struct dnet_router_hello r;
+        int rrc = dnet_router_hello_decode(frame + DNET_ETH_HDRLEN,
+                                           len - DNET_ETH_HDRLEN, &r, NULL);
+        if (rrc != DNET_ROUTER_HELLO_OK) {
+            e->frames_dropped++;
+            return 0;
+        }
+        unsigned nt = dnet_router_hello_nodetype(&r);
+        if (nt != DNET_NODETYPE_L1ROUTER && nt != DNET_NODETYPE_L2ROUTER) {
+            /* A router-hello that does not actually advertise a router node-type
+             * is not a DR candidate: honest drop, never a fabricated select. */
+            e->frames_dropped++;
+            return 0;
+        }
+        e->router_hello_recv++;
+        if (from_out)
+            memcpy(from_out, r.id, DNET_ADDR_LEN);
+
+        uint16_t cand_addr = dnet_addr_from_id(r.id);
+        int take = 0;
+        if (!e->have_dr)
+            take = 1;
+        else if (r.priority > e->dr_priority)
+            take = 1;
+        else if (r.priority == e->dr_priority &&
+                 cand_addr > dnet_addr_from_id(e->dr_id))
+            take = 1;   /* DNA tie-break: higher address wins */
+        if (take) {
+            memcpy(e->dr_id, r.id, DNET_ADDR_LEN);
+            e->dr_priority = r.priority;
+            e->have_dr     = 1;
+        }
+        if (state_out)
+            *state_out = dnet_adj_state_of(&e->adj, r.id);
+        return 1;
+    }
+
+    /* --- ENDNODE-hello: drive this node's neighbour adjacency SM. Anything that
+     * is neither an endnode-hello nor a router-hello is honestly dropped. */
+    if (rflags != DNET_RFLAG_ENDNODE_HELLO) {
+        e->frames_dropped++;
+        return 0;
+    }
+
     struct dnet_endnode_hello h;
     int rc = dnet_hello_decode(frame + DNET_ETH_HDRLEN,
                                len - DNET_ETH_HDRLEN, &h, NULL);
     if (rc != DNET_HELLO_OK) {
-        e->frames_dropped++;
-        return 0;
-    }
-    /* Only endnode-HELLO control messages drive this endnode's adjacency here
-     * (router HELLOs are the sibling codec's job, a later rung). */
-    if (h.rflags != DNET_RFLAG_ENDNODE_HELLO) {
         e->frames_dropped++;
         return 0;
     }
@@ -270,12 +438,21 @@ int dnet_engine_build_data_frame(const struct dnet_engine *e,
     frame_out[13] = (uint8_t)(DNET_ETHERTYPE & 0xff);
 
     uint8_t *p = frame_out + DNET_ETH_HDRLEN;
-    /* Data-link 2-byte LE length prefix = routing header + NSP PDU (everything
-     * after the prefix), matching the specimen-#3 framing. */
-    uint16_t rlen = (uint16_t)(DNET_DATA_RHDR_LEN + pdu_len);
+    /* Data-link 2-byte LE length prefix = pad + routing header + NSP PDU
+     * (everything after the prefix), matching the specimen-#3 framing (the
+     * captured VAX CI's prefix 0x0033 = 51 = 1 pad + 21 rhdr + 29 NSP). */
+    uint16_t rlen = (uint16_t)(DNET_DATA_PAD_LEN + DNET_DATA_RHDR_LEN + pdu_len);
     p[0] = (uint8_t)(rlen & 0xff);
     p[1] = (uint8_t)((rlen >> 8) & 0xff);
     p += DNET_DATA_LENPREFIX;
+
+    /* Phase IV intra-Ethernet PADDING field (rd vms-a70). Real VMS prepends this
+     * before the routing-flags byte on UNICAST routed data frames and silently
+     * DISCARDS a unicast CI that lacks it at the routing layer; emitting it makes
+     * our CI byte-identical to the captured VAX wire (specimen #3: 0x81). HELLO /
+     * router-hello control multicasts stay padless -- they are built elsewhere
+     * (dnet_engine_build_hello_frame / router-hello encoder), never this path. */
+    *p++ = DNET_DATA_PAD_BYTE;
 
     /* 21-byte long-data routing header. */
     p[0] = DNET_RFLAG_LONG_DATA;      /* RFLG */
@@ -304,7 +481,9 @@ int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
 {
     if (!frame || !nsp_pdu || !pdu_len)
         return DNET_ENGINE_EINVAL;
-    if (len < DNET_DATA_NSP_OFF)
+    /* Enough for the Ethernet header + the LE length prefix (rlen bounds the
+     * routing message below; pad + routing header are validated against it). */
+    if (len < (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX)
         return DNET_ENGINE_EINVAL;
     uint16_t etype = (uint16_t)((frame[12] << 8) | frame[13]);
     if (etype != DNET_ETHERTYPE)
@@ -313,20 +492,35 @@ int dnet_engine_parse_data_frame(const uint8_t *frame, size_t len,
     const uint8_t *p = frame + DNET_ETH_HDRLEN;
     uint16_t rlen = (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
     p += DNET_DATA_LENPREFIX;
-    if (p[0] != DNET_RFLAG_LONG_DATA)     /* not a long-data frame (e.g. a HELLO) */
+    /* The declared routing message must fit the captured frame. After this,
+     * [p, p+rlen) is entirely within the frame -- safe to inspect. */
+    if ((size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + rlen > len)
         return DNET_ENGINE_EINVAL;
-    /* The declared routing length must cover the fixed header and fit the frame. */
-    if (rlen < DNET_DATA_RHDR_LEN ||
-        (size_t)DNET_ETH_HDRLEN + DNET_DATA_LENPREFIX + rlen > len)
+
+    /* Strip an optional Phase IV intra-Ethernet PADDING field (rd vms-a70): a
+     * leading byte with the 0x80 bit set is a pad field of (byte & 0x7f) bytes
+     * total. Real VMS and OVMX both prepend one (0x81) on unicast routed data
+     * frames; tolerate its absence so a legacy padless frame still parses. */
+    size_t pad = 0;
+    if (rlen >= 1 && (p[0] & 0x80))
+        pad = (size_t)(p[0] & 0x7f);
+    if ((size_t)rlen < pad + DNET_DATA_RHDR_LEN)   /* room for pad + routing header */
+        return DNET_ENGINE_EINVAL;
+
+    const uint8_t *rh = p + pad;              /* routing header after the pad */
+    /* Accept the long-data RFLG masking the intra-Ethernet flag: a real VAX
+     * clears it on its replies (0x26) where OVMX/the initiator sets it (0x2e).
+     * A HELLO (0x0d) / router-hello (0x0b) still fails this test. */
+    if (!DNET_RFLAG_IS_LONG_DATA(rh[0]))      /* not a long-data frame (e.g. a HELLO) */
         return DNET_ENGINE_EINVAL;
 
     if (dst_id_out)
-        memcpy(dst_id_out, p + 3, DNET_ADDR_LEN);
+        memcpy(dst_id_out, rh + 3, DNET_ADDR_LEN);
     if (src_id_out)
-        memcpy(src_id_out, p + 11, DNET_ADDR_LEN);
+        memcpy(src_id_out, rh + 11, DNET_ADDR_LEN);
 
-    *nsp_pdu = p + DNET_DATA_RHDR_LEN;
-    *pdu_len = (size_t)(rlen - DNET_DATA_RHDR_LEN);
+    *nsp_pdu = rh + DNET_DATA_RHDR_LEN;
+    *pdu_len = (size_t)(rlen - pad - DNET_DATA_RHDR_LEN);
     return DNET_ENGINE_OK;
 }
 
@@ -412,6 +606,18 @@ int dnet_engine_link_close(struct dnet_engine *e, uint16_t reason,
     if (dnet_link_disconnect(&e->link, reason, &di, now) != DNET_LINK_OK)
         return DNET_ENGINE_EINVAL;
     return engine_wrap_pdu(e, &di, frame_out, cap, len_out);
+}
+
+int dnet_engine_link_service(struct dnet_engine *e,
+                             uint8_t *frame_out, size_t cap, size_t *len_out,
+                             dnet_tick_t now)
+{
+    if (!e || !frame_out || !e->link_active)
+        return DNET_ENGINE_EINVAL;
+    struct dnet_nsp_msg ls;
+    if (dnet_link_link_service(&e->link, &ls, now) != DNET_LINK_OK)
+        return DNET_ENGINE_EINVAL;
+    return engine_wrap_pdu(e, &ls, frame_out, cap, len_out);
 }
 
 /* Advance the active link's timers (Connect Initiate retransmit / give-up). If
@@ -526,7 +732,11 @@ void dnet_engine_show_executor(const struct dnet_engine *e, FILE *out)
     fprintf(out, "State                    = on\n");
     /* INV-0: OVMX-branded identification -- never claims "DECnet for OpenVMS". */
     fprintf(out, "Identification           = OVMX DECnet-compatible networking\n");
-    fprintf(out, "Type                     = nonrouting IV (endnode)\n");
+    /* Honestly reflect the run-mode role (rd vms-0a9): router mode advertises an
+     * L1 router node-type on the wire, so the NCP surface must say so too. */
+    fprintf(out, "Type                     = %s\n",
+            e->node_type == DNET_NODETYPE_L1ROUTER ? "routing IV (L1 router)"
+                                                   : "nonrouting IV (endnode)");
 }
 
 void dnet_engine_show_circuit(const struct dnet_engine *e, FILE *out)
@@ -537,7 +747,13 @@ void dnet_engine_show_circuit(const struct dnet_engine *e, FILE *out)
     fprintf(out, "Known Circuit Volatile Summary\n");
     fprintf(out, "Circuit = %s\n", e->circuit);
     fprintf(out, "State                    = on\n");
-    fprintf(out, "Designated router        = none\n");
+    /* Honestly report the selected designated router (rd vms-0a9): "none" until
+     * this endnode has actually heard + selected a router-hello. */
+    if (e->have_dr)
+        fprintf(out, "Designated router        = %s\n",
+                dnet_addr_str(dnet_addr_from_id(e->dr_id), a, sizeof(a)));
+    else
+        fprintf(out, "Designated router        = none\n");
     fprintf(out, "Hello timer              = %u\n", (unsigned)e->adj.t3);
     fprintf(out, "Adjacent nodes           = %zu\n", e->adj.count);
     (void)a;

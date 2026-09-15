@@ -1,5 +1,24 @@
 # Scoping — real VAX MOUNTs an OVMX-MSCP-served unit (the last cluster-1.0 gap)
 
+> ## ⛔ SUPERSEDED (2026-09-14) — file:line refs predate the cluster reset
+>
+> This scoping record is grounded on a **pre-reset** tree (2026-08-31, HEAD
+> `d61423c2`). The **2026-09-02 cluster reset** deleted the userspace SCS daemon
+> (`src/vmsscs/`, `scsd.c`) and the userspace responder
+> `src/vmsscs/scs_mscp_srv.c`, moving the MSCP disk server **into the executive**.
+> Every `scs_mscp_srv.c:NNN` and `scsd.c:NNN` line reference below is dead.
+>
+> **Successor (current, executive-resident):** server glue
+> `src/kernel-core/vms_mscp_srv.c` + pure FSM `vms_mscp_srv_fsm.{c,h}` + block I/O
+> `vms_mscp_srv_io.c`; wire frames `vms_cluster_codec_mscp.{c,h}`. Re-derive
+> current MSCP-serve status from the compat register (`mscp-serve.yaml`).
+>
+> **The gap analysis below (§"The true remaining gap") is still substantively the
+> shape of the work** — a real VAX MOUNTing an OVMX-served unit, the ungrounded
+> block-transfer header constants, and the missing byte-exact ONLINE-END oracle —
+> but re-anchor each claim to the executive files above before acting, and treat
+> the `src/vmsscs/*` file:line citations and the "rd purge" list as historical.
+
 > Design/scoping record for the V0.6-9-worthy increment. Grounded on origin/main
 > (worktree HEAD d61423c2), 2026-08-31. Clean-room (Rule 8): every field cited
 > below is from a lab capture we ran (vaxlab-9, real-VAX↔real-VAX, 2026-08-06,

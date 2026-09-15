@@ -36,13 +36,31 @@
 #include <netinet/in.h>
 
 #include "vms/pcb.h"
+#include "rms/rms.h"        /* rms_stage_over_acp: read the DB off the ODS-2 ACP */
 #include "tcpip_inetd.h"
+#include "tcpip_inetd_ident.h"  /* R4 G1: per-service run-as identity drop before execv */
+
+/* The production identity hook: drop the spawned child to the service's
+ * configured SYSUAF run-as account (executive setident + Linux cred drop),
+ * fail-closed. Passed to accept_dispatch so tcpip_inetd_spawn establishes it in
+ * the child before execv -- never launches a service as INETD's SYSTEM/all-privs
+ * identity (rd vms-8bd). */
+static int inetd_drop_identity(const struct tcpip_service *svc)
+{
+    return tcpip_inetd_establish_service_identity(svc->user, NULL, NULL);
+}
 
 /* Default service DB path when none is given on the command line. The running
+ * OVMX system resolves SYS$SYSTEM: through the Files-11 ACP; on a booted distro
+ * the DB is ODS-2-resident there (NOT on the Linux VFS), so main() stages it off
+ * the ACP via rms_stage_over_acp before reading (rd vms-21b) -- the same
+ * materialize-off-the-ACP the aux server does for the service images it launches.
+ * A LITERAL path (argv[1], leading '/') is read directly (the in-guest KE test
+ * harness's own fixture path). OLD literal below kept as the historical note.
  * OVMX system resolves SYS$SYSTEM: through the Files-11 ACP; this literal is the
  * rootfs staging path so the image is runnable in a plain build/test shell too. */
 #define DEFAULT_SERVICE_DB \
-    "/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT"
+    "SYS$SYSTEM:TCPIP$SERVICE.DAT"
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -90,11 +108,30 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    db_text = slurp(db_path);
-    if (!db_text) {
-        fprintf(stderr, "%%TCPIP-F-NOSERVICEDB, cannot read service database %s: %s\n",
-                db_path, strerror(errno));
-        return 1;
+    /* The DB lives at SYS$SYSTEM: on the ACP-only ODS-2 system disk (NOT on the
+     * boot initramfs Linux VFS), so a VMS-filespec path is materialized off the
+     * ACP into a tmpfs copy first (rms_stage_over_acp -- the shared vmsrms stager,
+     * vms-21b) and THAT is read. A leading-'/' path (the KE test's literal fixture)
+     * is read directly. Fail honestly if the DB is not on the ACP volume. */
+    {
+        static char staged_db[512];
+        const char *read_path = db_path;
+        if (db_path[0] != '/') {
+            uint32_t st = rms_stage_over_acp(db_path, "/tmp/ovmx_tcpip_service.dat");
+            if (!(st & 1u)) {          /* VMS status: low bit set == success */
+                fprintf(stderr, "%%TCPIP-F-NOSERVICEDB, cannot stage service database %s off the ACP (status %#x)\n",
+                        db_path, st);
+                return 1;
+            }
+            snprintf(staged_db, sizeof(staged_db), "/tmp/ovmx_tcpip_service.dat");
+            read_path = staged_db;
+        }
+        db_text = slurp(read_path);
+        if (!db_text) {
+            fprintf(stderr, "%%TCPIP-F-NOSERVICEDB, cannot read service database %s: %s\n",
+                    db_path, strerror(errno));
+            return 1;
+        }
     }
 
     nsvc = tcpip_inetd_parse_db(db_text, svcs, TCPIP_INETD_MAX_SERVICES);
@@ -118,6 +155,20 @@ int main(int argc, char *argv[])
             pfd[i].fd = -1;
             continue;
         }
+        /* Pre-flight: refuse to ADVERTISE a service whose image cannot be staged
+         * or executed. Otherwise the port binds, the operator sees the service
+         * "listening", and every client connect is silently dropped when spawn's
+         * staging/execv fails -- a bound-but-unserviceable facade (INV-6). The
+         * executive is up (listen just bound over BGn:), so a stage failure here
+         * genuinely means the image is not on the ACP volume, not an absent
+         * executive (that path already short-circuited with NOSUCHDEV above). */
+        if (tcpip_inetd_preflight(&svcs[i]) < 0) {
+            fprintf(stderr, "%%TCPIP-W-NOIMAGE, service %s port %u: image %s cannot be staged (%s) -- not bound\n",
+                    svcs[i].name, (unsigned)svcs[i].port, svcs[i].image, strerror(errno));
+            (void)ovmx_socket_close(listen_h[i]);
+            pfd[i].fd = -1;
+            continue;
+        }
         pfd[i].fd = ovmx_readyfd(listen_h[i]);  /* executive readiness fd for poll() */
         pfd[i].events = POLLIN;
         printf("%%TCPIP-I-BOUND, service %s listening on port %u (image %s)\n",
@@ -130,10 +181,23 @@ int main(int argc, char *argv[])
     }
 
     /* The auxiliary-server accept loop: poll the listeners, dispatch the ready
-     * ones to their configured service image, reap exited services. */
+     * ones to their configured service image, reap exited services. `live` counts
+     * spawned service children so the loop can cap concurrency (rd vms-bb4, R4 G2). */
+    int live = 0;
     while (!g_stop) {
         int r, st;
         pid_t w;
+
+        /* Fork-flood back-pressure (R4 G2): at the child cap, stop selecting the
+         * listeners for POLLIN so new connections queue in the listen backlog
+         * instead of forking an unbounded number of children. Re-enabled as soon
+         * as a child exits and `live` drops back below TCPIP_INETD_MAXCHILD. */
+        {
+            short ev = tcpip_inetd_may_accept(live) ? POLLIN : 0;
+            for (i = 0; i < nsvc; i++)
+                if (pfd[i].fd >= 0)
+                    pfd[i].events = ev;
+        }
 
         r = poll(pfd, (nfds_t)nsvc, 1000);
         if (r < 0) {
@@ -143,11 +207,16 @@ int main(int argc, char *argv[])
         for (i = 0; i < nsvc && r > 0; i++) {
             if (pfd[i].fd < 0 || !(pfd[i].revents & POLLIN))
                 continue;
-            (void)tcpip_inetd_accept_dispatch(listen_h[i], &svcs[i], NULL);
+            /* Drop the spawned child to the service's run-as identity (G1,
+             * inetd_drop_identity) AND count it toward the concurrency cap so the
+             * back-pressure gate (G2) can stop accepting at MAXCHILD. */
+            if (tcpip_inetd_accept_dispatch(listen_h[i], &svcs[i], NULL,
+                                            inetd_drop_identity) > 0)
+                live++;                         /* a service child was spawned */
         }
-        /* Reap any finished service images (non-blocking). */
+        /* Reap any finished service images (non-blocking); each exit frees a slot. */
         while ((w = waitpid(-1, &st, WNOHANG)) > 0)
-            ;
+            if (live > 0) live--;
     }
 
     for (i = 0; i < nsvc; i++)

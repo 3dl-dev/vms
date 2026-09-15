@@ -4,17 +4,22 @@
 > config-**authoring** gap in the clustering program. Source-of-truth for the
 > `vms-cfgcluster` epic (see rd). Written 2026-08-13.
 
-> **Consumer pivot (2026-09-02).** The operator-facing authoring surface below
-> (SYSGEN/SYSMAN, MODPARAMS.DAT, AUTOGEN, CLUSTER_AUTHORIZE.DAT, CLUSTER_CONFIG_LAN.COM)
-> remains the right plan — it is mechanism-agnostic DCL/tooling work, not the
-> userspace-`scsd` cluster orchestration the operator retired that day (see
-> `docs/design-faithful-cluster-executive.md`, branch `feat/cluster-executive`).
-> What changes is the *consumer* of the authored parameters: R1's acceptance
-> below is phrased as "`scsd`/`SHOW CLUSTER` reflect them" (true for today's
-> shipped main), but going forward the executive itself must own the SYSGEN
-> state — `VMS_IOCTL_SYSGEN_LOAD` has landed on `feat/cluster-executive`
-> (unmerged) feeding `struct vms_cluster` directly. Re-target R1–R4's
-> acceptance criteria to that path once the branch merges.
+> **Consumer pivot (2026-09-02; updated 2026-09-14).** The operator-facing
+> authoring surface below (SYSGEN/SYSMAN, MODPARAMS.DAT, AUTOGEN,
+> CLUSTER_AUTHORIZE.DAT, CLUSTER_CONFIG_LAN.COM) remains the right plan — it is
+> mechanism-agnostic DCL/tooling work, not the userspace-`scsd` cluster
+> orchestration the operator retired on 2026-09-02 (the **cluster reset** deleted
+> `src/vmsscs/`/`scsd.c`; the connection manager is now executive-resident in
+> `vms.ko`, `src/kernel-core/` — see `docs/design-faithful-cluster-executive.md`).
+> What changed is the *consumer* of the authored parameters: **the executive now
+> owns the SYSGEN state directly.** `VMS_IOCTL_SYSGEN_LOAD` has **merged**
+> (`src/kernel/vms_ioctl.h`, dispatched `vms_ioctl_sysgen_load` in
+> `src/kernel-core/vms_devtab.c`), committing the params into `struct vms_cluster`
+> via `cluster_sysgen_load()` (`src/kernel-core/vms_cluster_sysgen.c`); STARTUP.EXE's
+> boot path issues it once after reading the `.PAR` store. Re-target R1–R4's
+> acceptance criteria to that path: the proof is that the **executive's** loaded
+> params (and `SHOW CLUSTER`) reflect the authored values, not a userspace daemon's
+> log.
 
 > **Milestone reconciliation (2026-08-30, vms-d1e — Rule 10).** The original
 > release ladder below marked R1 and R2 as shipping at **0.5** ("operator
@@ -30,17 +35,21 @@
 
 ## The gap (measured)
 
-Config **reading** is faithful and DONE (`vms-ci.8`, merged d76a0c2): `scsd`
-resolves SCSNODE / SCSSYSTEMID / group+password from a typed SYSGEN store that
-mirrors `VAXVMSSYS.PAR`, with hardcoded values reduced to honest fallbacks
-(`src/vmsscs/scsd.c:206,237,257`).
+Config **reading** is faithful and DONE (`vms-ci.8`, merged d76a0c2; re-homed by
+the 2026-09-02 cluster reset): the boot path resolves SCSNODE / SCSSYSTEMID /
+group+password from a typed SYSGEN store that mirrors `VAXVMSSYS.PAR` and commits
+them into the **executive** via `VMS_IOCTL_SYSGEN_LOAD` →
+`cluster_sysgen_load()` (`src/kernel-core/vms_cluster_sysgen.c`), which enforces
+`vms_cluster.h` §2's own validity rule (SCSNODE is fatal-if-absent once
+VAXCLUSTER≥1). The retired userspace `scsd` reader (`src/vmsscs/scsd.c`) that
+originally did this is gone.
 
 Config **authoring** — the operator setting that config *the VMS way* — is
 split across three states:
 
 | Piece | State | Where |
 |---|---|---|
-| SYSGEN param **read** at boot | DONE | `vms-ci.8`; `scsd.c` |
+| SYSGEN param **read** at boot | DONE | `vms-ci.8`; executive `cluster_sysgen_load()` via `VMS_IOCTL_SYSGEN_LOAD` |
 | `.PAR` write mechanism, conversational SYSBOOT | in epic | `vms-46c` (boot-faithful) |
 | SYSMAN PARAMETERS SET/SHOW (string params) | filed, numeric-only today | `vms-8da` |
 | CLUSTER_AUTHORIZE hash `(group#,pw)→credential` | filed (RE) | `vms-732`; must-auth decision `vms-405` |
@@ -66,7 +75,8 @@ separate tracking item.
   persisted to the `.PAR` store. **Demonstrates the `vms-ci.8` reading that
   already ships.** Deps: `vms-8da` (type-aware strings), `vms-46c` (.PAR write),
   `vms-41d` (VOTES reconciles on the VC). Proof: set params → WRITE CURRENT →
-  reboot → `scsd`/`SHOW CLUSTER` reflect them, bracketed against a control.
+  reboot → the executive's loaded params / `SHOW CLUSTER` reflect them, bracketed
+  against a control.
 
 - **R2 — MODPARAMS.DAT + AUTOGEN drive cluster params.**
   `→ deferred (NOT shipped as of 0.6)`
@@ -89,7 +99,7 @@ separate tracking item.
 
 | Milestone | Lands | Demonstrates |
 |---|---|---|
-| **0.5 / 0.6 (shipped)** | config **reading** only (`vms-ci.8`) | `scsd` reads SCSNODE/SCSSYSTEMID/ALLOCLASS/RECNXINTERVAL from the pre-seeded `.PAR` and adopts them on (re)boot; operator authors by editing the pre-seeded store |
+| **0.5 / 0.6 (shipped)** | config **reading** only (`vms-ci.8`) | the boot path reads SCSNODE/SCSSYSTEMID/ALLOCLASS/RECNXINTERVAL from the pre-seeded `.PAR` and the **executive** adopts them on (re)boot (`VMS_IOCTL_SYSGEN_LOAD`); operator authors by editing the pre-seeded store |
 | **deferred (NOT shipped 0.6)** | R1, R2 | operator authors cluster identity/votes *the VMS way* (SYSMAN string params, `.PAR` write / SYSBOOT, AUTOGEN); node adopts on reboot — depends on `vms-8da`, `vms-46c`, `vms-41d`, none landed |
 | **1.0** | R3, R4 | arbitrary-cluster authentication + one-command `CLUSTER_CONFIG_LAN.COM` provisioning → join |
 

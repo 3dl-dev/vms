@@ -116,7 +116,27 @@ struct dlm_scs_request {
 	vms_scs_sysid_t from_sysid;
 	uint8_t        category;     /* SCA category, e.g. 0x02 */
 	uint8_t        opcode;       /* e.g. 0x01 ENQ/lookup, 0x0d rebuild record */
-	uint8_t        pad[2];
+	/*
+	 * DID THE SENDER PROVE IT RUNS THIS IMPLEMENTATION? (rd vms-1ee.)
+	 *
+	 * Read by the CONNECTION MANAGER off the sender's CSB
+	 * (`peer_is_ours`, derived where both software-version tokens are in
+	 * scope -- cnxman_csb_set_swver), and handed here rather than
+	 * re-derived, because a layer that re-decides a trust question is a
+	 * layer that can decide it differently.
+	 *
+	 * WHY THE DLM CARES AND NOBODY ELSE DOES. OVMX's cat-0x02 arm is
+	 * grounded against its OWN protocol; §4(f).1 grounds the ENQ/CONVERT
+	 * request and its grant/deny reply shape and nothing else, and the
+	 * completion/commit table is explicitly PROVISIONAL. Sending any of that
+	 * at a real VAX's lock manager is how LOCKMGRERR and INVLOCKID happened.
+	 * So the arm serves -- and the connection manager emits -- only between
+	 * systems whose advertised version token is byte-identical to our own.
+	 * 0 covers BOTH "advertised something else" and "advertised nothing":
+	 * neither is proof (INV-6).
+	 */
+	uint8_t        peer_is_ours;
+	uint8_t        pad;
 	const uint8_t *body;
 	uint32_t       len;
 };
@@ -167,6 +187,24 @@ struct dlm_scs_role_ops {
 	 * through an ioctl.
 	 */
 	void (*member_departed)(void *ctx, vms_csid_t csid);
+
+	/*
+	 * THE QUORUM EDGE (FC-P8.1, rd vms-b6d). The connection manager has just
+	 * recomputed the quorum arithmetic and the ENFORCEABLE answer CHANGED:
+	 * `quorum_lost` nonzero means this node has entered a real quorum hang
+	 * (it had perceived quorum and has now lost it -- never the honest
+	 * arithmetic-not-finished zero of a join, which cnxman_quorum_hang_active
+	 * filters out), zero means quorum is back.
+	 *
+	 * It is an EDGE, not a poll: it fires only when the answer changes, on
+	 * the fork thread, from the recompute that observed it. The arm's job on
+	 * the regain edge is to release the requests the hang stalled; on the
+	 * loss edge there is nothing to do, because the gate the lock engine
+	 * consults (vms_dlm_quorum.h) is already answering "hang" to every new
+	 * request. Optional: a NULL leaves the engine ungated, which is what a
+	 * node with no DLM arm should be.
+	 */
+	void (*quorum_changed)(void *ctx, int quorum_lost);
 
 	void *ctx;
 };

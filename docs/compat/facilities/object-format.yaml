@@ -16,7 +16,7 @@ summary: >
   identity rather than being forced to emit ELF. EVAX layouts are clean-room
   from the public binutils include/vms headers and verified byte-exact against
   fixtures the reference `alpha-dec-vms-as` emits. VAX OBJ$ records remain out.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: object-format$elf-object-ingest, kind: feature, status: implemented, authenticity: advisory, vms: "LINK.EXE ingestion of relocatable object modules for linking", evidence: "src/vmslink/link.c", notes: "Consumes ELF .o objects (OVMX self-host path); relocation/symbol-resolution semantics real, container format is OVMX-original (Rule 8), not VMS-authentic byte layout."}
   - {id: object-format$ar-whole-archive, kind: feature, status: implemented, authenticity: real, vms: "Whole-archive object-library consumption", evidence: "src/vmslink/link.c", notes: "Standard `ar` archive (load_archive/load_archive_selective); consumption logic real. .OLB (see librarian facility) is an ar container — LINK.EXE already ingests it with no format bridge."}

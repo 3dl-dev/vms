@@ -144,6 +144,7 @@ static void test_votes_zero_never_founds(void)
 	bed_snapshot();
 	check_refused(CNXMAN_COORD_REF_NO_QUORUM,
 		      "a non-voting node asked to found");
+	/* negctl: coord-genesis-refusal-uncounted */
 	ct_check_eq_u32(g.c.genesis_refused_noquorum, 1u,
 			"the refusal is COUNTED (the anti-LARP tripwire)");
 	ct_check_eq_u32(g.c.genesis_opens, 0u, "no founding transition opened");
@@ -177,6 +178,7 @@ static void test_subquorum_never_founds(void)
 	bed_snapshot();
 	check_refused(CNXMAN_COORD_REF_NO_QUORUM,
 		      "a sub-quorum voting node asked to found");
+	/* negctl: coord-genesis-refusal-uncounted */
 	ct_check_eq_u32(g.c.genesis_refused_noquorum, 1u, "counted");
 }
 
@@ -291,6 +293,7 @@ static void test_repeated_attempts_never_drift(void)
 		(void)cnxman_coord_found(&g.c);
 	}
 
+	/* negctl: coord-genesis-refusal-uncounted */
 	ct_check_eq_u32(g.c.genesis_refused_noquorum, 1000u,
 			"every attempt was refused, and counted");
 	ct_check_eq_u32(g.c.genesis_opens, 0u, "not one founding transition");

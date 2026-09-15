@@ -253,6 +253,25 @@ struct cnxman_barrier {
 	 * barrier step" and never "a transition-shaped thing finished".
 	 */
 	uint32_t commits;
+	/*
+	 * THE PHASE-2 COMMITS (rd vms-9c99) -- incremented by
+	 * barrier_commit_phase2(), i.e. at the op-0x0a GO, which is where
+	 * p. 7-42's tasks actually run and where the count, the quorum and this
+	 * node's own CLUSTER flag are decided. This is the counter the join FSM
+	 * promotes on.
+	 *
+	 * WHY NOT `commits` (op-0x0c #12). E79 chose the last barrier release
+	 * because sec 4(q) says membership "follows from the transition
+	 * completing". The reference shows the transition COMMITS at the GO and
+	 * that the 12-step barrier is the lock-rebuild synchronisation which
+	 * follows it: in tests/lab/captures/cn3-achieved-20260905.pcap the
+	 * coordinator committed an ADD and counted the joiner a member from the
+	 * GO onward for the rest of a 600 s run, and NOT ONE op-0x0c was ever
+	 * sent to that joiner. A joiner that waits for op-0x0c #12 there waits
+	 * forever while the cluster already counts it -- an interop hang, not a
+	 * safety margin.
+	 */
+	uint32_t phase2_commits;
 	uint32_t commit_epoch;       /* the epoch that op-0x0c #12 released    */
 	uint8_t  commit_class;       /* its enum vms_cnxman_transition_class   */
 	/*
@@ -399,6 +418,16 @@ struct cnxman_barrier_commit {
  */
 uint32_t cnxman_barrier_commits(const struct cnxman_barrier *b,
 				struct cnxman_barrier_commit *out);
+
+/*
+ * How many transitions this node has COMMITTED AT PHASE 2 -- one per op-0x0a
+ * GO whose tasks ran (rd vms-9c99). Same monotone-snapshot contract as
+ * cnxman_barrier_commits() above, and `out` carries what the coordinator's
+ * nodemap said about THIS node in that very commit, so a caller never has to
+ * re-read a map it did not see.
+ */
+uint32_t cnxman_barrier_phase2_commits(const struct cnxman_barrier *b,
+				       struct cnxman_barrier_commit *out);
 
 /* Fill `out` with the transition in progress; nonzero when there is none (NOT
  * a zeroed struct that reads like a transition at epoch 0). */

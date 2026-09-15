@@ -93,6 +93,15 @@ int ovmx_sshd_fill_passwd(const char *user, struct passwd *pw,
 /* The DCL image path used for pw_shell / the session exec (Linux path). */
 const char *ovmx_sshd_dcl_image_path(void);
 
+/*
+ * Resolve SYS$SYSTEM:LOGINOUT.EXE to the Linux path that activates it (the VMS
+ * filespec translation, then the boot-staging bridge when a staged copy is
+ * present). Returns 1 and fills *out on success, 0 on failure. Shared by the
+ * SSH session handoff (sshd_session.c: the $CREPRC image) and the getpwnam
+ * adapter (pw_shell). See sshd_auth.c.
+ */
+int ovmx_sshd_loginout_path(char *out, size_t outsz);
+
 /* 1 if `path` names the DCL image (basename DCL.EXE) -- the session-shim test
  * for "OpenSSH is about to exec the login shell, which is DCL". */
 int ovmx_sshd_is_dcl_path(const char *path);

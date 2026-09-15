@@ -17,11 +17,13 @@ set -euxo pipefail
 
 BINUTILS_VER=${BINUTILS_VER:-2.43}
 GCC_VER=${GCC_VER:-14.2.0}
-# SHA256 integrity pins (vms-8a06). A from-scratch rebuild (gha layer-cache miss)
-# used to be one ftp.gnu.org hiccup from a red gate — both alpha gates just died on
-# `wget binutils-2.43.tar.xz -> exit 4` — and the fetches carried NO integrity check.
-# binutils is now VENDORED (mirrored like musl); gcc (90MB, too big to vendor) is
-# fetched from GNU's mirror redirector with retries. BOTH are SHA256-enforced here.
+# SHA256 integrity pins (vms-8a06 / vms-00c5). A from-scratch rebuild (gha
+# layer-cache miss) used to be one ftp.gnu.org hiccup from a red gate — both alpha
+# gates just died on `wget binutils-2.43.tar.xz -> exit 4` — and the fetches carried
+# NO integrity check. binutils AND gcc (vms-00c5, the last un-vendored fetch) are now
+# VENDORED (mirrored like musl); the image build is HERMETIC. The wget branches below
+# survive only as a last-resort fallback for a dev tree without the vendored blobs.
+# BOTH are SHA256-enforced here in every case.
 BINUTILS_SHA256=${BINUTILS_SHA256:-b53606f443ac8f01d1d5fc9c39497f2af322d99e14cea5c0b4b124d630379365}
 GCC_SHA256=${GCC_SHA256:-a7b39bc69cbf9e25826c5a60ab26477001f7c08d85cec04bc0e29cabed6f3cc9}
 TARGET=${TARGET:-alpha-dec-vms}
@@ -76,9 +78,12 @@ export PATH="${PREFIX}/bin:${PATH}"
 cd /src
 
 # ---- gcc cc1 (compiler proper) ----
-# NOT vendored (90MB — irreversible git bloat). Hardened for CI-robustness instead
-# (vms-8a06): GNU mirror redirector first, ftp.gnu.org fallback, retries on each, and
-# a SHA256 integrity check on the result (closes the no-integrity-check gap too).
+# VENDORED (vms-00c5), same resolution order as binutils above: (1) the tarball
+# COPY'd to /src by the Dockerfile (tools/cross-alpha-vms/gcc-<ver>.tar.xz), so the
+# image build is HERMETIC and the recurring `wget gcc-14.2.0 -> exit 4` GNU-mirror
+# flake can no longer redden a from-scratch alpha gate; (2) a network fetch (GNU
+# mirror redirector, ftp.gnu.org fallback, retries) as a last resort for a dev tree
+# without the vendored blob. The pinned SHA256 is enforced in EVERY case.
 if [ ! -f "gcc-${GCC_VER}.tar.xz" ]; then
   wget --tries=3 --timeout=30 -q "https://ftpmirror.gnu.org/gnu/gcc/gcc-${GCC_VER}/gcc-${GCC_VER}.tar.xz" \
     || wget --tries=3 --timeout=30 -q "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VER}/gcc-${GCC_VER}.tar.xz"

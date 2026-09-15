@@ -109,6 +109,17 @@ static const struct seed_acct g_seed[] = {
      * password would be refused for the wrong reason and prove nothing.
      */
     { "DISABLED", 128, 132, "SYS$SYSDEVICE:[USERS.DISABLED]", "DISUSER", "TMPMBX",  "DISABLED", NULL },
+    /*
+     * A low-privilege SERVICE account for TCPIP$INETD-launched services to run
+     * under (rd vms-8bd, R4 G1). Real VMS TCP/IP services run under their own
+     * service accounts, NOT SYSTEM: INETD resolves the SERVICE.DAT run-as
+     * username through SYSUAF and drops to this UIC + minimal privileges before
+     * execv, so a bug in a service image executes with TMPMBX/NETMBX, not
+     * SYSTEM/all-privileges. DAYTIME reads nothing and needs no privilege; this
+     * is the account the daytime cold-boot proof launches it under. No password
+     * (pw = NULL): a service account is not an interactive login.
+     */
+    { "TCPIP$DAYTIME", 128, 134, "SYS$SYSDEVICE:[USERS]", "", "TMPMBX,NETMBX", NULL, NULL },
 };
 
 /* Build one $UAFDEF record from a seed row. */

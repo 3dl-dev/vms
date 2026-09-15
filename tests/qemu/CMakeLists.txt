@@ -115,6 +115,13 @@ endforeach()
 # qemu_syssvc_tests still builds it via the GLOBAL target list.
 qemu_syssvc_add_test(test_arith_hparith ${CMAKE_CURRENT_SOURCE_DIR}/test_arith_hparith.c)
 
+# test_accvio_dispatch (vms-cc8, CHF rung-4, gap G6): the Alpha access-violation
+# -> SS$_ACCVIO condition bridge, the hardware sibling of test_arith_hparith.
+# Same rationale as arith_hparith for being test_accvio_* (not test_syssvc_*): an
+# Alpha-only libvms RTL signal primitive proven on the Alpha rig, not an
+# x86/arm /dev/vms facility.
+qemu_syssvc_add_test(test_accvio_dispatch ${CMAKE_CURRENT_SOURCE_DIR}/test_accvio_dispatch.c)
+
 # ---------------------------------------------------------------------------
 # RMS-over-ACP force-bind (rms_acp_bind.c) -- OPT-IN, not blanket (vms-5f0).
 #
@@ -153,12 +160,35 @@ foreach(_anchored
         test_syssvc_sysuaf_uic_base
         test_syssvc_rightslist
         test_syssvc_setuai
-        test_syssvc_loginout_acp)
+        test_syssvc_loginout_acp
+        test_syssvc_tcpip_host_acp
+        test_syssvc_tcpip_config_acp
+        # test_syssvc_tcpip_service_db (#878, vms-71b): reaches the persistent
+        # INETD service database over the ACP ONLY through the rms_textfile weak
+        # seam (tcpip_service_db.h -> rms_textfile_write_line/append_line/getline),
+        # so it needs the same force-bind as tcpip_config_acp or every store/read
+        # returns -1 with no honest RMS status.
+        test_syssvc_tcpip_service_db)
     if(TARGET ${_anchored})
         target_sources(${_anchored} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/rms_acp_bind.c)
     endif()
 endforeach()
+
+# test_syssvc_tcpip_inetd (R4 G1, rd vms-8bd): the inetd engine's spawn now drops
+# to a per-service run-as identity, so the suite compiles the identity TU + the
+# SHARED sshd identity/credential seams it reuses (ssh_ident.c / cred_drop.c) and
+# needs their headers + sysuaf.h on its include path. The G1 assertions inject mock
+# tables (no live /dev/vms), so no rms_acp_bind anchor is required.
+if(TARGET test_syssvc_tcpip_inetd)
+    target_sources(test_syssvc_tcpip_inetd PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmstcpip/services/tcpip_inetd_ident.c
+        ${CMAKE_SOURCE_DIR}/src/vmsssh/ssh_ident.c
+        ${CMAKE_SOURCE_DIR}/src/vmsssh/cred_drop.c)
+    target_include_directories(test_syssvc_tcpip_inetd PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsssh
+        ${CMAKE_SOURCE_DIR}/src/libvms/include)
+endif()
 
 # test_syssvc_crtl_rms_veneer (vms-47e): the C RTL stdio->RMS veneer proof.
 # The suite drives src/vmsrms/crtl_rms_stdio.c (ovmx_crtl_fopen/fwrite/fread/
@@ -170,6 +200,44 @@ endforeach()
 if(TARGET test_syssvc_crtl_rms_veneer)
     target_sources(test_syssvc_crtl_rms_veneer PRIVATE
         ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
+endif()
+
+# test_syssvc_crtl_rms_bigwrite (vms-126): the veneer-completeness proof (large
+# >64 KiB chunked writes + FAB$M_TMD delete-on-close temps). Same reusable veneer
+# TU as the base veneer proof; its strong sys$create/$search references pull the
+# vmsrms archive with no extra anchor.
+if(TARGET test_syssvc_crtl_rms_bigwrite)
+    target_sources(test_syssvc_crtl_rms_bigwrite PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
+endif()
+
+# test_syssvc_crtl_rms_fileops (vms-3c1): the x86_64 arch-discriminator for the
+# crtl_rms3 alpha-dec-vms SIGSEGV -- drives crtl_rms3's exact file-op sequence
+# (creat/close, open/close, unlink, rename, opendir/readdir/closedir) through
+# the SAME reusable veneer TU as the stdio + bigwrite proofs above, so a
+# heap-buffer-overflow/use-after-free/double-free reachable from the veneer,
+# the RMS engine, or the kernel ACP handler on x86_64 aborts under ASan with a
+# named file:line. Its strong sys$create reference pulls the vmsrms archive
+# with no extra anchor.
+if(TARGET test_syssvc_crtl_rms_fileops)
+    target_sources(test_syssvc_crtl_rms_fileops PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmsrms/crtl_rms_stdio.c)
+    # ASan/UBSan: a decisive signal for vms-3c1 needs a NAMED fault line, not
+    # just a bare SIGSEGV. Probe-gated exactly like tests/vmsdecnet/
+    # CMakeLists.txt's OVMX_DAP_SANITIZE_OK (a musl-static cross may lack the
+    # sanitizer runtime; this target links the same -static musl toolchain as
+    # every other qemu_syssvc_add_test target, so probe with -static too).
+    include(CheckCSourceCompiles)
+    set(_fileops_san_save "${CMAKE_REQUIRED_FLAGS}")
+    set(CMAKE_REQUIRED_FLAGS "-static -fsanitize=address,undefined")
+    check_c_source_compiles("int main(void){return 0;}" OVMX_FILEOPS_SANITIZE_OK)
+    set(CMAKE_REQUIRED_FLAGS "${_fileops_san_save}")
+    if(OVMX_FILEOPS_SANITIZE_OK)
+        target_compile_options(test_syssvc_crtl_rms_fileops PRIVATE
+            -fsanitize=address,undefined -g)
+        target_link_options(test_syssvc_crtl_rms_fileops PRIVATE
+            -fsanitize=address,undefined)
+    endif()
 endif()
 
 # test_arith_hparith (vms-db3, epic vms-8954): the Alpha FP-trap -> SS$_HPARITH
@@ -187,6 +255,17 @@ if(TARGET test_arith_hparith AND CMAKE_SYSTEM_PROCESSOR STREQUAL "alpha")
     target_sources(test_arith_hparith PRIVATE
         ${CMAKE_SOURCE_DIR}/src/vmslink/arith_signal_bind.c)
     target_compile_options(test_arith_hparith PRIVATE -mieee -mfp-trap-mode=sui)
+endif()
+
+# test_accvio_dispatch (vms-cc8, CHF rung-4): like arith_hparith, Alpha-only and
+# needs its bridge constructor force-pulled under -static. accvio_signal_bind.c
+# as a PRIMARY object makes the strong ref to ovmx$accvio_signal_anchor that
+# extracts src/libvms/rtl/accvio_signal.o (and its image-start constructor) into
+# the static image; without it the auto-install CHECK fails. No FP-trap flags:
+# the fault here is a real memory access violation, not an arithmetic trap.
+if(TARGET test_accvio_dispatch AND CMAKE_SYSTEM_PROCESSOR STREQUAL "alpha")
+    target_sources(test_accvio_dispatch PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/vmslink/accvio_signal_bind.c)
 endif()
 
 # test_syssvc_rms_p3_acp (vms-045) drives the runtime Prolog-3 indexed WRITE+READ

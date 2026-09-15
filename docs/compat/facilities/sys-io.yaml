@@ -14,7 +14,7 @@ summary: >
   file descriptors, invisible cross-process (advisory). The 6th named routine,
   SYS$CANCEL (process-wide I/O cancellation), is registered under the
   sys-process facility to avoid a duplicate row.
-last_reviewed: 2026-08-31
+last_reviewed: 2026-09-14
 items:
   - {id: sys$assign, kind: routine, status: implemented, authenticity: advisory, vms: "Assign an I/O channel to a device", evidence: src/libvms/syssvc/sys_assign.c, notes: "console/mailbox/BGn: channels executive-routed (real, cross-process); ordinary channels are private per-process fds"}
   - {id: sys$dassgn, kind: routine, status: implemented, authenticity: advisory, vms: "Deassign an I/O channel", evidence: src/libvms/syssvc/sys_assign.c, notes: "same executive/private-channel split as sys$assign"}

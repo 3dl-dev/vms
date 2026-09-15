@@ -10,11 +10,13 @@
  * "FC-P3.7 computes these; FC-P3.6 does not write them, so nothing here is a
  * fabricated zero standing in for arithmetic that has not run").
  *
- * TRACKING ONLY (P3 scope, this item's own outcome line). This module
- * computes the numbers on every membership transition; it never blocks or
- * allows one and never suspends process activity. Enforcement -- VOTES>0
- * gating the scheduler/ACP issue points on quorum loss, and the Quorum Disk
- * Watcher's liveness fold-in -- is P8 (design SS3.7 "Enforcement (P8)").
+ * TRACKING (P3 scope) PLUS THE ENFORCEMENT PREDICATES (FC-P8.1, rd vms-b6d,
+ * SS "ENFORCEMENT" below). This module computes the numbers on every membership
+ * transition and answers whether they may be ACTED on; it still suspends
+ * nothing itself -- it has no process, no lock and no queue to suspend. The
+ * ACTOR is the lock manager, through the injected gate of vms_dlm_quorum.h.
+ * The Quorum Disk Watcher's liveness fold-in remains P8.4, unground and
+ * deliberately absent.
  *
  * ---------------------------------------------------------------------------
  * GROUNDING (clean-room, published description, page cites only, rule 8)
@@ -85,6 +87,32 @@
 void cnxman_quorum_recompute(struct vms_club *club);
 
 /*
+ * RECOMPUTE IF -- AND ONLY IF -- THIS NODE IS REALLY A MEMBER (rd vms-d0d).
+ *
+ * The trigger a running node uses on itself, for the two events that can change
+ * the answer: a transition COMMIT (design SS3.7 "recomputed on transitions",
+ * p. 7-42) and a member's PARAMS record arriving in between (SS3.7 "the CLUB
+ * tracks CEVOTES/QUORUM from every member's advertised VOTES ... from day one
+ * so $GETSYI reports truth").
+ *
+ * It exists because the ADMITTED node has no other source for these figures:
+ * p. 7-42 task 2's proposed->effective copy carries the COORDINATOR's
+ * arithmetic, and a joiner never ran one -- so without this it counts its
+ * fellow members and reports CEVOTES/QUORUM 0 while the peer's real advertised
+ * VOTES sit in its own CSB table. Here it does what the founding node does at
+ * genesis: applies p. 7-6 to the votes the executive really holds.
+ *
+ * INV-6: runs only when cl->state is VMS_CLUSTER_MEMBER (which only a real
+ * Phase 2 commit of a real MEMBER flag ever sets) AND this node's own local CSB
+ * is in the selected, params-learned set. Otherwise it changes NOTHING and
+ * returns 0 -- an un-computed quorum stays honestly absent rather than becoming
+ * a zero, or a local-only number, that the rest of the cluster never agreed to.
+ *
+ * Returns nonzero iff the recompute really ran. A NULL cluster changes nothing.
+ */
+int cnxman_quorum_member_recompute(struct vms_cluster *cl);
+
+/*
  * The published formula, split into its two published steps so that every
  * caller in the executive computes quorum with ONE implementation
  * (single-ledger; a second copy is how a founding node and a running cluster
@@ -126,6 +154,62 @@ uint16_t cnxman_quorum_of_cevotes(uint16_t cevotes);
  */
 int cnxman_quorum_own_votes_suffice(const struct vms_cluster *cl,
 				    uint16_t *out_quorum);
+
+/* ===========================================================================
+ * ENFORCEMENT -- may the executive ACT on the arithmetic? (FC-P8.1, rd vms-b6d)
+ *
+ * p. 7-4: a system perceives quorum, and cluster activity proceeds, while the
+ * votes available to it are >= QUORUM; otherwise it BLOCKS ACTIVITY and waits
+ * for quorum to be regained. That "blocks activity" is VMS's quorum hang: a
+ * STALL, not an error. A lock request made during it is neither granted nor
+ * refused -- it waits, exactly as a request waits for an incompatible holder --
+ * and it completes on its own the moment quorum returns. Nothing is denied with
+ * a status code and nothing in flight is invented (INV-6).
+ *
+ * WHY THE RAW FLAG IS NOT THE CONDITION. club->quorum_lost is the arithmetic's
+ * answer AT THIS INSTANT, over the CSBs whose PARAMS this node has learned SO
+ * FAR. During a join that set is legitimately empty or partial, and p. 7-6's
+ * formula over an empty set yields QUORUM = (0+2)/2 = 1 with 0 votes present --
+ * quorum_lost = 1, which is the HONEST arithmetic answer to "do I have quorum
+ * right now?" and NOT a report that a cluster lost quorum. Enforcing on it
+ * would freeze every node on every join, forever, before it could ever learn a
+ * peer's votes. So enforcement is gated on the node having genuinely PERCEIVED
+ * quorum first (club->quorum_armed, latched by cnxman_quorum_arm_update()), and
+ * on it still being a committed member whose own CSB counts.
+ *
+ * All three are PURE reads of a real CLUB -- no clock, no seam, no cache. The
+ * lock manager reaches cnxman_quorum_hang_active() through the injected
+ * `struct vms_quorum_ops` of vms_dlm_quorum.h so that the value it acts on is
+ * read from THIS state at decision time, never copied into the lock engine
+ * where it could go stale (INV-6).
+ * =========================================================================== */
+
+/*
+ * Is this node in a position to act on its own quorum arithmetic at all?
+ * Nonzero iff it is a COMMITTED member (cl->state == VMS_CLUSTER_MEMBER) whose
+ * own CSB satisfies the very condition the arithmetic applies before counting a
+ * vote (in use, SELECTED, PARAMS learned). A joining node, a node whose local
+ * CSB the CLUB has not selected, and a node with no cluster at all all answer 0
+ * -- they have numbers to REPORT, none to enforce.
+ */
+int cnxman_quorum_enforce_ready(const struct vms_cluster *cl);
+
+/*
+ * Latch "this node has perceived quorum" (club->quorum_armed) when, and only
+ * when, it is enforce-ready AND its current arithmetic says it HAS quorum.
+ * Idempotent, monotone within one cluster life, and safe to call after every
+ * recompute -- which is exactly how it is used (cnxman_quorum_apply()).
+ */
+void cnxman_quorum_arm_update(struct vms_cluster *cl);
+
+/*
+ * THE QUORUM HANG, as one predicate: nonzero iff this node is enforce-ready,
+ * has latched a real perception of quorum, and has LOST it. This is the value
+ * the lock manager stalls new grants on; it clears by itself the moment the
+ * next recompute finds the votes back, which is what makes the hang resume
+ * rather than need an unwind.
+ */
+int cnxman_quorum_hang_active(const struct vms_cluster *cl);
 
 /*
  * This node's own TRACKED QDSKVOTES (its SYSGEN quorum-disk vote count,

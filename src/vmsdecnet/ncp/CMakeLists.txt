@@ -12,9 +12,18 @@ target_include_directories(vmsdecnet_nodedb PUBLIC
     ${CMAKE_SOURCE_DIR}/src/vmsdecnet/routing/include   # dnet_hello.h: area/node helpers
 )
 
+# dnet_objectdb (rd vms-f52): the persisted DECnet OBJECT database -- the
+# Session Control objects this node offers (42=CTERM, 17=FAL, ...), managed by
+# NCP SET/DEFINE/SHOW/CLEAR/PURGE OBJECT. Same footing as vmsdecnet_nodedb: pure
+# table logic + a documented plain-text file, no socket/engine, unit-testable.
+add_library(vmsdecnet_objectdb STATIC dnet_objectdb.c)
+target_include_directories(vmsdecnet_objectdb PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # NCP.EXE -- the Network Control Program utility that drives the database +
-# executor config (SET/DEFINE/SHOW/CLEAR NODE, SET/SHOW EXECUTOR).
+# executor config (SET/DEFINE/SHOW/CLEAR NODE + OBJECT, SET/SHOW EXECUTOR).
 add_executable(ncp_exe ncp.c)
-target_link_libraries(ncp_exe PRIVATE vmsdecnet_nodedb)
+target_link_libraries(ncp_exe PRIVATE vmsdecnet_nodedb vmsdecnet_objectdb)
 set_target_properties(ncp_exe PROPERTIES OUTPUT_NAME "NCP" SUFFIX ".EXE")
 install(TARGETS ncp_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

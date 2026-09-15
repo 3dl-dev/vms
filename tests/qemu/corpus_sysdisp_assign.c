@@ -40,6 +40,7 @@
  *     RC_MOUNT 12  $MOUNT of the boot unit failed
  *     RC_ASSIGN 13 post-mount $ASSIGN did not return SS$_NORMAL + nonzero channel
  *     RC_DASSGN 14 $DASSGN failed
+ *     RC_DMOUNT 15 $DISMOUNT (restore unmounted state for the next suite) failed
  * (printf is deliberately NOT used — the harness, an ld-linked ctest with a full
  * C runtime, prints the human-readable CHECK lines from the mapped exit code.)
  *
@@ -66,6 +67,7 @@
 #define RC_MOUNT   12
 #define RC_ASSIGN  13
 #define RC_DASSGN  14
+#define RC_DMOUNT  15
 
 int main(void)
 {
@@ -104,7 +106,13 @@ int main(void)
     if (!$VMS_STATUS_SUCCESS(sys$dassgn(chan)))
         return RC_DASSGN;
 
-    /* Leave the volume mounted: $MOUNT is executive-global and other suites in
-     * this booted VM rely on it (test_syssvc_acp_* mount idempotently too). */
+    /* (5) $DISMOUNT restores the unmounted precondition the NEXT suite in this
+     *     booted VM expects: $MOUNT is executive-GLOBAL, and the rail convention
+     *     (test_syssvc_acp_channel.c asserts SS$_DEVNOTMOUNT as its first act, then
+     *     dismounts at the end) is "each suite leaves the fixture unmounted." A
+     *     subject that left it mounted would break that sibling's opening assertion. */
+    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_dmount(BOOT_UNIT)))
+        return RC_DMOUNT;
+
     return 0;
 }

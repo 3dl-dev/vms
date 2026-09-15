@@ -1083,26 +1083,21 @@ static int run_net_service_selftest(void)
  *   client  reads the response from ITS reply mailbox and CORRELATION-MATCHES it.
  * The op is OP_RECV on a fresh engine (rx buffer empty), so the honest
  * SS$_ENDOFFILE round-trips with no live link needed -- the point here is the
- * MAILBOX SEAM, not the link. FAIL-HONEST (Rule 9/INV-6): with no /dev/vms the
- * mailbox creates fail SS$_NOSUCHDEV and this skips, never fakes the round-trip.
- * The full task-to-task e2e ($QIO _NET: -> qio_net_op -> NETACP -> a live link)
- * is slice 2c. Runs in the booted acceptance battery (via run-on-rail's QEMU
- * leg) where /dev/vms is real.
+ * MAILBOX SEAM, not the link. FAIL-HONEST (Rule 9/INV-6, ONE RUNTIME): this test
+ * does NOT probe for executive presence and does NOT skip. It always attempts the
+ * real mailbox round-trip against /dev/vms; with no executive the $CREMBX calls
+ * return SS$_NOSUCHDEV, the checks FAIL, and the test reports a TERMINAL honest
+ * FAILURE (never a fake pass, never a silent userspace fallback). The decision of
+ * WHERE to run it belongs to the harness, not this engine code: it is invoked
+ * only by the booted acceptance battery (via run-on-rail's QEMU leg) where
+ * /dev/vms is real -- it is NOT registered as a host ctest. The full task-to-task
+ * e2e ($QIO _NET: -> qio_net_op -> NETACP -> a live link) is slice 2c.
  */
 static int run_net_mbx_selftest(void)
 {
     printf("DECNETD-I-NETMBX, T1 mailbox transport round-trip (client $CREMBX ->"
            " request -> NETACP read+serve -> reply-by-unit -> client correlation-"
-           " match), needs /dev/vms (rd vms-22c)\n");
-
-    int kfd = vms_kif_open();
-    if (kfd < 0) {
-        printf("DECNETD-I-NETMBX, SKIPPED: no /dev/vms -- the mailbox round-trip"
-               " runs in the booted battery (fail-honest, no fake)\n");
-        printf("DECNETD-NET-MBX-SELFTEST: SKIP\n");
-        return 0;
-    }
-    vms_kif_close();
+           " match), against the booted executive /dev/vms (rd vms-22c)\n");
 
     int pass = 0, fail = 0;
 #define MB_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \

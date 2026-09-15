@@ -10,7 +10,12 @@
 # (magic gate + datalen bound + total-length check, never over-reads), and a
 # monotonically-issued correlation id matches each response to its request
 # (anti-cross-talk). Depends on vmsdecnet_nsp only for DNET_NSP_MAX_DATA.
-add_library(vmsdecnet_broker STATIC dnet_broker.c)
+# dnet_ncb: the client-side Network Connect Block parser (rd vms-22c, a1-2) --
+# the LOCAL API connect string ($QIO IO$_ACCESS p1, NODE::"TASK=name") qio_net_op
+# parses into {node, task/object} before building the SC connect descriptor.
+# Pure, bounds-checked, spec-derived (never a wire field). Grouped with the
+# broker record as the client-side transport helpers libvms will link.
+add_library(vmsdecnet_broker STATIC dnet_broker.c dnet_ncb.c)
 target_include_directories(vmsdecnet_broker PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../nsp/include   # dnet_nsp.h (DNET_NSP_MAX_DATA)

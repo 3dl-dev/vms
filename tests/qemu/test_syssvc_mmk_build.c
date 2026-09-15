@@ -815,6 +815,14 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     pid_t pid = fork();
     if (pid < 0) { close(outpipe[0]); close(outpipe[1]); return; }
     if (pid == 0) {
+        /* Lead our own process group so a wedged MMK (no marker -> $HIBER
+         * deadlock, which the mmk-drive-command-not-sent defect forces on EVERY
+         * MMK drive incl. this build drive) can be hard-killed together with the
+         * DCL subprocess it lib$spawns -- a NON-detached subprocess is a plain
+         * fork() child that inherits this pgid, so kill(-pid) reaps it. Without
+         * this, the orphaned DCL wedges subsequent suites in the same booted VM
+         * (vms-c09f/#1241; see the group-kill below and the twin in mmk_drive). */
+        setpgid(0, 0);
         if (chdir(workdir) != 0) _exit(120);
         dup2(outpipe[1], STDOUT_FILENO);
         dup2(outpipe[1], STDERR_FILENO);
@@ -901,9 +909,12 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
         if (r < 0) break;
         waited += 200;
     }
-    /* Kill MMK if still running -- CLEANUP, not a verdict (see above). */
+    /* Kill MMK if still running -- CLEANUP, not a verdict (see above). Kill the
+     * whole PROCESS GROUP (kill(-pid), MMK + its lib$spawn'd DCL) so a wedged
+     * build drive leaves NOTHING alive to wedge the next suite -- see the
+     * setpgid + the fuller rationale in the mmk_drive twin (vms-c09f/#1241). */
     if (waitpid(pid, &wstatus, WNOHANG) == 0) {
-        kill(pid, SIGKILL);
+        kill(-pid, SIGKILL);            /* the group: MMK + its spawned DCL */
         (void)waitpid(pid, &wstatus, 0);
     } else {
         *reaped = 1;

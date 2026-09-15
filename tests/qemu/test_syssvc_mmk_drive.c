@@ -352,11 +352,23 @@ int main(int argc, char **argv)
     pid_t pid = fork();
     if (pid < 0) { printf("  FAIL: fork() failed\n"); return 1; }
     if (pid == 0) {
-        /* Child = the shipped MMK. Run the REAL build (NOT /NOACTION): MMK opens
-         * the description off the ODS-2 volume through RMS, opens the persistent
-         * DCL, and drives the action over the mailbox. /DESCRIPTION + /RULES_FILE
-         * are qualifier VALUES (not rule-parsed) so they carry the device+MFD
-         * spec; the P1 target is bare (resolving to VDA0:'s MFD like the rule). */
+        /* Child = the shipped MMK. Lead our OWN process group so that if MMK
+         * genuinely wedges under a defect (no marker -> $HIBER deadlock) and must
+         * be hard-killed below, we can reap MMK *and* the DCL subprocess it
+         * lib$spawns: lib$spawn creates a NON-detached subprocess, i.e. a plain
+         * fork() child (sys$creprc setsid()+double-forks ONLY for PRC$M_DETACH,
+         * src/libvms/syssvc/sys_process.c), so the DCL inherits THIS pgid and a
+         * process-group kill reaches it. Without this, a kill(MMK) alone orphans
+         * the DCL, which keeps this suite's stdout FIFO open and sits blocked on
+         * the leaked mailbox in the shared executive -- contending/wedging every
+         * SUBSEQUENT suite in the same booted VM (the negctl runs the full suite
+         * set per defect-boot, so that leak is NOT contained to this suite; it
+         * blew the 2700s wall under mmk-drive-command-not-sent, vms-c09f/#1241). */
+        setpgid(0, 0);
+        /* Run the REAL build (NOT /NOACTION): MMK opens the description off the
+         * ODS-2 volume through RMS, opens the persistent DCL, and drives the action
+         * over the mailbox. /DESCRIPTION + /RULES_FILE are qualifier VALUES (not
+         * rule-parsed) so they carry the device+MFD spec; the P1 target is bare. */
         dup2(outpipe[1], STDOUT_FILENO);
         dup2(outpipe[1], STDERR_FILENO);
         close(outpipe[0]); close(outpipe[1]);
@@ -469,12 +481,19 @@ int main(int argc, char **argv)
      * the loop above (reaped=1), having run sp_close() to $FORCEX/$DELPRC its DCL
      * subprocess and $DASSGN its mailboxes -- so this suite leaves NOTHING alive on
      * the shared executive to wedge the next one. Only if MMK genuinely wedged (a
-     * real mid-drive $HIBER deadlock -- no marker, the failure case) do we SIGKILL
-     * it as a last resort so no process is left running; that path occurs ONLY under
-     * the isolated negctl (one defect per QEMU boot), so the resource leak a hard
-     * kill cannot avoid stays contained to that boot and never reaches a sibling. */
+     * real mid-drive $HIBER deadlock -- no marker, the failure case, which the
+     * mmk-drive-command-not-sent negctl forces on purpose) do we hard-kill as a
+     * last resort. Kill the whole PROCESS GROUP (kill(-pid) -- MMK leads its own
+     * group via setpgid above, and its non-detached lib$spawn'd DCL is in it), NOT
+     * just MMK: a kill(pid) alone leaves the DCL orphaned, holding this suite's
+     * stdout FIFO and blocked on the leaked mailbox, which contends/wedges EVERY
+     * subsequent suite in the same booted VM. The negctl runs the FULL suite set
+     * per defect-boot (not one suite in isolation), so that leak is NOT contained
+     * -- unreaped, it blew the 2700s wall under this very defect (vms-c09f/#1241).
+     * Killing the group reaps the DCL (it dies even mid-$QIO; SIGKILL is
+     * uncatchable), releasing the FIFO and the mailbox so siblings run clean. */
     if (!reaped) {
-        kill(pid, SIGKILL);
+        kill(-pid, SIGKILL);            /* the group: MMK + its spawned DCL */
         (void)waitpid(pid, &wstatus, 0);
     }
 

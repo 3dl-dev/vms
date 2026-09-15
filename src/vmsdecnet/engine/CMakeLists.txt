@@ -108,4 +108,11 @@ if(BUILD_TESTS)
     # executive; the mailbox seam + qio_net_op + NETACP servicing build on it.
     add_test(NAME decnetd_net_broker_selftest
              COMMAND decnetd_exe --net-broker-selftest)
+    # rd vms-22c (a1-2 integration): the NETACP broker SERVICE DISPATCH floor --
+    # dnet_broker_serve driving OPEN/SEND/RECV/CLOSE against the NSP link engine
+    # over a socketpair, correlation-matched, with honest never-crash refusals
+    # (unknown op, too-short OPEN). No executive; the mailbox $CREMBX seam +
+    # qio_net_op marshalling + the IO$M_NOW serve loop build on it.
+    add_test(NAME decnetd_net_service_selftest
+             COMMAND decnetd_exe --net-service-selftest)
 endif()

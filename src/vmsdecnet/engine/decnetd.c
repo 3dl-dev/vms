@@ -796,6 +796,245 @@ static int run_net_broker_selftest(void)
 }
 
 /*
+ * dnet_broker_serve (rd vms-22c, a1-2 integration) -- service ONE bounds-
+ * validated broker request against the NSP link engine, producing a
+ * correlation-matched response. This is the NETACP "brain" the mailbox serve
+ * loop will call: the caller has already dnet_broker_req_decode'd the request
+ * (so every field is length-checked) and owns the datalink; this maps the broker
+ * OP to the engine's link primitive and, when the op emits a wire frame (CI /
+ * data segment / DI), returns it in frame_out for the caller to transmit.
+ *
+ * NEVER-CRASH-A-PEER (INV-6 / the A2/A8 discipline): an unknown op, an op invalid
+ * for the current link state, or an OPEN whose payload is too short for the
+ * remote address are each answered with an HONEST error status and no frame --
+ * never a crash, an over-read, or a fabricated success. rsp->corr_id ALWAYS
+ * echoes req->corr_id so the waiter matches the completion (dnet_broker_corr_
+ * match); a response is never emitted with a zero/mismatched id.
+ *
+ * Request payload layout (data[], already length-bounded by the decode):
+ *   OP_OPEN : remote_area(2 LE) remote_node(2 LE) + the Session Control connect
+ *             descriptor the client built (dnet_cterm_sc_connect_build[_task]).
+ *   OP_SEND : the raw task-to-task message bytes.
+ *   OP_RECV / OP_CLOSE : no request payload.
+ * OP_OPEN sends the Connect Initiate and returns SS$_NORMAL "initiated" -- the
+ * link reaches RUN asynchronously when the peer's Connect Confirm arrives (the
+ * mailbox serve loop delivers that completion later); OP_RECV returns the next
+ * buffered inbound segment or SS$_ENDOFFILE when nothing is pending (the loop
+ * owns the blocking/wait semantics, this call never blocks).
+ */
+static int dnet_broker_serve(struct dnet_engine *eng,
+                             const struct dnet_broker_req *req,
+                             struct dnet_broker_rsp *rsp,
+                             uint8_t *frame_out, size_t framecap,
+                             size_t *framelen, int *has_frame, dnet_tick_t now)
+{
+    if (!eng || !req || !rsp || !frame_out || !framelen || !has_frame)
+        return -1;
+
+    memset(rsp, 0, sizeof *rsp);
+    rsp->corr_id = req->corr_id;          /* always echo -- the correlation guard */
+    *has_frame = 0;
+    *framelen  = 0;
+
+    size_t flen = 0;
+
+    switch (req->op) {
+    case DNET_BROKER_OP_OPEN:
+        if (req->datalen < 4) {           /* need the 4-byte remote address prefix */
+            rsp->status = SS$_BADPARAM;
+            return 0;
+        }
+        {
+            unsigned rarea = (unsigned)((uint16_t)req->data[0] | ((uint16_t)req->data[1] << 8));
+            unsigned rnode = (unsigned)((uint16_t)req->data[2] | ((uint16_t)req->data[3] << 8));
+            const uint8_t *desc = req->data + 4;
+            size_t desclen = (size_t)req->datalen - 4;
+            if (dnet_engine_link_open(eng, rarea, rnode, 0x2001, desc, desclen,
+                                      1459, 1, DNET_NSP_VER_41,
+                                      frame_out, framecap, &flen, now) != DNET_ENGINE_OK) {
+                rsp->status = SS$_ABORT;
+                return 0;
+            }
+            *framelen = flen; *has_frame = 1;
+            rsp->status = SS$_NORMAL;      /* CI sent; RUN completes async on CC */
+        }
+        return 0;
+
+    case DNET_BROKER_OP_SEND:
+        if (!dnet_link_is_up(&eng->link)) {
+            rsp->status = SS$_DEVOFFLINE;  /* honest: no link to send on */
+            return 0;
+        }
+        if (dnet_engine_link_send(eng, req->data, req->datalen,
+                                  frame_out, framecap, &flen, now) != DNET_ENGINE_OK) {
+            rsp->status = SS$_ABORT;
+            return 0;
+        }
+        *framelen = flen; *has_frame = 1;
+        rsp->status = SS$_NORMAL;
+        return 0;
+
+    case DNET_BROKER_OP_RECV:
+        if (eng->rx_datalen == 0) {
+            rsp->status = SS$_ENDOFFILE;   /* nothing pending -- caller waits, we don't */
+            return 0;
+        }
+        {
+            uint16_t n = eng->rx_datalen;
+            if (n > DNET_NSP_MAX_DATA) n = DNET_NSP_MAX_DATA;   /* defensive clamp */
+            memcpy(rsp->data, eng->rx_data, n);
+            rsp->datalen = n;
+            eng->rx_datalen = 0;           /* consumed */
+            rsp->status = SS$_NORMAL;
+        }
+        return 0;
+
+    case DNET_BROKER_OP_CLOSE:
+        if (dnet_engine_link_close(eng, DNET_LINK_REASON_NORMAL,
+                                   frame_out, framecap, &flen, now) != DNET_ENGINE_OK) {
+            rsp->status = SS$_ABORT;
+            return 0;
+        }
+        *framelen = flen; *has_frame = 1;
+        rsp->status = SS$_NORMAL;
+        return 0;
+
+    default:
+        rsp->status = SS$_ILLIOFUNC;       /* unknown op -- honest refusal, no frame */
+        return 0;
+    }
+}
+
+/*
+ * run_net_service_selftest (rd vms-22c, a1-2 integration) -- the host floor of
+ * the NETACP broker SERVICE DISPATCH: dnet_broker_serve driving each op against
+ * the real NSP link engine over a socketpair, with NO mailbox and NO executive.
+ * Proves the request -> engine-op mapping + the correlation-matched response +
+ * the never-crash-a-peer refusals, before any mailbox/kernel wiring:
+ *   OP_OPEN's CI drives a real bring-up (peer accepts, link reaches RUN);
+ *   OP_SEND's data segment is received by the peer byte-exact;
+ *   OP_RECV returns the buffered inbound message (and SS$_ENDOFFILE when empty);
+ *   OP_CLOSE's DI closes the peer's link;
+ *   an unknown op and a too-short OPEN are refused honestly (no frame, no
+ *   over-read), correlation still echoed. The --copy-transport-selftest pattern.
+ */
+static int run_net_service_selftest(void)
+{
+    printf("DECNETD-I-NETSERVICE, NETACP broker service dispatch: OPEN/SEND/RECV/"
+           "CLOSE against the NSP link engine, correlation-matched, never-crash"
+           " refusals (no executive, rd vms-22c)\n");
+    int pass = 0, fail = 0;
+#define NS_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        fprintf(stderr, "DECNETD-E-NETSERVICE, socketpair failed: %s\n", strerror(errno));
+        return 1;
+    }
+    const uint8_t hwL[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwR[6] = { 0x02,0,0,0,0,0x0b };
+    struct dnet_engine L, R;
+    if (dnet_engine_init(&L, 1, 10, "OVMXL", "EWA0", NULL, hwL, 0, 0, 0) != 0 ||
+        dnet_engine_init(&R, 1, 11, "OVMXR", "EWA0", NULL, hwR, 0, 0, 0) != 0) {
+        fprintf(stderr, "DECNETD-E-NETSERVICE, engine init failed\n");
+        close(sv[0]); close(sv[1]); return 1;
+    }
+
+    struct dnet_broker_req req; struct dnet_broker_rsp rsp;
+    uint8_t frame[DNET_FRAME_MAX], rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
+    size_t flen = 0, rxlen = 0, rlen = 0; int has_reply = 0, has = 0;
+    enum dnet_link_event ev = DNET_LINK_EV_NONE;
+    uint32_t corr = 0;
+    dnet_tick_t t = 10;
+
+    /* 1) OP_OPEN via serve on L -> CI -> R accepts -> CC -> L link RUN. */
+    memset(&req, 0, sizeof req);
+    req.corr_id = dnet_broker_corr_next(&corr);
+    req.op = DNET_BROKER_OP_OPEN;
+    uint8_t desc[192]; size_t dlen = 0;
+    dnet_cterm_sc_connect_build_task("SVCTEST", "OVMXL", 0x021a, 0x2020, "", "", "",
+                                     desc, sizeof desc, &dlen);
+    req.data[0] = 1; req.data[1] = 0; req.data[2] = 11; req.data[3] = 0;   /* 1.11 LE */
+    memcpy(req.data + 4, desc, dlen);
+    req.datalen = (uint16_t)(4 + dlen);
+    int sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
+    NS_CHECK(sr == 0 && rsp.status == SS$_NORMAL && rsp.corr_id == req.corr_id && has == 1,
+             "OP_OPEN: serve builds a CI frame, status NORMAL, correlation echoed");
+
+    int up = has &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_CONNECT_IND &&
+        dnet_engine_link_accept(&R, 0x2002, reply, sizeof reply, &rlen, t++) == 0 &&
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_CONNECT_CONF && dnet_link_is_up(&L.link) && dnet_link_is_up(&R.link);
+    NS_CHECK(up, "OP_OPEN's CI drives the bring-up: peer accepts, the link reaches RUN both ends");
+
+    /* 2) OP_SEND via serve on L -> data -> R receives it byte-exact. */
+    req.corr_id = dnet_broker_corr_next(&corr);
+    req.op = DNET_BROKER_OP_SEND;
+    const char *smsg = "SERVICE-DISPATCH task payload 0123456789";
+    req.datalen = (uint16_t)strlen(smsg);
+    memcpy(req.data, smsg, req.datalen);
+    has = 0;
+    sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
+    int sent = up && sr == 0 && rsp.status == SS$_NORMAL && rsp.corr_id == req.corr_id && has == 1 &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_DATA && R.rx_datalen == strlen(smsg) &&
+        memcmp(R.rx_data, smsg, R.rx_datalen) == 0;
+    if (sent && has_reply) {   /* absorb R's data-ack back on L */
+        move_frame(sv[1], sv[0], reply, rlen, rxbuf, sizeof rxbuf, &rxlen);
+        dnet_engine_link_rx(&L, t++, rxbuf, rxlen, frame, sizeof frame, &flen, &has_reply, &ev);
+    }
+    NS_CHECK(sent, "OP_SEND: serve builds a data frame the peer receives byte-exact (correlation echoed)");
+
+    /* 3) OP_RECV via serve on R -> returns the buffered task message. */
+    req.corr_id = dnet_broker_corr_next(&corr);
+    req.op = DNET_BROKER_OP_RECV; req.datalen = 0;
+    sr = dnet_broker_serve(&R, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
+    NS_CHECK(sr == 0 && rsp.status == SS$_NORMAL && rsp.corr_id == req.corr_id && has == 0 &&
+             rsp.datalen == strlen(smsg) && memcmp(rsp.data, smsg, rsp.datalen) == 0,
+             "OP_RECV: serve returns the buffered inbound task message to the reader (byte-exact)");
+    req.corr_id = dnet_broker_corr_next(&corr);
+    sr = dnet_broker_serve(&R, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
+    NS_CHECK(sr == 0 && rsp.status == SS$_ENDOFFILE,
+             "OP_RECV with nothing pending returns the honest SS$_ENDOFFILE (never blocks here)");
+
+    /* 4) OP_CLOSE via serve on L -> DI -> R's link goes CLOSED. */
+    req.corr_id = dnet_broker_corr_next(&corr);
+    req.op = DNET_BROKER_OP_CLOSE; req.datalen = 0; has = 0;
+    sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
+    int closed = sr == 0 && rsp.status == SS$_NORMAL && rsp.corr_id == req.corr_id && has == 1 &&
+        move_frame(sv[0], sv[1], frame, flen, rxbuf, sizeof rxbuf, &rxlen) == 0 &&
+        dnet_engine_link_rx(&R, t++, rxbuf, rxlen, reply, sizeof reply, &rlen, &has_reply, &ev) == 0 &&
+        ev == DNET_LINK_EV_DISCONNECT && dnet_link_state_of(&R.link) == DNET_LINK_CLOSED;
+    NS_CHECK(closed, "OP_CLOSE: serve builds a DI frame; the peer's link goes CLOSED");
+
+    /* 5) NEVER-CRASH: an unknown op and a too-short OPEN are refused honestly. */
+    req.corr_id = dnet_broker_corr_next(&corr);
+    req.op = 0x7fffu; req.datalen = 0; has = 1;
+    sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
+    NS_CHECK(sr == 0 && rsp.status == SS$_ILLIOFUNC && has == 0 && rsp.corr_id == req.corr_id,
+             "an unknown op is refused (SS$_ILLIOFUNC), no frame, correlation still echoed");
+    req.corr_id = dnet_broker_corr_next(&corr);
+    req.op = DNET_BROKER_OP_OPEN; req.datalen = 2;   /* too short for the remote address */
+    has = 1;
+    sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
+    NS_CHECK(sr == 0 && rsp.status == SS$_BADPARAM && has == 0,
+             "OP_OPEN with a payload too short for the remote address is refused (BADPARAM, no over-read)");
+
+    close(sv[0]); close(sv[1]);
+    printf("DECNETD-I-NETSERVICE, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-NET-SERVICE-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-NET-SERVICE-SELFTEST: FAIL\n");
+    return 1;
+#undef NS_CHECK
+}
+
+/*
  * run_task_selftest (rd vms-dda) -- the host floor of the DECnet TASK-TO-TASK
  * client seam (the a1 ladder rung 1). It proves the generic NAMED-object logical
  * link an application task uses -- $ASSIGN NODE::"TASK=name" + $QIO -- over the
@@ -2934,6 +3173,10 @@ static void usage(const char *argv0)
         "                      floor and exit (no executive): request/response\n"
         "                      round-trip + bounds-validated decode (fuzzed) +\n"
         "                      correlation-id anti-cross-talk (rd vms-22c)\n"
+        "  --net-service-selftest run the NETACP broker service-dispatch floor and\n"
+        "                      exit (no executive): OPEN/SEND/RECV/CLOSE against the\n"
+        "                      NSP link engine over a socketpair, correlation-matched,\n"
+        "                      with honest never-crash refusals (rd vms-22c)\n"
         "  --set-host-selftest run the $ SET HOST / CTERM terminal-service proof\n"
         "                      and exit (no CAP_NET_RAW -- two engines carry a\n"
         "                      whole terminal session: Bind, characteristics,\n"
@@ -3023,6 +3266,7 @@ int main(int argc, char **argv)
     int nsp_self_test = 0;
     int task_self_test = 0;               /* --task-selftest : task-to-task client floor */
     int net_broker_test = 0;              /* --net-broker-selftest : T1 broker record codec */
+    int net_service_test = 0;             /* --net-service-selftest : broker service dispatch */
     int sethost_self_test = 0;
     int sethost_srccode_test = 0;
     int cterm_accept_test = 0;
@@ -3065,6 +3309,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--nsp-selftest"))  nsp_self_test = 1;
         else if (!strcmp(argv[i], "--task-selftest")) task_self_test = 1;
         else if (!strcmp(argv[i], "--net-broker-selftest")) net_broker_test = 1;
+        else if (!strcmp(argv[i], "--net-service-selftest")) net_service_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
@@ -3107,6 +3352,8 @@ int main(int argc, char **argv)
         return run_task_selftest();
     if (net_broker_test)
         return run_net_broker_selftest();
+    if (net_service_test)
+        return run_net_service_selftest();
     if (sethost_self_test)
         return run_sethost_selftest();
     if (sethost_srccode_test)

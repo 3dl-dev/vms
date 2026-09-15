@@ -664,6 +664,21 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     { cp '/src/repo/build-static/bin/DECC$SHR.EXE' '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' || \
       { echo "FATAL: DECC\$SHR.EXE was not built -- the MMK-driven executable link would have no --use producer"; exit 1; }; } && \
     chmod +x '/initramfs/vms/SYS0/SYSCOMMON/SYSLIB/DECC$SHR.EXE' && \
+    # ACTIVATED MMK.EXE (vms-c09f): swap the drive suites' MMK subject from the
+    # STATIC mmk_native (staged just above) to the OVMX-native, IMGACT-ACTIVATED
+    # MMK.EXE (mk_mmk.sh: 19 objects, LINK.EXE --executable --use {DECC$SHR + the
+    # six OVMX shareables}, PT_INTERP=IMGACT.EXE). The full seven-producer graph
+    # builds here once via build_producer_graph (arch-adaptive, x86_64 supported,
+    # vms-cb5f) and stages all 7 shareables into SYS$LIBRARY + the activated
+    # MMK.EXE into SYS$SYSTEM (overwriting the static copy above with identical
+    # IMGACT/DECC$SHR re-emitted, and LINK.EXE left untouched). The activated MMK
+    # --uses all 7, so all 7 must be staged where IMGACT resolves them. Staging
+    # only; link.c/imgact.c unchanged (vms-c09f boundary). inject_and_run.sh's
+    # per-defect rebuild relinks MMK.EXE mmk-only against these staged shareables.
+    sh /src/repo/src/vmslink/mk_mmk_native_staged.sh /src/repo \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSLIB full && \
+    ls -la /initramfs/vms/SYS0/SYSCOMMON/SYSLIB/*'$SHR.EXE' && \
     mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include && \
     cp /src/repo/third-party/tcc/src/include/*.h /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/include/ && \
     # tinycc ships stddef.h/stdarg.h but NOT <stdint.h> -- upstream tcc defers

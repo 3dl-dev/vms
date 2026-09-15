@@ -109,6 +109,9 @@
 #include "vms_kif.h"
 #include "vms/pcb.h"
 #include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors for IO$_CREATE */
+#include "sysvol_stage.h" /* SYSVOL_UNIT + the shared VDA300: mount/write-over-ACP/
+                             OVMX_SYSDEVICE staging (vms-c09f), shared with
+                             test_syssvc_mmk_drive.c */
 
 #define EXIT_SKIP 77
 
@@ -144,7 +147,7 @@
  * location and reads the GENUINE bytes over the ACP. DECC$SHR.EXE lives on this
  * volume too (mastered by mkimage_ods2_sysvol). The clean-room real-VAX VDA0:
  * fixture is NEVER mutated with OVMX toolchain/image files (vms-29ff). */
-#define SYSVOL_UNIT       "VDA300:"
+/* SYSVOL_UNIT is defined in sysvol_stage.h (shared). */
 #define SYSVOL_IMAGE_NAME "OVMXRT.EXE"
 /* The staged POSIX copy the kernel execs; imgsrc_map_staged() maps the
  * OVMX_BOOT_STAGE_PREFIX back to /vms/SYS0/SYSCOMMON/SYSEXE/ and IMGACT then
@@ -399,142 +402,10 @@ static int create_ods2_blob(const char *spec, const char *blob)
     return create_ods2_text(spec, lines);
 }
 
-/* The [SYS0.SYSCOMMON.SYSEXE] directory FID on SYSVOL_UNIT, resolved once in
- * main() by walking the ACP directory tree. write_produced_image() creates the
- * produced OVMXRT.EXE under this DID. */
-static uint16_t g_sysexe_num = 0, g_sysexe_seq = 0;
-static uint8_t  g_sysexe_rvn = 0, g_sysexe_nmx = 0;
-static int      g_sysvol_ready = 0;
-
-/* Walk MFD -> <dirs[0]>.DIR -> <dirs[1]>.DIR -> ... over the ACP on `chan`,
- * returning the FINAL directory's FID. dirs[] is NULL-terminated (names without
- * the ".DIR" type). Leaves the channel with no accessed file. Returns a VMS
- * status. */
-static uint32_t resolve_dir_fid(uint32_t chan, const char *const *dirs,
-                                uint16_t *num, uint16_t *seq,
-                                uint8_t *rvn, uint8_t *nmx)
-{
-    uint16_t d_num = 0, d_seq = 0;
-    uint8_t  d_rvn = 0, d_nmx = 0;   /* 0/0/0 => MFD */
-    for (int i = 0; dirs[i]; i++) {
-        struct vms_acp_access_args a;
-        memset(&a, 0, sizeof(a));
-        a.chan = chan;
-        a.did_num = d_num; a.did_seq = d_seq; a.did_rvn = d_rvn; a.did_nmx = d_nmx;
-        a.version = 0;
-        snprintf(a.name, VMS_ACP_NAME_SIZE, "%s.DIR", dirs[i]);
-        uint32_t st = vms_kif_acp_access(&a);
-        if (!$VMS_STATUS_SUCCESS(st))
-            return st;
-        d_num = a.fid_num; d_seq = a.fid_seq; d_rvn = a.fid_rvn; d_nmx = a.fid_nmx;
-        (void)vms_kif_acp_deaccess(chan);
-    }
-    *num = d_num; *seq = d_seq; *rvn = d_rvn; *nmx = d_nmx;
-    return SS$_NORMAL;
-}
-
-/* Mount SYSVOL_UNIT and resolve [SYS0.SYSCOMMON.SYSEXE]'s FID (into the g_sysexe_*
- * globals). Idempotent; sets g_sysvol_ready on success. Returns 0 on success.
- * The volume is LEFT MOUNTED so IMGACT can $ASSIGN + IO$_ACCESS the produced
- * image off it at activation time. */
-static int sysvol_prepare(void)
-{
-    if (g_sysvol_ready)
-        return 0;
-    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_mount(SYSVOL_UNIT)))
-        return -1;
-    uint32_t chan = 0;
-    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_assign(SYSVOL_UNIT, &chan)) || chan == 0)
-        return -1;
-    static const char *const tree[] = { "SYS0", "SYSCOMMON", "SYSEXE", NULL };
-    uint32_t st = resolve_dir_fid(chan, tree, &g_sysexe_num, &g_sysexe_seq,
-                                  &g_sysexe_rvn, &g_sysexe_nmx);
-    (void)vms_kif_dassgn(chan);
-    if (!$VMS_STATUS_SUCCESS(st) || g_sysexe_num == 0)
-        return -1;
-    g_sysvol_ready = 1;
-    return 0;
-}
-
-/* Write `bytes[0..len)` as [SYS0.SYSCOMMON.SYSEXE]<SYSVOL_IMAGE_NAME> on
- * SYSVOL_UNIT, byte-exact, over the executive Files-11 ACP: delete any prior
- * version, IO$_CREATE + IO$_ACCESS(write), IO$_WRITEVBLK the bytes block by block
- * (implicit extend allocates from BITMAP.SYS), padding the final block with
- * zeros. The produced image's valid byte count becomes a whole number of blocks
- * (>= len), which is all IMGACT needs -- it reads header/phdrs/sections/PT_LOAD
- * at offsets < len (imgact_acp_pread clamps at f.valid). Returns 0 on success. */
-static int write_produced_image(const uint8_t *bytes, long len)
-{
-    if (!g_sysvol_ready || len <= 0)
-        return -1;
-    uint32_t chan = 0;
-    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_assign(SYSVOL_UNIT, &chan)) || chan == 0)
-        return -1;
-
-    /* Best-effort: delete any prior versions from an earlier drive in this VM. */
-    for (int v = 0; v < 8; v++) {
-        struct vms_acp_fileop_args df;
-        memset(&df, 0, sizeof(df));
-        df.chan = chan; df.func = VMS_ACP_FOP_DELETE; df.modifiers = VMS_ACP_M_DELETE;
-        df.did_num = g_sysexe_num; df.did_seq = g_sysexe_seq;
-        df.did_rvn = g_sysexe_rvn; df.did_nmx = g_sysexe_nmx;
-        df.version = 0;   /* highest */
-        strncpy(df.name, SYSVOL_IMAGE_NAME, VMS_ACP_NAME_SIZE - 1);
-        if (!$VMS_STATUS_SUCCESS(vms_kif_acp_fileop(&df)))
-            break;
-    }
-
-    /* IO$_CREATE a fresh ;1 (dir entry + real FID), then IO$_ACCESS it for
-     * WRITE by name -- the exact create->access(write)->writevb pattern
-     * test_syssvc_acp_create.c proves. */
-    struct vms_acp_fileop_args f;
-    memset(&f, 0, sizeof(f));
-    f.chan = chan; f.func = VMS_ACP_FOP_CREATE; f.modifiers = VMS_ACP_M_CREATE;
-    f.kind = ODS2_FK_DATA_FIX;
-    f.did_num = g_sysexe_num; f.did_seq = g_sysexe_seq;
-    f.did_rvn = g_sysexe_rvn; f.did_nmx = g_sysexe_nmx;
-    f.version = 1;
-    strncpy(f.name, SYSVOL_IMAGE_NAME, VMS_ACP_NAME_SIZE - 1);
-    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_fileop(&f))) {
-        (void)vms_kif_dassgn(chan);
-        return -1;
-    }
-
-    struct vms_acp_access_args a;
-    memset(&a, 0, sizeof(a));
-    a.chan = chan;
-    a.did_num = g_sysexe_num; a.did_seq = g_sysexe_seq;
-    a.did_rvn = g_sysexe_rvn; a.did_nmx = g_sysexe_nmx;
-    a.version = 0;   /* highest */
-    a.acctl = VMS_ACP_ACCTL_WRITE;
-    strncpy(a.name, SYSVOL_IMAGE_NAME, VMS_ACP_NAME_SIZE - 1);
-    if (!$VMS_STATUS_SUCCESS(vms_kif_acp_access(&a))) {
-        (void)vms_kif_dassgn(chan);
-        return -1;
-    }
-
-    /* IO$_WRITEVBLK block by block (last block zero-padded to 512). */
-    static uint8_t blk[512];
-    long off = 0;
-    uint32_t vbn = 1;
-    int ok = 1;
-    while (off < len) {
-        uint32_t chunk = (len - off > 512) ? 512u : (uint32_t)(len - off);
-        if (chunk < 512)
-            memset(blk, 0, sizeof(blk));
-        memcpy(blk, bytes + off, chunk);
-        struct vms_acp_rw_args r;
-        memset(&r, 0, sizeof(r));
-        r.chan = chan; r.vbn = vbn; r.offset = 0; r.length = 512;
-        r.buffer = (uint64_t)(uintptr_t)blk;
-        uint32_t st = vms_kif_acp_writevb(&r);
-        if (!$VMS_STATUS_SUCCESS(st) || r.xferred != 512) { ok = 0; break; }
-        off += chunk; vbn++;
-    }
-    (void)vms_kif_acp_deaccess(chan);
-    (void)vms_kif_dassgn(chan);
-    return ok ? 0 : -1;
-}
+/* g_sysexe_* / sysvol_resolve_dir_fid / sysvol_prepare / sysvol_write_image
+ * moved to the shared sysvol_stage.h (vms-c09f). stage_from_sysvol_over_acp
+ * below (build-specific: stages producers into /run/ovmx-boot) uses the
+ * shared sysvol_resolve_dir_fid. */
 
 /*
  * stage_from_sysvol_over_acp (vms-104) - read `name` off SYSVOL_UNIT under the
@@ -556,7 +427,7 @@ static int stage_from_sysvol_over_acp(const char *const *tree, const char *name)
     if (!$VMS_STATUS_SUCCESS(vms_kif_acp_assign(SYSVOL_UNIT, &chan)) || chan == 0)
         return -1;
     uint16_t dnum = 0, dseq = 0; uint8_t drvn = 0, dnmx = 0;
-    uint32_t st = resolve_dir_fid(chan, tree, &dnum, &dseq, &drvn, &dnmx);
+    uint32_t st = sysvol_resolve_dir_fid(chan, tree, &dnum, &dseq, &drvn, &dnmx);
     if (!$VMS_STATUS_SUCCESS(st) || dnum == 0) { vms_kif_dassgn(chan); return -1; }
 
     struct vms_acp_access_args a;
@@ -944,6 +815,14 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
     pid_t pid = fork();
     if (pid < 0) { close(outpipe[0]); close(outpipe[1]); return; }
     if (pid == 0) {
+        /* Lead our own process group so a wedged MMK (no marker -> $HIBER
+         * deadlock, which the mmk-drive-command-not-sent defect forces on EVERY
+         * MMK drive incl. this build drive) can be hard-killed together with the
+         * DCL subprocess it lib$spawns -- a NON-detached subprocess is a plain
+         * fork() child that inherits this pgid, so kill(-pid) reaps it. Without
+         * this, the orphaned DCL wedges subsequent suites in the same booted VM
+         * (vms-c09f/#1241; see the group-kill below and the twin in mmk_drive). */
+        setpgid(0, 0);
         if (chdir(workdir) != 0) _exit(120);
         dup2(outpipe[1], STDOUT_FILENO);
         dup2(outpipe[1], STDERR_FILENO);
@@ -963,8 +842,12 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
          * channel the real runtime uses, not the retired VMS_FOREIGN_CMD env
          * shim (lib$get_foreign now prefers the executive whenever /dev/vms
          * answers and consults the env var only as the no-executive fallback).
-         * MMK.EXE is a bare static image, so it re-REGISTERs onto this same PCB
-         * (EEXIST, context preserved). The env var is kept only for that
+         * MMK.EXE is now the OVMX-native IMGACT-ACTIVATED image (vms-c09f): the
+         * harness execl()s it in place, the kernel loads IMGACT as PT_INTERP, and
+         * the activated MMK reads the fcmd from this same setcli'd PCB. Whether
+         * that exec-drive reads the CLI (and drives spawn+mailbox+WRTATTN-AST)
+         * identically to the former static image over real /dev/vms is exactly
+         * the convergence this suite now proves. The env var is kept only for the
          * no-executive fallback, mirroring lib$get_foreign. */
         (void)vms_kif_setcli(1, fcmd);
         setenv("VMS_FOREIGN_CMD", fcmd, 1);
@@ -1026,9 +909,12 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
         if (r < 0) break;
         waited += 200;
     }
-    /* Kill MMK if still running -- CLEANUP, not a verdict (see above). */
+    /* Kill MMK if still running -- CLEANUP, not a verdict (see above). Kill the
+     * whole PROCESS GROUP (kill(-pid), MMK + its lib$spawn'd DCL) so a wedged
+     * build drive leaves NOTHING alive to wedge the next suite -- see the
+     * setpgid + the fuller rationale in the mmk_drive twin (vms-c09f/#1241). */
     if (waitpid(pid, &wstatus, WNOHANG) == 0) {
-        kill(pid, SIGKILL);
+        kill(-pid, SIGKILL);            /* the group: MMK + its spawned DCL */
         (void)waitpid(pid, &wstatus, 0);
     } else {
         *reaped = 1;
@@ -1057,7 +943,7 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
          * main) points IMGACT at SYSVOL_UNIT. 216 iff the driven LINK produced a
          * real image that really activates + runs off the volume. */
         if (*exelen > 0) {
-            int wrote = (write_produced_image((const uint8_t *)*exebuf, *exelen) == 0);
+            int wrote = (sysvol_write_image(SYSVOL_IMAGE_NAME, (const uint8_t *)*exebuf, *exelen) == 0);
             (void)mkdir("/run", 0755);
             (void)mkdir(STAGE_DIR, 0755);
             int staged = (copy_file(exepath, STAGED_IMAGE_PATH) == 0);
@@ -1148,6 +1034,34 @@ int main(int argc, char **argv)
     CHECK(sysvol_prepare() == 0,
           "$MOUNT " SYSVOL_UNIT " + resolve [SYS0.SYSCOMMON.SYSEXE] over the ACP "
           "(the system volume the produced image is activated off, vms-104)");
+
+    /* Stage the ACTIVATED MMK.EXE SUBJECT itself onto the system volume over the
+     * ACP (vms-c09f). MMK.EXE is now an OVMX-native IMGACT-activated image: the
+     * execl() below hands the kernel the /vms POSIX copy for the PT_LOAD/PT_INTERP
+     * mmap, but IMGACT then re-reads the GENUINE main-image bytes off
+     * OVMX_SYSDEVICE:[SYS0.SYSCOMMON.SYSEXE]MMK.EXE THROUGH the ACP (imgsrc_open,
+     * no /vms fallback for a MAIN image -- a missing one fails %IMGACT-F-IMGNOTFND,
+     * which is what a bare activated MMK.EXE hit before this). So the subject must
+     * live on the mounted volume, exactly as the produced OVMXRT.EXE below does.
+     * The on-volume name is basename(mmk) so IMGACT's execfn->[SYS0.SYSCOMMON.
+     * SYSEXE]<name> resolution finds it (default MMK.EXE; OVMX_MMK basename honored). */
+    const char *mmk_base = strrchr(mmk, '/');
+    mmk_base = mmk_base ? mmk_base + 1 : mmk;
+    CHECK(sysvol_stage_subject(mmk, mmk_base) == 0,
+          "staged the activated MMK.EXE subject onto " SYSVOL_UNIT
+          " [SYS0.SYSCOMMON.SYSEXE] over the ACP (IMGACT resolves the main image "
+          "off the volume -- no /vms fallback, vms-c09f)");
+
+    /* Stage MMK's --use'd shareable graph (LIBVMS$SHR.EXE et al.) onto the volume
+     * too: IMGACT's load_needed() resolves each SONAME off OVMX_SYSDEVICE:
+     * [SYS0.SYSCOMMON.SYSLIB] over the ACP, so the whole closure must LIVE on the
+     * volume, not lean on the /vms SYSLIB fallback (vms-c09f, #1241). DECC$SHR.EXE
+     * is mastered there already and skipped; the rest come from the initramfs
+     * SYS$LIBRARY the Dockerfile's full-mode build produced. */
+    CHECK(sysvol_stage_shareables_from("/vms/SYS0/SYSCOMMON/SYSLIB") >= 0,
+          "staged MMK's --use'd shareable graph onto " SYSVOL_UNIT
+          " [SYS0.SYSCOMMON.SYSLIB] over the ACP (IMGACT resolves each shareable "
+          "off the volume, no /vms fallback, vms-c09f/#1241)");
 
     /* Stage the two producers the drive binds by VMS spec off the ODS-2 volume
      * THROUGH the ACP into /run/ovmx-boot (vms-104): the C run-time shareable

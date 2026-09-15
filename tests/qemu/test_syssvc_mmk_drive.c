@@ -87,6 +87,9 @@
 #include "rms/rms.h"
 #include "vms_kif.h"
 #include "vms/pcb.h"
+#include "vmsfs/ods2.h"   /* ODS2_FK_* file-kind selectors (used by sysvol_stage.h) */
+#include "sysvol_stage.h" /* shared VDA300: mount/write-over-ACP/OVMX_SYSDEVICE
+                             staging of the activated MMK.EXE subject (vms-c09f) */
 
 #define EXIT_SKIP 77
 
@@ -284,6 +287,33 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* Stage the ACTIVATED MMK.EXE SUBJECT onto the system volume over the ACP
+     * (vms-c09f). MMK.EXE is now an OVMX-native IMGACT-activated image: execl()
+     * hands the kernel the /vms POSIX copy for the PT_LOAD/PT_INTERP mmap, but
+     * IMGACT then re-reads the GENUINE main-image bytes off OVMX_SYSDEVICE:
+     * [SYS0.SYSCOMMON.SYSEXE]MMK.EXE THROUGH the ACP (imgsrc_open) -- there is NO
+     * /vms fallback for a MAIN image, so a subject not on the volume fails
+     * %IMGACT-F-IMGNOTFND (what a bare activated MMK.EXE hit before this). This
+     * mounts VDA300:, writes the subject there, and points IMGACT at it via
+     * OVMX_SYSDEVICE -- which the forked child below inherits. The build files
+     * (author'd on VDA0: above) are unaffected: MMK opens them by full VDA0: spec. */
+    const char *mmk_base = strrchr(mmk_path(), '/');
+    mmk_base = mmk_base ? mmk_base + 1 : mmk_path();
+    if (sysvol_stage_subject(mmk_path(), mmk_base) != 0) {
+        printf("  FAIL: could not stage the activated MMK.EXE subject onto %s "
+               "[SYS0.SYSCOMMON.SYSEXE] over the ACP (vms-c09f)\n", SYSVOL_UNIT);
+        return 1;
+    }
+    /* Stage MMK's --use'd shareable graph onto the volume too: IMGACT resolves
+     * each SONAME off OVMX_SYSDEVICE:[SYS0.SYSCOMMON.SYSLIB] over the ACP, so the
+     * whole closure must live on the volume, not lean on the /vms fallback
+     * (vms-c09f/#1241). DECC$SHR.EXE is mastered there already and skipped. */
+    if (sysvol_stage_shareables_from("/vms/SYS0/SYSCOMMON/SYSLIB") < 0) {
+        printf("  FAIL: could not stage MMK's --use'd shareable graph onto %s "
+               "[SYS0.SYSCOMMON.SYSLIB] over the ACP (vms-c09f/#1241)\n", SYSVOL_UNIT);
+        return 1;
+    }
+
     /* Author the description + rules files in VDA0:[OVMXDIR] through RMS
      * ($CREATE/$PUT -> the Files-11 ACP). The rule target is a BARE name (all
      * MMK's lib$tparse accepts) and the rule is DEPENDENCY-FREE, so MMK just
@@ -322,11 +352,23 @@ int main(int argc, char **argv)
     pid_t pid = fork();
     if (pid < 0) { printf("  FAIL: fork() failed\n"); return 1; }
     if (pid == 0) {
-        /* Child = the shipped MMK. Run the REAL build (NOT /NOACTION): MMK opens
-         * the description off the ODS-2 volume through RMS, opens the persistent
-         * DCL, and drives the action over the mailbox. /DESCRIPTION + /RULES_FILE
-         * are qualifier VALUES (not rule-parsed) so they carry the device+MFD
-         * spec; the P1 target is bare (resolving to VDA0:'s MFD like the rule). */
+        /* Child = the shipped MMK. Lead our OWN process group so that if MMK
+         * genuinely wedges under a defect (no marker -> $HIBER deadlock) and must
+         * be hard-killed below, we can reap MMK *and* the DCL subprocess it
+         * lib$spawns: lib$spawn creates a NON-detached subprocess, i.e. a plain
+         * fork() child (sys$creprc setsid()+double-forks ONLY for PRC$M_DETACH,
+         * src/libvms/syssvc/sys_process.c), so the DCL inherits THIS pgid and a
+         * process-group kill reaches it. Without this, a kill(MMK) alone orphans
+         * the DCL, which keeps this suite's stdout FIFO open and sits blocked on
+         * the leaked mailbox in the shared executive -- contending/wedging every
+         * SUBSEQUENT suite in the same booted VM (the negctl runs the full suite
+         * set per defect-boot, so that leak is NOT contained to this suite; it
+         * blew the 2700s wall under mmk-drive-command-not-sent, vms-c09f/#1241). */
+        setpgid(0, 0);
+        /* Run the REAL build (NOT /NOACTION): MMK opens the description off the
+         * ODS-2 volume through RMS, opens the persistent DCL, and drives the action
+         * over the mailbox. /DESCRIPTION + /RULES_FILE are qualifier VALUES (not
+         * rule-parsed) so they carry the device+MFD spec; the P1 target is bare. */
         dup2(outpipe[1], STDOUT_FILENO);
         dup2(outpipe[1], STDERR_FILENO);
         close(outpipe[0]); close(outpipe[1]);
@@ -343,10 +385,12 @@ int main(int argc, char **argv)
          * uses (the invoking CLI records the command line; the activated image
          * reads it), NOT the retired VMS_FOREIGN_CMD env shim: lib$get_foreign
          * now prefers the executive whenever /dev/vms answers, and only consults
-         * VMS_FOREIGN_CMD as the no-executive fallback. MMK.EXE is a bare static
-         * image (no IMGACT interpreter), so it re-REGISTERs onto this same PCB
-         * (EEXIST, context preserved) rather than REGISTER_CONTINUE-inheriting
-         * from a parent -- the setcli made here is what it reads. The env var is
+         * VMS_FOREIGN_CMD as the no-executive fallback. MMK.EXE is now the
+         * OVMX-native IMGACT-ACTIVATED image (vms-c09f): the harness execl()s it
+         * in place and the kernel loads IMGACT as PT_INTERP -- whether the
+         * activated image reads the setcli made here identically to the former
+         * bare static image (which re-REGISTERed onto this same PCB) over real
+         * /dev/vms is what the exec-drive proof now exercises. The env var is
          * kept only for that no-executive fallback, mirroring lib$get_foreign. */
         (void)vms_kif_setcli(1, fcmd);
         setenv("VMS_FOREIGN_CMD", fcmd, 1);
@@ -437,12 +481,19 @@ int main(int argc, char **argv)
      * the loop above (reaped=1), having run sp_close() to $FORCEX/$DELPRC its DCL
      * subprocess and $DASSGN its mailboxes -- so this suite leaves NOTHING alive on
      * the shared executive to wedge the next one. Only if MMK genuinely wedged (a
-     * real mid-drive $HIBER deadlock -- no marker, the failure case) do we SIGKILL
-     * it as a last resort so no process is left running; that path occurs ONLY under
-     * the isolated negctl (one defect per QEMU boot), so the resource leak a hard
-     * kill cannot avoid stays contained to that boot and never reaches a sibling. */
+     * real mid-drive $HIBER deadlock -- no marker, the failure case, which the
+     * mmk-drive-command-not-sent negctl forces on purpose) do we hard-kill as a
+     * last resort. Kill the whole PROCESS GROUP (kill(-pid) -- MMK leads its own
+     * group via setpgid above, and its non-detached lib$spawn'd DCL is in it), NOT
+     * just MMK: a kill(pid) alone leaves the DCL orphaned, holding this suite's
+     * stdout FIFO and blocked on the leaked mailbox, which contends/wedges EVERY
+     * subsequent suite in the same booted VM. The negctl runs the FULL suite set
+     * per defect-boot (not one suite in isolation), so that leak is NOT contained
+     * -- unreaped, it blew the 2700s wall under this very defect (vms-c09f/#1241).
+     * Killing the group reaps the DCL (it dies even mid-$QIO; SIGKILL is
+     * uncatchable), releasing the FIFO and the mailbox so siblings run clean. */
     if (!reaped) {
-        kill(pid, SIGKILL);
+        kill(-pid, SIGKILL);            /* the group: MMK + its spawned DCL */
         (void)waitpid(pid, &wstatus, 0);
     }
 

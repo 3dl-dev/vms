@@ -137,9 +137,19 @@ echo "--- rebuilding DCL.EXE (the user-visible command layer) ---"
 # unconditionally, same reason as DCL.EXE: a conditional rebuild is one more
 # thing that can silently not happen, leaving a stale MMK.EXE asserting the gate
 # caught nothing.
-echo "--- rebuilding MMK.EXE (the exec-drive subject test_syssvc_mmk_drive drives) ---"
-( cd /src/repo && cmake --build build-static --target mmk_native \
-                        --parallel "$(nproc)" ) || exit 4
+# vms-c09f: MMK.EXE is now the OVMX-native, IMGACT-ACTIVATED image (mk_mmk.sh),
+# not the static mmk_native. A defect targeting ovmx_mmk_sp.c (mmk-drive-command-
+# not-sent) is compiled INTO MMK.EXE, so it must be RELINKED after the injection
+# -- mmk-ONLY (reusing the 7 shareables the Docker image build already staged into
+# SYS$LIBRARY, and build-static/bin/LINK.EXE), NOT the full producer graph: the
+# negctl shard runs ~7 defects under a 50m budget and the shareables never change
+# per-defect, so a full graph rebuild each time would risk the timeout. Staging
+# only; link.c/imgact.c unchanged (vms-c09f boundary).
+echo "--- relinking the ACTIVATED MMK.EXE (mmk-only, reusing staged shareables; vms-c09f) ---"
+( cd /src/repo && sh src/vmslink/mk_mmk_native_staged.sh /src/repo \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSEXE \
+        /initramfs/vms/SYS0/SYSCOMMON/SYSLIB \
+        mmk-only /src/repo/build-static/bin/LINK.EXE ) || exit 4
 
 # INITIALIZE.EXE is a SUBJECT test_syssvc_initialize drives (vms-cf62), not a
 # suite, so nothing above builds it -- and initialize-home-magic-not-written
@@ -199,9 +209,12 @@ chmod +x /initramfs/tests/INITIALIZE.EXE || exit 4
 # refresh THESE copies or the drive runs against the pristine image-build
 # binaries and the mmk-drive-command-not-sent control could never go red.
 # Absence is FATAL, exactly as in the image build (tests/qemu/Dockerfile).
+# vms-c09f: MMK.EXE was already relinked (ACTIVATED) + staged into SYS$SYSTEM by
+# the mmk-only mk_mmk_native_staged.sh call above -- do NOT re-copy the static
+# build-static/bin/MMK.EXE here (that would clobber the activated image with the
+# static one). Only DCL.EXE (the subprocess MMK's lib$spawn launches from the
+# SAME SYS$SYSTEM path) is refreshed here.
 mkdir -p /initramfs/vms/SYS0/SYSCOMMON/SYSEXE || exit 4
-cp /src/repo/build-static/bin/MMK.EXE \
-   /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE || exit 4
 cp /src/repo/build-static/bin/DCL.EXE \
    /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/DCL.EXE || exit 4
 chmod +x /initramfs/vms/SYS0/SYSCOMMON/SYSEXE/MMK.EXE \

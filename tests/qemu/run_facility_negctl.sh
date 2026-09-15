@@ -492,6 +492,25 @@ if [ "$DEFECT_BAD" -eq 0 ]; then
 else
     fail_n=$((fail_n + 1))
     FAILED_DEFECTS="$FAILED_DEFECTS positive-control"
+    # DIAGNOSTIC (vms-c09f): the CI log otherwise shows only this summary, not the
+    # guest console -- so a pristine-red suite's ACTUAL per-assertion PASS/FAIL (and
+    # any activation/exec error) is invisible. Dump each failing suite's raw guest
+    # console section from $OUTFILE so the first real failure is classifiable from
+    # the log alone (e.g. activation-gap vs a build/CLI/staging error).
+    echo ""
+    echo "--- DIAGNOSTIC: raw guest console for the pristine-red suite(s) ---"
+    for _fs in $EXPECTED; do
+        [ "$(suite_rc "$_fs")" = "0" ] && continue
+        echo "======== console: $_fs ========"
+        awk -v s="$_fs" '
+            /^=== SUITE / {
+                if ($0 ~ ("^=== SUITE " s " rc=")) { printf "%s", buf; print; exit }
+                buf = ""; next
+            }
+            { buf = buf $0 "\n" }
+        ' "$OUTFILE" | tail -120
+        echo "======== end console: $_fs ========"
+    done
     echo ""
     echo "The positive control failed. Refusing to run the negative controls: their"
     echo "verdicts would be unfounded."

@@ -1069,6 +1069,121 @@ static int run_net_service_selftest(void)
 }
 
 /*
+ * run_net_mbx_selftest (rd vms-22c, a1-2 slice 2b) -- the T1 mailbox transport
+ * round-trip on a REAL /dev/vms: the exec<->NETACP hop the record codec + service
+ * dispatch ride, proven end to end through the executive mailbox (vms_mbx). A
+ * single process plays both sides -- a client and NETACP -- so it needs no peer
+ * node or datalink; it exercises exactly the mailbox plumbing:
+ *   client  $CREMBXs its own reply mailbox, marshals a broker REQUEST carrying
+ *           reply_unit, and writes it to NETACP's request mailbox;
+ *   NETACP   reads the request (IO$M_NOW), BOUNDS-DECODES it (dnet_broker_req_
+ *           decode), services it (dnet_broker_serve), ASSIGNS the client's reply
+ *           mailbox BY UNIT (MBA<reply_unit>: -- the routing that delivers the
+ *           response to the right waiter), and writes the RESPONSE;
+ *   client  reads the response from ITS reply mailbox and CORRELATION-MATCHES it.
+ * The op is OP_RECV on a fresh engine (rx buffer empty), so the honest
+ * SS$_ENDOFFILE round-trips with no live link needed -- the point here is the
+ * MAILBOX SEAM, not the link. FAIL-HONEST (Rule 9/INV-6): with no /dev/vms the
+ * mailbox creates fail SS$_NOSUCHDEV and this skips, never fakes the round-trip.
+ * The full task-to-task e2e ($QIO _NET: -> qio_net_op -> NETACP -> a live link)
+ * is slice 2c. Runs in the booted acceptance battery (via run-on-rail's QEMU
+ * leg) where /dev/vms is real.
+ */
+static int run_net_mbx_selftest(void)
+{
+    printf("DECNETD-I-NETMBX, T1 mailbox transport round-trip (client $CREMBX ->"
+           " request -> NETACP read+serve -> reply-by-unit -> client correlation-"
+           " match), needs /dev/vms (rd vms-22c)\n");
+
+    int kfd = vms_kif_open();
+    if (kfd < 0) {
+        printf("DECNETD-I-NETMBX, SKIPPED: no /dev/vms -- the mailbox round-trip"
+               " runs in the booted battery (fail-honest, no fake)\n");
+        printf("DECNETD-NET-MBX-SELFTEST: SKIP\n");
+        return 0;
+    }
+    vms_kif_close();
+
+    int pass = 0, fail = 0;
+#define MB_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    const uint32_t MAXMSG = DNET_BROKER_REQ_MAX + 16;   /* > the 1024 default */
+    uint32_t req_chan = 0, req_unit = 0;   char req_dev[64]   = {0};
+    uint32_t rep_chan = 0, rep_unit = 0;   char rep_dev[64]   = {0};
+
+    uint32_t st = vms_kif_mbx_create(0, MAXMSG, MAXMSG * 4,
+                                     &req_chan, &req_unit, req_dev, sizeof req_dev);
+    MB_CHECK(st & 1, "NETACP $CREMBX the request mailbox");
+    st = vms_kif_mbx_create(0, MAXMSG, MAXMSG * 4,
+                            &rep_chan, &rep_unit, rep_dev, sizeof rep_dev);
+    MB_CHECK(st & 1, "client $CREMBX its own reply mailbox");
+
+    if (pass >= 2) {
+        /* client: marshal a request carrying reply_unit, write to NETACP's mbx. */
+        struct dnet_broker_req req;
+        memset(&req, 0, sizeof req);
+        req.corr_id = 0xABCD1234u; req.owner_pid = 0x0000BEEFu;
+        req.link_handle = 0x2001u; req.reply_unit = rep_unit;
+        req.op = DNET_BROKER_OP_RECV; req.datalen = 0;
+        uint8_t reqbuf[DNET_BROKER_REQ_MAX]; size_t reqlen = 0;
+        dnet_broker_req_encode(&req, reqbuf, sizeof reqbuf, &reqlen);
+        st = vms_kif_mbx_write(req_chan, reqbuf, (uint32_t)reqlen);
+        MB_CHECK(st & 1, "client writes the request to NETACP's request mailbox");
+
+        /* NETACP: read (IO$M_NOW) -> bounds-decode -> serve. */
+        struct dnet_engine eng;
+        const uint8_t hw[6] = { 0x02,0,0,0,0,0x0a };
+        dnet_engine_init(&eng, 1, 10, "OVMXN", "EWA0", NULL, hw, 0, 0, 0);
+        uint8_t rdbuf[DNET_BROKER_REQ_MAX]; uint32_t rdlen = 0;
+        st = vms_kif_mbx_read(req_chan, rdbuf, sizeof rdbuf, &rdlen, 1 /*nowait*/);
+        struct dnet_broker_req sreq;
+        int dr = dnet_broker_req_decode(rdbuf, rdlen, &sreq);
+        MB_CHECK((st & 1) && dr == DNET_BROKER_OK && sreq.corr_id == req.corr_id &&
+                 sreq.reply_unit == rep_unit && sreq.op == DNET_BROKER_OP_RECV,
+                 "NETACP reads + bounds-decodes the request (correlation + reply_unit intact)");
+
+        struct dnet_broker_rsp srsp;
+        uint8_t frame[DNET_FRAME_MAX]; size_t flen = 0; int has = 0;
+        dnet_broker_serve(&eng, &sreq, &srsp, frame, sizeof frame, &flen, &has, 10);
+        MB_CHECK(srsp.status == SS$_ENDOFFILE && srsp.corr_id == req.corr_id && has == 0,
+                 "NETACP services it (RECV-empty -> honest ENDOFFILE, correlation echoed, no frame)");
+
+        /* NETACP: assign the client's reply mailbox BY UNIT and write the response. */
+        char rep_name[32];
+        snprintf(rep_name, sizeof rep_name, "MBA%u:", (unsigned)sreq.reply_unit);
+        uint32_t nrep_chan = 0;
+        st = vms_kif_mbx_assign(rep_name, &nrep_chan);
+        MB_CHECK(st & 1, "NETACP assigns the client's reply mailbox by unit (MBA<reply_unit>:)");
+        uint8_t rspbuf[DNET_BROKER_RSP_MAX]; size_t rsplen = 0;
+        dnet_broker_rsp_encode(&srsp, rspbuf, sizeof rspbuf, &rsplen);
+        st = vms_kif_mbx_write(nrep_chan, rspbuf, (uint32_t)rsplen);
+        MB_CHECK(st & 1, "NETACP writes the response to the reply mailbox");
+
+        /* client: read the response from ITS reply mailbox, correlation-match. */
+        uint8_t crbuf[DNET_BROKER_RSP_MAX]; uint32_t crlen = 0;
+        st = vms_kif_mbx_read(rep_chan, crbuf, sizeof crbuf, &crlen, 0 /*wait*/);
+        struct dnet_broker_rsp crsp;
+        int cd = dnet_broker_rsp_decode(crbuf, crlen, &crsp);
+        MB_CHECK((st & 1) && cd == DNET_BROKER_OK &&
+                 dnet_broker_corr_match(req.corr_id, crsp.corr_id) &&
+                 crsp.status == SS$_ENDOFFILE,
+                 "client reads the response from ITS reply mailbox; correlation matches; status round-trips");
+
+        if (nrep_chan) vms_kif_mbx_delmbx(nrep_chan);
+    }
+
+    if (req_chan) vms_kif_mbx_delmbx(req_chan);
+    if (rep_chan) vms_kif_mbx_delmbx(rep_chan);
+
+    printf("DECNETD-I-NETMBX, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-NET-MBX-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-NET-MBX-SELFTEST: FAIL\n");
+    return 1;
+#undef MB_CHECK
+}
+
+/*
  * run_task_selftest (rd vms-dda) -- the host floor of the DECnet TASK-TO-TASK
  * client seam (the a1 ladder rung 1). It proves the generic NAMED-object logical
  * link an application task uses -- $ASSIGN NODE::"TASK=name" + $QIO -- over the
@@ -3301,6 +3416,7 @@ int main(int argc, char **argv)
     int task_self_test = 0;               /* --task-selftest : task-to-task client floor */
     int net_broker_test = 0;              /* --net-broker-selftest : T1 broker record codec */
     int net_service_test = 0;             /* --net-service-selftest : broker service dispatch */
+    int net_mbx_test = 0;                 /* --net-mbx-selftest : T1 mailbox round-trip (/dev/vms) */
     int sethost_self_test = 0;
     int sethost_srccode_test = 0;
     int cterm_accept_test = 0;
@@ -3344,6 +3460,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--task-selftest")) task_self_test = 1;
         else if (!strcmp(argv[i], "--net-broker-selftest")) net_broker_test = 1;
         else if (!strcmp(argv[i], "--net-service-selftest")) net_service_test = 1;
+        else if (!strcmp(argv[i], "--net-mbx-selftest")) net_mbx_test = 1;
         else if (!strcmp(argv[i], "--set-host-selftest")) sethost_self_test = 1;
         else if (!strcmp(argv[i], "--set-host-src-codes-selftest")) sethost_srccode_test = 1;
         else if (!strcmp(argv[i], "--cterm-accept-test")) cterm_accept_test = 1;
@@ -3388,6 +3505,8 @@ int main(int argc, char **argv)
         return run_net_broker_selftest();
     if (net_service_test)
         return run_net_service_selftest();
+    if (net_mbx_test)
+        return run_net_mbx_selftest();
     if (sethost_self_test)
         return run_sethost_selftest();
     if (sethost_srccode_test)

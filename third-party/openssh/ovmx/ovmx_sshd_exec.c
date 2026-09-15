@@ -1,9 +1,8 @@
 /* SPDX-License-Identifier: BSD-2-Clause */
 /*
- * ovmx_sshd_exec.c - OVMX OpenSSH sshd SESSION exec seam (rd vms-0cd, RUNG-3
- * step 3c, design §B). The `--wrap=execve` half of the session shim, kept in its
- * OWN translation unit (separate from the permanently_set_uid wrap in
- * ovmx_sshd_session.c) ON PURPOSE:
+ * ovmx_sshd_exec.c - OVMX OpenSSH sshd SESSION exec seam (rd vms-0cd / vms-29b).
+ * The `--wrap=execve` half of the session shim, kept in its OWN translation unit
+ * (separate from the permanently_set_uid wrap in ovmx_sshd_session.c) ON PURPOSE:
  *
  *   Every OpenSSH server binary references execve (libc), so --wrap=execve pulls
  *   THIS object into each of them -- including the sshd LISTENER, which does NOT
@@ -12,10 +11,16 @@
  *   set_uid reference into the listener. Split, this object references only
  *   __real_execve (always present) and is safe to pull anywhere.
  *
- * When do_child() execs the login shell and it is DCL (pw_shell set by
- * __wrap_getpwnam), rewrite OpenSSH's shell argv into the LOGINOUT->DCL argv for
- * the login user, honouring the account's LGICMD / captive flag. Every other
- * execve (sshd re-exec of sshd-session, sftp-server, ...) passes straight
+ * THE SESSION HANDOFF, SECOND HALF (vms-29b). ovmx_sshd_pre_drop_pw (the
+ * permanently_set_uid wrap) created a $CREPRC(LOGINOUT) session in the still-
+ * privileged pre-drop window and stashed its vterm master fd. It could NOT pump
+ * there: for a non-PTY session OpenSSH wires the ssh channel onto fd0/1 only just
+ * before THIS shell execve, after the credential drop. So the pump runs here,
+ * where fd0/1 ARE the channel -- ovmx_sshd_run_pump_if_pending() relays and
+ * _exits (the real login shell never runs). This RETIRES the old raw-execve-of-
+ * DCL session shim (vms-16b): a SYSUAF login is a LOGINOUT/$CREPRC session, not a
+ * DCL image execve'd here. Every other execve (a privsep re-exec of sshd-session
+ * /sshd-auth, sftp-server, ...) has no handoff pending and passes straight
  * through.
  */
 
@@ -23,9 +28,8 @@
 
 #include <sys/types.h>
 #include <unistd.h>
-#include <string.h>
 
-#include "sshd_auth.h"   /* ovmx_sshd_is_dcl_path / ovmx_sshd_dcl_login_argv */
+#include "sshd_session.h"   /* ovmx_sshd_run_pump_if_pending */
 
 extern int __real_execve(const char *path, char *const argv[],
                          char *const envp[]);
@@ -33,37 +37,15 @@ extern int __real_execve(const char *path, char *const argv[],
 int
 __wrap_execve(const char *path, char *const argv[], char *const envp[])
 {
-	const char *user = NULL;
-	const char *nargv[8];
-	char lgicmd[256];
-	const char *dcl;
-	size_t i;
+	/* If a SYSUAF login's $CREPRC(LOGINOUT) session is pending, the ssh
+	 * channel is now on fd0/1 -- relay it to/from the vterm master until the
+	 * session ends, then _exit. This does NOT return when a handoff is
+	 * pending. Fail-closed: a pre-drop creprc failure already _exited, so a
+	 * pending handoff always names a live session; nothing-pending just
+	 * returns (never hangs). */
+	ovmx_sshd_run_pump_if_pending();
 
-	if (!ovmx_sshd_is_dcl_path(path))
-		return __real_execve(path, argv, envp);
-
-	/* Find the login user in the environment (USER, then LOGNAME). */
-	if (envp != NULL) {
-		for (i = 0; envp[i] != NULL; i++) {
-			if (strncmp(envp[i], "USER=", 5) == 0) {
-				user = envp[i] + 5;
-				break;
-			}
-			if (user == NULL && strncmp(envp[i], "LOGNAME=", 8) == 0)
-				user = envp[i] + 8;
-		}
-	}
-
-	if (user != NULL) {
-		dcl = ovmx_sshd_dcl_login_argv(user, lgicmd, sizeof(lgicmd),
-		                               nargv, sizeof(nargv) /
-		                               sizeof(nargv[0]));
-		if (dcl != NULL)
-			return __real_execve(dcl, (char *const *)nargv, envp);
-	}
-
-	/* Could not resolve the user/record: fail honestly rather than exec a
-	 * shell we cannot turn into a DCL session. execve DCL with OpenSSH's own
-	 * argv still lands in DCL (it just ignores the unknown args). */
+	/* No handoff pending -- a privsep re-exec, sftp-server, etc.: pass
+	 * straight through to the real execve. */
 	return __real_execve(path, argv, envp);
 }

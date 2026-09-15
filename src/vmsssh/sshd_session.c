@@ -77,11 +77,28 @@ static int session_write_all(int fd, const char *buf, size_t len)
 }
 
 /*
+ * THE HANDOFF IS SPLIT ACROSS OpenSSH's do_child, ON PURPOSE:
+ *   - the $CREPRC(LOGINOUT) is done in the PRE-DROP window (ovmx_sshd_pre_drop_pw,
+ *     __wrap_permanently_set_uid) because creating a LOGINOUT that establishes
+ *     SYSTEM needs the caller to still hold CAP_SYS_ADMIN;
+ *   - the PUMP is done LATER, from __wrap_execve (ovmx_sshd_run_pump_if_pending),
+ *     because for a NON-PTY session OpenSSH wires the ssh channel onto fd0/1 only
+ *     just before the shell execve -- AFTER permanently_set_uid. Relaying at
+ *     pre-drop time would use the PRE-dup2 fds, not the client channel: the
+ *     LOGINOUT banner/output never reaches the client and the client's input
+ *     never reaches DCL -> an empty response + a hung session (the vms-843a
+ *     booted e2e's exact symptom). So the created session's vterm master fd +
+ *     device name are stashed at creprc time and pumped from __wrap_execve.
+ */
+static int  ovmx_sshd_handoff_master_fd = -1;
+static char ovmx_sshd_handoff_devnam[VMS_DEVNAM_SIZE];
+
+/*
  * Relay the SSH channel (this process's stdin/stdout, which OpenSSH's do_child
- * has already pointed at the session channel -- pty slave for interactive, the
- * materialized BGn: socket otherwise) to and from the vterm master, until the
- * session ends. Then _exit -- this process IS the session relay and never
- * returns to OpenSSH.
+ * has pointed at the session channel by the time __wrap_execve runs -- pty slave
+ * for interactive, the materialized BGn: socket otherwise) to and from the vterm
+ * master, until the session ends. Then _exit -- this process IS the session
+ * relay and never returns to OpenSSH.
  *
  *   client -> server  : stdin  -> master_fd   (keystrokes / piped DCL commands)
  *   server -> client  : master_fd -> stdout   (DCL output, the login banner)
@@ -167,9 +184,11 @@ void ovmx_sshd_pre_drop_pw(const struct passwd *pw)
     if (sysuaf_lookup(pw->pw_name, &rec) != 0)
         return;
 
-    /* ---- from here the process NEVER returns to OpenSSH: it either becomes
-     * the session relay (success) or _exits fail-closed. A SYSUAF login does
-     * not fall through to OpenSSH's own credential drop + shell exec. ---- */
+    /* ---- from here a SYSUAF login either (success) STASHES a $CREPRC'd
+     * LOGINOUT session for __wrap_execve to pump and RETURNS so OpenSSH's real
+     * drop + do_child proceed to the shell execve (where fd0/1 become the
+     * channel), or _exits FAIL-CLOSED. It never admits a session by any other
+     * path, and never falls through to OpenSSH running a real login shell. ---- */
 
     /* 1. Mint the virtual terminal for this SSH channel. The name comes BACK
      *    from the executive; this process does not choose it. */
@@ -219,11 +238,39 @@ void ovmx_sshd_pre_drop_pw(const struct passwd *pw)
         }
     }
 
-    /* 4. Relay bytes until the session ends, then release the RTAn: this
-     *    handoff minted (the creator owns it, as the DECnet CTERM host does) and
-     *    _exit. The relay process held the vterm master; closing it here + the
-     *    executive delete withdraws the dynamic unit rather than leaking it. */
+    /* 4. The session exists. STASH its vterm master fd + name and RETURN -- the
+     *    PUMP runs later, from __wrap_execve, where fd0/1 are the ssh channel
+     *    (see the split note above ovmx_sshd_pump). Returning lets OpenSSH's real
+     *    permanently_set_uid drop + do_child run; the shell execve of
+     *    pw_shell=LOGINOUT.EXE is intercepted by __wrap_execve ->
+     *    ovmx_sshd_run_pump_if_pending(), which relays and _exits (so the real
+     *    login shell never runs). The master fd is an ordinary open fd and
+     *    survives the drop + do_child's setup into __wrap_execve, same process. */
+    ovmx_sshd_handoff_master_fd = master_fd;
+    snprintf(ovmx_sshd_handoff_devnam, sizeof(ovmx_sshd_handoff_devnam),
+             "%s", devnam);
+}
+
+/*
+ * Called FIRST from __wrap_execve (ovmx_sshd_exec.c), on every session-child
+ * shell exec. If ovmx_sshd_pre_drop_pw stashed a $CREPRC'd LOGINOUT session, the
+ * ssh channel is NOW on fd0/1 (OpenSSH wired it just before this execve), so
+ * relay it to/from the vterm master until the session ends, release the RTAn:,
+ * and _exit -- this process IS the relay and never execs the shell. If nothing
+ * is pending (a privsep re-exec, sftp-server, or a non-SYSUAF login), RETURN so
+ * __wrap_execve does its normal passthrough. Fail-closed by construction: a
+ * pre-drop creprc failure _exited already, so a stashed fd here always names a
+ * live session, and no-stash never hangs -- it just returns.
+ */
+void ovmx_sshd_run_pump_if_pending(void)
+{
+    int master_fd = ovmx_sshd_handoff_master_fd;
+
+    if (master_fd < 0)
+        return;                       /* no handoff: caller execs normally */
+    ovmx_sshd_handoff_master_fd = -1; /* one-shot */
+
     ovmx_sshd_pump(master_fd);
-    (void)ovmx_vterm_delete(devnam, master_fd);
+    (void)ovmx_vterm_delete(ovmx_sshd_handoff_devnam, master_fd);
     _exit(0);
 }

@@ -48,4 +48,16 @@ struct passwd;   /* <pwd.h> */
  */
 void ovmx_sshd_pre_drop_pw(const struct passwd *pw);
 
+/*
+ * The SECOND half of the split handoff, called first from __wrap_execve. If
+ * ovmx_sshd_pre_drop_pw stashed a $CREPRC(LOGINOUT) session, the ssh channel is
+ * now on fd0/1 (OpenSSH wired it just before the shell execve, after the drop),
+ * so relay it to/from the vterm master until the session ends and _exit -- this
+ * never returns. If no handoff is pending (a privsep re-exec, or a non-SYSUAF
+ * login), return so the caller does its normal execve. Fail-closed / never-hang:
+ * a pre-drop creprc failure already _exited, so a pending fd always names a live
+ * session, and no-stash simply returns.
+ */
+void ovmx_sshd_run_pump_if_pending(void);
+
 #endif /* OVMX_VMSSSH_SSHD_SESSION_H */

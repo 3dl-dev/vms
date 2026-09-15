@@ -1112,6 +1112,46 @@ run_dcl_acceptance_battery() {
     fi
     wait_for '$ ' 20 "$FAL_OFF"
 
+    # =======================================================================
+    # DECnet _NET: $QIO BROKER — T1 MAILBOX TRANSPORT (vms-22c, a1-2 slice 2b).
+    # The exec<->NETACP hop the broker rides: a client $CREMBXs a reply mailbox,
+    # marshals a broker request carrying reply_unit, and writes it to NETACP's
+    # request mailbox; NETACP reads it (IO$M_NOW), bounds-decodes it, services it
+    # (dnet_broker_serve), assigns the client's reply mailbox BY UNIT and writes
+    # the response; the client reads it back and correlation-matches. Only means
+    # anything against the REAL executive mailbox (vms_mbx over /dev/vms). This
+    # battery runs INSIDE the booted OVMX image where /dev/vms is real, so the
+    # round-trip must actually complete: DECNETD.EXE --net-mbx-selftest does NOT
+    # probe for the executive and does NOT skip (Rule 9, ONE RUNTIME) -- it always
+    # attempts the real mailbox creates, and on any absence they fail SS$_NOSUCHDEV
+    # and the selftest reports a TERMINAL FAIL. The HARNESS, not the engine, owns
+    # WHERE this runs -- a hard gate on the rails that ship the image, a loud note
+    # where DECNETD.EXE is absent (the VAX/Alpha staging follow-on, same as FAL).
+    local NMBX_OFF; NMBX_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --net-mbx-selftest'
+    if wait_for 'IVIMAGE' 15 "$NMBX_OFF"; then
+        note "NET mailbox [vms-22c]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the T1 mailbox transport round-trip DID NOT RUN here (hard gate on the rails that ship the image)"
+    elif wait_for 'DECNETD-NET-MBX-SELFTEST:' 60 "$NMBX_OFF"; then
+        local NMBXSEG; NMBXSEG=$(tail -c "+$((NMBX_OFF + 1))" "$LOG" | tr -d '\r')
+        # Rule 9 / ONE RUNTIME: --net-mbx-selftest does NOT skip -- it always
+        # attempts the real mailbox round-trip and reports a TERMINAL FAIL on any
+        # executive absence. This battery runs booted where /dev/vms is real, so
+        # this is an unconditional hard PASS-gate (the harness owns WHERE it runs).
+            must_have "$NMBXSEG" 'DECNETD-NET-MBX-SELFTEST: PASS' \
+                "NET mailbox [vms-22c]: the T1 mailbox round-trip completed on the real executive mailbox (one PASS line per assertion above this verdict)"
+            must_have "$NMBXSEG" 'NETACP reads + bounds-decodes the request' \
+                "NET mailbox [vms-22c]: NETACP reads the request from its mailbox and bounds-decodes it (correlation + reply_unit intact)"
+            must_have "$NMBXSEG" 'assigns the client'"'"'s reply mailbox by unit' \
+                "NET mailbox [vms-22c]: NETACP routes the response to the client's OWN reply mailbox by unit (MBA<reply_unit>:)"
+            must_have "$NMBXSEG" 'correlation matches; status round-trips' \
+                "NET mailbox [vms-22c]: the client reads the response from its reply mailbox and correlation-matches it (the anti-cross-talk guard end to end)"
+            must_not_have "$NMBXSEG" 'DECNETD-NET-MBX-SELFTEST: FAIL' \
+                "NET mailbox [vms-22c]: no assertion in the T1 mailbox round-trip failed (a TERMINAL FAIL here means the real executive mailbox facility is broken, never a skipped proof)"
+    else
+        bad "NET mailbox [vms-22c]: DECNETD.EXE --net-mbx-selftest produced no verdict line within 60s -- the T1 mailbox round-trip did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung mailbox)"
+    fi
+    wait_for '$ ' 20 "$NMBX_OFF"
+
     # The DECnet device FACE _NET: is executive-resident and cross-process real
     # (vms-9ab, P5; design §2b/§7.5). $GETDVI it from DCL -- a process that is
     # NOT NETACP -- and it resolves; the deep cross-process assertions (class,

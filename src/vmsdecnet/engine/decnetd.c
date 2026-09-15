@@ -674,7 +674,8 @@ static int run_net_broker_selftest(void)
     struct dnet_broker_req req, rq2;
     memset(&req, 0, sizeof req);
     req.corr_id = 0x11223344u; req.owner_pid = 0x0000BEEFu;
-    req.link_handle = 0x2001u; req.op = DNET_BROKER_OP_SEND;
+    req.link_handle = 0x2001u; req.reply_unit = 0x00000042u;
+    req.op = DNET_BROKER_OP_SEND;
     const char *payload = "TASK-TO-TASK broker payload: ping 0123456789";
     req.datalen = (uint16_t)strlen(payload);
     memcpy(req.data, payload, req.datalen);
@@ -686,7 +687,8 @@ static int run_net_broker_selftest(void)
     NB_CHECK(enc == DNET_BROKER_OK && dec == DNET_BROKER_OK &&
              blen == (size_t)DNET_BROKER_REQ_HDR + req.datalen &&
              rq2.corr_id == req.corr_id && rq2.owner_pid == req.owner_pid &&
-             rq2.link_handle == req.link_handle && rq2.op == req.op &&
+             rq2.link_handle == req.link_handle && rq2.reply_unit == req.reply_unit &&
+             rq2.op == req.op &&
              rq2.datalen == req.datalen &&
              memcmp(rq2.data, req.data, req.datalen) == 0,
              "request record round-trips byte-exact (encode -> decode)");
@@ -716,8 +718,8 @@ static int run_net_broker_selftest(void)
         /* forge a header claiming datalen over the payload bound. */
         uint8_t bad[DNET_BROKER_REQ_HDR];
         memcpy(bad, buf, DNET_BROKER_REQ_HDR);
-        bad[18] = (uint8_t)((DNET_NSP_MAX_DATA + 1) & 0xff);
-        bad[19] = (uint8_t)(((DNET_NSP_MAX_DATA + 1) >> 8) & 0xff);
+        bad[22] = (uint8_t)((DNET_NSP_MAX_DATA + 1) & 0xff);   /* datalen field (hdr grew to 24) */
+        bad[23] = (uint8_t)(((DNET_NSP_MAX_DATA + 1) >> 8) & 0xff);
         NB_CHECK(dnet_broker_req_decode(bad, sizeof bad, &rq2) == DNET_BROKER_EBADLEN,
                  "a datalen over DNET_NSP_MAX_DATA is refused (EBADLEN), never allocates/reads it");
     }

@@ -29,6 +29,7 @@
 #include "cluster_test.h"
 #include "vms_cluster_codec_dlm.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static struct vms_fixture g_fx[VMS_FIXTURE_MAX_FILES];
@@ -986,6 +987,74 @@ static void test_body_entries_are_what_scs_delivers(void)
 	}
 }
 
+/* ---- group 5: op-0e DLKSRCH twin (H11, vms-d55) ----------------------- *
+ * No captured fixture exists (OVMX-derived, Rule 8: the do-it-like-VMS
+ * successor to the retired-scsd SEARCH orchestration). The proof is a
+ * build->parse twin over a fully-populated record, into a HEAP buffer
+ * sized to EXACTLY `written` so ASan red-zones a one-byte over-write, plus
+ * a one-byte-short refusal to prove the builder is bounded, not scribbling.
+ * Non-vacuous: all eight fields carry distinct non-zero values and are
+ * each compared after the round trip.
+ */
+static void test_dlksrch_twin(void)
+{
+	struct vms_dlm_dlksrch_record in, out;
+	uint8_t probe[256];
+	uint32_t written = 0, body_off = VMS_OFF_SYSAP_BODY;
+	uint8_t *exact;
+	vms_codec_status_t st;
+
+	memset(&in, 0, sizeof(in));
+	in.flag           = 2u; /* VMS_DLM_DLK_VICTIM -- every field meaningful */
+	in.initiator_csid = 0x11112222u;
+	in.initiator_lkid = 0x33334444u;
+	in.blocked_csid   = 0x55556666u;
+	in.blocked_lkid   = 0x77778888u;
+	in.victim_csid    = 0x9999AAAAu;
+	in.victim_lkid    = 0xBBBBCCCCu;
+	in.ttl            = 16u;
+
+	/* Size discovery into a poisoned oversize buffer. */
+	memset(probe, 0xAA, sizeof(probe));
+	st = vms_dlm_dlksrch_build(&in, probe, sizeof(probe), &written);
+	ct_check(st == VMS_CODEC_OK, "DLKSRCH build OK");
+	ct_check_eq_u32(written, VMS_OFF_DLM_DLK_TTL + 1u,
+			"  frame high-water == TTL offset + 1 (109)");
+
+	/* Rebuild into a heap buffer of EXACTLY `written` bytes: a one-byte
+	 * over-write trips ASan here rather than passing silently. */
+	exact = (uint8_t *)malloc(written);
+	ct_check(exact != NULL, "  exact-sized buffer allocates");
+	st = vms_dlm_dlksrch_build(&in, exact, written, &written);
+	ct_check(st == VMS_CODEC_OK, "  build into exact-sized buffer OK");
+
+	/* Parse the body span back and compare every field (non-vacuous). */
+	memset(&out, 0, sizeof(out));
+	st = vms_dlm_dlksrch_parse_body(exact + body_off, written - body_off,
+					&out);
+	ct_check(st == VMS_CODEC_OK, "  DLKSRCH parse_body OK");
+	ct_check_eq_u32(out.flag, in.flag, "    flag survives");
+	ct_check_eq_u32(out.initiator_csid, in.initiator_csid,
+			"    initiator_csid survives");
+	ct_check_eq_u32(out.initiator_lkid, in.initiator_lkid,
+			"    initiator_lkid survives");
+	ct_check_eq_u32(out.blocked_csid, in.blocked_csid,
+			"    blocked_csid survives");
+	ct_check_eq_u32(out.blocked_lkid, in.blocked_lkid,
+			"    blocked_lkid survives");
+	ct_check_eq_u32(out.victim_csid, in.victim_csid,
+			"    victim_csid survives");
+	ct_check_eq_u32(out.victim_lkid, in.victim_lkid,
+			"    victim_lkid survives");
+	ct_check_eq_u32(out.ttl, in.ttl, "    ttl survives");
+
+	/* One byte short must FAIL, not scribble (bounded-write proof). */
+	ct_check(vms_dlm_dlksrch_build(&in, exact, written - 1u, NULL)
+		 != VMS_CODEC_OK, "  build REFUSES a one-byte-short buffer");
+
+	free(exact);
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -1005,6 +1074,7 @@ int main(void)
 	test_no_builder_accepts_a_placeholder_lock_id();
 	test_dir_hash_accessor();
 	test_body_entries_are_what_scs_delivers();
+	test_dlksrch_twin();
 
 	return ct_summary("test_codec_dlm");
 }

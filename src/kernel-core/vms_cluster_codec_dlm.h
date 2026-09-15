@@ -153,6 +153,7 @@ extern "C" {
 #define VMS_DLM_WIREOP_ENQ          0x01u  /* new-lock ENQ request              */
 #define VMS_DLM_WIREOP_CONVERT      0x07u  /* lock mode CONVERT                 */
 #define VMS_DLM_WIREOP_REBUILD      0x0du  /* join-time lock-resource rebuild rec*/
+#define VMS_DLM_WIREOP_DLKSRCH      0x0eu  /* distributed deadlock search (H11)  */
 
 /*
  * Opcodes -- GROUNDED by the vms-c03 capture set (see the file doc comment's
@@ -826,6 +827,56 @@ vms_codec_status_t vms_dlm_valblk_convert_build(const struct vms_dlm_valblk_conv
  * ------------------------------------------------------------------ */
 extern const struct vms_wire_allow_entry vms_dlm_allow_rows[];
 extern const struct vms_wire_allow_table vms_dlm_allow_table;
+
+/* ==========================================================================
+ * DLKSRCH -- distributed deadlock search (H11, rd vms-d55 / vms-ec75).
+ *
+ * OVMX-DERIVED (Rule 8): the do-it-like-VMS successor to the retired-scsd
+ * SEARCH orchestration. A cat-0x02 op-0x0e frame; because op-0x0e is a
+ * DISTINCT opcode, the body layout is this op's to define, at OVMX-chosen
+ * offsets in the free body span. EVERY field here is FORWARDING / ACCUMULATOR
+ * state: the executive arm DECIDES each grant/abort from LIVE res->granted /
+ * ENUM_WAITS reads at each hop, never from these frame values (INV-6). `flag`
+ * carries the VMS_DLM_DLK_* phase (SEARCH_HOLDER/RESOURCE/VICTIM, vms_ioctl.h).
+ * ========================================================================== */
+#define VMS_OFF_DLM_DLK_FLAG            82u  /* body[10] u8: VMS_DLM_DLK_*        */
+#define VMS_OFF_DLM_DLK_INITIATOR_CSID  84u  /* body[12] LE u32                  */
+#define VMS_OFF_DLM_DLK_INITIATOR_LKID  88u  /* body[16] LE u32                  */
+#define VMS_OFF_DLM_DLK_BLOCKED_CSID    92u  /* body[20] LE u32                  */
+#define VMS_OFF_DLM_DLK_BLOCKED_LKID    96u  /* body[24] LE u32                  */
+#define VMS_OFF_DLM_DLK_VICTIM_CSID    100u  /* body[28] LE u32                  */
+#define VMS_OFF_DLM_DLK_VICTIM_LKID    104u  /* body[32] LE u32                  */
+#define VMS_OFF_DLM_DLK_TTL           108u  /* body[36] u8                       */
+
+#define VMS_OFB_DLM_DLK_FLAG           VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DLK_FLAG)
+#define VMS_OFB_DLM_DLK_INITIATOR_CSID VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DLK_INITIATOR_CSID)
+#define VMS_OFB_DLM_DLK_INITIATOR_LKID VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DLK_INITIATOR_LKID)
+#define VMS_OFB_DLM_DLK_BLOCKED_CSID   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DLK_BLOCKED_CSID)
+#define VMS_OFB_DLM_DLK_BLOCKED_LKID   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DLK_BLOCKED_LKID)
+#define VMS_OFB_DLM_DLK_VICTIM_CSID    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DLK_VICTIM_CSID)
+#define VMS_OFB_DLM_DLK_VICTIM_LKID    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DLK_VICTIM_LKID)
+#define VMS_OFB_DLM_DLK_TTL            VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DLK_TTL)
+
+struct vms_dlm_dlksrch_record {
+	uint8_t  flag;            /* VMS_DLM_DLK_SEARCH_HOLDER/RESOURCE/VICTIM  */
+	uint32_t initiator_csid;  /* the blocked req that started the chase     */
+	uint32_t initiator_lkid;
+	uint32_t blocked_csid;    /* the req this hop is chasing the blocker of  */
+	uint32_t blocked_lkid;
+	uint32_t victim_csid;     /* running lexicographic-min over the cycle    */
+	uint32_t victim_lkid;
+	uint8_t  ttl;             /* bounded hop budget                         */
+};
+
+/* Parse a cat-0x02 op-0x0e DLKSRCH request BODY into the typed record. */
+vms_codec_status_t vms_dlm_dlksrch_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_dlksrch_record *out);
+
+/* Build a cat-0x02 op-0x0e DLKSRCH request FRAME from the typed record;
+ * `*written` receives the frame length. */
+vms_codec_status_t vms_dlm_dlksrch_build(const struct vms_dlm_dlksrch_record *rec,
+					 uint8_t *frame, uint32_t cap,
+					 uint32_t *written);
 
 #ifdef __cplusplus
 }

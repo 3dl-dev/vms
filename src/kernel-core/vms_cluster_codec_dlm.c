@@ -920,3 +920,78 @@ vms_dlm_valblk_convert_parse(const uint8_t *frame, uint32_t len,
 		return st;
 	return vms_dlm_valblk_convert_parse_body(body, blen, out);
 }
+
+/* ------------------------------------------------------------------ *
+ * op 0x0e DLKSRCH -- distributed deadlock search (H11, vms-d55).
+ *
+ * OVMX-DERIVED (Rule 8): every field is pure FORWARDING / ACCUMULATOR
+ * state. This codec carries the record verbatim; it decides NOTHING.
+ * The executive arm reads live res->granted / ENUM_WAITS at each hop and
+ * makes every grant/abort decision from THAT, never from these frame
+ * values (INV-6, ⭐⭐). So the codec neither validates a lock referent
+ * nor refuses a zero id -- which fields are meaningful is the flag's
+ * business and the arm's, not the wire format's.
+ * ------------------------------------------------------------------ */
+vms_codec_status_t vms_dlm_dlksrch_parse_body(const uint8_t *body, uint32_t len,
+					      struct vms_dlm_dlksrch_record *out)
+{
+	vms_wire_view_t v;
+	uint8_t cat, op;
+
+	if (out == (struct vms_dlm_dlksrch_record *)0)
+		return VMS_CODEC_E_CLASS;
+
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (vms_wire_is_response(cat) || (cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
+		return VMS_CODEC_E_CLASS;
+	if (op != VMS_DLM_WIREOP_DLKSRCH)
+		return VMS_CODEC_E_CLASS;
+
+	out->flag           = vms_wire_get_u8(&v, VMS_OFB_DLM_DLK_FLAG);
+	out->initiator_csid = vms_wire_get_le32(&v, VMS_OFB_DLM_DLK_INITIATOR_CSID);
+	out->initiator_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_DLK_INITIATOR_LKID);
+	out->blocked_csid   = vms_wire_get_le32(&v, VMS_OFB_DLM_DLK_BLOCKED_CSID);
+	out->blocked_lkid   = vms_wire_get_le32(&v, VMS_OFB_DLM_DLK_BLOCKED_LKID);
+	out->victim_csid    = vms_wire_get_le32(&v, VMS_OFB_DLM_DLK_VICTIM_CSID);
+	out->victim_lkid    = vms_wire_get_le32(&v, VMS_OFB_DLM_DLK_VICTIM_LKID);
+	out->ttl            = vms_wire_get_u8(&v, VMS_OFB_DLM_DLK_TTL);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_dlksrch_build(const struct vms_dlm_dlksrch_record *rec,
+					 uint8_t *frame, uint32_t cap,
+					 uint32_t *written)
+{
+	vms_wire_buf_t w;
+
+	if (rec == (const struct vms_dlm_dlksrch_record *)0)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, VMS_DLM_CAT_REQUEST);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_OP, VMS_DLM_WIREOP_DLKSRCH);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_DLK_FLAG, rec->flag);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DLK_INITIATOR_CSID, rec->initiator_csid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DLK_INITIATOR_LKID, rec->initiator_lkid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DLK_BLOCKED_CSID, rec->blocked_csid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DLK_BLOCKED_LKID, rec->blocked_lkid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DLK_VICTIM_CSID, rec->victim_csid);
+	vms_wire_put_le32(&w, VMS_OFF_DLM_DLK_VICTIM_LKID, rec->victim_lkid);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_DLK_TTL, rec->ttl);
+
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = vms_wire_buf_len(&w);
+	return VMS_CODEC_OK;
+}

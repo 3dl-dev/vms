@@ -814,8 +814,11 @@ static int run_net_broker_selftest(void)
  * match); a response is never emitted with a zero/mismatched id.
  *
  * Request payload layout (data[], already length-bounded by the decode):
- *   OP_OPEN : remote_area(2 LE) remote_node(2 LE) + the Session Control connect
+ *   OP_OPEN : node_name_len(1) + node_name + the Session Control connect
  *             descriptor the client built (dnet_cterm_sc_connect_build[_task]).
+ *             NETACP RESOLVES the node NAME (or an "area.node" literal) to
+ *             area.node via the node database it owns -- the client has no DB, so
+ *             it sends the name and the server resolves it (rd vms-22c a1-2).
  *   OP_SEND : the raw task-to-task message bytes.
  *   OP_RECV / OP_CLOSE : no request payload.
  * OP_OPEN sends the Connect Initiate and returns SS$_NORMAL "initiated" -- the
@@ -842,15 +845,34 @@ static int dnet_broker_serve(struct dnet_engine *eng,
 
     switch (req->op) {
     case DNET_BROKER_OP_OPEN:
-        if (req->datalen < 4) {           /* need the 4-byte remote address prefix */
+        /* data = [node_name_len:1][node_name][SC connect descriptor]. NETACP
+         * RESOLVES the node here -- the node database (name<->address) is
+         * NETACP's, not the client's, so the request carries the node NAME (or an
+         * "area.node" literal) and the server resolves it (rd vms-22c a1-2:
+         * node resolution is server-side). Bounds-checked: a name that over-runs
+         * the record, an empty/over-long name, or an unresolvable node are each
+         * refused honestly, never over-read or faked (INV-6). */
+        if (req->datalen < 1) {
             rsp->status = SS$_BADPARAM;
             return 0;
         }
         {
-            unsigned rarea = (unsigned)((uint16_t)req->data[0] | ((uint16_t)req->data[1] << 8));
-            unsigned rnode = (unsigned)((uint16_t)req->data[2] | ((uint16_t)req->data[3] << 8));
-            const uint8_t *desc = req->data + 4;
-            size_t desclen = (size_t)req->datalen - 4;
+            uint8_t nlen = req->data[0];
+            char node_name[32];
+            if (nlen == 0 || (size_t)1 + nlen > req->datalen || nlen >= sizeof node_name) {
+                rsp->status = SS$_BADPARAM;   /* name absent / over-runs the record */
+                return 0;
+            }
+            memcpy(node_name, req->data + 1, nlen);
+            node_name[nlen] = '\0';
+
+            unsigned rarea = 0, rnode = 0;
+            if (sethost_resolve_target(node_name, &rarea, &rnode) != 0) {
+                rsp->status = SS$_NOSUCHDEV;  /* node name not resolvable -- honest */
+                return 0;
+            }
+            const uint8_t *desc = req->data + 1 + nlen;
+            size_t desclen = (size_t)req->datalen - 1 - nlen;
             if (dnet_engine_link_open(eng, rarea, rnode, 0x2001, desc, desclen,
                                       1459, 1, DNET_NSP_VER_41,
                                       frame_out, framecap, &flen, now) != DNET_ENGINE_OK) {
@@ -957,9 +979,18 @@ static int run_net_service_selftest(void)
     uint8_t desc[192]; size_t dlen = 0;
     dnet_cterm_sc_connect_build_task("SVCTEST", "OVMXL", 0x021a, 0x2020, "", "", "",
                                      desc, sizeof desc, &dlen);
-    req.data[0] = 1; req.data[1] = 0; req.data[2] = 11; req.data[3] = 0;   /* 1.11 LE */
-    memcpy(req.data + 4, desc, dlen);
-    req.datalen = (uint16_t)(4 + dlen);
+    /* OP_OPEN payload: [node_name_len][node_name][descriptor]. NETACP resolves
+     * the name; "1.11" is the area.node literal sethost_resolve_target accepts
+     * directly (no node-DB entry needed for the host proof); it resolves to the
+     * peer engine R (1.11). */
+    {
+        const char *node = "1.11";
+        uint8_t nlen = (uint8_t)strlen(node);
+        req.data[0] = nlen;
+        memcpy(req.data + 1, node, nlen);
+        memcpy(req.data + 1 + nlen, desc, dlen);
+        req.datalen = (uint16_t)(1 + nlen + dlen);
+    }
     int sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
     NS_CHECK(sr == 0 && rsp.status == SS$_NORMAL && rsp.corr_id == req.corr_id && has == 1,
              "OP_OPEN: serve builds a CI frame, status NORMAL, correlation echoed");
@@ -1022,11 +1053,12 @@ static int run_net_service_selftest(void)
     NS_CHECK(sr == 0 && rsp.status == SS$_ILLIOFUNC && has == 0 && rsp.corr_id == req.corr_id,
              "an unknown op is refused (SS$_ILLIOFUNC), no frame, correlation still echoed");
     req.corr_id = dnet_broker_corr_next(&corr);
-    req.op = DNET_BROKER_OP_OPEN; req.datalen = 2;   /* too short for the remote address */
+    req.op = DNET_BROKER_OP_OPEN;
+    req.data[0] = 200; req.datalen = 2;   /* node_name_len=200 over-runs a 2-byte record */
     has = 1;
     sr = dnet_broker_serve(&L, &req, &rsp, frame, sizeof frame, &flen, &has, t++);
     NS_CHECK(sr == 0 && rsp.status == SS$_BADPARAM && has == 0,
-             "OP_OPEN with a payload too short for the remote address is refused (BADPARAM, no over-read)");
+             "OP_OPEN whose node-name length over-runs the record is refused (BADPARAM, no over-read)");
 
     close(sv[0]); close(sv[1]);
     printf("DECNETD-I-NETSERVICE, %d passed, %d failed\n", pass, fail);

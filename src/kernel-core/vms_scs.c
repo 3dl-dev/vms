@@ -940,6 +940,29 @@ int scs_disconnect(struct vms_scs *scs, vms_conid_t local_conid,
 	return (int)scs_glue_status(scs_fsm_disconnect(&scs->fsm, local_conid));
 }
 
+/* rd vms-abd: the clean departure's two services. Each is the one-line
+ * dereference vms_scs.h SS5b describes; neither adds state of its own. */
+uint32_t scs_set_disconnect_timeout(struct vms_scs *scs, uint32_t ms)
+{
+	struct scs_fsm_cfg cfg;
+	uint32_t was;
+
+	if (scs == (struct vms_scs *)0)
+		return 0u;
+	cfg = scs->fsm.cfg;
+	was = cfg.disconnect_timeout_ms;
+	cfg.disconnect_timeout_ms = ms;
+	scs_fsm_set_cfg(&scs->fsm, &cfg);
+	return was;
+}
+
+uint32_t scs_disc_pending(const struct vms_scs *scs)
+{
+	if (scs == (const struct vms_scs *)0)
+		return 0u;
+	return scs_fsm_disc_pending(&scs->fsm);
+}
+
 int scs_send_msg(struct vms_scs *scs, vms_conid_t local_conid,
 		 const uint8_t *body, uint32_t len)
 {

@@ -2886,6 +2886,18 @@ static void sysgen_load_args_to_params(const struct vms_sysgen_load_args *args,
     out->mscp_load = args->mscp_load;
     out->mscp_serve_all = args->mscp_serve_all;
 
+    /*
+     * OVMX_CLEAN_DEPART (rd vms-abd): THE ONE FIELD WHOSE SENSE IS UNDONE HERE.
+     * The ioctl carries the negation so a zero-filled args struct -- which is
+     * what a .PAR predating the parameter produces -- means the FAITHFUL
+     * default; the executive stores the positive sense, because "may I announce
+     * my departure?" is what every reader of it asks. The inversion itself is
+     * cluster_sysgen_depart_from_wire()'s, in the pure TU, so the R1 rung can
+     * drive the real polarity with the real absent-case byte instead of a test
+     * grepping for this line (vms_cluster_sysgen.h carries the argument).
+     */
+    out->clean_depart = cluster_sysgen_depart_from_wire(args->clean_depart_off);
+
     out->niscs_max_pktsz = args->niscs_max_pktsz;
 
     memcpy(out->disk_quorum, args->disk_quorum, sizeof(out->disk_quorum));
@@ -3025,6 +3037,93 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
     if (status != SS__NORMAL)
         pr_info("vms: CLUSTER_START -> SS$ %u (VAXCLUSTER %u)\n",
                 (unsigned)status, (unsigned)cl->params.vaxcluster);
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_cluster_stop - VMS_IOCTL_CLUSTER_STOP (rd vms-abd). CLUSTER_START's
+ * twin, and the clean cluster departure OVMX did not have: every layer
+ * vms_ioctl_cluster_start brought up is taken back down, in the REVERSE order,
+ * and -- first of all -- this node TELLS the cluster it is leaving.
+ *
+ * THE ORDER IS THE DESIGN, not a convenience:
+ *
+ *   1. vms_cnxman_depart()      The SCS departure: a symmetric DISCONNECT_REQ
+ *                               on every open peer connection, bounded-drained.
+ *                               It must run FIRST and with the FORK THREAD
+ *                               STILL LIVE, because the peer's answering frame
+ *                               is dispatched by that thread and by nothing
+ *                               else. Every later step in this list would make
+ *                               that impossible.
+ *   2. the class driver, the server and the DLM arm -- the SYSAPs, before the
+ *      transport they ride.
+ *   3. vms_cluster_fork_stop()  QUIESCE. Requests the stop, JOINS the fork
+ *                               thread, then cancels and destroys every timer.
+ *                               After it returns NOTHING in this node's cluster
+ *                               stack is running, which is what makes the frees
+ *                               below safe: the alternative -- freeing layer
+ *                               state with the fork thread and its timers still
+ *                               live -- is the use-after-free this ordering
+ *                               exists to make impossible. Each layer's own
+ *                               stop then finds cl->fork NULL and skips its
+ *                               timer work, which cfb_timers_destroy() has
+ *                               already done.
+ *   4. vms_cnxman_stop()        The PE last gasp (p. 7-29) + unlisten + free.
+ *                               The gasp goes out here, AFTER the SCS
+ *                               departure: the stack comes down top-first, the
+ *                               way CLUSTER_START built it bottom-first. It is
+ *                               a port datagram and needs no fork thread.
+ *   5. vms_scs_stop()           Force-closes any connection the drain did not
+ *                               finish ("nothing goes on the wire -- a shutdown
+ *                               is not a dialogue"), so nothing leaks.
+ *   6. vms_pe_stop()            PEA0: down, the multicast address left, and
+ *                               cl->state back to VMS_CLUSTER_OFF.
+ *
+ * Idempotent at every step, exactly like CLUSTER_START: each layer's stop is a
+ * no-op on a layer that is not up, so a second CLUSTER_STOP costs nothing and a
+ * CLUSTER_STOP on a node that never joined answers SS$_NORMAL with 0/0.
+ *
+ * THE THREE READBACKS ARE READ, NOT COMPOSED -- the same discipline
+ * vms_ioctl_cluster_start's are. The two counts come back from the departure
+ * itself (how many connections it really told, and how many really answered
+ * inside the deadline) and `cluster_state` is cl->state after the teardown, so
+ * a caller that renders "left the cluster" is quoting the executive (INV-6).
+ */
+long vms_ioctl_cluster_stop(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_stop_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    uint32_t initiated = 0, drained = 0;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+
+    /* 1. Announce, while the fork thread can still finish the handshake. */
+    vms_cnxman_depart(cl, &initiated, &drained);
+
+    /* 2. The SYSAPs, before the transport they ride. */
+    vms_mscp_cl_stop(cl);
+    vms_mscp_srv_stop(cl);
+    vms_dlm_scs_stop(cl);
+
+    /* 3. Quiesce: join the fork thread and destroy its timers. */
+    vms_cluster_fork_stop(cl);
+
+    /* 4-6. Nothing is running now: tear the layers down. */
+    vms_cnxman_stop(cl);
+    vms_scs_stop(cl);
+    vms_pe_stop(cl);
+
+    args.connections_disconnected = initiated;
+    args.connections_drained = drained;
+    args.cluster_state = (uint32_t)cl->state;
+    args.status = (uint32_t)SS__NORMAL;
+
+    pr_info("vms: CLUSTER_STOP -> state %u (departed %u of %u connections)\n",
+            (unsigned)cl->state, (unsigned)drained, (unsigned)initiated);
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;

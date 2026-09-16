@@ -956,4 +956,29 @@ void scs_fsm_cdt_project(const struct scs_fsm *f, const struct scs_cdt *cdt,
 			 struct vms_scs_cdt_view *out);
 void scs_fsm_view_project(const struct scs_fsm *f, struct vms_scs_view *out);
 
+/*
+ * HOW MANY LOCALLY-INITIATED TEARDOWNS HAVE NOT YET PUT THEIR op 6 ON THE WIRE
+ * (rd vms-abd) -- the clean departure's DRAIN PREDICATE.
+ *
+ * Counts the CDTs with `disc_pending` set and `disc_sent` clear: a SYSAP asked
+ * for the teardown, the op 8 went out, and the op 6 it releases has NOT. That
+ * is exactly the set the departing node is still waiting on, and it empties
+ * two ways -- the peer's op 9 arrives and h_rx_credit_rsp emits the op 6, or
+ * the disconnect timer fires and h_timer_disconnect emits it anyway. Either
+ * way this reaches 0 when every departure message this node owes is really on
+ * the wire, and NOT before.
+ *
+ * WHY IT IS ITS OWN READBACK AND NOT A READ OF scs_cdt_view(). Because
+ * scs_cdt_view() is explicitly diagnostics-only ("nothing in the executive
+ * branches on these values", vms_scs.h SS5) and the drain DOES branch. This is a
+ * behavioural read with its own contract, so it gets its own name; a
+ * diagnostic that quietly acquires a control caller is how a projection stops
+ * being safe to change.
+ *
+ * A listening CDT is never counted: it has no teardown to walk. 0 for a NULL
+ * or unbound FSM -- "nothing outstanding", which for a context with no
+ * connections at all is the truth, not a default.
+ */
+uint32_t scs_fsm_disc_pending(const struct scs_fsm *f);
+
 #endif /* OVMX_VMS_SCS_FSM_H */

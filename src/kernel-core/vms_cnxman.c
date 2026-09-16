@@ -2599,6 +2599,239 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	return (int)SS__NORMAL;
 }
 
+/* ==========================================================================
+ * 9b. THE CLEAN CLUSTER DEPARTURE (rd vms-abd)
+ *
+ * vms_cnxman.h's vms_cnxman_depart() doc comment carries the contract and the
+ * context rule. What follows is that function broken into the four steps it
+ * really has, so no step is buried inside another: WHICH connections, TELL
+ * them, WAIT for the telling to land, and the switch that turns the whole
+ * thing off.
+ *
+ * NOT ONE BYTE OF A DISCONNECT_REQ IS BUILT HERE. Every message goes out
+ * through scs_disconnect() -> the SCS FSM's ordinary h_local_disconnect ladder,
+ * which reads the connection's own CDT for everything it asserts. This file
+ * contributes Con.IDs it read out of live executive state and nothing else.
+ * ========================================================================== */
+
+/*
+ * The budget, and why these three numbers are what they are.
+ *
+ * DRAIN_MS is the whole cost a clean shutdown pays for announcing itself. The
+ * grounded teardown is machine-speed -- wire spec SS4(h)(1f) measures 8->9 at
+ * 3.1 ms worst case and 9->op-6 at 2.1 ms -- so a live peer finishes inside the
+ * first poll and this budget is never spent; it exists for the peer that does
+ * not answer at all.
+ *
+ * DISC_MS is what the SCS DISCONNECT timer is armed with for the duration
+ * (scs_set_disconnect_timeout). It is deliberately LESS than DRAIN_MS: the
+ * FSM's own dead-peer guard must fire while this function is still draining, or
+ * the op 6 it emits would be built after the caller had already torn the SCS
+ * down. The gap is the poll interval, so the expiry is observed.
+ *
+ * POLL_MS is how long the departing thread yields between re-tests. It is the
+ * ONLY place this path sleeps, and it sleeps with no lock held, which is what
+ * lets the fork thread deliver the peer's answer.
+ */
+#define CNXMAN_DEPART_DRAIN_MS   500u
+#define CNXMAN_DEPART_DISC_MS    400u
+#define CNXMAN_DEPART_POLL_MS      5u
+
+/*
+ * The most connections one departure can name: one VMS$VAXcluster connection
+ * per CSB, plus the request in flight and the join's own two. A storage bound,
+ * not a protocol limit -- and if it were ever hit, the extra connections are
+ * closed locally by vms_scs_stop()'s scs_fsm_stop() a moment later, so the
+ * failure mode is a missing announcement, never a leak.
+ *
+ * The list it sizes is ALLOCATED, not a local: at VMS_CLUB_MAX_CSB it is
+ * ~400 bytes, and this file's other buffers live in the context rather than on
+ * the stack for exactly that reason ("this runs on a VAX kernel stack"). The
+ * departure is process context and may sleep, so it can simply ask for it.
+ */
+#define CNXMAN_DEPART_MAX_CONNS  (VMS_CLUB_MAX_CSB + 3u)
+
+/* Append `conid` if it is real and not already listed. Returns the new count.
+ * The dedup is the IDEMPOTENCE the design asks for at the enumeration end: the
+ * same connection is reachable through a CSB, through `cur_conid` and through
+ * the join, and it must be told once. */
+static uint32_t depart_add_conid(vms_conid_t *list, uint32_t n, uint32_t max,
+				 vms_conid_t conid)
+{
+	uint32_t i;
+
+	if (conid == 0u || n >= max)
+		return n;
+	for (i = 0; i < n; i++) {
+		if (list[i] == conid)
+			return n;
+	}
+	list[n] = conid;
+	return n + 1u;
+}
+
+/*
+ * WHICH connections this node has open, read from live executive state. Three
+ * sources, because that is how many places the executive records one:
+ *   - every in-use CSB's `cdt_conid`: the VMS$VAXcluster connection to a member
+ *     (the same field csb_by_conid() resolves inbound traffic by);
+ *   - `cur_conid`, the request being dispatched, which on an ADOPTED inbound
+ *     connection is set before any CSB records it;
+ *   - the join's own `cm_conid` / `mscp_conid`, each gated on the join's own
+ *     `_open` flag -- a Con.ID whose connection never reached OPEN is not a
+ *     connection to disconnect.
+ * Nothing is inferred: every value here is one the executive is holding.
+ */
+static uint32_t depart_collect(struct vms_cnxman *cn, vms_conid_t *list,
+			       uint32_t max)
+{
+	struct vms_club *club = &cn->cl->club;
+	uint32_t n = 0u;
+	uint32_t i;
+
+	for (i = 0; i < club->n_csb; i++) {
+		if (club->csb[i].in_use)
+			n = depart_add_conid(list, n, max,
+					     club->csb[i].cdt_conid);
+	}
+	if (cn->cur_conid_valid)
+		n = depart_add_conid(list, n, max, cn->cur_conid);
+	if (cn->join.cm_open)
+		n = depart_add_conid(list, n, max, cn->join.cm_conid);
+	if (cn->join.mscp_open)
+		n = depart_add_conid(list, n, max, cn->join.mscp_conid);
+	return n;
+}
+
+/*
+ * Tell each of them. `scs_disconnect` answers SS$_NORMAL only for a connection
+ * that was really OPEN: SCS_EV_LOCAL_DISCONNECT appears in exactly one row of
+ * the dispatch table ([OPEN], vms_scs_fsm.c), so a listening CDT, a connection
+ * still walking the connect verbs, and one already being torn down all hit an
+ * empty cell and are counted-and-refused by the FSM. That IS the "do not
+ * disconnect a half-open or already-closing connection" rule, enforced by the
+ * state machine rather than re-derived here.
+ *
+ * Returns how many really started a teardown.
+ */
+static uint32_t depart_initiate(struct vms_cnxman *cn, const vms_conid_t *list,
+				uint32_t n)
+{
+	uint32_t i, started = 0u;
+
+	for (i = 0; i < n; i++) {
+		if (scs_disconnect(cn->cl->scs, list[i], 0u) ==
+		    (int)SS__NORMAL)
+			started++;
+	}
+	return started;
+}
+
+/*
+ * Wait, bounded, for those teardowns to reach the wire.
+ *
+ * The predicate is scs_disc_pending(): how many teardowns have had their op 8
+ * sent and their op 6 not. It empties when the peer's op 9 arrives (dispatched
+ * by the FORK THREAD, which is why this yields without the mutex) or when the
+ * lowered DISCONNECT timer fires and the FSM emits the op 6 anyway.
+ *
+ * Returns the number still outstanding when it gave up -- 0 on a clean drain.
+ */
+static uint32_t depart_drain(struct vms_cluster *cl)
+{
+	uint64_t deadline = exec_ticks_ms() + (uint64_t)CNXMAN_DEPART_DRAIN_MS;
+	uint32_t pending;
+
+	for (;;) {
+		vms_cluster_fork_enter(cl);
+		pending = scs_disc_pending(cl->scs);
+		vms_cluster_fork_leave(cl);
+
+		if (pending == 0u)
+			return 0u;
+		if (exec_ticks_ms() >= deadline)
+			return pending;
+		/* The one sleep on this path, with nothing held. */
+		exec_wait_ms(CNXMAN_DEPART_POLL_MS);
+	}
+}
+
+/*
+ * Announce, then wait. Every touch of layer state below is under the fork
+ * mutex; the only thing done WITHOUT it is the waiting, which is the point.
+ */
+void vms_cnxman_depart(struct vms_cluster *cl, uint32_t *out_initiated,
+		       uint32_t *out_drained)
+{
+	vms_conid_t *conids;
+	uint32_t n, started, left, prev_timeout;
+
+	if (out_initiated != NULL)
+		*out_initiated = 0u;
+	if (out_drained != NULL)
+		*out_drained = 0u;
+
+	if (cl == NULL || cl->cnxman == NULL || cl->scs == NULL)
+		return;
+	/* The wire-visible kill switch, asked ONCE, of the one function that
+	 * owns it (vms_cluster_sysgen.h). Off = this node leaves the way it did
+	 * before: silently, and the survivors time it out. */
+	if (!cluster_sysgen_clean_depart(cl)) {
+		cnxman_ops_log(NULL, "%CNXMAN-I-NODEPART, OVMX_CLEAN_DEPART is "
+				     "0: leaving without an SCS departure");
+		return;
+	}
+
+	conids = (vms_conid_t *)exec_zalloc(sizeof(*conids) *
+					    CNXMAN_DEPART_MAX_CONNS);
+	if (conids == NULL) {
+		/* Honest: no list, no departure. The teardown that follows
+		 * still closes every connection locally, so this costs the
+		 * announcement and nothing else -- it is not a reason to
+		 * refuse a shutdown. */
+		cnxman_ops_log(NULL, "%CNXMAN-W-DEPARTMEM, no memory to "
+				     "enumerate the connections: leaving "
+				     "without an SCS departure");
+		return;
+	}
+
+	vms_cluster_fork_enter(cl);
+	/* The lowered timeout is part of the same critical section as the
+	 * disconnects it applies to: the fork thread reads this cfg when it
+	 * dispatches an expiry, so it is not written behind its back. */
+	prev_timeout = scs_set_disconnect_timeout(cl->scs,
+						  CNXMAN_DEPART_DISC_MS);
+	n = depart_collect(cl->cnxman, conids, CNXMAN_DEPART_MAX_CONNS);
+	started = depart_initiate(cl->cnxman, conids, n);
+	vms_cluster_fork_leave(cl);
+
+	exec_free(conids);
+
+	left = (started > 0u) ? depart_drain(cl) : 0u;
+
+	/* Put the documented default back, so the departure leaves no trace in
+	 * the executive beyond what it put on the wire. */
+	vms_cluster_fork_enter(cl);
+	(void)scs_set_disconnect_timeout(cl->scs, prev_timeout);
+	vms_cluster_fork_leave(cl);
+
+	if (out_initiated != NULL)
+		*out_initiated = started;
+	if (out_drained != NULL)
+		*out_drained = (left >= started) ? 0u : started - left;
+
+	/*
+	 * A connection still outstanding here is NOT abandoned: vms_scs_stop()
+	 * closes it locally a moment later (scs_fsm_stop, "nothing goes on the
+	 * wire -- a shutdown is not a dialogue"). So the worst case is a peer
+	 * that was not told, which is exactly where this node was before, and
+	 * never a leaked CDT or a shutdown that waits.
+	 */
+	if (left != 0u)
+		cnxman_ops_log(NULL, "%CNXMAN-W-DEPARTTMO, a member did not "
+				     "answer the departure within the drain");
+}
+
 void vms_cnxman_stop(struct vms_cluster *cl)
 {
 	struct vms_cnxman *cn;

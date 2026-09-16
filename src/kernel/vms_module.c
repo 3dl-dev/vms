@@ -2175,6 +2175,13 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
      * ovmx_init.c caller and here (each layer's own check). */
     case VMS_IOCTL_CLUSTER_START:
         return vms_ioctl_cluster_start(proc, arg);
+    /* The clean DEPARTURE (rd vms-abd): STARTUP.EXE's shutdown path issues this
+     * as the exact twin of the CLUSTER_START above -- announce at the SCS layer
+     * (a real DISCONNECT_REQ per open connection), then take the stack down in
+     * reverse order. Process context with the fork thread still live, which is
+     * what lets the departure handshake finish; see vms_ioctl.h. */
+    case VMS_IOCTL_CLUSTER_STOP:
+        return vms_ioctl_cluster_stop(proc, arg);
     /* DLM cross-node lock-request dispatch (vms-94c, DLM epic vms-7fa rung 1):
      * a decoded remote DLM message reaches the cross-node handler, which
      * returns SS$_UNSUPPORTED (rung 1 transport; no fake grant). */

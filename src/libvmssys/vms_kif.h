@@ -446,6 +446,30 @@ uint32_t vms_kif_sysgen_load(struct vms_sysgen_load_args *args);
 uint32_t vms_kif_cluster_start(uint32_t *out_port_up, uint32_t *out_state);
 
 /*
+ * vms_kif_cluster_stop - VMS_IOCTL_CLUSTER_STOP (rd vms-abd). The exact twin of
+ * the call above: this node's CLEAN DEPARTURE from the cluster.
+ *
+ * WHAT IT IS FOR. A real VMS node going down through SHUTDOWN.COM announces its
+ * departure at both layers -- the port's last gasp AND a symmetric SCS
+ * DISCONNECT_REQ on every open connection -- so the survivors remove it at once
+ * instead of waiting out RECNXINTERVAL. OVMX announced neither, because it had
+ * no clean shutdown sequence at all. WIRED: STARTUP.EXE (ovmx_init.c) issues
+ * this once when PID 1 is told the system is going down, the mirror of the
+ * CLUSTER_START it issued at boot.
+ *
+ * `out_departed` / `out_connections`, if non-NULL, receive how many open peer
+ * connections really completed their departure handshake and how many there
+ * were. They are the EXECUTIVE's own counts -- a node that had nothing open
+ * answers 0 of 0, and `departed < connections` is the honest statement that a
+ * member did not answer in time, never rounded up (INV-6).
+ *
+ * Bounded: the executive drains the handshake for a fixed budget and then gives
+ * up and closes locally, so this call cannot hang a shutdown however dead the
+ * peers are.
+ */
+uint32_t vms_kif_cluster_stop(uint32_t *out_departed, uint32_t *out_connections);
+
+/*
  * The three SDA-shaped cluster diagnostics reads (FC-P0.9 / FC-P2.4 /
  * FC-P3.8), taken by args-struct pointer because each carries a wide row that
  * an out-parameter list would re-declare (and drift from). WIRED: DCL's

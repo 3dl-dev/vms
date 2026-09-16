@@ -560,6 +560,30 @@ cluster_host_scs_test(test_scs_fsm     test_scs_fsm.c)
 cluster_host_scs_test(test_scs_fsm_credit  test_scs_fsm_credit.c)
 cluster_host_scs_test(test_scs_fsm_vcdown  test_scs_fsm_vcdown.c)
 
+# rd vms-abd: the CLEAN CLUSTER DEPARTURE. The ALGORITHM (the grounded 8->9->6
+# a departure emits, the dead-peer guard that still lands the op 6 and still
+# closes, and the dispatch-table idempotence the enumeration relies on) against
+# the real scs_fsm through the FC-P2.2 harness; the WIRING -- that the departure
+# has a caller at all, in the right order, with the fork mutex released while it
+# drains -- source-scanned out of the shipping vms_cnxman.c / vms_devtab.c /
+# ovmx_init.c, the two-proof shape test_cnxman_glue.c established. It reads the
+# boot path as well as kernel-core for test_cnxman_boot.c's own reason: the
+# chain crosses both, and reading one end would let the other drift.
+cluster_host_scs_test(test_scs_fsm_depart  test_scs_fsm_depart.c)
+target_compile_definitions(test_scs_fsm_depart PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+    OVMX_INIT_DIR="${CMAKE_SOURCE_DIR}/src/ovmx_init"
+)
+# The KILL SWITCH lives in vms_cluster_sysgen.c (cluster_sysgen_clean_depart),
+# so the test drives the REAL decision function the departure asks instead of
+# reproducing the `if' and proving nothing. It comes in by LINKING the library
+# that already carries that TU, rather than by adding the source to this target:
+# this target has quoted -D defines (OVMX_KCORE_DIR above), and a kernel-core
+# PRODUCT source compiled under them lands in compile_commands.json with a
+# backslash escape, which kif_caller_census refuses to parse (it fails loudly
+# rather than mis-splitting the command). Linking sidesteps it entirely.
+target_link_libraries(test_scs_fsm_depart PRIVATE cluster_host_cnxman)
+
 # E78: the connection manager's own half of the p. 2-43 ledger. The MECHANISM
 # runs against the real scs_fsm through the FC-P2.2 harness (an unpaid ledger
 # silences the peer after exactly the grant -- the live E77 stall); the

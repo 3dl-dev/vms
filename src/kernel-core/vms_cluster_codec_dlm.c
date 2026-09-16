@@ -413,11 +413,18 @@ vms_codec_status_t vms_dlm_rebuild_parse_body(const uint8_t *body, uint32_t len,
 		return VMS_CODEC_E_CLASS;
 
 	inv1 = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_INV1);
-	inv2 = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_INV2);
+	inv2 = vms_wire_get_le16(&v, VMS_OFB_DLM_REBUILD_TYPE);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
-	if (inv1 != VMS_DLM_REBUILD_INV1_CONST || inv2 != VMS_DLM_REBUILD_INV2_CONST)
+	/* body[12:14] is the constant invariant; body[14:16] is the rebuild-TYPE
+	 * (JOIN 0x0003 / REJOIN 0x0004), NOT a constant -- gating on only 0x0003
+	 * wrongly rejected every rejoin-rebuild frame (vms-20c, caught by the
+	 * byte-identical twin-test against real captured op-0x0d frames). */
+	if (inv1 != VMS_DLM_REBUILD_INV1_CONST)
 		return VMS_CODEC_E_CLASS;
+	if (inv2 != VMS_DLM_REBUILD_TYPE_JOIN && inv2 != VMS_DLM_REBUILD_TYPE_REJOIN)
+		return VMS_CODEC_E_CLASS;
+	out->rebuild_type = inv2;
 
 	/* The whole body span, verbatim -- the exact source the response
 	 * recipe's "memcpy 132 bytes" copies. Body starts at abs
@@ -466,6 +473,34 @@ vms_dlm_rebuild_response_build(const struct vms_dlm_rebuild_record *req,
 	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT, vms_wire_response_category(cat));
 	vms_wire_put_u8(&w, VMS_OFF_DLM_RESULT_STAMP, VMS_DLM_RESULT_STAMP_REBUILD);
 
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_DLM_REBUILD_ECHO_LEN;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t
+vms_dlm_rebuild_request_build(const struct vms_dlm_rebuild_record *rec,
+			     uint8_t *frame, uint32_t cap, uint32_t *written)
+{
+	vms_wire_buf_t w;
+
+	if (rec == (const struct vms_dlm_rebuild_record *)0)
+		return VMS_CODEC_E_INVAL;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+
+	/* SCAFFOLD (vms-20c): the record's body is emitted VERBATIM into abs
+	 * [72,204) -- the byte-identical round-trip that grounds the op-0x0d
+	 * layout against the captured real-VMS frames. The survivor-side SENDER
+	 * replaces this verbatim copy with a live-state field assembly once §6
+	 * pins the send-field offsets (mode/lkid/csid); until then those bytes
+	 * stay in the honest verbatim region, never named or fabricated. */
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_DLM_REBUILD_ECHO_LEN,
+			   rec->body);
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 	if (written != (uint32_t *)0)

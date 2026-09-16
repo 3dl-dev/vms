@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-09-15",
+    "generated": "2026-09-16",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -74,32 +74,32 @@
     }
   ],
   "overall": {
-    "count": 459,
+    "count": 461,
     "by_status": {
-      "verified": 24,
+      "verified": 23,
       "implemented": 277,
-      "partial": 52,
+      "partial": 53,
       "stub": 14,
       "designed": 1,
-      "absent": 91
+      "absent": 93
     },
     "by_authenticity": {
       "real": 314,
-      "n/a": 92,
+      "n/a": 94,
       "advisory": 47,
       "facade-risk": 6
     },
-    "met": 301,
-    "in_progress": 52,
-    "not_started": 106,
+    "met": 300,
+    "in_progress": 53,
+    "not_started": 108,
     "facade_risk": 6
   },
   "overall_in_scope": {
     "count": 415,
     "by_status": {
-      "verified": 24,
+      "verified": 23,
       "implemented": 277,
-      "partial": 51,
+      "partial": 52,
       "stub": 10,
       "designed": 1,
       "absent": 52
@@ -110,8 +110,8 @@
       "advisory": 45,
       "facade-risk": 4
     },
-    "met": 301,
-    "in_progress": 51,
+    "met": 300,
+    "in_progress": 52,
     "not_started": 63,
     "facade_risk": 4
   },
@@ -1951,22 +1951,22 @@
       "vms_ref": "OpenVMS TCP/IP Services for OpenVMS (UCX) manuals",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 11,
+        "count": 13,
         "by_status": {
-          "verified": 1,
+          "verified": 0,
           "implemented": 9,
-          "partial": 0,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
-          "absent": 1
+          "absent": 3
         },
         "by_authenticity": {
           "real": 10,
-          "n/a": 1
+          "n/a": 3
         },
-        "met": 10,
-        "in_progress": 0,
-        "not_started": 1,
+        "met": 9,
+        "in_progress": 1,
+        "not_started": 3,
         "facade_risk": 0
       }
     },
@@ -8370,12 +8370,12 @@
       "id": "tcpip-services$bg-inet-device",
       "kind": "feature",
       "vms": "INET pseudo-device BGn: \u2014 $ASSIGN TCPIP$DEVICE: + $QIO (IO$_SETMODE/IO$_ACCESS/IO$_READVBLK/IO$_WRITEVBLK/IO$_DEACCESS) TCP socket path, executive-resident",
-      "status": "verified",
+      "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/kernel/vms_bg_datafd.c",
       "verified_against": "tests/qemu/test_syssvc_bg_echo.c \u2014 a VMS program TCP round-trips a loopback echo via the public system services against a REAL /dev/vms (honest SS$_NOSUCHDEV/EXIT_SKIP with no executive); + the facility_defects negctl gate 'bg-recv-length-zeroed' (vms-527)",
-      "notes": "The socket is executive-resident (vms.ko), the analogue of the executive mailbox; no userspace socket, exactly as VMS BGn: is a driver not a library.",
+      "notes": "The socket is executive-resident (vms.ko), the analogue of the executive mailbox; no userspace socket, exactly as VMS BGn: is a driver not a library. STATUS=implemented not verified: the proof is a 127.0.0.1 LOOPBACK echo inside one guest under -nic none (test_syssvc_bg_echo.c) -- no real NIC path, no external peer. The 'verified' gate is a real external-peer TCP round-trip over the virtio NIC (untested).",
       "plan_ref": "vms-67f"
     },
     {
@@ -8390,7 +8390,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmstcpip/sockets/vms_bgsock.c",
       "verified_against": null,
-      "notes": "707-line veneer; app speaks only BSD sockets, never BGn:/$QIO. Exercised by the qemu harness (tests/qemu/CMakeLists.txt) alongside the BGn: driver; used by the wrapped OpenSSH clients/daemon.",
+      "notes": "707-line veneer; app speaks only BSD sockets, never BGn:/$QIO. Exercised by the qemu harness (tests/qemu/CMakeLists.txt) alongside the BGn: driver, consumed by the client tools. THIN SLICE of the BSD API: socket/connect/send/recv + basic setsockopt only -- NO resolver (getaddrinfo/gethostbyname), NO AF_INET6, NO select/poll, partial setsockopt option set (see sockets-api-gaps).",
       "plan_ref": "vms-67f"
     },
     {
@@ -8399,13 +8399,13 @@
       "facility_name": "TCP/IP Services (UCX QIO + Sockets + BGn:/ETH0:)",
       "id": "tcpip-services$client-tools",
       "kind": "utility",
-      "vms": "TCP/IP client TOOLS \u2014 DCL TELNET + FTP over BGn:",
-      "status": "implemented",
+      "vms": "TCP/IP CLIENT tools \u2014 DCL TELNET + FTP client over BGn: (client-only; no server)",
+      "status": "partial",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/vmstcpip/services/tcpip_client.h",
       "verified_against": null,
-      "notes": "TELNET/FTP protocol engines driving BGn: the ordinary $ASSIGN/$QIO way; header-only static-inline so the test exercises the real product logic. Guarded by the negctl gate 'tcpip-ftp-get-length-dropped' (vms-dbb). Honest SS$_NOSUCHDEV with no executive.",
+      "notes": "TELNET/FTP protocol engines driving BGn: the ordinary $ASSIGN/$QIO way; header-only static-inline. STATUS=partial: proven ONLY by the KE harness + a negctl gate -- NO booted e2e against a real server; and these are CLIENTS only (FTP-server + TELNET-server are absent, see unbuilt-application-surface). Guarded by the negctl gate 'tcpip-ftp-get-length-dropped' (vms-dbb). Honest SS$_NOSUCHDEV with no executive.",
       "plan_ref": "vms-67f"
     },
     {
@@ -8511,6 +8511,36 @@
       "evidence": "src/vmstcpip/mgmt/tcpip_service_db.h",
       "verified_against": "tests/qemu/test_syssvc_tcpip_service_db.c \u2014 a service SET+ENABLEd through the engine over a REAL Files-11 ACP is read back through the INDEPENDENT aux-server parser (tcpip_inetd_parse_db, the same code TCPIP$INETD runs to decide what to bind); DISABLE removes it from the bound set (record retained as a '!'-line), DELETE drops it; with no executive the persistent WRITE fails ENOEXEC (honest SS$_NOSUCHDEV class, never a per-process fake); + the facility_defects negctl gate 'tcpip-svcdb-enable-not-persisted' (vms-71b)",
       "notes": "The management/persistence plane the DCL SERVICE verbs drive (#878). The database was already ACP-resident and read at boot; this adds the VMS-way management surface (was hand-edit-only) \u2014 SET SERVICE defines/updates a record, ENABLE/DISABLE toggle the '!'-disabled convention the aux-server parser already honours, DELETE removes it, and the change is persisted over the ACP the same apply/persist way the config stores are (rms_textfile_*), so a DCL-enabled service survives reboot and is reapplied on the next TCPIP$INETD start. Line format is the SAME OVMX design choice tcpip_inetd.h documents (Rule 8). A new service defaults DISABLED (operator posture). The end-to-end cold-boot double-boot serving proof (a DCL-enabled service answered on the next boot \u2014 the 'verified' oracle gate) is the tracked follow-on.",
+      "plan_ref": "vms-67f"
+    },
+    {
+      "domain": "networking",
+      "facility": "tcpip-services",
+      "facility_name": "TCP/IP Services (UCX QIO + Sockets + BGn:/ETH0:)",
+      "id": "tcpip-services$unbuilt-application-surface",
+      "kind": "subsystem",
+      "vms": "The OpenVMS UCX application service surface: SMTP, POP3, IMAP, NFS (client+server), NTP, SNMP agent, BIND/named resolver, LPD/LPR printing, FINGER, RLOGIN/RSH, FTP SERVER, TELNET SERVER",
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out",
+      "evidence": "docs/design-tcpip-services-ovmx.md",
+      "verified_against": null,
+      "notes": "NOT BUILT. src/vmstcpip/ is 11 files: the BGn: data path, a sockets veneer, an INETD aux server, a DAYTIME toy service, and client TELNET/FTP/PING. None of the real UCX servers/daemons above exist. Recorded as an explicit absent row so the register does not read as near-complete -- this is the bulk of the facility, post-1.0. (Baron 2026-09-16 anti-LARP: TCP/IP is a mile wide, inch deep; this row makes the width honest.)",
+      "plan_ref": "vms-67f"
+    },
+    {
+      "domain": "networking",
+      "facility": "tcpip-services",
+      "facility_name": "TCP/IP Services (UCX QIO + Sockets + BGn:/ETH0:)",
+      "id": "tcpip-services$sockets-api-gaps",
+      "kind": "feature",
+      "vms": "BSD sockets API completeness: DNS resolver (getaddrinfo/gethostbyname), AF_INET6, select/poll, the full setsockopt/getsockopt option set",
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out",
+      "evidence": "src/vmstcpip/sockets/vms_bgsock.c",
+      "verified_against": null,
+      "notes": "The DECC$SOCKET veneer covers socket/connect/send/recv + basic options only; a program needing name resolution, IPv6, readiness multiplexing, or most socket options cannot run. Absent, post-1.0.",
       "plan_ref": "vms-67f"
     },
     {

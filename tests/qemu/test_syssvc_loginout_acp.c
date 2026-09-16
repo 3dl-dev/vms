@@ -144,15 +144,11 @@ static int read_binary_sysuaf_system(const char *spec, sysuaf_record_t *out)
     return 0;
 }
 
-/* LE writers for the raw $UAFDEF expiry fields (vms-c6df). */
+/* LE writer for the raw $UAFDEF expiry fields (vms-c6df). */
 static void le32w(uint8_t *p, uint32_t v)
 {
     p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
     p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-static void le64w(uint8_t *p, uint64_t v)
-{
-    le32w(p, (uint32_t)v); le32w(p + 4, (uint32_t)(v >> 32));
 }
 
 /* Author a SYSUAF at `spec` over the ACP holding two accounts: EXPUSER with an

@@ -1,7 +1,7 @@
 # Image rundown: which resource classes are image-scoped vs process-permanent
 
 Grounding for the SYS$RUNDWN image-scoped release the executive performs on
-`VMS_IOCTL_IMAGE_RUNDOWN` (vms-68f increment v — `src/kernel/vms_access.c`,
+`VMS_IOCTL_IMAGE_RUNDOWN` (vms-68f increment v — `src/kernel-core/vms_access.c`,
 `vms_lock.c`, `vms_devtab.c`, `vms_ast.c`). The design (`docs/design-in-process-
 activation.md` Part II §A.6.1) flags this as *the hard part*: "which resource
 classes are image-scoped vs. process-permanent must be pinned to the oracle per
@@ -78,7 +78,7 @@ follow-up increment or a live-lab pin of their rundown class:
   Deassigning a user-mode channel still drops any *implicit* ownership resting on
   that channel (`device_release_channel()`), which is the common case.
 - **Image temporary (user-mode) logical names**: `LNM$PROCESS` is not
-  executive-resident yet (`src/kernel/vms_lnm.c` implements `LNM$SYSTEM`/GROUP/
+  executive-resident yet (`src/kernel-core/vms_lnm.c` implements `LNM$SYSTEM`/GROUP/
   JOB; PROCESS is deferred — see design §"What B does NOT fix"), so there are no
   executive-resident image-scoped logicals to release. This becomes live only
   when `LNM$PROCESS` moves into the executive, and is the mechanism behind the

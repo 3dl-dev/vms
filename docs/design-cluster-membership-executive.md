@@ -1,5 +1,19 @@
 # Design — cluster membership crosses into the executive (vms-551)
 
+> ## ⛔ SUPERSEDED (2026-09-16) — the `vms_cluster_members[96]` ioctl-populated
+> mirror this doc specifies is retired
+>
+> This doc's scheme — a userspace `scsd` populates a fixed `vms_cluster_member
+> vms_cluster_members[96]` block in `vms.ko` via ioctl, and `SHOW CLUSTER` reads
+> it back — predates the 2026-09-02 cluster reset. `src/kernel-core/vms_cluster.h`
+> now names this exact table "the strawman it replaces" and states the executive
+> holds no value that did not come from the executive or SYSGEN itself. The
+> current design is `docs/design-faithful-cluster-executive.md` (per-node
+> `struct vms_cluster` context, membership state owned end-to-end inside the
+> executive layers, not mirrored in from a daemon). The **NOTMEMBER ≠ NOSUCHDEV**
+> distinction this doc records remains a live invariant and is carried forward
+> in the current design.
+>
 > SHOW CLUSTER / $GETSYI / cluster-wide locking must see a REAL cluster through
 > `/dev/vms`, not a userspace file. Today the live membership lives only in scsd's
 > peer table and is published to a FILE (`/var/run/ovmx/cluster_state`), which

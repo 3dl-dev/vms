@@ -1,5 +1,9 @@
 # Conformance Gap Report — Eight-Cubed Corpus
 
+> This is a dated triage snapshot (2026-07-27). The maintained corpus pass-rates
+> live in `tests/conformance/corpus_baseline.json`; re-run `tests/conformance/run_corpus.sh`
+> for current numbers. The value below is the §2/§3 root-cause triage.
+
 **Item:** vms-801.4 (scoped baseline + triage task; NOT the 80% milestone)
 **Date:** 2026-07-27
 **Corpus:** `tests/corpus/tier1-examples/` — 229 Eight-Cubed VMS C examples (see `tests/corpus/PROVENANCE.md`)

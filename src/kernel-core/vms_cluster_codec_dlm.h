@@ -473,13 +473,26 @@ vms_codec_status_t vms_dlm_req_csid(const struct vms_sca_hdr *hdr, uint16_t *out
  * (1367/1367 real responses reconstructed byte-for-byte, zero residuals).
  * ------------------------------------------------------------------ */
 
-/* Request-layout invariants (spec §4(p), GROUNDED). */
+/* Request-layout fields (spec §4(p)). body[12:14] IS a constant invariant;
+ * body[14:16] is NOT -- it is the rebuild-TYPE (see below, vms-20c). */
 #define VMS_OFF_DLM_REBUILD_INV1    84u /* body[12:14] LE u16, invariant 0x0001 */
-#define VMS_OFF_DLM_REBUILD_INV2    86u /* body[14:16] LE u16, invariant 0x0003 */
+#define VMS_OFF_DLM_REBUILD_TYPE    86u /* body[14:16] LE u16, rebuild-type     */
+#define VMS_OFF_DLM_REBUILD_INV2    VMS_OFF_DLM_REBUILD_TYPE /* legacy spelling  */
 #define VMS_OFB_DLM_REBUILD_INV1 VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REBUILD_INV1)
-#define VMS_OFB_DLM_REBUILD_INV2 VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REBUILD_INV2)
+#define VMS_OFB_DLM_REBUILD_TYPE VMS_OFB_FROM_FRAME(VMS_OFF_DLM_REBUILD_TYPE)
+#define VMS_OFB_DLM_REBUILD_INV2 VMS_OFB_DLM_REBUILD_TYPE
 #define VMS_DLM_REBUILD_INV1_CONST 0x0001u
-#define VMS_DLM_REBUILD_INV2_CONST 0x0003u
+/*
+ * body[14:16] is the rebuild-TYPE, NOT a constant invariant (vms-20c, 2026-09-16).
+ * GROUNDED 0x0003 on a JOIN / member-add (ovmx-760-MEMBER-achieved capture) and
+ * 0x0004 on a REJOIN / departure-return (vms-20c rejoin-rebuild capture, all 307
+ * frames). The prior VMS_DLM_REBUILD_INV2_CONST=0x0003 was grounded from a single
+ * join capture and wrongly REJECTED every rejoin-rebuild frame -- caught by the
+ * byte-identical twin-test against real captured op-0x0d frames.
+ */
+#define VMS_DLM_REBUILD_TYPE_JOIN   0x0003u
+#define VMS_DLM_REBUILD_TYPE_REJOIN 0x0004u
+#define VMS_DLM_REBUILD_INV2_CONST  VMS_DLM_REBUILD_TYPE_JOIN /* legacy alias    */
 
 /* The envelope fields the response recipe overwrites (spec §4(p)). */
 #define VMS_OFF_DLM_SEND_MSG        72u /* body[0:2]  LE u16, own send-msg# */
@@ -500,9 +513,10 @@ vms_codec_status_t vms_dlm_req_csid(const struct vms_sca_hdr *hdr, uint16_t *out
 #define VMS_DLM_REBUILD_ECHO_LEN    132u
 
 struct vms_dlm_rebuild_record {
-	uint8_t body[VMS_DLM_REBUILD_ECHO_LEN]; /* abs 72..204, verbatim      */
-	uint8_t name_len;                        /* body[47], convenience     */
-	uint8_t name[VMS_DLM_NAME_MAX];          /* body[48..], convenience   */
+	uint8_t  body[VMS_DLM_REBUILD_ECHO_LEN]; /* abs 72..204, verbatim      */
+	uint16_t rebuild_type;                   /* body[14:16] JOIN/REJOIN    */
+	uint8_t  name_len;                       /* body[47], convenience      */
+	uint8_t  name[VMS_DLM_NAME_MAX];         /* body[48..], convenience    */
 };
 
 /*
@@ -518,6 +532,21 @@ vms_codec_status_t vms_dlm_rebuild_parse_body(const uint8_t *body, uint32_t len,
 vms_codec_status_t vms_dlm_rebuild_parse(const uint8_t *frame, uint32_t len,
 					 const struct vms_frame_info *fi,
 					 struct vms_dlm_rebuild_record *out);
+
+/*
+ * Build a cat-0x02 op-0x0d rebuild-record REQUEST frame from a record.
+ * SCAFFOLD (vms-20c, FC-P5.5): emits `rec->body` verbatim into abs [72,204)
+ * -- the byte-identical round-trip that grounds the op-0x0d layout against
+ * the captured real-VMS frames without naming the still-unpinned send fields
+ * (mode/lkid/csid, §6-blocked). The survivor-side SENDER will replace the
+ * verbatim body with a live-state field assembly once §6 pins those offsets;
+ * this build is the entry point + the crash-guard round-trip harness. Writes
+ * ONLY abs [72,204); `*written` receives 132. Same envelope division as the
+ * ENQ/response builders.
+ */
+vms_codec_status_t
+vms_dlm_rebuild_request_build(const struct vms_dlm_rebuild_record *rec,
+			     uint8_t *frame, uint32_t cap, uint32_t *written);
 
 /*
  * Build the op-0x0d response by the spec's OWN recipe, applied literally

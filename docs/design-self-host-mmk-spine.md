@@ -99,37 +99,41 @@ The high-frequency callers, mapped to OVMX `origin/main` coverage:
 | **`sys$filescan`** | lightweight filespec field parse | **ABSENT** | only structure headers exist (`src/libvms/include/fscndef.h`, `iledef.h`); no `sys_filescan.c` |
 | **`sys$setddir`** | set default directory | **ABSENT** | no symbol anywhere in `src/` |
 
-### 1.3 Verdict: **CONDITIONAL GO — NO-GO until the five gaps below are closed**
+### 1.3 Verdict: **GO — P1-P5 closed, MMK links and runs**
 
-The RTL **foundation is strong and mostly complete**: VM zones, balanced trees,
-dynamic strings, `$FAO`, symbols/logicals, condition handling, `lib$find_file`,
-and — critically — the full **RMS `sys$parse`/`sys$search`** engine are all real,
-implemented code on `origin/main`. There is no architectural blocker.
+*(Status corrected 2026-09-16: the P1-P5 gaps this section originally scoped as
+blocking are landed on `origin/main`. See
+`docs/design-self-host-spine5-mmk-component.md` for the proof that the shipped
+MMK.EXE drives real TCC/LIBRARIAN/LINK builds end to end, in-guest, through
+spine #7.)*
 
-But MMK **cannot link-and-run today**. Five entry points it hard-calls are
-absent or non-functional. Each becomes a **prerequisite child under `vms-801`**;
-the spine's implementation children (vms-486, LIBRARIAN) are **blocked on them**:
+The RTL **foundation is strong and complete** for MMK's needs: VM zones,
+balanced trees, dynamic strings, `$FAO`, symbols/logicals, condition handling,
+`lib$find_file`, the full **RMS `sys$parse`/`sys$search`** engine, and the five
+entry points MMK hard-calls are all real, implemented code on `origin/main`:
 
-| # | Prereq (→ vms-801 child) | Gap | Recommended scope |
-|---|---|---|---|
-| **P1** | **CLI$ callable interface + compiled-CLD support** — `cli$dcl_parse`, `cli$present`, `cli$get_value` | **ABSENT**. New `src/libvms/rtl/lib_cli.c` (roadmap already names it). MMK passes `MMK_CLD` (compiled from `mmk_cld.cld`) to `cli$dcl_parse`, so a **CLD command-table representation** and a way to produce it (SET COMMAND / CLD compile, or a hand-authored table) are part of this item. **This is the largest gap** and the roadmap's "minimal argc/argv, not full CLD" note is insufficient — MMK needs the CLD path. |
-| **P2** | **Real `lib$table_parse` / `lib$tparse` engine** | **PARTIAL (14-line stub)**, and `lib$table_parse` symbol missing. Implement the full TPARSE state-machine engine in `src/libvms/rtl/lib_tparse.c` and export **both** names (MMK aliases `lib$tparse`→`lib$table_parse`). Must define the **C table format** that vms-486 (§2) targets. Blocks vms-486. |
-| **P3** | **`sys$filescan`** | **ABSENT**. New `src/libvms/syssvc/sys_filescan.c`; structures already exist in `fscndef.h`/`iledef.h`. Distinct from `sys$parse` (no RMS I/O — pure field extraction). |
-| **P4** | **`sys$setddir`** | **ABSENT**. Set/read process default directory; small. |
-| **P5** | **`lib$get_foreign` semantics fix** | **PARTIAL**. Present at `lib_output.c:139` but reads stdin; must return the **invocation command tail** for foreign-command activation. `verify:` exact required semantics against the VSI RTL manual before implementing. |
+| # | Entry point | Landed at |
+|---|---|---|
+| **P1** | **CLI$ callable interface + compiled-CLD support** — `cli$dcl_parse`, `cli$present`, `cli$get_value` | `src/libvms/rtl/lib_cli.c` |
+| **P2** | **Real `lib$table_parse` / `lib$tparse` engine** | `src/libvms/rtl/lib_tparse.c` (401-line TPARSE state-machine engine; exports both `lib$table_parse` and `lib$tparse`) |
+| **P3** | **`sys$filescan`** | `src/libvms/syssvc/sys_filescan.c` |
+| **P4** | **`sys$setddir`** | `src/libvms/syssvc/sys_misc.c` |
+| **P5** | **`lib$get_foreign`** | `src/libvms/rtl/lib_output.c` (returns the invocation command tail, per the corpus's `lib_get_foreign.c` semantics) |
 
-`verify:` items to resolve while filing P1–P5: `lib$find_image_symbol`,
-`lib$getdvi`, `lib$cvt_dtb` — confirm real implementations vs header-only
-declarations (they appear in MMK but were not confirmed as `.c` definitions in
-this pass).
-
-**Bottom line:** GO on the architecture and the bulk of the RTL; **NO-GO on a
-native MMK+LIBRARIAN build until P1–P5 are closed under vms-801.** P1 and P2 are
-the long poles.
+**Bottom line:** GO on the architecture and the full RTL surface MMK needs.
+The spine's implementation children (vms-486 §2, LIBRARIAN §3) are unblocked;
+spine #5-#7 (`docs/design-self-host-spine5-mmk-component.md`) already prove the
+shipped MMK.EXE building a real multi-TU OVMX component end to end in QEMU.
 
 ---
 
-## 2. Assembler decision — `parse_tables.mar` (spine-child vms-486)
+## 2. Assembler decision — `parse_tables.mar` (spine-child vms-486, LANDED)
+
+*(Status corrected 2026-09-16: vms-486 landed as `tests/libvms/mmk_parse_tables.c`
+— a 683-line clean-room C port of the two TPARSE grammars, driven by the real
+`lib$table_parse` engine. §2.3's "concrete path" below is kept as the design
+rationale; the artifact landed at `tests/libvms/mmk_parse_tables.c`, not the
+`tests/corpus/tier3-mmk/parse_tables.c` path originally proposed.)*
 
 ### 2.1 Is it actually needed? — **Yes, it is load-bearing.**
 
@@ -248,11 +252,12 @@ spine does not need.
 
 ## 4. Summary for downstream spine children
 
-- **RTL verdict: CONDITIONAL GO.** Architecture and most of the RTL are ready.
-  **NO-GO on a native MMK+LIBRARIAN build until P1–P5 (§1.3) are closed under
-  `vms-801`.** Long poles: **P1 (CLI$ + CLD)** and **P2 (real TPARSE engine)**.
-- **Assembler: hand-port `parse_tables.mar` → C** (vms-486, blocked by P2). It is
-  load-bearing; MMK does not build without it. MACRO-32 assembler stays out of
+*(Status corrected 2026-09-16: P1-P5 and vms-486 are landed — see §1.3/§2.)*
+
+- **RTL verdict: GO.** Architecture and the full RTL surface MMK needs are ready
+  and proven driving real builds (`docs/design-self-host-spine5-mmk-component.md`).
+- **Assembler: hand-ported `parse_tables.mar` → C**, landed at
+  `tests/libvms/mmk_parse_tables.c` (vms-486). MACRO-32 assembler stays out of
   scope.
 - **`.OLB`: OVMX-labeled `ar` container** (Rule 8), consumed by LINK.EXE unchanged.
   A VMS-authentic LBR reader is a **separate operator-gated `link.c` sibling of
@@ -260,14 +265,10 @@ spine does not need.
 - **Settled inputs:** vendored MadGoat MMK; aarch64 → x86_64; Alpha rides
   `vms-054`.
 
-### Prerequisite items to file under `vms-801`
+### Prerequisite items landed under `vms-801`
 - **P1** — CLI$ callable interface (`cli$dcl_parse`, `cli$present`, `cli$get_value`)
-  + compiled-CLD table support (`lib_cli.c`). *Largest.*
-- **P2** — real `lib$table_parse`/`lib$tparse` TPARSE engine (replace the stub;
-  export both names; define the C table format). *Blocks vms-486.*
-- **P3** — `sys$filescan` (`sys_filescan.c`).
-- **P4** — `sys$setddir`.
-- **P5** — `lib$get_foreign` semantics fix (return the foreign-command tail, not
-  stdin).
-- **`verify:`** — confirm real implementations of `lib$find_image_symbol`,
-  `lib$getdvi`, `lib$cvt_dtb` (header-vs-`.c` unconfirmed in this pass).
+  + compiled-CLD table support — `src/libvms/rtl/lib_cli.c`.
+- **P2** — real `lib$table_parse`/`lib$tparse` TPARSE engine — `src/libvms/rtl/lib_tparse.c`.
+- **P3** — `sys$filescan` — `src/libvms/syssvc/sys_filescan.c`.
+- **P4** — `sys$setddir` — `src/libvms/syssvc/sys_misc.c`.
+- **P5** — `lib$get_foreign` — `src/libvms/rtl/lib_output.c`.

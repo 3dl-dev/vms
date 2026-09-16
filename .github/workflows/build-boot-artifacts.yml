@@ -1,0 +1,68 @@
+# Build the OVMX bootable boot artifacts and upload them as a downloadable
+# GitHub Actions artifact. workflow_dispatch only — this is the supported way
+# to hand a lab campaign the three files it boots (vmlinuz +
+# initramfs-ovmx-slim.cpio.gz + ovmx-distrib.img) WITHOUT cutting a public
+# release (tools/cut-release.sh is heavier: it also builds the VAX + Alpha
+# co-release sub-bundles) and without a heavy build on a shared dev host.
+#
+# The lab (tests/lab/tools/labjoin_booted.sh <pod> <tag> <artifacts-dir> ...)
+# consumes exactly these three files. After a run, download + stage them:
+#   gh run download <run-id> -n ovmx-boot-artifacts -D <artifacts-dir>
+#
+# This mirrors the ci.yml persistent-boot job's build step byte-for-byte
+# (docker/build-push-action@v6 against distro/Dockerfile.bootable, gha cache),
+# then extracts /boot/* from the built image rather than booting it.
+name: build-boot-artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build + upload OVMX boot artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract /boot artifacts from the built image
+        run: |
+          set -euo pipefail
+          cid="$(docker create ovmx-boot:latest)"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          mkdir -p dist/boot
+          for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img; do
+            docker cp "$cid:/boot/$f" "dist/boot/$f"
+          done
+          # Record the exact source commit alongside the bytes so a staged
+          # artifact set is always attributable to a build.
+          git rev-parse HEAD > dist/boot/SOURCE_COMMIT
+          ( cd dist/boot && sha256sum vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img > SHA256SUMS )
+          echo "== staged boot artifacts =="
+          ls -l dist/boot
+          cat dist/boot/SHA256SUMS
+
+      - name: Upload boot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ovmx-boot-artifacts
+          path: dist/boot/
+          retention-days: 14
+          if-no-files-found: error

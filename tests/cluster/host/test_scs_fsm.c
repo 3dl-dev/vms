@@ -223,6 +223,107 @@ static void t_acceptor_ladder(void)
 	ct_check_eq_u32(b_sysap.n_opened, 1u, "opened() fired");
 }
 
+/* ------------------------------------------------------------------ *
+ * 3b. vms-298 regression: a peer's SECOND connection while the FIRST is
+ *     still OPEN. Grounded in ovmx-760-MEMBER-achieved-20260730.pcap
+ *     (frames 2890/2896/2920): ~10s after its first MSCP$DISK bind a real
+ *     VAX opens a SECOND MSCP$DISK connection from the same node. The
+ *     retired scsd.c server keyed idempotence on a boolean "have we EVER
+ *     bound" (`int retx = ps->mscp_srv_bound;`) and therefore mistook the
+ *     genuinely-new second connect for a RETRANSMIT of the first: it
+ *     replayed a send_seq allocated minutes earlier and re-offered the SAME
+ *     compile-time-constant local handle -- which the VAX silently dropped
+ *     (no op-5 confirm). The executive-resident path has no such boolean
+ *     gate; connection identity keys on the PEER's Con.ID, so a distinct
+ *     remote Con.ID is a distinct connection. This locks that: the SYSAP is
+ *     asked AGAIN, the second connection gets its OWN local Con.ID, and both
+ *     coexist live with the first undisturbed.
+ * ------------------------------------------------------------------ */
+static void t_two_connects_one_peer(void)
+{
+	vms_conid_t listen1, listen2, conn1 = 0u, conn2 = 0u;
+	struct scs_cdt *c1, *c2;
+
+	printf("-- vms-298: a peer's SECOND connect (first still OPEN) gets its "
+	       "OWN Con.ID; the SYSAP is asked again, not deduped as a "
+	       "retransmit\n");
+	rig(SCS_CONNECT_DEFER);
+	b_node.drop_tx = 1;
+
+	/* FIRST connect from peer A -> accept -> OPEN. */
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_CON_REQ, 0u,
+			 0x33a00001u, 6u, scsh_name_b, scsh_name_a);
+	ct_check_eq_u32(b_sysap.n_connect_req, 1u,
+			"the first connect reached the SYSAP");
+	listen1 = b_sysap.last_listen_conid;
+	ct_check(scs_fsm_accept(&b_node.fsm, listen1, NULL, 0u, &conn1) == SCS_OK,
+		 "LOCAL_ACCEPT #1");
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_ACCP_RSP, conn1,
+			 0x33a00001u, 0u, NULL, NULL);
+	ct_check_eq_u32((unsigned long)scsh_state(&b_node, conn1),
+			VMS_SCS_CDT_OPEN, "connection #1 is OPEN");
+	c1 = scsh_cdt(&b_node, conn1);
+	ct_check_eq_u32(c1->remote_conid, 0x33a00001u,
+			"connection #1 learned peer A's FIRST Con.ID off the wire");
+
+	/*
+	 * SECOND connect from the SAME peer A, carrying a DIFFERENT remote
+	 * Con.ID (a genuinely-new connection endpoint -- a real node allocates
+	 * a separately-numbered Con.ID per connection). The listening CDT is
+	 * back in LISTEN, so this is a fresh accept, not the "busy" case.
+	 */
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_CON_REQ, 0u,
+			 0x33a00002u, 6u, scsh_name_b, scsh_name_a);
+
+	/* THE vms-298 REGRESSION GUARD: the SYSAP must be asked AGAIN. The
+	 * retired boolean gate would have swallowed this as a retransmit. */
+	ct_check_eq_u32(b_sysap.n_connect_req, 2u,
+			"the SYSAP is ASKED AGAIN -- the second connect is NOT "
+			"deduped as a retransmit of the first (vms-298)");
+	listen2 = b_sysap.last_listen_conid;
+	ct_check(scs_fsm_accept(&b_node.fsm, listen2, NULL, 0u, &conn2) == SCS_OK,
+		 "LOCAL_ACCEPT #2");
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_ACCP_RSP, conn2,
+			 0x33a00002u, 0u, NULL, NULL);
+	ct_check_eq_u32((unsigned long)scsh_state(&b_node, conn2),
+			VMS_SCS_CDT_OPEN, "connection #2 is OPEN");
+
+	/* Distinct local Con.ID -- never the reused constant handle of vms-298
+	 * (there is no OVMX_MSCP_*_CONID constant on origin/main). */
+	ct_check(conn2 != conn1,
+		 "connection #2 got its OWN local Con.ID, not the first's "
+		 "reused handle (vms-298)");
+	ct_check_eq_u32(conn2 >> 16, conn1 >> 16,
+			"...same boot seed (same node)");
+
+	/* Both connections coexist LIVE: the first is undisturbed by the
+	 * second, each bound to its own distinct peer Con.ID. */
+	c1 = scsh_cdt(&b_node, conn1);
+	c2 = scsh_cdt(&b_node, conn2);
+	ct_check(c1 != (struct scs_cdt *)0 &&
+		 (unsigned long)c1->state == VMS_SCS_CDT_OPEN,
+		 "connection #1 is STILL OPEN -- undisturbed by the second");
+	ct_check_eq_u32(c1->remote_conid, 0x33a00001u,
+			"connection #1 still bound to peer A's FIRST Con.ID");
+	ct_check(c2 != (struct scs_cdt *)0 &&
+		 (unsigned long)c2->state == VMS_SCS_CDT_OPEN,
+		 "connection #2 is OPEN");
+	ct_check_eq_u32(c2->remote_conid, 0x33a00002u,
+			"connection #2 bound to peer A's SECOND, DISTINCT Con.ID");
+	ct_check_eq_u32(b_sysap.n_opened, 2u,
+			"the SYSAP saw TWO distinct opened() -- two live served "
+			"connections from one peer");
+
+	/*
+	 * send_seq: the retired code replayed the MSCP server's OWN per-SYSAP
+	 * echo/accept seq; the executive-resident server owns none. send_seq is
+	 * per-VC (vms_pe_fsm.c) and continues the live stream across both
+	 * connections to this peer. That continuity is locked by the PE/VC
+	 * sequenced-message tests; the vms-298 send_seq-replay cannot recur here
+	 * because no per-SYSAP send_seq exists to replay.
+	 */
+}
+
 /*
  * E31 -- the VMS$VAXcluster 16-byte SCA connect data (spec SS4(N)) really
  * reaches the peer's wire, byte for byte, on a CONNECT_REQ (op 0). The
@@ -889,6 +990,7 @@ int main(void)
 	t_conid_allocator();
 	t_initiator_ladder();
 	t_acceptor_ladder();
+	t_two_connects_one_peer();
 	t_connect_data_on_wire();
 	t_reject_ladder();
 	t_accept_rcvd_is_real();

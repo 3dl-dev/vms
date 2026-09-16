@@ -127,7 +127,7 @@ The lower-level path, as shown in the top-level `README.md`:
 docker build -f distro/Dockerfile.bootable -o dist .
 
 # Needs a host QEMU install
-./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+./distro/boot/run-qemu.sh dist/boot/vmlinuz dist/boot/initramfs-ovmx.cpio.gz
 ```
 
 `run-qemu.sh` is what CI uses and is the right entry point when you need to
@@ -138,7 +138,7 @@ extracted onto the host; if you built with plain `docker build -t` (as
 `boot.sh` does), those files are inside the tagged image, not on your host, so
 use `boot.sh` or a direct `docker run` instead.
 
-> If you built with `-t` and try to run `run-qemu.sh dist/vmlinuz ...`, it will
+> If you built with `-t` and try to run `run-qemu.sh dist/boot/vmlinuz ...`, it will
 > fail with `kernel not found` — that just means you used the `boot.sh` build
 > output with the `run-qemu.sh` boot path. Pick one column of the table above
 > and stay in it.

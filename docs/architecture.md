@@ -134,12 +134,11 @@ docker build -f distro/Dockerfile.bootable -o dist .
   │
   ├── QEMU boots the Linux kernel
   └── Kernel unpacks the initramfs and runs /init directly — which IS
-      STARTUP.EXE (the ovmx_init binary), PID 1. There is NO wrapper
-      script and NO busybox (init-wrapper.sh is retired): PID 1 does the
-      bootstrap itself (vms-9b7, vms-2f0). BOOTSTRAP ONLY — it does not
-      install, INITIALIZE or provision. PID 1 does NOT read SYSUAF and is
-      NOT SYSTEM; it holds only what the executive derived from root's
-      credentials at registration (UIC [0,0], empty username).
+      STARTUP.EXE (the ovmx_init binary), PID 1, running the bootstrap
+      itself (vms-9b7, vms-2f0): a single static binary, no wrapper script,
+      no busybox. Its scope is bootstrap only, holding exactly the identity
+      the executive derived from root's credentials at registration (UIC
+      [0,0], empty username) — never a SYSUAF read, never SYSTEM's identity.
         ├── mount the Linux base layer (proc, sysfs, devtmpfs, devpts, tmpfs)
         ├── ovmx_boot_load_module("vms") → finit_module(2) loads vms.ko;
         │     executive_attach opens /dev/vms (the executive I/O + device table)

@@ -33,8 +33,8 @@ through the Files-11 ODS-2 ACP over `/dev/vms`.
 | `ALLOCLASS` | Allocation class for shared cluster devices | Recorded | Loaded and reported only; `0` is the documented default. Does not touch any wire frame. |
 | `RECNXINTERVAL` | Reconnection interval, seconds | Yes | Sizes the reconnect period after a VC break. Default `20`. |
 | `VAXCLUSTER` | Cluster participation (0/1/2) | Yes | The boot-time decision: `0` (the shipped default) brings up **no** cluster port at all; `1`/`2` bring the SCS port up and join/form. It gates the port only — the identity above is loaded regardless of its value. |
-| `VOTES` | Votes this node contributes | Recorded | Loaded and persisted, but OVMX always joins **non-voting** (advertises `VOTES=0`); the local value is not advertised. See [votes/quorum](#votes-and-quorum-are-not-enforced). |
-| `EXPECTED_VOTES` | Expected total cluster votes | Recorded | Loaded and persisted, but not reconciled — see [votes/quorum](#votes-and-quorum-are-not-enforced). |
+| `VOTES` | Votes this node contributes | Yes | Loaded into the executive and **effectual for genesis**: a node whose own `VOTES` already meet the quorum its `EXPECTED_VOTES` implies is the one allowed to *found* a cluster (`cnxman_coord_found()`, `src/kernel-core/vms_cnxman_coord_fsm.c`); a `VOTES=0` node can never found, only join. The value is carried onto the wire in this node's own CSB and PARAMS record — it is no longer a hardcoded non-voting `0`. See [votes/quorum](#votes-and-quorum-are-not-enforced) for what is *still* tracking-only. |
+| `EXPECTED_VOTES` | Expected total cluster votes | Yes | Loaded into the executive; together with `VOTES` it decides the genesis predicate above (`CEVOTES`/`QUORUM`, `src/kernel-core/vms_cnxman_quorum.c`). |
 
 ### How you author these: `@SYS$MANAGER:CLUSTER_CONFIG_LAN.COM`
 
@@ -80,26 +80,58 @@ prepared store) still works for scripted setups. But
 
 ## Standing up a two-node cluster
 
-1. **Give each node a unique identity.** On each node run
-   `@SYS$MANAGER:CLUSTER_CONFIG_LAN.COM` (see
-   [How you author these](#how-you-author-these-sysmanagercluster_config_lancom))
-   and author a distinct `SCSNODE` (≤6 chars) and a distinct `SCSSYSTEMID`, then
-   reboot. Reusing a `SCSNODE`/`SCSSYSTEMID` a peer has recently seen on another
-   system causes the join to be refused outright (the lab documents this as
-   `%PEA0, Remote System Conflicts with Known System`).
+This exact sequence is CI-proven end to end, on two real, separately booted
+OVMX nodes, by
+[`tests/qemu/test_cluster_config_lan_2node_e2e.sh`](../tests/qemu/test_cluster_config_lan_2node_e2e.sh)
+(rd vms-23b9 rung 2): one node founds, the other joins, and both independently
+report the other as a `MEMBER`.
 
-2. **Match the cluster group.** OVMX joins the reference lab's **group 1** by
+1. **Give each node a unique identity, and pick ADD, not CHANGE.** On each
+   node run `@SYS$MANAGER:CLUSTER_CONFIG_LAN.COM` (see
+   [How you author these](#how-you-author-these-sysmanagercluster_config_lancom))
+   and choose menu option **1 (ADD)** — CHANGE (option 2) never touches
+   `VAXCLUSTER`, so a CHANGE-only node stays at the shipped default
+   `VAXCLUSTER=0` and its executive never brings up a cluster port at all, no
+   matter what identity or votes it carries. ADD authors a distinct `SCSNODE`
+   (≤6 chars), a distinct `SCSSYSTEMID`, and enables `VAXCLUSTER=2`. Reusing a
+   `SCSNODE`/`SCSSYSTEMID` a peer has recently seen on another system causes
+   the join to be refused outright (the lab documents this as `%PEA0, Remote
+   System Conflicts with Known System`).
+
+2. **Give exactly one node quorum by its own votes.** The node that should
+   *found* the cluster needs `VOTES` ≥ the quorum its own `EXPECTED_VOTES`
+   implies — the simplest case, and the one the CI gate above uses, is
+   `VOTES=1`/`EXPECTED_VOTES=1` on the founder. A node with `VOTES=0` can
+   never found (`cnxman_coord_found()`'s own predicate) — it can only join
+   what another node already formed. Both prompts default to `1` at the
+   `CLUSTER_CONFIG_LAN.COM` "Votes this node contributes" step; a would-be
+   joiner should answer `0`.
+
+3. **Match the cluster group.** OVMX joins the reference lab's **group 1** by
    default (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
    [Not yet supported](#cluster_authorize-is-a-lab-only-stand-in)). Both nodes
-   must be on the same LAN segment carrying the LAVC/SCA ethertype `0x6007`; the
-   transport is genuine raw Ethernet, not a UDP tunnel (`src/vmsscs/scs_hello.c`,
-   requires `CAP_NET_RAW`).
+   must be on the same LAN segment carrying the LAVC/SCA ethertype `0x6007`;
+   the transport is genuine raw Ethernet framed and sent by the **executive's
+   own kernel socket** (`src/kernel-core/vms_l2.c`), not a userspace raw
+   socket and not a UDP tunnel — a booted OVMX node needs **no `CAP_NET_RAW`**
+   to join a cluster (`vms-fa1a`, proven with the capability dropped from the
+   node's whole process tree).
 
-3. **Boot both nodes.** As the cluster forms, the executive on each node
-   populates its membership block (below). Formation takes on the order of a
-   minute.
+4. **Reboot both nodes, the first-up one alone.** The first node to boot with
+   `VAXCLUSTER` enabled spends its whole `RECNXINTERVAL` (default 20s)
+   discovery window hearing nobody before it founds — a cluster is formed by
+   booting its first member and then booting the rest, exactly as on a real
+   VAXcluster. Boot the second node only after the first has founded (or at
+   least come up); a node that hears a peer during its own boot joins rather
+   than founding one of its own.
 
-4. **Confirm membership** with `SHOW CLUSTER`.
+5. **Confirm membership** with `SHOW CLUSTER` on both nodes: each should list
+   both `SCSNODE`s with `STATUS=MEMBER`. `SHOW CLUSTER/CLUSTER` also reports
+   `Nodes  2` — the same `SYI$_CLUSTER_NODES` value the `$GETSYI` *system
+   service* would return (the plain DCL `F$GETSYI` lexical does not implement
+   `CLUSTER_NODES`/`CLUSTER_MEMBER` — see `src/vmsdcl/dcl_lexical.c`
+   `lex_getsyi()` — only `SHOW CLUSTER`'s classes and the system service read
+   that field today).
 
 ## What SHOW CLUSTER reports
 
@@ -169,23 +201,33 @@ plainly so no one designs against a capability that is not there.
 
 ### Votes and quorum are not enforced
 
-**There is no split-brain protection at V0.6.** Be precise about why:
+**There is no split-brain protection at V0.6.** Be precise about why — this is
+narrower than it used to be, now that clustering is executive-resident
+(FC-P3.9 retired the userspace `scsd`/`src/vmsscs` stack this section used to
+describe):
 
-- OVMX always joins **non-voting**: `scsd` hardcodes an advertised `VOTES=0`
-  (`SCS_MEMBER_VOTES_NONVOTING`) so it can never affect a VAX cluster's quorum.
-  The local `VOTES`/`EXPECTED_VOTES` in your `.PAR` are **not read** by `scsd`.
-- A quorum *model* is present and does run: `scsd` folds each peer's
-  wire-advertised `VOTES` into a connection-manager quorum computation
-  (`src/vmsscs/scs_quorum.c`, `cm_quorum_note_peer_votes`) and logs
-  `SCSD-I-QUORUM ... quorum PRESENT/LOST`. But the gate result is **only
-  logged** — it is **never wired to suspend I/O or reconfigure** the cluster.
-  Quorum loss does not block anything.
-- `EXPECTED_VOTES` is an open reverse-engineering gap on the wire (held at 1 in
-  every capture), so the model seeds each peer's `EXPECTED_VOTES` from its
-  advertised `VOTES` rather than reconciling a real value.
+- `VOTES`/`EXPECTED_VOTES` **are** real and effectual for one decision:
+  whether *this* node may **found** a cluster (`cnxman_coord_found()`'s own
+  predicate, `src/kernel-core/vms_cnxman_coord_fsm.c`) — a node founds only if
+  its own `VOTES` already meet the quorum its own `EXPECTED_VOTES` implies.
+  This is proven on two real nodes by
+  [`test_cluster_config_lan_2node_e2e.sh`](../tests/qemu/test_cluster_config_lan_2node_e2e.sh)'s
+  negative control: with `VOTES=0` on *both* nodes, neither ever founds and
+  neither ever claims membership.
+- The connection manager also computes `CEVOTES`/`QUORUM`/`quorum_lost` on
+  every membership transition from every member's advertised `VOTES`
+  (`src/kernel-core/vms_cnxman_quorum.c`, `SHOW CLUSTER/CLUSTER`'s "Votes /
+  quorum" and "Quorum lost" lines) — real arithmetic over real wire-learned
+  state, not a stub.
+- What is **still** tracking-only: a **lost** quorum, once the cluster is
+  already formed, does not yet suspend any activity or block any `$ENQ` — the
+  arithmetic runs and is displayed, but nothing acts on `quorum_lost` yet
+  (post-0.6 work, `vms-b6d`).
 
-Net effect for an operator: do not rely on OVMX for quorum arbitration or
-split-brain avoidance.
+Net effect for an operator: `VOTES` genuinely decides *who may found* a
+cluster today, but a cluster that has already formed does not yet protect
+itself from a subsequent quorum loss — do not rely on OVMX for split-brain
+avoidance once a cluster is running.
 
 ### MSCP-served volumes — absent
 

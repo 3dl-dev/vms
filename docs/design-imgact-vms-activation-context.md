@@ -1,6 +1,6 @@
 # Design — IMGACT VMS Image-Activation Context for the OpenVMS GCC Port crt0
 
-**Item:** vms-f60d · **Lane:** GCC oracle (vms-da0) + main/IMGACT · **Status:** DESIGN (no code)
+**Item:** vms-f60d · **Lane:** GCC oracle (vms-da0) + main/IMGACT · **Status:** LANDED — VMS-standard image activation proven end-to-end on real `/dev/vms` (vms-f60d, PR #807)
 **Governing frame:** [[vms-ports-build-ladder]] — build OVMX's VMS-compat surface *up* until the
 real VMS GCC port (`alpha-dec-vms`) just builds/runs. This rung is the **image-activation calling
 convention** the port's crt0 (`libgcc/config/vms/vms-ucrt0.c`, GPL) demands. No Linux argv shim.

@@ -88,8 +88,10 @@ prepared store) still works for scripted setups. But
    system causes the join to be refused outright (the lab documents this as
    `%PEA0, Remote System Conflicts with Known System`).
 
-2. **Match the cluster group.** OVMX joins the reference lab's **group 1** by
-   default (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
+2. **Match the cluster group.** OVMX joins the cluster group baked into the image
+   at build time via the `CLUSTER_AUTH_GROUP` build-arg (default `0` stages no
+   group; the reference lab builds its own, e.g. 257) (`CLUSTER_AUTHORIZE` is a
+   minimal stand-in — see
    [Not yet supported](#cluster_authorize-is-a-lab-only-stand-in)). Both nodes
    must be on the same LAN segment carrying the LAVC/SCA ethertype `0x6007`; the
    transport is genuine raw Ethernet, not a UDP tunnel — the executive's cluster

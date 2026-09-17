@@ -26,7 +26,7 @@
  *
  * WEAK SEAM. These are the strong definitions of the ovmx_sysgen_acp_* symbols
  * sysgen_params.h declares #pragma weak, the same layering sysuaf.c uses for
- * ovmx_sysuaf_*: an image that links LIBVMSRMS$SHR (SYSGEN.EXE, SCSD.EXE,
+ * ovmx_sysuaf_*: an image that links LIBVMSRMS$SHR (SYSGEN.EXE,
  * SYSMAN.EXE, DCL.EXE, ...) resolves them and reaches the volume; an image that
  * does not (libvms's own inline callers) sees NULL and fails honest -- there is
  * NO /vms fallback (CLAUDE.md Rule 9 / INV-6).

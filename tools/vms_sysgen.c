@@ -131,10 +131,11 @@ static const struct sysgen_param default_params[] = {
      * range is minimum 1, maximum 32767 seconds. The default 20 matches
      * scs_recnx.h's SCS_RECNX_DEFAULT_RECNXINTERVAL (the runtime reconnect
      * loop's fallback, vms-c7d), so an unconfigured store and the runtime
-     * agree. Authored here so scsd adopts the operator's value on (re)boot the
-     * same way it adopts SCSNODE/SCSSYSTEMID/ALLOCLASS; this is the AUTHORING
-     * surface only -- the reconnect wire behavior is vms-694's (scs_recnx.c),
-     * unchanged. */
+     * agree. Authored here so src/ovmx_init/ovmx_init.c's sysgen_read_param()
+     * call picks up the operator's value on (re)boot the same way it reads
+     * SCSNODE/SCSSYSTEMID/ALLOCLASS, feeding VMS_IOCTL_SYSGEN_LOAD and, from
+     * there, vms_cnxman_recnx_fsm.c; this is the AUTHORING surface only -- the
+     * reconnect wire behavior is vms-694's (scs_recnx.c), unchanged. */
     { .name = "RECNXINTERVAL", .current = 20, .default_val = 20,
       .min_val = 1, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
       .description = "Cluster reconnection interval, in seconds",

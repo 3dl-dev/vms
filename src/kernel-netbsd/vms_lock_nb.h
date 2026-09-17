@@ -681,9 +681,26 @@ struct vms_sysgen_load_args {
 	 * version literal -- see src/kernel/vms_ioctl.h for the full rule. */
 	uint8_t  sw_version[8];
 	uint8_t  sw_version_len;
-	uint8_t  pad3;
+	/* OVMX_CLEAN_DEPART's wire half (rd vms-abd), carved out of the former
+	 * `pad3' so the struct size is unchanged. The sense is INVERTED on
+	 * purpose -- see src/kernel/vms_ioctl.h for the full rule. */
+	uint8_t  clean_depart_off;
 
 	uint32_t status;
+};
+
+/*
+ * VMS_IOCTL_CLUSTER_STOP (rd vms-abd). Byte-for-byte struct
+ * vms_cluster_stop_args in src/kernel/vms_ioctl.h -- the clean cluster
+ * departure, CLUSTER_START's missing twin. See that header for why it must run
+ * in process context with the fork thread still live, and for the INV-6
+ * contract on the two readback counts.
+ */
+struct vms_cluster_stop_args {
+	uint32_t status;
+	uint32_t cluster_state;
+	uint32_t connections_disconnected;
+	uint32_t connections_drained;
 };
 
 /*
@@ -761,6 +778,8 @@ struct vms_cluster_getsyi_args {
 #define VMS_IOCTL_CLUSTER_DIAG_JOIN    _IOWR(VMS_LOCK_IOC_MAGIC, 0x6d, struct vms_cluster_diag_join_args)
 /* rd vms-94c: NR 0x6e, same magic and NR byte as src/kernel/vms_ioctl.h. */
 #define VMS_IOCTL_CLUSTER_DIAG_DLM     _IOWR(VMS_LOCK_IOC_MAGIC, 0x6e, struct vms_cluster_diag_dlm_args)
+/* rd vms-abd: NR 0x6f, same magic and NR byte as src/kernel/vms_ioctl.h. */
+#define VMS_IOCTL_CLUSTER_STOP         _IOWR(VMS_LOCK_IOC_MAGIC, 0x6f, struct vms_cluster_stop_args)
 
 /*
  * Freeze the shared layouts -- see the other _nb.h contracts' identical asserts:
@@ -800,6 +819,8 @@ _Static_assert(sizeof(struct vms_sysgen_load_args) == 112,
                "vms_sysgen_load_args changed size -- VMS_IOCTL_SYSGEN_LOAD ABI break");
 _Static_assert(sizeof(struct vms_cluster_start_args) == 12,
                "vms_cluster_start_args changed size -- VMS_IOCTL_CLUSTER_START ABI break");
+_Static_assert(sizeof(struct vms_cluster_stop_args) == 16,
+               "vms_cluster_stop_args changed size -- VMS_IOCTL_CLUSTER_STOP ABI break");
 _Static_assert(sizeof(struct vms_cluster_getsyi_args) == 36,
                "vms_cluster_getsyi_args changed size -- VMS_IOCTL_CLUSTER_GETSYI ABI break");
 _Static_assert(sizeof(struct vms_scs_view_wire) == 32,

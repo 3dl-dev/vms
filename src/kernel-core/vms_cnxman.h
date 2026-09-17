@@ -433,8 +433,52 @@ int cnxman_get_transition(struct vms_cluster *cl, struct cnxman_transition *out)
  */
 int vms_cnxman_start(struct vms_cluster *cl);
 
+/*
+ * ANNOUNCE THIS NODE'S DEPARTURE AT THE SCS LAYER (rd vms-abd) -- step one of a
+ * clean VMS_IOCTL_CLUSTER_STOP, and the half OVMX did not have.
+ *
+ * A real VMS node leaving through SHUTDOWN.COM tells the cluster twice: the
+ * PORT sends the last gasp (p. 7-29, which vms_cnxman_stop below already emits)
+ * and SCS sends a SYMMETRIC DISCONNECT_REQ on every open connection (p. 2-26/
+ * 27). This is the second one. Without it a departing node simply stopped
+ * answering and every survivor carried a dead CSB until RECNXINTERVAL expired.
+ *
+ * WHAT IT DOES: enumerates the OPEN peer connections out of LIVE executive
+ * state (each in-use CSB's `cdt_conid`, the request currently being dispatched,
+ * and the join's own `VMS$VAXcluster` / `VMS$DISK_CL_DRVR` connections), calls
+ * scs_disconnect() on each -- the ORDINARY teardown path, so every byte of
+ * every DISCONNECT_REQ is built by the SCS FSM out of that connection's own CDT
+ * and nothing here composes a frame -- and then DRAINS, bounded, until each
+ * teardown's op 6 is really on the wire.
+ *
+ * CONTEXT, AND WHY IT IS NOT NEGOTIABLE: PROCESS CONTEXT, FORK THREAD RUNNING,
+ * FORK MUTEX NOT HELD. The handshake is completed by the peer's answering frame
+ * and only the fork thread can dispatch that, so this call has to be able to
+ * yield to it -- which is impossible from a fork callback (it IS the fork
+ * thread) and impossible while holding the fork mutex (the only dispatcher,
+ * cf_dispatch_one, takes that same non-recursive mutex). It takes the mutex
+ * itself, briefly, for each state read and for the initiation pass.
+ * MAY SLEEP; bounded by CNXMAN_DEPART_DRAIN_MS whatever the peers do.
+ *
+ * GATED by the OVMX_CLEAN_DEPART SYSGEN switch (struct vms_cluster_params), on
+ * by default; with it off this returns having emitted nothing.
+ *
+ * `*out_initiated` / `*out_drained` (either may be NULL) receive how many
+ * connections really got a DISCONNECT_REQ and how many really finished inside
+ * the deadline -- counted, never asserted: a node with nothing open reports
+ * 0/0, and a peer that went silent shows up as drained < initiated (INV-6).
+ *
+ * Idempotent: a second call finds no OPEN connection left and does nothing.
+ */
+void vms_cnxman_depart(struct vms_cluster *cl, uint32_t *out_initiated,
+		       uint32_t *out_drained);
+
 /* Leave the cluster: emit the last gasp, close the connections, stop the
- * timers. Idempotent. */
+ * timers. Idempotent.
+ *
+ * This is the TEARDOWN half; vms_cnxman_depart() above is the ANNOUNCEMENT
+ * half and runs FIRST, while the fork thread is still live. Nothing here waits
+ * for a peer -- by the time this runs the departure is already on the wire. */
 void vms_cnxman_stop(struct vms_cluster *cl);
 
 /* ==========================================================================

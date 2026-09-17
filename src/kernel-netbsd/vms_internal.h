@@ -996,6 +996,10 @@ long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
  * through connection manager, returning the executive's cluster state
  * (vms_devtab.c). */
 long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_STOP (rd vms-abd): mirror of the src/kernel/vms_internal.h
+ * decl -- the clean departure, announcing at the SCS layer before it takes the
+ * stack down in reverse order (vms_devtab.c). */
+long vms_ioctl_cluster_stop(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in

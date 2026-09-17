@@ -1278,6 +1278,10 @@ long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
  * vms_cnxman_start() -- against vms_cluster_node()'s real struct vms_cluster
  * (vms_devtab.c), returning the executive's own cluster state. */
 long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_STOP (rd vms-abd): CLUSTER_START's twin -- the clean
+ * departure. Announces at the SCS layer (a DISCONNECT_REQ per open connection,
+ * bounded-drained) before taking the stack down in reverse order. */
+long vms_ioctl_cluster_stop(struct vms_proc *proc, unsigned long arg);
 /* vms-94c (DLM epic vms-7fa rung 1): the cross-node DLM RECEIVE handler and its
  * ioctl wrapper. Rung 1 delivers a decoded remote DLM request TO the handler,
  * which returns SS$_UNSUPPORTED (no fabricated cross-node grant, INV-6). */

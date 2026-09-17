@@ -2806,6 +2806,28 @@ void scs_fsm_view_project(const struct scs_fsm *f, struct vms_scs_view *out)
 	out->credit_stalls = f->credit_stalls;
 }
 
+/*
+ * The clean departure's DRAIN PREDICATE (rd vms-abd). One pass over the CDL,
+ * counting the teardowns this node started whose op 6 is not out yet -- see
+ * vms_scs_fsm.h for why the drain reads this rather than the diagnostics-only
+ * CDT projection.
+ */
+uint32_t scs_fsm_disc_pending(const struct scs_fsm *f)
+{
+	uint32_t i, n = 0u;
+
+	if (f == (const struct scs_fsm *)0 || f->cdl == (struct scs_cdt *)0)
+		return 0u;
+	for (i = 0; i < f->n_cdl; i++) {
+		const struct scs_cdt *cdt = &f->cdl[i];
+
+		if (cdt->in_use && !cdt->is_listening &&
+		    cdt->disc_pending && !cdt->disc_sent)
+			n++;
+	}
+	return n;
+}
+
 static const char *const scs_cdt_state_names[VMS_SCS_CDT_STATE__COUNT] = {
 	"closed", "listen", "connect sent", "connect rcvd", "accept sent",
 	"accept rcvd", "open", "disc sent", "disc rcvd", "disc match"

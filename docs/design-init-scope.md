@@ -195,12 +195,10 @@ all?**
 - **(a) No.** The build produces a populated system-disk image; `./boot.sh`
   boots it. PID 1 mounts or halts. Maximum fidelity, smallest PID 1, and it
   deletes the entire class §3.2/§3.3 lives in. Costs: the release artifact
-  becomes a disk image, not just a kernel+initramfs, and `docs/install-0.1.md`'s
-  documented flow changes. **[As landed:** the operator ruled (a) below, and
-  `docs/install-0.1.md` was subsequently retired; the flow this option
-  describes now lives in `docs/install-guide.md` (`PRODUCT INSTALL` onto a
-  target volume, `./boot.sh` / `distro/Dockerfile.bootable` — one initramfs,
-  no `--slim` variant).]
+  becomes a disk image, not just a kernel+initramfs. The operator ruled (a)
+  below; the landed flow is `docs/install-guide.md`'s `PRODUCT INSTALL`
+  procedure onto a target volume, over `./boot.sh` / `distro/Dockerfile.bootable`
+  (one initramfs, no `--slim` variant).
 - **(b) Yes, but out of PID 1.** Keep first-boot install as an explicit
   `VMSINSTAL.EXE`-equivalent that the fat initramfs runs *instead of* a normal
   boot (a distinct boot mode, as standalone BACKUP is on VMS), not a branch
@@ -254,6 +252,4 @@ triggers. The cascade for §4 (executive-constructed system identity):
 2. **Test coverage check** — QA: the boot→install→boot e2e that `vms-9b7`
    already identifies as absent; plus a test that PID 1 reads SYSUAF zero times.
 3. **Documentation** — Tech Writer: `docs/architecture.md` boot section,
-   `docs/install-0.1.md` if §6 lands on (a) or (b). **[As landed (a):**
-   `docs/install-0.1.md` was retired and replaced by `docs/install-guide.md`,
-   which now carries this.]
+   `docs/install-guide.md` for the install flow.

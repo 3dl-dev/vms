@@ -534,13 +534,11 @@ The L3–L6 userspace surface (NCP, session, FAL, DCL/RMS integration) is stream
 
 ## 6. Engine decision — **RESOLVED: Option B (userspace NSP/AF_PACKET)**, and open `verify:` items
 
-> **Historical grounding note (2026-09-17).** §6.0-6.1 below cite `src/vmsscs/scsd.c` and
-> `SCSD.EXE` as the 2026-08-31 precedent for a userspace `AF_PACKET` raw-Ethernet daemon — that
-> was true then and is why DECnet's engine was built this way, but `scsd`/`src/vmsscs/` was
-> deleted in the **2026-09-02 cluster reset** (the cluster stack is now executive-resident,
-> `vms.ko`). Read every present-tense `scsd`/`SCSD.EXE` reference below as decision-time history,
-> not a live component; DECnet's own engine (`src/vmsdecnet/`, `DECNETD.EXE`) is unaffected and
-> stays userspace by deliberate design (`docs/design-decnet-ovmx.md`'s 2026-09-14 correction).
+> **Implementation home (2026-09-17).** The cluster stack that §6.0-6.1's `scsd.c`/`SCSD.EXE`
+> citations named as the userspace `AF_PACKET` raw-Ethernet precedent is executive-resident
+> today (`vms.ko`, `src/kernel-core/`). DECnet's own engine (`src/vmsdecnet/`, `DECNETD.EXE`)
+> stays userspace by deliberate design — it has no DLM survival/timing need
+> (`docs/design-decnet-ovmx.md` §2) — independent of where the cluster stack lives.
 
 ### 6.0 The §4.5 go/no-go verdict (rd `vms-a1c`, operator-ruled 2026-08-31)
 

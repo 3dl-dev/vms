@@ -1,22 +1,5 @@
 # Design — cluster membership crosses into the executive (vms-551)
 
-> ## ⛔ SUPERSEDED (2026-09-17) — the ioctl-populated `scsd`/`vms_cluster_members[96]` model this doc built has itself been retired
->
-> This design landed as written (`#937`, `#945`, `#950`: vms-551 + its two
-> follow-ons, `$GETSYI` cutover and file-bridge retirement) but its mechanism
-> — a userspace `scsd` daemon calling `VMS_IOCTL_CLUSTER_MEMBER_SET/CLEAR` to
-> populate a `vms_cluster_members[96]` mirror — no longer exists. The
-> 2026-09-02 cluster reset deleted `scsd`/`src/vmsscs/` entirely and moved the
-> connection manager into the executive (`vms_cnxman.c`); membership is now
-> tracked natively in the CLUB's `struct vms_csb` table
-> (`src/kernel-core/vms_cluster.h`, populated by `cnxman_club_alloc_csb()` as
-> CSBs are discovered — no external daemon, no SET/CLEAR ioctl in the path).
-> `src/kernel-core/vms_cluster.h`'s own header comment calls the
-> `vms_cluster_members[96]` table this doc introduced "the predecessor ... the
-> strawman it replaces." Current design: `docs/design-faithful-cluster-executive.md`
-> (§3.1/§3.4). Every `scsd`/ioctl-SET/CLEAR reference below describes that
-> retired mechanism, not the current one — read as history, not a live design.
-
 > SHOW CLUSTER / $GETSYI / cluster-wide locking must see a REAL cluster through
 > `/dev/vms`, not a userspace file. Today the live membership lives only in scsd's
 > peer table and is published to a FILE (`/var/run/ovmx/cluster_state`), which

@@ -42,6 +42,6 @@ guides above are the entry points for using OpenVMX.
 - **`design-*.md`** (~60 records) — per-feature design records: the executive core, Files-11 ACP, image activation, the distributed lock manager, DECnet, the native link toolchain, and more.
 - **`audit-*.md`** — targeted audits (ILP32/VAX width, message idents, executive boundary).
 - **Clean-room RE provenance** — `cluster-protocol-spec.md`, `decnet-provenance-register.md`, `draper-faithfulness-register.md`, `research-alpha-dlm-wire.md`.
-- **Compatibility & parity tracking** — `dcl-verb-fidelity-scoreboard.md`, `qualifier-audit.md`, `conformance-gap-report.md`, `roadmap-source-compat.md`, `vms-source-code-corpus.md`, and the source YAML under `docs/compat/`.
+- **Compatibility & parity tracking** — `dcl-verb-fidelity-scoreboard.md`, `conformance-gap-report.md`, `roadmap-source-compat.md`, `vms-source-code-corpus.md`, and the source YAML under `docs/compat/`.
 - **Oracle data** — golden captures and normalization under `docs/oracle/`.
 - **Runtime & process** — `runtime-target.md` (the one-runtime rule), `roadmap-reconcile-workflow.md`, and the internal orchestration state under `internal/` (`conductor-state.md`, `orchestration-conductor.md`, `lane-ownership.md`).

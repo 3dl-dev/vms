@@ -107,8 +107,14 @@ report the other as a `MEMBER`.
    `CLUSTER_CONFIG_LAN.COM` "Votes this node contributes" step; a would-be
    joiner should answer `0`.
 
-3. **Match the cluster group.** OVMX joins the reference lab's **group 1** by
-   default (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
+3. **Match the cluster group.** Every node in a cluster must carry the **same
+   cluster group number** — it selects the LAVC HELLO multicast address
+   (`AB-00-04-01-<group>`), so nodes on different groups never hear each other.
+   OVMX's group is set at image-build time by the `CLUSTER_AUTH_GROUP` build-arg
+   (`distro/Dockerfile.bootable`; default `0` stages no `CLUSTER_AUTHORIZE.DAT`
+   and boots group 0; e.g. `257` to match the reference VAX lab), also settable
+   via the `build-boot-artifacts` workflow's `cluster_auth_group` dispatch input
+   (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
    [Not yet supported](#cluster_authorize-is-a-lab-only-stand-in)). Both nodes
    must be on the same LAN segment carrying the LAVC/SCA ethertype `0x6007`;
    the transport is genuine raw Ethernet framed and sent by the **executive's
@@ -246,9 +252,14 @@ members; the scope degrades to system-wide (`docs/compat/facilities/cluster-logi
 ### CLUSTER_AUTHORIZE is a lab-only stand-in
 
 `CLUSTER_AUTHORIZE` is a **minimal OVMX stand-in** (`src/libvms/include/cluster_authorize.h`):
-a tiny typed file holding a group number and a cleartext password, defaulting to
-the reference lab's **group 1** only. There is no real `CLUSTER_AUTHORIZE.DAT`
-on-disk format, no credential hashing, and no wire authentication. Joining an
+a tiny typed file holding a group number and a cleartext password. Its group is
+chosen at **image-build time** via the `CLUSTER_AUTH_GROUP` build-arg
+(`distro/Dockerfile.bootable`) — the default `0` stages **no** file and boots
+group 0, while e.g. `257` stages a `CLUSTER_AUTHORIZE.DAT` for the reference VAX
+lab's group; the `build-boot-artifacts` workflow exposes it as the
+`cluster_auth_group` dispatch input. There is no interactive on-node
+`CLUSTER_AUTHORIZE.DAT` authoring yet, no credential hashing, and no wire
+authentication. Authoring the group/password on a running node and joining an
 **arbitrary** VMScluster (any group/password) is 1.0 work (`vms-732`, `vms-405`).
 
 ### DECnet — essentially greenfield

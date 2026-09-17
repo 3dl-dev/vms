@@ -761,15 +761,16 @@ _Static_assert(VMS_IOCTL_DLM_ENUM_WAITS == 0xC1905638u,
  * locks the executive holds for the node's LIFE -- today the per-volume
  * "F11B$v<label>" lock a faithful MOUNT holds from $MOUNT to $DISMOUNT (vms-25e),
  * later the mount (MOU$) and clusterwide-logical (LNM$CWLOGICALS) locks -- that
- * the connection manager (scsd) must register to the coordinator during a
+ * the connection manager (executive-resident since FC-P3.9; formerly the
+ * retired userspace scsd daemon) must register to the coordinator during a
  * directory rebuild. Each entry gives the resource name and this node's LOCAL
  * lock handle, which becomes the op-0x01 requester lkid on the wire.
  *
  * INV-6: a READ of REAL lock-manager state -- one entry per lock the executive
  * genuinely holds (a nonzero vol_lkid on a mounted volume). count=0 when the node
  * holds no standing locks; never a fabricated lock. This is the honest boundary
- * scsd registers FROM: it can only announce to the cluster what the executive
- * actually holds.
+ * the connection manager registers FROM: it can only announce to the cluster
+ * what the executive actually holds.
  */
 #define VMS_DLM_ENUM_STANDING_MAX 16u   /* standing system locks returned per call */
 struct vms_dlm_standing_ent {

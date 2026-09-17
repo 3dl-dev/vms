@@ -12,10 +12,11 @@ process so you don't need QEMU installed on your machine.
 ## What you need
 
 - **Docker** (or Podman) able to run a Linux container. The build compiles the
-  whole toolchain — a from-source Linux kernel, `vms.ko`/`vmsfs.ko`, the
-  VMS-native `LINK.EXE` image graph, a static-musl userland, and QEMU — all
-  inside containers. **No compiler, kernel headers, or QEMU need to be
-  installed on your host.**
+  whole toolchain — a from-source Linux kernel, `vms.ko` (the VMS executive,
+  which also carries the Files-11/ODS-2 ACP — there is no separate `vmsfs.ko`,
+  vms-165), the VMS-native `LINK.EXE` image graph, a static-musl userland, and
+  QEMU — all inside containers. **No compiler, kernel headers, or QEMU need to
+  be installed on your host.**
 - A few GB of free disk and ~25-30 minutes for a cold build (cached after
   that).
 
@@ -142,6 +143,15 @@ use `boot.sh` or a direct `docker run` instead.
 > fail with `kernel not found` — that just means you used the `boot.sh` build
 > output with the `run-qemu.sh` boot path. Pick one column of the table above
 > and stay in it.
+
+## Troubleshooting
+
+- **`docker build`/`boot.sh` fails partway through the `link-native` stage on
+  a ground-source check** (`FAIL: ... has N DT_NEEDED entries` or similar):
+  this is deliberate — one of the VMS-native images (`DECC$SHR.EXE`,
+  `DCL.EXE`, `LOGINOUT.EXE`, etc.) was built wrong (linked with the Unix
+  toolchain instead of OVMX's own `LINK.EXE`) and the build refuses to ship
+  it. This is a bug to report, not something to work around.
 
 ## Next steps
 

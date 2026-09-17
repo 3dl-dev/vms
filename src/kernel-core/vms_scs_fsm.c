@@ -437,6 +437,26 @@ static void cdt_learn_peer_min_cr(struct scs_cdt *cdt,
 	cdt->peer_min_send_credits_valid = 1u;
 }
 
+/*
+ * THE PEER'S OWN Con.ID, learned from a frame that stated it (SCS$L_SRC_CONID,
+ * abs 68). The op-2 ACCEPT_REQ is not the only verb that carries it -- a
+ * REJECT_REQUEST does too, and that is the only place this end will ever see
+ * the handle of a peer that refused it.
+ *
+ * A ZERO TEACHES NOTHING and is never learned: a peer that named no handle has
+ * told us nothing, and recording a zero as if it were an identifier would be
+ * the fabrication INV-6 forbids. The first non-zero assertion wins -- a handle
+ * already bound by the accept is the connection's, and a later frame does not
+ * get to move it.
+ */
+static void cdt_learn_peer_conid(struct scs_cdt *cdt, vms_conid_t conid)
+{
+	if (conid == 0u || cdt->remote_conid_valid)
+		return;
+	cdt->remote_conid = conid;
+	cdt->remote_conid_valid = 1u;
+}
+
 /* p. 2-44's "dangerously low" test. The SCA rule is
  *     local Receive Credit < SCSFLOWCUSH + remote Minimum Send Credits
  * and the remote term is the peer's SCS$W_MIN_CR, learned off the connect verb
@@ -1469,11 +1489,37 @@ static int h_rx_confirm(struct scs_fsm *f, struct scs_cdt *cdt,
 	return SCS_OK;
 }
 
-/* RX op 4 -- the peer refused our connect. Answer op 5 and close. */
+/*
+ * RX op 4 -- the peer refused our connect. Answer op 5 and close.
+ *
+ * ADDRESS THE ANSWER (vms-d7e). A REJECT_RESPONSE is a connection-control
+ * verb like any other: it is addressed to the handle the REJECTER named in
+ * SCS$L_SRC_CONID on its REJECT_REQUEST. This end is the INITIATOR, so until
+ * this frame arrived it had no peer handle at all -- `remote_conid_valid` is
+ * clear and ctrl_prepare() would (correctly, by its own rule) put a zero at
+ * abs 64. A zero there is not an honest omission: the peer DID state its
+ * handle, in the very frame being answered, and an answer that names nobody
+ * is a control message the peer's port driver cannot match to a connection.
+ *
+ * GROUNDED, spec sec 4(d)/4(m) + the 48-capture reference corpus:
+ *   - every REJECT_REQUEST carries a NONZERO SCS$L_SRC_CONID -- 852/852;
+ *   - every REJECT_RESPONSE pairable with its request addresses exactly that
+ *     value -- 698/698, zero residuals;
+ *   - no other connection-control verb this executive emits sits outside the
+ *     corpus Con.ID-presence envelope; op 5 was the single outlier.
+ * The value is READ OFF THE RECEIVED FRAME (the peer's own assertion), the
+ * same source and the same discipline as h_rx_accept()'s op-2 learn -- never
+ * a template, never a value this end invented.
+ */
 static int h_rx_reject(struct scs_fsm *f, struct scs_cdt *cdt,
 		       struct scs_rx *rx)
 {
-	(void)rx;
+	if (rx != (struct scs_rx *)0 &&
+	    rx->hdr != (const struct vms_scs_hdr *)0)
+		cdt_learn_peer_conid(cdt, rx->hdr->conid_local);
+	if (!cdt->remote_conid_valid)
+		scs_log(f, "%SCS-W-REJNOCONID, refusal named no connection "
+			   "identifier; the response cannot address one");
 	(void)ctrl_send_plain(f, cdt, (uint16_t)SCS_MTYPE_REJ_RSP);
 	cdt_close(f, cdt, SCS_CLOSE_REJECTED);
 	return SCS_OK;

@@ -105,3 +105,6 @@ tests/netbsd/.netbsd-cache/
 # Kernel module signing key — supplied as a build secret, NEVER committed
 # (vms-secret-signing-key). A committed private key is public.
 distro/kernel/ovmx-module-signing-key.pem
+
+# cleanup-swarm coordination scaffold — never commit
+LANE-STATE.md

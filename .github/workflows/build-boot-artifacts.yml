@@ -16,6 +16,23 @@ name: build-boot-artifacts
 
 on:
   workflow_dispatch:
+    inputs:
+      cluster_auth_group:
+        description: >-
+          VMScluster group number to bake into SYS$SYSTEM:CLUSTER_AUTHORIZE.DAT
+          (Dockerfile.bootable CLUSTER_AUTH_GROUP). Default 0 stages no file and
+          boots auth_group=0. Set 257 to join the lab VAX cluster (its HELLO
+          multicast is AB-00-04-01-01-01 = group 257); a group mismatch is
+          silent on the wire — the peer never hears a differently-grouped node.
+        required: false
+        default: '0'
+      cluster_auth_password:
+        description: >-
+          Optional cluster password baked alongside the group (CLUSTER_AUTH_PASSWORD).
+          Not yet wired onto the wire (cluster_authorize.h); the group is what
+          selects the multicast address today.
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -39,6 +56,9 @@ jobs:
           push: false
           load: true
           tags: ovmx-boot:latest
+          build-args: |
+            CLUSTER_AUTH_GROUP=${{ github.event.inputs.cluster_auth_group }}
+            CLUSTER_AUTH_PASSWORD=${{ github.event.inputs.cluster_auth_password }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

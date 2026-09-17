@@ -952,6 +952,37 @@ set_tests_properties(sysboot_cluster_params_e2e PROPERTIES
     TIMEOUT 900)
 
 # ---------------------------------------------------------------------------
+# @CLUSTER_CONFIG_LAN.COM AUTHORS CLUSTER IDENTITY -> REBOOT -> ADOPTED, END TO
+# END (vms-23b9 rung 1, the V0.7 "clustering done" gate).
+#
+# Boots the ACTUAL mastered bootable image (same distro/Dockerfile.bootable as
+# boot_scsnode_hostname_e2e above) and proves, against the REAL mounted volume
+# and a REAL second boot -- not a mock, not a host DCL shim -- that a USER who
+# runs the DOCUMENTED operator procedure @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM
+# (the CHANGE path from docs/cluster-configuration-guide.md) INTERACTIVELY over
+# the console to author a new SCSNODE, then reboots, gets that identity ADOPTED
+# by the running system: the boot console's own %OVMX-I-SCSNODE line names it and
+# F$GETSYI("NODENAME") (the live Linux hostname PID 1 sethostname()'d from the
+# authored SCSNODE) reads it, with F$GETSYI("SCSNODE") and SYSGEN USE CURRENT
+# agreeing. Where boot_scsnode_hostname_e2e types the SYSGEN commands by hand and
+# tests/dcl/test_cluster_config_lan.sh drives the procedure through a HOST
+# interpreter against a /tmp store (never boots), THIS gate runs the real
+# procedure on a real boot -- the user experience is the test. An over-long
+# SCSNODE rejected with %CLUSTER_CONFIG-E-BADNODE is folded into boot 1.
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real docker +
+# QEMU boot, real minutes, gated behind OVMX_QEMU_FULL_E2E=1 so it does not run
+# under a bare `ctest`. See tests/qemu/test_cluster_config_lan_e2e.sh's header.
+add_test(
+    NAME cluster_config_lan_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_cluster_config_lan_e2e.sh
+)
+set_tests_properties(cluster_config_lan_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
 # JOB_CONTROL OWNS THE CONSOLE SESSION, END TO END (vms-8d2).
 #
 # Boots the ACTUAL mastered bootable image (same distro/Dockerfile.bootable

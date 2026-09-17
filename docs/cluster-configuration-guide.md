@@ -17,48 +17,76 @@ described as working unless a real code path ships it over the real executive at
 ## Cluster identity parameters
 
 An OVMX node's cluster identity lives in the SYSGEN parameter store,
-`SYS$SYSTEM:OVMXVMSSYS.PAR` — the OVMX analogue of VMS's `VAXVMSSYS.PAR`. The
-cluster daemon `scsd` reads it at boot through `sysgen_read_string()` /
-`sysgen_read_param()` (honoring `OVMX_SYSGEN_PATH`; see `src/vmsscs/scsd.c`).
+`SYS$SYSTEM:OVMXVMSSYS.PAR` — the OVMX analogue of VMS's `VAXVMSSYS.PAR`. It is
+read **at boot** by `STARTUP.EXE` (PID 1, `src/ovmx_init/ovmx_init.c`):
+`read_boot_parameters()` applies `SCSNODE` to the running node's name, and
+`load_cluster_sysgen_params()` loads the whole cluster set into the **executive**
+through `VMS_IOCTL_SYSGEN_LOAD` (`src/kernel-core/vms_cluster_sysgen.c`). There is
+no `scsd` daemon reading the file for itself any more. `OVMX_SYSGEN_PATH` is a
+developer override used by host-side tests; the booted system resolves the store
+through the Files-11 ODS-2 ACP over `/dev/vms`.
 
-| Parameter | Meaning | Read by `scsd`? | Notes |
+| Parameter | Meaning | Adopted at boot? | Notes |
 |---|---|---|---|
-| `SCSNODE` | Cluster node name (max 6 chars) | Yes (`resolve_node_identity`) | Half of the fatal identity pair. Falls back to `OVMX` only if the store is unreadable. |
-| `SCSSYSTEMID` | Cluster system ID | Yes (`resolve_scssystemid`) | The other half of the identity pair. Falls back to `1030`. `SCSNODE`+`SCSSYSTEMID` must be cluster-wide unique. |
-| `ALLOCLASS` | Allocation class for shared cluster devices | Yes (`resolve_alloclass`) | Read and reported only; `0` is the documented default. Does not touch any wire frame. |
-| `RECNXINTERVAL` | Reconnection interval, seconds | Yes (`scsd_recnxinterval`) | Sizes the reconnect period after a VC break. Default `20`. |
-| `VAXCLUSTER` | Cluster participation (0/1/2) | No | Pre-seeded in the `.PAR`, but **not currently consulted** by `scsd`; participation is not gated on it at V0.6. |
-| `VOTES` | Votes this node contributes | No | Pre-seeded, but `scsd` does **not** read or advertise the local value — OVMX always joins **non-voting** (advertises `VOTES=0`). See [votes/quorum](#votes-and-quorum-are-not-enforced). |
-| `EXPECTED_VOTES` | Expected total cluster votes | No | Pre-seeded, but not reconciled — see [votes/quorum](#votes-and-quorum-are-not-enforced). |
+| `SCSNODE` | Cluster node name (max 6 chars) | Yes | Half of the identity pair; `STARTUP.EXE` sets the running node name from it (proven end to end — see below). Falls back to `OVMX` only if the store is unreadable. |
+| `SCSSYSTEMID` | Cluster system ID | Yes | The other half of the identity pair; loaded into the executive at boot. `SCSNODE`+`SCSSYSTEMID` must be cluster-wide unique. |
+| `ALLOCLASS` | Allocation class for shared cluster devices | Recorded | Loaded and reported only; `0` is the documented default. Does not touch any wire frame. |
+| `RECNXINTERVAL` | Reconnection interval, seconds | Yes | Sizes the reconnect period after a VC break. Default `20`. |
+| `VAXCLUSTER` | Cluster participation (0/1/2) | Yes | The boot-time decision: `0` (the shipped default) brings up **no** cluster port at all; `1`/`2` bring the SCS port up and join/form. It gates the port only — the identity above is loaded regardless of its value. |
+| `VOTES` | Votes this node contributes | Recorded | Loaded and persisted, but OVMX always joins **non-voting** (advertises `VOTES=0`); the local value is not advertised. See [votes/quorum](#votes-and-quorum-are-not-enforced). |
+| `EXPECTED_VOTES` | Expected total cluster votes | Recorded | Loaded and persisted, but not reconciled — see [votes/quorum](#votes-and-quorum-are-not-enforced). |
 
-### How you author these at V0.6: edit the pre-seeded `.PAR`
+### How you author these: `@SYS$MANAGER:CLUSTER_CONFIG_LAN.COM`
 
-The identity parameters are **pre-seeded** in the shipped
-`OVMXVMSSYS.PAR`. To configure a node, you edit that pre-seeded store — that is
-the only authoring path at V0.6.
+The VMS-canon way to configure a node's cluster identity **is shipped**: the
+operator procedure `SYS$MANAGER:CLUSTER_CONFIG_LAN.COM` (`CLUSTER_CONFIG.COM`
+forwards to it, exactly as on VMS). It is the front door a VMScluster admin
+expects — an interactive
 
-**The VMS-way authoring surface is not shipped at V0.6.** OVMX does **not** yet
-provide any of:
+```
+$ @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM
+```
+
+that drives SYSGEN (`USE CURRENT` / `SET SCSNODE`… / `WRITE CURRENT`) to author
+`SCSNODE` / `SCSSYSTEMID` / `ALLOCLASS` / `VOTES` / `EXPECTED_VOTES` into
+`SYS$SYSTEM:OVMXVMSSYS.PAR`, and is **adopted on the next reboot** by
+`STARTUP.EXE` (above). This author → reboot → adopt round-trip is proven end to
+end, on a real boot, by
+[`tests/qemu/test_cluster_config_lan_e2e.sh`](../tests/qemu/test_cluster_config_lan_e2e.sh):
+after the procedure authors a new `SCSNODE` and the node reboots, the boot
+console announces `%OVMX-I-SCSNODE, node name … set from SYS$SYSTEM:OVMXVMSSYS.PAR`
+and `F$GETSYI("NODENAME")` (the live node name) reads the authored value.
+
+To change this node's identity, run the procedure and pick **CHANGE** (menu
+option 2), which reconfigures the local node without altering `VAXCLUSTER`; pick
+**ADD** (option 1) to additionally enable cluster participation (`VAXCLUSTER=2`)
+on a node that is standalone today. Then reboot. The procedure prints an honest
+"not available at this edition" for verbs OVMX cannot perform (REMOVE of a remote
+member's root, CREATE of a duplicate system disk) — it never fakes them.
+
+**Still not shipped** (these remain the honest deferrals; the procedure above
+does not depend on any of them):
 
 - `SYSMAN PARAMETERS SET`/`SHOW`/`WRITE` for string parameters (numeric-only
   today; string params are filed as `vms-8da`),
-- a `.PAR` *write* mechanism or conversational **SYSBOOT**,
-- **AUTOGEN** / `MODPARAMS.DAT` feedback,
-- `CLUSTER_CONFIG(_LAN).COM`.
+- **AUTOGEN** / `MODPARAMS.DAT` feedback.
 
-So you cannot yet author cluster identity "the VMS way" and reboot into it. You
-set identity by editing the pre-seeded `.PAR` (or by pointing `OVMX_SYSGEN_PATH`
-at a store you have prepared), and `scsd` adopts it on the next boot. This
-matches the reconciled milestone status in
-[`docs/design-cluster-config-authoring.md`](design-cluster-config-authoring.md).
+Conversational **SYSBOOT** (`ovmx.flags=0,1` → the `SYSBOOT>` prompt) is also
+available as an alternate pre-boot authoring surface for the same parameters
+(see [`docs/design-cluster-config-authoring.md`](design-cluster-config-authoring.md)),
+and editing the pre-seeded `.PAR` directly (or pointing `OVMX_SYSGEN_PATH` at a
+prepared store) still works for scripted setups. But
+`CLUSTER_CONFIG_LAN.COM` is the documented operator path.
 
 ## Standing up a two-node cluster
 
-1. **Give each node a unique identity.** In each node's pre-seeded
-   `OVMXVMSSYS.PAR`, set a distinct `SCSNODE` (≤6 chars) and a distinct
-   `SCSSYSTEMID`. Reusing a `SCSNODE`/`SCSSYSTEMID` a peer has recently seen on
-   another system causes the join to be refused outright (the lab documents this
-   as `%PEA0, Remote System Conflicts with Known System`).
+1. **Give each node a unique identity.** On each node run
+   `@SYS$MANAGER:CLUSTER_CONFIG_LAN.COM` (see
+   [How you author these](#how-you-author-these-sysmanagercluster_config_lancom))
+   and author a distinct `SCSNODE` (≤6 chars) and a distinct `SCSSYSTEMID`, then
+   reboot. Reusing a `SCSNODE`/`SCSSYSTEMID` a peer has recently seen on another
+   system causes the join to be refused outright (the lab documents this as
+   `%PEA0, Remote System Conflicts with Known System`).
 
 2. **Match the cluster group.** OVMX joins the reference lab's **group 1** by
    default (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
@@ -67,19 +95,19 @@ matches the reconciled milestone status in
    transport is genuine raw Ethernet, not a UDP tunnel (`src/vmsscs/scs_hello.c`,
    requires `CAP_NET_RAW`).
 
-3. **Boot both nodes.** As the cluster forms, `scsd` on each node populates the
-   executive membership block (below). Formation takes on the order of a minute.
+3. **Boot both nodes.** As the cluster forms, the executive on each node
+   populates its membership block (below). Formation takes on the order of a
+   minute.
 
 4. **Confirm membership** with `SHOW CLUSTER`.
 
 ## What SHOW CLUSTER reports
 
 `SHOW CLUSTER` reads the **real executive membership block** through `/dev/vms`
-(`VMS_IOCTL_CLUSTER_MEMBER_GET` via `vms_kif_cluster_get_members()`), which
-`scsd` populates with `VMS_IOCTL_CLUSTER_MEMBER_SET`/`CLEAR` as members join and
-depart (`src/vmsdcl/dcl_cmd_show.c`, `src/vmsscs/scsd.c`). Every process reading
-`/dev/vms` sees the same member set — there is no per-process fake behind it
-(INV-6).
+(`VMS_IOCTL_CLUSTER_MEMBER_GET` via `vms_kif_cluster_get_members()`), which the
+executive populates with `VMS_IOCTL_CLUSTER_MEMBER_SET`/`CLEAR` as members join
+and depart (`src/vmsdcl/dcl_cmd_show.c`). Every process reading `/dev/vms` sees
+the same member set — there is no per-process fake behind it (INV-6).
 
 Three distinct outcomes, never conflated:
 

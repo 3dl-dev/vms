@@ -198,7 +198,8 @@ static const char *const cnxtrace_event_names[] = {
     "RX_CONFIG",      /* 20 */
     "RX_COMMIT",      /* 21 */
     "CM_ACCEPTED",    /* 22 */
-    "TRANSITION_DONE" /* 23 */
+    "TRANSITION_DONE",/* 23 */
+    "RX_ABORT"        /* 24 */
 };
 
 #define CNXTRACE_N(a) ((unsigned)(sizeof(a) / sizeof((a)[0])))

@@ -258,6 +258,28 @@ enum cnxman_event {
 	 */
 	CNXMAN_EV_TRANSITION_DONE = 23,
 
+	/*
+	 * THE COORDINATOR ABANDONED THE TRANSITION -- cat-0x01 op-0x04, role
+	 * 0x50 (rd vms-f3ec).
+	 *
+	 * WHY IT IS ITS OWN EVENT rather than a state inside RX_TR_OPEN, which
+	 * is where it used to arrive. An abort is the exact OPPOSITE of the
+	 * frames that share that cell: an open, a GO and op-0x0f all say the
+	 * transition is proceeding, and every table that reads the transcript
+	 * treats them as progress. On the vms-f3ec real-VAX run that conflation
+	 * was the whole `NEW -> MEMBER` stall -- the join FSM counted the abort
+	 * as its membership request having been TAKEN, and then waited forever
+	 * for an answer to a question the cluster had already thrown away.
+	 *
+	 * IT IS NOT CNXMAN_EV_RX_CLOSE either, though the barrier maps op-0x04
+	 * onto that name today: the join table already spends RX_CLOSE on the
+	 * cat-0x06 transaction close / recurring member poll (spec sec
+	 * 4(p)/(q)), which is a different verb with a different meaning, and
+	 * one enum value cannot be both without misnaming one of them in every
+	 * transcript. Both FSMs can now say "abort" and mean it.
+	 */
+	CNXMAN_EV_RX_ABORT      = 24,
+
 	CNXMAN_EV__COUNT
 };
 

@@ -952,6 +952,11 @@ void exec_timer_destroy(exec_timer_t *t);
 uint64_t exec_time_now_vms(void);
 uint64_t exec_ticks_ms(void);
 
+/* SS17b (rd vms-abd): the bounded PROCESS-CONTEXT wait the clean-departure
+ * drain yields on. See exec_kbackend.h for the full contract -- in particular
+ * that it is deliberately NON-interruptible. */
+void exec_wait_ms(uint32_t ms);
+
 /* SS18: a macro for the same reason the Linux side is one -- the format string
  * reaches printf(9) directly, so the compiler checks the call site. This one is
  * ALREADY the real binding (printf(9) writes the NetBSD console, which is OPA0:

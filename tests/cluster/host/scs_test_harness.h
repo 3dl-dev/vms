@@ -130,6 +130,13 @@ struct scsh_node {
 	uint32_t            armed[SCS_TIMER__COUNT];
 	uint32_t            cancelled[SCS_TIMER__COUNT];
 	uint32_t            last_key[SCS_TIMER__COUNT];
+	/* ...and WHAT IT WAS ARMED WITH (rd vms-abd). The clean departure's whole
+	 * dead-peer guarantee is that the DISCONNECT timer is armed with a value
+	 * SMALLER than the drain budget, so the FSM emits its own op 6 while the
+	 * departing thread is still draining. Without recording the ms, a test
+	 * could only assert THAT a timer was armed -- which is true of the 5000 ms
+	 * default that would miss the window entirely. */
+	uint32_t            last_ms[SCS_TIMER__COUNT];
 
 	struct scsh_sysap  *sysap;
 	uint32_t            now_ms;
@@ -299,9 +306,9 @@ SCSH_UNUSED static void scsh_arm(void *ctx, enum scs_timer which, uint32_t key, 
 {
 	struct scsh_node *n = (struct scsh_node *)ctx;
 
-	(void)ms;
 	n->armed[which]++;
 	n->last_key[which] = key;
+	n->last_ms[which] = ms;
 }
 
 SCSH_UNUSED static void scsh_cancel(void *ctx, enum scs_timer which, uint32_t key)

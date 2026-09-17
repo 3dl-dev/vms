@@ -492,5 +492,30 @@ exec_ticks_ms(void)
 	return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
 }
 
+/*
+ * SS17b (rd vms-abd): the bounded PROCESS-CONTEXT wait. kpause(9) with no mutex
+ * and `intr' FALSE -- the deliberately non-interruptible sleep the seam contract
+ * specifies, so a signal at a shutting-down process cannot abandon the
+ * clean-departure DISCONNECT_REQ drain half-way.
+ *
+ * The tick count is floored at 1 for the SAME reason exec_timer_arm above floors
+ * it: mstohz() of a sub-tick request answers 0, and 0 means "no timeout" to
+ * kpause -- i.e. sleep until something else wakes us, which for a caller with no
+ * waker is forever. That is the one way this primitive could wedge a shutdown,
+ * so it is closed here rather than left to every caller.
+ */
+void
+exec_wait_ms(uint32_t ms)
+{
+	int ticks;
+
+	if (ms == 0u)
+		return;
+	ticks = mstohz(ms);
+	if (ticks < 1)
+		ticks = 1;
+	(void)kpause("ovmxwait", false, ticks, NULL);
+}
+
 /* SS18 exec_console_printf is a macro over printf(9) in exec_kbackend_netbsd.h
  * -- already the real binding, so there is no body here. */

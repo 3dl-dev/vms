@@ -41,6 +41,7 @@
 #include <linux/compiler.h>   /* __user */
 #include <linux/gfp.h>
 #include <linux/jiffies.h>    /* msecs_to_jiffies (exec_cv_wait_timeout) */
+#include <linux/delay.h>      /* msleep (exec_wait_ms) */
 /* Phase F (host-task / RCU-lite / sleepable mutex) backing headers. */
 #include <linux/pid.h>            /* struct pid, pid_task, PIDTYPE_PID */
 #include <linux/capability.h>     /* capable, CAP_SYS_ADMIN */
@@ -1450,6 +1451,20 @@ static inline uint64_t exec_time_now_vms(void)
 static inline uint64_t exec_ticks_ms(void)
 {
 	return (uint64_t)(ktime_get_ns() / 1000000ULL);
+}
+
+/*
+ * SS17b: the BOUNDED PROCESS-CONTEXT WAIT (rd vms-abd). msleep() is an
+ * uninterruptible bounded sleep -- which is what the contract asks for: the
+ * clean-departure drain must not be cut short by a signal arriving at the
+ * shutting-down process, or the DISCONNECT_REQ handshake it is waiting out
+ * would be abandoned half-way. 0 ms is a no-op rather than a schedule.
+ */
+static inline void exec_wait_ms(uint32_t ms)
+{
+	if (ms == 0u)
+		return;
+	msleep((unsigned int)ms);
 }
 
 /* A macro, not a function: it forwards the caller's format string straight to

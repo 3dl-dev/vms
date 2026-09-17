@@ -884,7 +884,31 @@
  *        retransmit) are computed from this, so a wall-clock step cannot expire
  *        a virtual circuit. Linux: ktime_get_ns()/1000000. NetBSD:
  *        getnanouptime()/1000000.
+ *   void exec_wait_ms(uint32_t ms)
+ *        Sleep for AT LEAST `ms` milliseconds and return. PROCESS CONTEXT ONLY;
+ *        MAY SLEEP; never from the fork thread, a timer callback or receive
+ *        context, and never with the fork mutex or an exec_lock held.
  *
+ *        WHY THE SEAM NEEDS IT (rd vms-abd). The clean cluster departure
+ *        (VMS_IOCTL_CLUSTER_STOP -> vms_cnxman_depart) initiates a real SCS
+ *        DISCONNECT_REQ handshake per open connection and then DRAINS it: the
+ *        peer's answer arrives as a frame the FORK THREAD dispatches, so the
+ *        departing ioctl thread has to yield the processor and re-test, in a
+ *        bounded loop, without holding the mutex the fork thread needs. Every
+ *        other bounded wait in the executive owns a condition variable to sleep
+ *        on (exec_cv_wait_timeout); the connection manager owns none, and
+ *        inventing one for a shutdown poll would add a substrate object with a
+ *        lifecycle to get wrong. This is the smaller primitive.
+ *
+ *        IT IS NOT INTERRUPTIBLE, deliberately: the caller is a process that is
+ *        already shutting down, and a signal that cut the drain short would
+ *        abandon a DISCONNECT_REQ mid-handshake -- exactly the half-announced
+ *        departure this path exists to eliminate. The BOUND is the caller's
+ *        deadline, not a signal. Linux: msleep(). NetBSD: kpause(9),
+ *        non-interruptible, with the tick count floored at 1 so a sub-tick
+ *        request cannot degenerate into kpause's "sleep forever" 0.
+ *
+
  * 18. Console (design SS3.2.2 SS18; called from vms_cnxman.c for the OPCOM-class
  *    %CNXMAN / %VAXcluster lines the operator and the lab harness read on OPA0:).
  *

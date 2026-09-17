@@ -153,7 +153,31 @@ struct vms_cluster_params {
 	uint8_t  alloclass;         /* ALLOCLASS, for $n$DUAn naming */
 	uint8_t  mscp_load;         /* MSCP_LOAD */
 	uint8_t  mscp_serve_all;    /* MSCP_SERVE_ALL */
-	uint8_t  pad1[3];
+
+	/*
+	 * OVMX_CLEAN_DEPART (rd vms-abd) -- the WIRE-VISIBLE KILL SWITCH for the
+	 * clean cluster departure. 1 (the default) = on a VMS_IOCTL_CLUSTER_STOP
+	 * this node announces its departure at the SCS layer, a symmetric
+	 * DISCONNECT_REQ per open connection, the way a real VMS node leaving
+	 * through SHUTDOWN.COM does. 0 = it does not, and the survivors fall back
+	 * on the PE last gasp and their own RECNXINTERVAL timers.
+	 *
+	 * IT IS NOT A PUBLISHED DEC SYSGEN PARAMETER and the name says so. VMS has
+	 * no such knob because VMS has no build without the behaviour; this exists
+	 * because the departure is a change to what OVMX puts on a live cluster's
+	 * wire, and every such change gets a switch that turns it off in the field
+	 * without a rebuild. Calling it CLEAN_DEPART would have implied a
+	 * parameter an operator could look up in the VMS documentation (INV-0).
+	 *
+	 * DEFAULT-ON IS THE ZERO-FILLED CASE, deliberately. The ioctl carries the
+	 * negation (`clean_depart_off`, vms_ioctl.h) so a caller that zero-fills
+	 * the args struct -- every existing one -- gets the FAITHFUL behaviour, and
+	 * only an operator who wrote OVMX_CLEAN_DEPART = 0 into OVMXVMSSYS.PAR gets
+	 * the other one. The executive stores the POSITIVE sense, because that is
+	 * what every reader here asks ("may I announce?").
+	 */
+	uint8_t  clean_depart;
+	uint8_t  pad1[2];
 
 	uint32_t niscs_max_pktsz;   /* clamped to the interface MTU by the port */
 

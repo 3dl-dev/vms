@@ -28,7 +28,7 @@ compatibility data) that is characterized, not enumerated.
 
 - [Release Roadmap to 1.0](release-roadmap-to-1.0.md) — **the roadmap of record**: milestone ladder (0.3 → 1.0), the 1.0 gate set, and current status (reconciled from `rd`)
 - [Releasing](releasing.md) — release engineering and the co-release gate
-- **Release notes** — per-milestone notes: `release-notes-0.2.md`, `release-notes-0.5*.md`, `RELEASE-NOTES-0.3*.md`, and [`RELEASE-NOTES-0.6.md`](RELEASE-NOTES-0.6.md)
+- **Release notes** — per-milestone notes, all under `docs/RELEASE-NOTES-<version>.md`: [`RELEASE-NOTES-0.2.md`](RELEASE-NOTES-0.2.md), `RELEASE-NOTES-0.3*.md`, `RELEASE-NOTES-0.5*.md`, and [`RELEASE-NOTES-0.6.md`](RELEASE-NOTES-0.6.md)
 
 ## Internal / Design
 

@@ -84,4 +84,53 @@ int cluster_sysgen_sw_version(const struct vms_cluster *cl,
  */
 int cluster_sysgen_credits(const struct vms_cluster *cl, uint8_t *out);
 
+/*
+ * cluster_sysgen_clean_depart - OVMX_CLEAN_DEPART (rd vms-abd): may this node
+ * ANNOUNCE its departure at the SCS layer when it leaves the cluster?
+ *
+ * Nonzero = yes, a symmetric DISCONNECT_REQUEST goes out on every open
+ * connection at VMS_IOCTL_CLUSTER_STOP, which is what a real VMS node leaving
+ * through SHUTDOWN.COM does. Zero = no, and the survivors fall back on the PE
+ * last gasp and their own RECNXINTERVAL timers.
+ *
+ * THIS IS THE WHOLE KILL SWITCH, and it lives here -- in the pure, host-linkable
+ * parameter TU -- rather than as an `if' inside the connection manager, for one
+ * reason: vms_cnxman.c is not host-linkable, so a gate written there could only
+ * ever be proved by grepping the source. Here the R1 rung drives the REAL
+ * decision function, and the departure asks it exactly once.
+ *
+ * A NODE THAT NEVER LOADED ITS PARAMETERS ANSWERS 0. That is not the switch
+ * being off: it is the honest reading that this executive holds no parameter
+ * record at all, and the same test cluster_sysgen_credits() applies for the same
+ * reason (INV-6 -- an unloaded 0 is not a configured 0). It costs nothing here,
+ * because a node with no committed SYSGEN parameters never joined a cluster and
+ * so has no connection to announce a departure on.
+ */
+int cluster_sysgen_clean_depart(const struct vms_cluster *cl);
+
+/*
+ * cluster_sysgen_depart_from_wire - turn VMS_IOCTL_SYSGEN_LOAD's NEGATED wire
+ * byte (`clean_depart_off') into the POSITIVE sense the executive stores.
+ *
+ * ONE LINE, AND IT IS A NAMED FUNCTION ANYWAY, for two reasons.
+ *
+ * FIRST, THE POLARITY IS THE WHOLE ANTI-HOLLOW ARGUMENT AND HAS TO BE TESTABLE.
+ * sysgen_read_param() cannot distinguish "the operator set it to 0" from "this
+ * .PAR predates the parameter": an absent read leaves the caller's memset zero
+ * standing. Every existing OVMXVMSSYS.PAR is in the second case. So the wire
+ * field carries the NEGATION -- 0 means "nothing was turned off", which is the
+ * faithful default -- and an operator's explicit 0 is carried down as a 1 here.
+ * Get that inversion backwards and the clean departure is silently OFF on every
+ * install that already exists, which is a switch that reads as implemented and
+ * behaves as absent. The R1 rung drives THIS function with the zero-filled byte
+ * an absent parameter really produces.
+ *
+ * SECOND, it lives in this PURE TU rather than inside vms_devtab.c's static
+ * copier because that copier is not host-linkable: a polarity written there
+ * could only ever be proved by grepping the source.
+ *
+ * Returns what belongs in struct vms_cluster_params.clean_depart.
+ */
+uint8_t cluster_sysgen_depart_from_wire(uint8_t clean_depart_off);
+
 #endif /* OVMX_VMS_CLUSTER_SYSGEN_H */

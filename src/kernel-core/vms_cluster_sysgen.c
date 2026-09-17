@@ -65,3 +65,20 @@ int cluster_sysgen_credits(const struct vms_cluster *cl, uint8_t *out)
 	*out = (uint8_t)cl->params.cluster_credits;
 	return 1;
 }
+
+/* OVMX_CLEAN_DEPART (rd vms-abd) -- see vms_cluster_sysgen.h for the contract,
+ * including why an executive that never loaded its parameters answers 0. */
+int cluster_sysgen_clean_depart(const struct vms_cluster *cl)
+{
+	if (cl == NULL || !cl->params_valid)
+		return 0;
+	return cl->params.clean_depart != 0u;
+}
+
+/* The one place the kill switch's negated WIRE sense becomes the executive's
+ * positive one -- see vms_cluster_sysgen.h for why the negation exists and why
+ * this is a named, testable function rather than an inline ternary. */
+uint8_t cluster_sysgen_depart_from_wire(uint8_t clean_depart_off)
+{
+	return clean_depart_off != 0u ? 0u : 1u;
+}

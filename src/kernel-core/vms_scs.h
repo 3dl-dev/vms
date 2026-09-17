@@ -308,6 +308,39 @@ int scs_reject(struct vms_scs *scs, vms_conid_t local_conid, uint32_t reason);
  * matching response). */
 int scs_disconnect(struct vms_scs *scs, vms_conid_t local_conid, uint32_t reason);
 
+/* ==========================================================================
+ * 5b. THE CLEAN DEPARTURE'S TWO SERVICES (rd vms-abd)
+ *
+ * Both exist because `struct vms_scs` is opaque outside vms_scs.c and the
+ * connection manager -- which owns the departure -- cannot reach `scs->fsm`.
+ * Each is the usual one-line dereference into its scs_fsm_* twin.
+ * ========================================================================== */
+
+/*
+ * Set the DISCONNECT timer's timeout and answer what it was, so the caller can
+ * put it back. -> scs_fsm_set_cfg (the whole cfg, of which this is one field).
+ *
+ * WHY THE DEPARTURE MOVES IT. `disconnect_timeout_ms` defaults to 5000
+ * (SCS_DISCONNECT_TIMEOUT_MS_DEFAULT) and h_timer_disconnect needs TWO expiries
+ * to finish a teardown a peer never answers -- 5 s to get the op 6 out, 10 s to
+ * close. A clean departure cannot wait 10 s, and it must not give up before the
+ * op 6 is on the wire either. So for the duration of the departure the timeout
+ * is lowered to the drain's own budget and the FSM's OWN dead-peer guard fires
+ * INSIDE the drain window. Nothing is faked and no event is forged: the same
+ * handler runs, on the same armed timer, from the same substrate expiry -- only
+ * the documented OVMX design value it was armed with is different, and
+ * vms_scs_fsm.h SS(tunables) already says that value is this tree's to choose.
+ *
+ * 0 on success is not a status: this returns the PREVIOUS timeout in ms, and 0
+ * only when `scs` is NULL (no SCS, nothing changed).
+ */
+uint32_t scs_set_disconnect_timeout(struct vms_scs *scs, uint32_t ms);
+
+/* How many locally-initiated teardowns have not yet put their op 6 on the wire
+ * -> scs_fsm_disc_pending, whose doc comment carries the contract. This is the
+ * bounded drain's loop predicate; 0 for no SCS. */
+uint32_t scs_disc_pending(const struct vms_scs *scs);
+
 /* Send one application message on an open CDT. SPENDS A CREDIT: returns
  * SS$_EXQUOTA-class failure rather than sending when the send credit is
  * exhausted -- the ledger is real, not decorative. */

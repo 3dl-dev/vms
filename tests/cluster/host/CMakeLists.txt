@@ -980,3 +980,21 @@ set_tests_properties(cluster_host_wire_safety_audit PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
     TIMEOUT 60
 )
+
+# ---- The join-timeline reader, judged against the CN=3 baseline capture ----
+# tools/cluster/scs_join_timeline.py is the instrument that separates "OVMX was
+# flow-controlled" from "OVMX stopped talking" -- the distinction vms-f3ec's
+# credit-return COUNT could not make. Its --selftest re-derives, from the
+# in-tree cn3-achieved-20260905.pcap, the three figures the vms-d7e commit
+# published (the unaddressed op-5 at 16.315, the circuit reformation it
+# provoked at 18.289, and that the whole admission ran after that reformation).
+# If the reader ever stops finding them, it is the reader that is broken, and
+# this says so before anyone reads a join off it.
+add_test(NAME cluster_host_scs_join_timeline
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/scs_join_timeline.py" --selftest
+)
+set_tests_properties(cluster_host_scs_join_timeline PROPERTIES
+    LABELS "unit;cluster;cluster_host;scs"
+    TIMEOUT 60
+)

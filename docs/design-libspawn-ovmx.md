@@ -274,14 +274,14 @@ The GCC driver (`gcc.c`) on a VMS host does not use Unix `vfork`/`execve`
 directly for its pipeline — as documented publicly (DEC C RTL Reference,
 `vfork()`), the CRTL's own `vfork`/`exec` pair is itself implemented in terms
 of `$CREPRC` on VMS, because VMS has no native `fork()`. The forcing-function
-framing from `vms-da0` (§2a of `docs/design-gcc-vms-oracle-lane.md`: OVMX
-drives native RMS rather than honoring the CRTL's Unix-shim for file I/O)
+framing from `vms-da0` (§0 of `docs/design-gcc-port-surface-gaps-register.md`:
+OVMX drives native RMS rather than honoring the CRTL's Unix-shim for file I/O)
 extends identically to process creation: **OVMX's authored VMS-host layer for
 the GCC driver should call the `LIB$SPAWN`/`$CREPRC` primitives above
 directly, not route through musl's `vfork`/`posix_spawn`/`clone` on the
 Linux host underneath OVMX's DECC$SHR.** Doing the latter would reinstate
 exactly the "OS calls go through POSIX, force nothing VMS-authentic" failure
-mode `design-gcc-vms-oracle-lane.md §2` rejected for the base pick.
+mode `design-gcc-port-surface-gaps-register.md §0` rejected for the base pick.
 
 Two shapes for the pipeline, both buildable on the backfilled primitive:
 

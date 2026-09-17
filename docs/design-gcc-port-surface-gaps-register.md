@@ -1,19 +1,83 @@
 # GCC-port surface gap register — DECC$SHR/CRTL (vms-3e4) + RMS (vms-126)
 
-> **Status:** SNAPSHOT as of **2026-08-31**, read-only analysis pass — **stale, re-derive before
-> trusting the numbers.** *(Flagged 2026-09-14.)* This snapshot predates the 2026-09-11 F2a
-> host-surface trio, which has since landed and is GREEN on `origin/main`:
-> `design-gcc-port-host-surface-demands.md` (rung-1, MEASURED), `-gaps.md` (rung-2, MEASURED),
-> and `-gate.md` (rung-3, GREEN 2026-09-11). Re-derive the live gap counts and rung state from
-> the compat register (`docs/compat/facilities/*.yaml`) + `rd dep tree vms-da0`, not from the
-> symbol tallies below. Grounded on `origin/main`
-> (local checkout `vms-054-alpha-port` is stale relative to it — see project MEMORY.md
-> standing confounder). Supersedes the numbers/state in the original gap analysis
-> (`docs/design-gcc-vms-port-surface-gaps.md`, 2026-08-22, PR #709) without replacing
-> it — that doc's method and Axis structure still stand; this doc re-derives what is
-> **actually landed today** against it and turns the residue into dispatchable rd
-> items. Ladder epic: `vms-da0`. Ladder target: `vms-fd1` (blocked by `vms-3e4`,
-> `vms-126`, `vms-5b7e`(done)).
+> **Status:** CANONICAL single-ledger doc for the GCC-port gap register (merged
+> 2026-09-17, `vms-b3a6` wave 2). This file absorbs the substance of two now-deleted
+> duplicates: `design-gcc-vms-oracle-lane.md` (the lane charter / base-pick / GO-NO-GO
+> decision record, 2026-08-20) and `design-gcc-vms-port-surface-gaps.md` (the original
+> Axis 1-6 gap analysis, 2026-08-22, PR #709) — both `git rm`'d as single-ledger
+> duplicates once folded in below (§0 = charter, §2a/§3a = the Axis-4/6 material the
+> register itself never carried). The **numbers/rung-state snapshot in §1-§3 is from
+> 2026-08-31** and is itself superseded for *link-surface sufficiency* by the
+> 2026-09-11 F2a host-surface trio (`design-gcc-port-host-surface-demands.md` rung-1,
+> `-gaps.md` rung-2, `-gate.md` rung-3, GREEN) — those three remain **separate** docs
+> (distinct measurement rungs of `vms-078`, not register duplicates) and are the
+> current word on host-surface sufficiency. Re-derive live gap counts and rung state
+> from the compat register (`docs/compat/facilities/*.yaml`) + `rd dep tree vms-da0`,
+> not from the symbol tallies below. Grounded on `origin/main` (a stale local
+> checkout is a standing confounder — see project MEMORY.md). Ladder epic: `vms-da0`.
+> Ladder target: `vms-fd1` (blocked by `vms-3e4`, `vms-126`(done), `vms-5b7e`(done),
+> `vms-032`, `vms-3320`, `vms-c5d`).
+
+## 0. Charter — GO/NO-GO, base pick, oracle framing (merged from `design-gcc-vms-oracle-lane.md`)
+
+**Epic `vms-da0`.** Peer conductor lane, parallel to the 0.5/1.0 mainline, does not
+gate it. Parent `vms-df7` (OVMX self-hosts its own kernel).
+
+**Governing constraint (operator, 2026-08-20):** *"GCC and the self-hosting
+toolchain are the oracle, and OVMX must bend to it — not the other way around."*
+The compiler is a real VMS program; every OS-interface call it makes (RMS I/O,
+`LIB$SPAWN`, condition handling, logical names, the calling standard) encodes what
+real VMS provides. When it demands a facility OVMX fakes or lacks, OVMX is
+corrected **toward VMS**, never the compiler shimmed toward OVMX/POSIX (the exact
+INV-6 anti-pattern the authenticity program exists to kill).
+
+**GO/NO-GO verdict: GO** (2026-08-20). Base pick, decided against three
+alternatives:
+
+| Candidate | Verdict | Why |
+|---|---|---|
+| Stock Linux-musl GCC | REJECTED | OS calls go musl→POSIX→Linux; forces nothing VMS-authentic |
+| GNV "gcc" (VSI PCSI kit) | EXCLUDED | wrapper scripts around proprietary VSI/HPE DEC C, not GCC; needs proprietary source |
+| VSI OpenVMS x86-64 GCC | NOT VIABLE | no obtainable source; no `x86_64-*-vms*` mainline target |
+| **`alpha-dec-vms` OpenVMS GCC port, built on OVMX-Alpha** | **PRIMARY BASE** | the only cleanly-obtainable GPL VMS GCC port (GPLv3+); mainline GCC still configures `alpha-dec-vms` |
+
+**Ladder reconcile (operator, 2026-08-22):** the deliverable is the *existing*
+`alpha-dec-vms` port building on OVMX-Alpha unchanged (`vms-fd1`), not a Linux GCC
+adapted down and not an OVMX-authored target as the first brick. Authoring an
+x86_64/aarch64 VMS-host GCC layer from the `alpha-dec-vms` pattern (no upstream
+port exists for those arches) is an explicitly **LATER, distinct rung** (`vms-9894`,
+blocked by `vms-fd1`, clean-room per Rule 8 — nothing lifted from VSI/GNV). Linux
+GCC is a correctness oracle only, never shipped or run.
+
+**Predicted vs. actual first wall:** the charter predicted RMS file/temp semantics
+as the first OS-facility wall the port's toolchain would hit. **The forcing
+function proved the prediction wrong** (2026-08-20, from the F1 GNU `as` build):
+the actual first wall was LINK.EXE dropping static constructors for symbol-vector
+images (`.init_array` RELSKIP'd) — the `LIB$INITIALIZE` ctor-collection facility,
+surfaced at F1 (assembler activation) rather than F2 (the compiler itself). RMS
+turned out to be strong, not the first wall (§3). This is why the doc frames
+"predicted wall" and "confirmed-absent gap" as separate evidence classes — a
+prediction is not a measurement.
+
+**The loop (method):**
+
+```
+pick/scout the VMS-host GCC upstream (F1 first: GNU as)
+  -> cross-build it VMS-host as an OVMX image (LINK.EXE, the TCC.EXE pattern)
+    -> ACTIVATE under IMGACT against real /dev/vms
+      -> it demands a VMS facility OVMX fakes/lacks   <- THE WALL = the oracle speaking
+        -> bend OVMX toward VMS: backfill the facility GENUINELY
+             (public VMS docs + lab observation; NEVER a per-process fake)
+          -> verify under the tests/qemu KE harness (real /dev/vms), 3-way convergence gate
+            -> release-gate the shared-core change through the main/ACP conductor
+              -> repeat
+```
+
+Endgame (post-1.0): GCC + kbuild build the shipped kernel in-guest, closing `vms-df7`.
+The kernel-build output itself is native ELF via an in-guest GNU `ld`/BFD,
+deliberately bypassing LINK.EXE (a kernel is not an OVMX symbol-vector image); the
+**toolchain programs** (`as`, `gcc`, `cc1`) remain OVMX symbol-vector images
+(LINK.EXE-linked, the TCC.EXE pattern) — no conflict between the two object paths.
 
 ## Why this doc exists
 
@@ -145,10 +209,24 @@ regression. `vms-4b5` closed as not-a-bug (`fixed`), root-caused
 
 ## 2. LINK / object-format surface (supports both axes — not separately gated)
 
-The original 2026-08-22 doc (Axis 2, Open Question 3) framed object format as an
-undecided design call: "(a) assemble to ELF (cheap) vs (b) LINK grows a faithful
-VMS-OBJ (GSD/TIR) front-end", leaning toward (a). **What actually got built is (b)**,
-and it is the load-bearing piece under nearly everything in §1.1 and §3 above:
+**Object-format decision reversed from both earlier docs — corrected here
+(2026-09-17).** The charter (§0 above, then `design-gcc-vms-oracle-lane.md` §2a.3)
+originally resolved "gas emits ELF … `obj-evax.c` is the RMS-descriptor reference
+to borrow the discipline from, **not** the output writer (EVAX objects are a
+dead-end for the ELF kernel path)". The original gap analysis (2026-08-22, Axis 2,
+Open Question 3) likewise framed object format as undecided, "leaning toward (a)
+[assemble to ELF]". **Both are stale.** What was actually built is the opposite:
+LINK.EXE reads the port's **genuine native EVAX (Alpha/VMS) object format
+directly** — no ELF-assemble detour for Alpha at all. This is verified, not a
+design lean: `docs/compat/facilities/object-format.yaml` rates
+`object-format$evax-object-ingest` **status: verified, authenticity: real** (byte-exact
+round-tripped against real `alpha-dec-vms-as` fixtures, `src/vmslink/test/run_evax_*.sh`),
+and `docs/compat/facilities/link.yaml` rates `link$evax-backend` **status: verified,
+authenticity: real**. The "EVAX is a dead-end" framing applied only to the
+in-guest-kernel-build ELF path (§0's architecture-fork note, which still holds —
+`vmlinux` output bypasses LINK.EXE and stays ELF); it never applied to, and is now
+disproved for, the GCC port's own object ingest. It is the load-bearing piece under
+nearly everything in §1.1 and §3 above:
 
 - `src/vmslink/evax_read.{c,h}` (bead `vms-cbe`) is a real, clean-room GSD/EGSD/
   TIR/ETIR object-format reader, grounded to `binutils-2.43 bfd/vms-alpha.c` per
@@ -172,6 +250,36 @@ literally shells out to was never built — moot for every rung proven so far be
 wrapper. This only becomes a real gap at **P2** (the port's own `configure`+`make`
 running self-hosted on OVMX, invoking its own `vms-ld` literally) — not scoped here,
 tracked structurally by `vms-da0`'s R9/R10 rungs in the original doc.
+
+---
+
+## 2a. Process/spawn surface (Axis 4, `vms-e9a`) — merged from the original gap analysis
+
+The compiler driver's `cpp→cc1→as→ld` pipeline spawns a stage, must learn its exit
+status, and spawn the next. OVMX had (2026-08-22) three divergent process-creation
+paths: `lib$spawn` (fork/exec of a shell, **not executive-registered** — the INV-6
+fake), `sys$creprc` (real, executive-registered), and DCL `SPAWN` (a third,
+duplicated re-exec path). The original doc flagged this as **`/NOWAIT` completion
+channel absent**: `lib$spawn`'s `efn`/`astadr`/`astprm` were silently discarded —
+no EF, no termination AST — filed as `vms-e9a`.
+
+**Landed since (re-derived from `vms-e9a`'s own PR history, not recalled):**
+- **B0 (PR #919, merged 2026-08-29):** `lib$spawn` + DCL `SPAWN` routed onto the
+  executive-registered `sys$creprc` (`src/libvms/rtl/lib_misc.c`); the unregistered
+  fork/exec fake excised. Conductor ruling on record: SPAWN-requires-executive is
+  *authentic* Rule-9 behavior (real VMS `$CREPRC` needs the executive), not a
+  regression — plain-host now fails honestly (`%DCL-F-CREPRC`) absent `/dev/vms`.
+- **B1 (PR #974, merged 2026-08-31):** the `/NOWAIT` EF + termination-AST completion
+  channel itself — new shared kernel-core facility `VMS_IOCTL_SPAWN_NOTIFY`,
+  mirrored across the required NetBSD/kernel-module places (four-places rule),
+  proven by `tests/qemu/test_kmod_spawn_notify.c` (14/14) on real `/dev/vms`.
+
+**Still open:** **B2** — the GCC driver's own VMS-host process-creation hook
+actually calling `LIB$SPAWN`/`$CREPRC` for its `cpp→cc1→as→ld` pipeline (the
+payoff step; the executive mechanism it needs now exists). **B3** (mailbox-pipe
+concurrent-stage transport) is a deferred stretch rung, not required for the
+sequential pipeline. Tracked: `vms-e9a` (rd status may still read stale per project
+convention — re-derive from the item's own history, not the status field).
 
 ---
 
@@ -276,6 +384,40 @@ alpha port image's own file writes are still musl-POSIX → Linux-Alpha VFS.
 
 ---
 
+**Update since the 2026-08-31 snapshot (re-derived from `vms-126`'s own PR
+history, 2026-09-10):** `vms-126` landed further beyond the veneer above — PR
+#1122 added `fwrite` chunking for writes >0xFFFF bytes (successive `sys$put`,
+byte-transparent to the `mrs=1` `$GET` read loop) and `ovmx_crtl_tmpfile`
+(`FAB$M_TMD` delete-on-close), proven by
+`tests/qemu/test_syssvc_crtl_rms_bigwrite.c`. Descoped to two children: `vms-667b`
+(a `FAB$M_TMD` delete-on-close ordering bug found along the way) and `vms-a11`
+(`fseek`/`ftell`/`r+`/`w+` random access over the sequential RMS stream, deferred).
+Re-derive current status with `rd show vms-126` / `rd show vms-667b` / `rd show vms-a11`
+rather than trusting this note as it ages.
+
+---
+
+## 3a. Build drivers surface (Axis 6) + P1/P2 sequencing — merged from the original gap analysis
+
+**What the port actually uses:** the modern `alpha-dec-vms` port builds by cross
+`configure`+`make` (GNV-style), not MMS — no top-level `descrip.mms`/`.com` ships
+for the full compiler. So "the port builds+runs on OVMX" is two phases:
+
+- **P1 (near-term, this register's scope):** the port's *output/runtime* — a
+  cross-built `alpha-dec-vms` compiler's produced objects/images — runs on
+  OVMX-Alpha over the faithful surface (§1-§3 above). This is the ladder target
+  `vms-fd1`.
+- **P2 (self-host endgame, later, feeds `vms-df7`):** GCC's own `configure`+`make`
+  runs *on* OVMX-Alpha itself — needs a GNV-class self-hosting build environment
+  (shell, make, a bootstrap `cc`, `ar`/`ranlib`) on OVMX-Alpha. Sequenced strictly
+  after P1; retires the tcc-bootstrap-only story for the toolchain lane.
+
+**R9** (GNV-class self-hosting build env, P2) and **R10** (the `vms-9894`
+x86_64/aarch64 clean-room authoring rung, §0) are both later-ladder rungs, captured
+here so they are not forgotten, and neither blocks the P1 march.
+
+---
+
 ## 4. Prioritized "what to implement first" list
 
 Ordered by leverage toward `vms-fd1` (the port builds+runs unchanged), not by
@@ -342,3 +484,17 @@ crtl_rms boot gate to write onto a WRITABLE ODS-2 volume + assert an independent
 | `vms-2e72` | Real CHF/condition-handling dispatch | `vms-3e4` | Yes (deep runtime rung) |
 | `vms-1b5` | RMS beyond-stdio (dir ops, listing files, temp lifecycle, version bump) | `vms-126` | Yes |
 | `vms-4b5` | cc1 union-pun-branch miscompile | `vms-da0` | Partial (repro is compile-only; toolchain container needed) |
+
+Pre-existing rungs merged in from the deleted docs (not filed this pass, carried
+forward for single-ledger completeness): `vms-e9a` (Axis 4, spawn — B0/B1 landed,
+B2 open, §2a), `vms-9894` (R10, later x86_64/aarch64 authoring rung, §0), R9
+(GNV-class self-host build env, §3a — not yet filed as a distinct rd item).
+
+---
+
+*Doc history: merged 2026-09-17 (`vms-b3a6` wave 2) from
+`design-gcc-vms-oracle-lane.md` (charter, §0) and `design-gcc-vms-port-surface-gaps.md`
+(original Axis 1-6 analysis, §2a/§3a + the EVAX correction in §2), both deleted as
+single-ledger duplicates. This file remains the one canonical GCC-port gap-register
+doc; the F2a host-surface trio (`design-gcc-port-host-surface-{demands,gaps,gate}.md`)
+are separate, non-duplicate measurement rungs and stay as their own docs.*

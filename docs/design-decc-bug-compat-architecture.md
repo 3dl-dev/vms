@@ -3,7 +3,7 @@
 **Status:** design / roadmap fork for the operator. Not implementation.
 **Lane:** GCC production compiler (`vms-da0`, under `vms-df7`).
 **Companion:** `docs/design-gcc-port-surface-gaps-register.md` (the surface-gap
-register), `docs/design-gcc-vms-oracle-lane.md` (the base-picks go/no-go).
+register, incl. §0 the charter/base-pick go/no-go).
 **Provenance (Rule 8):** reasons ONLY from public GCC source/behavior, the public
 VSI/DEC C User's Guides and Language Reference, OpenVMS porting guides, and observed
 cross-`cc1` output on `ovmx-cross-alpha-vms`. No VSI/HPE proprietary source is read,

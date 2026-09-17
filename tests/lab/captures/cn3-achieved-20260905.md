@@ -29,12 +29,28 @@ vax2.log: 0 CNXMGRERR/INVEXCEPTN/BUG CHECK/0xb1, boot-banner count 1
 Both VAXes booted exactly once (at pod start) and stayed up the entire
 ~600s window. Pod: `Running`, 0 restarts.
 
-## Safety gate — clean
+## Safety gate — clean *against the vectors that existed then*
 
 ```
 $ python3 tools/cluster/cm_wire_safety_audit.py --ovmx-mac 52:54:00:00:00:f4 cn3-achieved-20260905.pcap
    (1787 CM-class frames) -- 0 FATAL, 0 WARN --
 ```
+
+> **CORRECTION (rd `vms-d7e`, re-audited 2026-09-17).** That "0 FATAL" is the
+> verdict of the vector set the gate carried on 2026-09-05, and it is kept
+> verbatim as the record of what was measured then. Re-run today it reports
+> **1 FATAL — `S15-REJECT-UNADDRESSED`**, at frame 84 (`14:49:11.114`,
+> OVMX→VAX2): the op-5 `REJECT_RESPONSE` answering VAX2's refusal of OVMX's
+> `MSCP$DISK` connect carries `SCS$L_DST_CONID = 0`, where 698 of 698 pairable
+> real-VMS refusals address the handle the request named. ~2.0 s later VAX2
+> restarts the virtual circuit (`0x41` START at t+18.2892), which is the
+> documented effect of the `%PEA0, Inappropriate SCA Control Message` such a
+> frame draws. **This run survived it** because that connect — and so the VC
+> bounce — happened *before* admission, where a bounce costs nothing; the CN=3
+> achievement below is unaffected and stands. The `vms-d7e` regression is the
+> SAME frame issued ~5 s *after* admission, where the same VC close takes an
+> admitted member's connection with it and bugchecks VAX1 (`CNXMGRERR`).
+> See `docs/cluster-crash-safety.md` §C10.
 
 ## The wire: CONFIG through barrier, in ~50 ms
 

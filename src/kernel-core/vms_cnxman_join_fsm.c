@@ -2356,6 +2356,51 @@ static enum cnxman_join_rx join_h_tr_open(struct cnxman_join *j,
 	return join_forward(j, e);
 }
 
+/*
+ * THE COORDINATOR ABANDONED THE TRANSITION -- cat-0x01 op-0x04, role 0x50
+ * (rd vms-f3ec, measured on the real-VAX re-verify: the member answered this
+ * node's op-0x02 with its COMMIT and four membership records, then aborted and
+ * re-opened the dialogue with its own op-0x01).
+ *
+ * THE ONE THING THIS DOES is WITHDRAW A CLAIM THIS FSM WAS HOLDING. A COMMIT
+ * or a rebuild record from the target sets `admit_answered` -- "the member
+ * took my membership request" -- and that is what stops the admission silence
+ * clock (join_admit_request_outstanding()). If the transition those frames
+ * belonged to is abandoned, the request they answered is gone with it, and a
+ * node that keeps the flag set waits forever: `admit_answered` is cleared
+ * nowhere else but join_reissue_to(), which only the silence clock can reach.
+ * That is the entire NEW -> MEMBER stall, and clearing the flag is the entire
+ * fix.
+ *
+ * NOTHING NEW IS ASSERTED ON THE WIRE. No frame is emitted here -- the codec's
+ * own allowlist row for op-0x04 is VMS_WIRE_ACT_CONSUME, "never answered" --
+ * and no recovery policy is invented for the abort: with the clock re-armed
+ * this request falls through the SAME declared silence threshold as any other
+ * unanswered one (p. 2-51's re-offer, E80's decline-and-ask-the-next-member).
+ * In particular this node does NOT re-ask the coordinator that abandoned it on
+ * its own beat -- no capture grounds a joiner's post-abort behaviour, and
+ * inventing one would be exactly the fabrication INV-6 forbids.
+ *
+ * THE STATE DOES NOT MOVE. An abort is not a refusal and not a path loss:
+ * p. 7-41's coordinator abandons transitions routinely, and this node is still
+ * connected, still advertised and still a candidate. It is also still
+ * FORWARDED, because a barrier that really is in [OPEN] or [STEP] must unwind
+ * its partial rebuild (barrier_h_abort) -- the notification has two audiences
+ * and always did.
+ */
+static enum cnxman_join_rx join_h_abort(struct cnxman_join *j,
+					const struct join_ev *e)
+{
+	j->transitions_abandoned++;
+	if (j->admit_answered) {
+		j->admit_answered = 0u;
+		j->admit_rearmed++;
+	}
+	join_log(j, "%CNXMAN, the cluster abandoned the state transition this "
+		    "node was being admitted in");
+	return join_forward(j, e);
+}
+
 /* ==========================================================================
  * Handlers: loss, the assignment, and the watchdog
  * ========================================================================== */
@@ -3142,6 +3187,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
 		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
+		[CNXMAN_EV_RX_ABORT]     = join_h_abort,
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
 		[CNXMAN_EV_RX_REBUILD]   = join_forward,
 		[CNXMAN_EV_CDT_CLOSED]   = join_h_closed,
@@ -3156,6 +3202,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_MEMBERSHIP] = join_h_membership,
 		[CNXMAN_EV_RX_CLOSE]     = join_h_close,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
+		[CNXMAN_EV_RX_ABORT]     = join_h_abort,
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
 		[CNXMAN_EV_RX_REBUILD]   = join_forward,
 		[CNXMAN_EV_CSID_LEARNED] = join_h_csid_learned,
@@ -3172,6 +3219,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	[CNXMAN_JOIN_BARRIER] = {
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
+		[CNXMAN_EV_RX_ABORT]     = join_h_abort,
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
 		[CNXMAN_EV_RX_BARRIER]   = join_forward,
 		[CNXMAN_EV_RX_BARRIER_ACK] = join_forward,
@@ -3189,6 +3237,7 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	[CNXMAN_JOIN_MEMBER] = {
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
+		[CNXMAN_EV_RX_ABORT]     = join_h_abort,
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
 		[CNXMAN_EV_RX_BARRIER]   = join_forward,
 		[CNXMAN_EV_RX_BARRIER_ACK] = join_forward,
@@ -3354,9 +3403,19 @@ static enum cnxman_event join_event_of_barrier(const struct vms_cm_envelope *env
 	case VMS_CM_OP_BARRIER:
 	case VMS_CM_OP_BARRIER_REL:
 		return CNXMAN_EV_RX_BARRIER;
+	case VMS_CM_OP_ABORT:
+		/*
+		 * NOT the forwarding cell below (rd vms-f3ec). The abort used
+		 * to fall through to CNXMAN_EV_RX_TR_OPEN with the opens, and
+		 * RX_TR_OPEN is on join_ev_is_admission_progress()'s list -- so
+		 * the frame that says the transition was ABANDONED was counted
+		 * as this node's membership request having been TAKEN, which
+		 * disarmed the admission clock for good.
+		 */
+		return CNXMAN_EV_RX_ABORT;
 	default:
-		/* the opens (0x08/0x09/0x0d), op-0x0f and the abort all reach
-		 * the barrier through the same forwarding cell */
+		/* the opens (0x08/0x09/0x0d) and op-0x0f reach the barrier
+		 * through the same forwarding cell */
 		return CNXMAN_EV_RX_TR_OPEN;
 	}
 }

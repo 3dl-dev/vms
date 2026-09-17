@@ -825,6 +825,18 @@ struct cnxman_join {
 	uint32_t attempts_exhausted;
 	uint32_t starts_backed_off;
 	uint32_t reissue_targets_absent;
+	/*
+	 * TRANSITIONS THE COORDINATOR ABANDONED UNDER THIS NODE -- cat-0x01
+	 * op-0x04 (rd vms-f3ec), and how many of them arrived while this FSM
+	 * was still holding an answer to its own membership request. The two
+	 * are separate because they are separate diagnoses: an abort during a
+	 * transition this node is only PARTICIPATING in costs it nothing, while
+	 * one that lands on its own pending admission is the case that used to
+	 * wedge the join in [ADMIT] forever. A join that is slow because the
+	 * cluster keeps abandoning transitions must be able to say so.
+	 */
+	uint32_t transitions_abandoned;
+	uint32_t admit_rearmed;
 	uint32_t echoes_sent;        /* 0x81 answers to op-0x03 / op-0x05     */
 	/*
 	 * RETIRED BY E79 and kept at zero rather than deleted: this counted the

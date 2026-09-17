@@ -1071,6 +1071,236 @@ static void t_d7e_reject_response_is_addressed(void)
 	}
 }
 
+/* ------------------------------------------------------------------ *
+ * vms-f3ec -- a REFUSED connect must leave every OTHER CDT untouched
+ *
+ * WHY THIS SHAPE, AND WHY THESE VALUES. In the real-VAX join captures the
+ * refusal and the membership connection are not strangers: the Con.ID the
+ * REJECT_REQUEST states in SCS$L_SRC_CONID is the SAME 32-bit value as the
+ * peer handle of the live VMS$VAXcluster connection, in BOTH the CN=3
+ * baseline and the vms-f3ec re-verify --
+ *
+ *   cn3-achieved-20260905      REJ_REQ src 0x81c4000d ; membership peer
+ *                              handle 0x81c4000d
+ *   vms-f3ec re-verify         REJ_REQ src 0x4d78000d ; membership peer
+ *                              handle 0x4d78000d
+ *
+ * (the lab's two VAXes are clones and mint from the same CDL slot, so the
+ * value repeats across nodes). That is the collision under which vms-d7e's
+ * conid learn had to be proved harmless: if a refusal on ONE CDT could
+ * re-point, shadow or unbalance another CDT's handle pair or credit ledger,
+ * the membership connection would stop returning credit and the join would
+ * stall at STATUS=NEW.
+ *
+ * Both orders are walked, because the wire shows both: the refusal arriving
+ * while the membership connection is already OPEN (rung 1), and the refusal
+ * arriving FIRST, so its handle is learned and then released before the peer
+ * opens the membership connection with that same value (rung 2).
+ * ------------------------------------------------------------------ */
+struct f3ec_ledger {
+	vms_conid_t local_conid;
+	vms_conid_t remote_conid;
+	uint8_t     remote_conid_valid;
+	uint8_t     state;
+	uint16_t    grant;
+	uint16_t    receive;
+	uint16_t    held;
+	uint16_t    pending;
+	uint16_t    send;
+	uint32_t    msgs_received;
+};
+
+static void f3ec_snapshot(struct scsh_node *n, vms_conid_t conid,
+			  struct f3ec_ledger *out)
+{
+	const struct scs_cdt *c = scsh_cdt(n, conid);
+
+	if (c == (const struct scs_cdt *)0) {
+		uint32_t i;
+		uint8_t *p = (uint8_t *)out;
+
+		for (i = 0; i < (uint32_t)sizeof(*out); i++)
+			p[i] = 0u;
+		return;
+	}
+	out->local_conid = c->local_conid;
+	out->remote_conid = c->remote_conid;
+	out->remote_conid_valid = c->remote_conid_valid;
+	out->state = c->state;
+	out->grant = c->credit_grant;
+	out->receive = c->credit_receive;
+	out->held = c->credit_held;
+	out->pending = c->credit_pending;
+	out->send = c->credit_send;
+	out->msgs_received = c->msgs_received;
+}
+
+static void f3ec_check_same(const struct f3ec_ledger *before,
+			    const struct f3ec_ledger *after)
+{
+	ct_check_eq_u32(after->local_conid, before->local_conid,
+			"membership CDT keeps its OWN Con.ID");
+	ct_check_eq_u32(after->remote_conid, before->remote_conid,
+			"membership CDT keeps the PEER handle it learned");
+	ct_check_eq_u32(after->remote_conid_valid, before->remote_conid_valid,
+			"...and keeps knowing that it learned one");
+	ct_check_eq_u32(after->state, before->state,
+			"membership CDT is still OPEN");
+	ct_check_eq_u32(after->grant, before->grant, "Grant unmoved");
+	ct_check_eq_u32(after->receive, before->receive,
+			"Receive Credit unmoved");
+	ct_check_eq_u32(after->held, before->held, "Held unmoved");
+	ct_check_eq_u32(after->pending, before->pending,
+			"PENDING RECEIVE CREDIT unmoved -- the count the next "
+			"carrier returns to the peer");
+	ct_check_eq_u32(after->send, before->send, "Send Credit unmoved");
+	ct_check_eq_u32(after->msgs_received, before->msgs_received,
+			"the delivered-message count is unmoved");
+}
+
+/* Feed `n` messages to the membership connection and answer the way the
+ * shipping VMS$VAXcluster SYSAP does, so the ledger is a real one. */
+static void f3ec_feed(vms_conid_t m_conid, vms_conid_t peer_handle,
+		      uint32_t n, uint8_t fill)
+{
+	uint32_t i;
+
+	for (i = 0; i < n; i++)
+		scsh_inject_msg(&a_node, b_node.sysid, m_conid, peer_handle,
+				0u, (uint8_t)(fill + i));
+}
+
+static void t_f3ec_reject_leaves_membership_cdt_alone(void)
+{
+	struct vms_scs_ctrl_frame c;
+	struct f3ec_ledger before, after;
+	struct scs_cdt *m;
+	vms_conid_t m_conid = 0u, r_conid = 0u, peer_handle = 0u;
+	uint32_t carriers_before;
+	int due_before;
+
+	printf("-- vms-f3ec: a REFUSED connect does not perturb the "
+	       "membership CDT's handle pair or its credit ledger\n");
+
+	/* ---- Rung 1: membership OPEN with credit due, THEN the refusal ---- */
+	rig(0 /* B accepts immediately */);
+	a_sysap.return_credit_immediately = 1u;
+	a_sysap.carrier_on_credit_due = 1u;
+	ct_check(scsh_open_pair(&a_node, &b_node, 10u, &m_conid) == 0,
+		 "the membership-style connection opens (10 credits)");
+	m = scsh_cdt(&a_node, m_conid);
+	ct_check(m != (struct scs_cdt *)0 &&
+		 m->state == (uint8_t)VMS_SCS_CDT_OPEN,
+		 "...and it is OPEN");
+	if (m == (struct scs_cdt *)0)
+		return;
+	peer_handle = m->remote_conid;
+	ct_check(peer_handle != 0u,
+		 "the peer handle is REAL -- read off the op-2 it sent");
+
+	/* A real inbound burst, so the ledger under test is a live one. */
+	f3ec_feed(m_conid, peer_handle, 3u, 0xa0u);
+	(void)scsh_pump();
+	ct_check_eq_u32(a_sysap.n_message, 3u,
+			"three membership messages were delivered");
+	due_before = scs_fsm_credit_return_due(&a_node.fsm, m_conid);
+	carriers_before = a_sysap.n_carriers;
+	f3ec_snapshot(&a_node, m_conid, &before);
+	ct_check(scsh_ledger_balanced(scsh_cdt(&a_node, m_conid)),
+		 "the membership ledger balances before the refusal");
+
+	/*
+	 * Now OVMX's own second connect (the MSCP$DISK discovery connect on
+	 * the wire) is refused, and the refusal names the SAME Con.ID the
+	 * membership connection already holds -- the measured collision.
+	 */
+	a_node.drop_tx = 1;                  /* B must not answer this one */
+	ct_check(scsh_open_pair(&a_node, &b_node, 4u, &r_conid) == 0,
+		 "a SECOND, separately-initiated connect goes out");
+	a_node.drop_tx = 0;
+	ct_check(r_conid != m_conid, "it minted its own Con.ID");
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, r_conid,
+			 peer_handle, 0u, NULL, NULL);
+
+	/* vms-d7e stays fixed: the answer still names the refuser. */
+	if (e65_wire(&a_node, SCS_MTYPE_REJ_RSP, &c, "op 5 is on the wire")) {
+		ct_check_eq_u32(c.conid_remote, peer_handle,
+				"vms-d7e holds: op 5 still ADDRESSES the "
+				"handle the refusal stated");
+		ct_check_eq_u32(c.conid_local, r_conid,
+				"and it answers from the REFUSED connect's "
+				"own CDT, not the membership one");
+	}
+	ct_check(scsh_cdt(&a_node, r_conid) == (struct scs_cdt *)0,
+		 "the refused connection is gone");
+	ct_check_eq_u32(a_sysap.last_closed_conid, r_conid,
+			"the SYSAP was told THAT connection closed");
+
+	/* THE MEASUREMENT: nothing of the membership CDT moved. */
+	f3ec_snapshot(&a_node, m_conid, &after);
+	ct_check(scsh_cdt(&a_node, m_conid) != (struct scs_cdt *)0,
+		 "the membership connection survives the refusal");
+	f3ec_check_same(&before, &after);
+	ct_check_eq_u32((unsigned long)scs_fsm_credit_return_due(&a_node.fsm,
+								 m_conid),
+			(unsigned long)due_before,
+			"p. 2-44's credit-return decision is unchanged");
+	ct_check(scsh_ledger_balanced(scsh_cdt(&a_node, m_conid)),
+		 "and the ledger still balances");
+
+	/* And credit still FLOWS: the next inbound message is delivered and
+	 * answered by a carrier whose credit byte is the ledger read. */
+	f3ec_feed(m_conid, peer_handle, 4u, 0xb0u);
+	(void)scsh_pump();
+	ct_check_eq_u32(a_sysap.n_message, 7u,
+			"messages after the refusal are still delivered");
+	ct_check(a_sysap.n_carriers > carriers_before,
+		 "CREDIT IS STILL RETURNED after the refusal -- the "
+		 "vms-f3ec stall would show as zero carriers here");
+
+	/* ---- Rung 2: the refusal arrives FIRST, then the peer opens the
+	 * membership connection with that very Con.ID (the vms-f3ec order) -- */
+	rig(0);
+	a_sysap.return_credit_immediately = 1u;
+	a_sysap.carrier_on_credit_due = 1u;
+	r_conid = 0u;
+	m_conid = 0u;
+	a_node.drop_tx = 1;
+	ct_check(scsh_open_pair(&a_node, &b_node, 4u, &r_conid) == 0,
+		 "the discovery connect goes out first");
+	a_node.drop_tx = 0;
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, r_conid,
+			 peer_handle, 0u, NULL, NULL);
+	ct_check(scsh_cdt(&a_node, r_conid) == (struct scs_cdt *)0,
+		 "it is refused and released");
+
+	ct_check(scsh_open_pair(&a_node, &b_node, 10u, &m_conid) == 0,
+		 "the membership connection then opens");
+	m = scsh_cdt(&a_node, m_conid);
+	ct_check(m != (struct scs_cdt *)0 &&
+		 m->state == (uint8_t)VMS_SCS_CDT_OPEN,
+		 "...to OPEN, with a handle of its own");
+	if (m == (struct scs_cdt *)0)
+		return;
+	ct_check(m->remote_conid_valid && m->remote_conid != 0u,
+		 "the peer handle is the one the ACCEPT stated, not a "
+		 "leftover from the refusal");
+	carriers_before = a_sysap.n_carriers;
+	f3ec_feed(m_conid, m->remote_conid, 4u, 0xc0u);
+	(void)scsh_pump();
+	ct_check_eq_u32(a_sysap.n_message, 4u,
+			"its messages are delivered");
+	ct_check(a_sysap.n_carriers > carriers_before,
+		 "and it returns credit normally");
+	ct_check(scsh_ledger_balanced(scsh_cdt(&a_node, m_conid)),
+		 "with a balanced ledger");
+	ct_check_eq_u32(a_node.fsm.rx_no_cdt, 0u,
+			"no membership frame was ever lost to an unmatched "
+			"Con.ID -- the suspected frame->CDT failure");
+	ct_check_eq_u32(a_node.fsm.rx_conid_mismatch, 0u,
+			"and none landed on the wrong CDT");
+}
+
 int main(void)
 {
 	t_conid_allocator();
@@ -1093,5 +1323,6 @@ int main(void)
 	t_e80_accept_conndata();
 	t_e65_refusal_and_teardown_words();
 	t_d7e_reject_response_is_addressed();
+	t_f3ec_reject_leaves_membership_cdt_alone();
 	return ct_summary("test_scs_fsm");
 }

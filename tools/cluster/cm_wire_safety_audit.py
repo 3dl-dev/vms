@@ -173,6 +173,31 @@ ACK_CAPTURE_SLACK = 1
 # ovmx-760 LOCKMGRERR crash and its in-capture real-node control at zero.
 DLM_PAIR_CORROBORATORS = (16, 47)
 
+# The SCS connection-control verb, at abs 60 (SCS$W_MTYPE -- spec sec 4(m), and
+# the independent $SCSDEF confirmation in sec 4(h)'s vms-0fe table). The two
+# verbs this file judges are the refusal pair.
+OFF_CTRL_MTYPE = 60
+MT_CTRL_REJ_REQ = 4
+MT_CTRL_REJ_RSP = 5
+
+# vms-d7e: a REJECT_RESPONSE names the connection it is answering.
+#
+# MEASURED over the 48-capture reference corpus + this tree's lab captures:
+#   * every REJECT_REQUEST carries a NONZERO SCS$L_SRC_CONID -- 852 of 852, so
+#     the handle an answer needs is always on the wire;
+#   * every REJECT_RESPONSE pairable with its request addresses EXACTLY that
+#     value in SCS$L_DST_CONID -- 698 of 698, zero residuals (a further 355 are
+#     unpairable only because their request predates the capture window);
+#   * no real node has ever emitted one with SCS$L_DST_CONID == 0.
+# The OBSERVED CRASH: a booted OVMX node emitted 11 of 11 with that field zero.
+# The peer's port driver could not match the control message to a connection,
+# logged `%PEA0, Inappropriate SCA Control Message` -- whose documented effect
+# (VMS's own HELP/MESSAGE "Inappropriate SCA Control") is "The port driver
+# closes the port-to-port virtual circuit to the remote port" -- and closed the
+# VC ~2 s later. Post-admission that takes an admitted member's connection with
+# it and the peer's connection manager bugchecks CNXMGRERR.
+REJECT_RSP_MUST_ADDRESS = True
+
 FATAL, WARN = "FATAL", "WARN"
 
 
@@ -865,6 +890,53 @@ def _credit_finding(i, ts, fr, src, dst, grants, peer_ack, sent):
         "buffering.")]
 
 
+def _is_ctrl(fr):
+    """A sequenced SCA frame long enough to carry the SCS control header."""
+    return len(fr) >= OFF_CONID_LOCAL + 4 and fr[OFF_MSGTYPE] in MT_SEQ
+
+
+def check_reject_addressed(path, audited):
+    """vms-d7e: a REJECT_RESPONSE (op 5) must address the handle the
+    REJECT_REQUEST (op 4) named -- see REJECT_RSP_MUST_ADDRESS for the 698/698
+    measurement and the observed CNXMGRERR. An unaddressed refusal is a control
+    message the peer's port driver cannot match to a connection, and the
+    documented consequence is that it closes the virtual circuit.
+    """
+    findings, named = [], {}
+    for i, ts, fr in sca_frames(path):
+        if not _is_ctrl(fr):
+            continue
+        verb = le16(fr, OFF_CTRL_MTYPE)
+        src, dst = mac(fr[6:12]), mac(fr[0:6])
+        if verb == MT_CTRL_REJ_REQ:
+            named[(src, dst)] = le32(fr, OFF_CONID_LOCAL)
+        elif verb == MT_CTRL_REJ_RSP and src in audited:
+            findings += _reject_finding(i, ts, fr, src, dst,
+                                        named.get((dst, src)))
+    return findings
+
+
+def _reject_finding(i, ts, fr, src, dst, handle):
+    addressed = le32(fr, OFF_CONID_REMOTE)
+    if addressed != 0:
+        return []
+    if handle in (None, 0):
+        # The refusal itself named nobody -- unobserved in the corpus, and not
+        # this node's doing. Report nothing rather than blame the answer.
+        return []
+    return [Finding(
+        "S15-REJECT-UNADDRESSED", FATAL, _StubFrame(i, ts, src, dst),
+        "REJECT_RESPONSE carries SCS$L_DST_CONID 0; the refusal it answers "
+        "named Con.ID %08x" % handle,
+        "spec sec 4(d)/4(m): every REJECT_REQUEST in the reference corpus "
+        "states its own Con.ID (852/852) and every pairable REJECT_RESPONSE "
+        "addresses exactly that value (698/698, zero residuals). A refusal "
+        "the peer cannot match to a connection draws `%PEA0, Inappropriate "
+        "SCA Control Message`, whose documented effect is that the port "
+        "driver CLOSES the virtual circuit -- fatal to an admitted member "
+        "(vms-d7e CNXMGRERR).")]
+
+
 class _StubFrame(object):
     """A non-CM SCA frame, carried only so a Finding can name it."""
     __slots__ = ("idx", "ts", "src", "dst")
@@ -894,6 +966,7 @@ def audit(path, frames, audited):
     findings += check_conid(frames, audited)
     findings += check_frame_size(path, audited)
     findings += check_credit_window(path, audited)
+    findings += check_reject_addressed(path, audited)
     findings.sort(key=lambda f: (f.frame.ts, f.vector))
     return findings
 
@@ -1048,6 +1121,22 @@ def _synth_cm(ts, src, dst, conid_l, conid_r, send_msg, ack_msg, txn, token,
     return ts, bytes(frame)
 
 
+def _synth_ctrl(ts, src, dst, verb, conid_remote, conid_local):
+    """One SCS connection-control frame at the grounded offsets (sec 4(m))."""
+    frame = bytearray(74)
+    frame[0:6] = bytes(int(x, 16) for x in dst.split(":"))
+    frame[6:12] = bytes(int(x, 16) for x in src.split(":"))
+    frame[12:14] = b"\x60\x07"
+    frame[14:16] = (60).to_bytes(2, "little")
+    frame[OFF_MSGTYPE] = 0x4b
+    frame[OFF_CTRL_MTYPE:OFF_CTRL_MTYPE + 2] = verb.to_bytes(2, "little")
+    frame[OFF_CONID_REMOTE:OFF_CONID_REMOTE + 4] = \
+        conid_remote.to_bytes(4, "little")
+    frame[OFF_CONID_LOCAL:OFF_CONID_LOCAL + 4] = \
+        conid_local.to_bytes(4, "little")
+    return ts, bytes(frame)
+
+
 def _write_pcap(path, records):
     import struct
     with open(path, "wb") as fh:
@@ -1186,6 +1275,18 @@ def _violation_cases():
     # every one of its twelve, before it minted them.
     cases["S14-REQUEST-PAIR-ZERO"] = [
         _synth_cm(ts, OVMX, VAX, 0x2002, 0x1002, 5, 9, 0, 0, 0x01, 0x0b)]
+
+    # S15: the refusal exchange vms-d7e crashed a real VAX with -- the peer
+    # names its handle on the op 4, and the op 5 answers nobody. The PASSING
+    # half of the pair rides in the same fixture (a second, correctly addressed
+    # op 5), so a check that fired unconditionally would not pass this case.
+    cases["S15-REJECT-UNADDRESSED"] = [
+        _synth_ctrl(ts, VAX, OVMX, MT_CTRL_REJ_REQ, 0xbb0e000d, 0x9e8f000c),
+        _synth_ctrl(ts + .001, OVMX, VAX, MT_CTRL_REJ_RSP, 0, 0xbb0e000d),
+        _synth_ctrl(ts + .002, VAX, OVMX, MT_CTRL_REJ_REQ, 0xbb0e000e,
+                    0x9e8f000d),
+        _synth_ctrl(ts + .003, OVMX, VAX, MT_CTRL_REJ_RSP, 0x9e8f000d,
+                    0xbb0e000e)]
     return cases
 
 

@@ -194,6 +194,8 @@ jobs:
               - 'tests/qemu/run_cluster_param_adoption_e2e.sh'
               - 'tests/qemu/test_cluster_config_lan_e2e.sh'
               - 'tests/qemu/run_cluster_config_lan_e2e.sh'
+              - 'tests/qemu/test_cluster_config_lan_2node_e2e.sh'
+              - 'tests/qemu/run_cluster_config_lan_2node_e2e.sh'
               - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/CLUSTER_CONFIG_LAN.COM'
               - 'tests/uat/**'
             # vms-707: the change classes that can regress the OVMX/Alpha
@@ -2408,6 +2410,55 @@ jobs:
           rc=$?
           if [ "$rc" -eq 77 ]; then
             echo "FATAL: cluster_config_lan_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2e2: TWO OVMX nodes, EACH configured via @CLUSTER_CONFIG_LAN.COM,
+  # FORM a cluster (vms-23b9 rung 2)
+  #
+  # Rung 1 (above) proved author -> reboot -> adopt on ONE standalone node via
+  # the CHANGE path, which never enables VAXCLUSTER. This job composes that
+  # same documented procedure -- this time the ADD path, which does enable it
+  # -- with a real QEMU point-to-point network between two separately booted,
+  # separately configured nodes: node A (VOTES=1, EXPECTED_VOTES=1) founds,
+  # node B (VOTES=0) joins, and both independently report CN=2 with the other
+  # as a MEMBER via SHOW CLUSTER. Same hard-fail-on-skip convention.
+  # -----------------------------------------------------------------------
+  cluster-config-lan-2node-e2e:
+    name: 2-node cluster via @CLUSTER_CONFIG_LAN.COM (ADD) -> found/join (vms-23b9 rung 2)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 2-node cluster e2e — configure both nodes, form/join, verify CN=2
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_cluster_config_lan_2node_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: cluster_config_lan_2node_e2e SKIPPED in CI — this gate must actually run the real 2-node boot, never skip silently." >&2
             exit 1
           fi
           exit "$rc"

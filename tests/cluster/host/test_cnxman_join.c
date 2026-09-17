@@ -4731,6 +4731,118 @@ static void test_c06_a_rejoiner_still_takes_a_new_csid(void)
 	ct_check_eq_u32(g.j.membrecs_adopted, 2u, "both adoptions counted");
 }
 
+/* ------------------------------------------------------------------ *
+ * vms-f3ec -- THE COORDINATOR ABORTED THE TRANSITION AND STARTED OVER
+ *
+ * THIS TEST CURRENTLY ASSERTS A DEFECT. Every `f3ec:` check below records
+ * what the executive does TODAY, measured, so the fix has something to
+ * invert. It is NOT a description of correct behaviour and must be rewritten
+ * by whatever lands the fix.
+ *
+ * THE WIRE IT REPRODUCES, frame for frame, off the vms-f3ec re-verify capture
+ * (connection 47df0006 <-> 4d79000d, the member this join drives through):
+ *
+ *   OVMX -> MODEL, PARAMS, CONFIG          admission requested, [ADMIT]
+ *   VAX  -> cat 01 op 03 COMMIT            answered with the 0x81 echo
+ *   VAX  -> cat 01 op 05 MEMBREC x4        answered with four 0x81 echoes
+ *   VAX  -> cat 01 op 04 ABORT             VMS_CM_OP_ABORT, role 0x50
+ *   VAX  -> cat 01 op 01 PARAMS            the coordinator starts over
+ *   OVMX -> (a credit carrier, and then nothing, for 690 seconds)
+ *
+ * The coordinator abandoned the transition that would have admitted this node
+ * and re-opened the dialogue. A joiner that does not answer the restart is
+ * never admitted -- and on the vms-f3ec run it was not, which is the whole
+ * `NEW -> MEMBER` stall. #1273 did not cause this; it removed the peer's VC
+ * close, and with it the circuit reformation that used to restart the join
+ * from scratch and hide this.
+ * ------------------------------------------------------------------ */
+static void test_f3ec_transition_abort_and_restart(void)
+{
+	uint32_t sent_before, i;
+
+	printf("\n-- vms-f3ec: the coordinator ABORTS the transition and "
+	       "restarts the dialogue (MEASUREMENT, asserts today's defect) --\n");
+	bed_init();
+	bed_set_identity();
+	cnxman_csb_set_scsnode(g.member_csb, (const uint8_t *)"VAX1", 4u);
+	drive_to_admit_member_dialled();
+
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"the request is out: this node is in [ADMIT]");
+	ct_check_eq_u32(g.j.config_sent, 1u, "exactly one op-0x02");
+
+	/* The member answers -- COMMIT, then the four membership records. */
+	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0081));
+	for (i = 0; i < 4u; i++)
+		(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC,
+				      (uint16_t)(0x0082u + i)));
+	ct_check_eq_u32(g.j.admit_answered, 1u,
+			"the answer stops the admission silence clock, "
+			"correctly: the member really did reply");
+
+	/* ...and then abandons the transition. */
+	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_ABORT, 0x0086));
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"f3ec: the abort leaves this FSM in [ADMIT]");
+	ct_check_eq_u32(g.j.admit_answered, 1u,
+			"f3ec: THE DEFECT'S ROOT -- join_note_admission_progress"
+			"() counts the ABORT itself as admission PROGRESS "
+			"(it arrives as CNXMAN_EV_RX_TR_OPEN), so the flag "
+			"that says 'my request was answered' is re-set by the "
+			"very frame that says it was abandoned");
+
+	/* The coordinator starts over with its own op-0x01. */
+	sent_before = n_sent_on(ACC_CM_CONID);
+	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_PARAMS, 0x0087));
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), sent_before,
+			"f3ec: the restarted PARAMS is filed in the sender's "
+			"CSB and answered with NOTHING -- no re-advert, no "
+			"new op-0x02");
+
+	/*
+	 * AND NO CLOCK CAN EVER RUN OUT. `admit_answered` is cleared only by
+	 * join_reissue_to(); join_reissue_to() is reached only from
+	 * join_decline_target(); and join_decline_target() is reached only when
+	 * join_admit_beat() finds a request OUTSTANDING -- which it never will,
+	 * because join_admit_request_outstanding() reads `admit_answered`.
+	 * Twenty-four beats is four times the declared threshold.
+	 */
+	for (i = 0; i < 4u; i++)
+		bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);
+	ct_check_eq_u32(g.j.admit_silent_beats, 0u,
+			"f3ec: the silence clock reads ZERO after 24 beats -- "
+			"join_admit_beat() zeroes it every time because the "
+			"request still counts as answered");
+	ct_check_eq_u32(g.j.requests_unanswered, 0u,
+			"f3ec: so the member is never declined");
+	ct_check_eq_u32(g.j.reissues, 0u,
+			"f3ec: and the request is never re-issued to anyone");
+	ct_check_eq_u32(g.j.config_sent, 1u,
+			"f3ec: still exactly one op-0x02 in the world -- the "
+			"abandoned one");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), sent_before,
+			"f3ec: NOTHING FURTHER GOES OUT ON THAT CONNECTION, "
+			"ever -- join_reoffer_burst() re-offers only what this "
+			"Con.ID has not carried, and it has carried all three");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"f3ec: wedged in [ADMIT], not FAILED and not MEMBER");
+	ct_check_eq_u32(cnxman_club_local(&g.cl.club)->csid_valid, 0u,
+			"INV-6: and no CSID was invented while wedged");
+
+	/* The control: WITHOUT the abort, the same silence really does decline
+	 * the member. This is what proves the wedge is the abort's doing and
+	 * not a broken bed. */
+	bed_init();
+	bed_set_identity();
+	cnxman_csb_set_scsnode(g.member_csb, (const uint8_t *)"VAX1", 4u);
+	drive_to_admit_member_dialled();
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);
+	ct_check_eq_u32(g.j.requests_unanswered, 1u,
+			"CONTROL: with no answer at all, six beats DO decline "
+			"the member -- the clock works; the abort is what "
+			"disarms it");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -4807,6 +4919,7 @@ int main(void)
 	test_c06_a_joiner_still_asks();
 	test_c06_a_members_csid_is_not_reassigned();
 	test_c06_a_rejoiner_still_takes_a_new_csid();
+	test_f3ec_transition_abort_and_restart();
 
 	return ct_summary("test_cnxman_join");
 }

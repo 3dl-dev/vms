@@ -92,8 +92,10 @@ prepared store) still works for scripted setups. But
    default (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
    [Not yet supported](#cluster_authorize-is-a-lab-only-stand-in)). Both nodes
    must be on the same LAN segment carrying the LAVC/SCA ethertype `0x6007`; the
-   transport is genuine raw Ethernet, not a UDP tunnel (`src/vmsscs/scs_hello.c`,
-   requires `CAP_NET_RAW`).
+   transport is genuine raw Ethernet, not a UDP tunnel — the executive's cluster
+   port drives the datalink and emits the SCA HELLO beat (executive-resident, in
+   `src/kernel-core/vms_cnxman.c` / `vms_scs.c`; the retired userspace `scsd` /
+   `src/vmsscs` daemon is gone) — and it requires `CAP_NET_RAW`.
 
 3. **Boot both nodes.** As the cluster forms, the executive on each node
    populates its membership block (below). Formation takes on the order of a
@@ -171,15 +173,19 @@ plainly so no one designs against a capability that is not there.
 
 **There is no split-brain protection at V0.6.** Be precise about why:
 
-- OVMX always joins **non-voting**: `scsd` hardcodes an advertised `VOTES=0`
-  (`SCS_MEMBER_VOTES_NONVOTING`) so it can never affect a VAX cluster's quorum.
-  The local `VOTES`/`EXPECTED_VOTES` in your `.PAR` are **not read** by `scsd`.
-- A quorum *model* is present and does run: `scsd` folds each peer's
-  wire-advertised `VOTES` into a connection-manager quorum computation
-  (`src/vmsscs/scs_quorum.c`, `cm_quorum_note_peer_votes`) and logs
-  `SCSD-I-QUORUM ... quorum PRESENT/LOST`. But the gate result is **only
-  logged** — it is **never wired to suspend I/O or reconfigure** the cluster.
-  Quorum loss does not block anything.
+- OVMX always joins **non-voting**: the executive-resident connection manager
+  advertises `VOTES=0`, so OVMX can never affect a real VAX cluster's quorum.
+  Your `.PAR` `VOTES`/`EXPECTED_VOTES` are loaded into the executive at boot but
+  are not what OVMX advertises on the wire.
+- A quorum *model* runs in the executive
+  (`src/kernel-core/vms_cnxman_quorum.c`, `cnxman_quorum_recompute`): it computes
+  quorum from the votes it has actually learned and refuses a `VOTES=0` node from
+  *founding* a cluster. Within an OVMX↔OVMX cluster the executive acts on quorum
+  (`vms-b6d`). But do **not** rely on OVMX for quorum arbitration in a real VAX
+  cluster: OVMX joins non-voting, and real-VAX cluster participation is currently
+  gated by a join regression (`vms-d7e`). (The retired userspace `scsd` /
+  `src/vmsscs/scs_quorum.c` that formerly did this is gone — the model is now
+  executive-resident.)
 - `EXPECTED_VOTES` is an open reverse-engineering gap on the wire (held at 1 in
   every capture), so the model seeds each peer's `EXPECTED_VOTES` from its
   advertised `VOTES` rather than reconciling a real value.
@@ -204,8 +210,10 @@ members; the scope degrades to system-wide (`docs/compat/facilities/cluster-logi
 ### CLUSTER_AUTHORIZE is a lab-only stand-in
 
 `CLUSTER_AUTHORIZE` is a **minimal OVMX stand-in** (`src/libvms/include/cluster_authorize.h`):
-a tiny typed file holding a group number and a cleartext password, defaulting to
-the reference lab's **group 1** only. There is no real `CLUSTER_AUTHORIZE.DAT`
+a tiny typed file holding a group number and a cleartext password. The group is
+set at build time via the `CLUSTER_AUTH_GROUP` build-arg (default `0` stages no
+group; the reference lab builds with its own group, e.g. 257). There is no real
+`CLUSTER_AUTHORIZE.DAT`
 on-disk format, no credential hashing, and no wire authentication. Joining an
 **arbitrary** VMScluster (any group/password) is 1.0 work (`vms-732`, `vms-405`).
 

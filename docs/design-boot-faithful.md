@@ -37,9 +37,12 @@ From `docs/design-init-scope.md` §1, updated with the vms-718 outcome:
 - `tools/vms_sysgen.c` implements USE/SHOW/SET/WRITE against
   `/etc/ovmx/sysparams.dat` — a **Linux path**, not a file on the system disk
   named by a VMS filespec.
-- **No boot component reads it.** grep: the only consumer is `src/vmsscs/scsd.c`
-  (cluster daemon). SYSBOOT's defining job — configure the system from the
-  parameter file before anything runs — has no OVMX analogue.
+- **No boot component reads it.** grep (2026-08-07): the only consumer is
+  `src/vmsscs/scsd.c` (cluster daemon). SYSBOOT's defining job — configure the
+  system from the parameter file before anything runs — has no OVMX analogue.
+  **[Landed, `vms-46c`/`vms-b6a7`:** `SYS$SYSTEM:OVMXVMSSYS.PAR` lives on the
+  system disk (`distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/`) and PID 1's own
+  SYSBOOT role reads it directly (`src/ovmx_init/sysboot.c`, `ovmx_init.c`).]
 - `ovmx_init.c` hardcodes `sethostname("OVMX", 4)`; on VMS the node name is the
   `SCSNODE` **parameter** (§3.1 shows it live in SYSBOOT's own table).
 - The real file, measured (§3.4): `SYS$SYSROOT:[SYSEXE]ALPHAVMSSYS.PAR` — with
@@ -463,8 +466,9 @@ exact §2.5/Rule 10 defect this whole design record exists to kill.
    `SYS$SYSTEM:OVMXVMSSYS.PAR` (OVMX-labeled format), versioned by vmsfs like
    the oracle's `;2`/`;1`; SYSGEN's USE/WRITE CURRENT point there via
    filespec; STARTUP.EXE's SYSBOOT role loads it before the executive attaches;
-   `sethostname` comes from `SCSNODE`; `scsd` reads the same file. The Linux
-   path `/etc/ovmx/sysparams.dat` dies.
+   `sethostname` comes from `SCSNODE`. The Linux path `/etc/ovmx/sysparams.dat`
+   dies. **[Landed:** PID 1's own SYSBOOT role is the reader
+   (`src/ovmx_init/sysboot.c`/`ovmx_init.c`).]
 2. **Conversational boot.** A kernel-cmdline boot flag (the platform's R5)
    halts STARTUP.EXE at `SYSBOOT>` before the executive attaches:
    SHOW/SET/USE/CONTINUE against the parameter file, `SHOW /STARTUP`

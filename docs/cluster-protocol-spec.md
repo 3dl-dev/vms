@@ -2,6 +2,15 @@
 
 > Status: DRAFT, derived entirely from wire observation (vms-ci.2).
 > Companion dissector: `tools/cluster/dissect_sca.py`.
+>
+> **Implementation home (2026-09-17).** The wire-protocol findings below
+> (byte layouts, timing rules, the b2/b3/b4 response rule, the
+> REJECT_REQ/REJECT_RSP misattribution) are about the real VMS wire. OVMX's
+> own implementation of these findings lives in the executive-resident
+> cluster stack — `vms.ko`, `src/kernel-core/vms_cnxman*.c`,
+> `vms_cluster_codec_hello.c`, `vms_cluster_codec_dlm.c`. Where this doc names
+> a `src/vmsscs/`/`scsd.c` file for OVMX's side of a finding, ground the cited
+> bug or behavior against that kernel-core code before acting on it.
 
 ## 0. Clean-room provenance
 

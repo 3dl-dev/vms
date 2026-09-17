@@ -92,7 +92,7 @@
 /* ---- Brand identity (human surfaces, INV-0) ---------------------- */
 
 #define OVMX_PRODUCT_NAME       "OpenVMX"
-#define OVMX_PRODUCT_VERSION    "V0.6-16"
+#define OVMX_PRODUCT_VERSION    "V0.7"
 
 /*
  * Cluster software-version identity -- the string OVMX presents AS A CLUSTER
@@ -120,7 +120,7 @@
  * field into struct vms_cluster.params (kernel-core cannot include this
  * userland header, and must never hold a version literal of its own).
  */
-#define OVMX_CLUSTER_SW_VERSION "VMX V0.6"
+#define OVMX_CLUSTER_SW_VERSION "VMX V0.7"
 
 /* The wire field's fixed width (VMS_SCS_START_SWVER_LEN in the executive's own
  * vms_cluster_codec_vc.h). Blank-padding a shorter token to it is the

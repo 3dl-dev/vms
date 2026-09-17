@@ -985,6 +985,92 @@ static void t_e65_refusal_and_teardown_words(void)
 	}
 }
 
+/* ------------------------------------------------------------------ *
+ * vms-d7e -- the REJECT_RESPONSE names the connection it is answering
+ *
+ * The regression this pins: a booted OVMX node's op-5 went out with
+ * SCS$L_DST_CONID == 0, so the peer's port driver held a control message it
+ * could not match to a connection, complained
+ * `%PEA0, Inappropriate SCA Control Message` and -- the DOCUMENTED effect of
+ * that message, `HELP/MESSAGE "Inappropriate SCA Control"` -- closed the
+ * port-to-port virtual circuit ~2 s later. Post-admission that VC close takes
+ * an ADMITTED member's connection with it, and the peer's connection manager
+ * bugchecks CNXMGRERR.
+ *
+ * The envelope these rungs assert is MEASURED, not chosen: across the
+ * 48-capture reference corpus every REJECT_REQUEST carries a nonzero
+ * SCS$L_SRC_CONID (852/852) and every pairable REJECT_RESPONSE addresses
+ * exactly that value (698/698, zero residuals). `0x9e8f000c` below is the
+ * handle VAX1 really put on the wire in the vms-d7e crash capture.
+ * ------------------------------------------------------------------ */
+static void t_d7e_reject_response_is_addressed(void)
+{
+	struct vms_scs_ctrl_frame c;
+	vms_conid_t a_conid = 0u;
+	const vms_conid_t peer_handle = 0x9e8f000cu;
+
+	printf("-- vms-d7e: op 5 REJECT_RSP addresses the rejecter's own "
+	       "Con.ID, read off the op 4 that stated it\n");
+
+	/* Rung 1 -- [CONNECT_SENT] the peer refuses and names its handle. */
+	rig(SCS_CONNECT_DEFER);
+	a_node.drop_tx = 1;
+	b_node.drop_tx = 1;
+	(void)scsh_open_pair(&a_node, &b_node, 6u, &a_conid);
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, a_conid,
+			 peer_handle, 0u, NULL, NULL);
+	if (e65_wire(&a_node, SCS_MTYPE_REJ_RSP, &c, "op 5 is on the wire")) {
+		ct_check_eq_u32(c.conid_remote, peer_handle,
+				"SCS$L_DST_CONID == the handle the REJECT "
+				"named (698/698 corpus rule), not 0");
+		ct_check_eq_u32(c.conid_local, a_conid,
+				"SCS$L_SRC_CONID is still our own CDT");
+	}
+	ct_check(scsh_cdt(&a_node, a_conid) == (struct scs_cdt *)0,
+		 "...and the connection still closes");
+
+	/* Rung 2 -- the HONEST OMISSION control. A refusal that names no
+	 * handle teaches nothing, so nothing is invented: abs 64 stays 0. The
+	 * corpus has never shown this frame; the rung exists so the learner
+	 * cannot quietly start manufacturing an identifier. */
+	rig(SCS_CONNECT_DEFER);
+	a_node.drop_tx = 1;
+	b_node.drop_tx = 1;
+	a_conid = 0u;
+	(void)scsh_open_pair(&a_node, &b_node, 6u, &a_conid);
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, a_conid,
+			 0u, 0u, NULL, NULL);
+	if (e65_wire(&a_node, SCS_MTYPE_REJ_RSP, &c,
+		     "op 5 still goes out")) {
+		ct_check_eq_u32(c.conid_remote, 0u,
+				"a refusal that named nobody is answered with "
+				"an honest zero, never a fabricated handle");
+	}
+
+	/* Rung 3 -- [ACCEPT_RCVD] the accept already bound the pair; the
+	 * learner must not let a later frame re-point it. (This is the second
+	 * and only other state whose row routes op 4 to this handler.) */
+	rig(SCS_CONNECT_DEFER);
+	a_node.drop_tx = 1;
+	b_node.drop_tx = 1;
+	a_conid = 0u;
+	(void)scsh_open_pair(&a_node, &b_node, 6u, &a_conid);
+	a_node.fail_ctrl = 1;    /* the op-3 confirm will not go out */
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_ACCP_REQ, a_conid,
+			 0x8fd20001u, 8u, scsh_name_b, scsh_name_a);
+	a_node.fail_ctrl = 0;
+	ct_check_eq_u32((unsigned long)scsh_state(&a_node, a_conid),
+			VMS_SCS_CDT_ACCEPT_RCVD, "A is in ACCEPT_RCVD");
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, a_conid,
+			 peer_handle, 0u, NULL, NULL);
+	if (e65_wire(&a_node, SCS_MTYPE_REJ_RSP, &c,
+		     "op 5 answers from ACCEPT_RCVD")) {
+		ct_check_eq_u32(c.conid_remote, 0x8fd20001u,
+				"the handle the ACCEPT bound wins; a later "
+				"frame does not re-point the connection");
+	}
+}
+
 int main(void)
 {
 	t_conid_allocator();
@@ -1006,5 +1092,6 @@ int main(void)
 	t_e65_acceptor_words();
 	t_e80_accept_conndata();
 	t_e65_refusal_and_teardown_words();
+	t_d7e_reject_response_is_addressed();
 	return ct_summary("test_scs_fsm");
 }

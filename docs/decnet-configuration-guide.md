@@ -31,10 +31,13 @@ socket library. Three pieces matter to an operator:
 
 - **NETACP** is a privileged `RUN/DETACHED` process that owns the DECnet device
   face (`_NET:`, layered over the same NIC `ETH0:` rides) and the Session
-  Control **object-dispatch table** — analogous to how `scsd` owns the cluster's
-  SCS surface. NETACP's own control path never parses attacker-controlled wire
-  bytes: a low-privilege engine decodes the wire and hands NETACP only a
-  validated, typed connection descriptor (`decnet$wire-isolation`, implemented).
+  Control **object-dispatch table**. It is a deliberately userspace engine —
+  DECnet has no DLM survival/timing need, unlike the cluster stack, which is
+  executive-resident (`vms.ko`) since the 2026-09-02 cluster reset retired its
+  old userspace daemon; the two diverge on purpose (`docs/design-decnet-ovmx.md`
+  §2). NETACP's own control path never parses attacker-controlled wire bytes: a
+  low-privilege engine decodes the wire and hands NETACP only a validated,
+  typed connection descriptor (`decnet$wire-isolation`, implemented).
 - **The wire engine** is a userspace Phase IV implementation — datalink, NSP
   logical links, and routing/HELLO adjacency — over `AF_PACKET SOCK_RAW`
   (ethertype `0x6003`), hidden entirely behind the executive device face. This

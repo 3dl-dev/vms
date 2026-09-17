@@ -168,26 +168,40 @@ master via `GET_RESMASTER` before it can send an ENQ to the right node.
 When a member LEAVES the cluster, the directory vector shrinks and every name
 re-hashes over the survivors, so a resource whose directory (or master) resolved
 to the departed node must re-resolve. In OVMX the **graceful-departure directory
-re-resolution** is the departure INGRESS, and it rides **NO new wire op**: scsd,
-observing the connection manager's own graceful class-0x04 self-departure
-(`SCS_MEMBER_OP_DEPART`) on the VC, issues the **LOCAL** ioctl
-`VMS_IOCTL_DLM_MEMBER_DEPART` to its own executive with the departed CSID. The
-executive marks that CSID gone from the LIVE directory membership (the static
-`dlm_member_csids` vector is not mutated — a runtime departed-set filters it) and
-invalidates cached `res->dir_csid`, so `dlm_directory_csid` re-resolves over the
-survivors on next use and a departed master's resources re-master to a survivor.
-This is the DIRECTORY re-resolution only; the cross-node **lock-STATE rebuild** —
+re-resolution** is the departure INGRESS, and it rides **NO new wire op**.
+**[Updated 2026-09-17 — post the 2026-09-02 cluster reset]** This used to be
+scsd, observing the connection manager's own graceful class-0x04 self-departure
+(`SCS_MEMBER_OP_DEPART`) over a POSIX ioctl; the userspace `scsd`/`src/vmsscs/`
+daemon that did this was deleted in the reset (FC-P3.9) and the connection
+manager itself is now executive-resident (`vms_cnxman.c`), so the departure
+sweep fires internally — the kernel-core door onto it is
+`VMS_IOCTL_DLM_MEMBER_DEPART` (`src/kernel-core/vms_dlm_master.h:257`),
+still routed with the departed CSID. The executive marks that CSID gone from
+the LIVE directory membership (the static `dlm_member_csids` vector is not
+mutated — a runtime departed-set filters it) and invalidates cached
+`res->dir_csid`, so `dlm_directory_csid` re-resolves over the survivors on
+next use and a departed master's resources re-master to a survivor. This is
+the DIRECTORY re-resolution only; the cross-node **lock-STATE rebuild** —
 COLLECTing survivors' origin records and reconstructing `res->granted`, which IS a
-new SCS message class — is the **H10b** rung (`vms-dca9`). Proven on the 3-node
-`tests/qemu/run_dlm_harness_h10.sh` live harness (real `/dev/vms` on all three).
+new SCS message class — is the **H10b** rung (`vms-dca9`). **This was proven pre-reset
+on a 3-node harness, `tests/qemu/run_dlm_harness_h10.sh` — deleted along with
+`scsd` in the 2026-09-02 reset; #1052 downgraded the four `cluster-dlm` rows
+this backed, and re-establishing a live executive-resident multi-node DLM
+proof is open work (`vms-1ee`), not something currently in the tree.**
 
 ---
 
 ## 4. Cross-node message flow — [DOCUMENTED] semantics, [OBSERVED/RE] bytes
 
 The four cross-node DLM message kinds and their direction — OVMX's
-`VMS_DLM_OP_*` (`src/kernel-netbsd/vms_lock_nb.h`), which `scsd.c` static-asserts
-equal to `scs_dlm.h`'s `SCS_DLM_OP_*`:
+`VMS_DLM_OP_*`, mirrored in `src/kernel-netbsd/vms_lock_nb.h` and
+`src/kernel/vms_ioctl.h` (`_Static_assert`s pin the two encodings equal, the
+#928 twin trap). **[Corrected 2026-09-17]** The doubled-up wire-op enum this
+paragraph used to describe (`scsd.c` static-asserting against
+`src/vmsscs/scs_dlm.h`) no longer exists — both files were deleted with the
+userspace `scsd` daemon in the 2026-09-02 cluster reset. The op codec now
+lives in one place, `src/kernel-core/vms_cluster_codec_dlm.{c,h}` (FC-P4.5,
+typed GROUNDED/OBSERVED codec entries, not a raw enum mirror):
 
 | OVMX op | value | direction | `$ENQ`/`$DEQ` correspondence [DOCUMENTED] |
 |---|---|---|---|
@@ -224,7 +238,19 @@ and §6 for the emulator constraint on observing the real one.
 
 ---
 
-## 5. [code] How OVMX encodes it today — what observation must corroborate
+## 5. [code] How OVMX encoded it pre-reset — what observation must corroborate
+
+> **⚠ Historical implementation citation.** `src/vmsscs/scs_dlm.c` was deleted
+> with the userspace `scsd` daemon in the 2026-09-02 cluster reset; the DLM
+> wire codec is now `src/kernel-core/vms_cluster_codec_dlm.{c,h}`
+> (FC-P4.5), a typed GROUNDED/OBSERVED codec rather than the raw
+> clean-room-replay build described below, and it records its own supersession
+> finding (vms-c03: the "completion 0x04 + commit 0x03" pair this section's
+> era believed in was a phantom — 0x03 is `$DEQ`, 0x04 is BLKAST, 0x06 carries
+> the value block). The [DOCUMENTED]/[OBSERVED] **semantics** below (§§1-4)
+> are unaffected by the reset; only this section's file/function names and its
+> specific byte-offset claims are pre-reset and need re-grounding against the
+> current codec before being cited as current.
 
 `src/vmsscs/scs_dlm.c` builds the DLM datagram as a **clean-room replay** of an
 [OBSERVED] NISCA sequenced-message frame: the fields OVMX understands (destination
@@ -327,7 +353,9 @@ honest `SS$_UNSUPPORTED` (INV-6) stays until rung 2 wires the real lock manager.
   `$GETLKI`); `$LCKDEF`; *OpenVMS Cluster Systems*; *OpenVMS Internals and Data
   Structures Manual* (SCS + lock-manager chapters).
 - **[code]** `src/kernel-core/vms_lock.c`, `src/kernel-netbsd/vms_lock_nb.h`,
-  `src/vmsscs/scs_dlm.c` (OVMX DLM-over-SCS transport + dispatch).
+  `src/kernel-core/vms_cluster_codec_dlm.{c,h}` (OVMX DLM-over-SCS codec,
+  executive-resident post the 2026-09-02 cluster reset — supersedes
+  `src/vmsscs/scs_dlm.c`, deleted with the userspace `scsd` daemon).
 
 _Clean-room (Rule 8): observation + public documentation only. No VSI/HPE source
 or binary was disassembled, decompiled, or copied._

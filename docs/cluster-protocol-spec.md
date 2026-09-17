@@ -2,6 +2,19 @@
 
 > Status: DRAFT, derived entirely from wire observation (vms-ci.2).
 > Companion dissector: `tools/cluster/dissect_sca.py`.
+>
+> **Historical implementation citations (2026-09-17).** The wire-protocol
+> **findings** below (byte layouts, timing rules, the b2/b3/b4 response rule,
+> the REJECT_REQ/REJECT_RSP misattribution) are about the real VMS wire and
+> stay current. But this doc also cites `src/vmsscs/` (`scsd.c`, `scs_hello.c`,
+> `scs_dir.c`, `scs_env.h`) as OVMX's *implementation* of those findings in
+> several places — that daemon was deleted with `src/vmsscs/` in the
+> 2026-09-02 cluster reset, and the cluster stack is now executive-resident
+> (`vms.ko`, `src/kernel-core/vms_cnxman*.c`, `vms_cluster_codec_hello.c`,
+> `vms_cluster_codec_dlm.c`, …). Read any present-tense `scsd`/`src/vmsscs/`
+> reference below as "OVMX's implementation at capture time," not current
+> code, and re-derive whether the cited bug/behavior still applies from the
+> kernel-core equivalent before acting on it.
 
 ## 0. Clean-room provenance
 

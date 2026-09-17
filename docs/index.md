@@ -12,7 +12,7 @@ compatibility data) that is characterized, not enumerated.
 - [Building](building.md) — all build modes, CMake options, kernel modules
 - [Cluster Configuration Guide](cluster-configuration-guide.md) — stand up a 2-node cluster via the pre-seeded `OVMXVMSSYS.PAR` (VMS-way SYSGEN/AUTOGEN authoring is post-0.6)
 - [TCP/IP Configuration Guide](tcpip-configuration-guide.md) — the `TCPIP$CONFIG` plane, `TCPIP$` logicals, interfaces
-- [Multi-Architecture Guide](building-multiarch.md) — x86_64, Alpha (LP64), VAX, and aarch64 targets
+- [Multi-Architecture Guide](building-multiarch.md) — Alpha (LP64) and VAX cross-build/boot targets (x86_64 is the primary path, covered by [Building](building.md)/[Getting Started](getting-started.md); aarch64 has a CI system-emulation boot-proof lane only, no user-facing build doc)
 - [DCL Command Reference](dcl-commands.md) — the built-in verb set (`src/vmsdcl/dcl_builtin.c`)
 - [Adding an OVMX Kernel Module](adding-an-ovmx-kernel-module.md) — extending `vms.ko`
 

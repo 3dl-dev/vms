@@ -43,11 +43,12 @@ independent NIC efforts**:
    virtio-net enabled in the `3dl-dev/qemu-wasm` fork and a net backend that bridges the guest NIC frames out to the
    parent-page switch via postMessage (the frame crosses worker→iframe→parent). Comparable in size to the DELQA epic.
 
-**Also unverified (de-risk spike, own item):** that the in-browser OVMX images actually run the SCS/cluster stack
-to a join. Node A likely does (shipped distro auto-starts SCS — vms-5ad, the `labjoin_booted.sh` gate). OVMX/VAX
-(NetBSD substrate) SCS-in-browser is unconfirmed. **Spike this before committing to Node B.** If Node B can't
-cluster in-browser, the honest fallback is a **2-real + 1-OVMX** or **1-real + 1-OVMX/x86** cluster — still a real
-heterogeneous cluster, still the headline; conductor/Baron decide scope if the spike reds.
+**SCS-stack-present: RESOLVED by the reconciliation spike (§11).** Both OVMX images carry a real, loaded executive
+*with the full cluster stack present and startable*: Node A's Linux `vms.ko`, and — confirmed by mounting the shipped
+`ovmx-vax-v0.6-14.img` — Node B's NetBSD-VAX `vms.kmod` (real CNXMAN: barrier/quorum/LOCKDIRWT/SCS$DIRECTORY), with
+`sbin/init` doing conditional cluster-start gated on `VAXCLUSTER`. So the remaining work on **both** nodes is the
+**NIC + starting/joining SCS over the switch**, not any executive gap. No fallback descope is forced by an executive
+limitation.
 
 ## 4. The transport: shared virtual L2 = the parent page as an in-browser switch (postMessage)
 
@@ -86,20 +87,36 @@ the virtual Ethernet switch**, brokering frames between the iframes with `postMe
 
 ## 5. Cluster config + genesis order
 
-Each node gets, injected by the generator (§6) before boot:
+Grounded in the lab's proven mechanism (labjoin, `mk_sysgen.py`, `mk_cluster_authorize`). Each OVMX node needs **two
+offline config artifacts**, both writable by existing tools — **no interactive SYSBOOT** (the lab drives SYSBOOT> only
+to avoid mutating a shared golden image; a per-node baked image uses the offline path):
 
-- Distinct **SCSNODE** (≤6 chars, e.g. `OVMXA`,`OVMXB`,`VAXC`) + distinct **SCSSYSTEMID**.
-- Shared **CLUSTER_AUTHORIZE**: same cluster **group number + password** (the group-N/password the lab used).
-- **VOTES=1** each; **EXPECTED_VOTES** tuned for genesis (below).
-- LAVC enable: OVMX ≈ its SCS auto-start; real VMS 5.5 = `NISCS_LOAD_PEA0=1`, `VAXCLUSTER=2` (PEDRIVER/PEA0 on 0x6007).
-- Same ethertype 0x6007, same padded/ALLOCLASS conventions as the lab.
+- **`OVMXVMSSYS.PAR`** — the SYSGEN param store (`SYSG` v2, 9484 B, `sysgen_params.h`), holding **SCSNODE** (≤6 chars,
+  unique), **SCSSYSTEMID** (unique), **VAXCLUSTER=2**, **VOTES**, **EXPECTED_VOTES**. Written offline by
+  `tests/lab/tools/mk_sysgen.py` from a **complete join-proven template** (⚠ the *shipped seed* omits many params →
+  they read 0, bug "E61"; the generator must author a full store, not patch the seed). Read at boot by
+  `ovmx_init.c load_cluster_sysgen_params()`. Lives at `distro/rootfs/.../SYSEXE/OVMXVMSSYS.PAR` → ODS-2 volume.
+- **`CLUSTER_AUTHORIZE.DAT`** — the cluster group+password (`CAUT` record, `cluster_authorize.h`). Written offline by
+  `tools/cluster/mk_cluster_authorize` (or `CLUSTER_AUTH_GROUP/PASSWORD` build-args). Lives at
+  `/etc/ovmx/cluster_authorize.dat` in the **initramfs**. **Bake GROUP = 257** (0x0101 — the lab cluster's group; it
+  *is* the last two bytes of the SCA HELLO multicast MAC `ab:00:04:01:01:01`, so it must match byte-exact). Password:
+  **irrelevant on the OVMX side at this edition** (stored plaintext, never put on the wire) — leave empty for Node A.
+- **`VAXCLUSTER=2` auto-starts** PEA0:/PEDRIVER/SCS/connection-manager on OVMX — **no `NISCS_LOAD_PEA0` analog needed**.
+  (Real VMS Node C *does* need `NISCS_LOAD_PEA0=1` + `VAXCLUSTER=2` + a matching group **and the real password**, which
+  is an operator fact not in the repo — see §11 / Node-C notes.)
+- **Identity uniqueness is load-bearing:** a colliding SCSNODE/SCSSYSTEMID makes the peer's poller refuse the join
+  silently (`%PEA0, Remote System Conflicts with Known System`) — use `mk_sysgen.py --alloc`.
 
-**Genesis order (deterministic, faithful to "OVMX joins a real VAX cluster"):**
+**Genesis order (deterministic; 3-node target, delivered in two milestones — see §11):**
 1. **Node C (real VMS)** boots as genesis — `VOTES=1 EXPECTED_VOTES=1` → forms a 1-node cluster (quorum=1). CN=1.
-2. **Node A (OVMX/x86)** boots (`EXPECTED_VOTES=3`), joins over the relay → CN=2 (cluster raises EV, quorum=2, held).
-3. **Node B (OVMX/VAX)** boots, joins → **CN=3**, quorum=2 held.
+2. **Node A (OVMX/x86)** boots (`EXPECTED_VOTES=2..3`), joins over the switch → **CN=2** (cluster raises EV; OVMX
+   tracks quorum but does not enforce it at this edition — real VMS Node C does). *(2-node milestone: vms-1c3.)*
+3. **Node B (OVMX/VAX)** boots (`EXPECTED_VOTES=3`), joins → **CN=3**. Node B's executive + cluster stack already
+   ship (§11); it rides the same DELQA NIC as Node C and the same arch-agnostic config injection as Node A, gated
+   only on an SCS-on-VAX-in-browser start+join spike.
 
-The visitor **watches CN grow 1→2→3 live** (more compelling than a pre-baked number).
+The visitor **watches CN grow live** (1→2, then →3) — `SHOW CLUSTER` reading the real membership block, never a
+scripted number.
 
 **Boot-strategy consequence:** the x86 demo's single-node snapshot-resume (`loadvm ovmx`) **cannot** be reused as-is
 for clustering — live SCS/VC connection state can't be frozen/restored per-node independently of its peers. The
@@ -192,6 +209,41 @@ The relay + wire contract is the **first** thing to build (unblocks both lanes).
 
 ## 10. Honest-scope copy (INV-0, conductor gates before ship)
 
-The page states plainly: real executives on all three nodes; real OpenVMS on Node C; live cluster formation over a
-WebSocket-bridged virtual Ethernet (the emulators' NICs, real 0x6007 SCA frames); what is emulation vs. real
-hardware; and — until Node B's SCS-in-browser spike is green — the true node count shown. No overstatement.
+The page states plainly: real executives on every node shown; real OpenVMS on Node C; live cluster formation over an
+in-page virtual Ethernet switch (the emulators' NICs, real 0x6007 SCA frames, postMessage transport); and what is
+emulation vs. real hardware. No overstatement.
+
+**The join is proven LIVE on the page, not claimed as pre-baked.** The OVMX/x86 ↔ real-VMS cluster join is lab-proven,
+but the register flags real-VAX-join as not-yet-CI-gated (the E31 conn-data / "a real VAX must not REJECT" caveat), so
+the browser-transport join is a genuine **re-proof** that lands at the integration milestone (§9 vms-1c3). The page
+must show `SHOW CLUSTER` reading the real membership block live — never a scripted CN number. This is the
+never-crash-a-peer + real-executive discipline applied to the demo's headline (Node C is real VMS).
+
+## 11. Node-B feasibility — RECONCILED: KEEP (executive present; blocked on the NIC, not the kernel)
+
+**Correction.** An early spike concluded OVMX-on-VAX was "unbuilt on the VAX runtime / no running executive" — that was
+**stale/wrong**: it read rd item premises and pre-capstone design docs instead of ground truth. A reconciliation spike
+(prompted by Baron's correction that the site *already* runs OVMX/VAX) **mounted the actual shipped `ovmx-vax-v0.6-14.img`**
+and found:
+
+- A loaded `/dev/vms` executive (custom modular NetBSD kernel; `crw-rw-rw- 110,0 dev/vms`).
+- A **real** `vms.kmod` (333 KB) with the full CNXMAN connection manager — barrier step/release, quorum, LOCKDIRWT,
+  `SCS$DIRECTORY`, `VMS$VAXcluster` frames, "joins a cluster rather than forming one". Not a stub.
+- `sbin/init` = the OVMX PID1 executive-init, with **conditional cluster-start gated on `VAXCLUSTER`**
+  ("CLUSTER_START returned… PEA0: is not up", "waiting to form or join").
+- Both prerequisites are **DONE (with SHAs) and ship in the image**: `vms-f78bb` (`/dev/vms` live on NetBSD-VAX) and
+  `vms-d59` (boot-to-DCL-on-VAX capstone). The earlier "unmet" reading was frozen-conclusion drift.
+
+**So Node B is blocked on the NIC, not the kernel.** The real gap:
+1. **PCjs KA655 has no Ethernet device** → PEDRIVER/PEA0 can't come up. This is the DELQA NIC = epic `pcjsvax-d1bf`,
+   **already the assigned pcjs lane**, and it serves **both** Node B and Node C (same emulator). *Not* Node-B-extra.
+   (The NetBSD guest kernel already has the `qe(4)` DELQA driver compiled in — only the emulator device is missing.)
+2. **SCS-on-VAX-in-browser start+join spike** — inject cluster config (`VAXCLUSTER=2` + `SCSNODE` + group 257; the §5
+   injection is arch-agnostic and covers the VAX node) and prove SCS/PEDRIVER actually starts on the VAX substrate and
+   joins over the switch. A cheap spike, gated only on the NIC existing.
+
+**Recommendation: KEEP Node B — 3-node is achievable with no kernel bring-up.** Marginal cost over a 2-node (A+C) demo
+is ~zero on the NIC (needed for C anyway) + config (the §5 tooling) + one SCS-on-VAX spike. **Delivery in two milestones:**
+first the **2-node** integration (A↔C join, vms-1c3) once the DELQA NIC + Node-A qemu-wasm NIC land; then **Node B as the
+3rd** reusing the same NIC + config + the SCS-on-VAX spike → CN=3. This is the close-don't-descope outcome Baron wanted,
+far cheaper than either a descope or a kernel effort. (Node-count remains Baron's product-scope call; this recommends KEEP.)

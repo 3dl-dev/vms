@@ -1,0 +1,10 @@
+{
+  "name": "ovmx-cluster-web-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "In-browser L2 switch (virtual Ethernet hub) for the OVMX 3-node cluster web demo. See CONTRACT.md.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

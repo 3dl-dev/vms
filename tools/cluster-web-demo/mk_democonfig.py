@@ -180,13 +180,57 @@ REQUIRED_LOADER_PARAMS = [
     "NISCS_MAX_PKTSZ", "MSCP_LOAD", "MSCP_SERVE_ALL",
 ]
 
-# Built-in default demo roster entry: the demo's Node A (OVMX/x86_64).
-# SCSSYSTEMID 1987 avoids ids used in tests/lab captures (1025/1026 = the VAX
-# lab nodes, 1986 = OVMXJ1). VOTES=1, EXPECTED_VOTES=2, group 257.
+# Built-in default demo roster entries -- the SINGLE SOURCE of the three demo
+# node identities (rd vms-735/vms-4a5/vms-f0f). The page, the generator and
+# every injector consume these constants; do not hardcode SCSNODE/SCSSYSTEMID
+# anywhere else (single-ledger).
+#
+# SCSSYSTEMID values avoid ids used in tests/lab captures (1025/1026 = the VAX
+# lab nodes, 1986 = OVMXJ1). All three share GROUP 257 (the lab cluster group,
+# = the last two bytes of the SCA HELLO multicast MAC ab:00:04:01:01:01).
+#
+# Node A (OVMX/x86_64, qemu-wasm) -- LIVE today (vms-b16/vms-f0f proven e2e).
+# expected_votes=2 was authored for the proven 2-node milestone (A+C) and is
+# INTENTIONALLY not yet 3; reconciling all three EXPECTED_VOTES to the full
+# 3-node target is genesis-wiring work for whoever lands vms-1c3, not a change
+# to make silently against an already-proven config.
 DEMO_NODE_A = {
     "name": "OVMXA", "id": 1987, "votes": 1, "expected_votes": 2,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
 }
+
+# Node B (OVMX/VAX, pcjs KA655/NetBSD-VAX substrate) -- STAGED. Blocked on the
+# Node-B SCS-on-VAX-in-browser join proof (rd vms-613, a separate lane); the
+# demo page only materialises this node's iframe when given ?nodeB=. Config
+# injection is the SAME arch-agnostic mechanism as Node A (mk_democonfig +
+# inject-cluster-config.sh/inject-ods2-config.sh) -- no VAX-specific path.
+# expected_votes=3 is the full 3-node target (B is the last node to join in
+# the design's genesis order, so it always sees the final roster size).
+DEMO_NODE_B = {
+    "name": "OVMXB", "id": 1988, "votes": 1, "expected_votes": 3,
+    "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
+}
+
+# Node C (real OpenVMS 5.5-2H4 VAX, pcjs KA655) -- STAGED, and NOT authored by
+# this tool's byte-writers at this edition: it is a PINNED, pre-configured,
+# operator-maintained cluster volume (the real cluster password is an
+# operator fact never committed to this repo, per docs/design/cluster-web-
+# demo.md §5/§11). This entry exists so the identity (SCSNODE=VAXC,
+# SCSSYSTEMID=1989, group 257) is declared in the ONE SSOT rather than
+# hardcoded into the page/generator -- the roster driver can still validate
+# it for uniqueness against A/B even though the real VMS volume's own SYSGEN
+# is set by hand, once, outside this pipeline. votes=1, expected_votes=1
+# reflects Node C's role as cluster GENESIS (it forms the 1-node cluster
+# first; CN grows as A then B join) -- not the final 3-node target.
+DEMO_NODE_C = {
+    "name": "VAXC", "id": 1989, "votes": 1, "expected_votes": 1,
+    "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
+}
+
+# The full 3-node target roster, in genesis join order (C forms, A joins, B
+# joins) -- the single place the demo page/generator should import from for
+# "all three nodes" rather than assembling their own list.
+DEMO_ROSTER = [DEMO_NODE_C, DEMO_NODE_A, DEMO_NODE_B]
 
 
 # ---------------------------------------------------------------------------
@@ -456,9 +500,14 @@ def _cmd_roster(args):
     if args.roster:
         with open(args.roster) as fp:
             nodes = json.load(fp)
+    elif args.demo_roster:
+        nodes = DEMO_ROSTER
+        print("mk_democonfig: --demo-roster given; using the built-in 3-node "
+              "demo roster (OVMXA/OVMXB/VAXC)")
     else:
         nodes = [DEMO_NODE_A]
-        print("mk_democonfig: no --roster given; using the built-in demo Node A")
+        print("mk_democonfig: no --roster/--demo-roster given; using the "
+              "built-in demo Node A only")
     written = emit_roster(nodes, args.out_dir, caut_writer=args.writer)
     for w in written:
         print("  %-8s id=%-6d %s (caut writer=%s)"
@@ -492,6 +541,10 @@ def main(argv=None):
     p.add_argument("--roster", help="JSON list of {name,id,votes,expected_votes,"
                                      "alloclass,vaxcluster,group,password}; "
                                      "default = built-in demo Node A")
+    p.add_argument("--demo-roster", action="store_true",
+                    help="use the built-in 3-node demo roster (DEMO_ROSTER: "
+                         "OVMXA/OVMXB/VAXC) instead of Node A alone; ignored "
+                         "if --roster is also given")
     p.add_argument("--writer", choices=["auto", "c", "py"], default="auto")
     p.set_defaults(func=_cmd_roster)
 

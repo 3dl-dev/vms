@@ -211,6 +211,22 @@ done
 [ -d "$SITE_DIR/demo/cluster/lib" ] && cp -r "$SITE_DIR/demo/cluster/lib" "$BUNDLE/lib"
 mkdir -p "$BUNDLE/boot"
 cp -r "$BOOT_DIR"/. "$BUNDLE/boot/"
+# rd vms-a4f: node.html hard-depends on boot/assets/{xterm.js,xterm.css,xterm-pty.js}
+# (xterm.js is a <script src> load, xterm.css a <link>, xterm-pty.js an importScripts()
+# in node-worker.js) -- WITHOUT them the guest still boots but the page throws
+# "Terminal is not defined" and Node A never renders/attaches, so the demo silently
+# never boots. The recursive copy above already includes boot/assets/ whenever
+# $BOOT_DIR carries it, but a caller-supplied --boot-dir (or a future change to the
+# source boot/ tree) could silently drop it -- so verify the bundle actually got
+# them and FAIL LOUDLY rather than ship a Terminal-less Node A.
+for asset in xterm.js xterm.css xterm-pty.js; do
+    [ -f "$BUNDLE/boot/assets/$asset" ] || {
+        echo "$PROG: FATAL -- $BUNDLE/boot/assets/$asset missing after staging" >&2
+        echo "  (rd vms-a4f: node.html needs boot/assets/{xterm.js,xterm.css,xterm-pty.js};" >&2
+        echo "  --boot-dir was: $BOOT_DIR -- check it carries an assets/ subdir)" >&2
+        exit 1
+    }
+done
 # demo/cluster/index.html links the site's SHARED chrome stylesheet at the
 # domain-root-absolute path /assets/site.css (index.html and every sub-page
 # read the SAME file -- no second hand-maintained copy of the design system,

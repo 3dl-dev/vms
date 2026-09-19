@@ -46,15 +46,16 @@ mkdir -p "$WORK/initramfs-root/etc/ovmx"
 ( cd "$WORK/initramfs-root" && find . | cpio -o -H newc --quiet | gzip -n ) > "$WORK/stock-initramfs.cpio.gz"
 echo "not a real kernel -- generator orchestration fixture only" > "$WORK/stock-vmlinuz"
 
-echo "3. fabricating a minimal site-dir stand-in (demo/cluster/{page files,boot/})"
+echo "3. fabricating a minimal site-dir stand-in (demo/cluster/{page files,boot/}, assets/site.css)"
 SITE="$WORK/site"
-mkdir -p "$SITE/demo/cluster/lib" "$SITE/demo/cluster/boot"
+mkdir -p "$SITE/demo/cluster/lib" "$SITE/demo/cluster/boot" "$SITE/assets"
 for f in index.html node.html node-pcjs.html node-worker.js coi-serviceworker.js; do
     echo "<!-- fixture $f -->" > "$SITE/demo/cluster/$f"
 done
 echo "// fixture hub.mjs" > "$SITE/demo/cluster/lib/hub.mjs"
 echo "fixture-wasm-bytes" > "$SITE/demo/cluster/boot/qemu-system-x86_64.wasm"
 echo "// fixture out.js" > "$SITE/demo/cluster/boot/out.js"
+echo "/* fixture shared site.css */" > "$SITE/assets/site.css"
 
 echo "4. running build-cluster-demo (run 1)"
 OUT1="$WORK/out1"
@@ -72,6 +73,7 @@ BUNDLE1="$OUT1/V9.9-test"
 [ -f "$BUNDLE1/initramfs-ovmx-nodeA.cpio.gz" ] || { echo "FAIL: no injected initramfs in bundle"; exit 1; }
 [ -f "$BUNDLE1/sysdisk-nodeA.qcow2.gz" ] || { echo "FAIL: no injected sysdisk in bundle"; exit 1; }
 [ -f "$BUNDLE1/index.html" ] || { echo "FAIL: page not staged into bundle"; exit 1; }
+[ -f "$BUNDLE1/assets/site.css" ] || { echo "FAIL: shared site.css not staged into bundle"; exit 1; }
 [ -d "$BUNDLE1/nodeB" ] && { echo "FAIL: Node B directory present without --vax-image (must stay staged/absent)"; exit 1; }
 [ -d "$BUNDLE1/nodeC" ] && { echo "FAIL: Node C directory present without --vms-image (must stay staged/absent)"; exit 1; }
 

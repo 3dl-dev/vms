@@ -211,6 +211,17 @@ done
 [ -d "$SITE_DIR/demo/cluster/lib" ] && cp -r "$SITE_DIR/demo/cluster/lib" "$BUNDLE/lib"
 mkdir -p "$BUNDLE/boot"
 cp -r "$BOOT_DIR"/. "$BUNDLE/boot/"
+# demo/cluster/index.html links the site's SHARED chrome stylesheet at the
+# domain-root-absolute path /assets/site.css (index.html and every sub-page
+# read the SAME file -- no second hand-maintained copy of the design system,
+# single-ledger). Stage a build-time copy into the bundle too, so a
+# self-contained per-tag bundle (SS6, "self-contained... served exactly like
+# openvmx-site today") still renders correctly if ever deployed as its OWN
+# origin rather than as a subdirectory of the shared site.
+if [ -f "$SITE_DIR/assets/site.css" ]; then
+    mkdir -p "$BUNDLE/assets"
+    cp "$SITE_DIR/assets/site.css" "$BUNDLE/assets/site.css"
+fi
 
 # --- (6) manifest -- the reproducibility record --------------------------------
 # The hash listing is written OUTSIDE $BUNDLE (a sibling tempfile) -- writing it

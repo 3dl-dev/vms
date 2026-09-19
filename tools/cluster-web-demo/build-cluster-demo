@@ -1,0 +1,264 @@
+#!/bin/sh
+# build-cluster-demo - the per-release cluster web demo generator (rd vms-f0f).
+#
+# Reproducible, parameterized by release TAG: takes that tag's already-built
+# OVMX x86_64 + OVMX/VAX boot artifacts (produced by the existing
+# distro/Dockerfile.bootable / build-boot-artifacts.yml pipeline -- this
+# script does NOT rebuild them, it consumes them) plus the PINNED pcjs
+# real-VMS reference image (fixed, not versioned with OVMX), injects each
+# OVMX node's cluster identity (SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/
+# CLUSTER_AUTHORIZE), and emits a deployable per-tag demo bundle:
+#
+#   <out>/<TAG>/{index.html,node.html,node-pcjs.html,node-worker.js,lib/,
+#                coi-serviceworker.js,boot/,initramfs-ovmx-nodeA.cpio.gz,
+#                sysdisk-nodeA.qcow2.gz,[nodeB/ovmx-vax-nodeB.img.gz],
+#                manifest.json}
+#
+# Node identities come from ONE place: mk_democonfig.py's DEMO_ROSTER
+# (DEMO_NODE_A/B/C) -- this script never hardcodes a SCSNODE/SCSSYSTEMID.
+# NEW CLUSTER PER RELEASE: every run is keyed by <TAG> and writes into its
+# own <out>/<TAG>/ directory -- never an in-place upgrade of a prior tag's
+# bundle (Baron 2026-09-18).
+#
+# REUSE ONLY -- no parallel injector, no parallel transport, no second
+# emulator:
+#   - tools/cluster-web-demo/inject-cluster-config.sh   (initramfs: CLUSTER_AUTHORIZE.DAT
+#     + the OVMX_SYSGEN_PATH lever copy of OVMXVMSSYS.PAR)
+#   - tools/cluster-web-demo/inject-ods2-config.sh      (ODS-2 system-disk-resident
+#     OVMXVMSSYS.PAR -- the copy the boot actually reads, vms-f0f root cause)
+#   - the openvmx-site demo/cluster/ page (index.html/node.html/node-pcjs.html/
+#     node-worker.js/lib/) is copied verbatim, not reimplemented here.
+#
+# HONEST-PARTIAL BY DESIGN: Node B (--vax-image) and Node C (--vms-image) are
+# OPTIONAL inputs. Omitted -> the bundle carries Node A only (today's proven,
+# live configuration) and says so on stdout and in manifest.json ("staged":
+# true for the missing node) -- this script never fabricates a B/C bundle
+# entry it didn't actually build. Node C is NEVER config-injected (it is a
+# pinned, pre-configured, operator-maintained real-VMS volume, per
+# docs/design/cluster-web-demo.md SS5/SS11); its manifest entry is a
+# passthrough record of the pinned reference, not a generated artifact.
+#
+# Usage:
+#   build-cluster-demo <TAG> --out <dir> \
+#       --x86-vmlinuz <path> --x86-initramfs <path> --x86-sysdisk <path> \
+#       --site-dir <openvmx-site checkout>  \
+#       [--vax-image <path>] [--vms-image <path>] \
+#       [--boot-dir <path with qemu-wasm runtime: out.js/.wasm/.worker.js/load-rom.*>]
+#
+# Deterministic: given byte-identical inputs, two runs produce a
+# byte-identical output tree (see test/build-cluster-demo.test.sh, which
+# proves this with small fixtures -- it does not exercise the real qemu-img/
+# ODS-2 codec path, which needs real multi-GB boot images and a >=48GB host).
+
+set -eu
+
+PROG=$(basename "$0")
+HERE=$(cd "$(dirname "$0")" && pwd)
+MK_DEMOCONFIG="$HERE/mk_democonfig.py"
+INJECT_INITRAMFS="$HERE/inject-cluster-config.sh"
+INJECT_ODS2="$HERE/inject-ods2-config.sh"
+
+usage() {
+    cat >&2 <<EOF
+usage: $PROG <TAG> --out <dir> --x86-vmlinuz <path> --x86-initramfs <path> \\
+             --x86-sysdisk <path> --site-dir <path> [--boot-dir <path>] \\
+             [--vax-image <path>] [--vms-image <path>]
+
+<TAG>            the OVMX release tag this demo bundle tracks (e.g. V0.7).
+--out            output root; the bundle lands at <out>/<TAG>/.
+--x86-vmlinuz    that tag's built vmlinuz (from build-boot-artifacts.yml).
+--x86-initramfs  that tag's built initramfs-ovmx-slim.cpio.gz (stock, pre-injection).
+--x86-sysdisk    that tag's built ovmx-distrib.img / sysdisk (stock, pre-injection;
+                 qcow2 or raw, auto-detected via qemu-img).
+--site-dir       an openvmx-site checkout (sibling repo) to copy the
+                 demo/cluster page + boot/ qemu-wasm runtime from.
+--boot-dir       override the qemu-wasm runtime dir (default: <site-dir>/demo/cluster/boot).
+--vax-image      OPTIONAL: that tag's OVMX/VAX image (Node B). Omitted -> Node B
+                 stays staged/absent from the bundle (honest-partial).
+--vms-image      OPTIONAL: the PINNED real-VMS 5.5 cluster volume (Node C, fixed
+                 across releases). Omitted -> Node C stays staged/absent.
+EOF
+    exit 2
+}
+
+[ $# -ge 1 ] || usage
+TAG=$1; shift
+[ -n "$TAG" ] || { echo "$PROG: TAG must be non-empty" >&2; exit 1; }
+
+OUT=""; X86_VMLINUZ=""; X86_INITRAMFS=""; X86_SYSDISK=""; SITE_DIR=""
+BOOT_DIR=""; VAX_IMAGE=""; VMS_IMAGE=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out)           OUT=$2; shift 2 ;;
+        --x86-vmlinuz)    X86_VMLINUZ=$2; shift 2 ;;
+        --x86-initramfs)  X86_INITRAMFS=$2; shift 2 ;;
+        --x86-sysdisk)    X86_SYSDISK=$2; shift 2 ;;
+        --site-dir)       SITE_DIR=$2; shift 2 ;;
+        --boot-dir)       BOOT_DIR=$2; shift 2 ;;
+        --vax-image)      VAX_IMAGE=$2; shift 2 ;;
+        --vms-image)      VMS_IMAGE=$2; shift 2 ;;
+        -h|--help)        usage ;;
+        *) echo "$PROG: unknown argument: $1" >&2; usage ;;
+    esac
+done
+
+for req_name in OUT X86_VMLINUZ X86_INITRAMFS X86_SYSDISK SITE_DIR; do
+    eval "val=\${$req_name}"
+    [ -n "$val" ] || { echo "$PROG: --$(echo "$req_name" | tr 'A-Z_' 'a-z-') is required" >&2; usage; }
+done
+[ -f "$X86_VMLINUZ" ] || { echo "$PROG: --x86-vmlinuz not found: $X86_VMLINUZ" >&2; exit 1; }
+[ -f "$X86_INITRAMFS" ] || { echo "$PROG: --x86-initramfs not found: $X86_INITRAMFS" >&2; exit 1; }
+[ -f "$X86_SYSDISK" ] || { echo "$PROG: --x86-sysdisk not found: $X86_SYSDISK" >&2; exit 1; }
+[ -d "$SITE_DIR/demo/cluster" ] || { echo "$PROG: --site-dir has no demo/cluster/: $SITE_DIR" >&2; exit 1; }
+[ -n "$BOOT_DIR" ] || BOOT_DIR="$SITE_DIR/demo/cluster/boot"
+[ -d "$BOOT_DIR" ] || { echo "$PROG: qemu-wasm runtime dir not found: $BOOT_DIR" >&2; exit 1; }
+
+PYTHON=${PYTHON:-python3}
+BUNDLE="$OUT/$TAG"
+# NEW cluster per release: refuse to silently reuse a stale bundle dir from an
+# earlier partial run of the SAME tag -- start clean, never in-place-upgrade.
+rm -rf "$BUNDLE"
+mkdir -p "$BUNDLE"
+
+echo "== $PROG: $TAG -> $BUNDLE =="
+
+# --- (1) node identities: the ONE SSOT (mk_democonfig.DEMO_ROSTER) ------------
+ROSTER_JSON=$("$PYTHON" - "$MK_DEMOCONFIG" <<'PYEOF'
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("mk_democonfig", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(json.dumps({"a": m.DEMO_NODE_A, "b": m.DEMO_NODE_B, "c": m.DEMO_NODE_C}))
+PYEOF
+)
+NODE_A_NAME=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['a']['name'])" "$ROSTER_JSON")
+NODE_A_ID=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['a']['id'])" "$ROSTER_JSON")
+NODE_A_VOTES=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['a']['votes'])" "$ROSTER_JSON")
+NODE_A_EV=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['a']['expected_votes'])" "$ROSTER_JSON")
+NODE_A_GROUP=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['a']['group'])" "$ROSTER_JSON")
+NODE_B_NAME=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['b']['name'])" "$ROSTER_JSON")
+NODE_B_ID=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['b']['id'])" "$ROSTER_JSON")
+NODE_B_VOTES=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['b']['votes'])" "$ROSTER_JSON")
+NODE_B_EV=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['b']['expected_votes'])" "$ROSTER_JSON")
+NODE_B_GROUP=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['b']['group'])" "$ROSTER_JSON")
+NODE_C_NAME=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['c']['name'])" "$ROSTER_JSON")
+NODE_C_ID=$("$PYTHON" -c "import json,sys; print(json.loads(sys.argv[1])['c']['id'])" "$ROSTER_JSON")
+echo "== $PROG: roster -- A=$NODE_A_NAME/$NODE_A_ID B=$NODE_B_NAME/$NODE_B_ID C=$NODE_C_NAME/$NODE_C_ID (SSOT: mk_democonfig.py) =="
+
+# --- (2) Node A: inject + stage (LIVE today) -----------------------------------
+echo "== $PROG: Node A ($NODE_A_NAME) config injection =="
+"$INJECT_INITRAMFS" "$X86_INITRAMFS" "$BUNDLE/initramfs-ovmx-nodeA.cpio.gz" \
+    --scsnode "$NODE_A_NAME" --scssystemid "$NODE_A_ID" \
+    --votes "$NODE_A_VOTES" --expected-votes "$NODE_A_EV" --group "$NODE_A_GROUP"
+
+if command -v qemu-img >/dev/null 2>&1 && command -v "${CC:-cc}" >/dev/null 2>&1; then
+    "$INJECT_ODS2" "$X86_SYSDISK" "$BUNDLE/sysdisk-nodeA.qcow2" \
+        --scsnode "$NODE_A_NAME" --scssystemid "$NODE_A_ID" \
+        --votes "$NODE_A_VOTES" --expected-votes "$NODE_A_EV"
+    gzip -n -9 -c "$BUNDLE/sysdisk-nodeA.qcow2" > "$BUNDLE/sysdisk-nodeA.qcow2.gz"
+    rm -f "$BUNDLE/sysdisk-nodeA.qcow2"
+    NODE_A_SYSDISK_DONE=1
+else
+    echo "== $PROG: WARNING -- qemu-img/cc unavailable, Node A ODS-2 sysdisk injection SKIPPED" >&2
+    echo "   (honest partial: the bundle will carry only the stock, uninjected sysdisk;" >&2
+    echo "   it will NOT cluster -- see inject-ods2-config.sh's root-cause note)" >&2
+    NODE_A_SYSDISK_DONE=0
+fi
+cp "$X86_VMLINUZ" "$BUNDLE/vmlinuz"
+
+# --- (3) Node B: inject IF a VAX image was supplied, else stay staged ---------
+NODE_B_STAGED=true
+if [ -n "$VAX_IMAGE" ]; then
+    [ -f "$VAX_IMAGE" ] || { echo "$PROG: --vax-image not found: $VAX_IMAGE" >&2; exit 1; }
+    if command -v qemu-img >/dev/null 2>&1 && command -v "${CC:-cc}" >/dev/null 2>&1; then
+        echo "== $PROG: Node B ($NODE_B_NAME) config injection (same arch-agnostic ODS-2 injector as Node A) =="
+        mkdir -p "$BUNDLE/nodeB"
+        "$INJECT_ODS2" "$VAX_IMAGE" "$BUNDLE/nodeB/ovmx-vax-nodeB.qcow2" \
+            --scsnode "$NODE_B_NAME" --scssystemid "$NODE_B_ID" \
+            --votes "$NODE_B_VOTES" --expected-votes "$NODE_B_EV"
+        gzip -n -9 -c "$BUNDLE/nodeB/ovmx-vax-nodeB.qcow2" > "$BUNDLE/nodeB/ovmx-vax-nodeB.img.gz"
+        rm -f "$BUNDLE/nodeB/ovmx-vax-nodeB.qcow2"
+        NODE_B_STAGED=false
+        echo "== $PROG: NOTE -- Node B's ODS-2-on-VAX injection path is UNVERIFIED against a" >&2
+        echo "   real VAX cluster volume by this script (that proof belongs to rd vms-613);" >&2
+        echo "   the bytes are written, whether OVMX/VAX's boot reads them the same way as" >&2
+        echo "   x86 is NOT asserted here." >&2
+    else
+        echo "== $PROG: --vax-image given but qemu-img/cc unavailable -- Node B stays staged" >&2
+    fi
+else
+    echo "== $PROG: no --vax-image -- Node B ($NODE_B_NAME) stays STAGED (not in the bundle)"
+fi
+
+# --- (4) Node C: passthrough ONLY, never injected (pinned + operator-managed) --
+NODE_C_STAGED=true
+if [ -n "$VMS_IMAGE" ]; then
+    [ -f "$VMS_IMAGE" ] || { echo "$PROG: --vms-image not found: $VMS_IMAGE" >&2; exit 1; }
+    mkdir -p "$BUNDLE/nodeC"
+    cp "$VMS_IMAGE" "$BUNDLE/nodeC/$(basename "$VMS_IMAGE")"
+    NODE_C_STAGED=false
+    echo "== $PROG: Node C ($NODE_C_NAME) reference volume staged verbatim (NOT injected -- pinned/operator-managed)"
+else
+    echo "== $PROG: no --vms-image -- Node C ($NODE_C_NAME) stays STAGED (not in the bundle)"
+fi
+
+# --- (5) copy the page + qemu-wasm runtime VERBATIM (no reimplementation) -----
+echo "== $PROG: staging the demo page + runtime from $SITE_DIR/demo/cluster =="
+for f in index.html node.html node-pcjs.html node-worker.js coi-serviceworker.js; do
+    [ -f "$SITE_DIR/demo/cluster/$f" ] && cp "$SITE_DIR/demo/cluster/$f" "$BUNDLE/$f"
+done
+[ -d "$SITE_DIR/demo/cluster/lib" ] && cp -r "$SITE_DIR/demo/cluster/lib" "$BUNDLE/lib"
+mkdir -p "$BUNDLE/boot"
+cp -r "$BOOT_DIR"/. "$BUNDLE/boot/"
+# demo/cluster/index.html links the site's SHARED chrome stylesheet at the
+# domain-root-absolute path /assets/site.css (index.html and every sub-page
+# read the SAME file -- no second hand-maintained copy of the design system,
+# single-ledger). Stage a build-time copy into the bundle too, so a
+# self-contained per-tag bundle (SS6, "self-contained... served exactly like
+# openvmx-site today") still renders correctly if ever deployed as its OWN
+# origin rather than as a subdirectory of the shared site.
+if [ -f "$SITE_DIR/assets/site.css" ]; then
+    mkdir -p "$BUNDLE/assets"
+    cp "$SITE_DIR/assets/site.css" "$BUNDLE/assets/site.css"
+fi
+
+# --- (6) manifest -- the reproducibility record --------------------------------
+# The hash listing is written OUTSIDE $BUNDLE (a sibling tempfile) -- writing it
+# inside the tree being hashed races `find`'s own walk (the file can be listed
+# mid-write, making the manifest non-deterministic run to run).
+echo "== $PROG: writing manifest.json =="
+HASHFILE=$(mktemp "${TMPDIR:-/tmp}/build-cluster-demo-hashes.XXXXXX")
+( cd "$BUNDLE" && find . -type f ! -name manifest.json -print0 \
+    | LC_ALL=C sort -z | xargs -0 sha256sum ) > "$HASHFILE"
+"$PYTHON" - "$HASHFILE" "$TAG" "$NODE_A_NAME" "$NODE_A_ID" \
+    "$NODE_A_SYSDISK_DONE" "$NODE_B_STAGED" "$NODE_C_STAGED" "$BUNDLE/manifest.json" <<'PYEOF'
+import json, sys
+hashfile, tag, node_a_name, node_a_id, a_sysdisk_done, b_staged, c_staged, out = sys.argv[1:9]
+files = {}
+with open(hashfile) as fp:
+    for line in fp:
+        h, path = line.rstrip("\n").split("  ", 1)
+        files[path.lstrip("./")] = h
+manifest = {
+    "tag": tag,
+    "generator": "tools/cluster-web-demo/build-cluster-demo",
+    "roster_ssot": "tools/cluster-web-demo/mk_democonfig.py:DEMO_ROSTER",
+    "nodes": {
+        "A": {"name": node_a_name, "id": int(node_a_id), "staged": False,
+              "sysdisk_injected": a_sysdisk_done == "1"},
+        "B": {"staged": b_staged == "true"},
+        "C": {"staged": c_staged == "true"},
+    },
+    "files": files,
+}
+with open(out, "w") as fp:
+    json.dump(manifest, fp, indent=2, sort_keys=True)
+    fp.write("\n")
+PYEOF
+rm -f "$HASHFILE"
+
+echo "== $PROG: done -> $BUNDLE =="
+echo "   Node A: LIVE (sysdisk_injected=$([ "$NODE_A_SYSDISK_DONE" = 1 ] && echo yes || echo NO))"
+echo "   Node B: $([ "$NODE_B_STAGED" = true ] && echo STAGED || echo staged-with-injected-volume)"
+echo "   Node C: $([ "$NODE_C_STAGED" = true ] && echo STAGED || echo staged-with-pinned-volume)"

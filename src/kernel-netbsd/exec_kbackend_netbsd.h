@@ -748,36 +748,16 @@ exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
 
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  *
- * STATUS AFTER THE DEVTAB PORT (rd vms-618). The device table (vms_devtab.c),
- * the ONLY caller, IS in this module's SRCS now, so vms_devtab_probe_nic() DOES
- * call this once at module init. It answers "no NIC", which the executive
- * handles by entering NO ETH0: unit at all -- so SHOW DEVICE has no ETH0: row
- * and $ASSIGN/$ALLOC ETH0: is SS$_NOSUCHDEV. That is the honest "this node has
- * no ENUMERATED Ethernet controller" state, not a fake device (INV-6): the VAX
- * under SIMH may well have a DEQNA, but this backend does not yet ask the ifnet
- * list, and reporting a unit it never looked up would be the fabrication.
- * Binding it is a later item (the VAX networking lane). The REAL NetBSD binding
- * is the generic ifnet list: IFNET_LOCK() /
- * IFNET_READER_FOREACH(ifp) over the interface list, skipping ifp->if_type ==
- * IFT_LOOP and requiring IFT_ETHER, copying ifp->if_xname and reading the link
- * state through if_link_state (LINK_STATE_UP) -- the exact NetBSD twins of
- * Linux for_each_netdev / ARPHRD_ETHER / netif_carrier_ok, and just as
- * driver-agnostic. Binding that -- and registering ETH0: on NetBSD -- is the
- * devtab-on-NetBSD proof's concern (a later item, following exec_blockdev).
- * Until then this is a compile-safe documented stub that touches no ifnet
- * internals and reports "no such device", naming its real source here. It is
- * never on a live path (INV-6 / Rule 11: it fabricates nothing). */
-static __inline int
-exec_netdev_primary(char *name, unsigned int namesz, int *link_up)
-{
-	/* vms-9d2: bind to IFNET_READER_FOREACH(ifp) filtered on IFT_ETHER when
-	 * the VAX networking lane needs ETH0:. Reached once per module load
-	 * (vms-618); answers "no NIC", so no unit is entered. See above. */
-	(void)name;
-	(void)namesz;
-	(void)link_up;
-	return -1;   /* no such device */
-}
+ * BOUND (rd vms-613's SCS-on-VAX-in-browser spike: the real join proof empirically
+ * hit this exact stub -- CLUSTER_START failed SS$_NOSUCHDEV because no ETH0: was
+ * ever entered, even though NetBSD's own boot log shows a real DELQA (`qt0`)
+ * probed and attached). The real body lives in vms_lan_netbsd.c (not here,
+ * static-inline), following the exec_lan_open/_close/_xmit precedent in this same
+ * file: <net/if.h>'s IFNET_READER_FOREACH collides with vms_internal.h's rbtree
+ * macros the same way pfil.h's uvm pull-in does (see vms_lan_netbsd.c's own
+ * header comment), so the real body needs a TU that does not include
+ * vms_internal.h. Declared extern here; defined in vms_lan_netbsd.c. */
+int exec_netdev_primary(char *name, unsigned int namesz, int *link_up);
 
 /* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
  * Real mapping: membar_producer/membar_consumer are the portable NetBSD

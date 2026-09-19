@@ -188,6 +188,18 @@ DEMO_NODE_A = {
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
 }
 
+# Demo Node B (OVMX/VAX, NetBSD-VAX SYSKRNL substrate) -- rd vms-613. Same
+# demo cluster/group as Node A (257); SCSSYSTEMID 1988 is the next free id in
+# the canonical roster sequence (1987=OVMXA, 1989 reserved for the pinned
+# real-VMS Node C -- an operator fact, not authored here). expected_votes is
+# left at the CALLER's discretion at injection time (2 for an A+B pairing, 3
+# once Node C's cluster volume also lands) -- this dict is the identity SSOT
+# only, not a fixed genesis-order policy.
+DEMO_NODE_B = {
+    "name": "OVMXB", "id": 1988, "votes": 1, "expected_votes": 2,
+    "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
+}
+
 
 # ---------------------------------------------------------------------------
 # OVMXVMSSYS.PAR authoring

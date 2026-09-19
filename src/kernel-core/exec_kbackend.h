@@ -461,10 +461,11 @@
  *        "no NIC" case, in which the executive registers no ETH0: at all (INV-6:
  *        no fake device for a NIC that is not there). Linux: for_each_netdev over
  *        init_net under rtnl_lock, skipping IFF_LOOPBACK and requiring
- *        ARPHRD_ETHER, taking the first match. NetBSD: the documented
- *        contract-only twin until devtab joins the NetBSD module's SRCS
- *        (following the exec_blockdev precedent -- type-checked, never run, and
- *        names its real source in the backend comment).
+ *        ARPHRD_ETHER, taking the first match. NetBSD (rd vms-613): BOUND, in
+ *        src/kernel-netbsd/vms_lan_netbsd.c (not static-inline here, the same
+ *        exec_lan_open precedent) -- IFNET_READER_FOREACH(ifp) inside a
+ *        pserialize_read_enter()/_exit() section, skipping IFT_LOOP and
+ *        requiring IFT_ETHER, taking the first match.
  *
  * 12. Host TCP client socket  (vms-9951; called ONLY from the BGn: INET facility,
  *    src/kernel-core/vms_bg.c -- the executive-resident network pseudo-device,

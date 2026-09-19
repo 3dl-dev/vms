@@ -144,3 +144,33 @@ jobs:
             --repo "${{ github.repository }}" \
             --no-record-notes \
             $DRAFT_FLAG
+
+      # Notify openvmx-site of the cut so its follow-ons (track-release.yml,
+      # track-cluster-demo.yml, rd vms-cdbd) fire on the tag instead of waiting
+      # for their own poll. Fully OFF the release critical path: this step is
+      # best-effort (continue-on-error) and runs LAST, after the tag is already
+      # published above -- a dispatch failure (or the token being unset) never
+      # reds this job or blocks/holds a release.
+      #
+      # NEEDS PROVISIONING: secrets.SITE_DISPATCH_TOKEN -- a PAT (or GitHub App
+      # token) scoped to `repo` on 3dl-dev/openvmx-site, since github.token only
+      # authorizes repository_dispatch within ITS OWN repo. Absent, this step
+      # is a harmless no-op (curl gets a 401/404, continue-on-error swallows
+      # it) and both listener workflows fall back to their own schedule/manual
+      # dispatch. Provisioning that token is a credential/security-posture
+      # decision reserved to the operator, not made here.
+      - name: Notify openvmx-site (repository_dispatch release-tagged) — off critical path
+        if: always() && steps.tag.outputs.tag != ''
+        continue-on-error: true
+        env:
+          SITE_DISPATCH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "${SITE_DISPATCH_TOKEN:-}" ]; then
+            echo "no secrets.SITE_DISPATCH_TOKEN provisioned -- skipping (openvmx-site falls back to its own poll/manual dispatch)."
+            exit 0
+          fi
+          curl -sS -X POST \
+            -H "Authorization: token ${SITE_DISPATCH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/3dl-dev/openvmx-site/dispatches \
+            -d "$(printf '{"event_type":"release-tagged","client_payload":{"tag":"%s"}}' '${{ steps.tag.outputs.tag }}')"

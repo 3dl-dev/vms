@@ -65,7 +65,9 @@
 #include <sys/mbuf.h>
 #include <sys/socket.h>          /* AF_LINK */
 #include <sys/sockio.h>          /* SIOCADDMULTI / SIOCDELMULTI */
+#include <sys/pserialize.h>      /* pserialize_read_enter/_exit (netdev_primary) */
 #include <net/if.h>
+#include <net/if_types.h>        /* IFT_ETHER / IFT_LOOP (netdev_primary) */
 #include <net/if_dl.h>           /* struct sockaddr_dl, LLADDR/CLLADDR */
 #include <net/if_ether.h>        /* struct ether_header, ETHER_* */
 #include <net/pfil.h>
@@ -153,6 +155,64 @@ scap_pfil_rx(void *arg, struct mbuf **mp, struct ifnet *ifp, int dir)
 	return 1;
 }
 
+/*
+ * exec_netdev_primary - family 11 of exec_kbackend.h (vms-9d2). vms_devtab.c's
+ * NIC probe (the ONLY caller, vms_devtab_probe_nic()) calls this once at
+ * module init to find the host's PRIMARY non-loopback Ethernet controller and
+ * name it ETH0:; the LAN port this file opens (exec_lan_open, above) then
+ * ifunit()s the SAME name this returns. Lives here, not as a static-inline in
+ * exec_kbackend_netbsd.h, for the identical reason exec_lan_open does: <net/
+ * if.h>'s IFNET_READER_FOREACH needs no vms_internal.h symbol, and this TU
+ * already avoids that header's rbtree/uvm collision (see the file header).
+ *
+ * The real NetBSD binding this replaces (previously a documented stub
+ * returning "no such device" unconditionally): IFNET_READER_FOREACH(ifp)
+ * walks the GENERIC pserialize-protected interface list (net/if.h), reading
+ * inside a pserialize_read_enter()/_exit() section -- the standard NetBSD KPI
+ * for a lock-free reader of this list (mirrors net/if.c's own ifunit_locked()
+ * shape; no vms_internal.h symbol, no driver named). Skips IFT_LOOP, requires
+ * IFT_ETHER, and takes the FIRST match in kernel enumeration order -- the
+ * exact NetBSD twin of exec_kbackend_linux.h's for_each_netdev / IFF_LOOPBACK
+ * / ARPHRD_ETHER walk (same contract, same "first non-loopback Ethernet
+ * device" semantic, same INV-4: the host interface name (`qt0`, `qe0`, ...)
+ * is recorded for this backend's own exec_lan_open() call and never surfaces
+ * to a VMS program). Clean-room (Rule 8): IFNET_READER_FOREACH, IFT_ETHER/
+ * IFT_LOOP, if_xname and if_link_state are all read from the public NetBSD
+ * kernel headers (net/if.h, net/if_types.h) to confirm their shape, not
+ * transcribed from any implementation.
+ */
+int
+exec_netdev_primary(char *name, unsigned int namesz, int *link_up)
+{
+	struct ifnet *ifp;
+	int s, found = -1;
+
+	s = pserialize_read_enter();
+	IFNET_READER_FOREACH(ifp) {
+		if (ifp->if_type == IFT_LOOP)
+			continue;
+		if (ifp->if_type != IFT_ETHER)
+			continue;
+
+		if (name != NULL && namesz > 0) {
+			/* Bounded, self-contained copy (no strscpy dependency in
+			 * this TU): if_xname is a NUL-terminated IFNAMSIZ string. */
+			unsigned int i;
+
+			for (i = 0; i + 1 < namesz && ifp->if_xname[i] != '\0'; i++)
+				name[i] = ifp->if_xname[i];
+			name[i] = '\0';
+		}
+		if (link_up != NULL)
+			*link_up = (ifp->if_link_state == LINK_STATE_UP) ? 1 : 0;
+		found = 0;
+		break;
+	}
+	pserialize_read_exit(s);
+
+	return found;
+}
+
 int
 exec_lan_open(const char *ifname, uint16_t ethertype, exec_lan_rx_cb_t rx_cb,
     void *ctx)
@@ -165,6 +225,38 @@ exec_lan_open(const char *ifname, uint16_t ethertype, exec_lan_rx_cb_t rx_cb,
 	ifp = ifunit(ifname);
 	if (ifp == NULL || ifp->if_pfil == NULL)
 		return (int)EXEC_SS_NOSUCHDEV;   /* the honest "no NIC" case */
+
+	/*
+	 * rd vms-613 (empirical, real NetBSD/vax + SIMH DELQA-Turbo): a NIC
+	 * NetBSD probed at boot is attached but administratively DOWN until
+	 * something does what `ifconfig <if> up` does -- nothing in this boot
+	 * path ever has. dev/qbus/if_qt.c's transmit ring is allocated/armed
+	 * ONLY from ITS OWN SIOCSIFFLAGS handler's IFF_UP case; skipping this
+	 * leaves qtstart()'s descriptor-ownership invariant unsatisfied and it
+	 * panics on the first real transmit. Reproduce exactly what `ifconfig
+	 * up` does: if_ioctl(ifp, SIOCSIFFLAGS, &ifr) with IFF_UP set in
+	 * ifr_flags -- the SAME KPI if_mcast_op(9) below already uses, not a
+	 * raw ifp->if_init call this TU has no business making driver-
+	 * specific. Unlike SIOCADDMULTI/DELMULTI, if_ioctl(9) requires the
+	 * caller hold IFNET_LOCK for every other cmd (net/if.c's own
+	 * KASSERTMSG), so bracket it. Idempotent: a no-op once already up (the
+	 * driver's own SIOCSIFFLAGS `case IFF_UP|IFF_RUNNING:` arm just re-
+	 * sends the setup packet, never double-inits).
+	 */
+	if ((ifp->if_flags & IFF_UP) == 0) {
+		struct ifreq ifr;
+		int ioctl_err;
+
+		memset(&ifr, 0, sizeof(ifr));
+		strlcpy(ifr.ifr_name, ifp->if_xname, sizeof(ifr.ifr_name));
+		ifr.ifr_flags = ifp->if_flags | IFF_UP;
+
+		IFNET_LOCK(ifp);
+		ioctl_err = if_ioctl(ifp, SIOCSIFFLAGS, &ifr);
+		IFNET_UNLOCK(ifp);
+		if (ioctl_err != 0)
+			return (int)EXEC_SS_NOSUCHDEV;
+	}
 
 	/* Set the hook's inputs BEFORE attaching it: scap_pfil_rx can run the
 	 * instant pfil_add_hook returns (another CPU may already be draining
@@ -230,25 +322,36 @@ exec_lan_xmit(const uint8_t *frame, uint32_t len)
 }
 
 /*
- * scap_mcast_op - shared body of exec_lan_mc_add/del: build the sockaddr_dl
+ * scap_mcast_op - shared body of exec_lan_mc_add/del: build the sockaddr
  * if_mcast_op(9) wants and issue the ioctl-shaped (but sleep-capable, no
  * if_ioctl call site of our own) request.
+ *
+ * rd vms-613 (empirical, on real NetBSD/vax under SIMH): AF_LINK/sockaddr_dl
+ * here is WRONG and was the actual CLUSTER_START blocker even after
+ * exec_netdev_primary was bound -- net/if_ethersubr.c's ether_multiaddr()
+ * (the function if_mcast_op -> if_ioctl -> ether_ioctl -> ether_addmulti
+ * dispatches to) switches on sa->sa_family and only accepts AF_UNSPEC (a raw
+ * 6-byte MAC in sa_data), AF_INET or AF_INET6 -- AF_LINK falls through to its
+ * `default: return EAFNOSUPPORT` (confirmed: if_mcast_op returned errno 47 =
+ * EAFNOSUPPORT here). AF_UNSPEC + sa_data is also the exact shape
+ * SIOCADDMULTI's own man page documents for a raw Ethernet multicast add.
+ * Clean-room (Rule 8): read from the public net/if_ethersubr.c source to
+ * confirm the contract, not guessed.
  */
 static int
 scap_mcast_op(unsigned long cmd, const uint8_t mac[6])
 {
-	struct sockaddr_dl sdl;
+	struct sockaddr sa;
 
 	if (g_lan_ifp == NULL)
 		return (int)EXEC_SS_NOSUCHDEV;
 
-	memset(&sdl, 0, sizeof(sdl));
-	sdl.sdl_len = sizeof(sdl);
-	sdl.sdl_family = AF_LINK;
-	sdl.sdl_alen = ETHER_ADDR_LEN;
-	memcpy(LLADDR(&sdl), mac, ETHER_ADDR_LEN);
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_len = sizeof(sa);
+	sa.sa_family = AF_UNSPEC;
+	memcpy(sa.sa_data, mac, ETHER_ADDR_LEN);
 
-	if (if_mcast_op(g_lan_ifp, cmd, (const struct sockaddr *)&sdl) != 0)
+	if (if_mcast_op(g_lan_ifp, cmd, &sa) != 0)
 		return (int)EXEC_SS_NOSUCHDEV;
 	return 0;
 }

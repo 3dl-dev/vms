@@ -253,6 +253,41 @@ class TestRosterUniqueness(unittest.TestCase):
         self.assertEqual(p["SCSSYSTEMID"]["current"], 1987)
         self.assertEqual(p["VAXCLUSTER"]["current"], 2)
 
+    def test_builtin_demo_node_b(self):
+        n = M.DEMO_NODE_B
+        self.assertEqual(n["name"], "OVMXB")
+        self.assertEqual(n["id"], 1988)
+        self.assertLessEqual(len(n["name"]), 6)
+        self.assertEqual(n["group"], 257)
+        self.assertEqual(n["vaxcluster"], 2)
+
+    def test_builtin_demo_node_c(self):
+        n = M.DEMO_NODE_C
+        self.assertEqual(n["name"], "VAXC")
+        self.assertEqual(n["id"], 1989)
+        self.assertLessEqual(len(n["name"]), 6)
+        self.assertEqual(n["group"], 257)
+
+    def test_demo_roster_is_the_single_source_of_all_three_identities(self):
+        # DEMO_ROSTER must be exactly {A, B, C} -- the page/generator's one
+        # place to get "all three nodes" (single-ledger: no second hardcoded
+        # list of names/ids anywhere else).
+        names = {n["name"] for n in M.DEMO_ROSTER}
+        ids = {n["id"] for n in M.DEMO_ROSTER}
+        self.assertEqual(names, {"OVMXA", "OVMXB", "VAXC"})
+        self.assertEqual(ids, {1987, 1988, 1989})
+
+    def test_demo_roster_validates_and_emits_three_distinct_nodes(self):
+        # The full target roster must pass the uniqueness validator (no
+        # SCSNODE/SCSSYSTEMID collision) and emit three independent artifact
+        # sets -- this is the config-injection input for the 3-node demo.
+        with tempfile.TemporaryDirectory() as d:
+            written = M.emit_roster(M.DEMO_ROSTER, d, caut_writer="auto")
+            self.assertEqual({w["name"] for w in written}, {"OVMXA", "OVMXB", "VAXC"})
+            for w in written:
+                self.assertEqual(os.path.getsize(w["par"]), 9484)
+                self.assertEqual(os.path.getsize(w["caut"]), 44)
+
 
 if __name__ == "__main__":
     unittest.main()

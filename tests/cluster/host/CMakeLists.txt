@@ -471,6 +471,16 @@ endfunction()
 
 cluster_host_pe_test(test_pe_channel   test_pe_channel.c)
 
+# rd vms-b34: the cluster GROUP NUMBER -- which IS the HELLO multicast address
+# -- is REPORTED rather than silently defaulted. The mapping and the view run
+# against the real codec and the real ABI struct; the bindings are read out of
+# the shipping glue (vms_pe.c is not host-linkable -- exec_kbackend.h + the
+# fork API), the same shape test_cnxman_glue.c established.
+cluster_host_pe_test(test_pe_glue_group test_pe_glue_group.c)
+target_compile_definitions(test_pe_glue_group PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+
 # E60: the receive-buffer credit ledger (vms_pe_fsm.h SS4b) as arithmetic --
 # the invariant "the sum of everything this port promised never exceeds the
 # buffers it owns", which is what makes the abs-95 byte test_pe_vc.c asserts on

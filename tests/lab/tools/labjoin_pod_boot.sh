@@ -146,17 +146,50 @@ QP=$!
 # subtree (capsh -> exec'd command); its CapEff/CapBnd apply to every descendant.
 # Written to the tank-visible $CAP_EVID so labjoin_booted.sh can read it host-side.
 # The writer is already open (above) so $QP is no longer blocked in open(2) on
-# the FIFO; give the exec chain a little headroom anyway (up to 2s) in case
-# capsh/bash/timeout haven't finished their chained execve()s yet.
-: > "$CAP_EVID"
-{
-    echo "# CAP_NET_RAW evidence for booted-OVMX node pid=$QP (OVMX_DROP_NET_RAW=$OVMX_DROP_NET_RAW)"
-    for _try in 1 2 3 4 5 6 7 8 9 10; do
-        if [ -r "/proc/$QP/status" ]; then
-            grep -E 'Cap(Inh|Prm|Eff|Bnd|Amb)' "/proc/$QP/status" 2>/dev/null && break
+# the FIFO.
+#
+# ⚠ SAMPLE THE EXEC CHAIN'S END, NOT ITS BEGINNING (rd vms-b34). $QP is first
+# this script's own forked copy and only becomes capsh->bash->timeout->qemu
+# after a chain of execve()s. The old loop broke out of its retry on the FIRST
+# READABLE /proc/$QP/status -- which is essentially always the pre-exec fork,
+# whose caps are this script's undropped ambient set. It therefore recorded
+# CapEff=...a80435fb (net_raw PRESENT) even though capsh really did drop it,
+# and the fail-honest abort below then killed a perfectly good run. (Verified
+# directly in the pod: `capsh --drop=cap_net_raw -- -c 'exec "$@"' _ grep Cap
+# /proc/self/status` -> ...a80415fb, net_raw clear.) vms-4363's FIFO fix
+# narrowed this window; it did not close it, because "readable" was never the
+# condition that mattered.
+#
+# So when a drop was REQUESTED, poll for the drop to be OBSERVED, bounded, and
+# keep the LAST reading whatever it is. This does not weaken leg (e): the
+# evidence is still whatever /proc really said, the verdict still grades it, and
+# a drop that never lands inside the bound is still recorded net_raw-PRESENT and
+# still aborts. When no drop was requested (the negctl control) there is nothing
+# to wait for, so one sample is taken.
+cap_sample() {  # -> the five Cap* lines of $QP, or nothing if it is gone
+    [ -r "/proc/$QP/status" ] || return 1
+    grep -E 'Cap(Inh|Prm|Eff|Bnd|Amb)' "/proc/$QP/status" 2>/dev/null
+}
+cap_sample_settled() {  # -> the sample to record; waits for a DROPPED one
+    local s="" try
+    for try in $(seq 1 50); do          # <= 10s, well inside the TCG boot
+        s="$(cap_sample)" || { sleep 0.2; continue; }
+        [ -n "$s" ] || { sleep 0.2; continue; }
+        if [ "$OVMX_DROP_NET_RAW" != "1" ]; then
+            printf '%s\n' "$s"; return 0
+        fi
+        if ! lj_mask_has_netraw "$(printf '%s\n' "$s" | awk '/CapBnd/{print $2}')"; then
+            printf '%s\n' "$s"; return 0   # the drop is visible: this is the truth
         fi
         sleep 0.2
     done
+    printf '%s\n' "$s"                     # bound elapsed: record what it really says
+    return 0
+}
+: > "$CAP_EVID"
+{
+    echo "# CAP_NET_RAW evidence for booted-OVMX node pid=$QP (OVMX_DROP_NET_RAW=$OVMX_DROP_NET_RAW)"
+    cap_sample_settled
 } >> "$CAP_EVID" 2>/dev/null
 echo "[node] recorded CAP_NET_RAW evidence -> $CAP_EVID:" | tee -a "$OUT_LOG"
 sed 's/^/[node]   /' "$CAP_EVID" | tee -a "$OUT_LOG"
@@ -202,6 +235,20 @@ if waitfor 'SYSBOOT> ' 300; then
     send "SET SCSNODE $SCSNODE";    sleep 2
     send "SET SCSSYSTEMID $SCSSYSID"; sleep 2
     send 'SET VAXCLUSTER 2';        sleep 2   # make VAXCLUSTER effectual (2 = enabled)
+    # VOTES / EXPECTED_VOTES (rd vms-b34). The shipped defaults are VOTES=1,
+    # EXPECTED_VOTES=1 (tools/vms_sysgen.c), which means this node's OWN vote
+    # satisfies quorum -- so if it never discovers the reference cluster it is
+    # entitled to FOUND one, and a run against a single-VAX genesis cluster
+    # could end in two one-node clusters rather than a join. Naming
+    # EXPECTED_VOTES explicitly makes the run test what it says it tests: with
+    # EXPECTED_VOTES=2 this node CANNOT found, so reaching MEMBER can only be a
+    # real admission by the reference cluster. Unset = the shipped defaults.
+    if [ -n "${OVMX_VOTES:-}" ]; then
+        send "SET VOTES $OVMX_VOTES"; sleep 2
+    fi
+    if [ -n "${OVMX_EXPECTED_VOTES:-}" ]; then
+        send "SET EXPECTED_VOTES $OVMX_EXPECTED_VOTES"; sleep 2
+    fi
     send 'WRITE';                   sleep 2
     waitfor 'parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR' 60 || true
     send 'CONTINUE';                sleep 2

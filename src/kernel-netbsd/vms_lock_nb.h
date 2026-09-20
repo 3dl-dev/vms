@@ -352,7 +352,8 @@ struct vms_pe_view_wire {
 	uint8_t  hwaddr_valid;
 	uint8_t  hwaddr[6];
 	uint8_t  link_up;
-	uint8_t  pad0[3];
+	uint8_t  cluster_group_valid;   /* 0 = group 0 by DEFAULT, not by config  */
+	uint16_t cluster_group;         /* the group the HELLO mcast addr is built from */
 	uint32_t mtu;
 	uint32_t max_pktsz;
 	uint32_t n_channels;

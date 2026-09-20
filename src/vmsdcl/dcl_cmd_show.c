@@ -3515,6 +3515,25 @@ static int show_cluster_local_ports(void)
            (unsigned)a.port.mtu, (unsigned)a.port.n_channels,
            (unsigned)a.port.n_vcs);
     /*
+     * rd vms-b34. The cluster group number IS the HELLO multicast address
+     * (AB-00-04-01-<lo>-<hi>), so two nodes with different numbers are not on
+     * the same cluster's wire -- and this surface reported neither the number
+     * nor whether anyone had chosen it. With every other line reading
+     * "open"/"link up" and tx_frames climbing, an unconfigured node looked
+     * exactly like a healthy one. That is what cost a 195 s lab join window
+     * against a real OpenVMS V7.3 cluster before a pcap showed the two nodes
+     * multicasting to different groups (tests/lab/captures/
+     * cn2-genesis-vaxlab4-20260920/). One line, always printed, and it says
+     * plainly when the 0 is a default rather than a choice.
+     */
+    if (a.port.cluster_group_valid)
+        printf("         cluster group %u (CLUSTER_AUTHORIZE)\n",
+               (unsigned)a.port.cluster_group);
+    else
+        printf("         cluster group %u -- NOT CONFIGURED (no "
+               "CLUSTER_AUTHORIZE record): this node cannot reach a real "
+               "cluster\n", (unsigned)a.port.cluster_group);
+    /*
      * vms-fc-e51: the port-wide send/receive counters (vms_pe.c pe_ops_send,
      * INV-6 -- counted only where a frame actually leaves/arrives this
      * node), not previously surfaced here. The discriminator a booted-node

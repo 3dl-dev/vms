@@ -1,0 +1,19 @@
+# ether-src -> ether-dst census, 0x6007 SCA frames, join-b34gen-1789939705.pcap
+# (pcaps are lab-host-only, docs/clean-room/PROVENANCE.md; this is the decoded census)
+    225 52:54:00:00:00:f4 > ab:00:04:01:00:00,
+    180 aa:00:04:00:01:04 > ab:00:04:01:01:01,
+
+# ether-src -> ether-dst census, 0x6007 SCA frames, join-b34g257-1789940463.pcap
+# (pcaps are lab-host-only, docs/clean-room/PROVENANCE.md; this is the decoded census)
+   1062 52:54:00:00:00:f4 > aa:00:04:00:01:04,
+    914 aa:00:04:00:01:04 > 52:54:00:00:00:f4,
+    253 aa:00:04:00:01:04 > ab:00:04:01:01:01,
+    245 52:54:00:00:00:f4 > ab:00:04:01:01:01,
+
+
+# ether-src -> ether-dst census, 0x6007 SCA frames, join-b34ship-1789947528.pcap
+# (the FIXED build, group 257 staged -- the run that produced fixed-group257-node.log)
+    836 52:54:00:00:00:f4 > aa:00:04:00:01:04,
+    698 aa:00:04:00:01:04 > 52:54:00:00:00:f4,
+    175 aa:00:04:00:01:04 > ab:00:04:01:01:01,
+    157 52:54:00:00:00:f4 > ab:00:04:01:01:01,

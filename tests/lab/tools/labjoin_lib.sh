@@ -344,11 +344,16 @@ lj_verdict() {  # <ovmx_node> <ovmx_showcluster_txt> <vax_showcluster_txt> <cn> 
         fi
     fi
 
-    # (c) cluster grew to 3.
-    if [ "$cn" = "3" ]; then
-        c=1; echo "  verdict: (c) PASS -- vax1 CLUSTER_NODES=3 (2 VAXes + 1 OVMX)"
+    # (c) the cluster GREW, by the reference cluster's own count. LJ_CN_JOINED is
+    # the number the CALLER declared for the topology it set up (default 3 = the
+    # 2-VAX lab-2 pod + 1 OVMX; a GENESIS reference cluster is 1 VAX + 1 OVMX = 2).
+    # It is never inferred from what the cluster reports -- that would make the
+    # leg unfalsifiable.
+    local want_cn="${LJ_CN_JOINED:-3}"
+    if [ "$cn" = "$want_cn" ]; then
+        c=1; echo "  verdict: (c) PASS -- vax1 CLUSTER_NODES=$want_cn (the reference VAX cluster + 1 OVMX)"
     else
-        echo "  verdict: (c) FAIL -- vax1 CLUSTER_NODES=${cn:-?} (want 3; still the bare 2-VAX pod)"
+        echo "  verdict: (c) FAIL -- vax1 CLUSTER_NODES=${cn:-?} (want $want_cn; the cluster did not grow)"
     fi
 
     # (d) the join is on the wire under the OVMX identity.

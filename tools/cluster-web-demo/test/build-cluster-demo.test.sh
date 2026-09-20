@@ -56,6 +56,10 @@ echo "// fixture hub.mjs" > "$SITE/demo/cluster/lib/hub.mjs"
 echo "fixture-wasm-bytes" > "$SITE/demo/cluster/boot/qemu-system-x86_64.wasm"
 echo "// fixture out.js" > "$SITE/demo/cluster/boot/out.js"
 echo "/* fixture shared site.css */" > "$SITE/assets/site.css"
+mkdir -p "$SITE/demo/cluster/boot/assets"
+echo "// fixture xterm.js" > "$SITE/demo/cluster/boot/assets/xterm.js"
+echo "/* fixture xterm.css */" > "$SITE/demo/cluster/boot/assets/xterm.css"
+echo "// fixture xterm-pty.js" > "$SITE/demo/cluster/boot/assets/xterm-pty.js"
 
 echo "4. running build-cluster-demo (run 1)"
 OUT1="$WORK/out1"
@@ -76,6 +80,11 @@ BUNDLE1="$OUT1/V9.9-test"
 [ -f "$BUNDLE1/assets/site.css" ] || { echo "FAIL: shared site.css not staged into bundle"; exit 1; }
 [ -d "$BUNDLE1/nodeB" ] && { echo "FAIL: Node B directory present without --vax-image (must stay staged/absent)"; exit 1; }
 [ -d "$BUNDLE1/nodeC" ] && { echo "FAIL: Node C directory present without --vms-image (must stay staged/absent)"; exit 1; }
+echo "4b. asserting boot/assets/{xterm.js,xterm.css,xterm-pty.js} staged (rd vms-a4f: node.html throws"
+echo "    'Terminal is not defined' and Node A never boots without them)"
+for a in xterm.js xterm.css xterm-pty.js; do
+    [ -f "$BUNDLE1/boot/assets/$a" ] || { echo "FAIL: boot/assets/$a missing from bundle"; exit 1; }
+done
 
 echo "5. asserting the injected sysdisk actually carries VAXCLUSTER=2 SCSNODE=OVMXA (real ODS-2 read-back)"
 gunzip -c "$BUNDLE1/sysdisk-nodeA.qcow2.gz" > "$WORK/check.qcow2"
@@ -130,6 +139,25 @@ touch "$OUT1/V9.9-test/stale-marker-from-a-hand-edit"
 [ -f "$OUT1/V9.9-test/stale-marker-from-a-hand-edit" ] \
     && { echo "FAIL: generator did not start clean -- stale file survived a re-run"; exit 1; }
 
+echo "10. rd vms-a4f NEGATIVE case: a --boot-dir missing boot/assets/ must FAIL LOUDLY,"
+echo "    not silently ship a bundle whose node.html throws 'Terminal is not defined'"
+BADBOOT="$WORK/bad-boot-dir"
+mkdir -p "$BADBOOT"
+cp "$SITE/demo/cluster/boot/qemu-system-x86_64.wasm" "$SITE/demo/cluster/boot/out.js" "$BADBOOT/"
+# deliberately no assets/ subdir under $BADBOOT
+OUT4="$WORK/out4"
+if "$DEMO/build-cluster-demo" V9.9-test --out "$OUT4" \
+    --x86-vmlinuz "$WORK/stock-vmlinuz" \
+    --x86-initramfs "$WORK/stock-initramfs.cpio.gz" \
+    --x86-sysdisk "$WORK/stock-sysdisk.qcow2" \
+    --site-dir "$SITE" --boot-dir "$BADBOOT" > "$WORK/run4.log" 2>&1; then
+    echo "FAIL: generator exited 0 with a --boot-dir missing assets/ (vms-a4f regression)"; cat "$WORK/run4.log"; exit 1
+fi
+grep -q "vms-a4f" "$WORK/run4.log" \
+    || { echo "FAIL: generator failed but not with the expected vms-a4f diagnostic"; cat "$WORK/run4.log"; exit 1; }
+
 echo "PASS: build-cluster-demo injects a real ODS-2 identity for Node A, stages the page"
-echo "      verbatim, stays honest-partial on Node B/C, is byte-deterministic across"
-echo "      re-runs, and starts each tag's bundle clean (no in-place upgrade)."
+echo "      verbatim (including boot/assets/{xterm.js,xterm.css,xterm-pty.js}, rd vms-a4f),"
+echo "      stays honest-partial on Node B/C, is byte-deterministic across re-runs, starts"
+echo "      each tag's bundle clean (no in-place upgrade), and refuses to ship a bundle"
+echo "      Node A can't render into."

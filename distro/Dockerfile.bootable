@@ -1112,10 +1112,21 @@ RUN cp -r /system-stage/vms /system-stage-install-media-vms && \
 # Real VMS writes this once, at CLUSTER_CONFIG.COM time, onto the persistent
 # system disk; OVMX has no interactive equivalent yet (a disclosed gap, not a
 # silent one), so a specific boot's group/password is staged at IMAGE-BUILD
-# time here, gated on a build-arg that defaults OFF -- an ordinary build
-# (no --build-arg) stages nothing and boots with auth_group=0, byte-identical
-# to today. Only a caller who explicitly names a real cluster's group (e.g.
-# the lab VAX cluster's group 257) gets a CLUSTER_AUTHORIZE.DAT written.
+# time here, gated on a build-arg that defaults OFF. Only a caller who
+# explicitly names a real cluster's group (e.g. the lab VAX cluster's group
+# 257) gets a CLUSTER_AUTHORIZE.DAT written.
+#
+# WHAT AN ORDINARY BUILD THEREFORE IS, SAID OUT LOUD (rd vms-b34). No
+# --build-arg stages no record, the port falls back to group 0, and
+# AB-00-04-01-00-00 is a group no real cluster is on. That is why a shipped
+# V0.7 node sat beside a real single-node OpenVMS V7.3 cluster on the same
+# bridge for 195 s without exchanging ONE frame with it, while every surface
+# read healthy (tests/lab/captures/cn2-genesis-vaxlab4-20260920/). The node
+# now ANNOUNCES that at port start and in SHOW CLUSTER/LOCAL_PORTS -- "cluster
+# group 0 -- NOT CONFIGURED" -- instead of looking like a working cluster
+# node. Joining any real cluster still requires naming that cluster's group:
+# here, or via tests/lab/tools/stage_cluster_group.sh for an already-built
+# artifact, or ovmx.group= on the QEMU genesis rig.
 ARG CLUSTER_AUTH_GROUP=0
 ARG CLUSTER_AUTH_PASSWORD=""
 

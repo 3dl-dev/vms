@@ -1453,6 +1453,47 @@ static uint32_t load_cluster_sysgen_params(void)
  * (vms_cnxman.c), and it is repeated on the console because OPA0: is where
  * SYSINIT puts it and the executive's log is not OPA0: on either substrate.
  */
+/*
+ * report_cluster_group - which cluster group this node's port is in, and
+ * whether anyone configured it (rd vms-b34).
+ *
+ * WHY THIS IS AN OPERATOR LINE AND NOT A DEBUG DETAIL. The cluster group
+ * number IS the LAVC HELLO multicast address (AB-00-04-01-<lo>-<hi>), so two
+ * nodes with different numbers are not on the same cluster's wire at all -- and
+ * with no CLUSTER_AUTHORIZE record the port uses group 0, which no real cluster
+ * is on. Measured: a shipped V0.7 node sat beside a real single-node OpenVMS
+ * V7.3 cluster on one bridge for 195 s and exchanged ZERO frames with it, while
+ * "%CNXMAN, waiting to form or join" and every SHOW surface read healthy
+ * (tests/lab/captures/cn2-genesis-vaxlab4-20260920/). This is the line that
+ * makes that one glance instead of a pcap.
+ *
+ * The executive says the same thing on ITS console (vms_pe.c
+ * pe_announce_group), but that is the kernel log, not OPA0: -- the same reason
+ * report_cluster_state() below repeats the connection manager's own wording
+ * here. Both values are READ BACK from the port the executive really opened
+ * (CLUSTER_DIAG_PORT's PORT row), never from the configuration this image
+ * handed down (INV-6): if the two ever disagreed, this prints what the port is
+ * actually doing. A node whose port is not up prints nothing.
+ */
+static void report_cluster_group(void)
+{
+    struct vms_cluster_diag_port_args a;
+
+    memset(&a, 0, sizeof(a));
+    a.row = VMS_CLUSTER_DIAG_PORT_ROW;
+    if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL || !a.port.port_open)
+        return;
+
+    if (a.port.cluster_group_valid) {
+        printf("%%CNXMAN, cluster group %u (CLUSTER_AUTHORIZE)\n",
+               (unsigned)a.port.cluster_group);
+        return;
+    }
+    printf("%%CNXMAN, cluster group %u is NOT CONFIGURED (no CLUSTER_AUTHORIZE"
+           " record): this system cannot reach a real cluster\n",
+           (unsigned)a.port.cluster_group);
+}
+
 static void report_cluster_state(uint32_t state)
 {
     switch (state) {
@@ -1528,6 +1569,7 @@ static void start_cluster_port(uint32_t vaxcluster)
                 " PEA0: is not up\n");
         return;
     }
+    report_cluster_group();
     report_cluster_state(state);
 }
 

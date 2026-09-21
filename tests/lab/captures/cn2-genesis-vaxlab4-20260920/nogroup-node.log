@@ -1,0 +1,345 @@
+=== booted-OVMX node: SCSNODE=OVMXB4 SCSSYSTEMID=1834 tap=tap4 mac=52:54:00:00:00:f4 qemu=qemu-system-x86_64 (TCG) ===
+[node] recorded CAP_NET_RAW evidence -> /lab/k8s-labs/vaxlab-4/logs/ovmx-node-b34gen-1789939705.caps:
+[node]   # CAP_NET_RAW evidence for booted-OVMX node pid=1354 (OVMX_DROP_NET_RAW=1)
+[node]   CapInh:	0000000000000000
+[node]   CapPrm:	00000000a80415fb
+[node]   CapEff:	00000000a80415fb
+[node]   CapBnd:	00000000a80415fb
+[node]   CapAmb:	0000000000000000
+[node]   verdict: (e) PASS -- CAP_NET_RAW denied to the booted node (CapEff=00000000a80415fb CapBnd=00000000a80415fb, net_raw clear):
+[node]                        a userspace AF_PACKET raw open would EPERM, so a join proves the executive did it
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [node] SYSBOOT> reached
+SET SCSNODE OVMXB4
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXB4
+SYSBOOT> SET SCSSYSTEMID 1834
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1834
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 2
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 2
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    20-SEP-2026 21:28:49.26
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB4 set from SYS$SYSTEM:OVMXVMSSYS.PAR
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 20-SEP-2026 21:28:50.64
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-F4
+         MTU 1500, channels 0, circuits 0
+         frames tx 4 (errors 0), rx 0 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-0"
+OVMX-POLL-0
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:29:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-20"
+OVMX-POLL-20
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:29:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-40"
+OVMX-POLL-40
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:29:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-60"
+OVMX-POLL-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:30:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-80"
+OVMX-POLL-80
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:30:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-100"
+OVMX-POLL-100
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:30:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-120"
+OVMX-POLL-120
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:31:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-140"
+OVMX-POLL-140
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:31:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-160"
+OVMX-POLL-160
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:31:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-180"
+OVMX-POLL-180
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:32:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-200"
+OVMX-POLL-200
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:32:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-220"
+OVMX-POLL-220
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:32:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-240"
+OVMX-POLL-240
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:33:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-260"
+OVMX-POLL-260
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:33:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-280"
+OVMX-POLL-280
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:33:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-300"
+OVMX-POLL-300
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:34:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-320"
+OVMX-POLL-320
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:34:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-340"
+OVMX-POLL-340
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:34:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-360"
+OVMX-POLL-360
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:35:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-380"
+OVMX-POLL-380
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:35:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-400"
+OVMX-POLL-400
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:35:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ [node] join-poll held the node LIVE ~420s (full window; teardown is gated by the VAX-side STATUS==MEMBER verdict, not an OVMX self-report)
+WRITE SYS$OUTPUT "OVMX-CNXTRACE-BEGIN"
+OVMX-CNXTRACE-BEGIN
+$ RUN SYS$SYSTEM:CNXTRACE.EXE
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=IDLE failure=none ignored_events=0 recording=yes
+%CNXTRACE-I-COUNT, held=0 recorded=0 dropped=0
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=0 lockdirwt=0 gen=0 proxy_lkbs=0
+%CNXTRACE-I-DLMREQ, requests sent=0 received=0 grants sent=0 received=0 declined=0
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=0 unparsed=0 foreign=0
+%CNXTRACE-I-DLMRECV, releases received=0 refused=0  blkasts unparsed=0  deferred grants owed=0
+%CNXTRACE-I-DLMPOST, posts queued=0 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=0 refused=0 frames_rx=0 replies_sent=0 declined=0
+%CNXTRACE-I-END, 0 records printed
+$ WRITE SYS$OUTPUT "OVMX-CNXTRACE-END"
+OVMX-CNXTRACE-END
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-F4
+         MTU 1500, channels 0, circuits 0
+         frames tx 222 (errors 0), rx 0 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-SC-DONE"
+OVMX-SC-DONE
+$ LOGOUT
+  SYSTEM      logged out at 20-SEP-2026 21:36:32.37
+
+qemu-system-x86_64: terminating on signal 15 from pid 1354 (timeout)
+=== node boot driver done (rc=0) ===

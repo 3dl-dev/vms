@@ -149,7 +149,22 @@ struct vms_pe_view {
 	uint8_t  hwaddr_valid;       /* 0 unless exec_lan_hwaddr returned a real MAC */
 	uint8_t  hwaddr[6];          /* the interface's REAL hardware address */
 	uint8_t  link_up;            /* exec_lan_link_up on the bound interface */
-	uint8_t  pad0[3];
+	/*
+	 * WHICH CLUSTER GROUP THIS PORT IS IN, AND WHETHER ANYONE CHOSE IT
+	 * (rd vms-b34). The group number IS the HELLO multicast address --
+	 * AB-00-04-01-<lo>-<hi> -- so two nodes with different numbers are not
+	 * on the same cluster's wire at all, and nothing used to report either
+	 * fact. `cluster_group_valid` 0 means no CLUSTER_AUTHORIZE record was
+	 * ever loaded, so `cluster_group` is 0 BY DEFAULT rather than by
+	 * configuration, and this node cannot reach a real cluster. Both are
+	 * read off what the port really opened with (struct vms_pe), not
+	 * recomputed from parameters a later load may have changed.
+	 *
+	 * Takes the three existing pad bytes (u8 at 9, u16 at 10) -- the
+	 * 48-byte cross-substrate ABI is unchanged.
+	 */
+	uint8_t  cluster_group_valid;
+	uint16_t cluster_group;
 	uint32_t mtu;                /* the interface MTU that clamps the next field */
 	uint32_t max_pktsz;          /* NISCS_MAX_PKTSZ after the clamp */
 	uint32_t n_channels;         /* channel objects the port holds */

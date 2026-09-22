@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-09-16",
+    "generated": "2026-09-22",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -5255,7 +5255,7 @@
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vms_pe.c",
       "verified_against": null,
-      "notes": "FC-P0.9. The datalink is opened IN KERNEL CONTEXT (exec_l2_open(), the exec_kbackend seam: AF_PACKET on Linux, the NetBSD equivalent on the vax substrate), so a booted node needs no CAP_NET_RAW anywhere in userspace -- there is no userspace raw socket on the cluster path at all any more. Real frames on 0x6007, never a UDP/IP tunnel. PROVEN AT R1/R2/R3, in CI: tests/cluster/host/test_pe_*.c (the pure port FSM: channels, HELLO cadence, circuit formation, TIMVCFAIL, sequence/ack); the N-node simulator's virtual LAN; tests/qemu/test_cluster_vc.sh drives CLUSTER_DIAG_PORT against a real /dev/vms on a booted node. NOT claimed: interoperation with a real VAX's PEDRIVER on a live LAN -- that is R5, LAB-DEFERRED.\n",
+      "notes": "FC-P0.9. The datalink is opened IN KERNEL CONTEXT (exec_l2_open(), the exec_kbackend seam: AF_PACKET on Linux, the NetBSD equivalent on the vax substrate), so a booted node needs no CAP_NET_RAW anywhere in userspace -- there is no userspace raw socket on the cluster path at all any more. Real frames on 0x6007, never a UDP/IP tunnel. The HELLO multicast address is derived from the cluster group number as real VMS does it -- AB-00-04-01-<LE16(group + 0x100)>, the mapping VMS prints for itself at SYSMAN CONFIGURATION SHOW CLUSTER_AUTHORIZATION -- and the SAME derived value is both the transmit destination and the address enabled in the LAN device's multicast filter, so the two cannot diverge (rd vms-147; through V0.7 the derivation omitted the +0x100 and was correct for group 1 only). Grounded on three real-VMS oracles (V7.3/VAX group 1, V5.5-2H4/VAX group 257, V8.4/Alpha group 2026), pinned with refutations in tests/cluster/host/test_codec_hello.c. PROVEN AT R1/R2/R3, in CI: tests/cluster/host/test_pe_*.c (the pure port FSM: channels, HELLO cadence, circuit formation, TIMVCFAIL, sequence/ack); the N-node simulator's virtual LAN; tests/qemu/test_cluster_vc.sh drives CLUSTER_DIAG_PORT against a real /dev/vms on a booted node. NOT claimed: interoperation with a real VAX's PEDRIVER on a live LAN -- that is R5, LAB-DEFERRED.\n",
       "plan_ref": "vms-694"
     },
     {
@@ -6560,7 +6560,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmsssh/ssh_ident.c",
       "verified_against": null,
-      "notes": "The SEAMS are real and unit-tested: ssh_ident.c establishes identity through the executive (vms_kif_setident) and is FAIL-HONEST \u2014 if the executive refuses (even status, or /dev/vms absent) the session is DENIED with no local privileged fallback (tests/vmsssh/test_ssh_ident.c, closing the audit \u00a73.7 soft-fail bypass); term_map.c maps TERM -> VMS device type, labelled an OVMX design choice (not VMS-authentic) per Rule 8 (tests/vmsssh/test_term_mapping.c). Both are already reused by the TCP/IP inetd run-as path. status=partial (not implemented) because there is no SSH session wiring them end-to-end yet \u2014 that arrives with the real OpenSSH port (vms-9ef). The former 'RUNTIME-PROVEN over the wrapped sshd' claim (and its sshd_auth.c evidence) is WITHDRAWN: that scaffold was retired as LARP (vms-d916), so the runtime proof it rested on no longer exists.",
+      "notes": "The SEAMS are real and unit-tested: ssh_ident.c establishes identity through the executive (vms_kif_setident) and is FAIL-HONEST \u2014 if the executive refuses (even status, or /dev/vms absent) the session is DENIED with no local privileged fallback (tests/vmsssh/test_ssh_ident.c, closing the audit \u00a73.7 soft-fail bypass); term_map.c maps TERM -> VMS device type, labelled an OVMX design choice (not VMS-authentic) per Rule 8 (tests/vmsssh/test_term_mapping.c). ssh_ident.c is reused by the TCP/IP inetd run-as path (alongside cred_drop.c); term_map.c is unit-tested substrate with NO production caller yet \u2014 it will be wired by the real OpenSSH port (vms-9ef). status=partial (not implemented) because there is no SSH session wiring them end-to-end yet \u2014 that arrives with the real OpenSSH port (vms-9ef). The former 'RUNTIME-PROVEN over the wrapped sshd' claim (and its sshd_auth.c evidence) is WITHDRAWN: that scaffold was retired as LARP (vms-d916), so the runtime proof it rested on no longer exists.",
       "plan_ref": "vms-9ef"
     },
     {

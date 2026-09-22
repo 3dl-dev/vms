@@ -24,6 +24,15 @@ items:
       substrate), so a booted node needs no CAP_NET_RAW anywhere in userspace --
       there is no userspace raw socket on the cluster path at all any more. Real
       frames on 0x6007, never a UDP/IP tunnel.
+      The HELLO multicast address is derived from the cluster group number as
+      real VMS does it -- AB-00-04-01-<LE16(group + 0x100)>, the mapping VMS
+      prints for itself at SYSMAN CONFIGURATION SHOW CLUSTER_AUTHORIZATION --
+      and the SAME derived value is both the transmit destination and the
+      address enabled in the LAN device's multicast filter, so the two cannot
+      diverge (rd vms-147; through V0.7 the derivation omitted the +0x100 and
+      was correct for group 1 only). Grounded on three real-VMS oracles
+      (V7.3/VAX group 1, V5.5-2H4/VAX group 257, V8.4/Alpha group 2026), pinned
+      with refutations in tests/cluster/host/test_codec_hello.c.
       PROVEN AT R1/R2/R3, in CI: tests/cluster/host/test_pe_*.c (the pure port
       FSM: channels, HELLO cadence, circuit formation, TIMVCFAIL, sequence/ack);
       the N-node simulator's virtual LAN; tests/qemu/test_cluster_vc.sh drives

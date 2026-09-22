@@ -177,6 +177,29 @@ Cluster group `1` → multicast `AB-00-04-01-01-01` (SYSMAN CONFIGURATION
 SHOW CLUSTER_AUTHORIZATION: `Cluster group number: 1`, `Multicast address:
 AB-00-04-01-01-01`).
 
+**The group → multicast derivation (rd `vms-147`), GROUNDED on three real-VMS
+observations across three VMS versions and two architectures:**
+
+| Cluster group | Multicast address | Oracle |
+|---|---|---|
+| 1 | `AB-00-04-01-01-01` | **VMS's own output** — SYSMAN `CONFIGURATION SHOW CLUSTER_AUTHORIZATION` on the lab VAX1 (OpenVMS VAX V7.3), `sda-scs-extract-vax1.txt` |
+| 257 | `AB-00-04-01-01-02` | observed on the wire from the browser-demo Node C (OpenVMS VAX V5.5-2H4), whose volume was configured for group 257 |
+| 2026 | `AB-00-04-01-EA-08` | observed from OpenVMS Alpha V8.4, `tests/lab-alpha/README.md` (CLUSTER_CONFIG_LAN group number 2026) |
+
+The last two bytes are **`LE16(group + 0x100)`** — low byte first, with the
+group number **biased by 256**: `1+0x100=0x0101`→`01 01`,
+`257+0x100=0x0201`→`01 02`, `2026+0x100=0x08EA`→`EA 08`. A plain `LE16(group)`
+fits group 1 alone (it was OVMX's implementation through V0.7 and put a
+group-257 node on group 1's address); `group | 0x100` and `group ^ 0x100` are
+both refuted by the group-257 point. VMS group numbers run 1–4095, so the bias
+never carries out of the 16-bit field. Pinned in
+`tests/cluster/host/test_codec_hello.c`.
+
+⚠ **Reading a group number back out of a capture:** `group = LE16(bytes 4,5) −
+0x100`. Several earlier notes in this repo name the lab cluster "group 257"
+because they inverted the defective rule; the lab cluster is group **1**, as
+VMS itself prints above.
+
 SCS connections (SDA `SHOW CONNECTIONS` CDTs):
 
 | Local SYSAP | Remote | Local Con.ID | Remote Con.ID | Credit (Send/Recv) |

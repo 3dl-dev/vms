@@ -3,10 +3,12 @@
  * test_pe_glue_group.c - the cluster GROUP NUMBER is REPORTED, never silently
  * defaulted (rd vms-b34, test-ladder rung R1).
  *
- * THE DEFECT, MEASURED. The cluster group number IS the LAVC HELLO multicast
- * address -- AB-00-04-01-<lo>-<hi> (vms_cluster_codec_hello.c
- * vms_cluster_hello_mcast_build) -- so two nodes with different numbers are not
- * on the same cluster's wire at all. It reaches the executive from
+ * THE DEFECT, MEASURED. The cluster group number SELECTS the LAVC HELLO
+ * multicast address -- AB-00-04-01-<LE16(group + 0x100)>
+ * (vms_cluster_codec_hello.c vms_cluster_hello_mcast_build; the derivation and
+ * its three real-VMS oracles are pinned in test_codec_hello.c, rd vms-147) --
+ * so two nodes with different numbers are not on the same cluster's wire at
+ * all. It reaches the executive from
  * CLUSTER_AUTHORIZE (`params.auth_group`, with `params.auth_valid` saying a
  * real record was read), and vms_cluster.h's own contract is "`auth_valid` is 0
  * until the record is loaded; the port driver NEVER substitutes a default".
@@ -18,7 +20,7 @@
  * 20260920/) a booted V0.7 release node -- the shipped initramfs carries an
  * EMPTY /etc/ovmx, so no record -- ran a 195 s join window against a real
  * single-node OpenVMS V7.3 VMScluster on the same bridge: 225 frames to
- * AB-00-04-01-00-00 out, 180 to AB-00-04-01-01-01 (group 257) the other way,
+ * AB-00-04-01-00-00 out, 180 to AB-00-04-01-01-01 (group 1) the other way,
  * `channels 0, circuits 0, rx 0`, ZERO records in the executive's own join
  * ring. Every surface read healthy. Staging the cluster's real group and
  * changing nothing else, the same node was MEMBER on the VAX's own SDA CSB
@@ -79,16 +81,23 @@ static void test_group_is_the_address(void)
 {
 	uint8_t mac[VMS_ETH_ADDR_LEN];
 
-	vms_cluster_hello_mcast_build(257u, mac);
+	/* The lab's real OpenVMS V7.3 cluster is on AB-00-04-01-01-01, and its
+	 * group number is 1 -- VMS prints both itself (SYSMAN CONFIGURATION SHOW
+	 * CLUSTER_AUTHORIZATION on VAX1). The vms-b34 capture below calls that
+	 * address "group 257" because it inverted OVMX's then-defective
+	 * derivation to name it; rd vms-147 corrected the derivation, and the
+	 * arithmetic is pinned oracle-by-oracle in test_codec_hello.c. */
+	vms_cluster_hello_mcast_build(1u, mac);
 	ct_check(mac[0] == 0xabu && mac[1] == 0x00u && mac[2] == 0x04u &&
 		 mac[3] == 0x01u && mac[4] == 0x01u && mac[5] == 0x01u,
-		 "group 257 is AB-00-04-01-01-01 -- the address the lab's real "
+		 "group 1 is AB-00-04-01-01-01 -- the address the lab's real "
 		 "OpenVMS V7.3 cluster is on");
 
 	vms_cluster_hello_mcast_build(0u, mac);
-	ct_check(mac[4] == 0x00u && mac[5] == 0x00u,
-		 "group 0 is AB-00-04-01-00-00 -- where an unconfigured node "
-		 "spent 225 frames talking to nobody");
+	ct_check(mac[4] == 0x00u && mac[5] == 0x01u,
+		 "an unconfigured node's group 0 is AB-00-04-01-00-01 -- still "
+		 "an address no real cluster is on, which is why the port says "
+		 "out loud that nobody chose it");
 }
 
 /* ==========================================================================

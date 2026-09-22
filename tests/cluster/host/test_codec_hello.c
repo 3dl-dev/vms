@@ -395,29 +395,92 @@ static void test_lavc_address_helpers(void)
 }
 
 /*
- * E53: the HELLO multicast group address, ab:00:04:01:<LE16(group)>. Pins
- * the mapping a real config value must produce -- group 257 (0x0101, the lab
- * VAX cluster's CLUSTER_AUTHORIZE group, directly observed on the wire as
- * ab:00:04:01:01:01) and group 0 (the prior hardcoded/no-CLUSTER_AUTHORIZE
- * value, ab:00:04:01:00:00) -- so a regression here cannot silently point
- * OVMX's HELLO at the wrong cluster again.
+ * rd vms-147 (was E53): the HELLO multicast group address,
+ * ab:00:04:01:<LE16(group + 0x100)>.
+ *
+ * EVERY EXPECTATION BELOW IS A REAL-VMS OBSERVATION, not a restatement of what
+ * this codec happens to compute -- three of them, from three OpenVMS versions
+ * on two architectures, listed with their sources in
+ * vms_cluster_codec_hello.h. Two exist precisely because the one-point version
+ * of this test (group 1's address, mislabelled "group 257") let OVMX ship a
+ * derivation that was right for exactly one group and pointed every other
+ * cluster's node at the wrong multicast address.
+ *
+ * The refutation block is the teeth: it re-runs the three candidate formulas a
+ * reader might reach for (raw LE16, OR 0x100, XOR 0x100) against the SAME
+ * oracles and requires each to FAIL at least one, so "it matches the oracles"
+ * cannot be satisfied by an accident of one data point again.
  */
 static void test_hello_mcast_group_mapping(void)
 {
 	uint8_t mcast[VMS_ETH_ADDR_LEN];
-	static const uint8_t group_257[6] = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
-	static const uint8_t group_0[6]   = { 0xab, 0x00, 0x04, 0x01, 0x00, 0x00 };
+	/* group 1, OpenVMS VAX V7.3 -- printed by VMS itself, SYSMAN
+	 * CONFIGURATION SHOW CLUSTER_AUTHORIZATION on the lab's VAX1. */
+	static const uint8_t group_1[6]    = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
+	/* group 257, OpenVMS VAX V5.5-2H4 -- browser-demo Node C, observed
+	 * transmitting its 0x6007 HELLOs to this address (rd vms-147). */
+	static const uint8_t group_257[6]  = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x02 };
+	/* group 2026, OpenVMS Alpha V8.4 -- lab-alpha ALPHA1's HELLO multicast
+	 * (tests/lab-alpha/README.md). */
+	static const uint8_t group_2026[6] = { 0xab, 0x00, 0x04, 0x01, 0xea, 0x08 };
 
-	printf("-- CLUSTER_AUTHORIZE group <-> ab:00:04:01:<LE16(group)> HELLO mcast (E53)\n");
+	printf("-- CLUSTER_AUTHORIZE group -> ab:00:04:01:<LE16(group+0x100)> "
+	       "HELLO mcast (vms-147)\n");
+
+	vms_cluster_hello_mcast_build(1, mcast);
+	ct_check(memcmp(mcast, group_1, 6) == 0,
+		 "group 1 -> ab:00:04:01:01:01 (VMS's own SYSMAN CONFIGURATION "
+		 "SHOW CLUSTER_AUTHORIZATION output on the lab VAX1, V7.3)");
 
 	vms_cluster_hello_mcast_build(257, mcast);
 	ct_check(memcmp(mcast, group_257, 6) == 0,
-		 "group 257 (0x0101) -> ab:00:04:01:01:01 (the lab VAX cluster's "
-		 "observed group, GROUNDED not fabricated)");
+		 "group 257 -> ab:00:04:01:01:02 (observed on the wire from a "
+		 "real OpenVMS V5.5-2H4 node configured for group 257) -- NOT "
+		 "ab:00:04:01:01:01, which is group 1's address");
 
+	vms_cluster_hello_mcast_build(2026, mcast);
+	ct_check(memcmp(mcast, group_2026, 6) == 0,
+		 "group 2026 -> ab:00:04:01:ea:08 (observed from real OpenVMS "
+		 "Alpha V8.4, lab-alpha)");
+
+	/* Refutations: each wrong candidate must miss at least one oracle. */
+	{
+		struct { const char *name; uint16_t g; const uint8_t *want; } o[3] = {
+			{ "group 1",    1u,    group_1    },
+			{ "group 257",  257u,  group_257  },
+			{ "group 2026", 2026u, group_2026 },
+		};
+		int raw_hits = 0, or_hits = 0, xor_hits = 0;
+		int i;
+
+		for (i = 0; i < 3; i++) {
+			uint16_t raw = o[i].g;
+			uint16_t orv = (uint16_t)(o[i].g | 0x0100u);
+			uint16_t xorv = (uint16_t)(o[i].g ^ 0x0100u);
+
+			raw_hits += ((uint8_t)(raw & 0xffu) == o[i].want[4] &&
+				     (uint8_t)(raw >> 8) == o[i].want[5]);
+			or_hits += ((uint8_t)(orv & 0xffu) == o[i].want[4] &&
+				    (uint8_t)(orv >> 8) == o[i].want[5]);
+			xor_hits += ((uint8_t)(xorv & 0xffu) == o[i].want[4] &&
+				     (uint8_t)(xorv >> 8) == o[i].want[5]);
+		}
+		ct_check(raw_hits < 3,
+			 "a raw LE16(group) is REFUTED by the oracle set (it was "
+			 "OVMX's shipped bug: right for group 1 only)");
+		ct_check(or_hits < 3,
+			 "LE16(group | 0x100) is REFUTED by the oracle set");
+		ct_check(xor_hits < 3,
+			 "LE16(group ^ 0x100) is REFUTED by the oracle set");
+	}
+
+	/* Group 0 is not a VMS-assignable group -- it is OVMX's "nobody
+	 * configured one" state (vms_pe.c pe_hello_multicast, which says so on
+	 * the console). It gets the same single derivation, no special case. */
 	vms_cluster_hello_mcast_build(0, mcast);
-	ct_check(memcmp(mcast, group_0, 6) == 0,
-		 "group 0 -> ab:00:04:01:00:00 (the prior no-CLUSTER_AUTHORIZE value)");
+	ct_check(mcast[4] == 0x00u && mcast[5] == 0x01u,
+		 "group 0 (unconfigured, not a VMS group) -> ab:00:04:01:00:01 "
+		 "by the same arithmetic -- no second formula");
 }
 
 int main(void)

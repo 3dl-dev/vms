@@ -235,20 +235,57 @@ vms_codec_status_t vms_cluster_lavc_sysid(const uint8_t addr[VMS_ETH_ADDR_LEN],
 					  uint16_t *out);
 
 /* ------------------------------------------------------------------ *
- * HELLO multicast group address (spec sec 4a: AB-00-04-01-<LE16(group)>).
- * The group number is CLUSTER_AUTHORIZE's cluster group (vms_cluster.h
- * params.auth_group, loaded off CLUSTER_AUTHORIZE.DAT at boot) -- a real,
- * per-cluster config value, never a hardcoded constant (E53). Same LE16
- * convention as the LAVC prefix above (out[4]=low byte, out[5]=high byte),
- * confirmed against the lab VAX cluster's observed group 257 (0x0101) ->
- * ab:00:04:01:01:01 on the wire.
+ * HELLO multicast group address: AB-00-04-01-<LE16(group + 0x100)>
+ * (rd vms-147). The group number is CLUSTER_AUTHORIZE's cluster group
+ * (vms_cluster.h params.auth_group, loaded off CLUSTER_AUTHORIZE.DAT at
+ * boot) -- a real, per-cluster config value, never a hardcoded constant
+ * (E53).
+ *
+ * THE +0x100 IS NOT AN OVMX INVENTION AND NOT A GUESS. It is what real
+ * OpenVMS computes, derived clean-room (Rule 8) from VMS's OWN PRINTED
+ * MAPPING plus two independent on-wire observations -- no VSI source, no
+ * disassembly, no algorithm recomputed from a binary:
+ *
+ *   group 1    -> AB-00-04-01-01-01   OpenVMS VAX V7.3, lab VAX1, printed by
+ *                                     VMS itself: SYSMAN> CONFIGURATION SHOW
+ *                                     CLUSTER_AUTHORIZATION ->
+ *                                       "Node VAX1: Cluster group number: 1"
+ *                                       "Multicast address: AB-00-04-01-01-01"
+ *                                     (~/vax/cluster/captures/
+ *                                      sda-scs-extract-vax1.txt:423-424;
+ *                                      docs/cluster-protocol-spec.md sec 3)
+ *   group 257  -> AB-00-04-01-01-02   OpenVMS VAX V5.5-2H4 (browser-demo Node
+ *                                     C, CLUSTER_CONFIG group 257), observed
+ *                                     transmitting 0x6007 HELLOs to that
+ *                                     address on the demo's in-page hub
+ *   group 2026 -> AB-00-04-01-EA-08   OpenVMS Alpha V8.4 (lab-alpha ALPHA1,
+ *                                     CLUSTER_CONFIG_LAN group number 2026),
+ *                                     tests/lab-alpha/README.md:184/317/351
+ *
+ * 1+0x100=0x0101 -> LE 01 01; 257+0x100=0x0201 -> LE 01 02;
+ * 2026+0x100=0x08EA -> LE EA 08. Three VMS versions, two architectures, one
+ * arithmetic. The three points are what make it a DERIVATION rather than a
+ * pattern: a plain LE16(group) fits group 1 alone and is WRONG for the other
+ * two (it was OVMX's bug through V0.7 -- it pointed a group-257 node at the
+ * group-1 address, rd vms-147); OR/XOR of 0x100 are refuted by group 257.
+ *
+ * Range: VMS cluster group numbers are 1..4095, so the addend never carries
+ * out of the 16-bit field. Group 0 is "no group configured" (vms_pe.c
+ * pe_hello_multicast) -- not a VMS-assignable group, and what VMS would do
+ * with one is UNOBSERVED; the same arithmetic is applied so the executive has
+ * exactly one derivation, and the port says out loud that nobody chose it.
  * ------------------------------------------------------------------ */
 #define VMS_HELLO_MCAST_PREFIX0 0xabu
 #define VMS_HELLO_MCAST_PREFIX1 0x00u
 #define VMS_HELLO_MCAST_PREFIX2 0x04u
 #define VMS_HELLO_MCAST_PREFIX3 0x01u
 
-/* Build ab:00:04:01:<LE16(group)> into out[VMS_ETH_ADDR_LEN]. Pure. */
+/* The addend VMS applies to the group number before writing it LE into the
+ * last two bytes (see the three oracles above). */
+#define VMS_HELLO_MCAST_GROUP_BIAS 0x0100u
+
+/* Build ab:00:04:01:<LE16(group + VMS_HELLO_MCAST_GROUP_BIAS)> into
+ * out[VMS_ETH_ADDR_LEN]. Pure. */
 void vms_cluster_hello_mcast_build(uint16_t group, uint8_t out[VMS_ETH_ADDR_LEN]);
 
 #ifdef __cplusplus

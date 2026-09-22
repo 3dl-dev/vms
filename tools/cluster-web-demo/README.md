@@ -34,8 +34,10 @@ transfer/neutering across a 3-node page.
 `mk_democonfig.py`'s `DEMO_NODE_A` / `DEMO_NODE_B` / `DEMO_NODE_C` (and `DEMO_ROSTER`, the three in
 genesis-join order: C forms, A joins, B joins) are the **only** place the demo's three cluster identities
 (SCSNODE/SCSSYSTEMID/VOTES/EXPECTED_VOTES/GROUP) are declared — `OVMXA`/1987, `OVMXB`/1988, `VAXC`/1989, all
-group 257. The generator, the injectors and the demo page must import/consume this, never hardcode a second
-copy (single-ledger).
+group 257 — the group Node C's real OpenVMS V5.5-2H4 volume was configured with, which puts the whole demo
+segment on SCA HELLO multicast `ab:00:04:01:01:02` (`AB-00-04-01-<LE16(group + 0x100)>`, rd vms-147). The
+generator, the injectors and the demo page must import/consume this, never hardcode a second copy
+(single-ledger).
 
 ## `build-cluster-demo <TAG>` — the per-release generator (rd vms-f0f)
 

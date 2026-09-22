@@ -175,6 +175,28 @@ firing of the partial threshold is counted in
 `scs_fsm.credit_msg_partial_threshold`. A lab capture isolating that field
 would close it.
 
+### E87 — ✅ FIXED (rd vms-147). ⚠⚠ THE GROUP → MULTICAST DERIVATION WAS WRONG, AND A COMPENSATING MISLABEL HID IT FOR MONTHS
+
+**THE DEFECT.** `vms_cluster_hello_mcast_build()` built the LAVC HELLO multicast address as `AB-00-04-01-<LE16(group)>`. Real VMS builds `AB-00-04-01-<LE16(group + 0x100)>`. The two agree for **exactly one** group number — 1 — and differ for every other, so an OVMX node configured with its cluster's real group transmitted to, *and enabled in its NIC's multicast filter*, a **different cluster's address**. Both directions, one derivation: `pe_port_start()` uses the one built value for the port identity the FSM stamps on every HELLO **and** for `exec_lan_mc_add()`.
+
+**THE ORACLES (clean-room, Rule 8 — VMS's own printed output plus two on-wire observations; no VSI source, nothing recomputed from a binary):**
+
+| Group | Address | Source |
+|---|---|---|
+| 1 | `AB-00-04-01-01-01` | **VMS prints it itself**: `SYSMAN> CONFIGURATION SHOW CLUSTER_AUTHORIZATION` on the lab VAX1 (OpenVMS VAX V7.3) — `Cluster group number: 1` / `Multicast address: AB-00-04-01-01-01` (`~/vax/cluster/captures/sda-scs-extract-vax1.txt:423`) |
+| 257 | `AB-00-04-01-01-02` | browser-demo **Node C**, a real OpenVMS VAX **V5.5-2H4** volume configured for group 257, observed transmitting 0x6007 HELLOs to that address on the demo's in-page hub |
+| 2026 | `AB-00-04-01-EA-08` | real OpenVMS **Alpha V8.4** (lab-alpha ALPHA1, `CLUSTER_CONFIG_LAN` group number 2026) — `tests/lab-alpha/README.md` |
+
+`LE16(group)` fits group 1 alone; `group|0x100` and `group^0x100` are refuted by group 257. R1 pins all three oracles **and** the three refutations (`tests/cluster/host/test_codec_hello.c`).
+
+**HOW IT SURVIVED — AND THE HONEST CORRECTION TO E53/E86 AND THE CN=2 CAPTURE (PR #1288).** Nobody ever read the lab cluster's group number out of VMS; it was read out of the *wire* by inverting the defective rule — `ab:00:04:01:01:01` → "group 257". The lab cluster is **group 1**. OVMX was then configured with 257, which its defective builder turned back into group 1's address. **Two errors that cancelled**: the joins were real (a real VAX really admitted a real OVMX node on the right address), but the number OVMX called its group was not the cluster's group, and the derivation was defective. It was invisible on the lab bridge because both sides ended up on the same address.
+
+The **browser demo** is where it stopped cancelling: Node C's group 257 is a *real VMS* configuration, so Node C really does transmit to `ab:00:04:01:01:02`, while Node A (group 257, defective rule) transmitted to and filtered for `ab:00:04:01:01:01`. Node A's `SHOW CLUSTER/LOCAL_PORTS` read `rx 0, nobuf 0, badclass 0` — a NIC-level filter drop is counted nowhere — for the whole run.
+
+⚠ **CONSEQUENCE FOR THE LAB — READ BEFORE THE NEXT LAB RUN.** Staging `257` into an OVMX image now puts the node on `AB-00-04-01-01-02` and the lab join will go **silent**. Stage **1** (`tests/lab/tools/stage_cluster_group.sh <in> <out> 1`, `--build-arg CLUSTER_AUTH_GROUP=1`, `ovmx.group=1`). The capture note `tests/lab/captures/cn2-genesis-vaxlab4-20260920/README.md` carries this correction inline; its measurements are unchanged and still stand.
+
+**WHAT DID NOT CHANGE.** No frame layout, no FSM, no seam. One arithmetic expression in the codec, plus the labels on every surface that named a group number.
+
 ## LAB-lane inputs needed (capture/oracle — the lab owns these)
 
 ### E12. Decoded `vax3-2to3-established-join` capture for the replay oracle (raised by FC-P1.5)

@@ -109,10 +109,14 @@ report the other as a `MEMBER`.
 
 3. **Match the cluster group.** Every node in a cluster must carry the **same
    cluster group number** — it selects the LAVC HELLO multicast address
-   (`AB-00-04-01-<group>`), so nodes on different groups never hear each other.
+   (`AB-00-04-01-<LE16(group + 0x100)>`, the mapping VMS prints at `SYSMAN>
+   CONFIGURATION SHOW CLUSTER_AUTHORIZATION`), so nodes on different groups
+   never hear each other. Note the `+ 0x100`: group 1 is `AB-00-04-01-01-01`
+   and group 257 is `AB-00-04-01-01-02`, **not** the other way round (rd
+   vms-147 — OVMX got this wrong through V0.7).
    OVMX's group is set at image-build time by the `CLUSTER_AUTH_GROUP` build-arg
    (`distro/Dockerfile.bootable`; default `0` stages no `CLUSTER_AUTHORIZE.DAT`
-   and boots group 0; e.g. `257` to match the reference VAX lab), also settable
+   and boots group 0; e.g. `1` to match the reference VAX lab), also settable
    via the `build-boot-artifacts` workflow's `cluster_auth_group` dispatch input
    (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
    [Not yet supported](#cluster_authorize-is-a-lab-only-stand-in)). Both nodes

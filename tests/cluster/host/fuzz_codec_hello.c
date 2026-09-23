@@ -35,5 +35,15 @@ int main(void)
                                call_solicit, &sol);
     ct_check(ds > 0, "solicit_parse reached (fixture truncation+mutation), no over-read/crash");
 
+    /* rd vms-0f8: the SECOND discovery revision is the same unauthenticated
+     * pre-membership surface, reached by the same anonymous multicast -- and
+     * its frame is SIX BYTES SHORTER than the one the decoder was written
+     * against, which is exactly the shape an over-read hides in. Seeded from
+     * the real V5.5-2H4 specimen. */
+    dh = fz_fixture_frame_fuzz("hello-c3-vaxc-v55-multicast", VMS_FCLS_HELLO_C3,
+                               call_hello, &hello);
+    ct_check(dh > 0, "hello_parse reached on the C03 revision (fixture "
+                     "truncation+mutation), no over-read/crash");
+
     return ct_summary("fuzz_codec_hello");
 }

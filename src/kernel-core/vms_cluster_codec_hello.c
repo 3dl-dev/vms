@@ -17,13 +17,73 @@
 #include "vms_cluster_codec_hello.h"
 
 /* ------------------------------------------------------------------ *
+ * The discovery-revision table (vms_cluster_codec_hello.h, rd vms-0f8).
+ * DATA, not a switch ladder: adding a third revision is a row plus its
+ * specimen, never a branch in parse or build.
+ * ------------------------------------------------------------------ */
+static const struct vms_hello_rev_desc g_hello_revs[] = {
+	{ VMS_HELLO_REV_C05, VMS_DISC_CLASS_HELLO, VMS_HELLO_SCA_LEN,
+	  VMS_HELLO_FRAME_LEN, 1u, 1u, "c05" },
+	{ VMS_HELLO_REV_C03, VMS_DISC_CLASS_HELLO_C3, VMS_HELLO_C3_SCA_LEN,
+	  VMS_HELLO_C3_FRAME_LEN, 0u, 0u, "c03" },
+};
+
+#define G_HELLO_REV_N \
+	((uint8_t)(sizeof(g_hello_revs) / sizeof(g_hello_revs[0])))
+
+const struct vms_hello_rev_desc *vms_hello_rev_lookup(uint8_t rev)
+{
+	uint8_t i;
+
+	for (i = 0; i < G_HELLO_REV_N; i++) {
+		if (g_hello_revs[i].rev == rev)
+			return &g_hello_revs[i];
+	}
+	return (const struct vms_hello_rev_desc *)0;
+}
+
+const struct vms_hello_rev_desc *
+vms_hello_rev_for_class(const struct vms_frame_info *fi)
+{
+	if (fi == (const struct vms_frame_info *)0 ||
+	    fi->family != VMS_FFAM_DISCOVERY)
+		return (const struct vms_hello_rev_desc *)0;
+	if (fi->cls == VMS_FCLS_HELLO || fi->cls == VMS_FCLS_HELLO_PADDED)
+		return vms_hello_rev_lookup(VMS_HELLO_REV_C05);
+	if (fi->cls == VMS_FCLS_HELLO_C3)
+		return vms_hello_rev_lookup(VMS_HELLO_REV_C03);
+	return (const struct vms_hello_rev_desc *)0;
+}
+
+/* ------------------------------------------------------------------ *
  * HELLO (sec 4a shared header + 4b HELLO tail)
  * ------------------------------------------------------------------ */
+
+/*
+ * The abs 128-133 tail, which exists in VMS_HELLO_REV_C05 only. On a
+ * revision without it the three words are set to zero EXPLICITLY -- never
+ * left holding whatever the caller's struct happened to carry in, which
+ * would hand a caller a stale value dressed as wire data (INV-6).
+ */
+static void hello_get_tail128(vms_wire_view_t *v, struct vms_hello_frame *out,
+			      uint8_t present)
+{
+	if (!present) {
+		out->poller_sweep = 0u;
+		out->trailer_0064 = 0u;
+		out->trailer_0000 = 0u;
+		return;
+	}
+	out->poller_sweep = vms_wire_get_le16(v, VMS_OFF_HELLO_POLLER);
+	out->trailer_0064 = vms_wire_get_le16(v, VMS_OFF_HELLO_TR0064);
+	out->trailer_0000 = vms_wire_get_le16(v, VMS_OFF_HELLO_TR0000);
+}
 
 vms_codec_status_t vms_hello_parse(const uint8_t *frame, uint32_t len,
 				   const struct vms_frame_info *fi,
 				   struct vms_hello_frame *out)
 {
+	const struct vms_hello_rev_desc *rv;
 	vms_wire_view_t v;
 	vms_codec_status_t st;
 	uint8_t disc_class;
@@ -31,8 +91,8 @@ vms_codec_status_t vms_hello_parse(const uint8_t *frame, uint32_t len,
 	if (out == (struct vms_hello_frame *)0 ||
 	    fi == (const struct vms_frame_info *)0)
 		return VMS_CODEC_E_INVAL;
-	if (fi->family != VMS_FFAM_DISCOVERY ||
-	    (fi->cls != VMS_FCLS_HELLO && fi->cls != VMS_FCLS_HELLO_PADDED))
+	rv = vms_hello_rev_for_class(fi);
+	if (rv == (const struct vms_hello_rev_desc *)0)
 		return VMS_CODEC_E_CLASS;
 
 	st = vms_sca_hdr_parse(frame, len, &out->hdr);
@@ -47,8 +107,9 @@ vms_codec_status_t vms_hello_parse(const uint8_t *frame, uint32_t len,
 	 * caller's classification without checking is how a class-mismatch
 	 * bug turns into wrong data instead of a refusal (INV-6). */
 	disc_class = vms_wire_get_u8(&v, VMS_OFF_DISC_CLASS);
-	if (vms_wire_view_ok(&v) && disc_class != VMS_DISC_CLASS_HELLO)
+	if (vms_wire_view_ok(&v) && disc_class != rv->disc_class)
 		return VMS_CODEC_E_CLASS;
+	out->revision = rv->rev;
 
 	out->disc.namelen = vms_wire_get_u8(&v, VMS_OFF_DISC_NAMELEN);
 	vms_wire_get_bytes(&v, VMS_OFF_DISC_NAME, VMS_HELLO_NODENAME_MAX,
@@ -72,9 +133,7 @@ vms_codec_status_t vms_hello_parse(const uint8_t *frame, uint32_t len,
 	vms_wire_get_bytes(&v, VMS_OFF_HELLO_HWMAC, VMS_ETH_ADDR_LEN,
 			   out->hw_mac);
 	out->trailer_2600 = vms_wire_get_le16(&v, VMS_OFF_HELLO_TR2600);
-	out->poller_sweep = vms_wire_get_le16(&v, VMS_OFF_HELLO_POLLER);
-	out->trailer_0064 = vms_wire_get_le16(&v, VMS_OFF_HELLO_TR0064);
-	out->trailer_0000 = vms_wire_get_le16(&v, VMS_OFF_HELLO_TR0000);
+	hello_get_tail128(&v, out, rv->has_tail128);
 
 	if (!vms_wire_view_ok(&v))
 		return v.err;
@@ -104,16 +163,57 @@ static void disc_put_body(vms_wire_buf_t *w, const struct vms_disc_body *d)
 	vms_wire_put_bytes(w, VMS_OFF_DISC_NONCE, VMS_DISC_NONCE_LEN, d->nonce);
 }
 
-vms_codec_status_t vms_hello_build(const struct vms_hello_frame *h,
-				   uint8_t *frame, uint32_t cap,
-				   uint32_t *written)
+/* The abs 128-133 tail. Emitted only by the revision that HAS it. */
+static void hello_put_tail128(vms_wire_buf_t *w,
+			      const struct vms_hello_frame *h)
+{
+	vms_wire_put_le16(w, VMS_OFF_HELLO_POLLER, h->poller_sweep);
+	vms_wire_put_le16(w, VMS_OFF_HELLO_TR0064, h->trailer_0064);
+	vms_wire_put_le16(w, VMS_OFF_HELLO_TR0000, h->trailer_0000);
+}
+
+/* The span both revisions share, abs 72-127. */
+static void hello_put_common_tail(vms_wire_buf_t *w,
+				  const struct vms_hello_frame *h)
+{
+	vms_wire_put_zero(w, VMS_OFF_HELLO_ZEROPAD1, VMS_HELLO_ZEROPAD1_LEN);
+	vms_wire_put_le16(w, VMS_OFF_HELLO_INCARN, h->incarnation);
+	vms_wire_put_le16(w, VMS_OFF_HELLO_TR9205, h->trailer_9205);
+	vms_wire_put_bytes(w, VMS_OFF_HELLO_TIMER, 6, h->timer_tick);
+	vms_wire_put_bytes(w, VMS_OFF_HELLO_TAILCONST, VMS_HELLO_TAILCONST_LEN,
+			   h->tail_const);
+	vms_wire_put_zero(w, VMS_OFF_HELLO_ZEROPAD2, VMS_HELLO_ZEROPAD2_LEN);
+	vms_wire_put_bytes(w, VMS_OFF_HELLO_HWMAC, VMS_ETH_ADDR_LEN, h->hw_mac);
+	vms_wire_put_le16(w, VMS_OFF_HELLO_TR2600, h->trailer_2600);
+}
+
+/*
+ * Resolve the revision a build request names, refusing anything
+ * self-contradictory. NULL out means: unknown revision, or a length field
+ * that disagrees with it.
+ */
+static const struct vms_hello_rev_desc *
+hello_build_rev(const struct vms_hello_frame *h)
+{
+	const struct vms_hello_rev_desc *rv = vms_hello_rev_lookup(h->revision);
+
+	if (rv == (const struct vms_hello_rev_desc *)0)
+		return rv;
+	if ((uint32_t)h->hdr.sca_len_field + 2u != (uint32_t)rv->sca_content)
+		return (const struct vms_hello_rev_desc *)0;
+	return rv;
+}
+
+/* Lay one HELLO of revision `rv` into `frame`. No length policy of its own:
+ * both public entries below decide that, because the padded form's SCA
+ * length is the PADDED total, not the revision's. */
+static vms_codec_status_t hello_emit(const struct vms_hello_frame *h,
+				     const struct vms_hello_rev_desc *rv,
+				     uint8_t *frame, uint32_t cap)
 {
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 	uint32_t hdr_written = 0;
-
-	if (h == (const struct vms_hello_frame *)0)
-		return VMS_CODEC_E_INVAL;
 
 	st = vms_sca_hdr_build(&h->hdr, frame, cap, &hdr_written);
 	if (st != VMS_CODEC_OK)
@@ -123,27 +223,36 @@ vms_codec_status_t vms_hello_build(const struct vms_hello_frame *h,
 	if (!vms_wire_buf_ok(&w))
 		return VMS_CODEC_E_INVAL;
 
-	disc_put_format_markers(&w, VMS_DISC_CLASS_HELLO);
+	disc_put_format_markers(&w, rv->disc_class);
 	disc_put_body(&w, &h->disc);
+	hello_put_common_tail(&w, h);
+	if (rv->has_tail128)
+		hello_put_tail128(&w, h);
 
-	vms_wire_put_zero(&w, VMS_OFF_HELLO_ZEROPAD1, VMS_HELLO_ZEROPAD1_LEN);
-	vms_wire_put_le16(&w, VMS_OFF_HELLO_INCARN, h->incarnation);
-	vms_wire_put_le16(&w, VMS_OFF_HELLO_TR9205, h->trailer_9205);
-	vms_wire_put_bytes(&w, VMS_OFF_HELLO_TIMER, 6, h->timer_tick);
-	vms_wire_put_bytes(&w, VMS_OFF_HELLO_TAILCONST, VMS_HELLO_TAILCONST_LEN,
-			   h->tail_const);
-	vms_wire_put_zero(&w, VMS_OFF_HELLO_ZEROPAD2, VMS_HELLO_ZEROPAD2_LEN);
-	vms_wire_put_bytes(&w, VMS_OFF_HELLO_HWMAC, VMS_ETH_ADDR_LEN, h->hw_mac);
-	vms_wire_put_le16(&w, VMS_OFF_HELLO_TR2600, h->trailer_2600);
-	vms_wire_put_le16(&w, VMS_OFF_HELLO_POLLER, h->poller_sweep);
-	vms_wire_put_le16(&w, VMS_OFF_HELLO_TR0064, h->trailer_0064);
-	vms_wire_put_le16(&w, VMS_OFF_HELLO_TR0000, h->trailer_0000);
+	return vms_wire_buf_ok(&w) ? VMS_CODEC_OK : w.err;
+}
 
-	if (!vms_wire_buf_ok(&w))
-		return w.err;
+vms_codec_status_t vms_hello_build(const struct vms_hello_frame *h,
+				   uint8_t *frame, uint32_t cap,
+				   uint32_t *written)
+{
+	const struct vms_hello_rev_desc *rv;
+	vms_codec_status_t st;
+
+	if (h == (const struct vms_hello_frame *)0)
+		return VMS_CODEC_E_INVAL;
+	rv = hello_build_rev(h);
+	if (rv == (const struct vms_hello_rev_desc *)0)
+		return VMS_CODEC_E_INVAL;
+	if (cap < (uint32_t)rv->frame_len)
+		return VMS_CODEC_E_RANGE;
+
+	st = hello_emit(h, rv, frame, cap);
+	if (st != VMS_CODEC_OK)
+		return st;
 
 	if (written != (uint32_t *)0)
-		*written = VMS_HELLO_FRAME_LEN;
+		*written = rv->frame_len;
 	return VMS_CODEC_OK;
 }
 
@@ -152,13 +261,19 @@ vms_codec_status_t vms_hello_build_padded(const struct vms_hello_frame *h,
 					  uint8_t *frame, uint32_t cap,
 					  uint32_t *written)
 {
+	const struct vms_hello_rev_desc *rv;
 	vms_wire_buf_t w;
 	vms_codec_status_t st;
 	uint32_t frame_len;
-	uint32_t base_written = 0;
 
 	if (h == (const struct vms_hello_frame *)0)
 		return VMS_CODEC_E_INVAL;
+	/* sec 4(k)'s size ladder was measured entirely on VMS_HELLO_REV_C05.
+	 * No padded class-0x03 frame has ever been observed, so this refuses
+	 * rather than extrapolating a shape nobody has seen (INV-6). */
+	if (h->revision != (uint8_t)VMS_HELLO_REV_C05)
+		return VMS_CODEC_E_INVAL;
+	rv = vms_hello_rev_lookup(VMS_HELLO_REV_C05);
 	if (total_sca_len < VMS_HELLO_SCA_LEN ||
 	    total_sca_len > VMS_HELLO_PADDED_MAX_SCA)
 		return VMS_CODEC_E_INVAL;
@@ -176,7 +291,7 @@ vms_codec_status_t vms_hello_build_padded(const struct vms_hello_frame *h,
 	if (!vms_wire_buf_ok(&w))
 		return w.err;
 
-	st = vms_hello_build(h, frame, cap, &base_written);
+	st = hello_emit(h, rv, frame, cap);
 	if (st != VMS_CODEC_OK)
 		return st;
 

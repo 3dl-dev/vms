@@ -485,6 +485,13 @@ target_compile_definitions(test_pe_glue_group PRIVATE
 # the invariant "the sum of everything this port promised never exceeds the
 # buffers it owns", which is what makes the abs-95 byte test_pe_vc.c asserts on
 # a promise this node can actually keep.
+# rd vms-0f8: the port driven by a REAL OpenVMS VAX V5.5-2H4 node's own 128
+# bytes -- the second discovery revision. Receive (badclass -> 0, peer identity
+# out of the real frame), learn (the revision, per channel and port-wide),
+# transmit (the peer's revision carrying OUR identity), and the never-crash
+# corpus. Needs the fixture loader, which cluster_host_pe_test already links.
+cluster_host_pe_test(test_pe_rev_c3    test_pe_rev_c3.c)
+
 cluster_host_pe_test(test_pe_credit    test_pe_credit.c)
 cluster_host_pe_test(test_pe_formation test_pe_formation.c)
 

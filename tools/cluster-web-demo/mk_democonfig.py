@@ -187,8 +187,10 @@ REQUIRED_LOADER_PARAMS = [
 #
 # SCSSYSTEMID values avoid ids used in tests/lab captures (1025/1026 = the VAX
 # lab nodes, 1986 = OVMXJ1). All three share GROUP 257 -- the group Node C's
-# real OpenVMS V5.5-2H4 volume was configured with (tools/lab-vax/
-# build_nodeC_vms55_cluster.sh CLUSTER_GROUP=257), which puts the demo segment
+# real OpenVMS volume was configured with (tools/lab-vax/
+# build_nodeC_vms73_cluster.sh CLUSTER_GROUP=257 -- V7.3 per rd vms-d24, which
+# superseded the original V5.5 volume build_nodeC_vms55_cluster.sh still
+# documents for anyone who needs it), which puts the demo segment
 # on SCA HELLO multicast ab:00:04:01:01:02: the address is
 # AB-00-04-01-<LE16(group + 0x100)>, not LE16(group) (rd vms-147 -- an earlier
 # comment here read the group off ab:00:04:01:01:01, which is group 1's
@@ -217,7 +219,8 @@ DEMO_NODE_B = {
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
 }
 
-# Node C (real OpenVMS 5.5-2H4 VAX, pcjs KA655) -- STAGED, and NOT authored by
+# Node C (real OpenVMS VAX, pcjs KA655; V7.3 per rd vms-d24 as of rd vms-2570,
+# superseding the original V5.5-2H4 choice) -- STAGED, and NOT authored by
 # this tool's byte-writers at this edition: it is a PINNED, pre-configured,
 # operator-maintained cluster volume (the real cluster password is an
 # operator fact never committed to this repo, per docs/design/cluster-web-

@@ -1,0 +1,1 @@
+74fae16830b9cfe0d6be9c116cc46409a8e2f7c6fcc06924c88b7717cb41ac0b  data/d0.dsk

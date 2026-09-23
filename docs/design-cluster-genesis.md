@@ -213,6 +213,97 @@ Tests: `tests/cluster/host/test_cnxman_genesis.c` (predicate truth table +
 end-to-end founding) and `tests/cluster/host/test_cnxman_genesis_negctl.c`
 (every refusal, each with the CLUB compared byte-for-byte before and after).
 
+## Update 2026-09-23 (vms-151): SYMMETRIC genesis — two fresh nodes that can see each other
+
+The mechanism above forms a cluster when a node finds **nobody**. It could not
+form one when two fresh nodes found **each other**, which is the ordinary way an
+all-OVMX cluster comes up. Measured: two OVMX/x86 nodes (OVMXA/1987,
+OVMXD/1990, group 257) booted in the browser, their SCS virtual circuits opened
+bidirectionally in ~15 s and stayed open — and 25 minutes later both consoles
+still showed a blank CSID and neither had ever printed `%CNXMAN, this node is
+now a VAXcluster member`. Each held a CSB for the other, so
+`coord_has_peer_csb()` refused **both**; and neither could be joined, because
+admission needs a coordinator and a coordinator needs a CSID.
+
+### Root cause 1 — the gate conflated three different facts
+
+"There is a system present" was the right question. "Therefore I join it" was
+the wrong conclusion: a system that is not in a cluster cannot admit anybody.
+`cnxman_coord_found()` now asks the three separately, each one a read of real
+CSB state (`vms_cnxman_coord_fsm.h` §8b, "THE ELECTION"):
+
+1. **That system already holds a cluster identity** — a CSID on its CSB, or
+   this CLUB's own MEMBER/SELECTED flag → **JOIN, never form**. This is the
+   clause that keeps a booting OVMX node from forming a singleton beside a live
+   VAXcluster, and it is *unchanged in strength* (footgun #1 above).
+   `genesis_refused_peer`.
+2. **That system has not been asked yet** → ask before forming. What settles
+   "is there a cluster here?" is the question the join FSM already asks: a
+   member takes a membership request and coordinates an admission within
+   milliseconds (spec §4(o)); a system that is not in a cluster cannot. So a
+   node may form only after at least one **complete** round in which every
+   system it could see was asked and none took the request — the join FSM's own
+   `attempts_exhausted`, handed in as `struct cnxman_form_evidence`, never
+   inferred by the coordinator and never cached by the glue.
+   `genesis_refused_unasked`.
+3. **That system is another founding candidate** → exactly one of us forms.
+   Book p. 7-32's published mechanism is the **coordinator lock** (ask every
+   selected system, one already granted refuses, collisions back off a random
+   short interval). OVMX **cannot ask**: no capture in the library contains a
+   coordinator-lock request or grant and no opcode is grounded for one, and
+   inventing a frame for it is the failure class that bugchecked two real VAXes.
+   What ships instead is a **total order over a value every candidate already
+   advertises** — the SCSSYSTEMID in its CSB, **lowest first**. It is labelled
+   for what it is: an **OVMX design value** standing in for a mechanism OVMX has
+   no grounding to speak. The properties that matter are that it is total (it
+   cannot elect two), symmetric (both nodes decide identically from the same
+   wire-learned numbers) and needs no frame; the *direction* is arbitrary and is
+   not claimed to be VMS's. Who counts as a candidate is read too: FORM requires
+   VOTES > 0 (pp. 7-28, 7-33), so a peer whose own PARAMS advertise zero votes
+   can never form and is not a rival (deferring to it would be the same deadlock
+   in a new shape), while a peer whose PARAMS have not arrived is unknown and is
+   treated as one. `genesis_refused_outranked`, plus the `deferred_to_sysid`
+   this node really stood down for.
+
+The **loser does nothing new**: it keeps the join drive it was already running,
+and the moment the winner is a member its op-0x02 is taken and it is admitted on
+the ordinary path. There is no second code path for "the node that lost".
+
+### Root cause 2 — the founder's CSID used the falsified slot rule
+
+`coord_genesis_csid()` built `(1 << 16) | (SCSSYSTEMID & 0x3ff)`. rd vms-3a7c had
+already settled the assignment rule against the lab oracle — a coordinator hands
+out the **round-robin CSV slot** (p. 7-25), never a function of the SCSSYSTEMID
+(1986 was assigned slot 3, 1026 was assigned slot 3) — but only the *admission*
+path was moved onto it. The capture that suggested the old reading cannot
+distinguish the two: both real founders it shows (1025 → 0x00010001, 1027 →
+0x00010003) have system ids whose bottom ten bits happen to equal their slots.
+
+It is not harmless. A founder whose SCSSYSTEMID's bottom ten bits fall outside
+the grounded 8-slot nodemap byte **could not found at all** — and the demo's own
+Node A, SCSSYSTEMID 1987, asks for slot 963 and was refused `NO_SLOT`. The
+founder now goes through `coord_next_slot()` and the shared
+`coord_csid_of_slot()`, taking slot 1 on a virgin CLUB.
+
+### Also
+
+The discovery window is now armed for **every** VAXCLUSTER=2 node and **before**
+the join drive. It used to be armed only on the branch where no join could be
+started, so a node that could see a peer at CLUSTER_START never armed it — and
+when that join later ended unanswered, the window it needed in order to form had
+never been running and could never elapse.
+
+### Tests
+
+`tests/cluster/host/test_cnxman_genesis.c`: the founder takes slot 1 for
+SCSSYSTEMID 1987 / 1024 / 1032 (all three refused before); the election elects
+**exactly one** of the two symmetric decisions; a VOTES=0 peer is not a rival and
+an unknown one is; even the winner asks before it forms, and a node alone still
+founds with no evidence at all. `test_cnxman_genesis_negctl.c`: the loser mints
+nothing, a CSID-holding peer refuses forming however many rounds were exhausted,
+and `NO_SLOT` is re-anchored on the real condition it guards. Every refusal
+still compares the whole CLUB byte-for-byte before and after.
+
 ## References
 
 - `docs/compat/facilities/cluster-dlm.yaml` (the four downgraded rows + wire_format)

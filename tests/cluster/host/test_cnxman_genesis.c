@@ -298,6 +298,18 @@ static void test_founds_and_becomes_member(void)
 	ct_check_eq_u32(g.c.opens_sent + g.c.gos_sent + g.c.releases_sent, 0u,
 			"no open, no GO, no release originated");
 
+	/*
+	 * AND THE FOUNDER SAID SO (rd vms-151). A joiner announces its
+	 * membership from the join FSM; a founder never runs that FSM, so until
+	 * this the one node that formed the cluster was the one node whose
+	 * console never said it was in one -- and the in-browser proof reads
+	 * exactly that line off both consoles.
+	 */
+	ct_check(strcmp(g.fake.last_log,
+			"%CNXMAN, this node is now a VAXcluster member") == 0,
+		 "the founder announces its membership in the same words a "
+		 "joiner does, AFTER phase2 committed it");
+
 	/* The founded cluster's quorum, recomputed from the CSBs phase2 just
 	 * committed -- the glue does this immediately after founding. */
 	cnxman_quorum_recompute(&g.cl.club);

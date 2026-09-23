@@ -1948,7 +1948,19 @@ int cnxman_coord_found(struct cnxman_coord *c,
 	 * flag (vms_cnxman_phase2.c tasks 1/3/4). A caller that trusted the
 	 * return of the drive above would be asserting a membership.
 	 */
-	return c->phase2_committed ? 0 : -1;
+	if (!c->phase2_committed)
+		return -1;
+	/*
+	 * ... AND THE FOUNDER SAYS IT OUT LOUD, like every other member (rd
+	 * vms-151). A JOINER announces its membership from the join FSM's
+	 * transition-done handler; a founder never runs that FSM, so the one
+	 * node that formed the cluster was the one node that never announced
+	 * being in it. The line is the same one, printed from the same fact --
+	 * phase2's committed MEMBER flag, read back above -- and never before
+	 * it, so it can no more be said without a membership than the joiner's.
+	 */
+	coord_log(c, "%CNXMAN, this node is now a VAXcluster member");
+	return 0;
 }
 
 static void coord_retry_deferred(struct cnxman_coord *c)

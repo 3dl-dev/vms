@@ -377,6 +377,38 @@ master_system_volume() {
   log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR + [USERS]"
 }
 
+# rd vms-cee (OPTIONAL, no-op unless CLUSTER_SCSNODE is set): rewrite the
+# mastered SYSTEM volume's SYS$SYSTEM:OVMXVMSSYS.PAR (SCSNODE/SCSSYSTEMID/
+# VOTES/EXPECTED_VOTES/VAXCLUSTER) so a browser-demo node (or any other VAX
+# cluster node) boots pre-configured, rather than with the stock stand-alone
+# seed master_system_volume() ships. Runs BEFORE build_single_disk() dd's
+# SYSVOL_IMG into the disklabel's ODS-2 partition 'e', so no disklabel/offset
+# knowledge is needed here -- SYSVOL_IMG is still a bare ODS-2 volume file,
+# exactly the shape tools/cluster-web-demo/inject-ods2-config.sh (the SAME
+# tested x86 Node-A injector) already writes. REUSE ONLY: no parallel ODS-2
+# code. inject-ods2-config.sh always emits qcow2 (matching the x86 sysdisk
+# convention); converted back to raw here since SYSVOL_IMG must stay a plain
+# raw file for mk_single_disk.py's dd-style embed.
+inject_cluster_sysvol_config() {
+  [ -n "${CLUSTER_SCSNODE:-}" ] || return 0
+  [ -n "${CLUSTER_SCSSYSTEMID:-}" ] || die "CLUSTER_SCSNODE is set but CLUSTER_SCSSYSTEMID is not"
+  command -v qemu-img >/dev/null 2>&1 || die "CLUSTER_SCSNODE requested but qemu-img is not on PATH"
+  local injector="${REPO}/tools/cluster-web-demo/inject-ods2-config.sh"
+  [ -f "${injector}" ] || die "inject-ods2-config.sh not found at ${injector}"
+  local tmp_qcow2="${SYSVOL_IMG}.cluster-inject.qcow2"
+  log "injecting cluster config onto the mastered SYSTEM volume: SCSNODE=${CLUSTER_SCSNODE} SCSSYSTEMID=${CLUSTER_SCSSYSTEMID} VOTES=${CLUSTER_VOTES:-1} EXPECTED_VOTES=${CLUSTER_EXPECTED_VOTES:-1} VAXCLUSTER=${CLUSTER_VAXCLUSTER:-2}"
+  sh "${injector}" "${SYSVOL_IMG}" "${tmp_qcow2}" \
+    --scsnode "${CLUSTER_SCSNODE}" --scssystemid "${CLUSTER_SCSSYSTEMID}" \
+    --votes "${CLUSTER_VOTES:-1}" --expected-votes "${CLUSTER_EXPECTED_VOTES:-1}" \
+    --vaxcluster "${CLUSTER_VAXCLUSTER:-2}" \
+    || die "cluster config injection onto the mastered SYSTEM volume failed"
+  qemu-img convert -O raw "${tmp_qcow2}" "${SYSVOL_IMG}.raw-new" \
+    || die "qcow2->raw convert-back of the injected SYSTEM volume failed"
+  mv "${SYSVOL_IMG}.raw-new" "${SYSVOL_IMG}"
+  rm -f "${tmp_qcow2}"
+  log "OK: mastered SYSTEM volume now carries the injected cluster config"
+}
+
 # 3d (install). Cross-build the FULL shipped vax image set via the top-level
 #    CMake `ovmx-images' target (tools/cross-vax/build-ovmx-images-vax-cmake.sh)
 #    and collect the boot + utility images (PRODUCT/AUTHORIZE/INITIALIZE/SYSGEN)
@@ -805,10 +837,27 @@ build_single_disk() {
   #    gives a shell), target=single on rq1, artifact CD on rq2 -- resize_ffs the
   #    target root FFS down to SINGLE_A_SECTORS, MAKEDEV ra0 on it (so /dev/ra0e
   #    exists), replace its module_path vms.kmod with the ra0e-aware build.
+  #    CLUSTER_AUTH_FILE (rd vms-cee, optional, unset by default): a host path
+  #    UNDER ${CACHE_DIR} carrying an authored CLUSTER_AUTHORIZE.DAT to install
+  #    onto the target's FFS root at /etc/ovmx/cluster_authorize.dat in the SAME
+  #    session (build-time, not a second boot). Unset -> byte-identical to
+  #    before (no cluster_authorize.dat touched, zero regression for every
+  #    existing sysboot-single caller, e.g. the single-node VAX browser demo).
   log "single-disk in-guest assembly (resize_ffs + ra0 nodes + kmod swap)"
+  local cluster_auth_env=()
+  if [ -n "${CLUSTER_AUTH_FILE:-}" ]; then
+    case "${CLUSTER_AUTH_FILE}" in
+      "${CACHE_DIR}"/*) ;;
+      *) die "CLUSTER_AUTH_FILE must be under CACHE_DIR (${CACHE_DIR}) so the build container can see it: ${CLUSTER_AUTH_FILE}" ;;
+    esac
+    [ -f "${CLUSTER_AUTH_FILE}" ] || die "CLUSTER_AUTH_FILE not found: ${CLUSTER_AUTH_FILE}"
+    cluster_auth_env=(-e "OVMX_CLUSTER_AUTH_FILE=/cache/${CLUSTER_AUTH_FILE#"${CACHE_DIR}"/}")
+    log "  + injecting CLUSTER_AUTHORIZE.DAT from ${CLUSTER_AUTH_FILE}"
+  fi
   run_session assemble-single /cache/anita-work \
     -e OVMX_SINGLE_IMG=/cache/single-work/wd0.img \
     -e OVMX_SINGLE_A_SECTORS="${SINGLE_A_SECTORS}" \
+    "${cluster_auth_env[@]}" \
     || die "single-disk in-guest assembly session failed"
 
   # 4. Host-side finish: rewrite the disklabel (shrink 'a', add ODS-2 'e', slim
@@ -916,8 +965,12 @@ case "${MODE}" in
     # single `attach rq0' (NO rq1) and prove it reaches Username: with DUA0:
     # bound to the boot disk's ODS-2 partition (ra0e).
     #   tests/lab-vax/run-boot.sh sysboot-single
+    # (rd vms-cee: CLUSTER_SCSNODE/CLUSTER_SCSSYSTEMID etc, unset by default,
+    # inject a cluster config onto the mastered volume between the two -- see
+    # inject_cluster_sysvol_config()'s own comment.)
     build_boot_image_set
     master_system_volume
+    inject_cluster_sysvol_config
     build_single_disk
     run_sysboot_single && exit 0
     exit 1

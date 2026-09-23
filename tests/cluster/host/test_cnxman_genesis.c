@@ -121,7 +121,8 @@ static const struct dlm_scs_role_ops bed_dlm_ops = {
 
 /* A node exactly as it stands at CLUSTER_START: SYSGEN parameters loaded, the
  * CLUB initialised with its own local CSB, NO CSID, no peers, not a member. */
-static void bed_init(uint16_t votes, uint16_t expected_votes)
+static void bed_init_sysid(uint16_t votes, uint16_t expected_votes,
+			   vms_scs_sysid_t sysid)
 {
 	memset(&g, 0, sizeof(g));
 	fake_ops_init(&g.ops, &g.fake);
@@ -131,7 +132,7 @@ static void bed_init(uint16_t votes, uint16_t expected_votes)
 
 	memcpy(g.cl.params.scsnode, "OVMX01", 6);
 	g.cl.params.scsnode_len = 6;
-	g.cl.params.scssystemid = (vms_scs_sysid_t)FOUNDER_SYSID;
+	g.cl.params.scssystemid = sysid;
 	g.cl.params.vaxcluster = 2u;
 	g.cl.params.votes = votes;
 	g.cl.params.expected_votes = expected_votes;
@@ -141,6 +142,11 @@ static void bed_init(uint16_t votes, uint16_t expected_votes)
 
 	cnxman_coord_init(&g.c, &g.cl, &g.ops);
 	cnxman_coord_set_dlm(&g.c, &bed_dlm_ops);
+}
+
+static void bed_init(uint16_t votes, uint16_t expected_votes)
+{
+	bed_init_sysid(votes, expected_votes, (vms_scs_sysid_t)FOUNDER_SYSID);
 }
 
 /* ==========================================================================
@@ -214,6 +220,9 @@ static void test_csid_construction(void)
 
 	ct_check_eq_u32(vms_cm_csid_of(1u, FOUNDER_SYSID), FOUNDER_CSID,
 			"generation 1 over SCSSYSTEMID 1025 is CSID 0x00010001");
+	/* ... and that coincidence is exactly why the ASSIGNMENT rule may not
+	 * be read off it: 1025's bottom ten bits and its CSV slot are both 1.
+	 * test_founder_slot_is_the_round_robin_one() below separates them. */
 	/* The same function the joiner drives with a WIRE-LEARNED generation:
 	 * a founder at generation 1 and a joiner told generation 7 build the
 	 * same shape from the same real SCSSYSTEMID. */
@@ -240,7 +249,7 @@ static void test_founds_and_becomes_member(void)
 			"before: this node holds NO cluster system id");
 	ct_check(g.cl.state != VMS_CLUSTER_MEMBER, "before: not a member");
 
-	rc = cnxman_coord_found(&g.c);
+	rc = cnxman_coord_found(&g.c, NULL);
 	ct_check_eq_u32((unsigned long)rc, 0u, "cnxman_coord_found() founds");
 
 	/* The identity, through the ONE setter a joiner also goes through. */
@@ -309,12 +318,12 @@ static void test_second_call_refuses(void)
 
 	printf("[genesis] founding is not repeatable\n");
 	bed_init(1u, 1u);
-	ct_check_eq_u32((unsigned long)cnxman_coord_found(&g.c), 0u,
+	ct_check_eq_u32((unsigned long)cnxman_coord_found(&g.c, NULL), 0u,
 			"the first call founds");
 	csid_before = g.cl.club.local_csid;
 	epoch_before = g.cl.club.epoch;
 
-	rc = cnxman_coord_found(&g.c);
+	rc = cnxman_coord_found(&g.c, NULL);
 	ct_check(rc != 0, "the second call REFUSES");
 	ct_check_eq_u32(g.c.last_refusal, (unsigned long)CNXMAN_COORD_REF_BUSY,
 			"... because this node already holds a cluster system id");
@@ -325,11 +334,178 @@ static void test_second_call_refuses(void)
 	ct_check_eq_u32(g.c.genesis_opens, 1u, "still exactly one founding");
 }
 
+/* ==========================================================================
+ * 4. THE FOUNDER'S CSV SLOT -- round-robin, not `SCSSYSTEMID & 0x3ff`
+ *    (rd vms-3a7c settled the rule; rd vms-151 moved the founding path onto it)
+ * ==========================================================================
+ *
+ * The falsified rule was invisible in this suite because its founder's system
+ * id (1025) has bottom ten bits equal to its slot. Three system ids that do NOT
+ * are what separates the two readings -- and all three are system ids a real
+ * deployment uses: the in-browser demo's own nodes run 1987 and 1990, and under
+ * the old rule NEITHER of them could form a cluster at all.
+ */
+static void check_founds_with_slot_1(vms_scs_sysid_t sysid, const char *what)
+{
+	struct vms_csb *local;
+
+	bed_init_sysid(1u, 1u, sysid);
+	printf("  -- %s\n", what);
+	ct_check_eq_u32((unsigned long)cnxman_coord_found(&g.c, NULL), 0u,
+			"it founds");
+	ct_check_eq_u32(g.cl.club.local_csid, FOUNDER_CSID,
+			"... taking CSV slot 1 at generation 1, whatever its "
+			"SCSSYSTEMID's bottom ten bits are");
+	local = cnxman_club_local(&g.cl.club);
+	ct_check(local != NULL && cnxman_csb_is_member(local),
+		 "... and phase2 committed it a member");
+	ct_check_eq_u32((unsigned long)g.cl.state,
+			(unsigned long)VMS_CLUSTER_MEMBER, "... cl->state agrees");
+}
+
+static void test_founder_slot_is_the_round_robin_one(void)
+{
+	printf("[genesis] the founder takes CSV slot 1, not SCSSYSTEMID & 0x3ff\n");
+	check_founds_with_slot_1((vms_scs_sysid_t)1987u,
+				 "SCSSYSTEMID 1987 (& 0x3ff = 963: slot 963 is "
+				 "unnameable, and the old rule refused it)");
+	check_founds_with_slot_1((vms_scs_sysid_t)1024u,
+				 "SCSSYSTEMID 1024 (& 0x3ff = 0: slot 0 is never "
+				 "used, and the old rule refused it)");
+	check_founds_with_slot_1((vms_scs_sysid_t)1032u,
+				 "SCSSYSTEMID 1032 (& 0x3ff = 8: one past the "
+				 "grounded bitmap byte)");
+}
+
+/* ==========================================================================
+ * 5. THE ELECTION -- two fresh systems that can see each other (vms-151)
+ * ==========================================================================
+ *
+ * The measured deadlock: two fresh OVMX nodes open their circuits, each holds a
+ * CSB for the other, neither is in a cluster, and neither could form one. Both
+ * asked the other for admission first and were declined (the evidence below is
+ * the join FSM's own count of those completed rounds), so what has to break the
+ * symmetry is the election -- and it must break it the SAME WAY on both nodes,
+ * from numbers both of them hold.
+ */
+static int form_verdict(vms_scs_sysid_t own, vms_scs_sysid_t peer_sysid,
+			uint16_t peer_votes, uint8_t peer_params_known,
+			uint32_t rounds)
+{
+	struct cnxman_form_evidence ev;
+	struct vms_csb *peer;
+
+	bed_init_sysid(1u, 1u, own);
+	peer = cnxman_club_alloc_csb(&g.cl.club, peer_sysid, 1);
+	ct_check(peer != NULL, "the peer CSB exists");
+	if (peer_params_known)
+		cnxman_csb_set_params(peer, peer_votes, 0u, 0u);
+	ev.admission_rounds = rounds;
+	return cnxman_coord_found(&g.c, &ev);
+}
+
+static void test_election_elects_exactly_one(void)
+{
+	int a, b;
+
+	printf("[genesis] two fresh systems elect exactly ONE founder\n");
+
+	/* Run BOTH sides of the same pair, with the inputs each of them really
+	 * holds. Not "assert A founds": assert that of the two symmetric
+	 * decisions exactly one is a founding. */
+	a = form_verdict(1987u, 1990u, 1u, 1u, 1u);
+	ct_check_eq_u32((unsigned long)a, 0u,
+			"the LOWER SCSSYSTEMID (1987) forms the cluster");
+	ct_check_eq_u32(g.cl.club.local_csid, FOUNDER_CSID,
+			"... at generation 1, CSV slot 1");
+	ct_check_eq_u32((unsigned long)g.cl.state,
+			(unsigned long)VMS_CLUSTER_MEMBER,
+			"... and phase2 committed it a member");
+	ct_check_eq_u32(g.c.genesis_opens, 1u, "one founding transition");
+	ct_check_eq_u32(g.sends + g.responds, 0u,
+			"still not one frame: the peer is not a participant of "
+			"a transition it was never proposed");
+
+	b = form_verdict(1990u, 1987u, 1u, 1u, 1u);
+	ct_check(b != 0, "the HIGHER SCSSYSTEMID (1990) does NOT form one");
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_OUTRANKED,
+			"... it stands down for the other candidate");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
+			"... minting nothing while it waits to be admitted");
+
+	ct_check((a == 0) != (b == 0),
+		 "EXACTLY ONE of the two symmetric decisions founds -- the "
+		 "property that makes this an election and not a race");
+}
+
+/*
+ * ... AND A PEER THAT CAN NEVER FOUND IS NOT DEFERRED TO. FORM requires the
+ * coordinator to have VOTES > 0 (pp. 7-28, 7-33), so standing down for a
+ * zero-vote system is the same deadlock in a new shape: it would wait forever
+ * for a node that is structurally incapable of forming anything.
+ */
+static void test_zero_vote_peer_is_not_a_rival(void)
+{
+	int rc;
+
+	printf("[genesis] a VOTES=0 peer is not a founding rival\n");
+
+	/* Lower SCSSYSTEMID than ours -- it would win the election if it were a
+	 * candidate at all -- but its own PARAMS record says zero votes. */
+	rc = form_verdict(1990u, 1987u, 0u, 1u, 1u);
+	ct_check_eq_u32((unsigned long)rc, 0u,
+			"this node founds despite the lower-numbered peer");
+	ct_check_eq_u32((unsigned long)g.cl.state,
+			(unsigned long)VMS_CLUSTER_MEMBER, "... and is a member");
+
+	/* But a peer whose PARAMS have NOT arrived is UNKNOWN, and unknown is
+	 * treated as a rival: standing down costs a beat, forming beside a
+	 * system this node has not finished listening to costs a partition. */
+	rc = form_verdict(1990u, 1987u, 0u, 0u, 1u);
+	ct_check(rc != 0, "a peer whose votes are not yet known DOES block it");
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_OUTRANKED,
+			"... as an OUTRANKED refusal");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "nothing was minted");
+}
+
+/*
+ * AND NOBODY FORMS BEFORE ASKING. Clause (2): a system that is present has to
+ * be asked to admit this node before this node concludes there is no cluster
+ * here -- a member answers such a request in milliseconds, and a system that is
+ * not in a cluster cannot answer it at all. Evidence of zero completed rounds
+ * refuses even the election's winner.
+ */
+static void test_unasked_peer_blocks_the_winner(void)
+{
+	int rc;
+
+	printf("[genesis] even the election winner asks before it forms\n");
+	rc = form_verdict(1987u, 1990u, 1u, 1u, 0u);
+	ct_check(rc != 0, "with no completed admission round it REFUSES");
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_PEER_UNASKED,
+			"... naming the unasked system as the reason");
+	ct_check_eq_u32(g.c.genesis_refused_unasked, 1u, "and counting it");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "nothing was minted");
+
+	/* ... while a node that can see NOBODY needs no round: there was
+	 * nobody to ask. This is the shipped single-node founding, unchanged. */
+	bed_init(1u, 1u);
+	ct_check_eq_u32((unsigned long)cnxman_coord_found(&g.c, NULL), 0u,
+			"a node alone still founds with no evidence at all");
+}
+
 int main(void)
 {
 	test_predicate_truth_table();
 	test_csid_construction();
 	test_founds_and_becomes_member();
 	test_second_call_refuses();
+	test_founder_slot_is_the_round_robin_one();
+	test_election_elects_exactly_one();
+	test_zero_vote_peer_is_not_a_rival();
+	test_unasked_peer_blocks_the_winner();
 	return ct_summary("test_cnxman_genesis");
 }

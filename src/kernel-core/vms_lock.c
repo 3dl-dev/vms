@@ -83,6 +83,17 @@ uint32_t vms_next_lock_id = 1;
 EXEC_DEFINE_HASHTABLE(vms_res_hash, VMS_RES_HASH_BITS);
 exec_lock_t vms_res_hash_lock;
 
+/*
+ * THE CSID THIS NODE USED TO HAVE, and why it is kept (rd vms-151; the whole
+ * case is at dlm_master_is_us()). `vms_local_csid` is the substrate's insmod
+ * placeholder until the connection manager hands over the cluster's real
+ * assignment, and the resources this node mastered in between are stamped with
+ * the placeholder. 0 = "this node has never had a different identity", which is
+ * the state of every node that never joins a cluster; it is core state, not a
+ * substrate one, so it lives here and not beside vms_local_csid in the rind.
+ */
+static uint32_t vms_prev_local_csid;
+
 /* ================================================================
  * The PROXY LKB: the requester-side image of a lock mastered elsewhere
  * (FC-P4.4; design SS3.4 + hard call 7; Davis p. 6-52's *process copy*)
@@ -166,6 +177,7 @@ int vms_lock_init(void)
     exec_lock_init(&vms_quorum_gate_lock);
     exec_rbtree_init(&vms_lock_id_tree);
     exec_hash_init(vms_res_hash);
+    vms_prev_local_csid = 0u;   /* a fresh engine has had no other identity */
     return 0;
 }
 
@@ -921,6 +933,44 @@ enum dlm_route {
  * the same vector. Binding a child RSB to its root's master belongs with the
  * tree/rebuild work (FC-P4.6/FC-P5.5) and is recorded here so it is not lost.
  */
+/*
+ * IS THE NODE NAMED HERE US? -- and the identity this node used to have
+ * (rd vms-151, MEASURED: a booted node founded generation 1 and its userland
+ * stopped dead at the next $ENQ).
+ *
+ * Every resource this node mastered BEFORE the cluster existed carries
+ * `master_csid == <the placeholder CSID the substrate booted with>`. The
+ * instant the cluster assigns a real one, a bare `== vms_local_csid` stops
+ * matching those resources and each is routed REMOTE -- to a node whose CSID no
+ * cluster ever assigned to anybody. The request goes nowhere and never
+ * completes: the executive is healthy, the circuits are open, and the userland
+ * is wedged on a lock request addressed to a node that does not exist.
+ *
+ * WHAT CHANGED AND WHAT DID NOT. This node still masters exactly what it
+ * mastered a moment ago; learning one's own cluster identity moves no resource.
+ * Only the NAME of the node holding them changed. So the previous identity is
+ * recognised as this node's, and the record is RELABELLED here -- under the
+ * res->lock the caller already holds, one resource at a time, on the one path
+ * that asks the question. That is deliberately not a sweep: a sweep would have
+ * to take the resource hash from the connection manager's own fork-thread
+ * callback, and this is the only place the stale label can do any harm.
+ *
+ * INV-6: this asserts nothing new. `master_csid` said "this node" before and
+ * says "this node" after; a resource mastered ELSEWHERE, or by nobody, never
+ * matches either value and is untouched. `vms_prev_local_csid` is 0 until an
+ * identity is really replaced, and 0 means "unmastered" throughout this file,
+ * so before that this test cannot fire at all.
+ */
+static int dlm_master_is_us(struct vms_lock_resource *res)
+{
+    if (res->master_csid == vms_local_csid)
+        return 1;
+    if (vms_prev_local_csid == 0u || res->master_csid != vms_prev_local_csid)
+        return 0;
+    res->master_csid = vms_local_csid;       /* the same node, its new name */
+    return 1;
+}
+
 /* Route to a master this node already knows, or say there is none yet.
  * Returns 1 when the answer is settled (the two "known master" rows above). */
 static int dlm_route_known_master(struct vms_lock_resource *res,
@@ -928,7 +978,7 @@ static int dlm_route_known_master(struct vms_lock_resource *res,
 {
     if (res->master_csid == 0)
         return 0;
-    if (res->master_csid == vms_local_csid)
+    if (dlm_master_is_us(res))
         return 1;                            /* LOCAL: we master it */
     *route = DLM_ROUTE_REMOTE;               /* straight to the known master */
     *dst_csid = res->master_csid;
@@ -2116,74 +2166,23 @@ int vms_lock_dlm_have_delivery_proc(void)
  * "unmastered" throughout this file, so it is not an identity, and an identity
  * the cluster has not assigned is one this node does not have.
  */
-/*
- * ... AND THE LOCK DATABASE THIS NODE ALREADY BUILT UNDER THE OLD ONE
- * (rd vms-151, MEASURED: a booted node founded generation 1 and its userland
- * stopped dead at the next $ENQ).
- *
- * Every resource this node mastered before the cluster existed carries
- * `master_csid == <the old local value>`. The instant the cluster assigns this
- * node a real CSID, dlm_resolve_master()'s first test -- "is the known master
- * US?" -- stops matching those resources and routes each one REMOTE, to a node
- * whose CSID is the placeholder this executive booted with and which no cluster
- * ever assigned to anybody. The request goes nowhere and never completes: the
- * executive is healthy, the circuits are open, and the userland is wedged on a
- * lock request addressed to a node that does not exist.
- *
- * WHAT CHANGED AND WHAT DID NOT. This node still masters exactly what it
- * mastered a moment ago -- that is a fact about the lock database, and learning
- * one's own cluster identity does not move a single resource. Only the NAME of
- * the node holding them changed. So this is a RELABEL of this node's own
- * identity on its own mastery records, not an assignment of mastery to anybody
- * (INV-6): a resource mastered ELSEWHERE, or mastered by nobody, is untouched.
- *
- * The cached directory answers ARE discarded, because those were resolved
- * against the pre-cluster weight vector and a state transition is exactly when
- * Davis p. 6-33 says directory knowledge goes. Mastery is not discarded with
- * them: p. 7-35's FORM rebuild would scramble to remaster, and OVMX has no
- * cross-node re-registration to scramble WITH yet (FC-P5.5), so dropping
- * mastery here would strand every lock already granted on this node.
- */
-static void dlm_relabel_resource(struct vms_lock_resource *res,
-                                 uint32_t old_csid, uint32_t new_csid)
-{
-    res->dir_valid = 0;
-    res->dir_csid = 0;
-    if (res->master_csid == old_csid)
-        res->master_csid = new_csid;
-}
-
-static void dlm_relabel_local_identity(uint32_t old_csid, uint32_t new_csid)
-{
-    struct vms_lock_resource *res;
-    int bkt;
-
-    /* The same lock order vms_lock_dlm_member_departed() uses: the resource
-     * hash outside, the per-resource lock inside. */
-    exec_lock(&vms_res_hash_lock);
-    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
-        exec_lock(&res->lock);
-        dlm_relabel_resource(res, old_csid, new_csid);
-        exec_unlock(&res->lock);
-    }
-    exec_unlock(&vms_res_hash_lock);
-}
-
 void vms_lock_dlm_set_local_csid(uint32_t csid)
 {
-    uint32_t old;
-
     if (csid == 0u)
         return;
     exec_lock(&vms_dlm_req_ops_lock);
-    old = vms_local_csid;
+    /*
+     * ... AND THE IDENTITY THIS NODE IS LEAVING BEHIND (rd vms-151; the whole
+     * case is at dlm_master_is_us() above). It is RECORDED, not discarded,
+     * because the lock database this node built while it carried that value
+     * still names it. Only a REAL change records anything, so the connection
+     * manager may make this call on every transition boundary and on its own
+     * beat, as it does.
+     */
+    if (vms_local_csid != csid)
+        vms_prev_local_csid = vms_local_csid;
     vms_local_csid = csid;
     exec_unlock(&vms_dlm_req_ops_lock);
-
-    /* Idempotent: this is called on every transition boundary and on the DLM
-     * arm's own beat, and only a REAL change has anything to relabel. */
-    if (old != csid && old != 0u)
-        dlm_relabel_local_identity(old, csid);
 }
 
 uint32_t vms_lock_dlm_local_csid(void)
@@ -3786,9 +3785,14 @@ long vms_ioctl_get_resmaster(struct vms_proc *proc, unsigned long arg)
         args.found = 1;
         if (dir_resolve(res, &dir) == SS__NORMAL)
             args.dir_csid = (dir != 0) ? dir : vms_local_csid;
-        args.master_csid = res->master_csid;
+        /* The SAME "is that node us?" test the router applies (vms-151), so a
+         * readback taken after this node learned its cluster identity names the
+         * master this node's next $ENQ will actually route to -- rather than
+         * the placeholder the record was stamped with before the cluster
+         * existed, which would read as "somebody else masters it". */
         args.is_local_master =
-            (res->master_csid != 0 && res->master_csid == vms_local_csid) ? 1 : 0;
+            (res->master_csid != 0 && dlm_master_is_us(res)) ? 1 : 0;
+        args.master_csid = res->master_csid;
         exec_list_for_each_entry(granted, &res->granted, res_granted) {
             n++;
             /*

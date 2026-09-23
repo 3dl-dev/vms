@@ -53,9 +53,12 @@
  * Small shared helpers
  * ========================================================================== */
 
+/* A NULL message is "nothing to say", not a line: coord_found_refuse() uses it
+ * to keep a standing refusal's bookkeeping while staying quiet on OPA0: (rd
+ * vms-151). No ops->log implementation, here or in a test, ever sees NULL. */
 static void coord_log(const struct cnxman_coord *c, const char *msg)
 {
-	if (c->ops != NULL && c->ops->log != NULL)
+	if (msg != NULL && c->ops != NULL && c->ops->log != NULL)
 		c->ops->log(c->ops->ctx, msg);
 }
 
@@ -1708,10 +1711,27 @@ enum cnxman_coord_verdict cnxman_coord_propose_remove(struct cnxman_coord *c,
  * here and mints nothing, however it was called.
  * ========================================================================== */
 
+/*
+ * A FOUNDING REFUSAL: recorded and counted every time, SAID when it is news
+ * (rd vms-151, MEASURED on the two-node rig -- "another system is also waiting
+ * to form ... and takes precedence" once a second for as long as the other
+ * node took to form). The founding gate is asked on the once-a-second
+ * reconnect beat, so every clause of it is a standing condition, not an event;
+ * an OPA0: line per second while nothing changes is console noise VMS does not
+ * make. `genesis_said` carries the last reason ANNOUNCED, so a reason that
+ * CHANGES is heard, and one that merely persists is not repeated.
+ *
+ * coord_refuse() still runs in full either way -- `last_refusal` and the
+ * per-reason counters are state the diagnostics and the negctl read, and they
+ * are not silenced with the speech.
+ */
 static int coord_found_refuse(struct cnxman_coord *c,
 			      enum cnxman_coord_refusal why, const char *msg)
 {
-	(void)coord_refuse(c, why, msg);
+	int news = ((uint8_t)why != c->genesis_said);
+
+	c->genesis_said = (uint8_t)why;
+	(void)coord_refuse(c, why, news ? msg : (const char *)0);
 	return -1;
 }
 
@@ -1932,6 +1952,9 @@ int cnxman_coord_found(struct cnxman_coord *c,
 	 * cnxman_club_learn_local_csid() is the ONE setter of local_csid_valid,
 	 * for a founder and a joiner alike. */
 	cnxman_club_learn_local_csid(club, csid);
+	/* Nothing is being refused any more, so the next refusal -- whatever it
+	 * is -- is news again (rd vms-151). */
+	c->genesis_said = (uint8_t)CNXMAN_COORD_REF_NONE;
 	c->genesis_opens++;
 	coord_log(c, "%CNXMAN, this node has quorum by its own votes: forming "
 		     "an OpenVMS Cluster");

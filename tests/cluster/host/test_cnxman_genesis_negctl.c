@@ -385,12 +385,90 @@ static void test_repeated_attempts_never_drift(void)
 	/* negctl: coord-genesis-refusal-uncounted */
 	ct_check_eq_u32(g.c.genesis_refused_noquorum, 1000u,
 			"every attempt was refused, and counted");
+	/*
+	 * ... AND THE OPERATOR HEARD IT ONCE (rd vms-151). The beat is once a
+	 * second; a standing refusal that spoke on every one of them would put
+	 * a thousand identical lines on OPA0:, which is exactly what the
+	 * two-node rig printed once these lines reached the console at all.
+	 * Counted state is not speech: the 1000 above and the 1 here are the
+	 * same thousand refusals.
+	 */
+	ct_check_eq_u32(g.fake.logs, 1u,
+			"the standing refusal was SAID once, not a thousand times");
 	ct_check_eq_u32(g.c.genesis_opens, 0u, "not one founding transition");
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
 			"still NO cluster system id after 1000 attempts");
 	ct_check(g.cl.state != VMS_CLUSTER_MEMBER, "still not a member");
 	ct_check(memcmp(&g.club_before, &g.cl.club, sizeof(g.cl.club)) == 0,
 		 "the CLUB never moved");
+}
+
+/*
+ * ... BUT A REFUSAL THAT CHANGES IS NEWS (rd vms-151). Silence while a
+ * situation holds must not become silence about a DIFFERENT situation: a node
+ * that was waiting for an answer, then stood down for a rival, then found
+ * itself beside a real cluster has three different things to tell the
+ * operator, and each one is said exactly once. Every reason here is driven by
+ * changing the REAL state the gate reads -- the evidence the join FSM hands
+ * over, and the peer's own CSB -- never by poking the latch.
+ */
+static void test_refusal_speaks_again_when_the_reason_changes(void)
+{
+	struct cnxman_form_evidence ev;
+	struct vms_csb *peer;
+	uint32_t i;
+
+	printf("[negctl] a refusal is said once per REASON, not once per beat\n");
+	bed_init(1u, 1u, (vms_scs_sysid_t)1990u);
+	peer = cnxman_club_alloc_csb(&g.cl.club, (vms_scs_sysid_t)1987u, 1);
+	cnxman_csb_set_scsnode(peer, (const uint8_t *)"OVMXA", 5u);
+	cnxman_csb_set_params(peer, 1u, 0u, 0u);   /* a real VOTES=1 advert */
+
+	/* (1) the peer has not been asked yet: no admission round has ended. */
+	ev.admission_rounds = 0u;
+	for (i = 0; i < 6u; i++) {
+		g.fake.now_ms += 1000u;
+		(void)cnxman_coord_found(&g.c, &ev);
+	}
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_PEER_UNASKED,
+			"six beats, refused because the peer is unasked");
+	ct_check_eq_u32(g.fake.logs, 1u, "... said once");
+
+	/* (2) the rounds ran out and the peer outranks us: a NEW reason. */
+	ev.admission_rounds = 1u;
+	for (i = 0; i < 6u; i++) {
+		g.fake.now_ms += 1000u;
+		(void)cnxman_coord_found(&g.c, &ev);
+	}
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_OUTRANKED,
+			"six more beats, refused because the peer outranks us");
+	ct_check_eq_u32(g.fake.logs, 2u, "... said once more, and only once");
+
+	/* (3) that peer is now in a cluster: a third reason, and the one that
+	 *     matters most for interop safety. */
+	cnxman_csb_set_csid(peer, 0x00010001u);
+	for (i = 0; i < 6u; i++) {
+		g.fake.now_ms += 1000u;
+		(void)cnxman_coord_found(&g.c, &ev);
+	}
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_PEER_CLUSTER,
+			"six more, refused because that system is in a cluster");
+	ct_check_eq_u32(g.fake.logs, 3u, "... said once more, and only once");
+	ct_check(strstr(g.fake.last_log, "already belongs to an OpenVMS "
+					 "Cluster") != NULL,
+		 "... and what OPA0: last heard is that reason, not the old one");
+
+	/* Through all eighteen beats: every refusal counted, nothing minted. */
+	ct_check_eq_u32(g.c.genesis_refused_unasked, 6u,
+			"every unasked refusal is counted, said or not");
+	ct_check_eq_u32(g.c.genesis_refused_outranked, 6u,
+			"every outranked refusal is counted, said or not");
+	ct_check_eq_u32(g.c.genesis_refused_peer, 6u,
+			"every in-a-cluster refusal is counted, said or not");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "nothing was minted");
 }
 
 int main(void)
@@ -406,5 +484,6 @@ int main(void)
 	test_unexpressible_csid_refused();
 	test_transition_active_refused();
 	test_repeated_attempts_never_drift();
+	test_refusal_speaks_again_when_the_reason_changes();
 	return ct_summary("test_cnxman_genesis_negctl");
 }

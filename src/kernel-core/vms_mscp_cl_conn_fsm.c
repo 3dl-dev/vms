@@ -93,7 +93,7 @@ static struct mscp_cl_conn_peer *conn_alloc(struct mscp_cl_conn *c,
 		p->in_use = 1u;
 		p->state = (uint8_t)MSCP_CL_CONN_IDLE;
 		p->spoken = 0u;   /* never asked: due on THIS sweep */
-		p->pad0 = 0u;
+		p->said_absent = 0u;   /* a member nothing has been said about */
 		p->sysid = sysid;
 		p->conid = 0u;
 		p->since_ms = now;
@@ -196,16 +196,30 @@ static void h_hit(struct mscp_cl_conn *c, struct mscp_cl_conn_peer *p,
 		  uint32_t now)
 {
 	c->hits++;
+	/* Its answer changed: if it stops serving again, that is news. */
+	p->said_absent = 0u;
 	conn_goto(c, p, MSCP_CL_CONN_PRESENT, now);
 }
 
+/*
+ * A MISS is counted every time and SAID once per member (rd vms-151). The
+ * re-ask every MSCP_CL_CONN_RETRY_MS is deliberate -- a member may mount its
+ * first served volume at any moment -- but "it serves no disks" is a standing
+ * fact about that member, and OPA0: hearing it every thirty seconds for the
+ * life of the cluster is noise, not information. Measured on the two-node rig
+ * once these lines reached the console at all.
+ */
 static void h_miss(struct mscp_cl_conn *c, struct mscp_cl_conn_peer *p,
 		   uint32_t now)
 {
+	int news = (p->said_absent == 0u);
+
 	c->misses++;
+	p->said_absent = 1u;
 	conn_goto(c, p, MSCP_CL_CONN_ABSENT, now);
-	conn_log(c, "%MSCP_CL, the member answered NOT PRESENT HERE for "
-		    "MSCP$DISK: it serves no disks");
+	if (news)
+		conn_log(c, "%MSCP_CL, the member answered NOT PRESENT HERE "
+			    "for MSCP$DISK: it serves no disks");
 }
 
 /* CONNECTING / OPEN + SWEEP: this member's leg is in SCS's hands; the beat has
@@ -335,7 +349,7 @@ int mscp_cl_conn_bind_peers(struct mscp_cl_conn *c,
 		p[i].in_use = 0u;
 		p[i].state = (uint8_t)MSCP_CL_CONN_IDLE;
 		p[i].spoken = 0u;
-		p[i].pad0 = 0u;
+		p[i].said_absent = 0u;
 		p[i].sysid = 0u;
 		p[i].conid = 0u;
 		p[i].since_ms = 0u;
@@ -377,6 +391,9 @@ static void conn_reap(struct mscp_cl_conn *c, const vms_scs_sysid_t *sysids,
 		p->in_use = 0u;
 		p->state = (uint8_t)MSCP_CL_CONN_IDLE;
 		p->spoken = 0u;
+		/* The slot outlives the member; what was said about the old one
+		 * must not silence the next member to land here (vms-151). */
+		p->said_absent = 0u;
 		p->sysid = 0u;
 		p->conid = 0u;
 		p->since_ms = 0u;

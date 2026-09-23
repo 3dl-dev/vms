@@ -920,6 +920,14 @@
  *        exactly where the harness reads it (memory forking-daemon-over-bgn-
  *        ladder). NetBSD: printf(9). This op EXISTS so the cluster stack stops
  *        using pr_info(), a Linux idiom the NetBSD twin has to #define away.
+ *
+ *        "THE CONSOLE" IS NOT THE RIND'S ALONE TO GUARANTEE (rd vms-151). On
+ *        Linux the record still has to clear the console level PID 1 sets for
+ *        the product boot, and for months it did not: a whole cluster formation
+ *        was written to a console that dropped every line of it. Both numbers
+ *        and the invariant between them are src/kernel/ovmx_console_policy.h,
+ *        asserted at compile time on each side. A NEW CALL SITE NEEDS NOTHING
+ *        FROM THIS -- but a change to either level does, and the build says so.
  */
 
 #ifndef OVMX_EXEC_KBACKEND_H

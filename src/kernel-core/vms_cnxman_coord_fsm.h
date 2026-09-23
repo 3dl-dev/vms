@@ -428,7 +428,24 @@ struct cnxman_coord {
 	 */
 	vms_scs_sysid_t deferred_to_sysid;
 	uint8_t  deferred_to_valid;
-	uint8_t  pad_form[3];
+	/*
+	 * THE FOUNDING REFUSAL THIS NODE HAS ALREADY SAID OUT LOUD (rd vms-151).
+	 * The founding gate is asked once a second, by the same reconnect beat
+	 * that does the discovery -- so a node that is waiting for the system
+	 * ahead of it to form refuses once a second, for as long as it takes.
+	 * The refusal is right; saying it every second is not: OPA0: is an
+	 * operator's console, and VMS does not repeat itself there while a
+	 * situation simply persists.
+	 *
+	 * So the line is EDGE-triggered on the reason: said when the reason
+	 * CHANGES, silent while it holds, said again if it comes back. The
+	 * COUNTERS above are untouched by this -- they count every refusal,
+	 * because a count is state and not speech. CNXMAN_COORD_REF_NONE = this
+	 * node has said nothing yet, which is where cnxman_coord_init()'s zeroed
+	 * context starts and what a successful founding restores.
+	 */
+	uint8_t  genesis_said;     /* enum cnxman_coord_refusal, last ANNOUNCED */
+	uint8_t  pad_form[2];
 
 	/* The one scratch buffer every built BODY goes through (design sec
 	 * 3.2.4: this FSM emits bodies, never a frame) -- in the context, not

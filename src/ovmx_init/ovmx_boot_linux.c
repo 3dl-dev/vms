@@ -32,6 +32,12 @@
 #include "opcom_kmsg.h"
 #include "vms_kif.h"
 #include "ovmx_layout.h"        /* SYSDISK_DEVICE -- the substrate default unit */
+/* OVMX_CONSOLE_MUTE_LEVEL -- shared with the executive's own Linux rind
+ * (rd vms-151). Reached by relative path, the way src/libvms/prv_agreement.c
+ * reaches ../kernel/vms_ioctl.h, so every tool that compiles this file (the
+ * kif caller census among them) resolves it without an include path of its
+ * own. */
+#include "../kernel/ovmx_console_policy.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -83,27 +89,41 @@ void ovmx_boot_start_console_log_bridge(void)
 
 void ovmx_boot_mute_kernel_console(void)
 {
+    char level[8];
+    int fd;
+    long rc;
+
     /* SYSLOG_ACTION_CONSOLE_LEVEL = 8 (syslog(2)/klogctl(2) man page).
      * Issued as a raw syscall rather than through <sys/klog.h>'s klogctl()
      * wrapper so this file depends on no header beyond what it already
      * includes (<sys/syscall.h>, already pulled in above for
-     * SYS_finit_module). Level 3 lets EMERG(0)/ALERT(1)/CRIT(2) through --
-     * everything a real kernel bugcheck-class fault would use -- and blocks
-     * pr_info/pr_warn (levels 4-6), which is exactly the vms.ko/vmsfs.ko
-     * lifecycle noise vms-300 reported. */
-    long rc = syscall(SYS_syslog, 8 /* SYSLOG_ACTION_CONSOLE_LEVEL */, NULL, 3);
+     * SYS_finit_module).
+     *
+     * THE LEVEL IS NOT THIS FILE'S TO PICK (rd vms-151). It is one half of a
+     * pair -- the other half is the level the executive emits its OPA0: lines
+     * at -- and when this file chose 3 on its own, it muted the connection
+     * manager along with the module chatter it was aimed at: two nodes formed
+     * a cluster and neither console said a word. Both numbers, and the
+     * invariant between them, are in ovmx_console_policy.h. Everything
+     * vms-300 asked for still holds: pr_info/pr_warn lifecycle noise
+     * (levels 4-6) stays off the console. */
+    rc = syscall(SYS_syslog, 8 /* SYSLOG_ACTION_CONSOLE_LEVEL */, NULL,
+                 OVMX_CONSOLE_MUTE_LEVEL);
     if (rc == 0)
         return;
 
     /* Fallback: /proc/sys/kernel/printk's first whitespace-separated field
      * is console_loglevel (proc(5)). Needs /proc mounted, which
      * ovmx_boot_mount_kernel_filesystems() has already done by the time
-     * bare_metal_init() calls this op. */
-    int fd = open("/proc/sys/kernel/printk", O_WRONLY);
+     * bare_metal_init() calls this op. Same constant, formatted -- never a
+     * second literal that could disagree with the syscall above. */
+    snprintf(level, sizeof(level), "%d\n", OVMX_CONSOLE_MUTE_LEVEL);
+    fd = open("/proc/sys/kernel/printk", O_WRONLY);
     if (fd >= 0) {
-        ssize_t w = write(fd, "3\n", 2);
+        size_t n = strlen(level);
+        ssize_t w = write(fd, level, n);
         close(fd);
-        if (w == 2)
+        if (w == (ssize_t)n)
             return;
     }
 

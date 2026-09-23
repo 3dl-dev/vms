@@ -1061,6 +1061,36 @@ uint8_t pe_credit_reserve(struct pe_credit_ledger *l, uint32_t want);
 void pe_credit_release(struct pe_credit_ledger *l, uint8_t granted);
 
 /* ==========================================================================
+ * 4b. The DISCOVERY REVISION this port speaks (rd vms-0f8)
+ *
+ * vms_cluster_codec_hello.h's revision table measures TWO revisions of the
+ * same HELLO on real VMS wires: the sec 4(a)/4(b) one every OpenVMS VAX V7.3
+ * node in the clean-room corpus speaks (class 0x05, SCA content 120), and the
+ * one a real OpenVMS VAX V5.5-2H4 node speaks (class 0x03, content 114, no
+ * abs 128-133 tail, and three differing marker words at abs 22 / 94 / 126).
+ *
+ * A revision is a property of the CLUSTER ON THE WIRE, not of this source
+ * tree -- so the port LEARNS it off a real peer's own frame, exactly as it
+ * already learns the join nonce (spec sec 4(g)) and the abs 47-67 discovery-
+ * format span (E56). Nothing in this struct is ever populated from a stored
+ * capture, a version number, or a compiled-in table: `valid == 0` means no
+ * peer has been heard yet and the port speaks its OWN grounded default, and
+ * says so through pe_fsm_wire_rev_learned().
+ *
+ * THE DEFAULT IS UNCHANGED BEHAVIOUR. With no peer heard the port emits
+ * precisely the frame it emitted before vms-0f8; in a V7.3 cluster the first
+ * peer teaches it the V7.3 revision, which is the same frame again. The
+ * V7.3 lab's join path is therefore byte-identical either way.
+ * ========================================================================== */
+struct pe_wire_rev {
+	uint8_t  rev;           /* enum vms_hello_rev                        */
+	uint8_t  valid;         /* 0 = nothing learned; the default is in use */
+	uint16_t connect_flag;  /* abs 22                                    */
+	uint16_t trailer_9205;  /* abs 94                                    */
+	uint16_t trailer_2600;  /* abs 126                                   */
+};
+
+/* ==========================================================================
  * 5. One channel
  *
  * Everything here is either read off a real received frame or counted from a
@@ -1092,13 +1122,23 @@ struct pe_channel {
 	uint8_t  peer_incarnation_valid;
 	uint8_t  pad2;
 
+	/* The discovery revision THIS PEER speaks, learned off its own HELLO
+	 * (rd vms-0f8). Every frame this port directs AT this peer is emitted
+	 * in it. `valid == 0` means no HELLO has been decoded from this
+	 * station yet, and the port-wide revision is used instead. */
+	struct pe_wire_rev peer_rev;
+
 	/* ---- the size verification (SS4(k)) ---- */
 	uint16_t verified_pktsz;  /* SCA content a b4 CONFIRMED. 0 = not proven */
 	uint16_t probe_sca_len;   /* the probe in flight. 0 = none outstanding  */
 	uint8_t  probe_rung;      /* index into pe_probe_ladder                 */
 	uint8_t  probe_tries;     /* attempts made at this rung                 */
 	uint8_t  probe_exhausted; /* ladder walked out; counted, never invented */
-	uint8_t  pad3;
+	uint8_t  probe_rev_unsupported; /* rd vms-0f8: this peer speaks a
+					 * revision in which no sec 4(k) padded
+					 * frame has ever been observed, so the
+					 * port declined to probe. An honest
+					 * "not attempted", never a claimed size */
 	uint32_t probe_due_ms;    /* injected-clock deadline of the retransmit  */
 
 	/* ---- liveness, on the injected clock, compared wrap-safely ---- */
@@ -1159,6 +1199,12 @@ struct pe_fsm {
 	uint32_t disc_format_absent;/* discovery frames sent with abs 47-67 zero */
 	uint32_t disc_format_learned;/* 0 or 1: the abs 47-67 span was learned
 				      * live off a real peer this run (E56)     */
+	uint32_t rx_hello_c03;      /* HELLOs decoded in the class-0x03 revision */
+
+	/* The revision the port's own MULTICAST advertisement goes out in,
+	 * learned off the first peer HELLO decoded this run (rd vms-0f8).
+	 * Until then `.valid == 0` and the grounded sec 4(b) default is used. */
+	struct pe_wire_rev wire_rev;
 	uint32_t tx_errors;         /* ops->send returned non-zero               */
 	uint32_t last_gasps_built;
 

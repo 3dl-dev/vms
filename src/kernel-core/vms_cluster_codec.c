@@ -276,6 +276,24 @@ static const struct frame_class_rule g_rules[] = {
 	  M_DISCCLASS | M_LEN_GT, VMS_DISC_CLASS_HELLO,
 	  0, { 0, 0, 0 }, 0, { 0, 0, 0 }, 120, 0, 0 },
 
+	/*
+	 * The SECOND discovery revision's HELLO (rd vms-0f8): abs 36 == 0x03
+	 * with a 114-byte SCA content. Keyed on BOTH the class byte and the
+	 * exact length, exactly like the 0x05 row above -- a class-0x03
+	 * discovery frame of any OTHER length is a shape nobody has ever
+	 * observed, and this codec refuses to guess at it (INV-6): it stays
+	 * VMS_FCLS_UNKNOWN and is counted.
+	 *
+	 * Cannot collide with either 0x05 row: M_DISCCLASS partitions the
+	 * discovery family by the class byte, so table order is not
+	 * load-bearing here.
+	 */
+	{ { VMS_FCLS_HELLO_C3, VMS_FFAM_DISCOVERY,
+	    VMS_FCAP_CHANWORD | VMS_FCAP_DISCNAME,
+	    40, VMS_SCA_HDR_LEN, "hello-c3", "spec §4(a),§4(b.c3)" },
+	  M_DISCCLASS | M_LEN_EQ, VMS_DISC_CLASS_HELLO_C3,
+	  0, { 0, 0, 0 }, 1, { 114, 0, 0 }, 0, 0, 0 },
+
 	{ { VMS_FCLS_SOLICIT, VMS_FFAM_DISCOVERY,
 	    VMS_FCAP_CHANWORD | VMS_FCAP_DISCNAME,
 	    40, VMS_SCA_HDR_LEN, "solicit", "spec §4(c)" },

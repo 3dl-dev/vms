@@ -103,11 +103,24 @@ static void roundtrip_hello_class(const char *fname)
 		ct_check_eq_u32(written, f->wire_len,
 				"padded build wrote the full on-wire length");
 	} else {
+		/* The frame length is the REVISION's, read back through the
+		 * codec's own table -- never a constant retyped here. */
+		const struct vms_hello_rev_desc *rv = vms_hello_rev_for_class(&fi);
+
+		snprintf(what, sizeof(what), "%s: names a known revision", fname);
+		ct_check(rv != NULL, what);
+		if (rv == NULL)
+			return;
 		snprintf(what, sizeof(what), "%s: builds as a plain HELLO", fname);
 		ct_check(vms_hello_build(&h, built, sizeof(built), &written)
 			 == VMS_CODEC_OK, what);
-		ct_check_eq_u32(written, VMS_HELLO_FRAME_LEN,
-				"plain build wrote VMS_HELLO_FRAME_LEN");
+		snprintf(what, sizeof(what),
+			 "%s: plain build wrote the revision's frame length (%u)",
+			 fname, rv->frame_len);
+		ct_check_eq_u32(written, rv->frame_len, what);
+		snprintf(what, sizeof(what),
+			 "%s: and that IS the specimen's on-wire length", fname);
+		ct_check_eq_u32(written, f->wire_len, what);
 	}
 
 	assert_cited_bytes_match(f, built, f->wire_len, fname);
@@ -154,7 +167,211 @@ static void test_fixture_roundtrips(void)
 	roundtrip_hello_class("hello-multicast-vax1");
 	roundtrip_hello_class("hello-directed-vax2-to-vax1");
 	roundtrip_hello_class("hello-padded-vax1-channel-size-verify");
+	roundtrip_hello_class("hello-c3-vaxc-v55-multicast");
 	roundtrip_solicit();
+}
+
+/* ---- group 1b: the SECOND discovery revision (rd vms-0f8) ------------ *
+ *
+ * The specimen is a real OpenVMS VAX V5.5-2H4 node's own multicast HELLO.
+ * Before this item OVMX classified it family 0 / UNCLASSIFIED and counted
+ * all 553 of them `badclass` in an 8-minute in-browser run; what is asserted
+ * here is that it now becomes a real DISCOVERY/HELLO whose peer identity the
+ * join FSM can act on -- and that the V7.3 revision is untouched.
+ */
+static void test_c3_revision(void)
+{
+	const struct vms_fixture *f = fixture("hello-c3-vaxc-v55-multicast");
+	const struct vms_fixture *v73 = fixture("hello-multicast-vax1");
+	const struct vms_hello_rev_desc *rv;
+	struct vms_frame_info fi, fi73;
+	struct vms_hello_frame h;
+	uint8_t lavc[VMS_ETH_ADDR_LEN];
+	uint16_t sysid = 0;
+	int tick_nonzero = 0, i;
+
+	printf("-- the class-0x03 discovery revision (rd vms-0f8)\n");
+	ct_check(f != NULL && v73 != NULL, "both revisions' specimens load");
+	if (f == NULL || v73 == NULL)
+		return;
+
+	/* 1. it classifies, as its OWN class, in the discovery family */
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "V5.5 HELLO classifies without error");
+	ct_check_eq_u32(fi.family, VMS_FFAM_DISCOVERY,
+			"  family == DISCOVERY (was 0/UNCLASSIFIED -- the whole defect)");
+	ct_check_eq_u32(fi.cls, VMS_FCLS_HELLO_C3, "  class == VMS_FCLS_HELLO_C3");
+	ct_check_eq_u32(fi.sca_content, VMS_HELLO_C3_SCA_LEN,
+			"  SCA content == 114");
+	ct_check_eq_u32(fi.len_check, VMS_SCA_LEN_EXACT,
+			"  and 14 + 114 == the 128-byte wire length (sec 2 identity)");
+	ct_check((fi.caps & VMS_FCAP_DISCNAME) != 0,
+		 "  the class is entitled to the node-name accessor");
+	ct_check((fi.caps & VMS_FCAP_CHANWORD) != 0,
+		 "  and to the abs-30 channel-verify word");
+
+	/* 2. the revision table names it, and says what it does NOT have */
+	rv = vms_hello_rev_for_class(&fi);
+	ct_check(rv != NULL && rv->rev == VMS_HELLO_REV_C03,
+		 "the class maps to VMS_HELLO_REV_C03");
+	if (rv == NULL)
+		return;
+	ct_check_eq_u32(rv->disc_class, VMS_DISC_CLASS_HELLO_C3,
+			"  its format marker is the 0x03 class byte");
+	ct_check_eq_u32(rv->frame_len, 128, "  its frame length is 128");
+	ct_check(rv->has_tail128 == 0,
+		 "  it has NO abs 128-133 tail (the 6-byte length delta)");
+	ct_check(rv->has_padded == 0,
+		 "  and no sec-4(k) padded form has ever been observed in it");
+
+	/* 3. it PARSES, and the peer identity the join FSM needs comes out */
+	memset(&h, 0xAA, sizeof(h));
+	ct_check(vms_hello_parse(f->bytes, f->wire_len, &fi, &h) == VMS_CODEC_OK,
+		 "V5.5 HELLO parses (was E_CLASS)");
+	ct_check_eq_u32(h.revision, VMS_HELLO_REV_C03,
+			"  the parse records WHICH revision the wire was");
+	ct_check_eq_u32(h.disc.namelen, 6, "  namelen == 6");
+	ct_check(memcmp(h.disc.name, "VAXC  ", 6) == 0,
+		 "  SCSNODE == \"VAXC  \", read off the real frame");
+	ct_check(vms_cluster_lavc_sysid(h.hdr.src_lavc, &sysid) == VMS_CODEC_OK,
+		 "  abs 24 is a cluster-LOGICAL address");
+	ct_check_eq_u32(sysid, 1989,
+			"  SCSSYSTEMID == 1989, the node's configured value");
+	vms_cluster_lavc_addr_build(1989, lavc);
+	ct_check(memcmp(h.hdr.src_lavc, lavc, VMS_ETH_ADDR_LEN) == 0,
+		 "  and it rebuilds from that sysid exactly");
+	ct_check_eq_u32(h.hdr.word30, 0x00a0,
+			"  abs 30 == a0: a MULTICAST advertisement (sec 4a)");
+	ct_check_eq_u32(h.incarnation, 0,
+			"  incarnation 0, as sec 4(b) grounds for multicast");
+	/* The abs 96-101 tick is the one span that MOVES across the 53 real
+	 * frames, so it is UNCITED in the specimen (a live field is never a
+	 * fixture constant) and decodes as the loader's zero fill. What is
+	 * asserted is the honest thing: that the loader agrees it is uncited,
+	 * and that every span around it IS cited -- the round trip in group 1
+	 * is what proves the tick's offset, by rebuilding the 122 cited bytes
+	 * on either side of it byte-exact. */
+	for (i = 0; i < 6; i++)
+		tick_nonzero |= vms_fixture_is_cited(f, VMS_OFF_HELLO_TIMER + i, 1);
+	ct_check(!tick_nonzero,
+		 "  abs 96-101, the LIVE tick, is uncited in the specimen");
+	ct_check(vms_fixture_is_cited(f, VMS_OFF_HELLO_TIMER - 2u, 2) &&
+		 vms_fixture_is_cited(f, VMS_OFF_HELLO_TAILCONST, 10),
+		 "  and the cited spans butt right up against it on both sides");
+
+	/* 4. the fields the revision does NOT carry come back ZERO, never
+	 *    stale -- the struct was poisoned 0xAA before the parse */
+	ct_check_eq_u32(h.poller_sweep, 0,
+			"  abs 128 is not on the wire -> zero, not the poison");
+	ct_check_eq_u32(h.trailer_0064, 0, "  abs 130 likewise");
+	ct_check_eq_u32(h.trailer_0000, 0, "  abs 132 likewise");
+
+	/* 5. the marker words that DIFFER are carried as data, not baked in */
+	ct_check_eq_u32(h.hdr.connect_flag, 0x0101,
+			"  abs 22 == 0x0101 (the 0x05 revision's is 0x0001)");
+	ct_check_eq_u32(h.trailer_9205, 0x0590,
+			"  abs 94 == 0x0590 (the 0x05 revision's is 0x0592)");
+	ct_check_eq_u32(h.trailer_2600, 0x0021,
+			"  abs 126 == 0x0021 (the 0x05 revision's is 0x0026)");
+
+	/* 6. NO REGRESSION: the V7.3 specimen is exactly what it always was */
+	ct_check(vms_frame_classify(v73->bytes, v73->wire_len, &fi73)
+		 == VMS_CODEC_OK, "V7.3 HELLO still classifies");
+	ct_check_eq_u32(fi73.cls, VMS_FCLS_HELLO,
+			"  still VMS_FCLS_HELLO, not the new class");
+	ct_check_eq_u32(fi73.sca_content, VMS_HELLO_SCA_LEN,
+			"  still 120-byte content");
+	ct_check(vms_hello_rev_for_class(&fi73)->rev == VMS_HELLO_REV_C05,
+		 "  and maps to VMS_HELLO_REV_C05");
+}
+
+/*
+ * The refusals. A codec that stretches to fit an unobserved shape is how a
+ * wrong field becomes wire truth; every one of these is a shape nobody has
+ * ever captured, and the codec says no rather than guessing.
+ */
+static void test_c3_refusals(void)
+{
+	const struct vms_fixture *f = fixture("hello-c3-vaxc-v55-multicast");
+	struct vms_frame_info fi;
+	struct vms_hello_frame h;
+	uint8_t frame[VMS_HELLO_FRAME_LEN];
+	uint8_t out[VMS_HELLO_PADDED_MAX_FRAME];
+	uint32_t written = 0;
+	uint32_t i;
+
+	printf("-- what the class-0x03 revision REFUSES\n");
+	ct_check(f != NULL, "specimen loads");
+	if (f == NULL)
+		return;
+
+	/* a class-0x03 frame at ANY other length is a shape nobody has seen */
+	memcpy(frame, f->bytes, f->wire_len);
+	frame[14] = (uint8_t)(VMS_HELLO_SCA_LEN - 2u);   /* claim 120 content */
+	ct_check(vms_frame_classify(frame, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "class 0x03 with a 120-content length field: classify returns OK");
+	ct_check_eq_u32(fi.cls, VMS_FCLS_UNKNOWN,
+			"  ...but is UNCLASSIFIED, not silently read as a HELLO");
+
+	/* the parse refuses to decode one class as the other */
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "reclassify the untouched specimen");
+	fi.cls = (uint8_t)VMS_FCLS_HELLO;   /* lie to the parser */
+	ct_check(vms_hello_parse(f->bytes, f->wire_len, &fi, &h)
+		 == VMS_CODEC_E_CLASS,
+		 "a 0x03 frame handed over as class 0x05 -> E_CLASS, never wrong data");
+
+	/* a C03 frame has no observed padded form */
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "reclassify again");
+	ct_check(vms_hello_parse(f->bytes, f->wire_len, &fi, &h) == VMS_CODEC_OK,
+		 "parse again");
+	ct_check(vms_hello_build_padded(&h, 1500, out, sizeof(out), &written)
+		 == VMS_CODEC_E_INVAL,
+		 "padded build of a C03 frame -> E_INVAL (sec 4k was measured on C05 only)");
+
+	/* a build whose length field contradicts its revision is refused */
+	h.hdr.sca_len_field = (uint16_t)(VMS_HELLO_SCA_LEN - 2u);
+	ct_check(vms_hello_build(&h, out, sizeof(out), &written)
+		 == VMS_CODEC_E_INVAL,
+		 "C03 revision + a 120-content length field -> E_INVAL");
+	h.hdr.sca_len_field = (uint16_t)(VMS_HELLO_C3_SCA_LEN - 2u);
+	ct_check(vms_hello_build(&h, out, sizeof(out), &written) == VMS_CODEC_OK,
+		 "  ...and is accepted again once the two agree");
+	ct_check_eq_u32(written, VMS_HELLO_C3_FRAME_LEN, "  writing 128 bytes");
+
+	/* an unknown revision id is refused, not clamped to a known one */
+	h.revision = (uint8_t)VMS_HELLO_REV__COUNT;
+	ct_check(vms_hello_build(&h, out, sizeof(out), &written)
+		 == VMS_CODEC_E_INVAL, "an unregistered revision id -> E_INVAL");
+	ct_check(vms_hello_rev_lookup((uint8_t)VMS_HELLO_REV__COUNT) == NULL,
+		 "  and the revision table itself returns NULL for it");
+
+	/* never crash a peer: every truncation of the real frame is refused
+	 * or classified, and none of them reads past the buffer */
+	{
+		uint32_t classified = 0, decoded = 0;
+
+		for (i = 0; i < f->wire_len; i++) {
+			uint8_t clip[VMS_HELLO_FRAME_LEN];
+			struct vms_frame_info tfi;
+			struct vms_hello_frame th;
+
+			memcpy(clip, f->bytes, i);
+			(void)vms_frame_classify(clip, i, &tfi);
+			if (tfi.cls != VMS_FCLS_HELLO_C3)
+				continue;
+			classified++;
+			if (vms_hello_parse(clip, i, &tfi, &th) == VMS_CODEC_OK)
+				decoded++;
+		}
+		/* The test is only worth anything if the truncations really do
+		 * reach the C03 parser -- assert that they did. */
+		ct_check(classified > 0, "truncated V5.5 frames DO reach the "
+					 "C03 parse path (the test is not vacuous)");
+		ct_check_eq_u32(decoded, 0,
+				"  and not one of them decodes as a complete HELLO");
+	}
 }
 
 /* ---- group 2: hand-built HELLO, every field at its offset ------------- */
@@ -497,6 +714,8 @@ int main(void)
 	}
 
 	test_fixture_roundtrips();
+	test_c3_revision();
+	test_c3_refusals();
 	test_handbuilt_hello_field_placement();
 	test_hello_error_paths();
 	test_lastgasp_is_a_plain_hello_diff();

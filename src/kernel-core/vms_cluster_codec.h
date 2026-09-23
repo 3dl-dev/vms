@@ -201,6 +201,23 @@ void     vms_wire_put_zero(vms_wire_buf_t *w, uint32_t off, uint32_t n);
 #define VMS_OFF_DISC_SUFFIX      37u   /* payload[23] const 01 00 00       */
 #define VMS_DISC_CLASS_HELLO     0x05u
 #define VMS_DISC_CLASS_SOLICIT   0x02u
+/*
+ * A SECOND discovery revision's HELLO class byte, MEASURED (rd vms-0f8), not
+ * inferred from any version number: a real OpenVMS VAX **V5.5-2H4** node
+ * (browser-demo Node C, `SCSNODE=VAXC`) emits its periodic multicast
+ * advertisement with abs 36 == 0x03 and a 114-byte SCA content. Every other
+ * byte position of that frame is the §4(a)/§4(b) HELLO -- see
+ * vms_cluster_codec_hello.h's revision table for the byte-level census.
+ *
+ * The census that makes this a SECOND REVISION rather than a second message
+ * class: across 74 817 + 282 + 181 discovery frames from five real V7.3 VAXes
+ * and OVMX (every pcap in docs/clean-room/reference-captures.sha256), abs 36
+ * takes exactly two values, 0x05 (HELLO) and 0x02 (SOLICIT). 0x03 appears
+ * ZERO times. It appears only from the V5.5 node, and there it is the ONLY
+ * discovery class that node ever sends. No meaning is claimed for the value
+ * 0x03 itself; what is asserted is only what was counted.
+ */
+#define VMS_DISC_CLASS_HELLO_C3  0x03u
 
 /* SCS message-type byte values (spec §4(g) partition; labels inferred). */
 #define VMS_SCS_MT_START         0x41u /* START / STACK / ACK              */
@@ -239,6 +256,11 @@ enum vms_frame_class {
 	VMS_FCLS_UNKNOWN = 0,
 	VMS_FCLS_HELLO,         /* §4(a)+§4(b), SCA content 120             */
 	VMS_FCLS_HELLO_PADDED,  /* §4(k), directed HELLO + zero pad         */
+	VMS_FCLS_HELLO_C3,      /* rd vms-0f8: the SECOND discovery
+				 * revision's HELLO -- abs 36 == 0x03, SCA
+				 * content 114, i.e. the §4(a)/§4(b) frame
+				 * without the abs 128-133 tail. MEASURED
+				 * from a real OpenVMS VAX V5.5-2H4 node    */
 	VMS_FCLS_SOLICIT,       /* §4(c), SCA content 78                    */
 	VMS_FCLS_SCS_START,     /* §4(g) ph2, mt 0x41 (START/STACK/ACK)     */
 	VMS_FCLS_SCS_CREDIT,    /* §4(h)(3), mt 0x48, SCA content 41        */

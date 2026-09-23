@@ -199,6 +199,17 @@ struct fake_peer {
 	 * wants a member holding a residual for us raises it.
 	 */
 	uint16_t incarnation;
+	/*
+	 * rd vms-0f8: which DISCOVERY REVISION this peer speaks, and the three
+	 * marker words that go with it. fake_peer_init sets the sec 4(a)/4(b)
+	 * revision, so every pre-existing scenario emits exactly the frame it
+	 * always did; fake_peer_set_revision() copies a revision out of a
+	 * PARSED REAL FRAME rather than letting a test type marker words in.
+	 */
+	uint8_t  revision;
+	uint16_t connect_flag;
+	uint16_t trailer_9205;
+	uint16_t trailer_2600;
 };
 
 static void fake_peer_init(struct fake_peer *p, uint16_t sysid,
@@ -215,6 +226,27 @@ static void fake_peer_init(struct fake_peer *p, uint16_t sysid,
 		p->name[i] = (uint8_t)name[i];
 	p->name_len = VMS_HELLO_NODENAME_MAX;
 	p->incarnation = 1u;    /* fresh contact, sec 4(i).B */
+	p->revision = (uint8_t)VMS_HELLO_REV_C05;
+	p->connect_flag = 0x0001u;
+	p->trailer_9205 = 0x0592u;
+	p->trailer_2600 = 0x0026u;
+}
+
+/*
+ * Make this peer speak the revision a REAL captured frame speaks. The markers
+ * are copied out of `src` -- a frame some real VMS node actually sent and this
+ * test parsed -- so a scenario never asserts a marker word it typed in itself.
+ */
+static void fake_peer_set_revision(struct fake_peer *p,
+				   const struct vms_hello_frame *src)
+	__attribute__((unused));
+static void fake_peer_set_revision(struct fake_peer *p,
+				   const struct vms_hello_frame *src)
+{
+	p->revision = src->revision;
+	p->connect_flag = src->hdr.connect_flag;
+	p->trailer_9205 = src->trailer_9205;
+	p->trailer_2600 = src->trailer_2600;
 }
 
 /*
@@ -228,15 +260,19 @@ static uint32_t fake_peer_hello(const struct fake_peer *p,
 				uint8_t word, uint16_t incarnation,
 				uint16_t padded_sca, uint8_t *out, uint32_t cap)
 {
+	const struct vms_hello_rev_desc *rv = vms_hello_rev_lookup(p->revision);
 	struct vms_hello_frame h;
 	uint32_t written = 0;
 
+	if (rv == NULL)
+		return 0;
 	memset(&h, 0, sizeof(h));
+	h.revision = p->revision;
 	memcpy(h.hdr.eth_dst, dst_hw, VMS_ETH_ADDR_LEN);
 	memcpy(h.hdr.eth_src, p->hw_mac, VMS_ETH_ADDR_LEN);
-	h.hdr.sca_len_field = (uint16_t)(VMS_HELLO_SCA_LEN - 2u);
+	h.hdr.sca_len_field = (uint16_t)(rv->sca_content - 2u);
 	memcpy(h.hdr.dst_lavc, dst_lavc, VMS_ETH_ADDR_LEN);
-	h.hdr.connect_flag = 0x0001u;
+	h.hdr.connect_flag = p->connect_flag;
 	memcpy(h.hdr.src_lavc, p->lavc, VMS_ETH_ADDR_LEN);
 	h.hdr.word30 = (uint16_t)word;
 
@@ -247,9 +283,9 @@ static uint32_t fake_peer_hello(const struct fake_peer *p,
 	memcpy(h.disc.reserved_64, p->reserved_64, VMS_DISC_RESERVED64_LEN);
 
 	h.incarnation = incarnation;
-	h.trailer_9205 = 0x0592u;
+	h.trailer_9205 = p->trailer_9205;
 	memcpy(h.hw_mac, p->hw_mac, VMS_ETH_ADDR_LEN);
-	h.trailer_2600 = 0x0026u;
+	h.trailer_2600 = p->trailer_2600;
 	h.poller_sweep = (word == 0xa0u || word == 0xb1u) ? 0x0000u : 0x001fu;
 	h.trailer_0064 = 0x0064u;
 

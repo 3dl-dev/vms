@@ -121,6 +121,17 @@ static uint32_t pe_listen_timeout(const struct pe_fsm *f)
 #define PE_TRAILER_0064 0x0064u
 #define PE_TRAILER_0000 0x0000u
 
+/*
+ * The port's OWN grounded revision, used until a real peer has taught it one
+ * (rd vms-0f8, vms_pe_fsm.h SS4b). These are exactly the three constants above:
+ * the default IS the sec 4(a)/4(b) revision, so a port that never hears a peer
+ * emits byte-for-byte the frame it emitted before this item.
+ */
+static const struct pe_wire_rev pe_rev_default = {
+	(uint8_t)VMS_HELLO_REV_C05, 0u,
+	PE_CONNECT_FLAG, PE_TRAILER_9205, PE_TRAILER_2600
+};
+
 /* SS4(b) abs 102-111: the constant tail, byte-exact in every captured HELLO. */
 static const uint8_t pe_tail_const[VMS_HELLO_TAILCONST_LEN] = {
 	0xbc, 0x00, 0x03, 0x58, 0x51, 0x41, 0x00, 0x00, 0x00, 0x00
@@ -167,13 +178,46 @@ static void pe_put_disc_format(struct pe_fsm *f, struct vms_hello_frame *h)
 		VMS_DISC_RESERVED64_LEN);
 }
 
-/* The span every OVMX HELLO shares, from real state. */
-static void pe_hello_common(struct pe_fsm *f, struct vms_hello_frame *h)
+/* The revision the port's own multicast advertisement goes out in. */
+static const struct pe_wire_rev *pe_rev_port(const struct pe_fsm *f)
 {
+	return f->wire_rev.valid ? &f->wire_rev : &pe_rev_default;
+}
+
+/* The revision to direct AT one peer: its own if we have decoded a HELLO
+ * from it, else the port's. Never a guess -- both carry a validity flag. */
+static const struct pe_wire_rev *pe_rev_for_channel(const struct pe_fsm *f,
+						    const struct pe_channel *ch)
+{
+	if (ch != NULL && ch->peer_rev.valid)
+		return &ch->peer_rev;
+	return pe_rev_port(f);
+}
+
+/*
+ * The codec descriptor for a revision. `rv->rev` is only ever written from a
+ * descriptor the codec itself handed back, so the lookup cannot miss -- but
+ * this runs in a kernel, and a NULL here would be a fault rather than a
+ * refusal, so the miss is folded back onto the grounded default.
+ */
+static const struct vms_hello_rev_desc *pe_rev_desc(const struct pe_wire_rev *rv)
+{
+	const struct vms_hello_rev_desc *d = vms_hello_rev_lookup(rv->rev);
+
+	return d != NULL ? d : vms_hello_rev_lookup(VMS_HELLO_REV_C05);
+}
+
+/* The span every OVMX HELLO shares, from real state, in revision `rv`. */
+static void pe_hello_common(struct pe_fsm *f, struct vms_hello_frame *h,
+			    const struct pe_wire_rev *rv)
+{
+	const struct vms_hello_rev_desc *d = pe_rev_desc(rv);
+
 	pe_bzero(h, (uint32_t)sizeof(*h));
 
-	h->hdr.sca_len_field = (uint16_t)(VMS_HELLO_SCA_LEN - 2u);
-	h->hdr.connect_flag = PE_CONNECT_FLAG;
+	h->revision = d->rev;
+	h->hdr.sca_len_field = (uint16_t)(d->sca_content - 2u);
+	h->hdr.connect_flag = rv->connect_flag;
 	pe_copy(h->hdr.eth_src, f->id.hw_mac, VMS_ETH_ADDR_LEN);
 	pe_copy(h->hdr.src_lavc, f->id.lavc, VMS_ETH_ADDR_LEN);
 	pe_copy(h->hw_mac, f->id.hw_mac, VMS_ETH_ADDR_LEN);
@@ -182,9 +226,11 @@ static void pe_hello_common(struct pe_fsm *f, struct vms_hello_frame *h)
 	pe_copy(h->disc.name, f->id.scsnode, VMS_HELLO_NODENAME_MAX);
 	pe_put_disc_format(f, h);
 
-	h->trailer_9205 = PE_TRAILER_9205;
+	h->trailer_9205 = rv->trailer_9205;
 	pe_copy(h->tail_const, pe_tail_const, VMS_HELLO_TAILCONST_LEN);
-	h->trailer_2600 = PE_TRAILER_2600;
+	h->trailer_2600 = rv->trailer_2600;
+	/* The abs 130/132 words exist only in the revision that HAS the
+	 * abs 128-133 tail; the codec drops them otherwise. */
 	h->trailer_0064 = PE_TRAILER_0064;
 	h->trailer_0000 = PE_TRAILER_0000;
 	pe_put_tick(f, h->timer_tick);
@@ -229,7 +275,7 @@ static int pe_nonce_is_zero(const uint8_t n[VMS_DISC_NONCE_LEN])
 static void pe_hello_multicast(struct pe_fsm *f, struct vms_hello_frame *h,
 			       uint8_t word)
 {
-	pe_hello_common(f, h);
+	pe_hello_common(f, h, pe_rev_port(f));
 	pe_copy(h->hdr.eth_dst, f->id.mcast, VMS_ETH_ADDR_LEN);
 	pe_copy(h->hdr.dst_lavc, f->id.mcast, VMS_ETH_ADDR_LEN);
 	h->hdr.word30 = (uint16_t)word;
@@ -250,7 +296,7 @@ static void pe_hello_multicast(struct pe_fsm *f, struct vms_hello_frame *h,
 static void pe_hello_directed(struct pe_fsm *f, const struct pe_channel *ch,
 			      struct vms_hello_frame *h, uint8_t word)
 {
-	pe_hello_common(f, h);
+	pe_hello_common(f, h, pe_rev_for_channel(f, ch));
 	pe_copy(h->hdr.eth_dst, ch->remote_mac, VMS_ETH_ADDR_LEN);
 	pe_copy(h->hdr.dst_lavc, ch->remote_lavc, VMS_ETH_ADDR_LEN);
 	h->hdr.word30 = (uint16_t)word;
@@ -482,6 +528,17 @@ static void pe_probe_start(struct pe_fsm *f, struct pe_channel *ch, uint16_t cap
 
 	if (limit == 0u)
 		return;                     /* MTU unknown: assert no size */
+	/* rd vms-0f8: sec 4(k)'s padded size-verify frame has only ever been
+	 * observed in the class-0x05 revision. Against a peer speaking a
+	 * revision in which no padded frame has ever been seen, the port
+	 * DECLINES to probe and records that -- rather than extrapolating a
+	 * frame shape nobody has observed and then crediting a size it never
+	 * proved (INV-6). The plain b3/b4 channel verify still runs. */
+	if (!pe_rev_desc(pe_rev_for_channel(f, ch))->has_padded) {
+		ch->probe_sca_len = 0u;
+		ch->probe_rev_unsupported = 1u;
+		return;
+	}
 	if (cap != 0u && cap < limit)
 		limit = cap;
 	if (ch->probe_sca_len != 0u)
@@ -515,6 +572,7 @@ struct pe_rx {
 	const struct vms_frame_info *fi;
 	const struct vms_sca_hdr    *hdr;
 	const struct vms_disc_body  *disc;
+	const struct vms_hello_frame *hello; /* NULL unless a HELLO decoded  */
 	uint16_t incarnation;        /* abs 92, meaningful only when directed */
 	uint8_t  incarnation_valid;
 	uint8_t  directed;           /* addressed to THIS node, not the group */
@@ -1098,6 +1156,52 @@ static void pe_learn_disc_format(struct pe_fsm *f, const struct pe_rx *rx)
 	f->disc_format_learned = 1u;
 }
 
+/* Copy a peer's revision markers out of the HELLO it really sent. */
+static void pe_rev_from_hello(struct pe_wire_rev *out,
+			      const struct vms_hello_frame *h)
+{
+	out->rev = h->revision;
+	out->connect_flag = h->hdr.connect_flag;
+	out->trailer_9205 = h->trailer_9205;
+	out->trailer_2600 = h->trailer_2600;
+	out->valid = 1u;
+}
+
+/*
+ * rd vms-0f8 -- learn the DISCOVERY REVISION off a real peer's own HELLO, the
+ * same learn-from-the-wire discipline pe_learn_join_nonce() and
+ * pe_learn_disc_format() above already use, and for the same reason: which
+ * revision is spoken is a property of the CLUSTER, not of this source tree,
+ * and Rule 8 sanctions "the cluster's on-wire assignment" where a computed
+ * answer is unpublished.
+ *
+ * TWO SCOPES, because they answer two different questions:
+ *   - per CHANNEL: every frame directed AT a peer goes out in the revision
+ *     THAT peer was heard speaking. Always correct, even in a mixed cluster.
+ *   - port-wide: the periodic MULTICAST advertisement is addressed to no one
+ *     in particular, so it goes out in the revision of the FIRST peer decoded
+ *     this run (first-wins, exactly like the nonce). In a V7.3 cluster that is
+ *     the V7.3 revision, i.e. the pre-vms-0f8 frame unchanged. In a cluster
+ *     whose members speak BOTH, one multicast revision cannot suit both and
+ *     the port says which it chose rather than guessing at a third behaviour.
+ *
+ * INV-6: the three marker words carried here are FORMAT markers read out of a
+ * real received frame -- on the same footing as the ethertype. Every field
+ * that asserts something ABOUT THIS NODE (name, SCSSYSTEMID, hardware MAC,
+ * incarnation, tick) stays this node's own and is never echoed.
+ */
+static void pe_learn_revision(struct pe_fsm *f, struct pe_channel *ch,
+			      const struct pe_rx *rx)
+{
+	if (rx->hello == NULL)
+		return;
+	if (rx->hello->revision == (uint8_t)VMS_HELLO_REV_C03)
+		f->rx_hello_c03++;
+	pe_rev_from_hello(&ch->peer_rev, rx->hello);
+	if (!f->wire_rev.valid)
+		pe_rev_from_hello(&f->wire_rev, rx->hello);
+}
+
 /* Is this frame ours? A directed frame names THIS node's LOGICAL address at
  * abs 16; a multicast one names the cluster group. Anything else is somebody
  * else's traffic on a shared LAN and is counted, not processed. */
@@ -1155,6 +1259,7 @@ static int pe_parse_discovery(const uint8_t *frame, uint32_t len,
 		return -1;
 	rx->hdr = &hello->hdr;
 	rx->disc = &hello->disc;
+	rx->hello = hello;
 	rx->incarnation = hello->incarnation;
 	rx->incarnation_valid = 1u;
 	return 0;
@@ -1215,6 +1320,7 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 	pe_channel_learn(f, ch, &rx);
 	pe_learn_join_nonce(f, &rx);
 	pe_learn_disc_format(f, &rx);
+	pe_learn_revision(f, ch, &rx);
 
 	act = pe_check_incarnation(f, ch, &rx);
 	if (act == PE_CH_ACT_NONE)

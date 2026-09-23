@@ -575,6 +575,90 @@ static void mixed_cluster_masters_a_novel_root_locally(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * 9. GENESIS RELABELS THIS NODE'S OWN MASTERY (rd vms-151)
+ *
+ * MEASURED: a booted OVMX node founded generation 1 and its userland stopped
+ * dead. The executive stayed healthy and its circuits stayed open -- what
+ * stopped was every lock request on a resource the node had ALREADY mastered
+ * while it was still carrying the substrate's insmod placeholder CSID. The
+ * cluster assigned it 0x00010001; dlm_resolve_master()'s "is the known master
+ * US?" test stopped matching `master_csid == 1`; and each such request was
+ * routed REMOTE to a node whose CSID no cluster ever assigned to anybody.
+ *
+ * What this pins is the fact that does not change: this node still masters
+ * exactly what it mastered, so learning its own cluster identity RELABELS those
+ * records and grants keep working. The second $ENQ below is the teeth -- under
+ * the defect it does not grant locally, it leaves for CSID 1.
+ * ================================================================ */
+static void genesis_relabels_this_nodes_own_mastery(void)
+{
+	const uint16_t WIRE_HASH = 0xC0DEu;
+	const uint32_t GENESIS_CSID = 0x00010001u;   /* generation 1, CSV slot 1 */
+	struct vms_proc proc;
+	struct vms_resmaster_args rm;
+	uint32_t lkid = 0, lkid2 = 0, st;
+
+	printf("--- genesis: this node learns its CSID and keeps its own mastery ---\n");
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms_lock_init");
+		return;
+	}
+	cm_reset(0u);          /* the vector's entry reads "us" (p. 6-32) */
+	cm_install();
+	proc_init(&proc);
+	vms_local_csid = CSID_LOCAL;   /* the pre-cluster placeholder */
+
+	st = vms_lock_dlm_learn_dir_hash("PREGENESIS", WIRE_HASH);
+	ct_check_eq_u32(st, SS__NORMAL, "the wire named PREGENESIS");
+	st = do_enq(&proc, "PREGENESIS", LCK_K_EXMODE, &lkid);
+	ct_check(st == SS__NORMAL && lkid != 0,
+		 "$ENQ grants before the cluster exists");
+	read_resmaster("PREGENESIS", &rm);
+	ct_check_eq_u32(rm.master_csid, CSID_LOCAL,
+			"and this node masters it under the placeholder CSID");
+	ct_check_eq_u32((unsigned long)cm.posts, 0u, "nothing left this node");
+
+	/* The cluster forms. This is the ONE call the connection manager makes. */
+	vms_lock_dlm_set_local_csid(GENESIS_CSID);
+	ct_check_eq_u32(vms_lock_dlm_local_csid(), GENESIS_CSID,
+			"the engine now carries the cluster's own assignment");
+
+	read_resmaster("PREGENESIS", &rm);
+	ct_check_eq_u32(rm.master_csid, GENESIS_CSID,
+			"the resource this node mastered is STILL mastered by "
+			"this node, under its new name");
+
+	/* THE TEETH. Under the defect this second request resolves "the master
+	 * is CSID 1, which is not us" and is posted to a node that does not
+	 * exist; the caller then waits for an answer that can never come. */
+	st = do_enq(&proc, "PREGENESIS", LCK_K_NLMODE, &lkid2);
+	ct_check(st == SS__NORMAL && lkid2 != 0,
+		 "a later $ENQ on that resource still grants HERE");
+	ct_check_eq_u32((unsigned long)cm.posts, 0u,
+			"and nothing was posted to the placeholder CSID");
+
+	/* Idempotent, because the connection manager makes this call on every
+	 * transition boundary and on its own beat. */
+	vms_lock_dlm_set_local_csid(GENESIS_CSID);
+	read_resmaster("PREGENESIS", &rm);
+	ct_check_eq_u32(rm.master_csid, GENESIS_CSID, "and re-telling it is a no-op");
+
+	/* A zero is still refused: 0 means "unmastered" throughout the engine,
+	 * so it is not an identity and may not relabel anything. */
+	vms_lock_dlm_set_local_csid(0u);
+	ct_check_eq_u32(vms_lock_dlm_local_csid(), GENESIS_CSID,
+			"a zero CSID is refused, not stored");
+	read_resmaster("PREGENESIS", &rm);
+	ct_check_eq_u32(rm.master_csid, GENESIS_CSID,
+			"... and relabels nothing");
+
+	ct_check(do_deq(&proc, lkid) == SS__NORMAL, "the first lock releases");
+	ct_check(do_deq(&proc, lkid2) == SS__NORMAL, "and so does the second");
+	vms_local_csid = CSID_LOCAL;
+	vms_lock_cleanup();
+}
+
 int main(void)
 {
 	printf("=== test_lock_dir (FC-P4.3 dir_resolve in the real engine, R1) ===\n");
@@ -586,5 +670,6 @@ int main(void)
 	learned_hash_survives_reclaim();
 	all_ovmx_grounds_a_novel_root();
 	mixed_cluster_masters_a_novel_root_locally();
+	genesis_relabels_this_nodes_own_mastery();
 	return ct_summary("test_lock_dir");
 }

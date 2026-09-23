@@ -2116,13 +2116,74 @@ int vms_lock_dlm_have_delivery_proc(void)
  * "unmastered" throughout this file, so it is not an identity, and an identity
  * the cluster has not assigned is one this node does not have.
  */
+/*
+ * ... AND THE LOCK DATABASE THIS NODE ALREADY BUILT UNDER THE OLD ONE
+ * (rd vms-151, MEASURED: a booted node founded generation 1 and its userland
+ * stopped dead at the next $ENQ).
+ *
+ * Every resource this node mastered before the cluster existed carries
+ * `master_csid == <the old local value>`. The instant the cluster assigns this
+ * node a real CSID, dlm_resolve_master()'s first test -- "is the known master
+ * US?" -- stops matching those resources and routes each one REMOTE, to a node
+ * whose CSID is the placeholder this executive booted with and which no cluster
+ * ever assigned to anybody. The request goes nowhere and never completes: the
+ * executive is healthy, the circuits are open, and the userland is wedged on a
+ * lock request addressed to a node that does not exist.
+ *
+ * WHAT CHANGED AND WHAT DID NOT. This node still masters exactly what it
+ * mastered a moment ago -- that is a fact about the lock database, and learning
+ * one's own cluster identity does not move a single resource. Only the NAME of
+ * the node holding them changed. So this is a RELABEL of this node's own
+ * identity on its own mastery records, not an assignment of mastery to anybody
+ * (INV-6): a resource mastered ELSEWHERE, or mastered by nobody, is untouched.
+ *
+ * The cached directory answers ARE discarded, because those were resolved
+ * against the pre-cluster weight vector and a state transition is exactly when
+ * Davis p. 6-33 says directory knowledge goes. Mastery is not discarded with
+ * them: p. 7-35's FORM rebuild would scramble to remaster, and OVMX has no
+ * cross-node re-registration to scramble WITH yet (FC-P5.5), so dropping
+ * mastery here would strand every lock already granted on this node.
+ */
+static void dlm_relabel_resource(struct vms_lock_resource *res,
+                                 uint32_t old_csid, uint32_t new_csid)
+{
+    res->dir_valid = 0;
+    res->dir_csid = 0;
+    if (res->master_csid == old_csid)
+        res->master_csid = new_csid;
+}
+
+static void dlm_relabel_local_identity(uint32_t old_csid, uint32_t new_csid)
+{
+    struct vms_lock_resource *res;
+    int bkt;
+
+    /* The same lock order vms_lock_dlm_member_departed() uses: the resource
+     * hash outside, the per-resource lock inside. */
+    exec_lock(&vms_res_hash_lock);
+    exec_hash_for_each(vms_res_hash, bkt, res, hash_node) {
+        exec_lock(&res->lock);
+        dlm_relabel_resource(res, old_csid, new_csid);
+        exec_unlock(&res->lock);
+    }
+    exec_unlock(&vms_res_hash_lock);
+}
+
 void vms_lock_dlm_set_local_csid(uint32_t csid)
 {
+    uint32_t old;
+
     if (csid == 0u)
         return;
     exec_lock(&vms_dlm_req_ops_lock);
+    old = vms_local_csid;
     vms_local_csid = csid;
     exec_unlock(&vms_dlm_req_ops_lock);
+
+    /* Idempotent: this is called on every transition boundary and on the DLM
+     * arm's own beat, and only a REAL change has anything to relabel. */
+    if (old != csid && old != 0u)
+        dlm_relabel_local_identity(old, csid);
 }
 
 uint32_t vms_lock_dlm_local_csid(void)

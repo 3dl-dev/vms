@@ -53,6 +53,9 @@ CSIDs 0x00010001 / 0x00010002 are generation 1, CSV slots 1 and 2 -- the
 round-robin slot a coordinator hands out (p. 7-25), not a function of the
 SCSSYSTEMID.
 
+The in-browser run of the same images reads back the same two tables from the
+same two guest consoles (`browser-stage1-result.json`, `A_cn2`/`D_cn2` true).
+
 ## Why the earlier runs of this item looked like a hang
 
 They were not hangs. `ovmx_boot_mute_kernel_console()` lowers the Linux console
@@ -86,8 +89,22 @@ parent item's own harness (rd vms-735); this rig is the fast loop under it.
 
 - `nodeA-OVMXA.console.log` -- node A's whole console, boot to SHOW CLUSTER.
 - `nodeD-OVMXD.console.log` -- node D's, same run.
-- `browser-stage1-result.json` -- the in-browser run of the SAME images on the
+- `browser-stage1-result.json` -- the IN-BROWSER run of the SAME images on the
   k3s pod (two `node.html` iframes on one in-page L2 hub, qemu-wasm/TCG): both
-  consoles' tails and the harness's own verdict.
-- `browser-run.log` -- that run's transcript, including the `CN2_STAGE1 PASS`
-  line and the timestamps of each node's membership announcement.
+  consoles' tails and the harness's own verdict,
+  `{"pass":true,"elapsed_s":176,"A_pass":true,"D_pass":true,"A_cn2":true,"D_cn2":true}`
+  -- `*_pass` is the membership announcement on that node's own console, `*_cn2`
+  is that node's own SHOW CLUSTER naming two members.
+- `browser-run.log` -- that run's transcript: `CN2_STAGE1 PASS` (both consoles
+  name each other) and `CN2_STAGE1 READBACK` (both tables name two members).
+
+**In-browser reliability, honestly.** Three earlier runs of these images on the
+same pod went: both-MEMBER pass; formed-then-lost (node A's VC dropped at
+t=252 s, `%CNXMAN, quorum lost, blocking activity`, and startup then blocked on
+the quorum hang -- the executive doing the right thing on a real connectivity
+loss); and founder-only (node D's admission stalled with `%CNXMAN, the peer has
+spent every receive buffer this node extended`). The host-QEMU/KVM rig with the
+identical images formed CN=2 every time. That reads as qemu-wasm/TCG throughput
+starvation rather than an executive defect, but it has NOT been measured to the
+point where that can be asserted -- it is rd vms-d25, under the browser-demo
+item, not a claim made here.

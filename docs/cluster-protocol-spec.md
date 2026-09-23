@@ -432,6 +432,78 @@ Verified against `scs-idle-baseline.pcap` frames 1 (VAX1→multicast), 2
 | 130 | 2 | constant `0x0064` (100 decimal) | unknown/inferred — not corroborated against any decoder-ring value |
 | 132 | 2 | trailer, always `0x0000` | unknown |
 
+#### 4(b.c3) A SECOND discovery revision — the class-`0x03`, 114-content HELLO (GROUNDED, `vms-0f8`)
+
+Everything above §4(b) was harvested from **OpenVMS VAX V7.3** nodes. A real
+**OpenVMS VAX V5.5-2H4** node speaks a second revision of the same HELLO. This
+section records what was measured and nothing more.
+
+**The specimens.** 53 consecutive multicast HELLOs from `VAXC` — an unmodified
+V5.5-2H4 system disk, cluster group 257, in the in-browser cluster demo —
+against 7 from OVMX in the same capture. Raw bytes:
+`tests/lab/captures/vms147-browser-nodea-vaxc-20260922/hub-frames.json`,
+SHA-256 in `docs/clean-room/reference-captures.sha256`. The extracted first
+frame is the host-test fixture
+`tests/cluster/host/fixtures/hello-c3-vaxc-v55.spec`.
+
+**It is the same frame.** Field position for field position:
+
+| abs | V7.3 (class `0x05`) | V5.5-2H4 (class `0x03`) | |
+|---|---|---|---|
+| 14–15 | `76 00` → content **120** | `70 00` → content **114** | **differs** |
+| 16–21 | dst/group logical | dst/group logical | same shape |
+| 22–23 | `01 00` | **`01 01`** | **differs** |
+| 24–29 | src logical LAVC | src logical LAVC | same shape |
+| 30–31 | `a0 00` multicast | `a0 00` | identical |
+| 32–35 | `08 00 00 80` | `08 00 00 80` | identical |
+| 36 | **`05`** | **`03`** | **differs** |
+| 37–39 | `01 00 00` | `01 00 00` | identical |
+| 40–46 | namelen + SCSNODE | namelen + SCSNODE | same shape |
+| 47–63 | `00 80 01 ff 83 00 04 00×9 18` | `... 00×9 `**`10`** | differs at abs 63 only |
+| 64–67 | `03 00 00 00` | `03 00 00 00` | identical |
+| 68–71 | join nonce (0 on multicast) | join nonce (0 on multicast) | same shape |
+| 72–91 | zero | zero | identical |
+| 92–93 | incarnation (0 on multicast) | incarnation (0 on multicast) | same shape |
+| 94–95 | `92 05` | **`90 05`** | **differs** |
+| 96–101 | live 48-bit tick | live 48-bit tick | same offset, same width |
+| 102–111 | `bc 00 03 58 51 41 00 00 00 00` | identical | identical |
+| 112–119 | zero | zero | identical |
+| 120–125 | sender's real HW MAC | sender's real HW MAC | same shape |
+| 126–127 | `26 00` | **`21 00`** | **differs** |
+| 128–133 | poller-sweep / `0064` / `0000` | **absent — frame ends at 127** | **differs** |
+
+Five differing values, one absent tail. The 6-byte length delta at abs 14 **is**
+that absent tail. Across all 53 frames the only span that changes is abs 96–101,
+the live tick, walking monotonically upward — the same field at the same offset
+the `0x05` revision carries.
+
+**Why "revision" and not "a second message class."** Across every capture in
+`docs/clean-room/reference-captures.sha256` — ~75 000 discovery frames from five
+real V7.3 VAXes plus OVMX — abs 36 takes exactly two values: `0x05` (HELLO,
+74 817 at content 120 plus the §4(k) padded sizes) and `0x02` (SOLICIT, content
+78). `0x03` appears **zero** times, and on the V5.5 node it is the **only**
+discovery class that node ever sends.
+
+**What is NOT claimed.** No meaning is assigned to `0x03`, to `0x0101`, to
+`0x0590`, to `0x0021`, or to the abs-63 `0x10`↔`0x18` difference. Whatever
+selects or encodes them is unpublished and is not reconstructed here (Rule 8).
+Nothing here says the class byte is a version number. Nor is anything claimed
+about this revision's **directed** HELLO, its §4(a).1 `b2`/`b3`/`b4` channel
+verify, its §4(k) padded size-verify frame, or its SCS layer: **no specimen of
+any of those exists** — the only V5.5 frames ever captured are multicast HELLOs.
+
+**What OVMX does with that.** `vms_cluster_codec_hello.h` carries the two
+revisions as a table; the classifier keys on the class byte **and** the exact
+content length, so a class-`0x03` frame at any other length stays
+`VMS_FCLS_UNKNOWN`. `vms_pe_fsm.c` **learns** a peer's revision off that peer's
+own frame — per channel for directed frames, and port-wide (first-wins) for the
+multicast advertisement — the same mechanism §4(g)/`E55` sanctions for the join
+nonce and §4(a).2/`E56` for the discovery-format span. Because no padded frame
+has ever been observed in this revision, the port **declines** the §4(k) size
+probe against such a peer and records that it declined
+(`pe_channel.probe_rev_unsupported`), rather than extrapolate a shape nobody has
+seen and then credit a packet size it never proved.
+
 ### 4(c) SOLICIT / connect-and-directory-lookup phase
 
 **Boot-time SOLICIT** (satellite VC establishment on disk-server discovery),

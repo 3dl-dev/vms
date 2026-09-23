@@ -40,6 +40,49 @@ items:
       NOT claimed: interoperation with a real VAX's PEDRIVER on a live LAN --
       that is R5, LAB-DEFERRED.
 
+  - id: nisca$discovery-revisions
+    kind: protocol
+    status: implemented
+    authenticity: real
+    vms: "NISCA discovery HELLO — both observed on-wire revisions"
+    evidence: src/kernel-core/vms_cluster_codec_hello.c
+    notes: >
+      rd vms-0f8. OVMX's discovery corpus was harvested entirely from OpenVMS
+      VAX V7.3 nodes (message class 0x05, 120-byte SCA content). A real OpenVMS
+      VAX V5.5-2H4 node speaks a SECOND revision of the same HELLO: class 0x03,
+      114-byte content, no abs 128-133 tail, and three differing marker words
+      at abs 22/94/126 -- and NOTHING else different, field position for field
+      position, across 53 captured frames in which the only span that moves is
+      the live tick at abs 96 (docs/cluster-protocol-spec.md 4(b.c3)). Through
+      V0.7 the executive classified every such frame family 0/UNCLASSIFIED and
+      counted it badclass.
+      The codec now carries both revisions as a TABLE, keyed on the class byte
+      AND the exact content length, so a class-0x03 frame at any other length
+      stays UNKNOWN and is counted rather than guessed at. The port LEARNS
+      which revision a peer speaks off that peer's own frame -- per channel for
+      directed frames, port-wide first-wins for the multicast advertisement --
+      the same on-wire-assignment discipline already used for the cluster join
+      nonce and the abs 47-67 discovery-format span, never a version table
+      compiled in. No meaning is claimed for the differing marker values; they
+      are carried as data exactly as the 0x05 revision's already are, and every
+      field that asserts something about THIS node (SCSNODE, SCSSYSTEMID,
+      hardware MAC, incarnation, tick) stays this node's own and is never
+      echoed.
+      PROVEN AT R1, in CI: tests/cluster/host/test_codec_hello.c (classification,
+      parse, byte-exact round trip of the real specimen, and the refusals) and
+      tests/cluster/host/test_pe_rev_c3.c (the real 128 bytes through
+      pe_fsm_rx: badclass 0, peer identity off the wire, the reply emitted in
+      the peer's revision carrying our own identity, plus 257 truncations and
+      bit-flips that must not fault). Specimen provenance:
+      tests/cluster/host/fixtures/hello-c3-vaxc-v55.spec against
+      docs/clean-room/reference-captures.sha256.
+      NOT claimed: anything about this revision's DIRECTED HELLO, its
+      channel-verify b2/b3/b4 exchange, its 4(k) padded size-verify frame, or
+      its SCS layer -- no specimen of any of those exists, only multicast
+      HELLOs. The port therefore DECLINES the 4(k) size probe against such a
+      peer and records that it declined, rather than extrapolate a shape nobody
+      has captured and credit a packet size it never proved.
+
   - id: nisca$pea0-device
     kind: feature
     status: implemented

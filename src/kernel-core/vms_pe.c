@@ -138,8 +138,8 @@ struct vms_pe {
 	uint8_t  pad0;
 };
 
-/* The cluster HELLO multicast group, spec SS4(a): AB-00-04-01-<group>, with the
- * group number coming from CLUSTER_AUTHORIZE (params.auth_group, loaded off
+/* The cluster HELLO multicast group: AB-00-04-01-<LE16(group + 0x100)>, with
+ * the group number coming from CLUSTER_AUTHORIZE (params.auth_group, loaded off
  * CLUSTER_AUTHORIZE.DAT at boot -- src/libvms/include/cluster_authorize.h,
  * ovmx_init.c load_cluster_sysgen_params()). Never hard-coded: the last two
  * bytes are the operator's real per-cluster configuration. The byte layout
@@ -147,12 +147,25 @@ struct vms_pe {
  * that already builds the LAVC address the same way), so the R1 host tests
  * can pin the mapping without pulling in this glue TU's substrate seam.
  *
+ * THE SAME ADDRESS IS BOTH DIRECTIONS, AND THAT IS STRUCTURAL (rd vms-147).
+ * pe_port_start() below builds it ONCE and uses that one value twice: it goes
+ * into the port identity the FSM stamps on every transmitted HELLO, and it is
+ * the address handed to exec_lan_mc_add() to enable in the LAN device's
+ * multicast filter. A node that transmits to one address while filtering for
+ * another is invisible in both directions on any NIC that actually implements
+ * its filter -- which is exactly what OVMX did through V0.7, when this
+ * derivation omitted the +0x100 and was therefore right for group 1 and wrong
+ * for every other group (a group-257 node sat on group 1's address).
+ *
  * ===========================================================================
  * WHAT HAPPENS WHEN NOBODY CONFIGURED ONE -- AND WHY THAT IS SAID, LOUDLY,
  * RATHER THAN SILENTLY DEFAULTED (rd vms-b34)
  *
  * With no record loaded `auth_group` is 0, and the address built from it is
- * AB-00-04-01-00-00 -- a group no real cluster is on. vms_cluster.h states the
+ * AB-00-04-01-00-01 (0 is not a VMS-assignable group number, and what VMS
+ * would do with one is unobserved -- the executive applies its one derivation
+ * rather than growing a second, rd vms-147) -- an address no real cluster is
+ * on either way. vms_cluster.h states the
  * contract this is in tension with: "`auth_valid` is 0 until the record is
  * loaded; the port driver NEVER substitutes a default". Until rd vms-b34 that
  * flag had exactly ONE reader in the whole executive (a copy in vms_devtab.c),
@@ -164,7 +177,9 @@ struct vms_pe {
  * initramfs carries an EMPTY /etc/ovmx, so no record -- transmitted 225 frames
  * to AB-00-04-01-00-00 across a 195 s join window while the real OpenVMS V7.3
  * single-node cluster on the same bridge transmitted 180 to AB-00-04-01-01-01
- * (group 257). Neither received one frame of the other's: SHOW CLUSTER/
+ * (group 1 -- that capture's notes call it "group 257" because they inverted
+ * the then-defective derivation to name it; rd vms-147). Neither received one
+ * frame of the other's: SHOW CLUSTER/
  * LOCAL_PORTS read `channels 0, circuits 0, rx 0` and the executive's own join
  * ring held ZERO records. Staging the cluster's real group into the same
  * artifacts and changing nothing else, the SAME node was MEMBER on the VAX's

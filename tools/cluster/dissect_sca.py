@@ -40,7 +40,11 @@ MAC_NAMES = {
     "aa:00:04:00:02:04": "VAX2 (logical LAVC addr, CSID 00010002, SCSSYSTEMID 1026)",
     "aa:00:04:00:03:04": "VAX3 (logical LAVC addr, satellite, SCSSYSTEMID 1027)",
     "08:00:2b:78:56:b9": "VAX2 (real HW MAC, used before DECnet reprograms the adapter)",
-    "ab:00:04:01:01:01": "cluster group 1 multicast (AB-00-04-01-<group16>, SYSMAN CONFIGURATION SHOW CLUSTER_AUTHORIZATION)",
+    # AB-00-04-01-<LE16(group + 0x100)> -- the mapping VMS prints for itself at
+    # SYSMAN CONFIGURATION SHOW CLUSTER_AUTHORIZATION ("Cluster group number:
+    # 1" / "Multicast address: AB-00-04-01-01-01" on VAX1). rd vms-147.
+    "ab:00:04:01:01:01": "cluster group 1 multicast (AB-00-04-01-<LE16(group+0x100)>, SYSMAN CONFIGURATION SHOW CLUSTER_AUTHORIZATION)",
+    "ab:00:04:01:01:02": "cluster group 257 multicast (AB-00-04-01-<LE16(group+0x100)>)",
 }
 
 # --- SCS Connection ID -> SYSAP map (grounded: SDA `SHOW CONNECTIONS` CDTs,

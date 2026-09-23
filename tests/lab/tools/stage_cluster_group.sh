@@ -5,8 +5,9 @@
 # OVMX boot initramfs (rd vms-b34).
 #
 # WHY THIS EXISTS. The cluster group number is what the LAVC HELLO multicast
-# address is BUILT from -- AB-00-04-01-<group lo>-<group hi>
-# (src/kernel-core/vms_cluster_codec_hello.c vms_cluster_hello_mcast_build) --
+# address is BUILT from -- AB-00-04-01-<LE16(group + 0x100)>
+# (src/kernel-core/vms_cluster_codec_hello.c vms_cluster_hello_mcast_build; the
+# +0x100 is VMS's, grounded on three real-VMS oracles, rd vms-147) --
 # so two nodes with different group numbers are on different multicast groups
 # and are simply not on the same cluster's wire. It reaches the executive from
 # /etc/ovmx/cluster_authorize.dat (cluster_authorize_read() -> SYSGEN_LOAD
@@ -14,9 +15,19 @@
 # built with --build-arg CLUSTER_AUTH_GROUP=<n>; an ordinary build (and every
 # published release artifact) ships an EMPTY /etc/ovmx and therefore group 0.
 #
+# WHICH NUMBER TO PASS (rd vms-147). The lab VAX cluster is group 1 -- VMS
+# prints that itself: SYSMAN> CONFIGURATION SHOW CLUSTER_AUTHORIZATION on VAX1
+# reads "Cluster group number: 1" / "Multicast address: AB-00-04-01-01-01".
+# Earlier lab runs passed 257 here and joined anyway: OVMX's derivation was
+# LE16(group) with no bias, so 257 produced group 1's address -- two errors
+# that cancelled. With the derivation corrected, 257 now puts a node on
+# AB-00-04-01-01-02 (a different cluster's address) and the lab join would go
+# silent. Pass the cluster's REAL group number, read from VMS, not one
+# back-derived from a multicast address.
+#
 # Measured on lab-2 vaxlab-4 (2026-09-20): a booted V0.7 release node ran the
 # whole join window transmitting 225 frames to AB-00-04-01-00-00 while the real
-# VMS V7.3 cluster transmitted 180 to AB-00-04-01-01-01 (group 257). Neither
+# VMS V7.3 cluster transmitted 180 to AB-00-04-01-01-01 (group 1). Neither
 # received one frame of the other's: `SHOW CLUSTER/LOCAL_PORTS` read
 # `channels 0, circuits 0, rx 0`. Requiring a 30-minute image rebuild to put a
 # lab run on the lab cluster's own group is what made that cost a whole run, so

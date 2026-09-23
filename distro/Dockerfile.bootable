@@ -1113,8 +1113,10 @@ RUN cp -r /system-stage/vms /system-stage-install-media-vms && \
 # system disk; OVMX has no interactive equivalent yet (a disclosed gap, not a
 # silent one), so a specific boot's group/password is staged at IMAGE-BUILD
 # time here, gated on a build-arg that defaults OFF. Only a caller who
-# explicitly names a real cluster's group (e.g. the lab VAX cluster's group
-# 257) gets a CLUSTER_AUTHORIZE.DAT written.
+# explicitly names a real cluster's group (e.g. the lab VAX cluster's group 1,
+# whose HELLO multicast is AB-00-04-01-01-01 -- the address is
+# AB-00-04-01-<LE16(group+0x100)>, rd vms-147) gets a CLUSTER_AUTHORIZE.DAT
+# written.
 #
 # WHAT AN ORDINARY BUILD THEREFORE IS, SAID OUT LOUD (rd vms-b34). No
 # --build-arg stages no record, the port falls back to group 0, and

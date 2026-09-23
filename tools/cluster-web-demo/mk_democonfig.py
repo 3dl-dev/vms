@@ -186,8 +186,14 @@ REQUIRED_LOADER_PARAMS = [
 # anywhere else (single-ledger).
 #
 # SCSSYSTEMID values avoid ids used in tests/lab captures (1025/1026 = the VAX
-# lab nodes, 1986 = OVMXJ1). All three share GROUP 257 (the lab cluster group,
-# = the last two bytes of the SCA HELLO multicast MAC ab:00:04:01:01:01).
+# lab nodes, 1986 = OVMXJ1). All three share GROUP 257 -- the group Node C's
+# real OpenVMS V5.5-2H4 volume was configured with (tools/lab-vax/
+# build_nodeC_vms55_cluster.sh CLUSTER_GROUP=257), which puts the demo segment
+# on SCA HELLO multicast ab:00:04:01:01:02: the address is
+# AB-00-04-01-<LE16(group + 0x100)>, not LE16(group) (rd vms-147 -- an earlier
+# comment here read the group off ab:00:04:01:01:01, which is group 1's
+# address, and OVMX's matching derivation bug is what kept Node A from ever
+# hearing Node C).
 #
 # Node A (OVMX/x86_64, qemu-wasm) -- LIVE today (vms-b16/vms-f0f proven e2e).
 # expected_votes=2 was authored for the proven 2-node milestone (A+C) and is

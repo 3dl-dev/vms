@@ -3515,8 +3515,9 @@ static int show_cluster_local_ports(void)
            (unsigned)a.port.mtu, (unsigned)a.port.n_channels,
            (unsigned)a.port.n_vcs);
     /*
-     * rd vms-b34. The cluster group number IS the HELLO multicast address
-     * (AB-00-04-01-<lo>-<hi>), so two nodes with different numbers are not on
+     * rd vms-b34. The cluster group number SELECTS the HELLO multicast address
+     * (AB-00-04-01-<LE16(group + 0x100)>, rd vms-147), so two nodes with
+     * different numbers are not on
      * the same cluster's wire -- and this surface reported neither the number
      * nor whether anyone had chosen it. With every other line reading
      * "open"/"link up" and tx_frames climbing, an unconfigured node looked

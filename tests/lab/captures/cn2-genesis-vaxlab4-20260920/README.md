@@ -2,6 +2,36 @@
 
 **rd vms-b34. lab-2 `vaxlab-4`, 2026-09-20. Two runs, one variable.**
 
+> ### ⚠ CORRECTION (rd vms-147, 2026-09-22) — the joins below are real; the group NUMBER they are labelled with is not
+>
+> Every measurement in this note stands: a real OpenVMS V7.3 node really did
+> admit a real booted OVMX node to MEMBER on its own SDA CSB, with CAP_NET_RAW
+> denied. What is **wrong** is the name this note gives the group.
+>
+> This note calls the cluster "group 257" because it read the number back OUT of
+> VAX1's multicast address `AB-00-04-01-01-01` using OVMX's own derivation,
+> which was **defective**: it built `AB-00-04-01-<LE16(group)>`, while real VMS
+> builds `AB-00-04-01-<LE16(group + 0x100)>`. **The lab cluster is group 1** —
+> VMS prints that itself (`SYSMAN> CONFIGURATION SHOW CLUSTER_AUTHORIZATION` on
+> VAX1: `Cluster group number: 1`, `Multicast address: AB-00-04-01-01-01`).
+> Staging `257` into OVMX and having it land on group 1's address was **two
+> errors cancelling**, not a correct configuration — which is why the join
+> worked here and would have worked on a strictly-filtering NIC too: both nodes
+> ended up on the same address by accident.
+>
+> **So: this run did NOT depend on a permissive datalink.** The defect was
+> invisible here because the compensating mislabel put OVMX on the right
+> address anyway. It became visible the moment a peer's group number was a
+> *real* VMS configuration rather than a back-derived one (the browser demo's
+> Node C, a real V5.5-2H4 volume configured for group 257, which therefore
+> transmits to `AB-00-04-01-01-02`).
+>
+> **Reproducing this run on corrected code: stage group `1`, not `257`.**
+> Derivation, oracles and the fix: `docs/cluster-integration-notes.md` **E87**,
+> `docs/cluster-protocol-spec.md` §3, `tests/cluster/host/test_codec_hello.c`.
+> Every "group 257" below should be read as "group 1"; the addresses, frame
+> counts and verdicts are unchanged.
+
 ## The reference cluster
 
 `vaxlab-4`'s `vax1` alone, booted conversationally (`B/R5:1 DUA0`) with

@@ -314,14 +314,21 @@ int vms_cluster_lavc_is_logical(const uint8_t addr[VMS_ETH_ADDR_LEN])
 
 void vms_cluster_hello_mcast_build(uint16_t group, uint8_t out[VMS_ETH_ADDR_LEN])
 {
+	uint16_t field;
+
 	if (out == (uint8_t *)0)
 		return;
+	/* AB-00-04-01-<LE16(group + 0x100)> -- the bias is VMS's, grounded on
+	 * three real-VMS oracles in vms_cluster_codec_hello.h. NOT LE16(group):
+	 * that fits group 1 by coincidence and puts every other group on the
+	 * wrong cluster's address (rd vms-147). */
+	field = (uint16_t)(group + VMS_HELLO_MCAST_GROUP_BIAS);
 	out[0] = VMS_HELLO_MCAST_PREFIX0;
 	out[1] = VMS_HELLO_MCAST_PREFIX1;
 	out[2] = VMS_HELLO_MCAST_PREFIX2;
 	out[3] = VMS_HELLO_MCAST_PREFIX3;
-	out[4] = (uint8_t)(group & 0xffu);
-	out[5] = (uint8_t)((group >> 8) & 0xffu);
+	out[4] = (uint8_t)(field & 0xffu);
+	out[5] = (uint8_t)((field >> 8) & 0xffu);
 }
 
 vms_codec_status_t vms_cluster_lavc_sysid(const uint8_t addr[VMS_ETH_ADDR_LEN],

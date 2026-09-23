@@ -21,8 +21,9 @@ on:
         description: >-
           VMScluster group number to bake into SYS$SYSTEM:CLUSTER_AUTHORIZE.DAT
           (Dockerfile.bootable CLUSTER_AUTH_GROUP). Default 0 stages no file and
-          boots auth_group=0. Set 257 to join the lab VAX cluster (its HELLO
-          multicast is AB-00-04-01-01-01 = group 257); a group mismatch is
+          boots auth_group=0. Set 1 to join the lab VAX cluster (group 1, whose
+          HELLO multicast is AB-00-04-01-01-01 — the address is
+          AB-00-04-01-<LE16(group+0x100)>, rd vms-147); a group mismatch is
           silent on the wire — the peer never hears a differently-grouped node.
         required: false
         default: '0'

@@ -168,7 +168,73 @@ static void test_fixture_roundtrips(void)
 	roundtrip_hello_class("hello-directed-vax2-to-vax1");
 	roundtrip_hello_class("hello-padded-vax1-channel-size-verify");
 	roundtrip_hello_class("hello-c3-vaxc-v55-multicast");
+	roundtrip_hello_class("hello-c3-vaxc-v55-directed-b2");
 	roundtrip_solicit();
+}
+
+/*
+ * The DIRECTED class-0x03 HELLO (rd vms-0f8): a real V5.5-2H4 member's
+ * sec 4(a).1 channel-verify REQUEST. This specimen exists BECAUSE of the fix --
+ * it is the frame the V5.5 node sent once OVMX could answer in its revision --
+ * and it carries the three things a multicast HELLO does not: the peer's
+ * hardware/logical address split (sec 4a.0), a NON-ZERO cluster join nonce
+ * (sec 4a/4g), and an incarnation the sender attributes to US (sec 4i.B).
+ */
+static void test_c3_directed(void)
+{
+	const struct vms_fixture *f = fixture("hello-c3-vaxc-v55-directed-b2");
+	const struct vms_fixture *m = fixture("hello-c3-vaxc-v55-multicast");
+	struct vms_frame_info fi;
+	struct vms_hello_frame h, mh;
+	uint8_t ovmxa_lavc[VMS_ETH_ADDR_LEN];
+	uint8_t word = 0;
+
+	printf("-- the DIRECTED class-0x03 HELLO (rd vms-0f8)\n");
+	ct_check(f != NULL && m != NULL, "both C03 specimens load");
+	if (f == NULL || m == NULL)
+		return;
+
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "directed C03 HELLO classifies");
+	ct_check_eq_u32(fi.cls, VMS_FCLS_HELLO_C3, "  as the same C03 class");
+	ct_check(vms_sca_chan_word(f->bytes, f->wire_len, &fi, &word)
+		 == VMS_CODEC_OK, "  the abs-30 channel word is readable");
+	ct_check_eq_u32(word, 0xb2,
+			"  == b2: the sec 4(a).1 channel-verify REQUEST");
+
+	ct_check(vms_hello_parse(f->bytes, f->wire_len, &fi, &h) == VMS_CODEC_OK,
+		 "it parses");
+
+	/* sec 4(a).0: abs 0-5 and abs 16-21 are two DIFFERENT addresses. */
+	vms_cluster_lavc_addr_build(1987, ovmxa_lavc);
+	ct_check(memcmp(h.hdr.dst_lavc, ovmxa_lavc, VMS_ETH_ADDR_LEN) == 0,
+		 "  abs 16 is OUR cluster-LOGICAL address (sec 4a.0)");
+	ct_check(memcmp(h.hdr.eth_dst, h.hdr.dst_lavc, VMS_ETH_ADDR_LEN) != 0,
+		 "  and abs 0 is a DIFFERENT address -- our hardware MAC");
+
+	/* sec 4(a)/4(g): the nonce is zero on multicast, non-zero directed. */
+	ct_check(vms_frame_classify(m->bytes, m->wire_len, &fi) == VMS_CODEC_OK &&
+		 vms_hello_parse(m->bytes, m->wire_len, &fi, &mh) == VMS_CODEC_OK,
+		 "  the multicast specimen re-parses for comparison");
+	ct_check(memcmp(h.disc.nonce, "\x77\x11\x7a\x7d", 4) == 0,
+		 "  abs 68 carries the cluster join nonce, in the clear");
+	ct_check(memcmp(mh.disc.nonce, "\0\0\0\0", 4) == 0,
+		 "  and it is ZERO on the multicast HELLO -- the sec 4(a) split "
+		 "holds in this revision too");
+
+	/* sec 4(i).B: the incarnation the sender attributes to us. */
+	ct_check_eq_u32(h.incarnation, 1,
+			"  abs 92 == 1: the incarnation VAXC attributes to us");
+	ct_check_eq_u32(mh.incarnation, 0,
+			"  and 0 on the multicast HELLO (sec 4b)");
+
+	/* The revision markers are the SAME on both frames from the same node --
+	 * they are a property of the revision, not of the frame's direction. */
+	ct_check(h.revision == mh.revision &&
+		 h.hdr.connect_flag == mh.hdr.connect_flag &&
+		 h.trailer_9205 == mh.trailer_9205 &&
+		 h.trailer_2600 == mh.trailer_2600,
+		 "  directed and multicast carry IDENTICAL revision markers");
 }
 
 /* ---- group 1b: the SECOND discovery revision (rd vms-0f8) ------------ *
@@ -715,6 +781,7 @@ int main(void)
 
 	test_fixture_roundtrips();
 	test_c3_revision();
+	test_c3_directed();
 	test_c3_refusals();
 	test_handbuilt_hello_field_placement();
 	test_hello_error_paths();

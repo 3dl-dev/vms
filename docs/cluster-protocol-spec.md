@@ -492,6 +492,48 @@ about this revision's **directed** HELLO, its §4(a).1 `b2`/`b3`/`b4` channel
 verify, its §4(k) padded size-verify frame, or its SCS layer: **no specimen of
 any of those exists** — the only V5.5 frames ever captured are multicast HELLOs.
 
+**The DIRECTED form, and the channel that proved it (GROUNDED, second capture).**
+Once OVMX could answer in this revision, the same V5.5 node opened a §4(a).1
+channel with it. `tests/lab/captures/vms-0f8-browser-c03-channel-20260923/`
+(census of every distinct frame shape over a 7-minute run, first and last full
+frame of each kept; SHA-256 in `docs/clean-room/reference-captures.sha256`):
+
+| shape | n | |
+|---|---|---|
+| `VAXC/128/w30=b200/b36=03` | **1** | the member's channel-verify REQUEST |
+| `OVMXA/128/w30=b300/b36=03` | 186 | OVMX's REQUEST, in the peer's revision |
+| `VAXC/128/w30=b400/b36=03` | 184 | the member's CONFIRM, steady |
+
+One `b2` → `b3` → `b4` then steady keepalives — §4(a).1's rule, unchanged in
+this revision. The directed frame differs from the multicast one exactly as
+§4(a).0/§4(a)/§4(i).B say it should, and in no other way: abs 16 is the
+target's cluster-LOGICAL address (not the hardware MAC at abs 0), abs 30 is the
+verify counter, abs 68–71 carries the cluster join nonce **non-zero and in the
+clear** (`77 11 7a 7d`) where the multicast frame carries zero, and abs 92 is
+the incarnation the sender attributes to the target (1) where the multicast
+frame carries 0. The revision markers at abs 22/94/126 are **identical on both**
+— they are a property of the revision, not of the frame's direction. Specimen:
+`tests/cluster/host/fixtures/hello-c3-vaxc-directed-b2.spec`.
+
+**The SCS layer has its OWN second revision — NOT decoded (`vms-0f8`).** In that
+same capture the V5.5 node also emits `VAXC/104/w30=0103/b36=01` (n=184): SCA
+content 90, **abs 31 == `0x03`, not the §4(d) format constant `0x13`**, and
+abs 30 == `0x01` rather than the §4(g) phase-2 `0x41`. It is the **only**
+remaining unclassified shape on that wire, and it is all of the residual
+`badclass`. Aligned against OVMX's own round-0 START, the two bodies are the
+same structure offset by exactly 16 bytes:
+
+```
+OVMXA  abs30=41 abs31=13  content 106   ... 12 00 | <16 bytes> | 3e 00 00 00 | c3 07 | ... "VMX V0.7" ... "X86 " ... "OVMXA   "
+VAXC   abs30=01 abs31=03  content  90   ... 03 00 |            | 3e 00 00 00 | c5 07 | ... "VMS V5.5" ... "VAX  " ... "VAXC    "
+```
+
+Nothing further is claimed about it. One specimen exists (the member's round-0
+START, retransmitted because nothing answered it); §4(d)/§4(g)/§4(h)'s Con.ID
+offsets, inner-length identity and credit protocol are **not** re-grounded for
+this revision, and this spec does not extrapolate them. Decoding it is an
+iterative live-oracle campaign, not a passive-capture exercise.
+
 **What OVMX does with that.** `vms_cluster_codec_hello.h` carries the two
 revisions as a table; the classifier keys on the class byte **and** the exact
 content length, so a class-`0x03` frame at any other length stays

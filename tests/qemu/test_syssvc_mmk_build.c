@@ -992,9 +992,25 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
 
     /* On a failed drive, surface the driven-DCL transcript so a regression is
      * attributable (a cwd / path / link error is named here rather than showing
-     * only "artifact never appeared"). Bounded: acc is capped above. */
-    if ((do_link && *exelen <= 0) || *olblen <= 0 || *objlen <= 0) {
-        printf("  (drive did not produce its final artifact; driven-DCL transcript follows)\n");
+     * only "artifact never appeared"). Bounded: acc is capped above.
+     *
+     * vms-e28c: ALSO dump it when the completion marker was never observed
+     * even though the final artifact DID appear (the exact shape of the
+     * observed flake -- every downstream artifact assertion passes, only the
+     * `mark1'/`mark2' CHECK reddens). Previously this case printed NOTHING,
+     * so every occurrence in CI was undiagnosable after the fact: there was no
+     * way to tell whether the marker text was genuinely never written (a real
+     * spawn/mailbox/WRTATTN-AST race in the product) or was written but this
+     * capture's sliding window somehow missed it (a harness bug, e.g. the
+     * acc[16384]-overflow fix above). Printing here on every future
+     * recurrence turns "guess from a bare CHECK: FAIL line" into "read the
+     * actual bytes MMK's stdout produced" -- exactly the harness fix this
+     * class of race needs to be pinned down for good, without lengthening any
+     * budget or weakening the assertion itself. */
+    if ((do_link && *exelen <= 0) || *olblen <= 0 || *objlen <= 0 || !*saw_marker) {
+        printf("  (drive diagnostic: saw_marker=%d reaped=%d waited=%dms/%ldms budget "
+               "-- driven-DCL transcript follows)\n",
+               *saw_marker, *reaped, waited, budget_ms);
         printf("----8<----\n%s\n---->8----\n", acc);
     }
 

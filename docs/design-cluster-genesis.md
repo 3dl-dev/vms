@@ -413,7 +413,10 @@ milliseconds later (the shape the `EXPECTED_VOTES=1` baseline shows VMS itself
 producing in the other configuration). The outcome is the same CN=2 with the
 same votes, and both halves run the *existing* machinery, but the
 multi-participant founding transition is a real remaining difference. It is
-recorded here and in the capture's §4 rather than papered over.
+recorded here, in the capture's §4 and in arm 3
+(`mixed-ovmx-plus-v73/`, where a real V7.3 system opens exactly such a
+formation with an OVMX node and OVMX cannot take its place in it), and tracked
+as **rd vms-f29** rather than papered over.
 
 ### Tests
 

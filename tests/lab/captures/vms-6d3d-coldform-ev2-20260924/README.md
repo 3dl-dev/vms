@@ -112,8 +112,18 @@ the systems it can see — but still opens a **single-node** founding transition
 and admits the peer on the ordinary op-0x02 admission path immediately
 afterwards, which is the shape the §3 baseline shows VMS itself producing in
 the other configuration. The multi-participant founding transition is a real
-remaining difference and is tracked rather than papered over; nothing in this
-tree claims OVMX reproduces it.
+remaining difference, tracked as **rd vms-f29** rather than papered over;
+nothing in this tree claims OVMX reproduces it.
+
+**Arm 3, `mixed-ovmx-plus-v73/`, measures exactly that boundary.** One booted
+OVMX node and this same real V7.3 system, both `EXPECTED_VOTES=2`: the real VAX
+**does** propose a cold formation with the OVMX node supplying the second vote
+(`received VAXcluster membership request from system OVMX6D` ->
+`proposing formation of a VAXcluster`), so the vote arithmetic agrees across the
+two implementations. It does **not** complete: OVMX answers the formation's
+records but never adopts a CSID out of a transition it did not coordinate, and
+CN=2 is not reached. No bugcheck on either side. Read that directory's README
+before quoting this one as a mixed-cluster result.
 
 `coldform-ev2-formation.pcap` is the 30 s of `br0` around the formation
 (`21:40:00`–`21:40:30`, 236 × 0x6007 frames) sliced out of the full 450 s

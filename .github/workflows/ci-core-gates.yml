@@ -309,6 +309,48 @@ jobs:
       - name: Run build_source_iso extra_files self-tests
         run: python3 -m pytest tests/lab-vax/test_build_source_iso.py -v
   # -----------------------------------------------------------------------
+  # Job: NetBSD/amd64 console driver self-test (rd vms-d83 / vms-d984)
+  #
+  # tests/netbsd/netbsd_console.py is the shared deterministic pexpect driver
+  # every NetBSD/amd64 harness (P2a/P2b/P2c) uses to talk to the guest serial
+  # console. Its own unit test, tests/netbsd/test_netbsd_console_recovery.py,
+  # scripts a fake pexpect child -- no QEMU, no anita, no container -- to
+  # exercise the lossy-serial marker recovery AND the vms-d83/vms-d984
+  # hardening (the stale-byte drain before a re-issue, and the "console
+  # wedged" fail-fast after too many consecutive marker-less re-issues of the
+  # same command). This existed with no CI leg at all before vms-d83 (the
+  # same gap vaxharness-selftest above closed for its own lab-vax analogue):
+  # the file could only ever be run by hand. This is the cheap, fast
+  # complement to the heavy netbsd-amd64-* QEMU jobs in
+  # ci-kernel-executive.yml, which still exercise the real driver against a
+  # real booted guest; this one proves the driver's OWN recovery logic on
+  # every PR that touches it, without paying for an emulator boot. It is NOT
+  # a pytest file (its assertions run from a plain `if __name__ ==
+  # "__main__"` script, matching its own documented invocation) -- run it
+  # directly and let its exit code gate the job.
+  # -----------------------------------------------------------------------
+  netbsd-console-selftest:
+    name: NetBSD Console Driver Self-Test (rd vms-d83)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install pexpect (test dep only -- no anita/container/QEMU)
+        run: pip install --disable-pip-version-check pexpect
+
+      - name: Run netbsd_console.py self-tests
+        run: python3 tests/netbsd/test_netbsd_console_recovery.py
+  # -----------------------------------------------------------------------
   # Job: aarch64 system-emulation boot proof (rd vms-f66)
   #
   # The aarch64 positioning lane. Every other positioning arch has a

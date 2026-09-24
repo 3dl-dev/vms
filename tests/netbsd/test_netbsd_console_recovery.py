@@ -23,6 +23,16 @@
 #     exception; the fake asserts TIMEOUT is absent from the list),
 #   * a slice TIMEOUT that persists to the overall deadline -> None, no crash,
 #   * bg launch / retriable=False never re-issued.
+#
+# Also covers the vms-d83 / vms-d984 hardening:
+#   * _drain_stale() actually drains bytes already sitting in the stream, and
+#     stops cleanly when there is nothing left to read;
+#   * a PERSISTENT marker loss (the shell reaches its idle prompt every single
+#     time but the marker never once arrives) fails fast with a "console
+#     wedged" pexpect.TIMEOUT after _WEDGE_MAX_CONSECUTIVE_MARKER_LOSSES
+#     consecutive re-issues, rather than grinding out the whole deadline --
+#     while a genuine transient burst well under that threshold (the existing
+#     12-drop-then-recover case above) must keep succeeding.
 # Run: python3 tests/netbsd/test_netbsd_console_recovery.py  (exit 0 = pass).
 
 import os
@@ -68,9 +78,21 @@ class _FakeChild(object):
         self.sent = []
         self.before = b"OUTPUT-LINE"
         self.match = None
+        # Bytes _drain_stale() should hand back on successive calls to
+        # read_nonblocking(), one chunk per call; once exhausted (and by
+        # default, since this defaults to empty) it raises pexpect.TIMEOUT,
+        # exactly as a live pexpect child does when nothing is available.
+        self.stale_chunks = []
+        self.read_nonblocking_calls = 0
 
     def sendline(self, s):
         self.sent.append(s)
+
+    def read_nonblocking(self, size=4096, timeout=None):
+        self.read_nonblocking_calls += 1
+        if self.stale_chunks:
+            return self.stale_chunks.pop(0)
+        raise pexpect.TIMEOUT("scripted: nothing buffered to drain")
 
     def expect(self, patterns, timeout=None):
         if not isinstance(patterns, (list, tuple)):
@@ -154,8 +176,66 @@ def _assert_console_carries_only_markers():
           "(job semantics preserved)")
 
 
+def _assert_drain_stale():
+    """_drain_stale() must drain whatever is already buffered and stop cleanly
+    (no crash, no hang) once nothing is left -- rd vms-d83."""
+    child = _FakeChild(["marker"])
+    child.stale_chunks = [b"leftover-prompt-fragment", b"more-junk"]
+    con = _console(child)
+    drained = con._drain_stale(budget=1.0)
+    assert drained == len(b"leftover-prompt-fragment") + len(b"more-junk"), \
+        "drain_stale: drained %d bytes, expected the two staged chunks" % drained
+    assert child.read_nonblocking_calls == 3, \
+        "drain_stale: expected 2 chunk reads + 1 terminating TIMEOUT, got %d calls" \
+        % child.read_nonblocking_calls
+    print("PASS drain-stale: flushed %d buffered byte(s) across %d chunk(s) "
+          "before hitting empty" % (drained, 2))
+
+    # Nothing buffered: returns 0 immediately, no crash.
+    child2 = _FakeChild(["marker"])
+    con2 = _console(child2)
+    drained2 = con2._drain_stale(budget=1.0)
+    assert drained2 == 0, "drain-stale-empty: expected 0, got %d" % drained2
+    print("PASS drain-stale-empty: nothing buffered -> drained 0, no hang")
+
+
+def _assert_wedge_fail_fast():
+    """A PERSISTENT marker loss (idle prompt every time, marker never once
+    arrives) must fail fast as a 'console wedged' error well before the overall
+    deadline -- rd vms-d984. A genuine transient burst UNDER the wedge
+    threshold must still recover (covered above by burst-12-drops, which stays
+    well under _WEDGE_MAX_CONSECUTIVE_MARKER_LOSSES and must keep succeeding)."""
+    child = _FakeChild(always_prompt=True)
+    con = _console(child)
+    threshold = nc.NetBSDConsole._WEDGE_MAX_CONSECUTIVE_MARKER_LOSSES
+    try:
+        con.run("test -f /root/ovmx/kmod/vms.kmod", timeout=300, echo=False)
+        raise AssertionError("wedge-fail-fast: expected a console-wedged TIMEOUT")
+    except pexpect.TIMEOUT as e:
+        assert "console wedged" in str(e), \
+            "wedge-fail-fast: TIMEOUT message did not say 'console wedged': %s" % e
+        assert len(child.sent) == threshold, \
+            "wedge-fail-fast: expected exactly %d re-issue(s) before failing " \
+            "fast, got %d" % (threshold, len(child.sent))
+        print("PASS wedge-fail-fast: gave up after %d consecutive marker-less "
+              "re-issues with a 'console wedged' TIMEOUT (not the 300s deadline)"
+              % len(child.sent))
+
+    # The threshold must stay ABOVE the legitimate 12-drop burst this module
+    # already recovers from -- a wedge detector that fires on a real, if
+    # unlucky, transient run would be a regression, not a fix.
+    assert threshold > 12, \
+        "wedge threshold (%d) must exceed the proven-recoverable 12-drop " \
+        "burst, or a legitimate transient run would be misdiagnosed as wedged" \
+        % threshold
+    print("PASS wedge-threshold-headroom: %d > 12 (the proven-recoverable "
+          "transient-burst length)" % threshold)
+
+
 def main():
     _assert_console_carries_only_markers()
+    _assert_drain_stale()
+    _assert_wedge_fail_fast()
 
     # Idempotent command: recovered across 0, 1, 2 dropped markers.
     _run_ok("clean",        ["marker"],                    3, 1)

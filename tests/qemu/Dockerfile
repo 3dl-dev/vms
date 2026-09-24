@@ -69,7 +69,8 @@ ARG NEGATIVE_CONTROL=0
 # not free at the mirror throughputs actually observed: on run 30927522942 the
 # two index fetches cost 3min39s and 1min8s (146 kB/s and 472 kB/s) on top of
 # the payload. One `apt-get update`, one index fetch. Same packages installed.
-RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && \
     ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
     apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
@@ -82,7 +83,10 @@ RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire
     curl perl ca-certificates patch \
     cmake musl-tools linux-libc-dev \
     "$QEMU_PKG" \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 # Determine kernel version from installed headers
 RUN KVER=$(ls /lib/modules/ | sort -V | tail -1) && \

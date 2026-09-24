@@ -29,7 +29,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # genisoimage      : anita builds the install-sets ISO with mkisofs/genisoimage
 # curl/ca-certs    : anita downloads the pinned release from cdn.netbsd.org
 # gzip, cpio       : anita unpacks release media
-RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         qemu-system-x86 \
         qemu-utils \
         python3 \
@@ -42,7 +43,10 @@ RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire
         cpio \
         gcc \
         libc6-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 # anita is pinned (see tests/netbsd/netbsd_version.env). It is NOT the unrelated
 # PyPI package named "anita"; the real tool ships as a tarball from gson.org, so

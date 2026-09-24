@@ -36,10 +36,14 @@ ARG SIMH_REF=2e0d51e9e97b2c3a28c55261108550d1f533916b
 # --- SIMH VAX builder ---------------------------------------------------------
 FROM ubuntu:24.04 AS simh-builder
 ARG SIMH_REF
-RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         build-essential git ca-certificates \
         libpcap-dev libpcre3-dev libedit-dev zlib1g-dev pkg-config \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 RUN git init . \
  && git remote add origin https://github.com/open-simh/simh \
@@ -60,11 +64,15 @@ FROM ubuntu:24.04
 # gets: a lab result must name exactly which install driver produced it.
 ARG ANITA_REF=79c0a3f178918b0a12216685b35734e038207198
 
-RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         python3 python3-venv python3-pip git ca-certificates curl \
         coreutils genisoimage \
         libpcap0.8 libpcre3 libedit2 zlib1g \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 # anita + pexpect in an isolated venv (PEP 668: don't touch the system python).
 # anita's setup.py declares no dependencies, so pexpect (which anita.py imports

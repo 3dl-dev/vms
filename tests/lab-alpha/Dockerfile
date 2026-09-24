@@ -27,10 +27,14 @@ FROM ubuntu:24.04
 # Installing it HERE is correct and is not a violation of "never install on the
 # host" -- that rule is about workshop, and containerising the dependency is
 # exactly what it asks for. v1.2.0 does not need it.
-RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         python3 ca-certificates curl iproute2 tcpdump \
         libpcap0.8 libx11-6 libsdl1.2debian \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 ARG AXPBOX_V120_URL=https://github.com/lenticularis39/axpbox/releases/download/v1.2.0/AXPbox-linux-x86-gcc
 ARG AXPBOX_V112_URL=https://github.com/lenticularis39/axpbox/releases/download/v1.1.2/axpbox-v1.1.2-linux-x86-gcc

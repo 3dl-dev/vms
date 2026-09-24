@@ -168,10 +168,14 @@ ARG KERNEL_SHA256=f143aaade8877ba5616e788b4482576db28481bcf557ef537f4fcc3938fc31
 ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
-RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     gcc binutils make bc bison flex libssl-dev libelf-dev openssl \
     xz-utils curl ca-certificates kmod cpio \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 # Fetch + integrity-verify + unpack the pinned source. The build FAILS closed
 # if the sha256 does not match -- no unpinned/tampered source ever compiles.
@@ -411,10 +415,14 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 # module build -- without it the vms.ko compile dies with
 # "libelf.so.1: cannot open shared object file". (The stock-kernel path used to
 # get libelf transitively via linux-headers-generic, now dropped.)
-RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     cmake gcc make musl-tools linux-libc-dev \
     kmod cpio binutils libelf1 \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 # The from-source OVMX kernel (vms-448): its built tree (for external module
 # builds) + the bzImage that becomes the bootable vmlinuz + the exact
@@ -1261,9 +1269,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # kmod: provides `modinfo`, which tests/qemu/test_intree_modules.sh (vms-934)
 # runs on the shipped vms.ko to prove it is stamped intree=Y. Test
 # tooling only (CLAUDE.md Rule 9 distinction), like `expect` above.
-RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio expect kmod \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz
 COPY --from=builder /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx.cpio.gz

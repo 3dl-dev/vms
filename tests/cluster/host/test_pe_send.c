@@ -133,6 +133,10 @@ static void env_init(struct send_env *e)
 	id.scsnode_len = 6;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 	id.max_sca_len = 1500;
 	memcpy(id.sw_version, "VMX V0.6", 8);
 	id.sw_version_valid = 1;

@@ -320,7 +320,7 @@ static void pe_ops_bind(struct vms_pe *pe)
  * adds nothing that is not real executive state.
  * ========================================================================== */
 static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
-			      struct pe_identity *id)
+			      int group_valid, struct pe_identity *id)
 {
 	uint32_t mtu = 0;
 	uint32_t nlen;
@@ -338,6 +338,15 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 
 	memcpy(id->mcast, mcast, 6);
 	id->mcast_valid = 1u;
+
+	/*
+	 * The SAME group number the multicast address above was built from,
+	 * in the OTHER encoding the wire uses for it (abs 22, LE16 -- rd
+	 * vms-b34). One read of one record feeds both, so the address and the
+	 * in-frame number can never disagree again.
+	 */
+	id->cluster_group = cl->params.auth_group;
+	id->cluster_group_valid = (uint8_t)(group_valid ? 1u : 0u);
 
 	/*
 	 * The largest SCA content this port may put on the wire: the real
@@ -550,7 +559,7 @@ int vms_pe_start(struct vms_cluster *cl)
 	pe->group_valid = (uint8_t)(group_valid ? 1u : 0u);
 	pe_ops_bind(pe);
 
-	pe_build_identity(cl, mcast, &id);
+	pe_build_identity(cl, mcast, group_valid, &id);
 	if (pe_fsm_init(&pe->fsm, &id, cl->params.scssystemid, &pe->ops) != 0 ||
 	    !pe->fsm.id.lavc_valid) {
 		/* SCSSYSTEMID does not fit the two bytes the wire grounds

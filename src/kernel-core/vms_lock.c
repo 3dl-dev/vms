@@ -4373,6 +4373,15 @@ static int vms_lock_dlm_xnode_enq_idempotent(struct vms_dlm_xnode_args *req,
  *
  * The request is VALIDATED so a malformed message is rejected (SS$_BADPARAM)
  * rather than silently dropped -- the same discipline vms_enq_core applies.
+ * The lock-mode bound itself is NOT re-checked here: every op that reads
+ * req->lkmode (ENQ, the only one) marshals it into vms_enq_core_ex, which
+ * already refuses lkmode > LCK_K_EXMODE with SS$_BADPARAM (the same guard
+ * vms_ioctl_convert applies to a local $CVT). A second copy of that bound
+ * here was provably unreachable in isolation -- ops that never read lkmode
+ * (DEQ/GRANT/BLKAST/REBUILD/DLKSRCH) never needed it either -- so it was
+ * removed rather than kept as untested decoration (vms-e7d negctl: the
+ * duplicate made 'dlm-xnode-mode-unvalidated' unable to observe its own
+ * mutation, since the sibling check in vms_enq_core_ex caught it anyway).
  */
 uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
                                      struct vms_dlm_xnode_args *req)
@@ -4380,8 +4389,6 @@ uint32_t vms_lock_dlm_xnode_dispatch(struct vms_proc *proc,
     if (!req)
         return SS__BADPARAM;
     if (!proc)
-        return SS__BADPARAM;
-    if (req->lkmode > LCK_K_EXMODE)
         return SS__BADPARAM;
     req->resnam[sizeof(req->resnam) - 1] = '\0';
 

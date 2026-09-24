@@ -64,7 +64,7 @@ static void fill_link(struct vms_cm_link *l)
 	memcpy(l->hdr.eth_src, src, 6);
 	memcpy(l->hdr.dst_lavc, dst, 6);
 	memcpy(l->hdr.src_lavc, src, 6);
-	l->hdr.connect_flag = 0x0001;
+	l->hdr.cluster_group = 0x0001;
 	l->recv_ack = 0x0007;
 	l->send_seq = 0x0009;
 	l->remote_conid = 0x62c50009u;

@@ -839,6 +839,18 @@ struct cnxman_join {
 	uint32_t admit_rearmed;
 	uint32_t echoes_sent;        /* 0x81 answers to op-0x03 / op-0x05     */
 	/*
+	 * THE COORDINATOR'S op-0x12 RELAY, seen and answerable vs seen and NOT
+	 * (rd vms-4f0, join_h_relay). Two counters because they are two
+	 * diagnoses: `relays_seen` moving means this node is taking part in
+	 * somebody else's admission as a real member does (the Rule of Total
+	 * Connectivity, p. 7-39), and `relays_no_class` moving means it was
+	 * asked before it held a transition class and honestly said nothing --
+	 * which STRANDS that admission, so it is a gap to close, never a
+	 * resting state.
+	 */
+	uint32_t relays_seen;
+	uint32_t relays_no_class;
+	/*
 	 * RETIRED BY E79 and kept at zero rather than deleted: this counted the
 	 * cat-0x04 this FSM emitted per op-0x06, which is the flood that halted
 	 * VAX2. The op-0x06 burst is answered by NOTHING here; the credit it

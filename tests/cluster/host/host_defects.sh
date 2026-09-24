@@ -91,6 +91,11 @@
 #   mscp-srv-fsm-writeprotect-uncounted  vms_mscp_srv_fsm.c
 #   mscp-srv-io-worker-registers-handler vms_mscp_srv_io.c
 #
+# GROWN (vms-4f0) with the defect that BLOCKED CN=3 against a real OpenVMS VAX
+# V7.3 -- a member that does not answer the coordinator's op-0x12 relay:
+#
+#   join-relay-unanswered                vms_cnxman_join_fsm.c
+#
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
@@ -111,7 +116,8 @@ mscp-cl-io-empty-cell-uncounted
 mscp-srv-glue-end-message-leaked
 mscp-srv-fsm-writeprotect-uncounted
 mscp-srv-io-worker-registers-handler
-join-own-connect-not-suppressed"
+join-own-connect-not-suppressed
+join-relay-unanswered"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -454,6 +460,23 @@ EOF
                       ;;
         esac;;
 
+    join-relay-unanswered)
+        case "$_f" in
+        facility)     echo "the sitting member's answer to the coordinator's cat-0x01 op-0x12 RELAY (the Rule of Total Connectivity, VAXcluster Principles p. 7-39; spec 4(O.31) -- the relay sits between op 0x02 and op 0x03 and is the commit gate for admitting a THIRD node)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_h_relay() still SEES the coordinator's relay and still counts it, but returns before building the answer, so the member emits nothing. That is the pre-vms-4f0 behaviour in one property: measured against a real OpenVMS VAX V7.3 an unanswered relay made the VAX log a third node's membership request ~30 times without ever proposing it, and then stop transmitting altogether. The response recipe, the allowlist row and the table cells are untouched -- only the answer.";;
+        require_fail) cat <<'EOF'
+EXACTLY ONE frame went back -- the answer the coordinator's whole admission gates on
+every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
+  body[9]: the opcode, echoed
+  body[20:24]: the epoch, LE u32
+body[20:24] is OUR epoch, not the coordinator's
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -635,6 +658,21 @@ apply_edit() {
         # Idempotency-safe: the edit consumes the pattern, so a second apply
         # matches nothing and cmd_apply reports BROKEN FIXTURE.
         sed -i 's|if (join_cm_take_held(j))|if (0 \&\& join_cm_take_held(j)) /* NEGCTL join-own-connect-not-suppressed: this node dials even when the executive already holds the connection */|' "$_file";;
+
+    join-relay-unanswered)
+        # `j->relays_seen++;` is unique in this file (grep -c is 1):
+        # join_h_relay()'s own accounting line. An early return is INSERTED
+        # after it, so the handler still runs, still counts, and still takes
+        # its argument -- the file builds -Wall -Wextra -Werror and only the
+        # ANSWER disappears. Idempotency-safe: the guard the edit inserts
+        # carries the NEGCTL marker, and a second apply would insert a
+        # second copy AFTER the first return, changing nothing -- which
+        # cmd_apply's pristine-compare reports as BROKEN FIXTURE only if the
+        # file is unchanged, so the marker is matched instead.
+        if grep -q 'NEGCTL join-relay-unanswered' "$_file"; then
+            return 0    # already injected: leave it byte-identical so
+        fi              # cmd_apply's pristine-compare reports BROKEN FIXTURE
+        sed -i 's|\tj->relays_seen++;|\tj->relays_seen++;\n\tif (j != (struct cnxman_join *)0)\n\t\treturn CNXMAN_JOIN_RX_CONSUMED; /* NEGCTL join-relay-unanswered: the member answers the coordinator nothing */|' "$_file";;
 
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2

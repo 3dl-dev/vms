@@ -1,0 +1,937 @@
+name: CI / Core Gates
+
+# Sibling of ci.yml, split out by vms-1af (ci.yml was ~511KB, over GitHub's
+# silent size ceiling somewhere around 511,986-512,030 bytes that produces
+# conclusion=startup_failure with ZERO jobs and no pull_request run at all --
+# see rd vms-1af / vms-e18e). Triggers, job names, and the needs-graph are
+# carried over unchanged from the corresponding slice of the old ci.yml; only
+# the shared `changes` path-filter job is now factored into the reusable
+# ci-changes.yml (see that file's header) instead of being duplicated in
+# every domain file. See ci-core-gates.yml for the per-PR/heavy-tier split
+# rationale (vms-fb8) and the P4-only fast-path (vms-6e10), both of which
+# apply identically here via the same `vax_p4_only` input and the same `if:`
+# conditions.
+# =====================================================================
+# TIER SPLIT (vms-fb8) -- why a PR does not run the heavy e2e gates
+# =====================================================================
+# The per-PR path used to run the full suite when a core path changed,
+# and its wall was one job: the release/install/upgrade/boot-scenario
+# QEMU e2e gates (14-46 min each, TCG-emulated). That made the 5-wide
+# peer iteration loop pay ~46 min per push.
+#
+# Those heavy gates now run on every NON-pull_request event only --
+# push(main), merge_group, workflow_dispatch, schedule -- via
+# `if: github.event_name != 'pull_request'`. A pull_request runs the
+# FAST tier (build+test, link/activate, kernel-executive shards,
+# static analysis, conformance, cross-compiles). No coverage is
+# deleted; the heavy tier MOVES off the per-PR critical path.
+#
+# COVERAGE-BEFORE-MERGE IS PRESERVED, two ways:
+#   * merge_group -- when a merge queue is enabled, the full suite runs
+#     on the batched result before it lands (nothing enqueues it until
+#     then; see below).
+#   * PRE-MERGE FULL RUN -- until a merge queue exists, the reap gate
+#     MUST fire a `workflow_dispatch` run on the candidate branch/SHA for
+#     EACH ci-*.yml sibling (`for f in ci-core-gates ci-release-e2e
+#     ci-kernel-executive ci-selfhost-x86 ci-alpha ci-vax; do gh workflow
+#     run "$f.yml" --ref <branch>; done` -- vms-1af split ci.yml into
+#     these six domain files, so one dispatch is no longer enough) and
+#     verify all of them GREEN before squash-merge. workflow_dispatch
+#     forces every output true (full suite). KVM-accelerated, this is
+#     ~single-digit minutes, not 46. This replaces "the PR's own run was
+#     the full suite" -- the by-SHA proof still exists, just fired
+#     deliberately at reap time.
+# Do NOT merge a core change on the fast-tier PR run alone.
+#
+# WIDENS the "invisible-on-PR, red-on-push" class: gates that only run on
+# non-PR events (these heavy e2e jobs, plus the pre-existing negative-control
+# meta-checks in facility_defects.sh) will NOT redden a PR — only the
+# pre-merge full run / push / nightly. A lane that reaps on fast-tier-green
+# alone WILL get bitten. The pre-merge `workflow_dispatch` full run is the
+# backstop; read it, do not skip it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      vax_p4_only:
+        description: 'P4-only fast-path: run only the VAX substrate chain + the P4 activation gate, skip the full heavy matrix (rd vms-6e10)'
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: '17 7 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    uses: ./.github/workflows/ci-changes.yml
+
+  # -----------------------------------------------------------------------
+  # Job: compatibility surface drift gate (INV-LEDGER, vms-8465)
+  #
+  # docs/compat/domains.yaml + docs/compat/facilities/*.yaml are the single
+  # ledger for the VMS compatibility surface register; docs/compatibility-
+  # surface.md and build/compat-surface.json are GENERATED from them by
+  # tools/compat/render_compat.py and must never be hand-edited (its own
+  # banner says so). Without a gate, nothing stops the YAML and the tracked
+  # md from silently diverging -- someone edits a status in the YAML and
+  # forgets to regenerate, or hand-patches the md directly.
+  #
+  # `render_compat.py --check` only validates vocab/schema (status/
+  # authenticity/kind against docs/compat/domains.yaml, cross-refs, evidence
+  # paths) -- it does NOT compare its output against the tracked md, so it
+  # cannot catch drift by itself. This job adds that comparison: regenerate,
+  # then diff the fresh render against the committed file. The generated
+  # header carries a "Generated <today>" date stamp that changes on every
+  # run regardless of content, so both sides of the diff have that one line
+  # stripped first -- otherwise the gate would redden on pure calendar
+  # rollover, which is not the drift this gate exists to catch.
+  #
+  # In-repo and network-free (no rd, no external calls), so this is cleanly
+  # CI-gateable, unlike tools/roadmap/reconcile.py --check (needs `rd`, which
+  # is not available in GitHub Actions -- that stays a local/checkpoint
+  # check, not a CI job).
+  # -----------------------------------------------------------------------
+  compat-surface-drift:
+    name: Compat Surface Drift Gate (INV-LEDGER)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.compat_surface == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install PyYAML
+        run: pip install --disable-pip-version-check pyyaml
+
+      - name: Validate compat surface YAML (schema/vocab)
+        run: python3 tools/compat/render_compat.py --check
+
+      - name: Detect drift between docs/compat/*.yaml and the generated register
+        run: |
+          set -e
+          cp docs/compatibility-surface.md /tmp/compat-surface-tracked.md
+          python3 tools/compat/render_compat.py
+          if ! diff -u <(grep -v '^> Generated ' /tmp/compat-surface-tracked.md) \
+                       <(grep -v '^> Generated ' docs/compatibility-surface.md); then
+            echo "::error::docs/compatibility-surface.md has drifted from docs/compat/*.yaml (single ledger, INV-LEDGER). Run 'python3 tools/compat/render_compat.py' and commit the regenerated file."
+            exit 1
+          fi
+          echo "OK: docs/compatibility-surface.md matches a fresh render of docs/compat/ (date stamp ignored)."
+  # -----------------------------------------------------------------------
+  # Job: cluster core includes gate (FC-P0.1)
+  #
+  # The executive-resident VMScluster stack is written ONCE and compiled into
+  # BOTH kmods (Linux vms.ko and the NetBSD-VAX vms.kmod). That property is
+  # worth ~13 500 shared lines and it is lost to a single #include that only one
+  # substrate has -- the tree already carries the cautionary case, vms_l2.c,
+  # which is Linux-only and absent from the NetBSD module's SRCS. So kernel-core
+  # cluster TUs may include only exec_kbackend.h and kernel-core headers
+  # (docs/design-faithful-cluster-executive.md SS3.2.2), and this gate enforces
+  # it in seconds at PR time. Unconditional: the leak can be introduced by any
+  # change. The self-test is the negative control -- it injects
+  # `#include <linux/netdevice.h>` into a throwaway vms_pe.c and requires the
+  # gate to reject it, so the gate can never pass by having no teeth.
+  # -----------------------------------------------------------------------
+  cluster-core-includes-gate:
+    name: Cluster core stays substrate-free (FC-P0.1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: No substrate include or idiom in kernel-core cluster TUs
+        run: sh tools/ci/cluster_core_includes_gate.sh
+
+      - name: NEGATIVE CONTROL -- the gate must reject an injected substrate include
+        run: sh tools/ci/cluster_core_includes_gate.sh --self-test
+  # -----------------------------------------------------------------------
+  # Job: vmslink shell-portability lint (vms-200)
+  #
+  # Fail-fast gate for the #773 class: a #!/bin/sh script (e.g.
+  # src/vmslink/mk_decc_shr.sh) is invoked by one harness as sh (dash, lenient)
+  # and by another as bash (strict), so a syntax/portability error can parse
+  # fine under one shell and die at container-runtime under the other (an
+  # apostrophe in a ${VAR:?...}, a bashism in a POSIX script, ...). This parses
+  # every vmslink + cross-alpha shell script under the shell(s) it must
+  # satisfy -- bash -n for #!/bin/bash, BOTH bash -n and sh -n for #!/bin/sh (a
+  # POSIX script must stay portable to bash) -- in seconds at PR time, before
+  # any deep container build. Unconditional (no path filter): a shell change
+  # can land anywhere. A negative control proves the gate has teeth.
+  # -----------------------------------------------------------------------
+  vmslink-shell-lint:
+    name: vmslink shell-portability lint (bash -n + sh -n) (vms-200)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Parse every vmslink + cross-alpha shell script under its shell(s)
+        run: |
+          set -eu
+          rc=0; n=0
+          scripts=$(find src/vmslink tools/cross-alpha-vms -name '*.sh' -type f | sort)
+          for s in $scripts; do
+            case "$(head -1 "$s")" in
+              *bin/bash*)          shells="bash" ;;
+              *bin/sh*|*bin/dash*) shells="bash sh" ;;  # a #!/bin/sh script must stay POSIX -> parse under bash too
+              *)                   shells="bash sh" ;;   # no/unknown shebang: require both
+            esac
+            for shellcmd in $shells; do
+              n=$((n+1))
+              if ! "$shellcmd" -n "$s" 2>/tmp/lint.err; then
+                echo "::error file=$s::$shellcmd -n rejected $s (shell-portability, vms-200)"
+                sed 's/^/    /' /tmp/lint.err
+                rc=1
+              fi
+            done
+          done
+          [ "$rc" -eq 0 ] || { echo "shell-portability lint FAILED"; exit 1; }
+          echo "OK: $(echo "$scripts" | wc -l) scripts, $n parse-checks, all clean under bash AND sh"
+
+      - name: NEGATIVE CONTROL -- the linter must reject the #773 apostrophe-in-dollar-brace trap
+        run: |
+          set -eu
+          tmp=$(mktemp --suffix=.sh)
+          printf '#!/bin/sh\n: "${X:?a b c'\''s d (e/f)}"\n' > "$tmp"
+          if bash -n "$tmp" 2>/dev/null; then
+            echo "::error::NEGATIVE CONTROL FAILED: bash -n accepted the known-bad apostrophe-in-\${VAR:?} script -- the gate has no teeth"
+            rm -f "$tmp"; exit 1
+          fi
+          rm -f "$tmp"
+          echo "OK: bash -n rejects the apostrophe-in-\${VAR:?} trap (gate has teeth)"
+  # -----------------------------------------------------------------------
+  # Job: cross-arch shippable-image parity gate (rd vms-e1d)
+  #
+  # Operator ruling: "if I see a release that has something on x86_64 and
+  # not vax, it's your ass." Today the OVMX shippable-image set is defined
+  # twice by hand -- distro/Dockerfile.bootable's `cp` lines (x86_64) and
+  # tools/cut-release.sh's VAX_ARTIFACT_ORDER (vax, itself fed by ~25
+  # tools/cross-vax/build-*.sh scripts) -- with nothing mechanically
+  # comparing them. tools/parity/image_parity.py diffs the two sets and
+  # fails on ANY unallowlisted gap in either direction; the only permitted
+  # differences are the reviewed, justified ones in
+  # tools/parity/image-parity-allowlist.json (Decision A / vms-42d: VAX
+  # activates images via NetBSD's own ld.elf_so, not IMGACT.EXE's symbol-
+  # vector scheme, so it has no $SHR shareables or IMGACT.EXE by design;
+  # plus the vms kernel-module packaging and filename-convention
+  # differences). This is the
+  # INTERIM gate for the vms-509 unified-build migration -- no SIMH, no
+  # docker, pure text-parsing, so it runs on every PR fast. Unconditional
+  # (not gated on a path filter): a drift-introducing change can touch
+  # either source file, or neither (e.g. a VAX build regression that
+  # silently drops an artifact from a future manifest-driven source), so
+  # this always runs.
+  # -----------------------------------------------------------------------
+  image-parity-gate:
+    name: Cross-Arch Image Parity Gate (vms-e1d)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install pytest (test deps only -- no docker/SIMH)
+        run: pip install --disable-pip-version-check pytest
+
+      - name: Run image_parity.py self-tests (prove the gate has teeth)
+        run: python3 -m pytest tests/tools/test_image_parity_gate.py -v
+
+      - name: Run the live cross-arch image-parity gate
+        run: python3 tools/parity/image_parity.py
+  # -----------------------------------------------------------------------
+  # Job: vax SIMH harness self-test (rd vms-cf5, epic vms-8e8)
+  #
+  # tests/lab-vax/vaxharness.py is the shared crash-proof helper (safe_expect,
+  # Proof/StepResult, negctl_gate) that kills the anita expect()-crash /
+  # child.before-is-None / negctl-exit-code-contradiction fragility class the
+  # SIMH+anita vax drivers keep re-biting. This job proves the helper itself
+  # with no SIMH, no anita, no container -- plain pytest against fake pexpect
+  # children (see test_vaxharness.py). It is a CHEAP, fast complement to the
+  # heavy netbsd-vax-* SIMH jobs below (which still exercise the real drivers
+  # under real SIMH); this one exists so the helper's own correctness is
+  # proven on every PR that touches it, without paying for an emulator boot.
+  # Gated on the same netbsd_vax path filter those jobs share (covers
+  # tests/lab-vax/**), but this job itself never touches SIMH/anita/docker.
+  # -----------------------------------------------------------------------
+  vaxharness-selftest:
+    name: vax Harness Self-Test (rd vms-cf5)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install pexpect + pytest (test deps only -- no SIMH/anita/container)
+        run: pip install --disable-pip-version-check pexpect pytest
+
+      - name: Run vaxharness.py self-tests
+        run: python3 -m pytest tests/lab-vax/test_vaxharness.py -v
+
+      # rd vms-cee: build_source_iso()'s extra_files staging logic (the Node-B
+      # cluster-config build-time injection hook) -- same "no SIMH/anita/
+      # container" cheap-pytest shape; anita/netbsd_console are stubbed inside
+      # the test itself.
+      - name: Run build_source_iso extra_files self-tests
+        run: python3 -m pytest tests/lab-vax/test_build_source_iso.py -v
+  # -----------------------------------------------------------------------
+  # Job: aarch64 system-emulation boot proof (rd vms-f66)
+  #
+  # The aarch64 positioning lane. Every other positioning arch has a
+  # system-emulation boot proof -- x86_64 (tests/qemu/, the vms.ko executive),
+  # NetBSD/amd64 (tests/netbsd/, qemu-system-x86_64), NetBSD/vax (SIMH). aarch64
+  # had NONE: it was only ever exercised under *user-mode* QEMU binfmt (the ~25
+  # link-native/imgact arm64 jobs) and its branches in run-qemu.sh /
+  # tests/qemu/run_tests.sh were dead code with no aarch64 QEMU host to run them
+  # (rd vms-c83). This job boots a REAL arm64 Linux kernel under *system-mode*
+  # qemu-system-aarch64 -machine virt and runs a genuine OVMX freestanding
+  # EM_AARCH64 artifact as PID 1 -- the aarch64 analogue of the Alpha
+  # syscall/crt0 proof (commit c0a663dc), one rung higher (system emulation, not
+  # user-mode qemu-alpha).
+  #
+  # BLOCKING. The harness itself carries the negative control (an EM_X86_64
+  # /init the arm64 kernel must refuse to exec), so a green here means the
+  # positive boot really was aarch64. This step adds an OUTER negative control:
+  # a deliberately-broken PASS marker must redden the job, proving the grep has
+  # teeth. TOOLING, NOT A RUNTIME (Rule 9): booting a kernel in QEMU to test the
+  # freestanding layer is exactly what tests/qemu and tests/netbsd already do;
+  # the Rule-9 gate inspects only src/** C/H, so nothing here trips it.
+  # -----------------------------------------------------------------------
+  aarch64-system-boot:
+    name: aarch64 System-Emulation Boot Proof (QEMU)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.aarch64_boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the aarch64 boot-proof image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu-aarch64/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-aarch64-boot:latest
+          cache-from: type=gha,scope=aarch64-boot
+          cache-to: type=gha,mode=max,scope=aarch64-boot
+
+      - name: Boot arm64 kernel under qemu-system-aarch64, run OVMX EM_AARCH64 init as PID 1
+        run: |
+          set +e
+          RAW=$(docker run --rm ovmx-aarch64-boot:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: aarch64 boot proof exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF 'OVMX_AARCH64_SYSMODE_PASS' \
+            || { echo "FAIL: did not see the OVMX aarch64 PASS marker on the guest console"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'uname machine == aarch64' \
+            || { echo "FAIL: guest never asserted uname machine == aarch64 -- the arch check has no teeth"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'aarch64 SYSTEM-EMULATION BOOT PROOF: PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner (negative control may not have run)"; exit 1; }
+          echo "PASS: OVMX freestanding EM_AARCH64 layer booted as PID 1 on a real arm64 kernel under qemu-system-aarch64"
+
+      - name: NEGATIVE CONTROL — a wrong PASS marker must redden the harness
+        run: |
+          set +e
+          # Point the harness at a marker the guest will never print. A correct
+          # harness then fails the positive proof (marker absent) and exits 1.
+          RAW=$(docker run --rm -e PASS=NEVER_EMITTED_MARKER ovmx-aarch64-boot:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT" | tail -20
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 while keyed on a marker that is never printed -- the grep has no teeth."
+            exit 1
+          fi
+          echo "PASS: harness correctly went RED when keyed on an absent marker -- the assertion has teeth"
+
+  # -----------------------------------------------------------------------
+  # Job 1: Build and unit test (host, shared libs, readline)
+  # -----------------------------------------------------------------------
+  build-and-test:
+    name: Build & Test
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    # vms-32e grew the register negative-control suite 49->62 controls and added a
+    # per-control citation check, taking this job from ~17m (main) to ~20m+ on the
+    # same runner class. The 20m cap left under 3 minutes of margin; raised for
+    # headroom. Suite runtime growth is tracked in rd (vms-32e).
+    #
+    # userspace_service_register_negctl (the suite above) is TORN OUT / de-gated
+    # (vms-b44) and no longer runs in this job at all -- this job's wall time is
+    # therefore now well under 35m, not measured down since de-gating only ever
+    # frees headroom. Left as-is rather than guessed down; re-derive from a
+    # measurement if this is ever revisited.
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          # Cache-key hygiene, not a correctness fix (vms-fb9 r7, vms-ecf r5):
+          # strace, then libssh-dev, then rsync (vms-8e7, for the host cluster
+          # mutation gate's working-copy injection), were added to the install
+          # list below. restore-keys already falls back to any
+          # apt-${{ runner.os }}- prefix, so apt-get install would still
+          # succeed and fetch them on a stale-key cache hit -- this bump only
+          # avoids re-downloading them every run.
+          key: apt-${{ runner.os }}-cmake-gcc-readline-strace-libssh-rsync
+          restore-keys: apt-${{ runner.os }}-
+
+      # libssh-dev was REMOVED here by the vms-d916 SSH-scaffold retirement.
+      # Its sole load-bearing reason was src/vmsssh/vmssshd.c, a product source
+      # that included <libssh/libssh.h>: this job runs ctest ->
+      # tests/integration/test_userspace_service_register.sh, which compiles
+      # EVERY product .c file and reads sys$ symbols out with nm, so without the
+      # package the scan would compile N-1 of N files and the gate would REFUSE
+      # to certify ("a service could hide behind a build error"). That refusal
+      # was correct and was never weakened by skipping the file.
+      #
+      # vmssshd.c has now been DELETED entirely (it was the hand-rolled SSH
+      # daemon Baron ruled LARP; the faithful path is the real upstream OpenSSH
+      # port on the DECC$SOCKET/$QIO substrate, vms-9ef). NO remaining product
+      # source includes libssh -- the surviving substrate seams src/vmsssh/
+      # {ssh_ident,cred_drop,term_map}.c are dependency-free on purpose -- so the
+      # register gate compiles the FULL product set with the C-RTL alone and
+      # certifies. libssh-dev is therefore no longer a dependency of anything and
+      # is dropped rather than carried as dead coupling. (The apt cache-key
+      # string below still spells "libssh" harmlessly; it is an opaque key, not
+      # a dependency list, and is left to avoid a needless one-time cache miss.)
+      # If the real OpenSSH port is ever wired into this job's compile set it
+      # will bring its OWN vendored crypto/transport, not distro libssh.
+      - name: Install build dependencies
+        run: |
+          # vms-216: retry transient apt mirror flakes (fetch only, never masks a real failure).
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+            cmake gcc make libc6-dev libreadline-dev strace libcap2-bin \
+            musl-tools ccache rsync
+
+      - name: Cache CMake build
+        uses: actions/cache@v4
+        with:
+          path: build
+          key: cmake-build-${{ runner.os }}-${{ hashFiles('CMakeLists.txt', 'src/**/CMakeLists.txt', 'src/**/*.c', 'src/**/*.h', 'src/**/*.S') }}
+          restore-keys: cmake-build-${{ runner.os }}-
+
+      # ccache (vms-fb8): every build job here is otherwise a cold recompile of
+      # the same tree. ccache keys on preprocessed content, so across runs the
+      # unchanged TUs are served from cache and only genuinely-changed files
+      # recompile. Populates on the first run, hits on subsequent ones. Keyed
+      # per job-family with a sha suffix so each run saves a fresh layer that
+      # the next run restores via the prefix.
+      - name: Cache ccache (compiler object cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-buildtest-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-buildtest-${{ runner.os }}-
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTS=ON \
+            -DBUILD_TOOLS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      # tests/libvms/test_protection.c (vms-2b8) synthesizes a caller UIC in
+      # a forked child to drive sys$chkpro's SYSTEM-category discrimination
+      # (its own comment, "synthesize_direct", has the full account). Its
+      # PREFERRED mechanism is a plain setgid()+setuid() to a synthetic
+      # (gid, uid), which needs CAP_SETGID/CAP_SETUID -- granted here as file
+      # capabilities because this runner is not root. Its FALLBACK
+      # mechanism (an unprivileged user namespace) is what this grant works
+      # around: Ubuntu 24.04's ubuntu-latest image restricts unprivileged
+      # CLONE_NEWUSER via AppArmor by default, which reddened all six of
+      # this test's discriminating assertions (MEASURED, vms-2b8 round 12 --
+      # reproduced locally with `sysctl user.max_user_namespaces=0` and
+      # fixed by this same grant). Do not remove this step to "simplify" the
+      # job: without it the suite still runs (the fallback tries), but on
+      # THIS runner it fails honestly rather than skipping, per the suite's
+      # own rule that a skipped discriminating case is a failing one.
+      #
+      # THE GRANT ITSELF IS NO LONGER WRITTEN HERE (rd vms-bd7). It used to be
+      # an inline `sudo setcap` on this line, and that is precisely why the dev
+      # seat was red while this job was green: the workshop host restricts
+      # unprivileged CLONE_NEWUSER the same way ubuntu-latest does, but nothing
+      # there ran this step, so the same commit produced 9/9 here and 3/9 there
+      # and four separate agents reported the dev-seat red as noise. The grant
+      # now lives in tests/libvms/grant_protection_caps.sh, which this step and
+      # a ctest FIXTURES_SETUP fixture both call -- one mechanism, both hosts.
+      # This step is therefore redundant with the fixture and is kept anyway, so
+      # that a failure to grant is attributable to a named step in the log
+      # rather than to a line of fixture output.
+      - name: Grant test_libvms_protection the two capabilities its synthetic-UIC mechanism needs
+        run: tests/libvms/grant_protection_caps.sh build/bin/test_libvms_protection
+
+      - name: Test
+        run: |
+          sudo mkdir -p /vms/SYS0/SYSCOMMON/{SYSEXE,SYSLIB,SYSMGR,SYSHLP}
+          sudo chmod -R 777 /vms
+          cd build
+          # kif_caller_census_negctl / userspace_service_register_negctl /
+          # terminal_identity_negctl (vms-819d's 3 slow-labelled per-control
+          # harness self-tests) are TORN OUT / de-gated (vms-b44, same ruling
+          # as vms-49f / CLAUDE.md Rule 9): each reran a source-scan gate
+          # against a mutated sandbox copy of the tree -- a string relation
+          # over the tree's own self-declaration, never touching vms.ko,
+          # QEMU, or /dev/vms. They are no longer registered with ctest at
+          # all (scripts remain in tests/integration/ as manual lint). The
+          # `-LE slow` filter below is kept for what still legitimately
+          # carries the label: tests/qemu's opt-in QEMU-boot tests (e.g.
+          # parts_demo_e2e). Every PRODUCT gate -- unit tests, the positive
+          # census/register authenticity gates, all integration gates --
+          # still runs on every PR.
+          # vms-ed4: run tests in parallel. ctest --parallel honors per-test
+          # RESOURCE_LOCK properties, so tests that share mutable global state
+          # (the /vms SYSDISK, /dev/vms, fixed ports) serialize among themselves
+          # via their lock while independent tests run concurrently. The locks
+          # are declared in CMake (see set_tests_properties ... RESOURCE_LOCK).
+          # NEVER drop a lock to speed a run -- an unlocked shared-state test is
+          # a flaky test (Rule 8).
+          # rd vms-abf: enforce that the DECnet routing-receive-path crash-vector
+          # fuzz (vmsdecnet_routing_fuzz_unit) actually runs UNDER AddressSanitizer
+          # here. The -fsanitize flags are probe-gated in CMake, so a CI image
+          # without the ASan runtime would silently build it toothless and pass;
+          # this env makes that test RED instead (it self-checks __SANITIZE_ADDRESS__).
+          # This host leg (ubuntu gcc) has ASan, so it stays green with real teeth.
+          export OVMX_FUZZ_REQUIRE_SANITIZERS=1
+          JOBS="$(nproc)"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            ctest --output-on-failure --parallel "$JOBS" -LE slow
+          else
+            ctest --output-on-failure --parallel "$JOBS"
+          fi
+
+      # vms-8e7: the R1 host cluster mutation gate. The 46 tests/cluster/host
+      # suites ctest just ran above have no negative control proving any of
+      # them can go red -- this is the first one. Host-native (cmake build +
+      # run against src/kernel-core alone, no /dev/vms/QEMU), so it belongs in
+      # THIS job rather than a QEMU-boot job. Reuses the `build` dir the
+      # "Configure"/"Build" steps above already produced (its positive-control
+      # rebuild of test_cnxman_genesis_negctl is then a no-op if unchanged),
+      # and does its defect injection against a private rsync'd copy of the
+      # tree -- the checkout this job is running from is never mutated.
+      - name: Host cluster mutation gate (R1 negctl, tests/cluster/host)
+        run: tests/cluster/host/run_host_negctl.sh
+
+  # -----------------------------------------------------------------------
+  # Job 4: Conformance tests
+  #
+  # Runs in a disposable ubuntu:24.04 tooling container (gcc, source tree,
+  # built libs). The conformance programs are compiled and executed against
+  # the VMS libs.
+  # -----------------------------------------------------------------------
+  conformance:
+    name: Conformance Tests
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # MIGRATED OFF THE ROOT DOCKERFILE BY vms-71a (CLAUDE.md Rule 9: the
+      # Docker RUNTIME layer is dead). This job never ran the product image —
+      # it only used the Dockerfile's "builder" stage for a disposable
+      # cmake+gcc build environment. That is build/test TOOLING, which Rule 9
+      # explicitly allows in Docker; it is reproduced here with a plain
+      # ubuntu:24.04 container and the checked-out workspace bind-mounted at
+      # /src, so no image tied to the retired root Dockerfile is built at all.
+      - name: Build OVMX + run conformance tests (tooling container, not a runtime image)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src -w /src \
+            -v "${{ github.workspace }}/tests/conformance/vms_programs:/tests/vms_programs:ro" \
+            ubuntu:24.04 bash -c '
+              set -e
+              apt-get -o Acquire::Retries=5 update -qq
+              apt-get -o Acquire::Retries=5 install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev
+              cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=/ -DBUILD_TOOLS=ON
+              cmake --build build --parallel "$(nproc)"
+              bash /src/tests/conformance/run_conformance.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 5: Corpus conformance — compile+run tier1-examples against OVMX
+  #
+  # This is a GATE with a FALSIFIABLE FLOOR, not just a metric job.
+  #   - It fails on per-entry REGRESSIONS — enforced by run_corpus.sh's own
+  #     exit code. A baseline run-pass entry that no longer runs clean
+  #     (run-pass -> run-fail/run-crash/link-fail/compile-fail), or a baseline
+  #     compile-pass/run-fail entry that no longer builds, fails the run. This
+  #     catches a single baseline-passing program breaking even when another
+  #     program improves in the same change and holds the aggregate count flat.
+  #   - It fails if the RUN-PASS count drops BELOW the committed baseline
+  #     floor in tests/conformance/corpus_baseline.json — enforced by the
+  #     "Enforce run-pass floor" step below. Aggregate backstop to the
+  #     per-entry check above.
+  #   - It HARD-FAILS on a zero-total report or baseline (vacuity guard,
+  #     vms-6a2). An empty corpus/baseline can never be undercut, so a
+  #     total=0 would make the whole gate exit 0 forever — the original
+  #     toothless-gate defect. run_corpus.sh exits 2 on total=0; the floor
+  #     step below independently rejects total=0 on either file.
+  #
+  # The floor is exactly what run_corpus.sh measured on the committed tree
+  # (see the baseline's timestamp + summary). It is honest, not inflated:
+  # if run-pass is 42/229, the floor is 42. Raising the headline number
+  # means raising the committed baseline with a real measurement — never
+  # hand-editing it. No continue-on-error, no `|| true`: a floor that
+  # cannot fail is not a floor.
+  #
+  # The JSON report is uploaded as a build artifact for trend analysis.
+  # -----------------------------------------------------------------------
+  corpus-conformance:
+    name: Corpus Conformance
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # MIGRATED OFF THE ROOT DOCKERFILE BY vms-71a — see the conformance job
+      # above for why: this only ever used the "builder" stage as a disposable
+      # build environment (Rule 9 build/test TOOLING), reproduced here with a
+      # plain ubuntu:24.04 container. Build/apt noise is redirected to stderr
+      # so only run_corpus.sh's JSON reaches stdout / corpus_report.json.
+      - name: Build OVMX + run corpus conformance harness (tooling container, not a runtime image)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src -w /src \
+            ubuntu:24.04 bash -c '
+              set -e
+              { apt-get -o Acquire::Retries=5 update -qq && apt-get -o Acquire::Retries=5 install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev; } >&2
+              { cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=/ -DBUILD_TOOLS=ON; } >&2
+              { cmake --build build --parallel "$(nproc)"; } >&2
+              bash /src/tests/conformance/run_corpus.sh /src/tests/conformance/corpus_baseline.json
+            ' > corpus_report.json
+        # Exit code 0 = no compile/link regressions (even if many compile-fail)
+        # Exit code 1 = compile/link regression (previously-passing program now fails)
+
+      # -------------------------------------------------------------------
+      # FALSIFIABLE FLOOR: fail the build if run-pass fell below the
+      # committed baseline. Runs on the ubuntu-latest host (jq is present);
+      # both files are plain JSON produced by the SAME harness, so the
+      # comparison is exact. This step is what converts the job from
+      # regression-only to a real conformance floor (vms-801, R2.0).
+      # -------------------------------------------------------------------
+      - name: Enforce run-pass floor (falsifiable conformance gate)
+        run: |
+          floor=$(jq '.summary."run-pass"' tests/conformance/corpus_baseline.json)
+          current=$(jq '.summary."run-pass"' corpus_report.json)
+          total=$(jq '.total' corpus_report.json)
+          baseline_total=$(jq '.total' tests/conformance/corpus_baseline.json)
+          echo "Corpus run-pass floor (committed baseline): ${floor}"
+          echo "Corpus run-pass current (this build):       ${current} / ${total}"
+          if ! [ "${floor}" -ge 0 ] 2>/dev/null || ! [ "${current}" -ge 0 ] 2>/dev/null; then
+            echo "::error::Could not read run-pass counts (floor='${floor}' current='${current}') — report or baseline malformed"
+            exit 1
+          fi
+          # VACUITY GUARD (vms-6a2): a total=0 baseline OR report makes this gate
+          # vacuous — an empty floor can never be undercut, so the job would exit
+          # 0 forever. Reject a zero-total on either side as a HARD error, never
+          # a pass. This is the mechanical block against the committed baseline
+          # ever silently reverting to total=0 (the original defect).
+          if ! [ "${total}" -ge 1 ] 2>/dev/null; then
+            echo "::error::Corpus report total=${total} — no programs measured. A zero-total run can never be a conformance pass; the harness or corpus tree is broken."
+            exit 1
+          fi
+          if ! [ "${baseline_total}" -ge 1 ] 2>/dev/null; then
+            echo "::error::Committed corpus_baseline.json total=${baseline_total} — an empty baseline is a vacuous floor (vms-6a2). Commit a real measured baseline with total>0."
+            exit 1
+          fi
+          if [ "${current}" -lt "${floor}" ]; then
+            echo "::error::Corpus conformance REGRESSION — run-pass ${current} dropped below committed floor ${floor}. Fix the regression, or (if intended) re-run run_corpus.sh and commit the new corpus_baseline.json."
+            exit 1
+          fi
+          echo "Conformance floor held: ${current} >= ${floor}"
+
+      - name: Upload corpus report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-conformance-report-${{ github.sha }}
+          path: corpus_report.json
+          retention-days: 90
+
+  # -----------------------------------------------------------------------
+  # Job 6: Static analysis (clang-tidy + cppcheck)
+  #
+  # Runs in parallel with all other jobs — no `needs:` dependency.
+  # INFORMATIONAL ONLY: always exits 0, findings are uploaded as artifacts.
+  # src/libvmssys/ is excluded (freestanding, no glibc — false positives).
+  # src/kernel/    is excluded (standalone Makefiles, not in compile_commands.json).
+  # -----------------------------------------------------------------------
+  static-analysis:
+    name: Static Analysis
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/apt/archives
+          key: apt-${{ runner.os }}-static-analysis
+          restore-keys: apt-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: |
+          # vms-216: retry transient apt mirror flakes.
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+            cmake gcc make libc6-dev libreadline-dev \
+            clang-tidy cppcheck ccache
+
+      # ccache (vms-fb8): this job's build (below, for generated headers +
+      # compile_commands) is otherwise a full cold recompile of the tree --
+      # the single biggest chunk of its wall. ccache serves unchanged TUs from
+      # cache across runs. See build-and-test for the rationale.
+      - name: Cache ccache (compiler object cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-staticanalysis-${{ runner.os }}-${{ github.sha }}
+          restore-keys: ccache-staticanalysis-${{ runner.os }}-
+
+      - name: Configure (generate compile_commands.json)
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTS=ON \
+            -DBUILD_TOOLS=ON \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+      - name: Build (required for generated headers)
+        run: cmake --build build -j$(nproc)
+
+      # vms-fb8: on a PR, lint only files changed vs the base branch -- the
+      # whole-tree sweep (~hundreds of files) was the bulk of clang-tidy's
+      # cost and it re-flags code the PR never touched. On non-PR events
+      # (push/merge_group/schedule) still sweep the whole tree so nothing is
+      # lost from the coverage that gates main. This job is informational-only
+      # (always exits 0), so narrowing the PR view changes latency, not a gate.
+      - name: Compute changed-file filter (PR only)
+        id: changed
+        if: github.event_name == 'pull_request'
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" || true
+          git diff --name-only "origin/${{ github.base_ref }}" HEAD -- '*.c' '*.h' > /tmp/changed_files.txt || true
+          echo "count=$(wc -l < /tmp/changed_files.txt)" >> "$GITHUB_OUTPUT"
+          echo "Changed C/H files vs origin/${{ github.base_ref }}:"; cat /tmp/changed_files.txt || true
+
+      - name: Run clang-tidy
+        env:
+          OVMX_CHANGED_ONLY: ${{ github.event_name == 'pull_request' && '1' || '' }}
+        run: |
+          # Collect source files from compile_commands.json,
+          # excluding freestanding (libvmssys) and kernel directories.
+          # On a PR (OVMX_CHANGED_ONLY=1) intersect with the changed-file set.
+          python3 - <<'PYEOF'
+          import json, subprocess, sys, os
+
+          db_path = "build/compile_commands.json"
+          if not os.path.exists(db_path):
+              print("compile_commands.json not found, skipping clang-tidy")
+              sys.exit(0)
+
+          with open(db_path) as f:
+              db = json.load(f)
+
+          cwd = os.getcwd()
+          excluded = ("src/libvmssys/", "src/kernel/")
+
+          changed = None
+          if os.environ.get("OVMX_CHANGED_ONLY") and os.path.exists("/tmp/changed_files.txt"):
+              with open("/tmp/changed_files.txt") as cf:
+                  changed = {line.strip() for line in cf if line.strip()}
+              print(f"PR mode: {len(changed)} changed C/H file(s) drive the filter")
+
+          files = []
+          for entry in db:
+              rel = entry["file"].replace(cwd + "/", "")
+              if any(rel.startswith(ex) for ex in excluded):
+                  continue
+              if changed is not None and rel not in changed:
+                  continue
+              files.append(entry["file"])
+
+          if not files:
+              print("No files to analyze (no changed non-excluded C files on this PR).")
+              sys.exit(0)
+
+          print(f"Running clang-tidy on {len(files)} files...")
+          result = subprocess.run(
+              ["clang-tidy", "-p", "build"] + files,
+              capture_output=True, text=True
+          )
+          output = result.stdout + result.stderr
+          print(output)
+          with open("clang-tidy-results.txt", "w") as out:
+              out.write(output)
+          # Always exit 0 — findings are informational only
+          sys.exit(0)
+          PYEOF
+
+      - name: Run cppcheck
+        run: |
+          cppcheck \
+            --suppressions-list=cppcheck.suppressions \
+            --enable=warning,performance,portability \
+            --error-exitcode=0 \
+            --std=c11 \
+            -D_GNU_SOURCE \
+            -I src/libvms/include \
+            -I src/vmsrms/include \
+            -I src/vmsfs/include \
+            -I src/vmslnm/include \
+            -I src/vmsprocess/include \
+            -I src/vmsdcl/include \
+            --suppress=missingInclude:src/libvmssys/* \
+            --suppress=missingInclude:src/kernel/* \
+            --suppress=missingInclude:src/kernel-netbsd/* \
+            -j$(nproc) \
+            src/ 2>&1 | tee cppcheck-results.txt || true
+          echo "cppcheck complete (exit forced to 0)"
+
+      - name: Upload clang-tidy results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clang-tidy-results
+          path: clang-tidy-results.txt
+          if-no-files-found: ignore
+
+      - name: Upload cppcheck results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cppcheck-results
+          path: cppcheck-results.txt
+          if-no-files-found: ignore
+
+  # -----------------------------------------------------------------------
+  # Job 7: User Acceptance Test — scripted VMS session on the REAL runtime
+  #
+  # Boots the real kernel under QEMU, logs in over the console, and drives a
+  # scripted VMS admin session, validating output for VMS correctness and the
+  # absence of Unix leaks.
+  #
+  # MIGRATED OFF DOCKER+SSH BY vms-71a (CLAUDE.md Rule 9: the Docker RUNTIME
+  # layer is dead). This job used to `docker run` the now-deleted root-
+  # Dockerfile product image and SSH to port 2222 — a container with no
+  # /dev/vms. distro/Dockerfile.bootable (build/test TOOLING, kept under
+  # Rule 9) builds the real kernel + initramfs; tests/uat/vms_session_qemu.sh
+  # runs the SAME command list and the SAME 13 assertions the SSH script did.
+  #
+  # KNOWN COVERAGE GAP, tracked not hidden: driving DCL over the console does
+  # not exercise an SSH login, so SSH login has no CI coverage. This is now the
+  # HONEST state of the world rather than a container artifact: the hand-rolled
+  # SSH server (vmssshd) was retired as LARP (vms-d916), and the faithful SSH
+  # server — the real upstream OpenSSH port on the DECC$SOCKET/$QIO substrate
+  # (vms-9ef) — does not yet build. SSH-login CI coverage returns with that
+  # port. tests/uat/vms_session_test.sh is retained for that bring-up.
+  # -----------------------------------------------------------------------
+  uat-session:
+    name: VMS User Acceptance Test
+    needs: changes
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (uses GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run UAT session on the real runtime (QEMU console)
+        timeout-minutes: 10
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/uat/vms_session_qemu.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh

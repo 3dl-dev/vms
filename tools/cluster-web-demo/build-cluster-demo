@@ -26,6 +26,8 @@
 #     + the OVMX_SYSGEN_PATH lever copy of OVMXVMSSYS.PAR)
 #   - tools/cluster-web-demo/inject-ods2-config.sh      (ODS-2 system-disk-resident
 #     OVMXVMSSYS.PAR -- the copy the boot actually reads, vms-f0f root cause)
+#   - tests/lab-vax/mk_single_disk.py `verify'             (the repo's ONE
+#     NetBSD/vax disklabel reader, used to check Node B's shape)
 #   - the openvmx-site demo/cluster/ page (index.html/node.html/node-pcjs.html/
 #     node-worker.js/lib/) is copied verbatim, not reimplemented here.
 #
@@ -57,6 +59,10 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 MK_DEMOCONFIG="$HERE/mk_democonfig.py"
 INJECT_INITRAMFS="$HERE/inject-cluster-config.sh"
 INJECT_ODS2="$HERE/inject-ods2-config.sh"
+# The ONE reader of the NetBSD/vax disklabel in this repo (rd vms-7b15 wrote it
+# to BUILD Node B's slim single disk); reused here to check that --vax-image is
+# really that disk rather than adding a second disklabel parser.
+MK_SINGLE_DISK="$HERE/../../tests/lab-vax/mk_single_disk.py"
 
 usage() {
     cat >&2 <<EOF
@@ -73,8 +79,13 @@ usage: $PROG <TAG> --out <dir> --x86-vmlinuz <path> --x86-initramfs <path> \\
 --site-dir       an openvmx-site checkout (sibling repo) to copy the
                  demo/cluster page + boot/ qemu-wasm runtime from.
 --boot-dir       override the qemu-wasm runtime dir (default: <site-dir>/demo/cluster/boot).
---vax-image      OPTIONAL: that tag's OVMX/VAX image (Node B). Omitted -> Node B
-                 stays staged/absent from the bundle (honest-partial).
+--vax-image      OPTIONAL: that tag's OVMX/VAX slim single disk (Node B), RAW,
+                 ALREADY cluster-configured by tests/lab-vax/run-boot.sh
+                 sysboot-single (CLUSTER_SCSNODE/... + CLUSTER_AUTH_FILE).
+                 Staged verbatim (gzipped raw bytes), never re-injected here --
+                 its ODS-2 volume is in partition 'e' behind a NetBSD disklabel
+                 and its cluster group is on the FFS root, neither of which has
+                 an offline writer. Omitted -> Node B stays staged/absent.
 --vms-image      OPTIONAL: the PINNED real-VMS 5.5 cluster volume (Node C, fixed
                  across releases). Omitted -> Node C stays staged/absent.
 EOF
@@ -167,26 +178,57 @@ else
 fi
 cp "$X86_VMLINUZ" "$BUNDLE/vmlinuz"
 
-# --- (3) Node B: inject IF a VAX image was supplied, else stay staged ---------
+# --- (3) Node B: stage the BUILD-TIME-CONFIGURED VAX image verbatim ----------
+# Node B is NOT injected here, and the attempt to do so was a dead path (rd
+# vms-e18e). Two reasons, both structural:
+#
+#   1. WRONG VOLUME. Node B is not a bare ODS-2 volume like Node A's sysdisk --
+#      it is ONE slim disk carrying a NetBSD/vax disklabel, the boot root FFS in
+#      partition 'a', and the OVMX ODS-2 SYSTEM volume in partition 'e' (see
+#      tests/lab-vax/mk_single_disk.py). inject-ods2-config.sh's injector opens
+#      its argument as a volume and requires a genuine ODS-2 home block at LBN 1
+#      (ods2_bdev_open -> ods2_home_parse strict); a disklabel sits there
+#      instead, so the call fails outright -- honestly, but it never produced a
+#      Node B.
+#   2. WRONG CONTAINER. inject-ods2-config.sh always emits qcow2; the demo page
+#      hands nodeB/ovmx-vax-nodeB.img.gz to pcjs, which reads RAW disk bytes and
+#      cannot open qcow2.
+#
+# The volume IS configured -- earlier, and at the only place that can reach both
+# partitions: tests/lab-vax/run-boot.sh sysboot-single (rd vms-cee) rewrites the
+# mastered ODS-2 volume's OVMXVMSSYS.PAR before mk_single_disk.py embeds it, and
+# installs CLUSTER_AUTHORIZE.DAT (the cluster GROUP) onto the FFS root in the
+# guest session. Neither file has an offline writer here, and the group in
+# particular has no offline READER either -- so this script asserts nothing
+# about Node B's identity. It stages the bytes the build produced and says so;
+# the group is read back where it is real executive state, off Node B's own
+# console at boot ("%PEA0, cluster HELLO multicast group N (CLUSTER_AUTHORIZE)").
 NODE_B_STAGED=true
 if [ -n "$VAX_IMAGE" ]; then
     [ -f "$VAX_IMAGE" ] || { echo "$PROG: --vax-image not found: $VAX_IMAGE" >&2; exit 1; }
-    if command -v qemu-img >/dev/null 2>&1 && command -v "${CC:-cc}" >/dev/null 2>&1; then
-        echo "== $PROG: Node B ($NODE_B_NAME) config injection (same arch-agnostic ODS-2 injector as Node A) =="
-        mkdir -p "$BUNDLE/nodeB"
-        "$INJECT_ODS2" "$VAX_IMAGE" "$BUNDLE/nodeB/ovmx-vax-nodeB.qcow2" \
-            --scsnode "$NODE_B_NAME" --scssystemid "$NODE_B_ID" \
-            --votes "$NODE_B_VOTES" --expected-votes "$NODE_B_EV"
-        gzip -n -9 -c "$BUNDLE/nodeB/ovmx-vax-nodeB.qcow2" > "$BUNDLE/nodeB/ovmx-vax-nodeB.img.gz"
-        rm -f "$BUNDLE/nodeB/ovmx-vax-nodeB.qcow2"
-        NODE_B_STAGED=false
-        echo "== $PROG: NOTE -- Node B's ODS-2-on-VAX injection path is UNVERIFIED against a" >&2
-        echo "   real VAX cluster volume by this script (that proof belongs to rd vms-613);" >&2
-        echo "   the bytes are written, whether OVMX/VAX's boot reads them the same way as" >&2
-        echo "   x86 is NOT asserted here." >&2
-    else
-        echo "== $PROG: --vax-image given but qemu-img/cc unavailable -- Node B stays staged" >&2
+    vax_magic=$(dd if="$VAX_IMAGE" bs=4 count=1 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    if [ "$vax_magic" = "514649fb" ]; then
+        echo "$PROG: FATAL -- --vax-image is a qcow2 image ($VAX_IMAGE)." >&2
+        echo "  Node B is booted by pcjs, which reads RAW disk bytes. Pass the raw" >&2
+        echo "  .img that tests/lab-vax/run-boot.sh sysboot-single produced" >&2
+        echo "  (single-work/wd0.img), not a qemu-img conversion of it." >&2
+        exit 1
     fi
+    # ONE call: on success it prints the label facts it read, on failure its own
+    # diagnostic plus this one. Do not add a second (silenced) probe -- a guard
+    # whose teeth live in a duplicate call reads as untested when the duplicate
+    # is what actually fires.
+    if ! "$PYTHON" "$MK_SINGLE_DISK" verify "$VAX_IMAGE"; then
+        echo "$PROG: FATAL -- --vax-image carries no NetBSD/vax disklabel with an" >&2
+        echo "  ODS-2 partition 'e' ($VAX_IMAGE). That is the shape" >&2
+        echo "  tests/lab-vax/run-boot.sh sysboot-single produces and the shape pcjs" >&2
+        echo "  boots; refusing to stage a Node B that cannot boot." >&2
+        exit 1
+    fi
+    echo "== $PROG: Node B ($NODE_B_NAME) staged VERBATIM (build-time-configured; not injected here) =="
+    mkdir -p "$BUNDLE/nodeB"
+    gzip -n -9 -c "$VAX_IMAGE" > "$BUNDLE/nodeB/ovmx-vax-nodeB.img.gz"
+    NODE_B_STAGED=false
 else
     echo "== $PROG: no --vax-image -- Node B ($NODE_B_NAME) stays STAGED (not in the bundle)"
 fi
@@ -263,7 +305,21 @@ manifest = {
     "nodes": {
         "A": {"name": node_a_name, "id": int(node_a_id), "staged": False,
               "sysdisk_injected": a_sysdisk_done == "1"},
-        "B": {"staged": b_staged == "true"},
+        # Node B carries NO identity assertion from this generator: its SCSNODE/
+        # SCSSYSTEMID live in the ODS-2 partition and its cluster GROUP on the
+        # FFS root, both written by tests/lab-vax/run-boot.sh sysboot-single's
+        # CLUSTER_* injection, and neither is re-read here (rd vms-e18e). What
+        # is recorded is where the bytes came from -- an honest omission rather
+        # than a roster value copied into a manifest as if it had been verified.
+        "B": {"staged": b_staged == "true",
+              **({} if b_staged == "true" else {
+                  "injected_here": False,
+                  "config_source": "build-time: tests/lab-vax/run-boot.sh "
+                                   "sysboot-single (CLUSTER_SCSNODE/"
+                                   "CLUSTER_SCSSYSTEMID/CLUSTER_VOTES/"
+                                   "CLUSTER_EXPECTED_VOTES/CLUSTER_VAXCLUSTER "
+                                   "+ CLUSTER_AUTH_FILE), rd vms-cee",
+              })},
         "C": {"staged": c_staged == "true"},
     },
     "files": files,

@@ -27,7 +27,7 @@
 #     which is outside this item's tests/qemu/** + distro/boot lane.
 # Wiring a dedicated CI job that sets OVMX_QEMU_FULL_E2E=1 (the equivalent of
 # the persistent-boot job's own docker build + `docker run .../test.sh` steps)
-# is a separate, explicit decision for whoever owns .github/workflows/ci.yml.
+# is a separate, explicit decision for whoever owns .github/workflows/ci-*.yml (split by vms-1af).
 #
 # Env knobs:
 #   OVMX_QEMU_FULL_E2E     must be "1" or this script SKIPs (exit 77).

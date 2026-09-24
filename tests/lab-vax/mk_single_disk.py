@@ -87,10 +87,49 @@ def _set_part(buf, lab, idx, size, offset, fsize, fstype, frag, cpg):
     struct.pack_into("<H", buf, base + 14, cpg & 0xffff)
 
 
+def verify(argv):
+    """`mk_single_disk.py verify IMG [E_INDEX=4]` -- read-only: is IMG the slim
+    single disk this script builds? Prints the disklabel facts it read and exits
+    non-zero if the label or the ODS-2 partition is not there.
+
+    It exists so a CONSUMER of the artifact (tools/cluster-web-demo/
+    build-cluster-demo staging Node B) can check the shape without a second
+    disklabel parser -- the constants and the locator above are the only ones in
+    the repo. It asserts SHAPE only: the cluster identity inside partition 'e'
+    and the cluster group on the FFS root are written by run-boot.sh's
+    CLUSTER_* injection and are not re-derived here."""
+    if len(argv) < 3:
+        sys.exit("usage: mk_single_disk.py verify IMG [E_INDEX=4]")
+    img = argv[2]
+    e_idx = int(argv[3]) if len(argv) > 3 else 4
+    with open(img, "rb") as f:
+        head = f.read(SECSIZE * 2)
+    if len(head) < SECSIZE * 2:
+        sys.exit("mk_single_disk: %s is shorter than two sectors" % img)
+    lab = _find_label_off(head)          # raises SystemExit when absent
+    npart = struct.unpack_from("<H", head, lab + OFF_NPART)[0]
+    if npart <= e_idx:
+        sys.exit("mk_single_disk: %s has %d partitions -- no partition '%s'"
+                 % (img, npart, "abcdefgh"[e_idx]))
+    e_size, e_off, e_fs = _part(head, lab, e_idx)
+    if e_size == 0 or e_fs == FS_UNUSED:
+        sys.exit("mk_single_disk: %s partition '%s' is unused (size=%d fstype=%d)"
+                 % (img, "abcdefgh"[e_idx], e_size, e_fs))
+    a_size, a_off, a_fs = _part(head, lab, 0)
+    print("mk_single_disk: %s -- NetBSD/vax disklabel at byte %d, %d partitions; "
+          "'a' %d sectors @%d (fstype %d), '%s' %d sectors @%d (fstype %d)"
+          % (img, lab, npart, a_size, a_off, a_fs,
+             "abcdefgh"[e_idx], e_size, e_off, e_fs))
+    return 0
+
+
 def main(argv):
+    if len(argv) >= 2 and argv[1] == "verify":
+        return verify(argv)
     if len(argv) < 5:
         sys.exit("usage: mk_single_disk.py SINGLE_IMG ODS2_IMG A_SECTORS "
                  "TOTAL_SECTORS [E_INDEX=4]\n"
+                 "       mk_single_disk.py verify IMG [E_INDEX=4]\n"
                  "  TOTAL_SECTORS: slim disk size (whole-disk 'c' + secperunit + "
                  "file truncation); 0 = keep the original disk size")
     single_img = argv[1]

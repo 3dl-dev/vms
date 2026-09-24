@@ -19,7 +19,7 @@
 # exists ONLY to drive the negative-control demonstration: it substitutes a
 # caller-supplied (deliberately wrong, for the control) value instead of the
 # manifest's real one, so the SAME gate script can be shown reddening on a
-# genuine version disagreement. See .github/workflows/ci.yml's
+# genuine version disagreement. See .github/workflows/ci-*.yml (split by vms-1af)'s
 # release-acceptance-e2e job for how CI exercises both the real gate and the
 # negative control.
 #

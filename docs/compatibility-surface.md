@@ -782,7 +782,7 @@ PRODUCT INSTALL/SHOW and the [SYS0.SYSCOMMON]-rooted install target are real. Th
 | 🟢 | `dcl$product_install` | command | PRODUCT INSTALL <name> /SOURCE=<kit> [/DESTINATION=<devdir>] | implemented | real | in | `src/product/product.c` |
 | 🟢 | `dcl$product_show` | command | PRODUCT SHOW PRODUCT / PRODUCT SHOW HISTORY [/DESTINATION=<devdir>] | implemented | real | in | `src/product/product.c` |
 | 🟢 | `install$syscommon_root` | feature | [SYS0.SYSCOMMON]-rooted install target layout | implemented | real | in | `src/product/product.c` — /DESTINATION target boots to login |
-| ✅ | `install$boot_login_e2e` | feature | End-to-end install -> boot -> login gate | verified | real | in | `.github/workflows/ci.yml:1458` |
+| ✅ | `install$boot_login_e2e` | feature | End-to-end install -> boot -> login gate | verified | real | in | `.github/workflows/ci-release-e2e.yml:536` |
 
 ### privileges — Privileges (Definition + Enforcement)
 <sub>scope: in · plan: vms-8ad · ref: OpenVMS Guide to System Security ch. 3 (Privileges) · reviewed 2026-09-14</sub>

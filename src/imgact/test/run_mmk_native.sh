@@ -77,7 +77,7 @@
 #
 # arm64 musl Alpine container only (CLAUDE.md test loop). Needs root to create
 # /vms. Run natively on an aarch64 host, or under arm64 emulation (binfmt/QEMU)
-# on x86_64 (see .github/workflows/ci.yml).
+# on x86_64 (see .github/workflows/ci-*.yml (split by vms-1af)).
 set -e
 CC=${CC:-gcc}
 HERE=$(cd "$(dirname "$0")" && pwd)          # src/imgact/test

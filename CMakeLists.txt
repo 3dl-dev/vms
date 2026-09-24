@@ -577,6 +577,26 @@ if(BUILD_TESTS)
     set_tests_properties(guide_drift_negctl PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
+    # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;
+    # GitHub ran ZERO jobs with no error anywhere in the UI or API). Pure
+    # source/text scan via tools/ci/check_workflow_sizes.py -- no docker, no
+    # QEMU.
+    add_test(NAME workflow_size_guard_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_workflow_size_guard.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(workflow_size_guard_gate PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
+    # Negative controls for the above -- proves the checker actually goes red
+    # on an oversized workflow file and respects the threshold boundary,
+    # rather than reporting OK no matter what it is handed.
+    add_test(NAME workflow_size_guard_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_workflow_size_guard_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(workflow_size_guard_negctl PROPERTIES
+        LABELS "integration;release" TIMEOUT 60)
+
     # vms-644 (epic vms-a84 RELEASE ENGINEERING): tools/publish-release.sh takes
     # a cut bundle and publishes its artifacts + generated notes to a GitHub
     # Release. This gate runs the publisher inside a throwaway git repo against

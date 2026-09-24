@@ -1,0 +1,1581 @@
+name: CI / Kernel Executive / NetBSD-amd64
+
+# Sibling of ci.yml, split out by vms-1af (ci.yml was ~511KB, over GitHub's
+# silent size ceiling somewhere around 511,986-512,030 bytes that produces
+# conclusion=startup_failure with ZERO jobs and no pull_request run at all --
+# see rd vms-1af / vms-e18e). Triggers, job names, and the needs-graph are
+# carried over unchanged from the corresponding slice of the old ci.yml; only
+# the shared `changes` path-filter job is now factored into the reusable
+# ci-changes.yml (see that file's header) instead of being duplicated in
+# every domain file. See ci-core-gates.yml for the per-PR/heavy-tier split
+# rationale (vms-fb8) and the P4-only fast-path (vms-6e10), both of which
+# apply identically here via the same `vax_p4_only` input and the same `if:`
+# conditions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      vax_p4_only:
+        description: 'P4-only fast-path: run only the VAX substrate chain + the P4 activation gate, skip the full heavy matrix (rd vms-6e10)'
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: '17 7 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    uses: ./.github/workflows/ci-changes.yml
+
+
+  # -----------------------------------------------------------------------
+  # RETIRED BY FC-P3.9 (docs/plan-faithful-cluster-executive.md), executing
+  # the operator's 2026-09-02 clustering reset:
+  #
+  #   cluster-params-recnx-e2e, cluster-param-adoption-e2e (SCSD adopts the
+  #       SYSGEN params) and dlm-harness-h0..h10b/e84/ec75 (the ioctl-driven
+  #       cross-node DLM H-rung harness).
+  #
+  # Every one of those jobs built SCSD.EXE from src/vmsscs and drove the
+  # executive through it. That userspace SCS stack is DELETED: the port, SCS,
+  # the connection manager and the cluster join are executive-resident
+  # (src/kernel-core/vms_pe.c, vms_scs.c, vms_cnxman.c), and the cluster SYSGEN
+  # parameters reach them through VMS_IOCTL_SYSGEN_LOAD at boot instead of
+  # through a daemon that read the store for itself.
+  #
+  # WHAT IS AND IS NOT COVERED MEANWHILE, stated rather than implied. The
+  # executive cluster stack's own R1/R2 suites (ctest -R 'cluster_host|
+  # cluster_sim') and its R4 legs (tests/qemu/test_cluster_vc.sh,
+  # test_cluster_conn.sh, test_cluster_membership.sh,
+  # test_cluster_start_negctl.sh) run and are unaffected, and single-node DLM
+  # ioctl assertions still run in the kernel-executive suite
+  # (test_syssvc_dlm_xnode). The MULTI-NODE cross-node DLM path the H-rungs
+  # exercised has NO CI leg until FC-P4.8 lands its replacement -- "R4: 2 OVMX
+  # nodes, a $ENQ on node B for a resource mastered on A is granted over the
+  # wire (replaces the ioctl-driven H-rung harness), both substrates" -- which
+  # is that plan row's own done-condition. rd vms-1da5 tracks the gap.
+  # -----------------------------------------------------------------------
+
+  # -----------------------------------------------------------------------
+  # Job 3b: Kernel Executive (vms-e4d, epic vms-6b8 PHASE 0 HARD BARRIER)
+  #
+  # This is the ONLY CI job that boots a real kernel, insmods vms.ko, and runs
+  # executive assertions against /dev/vms. Before this job existed, NO CI job
+  # ever loaded vms.ko (persistent-boot above runs entirely inside Docker,
+  # which has no /dev/vms) — so every executive facility (access modes, ASTs,
+  # event flags, the lock manager) was provably untested in CI, and userspace
+  # code drifted toward per-process fakes that report success without ever
+  # touching the executive. tests/qemu/Dockerfile builds vms.ko
+  # against a real Ubuntu kernel, assembles an initramfs with statically-linked
+  # test programs (ENQ/CONVERT/DEQ round-trips, AST delivery, event-flag
+  # clusters, access-mode/privilege checks, cross-process lock arbitration,
+  # Files-11 ACP mount/read/write), and boots QEMU on the serial console via
+  # tests/qemu/run_tests.sh, which exits nonzero if any suite failed.
+  #
+  # Docker here is BUILD/TEST TOOLING (produces the kernel module + boots the
+  # real kernel in QEMU) — it is NOT standing in as the runtime; nothing in
+  # this job talks to /dev/vms from inside a container's own namespace, it
+  # boots an independent guest kernel that loads the module for real.
+  # -----------------------------------------------------------------------
+  # SHARDED (rd vms-ea7). MEASURED root cause: this job booted ONE QEMU VM
+  # that ran the whole ~79-suite executive sequentially under a single fixed
+  # whole-VM wall (run_tests.sh TIMEOUT=600s). A normal GitHub runner does the
+  # full set in ~90s, but GitHub's TCG runner quality varies wildly and a
+  # pathologically slow (~10x) runner reached only 60/79 in 600s and WALLED --
+  # reddening proven work non-deterministically (#502 failed 3x consecutively
+  # at escalating walls 120s/300s/600s; the 600s run did 60/79). A fixed wall
+  # buys only LINEAR headroom against an UNBOUNDED-slow runner, so it cannot
+  # fix the variance -- raising it again was rejected (Rule 8: a bigger wall
+  # hides the margin problem, it does not fix it).
+  #
+  # The fix partitions the ~79 suites into N shards, each a SEPARATE matrix leg
+  # booting its OWN QEMU VM over ~1/N of the suites under the SAME 600s wall.
+  # ~13 suites/shard fit that wall even at 10x-slow (~125s worst case). The
+  # partition is BY NAME-HASH -- shard(name) = (first 6 hex of md5(name)) mod N
+  # -- computed identically in tests/qemu/init.sh (busybox) and in the
+  # verification step below (proven byte-identical GNU-vs-busybox md5sum,
+  # vms-ea7), so it is a residue-class partition: every suite lands in exactly
+  # one shard, the union is the whole set, no gaps and no overlap. No suite is
+  # dropped; coverage is unchanged, only spread. init.sh reads the shard
+  # coordinates off the kernel command line (run_tests.sh forwards SHARD_INDEX/
+  # SHARD_TOTAL as ovmx.shard/ovmx.shards); the default is shard 0 of 1 = run
+  # everything, so the negative-control image below is unaffected.
+  #
+  # ⚠ THE ORIGINAL REQUIRED-CHECK NAME 'Kernel Executive (vms.ko via /dev/vms,
+  # QEMU)' is preserved by the AGGREGATE job `kernel-executive` further down,
+  # which needs: all shards and is green iff every shard is green -- so branch
+  # protection keying on that name is unaffected by this split. This matrix job
+  # deliberately uses a DIFFERENT name (the shard suffix), never the bare
+  # original.
+  kernel-executive-shard:
+    name: Kernel Executive (vms.ko via /dev/vms, QEMU) — shard ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    # Per shard: the fixed image build (gha layer cache, shared scope across
+    # shards so it is built once and reused) + one QEMU boot over ~1/N suites.
+    # The 60m was sized for the whole-set single VM; a shard is a fraction of
+    # that, but kept at 60m as the OUTER bound so a genuine hang (not slowness)
+    # still surfaces -- the 600s per-VM wall inside run_tests.sh is the real
+    # budget the shard is sized against, and it is unchanged.
+    timeout-minutes: 60
+    strategy:
+      # A slow/failed shard must not cancel its siblings: each shard is an
+      # independent proof over its own suite subset, and we want ALL shard
+      # verdicts on a red run, not just the first.
+      fail-fast: false
+      matrix:
+        # N shards over ~115 suites. `strategy.job-total` (used in the name and
+        # passed to the guest) derives N from this list.
+        # HISTORY (vms-f881 / vms-739 / vms-8cb): test_kmod_devtab_terminal (real
+        # PTY + a cross-process fork/$GETDVI) is a TCG-pathological hog that blew
+        # the whole-VM wall on whichever shard it landed on (1200s AND 1800s,
+        # co-resident with cluster_fork_hammer on shard 0 at N=6). Adding shards
+        # did not fix it (devtab_terminal blows any shard alone) and only
+        # whack-a-moled latent-isolation suites (N=8 reddened identcont, then
+        # mmk_build). So devtab_terminal is EXCLUDED from the sharded set
+        # (init.sh SHARD_EXCLUDE, SHARD_TOTAL>1) and runs in its OWN dedicated VM
+        # (job kernel-executive-devtab-terminal), and the sharded run reverts to
+        # the isolation-proven N=6 (identcont's vms-739 self-mount fix rides in
+        # and is cohort-robust at any N). Systemic capacity/isolation: vms-8cb.
+        shard: [0, 1, 2, 3, 4, 5]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Content-addressed gha layer cache, SHARED SCOPE across all shards
+      # (scope=kernel-executive): the vms.ko + initramfs image is
+      # identical for every shard (the shard only changes the boot cmdline, not
+      # the image), so all N legs pull the same cached layers -- the image is
+      # effectively built once, not N times. load: true keeps `docker run
+      # ovmx-ktest:latest` below working unchanged.
+      - name: Build kernel executive test image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-ktest:latest
+          cache-from: type=gha,scope=kernel-executive
+          cache-to: type=gha,mode=max,scope=kernel-executive
+
+      - name: Boot QEMU, insmod vms.ko, run this shard's executive suites against /dev/vms
+        env:
+          SHARD_INDEX: ${{ matrix.shard }}
+          SHARD_TOTAL: ${{ strategy.job-total }}
+          # No KE_WALL_TIMEOUT override: run_tests.sh's 600s default is the
+          # origin/main-proven baseline for the sharded N=6 set. The 1800 bump
+          # existed ONLY for test_kmod_devtab_terminal, now excluded from the
+          # sharded set and run in its own VM (kernel-executive-devtab-terminal).
+        run: |
+          set +e
+          # -e SHARD_INDEX/-e SHARD_TOTAL: run_tests.sh forwards the shard vars
+          # onto the guest kernel cmdline (ovmx.shard/ovmx.shards, residue class
+          # md5(name) mod SHARD_TOTAL == SHARD_INDEX). No wall override (600s
+          # default) -- devtab_terminal, the reason 1800 was set, runs elsewhere.
+          RAW=$(docker run --rm -e SHARD_INDEX -e SHARD_TOTAL ovmx-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          # QEMU's serial console emits CRLF; normalise so line-anchored
+          # matching below is not defeated by a trailing \r.
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: kernel-executive harness exited nonzero (shard $SHARD_INDEX/$SHARD_TOTAL)"
+            exit 1
+          fi
+
+          # ---------------------------------------------------------------
+          # WHY THIS IS NOT A COUNT ASSERTION (vms-1d9 round 5)
+          #
+          # A nonzero exit code alone does not catch a suite that silently
+          # stops being built/staged/run while everything else stays green:
+          # if tests/qemu/Dockerfile's qemu_syssvc_tests build or its
+          # test_syssvc_* glob-copy step quietly drops a registered test,
+          # init.sh's TOTAL_PASS/TOTAL_FAIL both just get smaller and the
+          # job still exits 0. Two previous attempts at closing that gap
+          # both failed, each proven by a real podman build + QEMU boot:
+          #
+          #   round 3: pinned the EXACT tally ('11 suites passed, 0 failed').
+          #            Strong against a drop, but turns the job RED the
+          #            moment a legitimate new test_syssvc_*.c is ADDED --
+          #            defeating the glob-based generality this item exists
+          #            to deliver for vms-ef1 / vms-as1 / vms-pv1.
+          #   round 4: replaced it with a FLOOR (>= 11) plus a HAND-
+          #            MAINTAINED suite-name list whose own comment said it
+          #            is not updated when a suite is added. So every suite
+          #            added after that point was permanently unprotected:
+          #            adversary added a suite, dropped it from the
+          #            initramfs, and got '11 suites passed, 0 failed',
+          #            rc 0, 'PASS: all checks satisfied'.
+          #
+          # This version DERIVES the expected suite set from the checkout at
+          # CI time and asserts, per suite, on the machine-readable verdict
+          # line init.sh prints ("=== SUITE <name> rc=<exit code> ===").
+          # No count, no hand-maintained list. Consequences:
+          #   * suite ADDED   -> its source appears in the derived set, it is
+          #                      asserted automatically, job stays GREEN
+          #   * suite DROPPED -> source present, verdict line absent -> RED
+          #   * suite FAILS   -> verdict line says rc!=0 -> RED
+          # All three directions are proven by real podman+QEMU runs (see
+          # vms-1d9 notes), not by inspection.
+          #
+          # SHARDING (vms-ea7): the FULL expected set is derived here exactly
+          # as before (so the FLOOR still sees every source), then FILTERED to
+          # this shard's residue class using the SAME md5(name) mod N the guest
+          # used. Only THIS shard's assigned suites are asserted to have run --
+          # the rest ran in sibling shards. An assigned suite whose verdict
+          # line is absent is still RED (it proves the suite was dropped, not
+          # that it ran elsewhere -- the guest's own glob would have run it in
+          # THIS shard had it been staged).
+          # ---------------------------------------------------------------
+          EXPECTED=$(cd "$GITHUB_WORKSPACE" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
+                     | xargs -n1 basename | sed 's/\.c$//' | sort)
+
+          # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
+          # steps under `bash -e`, so without it an empty derived set would
+          # abort the step with no diagnostic instead of hitting the explicit
+          # floor check below.
+          N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
+          # Monotone FLOOR on the number of suite SOURCES, not on any tally.
+          # The derived set above cannot notice a suite whose .c file was
+          # deleted outright (the set simply shrinks), so this catches that.
+          # Sharding does not touch this: the FULL set is counted here, on
+          # every shard, BEFORE the residue filter below. It is a floor, so
+          # ADDING suites never requires touching it; only deliberately
+          # removing a suite does, which is the intended forcing function
+          # (see project Rule: do not delete the test that exposed a defect).
+          if [ "$N_EXPECTED" -lt 12 ]; then
+            echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 12)."
+            echo "A tests/qemu/test_kmod_*.c or test_syssvc_*.c was deleted. Deleting an executive"
+            echo "suite is not a way to make this gate pass -- see vms-6b8."
+            exit 1
+          fi
+
+          # Filter the full expected set to THIS shard's residue class, using
+          # the SAME hash the guest applied (md5 first-6-hex mod SHARD_TOTAL).
+          # vms-f881: test_kmod_devtab_terminal is EXCLUDED from the SHARDED run
+          # in init.sh (SHARD_TOTAL>1) and runs in its own dedicated VM
+          # (kernel-executive-devtab-terminal), so it prints NO "=== SUITE ... ==="
+          # line on any shard. Exclude it here IDENTICALLY, or the shard that
+          # owns it (md5(name)%N) would assert a verdict line that never appears
+          # and go RED. It stays in EXPECTED above, so the deletion floor still
+          # trips if its .c is removed. Keep in lock-step with init.sh SHARD_EXCLUDE.
+          SHARD_EXCLUDE="test_kmod_devtab_terminal"
+          SHARD_EXPECTED=""
+          for suite in $EXPECTED; do
+            case " $SHARD_EXCLUDE " in *" $suite "*) continue ;; esac
+            h=$(printf '%s' "$suite" | md5sum | cut -c1-6)
+            if [ "$(( 0x$h % SHARD_TOTAL ))" -eq "$SHARD_INDEX" ]; then
+              SHARD_EXPECTED="$SHARD_EXPECTED $suite"
+            fi
+          done
+          N_SHARD=$(printf '%s\n' $SHARD_EXPECTED | grep -c . || true)
+          echo "Shard $SHARD_INDEX/$SHARD_TOTAL owns $N_SHARD of $N_EXPECTED kmod/syssvc suites:"
+          printf '  %s\n' $SHARD_EXPECTED
+
+          # A shard that asserts on NOTHING is a toothless leg -- with ~79
+          # suites over 6 shards this cannot happen, but guard it so a future
+          # N > suite-count (or a hash collapse) fails loudly instead of
+          # passing vacuously.
+          if [ "$N_SHARD" -lt 1 ]; then
+            echo "FAIL: shard $SHARD_INDEX/$SHARD_TOTAL was assigned NO suites -- the partition is degenerate (too many shards for the suite count, or the hash is broken)."
+            exit 1
+          fi
+
+          # init.sh prints one verdict line per staged binary it actually
+          # execs, carrying the binary's REAL exit status. A missing line
+          # proves the binary never ran (dropped by the build or the
+          # initramfs copy); rc!=0 proves it ran and failed. We check only
+          # THIS shard's assigned suites -- the others ran in sibling shards.
+          BAD=""
+          for suite in $SHARD_EXPECTED; do
+            line=$(echo "$OUTPUT" | grep -F "=== SUITE $suite rc=" | tail -1)
+            if [ -z "$line" ]; then
+              BAD="$BAD
+            $suite: NEVER RAN (no verdict line -- not built, or not staged into the initramfs)"
+              continue
+            fi
+            rc=$(printf '%s' "$line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p')
+            if [ "$rc" != "0" ]; then
+              BAD="$BAD
+            $suite: rc=$rc (expected 0; rc=77 means it reported an honest SKIP inside the one job that HAS a real /dev/vms)"
+            fi
+          done
+          echo "$OUTPUT" | grep -qF 'PASS: vms.ko loaded, /dev/vms present' \
+            || BAD="$BAD
+            vms.ko: did not load / /dev/vms absent"
+
+          if [ -n "$BAD" ]; then
+            echo "FAIL: kernel-executive suite verdicts not all clean (shard $SHARD_INDEX/$SHARD_TOTAL):$BAD"
+            exit 1
+          fi
+
+          # Aggregate cross-check: init.sh's own tally must agree that
+          # nothing failed. This is deliberately NOT a count -- it catches a
+          # suite that failed inside init.sh's accounting without producing
+          # a verdict line at all (e.g. a harness edit that reorders them),
+          # and it proves the harness reached its own accounting rather than
+          # panicking or timing out mid-run. Per shard the "passed" count is
+          # this shard's subset; "0 suites failed" is what matters.
+          echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, 0 suites failed ===' \
+            || { echo "FAIL: expected a '<N> suites passed, 0 suites failed' split -- a suite failed, or the harness never reached its own accounting (panic/timeout)"; exit 1; }
+
+          echo "PASS: shard $SHARD_INDEX/$SHARD_TOTAL -- all $N_SHARD assigned suites ran with rc=0 against a real /dev/vms, both modules loaded"
+
+  # -----------------------------------------------------------------------
+  # Job 3a-devtab: test_kmod_devtab_terminal in its OWN VM (rd vms-f881 / vms-8cb)
+  #
+  # This suite (a real /dev/pts PTY as RTAn: + a cross-process fork doing
+  # $GETDVI) is a TCG-pathological hog that blew the sharded whole-VM wall on
+  # whichever shard it landed on (1200s AND 1800s, co-resident with
+  # cluster_fork_hammer on shard 0). Rather than inflate every shard's wall for
+  # one suite -- or whack-a-mole latent-isolation suites by adding shards -- it
+  # is EXCLUDED from the sharded residue set (init.sh SHARD_EXCLUDE + the
+  # SHARD_EXPECTED/union filters in the shard/aggregate jobs) and run here ALONE
+  # with a wall of its own. Coverage is unchanged: it runs, just not co-resident.
+  # init.sh's ovmx.only= (via OVMX_KTEST_ONLY) runs exactly this one suite,
+  # bypassing the shard filter and the exclusion. Folded into the
+  # kernel-executive aggregate's required-check name (no new branch-protection
+  # entry). Systemic capacity/isolation tracked as vms-8cb.
+  # -----------------------------------------------------------------------
+  kernel-executive-devtab-terminal:
+    name: Kernel Executive — test_kmod_devtab_terminal (own VM, QEMU)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same image + SAME cache scope as the shards (scope=kernel-executive):
+      # the vms.ko + initramfs is byte-identical, only the boot cmdline differs,
+      # so this leg pulls the shards' cached layers rather than rebuilding.
+      - name: Build kernel executive test image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-ktest:latest
+          cache-from: type=gha,scope=kernel-executive
+          cache-to: type=gha,mode=max,scope=kernel-executive
+
+      - name: Boot QEMU, insmod vms.ko, run ONLY test_kmod_devtab_terminal against /dev/vms
+        env:
+          # Its own generous wall. Alone it covers only module load +
+          # corpus_seed_lnm + this one suite (1800 blew ONLY when co-resident
+          # with ~12 other suites incl. cluster_fork_hammer), so this is ample
+          # headroom, not a masked margin.
+          KE_WALL_TIMEOUT: 1800
+          OVMX_KTEST_ONLY: test_kmod_devtab_terminal
+        run: |
+          set +e
+          # -e OVMX_KTEST_ONLY -> run_tests.sh appends ovmx.only=<name>; init.sh
+          # runs EXACTLY that suite (no shard filter, exclusion bypassed).
+          RAW=$(docker run --rm -e KE_WALL_TIMEOUT -e OVMX_KTEST_ONLY ovmx-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: devtab_terminal harness exited nonzero (rc=$RC; rc=124 = the ${KE_WALL_TIMEOUT}s wall fired even ALONE -- investigate, do not just raise it)"
+            exit 1
+          fi
+
+          line=$(echo "$OUTPUT" | grep -F "=== SUITE test_kmod_devtab_terminal rc=" | tail -1)
+          if [ -z "$line" ]; then
+            echo "FAIL: no '=== SUITE test_kmod_devtab_terminal rc= ===' verdict line -- suite not built/staged, or ovmx.only= did not select it."
+            exit 1
+          fi
+          rc=$(printf '%s' "$line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p')
+          if [ "$rc" != "0" ]; then
+            echo "FAIL: test_kmod_devtab_terminal exited rc=$rc against a real /dev/vms (expected 0)."
+            exit 1
+          fi
+
+          echo "$OUTPUT" | grep -qF 'PASS: vms.ko loaded, /dev/vms present' \
+            || { echo "FAIL: vms.ko did not load / /dev/vms absent"; exit 1; }
+
+          # ovmx.only= runs exactly one suite, so init.sh's tally must be
+          # exactly '1 suites passed, 0 suites failed' -- proves it reached its
+          # accounting (no panic/timeout) AND ovmx.only matched the suite (not
+          # zero, which would read as 0 passed / 0 failed).
+          echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: 1 suites passed, 0 suites failed ===' \
+            || { echo "FAIL: expected exactly '1 suites passed, 0 suites failed' -- the suite failed, ovmx.only matched nothing, or the harness never reached accounting (panic/timeout)"; exit 1; }
+
+          echo "PASS: test_kmod_devtab_terminal ran with rc=0 against a real /dev/vms in its own VM"
+
+  # -----------------------------------------------------------------------
+  # Job 3b-aggregate: Kernel Executive (vms.ko via /dev/vms, QEMU) — REQUIRED
+  # CHECK NAME PRESERVED (rd vms-ea7)
+  #
+  # This job exists ONLY to keep the exact status-check name the single
+  # pre-sharding job reported -- 'Kernel Executive (vms.ko via /dev/vms,
+  # QEMU)' -- so any branch-protection required check keyed on that name still
+  # resolves after the split into `kernel-executive-shard` matrix legs. It
+  # needs: all shards (as a matrix, `needs.kernel-executive-shard.result` is
+  # `success` iff EVERY leg succeeded) and is green iff every shard is green.
+  #
+  # if: always() so this REPORTS on every run (a needed job that failed would
+  # otherwise SKIP this by default -- which branch protection reads as a
+  # non-blocking skipped check, the exact false-green trap). With always() we
+  # run regardless and assert the shard matrix result explicitly:
+  #   success  -> every shard passed                       -> PASS
+  #   skipped  -> shards did not run (no kernel change on a PR; the original
+  #               job skipped in the same case) -> gate not applicable -> PASS
+  #   *        -> at least one shard failed/cancelled       -> FAIL
+  # A skipped-matrix PASS mirrors the original job's `if:` skip behavior; it
+  # cannot mask a real failure, because a real shard failure yields result
+  # 'failure', not 'skipped'.
+  # -----------------------------------------------------------------------
+  kernel-executive:
+    name: Kernel Executive (vms.ko via /dev/vms, QEMU)
+    needs: [kernel-executive-shard, kernel-executive-devtab-terminal]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # COVERAGE / UNION PROOF (vms-ea7): re-derive the full suite set and
+      # assign each to a shard with the SAME md5(name) mod N the guest and the
+      # shard verification use, then prove the partition is well-formed --
+      # every suite lands in exactly one shard in [0,N), and the union of the
+      # per-shard counts equals the total (no suite dropped, no overlap). N is
+      # read from the shard matrix's own list so it cannot drift from the legs.
+      - name: Prove the shard partition covers every suite exactly once (union = all)
+        run: |
+          N=$(sed -n 's/^ *shard: \[\(.*\)\].*/\1/p' .github/workflows/ci-kernel-executive.yml \
+              | head -1 | tr ',' '\n' | grep -c '[0-9]')
+          echo "shard count N derived from the matrix list: $N"
+          [ "$N" -ge 2 ] || { echo "FAIL: could not derive N>=2 shards from the matrix"; exit 1; }
+          # Every suite init.sh actually runs (all four families), so the union
+          # proof covers the whole run, not just the kmod/syssvc subset the
+          # per-shard verdict check asserts.
+          # vms-f881: test_kmod_devtab_terminal runs in its own dedicated VM
+          # (kernel-executive-devtab-terminal), NOT in the sharded residue set,
+          # so exclude it here too -- else this proof would claim the N-way
+          # partition "covers" a suite the shards never run. (covered==TOTAL
+          # passes either way since both derive from this list; the exclusion
+          # keeps the CLAIM true and aligned with SHARD_EXPECTED above.)
+          ALL=$(ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
+                   tests/qemu/test_imgact_*.c tests/qemu/test_corpus_*.c \
+                | xargs -n1 basename | sed 's/\.c$//' \
+                | grep -vx test_kmod_devtab_terminal | sort)
+          TOTAL=$(echo "$ALL" | grep -c .)
+          covered=0
+          i=0
+          while [ "$i" -lt "$N" ]; do
+            c=0
+            for s in $ALL; do
+              h=$(printf '%s' "$s" | md5sum | cut -c1-6)
+              [ "$(( 0x$h % N ))" -eq "$i" ] && c=$((c+1))
+            done
+            echo "  shard $i/$N: $c suites"
+            covered=$((covered + c))
+            i=$((i+1))
+          done
+          echo "total suites: $TOTAL ; sum over shards: $covered"
+          if [ "$covered" -ne "$TOTAL" ]; then
+            echo "FAIL: union of shards ($covered) != total suites ($TOTAL) -- a residue-class partition must cover every suite exactly once."
+            exit 1
+          fi
+          echo "PASS: the $N-way md5(name) mod N partition covers all $TOTAL suites exactly once (no gap, no overlap)."
+
+      - name: Aggregate — every KE shard passed (preserves the required-check name)
+        run: |
+          result='${{ needs.kernel-executive-shard.result }}'
+          echo "kernel-executive-shard matrix result: $result"
+          case "$result" in
+            success)
+              echo "PASS: every Kernel Executive shard passed against a real /dev/vms."
+              ;;
+            skipped)
+              echo "SKIPPED: the KE shard matrix did not run (no kernel-affecting change on this PR) -- the original single job skipped in the same case. Gate not applicable; reporting green under the required-check name."
+              ;;
+            *)
+              echo "FAIL: the KE shard matrix result is '$result' -- at least one shard failed or was cancelled. The executive gate is RED."
+              exit 1
+              ;;
+          esac
+
+          # vms-f881: fold the dedicated test_kmod_devtab_terminal job into this
+          # SAME required-check name, so the isolated heavy suite gates without a
+          # new branch-protection entry. Its `needs: changes` + identical `if:`
+          # make it skip in exactly the non-kernel-PR case the shards do.
+          dt='${{ needs.kernel-executive-devtab-terminal.result }}'
+          echo "kernel-executive-devtab-terminal result: $dt"
+          case "$dt" in
+            success)
+              echo "PASS: test_kmod_devtab_terminal passed in its own dedicated VM."
+              ;;
+            skipped)
+              echo "SKIPPED: the devtab_terminal job did not run (no kernel-affecting change) -- gate not applicable, same case as the shards."
+              ;;
+            *)
+              echo "FAIL: kernel-executive-devtab-terminal result is '$dt' -- the isolated devtab_terminal (RTAn:) gate is RED."
+              exit 1
+              ;;
+          esac
+
+  # -----------------------------------------------------------------------
+  # Job 3c: Kernel Executive — negative control (vms-e4d)
+  #
+  # Proves the kernel-executive gate above can actually fail. Builds the SAME
+  # harness with --build-arg NEGATIVE_CONTROL=1, which patches init.sh to skip
+  # insmod of vms.ko (simulating the executive being absent) while everything
+  # else — building vms.ko itself, the test binaries — stays
+  # real. Every test that opens /dev/vms then fails ("cannot open /dev/vms")
+  # instead of silently passing. (This comment used to add "the same
+  # SS$_NOSUCHDEV path sys_lock.c already takes"; that path was DELETED by
+  # vms-0ff — an unreachable executive is now prevented at boot, not reported
+  # per call. The harness is a test rig deliberately booted without an
+  # executive, which is why it can still observe a state the product cannot.)
+  # run_tests.sh exits 1 in that case, so
+  # THIS job inverts the check: it PASSES only if the container run fails,
+  # and FAILS (catching a regression in the harness itself) if the container
+  # run unexpectedly succeeds while the executive is supposed to be absent.
+  # This is what keeps "a CI job that cannot fail is decoration" from
+  # regressing silently — it re-proves the gate can trip on every push.
+  # -----------------------------------------------------------------------
+  kernel-executive-negative-control:
+    name: Kernel Executive — Negative Control (proves the gate can fail)
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build kernel executive test image WITHOUT loading vms.ko
+        run: |
+          docker build -f tests/qemu/Dockerfile \
+            --build-arg NEGATIVE_CONTROL=1 \
+            -t ovmx-ktest-negctl:latest .
+
+      - name: Assert the harness FAILS for the RIGHT REASON when the executive is absent
+        run: |
+          set +e
+          RAW=$(docker run --rm ovmx-ktest-negctl:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: expected the kernel-executive harness to fail with vms.ko unloaded, but it exited 0"
+            echo "This means a broken executive assertion would NOT fail CI -- the exact defect class vms-6b8 exists to kill."
+            exit 1
+          fi
+
+          # A nonzero exit alone proves nothing: a missing QEMU binary, a boot
+          # panic, run_tests.sh's hard-coded 120s TIMEOUT, or a runner OOM would
+          # ALL make this job go green for the WRONG reason. Assert the actual
+          # REASON the harness reported, not merely that something failed.
+          echo "$OUTPUT" | grep -qF 'cannot open /dev/vms' \
+            || { echo "FAIL: did not see the expected 'cannot open /dev/vms' failure text -- the job may have gone red for an unrelated reason (QEMU missing, boot panic, run_tests.sh timeout, runner OOM), not because the executive is absent"; exit 1; }
+
+          # ---------------------------------------------------------------
+          # PER-SUITE VERDICTS, DERIVED FROM THE CHECKOUT (vms-1d9)
+          #
+          # This block replaces an exact tally pin ('3 suites passed, N
+          # suites failed'). The pin's own comment argued "the brittleness IS
+          # the feature", and for detecting a suite that stops depending on
+          # /dev/vms that was true -- but it bought that with two defects,
+          # both proven by real podman builds + QEMU boots, not by argument:
+          #
+          # (a) IT BROKE ON A LEGITIMATE ADDITION. Adding one
+          #     test_syssvc_*.c that honestly needs /dev/vms moved the split
+          #     by one and turned THIS job red for a correct change -- which
+          #     defeats the glob-based generality vms-1d9 exists to hand to
+          #     vms-ef1 / vms-as1 / vms-pv1.
+          #
+          # (b) IT COULD NOT SEE A PER-SUITE REGRESSION. A tally is a sum:
+          #     one suite silently vanishing and another silently starting
+          #     to fail cancel out, and init.sh funnels an honest skip (77)
+          #     and a failed assertion (1) into the SAME counter, so a suite
+          #     whose assertions all failed produced byte-identical
+          #     accounting to the clean tree.
+          #
+          # Fix for both: assert the PER-SUITE exit code init.sh now prints
+          # ("=== SUITE <name> rc=<code> ==="), against a suite set DERIVED
+          # from `ls tests/qemu/test_*.c` at CI time. Nothing is maintained
+          # by hand, and each suite is judged on its own verdict:
+          #
+          #   test_syssvc_*      -> rc MUST be exactly 77 (honest skip).
+          #        These link the real src/libvms public sys$ API. The suite
+          #        returns 77 ONLY if every device-absent assertion it made
+          #        passed (`return fail > 0 ? 1 : EXIT_SKIP`), and those
+          #        assertions are that a public sys$ entry point called with
+          #        no executive present DID NOT REPORT SUCCESS. So:
+          #           rc=77 -> no sys$ entry point fabricated a success.
+          #           rc=1  -> one did, or another assertion failed. RED.
+          #           rc=0  -> the suite claims outright success with no
+          #                    /dev/vms at all. RED.
+          #        NOTE what is deliberately NOT asserted: any particular
+          #        status VALUE. vms-0ff ruled that OVMX has no
+          #        "executive absent" state to have a VMS-defined status for
+          #        (PID 1 refuses to boot without it), and the per-call
+          #        SS$_NOSUCHDEV returns sys_lock.c used to make were
+          #        DELETED as a fiction. Pinning a value here would freeze
+          #        that superseded contract into a gate. What survives the
+          #        ruling is strictly the absence of a fabricated success,
+          #        which is a property, not a VMS behaviour -- and it is
+          #        observable only in this rig, which is deliberately booted
+          #        without an executive (see this job's header).
+          #        CONTRACT for future test_syssvc_*.c (vms-ef1, vms-as1,
+          #        vms-pv1): the suite MUST require a real /dev/vms and MUST
+          #        exit 77 when it is absent, never 0.
+          #
+          #   (RETIRED, vms-165) The former POSITIVE control paired with the
+          #        negatives -- "test_kmod_vmsfs* | test_kmod_ods2_codec -> rc
+          #        MUST be 0" -- had its SUBJECT deleted. Those suites drove the
+          #        vmsfs.ko VFS driver (and its kernel-resident ods2ro codec),
+          #        which was executive-INDEPENDENT (it depended on vmsfs.ko, not
+          #        vms.ko), so a clean rc=0 with the executive absent proved the
+          #        harness was not failing indiscriminately (gutted, always-fail,
+          #        boot broken). vms-165 retired the whole vmsfs VFS driver, so
+          #        this positive control has NO SUBJECT left -- there is no
+          #        executive-INDEPENDENT suite in the tree to pass rc=0 here.
+          #        The VALUE it carried ("prove the gate CAN come up and run a
+          #        real binary to a clean decision, so the negatives below are
+          #        not proving-nothing") is PRESERVED, not dropped: it now rides
+          #        the test_syssvc_* rule below, which requires each such suite to
+          #        reach the SPECIFIC honest-skip code 77 (a real binary running
+          #        to a deliberate decision, plus the N_SYSSVC>=1 floor) -- a
+          #        gutted/always-fail/boot-broken harness cannot manufacture a 77
+          #        any more than it could a 0. So the harness-liveness signal
+          #        survives the driver's deletion; only its (now subjectless)
+          #        vehicle changed.
+          #
+          #   every other test_kmod_* -> rc MUST be nonzero.
+          #        Raw-ioctl executive tests; they cannot pass without
+          #        /dev/vms. An rc=0 here means something is faking the
+          #        executive.
+          #
+          # Nothing is maintained by hand; adding a suite of any of the three
+          # kinds is absorbed automatically.
+          # ---------------------------------------------------------------
+          EXPECTED=$(cd "$GITHUB_WORKSPACE" && ls tests/qemu/test_kmod_*.c tests/qemu/test_syssvc_*.c \
+                     | xargs -n1 basename | sed 's/\.c$//' | sort)
+          # `|| true`: grep -c exits 1 on an empty set, and GitHub runs `run:`
+          # steps under `bash -e`, so without it an empty derived set would
+          # abort the step with no diagnostic instead of hitting the explicit
+          # floor check below.
+          N_EXPECTED=$(echo "$EXPECTED" | grep -c . || true)
+          echo "Derived expected suites from the checkout ($N_EXPECTED):"
+          echo "$EXPECTED" | sed 's/^/  /'
+
+          # SUITE-COUNT FLOOR. The derived set above is drop-detecting for a
+          # suite that stops RUNNING, but blind to one whose .c is DELETED
+          # outright -- the expected set just shrinks with it. This floor is
+          # the guard against that, and it is the count on the tree at the
+          # time this line was written. It is a MINIMUM, so adding suites
+          # never requires touching it; only deliberately deleting one does,
+          # which is the intended forcing function.
+          #
+          # 12 -> 13 (vms-9fc adds test_kmod_bind). RECOMPUTED FROM THE MERGED
+          # TREE, not carried over from either side of the conflict: vms-9fc
+          # was branched while this block was still an exact-tally pin
+          # ('3 suites passed, N suites failed') and had bumped that pin
+          # instead. Two branches each adding one executive suite both write
+          # "N+1", git merges them cleanly, and the truth is "N+2" -- which is
+          # why this figure is derived by building the NEGATIVE_CONTROL=1 image
+          # and reading the verdicts, never by editing a number.
+          if [ "$N_EXPECTED" -lt 13 ]; then
+            echo "FAIL: only $N_EXPECTED suite sources under tests/qemu (expected at least 13) -- a suite source was deleted."
+            echo "Deleting an executive suite is not a way to make this gate pass."
+            exit 1
+          fi
+
+          BAD=""
+          N_SYSSVC=0
+          for suite in $EXPECTED; do
+            line=$(echo "$OUTPUT" | grep -F "=== SUITE $suite rc=" | tail -1)
+            if [ -z "$line" ]; then
+              BAD="$BAD
+            $suite: NEVER RAN (no verdict line -- not built, or not staged into the initramfs)"
+              continue
+            fi
+            rc=$(printf '%s' "$line" | sed -n 's/.*rc=\([0-9][0-9]*\).*/\1/p')
+            case "$suite" in
+              test_syssvc_*)
+                N_SYSSVC=$((N_SYSSVC+1))
+                if [ "$rc" = "0" ]; then
+                  BAD="$BAD
+            $suite: rc=0 -- claims SUCCESS through the public sys\$ API with NO /dev/vms present. A fake pass; expected the honest-skip code 77."
+                elif [ "$rc" != "77" ]; then
+                  # rc=1 (or any non-77, non-0 code) does NOT by itself mean a
+                  # fabricated success -- it only means "77 was not reached".
+                  # That has (at least) two distinct causes: a device-absent
+                  # assertion inside the suite failed (fabricated success,
+                  # vms-6b8's signature defect), OR some other assertion in
+                  # the suite failed for an unrelated reason. Printing one of
+                  # those as THE cause is a claim the suite's own FAIL lines
+                  # can refute (proven on PR #46, run 30725753152: both
+                  # fabricated-success assertions PASSED, DCL.EXE crashing was
+                  # the real defect). So report the CONDITION and paste this
+                  # suite's own FAIL lines and let the reader attribute --
+                  # vms-c9c.
+                  suite_fails=$(printf '%s\n' "$OUTPUT" | awk -v target="$suite" '
+                    /^=== SUITE / {
+                      if ($0 ~ ("^=== SUITE " target " rc=")) { printf "%s", buf; exit }
+                      buf=""
+                      next
+                    }
+                    { buf = buf $0 "\n" }
+                  ' | grep -F "FAIL:" || true)
+                  # `|| true`: grep -F exits 1 when this suite printed NO
+                  # FAIL: line at all -- the crash/segfault/killed-by-signal
+                  # shape (rc=139, rc=141/SIGPIPE, etc: real data per
+                  # CLAUDE.md Rule 9, not noise), where the process died
+                  # before reaching an assertion. This whole step runs under
+                  # bash -e (set at the top of this step), so an unguarded
+                  # grep here previously aborted the ENTIRE step with ZERO
+                  # diagnostic the instant a test_syssvc_* suite crashed
+                  # instead of failing an assertion -- reproduced with
+                  # tools/replay_ci_kernel_executive.py against a synthetic
+                  # rc=139/no-FAIL-line capture (vms-a3c). Same idiom, same
+                  # reason, as the N_EXPECTED `grep -c . || true` above.
+                  if [ -z "$suite_fails" ]; then
+                    suite_fails="(no FAIL: line was printed for this suite -- consistent with a crash, a killed process, or an exit before any assertion ran; NOT consistent with a specific assertion having been identified)"
+                  fi
+                  BAD="$BAD
+            $suite: rc=$rc -- expected the honest-skip code 77. Not reaching 77 has AT LEAST two known causes: a device-absent assertion inside the suite failing (a fabricated success, vms-6b8's signature defect), or another assertion failing for an unrelated reason -- both print the suite's own FAIL line(s), pasted below when present. This condition is not proven exhaustive; a suite that crashes before printing anything (see below) is a THIRD observed shape that produces neither:
+            $suite_fails"
+                fi
+                ;;
+              *)
+                if [ "$rc" = "0" ]; then
+                  BAD="$BAD
+            $suite: rc=0 -- a raw-ioctl executive test PASSED with no /dev/vms. Something is faking the executive."
+                fi
+                ;;
+            esac
+          done
+
+          if [ "$N_SYSSVC" -lt 1 ]; then
+            BAD="$BAD
+            no test_syssvc_* suite ran at all -- the userspace public-sys\$ layer is not in the initramfs, so the silent-fallback gate above checked nothing."
+          fi
+
+          # vms.ko must NOT have loaded (that is the scenario) -- the module-load
+          # negative. (The paired module-load POSITIVE was "vmsfs.ko must load
+          # with the executive absent"; vms-165 retired vmsfs.ko, so that
+          # subjectless check is gone -- the harness-liveness signal it shared
+          # now rides the test_syssvc_* honest-skip-77 rule above.)
+          echo "$OUTPUT" | grep -qF 'FAIL: vms.ko load or /dev/vms creation failed' \
+            || BAD="$BAD
+            vms.ko: expected the load to fail (NEGATIVE_CONTROL skips the insmod) but no such failure was reported -- the negative control may not have been applied at all."
+
+          if [ -n "$BAD" ]; then
+            echo "FAIL: negative control did not go red for the RIGHT REASON:$BAD"
+            exit 1
+          fi
+
+          # Proves the harness reached its own accounting rather than
+          # panicking or timing out. Deliberately NOT a count (see above).
+          echo "$OUTPUT" | grep -qE '=== FINAL RESULTS: [0-9]+ suites passed, [0-9]+ suites failed ===' \
+            || { echo "FAIL: the harness never reached its own FINAL RESULTS accounting -- boot panic, QEMU missing, or run_tests.sh timeout, not an executive-absent failure"; exit 1; }
+
+          echo "PASS: harness went red for the RIGHT REASON -- executive absent, all $N_SYSSVC public-sys\$ suite(s) returned the honest-skip code 77 (so no sys\$ entry point fabricated a success, AND a real binary ran to a deliberate decision -- the harness-liveness signal that the retired vmsfs positive control used to carry, vms-165), and every executive-dependent raw-ioctl suite failed"
+
+  # -----------------------------------------------------------------------
+  # Job 3b-netbsd: OVMX/NetBSD amd64 harness (vms-7f7, epic vms-8e8 Phase 2a)
+  #
+  # De-risks the OVMX/NetBSD SYSKRNL (epic vms-8e8) on a KNOWN architecture
+  # before the VAX arch port: there is NO qemu-system-vax, so the whole NetBSD
+  # executive is first proven on NetBSD/amd64 under qemu-system-x86_64 (see
+  # docs/design-ovmx-netbsd-syskrnl.md §6). This job boots a real NetBSD/amd64
+  # guest (installed from the pinned official release via anita), drives its
+  # serial console, and asserts `uname -srm` == "NetBSD <version> amd64". It is
+  # the foundation P2b (a `vms` pseudo-device on NetBSD) and P2c (an executive
+  # facility test against a real /dev/vms on NetBSD) build on.
+  #
+  # Docker here is BUILD/TEST TOOLING (CLAUDE.md Rule 9 / docs/runtime-target.md),
+  # exactly like the Linux kernel-executive job above: it boots an independent
+  # NetBSD guest in QEMU to TEST it. NetBSD-as-a-real-runtime is the product goal
+  # of epic vms-8e8; a QEMU harness that boots it for testing is not a runtime.
+  #
+  # GATING mirrors the expensive executive jobs: it never runs on an unrelated
+  # PR (only when tests/netbsd/** or the workflow changes), and always on
+  # push/merge_group/schedule.
+  #
+  # RUNNER-CAPABILITY CAVEAT (honest, per the anti-fake rule): GitHub-hosted
+  # runners have no /dev/kvm, so the guest runs under TCG. drive_netbsd.py
+  # detects this and still boots for real -- it is slower, not faked. The
+  # NetBSD install is done ONCE and the resulting disk image + download mirror
+  # are cached (actions/cache, keyed on the pinned release), so only a COLD
+  # cache pays the full TCG install cost; warm runs just boot the cached image.
+  # The first cold run on a fresh cache is the one at risk of the 120-minute
+  # cap under TCG; if that proves too tight on GitHub's runners, this job wants
+  # a KVM-capable (self-hosted or larger) runner -- it is wired and real, the
+  # only open question is the cold-install budget on the stock runner.
+  #
+  # The NEGATIVE CONTROL is a step in THIS job, not a separate one, because it
+  # reuses the warm cache the positive step just populated: it re-boots the same
+  # image asserting a deliberately WRONG arch (sparc64) and requires the harness
+  # to go RED -- proving the assertion has teeth for a couple of minutes of boot,
+  # not a second full install.
+  # -----------------------------------------------------------------------
+  # Job: NetBSD/amd64 vms module cross-compiles (rd vms-2d9). THE PER-PR NetBSD
+  # GATE -- BUILD ONLY, no QEMU, no console, no boot, ~1-2 min. It cross-compiles
+  # the `vms' kernel module (src/kernel-netbsd/) + the SHARED facility source
+  # (src/kernel-core/vms_eflag.c) against the pinned NetBSD/amd64 kernel headers
+  # with clang -target x86_64-unknown-netbsd, and relocatable-links them. This is
+  # the honest per-PR value: the facility logic is byte-identical Linux-side, so
+  # what a PR must catch is a NetBSD-backend / header-API DRIFT that breaks the
+  # NetBSD build -- a pure compile+link question. The full "does it RUN on NetBSD"
+  # proof (boot + module load + INV-6 cross-process event-flag proof) is the
+  # NIGHTLY console-driven harnesses below: QEMU-TCG on GitHub-hosted runners (no
+  # /dev/kvm) is too slow/variable for a reliable per-PR emulator test, so its
+  # coverage is MOVED to schedule, never deleted (validated in Phase C #393).
+  netbsd-amd64-vms-crosscompile:
+    name: NetBSD/amd64 vms module cross-compiles
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.netbsd == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang (NetBSD cross target)
+        run: |
+          # vms-216: retry transient apt mirror flakes.
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends clang
+
+      # Cache the extracted NetBSD kernel sources, keyed on the pinned release
+      # (netbsd_version.env carries NETBSD_SYSSRC_URL/_SHA512). No OVMX-source
+      # component -- a source change never re-downloads.
+      - name: Cache NetBSD kernel sources (syssrc)
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-src
+          key: netbsd-src-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-src-
+
+      - name: Fetch + verify + extract NetBSD syssrc (kernel headers) if not cached
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC1091
+          . tests/netbsd/netbsd_version.env
+          if [ ! -d .netbsd-src/usr/src/sys ]; then
+            mkdir -p .netbsd-src
+            curl -sSL -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL"
+            echo "$NETBSD_SYSSRC_SHA512  /tmp/syssrc.tgz" | sha512sum -c -
+            tar xzf /tmp/syssrc.tgz -C .netbsd-src usr/src/sys usr/src/common
+          fi
+
+      - name: Cross-compile the vms module + shared kernel-core (clang, NetBSD/amd64 kernel)
+        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang bash tests/netbsd/crosscompile.sh
+
+      - name: NEGATIVE CONTROL — a deliberately-broken TU must fail the cross-compile
+        run: OVMX_REPO="$PWD" NBSRC="$PWD/.netbsd-src" CC=clang CROSSCOMPILE_NEGCTL=1 bash tests/netbsd/crosscompile.sh
+
+  # -----------------------------------------------------------------------
+  netbsd-amd64-prime-cache:
+    name: NetBSD/amd64 Prime Install Cache (QEMU)
+    needs: changes
+    # NIGHTLY only (rd vms-2d9): this feeds the console-driven jobs, which are all
+    # nightly now (QEMU-TCG on GitHub runners is too slow/variable for reliable
+    # per-PR emulator tests). The per-PR NetBSD gate is the fast build-only
+    # cross-compile job (netbsd-amd64-vms-crosscompile), no QEMU.
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75    # a genuine cold TCG install is ~30-40min; rest is headroom
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # THE ONE WRITER of the shared cache (full actions/cache: restore + save).
+      # Same key/path as the restore-only test jobs.
+      - name: Cache installed NetBSD image (shared, version-keyed) — WRITER
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+
+      - name: Install (or restore) the shared NetBSD disk; prime the cache
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  -e PRIME_ONLY=1 -e HARNESS_TIMEOUT=4200 \
+                  --entrypoint /netbsd/run_p2c.sh \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: priming the shared NetBSD install cache failed ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "cache primed, exiting 0" \
+            || { echo "FAIL: prime driver did not report the shared disk installed"; exit 1; }
+          ls "$GITHUB_WORKSPACE"/.netbsd-cache/anita-netbsd-shared-*/wd0.img >/dev/null 2>&1 \
+            || { echo "FAIL: shared wd0.img not present after prime"; exit 1; }
+          echo "PASS: shared NetBSD disk installed; actions/cache will SAVE it warm for every test job"
+
+  netbsd-amd64-harness:
+    name: NetBSD/amd64 Executive Harness (QEMU)
+    needs: [changes, netbsd-amd64-prime-cache]
+    # NIGHTLY only (rd vms-2d9) — console-driven QEMU boot+drive, too flaky for
+    # per-PR under TCG. The per-PR build gate is netbsd-amd64-vms-crosscompile.
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Cache the installed NetBSD disk image + anita download mirror. Keyed on
+      # the pinned release/harness sources (netbsd_version.env lives under
+      # tests/netbsd/**), so a version bump or a harness change invalidates it
+      # and forces a fresh install; otherwise a warm cache skips the slow
+      # TCG install entirely.
+      # SHARED installed-disk cache (rd vms-2d9). All three NetBSD/amd64 jobs use
+      # the IDENTICAL key = f(NetBSD version + ISO sha + anita version) via
+      # netbsd_version.env, and the same path, so ONE cold install serves all
+      # three and NO OVMX-source change ever invalidates it (the OVMX module is
+      # built in-guest after boot, never baked into the disk).
+      # RESTORE-ONLY (rd vms-2d9): this test job never WRITES the cache. The
+      # prime job (a `needs:' of this job) already installed and SAVED the shared
+      # image, so we only restore it and always boot a WARM disk (~8min) -- the
+      # driver finds the image present and never installs. restore-only also means
+      # a timed-out/failed test job can never save a partial/corrupt image.
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: false
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+
+      - name: Boot NetBSD/amd64, drive the console, assert uname -srm
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: NetBSD/amd64 harness exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "PASS: uname -srm printed 'NetBSD 10.1 amd64'" \
+            || { echo "FAIL: did not see the asserted uname line -- job may have gone green without the real assertion"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 HARNESS PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
+          echo "PASS: NetBSD/amd64 booted under QEMU and uname -srm asserted as 'NetBSD 10.1 amd64'"
+
+      - name: NEGATIVE CONTROL — a wrong expected arch must redden the harness
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  -e EXPECT_ARCH=sparc64 \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 while asserting the WRONG arch (sparc64) -- the uname assertion has no teeth."
+            exit 1
+          fi
+          # Went red for the RIGHT reason: the assertion, not a build/boot break.
+          echo "$OUTPUT" | grep -qF "FAIL: uname -srm did not print 'NetBSD 10.1 sparc64'" \
+            || { echo "FAIL: nonzero exit but not the expected assertion-mismatch reason -- the negative control may have failed for an unrelated cause (build/boot/timeout)"; exit 1; }
+          echo "PASS: harness correctly went RED when asserting the wrong arch -- the assertion has teeth"
+
+  # -----------------------------------------------------------------------
+  # Job 3b-netbsd-p2b: OVMX/NetBSD `vms' pseudo-device (vms-bfe, epic vms-8e8 P2b)
+  #
+  # Builds P2a's harness image, then boots the cached NetBSD/amd64 guest and:
+  #   - builds the OVMX/NetBSD `vms' cdevsw pseudo-device (src/kernel-netbsd/)
+  #     in-guest with the NetBSD kernel-module toolchain (comp + syssrc),
+  #   - builds the userspace probe, which reaches /dev/vms THROUGH the transport
+  #     seam (src/libvmssys/kif_transport_netbsd.c),
+  #   - INV-6 NEGATIVE CONTROL: runs the probe with the module NOT loaded and
+  #     requires an HONEST device-absent failure (SS$_NOSUCHDEV) -- never a fake,
+  #   - modloads the module, mknod's /dev/vms, and asserts one version/ping ioctl
+  #     round-trips (PROBE: PING OK).
+  #
+  # Gated exactly like the P2a job: push/merge_group/schedule always, and on PRs
+  # only when tests/netbsd/** or the P2b src (src/kernel-netbsd/**, the transport
+  # seam) changes -- given the boot + in-guest build cost. It uses its OWN cache
+  # (comp + syssrc make its installed image different from P2a's), keyed on the
+  # pinned release + the P2b driver. TOOLING, NOT A RUNTIME (Rule 9): it boots a
+  # real NetBSD to build and load a real kernel module and test it, exactly as
+  # tests/qemu/ does for the Linux vms.ko executive.
+  #
+  # Runner-capability caveat (honest, same as P2a): GitHub-hosted runners have no
+  # /dev/kvm, so the guest runs under TCG. A COLD cache pays a full install that
+  # now also fetches comp + syssrc, which is the run at risk of the 120-minute
+  # cap; a warm cache boots, builds one small module, and probes in a few minutes.
+  # If the cold TCG install proves too tight, this job wants a KVM-capable runner;
+  # the harness itself is real either way.
+  netbsd-amd64-vms-pseudodev:
+    name: NetBSD/amd64 vms Pseudo-Device (QEMU)
+    needs: [changes, netbsd-amd64-prime-cache]
+    # NIGHTLY only (rd vms-2d9) — console-driven QEMU build+modload+PING, too flaky
+    # for per-PR under TCG. The per-PR build gate is netbsd-amd64-vms-crosscompile.
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Separate cache from P2a: the P2b image installs comp + syssrc, so its
+      # wd0.img is a different, larger image. Keyed on the pinned release + the
+      # P2b driver (which owns the set list); the driver/probe/kmod sources are
+      # rebuilt in-guest every run, so they do NOT need to invalidate the image.
+      # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
+      # P2a and P2c jobs, so one install serves all three; version-keyed only.
+      # RESTORE-ONLY (rd vms-2d9): this test job never WRITES the cache. The
+      # prime job (a `needs:' of this job) already installed and SAVED the shared
+      # image, so we only restore it and always boot a WARM disk (~8min) -- the
+      # driver finds the image present and never installs. restore-only also means
+      # a timed-out/failed test job can never save a partial/corrupt image.
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: false
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+
+      - name: Build + modload /dev/vms; assert one ping ioctl through the seam
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_p2b.sh \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: NetBSD/amd64 P2b harness exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "OK (INV-6): with no module loaded the probe FAILED HONESTLY" \
+            || { echo "FAIL: did not see the INV-6 module-absent honest-failure assertion"; exit 1; }
+          echo "$OUTPUT" | grep -qF "PROBE: PING OK" \
+            || { echo "FAIL: did not see the probe's PING OK line -- the ioctl did not round-trip"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 P2b HARNESS PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
+          echo "PASS: real in-kernel /dev/vms on NetBSD answered one ping ioctl through kif_transport_netbsd.c"
+
+      - name: NEGATIVE CONTROL — skipping modload must redden the PING assertion
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_p2b.sh \
+                  -e P2B_SKIP_LOAD=1 \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 with the module never loaded -- the PING OK assertion has no teeth."
+            exit 1
+          fi
+          # Went red for the RIGHT reason: the ping round-trip could not happen
+          # because /dev/vms was never created (not a build/boot/timeout break).
+          echo "$OUTPUT" | grep -qF "the version/ping ioctl did not round-trip" \
+            || { echo "FAIL: nonzero exit but not the expected missing-ioctl reason -- negative control may have failed for an unrelated cause"; exit 1; }
+          echo "PASS: harness correctly went RED when the module was not loaded -- the PING assertion has teeth"
+
+  # Job 3b-netbsd-p2c: OVMX/NetBSD event-flag facility (vms-4b4, epic vms-8e8 P2c)
+  #
+  # THE PHASE THAT PROVES THE SHARED EXECUTIVE CORE IS REAL ON NETBSD. Builds the
+  # harness image, boots the cached NetBSD/amd64 guest (comp + syssrc), and:
+  #   - builds the OVMX/NetBSD `vms' pseudo-device, which compiles the SAME
+  #     event-flag facility source the Linux vms.ko builds --
+  #     src/kernel-core/vms_eflag.c -- with the NetBSD backend
+  #     (exec_kbackend_netbsd.h / exec_list_netbsd.{h,c}). There is NO NetBSD copy
+  #     of the facility logic; the one source runs on both substrates,
+  #   - builds the userspace event-flag tool, which reaches /dev/vms THROUGH the
+  #     transport seam (src/libvmssys/kif_transport_netbsd.c) and $ASCEFCs the
+  #     well-known PERMANENT common cluster before each op (VMS-faithful),
+  #   - INV-6 NEGATIVE CONTROL: runs the tool with the module NOT loaded and
+  #     requires an HONEST device-absent failure (SS$_NOSUCHDEV) -- never a fake,
+  #   - CROSS-PROCESS PROOF: process A sets common flag 64; a DIFFERENT process B
+  #     reads it SET (control flag 65 stays CLEAR); a third clears it and sees the
+  #     previous state was-set; then a waiter BLOCKS in-kernel on flag 66 and is
+  #     WOKEN by a DIFFERENT process's set (the shared cv/lock wait/wake across a
+  #     process boundary). That cross-process visibility + wake is the
+  #     INV-6-decisive property (CLAUDE.md Rule 9): the flag lives in the shared
+  #     executive core's kernel memory, not in any one process.
+  #
+  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR and
+  # NOT the merge queue (rd vms-2d9). This is honest gating, not weakening:
+  #   * The per-PR NetBSD gate is P2a (Executive Harness) + P2b (vms Pseudo-Device)
+  #     + the prime job. P2b already BUILDS the shared src/kernel-core/vms_eflag.c
+  #     with the NetBSD backend (exec_kbackend_netbsd/exec_list_netbsd) and LOADS
+  #     the module and round-trips /dev/vms on every PR -- so a NetBSD-backend
+  #     COMPILE or module-load regression is caught per-PR.
+  #   * What runs here in addition is the heavy TWO-PROCESS cross-process proof
+  #     (build + modload + 4 processes + an in-kernel cv wait/wake). Under TCG on
+  #     shared GitHub runners that heavy path is reliable MOST of the time (green
+  #     in Phase C #393 at 14m50s, and 5/5 back-to-back local TCG runs) but flakes
+  #     intermittently on runner-variance (e.g. a stuck emulated-CD staging step),
+  #     and a flaky job must not gate PRs ("flaky = broken", CLAUDE.md Rule 8).
+  #   * So the cross-process proof is MOVED to the nightly full suite (never
+  #     deleted), where an occasional runner-variance retry is acceptable. It uses
+  #     the SAME shared prime cache and deterministic console as the per-PR jobs.
+  # Restore this to per-PR gating once GitHub-hosted NetBSD/amd64 runners gain KVM
+  # (or a dedicated KVM runner is available) so the heavy proof is fast + reliable.
+  netbsd-amd64-eflag-facility:
+    name: NetBSD/amd64 Event-Flag Facility (QEMU)
+    needs: [changes, netbsd-amd64-prime-cache]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
+      # P2a and P2b jobs, so one install serves all three; version-keyed only.
+      # This is the fix for the eflag job's cold-install timeout: its key no
+      # longer changes when src/kernel-core (or any OVMX source) changes.
+      # RESTORE-ONLY (rd vms-2d9): this test job never WRITES the cache. The
+      # prime job (a `needs:' of this job) already installed and SAVED the shared
+      # image, so we only restore it and always boot a WARM disk (~8min) -- the
+      # driver finds the image present and never installs. restore-only also means
+      # a timed-out/failed test job can never save a partial/corrupt image.
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: false
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+
+      - name: Build + modload /dev/vms; prove cross-process shared event-flag state
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_p2c.sh \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: NetBSD/amd64 P2c harness exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "OK (INV-6): with no module loaded the tool FAILED HONESTLY" \
+            || { echo "FAIL: did not see the INV-6 module-absent honest-failure assertion"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process B (a DIFFERENT process) observed common flag 64 SET" \
+            || { echo "FAIL: did not see the cross-process shared-kernel-state proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "the shared exec_cv_wait/broadcast holds cross-process" \
+            || { echo "FAIL: did not see the cross-process cv wait/wake proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 P2c HARNESS PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
+          echo "PASS: the SAME src/kernel-core/vms_eflag.c, compiled with the NetBSD backend, shared state across processes (INV-6)"
+
+      - name: NEGATIVE CONTROL — skipping the SETEF must redden the cross-process proof
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_p2c.sh \
+                  -e P2C_SKIP_SET=1 \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 with process A's SETEF skipped -- the cross-process proof has no teeth."
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "the cross-process shared-kernel-state proof did not hold" \
+            || { echo "FAIL: nonzero exit but not the expected missing-set reason -- negative control may have failed for an unrelated cause"; exit 1; }
+          echo "PASS: harness correctly went RED when the flag was never set -- the cross-process proof has teeth"
+
+  # -----------------------------------------------------------------------
+  # Job 3b-netbsd-p4a: OVMX/NetBSD executive cross-process proof (vms-f8a,
+  # epic vms-8e8 P4-A)
+  #
+  # P2c (above) proved ONE facility -- event flags -- is real, shared,
+  # cross-process kernel state. The four remaining facility backends (ASTs,
+  # access modes, mailboxes, process table, locks -- vms-9bb/vms-ca7/vms-d7a/
+  # vms-ff7) had already landed in src/kernel-netbsd/ and were already
+  # cross-compiled per-PR (netbsd-amd64-vms-crosscompile), but until this job
+  # none of them had ever been BUILT, LOADED and EXERCISED CROSS-PROCESS
+  # against a real, booted /dev/vms under QEMU. This job closes that gap for
+  # every remaining facility in ONE run:
+  #   - PROCTAB: process A $SETPRNs + stays alive; process B resolves it by
+  #     name with $GETJPI; process C enumerates with $PROCESS_SCAN and finds
+  #     the same row.
+  #   - MBX: process A $CREMBXes a PERMANENT mailbox; process B writes a
+  #     message into it BY NAME; process C reads the exact same bytes back.
+  #   - LOCK (DLM): process A holds an EXCLUSIVE lock; process B's
+  #     synchronous $ENQW for the same resource BLOCKS IN THE KERNEL; A
+  #     releases; B's blocked call unblocks and is granted.
+  #   - ACCESS MODES: process A $SETPRVs a real, permanent privilege change
+  #     on itself; process B's $GETJPI reads back the same mutated mask.
+  #   - AST: process A arms a mailbox write-attention AST and $HIBERs;
+  #     process B's write to that SAME mailbox is what lands the AST in A's
+  #     executive-resident queue and wakes A's $HIBER -- $DCLAST is
+  #     self-directed by VMS design, so this write-attention integration
+  #     (src/kernel-core/vms_mbx.c -> vms_ast_notify_arrival,
+  #     src/kernel-core/vms_ast.c) is the genuinely cross-process AST proof.
+  # Every new probe tool (vmsproctab, vmsmbx, vmslock, vmsaccess) is also run
+  # once with the module NOT loaded and must fail HONESTLY (SS$_NOSUCHDEV),
+  # never fake success (INV-6, CLAUDE.md Rule 9) -- the P2c discipline,
+  # repeated for each new tool. Combined with P2c, every one of the six
+  # executive facilities is now proven cross-process against a real
+  # NetBSD/amd64 /dev/vms.
+  #
+  # This run ALSO fixed a staging gap: the guest-src ISO the P2c-era Dockerfile
+  # built only ever copied vms_eflag.c into kernel-core/ and its header into
+  # kmod/, even though src/kernel-netbsd/Makefile's SRCS (and the per-PR
+  # crosscompile.sh gate) already required all six facility sources + the
+  # NetBSD hash/rbtree backends. The in-guest kmod build could not have linked
+  # before this job's Dockerfile update added the missing COPY lines.
+  #
+  # GATING: NIGHTLY (schedule) + manual (workflow_dispatch) ONLY -- NOT per-PR,
+  # for the exact reason the eflag job above gives (QEMU-TCG on a KVM-less
+  # GitHub runner is too slow/variable for a per-PR gate driving this many
+  # console commands). The per-PR NetBSD gate remains the fast build-only
+  # cross-compile job (netbsd-amd64-vms-crosscompile), which already compiles
+  # all six facilities on every PR. It uses the SAME shared prime cache and
+  # deterministic console as the other NetBSD/amd64 jobs.
+  netbsd-amd64-p4a-facilities-crossproc:
+    name: NetBSD/amd64 Executive Cross-Process Proof (vms-f8a, QEMU)
+    needs: [changes, netbsd-amd64-prime-cache]
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # SHARED installed-disk cache (rd vms-2d9) -- IDENTICAL key/path to the
+      # P2a/P2b/P2c jobs, so one install serves all of them.
+      - name: Restore shared NetBSD image (version-keyed, restore-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: .netbsd-cache
+          key: netbsd-amd64-install-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-amd64-install-
+          fail-on-cache-miss: false
+
+      - name: Build NetBSD harness image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/netbsd/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-netbsd-ktest:latest
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+
+      - name: Build + modload /dev/vms; prove proctab, mbx, lock, access, ast cross-process
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/.netbsd-cache"
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_p4a.sh \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -ne 0 ]; then
+            echo "FAIL: NetBSD/amd64 P4-A harness exited nonzero ($RC)"
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "OK (INV-6): all four new probe tools FAILED HONESTLY" \
+            || { echo "FAIL: did not see the INV-6 module-absent honest-failure assertion for the new tools"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process B (a DIFFERENT process) resolved A's name via \$GETJPI" \
+            || { echo "FAIL: did not see the proctab cross-process GETJPI proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process C enumerated the shared process table with \$PROCESS_SCAN" \
+            || { echo "FAIL: did not see the proctab cross-process PROCESS_SCAN proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process C (a THIRD, different process) read back the EXACT bytes B wrote" \
+            || { echo "FAIL: did not see the mailbox cross-process proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "the lock resource database + wait queue are shared kernel state" \
+            || { echo "FAIL: did not see the lock manager cross-process block/wake proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "process B (a DIFFERENT process) observed A's real \$SETPRV mutation via \$GETJPI" \
+            || { echo "FAIL: did not see the access-mode cross-process proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF "the AST queue + HIBER/wake path are shared kernel state reachable from a DIFFERENT process" \
+            || { echo "FAIL: did not see the AST cross-process write-attention proof"; exit 1; }
+          echo "$OUTPUT" | grep -qF 'NetBSD/amd64 P4-A HARNESS PASSED' \
+            || { echo "FAIL: harness did not report its own PASSED banner"; exit 1; }
+          echo "PASS: proctab, mbx, lock, access and ast -- all compiled from src/kernel-core/ with the NetBSD backend -- share real kernel state across processes (INV-6)"
+
+      - name: NEGATIVE CONTROL — skipping process A's registration must redden the proctab proof
+        run: |
+          set +e
+          RAW=$(docker run --rm -v "$GITHUB_WORKSPACE/.netbsd-cache:/cache" \
+                  --entrypoint /netbsd/run_p4a.sh \
+                  -e P4A_SKIP_PROCTAB_BG=1 \
+                  ovmx-netbsd-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          OUTPUT=$(printf '%s\n' "$RAW" | tr -d '\r')
+          echo "$OUTPUT"
+
+          if [ "$RC" -eq 0 ]; then
+            echo "FAIL: harness exited 0 with process A never registering a name -- the cross-process proctab proof has no teeth."
+            exit 1
+          fi
+          echo "$OUTPUT" | grep -qF "OK (negctl): B's GETJPI-by-name correctly found nothing when A never registered" \
+            || { echo "FAIL: nonzero exit but not the expected not-found reason -- negative control may have failed for an unrelated cause"; exit 1; }
+          echo "PASS: harness correctly went RED when process A never registered -- the proctab cross-process proof has teeth"
+
+  # -----------------------------------------------------------------------
+  kernel-executive-facility-negative-controls-shard:
+    name: Kernel Executive — Per-Facility Negative Controls (shard ${{ matrix.shard }}/${{ strategy.job-total }})
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    # Budget per shard: roughly one Nth of the manifest's defects (the NR%n
+    # partition below) plus the fixed image-build + positive-control cost
+    # every shard pays independently. Not hand-recited here because it drifts
+    # as the manifest grows -- run `sh tests/qemu/facility_defects.sh list |
+    # wc -l` for today's count. The pre-sharding full run measured 27m09s
+    # idle / 50m39s moderate / >60m heavy-load (rd vms-86a trail,
+    # 2026-08-04); a shard's sequential work is a small fraction of that, so
+    # 30m leaves headroom against the SAME per-defect variance without
+    # resurrecting a 60m+ job.
+    #
+    # SHARD-COUNT BUMP 6 -> 10 (0.5 integration). MEASURED on CI run
+    # 32447601184 (work/vms-0.5-final-dryrun): with 6 shards (~20 defects
+    # each) FIVE of six shards were KILLED at exactly 30.2m -- they hit THIS
+    # timeout-minutes, they did not fail (conclusion "cancelled", not
+    # "failure"). Shard 3 alone COMPLETED, at 24.5m, and passed -- so the
+    # manifest/gate is sound; what changed is that the flip + cascade grew the
+    # suite set (~76 -> ~97 suites), so every per-defect harness boot runs more
+    # suites and 20 defects/shard no longer fit in 30m under the 95-job run's
+    # runner contention. This is a capacity fact, NOT a facility_defects.sh
+    # inconsistency (coverage/selftest pass; shard 3 proved the defects redden).
+    # 120 defects / 10 shards = ~12/shard: at shard 3's measured ~1min/defect +
+    # ~5m fixed build+positive-control cost that is ~17m, comfortably inside 30m
+    # even at the first-batch contention that killed the 20-defect shards. The
+    # partition below is `NR % job-total`, so this is the ONLY line to touch --
+    # nothing is hand-maintained. Revisit as the manifest grows (raise the
+    # shard count, never delete a defect to fit).
+    #
+    # 30 -> 50 (0.5 integration, paired with the KE_WALL_TIMEOUT raise in
+    # tests/qemu/inject_and_run.sh). Splitting to 10 shards fixed the run #1
+    # 30m timeout, but that UNMASKED a per-defect truncation the outer timeout
+    # had hidden: with ~97 suites now, a mutation that makes event-flag $WAITFRs
+    # wait out their timeouts (eflag-readef/eflag-dacefc/lnm-manager-delete)
+    # pushes that defect's FULL-suite boot past the old 600s inner wall under CI
+    # contention -- "harness never reached FINAL RESULTS", a gate FAIL even
+    # though the control reddened. inject_and_run.sh now gives the full-suite
+    # boot an 1800s wall so it COMPLETES; a defect that used to fail at 600s now
+    # runs ~13m instead, so a shard holding one or two of them needs headroom
+    # past 30m. ~12 defects/shard, ~1min each for the fast majority + up to
+    # ~2-3 slow ones at ~13-20m + ~5m fixed build/positive-control fits in 50m.
+    # A genuine hang still surfaces: the 1800s inner wall fails the defect, and
+    # this 50m outer bound backstops a wedged shard.
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      # SHARD-BALLOON FIX (vms-86a part 2). MEASURED: the main-push run on
+      # d2d76fc failed on THREE shards AT ONCE (0/6, 1/6, 5/6) -- every shard
+      # runs QEMU + fork/pipe/multi-process tests, and with all 6 unbounded
+      # (GitHub's default matrix concurrency), they compete for host
+      # resources (CPU for concurrent QEMU guests, IPC timing) alongside
+      # whatever else this workflow is already running. That's resource
+      # starvation, not a per-defect logic bug -- the same shard slice that
+      # fails under load passes standalone. Capping how many run AT ONCE
+      # (not how many run in total -- all shards still execute, sequenced in
+      # batches) gives each shard the headroom it needs without trading away
+      # coverage or resurrecting the pre-#158 single-job wall-time problem.
+      # Revisit the number empirically if shards still balloon at 3.
+      max-parallel: 3
+      matrix:
+        # SHARD-COUNT BUMP 10 -> 22 (vms-6ea Bucket-A landing). MEASURED on
+        # run 34627048896: with the manifest at 138 defects (~14/shard at 10
+        # shards) SEVEN of ten shards were KILLED at exactly 50.0m -- they hit
+        # timeout-minutes above (conclusion "cancelled", not "failure"), while
+        # the three that finished ran 5m/23m/47m for the SAME ~14 defects. That
+        # 10x spread is runner-contention starvation, not a per-defect logic
+        # bug: a starved shard at ~3.4m/defect * 14 + fixed cost overruns 50m.
+        # Per this job's own standing rule ("raise the shard count, never
+        # delete a defect to fit"): 138 / 22 = ~6.3/shard -> ~26m even at the
+        # measured starved rate, well inside 50m. 22 (not 20) because the
+        # partition is `NR % job-total` and 138 is a multiple of 22 shifted by
+        # 6, so the manifest's tail (the newest defects, always the last-added
+        # lines) lands in the LOW-numbered shards that run in the first
+        # max-parallel batches -- a newly added control is provable without
+        # waiting on the whole matrix. This list is the ONLY line to touch;
+        # revisit (raise again) as the manifest grows.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-a68: run_facility_negctl.sh rebuilt tests/qemu/Dockerfile from
+      # scratch on every one of the 22 shards (no cache reuse) -- the script
+      # itself already skips its own rebuild when $BASE_TAG is present
+      # (`docker image inspect ovmx-ktest-negctl-base:latest`), so pre-building
+      # it here, with a GHA layer cache SHARED across shards (scope
+      # facility-negctl, same pattern as kernel-executive-shard's
+      # scope=kernel-executive), means each shard restores cached layers
+      # instead of paying a full from-scratch apt/build cost. load: true makes
+      # the image available to the script's own `docker image inspect` /
+      # `docker run` calls below exactly as if it had built it itself.
+      - name: Build facility-negctl test image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-ktest-negctl-base:latest
+          cache-from: type=gha,scope=facility-negctl
+          cache-to: type=gha,mode=max,scope=facility-negctl
+
+      # This job (across its shards) is the ONLY place the executive is
+      # actually exercised, and rd vms-b1f means it does not run on a dev host
+      # at all. It injects each defect, rebuilds vms.ko, boots the guest against
+      # a REAL /dev/vms, and asserts the RUNTIME property: the facility's own
+      # suite goes RED (run_facility_negctl.sh checks 1-4/8).
+      #
+      # The driver still emits an observed record to RECORD_OUT, but it is now
+      # ADVISORY ONLY: the aggregate ledger job that used to union the shards and
+      # compare against a committed tests/qemu/facility_negctl_observed.tsv was
+      # deleted in vms-49f (a string relation over the harness's own
+      # self-declarations -- "it may lint but MUST NOT be gated", CLAUDE.md Rule
+      # 9 amendment). Nothing downstream reads the emitted record.
+      - name: Every executive facility has a control that turns CI red against a real /dev/vms (this shard's slice)
+        env:
+          CONTAINER_ENGINE: docker
+          # Advisory emission only; no longer uploaded or compared (vms-49f).
+          FACILITY_NEGCTL_RECORD_OUT: ${{ runner.temp }}/facility_negctl_observed.tsv
+        run: |
+          set -eu
+          DEFECTS=$(sh tests/qemu/facility_defects.sh list \
+            | awk -v n="${{ strategy.job-total }}" -v i="${{ matrix.shard }}" 'NR % n == i')
+          echo "This shard (${{ matrix.shard }}/${{ strategy.job-total }}) runs:"
+          echo "$DEFECTS" | sed 's/^/  /'
+          # shellcheck disable=SC2086
+          tests/qemu/run_facility_negctl.sh $DEFECTS

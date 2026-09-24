@@ -1,0 +1,67 @@
+Raw 0x6007 frames flooded by the in-page L2 hub, 3-node run (boot order C,A,B),
+captured at the hub itself. abs 22..23 is LE16(cluster group) -- 01 01 = 257.
+
+ count  src    -> dst                      type  abs22..23  len
+   733  OVMXA  -> OVMXB                      b4  01 01      134
+   732  OVMXB  -> MCAST ab:00:04:01:01:02    a0  01 01      134
+   732  OVMXB  -> OVMXA                      b3  01 01      134
+   255  OVMXA  -> MCAST ab:00:04:01:01:02    a0  01 01      134
+   215  OVMXB  -> OVMXA                      b4  01 01      134
+   214  OVMXA  -> OVMXB                      b3  01 01      134
+   174  OVMXA  -> VAXC                       48  01 01      60
+   148  VAXC   -> OVMXA                      4b  01 01      204
+   143  OVMXA  -> VAXC                       4b  01 01      204
+    96  VAXC   -> MCAST ab:00:04:01:01:02    a0  01 01      134
+    66  VAXC   -> OVMXA                      b3  01 01      134
+    66  OVMXA  -> VAXC                       b4  01 01      134
+    42  OVMXA  -> VAXC                       b3  01 01      134
+    42  VAXC   -> OVMXA                      b4  01 01      134
+    25  OVMXB  -> OVMXA                      48  01 01      60
+    24  OVMXA  -> OVMXB                      48  01 01      60
+    15  VAXC   -> OVMXA                      48  01 01      60
+    10  OVMXA  -> OVMXB                      4b  01 01      204
+     9  OVMXB  -> OVMXA                      4b  01 01      204
+     6  OVMXA  -> VAXC                       5b  01 01      124
+     6  VAXC   -> OVMXA                      4b  01 01      80
+     6  OVMXA  -> VAXC                       4b  01 01      72
+     6  VAXC   -> OVMXA                      4b  01 01      72
+     6  VAXC   -> OVMXA                      4b  01 01      76
+     4  OVMXB  -> VAXC                       b3  01 01      134
+     4  OVMXA  -> OVMXB                      4b  01 01      72
+     4  OVMXB  -> OVMXA                      4b  01 01      72
+     3  VAXC   -> OVMXA                      4b  01 01      124
+     3  OVMXA  -> VAXC                       5b  01 01      76
+     3  OVMXA  -> VAXC                       5b  01 01      108
+     3  VAXC   -> OVMXA                      4b  01 01      108
+     3  OVMXA  -> VAXC                       4b  01 01      76
+     3  OVMXA  -> VAXC                       5b  01 01      72
+     3  OVMXA  -> OVMXB                      5b  01 01      124
+     3  OVMXB  -> OVMXA                      5b  01 01      124
+     3  VAXC   -> OVMXB                      b4  01 01      134
+     2  OVMXA  -> OVMXB                      5b  01 01      108
+     2  OVMXB  -> OVMXA                      5b  01 01      108
+     2  OVMXA  -> OVMXB                      4b  01 01      76
+     2  OVMXB  -> OVMXA                      4b  01 01      76
+     2  OVMXA  -> OVMXB                      5b  01 01      80
+     2  VAXC   -> OVMXB                      41  01 01      120
+     2  OVMXB  -> OVMXA                      5b  01 01      76
+     2  OVMXB  -> VAXC                       41  01 01      120
+     1  OVMXA  -> OVMXB                      b3  01 01      1514
+     1  OVMXA  -> OVMXB                      41  01 01      120
+     1  OVMXB  -> OVMXA                      b3  01 01      1514
+     1  OVMXB  -> OVMXA                      41  01 01      120
+     1  OVMXA  -> OVMXB                      41  01 01      60
+     1  OVMXB  -> OVMXA                      5b  01 01      80
+     1  OVMXA  -> OVMXB                      5b  01 01      76
+     1  VAXC   -> OVMXB                      b2  01 01      134
+     1  OVMXB  -> VAXC                       b3  01 01      1514
+     1  OVMXB  -> OVMXA                      4b  01 01      108
+     1  OVMXA  -> OVMXB                      4b  01 01      108
+     1  VAXC   -> OVMXB                      41  01 01      60
+     1  OVMXB  -> VAXC                       41  01 01      60
+     1  VAXC   -> MCAST ab:00:04:01:01:02    b1  01 01      134
+
+Every frame each node emitted, by the group number on the frame:
+  OVMXA  abs22..23 = 01 01  (group 257)  x1703
+  OVMXB  abs22..23 = 01 01  (group 257)  x1738
+  VAXC   abs22..23 = 01 01  (group 257)  x399

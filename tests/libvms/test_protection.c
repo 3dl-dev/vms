@@ -280,7 +280,7 @@ static int fork_and_chkpro_as(int (*synthesize)(gid_t, uid_t),
  * synthesize_direct - become (syn_gid, syn_uid) with plain setgid()+setuid(),
  * no namespace. Succeeds only if this process already holds CAP_SETGID and
  * CAP_SETUID (root, or file capabilities -- see the "Grant..." step in
- * .github/workflows/ci.yml, which sets exactly these two on this test's own
+ * .github/workflows/ci-kernel-executive.yml, which sets exactly these two on this test's own
  * binary so the GitHub-hosted runner can run this suite honestly). This is
  * the SAME mechanism tests/qemu/test_syssvc_ident.c's run_dcl(drop=1) uses
  * under QEMU (which runs as root); here it is reached by capability grant

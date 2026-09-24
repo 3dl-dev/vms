@@ -243,7 +243,10 @@ class TestRosterUniqueness(unittest.TestCase):
         self.assertEqual(n["name"], "OVMXA")
         self.assertLessEqual(len(n["name"]), 6)
         self.assertEqual(n["votes"], 1)
-        self.assertEqual(n["expected_votes"], 2)
+        # rd vms-6d3d: a real three-node VMScluster carries EXPECTED_VOTES = the
+        # total VOTES of its members on every node it authors. This was 2, left
+        # over from the proven 2-node milestone.
+        self.assertEqual(n["expected_votes"], 3)
         self.assertEqual(n["group"], 257)
         with tempfile.TemporaryDirectory() as d:
             written = M.emit_roster([n], d, caut_writer="auto")

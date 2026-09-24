@@ -96,9 +96,23 @@
 #
 #   join-relay-unanswered                vms_cnxman_join_fsm.c
 #
+# GROWN (vms-6d3d) with the COLD-FORMATION vote sum, the property that decides
+# whether an executive may mint a cluster system id:
+#
+#   quorum-form-set-ignores-peers        vms_cnxman_quorum.c
+#   makes cnxman_quorum_form_set() sum only the LOCAL system's votes, i.e.
+#   restores the pre-vms-6d3d rule that a node may found only a cluster its
+#   OWN votes already carry. Every refusal in the negctl suite still holds
+#   (a lone or non-voting node still founds nothing); what goes is the
+#   documented two-node VMScluster -- VOTES=1 / EXPECTED_VOTES=2 on both --
+#   which two real OpenVMS VAX V7.3 systems do form
+#   (tests/lab/captures/vms-6d3d-coldform-ev2-20260924/) and which no pair of
+#   OVMX nodes could form under the old rule.
+#
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+quorum-form-set-ignores-peers
 codec-vc-zero-incarnation-not-refused
 codec-cm-short-body-not-refused
 codec-blk-no-trailer-not-honest
@@ -189,6 +203,29 @@ cmd_owned() { echo "$HOST_OWNED_UNITS"; }
 defect_field() {
     _d="$1"; _f="$2"
     case "$_d" in
+
+    quorum-form-set-ignores-peers)
+        case "$_f" in
+        facility)     echo "cluster COLD-FORMATION quorum: p. 7-6 step 1's proposed set is this system PLUS the systems it can see, and the votes weighed against quorum are their COMBINED votes (rd vms-6d3d)";;
+        targets)      echo "kernel-core/vms_cnxman_quorum.c";;
+        suites_red)   echo "test_cnxman_genesis";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_quorum_form_set() sums only the LOCAL CSB's votes, so a peer whose PARAMS really arrived over a really-open circuit contributes nothing -- the pre-vms-6d3d rule that a node may found only a cluster its OWN votes already carry. Every refusal still refuses; what stops forming is the documented two-node VMScluster (VOTES=1/EXPECTED_VOTES=2 on both), which two real OpenVMS VAX V7.3 systems do form.";;
+        require_fail) cat <<'EOF'
+VOTES=1/EV=2 + a seen VOTES=1/EV=2 peer: FOUNDS on 2 votes
+a peer expecting 3 votes: quorum 2, and 2 votes meet it
+VOTES=2 + a seen VOTES=1/EV=5 peer: 3 votes meet quorum 3
+VOTES=1/EV=2 founds on the COMBINED two votes
+... at generation 1, CSV slot 1
+... and phase2 committed it a member
+EXACTLY ONE of the two founds
+... it stands down for the other candidate
+... but now because that system takes precedence
+... and it is named
+... by its real sysid
+EOF
+                      ;;
+        esac;;
 
     coord-genesis-refusal-uncounted)
         case "$_f" in
@@ -494,6 +531,12 @@ EOF
 apply_edit() {
     _file="$1"; _d="$2"
     case "$_d" in
+    quorum-form-set-ignores-peers)
+        # The ONE unconditional add of a CSB's votes into the cold-formation
+        # sum; making it conditional on the LOCAL flag is exactly the old
+        # own-votes-only rule, with nothing else in the walk touched.
+        sed -i 's|^\t\tout->sum_votes += (uint32_t)csb->votes;$|\t\tif ((csb->flags \& VMS_CSB_F_LOCAL) != 0u)  /* NEGCTL quorum-form-set-ignores-peers */\n\t\t\tout->sum_votes += (uint32_t)csb->votes;|' "$_file";;
+
     coord-genesis-refusal-uncounted)
         # c->genesis_refused_noquorum++; is unique in this file (grep -c is
         # 1) -- no line anchor needed. The refusal three lines below is left

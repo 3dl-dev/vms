@@ -1691,10 +1691,12 @@ enum cnxman_coord_verdict cnxman_coord_propose_remove(struct cnxman_coord *c,
 /* ==========================================================================
  * GENESIS -- forming a cluster from nothing (docs/design-cluster-genesis.md)
  *
- * The documented formation algorithm: the first node up that satisfies quorum
- * BY ITS OWN VOTES forms a single-node cluster as the founding member, takes
- * cluster generation 1 and becomes its coordinator; every later node joins
- * through it. It lives in THIS file because minting a CSID is the one thing
+ * The documented formation algorithm: a node waiting to form or join applies
+ * p. 7-6 to the PROPOSED SET -- itself plus every system it can currently see
+ * -- and, when their COMBINED votes meet quorum, forms a cluster as its
+ * founding member, takes cluster generation 1 and becomes its coordinator;
+ * every later node joins through it. It lives in THIS file because minting a
+ * CSID is the one thing
  * only a coordinator does (see "CSID ASSIGNMENT" above), and it is expressed
  * as an ordinary transition with an empty participant set -- the same
  * degenerate 12 x (M-1) = 0 path a two-node cluster already takes when it
@@ -1707,8 +1709,10 @@ enum cnxman_coord_verdict cnxman_coord_propose_remove(struct cnxman_coord *c,
  * and the quorum predicate is the load-bearing one -- the predecessor of this
  * stack defaulted the local CSID to 1 unconditionally and became a phantom
  * cluster of one (the note at cnxman_coord_select() above records it). A node
- * whose VOTES are 0, or short of its own EXPECTED_VOTES' quorum, is REFUSED
- * here and mints nothing, however it was called.
+ * whose VOTES are 0, or whose visible systems are short of quorum between
+ * them, is REFUSED here and mints nothing, however it was called -- and every
+ * vote in that sum was read from a CSB that really received the system's
+ * PARAMS record over a circuit that is really OPEN (rd vms-6d3d).
  * ========================================================================== */
 
 /*
@@ -1762,20 +1766,39 @@ static int coord_peer_in_cluster(const struct vms_csb *csb)
 }
 
 /*
- * (3) COULD THIS SYSTEM FORM A CLUSTER ITSELF? Only a system with VOTES > 0 can
- * (pp. 7-28, 7-33), so a peer whose PARAMS this node has REALLY RECEIVED and
- * which advertise zero votes is not a rival and must not be deferred to --
- * deferring to a node that can never found is the same deadlock in a new shape.
+ * (3) COULD THIS SYSTEM FORM THE CLUSTER THIS NODE IS CONTEMPLATING? Standing
+ * down for a system that could never have formed it is the same deadlock in a
+ * new shape, so the question is asked with the SAME arithmetic this node's own
+ * founding gate is about to be asked (cnxman_quorum_could_found(), p. 7-6) --
+ * over the SAME proposed set, with the peer's OWN advertised VOTES and
+ * EXPECTED_VOTES in place of this node's. One formula, two subjects.
  *
- * A peer whose PARAMS have not arrived is UNKNOWN, and unknown counts as a
- * rival: this node stands down for one more beat rather than form beside a
- * system it has not finished listening to.
+ * Old CEVOTES is the one term of that formula a peer does not advertise, so 0
+ * is used for it. That is the value which makes the peer MOST likely to
+ * qualify, i.e. most likely to be treated as a rival -- deliberately, because
+ * standing down costs a beat and forming beside a live candidate costs a
+ * partition.
+ *
+ * THREE ANSWERS COME BEFORE THE ARITHMETIC, in this order:
+ *   - PARAMS have not arrived: an un-advertised VOTES is UNKNOWN, never a
+ *     zero, so there is nothing to evaluate -- RIVAL (INV-6);
+ *   - the PARAMS that DID arrive advertise VOTES = 0: pp. 7-28/7-33 make that
+ *     system incapable of forming ANY cluster, reachable or not -- NOT a
+ *     rival, and deferring to it is the deadlock this clause exists to stop;
+ *   - it is not in the proposed set, i.e. this node cannot currently reach it:
+ *     there is no set to judge what it could form over -- RIVAL.
  */
-static int coord_peer_is_form_candidate(const struct vms_csb *csb)
+static int coord_peer_is_form_candidate(const struct vms_csb *csb,
+					const struct cnxman_form_set *set)
 {
 	if (!csb->params_valid)
 		return 1;
-	return csb->votes > 0u;
+	if (csb->votes == 0u)
+		return 0;
+	if (!cnxman_quorum_form_set_contains(csb))
+		return 1;
+	return cnxman_quorum_could_found(0u, csb->votes, csb->expected_votes,
+					 set, (uint16_t *)0);
 }
 
 /*
@@ -1786,9 +1809,10 @@ static int coord_peer_is_form_candidate(const struct vms_csb *csb)
  * carried into that CSB.
  */
 static int coord_peer_outranks(const struct cnxman_coord *c,
-			       const struct vms_csb *csb)
+			       const struct vms_csb *csb,
+			       const struct cnxman_form_set *set)
 {
-	if (!csb->sysid_valid || !coord_peer_is_form_candidate(csb))
+	if (!csb->sysid_valid || !coord_peer_is_form_candidate(csb, set))
 		return 0;
 	return csb->sysid < c->cl->params.scssystemid;
 }
@@ -1832,6 +1856,7 @@ static vms_csid_t coord_genesis_csid(struct cnxman_coord *c)
 static enum cnxman_coord_refusal
 coord_form_peer_bar(struct cnxman_coord *c,
 		    const struct cnxman_form_evidence *ev,
+		    const struct cnxman_form_set *set,
 		    const struct vms_csb **who)
 {
 	struct vms_club *club = coord_club(c);
@@ -1850,7 +1875,7 @@ coord_form_peer_bar(struct cnxman_coord *c,
 		if (!csb->sysid_valid)
 			continue;
 		seen++;
-		if (outranker == NULL && coord_peer_outranks(c, csb))
+		if (outranker == NULL && coord_peer_outranks(c, csb, set))
 			outranker = csb;
 	}
 	if (seen == 0u)
@@ -1896,7 +1921,14 @@ static int coord_found_gate(struct cnxman_coord *c, vms_csid_t csid,
 {
 	struct vms_club *club = coord_club(c);
 	const struct vms_csb *who = NULL;
+	struct cnxman_form_set set;
 	enum cnxman_coord_refusal bar;
+
+	/* p. 7-6 step 1, ONCE: the proposed set of a cold formation -- this
+	 * system plus every system it can currently see. The election below and
+	 * the quorum test underneath it are then asking about the SAME set, so
+	 * they cannot disagree about who is here. */
+	cnxman_quorum_form_set(club, &set);
 
 	if (club->local_csid_valid)
 		return coord_found_refuse(c, CNXMAN_COORD_REF_BUSY,
@@ -1910,20 +1942,23 @@ static int coord_found_gate(struct cnxman_coord *c, vms_csid_t csid,
 		return coord_found_refuse(c, CNXMAN_COORD_REF_NO_SUBJECT,
 			"%CNXMAN, no system block for this node; not forming a "
 			"cluster");
-	bar = coord_form_peer_bar(c, ev, &who);
+	bar = coord_form_peer_bar(c, ev, &set, &who);
 	if (bar != CNXMAN_COORD_REF_NONE)
 		return coord_found_refuse_peer(c, bar, who);
 	/*
-	 * THE PREDICATE. p. 7-6 applied to a proposed set of one: this node
-	 * founds only if its OWN configured VOTES already meet the quorum its
-	 * own EXPECTED_VOTES implies. cnxman_quorum_own_votes_suffice() is the
-	 * same arithmetic the running cluster recomputes with.
+	 * THE PREDICATE. p. 7-6 applied to the proposed set assembled above:
+	 * this node founds only if the COMBINED votes of the systems it can see
+	 * -- itself included -- meet the quorum that set's EXPECTED_VOTES
+	 * implies. cnxman_quorum_form_votes_suffice() is the same arithmetic the
+	 * running cluster recomputes with, and a node alone still reaches it
+	 * with a set of one (rd vms-6d3d: the real VAX with VOTES=1 /
+	 * EXPECTED_VOTES=2 waits alone and forms the moment its peer arrives).
 	 */
-	if (!cnxman_quorum_own_votes_suffice(c->cl, (uint16_t *)0)) {
+	if (!cnxman_quorum_form_votes_suffice(c->cl, &set, (uint16_t *)0)) {
 		c->genesis_refused_noquorum++;
 		return coord_found_refuse(c, CNXMAN_COORD_REF_NO_QUORUM,
-			"%CNXMAN, this node does not have quorum by its own "
-			"votes; waiting to form or join an OpenVMS Cluster");
+			"%CNXMAN, the systems this node can see do not have "
+			"quorum; waiting to form or join an OpenVMS Cluster");
 	}
 	if (csid == (vms_csid_t)0 || !coord_slot_expressible(csid))
 		return coord_found_refuse(c, CNXMAN_COORD_REF_NO_SLOT,
@@ -1956,8 +1991,8 @@ int cnxman_coord_found(struct cnxman_coord *c,
 	 * is -- is news again (rd vms-151). */
 	c->genesis_said = (uint8_t)CNXMAN_COORD_REF_NONE;
 	c->genesis_opens++;
-	coord_log(c, "%CNXMAN, this node has quorum by its own votes: forming "
-		     "an OpenVMS Cluster");
+	coord_log(c, "%CNXMAN, the systems this node can see have quorum: "
+		     "forming an OpenVMS Cluster");
 
 	if (coord_open_transition(c, VMS_CM_CLASS_ADD, -1, 0u) != 0)
 		return -1;

@@ -98,14 +98,26 @@ report the other as a `MEMBER`.
    the join to be refused outright (the lab documents this as `%PEA0, Remote
    System Conflicts with Known System`).
 
-2. **Give exactly one node quorum by its own votes.** The node that should
-   *found* the cluster needs `VOTES` ≥ the quorum its own `EXPECTED_VOTES`
-   implies — the simplest case, and the one the CI gate above uses, is
-   `VOTES=1`/`EXPECTED_VOTES=1` on the founder. A node with `VOTES=0` can
-   never found (`cnxman_coord_found()`'s own predicate) — it can only join
-   what another node already formed. Both prompts default to `1` at the
-   `CLUSTER_CONFIG_LAN.COM` "Votes this node contributes" step; a would-be
-   joiner should answer `0`.
+2. **Set `EXPECTED_VOTES` to the total votes the finished cluster will hold.**
+   That is the VMS rule, and it is what decides quorum:
+   `QUORUM = (EXPECTED_VOTES + 2) / 2`, integer. A two-node cluster with one
+   vote each is `VOTES=1`/`EXPECTED_VOTES=2` on **both** nodes — quorum 2,
+   which neither node reaches alone and both reach together. A node forms the
+   cluster when the **combined** votes of the systems it can see (itself
+   included, and only systems whose parameters it has really received over an
+   open circuit) reach that quorum; until then it waits, and says
+   `%CNXMAN, the systems this node can see do not have quorum; waiting to form
+   or join an OpenVMS Cluster`. A node with `VOTES=0` can never found
+   (`cnxman_coord_found()`'s own predicate) — it can only join what another
+   node already formed.
+
+   The simplest case, and the one the `test_cluster_config_lan_2node_e2e.sh`
+   gate uses, is `VOTES=1`/`EXPECTED_VOTES=1` on the founder and `VOTES=0` on
+   the joiner: the founder then forms alone, before the other node is even up.
+   The `RIG_MODE=coldform` gate
+   ([`tests/qemu/run_cluster_genesis_2node.sh`](../tests/qemu/run_cluster_genesis_2node.sh))
+   covers the textbook pair instead. Both prompts default to `1` at the
+   `CLUSTER_CONFIG_LAN.COM` "Votes this node contributes" step.
 
 3. **Match the cluster group.** Every node in a cluster must carry the **same
    cluster group number** — it selects the LAVC HELLO multicast address
@@ -129,9 +141,14 @@ report the other as a `MEMBER`.
 
 4. **Reboot both nodes, the first-up one alone.** The first node to boot with
    `VAXCLUSTER` enabled spends its whole `RECNXINTERVAL` (default 20s)
-   discovery window hearing nobody before it founds — a cluster is formed by
+   discovery window before it founds anything — a cluster is formed by
    booting its first member and then booting the rest, exactly as on a real
-   VAXcluster. Boot the second node only after the first has founded (or at
+   VAXcluster. With the `VOTES=1`/`EXPECTED_VOTES=1` founder above it forms at
+   the end of that window whether or not anyone else is there; with the
+   textbook `EXPECTED_VOTES=2` pair it waits until the second node's circuit is
+   up and then forms on their combined votes (which is what a real V7.3 system
+   does — `tests/lab/captures/vms-6d3d-coldform-ev2-20260924/`). Boot the
+   second node only after the first has founded (or at
    least come up); a node that hears a peer during its own boot joins rather
    than founding one of its own.
 

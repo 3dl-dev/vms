@@ -146,7 +146,7 @@ static void test_votes_zero_never_founds(void)
 	printf("[negctl] VOTES=0 (the SYSGEN default)\n");
 	bed_init(0u, 0u, (vms_scs_sysid_t)FOUNDER_SYSID);
 
-	ct_check(!cnxman_quorum_own_votes_suffice(&g.cl, (uint16_t *)0),
+	ct_check(!cnxman_quorum_form_votes_suffice(&g.cl, (const struct cnxman_form_set *)0, (uint16_t *)0),
 		 "the predicate says NO before anything is attempted");
 	bed_snapshot();
 	check_refused(CNXMAN_COORD_REF_NO_QUORUM,
@@ -179,8 +179,10 @@ static void test_subquorum_never_founds(void)
 	printf("[negctl] VOTES=1, EXPECTED_VOTES=2 (each half of a pair)\n");
 	bed_init(1u, 2u, (vms_scs_sysid_t)FOUNDER_SYSID);
 
-	ct_check(!cnxman_quorum_own_votes_suffice(&g.cl, &quorum),
-		 "one vote does not satisfy a two-vote quorum");
+	ct_check(!cnxman_quorum_form_votes_suffice(&g.cl,
+			(const struct cnxman_form_set *)0, &quorum),
+		 "one vote, and NOBODY IN SIGHT, does not satisfy a two-vote "
+		 "quorum -- the oracle's eighteen silent minutes (rd vms-6d3d)");
 	ct_check_eq_u32(quorum, 2u, "... QUORUM = (2+2)/2 = 2 (p. 7-6)");
 	bed_snapshot();
 	check_refused(CNXMAN_COORD_REF_NO_QUORUM,
@@ -219,7 +221,7 @@ static void test_peer_present_joins_not_founds(void)
 	peer = cnxman_club_alloc_csb(&g.cl.club, (vms_scs_sysid_t)1026u, 1);
 	cnxman_csb_set_scsnode(peer, (const uint8_t *)"VAX1", 4u);
 
-	ct_check(cnxman_quorum_own_votes_suffice(&g.cl, (uint16_t *)0),
+	ct_check(cnxman_quorum_form_votes_suffice(&g.cl, (const struct cnxman_form_set *)0, (uint16_t *)0),
 		 "this node WOULD satisfy quorum on its own votes");
 	bed_snapshot();
 	/*

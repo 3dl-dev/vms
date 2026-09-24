@@ -2116,9 +2116,10 @@ static int cnxman_genesis_window_elapsed(struct vms_cnxman *cn)
  *   including the one that ended because every system declined (E80) -- leaves
  *   the FSM in IDLE, which is precisely the state in which asking is right.
  *
- *   QUORUM BY OWN VOTES, asked here too -- the same one function, not a second
- *   formula -- so that the node which will never be a founder never reaches
- *   found()'s refusal line. found() applies it again as the load-bearing gate.
+ *   QUORUM OVER THE SYSTEMS THIS NODE CAN SEE, asked here too -- the same one
+ *   function, not a second formula -- so that the node which cannot be a
+ *   founder this beat never reaches found()'s refusal line. found() assembles
+ *   the proposed set again and applies it as the load-bearing gate.
  *
  * WHAT IS NO LONGER ASKED HERE, and why (rd vms-151). "Is there a system to
  * join?" used to be a clause of this gate, and it refused whenever ANY system
@@ -2139,7 +2140,8 @@ static int cnxman_genesis_may_ask(struct vms_cnxman *cn)
 		return 0;
 	if (cn->join.state != (uint8_t)CNXMAN_JOIN_IDLE)
 		return 0;
-	if (!cnxman_quorum_own_votes_suffice(cl, (uint16_t *)0))
+	if (!cnxman_quorum_form_votes_suffice(cl, (const struct cnxman_form_set *)0,
+					      (uint16_t *)0))
 		return 0;
 	return cnxman_genesis_window_elapsed(cn);
 }

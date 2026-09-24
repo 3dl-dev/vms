@@ -23,14 +23,14 @@
 # robustness observation, recorded rather than worked around here.)
 #
 # WHY THE START IS STAGGERED, and why that is faithful rather than convenient.
-# Genesis is refused while any peer connection manager is present
-# (cnxman_genesis_may_ask -> cnxman_join_target_present): a node that can hear
-# somebody must JOIN, not FORM. So two nodes powered on together can never
-# form a cluster -- and neither can two real VAXes; a VMScluster is formed by
-# booting its first member and then booting the rest. The rig reproduces that:
-# node A boots alone, spends its whole RECNXINTERVAL discovery window hearing
-# nobody, and founds generation 1; node B is powered on afterwards and must
-# join what is already there.
+# A VMScluster is formed by booting its first member and then booting the rest,
+# and the rig reproduces that: node A boots alone, spends its whole
+# RECNXINTERVAL discovery window, and founds generation 1; node B is powered on
+# afterwards and must join what is already there. (Genesis is no longer refused
+# merely because a peer is audible -- rd vms-151 replaced that blanket rule with
+# the three-clause election, since a system that is not in a cluster cannot
+# admit anybody. The stagger remains how the roles are made unambiguous: node A
+# is the only system on the segment when it founds.)
 #
 # NODE ROLES (SYSGEN, nothing else):
 #   A  OVMXA/1025  VOTES=1 EXPECTED_VOTES=1 VAXCLUSTER=2  -> quorum by own votes
@@ -40,10 +40,18 @@
 #
 #   proof   (default) A founds, B joins, both reach MEMBER with CN=2.
 #
-#   negctl  node A is given VOTES=0 too. Nothing else changes. Neither node
-#           then satisfies quorum by its own votes, so neither may found, so no
+#   negctl  node A is given VOTES=0 too. Nothing else changes. No node on the
+#           segment then has a vote at all, so neither may found, so no
 #           cluster exists to join: no node may reach MEMBER or hold a CSID.
 #           This is what distinguishes a measured genesis from a printed one.
+#
+#   coldform (rd vms-6d3d) BOTH nodes VOTES=1 EXPECTED_VOTES=2 -- the documented
+#           two-node VMScluster, in which NEITHER node's own vote reaches the
+#           quorum of 2. Node A is watched alone for RIG_SOLO_WATCH seconds and
+#           must found NOTHING; node B is then powered on, and the pair must
+#           reach CN=2 on their COMBINED votes with exactly one founder. The
+#           oracle for both halves is two real OpenVMS VAX V7.3 systems in
+#           tests/lab/captures/vms-6d3d-coldform-ev2-20260924/.
 #
 #   ambig   node B is given SCSSYSTEMID 1030 instead of 1026. Nothing else
 #           changes. 1030 & 0x3ff = 6, while the CSV slot the coordinator would
@@ -235,8 +243,56 @@ if [ "$MODE" = "remaster" ]; then
 	WALL="${RIG_WALL:-420}"
 fi
 
+# rd vms-6d3d: THE DOCUMENTED TWO-NODE VMSCLUSTER, formed from cold.
+#
+# Both nodes VOTES=1 EXPECTED_VOTES=2 -- the configuration every OpenVMS
+# cluster manual uses for a pair, and the one this rig could not form before:
+# NEITHER node's own vote meets quorum (2+2)/2 = 2, and the founding gate used
+# to demand quorum from the founder's OWN votes. What VMS does instead is weigh
+# the COMBINED votes of the systems that can see each other, MEASURED on two
+# real OpenVMS VAX V7.3 systems in
+# tests/lab/captures/vms-6d3d-coldform-ev2-20260924/: the first node waited
+# alone for eighteen minutes with no %CNXMAN line at all, and proposed the
+# formation 3.2 s after the second node's circuit came up.
+#
+# This mode reproduces BOTH halves, which is what makes it a measurement rather
+# than a demonstration:
+#   - node A is powered on alone and polled for SOLO_WATCH seconds. It must NOT
+#     found: no CSID, no MEMBER. That is the oracle's silent wait, and it is the
+#     control that keeps "counting the peer's real vote" from degenerating into
+#     "lower the bar".
+#   - node B is then powered on. The two votes now in one another's CSB tables
+#     meet quorum 2, exactly one of them founds (the election, lowest
+#     SCSSYSTEMID -- A/1025), the other joins, and both reach CN=2.
+COLDFORM=0
+SOLO_WATCH=0
+if [ "$MODE" = "coldform" ]; then
+	COLDFORM=1
+	RECNX="${RIG_RECNX:-8}"
+	# Long enough that node A has run its whole discovery window and many
+	# founding beats with nobody there: a node that was going to found alone
+	# has had every chance to.
+	SOLO_WATCH="${RIG_SOLO_WATCH:-45}"
+	STAGGER="${RIG_STAGGER:-$SOLO_WATCH}"
+	WINDOW_A="${RIG_WINDOW_A:-150}"
+	WINDOW_B="${RIG_WINDOW_B:-$((WINDOW_A - STAGGER))}"
+	WALL="${RIG_WALL:-600}"
+fi
+
 VOTES_A=1
 [ "$MODE" = "negctl" ] && VOTES_A=0
+
+# The SYSGEN votes each node really boots with. Node B is a NON-voting satellite
+# in every other mode (it can never found, so a founder in those runs can only
+# be node A); `coldform` is the mode where both are voting members of a pair.
+VOTES_B=0
+EXPECTED_A=1
+EXPECTED_B=1
+if [ "$COLDFORM" = "1" ]; then
+	VOTES_B=1
+	EXPECTED_A=2
+	EXPECTED_B=2
+fi
 
 # Node B's SCSSYSTEMID. 1026 & 0x3ff == 2 == the CSV slot the coordinator
 # assigns it, so the two candidate CSID rules agree and the admission is
@@ -258,8 +314,8 @@ echo "accel=${ACCEL#-accel } group=$GROUP recnx=${RECNX}s stagger=${STAGGER}s"
 [ "$XNODE" = "1" ] && echo "cross-node phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s, linger=${LINGER}s)"
 [ "$REJOIN" = "1" ] && echo "rejoin phase: ON (B_WINDOW1=${B_WINDOW1}s evac_dwell=${EVAC_DWELL}s B_WINDOW2=${B_WINDOW2}s)"
 [ "$REMASTER" = "1" ] && echo "remaster phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s -- B exits on its own, A watches)"
-echo "node A: OVMXA/1025 VOTES=$VOTES_A EXPECTED_VOTES=1 VAXCLUSTER=2"
-echo "node B: OVMXB/$SYSID_B VOTES=0          VAXCLUSTER=2"
+echo "node A: OVMXA/1025 VOTES=$VOTES_A EXPECTED_VOTES=$EXPECTED_A VAXCLUSTER=2"
+echo "node B: OVMXB/$SYSID_B VOTES=$VOTES_B EXPECTED_VOTES=$EXPECTED_B VAXCLUSTER=2"
 echo ""
 
 # --------------------------------------------------------------------------
@@ -326,7 +382,7 @@ launch_node() {
 }
 
 echo "--- powering on node A (it must hear nobody for ${RECNX}s, then found) ---"
-launch_node A OVMXA 1025 "$VOTES_A" 1 52:54:00:00:10:25 "$WINDOW_A"; PA=$LAUNCH_PID
+launch_node A OVMXA 1025 "$VOTES_A" "$EXPECTED_A" 52:54:00:00:10:25 "$WINDOW_A"; PA=$LAUNCH_PID
 
 # THE SEGMENT, WITH A CUT IN IT (rd vms-b6d). Started between the two power-ons
 # so its clock and node A's are within a second of each other: the cut must land
@@ -350,11 +406,36 @@ if [ "$REJOIN" = "1" ]; then
 		> "$OUT/relay.log" 2>&1 &
 	RELAY_PID=$!
 fi
-sleep "$STAGGER"
+# rd vms-6d3d: NODE A, ALONE, MUST NOT FOUND. Not a sleep -- a WATCH. Node A's
+# own executive readback is polled for the whole solo period, and the first
+# sight of a membership or a minted CSID while it is the only system on the
+# segment is recorded here and failed on below. This is the control half of
+# the coldform proof (the oracle's eighteen silent minutes).
+SOLO_FOUNDED=0
+SOLO_AT=""
+if [ "$COLDFORM" = "1" ]; then
+	echo "--- node A is ALONE for ${SOLO_WATCH}s: it must NOT found (VOTES=1, quorum 2) ---"
+	SECS=0
+	while [ "$SECS" -lt "$SOLO_WATCH" ]; do
+		if grep -aqE 'RIG-A-CLUB.*state=MEMBER|RIG-A-FINAL.*member=1' \
+			"$OUT/nodeA.ttyS1.log" 2>/dev/null; then
+			SOLO_FOUNDED=1; SOLO_AT="$SECS"; break
+		fi
+		sleep 5
+		SECS=$((SECS + 5))
+	done
+	if [ "$SOLO_FOUNDED" = "1" ]; then
+		echo "    *** node A asserted membership at ~t=${SOLO_AT}s WITH NOBODY THERE"
+	else
+		echo "    node A held: ${SOLO_WATCH}s alone, no membership, no cluster system id"
+	fi
+else
+	sleep "$STAGGER"
+fi
 
 if [ "$REJOIN" = "1" ]; then
 	echo "--- powering on node B, round 1 (first join) ---"
-	launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$B_WINDOW1" nodeB-r1
+	launch_node B OVMXB "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$B_WINDOW1" nodeB-r1
 	PB1=$LAUNCH_PID
 
 	echo "--- waiting up to ${WAIT_MEMBER_TIMEOUT}s for node B to reach MEMBER ---"
@@ -380,11 +461,11 @@ if [ "$REJOIN" = "1" ]; then
 	sleep "$EVAC_DWELL"
 
 	echo "--- powering on node B, round 2 (REJOIN, same SYSGEN identity) ---"
-	launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$B_WINDOW2" nodeB-r2
+	launch_node B OVMXB "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$B_WINDOW2" nodeB-r2
 	PB=$LAUNCH_PID
 else
 	echo "--- powering on node B (it must join what A formed) ---"
-	launch_node B OVMXB "$SYSID_B" 0 1 52:54:00:00:10:26 "$WINDOW_B"
+	launch_node B OVMXB "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$WINDOW_B"
 	PB=$LAUNCH_PID
 fi
 
@@ -556,6 +637,63 @@ if [ "$MODE" = "negctl" ]; then
 	echo "  founded, neither reached MEMBER and neither holds a CSID."
 	echo "  The founder + CSID the proof run reports are therefore"
 	echo "  measurements of real executive state, not constants."
+	echo "=========================================="
+	exit 0
+fi
+
+if [ "$MODE" = "coldform" ]; then
+	# THE CONTROL FIRST: a node alone must not have founded.
+	if [ "$SOLO_FOUNDED" = "1" ]; then
+		echo "  COLDFORM CONTROL FAILED: node A asserted membership at"
+		echo "  ~t=${SOLO_AT}s of its solo window, with no other system on"
+		echo "  the segment and one vote against a quorum of 2. A founding"
+		echo "  that does not need the peer's vote is not the VMS rule --"
+		echo "  it is the bar being lowered, and the CN=2 below would then"
+		echo "  prove nothing (rd vms-6d3d)."
+		echo "=========================================="
+		exit 1
+	fi
+	for N in A B; do
+		if console_panicked "$N"; then
+			echo "  COLDFORM FAILED: node $N's console took a bugcheck."
+			echo "=========================================="
+			exit 1
+		fi
+	done
+	if ! cn2_reached; then
+		echo "  COLDFORM FAILED: the documented two-node VMScluster did not"
+		echo "  form. A: member=$A_MEMBER cn=$A_CN csid=$A_CSID role=$A_ROLE"
+		echo "     B: member=$B_MEMBER cn=$B_CN csid=$B_CSID role=$B_ROLE"
+		echo "  Both nodes are VOTES=1 EXPECTED_VOTES=2 and could see each"
+		echo "  other; their COMBINED two votes meet quorum (2+2)/2 = 2."
+		echo "=========================================="
+		exit 1
+	fi
+	# Exactly one founder, and it is the one the election picks.
+	if [ "$A_ROLE" != "founder" ]; then
+		echo "  COLDFORM FAILED: node A (SCSSYSTEMID 1025, the lower) reports"
+		echo "  role=$A_ROLE. The election is total and lowest-first, so the"
+		echo "  pair must elect A and only A."
+		echo "=========================================="
+		exit 1
+	fi
+	if [ "$B_ROLE" = "founder" ]; then
+		echo "  COLDFORM FAILED: BOTH nodes report role=founder -- two"
+		echo "  clusters, which is the partition the election exists to stop."
+		echo "=========================================="
+		exit 1
+	fi
+	echo "  COLDFORM HELD (rd vms-6d3d): the DOCUMENTED two-node VMScluster."
+	echo "  Node A, VOTES=1 against a quorum of 2, spent ${SOLO_WATCH}s alone"
+	echo "  on the segment and founded NOTHING -- no membership, no cluster"
+	echo "  system id. Node B (VOTES=1) was then powered on, and with the two"
+	echo "  systems' COMBINED votes meeting that same quorum the pair formed:"
+	echo "    node A: role=$A_ROLE member=$A_MEMBER cn=$A_CN csid=$A_CSID"
+	echo "    node B: role=$B_ROLE member=$B_MEMBER cn=$B_CN csid=$B_CSID"
+	echo "  Every value above was read back out of that node's own executive."
+	echo "  This is what the ORACLE does (two real OpenVMS VAX V7.3 systems,"
+	echo "  tests/lab/captures/vms-6d3d-coldform-ev2-20260924/): wait alone,"
+	echo "  then form the moment the other system's circuit is up."
 	echo "=========================================="
 	exit 0
 fi

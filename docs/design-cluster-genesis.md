@@ -354,6 +354,85 @@ nodes from cold on one LAN, product boot cmdline, both consoles printing
 `%CNXMAN, this node is now a VAXcluster member`, and `SHOW CLUSTER` on each
 listing both systems MEMBER with CSIDs `00010001` / `00010002`.
 
+## Update 2026-09-24 (vms-6d3d): the votes are COMBINED, not the founder's own
+
+The predicate above — "quorum met by the node's **own** configured votes" — is
+strictly stronger than what VMS does, and it made the **documented two-node
+VMScluster unformable**. With `VOTES=1` and `EXPECTED_VOTES=2` on both nodes,
+the textbook pair, quorum is `(2+2)/2 = 2` and neither node's single vote
+reaches it: `cnxman_quorum_own_votes_suffice()` refused both, forever. Measured
+against the shipped browser-demo roster, *no* OVMX node in it could found at
+all (OVMXA `EV=2` → quorum 2; OVMXB `EV=3` → quorum 2), so every cluster in the
+demo had to be founded by the real-VMS node.
+
+### The oracle
+
+Two real OpenVMS VAX **V7.3** systems, `VOTES=1` / `EXPECTED_VOTES=2` on each,
+on a private bridge in a disposable lab pod —
+`tests/lab/captures/vms-6d3d-coldform-ev2-20260924/`:
+
+- **Alone, one of them does not form.** VAX1 sat for 18 minutes at
+  `%SYSINIT, waiting to form or join a VMScluster system` with **not one
+  `%CNXMAN` line**. So the bar is not lowered: a lone node short of quorum
+  really does wait, exactly as the old predicate had it.
+- **Together, they do.** 3.2 s after VAX2's circuit came up:
+  `discovered node VAX2` → `established connection to node VAX2` →
+  `proposed formation of a VAXcluster` → both nodes MEMBER, CSIDs `00010001`
+  and `00010002`.
+- The **same pod**, one SYSGEN digit earlier (`EXPECTED_VOTES=1`), formed
+  alone in two seconds — which is what makes the wait attributable to
+  `EXPECTED_VOTES` and nothing else.
+
+### What changed
+
+`cnxman_quorum_form_set()` assembles p. 7-6 **step 1**'s proposed set for a
+cold formation: this system plus every system whose PARAMS record it really
+received over a circuit that is really `OPEN`. (Not the SELECTED walk the
+running cluster uses — a formation has no membership yet — but the same INV-6
+rule underneath it: an un-advertised VOTES is unknown, never a zero, and an
+unreachable system contributes nothing.) `cnxman_quorum_could_found()` is then
+p. 7-6 steps 2 and 3 over that set, and `cnxman_quorum_form_votes_suffice()` is
+that function asked about **this** node, with the extra condition that this
+node's own CSB must be in the set.
+
+The election asks the **same function about the peer**, with the peer's own
+advertised VOTES/EXPECTED_VOTES: a candidate is ranked only if it could itself
+have formed the cluster being contemplated. `VOTES = 0` falls out of that
+predicate rather than being special-cased, a peer whose PARAMS have not arrived
+is a rival (unknown, never zero), and a peer this node cannot currently reach is
+a rival (there is no set to judge it over). One formula, two subjects — a second
+copy is how a node comes to defer forever to a system that could never have
+formed anything.
+
+### Not claimed: the founding transition is still single-node
+
+The oracle's VAX2 **never sent a membership request** — it was made a founding
+member *in the same transition*, and handed its CSID by it. OVMX founds a
+single-node cluster and admits the peer on the ordinary op-0x02 path
+milliseconds later (the shape the `EXPECTED_VOTES=1` baseline shows VMS itself
+producing in the other configuration). The outcome is the same CN=2 with the
+same votes, and both halves run the *existing* machinery, but the
+multi-participant founding transition is a real remaining difference. It is
+recorded here and in the capture's §4 rather than papered over.
+
+### Tests
+
+`tests/cluster/host/test_cnxman_genesis.c`: the predicate truth table is run
+twice — once over a set of one (unchanged, including `VOTES=1/EV=2` → NO) and
+once with a peer really in the set, where `VOTES=1/EV=2` + a seen
+`VOTES=1/EV=2` peer FOUNDS on two votes, a seen `VOTES=0` peer adds nothing,
+and a peer advertising `EXPECTED_VOTES=5` raises quorum to 3 so two votes no
+longer suffice. End to end, the pair elects exactly one founder and a node
+alone in that configuration still refuses **and says so on OPA0:**.
+`test_ineligible_candidate_never_wins()` asserts the refusal a node gives is the
+true one: it does not report "another system takes precedence" about a system
+that could not have taken it. R4: `RIG_MODE=coldform` on
+`tests/qemu/run_cluster_genesis_2node.sh` — both guests `VOTES=1
+EXPECTED_VOTES=2`, node A watched for 45 s alone and required to found nothing,
+then CN=2 with `role=founder`/`role=joiner` read out of each executive. That
+mode FAILS on the pre-fix executive (both nodes `member=0 cn=0 csid=-`), which
+is the R4 teeth.
+
 ## References
 
 - `docs/compat/facilities/cluster-dlm.yaml` (the four downgraded rows + wire_format)

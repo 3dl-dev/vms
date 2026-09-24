@@ -802,9 +802,10 @@ static void test_glue_bindings(void)
 	check_has("cnxman_coord_found(&cn->coord, &ev)",
 		  "GENESIS: the FORM decision is cnxman_coord_found()'s, taken "
 		  "against real CSBs with that evidence in hand");
-	check_has("if (!cnxman_quorum_own_votes_suffice(cl, (uint16_t *)0))",
-		  "GENESIS: quorum by this node's own votes is asked through "
-		  "the ONE shared predicate, not a second formula here");
+	check_has("if (!cnxman_quorum_form_votes_suffice(cl, (const struct cnxman_form_set *)0,",
+		  "GENESIS: quorum over the systems this node can SEE is asked "
+		  "through the ONE shared predicate, not a second formula here "
+		  "(rd vms-6d3d: the founder's own votes are not the test)");
 	check_has("return cnxman_genesis_window_elapsed(cn);",
 		  "GENESIS: ... and only once the discovery window has elapsed");
 	check_absent("cnxman_club_learn_local_csid",

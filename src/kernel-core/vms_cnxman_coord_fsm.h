@@ -543,12 +543,25 @@ void cnxman_coord_abandon(struct cnxman_coord *c, const char *why);
 /* ==========================================================================
  * 8b. GENESIS -- forming a cluster from nothing (docs/design-cluster-genesis.md)
  *
- * The published formation algorithm: the first node up that satisfies quorum
- * BY ITS OWN VOTES forms a single-node cluster as its founding member and
- * coordinator, taking cluster generation 1; every later node joins THROUGH it
- * on the ordinary op-0x02 path. Without this the executive cannot form a
- * cluster at all -- a node needs a CSID to coordinate, and a CSID is only ever
- * learned from a coordinator's op-0x06, so two fresh nodes deadlock.
+ * The published formation algorithm: a node waiting to form or join applies
+ * p. 7-6 to the PROPOSED SET -- itself plus every system it can currently see
+ * -- and, when their COMBINED votes meet quorum, forms the cluster as its
+ * founding member and coordinator, taking cluster generation 1; every later
+ * node joins THROUGH it on the ordinary op-0x02 path. Without this the
+ * executive cannot form a cluster at all -- a node needs a CSID to coordinate,
+ * and a CSID is only ever learned from a coordinator's op-0x06, so two fresh
+ * nodes deadlock.
+ *
+ * THE VOTES ARE COMBINED, NOT THIS NODE'S ALONE (rd vms-6d3d, MEASURED on two
+ * real OpenVMS VAX V7.3 systems, capture vms-6d3d-coldform-ev2-20260924):
+ * VOTES=1 / EXPECTED_VOTES=2 -- the documented two-node VMScluster -- has NO
+ * node whose own vote meets quorum 2, and the oracle's first node sat in
+ * `%SYSINIT, waiting to form or join a VMScluster system` for eighteen minutes
+ * printing not one %CNXMAN line. The instant its peer appeared it logged
+ * `established connection to node VAX2` and, 3.2 s later, `proposed formation
+ * of a VAXcluster`. Demanding quorum from the FOUNDER's own votes -- what this
+ * file did before -- is strictly stronger than VMS and made that configuration
+ * unformable by any pair of OVMX nodes.
  *
  * THIS IS NOT A SECOND KIND OF CLUSTER. What it forms is an ordinary
  * VMScluster whose first member happens to be this executive; the systems that
@@ -571,11 +584,13 @@ void cnxman_coord_abandon(struct cnxman_coord *c, const char *why);
  * this node's state untouched -- unless ALL of: no CSID already learned; no
  * transition already in progress; a real local CSB; NOBODY ELSE MAY BE FORMING
  * OR HOLDING A CLUSTER HERE (the three clauses of the ELECTION note below); the
- * node satisfies quorum on its own VOTES (cnxman_quorum_own_votes_suffice(),
- * p. 7-6); and the CSID it would mint is nameable in the grounded nodemap byte.
- * The votes gate is the load-bearing one for INV-6 -- a VOTES=0 node NEVER
- * founds, however this is called -- and the peer gates are the load-bearing
- * ones for interop. Every refusal is counted (`genesis_refused_noquorum`,
+ * proposed set's combined votes satisfy quorum
+ * (cnxman_quorum_form_votes_suffice(), p. 7-6); and the CSID it would mint is
+ * nameable in the grounded nodemap byte. The votes gate is the load-bearing one
+ * for INV-6 -- a VOTES=0 node NEVER founds, however this is called, and every
+ * vote in the sum was read from a CSB that really received that system's PARAMS
+ * record over a circuit that is really OPEN -- and the peer gates are the
+ * load-bearing ones for interop. Every refusal is counted (`genesis_refused_noquorum`,
  * `genesis_refused_peer`, `genesis_refused_unasked`,
  * `genesis_refused_outranked`).
  *
@@ -632,13 +647,23 @@ void cnxman_coord_abandon(struct cnxman_coord *c, const char *why);
  *      identically from the same wire-learned numbers), and needs no frame.
  *      The DIRECTION is arbitrary and is not claimed to be VMS's.
  *
- *      WHO IS A CANDIDATE is itself read, not assumed. FORM requires the
- *      coordinator to have VOTES > 0 (pp. 7-28, 7-33), so a peer whose PARAMS
- *      this node has really received and which advertise VOTES = 0 can never
- *      form and is NOT a rival -- deferring to it would deadlock exactly as
- *      before. A peer whose PARAMS have NOT arrived is unknown, and unknown is
- *      treated as a rival: standing down costs a beat, forming beside somebody
- *      costs a partition (`genesis_refused_outranked`).
+ *      WHO IS A CANDIDATE is itself read, not assumed, and it is read with the
+ *      SAME predicate this node's own founding gate is about to be asked:
+ *      cnxman_quorum_could_found() over the SAME proposed set, with that
+ *      peer's own advertised VOTES and EXPECTED_VOTES in place of this node's.
+ *      One formula, two subjects -- a second copy is how a node comes to defer
+ *      forever to a system that could never have formed anything (rd vms-6d3d).
+ *      FORM requires VOTES > 0 (pp. 7-28, 7-33), so a peer advertising zero
+ *      votes falls out of that predicate rather than being special-cased.
+ *
+ *      Old CEVOTES is the one term a peer does not advertise, so 0 stands in
+ *      for it -- the value that makes the peer MOST likely to qualify, i.e.
+ *      most likely to be treated as a rival. Two peers are rivals with no
+ *      arithmetic at all: one whose PARAMS have NOT arrived (an un-advertised
+ *      VOTES is unknown, never a zero) and one this node cannot currently
+ *      reach, so it is not in the proposed set and there is nothing to judge
+ *      it against. Standing down costs a beat, forming beside somebody costs a
+ *      partition (`genesis_refused_outranked`).
  *
  * WHAT THE LOSER DOES is nothing new: it keeps the join drive it was already
  * running, and the moment the winner is a member its op-0x02 is taken and it is

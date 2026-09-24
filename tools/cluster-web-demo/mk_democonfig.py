@@ -198,12 +198,17 @@ REQUIRED_LOADER_PARAMS = [
 # hearing Node C).
 #
 # Node A (OVMX/x86_64, qemu-wasm) -- LIVE today (vms-b16/vms-f0f proven e2e).
-# expected_votes=2 was authored for the proven 2-node milestone (A+C) and is
-# INTENTIONALLY not yet 3; reconciling all three EXPECTED_VOTES to the full
-# 3-node target is genesis-wiring work for whoever lands vms-1c3, not a change
-# to make silently against an already-proven config.
+#
+# expected_votes=3 is the value a real THREE-node VMScluster uses: EXPECTED_VOTES
+# is the total of the VOTES held by all its members (three nodes, one vote each),
+# and the connection manager's CEVOTES is the largest EXPECTED_VOTES in the
+# proposed set, so quorum here is (3 + 2) / 2 = 2 -- any two of the three form
+# and carry the cluster, and a lone node does not. It was 2, authored for the
+# proven 2-node milestone (A+C) and left short of the roster it is a member of;
+# rd vms-6d3d reconciles it, having measured the cold-formation rule against two
+# real V7.3 systems (tests/lab/captures/vms-6d3d-coldform-ev2-20260924/).
 DEMO_NODE_A = {
-    "name": "OVMXA", "id": 1987, "votes": 1, "expected_votes": 2,
+    "name": "OVMXA", "id": 1987, "votes": 1, "expected_votes": 3,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
 }
 
@@ -212,8 +217,8 @@ DEMO_NODE_A = {
 # demo page only materialises this node's iframe when given ?nodeB=. Config
 # injection is the SAME arch-agnostic mechanism as Node A (mk_democonfig +
 # inject-cluster-config.sh/inject-ods2-config.sh) -- no VAX-specific path.
-# expected_votes=3 is the full 3-node target (B is the last node to join in
-# the design's genesis order, so it always sees the final roster size).
+# expected_votes=3 is the full 3-node target and is what a real three-node
+# VMScluster uses on every member (see node A above, reconciled in rd vms-6d3d).
 DEMO_NODE_B = {
     "name": "OVMXB", "id": 1988, "votes": 1, "expected_votes": 3,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
@@ -228,9 +233,18 @@ DEMO_NODE_B = {
 # SCSSYSTEMID=1989, group 257) is declared in the ONE SSOT rather than
 # hardcoded into the page/generator -- the roster driver can still validate
 # it for uniqueness against A/B even though the real VMS volume's own SYSGEN
-# is set by hand, once, outside this pipeline. votes=1, expected_votes=1
-# reflects Node C's role as cluster GENESIS (it forms the 1-node cluster
-# first; CN grows as A then B join) -- not the final 3-node target.
+# is set by hand, once, outside this pipeline.
+#
+# votes=1, expected_votes=1 is DECLARED HERE BECAUSE IT IS WHAT THE PINNED
+# VOLUME REALLY HAS -- not because 1 is the right figure for a three-node
+# cluster. Nodes A and B carry the roster's true EXPECTED_VOTES of 3 (above);
+# this entry may not be "corrected" to 3 without re-tailoring the operator's
+# volume, and a declaration that disagreed with the volume would be a
+# fabrication in the SSOT (INV-6). It costs the cluster nothing: CEVOTES is the
+# LARGEST EXPECTED_VOTES in the proposed set, so A's and B's 3 governs and
+# quorum is 2 whatever this node says. What it does cost is node C's own
+# ability to form the cluster ALONE, which its expected_votes=1 permits and
+# which is exactly the "C forms first, A and B join" order the demo boots in.
 DEMO_NODE_C = {
     "name": "VAXC", "id": 1989, "votes": 1, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",

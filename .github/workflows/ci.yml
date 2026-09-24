@@ -3971,38 +3971,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # BUILD ONCE, REUSE ACROSS ALL 22 SHARDS (vms-216). Before this, every
-      # shard called tests/qemu/run_facility_negctl.sh, which did its own
-      # `docker build` from scratch (no cache) -- 22 independent live apt-get
-      # fetches per PR run, each a chance for a transient mirror blip to redden
-      # a shard for a reason that has nothing to do with the negative-control
-      # proof itself (measured on PR #1295 run 36019768986: shards 2/3/5/7/17/
-      # 18/19 all failed at the identical `apt-get install` "Unable to fetch
-      # some archives"). tests/qemu/Dockerfile is IDENTICAL for every shard --
-      # only the injected defect differs, and that happens at container RUN
-      # time (tests/qemu/inject_and_run.sh), never at image-build time -- so
-      # the same content-addressed GHA layer cache trick kernel-executive-shard
-      # already uses (scope=kernel-executive) applies here unchanged, under its
-      # own scope. `load: true` puts the image in the local docker daemon under
-      # the exact tag ($BASE_TAG in run_facility_negctl.sh) that script now
-      # checks for and reuses instead of rebuilding (see its "REUSE, DON'T
-      # REBUILD" comment). max-parallel: 3 above means at most 3 shards can
-      # race to populate a cold cache; the loser(s) still get a full apt-get on
-      # a hit, but every later batch (7 of them) pulls warm layers.
-      - name: Pre-build the harness image (gha layer cache, shared across all 22 shards)
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: tests/qemu/Dockerfile
-          push: false
-          load: true
-          tags: ovmx-ktest-negctl-base:latest
-          cache-from: type=gha,scope=facility-negctl
-          cache-to: type=gha,mode=max,scope=facility-negctl
-
       # This job (across its shards) is the ONLY place the executive is
       # actually exercised, and rd vms-b1f means it does not run on a dev host
       # at all. It injects each defect, rebuilds vms.ko, boots the guest against

@@ -445,13 +445,24 @@ echo ""
 # nothing.
 # ---------------------------------------------------------------------------
 echo "--- building the harness image (once) ---"
-if ! "$ENGINE" build -f "$REPO_ROOT/tests/qemu/Dockerfile" -t "$BASE_TAG" "$REPO_ROOT" \
+# REUSE, DON'T REBUILD (vms-216): CI runs this script from 22 separate
+# facility-negative-controls-shard matrix legs, each independently rebuilding
+# this image from scratch (a live apt-get per leg -- see the Dockerfile's own
+# Acquire::Retries hardening). If a caller has already put $BASE_TAG in the
+# local engine (e.g. a future pre-build step sharing a GHA layer cache across
+# shards -- deferred: ci.yml is within ~1KB of GitHub's workflow-file size
+# ceiling, see vms-216's follow-up item), reuse it instead of rebuilding. A
+# bare local run, with nothing pre-built, still builds normally below.
+if "$ENGINE" image inspect "$BASE_TAG" >/dev/null 2>&1; then
+    echo "  $BASE_TAG already present -- reusing it, not rebuilding"
+elif ! "$ENGINE" build -f "$REPO_ROOT/tests/qemu/Dockerfile" -t "$BASE_TAG" "$REPO_ROOT" \
         >"$RUNLOG" 2>&1; then
     echo "FATAL: the harness image does not build -- no verdict is possible."
     tail -40 "$RUNLOG" | sed 's/^/  | /'
     exit 2
+else
+    echo "  built $BASE_TAG"
 fi
-echo "  built $BASE_TAG"
 echo ""
 
 echo "--- positive control: pristine image, every suite green ---"

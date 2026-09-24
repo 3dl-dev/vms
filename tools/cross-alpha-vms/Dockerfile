@@ -17,10 +17,14 @@ ARG TARGET=alpha-dec-vms
 ARG PREFIX=/opt/cross-alpha-vms
 ENV BINUTILS_VER=${BINUTILS_VER} GCC_VER=${GCC_VER} TARGET=${TARGET} PREFIX=${PREFIX}
 
-RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -qq && DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
       build-essential libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
       flex bison texinfo gawk zlib1g-dev file wget xz-utils ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /src
 # vms-f97: checked-in alpha-dec-vms port patches, applied to the fetched GCC

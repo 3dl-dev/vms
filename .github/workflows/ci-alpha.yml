@@ -1,0 +1,1230 @@
+name: CI / Alpha
+
+# Sibling of ci.yml, split out by vms-1af (ci.yml was ~511KB, over GitHub's
+# silent ~512000-byte non-comment workflow-file ceiling that produces
+# conclusion=startup_failure with ZERO jobs and no pull_request run at all --
+# see rd vms-1af / vms-e18e). Triggers, job names, and the needs-graph are
+# carried over unchanged from the corresponding slice of the old ci.yml; only
+# the shared `changes` path-filter job is now factored into the reusable
+# ci-changes.yml (see that file's header) instead of being duplicated in
+# every domain file. See ci-core-gates.yml for the per-PR/heavy-tier split
+# rationale (vms-fb8) and the P4-only fast-path (vms-6e10), both of which
+# apply identically here via the same `vax_p4_only` input and the same `if:`
+# conditions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      vax_p4_only:
+        description: 'P4-only fast-path: run only the VAX substrate chain + the P4 activation gate, skip the full heavy matrix (rd vms-6e10)'
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: '17 7 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    uses: ./.github/workflows/ci-changes.yml
+
+
+  # -----------------------------------------------------------------------
+  # alpha-toolchain-image (vms-e7c5): build ONCE, push to ghcr, keyed by a hash
+  # of the toolchain SOURCES — the "once and for all" fix for the recurring
+  # alpha-gate flake.
+  #
+  # ROOT CAUSE: every alpha gate below used to `docker build` the alpha-dec-vms
+  # cross toolchain from scratch on a gha-cache miss, and that build fetches
+  # gcc from ftp.gnu.org (binutils is now vendored, #802 / vms-8a06, but gcc is
+  # 90MB and stays a hardened fetch). A gnu.org outage HARD-FAILS the gates that
+  # have nothing to do with the toolchain sources.
+  #
+  # FIX: this job builds the image and PUSHES it to a PRIVATE ghcr package,
+  # tagged by SOURCE_HASH = a 16-hex digest over the committed content of the
+  # toolchain sources (Dockerfile, build-toolchain.sh, patches/*, the vendored
+  # *.tar.xz) via `git ls-files -s | sha256sum`. Committed-content-based, so the
+  # tag CI computes here and the tag the gates compute below are identical for
+  # the same sources. The gates then PULL that tag (zero gnu.org), and only fall
+  # back to building if the tag is missing. A toolchain bump -> new hash -> this
+  # job builds + pushes the new image (path-filtered on the sources; forced true
+  # on any non-PR event; workflow_dispatch seeds the very first image manually
+  # while gnu.org is up). Self-contained: pushes with the built-in GITHUB_TOKEN
+  # (packages: write) — no external secret. The package is PRIVATE; the gates
+  # read it with GITHUB_TOKEN (packages: read).
+  # -----------------------------------------------------------------------
+  alpha-toolchain-image:
+    name: alpha-toolchain-image (vms-e7c5)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.alpha_toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute SOURCE_HASH over the toolchain sources
+        id: srchash
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "source_hash=$SOURCE_HASH" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to ghcr.io (built-in GITHUB_TOKEN)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      # Builds tools/cross-alpha-vms (whose Dockerfile COPYs the VENDORED
+      # binutils-2.43.tar.xz — #802/vms-8a06 — so the binutils step is offline;
+      # only gcc is fetched, hardened). push:true publishes both the source-hash
+      # tag and :latest to the PRIVATE ghcr package. gha layer cache keeps an
+      # unchanged-source rebuild (e.g. a main push) a cache hit — zero fetch.
+      - name: Build and push the alpha-dec-vms cross toolchain image (source-hash + latest)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/3dl-dev/ovmx-cross-alpha-vms:${{ steps.srchash.outputs.source_hash }}
+            ghcr.io/3dl-dev/ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+  # musl port for alpha-dec-vms — RUNG 1 (vms-960).
+  #
+  # Build/oracle tooling, Rule-9-clean: nothing here runs inside the OVMX guest.
+  # Builds the alpha-dec-vms (VMS-ABI) cross toolchain image (binutils + gcc
+  # cc1, gha layer cache scope=cross-alpha-vms), then INSIDE it fetches musl,
+  # overlays tools/cross-alpha-vms/musl-arch/arch/alpha-dec-vms, and builds
+  # lib/libc.a. The overlay is mounted read-only; the build runs in /tmp in the
+  # container (the repo is never written). A preflight asserts the LP64 model
+  # against the real compiler; VERIFY asserts libc.a is a real alpha-dec-vms
+  # archive with genuine portable text symbols (strlen/malloc/memcpy/vsnprintf)
+  # and that the honest -ENOSYS syscall stub (__vms_alpha_syscall) is defined.
+  # -----------------------------------------------------------------------
+  musl-alpha-vms:
+    name: musl alpha-dec-vms port — RUNG 1 build (vms-960)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5: PULL the source-hash-keyed prebuilt toolchain image from ghcr
+      # (zero ftp.gnu.org fetch). SOURCE_HASH is computed by the exact same
+      # `git ls-files -s | sha256sum` command as the alpha-toolchain-image
+      # build-push job, so the tag matches the current sources exactly. A
+      # missing tag (not yet seeded / registry hiccup) cleanly FALLS THROUGH to
+      # the gha-cached build below — `if docker pull; then … else …` keeps the
+      # pull-miss from aborting under `set -e`. Tags the result
+      # ovmx-cross-alpha-vms:latest either way, so the downstream steps are
+      # unchanged.
+      - name: Pull the prebuilt alpha-dec-vms toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-alpha-vms
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-alpha-vms:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the alpha-dec-vms cross toolchain image (fallback — gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Fetch musl, overlay alpha-dec-vms arch, build + verify lib/libc.a
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/tools/cross-alpha-vms/musl-arch":/overlay:ro \
+            -e OVERLAY=/overlay \
+            ovmx-cross-alpha-vms:latest bash /overlay/build-musl.sh
+
+      # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
+      # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
+      # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they
+      # bind as real cross-image .vms$imp imports); then runs the native OTS$-
+      # divide correctness proof. Reuses the toolchain image loaded above.
+      - name: OTS$ runtime proof (LIBOTS$ links + DECC$SHR binds it + divide correct)
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/ots/run_ots_proof.sh
+
+  # GCC-port include surface (vms-714c, R5:
+  # docs/design-gcc-port-surface-gaps-register.md S1.2). Standing gate: the
+  # GENUINE, UNPATCHED upstream libgcc/config/alpha/vms-gcc_shell_handler.c
+  # (GCC 14.2.0, SHA256-pinned) must compile with the real alpha-dec-vms cross
+  # cc1 against src/libvms/include's vms/ canonicalized include-surface shim
+  # — proving the port's own host sources #include VMS-convention header
+  # names (`<vms/chfdef.h>`) UNCHANGED. A baseline control inside the proof
+  # script asserts the SAME file fails with that #include unresolved when the
+  # shim's -I is omitted, so a future regression that silently no-ops the shim
+  # cannot read as green. Host-container only; shares the cross-alpha-vms gha
+  # layer-cache scope so the toolchain-image build is a cache hit.
+  gcc-port-include-surface:
+    name: GCC-port include surface — unpatched port source builds unchanged (vms-714c)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5: PULL the source-hash-keyed prebuilt toolchain image from ghcr
+      # (zero ftp.gnu.org fetch). SOURCE_HASH is computed by the exact same
+      # `git ls-files -s | sha256sum` command as the alpha-toolchain-image
+      # build-push job, so the tag matches the current sources exactly. A
+      # missing tag (not yet seeded / registry hiccup) cleanly FALLS THROUGH to
+      # the gha-cached build below — `if docker pull; then … else …` keeps the
+      # pull-miss from aborting under `set -e`. Tags the result
+      # ovmx-cross-alpha-vms:latest either way, so the downstream steps are
+      # unchanged.
+      - name: Pull the prebuilt alpha-dec-vms toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-alpha-vms
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-alpha-vms:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the alpha-dec-vms cross toolchain image (fallback — gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Include-surface proof (unpatched port source builds against src/libvms/include/vms/)
+        run: IMG=ovmx-cross-alpha-vms:latest bash tools/cross-alpha-vms/include-surface/run_include_surface_proof.sh
+
+  # Standing gate for vms-864: the genuine alpha DECC$SHR (musl-alpha universals
+  # + the OVMX bootstrap surface from mk_decc_shr.sh's ALPHA branch) must link a
+  # REAL alpha-dec-vms port crt0 (tools/cross-alpha-vms/joint-e2e/) with ZERO
+  # deferred symbols. OVMX_DECC_ARCH=alpha is forced (never auto-detected) so
+  # this cannot silently regress to linking a genuine EM_ALPHA crt0 against a
+  # non-alpha DECC$SHR (bead vms-2a0). Shares the cross-alpha-vms gha layer-
+  # cache scope with musl-alpha-vms above so the toolchain-image build is a
+  # cache hit.
+  joint-e2e-alpha-crt0:
+    name: genuine alpha DECC$SHR — real port crt0 links zero-deferred (vms-864)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # vms-e7c5: read-only pull of the PRIVATE prebuilt toolchain image from ghcr.
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # vms-e7c5: PULL the source-hash-keyed prebuilt toolchain image from ghcr
+      # (zero ftp.gnu.org fetch), identical SOURCE_HASH command as the build-push
+      # job. A missing tag cleanly falls through to the gha-cached build below.
+      # The image is tagged ovmx-cross-alpha-vms:latest; build-joint-image.sh
+      # (IMG=ovmx-cross-alpha-vms) then SKIPS its own step-1 docker build because
+      # the image already inspects OK — so a pulled image is used, not rebuilt.
+      - name: Pull the prebuilt alpha-dec-vms toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-alpha-vms
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-alpha-vms:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the alpha-dec-vms cross toolchain image (fallback — gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Link the real port crt0 against the GENUINE alpha DECC$SHR (OVMX_DECC_ARCH=alpha, strict, zero-deferred)
+        run: |
+          set -euo pipefail
+          OUT=/tmp/joint-e2e-out
+          IMG=ovmx-cross-alpha-vms tools/cross-alpha-vms/joint-e2e/build-joint-image.sh "$OUT"
+          # ---- standing assertions (loud; the strict LINK.EXE exit already
+          #      fails on undef — these guard against a silent pass) ----
+          NUNDEF=$(grep -c 'LINK-F-UNDEF' "$OUT/build.log" || true)
+          if [ "${NUNDEF:-0}" -ne 0 ]; then
+            echo "GATE FAIL: ${NUNDEF} LINK-F-UNDEF in the genuine-alpha crt0-join:"
+            grep 'LINK-F-UNDEF' "$OUT/build.log" || true
+            exit 1
+          fi
+          grep -q 'LINK-S-CREATED' "$OUT/build.log" || { echo "GATE FAIL: no %LINK-S-CREATED (joint_e2e.exe not linked)"; exit 1; }
+          # vms-f1a: the EVAX STRONG-vs-STRONG MULDEF pre-pass must be WHOLE-
+          # ARCHIVE-SAFE — the genuine alpha DECC$SHR whole-archives musl-alpha
+          # libc.a + libgcc.a here, and a well-formed library has NO strong dup
+          # (overridable defs are WEAK; decc$_malloc64 is #ifndef __VMS__-excluded
+          # on alpha). ZERO spurious %LINK-F-MULDEF is the correctness property;
+          # any hit means a genuinely-weak symbol was misread as strong.
+          NMULDEF=$(grep -c 'LINK-F-MULDEF' "$OUT/build.log" || true)
+          if [ "${NMULDEF:-0}" -ne 0 ]; then
+            echo "GATE FAIL: ${NMULDEF} spurious %LINK-F-MULDEF in the genuine-alpha whole-archive build (vms-f1a):"
+            grep 'LINK-F-MULDEF' "$OUT/build.log" || true
+            exit 1
+          fi
+          readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL: joint_e2e.exe is not EM_ALPHA"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL: joint_e2e.exe is not ET_DYN"; exit 1; }
+          # C$_EXIT1 should fold as a globalvalue (no import cell) — informational
+          if grep -q 'GVALFOLD' "$OUT/build.log"; then echo "ok: C\$_EXIT1 folded as globalvalue"; else echo "note: no GVALFOLD line logged"; fi
+          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
+
+      # vms-2655 (rung 3 of vms-b4f): the port-link recipe, opted into the rung-2
+      # CRTL->RMS stdio veneer (JOINT_CRTL_RMS_VENEER=1 -- see build-joint-image.sh's
+      # two-pass bootstrap block), STRICT-links the crtl_rms_test.c port program
+      # (heap+RMS+stdio) against the veneer-wired DECC$SHR + LIBVMSRMS$SHR + LIBOTS.
+      # Toolchain-only (no qemu boot -- the real-executive RMS-write proof is rung 4,
+      # vms-f49, gated on the LLP64 width fix vms-1fc); this leg proves the LINK-time
+      # composition: zero deferred/undef/muldef, EM_ALPHA/ET_DYN, and the import-map
+      # chain showing the port image's decc$fopen binds to the SAME DECC$SHR producer
+      # whose own build log recorded the veneer wiring + sys$create/open/connect/put/
+      # get/close bound to LIBVMSRMS$SHR (the un-fakeable proof fopen -> veneer -> RMS,
+      # not musl-POSIX). Reuses the toolchain image built/pulled above (cache hit).
+      - name: Link the port image against the CRTL->RMS veneer-wired DECC$SHR + LIBVMSRMS$SHR (vms-2655, rung 3, strict, zero-deferred)
+        run: |
+          set -euo pipefail
+          OUT=/tmp/joint-e2e-rms-veneer-out
+          JOINT_MAIN=crtl_rms_test.c JOINT_CRTL_RMS_VENEER=1 IMG=ovmx-cross-alpha-vms \
+            tools/cross-alpha-vms/joint-e2e/build-joint-image.sh "$OUT"
+          LOG="$OUT/build.log"
+          # (1) the pass-2 DECC$SHR build (inside this same recipe run) wired the veneer
+          grep -qE "mk_decc_shr: CRTL->RMS stdio veneer wired: decc\\\$fopen/fwrite/fread/fclose -> ovmx_crtl_\* \(--use .*LIBVMSRMS\\\$SHR\.EXE\)" "$LOG" \
+            || { echo "GATE FAIL (vms-2655): veneer-wired log line not seen"; exit 1; }
+          # (2) DECC$SHR's own pass-2 build resolved sys$create/open/connect/put/get/close
+          #     against --use LIBVMSRMS$SHR (the real RMS substrate, not a stub)
+          for s in create open connect put get close; do
+            grep -qE "cross-image import 'sys\\\$${s}' bound to --use producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
+              || { echo "GATE FAIL (vms-2655): sys\$${s} not bound to LIBVMSRMS\$SHR inside DECC\$SHR pass 2"; exit 1; }
+          done
+          # (3) the FINAL joint_e2e.exe link (after crt0 assembly) is zero-deferred/
+          #     undef/muldef -- scope past the producer-graph's own pre-existing
+          #     first-light residual (LIBVMS$SHR aggregator, unrelated to this rung,
+          #     same scoping build-decc-veneer.sh's own gate applies).
+          FINAL_START=$(grep -n '^-- assembling crt0.obj' "$LOG" | head -1 | cut -d: -f1)
+          [ -n "$FINAL_START" ] || { echo "GATE FAIL (vms-2655): crt0.obj assembly marker not found in log"; exit 1; }
+          TAIL=$(awk -v n="$FINAL_START" 'NR>=n' "$LOG")
+          echo "$TAIL" | grep -q 'LINK-F-UNDEF'  && { echo "GATE FAIL (vms-2655): LINK-F-UNDEF in the final port-image link"; exit 1; }
+          echo "$TAIL" | grep -q 'LINK-F-MULDEF' && { echo "GATE FAIL (vms-2655): LINK-F-MULDEF in the final port-image link"; exit 1; }
+          echo "$TAIL" | grep -q 'LINK-W-DEFERRED' && { echo "GATE FAIL (vms-2655): LINK-W-DEFERRED in the final port-image link"; exit 1; }
+          echo "$TAIL" | grep -qE "LINK-S-CREATED, .*joint_e2e.exe: EVAX/Alpha ET_DYN" \
+            || { echo "GATE FAIL (vms-2655): joint_e2e.exe (veneer build) not created EVAX/Alpha ET_DYN"; exit 1; }
+          # (4) the port image's OWN decc$fopen import binds to the pass-2 (veneer)
+          #     DECC$SHR.EXE producer -- the chain from (1)+(2) above proves THAT
+          #     producer's decc$fopen is the crtl_rms_stdio.c veneer, not musl-POSIX.
+          echo "$TAIL" | grep -qE "cross-image import 'decc\\\$fopen' bound to --use producer DECC\\\$SHR.EXE" \
+            || { echo "GATE FAIL (vms-2655): port image decc\$fopen did not bind to the veneer-wired DECC\$SHR producer"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not EM_ALPHA"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not ET_DYN"; exit 1; }
+          test -f "$OUT/LIBVMSRMS\$SHR.EXE" || { echo "GATE FAIL (vms-2655): LIBVMSRMS\$SHR.EXE not staged in OUTDIR"; exit 1; }
+          echo "GATE PASS (vms-2655): port image STRICT-links --use veneer-wired DECC\$SHR + LIBVMSRMS\$SHR + LIBOTS zero-deferred;"
+          echo "  decc\$fopen binds to the veneer producer, whose own build resolved sys\$create/open/connect/put/get/close"
+          echo "  against LIBVMSRMS\$SHR (real RMS substrate, not musl-POSIX); EM_ALPHA/ET_DYN; LIBVMSRMS\$SHR.EXE staged."
+
+      # vms-f1a: the EVAX/Alpha mirror of the ELF STRONG-vs-STRONG MULDEF gate
+      # (vms-d8d, #777, run_muldef_x86_64.sh). LINK.EXE's evax_find_sym was a
+      # linear FIRST-MATCH with no duplicate check, so two objects both STRONGLY
+      # defining a universal bound silently to link-input order. emit_evax_common
+      # now runs a one-time pre-pass (evax_check_muldef) that hard-errors
+      # %LINK-F-MULDEF. This proves BOTH halves with REAL alpha-dec-vms EVAX
+      # objects (cross cc1, no blobs checked in): the POSITIVE (two objects both
+      # strong-define dup_sym -> MULDEF names the symbol + BOTH objects, exit
+      # non-zero) and the CONTROL (weak-vs-strong still links clean, either link
+      # order — the new check is scoped to STRONG-vs-STRONG only). The whole-
+      # archive-safe no-regression half is the genuine-DECC$SHR link asserted in
+      # the step above (zero spurious MULDEF). Runs in the toolchain image built
+      # above.
+      - name: Prove LINK.EXE rejects a STRONG-vs-STRONG EVAX/Alpha duplicate definition (vms-f1a)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src:ro \
+            ovmx-cross-alpha-vms:latest \
+            sh -c 'export PATH=/opt/cross-alpha-vms/bin:$PATH CC=gcc; sh /src/src/vmslink/test/run_muldef_evax.sh'
+
+  # ---------------------------------------------------------------------------
+  # alpha-rms-substrate (vms-a7a, rung 1): the alpha-dec-vms LP64 RMS substrate.
+  # Builds the faithful producer graph (LIBVMSSYS/PROCESS/LNM/FS/LIBVMS$SHR) and
+  # LIBVMSRMS$SHR via each recipe's OVMX_DECC_ARCH=alpha branch, then STRICT-links
+  # a tiny alpha image against LIBVMSRMS$SHR proving the RMS engine + the vms_kif
+  # /dev/vms ioctl transport link zero-deferred with sys$create/$open/$connect/
+  # $put/$get/$close bound as real cross-image imports (EM_ALPHA/ET_DYN). This is
+  # the BUILD + STRICT-LINK rung; the un-fakeable RUNTIME proof (the transport
+  # actually reaching the executive ACP, an independent reader seeing the ODS-2
+  # File ID) needs /dev/vms + qemu-system-alpha and is rung 4 (vms-f49). The build
+  # script'"'"'s embedded GATE fails the job on any missing shareable / deferred link.
+  # ---------------------------------------------------------------------------
+  alpha-rms-substrate:
+    name: alpha RMS substrate — LIBVMSRMS$SHR + producer graph STRICT-link (vms-a7a)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same source-hash-keyed prebuilt-image pull as joint-e2e-alpha-crt0 (no
+      # ftp.gnu.org fetch); a miss falls through to the gha-cached source build.
+      - name: Pull the prebuilt alpha-dec-vms toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-alpha-vms
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-alpha-vms/Dockerfile \
+            tools/cross-alpha-vms/build-toolchain.sh \
+            'tools/cross-alpha-vms/patches/*' \
+            'tools/cross-alpha-vms/binutils-*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-alpha-vms:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the alpha-dec-vms cross toolchain image (fallback — gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Build the alpha RMS substrate + STRICT-link the proof image (vms-a7a rung-1 gate)
+        run: |
+          set -euo pipefail
+          IMG=ovmx-cross-alpha-vms tools/cross-alpha-vms/rms-substrate/build-rms-substrate.sh /tmp/rms-substrate-out
+          # The script'"'"'s embedded GATE already exits non-zero on failure; re-assert
+          # the headline lines here so the job log shows the proof explicitly.
+          test -f /tmp/rms-substrate-out/LIBVMSRMS\$SHR.EXE
+          test -f /tmp/rms-substrate-out/rms_substrate_test.exe
+          readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -q 'Machine:.*Alpha'
+          readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -qE 'Type:.*DYN'
+          echo "vms-a7a rung-1 CI gate PASSED"
+
+  # -----------------------------------------------------------------------
+  # alpha-boot-login (rd vms-341, epic vms-8954). The Alpha member of the
+  # cut-time release-acceptance set: proves the OVMX/Linux-Alpha (LP64) runtime
+  # boots to an AUTHENTICATED interactive DCL "$" over the genuine Files-11
+  # ODS-2 executive ACP -- SYSTEM/MANAGER authenticated by Purdy against the
+  # binary $UAFDEF SYSUAF (not just boot-to-Username). This is the 4th-arch
+  # authenticity dimension: the SAME authenticity flip x86_64 ships (the 0.5
+  # release-acceptance-e2e job proves x86_64), proven green-by-SHA on a second
+  # 64-bit width.
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), exactly like the
+  # netbsd-vax-boot SIMH gate above -- deliberately NOT the per-PR path (a full
+  # Alpha cross-build + qemu-system-alpha boot is ~25-30 min; keeping it off the
+  # PR path preserves the fast PR wall). qemu-system-alpha is pure TCG (no KVM /
+  # nested virt), so it runs on a stock ubuntu-latest runner. The conductor
+  # fires it via workflow_dispatch on the frozen SHA at cut time for a
+  # machine-observable green-by-SHA Alpha authenticity proof; the nightly
+  # schedule catches drift between cuts.
+  #
+  # NO persistent .boot-cache: on a fresh runner run-boot-alpha.sh cross-builds
+  # the FULL Alpha userland + vms.ko + ODS-2 disk from the checked-out SHA, so
+  # the gate can never pass on a stale artifact (the V0.4-6-on-a-V0.5-tree
+  # false-green class, vms-46f5). Only the cross toolchain docker layers are
+  # gha-cached (the compiler, not the product).
+  # -----------------------------------------------------------------------
+  alpha-boot-login:
+    name: OVMX/Alpha boots to an authenticated DCL $ over the ODS-2 ACP (vms-341)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # A full Alpha cross-build + a 128 MB ODS-2 disk + docker images is tight
+      # on a stock runner's ~14 GB root; reclaim the large unused toolchains up
+      # front so the boot build can't die on ENOSPC at minute 25.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "Login gate — boot qemu-system-alpha, authenticate SYSTEM/MANAGER against the binary SYSUAF over the ACP, land on an interactive DCL $, run SHOW TIME"
+        run: tools/cross-alpha/run-boot-alpha.sh login
+
+  # -----------------------------------------------------------------------
+  # alpha-boot-mount (rd vms-707). THE PER-PR Alpha RUNTIME-boot gate -- the
+  # guard this arch-asymmetric boot regression slipped through TWICE (#835
+  # tracepoints, #853 O_CLOEXEC): a change that reds the OVMX/Alpha boot while
+  # x86_64 stays green, so its author's x86_64-only proofs pass and the PR
+  # merges. The EXISTING per-PR Alpha guard (vms-5af) is BUILD/modpost ONLY --
+  # it proves vms.ko cross-compiles + links + modpost-passes for Alpha, NOT that
+  # the assembled runtime BOOTS and MOUNTS the system disk. #853 compiled and
+  # modpost-passed cleanly for Alpha yet halted at $MOUNT, because the generic
+  # O_CLOEXEC bit (0x80000) is O_DIRECT on Alpha -- a runtime-only, arch-specific
+  # fault no build check can see. This job closes that gap.
+  #
+  # SCOPE-GATED (needs.changes.outputs.alpha_boot_runtime) to the runtime
+  # executive + PID 1 + Alpha boot tooling. Most PRs don't touch those, so the
+  # fast PR wall is preserved; the ones that do are exactly the class that can
+  # regress the Alpha boot-to-mount. run-boot-alpha.sh `gate` boots to a real
+  # DCL Username: prompt, which PROVES the DKA0: $MOUNT -- the mount is a strict
+  # prerequisite of ever reaching login, so a mount regression reds this gate.
+  # (The boot's dominant cost is the cross-build, identical whether the assertion
+  # stops at mount or at Username, so the stronger post-condition is asserted for
+  # the same wall time -- no separate boot-to-mount subset buys anything.) PR-ONLY
+  # by design: on schedule/workflow_dispatch the fuller alpha-boot-login and
+  # alpha-dcl-acceptance legs already run, so this job does not duplicate them.
+  #
+  # vms-c54 UPGRADE: this gate now runs the N=3 ACTIVATION proof
+  # (run-module-gp-activation-alpha.sh) instead of the boot-to-mount proof.
+  # Activation REQUIRES the mounted ODS-2 volume + a DCL context, so the single
+  # boot SUBSUMES the old DKA0: $MOUNT assertion (a mount regression still reds
+  # it -- it never reaches activation) and ADDS the executive-recorded
+  # $STATUS=%X0035A019 N=3 check -- closing the #921 module-GP activation-crash
+  # class PER-PR (it was schedule/workflow_dispatch-only). Trigger widened from
+  # alpha_boot_runtime to the dedicated alpha_activation filter, which adds
+  # src/vmslink + src/imgact + tools/cross-alpha-vms: #921's LINK.EXE/cc1 side is
+  # NOT in alpha_boot_runtime and would otherwise slip. Enforcement stays the
+  # conductor reap-by-SHA (the repo has zero branch-protection-required checks);
+  # this makes the N=3 proof AUTOMATIC + visible on every activation-surface PR.
+  # -----------------------------------------------------------------------
+  alpha-boot-mount:
+    name: "OVMX/Alpha per-PR activation gate — boots, mounts DKA0:, activates the N=3 image, asserts $STATUS=%X0035A019 (vms-707/vms-c54)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    # vms-c54: 150 (was 120) — the N=3 activation gate adds the alpha-dec-vms
+    # toolchain build + joint-image build + activation on top of the boot, so it
+    # matches the alpha-module-gp-activation dispatch job's budget.
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # A full Alpha cross-build + a 128 MB ODS-2 disk + docker images is tight
+      # on a stock runner's ~14 GB root; reclaim the large unused toolchains up
+      # front so the boot build can't die on ENOSPC mid-build (mirrors
+      # alpha-boot-login).
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      # vms-c54: the alpha-dec-vms toolchain that builds the N=3 joint image
+      # (joint_main.c return 3 + the SS$_NORMAL control). gha-cached so a cache
+      # hit makes this near-free; build-joint-image.sh reuses it (no ftp.gnu.org
+      # fetch), mirroring the alpha-module-gp-activation dispatch job.
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "Activation gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, mounts DKA0:, activates the single-proc N=3 image on the real /dev/vms executive over the ODS-2 ACP, asserts $STATUS=%X0035A019 + SS$_NORMAL control (reds on the #853 mount-halt class AND the #921 activation-crash class; runs its own can-fail selftest before the boot)"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
+
+  # -----------------------------------------------------------------------
+  # vms-065c: the vms-1ef crtl_rms->N=7 runtime proof as a per-PR gate. Same
+  # real-executive boot as alpha-boot-mount, but the MILESTONE image is
+  # crtl_rms_test.c (heap malloc->mallocng + RMS file I/O + stdio, returns
+  # sentinel 7). vms-1ef #958 root-caused + fixed a LINK.EXE weak-alias-thunk
+  # descriptor-export bug whose ONLY runtime proof was a MANUAL joint-e2e boot;
+  # this gate makes that proof automatic on every activation-surface PR so a
+  # future LINK.EXE / toolchain / CRTL change cannot silently re-break the
+  # malloc->mallocng activation path with no CI tell. Same alpha_activation
+  # scope-gate + budget as the N=3 gate (it reuses the identical build+boot).
+  # -----------------------------------------------------------------------
+  alpha-crtl-rms-n7:
+    name: "OVMX/Alpha crtl_rms -> N=7 activation gate — boots, activates the crtl_rms heap+RMS+stdio image on the real /dev/vms executive, asserts $STATUS=%X0035A039 (vms-1ef/vms-065c)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "crtl_rms N=7 gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, activates the crtl_rms port image (heap malloc->mallocng + RMS + stdio) on the real /dev/vms executive over the ODS-2 ACP, asserts the heap+RMS+stdio port-test OK + $STATUS=%X0035A039 (sentinel 7); runs its own can-fail selftest before the boot"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-gate
+
+  # -----------------------------------------------------------------------
+  # alpha-crtl-rms-veneer (vms-f49, rung 4 of vms-b4f): the UN-FAKEABLE CRTL->RMS
+  # veneer proof + the runtime validation of the vms-1fc LLP64 width fix. Same
+  # crtl_rms heap+RMS+stdio image as alpha-crtl-rms-n7, but built with the
+  # CRTL->RMS stdio veneer wired in (JOINT_CRTL_RMS_VENEER=1): its decc$fopen
+  # binds to sys$create over the Files-11 ACP (-> LIBVMSRMS$SHR -> ioctl(/dev/vms))
+  # instead of musl-POSIX. The proof is NOT the port image's own console/CRTL
+  # read-back (a ramfs satisfies that identically) but an INDEPENDENT reader --
+  # DCL DIRECTORY/FULL, a different accessor over the ACP -- asserting
+  # PORTTEST.DAT;1 exists on the real ODS-2 volume with a genuine ODS-2 File ID.
+  # A truncated ioctl pointer (the vms-1fc bug) would make the veneer write reach
+  # nothing and the independent reader draw %DIRECT-W-NOFILES -> red. alpha-crtl-
+  # rms-n7 stays green as the non-veneer control. Same alpha_activation scope-gate
+  # + budget (it reuses the identical toolchain images + build+boot machinery).
+  # -----------------------------------------------------------------------
+  alpha-crtl-rms-veneer:
+    name: "OVMX/Alpha CRTL->RMS veneer gate — boots the veneer-wired crtl_rms image on the real /dev/vms executive, then an INDEPENDENT ACP reader (DIRECTORY/FULL) asserts PORTTEST.DAT;1 landed on the ODS-2 volume with a genuine File ID; validates the vms-1fc LLP64 width fix at runtime (vms-f49)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "CRTL->RMS veneer gate — qemu-system-alpha boots the veneer-wired crtl_rms image on the real /dev/vms executive; its decc$fopen writes PORTTEST.DAT via sys$create over the ODS-2 ACP, then an INDEPENDENT reader (DCL DIRECTORY/FULL, a different accessor than the writer's CRTL/RMS handle) asserts PORTTEST.DAT;1 with a genuine ODS-2 File ID a ramfs cannot produce; runs a can-fail selftest (incl. the ramfs-rejection case) before the boot"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate
+
+  # -----------------------------------------------------------------------
+  # alpha-mf-multifile (vms-bdd): the MULTI-.O STRICT-link + activation gate --
+  # the rung above alpha-crtl-rms-n7 (which is single-object). The milestone
+  # image is a genuine multi-object program: mf_main.obj calls ACROSS the .o
+  # boundary into mf_util.obj (mf_dup/mf_len/mf_eq/mf_free), which in turn pulls
+  # malloc/free/memcpy/strlen/strcmp from the genuine alpha DECC$SHR. This is the
+  # exact shape that hit `%LINK-F-UNDEF decc$free` before PR #795 (a SEPARATE
+  # object referencing free() under a STRICT no-allow-undefined link); it now
+  # links zero-deferred and activates to sentinel 5 ($STATUS=%X0035A029). A
+  # LINK.EXE / mk_decc_shr.sh regression that re-breaks the multi-.o STRICT link
+  # (or the weak-alias decc$ export class) reds HERE. Same alpha_activation
+  # scope-gate + build+boot path as the N=3 / N=7 gates.
+  # -----------------------------------------------------------------------
+  alpha-mf-multifile:
+    name: "OVMX/Alpha multi-.o STRICT-link activation gate — boots, activates a real multi-object program (mf_main.obj + mf_util.obj, cross-.o malloc/free/strlen/strcmp/memcpy) on the real /dev/vms executive, asserts $STATUS=%X0035A029 (vms-bdd)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "multi-.o STRICT-link gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, STRICT-links (no --allow-undefined) a real multi-object program (mf_main.obj + mf_util.obj across a .o boundary, cross-.o malloc/free/strlen/strcmp/memcpy resolved incl. the ex-blocker decc$free), activates it on the real /dev/vms executive over the ODS-2 ACP, asserts the cross-.o port-test OK + $STATUS=%X0035A029 (sentinel 5); runs its own can-fail selftest before the boot"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate
+
+  # -----------------------------------------------------------------------
+  # alpha-shipped-shareable-activation (vms-410, vms-deec Decision B): Alpha
+  # ships + activates real VMS shareable images. The Alpha VMS-format
+  # activator already exists (src/imgact/arch/alpha/, proven by "IMGACT
+  # VMS-standard Activation (Alpha)" above) and the genuine alpha DECC$SHR /
+  # LIBOTS$SHR EVAX shareables already exist (vms-864). The GAP this closes
+  # is PACKAGING: build-alpha-bootimage.sh -- the script that assembles the
+  # SHIPPED Alpha boot image -- now builds + stages that shareable graph
+  # into SYS$SHARE UNCONDITIONALLY, instead of only when a caller (like the
+  # gates above) happens to pre-populate $WORK/joint by hand.
+  #
+  # This gate proves exactly that packaging integration, isolated from the
+  # existing caller-injection pattern: `shipped-gate` mode clears
+  # $WORK/joint BEFORE calling build-alpha-bootimage.sh, so the ONLY source
+  # of DECC$SHR.EXE / LIBOTS_SHR.EXE / JOINT_E2E.EXE on the mastered ODS-2
+  # volume is that script's own new built-in step -- if the packaging
+  # regresses, the gate fails honestly on the missing-shareable assertion
+  # rather than silently reusing a caller's artifacts. It then boots the
+  # real /dev/vms executive and activates the shipped consumer image
+  # exactly as the N=3 gate does (asserts $STATUS=%X0035A019, the
+  # SS$_NORMAL control anchor, and no activation-failure signature) -- a
+  # REAL runtime activation of a shipped shareable, not a build-only check.
+  # Same alpha_activation scope-gate + build+boot path as the gates above.
+  # -----------------------------------------------------------------------
+  alpha-shipped-shareable-activation:
+    name: "OVMX/Alpha ships + activates real VMS shareable images — SYSLIB-staged genuine DECC$SHR/LIBOTS$SHR via the ordinary packaging path, asserts $STATUS=%X0035A019 (vms-410)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "Shipped shareable gate — build-alpha-bootimage.sh's OWN packaging (not caller-injection) stages the genuine DECC$SHR + LIBOTS$SHR into SYS$SHARE, qemu-system-alpha boots the assembled runtime, IMGACT activates a shipped consumer image over the real /dev/vms + ODS-2 ACP, asserts $STATUS=%X0035A019; runs its own can-fail selftest before the boot"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh shipped-gate
+
+  # -----------------------------------------------------------------------
+  # alpha-activation-selftest (vms-c54). The CHEAP per-PR half of the N=3
+  # activation guard: run-module-gp-activation-alpha.sh `selftest' drives the
+  # SAME assert_activation() the heavy boot uses against crafted transcript
+  # fixtures -- a good one passes; a wrong sentinel, a missing crt0-join, a
+  # broken SS$_NORMAL anchor, an IMGACT failure, and an activated-but-crashed
+  # (signal 11 / SS$_ABORT) image each RED it. Pure bash, no toolchain image, no
+  # boot -> seconds. It proves the gate's TEETH are intact on every
+  # activation-surface PR immediately, independent of the ~90 min heavy boot
+  # (Rule 7: an enforcement mechanism ships its own rejection test). Same
+  # alpha_activation scope-gate; a non-activation PR skips it.
+  # -----------------------------------------------------------------------
+  alpha-activation-selftest:
+    name: "OVMX/Alpha N=3 activation gate — assert_activation() can-fail proof (vms-c54, Rule 7)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: "Selftest — the N=3 activation assertion rejects a wrong sentinel, a missing crt0-join, a broken SS$_NORMAL anchor, an IMGACT activation failure, and an activated-but-crashed image (no build, no boot, seconds)"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh selftest
+
+  # -----------------------------------------------------------------------
+  # alpha-dcl-acceptance (rd vms-f2c, epic vms-8954). Co-release ACCEPTANCE
+  # PARITY: the SAME ground-source DCL/SHOW acceptance battery x86_64 runs
+  # (dcl-acceptance-e2e -> the shared tests/qemu/lib/dcl_acceptance_battery.sh),
+  # driven over qemu-system-alpha -- boot the real runtime, log in
+  # SYSTEM/MANAGER, run the commands a user types, assert VMS-FAITHFUL output
+  # (Rule 1). One shared battery, both arches, no drift. HEAVY-EMULATOR TIER
+  # (schedule || workflow_dispatch) like alpha-boot-login; the ~25-30 min full
+  # boot keeps it off the PR path (the per-PR Alpha guard is the vms-5af modpost
+  # smoke). A RED assertion here is a real Alpha faithful-output gap to fix, each
+  # naming its bug -- never weaken the shared battery to go green.
+  # -----------------------------------------------------------------------
+  alpha-dcl-acceptance:
+    name: OVMX/Alpha DCL/SHOW acceptance — boot, run the commands a user types, assert VMS-faithful (vms-f2c)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "Acceptance gate — boot qemu-system-alpha, log in SYSTEM/MANAGER, run the DCL/SHOW battery, assert VMS-faithful output"
+        run: tools/cross-alpha/run-boot-alpha.sh acceptance
+
+  # -----------------------------------------------------------------------
+  # alpha-module-gp-activation (vms-8208). The OVMX/Alpha single-proc N=3
+  # activation gate. It began as the per-image module-GP (#921/vms-095) API-compat
+  # leg and CAUGHT that program's runtime regression on the real executive (the
+  # $15 module-GP shifts the linkage base off &PDSC while cc1's linkage offsets
+  # stay &PDSC-relative -> a K-shift crash on every K!=0 proc). C1/C2/C3 were
+  # reverted as premise-wrong; this gate now proves the RESTORED pre-$15 `.base
+  # $27' behavior (base == &PDSC) activates cleanly -- i.e. it GATES the revert.
+  #
+  #   Builds the single-proc N=3 image (joint_main.c, return 3) + the SS$_NORMAL
+  #   control (joint_main_ok.c, return 0) with the (now reverted) alpha-dec-vms
+  #   toolchain, stages them onto a MOUNTED ODS-2 volume, boots qemu-system-alpha
+  #   + real /dev/vms, and asserts the EXECUTIVE-recorded $STATUS = %X0035A019
+  #   (N=3 = C$_EXIT1+(3-1)*8), the control anchors SS$_NORMAL, and no
+  #   activation-failure %-error appears (a %DCL-F-ABORT signal-11 crash is the
+  #   exact tell of the reverted $15 K-shift; it must NOT reappear).
+  #
+  # REAL executive, not qemu-user (INV-6/Rule 9): a qemu-user green has hidden a
+  # real-runtime activation fault before. HEAVY-EMULATOR TIER
+  # (schedule || workflow_dispatch), like alpha-boot-login: a full Alpha
+  # cross-build + a joint-image build + a pure-TCG qemu-system-alpha boot is
+  # ~60-100 min, off the fast PR wall; the conductor dispatches it on the frozen
+  # SHA. run-module-gp-activation-alpha.sh runs its own `selftest'
+  # (assert_activation can-fail proof) before the boot.
+  # -----------------------------------------------------------------------
+  alpha-module-gp-activation:
+    name: "OVMX/Alpha single-proc N=3 image activates on the real executive (vms-8208, gates the per-image-GP revert)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      # The kernel/userland/qemu-system-alpha image (build-alpha-bootimage.sh
+      # also rebuilds it, but pre-loading it via the gha layer cache makes that a
+      # cache hit).
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      # The alpha-dec-vms toolchain that builds the joint image (post-revert: cc1
+      # back to `.base $27'). Loaded so build-joint-image.sh reuses it (vms-e7c5)
+      # -- no ftp.gnu.org fetch.
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "N=3 activation gate — build the single-proc image with the (reverted) toolchain, activate it on qemu-system-alpha + real /dev/vms over the ODS-2 ACP, assert $STATUS=%X0035A019 + SS$_NORMAL control + no activation errors"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh gate
+
+  # -----------------------------------------------------------------------
+  # alpha-arith-hparith (rd vms-db3, epic vms-8954). The STANDING green-by-SHA
+  # gate for the Alpha fault->VMS-condition bridge: a trap-enabling FP
+  # divide-by-zero on OVMX/Linux-Alpha must raise a faithful SS$_HPARITH (1284)
+  # condition -- SIGFPE -> sc_fpcr exception-summary decode -> lib$signal(
+  # SS$_HPARITH, Imask,Fmask,summary,PC,PS) -> CHF handler search -> $STATUS --
+  # PROVEN against a REAL qemu-system-alpha kernel trap path, under -static.
+  #
+  # WHY A DEDICATED JOB, focused on ONE suite: test_arith_hparith is Alpha-only
+  # (the FP-trap/sc_fpcr/trapb model is Alpha) and named off the test_syssvc_
+  # glob so the x86/arm per-facility negctl rig never grabs a suite it cannot run
+  # (it has no qemu-system-alpha). Rule 7 -- a test that does not run in CI is
+  # effectively absent -- so the bridge's RUNTIME behavior needs its own
+  # green-by-SHA proof under the shared harness that guards main, not a workshop
+  # run. ONLY_SUITE=test_arith_hparith runs exactly that suite (build+stage+boot
+  # one suite), so the gate is deterministic and does not flake on or pay for the
+  # full ~66-suite alpha run.
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), exactly like
+  # alpha-boot-login above: qemu-system-alpha is pure TCG, a full Alpha
+  # cross-build + boot is ~25-30 min, so it stays OFF the per-PR path. The
+  # conductor fires it via workflow_dispatch on the frozen SHA for a
+  # green-by-SHA reap; the nightly schedule catches drift on main. If the FP-trap
+  # substrate (TCG) ever proves flaky, gate on NO-NEW-vs-baseline (vms-898a) --
+  # but the CHECK 2 sc_fpcr-fidelity sub-assertion has passed green under
+  # qemu-system, so the substrate is faithful, not blocked.
+  # -----------------------------------------------------------------------
+  alpha-arith-hparith:
+    name: OVMX/Alpha FP div-by-zero raises SS$_HPARITH over the CHF (vms-db3)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "HPARITH gate — boot qemu-system-alpha, FP div0 -> SIGFPE -> sc_fpcr summary -> lib$signal(SS$_HPARITH=1284) -> CHF handler -> $STATUS, under -static"
+        run: ONLY_SUITE=test_arith_hparith tools/cross-alpha/run-syssvc-tests-alpha.sh
+
+  # -----------------------------------------------------------------------
+  # alpha-accvio-dispatch (rd vms-cc8, CHF rung-4, gap G6). The hardware sibling
+  # of alpha-arith-hparith: a REAL Alpha access violation -- wild write ->
+  # SIGSEGV -> SS$_ACCVIO raised through the SAME dispatch_condition() -- searched
+  # through a SYS$SETEXV primary vector + the frame-handler chain in the authentic
+  # order and recovered via SYS$UNWIND (rung-2), PROVEN against a real
+  # qemu-system-alpha kernel trap path under -static (test_accvio_dispatch).
+  # Same tiering rationale as alpha-arith-hparith: Alpha-only, named off the
+  # test_syssvc_ glob, HEAVY-EMULATOR TIER (schedule || workflow_dispatch) since a
+  # full Alpha cross-build + boot is ~25-30 min of pure TCG. ONLY_SUITE runs
+  # exactly this one suite for a deterministic green-by-SHA reap; the conductor
+  # fires it on the frozen SHA and the nightly schedule catches drift on main.
+  # -----------------------------------------------------------------------
+  alpha-accvio-dispatch:
+    name: OVMX/Alpha access violation raises SS$_ACCVIO over the CHF (vms-cc8)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "ACCVIO gate — boot qemu-system-alpha, wild write -> SIGSEGV -> SS$_ACCVIO via dispatch_condition -> SYS$SETEXV primary vector + frame handler + SYS$UNWIND recovery, under -static"
+        run: ONLY_SUITE=test_accvio_dispatch tools/cross-alpha/run-syssvc-tests-alpha.sh
+
+  # -----------------------------------------------------------------------
+  # alpha-syssvc-suite (rd vms-341, epic vms-8954). The STANDING green-by-SHA
+  # proof that the OVMX public sys$ API tier (the whole test_syssvc_*/
+  # test_imgact_* suite) RUNS LP64 under a REAL qemu-system-alpha kernel over
+  # /dev/vms -- not just cross-compiles. This is the honest anti-LARP proof the
+  # Alpha userspace works, distinct from alpha-boot-login (which proves boot ->
+  # authenticated DCL) and alpha-arith-hparith (one arithmetic-trap suite).
+  #
+  # NO-NEW-vs-BASELINE gate (vms-898a policy). 58/66 suites pass on Alpha -- that
+  # IS the LP64 proof. The 11 that fail are ENVIRONMENTAL / not-applicable, not
+  # LP64 sys$ bugs, enumerated with per-suite reasons + follow-on rd items in
+  # tools/cross-alpha/alpha-syssvc-baseline.txt (5 symbol-vector suites that are
+  # LINK.EXE-only and N/A on Alpha static images; 2 whose subject image does not
+  # cross-build for Alpha yet; the -nic-none ETH0: pair; 2 emulator-timing). The
+  # runner still RUNS and honestly FAILS them (never skips); the gate REDS on ANY
+  # failure not in that list -- a new suite failing OR one of the 58 passes
+  # regressing -- so it protects the LP64 tier against regression without faking
+  # the environmental blockers green. A new failure is triaged, never
+  # auto-absorbed (adding to the baseline is an explicit, reviewed commit).
+  #
+  # HEAVY-EMULATOR TIER (schedule || workflow_dispatch), like alpha-boot-login:
+  # a full Alpha cross-build + ~66-suite qemu-system-alpha run is ~45-60 min, off
+  # the per-PR path. Conductor fires workflow_dispatch on the frozen SHA for the
+  # green-by-SHA reap; nightly schedule catches drift on main.
+  # -----------------------------------------------------------------------
+  alpha-syssvc-suite:
+    name: OVMX/Alpha public sys$ API tier RUNS LP64 on qemu-system-alpha, no-new-vs-baseline (vms-341)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: "sys tier gate — boot qemu-system-alpha, run the whole test_syssvc_*/test_imgact_* suite over /dev/vms, assert no NEW failure beyond the documented environmental baseline"
+        run: BASELINE=tools/cross-alpha/alpha-syssvc-baseline.txt tools/cross-alpha/run-syssvc-tests-alpha.sh

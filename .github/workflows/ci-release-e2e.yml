@@ -1,0 +1,1544 @@
+name: CI / Release / E2E
+
+# Sibling of ci.yml, split out by vms-1af (ci.yml was ~511KB, over GitHub's
+# silent ~512000-byte non-comment workflow-file ceiling that produces
+# conclusion=startup_failure with ZERO jobs and no pull_request run at all --
+# see rd vms-1af / vms-e18e). Triggers, job names, and the needs-graph are
+# carried over unchanged from the corresponding slice of the old ci.yml; only
+# the shared `changes` path-filter job is now factored into the reusable
+# ci-changes.yml (see that file's header) instead of being duplicated in
+# every domain file. See ci-core-gates.yml for the per-PR/heavy-tier split
+# rationale (vms-fb8) and the P4-only fast-path (vms-6e10), both of which
+# apply identically here via the same `vax_p4_only` input and the same `if:`
+# conditions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      vax_p4_only:
+        description: 'P4-only fast-path: run only the VAX substrate chain + the P4 activation gate, skip the full heavy matrix (rd vms-6e10)'
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: '17 7 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    uses: ./.github/workflows/ci-changes.yml
+
+
+  # -----------------------------------------------------------------------
+  # Job 3: Persistent boot smoke test (QEMU)
+  #
+  # Builds the bootable image, boots QEMU twice with the same disk:
+  #   Boot 1: blank disk → STARTUP.EXE initializes, formats, installs
+  #   Boot 2: same disk  → STARTUP.EXE detects installed system, skips install
+  # Proves install-once / boot-many persistence across reboots.
+  # -----------------------------------------------------------------------
+  persistent-boot:
+    name: Persistent Boot Smoke Test
+    needs: changes
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    # 40 (was 30): the SYSBOOT> conversational proof (vms-b81, wired in by
+    # vms-46c) adds a three-boot expect-driven step to this job; the extra
+    # margin keeps a congested runner from tripping the ceiling as a flake.
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run persistent boot smoke test
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_persistent_boot.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-9b7. THE RELEASE PATH: boot -> provision -> boot. The operator's
+      # "%OVMX-F-EXECINIT, no SYSTEM record in SYS$SYSTEM:SYSUAF.DAT" happened
+      # on exactly this path and NO COMMITTED TEST COVERED IT -- the persistent
+      # boot test above boots the same disk three times but never CHANGES
+      # SYSUAF between boots, so a system whose authorization file is edited
+      # (the entire point of having one) was untested end to end. Runs four
+      # cases: two controls that isolate the failure to the position of the
+      # sixth field separator rather than to the write path, the row that
+      # reproduced the halt, and a fail-stop negative control (SYSUAF with no
+      # SYSTEM row) proving this rig can still go red.
+      - name: Release e2e — boot, provision, boot
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_release_e2e.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-0ff. Reuses the image built above (no extra build). Boots the REAL
+      # runtime twice: once with the executive present (must come up), once
+      # with vms.ko removed from the initramfs (must NOT come up). The second
+      # boot is a negative control — it proves this check can actually go red,
+      # which is the only thing that distinguishes a gate from decoration.
+      - name: The executive is integral — OVMX must not boot without it
+        run: |
+          IDENTITY=${{ github.workspace }}/src/libvms/include/ovmx_identity.h
+          PRODUCT_NAME=$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_NAME[[:space:]]\+"\([^"]*\)".*/\1/p' "$IDENTITY" | head -1)
+          PRODUCT_VERSION=$(sed -n 's/^#define[[:space:]]\+OVMX_PRODUCT_VERSION[[:space:]]\+"\([^"]*\)".*/\1/p' "$IDENTITY" | head -1)
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_executive_integral.sh:/test.sh:ro \
+            -e "EXPECTED_BOOT_BANNER=$PRODUCT_NAME $PRODUCT_VERSION" \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-8ab. Reuses the image built above (no extra build). Boots the SLIM
+      # initramfs against /boot/ovmx-distrib.img — the PRE-INSTALLED distribution
+      # disk the mastering stage produced at build time — and drives a real
+      # SYSTEM/MANAGER login over the console, proving DCL/LOGINOUT/IMGACT and
+      # the SYSLIB shareables all resolve FROM THE MASTERED DISK (the slim
+      # initramfs carries none of them). Nothing installed this disk; vmsfs_master
+      # did. This is the §6 mount-or-halt shape that unblocks stripping install
+      # out of PID 1 (vms-2f0).
+      - name: Distribution disk boots to login (pre-installed, no self-install)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-21a. Reuses the image built above (no extra build). Boots the same
+      # pre-installed distribution disk and, over a real login session, proves
+      # STARTUP.COM is now a real STDRV phase driver: SHOW LOGICAL SYS$STARTUP
+      # names the measured multi-value search list, SYS$STARTUP:/SYS$MANAGER:
+      # carry the phase-driver's data files and the new site files, and
+      # SYS$MANAGER:OVMX.CONF is verified absent from the booted, mounted
+      # system disk (not merely deleted from the source tree).
+      - name: STARTUP.COM phase driver — SYS$STARTUP search list, OVMX.CONF gone
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_startup_phase_driver.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-1fb. Reuses the image built above (no extra build). Boots the
+      # pre-installed distribution disk and asserts the boot console's
+      # FACILITY+IDENT SEQUENCE against a sequence pinned from the OpenVMS
+      # Alpha 8.4 oracle capture (docs/design-boot-faithful.md §3.5/§3.7):
+      # banner-first ordering, %STDRV-I-STARTUP begun exactly once with no
+      # invented "completed" line, oracle-shaped timestamp (space-padded
+      # day, hundredths not milliseconds), and the borrowed-VMS-facility
+      # fixes the §3.7 audit made (%STARTUP-I-SYSDISK/MOUNTED/MODFAIL ->
+      # %OVMX-).
+      - name: Boot console sequence conformance vs. the OpenVMS oracle
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_boot_conformance.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-b81. Reuses the image built above (no extra build). The SYSBOOT>
+      # conversational-boot proof: on ovmx.flags=0,1 the boot halts at the
+      # SYSBOOT> prompt with NOTHING preceding it on the console (not even the
+      # executive-attach line), the SHOW SCSNODE table is byte-shaped to the
+      # OpenVMS Alpha 8.4 oracle (docs/design-boot-faithful.md §3.1), SET
+      # SCSNODE + CONTINUE boots showing the SET node name, and a subsequent
+      # flagless boot on the SAME disk shows the value is back to the file's
+      # (SET is in-memory-only unless WRITEn -- VMS persistence semantics).
+      # `expect` (test tooling, not runtime -- Rule 9) drives the real serial
+      # console. This gate authored the mechanism but was never wired into CI
+      # until vms-46c; it runs here now.
+      - name: SYSBOOT> conversational boot halts pre-banner (vms-b81)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_sysboot_conversational.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-7bd (parent vms-67f, TCP/IP Services). Reuses the image built above
+      # (no extra build). Proves the QEMU runtime gets a virtio-net NIC: the
+      # launcher's arg construction (user-mode SLIRP default, opt-in tap/bridge,
+      # no inbound by default, -nodefaults kept) AND a real boot where the guest
+      # kernel enumerates the virtio-net Ethernet controller with the DEFAULT
+      # user-mode NIC, the PXE ROM is suppressed, and the executive still
+      # attaches (adding the NIC did not regress boot). run-qemu.sh +
+      # Dockerfile.bootable are bind-mounted at /src so the arg-construction
+      # checks run here too, not just the boot check. This is the LINUX-LAYER
+      # NIC only; the VMS device face (EWAn:) is downstream (vms-3be/vms-9d2).
+      - name: virtio-net NIC present on the QEMU runtime (vms-7bd)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_virtio_nic.sh:/test.sh:ro \
+            -v ${{ github.workspace }}/distro/boot/run-qemu.sh:/src/distro/boot/run-qemu.sh:ro \
+            -v ${{ github.workspace }}/distro/Dockerfile.bootable:/src/distro/Dockerfile.bootable:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-566 (parent vms-19e "owns-kernel"). Reuses the image built above (no
+      # extra build). THE taint-clean acceptance gate: boots the real runtime with
+      # the ovmx.taintreport flag so PID 1 reads the actual /proc/sys/kernel/tainted
+      # AFTER loading vms.ko and prints the numeric mask, then FAILS if
+      # (mask & 4096) [O, out-of-tree] or (mask & 8192) [E, unsigned] -- the durable
+      # numeric assertion. Also re-asserts, on the shipped artifacts, modinfo
+      # intree=Y (vms-934) AND a PKCS#7 signature (vms-ff5). This CONSOLIDATES and
+      # supersedes the former test_intree_modules.sh + test_signed_modules.sh steps
+      # (every assertion folded in; coverage strictly increased by the numeric read).
+      - name: kernel is taint-clean (numeric /proc/sys/kernel/tainted, no O/E bits)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_kernel_taint.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+      # vms-566 negative control: the taint gate must be TWO-SIDED. Sources the
+      # gate's pure helpers (no boot) and proves taint_mask_forbidden() reddens on
+      # the O, E and O+E masks, and that stripping a real shipped module's intree
+      # stamp / signature reddens ko_intree_ok / ko_signed_ok -- i.e. a revert to
+      # out-of-tree or unsigned modules would turn this gate RED.
+      - name: taint gate is two-sided (negative controls)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_kernel_taint.sh:/gate.sh:ro \
+            -v ${{ github.workspace }}/tests/qemu/test_kernel_taint_negctl.sh:/negctl.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /negctl.sh /gate.sh
+
+  # -----------------------------------------------------------------------
+  # cut-release-reproducible (vms-d73, epic vms-a84 RELEASE ENGINEERING)
+  #
+  # tools/cut-release.sh is the FIRST piece of release-engineering machinery:
+  # a repeatable "cut a release" command replacing the previous hand-rolled
+  # per-cut process (build the image, copy artifacts out, hand-write
+  # checksums). This job is that command's ground-source proof:
+  #
+  #   1. Run cut-release.sh TWICE, from the SAME commit, each with
+  #      --no-cache so the two builds share nothing (a cache hit would prove
+  #      cache reuse, not reproducibility) — and diff the four release
+  #      artifacts (vmlinuz, initramfs-ovmx-slim.cpio.gz, ovmx-distrib.img,
+  #      ovmx-os.kit) byte-for-byte.
+  #   2. Recompute SHA256SUMS against the actual bundle bytes and compare
+  #      against what the script wrote, so a bug in the script's own
+  #      checksum step cannot self-certify.
+  #   3. Reuse the EXISTING boot-smoke harness (tests/qemu/test_distrib_boot.sh
+  #      — the same one persistent-boot above runs against a normal build) to
+  #      boot the freshly-cut bundle's own vmlinuz/initramfs/distrib.img to a
+  #      real SYSTEM login prompt, rather than reinventing that proof.
+  #
+  # Two full containerized builds (~25-30 min cold each per boot.sh) make this
+  # the heaviest job in the workflow; it is gated behind the `release` path
+  # filter so ordinary PRs that do not touch release-engineering surfaces
+  # don't pay for it, and still runs in full on push/merge_group/schedule.
+  # -----------------------------------------------------------------------
+  cut-release-reproducible:
+    name: cut-release is byte-reproducible + boots (vms-d73)
+    needs: changes
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The module signing key is the one remaining random build input (vms-
+      # secret-signing-key). It is NEVER committed. Mint ONE ephemeral key here
+      # and feed it to BOTH cuts via OVMX_MODULE_SIGNING_KEY, so the signatures/
+      # keyring are identical between them -- which is exactly what this gate
+      # asserts -- without any private key living in git. The key is scoped to
+      # this job and never persisted.
+      - name: Mint one ephemeral module-signing key for both cuts
+        run: |
+          set -euo pipefail
+          KEYDIR="${{ runner.temp }}/ovmx-sign"
+          mkdir -p "$KEYDIR"
+          openssl req -new -nodes -utf8 -sha256 -x509 -newkey rsa:2048 -days 36500 \
+            -subj "/CN=OVMX ephemeral module signing key (reproducibility gate)/" \
+            -keyout "$KEYDIR/key.pem" -out "$KEYDIR/cert.pem"
+          cat "$KEYDIR/key.pem" "$KEYDIR/cert.pem" > "$KEYDIR/signing.pem"
+          echo "OVMX_MODULE_SIGNING_KEY=$KEYDIR/signing.pem" >> "$GITHUB_ENV"
+          echo "Minted ephemeral signing key for both cuts (job-scoped, never persisted)."
+
+      # First independent cut. --no-cache on both cuts is the point: this
+      # proves the BUILD is reproducible, not that BuildKit's cache is.
+      - name: Cut release A (clean tree, no cache)
+        run: |
+          tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-a"
+
+      - name: Cut release B (independent clean tree, no cache)
+        run: |
+          tools/cut-release.sh --no-cache --out-dir "${{ github.workspace }}/dist/release-b"
+
+      # CO-RELEASE GATE PROOF (vms-ca5, epic vms-f10): tools/cut-release.sh
+      # now builds VAX (netbsd-vax/elf32-vax) artifacts UNCONDITIONALLY as
+      # part of every cut -- this step is the "actually IN the cut bundle"
+      # half of that proof, checked against the REAL bundle a real cut just
+      # produced (the "a broken VAX build fails the cut" half is proven
+      # separately + fast by the cut-release-vax-gate job below, via its own
+      # negative control). Recompute-checksums below (`sha256sum -c
+      # SHA256SUMS`) transitively re-verifies these files' bytes too, since
+      # cut-release.sh now writes vax/* entries into SHA256SUMS.
+      - name: Assert VAX release artifacts are present in the cut bundle
+        run: |
+          set -euo pipefail
+          # vms-88c (epic vms-509 Rung F): the shipped set is DERIVED from
+          # each cut's own vax/vax-artifact-manifest.txt, not a hand-named
+          # list here -- so this check never goes stale.
+          for d in dist/release-a dist/release-b; do
+            MANIFEST="$d/vax/vax-artifact-manifest.txt"
+            [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+            while IFS= read -r f || [ -n "$f" ]; do
+              [ -n "$f" ] || continue
+              [ -s "$d/vax/$f" ] || { echo "FAIL: $d/vax/$f missing or empty -- VAX co-release artifact not in the cut bundle"; exit 1; }
+              echo "OK: $d/vax/$f present ($(stat -c%s "$d/vax/$f") bytes)"
+            done < "$MANIFEST"
+          done
+          grep -q '"vax_release_parity"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no vax_release_parity section"; exit 1; }
+          grep -q '"vax_artifacts"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no vax_artifacts field"; exit 1; }
+          echo "OK: release-manifest.json carries vax_release_parity + vax_artifacts"
+
+      - name: Assert Alpha release artifacts are present in the cut bundle
+        run: |
+          set -euo pipefail
+          # rd vms-233b, epic vms-f10: the shipped Alpha set is DERIVED from each
+          # cut's own alpha/alpha-artifact-manifest.txt (itself derived from
+          # CMake's install_manifest_ovmx-images.txt), not a hand-named list --
+          # so this check never goes stale when a new image joins ovmx-images.
+          for d in dist/release-a dist/release-b; do
+            MANIFEST="$d/alpha/alpha-artifact-manifest.txt"
+            [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+            while IFS= read -r f || [ -n "$f" ]; do
+              [ -n "$f" ] || continue
+              [ -s "$d/alpha/$f" ] || { echo "FAIL: $d/alpha/$f missing or empty -- Alpha co-release artifact not in the cut bundle"; exit 1; }
+              echo "OK: $d/alpha/$f present ($(stat -c%s "$d/alpha/$f") bytes)"
+            done < "$MANIFEST"
+          done
+          grep -q '"alpha_release_parity"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no alpha_release_parity section"; exit 1; }
+          grep -q '"alpha_artifacts"' dist/release-a/release-manifest.json \
+            || { echo "FAIL: release-manifest.json has no alpha_artifacts field"; exit 1; }
+          echo "OK: release-manifest.json carries alpha_release_parity + alpha_artifacts"
+
+      # The manifest's own "cut_at_utc" field legitimately differs between
+      # the two invocations (it is wall-clock metadata ABOUT the cut, not a
+      # build input) -- the reproducibility claim is scoped to the four real
+      # release artifacts and their checksums, which is exactly what this
+      # step compares. SHA256SUMS also carries no such field, so it is
+      # compared byte-for-byte too, not just semantically. RELEASE-NOTES-
+      # <version>.md (vms-55a) is generated from git history that is fixed
+      # for a given commit and carries no wall-clock stamp of its own (see
+      # tools/gen_release_notes.py's header) -- it belongs in this same
+      # byte-identical set, found by glob since its name is version-suffixed.
+      - name: Assert the two cuts are byte-identical
+        run: |
+          set -euo pipefail
+          A="dist/release-a"
+          B="dist/release-b"
+          FAIL=0
+          NOTES_A=$(basename "$(ls "$A"/RELEASE-NOTES-*.md)")
+          for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit ovmx-os.kit.manifest.txt "$NOTES_A" SHA256SUMS; do
+            if cmp -s "$A/$f" "$B/$f"; then
+              echo "OK: $f is byte-identical across both cuts"
+            else
+              echo "FAIL: $f DIFFERS between the two independent cuts"
+              cmp "$A/$f" "$B/$f" || true
+              FAIL=1
+            fi
+          done
+          [ "$FAIL" -eq 0 ] || { echo "Reproducibility check FAILED"; exit 1; }
+          echo "All release artifacts + release notes + SHA256SUMS are byte-identical across two independent --no-cache cuts."
+
+      # Defense in depth against a bug in the script's own checksum step:
+      # recompute sha256 directly against the shipped bytes and compare
+      # against what release-manifest.json / SHA256SUMS claim.
+      - name: Recompute checksums and compare against the emitted manifest
+        run: |
+          set -euo pipefail
+          cd dist/release-a
+          sha256sum -c SHA256SUMS
+          for f in vmlinuz initramfs-ovmx-slim.cpio.gz ovmx-distrib.img ovmx-os.kit; do
+            REAL=$(sha256sum "$f" | awk '{print $1}')
+            # Each artifact is emitted as a single JSON line (cut-release.sh
+            # printf's one object per line, no embedded newlines) -- a plain
+            # grep+sed extraction is exact and needs no JSON library.
+            CLAIMED=$(grep "\"component\": \"$f\"" release-manifest.json | sed -n 's/.*"sha256": "\([a-f0-9]*\)".*/\1/p')
+            [ -n "$CLAIMED" ] || { echo "FAIL: $f not found in release-manifest.json"; exit 1; }
+            [ "$REAL" = "$CLAIMED" ] || { echo "FAIL: $f real=$REAL manifest=$CLAIMED"; exit 1; }
+            echo "OK: release-manifest.json sha256 for $f matches the actual artifact bytes"
+          done
+
+      # THE BOOT PROOF. Reuses tests/qemu/test_distrib_boot.sh verbatim
+      # against the CUT bundle's own artifacts (bind-mounted at the fixed
+      # /boot/ paths the script expects) instead of reinventing it — the same
+      # QEMU boot-to-login assertions persistent-boot already runs against a
+      # normal (non-cut) build.
+      - name: Boot the freshly-cut bundle to a login prompt
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/dist/release-a/vmlinuz:/boot/vmlinuz:ro \
+            -v ${{ github.workspace }}/dist/release-a/initramfs-ovmx-slim.cpio.gz:/boot/initramfs-ovmx-slim.cpio.gz:ro \
+            -v ${{ github.workspace }}/dist/release-a/ovmx-distrib.img:/boot/ovmx-distrib.img:ro \
+            -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
+            ubuntu:24.04 \
+            bash -c "apt-get -o Acquire::Retries=5 update -qq && apt-get -o Acquire::Retries=5 install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio >/dev/null 2>&1 && bash /test.sh"
+
+  # -----------------------------------------------------------------------
+  # Job 2c: install -> UPGRADE -> boot (vms-f05, epic vms-a84 RELEASE ENGINEERING)
+  #
+  # Fresh install is proven (Job 2 above, Job 2b's PARTS demo, vms-df9's
+  # product-install-e2e); a 0.N -> 0.N+1 UPGRADE preserving user state was
+  # completely untested before this job -- exactly where real systems break.
+  # Cuts TWO real tools/cut-release.sh bundles (never hand-faked "0.N"/
+  # "0.N+1"): BASELINE from a fixed, recorded commit
+  # (28a929b2, "tests: install->UPGRADE->boot e2e gate scaffolding" -- the
+  # commit right before this same PR bumped OVMX_PRODUCT_VERSION V0.1 ->
+  # V0.2) and UPGRADE from this workflow's own commit (HEAD). This is a
+  # deliberately PINNED historical pair, not a rolling N/N+1 -- it exists to
+  # structurally prove the upgrade MECHANISM once, against a real version
+  # jump this repository actually made. Re-pinning it to a later pair (or
+  # making it roll forward automatically each release) is tracked
+  # separately, not done here (no gold-plating this item's scope).
+  #
+  # tests/qemu/test_upgrade_e2e.sh's own header carries the history: PRODUCT
+  # INSTALL's do_install() used to overwrite every kit-listed file
+  # unconditionally, including SYS$MANAGER:SYSTARTUP_VMS.COM (shipped BY
+  # the kit) -- so a site customization appended to that file did NOT
+  # survive an upgrade (assertion (b)). FIXED by vms-2c9 (kit-format
+  # "seed once" metadata, OVMX_KIT_ENTRY_FLAG_SEED_ONCE): (b) now passes
+  # alongside (a) user-data survival, (c) the version bump, and (d) the
+  # machine still booting after the upgrade. This job is a REAL, FULLY
+  # ENFORCING gate -- no `continue-on-error`, every assertion is expected
+  # to pass on every run, and a red run here blocks the merge.
+  # -----------------------------------------------------------------------
+  upgrade-e2e:
+    name: install -> UPGRADE -> boot e2e (vms-f05)
+    needs: changes
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cut the BASELINE release (pinned commit, pre version-bump)
+        run: |
+          tools/cut-release.sh --ref 28a929b2 --out-dir "${{ github.workspace }}/dist/upgrade-baseline"
+
+      - name: Cut the UPGRADE release (this commit)
+        run: |
+          tools/cut-release.sh --ref HEAD --out-dir "${{ github.workspace }}/dist/upgrade-upgrade"
+
+      - name: Build host tools (INITIALIZE.EXE, vmsfs_master)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TOOLS=ON -DBUILD_TESTS=OFF
+          cmake --build build -j"$(nproc)" --target vms_initialize vmsfs_master
+
+      - name: Build bootable image (qemu tooling only -- boots the two cuts' own artifacts)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: install -> UPGRADE -> boot e2e
+        id: upgrade_e2e
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+          OVMX_BASELINE_RELEASE_DIR="${{ github.workspace }}/dist/upgrade-baseline" \
+          OVMX_UPGRADE_RELEASE_DIR="${{ github.workspace }}/dist/upgrade-upgrade" \
+            tests/qemu/run_upgrade_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: upgrade_e2e SKIPPED in CI — this gate must actually run the real boot+upgrade, never skip silently." >&2
+            exit 1
+          fi
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2c2: PRODUCT INSTALL /DESTINATION -> boot the INSTALLED target as its
+  # own system disk (vms-96ec, parent vms-718, gates the vms-37f R1 e2e).
+  #
+  # THE COVERAGE THAT WAS MISSING. product_install_e2e proves a /DESTINATION
+  # install lands runnable bytes on a mounted DATA volume; it never boots that
+  # target. Every booting e2e above (persistent-boot, distrib_boot, the
+  # release-acceptance gates) boots the PRE-MASTERED ovmx-distrib.img, already
+  # rooted+concealed by vmsfs_master -- never a freshly /DESTINATION-installed
+  # target. So the on-disk SHAPE a /DESTINATION install produces was never
+  # booted, which is exactly how vms-649 found PRODUCT INSTALL wrote a FLAT
+  # [SYSEXE] layout instead of the rooted, concealed [SYS0.SYSCOMMON.SYSEXE] a
+  # bootable system disk requires (a flat target halts %OVMX-F-SYSINIT --
+  # DCL.EXE absent under the rooted path STARTUP resolves). This job installs
+  # the OS kit onto a blank INITIALIZEd disk and then BOOTS that disk as the
+  # sole DKA0: system disk (slim bootstrap initramfs) to a SYSTEM login. It is
+  # a REAL, FULLY ENFORCING gate -- OVMX_QEMU_FULL_E2E=1, and a SKIP (exit 77)
+  # is a hard failure, so the opt-in that hid this class of bug is NOT the CI
+  # cover here. Same shape as upgrade-e2e above.
+  # -----------------------------------------------------------------------
+  install-boot-e2e:
+    name: install /DESTINATION -> boot the installed target -> login (vms-96ec)
+    needs: changes
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build host tools (INITIALIZE.EXE)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TOOLS=ON -DBUILD_TESTS=OFF
+          cmake --build build -j"$(nproc)" --target vms_initialize
+
+      - name: Build bootable image (qemu tooling + the OS kit staged at SYS$UPDATE:)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: install /DESTINATION -> boot installed target -> login
+        id: install_boot_e2e
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_install_boot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: install_boot_e2e SKIPPED in CI — this gate must actually install and boot the target, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2c3: THE R1 RELEASE-ACCEPTANCE GATE — media -> menu install -> SEPARATE
+  # container -> login -> PRODUCT SHOW (vms-37f, parent vms-718, docs/design-
+  # vms-faithful-install.md §3.3 "Release e2e"). Blocks vms-dd1.
+  #
+  # WHAT IT UNIFIES. install_menu_e2e drives the full OVMX$INSTALL.COM menu but
+  # inside ONE container; install_boot_e2e boots a /DESTINATION-installed target
+  # but via a raw DCL command, ONE container; docker_persistent_disk crosses a
+  # real container boundary but drives PID 1's auto-install, not the menu. This
+  # job is the intersection none of them cover: the FULL MENU-DRIVEN install in
+  # container 1, the target surviving into a SEPARATE `docker run` (container 2)
+  # that boots it ALONE and logs in + PRODUCT SHOW PRODUCT + DIRECTORY, and a
+  # container 3 re-boot proving first-boot ran once.
+  #
+  # THE RED-FIRST PROOF IS BUILT IN (the vms-9b7 standing rule). The gate keeps
+  # every drive at cache=writethrough and MECHANICALLY asserts it; then its own
+  # NEGATIVE CONTROL re-runs the SAME fully-successful menu install but onto a
+  # CONTAINER-LOCAL disk (OVMX_NEGCTL_LOCAL_TARGET=1) so it never reaches the
+  # shared host file, and asserts the following verify CANNOT boot an installed
+  # system. If a successful install that never touched the shared file still
+  # verified, the "boundary" would be vacuous and the gate reddens — so a run
+  # where the cross-container property does NOT hold fails this job. Deterministic
+  # (no guest-writeback-timing dependence), so the gate is not flaky.
+  #
+  # A REAL, FULLY ENFORCING gate — OVMX_QEMU_FULL_E2E=1, and a SKIP (exit 77) is
+  # a hard failure, so the opt-in that keeps `ctest` cheap is NOT the CI cover
+  # here. Same shape as install-boot-e2e above. The gate closes the REAL
+  # acceptance loop: container 1 sets a KNOWN non-default SYSTEM password during
+  # install and asserts AUTHORIZE persisted it to the target SYSUAF
+  # (%UAF-I-SAVED), and container 2 logs in with THAT install-set password —
+  # possible now that vms-8b6 (#385, cross-process mounted-device visibility) and
+  # vms-581 (#378, RMS CREATE on a mounted ODS-2 volume) are in base. (A separate
+  # SET TERMINAL/NOECHO display gap remains, captured as a NOTE, not scored.)
+  # -----------------------------------------------------------------------
+  release-install-e2e:
+    name: R1 release e2e — media→menu install→separate container→login→PRODUCT SHOW (vms-37f)
+    needs: changes
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build host tools (INITIALIZE.EXE)
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Debug -DBUILD_TOOLS=ON -DBUILD_TESTS=OFF
+          cmake --build build -j"$(nproc)" --target vms_initialize
+
+      - name: Build bootable image (qemu tooling + install media + the OS kit)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: media -> menu install -> separate container -> login -> PRODUCT SHOW (incl. the no-flush negative control)
+        id: release_install
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+          OVMX_INITIALIZE_EXE="${{ github.workspace }}/build/bin/INITIALIZE.EXE" \
+            tests/qemu/run_release_install.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: release_install SKIPPED in CI — this gate must actually install across a container boundary, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2d: GENERALIZED RELEASE-ACCEPTANCE GATE (vms-a86f, epic vms-a84
+  # RELEASE ENGINEERING)
+  #
+  # The PARTS 0.2 demo below (Job 2b) is PARTS-0.2-SPECIFIC and boots the DEV
+  # bootable image built straight from the working tree -- it has never once
+  # booted the actual thing a release recipient receives, and nothing checks
+  # that the shipped version matches what was cut. This job is that
+  # generalized, versioned proof:
+  #
+  #   1. Cuts a REAL release bundle via tools/cut-release.sh (vms-d73) --
+  #      never a hand-built artifact.
+  #   2. Boots that CUT bundle's own vmlinuz/initramfs-ovmx-slim.cpio.gz/
+  #      ovmx-distrib.img (bind-mounted into the ovmx-boot image, which here
+  #      supplies qemu-system-x86_64 and general boot tooling ONLY -- same
+  #      convention as upgrade-e2e above; the image's own baked-in /boot/* is
+  #      never touched).
+  #   3. Runs the SAME PARTS acceptance scenario as parts_demo_e2e (login ->
+  #      @PARTS_SETUP -> $ PARTS -> keyed RMS lookups -> DIRECTORY
+  #      corroboration) against the CUT artifact instead of a dev build.
+  #   4. Asserts `$ PRODUCT SHOW PRODUCT` on the booted artifact reports
+  #      EXACTLY the OVMX_PRODUCT_VERSION the cut recorded in its own
+  #      release-manifest.json.
+  #
+  # THE NEGATIVE CONTROL (second step below): reruns the identical gate
+  # against the SAME cut bundle, but with a deliberately wrong expected
+  # version substituted in (OVMX_EXPECTED_PRODUCT_VERSION_OVERRIDE) and
+  # OVMX_SKIP_PARTS_SCENARIO=1 (a fast boot+login+version-check-only run --
+  # no need to repeat the ~25-minute RMS load just to prove a string
+  # disagrees). This step is EXPECTED to fail (rc=1); the step inverts that
+  # expectation itself, so a run where the gate does NOT fail on a version
+  # mismatch is what turns this job red -- proving the version-match
+  # assertion above is a real, enforcing gate rather than one that always
+  # reports success no matter what it is fed.
+  # -----------------------------------------------------------------------
+  release-acceptance-e2e:
+    name: Release-acceptance gate — boot the CUT artifact, verify shipped version (vms-a86f)
+    needs: changes
+    # vms-fb8 tier-split: heavy release/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cut the release bundle (tools/cut-release.sh, never hand-built)
+        run: |
+          tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/release-acceptance"
+
+      # CO-RELEASE GATE PROOF (vms-ca5, epic vms-f10): the acceptance bundle
+      # is a real cut-release.sh cut, so it now unconditionally carries the
+      # VAX artifact set too -- confirm it landed. R2 scope only (build +
+      # publish); no VAX boot proof here, that is R3 vms-065.
+      - name: Assert VAX release artifacts are present in the acceptance bundle
+        run: |
+          set -euo pipefail
+          # vms-88c (epic vms-509 Rung F): DERIVED from the cut's own
+          # vax/vax-artifact-manifest.txt -- see cut-release-vax-gate for the
+          # same pattern.
+          MANIFEST="dist/release-acceptance/vax/vax-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/release-acceptance/vax/$f" ] || { echo "FAIL: dist/release-acceptance/vax/$f missing or empty"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          echo "OK: all $n VAX co-release artifacts present in the acceptance bundle"
+
+      - name: Assert Alpha release artifacts are present in the acceptance bundle
+        run: |
+          set -euo pipefail
+          # rd vms-233b, epic vms-f10: DERIVED from the cut's own
+          # alpha/alpha-artifact-manifest.txt -- see cut-release-alpha-gate for
+          # the same pattern.
+          MANIFEST="dist/release-acceptance/alpha/alpha-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/release-acceptance/alpha/$f" ] || { echo "FAIL: dist/release-acceptance/alpha/$f missing or empty"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          echo "OK: all $n Alpha co-release artifacts present in the acceptance bundle"
+
+      - name: Build bootable image (qemu tooling only -- boots the cut bundle's own artifacts)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Release-acceptance gate — boot the cut artifact, run the PARTS scenario, verify the shipped version
+        id: acceptance
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+          OVMX_RELEASE_DIR="${{ github.workspace }}/dist/release-acceptance" \
+            tests/qemu/run_release_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: release_acceptance_e2e SKIPPED in CI — this gate must actually run the real boot+demo, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: NEGATIVE CONTROL — a wrong expected version must redden the gate
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+          OVMX_RELEASE_DIR="${{ github.workspace }}/dist/release-acceptance" \
+          OVMX_EXPECTED_PRODUCT_VERSION_OVERRIDE="V0.0-NEGATIVE-CONTROL-DOES-NOT-EXIST" \
+          OVMX_SKIP_PARTS_SCENARIO=1 \
+            tests/qemu/run_release_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: the negative control PASSED against a deliberately wrong expected version — the version-match gate is not actually enforcing." >&2
+            exit 1
+          fi
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: the negative control SKIPPED instead of running for real — cannot prove the gate reddens." >&2
+            exit 1
+          fi
+          echo "Negative control confirmed: the gate correctly reddened (exit $rc) on a genuine version disagreement."
+          exit 0
+
+  # -----------------------------------------------------------------------
+  # tcpip-daytime-boot-e2e (vms-21b): the aux server launches a SYS$SYSTEM:
+  # service image on a BOOTED distro. Proves the (B) ACP-stage launch fix end to
+  # end: a test-overlay build (OVMX_TEST_ENABLE_TCPIP=1) cold-boots with the aux
+  # server auto-started, TCPIP$INETD materializes SYS$SYSTEM:TCPIP$DAYTIME.EXE off
+  # the Files-11 ACP and execve's it, and an inbound connection to :13 gets the
+  # RFC 867 line back. DAYTIME is the minimal service (no auth/privsep/posture);
+  # SSH (vms-843a) is the second, harder service on this proven launch path.
+  # TRIGGER (vms-f834 hole-free form): PR touching tcpip -> runs (so the vms-21b
+  # PR is green-by-SHA); schedule/dispatch -> runs (main-side reds surface on the
+  # nightly, never a PR-only blind spot). Full-distro boot is too heavy for every
+  # unrelated main push, so it is path-filtered, NOT run on every != pull_request.
+  tcpip-daytime-boot-e2e:
+    name: TCP/IP daytime cold-boot e2e — aux server launches DAYTIME on a booted distro (vms-21b)
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+            || (github.event_name == 'pull_request' && needs.changes.outputs.tcpip == 'true'))
+            && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build daytime test-overlay bootable image (OVMX_TEST_ENABLE_TCPIP=1)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot-tcpip:latest
+          build-args: |
+            OVMX_TEST_ENABLE_TCPIP=1
+          # Reuses the shared gha layer cache: only the late test-overlay layer
+          # differs from the shipped build, so the kernel + build-static layers are
+          # cache hits (fast rebuilds), the reason CI beats a cold rail build here.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Daytime cold-boot proof — INETD launches DAYTIME (ACP-stage), :13 answers RFC 867
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_DAYTIME_IMAGE=ovmx-boot-tcpip:latest \
+            tests/qemu/run_tcpip_daytime_boot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: tcpip_daytime_boot_e2e SKIPPED in CI — this gate must actually boot + probe :13, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+      - name: Config-survives-reboot proof — TCPIP$REAPPLY reapplies persisted config, store does not grow (vms-b97)
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_DAYTIME_IMAGE=ovmx-boot-tcpip:latest \
+            tests/qemu/run_tcpip_reboot_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: tcpip_reboot_e2e SKIPPED in CI — this gate must actually double-boot + assert reapply/no-growth, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # dcl-acceptance-e2e: BOOT-AND-RUN-COMMANDS DCL/SHOW acceptance gate.
+  #
+  # THE HOLE THIS CLOSES: release-acceptance-e2e above boots + logs in and
+  # then checks only PRODUCT SHOW PRODUCT's version -- it never runs the
+  # commands a user types. So V0.5-2 shipped with SHOW USERS empty, SHOW
+  # DEVICE not Mounted, SHOW QUOTA fabricated, and WRITE F$xxx() printing the
+  # literal, and the acceptance gate stayed green. This job boots the REAL
+  # runtime (the pre-mastered ODS-2 distribution disk baked into ovmx-boot),
+  # logs in SYSTEM/MANAGER, RUNS a battery of basic DCL/SHOW commands, and
+  # asserts VMS-faithful output for each, with a per-segment negative control
+  # (tests/qemu/test_dcl_acceptance_e2e.sh).
+  #
+  # WIRING (the vms-7a8 path-filter hole made explicit): this gate must gate a
+  # RELEASE CUT and must never be path-filtered away on a docs-only commit,
+  # yet must not redden every unrelated PR.
+  #   - On any NON-PR event (push to main, merge_group, the release-verify
+  #     workflow_dispatch, schedule) it runs unconditionally -- so a release
+  #     cut and the pre-merge full-run always include it, even a docs-only
+  #     release commit. This is the "a release cut cannot pass without these
+  #     assertions green" requirement.
+  #   - On a PR it runs ONLY when the change touches the DCL/RTL surface
+  #     (needs.changes.outputs.toolchain, which covers src/vmsdcl/**) or the
+  #     executive (needs.changes.outputs.kernel, which covers src/kernel*/**,
+  #     src/libvms/syssvc/**, src/libvmssys/vms_kif.*, and tests/qemu/**) --
+  #     so the fix PRs get direct feedback and unrelated PRs are never
+  #     reddened.
+  #
+  # EXPECTED TO BE RED until the in-flight command fixes land. It asserts the
+  # CORRECT behavior and must NOT be weakened to pass now; it is the gate that
+  # blocks a broken V0.5-3 cut and goes green only as the fixes land. A SKIP
+  # (77) is treated as a hard failure so it can never silently no-op.
+  # -----------------------------------------------------------------------
+  dcl-acceptance-e2e:
+    name: DCL/SHOW acceptance gate — boot, run the commands a user types, assert VMS-faithful output
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: DCL/SHOW acceptance gate — boot, log in, run the battery, assert VMS-faithful output
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_dcl_acceptance_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: dcl_acceptance_e2e SKIPPED in CI — this gate must actually boot and run the commands, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # console-newline-spam-e2e (vms-dec): the boot-console coverage CI lacked.
+  # Every other boot gate waits for "Username:" and only THEN feeds input, so
+  # none ever provoked the echo that produced the operator-reported boot
+  # "newline spam" (the operator's own RETURN keystrokes, mashed at a slow
+  # boot, echoed by the cooked-mode console tty as blank lines). This gate
+  # TYPES RETURNs DURING the boot, before the prompt appears, and asserts no
+  # run of echoed blank lines precedes "Username:" while login still works
+  # (tests/qemu/test_console_boot_no_newline_spam.sh).
+  console-newline-spam-e2e:
+    name: "Console boot — no echoed-RETURN newline spam before Username: (vms-dec)"
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.kernel == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Console newline-spam gate — hammer RETURN during boot, assert no echoed blank-line spam
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_console_boot_no_newline_spam_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: console_boot_no_newline_spam_e2e SKIPPED in CI — this gate must actually boot and type during boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # vms-9f5 device-discovery proof, per-PR. Device-native naming makes the
+  # system disk DISCOVERED, not compile-frozen. The DEFAULT discovery path
+  # (PID 1 select-default -> mount VDA0: -> publish OVMX_SYSDEVICE) is already
+  # exercised per-PR by console-newline-spam-e2e and the Alpha activation gate,
+  # so a bug there reds those. THIS focused job proves the NON-DEFAULT SELECTION
+  # -- the headline capability and the vms-9f5 DONE-condition -- per-PR: it boots
+  # the mastered system as the SECOND virtio disk (vdb -> VDA100:), selected by
+  # an ovmx.sysdev=VDA100: kernel-cmdline token, and reaches login (impossible on
+  # pristine main, which always mounts vda), plus an anti-LARP control (same two
+  # disks, no selector, must NOT log in -- proving the selector, not QEMU disk
+  # ordering, reaches the second disk). Tightly gated (honours the vms-fb8
+  # tier-split): runs on PR ONLY when the naming (kernel/toolchain) or the boot/
+  # discovery (boot) sources change, never on an unrelated PR; the heavy full
+  # boot/e2e battery stays in the non-PR persistent-boot tier.
+  device-discovery-alternate-disk-e2e:
+    name: "Alternate-disk boot — 2nd-disk device discovery reaches login (vms-9f5)"
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.toolchain == 'true' || needs.changes.outputs.boot == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image (qemu tooling + the pre-mastered distribution disk)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Alternate-disk boot — system on the second disk reaches login (vms-9f5)
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}/tests/qemu/test_boot_alternate_disk.sh:/test.sh:ro \
+            --entrypoint bash \
+            ovmx-boot:latest \
+            /test.sh
+
+  # -----------------------------------------------------------------------
+  # cut-release-vax-gate (rd vms-ca5, epic vms-f10; "R2 release parity",
+  # docs/design-vax-mainstream-release.md). FAST per-PR complement to the
+  # heavy cut-release-reproducible / release-acceptance-e2e jobs above (which
+  # each now build VAX for real as part of every cut, at full ~25-30-min-cold
+  # cost): this job proves the two co-release-gate HALVES directly against
+  # tools/cut-release-vax.sh, in minutes, without paying for a full x86_64
+  # OS build first --
+  #   1. POSITIVE: the VAX artifact set builds and is byte-present.
+  #   2. NEGATIVE (OVMX_VAX_RELEASE_NEGCTL=1): a deliberately-failed VAX
+  #      stage must make tools/cut-release-vax.sh -- and therefore
+  #      tools/cut-release.sh, which calls it unconditionally -- exit
+  #      nonzero. This is the "a release is NOT cuttable if the VAX build
+  #      fails" half of the invariant, proven mechanically, mirroring how R1
+  #      (vms-9172) gave its per-script cross-compile gates teeth via a
+  #      broken-TU negative control -- this one targets the GATE WIRING
+  #      itself rather than a compiler rejection.
+  # BUILD-ONLY (Rule 9): no SIMH boot here, that is R3 vms-065.
+  # -----------------------------------------------------------------------
+  cut-release-vax-gate:
+    name: VAX co-release gate — artifacts build + a failed VAX build reds the cut (vms-ca5)
+    needs: changes
+    # vms-fb8 tier-split: heavy VAX co-release gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
+    # cross-arch parity still enforced pre-merge (image-parity-gate stays on PR;
+    # the full VAX build runs in the pre-merge full run).
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same NetBSD/vax syssrc the R1 gates pin (tests/netbsd/netbsd_version.env,
+      # read by cut-release-vax.sh itself) -- cached so a source-only PR never
+      # re-downloads it.
+      - name: Cache NetBSD/vax kernel sources (syssrc)
+        uses: actions/cache@v4
+        with:
+          path: .netbsd-vax-src-release-cache
+          key: netbsd-vax-syssrc-release-${{ hashFiles('tests/netbsd/netbsd_version.env') }}
+          restore-keys: |
+            netbsd-vax-syssrc-release-
+
+      - name: POSITIVE — build the VAX release artifact set (tools/cut-release-vax.sh)
+        run: |
+          set -euo pipefail
+          tools/cut-release-vax.sh \
+            --src-dir "${{ github.workspace }}" \
+            --out-dir "${{ github.workspace }}/dist/vax-gate-proof" \
+            --netbsd-src-cache "${{ github.workspace }}/.netbsd-vax-src-release-cache"
+          # vms-88c (epic vms-509 Rung F): the shipped set is DERIVED from
+          # vax-artifact-manifest.txt (itself derived from CMake's
+          # install_manifest_ovmx-images.txt), not a hand-named list here --
+          # so this check never goes stale when a new image joins the
+          # ovmx-images aggregate. Ground-source both directions: every named
+          # artifact must be a real non-empty file, and no extra files may be
+          # present beyond what the manifest names.
+          MANIFEST="dist/vax-gate-proof/vax-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/vax-gate-proof/$f" ] || { echo "FAIL: dist/vax-gate-proof/$f missing or empty (named in $MANIFEST)"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          dir_count=$(find dist/vax-gate-proof -maxdepth 1 -type f ! -name 'vax-artifact-manifest.txt' | wc -l)
+          [ "$dir_count" -eq "$n" ] || { echo "FAIL: $MANIFEST names $n artifacts but dist/vax-gate-proof/ contains $dir_count files"; exit 1; }
+          [ "$n" -ge 9 ] || { echo "FAIL: only $n VAX release artifacts named in $MANIFEST -- expected at least the pre-Rung-F baseline of 9"; exit 1; }
+          echo "PASS: all $n VAX release artifacts named in $MANIFEST are present"
+
+      - name: NEGATIVE CONTROL — OVMX_VAX_RELEASE_NEGCTL=1 must fail the VAX artifact build
+        run: |
+          set +e
+          RAW=$(OVMX_VAX_RELEASE_NEGCTL=1 tools/cut-release-vax.sh \
+                  --src-dir "${{ github.workspace }}" \
+                  --out-dir "${{ github.workspace }}/dist/vax-gate-negctl" \
+                  --netbsd-src-cache "${{ github.workspace }}/.netbsd-vax-src-release-cache" 2>&1)
+          rc=$?
+          set -e
+          echo "$RAW"
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: OVMX_VAX_RELEASE_NEGCTL=1 PASSED — the co-release gate has no teeth against a failed VAX build" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'OVMX_VAX_RELEASE_NEGCTL: deliberately failing the userspace-image stage' \
+            || { echo "FATAL: did not see the expected NEGCTL failure banner — this failed for the wrong reason" >&2; exit 1; }
+          echo "Negative control confirmed: a failed VAX stage exits nonzero (exit $rc)."
+
+      - name: NEGATIVE CONTROL — tools/cut-release.sh itself must fail when the VAX build fails
+        run: |
+          set +e
+          RAW=$(OVMX_VAX_RELEASE_NEGCTL=1 tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/vax-gate-full-negctl" 2>&1)
+          rc=$?
+          set -e
+          # Truncate: this run legitimately fails during the (slow) x86_64
+          # container build stage too if it ever gets that far, so only the
+          # tail matters for diagnosing which gate fired -- but the VAX stage
+          # runs BEFORE the OS-kit ground-source check, so a VAX failure here
+          # should short-circuit long before any container build starts.
+          echo "$RAW" | tail -60
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: cut-release.sh PASSED despite OVMX_VAX_RELEASE_NEGCTL=1 — the co-release invariant is not wired into cut-release.sh" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'VAX release-artifact build FAILED -- co-release invariant' \
+            || { echo "FATAL: cut-release.sh failed for the wrong reason (did not name the VAX co-release invariant)" >&2; exit 1; }
+          echo "Negative control confirmed: cut-release.sh itself refuses to cut a release when the VAX build fails (exit $rc)."
+
+  # -----------------------------------------------------------------------
+  # cut-release-alpha-gate (rd vms-233b, epic vms-f10 "co-release parity across
+  # aarch64/x86_64/alpha/VAX"). The Alpha analog of cut-release-vax-gate above:
+  # the FAST, DETERMINISTIC co-release WIRING gate that proves the two halves of
+  # the Alpha co-release invariant directly against tools/cut-release-alpha.sh --
+  #   1. POSITIVE: the Alpha (EM_ALPHA/LP64) userspace ovmx-images artifact set
+  #      builds and is byte-present.
+  #   2. NEGATIVE (OVMX_ALPHA_RELEASE_NEGCTL=1): a deliberately-failed Alpha
+  #      stage must make tools/cut-release-alpha.sh -- and therefore
+  #      tools/cut-release.sh, which calls it unconditionally -- exit nonzero.
+  #      "a release is NOT cuttable if the Alpha build fails", proven mechanically.
+  #
+  # This gates on the DETERMINISTIC cross-compile + negctl, NOT on the heavy
+  # qemu-system-alpha boot: that is a SEPARATE leg (alpha-boot-login above,
+  # schedule/dispatch), exactly as netbsd-vax-boot is separate from this VAX gate
+  # -- so boot-tier TCG flake can never hold a release cut hostage. This is what
+  # protects an Alpha-carrying cut (the GCC lane's Alpha C-RTL DECC$SHR/LIBOTS$SHR
+  # userland lands in exactly this image set): if that build breaks, the cut reds.
+  #
+  # BUILD-ONLY (Rule 9): no boot here. SCOPE is the userspace image set; the Alpha
+  # executive module (vms.ko) is a tracked follow-on (see
+  # tools/cut-release-alpha.sh's header, INV-6). Same tier-split as the VAX gate:
+  # NON-PR events only.
+  # -----------------------------------------------------------------------
+  cut-release-alpha-gate:
+    name: Alpha co-release gate — artifacts build + a failed Alpha build reds the cut (vms-233b)
+    needs: changes
+    # vms-fb8 tier-split: heavy Alpha co-release gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request;
+    # cross-arch parity still enforced pre-merge in the full pre-merge run.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # The ovmx-cross-alpha toolchain image is large (alpha-linux-gnu cross +
+      # kernel/qemu deps); reclaim the big unused hosted toolchains up front so a
+      # fresh runner's ~14 GB root can't ENOSPC mid-build. Same guard the
+      # alpha-boot-login job uses.
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: POSITIVE — build the Alpha release artifact set (tools/cut-release-alpha.sh)
+        run: |
+          set -euo pipefail
+          tools/cut-release-alpha.sh \
+            --src-dir "${{ github.workspace }}" \
+            --out-dir "${{ github.workspace }}/dist/alpha-gate-proof"
+          # The shipped set is DERIVED from alpha-artifact-manifest.txt (itself
+          # derived from CMake's install_manifest_ovmx-images.txt), not a
+          # hand-named list here -- so this check never goes stale when a new
+          # image joins the ovmx-images aggregate. Ground-source both directions:
+          # every named artifact must be a real non-empty file, and no extra
+          # files may be present beyond what the manifest names.
+          MANIFEST="dist/alpha-gate-proof/alpha-artifact-manifest.txt"
+          [ -s "$MANIFEST" ] || { echo "FAIL: $MANIFEST missing or empty"; exit 1; }
+          n=0
+          while IFS= read -r f || [ -n "$f" ]; do
+            [ -n "$f" ] || continue
+            [ -s "dist/alpha-gate-proof/$f" ] || { echo "FAIL: dist/alpha-gate-proof/$f missing or empty (named in $MANIFEST)"; exit 1; }
+            n=$((n + 1))
+          done < "$MANIFEST"
+          dir_count=$(find dist/alpha-gate-proof -maxdepth 1 -type f ! -name 'alpha-artifact-manifest.txt' | wc -l)
+          [ "$dir_count" -eq "$n" ] || { echo "FAIL: $MANIFEST names $n artifacts but dist/alpha-gate-proof/ contains $dir_count files"; exit 1; }
+          [ "$n" -ge 12 ] || { echo "FAIL: only $n Alpha release artifacts named in $MANIFEST -- expected at least the ovmx-images baseline of 12"; exit 1; }
+          echo "PASS: all $n Alpha release artifacts named in $MANIFEST are present"
+
+      - name: NEGATIVE CONTROL — OVMX_ALPHA_RELEASE_NEGCTL=1 must fail the Alpha artifact build
+        run: |
+          set +e
+          RAW=$(OVMX_ALPHA_RELEASE_NEGCTL=1 tools/cut-release-alpha.sh \
+                  --src-dir "${{ github.workspace }}" \
+                  --out-dir "${{ github.workspace }}/dist/alpha-gate-negctl" 2>&1)
+          rc=$?
+          set -e
+          echo "$RAW"
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: OVMX_ALPHA_RELEASE_NEGCTL=1 PASSED — the co-release gate has no teeth against a failed Alpha build" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'OVMX_ALPHA_RELEASE_NEGCTL: deliberately failing the userspace-image stage' \
+            || { echo "FATAL: did not see the expected NEGCTL failure banner — this failed for the wrong reason" >&2; exit 1; }
+          echo "Negative control confirmed: a failed Alpha stage exits nonzero (exit $rc)."
+
+      - name: NEGATIVE CONTROL — tools/cut-release.sh itself must fail when the Alpha build fails
+        run: |
+          set +e
+          RAW=$(OVMX_ALPHA_RELEASE_NEGCTL=1 tools/cut-release.sh --out-dir "${{ github.workspace }}/dist/alpha-gate-full-negctl" 2>&1)
+          rc=$?
+          set -e
+          # The VAX stage runs BEFORE the Alpha stage in cut-release.sh, and both
+          # run before the slow x86_64 container build, so with only
+          # OVMX_ALPHA_RELEASE_NEGCTL=1 set the VAX stage builds for real first
+          # (it must pass) and the Alpha stage is where the cut short-circuits.
+          echo "$RAW" | tail -60
+          if [ "$rc" -eq 0 ]; then
+            echo "FATAL: cut-release.sh PASSED despite OVMX_ALPHA_RELEASE_NEGCTL=1 — the co-release invariant is not wired into cut-release.sh" >&2
+            exit 1
+          fi
+          echo "$RAW" | grep -qF 'Alpha release-artifact build FAILED -- co-release invariant' \
+            || { echo "FATAL: cut-release.sh failed for the wrong reason (did not name the Alpha co-release invariant)" >&2; exit 1; }
+          echo "Negative control confirmed: cut-release.sh itself refuses to cut a release when the Alpha build fails (exit $rc)."
+
+  # -----------------------------------------------------------------------
+  # Job 2b: PARTS 0.2 Demo E2E (vms-1c8, epic vms-2579/vms-5dd)
+  #
+  # The OVMX 0.2 "killer app" demo, end to end, against a REAL docker+QEMU
+  # boot of the actual shipped image (tests/qemu/test_parts_demo_e2e.sh, see
+  # that file's header for exactly what it proves and why nothing else does):
+  # boot -> SYSTEM/MANAGER login -> `@SYS$UPDATE:PARTS_SETUP.COM` -> the bare
+  # foreign command `$ PARTS` -> a 10000-record RMS indexed load with keyed
+  # lookups -> zero /tmp leaks -> an INDEPENDENT `$ DIRECTORY
+  # SYS$SCRATCH:PARTS.DAT` from the SAME session corroborating the file
+  # really exists (not just PARTS's own stdout claim).
+  #
+  # This is a REAL, EXECUTED proof, never a CI substitute: the harness
+  # (tests/qemu/run_parts_demo_e2e.sh) only SKIPs (exit 77) when docker
+  # itself is unavailable, which is never true on this runner, so the step
+  # below fails loudly if it ever sees that exit code instead of silently
+  # passing — a lane that can't boot vms.ko and run the demo is "unproven
+  # here", not proven otherwise (CLAUDE.md Rule 9).
+  #
+  # Runs whenever a PR touches the surfaces this demo exercises (DCL/vmsfs/
+  # RMS/boot assembly) or on any push/schedule/merge_group, same convention
+  # as persistent-boot above.
+  # -----------------------------------------------------------------------
+  parts-demo-e2e:
+    name: PARTS 0.2 Demo E2E (real boot, RMS load, DIRECTORY corroboration)
+    needs: changes
+    # vms-fb8 tier-split: heavy PARTS demo e2e runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: PARTS 0.2 demo e2e — boot, install, run, verify
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_parts_demo_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: parts_demo_e2e SKIPPED in CI — this gate must actually run the real boot+demo, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2c: SCSNODE -> real hostname across reboot (vms-b6a7)
+  #
+  # STARTUP.EXE's SYSBOOT role reads SYS$SYSTEM:OVMXVMSSYS.PAR and sets the
+  # actual Linux hostname from SCSNODE (the hardcoded sethostname("OVMX", 4)
+  # is gone). Boots the ACTUAL mastered bootable image TWICE per case (the
+  # closest thing OVMX's platform has to "reboot" — see the gate's own
+  # header): once to SYSGEN SET SCSNODE / WRITE CURRENT (or, in the negative
+  # case, DELETE the seeded parameter file), once to prove what the next
+  # boot does with it. See tests/qemu/test_boot_scsnode_hostname_e2e.sh for
+  # the full two-case sequence (positive: SCSNODE follows across reboot;
+  # negative: missing/corrupt .PAR on an installed disk boots on defaults
+  # with an honest OVMX-facility warning, never a fabricated VMS message).
+  #
+  # Same SKIP_RETURN_CODE 77 => hard CI failure convention as parts-demo-e2e
+  # above: this gate must actually run the real boot, never skip silently.
+  # -----------------------------------------------------------------------
+  boot-scsnode-hostname-e2e:
+    name: SCSNODE -> real hostname across reboot (vms-b6a7)
+    needs: changes
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: SCSNODE -> hostname e2e — boot, SYSGEN, reboot, verify
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_boot_scsnode_hostname_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: boot_scsnode_hostname_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2d: cluster params authored at SYSBOOT> -> booted system reflects them
+  # (vms-46c gap #2, conversational boot)
+  #
+  # The conversational-boot MECHANISM (SYSBOOT> halts pre-banner on the boot
+  # flag; SHOW/SET/USE/WRITE/CONTINUE against SYS$SYSTEM:OVMXVMSSYS.PAR) landed
+  # with vms-b81; test_sysboot_conversational.sh (boot-smoke job above) proves
+  # it for a STRING parameter and the pre-banner/persistence semantics. THIS
+  # gate proves the part that does not: a NUMERIC cluster-identity parameter
+  # (SCSSYSTEMID) driven through the same prompt with WRITE, and BOTH the
+  # string node name AND the numeric parameter observably in effect in the
+  # booted, logged-in system (F$GETSYI reads them) -- the whole point of
+  # conversational boot for clustering (docs/design-boot-faithful.md §2.2/§4.2).
+  # A flagless bracket boot on a fresh disk shows the seeded defaults, proving
+  # the authored values came from the SYSBOOT> session, not the seed.
+  #
+  # Same SKIP_RETURN_CODE 77 => hard CI failure convention as the scsnode e2e
+  # above: this gate must actually run the real boot, never skip silently.
+  # -----------------------------------------------------------------------
+  sysboot-cluster-params-e2e:
+    name: SYSBOOT> authors cluster params (vms-46c gap #2)
+    needs: changes
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: SYSBOOT> cluster-param e2e — author at prompt, boot, verify in-guest
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_sysboot_cluster_params_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: sysboot_cluster_params_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2e: @CLUSTER_CONFIG_LAN.COM authors cluster identity -> reboot ->
+  # adopted (vms-23b9 rung 1, the V0.7 "clustering done" gate)
+  #
+  # A USER configures THIS node's cluster identity by running the DOCUMENTED
+  # VMS-faithful operator procedure -- @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM, the
+  # CHANGE path from docs/cluster-configuration-guide.md -- INTERACTIVELY over
+  # the console on a real booted OVMX, then reboots the same disk, and the
+  # running system ADOPTS the authored SCSNODE: the boot console's own
+  # %OVMX-I-SCSNODE line names it and F$GETSYI("NODENAME") (the live Linux
+  # hostname PID 1 sethostname()'d from the authored SCSNODE) reads it back,
+  # with F$GETSYI("SCSNODE") and SYSGEN USE CURRENT agreeing. Where
+  # boot-scsnode-hostname-e2e types the SYSGEN commands by hand and the host
+  # DCL test (tests/dcl/test_cluster_config_lan.sh) never boots, THIS gate runs
+  # the real procedure on a real boot -- the user experience is the test.
+  #
+  # Same SKIP_RETURN_CODE 77 => hard CI failure convention as the scsnode/
+  # sysboot e2es above: this gate must actually run the real boot, never skip
+  # silently.
+  # -----------------------------------------------------------------------
+  cluster-config-lan-e2e:
+    name: CLUSTER_CONFIG_LAN.COM author -> reboot -> adopt (vms-23b9)
+    needs: changes
+    # vms-fb8 tier-split: heavy boot/e2e gate runs on NON-PR events only
+    # (push, merge_group, schedule, workflow_dispatch). Skipped on pull_request
+    # so the per-PR loop stays fast; full coverage still runs before landing.
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: CLUSTER_CONFIG_LAN.COM e2e — run the procedure, reboot, verify adoption
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_cluster_config_lan_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: cluster_config_lan_e2e SKIPPED in CI — this gate must actually run the real boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"
+
+  # -----------------------------------------------------------------------
+  # Job 2e2: TWO OVMX nodes, EACH configured via @CLUSTER_CONFIG_LAN.COM,
+  # FORM a cluster (vms-23b9 rung 2)
+  #
+  # Rung 1 (above) proved author -> reboot -> adopt on ONE standalone node via
+  # the CHANGE path, which never enables VAXCLUSTER. This job composes that
+  # same documented procedure -- this time the ADD path, which does enable it
+  # -- with a real QEMU point-to-point network between two separately booted,
+  # separately configured nodes: node A (VOTES=1, EXPECTED_VOTES=1) founds,
+  # node B (VOTES=0) joins, and both independently report CN=2 with the other
+  # as a MEMBER via SHOW CLUSTER. Same hard-fail-on-skip convention.
+  # -----------------------------------------------------------------------
+  cluster-config-lan-2node-e2e:
+    name: 2-node cluster via @CLUSTER_CONFIG_LAN.COM (ADD) -> found/join (vms-23b9 rung 2)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build bootable image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: distro/Dockerfile.bootable
+          push: false
+          load: true
+          tags: ovmx-boot:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 2-node cluster e2e — configure both nodes, form/join, verify CN=2
+        run: |
+          set +e
+          OVMX_QEMU_FULL_E2E=1 OVMX_BOOT_IMAGE=ovmx-boot:latest \
+            tests/qemu/run_cluster_config_lan_2node_e2e.sh
+          rc=$?
+          if [ "$rc" -eq 77 ]; then
+            echo "FATAL: cluster_config_lan_2node_e2e SKIPPED in CI — this gate must actually run the real 2-node boot, never skip silently." >&2
+            exit 1
+          fi
+          exit "$rc"

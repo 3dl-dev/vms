@@ -1,0 +1,1815 @@
+name: CI / Self-Host / x86_64 toolchain
+
+# Sibling of ci.yml, split out by vms-1af (ci.yml was ~511KB, over GitHub's
+# silent ~512000-byte non-comment workflow-file ceiling that produces
+# conclusion=startup_failure with ZERO jobs and no pull_request run at all --
+# see rd vms-1af / vms-e18e). Triggers, job names, and the needs-graph are
+# carried over unchanged from the corresponding slice of the old ci.yml; only
+# the shared `changes` path-filter job is now factored into the reusable
+# ci-changes.yml (see that file's header) instead of being duplicated in
+# every domain file. See ci-core-gates.yml for the per-PR/heavy-tier split
+# rationale (vms-fb8) and the P4-only fast-path (vms-6e10), both of which
+# apply identically here via the same `vax_p4_only` input and the same `if:`
+# conditions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+    inputs:
+      vax_p4_only:
+        description: 'P4-only fast-path: run only the VAX substrate chain + the P4 activation gate, skip the full heavy matrix (rd vms-6e10)'
+        type: boolean
+        required: false
+        default: false
+  schedule:
+    - cron: '17 7 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    uses: ./.github/workflows/ci-changes.yml
+
+
+  # -----------------------------------------------------------------------
+  # Job 8: IMGACT.EXE activation proof (musl, aarch64)
+  #
+  # Gate on the OVMX image activator (bead vms-913.x). Runs the clean-room
+  # proof harness inside a native-musl Alpine container: builds IMGACT.EXE,
+  # activates a dynamic test executable through it (DT_HASH symbol lookup,
+  # RELATIVE/GLOB_DAT/JUMP_SLOT/TLSDESC relocs, TLS), and asserts both the
+  # success path (activated program prints PASS, exits 0) and the failure
+  # path (missing shareable image -> %IMGACT-F-IMGNOTFND, nonzero exit).
+  #
+  # This job covers the aarch64 backend specifically (the x86_64 backend,
+  # bead vms-913.11, has its own native-runner counterpart: Job 9b
+  # imgact-x86_64 below, plus the full boot-to-login proof in uat-session).
+  # GitHub runners are x86_64, so this aarch64 harness runs under arm64
+  # emulation via binfmt/QEMU. This is a hard gate (rule 10): a broken
+  # activator fails the build.
+  # -----------------------------------------------------------------------
+  imgact-proof:
+    name: IMGACT.EXE Activation Proof (musl)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build + activate IMGACT.EXE in Alpine (musl, arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc
+              sh /src/src/imgact/test/run_test.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 9: OVMX_IMGACT build mode (musl, aarch64)
+  #
+  # Gate on the image-activation build mode (bead vms-913.3): configure +
+  # build the whole tree with -DOVMX_IMGACT=ON and assert (via readelf) that
+  # shareable images carry VMS SONAMEs + DT_HASH, executables carry
+  # PT_INTERP=IMGACT.EXE + DT_HASH, STARTUP.EXE/IMGACT.EXE stay static, and
+  # nothing uses GNU_HASH. This job covers the aarch64 backend; the x86_64
+  # counterpart (bead vms-913.11) is Job 9b (imgact-x86_64) below, which
+  # runs natively with no emulation. This job runs under arm64 emulation
+  # on the x86_64 runner.
+  # -----------------------------------------------------------------------
+  imgact-build-mode:
+    name: OVMX_IMGACT Build Mode (musl)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-0b8 FIXED (was: LINK.EXE "not found" in link_native_graph). Root cause
+    # was NOT a target-ordering bug: OVMX_IMGACT=ON injects
+    # -Wl,--dynamic-linker=/vms/.../IMGACT.EXE into the GLOBAL CMAKE_EXE_LINKER_FLAGS,
+    # which poisoned the PT_INTERP of the HOST build tool LINK.EXE (vmslink) — a
+    # tool that must EXECUTE during `cmake --build` to produce the shareable
+    # graph. exec then failed ENOENT/127 (file present, interpreter absent).
+    # Fixed by linking the vmslink host tools statically in IMGACT mode
+    # (src/vmslink/CMakeLists.txt) + adding src/libvms/include to the imgact
+    # target's include path (src/imgact/CMakeLists.txt, for imgact_prodreg.h).
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Configure + build + verify OVMX_IMGACT (arm64 musl)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc BUILD=/tmp/imgact-build
+              sh /src/src/imgact/test/verify_imgact_cmake.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 9b: OVMX_IMGACT build mode + activation (musl, x86_64)
+  #
+  # x86_64 counterpart of Job 9 (imgact-build-mode) + the IMGACT activation
+  # proof, gating bead vms-be5. GitHub runners ARE x86_64, so this runs the
+  # NATIVE x86_64 musl Alpine image with NO emulation (contrast the aarch64
+  # jobs, which need setup-qemu-action). Two proofs:
+  #   1. verify_imgact_cmake_x86_64.sh — configure+build the whole tree with
+  #      -DOVMX_IMGACT=ON, assert PT_INTERP=IMGACT.EXE + DT_HASH layout, no
+  #      GNU_HASH, and TLS uses the TLSDESC dialect (-mtls-dialect=gnu2) with
+  #      no general-dynamic __tls_get_addr relocs the x86_64 IMGACT can't bind.
+  #   2. run_test_x86_64.sh — build the x86_64 IMGACT.EXE backend and activate
+  #      a gnu2-TLSDESC shareable + PT_INTERP consumer FOR REAL (QEMU=env, i.e.
+  #      run natively since the runner is x86_64), then assert the missing-image
+  #      failure path yields %IMGACT-F-IMGNOTFND.
+  # -----------------------------------------------------------------------
+  imgact-x86_64:
+    name: OVMX_IMGACT Build + Activate (musl, x86_64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-0b8 FIXED — same host-tool PT_INTERP poisoning as imgact-build-mode
+    # (LINK.EXE, a build-host tool, was given PT_INTERP=IMGACT.EXE via the global
+    # CMAKE_EXE_LINKER_FLAGS in OVMX_IMGACT mode and could not exec during the
+    # link_native_graph build step). Fixed in src/vmslink/CMakeLists.txt (static
+    # host tools) + src/imgact/CMakeLists.txt (libvms include for imgact_prodreg.h).
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build + verify + activate OVMX_IMGACT (native x86_64 musl)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              echo "=== 1/2: OVMX_IMGACT x86_64 build + layout + TLSDESC verify ==="
+              CC=gcc READELF=readelf BUILD=/tmp/imgact-build-x86_64 \
+                sh /src/src/imgact/test/verify_imgact_cmake_x86_64.sh
+              echo "=== 2/2: x86_64 IMGACT.EXE activation proof (native, QEMU=env) ==="
+              CC=gcc READELF=readelf QEMU=env \
+                sh /src/src/imgact/test/run_test_x86_64.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 10: LINK.EXE — VMS-native linker MVP (aarch64)
+  #
+  # Gate on the OVMX/VMS linker (bead vms-9dd): builds LINK.EXE + OVMXDUMP,
+  # compiles a leaf object with gcc, links it into an OVMX shareable image
+  # WITHOUT ld, and asserts the image is a valid ET_DYN whose .vms$sv symbol
+  # vector exports the declared universal symbols + GSMATCH. aarch64-only for
+  # now (LINK.EXE rejects non-aarch64 objects); runs under arm64 emulation.
+  # -----------------------------------------------------------------------
+  vmslink-mvp:
+    name: LINK.EXE VMS-native Linker (MVP)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build LINK.EXE + link an OVMX shareable image (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils >/dev/null
+              export CC=gcc WORK=/tmp/vmslink-test
+              sh /src/src/vmslink/test/run_test.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 10a: LINK.EXE — x86_64 "simple" static relocations (vms-8f5)
+  #
+  # x86_64 counterpart of Job 10, gating the additive machine-type gate: the
+  # runner IS x86_64, so LINK.EXE + the hand-built .o test objects are built
+  # and RUN natively with NO emulation (contrast Job 10, which needs arm64
+  # QEMU for the whole harness). Proves R_X86_64_64 (absolute data pointer),
+  # R_X86_64_PC32 (same-image call), and R_X86_64_PLT32 (cross-object call)
+  # link + execute for real, that the emitted ET_DYN carries EM_X86_64, and —
+  # via one arm64-emulated cross-compile of a companion aarch64 object fed to
+  # the SAME native LINK.EXE binary — that the gate stays additive (aarch64
+  # still emits EM_AARCH64, mixed-architecture input is rejected).
+  # -----------------------------------------------------------------------
+  vmslink-x86_64:
+    name: LINK.EXE VMS-native Linker — x86_64 relocs (vms-8f5/cd1/2e4)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64, for the aarch64 regression cross-compile only)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build LINK.EXE (native x86_64) + prove the simple x86_64 relocs + additive-gate regression
+        run: |
+          sh src/vmslink/test/run_test_x86_64.sh
+
+      # vms-d8d: a STRONG-vs-STRONG duplicate definition of the same universal/
+      # global symbol across two whole-archived objects is now a hard
+      # %LINK-F-MULDEF error instead of silent first-wins. Proves the positive
+      # (MULDEF fires, names the symbol + both defining objects) and the
+      # regression (the pre-existing weak-yields-to-strong override is
+      # unchanged, in either link order).
+      - name: Prove LINK.EXE rejects a STRONG-vs-STRONG duplicate definition (vms-d8d)
+        run: |
+          sh src/vmslink/test/run_muldef_x86_64.sh
+
+      # vms-cbe: the EVAX (Alpha/VMS) object reader front end — parse a REAL
+      # native VMS object (checked-in fixture from binutils alpha-dec-vms-as)
+      # into psects + symbols. Pure byte parsing, arch-independent, no toolchain
+      # at test time. First slice toward LINK.EXE consuming the alpha-dec-vms
+      # port's intrinsic .obj output (the do-it-like-VMS ladder).
+      - name: Prove the EVAX/VMS-object reader parses a real Alpha/VMS object (vms-cbe)
+        run: |
+          sh src/vmslink/test/run_evax_read.sh
+
+      # vms-cbe (slices 3+4): LINK.EXE consumes the alpha-dec-vms port's native
+      # EVAX objects END TO END — dispatches on format, maps psects/symbols,
+      # APPLIES the relocations (REFLONG/REFQUAD/CODEADDR data + the Alpha
+      # LINKAGE pair), and stamps the .vms$xfer transfer vector. The verifier
+      # re-derives every expected reloc value from the placed section addresses
+      # and asserts the image bytes match. Pure byte manipulation, arch-
+      # independent; the EVAX .obj fixtures are checked in (no toolchain at
+      # test time).
+      - name: Prove LINK.EXE links a real EVAX/Alpha object set + applies relocs (vms-cbe)
+        run: |
+          sh src/vmslink/test/run_evax_link.sh
+
+      # vms-c179: cross-image (SYMG) import binding on the EVAX path. Links
+      # link_main.obj ALONE against a --use'd producer that EXPORTS its
+      # HELPER_PROC target, and asserts every reference (the STC_LP_PSB LINKAGE
+      # pair + the REFQUAD data pointers) binds as a cross-image import — fill
+      # slot left 0, a .vms$imp record naming {producer, symbol-vector index}
+      # for IMGACT to resolve at activation — while the ONE local REFQUAD stays
+      # directly resolved. The INV-6 honest-fail leg: a producer that does NOT
+      # export the symbol must still %LINK-F-UNDEF (no fabricated import). Pure
+      # byte manipulation, arch-independent; fixture checked in.
+      - name: Prove LINK.EXE binds EVAX cross-image imports from a --use producer (vms-c179)
+        run: |
+          sh src/vmslink/test/run_evax_ximport.sh
+
+      # vms-069: GLOBALVALUE fold on the EVAX cross-image path. A VMS globalvalue
+      # is an ABSOLUTE LINK-TIME CONSTANT (its address IS the value) — VMS folds
+      # it at LINK, never binding it through an activation import cell. Links the
+      # EVAX fixture gvalfold_ref.obj (`.quad C$_EXIT1` REFQUAD, undefined) against
+      # a --use'd producer exporting C$_EXIT1=GLOBALVALUE:0x0035A009, and asserts
+      # the site holds the FOLDED constant with NO .vms$imp — while a real
+      # PROCEDURE export STILL emits an import cell (fold must not break imports)
+      # and a symbol in no producer still %LINK-F-UNDEF (INV-6). This unblocks the
+      # alpha-dec-vms GCC-port crt0's &C$_EXIT1. Arch-independent; fixture checked in.
+      - name: Prove LINK.EXE folds EVAX producer globalvalues to link-time constants (vms-069)
+        run: |
+          sh src/vmslink/test/run_evax_gvalfold.sh
+
+      # vms-b5a0: LINK.EXE's EVAX/Alpha path emits a .vms$rel LOAD-BIAS FIXUP
+      # table, so a GCC-port program's global initialized pointers survive a
+      # non-zero IMGACT load bias. A REFQUAD/CODEADDR/LINKAGE slot LINK fills with
+      # an UNBIASED image-relative address is recorded; IMGACT's generic
+      # apply_vms_rel adds the bias at activation. VERIFY-FIRST, emit AND consume:
+      # PART A links gdata.obj (a global pointer `g_ptr = greeting`), asserts the
+      # g_ptr slot is in .vms$rel, then replicates IMGACT's exact `*(base+off)+=
+      # base` walk at a non-zero bias B and asserts g_ptr resolves to B+greeting.
+      # PART B a folded GLOBALVALUE (absolute) gets NO .vms$rel entry; PART C
+      # cross-image .vms$imp import slots are excluded (IMGACT fills those). Pure
+      # byte manipulation, arch-independent; fixtures checked in.
+      - name: Prove LINK.EXE emits an EVAX .vms$rel load-bias fixup table (vms-b5a0)
+        run: |
+          sh src/vmslink/test/run_evax_vmsrel.sh
+
+      # vms-c65: LINK.EXE's EVAX/Alpha path emits a SHAREABLE (a .vms$sv producer)
+      # from alpha-dec-vms objects — the half a real Alpha DECC$SHR needs (the
+      # other half, the Alpha C-RTL archive, is the Alpha lane's). Links the
+      # checked-in producer fixture shr_lib.obj into FOO$SHR.EXE and asserts an
+      # EM_ALPHA ET_DYN with a .vms$sv (magic + FOO=PROCEDURE/BAR=DATA bound to
+      # their addresses + GSMATCH LEQUAL/1/0) parsed by the SAME reader
+      # (ovmx_symvec.h) IMGACT + the ELF shareable use — byte parity (an Alpha and
+      # an x86_64 shareable differ only in e_machine + .text arch). NO .vms$xfer,
+      # NO PT_INTERP; a .vms$rel for the BAR->FOO data pointer. ROUND-TRIP: an EVAX
+      # consumer --use'ing FOO$SHR.EXE binds FOO by symbol-vector INDEX (the
+      # vms-c179 machinery) — proving the Alpha shareable is CONSUMABLE. INV-6
+      # honest-fail: a universal no object defines -> %LINK-F-NOUNIV (no bogus
+      # vector entry). Arch-independent, fixtures checked in.
+      - name: Prove LINK.EXE emits a consumable EVAX/Alpha .vms$sv shareable (vms-c65)
+        run: |
+          sh src/vmslink/test/run_evax_shareable.sh
+
+      # vms-2e4: the LAST x86_64 relocation class — gnu2-dialect TLSDESC
+      # (R_X86_64_GOTPC32_TLSDESC + R_X86_64_TLSDESC_CALL, plus the
+      # local-dynamic R_X86_64_DTPOFF32 / _TLS_MODULE_BASE_ half). Proof is
+      # end-to-end, not structural: the linked image is EXECUTED, its
+      # PT_INTERP runs the real x86_64 IMGACT.EXE, and a second real thread
+      # (clone + CLONE_SETTLS) shows every thread-local is TP-relative. The
+      # runner is x86_64, so this runs natively — but it needs
+      # /vms/SYS0/SYSCOMMON/{SYSEXE,SYSLIB} for the PT_INTERP path.
+      - name: Prove the x86_64 TLSDESC relocs link AND activate (vms-2e4)
+        run: |
+          sudo mkdir -p /vms/SYS0/SYSCOMMON/SYSEXE /vms/SYS0/SYSCOMMON/SYSLIB
+          sudo chown -R "$(id -u):$(id -g)" /vms
+          sh src/vmslink/test/run_test_x86_64_tls.sh
+
+      # vms-83e8: the OTHER x86_64 TLS access model — the CLASSIC general-/
+      # local-dynamic sequence that calls __tls_get_addr (what upstream
+      # libstdc++/libgcc emit; the gnu2 step above never emits a
+      # TLSGD/TLSLD/__tls_get_addr). LINK relaxes every one to Local-Exec;
+      # this proves at byte level that none survives AND activates the image
+      # so the relaxed TP-relative offsets read/write correctly. Native x86_64.
+      - name: Prove the x86_64 CLASSIC GD/LD TLS relaxation links AND activates (vms-83e8)
+        run: |
+          sudo mkdir -p /vms/SYS0/SYSCOMMON/SYSEXE /vms/SYS0/SYSCOMMON/SYSLIB
+          sudo chown -R "$(id -u):$(id -g)" /vms
+          sh src/vmslink/test/run_test_x86_64_classic_tls.sh
+
+  # -----------------------------------------------------------------------
+  # Job 10b: DECC$SHR.EXE — the OVMX C run-time library shareable (aarch64)
+  #
+  # Gate on the C-RTL shareable (bead vms-61f.1, pillar vms-ade): LINK.EXE links
+  # the WHOLE musl libc.a + libgcc.a (soft-float/long-double builtins) into a
+  # single OVMX shareable carrying a .vms$sv symbol vector of the C-RTL universals
+  # (malloc/free/memcpy/strlen/printf/...) — VMS-native, NO ld/ld.so. Asserts the
+  # image links CLEAN (zero deferred externals) and exports the universals as
+  # PROCEDURE. Runtime init is vms-61f.2. aarch64-only; runs under arm64 emulation.
+  # -----------------------------------------------------------------------
+  decc-shr:
+    name: DECC$SHR VMS-native C-RTL Shareable
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build LINK.EXE + link DECC$SHR from whole musl libc.a + libgcc.a (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils >/dev/null
+              export CC=gcc WORK=/tmp/decc-shr-test
+              sh /src/src/vmslink/test/run_decc_shr.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # link-native-cmake: the VMS-native LINK.EXE graph wired into CMake
+  # (bead vms-b6a, pillar vms-ade). Every job above this one drives the
+  # mk_*_shr.sh recipes by hand from a raw shell harness; this job proves the
+  # SAME recipes are reachable as ordinary `cmake --build` output when the
+  # compiler targets aarch64 musl (OVMX_LINK_NATIVE auto-detects ON), so the
+  # shipped OVMX libraries can be the VMS-native LINK.EXE shareables instead
+  # of ld-linked .so files. Asserts, via readelf, that all 9 artifacts (5
+  # libs + DECC$SHR + DCL.EXE + LOGINOUT.EXE) are EM_AARCH64 with zero
+  # DT_NEEDED entries -- no ld/ld.so anywhere in the graph. Runs under arm64
+  # emulation. The x86_64 analog (link-native-cmake-x86_64, vms-6da) follows
+  # immediately below, sharing this SAME build_link_native.sh/CMakeLists.txt
+  # mechanism (ARCH auto-detected from the compiler triple) -- not a forked
+  # target or a second custom command.
+  # -----------------------------------------------------------------------
+  link-native-cmake:
+    name: VMS-native LINK.EXE Graph via CMake (OVMX_LINK_NATIVE)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: cmake -B build && cmake --build build (arm64 musl) -- assert the shipped graph is LINK.EXE-native
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              cmake -B /tmp/build -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release
+              cmake --build /tmp/build --target link_native_graph -j"$(nproc)"
+              echo "== readelf: EM_AARCH64, zero DT_NEEDED, across all 9 artifacts =="
+              SYSLIB=/tmp/build/link-native/SYSLIB
+              SYSEXE=/tmp/build/link-native/SYSEXE
+              for f in "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE; do
+                  echo "-- $f --"
+                  readelf -h "$f" | grep -q "Machine:.*AArch64" || { echo "FAIL: $f not EM_AARCH64"; exit 1; }
+                  N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED || true)
+                  [ "$N" -eq 0 ] || { echo "FAIL: $f has $N DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }
+              done
+              COUNT=$(ls "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE | wc -l)
+              [ "$COUNT" -eq 9 ] || { echo "FAIL: expected 9 artifacts (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE), got $COUNT"; exit 1; }
+              echo "OK: $COUNT VMS-native LINK.EXE artifacts, all EM_AARCH64, zero DT_NEEDED"
+            '
+
+  # -----------------------------------------------------------------------
+  # link-native-cmake-x86_64: the x86_64 analog of link-native-cmake above
+  # (bead vms-6da, epic vms-b93 "0.1 pre-release" -- the direct blocker of
+  # vms-d0f5e's fat initramfs). Same CMakeLists.txt/build_link_native.sh
+  # mechanism, ARCH auto-detected from the compiler triple (aarch64-musl vs
+  # x86_64-musl) -- NOT a duplicated custom target. x86_64 is the project's
+  # primary architecture (CLAUDE.md Rule 5) and this is what a shipped fat
+  # initramfs actually needs. Asserts, via readelf, that all 9 artifacts are
+  # EM_X86_64 with zero DT_NEEDED entries. Unlike the arm64 job, GitHub's
+  # runner IS x86_64 (see dcl-native-x86_64 above), so this needs no QEMU
+  # binfmt registration -- the alpine:3.20/amd64 container runs natively.
+  # -----------------------------------------------------------------------
+  link-native-cmake-x86_64:
+    name: VMS-native LINK.EXE Graph via CMake, x86_64 (OVMX_LINK_NATIVE)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: cmake -B build && cmake --build build (x86_64 musl) -- assert the shipped graph is LINK.EXE-native
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache cmake gcc g++ musl-dev binutils make linux-headers >/dev/null
+              cmake -B /tmp/build -DBUILD_TESTS=OFF -DBUILD_TOOLS=ON -DCMAKE_BUILD_TYPE=Release
+              cmake --build /tmp/build --target link_native_graph -j"$(nproc)"
+              echo "== readelf: EM_X86_64, zero DT_NEEDED, across all 9 artifacts =="
+              SYSLIB=/tmp/build/link-native/SYSLIB
+              SYSEXE=/tmp/build/link-native/SYSEXE
+              for f in "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE; do
+                  echo "-- $f --"
+                  readelf -h "$f" | grep -q "Machine:.*X86-64" || { echo "FAIL: $f not EM_X86_64"; exit 1; }
+                  N=$(readelf -d "$f" 2>/dev/null | grep -c NEEDED || true)
+                  [ "$N" -eq 0 ] || { echo "FAIL: $f has $N DT_NEEDED entries (ld-linked, not VMS-native)"; exit 1; }
+              done
+              COUNT=$(ls "$SYSLIB"/*.EXE "$SYSEXE"/*.EXE | wc -l)
+              [ "$COUNT" -eq 9 ] || { echo "FAIL: expected 9 artifacts (5 libs + DECC\$SHR + DCL.EXE + LOGINOUT.EXE), got $COUNT"; exit 1; }
+              echo "OK: $COUNT VMS-native LINK.EXE artifacts, all EM_X86_64, zero DT_NEEDED"
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 11: real IMGACT.EXE symbol-vector activation (aarch64)
+  #
+  # Gate on the VMS-native activation path (bead vms-714): builds IMGACT.EXE
+  # with .vms$imp support, links a producer + consumer with LINK.EXE, installs
+  # IMGACT at its PT_INTERP path, and runs the consumer FOR REAL (kernel ->
+  # PT_INTERP=IMGACT.EXE -> resolve symbol vector + GSMATCH -> transfer). The
+  # cross-image call must return 42; a GSMATCH-older producer must exit 44
+  # (%IMGACT-F-GSMATCH), not crash. Runs under arm64 emulation.
+  # -----------------------------------------------------------------------
+  imgact-symvec:
+    name: IMGACT.EXE Symbol-Vector Activation
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Activate a VMS-native image through the real IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/symvec-act
+              sh /src/src/imgact/test/run_symvec_activation.sh
+            '
+
+      - name: Activate a producer whose section table exceeds the old 64 cap (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/shnum-cap-act
+              sh /src/src/imgact/test/run_shnum_cap_activation.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 11b: IMGACT VMS-standard image activation (Alpha, vms-f60d)
+  #
+  # The activation-time face of R8 (the Alpha calling standard). Builds the real
+  # IMGACT.EXE (alpha) + the real trampoline, then proves under user-mode
+  # qemu-alpha: (1) imgact_vms_transfer issues a correct Alpha standard call
+  # (R16-R21 args, R25 AI, R27 PV, R26 RA into IMGACT, R0 return);
+  # (2) real IMGACT activates a VMS-standard image (.vms$xfer flavor VMS_STD)
+  # end-to-end -- standard-calls the transfer address, control returns, and the
+  # returned condition value is routed to $EXIT, FAILING HONEST (%IMGACT-F-
+  # NOSUCHDEV, exit 45) with no /dev/vms rather than faking exit(cond&1) (INV-6);
+  # (3) the identical image with flavor SYSV takes the UNCHANGED tail-jump path
+  # (zero regression + the flavor gate actually gates). Reuses the ovmx-cross-
+  # alpha toolchain image (gha layer cache, scope=cross-alpha).
+  # -----------------------------------------------------------------------
+  imgact-vms-std-alpha:
+    name: IMGACT VMS-standard Activation (Alpha)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Activate a VMS-standard image through the real IMGACT.EXE (alpha)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/src -w /src \
+            ovmx-cross-alpha:latest sh -c '
+              sh /src/src/imgact/test/run_vms_std_activation_alpha.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # imgact-vax-backend (rd vms-73b2, epic vms-404,
+  # docs/design/vax-symbol-vector-imgact.md §4 P2). Builds the NEW elf32-vax
+  # symbol-vector IMGACT backend (src/imgact/arch/vax) + the elf32-generalized
+  # activator core for vax--netbsdelf and asserts it links into a clean
+  # static-PIE elf32-vax ET_DYN (no PT_INTERP, no bogus DT_NEEDED, RELATIVE +
+  # documented libc/libgcc helper relocs only), that the freestanding VAX
+  # syscall primitive has the right chmk/carry/-errno shape, and that the
+  # toolchain emits a real elf32-vax `.vms$sv`. There is NO qemu VAX, so this
+  # P2 gate does not execute a VAX binary (runtime activation on SIMH is P4);
+  # the by-index symbol-vector RESOLVE over a real elf32-vax `.vms$sv` is proven
+  # by the host ctest imgact_symvec_elf32_unit in the normal test job.
+  # Pulls the source-hash-keyed prebuilt vax toolchain image from ghcr (same as
+  # every other vax cross job), cleanly falling back to a gha-cached build.
+  # -----------------------------------------------------------------------
+  imgact-vax-backend:
+    name: IMGACT elf32-vax symbol-vector backend build (vms-404 P2)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.netbsd_vax == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Pull the prebuilt vax--netbsdelf toolchain image (source-hash tag) or fall back to build
+        env:
+          GHCR_IMG: ghcr.io/3dl-dev/ovmx-cross-vax
+        run: |
+          set -euo pipefail
+          SOURCE_HASH=$(git ls-files -s \
+            tools/cross-vax/Dockerfile \
+            'tools/cross-vax/*.tar.xz' \
+            | sha256sum | cut -c1-16)
+          echo "SOURCE_HASH=$SOURCE_HASH"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker pull "$GHCR_IMG:$SOURCE_HASH"; then
+            docker tag "$GHCR_IMG:$SOURCE_HASH" ovmx-cross-vax:latest
+            echo "PULLED prebuilt toolchain image $GHCR_IMG:$SOURCE_HASH (no gnu.org fetch)"
+          else
+            echo "no prebuilt image for $SOURCE_HASH — falling back to a gha-cached source build"
+            echo "BUILD_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build the vax--netbsdelf cross toolchain image (gha layer cache)
+        if: env.BUILD_FALLBACK == '1'
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-vax
+          file: tools/cross-vax/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-vax:latest
+          cache-from: type=gha,scope=cross-vax
+          cache-to: type=gha,mode=max,scope=cross-vax
+
+      - name: Build + structurally prove the elf32-vax IMGACT backend
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/src -w /src \
+            ovmx-cross-vax:latest sh /src/src/imgact/test/run_test_vax.sh
+
+  # Job 12: real src/libvmssys linked + activated VMS-native (aarch64)
+  #
+  # The pillar milestone (vms-ade / bead vms-80a): the whole toolchain end to
+  # end on REAL code. Compiles the actual src/libvmssys, links it into an OVMX
+  # shareable image with LINK.EXE (no ld), and runs a consumer that calls the
+  # real vms_strlen through the symbol vector — kernel -> PT_INTERP=IMGACT.EXE
+  # -> activate (GOT/.vms$rel bias + TLS setup) -> transfer. Must return 5.
+  # Built with -mno-outline-atomics so gcc inlines atomics (no libgcc helpers).
+  # Runs under arm64 emulation.
+  # -----------------------------------------------------------------------
+  libvmssys-native:
+    name: libvmssys VMS-native Link + Activate
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link + activate real libvmssys with LINK.EXE + IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/libvmssys-native
+              sh /src/src/imgact/test/run_libvmssys_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 13: DECC$SHR C-RTL activation — musl runtime init at activation (aarch64)
+  #
+  # The C-RTL milestone (pillar vms-ade / bead vms-61f.2): a consumer actually
+  # CALLS musl libc through DECC$SHR, VMS-native. LINK.EXE whole-archives musl
+  # libc.a + libgcc.a into DECC$SHR.EXE (exporting malloc/snprintf/strtod plus
+  # musl's own __init_libc bootstrap), links a consumer importing them, and runs
+  # it FOR REAL: kernel -> PT_INTERP=IMGACT.EXE -> resolve the symbol vector,
+  # then drive musl __init_libc (programs the thread pointer, builds the TCB/TLS
+  # musl-style, sets the stack guard, makes malloc usable) -> transfer control.
+  # The consumer computes snprintf("%d+%d")=5 + strtod("3.5")*2=7 + buf[0]=2 == 14.
+  # Proves musl libc is live post-activation with NO ld/ld.so. Runs under arm64
+  # emulation.
+  # -----------------------------------------------------------------------
+  decc-shr-activate:
+    name: DECC$SHR C-RTL Activation (musl init)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Activate DECC$SHR + drive musl init through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/decc-shr-act
+              sh /src/src/imgact/test/run_decc_shr_activation.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job 14: lib-shareable transitive import activation (aarch64)
+  #
+  # The spine increment (pillar vms-ade / bead vms-e65) that unblocks the b65
+  # lib-migration chain: LINK.EXE's emit_shareable can now BIND a LIBRARY
+  # shareable's own libc/pthread CALL imports to DECC$SHR (PLT + import GOT +
+  # .vms$imp), and IMGACT.EXE resolves that binding TRANSITIVELY at activation.
+  # mk_decc_shr.sh builds DECC$SHR with the appended pthread universals; a lib
+  # shareable TESTLIB$SHR imports pthread_mutex_lock/unlock + malloc + memset +
+  # free from it and exports lib_compute; a consumer that names ONLY TESTLIB$SHR
+  # runs FOR REAL and returns 42 — proving the lib's own imports bound transitively
+  # to DECC$SHR (a real pthread/malloc path executed through it). Runs under arm64
+  # emulation.
+  # -----------------------------------------------------------------------
+  shareable-import-activate:
+    name: Lib-Shareable Transitive Import Activation
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Bind a lib shareable's imports to DECC$SHR through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/shr-import-act
+              sh /src/src/imgact/test/run_shareable_import_activation.sh
+            '
+
+  tls-producer-over-crtl:
+    name: TLS Producer / C-RTL Coexistence Activation
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Activate a TLS-bearing lib shareable coexisting with DECC$SHR through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/tls-over-crtl
+              sh /src/src/imgact/test/run_tls_producer_over_crtl.sh
+            '
+
+  weak-import-activate:
+    name: Weak-by-name Import (.vms$wimp) — LOGINOUT reaches RMS across the layer cycle
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Native x86_64 (no emulation): the LINK-level assertions are the gate here
+      # — a #pragma-weak reference no --use'd producer exports lands in .vms$wimp
+      # (NOT baked to 0, NOT a link error), and binds STRONG (.vms$imp) when an
+      # exporter IS --use'd. The by-name ACTIVATION half needs a real /dev/vms
+      # ACP (INV-6: IMGACT has no POSIX image-read fallback), which this container
+      # lacks by construction — that half is proven by the boot-to-DCL login
+      # (uat-session), so the script runs the LINK assertions and notes the split.
+      - name: Record + bind a weak cross-image reference through LINK.EXE/.vms$wimp (x86_64)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make python3 >/dev/null
+              export CC=gcc WORK=/tmp/weak-import-act
+              sh /src/src/imgact/test/run_weak_import_activation.sh
+            '
+
+      # The SYMMETRIC case: the MAIN EXECUTABLE's OWN .vms$wimp (vms-4a6). A
+      # whole-archived C++ image weak-references a universal a producer loaded
+      # transitively at activation exports; resolve_weak_imports() must resolve
+      # g_exe, not only g_prods[]. Activation runs in-container via the sanctioned
+      # POSIX-defer image read (as run_symvec/run_shareable_import_activation do),
+      # so this gates the binding end-to-end here, present -> bound.
+      - name: Bind the EXECUTABLE's own weak cross-image reference at activation (x86_64)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make python3 >/dev/null
+              export CC=gcc WORK=/tmp/exe-weak-import-act
+              sh /src/src/imgact/test/run_exe_weak_import_activation.sh
+            '
+
+  vmsprocess-native:
+    name: vmsprocess VMS-native Migration (LIBVMSPROCESS$SHR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/vmsprocess VMS-native + activate a consumer through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/vmsprocess-native
+              sh /src/src/imgact/test/run_vmsprocess_native.sh
+            '
+
+  vmslnm-native:
+    name: vmslnm VMS-native Migration (LIBVMSLNM$SHR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/vmslnm VMS-native + activate a consumer through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/vmslnm-native
+              sh /src/src/imgact/test/run_vmslnm_native.sh
+            '
+
+  vmsfs-native:
+    name: vmsfs VMS-native Migration (LIBVMSFS$SHR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/vmsfs VMS-native (over DECC$SHR + LIBVMSLNM$SHR) + activate a consumer through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/vmsfs-native
+              sh /src/src/imgact/test/run_vmsfs_native.sh
+            '
+
+  libvms-native:
+    name: libvms VMS-native Migration (LIBVMS$SHR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/libvms VMS-native (over DECC$SHR + LIBVMSPROCESS$SHR + LIBVMSSYS$SHR + LIBVMSFS$SHR) + activate a consumer through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/libvms-native
+              sh /src/src/imgact/test/run_libvms_native.sh
+            '
+
+  vmsrms-native:
+    name: vmsrms VMS-native Migration (LIBVMSRMS$SHR)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/vmsrms VMS-native (over DECC$SHR + LIBVMS$SHR + LIBVMSFS$SHR) + activate a consumer through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/vmsrms-native
+              sh /src/src/imgact/test/run_vmsrms_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Executable-emit milestone (pillar vms-ade / bead vms-ba1). LINK.EXE's
+  # rebuilt emit_executable links a REAL multi-object main() C program — two
+  # translation units, a .rodata string table (ADR_PREL relocs) + a const
+  # pointer table (ABS64 -> .vms$rel), and libc calls (printf/strlen) through
+  # DECC$SHR — VMS-native via `LINK.EXE --executable --use DECC$SHR`. It
+  # activates through IMGACT.EXE: a synthesized crt0 recovers argc/argv/envp off
+  # the kernel-built process stack and calls main() then exit(). Runs twice (no
+  # args -> exit 5; two args -> exit 7), proving argc is read from the stack. NO
+  # ld / NO ld.so. Unblocks vms-c86 (executable TLS) and vms-b65.6 (DCL-native).
+  # -----------------------------------------------------------------------
+  multiobj-exec:
+    name: Multi-Object main() Executable Link + Activate
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link + activate a multi-object main() program through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/multiobj-exec
+              sh /src/src/imgact/test/run_multiobj_exec.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
+  #
+  # x86_64 counterpart of multiobj-exec. Proves LINK.EXE's emit_shareable()
+  # synthesizes REAL x86_64 machine code, not the aarch64 words it silently
+  # reused before vms-206, for (1) the crt0 entry stub of a main()-based
+  # --executable and (2) the PLT stub + import-CALL routing for a cross-image
+  # R_X86_64_PLT32 call to a --use producer's universal.
+  #
+  # Runs in a NATIVE x86_64 alpine container (vms-0b8): the runner is x86_64, so
+  # this container executes on the HOST kernel with NO qemu/emulation in the path
+  # under test — the real Linux ELF loader invokes IMGACT.EXE via PT_INTERP
+  # exactly as it would for any process, identical to the arm64 sibling's model
+  # and to the now-green imgact-x86_64 activation proof. The container gives the
+  # root-owned mount namespace the harness needs to stage IMGACT.EXE at its baked
+  # PT_INTERP path /vms/SYS0/SYSCOMMON/SYSEXE/IMGACT.EXE (the REAL OVMX SYSDISK
+  # deployment path — not a Unix leak to design around). Previously this job ran
+  # bare on the runner as the non-root user and could not `mkdir /vms`.
+  # -----------------------------------------------------------------------
+  multiobj-exec-x86_64:
+    name: Multi-Object main() Executable Link + Activate — x86_64 (vms-206)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link + activate a multi-object main() program through IMGACT.EXE (native x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/multiobj-exec-x86_64
+              sh /src/src/imgact/test/run_multiobj_exec_x86_64.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # Job: Read-only-section relocations — x86_64 (vms-a66)
+  #
+  # LINK.EXE used to collect relocations ONLY against sections it bucketed
+  # B_TEXT or B_DATA, silently discarding every relocation whose target was a
+  # read-only allocatable section. gcc emits each switch jump table into
+  # `.rodata` as `.long arm - table_base` (one R_X86_64_PC32 per arm, because
+  # the arms are in .text and the table is not), so those tables came out ALL
+  # ZERO and the dispatch `jmp *rdx` executed the table's own bytes. That is
+  # what made DCL.EXE segfault on x86_64: musl's pop_arg jumped into the
+  # "(null)" string in DECC$SHR's .rodata on the first %-conversion.
+  #
+  # The three jobs that "covered" this path before (multiobj-exec-x86_64,
+  # vmslink-x86_64, exec-tls) all passed through the bug because their
+  # specimens contained no switch big enough for a jump table and never
+  # executed one. This job reproduces the SHAPE directly — it is not a
+  # scale/import-count gate — and diffs the activated image's output against
+  # the same source built by the system toolchain.
+  # -----------------------------------------------------------------------
+  rodata-reloc-x86_64:
+    name: Read-only-section relocations (switch jump tables) — x86_64 (vms-a66)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link + activate a jump-table-bearing image against real musl DECC$SHR (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/rodata-reloc-x86_64
+              sh /src/src/vmslink/test/run_rodata_reloc_x86_64.sh
+            '
+
+  exec-tls:
+    name: Executable-Own TLS Link + Activate
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link + activate an executable with its OWN __thread/TLSDESC var through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make >/dev/null
+              export CC=gcc WORK=/tmp/exec-tls
+              sh /src/src/imgact/test/run_exec_tls.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # DCL-native ENDPOINT (pillar vms-ade / bead vms-b65.6) — S1 of self-hosting
+  # (vms-116). The REAL src/vmsdcl shell (22 TUs) + src/vmsqueue links as a
+  # VMS-native ET_DYN executable via LINK.EXE --executable --use {DECC$SHR + the
+  # five OVMX shareables}: a 23-object main() program with the full intra-image
+  # reloc set, 140 cross-image imports all bound, and its own single-object TLS.
+  # IMGACT.EXE activates it (crt0 recovers argc/argv off the kernel stack) and
+  # DCL runs a scripted session (SHOW TIME + A = 2+3 / SHOW SYMBOL A) to VMS-
+  # correct output, clean exit. NO ld / NO ld.so — the operator's "all VMS" path.
+  # -----------------------------------------------------------------------
+  dcl-native:
+    name: DCL.EXE VMS-native Link + Activate (self-hosting S1)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link the real src/vmsdcl into DCL.EXE VMS-native + activate a scripted session through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/dcl-native DCL_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_dcl_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # dcl-native-x86_64 — the x86_64 analog of dcl-native above (bead vms-cb5f,
+  # vms-bdf's own done-condition, epic vms-b93 "0.1 pre-release"). Reproduces
+  # the SAME proof (real DCL.EXE, the full six-library producer graph, IMGACT
+  # activation, the SHOW TIME / A=2+3 SHOW SYMBOL scripted session, zero
+  # ld/ld.so) through the x86_64 LINK.EXE path merged by vms-8f5 (simple
+  # relocs) + vms-cd1 (GOT-relative DATA imports) + vms-2e4 (gnu2 TLSDESC) +
+  # vms-206 (crt0 + cross-image CALL PLT stubs). Shares run_dcl_native.sh
+  # (and lib_build_graph.sh) verbatim with the arm64 job above -- ARCH=x86_64
+  # is a parameter of the SAME script, not a forked copy (vms-cb5f). Unlike
+  # the arm64 job, GitHub's runner IS x86_64, so this needs no QEMU binfmt
+  # registration -- the alpine:3.20/amd64 container runs natively and DCL.EXE
+  # activates directly, no qemu-user in the loop.
+  # -----------------------------------------------------------------------
+  dcl-native-x86_64:
+    name: DCL.EXE VMS-native Link + Activate, x86_64 (vms-bdf done-condition)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Link the real src/vmsdcl into DCL.EXE VMS-native + activate a scripted session through IMGACT.EXE (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/dcl-native-x86_64 DCL_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_dcl_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # LOGINOUT-native (vms-c39, pillar vms-ade, sibling of dcl-native above).
+  # tools/vms_login.c links as a VMS-native ET_DYN executable via LINK.EXE
+  # --executable --use {DECC$SHR + the six OVMX shareables} (mk_loginout.sh) --
+  # the OTHER real EXECUTABLE consumer of the graph, closing the gap Baron's
+  # 2026-08-06 ruling found: the 0.1 dynamic-linking proof covered DCL.EXE only,
+  # not the full login chain. IMGACT.EXE activates LOGINOUT.EXE and it
+  # authenticates SYSTEM against the REAL shipped SYSUAF.DAT, entirely inside
+  # the VMS-native image, with NO ld / NO ld.so. With no /dev/vms in this
+  # container it correctly refuses the session (%OVMX-F-NOIDENT) rather than
+  # faking success into DCL.EXE -- CLAUDE.md Rule 9's "fail honestly", not a
+  # test limitation. See run_login_native.sh's header for the full proof shape
+  # and what is left for a QEMU harness to extend.
+  # -----------------------------------------------------------------------
+  login-native:
+    name: LOGINOUT.EXE VMS-native Link + Activate (login chain)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Link LOGINOUT.EXE VMS-native + activate through IMGACT.EXE, authenticate against real SYSUAF (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/login-native LOGIN_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_login_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # libcrypto-static-musl — OpenSSH port prereq P-C (bead vms-2e8, parent
+  # vms-843, docs/design-openssh-port-ovmx.md §3.1). Fetches the SHA256-pinned
+  # LibreSSL tarball (see third-party/libcrypto/VENDOR-REV), cross-builds a
+  # STATIC libcrypto.a against musl in the same alpine:3.20 (musl) container the
+  # link-native / OVMX_STATIC path uses, then statically links + runs the
+  # hello-crypto probe and asserts its SHA-256 + bignum known-answers. This is
+  # the crypto FOUNDATION the OpenSSH clients (vms-22a) and the sshd swap
+  # (vms-0cd) link against for the bootable image — INDEPENDENT of the post-1.0
+  # OpenSSL-as-OVMX-image (vms-4fa). LibreSSL chosen over OpenSSL because it
+  # cross-builds static-musl clean with no patches (evaluation in VENDOR-REV).
+  # Everything builds out-of-tree to /tmp — no host install, no repo writes.
+  # -----------------------------------------------------------------------
+  libcrypto-static-musl:
+    name: Static libcrypto (musl) — hello-crypto probe
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.libcrypto == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch pinned LibreSSL, build static libcrypto.a (musl), run hello-crypto KAT
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev make perl curl file binutils >/dev/null
+              export CC=gcc WORK=/tmp/ovmx-libcrypto
+              sh /src/third-party/libcrypto/test/run_hello_crypto.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # (The openssh-static-musl job was RETIRED with the SSH scaffold, vms-d916: it
+  # built the --wrap veneer over a musl-static cross ELF, which Baron ruled LARP.
+  # The faithful SSH is the real upstream OpenSSH port on the DECC$SOCKET/$QIO
+  # C-RTL substrate — vms-9ef; a native-image CI proof lands with that rung.)
+  # -----------------------------------------------------------------------
+  # tcc-object-native — S2 CRUX proof (bead vms-4ba.3, epic vms-4ba "self-host
+  # S2: a C compiler as an OVMX image"). Builds stock, UNMODIFIED tinycc
+  # (third-party/tcc), compiles hello.c with DEFAULT flags (no -gstabs, no
+  # __thread), and asserts hello.o's real shape against the vms-4ba.2 reloc-
+  # gap ruling: SHT_RELA-only (no SHT_REL), no ABS32, no TLSLE, printf stays
+  # a real CALL26 import (not inlined). Then attempts the full DONE-condition
+  # round-trip: LINK.EXE --executable --use {DECC$SHR + the five OVMX
+  # shareables} -> HELLO.EXE, activated through IMGACT.EXE, expecting it to
+  # print "hello" and exit 0 (mirrors mk_dcl.sh:112-115 / run_dcl_native.sh).
+  #
+  # GATED BY TCC_EXPECT_LINK (env flag, mirrors DCL_EXPECT_LINK above): set to
+  # 1 here (BLOCKING) as of vms-9c1 — LINK.EXE's GOT-slot resolver now resolves
+  # tcc's GOT references to DEFINED LOCAL symbols (statics, string-literal labels
+  # 'L.n'). Previously tcc's arm64 backend GOT-references EVERY symbol including
+  # locally-defined statics (arm64-gen.c arm64_sym(), unconditional for ELF),
+  # while LINK.EXE only searched the GLOBAL symbol hash (build_symhash() skips
+  # STB_LOCAL binds, link.c:755) — reporting the defined local as an undefined
+  # GOT import. vms-9c1 gives every LOCAL-bind GOT reference a PER-OBJECT
+  # (obj,sym) slot resolved via placed_addr(), so single-TU HELLO.EXE AND the
+  # multi-TU cross-collision case (XTU.EXE, two TUs each with their own local
+  # 'L.1') both link and activate. The full DONE-condition round-trip (tcc build
+  # -> hello.o/tu*.o -> LINK.EXE --executable -> IMGACT activation) is now a hard
+  # gate. Set TCC_EXPECT_LINK=0 only to soften the LINK.EXE step while iterating.
+  # -----------------------------------------------------------------------
+  tcc-object-native:
+    name: tcc Object LINK.EXE Compatibility (S2 crux, musl)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build stock tcc, compile hello.c + cross-TU objects, LINK.EXE --executable + IMGACT activation (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/tcc-object-native TCC_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_tcc_object_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # tcc-native — S2 ENDPOINT proof (bead vms-4ba.4, epic vms-4ba "self-host
+  # S2: a C compiler as an OVMX image"). Builds stock, UNMODIFIED tinycc AS a
+  # VMS-native EXECUTABLE image (TCC.EXE, via the new src/vmslink/mk_tcc.sh
+  # recipe: 11 tcc TUs compiled with the proven freestanding musl CFLAGS,
+  # linked via LINK.EXE --executable --use {DECC$SHR + the five OVMX
+  # shareables}). IMGACT.EXE activates TCC.EXE (no ld / no ld.so), the
+  # ACTIVATED tcc compiles a real hello.c to hello.o, and that hello.o
+  # round-trips through the vms-4ba.3 LINK.EXE path into HELLO.EXE, which
+  # IMGACT-activates and prints "hello", exit 0.
+  #
+  # DECC$SHR gained 39 more PROCEDURE universals for this bead (libgcc IEEE-
+  # quad long-double helpers + POSIX calls tcc needs) — see mk_decc_shr.sh's
+  # vms-4ba.4 comment block. One tcc cross-image reference (`environ`,
+  # tccrun.c's `-run` JIT path — dead code for `tcc -c`) is deliberately left
+  # as a deferred import (--allow-undefined) rather than exported, because
+  # exporting it hits a genuine LINK.EXE gap (universal-vector resolution runs
+  # before BSS section placement) that is out of Systems-Engineer file-domain
+  # to fix here; mk_tcc.sh hard-asserts the deferred count is exactly 1.
+  #
+  # TCC_EXPECT_LINK (mirrors DCL_EXPECT_LINK / the tcc-object-native job
+  # above): set to 1 here (BLOCKING) — the vms-4ba.3 CRUX (vms-9c1) is closed,
+  # so a LINK.EXE failure on TCC.EXE's own build or the hello.o round-trip is
+  # a real regression.
+  # -----------------------------------------------------------------------
+  tcc-native:
+    name: TCC.EXE VMS-native Link + Activate (self-hosting S2 endpoint)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build TCC.EXE VMS-native, activate it, compile hello.c -> hello.o, round-trip through LINK.EXE + IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/tcc-native TCC_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_tcc_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # mmk-native — self-host spine residual (bead vms-ec70, epic vms-16d
+  # "self-host S3: MMK+LIBRARIAN+assembler as OVMX-native"). Builds the
+  # MadGoat MMK build engine (tests/corpus/tier3-mmk) AS a VMS-native
+  # EXECUTABLE image (MMK.EXE, via the new src/vmslink/mk_mmk.sh recipe: 19
+  # objects compiled with the proven freestanding musl CFLAGS, linked via
+  # LINK.EXE --executable --use {DECC$SHR + the six OVMX shareables}).
+  # IMGACT.EXE activates MMK.EXE (no ld / no ld.so), and the ACTIVATED image
+  # opens a real multi-TU descrip.mms (OVMXRT.MMS) through OVMX RMS, parses
+  # it with the real lib$table_parse engine + the vms-486 grammar, and
+  # resolves the correct compile -> archive -> link plan in /NOACTION,
+  # byte-identical across two independent runs.
+  #
+  # SCOPE (Rule 9 / INV-6, see run_mmk_native.sh's own header): this proves
+  # MMK built + activated as an OVMX image and genuinely functional
+  # (conditions 1-2 of vms-16d). MMK's persistent mailbox-driven DCL
+  # exec-drive (actually RUNNING that resolved plan) needs a real /dev/vms
+  # executive — $CREMBX fails SS$_NOSUCHDEV in this container's host-mode
+  # /vms — and is NOT attempted here; that rides the QEMU
+  # test_syssvc_mmk_build.c suite (today against the static `mmk_native`
+  # CMake target — swapping it to this OVMX-native MMK.EXE is a follow-on).
+  #
+  # MMK_EXPECT_LINK (mirrors TCC_EXPECT_LINK above): set to 1 here
+  # (BLOCKING) — the producer-graph + emit_executable toolchain is complete,
+  # so a LINK.EXE failure on MMK.EXE's own build is a real regression.
+  # -----------------------------------------------------------------------
+  mmk-native:
+    name: MMK.EXE VMS-native Link + Activate (self-hosting spine residual)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build MMK.EXE VMS-native, activate it, resolve a real multi-TU descrip.mms through IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/mmk-native MMK_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_mmk_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # tcc-rms — S2 RMS I/O proof (bead vms-4ba.5, epic vms-4ba). Sibling of
+  # tcc-native: same six-producer graph + TCC.EXE build (mk_tcc.sh now also
+  # compiles the OVMX RMS I/O shim, third-party/tcc/ovmx/ovmx_rms_io.c, and
+  # defines OVMX_RMS_IO so tcc's own primary-source read and output-object
+  # write route through sys$open/$connect/$get and sys$create/$connect/$put/
+  # $close instead of raw open()/read()/write()). Proves the RMS path is
+  # actually exercised (a real trace, byte-count cross-check, scratch-file
+  # cleanup check — see run_tcc_rms.sh's header) and that the RMS-delivered
+  # hello.o still round-trips through LINK.EXE + IMGACT exactly like the
+  # vms-4ba.4 raw-POSIX build did.
+  # -----------------------------------------------------------------------
+  tcc-rms:
+    name: TCC.EXE RMS File I/O (sys$open/$get read, sys$create/$put write)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build TCC.EXE with RMS I/O, activate it, compile hello.c -> hello.o via sys$open/$get + sys$create/$put, round-trip through LINK.EXE + IMGACT.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/tcc-rms TCC_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_tcc_rms.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # tcc-selfhost — S2 FIXPOINT proof (bead vms-4ba.6, epic vms-4ba). The
+  # summit: tcc COMPILES tcc INSIDE OVMX. A gcc-built seed TCC.EXE (the only
+  # Unix-compiler step, identical to tcc-native) is activated through IMGACT
+  # (no gcc, no ld.so) and compiles every one of tcc's 12 TUs — reading each
+  # .c and writing each .o through RMS — into a SECOND TCC.EXE (LINK.EXE
+  # --executable). That gen-2 compiler then compiles hello.c into a running
+  # image ('hello', exit 0), AND recompiles tcc a THIRD time producing objects
+  # BYTE-IDENTICAL to gen-2 — the classic self-host fixpoint. The compiler now
+  # reproduces itself with no Unix compiler in the loop.
+  #
+  # The ONE OVMX adaptation that makes tcc-built-tcc work: tcc emits its
+  # pointer-initializer tables (tcc_options[] etc.) into a `.data.ro` section
+  # created SHF_ALLOC-only (upstream tcc's own linker adds SHF_WRITE at final
+  # link via GNU_RELRO; a `tcc -c` object never gets that fixup). OVMX's
+  # LINK.EXE applies data-pointer relocations only to WRITABLE sections (gcc
+  # dodges this via .data.rel.ro WITH SHF_WRITE), so without the fix every
+  # `.data.ro` pointer in a tcc-built binary lands NULL and gen-2 tcc matches
+  # no CLI option. Fixed by a define-gated OVMX seam in the vendored tcc
+  # (third-party/tcc/src/tccelf.c shf_RELRO, activated by -DOVMX_DATA_RO_WRITABLE
+  # in src/vmslink/mk_tcc.sh) — emit `.data.ro` writable, matching gcc's
+  # pre-RELRO .data.rel.ro. Entirely in tcc/mk_tcc.sh scope; NOT a link.c change.
+  # mk_decc_shr.sh also exports one more libgcc quad helper (__negtf2) that a
+  # self-hosted tcc emits where gcc inlined it, keeping gen-2's deferred set to
+  # exactly one dead-for-`-c` reference (environ), same as gen-1.
+  #
+  # TCC_EXPECT_LINK (default 1, BLOCKING — mirrors tcc-native/tcc-rms): a
+  # LINK.EXE failure on any generation's build is a real regression.
+  # -----------------------------------------------------------------------
+  tcc-selfhost:
+    name: TCC.EXE Self-Host Fixpoint (tcc compiles tcc inside OVMX, S2 summit)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: gen-1 seed TCC.EXE -> gen-1 compiles all tcc TUs under IMGACT -> gen-2 TCC.EXE -> gen-2 compiles+runs hello -> gen-2==gen-3 byte-identity (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/tcc-selfhost TCC_EXPECT_LINK=1
+              sh /src/src/imgact/test/run_tcc_selfhost.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # link-native — self-host S3.1 proof (bead vms-b5a): LINK.EXE runs AS an
+  # OVMX image. Sibling of tcc-native/tcc-rms: the SAME producer graph +
+  # IMGACT.EXE, but here it is the LINKER ITSELF (link.c + its RMS I/O shim,
+  # ovmx_link_rms_io.c) that is compiled freestanding-musl (-DOVMX_RMS_IO)
+  # and self-linked (a bootstrap LINK.EXE --executable --use {DECC$SHR + the
+  # five OVMX shareables}, mk_link.sh) into a PT_INTERP=IMGACT.EXE image.
+  # IMGACT activates that native LINK.EXE and it links a real gcc-seed hello.o
+  # into a runnable HELLO.EXE — reading the .o via RMS sys$open/$get (byte-
+  # exact, FAB$C_FIX mrs=1: no EOF space-pad) and writing the .EXE via RMS
+  # sys$create/$put (byte-exact, mrs=0: per-put length) — with NO host
+  # LINK.EXE anywhere in that linking path (the bootstrap LINK.EXE only BUILDS
+  # the native image, which CLAUDE.md Rule 9 explicitly allows). The proof
+  # asserts an RMS trace (VMS-odd statuses), a read/write byte-count cross-
+  # check against both files' on-disk sizes, and that HELLO.EXE IMGACT-
+  # activates and prints 'hello', exit 0. link.c is arch-agnostic, so unlike
+  # the tcc harnesses this runs on BOTH arm64 (below) and x86_64 (further
+  # below, native on GitHub's x86_64 runner, no QEMU).
+  #
+  # LINK_EXPECT (default 1, BLOCKING — mirrors TCC_EXPECT_LINK/DCL_EXPECT_LINK):
+  # a failure of the native LINK.EXE build or the activated-link step is a real
+  # regression.
+  # -----------------------------------------------------------------------
+  link-native:
+    name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, arm64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    # vms-959: native arm64 runner (public-repo free ubuntu-24.04-arm) --
+    # was ubuntu-latest emulating arm64 via setup-qemu+--platform (~10x slower).
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Register QEMU binfmt handlers (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Self-link link.c into a native LINK.EXE, activate it, link hello.o -> HELLO.EXE via RMS, activate HELLO.EXE (arm64)
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=aarch64 WORK=/tmp/link-native LINK_EXPECT=1
+              sh /src/src/imgact/test/run_link_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # link-native-x86_64 — the x86_64 analog of link-native above (bead vms-b5a).
+  # Shares run_link_native.sh verbatim (ARCH=x86_64 is a parameter, not a fork).
+  # GitHub's runner IS x86_64, so the alpine:3.20/amd64 container runs natively
+  # and the native LINK.EXE activates directly — no QEMU binfmt in the loop.
+  # -----------------------------------------------------------------------
+  link-native-x86_64:
+    name: LINK.EXE VMS-native Self-Link + Activate (self-hosting S3.1, x86_64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Self-link link.c into a native LINK.EXE, activate it, link hello.o -> HELLO.EXE via RMS, activate HELLO.EXE (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/link-native-x86_64 LINK_EXPECT=1
+              sh /src/src/imgact/test/run_link_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # librarian-olb-native-x86_64 — LIBRARIAN.EXE + .OLB + LINK.EXE end-to-end,
+  # ACTIVATED (bead vms-ca9, self-host spine #3). LIBRARIAN builds an .OLB
+  # object library from two members; LINK.EXE --executable selectively pulls the
+  # one member that resolves an undefined symbol (1 of 2), and the produced image
+  # IMGACT-activates and RUNS (mul3(14)==42, exit 0), VMS-native (no ld/ld.so).
+  # Runner is x86_64 so the alpine:3.20/amd64 container runs natively — no QEMU.
+  # -----------------------------------------------------------------------
+  librarian-olb-native-x86_64:
+    name: LIBRARIAN.EXE .OLB + LINK.EXE Selective Pull + Activate (self-host spine #3, x86_64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: LIBRARIAN builds an .OLB, LINK selectively pulls a member, IMGACT activates the result (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/olb-native OLB_EXPECT=1
+              sh /src/src/imgact/test/run_olb_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # librarian-native-x86_64 — LIBRARIAN.EXE runs AS an OVMX image (bead vms-1c2,
+  # self-host S3 spine, epic vms-59a). Unlike librarian-olb-native (which proves
+  # the linked PRODUCT runs, LIBRARIAN staying a host bootstrap tool), this job
+  # links librarian.c + the reused RMS I/O shim into a native PT_INTERP=IMGACT
+  # image (mk_librarian.sh, -DOVMX_OLB_RMS_IO) and IMGACT-ACTIVATES LIBRARIAN
+  # itself: it /CREATEs a real .OLB from two .OBJs reading each object via RMS
+  # (sys$open/$get) and writing the .OLB via RMS (sys$create/$put), proven by a
+  # trace + byte-count cross-check; a stock `ar t` lists both modules, native
+  # /LIST reads it back via RMS, and a bootstrap LINK consumes it into an image
+  # that activates (mul3(14)==42). This promotes LIBRARIAN to a native
+  # OVMX image like LINK/TCC/DCL — the S3-spine step toward MMK building a
+  # component INSIDE OVMX (vms-1df). Runner is x86_64 so alpine:3.20/amd64 runs
+  # natively — no QEMU.
+  # -----------------------------------------------------------------------
+  librarian-native-x86_64:
+    name: LIBRARIAN.EXE runs AS an OVMX image — /CREATE .OLB via RMS + Activate (self-host S3 spine, x86_64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: IMGACT activates native LIBRARIAN.EXE; it /CREATEs an .OLB via RMS, /LIST reads it back, LINK pulls a member (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/librarian-native LIBRARIAN_EXPECT=1
+              sh /src/src/imgact/test/run_librarian_native.sh
+            '
+
+  # -----------------------------------------------------------------------
+  # olb-symvec-native-x86_64 — Rung 1 of the VMS-native shareable-build
+  # migration (rd vms-bf8, epic vms-a90; design-vms-native-shareable-build.md
+  # C.4.1). LINK.EXE --shareable ROOTS its selective .OLB search at the
+  # --symbol-vector universals: a /SHAREABLE built from MATH.OLB with NO explicit
+  # object TU list (the VMS way) pulls exactly the module defining the universal
+  # PLUS its transitive dependency (2 of 3), leaves the unreferenced member out,
+  # carries a symbol vector, and IMGACT-activates through a consumer that reaches
+  # mul3(14)==42. Before this rung a symbol-vector-only shareable seeded an empty
+  # root set and pulled zero members. Runner is x86_64 so alpine:3.20/amd64 runs
+  # natively — no QEMU.
+  # -----------------------------------------------------------------------
+  olb-symvec-native-x86_64:
+    name: LINK.EXE --shareable seeds selective .OLB pull from --symbol-vector + Activate (VMS-native shareable Rung 1, x86_64)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: LINK.EXE --shareable rooted at --symbol-vector selectively pulls from the .OLB (2 of 3), IMGACT activates a consumer (x86_64)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc ARCH=x86_64 WORK=/tmp/olb-symvec-native SV_EXPECT=1
+              sh /src/src/imgact/test/run_olb_symvec_native.sh
+            '
+
+  # mmk-link-selfhost-fixpoint — self-host S4 LINK.EXE fixpoint via the MMK
+  # driver (bead vms-89d, the vms-678 Build-native 1.0 gate).  ADDITIVE port of
+  # the multi-TU LINK.EXE self-host fixpoint from BUILD.COM to MMK: the committed
+  # descrip.mms tests/toolchain/component/LINKSH.MMS describes two TCC compiles
+  # (link.c + ovmx_link_rms_io.c) then a six-shareable LINK, and MMK resolves that
+  # plan (the toolchain-mmk-link-selfhost-plan ctest proves it).  This job proves
+  # the OTHER half: the real OVMX-native LINK.EXE, executing that exact plan on
+  # the real LINK.EXE sources, reproduces itself byte-for-byte -- gen1 builds
+  # gen2, the OVMX-built gen2 builds gen3, gen2 == gen3.  Runs NATIVE amd64 (the
+  # retired BUILD.COM fixpoint ran arm64-emulated because it ran TCC.EXE, tinycc
+  # keying off uname -m): this proof does NOT run TCC.EXE
+  # (it compiles the objects with the host CC -- TCC's compile determinism is the
+  # separate run_tcc_selfhost gen2==gen3 fixpoint), so it is not bound by tinycc's
+  # uname-keyed arch gate.  This job is now the PR-gated LINK.EXE self-host
+  # fixpoint proof outright: BUILD.COM and its DCL driver run_link_selfhost_native.sh
+  # were retired (vms-e49) once the ODS-2 flip landed, and the MMK descrip.mms
+  # (LINKSH.MMS) is the sole self-host driver.  MMK's own MAILBOX-DRIVEN
+  # execution of this plan (ovmx_mmk_sp.c: $CREMBX/lib$spawn, executive-only)
+  # rides QEMU and is a follow-on rung.  LINK_SELFHOST_EXPECT=1 (BLOCKING): any
+  # producer-graph, gen build, or gen2!=gen3 mismatch is a real regression.
+  # -----------------------------------------------------------------------
+  mmk-link-selfhost-fixpoint:
+    name: MMK LINK.EXE self-host fixpoint — real LINK.EXE builds LINK.EXE, gen2==gen3 (self-hosting S4)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.toolchain == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: MMK-planned LINK.EXE fixpoint — the real LINK.EXE links LINK.EXE twice and asserts gen2==gen3 (amd64 musl)
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "${{ github.workspace }}":/src -w /src \
+            docker.io/library/alpine:3.20 sh -c '
+              set -e
+              apk add --no-cache gcc musl-dev binutils make linux-headers >/dev/null
+              export CC=gcc WORK=/tmp/mmk-link-selfhost-build LINK_SELFHOST_EXPECT=1
+              sh /src/tests/toolchain/run_mmk_link_selfhost_build.sh
+            '

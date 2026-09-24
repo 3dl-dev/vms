@@ -29,7 +29,7 @@
  * NO /dev/vms -> honest SKIP (77), never a fake pass: with no executive the
  * mount table does not exist and $ASSIGN of the boot unit cannot return a
  * channel, so there is nothing to assert -- the contract every test_syssvc_*
- * suite is held to (.github/workflows/ci.yml).
+ * suite is held to (.github/workflows/ci-kernel-executive.yml).
  */
 
 #include <stdio.h>

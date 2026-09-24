@@ -438,7 +438,7 @@ orchestration model:
 | `src/ovmx_init/ovmx_init.c` | **single owner per cycle** (`vms-2f0` serializes) | never split across two live seats |
 | `dcl_builtin.c` verb table | the cycle's DCL-owning seat | append-only, one alpha-ordered line per commit |
 | public headers (`ssdef.h`/`starlet.h`/`descrip.h`/`ovmx_layout.h`) | **frozen** | any edit = design-cascade via one owner |
-| `.github/workflows/ci.yml` | the cycle's owner | append a new job as a distinct EOF key; never edit an existing job body |
+| `.github/workflows/ci-*.yml` (split by vms-1af into per-domain files + reusable `ci-changes.yml`) | the cycle's owner | append a new job as a distinct EOF key in the relevant domain file; never edit an existing job body; keep each file under the 450KB guard (`workflow_size_guard_gate`) |
 | `distro/rootfs`, `distro/boot` | boot owns `rootfs/vms/sys$startup/*`; installer owns mastering | prefer sequencing |
 | `src/vmsdcl` + `src/vmslnm` + `src/vmsrms` + `tools/**` | **Parity program (`vms-8ad`)** | zero `src/vmsscs` contention; append-only verb/qualifier tables; ships as 0.3-x accretion |
 | **`drivers/ovmx/**`, kernel `.config`, kernel build in `distro/Dockerfile.bootable`** | **Kernel-provenance (`vms-19e`)** | serializes with Executive on `src/kernel/**` (both touch modules); per-arch config keys for AXP |

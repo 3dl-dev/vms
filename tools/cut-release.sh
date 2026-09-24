@@ -62,7 +62,7 @@
 # tools/ovmx_kit_pack.c / tools/vmsfs_master.c). This script defaults that
 # clock to the CUT COMMIT'S timestamp, so two independent cuts of the same
 # ref are deterministic without the caller doing anything -- see
-# .github/workflows/ci.yml's cut-release-reproducible job, which builds
+# .github/workflows/ci-*.yml (split by vms-1af)'s cut-release-reproducible job, which builds
 # twice from a clean tree and diffs the artifact bytes.
 #
 # Usage:

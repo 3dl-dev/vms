@@ -48,7 +48,7 @@
 #
 # arm64 musl Alpine container only (CLAUDE.md test loop). Needs root to create
 # /vms. Run natively on an aarch64 host, or under arm64 emulation (binfmt/QEMU)
-# on x86_64 (see .github/workflows/ci.yml).
+# on x86_64 (see .github/workflows/ci-*.yml (split by vms-1af)).
 set -e
 CC=${CC:-gcc}
 HERE=$(cd "$(dirname "$0")" && pwd)          # src/imgact/test
@@ -204,7 +204,7 @@ EOF
 # chmod 666 below is very likely dead weight now, not a live workaround.
 # NOT REMOVED HERE: this script only runs under arm64 musl Alpine (own
 # header above), which this session's x86_64 host cannot exercise without
-# the emulated-container path .github/workflows/ci.yml drives, and that CI
+# the emulated-container path .github/workflows/ci-*.yml (split by vms-1af) drives, and that CI
 # job is one of the three already quarantined as non-blocking (vms-0b8,
 # commit d4b1c76) -- pulling it forward to verify a comment would be
 # disproportionate to this bead's scope. Original text, preserved for

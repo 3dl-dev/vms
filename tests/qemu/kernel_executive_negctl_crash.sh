@@ -5,7 +5,7 @@
 #
 # WHAT SHIPPED, AND WHAT IT BROKE. vms-c9c (commit 74e3200) replaced a hand-
 # typed inferred cause with `suite_fails=$(... | grep -F "FAIL:")` in
-# .github/workflows/ci.yml's kernel-executive-negative-control step. Both
+# .github/workflows/ci-kernel-executive.yml's kernel-executive-negative-control step. Both
 # shapes the vms-c9c implementer exercised (an ordinary assertion failure,
 # and the clean pass) emit a FAIL: line for the suite in question, so grep
 # always matched and the pipeline always exited 0. The THIRD shape -- a
@@ -23,7 +23,7 @@
 # WHAT THIS FILE PROVES, AND HOW. It does not boot QEMU or touch /dev/vms --
 # it needs neither. tools/replay_ci_kernel_executive.py extracts the
 # `kernel-executive-negative-control` step's `run:` block VERBATIM out of
-# .github/workflows/ci.yml and executes it under `bash -e -c` against a
+# .github/workflows/ci-kernel-executive.yml and executes it under `bash -e -c` against a
 # supplied captured-output file, so whatever this script asserts is
 # asserted against the SAME TEXT CI runs, not a hand-copied approximation
 # that could drift from it. This file builds ONE synthetic capture with the

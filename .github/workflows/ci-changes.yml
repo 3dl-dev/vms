@@ -1,8 +1,8 @@
 name: CI changes (reusable path filter)
 
 # Reusable path-filter workflow, split out of the monolithic ci.yml by
-# vms-1af (ci.yml was ~511KB, over GitHub's silent ~512000-byte non-comment
-# workflow-file ceiling -- see rd vms-1af / vms-e18e). Every ci-*.yml sibling
+# vms-1af (ci.yml was ~511KB, over GitHub's silent size ceiling somewhere
+# around 511,986-512,030 bytes -- see rd vms-1af). Every ci-*.yml sibling
 # file calls this as its own `changes` job via `uses:`, so the path-filter
 # logic (and its subsystem list) has exactly ONE source, instead of being
 # copy-pasted into every domain file. `github.event_name` / `github.event`

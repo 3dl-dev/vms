@@ -1,7 +1,7 @@
 name: CI / Self-Host / x86_64 toolchain
 
 # Sibling of ci.yml, split out by vms-1af (ci.yml was ~511KB, over GitHub's
-# silent ~512000-byte non-comment workflow-file ceiling that produces
+# silent size ceiling somewhere around 511,986-512,030 bytes that produces
 # conclusion=startup_failure with ZERO jobs and no pull_request run at all --
 # see rd vms-1af / vms-e18e). Triggers, job names, and the needs-graph are
 # carried over unchanged from the corresponding slice of the old ci.yml; only

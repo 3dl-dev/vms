@@ -1,7 +1,7 @@
 name: CI / Core Gates
 
 # Sibling of ci.yml, split out by vms-1af (ci.yml was ~511KB, over GitHub's
-# silent ~512000-byte non-comment workflow-file ceiling that produces
+# silent size ceiling somewhere around 511,986-512,030 bytes that produces
 # conclusion=startup_failure with ZERO jobs and no pull_request run at all --
 # see rd vms-1af / vms-e18e). Triggers, job names, and the needs-graph are
 # carried over unchanged from the corresponding slice of the old ci.yml; only
@@ -31,12 +31,16 @@ name: CI / Core Gates
 #     on the batched result before it lands (nothing enqueues it until
 #     then; see below).
 #   * PRE-MERGE FULL RUN -- until a merge queue exists, the reap gate
-#     MUST fire a `workflow_dispatch` run on the candidate branch/SHA
-#     (`gh workflow run ci.yml --ref <branch>`) and verify it GREEN
-#     before squash-merge. workflow_dispatch forces every output true
-#     (full suite). KVM-accelerated, this is ~single-digit minutes, not
-#     46. This replaces "the PR's own run was the full suite" -- the
-#     by-SHA proof still exists, just fired deliberately at reap time.
+#     MUST fire a `workflow_dispatch` run on the candidate branch/SHA for
+#     EACH ci-*.yml sibling (`for f in ci-core-gates ci-release-e2e
+#     ci-kernel-executive ci-selfhost-x86 ci-alpha ci-vax; do gh workflow
+#     run "$f.yml" --ref <branch>; done` -- vms-1af split ci.yml into
+#     these six domain files, so one dispatch is no longer enough) and
+#     verify all of them GREEN before squash-merge. workflow_dispatch
+#     forces every output true (full suite). KVM-accelerated, this is
+#     ~single-digit minutes, not 46. This replaces "the PR's own run was
+#     the full suite" -- the by-SHA proof still exists, just fired
+#     deliberately at reap time.
 # Do NOT merge a core change on the fast-tier PR run alone.
 #
 # WIDENS the "invisible-on-PR, red-on-push" class: gates that only run on

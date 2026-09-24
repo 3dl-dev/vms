@@ -1,7 +1,7 @@
 name: CI / Kernel Executive / NetBSD-amd64
 
 # Sibling of ci.yml, split out by vms-1af (ci.yml was ~511KB, over GitHub's
-# silent ~512000-byte non-comment workflow-file ceiling that produces
+# silent size ceiling somewhere around 511,986-512,030 bytes that produces
 # conclusion=startup_failure with ZERO jobs and no pull_request run at all --
 # see rd vms-1af / vms-e18e). Triggers, job names, and the needs-graph are
 # carried over unchanged from the corresponding slice of the old ci.yml; only
@@ -471,7 +471,7 @@ jobs:
       # read from the shard matrix's own list so it cannot drift from the legs.
       - name: Prove the shard partition covers every suite exactly once (union = all)
         run: |
-          N=$(sed -n 's/^ *shard: \[\(.*\)\].*/\1/p' .github/workflows/ci.yml \
+          N=$(sed -n 's/^ *shard: \[\(.*\)\].*/\1/p' .github/workflows/ci-kernel-executive.yml \
               | head -1 | tr ',' '\n' | grep -c '[0-9]')
           echo "shard count N derived from the matrix list: $N"
           [ "$N" -ge 2 ] || { echo "FAIL: could not derive N>=2 shards from the matrix"; exit 1; }

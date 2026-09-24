@@ -178,7 +178,7 @@ to run. If a future first-boot facility appears, the mechanism it stages must
 still be a `.COM`, not PID 1 C.
 
 **Ground-source proof (vms-649).** `tests/qemu/test_persistent_boot.sh` (a CI
-gate — `.github/workflows/ci.yml` "Run persistent boot smoke test") gains a
+gate — `.github/workflows/ci-release-e2e.yml` "Run persistent boot smoke test") gains a
 second boot of the pre-installed system disk and asserts the two boots are
 materially identical: both reach `%STDRV-I-STARTUP` begun and a login prompt,
 and **neither** runs any AUTOGEN / first-boot / one-time-completion phase, so

@@ -8,7 +8,7 @@
 #
 # Gated behind OVMX_QEMU_FULL_E2E=1 so a bare `ctest` never pays for a real
 # docker+QEMU boot -- IDENTICAL to run_product_install_e2e.sh/run_upgrade_
-# e2e.sh. CI does NOT rely on that opt-in as cover: .github/workflows/ci.yml
+# e2e.sh. CI does NOT rely on that opt-in as cover: .github/workflows/ci-*.yml (split by vms-1af)
 # runs this gate for real with OVMX_QEMU_FULL_E2E=1 and treats a SKIP
 # (exit 77) as a hard failure, exactly like the upgrade-e2e job. The
 # opt-in-in-ctest / enforced-in-CI split is the same one every qemu-full-boot

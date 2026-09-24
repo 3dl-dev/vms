@@ -850,8 +850,16 @@ jobs:
       # will bring its OWN vendored crypto/transport, not distro libssh.
       - name: Install build dependencies
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
+          # Infra-only retry (vms-216): GitHub's apt mirrors flake
+          # transiently. This wraps ONLY the package-fetch/setup step -- there
+          # is no test or build-correctness command here, so a retry cannot
+          # mask a real failure. Acquire::Retries retries apt's own network
+          # fetches; the loop retries a whole failed `update` with backoff.
+          for i in 1 2 3 4 5; do
+            sudo apt-get -o Acquire::Retries=5 update -qq && break
+            echo "apt-get update failed (attempt $i/5); backing off" >&2; sleep $((i * 5))
+          done
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
             cmake gcc make libc6-dev libreadline-dev strace libcap2-bin \
             musl-tools ccache rsync
 

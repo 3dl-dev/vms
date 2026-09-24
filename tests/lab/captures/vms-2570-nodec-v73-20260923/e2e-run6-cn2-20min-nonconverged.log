@@ -1,0 +1,127 @@
+booted A + C; URL=http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA.cpio.gz&sysdisk=sysdisk-nodeA.qcow2.gz&nodeC=http%3A%2F%2Flocalhost%3A8301%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dka655x.bin%26diskgz%3D%252Fvms73-nodeC-cluster.dsk.gz
+t=0s [rx] execLP=null nic{tx=0 rx=0} acp=false | hub.sca={}
+t=0s A: %NIC-CFG, initramfs=initramfs-ovmx-nodeA.cpio.gz sysdisk=sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+t=5s A: Booting from ROM... | c[?7l[2J
+t=5s C: 40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25.. | 24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+t=10s C:    OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0 | %WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+t=15s [rx] execLP=null nic{tx=0 rx=4} acp=false | hub.sca={"VAXC":2}
+t=15s C: %VAXcluster-I-LOADSECDB, loading the cluster security database | MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+t=30s [rx] execLP=null nic{tx=0 rx=16} acp=true | hub.sca={"VAXC":14}
+t=30s A: %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=40s C: %CNXMAN,  now a VAXcluster member -- system VAXC | CNXMAN,  completing VAXcluster state transition
+t=45s [rx] execLP=null nic{tx=0 rx=29} acp=true | hub.sca={"VAXC":27}
+t=45s C: $!  Copyright 2001 Compaq Computer Corporation. | STDRV-I-STARTUP, OpenVMS startup begun at 24-SEP-2026 14:19:59.53
+t=50s A: %CNXMAN, waiting to form or join an OpenVMS Cluster | %STDRV-I-STARTUP, OpenVMX startup begun at 24-SEP-2026 14:19:24.94
+t=50s C: %STDRV-I-STARTUP, OpenVMS startup begun at 24-SEP-2026 14:19:59.53 | MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+t=55s A: %STDRV-I-STARTUP, OpenVMX startup begun at 24-SEP-2026 14:19:24.94 | %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+t=55s C: 14:19:56.22 Node VAXC (csid 00010001) completed VAXcluster state transition | SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+t=60s [rx] execLP=null nic{tx=52 rx=75} acp=true | hub.sca={"VAXC":73,"OVMXA":45}
+t=60s A: %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive | [   43.162355] %PEA0, channel verified
+t=60s C: %STARTUP-I-AUDITCONTINUE, audit server initialization complete | The OpenVMS VAX 
+t=65s A: %INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+t=65s C:  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3     | Username: 
+t=65s C login cand 1
+t=76s A:  Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible) | Username: 
+t=76s C: -SET-I-UNKTERM, unknown terminal type | $ 
+t=76s A login
+t=90s [rx] execLP=null nic{tx=165 rx=173} acp=true | hub.sca={"VAXC":171,"OVMXA":156}
+t=90s A:    Welcome to OpenVMX V0.7 - OpenVMS-compatible | $ 
+t=90s C: OpenVMS (TM) VAX System analyzer | SDA> 
+t=94s *** Node A executive frames: tx=156 RX=141 (nobuf=0 badclass=0) ***
+t=99s A:          frames tx 156 (errors 0), rx 141 (dropped: nobuf 0, badclass 0) | $ 
+t=107s A: +---------------------------------------------------------------+ | $ 
+t=107s membership: max 1 A={OVMXA} C={}
+t=126s *** Node A executive frames: tx=275 RX=246 (nobuf=0 badclass=0) ***
+t=135s [rx] execLP={"tx":275,"rx":246,"nobuf":0,"badclass":0} nic{tx=330 rx=317} acp=true | hub.sca={"VAXC":315,"OVMXA":320}
+t=135s A:          frames tx 275 (errors 0), rx 246 (dropped: nobuf 0, badclass 0) | $ 
+t=135s C: Cache Protocol  00000000                                                         | SDA> 
+t=153s A: +---------------------------------------------------------------+ | $ 
+t=156s *** Node A executive frames: tx=386 RX=344 (nobuf=0 badclass=0) ***
+t=161s A:          frames tx 386 (errors 0), rx 344 (dropped: nobuf 0, badclass 0) | $ 
+t=180s [rx] execLP={"tx":386,"rx":344,"nobuf":0,"badclass":0} nic{tx=498 rx=466} acp=true | hub.sca={"VAXC":463,"OVMXA":487}
+t=180s C: Cache Protocol  00000000                                                         | SDA> 
+t=189s *** Node A executive frames: tx=507 RX=450 (nobuf=0 badclass=0) ***
+t=194s A:          frames tx 507 (errors 0), rx 450 (dropped: nobuf 0, badclass 0) | $ 
+t=202s A: +---------------------------------------------------------------+ | $ 
+t=220s *** Node A executive frames: tx=624 RX=553 (nobuf=0 badclass=0) ***
+t=229s A:          frames tx 624 (errors 0), rx 553 (dropped: nobuf 0, badclass 0) | $ 
+t=229s C: Cache Protocol  00000000                                                         | SDA> 
+t=247s A: +---------------------------------------------------------------+ | $ 
+t=251s *** Node A executive frames: tx=739 RX=653 (nobuf=0 badclass=0) ***
+t=256s A:          frames tx 739 (errors 0), rx 653 (dropped: nobuf 0, badclass 0) | $ 
+t=275s C: Cache Protocol  00000000                                                         | SDA> 
+t=283s *** Node A executive frames: tx=860 RX=757 (nobuf=0 badclass=0) ***
+t=288s A:          frames tx 860 (errors 0), rx 757 (dropped: nobuf 0, badclass 0) | $ 
+t=296s A: +---------------------------------------------------------------+ | $ 
+t=315s *** Node A executive frames: tx=975 RX=857 (nobuf=0 badclass=0) ***
+t=324s A:          frames tx 975 (errors 0), rx 857 (dropped: nobuf 0, badclass 0) | $ 
+t=324s C: Cache Protocol  00000000                                                         | SDA> 
+t=342s A: +---------------------------------------------------------------+ | $ 
+t=345s *** Node A executive frames: tx=1087 RX=952 (nobuf=0 badclass=0) ***
+t=350s A:          frames tx 1087 (errors 0), rx 952 (dropped: nobuf 0, badclass 0) | $ 
+t=360s [rx] execLP={"tx":1087,"rx":952,"nobuf":0,"badclass":0} nic{tx=1165 rx=1042} acp=true | hub.sca={"VAXC":1039,"OVMXA":1153}
+t=369s C: Cache Protocol  00000000                                                         | SDA> 
+t=378s *** Node A executive frames: tx=1205 RX=1052 (nobuf=0 badclass=0) ***
+t=383s A:          frames tx 1205 (errors 0), rx 1052 (dropped: nobuf 0, badclass 0) | $ 
+t=391s A: +---------------------------------------------------------------+ | $ 
+t=409s *** Node A executive frames: tx=1319 RX=1144 (nobuf=0 badclass=0) ***
+t=418s A:          frames tx 1319 (errors 0), rx 1144 (dropped: nobuf 0, badclass 0) | $ 
+t=418s C: Cache Protocol  00000000                                                         | SDA> 
+t=436s A: +---------------------------------------------------------------+ | $ 
+t=440s *** Node A executive frames: tx=1432 RX=1232 (nobuf=0 badclass=0) ***
+t=445s A:          frames tx 1432 (errors 0), rx 1232 (dropped: nobuf 0, badclass 0) | $ 
+t=450s [rx] execLP={"tx":1432,"rx":1232,"nobuf":0,"badclass":0} nic{tx=1496 rx=1307} acp=true | hub.sca={"VAXC":1303,"OVMXA":1484}
+t=463s C: Cache Protocol  00000000                                                         | SDA> 
+t=472s *** Node A executive frames: tx=1550 RX=1324 (nobuf=0 badclass=0) ***
+t=477s A:          frames tx 1550 (errors 0), rx 1324 (dropped: nobuf 0, badclass 0) | $ 
+t=485s A: +---------------------------------------------------------------+ | $ 
+t=495s [rx] execLP={"tx":1550,"rx":1324,"nobuf":0,"badclass":0} nic{tx=1656 rx=1429} acp=true | hub.sca={"VAXC":1425,"OVMXA":1644}
+t=504s *** Node A executive frames: tx=1661 RX=1408 (nobuf=0 badclass=0) ***
+t=512s A:          frames tx 1661 (errors 0), rx 1408 (dropped: nobuf 0, badclass 0) | $ 
+t=512s C: Cache Protocol  00000000                                                         | SDA> 
+t=530s A: +---------------------------------------------------------------+ | $ 
+t=534s *** Node A executive frames: tx=1768 RX=1490 (nobuf=0 badclass=0) ***
+t=539s A:          frames tx 1768 (errors 0), rx 1490 (dropped: nobuf 0, badclass 0) | $ 
+t=558s C: Cache Protocol  00000000                                                         | SDA> 
+t=566s *** Node A executive frames: tx=1883 RX=1578 (nobuf=0 badclass=0) ***
+t=571s A:          frames tx 1883 (errors 0), rx 1578 (dropped: nobuf 0, badclass 0) | $ 
+t=579s A: +---------------------------------------------------------------+ | $ 
+t=598s *** Node A executive frames: tx=1994 RX=1664 (nobuf=0 badclass=0) ***
+t=607s C: Cache Protocol  00000000                                                         | SDA> 
+t=628s *** Node A executive frames: tx=2103 RX=1748 (nobuf=0 badclass=0) ***
+t=652s C: Cache Protocol  00000000                                                         | SDA> 
+t=661s *** Node A executive frames: tx=2219 RX=1834 (nobuf=0 badclass=0) ***
+t=692s *** Node A executive frames: tx=2331 RX=1918 (nobuf=0 badclass=0) ***
+t=701s C: Cache Protocol  00000000                                                         | SDA> 
+t=723s *** Node A executive frames: tx=2433 RX=1996 (nobuf=0 badclass=0) ***
+t=747s C: Cache Protocol  00000000                                                         | SDA> 
+t=755s *** Node A executive frames: tx=2541 RX=2076 (nobuf=0 badclass=0) ***
+t=787s *** Node A executive frames: tx=2648 RX=2156 (nobuf=0 badclass=0) ***
+t=796s C: Cache Protocol  00000000                                                         | SDA> 
+t=817s *** Node A executive frames: tx=2752 RX=2235 (nobuf=0 badclass=0) ***
+t=841s C: Cache Protocol  00000000                                                         | SDA> 
+t=850s *** Node A executive frames: tx=2863 RX=2319 (nobuf=0 badclass=0) ***
+t=855s [rx] execLP={"tx":2863,"rx":2319,"nobuf":0,"badclass":0} nic{tx=2906 rx=2377} acp=true | hub.sca={"VAXC":2372,"OVMXA":2893}
+t=881s *** Node A executive frames: tx=2970 RX=2399 (nobuf=0 badclass=0) ***
+t=890s C: Cache Protocol  00000000                                                         | SDA> 
+t=900s [rx] execLP={"tx":2970,"rx":2399,"nobuf":0,"badclass":0} nic{tx=3059 rx=2491} acp=true | hub.sca={"VAXC":2486,"OVMXA":3046}
+t=912s *** Node A executive frames: tx=3072 RX=2475 (nobuf=0 badclass=0) ***
+t=936s C: Cache Protocol  00000000                                                         | SDA> 
+t=944s *** Node A executive frames: tx=3183 RX=2557 (nobuf=0 badclass=0) ***
+t=976s *** Node A executive frames: tx=3290 RX=2634 (nobuf=0 badclass=0) ***
+t=985s C: Cache Protocol  00000000                                                         | SDA> 
+t=990s [rx] execLP={"tx":3290,"rx":2634,"nobuf":0,"badclass":0} nic{tx=3362 rx=2714} acp=true | hub.sca={"VAXC":2708,"OVMXA":3349}
+t=1006s *** Node A executive frames: tx=3392 RX=2710 (nobuf=0 badclass=0) ***
+t=1030s C: Cache Protocol  00000000                                                         | SDA> 
+t=1035s [rx] execLP={"tx":3392,"rx":2710,"nobuf":0,"badclass":0} nic{tx=3516 rx=2826} acp=true | hub.sca={"VAXC":2820,"OVMXA":3502}
+t=1039s *** Node A executive frames: tx=3502 RX=2790 (nobuf=0 badclass=0) ***
+t=1070s *** Node A executive frames: tx=3608 RX=2869 (nobuf=0 badclass=0) ***
+t=1079s C: Cache Protocol  00000000                                                         | SDA> 
+t=1101s *** Node A executive frames: tx=3710 RX=2944 (nobuf=0 badclass=0) ***
+t=1125s [rx] execLP={"tx":3710,"rx":2944,"nobuf":0,"badclass":0} nic{tx=3815 rx=3047} acp=true | hub.sca={"VAXC":3041,"OVMXA":3801}
+t=1125s C: Cache Protocol  00000000                                                         | SDA> 
+t=1133s *** Node A executive frames: tx=3819 RX=3025 (nobuf=0 badclass=0) ***
+t=1165s *** Node A executive frames: tx=3924 RX=3103 (nobuf=0 badclass=0) ***
+t=1174s C: Cache Protocol  00000000                                                         | SDA> 
+t=1195s *** Node A executive frames: tx=4026 RX=3178 (nobuf=0 badclass=0) ***
+CN2_RESULT={"cn":1,"converged":false,"cnxman":null,"bugchecks":[],"sca":{"VAXC":3230,"OVMXA":4055},"aNames":[],"cNames":["VAXC"]}

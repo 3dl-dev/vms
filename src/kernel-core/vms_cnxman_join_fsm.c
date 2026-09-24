@@ -2097,6 +2097,70 @@ static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
 }
 
 /*
+ * THE COORDINATOR'S op-0x12 RELAY, ANSWERED BY A SITTING MEMBER (rd vms-4f0).
+ *
+ * THE DEFECT THIS CLOSES. A joiner sends its op-0x02 to exactly ONE peer
+ * (spec §4(p)); that peer becomes the coordinator and, BEFORE it proposes
+ * anything, relays the new system to every OTHER member with a cat-0x01
+ * op-0x12 and waits for each to answer -- the Rule of Total Connectivity,
+ * book p. 7-39, and §4(O.31)'s measured finding that "the op 0x12 RELAY sits
+ * between op 0x02 and op 0x03 and is the commit gate".
+ *
+ * Until this cell existed, cat-0x01 op-0x12 was the ONE grounded RESPOND row
+ * in the codec's allowlist (vms_cluster_codec_cm.c g_cm_allow_rows, "sec 4(r):
+ * op 0x12 coordinator relay") that NO table classified: join_event_of()
+ * returned CNXMAN_EV__COUNT for it, the barrier and the coordinator both
+ * declined it, and cnxman_vc_route() counted it in `frames_unrouted` and said
+ * "an unroutable VMS$VAXcluster frame was received". The recipe was built,
+ * tested and permitted -- and unreachable.
+ *
+ * WHY IT ONLY BITES AT THREE NODES, AND WHY IT WEDGED A REAL VAX. With two
+ * nodes there is no OTHER member, so no relay is ever sent and a join
+ * completes. With three, the coordinator relays to the sitting member and
+ * gates on the answer. MEASURED in-browser 2026-09-24
+ * (tests/lab/captures/vms-e18e-cn3-20260924/): a real OpenVMS VAX V7.3
+ * coordinator logged "received VAXcluster membership request from system
+ * OVMXB" ~30 times and NEVER proposed it, the sitting OVMX member logged
+ * exactly one "unroutable VMS$VAXcluster frame" as the third node appeared,
+ * and the real VAX stopped transmitting altogether within ~60 s. The spec
+ * predicted precisely that: "a joiner that fails to answer something the
+ * coordinator gates on strands the transition, which times out and drops
+ * healthy members" (§4(p)).
+ *
+ * THE ORACLE THIS MATCHES, byte for byte. In
+ * captures/vax3-2to3-established-join-20260730.pcap a real member
+ * (aa:00:04:00:01:04) answers the coordinator's op-0x12 in 0.3 ms with the
+ * request echoed verbatim and three mutations -- category |= 0x80,
+ * body[18] = 0x01, body[17] = its OWN class, body[20:24] = LE32 copy of the
+ * request's body[12:16]. Corpus-wide that answer is not optional: of 151
+ * op-0x12 requests, 148 are answered; the three that are not went to a node
+ * that had already left and to OVMX itself.
+ *
+ * NOTHING IS ASSERTED THAT THE EXECUTIVE DOES NOT HOLD (INV-6). The whole
+ * body is the request's own bytes; body[18] is the response marker every
+ * grounded 0x81 echo carries; body[20:24] is copied from the request. The
+ * ONE value this node asserts is body[17], its own current transition class,
+ * and that is `j->tr_class` -- written in join_h_tr_open() from a REAL
+ * op-0x08/0x09/0x0d open this node received, never composed. A node that
+ * holds no class has nothing grounded to put there (no real response in the
+ * corpus carries class 0), so it answers NOTHING and says so, which is the
+ * allowlist's own rule: an ungrounded field is a gap to name, not to fill.
+ */
+static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
+					const struct join_ev *e)
+{
+	if (j->tr_class == 0u) {
+		j->relays_no_class++;
+		join_log(j, "%CNXMAN, a system was relayed to this node before "
+			    "it held a transition class: nothing grounded to "
+			    "answer with");
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	j->relays_seen++;
+	return join_h_echo(j, e);
+}
+
+/*
  * The op-0x06 MEMBERSHIP burst -- the anti-LARP crux of this whole item.
  *
  * ==========================================================================
@@ -3218,6 +3282,11 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	 */
 	[CNXMAN_JOIN_BARRIER] = {
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
+		/* A relay can arrive while this node is inside a transition of
+		 * its own -- 39 of the 148 real answers in the corpus carry a
+		 * class the relay did not (rd vms-4f0) -- and this node holds
+		 * a real class here, so it can answer. */
+		[CNXMAN_EV_RX_TR_RELAY]  = join_h_relay,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
 		[CNXMAN_EV_RX_ABORT]     = join_h_abort,
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
@@ -3236,6 +3305,10 @@ join_table[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 	/* [MEMBER] steady state: the same server obligations, forever. */
 	[CNXMAN_JOIN_MEMBER] = {
 		[CNXMAN_EV_CM_ACCEPTED]  = join_h_cm_accepted,
+		/* The coordinator's op-0x12 relay of a THIRD system, and the
+		 * Rule of Total Connectivity's gate on this node's answer
+		 * (p. 7-39; see join_h_relay). */
+		[CNXMAN_EV_RX_TR_RELAY]  = join_h_relay,
 		[CNXMAN_EV_RX_TR_OPEN]   = join_h_tr_open,
 		[CNXMAN_EV_RX_ABORT]     = join_h_abort,
 		[CNXMAN_EV_RX_TR_GO]     = join_h_go,
@@ -3431,6 +3504,19 @@ static enum cnxman_event join_event_of(const struct vms_cm_envelope *env)
 		case VMS_CM_OP_PARAMS:
 		case VMS_CM_OP_CONFIG:
 			return CNXMAN_EV_RX_CONFIG;
+		/*
+		 * op-0x12 IS THE COORDINATOR'S RELAY (rd vms-4f0). The shared
+		 * vocabulary has named it since this stack existed --
+		 * CNXMAN_EV_RX_TR_RELAY, "the coordinator relays it" -- and no
+		 * table classified it, so a member's obligation to answer it
+		 * (join_h_relay) had no way to be reached. The coordinator's
+		 * side sees only its 0x81/0x12 ANSWER, which is a RESPONSE and
+		 * is classified by coord_event_of_response(); the
+		 * request-direction frame is this table's, in the states where
+		 * this node is a member that could answer it.
+		 */
+		case VMS_CM_OP_RELAY:
+			return CNXMAN_EV_RX_TR_RELAY;
 		case VMS_CM_OP_COMMIT:
 		case VMS_CM_OP_MEMBREC:
 			return CNXMAN_EV_RX_COMMIT;

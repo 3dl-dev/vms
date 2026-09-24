@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "cluster_test.h"
+#include "cluster_fixture.h"
 #include "cnxman_fake_ops.h"
 
 #include "vms_cluster.h"
@@ -1795,22 +1796,31 @@ static enum cnxman_join_rx fire(enum cnxman_event ev)
 		len = mk_cm(VMS_CM_CAT_DLM, VMS_CM_OP_DLM_REBUILD, 0x0085);
 		rx = join_feed(len);
 		break;
+	case CNXMAN_EV_RX_TR_RELAY:
+		/* rd vms-4f0: the coordinator relaying a THIRD system to this
+		 * node. Composed here only to walk the cell in every state;
+		 * the ANSWER is diffed against a real VAX's in
+		 * test_4f0_member_answers_the_relay_like_a_real_vax(). */
+		len = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY, 0x0086);
+		rx = join_feed(len);
+		break;
 	default:
 		break;
 	}
 	return rx;
 }
 
-/* The events this FSM's entry points can actually deliver. The four the shared
- * vocabulary carries for OTHER tables (RX_TR_REQUEST, RX_TR_RELAY, RX_TR_ACK,
- * SHUTDOWN) have no join entry point and are not walked here. */
+/* The events this FSM's entry points can actually deliver. The three the shared
+ * vocabulary carries for OTHER tables (RX_TR_REQUEST, RX_TR_ACK, SHUTDOWN) have
+ * no join entry point and are not walked here. RX_TR_RELAY became this table's
+ * in rd vms-4f0 and IS walked. */
 static const enum cnxman_event walked[] = {
 	CNXMAN_EV_START, CNXMAN_EV_CDT_OPEN, CNXMAN_EV_CDT_CLOSED,
 	CNXMAN_EV_DIR_RESULT, CNXMAN_EV_MSCP_END, CNXMAN_EV_TIMER_JOIN,
 	CNXMAN_EV_CSID_LEARNED, CNXMAN_EV_RX_CONFIG, CNXMAN_EV_RX_COMMIT,
 	CNXMAN_EV_RX_MEMBERSHIP, CNXMAN_EV_RX_CLOSE, CNXMAN_EV_RX_TR_OPEN,
 	CNXMAN_EV_RX_TR_GO, CNXMAN_EV_RX_BARRIER, CNXMAN_EV_RX_BARRIER_ACK,
-	CNXMAN_EV_RX_REBUILD, CNXMAN_EV_CM_ACCEPTED
+	CNXMAN_EV_RX_REBUILD, CNXMAN_EV_CM_ACCEPTED, CNXMAN_EV_RX_TR_RELAY
 };
 
 /* 1 = this cell is POPULATED in vms_cnxman_join_fsm.c's table. Kept here as
@@ -1875,6 +1885,7 @@ static const uint8_t expect[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_TIMER_JOIN] = 1,
 	},
 	[CNXMAN_JOIN_BARRIER] = {
+		[CNXMAN_EV_RX_TR_RELAY] = 1,     /* rd vms-4f0 */
 		[CNXMAN_EV_RX_TR_OPEN] = 1,
 		[CNXMAN_EV_RX_ABORT] = 1,
 		[CNXMAN_EV_CM_ACCEPTED] = 1,
@@ -1890,6 +1901,7 @@ static const uint8_t expect[CNXMAN_JOIN_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_CDT_CLOSED] = 1,
 	},
 	[CNXMAN_JOIN_MEMBER] = {
+		[CNXMAN_EV_RX_TR_RELAY] = 1,     /* rd vms-4f0 */
 		[CNXMAN_EV_RX_TR_OPEN] = 1,
 		[CNXMAN_EV_RX_ABORT] = 1,
 		[CNXMAN_EV_CM_ACCEPTED] = 1,
@@ -4920,6 +4932,176 @@ static void test_f3ec_abort_rearms_the_admission_clock(void)
 			"...and no clock was re-armed");
 }
 
+/* ==========================================================================
+ * rd vms-4f0: A SITTING MEMBER ANSWERS THE COORDINATOR'S op-0x12 RELAY --
+ * AND THE ANSWER IS DIFFED AGAINST A REAL OpenVMS VAX's OWN.
+ *
+ * THE DEFECT. A third node cannot join a real VMS cluster that OVMX is already
+ * a member of. The joiner sends its op-0x02 to one peer; that peer becomes the
+ * coordinator and, BEFORE proposing anything, relays the new system to every
+ * OTHER member (op-0x12) and gates the admission on their answers -- the Rule
+ * of Total Connectivity, p. 7-39, spec §4(O.31). OVMX classified that frame in
+ * no table, so cnxman_vc_route() counted it in `frames_unrouted` and said "an
+ * unroutable VMS$VAXcluster frame was received". MEASURED in-browser
+ * (tests/lab/captures/vms-e18e-cn3-20260924/): a real OpenVMS VAX V7.3
+ * coordinator logged the third node's membership request ~30 times and never
+ * proposed it, and then stopped transmitting altogether.
+ *
+ * WHY THE ORACLE AND NOT A COMPOSED EXPECTATION. cm-relay-resp.spec already
+ * proves the CODEC's recipe against the spec. What was missing was never the
+ * recipe -- it was that nothing REACHED it. So this test feeds the FSM the
+ * exact 204-byte relay a real coordinator put on the wire and compares the
+ * bytes OVMX emits with the ones the real sitting VMS member emitted 0.3 ms
+ * later in the SAME capture (vax3-2to3-established-join-20260730.pcap, in the
+ * clean-room manifest). A cell that exists but answers differently from the
+ * oracle is as red as no cell at all.
+ * ========================================================================== */
+
+static int load_relay_fixture(const char *name, struct vms_fixture *out)
+{
+	char path[600];
+	char err[256];
+
+	snprintf(path, sizeof(path), "%s/%s.spec", OVMX_FIXTURE_DIR, name);
+	err[0] = '\0';
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, out, err,
+			     sizeof(err)) != 0) {
+		printf("  FAIL could not load %s: %s\n", path, err);
+		return -1;
+	}
+	return 0;
+}
+
+/* Every body byte from `from` up, compared against the oracle's. body[0:4] is
+ * excluded by the caller: send/ack is THIS node's own dialogue with THIS
+ * peer (the CSB's, cnxman_envelope_stamp), and no two nodes' message numbers
+ * can agree. Everything from body[4] up is the recipe's, and must. */
+static void relay_body_matches_oracle(const uint8_t *got,
+				      const struct vms_fixture *oracle,
+				      uint32_t from)
+{
+	const uint8_t *want = oracle->bytes + VMS_OFF_SYSAP_BODY;
+	uint32_t i, bad = 0;
+
+	for (i = from; i < VMS_CM_BODY_LEN; i++) {
+		if (got[i] == want[i])
+			continue;
+		if (bad < 8u)
+			printf("    body[%u]: OVMX %02x, real VAX %02x\n",
+			       i, got[i], want[i]);
+		bad++;
+	}
+	ct_check(bad == 0,
+		 "every body byte from [4] up is what the REAL OpenVMS VAX "
+		 "member put on the wire");
+}
+
+static void test_4f0_member_answers_the_relay_like_a_real_vax(void)
+{
+	struct vms_fixture req, oracle;
+	const struct sent_body *sent;
+	uint32_t before;
+
+	printf("\n-- rd vms-4f0: the coordinator's op-0x12 relay, answered "
+	       "byte-for-byte as a real VMS member answers it --\n");
+
+	if (load_relay_fixture("cm-relay-oracle-req", &req) != 0 ||
+	    load_relay_fixture("cm-relay-oracle-resp", &oracle) != 0) {
+		ct_check(0, "the oracle relay pair loads");
+		return;
+	}
+	ct_check(req.origin == VMS_FIXTURE_ORIGIN_CAPTURE &&
+		 oracle.origin == VMS_FIXTURE_ORIGIN_CAPTURE,
+		 "both specimens are REAL CAPTURE, not composed");
+
+	bed_init();
+	bed_set_identity();
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_MEMBER,
+			"this node is a sitting member");
+	ct_check_eq_u32(g.j.tr_class, VMS_CM_CLASS_ADD,
+			"and holds a REAL transition class, read off the "
+			"op-0x09 open it was sent -- the one value body[17] "
+			"asserts (INV-6)");
+
+	before = n_cm_sent();
+	memcpy(g_frame, req.bytes, req.wire_len);
+	ct_check_eq_u32(join_feed(req.wire_len), CNXMAN_JOIN_RX_CONSUMED,
+			"the relay is CLAIMED, not routed on to nowhere");
+	ct_check_eq_u32(g.j.ignored_events, 0u,
+			"...and not swallowed by an empty cell");
+	ct_check_eq_u32(g.j.relays_seen, 1u,
+			"the member counted the system that was relayed to it");
+	ct_check_eq_u32(g.j.relays_no_class, 0u,
+			"...and had a grounded class to answer with");
+	ct_check_eq_u32(n_cm_sent(), before + 1u,
+			"EXACTLY ONE frame went back -- the answer the "
+			"coordinator's whole admission gates on");
+
+	sent = nth_sent(n_cm_sent() - 1u);
+	if (sent == NULL) {
+		ct_check(0, "the answer is readable");
+		return;
+	}
+	ct_check_eq_u32(sent->len, VMS_CM_BODY_LEN,
+			"a full 132-byte CM body");
+	relay_body_matches_oracle(sent->body, &oracle, 4u);
+
+	/* Named individually too, so a future regression reads as WHICH
+	 * mutation drifted rather than as an opaque byte diff. */
+	ct_check_eq_u32(sent->body[VMS_OFB_CM_CATEGORY],
+			(uint32_t)(VMS_CM_CAT_CONFIG | 0x80u),
+			"  body[8]: the response bit");
+	ct_check_eq_u32(sent->body[VMS_OFB_CM_OPCODE], VMS_CM_OP_RELAY,
+			"  body[9]: the opcode, echoed");
+	ct_check_eq_u32(sent->body[VMS_OFB_CM_RESP_MARK], 0x01u,
+			"  body[18]: the response marker, forced");
+	ct_check_eq_u32(sent->body[VMS_OFB_CM_CLASS], VMS_CM_CLASS_ADD,
+			"  body[17]: OUR OWN class, not the relayer's echo");
+	ct_check(memcmp(sent->body + VMS_OFB_CM_RELAY_EPOCH,
+			req.bytes + VMS_OFF_SYSAP_BODY + VMS_OFB_CM_EPOCH,
+			4) == 0,
+		 "  body[20:24]: a fresh LE u32 copy of the request's epoch");
+}
+
+/*
+ * ...AND A NODE THAT HOLDS NO CLASS INVENTS ONE (INV-6). No real 0x81/0x12 in
+ * either capture tree carries class 0 -- 109 carry 0x02 and 39 carry 0x03 --
+ * so a node that has been through no transition has nothing grounded to put in
+ * body[17]. It says so and emits nothing, which is the allowlist's own rule.
+ */
+static void test_4f0_no_class_answers_nothing(void)
+{
+	struct vms_fixture req;
+	uint32_t before;
+
+	printf("\n-- rd vms-4f0: no transition class, no invented answer --\n");
+
+	if (load_relay_fixture("cm-relay-oracle-req", &req) != 0) {
+		ct_check(0, "the oracle relay request loads");
+		return;
+	}
+
+	bed_init();
+	bed_set_identity();
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	g.j.tr_class = 0u;   /* an executive that learned no class */
+
+	before = n_cm_sent();
+	memcpy(g_frame, req.bytes, req.wire_len);
+	(void)join_feed(req.wire_len);
+	ct_check_eq_u32(n_cm_sent(), before,
+			"nothing was emitted: body[17] would have been a "
+			"value this node does not hold");
+	ct_check_eq_u32(g.j.relays_no_class, 1u,
+			"and the gap is COUNTED -- a stranded admission is a "
+			"gap to close, never a resting state");
+	ct_check_eq_u32(g.j.relays_seen, 0u,
+			"...and never counted as one it took part in");
+	ct_check(bed_logged("nothing grounded to answer with"),
+		 "and said out loud on the console");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -4997,6 +5179,8 @@ int main(void)
 	test_c06_a_members_csid_is_not_reassigned();
 	test_c06_a_rejoiner_still_takes_a_new_csid();
 	test_f3ec_abort_rearms_the_admission_clock();
+	test_4f0_member_answers_the_relay_like_a_real_vax();
+	test_4f0_no_class_answers_nothing();
 
 	return ct_summary("test_cnxman_join");
 }

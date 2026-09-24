@@ -200,7 +200,16 @@ endif()
 
 function(cluster_host_cnxman_test name)
     add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE cluster_host_cnxman)
+    # rd vms-4f0: the fixture loader too, so an FSM test can assert what it
+    # emits against a REAL captured frame (with the loader's own chain-of-
+    # custody check against docs/clean-room/reference-captures.sha256) rather
+    # than against a composed expectation it wrote itself.
+    target_link_libraries(${name} PRIVATE cluster_host_cnxman
+                                          cluster_host_fixture)
+    target_compile_definitions(${name} PRIVATE
+        OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+        OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+    )
     target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${name} PRIVATE -Wall -Wextra -Werror)

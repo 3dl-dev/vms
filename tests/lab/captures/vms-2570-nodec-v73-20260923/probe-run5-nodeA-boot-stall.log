@@ -1,0 +1,38 @@
+probe goto http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA.cpio.gz&sysdisk=sysdisk-nodeA.qcow2.gz&nodeC=http%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dhttp%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fka655x.bin%26diskgz%3Dhttp%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fvms73-nodeC-cluster.dsk.gz
+t=0s NODEA: %NIC-CFG, initramfs=initramfs-ovmx-nodeA.cpio.gz sysdisk=sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+t=3s NODEA: Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                                | Booting from ROM...
+t=6s VAXC[boot]: 
+t=6s NODEA: Booting from ROM... | c[?7l[2J
+t=9s VAXC[boot]: >>>B DUA0 | (BOOT/R5:0 DUA0)
+t=12s VAXC[boot]:    OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0 | %WBM-I-WBMINFO Write Bitmap has successfully completed initializatio
+t=15s VAXC[boot]:    OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0 | %WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+t=18s VAXC[boot]: %VAXcluster-I-LOADSECDB, loading the cluster security database | MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+t=42s VAXC[boot]: $!  Copyright 2001 Compaq Computer Corporation. | STDRV-I-STARTUP, OpenVMS startup begun at 23-SEP-2026 19:18:50.44
+t=48s VAXC[boot]: %STDRV-I-STARTUP, OpenVMS startup begun at 23-SEP-2026 19:18:50.44 | MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+t=51s VAXC[boot]: %RUN-S-PROC_ID, identification of created process is 20200208 | DCL-S-SPAWNED, process SYSTEM_1 spawned
+t=54s VAXC[boot]: 19:18:47.13 Node VAXC (csid 00010001) completed VAXcluster state transition | SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+t=57s VAXC[boot]: %SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up | %SMG-W-GBLNOTCRE, global section not create
+t=60s VAXC[boot]: The OpenVMS VAX system is now executing the site-specific startup commands. | SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+t=63s VAXC[boot]:  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3     | Username: 
+t=63s -> VAXC: typing SYSTEM
+t=67s VAXC[user]: Username: SYSTEM | Password: 
+t=67s -> VAXC: typing password
+t=70s VAXC[pass]:  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 |    Last interactive login on Wednesday, 23-SEP-2026 18:54
+t=73s VAXC[pass]: -SET-I-UNKTERM, unknown terminal type | $ 
+t=73s -> VAXC: at DCL
+t=76s -> VAXC: round 0 ANALYZE/SYSTEM
+t=80s VAXC[sda]: OpenVMS (TM) VAX System analyzer | SDA> 
+t=80s -> VAXC: round 0 SHOW CLUSTER
+t=83s VAXC[shown]: Cache Protocol  00000000                                                         | SDA> 
+t=101s ROUND 0 DONE -- Nodes field = 1
+t=104s VAXC[cooldown]: SDA> EXIT | $ 
+t=155s -> VAXC: round 1 ANALYZE/SYSTEM
+t=159s VAXC[sda]: OpenVMS (TM) VAX System analyzer | SDA> 
+t=159s -> VAXC: round 1 SHOW CLUSTER
+t=163s VAXC[shown]: Cache Protocol  00000000                                                         | SDA> 
+t=181s ROUND 1 DONE -- Nodes field = 1
+t=184s VAXC[cooldown]: SDA> EXIT | $ 
+t=235s -> VAXC: round 2 ANALYZE/SYSTEM
+t=238s VAXC[sda]: OpenVMS (TM) VAX System analyzer | SDA> 
+t=238s -> VAXC: round 2 SHOW CLUSTER
+t=242s VAXC[shown]: Cache Protocol  00000000                                                         | SDA> 

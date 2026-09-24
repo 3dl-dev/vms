@@ -1,0 +1,67 @@
+e2e goto http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA.cpio.gz&sysdisk=sysdisk-nodeA.qcow2.gz&nodeC=http%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dhttp%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fka655x.bin%26diskgz%3Dhttp%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fvms73-nodeC-cluster.dsk.gz
+t=0s sca_byPort={} acp_byPort={"OVMXA":false,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+  guest: %NIC-CFG, initramfs=initramfs-ovmx-nodeA.cpio.gz sysdisk=sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+t=6s sca_byPort={} acp_byPort={"OVMXA":false,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+  guest: Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                                | Booting from ROM... | c[?7l[2J
+t=12s sca_byPort={} acp_byPort={"OVMXA":false,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+  VAXC: %SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS |    OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0 | █
+t=18s sca_byPort={} acp_byPort={"OVMXA":false,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+  VAXC: %SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS |    OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0 | %WBM-I-WBMINFO Write Bitmap has successfully completed initialization.█
+t=24s sca_byPort={"VAXC":3} acp_byPort={"OVMXA":false,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+  VAXC: %SYSINIT, waiting to form or join a VMScluster system | %VAXcluster-I-LOADSECDB, loading the cluster security database | █MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+t=30s sca_byPort={"VAXC":7} acp_byPort={"OVMXA":false,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+t=36s sca_byPort={"VAXC":11} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+  guest:     23-SEP-2026 18:56:51.41 | %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=42s sca_byPort={"VAXC":15} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+t=48s sca_byPort={"VAXC":19} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=0 werr=null
+t=54s sca_byPort={"VAXC":29,"OVMXA":12} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=18 werr=null
+  guest: %CNXMAN, waiting to form or join an OpenVMS Cluster | %STDRV-I-STARTUP, OpenVMX startup begun at 23-SEP-2026 18:57:06.06 | %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+  VAXC: %CNXMAN,  completing VAXcluster state transition | $!  Copyright 2001 Compaq Computer Corporation. | █STDRV-I-STARTUP, OpenVMS startup begun at 23-SEP-2026 18:57:47.35
+t=60s sca_byPort={"VAXC":46,"OVMXA":34} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=41 werr=null
+t=66s sca_byPort={"VAXC":63,"OVMXA":56} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=64 werr=null
+  VAXC: $!  Copyright 2001 Compaq Computer Corporation. | %STDRV-I-STARTUP, OpenVMS startup begun at 23-SEP-2026 18:57:47.35 | █MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+t=72s sca_byPort={"VAXC":79,"OVMXA":77} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=85 werr=null
+  guest: %INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+  VAXC: %MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving | %RUN-S-PROC_ID, identification of created process is 20200208 | █DCL-S-SPAWNED, process SYSTEM_1 spawned
+t=78s sca_byPort={"VAXC":95,"OVMXA":97} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=106 werr=null
+  VAXC: %SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up | %SMG-W-GBLNOTCRE, global section not created | █SYSTEM-F-GPTFULL, global page table is full
+t=84s sca_byPort={"VAXC":114,"OVMXA":121} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=130 werr=null
+  VAXC:   Charged CPU time:           0 00:00:54.77   Elapsed time:     0 00:01:08.04 |  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3     | Username: █
+t=90s sca_byPort={"VAXC":134,"OVMXA":143} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=152 werr=null
+  VAXC: Image name:               VAXC$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE | Status:                   %LOGIN-F-CMDINPUT, error reading command input | █
+t=96s sca_byPort={"VAXC":153,"OVMXA":166} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=175 werr=null
+t=102s sca_byPort={"VAXC":171,"OVMXA":187} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=196 werr=null
+t=108s sca_byPort={"VAXC":187,"OVMXA":206} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=215 werr=null
+t=114s sca_byPort={"VAXC":206,"OVMXA":228} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=238 werr=null
+t=120s sca_byPort={"VAXC":223,"OVMXA":249} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=259 werr=null
+t=126s sca_byPort={"VAXC":241,"OVMXA":271} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=281 werr=null
+t=132s sca_byPort={"VAXC":259,"OVMXA":294} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=304 werr=null
+t=138s sca_byPort={"VAXC":277,"OVMXA":315} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=325 werr=null
+t=144s sca_byPort={"VAXC":295,"OVMXA":337} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=347 werr=null
+t=150s sca_byPort={"VAXC":314,"OVMXA":360} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=370 werr=null
+t=156s sca_byPort={"VAXC":331,"OVMXA":382} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=392 werr=null
+t=162s sca_byPort={"VAXC":349,"OVMXA":404} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=414 werr=null
+t=168s sca_byPort={"VAXC":366,"OVMXA":425} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=435 werr=null
+t=174s sca_byPort={"VAXC":386,"OVMXA":448} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=458 werr=null
+t=180s sca_byPort={"VAXC":404,"OVMXA":469} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=480 werr=null
+t=186s sca_byPort={"VAXC":422,"OVMXA":491} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=502 werr=null
+t=192s sca_byPort={"VAXC":437,"OVMXA":510} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=523 werr=null
+t=198s sca_byPort={"VAXC":455,"OVMXA":533} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=544 werr=null
+t=204s sca_byPort={"VAXC":474,"OVMXA":555} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=566 werr=null
+t=210s sca_byPort={"VAXC":490,"OVMXA":577} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=588 werr=null
+t=216s sca_byPort={"VAXC":507,"OVMXA":600} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=611 werr=null
+t=222s sca_byPort={"VAXC":525,"OVMXA":623} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=634 werr=null
+t=228s sca_byPort={"VAXC":542,"OVMXA":645} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=656 werr=null
+t=234s sca_byPort={"VAXC":560,"OVMXA":667} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=678 werr=null
+t=240s sca_byPort={"VAXC":578,"OVMXA":690} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=701 werr=null
+t=246s sca_byPort={"VAXC":596,"OVMXA":713} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=724 werr=null
+t=252s sca_byPort={"VAXC":614,"OVMXA":736} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=747 werr=null
+t=258s sca_byPort={"VAXC":632,"OVMXA":759} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=770 werr=null
+t=264s sca_byPort={"VAXC":650,"OVMXA":781} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=792 werr=null
+t=270s sca_byPort={"VAXC":668,"OVMXA":803} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=814 werr=null
+t=276s sca_byPort={"VAXC":685,"OVMXA":826} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=837 werr=null
+t=282s sca_byPort={"VAXC":704,"OVMXA":849} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=860 werr=null
+t=288s sca_byPort={"VAXC":719,"OVMXA":869} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=880 werr=null
+t=294s sca_byPort={"VAXC":737,"OVMXA":892} acp_byPort={"OVMXA":true,"VAXC":false} roster=["OVMXA","VAXC"] nicTx=903 werr=null
+t=300s sca_byPort=undefined acp_byPort=undefined roster=undefined nicTx=null werr=undefined
+t=306s sca_byPort=undefined acp_byPort=undefined roster=undefined nicTx=null werr=undefined

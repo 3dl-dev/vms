@@ -34,11 +34,18 @@
 #define SYSUAF_PATH VMS_SYSUAF_PATH
 
 /*
- * THE UIC FIELDS ARE OCTAL (vms-e60). VMS writes UICs in octal; every /UIC=[g,m]
- * parse and UIC display in the tree reads this radix so they cannot drift.
- * (Still consumed by AUTHORIZE's /UIC parse and next-member allocation.)
+ * THE UIC FIELDS ARE OCTAL ON DISPLAY/INPUT (vms-e60): VMS writes and reads
+ * UICs in octal wherever they cross a text boundary (AUTHORIZE's /UIC parse,
+ * DCL's [g,m] display). SYSUAF.DAT's own UIC_GROUP/UIC_MEMBER columns are no
+ * longer text, though -- vms-d92 flipped the record to the binary $UAFDEF
+ * uaf$l_uic longword, and sysuaf_raw_to_view()/sysuaf_view_to_raw() (rtl/
+ * sysuaf.c) unpack/pack it with bit-shifts, not a radix. The SYSUAF_UIC_RADIX
+ * constant this comment used to anchor was that text reader's radix; it has
+ * no consumer left in this repo (grepped: none) and was removed with it
+ * (vms-b95). If a future text-facing UIC parser needs the radix again
+ * (AUTHORIZE's /UIC=[g,m] command-line parse, still ASCII), reintroduce the
+ * constant there, next to that reader.
  */
-#define SYSUAF_UIC_RADIX     8
 
 /*
  * The login command file run at login when the account's LGICMD field is

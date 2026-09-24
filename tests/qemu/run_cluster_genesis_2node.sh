@@ -53,6 +53,24 @@
 #           oracle for both halves is two real OpenVMS VAX V7.3 systems in
 #           tests/lab/captures/vms-6d3d-coldform-ev2-20260924/.
 #
+#           The identities and votes are ENV-OVERRIDABLE (RIG_SCSNODE_A/B,
+#           RIG_SYSID_A/B, RIG_EXPECTED_A/B, RIG_VOTES_B, RIG_GROUP) so a REAL
+#           ROSTER runs through the same mode unchanged. The browser demo's own
+#           pair -- OVMXA/1987 + OVMXB/1988, VOTES=1 EXPECTED_VOTES=3, group
+#           257 -- is exactly a coldform pair with different numbers, and
+#           running it here is what says the SHIPPED roster forms on two real
+#           executives without needing a browser:
+#
+#             docker run --rm --device /dev/kvm -e RIG_MODE=coldform \
+#               -e RIG_SCSNODE_A=OVMXA -e RIG_SYSID_A=1987 \
+#               -e RIG_SCSNODE_B=OVMXB -e RIG_SYSID_B=1988 \
+#               -e RIG_EXPECTED_A=3 -e RIG_EXPECTED_B=3 -e RIG_GROUP=257 \
+#               ovmx-genesis-rig
+#
+#           MEASURED 2026-09-24: node A founded nothing in its 45 s alone, then
+#           role=founder csid=0x00010001 / role=joiner csid=0x00010002, cn=2 on
+#           both.
+#
 #   ambig   node B is given SCSSYSTEMID 1030 instead of 1026. Nothing else
 #           changes. 1030 & 0x3ff = 6, while the CSV slot the coordinator would
 #           assign is 2 -- the two candidate CSID-assignment rules (rd vms-3a7c)
@@ -293,11 +311,22 @@ if [ "$COLDFORM" = "1" ]; then
 	EXPECTED_A=2
 	EXPECTED_B=2
 fi
+# The votes/identities are overridable so a REAL ROSTER can be run through this
+# rig unchanged -- the browser demo's own OVMXA/1987 + OVMXB/1988, VOTES=1
+# EXPECTED_VOTES=3, are exactly a coldform pair with different numbers, and
+# running them here is what says the shipped roster forms on real executives
+# without needing the browser (rd vms-6d3d).
+EXPECTED_A="${RIG_EXPECTED_A:-$EXPECTED_A}"
+EXPECTED_B="${RIG_EXPECTED_B:-$EXPECTED_B}"
+VOTES_B="${RIG_VOTES_B:-$VOTES_B}"
+SYSID_A="${RIG_SYSID_A:-1025}"
+SCSNODE_A="${RIG_SCSNODE_A:-OVMXA}"
+SCSNODE_B="${RIG_SCSNODE_B:-OVMXB}"
 
 # Node B's SCSSYSTEMID. 1026 & 0x3ff == 2 == the CSV slot the coordinator
 # assigns it, so the two candidate CSID rules agree and the admission is
 # unambiguous. The `ambig` mode moves it to 1030 (& 0x3ff == 6) so they do not.
-SYSID_B=1026
+SYSID_B="${RIG_SYSID_B:-1026}"
 [ "$MODE" = "noderive" ] && SYSID_B=1030
 
 KERNEL=/boot/vmlinuz
@@ -314,8 +343,8 @@ echo "accel=${ACCEL#-accel } group=$GROUP recnx=${RECNX}s stagger=${STAGGER}s"
 [ "$XNODE" = "1" ] && echo "cross-node phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s, linger=${LINGER}s)"
 [ "$REJOIN" = "1" ] && echo "rejoin phase: ON (B_WINDOW1=${B_WINDOW1}s evac_dwell=${EVAC_DWELL}s B_WINDOW2=${B_WINDOW2}s)"
 [ "$REMASTER" = "1" ] && echo "remaster phase: ON (windows A=${WINDOW_A}s B=${WINDOW_B}s -- B exits on its own, A watches)"
-echo "node A: OVMXA/1025 VOTES=$VOTES_A EXPECTED_VOTES=$EXPECTED_A VAXCLUSTER=2"
-echo "node B: OVMXB/$SYSID_B VOTES=$VOTES_B EXPECTED_VOTES=$EXPECTED_B VAXCLUSTER=2"
+echo "node A: $SCSNODE_A/$SYSID_A VOTES=$VOTES_A EXPECTED_VOTES=$EXPECTED_A VAXCLUSTER=2"
+echo "node B: $SCSNODE_B/$SYSID_B VOTES=$VOTES_B EXPECTED_VOTES=$EXPECTED_B VAXCLUSTER=2"
 echo ""
 
 # --------------------------------------------------------------------------
@@ -382,7 +411,7 @@ launch_node() {
 }
 
 echo "--- powering on node A (it must hear nobody for ${RECNX}s, then found) ---"
-launch_node A OVMXA 1025 "$VOTES_A" "$EXPECTED_A" 52:54:00:00:10:25 "$WINDOW_A"; PA=$LAUNCH_PID
+launch_node A "$SCSNODE_A" "$SYSID_A" "$VOTES_A" "$EXPECTED_A" 52:54:00:00:10:25 "$WINDOW_A"; PA=$LAUNCH_PID
 
 # THE SEGMENT, WITH A CUT IN IT (rd vms-b6d). Started between the two power-ons
 # so its clock and node A's are within a second of each other: the cut must land
@@ -435,7 +464,7 @@ fi
 
 if [ "$REJOIN" = "1" ]; then
 	echo "--- powering on node B, round 1 (first join) ---"
-	launch_node B OVMXB "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$B_WINDOW1" nodeB-r1
+	launch_node B "$SCSNODE_B" "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$B_WINDOW1" nodeB-r1
 	PB1=$LAUNCH_PID
 
 	echo "--- waiting up to ${WAIT_MEMBER_TIMEOUT}s for node B to reach MEMBER ---"
@@ -461,11 +490,11 @@ if [ "$REJOIN" = "1" ]; then
 	sleep "$EVAC_DWELL"
 
 	echo "--- powering on node B, round 2 (REJOIN, same SYSGEN identity) ---"
-	launch_node B OVMXB "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$B_WINDOW2" nodeB-r2
+	launch_node B "$SCSNODE_B" "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$B_WINDOW2" nodeB-r2
 	PB=$LAUNCH_PID
 else
 	echo "--- powering on node B (it must join what A formed) ---"
-	launch_node B OVMXB "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$WINDOW_B"
+	launch_node B "$SCSNODE_B" "$SYSID_B" "$VOTES_B" "$EXPECTED_B" 52:54:00:00:10:26 "$WINDOW_B"
 	PB=$LAUNCH_PID
 fi
 
@@ -671,7 +700,7 @@ if [ "$MODE" = "coldform" ]; then
 	fi
 	# Exactly one founder, and it is the one the election picks.
 	if [ "$A_ROLE" != "founder" ]; then
-		echo "  COLDFORM FAILED: node A (SCSSYSTEMID 1025, the lower) reports"
+		echo "  COLDFORM FAILED: node A (SCSSYSTEMID $SYSID_A, the lower) reports"
 		echo "  role=$A_ROLE. The election is total and lowest-first, so the"
 		echo "  pair must elect A and only A."
 		echo "=========================================="

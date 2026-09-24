@@ -23,7 +23,7 @@
 # ctest test 37 test_libvms_protection failed 6 of its 9 assertions with
 # "CLONE_NEWUSER/uid_map/gid_map setup failed on this host". After a single
 # `sudo setcap cap_setgid,cap_setuid+ep` on the binary: 9/9, ALL TESTS PASSED.
-# CI was already green only because .github/workflows/ci.yml carried that
+# CI was already green only because .github/workflows/ci-*.yml (split by vms-1af) carried that
 # setcap as an inline step -- so the two hosts ran DIFFERENT harnesses and the
 # dev seat got the red. That asymmetry is what this script removes: CI now
 # calls this file, and so does a ctest fixture, so there is one mechanism.

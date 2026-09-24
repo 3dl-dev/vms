@@ -1,0 +1,458 @@
+name: CI changes (reusable path filter)
+
+# Reusable path-filter workflow, split out of the monolithic ci.yml by
+# vms-1af (ci.yml was ~511KB, over GitHub's silent size ceiling somewhere
+# around 511,986-512,030 bytes -- see rd vms-1af). Every ci-*.yml sibling
+# file calls this as its own `changes` job via `uses:`, so the path-filter
+# logic (and its subsystem list) has exactly ONE source, instead of being
+# copy-pasted into every domain file. `github.event_name` / `github.event`
+# inside a called reusable workflow are the CALLER's triggering event, so
+# behavior here is identical to when this was an inline job in ci.yml.
+
+on:
+  workflow_call:
+    outputs:
+      core:
+        description: 'core (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.core }}
+      toolchain:
+        description: 'toolchain (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.toolchain }}
+      kernel:
+        description: 'kernel (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.kernel }}
+      boot:
+        description: 'boot (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.boot }}
+      release:
+        description: 'release (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.release }}
+      netbsd:
+        description: 'netbsd (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.netbsd }}
+      netbsd_vax:
+        description: 'netbsd_vax (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.netbsd_vax }}
+      exec_netbsd_vax:
+        description: 'exec_netbsd_vax (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.exec_netbsd_vax }}
+      aarch64_boot:
+        description: 'aarch64_boot (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.aarch64_boot }}
+      compat_surface:
+        description: 'compat_surface (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.compat_surface }}
+      libcrypto:
+        description: 'libcrypto (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.libcrypto }}
+      openssh:
+        description: 'openssh (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.openssh }}
+      alpha_toolchain:
+        description: 'alpha_toolchain (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.alpha_toolchain }}
+      alpha_boot_runtime:
+        description: 'alpha_boot_runtime (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.alpha_boot_runtime }}
+      alpha_activation:
+        description: 'alpha_activation (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.alpha_activation }}
+      vax_toolchain:
+        description: 'vax_toolchain (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.vax_toolchain }}
+      tcpip:
+        description: 'tcpip (see ci-changes.yml decide step)'
+        value: ${{ jobs.changes.outputs.tcpip }}
+
+permissions:
+  contents: read
+
+jobs:
+  # -----------------------------------------------------------------------
+  # changes: test-impact / path filter. Decides which heavy tiers a PR actually
+  # needs (quality-preserving: same inputs -> same verdict). On any NON-PR event
+  # every output is forced true, so the FULL suite runs and no coverage is lost;
+  # filtering only ever narrows the per-PR tier. `.github/workflows/**` is in
+  # every filter, so a CI change re-runs everything.
+  # -----------------------------------------------------------------------
+  changes:
+    name: Decide affected subsystems (path filter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      core: ${{ steps.decide.outputs.core }}
+      toolchain: ${{ steps.decide.outputs.toolchain }}
+      kernel: ${{ steps.decide.outputs.kernel }}
+      boot: ${{ steps.decide.outputs.boot }}
+      release: ${{ steps.decide.outputs.release }}
+      netbsd: ${{ steps.decide.outputs.netbsd }}
+      netbsd_vax: ${{ steps.decide.outputs.netbsd_vax }}
+      exec_netbsd_vax: ${{ steps.decide.outputs.exec_netbsd_vax }}
+      aarch64_boot: ${{ steps.decide.outputs.aarch64_boot }}
+      compat_surface: ${{ steps.decide.outputs.compat_surface }}
+      libcrypto: ${{ steps.decide.outputs.libcrypto }}
+      openssh: ${{ steps.decide.outputs.openssh }}
+      alpha_toolchain: ${{ steps.decide.outputs.alpha_toolchain }}
+      alpha_boot_runtime: ${{ steps.decide.outputs.alpha_boot_runtime }}
+      alpha_activation: ${{ steps.decide.outputs.alpha_activation }}
+      vax_toolchain: ${{ steps.decide.outputs.vax_toolchain }}
+      tcpip: ${{ steps.decide.outputs.tcpip }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Path filter (PR only)
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            core:
+              - '.github/workflows/**'
+              - 'CMakeLists.txt'
+              - 'src/**'
+              - 'tests/**'
+              - 'third-party/**'
+              - 'tools/**'
+              - 'docs/install-guide.md'
+              - 'docs/upgrade-guide.md'
+            toolchain:
+              - '.github/workflows/**'
+              - 'CMakeLists.txt'
+              - 'src/vmslink/**'
+              - 'src/imgact/**'
+              - 'src/libvms/**'
+              - 'src/libvmssys/**'
+              - 'src/vmsprocess/**'
+              - 'src/vmslnm/**'
+              - 'src/vmsfs/**'
+              - 'src/vmsrms/**'
+              - 'src/vmsdcl/**'
+              - 'src/ovmx_job_control/**'
+              - 'src/vmsqueue/**'
+              - 'third-party/tcc/**'
+              - 'tools/**'
+            libcrypto:
+              - '.github/workflows/**'
+              - 'third-party/libcrypto/**'
+            openssh:
+              - '.github/workflows/**'
+              - 'third-party/openssh/**'
+              - 'third-party/libcrypto/**'
+              - 'src/vmstcpip/sockets/**'
+              - 'src/libvmssys/**'
+            kernel:
+              - '.github/workflows/**'
+              - 'src/kernel/**'
+              - 'src/kernel-core/**'
+              - 'src/libvms/syssvc/**'
+              - 'src/libvmssys/vms_kif.*'
+              - 'tests/qemu/**'
+            boot:
+              - '.github/workflows/**'
+              - 'distro/**'
+              - 'src/ovmx_init/**'
+              - 'src/libvms/include/sysgen_params.h'
+              - 'tests/qemu/test_persistent_boot.sh'
+              - 'tests/qemu/test_kernel_taint.sh'
+              - 'tests/qemu/test_kernel_taint_negctl.sh'
+              - 'tests/qemu/test_release_e2e.sh'
+              - 'tests/qemu/test_executive_integral.sh'
+              - 'tests/qemu/test_distrib_boot.sh'
+              - 'tests/qemu/test_boot_alternate_disk.sh'
+              - 'tests/qemu/test_virtio_nic.sh'
+              - 'tests/qemu/test_startup_phase_driver.sh'
+              - 'tests/qemu/test_boot_conformance.sh'
+              - 'tests/qemu/test_boot_scsnode_hostname_e2e.sh'
+              - 'tests/qemu/run_boot_scsnode_hostname_e2e.sh'
+              - 'tests/qemu/test_sysboot_conversational.sh'
+              - 'tests/qemu/test_sysboot_cluster_params_e2e.sh'
+              - 'tests/qemu/run_sysboot_cluster_params_e2e.sh'
+              - 'tests/qemu/test_cluster_params_recnx_e2e.sh'
+              - 'tests/qemu/test_cluster_params_recnx_negctl.sh'
+              - 'tests/qemu/run_cluster_params_recnx_e2e.sh'
+              - 'tests/qemu/test_cluster_param_adoption.sh'
+              - 'tests/qemu/test_cluster_param_adoption_negctl.sh'
+              - 'tests/qemu/run_cluster_param_adoption_e2e.sh'
+              - 'tests/qemu/test_cluster_config_lan_e2e.sh'
+              - 'tests/qemu/run_cluster_config_lan_e2e.sh'
+              - 'tests/qemu/test_cluster_config_lan_2node_e2e.sh'
+              - 'tests/qemu/run_cluster_config_lan_2node_e2e.sh'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/CLUSTER_CONFIG_LAN.COM'
+              - 'tests/uat/**'
+            # vms-707: the change classes that can regress the OVMX/Alpha
+            # RUNTIME boot-to-mount (as distinct from the modpost-only vms-5af
+            # guard). A change here fires the per-PR alpha-boot-mount gate below.
+            # Kept narrow (the runtime executive + PID 1 + the Alpha boot tooling)
+            # so the fast PR wall is preserved for everything else.
+            alpha_boot_runtime:
+              - '.github/workflows/**'
+              - 'src/kernel/**'
+              - 'src/kernel-core/**'
+              - 'src/libvmssys/**'
+              - 'src/ovmx_init/**'
+              - 'tools/cross-alpha/**'
+            # vms-c54: the Alpha N=3 ACTIVATION surface -- every change class that
+            # can regress single-proc image activation on the real OVMX/Alpha
+            # executive (the #921 module-GP regression class). A SUPERSET of
+            # alpha_boot_runtime (the runtime executive + PID 1 + boot tooling that
+            # activation runs AGAINST) PLUS the parts that PRODUCE and ACTIVATE the
+            # image: the alpha-dec-vms toolchain that emits the linkage
+            # (tools/cross-alpha-vms/**, incl. the cc1/gcc patches), LINK.EXE
+            # (src/vmslink/**), and IMGACT (src/imgact/**). The misleadingly-named
+            # alpha_toolchain filter is ONLY the cross-alpha-vms docker-image
+            # sources -- it does NOT cover src/vmslink or src/imgact, so #921's
+            # LINK.EXE side would slip a boot_runtime||toolchain gate. This filter
+            # fires the per-PR alpha-boot-mount N=3 activation gate + the cheap
+            # alpha-activation-selftest below. Kept scoped so non-Alpha PRs pay
+            # nothing.
+            alpha_activation:
+              - '.github/workflows/**'
+              - 'src/kernel/**'
+              - 'src/kernel-core/**'
+              - 'src/libvmssys/**'
+              - 'src/ovmx_init/**'
+              - 'tools/cross-alpha/**'
+              - 'tools/cross-alpha-vms/**'
+              - 'src/vmslink/**'
+              - 'src/imgact/**'
+            # vms-21b: the TCP/IP aux-server launch mechanism + daytime cold-boot
+            # proof. Fires the tcpip-daytime-boot-e2e gate on any PR touching the
+            # aux server, its service images, the shipped/test SERVICE.DAT +
+            # SYSTARTUP, the boot image build, or the e2e/posture-guard tests.
+            # Scoped so unrelated PRs pay nothing for the ~heavy full-distro boot.
+            tcpip:
+              - '.github/workflows/**'
+              - 'src/vmstcpip/**'
+              - 'src/vmsrms/**'
+              - 'distro/Dockerfile.bootable'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSEXE/TCPIP$SERVICE.DAT'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYS$STARTUP/**'
+              - 'distro/rootfs/vms/SYS0/SYSCOMMON/SYSMGR/SYSTARTUP_VMS.COM'
+              - 'distro/rootfs-test-tcpip/**'
+              - 'tests/qemu/run_tcpip_daytime_boot_e2e.sh'
+              - 'tests/qemu/test_tcpip_daytime_boot_e2e.sh'
+              - 'tests/qemu/run_tcpip_reboot_e2e.sh'
+              - 'tests/qemu/test_tcpip_reboot_e2e.sh'
+              - 'tests/integration/test_tcpip_posture_guard.sh'
+            release:
+              - '.github/workflows/**'
+              - 'tools/cut-release.sh'
+              - 'tools/cut-release-vax.sh'
+              - 'tools/publish-release.sh'
+              - 'tools/gen_release_notes.py'
+              - 'tools/check_guide_drift.py'
+              - 'distro/Dockerfile.bootable'
+              - 'tools/ovmx_kit_pack.c'
+              - 'tools/vmsfs_master.c'
+              - 'src/libvms/include/ovmx_identity.h'
+              - 'src/libvms/include/ovmx_kit_format.h'
+              - 'src/vmsfs/include/vmsfs_ondisk.h'
+              - 'src/product/**'
+              - 'tests/qemu/test_upgrade_e2e.sh'
+              - 'tests/qemu/run_upgrade_e2e.sh'
+              - 'tests/qemu/test_product_install_e2e.sh'
+              - 'tests/qemu/run_product_install_e2e.sh'
+              - 'tests/qemu/test_install_boot_e2e.sh'
+              - 'tests/qemu/run_install_boot_e2e.sh'
+              - 'tests/qemu/test_release_acceptance_e2e.sh'
+              - 'tests/qemu/run_release_acceptance_e2e.sh'
+              - 'tests/qemu/test_release_install.sh'
+              - 'tests/qemu/run_release_install.sh'
+              - 'tests/qemu/release_install_inner.sh'
+              - 'tests/qemu/test_parts_demo_e2e.sh'
+              - 'docs/install-guide.md'
+              - 'docs/upgrade-guide.md'
+              - 'tests/integration/test_guide_drift.sh'
+              - 'tests/integration/test_guide_drift_negctl.sh'
+              - 'tests/integration/test_publish_release.sh'
+            netbsd:
+              - '.github/workflows/**'
+              - 'tests/netbsd/**'
+              - 'src/kernel-netbsd/**'
+              - 'src/kernel-core/**'
+              - 'src/vmsfs/include/vmsfs_ondisk.h'
+              - 'src/libvmssys/kif_transport.h'
+              - 'src/libvmssys/kif_transport_netbsd.c'
+            netbsd_vax:
+              - '.github/workflows/**'
+              - 'tests/lab-vax/**'
+              - 'tools/cross-vax/**'
+              - 'src/libvmssys/**'
+              - 'src/vmsprocess/**'
+              - 'src/libvms/**'
+              - 'src/vmslnm/**'
+              - 'src/vmsfs/**'
+              - 'src/vmsrms/**'
+              - 'src/vmsqueue/**'
+              - 'src/vmsdcl/**'
+              - 'src/ovmx_init/**'
+              - 'src/ovmx_provision/**'
+              - 'src/ovmx_job_control/**'
+              - 'src/vmslink/librarian.c'
+              - 'src/vmslink/include/ovmx_olb.h'
+              - 'src/vmslink/mk_librarian.sh'
+              - 'src/vmslink/ovmx_link_rms_io.c'
+              - 'src/vmslink/ovmx_link_rms_io.h'
+              - 'src/imgact/test/run_librarian_native.sh'
+              - 'tools/vms_login.c'
+              - 'tools/loginout_display.c'
+              - 'tools/loginout_display.h'
+              - 'tools/mail_notify.c'
+              - 'tools/vms_mail_notify.h'
+              - 'tools/CMakeLists.txt'
+              # vms-64a (unified cross-build Rung B): the ovmx-images
+              # aggregate now builds these images too, so their sources are
+              # netbsd_vax inputs (vax-cmake-images job).
+              - 'tools/vms_help.c'
+              - 'tools/vms_authorize.c'
+              - 'tools/vms_mail.c'
+              - 'tools/vms_monitor.c'
+              - 'tools/vms_initialize.c'
+              - 'tools/vms_sysgen.c'
+              - 'src/install/**'
+              - 'src/product/**'
+              - 'src/apps/parts/**'
+              - 'src/vmsfs/ods2/**'
+              - 'src/imgact/known_images.c'
+              - 'src/imgact/known_images.h'
+              # vms-8e8f: the vax-acp-read-ilp32 job cross-compiles the shared
+              # ACP file-access walk for elf32-vax, so a change to it must
+              # re-trigger the VAX ILP32 leg on a PR (it is the SAME TU
+              # IMGACT.EXE, PID 1's staging bridge, and the OVMXVMSSYS.PAR
+              # reader all go through).
+              - 'src/imgact/imgact_acp.c'
+              - 'src/imgact/imgact_acp.h'
+              # vms-73b2 (epic vms-404): the elf32-vax symbol-vector IMGACT
+              # backend + the elf32-generalized activator core, built + proven
+              # by the imgact-vax-backend job.
+              - 'src/imgact/imgact.c'
+              - 'src/imgact/imgact_elf.h'
+              - 'src/imgact/imgact_boundary_audit.c'
+              - 'src/imgact/arch/**'
+              - 'src/imgact/CMakeLists.txt'
+              - 'src/imgact/test/run_test_vax.sh'
+              - 'src/product/ovmx_kit_reader.c'
+              # vms-64a (unified cross-build Rung B): the top-level project
+              # now configures + builds the full ovmx-images aggregate
+              # (including STARTUP.EXE) directly under the vax toolchain
+              # file (vax-cmake-images job), so its own CMakeLists.txt is a
+              # netbsd_vax input too.
+              - 'CMakeLists.txt'
+              - 'docs/design-ovmx-netbsd-syskrnl.md'
+              - 'docs/design-p4-netbsd-vax-boot.md'
+              - 'docs/design-unified-cross-build.md'
+              - 'docs/audit-ilp32-vax-libvmssys.md'
+            exec_netbsd_vax:
+              - '.github/workflows/**'
+              - 'tools/cross-vax/**'
+              - 'src/kernel-core/**'
+              - 'src/kernel-netbsd/**'
+              # vms-02b: netbsd-vax-vms-crosscompile (build-vms-module-vax.sh)
+              # builds src/kernel-core/vmsfs_acp.c + src/vmsfs/ods2/ods2_edit.c
+              # under -DOVMX_ODS2_KERNEL, and both pull in the genuine ODS-2
+              # codec header at src/vmsfs/include/vmsfs/ods2.h (-I$ODS2_INC).
+              # Neither src/vmsfs/ods2/** nor src/vmsfs/include/** was in this
+              # filter, so a change to ods2.h or ods2_kcompat.h did not
+              # re-trigger this gate on a PR (only surfaced once a later rung
+              # pulled the header in and someone touched src/kernel-core/**
+              # too) -- ods2.h/vms-6a7f and ods2_kcompat.h/#648 both hit this.
+              # The broader netbsd_vax filter already covers 'src/vmsfs/**'
+              # for the userland-side jobs; this filter is the executive-only
+              # twin and needs its own explicit entries for the same reason.
+              - 'src/vmsfs/ods2/**'
+              - 'src/vmsfs/include/**'
+              - 'tests/netbsd/netbsd_version.env'
+              - 'tests/netbsd/guest/vmseflag.c'
+              - 'tests/netbsd/guest/vmsaccess.c'
+              - 'tests/netbsd/guest/vmsproctab.c'
+              - 'tests/netbsd/guest/vmsmbx.c'
+              - 'src/libvmssys/kif_transport_netbsd.c'
+              - 'src/libvmssys/kif_transport.h'
+              - 'docs/audit-ilp32-vax-netbsd-exec.md'
+              # vms-74b (unified cross-build Rung D): the facility guest
+              # tools + their width negctl teeth now build via the top-level
+              # CMake project (tests/netbsd/guest/CMakeLists.txt,
+              # netbsd-vax-facility-tools-crosscompile job), so its CMake
+              # glue + negctl fixtures/runner + the top-level CMakeLists.txt
+              # are inputs too.
+              - 'tests/netbsd/guest/CMakeLists.txt'
+              - 'tests/netbsd/guest/negctl/**'
+              - 'CMakeLists.txt'
+            aarch64_boot:
+              - '.github/workflows/**'
+              - 'tests/qemu-aarch64/**'
+              - 'src/libvmssys/**'
+            # INV-LEDGER (vms-8465): docs/compatibility-surface.md is GENERATED
+            # from docs/compat/*.yaml by tools/compat/render_compat.py -- the
+            # YAML is the single ledger. This filter is intentionally narrow
+            # (no C/H sources): the drift job below runs Python + PyYAML only.
+            compat_surface:
+              - '.github/workflows/**'
+              - 'docs/compat/**'
+              - 'tools/compat/**'
+              - 'docs/compatibility-surface.md'
+            # vms-e7c5: the alpha-dec-vms cross toolchain SOURCES. A change here
+            # bumps the source-hash tag (see the alpha-toolchain-image job), so
+            # the dedicated build-push job must rebuild + push the new prebuilt
+            # image to ghcr. Deliberately narrow (NOT '.github/workflows/**'): a
+            # CI-only edit does not change the toolchain source hash, so it need
+            # not re-seed the registry. Non-PR events force this true (the decide
+            # step below) so a main push / manual dispatch always refreshes the
+            # seed (a gha cache-hit build, zero gnu.org fetch when unchanged).
+            alpha_toolchain:
+              - 'tools/cross-alpha-vms/Dockerfile'
+              - 'tools/cross-alpha-vms/build-toolchain.sh'
+              - 'tools/cross-alpha-vms/patches/**'
+              - 'tools/cross-alpha-vms/*.tar.xz'
+            # vms-e7c5 twin for VAX (this PR): the vax-toolchain-image build-push
+            # job re-builds + re-pushes the prebuilt ghcr image only when the
+            # toolchain SOURCES change (its Dockerfile or the vendored tarball).
+            vax_toolchain:
+              - 'tools/cross-vax/Dockerfile'
+              - 'tools/cross-vax/*.tar.xz'
+
+      - name: Decide (force every output true on non-PR events)
+        id: decide
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            {
+              echo "core=${{ steps.filter.outputs.core }}"
+              echo "toolchain=${{ steps.filter.outputs.toolchain }}"
+              echo "kernel=${{ steps.filter.outputs.kernel }}"
+              echo "boot=${{ steps.filter.outputs.boot }}"
+              echo "release=${{ steps.filter.outputs.release }}"
+              echo "netbsd=${{ steps.filter.outputs.netbsd }}"
+              echo "netbsd_vax=${{ steps.filter.outputs.netbsd_vax }}"
+              echo "exec_netbsd_vax=${{ steps.filter.outputs.exec_netbsd_vax }}"
+              echo "aarch64_boot=${{ steps.filter.outputs.aarch64_boot }}"
+              echo "compat_surface=${{ steps.filter.outputs.compat_surface }}"
+              echo "libcrypto=${{ steps.filter.outputs.libcrypto }}"
+              echo "openssh=${{ steps.filter.outputs.openssh }}"
+              echo "alpha_toolchain=${{ steps.filter.outputs.alpha_toolchain }}"
+              echo "alpha_boot_runtime=${{ steps.filter.outputs.alpha_boot_runtime }}"
+              echo "alpha_activation=${{ steps.filter.outputs.alpha_activation }}"
+              echo "vax_toolchain=${{ steps.filter.outputs.vax_toolchain }}"
+              echo "tcpip=${{ steps.filter.outputs.tcpip }}"
+            } >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "core=true"
+              echo "toolchain=true"
+              echo "kernel=true"
+              echo "boot=true"
+              echo "release=true"
+              echo "netbsd=true"
+              echo "netbsd_vax=true"
+              echo "exec_netbsd_vax=true"
+              echo "aarch64_boot=true"
+              echo "compat_surface=true"
+              echo "libcrypto=true"
+              echo "openssh=true"
+              echo "alpha_toolchain=true"
+              echo "alpha_boot_runtime=true"
+              echo "alpha_activation=true"
+              echo "vax_toolchain=true"
+              echo "tcpip=true"
+            } >> "$GITHUB_OUTPUT"
+          fi

@@ -62,7 +62,7 @@
 # SYSTARTUP_VMS.COM/SYCONFIG.COM/SYLOGICALS.COM, read by do_install()).
 # Assertion (b) is now a REAL, ENFORCING assertion like (a)/(c)/(d) -- this
 # gate no longer ships with a known-red assertion, and the CI job no
-# longer runs it under continue-on-error (.github/workflows/ci.yml).
+# longer runs it under continue-on-error (.github/workflows/ci-*.yml (split by vms-1af)).
 # =============================================================================
 #
 # Usage (run INSIDE the bootable image, like test_product_install_e2e.sh):

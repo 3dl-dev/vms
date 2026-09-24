@@ -51,7 +51,7 @@
 # NOT ON THE PER-PR PATH. This gate is release-acceptance / frozen-verify
 # tooling, invoked by the conductor at cut time on the frozen SHA -- exactly
 # like tests/lab-vax/run-boot.sh gate. It is deliberately not wired into
-# .github/workflows/ci.yml (keeps the slow emulator boot off every PR).
+# .github/workflows/ci-*.yml (split by vms-1af) (keeps the slow emulator boot off every PR).
 #
 # USAGE:
 #   tools/cross-alpha/run-boot-alpha.sh              # gate mode (default)

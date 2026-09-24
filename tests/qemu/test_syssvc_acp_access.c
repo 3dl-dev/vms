@@ -65,7 +65,7 @@
  * NO /dev/vms -> honest SKIP (77), never a fake pass: the ACP, the window, and
  * the protection gate are executive-resident, so with no /dev/vms there is
  * nothing to assert (the contract every test_syssvc_* suite is held to,
- * .github/workflows/ci.yml).
+ * .github/workflows/ci-kernel-executive.yml).
  *
  * GROUND TRUTH. The concrete FIDs/attributes/LBNs asserted below were read off
  * tests/ods2/real_vax_ods2.dsk with the userspace ODS-2 codec (the same reader,

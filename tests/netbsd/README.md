@@ -123,7 +123,7 @@ echo "exit: $?"        # nonzero via the boot-deadline timeout
 
 ## CI
 
-Job **`NetBSD/amd64 Executive Harness (QEMU)`** in `.github/workflows/ci.yml`,
+Job **`NetBSD/amd64 Executive Harness (QEMU)`** in `.github/workflows/ci-kernel-executive.yml`,
 gated exactly like the expensive Linux executive jobs: it runs on
 push/merge_group/schedule and on PRs **only** when `tests/netbsd/**` (or the
 workflow) changes — never on an unrelated PR, given the boot cost. The installed
@@ -218,7 +218,7 @@ driver.
 
 ## CI (P2b)
 
-Job **`NetBSD/amd64 vms Pseudo-Device (QEMU)`** in `.github/workflows/ci.yml`,
+Job **`NetBSD/amd64 vms Pseudo-Device (QEMU)`** in `.github/workflows/ci-kernel-executive.yml`,
 gated like the P2a job (push/merge_group/schedule always; on PRs only when
 `tests/netbsd/**` **or** the P2b src — `src/kernel-netbsd/**`, the transport seam
 — changes). It asserts the INV-6 honest-failure line **and** `PROBE: PING OK`, and
@@ -315,7 +315,7 @@ rendezvous point — a real failure reddens the job, it never hangs it.
 ## CI (P4-A)
 
 Job **`NetBSD/amd64 Executive Cross-Process Proof (vms-f8a, QEMU)`** in
-`.github/workflows/ci.yml`, gated **nightly (`schedule`) + manual
+`.github/workflows/ci-kernel-executive.yml`, gated **nightly (`schedule`) + manual
 (`workflow_dispatch`) only** — the same reasoning as the P2c event-flag job: this
 drives many console commands across five facilities under GitHub's KVM-less TCG,
 too slow/variable for a per-PR gate. The per-PR NetBSD gate remains

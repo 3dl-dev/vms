@@ -27,7 +27,7 @@
 #             including the plain host CI build job.
 #   * RUN:    tests/qemu/init.sh execs every /tests/test_syssvc_* in the
 #             initramfs and prints "=== SUITE <name> rc=<code> ===".
-#   * ASSERT: .github/workflows/ci.yml (jobs kernel-executive and
+#   * ASSERT: .github/workflows/ci-kernel-executive.yml (jobs kernel-executive and
 #             kernel-executive-negative-control) derives the expected suite
 #             set from `ls tests/qemu/test_*.c` and asserts each suite's
 #             verdict line individually.
@@ -410,7 +410,7 @@ qemu_syssvc_add_test(corpus_seed_lnm
 # (main-red classification fix; test_imgact_bind was test_syssvc_imgact_bind
 # through #225).
 #
-# .github/workflows/ci.yml's kernel-executive-negative-control job derives its
+# .github/workflows/ci-kernel-executive.yml's kernel-executive-negative-control job derives its
 # "must be a real executive suite" policed set from the test_syssvc_*.c glob
 # above and requires every member to return the honest-skip code 77 when
 # /dev/vms is absent -- a test_syssvc_* suite that returns 0 with no executive
@@ -682,7 +682,7 @@ add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg
 # enormous effort; a gameable declaration-gate is a tear-out, not a hardening
 # target. The property they gestured at -- "a defect is actually caught" -- is
 # already covered by the runtime proof: the QEMU per-facility negative-control
-# job (.github/workflows/ci.yml) injects each defect, rebuilds vms.ko, boots it
+# job (.github/workflows/ci-kernel-executive.yml) injects each defect, rebuilds vms.ko, boots it
 # against a REAL /dev/vms, and asserts the facility's own suite goes RED
 # (run_facility_negctl.sh checks 1-4/8). That behavioral proof stays.
 #
@@ -815,7 +815,7 @@ set_tests_properties(product_install_e2e PROPERTIES
 # disk as the sole VDA0: system disk with the bootstrap-only slim initramfs
 # and reaches a SYSTEM login -- red on the unfixed tree, green after vms-96ec.
 # CI runs it for real (never opt-in cover): see the install-boot-e2e job in
-# .github/workflows/ci.yml, which treats a SKIP as a hard failure. Same
+# .github/workflows/ci-kernel-executive.yml, which treats a SKIP as a hard failure. Same
 # opt-in-in-ctest convention as product_install_e2e above.
 add_test(
     NAME install_boot_e2e
@@ -863,7 +863,7 @@ set_tests_properties(install_menu_e2e PROPERTIES
 # writethrough-cache lesson, and its NEGATIVE CONTROL (an install torn down
 # before the guest flush, whose verify must then fail) is the red-first proof
 # that the durability is real. CI runs it for real (never opt-in cover): the
-# release-install-e2e job in .github/workflows/ci.yml treats a SKIP as a hard
+# release-install-e2e job in .github/workflows/ci-kernel-executive.yml treats a SKIP as a hard
 # failure. Same opt-in-in-ctest convention as install_menu_e2e above.
 add_test(
     NAME release_install_e2e
@@ -884,7 +884,7 @@ set_tests_properties(release_install_e2e PROPERTIES
 # and site customization survive, the version advanced, and the machine
 # still boots. Requires the two bundles to be prebuilt -- see
 # run_upgrade_e2e.sh's header for the local reproduction recipe and
-# .github/workflows/ci.yml's upgrade-e2e job for how CI produces them.
+# .github/workflows/ci-kernel-executive.yml's upgrade-e2e job for how CI produces them.
 # Same opt-in convention as product_install_e2e above, for the same reason.
 add_test(
     NAME upgrade_e2e
@@ -1050,7 +1050,7 @@ set_tests_properties(job_control_negctl_e2e PROPERTIES
 # recorded in its release-manifest.json (an independent record, not
 # re-derived from the artifact under test). Includes an in-transcript
 # negative control proving the version-match comparator can actually detect
-# a disagreement; see .github/workflows/ci.yml's release-acceptance-e2e job
+# a disagreement; see .github/workflows/ci-kernel-executive.yml's release-acceptance-e2e job
 # for the heavier complementary negative control (rerunning this whole gate
 # with a genuinely wrong expected version and asserting the GATE ITSELF
 # reddens). Requires a prebuilt bundle -- see run_release_acceptance_e2e.sh's
@@ -1080,7 +1080,7 @@ set_tests_properties(release_acceptance_e2e PROPERTIES
 #
 # EXPECTED TO BE RED until the in-flight command fixes land; it must NOT be
 # weakened to go green. Same opt-in convention as the qemu-full-boot gates
-# above (OVMX_QEMU_FULL_E2E=1); .github/workflows/ci.yml's dcl-acceptance-e2e
+# above (OVMX_QEMU_FULL_E2E=1); .github/workflows/ci-kernel-executive.yml's dcl-acceptance-e2e
 # job runs it for real on the release-cut path and treats a SKIP as a hard
 # failure.
 add_test(

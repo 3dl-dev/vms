@@ -68,7 +68,7 @@
  * Honest SKIP (77) when /dev/vms is absent -- the cross-node handler is
  * executive-resident, so with no /dev/vms there is nothing to dispatch and
  * nothing this suite can fabricate; never a fake pass (the test_syssvc_* honest-
- * skip-77 contract, .github/workflows/ci.yml kernel-executive-negative-control).
+ * skip-77 contract, .github/workflows/ci-kernel-executive.yml kernel-executive-negative-control).
  *
  * Grounding: docs/research-alpha-dlm-wire.md §4 (the ENQ->GRANT->BLKAST->DEQ
  * sequence, DOCUMENTED from public $ENQ/$DEQ/$LCKDEF/IDSM/Cluster Systems

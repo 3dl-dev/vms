@@ -850,7 +850,7 @@ done
 # job prints the record it just produced and uploads it as an artifact, and
 # facility_defects.sh's coverage prints NOT MEASURED and withholds both
 # cardinals. FACILITY_NEGCTL_REQUIRE_RECORD is set EXPLICITLY by the CI job
-# (.github/workflows/ci.yml) and is 0 only while the tree has no record; flip
+# (.github/workflows/ci-*.yml (split by vms-1af)) and is 0 only while the tree has no record; flip
 # it to 1 in the same change that commits the first one.
 # ---------------------------------------------------------------------------
 echo "--- the execution record this run observed vs the one committed ---"

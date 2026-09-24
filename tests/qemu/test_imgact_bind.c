@@ -25,7 +25,7 @@
  * (including the CI host build), not just under QEMU.
  *
  * NAMING (main-red fix, was test_syssvc_imgact_bind through #225). The
- * kernel-executive-negative-control CI job (.github/workflows/ci.yml) derives
+ * kernel-executive-negative-control CI job (.github/workflows/ci-kernel-executive.yml) derives
  * its "must be a real executive suite" policed set from the test_syssvc_*
  * glob and requires every member to return the honest-skip code 77 when
  * /dev/vms is absent -- because a test_syssvc_* suite that returns 0 with no

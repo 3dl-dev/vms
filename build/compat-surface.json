@@ -4113,8 +4113,8 @@
       "status": "verified",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": ".github/workflows/ci.yml:1458",
-      "verified_against": "CI job install-boot-e2e (ci.yml:1458, vms-96ec) \u2014 runs tests/qemu/run_install_boot_e2e.sh on non-PR events (push/merge_group/schedule/workflow_dispatch); a real PRODUCT INSTALL of a kit, boot of the installed target, and login. Re-census 2026-09-14: job present, line ref refreshed (was :1495).",
+      "evidence": ".github/workflows/ci-release-e2e.yml:536",
+      "verified_against": "CI job install-boot-e2e (ci-release-e2e.yml:536, vms-96ec) \u2014 runs tests/qemu/run_install_boot_e2e.sh on non-PR events (push/merge_group/schedule/workflow_dispatch); a real PRODUCT INSTALL of a kit, boot of the installed target, and login. Re-census 2026-09-24 (vms-1af): ci.yml split into ci-*.yml domain files, job moved to ci-release-e2e.yml, line ref refreshed (was ci.yml:1458).",
       "notes": "",
       "plan_ref": "vms-718"
     },

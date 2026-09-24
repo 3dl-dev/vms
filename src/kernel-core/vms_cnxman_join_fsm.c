@@ -2137,18 +2137,28 @@ static enum cnxman_join_rx join_h_echo(struct cnxman_join *j,
  * that had already left and to OVMX itself.
  *
  * NOTHING IS ASSERTED THAT THE EXECUTIVE DOES NOT HOLD (INV-6). The whole
- * body is the request's own bytes; body[18] is the response marker every
- * grounded 0x81 echo carries; body[20:24] is copied from the request. The
- * ONE value this node asserts is body[17], its own current transition class,
- * and that is `j->tr_class` -- written in join_h_tr_open() from a REAL
- * op-0x08/0x09/0x0d open this node received, never composed. A node that
- * holds no class has nothing grounded to put there (no real response in the
- * corpus carries class 0), so it answers NOTHING and says so, which is the
- * allowlist's own rule: an ungrounded field is a gap to name, not to fill.
+ * body is the request's own bytes except TWO facts about THIS node, and both
+ * are read back from real executive state at the moment of the answer:
+ *
+ *   body[17]     `j->tr_class`      -- written in join_h_tr_open() from a REAL
+ *                                      op-0x08/0x09/0x0d open this node was
+ *                                      sent, never composed;
+ *   body[12:16]  the CLUB's epoch   -- the epoch this node is really at, which
+ *   body[20:24]                        is NOT the coordinator's (the recipe
+ *                                      correction in vms_cm_relay_response_
+ *                                      build's header; a real VAX answered
+ *                                      OVMX's epoch-4 relay with 3, its own).
+ *
+ * A node that holds no class has nothing grounded to put in body[17] (no real
+ * response in either capture tree carries class 0), so it answers NOTHING and
+ * says so -- the allowlist's own rule: an ungrounded field is a gap to name,
+ * not to fill.
  */
 static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 					const struct join_ev *e)
 {
+	vms_codec_status_t st;
+
 	if (j->tr_class == 0u) {
 		j->relays_no_class++;
 		join_log(j, "%CNXMAN, a system was relayed to this node before "
@@ -2156,8 +2166,20 @@ static enum cnxman_join_rx join_h_relay(struct cnxman_join *j,
 			    "answer with");
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
+	if (!join_recipe_allowed(e->env.category, e->env.opcode,
+				 (uint16_t)VMS_CM_RECIPE_ECHO)) {
+		j->ignored_events++;
+		return CNXMAN_JOIN_RX_CONSUMED;
+	}
+	st = vms_cm_relay_response_build(e->body, e->len, j->tr_class,
+					 j->cl->club.epoch, j->scratch,
+					 (uint32_t)sizeof(j->scratch), NULL);
+	if (join_build_failed(j, st))
+		return CNXMAN_JOIN_RX_CONSUMED;
 	j->relays_seen++;
-	return join_h_echo(j, e);
+	if (join_emit_cm(j, 1) == 0)
+		j->echoes_sent++;
+	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
 /*

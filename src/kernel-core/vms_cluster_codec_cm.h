@@ -662,6 +662,13 @@ vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *body, uint32_t len,
  *   body[18]  = ECHOED, not forced                 op == 0x0f
  *   body[55]  = 0x00                               op == 0x09 ONLY
  *   body[17]  = own_class ; body[20:24] = epoch     op == 0x12 ONLY
+ *
+ * ⚠ op-0x12 HAS ITS OWN BUILDER (rd vms-4f0). The op-0x12 line above leaves
+ * body[12:16] echoed and body[20:24] holding the REQUEST's epoch, which is
+ * only right when the two nodes are at the same epoch. A member answering a
+ * coordinator must state its OWN epoch in both -- call
+ * vms_cm_relay_response_build() below, never this builder directly, for
+ * op-0x12.
  *   everything else                                 echoed verbatim
  *
  * `own_class` is this node's own current transition class (sec 4(r):
@@ -677,6 +684,39 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
 					      uint8_t own_class,
 					      uint8_t *out_body, uint32_t cap,
 					      uint32_t *written);
+
+/*
+ * vms_cm_relay_response_build - the 0x81/0x12 answer a MEMBER owes the
+ * transition coordinator (rd vms-4f0; spec §4(r), CORRECTED below).
+ *
+ * THE EPOCH IN AN 0x81/0x12 IS THE RESPONDER'S OWN, NOT THE REQUEST'S.
+ * §4(r) read the corpus as "body[20:24] = LE u32 copy of the request's
+ * body[12:16]", and in 141 of 143 pairs that is indistinguishable, because
+ * the coordinator and the member held the SAME epoch. The three specimens
+ * in which they DIFFER settle it, and all three agree:
+ *
+ *   d94-ctl1.pcap   request epoch 0x07 -> response body[12:16] = body[20:24] = 0x06
+ *   d94-rej3.pcap   request epoch 0x10 -> response body[12:16] = body[20:24] = 0x0f
+ *   the rd vms-4f0 lab run: OVMX relayed at epoch 4 to a real OpenVMS VAX
+ *   V7.3 at epoch 3, and the VAX answered body[12:16] = body[20:24] = 3.
+ *
+ * So a real member does NOT parrot the coordinator's epoch back: it states
+ * the epoch it is actually at, in BOTH fields. That is also the only
+ * INV-6-clean reading -- a responder can stand behind its own club's
+ * epoch and cannot stand behind somebody else's.
+ *
+ * `own_class` and `own_epoch` are both read from this node's real state by
+ * the caller (the join FSM's tr_class and the CLUB's epoch); neither is
+ * ever composed here. Everything else is the echo family's recipe.
+ *
+ * STAMP with is_response=1, exactly as for the echo builder.
+ */
+vms_codec_status_t vms_cm_relay_response_build(const uint8_t *req_body,
+					       uint32_t req_len,
+					       uint8_t own_class,
+					       uint32_t own_epoch,
+					       uint8_t *out_body, uint32_t cap,
+					       uint32_t *written);
 
 /*
  * vms_cm_close_build - the cat-0x06 close recipe (sec 4(p): "closes the

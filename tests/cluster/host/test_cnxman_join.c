@@ -4957,6 +4957,17 @@ static void test_f3ec_abort_rearms_the_admission_clock(void)
  * oracle is as red as no cell at all.
  * ========================================================================== */
 
+/* The epoch the ORACLE's responder (aa:00:04:00:01:04) was really at, and an
+ * epoch it was NOT at, for the discriminator below. */
+#define ORACLE_EPOCH  3u
+#define FOREIGN_EPOCH 7u
+
+static uint32_t le32_at(const uint8_t *b, uint32_t off)
+{
+	return (uint32_t)b[off] | ((uint32_t)b[off + 1] << 8) |
+	       ((uint32_t)b[off + 2] << 16) | ((uint32_t)b[off + 3] << 24);
+}
+
 static int load_relay_fixture(const char *name, struct vms_fixture *out)
 {
 	char path[600];
@@ -5023,6 +5034,13 @@ static void test_4f0_member_answers_the_relay_like_a_real_vax(void)
 			"and holds a REAL transition class, read off the "
 			"op-0x09 open it was sent -- the one value body[17] "
 			"asserts (INV-6)");
+	/* Put this node at the epoch the ORACLE's responder was really at, by
+	 * the only path that ever sets it: a real op-0x09 open, which
+	 * barrier_h_open() reads `club->epoch` out of. Nothing is assigned
+	 * behind the executive's back. */
+	(void)join_feed(mk_open_add(ORACLE_EPOCH, 0x0eu));
+	ct_check_eq_u32(g.cl.club.epoch, ORACLE_EPOCH,
+			"...and is at the epoch a real op-0x09 open taught it");
 
 	before = n_cm_sent();
 	memcpy(g_frame, req.bytes, req.wire_len);
@@ -5058,10 +5076,66 @@ static void test_4f0_member_answers_the_relay_like_a_real_vax(void)
 			"  body[18]: the response marker, forced");
 	ct_check_eq_u32(sent->body[VMS_OFB_CM_CLASS], VMS_CM_CLASS_ADD,
 			"  body[17]: OUR OWN class, not the relayer's echo");
-	ct_check(memcmp(sent->body + VMS_OFB_CM_RELAY_EPOCH,
-			req.bytes + VMS_OFF_SYSAP_BODY + VMS_OFB_CM_EPOCH,
-			4) == 0,
-		 "  body[20:24]: a fresh LE u32 copy of the request's epoch");
+	ct_check_eq_u32(le32_at(sent->body, VMS_OFB_CM_RELAY_EPOCH),
+			ORACLE_EPOCH, "  body[20:24]: the epoch, LE u32");
+	ct_check_eq_u32(le32_at(sent->body, VMS_OFB_CM_EPOCH),
+			ORACLE_EPOCH, "  body[12:16]: the epoch, LE u32");
+}
+
+/*
+ * ...AND THE EPOCH IN THAT ANSWER IS THIS NODE'S OWN, NOT THE COORDINATOR'S
+ * (rd vms-4f0). §4(r) recorded body[20:24] as "a copy of the request's
+ * body[12:16]", which is indistinguishable in 141 of the 143 corpus pairs
+ * because both nodes held the same epoch. The three specimens where they
+ * DIFFER all say the same thing, and they are the whole evidence for this
+ * test:
+ *
+ *   d94-ctl1.pcap  request epoch 0x07 -> response body[12:16]=body[20:24]=0x06
+ *   d94-rej3.pcap  request epoch 0x10 -> response body[12:16]=body[20:24]=0x0f
+ *   rd vms-4f0 lab: OVMX relayed at epoch 4 to a real OpenVMS VAX V7.3 that
+ *                   was at epoch 3, and the VAX answered 3 in both fields.
+ *
+ * So the discriminator is run here the same way: the oracle's own relay with
+ * ONE field changed -- an epoch this node is not at.
+ */
+static void test_4f0_relay_epoch_is_ours_not_the_coordinators(void)
+{
+	struct vms_fixture req;
+	const struct sent_body *sent;
+	vms_wire_buf_t w;
+
+	printf("\n-- rd vms-4f0: the 0x81/0x12 epoch is the RESPONDER's own --\n");
+
+	if (load_relay_fixture("cm-relay-oracle-req", &req) != 0) {
+		ct_check(0, "the oracle relay request loads");
+		return;
+	}
+	bed_init();
+	bed_set_identity();
+	drive_to_state(CNXMAN_JOIN_MEMBER);
+	(void)join_feed(mk_open_add(ORACLE_EPOCH, 0x0eu));
+
+	memcpy(g_frame, req.bytes, req.wire_len);
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, FOREIGN_EPOCH);
+	ct_check(vms_wire_buf_ok(&w),
+		 "the oracle relay, with ONE field changed: an epoch this node "
+		 "is not at");
+	(void)join_feed(req.wire_len);
+
+	sent = nth_sent(n_cm_sent() - 1u);
+	if (sent == NULL) {
+		ct_check(0, "the answer is readable");
+		return;
+	}
+	ct_check_eq_u32(le32_at(sent->body, VMS_OFB_CM_EPOCH), ORACLE_EPOCH,
+			"body[12:16] is OUR epoch, not the coordinator's");
+	ct_check_eq_u32(le32_at(sent->body, VMS_OFB_CM_RELAY_EPOCH),
+			ORACLE_EPOCH,
+			"body[20:24] is OUR epoch, not the coordinator's");
+	ct_check(le32_at(sent->body, VMS_OFB_CM_EPOCH) != FOREIGN_EPOCH,
+		 "...and neither field parrots a value this node cannot stand "
+		 "behind (INV-6)");
 }
 
 /*
@@ -5180,6 +5254,7 @@ int main(void)
 	test_c06_a_rejoiner_still_takes_a_new_csid();
 	test_f3ec_abort_rearms_the_admission_clock();
 	test_4f0_member_answers_the_relay_like_a_real_vax();
+	test_4f0_relay_epoch_is_ours_not_the_coordinators();
 	test_4f0_no_class_answers_nothing();
 
 	return ct_summary("test_cnxman_join");

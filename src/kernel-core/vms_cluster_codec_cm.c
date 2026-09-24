@@ -373,6 +373,50 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
 	return VMS_CODEC_OK;
 }
 
+/*
+ * The member's 0x81/0x12 -- the echo family's recipe with the ONE field a
+ * responder states for itself overwritten (rd vms-4f0; see the header's
+ * "THE EPOCH IN AN 0x81/0x12 IS THE RESPONDER'S OWN"). Built ON TOP of the
+ * echo builder rather than beside it, so the verbatim copy, the response
+ * bit, body[18] and body[17] have exactly ONE implementation.
+ */
+vms_codec_status_t vms_cm_relay_response_build(const uint8_t *req_body,
+					       uint32_t req_len,
+					       uint8_t own_class,
+					       uint32_t own_epoch,
+					       uint8_t *out_body, uint32_t cap,
+					       uint32_t *written)
+{
+	struct vms_cm_envelope req_env;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	/* This recipe is op-0x12's alone; anything else belongs to the echo
+	 * family and must not be given a caller-supplied epoch. */
+	if (req_env.category != VMS_CM_CAT_CONFIG ||
+	    req_env.opcode != VMS_CM_OP_RELAY)
+		return VMS_CODEC_E_CLASS;
+
+	st = vms_cm_echo_response_build(req_body, req_len, own_class,
+					out_body, cap, written);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, out_body, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, own_epoch);
+	vms_wire_put_le32(&w, VMS_OFB_CM_RELAY_EPOCH, own_epoch);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	return VMS_CODEC_OK;
+}
+
 vms_codec_status_t vms_cm_close_build(const uint8_t *req_body, uint32_t req_len,
 				      const struct vms_cm_node_params *own_params,
 				      uint16_t close_state,

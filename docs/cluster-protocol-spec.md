@@ -3850,9 +3850,32 @@ record in category `0x02`, and a single join carries **216** of the latter.
 |---|---|
 | `0x03`, `0x05`, `0x08`, `0x09`, `0x0d` | `body[18] = 0x01`; `body[55] = 0x00` on `0x09` only (§4(p)) |
 | `0x0f` | **none** — `body[18]` is *echoed*, not forced |
-| `0x12` | `body[18] = 0x01`; `body[17]` = the responder's own current class; `body[20:24]` = LE u32 copy of the request's `body[12:16]` (the epoch) |
+| `0x12` | `body[18] = 0x01`; `body[17]` = the responder's own current class; `body[12:16]` **and** `body[20:24]` = the **responder's OWN** current epoch, LE u32 — **not** the request's (corrected, see below) |
 | `0x06` | never `0x81` — answered with cat-`0x04` acks |
 | `0x0a`, `0x0c` | never answered (`txn = 0`) |
+
+> **CORRECTION to the `0x12` row (rd vms-4f0).** This row previously read
+> "`body[20:24]` = LE u32 copy of the request's `body[12:16]`". Across the
+> corpus that is indistinguishable from "the responder's own epoch": in 141 of
+> the 143 matched `0x12`/`0x81 0x12` pairs the coordinator and the member held
+> the **same** epoch. The three specimens in which they DIFFER settle it, and
+> all three agree that the responder states its **own** epoch, in **both**
+> fields, and echoes neither:
+>
+> | specimen | request `body[12:16]` | response `body[12:16]` | response `body[20:24]` |
+> |---|---|---|---|
+> | `d94-ctl1.pcap` | `07` | `06` | `06` |
+> | `d94-rej3.pcap` | `10` | `0f` | `0f` |
+> | rd vms-4f0 lab run, 2026-09-24 | `04` (OVMX) | `03` (real VAX V7.3) | `03` |
+>
+> The third is the decisive one because it was produced on purpose: OVMX, as
+> transition coordinator, relayed at epoch 4 to a real OpenVMS VAX V7.3 that
+> was at epoch 3, and the VAX answered `3` in both fields 0.2 ms later. This
+> is also the only INV-6-clean reading — a responder can stand behind its own
+> club's epoch and cannot stand behind somebody else's. `body[12:16]` is
+> therefore the **one** field of the `0x81/0x12` that is not a verbatim echo
+> besides `body[17]`, which is why the earlier verbatim census flagged
+> "extra mutation at [12]" in exactly `d94-ctl1` and `d94-rej3`.
 
 > The `0x0f` row reconciles two censuses that looked contradictory. One found a
 > single real `0x0f` response with `body[18] == 1`; the other found six that leave

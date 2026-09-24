@@ -59,7 +59,7 @@ static uint32_t stamp_applmsg_envelope(uint8_t *frame, uint32_t cap,
 	memcpy(sca.eth_src, g_eth_src, 6);
 	memcpy(sca.dst_lavc, g_eth_dst, 6);
 	memcpy(sca.src_lavc, g_eth_src, 6);
-	sca.connect_flag = 0x0001u;
+	sca.cluster_group = 0x0001u;
 	sca.sca_len_field = (uint16_t)(content_len - 2u);
 	sca.word30 = (uint16_t)((uint16_t)VMS_SCS_MT_MSG |
 				((uint16_t)VMS_SCS_FORMAT_V13 << 8));
@@ -312,7 +312,7 @@ static void test_block_transfer_unaffected(void)
 	memcpy(sca.eth_src, g_eth_src, 6);
 	memcpy(sca.dst_lavc, g_eth_dst, 6);
 	memcpy(sca.src_lavc, g_eth_src, 6);
-	sca.connect_flag = 0x0001u;
+	sca.cluster_group = 0x0001u;
 	sca.sca_len_field = (uint16_t)(302u - 2u);
 	sca.word30 = (uint16_t)((uint16_t)VMS_SCS_MT_MSG |
 				((uint16_t)VMS_SCS_FORMAT_V13 << 8));

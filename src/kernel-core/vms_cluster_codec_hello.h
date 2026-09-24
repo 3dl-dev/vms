@@ -32,7 +32,8 @@
  * assert. Every field in `struct vms_hello_frame` below -- including the
  * ones the spec calls "constant" -- is instead a CALLER-SUPPLIED value
  * (mirroring the vms_sca_hdr_build precedent, where even the "observed
- * constant" connect_flag is threaded through the struct, never baked in).
+ * constant" abs-22 word -- the cluster group number, rd vms-b34 -- is
+ * threaded through the struct, never baked in).
  * PARSING a real captured frame into this struct is honest (it is reading
  * real wire data); BUILDING one for OVMX's own transmit path must get every
  * byte from the executive's real state, never from this codec's memory of

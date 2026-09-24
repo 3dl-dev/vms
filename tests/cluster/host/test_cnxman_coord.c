@@ -159,7 +159,7 @@ static void bed_record_link(struct vms_cm_link *l)
 	memcpy(l->hdr.eth_src, smac, 6);
 	memcpy(l->hdr.dst_lavc, dmac, 6);
 	memcpy(l->hdr.src_lavc, smac, 6);
-	l->hdr.connect_flag = 0x0001;
+	l->hdr.cluster_group = 0x0001;
 	l->recv_ack = 0x0007;
 	l->send_seq = 0x0009;
 	l->remote_conid = 0x62c50009u;
@@ -372,7 +372,7 @@ static uint32_t mk_frame(uint8_t *f, uint8_t cat, uint8_t op)
 	memcpy(l.hdr.eth_src, smac, 6);
 	memcpy(l.hdr.dst_lavc, dmac, 6);
 	memcpy(l.hdr.src_lavc, smac, 6);
-	l.hdr.connect_flag = 0x0001;
+	l.hdr.cluster_group = 0x0001;
 	l.recv_ack = 0x0011;
 	l.send_seq = 0x0012;
 	l.remote_conid = 0x33580008u;

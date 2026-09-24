@@ -1,0 +1,33 @@
+goto http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA.cpio.gz&sysdisk=sysdisk-nodeA.qcow2.gz&nodeC=http%3A%2F%2Flocalhost%3A8301%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dka655x.bin%26diskgz%3D%252Fvms73-nodeC-cluster.dsk.gz
+t=0s sca={} nicTx=0 nicRx=0 acpOk=false werr=null
+  OVMXA: %NIC-CFG, initramfs=initramfs-ovmx-nodeA.cpio.gz sysdisk=sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+t=6s sca={} nicTx=0 nicRx=0 acpOk=false werr=null
+  OVMXA: Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                                | Booting from ROM... | c[?7l[2J
+  VAXC : Tests completed. | >>>B DUA0 | (BOOT/R5:0 DUA0)█
+t=12s sca={} nicTx=0 nicRx=0 acpOk=false werr=null
+  VAXC : %SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS |    OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0 | %WBM-I-WBMINFO Write Bitmap has successfully completed initialization.█
+t=18s sca={"VAXC":4} nicTx=0 nicRx=6 acpOk=false werr=null
+  VAXC : %SYSINIT, waiting to form or join a VMScluster system | %VAXcluster-I-LOADSECDB, loading the cluster security database | █MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+t=24s sca={"VAXC":9} nicTx=0 nicRx=11 acpOk=false werr=null
+t=30s sca={"VAXC":14} nicTx=0 nicRx=16 acpOk=true werr=null
+  OVMXA:     24-SEP-2026 17:12:05.34 | %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=36s sca={"VAXC":19} nicTx=0 nicRx=21 acpOk=true werr=null
+t=42s sca={"VAXC":24} nicTx=0 nicRx=26 acpOk=true werr=null
+  VAXC : %CNXMAN,  completing VAXcluster state transition | $!  Copyright 2001 Compaq Computer Corporation. | █STDRV-I-STARTUP, OpenVMS startup begun at 24-SEP-2026 17:12:59.84
+t=48s sca={"VAXC":30,"OVMXA":1} nicTx=7 nicRx=32 acpOk=true werr=null
+  OVMXA: %CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE) | %CNXMAN, waiting to form or join an OpenVMS Cluster | %STDRV-I-STARTUP, OpenVMX startup begun at 24-SEP-2026 17:12:23.22
+t=54s sca={"VAXC":534,"OVMXA":766} nicTx=773 nicRx=536 acpOk=true werr=null
+  OVMXA: [   45.026143] %DLM, refusing a lock message from a system that has not proved it runs this implementation | [   45.081034] %CNXMAN, completed VAXcluster state transition | %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+  VAXC : %CNXMAN,  proposing addition of system OVMXA | %MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving | █CNXMAN,  completing VAXcluster state transition
+LEG 2 OK: the REAL VMS node announced OVMXA's admission on its own console
+t=60s sca={"VAXC":552,"OVMXA":778} nicTx=786 nicRx=554 acpOk=true werr=null
+t=66s sca={"VAXC":570,"OVMXA":791} nicTx=799 nicRx=572 acpOk=true werr=null
+  OVMXA: %INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+t=72s sca={"VAXC":586,"OVMXA":803} nicTx=811 nicRx=588 acpOk=true werr=null
+  OVMXA: %RUN-S-PROC_ID, identification of created process is 10000003
+t=78s sca={"VAXC":604,"OVMXA":815} nicTx=824 nicRx=606 acpOk=true werr=null
+  OVMXA:  Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible) | Username: 
+  -> Username: seen; logging in
+  SHOW CLUSTER: self=true peer=true
+LEG 1 OK: Node A's own SHOW CLUSTER names BOTH nodes MEMBER
+CN2_RESULT={"pass":true,"legA":true,"legC":true,"elapsed_s":108}

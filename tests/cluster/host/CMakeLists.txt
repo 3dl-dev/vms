@@ -492,6 +492,13 @@ target_compile_definitions(test_pe_glue_group PRIVATE
 # corpus. Needs the fixture loader, which cluster_host_pe_test already links.
 cluster_host_pe_test(test_pe_rev_c3    test_pe_rev_c3.c)
 
+# rd vms-b34: abs 22 is LE16(this node's cluster group), not the constant
+# 0x0001 three builders baked. The port must put its OWN configured number on
+# every frame (HELLO, channel verify, VC START/STACK) and must ignore anybody
+# else's -- the defect that had a real group-257 OpenVMS V7.3 member discard
+# 273 OVMX VC STACKs while the channel stayed verified.
+cluster_host_pe_test(test_pe_group_on_wire test_pe_group_on_wire.c)
+
 cluster_host_pe_test(test_pe_credit    test_pe_credit.c)
 cluster_host_pe_test(test_pe_formation test_pe_formation.c)
 

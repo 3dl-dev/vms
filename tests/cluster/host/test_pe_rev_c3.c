@@ -87,6 +87,10 @@ static void env_init(struct env *e)
 	id.scsnode_len = 5;
 	memcpy(id.mcast, e->mcast, VMS_ETH_ADDR_LEN);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes, DEMO_GROUP (rd vms-b34). */
+	id.cluster_group = (uint16_t)DEMO_GROUP;
+	id.cluster_group_valid = 1u;
 	id.max_sca_len = 1500;
 
 	(void)pe_fsm_init(&e->fsm, &id, NODEA_SYSID, &e->ops);
@@ -174,8 +178,6 @@ static void test_revision_is_learned_not_assumed(void)
 
 	ct_check(ch->peer_rev.valid, "the CHANNEL learned its peer's revision");
 	ct_check_eq_u32(ch->peer_rev.rev, VMS_HELLO_REV_C03, "  == C03");
-	ct_check_eq_u32(ch->peer_rev.connect_flag, 0x0101,
-			"  with abs 22 as that peer really sent it");
 	ct_check_eq_u32(ch->peer_rev.trailer_9205, 0x0590, "  abs 94 likewise");
 	ct_check_eq_u32(ch->peer_rev.trailer_2600, 0x0021, "  abs 126 likewise");
 
@@ -240,9 +242,14 @@ static void test_reply_is_in_the_peers_revision(void)
 	ct_check_eq_u32(d.fi.len_check, VMS_SCA_LEN_EXACT,
 			"  self-consistent under the sec 2 length identity");
 
-	ct_check_eq_u32(d.h.hdr.connect_flag, 0x0101,
-			"  FORMAT MARKER abs 22 echoed from the peer's frame");
-	ct_check_eq_u32(d.h.trailer_9205, 0x0590, "  abs 94 likewise");
+	/* abs 22 is THIS node's own group (rd vms-b34) -- it agrees with the
+	 * peer because they are in the same cluster, NOT because it is echoed:
+	 * test_group_is_ours_never_the_peers() below holds the revision fixed
+	 * and changes only the group to prove it. */
+	ct_check_eq_u32(d.h.hdr.cluster_group, DEMO_GROUP,
+			"  abs 22 is OUR OWN cluster group (257), not an echo");
+	ct_check_eq_u32(d.h.trailer_9205, 0x0590,
+			"  FORMAT MARKER abs 94 echoed from the peer's frame");
 	ct_check_eq_u32(d.h.trailer_2600, 0x0021, "  abs 126 likewise");
 
 	vms_cluster_lavc_addr_build(NODEA_SYSID, nodea_lavc);
@@ -290,6 +297,7 @@ static void test_padded_probe_declined_for_c03(void)
 		 vms_hello_parse(f->bytes, f->wire_len, &fi, &real) == VMS_CODEC_OK,
 		 "the real V5.5 frame re-parses, to source the revision from");
 	fake_peer_init(&vaxc, VAXC_SYSID, vaxc_hw, "VAXC");
+	vaxc.cluster_group = (uint16_t)DEMO_GROUP;   /* the demo's own cluster */
 	fake_peer_set_revision(&vaxc, &real);
 	ct_check_eq_u32(vaxc.revision, VMS_HELLO_REV_C03,
 			"  the stimulus peer speaks the revision the capture did");
@@ -343,6 +351,7 @@ static void test_v73_peer_is_unchanged(void)
 	printf("-- control: the same port against a V7.3 peer\n");
 	env_init(e);
 	fake_peer_init(&vax1, 1025, vax1_hw, "VAX1");
+	vax1.cluster_group = (uint16_t)DEMO_GROUP;   /* same cluster as Node A */
 	len = fake_peer_hello(&vax1, e->mcast, e->mcast, 0xa0u, 0u, 0u,
 			      e->buf, sizeof(e->buf));
 	ct_check(len == VMS_HELLO_FRAME_LEN,
@@ -391,7 +400,8 @@ static void test_default_before_any_peer(void)
 	ct_check_eq_u32(d.h.revision, VMS_HELLO_REV_C05,
 			"  in the grounded sec 4(a)/4(b) revision");
 	ct_check_eq_u32(d.len, VMS_HELLO_FRAME_LEN, "  134 bytes");
-	ct_check_eq_u32(d.h.hdr.connect_flag, 0x0001, "  abs 22 == 0x0001");
+	ct_check_eq_u32(d.h.hdr.cluster_group, DEMO_GROUP,
+			"  abs 22 == this node's OWN group, with no peer heard");
 	ct_check_eq_u32(d.h.trailer_9205, 0x0592, "  abs 94 == 0x0592");
 	ct_check_eq_u32(d.h.trailer_2600, 0x0026, "  abs 126 == 0x0026");
 }

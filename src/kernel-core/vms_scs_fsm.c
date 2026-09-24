@@ -666,7 +666,10 @@ static int ctrl_prepare(struct scs_fsm *f, const struct scs_cdt *cdt,
 	scs_copy(c->hdr.eth_src, addr.src_mac, VMS_ETH_ADDR_LEN);
 	scs_copy(c->hdr.dst_lavc, addr.dst_logical, VMS_ETH_ADDR_LEN);
 	scs_copy(c->hdr.src_lavc, addr.src_logical, VMS_ETH_ADDR_LEN);
-	c->hdr.connect_flag = VMS_SCSCTRL_CONNECT_FLAG;
+	/* abs 22: THIS node's cluster group, carried on the addressing the port
+	 * just handed back -- read from the executive's CLUSTER_AUTHORIZE
+	 * record, never a constant (rd vms-b34). */
+	c->hdr.cluster_group = addr.cluster_group;
 	c->hdr.word30 = (uint16_t)(cdt_msgtype(cdt) |
 				   ((uint16_t)VMS_SCS_FORMAT_V13 << 8));
 

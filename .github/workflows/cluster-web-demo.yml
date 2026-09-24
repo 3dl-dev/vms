@@ -1,0 +1,83 @@
+# Cluster web-demo generator self-test (rd vms-e18e).
+#
+# WHY THIS IS ITS OWN FILE AND NOT A JOB IN ci.yml.
+# ci.yml is ~511.3 KB and GitHub Actions refuses a workflow file past roughly
+# 512 KB of non-comment content: the run is created and immediately ends
+# `startup_failure` with ZERO jobs, no annotation the API will show you, and --
+# the dangerous part -- the pull_request trigger produces no run at all, so a
+# PR shows a green-looking check list with the entire CI suite simply missing.
+# Measured 2026-09-24 by bisection against the real API (rd vms-e18e, and the
+# standing item it filed): the SAME job passes at 511,986 bytes of ci.yml and
+# startup-fails at 512,030 -- a 44-byte difference in step-name text. Comments
+# are not counted. Until ci.yml is split, NEW CI COVERAGE MUST GO IN A NEW FILE.
+#
+# WHAT IT COVERS. tools/cluster-web-demo/ carries three ground-source tests --
+# the config authoring (test_mk_democonfig.py), the offline ODS-2 injector
+# (inject-ods2-config.test.sh) and the per-release bundle generator
+# (build-cluster-demo.test.sh) -- and NOTHING ran them. The cost of that was
+# paid on the public page: the demo shipped an OVMX/VAX Node B whose bundle
+# path could not have produced a bootable node at all (it re-injected a
+# disklabelled disk as if it were a bare ODS-2 volume, and emitted qcow2 to a
+# pcjs machine that reads raw bytes).
+#
+# TEETH. The suites carry their own negative controls -- a Node B whose bytes
+# were re-written, a qcow2 Node B, a Node B with no disklabel, and a bundle
+# missing boot/assets -- each of which must redden. No extra wrapper needed.
+#
+# CHEAP: no SIMH, no emulator, no release artifacts. qemu-img + cc + python3
+# against small fixtures the tests master themselves.
+name: cluster-web-demo
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/cluster-web-demo.yml'
+      - 'tools/cluster-web-demo/**'
+      - 'tests/lab-vax/mk_single_disk.py'
+      - 'src/vmsfs/**'
+      - 'tools/vmsfs_master.c'
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: Cluster Web-Demo Generator Self-Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install test dependencies
+        run: |
+          pip install --disable-pip-version-check pytest
+          sudo apt-get -o Acquire::Retries=5 update
+          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+              qemu-utils cpio
+
+      # The two shell suites SKIP(0) when qemu-img is absent, and a skipped test
+      # is a failing test. Assert the tool is really here so a green below means
+      # the ODS-2 codec path actually ran.
+      - name: Assert qemu-img is present
+        run: command -v qemu-img
+
+      - name: mk_democonfig.py byte-level self-tests
+        run: python3 -m pytest tools/cluster-web-demo/test_mk_democonfig.py -v
+
+      - name: inject-ods2-config.sh against a genuine ODS-2 fixture
+        run: sh tools/cluster-web-demo/test/inject-ods2-config.test.sh
+
+      - name: build-cluster-demo bundle generator and its negative controls
+        run: sh tools/cluster-web-demo/test/build-cluster-demo.test.sh

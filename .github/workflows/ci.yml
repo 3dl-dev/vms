@@ -850,16 +850,8 @@ jobs:
       # will bring its OWN vendored crypto/transport, not distro libssh.
       - name: Install build dependencies
         run: |
-          # Infra-only retry (vms-216): GitHub's apt mirrors flake
-          # transiently. This wraps ONLY the package-fetch/setup step -- there
-          # is no test or build-correctness command here, so a retry cannot
-          # mask a real failure. Acquire::Retries retries apt's own network
-          # fetches; the loop retries a whole failed `update` with backoff.
-          for i in 1 2 3 4 5; do
-            sudo apt-get -o Acquire::Retries=5 update -qq && break
-            echo "apt-get update failed (attempt $i/5); backing off" >&2; sleep $((i * 5))
-          done
-          sudo apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
             cmake gcc make libc6-dev libreadline-dev strace libcap2-bin \
             musl-tools ccache rsync
 
@@ -1359,7 +1351,7 @@ jobs:
             -v ${{ github.workspace }}/dist/release-a/ovmx-distrib.img:/boot/ovmx-distrib.img:ro \
             -v ${{ github.workspace }}/tests/qemu/test_distrib_boot.sh:/test.sh:ro \
             ubuntu:24.04 \
-            bash -c "apt-get -o Acquire::Retries=5 update -qq && apt-get -o Acquire::Retries=5 install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio >/dev/null 2>&1 && bash /test.sh"
+            bash -c "apt-get update -qq && apt-get install -y --no-install-recommends qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio >/dev/null 2>&1 && bash /test.sh"
 
   # -----------------------------------------------------------------------
   # Job 2c: install -> UPGRADE -> boot (vms-f05, epic vms-a84 RELEASE ENGINEERING)
@@ -3308,12 +3300,8 @@ jobs:
 
       - name: Install clang (NetBSD cross target)
         run: |
-          # Infra-only retry (vms-216) -- setup step, no test here.
-          for i in 1 2 3 4 5; do
-            sudo apt-get -o Acquire::Retries=5 update -qq && break
-            echo "apt-get update failed (attempt $i/5); backing off" >&2; sleep $((i * 5))
-          done
-          sudo apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends clang
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends clang
 
       # Cache the extracted NetBSD kernel sources, keyed on the pinned release
       # (netbsd_version.env carries NETBSD_SYSSRC_URL/_SHA512). No OVMX-source
@@ -4029,8 +4017,8 @@ jobs:
             -v "${{ github.workspace }}/tests/conformance/vms_programs:/tests/vms_programs:ro" \
             ubuntu:24.04 bash -c '
               set -e
-              apt-get -o Acquire::Retries=5 update -qq
-              apt-get -o Acquire::Retries=5 install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev
+              apt-get update -qq
+              apt-get install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev
               cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=/ -DBUILD_TOOLS=ON
               cmake --build build --parallel "$(nproc)"
               bash /src/tests/conformance/run_conformance.sh
@@ -4087,7 +4075,7 @@ jobs:
             -v "${{ github.workspace }}":/src -w /src \
             ubuntu:24.04 bash -c '
               set -e
-              { apt-get -o Acquire::Retries=5 update -qq && apt-get -o Acquire::Retries=5 install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev; } >&2
+              { apt-get update -qq && apt-get install -y --no-install-recommends cmake gcc make libc6-dev libreadline-dev; } >&2
               { cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_INSTALL_PREFIX=/ -DBUILD_TOOLS=ON; } >&2
               { cmake --build build --parallel "$(nproc)"; } >&2
               bash /src/tests/conformance/run_corpus.sh /src/tests/conformance/corpus_baseline.json

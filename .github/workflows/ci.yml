@@ -3300,8 +3300,12 @@ jobs:
 
       - name: Install clang (NetBSD cross target)
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends clang
+          # Infra-only retry (vms-216) -- setup step, no test here.
+          for i in 1 2 3 4 5; do
+            sudo apt-get -o Acquire::Retries=5 update -qq && break
+            echo "apt-get update failed (attempt $i/5); backing off" >&2; sleep $((i * 5))
+          done
+          sudo apt-get -o Acquire::Retries=5 install -y -qq --no-install-recommends clang
 
       # Cache the extracted NetBSD kernel sources, keyed on the pinned release
       # (netbsd_version.env carries NETBSD_SYSSRC_URL/_SHA512). No OVMX-source

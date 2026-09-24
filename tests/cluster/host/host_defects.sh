@@ -470,11 +470,9 @@ EOF
         require_fail) cat <<'EOF'
 EXACTLY ONE frame went back -- the answer the coordinator's whole admission gates on
 every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
-  body[8]: the response bit
   body[9]: the opcode, echoed
-  body[18]: the response marker, forced
-  body[17]: OUR OWN class, not the relayer's echo
-  body[20:24]: a fresh LE u32 copy of the request's epoch
+  body[20:24]: the epoch, LE u32
+body[20:24] is OUR epoch, not the coordinator's
 EOF
                       ;;
         esac;;

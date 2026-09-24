@@ -109,8 +109,15 @@ static uint32_t pe_listen_timeout(const struct pe_fsm *f)
  * a byte array lifted from somebody else's capture.
  * ========================================================================== */
 
-/* SS4(a) abs 22: observed constant 0x0001 on every discovery frame. */
-#define PE_CONNECT_FLAG 0x0001u
+/*
+ * abs 22 IS NOT A CONSTANT. It is the cluster GROUP NUMBER, LE16
+ * (vms_cluster_codec.h's four-oracle table, rd vms-b34) -- it read as a
+ * constant 0x0001 only because every capture in the corpus came from the lab
+ * cluster, whose group is 1. It is therefore NOT a revision marker and NOT a
+ * format constant: it comes from struct pe_identity, i.e. from the executive's
+ * loaded CLUSTER_AUTHORIZE record, like the multicast address it is the other
+ * encoding of.
+ */
 
 /* SS4(b) abs 94: the LE16 of the wire bytes 92 05 (the spec prints the word as
  * "0x9205"; the bytes are what the codec places). */
@@ -129,7 +136,7 @@ static uint32_t pe_listen_timeout(const struct pe_fsm *f)
  */
 static const struct pe_wire_rev pe_rev_default = {
 	(uint8_t)VMS_HELLO_REV_C05, 0u,
-	PE_CONNECT_FLAG, PE_TRAILER_9205, PE_TRAILER_2600
+	PE_TRAILER_9205, PE_TRAILER_2600
 };
 
 /* SS4(b) abs 102-111: the constant tail, byte-exact in every captured HELLO. */
@@ -217,7 +224,7 @@ static void pe_hello_common(struct pe_fsm *f, struct vms_hello_frame *h,
 
 	h->revision = d->rev;
 	h->hdr.sca_len_field = (uint16_t)(d->sca_content - 2u);
-	h->hdr.connect_flag = rv->connect_flag;
+	h->hdr.cluster_group = f->id.cluster_group;
 	pe_copy(h->hdr.eth_src, f->id.hw_mac, VMS_ETH_ADDR_LEN);
 	pe_copy(h->hdr.src_lavc, f->id.lavc, VMS_ETH_ADDR_LEN);
 	pe_copy(h->hw_mac, f->id.hw_mac, VMS_ETH_ADDR_LEN);
@@ -1161,7 +1168,6 @@ static void pe_rev_from_hello(struct pe_wire_rev *out,
 			      const struct vms_hello_frame *h)
 {
 	out->rev = h->revision;
-	out->connect_flag = h->hdr.connect_flag;
 	out->trailer_9205 = h->trailer_9205;
 	out->trailer_2600 = h->trailer_2600;
 	out->valid = 1u;
@@ -1217,6 +1223,24 @@ static int pe_frame_is_ours(const struct pe_fsm *f, const struct vms_sca_hdr *hd
 		return 1;
 	}
 	return 0;
+}
+
+/*
+ * IS THIS FRAME THIS CLUSTER'S? (rd vms-b34)
+ *
+ * abs 22 is LE16 of the sending node's CLUSTER_AUTHORIZE group number
+ * (vms_cluster_codec.h's oracle table), so a frame whose number is not this
+ * node's belongs to a different cluster sharing the LAN. A real member
+ * ignores it; so does this port -- and counts it, because a rising count is a
+ * misconfiguration an operator can act on, not a mystery.
+ *
+ * NOT A SECURITY CLAIM. The group number is not a credential; refusing a
+ * mismatch is the ordinary addressing rule, the same one `pe_frame_is_ours`
+ * applies to the LAVC address.
+ */
+static int pe_frame_group_is_ours(const struct pe_fsm *f, uint16_t group)
+{
+	return group == f->id.cluster_group;
 }
 
 /*
@@ -1308,6 +1332,10 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 	}
 	if (!pe_frame_is_ours(f, rx.hdr, &rx.directed)) {
 		f->rx_not_for_us++;
+		return PE_CH_ACT_NONE;
+	}
+	if (!pe_frame_group_is_ours(f, rx.hdr->cluster_group)) {
+		f->rx_wrong_group++;
 		return PE_CH_ACT_NONE;
 	}
 
@@ -2165,6 +2193,9 @@ static int vc_fill_addr(const struct pe_fsm *f, const struct pe_channel *ch,
 	pe_copy(a->src_mac, f->id.hw_mac, VMS_ETH_ADDR_LEN);
 	pe_copy(a->dst_logical, ch->remote_lavc, VMS_ETH_ADDR_LEN);
 	pe_copy(a->src_logical, f->id.lavc, VMS_ETH_ADDR_LEN);
+	/* abs 22: THIS node's own group, from the record the port opened with --
+	 * never the peer's, never a constant (rd vms-b34). */
+	a->cluster_group = f->id.cluster_group;
 	return 0;
 }
 
@@ -3401,6 +3432,11 @@ static void pe_vc_rx_frame(struct pe_fsm *f, const uint8_t *frame, uint32_t len,
 	}
 	if (vms_sca_hdr_parse(frame, len, &hdr) != VMS_CODEC_OK) {
 		f->vc_rx_parse_failed++;
+		return;
+	}
+	/* Another cluster's circuit traffic on a shared LAN (rd vms-b34). */
+	if (!pe_frame_group_is_ours(f, hdr.cluster_group)) {
+		f->rx_wrong_group++;
 		return;
 	}
 	ch = pe_fsm_channel_by_mac(f, hdr.eth_src);

@@ -200,6 +200,36 @@ never carries out of the 16-bit field. Pinned in
 because they inverted the defective rule; the lab cluster is group **1**, as
 VMS itself prints above.
 
+**The group is ALSO on every frame, at abs 22..23, as a plain `LE16(group)`
+(rd `vms-b34`).** The field this document called "connect flag, constant
+`0x0001`" is the cluster group number. It read as a constant for as long as
+every capture in the corpus came from ONE cluster — the lab's, which is group
+**1** — and it survived `vms-147` because that item corrected the multicast
+address and nobody asked what else carried the number.
+
+| Cluster group | abs 22..23 on the wire | Oracle |
+|---|---|---|
+| 1 | `01 00` | OpenVMS VAX V7.3, lab VAX1 — the cluster VMS itself prints as group 1 (above) |
+| 257 | `01 01` | OpenVMS VAX **V7.3**, demo Node C `VAXC`, isolated bridge in `vaxlab-4`, `CLUSTER_CONFIG_LAN` dialogue in the same capture answers `257` |
+| 257 | `01 01` | OpenVMS VAX **V5.5-2H4**, demo Node C in-browser — a second VMS version, same number: abs 22 is **not** a revision marker |
+| 2026 | `ea 07` | OpenVMS **Alpha** V8.4, lab-alpha — a second architecture, and the row that separates every candidate the two-byte groups cannot |
+
+So the group appears in two encodings, and they are **not** the same
+arithmetic: the multicast address biases by `0x100`, abs 22 does not. A fixed
+`0x0001` is refuted by groups 257 and 2026; `LE16(group + 0x100)` is refuted by
+all four rows; `BE16(group)` is refuted by 2026. The `0x03e8` §4(m) once called
+an unaccepted "connect class" variant is **1000** — another cluster's group,
+correctly ignored by a member of group 1.
+
+It is load-bearing on the wire: a real OpenVMS VAX V7.3 member in group 257
+completed the `b2`/`b3`/`b4` channel verify with an OVMX node, sent it 96
+`0x41` VC STARTs, and **discarded all 803 of OVMX's STACKs** because they
+claimed group 1 — so the circuit never opened, nothing was promoted to a CSB,
+and CNXMAN said nothing after "waiting to form or join".
+`tests/lab/captures/vms-b34-group-on-wire-20260924/`. Pinned in
+`tests/cluster/host/test_codec_hello.c` and
+`tests/cluster/host/test_pe_group_on_wire.c`.
+
 SCS connections (SDA `SHOW CONNECTIONS` CDTs):
 
 | Local SYSAP | Remote | Local Con.ID | Remote Con.ID | Credit (Send/Recv) |
@@ -229,7 +259,7 @@ multicast and directed) and `satellite-niscs-boot-solicit.pcap` frame 1100
 |---|---|---|---|
 | 14 | 2 | SCA length field | GROUNDED (§2) |
 | 16 | 6 | Dest/group logical LAVC addr | GROUNDED (matches multicast group or peer's logical MAC) |
-| 22 | 2 | Connect flag, constant `0x0001` | observed constant |
+| 22 | 2 | **Cluster group number, `LE16(group)`** (rd `vms-b34`) | **GROUNDED** on four real-VMS observations, §3 |
 | 24 | 6 | Src logical LAVC addr (sender's own) | GROUNDED |
 | 30 | 2 | per-frame word: `a000` on multicast HELLO / `b600` on VAX3 SOLICIT / **`b200`,`b300`,`b400` on directed HELLO = the NISCA channel-verify request/response counter** | **GROUNDED (directed values) in the offset-30 subsection below (`vms-d94`)**; the multicast `a0`/SOLICIT `b6` values remain inferred-constant |
 | 32 | 4 | constant prefix `08 00 00 80` | unknown/inferred |
@@ -511,8 +541,11 @@ target's cluster-LOGICAL address (not the hardware MAC at abs 0), abs 30 is the
 verify counter, abs 68–71 carries the cluster join nonce **non-zero and in the
 clear** (`77 11 7a 7d`) where the multicast frame carries zero, and abs 92 is
 the incarnation the sender attributes to the target (1) where the multicast
-frame carries 0. The revision markers at abs 22/94/126 are **identical on both**
-— they are a property of the revision, not of the frame's direction. Specimen:
+frame carries 0. The revision markers at abs 94/126 are **identical on both**
+— they are a property of the revision, not of the frame's direction. (This
+paragraph once counted abs 22 as a third revision marker; it is the cluster
+GROUP number — see §3, rd `vms-b34` — and it is identical on both frames for
+the ordinary reason that both came from the same cluster.) Specimen:
 `tests/cluster/host/fixtures/hello-c3-vaxc-directed-b2.spec`.
 
 **The SCS layer has its OWN second revision — NOT decoded (`vms-0f8`).** In that
@@ -607,7 +640,7 @@ DLM and MSCP sections below.
 |---|---|---|---|
 | 14 | 2 | SCA length field (`0x00BC` = 188 → 190 total) | GROUNDED |
 | 16 | 6 | Destination logical LAVC addr | GROUNDED |
-| 22 | 2 | Connect flag | constant `0x0001` |
+| 22 | 2 | **Cluster group number, `LE16(group)`** (rd `vms-b34`) | **GROUNDED**, §3 |
 | 24 | 6 | Source logical LAVC addr (sender's own) | GROUNDED |
 | 30 | 2 | SCS sequence/type word (varies per-message, e.g. `4b13`) | unknown/inferred |
 | 32 | 32 | SCS sequence-number region: two 16-bit counters, each repeated up to 3×, zero-padded to 32 bits; a constant `0x0012` (=18 decimal) sits at offset 38–39 | the `18` is **GROUNDED**: byte-exact match to SYSGEN `NISCS_LAN_OVRHD 18`. The repeated 16-bit values plausibly correspond to the CSB's "Next seq. number" / "Last seq num rcvd" / "Last ack. seq num" triad documented in SDA `SHOW CLUSTER`, but the specific mapping of which repeat is which CSB field is **inferred**, not independently confirmed. |
@@ -2667,7 +2700,7 @@ HELLO with a zero-pad tail**. Verified byte-exact:
 |---|---|---|---|
 | 0 | 2 | SCA length field (LE u16 + 2 = total) | GROUNDED (§2): `0x05da`→1500, `0x042b`→1069, `0x0353`→853, `0x02e7`→745 |
 | 2 | 6 | dest logical LAVC addr (the joiner) | GROUNDED (§4a) |
-| 8 | 2 | connect flag `0x0001` | observed constant |
+| 8 | 2 | **cluster group number, `LE16(group)`** (abs 22, rd `vms-b34`) | **GROUNDED**, §3 |
 | 10 | 6 | src logical LAVC addr (VAX1 `aa:00:04:00:01:04`) | GROUNDED (§4a) |
 | **16** | **1** | **per-frame word `0xb3`** (§4a offset-30) | GROUNDED value: VAX1's directed-HELLO per-frame word (the `b2/b3/b4` channel-handshake stepping, §4g phase 1). **This is `vms-224`'s "op-0xb3": it is a directed-HELLO per-frame word, NOT a distinct block-transfer opcode** — a genuine 120-byte directed HELLO carries the same `0xb3` (a `0xb2`-step directed HELLO differs from the padded frame in this one byte only). The padded frame's distinguishing feature is its **size**, not this byte. |
 | 17 | 1 | `0x00` | observed (note: **not** the `0x13` SCS-envelope format constant — this is a HELLO-family frame, not an `0x4b` sequenced message) |
@@ -3308,12 +3341,16 @@ answered with a `0x4b` echo/response. Sending a connect as `0x4b` when the peer 
 an establishing connection, or a post-establishment lookup as `0x5b`, causes the member
 to **echo (op 1) but never accept (op 2)** — the signature failure mode.
 
-#### Connect-class at abs 22 (`sca[8:10]`)
+#### Cluster group at abs 22 (`sca[8:10]`) — rd `vms-b34`
 
-Connection-control frames carry **`0x0001`** here. (`0x03e8` appears in some
-fresh-formation captures and is *not* accepted by an established member — a member that
-receives it echoes and stalls.) The same field carries the node-incarnation echo on
-`0x41` START frames (§4i); it is phase-dependent, not a single global constant.
+**CORRECTED.** This subsection previously read "connection-control frames carry
+`0x0001` here", with `0x03e8` an unaccepted variant. There is no connect class
+at abs 22: it is `LE16(cluster group)` on **every** SCA frame class (§3's
+four-oracle table). `0x0001` is group 1 — the lab cluster every capture that
+supported the old reading came from — and `0x03e8` is group **1000**, i.e.
+another cluster's frames, which an established member of group 1 correctly
+declines to act on. The node-incarnation echo on `0x41` START frames is at
+abs 36 (§4i), not here.
 
 #### Ordering invariant
 

@@ -159,6 +159,24 @@ static void test_glue_bindings(void)
 		  "and saying plainly that group 0 is a DEFAULT, not a choice "
 		  "-- the silence in its place cost a 195 s lab join window");
 
+	/*
+	 * THE OTHER ENCODING OF THE SAME NUMBER (rd vms-b34). The group is on
+	 * the wire twice: as the multicast ADDRESS this node joins, and as the
+	 * LE16 at abs 22 of every SCA frame it emits. They were derived from
+	 * two different places -- one from the record, one from a constant --
+	 * and a real group-257 OpenVMS V7.3 member consequently discarded 273
+	 * OVMX VC STACKs while its channel stayed verified. Both must come
+	 * from the ONE record, in the ONE function, so they cannot drift apart
+	 * again.
+	 */
+	check_has("id->cluster_group = cl->params.auth_group;",
+		  "pe_build_identity takes abs 22 from the SAME "
+		  "CLUSTER_AUTHORIZE record the multicast address came from");
+	check_has("id->cluster_group_valid = (uint8_t)(group_valid ? 1u : 0u);",
+		  "and carries the same 'was it configured' answer with it");
+	check_has("pe_build_identity(cl, mcast, group_valid, &id);",
+		  "and the one caller hands it both, at port start");
+
 	/* The same two facts reach the diagnostics an operator reads. */
 	check_has("out->cluster_group = cl->pe->group;",
 		  "vms_pe_snapshot reports the group from the port object");

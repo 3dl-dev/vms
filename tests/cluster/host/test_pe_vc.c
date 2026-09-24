@@ -189,6 +189,10 @@ static void env_init(struct vc_env *e, int with_identity, int with_upper)
 	id.scsnode_len = 6;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 	id.max_sca_len = 1500;
 	if (with_identity) {
 		memcpy(id.hw_type, "X86 ", 4);
@@ -1126,7 +1130,7 @@ static uint32_t our_seqmsg_to(struct vc_env *e, vms_scs_sysid_t dst,
 	memcpy(h.dst_lavc, a.dst_logical, 6);
 	memcpy(h.src_lavc, a.src_logical, 6);
 	h.sca_len_field = (uint16_t)(FAKE_VC_MSG_SCA - 2u);
-	h.connect_flag = 0x0001u;
+	h.cluster_group = 0x0001u;
 	h.word30 = (uint16_t)(VMS_SCS_MT_MSG |
 			      ((uint16_t)VMS_SCS_FORMAT_V13 << 8));
 	if (vms_sca_hdr_build(&h, out, cap, &written) != VMS_CODEC_OK)

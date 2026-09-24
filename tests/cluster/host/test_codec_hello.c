@@ -231,7 +231,7 @@ static void test_c3_directed(void)
 	/* The revision markers are the SAME on both frames from the same node --
 	 * they are a property of the revision, not of the frame's direction. */
 	ct_check(h.revision == mh.revision &&
-		 h.hdr.connect_flag == mh.hdr.connect_flag &&
+		 h.hdr.cluster_group == mh.hdr.cluster_group &&
 		 h.trailer_9205 == mh.trailer_9205 &&
 		 h.trailer_2600 == mh.trailer_2600,
 		 "  directed and multicast carry IDENTICAL revision markers");
@@ -332,9 +332,17 @@ static void test_c3_revision(void)
 	ct_check_eq_u32(h.trailer_0064, 0, "  abs 130 likewise");
 	ct_check_eq_u32(h.trailer_0000, 0, "  abs 132 likewise");
 
-	/* 5. the marker words that DIFFER are carried as data, not baked in */
-	ct_check_eq_u32(h.hdr.connect_flag, 0x0101,
-			"  abs 22 == 0x0101 (the 0x05 revision's is 0x0001)");
+	/* 5. the marker words that DIFFER are carried as data, not baked in.
+	 *
+	 *    abs 22 IS NOT ONE OF THEM (rd vms-b34). vms-0f8 counted it as a
+	 *    third revision marker because this V5.5 specimen reads 0x0101
+	 *    where the V7.3 specimen reads 0x0001 -- but those two nodes are in
+	 *    DIFFERENT CLUSTERS (257 and 1), and abs 22 is LE16(group). It is
+	 *    asserted here as what it is: this specimen's cluster's number. */
+	ct_check_eq_u32(h.hdr.cluster_group, 257,
+			"  abs 22 == 257, Node C's CLUSTER GROUP -- not a "
+			"revision marker (the V7.3 specimen's 0x0001 is "
+			"group 1, the lab's)");
 	ct_check_eq_u32(h.trailer_9205, 0x0590,
 			"  abs 94 == 0x0590 (the 0x05 revision's is 0x0592)");
 	ct_check_eq_u32(h.trailer_2600, 0x0021,
@@ -460,7 +468,7 @@ static void fill_test_hello(struct vms_hello_frame *h)
 	memcpy(h->hdr.eth_src, test_hw_mac, 6);
 	h->hdr.sca_len_field = 0x0076; /* 120-byte content, GROUNDED sec 2 */
 	memcpy(h->hdr.dst_lavc, mcast, 6);
-	h->hdr.connect_flag = 0x0001;
+	h->hdr.cluster_group = 0x0001;
 	memcpy(h->hdr.src_lavc, src_logical, 6);
 	h->hdr.word30 = 0x00a0; /* multicast per-frame word */
 
@@ -766,6 +774,113 @@ static void test_hello_mcast_group_mapping(void)
 		 "by the same arithmetic -- no second formula");
 }
 
+/*
+ * rd vms-b34: abs 22..23 is LE16(cluster group), not a constant 0x0001.
+ *
+ * THE SAME MISTAKE AS vms-147, IN THE OTHER ENCODING. The multicast address
+ * was wrong for every group but 1; this word was wrong for every group but 1,
+ * for the same reason -- every capture in the corpus came from ONE cluster,
+ * whose group number is 1 -- and it stayed wrong after vms-147 because nobody
+ * asked what else on the frame carried the group. A real OpenVMS VAX V7.3
+ * member in group 257 answered OVMX's channel-verify handshake and then
+ * discarded all 273 of its VC STACKs, which carried 0x0001; the circuit never
+ * opened, nothing was ever promoted to a CSB, and CNXMAN went silent after
+ * "waiting to form or join" (tests/lab/captures/vms-b34-group-on-wire-20260924).
+ *
+ * FOUR ORACLES, three VMS versions, two architectures. This test asserts the
+ * derivation against all four and requires each wrong candidate to FAIL at
+ * least one, so "it matches the oracle" can never again be satisfied by the
+ * single data point that made the mislabel possible.
+ */
+static void test_abs22_is_the_cluster_group(void)
+{
+	/* (group, abs22 bytes as they appear on the wire, provenance) */
+	static const struct {
+		uint16_t    group;
+		uint8_t     lo, hi;
+		const char *why;
+	} oracle[4] = {
+		{ 1u,    0x01u, 0x00u,
+		  "group 1, OpenVMS VAX V7.3 (lab VAX1) -- VMS prints the "
+		  "group itself: SYSMAN CONFIGURATION SHOW "
+		  "CLUSTER_AUTHORIZATION -> 'Cluster group number: 1'" },
+		{ 257u,  0x01u, 0x01u,
+		  "group 257, OpenVMS VAX V7.3 (demo Node C VAXC) -- observed "
+		  "on the wire, isolated bridge, CLUSTER_CONFIG_LAN dialogue "
+		  "in the capture says 257" },
+		{ 257u,  0x01u, 0x01u,
+		  "group 257, OpenVMS VAX V5.5-2H4 (demo Node C) -- observed "
+		  "in-browser: a SECOND VMS version, same number, so abs 22 "
+		  "is not a revision marker" },
+		{ 2026u, 0xeau, 0x07u,
+		  "group 2026, OpenVMS Alpha V8.4 (lab-alpha) -- a second "
+		  "ARCHITECTURE, and the row that refutes every candidate "
+		  "the two-byte groups cannot separate" },
+	};
+	int i, const1_hits = 0, mcast_rule_hits = 0, be_hits = 0;
+
+	printf("-- abs 22..23 == LE16(cluster group) (vms-b34)\n");
+
+	for (i = 0; i < 4; i++) {
+		uint16_t want = (uint16_t)(oracle[i].lo |
+					   ((uint16_t)oracle[i].hi << 8));
+
+		ct_check_eq_u32(oracle[i].group, want, oracle[i].why);
+
+		/* Refutation candidates, scored against the same oracle. */
+		const1_hits += (0x0001u == want);
+		mcast_rule_hits += ((uint16_t)(oracle[i].group + 0x0100u) == want);
+		be_hits += ((uint16_t)((oracle[i].group << 8) |
+				       (oracle[i].group >> 8)) == want);
+	}
+
+	ct_check(const1_hits < 4,
+		 "a fixed 0x0001 is REFUTED (it is right for group 1 alone -- "
+		 "which is exactly why it survived as 'the observed constant "
+		 "connect flag')");
+	ct_check(mcast_rule_hits < 4,
+		 "LE16(group + 0x100) -- the MULTICAST ADDRESS rule (vms-147) "
+		 "-- is REFUTED here: the two encodings of the group are NOT "
+		 "the same arithmetic");
+	ct_check(be_hits < 4,
+		 "BE16(group) is REFUTED by group 2026");
+}
+
+/*
+ * The codec must PLACE that number at abs 22 and read it back, for both
+ * revisions -- so a group is a property a caller supplies, never a constant
+ * this TU remembers.
+ */
+static void test_abs22_round_trips_through_the_codec(void)
+{
+	static const uint16_t groups[3] = { 1u, 257u, 2026u };
+	uint8_t frame[VMS_HELLO_FRAME_LEN];
+	struct vms_hello_frame h, back;
+	struct vms_frame_info fi;
+	uint32_t written = 0;
+	int i;
+
+	printf("-- the group a caller supplies is the group on the wire\n");
+
+	for (i = 0; i < 3; i++) {
+		fill_test_hello(&h);
+		h.hdr.cluster_group = groups[i];
+
+		ct_check(vms_hello_build(&h, frame, sizeof(frame),
+					 &written) == VMS_CODEC_OK,
+			 "  build accepts this group");
+		ct_check(frame[22] == (uint8_t)(groups[i] & 0xffu) &&
+			 frame[23] == (uint8_t)(groups[i] >> 8),
+			 "  abs 22..23 carry it, LE, byte for byte");
+		ct_check(vms_frame_classify(frame, written, &fi) == VMS_CODEC_OK &&
+			 vms_hello_parse(frame, written, &fi,
+					 &back) == VMS_CODEC_OK,
+			 "  and it re-parses");
+		ct_check_eq_u32(back.hdr.cluster_group, groups[i],
+				"  to the same number");
+	}
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -788,6 +903,8 @@ int main(void)
 	test_lastgasp_is_a_plain_hello_diff();
 	test_lavc_address_helpers();
 	test_hello_mcast_group_mapping();
+	test_abs22_is_the_cluster_group();
+	test_abs22_round_trips_through_the_codec();
 
 	return ct_summary("test_codec_hello");
 }

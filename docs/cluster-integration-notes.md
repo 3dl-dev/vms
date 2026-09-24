@@ -175,6 +175,33 @@ firing of the partial threshold is counted in
 `scs_fsm.credit_msg_partial_threshold`. A lab capture isolating that field
 would close it.
 
+### E88 — ✅ FIXED (rd vms-b34). ⚠⚠ THE SAME GROUP NUMBER IS ON THE FRAME TOO, AND abs 22 WAS A CONSTANT
+
+**THE DEFECT.** abs 22..23 of every SCA frame is `LE16(cluster group)`. OVMX wrote the literal `0x0001` there, from three separate constants — `PE_CONNECT_FLAG` (HELLO), `VMS_SCS_VC_CONNECT_FLAG` (VC START/STACK/ACK, sequenced envelopes, credit returns) and `VMS_SCSCTRL_CONNECT_FLAG` (SCS control verbs) — all labelled "the observed constant connect flag".
+
+**WHY IT LOOKED LIKE A CONSTANT, AND WHY E87 DID NOT FIX IT.** Every capture in the corpus came from ONE cluster, the lab's, and **the lab cluster is group 1**, so `0x0001` and `LE16(group)` are indistinguishable in it. E87 corrected the group → **multicast address** derivation and stopped there: nobody asked what else on the frame carried the group. The two encodings are not even the same arithmetic — the address biases by `0x100`, abs 22 does not — so fixing one could not fix the other.
+
+**MEASURED** (`tests/lab/captures/vms-b34-group-on-wire-20260924/`, an isolated bridge inside `vaxlab-4`, the lab's live group-1 cluster untouched). A real OpenVMS VAX V7.3 node `VAXC` (SCSSYSTEMID 1989) founding a one-member VMScluster in **group 257**, beside a booted OVMX node `OVMXA` (1987) configured for group 257, CAP_NET_RAW denied:
+
+```
+1712  VAXC  -> ab:00:04:01:01:02   multicast HELLO    abs 22 = 01 01
+ 240  OVMXA -> ab:00:04:01:01:02   multicast HELLO    abs 22 = 01 01
+ 403  VAXC <-> OVMXA               b3/b4 chan verify  abs 22 = 01 01
+  96  VAXC  -> OVMXA               0x41 VC START      abs 22 = 01 01
+ 803  OVMXA -> VAXC                0x41 VC STACK      abs 22 = 00 01   <-- WRONG
+   0  (either direction)           0x48 VC ACK
+```
+
+`%PEA0, channel verified` and then nothing. `SHOW CLUSTER/CIRCUITS` on OVMXA read `State 2` (STACK SENT) for the whole window: VAXC discarded every STACK as another cluster's frame and re-sent its START. No `vc_up`, so `cnxman_discover_peers()` had nothing to promote, so the join FSM had no target and CNXMAN correctly said nothing more. Identical symptom in-browser, 20 minutes, 7,305 error-free frames (rd vms-2570 run6).
+
+**NOT A REGRESSION.** The lab joins in E86/PR #1288 were real, and they worked because that cluster is group 1 — the one number for which the constant is right. This configuration had never worked.
+
+**THE FIX.** abs 22 is threaded from the executive's loaded CLUSTER_AUTHORIZE record, through `struct pe_identity::cluster_group` (filled in `pe_build_identity()` beside the multicast address, from the same `cl->params.auth_group`, so the two encodings cannot drift apart again) and `struct vms_scs_addr::cluster_group`. Nothing is echoed from a peer. A node with no record emits the 0 it really has — the honest value, already disclosed on OPA0: and in `SHOW CLUSTER/LOCAL_PORTS` (E86). The receive side refuses and counts (`pe_fsm.rx_wrong_group`) a frame carrying another cluster's number, on both the discovery and the SCS-envelope paths.
+
+**ALSO CORRECTS vms-0f8.** That item recorded "three differing marker words at abs 22 / 94 / 126" between the V7.3 and V5.5-2H4 HELLO revisions. abs 22 is not one: the two specimens came from clusters 1 and 257. `struct pe_wire_rev` no longer carries it, and the port no longer echoes a peer's group back at it.
+
+**ORACLES** (four, three VMS versions, two architectures) and the refutations are in `docs/cluster-protocol-spec.md` §3, pinned in `tests/cluster/host/test_codec_hello.c`; the behaviour is pinned in `tests/cluster/host/test_pe_group_on_wire.c`.
+
 ### E87 — ✅ FIXED (rd vms-147). ⚠⚠ THE GROUP → MULTICAST DERIVATION WAS WRONG, AND A COMPENSATING MISLABEL HID IT FOR MONTHS
 
 **THE DEFECT.** `vms_cluster_hello_mcast_build()` built the LAVC HELLO multicast address as `AB-00-04-01-<LE16(group)>`. Real VMS builds `AB-00-04-01-<LE16(group + 0x100)>`. The two agree for **exactly one** group number — 1 — and differ for every other, so an OVMX node configured with its cluster's real group transmitted to, *and enabled in its NIC's multicast filter*, a **different cluster's address**. Both directions, one derivation: `pe_port_start()` uses the one built value for the port identity the FSM stamps on every HELLO **and** for `exec_lan_mc_add()`.

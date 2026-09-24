@@ -17,7 +17,7 @@ ARG TARGET=alpha-dec-vms
 ARG PREFIX=/opt/cross-alpha-vms
 ENV BINUTILS_VER=${BINUTILS_VER} GCC_VER=${GCC_VER} TARGET=${TARGET} PREFIX=${PREFIX}
 
-RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -qq && DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
       build-essential libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
       flex bison texinfo gawk zlib1g-dev file wget xz-utils ca-certificates \
     && rm -rf /var/lib/apt/lists/*

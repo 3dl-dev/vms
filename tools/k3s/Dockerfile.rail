@@ -32,10 +32,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 # distro/Dockerfile.bootable` then `docker run -v $REPO_ROOT/...` -- resolve
 # their bind mounts against the same filesystem the repo is cloned into. A
 # separate dind sidecar would resolve those mounts on the wrong host.
-RUN apt-get update && \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && \
     ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
-    apt-get install -y --no-install-recommends \
+    apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         make gcc g++ libc6-dev kmod \
         linux-headers-generic \
         linux-image-virtual \

@@ -54,7 +54,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Build deps for binutils+gcc, plus cmake/make/file so libvmssys can be built in
 # this same image. libgmp/mpfr/mpc-dev satisfy gcc's math libs (no in-tree build).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         build-essential \
         wget ca-certificates \
         xz-utils \

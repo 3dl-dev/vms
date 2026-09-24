@@ -31,7 +31,7 @@ ARG SIMH_REF=2e0d51e9e97b2c3a28c55261108550d1f533916b
 
 FROM ubuntu:24.04 AS builder
 ARG SIMH_REF
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         build-essential git ca-certificates \
         libpcap-dev libpcre3-dev libedit-dev zlib1g-dev pkg-config \
     && rm -rf /var/lib/apt/lists/*
@@ -48,7 +48,7 @@ RUN make vax -j"$(nproc)" \
  && echo "open-simh ${SIMH_REF} ($(uname -m))" > /out/simh-version.txt
 
 FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         python3 iproute2 bridge-utils iputils-ping tcpdump libpcap0.8 \
         libpcre3 libedit2 zlib1g ca-certificates \
         libcap2-bin \
@@ -74,7 +74,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # base ubuntu:24.04 digest is the reproducibility anchor); the exact installed
 # version is recorded to /etc/qemu-version.txt for provenance, mirroring
 # /etc/simh-version.txt.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         qemu-system-x86 \
     && rm -rf /var/lib/apt/lists/* \
     && qemu-system-x86_64 --version | head -1 > /etc/qemu-version.txt \

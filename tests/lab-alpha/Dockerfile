@@ -27,7 +27,7 @@ FROM ubuntu:24.04
 # Installing it HERE is correct and is not a violation of "never install on the
 # host" -- that rule is about workshop, and containerising the dependency is
 # exactly what it asks for. v1.2.0 does not need it.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         python3 ca-certificates curl iproute2 tcpdump \
         libpcap0.8 libx11-6 libsdl1.2debian \
     && rm -rf /var/lib/apt/lists/*

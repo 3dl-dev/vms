@@ -29,7 +29,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # genisoimage      : anita builds the install-sets ISO with mkisofs/genisoimage
 # curl/ca-certs    : anita downloads the pinned release from cdn.netbsd.org
 # gzip, cpio       : anita unpacks release media
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         qemu-system-x86 \
         qemu-utils \
         python3 \

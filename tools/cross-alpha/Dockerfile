@@ -2,7 +2,7 @@
 # Rule 9 / containerize-all-deps: BUILD/TEST tooling, never a runtime.
 # Feasibility probe for OVMX-on-Alpha (rd vms-054).
 FROM debian:trixie
-RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -qq && DEBIAN_FRONTEND=noninteractive apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
       gcc-alpha-linux-gnu binutils-alpha-linux-gnu libc6-dev-alpha-cross \
       qemu-user qemu-system-misc qemu-utils \
       build-essential cmake make file ca-certificates \

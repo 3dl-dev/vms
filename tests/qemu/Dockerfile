@@ -69,10 +69,10 @@ ARG NEGATIVE_CONTROL=0
 # not free at the mirror throughputs actually observed: on run 30927522942 the
 # two index fetches cost 3min39s and 1min8s (146 kB/s and 472 kB/s) on top of
 # the payload. One `apt-get update`, one index fetch. Same packages installed.
-RUN apt-get update && \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && \
     ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "arm64" ]; then QEMU_PKG=qemu-system-arm; else QEMU_PKG=qemu-system-x86; fi && \
-    apt-get install -y --no-install-recommends \
+    apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     make gcc libc6-dev kmod \
     linux-headers-generic \
     linux-image-virtual \

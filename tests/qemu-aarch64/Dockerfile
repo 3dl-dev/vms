@@ -22,7 +22,7 @@ FROM --platform=linux/amd64 debian:trixie
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update -qq && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -qq && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         qemu-system-arm \
         gcc gcc-aarch64-linux-gnu \
         binutils binutils-aarch64-linux-gnu \

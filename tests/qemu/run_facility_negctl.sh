@@ -445,13 +445,28 @@ echo ""
 # nothing.
 # ---------------------------------------------------------------------------
 echo "--- building the harness image (once) ---"
-if ! "$ENGINE" build -f "$REPO_ROOT/tests/qemu/Dockerfile" -t "$BASE_TAG" "$REPO_ROOT" \
+# REUSE, DON'T REBUILD (vms-216): in CI, kernel-executive-facility-negative-
+# controls-shard runs this script from 22 separate matrix legs, and every leg
+# used to `docker build` this image from scratch -- 22 independent live
+# apt-get fetches per PR run, so one transient mirror blip reddens many legs
+# at once (measured on PR #1295 run 36019768986: shards 2/3/5/7/17/18/19 all
+# failed at the SAME apt-get install with "Unable to fetch some archives").
+# The caller (ci.yml) now pre-builds $BASE_TAG once with docker/build-push-
+# action's GHA layer cache, shared across all 22 shards -- so only the first
+# cold shard in a batch pays a real apt-get; everyone else pulls cached
+# layers. If $BASE_TAG is already present (the CI pre-build step, or a prior
+# local run), skip the rebuild entirely and use it as-is. A caller that never
+# pre-built it (a bare local run) still gets a full build here, unchanged.
+if "$ENGINE" image inspect "$BASE_TAG" >/dev/null 2>&1; then
+    echo "  $BASE_TAG already present -- reusing it, not rebuilding"
+elif ! "$ENGINE" build -f "$REPO_ROOT/tests/qemu/Dockerfile" -t "$BASE_TAG" "$REPO_ROOT" \
         >"$RUNLOG" 2>&1; then
     echo "FATAL: the harness image does not build -- no verdict is possible."
     tail -40 "$RUNLOG" | sed 's/^/  | /'
     exit 2
+else
+    echo "  built $BASE_TAG"
 fi
-echo "  built $BASE_TAG"
 echo ""
 
 echo "--- positive control: pristine image, every suite green ---"

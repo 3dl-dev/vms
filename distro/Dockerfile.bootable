@@ -168,7 +168,7 @@ ARG KERNEL_SHA256=f143aaade8877ba5616e788b4482576db28481bcf557ef537f4fcc3938fc31
 ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     gcc binutils make bc bison flex libssl-dev libelf-dev openssl \
     xz-utils curl ca-certificates kmod cpio \
     && rm -rf /var/lib/apt/lists/*
@@ -411,7 +411,7 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 # module build -- without it the vms.ko compile dies with
 # "libelf.so.1: cannot open shared object file". (The stock-kernel path used to
 # get libelf transitively via linux-headers-generic, now dropped.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     cmake gcc make musl-tools linux-libc-dev \
     kmod cpio binutils libelf1 \
     && rm -rf /var/lib/apt/lists/*
@@ -1261,7 +1261,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # kmod: provides `modinfo`, which tests/qemu/test_intree_modules.sh (vms-934)
 # runs on the shipped vms.ko to prove it is stamped intree=Y. Test
 # tooling only (CLAUDE.md Rule 9 distinction), like `expect` above.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio expect kmod \
     && rm -rf /var/lib/apt/lists/*
 

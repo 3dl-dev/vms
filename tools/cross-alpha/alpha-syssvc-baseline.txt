@@ -41,6 +41,7 @@ test_syssvc_mmk_build        # B: needs MMK.EXE/TCC.EXE self-host (does not cros
 #  is no longer built for any arch, so it is removed from this baseline.)
 test_syssvc_spawn_pipeline   # B: PIPESTAGE.EXE (tests/qemu/pipe_stage.c) not cross-staged for Alpha (pass=0, suite cannot start); $CREPRC/SPAWN/$STATUS facility PROVEN on Alpha same run by spawn_users 13/0 — rd vms-41f
 test_syssvc_tcpip_daytime    # B: shipped TCPIP$DAYTIME.EXE (tools/vms_tcpip_daytime.c) not cross-staged for Alpha (image-missing ENOENT, not a facility defect); accept->materialize-fd->fork/exec launch path PROVEN on Alpha same run by tcpip_inetd 7/7 — rd vms-41f
+test_syssvc_mmk_drive        # B: could not stage MMK's --use'd shareable graph onto VDA300:[SYS0.SYSCOMMON.SYSLIB] over the ACP (pass=0, suite cannot start) — the OVMX-native MMK.EXE exec-drive arc this suite exercises is still being landed (rd vms-c09f/#1241); this suite's own FAIL text cites that item directly. Not an Alpha-specific gap: mmk_build's own build-time TCC.EXE dependency above is Alpha-specific, this one is the shareable-graph staging step vms-c09f tracks for every arch. Remove once vms-c09f lands.
 #
 # ---- (C) harness/emulator environment — not an LP64 sys$ bug -------------------
 # getdvi/showdev: fail ONLY on ETH0: — the qemu-system-alpha boot is `-nic none`

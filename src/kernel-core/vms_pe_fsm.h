@@ -860,6 +860,23 @@ struct pe_identity {
 	uint8_t  mcast_valid;
 
 	/*
+	 * THE SAME NUMBER, THE OTHER ENCODING (rd vms-b34). `mcast` carries the
+	 * group as AB-00-04-01-<LE16(group + 0x100)>; abs 22 of every SCA frame
+	 * carries it as a plain LE16 -- see vms_cluster_codec.h's oracle table.
+	 * Both are read from the ONE CLUSTER_AUTHORIZE record the port opened
+	 * with, so they can never again disagree, which is exactly how OVMX came
+	 * to transmit to group 257's address with group 1's number in the frame
+	 * and be ignored by a real V7.3 member for 20 minutes.
+	 *
+	 * `cluster_group_valid` is 0 when no record was loaded; the 0 that then
+	 * goes on the wire is the group this node really has, not a placeholder
+	 * (INV-6) -- and it is disclosed on OPA0: and in SHOW CLUSTER/LOCAL_PORTS
+	 * exactly as the multicast default already is.
+	 */
+	uint16_t cluster_group;
+	uint8_t  cluster_group_valid;
+
+	/*
 	 * The connect/join nonce (spec SS4(a) abs 68). ZERO on a multicast HELLO
 	 * is GROUNDED; on a directed HELLO the real cluster carries a shared
 	 * token that is the SAME value on every node's directed HELLO because it
@@ -1082,10 +1099,19 @@ void pe_credit_release(struct pe_credit_ledger *l, uint8_t granted);
  * peer teaches it the V7.3 revision, which is the same frame again. The
  * V7.3 lab's join path is therefore byte-identical either way.
  * ========================================================================== */
+/*
+ * ⚠ abs 22 IS NOT PART OF THE REVISION (rd vms-b34). vms-0f8 recorded three
+ * "differing marker words at abs 22 / 94 / 126" between the V7.3 and the
+ * V5.5-2H4 HELLO, but the two frames it compared came from clusters with
+ * DIFFERENT GROUP NUMBERS (1 and 257): abs 22 is LE16(cluster group), a
+ * property of the cluster, not of the revision, and it is now emitted from
+ * this node's own CLUSTER_AUTHORIZE record (struct pe_identity). abs 94 and
+ * abs 126 remain real revision markers -- the V5.5 frame differs there with
+ * the group held constant.
+ */
 struct pe_wire_rev {
 	uint8_t  rev;           /* enum vms_hello_rev                        */
 	uint8_t  valid;         /* 0 = nothing learned; the default is in use */
-	uint16_t connect_flag;  /* abs 22                                    */
 	uint16_t trailer_9205;  /* abs 94                                    */
 	uint16_t trailer_2600;  /* abs 126                                   */
 };
@@ -1200,6 +1226,9 @@ struct pe_fsm {
 	uint32_t disc_format_learned;/* 0 or 1: the abs 47-67 span was learned
 				      * live off a real peer this run (E56)     */
 	uint32_t rx_hello_c03;      /* HELLOs decoded in the class-0x03 revision */
+	uint32_t rx_wrong_group;    /* frames carrying ANOTHER cluster's group
+				     * number at abs 22 -- refused, counted, and
+				     * never processed (rd vms-b34)            */
 
 	/* The revision the port's own MULTICAST advertisement goes out in,
 	 * learned off the first peer HELLO decoded this run (rd vms-0f8).

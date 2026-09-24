@@ -48,6 +48,7 @@ static void fake_vc_addr(struct vms_scs_addr *a, const struct fake_peer *p,
 	memcpy(a->src_mac, p->hw_mac, 6);
 	memcpy(a->dst_logical, dst_lavc, 6);
 	memcpy(a->src_logical, p->lavc, 6);
+	a->cluster_group = p->cluster_group;
 }
 
 /*
@@ -88,6 +89,7 @@ static uint32_t fake_peer_start(const struct fake_peer *p, uint16_t sysid,
 }
 
 /* The 46-byte round-2 ACK: no identity body (§4(g) phase 2). */
+__attribute__((unused))
 static uint32_t fake_peer_vc_ack(const struct fake_peer *p,
 				 const uint8_t dst_hw[6],
 				 const uint8_t dst_lavc[6],
@@ -142,6 +144,7 @@ static uint32_t fake_peer_credit(const struct fake_peer *p,
  * SENDER's side), and the Con.ID pair through the codec's own named offsets
  * because FC-P2.1 has not landed a typed builder for it yet.
  */
+__attribute__((unused))
 static uint32_t fake_peer_seqmsg(const struct fake_peer *p,
 				 const uint8_t dst_hw[6],
 				 const uint8_t dst_lavc[6], uint16_t send_seq,
@@ -164,7 +167,7 @@ static uint32_t fake_peer_seqmsg(const struct fake_peer *p,
 	memcpy(h.dst_lavc, dst_lavc, 6);
 	memcpy(h.src_lavc, p->lavc, 6);
 	h.sca_len_field = (uint16_t)(FAKE_VC_MSG_SCA - 2u);
-	h.connect_flag = 0x0001u;
+	h.cluster_group = 0x0001u;
 	h.word30 = (uint16_t)(VMS_SCS_MT_MSG |
 			      ((uint16_t)VMS_SCS_FORMAT_V13 << 8));
 	if (vms_sca_hdr_build(&h, out, cap, &written) != VMS_CODEC_OK)
@@ -313,6 +316,7 @@ static int fake_vc_is_kind(const struct fake_vc_decoded *d,
 	}
 }
 
+__attribute__((unused))
 static struct fake_vc_decoded fake_vc_last(const struct fake_pe *f,
 					   enum fake_vc_kind k)
 {

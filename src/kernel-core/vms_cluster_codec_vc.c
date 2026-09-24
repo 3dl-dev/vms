@@ -38,10 +38,6 @@ static uint64_t wire_get_le64(vms_wire_view_t *v, uint32_t off)
  * Shared addressing + envelope helpers
  * ------------------------------------------------------------------ */
 
-/* Every class in this file carries connect_flag==0x0001 (GROUNDED, spec
- * sec 4(g)/4(h)) -- a fixed protocol constant, not a per-node value. */
-#define VMS_SCS_VC_CONNECT_FLAG 0x0001u
-
 static void addr_put_hdr(vms_wire_buf_t *w, const struct vms_scs_addr *a,
 			 uint16_t sca_content_len, uint16_t word30)
 {
@@ -50,7 +46,7 @@ static void addr_put_hdr(vms_wire_buf_t *w, const struct vms_scs_addr *a,
 	vms_wire_put_be16(w, VMS_OFF_ETHERTYPE, VMS_SCA_ETHERTYPE);
 	vms_wire_put_le16(w, VMS_OFF_SCA_LEN, (uint16_t)(sca_content_len - 2u));
 	vms_wire_put_bytes(w, VMS_OFF_DST_LAVC, VMS_ETH_ADDR_LEN, a->dst_logical);
-	vms_wire_put_le16(w, VMS_OFF_CONNECT_FLAG, VMS_SCS_VC_CONNECT_FLAG);
+	vms_wire_put_le16(w, VMS_OFF_CLUSTER_GROUP, a->cluster_group);
 	vms_wire_put_bytes(w, VMS_OFF_SRC_LAVC, VMS_ETH_ADDR_LEN, a->src_logical);
 	vms_wire_put_le16(w, VMS_OFF_WORD30, word30);
 }
@@ -61,6 +57,7 @@ static void addr_get_hdr(vms_wire_view_t *v, struct vms_scs_addr *a)
 	vms_wire_get_bytes(v, VMS_OFF_ETH_SRC, VMS_ETH_ADDR_LEN, a->src_mac);
 	vms_wire_get_bytes(v, VMS_OFF_DST_LAVC, VMS_ETH_ADDR_LEN, a->dst_logical);
 	vms_wire_get_bytes(v, VMS_OFF_SRC_LAVC, VMS_ETH_ADDR_LEN, a->src_logical);
+	a->cluster_group = vms_wire_get_le16(v, VMS_OFF_CLUSTER_GROUP);
 }
 
 /* ------------------------------------------------------------------ *

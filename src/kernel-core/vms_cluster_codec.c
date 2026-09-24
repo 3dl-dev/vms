@@ -712,7 +712,7 @@ vms_codec_status_t vms_sca_hdr_parse(const uint8_t *frame, uint32_t len,
 	vms_wire_get_bytes(&v, VMS_OFF_ETH_SRC, VMS_ETH_ADDR_LEN, out->eth_src);
 	out->sca_len_field = vms_wire_get_le16(&v, VMS_OFF_SCA_LEN);
 	vms_wire_get_bytes(&v, VMS_OFF_DST_LAVC, VMS_ETH_ADDR_LEN, out->dst_lavc);
-	out->connect_flag = vms_wire_get_le16(&v, VMS_OFF_CONNECT_FLAG);
+	out->cluster_group = vms_wire_get_le16(&v, VMS_OFF_CLUSTER_GROUP);
 	vms_wire_get_bytes(&v, VMS_OFF_SRC_LAVC, VMS_ETH_ADDR_LEN, out->src_lavc);
 	out->word30 = vms_wire_get_le16(&v, VMS_OFF_WORD30);
 
@@ -736,7 +736,7 @@ vms_codec_status_t vms_sca_hdr_build(const struct vms_sca_hdr *h,
 	vms_wire_put_be16(&w, VMS_OFF_ETHERTYPE, VMS_SCA_ETHERTYPE);
 	vms_wire_put_le16(&w, VMS_OFF_SCA_LEN, h->sca_len_field);
 	vms_wire_put_bytes(&w, VMS_OFF_DST_LAVC, VMS_ETH_ADDR_LEN, h->dst_lavc);
-	vms_wire_put_le16(&w, VMS_OFF_CONNECT_FLAG, h->connect_flag);
+	vms_wire_put_le16(&w, VMS_OFF_CLUSTER_GROUP, h->cluster_group);
 	vms_wire_put_bytes(&w, VMS_OFF_SRC_LAVC, VMS_ETH_ADDR_LEN, h->src_lavc);
 	vms_wire_put_le16(&w, VMS_OFF_WORD30, h->word30);
 

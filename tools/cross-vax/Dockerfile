@@ -54,14 +54,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Build deps for binutils+gcc, plus cmake/make/file so libvmssys can be built in
 # this same image. libgmp/mpfr/mpc-dev satisfy gcc's math libs (no in-tree build).
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         build-essential \
         wget ca-certificates \
         xz-utils \
         libgmp-dev libmpfr-dev libmpc-dev \
         texinfo bison flex \
         cmake make ninja-build file \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 # ------------------------------------------------------------------
 # NetBSD/vax sysroot: headers + libc + crt objects (base + comp sets).

@@ -159,8 +159,48 @@ void     vms_wire_put_zero(vms_wire_buf_t *w, uint32_t off, uint32_t n);
 #define VMS_OFF_ETHERTYPE        12u
 #define VMS_OFF_SCA_LEN          14u   /* payload[0]  LE u16, +2 == content */
 #define VMS_OFF_DST_LAVC         16u   /* payload[2]  peer/group LOGICAL    */
-#define VMS_OFF_CONNECT_FLAG     22u   /* payload[8]  constant 0x0001       */
+#define VMS_OFF_CLUSTER_GROUP    22u   /* payload[8]  LE16 cluster group    */
 #define VMS_OFF_SRC_LAVC         24u   /* payload[10] sender's own LOGICAL  */
+
+/*
+ * ABS 22..23 IS THE CLUSTER GROUP NUMBER, LE u16 -- NOT A CONSTANT FLAG
+ * (rd vms-b34, and the second half of rd vms-147's defect).
+ *
+ * It was labelled "connect flag, observed constant 0x0001" for as long as
+ * every capture in the corpus came from ONE cluster -- the lab's, whose group
+ * number IS 1. Four independent real-VMS observations, three VMS versions and
+ * two architectures, say what it really is:
+ *
+ *   group    node                                abs 22..23   HELLO multicast
+ *   -----    ---------------------------------   ----------   ----------------
+ *      1     OpenVMS VAX V7.3   (lab VAX1)        01 00       AB-00-04-01-01-01
+ *    257     OpenVMS VAX V7.3   (demo VAXC)       01 01       AB-00-04-01-01-02
+ *    257     OpenVMS VAX V5.5-2H4 (demo Node C)   01 01       AB-00-04-01-01-02
+ *   2026     OpenVMS Alpha V8.4 (lab-alpha)       ea 07       AB-00-04-01-EA-08
+ *
+ * i.e. abs 22..23 == LE16(group), on EVERY SCA frame class -- multicast HELLO,
+ * directed HELLO, the b2/b3/b4 channel-verify frames and the 0x41/0x48/0x4b
+ * SCS envelopes alike. (Contrast the multicast ADDRESS, which is
+ * AB-00-04-01-<LE16(group + 0x100)> -- rd vms-147. Two different encodings of
+ * the same number, which is why fixing one did not fix the other.)
+ *
+ * REFUTATIONS, so "matches the oracle" can never again be satisfied by the one
+ * data point that made the mislabel possible: a fixed 0x0001 is refuted by
+ * group 257 and by group 2026; LE16(group + 0x100) -- the multicast rule -- is
+ * refuted by all four rows; BE16(group) is refuted by 2026.
+ *
+ * CONSEQUENCE, MEASURED (tests/lab/captures/vms-b34-group-on-wire-20260924/):
+ * a real V7.3 VAX in group 257 sent OVMX 96 VC STARTs and discarded every one
+ * of OVMX's 803 STACKs, because they carried 0x0001. The circuit never opened,
+ * so no vc_up, so no CSB, so the join FSM never had a target and CNXMAN said
+ * nothing after "waiting to form or join" -- for 20 minutes in the browser and
+ * for the whole window in the lab.
+ *
+ * Rule 8: this is the cluster's own on-wire assignment plus VMS's own printed
+ * CLUSTER_AUTHORIZATION output, never a recomputed VSI algorithm.
+ * INV-6: every emitter below takes the number from the executive's loaded
+ * CLUSTER_AUTHORIZE record; a node with no record emits the 0 it really has.
+ */
 #define VMS_OFF_WORD30           30u   /* payload[16] see below             */
 
 /*
@@ -363,7 +403,7 @@ struct vms_sca_hdr {
 	uint8_t  dst_lavc[VMS_ETH_ADDR_LEN];
 	uint8_t  src_lavc[VMS_ETH_ADDR_LEN];
 	uint16_t sca_len_field;  /* raw abs 14; content == this + 2         */
-	uint16_t connect_flag;   /* abs 22, observed constant 0x0001        */
+	uint16_t cluster_group;  /* abs 22, LE16 cluster group number       */
 	uint16_t word30;         /* raw abs 30..31, LE                      */
 };
 

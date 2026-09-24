@@ -431,7 +431,7 @@ static uint32_t mk_cm(uint8_t cat, uint8_t op, uint16_t send_msg)
 	memcpy(l.hdr.eth_src, smac, 6);
 	memcpy(l.hdr.dst_lavc, dmac, 6);
 	memcpy(l.hdr.src_lavc, smac, 6);
-	l.hdr.connect_flag = 0x0001;
+	l.hdr.cluster_group = 0x0001;
 	l.recv_ack = 0x0011;
 	l.send_seq = 0x0012;
 	l.remote_conid = CM_CONID;

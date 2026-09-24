@@ -53,6 +53,10 @@ struct sim_node_cfg {
 				      * BUILT from it by the FSM           */
 	uint8_t     hw_mac[6];       /* the port's REAL hardware address   */
 	uint8_t     mcast[6];        /* the cluster HELLO group it joins   */
+	uint16_t    cluster_group;   /* the SAME group as a plain LE16 --
+				      * abs 22 of every frame it emits
+				      * (rd vms-b34). 0 selects the
+				      * harness default, group 1        */
 	uint8_t     credits;         /* SYSGEN CLUSTER_CREDITS: receive
 				      * buffers this node REQUESTS per
 				      * circuit (0 is legitimate)          */

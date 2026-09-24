@@ -207,9 +207,17 @@ struct fake_peer {
 	 * PARSED REAL FRAME rather than letting a test type marker words in.
 	 */
 	uint8_t  revision;
-	uint16_t connect_flag;
 	uint16_t trailer_9205;
 	uint16_t trailer_2600;
+	/*
+	 * The CLUSTER this peer belongs to (abs 22, LE16 -- rd vms-b34). NOT a
+	 * revision marker: vms-0f8 read the abs-22 difference between a V7.3
+	 * and a V5.5 capture as one, but those two nodes were in groups 1 and
+	 * 257. It is set independently here so a scenario can vary the revision
+	 * with the group held constant, and the group with the revision held
+	 * constant.
+	 */
+	uint16_t cluster_group;
 };
 
 static void fake_peer_init(struct fake_peer *p, uint16_t sysid,
@@ -227,7 +235,7 @@ static void fake_peer_init(struct fake_peer *p, uint16_t sysid,
 	p->name_len = VMS_HELLO_NODENAME_MAX;
 	p->incarnation = 1u;    /* fresh contact, sec 4(i).B */
 	p->revision = (uint8_t)VMS_HELLO_REV_C05;
-	p->connect_flag = 0x0001u;
+	p->cluster_group = 0x0001u;
 	p->trailer_9205 = 0x0592u;
 	p->trailer_2600 = 0x0026u;
 }
@@ -244,7 +252,6 @@ static void fake_peer_set_revision(struct fake_peer *p,
 				   const struct vms_hello_frame *src)
 {
 	p->revision = src->revision;
-	p->connect_flag = src->hdr.connect_flag;
 	p->trailer_9205 = src->trailer_9205;
 	p->trailer_2600 = src->trailer_2600;
 }
@@ -272,7 +279,7 @@ static uint32_t fake_peer_hello(const struct fake_peer *p,
 	memcpy(h.hdr.eth_src, p->hw_mac, VMS_ETH_ADDR_LEN);
 	h.hdr.sca_len_field = (uint16_t)(rv->sca_content - 2u);
 	memcpy(h.hdr.dst_lavc, dst_lavc, VMS_ETH_ADDR_LEN);
-	h.hdr.connect_flag = p->connect_flag;
+	h.hdr.cluster_group = p->cluster_group;
 	memcpy(h.hdr.src_lavc, p->lavc, VMS_ETH_ADDR_LEN);
 	h.hdr.word30 = (uint16_t)word;
 
@@ -319,7 +326,7 @@ static uint32_t fake_peer_solicit(const struct fake_peer *p,
 	memcpy(s.hdr.eth_src, p->hw_mac, VMS_ETH_ADDR_LEN);
 	s.hdr.sca_len_field = 76u;            /* 78-byte SCA content, SS4(c) */
 	memcpy(s.hdr.dst_lavc, group, VMS_ETH_ADDR_LEN);
-	s.hdr.connect_flag = 0x0001u;
+	s.hdr.cluster_group = p->cluster_group;
 	memcpy(s.hdr.src_lavc, p->lavc, VMS_ETH_ADDR_LEN);
 	s.hdr.word30 = 0x00b6u;               /* SS4(a): b6 on a SOLICIT */
 	s.disc.namelen = p->name_len;

@@ -33,6 +33,18 @@ items:
       was correct for group 1 only). Grounded on three real-VMS oracles
       (V7.3/VAX group 1, V5.5-2H4/VAX group 257, V8.4/Alpha group 2026), pinned
       with refutations in tests/cluster/host/test_codec_hello.c.
+      The group is on the wire a SECOND time, at abs 22..23 of every SCA frame,
+      as a plain LE16(group) -- a different encoding of the same number, not
+      the same arithmetic as the address. Both are read from the ONE
+      CLUSTER_AUTHORIZE record in pe_build_identity(), so they cannot diverge
+      (rd vms-b34; through V0.7 abs 22 was the constant 0x0001, right for
+      group 1 only -- a real group-257 OpenVMS VAX V7.3 member discarded every
+      VC STACK OVMX sent it and the circuit never opened). Four oracles
+      (V7.3/VAX group 1, V7.3/VAX group 257, V5.5-2H4/VAX group 257,
+      V8.4/Alpha group 2026), pinned with refutations in the same test; the
+      port's emit/refuse behaviour in tests/cluster/host/test_pe_group_on_wire.c.
+      A frame carrying another cluster's group is refused and counted, never
+      processed.
       PROVEN AT R1/R2/R3, in CI: tests/cluster/host/test_pe_*.c (the pure port
       FSM: channels, HELLO cadence, circuit formation, TIMVCFAIL, sequence/ack);
       the N-node simulator's virtual LAN; tests/qemu/test_cluster_vc.sh drives
@@ -50,10 +62,14 @@ items:
       rd vms-0f8. OVMX's discovery corpus was harvested entirely from OpenVMS
       VAX V7.3 nodes (message class 0x05, 120-byte SCA content). A real OpenVMS
       VAX V5.5-2H4 node speaks a SECOND revision of the same HELLO: class 0x03,
-      114-byte content, no abs 128-133 tail, and three differing marker words
-      at abs 22/94/126 -- and NOTHING else different, field position for field
+      114-byte content, no abs 128-133 tail, and two differing marker words
+      at abs 94/126 -- and NOTHING else different, field position for field
       position, across 53 captured frames in which the only span that moves is
-      the live tick at abs 96 (docs/cluster-protocol-spec.md 4(b.c3)). Through
+      the live tick at abs 96 (docs/cluster-protocol-spec.md 4(b.c3)). (This
+      entry once counted abs 22 as a third marker; it is the CLUSTER GROUP
+      number, LE16 -- the two specimens compared came from clusters 1 and 257
+      -- corrected under rd vms-b34, which also stopped the port echoing a
+      peer's group back at it.) Through
       V0.7 the executive classified every such frame family 0/UNCLASSIFIED and
       counted it badclass.
       The codec now carries both revisions as a TABLE, keyed on the class byte

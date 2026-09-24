@@ -234,6 +234,10 @@ static void sim_upper_bind(struct sim_node *n)
  * overrides; both are named so a reader sees a configured value, not a magic
  * number appearing mid-frame. */
 static const uint8_t sim_default_group[6] = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
+/* The same group as a plain number: AB-00-04-01-01-01 is group 1's multicast
+ * address (AB-00-04-01-<LE16(group + 0x100)>, rd vms-147) and group 1 is what
+ * abs 22 then carries (LE16(group), rd vms-b34). ONE number, two encodings. */
+#define SIM_DEFAULT_CLUSTER_GROUP 0x0001u
 #define SIM_DEFAULT_CREDITS 10u
 
 /* Receive buffers a simulated port owns: FC-P0.5's OWN default, taken from the
@@ -263,6 +267,7 @@ void sim_node_cfg_default(struct sim_node_cfg *cfg, const char *name,
 	cfg->hw_mac[5] = index;
 
 	memcpy(cfg->mcast, sim_default_group, 6);
+	cfg->cluster_group = SIM_DEFAULT_CLUSTER_GROUP;
 	cfg->credits = SIM_DEFAULT_CREDITS;
 	cfg->credits_valid = 1u;
 	cfg->rx_pool_bufs = SIM_DEFAULT_RX_POOL_BUFS;
@@ -345,6 +350,8 @@ static void sim_node_identity(const struct sim_node *n, struct pe_identity *id)
 	id->scsnode_len = (uint8_t)VMS_HELLO_NODENAME_MAX;
 	memcpy(id->mcast, n->cfg.mcast, 6);
 	id->mcast_valid = 1u;
+	id->cluster_group = n->cfg.cluster_group;
+	id->cluster_group_valid = 1u;
 	id->max_sca_len = n->cfg.max_sca_len;
 	id->hello_interval_ms = n->cfg.hello_interval_ms;
 	id->listen_timeout_ms = n->cfg.listen_timeout_ms;

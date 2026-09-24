@@ -2030,21 +2030,30 @@ EOF
 
     dlm-xnode-mode-unvalidated)
         case "$_f" in
-        facility)     echo "distributed lock manager -- the cross-node DLM RECEIVE handler's request validation (VMS_IOCTL_DLM_XNODE, vms-94c rung 1 / vms-17c)";;
+        facility)     echo "distributed lock manager -- the shared \$ENQ core's lock-mode bound (vms_enq_core_ex, VMS_IOCTL_DLM_XNODE's cross-node ENQ marshals into it, vms-94c rung 1 / vms-17c)";;
         targets)      echo "kernel-core/vms_lock.c";;
-        # vms_lock_dlm_xnode_dispatch()'s own lock-mode bounds check
-        # `if (req->lkmode > LCK_K_EXMODE) return SS__BADPARAM;`. UNIQUE TEXT in
-        # the file: the two OTHER `lkmode > LCK_K_EXMODE` guards (vms_enq_core
-        # line ~839, vms_ioctl_convert line ~1195) read `args.lkmode` with a
-        # brace body, so the `req->lkmode`/no-brace form anchors this handler
-        # alone -- no range anchor needed. Reached by exactly one suite:
-        # test_syssvc_dlm_xnode (the cross-node handler has no public sys$ entry
-        # point and no other test drives VMS_IOCTL_DLM_XNODE).
+        # RE-ANCHORED (vms-e7d CI red, 2026-09-24): vms_lock_dlm_xnode_dispatch()
+        # used to carry its OWN front-door `if (req->lkmode > LCK_K_EXMODE)
+        # return SS__BADPARAM;` copy, but that copy was provably unreachable in
+        # isolation -- the ENQ op (the only one that reads req->lkmode) marshals
+        # it into vms_enq_core_ex, which already refuses the identical bound.
+        # Mutating the front door alone left the harness green because the
+        # downstream copy still caught it; the front door was removed as dead
+        # duplication rather than kept as untested decoration. This control now
+        # targets vms_enq_core_ex's own `if (args.lkmode > LCK_K_EXMODE) {`
+        # check directly -- RANGE-ANCHORED to that function, since
+        # vms_ioctl_convert's local $CVT carries the identical text (same
+        # idiom as lock-convert-mode-not-updated's own range anchor below).
+        # vms_enq_core_ex is also reached by the LOCAL $ENQ ioctl and by the
+        # ACP's fixed-EXMODE volume lock, but no suite drives a bad lkmode
+        # through either of those paths (grepped tests/qemu/*.c for
+        # LCK_K_EXMODE+1: test_syssvc_dlm_xnode is the only hit), so isolation
+        # holds -- exactly one suite's own bad-lockmode assertion still reddens.
         suites_red)   echo "test_syssvc_dlm_xnode";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "vms_lock_dlm_xnode_dispatch() stops bounds-checking the decoded request's lock mode: the up-front 'lkmode > LCK_K_EXMODE' refusal is forced always-false with a 0-AND prefix, so a request naming an out-of-range mode (LCK_K_EXMODE+1) is no longer refused with SS\$_BADPARAM at the door -- it falls through to the op switch and, for an ENQ that names a resource, returns SS\$_UNSUPPORTED (rung 1's honest decline) as though the mode were valid. A malformed cross-node message that should be rejected up front is instead accepted for dispatch. One guard neutered; the op switch, the empty-name check, and the unknown-op default are all untouched, so only the bad-mode assertion moves.";;
+        why)          echo "vms_enq_core_ex() stops bounds-checking the decoded request's lock mode: its 'args.lkmode > LCK_K_EXMODE' refusal is forced always-false with a 0-AND prefix, so a request naming an out-of-range mode (LCK_K_EXMODE+1) is no longer refused with SS\$_BADPARAM -- it falls through into the resource lookup and grant/queue logic with an out-of-range mode. For the cross-node \$ENQ that test_syssvc_dlm_xnode drives (VMS_IOCTL_DLM_XNODE marshals req->lkmode into this same core), that is now the SOLE guard, so the suite's own 'bad lock mode -> SS\$_BADPARAM' assertion reddens. The local \$ENQ ioctl and vms_ioctl_convert's \$CVT path share this core but no suite drives a bad mode through either, so nothing else reddens.";;
         require_fail) cat <<'EOF'
 bad lock mode -> SS$_BADPARAM
 EOF
@@ -6269,63 +6278,88 @@ EOF
 
     sysuaf-uic-radix-decimal)
         case "$_f" in
-        facility)     echo "SYSUAF.DAT's UIC fields -- the shared read radix (SYSUAF_UIC_RADIX, src/libvms/include/sysuaf.h, consulted only by sysuaf_lookup()'s field parse in src/libvms/rtl/sysuaf.c), vms-e60";;
-        targets)      echo "libvms/include/sysuaf.h";;
-        # test_syssvc_sysuaf_uic_base.c's OWN UIC checks (DEFAULT/GUEST, via
-        # sysuaf_lookup()) and test_syssvc_setuai.c's UIC-write-back readback
-        # (scenario 4, which reads USER1's row back through sysuaf_lookup())
-        # are the ONLY suites this mutation reddens. Since vms-930 the
-        # identifier-resolution suites test_syssvc_rightslist and
-        # test_syssvc_ident source UIC identifiers from the world-readable
-        # RIGHTSLIST.DAT (a binary $RDBDEF longword, no text radix), NOT from
-        # SYSUAF -- so mutating SYSUAF_UIC_RADIX no longer reaches them. They
-        # were dropped from this red set when rightslist.c's SYSUAF fallback
-        # was removed; see knock_on_why.
-        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_setuai";;
+        facility)     echo "SYSUAF.DAT's UIC WRITE-BACK read side -- sysuaf_raw_to_view()'s unpack of the binary \$UAFDEF uaf\$l_uic longword into the UIC_GROUP/UIC_MEMBER view fields (src/libvms/rtl/sysuaf.c, vms-e60/vms-d92). The READER half: a record's UIC round-trips only if the reader unpacks the same group/member the writer packed.";;
+        targets)      echo "libvms/rtl/sysuaf.c";;
+        # RE-ANCHORED (vms-e7d CI red, 2026-09-24). This control used to mutate
+        # SYSUAF_UIC_RADIX (sysuaf.h), the ASCII text-parse radix an earlier
+        # SYSUAF.DAT format applied. vms-d92 flipped SYSUAF to the binary
+        # $UAFDEF record; sysuaf_raw_to_view() unpacks uaf$l_uic with bit-shifts,
+        # not a radix, so SYSUAF_UIC_RADIX had no reader left to mutate -- it
+        # was a dead #define (grepped: zero consumers) and the injected 8->10
+        # edit changed nothing any suite could observe. That define was removed
+        # (vms-b95); this control now targets sysuaf_raw_to_view()'s own unpack
+        # directly, the reader-side mirror of sysuaf-uic-writeback-decimal's
+        # packer mutation.
+        #
+        # A GROUP/MEMBER SWAP on unpack reaches every sysuaf_lookup()/
+        # sysuaf_raw_to_view() caller, so the red set is wider than the old
+        # radix defect's two suites (grepped tests/qemu/*.c for uic_group/
+        # uic_member/sysuaf_lookup callers to build this list):
+        #   - test_syssvc_sysuaf_uic_base.c: GUEST (0200,0201, asymmetric) and
+        #     SYSTEM ([1,4], asymmetric) redden. DEFAULT (0200,0200, EQUAL
+        #     group/member) is swap-INVARIANT -- it stays green, unlike under
+        #     the old radix defect where its absolute value (200 vs 128) still
+        #     differed even though the two digits matched.
+        #   - test_syssvc_setuai.c scenario 4: USER1's write-back readback
+        #     (128,130, asymmetric) redden, same two assertions the old defect
+        #     named.
+        #   - test_syssvc_loginout_acp.c: the binary-SYSUAF SYSTEM readback
+        #     ([1,4], asymmetric) reddens -- a new suite this control did not
+        #     previously name.
+        suites_red)   echo "test_syssvc_sysuaf_uic_base test_syssvc_setuai test_syssvc_loginout_acp";;
         blind_suites) echo "";;
         blind_why)    echo "";;
         isolation)    echo "isolated";;
-        why)          echo "SYSUAF_UIC_RADIX -- the ONE constant sysuaf_lookup()'s field parse applies to SYSUAF.DAT's UIC_GROUP/UIC_MEMBER columns (vms-e60: every VMS UIC is written in octal) -- is changed from 8 to 10, so a shipped record like DEFAULT's '200|200' is read as decimal 200/200 instead of octal 128/128. SYSTEM's '1|4' is unaffected (identical in both bases, the LIVENESS ANCHOR every one of these suites' own comments name it as -- as is OPERATOR's '1|6'; TWO shipped rows read the same in both bases, not one, both being single-octal-digit rows, measured vms-f57); DEFAULT and GUEST, whose fields actually discriminate the base, are not. sysuaf_format_record() (the writer) uses a literal %o unconnected to this constant, so a WRITE alone is not reached through THIS mutation -- but any suite that reads a record back afterward through sysuaf_lookup() (test_syssvc_setuai's scenario 4) is. The writer's own octal-ness has its own dedicated control, sysuaf-uic-writeback-decimal.";;
+        why)          echo "sysuaf_raw_to_view()'s unpack ('rec->uic_group = (uic >> 16) & 0xffffu; rec->uic_member = uic & 0xffffu;') has its two field assignments SWAPPED, so every read through sysuaf_lookup()/sysuaf_raw_to_view() reports group and member exchanged. A record whose stored group equals its member (DEFAULT, 0200|0200) is swap-invariant and stays green; any record where they differ (GUEST 0200|0201, SYSTEM 1|4, USER1 128|130) reads back with the two fields transposed, reddening whichever suite checks it.";;
         require_fail) cat <<'EOF'
 member field is octal as well as group
 EOF
                       ;;
         knock_on_fail) cat <<'EOF'
-the oracle's 8388736; decimal parsing gives 13107400
-DEFAULT is NOT 13107400 (the decimal misreading vms-e60 filed)
+LIVENESS ONLY: identical in both bases, proves nothing about base
+SYSTEM UIC [1,4] read back from the ODS-2 binary record
 the rewritten UIC GROUP field still reads 200 (octal, vms-e60)
 the rewritten UIC MEMBER field still reads 202 (octal, vms-e60)
 EOF
                       ;;
         knock_on_why)  cat <<'EOF'
-SAME CONSTANT, OBSERVED AT THE TWO SUITES THAT STILL READ SYSUAF's UIC TEXT
-FIELDS. test_syssvc_sysuaf_uic_base.c drives sysuaf_lookup() directly for
-DEFAULT and GUEST (require_fail names GUEST's own check; knock_on_fail's first
-two lines are DEFAULT's check and its own regression-naming assertion, which
-now reads exactly the decimal value it exists to rule out).
+FOUR ADDITIONAL ASSERTIONS, ACROSS THREE SUITES, ALL READING THE SAME SWAPPED
+UNPACK.
 
-test_syssvc_setuai.c's scenario 4 is the second: it does not just $SETUAI a
-new UIC, it reads USER1's rewritten row BACK afterward (row_field() against the
-same sysuaf_lookup()-backed record the read side of this mutation touches) to
-prove the write landed -- so its readback, not its write, hits the mutated
-radix. Two assertions redden ("4: the rewritten UIC GROUP field still reads
-200" and its MEMBER sibling), because USER1 ships 200|202, and decimal-reading
-those digits produces a different string than octal does.
+test_syssvc_sysuaf_uic_base.c's SYSTEM check ("LIVENESS ONLY: identical in
+both bases, proves nothing about base") was named SYSTEM's own comment as
+immune to the OLD radix defect -- true for a base (octal-vs-decimal)
+confusion, since 1 and 4 are the same digit in both bases. It is NOT immune to
+a field-order swap: 1 != 4, so transposing them changes the value. The suite's
+own liveness framing is still correct (it still proves nothing about a text
+radix); it just does not stay green under this control any more.
 
-WHAT STAYS GREEN, AND WHY. SYSTEM's UIC ([1,4]) is identical in both bases in
-every suite that checks it -- explicitly labelled LIVENESS ONLY in each of
-their own comments, for exactly this reason. THE IDENTIFIER-RESOLUTION SUITES
-NO LONGER REACH THIS CONSTANT (vms-930): test_syssvc_rightslist.c and
-test_syssvc_ident.c source BOTH general and UIC identifiers from the
-world-readable RIGHTSLIST.DAT ($RDBDEF binary longword, no text radix) after
-rightslist.c's SYSUAF fallback was removed, so mutating SYSUAF_UIC_RADIX does
-not touch their DEFAULT/GUEST resolutions at all -- they were in this red set
-only while rightslist_name_to_value() fell through to sysuaf_lookup(), and were
-dropped with that fallback. rightslist.c's GENERAL identifiers
-(BATCH/DIALUP/INTERACTIVE/LOCAL/NETWORK/REMOTE) and its check_miss_value()
-calls never reached sysuaf_lookup() to begin with. test_syssvc_setuai's OTHER
-scenarios (1-3, the SYSPRV refusal/grant checks) never read a UIC field back
-and stay green.
+test_syssvc_loginout_acp.c authors a binary SYSUAF record for SYSTEM
+(uic_group=1, uic_member=4) and reads it straight back through the same
+sysuaf_raw_to_view(), so its own "SYSTEM UIC [1,4] read back from the ODS-2
+binary record" check reddens for the identical reason.
+
+test_syssvc_setuai.c's scenario 4 reads USER1's rewritten row back through
+sysuaf_lookup() (row_field() against the sysuaf_lookup()-backed record) after
+$SETUAI, so its readback rides the mutated unpack too: USER1 ships 128|130,
+group != member, so both field-text assertions redden exactly as they did
+under the old radix defect (same suite, same lines -- this control and
+sysuaf-uic-writeback-decimal both reach them, one from the read side and one
+from the write side).
+
+WHAT STAYS GREEN, AND WHY. test_syssvc_sysuaf_uic_base.c's DEFAULT check and
+its "DEFAULT is NOT 13107400" regression companion: DEFAULT ships 0200|0200
+(128|128), group == member, so a swap leaves it unchanged -- it is this
+control's OWN liveness anchor now, the mirror of SYSTEM's role under the old
+radix defect. THE IDENTIFIER-RESOLUTION SUITES (vms-930): test_syssvc_rightslist.c
+and test_syssvc_ident.c source UIC identifiers from the world-readable
+RIGHTSLIST.DAT ($RDBDEF binary longword) via sysuaf_lookup_by_uic(), which no
+suite here actually calls (grepped) -- they never reach sysuaf_raw_to_view()
+through this path and stay green. test_syssvc_loginout_acp.c's EXPUSER/
+FRESHUSER accounts carry asymmetric UICs too, but no assertion in that suite
+reads their uic_group/uic_member fields back (only password/expiry state), so
+neither reddens. test_syssvc_setuai's scenarios 1-3 never read a UIC field
+back and stay green.
 EOF
                       ;;
         esac;;
@@ -6948,21 +6982,20 @@ apply_edit() {
         # is no dangling-body hazard here.
         sed -i '/^long vms_ioctl_convert/,/^}$/ s|^        lock->granted_mode = args\.lkmode;$|        /* NEGCTL lock-convert-mode-not-updated: granted_mode left unchanged */|' "$_file";;
     dlm-xnode-mode-unvalidated)
-        # UNIQUE TEXT, no range anchor needed: `if (req->lkmode > LCK_K_EXMODE)`
-        # occurs once in the file -- vms_lock_dlm_xnode_dispatch's own mode
-        # bounds check. The two sibling guards (vms_enq_core, vms_ioctl_convert)
-        # read `args.lkmode > LCK_K_EXMODE) {` with a brace body, so neither
-        # matches this `req->lkmode`/no-brace anchor. Forcing the condition
-        # always-false with `0 &&` (the same idiom access-mode-escalation and
-        # lock-valblk-grant-not-delivered use in this file) makes the up-front
-        # SS$_BADPARAM refusal structurally unreachable, so an out-of-range mode
-        # falls through to the op switch -- an ENQ naming a resource returns
-        # rung 1's SS$_UNSUPPORTED as though the mode were valid. After
-        # substitution the line reads `if (0 && req->lkmode > LCK_K_EXMODE)`, so
-        # a second apply finds nothing left to match -- the no-op selftest
-        # requires. The op switch, the empty-name check, and the unknown-op
-        # default are untouched, so ONLY "bad lock mode -> SS$_BADPARAM" reddens.
-        sed -i 's|    if (req->lkmode > LCK_K_EXMODE)|    if (0 \&\& req->lkmode > LCK_K_EXMODE) /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
+        # RE-ANCHORED (vms-e7d CI red, 2026-09-24). vms_lock_dlm_xnode_dispatch's
+        # OWN front-door `if (req->lkmode > LCK_K_EXMODE) return SS__BADPARAM;`
+        # copy was removed as dead duplication: the ENQ op (the only one that
+        # reads req->lkmode) marshals it into vms_enq_core_ex, which carries the
+        # identical bound -- mutating the front door alone left this suite green
+        # because the downstream copy still caught it. This control now targets
+        # vms_enq_core_ex's OWN check directly. RANGE-ANCHORED to that function:
+        # `if (args.lkmode > LCK_K_EXMODE) {` also occurs verbatim in
+        # vms_ioctl_convert (lock-convert-mode-not-updated's own target, same
+        # idiom as that control's range anchor), so an unanchored sed would hit
+        # both. vms_enq_core_ex is defined before vms_ioctl_convert in this file,
+        # so the range closes at the first following top-level `}` and leaves
+        # vms_ioctl_convert's copy untouched.
+        sed -i '/^static long vms_enq_core_ex/,/^}$/ s|    if (args\.lkmode > LCK_K_EXMODE) {|    if (0 \&\& args.lkmode > LCK_K_EXMODE) { /* NEGCTL dlm-xnode-mode-unvalidated */|' "$_file";;
     dlm-xnode-redirect-target-dropped)
         # UNIQUE TEXT, no range anchor needed: `xn->redirect_csid = target;`
         # occurs once in the file -- enq_inbound_not_master()'s sole report of
@@ -7790,11 +7823,22 @@ apply_edit() {
         sed -i 's|\*value = rdb_ident_value(&rec);|*value = rdb_ident_value(\&rec) \& 0x7FFFFFFFu; /* NEGCTL rightslist-general-hex-as-decimal */|' "$_file";;
 
     sysuaf-uic-radix-decimal)
-        # UNIQUE TEXT: the sole #define. Both strtoul() call sites in
-        # sysuaf.c reference the symbol, not a literal, so this one edit
-        # reaches both. Idempotent: the edit removes the literal `8` this
-        # pattern matches.
-        sed -i 's|^#define SYSUAF_UIC_RADIX     8$|#define SYSUAF_UIC_RADIX     10  /* NEGCTL sysuaf-uic-radix-decimal */|' "$_file";;
+        # RE-ANCHORED (vms-e7d CI red, 2026-09-24): SYSUAF_UIC_RADIX was
+        # removed (dead #define, vms-b95) after this control's injected 8->10
+        # edit was proven to change nothing any suite could observe -- the
+        # ASCII reader it used to target does not exist any more. This now
+        # swaps sysuaf_raw_to_view()'s two field assignments instead, the
+        # reader-side mirror of sysuaf-uic-writeback-decimal's packer swap.
+        # UNIQUE TEXT: each full line (`rec->uic_group  = (uic >> 16) & ...`,
+        # `rec->uic_member = uic & ...`) occurs exactly once in the file, so
+        # two independent line-anchored substitutions in one sed pass swap
+        # the pair without a range anchor. Idempotent: after substitution
+        # neither original right-hand side survives on its original
+        # left-hand side, so a second apply matches nothing on either line.
+        sed -i \
+            -e 's|^    rec->uic_group  = (uic >> 16) & 0xffffu;$|    rec->uic_group  = uic \& 0xffffu; /* NEGCTL sysuaf-uic-radix-decimal */|' \
+            -e 's|^    rec->uic_member = uic & 0xffffu;$|    rec->uic_member = (uic >> 16) \& 0xffffu;|' \
+            "$_file";;
 
     sysuaf-uic-writeback-decimal)
         # RE-ANCHORED (vms-d92): the ASCII sysuaf_format_record() %o UIC writer

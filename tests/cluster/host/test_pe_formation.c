@@ -82,6 +82,10 @@ static void port_up(uint16_t sysid, uint16_t max_sca_len)
 	id.scsnode_len = 6;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 	id.max_sca_len = max_sca_len;
 
 	(void)pe_fsm_init(&g_fsm, &id, sysid, &g_ops);
@@ -670,6 +674,10 @@ static void test_last_gasp(void)
 	id.hw_mac_valid = 1;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 	id.join_nonce[0] = 0xee;
 	id.join_nonce[1] = 0x05;
 	id.join_nonce[2] = 0x39;

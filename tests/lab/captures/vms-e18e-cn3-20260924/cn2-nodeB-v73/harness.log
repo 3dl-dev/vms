@@ -1,0 +1,6 @@
+[19:02:17] goto http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA.cpio.gz&sysdisk=sysdisk-nodeA.qcow2.gz&nodeB=http%3A%2F%2Flocalhost%3A8301%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dka655x.bin%26diskgz%3Dovmx-vax-nodeB.img.gz&nodeC=http%3A%2F%2Flocalhost%3A8301%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dka655x.bin%26diskgz%3Dvms73-nodeC-cluster.dsk.gz
+[19:02:17] boot C
+[19:03:48] boot B
+[19:05:18]   VAXC: saw Username:
+[19:08:18]   VAXC: no Password: prompt (attempt 1); console tail:
+[19:08:18]     "026 19:08:47.93  %%%%%%%%%%%\n19:08:47.91 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB\n\n%%%%%%%%%%%  OPCOM  24-SEP-2026 19:08:47.96  %%%%%%%%%%%\n19:08:47.91 Node VAXC (csid 00010001) proposed addition of node OVMXB\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  24-SEP-2026 19:08:51.54  %%%%%%%%%%%\n19:08:51.51 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"

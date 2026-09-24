@@ -79,16 +79,98 @@ Node C or genesis-code issue); run5's Node A guest never printed anything past "
 ROM..." for 180+s (starved, not crashed). Both rounds correctly report `Nodes 1` (Node A never
 actually reached a state where it could join).
 
-## Honest status — CN=2 (Node A + Node C V7.3) in-browser: NOT YET PROVEN
+## run6 (2026-09-24) — Node A rebuilt from current main (carries #1293's console fix), 20-minute uncontended watch (rd vms-2570 follow-up)
 
-What IS proven: the V7.3 disk is real, byte-correct, forms genesis both standalone and in-browser,
-and the transport carries real, sustained, bidirectional, error-free 0x6007 traffic between OVMX
-Node A and it (same mechanism already proven symmetric-OVMX-to-OVMX and OVMX-to-real-VMS-5.5
-elsewhere in this epic). What is NOT yet proven: full membership convergence (`SHOW CLUSTER`
-naming both nodes on both sides) within an observed window — the one clean, uncontended run
-(e2e-run1) was not watched past t=282s, and the follow-up attempts to watch longer were blocked
-by real k3s-worker CPU contention with a concurrent lane, not by anything in this disk or in
-Node A's own fixes. This is reported as an **open gap**, not fabricated as done.
+Rebuilt Node A from `origin/main` at `32f743e9` (`build-boot-artifacts` run
+[36009596171](https://github.com/3dl-dev/vms/actions/runs/36009596171), `SOURCE_COMMIT`
+verified) — includes #1293 (the console fix so `%CNXMAN` membership lines are actually printed),
+#1291 (Node B injection, unused here), #1290/#1289 (NISCA discovery + multicast fixes already in
+run1). Config-injected via `tools/cluster-web-demo/build-cluster-demo main-32f743e9` (the same
+generator, `--x86-vmlinuz/--x86-initramfs/--x86-sysdisk` from that run + `--site-dir` a fresh
+`openvmx-site` checkout at `f1fe677`) — `SCSNODE=OVMXA`, `SCSSYSTEMID=1987`, group `257`,
+`VAXCLUSTER=2`, read back off the injected ODS-2 volume by the injector's own verifier. Node C =
+this V7.3 disk, served locally (no vax.3dl.network) via a minimal same-repo-tree pcjs static
+server (`machines/dec/vax/browser/` + the shared `machines/modules/`, ~5.7MB, traced by import
+closure from `vaxworker.js` — no unrelated pcjs disk images shipped). Both servers ran inside one
+temporary k3s-worker pod (`ovmx-lab/vms-2570-cn2-run`, deleted after use), CPU-sized
+`requests=2/limits=4` (of 8 total) to avoid starving other lanes.
+
+**Host was NOT contended this time**: `kubectl top nodes`/`describe node k3s-worker` checked
+before and during the run — 53–79% CPU utilization throughout, no concurrent heavy pod in
+`ovmx-lab` (the prior confounding `cn2-stage1` pod had already completed). This rules out the
+host-contention explanation runs 4–5 hit.
+
+**`e2e-run6-cn2-20min-nonconverged.log`** + **`e2e-run6-cn2-result.json`** +
+**`e2e-run6-final-t1195s.png`** — a fresh harness (adapted from the prior lane's `cluster-proof2.js`,
+not committed — same "throwaway probe, not the repo" precedent as `probe-run3`), run for the full
+`DEADLINE_MS=1200000` (20 minutes; exceeds this item's >=15-minute bar), with one methodology fix:
+plain DCL `SHOW CLUSTER` on VAXC fails with `%SMG-F-UNDTERNOS` on this minimally-tailored disk
+(confirmed again — `SET TERMINAL/DEVICE_TYPE=VT100` does **not** fix it, SMG$ needs a compiled
+TERMTABLE entry this volume doesn't carry), so this run used SDA's `SHOW CLUSTER`
+(`ANALYZE/SYSTEM` -> `SDA> SHOW CLUSTER`) on Node C instead — the same product-native command
+`probe-run3` used interactively, now driven automatically every ~45s for the whole window.
+
+**Result — transport proven at far greater scale than run1, membership genuinely did NOT
+converge, zero bugchecks either side:**
+
+- **Traffic**: `hub.sca` = `{"VAXC": 3230, "OVMXA": 4055}` (7,305 real 0x6007 frames total),
+  Node A's own executive counters (`SHOW CLUSTER/LOCAL_PORTS`) confirm `frames tx 4026 (errors 0),
+  rx 3178 (dropped: nobuf 0, badclass 0)` at t=1195s — sustained, symmetric, growing continuously
+  for the entire 20-minute window, zero drops/errors throughout.
+- **Node A's own `SHOW CLUSTER`** (plain DCL, works fine on this side) at t=1195s:
+  ```
+  View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 14:37:35
+  +---------------------------------------------------------------+
+  |                 SYSTEMS                |      MEMBERS         |
+  |----------------------------------------+----------------------|
+  | NODE   | CSID     | SOFTWARE        | STATUS           |
+  |--------+----------+-----------------+------------------|
+  | OVMXA  |          | VMX V0.7        | LOCAL            |
+  +---------------------------------------------------------------+
+  ```
+  — lists **only itself**, for the entire run (every periodic re-check from t~102s to t=1195s
+  showed the identical single-row table).
+- **Node C's own SDA `SHOW CLUSTER`** at t=1195s: CSB list still shows a single row (`VAXC`,
+  `Nodes 1`, `Curr. coord. CSID 00010001`) — byte-identical in shape to the solo genesis dump in
+  `vaxc-fulldump-run3.txt`, i.e. **VAXC never admitted OVMXA either**.
+- **`%CNXMAN` lines, whole 20-minute console history (grepped, not sampled)**: exactly two —
+  Node C's own genesis completion (`%CNXMAN, completing VAXcluster state transition`, its
+  standalone 1-node formation) and Node A's single **`%CNXMAN, waiting to form or join an OpenVMS
+  Cluster`** at t=50s. **Node A never printed a second `CNXMAN` line for the rest of the run** —
+  no proposing, no completing, no `%CNXMAN, this node is now a VAXcluster member` — despite
+  #1293's console fix (confirmed working: this exact string IS what the harness greps for and
+  the fix is why the t=50s line appears at all; run1 predates it) and despite the PEDRIVER-level
+  transport running continuously and correctly the whole time.
+- **Bugchecks**: zero on both sides (scanned for `***FATAL BUGCHECK***`, `BUGCHECK CODE`, `Kernel
+  panic`, `Oops:` on every console-text update across the whole run; none matched).
+
+## Diagnosis (evidence-bounded; join-FSM code NOT touched here per this item's scope)
+
+The gap is **not** transport, **not** host contention, and **not** this V7.3 disk's genesis (which
+independently forms its own correct 1-node CSB both standalone and here). The SCA/PEDRIVER wire
+carried 7,305 real, error-free, bidirectional frames over 20 minutes — proof the executive-resident
+datalink, multicast HELLO addressing (group 257, rd vms-147), and frame RX/TX paths on both OVMX
+and real VAX/VMS are correct and healthy. The break is **above** that layer: Node A's own CNXMAN
+join state machine entered `waiting to form or join` once at t=50s and never advanced again for the
+remaining ~19 minutes — no further CNXMAN state transition, no membership admission, even though
+it kept transmitting/receiving real cluster-group frames the whole time. This points at the
+OVMX-side CNXMAN/connection-manager logic that is supposed to *interpret* an incoming peer's HELLO
+(or PROPOSE/formation) traffic and drive its own join forward — not the frame path itself, which
+this run's counters clear. Reported as an **open gap** for the vms-151/genesis-join-FSM lane
+(explicitly out of this item's scope) with the fullest evidence bundle to date: a real, sustained,
+massive, error-free two-way SCA exchange between OVMX and a genuine VAX/VMS V7.3 peer that still
+does not converge to CN=2.
+
+## Honest status — CN=2 (Node A + Node C V7.3) in-browser: NOT PROVEN (transport proven, membership does not converge)
+
+What IS proven: the V7.3 disk is real, byte-correct, forms genesis both standalone and in-browser;
+the transport carries real, sustained, bidirectional, error-free 0x6007 traffic between OVMX Node A
+and it, now demonstrated for a full uncontended 20-minute window (7,305 frames, 0 errors) — ruling
+out both host contention and insufficient wall-clock time as explanations. What is **conclusively
+NOT achieved**: cluster membership convergence — `SHOW CLUSTER` on Node A and SDA `SHOW CLUSTER` on
+Node C both name only themselves for the entire window, and Node A's CNXMAN state machine visibly
+stalls after its first "waiting to form or join" message. This is reported as an **open gap**
+requiring join-FSM work outside this item's scope (see Diagnosis above), not fabricated as done.
 
 ## Known gap (diagnostic only, does not block this item)
 
@@ -100,9 +182,11 @@ never fires for a V7.3 Node C, though this does not affect `e2e-boot.js`'s actua
 (which only grades Node A). Filed as a follow-on, not fixed here (out of this item's scope —
 pcjs page authenticity-tell logic, not the disk or the OVMX executive).
 
-## Retry recommendation
+## Retry recommendation (ACTIONED — see run6 above)
 
-Re-run the longer-duration in-browser CN=2 watch (`e2e-boot.js` with `NODE_C=` this disk,
-`DEADLINE_MS` >= 600000) on an UNCONTENDED k3s-worker window (check `kubectl top pods -n
-ovmx-lab` first) to determine whether membership converges given enough real time, independent
-of the contention that blocked runs 4–5 here.
+The longer-duration, uncontended re-run this section asked for was done (run6, 2026-09-24,
+20 minutes, verified-idle host). It answers the open question definitively: membership does
+**not** converge given ample real time on an uncontended host — the gap is a real join-FSM
+issue on the OVMX side, not a resourcing artifact. Next step is join-FSM work (CNXMAN's handling
+of a peer's HELLO/formation traffic after its own "waiting to form or join" state), tracked
+outside this item.

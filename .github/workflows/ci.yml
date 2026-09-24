@@ -698,6 +698,13 @@ jobs:
 
       - name: Run vaxharness.py self-tests
         run: python3 -m pytest tests/lab-vax/test_vaxharness.py -v
+
+      # rd vms-cee: build_source_iso()'s extra_files staging logic (the Node-B
+      # cluster-config build-time injection hook) -- same "no SIMH/anita/
+      # container" cheap-pytest shape; anita/netbsd_console are stubbed inside
+      # the test itself.
+      - name: Run build_source_iso extra_files self-tests
+        run: python3 -m pytest tests/lab-vax/test_build_source_iso.py -v
   # -----------------------------------------------------------------------
   # Job: aarch64 system-emulation boot proof (rd vms-f66)
   #

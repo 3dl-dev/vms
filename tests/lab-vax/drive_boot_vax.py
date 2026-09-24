@@ -50,9 +50,11 @@
 # command here has its own console deadline, so nothing hangs.
 
 import os
+import shutil
 import sys
 import signal
 import subprocess
+import tempfile
 import time
 import traceback
 
@@ -249,23 +251,46 @@ def _console_text(child):
     return str(raw)
 
 
-def build_source_iso(artifacts_dir, out_iso, required):
+def build_source_iso(artifacts_dir, out_iso, required, extra_files=None):
     """Bundle the boot deliverables (the WHOLE artifacts dir) into an ISO9660
     image attached as a second CD (rq2): STARTUP.EXE (-> /sbin/init), the
     loadable vms.kmod + vmsfs.kmod (-> the kernel module_path), and the custom
     MODULAR kernel netbsd-OVMX (-> /netbsd, for install-kernel). `required' is
-    the subset this mode must have present."""
+    the subset this mode must have present (in artifacts_dir OR extra_files).
+
+    extra_files (rd vms-cee): optional {basename: host_path} of additional
+    files to stage onto the CD from OUTSIDE artifacts_dir -- needed because
+    artifacts_dir is typically a read-only mount (run-boot.sh's `-v
+    ARTIFACTS_DIR:/artifacts:ro'), so a caller-authored file (e.g. a per-node
+    CLUSTER_AUTHORIZE.DAT) cannot be dropped into it directly. None/empty ->
+    byte-identical to the original behavior (the ISO is built directly from
+    artifacts_dir, no staging copy)."""
     for f in required:
         p = os.path.join(artifacts_dir, f)
-        if not os.path.isfile(p):
+        if not os.path.isfile(p) and not (extra_files and f in extra_files):
             raise RuntimeError("missing boot artifact: %s" % p)
     if os.path.exists(out_iso):
         os.remove(out_iso)
-    cmd = ["genisoimage", "-quiet", "-J", "-r", "-V", "OVMXBOOT",
-           "-o", out_iso, artifacts_dir]
-    log("building boot-artifact ISO: %s" % " ".join(cmd))
-    subprocess.check_call(cmd)
-    log("boot-artifact ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
+    src_dir = artifacts_dir
+    tmp_stage = None
+    if extra_files:
+        tmp_stage = tempfile.mkdtemp(prefix="ovmx-iso-stage-")
+        for name in os.listdir(artifacts_dir):
+            s = os.path.join(artifacts_dir, name)
+            if os.path.isfile(s):
+                shutil.copyfile(s, os.path.join(tmp_stage, name))
+        for name, path in extra_files.items():
+            shutil.copyfile(path, os.path.join(tmp_stage, name))
+        src_dir = tmp_stage
+    try:
+        cmd = ["genisoimage", "-quiet", "-J", "-r", "-V", "OVMXBOOT",
+               "-o", out_iso, src_dir]
+        log("building boot-artifact ISO: %s" % " ".join(cmd))
+        subprocess.check_call(cmd)
+        log("boot-artifact ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
+    finally:
+        if tmp_stage:
+            shutil.rmtree(tmp_stage, ignore_errors=True)
 
 
 def do_install_kernel(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
@@ -473,7 +498,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
 
 
 def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
-                       boot_deadline, cmd_timeout):
+                       boot_deadline, cmd_timeout, cluster_authorize_path=""):
     """vms-7b15: turn the already-assembled boot disk (ovmx_init + modules + boot
     nodes, a COPY of boot-work/wd0.img) into a SINGLE-disk image whose one MSCP
     disk both VMB-boots the NetBSD root AND carries the OVMX ODS-2 volume in a
@@ -495,13 +520,29 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
       3. replaces the target's module_path vms.kmod with the CD's freshly-built
          one  -- the boot-work copy carries a vms.kmod built BEFORE the ra0e
          discovery landed; the running executive must be the new one.
+      4. OPTIONAL (cluster_authorize_path, rd vms-cee): drops a CLUSTER_AUTHORIZE.DAT
+         onto the target's root FFS at /etc/ovmx/cluster_authorize.dat -- the ONLY
+         build-time point a browser-demo VAX node's cluster GROUP can be authored,
+         since the FFS root ('a') has no offline writer (unlike the ODS-2 'e'
+         partition, which inject-ods2-config.sh already writes offline). This
+         session already boots the target single-user with a writable root
+         specifically to edit its FFS, so writing one more small file here is the
+         sound build-time path -- not a new live-boot session, and no regression
+         to the default (empty path -> byte-identical behavior to before).
 
     The disklabel rewrite (shrink 'a', add the ODS-2 'e' partition) and the dd of
     the mastered ODS-2 volume into 'e' happen HOST-side afterwards
     (mk_single_disk.py), because they need no NetBSD tools and are deterministic.
     This session only does what genuinely needs a NetBSD kernel: the FFS resize
     and the on-target device/module edits."""
-    build_source_iso(artifacts_dir, src_iso, ("vms.kmod",))
+    want_cluster_auth = bool(cluster_authorize_path)
+    extra_files = None
+    if want_cluster_auth:
+        if not os.path.isfile(cluster_authorize_path):
+            log("FAIL: cluster-authorize path not found: %s" % cluster_authorize_path)
+            return HARNESS_ERROR
+        extra_files = {"cluster_authorize.dat": cluster_authorize_path}
+    build_source_iso(artifacts_dir, src_iso, ("vms.kmod",), extra_files=extra_files)
     src_abs = os.path.abspath(src_iso)
     single_abs = os.path.abspath(single_img)
     vmm_args = ["set rq1 ra92", "attach rq1 " + single_abs,
@@ -611,6 +652,23 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
         return PROOF_FAILED
     log("OK: /mnt/dev/ra0e (the ODS-2 partition node) created on the target")
 
+    # rd vms-cee: when requested, also drop CLUSTER_AUTHORIZE.DAT onto the
+    # target's root FFS at /etc/ovmx/cluster_authorize.dat (cluster_authorize.h
+    # CLUSTER_AUTH_DEFAULT_PATH) -- the same CD, same mount, same session; the
+    # file is already on the CD via build_source_iso's extra_files (do_assemble_
+    # single). Absent (default), this clause is empty and the shell + its
+    # verification are byte-identical to before (no regression).
+    cluster_auth_clause = ""
+    cluster_auth_verify = ""
+    if want_cluster_auth:
+        cluster_auth_clause = (
+            "test -f /cdrom/cluster_authorize.dat || "
+            "{ echo NO_CLUSTER_AUTH_CD; exit 1; }; "
+            "mkdir -p /mnt/etc/ovmx && "
+            "cp /cdrom/cluster_authorize.dat /mnt/etc/ovmx/cluster_authorize.dat.new && "
+            "mv /mnt/etc/ovmx/cluster_authorize.dat.new /mnt/etc/ovmx/cluster_authorize.dat && "
+        )
+        cluster_auth_verify = " && test -f /mnt/etc/ovmx/cluster_authorize.dat"
     rc, out = run(child,
                   "MP=`sysctl -n kern.module.path | cut -d: -f1`; "
                   "echo module_path=$MP; DEST=/mnt$MP/vms/vms.kmod; "
@@ -624,14 +682,17 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
                   "test -n \"$ok\" || { echo NO_KMOD_CD; exit 1; }; "
                   "test -f \"$DEST\" || { echo NO_DEST_KMOD; exit 1; }; "
                   "cp /cdrom/vms.kmod \"$DEST.new\" && mv \"$DEST.new\" \"$DEST\" && "
-                  "sync && umount /cdrom && ls -l \"$DEST\"",
+                  + cluster_auth_clause +
+                  "sync && umount /cdrom && ls -l \"$DEST\""
+                  + cluster_auth_verify,
                   cmd_timeout)
     if rc != 0:
-        log("FAIL: could not replace the target's module_path vms.kmod with the "
-            "ra0e-aware build:\n%s" % out)
+        log("FAIL: could not replace the target's module_path vms.kmod%s:\n%s"
+            % (" / drop cluster_authorize.dat" if want_cluster_auth else "", out))
         run(child, "umount /mnt 2>/dev/null; true", cmd_timeout)
         return PROOF_FAILED
-    log("OK: target module_path vms.kmod replaced with the ra0e-aware build")
+    log("OK: target module_path vms.kmod replaced with the ra0e-aware build"
+        + (" + /etc/ovmx/cluster_authorize.dat installed" if want_cluster_auth else ""))
 
     run(child, "sync; umount /mnt 2>/dev/null; sync", cmd_timeout)
     # Remove the swap file from the shared root (tidy; the next run recreates it).
@@ -1173,6 +1234,10 @@ def main():
     single_img = env("OVMX_SINGLE_IMG", "/cache/single-work/wd0.img")
     single_a_sectors = int(env("OVMX_SINGLE_A_SECTORS", "524288"))  # 256 MiB
     single_rq0_type = env("OVMX_SINGLE_RQ0_TYPE", "RAUSER=340")     # 324 MiB
+    # rd vms-cee: OPTIONAL host path to a CLUSTER_AUTHORIZE.DAT to install onto
+    # the assemble-single target's FFS root at /etc/ovmx/cluster_authorize.dat.
+    # Empty (default) -> assemble-single is byte-identical to before.
+    cluster_authorize_path = env("OVMX_CLUSTER_AUTH_FILE", "")
 
     boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1800"))
     cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
@@ -1221,7 +1286,8 @@ def main():
                     "first)" % single_img)
                 return HARNESS_ERROR
             return do_assemble_single(a, single_img, artifacts_dir, src_iso,
-                                      single_a_sectors, boot_deadline, cmd_timeout)
+                                      single_a_sectors, boot_deadline, cmd_timeout,
+                                      cluster_authorize_path=cluster_authorize_path)
 
         if mode in ("sysboot", "sysboot-negctl", "sysboot-single"):
             sb_negctl = (mode == "sysboot-negctl")

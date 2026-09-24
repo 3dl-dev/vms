@@ -156,8 +156,93 @@ fi
 grep -q "vms-a4f" "$WORK/run4.log" \
     || { echo "FAIL: generator failed but not with the expected vms-a4f diagnostic"; cat "$WORK/run4.log"; exit 1; }
 
+echo "11. rd vms-e18e: Node B is a BUILD-TIME-CONFIGURED slim single disk, staged VERBATIM."
+echo "    Fixture: assemble one with the REAL builder (tests/lab-vax/mk_single_disk.py),"
+echo "    then assert the generator stages its bytes unchanged."
+LABVAX="$REPO/tests/lab-vax"
+"$PYTHON" - "$LABVAX/mk_single_disk.py" "$WORK/nodeB.img" <<'PYEOF'
+# Build the minimal shape run-boot.sh's sysboot-single produces: a NetBSD/vax
+# disklabel in sector 0 with an FFS root in 'a'. The partition-'e' ODS-2 volume
+# is then added by the REAL builder (mk_single_disk.main) below, so what the
+# generator is asked to verify was produced by the repo's own writer -- not by
+# a hand-rolled label this test invented.
+import importlib.util, struct, sys
+spec = importlib.util.spec_from_file_location("mk_single_disk", sys.argv[1])
+msd = importlib.util.module_from_spec(spec); spec.loader.exec_module(msd)
+img, secsize = sys.argv[2], msd.SECSIZE
+A_SECTORS, TOTAL, A_ORIG = 64, 256, 128
+buf = bytearray(secsize * 2)
+lab = msd.LABELSECTOR * secsize + msd.LABELOFFSET
+struct.pack_into("<I", buf, lab, msd.DISKMAGIC)
+struct.pack_into("<I", buf, lab + msd.OFF_MAGIC2, msd.DISKMAGIC)
+struct.pack_into("<I", buf, lab + msd.OFF_SECPERCYL, 32)
+struct.pack_into("<I", buf, lab + msd.OFF_SECPERUNIT, TOTAL)
+struct.pack_into("<H", buf, lab + msd.OFF_NPART, 3)
+msd._set_part(buf, lab, 0, A_ORIG, 0, 1024, 7, 8, 16)         # 'a' FFS root (pre-shrink)
+msd._set_part(buf, lab, 2, TOTAL, 0, 0, msd.FS_UNUSED, 0, 0)  # 'c' whole disk
+struct.pack_into("<H", buf, lab + msd.OFF_CKSUM, 0)
+struct.pack_into("<H", buf, lab + msd.OFF_CKSUM, msd._dkcksum(buf, lab, 3))
+with open(img, "wb") as f:
+    f.write(buf); f.truncate(TOTAL * secsize)
+with open(img + ".ods2", "wb") as f:                          # stand-in volume
+    f.write(b"ODS2-VOLUME-FIXTURE" * 512)
+sys.exit(msd.main(["mk_single_disk.py", img, img + ".ods2", str(A_SECTORS), str(TOTAL)]))
+PYEOF
+"$PYTHON" "$LABVAX/mk_single_disk.py" verify "$WORK/nodeB.img" \
+    || { echo "FAIL: the fixture the real builder produced does not verify"; exit 1; }
+
+OUT5="$WORK/out5"
+"$DEMO/build-cluster-demo" V9.9-test --out "$OUT5" \
+    --x86-vmlinuz "$WORK/stock-vmlinuz" \
+    --x86-initramfs "$WORK/stock-initramfs.cpio.gz" \
+    --x86-sysdisk "$WORK/stock-sysdisk.qcow2" \
+    --site-dir "$SITE" --vax-image "$WORK/nodeB.img" > "$WORK/run5.log" 2>&1 \
+    || { echo "FAIL: generator rejected a genuine build-time-configured Node B"; cat "$WORK/run5.log"; exit 1; }
+BUNDLE5="$OUT5/V9.9-test"
+[ -f "$BUNDLE5/nodeB/ovmx-vax-nodeB.img.gz" ] || { echo "FAIL: Node B not staged into the bundle"; exit 1; }
+gunzip -c "$BUNDLE5/nodeB/ovmx-vax-nodeB.img.gz" > "$WORK/nodeB.roundtrip"
+cmp "$WORK/nodeB.img" "$WORK/nodeB.roundtrip" \
+    || { echo "FAIL: staged Node B is NOT byte-identical to the build's image (it was re-written)"; exit 1; }
+"$PYTHON" - "$BUNDLE5/manifest.json" <<'PYEOF'
+import json, sys
+b = json.load(open(sys.argv[1]))["nodes"]["B"]
+assert b["staged"] is False, b
+assert b["injected_here"] is False, b
+assert "run-boot.sh" in b["config_source"], b
+assert "name" not in b and "id" not in b, ("manifest asserts a Node B identity "
+                                           "this generator never read back", b)
+print("manifest Node B OK (verbatim, provenance recorded, no unverified identity)")
+PYEOF
+
+echo "12. rd vms-e18e TEETH: the two ways a Node B cannot boot must be REFUSED, not shipped."
+echo "12a. a qcow2 --vax-image (pcjs reads raw disk bytes and cannot open qcow2)"
+qemu-img create -f qcow2 "$WORK/nodeB.qcow2" 1M >/dev/null
+OUT6="$WORK/out6"
+if "$DEMO/build-cluster-demo" V9.9-test --out "$OUT6" \
+    --x86-vmlinuz "$WORK/stock-vmlinuz" --x86-initramfs "$WORK/stock-initramfs.cpio.gz" \
+    --x86-sysdisk "$WORK/stock-sysdisk.qcow2" --site-dir "$SITE" \
+    --vax-image "$WORK/nodeB.qcow2" > "$WORK/run6.log" 2>&1; then
+    echo "FAIL: generator staged a qcow2 Node B pcjs cannot boot"; cat "$WORK/run6.log"; exit 1
+fi
+# Match the diagnostic's own words, not "qcow2" -- the fixture PATH contains
+# that string, so a grep for it passes on any refusal at all.
+grep -q "reads RAW disk bytes" "$WORK/run6.log" \
+    || { echo "FAIL: refused, but not with the qcow2 diagnostic"; cat "$WORK/run6.log"; exit 1; }
+
+echo "12b. an image with no NetBSD/vax disklabel (e.g. a bare ODS-2 volume passed by mistake)"
+OUT7="$WORK/out7"
+if "$DEMO/build-cluster-demo" V9.9-test --out "$OUT7" \
+    --x86-vmlinuz "$WORK/stock-vmlinuz" --x86-initramfs "$WORK/stock-initramfs.cpio.gz" \
+    --x86-sysdisk "$WORK/stock-sysdisk.qcow2" --site-dir "$SITE" \
+    --vax-image "$WORK/stock.raw" > "$WORK/run7.log" 2>&1; then
+    echo "FAIL: generator staged an image carrying no disklabel as Node B"; cat "$WORK/run7.log"; exit 1
+fi
+grep -q "carries no NetBSD/vax disklabel" "$WORK/run7.log" \
+    || { echo "FAIL: refused, but not with the disklabel diagnostic"; cat "$WORK/run7.log"; exit 1; }
+
 echo "PASS: build-cluster-demo injects a real ODS-2 identity for Node A, stages the page"
 echo "      verbatim (including boot/assets/{xterm.js,xterm.css,xterm-pty.js}, rd vms-a4f),"
 echo "      stays honest-partial on Node B/C, is byte-deterministic across re-runs, starts"
-echo "      each tag's bundle clean (no in-place upgrade), and refuses to ship a bundle"
-echo "      Node A can't render into."
+echo "      each tag's bundle clean (no in-place upgrade), refuses to ship a bundle"
+echo "      Node A can't render into, and stages a build-time-configured Node B byte-for-byte"
+echo "      while refusing the two shapes pcjs cannot boot (rd vms-e18e)."

@@ -157,6 +157,78 @@ both teardowns (`grep -c 'BUGCHECK|FATAL'` → 0 on both VAXC logs; `Kernel
 panic`/`Oops:` → 0 on both OVMX logs). VAXC survived run 1, run 2, a reboot
 between them, and the run-2 teardown.
 
+## In-browser: CN=2, the same fix, the same real V7.3 volume (2026-09-24)
+
+`browser-cn2-result.json`, `browser-cn2-run.log`, `browser-nodeA.console.log`,
+`browser-cn2-final.png`. Run in a temporary `k3s-worker` pod
+(`ovmx-lab/vms-b34-cn2`, deleted after use), never served from
+vax.3dl.network. Node A = the demo bundle built by
+`tools/cluster-web-demo/build-cluster-demo` from **these same fixed
+artifacts**; Node C = **this same pinned V7.3 volume**, SHA-256
+`45355fd2…4fe15` — byte-identical to the one rd vms-2570 run6 used — served
+from a minimal local pcjs tree.
+
+**`pass: true` at t=108 s.** Both legs, neither of them an OVMX self-report
+alone:
+
+Node A's own console, in the browser (`browser-nodeA.console.log`):
+
+```
+[   39.071299] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   39.102474] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   41.627264] %PEA0, channel verified
+[   41.670649] %PEA0, virtual circuit open
+[   42.405352] %CNXMAN, the cluster assigned this node a cluster system id
+[   43.692235] %CNXMAN, this node is a member of the cluster
+[   43.739395] %CNXMAN, this node is now a VAXcluster member
+[   43.745130] %CNXMAN, system 00000000000007c3 was added to the cluster
+[   43.752510] %CNXMAN, system 00000000000007c5 was added to the cluster
+[   45.081034] %CNXMAN, completed VAXcluster state transition
+```
+
+Node A's `SHOW CLUSTER` (leg 1):
+
+```
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 17:13:19
+
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+```
+
+Node C — the real VMS node — on its own console (leg 2):
+
+```
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+%CNXMAN,  received VAXcluster membership request from system OVMXA
+%CNXMAN,  proposing addition of system OVMXA
+%CNXMAN,  completing VAXcluster state transition
+```
+
+and Node A's port, in the browser (screenshot):
+`channels 1, circuits 1 / cluster group 257 (CLUSTER_AUTHORIZE) /
+frames tx 857 (errors 0), rx 628 (dropped: nobuf 0, badclass 0)`.
+
+Compare rd vms-2570 run6 on the shipped executive: 20 minutes, 7,305
+error-free frames, `channels 1, circuits 1`, and `SHOW CLUSTER` naming only
+itself the whole time.
+
+### A harness confound worth recording
+
+The first two in-browser attempts here read `rx 0` at the executive while the
+page's own NIC counter showed ~1,000 frames delivered — Node A never formed a
+channel at all. That was **not** the executive: the bundle had been generated
+against a local `openvmx-site` checkout at `87aa991`, two commits **before**
+`00c241a` ("fix in-browser cluster RX — WebSocket readyState constants on
+FakeWebSocket instances", rd vms-0cd2). Rebuilt against `f1fe677` — the commit
+rd vms-2570 run6 also used — with nothing else changed, the same Node A image
+joined in 108 s. Both non-converging runs are kept (`cn2-run1`/`cn2-run2` in
+the pod, summarised here) so the distinction is on the record: the browser
+lane's RX fix is a prerequisite for this proof, not part of it.
+
 ## Honest scope
 
 * **Not** a licensed VMScluster. VAXC logs `%LICENSE-E-NOAUTH, DEC VAXCLUSTER
@@ -172,6 +244,10 @@ between them, and the run-2 teardown.
   PEDRIVER's own console output instead, which is VMS reporting on itself, not
   OVMX reporting on VMS.
 * CN=3 (adding Node B) is not attempted here.
+* The in-browser grader (`cn2-grade.js`) is a throwaway probe built on
+  openvmx-site's committed `e2e-boot.js` page-driving code — the same
+  "throwaway probe, not the repo" precedent as vms-2570's `probe-run3`. Its
+  full transcript is `browser-cn2-run.log`.
 
 ## Reproducing
 

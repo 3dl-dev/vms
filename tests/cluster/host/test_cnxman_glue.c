@@ -761,10 +761,15 @@ static void test_glue_bindings(void)
 	 */
 	check_has("if (cnxman_join_drive(cn))\n\t\treturn;\n\n"
 		  "\tif (cl->params.vaxcluster == 2u) {",
-		  "GENESIS: CLUSTER_START tries to JOIN and then, finding "
-		  "nobody, does NOT found -- nothing has had time to be heard");
-	check_has("cnxman_genesis_arm(cn);",
-		  "... it ARMS the discovery window instead");
+		  "GENESIS: CLUSTER_START tries to JOIN and does NOT found -- "
+		  "nothing has had time to be heard");
+	check_has("if (cl->params.vaxcluster == 2u)\n\t\tcnxman_genesis_arm(cn);"
+		  "\n\n\tif (cnxman_join_drive(cn))",
+		  "GENESIS (vms-151): the discovery window is ARMED for EVERY "
+		  "VAXCLUSTER=2 node and BEFORE the join drive -- a node that "
+		  "could see a peer at CLUSTER_START used to never arm it, so "
+		  "when that join ended unanswered the window it needed in "
+		  "order to form had never been running");
 	check_has("uint32_t secs = cn->cl->club.recnxinterval;",
 		  "GENESIS: the window is RECNXINTERVAL -- the executive's own "
 		  "configured answer to \"how long before an absence is real\", "
@@ -777,9 +782,26 @@ static void test_glue_bindings(void)
 		  "GENESIS: only VAXCLUSTER=2 (\"always a member\") may form "
 		  "one; =1 is \"a member when a cluster is PRESENT\", and from "
 		  "cold there is none");
-	check_has("if (cnxman_join_target_present(cn))\n\t\treturn 0;",
-		  "GENESIS: a system this node could join -- a real VAX "
-		  "included -- means JOIN, never FORM");
+	/*
+	 * vms-151. "Is there a system to join?" is no longer asked HERE, and
+	 * that is a tightening, not a loosening: this glue's version refused
+	 * whenever any system was visible, which deadlocked two fresh nodes
+	 * that could see each other and neither of which was in a cluster to be
+	 * joined. The question now belongs to cnxman_coord_found(), which can
+	 * ask it precisely against the CLUB's own CSBs -- and what this file
+	 * must still do is hand it the one fact only the JOIN FSM holds.
+	 */
+	check_absent("if (cnxman_join_target_present(cn))\n\t\treturn 0;",
+		     "GENESIS: the blanket \"any system is visible\" refusal is "
+		     "gone from this glue -- it deadlocked symmetric genesis");
+	check_has("ev.admission_rounds = cn->join.attempts_exhausted;",
+		  "GENESIS: ... and the precise question is fed the JOIN FSM's "
+		  "OWN count of complete rounds in which every visible system "
+		  "was asked to admit this node and none did -- read at the "
+		  "decision, never cached here");
+	check_has("cnxman_coord_found(&cn->coord, &ev)",
+		  "GENESIS: the FORM decision is cnxman_coord_found()'s, taken "
+		  "against real CSBs with that evidence in hand");
 	check_has("if (!cnxman_quorum_own_votes_suffice(cl, (uint16_t *)0))",
 		  "GENESIS: quorum by this node's own votes is asked through "
 		  "the ONE shared predicate, not a second formula here");

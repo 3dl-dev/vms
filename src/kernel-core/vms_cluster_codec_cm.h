@@ -1183,13 +1183,18 @@ vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *body,
  * 0x3FF, E30) the shape test above is derived from.
  *
  * NEITHER ARGUMENT MAY BE INVENTED, and this function cannot check that --
- * its two callers are what make it honest. vms_cnxman_join_fsm.c takes the
+ * its caller is what makes it honest. vms_cnxman_join_fsm.c takes the
  * generation off a coordinator CSID it really read from a real op-0x06 and the
- * SCSSYSTEMID from real SYSGEN state; vms_cnxman_coord_fsm.c's founding path
- * takes generation 1 (a cluster formed from nothing) and the same SYSGEN
- * SCSSYSTEMID, and only after the quorum predicate has passed. There is no
- * third caller, and a CSID assembled anywhere else in the executive would be a
- * placeholder -- the fabrication that bugchecked a real VAX.
+ * SCSSYSTEMID from real SYSGEN state. A CSID assembled anywhere else in the
+ * executive would be a placeholder -- the fabrication that bugchecked a real
+ * VAX.
+ *
+ * NOT THE ASSIGNMENT RULE (rd vms-3a7c, vms-151). This construction is the
+ * SHAPE a CSID has; what a COORDINATOR puts in the low half is the round-robin
+ * CSV slot (p. 7-25), which the oracle proved is not a function of the
+ * SCSSYSTEMID -- 1986 was assigned slot 3. Every coordinator-side CSID, the
+ * founder's included, is therefore built by vms_cnxman_coord_fsm.c's
+ * coord_csid_of_slot() from a slot the CLUB's own CSIDs seeded, not here.
  */
 uint32_t vms_cm_csid_of(uint32_t generation, uint32_t scssystemid);
 

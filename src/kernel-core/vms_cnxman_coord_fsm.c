@@ -53,9 +53,12 @@
  * Small shared helpers
  * ========================================================================== */
 
+/* A NULL message is "nothing to say", not a line: coord_found_refuse() uses it
+ * to keep a standing refusal's bookkeeping while staying quiet on OPA0: (rd
+ * vms-151). No ops->log implementation, here or in a test, ever sees NULL. */
 static void coord_log(const struct cnxman_coord *c, const char *msg)
 {
-	if (c->ops != NULL && c->ops->log != NULL)
+	if (msg != NULL && c->ops != NULL && c->ops->log != NULL)
 		c->ops->log(c->ops->ctx, msg);
 }
 
@@ -342,10 +345,17 @@ static uint32_t coord_next_slot(struct cnxman_coord *c)
  * behaviour (1986 -> slot 3) is precisely a case it would have refused.
  * Full statement: docs/design-op06-membership-builder.md sec 5.
  */
+/* The ONE spelling of "a CSID for this CSV slot", so the founding path and
+ * every admission cannot build one differently (rd vms-3a7c, vms-151). */
+static vms_csid_t coord_csid_of_slot(uint32_t slot)
+{
+	return (vms_csid_t)((CNXMAN_COORD_GENESIS_GEN << 16) | slot);
+}
+
 static void coord_assign_slot(struct cnxman_coord *c, struct vms_csb *subject,
 			      uint32_t slot)
 {
-	cnxman_csb_set_csid(subject, (vms_csid_t)((1u << 16) | slot));
+	cnxman_csb_set_csid(subject, coord_csid_of_slot(slot));
 	c->max_slot_seen = slot;
 	c->csids_assigned++;
 }
@@ -1701,62 +1711,192 @@ enum cnxman_coord_verdict cnxman_coord_propose_remove(struct cnxman_coord *c,
  * here and mints nothing, however it was called.
  * ========================================================================== */
 
+/*
+ * A FOUNDING REFUSAL: recorded and counted every time, SAID when it is news
+ * (rd vms-151, MEASURED on the two-node rig -- "another system is also waiting
+ * to form ... and takes precedence" once a second for as long as the other
+ * node took to form). The founding gate is asked on the once-a-second
+ * reconnect beat, so every clause of it is a standing condition, not an event;
+ * an OPA0: line per second while nothing changes is console noise VMS does not
+ * make. `genesis_said` carries the last reason ANNOUNCED, so a reason that
+ * CHANGES is heard, and one that merely persists is not repeated.
+ *
+ * coord_refuse() still runs in full either way -- `last_refusal` and the
+ * per-reason counters are state the diagnostics and the negctl read, and they
+ * are not silenced with the speech.
+ */
 static int coord_found_refuse(struct cnxman_coord *c,
 			      enum cnxman_coord_refusal why, const char *msg)
 {
-	(void)coord_refuse(c, why, msg);
+	int news = ((uint8_t)why != c->genesis_said);
+
+	c->genesis_said = (uint8_t)why;
+	(void)coord_refuse(c, why, news ? msg : (const char *)0);
 	return -1;
 }
 
+/* ------------------------------------------------------------------------
+ * IS THERE ANYBODY OUT THERE? -- the interop-safety gate, split into the three
+ * different facts it used to conflate (SS8b's ELECTION note, rd vms-151).
+ * ------------------------------------------------------------------------ */
+
+/* Is this CSB one of somebody else's systems, as opposed to a free slot or the
+ * block describing this node? The one spelling, so the three walks below cannot
+ * drift apart. */
+static int coord_is_peer_csb(const struct vms_csb *csb)
+{
+	return csb->in_use && (csb->flags & VMS_CSB_F_LOCAL) == 0u;
+}
+
 /*
- * IS THERE ANYBODY OUT THERE? -- the interop-safety gate, and the one that
- * keeps founding from ever competing with an existing cluster.
- *
- * A node founds only when it has found NOBODY: any other system this executive
- * holds a CSB for -- a real VAX or another OVMX, discovered but not yet
- * admitted, or already SELECTED into a membership -- means there is a cluster
- * (or a system about to form one) to JOIN, and joining is what this node must
- * do. Forming a singleton beside a system that is already there is a partition,
- * and a partition is how the other side gets hurt.
- *
- * Deliberately the same condition the glue's own discovery gate applies, read
- * here from the CLUB's real CSB table so it is the FSM that refuses -- not an
- * ordering the caller has to remember to get right.
+ * (1) DOES THIS SYSTEM ALREADY HOLD A CLUSTER IDENTITY? Then there is a cluster
+ * to JOIN and this node must not form one beside it. Two honest reads, no
+ * inference: a CSID on its CSB (a value only a cluster ever assigns -- this
+ * executive learns one and never guesses one), or this CLUB's own MEMBER /
+ * SELECTED flag on it, which only a real Phase 2 commit ever sets.
  */
-static int coord_has_peer_csb(struct cnxman_coord *c)
+static int coord_peer_in_cluster(const struct vms_csb *csb)
+{
+	return csb->csid_valid ||
+	       (csb->flags & (VMS_CSB_F_MEMBER | VMS_CSB_F_SELECTED)) != 0u;
+}
+
+/*
+ * (3) COULD THIS SYSTEM FORM A CLUSTER ITSELF? Only a system with VOTES > 0 can
+ * (pp. 7-28, 7-33), so a peer whose PARAMS this node has REALLY RECEIVED and
+ * which advertise zero votes is not a rival and must not be deferred to --
+ * deferring to a node that can never found is the same deadlock in a new shape.
+ *
+ * A peer whose PARAMS have not arrived is UNKNOWN, and unknown counts as a
+ * rival: this node stands down for one more beat rather than form beside a
+ * system it has not finished listening to.
+ */
+static int coord_peer_is_form_candidate(const struct vms_csb *csb)
+{
+	if (!csb->params_valid)
+		return 1;
+	return csb->votes > 0u;
+}
+
+/*
+ * Does a founding candidate rank AHEAD of this node? The total order is the
+ * SCSSYSTEMID, lowest first -- an OVMX design value standing in for p. 7-32's
+ * coordinator lock, which OVMX has no grounded frame to ask for (SS8b (3)). Both
+ * numbers are real: ours is SYSGEN's, theirs is the one their own record
+ * carried into that CSB.
+ */
+static int coord_peer_outranks(const struct cnxman_coord *c,
+			       const struct vms_csb *csb)
+{
+	if (!csb->sysid_valid || !coord_peer_is_form_candidate(csb))
+		return 0;
+	return csb->sysid < c->cl->params.scssystemid;
+}
+
+/* Remember whom we stood down for -- read off that peer's own CSB, and left an
+ * explicit omission when there is nobody. */
+static void coord_note_deferred_to(struct cnxman_coord *c,
+				   const struct vms_csb *csb)
+{
+	c->deferred_to_sysid = csb->sysid;
+	c->deferred_to_valid = 1u;
+}
+
+/*
+ * The founding CSID: generation 1 -- p. 7-25's sequence starts at 1 and no slot
+ * of a cluster that does not exist has ever been used -- over the CSV slot
+ * coord_next_slot() hands out, which on a virgin CLUB is slot 1. The SAME walk
+ * every admission assigns from (rd vms-3a7c; see the header's note on why this
+ * is not `SCSSYSTEMID & 0x3ff`), so a founder and an admission cannot assign
+ * slots differently. Returns 0 when no slot the grounded nodemap byte can name
+ * is left -- caught by the gate, never minted.
+ */
+static vms_csid_t coord_genesis_csid(struct cnxman_coord *c)
+{
+	uint32_t slot = coord_next_slot(c);
+
+	if (slot == 0u)
+		return (vms_csid_t)0;
+	return coord_csid_of_slot(slot);
+}
+
+/*
+ * ONE walk of the CSB table, applying SS8b's three clauses in the order that
+ * lets the strongest refusal win: a system already in a cluster forbids forming
+ * outright; otherwise a system nobody has asked yet must be asked first;
+ * otherwise a founding candidate that ranks ahead of this node forms instead.
+ *
+ * Returns CNXMAN_COORD_REF_NONE when nothing present forbids forming, and sets
+ * `*who` to the CSB that did forbid it when one did.
+ */
+static enum cnxman_coord_refusal
+coord_form_peer_bar(struct cnxman_coord *c,
+		    const struct cnxman_form_evidence *ev,
+		    const struct vms_csb **who)
 {
 	struct vms_club *club = coord_club(c);
-	uint32_t i;
+	const struct vms_csb *outranker = NULL;
+	uint32_t i, seen = 0u;
 
 	for (i = 0; i < club->n_csb; i++) {
 		const struct vms_csb *csb = &club->csb[i];
 
-		if (!csb->in_use || (csb->flags & VMS_CSB_F_LOCAL) != 0u)
+		if (!coord_is_peer_csb(csb))
 			continue;
-		if (csb->sysid_valid ||
-		    (csb->flags & VMS_CSB_F_SELECTED) != 0u)
-			return 1;
+		if (coord_peer_in_cluster(csb)) {
+			*who = csb;
+			return CNXMAN_COORD_REF_PEER_CLUSTER;
+		}
+		if (!csb->sysid_valid)
+			continue;
+		seen++;
+		if (outranker == NULL && coord_peer_outranks(c, csb))
+			outranker = csb;
 	}
-	return 0;
+	if (seen == 0u)
+		return CNXMAN_COORD_REF_NONE;   /* nobody to ask, nobody to rank */
+	if (ev == NULL || ev->admission_rounds == 0u)
+		return CNXMAN_COORD_REF_PEER_UNASKED;
+	if (outranker != NULL) {
+		*who = outranker;
+		return CNXMAN_COORD_REF_OUTRANKED;
+	}
+	return CNXMAN_COORD_REF_NONE;
 }
 
-/*
- * The founding CSID: generation 1 -- p. 7-25's sequence starts at 1 and this
- * slot has never been used, because there is no cluster yet -- over THIS
- * node's own real SCSSYSTEMID (FC-P0.10 SYSGEN state). Assembled by the codec's
- * one construction (vms_cm_csid_of), the same one the joiner's wire-learned
- * CSID goes through, so a founder and a joiner cannot build a CSID differently.
- */
-static vms_csid_t coord_genesis_csid(const struct cnxman_coord *c)
+/* Say the refusal the walk returned, count it in its own cell, and -- for the
+ * election -- record whom this node stood down for. */
+static int coord_found_refuse_peer(struct cnxman_coord *c,
+				   enum cnxman_coord_refusal bar,
+				   const struct vms_csb *who)
 {
-	return (vms_csid_t)vms_cm_csid_of(CNXMAN_COORD_GENESIS_GEN,
-					  (uint32_t)c->cl->params.scssystemid);
+	if (bar == CNXMAN_COORD_REF_PEER_CLUSTER) {
+		c->genesis_refused_peer++;
+		return coord_found_refuse(c, bar,
+			"%CNXMAN, another system already belongs to an OpenVMS "
+			"Cluster; this node joins one rather than forming one");
+	}
+	if (bar == CNXMAN_COORD_REF_PEER_UNASKED) {
+		c->genesis_refused_unasked++;
+		return coord_found_refuse(c, bar,
+			"%CNXMAN, another system is present and has not yet been "
+			"asked to admit this node; not forming a cluster");
+	}
+	if (who != NULL)
+		coord_note_deferred_to(c, who);
+	c->genesis_refused_outranked++;
+	return coord_found_refuse(c, CNXMAN_COORD_REF_OUTRANKED,
+		"%CNXMAN, another system is also waiting to form an OpenVMS "
+		"Cluster and takes precedence; this node will join it");
 }
 
 /* Every reason this node may NOT found, each one a read of real state. */
-static int coord_found_gate(struct cnxman_coord *c, vms_csid_t csid)
+static int coord_found_gate(struct cnxman_coord *c, vms_csid_t csid,
+			    const struct cnxman_form_evidence *ev)
 {
 	struct vms_club *club = coord_club(c);
+	const struct vms_csb *who = NULL;
+	enum cnxman_coord_refusal bar;
 
 	if (club->local_csid_valid)
 		return coord_found_refuse(c, CNXMAN_COORD_REF_BUSY,
@@ -1770,12 +1910,9 @@ static int coord_found_gate(struct cnxman_coord *c, vms_csid_t csid)
 		return coord_found_refuse(c, CNXMAN_COORD_REF_NO_SUBJECT,
 			"%CNXMAN, no system block for this node; not forming a "
 			"cluster");
-	if (coord_has_peer_csb(c)) {
-		c->genesis_refused_peer++;
-		return coord_found_refuse(c, CNXMAN_COORD_REF_BUSY,
-			"%CNXMAN, another system is present; this node joins an "
-			"OpenVMS Cluster rather than forming one");
-	}
+	bar = coord_form_peer_bar(c, ev, &who);
+	if (bar != CNXMAN_COORD_REF_NONE)
+		return coord_found_refuse_peer(c, bar, who);
 	/*
 	 * THE PREDICATE. p. 7-6 applied to a proposed set of one: this node
 	 * founds only if its OWN configured VOTES already meet the quorum its
@@ -1788,7 +1925,7 @@ static int coord_found_gate(struct cnxman_coord *c, vms_csid_t csid)
 			"%CNXMAN, this node does not have quorum by its own "
 			"votes; waiting to form or join an OpenVMS Cluster");
 	}
-	if (!coord_slot_expressible(csid))
+	if (csid == (vms_csid_t)0 || !coord_slot_expressible(csid))
 		return coord_found_refuse(c, CNXMAN_COORD_REF_NO_SLOT,
 			"%CNXMAN, this node's cluster system id falls outside "
 			"the membership map this protocol can express; not "
@@ -1796,7 +1933,8 @@ static int coord_found_gate(struct cnxman_coord *c, vms_csid_t csid)
 	return 0;
 }
 
-int cnxman_coord_found(struct cnxman_coord *c)
+int cnxman_coord_found(struct cnxman_coord *c,
+		       const struct cnxman_form_evidence *ev)
 {
 	struct vms_club *club;
 	vms_csid_t csid;
@@ -1807,13 +1945,16 @@ int cnxman_coord_found(struct cnxman_coord *c)
 	club = coord_club(c);
 	csid = coord_genesis_csid(c);
 
-	if (coord_found_gate(c, csid) != 0)
+	if (coord_found_gate(c, csid, ev) != 0)
 		return -1;
 
 	/* Earned: mint it, and record it exactly where a LEARNED one lands --
 	 * cnxman_club_learn_local_csid() is the ONE setter of local_csid_valid,
 	 * for a founder and a joiner alike. */
 	cnxman_club_learn_local_csid(club, csid);
+	/* Nothing is being refused any more, so the next refusal -- whatever it
+	 * is -- is news again (rd vms-151). */
+	c->genesis_said = (uint8_t)CNXMAN_COORD_REF_NONE;
 	c->genesis_opens++;
 	coord_log(c, "%CNXMAN, this node has quorum by its own votes: forming "
 		     "an OpenVMS Cluster");
@@ -1830,7 +1971,19 @@ int cnxman_coord_found(struct cnxman_coord *c)
 	 * flag (vms_cnxman_phase2.c tasks 1/3/4). A caller that trusted the
 	 * return of the drive above would be asserting a membership.
 	 */
-	return c->phase2_committed ? 0 : -1;
+	if (!c->phase2_committed)
+		return -1;
+	/*
+	 * ... AND THE FOUNDER SAYS IT OUT LOUD, like every other member (rd
+	 * vms-151). A JOINER announces its membership from the join FSM's
+	 * transition-done handler; a founder never runs that FSM, so the one
+	 * node that formed the cluster was the one node that never announced
+	 * being in it. The line is the same one, printed from the same fact --
+	 * phase2's committed MEMBER flag, read back above -- and never before
+	 * it, so it can no more be said without a membership than the joiner's.
+	 */
+	coord_log(c, "%CNXMAN, this node is now a VAXcluster member");
+	return 0;
 }
 
 static void coord_retry_deferred(struct cnxman_coord *c)

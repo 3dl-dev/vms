@@ -2110,14 +2110,24 @@ static int cnxman_genesis_window_elapsed(struct vms_cnxman *cn)
  *   this node's identity is somebody else's to give, and asking again would at
  *   best be noise.
  *
- *   A TARGET TO JOIN. The same question cnxman_join_drive() asks, asked again
- *   because a join that could not be STARTED still means there is a system
- *   there. (cnxman_coord_found() re-checks it against the CLUB itself, so the
- *   guarantee does not rest on this ordering.)
+ *   A JOIN STILL RUNNING. While this node's own membership request is in
+ *   flight its identity is somebody else's to give, and asking to form in the
+ *   middle of being admitted would race the admission. An attempt that ENDED --
+ *   including the one that ended because every system declined (E80) -- leaves
+ *   the FSM in IDLE, which is precisely the state in which asking is right.
  *
  *   QUORUM BY OWN VOTES, asked here too -- the same one function, not a second
  *   formula -- so that the node which will never be a founder never reaches
  *   found()'s refusal line. found() applies it again as the load-bearing gate.
+ *
+ * WHAT IS NO LONGER ASKED HERE, and why (rd vms-151). "Is there a system to
+ * join?" used to be a clause of this gate, and it refused whenever ANY system
+ * was visible -- which deadlocked two fresh nodes that could see each other and
+ * neither of which was in a cluster to be joined. The question is now
+ * cnxman_coord_found()'s, where it can be asked PRECISELY (is that system in a
+ * cluster? has it been asked? does it rank ahead of us?) against the CLUB's own
+ * CSBs. The guarantee never rested on this ordering: found() has always
+ * re-applied it, and now it is the only place that applies it.
  */
 static int cnxman_genesis_may_ask(struct vms_cnxman *cn)
 {
@@ -2128,8 +2138,6 @@ static int cnxman_genesis_may_ask(struct vms_cnxman *cn)
 	if (cl->state == VMS_CLUSTER_MEMBER || cl->club.local_csid_valid)
 		return 0;
 	if (cn->join.state != (uint8_t)CNXMAN_JOIN_IDLE)
-		return 0;
-	if (cnxman_join_target_present(cn))
 		return 0;
 	if (!cnxman_quorum_own_votes_suffice(cl, (uint16_t *)0))
 		return 0;
@@ -2205,10 +2213,20 @@ static void cnxman_quorum_apply(struct vms_cnxman *cn)
 static int cnxman_try_genesis(struct vms_cnxman *cn)
 {
 	struct vms_cluster *cl = cn->cl;
+	struct cnxman_form_evidence ev;
 
 	if (!cnxman_genesis_may_ask(cn))
 		return 0;
-	if (cnxman_coord_found(&cn->coord) != 0)
+	/*
+	 * THE JOIN'S OWN FACT, read out of the join FSM at the moment of the
+	 * decision and passed in -- never cached, never a second counter. It is
+	 * how many COMPLETE rounds ended with every visible system asked to
+	 * admit this node and none of them taking the request (E80's
+	 * join_attempt_exhausted()). found() needs it for clause (2) of the
+	 * election; this glue holds it for nobody.
+	 */
+	ev.admission_rounds = cn->join.attempts_exhausted;
+	if (cnxman_coord_found(&cn->coord, &ev) != 0)
 		return 0;   /* refused, logged and counted inside found() */
 
 	/*
@@ -2449,6 +2467,23 @@ static void cnxman_start_join_or_wait(struct vms_cnxman *cn)
 	struct vms_cluster *cl = cn->cl;
 
 	(void)cnxman_discover_peers(cn);
+
+	/*
+	 * ARM THE DISCOVERY WINDOW FIRST, AND FOR EVERY VAXCLUSTER=2 NODE (rd
+	 * vms-151). Arming a clock asserts nothing about membership -- what it
+	 * says is "this node has not yet waited long enough to conclude
+	 * anything", which is true of a node that has just started a join as
+	 * much as of one that found nobody to start one to. It used to be armed
+	 * only on the branch where no join could be started, so a node that
+	 * could see a peer at CLUSTER_START never armed it at all; when that
+	 * join then ended unanswered because the peer was not in a cluster
+	 * either (E80), the window it needed in order to form had never been
+	 * running and never elapsed. The FORM half of the line below was
+	 * unreachable for exactly the configuration that needs it.
+	 */
+	if (cl->params.vaxcluster == 2u)
+		cnxman_genesis_arm(cn);
+
 	if (cnxman_join_drive(cn))
 		return;
 
@@ -2457,14 +2492,13 @@ static void cnxman_start_join_or_wait(struct vms_cnxman *cn)
 		cnxman_ops_log(cn, "%CNXMAN, waiting to form or join an "
 				   "OpenVMS Cluster");
 		/*
-		 * ... and the FORM half of that line is now a real
-		 * possibility, not just words: arm the discovery window, which
-		 * the reconnect beat spends looking for somebody to join and
-		 * at the end of which -- still alone, and with quorum by this
-		 * node's own votes -- cnxman_try_genesis() forms one. NOT
+		 * ... and the FORM half of that line is a real possibility, not
+		 * just words: the reconnect beat spends the armed window
+		 * looking for somebody to join, and at the end of it --
+		 * with nobody in a cluster to be joined, and with quorum by
+		 * this node's own votes -- cnxman_try_genesis() forms one. NOT
 		 * attempted here: nothing has had time to be heard yet.
 		 */
-		cnxman_genesis_arm(cn);
 	} else {
 		cl->state = VMS_CLUSTER_STANDALONE;
 	}

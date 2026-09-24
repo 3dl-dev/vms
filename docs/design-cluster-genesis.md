@@ -213,6 +213,147 @@ Tests: `tests/cluster/host/test_cnxman_genesis.c` (predicate truth table +
 end-to-end founding) and `tests/cluster/host/test_cnxman_genesis_negctl.c`
 (every refusal, each with the CLUB compared byte-for-byte before and after).
 
+## Update 2026-09-23 (vms-151): SYMMETRIC genesis — two fresh nodes that can see each other
+
+The mechanism above forms a cluster when a node finds **nobody**. It could not
+form one when two fresh nodes found **each other**, which is the ordinary way an
+all-OVMX cluster comes up. Measured: two OVMX/x86 nodes (OVMXA/1987,
+OVMXD/1990, group 257) booted in the browser, their SCS virtual circuits opened
+bidirectionally in ~15 s and stayed open — and 25 minutes later both consoles
+still showed a blank CSID and neither had ever printed `%CNXMAN, this node is
+now a VAXcluster member`. Each held a CSB for the other, so
+`coord_has_peer_csb()` refused **both**; and neither could be joined, because
+admission needs a coordinator and a coordinator needs a CSID.
+
+### Root cause 1 — the gate conflated three different facts
+
+"There is a system present" was the right question. "Therefore I join it" was
+the wrong conclusion: a system that is not in a cluster cannot admit anybody.
+`cnxman_coord_found()` now asks the three separately, each one a read of real
+CSB state (`vms_cnxman_coord_fsm.h` §8b, "THE ELECTION"):
+
+1. **That system already holds a cluster identity** — a CSID on its CSB, or
+   this CLUB's own MEMBER/SELECTED flag → **JOIN, never form**. This is the
+   clause that keeps a booting OVMX node from forming a singleton beside a live
+   VAXcluster, and it is *unchanged in strength* (footgun #1 above).
+   `genesis_refused_peer`.
+2. **That system has not been asked yet** → ask before forming. What settles
+   "is there a cluster here?" is the question the join FSM already asks: a
+   member takes a membership request and coordinates an admission within
+   milliseconds (spec §4(o)); a system that is not in a cluster cannot. So a
+   node may form only after at least one **complete** round in which every
+   system it could see was asked and none took the request — the join FSM's own
+   `attempts_exhausted`, handed in as `struct cnxman_form_evidence`, never
+   inferred by the coordinator and never cached by the glue.
+   `genesis_refused_unasked`.
+3. **That system is another founding candidate** → exactly one of us forms.
+   Book p. 7-32's published mechanism is the **coordinator lock** (ask every
+   selected system, one already granted refuses, collisions back off a random
+   short interval). OVMX **cannot ask**: no capture in the library contains a
+   coordinator-lock request or grant and no opcode is grounded for one, and
+   inventing a frame for it is the failure class that bugchecked two real VAXes.
+   What ships instead is a **total order over a value every candidate already
+   advertises** — the SCSSYSTEMID in its CSB, **lowest first**. It is labelled
+   for what it is: an **OVMX design value** standing in for a mechanism OVMX has
+   no grounding to speak. The properties that matter are that it is total (it
+   cannot elect two), symmetric (both nodes decide identically from the same
+   wire-learned numbers) and needs no frame; the *direction* is arbitrary and is
+   not claimed to be VMS's. Who counts as a candidate is read too: FORM requires
+   VOTES > 0 (pp. 7-28, 7-33), so a peer whose own PARAMS advertise zero votes
+   can never form and is not a rival (deferring to it would be the same deadlock
+   in a new shape), while a peer whose PARAMS have not arrived is unknown and is
+   treated as one. `genesis_refused_outranked`, plus the `deferred_to_sysid`
+   this node really stood down for.
+
+The **loser does nothing new**: it keeps the join drive it was already running,
+and the moment the winner is a member its op-0x02 is taken and it is admitted on
+the ordinary path. There is no second code path for "the node that lost".
+
+### Root cause 2 — the founder's CSID used the falsified slot rule
+
+`coord_genesis_csid()` built `(1 << 16) | (SCSSYSTEMID & 0x3ff)`. rd vms-3a7c had
+already settled the assignment rule against the lab oracle — a coordinator hands
+out the **round-robin CSV slot** (p. 7-25), never a function of the SCSSYSTEMID
+(1986 was assigned slot 3, 1026 was assigned slot 3) — but only the *admission*
+path was moved onto it. The capture that suggested the old reading cannot
+distinguish the two: both real founders it shows (1025 → 0x00010001, 1027 →
+0x00010003) have system ids whose bottom ten bits happen to equal their slots.
+
+It is not harmless. A founder whose SCSSYSTEMID's bottom ten bits fall outside
+the grounded 8-slot nodemap byte **could not found at all** — and the demo's own
+Node A, SCSSYSTEMID 1987, asks for slot 963 and was refused `NO_SLOT`. The
+founder now goes through `coord_next_slot()` and the shared
+`coord_csid_of_slot()`, taking slot 1 on a virgin CLUB.
+
+### Also
+
+The discovery window is now armed for **every** VAXCLUSTER=2 node and **before**
+the join drive. It used to be armed only on the branch where no join could be
+started, so a node that could see a peer at CLUSTER_START never armed it — and
+when that join later ended unanswered, the window it needed in order to form had
+never been running and could never elapse.
+
+### Tests
+
+`tests/cluster/host/test_cnxman_genesis.c`: the founder takes slot 1 for
+SCSSYSTEMID 1987 / 1024 / 1032 (all three refused before); the election elects
+**exactly one** of the two symmetric decisions; a VOTES=0 peer is not a rival and
+an unknown one is; even the winner asks before it forms, and a node alone still
+founds with no evidence at all. `test_cnxman_genesis_negctl.c`: the loser mints
+nothing, a CSID-holding peer refuses forming however many rounds were exhausted,
+and `NO_SLOT` is re-anchored on the real condition it guards. Every refusal
+still compares the whole CLUB byte-for-byte before and after.
+
+## Update 2026-09-23 (vms-151, second half): the cluster formed, and nobody heard it
+
+With the election and the founder's slot in, two fresh OVMX/x86 nodes really did
+form a cluster — and the run still read as a hang. Node A founded generation 1,
+node D was admitted as CSID `00010002`, `SHOW CLUSTER` on each listed both as
+MEMBER — while both consoles had said nothing since the login banner. The
+executive was never silent; it was never *audible*.
+
+**Root cause — two right decisions, one level apart.** `exec_console_printf()`
+is the seam's OPA0: op (`exec_kbackend.h` §18) and the Linux rind emits it with
+`printk` at `KERN_ERR`, chosen because `KERN_INFO` is dropped at the console
+level the harness reads. Independently, PID 1's
+`ovmx_boot_mute_kernel_console()` (vms-300) lowers the console sink to 3 to keep
+module chatter off the VMS boot banner. Linux prints a record iff its level is
+**strictly less** than `console_loglevel` — so a sink of 3 swallowed level 3,
+i.e. every `%CNXMAN` / `%PEA0` / `%MSCP_CL` line the cluster stack has ever
+written. Nothing was wrong in either file; what was missing was a place where
+the two numbers have to agree.
+
+Why no earlier capture caught it: every lab node in `tests/lab/captures/` boots
+a harness init, not `ovmx_init`, so the mute never ran there and those consoles
+show the lines. The muted path is the *product* boot — the bootable image, and
+the in-browser demo.
+
+**The fix** is `src/kernel/ovmx_console_policy.h`: both levels in one header,
+used by both rinds, with the invariant (`OPA0 level < console mute`) asserted at
+compile time on each side — a kernel `static_assert` binds the level the macro
+really passes, so the module fails to build if they drift. The sink moves 3 → 4:
+EMERG/ALERT/CRIT still reach the console, and so do ERR — the executive's
+operator lines plus vms.ko's genuine init-failure `pr_err()`s, which an operator
+must see for the same reason. WARNING/NOTICE/INFO/DEBUG stay muted, which is
+everything vms-300 asked for. The OPA0: level deliberately stays at ERR rather
+than moving to CRIT: `opcom_kmsg_classify()` derives an OPERATOR.LOG record's
+severity from this same number, and a membership announcement filed as `-F-`
+would be a false severity claim.
+
+**Console hygiene, now that the lines are heard.** Two of them were being
+written on a poll and would have repeated forever: the founding refusal (the
+gate is asked once a second, so the loser said "another system … takes
+precedence" once a second until the winner formed) and the MSCP client's "the
+member answered NOT PRESENT HERE" (re-asked every 30 s, because a member may
+mount its first served volume later). Both are now edge-triggered on the fact
+they report — said when it changes, silent while it holds — and both still
+COUNT every occurrence, because a counter is state and speech is not.
+
+**Proof** (`tests/lab/captures/vms-151-genesis-cn2-20260923/`): two OVMX/x86
+nodes from cold on one LAN, product boot cmdline, both consoles printing
+`%CNXMAN, this node is now a VAXcluster member`, and `SHOW CLUSTER` on each
+listing both systems MEMBER with CSIDs `00010001` / `00010002`.
+
 ## References
 
 - `docs/compat/facilities/cluster-dlm.yaml` (the four downgraded rows + wire_format)

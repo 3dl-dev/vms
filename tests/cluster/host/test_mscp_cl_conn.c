@@ -73,6 +73,10 @@ struct bed {
 	int         refuse_inquiry;
 	vms_conid_t next_conid;
 	uint32_t    join_owns;                /* sysid the join holds, or 0 */
+
+	/* what OPA0: heard (rd vms-151) */
+	uint32_t    logs;
+	char        last_log[160];
 };
 
 static struct bed g;
@@ -134,7 +138,17 @@ static uint32_t op_now_ms(void *ctx)
 
 static void op_log(void *ctx, const char *msg)
 {
-	(void)ctx; (void)msg;
+	size_t n;
+
+	(void)ctx;
+	g.logs++;
+	if (msg == (const char *)0)
+		return;
+	n = strlen(msg);
+	if (n >= sizeof(g.last_log))
+		n = sizeof(g.last_log) - 1;
+	memcpy(g.last_log, msg, n);
+	g.last_log[n] = '\0';
 }
 
 static void bed_init(int joined)
@@ -275,6 +289,64 @@ static void test_miss_is_an_answer(void)
 	(void)sweep2();
 	ct_check_eq_u32(g.c.inquiries, 3u,
 			"and it is ASKED again -- never connected on a guess");
+}
+
+/*
+ * ... AND THE OPERATOR IS TOLD ONCE (rd vms-151). The re-ask above is right and
+ * stays; the LINE about it is not repeated while the member's answer holds --
+ * OPA0: carried "it serves no disks" every thirty seconds for the life of a
+ * two-node cluster once the executive's console lines actually reached the
+ * console. A member whose answer CHANGES is news again.
+ */
+static void test_absence_is_said_once_per_member(void)
+{
+	uint32_t i;
+
+	printf("\n-- a standing NOT PRESENT HERE is said once, not every retry --\n");
+	bed_init(1);
+	(void)sweep2();
+
+	mscp_cl_conn_dir_result(&g.c, VAX1_SYSID, name_mscp_disk, 0);
+	ct_check_eq_u32(g.logs, 1u, "the first NO is said on OPA0:");
+	ct_check(strstr(g.last_log, "it serves no disks") != NULL,
+		 "... in the words the operator reads");
+
+	/* Five more retry periods, the member saying the same thing each time. */
+	for (i = 0; i < 5u; i++) {
+		g.now_ms += MSCP_CL_CONN_RETRY_MS;
+		(void)sweep2();
+		g.now_ms += 1000u;
+		(void)sweep2();
+		mscp_cl_conn_dir_result(&g.c, VAX1_SYSID, name_mscp_disk, 0);
+	}
+	ct_check_eq_u32(g.c.misses, 6u, "every answer is COUNTED -- state is not speech");
+	ct_check_eq_u32(g.logs, 1u, "... and OPA0: still heard it exactly once");
+
+	/* It mounts its first served volume: the answer CHANGED. (The connect
+	 * that follows is refused by the bed, which is what leaves the leg back
+	 * in IDLE and lets this test ask the member one more time -- the state
+	 * machine's own path, not a poke at the latch.) */
+	g.refuse_connect = 1;
+	g.now_ms += MSCP_CL_CONN_RETRY_MS;
+	(void)sweep2();
+	g.now_ms += 1000u;
+	(void)sweep2();
+	mscp_cl_conn_dir_result(&g.c, VAX1_SYSID, name_mscp_disk, 1);
+	ct_check_eq_u32(row(VAX1_SYSID)->state, MSCP_CL_CONN_PRESENT,
+			"the member now serves disks");
+	g.now_ms += 1000u;
+	(void)sweep2();
+	ct_check_eq_u32(row(VAX1_SYSID)->state, MSCP_CL_CONN_IDLE,
+			"... the connect was refused, so the leg is IDLE again");
+
+	/* ... and when it stops serving, the operator IS told again. */
+	g.now_ms += MSCP_CL_CONN_RETRY_MS;
+	(void)sweep2();
+	g.now_ms += 1000u;
+	(void)sweep2();
+	mscp_cl_conn_dir_result(&g.c, VAX1_SYSID, name_mscp_disk, 0);
+	ct_check_eq_u32(g.logs, 2u,
+			"a member that stops serving again IS said again");
 }
 
 static void test_silence_is_not_absence(void)
@@ -479,6 +551,7 @@ int main(void)
 	test_joining_originates_nothing();
 	test_lookup_precedes_connect();
 	test_miss_is_an_answer();
+	test_absence_is_said_once_per_member();
 	test_silence_is_not_absence();
 	test_join_owned_leg_is_not_duplicated();
 	test_refused_connect_backs_off();

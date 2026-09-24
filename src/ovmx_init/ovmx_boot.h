@@ -121,10 +121,14 @@ void ovmx_boot_start_console_log_bridge(void);
  * interleaves with -- and is indistinguishable from -- the VMS boot banner
  * on what is supposed to read as a faithful VMS console.
  *
- * Lowered so only EMERG/ALERT/CRIT (bugcheck-class kernel faults) still
- * reach the console -- a real catastrophic kernel fault surfaces, exactly
- * as a VAX/Alpha would bugcheck to its own console, but routine INFO/WARN
- * module chatter does not. Does NOT touch the kernel's own log ring
+ * Lowered so EMERG/ALERT/CRIT (bugcheck-class kernel faults) still reach
+ * the console -- a real catastrophic kernel fault surfaces, exactly as a
+ * VAX/Alpha would bugcheck to its own console -- and so does ERR, which is
+ * the level the EXECUTIVE writes its OPA0: operator lines at (%CNXMAN,
+ * %PEA0, ...; see src/kernel/ovmx_console_policy.h, which owns both numbers
+ * and asserts the relation -- rd vms-151, where a one-level disagreement
+ * muted a whole cluster formation). Routine INFO/WARN module chatter does
+ * not, which is what vms-300 was about. Does NOT touch the kernel's own log ring
  * buffer/log device (Linux /dev/kmsg, NetBSD /dev/klog) -- only the console
  * SINK -- so ovmx_boot_start_console_log_bridge()'s reader keeps seeing
  * every line for SYS$MANAGER:OPERATOR.LOG (vms-32a); kernel pr_info() call

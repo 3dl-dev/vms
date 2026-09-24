@@ -5,13 +5,16 @@
  *
  * WHAT THIS PROVES.
  *
- *   1. THE PREDICATE, as a truth table. `cnxman_quorum_own_votes_suffice()` is
+ *   1. THE PREDICATE, as a truth table. `cnxman_quorum_form_votes_suffice()` is
  *      the one gate that permits an executive to mint a CSID nobody gave it,
  *      so it is exercised over (VOTES, EXPECTED_VOTES) pairs directly rather
  *      than inferred from an outcome -- including the pairs whose answer is NO
  *      and the Old-CEVOTES case, where a node that was once in a big cluster
  *      may NOT re-found it on one vote (p. 7-6: CEVOTES cannot decrease by
- *      itself).
+ *      itself). The set it is judged over is the COLD FORMATION's proposed set
+ *      (p. 7-6 step 1), so the table is run twice: once for a node that can see
+ *      nobody, and once for the documented two-node VMScluster where the answer
+ *      flips because the peer's vote is really there (rd vms-6d3d).
  *
  *   2. THE FOUNDING ITSELF, end to end and through the REAL machinery. A
  *      node that satisfies quorum on its own votes reaches VMS_CLUSTER_MEMBER
@@ -163,7 +166,36 @@ static void check_predicate(uint16_t votes, uint16_t expected_votes,
 	bed_init(votes, expected_votes);
 	g.cl.club.cevotes = old_cevotes;
 
-	got = cnxman_quorum_own_votes_suffice(&g.cl, &quorum);
+	got = cnxman_quorum_form_votes_suffice(&g.cl, (const struct cnxman_form_set *)0, &quorum);
+	ct_check(got == want_found, what);
+	ct_check_eq_u32(quorum, want_quorum, "  ... judged against quorum");
+}
+
+/*
+ * The SAME table, but with one peer this node can really see: a CSB whose
+ * PARAMS record really arrived and whose circuit is really OPEN. That is
+ * p. 7-6 step 1's proposed set with two systems in it, and the votes weighed
+ * against quorum are their COMBINED votes (rd vms-6d3d).
+ */
+static void check_predicate_with_peer(uint16_t votes, uint16_t expected_votes,
+				      uint16_t peer_votes,
+				      uint16_t peer_expected_votes,
+				      int want_found, uint16_t want_quorum,
+				      const char *what)
+{
+	struct vms_csb *peer;
+	uint16_t quorum = 0xffffu;
+	int got;
+
+	bed_init(votes, expected_votes);
+	peer = cnxman_club_alloc_csb(&g.cl.club, (vms_scs_sysid_t)1990u, 1);
+	ct_check(peer != NULL, "the peer CSB exists");
+	cnxman_csb_set_params(peer, peer_votes, peer_expected_votes, 0u);
+	peer->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+
+	got = cnxman_quorum_form_votes_suffice(&g.cl,
+					       (const struct cnxman_form_set *)0,
+					       &quorum);
 	ct_check(got == want_found, what);
 	ct_check_eq_u32(quorum, want_quorum, "  ... judged against quorum");
 }
@@ -208,6 +240,51 @@ static void test_predicate_truth_table(void)
 	 * because its own EXPECTED_VOTES is small. */
 	check_predicate(1u, 1u, 5u, 0, 3u, "old CEVOTES=5 outvotes VOTES=1: NO");
 	check_predicate(3u, 1u, 5u, 1, 3u, "old CEVOTES=5, VOTES=3: FOUNDS");
+
+	/* ------------------------------------------------------------------
+	 * AND THE SAME TABLE WITH A SYSTEM THIS NODE CAN SEE (rd vms-6d3d).
+	 *
+	 * THE DEFECT THIS ROW IS: with VOTES=1 / EXPECTED_VOTES=2 on both --
+	 * the documented two-node VMScluster -- NEITHER node's own vote meets
+	 * quorum 2, so the predicate above says NO to both and an all-OVMX
+	 * pair configured the documented way could never form a cluster at
+	 * all. The ORACLE (two real OpenVMS VAX V7.3 systems, capture
+	 * tests/lab/captures/vms-6d3d-coldform-ev2-20260924/) forms exactly
+	 * this cluster: the first node waited alone for eighteen minutes with
+	 * no %CNXMAN line at all, and proposed the formation 3.2 s after the
+	 * second one's circuit came up.
+	 * ------------------------------------------------------------------ */
+	printf("[genesis] ... and over the systems this node can SEE\n");
+
+	/* The textbook pair: 1 + 1 = 2 votes against quorum (2+2)/2 = 2. */
+	check_predicate_with_peer(1u, 2u, 1u, 2u, 1, 2u,
+		"VOTES=1/EV=2 + a seen VOTES=1/EV=2 peer: FOUNDS on 2 votes");
+
+	/* ... and the SAME node with nobody in sight still refuses, which is
+	 * what makes the row above a combined-votes answer and not a weakened
+	 * gate. (check_predicate() above already asserts it; repeated here
+	 * because the pair is the whole point.) */
+	check_predicate(1u, 2u, 0u, 0, 2u,
+		"VOTES=1/EV=2 alone: STILL NO -- one vote is not quorum 2");
+
+	/* A peer that advertises ZERO votes adds nothing to the sum: seeing a
+	 * non-voting system does not manufacture quorum (INV-6). */
+	check_predicate_with_peer(1u, 2u, 0u, 2u, 0, 2u,
+		"a seen VOTES=0 peer does not make quorum");
+
+	/* p. 7-6 step 2's EXPECTED_VOTES term is the LARGEST in the set, so a
+	 * peer that expects a bigger cluster RAISES the bar for everybody --
+	 * three expected votes need quorum 2, which two still meet. */
+	check_predicate_with_peer(1u, 2u, 1u, 3u, 1, 2u,
+		"a peer expecting 3 votes: quorum 2, and 2 votes meet it");
+
+	/* ... but a peer expecting five does not: quorum 3, and there are 2. */
+	check_predicate_with_peer(1u, 2u, 1u, 5u, 0, 3u,
+		"a peer expecting 5 votes: quorum 3, and 2 votes do NOT");
+
+	/* Three votes between two systems DO meet that bar. */
+	check_predicate_with_peer(2u, 2u, 1u, 5u, 1, 3u,
+		"VOTES=2 + a seen VOTES=1/EV=5 peer: 3 votes meet quorum 3");
 }
 
 /* ==========================================================================
@@ -241,7 +318,7 @@ static void test_founds_and_becomes_member(void)
 	struct vms_csb *local;
 	int rc;
 
-	printf("[genesis] a node with quorum by its own votes forms a cluster\n");
+	printf("[genesis] a node whose visible systems have quorum forms a cluster\n");
 	bed_init(1u, 1u);
 
 	/* Before: no identity, no membership. */
@@ -416,6 +493,119 @@ static int form_verdict(vms_scs_sysid_t own, vms_scs_sysid_t peer_sysid,
 	return cnxman_coord_found(&g.c, &ev);
 }
 
+/*
+ * The same decision for the CONFIGURATION THE ORACLE RUNS (rd vms-6d3d): both
+ * systems VOTES=1 / EXPECTED_VOTES=2, each with the other's PARAMS really
+ * learned over a circuit that is really OPEN, so the peer is in p. 7-6 step 1's
+ * proposed set and its vote is really in the sum.
+ */
+static int form_verdict_seen(vms_scs_sysid_t own, uint16_t own_votes,
+			     uint16_t own_expected, vms_scs_sysid_t peer_sysid,
+			     uint16_t peer_votes, uint16_t peer_expected,
+			     uint32_t rounds)
+{
+	struct cnxman_form_evidence ev;
+	struct vms_csb *peer;
+
+	bed_init_sysid(own_votes, own_expected, own);
+	peer = cnxman_club_alloc_csb(&g.cl.club, peer_sysid, 1);
+	ct_check(peer != NULL, "the peer CSB exists");
+	cnxman_csb_set_params(peer, peer_votes, peer_expected, 0u);
+	peer->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	ev.admission_rounds = rounds;
+	return cnxman_coord_found(&g.c, &ev);
+}
+
+/*
+ * THE DEFECT, END TO END (rd vms-6d3d). Two systems configured the documented
+ * way -- VOTES=1, EXPECTED_VOTES=2 -- that can see each other. Before this
+ * change NEITHER could found (each own vote is short of quorum 2) and the pair
+ * hung forever; the oracle forms this cluster in 3.2 s.
+ */
+static void test_two_node_cold_formation(void)
+{
+	int a, b;
+
+	printf("[genesis] the documented 2-node VMScluster forms from cold\n");
+
+	a = form_verdict_seen(1987u, 1u, 2u, 1990u, 1u, 2u, 1u);
+	ct_check_eq_u32((unsigned long)a, 0u,
+			"VOTES=1/EV=2 founds on the COMBINED two votes");
+	ct_check_eq_u32(g.cl.club.local_csid, FOUNDER_CSID,
+			"... at generation 1, CSV slot 1");
+	ct_check_eq_u32((unsigned long)g.cl.state,
+			(unsigned long)VMS_CLUSTER_MEMBER,
+			"... and phase2 committed it a member");
+	ct_check_eq_u32(g.sends + g.responds, 0u,
+			"still not one frame: the peer joins on the ordinary "
+			"op-0x02 path, it is not a participant of this "
+			"transition");
+
+	/* ... and the OTHER node, deciding from the same two real numbers,
+	 * stands down. Exactly one founder, which is what stops a partition. */
+	b = form_verdict_seen(1990u, 1u, 2u, 1987u, 1u, 2u, 1u);
+	ct_check(b != 0, "the HIGHER SCSSYSTEMID does NOT also form one");
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_OUTRANKED,
+			"... it stands down for the other candidate");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "... minting nothing");
+	ct_check((a == 0) != (b == 0), "EXACTLY ONE of the two founds");
+
+	/* AND A NODE ALONE IN THAT CONFIGURATION STILL DOES NOT FOUND -- the
+	 * oracle's eighteen silent minutes. This is the INV-6 half: the fix is
+	 * "count the votes that are really there", never "lower the bar". */
+	bed_init_sysid(1u, 2u, 1987u);
+	ct_check(cnxman_coord_found(&g.c, NULL) != 0,
+		 "alone, VOTES=1/EV=2 REFUSES to form");
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_NO_QUORUM,
+			"... naming the honest reason: no quorum");
+	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "... and mints nothing");
+	ct_check(strcmp(g.fake.last_log,
+			"%CNXMAN, the systems this node can see do not have "
+			"quorum; waiting to form or join an OpenVMS Cluster") == 0,
+		 "... and SAYS so on OPA0:, rather than hanging silently");
+}
+
+/*
+ * ... AND THE ELECTION IS OVER SYSTEMS THAT COULD ACTUALLY FORM. A candidate is
+ * ranked only if the SAME p. 7-6 predicate this node's own gate applies says
+ * that system could have formed this cluster. So a node never reports "another
+ * system takes precedence" about a system which could not have taken it: the
+ * refusal it gives is the true one.
+ */
+static void test_ineligible_candidate_never_wins(void)
+{
+	int rc;
+
+	printf("[genesis] an ineligible candidate is not deferred to\n");
+
+	/* A LOWER-numbered peer whose own EXPECTED_VOTES is 5: the set's two
+	 * votes cannot reach quorum 3, so NEITHER system can form -- and the
+	 * refusal must name that, not the peer. */
+	rc = form_verdict_seen(1990u, 1u, 2u, 1900u, 1u, 5u, 1u);
+	ct_check(rc != 0, "it does not form");
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_NO_QUORUM,
+			"... for want of QUORUM, not for the lower-numbered "
+			"system that could not have formed it either");
+	ct_check_eq_u32(g.c.genesis_refused_outranked, 0u,
+			"... and no deferral was recorded");
+	ct_check_eq_u32(g.c.deferred_to_valid, 0u,
+			"... nor any system stood down for");
+
+	/* The SAME peer, one SYSGEN digit apart: EXPECTED_VOTES=2 makes it a
+	 * system that really could form this cluster, and now it IS deferred
+	 * to. One digit is the whole difference between the two refusals. */
+	rc = form_verdict_seen(1990u, 1u, 2u, 1900u, 1u, 2u, 1u);
+	ct_check(rc != 0, "it still does not form");
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_OUTRANKED,
+			"... but now because that system takes precedence");
+	ct_check_eq_u32(g.c.deferred_to_valid, 1u, "... and it is named");
+	ct_check_eq_u32(g.c.deferred_to_sysid, 1900u, "... by its real sysid");
+}
+
 static void test_election_elects_exactly_one(void)
 {
 	int a, b;
@@ -517,6 +707,8 @@ int main(void)
 	test_second_call_refuses();
 	test_founder_slot_is_the_round_robin_one();
 	test_election_elects_exactly_one();
+	test_two_node_cold_formation();
+	test_ineligible_candidate_never_wins();
 	test_zero_vote_peer_is_not_a_rival();
 	test_unasked_peer_blocks_the_winner();
 	return ct_summary("test_cnxman_genesis");

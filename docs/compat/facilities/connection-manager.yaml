@@ -15,8 +15,11 @@ summary: >
   (CLUB/CSB, the ten-state ladder, join drive, 12-step barrier, coordinator,
   reconnect, quorum arithmetic) at R1/R2 with the readback ioctls at R3/R4 —
   AND, as of the symmetric-CN=2 proof, the DISTRIBUTED outcome for OVMX^n: two
-  real /dev/vms executives form a cluster (one FOUNDS from nothing on quorum by
-  its own votes, the other JOINS and reaches MEMBER), CN=2 read from real
+  real /dev/vms executives form a cluster (one FOUNDS from nothing once the
+  systems it can see have quorum between them, the other JOINS and reaches
+  MEMBER -- including the documented VOTES=1/EXPECTED_VOTES=2 pair, where the
+  founder's own vote is NOT enough and the peer's really-learned vote is what
+  carries the formation, rd vms-6d3d), CN=2 read from real
   executive state on both. The CSID mechanism that gated this is now PINNED on a
   real-VMS capture (integration note E30, resolved): the coordinator assigns a
   round-robin, monotonically-advancing CSV slot (NOT sysid&0x3ff), sent per
@@ -95,22 +98,35 @@ items:
     kind: feature
     status: verified
     authenticity: real
-    vms: "A node forms an OpenVMS Cluster from nothing when it has quorum by its own votes"
+    vms: "A node forms an OpenVMS Cluster from nothing when the systems it can see have quorum between them"
     evidence: src/kernel-core/vms_cnxman_coord_fsm.c
-    verified_against: "tests/qemu/run_cluster_genesis_2node.sh (real /dev/vms, KVM) — the founder reaches MEMBER, csid=(1<<16)|slot1, CN counted from real executive state; + host tests/cluster/host/test_cnxman_coord.c (the votes gate) and tests/cluster/host/test_cnxman_genesis_negctl.c (VOTES=0 never mints)"
+    verified_against: "tests/qemu/run_cluster_genesis_2node.sh (real /dev/vms, KVM): RIG_MODE=proof — the founder reaches MEMBER, csid=(1<<16)|slot1, CN counted from real executive state; RIG_MODE=coldform — both nodes VOTES=1/EXPECTED_VOTES=2, node A founds NOTHING in 45s alone and the pair reaches CN=2 once B is up; RIG_MODE=negctl (VOTES=0 on both: nobody founds). Oracle: tests/lab/captures/vms-6d3d-coldform-ev2-20260924 (two real OpenVMS VAX V7.3). Host: tests/cluster/host/test_cnxman_genesis.c + test_cnxman_genesis_negctl.c"
     notes: >
       The authentic VMS formation algorithm (OpenVMS Cluster Systems ch. 7), NOT
       a fabricated default: a booting VAXCLUSTER=2 node founds generation-1 as
-      coordinator IFF quorum is met by its OWN configured votes
-      (votes>0 && votes>=(max{EXPECTED_VOTES,votes}+2)/2), minting
-      CSID=(1<<16)|(SCSSYSTEMID&0x3ff) and driving the SAME learn-CSID →
-      coordinator → phase2 machinery a real-VAX admission runs (no fork). A
-      VOTES=0 or sub-quorum node NEVER founds — it stays JOINING/STANDALONE
-      honestly (the negctl proves it). #1052 removed the old unconditional
-      CSID=1 phantom-cluster default under INV-6; this is the legitimate
-      replacement. PROVEN AT RUNTIME on two real /dev/vms executives (node A
-      founds → MEMBER, three agreeing executive projections; negctl held).
-      One shared path with OVMX↔VAX join, not a separate platform. rd vms-3c3.
+      coordinator IFF p. 7-6's quorum is met by the COMBINED votes of the
+      PROPOSED SET — itself plus every system whose PARAMS record it really
+      received over a circuit that is really OPEN
+      (quorum=(max{largest EXPECTED_VOTES in the set, SUM VOTES, old CEVOTES}+2)/2,
+      and SUM VOTES must reach it). It then mints the round-robin CSV slot's
+      CSID and drives the SAME learn-CSID → coordinator → phase2 machinery a
+      real-VAX admission runs (no fork). A VOTES=0 node NEVER founds, and a
+      voting node whose visible systems are short of quorum stays
+      JOINING/STANDALONE honestly and says so (the negctl proves both).
+      rd vms-6d3d CORRECTED this from "quorum by the founder's OWN votes",
+      which is strictly stronger than VMS and made the documented two-node
+      VMScluster (VOTES=1, EXPECTED_VOTES=2 on both) unformable by any pair of
+      OVMX nodes; the oracle above is two real V7.3 systems in that exact
+      configuration, the first waiting 18 minutes alone with no %CNXMAN line
+      and the pair forming 3.2 s after the second one's circuit came up.
+      #1052 removed the old unconditional CSID=1 phantom-cluster default under
+      INV-6; this is the legitimate replacement. PROVEN AT RUNTIME on two real
+      /dev/vms executives in BOTH configurations. NOT claimed: VMS admits the
+      peer in the SAME founding transition (the oracle's VAX2 never sent a
+      membership request); OVMX founds single-node and admits on the ordinary
+      op-0x02 path immediately after — a real remaining difference, tracked.
+      One shared path with OVMX↔VAX join, not a separate platform.
+      rd vms-3c3, rd vms-6d3d.
 
   - id: connection-manager$membership
     kind: feature

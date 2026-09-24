@@ -130,19 +130,104 @@ uint16_t cnxman_quorum_cevotes(uint16_t old_cevotes, uint32_t expected_votes,
 			       uint32_t sum_votes);
 uint16_t cnxman_quorum_of_cevotes(uint16_t cevotes);
 
+/* ===========================================================================
+ * FORMING FROM NOTHING -- p. 7-6 applied to a COLD FORMATION (rd vms-6d3d)
+ *
+ * THE PROPOSED SET IS NOT "THIS NODE ALONE". Step 1 selects "the proposed set
+ * of members: normally every member it can see". For a node that is already in
+ * a cluster that set is the SELECTED CSBs; for a node that is waiting to form
+ * one there is no membership yet, so the set is THIS SYSTEM PLUS EVERY SYSTEM
+ * IT CAN CURRENTLY SEE -- and the votes that are weighed against quorum are
+ * THEIR COMBINED VOTES, not this node's own.
+ *
+ * MEASURED ON THE ORACLE (tests/lab/captures/vms-6d3d-coldform-ev2-20260924/),
+ * two real OpenVMS VAX V7.3 systems, VOTES=1 / EXPECTED_VOTES=2 on each:
+ *
+ *   - VAX1 alone on the segment for 18 minutes printed
+ *     `%SYSINIT, waiting to form or join a VMScluster system` and NOT ONE
+ *     %CNXMAN line. Its own vote cannot meet quorum 2, so it did not form.
+ *   - the instant VAX2 appeared, VAX1 logged `discovered node VAX2`,
+ *     `established connection to node VAX2`, and 3.2 s later
+ *     `proposed formation of a VAXcluster` -- with the two nodes' COMBINED
+ *     two votes meeting the same quorum 2.
+ *
+ * The predecessor of this file demanded quorum from the founder's OWN votes,
+ * which is strictly stronger than what VMS does and made the documented
+ * two-node VMScluster (VOTES=1, EXPECTED_VOTES=2 on both) unformable by any
+ * pair of OVMX nodes.
+ *
+ * INV-6. Every vote summed below is read from a CSB that really received that
+ * system's PARAMS record (csb->params_valid) over a circuit that is really
+ * OPEN right now. A system whose PARAMS have not arrived contributes NOTHING
+ * -- an un-advertised VOTES is unknown, never a fabricated zero -- and a system
+ * this node cannot currently reach contributes nothing either, which is the
+ * same p. 7-4/7-5 "available" rule cnxman_quorum_recompute() applies.
+ * =========================================================================== */
+
 /*
- * FORMING FROM NOTHING -- does THIS node satisfy quorum on its OWN votes?
+ * The proposed set of a COLD formation, as three summary numbers. Held in a
+ * struct rather than recomputed per question so that the founding gate and the
+ * election below cannot be asking about two different sets.
+ */
+struct cnxman_form_set {
+	uint32_t sum_votes;     /* SUM of VOTES over the set (p. 7-6 step 2) */
+	uint32_t max_expected;  /* the largest EXPECTED_VOTES advertised in it */
+	uint32_t n_systems;     /* how many systems are in it, this node included */
+	uint8_t  local_counted; /* nonzero iff THIS node's own CSB is in the set */
+};
+
+/*
+ * Walk the CLUB and fill *out. A CSB is in the set iff it is in use, it really
+ * learned its PARAMS, and it is reachable NOW: the LOCAL CSB always is (it is
+ * this system, not a connection that can be down), a remote one only in state
+ * OPEN. Never reads a caller's opinion of who is present. A NULL club yields
+ * the empty set rather than a guess.
+ */
+void cnxman_quorum_form_set(const struct vms_club *club,
+			    struct cnxman_form_set *out);
+
+/* Is THIS CSB one of the systems cnxman_quorum_form_set() counted? The one
+ * spelling of the membership rule above, exported because the election has to
+ * ask it about a single peer ("can I even judge what that system could form?")
+ * without walking the CLUB a second time. */
+int cnxman_quorum_form_set_contains(const struct vms_csb *csb);
+
+/*
+ * COULD THE SYSTEM DESCRIBED BY (votes, expected_votes, old_cevotes) FORM THE
+ * CLUSTER THIS PROPOSED SET DESCRIBES?
  *
- * The gate on cluster GENESIS (docs/design-cluster-genesis.md): the documented
- * connection-manager formation algorithm lets the first node up form a
- * single-node cluster as the founding member IFF it is a voting node whose own
- * VOTES already meet the quorum its own EXPECTED_VOTES implies -- p. 7-6's
- * three steps applied to a proposed set containing only this system.
+ * p. 7-6, all three steps, over `set`: New CEVOTES = max{that system's own
+ * EXPECTED_VOTES; the largest EXPECTED_VOTES in the set; SUM VOTES; Old
+ * CEVOTES}, QUORUM = (New CEVOTES + 2) / 2, and the set's combined votes must
+ * meet it. VOTES == 0 is refused FIRST and on its own terms: FORM requires a
+ * voting system (pp. 7-28, 7-33), and making that a property of this function
+ * rather than of the numbers it happens to be handed is what keeps "a VOTES=0
+ * node never founds" true however it is called.
  *
- * Returns nonzero when the node may found, and writes the quorum figure it was
- * judged against to *out_quorum (0 and "no" for a NULL cluster or VOTES == 0).
- * Reads nothing but real executive state: this node's SYSGEN VOTES /
- * EXPECTED_VOTES and the CLUB's own Old CEVOTES.
+ * ONE function, asked about TWO different systems: this node (the founding
+ * gate) and a peer (the election's "is that system a rival?"). A second copy
+ * is how a node comes to defer forever to a system that could never have
+ * formed anything.
+ *
+ * *out_quorum receives the figure the answer was judged against (0 on refusal
+ * before any arithmetic ran).
+ */
+int cnxman_quorum_could_found(uint16_t old_cevotes, uint16_t votes,
+			      uint16_t expected_votes,
+			      const struct cnxman_form_set *set,
+			      uint16_t *out_quorum);
+
+/*
+ * THE FOUNDING PREDICATE: may THIS node form the cluster `set` describes?
+ *
+ * cnxman_quorum_could_found() asked about this node -- its SYSGEN VOTES and
+ * EXPECTED_VOTES and the CLUB's own Old CEVOTES -- with one extra condition
+ * that only the local system has: its own CSB must be IN the set. If this node
+ * cannot even state its own contribution (no local CSB, or one whose PARAMS
+ * were never loaded) then the sum it would found on silently omits the founder,
+ * which is worse than no sum at all.
+ *
+ * `set` may be NULL, in which case it is computed from the CLUB here.
  *
  * INV-6, and the reason this predicate is a function rather than an `if` at
  * the one call site: the CSID a founding node mints is the one value in the
@@ -152,8 +237,9 @@ uint16_t cnxman_quorum_of_cevotes(uint16_t cevotes);
  * of this stack defaulted the local CSID to 1 unconditionally and became a
  * phantom cluster of one; the difference is exactly this function.
  */
-int cnxman_quorum_own_votes_suffice(const struct vms_cluster *cl,
-				    uint16_t *out_quorum);
+int cnxman_quorum_form_votes_suffice(const struct vms_cluster *cl,
+				     const struct cnxman_form_set *set,
+				     uint16_t *out_quorum);
 
 /* ===========================================================================
  * ENFORCEMENT -- may the executive ACT on the arithmetic? (FC-P8.1, rd vms-b6d)

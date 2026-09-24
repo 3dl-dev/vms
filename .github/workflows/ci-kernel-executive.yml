@@ -940,8 +940,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-netbsd-ktest:latest
-          cache-from: type=gha,scope=netbsd-harness
-          cache-to: type=gha,mode=max,scope=netbsd-harness
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
 
       - name: Install (or restore) the shared NetBSD disk; prime the cache
         run: |
@@ -1013,8 +1013,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-netbsd-ktest:latest
-          cache-from: type=gha,scope=netbsd-harness
-          cache-to: type=gha,mode=max,scope=netbsd-harness
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
 
       - name: Boot NetBSD/amd64, drive the console, assert uname -srm
         run: |
@@ -1128,8 +1128,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-netbsd-ktest:latest
-          cache-from: type=gha,scope=netbsd-harness
-          cache-to: type=gha,mode=max,scope=netbsd-harness
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
 
       - name: Build + modload /dev/vms; assert one ping ioctl through the seam
         run: |
@@ -1257,8 +1257,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-netbsd-ktest:latest
-          cache-from: type=gha,scope=netbsd-harness
-          cache-to: type=gha,mode=max,scope=netbsd-harness
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
 
       - name: Build + modload /dev/vms; prove cross-process shared event-flag state
         run: |
@@ -1388,8 +1388,8 @@ jobs:
           push: false
           load: true
           tags: ovmx-netbsd-ktest:latest
-          cache-from: type=gha,scope=netbsd-harness
-          cache-to: type=gha,mode=max,scope=netbsd-harness
+          cache-from: type=gha,scope=netbsd-harness-v2
+          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
 
       - name: Build + modload /dev/vms; prove proctab, mbx, lock, access, ast cross-process
         run: |

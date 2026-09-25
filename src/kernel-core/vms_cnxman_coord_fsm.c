@@ -180,6 +180,119 @@ static enum cnxman_coord_verdict coord_refuse(struct cnxman_coord *c,
 	return CNXMAN_COORD_REFUSE;
 }
 
+/* ==========================================================================
+ * THE TWO ADMISSION GATES (rd vms-1ac)
+ *
+ * Both are asked ONLY of CNXMAN_COORD_TRIG_ASKED -- an op-0x02. A departure
+ * (TRIG_DETECTED) is the first detector's (p. 7-2) and neither gate applies.
+ * ========================================================================== */
+
+/* Is this CSB one of the cluster's OTHER members -- a system this node really
+ * holds an admitted block for? The one spelling, so the two walks below cannot
+ * drift apart. */
+static int coord_is_other_member(const struct vms_csb *csb)
+{
+	return csb->in_use && csb->sysid_valid &&
+	       (csb->flags & VMS_CSB_F_LOCAL) == 0u &&
+	       (csb->flags & VMS_CSB_F_REMOVED) == 0u &&
+	       (csb->flags & (VMS_CSB_F_MEMBER | VMS_CSB_F_SELECTED)) != 0u;
+}
+
+/*
+ * GATE 1 -- IS THIS NODE THE ONE VMS WOULD HAVE PICKED?
+ *
+ * Spec §4(p) is categorical that a receiver-side answer exists: in `d94-e15`
+ * all three members received a BYTE-IDENTICAL op-0x02 inside 400 ms, two
+ * answered only a cat-0x04 ack and did nothing further, and the third relayed
+ * and drove. Something told the other two they were not the one. No wire field
+ * distinguishes them, so the discriminator is node-local, and the observable
+ * that survives every specimen is the one §4(p) already names for the joiner's
+ * side: the HIGHEST DECnet node number, confounded with the highest
+ * SCSSYSTEMID. Measured over both reference capture trees (rd vms-1ac,
+ * tests/lab/captures/vms-1ac-.../coord_add.py): of 113 ADD admissions with an
+ * observed op-0x12 relay, the coordinator was the highest-SCSSYSTEMID LIVE
+ * MEMBER in 107; every one of the six exceptions is a capture in which the
+ * higher-numbered "member" is an OVMX strawman node, and in two of those it
+ * had never been admitted at all.
+ *
+ * INFERRED, and labelled so -- exactly as the joiner-side pick is (design
+ * §5.5). What makes it safe to act on is the DIRECTION of the error: a node
+ * that wrongly defers coordinates nothing and crashes nobody, and the joiner's
+ * own admission-silence clock re-issues its op-0x02 to the next member
+ * (join_reissue_to()). A node that wrongly drives put a real OpenVMS VAX V7.3
+ * into a CNXMGRERR bugcheck in 1.3 ms.
+ *
+ * The SUBJECT is excluded: it is asking to be admitted, so it is not yet a
+ * member and its SCSSYSTEMID does not rank. In `d94-e15` the joiner's 1164
+ * outranked all three members and the highest MEMBER still drove.
+ */
+static int coord_outranked_for_admission(struct cnxman_coord *c,
+					 int32_t subject_csb)
+{
+	struct vms_club *club = coord_club(c);
+	struct vms_csb *local = cnxman_club_local(club);
+	uint32_t i;
+
+	if (local == NULL || !local->sysid_valid)
+		return 0;    /* we cannot rank ourselves: nothing to defer to */
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *m = &club->csb[i];
+
+		if ((int32_t)i == subject_csb || !coord_is_other_member(m))
+			continue;
+		if (m->sysid > local->sysid)
+			return 1;
+	}
+	return 0;
+}
+
+/*
+ * GATE 2 -- CAN THIS NODE BUILD THE OPEN IT IS ABOUT TO SEND?
+ *
+ * The class-0x02 transition-open this executive builds carries the grounded
+ * fields and leaves the rest zero (vms_cm_xition_open_build: epoch, role/class
+ * tag, nodemap). A REAL coordinator's op-0x09 carries more -- measured on
+ * `vax3-2to3-established-join-20260730.pcap`, VAX2 admitting VAX3:
+ *
+ *   body[20:28]  two longwords this executive has no derivation for
+ *   body[32:40]  a VMS absolute-time quadword
+ *   body[40:48]  a second quadword, equal to the op-0x03 COMMIT's body[20:28]
+ *
+ * Twenty-eight bytes of another connection manager's state that OVMX cannot
+ * derive. Sending zeros there to a system running THIS implementation is
+ * symmetric and harmless -- it reads them with the same codec. Sending them to
+ * a real OpenVMS connection manager is asserting a transition in a shape it
+ * did not write, and that is the frame after which a real VAX V7.3 bugchecked
+ * CNXMGRERR and rebooted (rd vms-1ac).
+ *
+ * So the gate is the one honest fact available: `peer_is_ours`, the CSB flag
+ * the port sets when a system has PROVED it runs this implementation -- the
+ * same fact the lock manager already refuses foreign traffic on. Until the
+ * remaining op-0x09 fields are grounded, this node does not open a class-0x02
+ * transition that a foreign connection manager has to act on. It is a NAMED
+ * GAP with a counter, not a resting state.
+ */
+static int coord_open_is_grounded_for(struct cnxman_coord *c,
+				      int32_t subject_csb)
+{
+	struct vms_club *club = coord_club(c);
+	uint32_t i;
+
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *m = &club->csb[i];
+
+		if ((int32_t)i != subject_csb && !coord_is_other_member(m))
+			continue;
+		if ((m->flags & VMS_CSB_F_LOCAL) != 0u)
+			continue;
+		if (!m->in_use || !m->sysid_valid)
+			continue;
+		if (!m->peer_is_ours)
+			return 0;
+	}
+	return 1;
+}
+
 enum cnxman_coord_verdict cnxman_coord_select(struct cnxman_coord *c,
 					      enum cnxman_coord_trigger trig,
 					      int32_t subject_csb)
@@ -225,15 +338,31 @@ enum cnxman_coord_verdict cnxman_coord_select(struct cnxman_coord *c,
 			"proposed state transition");
 
 	/*
-	 * And that is the whole predicate. There is deliberately NO ordering
-	 * rule here -- no highest node number, no SCSSYSTEMID comparison. For a
-	 * JOIN the joiner already chose (book pp. 7-37/7-38), and receiving its
-	 * op 0x02 IS the choice; for a DEPARTURE this node is the first
-	 * detector (p. 7-2) and the test above is p. 7-30's condition. Design
-	 * SS3.7's "OVMX never claims the role unprompted" holds structurally:
-	 * there is no code path in this file that elects this node.
+	 * A DEPARTURE stops here: this node is the first detector (p. 7-2) and
+	 * the coordinator-lock test above is p. 7-30's whole condition. The two
+	 * gates below are the ADMISSION's alone.
 	 */
-	(void)trig;
+	if (trig != CNXMAN_COORD_TRIG_ASKED)
+		return CNXMAN_COORD_DRIVE;
+
+	if (coord_outranked_for_admission(c, subject_csb)) {
+		c->not_selected++;
+		/* SILENTLY, per spec §4(p): counted and recorded, never
+		 * announced. A non-coordinator says nothing on the wire and
+		 * nothing on the console -- a line per retry would be console
+		 * noise VMS does not make. */
+		c->last_refusal = (uint8_t)CNXMAN_COORD_REF_NOT_SELECTED;
+		c->refusals++;
+		return CNXMAN_COORD_REFUSE;
+	}
+	if (!coord_open_is_grounded_for(c, subject_csb)) {
+		c->open_ungrounded++;
+		return coord_refuse(c, CNXMAN_COORD_REF_OPEN_UNGROUNDED,
+			"%CNXMAN, a system in this cluster does not run this "
+			"implementation and the transition open this node can "
+			"build is not grounded for it: the addition is not "
+			"proposed");
+	}
 	return CNXMAN_COORD_DRIVE;
 }
 
@@ -751,6 +880,7 @@ static void coord_send_membrec(struct cnxman_coord *c, uint32_t to_csb,
 	rec.index   = (uint16_t)(((uint32_t)about->csid & 0xffffu) - 1u);
 	rec.boot_lo = (uint32_t)(about->incarnation & 0xffffffffu);
 	rec.boot_hi = (uint32_t)((about->incarnation >> 32) & 0xffffffffu);
+	rec.epoch   = c->epoch;        /* the transition this record is part of */
 	rec.boot_valid = (uint8_t)(about->incarnation != 0u);
 	if (!rec.boot_valid)
 		c->membrec_boot_omitted++;
@@ -950,14 +1080,19 @@ static void coord_claim_club(struct cnxman_coord *c)
 	struct vms_club *club = coord_club(c);
 
 	/*
-	 * The epoch is THIS node's own, advanced. Spec SS4(r) grounds only that
-	 * it is monotone (a capture runs 3, 4, 6, 7, 9, 11); the increment rule
-	 * is not published, so the honest choice is the smallest step that
-	 * preserves the one property that IS grounded, taken from the CLUB's
-	 * real epoch -- never a constant and never a counter of our own.
+	 * THE EPOCH THE CLUSTER IS AT -- not the one it is going to. The
+	 * op-0x12 RELAY is sent from this state and a real coordinator sends it
+	 * at the CURRENT epoch: measured over both reference capture trees,
+	 * 133 of 133 relay/commit pairs have commit == relay + 1, never equal
+	 * (rd vms-1ac). coord_advance_epoch() below does the increment, once,
+	 * at the commit.
+	 *
+	 * This used to advance here, so OVMX relayed at N+1 and then compared
+	 * the member's answer -- which carries the member's OWN epoch, N --
+	 * against N+1 and counted every one as `epoch_mismatch`.
 	 */
-	c->epoch = club->epoch + 1u;
-	club->epoch = c->epoch;
+	c->epoch = club->epoch;
+	c->epoch_advanced = 0u;
 	club->transition_active = 1u;
 	club->transition_class = c->tr_class;
 	club->we_coordinate = 1u;
@@ -976,8 +1111,13 @@ static void coord_release_club(struct cnxman_coord *c)
 
 static void coord_try_go(struct cnxman_coord *c);
 
+static void coord_advance_epoch(struct cnxman_coord *c);
+
 static void coord_enter_open(struct cnxman_coord *c)
 {
+	/* A REMOVE and a FOUNDING open arrive here without a commit; the
+	 * advance is idempotent, so this is the one place both are covered. */
+	coord_advance_epoch(c);
 	/*
 	 * BETWEEN THE COMMIT AND THE OPEN -- the reference sequence's own place
 	 * for the membership record, and the last moment at which telling the
@@ -1011,8 +1151,40 @@ static void coord_enter_open(struct cnxman_coord *c)
 	coord_try_go(c);
 }
 
+/*
+ * THE EPOCH ADVANCES ONCE PER TRANSITION, AT THE COMMIT (rd vms-1ac).
+ *
+ * Measured on `vax3-2to3-established-join-20260730.pcap`, a real NON-FOUNDER
+ * member (VAX2) admitting a third node into {VAX1,VAX2}:
+ *
+ *   op 0x12 RELAY   epoch 3     the epoch the cluster is at
+ *   op 0x03 COMMIT  epoch 4     }
+ *   op 0x05 records epoch 4     }  the epoch it is going to
+ *   op 0x09 OPEN    epoch 4     }
+ *   op 0x0a GO      epoch 4     }
+ *
+ * and corpus-wide: 133/133 relay->commit pairs advance by exactly one, and
+ * all 791 op-0x05 records of those transitions carry relay-epoch + 1.
+ *
+ * Spec §4(r) grounds only that the epoch is MONOTONE (a capture runs 3, 4, 6,
+ * 7, 9, 11), so the increment stays the smallest step that preserves it; what
+ * this function fixes is WHEN, not by how much. Idempotent, because a founding
+ * or REMOVE open reaches coord_enter_open() without passing a commit.
+ */
+static void coord_advance_epoch(struct cnxman_coord *c)
+{
+	struct vms_club *club = coord_club(c);
+
+	if (c->epoch_advanced)
+		return;
+	c->epoch = club->epoch + 1u;
+	club->epoch = c->epoch;
+	c->epoch_advanced = 1u;
+}
+
 static void coord_enter_commit(struct cnxman_coord *c)
 {
+	coord_advance_epoch(c);
 	if (c->tr_class != VMS_CM_CLASS_ADD || c->subject_csb < 0) {
 		coord_enter_open(c);
 		return;

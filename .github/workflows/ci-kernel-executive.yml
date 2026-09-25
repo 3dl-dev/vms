@@ -156,6 +156,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -367,6 +372,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -469,6 +479,11 @@ jobs:
       # every suite lands in exactly one shard in [0,N), and the union of the
       # per-shard counts equals the total (no suite dropped, no overlap). N is
       # read from the shard matrix's own list so it cannot drift from the legs.
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Prove the shard partition covers every suite exactly once (union = all)
         run: |
           N=$(sed -n 's/^ *shard: \[\(.*\)\].*/\1/p' .github/workflows/ci-kernel-executive.yml \
@@ -573,6 +588,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Build kernel executive test image WITHOUT loading vms.ko
         run: |
@@ -1531,6 +1551,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

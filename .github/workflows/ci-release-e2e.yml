@@ -65,6 +65,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -280,6 +285,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -470,6 +480,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -548,6 +563,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -631,6 +651,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -712,6 +737,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -824,6 +854,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -911,6 +946,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -956,6 +996,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1007,6 +1052,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1292,6 +1342,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -1348,6 +1403,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1407,6 +1467,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1468,6 +1533,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -1516,6 +1586,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # vms-6bf: GitHub-hosted x86_64 runners expose /dev/kvm; make QEMU guests
+      # (host-side and inside `docker run`) use it instead of TCG.
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

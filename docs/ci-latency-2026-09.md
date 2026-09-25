@@ -40,7 +40,7 @@ suite on the branch:
 | 3 | **One slow defect**: `lock-deq-status-wrong` runs to the 1800 s inner wall | negctl shard 21 | Shard 21 median **40 min**; the other 21 shards take 11–18 min | Filed as vms-fa5. Now that the cap is gone, this is the floor of the negctl matrix. |
 | 4 | **`cut-release is byte-reproducible`**: two sequential `--no-cache` cuts | Release/E2E push/dispatch | Cut A 21.0 min + cut B 21.5 min; job median 44 min | Unchanged. Running the cuts as two parallel jobs would save ~20 min, but both need the same ephemeral signing key, and moving a private key between jobs is a security-posture choice. Not done. |
 | 5 | **"Build bootable image" on the PR path**: three PR jobs each build `distro/Dockerfile.bootable` | Release/E2E pull_request (DCL/SHOW, Console boot, Alternate-disk) | 13–15 min median per job. A PR changes source, so the compile layers rebuild; the cache works as designed. | Unchanged; the PR path is already ~20 min. Next lever: a ccache mount in the Dockerfile. |
-| 6 | **x86_64 QEMU under TCG** | KE shards, negctl, release e2e boots | negctl test step median **10.9 → 7.2 min** with KVM. Pristine all-suite boot 44 s → 17 s. 21 of 22 shards finish in 20.8 min. | **#1314 is built and measured but held.** Under KVM the pristine `test_syssvc_procnam` hit a real `$CREPRC` signal-handshake hang that TCG hides (vms-d90, p1). #1314 lands once that's fixed. About 35 release e2e boot scripts also hardcode `MACHINE=""` (TCG) and need the guard: vms-5486. |
+| 6 | **x86_64 QEMU under TCG** | KE shards, negctl, release e2e boots | negctl test step median **10.9 → 7.2 min** with KVM. Pristine all-suite boot 44 s → 17 s. 21 of 22 shards finish in 20.8 min. | #1314 enables KVM. Under KVM, the pristine `test_syssvc_procnam` hung in P13 (vms-d90). The cause was a race in the test's own ptrace tracer, which lost a held child. `$CREPRC` was not at fault. The fix is #1317. About 35 release e2e boot scripts also hardcode `MACHINE=""` (TCG) and need the guard: vms-5486. |
 | 7 | **qemu-system-alpha** (TCG only on x86 hosts) | Alpha PR jobs | 10–20 min per job | Can't be accelerated on hosted x86 runners. Already runs in parallel, so it doesn't set the PR critical path. |
 
 ## Things checked that are *not* the problem
@@ -63,9 +63,12 @@ device usable. The one job that passed `--device /dev/kvm` itself (2-node
 CLUSTER_CONFIG_LAN) was already running `accel=kvm` on main. `.github/actions/enable-kvm`
 (#1314) applies the udev rule and adds a `docker run` shim that inserts `--device
 /dev/kvm`. It's wired into the x86 QEMU jobs in Core Gates, Kernel Executive and
-Release/E2E, but not into the NetBSD/amd64 jobs (sink #2). #1314 is held on vms-d90: KVM
-exposed a real `$CREPRC` race in the pristine suite (1 hit in about 55 KVM runs of that
-suite, 0 in 374 TCG shard runs).
+Release/E2E, but not into the NetBSD/amd64 jobs (sink #2). #1314 waited on vms-d90. Under KVM,
+the pristine suite hung in P13 (1 hit in about 55 KVM runs of that suite, 0 in 374 TCG shard
+runs). The cause was P13's ptrace tracer: it detached a held fork child before the child
+had stopped, got ESRCH, and left the child stopped forever. It was not a `$CREPRC` race.
+Fixed in #1317. Before the fix, 55 of 90 KVM runs hung with P13 at 60 calls. After it,
+0 of 90 hung.
 
 ## Self-hosted runners on the k3s rail (vms-101): operator decision
 
@@ -80,7 +83,7 @@ so it's Baron's. The operator trail on vms-101 also conflicts: 2026-08-20 and 08
 | Lever self-hosting would give | Is it the bottleneck? | Expected gain |
 |---|---|---|
 | Less queue wait | No. Queue is ~0.1 min with 300 jobs running at once | none |
-| KVM | Hosted x86 runners expose it (#1314, held on vms-d90) | none extra (except NetBSD, sink #2, which is a guest/CPU-model issue and would show up on our KVM hosts too) |
+| KVM | Hosted x86 runners expose it (#1314) | none extra (except NetBSD, sink #2, which is a guest/CPU-model issue and would show up on our KVM hosts too) |
 | Warm persistent Docker/ccache | Partly (sink #5, 13–15 min per PR-path build) | maybe 5–10 min off the PR path, and ccache on hosted runners gets most of that |
 | Bigger boxes | k3s-worker is 8 CPU / 53 GB, versus 4 vCPU / 16 GB per hosted job | faster per job, but **one worker node gives far less fan-out**: a KE dispatch is ~36 jobs, which fit in about 4–6 concurrent QEMU jobs on one node, so ~6–9 waves. That's **slower** than hosted, where all of them start at once |
 
@@ -100,13 +103,13 @@ per-PR job needs hardware that hosted runners don't have.
 | PR | Change | Job set | Before → after |
 |---|---|---|---|
 | #1313 | Remove negctl `max-parallel: 3` | unchanged (superset diff) | negctl matrix ~100+ min (KE wall median 121) → **44.9 min** |
-| #1314 (**held**, draft) | `.github/actions/enable-kvm` in the x86 QEMU jobs (not NetBSD) | unchanged; one step added per job | negctl test step median 10.9 → 7.2 min; 21/22 shards in 20.8 min. Waiting on vms-d90 |
+| #1314 | `.github/actions/enable-kvm` in the x86 QEMU jobs (not NetBSD) | unchanged; one step added per job | negctl test step median 10.9 → 7.2 min; 21/22 shards in 20.8 min |
 
 No test was deleted, skipped, relocated or weakened. No job moved off the PR path.
 
 ## Follow-ups filed
 
-- vms-d90 (p1 bug): `sys$creprc` hangs while the caller catches signals, on pristine code under KVM. Blocks #1314.
+- vms-d90 (p1, fixed in #1317): P13 "`sys$creprc` did not return" under KVM. Cause: a race in the test's ptrace tracer (a detach before the held child had stopped). `$CREPRC` was not at fault.
 - vms-fa5: negctl shard 21 / `lock-deq-status-wrong` sets a ~40 min floor.
 - vms-5486: add the KVM guard to the ~35 x86 boot scripts that hardcode TCG.
 - vms-8a8: NetBSD 10.1/amd64 enters ddb under KVM; its jobs stay on TCG (25–75 min).

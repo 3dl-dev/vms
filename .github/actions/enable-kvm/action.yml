@@ -1,0 +1,55 @@
+name: Enable KVM for QEMU guests
+description: >-
+  Make the runner's /dev/kvm usable by host-side QEMU (udev 0666) and by
+  every `docker run` in the job (a PATH shim that adds --device /dev/kvm).
+  The harnesses already choose `-accel kvm -cpu host` when /dev/kvm is
+  writable and fall back to TCG otherwise (distro/boot/run-qemu.sh,
+  tests/qemu/run_tests.sh, tests/netbsd/drive_netbsd*.py), so this only
+  changes which accelerator the SAME boot uses. It is a no-op where the
+  runner has no /dev/kvm (e.g. ubuntu-24.04-arm). rd vms-6bf.
+  NOT wired into the NetBSD/amd64 guest jobs: under KVM the NetBSD 10.1
+  install dropped into ddb (--db_more--) and the prime job timed out
+  (measured on run 36150067789), so those jobs stay on TCG for now.
+runs:
+  using: composite
+  steps:
+    - name: Enable KVM (udev + docker --device shim)
+      shell: bash
+      run: |
+        set -eu
+        if [ ! -e /dev/kvm ]; then
+          echo "enable-kvm: no /dev/kvm on this runner -- QEMU guests stay on TCG"
+          exit 0
+        fi
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules >/dev/null
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+        ls -l /dev/kvm
+        REAL_DOCKER=$(command -v docker || true)
+        if [ -n "$REAL_DOCKER" ]; then
+          SHIM_DIR="$RUNNER_TEMP/enable-kvm-bin"
+          mkdir -p "$SHIM_DIR"
+          cat > "$SHIM_DIR/docker" <<SHIM
+        #!/bin/bash
+        # enable-kvm shim (rd vms-6bf): pass /dev/kvm into every container run.
+        real="$REAL_DOCKER"
+        if [ -e /dev/kvm ]; then
+          case "\$1 \${2:-}" in
+            "run "*|"container run")
+              case " \$* " in *"/dev/kvm"*) exec "\$real" "\$@" ;; esac
+              if [ "\$1" = container ]; then shift 2; else shift; fi
+              exec "\$real" run --device /dev/kvm "\$@" ;;
+          esac
+        fi
+        exec "\$real" "\$@"
+        SHIM
+          chmod +x "$SHIM_DIR/docker"
+          echo "$SHIM_DIR" >> "$GITHUB_PATH"
+          echo "enable-kvm: docker run shim installed ($SHIM_DIR/docker -> $REAL_DOCKER)"
+        fi
+        if [ -w /dev/kvm ]; then
+          echo "enable-kvm: /dev/kvm writable -- QEMU x86_64 guests use -accel kvm"
+        else
+          echo "enable-kvm: /dev/kvm still not writable -- host-side QEMU stays on TCG"
+        fi

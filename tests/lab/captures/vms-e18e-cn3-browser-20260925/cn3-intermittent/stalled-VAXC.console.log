@@ -1,0 +1,169 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 25-SEP-2026 06:43:41.65
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20200208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:25.00  %%%%%%%%%%%
+Operator _VAXC$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:25.02  %%%%%%%%%%%
+Operator status for operator _VAXC$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:25.18  %%%%%%%%%%%
+Logfile has been initialized by operator _VAXC$OPA0:
+Logfile is VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:25.19  %%%%%%%%%%%
+Operator status for operator VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:25.27  %%%%%%%%%%%
+06:43:38.31 Node VAXC (csid 00000000) proposed formation of a VAXcluster
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:25.29  %%%%%%%%%%%
+06:43:38.31 Node VAXC (csid 00010001) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:25.32  %%%%%%%%%%%
+06:43:38.35 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:28.42  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:28.44  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:32.37  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:32.44  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:32.57  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:32.76  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:32.78  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%SMG-W-GBLNOTCRE, global section not created
+-SYSTEM-F-GPTFULL, global page table is full
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:38.88  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAX-VMS use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAX-VMS use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:39.43  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:41.73  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAXC.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:44:44.33  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Audit server starting up
+Event time:               25-SEP-2026 06:44:44.00
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at 25-SEP-2026 06:44:48.54
+
+  Accounting information:
+  Buffered I/O count:            1140         Peak working set size:    1883
+  Direct I/O count:               755         Peak page file size:      4920
+  Page faults:                   3258         Mounted volumes:             0
+  Charged CPU time:           0 00:00:54.65   Elapsed time:     0 00:01:07.94
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: 
+Error reading command input
+Timeout period expired
+%%%%%%%%%%%  OPCOM  25-SEP-2026 06:45:10.13  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Local interactive login failure
+Event time:               25-SEP-2026 06:45:10.04
+PID:                      20200213        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               VAXC$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+█

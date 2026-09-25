@@ -584,6 +584,7 @@ the removal is REFUSED, not driven
 ...and named OPEN_UNGROUNDED
 ...and counted, so the gap is visible without a capture
 NOTHING went on the wire -- above all no op 0x08 this node cannot build faithfully
+and no transition was opened
 EOF
         ;;
         esac;;

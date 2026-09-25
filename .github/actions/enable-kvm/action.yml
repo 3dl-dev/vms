@@ -7,6 +7,9 @@ description: >-
   tests/qemu/run_tests.sh, tests/netbsd/drive_netbsd*.py), so this only
   changes which accelerator the SAME boot uses. It is a no-op where the
   runner has no /dev/kvm (e.g. ubuntu-24.04-arm). rd vms-6bf.
+  NOT wired into the NetBSD/amd64 guest jobs: under KVM the NetBSD 10.1
+  install dropped into ddb (--db_more--) and the prime job timed out
+  (measured on run 36150067789), so those jobs stay on TCG for now.
 runs:
   using: composite
   steps:

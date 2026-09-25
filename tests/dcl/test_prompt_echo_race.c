@@ -27,6 +27,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/socket.h>
 
 #include "dcl/dcl_mbx.h"
 
@@ -149,10 +150,81 @@ static void test_fixed_with_barrier(void)
           "fixed: the echo follows the fully-emitted prompt");
 }
 
+/*
+ * test_two_lines_one_read_become_two_messages (vms-d26f) - the SYS$OUTPUT
+ * relay's line-boundary fix.
+ *
+ * THE BUG. A Unix pipe carries no message boundaries: dcl_mbx.c's writer
+ * thread used to forward each read() of DCL's stdout pipe as ONE mailbox
+ * message verbatim. If a foreign command's own exit-time stdio flush and
+ * DCL's own immediately-following end-of-command status echo (the
+ * "MMK____status=" marker MMK's persistent-DCL build protocol keys
+ * completion on, tests/corpus/tier3-mmk/build_target.c) both land in the
+ * pipe before the writer thread's read() runs -- entirely plausible under
+ * host scheduling contention -- ONE read() returns both concatenated, and
+ * the old code relayed that as ONE mailbox message. MMK's echo_ast only
+ * recognizes the marker when it is the FIRST thing in a message, so the
+ * marker silently failed to match, was echoed as ordinary output instead of
+ * consumed, and the command that owned it never completed --
+ * test_syssvc_mmk_build's "pristine run" flake (LINK never runs because the
+ * PRECEDING command's own completion marker was the one lost this way).
+ *
+ * THE PROOF. Write two newline-terminated lines in ONE write() call, so they
+ * are certain to sit contiguously in the pipe (well under PIPE_BUF, so the
+ * kernel write is atomic) by the time the writer thread's read() executes --
+ * reproducing "one read() spans two logically distinct writes" without
+ * depending on real scheduling timing. The far end is a SOCK_SEQPACKET
+ * socket, which (unlike a pipe) preserves the boundary of each individual
+ * write() the relay makes, so this can assert MESSAGE COUNT directly: the
+ * fix must produce exactly two records, each holding exactly one line.
+ */
+static void test_two_lines_one_read_become_two_messages(void)
+{
+    int sv[2];
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv) != 0) {
+        CHECK(0, "two-lines: socketpair()");
+        return;
+    }
+
+    int dcl_fd1 = -1;
+    if (dcl_mbx__test_start_output(sv[1], &dcl_fd1) != 0) {
+        CHECK(0, "two-lines: start_output()");
+        close(sv[0]); close(sv[1]);
+        return;
+    }
+
+    /* One write() call: both lines are certain to be contiguous in the pipe
+     * (atomic, well under PIPE_BUF) whenever the writer thread's read() next
+     * runs -- the exact "one read() spans two distinct writes" shape the bug
+     * needed, reproduced without racing real process scheduling. */
+    static const char two_lines[] = "%LIBRAR-S-CREATED, object library made\nMMK____status=1\n";
+    if (write(dcl_fd1, two_lines, sizeof(two_lines) - 1) != (ssize_t)sizeof(two_lines) - 1) {
+        CHECK(0, "two-lines: write() of both lines");
+    }
+
+    close(dcl_fd1);
+    dcl_mbx__test_stop_output();     /* joins the writer: both lines are out */
+    close(sv[1]);
+
+    char rec1[128] = {0}, rec2[128] = {0};
+    ssize_t n1 = recv(sv[0], rec1, sizeof(rec1) - 1, 0);
+    ssize_t n2 = recv(sv[0], rec2, sizeof(rec2) - 1, 0);
+    close(sv[0]);
+
+    CHECK(n1 == (ssize_t)strlen("%LIBRAR-S-CREATED, object library made\n") &&
+          strcmp(rec1, "%LIBRAR-S-CREATED, object library made\n") == 0,
+          "two-lines: first record is the foreign command's own line alone");
+    CHECK(n2 == (ssize_t)strlen("MMK____status=1\n") &&
+          strcmp(rec2, "MMK____status=1\n") == 0,
+          "two-lines: second record is DCL's status marker alone, "
+          "starting at byte 0 -- echo_ast's marker match would have found it");
+}
+
 int main(void)
 {
     test_repro_without_barrier();
     test_fixed_with_barrier();
+    test_two_lines_one_read_become_two_messages();
 
     if (failures) {
         fprintf(stderr, "\n%d check(s) failed\n", failures);

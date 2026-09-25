@@ -1494,19 +1494,21 @@ jobs:
     timeout-minutes: 50
     strategy:
       fail-fast: false
-      # SHARD-BALLOON FIX (vms-86a part 2). MEASURED: the main-push run on
-      # d2d76fc failed on THREE shards AT ONCE (0/6, 1/6, 5/6) -- every shard
-      # runs QEMU + fork/pipe/multi-process tests, and with all 6 unbounded
-      # (GitHub's default matrix concurrency), they compete for host
-      # resources (CPU for concurrent QEMU guests, IPC timing) alongside
-      # whatever else this workflow is already running. That's resource
-      # starvation, not a per-defect logic bug -- the same shard slice that
-      # fails under load passes standalone. Capping how many run AT ONCE
-      # (not how many run in total -- all shards still execute, sequenced in
-      # batches) gives each shard the headroom it needs without trading away
-      # coverage or resurrecting the pre-#158 single-job wall-time problem.
-      # Revisit the number empirically if shards still balloon at 3.
-      max-parallel: 3
+      # NO max-parallel CAP (vms-6bf, 2026-09-25). This used to be
+      # `max-parallel: 3` (vms-86a part 2), on the premise that unbounded
+      # shards "compete for host resources (CPU for concurrent QEMU guests,
+      # IPC timing)". That premise does not hold on GitHub-hosted runners:
+      # every matrix job gets its OWN fresh VM, so shards never share a host.
+      # MEASURED (docs/ci-latency-2026-09.md): the cap serialised the 22
+      # shards into ~8 batches, so shard queue wait (created->started) was a
+      # median 32.6m / max 87.7m, and the whole Kernel Executive workflow
+      # took a median 121m (max 252m) on push/workflow_dispatch -- the single
+      # largest time sink in CI. Uncapped jobs elsewhere in the same window
+      # queued ~0.1m with >300 jobs running concurrently account-wide, so no
+      # runner-concurrency limit is being protected either. The per-shard
+      # time variance vms-86a saw (5m/23m/47m for the same defects) is QEMU
+      # TCG speed variance between runner VMs, which a cap cannot fix. Every
+      # shard still runs; only the artificial batching is gone.
       matrix:
         # SHARD-COUNT BUMP 10 -> 22 (vms-6ea Bucket-A landing). MEASURED on
         # run 34627048896: with the manifest at 138 defects (~14/shard at 10

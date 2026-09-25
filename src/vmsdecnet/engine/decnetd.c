@@ -2078,15 +2078,48 @@ static int run_cterm_accept_test(void)
              "NEGCTL: the screen search finds a token the session really sent and"
              " rejects one it never sent -- the assertions above can go red");
 
-    /* ---- 6. Tear down and prove the device row went with the session ------ */
+    /* ---- 6. Tear down and prove the device row went with the session ------ *
+     *
+     * dnet_cterm_host_close() is the link going down: it hangs up the PTY and
+     * WITHDRAWS the RTAn: (VMS_IOCTL_TERM_DELETE). The executive deletes a
+     * withdrawn unit when its LAST channel is released (rd vms-1875) -- and the
+     * LOGINOUT session process bound to it (which has also used up its three
+     * attempts) still holds that channel until it runs down. Deleting the row
+     * any earlier is what freed it out from under that process's channel and
+     * corrupted the kernel. So the property proven here is the faithful one:
+     * the session process runs down, and the unit goes with it. Both are
+     * asynchronous rundowns of ANOTHER process, so each is awaited against a
+     * bound (the executive is asked, never assumed), then asserted. */
     {
         char devnam[DNET_CTERM_HOST_DEVNAM];
         struct vms_devinfo info;
+        struct vms_procinfo pinfo;
+        uint32_t spid = c.hs.session_pid;
+        const struct timespec tick = { 0, 50 * 1000 * 1000 };   /* 50 ms */
+        int ms, session_gone = 0, unit_gone = 0;
 
         snprintf(devnam, sizeof(devnam), "%s", c.hs.devnam);
         (void)dnet_cterm_host_close(&c.hs);
-        memset(&info, 0, sizeof(info));
-        CT_CHECK((vms_kif_getdvi_devnam(devnam, &info) & 1) == 0,
+
+        for (ms = 0; ms < 30000 && !session_gone; ms += 50) {
+            memset(&pinfo, 0, sizeof(pinfo));
+            if ((vms_kif_getjpi_pid(spid, &pinfo) & 1) == 0)
+                session_gone = 1;
+            else
+                nanosleep(&tick, NULL);
+        }
+        CT_CHECK(session_gone,
+                 "the session process bound to the RTAn: runs down once its link"
+                 " is torn down");
+
+        for (ms = 0; ms < 5000 && !unit_gone; ms += 50) {
+            memset(&info, 0, sizeof(info));
+            if ((vms_kif_getdvi_devnam(devnam, &info) & 1) == 0)
+                unit_gone = 1;
+            else
+                nanosleep(&tick, NULL);
+        }
+        CT_CHECK(unit_gone,
                  "the RTAn: row is WITHDRAWN from the executive when the session"
                  " ends -- it appeared with the session and disappears with it");
     }

@@ -627,6 +627,15 @@ struct vms_club {
 	 */
 	uint32_t csb_ignored_events;
 
+	/*
+	 * OVMX instrumentation, not a VMS field (rd vms-dfe): CSBs this CLUB
+	 * DEALLOCATED because the connection manager had given up on them
+	 * (p. 7-25's "its old CSB is deallocated"). Nonzero means a system was
+	 * released back to discovery; the port decides whether a fresh block
+	 * appears for it. See cnxman_club_reclaim_abandoned().
+	 */
+	uint32_t csb_reclaimed;
+
 	/* ---- the DLM directory (FC-P4.3) ---- */
 
 	/*

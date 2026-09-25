@@ -195,6 +195,27 @@ struct vms_csb *cnxman_club_alloc_csb(struct vms_club *club,
  * first time"). */
 void cnxman_club_free_csb(struct vms_club *club, struct vms_csb *csb);
 
+/*
+ * Deallocate every CSB the connection manager has GIVEN UP ON -- p. 7-25's
+ * "its old CSB is deallocated, and a new CSB is created for it just as if it
+ * were joining the cluster for the first time", and p. 7-24 DEAD's "until the
+ * caller deallocates it and builds a fresh CSB for the new incarnation".
+ * A block qualifies only when it is in DISCONNECT or DEAD, is neither the
+ * LOCAL block nor a SELECTED member, and claims no Con.ID -- see the function's
+ * own header for why each of those is a read of executive state. This asserts
+ * nothing and opens nothing: rebuilding a block for a system is
+ * cnxman_discover_peers()' answer, and only for a circuit the port really has.
+ *
+ * `released` receives the SCSSYSTEMID of each released block that carried one,
+ * up to `max`, so the caller can tell whatever was still driving through that
+ * system that its block is gone. THE RETURN VALUE IS HOW MANY SYSTEMS WERE
+ * NAMED, not how many slots were freed: a block that never learned a sysid is
+ * freed silently because there is nothing honest to put in the array. The slot
+ * count is club->csb_reclaimed, which this advances for every release.
+ */
+uint32_t cnxman_club_reclaim_abandoned(struct vms_club *club,
+				       vms_scs_sysid_t *released, uint32_t max);
+
 /* Find by identity. Both skip free slots and both refuse to match on a value
  * the CSB has not LEARNED (a CSB with csid_valid == 0 never matches any CSID,
  * including 0). NULL when there is none. */

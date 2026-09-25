@@ -176,6 +176,8 @@ const char *cnxman_join_failure_name(enum cnxman_join_failure f)
 	case CNXMAN_JOIN_FAIL_TIMEOUT:   return "reconnect interval expired";
 	case CNXMAN_JOIN_FAIL_UNANSWERED:
 		return "no member answered the membership request";
+	case CNXMAN_JOIN_FAIL_RELEASED:
+		return "the member's CSB was deallocated";
 	default:                         return "?";
 	}
 }
@@ -2744,6 +2746,18 @@ static enum cnxman_join_rx join_h_watch(struct cnxman_join *j,
 static void join_no_connectivity(struct cnxman_join *j)
 {
 	j->connect_windows_expired++;
+	/*
+	 * NO BACK-OFF IS TAKEN HERE, and that is deliberate (rd vms-dfe). One
+	 * member's reconnect window expiring says nothing about the OTHER
+	 * members this node has connectivity with, and join_backoff_start() is
+	 * node-wide: taking it would stop this node asking a perfectly healthy
+	 * member for admission because an unrelated one went quiet. The rate at
+	 * which the next attempt can reach a VMS$VAXcluster CONNECT_REQ is
+	 * already bounded by the thing that must precede it -- p. 2-51's
+	 * directory round, which only a member that is really ANSWERING
+	 * completes. join_attempt_exhausted() takes the node-wide back-off,
+	 * because "every member declined" really is a fact about the node.
+	 */
 	join_stopped(j, CNXMAN_JOIN_FAIL_TIMEOUT,
 		     "%CNXMAN, the reconnect interval expired with no "
 		     "VMS$VAXcluster connection to the member: this node is NOT "
@@ -3820,6 +3834,33 @@ void cnxman_join_csid_learned(struct cnxman_join *j, vms_csid_t csid)
 	join_bzero(&e, (uint32_t)sizeof(e));
 	e.csid = csid;
 	(void)join_dispatch(j, CNXMAN_EV_CSID_LEARNED, &e);
+}
+
+/*
+ * THE CLUB DEALLOCATED THIS ATTEMPT'S BLOCK (rd vms-dfe). The contract and the
+ * grounding are in vms_cnxman_join_fsm.h; this is the whole of the behaviour.
+ *
+ * NOT A TABLE EVENT, because the same answer is right from every state that
+ * has one: the attempt was built on a block that no longer exists, so it is
+ * over, and the states that have NOTHING to release (IDLE) or that are past
+ * the point where releasing would be unmaking a membership (BARRIER, MEMBER --
+ * and a SELECTED block is never reclaimed anyway) are named here rather than
+ * given nine identical cells.
+ */
+void cnxman_join_target_released(struct cnxman_join *j, vms_scs_sysid_t sysid)
+{
+	if (j == NULL || !j->target_valid || j->target_sysid != sysid)
+		return;
+	if (j->state == (uint8_t)CNXMAN_JOIN_IDLE ||
+	    j->state == (uint8_t)CNXMAN_JOIN_BARRIER ||
+	    j->state == (uint8_t)CNXMAN_JOIN_MEMBER)
+		return;
+
+	j->targets_released++;
+	join_stopped(j, CNXMAN_JOIN_FAIL_RELEASED,
+		     "%CNXMAN, the connection manager gave up this member's "
+		     "connection and released its block: this node is NOT a "
+		     "cluster member, and will ask again");
 }
 
 void cnxman_join_timer(struct cnxman_join *j)

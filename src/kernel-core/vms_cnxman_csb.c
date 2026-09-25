@@ -105,6 +105,19 @@ static void csb_give_up(struct vms_csb *csb)
 	csb->flags &= (uint16_t)~VMS_CSB_F_MEMBER;
 	csb->next_attempt_ms = 0u;
 	csb->deadline_ms = 0u;
+
+	/*
+	 * AND THE CON.ID CLAIM GOES WITH IT (rd vms-dfe), for the reason E81
+	 * already gives on the reject path: `cdt_conid` is this block's claim to
+	 * HOLD a connection to that system, and a block that has given up on the
+	 * connection does not hold one. A stale claim is not inert -- it is read
+	 * by join_cm_take_held() as "the executive already holds this pair's
+	 * connection, open none of your own", by join_cm_sync_with_csb() as a
+	 * connection to adopt, and by the emitters as an envelope to stamp for a
+	 * CDT that does not exist (the E76/E77 crash family). Released through
+	 * the single writer, which also discards the dialogue that died with it.
+	 */
+	cnxman_csb_bind_connection(csb, 0u);
 }
 
 /* ==========================================================================
@@ -587,6 +600,94 @@ void cnxman_club_free_csb(struct vms_club *club, struct vms_csb *csb)
 	    csb == &club->csb[club->local_csb])
 		club->local_csb = -1;
 	csb_zero(csb);
+}
+
+/* ==========================================================================
+ * THE DEALLOCATION THE TABLE'S OWN [DISCONNECT] ROW ALREADY PROMISED (vms-dfe)
+ *
+ * p. 7-25: on a return, "its old CSB is deallocated, and a new CSB is created
+ * for it just as if it were joining the cluster for the first time"; p. 7-24
+ * DEAD is the old incarnation's block, kept "until the caller deallocates it
+ * and builds a fresh CSB for the new incarnation". Both sentences describe a
+ * deallocation that this file named and NOTHING in the executive performed:
+ * cnxman_club_free_csb() had no production caller at all.
+ *
+ * WHAT ITS ABSENCE COST, MEASURED (the rd vms-dfe in-browser stall,
+ * tests/lab/captures/vms-e18e-cn3-browser-20260925/cn3-intermittent/). A
+ * joiner's VMS$VAXcluster connection to the one cluster member dropped before
+ * it was admitted; the p. 7-30 window ran out; h_recnx_expired() parked the
+ * block in DISCONNECT. From there the table offers exactly one edge
+ * (NEW_INCARNATION), csb_ensure()/cnxman_discover_peers() find the block by
+ * SCSSYSTEMID and never allocate another, and join_askable() -- correctly --
+ * refuses to drive a join through a connection the ladder has given up on. So
+ * a node whose PE circuit to that member was still OPEN, still exchanging
+ * HELLOs, could never speak to it again for the life of the boot: 25 minutes
+ * of "waiting to form or join an OpenVMS Cluster" beside a healthy cluster.
+ * Real VMS does not have that resting place; it deallocates and rebuilds.
+ *
+ * WHAT IS RECLAIMED, and why each guard is a READ and not a policy:
+ *
+ *   - STATE. Only DISCONNECT and DEAD -- the two states whose own book text is
+ *     "this connection is over". Every other state is a live ladder position.
+ *   - NOT THE LOCAL BLOCK. p. 7-24 LOCAL is this system's own CSB and has no
+ *     SCS connection to give up on; freeing it would unmake the CLUB.
+ *   - NOT A SELECTED BLOCK. p. 7-49 makes SELECTED the cluster's COMMITTED
+ *     membership ("the total number of CSBs that have their SELECTED flag
+ *     set"), and only a state transition may move it (csb_give_up's own note).
+ *     A member the cluster has not yet removed keeps its block, so
+ *     CLUSTER_NODES cannot dip because a connection blinked.
+ *   - NOT A BLOCK STILL CLAIMING A CON.ID. `cdt_conid` is the executive's
+ *     record that a connection exists; a block that still claims one is a block
+ *     SCS can still call back about, and freeing it would lose the attribution.
+ *     (csb_give_up() releases the claim, so the normal give-up path qualifies
+ *     on the very next sweep; an ORDERLY disconnect still in flight does not.)
+ *
+ * NOTHING IS ASSERTED. This frees a table slot and no more: it opens no
+ * connection, sends nothing, and makes no claim about the system the block
+ * described. Whether a new block appears is the PORT's answer, not this
+ * function's -- cnxman_discover_peers() reallocates one only for a system SCS
+ * really reports an open circuit to (INV-6).
+ * ========================================================================== */
+static int csb_reclaimable(const struct vms_club *club,
+			   const struct vms_csb *csb, uint32_t slot)
+{
+	if (!csb->in_use)
+		return 0;
+	if (club->local_csb >= 0 && (uint32_t)club->local_csb == slot)
+		return 0;
+	if ((csb->flags & (VMS_CSB_F_LOCAL | VMS_CSB_F_SELECTED)) != 0u)
+		return 0;
+	if (csb->cdt_conid != 0u)
+		return 0;
+	return csb->state == (uint8_t)VMS_CNXMAN_CSB_DISCONNECT ||
+	       csb->state == (uint8_t)VMS_CNXMAN_CSB_DEAD;
+}
+
+uint32_t cnxman_club_reclaim_abandoned(struct vms_club *club,
+				       vms_scs_sysid_t *released, uint32_t max)
+{
+	uint32_t i, n = 0u;
+
+	if (club == NULL)
+		return 0u;
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *csb = &club->csb[i];
+
+		if (!csb_reclaimable(club, csb, i))
+			continue;
+		/* WHO was released, so the caller can tell whatever was still
+		 * driving through that system. Only a sysid the block really
+		 * LEARNED is reported (INV-6); a block that never carried one
+		 * is freed silently because there is nothing to name, and the
+		 * slot still counts in club->csb_reclaimed. */
+		if (csb->sysid_valid && released != NULL && n < max) {
+			released[n] = csb->sysid;
+			n++;
+		}
+		cnxman_club_free_csb(club, csb);
+		club->csb_reclaimed++;
+	}
+	return n;
 }
 
 struct vms_csb *cnxman_club_find_sysid(struct vms_club *club,

@@ -1658,6 +1658,35 @@ static void cnxman_vc_rejected(struct vms_cnxman *cn, struct vms_csb *csb,
 	cnxman_join_rejected(&cn->join, local_conid, reason);
 }
 
+/*
+ * SAY WHY THE PAIR'S CONNECTION WENT (rd vms-dfe).
+ *
+ * Until this line existed the console recorded that the VMS$VAXcluster
+ * connection had been lost and not one word about WHY, and the difference
+ * matters to every diagnosis downstream of it: a circuit that broke
+ * (path lost), a peer that tore the connection down (remote), a verb that went
+ * unanswered (timeout) and a SYSAP that withdrew its name are four different
+ * faults with one symptom. Reading the in-browser stall capture cost a whole
+ * root-cause pass for want of exactly this word.
+ *
+ * IT IS SCS'S OWN VERDICT, named by SCS's own table (scs_close_reason_name),
+ * not an interpretation this glue put on it -- and it is said only for a
+ * connection the executive could attribute to a system (`csb` non-NULL, which
+ * for this SYSAP means the pair's VMS$VAXcluster CDT). A close this node
+ * cannot attribute is counted in the diag ring and named to nobody (INV-6).
+ */
+static void cnxman_log_cm_close(struct vms_cnxman *cn, const struct vms_csb *csb,
+				uint32_t reason)
+{
+	(void)cn;
+	if (csb == NULL)
+		return;
+	exec_console_printf("%%CNXMAN, the VMS$VAXcluster connection to a "
+			    "cluster member closed: %s\n",
+			    scs_close_reason_name(
+				    (enum scs_close_reason)reason));
+}
+
 static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 			     uint32_t reason)
 {
@@ -1668,6 +1697,7 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 	 * reason SCS gave, not an interpretation of it. */
 	cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_CLOSED, (int32_t)reason,
 			 (uint32_t)local_conid);
+	cnxman_log_cm_close(cn, csb, reason);
 
 	/*
 	 * FIRST, and for EVERY close including a rejection (rd vms-c06): a
@@ -1903,6 +1933,36 @@ static void cnxman_mscp_sysap_bind(struct vms_cnxman *cn)
  * INV-6: the sysid comes from vms_pe_fsm.c's vc_notify_up, read off the
  * wire -- never from a config file, a module parameter or a guess.
  * ========================================================================== */
+
+/*
+ * THE OTHER HALF OF DISCOVERY: GIVING A SYSTEM BACK TO IT (rd vms-dfe).
+ *
+ * p. 7-25 deallocates the CSB of a system the connection manager has given up
+ * on, so that the system can be "created ... just as if it were joining the
+ * cluster for the first time" when it is seen again -- and the sweep below is
+ * exactly that re-creation. Without the deallocation the sweep skips the
+ * system forever (it finds the tombstone by SCSSYSTEMID) and the join FSM
+ * refuses to drive through it (join_askable), which is the measured in-browser
+ * stall: a node beside a healthy cluster, its PE circuit to the member still
+ * open, saying "waiting to form or join an OpenVMS Cluster" for 25 minutes.
+ *
+ * TOLD, NOT LEFT TO BE NOTICED. Anything still driving an admission through a
+ * released system hears about it here, on the beat that really freed the
+ * block, because a slot reused for the SAME system between two beats would
+ * otherwise leave a half-run attempt sitting on a block that has answered none
+ * of its lookups. The CLUB names the systems (INV-6: only the ones whose block
+ * really carried an SCSSYSTEMID); this reports them.
+ */
+static void cnxman_reclaim_abandoned_csbs(struct vms_cnxman *cn)
+{
+	vms_scs_sysid_t released[VMS_CLUB_MAX_CSB];
+	uint32_t n, i;
+
+	n = cnxman_club_reclaim_abandoned(&cn->cl->club, released,
+					  (uint32_t)VMS_CLUB_MAX_CSB);
+	for (i = 0; i < n; i++)
+		cnxman_join_target_released(&cn->join, released[i]);
+}
 
 /* One sweep pass. Returns the number of CSBs newly allocated (0 on a beat
  * where nothing new appeared, which is the normal case). */
@@ -2316,6 +2376,17 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 
 	switch ((enum cnxman_timer)w->arg0) {
 	case CNXMAN_TIMER_RECNX:
+		/*
+		 * RECLAIM BEFORE DISCOVERY (rd vms-dfe). p. 7-25 deallocates
+		 * the block of a system the connection manager has given up on
+		 * and builds "a new CSB ... just as if it were joining the
+		 * cluster for the first time"; the sweep below IS that rebuild,
+		 * so the deallocation has to precede it or a system whose
+		 * circuit is still up stays locked out behind its own tombstone
+		 * (the measured in-browser stall). Freeing first also makes the
+		 * recovery take effect on THIS beat rather than the next.
+		 */
+		cnxman_reclaim_abandoned_csbs(cn);
 		/* E36: discovery FIRST, so a system that appeared since the
 		 * last beat has a CSB before the reconnect ladder and the join
 		 * look at the CLUB on this same beat. */

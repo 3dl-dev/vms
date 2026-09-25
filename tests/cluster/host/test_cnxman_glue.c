@@ -601,9 +601,13 @@ static void test_glue_bindings(void)
 		  "... its quorum too");
 	check_has("in.cluster_nodes = (uint16_t)cn->cl->club.cluster_nodes",
 		  "... and its member count, which is p. 7-49's SELECTED set");
-	check_has("in.member = (uint8_t)(cn->cl->state == VMS_CLUSTER_MEMBER",
+	check_has("in.member = (uint8_t)((cn->cl->state == VMS_CLUSTER_MEMBER &&",
 		  "... and the role is this node's OWN cluster state, which "
 		  "only a membership record naming it can set");
+	check_has("cn->cl->club.cluster_nodes > 0u) ? 1 : 0);",
+		  "rd vms-b87: ...AND the CLUB really holding a member -- a "
+		  "member is at least itself, and the MEMBER form with zero "
+		  "votes, quorum and members is one a real VAX refuses");
 	check_has("cn->vc_sysap.accept_conndata = cn->conndata;",
 		  "rd vms-b87: the ACCEPT offers the live buffer");
 	/*
@@ -789,7 +793,7 @@ static void test_glue_bindings(void)
 		     "... BEFORE re-incarnating, so no frame carries the new "
 		     "incarnation on the old circuit");
 	check_before("pe_reincarnate(cn->cl->pe)",
-		     "cnxman_arm_fsms(cn);\n\t/*",
+		     "cn->cl->state = VMS_CLUSTER_JOINING;\n\tcnxman_arm_fsms(cn);",
 		     "... and the CLUB and the FSMs go last, because until "
 		     "then they are what the announcement is made out of");
 	check_has("if (pe_reincarnate(cn->cl->pe) != (int)SS__NORMAL)",
@@ -813,7 +817,7 @@ static void test_glue_bindings(void)
 	check_has("uint32_t now = cn->join.inbound_refused_giveup;",
 		  "rd vms-0f9: the standoff is read off the join's OWN count "
 		  "of refusals it really made");
-	check_has("if (cn->cl->state == VMS_CLUSTER_MEMBER)\n\t\treturn;\n\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_STANDOFF);",
+	check_has("if (cn->cl->state == VMS_CLUSTER_MEMBER)\n\t\treturn;",
 		  "... and arms it only for a node that is NOT a member -- a "
 		  "member refusing a system it removed is doing its job");
 	check_absent("cnxman_cluexit_run(cn);\n\t\tcnxman_reclaim",
@@ -833,10 +837,18 @@ static void test_glue_bindings(void)
 	check_has("if (!cn->join.cm_open)\n\t\treturn;\n\tcn->cluexit_used = 0u;",
 		  "... and the latch clears on the executive's OWN fact that "
 		  "the cluster is talking to this node again");
-	check_has("cnxman_recnx_start(&cn->recnx);\n\tcn->cl->state = VMS_CLUSTER_JOINING;",
+	check_has("cnxman_recnx_start(&cn->recnx);\n\tcn->cluexits++;",
 		  "rd vms-0f9: ...and the re-incarnated node re-arms its own "
 		  "beat -- cnxman_recnx_init() zeroed `running`, and a node "
 		  "that does not re-arm never runs again");
+	check_before("cn->cl->state = VMS_CLUSTER_JOINING;\n\tcnxman_arm_fsms(cn);",
+		     "cnxman_recnx_start(&cn->recnx);",
+		     "rd vms-b87: ...and it is a JOINER before its identity is "
+		     "rebuilt, so the connect data it offers is the joiner "
+		     "form and not a membership with nothing behind it");
+	check_has("if (cn->join.cm_open)\n\t\treturn;\n\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_STANDOFF);",
+		  "rd vms-0f9: a node the cluster is TALKING to is not in a "
+		  "standoff, whatever it refused a moment ago");
 
 	/* E29. */
 	check_has("SCS_CLOSE_REJECTED",

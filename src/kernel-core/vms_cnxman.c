@@ -2742,7 +2742,14 @@ static int cnxman_refresh_conndata(struct vms_cnxman *cn)
 	in.cluster_votes = cn->cl->club.cevotes;
 	in.quorum = cn->cl->club.quorum;
 	in.cluster_nodes = (uint16_t)cn->cl->club.cluster_nodes;
-	in.member = (uint8_t)(cn->cl->state == VMS_CLUSTER_MEMBER ? 1 : 0);
+	/*
+	 * BOTH FACTS, OR NEITHER (INV-6). A member is at least itself, so a
+	 * CLUB that holds no committed member is a CLUB this node cannot
+	 * report a membership out of -- whatever `cl->state` says while the
+	 * two are being rebuilt. Decided here, where both are in scope.
+	 */
+	in.member = (uint8_t)((cn->cl->state == VMS_CLUSTER_MEMBER &&
+			       cn->cl->club.cluster_nodes > 0u) ? 1 : 0);
 	in.pad0 = 0u;
 
 	if (vms_cm_conndata_build(&in, cnxman_e31_head,
@@ -2892,6 +2899,16 @@ static void cnxman_check_standoff(struct vms_cnxman *cn)
 	cn->refused_seen = now;
 	if (cn->cl->state == VMS_CLUSTER_MEMBER)
 		return;
+	/*
+	 * ...AND NOT IF THE CLUSTER IS TALKING TO THIS NODE RIGHT NOW.
+	 * MEASURED, arm C-1: the cluster opened its VMS$VAXcluster connection
+	 * to this node 0.8 s AFTER a refusal this node had already made, and
+	 * re-incarnating out of a connection that had just been established
+	 * threw away the admission it was the start of. A refusal is evidence
+	 * of a standoff only while there is no connection.
+	 */
+	if (cn->join.cm_open)
+		return;
 	cnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_STANDOFF);
 }
 
@@ -2935,6 +2952,15 @@ static void cnxman_cluexit_run(struct vms_cnxman *cn)
 		return;
 	}
 
+	/*
+	 * A RE-INCARNATED NODE IS A JOINER, AND ITS IDENTITY HAS TO SAY SO
+	 * BEFORE IT IS BUILT. cnxman_arm_fsms() builds this node's connect
+	 * data out of `cl->state` and the CLUB it has just emptied; with the
+	 * state still MEMBER that is the MEMBER form carrying zero votes, zero
+	 * quorum and zero members -- a shape no real node sends, and the real
+	 * VAX answers it "version identity refused" (measured, arm C-1).
+	 */
+	cn->cl->state = VMS_CLUSTER_JOINING;
 	cnxman_arm_fsms(cn);
 	/*
 	 * ...AND THE BEAT ITSELF. cnxman_recnx_init() zeroes the reconnect
@@ -2944,7 +2970,6 @@ static void cnxman_cluexit_run(struct vms_cnxman *cn)
 	 * once its context is published, and this is the OTHER caller.
 	 */
 	cnxman_recnx_start(&cn->recnx);
-	cn->cl->state = VMS_CLUSTER_JOINING;
 	cn->cluexits++;
 	cn->cluexit_used = 1u;
 	cnxman_start_join_or_wait(cn);

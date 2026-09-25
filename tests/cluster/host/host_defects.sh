@@ -143,7 +143,8 @@ join-relay-unanswered
 coord-relay-epoch-advanced-early
 coord-membrec-epoch-zero
 coord-admission-not-selected-disarmed
-coord-admission-open-gate-disarmed"
+coord-admission-open-gate-disarmed
+coord-removal-open-gate-disarmed"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -571,6 +572,22 @@ EOF
                       ;;
         esac;;
 
+    coord-removal-open-gate-disarmed)
+        case "$_f" in
+        facility)     echo "the INV-6 refusal to originate a class-0x03 REMOVAL open toward a connection manager this executive cannot build one for (rd vms-0f9: a real op-0x08 carries 44 bytes OVMX has no derivation for)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_coord_select()'s DEPARTURE branch has its coord_open_is_grounded_for() call disarmed with '0 &&', so a survivor opens a class-0x03 removal toward a system that has NOT proved it runs this implementation -- putting an op-0x08 with 44 zero bytes where a real coordinator writes two VMS absolute-time quadwords and four longwords. MEASURED consequence, jittered three-node rig arm V2-1: the real OpenVMS VAX V7.3 put its last-gasp datagram on the multicast in the SAME millisecond.";;
+        require_fail) cat <<'EOF'
+the removal is REFUSED, not driven
+...and named OPEN_UNGROUNDED
+...and counted, so the gap is visible without a capture
+NOTHING went on the wire -- above all no op 0x08 this node cannot build faithfully
+EOF
+        ;;
+        esac;;
+
     coord-admission-open-gate-disarmed)
         case "$_f" in
         facility)     echo "the INV-6 refusal to originate a class-0x02 transition open toward a connection manager this executive cannot build one for (rd vms-1ac: a real op-0x09 carries 28 bytes OVMX has no derivation for)";;
@@ -806,7 +823,10 @@ apply_edit() {
         sed -i 's|if (coord_outranked_for_admission(c, subject_csb)) {|if (0 \&\& coord_outranked_for_admission(c, subject_csb)) { /* NEGCTL coord-admission-not-selected-disarmed */|' "$_file";;
 
     coord-admission-open-gate-disarmed)
-        sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+        sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    coord-removal-open-gate-disarmed)
+        sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;
 
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2

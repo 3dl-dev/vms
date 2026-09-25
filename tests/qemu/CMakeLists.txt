@@ -1125,3 +1125,17 @@ set_tests_properties(console_boot_no_newline_spam_e2e PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 1200)
 
+
+# ptrace_hold_selftest (rd vms-d90) -- the ONE host-runnable test in this
+# directory, and deliberately so: it needs no /dev/vms (so the "no add_test
+# here" rule above does not apply to it). It proves the arrangement that
+# test_syssvc_procnam P13 builds with ptrace -- hold a forked child at birth,
+# release it only once it is provably stopped (tests/qemu/ptrace_hold.h)
+# -- over every event ordering, and under a one-CPU real-ptrace stress that
+# lost ~1% of rounds to the pre-fix release-at-once logic. Linux ptrace only.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(ptrace_hold_selftest
+        ${CMAKE_CURRENT_SOURCE_DIR}/ptrace_hold_selftest.c)
+    add_test(NAME ptrace_hold_selftest COMMAND ptrace_hold_selftest)
+    set_tests_properties(ptrace_hold_selftest PROPERTIES TIMEOUT 300)
+endif()

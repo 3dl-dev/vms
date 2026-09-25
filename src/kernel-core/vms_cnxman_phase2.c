@@ -124,9 +124,25 @@ static uint32_t phase2_apply_nodemap(struct vms_club *club,
 		if (!known)
 			continue;
 		matched++;
-		if (in_map)
+		if (in_map) {
 			cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED |
 							     VMS_CSB_F_MEMBER));
+			/*
+			 * ...AND THIS NODE HAS NOTHING TO REFUSE IT FOR
+			 * (rd vms-0f9). A give-up record about a system the
+			 * cluster has just committed as a member is stale:
+			 * membership is what the transition says it is, and a
+			 * member that went on refusing this one's connection
+			 * would be a member short of the Rule of Total
+			 * Connectivity. MEASURED, arms D-1/D-2: both OVMX
+			 * nodes reached MEMBER and the real VAX admitted the
+			 * joiner, but the node that had given up on it during
+			 * the blackout never took its connection back, so its
+			 * own SHOW CLUSTER was one system short.
+			 */
+			if (csb->sysid_valid)
+				cnxman_club_giveup_clear(club, csb->sysid);
+		}
 		else
 			cnxman_csb_clear_flags(csb,
 					       (uint16_t)(VMS_CSB_F_SELECTED |

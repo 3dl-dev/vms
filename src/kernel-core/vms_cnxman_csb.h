@@ -331,6 +331,15 @@ int cnxman_club_gave_up_on(const struct vms_club *club, vms_scs_sysid_t sysid,
  */
 void cnxman_club_giveup_arm(struct vms_club *club, const struct vms_csb *csb);
 
+/*
+ * The cluster has spoken: this system is IN. A give-up record about a system a
+ * committed transition has just put in the membership is stale by definition
+ * (p. 7-42/7-49 -- membership is what the transition says it is), and keeping
+ * it would leave this node refusing a member's connection and short of the
+ * Rule of Total Connectivity. Clears one record; silent when there is none.
+ */
+void cnxman_club_giveup_clear(struct vms_club *club, vms_scs_sysid_t sysid);
+
 /* How many records the ledger currently holds. Readback for tests and the
  * diagnostic view; nothing decides anything from it. */
 uint32_t cnxman_club_giveup_count(const struct vms_club *club);

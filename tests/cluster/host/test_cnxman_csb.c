@@ -480,6 +480,24 @@ static void test_giveup_ledger(void)
 	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 0u,
 			"a NEW incarnation does");
 
+	/*
+	 * ...AND SO DOES THE CLUSTER COMMITTING IT AS A MEMBER (rd vms-0f9).
+	 * MEASURED, arms D-1/D-2: both OVMX nodes reached MEMBER and the real
+	 * VAX admitted the joiner, but the node that had given up on it during
+	 * the blackout went on refusing its connection, so its own SHOW
+	 * CLUSTER was one system short of the Rule of Total Connectivity.
+	 */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xF00Du, 1);
+	cnxman_club_giveup_arm(&g_cl.club, csb);
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xF00Du),
+		 "given up on it");
+	cnxman_club_giveup_clear(&g_cl.club, csb->sysid);
+	ct_check(!cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xF00Du),
+		 "...and a committed membership clears it, at the SAME "
+		 "incarnation");
+
 	/* p. 7-29's last gasp arms one too. */
 	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
 	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xD00Du, 1);

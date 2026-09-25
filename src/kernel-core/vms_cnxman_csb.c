@@ -152,6 +152,13 @@ void cnxman_club_giveup_arm(struct vms_club *club, const struct vms_csb *csb)
 	giveup_arm(club, csb);
 }
 
+void cnxman_club_giveup_clear(struct vms_club *club, vms_scs_sysid_t sysid)
+{
+	if (club == NULL)
+		return;
+	giveup_clear(club, sysid);
+}
+
 uint32_t cnxman_club_giveup_count(const struct vms_club *club)
 {
 	uint32_t i, n = 0u;

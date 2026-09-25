@@ -164,6 +164,108 @@ static int process_a(int wfd)
     return 0;
 }
 
+/*
+ * rd vms-1875 -- the HOLDER: a session process still bound to an RTAn: when
+ * the daemon that minted it withdraws it. Assigns `devnam` from its own fresh
+ * /dev/vms, reports, then on each byte from the parent performs one step and
+ * reports again:
+ *   'c'  $GETDVI through its OWN channel (the channel's device must still be
+ *        the real row, not freed memory)
+ *   'd'  $DASSGN that channel (the release that must delete a withdrawn unit)
+ *   'x'  exit(0) -- the process-exit release path (vms_dev_release ->
+ *        vms_proc_release_channels), the exact path the booted CTERM session
+ *        took when it wrote into the freed row.
+ */
+struct holder_report {
+    uint32_t status;
+    uint32_t chan;
+    uint32_t refcnt;
+    char     devnam[VMS_DEVNAM_SIZE];
+};
+
+static int process_holder(int wfd, int rfd, const char *devnam)
+{
+    struct holder_report rep;
+    struct vms_devinfo info;
+    uint32_t chan = 0, own_pid = 0;
+    char op;
+
+    memset(&rep, 0, sizeof(rep));
+    if (vms_kif_open() < 0 || vms_kif_register(&own_pid) != SS_NORMAL) {
+        (void)!write(wfd, &rep, sizeof(rep));
+        return 1;
+    }
+    rep.status = vms_kif_assign(devnam, &chan);
+    rep.chan = chan;
+    if (write(wfd, &rep, sizeof(rep)) != (ssize_t)sizeof(rep))
+        return 1;
+
+    while (read(rfd, &op, 1) == 1) {
+        memset(&rep, 0, sizeof(rep));
+        rep.chan = chan;
+        if (op == 'c') {
+            memset(&info, 0, sizeof(info));
+            rep.status = vms_kif_getdvi_chan(chan, &info);
+            rep.refcnt = info.refcnt;
+            memcpy(rep.devnam, info.devnam, sizeof(rep.devnam));
+            rep.devnam[sizeof(rep.devnam) - 1] = '\0';
+        } else if (op == 'd') {
+            rep.status = vms_kif_dassgn(chan);
+        } else if (op == 'x') {
+            _exit(0);
+        }
+        if (write(wfd, &rep, sizeof(rep)) != (ssize_t)sizeof(rep))
+            return 1;
+    }
+    return 0;
+}
+
+/* Parent side of the holder protocol: fork+exec a holder bound to `devnam`
+ * and return its pid (or -1), with its report/command pipes in *rfd / *wfd
+ * and its first report (the $ASSIGN) in *rep. */
+static pid_t spawn_holder(const char *self, const char *devnam,
+                          int *rfd, int *wfd, struct holder_report *rep)
+{
+    int up[2], down[2];
+    pid_t pid;
+
+    if (pipe(up) < 0 || pipe(down) < 0)
+        return -1;
+    pid = fork();
+    if (pid < 0)
+        return -1;
+    if (pid == 0) {
+        char w[16], r[16];
+
+        close(up[0]);
+        close(down[1]);
+        vms_kif_close();                 /* take our OWN /dev/vms fd */
+        snprintf(w, sizeof(w), "%d", up[1]);
+        snprintf(r, sizeof(r), "%d", down[0]);
+        execl(self, self, "--hold", w, r, devnam, (char *)NULL);
+        _exit(73);
+    }
+    close(up[1]);
+    close(down[0]);
+    *rfd = up[0];
+    *wfd = down[1];
+    memset(rep, 0, sizeof(*rep));
+    if (read(*rfd, rep, sizeof(*rep)) != (ssize_t)sizeof(*rep)) {
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        return -1;
+    }
+    return pid;
+}
+
+static int holder_step(int rfd, int wfd, char op, struct holder_report *rep)
+{
+    memset(rep, 0, sizeof(*rep));
+    if (write(wfd, &op, 1) != 1)
+        return -1;
+    return read(rfd, rep, sizeof(*rep)) == (ssize_t)sizeof(*rep) ? 0 : -1;
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -182,6 +284,8 @@ int main(int argc, char **argv)
 
     if (argc >= 3 && strcmp(argv[1], "--owner") == 0)
         return process_a(atoi(argv[2]));
+    if (argc >= 5 && strcmp(argv[1], "--hold") == 0)
+        return process_holder(atoi(argv[2]), atoi(argv[3]), argv[4]);
 
     printf("=== test_kmod_devtab_terminal: RTAn: dynamic terminal unit ===\n");
 
@@ -432,6 +536,98 @@ int main(int argc, char **argv)
 
     CHECK(write_param(REMOVE_PARAM, RTA_DEV) != 0,
           "withdrawing an already-gone RTA0: reports failure, not a silent no-op");
+
+    /* --------------------------------------------------------------
+     * 7. rd vms-1875 -- WITHDRAWAL WHILE A SESSION STILL HOLDS THE UNIT.
+     *    The booted DECnet CTERM path withdraws its RTAn: (VMS_IOCTL_TERM_
+     *    DELETE, ovmx_vterm_delete) when the link closes, which can be
+     *    BEFORE the LOGINOUT process bound to that terminal has exited. The
+     *    executive used to free the row on the spot; the session's later
+     *    channel release then wrote into freed memory (KASAN: slab-use-
+     *    after-free in device_release_channel), and without KASAN those
+     *    stray writes corrupted whatever reused the object -- the kernel
+     *    faults that intermittently killed the next console login in the
+     *    x86_64 DCL/SHOW acceptance gate. The unit must instead live until
+     *    its LAST reference is released, then go.
+     *
+     *    Driven through the PRODUCT door (VMS_IOCTL_TERM_CREATE/_DELETE, the
+     *    calls ovmx_vterm_create/_delete make), not the ktest knob, so the
+     *    caller under test is the one the booted runtime uses. Two release
+     *    paths, each its own holder process: an explicit $DASSGN (7a) and
+     *    process exit (7b).
+     * -------------------------------------------------------------- */
+    {
+        const char *paths[2] = { "$DASSGN", "process exit" };
+        int k;
+
+        for (k = 0; k < 2; k++) {
+            char unit[VMS_DEVNAM_SIZE], msg[256];
+            struct holder_report hrep;
+            int hr = -1, hw = -1;
+            pid_t holder;
+
+            memset(unit, 0, sizeof(unit));
+            status = vms_kif_terminal_create(pty_short, unit, sizeof(unit));
+            snprintf(msg, sizeof(msg),
+                     "[%s] VMS_IOCTL_TERM_CREATE mints an RTAn: unit", paths[k]);
+            CHECK(status == SS_NORMAL && strncmp(unit, "RTA", 3) == 0, msg);
+            if (status != SS_NORMAL)
+                continue;
+
+            holder = spawn_holder(argv[0], unit, &hr, &hw, &hrep);
+            snprintf(msg, sizeof(msg),
+                     "[%s] a session process takes a channel to the unit", paths[k]);
+            CHECK(holder > 0 && hrep.status == SS_NORMAL && hrep.chan != 0, msg);
+            if (holder <= 0)
+                continue;
+
+            /* The daemon withdraws the unit while the session still holds it. */
+            status = vms_kif_terminal_delete(unit);
+            snprintf(msg, sizeof(msg),
+                     "[%s] withdrawing the unit while a channel is assigned is accepted",
+                     paths[k]);
+            CHECK(status == SS_NORMAL, msg);
+
+            /* NOT freed out from under the channel: the row is still the
+             * executive's, still referenced once, visible by name. */
+            memset(&info, 0, sizeof(info));
+            status = vms_kif_getdvi_devnam(unit, &info);
+            snprintf(msg, sizeof(msg),
+                     "[%s] the withdrawn unit stays in the device table while a channel still holds it (refcnt 1)",
+                     paths[k]);
+            CHECK(status == SS_NORMAL && strcmp(info.devnam, unit) == 0 &&
+                  info.refcnt == 1, msg);
+
+            /* ...and the holder's own channel still resolves the real row. */
+            snprintf(msg, sizeof(msg),
+                     "[%s] the session's channel still resolves the real unit after withdrawal",
+                     paths[k]);
+            CHECK(holder_step(hr, hw, 'c', &hrep) == 0 &&
+                  hrep.status == SS_NORMAL && strcmp(hrep.devnam, unit) == 0 &&
+                  hrep.refcnt == 1, msg);
+
+            /* The last release deletes it. */
+            if (k == 0) {
+                CHECK(holder_step(hr, hw, 'd', &hrep) == 0 && hrep.status == SS_NORMAL,
+                      "[$DASSGN] the session deassigns its channel");
+                kill(holder, SIGKILL);
+            } else {
+                char op = 'x';
+
+                (void)!write(hw, &op, 1);
+            }
+            waitpid(holder, NULL, 0);
+            close(hr);
+            close(hw);
+
+            memset(&info, 0, sizeof(info));
+            status = vms_kif_getdvi_devnam(unit, &info);
+            snprintf(msg, sizeof(msg),
+                     "[%s] releasing the last channel deletes the withdrawn unit (SS$_NOSUCHDEV)",
+                     paths[k]);
+            CHECK(status == SS_NOSUCHDEV, msg);
+        }
+    }
 
     close(master_fd);
     vms_kif_close();

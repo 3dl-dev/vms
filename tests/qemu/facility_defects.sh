@@ -860,9 +860,13 @@ EOF
                       ;;
         knock_on_fail) cat <<'EOF'
 RTA0: no longer exists after withdrawal
+[$DASSGN] withdrawing the unit while a channel is assigned is accepted
+[$DASSGN] releasing the last channel deletes the withdrawn unit (SS$_NOSUCHDEV)
+[process exit] withdrawing the unit while a channel is assigned is accepted
+[process exit] releasing the last channel deletes the withdrawn unit (SS$_NOSUCHDEV)
 EOF
                       ;;
-        knock_on_why)  echo "one gate, two dependent observations: the neutered \`if (0 && dynamic_term)\` makes vms_devtab_remove_terminal return -ENODEV without unlinking, so the withdrawal call itself fails (require_fail) AND the follow-up \$GETDVI on RTA0: still resolves the leaked row instead of SS\$_NOSUCHDEV (knock_on). Every other assertion in the suite reads a path this gate does not touch -- the mint, the DC\$_TERM/devchar/width/page characteristics, the unowned->owned \$ASSIGN transition, the PTY byte round-trip (its backing is reported off the still-set dynamic_term flag at the GETPTY handler), the survives-owner-death release, and the OPA0: removal-refused check (the console is correctly refused either way) -- and all stay green.";;
+        knock_on_why)  echo "one gate, dependent observations: the neutered \`if (0 && dynamic_term)\` makes vms_devtab_remove_terminal return -ENODEV without unlinking, so the withdrawal call itself fails (require_fail) AND the follow-up \$GETDVI on RTA0: still resolves the leaked row instead of SS\$_NOSUCHDEV (knock_on). The same refused withdrawal is observed again by the rd vms-1875 withdraw-while-held section (both its \$DASSGN and process-exit legs): the product-door VMS_IOCTL_TERM_DELETE rides the same vms_devtab_remove_terminal() and fails the same way (its 'withdrawing ... is accepted' line), and because the unit was never withdrawn the last channel release leaves it in the table (its 'releasing the last channel deletes' line). Its hold-time assertions (the unit stays, refcnt 1; the holder's channel still resolves it) read a row that was never withdrawn and stay green. Every other assertion in the suite reads a path this gate does not touch -- the mint, the DC\$_TERM/devchar/width/page characteristics, the unowned->owned \$ASSIGN transition, the PTY byte round-trip (its backing is reported off the still-set dynamic_term flag at the GETPTY handler), the survives-owner-death release, and the OPA0: removal-refused check (the console is correctly refused either way) -- and all stay green.";;
         esac;;
 
     setexit-status-not-recorded)

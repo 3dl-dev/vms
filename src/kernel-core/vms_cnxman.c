@@ -262,9 +262,10 @@ struct vms_cnxman {
 	uint8_t  conndata[VMS_SCS_PROCNAME_LEN];
 	struct cnxman_join_cfg cfg;
 
-	/* The join's `commits_excluded_us` as of the last beat, so a REMOVAL is
-	 * acted on once (rd vms-0f9). */
+	/* The join's `commits_excluded_us` and `inbound_refused_giveup` as of
+	 * the last beat, so each event is acted on once (rd vms-0f9). */
 	uint32_t excluded_seen;
+	uint32_t refused_seen;
 
 	/*
 	 * The request currently being dispatched, for `ops->respond()`
@@ -1365,6 +1366,7 @@ static void cnxman_sync_conndata(struct vms_cnxman *cn);
 static void cnxman_cluexit_arm(struct vms_cnxman *cn,
 			       enum cnxman_cluexit_reason why);
 static void cnxman_check_removed(struct vms_cnxman *cn);
+static void cnxman_check_standoff(struct vms_cnxman *cn);
 static void cnxman_cluexit_run(struct vms_cnxman *cn);
 static void cnxman_cluexit_clear_on_contact(struct vms_cnxman *cn);
 
@@ -2556,6 +2558,7 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 */
 		cnxman_cluexit_clear_on_contact(cn);
 		cnxman_check_removed(cn);
+		cnxman_check_standoff(cn);
 		if (cn->cluexit_pending) {
 			cnxman_cluexit_run(cn);
 			return;
@@ -2849,6 +2852,10 @@ static const char *cnxman_cluexit_why(uint8_t reason)
 		return "%CNXMAN, a cluster member refused this node's "
 		       "VMS$VAXcluster connection: CLUEXIT, this node is "
 		       "re-incarnating and will ask to join again";
+	if (reason == (uint8_t)CNXMAN_CLUEXIT_STANDOFF)
+		return "%CNXMAN, this node and the cluster have given up on "
+		       "each other: CLUEXIT, this node is re-incarnating and "
+		       "will ask to join again";
 	return "%CNXMAN, this node was removed from the cluster: CLUEXIT, "
 	       "this node is re-incarnating and will ask to join again";
 }
@@ -2864,6 +2871,30 @@ static const char *cnxman_cluexit_why(uint8_t reason)
  * re-incarnates once a transition. The membership test is what makes this the
  * event p. 7-49 describes and not arithmetic.
  */
+/*
+ * THE THIRD FACE OF THE SAME EVENT (rd vms-0f9): this node REFUSED a member's
+ * connect, because of its own give-up record. It has given up on the cluster
+ * and is now turning the cluster away -- the standoff, from this side.
+ *
+ * ONLY FOR A NODE THAT IS NOT A MEMBER. A member refusing a system it has
+ * removed is a member doing its job (the oracle's own case (a)) and has
+ * nothing to re-incarnate for. A NON-member refusing the cluster has no other
+ * way back in: its own connects are refused for the same reason, and only a
+ * new incarnation clears the record on both sides. MEASURED, arm V3-2: without
+ * this the joiner refused correctly, never crashed the VAX, and never rejoined.
+ */
+static void cnxman_check_standoff(struct vms_cnxman *cn)
+{
+	uint32_t now = cn->join.inbound_refused_giveup;
+
+	if (now == cn->refused_seen)
+		return;
+	cn->refused_seen = now;
+	if (cn->cl->state == VMS_CLUSTER_MEMBER)
+		return;
+	cnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_STANDOFF);
+}
+
 static void cnxman_check_removed(struct vms_cnxman *cn)
 {
 	uint32_t now = cn->join.commits_excluded_us;

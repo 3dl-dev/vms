@@ -804,6 +804,18 @@ static void test_glue_bindings(void)
 	check_has("if (cn->cl->state != VMS_CLUSTER_MEMBER)\n\t\treturn;\n\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_REMOVED);",
 		  "... and a committed transition that left us out arms it "
 		  "only for a node that WAS one");
+	/*
+	 * And the third face: THIS node refusing a member's connect because of
+	 * its own give-up record. MEASURED, arm V3-2: without this trigger the
+	 * rig's joiner refused correctly, never crashed the VAX, and never got
+	 * back in -- a standoff with no exit.
+	 */
+	check_has("uint32_t now = cn->join.inbound_refused_giveup;",
+		  "rd vms-0f9: the standoff is read off the join's OWN count "
+		  "of refusals it really made");
+	check_has("if (cn->cl->state == VMS_CLUSTER_MEMBER)\n\t\treturn;\n\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_STANDOFF);",
+		  "... and arms it only for a node that is NOT a member -- a "
+		  "member refusing a system it removed is doing its job");
 	check_absent("cnxman_cluexit_run(cn);\n\t\tcnxman_reclaim",
 		     "... and nothing runs after it on the beat that spent it");
 	/*

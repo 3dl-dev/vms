@@ -484,7 +484,18 @@ int cnxman_get_transition(struct vms_cluster *cl, struct cnxman_transition *out)
 enum cnxman_cluexit_reason {
 	CNXMAN_CLUEXIT_NONE     = 0,
 	CNXMAN_CLUEXIT_REJECTED = 1, /* a peer refused our own connect       */
-	CNXMAN_CLUEXIT_REMOVED  = 2  /* a committed transition left us out   */
+	CNXMAN_CLUEXIT_REMOVED  = 2, /* a committed transition left us out   */
+	/*
+	 * ...and the same event seen from the other side: THIS node refused a
+	 * member's connect because of its own give-up record. A node that has
+	 * given up on the cluster and is now turning the cluster away is in
+	 * the standoff the oracle filmed, and re-incarnating is the only thing
+	 * that ends it -- which is what the real V7.3 node did (CLUEXIT, then
+	 * accepted again). MEASURED: without this trigger the rig's joiner
+	 * refused correctly, never crashed the VAX, and never got back in
+	 * (arm V3-2).
+	 */
+	CNXMAN_CLUEXIT_STANDOFF = 3
 };
 
 /*

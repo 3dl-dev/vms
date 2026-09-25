@@ -1022,6 +1022,9 @@ vms_codec_status_t vms_cm_membership_rec_build(const struct vms_cm_membership_re
 	if (st != VMS_CODEC_OK)
 		return st;
 
+	/* The transition this record belongs to. 791/791 real op-0x05 records
+	 * carry it; OVMX used to leave it zero (rd vms-1ac). */
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, rec->epoch);
 	vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_TAG, VMS_CM_MEMBREC_TAG);
 	vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_SYSID, rec->sysid);
 	if (rec->boot_valid) {

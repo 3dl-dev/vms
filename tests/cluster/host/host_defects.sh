@@ -109,6 +109,14 @@
 #   (tests/lab/captures/vms-6d3d-coldform-ev2-20260924/) and which no pair of
 #   OVMX nodes could form under the old rule.
 #
+# GROWN (vms-1ac) with the four properties of an admission this node
+# COORDINATES -- the defect class that bugchecked a real OpenVMS VAX V7.3:
+#
+#   coord-relay-epoch-advanced-early      vms_cnxman_coord_fsm.c
+#   coord-membrec-epoch-zero              vms_cnxman_coord_fsm.c
+#   coord-admission-not-selected-disarmed vms_cnxman_coord_fsm.c
+#   coord-admission-open-gate-disarmed    vms_cnxman_coord_fsm.c
+#
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
@@ -131,7 +139,11 @@ mscp-srv-glue-end-message-leaked
 mscp-srv-fsm-writeprotect-uncounted
 mscp-srv-io-worker-registers-handler
 join-own-connect-not-suppressed
-join-relay-unanswered"
+join-relay-unanswered
+coord-relay-epoch-advanced-early
+coord-membrec-epoch-zero
+coord-admission-not-selected-disarmed
+coord-admission-open-gate-disarmed"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -514,6 +526,68 @@ EOF
                       ;;
         esac;;
 
+    coord-relay-epoch-advanced-early)
+        case "$_f" in
+        facility)     echo "WHEN the cluster epoch advances during an admission this node coordinates (spec 4(r) + rd vms-1ac: the op-0x12 RELAY carries the epoch the cluster IS at, the op-0x03 COMMIT one past it -- 133/133 real relay/commit pairs)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_claim_club() advances the epoch again, as it did before rd vms-1ac, so the op-0x12 RELAY goes out at N+1 instead of N. Everything downstream still reads N+1 and still agrees with itself -- which is exactly why this went unnoticed against OVMX peers and only showed up when a real OpenVMS VAX answered the relay with ITS OWN epoch N and every answer was counted as an epoch_mismatch.";;
+        require_fail) cat <<'EOF'
+op-0x12 RELAY carries the epoch the cluster is at
+...and the CLUB has not moved yet either
+EOF
+                      ;;
+        esac;;
+
+    coord-membrec-epoch-zero)
+        case "$_f" in
+        facility)     echo "the epoch field of every op-0x05 MEMBERSHIP RECORD this node originates (rd vms-1ac; 791/791 real records carry their transition's epoch, and cm-membrec-oracle.spec is one of them)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_send_membrec() stops filling rec.epoch, so every membership record goes out with body[12:16] zero -- the shipped behaviour before rd vms-1ac. The records are otherwise complete and correct, which is the point: a receiver cannot place them in any transition, and a real OpenVMS VAX V7.3 handed them took a fatal CNXMGRERR.";;
+        require_fail) cat <<'EOF'
+EVERY op-0x05 record carries the transition's epoch -- the field OVMX used to leave at zero
+EOF
+                      ;;
+        esac;;
+
+    coord-admission-not-selected-disarmed)
+        case "$_f" in
+        facility)     echo "the receiver half of coordinator selection (spec 4(p): 'a NON-COORDINATOR peer SILENTLY DISCARDS op 0x02'), implemented as cnxman_coord_select()'s outranked-by-a-member gate";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_coord_select()'s coord_outranked_for_admission() call is disarmed with '0 &&', so this node takes EVERY op-0x02 it is handed and appoints itself transition coordinator even when another member outranks it. That is the shipped behaviour before rd vms-1ac, and on the lab rig it is how a sitting OVMX member came to drive a transition at a real OpenVMS VAX V7.3 that the VAX bugchecked on.";;
+        require_fail) cat <<'EOF'
+NOT the selected coordinator: no relay
+...and not one frame of any kind: the op-0x02 is DISCARDED, which is what a real non-coordinator does
+the discard is COUNTED
+...and named
+SILENTLY: not one console line, because a joiner that retries would otherwise print one per retry
+and no transition was opened
+EOF
+                      ;;
+        esac;;
+
+    coord-admission-open-gate-disarmed)
+        case "$_f" in
+        facility)     echo "the INV-6 refusal to originate a class-0x02 transition open toward a connection manager this executive cannot build one for (rd vms-1ac: a real op-0x09 carries 28 bytes OVMX has no derivation for)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_coord_select()'s coord_open_is_grounded_for() call is disarmed with '0 &&', so this node opens a class-0x02 transition toward a system that has NOT proved it runs this implementation -- putting an op-0x09 with 28 zero bytes where a real coordinator writes times and identities in front of a foreign connection manager. The measured consequence is a fatal CNXMGRERR on a real OpenVMS VAX V7.3 1.3 ms later.";;
+        require_fail) cat <<'EOF'
+nothing is originated: no relay, no commit, and above all no op-0x09 this node cannot build faithfully
+the refusal is COUNTED
+...and named
+...and SAID, because a stranded admission is a gap to close
+and no transition was opened
+EOF
+                      ;;
+        esac;;
+
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2
         return 1;;
@@ -716,6 +790,23 @@ apply_edit() {
             return 0    # already injected: leave it byte-identical so
         fi              # cmd_apply's pristine-compare reports BROKEN FIXTURE
         sed -i 's|\tj->relays_seen++;|\tj->relays_seen++;\n\tif (j != (struct cnxman_join *)0)\n\t\treturn CNXMAN_JOIN_RX_CONSUMED; /* NEGCTL join-relay-unanswered: the member answers the coordinator nothing */|' "$_file";;
+
+    coord-relay-epoch-advanced-early)
+        # coord_claim_club()'s two lines, replaced with the pre-vms-1ac pair.
+        # `c->epoch_advanced = 1u` keeps coord_advance_epoch() idempotent, so
+        # the transition still runs -- only WHEN the epoch moved changes.
+        sed -i 's|\tc->epoch = club->epoch;|\tc->epoch = club->epoch + 1u; club->epoch = c->epoch; /* NEGCTL coord-relay-epoch-advanced-early */|' "$_file"
+        sed -i 's|\tc->epoch_advanced = 0u;|\tc->epoch_advanced = 1u;|' "$_file";;
+
+    coord-membrec-epoch-zero)
+        # `rec.epoch   = c->epoch;` is unique in this file.
+        sed -i 's|rec.epoch   = c->epoch;.*|/* NEGCTL coord-membrec-epoch-zero: the record names no transition */|' "$_file";;
+
+    coord-admission-not-selected-disarmed)
+        sed -i 's|if (coord_outranked_for_admission(c, subject_csb)) {|if (0 \&\& coord_outranked_for_admission(c, subject_csb)) { /* NEGCTL coord-admission-not-selected-disarmed */|' "$_file";;
+
+    coord-admission-open-gate-disarmed)
+        sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
 
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2

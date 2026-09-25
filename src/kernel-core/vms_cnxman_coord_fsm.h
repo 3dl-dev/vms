@@ -259,9 +259,25 @@ enum cnxman_coord_refusal {
 	CNXMAN_COORD_REF_PEER_UNASKED  = 8, /* a system is present and this node
 					     * has not yet completed a round of
 					     * asking it to admit this node     */
-	CNXMAN_COORD_REF_OUTRANKED     = 9  /* another founding candidate is
+	CNXMAN_COORD_REF_OUTRANKED     = 9, /* another founding candidate is
 					     * present whose SCSSYSTEMID ranks
 					     * ahead of ours: IT forms, we join */
+	/*
+	 * ADMISSION only (rd vms-1ac): this node was ASKED to admit a system,
+	 * but it is not the member VMS's own observable names as the
+	 * coordinator -- another MEMBER outranks it. Spec §4(p)'s "a
+	 * NON-COORDINATOR peer SILENTLY DISCARDS op 0x02", carried out.
+	 */
+	CNXMAN_COORD_REF_NOT_SELECTED  = 10,
+	/*
+	 * ADMISSION only (rd vms-1ac): this node IS the one that would drive
+	 * it, but a participant has not proved it runs this implementation and
+	 * the class-0x02 transition-open this node can build is not grounded
+	 * byte-for-byte for a foreign connection manager (see
+	 * coord_open_is_grounded_for()). Refusing costs an admission round;
+	 * emitting it cost a real OpenVMS VAX V7.3 a CNXMGRERR bugcheck.
+	 */
+	CNXMAN_COORD_REF_OPEN_UNGROUNDED = 11
 };
 
 /* ==========================================================================
@@ -402,6 +418,20 @@ struct cnxman_coord {
 	uint32_t nodemap_unmapped;
 	uint32_t bitmap_short;
 	uint32_t unknown_peer;         /* a frame from no CSB we could resolve */
+	/*
+	 * THE TWO ADMISSION GATES (rd vms-1ac). `not_selected` counts the
+	 * op-0x02s this node silently discarded because another MEMBER
+	 * outranks it -- moving is NORMAL and is what a real non-coordinator
+	 * does. `open_ungrounded` counts the admissions this node WOULD have
+	 * driven and refused because it cannot build a byte-grounded
+	 * class-0x02 open for a participant that does not run this
+	 * implementation -- moving is a NAMED GAP, never a resting state.
+	 */
+	uint32_t not_selected;
+	uint32_t open_ungrounded;
+	/* 1 once coord_advance_epoch() has run for the transition in progress
+	 * (rd vms-1ac). Per-transition, cleared by coord_open_transition(). */
+	uint8_t  epoch_advanced;
 	uint32_t ignored_events;       /* no table cell: ignored and COUNTED   */
 
 	/* ---- GENESIS (SS9), both outcomes counted from a real call ---- */

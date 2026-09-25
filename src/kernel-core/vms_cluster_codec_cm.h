@@ -284,6 +284,15 @@ struct vms_cm_membership_rec {
 	uint32_t csid;         /* the CSID the cluster assigned it            */
 	uint32_t boot_lo;      /* its boot time, low word                     */
 	uint32_t boot_hi;      /* ... high word                               */
+	/*
+	 * body[12:16]: the epoch of the transition this record belongs to (rd
+	 * vms-1ac). It is NOT decoration -- OVMX left it zero and a real
+	 * OpenVMS VAX V7.3 connection manager, handed membership records for a
+	 * transition it could not place, bugchecked CNXMGRERR. Measured: all
+	 * 791 real op-0x05 records in the reference trees carry their
+	 * transition's epoch, which is the relaying coordinator's epoch + 1.
+	 */
+	uint32_t epoch;
 	uint16_t index;        /* 0-based CSV index, == (csid & 0xffff) - 1   */
 	uint8_t  boot_valid;   /* 0 = no boot time was carried/held           */
 	uint8_t  pad;

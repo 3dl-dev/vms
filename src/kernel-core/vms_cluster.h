@@ -390,6 +390,16 @@ struct vms_csb {
 	uint32_t reconnects;         /* breaks this CSB recovered from */
 	uint32_t transitions_proposed; /* transitions THIS CSB's loss caused us to propose */
 	/*
+	 * ...and how many times this block's loss did NOT cause one because the
+	 * cluster had never admitted the system (rd vms-b36): SELECTED clear,
+	 * so p. 7-49 says there is no membership to reconfigure away. Counted
+	 * in the block, beside `transitions_proposed`, because "we gave up on a
+	 * system that was never in" and "we proposed its removal" are the two
+	 * outcomes of the same window expiring and the difference between them
+	 * is a peer bugcheck.
+	 */
+	uint32_t removals_withheld;
+	/*
 	 * How many of this CSB's own connect attempts the remote connection
 	 * manager REJECTED (book p. 2-25 / correction D12: the CMs identify
 	 * their version to each other in the 16-byte connect data and reject one

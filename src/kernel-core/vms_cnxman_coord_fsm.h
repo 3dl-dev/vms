@@ -277,7 +277,16 @@ enum cnxman_coord_refusal {
 	 * coord_open_is_grounded_for()). Refusing costs an admission round;
 	 * emitting it cost a real OpenVMS VAX V7.3 a CNXMGRERR bugcheck.
 	 */
-	CNXMAN_COORD_REF_OPEN_UNGROUNDED = 11
+	CNXMAN_COORD_REF_OPEN_UNGROUNDED = 11,
+	/*
+	 * DEPARTURE only (rd vms-b36): this node lost contact with a system the
+	 * cluster had NEVER ADMITTED, so p. 7-49's SELECTED flag is clear for it
+	 * and there is no membership to reconfigure away. Proposing its removal
+	 * anyway asserts a membership change that never happened (INV-6) and
+	 * cost a real OpenVMS VAX V7.3 a CNXMGRERR bugcheck 0.6 s after it
+	 * abandoned that very system's admission.
+	 */
+	CNXMAN_COORD_REF_NOT_ADMITTED = 12
 };
 
 /* ==========================================================================
@@ -429,6 +438,14 @@ struct cnxman_coord {
 	 */
 	uint32_t not_selected;
 	uint32_t open_ungrounded;
+	/*
+	 * THE DEPARTURE GATE (rd vms-b36). Removals this node did NOT propose
+	 * because the subject was never a committed member (p. 7-49's SELECTED
+	 * clear). Moving is NORMAL whenever a join is abandoned; a zero here in
+	 * a run whose console shows a joiner abandoned is the tripwire that
+	 * says the gate did not run.
+	 */
+	uint32_t not_admitted;
 	/* 1 once coord_advance_epoch() has run for the transition in progress
 	 * (rd vms-1ac). Per-transition, cleared by coord_open_transition(). */
 	uint8_t  epoch_advanced;

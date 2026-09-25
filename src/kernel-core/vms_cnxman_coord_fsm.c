@@ -338,12 +338,34 @@ enum cnxman_coord_verdict cnxman_coord_select(struct cnxman_coord *c,
 			"proposed state transition");
 
 	/*
-	 * A DEPARTURE stops here: this node is the first detector (p. 7-2) and
-	 * the coordinator-lock test above is p. 7-30's whole condition. The two
-	 * gates below are the ADMISSION's alone.
+	 * A DEPARTURE asks ONE more question and then stops: this node is the
+	 * first detector (p. 7-2) and the coordinator-lock test above is
+	 * p. 7-30's other condition. The two gates below it are the ADMISSION's
+	 * alone.
+	 *
+	 * THE SUBJECT HAS TO BE A MEMBER (rd vms-b36). p. 7-49: the cluster's
+	 * committed membership is the set of CSBs with SELECTED set. A system
+	 * the cluster never admitted cannot be removed from it, and a class-0x03
+	 * transition naming one asserts a membership change that never happened.
+	 * The CSB ladder already refuses this at h_recnx_expired(); the gate is
+	 * repeated HERE because this is the one funnel every proposer passes
+	 * through (the close path and the once-a-second beat both call
+	 * cnxman_coord_propose_remove()), and a peer bugcheck is not a defect a
+	 * future third caller may reintroduce.
 	 */
-	if (trig != CNXMAN_COORD_TRIG_ASKED)
+	if (trig != CNXMAN_COORD_TRIG_ASKED) {
+		const struct vms_csb *subject = coord_csb_at(c, subject_csb);
+
+		if (subject != NULL &&
+		    (subject->flags & VMS_CSB_F_SELECTED) == 0u) {
+			c->not_admitted++;
+			return coord_refuse(c, CNXMAN_COORD_REF_NOT_ADMITTED,
+				"%CNXMAN, the cluster never admitted this "
+				"system: no state transition is proposed to "
+				"remove it");
+		}
 		return CNXMAN_COORD_DRIVE;
+	}
 
 	if (coord_outranked_for_admission(c, subject_csb)) {
 		c->not_selected++;

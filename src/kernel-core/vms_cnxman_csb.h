@@ -108,6 +108,33 @@ enum cnxman_csb_event {
 	 */
 	CNXMAN_CSB_EV_CONNECT_REJECTED = 10,
 
+	/*
+	 * THE PEER TORE THE CONNECTION DOWN ITSELF (rd vms-dfe) -- SCS's
+	 * `SCS_CLOSE_REMOTE`, the peer's own DISCONNECT completing (p. 2-27).
+	 *
+	 * This is E81's distinction, applied to the OTHER kind of peer answer.
+	 * CONN_LOST is "we cannot see it at the moment", which p. 7-30 answers
+	 * by attempting again a second later. A DISCONNECT is not a loss of
+	 * sight: it is the remote SYSAP saying it does not want this
+	 * connection, and it is as much an ANSWER as a REJECT is.
+	 *
+	 * MEASURED (tests/lab/captures/vms-dfe-blackout-recovery-20260925,
+	 * runs/FIN-1 and FIN-3): routed as a plain CONN_LOST, this is an
+	 * infinite loop. h_conn_lost opens a fresh 20-second window, the beat
+	 * dials a second later, the peer accepts and disconnects again,
+	 * h_open CLEARS the deadline -- so the window never expires and the
+	 * node emits a VMS$VAXcluster connect roughly twice a second for as
+	 * long as it lives: 457 reconnect cycles in one 400-second run. A node
+	 * that dials a peer 2 Hz forever is the E81 CNXMGRERR shape, and OVMX
+	 * never gets to make that decision for a peer.
+	 *
+	 * So it takes h_connect_rejected's edge: no further attempt in THIS
+	 * reconnect window, the window itself untouched, membership HELD, and
+	 * the peer's own re-offer still ACCEPTED (p. 7-24 REACCEPT). This node
+	 * stops ASKING; it does not stop ANSWERING.
+	 */
+	CNXMAN_CSB_EV_REMOTE_DISCONNECT = 11,
+
 	CNXMAN_CSB_EV__COUNT
 };
 
@@ -194,6 +221,33 @@ struct vms_csb *cnxman_club_alloc_csb(struct vms_club *club,
  * new CSB is created for it just as if it were joining the cluster for the
  * first time"). */
 void cnxman_club_free_csb(struct vms_club *club, struct vms_csb *csb);
+
+/*
+ * Deallocate every CSB the connection manager has GIVEN UP ON -- p. 7-25's
+ * "its old CSB is deallocated, and a new CSB is created for it just as if it
+ * were joining the cluster for the first time", and p. 7-24 DEAD's "until the
+ * caller deallocates it and builds a fresh CSB for the new incarnation".
+ * A block qualifies only when it is in DISCONNECT or DEAD, is neither the
+ * LOCAL block nor a SELECTED member, and claims no Con.ID -- see the function's
+ * own header for why each of those is a read of executive state. This asserts
+ * nothing and opens nothing: rebuilding a block for a system is
+ * cnxman_discover_peers()' answer, and only for a circuit the port really has.
+ *
+ * `released` receives the SCSSYSTEMID of each released block that carried one,
+ * up to `max`, so the caller can tell whatever was still driving through that
+ * system that its block is gone. THE RETURN VALUE IS HOW MANY SYSTEMS WERE
+ * NAMED, not how many slots were freed: a block that never learned a sysid is
+ * freed silently because there is nothing honest to put in the array. The slot
+ * count is club->csb_reclaimed, which this advances for every release.
+ *
+ * A NAMED SYSTEM IS NEVER RELEASED WITHOUT BEING NAMED: when the array is full
+ * (or absent) the sweep STOPS there rather than freeing a block the caller will
+ * not hear about. So `max` may be a small batch that fits a VAX kernel stack,
+ * and a caller with more to reclaim than one batch simply calls again until it
+ * returns less than `max`.
+ */
+uint32_t cnxman_club_reclaim_abandoned(struct vms_club *club,
+				       vms_scs_sysid_t *released, uint32_t max);
 
 /* Find by identity. Both skip free slots and both refuse to match on a value
  * the CSB has not LEARNED (a CSB with csid_valid == 0 never matches any CSID,

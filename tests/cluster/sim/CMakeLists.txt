@@ -109,6 +109,18 @@ target_include_directories(test_sim_mscp_write PRIVATE
 cluster_sim_test(test_sim_dlm_directory scenarios/dlm_directory.c)
 target_link_libraries(test_sim_dlm_directory PRIVATE cluster_host_cnxman)
 
+# rd vms-dfe's rung-R2 leg: the MEASURED in-browser join stall
+# (tests/lab/captures/vms-e18e-cn3-browser-20260925/cn3-intermittent/), replayed
+# on the virtual clock. The whole 20-second p. 7-30 reconnect window is really
+# run, beat by beat, by the SHIPPING reconnect FSM over the SHIPPING CSB ladder
+# and join FSM -- no state is hand-set -- and the assertion is that the node
+# ASKS AGAIN within a bounded number of beats (p. 7-25's deallocate-and-rebuild)
+# without dialling the peer once a second to do it.
+cluster_sim_test(test_sim_cnxman_recover scenarios/cnxman_recover_after_giveup.c)
+target_link_libraries(test_sim_cnxman_recover PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_recover PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 # rd vms-ci.6 (the V1.0 R5 release gate): the ROLLING-EVACUATION harness. A
 # workload is moved off a departing member onto a survivor and the cluster
 # STAYS UP -- proven as the shipping quorum ENFORCEMENT (cnxman_quorum_*, needs

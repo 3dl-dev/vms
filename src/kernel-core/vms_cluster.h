@@ -402,6 +402,17 @@ struct vms_csb {
 	uint32_t connect_rejects;
 
 	/*
+	 * ...and how many times the remote connection manager DISCONNECTED a
+	 * connection this pair had OPEN (rd vms-dfe; SCS_CLOSE_REMOTE, the
+	 * peer's own p. 2-27 DISCONNECT completing). The third diagnosis in the
+	 * same family: "the peer keeps saying no", "the peer keeps not
+	 * answering", and "the peer keeps hanging up on a connection it had".
+	 * A rising count with `reconnects` rising beside it is a node and a peer
+	 * disagreeing about whether the pair should be connected at all.
+	 */
+	uint32_t remote_disconnects;
+
+	/*
 	 * ---- the SYSAP dialogue counters (design sec 3.2.4 ruling E1) ----
 	 * This node's own body[0:8] state for the `VMS$VAXcluster` SYSAP
 	 * dialogue with THIS remote connection manager: the send/ack message
@@ -626,6 +637,15 @@ struct vms_club {
 	 * capture.
 	 */
 	uint32_t csb_ignored_events;
+
+	/*
+	 * OVMX instrumentation, not a VMS field (rd vms-dfe): CSBs this CLUB
+	 * DEALLOCATED because the connection manager had given up on them
+	 * (p. 7-25's "its old CSB is deallocated"). Nonzero means a system was
+	 * released back to discovery; the port decides whether a fresh block
+	 * appears for it. See cnxman_club_reclaim_abandoned().
+	 */
+	uint32_t csb_reclaimed;
 
 	/* ---- the DLM directory (FC-P4.3) ---- */
 

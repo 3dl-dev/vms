@@ -53,7 +53,8 @@ static const char *const cnxtrace_failure_names[] = {
     "message could not be sent",     /* 6 */
     "codec refused to build",        /* 7 */
     "reconnect interval expired",    /* 8 */
-    "no member answered the membership request"  /* 9 (E80) */
+    "no member answered the membership request", /* 9 (E80) */
+    "the member's CSB was deallocated"           /* 10 (vms-dfe, p. 7-25) */
 };
 
 /* enum cnxman_diag_kind */

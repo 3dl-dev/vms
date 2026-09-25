@@ -2514,6 +2514,153 @@ static void test_expired_reconnect_window_ends_the_attempt_honestly(void)
 			"gave up on");
 }
 
+/* ==========================================================================
+ * rd vms-dfe -- THE MEASURED IN-BROWSER STALL, AND THE WAY OUT OF IT
+ *
+ * tests/lab/captures/vms-e18e-cn3-browser-20260925/cn3-intermittent/ :
+ * OVMXB's VMS$VAXcluster connection to the ONE cluster member (a real
+ * OpenVMS VAX V7.3) went 0.85 s after the member opened it and before this
+ * node was admitted; the p. 7-30 window ran out 20 s later; the ladder gave
+ * the connection up. From there the node said "waiting to form or join an
+ * OpenVMS Cluster" for 25 minutes beside a healthy cluster whose circuit it
+ * could still see. That is a WEDGE, not a wait, and these two cases are its
+ * two halves: the block that could never be re-offered, and the attempt that
+ * was still sitting on it.
+ * ========================================================================== */
+
+/* This bed's topology, made the capture's: ONE reachable member. */
+static void bed_leave_one_member(void)
+{
+	cnxman_club_free_csb(&g.cl.club,
+			     cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID));
+}
+
+static void test_dfe_a_given_up_member_comes_back(void)
+{
+	vms_scs_sysid_t released[VMS_CLUB_MAX_CSB];
+	struct vms_csb *rebuilt;
+	uint32_t n;
+
+	printf("\n-- vms-dfe: a member the ladder gave up on is released back "
+	       "to discovery --\n");
+
+	bed_init();
+	bed_leave_one_member();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	g.fail_connect = 1;
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);
+
+	member_csb_reconnect_window_expires();
+	g.fake.now_ms += 1000u;
+	cnxman_join_timer(&g.j);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_IDLE,
+			"the attempt ends honestly, as it always did");
+
+	/* THE WEDGE. The tombstone is still in the CLUB, so the glue's peer
+	 * sweep finds the system already has a block and allocates none, and
+	 * join_askable() -- correctly -- will not drive through a connection
+	 * the ladder gave up on. With this member the only one reachable, that
+	 * is the whole cluster, unreachable forever. */
+	g.fail_connect = 0;
+	ct_check(cnxman_join_start(&g.j) != 0,
+		 "with its one member given up on, this node cannot start an "
+		 "attempt at all -- the measured stall");
+	ct_check(cnxman_club_find_sysid(&g.cl.club, MEMBER_SYSID) != NULL,
+		 "... because the block is still there, and discovery skips a "
+		 "system that already has one");
+
+	/* p. 7-25: the old CSB is DEALLOCATED. This is the beat doing it. */
+	n = cnxman_club_reclaim_abandoned(&g.cl.club, released,
+					  (uint32_t)VMS_CLUB_MAX_CSB);
+	ct_check_eq_u32(n, 1u, "the CLUB releases exactly the one block");
+	ct_check(released[0] == MEMBER_SYSID,
+		 "... and NAMES the system it released (INV-6: its own learned "
+		 "SCSSYSTEMID, not a slot number)");
+	ct_check_eq_u32(g.cl.club.csb_reclaimed, 1u, "... counted");
+	ct_check(cnxman_club_find_sysid(&g.cl.club, MEMBER_SYSID) == NULL,
+		 "... so the system is undiscovered again");
+	ct_check(cnxman_club_local(&g.cl.club) != NULL,
+		 "... and this node's OWN block is untouched");
+
+	/* The next beat's peer sweep, for a circuit the port still reports. */
+	rebuilt = cnxman_club_alloc_csb(&g.cl.club, MEMBER_SYSID, 1);
+	ct_check(rebuilt != NULL, "discovery builds a fresh block for it");
+	ct_check_eq_u32(rebuilt->state, (uint8_t)VMS_CNXMAN_CSB_NEW,
+			"... in p. 7-23's NEW");
+	ct_check_eq_u32(rebuilt->csid_valid, 0u,
+			"INV-6: the fresh block claims no CSID ...");
+	ct_check_eq_u32(rebuilt->cdt_conid, 0u, "... and no connection ...");
+	ct_check_eq_u32((rebuilt->flags &
+			 (VMS_CSB_F_MEMBER | VMS_CSB_F_SELECTED)) == 0u, 1u,
+			"... and no membership");
+
+	ct_check(cnxman_join_start(&g.j) == 0,
+		 "and THIS node can ask the cluster for admission again");
+	ct_check(g.j.target_sysid == MEMBER_SYSID,
+		 "... through the member it lost, now rediscovered");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_DIR_ROUND,
+			"... starting where every attempt starts: p. 2-51's "
+			"directory round, which only a member that is really "
+			"answering completes");
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"INV-6: retrying is not membership");
+	ct_check_eq_u32(cnxman_club_local(&g.cl.club)->csid_valid, 0u,
+			"... and this node still holds no cluster system id");
+}
+
+static void test_dfe_an_attempt_on_a_released_block_is_released_too(void)
+{
+	vms_scs_sysid_t released[VMS_CLUB_MAX_CSB];
+	uint32_t n;
+
+	printf("\n-- vms-dfe: the attempt goes with the block --\n");
+
+	bed_init();
+	bed_leave_one_member();
+	bed_set_identity();
+	drive_to_mscp_connect();
+	g.fail_connect = 1;
+	cnxman_join_rejected(&g.j, MSCP_CONID, 0u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"the join is waiting for its connection back");
+
+	/* The ladder gives up and the beat reclaims, all before the join's own
+	 * watchdog gets a turn -- the interleaving the glue must not depend on. */
+	member_csb_reconnect_window_expires();
+	n = cnxman_club_reclaim_abandoned(&g.cl.club, released,
+					  (uint32_t)VMS_CLUB_MAX_CSB);
+	ct_check_eq_u32(n, 1u, "the block is released");
+
+	cnxman_join_target_released(&g.j, released[0]);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_IDLE,
+			"the attempt built on it is released with it -- never "
+			"left running over a block that answered none of its "
+			"lookups");
+	ct_check_eq_u32(g.j.failure, CNXMAN_JOIN_FAIL_RELEASED,
+			"... with the reason NAMED");
+	ct_check_eq_u32(g.j.targets_released, 1u, "... and counted");
+	ct_check_eq_u32(g.j.target_valid, 0u, "... it targets nobody");
+	ct_check_eq_u32(g.j.cm_conid, 0u, "... and holds no connection");
+	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
+			"INV-6: a released attempt is not a membership");
+
+	/* A release naming somebody else is not this attempt's business. */
+	{
+		uint8_t before;
+
+		bed_init();
+		bed_set_identity();
+		drive_to_mscp_connect();
+		before = g.j.state;
+		cnxman_join_target_released(&g.j, OTHER_SYSID);
+		ct_check_eq_u32(g.j.targets_released, 0u,
+				"a release for another system leaves this "
+				"attempt alone");
+		ct_check_eq_u32(g.j.state, before, "... exactly where it was");
+	}
+}
+
 /*
  * The executive's own reconnect apparatus opened a connection this FSM had no
  * way of hearing about (its CDT_OPEN named a Con.ID the join was not holding).
@@ -5217,6 +5364,8 @@ int main(void)
 	test_e70_sequence_reaches_the_membership_offer();
 	test_retrying_never_fabricates_a_join();
 	test_expired_reconnect_window_ends_the_attempt_honestly();
+	test_dfe_a_given_up_member_comes_back();
+	test_dfe_an_attempt_on_a_released_block_is_released_too();
 	test_beat_adopts_the_connection_the_executive_holds();
 	test_rejoin_admission_rides_the_member_initiated_connection();
 	test_first_join_still_opens_its_own_connection();

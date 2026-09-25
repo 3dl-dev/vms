@@ -388,6 +388,17 @@ enum cnxman_join_failure {
 	 * again.
 	 */
 	CNXMAN_JOIN_FAIL_UNANSWERED = 9,
+	/*
+	 * The CLUB DEALLOCATED the block this attempt was driving through
+	 * (rd vms-dfe; p. 7-25's "its old CSB is deallocated"). Not a verdict
+	 * and not terminal either: the connection manager gave that connection
+	 * up, the system went back to being undiscovered, and the moment the
+	 * port reports a circuit to it again a fresh block is built and a fresh
+	 * attempt asks it -- starting, as every attempt does, at p. 2-51's
+	 * directory round, which only a member that is really ANSWERING
+	 * completes.
+	 */
+	CNXMAN_JOIN_FAIL_RELEASED   = 10,
 	CNXMAN_JOIN_FAIL__COUNT
 };
 
@@ -767,6 +778,14 @@ struct cnxman_join {
 	/* The reconnect timeout period ran out (FAIL_TIMEOUT): the attempt was
 	 * released and this node went back to waiting for a cluster. */
 	uint32_t connect_windows_expired;
+	/*
+	 * Attempts released because the CLUB DEALLOCATED the block this join
+	 * was driving through (rd vms-dfe; p. 7-25). Distinct from
+	 * `connect_windows_expired`, which is this join's own reading of a
+	 * connection that never came back: this one is the connection manager
+	 * having already given up and released the system back to discovery.
+	 */
+	uint32_t targets_released;
 	/* Attempts that never started because no CSB was joinable at that
 	 * instant -- VMS's "waiting to form or join", counted rather than
 	 * turned into a terminal failure. */
@@ -1267,6 +1286,28 @@ void cnxman_join_csid_learned(struct cnxman_join *j, vms_csid_t csid);
  * and a connection that CHANGED has carried nothing (see `cm_advert_conid`).
  */
 void cnxman_join_advertise_peers(struct cnxman_join *j);
+
+/*
+ * THE CSB THIS JOIN WAS DRIVING THROUGH HAS BEEN DEALLOCATED (rd vms-dfe).
+ *
+ * p. 7-25 deallocates the block of a system the connection manager has given
+ * up on and builds a fresh one when the system is seen again -- so the CLUB
+ * slot this attempt selected can vanish under it, and the attempt built on it
+ * is over. Told to the FSM explicitly, on the beat that really freed the
+ * block, rather than left for the watchdog to notice: a slot reused for the
+ * SAME system between two beats would otherwise let a half-run attempt carry
+ * on over a block that has answered none of its lookups.
+ *
+ * A NODE THE CLUSTER HAS ALREADY ADMITTED IS UNTOUCHED. Membership is not
+ * unmade by a block being rebuilt (p. 7-30), and a SELECTED block is never
+ * reclaimed in the first place; this releases only an attempt that had not
+ * reached the barrier.
+ *
+ * The attempt is released the way join_no_connectivity() releases one: IDLE,
+ * reason named, no node-wide back-off -- the members this node has NOT lost
+ * are still askable on the very next beat.
+ */
+void cnxman_join_target_released(struct cnxman_join *j, vms_scs_sysid_t sysid);
 
 /*
  * The join watchdog (CNXMAN_TIMER_JOIN). INSTRUMENT-AND-REPEAT, never abandon:

@@ -606,6 +606,19 @@ static void test_glue_bindings(void)
 		  "only a membership record naming it can set");
 	check_has("cn->vc_sysap.accept_conndata = cn->conndata;",
 		  "rd vms-b87: the ACCEPT offers the live buffer");
+	/*
+	 * ...AND SO DOES THE JOIN'S OWN COPY. MEASURED: the first live arm of
+	 * this code filled `cn->conndata` and left `cfg.conndata` at the
+	 * memset zero, so every connect the JOIN opened carried sixteen zero
+	 * bytes -- the all-zero connect data E31 replaced -- and the real VAX
+	 * answered every one of them "version identity refused". One loop,
+	 * both copies, so they cannot drift again.
+	 */
+	check_has("cn->conndata[i] = next[i];\n\t\tcn->cfg.conndata[i] = next[i];",
+		  "rd vms-b87: ONE refresh fills BOTH copies -- the glue's "
+		  "buffer and the join's cfg");
+	check_has("cn->cfg.conndata_valid = 1u;\n\treturn moved;",
+		  "... and marks the join's copy valid in the same place");
 	check_absent("accept_conndata = cnxman_e31_conndata",
 		     "... and no emit point names a constant any more");
 	check_absent("cnxman_e31_conndata[",
@@ -793,6 +806,21 @@ static void test_glue_bindings(void)
 		  "only for a node that WAS one");
 	check_absent("cnxman_cluexit_run(cn);\n\t\tcnxman_reclaim",
 		     "... and nothing runs after it on the beat that spent it");
+	/*
+	 * ONE RE-INCARNATION PER EPISODE. MEASURED: without the latch a node
+	 * whose connect the cluster refuses for a reason that is NOT its
+	 * incarnation re-incarnated once a second for the whole run (415 times
+	 * in the first live arm). A real node CLUEXITs once and then waits.
+	 */
+	check_has("if (cn->cluexit_used) {",
+		  "rd vms-0f9: a second re-incarnation is REFUSED while the "
+		  "first has not been answered");
+	check_has("cn->cluexit_refused++;",
+		  "... and the refusal is COUNTED, so the standoff is visible "
+		  "without a capture");
+	check_has("if (!cn->join.cm_open)\n\t\treturn;\n\tcn->cluexit_used = 0u;",
+		  "... and the latch clears on the executive's OWN fact that "
+		  "the cluster is talking to this node again");
 	check_has("cnxman_recnx_start(&cn->recnx);\n\tcn->cl->state = VMS_CLUSTER_JOINING;",
 		  "rd vms-0f9: ...and the re-incarnated node re-arms its own "
 		  "beat -- cnxman_recnx_init() zeroed `running`, and a node "

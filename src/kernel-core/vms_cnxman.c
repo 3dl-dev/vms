@@ -242,8 +242,10 @@ struct vms_cnxman {
 	 */
 	uint8_t  cluexit_pending;
 	uint8_t  cluexit_reason;     /* enum cnxman_cluexit_reason */
-	uint8_t  pad_cx[2];
+	uint8_t  cluexit_used;       /* one re-incarnation per episode        */
+	uint8_t  pad_cx;
 	uint32_t cluexits;
+	uint32_t cluexit_refused;    /* re-incarnations NOT spent, and counted */
 
 	/*
 	 * ---- THIS NODE'S OWN 16-BYTE CONNECT DATA (rd vms-b87) ----
@@ -1364,6 +1366,7 @@ static void cnxman_cluexit_arm(struct vms_cnxman *cn,
 			       enum cnxman_cluexit_reason why);
 static void cnxman_check_removed(struct vms_cnxman *cn);
 static void cnxman_cluexit_run(struct vms_cnxman *cn);
+static void cnxman_cluexit_clear_on_contact(struct vms_cnxman *cn);
 
 /* ==========================================================================
  * 8b. THE DLM's LEG (rd vms-1ee; vms_cnxman.h §5)
@@ -2551,6 +2554,7 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * with the old one's state. Everything below this line reads a
 		 * CLUB that is then one beat old at most.
 		 */
+		cnxman_cluexit_clear_on_contact(cn);
 		cnxman_check_removed(cn);
 		if (cn->cluexit_pending) {
 			cnxman_cluexit_run(cn);
@@ -2745,24 +2749,29 @@ static int cnxman_refresh_conndata(struct vms_cnxman *cn)
 				  next, (uint32_t)sizeof(next)) != VMS_CODEC_OK)
 		return 0;   /* the builder refused: the old bytes stand */
 
+	/*
+	 * BOTH COPIES, IN ONE PLACE. The glue emits from `cn->conndata` and the
+	 * join emits from its own `cfg.conndata`, and a refresh that filled
+	 * only one of them left the other at the memset zero -- which is
+	 * exactly the all-zero connect data E31 replaced, and a real VAX
+	 * answers it "version identity refused". Measured, on the first arm
+	 * that ran this code.
+	 */
 	for (i = 0; i < (uint32_t)VMS_SCS_PROCNAME_LEN; i++) {
 		if (cn->conndata[i] != next[i])
 			moved = 1;
 		cn->conndata[i] = next[i];
+		cn->cfg.conndata[i] = next[i];
 	}
+	cn->cfg.conndata_valid = 1u;
 	return moved;
 }
 
-/* ...and the join's own copy of it, re-installed only on a real change. */
+/* ...and the join's INSTALLED copy, re-set only on a real change. */
 static void cnxman_sync_conndata(struct vms_cnxman *cn)
 {
-	uint32_t i;
-
 	if (!cnxman_refresh_conndata(cn))
 		return;
-	for (i = 0; i < (uint32_t)VMS_SCS_PROCNAME_LEN; i++)
-		cn->cfg.conndata[i] = cn->conndata[i];
-	cn->cfg.conndata_valid = 1u;
 	cnxman_join_set_cfg(&cn->join, &cn->cfg);
 }
 
@@ -2795,8 +2804,43 @@ static void cnxman_cluexit_arm(struct vms_cnxman *cn,
 {
 	if (cn->cluexit_pending)
 		return;
+	/*
+	 * ONCE PER EPISODE (measured, first live arm of this code). A real
+	 * node CLUEXITs and reboots ONCE; if it still cannot get in it sits in
+	 * "waiting to form or join", it does not reboot once a second. And the
+	 * reasoning is the same as the remedy's: re-incarnating cures a
+	 * refusal that is ABOUT this incarnation, so a refusal that survives
+	 * the new one is about something else and another re-incarnation
+	 * cannot help. The latch clears the moment the cluster is talking to
+	 * this node again (cnxman_cluexit_clear_on_contact).
+	 */
+	if (cn->cluexit_used) {
+		cn->cluexit_refused++;
+		if (cn->cluexit_refused == 1u)
+			cnxman_ops_log(cn, "%CNXMAN, this node has already "
+					   "re-incarnated and the cluster still "
+					   "refuses it: waiting to form or join "
+					   "an OpenVMS Cluster");
+		return;
+	}
 	cn->cluexit_pending = 1u;
 	cn->cluexit_reason = (uint8_t)why;
+}
+
+/*
+ * THE STANDOFF IS OVER when the cluster is talking to this node again: an OPEN
+ * VMS$VAXcluster connection is the fact, and it is the executive's own (the
+ * join holds the Con.ID the CSB ladder called OPEN). Only then may this node
+ * spend another re-incarnation.
+ */
+static void cnxman_cluexit_clear_on_contact(struct vms_cnxman *cn)
+{
+	if (!cn->cluexit_used)
+		return;
+	if (!cn->join.cm_open)
+		return;
+	cn->cluexit_used = 0u;
+	cn->cluexit_refused = 0u;
 }
 
 static const char *cnxman_cluexit_why(uint8_t reason)
@@ -2871,6 +2915,7 @@ static void cnxman_cluexit_run(struct vms_cnxman *cn)
 	cnxman_recnx_start(&cn->recnx);
 	cn->cl->state = VMS_CLUSTER_JOINING;
 	cn->cluexits++;
+	cn->cluexit_used = 1u;
 	cnxman_start_join_or_wait(cn);
 }
 

@@ -1713,6 +1713,26 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 		return;
 	}
 
+	/*
+	 * THE PEER'S OWN DISCONNECT IS THE PEER'S ANSWER, NOT A LOST PATH
+	 * (rd vms-dfe). Routed to the ladder's own edge for it rather than to
+	 * connectivity-lost, and the ladder's header says why in full: sent
+	 * through CONN_LOST this is an infinite 2 Hz dial-and-be-hung-up-on
+	 * loop, measured at 457 cycles in one run. The Con.ID goes too, for
+	 * E81's reason on the reject path: the block's claim to hold a
+	 * connection is false the moment the peer tore it down.
+	 */
+	if (reason == (uint32_t)SCS_CLOSE_REMOTE && csb != NULL) {
+		(void)cnxman_csb_dispatch(&cn->cl->club, csb,
+					  CNXMAN_CSB_EV_REMOTE_DISCONNECT,
+					  &cn->ops);
+		if (csb->cdt_conid == (uint32_t)local_conid)
+			cnxman_csb_bind_connection(csb, 0u);
+		cnxman_join_closed(&cn->join, local_conid, reason);
+		cnxman_quorum_apply(cn);
+		return;
+	}
+
 	if (csb != NULL) {
 		/*
 		 * `announced_departure` is p. 7-29's last-gasp distinction.

@@ -1,0 +1,406 @@
+[OVMXB] caps: CapPrm:	000001ffffffdfff CapEff:	000001ffffffdfff CapBnd:	000001ffffffdfff 
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+3EFCAD00+3EF0AD00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [OVMXB] SYSBOOT> reached
+SET SCSNODE OVMXB
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXB
+SYSBOOT> SET SCSSYSTEMID 1988
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1988
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    25-SEP-2026 11:21:49.61
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   15.375784] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   15.379952] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 25-SEP-2026 11:21:50.23
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: [   17.001515] %PEA0, channel verified
+[   17.132955] %PEA0, virtual circuit open
+[   17.467430] %CNXMAN, a connection manager was discovered on the interconnect
+[   17.478070] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   17.499455] %PEA0, channel verified
+SYSTEM
+Password: [   17.608359] %PEA0, virtual circuit open
+[   18.490763] %CNXMAN, a connection manager was discovered on the interconnect
+[   18.810760] %CNXMAN, waiting to form or join an OpenVMS Cluster
+
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ [   23.034723] %SCS-W-NOCREDMSG, disconnect proceeding without the credit-message exchange
+[   23.930742] %CNXMAN, membership request to the selected member not answered
+[   23.944317] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   24.634748] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-0"
+DFE-POLL-OVMXB-0
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:22:01
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [   28.154707] %SCS-W-DISCTIMO, disconnect unmatched, connection closed
+[   39.162709] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[   39.172479] %CNXMAN, lost connection to a cluster member, reconnecting
+[   39.176603] vms: SCS path lost to system 0:1987 -> SS$ 2692
+[   39.180466] %PEA0, peer stopped acknowledging, circuit re-formed
+[   39.930787] %PEA0, no HELLO within the listen timeout, channel lost
+[   39.935510] %PEA0, no HELLO within the listen timeout, channel lost
+[   39.939824] %PEA0, channel lost, virtual circuit closed
+[   39.943914] vms: SCS path lost to system 0:1989 -> SS$ 2692
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-15"
+DFE-POLL-OVMXB-15
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:22:16
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | RECONNECT        |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [   44.090702] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   45.114696] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   46.138667] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   47.162717] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   48.186723] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   49.210710] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   50.234715] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   51.258756] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   52.282728] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   53.306705] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   54.330743] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   55.354671] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-30"
+DFE-POLL-OVMXB-30
+$ [   56.378750] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:22:31
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | RECONNECT        |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [   57.402719] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   58.426988] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   59.450735] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   59.460564] %CNXMAN, reconnect interval expired, proposing removal
+[   59.464172] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition
+[   60.474806] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   61.498729] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   62.527319] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   63.509667] %PEA0, virtual circuit open
+[   63.546815] %CNXMAN, a connection manager was discovered on the interconnect
+[   63.553002] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   63.964904] %PEA0, channel verified
+[   64.570670] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   65.594726] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   66.620550] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   67.642691] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   68.666703] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   69.690735] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   70.714763] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-45"
+DFE-POLL-OVMXB-45
+$ [   71.738731] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:22:46
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [   72.762817] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   73.786675] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   74.810688] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   75.835968] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   76.858796] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   77.882717] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   78.906869] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   79.930703] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   80.954737] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   81.978731] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   83.002697] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   84.026691] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   84.933296] %PEA0, channel verified
+[   84.934061] %PEA0, virtual circuit open
+[   85.050718] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   85.072518] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-60"
+DFE-POLL-OVMXB-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:23:01
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ [   91.258764] %CNXMAN, membership request to the selected member not answered
+[   91.263148] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   92.218697] %CNXMAN, another system is also waiting to form an OpenVMS Cluster and takes precedence; this node will join it
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-75"
+DFE-POLL-OVMXB-75
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:23:16
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ [  111.674699] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  111.709017] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[  111.716476] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[  111.729179] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-90"
+DFE-POLL-OVMXB-90
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:23:31
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ [  117.882717] %CNXMAN, membership request to the selected member not answered
+[  117.890734] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-105"
+DFE-POLL-OVMXB-105
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:23:46
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ [  138.362744] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  138.383090] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[  138.399268] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[  144.282859] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-120"
+DFE-POLL-OVMXB-120
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:24:01
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-135"
+DFE-POLL-OVMXB-135
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:24:16
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-150"
+DFE-POLL-OVMXB-150
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:24:31
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-165"
+DFE-POLL-OVMXB-165
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:24:46
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-180"
+DFE-POLL-OVMXB-180
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:25:01
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-195"
+DFE-POLL-OVMXB-195
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:25:16
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-210"
+DFE-POLL-OVMXB-210
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:25:31
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-225"
+DFE-POLL-OVMXB-225
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:25:46
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-240"
+DFE-POLL-OVMXB-240
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:26:01
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-255"
+DFE-POLL-OVMXB-255
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:26:16
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-270"
+DFE-POLL-OVMXB-270
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 11:26:31
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | NEW              |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ 

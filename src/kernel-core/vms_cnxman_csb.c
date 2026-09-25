@@ -295,6 +295,43 @@ static enum cnxman_csb_action h_connect_rejected(struct vms_club *club,
 	return CNXMAN_CSB_ACT_NONE;
 }
 
+/*
+ * THE PEER TORE IT DOWN ITSELF (rd vms-dfe). The contract and the measured
+ * 2 Hz loop this closes are in vms_cnxman_csb.h at
+ * CNXMAN_CSB_EV_REMOTE_DISCONNECT; the BEHAVIOUR is deliberately identical to
+ * h_connect_rejected's, because the two events are the same fact about the
+ * peer -- it answered -- arriving by two different verbs.
+ *
+ * TWO POSITIONS, ONE ANSWER:
+ *
+ *   - FROM [OPEN]: the window has to START, exactly as h_conn_lost starts it
+ *     (this is the first loss), and then no attempt is made inside it.
+ *   - FROM [WAIT]/[RECONNECT]/[REACCEPT]: the window is already running and is
+ *     NOT extended -- the deadline set at the first loss is what p. 7-30 ends.
+ *
+ * MEMBERSHIP IS HELD either way, for h_conn_lost's own reason: "do not presume
+ * that the remote system has left ... simply because the local Connection
+ * Manager has lost contact" (p. 7-30). A system that disconnected one SYSAP
+ * connection has not left the cluster, and only a state transition may say it
+ * has.
+ */
+static enum cnxman_csb_action h_remote_disconnect(struct vms_club *club,
+						  struct vms_csb *csb,
+						  const struct cnxman_ops *ops)
+{
+	if (csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN)
+		(void)h_conn_lost(club, csb, ops);   /* start p. 7-30's window */
+
+	csb->remote_disconnects++;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	csb->next_attempt_ms = csb->deadline_ms;   /* no attempt in THIS window */
+	if (csb->remote_disconnects == 1u)
+		csb_log(ops, "%CNXMAN, a cluster member disconnected this "
+			     "node's VMS$VAXcluster connection: not dialling it "
+			     "again until the reconnect interval expires");
+	return CNXMAN_CSB_ACT_NONE;
+}
+
 /* p. 7-24 WAIT: "This will be repeated until either connectivity is once again
  * established ... or a time limit is exceeded". The attempt failed, so the
  * timeout resumes; the deadline set at loss time is NOT extended. */
@@ -421,6 +458,7 @@ static const csb_handler_t csb_table[VMS_CNXMAN_CSB_STATE__COUNT]
 	[VMS_CNXMAN_CSB_OPEN] = {
 		[CNXMAN_CSB_EV_DISCONNECT]      = h_disconnect,
 		[CNXMAN_CSB_EV_CONN_LOST]       = h_conn_lost,
+		[CNXMAN_CSB_EV_REMOTE_DISCONNECT] = h_remote_disconnect,
 		[CNXMAN_CSB_EV_LAST_GASP]       = h_last_gasp,
 		[CNXMAN_CSB_EV_NEW_INCARNATION] = h_dead,
 	},
@@ -438,6 +476,7 @@ static const csb_handler_t csb_table[VMS_CNXMAN_CSB_STATE__COUNT]
 		/* E81: a reject can land here when the beat has already stepped
 		 * the CSB back to WAIT under the outstanding attempt. */
 		[CNXMAN_CSB_EV_CONNECT_REJECTED] = h_connect_rejected,
+		[CNXMAN_CSB_EV_REMOTE_DISCONNECT] = h_remote_disconnect,
 		[CNXMAN_CSB_EV_RECNX_EXPIRED]   = h_recnx_expired,
 		[CNXMAN_CSB_EV_CONNECT_RCVD]    = h_reaccept,
 		[CNXMAN_CSB_EV_CONN_OPEN]       = h_open,
@@ -451,6 +490,7 @@ static const csb_handler_t csb_table[VMS_CNXMAN_CSB_STATE__COUNT]
 	[VMS_CNXMAN_CSB_RECONNECT] = {
 		[CNXMAN_CSB_EV_RECNX_ATTEMPT]   = h_recnx_attempt,
 		[CNXMAN_CSB_EV_CONNECT_REJECTED] = h_connect_rejected,
+		[CNXMAN_CSB_EV_REMOTE_DISCONNECT] = h_remote_disconnect,
 		[CNXMAN_CSB_EV_CONN_OPEN]       = h_open,
 		[CNXMAN_CSB_EV_RECNX_FAILED]    = h_recnx_failed,
 		[CNXMAN_CSB_EV_RECNX_EXPIRED]   = h_recnx_expired,
@@ -464,6 +504,7 @@ static const csb_handler_t csb_table[VMS_CNXMAN_CSB_STATE__COUNT]
 	 * lost and this state does not extend it. */
 	[VMS_CNXMAN_CSB_REACCEPT] = {
 		[CNXMAN_CSB_EV_CONN_OPEN]       = h_open,
+		[CNXMAN_CSB_EV_REMOTE_DISCONNECT] = h_remote_disconnect,
 		[CNXMAN_CSB_EV_RECNX_FAILED]    = h_recnx_failed,
 		[CNXMAN_CSB_EV_RECNX_EXPIRED]   = h_recnx_expired,
 		[CNXMAN_CSB_EV_LAST_GASP]       = h_last_gasp,
@@ -1009,7 +1050,7 @@ static const char *const csb_event_names[CNXMAN_CSB_EV__COUNT] = {
 	"connect sent", "connect received", "connection open",
 	"disconnect", "connectivity lost", "last gasp",
 	"reconnect attempt", "reconnect failed", "reconnect expired",
-	"new incarnation", "connect rejected"
+	"new incarnation", "connect rejected", "remote disconnect"
 };
 
 static const char *const csb_action_names[CNXMAN_CSB_ACT__COUNT] = {

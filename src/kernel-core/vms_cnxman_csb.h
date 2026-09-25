@@ -108,6 +108,33 @@ enum cnxman_csb_event {
 	 */
 	CNXMAN_CSB_EV_CONNECT_REJECTED = 10,
 
+	/*
+	 * THE PEER TORE THE CONNECTION DOWN ITSELF (rd vms-dfe) -- SCS's
+	 * `SCS_CLOSE_REMOTE`, the peer's own DISCONNECT completing (p. 2-27).
+	 *
+	 * This is E81's distinction, applied to the OTHER kind of peer answer.
+	 * CONN_LOST is "we cannot see it at the moment", which p. 7-30 answers
+	 * by attempting again a second later. A DISCONNECT is not a loss of
+	 * sight: it is the remote SYSAP saying it does not want this
+	 * connection, and it is as much an ANSWER as a REJECT is.
+	 *
+	 * MEASURED (tests/lab/captures/vms-dfe-blackout-recovery-20260925,
+	 * runs/FIN-1 and FIN-3): routed as a plain CONN_LOST, this is an
+	 * infinite loop. h_conn_lost opens a fresh 20-second window, the beat
+	 * dials a second later, the peer accepts and disconnects again,
+	 * h_open CLEARS the deadline -- so the window never expires and the
+	 * node emits a VMS$VAXcluster connect roughly twice a second for as
+	 * long as it lives: 457 reconnect cycles in one 400-second run. A node
+	 * that dials a peer 2 Hz forever is the E81 CNXMGRERR shape, and OVMX
+	 * never gets to make that decision for a peer.
+	 *
+	 * So it takes h_connect_rejected's edge: no further attempt in THIS
+	 * reconnect window, the window itself untouched, membership HELD, and
+	 * the peer's own re-offer still ACCEPTED (p. 7-24 REACCEPT). This node
+	 * stops ASKING; it does not stop ANSWERING.
+	 */
+	CNXMAN_CSB_EV_REMOTE_DISCONNECT = 11,
+
 	CNXMAN_CSB_EV__COUNT
 };
 

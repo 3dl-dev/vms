@@ -660,6 +660,99 @@ static void test_a_reject_does_not_stop_us_answering(void)
 	ct_check(cnxman_csb_is_member(peer), "membership never lapsed");
 }
 
+/*
+ * rd vms-dfe -- THE PEER HANGS UP, AND THIS NODE STOPS DIALLING.
+ *
+ * MEASURED (tests/lab/captures/vms-dfe-blackout-recovery-20260925, runs/FIN-1
+ * and FIN-3, on the booted 3-node QEMU/KVM + real-VAX rig): routed as a plain
+ * CONN_LOST, a peer that accepts and immediately DISCONNECTs is an infinite
+ * loop -- h_conn_lost opens a fresh window, the beat dials a second later,
+ * h_open clears the deadline when the connection comes up, and the node emits
+ * a VMS$VAXcluster connect roughly twice a second forever. 457 reconnect
+ * cycles in one 400-second run. That is the E81 CNXMGRERR shape pointed at a
+ * real VAX, and OVMX never gets to make that decision for a peer.
+ *
+ * This is E81's own rule applied to the other kind of peer ANSWER, so the
+ * assertions are deliberately E81's, one for one.
+ */
+static struct vms_csb *remote_disconnect_bed(void)
+{
+	struct vms_csb *peer = bed(5, 0, 0);   /* a 5 s window */
+
+	g_fake.now_ms = 0;
+	(void)cnxman_csb_dispatch(&g_cl.club, peer,
+				  CNXMAN_CSB_EV_REMOTE_DISCONNECT, &g_ops);
+	return peer;
+}
+
+static void test_a_peer_disconnect_is_not_re_dialled(void)
+{
+	struct vms_csb *peer;
+	struct cnxman_recnx_rec rec[4];
+	uint32_t t, n, i;
+	uint32_t attempts = 0, proposals = 0;
+
+	printf("[recnx] vms-dfe: a peer's own DISCONNECT is not re-dialled\n");
+	peer = remote_disconnect_bed();
+
+	ct_check_eq_u32(peer->state, VMS_CNXMAN_CSB_WAIT,
+			"the p. 7-30 window STARTS -- connectivity really did go");
+	ct_check_eq_u32(peer->remote_disconnects, 1,
+			"and the peer's answer reached this CSB");
+	ct_check_eq_u32(peer->deadline_ms, 5000,
+			"the window is the ordinary one, neither extended nor "
+			"shortened");
+	ct_check(cnxman_csb_is_member(peer),
+		 "MEMBERSHIP IS HELD -- a system that hung up one SYSAP "
+		 "connection has not left the cluster (p. 7-30)");
+
+	/* THE REGRESSION: every one of these beats used to produce another
+	 * VMS$VAXcluster CONNECT_REQ at a peer that had just hung up. */
+	for (t = 250; t < 5000; t += 250) {
+		g_fake.now_ms = t;
+		n = cnxman_recnx_tick(&g_recnx, rec, 4);
+		for (i = 0; i < n; i++) {
+			if (rec[i].action == CNXMAN_CSB_ACT_RECONNECT)
+				attempts++;
+		}
+	}
+	ct_check_eq_u32(attempts, 0,
+			"ZERO connects go to a peer that hung up on us");
+	ct_check_eq_u32(g_recnx.attempts_issued, 0,
+			"and the loop's own ledger agrees");
+
+	/* p. 7-30's ending is untouched. */
+	g_fake.now_ms = 5000;
+	n = cnxman_recnx_tick(&g_recnx, rec, 4);
+	for (i = 0; i < n; i++) {
+		if (rec[i].action == CNXMAN_CSB_ACT_PROPOSE_TRANSITION)
+			proposals++;
+	}
+	ct_check_eq_u32(proposals, 1,
+			"the window still expires into exactly one proposal");
+}
+
+/* Stopping dialling is not stopping answering: the peer that hung up may open
+ * its own connection, and this node takes it (p. 7-24 REACCEPT). */
+static void test_a_peer_disconnect_does_not_stop_us_answering(void)
+{
+	struct vms_csb *peer;
+
+	printf("[recnx] vms-dfe: after a peer DISCONNECT its own re-offer is "
+	       "still taken\n");
+	peer = remote_disconnect_bed();
+
+	(void)cnxman_csb_dispatch(&g_cl.club, peer,
+				  CNXMAN_CSB_EV_CONNECT_RCVD, &g_ops);
+	ct_check_eq_u32(peer->state, VMS_CNXMAN_CSB_REACCEPT,
+			"the peer's reconnect is accepted (p. 7-24 REACCEPT)");
+	(void)cnxman_csb_dispatch(&g_cl.club, peer, CNXMAN_CSB_EV_CONN_OPEN,
+				  &g_ops);
+	ct_check_eq_u32(peer->state, VMS_CNXMAN_CSB_OPEN,
+			"and the connection comes up on the peer's leg");
+	ct_check(cnxman_csb_is_member(peer), "membership never lapsed");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_recnx: RECNXINTERVAL/TIMVCFAIL + last gasp ===\n");
@@ -678,5 +771,7 @@ int main(void)
 	test_degenerate_one_second_window();
 	test_a_rejected_reconnect_is_not_re_asked();
 	test_a_reject_does_not_stop_us_answering();
+	test_a_peer_disconnect_is_not_re_dialled();
+	test_a_peer_disconnect_does_not_stop_us_answering();
 	return ct_summary("test_cnxman_recnx");
 }

@@ -62,10 +62,10 @@
 /*
  * THE LOGIN SEQUENCE IS BOUNDED IN TIME (vms-3e9). Both prompts are read
  * through login_read_line_timed(), which gives up after
- * LOGIN_INPUT_TIMEOUT_SEC seconds of an unfinished response -- the public
- * OpenVMS LGI_PWD_TMO behaviour and its default value (see login_input.h for
- * the citation and for why the deadline is a compiled-in constant rather than
- * a fabricated SYSGEN row).
+ * LOGIN_INPUT_TIMEOUT_SEC seconds of an unfinished response -- the deadline a
+ * real OpenVMS V7.3 console applies to both login reads, which is its
+ * LGI_RETRY_TMO (measured, rd vms-29e; login_input.h has the oracle and why the
+ * deadline is a compiled-in constant rather than a fabricated SYSGEN row).
  *
  * BEFORE THIS, NEITHER PROMPT HAD A DEADLINE ON ANY ARCH: a console left at
  * "Username:" held the session open forever, and JOB_CONTROL -- which watches
@@ -73,14 +73,15 @@
  * to observe. The read is the only place a deadline can live, because that is
  * where the session is idle.
  *
- * ON EXPIRY THE SESSION IS DISCONNECTED SILENTLY, which is the existing
- * MAX_ATTEMPTS behaviour and the same VMS rule: LOGINOUT prints no farewell
- * when it drops a connection, so an invented "login timed out" line would be a
- * self-certified VMS message (CLAUDE.md Rule 10, the same defect vms-417
- * deleted from the MAX_ATTEMPTS path). The disconnect is real, not cosmetic:
- * console_login() returns, main() returns, the image exits, and JOB_CONTROL
- * creates a fresh session on OPA0: -- which is what a real disconnect looks
- * like from the terminal.
+ * ON EXPIRY THE TERMINAL IS TOLD, THEN THE SESSION ENDS (rd vms-29e). The
+ * reader writes what the VMS oracle writes -- the prompt line ended, then
+ * "Error reading command input" and "Timeout period expired" -- and returns
+ * LOGIN_READ_TIMEOUT; console_login() returns, main() returns, the image exits,
+ * and JOB_CONTROL creates a fresh session on OPA0: which, like the real
+ * console, waits for the operator's RETURN before it prompts again. This used
+ * to be SILENT, on the belief that VMS prints nothing here; the oracle shows
+ * otherwise, and the silence is what let an idle-timed-out console be mistaken
+ * for a login read "abandoned" by the executive's operator lines.
  */
 static int read_prompt_response(char *buf, size_t bufsiz, int hide)
 {

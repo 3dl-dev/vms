@@ -18,12 +18,19 @@
  * Oracle for the expected strings/format: see loginout_display.h.
  */
 
+/* posix_openpt()/grantpt()/unlockpt()/ptsname() for the terminal-read tests. */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #include <fcntl.h>
+#include <poll.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include "loginout_display.h"
@@ -85,6 +92,41 @@ static char *slurp(const char *path)
     b[got] = '\0';
     fclose(fp);
     return b;
+}
+
+/* ---- a REAL terminal for the login-read tests (rd vms-29e) ----------- */
+/*
+ * Opens a pseudo-terminal pair. *slave is the terminal LOGINOUT reads and
+ * writes (default termios: ICANON, ECHO, ICRNL, ONLCR -- a console), *master is
+ * the "operator's keyboard and screen". Returns 0 on success.
+ */
+static int open_terminal(int *master, int *slave)
+{
+    int m = posix_openpt(O_RDWR | O_NOCTTY);
+    if (m < 0) return -1;
+    if (grantpt(m) != 0 || unlockpt(m) != 0) { close(m); return -1; }
+    const char *name = ptsname(m);
+    int s = name ? open(name, O_RDWR | O_NOCTTY) : -1;
+    if (s < 0) { close(m); return -1; }
+    *master = m;
+    *slave = s;
+    return 0;
+}
+
+/* Everything the terminal has shown the operator so far (bounded wait). */
+static size_t screen(int master, char *buf, size_t bufsz)
+{
+    size_t len = 0;
+    for (;;) {
+        struct pollfd p = { master, POLLIN, 0 };
+        if (poll(&p, 1, 300) <= 0 || !(p.revents & POLLIN)) break;
+        ssize_t n = read(master, buf + len, bufsz - 1 - len);
+        if (n <= 0) break;
+        len += (size_t)n;
+        if (len >= bufsz - 1) break;
+    }
+    buf[len] = '\0';
+    return len;
 }
 
 int main(void)
@@ -233,7 +275,7 @@ int main(void)
                                            pfd[1], 1);
             long long elapsed = login_now_ms() - t0;
             CHECK(rc == LOGIN_READ_TIMEOUT,
-                  "prompt read: an idle prompt times out (LGI_PWD_TMO behaviour)");
+                  "prompt read: an idle prompt times out (the LGI_RETRY_TMO behaviour, rd vms-29e)");
             /* NEGATIVE CONTROL: it must actually have WAITED. A stub that
              * returned TIMEOUT immediately would pass the line above and be
              * useless as a login deadline. */
@@ -275,6 +317,110 @@ int main(void)
                   == LOGIN_READ_OK && strcmp(line, "NEXT") == 0,
               "prompt read: the NEXT line is the next response (no tail leaks into it)");
         close(pfd[0]); close(pfd[1]);
+    }
+
+
+    /* ================================================================
+     * (d) THE LOGIN READ ON A REAL TERMINAL: WHAT THE OPERATOR SEES
+     *     (rd vms-29e).
+     *
+     * Oracle: a real OpenVMS VAX V7.3 console, isolated vaxlab replica,
+     * 2026-09-25 (tests/lab/captures/vms-29e-login-read-oracle-20260925/):
+     *
+     *   "Username: \r\nError reading command input\r\nTimeout period expired\r\n"
+     *   "Password: \r\nError reading command input\r\nTimeout period expired\r\n"
+     *
+     * after ~20 s -- LGI_RETRY_TMO, not LGI_PWD_TMO: moving RETRY_TMO to 60
+     * moved both reads to ~60 s, moving PWD_TMO to 60 moved neither. OVMX timed
+     * out after 30 s and printed NOTHING, so an idle-timed-out console looked
+     * like a live "Username:" -- the whole of the vms-29e symptom.
+     *
+     * Run on a pseudo-terminal, not a pipe: ECHO, ONLCR and the canonical
+     * line buffer are the terminal driver's, and they decide these bytes.
+     * ================================================================ */
+    {
+        static const char want[] =
+            "\r\nError reading command input\r\nTimeout period expired\r\n";
+        char line[16];
+        char scr[512];
+        int m, t;
+
+        CHECK(LOGIN_INPUT_TIMEOUT_SEC == 20,
+              "login read deadline is 20 s -- the LGI_RETRY_TMO default the V7.3 oracle applies to both login reads");
+
+        /* --- Username: left idle --- */
+        if (open_terminal(&m, &t) == 0) {
+            CHECK(isatty(t), "NEGCTL: the login-read tests really run on a terminal");
+            int rc = login_read_line_timed(t, line, sizeof(line), 0, t, 1);
+            size_t n = screen(m, scr, sizeof(scr));
+            CHECK(rc == LOGIN_READ_TIMEOUT, "terminal: an idle Username: read times out");
+            CHECK(n == sizeof(want) - 1 && memcmp(scr, want, n) == 0,
+                  "terminal: an expired Username: read shows EXACTLY the VMS report (prompt line ended, "
+                  "'Error reading command input', 'Timeout period expired') -- not silence");
+            if (!(n == sizeof(want) - 1 && memcmp(scr, want, n) == 0))
+                printf("      screen was: [%s]\n", scr);
+            close(m); close(t);
+        } else {
+            CHECK(0, "terminal: could not open a pseudo-terminal");
+        }
+
+        /* --- Username: half typed, then left --- */
+        if (open_terminal(&m, &t) == 0) {
+            CHECK(write(m, "SYS", 3) == 3, "terminal: operator types SYS and stops");
+            int rc = login_read_line_timed(t, line, sizeof(line), 0, t, 1);
+            size_t n = screen(m, scr, sizeof(scr));
+            CHECK(rc == LOGIN_READ_TIMEOUT && line[0] == '\0',
+                  "terminal: a half-typed username times out and yields nothing");
+            CHECK(n == 3 + sizeof(want) - 1 && memcmp(scr, "SYS", 3) == 0 &&
+                  memcmp(scr + 3, want, sizeof(want) - 1) == 0,
+                  "terminal: the oracle's 'Username: SYS' + report shape -- the typed echo, then the report on the next line");
+            /* The half-typed line must not survive into the next session's read. */
+            CHECK(write(m, "TEM\r", 4) == 4, "terminal: operator then finishes the line");
+            rc = login_read_line_timed(t, line, sizeof(line), 0, t, 1);
+            CHECK(rc == LOGIN_READ_OK && strcmp(line, "TEM") == 0,
+                  "terminal: the timed-out partial 'SYS' was discarded -- it does not prefix the next read");
+            close(m); close(t);
+        } else {
+            CHECK(0, "terminal: could not open a pseudo-terminal");
+        }
+
+        /* --- Password: (echo off) left idle: the prompt line ends ONCE --- */
+        if (open_terminal(&m, &t) == 0) {
+            int rc = login_read_line_timed(t, line, sizeof(line), 1, t, 1);
+            size_t n = screen(m, scr, sizeof(scr));
+            CHECK(rc == LOGIN_READ_TIMEOUT, "terminal: an idle Password: read times out");
+            CHECK(n == sizeof(want) - 1 && memcmp(scr, want, n) == 0,
+                  "terminal: an expired Password: read shows EXACTLY the VMS report (one line end, not two)");
+            if (!(n == sizeof(want) - 1 && memcmp(scr, want, n) == 0))
+                printf("      screen was: [%s]\n", scr);
+            close(m); close(t);
+        } else {
+            CHECK(0, "terminal: could not open a pseudo-terminal");
+        }
+
+        /* --- the vms-29e PREMISE, measured: output written to the console by
+         *     someone else while the operator is typing (the executive's
+         *     %DLM/%CNXMAN lines, a REPLY, OPCOM) does NOT end the read. The
+         *     V7.3 oracle carried on the same way: "Username: SYS", a REPLY and
+         *     an OPCOM message, then "TEM" completed SYSTEM. --- */
+        if (open_terminal(&m, &t) == 0) {
+            static const char opline[] =
+                "\n[  340.849897] %DLM, refusing a lock message from a system that has not proved it runs this implementation\n";
+            int other = open(ptsname(m), O_WRONLY | O_NOCTTY);
+            CHECK(write(m, "SYS", 3) == 3, "terminal: operator types SYS");
+            (void)screen(m, scr, sizeof(scr));
+            CHECK(other >= 0 && write(other, opline, sizeof(opline) - 1) ==
+                                    (ssize_t)(sizeof(opline) - 1),
+                  "terminal: an operator line is written to the console mid-read");
+            CHECK(write(m, "TEM\r", 4) == 4, "terminal: operator finishes with TEM<CR>");
+            int rc = login_read_line_timed(t, line, sizeof(line), 0, t, 2);
+            CHECK(rc == LOGIN_READ_OK && strcmp(line, "SYSTEM") == 0,
+                  "terminal: the read survives console output and returns the whole username SYSTEM");
+            if (other >= 0) close(other);
+            close(m); close(t);
+        } else {
+            CHECK(0, "terminal: could not open a pseudo-terminal");
+        }
     }
 
     /* ================================================================

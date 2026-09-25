@@ -333,7 +333,7 @@ run_acceptance_boot() {
   # login plus three commands -- so the bound gains room for that too.
   # vms-3e9: the battery now opens with console_login_acceptance() -- a console
   # quiet-settle, then a deliberate idle-at-the-prompt probe longer than
-  # LOGIN_INPUT_TIMEOUT_SEC (30s) to prove the login prompt is really
+  # LOGIN_INPUT_TIMEOUT_SEC (20s) to prove the login prompt is really
   # disconnected. That is ~60-90s of WAIT this bound must cover.
   local QT="${ACCEPT_TIMEOUT:-1200}"
   local DT="$((QT + 150))"

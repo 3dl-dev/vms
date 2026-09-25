@@ -64,6 +64,46 @@ static uint32_t csb_now(const struct cnxman_ops *ops)
 }
 
 /*
+ * THE SUBJECT OF A RECONFIGURATION IS A MEMBER (rd vms-b36).
+ *
+ * p. 7-49 makes SELECTED the cluster's COMMITTED membership -- the member count
+ * in the CLUB "is simply the total number of CSBs that have their SELECTED flag
+ * set", written at a transition's Phase 2 -- which is exactly why csb_give_up()
+ * below refuses to touch it. p. 7-30's reconfiguration is the answer to losing
+ * contact with a system that IS in the cluster; a system the cluster never
+ * admitted has no membership to remove, and a transition proposing to remove it
+ * asserts a membership change that never happened.
+ *
+ * MEASURED, and it is not theoretical: in
+ * tests/lab/captures/vms-b36-cnxmgrerr-20260925/ a second OVMX node's
+ * admission was abandoned by the real VAX coordinator ("timed-out lost
+ * connection to system OVMXB" -> "aborting VAXcluster state transition"), and
+ * 0.6 s later THIS code proposed a cluster reconfiguration removing that same
+ * never-admitted system. The real OpenVMS VAX V7.3 took a fatal CNXMGRERR
+ * bugcheck. Across the four runs the predecessor lane archived, the console
+ * line "proposing removal of a system from the cluster" appears in exactly the
+ * one run that bugchecked a peer and in none of the three that did not.
+ *
+ * THE ORACLE SAYS THE SAME THING. On a three-node cluster of REAL OpenVMS VAX
+ * V7.3 nodes (tests/lab/captures/vms-b36-cnxmgrerr-20260925/oracle/), a
+ * joiner blacked out mid-admission is ABANDONED, never removed: no surviving
+ * member proposes a reconfiguration naming it. When a real MEMBER goes, exactly
+ * one member proposes and the others follow.
+ *
+ * Returns 1 when the caller must NOT propose.
+ */
+static int csb_nothing_to_remove(struct vms_csb *csb,
+				 const struct cnxman_ops *ops)
+{
+	if ((csb->flags & VMS_CSB_F_SELECTED) != 0u)
+		return 0;
+	csb->removals_withheld++;
+	csb_log(ops, "%CNXMAN, the cluster never admitted this system: giving "
+		     "up its connection and proposing no state transition");
+	return 1;
+}
+
+/*
  * p. 7-30: the local connection manager starts a state transition only "if no
  * other Connection Manager has already instituted a cluster state transition".
  * The answer comes from the CLUB's real transition state -- what this node has
@@ -243,6 +283,11 @@ static enum cnxman_csb_action h_last_gasp(struct vms_club *club,
 {
 	csb_give_up(csb);
 	csb_log(ops, "%CNXMAN, received last gasp from a cluster member");
+	/* A departure announcement from a system the cluster never admitted is
+	 * still an announcement -- the connection goes -- but there is no
+	 * membership to reconfigure away (rd vms-b36). */
+	if (csb_nothing_to_remove(csb, ops))
+		return CNXMAN_CSB_ACT_NONE;
 	return csb_propose_or_defer(club, csb, ops);
 }
 
@@ -355,7 +400,20 @@ static enum cnxman_csb_action h_recnx_expired(struct vms_club *club,
 					      struct vms_csb *csb,
 					      const struct cnxman_ops *ops)
 {
-	enum cnxman_csb_action act = csb_propose_or_defer(club, csb, ops);
+	enum cnxman_csb_action act;
+
+	/*
+	 * The window is over either way -- p. 7-30 is done attempting, so the
+	 * block gives up its connection and its Con.ID claim. WHETHER A
+	 * TRANSITION IS PROPOSED is the separate question, and a system this
+	 * cluster never admitted is not the subject of one (rd vms-b36).
+	 */
+	if (csb_nothing_to_remove(csb, ops)) {
+		csb_give_up(csb);
+		return CNXMAN_CSB_ACT_NONE;
+	}
+
+	act = csb_propose_or_defer(club, csb, ops);
 
 	/* Deferred: another connection manager is already reconfiguring the
 	 * cluster, so this CSB stays exactly where it is and the next

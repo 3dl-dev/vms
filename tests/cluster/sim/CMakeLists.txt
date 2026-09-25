@@ -133,6 +133,19 @@ target_include_directories(test_sim_cnxman_recover PRIVATE
 cluster_sim_test(test_sim_rolling_evacuation scenarios/rolling_evacuation.c)
 target_link_libraries(test_sim_rolling_evacuation PRIVATE cluster_host_cnxman)
 
+# rd vms-b36's rung-R2 leg: a system the cluster NEVER ADMITTED loses its
+# connection and its whole p. 7-30 window runs out on the virtual clock, driven
+# by the SHIPPING reconnect FSM over the SHIPPING CSB ladder, with every PROPOSE
+# action followed through into the SHIPPING coordinator FSM. The assertion is
+# that NOTHING reaches the wire -- proposing a class-0x03 removal for a system
+# p. 7-49 never selected is what bugchecked a real OpenVMS VAX V7.3 CNXMGRERR --
+# with a positive control that a COMMITTED member is still removed.
+cluster_sim_test(test_sim_cnxman_never_admitted
+                 scenarios/cnxman_never_admitted_not_removed.c)
+target_link_libraries(test_sim_cnxman_never_admitted PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_never_admitted PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 # FC-P4.6's rung-R2 leg: the REAL lock engine (vms_lock.c on FC-P4.9's host
 # backend), the REAL requester FSM and the REAL Lock Directory Weight Vector in
 # one host process, against SIMULATED master/directory systems. It proves the

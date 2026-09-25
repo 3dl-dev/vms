@@ -1287,6 +1287,56 @@ static void test_remove_class(void)
 	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_COMPLETE, "completed");
 }
 
+/*
+ * rd vms-b36: NOTHING IS PROPOSED TO REMOVE A SYSTEM THE CLUSTER NEVER ADMITTED.
+ *
+ * The bed's joiner is exactly the real shape: a real CSB, a real connection,
+ * real dialogue state -- and p. 7-49's SELECTED clear, because no transition
+ * ever committed it. When that system's reconnect window expires, p. 7-30 has
+ * nothing to reconfigure away.
+ *
+ * WHY IT IS HERE AS WELL AS IN test_cnxman_csb.c: the CSB ladder and this
+ * coordinator are two different entry points, and both the close path and the
+ * once-a-second beat reach the coordinator through
+ * cnxman_coord_propose_remove(). This is the funnel, so this is where the gate
+ * has to hold for a caller that has not asked the ladder first.
+ *
+ * WHAT IT COST: a real OpenVMS VAX V7.3 took a fatal CNXMGRERR bugcheck 0.6 s
+ * after it had abandoned that very system's admission.
+ */
+static void test_never_admitted_is_never_removed(void)
+{
+	printf("\n-- rd vms-b36: no removal transition for a system the "
+	       "cluster never admitted --\n");
+	bed_init(2);
+
+	ct_check((cnxman_club_csb_at(&g.cl.club, bed_join_csb(2))->flags &
+		  VMS_CSB_F_SELECTED) == 0u,
+		 "the subject really is unadmitted (p. 7-49 SELECTED clear)");
+	ct_check(cnxman_coord_propose_remove(&g.c, bed_join_csb(2)) ==
+		 CNXMAN_COORD_REFUSE,
+		 "the proposal is REFUSED, not driven");
+	ct_check_eq_u32(g.c.last_refusal,
+			(uint32_t)CNXMAN_COORD_REF_NOT_ADMITTED,
+			"...and named NOT_ADMITTED");
+	ct_check_eq_u32(g.c.not_admitted, 1,
+			"...and counted, so a run can prove the gate ran");
+	ct_check_eq_u32(g.n_sent, 0,
+			"NOTHING went on the wire -- no op 0x08, no GO, "
+			"no barrier step");
+	ct_check_eq_u32(g.cl.club.transition_active, 0,
+			"and no transition was opened");
+
+	/* POSITIVE CONTROL, same bed, same call: a COMMITTED member still
+	 * drives p. 7-30's reconfiguration, so this gate is about membership
+	 * and not about departures. */
+	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
+		 CNXMAN_COORD_DRIVE,
+		 "CONTROL: a MEMBER is still removed by the first detector");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM), 1,
+			"...with its one op 0x08");
+}
+
 static void test_removing_the_last_peer_completes_locally(void)
 {
 	printf("\n-- removing the last peer: 12 x (M-1) = 0, and it completes --\n");
@@ -2037,6 +2087,7 @@ int main(void)
 	test_lost_participant_in_the_barrier_does_not_strand_it();
 
 	test_remove_class();
+	test_never_admitted_is_never_removed();
 	test_removing_the_last_peer_completes_locally();
 
 	test_no_link_originates_nothing();

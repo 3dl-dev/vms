@@ -255,6 +255,15 @@ static struct vms_csb *ladder_csb(uint8_t state)
 	csb->state = state;
 	csb->deadline_ms = 60000u;      /* far away: expiry must come from the event */
 	csb->next_attempt_ms = 60000u;
+	/*
+	 * THE SWEEP'S SUBJECT IS A COMMITTED MEMBER (rd vms-b36). p. 7-29's
+	 * last gasp and p. 7-30's reconnect window are both about a system that
+	 * IS in the cluster -- p. 7-49's SELECTED flag -- and the table rows
+	 * below assert what happens to one. A block the cluster never admitted
+	 * takes a DIFFERENT edge (nothing to remove, nothing proposed), proved
+	 * on its own in test_never_admitted_is_not_removed().
+	 */
+	csb->flags |= VMS_CSB_F_SELECTED;
 	return csb;
 }
 
@@ -337,6 +346,80 @@ static void test_ladder_exhaustive(void)
 	ct_check_eq_u32(ignored_cells, cells - (unsigned)(sizeof(ladder) /
 							 sizeof(ladder[0])),
 			"every other cell is an honestly ignored event");
+}
+
+/*
+ * rd vms-b36: A SYSTEM THE CLUSTER NEVER ADMITTED IS NOT REMOVED FROM IT.
+ *
+ * p. 7-49 makes SELECTED the cluster's committed membership, and p. 7-30's
+ * reconfiguration is the answer to losing contact with a system that IS in the
+ * cluster. A CSB allocated by discovery (p. 7-23 NEW: "a newly discovered
+ * remote Connection Manager") and never admitted has no membership to remove.
+ *
+ * MEASURED COST OF GETTING THIS WRONG: a real OpenVMS VAX V7.3 abandoned a
+ * second OVMX node's admission and 0.6 s later this executive proposed a
+ * cluster reconfiguration removing that same never-admitted system; the VAX
+ * took a fatal CNXMGRERR bugcheck (rd vms-b36, capture
+ * tests/lab/captures/vms-b36-cnxmgrerr-20260925/).
+ *
+ * THE TEETH: both p. 7-29's announced departure and p. 7-30's expired window
+ * are driven, on the SAME block, with SELECTED clear and then set. Revert the
+ * gate in vms_cnxman_csb.c and the four "no transition" checks go red.
+ */
+static void test_never_admitted_is_not_removed(void)
+{
+	struct vms_csb *csb;
+	enum cnxman_csb_action act;
+
+	printf("[csb] a system the cluster never admitted is not removed "
+	       "from it (pp. 7-30/7-49, rd vms-b36)\n");
+
+	/* p. 7-30: the window expires on a block that was never admitted. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	act = cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g_ops);
+	ct_check_eq_u32((uint32_t)act, (uint32_t)CNXMAN_CSB_ACT_NONE,
+			"the expired window proposes NO state transition");
+	ct_check_eq_u32(csb->state, (uint32_t)VMS_CNXMAN_CSB_DISCONNECT,
+			"...but the block still gives up: the window is over");
+	ct_check_eq_u32(csb->transitions_proposed, 0u,
+			"nothing was counted as proposed");
+	ct_check_eq_u32(csb->removals_withheld, 1u,
+			"and the withholding is COUNTED, not silent");
+
+	/* p. 7-29: an announced departure from a system never admitted. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	act = cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_LAST_GASP, &g_ops);
+	ct_check_eq_u32((uint32_t)act, (uint32_t)CNXMAN_CSB_ACT_NONE,
+			"a last gasp from a never-admitted system proposes "
+			"nothing either");
+	ct_check_eq_u32(csb->state, (uint32_t)VMS_CNXMAN_CSB_DISCONNECT,
+			"...and the connection still goes (p. 7-29)");
+	ct_check_eq_u32(csb->removals_withheld, 1u,
+			"counted once for that block too");
+
+	/* POSITIVE CONTROL: the SAME two edges on a COMMITTED member still
+	 * propose, so the gate is about membership and nothing else. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	act = cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g_ops);
+	ct_check_eq_u32((uint32_t)act,
+			(uint32_t)CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+			"CONTROL: a MEMBER's expired window still proposes "
+			"p. 7-30's reconfiguration");
+	ct_check_eq_u32(csb->removals_withheld, 0u,
+			"...and withholds nothing");
+
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
+	act = cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_LAST_GASP, &g_ops);
+	ct_check_eq_u32((uint32_t)act,
+			(uint32_t)CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+			"CONTROL: a MEMBER's last gasp still proposes "
+			"p. 7-29's reconfiguration");
 }
 
 /* The two absorbing states, called out by name because getting either wrong is
@@ -1029,6 +1112,7 @@ int main(void)
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
 	test_state_vocabulary();
 	test_ladder_exhaustive();
+	test_never_admitted_is_not_removed();
 	test_absorbing_states();
 	test_club_init();
 	test_club_recnxinterval_default();

@@ -1,0 +1,7 @@
+[f1] vax3 stopped at 15:51:27
+[f1] vax3 rebooting at 15:52:07
+[f1] baseline 'proposing addition of system VAX3' count = 1
+[f1] MARKER 'proposing addition of system VAX3' at 15:52:40.625
+[f1] BLACKOUT on tap3 at 15:52:40.628
+[f1] BLACKOUT off tap3 at 15:53:25.633 after 45s
+/lab/run-b36/fault3.sh: line 31:   773 Killed                  setsid nohup python3 /usr/local/bin/nodedrv.py "$D/vax3" "$D/logs/vax3.log" --date "25-SEP-2026 15:50" --boot "B/R5:20000000 DUA0" > "$D/vax3.drv.out" 2>&1 < /dev/null

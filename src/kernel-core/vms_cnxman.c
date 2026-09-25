@@ -1352,6 +1352,18 @@ static void cnxman_credit_carrier(struct vms_cnxman *cn,
 /* Defined below, beside the beat that also calls it (rd vms-1ee). */
 static void cnxman_sync_peer_swver(struct vms_cnxman *cn);
 static void cnxman_start_join_or_wait(struct vms_cnxman *cn);
+/*
+ * rd vms-0f9: declared here because their CALLERS are the connect-reject path
+ * and the beat, both of which are earlier in this file than the definitions.
+ * This TU is not host-linkable, so nothing but a kmod build compiles it --
+ * which is exactly why the declarations are stated rather than left to
+ * definition order.
+ */
+static void cnxman_sync_conndata(struct vms_cnxman *cn);
+static void cnxman_cluexit_arm(struct vms_cnxman *cn,
+			       enum cnxman_cluexit_reason why);
+static void cnxman_check_removed(struct vms_cnxman *cn);
+static void cnxman_cluexit_run(struct vms_cnxman *cn);
 
 /* ==========================================================================
  * 8b. THE DLM's LEG (rd vms-1ee; vms_cnxman.h §5)

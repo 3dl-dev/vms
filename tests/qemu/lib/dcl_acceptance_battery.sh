@@ -299,18 +299,26 @@ console_login_acceptance() {
     fi
 
     # Now leave the prompt strictly alone for longer than the deadline
-    # (LOGIN_INPUT_TIMEOUT_SEC in tools/login_input.h, the public LGI_PWD_TMO
-    # default of 30s). LOGINOUT must DISCONNECT -- silently, printing no
-    # farewell, as VMS does -- and JOB_CONTROL must create the next session on
-    # OPA0:, which then waits for its own RETURN.
+    # (LOGIN_INPUT_TIMEOUT_SEC in tools/login_input.h: 20s, the LGI_RETRY_TMO
+    # default a real V7.3 console applies to its login reads -- rd vms-29e).
+    # LOGINOUT must say so exactly as VMS does ("Error reading command input" /
+    # "Timeout period expired", the oracle bytes in login_input.h), end the
+    # session, and JOB_CONTROL must create the next session on OPA0:, which then
+    # waits for its own RETURN.
     local IDLE_WAIT="${LOGIN_IDLE_WAIT:-45}"
     local IDLE_OFF; IDLE_OFF=$(wc -c <"$LOG")
     echo "  (idle-timeout probe: leaving the login prompt untouched for ${IDLE_WAIT}s)"
     sleep "$IDLE_WAIT"
     local IDLE_SEG; IDLE_SEG=$(_batt_seg_since "$IDLE_OFF")
-    # Silent: no invented sign-off line (the MAX_ATTEMPTS rule, vms-417).
+    # NOT silent, and not invented either: the two lines the V7.3 oracle prints
+    # (rd vms-29e). A silent timeout is what let an idle console pass for a
+    # login read "abandoned" by operator output.
+    must_have "$IDLE_SEG" 'Error reading command input' \
+        "IDLE TIMEOUT (vms-29e): the expiry is REPORTED as VMS reports it -- 'Error reading command input'"
+    must_have "$IDLE_SEG" 'Timeout period expired' \
+        "IDLE TIMEOUT (vms-29e): ... followed by the reason, 'Timeout period expired'"
     must_not_have "$IDLE_SEG" 'timed out' \
-        "IDLE TIMEOUT (vms-3e9 c): the disconnect is SILENT -- no invented 'timed out' farewell"
+        "IDLE TIMEOUT (vms-3e9 c): no invented 'timed out' farewell beyond the VMS text"
     must_not_have "$IDLE_SEG" 'Username:' \
         "IDLE TIMEOUT (vms-3e9 c): the replacement session does not prompt on its own -- it waits for RETURN like any OPA0: session"
     # THE REAL PROOF: the session that was sitting at "Username:" is GONE. Only

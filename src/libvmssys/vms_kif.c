@@ -2660,6 +2660,20 @@ uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan)
     return args.status;
 }
 
+/*
+ * vms_kif_mbx_write - write one message to a mailbox.
+ *
+ * BLOCKING when the mailbox is merely full of other processes' unread
+ * messages (vms-d26f): the executive's VMS_IOCTL_MBX_WRITE handler queues
+ * such a write until buffer quota frees up (a real reader draining the
+ * mailbox), returning -ERESTARTSYS with no status on a bare signal -- the
+ * same WAIT-facility contract vms_kif_mbx_read's KIF_WAIT_CALL already
+ * re-enters for (see kif_wait_call's header comment). Only a message bigger
+ * than the mailbox's own maxmsg is an immediate SS$_EXQUOTA (see vms_mbx.c);
+ * that path never blocks, so this degenerates to a single ioctl round trip
+ * exactly as it did before this file used KIF_CALL for the (then always
+ * synchronous) write.
+ */
 uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
 {
     struct vms_mbx_write_args args;
@@ -2676,7 +2690,7 @@ uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
     args.len = len;
     vms_memcpy(args.data, buf, len);
 
-    KIF_CALL(VMS_IOCTL_MBX_WRITE, &args);
+    KIF_WAIT_CALL(VMS_IOCTL_MBX_WRITE, &args);
 
     return args.status;
 }

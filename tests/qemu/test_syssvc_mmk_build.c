@@ -893,9 +893,41 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
         struct pollfd pfd = { .fd = outpipe[0], .events = POLLIN };
         int pr = poll(&pfd, 1, 200);
         if (pr > 0) {
-            ssize_t n = read(outpipe[0], acc + acclen,
-                             (acclen < sizeof(acc) - 1) ? (sizeof(acc) - 1 - acclen) : 0);
+            /* vms-e28c: ALWAYS drain into a small scratch buffer, never
+             * directly into the tail of `acc' with a shrinking count. The old
+             * code passed read() a count of 0 once acclen hit sizeof(acc)-1,
+             * which is a legal no-op read -- it permanently stopped draining
+             * this pipe for the rest of the drive. A verbose run (more
+             * MMK/TCC diagnostic chatter ahead of the marker than usual --
+             * this varies run to run and shard to shard, never the compile
+             * determinism itself) could then push EXPECT_MARKER's bytes past
+             * that point: they sat unread in the kernel pipe buffer forever,
+             * so *saw_marker stayed 0 even though the drive genuinely
+             * finished (every downstream artifact assertion still passed,
+             * since those come off disk, not this pipe). Fix: keep `acc' a
+             * SLIDING window over the most recent output instead of a
+             * write-once buffer -- once it would overflow, discard the
+             * oldest bytes (retaining strlen(EXPECT_MARKER)-1 bytes of
+             * overlap so a marker split across the slide boundary is never
+             * missed) and keep reading. The pipe is thus drained to
+             * completion on every poll, so the child can never block on a
+             * full pipe and the marker -- wherever in the stream it lands --
+             * is always seen. */
+            char rdbuf[4096];
+            ssize_t n = read(outpipe[0], rdbuf, sizeof(rdbuf));
             if (n > 0) {
+                size_t overlap = sizeof(EXPECT_MARKER) - 1; /* exclude the NUL */
+                if (acclen + (size_t)n > sizeof(acc) - 1) {
+                    size_t room = sizeof(acc) - 1 - (size_t)n;
+                    if (room < overlap)
+                        room = overlap;
+                    if (room > acclen)
+                        room = acclen;
+                    if (acclen > room)
+                        memmove(acc, acc + (acclen - room), room);
+                    acclen = room;
+                }
+                memcpy(acc + acclen, rdbuf, (size_t)n);
                 acclen += (size_t)n;
                 acc[acclen] = '\0';
                 if (strstr(acc, EXPECT_MARKER) != NULL) *saw_marker = 1;
@@ -960,9 +992,25 @@ static void drive_build(const char *mmk, const char *comp, const char *tcc,
 
     /* On a failed drive, surface the driven-DCL transcript so a regression is
      * attributable (a cwd / path / link error is named here rather than showing
-     * only "artifact never appeared"). Bounded: acc is capped above. */
-    if ((do_link && *exelen <= 0) || *olblen <= 0 || *objlen <= 0) {
-        printf("  (drive did not produce its final artifact; driven-DCL transcript follows)\n");
+     * only "artifact never appeared"). Bounded: acc is capped above.
+     *
+     * vms-e28c: ALSO dump it when the completion marker was never observed
+     * even though the final artifact DID appear (the exact shape of the
+     * observed flake -- every downstream artifact assertion passes, only the
+     * `mark1'/`mark2' CHECK reddens). Previously this case printed NOTHING,
+     * so every occurrence in CI was undiagnosable after the fact: there was no
+     * way to tell whether the marker text was genuinely never written (a real
+     * spawn/mailbox/WRTATTN-AST race in the product) or was written but this
+     * capture's sliding window somehow missed it (a harness bug, e.g. the
+     * acc[16384]-overflow fix above). Printing here on every future
+     * recurrence turns "guess from a bare CHECK: FAIL line" into "read the
+     * actual bytes MMK's stdout produced" -- exactly the harness fix this
+     * class of race needs to be pinned down for good, without lengthening any
+     * budget or weakening the assertion itself. */
+    if ((do_link && *exelen <= 0) || *olblen <= 0 || *objlen <= 0 || !*saw_marker) {
+        printf("  (drive diagnostic: saw_marker=%d reaped=%d waited=%dms/%ldms budget "
+               "-- driven-DCL transcript follows)\n",
+               *saw_marker, *reaped, waited, budget_ms);
         printf("----8<----\n%s\n---->8----\n", acc);
     }
 

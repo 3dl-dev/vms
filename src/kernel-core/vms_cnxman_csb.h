@@ -288,6 +288,54 @@ void cnxman_csb_set_params(struct vms_csb *csb, uint16_t votes,
 void cnxman_csb_set_lockdirwt(struct vms_csb *csb, uint8_t lockdirwt);
 
 /*
+ * Record the peer's OWN advertised INCARNATION (rd vms-0f9), read off the
+ * circuit's formation body (pe_peer_incarnation). `valid` 0 clears it back to
+ * "this executive has not been told", which is the honest state for a circuit
+ * whose identity has not arrived -- never incarnation 0.
+ *
+ * AND IT IS THE p. 7-25 EDGE. If the CLUB holds a give-up record for this
+ * system at a DIFFERENT incarnation, this is "a new incarnation of a VAX system
+ * has been seen": the record is cleared here, in the one place that can see
+ * both numbers, so no reader has to re-decide it.
+ */
+void cnxman_csb_set_incarnation(struct vms_club *club, struct vms_csb *csb,
+				uint64_t incarnation, int valid);
+
+/* ==========================================================================
+ * 5b. THE GIVE-UP LEDGER (rd vms-0f9) -- "we stopped dealing with THAT
+ *     incarnation of that system"
+ *
+ * Written by exactly one event, csb_give_up() inside this TU, and read by
+ * exactly one decision, the connection manager's answer to an inbound
+ * VMS$VAXcluster connect. Both halves are deliberate: the ledger is not a
+ * policy knob, it is the record of something that happened.
+ * ========================================================================== */
+
+/*
+ * Has this node given up on `sysid` AT `incarnation`?
+ *
+ * 1 only when a record really names that system at that exact incarnation.
+ * A system with no record, or one whose record names a DIFFERENT incarnation,
+ * answers 0 -- this node cannot prove it gave up on the incarnation in front
+ * of it and must not refuse on a guess (INV-6).
+ */
+int cnxman_club_gave_up_on(const struct vms_club *club, vms_scs_sysid_t sysid,
+			   uint64_t incarnation);
+
+/*
+ * Record that this node has given up on `csb`'s system at the incarnation the
+ * block currently holds. The CSB ladder calls this for itself on p. 7-29's
+ * last gasp and p. 7-30's expired window; the coordinator calls it when a
+ * class-0x03 transition really retires a member (p. 7-46). Records nothing it
+ * cannot name: no SCSSYSTEMID or no incarnation, no record.
+ */
+void cnxman_club_giveup_arm(struct vms_club *club, const struct vms_csb *csb);
+
+/* How many records the ledger currently holds. Readback for tests and the
+ * diagnostic view; nothing decides anything from it. */
+uint32_t cnxman_club_giveup_count(const struct vms_club *club);
+
+/*
  * Record the peer's OWN advertised software version (rd vms-1ee): the token it
  * really put in its formation body, copied out of the port's circuit. `len` 0
  * clears it back to "has advertised nothing", which is the honest state for a

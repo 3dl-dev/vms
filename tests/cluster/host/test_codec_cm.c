@@ -970,6 +970,117 @@ static void test_open_bitmap_span(void)
 	}
 }
 
+/* ==========================================================================
+ * rd vms-b87 -- the 16-byte SCA connect data, byte-exact against FOUR real
+ * cluster configurations
+ *
+ * Every expectation below is a string of bytes a REAL OpenVMS VAX V7.3 put on
+ * a real wire, read back out of
+ * tests/lab/captures/vms-b36-cnxmgrerr-20260925/analysis/connect-data.txt, and
+ * every INPUT is the value VMS reported for ITSELF with F$GETSYI at the same
+ * moment (VOTES / EXPECTED_VOTES / QUORUM / CLUSTER_NODES, transcript in that
+ * capture's README sec 2(d)). The test is therefore not "the builder agrees
+ * with itself": it is "the builder produces what four real nodes produced,
+ * from the numbers those nodes said they held".
+ *
+ * VAX2 IS THE DISCRIMINATOR and is in here for that reason alone: it holds
+ * ZERO votes of its own and still reports 1, which is what proves the first
+ * field is the CLUSTER's vote total and not the sender's. Delete it and a
+ * wrong builder passes.
+ * ========================================================================== */
+static const uint8_t CD_HEAD[4] = { 0x01, 0x1b, 0x01, 0x03 };
+static const uint8_t CD_TAIL[5] = { 0x08, 0x00, 0x00, 0x06, 0x00 };
+
+static void cd_case(const char *what, uint16_t votes, uint16_t quorum,
+		    uint16_t nodes, uint8_t member, const uint8_t *want)
+{
+	struct vms_cm_conndata_in in;
+	uint8_t out[VMS_CM_CONNDATA_LEN];
+	vms_codec_status_t st;
+
+	in.cluster_votes = votes;
+	in.quorum = quorum;
+	in.cluster_nodes = nodes;
+	in.member = member;
+	in.pad0 = 0u;
+
+	st = vms_cm_conndata_build(&in, CD_HEAD, 4u, CD_TAIL, 5u, out,
+				   (uint32_t)sizeof(out));
+	ct_check_eq_u32((uint32_t)st, (uint32_t)VMS_CODEC_OK, what);
+	ct_check(memcmp(out, want, sizeof(out)) == 0, what);
+}
+
+static void test_conndata_against_real_nodes(void)
+{
+	/* VAX1: VOTES 1, EXPECTED_VOTES 1, QUORUM 1, CLUSTER_NODES 2. */
+	static const uint8_t vax1[16] = {
+		0x01,0x1b,0x01,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00, 0x01,
+		0x08,0x00,0x00,0x06,0x00 };
+	/* VAX2: the SAME cluster, and its OWN votes are 0. Same bytes. */
+	static const uint8_t vax2[16] = {
+		0x01,0x1b,0x01,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00, 0x01,
+		0x08,0x00,0x00,0x06,0x00 };
+	/* VAXC alone: one member, one vote, quorum one. */
+	static const uint8_t solo[16] = {
+		0x01,0x1b,0x01,0x03, 0x01,0x00, 0x01,0x00, 0x01,0x00, 0x01,
+		0x08,0x00,0x00,0x06,0x00 };
+	/* VAXC after admitting a second, EXPECTED_VOTES 2 member. */
+	static const uint8_t two[16] = {
+		0x01,0x1b,0x01,0x03, 0x02,0x00, 0x02,0x00, 0x02,0x00, 0x01,
+		0x08,0x00,0x00,0x06,0x00 };
+	/* Any node BEING ADMITTED, either direction. */
+	static const uint8_t joining[16] = {
+		0x01,0x1b,0x01,0x03, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,
+		0x08,0x00,0x00,0x06,0x00 };
+	struct vms_cm_conndata_in in;
+	uint8_t out[VMS_CM_CONNDATA_LEN];
+
+	printf("-- rd vms-b87: the connect data, against four real "
+	       "configurations\n");
+	cd_case("VAX1, a 2-node cluster with one vote in it",
+		1u, 1u, 2u, 1u, vax1);
+	cd_case("VAX2, the SAME cluster -- OWN votes 0, reports the "
+		"CLUSTER's 1 (the discriminator)", 1u, 1u, 2u, 1u, vax2);
+	cd_case("VAXC alone", 1u, 1u, 1u, 1u, solo);
+	cd_case("VAXC with a second member, EXPECTED_VOTES 2",
+		2u, 2u, 2u, 1u, two);
+	cd_case("a node being admitted reports no cluster arithmetic",
+		0u, 0u, 0u, 0u, joining);
+
+	/*
+	 * ...AND A NON-MEMBER CANNOT REPORT ONE EVEN IF ITS CALLER TRIES.
+	 * A stale count surviving into the joining form would be this node
+	 * claiming a membership it does not have, which is the INV-6 case.
+	 */
+	in.cluster_votes = 9u;
+	in.quorum = 9u;
+	in.cluster_nodes = 9u;
+	in.member = 0u;
+	in.pad0 = 0u;
+	ct_check_eq_u32((uint32_t)vms_cm_conndata_build(&in, CD_HEAD, 4u,
+							CD_TAIL, 5u, out,
+							(uint32_t)sizeof(out)),
+			(uint32_t)VMS_CODEC_OK, "a non-member still builds");
+	ct_check(memcmp(out, joining, sizeof(out)) == 0,
+		 "...and the counts a non-member was handed are DROPPED, not "
+		 "sent");
+
+	/* Refusals: a head or tail that is not the measured width, and no
+	 * room. Nothing is written on a refusal. */
+	in.member = 1u;
+	ct_check(vms_cm_conndata_build(&in, CD_HEAD, 3u, CD_TAIL, 5u, out,
+				       (uint32_t)sizeof(out)) != VMS_CODEC_OK,
+		 "a head that is not the measured four bytes is refused");
+	ct_check(vms_cm_conndata_build(&in, CD_HEAD, 4u, CD_TAIL, 4u, out,
+				       (uint32_t)sizeof(out)) != VMS_CODEC_OK,
+		 "...and a tail that is not the measured five");
+	ct_check(vms_cm_conndata_build(&in, CD_HEAD, 4u, CD_TAIL, 5u, out, 15u)
+		 != VMS_CODEC_OK, "...and a buffer that cannot hold sixteen");
+	ct_check(vms_cm_conndata_build(NULL, CD_HEAD, 4u, CD_TAIL, 5u, out,
+				       (uint32_t)sizeof(out)) != VMS_CODEC_OK,
+		 "...and a NULL input");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -997,6 +1108,7 @@ int main(void)
 	test_ack_build();
 
 	test_allowlist();
+	test_conndata_against_real_nodes();
 
 	test_open_parse();
 	test_barrier_parse();

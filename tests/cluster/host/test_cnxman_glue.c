@@ -437,6 +437,21 @@ static void check_absent(const char *needle, const char *what)
 	ct_check(strstr(glue_src, needle) == NULL, what);
 }
 
+/*
+ * The third shape: A really comes BEFORE B. Stronger than two check_has()
+ * calls and weaker than demanding they be adjacent -- adjacency is a fact
+ * about today's line breaks, ORDER is the fact the defect was about (rd
+ * vms-0f9 put the incarnation read between two lines that used to touch).
+ */
+static void check_before(const char *first, const char *second,
+			 const char *what)
+{
+	const char *a = strstr(glue_src, first);
+	const char *b = strstr(glue_src, second);
+
+	ct_check(a != NULL && b != NULL && a < b, what);
+}
+
 static void test_glue_bindings(void)
 {
 	printf("-- the bindings, read out of src/kernel-core/vms_cnxman.c --\n");
@@ -561,13 +576,40 @@ static void test_glue_bindings(void)
 	check_has("cfg.conndata_valid = 1u",
 		  "E31: conndata is explicitly marked valid, not left the "
 		  "default omission");
-	check_has("memcpy(cfg.conndata, cnxman_e31_conndata",
-		  "E31: conndata is the named grounded constant, not an "
-		  "inline replay");
-	check_has("memset(&cfg, 0, sizeof(cfg))",
+	check_has("memset(&cn->cfg, 0, sizeof(cn->cfg))",
 		  "E31: every OTHER identity field (model/version/params/"
 		  "dir_descriptor) still starts fully zeroed -- only conndata "
 		  "has an operator ruling behind it");
+
+	/*
+	 * rd vms-b87 SUPERSEDES the memcpy this used to assert, the same way
+	 * E31 superseded the all-zero before it. The quad and the tail are
+	 * still the named grounded spans and are still copied; the SEVEN BYTES
+	 * BETWEEN THEM are this node's own cluster arithmetic and are now
+	 * DERIVED from the CLUB every beat.
+	 *
+	 * The teeth are negative as much as positive: a constant named at an
+	 * emit point is the defect (one value sent whatever state the node was
+	 * in), so no emit point may name one.
+	 */
+	check_has("vms_cm_conndata_build(&in, cnxman_e31_head",
+		  "rd vms-b87: the connect data is BUILT by the codec, not "
+		  "copied from a template");
+	check_has("in.cluster_votes = cn->cl->club.cevotes",
+		  "... its votes come from the CLUB a transition committed");
+	check_has("in.quorum = cn->cl->club.quorum",
+		  "... its quorum too");
+	check_has("in.cluster_nodes = (uint16_t)cn->cl->club.cluster_nodes",
+		  "... and its member count, which is p. 7-49's SELECTED set");
+	check_has("in.member = (uint8_t)(cn->cl->state == VMS_CLUSTER_MEMBER",
+		  "... and the role is this node's OWN cluster state, which "
+		  "only a membership record naming it can set");
+	check_has("cn->vc_sysap.accept_conndata = cn->conndata;",
+		  "rd vms-b87: the ACCEPT offers the live buffer");
+	check_absent("accept_conndata = cnxman_e31_conndata",
+		     "... and no emit point names a constant any more");
+	check_absent("cnxman_e31_conndata[",
+		     "... the one-size-fits-every-state template is gone");
 
 	/*
 	 * E67 -- the wall this file's source scan exists for. `vms_cnxman.c`
@@ -695,13 +737,66 @@ static void test_glue_bindings(void)
 	 * peer sweep allocated the very same block. This contiguous shape lives
 	 * only in cnxman_vc_connect_req.
 	 */
-	check_has("csb = csb_ensure(&cn->cl->club, peer);\n\n"
-		  "\t/* THE SERVER HALF",
-		  "E72: an inbound CONNECT allocates the CSB BEFORE the join's "
-		  "acceptance policy is asked");
+	check_before("csb = csb_ensure(&cn->cl->club, peer);",
+		     "/* THE SERVER HALF",
+		     "E72: an inbound CONNECT allocates the CSB BEFORE the "
+		     "join's acceptance policy is asked");
+	/*
+	 * rd vms-0f9: ...and the block learns the INCARNATION the connect's own
+	 * circuit is advertising in that same window, because the acceptance
+	 * policy's give-up test compares against it. A beat-old value would
+	 * refuse a system that has just re-incarnated, or accept one that has
+	 * not -- and accepting one that has not is what bugchecked a real VAX.
+	 */
+	check_before("pe_peer_incarnation(cn->cl->pe, peer, &inc)",
+		     "/* THE SERVER HALF",
+		     "rd vms-0f9: ...and the incarnation is read from the "
+		     "circuit BEFORE the policy is asked");
+	check_before("csb = csb_ensure(&cn->cl->club, peer);",
+		     "pe_peer_incarnation(cn->cl->pe, peer, &inc)",
+		     "... into the block that connect just ensured");
 	check_absent("conndata_len);\n\tif (rc != 0)\n\t\treturn rc;\n\n"
 		     "\tcsb = csb_ensure(",
 		     "... and the order that lost the first offer is gone");
+
+	/* ==================================================================
+	 * rd vms-0f9 -- CLUEXIT, read out of the glue that is not linkable
+	 *
+	 * A real OpenVMS node the cluster has given up on bugchecks CLUEXIT
+	 * and reboots, and its peers see exactly two things: the last gasp,
+	 * and a NEW INCARNATION when it comes back. This executive does both
+	 * in place. The ORDER is the book's and is the part a future edit can
+	 * silently get wrong, so the order is what is asserted.
+	 * ================================================================== */
+	check_has("(void)pe_send_last_gasp(cn->cl->pe);",
+		  "rd vms-0f9: CLUEXIT announces the departure the way p. 7-29 "
+		  "says a leaving node does");
+	check_before("(void)pe_send_last_gasp(cn->cl->pe);",
+		     "pe_reincarnate(cn->cl->pe)",
+		     "... BEFORE re-incarnating, so no frame carries the new "
+		     "incarnation on the old circuit");
+	check_before("pe_reincarnate(cn->cl->pe)",
+		     "cnxman_arm_fsms(cn);\n\t/*",
+		     "... and the CLUB and the FSMs go last, because until "
+		     "then they are what the announcement is made out of");
+	check_has("if (pe_reincarnate(cn->cl->pe) != (int)SS__NORMAL)",
+		  "rd vms-0f9: a re-incarnation that could not happen is NOT "
+		  "claimed -- no port, no new incarnation, no reset");
+	check_has("if (cn->cluexit_pending) {\n\t\t\tcnxman_cluexit_run(cn);",
+		  "rd vms-0f9: it is spent at the TOP of the beat, where "
+		  "nothing is half-way through a dispatch");
+	check_has("if (cn->cl->state != VMS_CLUSTER_MEMBER)\n\t\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_REJECTED);",
+		  "rd vms-0f9: a peer's REJECT arms it only for a node that is "
+		  "not a member -- p. 7-30 owns a member's lost connection");
+	check_has("if (cn->cl->state != VMS_CLUSTER_MEMBER)\n\t\treturn;\n\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_REMOVED);",
+		  "... and a committed transition that left us out arms it "
+		  "only for a node that WAS one");
+	check_absent("cnxman_cluexit_run(cn);\n\t\tcnxman_reclaim",
+		     "... and nothing runs after it on the beat that spent it");
+	check_has("cnxman_recnx_start(&cn->recnx);\n\tcn->cl->state = VMS_CLUSTER_JOINING;",
+		  "rd vms-0f9: ...and the re-incarnated node re-arms its own "
+		  "beat -- cnxman_recnx_init() zeroed `running`, and a node "
+		  "that does not re-arm never runs again");
 
 	/* E29. */
 	check_has("SCS_CLOSE_REJECTED",

@@ -172,11 +172,25 @@ _Static_assert((unsigned)VMS_CLUSTER_SWVER_LEN == (unsigned)VMS_CM_VERSION_LEN,
  * capture) IS all-zero, so this is not an omission needing a value, it is
  * the grounded joiner behaviour.
  */
-static const uint8_t cnxman_e31_conndata[VMS_SCS_PROCNAME_LEN] = {
-	0x01, 0x1b, 0x01, 0x03,             /* [0:4]  CM version/protocol quad */
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* [4:11] node/role, joiner=0 */
-	0x08, 0x00, 0x00, 0x06, 0x00        /* [11:16] tail constant            */
-};
+/*
+ * rd vms-b87 SPLIT THIS CONSTANT IN TWO, because measurement showed the two
+ * halves are different kinds of thing.
+ *
+ * [0:4] and [11:16] stay exactly the bytes E31 grounded and this node has
+ * always sent -- the version/protocol handshake, unchanged byte for byte.
+ * (They are not truly CONSTANT: the bench VAX moved [2], [11] and [12] inside
+ * one run, which corrects spec sec 4(N) and is why they are still copied
+ * rather than composed. Nothing in the library says what moves them.)
+ *
+ * [4:11] is NOT a constant and never was. It is this node's own cluster
+ * arithmetic, and vms_cm_conndata_build() derives it from the CLUB -- see
+ * vms_cluster_codec_cm.h sec 7 for the four real configurations that resolved
+ * it. What this file used to send was the JOINER form, always, whatever state
+ * the node was in: correct while joining and a false report of "not in a
+ * cluster" for every frame after that.
+ */
+static const uint8_t cnxman_e31_head[4] = { 0x01, 0x1b, 0x01, 0x03 };
+static const uint8_t cnxman_e31_tail[5] = { 0x08, 0x00, 0x00, 0x06, 0x00 };
 
 /*
  * The glue's own timer identity space, on CF_OWNER_CNXMAN. `enum cnxman_timer`
@@ -211,6 +225,44 @@ struct vms_cnxman {
 	struct cnxman_barrier  barrier;
 	struct cnxman_coord    coord;
 	struct cnxman_recnx    recnx;
+
+	/*
+	 * ---- CLUEXIT (rd vms-0f9) ----
+	 *
+	 * `cluexit_pending` is armed by whichever event told this node the
+	 * cluster has given up on it, and SPENT at the top of the next beat.
+	 * It is a flag and not a call because the events that raise it arrive
+	 * inside an SCS dispatch -- re-initialising the join, the barrier, the
+	 * coordinator and the CLUB underneath the frame being dispatched would
+	 * pull the ground out from under the caller. The beat is the one place
+	 * in this glue where nothing is half-way through.
+	 *
+	 * `cluexits` is how many times this node has really re-incarnated, and
+	 * `cluexit_reason` is the last one's cause, both readback only.
+	 */
+	uint8_t  cluexit_pending;
+	uint8_t  cluexit_reason;     /* enum cnxman_cluexit_reason */
+	uint8_t  pad_cx[2];
+	uint32_t cluexits;
+
+	/*
+	 * ---- THIS NODE'S OWN 16-BYTE CONNECT DATA (rd vms-b87) ----
+	 *
+	 * ONE buffer, refreshed from the CLUB by cnxman_refresh_conndata(), and
+	 * the ONLY connect data any of this glue's four emit points name. It has
+	 * to be a live buffer rather than four copies of a constant because the
+	 * seven bytes in the middle are this node's cluster arithmetic and that
+	 * changes while the node runs: the value that is correct on the connect
+	 * it sends as a joiner is a false report on the accept it gives as a
+	 * member. `cfg` is the join's copy of the same thing, re-installed only
+	 * when the bytes really moved.
+	 */
+	uint8_t  conndata[VMS_SCS_PROCNAME_LEN];
+	struct cnxman_join_cfg cfg;
+
+	/* The join's `commits_excluded_us` as of the last beat, so a REMOVAL is
+	 * acted on once (rd vms-0f9). */
+	uint32_t excluded_seen;
 
 	/*
 	 * The request currently being dispatched, for `ops->respond()`
@@ -1009,6 +1061,24 @@ static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 	 */
 	csb = csb_ensure(&cn->cl->club, peer);
 
+	/*
+	 * THE BLOCK LEARNS WHO IS ASKING, BEFORE THE POLICY IS (rd vms-0f9).
+	 * The acceptance policy's give-up test compares the incarnation THIS
+	 * connect's circuit is advertising against the one this node gave up
+	 * on, so the block has to carry the live value at the moment of the
+	 * question rather than whatever the last once-a-second beat left there.
+	 * Read off the same circuit the connect arrived on; not told is not
+	 * told, and the policy then accepts (INV-6).
+	 */
+	if (csb != NULL && cn->cl->pe != NULL) {
+		uint64_t inc = 0u;
+
+		if (pe_peer_incarnation(cn->cl->pe, peer, &inc) != 0)
+			cnxman_csb_set_incarnation(&cn->cl->club, csb, 0u, 0);
+		else
+			cnxman_csb_set_incarnation(&cn->cl->club, csb, inc, 1);
+	}
+
 	/* THE SERVER HALF (spec SS4(y)): total connectivity requires this node
 	 * accept every member's own connect. cnxman_join_connect_req() is that
 	 * policy end to end, including recording the peer's connect-data
@@ -1281,6 +1351,7 @@ static void cnxman_credit_carrier(struct vms_cnxman *cn,
  * still owes the peer its credit back. */
 /* Defined below, beside the beat that also calls it (rd vms-1ee). */
 static void cnxman_sync_peer_swver(struct vms_cnxman *cn);
+static void cnxman_start_join_or_wait(struct vms_cnxman *cn);
 
 /* ==========================================================================
  * 8b. THE DLM's LEG (rd vms-1ee; vms_cnxman.h §5)
@@ -1656,6 +1727,18 @@ static void cnxman_vc_rejected(struct vms_cnxman *cn, struct vms_csb *csb,
 			cnxman_csb_bind_connection(csb, 0u);
 	}
 	cnxman_join_rejected(&cn->join, local_conid, reason);
+
+	/*
+	 * THE CLUSTER HAS GIVEN UP ON THIS NODE (rd vms-0f9). p. 2-25: a reject
+	 * is the peer's judgement, not a transient. A node that is already a
+	 * MEMBER does not re-incarnate over one refused connection -- p. 7-30's
+	 * reconnect apparatus owns that case and membership is held across it --
+	 * but a node that is NOT a member and is being refused has learned the
+	 * only thing a real V7.3 node needs in order to CLUEXIT: it cannot get
+	 * back in as this incarnation.
+	 */
+	if (cn->cl->state != VMS_CLUSTER_MEMBER)
+		cnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_REJECTED);
 }
 
 /*
@@ -1761,7 +1844,7 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 			rc = scs_connect(cn->cl->scs,
 					 cnxman_join_name_vaxcluster,
 					 cnxman_join_name_vaxcluster,
-					 csb->sysid, cnxman_e31_conndata,
+					 csb->sysid, cn->conndata,
 					 &new_conid);
 			if (rc == (int)SS__NORMAL) {
 				/* E77: THE reconnect case -- the dialogue the
@@ -1833,7 +1916,9 @@ static void cnxman_vc_sysap_bind(struct vms_cnxman *cn)
 	 * recorded this node as "Eco/Version 32/32" -- the ASCII space it was
 	 * sent -- while the connections we opened carried the real quad.
 	 */
-	cn->vc_sysap.accept_conndata = cnxman_e31_conndata;
+	/* rd vms-b87: the LIVE buffer, not a constant -- what this node
+	 * offers on an ACCEPT is its own cluster arithmetic at that moment. */
+	cn->vc_sysap.accept_conndata = cn->conndata;
 	cn->vc_sysap.ctx = cn;
 }
 
@@ -2053,6 +2138,41 @@ static void cnxman_sync_peer_swver(struct vms_cnxman *cn)
 		cnxman_csb_set_swver(csb, len ? sw : (const uint8_t *)0, len,
 				     cn->cl->params.sw_version,
 				     cn->cl->params.sw_version_len);
+	}
+}
+
+/*
+ * ...AND THE SAME FOR THE INCARNATION (rd vms-0f9).
+ *
+ * The quadword a system put in its own formation body (spec SS4(g) abs 80) is
+ * the one fact on the wire that tells one incarnation of a node from the next,
+ * and p. 7-24/7-25 are written in terms of it. Read off the live circuit each
+ * beat, exactly like the software version above; a circuit whose identity has
+ * not arrived records the honest "not told", never incarnation 0.
+ *
+ * The p. 7-25 edge -- a give-up record that names a DIFFERENT incarnation is
+ * about a system that no longer exists -- is taken inside the setter, the one
+ * place both numbers are in scope.
+ */
+static void cnxman_sync_peer_incarnation(struct vms_cnxman *cn)
+{
+	struct vms_club *club = &cn->cl->club;
+	uint32_t i;
+
+	if (cn->cl->pe == NULL)
+		return;
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *csb = &club->csb[i];
+		uint64_t inc = 0u;
+
+		if (!csb->in_use || !csb->sysid_valid)
+			continue;
+		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
+			continue;   /* our own incarnation is not learned */
+		if (pe_peer_incarnation(cn->cl->pe, csb->sysid, &inc) != 0)
+			cnxman_csb_set_incarnation(club, csb, 0u, 0);
+		else
+			cnxman_csb_set_incarnation(club, csb, inc, 1);
 	}
 }
 
@@ -2363,7 +2483,7 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 		 * rejects. */
 		rc = scs_connect(cn->cl->scs, cnxman_join_name_vaxcluster,
 				 cnxman_join_name_vaxcluster, csb->sysid,
-				 cnxman_e31_conndata, &new_conid);
+				 cn->conndata, &new_conid);
 		if (rc == (int)SS__NORMAL) {
 			/* E77: same rule on the once-a-second beat's reconnect
 			 * as on the close-path one above. */
@@ -2413,6 +2533,17 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		 * (the measured in-browser stall). Freeing first also makes the
 		 * recovery take effect on THIS beat rather than the next.
 		 */
+		/*
+		 * rd vms-0f9: FIRST OF ALL, if the cluster has told this node
+		 * it is out, be a new incarnation before doing anything else
+		 * with the old one's state. Everything below this line reads a
+		 * CLUB that is then one beat old at most.
+		 */
+		cnxman_check_removed(cn);
+		if (cn->cluexit_pending) {
+			cnxman_cluexit_run(cn);
+			return;
+		}
 		cnxman_reclaim_abandoned_csbs(cn);
 		/* E36: discovery FIRST, so a system that appeared since the
 		 * last beat has a CSB before the reconnect ladder and the join
@@ -2421,6 +2552,12 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 		/* ... and keep each member's advertised identity current, so
 		 * the LDWV's split-brain gate reads a fresh fact (vms-1ee). */
 		cnxman_sync_peer_swver(cn);
+		/* ...and its incarnation, which is what p. 7-24/7-25 are
+		 * written in terms of (rd vms-0f9). */
+		cnxman_sync_peer_incarnation(cn);
+		/* ...and THIS node's own connect data, whose middle seven
+		 * bytes are its cluster arithmetic (rd vms-b87). */
+		cnxman_sync_conndata(cn);
 		/*
 		 * E71: EVERY beat, not only a beat that discovered something
 		 * new. "Waiting to form or join an OpenVMS Cluster" is a
@@ -2562,6 +2699,169 @@ static uint16_t cnxman_vc_grant(const struct vms_cluster *cl)
  * cluster to join and absent quorum by this node's own votes, this function's
  * strongest output is still JOINING.
  */
+/* ==========================================================================
+ * THIS NODE'S OWN CONNECT DATA, AND CLUEXIT (rd vms-b87 / rd vms-0f9)
+ * ========================================================================== */
+
+/*
+ * Rebuild the 16 bytes from the CLUB. Returns 1 when they MOVED, so the caller
+ * can re-install the join's copy only when there is something to install.
+ *
+ * Everything asserted here is read from the CLUB a transition really committed
+ * (p. 7-42/7-49): the cluster's vote total, its quorum, and the number of CSBs
+ * with SELECTED set. `member` is this node's own cluster state, not an opinion
+ * -- VMS_CLUSTER_MEMBER is set by a membership record naming this node and by
+ * nothing else -- and a non-member's counts are zeroed inside the builder.
+ */
+static int cnxman_refresh_conndata(struct vms_cnxman *cn)
+{
+	struct vms_cm_conndata_in in;
+	uint8_t next[VMS_SCS_PROCNAME_LEN];
+	uint32_t i;
+	int moved = 0;
+
+	in.cluster_votes = cn->cl->club.cevotes;
+	in.quorum = cn->cl->club.quorum;
+	in.cluster_nodes = (uint16_t)cn->cl->club.cluster_nodes;
+	in.member = (uint8_t)(cn->cl->state == VMS_CLUSTER_MEMBER ? 1 : 0);
+	in.pad0 = 0u;
+
+	if (vms_cm_conndata_build(&in, cnxman_e31_head,
+				  (uint32_t)sizeof(cnxman_e31_head),
+				  cnxman_e31_tail,
+				  (uint32_t)sizeof(cnxman_e31_tail),
+				  next, (uint32_t)sizeof(next)) != VMS_CODEC_OK)
+		return 0;   /* the builder refused: the old bytes stand */
+
+	for (i = 0; i < (uint32_t)VMS_SCS_PROCNAME_LEN; i++) {
+		if (cn->conndata[i] != next[i])
+			moved = 1;
+		cn->conndata[i] = next[i];
+	}
+	return moved;
+}
+
+/* ...and the join's own copy of it, re-installed only on a real change. */
+static void cnxman_sync_conndata(struct vms_cnxman *cn)
+{
+	uint32_t i;
+
+	if (!cnxman_refresh_conndata(cn))
+		return;
+	for (i = 0; i < (uint32_t)VMS_SCS_PROCNAME_LEN; i++)
+		cn->cfg.conndata[i] = cn->conndata[i];
+	cn->cfg.conndata_valid = 1u;
+	cnxman_join_set_cfg(&cn->join, &cn->cfg);
+}
+
+/*
+ * ARM THE FOUR FSMs AND THE CLUB. Shared by CLUSTER_START and by CLUEXIT,
+ * which is the whole reason it is a function: a re-incarnation that rebuilt
+ * three of the four would be worse than none.
+ */
+static void cnxman_arm_fsms(struct vms_cnxman *cn)
+{
+	(void)cnxman_club_init(cn->cl);
+	cnxman_join_init(&cn->join, cn->cl, &cn->ops, &cn->jops);
+	cnxman_barrier_init(&cn->barrier, cn->cl, &cn->ops);
+	cnxman_coord_init(&cn->coord, cn->cl, &cn->ops);
+	cnxman_recnx_init(&cn->recnx, cn->cl, &cn->ops);
+	cnxman_join_set_barrier(&cn->join, &cn->barrier);
+	cnxman_join_set_diag(&cn->join, cn->diag);
+	(void)cnxman_refresh_conndata(cn);
+	cnxman_join_set_cfg(&cn->join, &cn->cfg);
+}
+
+/*
+ * ARM A CLUEXIT. Called from wherever the cluster told this node it has given
+ * up on it; the work happens on the next beat (vms_cnxman.h sec 7b says why).
+ * The FIRST reason wins -- a node re-incarnates once per episode, and the
+ * second event in the same second is the same event.
+ */
+static void cnxman_cluexit_arm(struct vms_cnxman *cn,
+			       enum cnxman_cluexit_reason why)
+{
+	if (cn->cluexit_pending)
+		return;
+	cn->cluexit_pending = 1u;
+	cn->cluexit_reason = (uint8_t)why;
+}
+
+static const char *cnxman_cluexit_why(uint8_t reason)
+{
+	if (reason == (uint8_t)CNXMAN_CLUEXIT_REJECTED)
+		return "%CNXMAN, a cluster member refused this node's "
+		       "VMS$VAXcluster connection: CLUEXIT, this node is "
+		       "re-incarnating and will ask to join again";
+	return "%CNXMAN, this node was removed from the cluster: CLUEXIT, "
+	       "this node is re-incarnating and will ask to join again";
+}
+
+/*
+ * THE OTHER WAY THE CLUSTER SAYS IT (rd vms-0f9): a committed transition whose
+ * nodemap NAMED this node and left it out. The join FSM computes that from the
+ * coordinator's own bitmap in cnxman_phase2_commit(); this reads the counter.
+ *
+ * ONLY FOR A NODE THAT WAS IN. For a node that is not a member, "the nodemap
+ * says you are not in it" is a true statement about a cluster it has not
+ * joined yet, not a removal -- and re-incarnating over it would be a node that
+ * re-incarnates once a transition. The membership test is what makes this the
+ * event p. 7-49 describes and not arithmetic.
+ */
+static void cnxman_check_removed(struct vms_cnxman *cn)
+{
+	uint32_t now = cn->join.commits_excluded_us;
+
+	if (now == cn->excluded_seen)
+		return;
+	cn->excluded_seen = now;
+	if (cn->cl->state != VMS_CLUSTER_MEMBER)
+		return;
+	cnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_REMOVED);
+}
+
+/*
+ * SPEND IT. Announce, re-incarnate, forget everything, start again.
+ *
+ * ORDER MATTERS AND IS THE BOOK'S. The last gasp goes FIRST (p. 7-29: a peer
+ * receiving one "immediately closes the virtual circuit"), so every peer tears
+ * its circuit down while this node still has one to send on -- that is what
+ * makes them re-form and read the new incarnation, and it is the only reason
+ * this is equivalent to the reboot a real node does. Re-sampling the
+ * incarnation second means no frame can carry the new number on the old
+ * circuit. The CLUB and the FSMs go last, because until then they are what the
+ * announcement is being made out of.
+ */
+static void cnxman_cluexit_run(struct vms_cnxman *cn)
+{
+	uint8_t why = cn->cluexit_reason;
+
+	cn->cluexit_pending = 0u;
+	cnxman_ops_log(cn, cnxman_cluexit_why(why));
+
+	(void)pe_send_last_gasp(cn->cl->pe);
+	if (pe_reincarnate(cn->cl->pe) != (int)SS__NORMAL) {
+		/* No port, no new incarnation, and therefore no honest
+		 * re-incarnation to claim. Say so and change nothing. */
+		cnxman_ops_log(cn, "%CNXMAN, this node cannot re-incarnate: "
+				   "the port holds no incarnation");
+		return;
+	}
+
+	cnxman_arm_fsms(cn);
+	/*
+	 * ...AND THE BEAT ITSELF. cnxman_recnx_init() zeroes the reconnect
+	 * context, `running` included, and a beat that does not re-arm its own
+	 * timer is a node that never runs again. Said here, explicitly, rather
+	 * than buried in the shared arming: CLUSTER_START does the same thing
+	 * once its context is published, and this is the OTHER caller.
+	 */
+	cnxman_recnx_start(&cn->recnx);
+	cn->cl->state = VMS_CLUSTER_JOINING;
+	cn->cluexits++;
+	cnxman_start_join_or_wait(cn);
+}
+
 static void cnxman_start_join_or_wait(struct vms_cnxman *cn)
 {
 	struct vms_cluster *cl = cn->cl;
@@ -2622,7 +2922,6 @@ static void cnxman_free(struct vms_cnxman *cn)
 int vms_cnxman_start(struct vms_cluster *cl)
 {
 	struct vms_cnxman *cn;
-	struct cnxman_join_cfg cfg;
 	int status;
 
 	if (cl == NULL)
@@ -2652,12 +2951,6 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	cnxman_vc_sysap_bind(cn);
 	cnxman_mscp_sysap_bind(cn);
 
-	cnxman_join_init(&cn->join, cl, &cn->ops, &cn->jops);
-	cnxman_barrier_init(&cn->barrier, cl, &cn->ops);
-	cnxman_coord_init(&cn->coord, cl, &cn->ops);
-	cnxman_recnx_init(&cn->recnx, cl, &cn->ops);
-	cnxman_join_set_barrier(&cn->join, &cn->barrier);
-
 	/*
 	 * E69: the transition ring, allocated ONCE here (never on a recording
 	 * path) and installed into the join. FAIL-SOFT ON PURPOSE: if the
@@ -2673,7 +2966,6 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	else
 		cnxman_ops_log(cn, "%CNXMAN, no memory for the join "
 				   "diagnostics ring: it is NOT recording");
-	cnxman_join_set_diag(&cn->join, cn->diag);
 
 	/* No DLM arm in P3 (vms_cnxman_barrier_fsm.h / _coord_fsm.h: NULL is a
 	 * real VMS configuration, a node with no distributed locking still
@@ -2689,9 +2981,8 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	 * with an operator ruling behind it (E31, above): the grounded CM
 	 * protocol quad, not a default.
 	 */
-	memset(&cfg, 0, sizeof(cfg));
-	cfg.conndata_valid = 1u;
-	memcpy(cfg.conndata, cnxman_e31_conndata, VMS_SCS_PROCNAME_LEN);
+	memset(&cn->cfg, 0, sizeof(cn->cfg));
+	cn->cfg.conndata_valid = 1u;
 	/*
 	 * E80: and the software version it advertises in its op-0x01
 	 * cluster-parameters record, body[88:96] -- READ FROM THE EXECUTIVE,
@@ -2705,9 +2996,13 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	 * rather than a plausible one (INV-6), and it NEVER echoes the peer's
 	 * ("VMS V7.3" from a real VAX is that VAX's identity).
 	 */
-	cfg.version_valid =
-		(uint8_t)cluster_sysgen_sw_version(cl, cfg.version);
-	cnxman_join_set_cfg(&cn->join, &cfg);
+	cn->cfg.version_valid =
+		(uint8_t)cluster_sysgen_sw_version(cl, cn->cfg.version);
+
+	/* THE CLUB, THE FOUR FSMs AND THIS NODE'S CONNECT DATA, armed from the
+	 * identity built above. Shared with CLUEXIT, which re-runs exactly
+	 * this (rd vms-0f9). */
+	cnxman_arm_fsms(cn);
 
 	status = (int)scs_sysap_listen(cl->scs, cnxman_join_name_vaxcluster,
 				       &cn->vc_sysap, cnxman_vc_grant(cl));
@@ -3273,4 +3568,22 @@ void vms_cnxman_proc_gone(struct vms_cluster *cl, void *proc)
 		cn->cluevt_mask = 0u;
 	}
 	vms_cluster_fork_leave(cl);
+}
+
+/* ==========================================================================
+ * CLUEXIT readback (vms_cnxman.h sec 7b)
+ * ========================================================================== */
+uint32_t vms_cnxman_cluexits(const struct vms_cluster *cl)
+{
+	if (cl == NULL || cl->cnxman == NULL)
+		return 0u;
+	return cl->cnxman->cluexits;
+}
+
+enum cnxman_cluexit_reason vms_cnxman_cluexit_reason(
+	const struct vms_cluster *cl)
+{
+	if (cl == NULL || cl->cnxman == NULL)
+		return CNXMAN_CLUEXIT_NONE;
+	return (enum cnxman_cluexit_reason)cl->cnxman->cluexit_reason;
 }

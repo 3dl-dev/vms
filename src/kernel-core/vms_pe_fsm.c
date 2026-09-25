@@ -1702,6 +1702,20 @@ struct pe_vc *pe_fsm_vc_by_sysid(struct pe_fsm *f, vms_scs_sysid_t sysid)
 	return NULL;
 }
 
+int pe_fsm_peer_incarnation(struct pe_fsm *f, vms_scs_sysid_t sysid,
+			    uint64_t *out)
+{
+	struct pe_vc *vc = pe_fsm_vc_by_sysid(f, sysid);
+
+	if (out == NULL)
+		return -1;
+	*out = 0u;
+	if (vc == NULL || !vc->peer_ident_valid)
+		return -1;   /* no formation body arrived: we were not told */
+	*out = vc->peer_incarnation_time;
+	return 0;
+}
+
 int pe_fsm_peer_swver(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
 		      uint32_t cap, uint8_t *out_len)
 {

@@ -1069,6 +1069,14 @@ static void coord_retire_subject(struct cnxman_coord *c)
 	cnxman_csb_clear_flags(s, (uint16_t)(VMS_CSB_F_SELECTED |
 					     VMS_CSB_F_MEMBER));
 	cnxman_csb_set_flags(s, (uint16_t)VMS_CSB_F_REMOVED);
+	/*
+	 * ...AND THE CLUSTER HAS GIVEN UP ON THAT INCARNATION (rd vms-0f9).
+	 * Measured on three real OpenVMS VAX V7.3 nodes: after a transition
+	 * removes a system, the surviving MEMBER answers REJECT_REQ to that
+	 * system's VMS$VAXcluster connects until it comes back as a new
+	 * incarnation. This is the record that makes that answer possible.
+	 */
+	cnxman_club_giveup_arm(&c->cl->club, s);
 }
 
 static void coord_commit_phase2(struct cnxman_coord *c)

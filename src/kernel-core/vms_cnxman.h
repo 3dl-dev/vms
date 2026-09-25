@@ -453,6 +453,50 @@ int cnxman_get_transition(struct vms_cluster *cl, struct cnxman_transition *out)
  * IDEMPOTENT. A second call while the connection manager is up is
  * SS$_NORMAL and starts nothing -- it does not re-drive a join in flight.
  */
+/* ==========================================================================
+ * 7b. CLUEXIT -- re-incarnating in place (rd vms-0f9)
+ *
+ * A real OpenVMS node the cluster has given up on does not sit there: it
+ * bugchecks CLUEXIT ("Node voluntarily exiting VAXcluster") and reboots, and
+ * comes back as a NEW INCARNATION, which is what lets every peer's p. 7-25
+ * edge fire and lets the node be admitted again. MEASURED twice on three real
+ * OpenVMS VAX V7.3 nodes in tests/lab/captures/vms-b36-cnxmgrerr-20260925/:
+ * the isolated node lost quorum, ran its own reconfiguration, took CLUEXIT and
+ * rebooted, and only then did its peers stop refusing it.
+ *
+ * WHAT OVMX DOES INSTEAD OF REBOOTING, and why it is the same thing on the
+ * wire: this executive re-incarnates IN PLACE. It announces the departure the
+ * way p. 7-29 says a leaving node does (the port's last gasp, which makes every
+ * peer close the circuit at once instead of waiting out RECNXINTERVAL),
+ * re-samples the port's incarnation quadword, throws away every scrap of
+ * cluster state it held, and starts its connection manager again. A peer
+ * cannot tell that apart from a reboot, because the only thing a peer ever saw
+ * of a reboot was the last gasp and the new incarnation. The node's own
+ * processes are not disturbed, which is the one honest difference and is
+ * recorded here rather than hidden.
+ *
+ * WHAT RAISES IT: exactly the two things the cluster does to say it has given
+ * up on this node -- a peer REJECTING this node's VMS$VAXcluster connect
+ * (p. 2-25: a reject is the peer's judgement), and a committed transition that
+ * NAMES this node and leaves it out. Neither is inferred; both are events this
+ * executive already receives.
+ * ========================================================================== */
+enum cnxman_cluexit_reason {
+	CNXMAN_CLUEXIT_NONE     = 0,
+	CNXMAN_CLUEXIT_REJECTED = 1, /* a peer refused our own connect       */
+	CNXMAN_CLUEXIT_REMOVED  = 2  /* a committed transition left us out   */
+};
+
+/*
+ * How many times this node has really re-incarnated, and why the last one
+ * happened. Readback only -- nothing decides anything from these -- but a run
+ * in which the console shows the standoff and this count is still 0 is a
+ * CLUEXIT that did not happen. 0 before CLUSTER_START.
+ */
+uint32_t vms_cnxman_cluexits(const struct vms_cluster *cl);
+enum cnxman_cluexit_reason vms_cnxman_cluexit_reason(
+	const struct vms_cluster *cl);
+
 int vms_cnxman_start(struct vms_cluster *cl);
 
 /*

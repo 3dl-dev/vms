@@ -63,6 +63,132 @@ static uint32_t csb_now(const struct cnxman_ops *ops)
 	return 0u;
 }
 
+/* ==========================================================================
+ * The give-up ledger (rd vms-0f9). Three small functions, one writer.
+ * ========================================================================== */
+
+static struct vms_club_giveup *giveup_find(struct vms_club *club,
+					   vms_scs_sysid_t sysid)
+{
+	uint32_t i;
+
+	for (i = 0; i < (uint32_t)VMS_CLUB_MAX_GIVEUP; i++) {
+		if (club->giveup[i].in_use && club->giveup[i].sysid == sysid)
+			return &club->giveup[i];
+	}
+	return (struct vms_club_giveup *)0;
+}
+
+/*
+ * RECORD IT. One record per system -- a second give-up on the same system
+ * overwrites the incarnation rather than accumulating, because the question
+ * this ledger answers is always about the CURRENT incarnation in front of us.
+ *
+ * A give-up we cannot name an incarnation for is NOT recorded: a record with
+ * no incarnation could not tell the old incarnation from the new one, and the
+ * connect would then be refused forever (INV-6: no record, no refusal).
+ */
+static void giveup_arm(struct vms_club *club, const struct vms_csb *csb)
+{
+	struct vms_club_giveup *g;
+	uint32_t i;
+
+	if (club == NULL || csb == NULL)
+		return;
+	if (!csb->sysid_valid || !csb->incarnation_valid)
+		return;
+
+	g = giveup_find(club, csb->sysid);
+	if (g == (struct vms_club_giveup *)0) {
+		for (i = 0; i < (uint32_t)VMS_CLUB_MAX_GIVEUP; i++) {
+			if (!club->giveup[i].in_use) {
+				g = &club->giveup[i];
+				break;
+			}
+		}
+	}
+	if (g == (struct vms_club_giveup *)0) {
+		club->giveup_overflow++;
+		return;
+	}
+	g->sysid = csb->sysid;
+	g->incarnation = csb->incarnation;
+	g->in_use = 1u;
+	club->giveup_armed++;
+}
+
+/* p. 7-25's edge: the system came back as somebody else. */
+static void giveup_clear(struct vms_club *club, vms_scs_sysid_t sysid)
+{
+	struct vms_club_giveup *g = giveup_find(club, sysid);
+
+	if (g == (struct vms_club_giveup *)0)
+		return;
+	g->in_use = 0u;
+	g->sysid = 0u;
+	g->incarnation = 0u;
+	club->giveup_cleared++;
+}
+
+int cnxman_club_gave_up_on(const struct vms_club *club, vms_scs_sysid_t sysid,
+			   uint64_t incarnation)
+{
+	uint32_t i;
+
+	if (club == NULL)
+		return 0;
+	for (i = 0; i < (uint32_t)VMS_CLUB_MAX_GIVEUP; i++) {
+		if (!club->giveup[i].in_use)
+			continue;
+		if (club->giveup[i].sysid != sysid)
+			continue;
+		return club->giveup[i].incarnation == incarnation ? 1 : 0;
+	}
+	return 0;
+}
+
+void cnxman_club_giveup_arm(struct vms_club *club, const struct vms_csb *csb)
+{
+	giveup_arm(club, csb);
+}
+
+uint32_t cnxman_club_giveup_count(const struct vms_club *club)
+{
+	uint32_t i, n = 0u;
+
+	if (club == NULL)
+		return 0u;
+	for (i = 0; i < (uint32_t)VMS_CLUB_MAX_GIVEUP; i++) {
+		if (club->giveup[i].in_use)
+			n++;
+	}
+	return n;
+}
+
+void cnxman_csb_set_incarnation(struct vms_club *club, struct vms_csb *csb,
+				uint64_t incarnation, int valid)
+{
+	if (csb == NULL)
+		return;
+	if (!valid) {
+		csb->incarnation = 0u;
+		csb->incarnation_valid = 0u;
+		return;
+	}
+	/*
+	 * p. 7-25, DECIDED WHERE BOTH NUMBERS ARE IN SCOPE. A give-up record
+	 * that names a DIFFERENT incarnation of this system is about a system
+	 * that no longer exists; the one in front of us is new and is dealt
+	 * with from scratch.
+	 */
+	if (club != NULL && csb->sysid_valid &&
+	    !cnxman_club_gave_up_on(club, csb->sysid, incarnation))
+		giveup_clear(club, csb->sysid);
+
+	csb->incarnation = incarnation;
+	csb->incarnation_valid = 1u;
+}
+
 /*
  * THE SUBJECT OF A RECONFIGURATION IS A MEMBER (rd vms-b36).
  *
@@ -139,8 +265,16 @@ static enum cnxman_csb_action csb_propose_or_defer(struct vms_club *club,
  * connection cleared it here, CLUSTER_NODES would drop before the cluster had
  * agreed that anything left.
  */
-static void csb_give_up(struct vms_csb *csb)
+static void csb_give_up(struct vms_club *club, struct vms_csb *csb)
 {
+	/*
+	 * ...AND THE LEDGER REMEMBERS WHICH INCARNATION (rd vms-0f9). This is
+	 * the moment this node stops dealing with the system in front of it,
+	 * and p. 7-24's DEAD state says the executive is expected to know which
+	 * incarnation that was. giveup_arm() records nothing it cannot name.
+	 */
+	giveup_arm(club, csb);
+
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_DISCONNECT;
 	csb->flags &= (uint16_t)~VMS_CSB_F_MEMBER;
 	csb->next_attempt_ms = 0u;
@@ -234,7 +368,10 @@ static enum cnxman_csb_action h_disconnect(struct vms_club *club,
 					   const struct cnxman_ops *ops)
 {
 	(void)club; (void)ops;
-	csb_give_up(csb);
+	/* NOT a give-up on the peer's incarnation (rd vms-0f9): this is our own
+	 * orderly close and the caller knows why. Passing NULL leaves the
+	 * ledger alone rather than refusing that system's next connect. */
+	csb_give_up((struct vms_club *)0, csb);
 	return CNXMAN_CSB_ACT_NONE;
 }
 
@@ -281,7 +418,7 @@ static enum cnxman_csb_action h_last_gasp(struct vms_club *club,
 					  struct vms_csb *csb,
 					  const struct cnxman_ops *ops)
 {
-	csb_give_up(csb);
+	csb_give_up(club, csb);
 	csb_log(ops, "%CNXMAN, received last gasp from a cluster member");
 	/* A departure announcement from a system the cluster never admitted is
 	 * still an announcement -- the connection goes -- but there is no
@@ -409,7 +546,7 @@ static enum cnxman_csb_action h_recnx_expired(struct vms_club *club,
 	 * cluster never admitted is not the subject of one (rd vms-b36).
 	 */
 	if (csb_nothing_to_remove(csb, ops)) {
-		csb_give_up(csb);
+		csb_give_up(club, csb);
 		return CNXMAN_CSB_ACT_NONE;
 	}
 
@@ -421,7 +558,7 @@ static enum cnxman_csb_action h_recnx_expired(struct vms_club *club,
 	if (act == CNXMAN_CSB_ACT_NONE)
 		return act;
 
-	csb_give_up(csb);
+	csb_give_up(club, csb);
 	csb_log(ops, "%CNXMAN, reconnect interval expired, proposing removal");
 	return act;
 }

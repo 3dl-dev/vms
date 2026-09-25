@@ -1,0 +1,6 @@
+MARKER seen at 12:34:20.381: %CNXMAN, (the cluster opened the VMS[$]VAXcluster connection to this node|a cluster member opened a VMS[$]VAXcluster connection to this node|the executive already holds this pair.s VMS[$]VAXcluster connection|adopting the VMS[$]VAXcluster connection)
+BLACKOUT on  tapBdfe at 12:34:20.385
++---------------------------------------------------------------+
+$ [   25.852797] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[   27.408069] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+BLACKOUT off tapBdfe at 12:35:05.393 after 45s

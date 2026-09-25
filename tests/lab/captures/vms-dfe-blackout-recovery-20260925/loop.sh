@@ -11,7 +11,7 @@ for i in $(seq 1 "$N"); do
     if ! grep -q "OVMXB booting" "$R/arm-$TAG-$i.out" 2>/dev/null; then :; fi
     # wait up to 240 s from B's boot for the membership verdict, then hold for
     # three SHOW CLUSTER polls so the final table is a fresh read.
-    for _ in $(seq 1 120); do
+    for _ in $(seq 1 ${JOIN_WAIT_BEATS:-120}); do
         grep -qa 'this node is now a VAXcluster member' "$R/OVMXB.console.log" 2>/dev/null && break
         sleep 2
     done

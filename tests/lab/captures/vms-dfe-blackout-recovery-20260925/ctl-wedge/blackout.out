@@ -1,6 +1,0 @@
-MARKER seen at 10:53:38.706: %CNXMAN, a connection manager was discovered on the interconnect
-BLACKOUT on  tapBdfe at 10:53:39.312
-Password: [   17.648349] %PEA0, virtual circuit open
-[   18.494001] %CNXMAN, a connection manager was discovered on the interconnect
-[   18.501567] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
-BLACKOUT off tapBdfe at 10:54:24.321 after 45s

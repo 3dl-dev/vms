@@ -11,8 +11,8 @@ ART="$1"; TAG="$2"
 R=/lab/run-dfe
 BLACKOUT_S="${BLACKOUT_S:-45}"
 JIT="${JIT:-80ms 40ms}"
-MARK='%CNXMAN, a connection manager was discovered on the interconnect'
-DELAY="${TRIG_DELAY:-0.6}"
+MARK='%CNXMAN, (the cluster opened the VMS[$]VAXcluster connection to this node|a cluster member opened a VMS[$]VAXcluster connection to this node|the executive already holds this pair.s VMS[$]VAXcluster connection|adopting the VMS[$]VAXcluster connection)'
+DELAY="${TRIG_DELAY:-0}"
 
 # Kill the previous arm's emulators BY PID. (pkill -f would also match this
 # script's own command line, and SIMH ignores a plain SIGTERM in its console
@@ -48,7 +48,11 @@ echo "[$TAG] OVMXA MEMBER at $(date -u +%H:%M:%S)"
 
 tc qdisc replace dev tapBdfe root netem delay $JIT distribution normal
 : > "$R/OVMXB.console.log"
-setsid nohup bash "$R/blackout.sh" tapBdfe "$R/OVMXB.console.log" "$MARK" "$DELAY" "$BLACKOUT_S" \
-    > "$R/blackout.out" 2>&1 < /dev/null &
+if [ "${NOFAULT:-0}" = "1" ]; then
+    echo "NOFAULT: no blackout armed (jitter only)" > "$R/blackout.out"
+else
+    setsid nohup bash "$R/blackout.sh" tapBdfe "$R/OVMXB.console.log" "$MARK" "$DELAY" "$BLACKOUT_S" \
+        > "$R/blackout.out" 2>&1 < /dev/null &
+fi
 ART_ROOT="$ART" DUR=400 bash dfestart.sh B
 echo "[$TAG] OVMXB booting with blackout armed (${BLACKOUT_S}s) at $(date -u +%H:%M:%S)"

@@ -1,5 +1,6 @@
-MARKER seen at 11:17:43.008: %CNXMAN, a connection manager was discovered on the interconnect
-BLACKOUT on  tapBdfe at 11:17:43.614
- Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
-
-Username: BLACKOUT off tapBdfe at 11:18:28.622 after 45s
+MARKER seen at 13:43:52.829: %CNXMAN, (the cluster opened the VMS[$]VAXcluster connection to this node|a cluster member opened a VMS[$]VAXcluster connection to this node|the executive already holds this pair.s VMS[$]VAXcluster connection|adopting the VMS[$]VAXcluster connection)
+BLACKOUT on  tapBdfe at 13:43:52.832
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-0"
+DFE-POLL-OVMXB-0
+$ [   26.813624] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+BLACKOUT off tapBdfe at 13:44:37.838 after 45s

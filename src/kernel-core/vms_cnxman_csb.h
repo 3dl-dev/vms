@@ -212,6 +212,12 @@ void cnxman_club_free_csb(struct vms_club *club, struct vms_csb *csb);
  * NAMED, not how many slots were freed: a block that never learned a sysid is
  * freed silently because there is nothing honest to put in the array. The slot
  * count is club->csb_reclaimed, which this advances for every release.
+ *
+ * A NAMED SYSTEM IS NEVER RELEASED WITHOUT BEING NAMED: when the array is full
+ * (or absent) the sweep STOPS there rather than freeing a block the caller will
+ * not hear about. So `max` may be a small batch that fits a VAX kernel stack,
+ * and a caller with more to reclaim than one batch simply calls again until it
+ * returns less than `max`.
  */
 uint32_t cnxman_club_reclaim_abandoned(struct vms_club *club,
 				       vms_scs_sysid_t *released, uint32_t max);

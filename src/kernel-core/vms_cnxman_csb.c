@@ -675,12 +675,23 @@ uint32_t cnxman_club_reclaim_abandoned(struct vms_club *club,
 
 		if (!csb_reclaimable(club, csb, i))
 			continue;
-		/* WHO was released, so the caller can tell whatever was still
+		/*
+		 * WHO was released, so the caller can tell whatever was still
 		 * driving through that system. Only a sysid the block really
 		 * LEARNED is reported (INV-6); a block that never carried one
 		 * is freed silently because there is nothing to name, and the
-		 * slot still counts in club->csb_reclaimed. */
-		if (csb->sysid_valid && released != NULL && n < max) {
+		 * slot still counts in club->csb_reclaimed.
+		 *
+		 * A FULL ARRAY STOPS THE SWEEP rather than freeing blocks it
+		 * cannot name: releasing a system and not telling the caller is
+		 * exactly the half-run-attempt-on-a-rebuilt-block hazard this
+		 * out-parameter exists to prevent. The caller drains the rest by
+		 * calling again, which is why the batch may be small enough to
+		 * live on a VAX kernel stack.
+		 */
+		if (csb->sysid_valid) {
+			if (released == NULL || n >= max)
+				break;
 			released[n] = csb->sysid;
 			n++;
 		}

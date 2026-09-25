@@ -476,7 +476,7 @@ static void test_club_reclaims_only_what_was_given_up(void)
 {
 	struct vms_csb *local, *gone, *dead, *selected, *open, *busy;
 	vms_scs_sysid_t released[VMS_CLUB_MAX_CSB];
-	uint32_t n;
+	uint32_t n, i;
 
 	printf("[club] p. 7-25: a given-up CSB is DEALLOCATED (vms-dfe)\n");
 	cluster_reset(20);
@@ -548,6 +548,35 @@ static void test_club_reclaims_only_what_was_given_up(void)
 			0u, "a second sweep releases nothing");
 	ct_check_eq_u32(cnxman_club_reclaim_abandoned(NULL, released, 1u), 0u,
 			"and a NULL CLUB releases nothing");
+
+	/*
+	 * A NAMED SYSTEM IS NEVER RELEASED WITHOUT BEING NAMED. The caller's
+	 * array may be a small batch (it lives on a VAX kernel stack), so the
+	 * sweep must STOP when it is full rather than free a block the caller
+	 * will never hear about -- and the caller drains the rest by calling
+	 * again.
+	 */
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	for (i = 0; i < 3u; i++) {
+		struct vms_csb *c = cnxman_club_alloc_csb(&g_cl.club,
+							  0x000004000210ull + i, 1);
+		c->state = (uint8_t)VMS_CNXMAN_CSB_DISCONNECT;
+	}
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 1u),
+			1u, "a one-entry batch names one system ...");
+	ct_check_eq_u32(g_cl.club.csb_reclaimed, 1u,
+			"... and frees exactly that one, not the other two");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 1u),
+			1u, "the caller drains the next by calling again");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 1u),
+			1u, "... and the last");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 1u),
+			0u, "then there is nothing left");
+	ct_check_eq_u32(g_cl.club.csb_reclaimed, 3u, "three in all");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, NULL, 4u), 0u,
+			"a caller that offers nowhere to put the names releases "
+			"nothing");
 }
 
 /*

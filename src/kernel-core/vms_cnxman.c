@@ -1953,15 +1953,22 @@ static void cnxman_mscp_sysap_bind(struct vms_cnxman *cn)
  * of its lookups. The CLUB names the systems (INV-6: only the ones whose block
  * really carried an SCSSYSTEMID); this reports them.
  */
+/* One batch. Small ON PURPOSE: this runs on the fork context's kernel stack,
+ * and a VAX one is measured in pages, not in kilobytes -- 8 quadwords is 64
+ * bytes and the loop below drains any number of blocks through it. */
+#define CNXMAN_RECLAIM_BATCH 8u
+
 static void cnxman_reclaim_abandoned_csbs(struct vms_cnxman *cn)
 {
-	vms_scs_sysid_t released[VMS_CLUB_MAX_CSB];
+	vms_scs_sysid_t released[CNXMAN_RECLAIM_BATCH];
 	uint32_t n, i;
 
-	n = cnxman_club_reclaim_abandoned(&cn->cl->club, released,
-					  (uint32_t)VMS_CLUB_MAX_CSB);
-	for (i = 0; i < n; i++)
-		cnxman_join_target_released(&cn->join, released[i]);
+	do {
+		n = cnxman_club_reclaim_abandoned(&cn->cl->club, released,
+						  CNXMAN_RECLAIM_BATCH);
+		for (i = 0; i < n; i++)
+			cnxman_join_target_released(&cn->join, released[i]);
+	} while (n == CNXMAN_RECLAIM_BATCH);
 }
 
 /* One sweep pass. Returns the number of CSBs newly allocated (0 on a beat

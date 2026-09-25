@@ -1,0 +1,107 @@
+{
+  "pass": true,
+  "boot_order": "C,B,A",
+  "announced": {
+    "OVMXA": true,
+    "OVMXB": true
+  },
+  "vaxc_oracle": {
+    "OVMXA": true,
+    "OVMXB": true,
+    "sda_rows": 0
+  },
+  "members": {
+    "OVMXA": [
+      "OVMXA=00010003",
+      "1988=00010002",
+      "1989=00010001"
+    ],
+    "OVMXB": [
+      "OVMXB=00010002",
+      "1989=00010001",
+      "1987=00010003"
+    ]
+  },
+  "samples": [
+    {
+      "t": 1353,
+      "members": {
+        "OVMXA": [
+          "OVMXA=00010003",
+          "1988=00010002",
+          "1989=00010001"
+        ],
+        "OVMXB": [
+          "OVMXB=00010002",
+          "1989=00010001",
+          "1987=00010003"
+        ]
+      },
+      "tx": {
+        "OVMXA": 4937,
+        "OVMXB": 9510,
+        "VAXC": 7624
+      },
+      "allSee": true,
+      "vaxAlive": true
+    },
+    {
+      "t": 1736,
+      "members": {
+        "OVMXA": [
+          "OVMXA=00010003",
+          "1988=00010002",
+          "1989=00010001"
+        ],
+        "OVMXB": [
+          "OVMXB=00010002",
+          "1989=00010001",
+          "1987=00010003"
+        ]
+      },
+      "tx": {
+        "OVMXA": 7286,
+        "OVMXB": 13172,
+        "VAXC": 10201
+      },
+      "allSee": true,
+      "vaxAlive": true
+    },
+    {
+      "t": 2120,
+      "members": {
+        "OVMXA": [
+          "OVMXA=00010003",
+          "1988=00010002",
+          "1989=00010001"
+        ],
+        "OVMXB": [
+          "OVMXB=00010002",
+          "1989=00010001",
+          "1987=00010003"
+        ]
+      },
+      "tx": {
+        "OVMXA": 9616,
+        "OVMXB": 16820,
+        "VAXC": 12769
+      },
+      "allSee": true,
+      "vaxAlive": true
+    }
+  ],
+  "bugchecks": {},
+  "losses": {},
+  "vaxc_tx": {
+    "1353": 7624,
+    "1736": 10201,
+    "2120": 12769
+  },
+  "hold_s": 767,
+  "elapsed_s": 2458,
+  "logged_in": {
+    "OVMXB": true,
+    "OVMXA": true,
+    "VAXC": false
+  }
+}

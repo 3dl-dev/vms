@@ -105,6 +105,13 @@
 static EXEC_LIST_HEAD(vms_device_list);
 static exec_lock_t vms_device_list_lock;
 
+/* Deferred deletion of a WITHDRAWN dynamic unit (rd vms-1875); defined with
+ * device_release_channel() below, used by the remove_* withdrawal entry
+ * points above it. */
+static int device_unlink_if_withdrawn_locked(struct vms_device *dev,
+                                             exec_list_head_t *reap);
+static void device_reap(exec_list_head_t *reap);
+
 /*
  * Console terminal defaults.
  *
@@ -532,6 +539,8 @@ int vms_devtab_remove_served_disk(const char *devnam)
 {
     struct vms_device *dev;
     int served;
+    int deleted = 0;
+    EXEC_LIST_HEAD(reap);
 
     if (!devnam || devnam[0] == '\0')
         return -EINVAL;
@@ -543,16 +552,24 @@ int vms_devtab_remove_served_disk(const char *devnam)
         return -ENODEV;
     }
     served = (dev->mscp_served != 0);
-    if (served)
-        exec_list_del(&dev->list);
+    if (served) {
+        /* Same last-reference rule as vms_devtab_remove_terminal (rd
+         * vms-1875): a channel still assigned to the served unit keeps the
+         * row alive until its release drops the last reference. */
+        exec_lock(&dev->lock);
+        dev->withdrawn = 1;
+        deleted = device_unlink_if_withdrawn_locked(dev, &reap);
+        exec_unlock(&dev->lock);
+    }
     exec_unlock(&vms_device_list_lock);
 
     if (!served)
         return -ENODEV;   /* not ours: another driver entered this unit */
 
-    exec_free(dev);
-    pr_info("vms: served disk unit %s withdrawn (path to the server lost)\n",
-            devnam);
+    if (deleted)
+        device_reap(&reap);
+    pr_info("vms: served disk unit %s withdrawn (path to the server lost)%s\n",
+            devnam, deleted ? "" : "; deleted when its last channel is released");
     return 0;
 }
 
@@ -962,6 +979,8 @@ int vms_devtab_remove_terminal(const char *devnam)
 {
     struct vms_device *dev;
     int dynamic_term;
+    int deleted = 0;
+    EXEC_LIST_HEAD(reap);
 
     if (!devnam || devnam[0] == '\0')
         return -EINVAL;
@@ -973,15 +992,28 @@ int vms_devtab_remove_terminal(const char *devnam)
         return -ENODEV;
     }
     dynamic_term = (dev->dynamic_term != 0);
-    if (dynamic_term)
-        exec_list_del(&dev->list);
+    if (dynamic_term) {
+        /* WITHDRAW, and delete now only if nothing still holds the unit
+         * (rd vms-1875): a channel still assigned -- the session process
+         * bound to this RTAn: has not exited yet -- keeps the row alive until
+         * its release drops the last reference (device_release_channel). */
+        exec_lock(&dev->lock);
+        dev->withdrawn = 1;
+        deleted = device_unlink_if_withdrawn_locked(dev, &reap);
+        exec_unlock(&dev->lock);
+    }
     exec_unlock(&vms_device_list_lock);
 
     if (!dynamic_term)
         return -ENODEV;   /* not ours: the console, or another driver's row */
 
-    exec_free(dev);
-    pr_info("vms: terminal unit %s withdrawn (session ended)\n", devnam);
+    if (deleted) {
+        device_reap(&reap);
+        pr_info("vms: terminal unit %s withdrawn (session ended)\n", devnam);
+    } else {
+        pr_info("vms: terminal unit %s withdrawn; deleted when its last channel is released\n",
+                devnam);
+    }
     return 0;
 }
 
@@ -1405,20 +1437,75 @@ static void device_dealloc_locked(struct vms_device *dev)
 }
 
 /*
+ * Caller holds vms_device_list_lock AND dev->lock (list lock outermost, the
+ * order every table walker already takes them in). If `dev` has been
+ * WITHDRAWN by the facility that minted it (vms_devtab_remove_terminal /
+ * _remove_served_disk) and its last reference has just gone, unlink it from
+ * the table onto `reap` and return 1: the caller frees it with
+ * device_reap() AFTER dropping both locks. Otherwise leave it and return 0.
+ *
+ * WHY DELETION WAITS FOR THE LAST REFERENCE (rd vms-1875). A channel is a
+ * bare `ch->dev` pointer; it has no way to learn that the row behind it was
+ * freed. Freeing a withdrawn unit while a channel still names it turned the
+ * holder's later $DASSGN / image rundown / process exit into writes to freed
+ * memory (device_release_channel's lock, list unlink, refcnt and owner
+ * fields) -- measured under KASAN on the booted x86_64 runtime: a DECnet
+ * CTERM session's daemon withdrew RTAn: before the LOGINOUT process bound to
+ * it had exited, and that process's exit wrote into the freed row. Without
+ * KASAN the stray writes landed in whatever reused the slab object and
+ * surfaced later as unrelated kernel faults (free_pgtables / copy_mm NULL
+ * dereferences) that killed the next console session. The same
+ * last-reference rule vms_mbx.c's mbx_put() applies to a $DELMBX'd mailbox:
+ * withdrawal marks the unit, the last release deletes it.
+ */
+static int device_unlink_if_withdrawn_locked(struct vms_device *dev,
+                                             exec_list_head_t *reap)
+{
+    if (!dev->withdrawn || dev->refcnt != 0)
+        return 0;
+    exec_list_move(&dev->list, reap);
+    return 1;
+}
+
+/* Free every unit device_unlink_if_withdrawn_locked() moved onto `reap`.
+ * Called with NO device-table lock held. */
+static void device_reap(exec_list_head_t *reap)
+{
+    struct vms_device *dev, *tmp;
+
+    exec_list_for_each_entry_safe(dev, tmp, reap, list) {
+        exec_list_del(&dev->list);
+        pr_info("vms: unit %s deleted (last reference released after withdrawal)\n",
+                dev->devnam);
+        exec_free(dev);
+    }
+}
+
+/*
  * Give a channel back: unlink it from the device, drop the reference it
- * held, and end any ownership that channel was carrying.
+ * held, and end any ownership that channel was carrying. If that was the
+ * last reference to a WITHDRAWN unit, the unit is deleted now (see
+ * device_unlink_if_withdrawn_locked). The device-list lock is taken first
+ * so the refcnt-reaches-zero decision and the unlink are one step against
+ * vms_ioctl_assign(), which bumps refcnt under the same list lock.
  */
 static void device_release_channel(struct vms_channel *ch)
 {
     struct vms_device *dev = ch->dev;
     pid_t pid = ch->owner_linux_pid;
+    EXEC_LIST_HEAD(reap);
 
+    exec_lock(&vms_device_list_lock);
     exec_lock(&dev->lock);
     exec_list_del(&ch->devlink);
     if (dev->refcnt > 0)
         dev->refcnt--;
     device_release_implicit_owner_locked(dev, pid);
+    device_unlink_if_withdrawn_locked(dev, &reap);
     exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    device_reap(&reap);
 }
 
 /*
@@ -1433,8 +1520,9 @@ static void device_release_channel(struct vms_channel *ch)
 void vms_proc_release_channels(struct vms_proc *proc)
 {
     struct vms_channel *ch, *tmp;
-    struct vms_device *dev;
+    struct vms_device *dev, *dtmp;
     EXEC_LIST_HEAD(doomed);
+    EXEC_LIST_HEAD(reap);
 
     exec_lock(&proc->chan_lock);
     exec_list_for_each_entry_safe(ch, tmp, &proc->channels, list)
@@ -1448,13 +1536,18 @@ void vms_proc_release_channels(struct vms_proc *proc)
     }
 
     exec_lock(&vms_device_list_lock);
-    exec_list_for_each_entry(dev, &vms_device_list, list) {
+    exec_list_for_each_entry_safe(dev, dtmp, &vms_device_list, list) {
         exec_lock(&dev->lock);
-        if (dev->allocated && dev->owner_linux_pid == proc->linux_pid)
+        if (dev->allocated && dev->owner_linux_pid == proc->linux_pid) {
             device_dealloc_locked(dev);
+            /* The allocation may have been a withdrawn unit's last
+             * reference (rd vms-1875). */
+            device_unlink_if_withdrawn_locked(dev, &reap);
+        }
         exec_unlock(&dev->lock);
     }
     exec_unlock(&vms_device_list_lock);
+    device_reap(&reap);
 
     /*
      * Mailbox channels (vms-d44) are a separate list (see vms_mbx.h) --
@@ -1781,6 +1874,7 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_alloc_args args;
     struct vms_device *dev;
+    EXEC_LIST_HEAD(reap);
     char devnam[VMS_DEVNAM_SIZE];
     uint32_t status;
 
@@ -1806,12 +1900,14 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
     exec_lock(&dev->lock);
     if (dev->allocated && dev->owner_linux_pid == proc->linux_pid) {
         device_dealloc_locked(dev);
+        device_unlink_if_withdrawn_locked(dev, &reap);   /* rd vms-1875 */
         args.status = SS__NORMAL;
     } else {
         args.status = SS__DEVNOTALLOC;
     }
     exec_unlock(&dev->lock);
     exec_unlock(&vms_device_list_lock);
+    device_reap(&reap);
 
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))

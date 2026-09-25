@@ -1075,8 +1075,23 @@ static void join_declare_dir_data(struct cnxman_join *j)
 {
 	if (!j->cfg.dir_descriptor_valid) {
 		j->dir_descriptor_omitted++;
-		join_log(j, "%CNXMAN, VMS$VAXcluster directory descriptor is "
-			    "not grounded: answering with the registered name");
+		/*
+		 * SAID ONCE (rd vms-dfe). This is a statement about THIS NODE'S
+		 * OWN configuration -- there is no grounded descriptor to
+		 * answer a hit with -- and it is the same on every attempt this
+		 * node will ever make, so repeating it per attempt says nothing
+		 * new. It used to be per-attempt, which was invisible while a
+		 * node could only make one attempt; with the p. 7-25 reclaim a
+		 * node beside an unreachable cluster starts one a second, and
+		 * the measured console (runs/FIX-2) is 16 consecutive seconds
+		 * of this line and nothing else -- an operator cannot see the
+		 * reconnect and expiry lines underneath it. The COUNTER still
+		 * rises every time, so the diagnostic is unchanged.
+		 */
+		if (j->dir_descriptor_omitted == 1u)
+			join_log(j, "%CNXMAN, VMS$VAXcluster directory "
+				    "descriptor is not grounded: answering "
+				    "with the registered name");
 		return;
 	}
 	if (j->jops != NULL && j->jops->set_dir_data != NULL)

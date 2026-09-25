@@ -128,16 +128,33 @@ in `runarm.sh`: **where the fault lands.**
   joiner's tap out at that instant for 45 s. Same fault, landed where the
   archived exhibit landed it.
 
-Result, `main` (`7d053b50`), `loop-M1.log`:
+### The A/B, twelve arms
 
-| arm | joiner MEMBER | VAX proposed OVMXB | final MEMBER rows (B/A) | **VAX bugchecks** |
-|---|---|---|---|---|
-| M1-1 | yes | yes | 2/2 | **1** |
-| M1-2 | no | yes | 0/2 | **1** |
-| M1-3 | yes | yes | 3/3 | 0 |
+Both arms are boot artifacts from the **same** workflow
+(`build-boot-artifacts.yml`, `cluster_auth_group=257`), one patch apart,
+`sha256sum -c`'d in the pod before use. Nothing else differs: same pinned VAXC
+volume restored before every arm, same bridge, same trigger, same 45 s.
 
-The window is entered **every** run, and the peer bugchecks in most of them —
-against 1 run in 5 on the rd vms-dfe trigger. That is the rig this item needed.
+| arm | commit | what is in it | arms | fault injected | CN=3 | **VAX bugchecks** |
+|---|---|---|---|---|---|---|
+| `M1` | `7d053b50` (main) | — | 6 | 6 | 4 | **2** |
+| `F1` | `9d94dde5` | the never-admitted-removal gate | 6 | 5¹ | 3 | **2** |
+
+¹ `F1-4`'s marker never appeared (the VAX never opened a transition for OVMXB
+in that arm), so no fault was injected in it and it is not an arm of the
+experiment. It is reported rather than dropped.
+
+**The gate this branch lands does not change the bugcheck rate on this rig, and
+this table says so.** The vector this rig exposes is §4's accept, not the
+removal: in every crashing arm of either colour `proposing removal of a system
+from the cluster` never appears at all — the VAX dies before the joiner's
+reconnect window ever expires. What the gate closes is the vector the ARCHIVED
+`vms-dfe-blackout-recovery-20260925/vax-bugcheck-on-main/` run shows, where the
+window did expire and the removal was proposed 0.6 s before the VAX went.
+
+The window is entered **every** run now — against 1 run in 5 on the rd vms-dfe
+trigger. That is the rig this item needed, and it is what makes §4 readable at
+all.
 
 ## 4. The crash frame
 
@@ -156,6 +173,14 @@ rd vms-4c9 connect/disconnect loop, and then:
 **OVMX ACCEPTS the connect. 0.3 ms after the connection completes, the real VAX
 puts its last-gasp datagram on the cluster multicast and bugchecks CNXMGRERR.**
 In the same position a real V7.3 node sends `REJECT_REQ` (§2(c)).
+
+`analysis/crash-window-F1-2.txt` and `crash-window-F1-3.txt` are the SAME four
+frames on the **fixed** arm, which is what makes the shape a signature rather
+than one run's accident:
+
+```
+CONNECT_REQ (VAXC) -> CONNECT_RSP + ACCEPT_REQ (OVMXB) -> ACCEPT_RSP (VAXC) -> 0xb1
+```
 
 `M1-1` is the same family one step earlier: OVMXB accepts a **second**
 `VMS$VAXcluster` connection (`loc=e09a0053`) from the VAX while the first

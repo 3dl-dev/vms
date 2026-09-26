@@ -903,6 +903,25 @@ struct cnxman_join {
 	uint32_t peer_acks;          /* cat-0x04 acks the member sent us      */
 	uint32_t inbound_accepted;   /* members' connects (total connectivity)*/
 	uint32_t inbound_refused;    /* ... refused, with a reason            */
+	/*
+	 * ...of which THIS many were refused because the connect came from an
+	 * incarnation this node had given up on (rd vms-0f9). Separate from
+	 * `inbound_refused` above because the two are different diagnoses: one
+	 * is "a system we hold no block for", the other is "a system we hold a
+	 * give-up record for", and only the second is the answer a real V7.3
+	 * node gives in the same position. A run whose console shows a
+	 * give-up and whose counter is still 0 is a gate that did not fire.
+	 */
+	uint32_t inbound_refused_giveup;
+	/*
+	 * Committed transitions that NAMED this node and left it OUT of the
+	 * nodemap (rd vms-0f9). A subset of `commits_not_ours`, split off
+	 * because the two mean different things to a node that is already a
+	 * member: "it said nothing about me" is silence, and "it said I am not
+	 * in it" is the cluster removing this node -- which is one of the two
+	 * events that make a real V7.3 node CLUEXIT.
+	 */
+	uint32_t commits_excluded_us;
 	uint32_t cm_adopted;         /* the member won the connect race and
 				      * THIS is the one connection to it (E67)*/
 	uint32_t cm_already_held;    /* an accepted VMS$VAXcluster connection

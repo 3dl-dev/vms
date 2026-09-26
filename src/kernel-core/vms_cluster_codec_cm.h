@@ -1263,6 +1263,72 @@ enum vms_cm_recipe {
 	VMS_CM_RECIPE_STEP_ACK
 };
 
+/* ------------------------------------------------------------------ *
+ * sec 7  THE 16-BYTE SCA CONNECT DATA of the VMS$VAXcluster connect
+ *        (SCA content [94:110]; spec sec 4(N)) -- rd vms-b87
+ * ------------------------------------------------------------------ *
+ *
+ * WHAT IS GROUNDED, AND HOW IT WAS MEASURED. On three REAL OpenVMS VAX V7.3
+ * nodes and one more on a second bridge (capture
+ * tests/lab/captures/vms-b36-cnxmgrerr-20260925/analysis/connect-data.txt),
+ * four independent cluster configurations were read off the wire and, for each
+ * node, the SAME quantities were read out of VMS's own mouth with F$GETSYI:
+ *
+ *   node / configuration        VOTES EXP QUORUM NODES   content[98:105]
+ *   VAX1, 2-node lab              1    1     1     2     01 00 01 00 02 00 01
+ *   VAX2, same cluster, VOTES 0   0    1     1     2     01 00 01 00 02 00 01
+ *   VAXC alone                    1    1     1     1     01 00 01 00 01 00 01
+ *   VAXC + one member             1    2     2     2     02 00 02 00 02 00 01
+ *   any node BEING ADMITTED       -    -     -     -     00 00 00 00 00 00 00
+ *
+ * VAX2 is the discriminator: it holds ZERO votes of its own and still reports
+ * 1 in the first field, so the field is the CLUSTER's vote total and not the
+ * sender's. With that, three fields resolve with no residual across all four
+ * configurations:
+ *
+ *   body[0:2]  LE16  the cluster's total votes   (CLUB cevotes)
+ *   body[2:4]  LE16  the cluster quorum          (CLUB quorum)
+ *   body[4:6]  LE16  the number of members       (CLUB cluster_nodes)
+ *   body[6]          1 for a member, 0 for a node being admitted
+ *
+ * ...and a node that is not a member reports all four as ZERO, which is not an
+ * omission: it is what every real joiner in the library puts there.
+ *
+ * WHAT IS NOT GROUNDED, AND IS THEREFORE NOT COMPOSED HERE. content[94:98]
+ * (`01 1b 01 03`) and content[105:110] (`08 00 00 06 00`) are the version/
+ * protocol quad and tail of integration note E31. They are NOT constants --
+ * the bench VAX moved content[96] 01->02, content[105] 08->09 and content[106]
+ * 00->02 inside one run, which corrects spec sec 4(N)'s "GROUNDED constant"
+ * reading and is filed as rd vms-b87 -- but nothing in the library says what
+ * moves them. So this builder takes both spans from the CALLER, which passes
+ * the bytes this node already sends, and derives ONLY the seven bytes above.
+ * No byte of this frame changes meaning without a measurement behind it.
+ */
+/* The field is SIXTEEN bytes because spec sec 4(N) measured it at sixteen
+ * (content [94:110]); it is not the SYSAP-name length that happens to match. */
+#define VMS_CM_CONNDATA_LEN 16u
+
+struct vms_cm_conndata_in {
+	uint16_t cluster_votes;   /* CLUB cevotes -- the CLUSTER's, not ours */
+	uint16_t quorum;          /* CLUB quorum                             */
+	uint16_t cluster_nodes;   /* CLUB cluster_nodes (p. 7-49 SELECTED)   */
+	uint8_t  member;          /* 1 iff a committed member of a cluster   */
+	uint8_t  pad0;
+};
+
+/*
+ * Build the 16 bytes. `head` is content[94:98] and `tail` is content[105:110],
+ * supplied by the caller; `out` must have room for VMS_CM_CONNDATA_LEN.
+ *
+ * A NON-MEMBER's three counts are written as ZERO whatever the caller passed,
+ * because that is the measured joiner form and because a node that is not in a
+ * cluster has no cluster arithmetic to report (INV-6).
+ */
+vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
+					 const uint8_t *head, uint32_t head_len,
+					 const uint8_t *tail, uint32_t tail_len,
+					 uint8_t *out, uint32_t cap);
+
 /* The grounded rows, exposed as a table the caller (a later FSM item, or
  * a test) looks up through vms_wire_allow_find() -- never a bespoke
  * per-layer switch. */

@@ -309,6 +309,29 @@ enum vms_cluster_state {
 #define VMS_CLUB_MAX_CSB 96
 
 /*
+ * How many "systems this node has given up on" records the CLUB carries
+ * (rd vms-0f9). Not VMS_CLUB_MAX_CSB: the set is not "every system in the
+ * cluster", it is "every system this node has given up on AND not yet seen
+ * re-incarnate", which empties itself. Sixteen is a storage bound and is
+ * labelled as one -- an overflow is COUNTED and the connect is ACCEPTED.
+ */
+#define VMS_CLUB_MAX_GIVEUP 16
+
+/*
+ * One give-up record: this node stopped dealing with system `sysid` while it
+ * was advertising incarnation `incarnation`. Both halves are required -- a
+ * record with no incarnation could not tell the old incarnation from the new
+ * one, which is the whole question -- so there is no "valid" flag for the
+ * incarnation separately from `in_use`.
+ */
+struct vms_club_giveup {
+	uint64_t        incarnation;
+	vms_scs_sysid_t sysid;
+	uint8_t         in_use;
+	uint8_t         pad0[7];
+};
+
+/*
  * One CSB: the connection manager's block for ONE system, local or remote.
  * Allocated by cnxman_club_alloc_csb() (vms_cnxman_csb.h) when a connection
  * manager is first discovered; the state machine there walks `state` through the
@@ -369,7 +392,15 @@ struct vms_csb {
 	 * connection and restarting this block's dialogue counters on it are the
 	 * same event (E77, see cm_dialogue_conid below). */
 	uint32_t cdt_conid;
-	uint64_t incarnation;       /* the peer's incarnation (spec SS4(i).B) */
+	/*
+	 * THE PEER'S INCARNATION (spec SS4(i).B / SS4(g) abs 80), copied from the
+	 * circuit's own formation body by cnxman_csb_set_incarnation() and by
+	 * nothing else. `incarnation_valid` 0 is the honest "no START/STACK has
+	 * arrived from that system yet" -- NOT "incarnation 0" (rd vms-0f9).
+	 */
+	uint64_t incarnation;
+	uint8_t  incarnation_valid;
+	uint8_t  pad5[7];
 	uint32_t last_status_ms;    /* ops.now_ms of the last CM message from it */
 
 	/*
@@ -688,6 +719,37 @@ struct vms_club {
 	 * the wrong offset. Both leave the vector INVALID rather than wrong.
 	 */
 	uint32_t ldwv_build_refused;
+
+	/*
+	 * ---- THE GIVE-UP LEDGER (rd vms-0f9) ----
+	 *
+	 * p. 7-24's DEAD state is "a new incarnation of a VAX system has been
+	 * seen; the CSB whose connection state is DEAD represents the OLD
+	 * incarnation" -- so the executive is expected to remember WHICH
+	 * incarnation of a system it has stopped dealing with, and to keep
+	 * remembering it until a different one shows up.
+	 *
+	 * That fact cannot live in the CSB, because p. 7-25 deallocates the
+	 * block and rebuilds it (rd vms-dfe, #1309) within a second of the
+	 * give-up. It lives here instead, beside the CSB table it outlives.
+	 *
+	 * WHAT IT IS FOR. A real OpenVMS connection manager answers REJECT_REQ
+	 * to an inbound VMS$VAXcluster connect for a relationship it has given
+	 * up on -- measured on three real V7.3 nodes in
+	 * tests/lab/captures/vms-b36-cnxmgrerr-20260925/ -- and ACCEPTS again
+	 * once the peer comes back as a new incarnation. Accepting instead is
+	 * what put a real VAX into CNXMGRERR 0.3 ms after the connection
+	 * completed.
+	 *
+	 * BOUNDED, AND HONEST WHEN IT OVERFLOWS. `giveup_overflow` counts the
+	 * records that did not fit; a system with no record is ACCEPTED, because
+	 * this node cannot prove it gave up on that incarnation and must not
+	 * refuse on a guess (INV-6).
+	 */
+	struct vms_club_giveup giveup[VMS_CLUB_MAX_GIVEUP];
+	uint32_t giveup_overflow;    /* records that did not fit -- accepted */
+	uint32_t giveup_armed;       /* records really written */
+	uint32_t giveup_cleared;     /* ...cleared by a NEW incarnation */
 
 	/* ---- the CSB table (Figure 7-4: all CSBs hang off the CLUB) ---- */
 	uint32_t       n_csb;        /* high-water: slots 0..n_csb-1 may be in use */

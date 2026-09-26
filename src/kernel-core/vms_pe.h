@@ -378,6 +378,30 @@ int pe_incarnation(struct vms_pe *pe, uint32_t *lo, uint32_t *hi);
 int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
 		  uint32_t cap, uint8_t *out_len);
 
+/* The incarnation `sysid` really advertised (vms_pe_fsm.h). rd vms-0f9. */
+int pe_peer_incarnation(struct vms_pe *pe, vms_scs_sysid_t sysid,
+			uint64_t *out);
+
+/*
+ * RE-INCARNATE THIS PORT IN PLACE (rd vms-0f9, the CLUEXIT half).
+ *
+ * A real OpenVMS node that the cluster has given up on bugchecks CLUEXIT and
+ * reboots, and what its peers see of that is exactly ONE thing: the system
+ * comes back advertising a NEW incarnation quadword (spec SS4(g) abs 80), so
+ * p. 7-25's "a new incarnation of a VAX system has been seen" fires on every
+ * CSB that named the old one. The reboot itself is not wire-visible.
+ *
+ * This re-samples the port's own incarnation from the SAME executive clock
+ * pe_build_identity() used -- no value is composed here -- so every START this
+ * node sends from now on carries the new one. It does NOT tear the port down:
+ * the announcement that makes peers re-form their circuits is the last gasp
+ * (pe_send_last_gasp, p. 7-29), which the connection manager emits first.
+ *
+ * Returns SS$_NORMAL, or SS$_NOSUCHDEV with no port. Never fails silently: a
+ * caller that cannot re-incarnate must not pretend it did.
+ */
+int pe_reincarnate(struct vms_pe *pe);
+
 /*
  * THE THIRD SERVICE -- BLOCK TRANSFER (FC-P6.1). Same E9 bridge shape as the
  * two above: these are the frozen glue-facing names, and the REAL, R1-tested

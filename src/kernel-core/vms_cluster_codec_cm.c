@@ -1242,3 +1242,51 @@ const struct vms_wire_allow_table *vms_cm_allow_table(void)
 {
 	return &g_cm_allow_table;
 }
+
+/* ==========================================================================
+ * sec 7 -- the 16-byte SCA connect data (rd vms-b87)
+ *
+ * The grounding, the four measured configurations and the reason the head and
+ * tail spans are the CALLER's rather than this file's are all in
+ * vms_cluster_codec_cm.h sec 7. This is the encode.
+ * ========================================================================== */
+vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
+					 const uint8_t *head, uint32_t head_len,
+					 const uint8_t *tail, uint32_t tail_len,
+					 uint8_t *out, uint32_t cap)
+{
+	uint32_t i;
+	uint16_t votes, quorum, nodes;
+
+	if (in == (const struct vms_cm_conndata_in *)0 ||
+	    head == (const uint8_t *)0 || tail == (const uint8_t *)0 ||
+	    out == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (head_len != 4u || tail_len != 5u ||
+	    cap < (uint32_t)VMS_CM_CONNDATA_LEN)
+		return VMS_CODEC_E_INVAL;
+
+	/* A node that is not a member has no cluster arithmetic to report, and
+	 * a real one puts zeroes here. Forced rather than trusted, so a caller
+	 * that passes stale counts cannot assert a membership it does not have
+	 * (INV-6). */
+	votes  = in->member ? in->cluster_votes : 0u;
+	quorum = in->member ? in->quorum : 0u;
+	nodes  = in->member ? in->cluster_nodes : 0u;
+
+	for (i = 0; i < head_len; i++)
+		out[i] = head[i];
+
+	out[4] = (uint8_t)(votes & 0xffu);
+	out[5] = (uint8_t)((votes >> 8) & 0xffu);
+	out[6] = (uint8_t)(quorum & 0xffu);
+	out[7] = (uint8_t)((quorum >> 8) & 0xffu);
+	out[8] = (uint8_t)(nodes & 0xffu);
+	out[9] = (uint8_t)((nodes >> 8) & 0xffu);
+	out[10] = (uint8_t)(in->member ? 1u : 0u);
+
+	for (i = 0; i < tail_len; i++)
+		out[11u + i] = tail[i];
+
+	return VMS_CODEC_OK;
+}

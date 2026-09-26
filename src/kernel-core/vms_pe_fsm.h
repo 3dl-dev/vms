@@ -1784,6 +1784,20 @@ struct pe_vc *pe_fsm_vc_by_sysid(struct pe_fsm *f, vms_scs_sysid_t sysid);
  * anything else is the honest "this executive has not been told", never a
  * default (INV-6). rd vms-1ee: the split-brain gate's trust anchor.
  */
+/*
+ * The INCARNATION `sysid` advertised in its own formation body (spec SS4(g)
+ * abs 80) -- the quadword a real VAX fills with the time that system came up,
+ * and the ONE fact on the wire that tells one incarnation of a system from the
+ * next (book p. 7-24/7-25: "A new incarnation of a VAX system has been seen").
+ *
+ * Returns 0 and fills *out only when a real 106-byte START/STACK actually
+ * arrived from that system; anything else is the honest "this executive has
+ * not been told" and the caller must NOT substitute a value of its own
+ * (INV-6). rd vms-0f9: the connection manager's give-up record is keyed on it.
+ */
+int pe_fsm_peer_incarnation(struct pe_fsm *f, vms_scs_sysid_t sysid,
+			    uint64_t *out);
+
 int pe_fsm_peer_swver(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
 		      uint32_t cap, uint8_t *out_len);
 

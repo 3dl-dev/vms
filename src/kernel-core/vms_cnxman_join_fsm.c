@@ -2682,6 +2682,11 @@ static enum cnxman_join_rx join_h_transition_done(struct cnxman_join *j,
 	 */
 	if (e->aux_named && !e->aux_in_map) {
 		j->commits_not_ours++;
+		/* ...and SAID SO: the nodemap addressed this node and put it
+		 * outside the cluster (rd vms-0f9). For a node that is already
+		 * a member that is a removal, and the glue reads this counter
+		 * to know it. */
+		j->commits_excluded_us++;
 		return CNXMAN_JOIN_RX_CONSUMED;
 	}
 	if (!e->aux_named)
@@ -4008,6 +4013,55 @@ enum cnxman_join_rx cnxman_join_rx_body(struct cnxman_join *j,
 	}
 }
 
+/*
+ * ...AND NOT FROM AN INCARNATION THIS NODE HAS GIVEN UP ON (rd vms-0f9).
+ *
+ * MEASURED, on three REAL OpenVMS VAX V7.3 nodes on an isolated bridge
+ * (tests/lab/captures/vms-b36-cnxmgrerr-20260925/analysis/oracle-accept-vs-reject.txt):
+ * after a transition removed a system, every VMS$VAXcluster connect between it
+ * and the members was answered REJECT_REQ -- by the removed node AND by the
+ * healthy member, once a second, both directions -- until the removed node came
+ * back as a new incarnation. ACCEPT was observed during admission, both ways.
+ *
+ * WHAT ACCEPTING INSTEAD COST: a real V7.3 node took a fatal CNXMGRERR bugcheck
+ * 0.3 ms after such a connection completed (analysis/crash-window-M1-2.txt,
+ * reproduced on both sides of an A/B), and where it did not bugcheck the pair
+ * span in a ~2 Hz accept-and-be-hung-up-on loop (rd vms-4c9, 460 cycles in one
+ * arm).
+ *
+ * THE PREDICATE IS NARROW BY CONSTRUCTION, and p. 7-24's REACCEPT is untouched:
+ *   - a system with NO give-up record is accepted;
+ *   - a system inside its p. 7-30 reconnect window has no record yet -- the
+ *     ladder only arms one when it GIVES UP -- so the member's own reconnect
+ *     offer (#1309's recovery path) is accepted exactly as before;
+ *   - a system whose CURRENT incarnation differs from the recorded one is a
+ *     new incarnation (p. 7-25) and is accepted;
+ *   - and a connect this executive cannot attach an incarnation to is ACCEPTED,
+ *     because it cannot prove what it is refusing (INV-6: no record, no
+ *     refusal).
+ *
+ * The refusal itself is SCS's: returning non-zero from the SYSAP's connect_req
+ * is what makes the port answer REJECT_REQ, so no frame is composed here.
+ */
+static int join_gave_up_on_this_incarnation(struct cnxman_join *j,
+					    const struct vms_csb *csb)
+{
+	if (!csb->incarnation_valid)
+		return 0;
+	if (!cnxman_club_gave_up_on(&j->cl->club, csb->sysid,
+				    csb->incarnation))
+		return 0;
+
+	j->inbound_refused_giveup++;
+	join_diag_arrival(j, CNXMAN_DIAG_EV_NONE, CNXMAN_DIAG_R_REFUSED, 0,
+			  (uint32_t)csb->sysid);
+	if (j->inbound_refused_giveup == 1u)
+		join_log(j, "%CNXMAN, refused a VMS$VAXcluster connection from "
+			    "an incarnation this node has given up on: it must "
+			    "come back as a new one");
+	return 1;
+}
+
 int cnxman_join_connect_req(struct cnxman_join *j, vms_scs_sysid_t peer,
 			    vms_conid_t peer_conid,
 			    const uint8_t *conndata, uint32_t conndata_len)
@@ -4045,6 +4099,8 @@ int cnxman_join_connect_req(struct cnxman_join *j, vms_scs_sysid_t peer,
 			    "a system with no cluster system block");
 		return -1;
 	}
+	if (join_gave_up_on_this_incarnation(j, csb))
+		return -1;
 	j->inbound_accepted++;
 	join_diag_arrival(j, CNXMAN_DIAG_EV_NONE, CNXMAN_DIAG_R_ACCEPTED, 0,
 			  (uint32_t)peer);

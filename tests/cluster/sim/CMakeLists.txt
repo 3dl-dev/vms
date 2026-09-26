@@ -146,6 +146,18 @@ target_link_libraries(test_sim_cnxman_never_admitted PRIVATE cluster_host_cnxman
 target_include_directories(test_sim_cnxman_never_admitted PRIVATE
     ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
+# rd vms-0f9's rung-R2 leg: the whole standoff on the virtual clock. The
+# p. 7-30 window really runs out, the SHIPPING acceptance policy then refuses
+# the same incarnation once a second, CLUEXIT re-incarnates, and the very next
+# offer is taken -- plus the other way out, a PEER that re-incarnates and is
+# taken back with no CLUEXIT at all (p. 7-25). The teeth: p. 7-24's REACCEPT is
+# asserted INSIDE the window, so a gate that refused everything reds here.
+cluster_sim_test(test_sim_cnxman_giveup_reject
+                 scenarios/cnxman_giveup_reject_cluexit.c)
+target_link_libraries(test_sim_cnxman_giveup_reject PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_giveup_reject PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 # FC-P4.6's rung-R2 leg: the REAL lock engine (vms_lock.c on FC-P4.9's host
 # backend), the REAL requester FSM and the REAL Lock Directory Weight Vector in
 # one host process, against SIMULATED master/directory systems. It proves the

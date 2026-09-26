@@ -1337,6 +1337,81 @@ static void test_never_admitted_is_never_removed(void)
 			"...with its one op 0x08");
 }
 
+/*
+ * rd vms-0f9: THE REMOVAL'S OPEN IS GATED TOO.
+ *
+ * MEASURED on the jittered three-node rig (arm V2-1): OVMXA, a committed
+ * member, lost its connection to OVMXB, its p. 7-30 window expired, and it
+ * proposed the removal -- correctly -- to a cluster containing a real
+ * OpenVMS VAX V7.3. Its op-0x08 carried the class tag and then 44 zero bytes
+ * where a real coordinator writes two VMS absolute-time quadwords and four
+ * more longwords, and the VAX put its last-gasp datagram on the multicast in
+ * the same millisecond.
+ *
+ * The gate already existed for the class-0x02 admission and said exactly this
+ * in its own comment. This is the other class asking the same question.
+ *
+ * THE CONTROL IS THE POINT: with every survivor proved to run this
+ * implementation, the removal still drives. The gate is about who has to ACT
+ * on the open, not about departures.
+ */
+static void test_0f9_a_removal_is_not_opened_for_a_foreign_cm(void)
+{
+	struct vms_csb *foreign;
+
+	printf("\n-- rd vms-0f9: no class-0x03 open toward a connection "
+	       "manager this one cannot build for --\n");
+	bed_init(2);
+
+	/* CONTROL first: everyone runs this implementation, so it drives. */
+	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
+		 CNXMAN_COORD_DRIVE,
+		 "CONTROL: with every survivor proved ours, the removal is "
+		 "driven");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM), 1,
+			"...with its one op 0x08");
+
+	/* Now a survivor that has NOT proved it runs this implementation. */
+	bed_init(2);
+	foreign = cnxman_club_csb_at(&g.cl.club, CSB_VAX1);
+	ct_check(foreign != NULL, "the survivor has a block");
+	cnxman_csb_set_swver(foreign, (const uint8_t *)0, 0u,
+			     (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u));
+	ct_check_eq_u32(foreign->peer_is_ours, 0,
+			"...and it has advertised nothing, which is not proof");
+
+	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
+		 CNXMAN_COORD_REFUSE,
+		 "the removal is REFUSED, not driven");
+	ct_check_eq_u32(g.c.last_refusal,
+			(uint32_t)CNXMAN_COORD_REF_OPEN_UNGROUNDED,
+			"...and named OPEN_UNGROUNDED");
+	ct_check_eq_u32(g.c.open_ungrounded, 1,
+			"...and counted, so the gap is visible without a "
+			"capture");
+	ct_check_eq_u32(g.n_sent, 0,
+			"NOTHING went on the wire -- above all no op 0x08 this "
+			"node cannot build faithfully");
+	ct_check_eq_u32(g.cl.club.transition_active, 0,
+			"and no transition was opened");
+
+	/*
+	 * ...AND THE DEPARTING SYSTEM ITSELF IS NOT ASKED TO ACT ON IT. A
+	 * removal's census excludes the subject (spec sec 4(r)), so a subject
+	 * that never proved anything does not block the survivors' removal of
+	 * it -- which is the ONLY case that matters on a mixed cluster.
+	 */
+	bed_init(2);
+	foreign = cnxman_club_csb_at(&g.cl.club, CSB_VAX2);
+	cnxman_csb_set_swver(foreign, (const uint8_t *)0, 0u,
+			     (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u));
+	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
+		 CNXMAN_COORD_DRIVE,
+		 "the SUBJECT's own foreignness does not block its removal");
+}
+
 static void test_removing_the_last_peer_completes_locally(void)
 {
 	printf("\n-- removing the last peer: 12 x (M-1) = 0, and it completes --\n");
@@ -2088,6 +2163,7 @@ int main(void)
 
 	test_remove_class();
 	test_never_admitted_is_never_removed();
+	test_0f9_a_removal_is_not_opened_for_a_foreign_cm();
 	test_removing_the_last_peer_completes_locally();
 
 	test_no_link_originates_nothing();

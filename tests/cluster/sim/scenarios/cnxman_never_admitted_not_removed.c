@@ -143,12 +143,25 @@ static int bed_respond(void *ctx, const uint8_t *body, uint32_t len)
 
 /* ---- the bed ------------------------------------------------------------- */
 
+/*
+ * The members of this scenario's cluster all run THIS implementation, and they
+ * say so the only way a system can: the software token their own formation
+ * body carried (rd vms-1ee). Without it the CONTROL below is asking a node to
+ * open a transition for a connection manager it cannot build one for, which
+ * rd vms-0f9 now -- correctly -- refuses.
+ */
+#define BED_SWVER "OVMXV07\0"
+
 static struct vms_csb *bed_add_member(vms_scs_sysid_t sysid, vms_csid_t csid)
 {
 	struct vms_csb *csb = cnxman_club_alloc_csb(&g.cl.club, sysid, 1);
 
 	if (csb == NULL)
 		return NULL;
+	cnxman_csb_set_swver(csb, (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u),
+			     (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u));
 	cnxman_csb_set_csid(csb, csid);
 	cnxman_csb_set_flags(csb, (uint16_t)(VMS_CSB_F_SELECTED |
 					     VMS_CSB_F_MEMBER));
@@ -254,6 +267,12 @@ static struct vms_csb *bring_the_joiner_up_then_lose_it(void)
 	ct_check(csb != NULL, "discovery allocated a block for the joiner");
 	ct_check_eq_u32(csb->flags & VMS_CSB_F_SELECTED, 0,
 			"INV-6: discovery does NOT make it a member (p. 7-49)");
+	/* ...and a SUBJECT that has proved nothing must not be what blocks the
+	 * control below: rd vms-0f9's removal gate excludes the subject. */
+	cnxman_csb_set_swver(csb, (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u),
+			     (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u));
 
 	(void)cnxman_csb_dispatch(&g.cl.club, csb, CNXMAN_CSB_EV_CONNECT_RCVD,
 				  &g.ops);

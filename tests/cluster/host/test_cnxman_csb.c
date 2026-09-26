@@ -422,6 +422,142 @@ static void test_never_admitted_is_not_removed(void)
 			"p. 7-29's reconfiguration");
 }
 
+/*
+ * rd vms-0f9 -- THE GIVE-UP LEDGER.
+ *
+ * p. 7-24's DEAD state is written in terms of knowing WHICH incarnation of a
+ * system this node stopped dealing with, and p. 7-25 deallocates the block
+ * within a second of the give-up (rd vms-dfe). So the record has to outlive
+ * the block, and the FIRST test below is the one that matters: a ledger that
+ * died with its CSB would answer "no" one beat later and the refusal that
+ * keeps a real VAX alive would never fire.
+ */
+static void test_giveup_ledger(void)
+{
+	struct vms_csb *csb;
+	vms_scs_sysid_t released[VMS_CLUB_MAX_CSB];
+	uint32_t n;
+
+	printf("[csb] the give-up ledger outlives the block (pp. 7-24/7-25, "
+	       "rd vms-0f9)\n");
+
+	/*
+	 * p. 7-30's window expires on a system this node has learned the
+	 * incarnation of. SELECTED is cleared first, because the case that
+	 * matters on the rig -- and the case p. 7-25 reclaims -- is a system
+	 * the cluster never committed (rd vms-b36), and a SELECTED block is
+	 * deliberately never reclaimed.
+	 */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xAAAAu, 1);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g_ops);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 1u,
+			"the expired window armed a record");
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xAAAAu),
+		 "...naming that system at that incarnation");
+	ct_check(!cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xBBBBu),
+		 "...and NOT at any other");
+
+	/* THE ONE THAT MATTERS: p. 7-25 deallocates the block. */
+	n = cnxman_club_reclaim_abandoned(&g_cl.club, released,
+					  (uint32_t)VMS_CLUB_MAX_CSB);
+	ct_check_eq_u32(n, 1u, "the block really was reclaimed (rd vms-dfe)");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, released[0]) == NULL,
+		 "...and is gone");
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, released[0], 0xAAAAu),
+		 "AND THE RECORD SURVIVED IT -- which is the whole point");
+
+	/* p. 7-25's other half: a new incarnation clears it, and only a
+	 * DIFFERENT one does. */
+	csb = cnxman_club_alloc_csb(&g_cl.club, released[0], 1);
+	ct_check(csb != NULL, "the system is rediscovered and rebuilt NEW");
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xAAAAu, 1);
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xAAAAu),
+		 "the SAME incarnation does not clear it");
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xCCCCu, 1);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 0u,
+			"a NEW incarnation does");
+
+	/*
+	 * ...AND SO DOES THE CLUSTER COMMITTING IT AS A MEMBER (rd vms-0f9).
+	 * MEASURED, arms D-1/D-2: both OVMX nodes reached MEMBER and the real
+	 * VAX admitted the joiner, but the node that had given up on it during
+	 * the blackout went on refusing its connection, so its own SHOW
+	 * CLUSTER was one system short of the Rule of Total Connectivity.
+	 */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xF00Du, 1);
+	cnxman_club_giveup_arm(&g_cl.club, csb);
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xF00Du),
+		 "given up on it");
+	cnxman_club_giveup_clear(&g_cl.club, csb->sysid);
+	ct_check(!cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xF00Du),
+		 "...and a committed membership clears it, at the SAME "
+		 "incarnation");
+
+	/* p. 7-29's last gasp arms one too. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xD00Du, 1);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb, CNXMAN_CSB_EV_LAST_GASP,
+				  &g_ops);
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xD00Du),
+		 "a last gasp arms a record as well (p. 7-29)");
+
+	/* INV-6: nothing is recorded that cannot be named. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g_ops);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 0u,
+			"INV-6: a give-up with no incarnation learned records "
+			"NOTHING, so nothing is refused on a guess");
+
+	/* An orderly close of OUR own is not a give-up on the peer. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xE11Eu, 1);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_DISCONNECT, &g_ops);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 0u,
+			"an SCS disconnect this node initiated arms nothing");
+}
+
+/*
+ * ...and the bound is honest. A ledger that silently dropped the seventeenth
+ * record would refuse nothing for that system and say so nowhere.
+ */
+static void test_giveup_overflow_is_counted(void)
+{
+	uint32_t i;
+
+	printf("[csb] the ledger's bound is counted, not silent\n");
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	for (i = 0; i < (uint32_t)VMS_CLUB_MAX_GIVEUP + 3u; i++) {
+		struct vms_csb *csb =
+			cnxman_club_alloc_csb(&g_cl.club,
+					      0x000004000200ull + i, 1);
+
+		if (csb == NULL)
+			break;
+		cnxman_csb_set_incarnation(&g_cl.club, csb, 0x5000u + i, 1);
+		cnxman_club_giveup_arm(&g_cl.club, csb);
+	}
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club),
+			(uint32_t)VMS_CLUB_MAX_GIVEUP,
+			"the ledger fills to its bound");
+	ct_check_eq_u32(g_cl.club.giveup_overflow, 3u,
+			"...and every record that did not fit is COUNTED");
+	ct_check(!cnxman_club_gave_up_on(&g_cl.club,
+					 0x000004000200ull +
+						 (uint32_t)VMS_CLUB_MAX_GIVEUP,
+					 0x5000u +
+						 (uint32_t)VMS_CLUB_MAX_GIVEUP),
+		 "a system that did not fit is not claimed to be given up on "
+		 "-- it is ACCEPTED");
+}
+
 /* The two absorbing states, called out by name because getting either wrong is
  * a cluster-level bug: a revived DEAD CSB is a stale incarnation readmitted,
  * and a LOCAL CSB that accepts a connectivity event is this node proposing its
@@ -1113,6 +1249,8 @@ int main(void)
 	test_state_vocabulary();
 	test_ladder_exhaustive();
 	test_never_admitted_is_not_removed();
+	test_giveup_ledger();
+	test_giveup_overflow_is_counted();
 	test_absorbing_states();
 	test_club_init();
 	test_club_recnxinterval_default();

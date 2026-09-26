@@ -268,12 +268,33 @@ static int coord_outranked_for_admission(struct cnxman_coord *c,
  * So the gate is the one honest fact available: `peer_is_ours`, the CSB flag
  * the port sets when a system has PROVED it runs this implementation -- the
  * same fact the lock manager already refuses foreign traffic on. Until the
- * remaining op-0x09 fields are grounded, this node does not open a class-0x02
+ * remaining op-0x09 fields are grounded, this node does not open a
  * transition that a foreign connection manager has to act on. It is a NAMED
  * GAP with a counter, not a resting state.
+ *
+ * AND IT IS THE REMOVAL'S GATE TOO (rd vms-0f9). It was asked only of the
+ * class-0x02 admission until a live arm measured the other half: OVMXA, a
+ * committed member, lost its connection to OVMXB, its p. 7-30 window expired,
+ * and it proposed the removal -- correctly, and to a real VAX. Its op-0x08
+ * body against a real VAX's, same capture:
+ *
+ *   real VAX  [16:32] 40 03 00 00 04 00 01 00 03 07 01 00 02 01 00 00
+ *             [32:48] 20 ca 91 dc 8c 30 bc 00 e0 d8 a8 40 8e 30 bc 00
+ *             [48:64] 00 01 04 00 00 00 00 06 00 00 00 00 00 00 00 00
+ *   OVMXA     [16:32] 40 03 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+ *             [32:48] (zero)   [48:64] (zero)
+ *
+ * The class tag is right and everything after it is a field this executive has
+ * no derivation for. The VAX put its last-gasp datagram on the multicast in
+ * the SAME millisecond (crash-window, arm V2-1). Same gap, same frame family,
+ * same cost -- so the same gate, asked of both classes.
+ *
+ * `subject_counts` is the one difference: an admission has to be actable by
+ * the system being ADMITTED, a removal does not -- the departing system is not
+ * in the census (spec sec 4(r)) and is asked to act on nothing.
  */
 static int coord_open_is_grounded_for(struct cnxman_coord *c,
-				      int32_t subject_csb)
+				      int32_t subject_csb, int subject_counts)
 {
 	struct vms_club *club = coord_club(c);
 	uint32_t i;
@@ -281,6 +302,8 @@ static int coord_open_is_grounded_for(struct cnxman_coord *c,
 	for (i = 0; i < club->n_csb; i++) {
 		const struct vms_csb *m = &club->csb[i];
 
+		if ((int32_t)i == subject_csb && !subject_counts)
+			continue;
 		if ((int32_t)i != subject_csb && !coord_is_other_member(m))
 			continue;
 		if ((m->flags & VMS_CSB_F_LOCAL) != 0u)
@@ -364,6 +387,24 @@ enum cnxman_coord_verdict cnxman_coord_select(struct cnxman_coord *c,
 				"system: no state transition is proposed to "
 				"remove it");
 		}
+		/*
+		 * ...AND GATE 2 IS THE REMOVAL'S TOO (rd vms-0f9). See
+		 * coord_open_is_grounded_for()'s own note for the measured
+		 * op-0x08 body this node cannot fill and the last gasp that
+		 * followed it. A survivor that cannot build the open does not
+		 * send one; the cluster still reconfigures, because p. 7-2's
+		 * first detector is whoever CAN -- and on a mixed cluster that
+		 * is the real VMS node, which is what the oracle films it
+		 * doing.
+		 */
+		if (!coord_open_is_grounded_for(c, subject_csb, 0)) {
+			c->open_ungrounded++;
+			return coord_refuse(c, CNXMAN_COORD_REF_OPEN_UNGROUNDED,
+				"%CNXMAN, a system in this cluster does not run "
+				"this implementation and the removal this node "
+				"can build is not grounded for it: the removal "
+				"is not proposed");
+		}
 		return CNXMAN_COORD_DRIVE;
 	}
 
@@ -377,7 +418,7 @@ enum cnxman_coord_verdict cnxman_coord_select(struct cnxman_coord *c,
 		c->refusals++;
 		return CNXMAN_COORD_REFUSE;
 	}
-	if (!coord_open_is_grounded_for(c, subject_csb)) {
+	if (!coord_open_is_grounded_for(c, subject_csb, 1)) {
 		c->open_ungrounded++;
 		return coord_refuse(c, CNXMAN_COORD_REF_OPEN_UNGROUNDED,
 			"%CNXMAN, a system in this cluster does not run this "
@@ -1069,6 +1110,14 @@ static void coord_retire_subject(struct cnxman_coord *c)
 	cnxman_csb_clear_flags(s, (uint16_t)(VMS_CSB_F_SELECTED |
 					     VMS_CSB_F_MEMBER));
 	cnxman_csb_set_flags(s, (uint16_t)VMS_CSB_F_REMOVED);
+	/*
+	 * ...AND THE CLUSTER HAS GIVEN UP ON THAT INCARNATION (rd vms-0f9).
+	 * Measured on three real OpenVMS VAX V7.3 nodes: after a transition
+	 * removes a system, the surviving MEMBER answers REJECT_REQ to that
+	 * system's VMS$VAXcluster connects until it comes back as a new
+	 * incarnation. This is the record that makes that answer possible.
+	 */
+	cnxman_club_giveup_arm(&c->cl->club, s);
 }
 
 static void coord_commit_phase2(struct cnxman_coord *c)

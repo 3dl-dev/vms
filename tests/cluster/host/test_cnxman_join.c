@@ -1473,6 +1473,75 @@ static void test_server_half(void)
 }
 
 /* ==========================================================================
+ * rd vms-0f9 -- AND NOT FROM AN INCARNATION THIS NODE HAS GIVEN UP ON
+ *
+ * MEASURED on three REAL OpenVMS VAX V7.3 nodes
+ * (tests/lab/captures/vms-b36-cnxmgrerr-20260925/analysis/oracle-accept-vs-reject.txt):
+ * after a transition removed a system, every VMS$VAXcluster connect between it
+ * and the members was answered REJECT_REQ -- both directions, once a second --
+ * until the removed node came back as a new incarnation. ACCEPT was observed
+ * during admission. Accepting instead bugchecked a real VAX CNXMGRERR 0.3 ms
+ * after the connection completed.
+ *
+ * FOUR CASES, and three of them are ACCEPTS. The refusal is the narrow one.
+ * ========================================================================== */
+static void test_0f9_a_given_up_incarnation_is_refused(void)
+{
+	static const uint8_t cd[VMS_SCS_PROCNAME_LEN] = {
+		0x01, 0x1b, 0x01, 0x03, 0, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0x06, 0
+	};
+	struct vms_csb *csb;
+
+	printf("\n-- rd vms-0f9: a connect from an incarnation this node gave "
+	       "up on is REFUSED --\n");
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	csb = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	ct_check(csb != NULL, "the system has a block");
+
+	/* CASE 1 -- no give-up record at all: ACCEPT, exactly as before. */
+	cnxman_csb_set_incarnation(&g.cl.club, csb, 0x1111u, 1);
+	ct_check(cnxman_join_connect_req(&g.j, OTHER_SYSID, 0x1234u, cd,
+					 sizeof(cd)) == 0,
+		 "CONTROL: with no give-up record the connect is ACCEPTED");
+	ct_check_eq_u32(g.j.inbound_refused_giveup, 0u, "...and nothing "
+			"counted as refused-on-give-up");
+
+	/* CASE 2 -- this node gave up on THAT incarnation: REFUSE. */
+	cnxman_club_giveup_arm(&g.cl.club, csb);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g.cl.club), 1u,
+			"the ledger holds the record");
+	ct_check(cnxman_join_connect_req(&g.j, OTHER_SYSID, 0x1235u, cd,
+					 sizeof(cd)) != 0,
+		 "the SAME incarnation's connect is REFUSED");
+	ct_check_eq_u32(g.j.inbound_refused_giveup, 1u,
+			"...and the refusal is counted as its own diagnosis");
+
+	/* CASE 3 -- p. 7-25: it came back as somebody else. ACCEPT, and the
+	 * record is gone, because the system it was about is gone. */
+	cnxman_csb_set_incarnation(&g.cl.club, csb, 0x2222u, 1);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g.cl.club), 0u,
+			"a NEW incarnation clears the record (p. 7-25)");
+	ct_check(cnxman_join_connect_req(&g.j, OTHER_SYSID, 0x1236u, cd,
+					 sizeof(cd)) == 0,
+		 "...and the new incarnation's connect is ACCEPTED");
+
+	/* CASE 4 -- a system whose incarnation this executive has NOT been
+	 * told: ACCEPT. It cannot prove what it would be refusing. */
+	cnxman_club_giveup_arm(&g.cl.club, csb);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g.cl.club), 1u,
+			"armed again at the new incarnation");
+	cnxman_csb_set_incarnation(&g.cl.club, csb, 0u, 0);
+	ct_check(cnxman_join_connect_req(&g.j, OTHER_SYSID, 0x1237u, cd,
+					 sizeof(cd)) == 0,
+		 "INV-6: with no incarnation learned the connect is ACCEPTED, "
+		 "never refused on a guess");
+	ct_check_eq_u32(g.j.inbound_refused_giveup, 1u,
+			"...and still only the one real refusal");
+}
+
+/* ==========================================================================
  * 6. The watchdog instruments and repeats; it never abandons
  * ========================================================================== */
 
@@ -5347,6 +5416,7 @@ int main(void)
 	test_pathlost_keeps_the_join_alive();
 	test_connect_refusal_is_named_and_retried();
 	test_server_half();
+	test_0f9_a_given_up_incarnation_is_refused();
 	test_watchdog();
 	test_handoff_without_a_barrier();
 	test_unowned_frame_is_not_mine();

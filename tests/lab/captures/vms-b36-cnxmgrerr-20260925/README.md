@@ -244,3 +244,106 @@ POD_NAME=<pod> LAB_ROOT=/lab NODES="vax1 vax2" \
 #   nodedrv.py <dir> <log> --boot "B/R5:20000000 DUA0"
 TAG=f1 bash oracle/fault3.sh
 ```
+
+---
+
+# vms-0f9 — the ruling, implemented and run on the rig
+
+**2026-09-25, the same disposable `ovmx-lab/b36lab` pod, the same deterministic
+bench rig described above, and the same three-real-node oracle.** This section
+is the second half of the rd vms-b36 story: §4 above identified the defect
+(OVMX ACCEPTS where a real V7.3 node REJECTS), the conductor ruled on rd
+vms-0f9, and this is what implementing that ruling did on the wire.
+
+## The rig, unchanged except for one number
+
+Same nodes, same bridge, same 80±40 ms jitter, same 45 s blackout, same trigger
+(the real VAX's own `%CNXMAN,  proposing addition of system OVMXB`). The one
+change is `JOIN_WAIT_BEATS` 120 → 170: a node that **re-incarnates** starts its
+admission again from the directory round, and a 240-second window cut two arms
+off mid-progress rather than mid-failure. **No grading criterion changed** —
+`grade3.sh` is the grader for every arm below and it is stricter than
+`grade2.sh`, because it adds the rd vms-4c9 loop as a *pass criterion* rather
+than a reported number.
+
+## What the arms measured, in order — every one of them found something
+
+The rig was re-run after every change. Each arm is listed with what it found,
+because the sequence is the evidence that these were measured and not designed:
+
+| arm | outcome | what it found |
+|---|---|---|
+| `V1-1` | OVMXA never joined | the join's own `cfg.conndata` was left at the memset **zero** — the all-zero connect data E31 replaced. The real VAX answered *"version identity refused"* on the node's first attempt. |
+| `V1-1` | 415 re-incarnations | CLUEXIT **looped**: refused → re-incarnate → refused. Re-incarnating cures a refusal that is *about* this incarnation; one that survives the new one is about something else. |
+| `V2-1` | VAX bugchecked | OVMXA's own class-0x03 **removal open** carried the class tag and 44 zero bytes where a real coordinator writes two VMS absolute-time quadwords and four longwords. The VAX's last gasp is in the same millisecond. |
+| `C-1` | joiner never rejoined | CLUEXIT fired 0.8 s **after** the cluster had opened its connection to the joiner, throwing away the admission that connection was the start of. |
+| `C-1` | *"version identity refused"* again | the re-incarnated node advertised the **MEMBER** form with zero votes, zero quorum and zero members, because `cl->state` still said MEMBER while the CLUB it was built from had just been emptied. |
+| `D-1`,`D-2` | 3/2 MEMBER rows | a member that had given up on the joiner during the blackout went on refusing it **after the cluster had committed it as a member** — a member short of the Rule of Total Connectivity. |
+
+Every one of those has a test in this branch, and the negctl mutation gate
+carries a new control (`coord-removal-open-gate-disarmed`) for the removal
+open.
+
+## The campaign — `loop-F.log`
+
+Twenty-two consecutive arms on `b7b33bfc`, boot artifacts checksum-verified in
+the pod, the real VAX volume restored from the pinned copy before every arm.
+
+**13 PASS / 9 FAIL, and the two numbers the bar is about:**
+
+* **VAX bugchecks: ZERO. In every arm.** And zero in every arm of every rig run
+  since the removal gate landed — `V3-1`..`V3-3`, `C-1`, `C-2`, and the whole
+  of `F`. Against **two in six** on `main` (§3 above) with the same fault at
+  the same point.
+* **The rd vms-4c9 accept-and-be-hung-up-on loop: ZERO in every arm.** Against
+  460 cycles in a single arm before.
+
+Per-arm, from `campaign/loop-F.log`: **bugchecks 0 in all 22**; `4c9-loop` 0 in
+21 arms and **1** in the twenty-second (one disconnect line, against 460 in a
+single pre-fix arm). `cluexits` totals **13** and `refused-giveup` **28** across
+the campaign, so the mechanism is visible rather than inferred: the arms that
+take the blackout show the joiner refusing the incarnation it gave up on,
+re-incarnating once, and being admitted again.
+
+`campaign/F-2/` is one of those arms kept whole, with its capture.
+`campaign/loop-E-short-window.log` is the earlier five-arm run on the same
+build with `JOIN_WAIT_BEATS` at 120, kept because it is where the window was
+measured to be too short.
+
+## What did NOT reach the bar, and why it is filed rather than argued away
+
+`grade3.sh` also requires **both** OVMX nodes' own `SHOW CLUSTER` to name all
+three systems MEMBER, and **nine arms** miss it: `F-3`, `F-9`, `F-13`, `F-15`
+and `F-17` end with the surviving member showing the joiner as `NEW`; `F-10`
+and `F-16` had the joiner still re-joining when the window closed; `F-14`'s own
+last table was taken between polls; and `F-1` is not an arm of the experiment
+at all -- its trigger never fired, so no fault was injected (its
+`blackout.out` says so, and it reached CN=3 anyway). Its console says why: *"committed member count differs from
+the transition nodemap"*.
+
+**The chain, from the arms' own transcripts.** The survivor learned the
+joiner's CSID from an op-0x05 membership record, lost its connection in the
+blackout, gave up on the block, and p. 7-25's reclaim (rd vms-dfe, #1309) freed
+it. The rebuilt block is `NEW` with `csid_valid` 0, and
+`phase2_csb_in_nodemap()` needs `csid_valid` to match a CSB to a nodemap bit —
+so the coordinator's admission commit cannot name the joiner on that node and
+`SELECTED` is never set for it.
+
+**It is not a crash and not the accept defect.** It is a convergence gap in the
+rebuild path, adjacent to rd vms-dfe, and it is filed as **rd vms-8a9** with
+this evidence rather than being closed over. Fixing it means deciding whether a
+peer's CSID should survive the p. 7-25 rebuild — the CLUB already keeps a
+give-up ledger beside the CSB table for exactly that class of fact — and that
+is a membership-accounting decision, not a line of code to guess at.
+
+## The oracle, still the reference
+
+`oracle/` is unchanged and is what every rule in this branch is measured
+against: a real connection manager REJECTS an inbound `VMS$VAXcluster` connect
+for a relationship it has given up on, both directions, once a second, until
+the peer re-incarnates — and the node the cluster gave up on takes CLUEXIT,
+reboots, and is accepted again. Both halves are now what this executive does.
+
+`campaign/F-3/` is one of those arms kept whole, and `campaign/F-1/` is the
+no-fault one, kept so the nine failures can be read apart rather than counted
+together.

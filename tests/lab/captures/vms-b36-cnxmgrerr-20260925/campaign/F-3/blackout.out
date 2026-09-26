@@ -1,0 +1,5 @@
+MARKER seen at 22:35:51.749: %CNXMAN,  proposing addition of system OVMXB
+BLACKOUT on  tapBb36 at 22:35:51.754
+%%%%%%%%%%%  OPCOM  25-SEP-2026 22:35:51.72  %%%%%%%%%%%
+22:35:51.72 Node VAXC (csid 00010001) proposed addition of node OVMXB
+BLACKOUT off tapBb36 at 22:36:36.760 after 45s

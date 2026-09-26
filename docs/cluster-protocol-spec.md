@@ -3251,6 +3251,61 @@ carried the stamped bytes, so that direction is byte-unchanged. Kill switch
 `OVMX_NO_CONNECT_DATA=1` suppresses the stamp and restores the template bytes
 exactly; both directions are asserted in the unit test.
 
+> ### ⚠ §4(N) CORRECTED — `[98:105]` IS RESOLVED, AND THE "CONSTANTS" ARE NOT (`vms-b87`, 2026-09-25)
+>
+> The gap recorded below is **closed**, and one of the section's GROUNDED
+> claims is **withdrawn**. Both come from the same measurement: three real
+> OpenVMS VAX V7.3 nodes plus a fourth on a second bridge, each node's frames
+> read off the wire *and* the same quantities read out of VMS's own mouth with
+> `F$GETSYI` at the same moment (capture
+> `tests/lab/captures/vms-b36-cnxmgrerr-20260925/`, `analysis/connect-data.txt`
+> and README §2(d)).
+>
+> | node / configuration | VOTES | EXPECTED | QUORUM | CLUSTER_NODES | `[98:105]` |
+> |---|---|---|---|---|---|
+> | VAX1, 2-node lab | 1 | 1 | 1 | 2 | `01 00 01 00 02 00 01` |
+> | **VAX2, same cluster** | **0** | 1 | 1 | 2 | `01 00 01 00 02 00 01` |
+> | VAXC alone | 1 | 1 | 1 | 1 | `01 00 01 00 01 00 01` |
+> | VAXC + one member | 1 | 2 | 2 | 2 | `02 00 02 00 02 00 01` |
+> | any node being admitted | — | — | — | — | `00 00 00 00 00 00 00` |
+>
+> **VAX2 is the discriminator.** It holds ZERO votes of its own and still
+> reports `1`, so the first field is the CLUSTER's vote total and not the
+> sender's — which no census restricted to one cluster could have separated.
+> The field resolves as three little-endian 16-bit counts and a flag:
+>
+> ```
+> [98:100] the cluster's total votes      (CLUB cevotes)
+> [100:102] the cluster quorum            (CLUB quorum)
+> [102:104] the number of members         (CLUB cluster_nodes, p. 7-49 SELECTED)
+> [104]     1 for a member, 0 for a node being admitted
+> ```
+>
+> **This reading explains all five values in the table below, including the
+> one the section says "does not fit the shape".** `01 00 00 00 02 00 01` is
+> votes 1, **quorum 0**, members 2 — a member whose quorum cell is momentarily
+> zero, which is exactly p. 7-48's proposed-vs-effective window before Phase 2
+> copies the proposed cells. The old `01 00 01 00 NN 00 01` reading was the
+> THIRD field alone, and "NN = the count of members the sender sees" was right
+> about that field and silent about the other two.
+>
+> **AND `[94:98]` / `[105:110]` ARE NOT CONSTANTS.** §4(N) records them as
+> GROUNDED constants (`01 1b 01 03` and `08 00 00 06 00`). On the bench VAX
+> `[96]` moved `01 -> 02`, `[105]` moved `08 -> 09` and `[106]` moved
+> `00 -> 02` **inside one run** (`analysis/connect-data.txt`, the `011b0203 ...
+> 0109 0200 0600` frame). What the census established is that they are stable
+> across identity, node number, root, boot and role — not that they are
+> constant. Nothing in the library says what moves them, so OVMX still COPIES
+> both spans rather than composing them (`vms_cluster_codec_cm.h` §7), and that
+> is now a NAMED gap instead of an assumed constant.
+>
+> **What OVMX does with this:** `vms_cm_conndata_build()` derives `[98:105]`
+> from the CLUB every beat, so the bytes this node offers on a connect AND on
+> an accept are its own cluster arithmetic at that moment. The "OVMX cannot
+> generate connect data for a role it has not observed" limit recorded at the
+> end of this gap is **lifted for the member role**; the version quad and tail
+> keep it.
+
 **RE gap left in §4(N) (honest).** What `[98:105]` **encodes is unknown.** All
 five values it takes over the 148 VAX-sourced frames, exhaustively:
 
@@ -3271,8 +3326,9 @@ OVMX does depends on any of it: OVMX copies a real joiner's observed bytes
 rather than computing them. Two candidate readings are **REFUTED**: it is not
 the member-state sequence (`af2-established-rejoin` runs Member State Seq 2→3→4
 while VAX1 sends `NN=1` throughout) and not the node number (VAX1, node 1, sends
-`NN=2` in the 2-member specimen). **Consequence, and it is a real limit:** OVMX
-cannot yet *generate* connect data for a role it has not observed, and it must
+`NN=2` in the 2-member specimen). **Consequence, and it is a real limit** (LIFTED for the member role by the
+`vms-b87` correction boxed above; still true of the version quad and tail)**:**
+OVMX cannot yet *generate* connect data for a role it has not observed, and it must
 not claim to.
 
 **OVMX does NOT act on the peer's value.** It decodes and logs it

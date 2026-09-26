@@ -158,6 +158,19 @@ target_link_libraries(test_sim_cnxman_giveup_reject PRIVATE cluster_host_cnxman)
 target_include_directories(test_sim_cnxman_giveup_reject PRIVATE
     ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
+# rd vms-8a9's rung-R2 leg: a member whose block for a peer p. 7-25 deallocated
+# (#1309) relearns that peer's CSID from the ONE membership record the
+# coordinator sends an existing member -- byte-grounded on the three-real-node
+# oracle, where VAX3 was removed at CSID 00010003/index 2 and re-admitted at
+# 00010004/index 3 -- and the SHIPPING phase-2 commit can then name it. The
+# CONTROL is the measured defect itself: without the record the identical
+# commit leaves the peer NEW and the member count one short.
+cluster_sim_test(test_sim_cnxman_rebuilt_view
+                 scenarios/cnxman_rebuilt_view_relearns_csid.c)
+target_link_libraries(test_sim_cnxman_rebuilt_view PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_rebuilt_view PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 # FC-P4.6's rung-R2 leg: the REAL lock engine (vms_lock.c on FC-P4.9's host
 # backend), the REAL requester FSM and the REAL Lock Directory Weight Vector in
 # one host process, against SIMULATED master/directory systems. It proves the

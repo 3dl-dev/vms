@@ -1077,12 +1077,63 @@ static void test_membrec_about_another_member_is_not_adopted(void)
 					"  ... the one the record named");
 	}
 
-	/* A system this node holds no block for is NOT invented. */
-	len = mk_membrec(4242u, 0x00010007u);
+	/*
+	 * rd vms-8a9 SUPERSEDES the old "a system with no block is not
+	 * invented" reading, and the oracle is why. A committed membership
+	 * record is the COORDINATOR NAMING A SYSTEM on the cluster's own
+	 * connection; filing it is recording what the cluster said, not
+	 * inventing a system. The block a member holds for a peer does not
+	 * survive p. 7-25's deallocate-and-rebuild (#1309), and after that
+	 * rebuild this record is the ONLY way the member ever learns the
+	 * re-admitted peer's CSID.
+	 *
+	 * THE BYTES ARE THE ORACLE'S. oracle-3node-fault-f1.pcap frame 1523:
+	 * VAX3 (SCSSYSTEMID 1027) was removed at CSID 00010003 / CSV index 2,
+	 * came back as a new incarnation, was assigned 00010004 / index 3, and
+	 * the coordinator sent the SURVIVING MEMBER exactly that one record --
+	 * which it answered. So those are the values fed here.
+	 */
+	len = mk_membrec(1027u, 0x00010004u);
 	(void)join_feed(len);
-	ct_check_eq_u32(g.j.membrecs_unknown_peer, 1u,
-			"a record about a system with no block is counted and "
-			"dropped -- there is no \"system zero\"");
+	ct_check_eq_u32(g.j.membrecs_peer_created, 1u,
+			"a record about a system this node has no block for "
+			"CREATES one -- the coordinator named it");
+	ct_check_eq_u32(g.j.membrecs_unknown_peer, 0u,
+			"...and nothing is dropped");
+	{
+		const struct vms_csb *rebuilt =
+			cnxman_club_find_sysid(&g.cl.club, 1027ull);
+
+		ct_check(rebuilt != NULL, "  the block exists");
+		ct_check(rebuilt != NULL && rebuilt->csid_valid,
+			 "  and carries a CSID");
+		if (rebuilt != NULL)
+			ct_check_eq_u32((uint32_t)rebuilt->csid, 0x00010004u,
+					"  ... the NEW one the oracle's own "
+					"record named, not the old 00010003");
+		ct_check(rebuilt != NULL && rebuilt->sysid_valid &&
+			 rebuilt->sysid == 1027ull,
+			 "  ... filed under the SCSSYSTEMID the record named");
+	}
+	ct_check_eq_u32(g.j.membrecs_adopted, 0u,
+			"INV-6: and it is still NOT taken as this node's own "
+			"identity");
+
+	/* A SECOND record about the same system does not make a second block:
+	 * the CSID is re-filed on the one that exists. */
+	len = mk_membrec(1027u, 0x00010005u);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.j.membrecs_peer_created, 1u,
+			"a second record about the same system creates no "
+			"second block");
+	{
+		const struct vms_csb *rebuilt =
+			cnxman_club_find_sysid(&g.cl.club, 1027ull);
+
+		ct_check(rebuilt != NULL &&
+			 (uint32_t)rebuilt->csid == 0x00010005u,
+			 "...it re-files the CSID the cluster now names");
+	}
 }
 
 /*

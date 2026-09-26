@@ -2051,17 +2051,55 @@ static void join_adopt_membership_rec(struct cnxman_join *j,
 		 * (phase2_csb_in_nodemap needs csid_valid), and counts a
 		 * cluster of one while being a member of a cluster of two.
 		 *
-		 * A system this node holds NO block for is not invented: there
-		 * is no "system zero" (INV-6). The record is counted and
-		 * dropped.
+		 * A SYSTEM THIS NODE HOLDS NO BLOCK FOR GETS ONE (rd vms-8a9),
+		 * and that is not the "system zero" INV-6 forbids: this record
+		 * is the COORDINATOR NAMING A SYSTEM, on the cluster's own
+		 * connection, in the transition that committed it. Every value
+		 * filed comes out of the record; nothing is composed. It is the
+		 * same reasoning E72 applied to an inbound connect -- a frame
+		 * from a system IS the discovery of it -- applied to the
+		 * cluster's own statement about a third party.
+		 *
+		 * MEASURED, AND IT IS WHY THIS EXISTS. The block a member holds
+		 * for a peer does not survive p. 7-25's deallocate-and-rebuild
+		 * (rd vms-dfe, #1309): on the jittered rig a survivor's block
+		 * for the joiner was freed while the joiner's admission was in
+		 * flight, this record arrived at the gap, was counted
+		 * `membrecs_unknown_peer` and dropped, and
+		 * phase2_csb_in_nodemap() then had no CSID to match the joiner
+		 * to the coordinator's nodemap -- so the joiner stayed NEW in
+		 * that member's own SHOW CLUSTER for the rest of the run
+		 * (arms F-3/F-9/F-13/F-15/F-17).
+		 *
+		 * AND IT IS WHAT REAL VMS DOES. In the three-real-node oracle
+		 * (tests/lab/captures/vms-b36-cnxmgrerr-20260925/oracle/) the
+		 * coordinator sends the JOINER the full member set and sends
+		 * every EXISTING MEMBER exactly one record: the one naming the
+		 * system being admitted. When VAX3 was removed and came back as
+		 * a new incarnation it was assigned a NEW CSID at a NEW CSV
+		 * index (00010003 idx 2 -> 00010004 idx 3), and frame 1523 of
+		 * oracle-3node-fault-f1.pcap is that single record going to
+		 * VAX1, which VAX1 answers. A real member's knowledge of a
+		 * re-admitted peer's CSID comes from THAT record and from no
+		 * pre-existing field -- VMS does not re-run the admission for
+		 * the survivor.
 		 */
 		struct vms_csb *peer =
 			cnxman_club_find_sysid(&j->cl->club,
 					       (vms_scs_sysid_t)rec.sysid);
 
 		if (peer == NULL) {
-			j->membrecs_unknown_peer++;
-			return;
+			peer = cnxman_club_alloc_csb(&j->cl->club,
+						     (vms_scs_sysid_t)rec.sysid,
+						     1);
+			if (peer == NULL) {
+				/* The table is full. Counted and dropped --
+				 * never a silent overwrite of another
+				 * system's block. */
+				j->membrecs_unknown_peer++;
+				return;
+			}
+			j->membrecs_peer_created++;
 		}
 		cnxman_csb_set_csid(peer, (vms_csid_t)rec.csid);
 		j->membrecs_peer_learned++;

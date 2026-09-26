@@ -1,0 +1,32 @@
+# Per-arm fault classification (rd vms-8a9 campaign).
+# fault=1 means the trigger line really appeared and the tap really went
+# dark; fault=0 means the joiner never asked the real VAX, so no fault was
+# injected and the arm is not an arm of the experiment.
+H-1 fault=1 verdict=PASS
+H-2 fault=1 verdict=PASS
+H-3 fault=1 verdict=PASS
+H-4 fault=1 verdict=PASS
+H-5 fault=0 verdict=FAIL
+H-6 fault=1 verdict=PASS
+H-7 fault=1 verdict=PASS
+H-8 fault=1 verdict=PASS
+H-9 fault=1 verdict=PASS
+H-10 fault=1 verdict=PASS
+H-11 fault=1 verdict=PASS
+H-12 fault=1 verdict=PASS
+H-13 fault=1 verdict=PASS
+H-14 fault=1 verdict=PASS
+H-15 fault=0 verdict=FAIL
+H-16 fault=1 verdict=PASS
+H-17 fault=1 verdict=PASS
+H-18 fault=1 verdict=PASS
+H-19 fault=0 verdict=FAIL
+H-20 fault=1 verdict=PASS
+H-21 fault=1 verdict=PASS
+H-22 fault=1 verdict=PASS
+J-1 fault=1 verdict=PASS
+J-2 fault=1 verdict=PASS
+J-3 fault=1 verdict=FAIL
+J-4 fault=1 verdict=PASS
+J-5 fault=1 verdict=PASS
+J-6 fault=1 verdict=PASS

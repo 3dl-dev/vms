@@ -347,3 +347,69 @@ reboots, and is accepted again. Both halves are now what this executive does.
 `campaign/F-3/` is one of those arms kept whole, and `campaign/F-1/` is the
 no-fault one, kept so the nine failures can be read apart rather than counted
 together.
+
+---
+
+# vms-8a9 — where a member gets a rebuilt peer's CSID, and the campaign that closes it
+
+**2026-09-26, a temporary `ovmx-lab/b8alab` pod, the same deterministic bench
+rig and the same oracle captures.** This is the third section: §5 above closed
+the crash, the rd vms-0f9 campaign left nine arms missing "all three MEMBER on
+both nodes", and five of those were rd vms-8a9.
+
+## The oracle already held the answer
+
+No new lab run was needed to ground it — the three-real-node captures in
+`oracle/` contain both halves:
+
+```
+oracle-3node-clean.pcap     frame  266   VAX2 -> VAX1   sysid 1027  csid 00010003  idx 2
+oracle-3node-fault-f1.pcap  frame 1523   VAX2 -> VAX1   sysid 1027  csid 00010004  idx 3
+```
+
+A real coordinator sends the **joiner** the full member set and sends every
+**existing member** exactly **one** op-0x05 record: the one naming the system
+being admitted. VAX3 was removed at CSID `00010003` / CSV index 2, came back as
+a **new incarnation** (its boot quadword changed) and was re-admitted at
+`00010004` / index **3** — round-robin, never its old slot. Frame 1523 is that
+single record going to the surviving member, and VAX1 answers it. **A real
+member's knowledge of a re-admitted peer's CSID comes from that record and from
+nothing it held before; VMS does not re-run the admission for the survivor.**
+
+And the record really did arrive on the rig too: `campaign/F-3`'s own capture,
+frame 2299, is VAXC → OVMXA naming sysid 1988, csid `00010003`, idx 2 — and
+OVMXA answered it. This executive parsed it, found no block for 1988 (p. 7-25
+had freed it), counted `membrecs_unknown_peer` and **dropped it**. That is the
+whole defect.
+
+## The campaign — `campaign-8a9/`
+
+Twenty-eight arms on `15bb286d`, same rig, same fault at the same point.
+`fault-classification.txt` classifies every arm by whether the fault really
+fired, because that is the difference between an arm of the experiment and an
+arm in which the joiner never asked the real VAX at all.
+
+| | |
+|---|---|
+| arms run | **28** (`loop-H.log` 22, `loop-J.log` 6) |
+| **VAX bugchecks** | **0 — in all 28** |
+| **rd vms-4c9 loop** | **0 — in all 28** |
+| arms with the fault really injected | 25 |
+| ...of which passed every criterion | **24** |
+| **longest consecutive run of fault-injected arms passing** | **21** |
+| **arms showing the rd vms-8a9 signature (one node short)** | **0**, against **5 of 22** before |
+
+The three arms with no fault injected (`H-5`, `H-15`, `H-19`) are the same
+class as `F-1` in §5: the joiner's first admission request went to the OVMX
+member rather than the real VAX, that member cannot coordinate an admission
+while a real VAX is a participant (the rd vms-1ac grounded-open gate, working
+as designed), so it says nothing, and the joiner was still working through
+E80's re-issue when the arm's window closed. The VAX therefore never proposed
+and the trigger line never appeared. `J-3` is the one fault-injected arm that
+did not pass: it re-incarnated and was still re-joining at the window. Both are
+harness-window behaviour, not correctness — and both are named rather than
+folded into a pass rate.
+
+`campaign-8a9/H-2/` is a passing arm kept whole; `campaign-8a9/J-3/` is the one
+that did not.
+

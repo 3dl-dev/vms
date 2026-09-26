@@ -24,6 +24,6 @@ for i in $(seq 1 "$N"); do
     done
     sleep 2
     gzip -c "$R"/b36.pcap > "$D"/b36.pcap.gz 2>/dev/null
-    bash "$R/grade2.sh" "$D" "$TAG-$i" | tee -a "$R/loop-$TAG.log"
+    bash "$R/grade3.sh" "$D" "$TAG-$i" | tee -a "$R/loop-$TAG.log"
 done
 echo "===== $TAG done: $(grep -c ' PASS ' "$R/loop-$TAG.log") PASS / $(grep -c ' FAIL ' "$R/loop-$TAG.log") FAIL =====" | tee -a "$R/loop-$TAG.log"

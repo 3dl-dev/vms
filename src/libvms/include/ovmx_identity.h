@@ -92,7 +92,7 @@
 /* ---- Brand identity (human surfaces, INV-0) ---------------------- */
 
 #define OVMX_PRODUCT_NAME       "OpenVMX"
-#define OVMX_PRODUCT_VERSION    "V0.7-1"
+#define OVMX_PRODUCT_VERSION    "V0.7-2"
 
 /*
  * Cluster software-version identity -- the string OVMX presents AS A CLUSTER

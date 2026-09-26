@@ -1042,9 +1042,19 @@ struct cnxman_join {
 					 * on the block this CLUB already holds
 					 * for that SCSSYSTEMID -- which is what
 					 * lets this node COUNT the cluster     */
-	uint32_t membrecs_unknown_peer; /* ... about a system this node holds no
-					 * block for: counted and dropped, never
-					 * invented (INV-6)                     */
+	uint32_t membrecs_unknown_peer; /* ... that could not be filed at all,
+					 * because the CSB table is full: counted
+					 * and dropped, never a silent overwrite */
+	/*
+	 * ...and records about a system this node held no block for, which
+	 * therefore GOT one (rd vms-8a9). Its own counter because the two are
+	 * different facts about the cluster: `peer_learned` is "we already knew
+	 * of that system", `peer_created` is "the cluster told us about a
+	 * system we did not have", and after a p. 7-25 rebuild the second is
+	 * the only way a member ever learns the CSID of the peer being
+	 * admitted.
+	 */
+	uint32_t membrecs_peer_created;
 	uint8_t  lockdirwt_unrepresentable; /* configured nonzero, no offset  */
 	uint8_t  pad3[3];
 	uint32_t lockdirwt_unpinned;

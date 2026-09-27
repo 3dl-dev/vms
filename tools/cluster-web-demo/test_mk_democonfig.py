@@ -242,11 +242,18 @@ class TestRosterUniqueness(unittest.TestCase):
         n = M.DEMO_NODE_A
         self.assertEqual(n["name"], "OVMXA")
         self.assertLessEqual(len(n["name"]), 6)
-        self.assertEqual(n["votes"], 1)
-        # rd vms-6d3d: a real three-node VMScluster carries EXPECTED_VOTES = the
-        # total VOTES of its members on every node it authors. This was 2, left
-        # over from the proven 2-node milestone.
-        self.assertEqual(n["expected_votes"], 3)
+        # rd vms-1a1: NON-VOTING. This asserted votes=1/expected_votes=3 (rd
+        # vms-6d3d's "EXPECTED_VOTES = the roster's total votes"), which was
+        # right for a cluster of three EQUAL voting members -- but this roster's
+        # third member is a real VAX that must be the founder, and with a vote
+        # each the two OVMX nodes' COMBINED votes satisfied quorum and they
+        # founded without it (measured live: the VAX formed a separate cluster
+        # and admitted nobody). The values change deliberately; coverage is not
+        # reduced -- see test_only_the_real_vms_node_can_found_the_cluster and
+        # test_no_ovmx_node_carries_votes, which assert the invariant these two
+        # literals only happen to satisfy.
+        self.assertEqual(n["votes"], 0)
+        self.assertEqual(n["expected_votes"], 1)
         self.assertEqual(n["group"], 257)
         with tempfile.TemporaryDirectory() as d:
             written = M.emit_roster([n], d, caut_writer="auto")
@@ -290,6 +297,46 @@ class TestRosterUniqueness(unittest.TestCase):
             for w in written:
                 self.assertEqual(os.path.getsize(w["par"]), 9484)
                 self.assertEqual(os.path.getsize(w["caut"]), 44)
+
+
+    # --- rd vms-1a1: only the real VAX may be able to found the demo cluster ---
+    #
+    # MEASURED on the live page 2026-09-27: with VOTES=1 on both OVMX nodes their
+    # COMBINED votes satisfied quorum, so the pair cold-formed a cluster of their
+    # own before the real VAX (slower to boot under pcjs) could form one -- and
+    # the real VAX then formed a SEPARATE one-member cluster and admitted nobody.
+    # A visitor saw "vax vms never joined". The grader had hidden it for two
+    # deploys by always clicking Node C first with a five-minute head start.
+    #
+    # These two assertions are deliberately FORMULA-FREE: they do not restate the
+    # quorum arithmetic (that lives once, in the executive --
+    # cnxman_quorum_could_found(), which refuses a zero-vote system first and on
+    # its own terms). They assert the structural property that makes the
+    # arithmetic's answer inevitable, so there is no second implementation of the
+    # rule to drift.
+    def test_only_the_real_vms_node_can_found_the_cluster(self):
+        voters = [n["name"] for n in M.DEMO_ROSTER if n["votes"] > 0]
+        self.assertEqual(
+            voters, [M.DEMO_NODE_C["name"]],
+            "exactly one node in DEMO_ROSTER may carry votes, and it must be the "
+            "real-VMS node: a zero-vote system can never found a cluster, so this "
+            "is what stops the OVMX nodes forming one without the VAX (rd vms-1a1)")
+
+    def test_no_ovmx_node_carries_votes(self):
+        for node in (M.DEMO_NODE_A, M.DEMO_NODE_B):
+            self.assertEqual(
+                node["votes"], 0,
+                f"{node['name']} must be a NON-VOTING member (rd vms-1a1). With "
+                "votes > 0 on both OVMX nodes their combined votes satisfy quorum "
+                "and the pair founds its own cluster, which is the split brain a "
+                "visitor reported as 'vax vms never joined'.")
+            # EXPECTED_VOTES must not exceed the votes actually in the cluster, or
+            # CEVOTES rises above the one real vote and the cluster sits
+            # quorum-blocked with every node present.
+            self.assertLessEqual(
+                node["expected_votes"], M.DEMO_NODE_C["votes"],
+                f"{node['name']}'s EXPECTED_VOTES must not exceed the total votes "
+                "in the roster, or quorum cannot be met even at CN=3 (rd vms-1a1)")
 
 
 if __name__ == "__main__":

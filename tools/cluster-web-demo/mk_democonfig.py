@@ -207,8 +207,33 @@ REQUIRED_LOADER_PARAMS = [
 # proven 2-node milestone (A+C) and left short of the roster it is a member of;
 # rd vms-6d3d reconciles it, having measured the cold-formation rule against two
 # real V7.3 systems (tests/lab/captures/vms-6d3d-coldform-ev2-20260924/).
+# rd vms-1a1 -- VOTES=0. MEASURED on the live page 2026-09-27: with VOTES=1 and
+# EXPECTED_VOTES=3 on BOTH OVMX nodes their COMBINED two votes satisfy quorum 2,
+# so since rd vms-6d3d's cold-formation rule the pair can FOUND A CLUSTER OF
+# THEIR OWN -- and they do, because they boot faster than a real VAX under pcjs.
+# A visitor clicking the page top to bottom (its own order is A, B, C) then gets
+# OVMXA founding, OVMXB joining it ("another system is also waiting to form an
+# OpenVMS Cluster and takes precedence"), and the real VAX forming a SEPARATE
+# one-member cluster it never admits anybody into: split brain, reported as
+# "vax vms never joined". The grader missed it for two deploys because it always
+# clicked Node C FIRST with a five-minute head start, which made the VAX the
+# founder by construction.
+#
+# VOTES=0 is the fix and it is the ordinary VMS configuration for this shape, not
+# a workaround: a non-voting member is what every satellite node is, and
+# cnxman_quorum_could_found() refuses a zero-vote system FIRST and on its own
+# terms ("a non-voting system never founds", pp. 7-28/7-33). So neither OVMX node
+# can found, alone or as a pair, at any speed or click order -- the only node
+# that can is the real VAX, which is the demo's whole point. EXPECTED_VOTES drops
+# to 1 with it: leaving it at 3 would raise CEVOTES to 3 and quorum to 2 while
+# only the VAX votes, and the cluster would sit quorum-blocked. At 1, CEVOTES is
+# max(1, sum VOTES = 1) = 1, quorum 1, present 1 -- quorum holds at CN=2 and CN=3
+# alike. Verified against the real predicate, not by hand.
+#
+# It also strengthens the anti-LARP property every capture leans on: reaching
+# MEMBER can only ever be a real admission by the real VAX.
 DEMO_NODE_A = {
-    "name": "OVMXA", "id": 1987, "votes": 1, "expected_votes": 3,
+    "name": "OVMXA", "id": 1987, "votes": 0, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
 }
 
@@ -219,8 +244,10 @@ DEMO_NODE_A = {
 # inject-cluster-config.sh/inject-ods2-config.sh) -- no VAX-specific path.
 # expected_votes=3 is the full 3-node target and is what a real three-node
 # VMScluster uses on every member (see node A above, reconciled in rd vms-6d3d).
+# VOTES=0 for the same reason as node A above (rd vms-1a1) -- the two of them
+# together were what could found a cluster without the real VAX.
 DEMO_NODE_B = {
-    "name": "OVMXB", "id": 1988, "votes": 1, "expected_votes": 3,
+    "name": "OVMXB", "id": 1988, "votes": 0, "expected_votes": 1,
     "alloclass": 0, "vaxcluster": 2, "group": 257, "password": "",
 }
 

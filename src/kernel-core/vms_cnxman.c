@@ -2836,11 +2836,7 @@ static int cnxman_refresh_conndata(struct vms_cnxman *cn)
 static void cnxman_refresh_conndata_for(struct vms_cnxman *cn,
 					const struct vms_csb *csb)
 {
-	uint16_t ack = cnxman_csb_dialogue_ack(csb);
-
-	if (cn->conndata_peer_ack == ack && cn->conndata_peer_valid)
-		; /* fall through: the arithmetic may still have moved */
-	cn->conndata_peer_ack = ack;
+	cn->conndata_peer_ack = cnxman_csb_dialogue_ack(csb);
 	cn->conndata_peer_valid = 1u;
 	(void)cnxman_refresh_conndata(cn);
 }

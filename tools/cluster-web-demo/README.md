@@ -75,6 +75,29 @@ Release, else build from source at the tag) and the multi-node CN=N reproducibil
 exists as `openvmx-site/demo/cluster/e2e/e2e-boot.js` (parameterized by `NODE_B`/`NODE_C` env vars) and
 should be driven against this generator's bundle, not reimplemented.
 
+## `visitor-gate.mjs` — the pre-deploy gate (rd vms-1a1)
+
+Run it against the bundle (or the live page) **before and after every redeploy**. It drives the page the
+way a visitor does and nothing else: no query parameters, a fresh profile and cold cache per run, and it
+**types nothing** — membership must form with nobody touching a console.
+
+```
+DEMO_URL=http://localhost:8110/index.html OUT_DIR=/out/gate node visitor-gate.mjs
+CASE=c-first-legacy node visitor-gate.mjs        # re-run one row of the matrix
+FREEZE_MS=45000     node visitor-gate.mjs        # suspend the tab mid-formation (rd vms-8c54)
+```
+
+The matrix varies the two things the old grader assumed away — **click order and speed** — plus CPU
+throttling, because every inter-node frame crosses four main threads (node worker → node iframe → the
+parent page's L2 hub → node iframe → worker) and an SCS virtual circuit dies on latency. Each run reports
+its worst main-thread drift.
+
+Pass bar: **both** OVMX nodes' own CNXMAN naming all three systems **and** the real VAX admitting both in
+its own words, with no bugcheck. `gate-eval.mjs` holds every judgement the gate makes as pure functions
+over console text, unit-tested by `test/visitor-gate.test.mjs` without a browser — the gate has twice been
+wrong about a run (it failed a healthy cluster whose console had scrolled, and it named a cause its
+evidence did not carry), and a grader that lies in either direction is worse than no grader.
+
 ## Scope of this component
 
 This is lane (a)'s transport seam + per-node config injection + the `build-cluster-demo <TAG>` generator.

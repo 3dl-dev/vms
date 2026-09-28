@@ -74,8 +74,8 @@ grep -q "sysdisk_injected=yes" "$WORK/run1.log" \
 
 BUNDLE1="$OUT1/V9.9-test"
 [ -f "$BUNDLE1/manifest.json" ] || { echo "FAIL: no manifest.json"; exit 1; }
-[ -f "$BUNDLE1/initramfs-ovmx-nodeA.cpio.gz" ] || { echo "FAIL: no injected initramfs in bundle"; exit 1; }
-[ -f "$BUNDLE1/sysdisk-nodeA.qcow2.gz" ] || { echo "FAIL: no injected sysdisk in bundle"; exit 1; }
+[ -f "$BUNDLE1/nodeA/initramfs-ovmx-nodeA.cpio.gz" ] || { echo "FAIL: no injected initramfs in bundle"; exit 1; }
+[ -f "$BUNDLE1/nodeA/sysdisk-nodeA.qcow2.gz" ] || { echo "FAIL: no injected sysdisk in bundle"; exit 1; }
 [ -f "$BUNDLE1/index.html" ] || { echo "FAIL: page not staged into bundle"; exit 1; }
 [ -f "$BUNDLE1/assets/site.css" ] || { echo "FAIL: shared site.css not staged into bundle"; exit 1; }
 [ -d "$BUNDLE1/nodeB" ] && { echo "FAIL: Node B directory present without --vax-image (must stay staged/absent)"; exit 1; }
@@ -87,7 +87,7 @@ for a in xterm.js xterm.css xterm-pty.js; do
 done
 
 echo "5. asserting the injected sysdisk actually carries VAXCLUSTER=2 SCSNODE=OVMXA (real ODS-2 read-back)"
-gunzip -c "$BUNDLE1/sysdisk-nodeA.qcow2.gz" > "$WORK/check.qcow2"
+gunzip -c "$BUNDLE1/nodeA/sysdisk-nodeA.qcow2.gz" > "$WORK/check.qcow2"
 qemu-img convert -O raw "$WORK/check.qcow2" "$WORK/check.raw"
 "$WORK/vmsfs_master" --ods2 list "$WORK/check.raw" | grep -qi '\]OVMXVMSSYS.PAR;2' \
     || { echo "FAIL: bundle sysdisk has no injected OVMXVMSSYS.PAR;2"; exit 1; }
@@ -103,7 +103,7 @@ assert m["nodes"]["A"]["sysdisk_injected"] is True, m
 assert m["nodes"]["B"]["staged"] is True, m
 assert m["nodes"]["C"]["staged"] is True, m
 assert "index.html" in m["files"], m
-assert "sysdisk-nodeA.qcow2.gz" in m["files"], m
+assert "nodeA/sysdisk-nodeA.qcow2.gz" in m["files"], m
 print("manifest OK")
 PYEOF
 

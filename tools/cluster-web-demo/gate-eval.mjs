@@ -104,6 +104,9 @@ export const isCN3 = (R) =>
 export const newObservations = () => ({
   transcript: {}, restarts: {}, member: {}, added: {}, lost: {},
   vaxc_admitted: [], ovmx_founded: {}, bugchecks: {}, sca: {}, cn3: false,
+  // How many times a panel's console only advanced after it was scrolled into
+  // view -- the page defect in rd vms-0bc, counted rather than hidden.
+  repaint_stalls: {},
 });
 
 // State the outcome in terms of what was OBSERVED, never a diagnosis the
@@ -126,5 +129,9 @@ export function verdictOf(R) {
   const quiet = NODES.filter((w) => !(R.sca || {})[w]);
   if (quiet.length) why.push(`no SCA frames from ${quiet.join(',')}`);
   if (Object.keys(R.lost || {}).length) why.push(`lost: ${JSON.stringify(R.lost)}`);
+  const stalls = R.repaint_stalls || {};
+  if (Object.keys(stalls).length) {
+    why.push(`panels that only repainted once revealed: ${JSON.stringify(stalls)} (rd vms-0bc)`);
+  }
   return `NOT CN=3: ${why.join('; ')}`;
 }

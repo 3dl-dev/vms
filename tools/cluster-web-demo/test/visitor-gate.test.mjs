@@ -152,3 +152,13 @@ test('the matrix tests click ORDER and SPEED, not just the easy path', () => {
     'the old grader always gave the real VAX a head start; this one must not');
   assert.equal(new Set(labels).size, labels.length, 'labels select rows, so they must be unique');
 });
+
+test('a panel that only repaints when revealed is named in the verdict', () => {
+  // Not a cluster fact -- a page defect (rd vms-0bc) -- but the run that hit it
+  // must say so, because the alternative is someone re-reading a throttled
+  // screen as "the real VAX never printed anything".
+  const R = newObservations();
+  R.sca = { OVMXA: 1, OVMXB: 1, VAXC: 1 };
+  R.repaint_stalls = { VAXC: 4 };
+  assert.match(verdictOf(R), /panels that only repainted once revealed: \{"VAXC":4\} \(rd vms-0bc\)/);
+});

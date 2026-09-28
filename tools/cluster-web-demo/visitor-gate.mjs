@@ -66,6 +66,8 @@ const CASE = (process.env.CASE || '').split(',').map((x) => x.trim()).filter(Boo
 // it on to REPRODUCE 8c54, not to gate a deploy on it.
 const FREEZE_MS = +(process.env.FREEZE_MS || 0);
 const FREEZE_AT_MS = +(process.env.FREEZE_AT_MS || 60000);
+// How long to let a revealed panel catch up before reading it (rd vms-0bc).
+const REVEAL_MS = +(process.env.REVEAL_MS || 1500);
 
 // Injected before any page script: let the page report its own main-thread
 // health. A starved or throttled document shows up here as a large drift, which
@@ -89,13 +91,45 @@ const pcjs = (p, s) => p.frames().find((f) => f !== p.mainFrame() &&
 const nodeA = (p) => p.frames().find((f) => f !== p.mainFrame() &&
   f.url().split('?')[0].endsWith('/node.html'));
 
-async function consoleOf(page, who) {
+async function rawConsoleOf(page, who) {
   if (who === 'OVMXA') {
     const f = nodeA(page);
     return f ? f.evaluate(() => (window.__nodeState && window.__nodeState.consoleText) || '').catch(() => '') : '';
   }
   const f = pcjs(page, who === 'OVMXB' ? '0B' : '0C');
   return f ? f.evaluate(() => { const e = document.getElementById('screen'); return e ? e.textContent : ''; }).catch(() => '') : '';
+}
+
+// Bring a panel into the viewport. A pcjs panel below the fold STOPS
+// REPAINTING -- Chromium throttles rendering in an offscreen cross-origin
+// iframe and the terminal writes its DOM text on the render tick -- so its
+// screen text goes stale while the guest runs on. Measured (rd vms-0bc): a
+// panel frozen 180s at 211 characters of power-on self-test jumped to 6864
+// characters, the whole VMS boot and its cluster transition, within 10s of a
+// scrollIntoView -- with nothing typed and nothing clicked.
+//
+// Reading a throttled panel as if it were the guest's output is how a formed
+// cluster gets reported as "the real VAX admitted nobody". So reveal a panel
+// before reading it, and COUNT the times that was what made it move: that
+// count is the page defect, measured, not a thing the gate hides.
+async function reveal(page, who) {
+  const key = who === 'OVMXB' ? '0B' : who === 'VAXC' ? '0C' : null;
+  if (!key) return;                                  // node A's console is a JS string
+  await page.evaluate((k) => {
+    const f = [...document.querySelectorAll('iframe')].find((x) => x.src.includes(k));
+    if (f) f.scrollIntoView({ block: 'center' });
+  }, key).catch(() => {});
+  await sleep(REVEAL_MS);
+}
+
+async function consoleOf(page, who, R) {
+  const before = await rawConsoleOf(page, who);
+  await reveal(page, who);
+  const after = await rawConsoleOf(page, who);
+  if (R && after.length > before.length + 8) {
+    R.repaint_stalls[who] = (R.repaint_stalls[who] || 0) + 1;
+  }
+  return after.length >= before.length ? after : before;
 }
 
 // The transcripts live in the .console.log files; keeping them out of the JSON
@@ -152,7 +186,7 @@ async function oneRun(spec, idx) {
         // of a KA655 power-on self-test is then the only surviving trace of
         // twenty minutes of cluster messages. Keep everything ever seen, and
         // judge from that.
-        observe(R, w, await consoleOf(page, w));
+        observe(R, w, await consoleOf(page, w, R));
         try { fs.writeFileSync(`${dir}/${w}.console.log`, R.transcript[w] || ''); } catch (e) {}
       }
       const health = await page.evaluate(() => ({
@@ -167,7 +201,7 @@ async function oneRun(spec, idx) {
                        vis: health.vis, worstDriftMs: health.drift });
       log(`  t=${el}s vis=${health.vis} drift=${health.drift}ms sca=${JSON.stringify(hub)} ` +
           `added=${JSON.stringify(R.added)} vaxcAdm=${JSON.stringify(R.vaxc_admitted)} ` +
-          `lost=${JSON.stringify(R.lost)}`);
+          `lost=${JSON.stringify(R.lost)} stalls=${JSON.stringify(R.repaint_stalls)}`);
       fs.writeFileSync(`${dir}/result.json`, asJson(R));
       if (ok) { R.cn3 = true; break; }
       if (Object.keys(R.bugchecks).length) break;
@@ -175,7 +209,7 @@ async function oneRun(spec, idx) {
     }
 
     for (const w of NODES) {
-      observe(R, w, await consoleOf(page, w));
+      observe(R, w, await consoleOf(page, w, R));
       fs.writeFileSync(`${dir}/${w}.console.log`, R.transcript[w] || '');
     }
     R.verdict = verdictOf(R);
@@ -202,6 +236,7 @@ await (async () => {
                    throttle: rows[i].throttle, verdict: r.verdict, cn3: r.cn3,
                    added: r.added, vaxc_admitted: r.vaxc_admitted, restarts: r.restarts,
                    ovmx_founded: r.ovmx_founded, bugchecks: r.bugchecks, lost: r.lost,
+                   repaint_stalls: r.repaint_stalls,
                    worstDriftMs: r.worstDriftMs, froze: r.froze || false });
     fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 1));
   }

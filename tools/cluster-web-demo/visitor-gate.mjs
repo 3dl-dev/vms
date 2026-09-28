@@ -236,7 +236,7 @@ await (async () => {
                    throttle: rows[i].throttle, verdict: r.verdict, cn3: r.cn3,
                    added: r.added, vaxc_admitted: r.vaxc_admitted, restarts: r.restarts,
                    ovmx_founded: r.ovmx_founded, bugchecks: r.bugchecks, lost: r.lost,
-                   repaint_stalls: r.repaint_stalls,
+                   repaint_stalls: r.repaint_stalls, lost_unnamed: r.lost_unnamed,
                    worstDriftMs: r.worstDriftMs, froze: r.froze || false });
     fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 1));
   }

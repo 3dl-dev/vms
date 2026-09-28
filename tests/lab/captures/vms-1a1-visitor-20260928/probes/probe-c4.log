@@ -1,0 +1,17 @@
+t=20s Clen=860 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=40s Clen=1292 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=60s Clen=6244 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=80s Clen=6244 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=100s Clen=6244 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=120s Clen=6244 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=140s Clen=6244 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=160s Clen=6244 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=180s Clen=6244 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+t=200s Clen=6244 geom=[{"src":"2Fsysdisk-nodeA.qcow2.gz","top":-306,"bottom":62,"onscreen":true},{"src":"52Fovmx-vax-nodeB.img.gz","top":210,"bottom":578,"onscreen":true},{"src":"s73-nodeC-cluster.dsk.gz","top":727,"bottom":1095,"onscreen":true}]
+--- scrolling Node C into view (no click, no keystroke) ---
+after scroll +10s Clen=6244 :: %% 16:44:04.29 Node VAXC (csid 00010001) completed VAXcluster state transition █
+after scroll +20s Clen=6244 :: %% 16:44:04.29 Node VAXC (csid 00010001) completed VAXcluster state transition █
+after scroll +30s Clen=6244 :: %% 16:44:04.29 Node VAXC (csid 00010001) completed VAXcluster state transition █
+after scroll +40s Clen=6244 :: %% 16:44:04.29 Node VAXC (csid 00010001) completed VAXcluster state transition █
+after scroll +50s Clen=6244 :: %% 16:44:04.29 Node VAXC (csid 00010001) completed VAXcluster state transition █
+after scroll +60s Clen=6244 :: %% 16:44:04.29 Node VAXC (csid 00010001) completed VAXcluster state transition █

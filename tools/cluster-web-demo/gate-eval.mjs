@@ -38,7 +38,15 @@ export const MEMBER = /%CNXMAN,\s*this node is now a VAXcluster member/;
 export const FOUNDED = /%CNXMAN,\s*this node has quorum by its own votes/;
 export const ADDED = /%CNXMAN, system 0*([0-9a-f]+) was added to the cluster/g;
 export const VADD = /proposing addition of system (\S+)|proposed addition of node (\S+)/g;
-export const LOST = /lost connection to (?:system )?(\S+)/g;
+// Who a node says it lost, in the node's OWN words. The real VAX names the
+// peer ("%CNXMAN,  lost connection to system OVMXB"); OVMX's connection manager
+// often does not ("lost connection to a cluster member, reconnecting") and its
+// executive names the system by id ("vms: SCS path lost to system 0:1988").
+// Matching \S+ against the unnamed form yielded the peer name "a", which is how
+// a report stops being evidence.
+export const LOST = /lost connection to (?:system|node) ([A-Z][A-Z0-9$]{0,5})|SCS path lost to system (\d+:\d+)/g;
+// A loss the node reports without naming anyone. Counted, never guessed at.
+export const LOST_UNNAMED = /lost connection to a cluster member|lost the VMS\$VAXcluster connection before this node was admitted/g;
 export const BUG = /\*\*\*\s*Fatal BUG CHECK|\*\*\*\s*FATAL BUGCHECK|CNXMGRERR|BUGCHECK CODE|Kernel panic|\bOops:/i;
 // A KA655 power-on self-test banner. Seeing it twice in one run's transcript
 // means the guest restarted -- a fact worth reporting, and not one to infer
@@ -87,6 +95,8 @@ export function observe(R, who, screen) {
   R.added[who] = setOf(t, ADDED).map((h) => '0x' + h.replace(/^0x/, ''));
   const lost = setOf(t, LOST);
   if (lost.length) R.lost[who] = lost;
+  const unnamed = (t.match(LOST_UNNAMED) || []).length;
+  if (unnamed) R.lost_unnamed[who] = unnamed;
   if (BUG.test(t)) R.bugchecks[who] = (t.match(BUG) || [''])[0];
   if (who !== 'VAXC' && FOUNDED.test(t)) R.ovmx_founded[who] = true;
   if (who === 'VAXC') R.vaxc_admitted = setOf(t, VADD);
@@ -103,7 +113,7 @@ export const isCN3 = (R) =>
 // A fresh, empty set of observations.
 export const newObservations = () => ({
   transcript: {}, restarts: {}, member: {}, added: {}, lost: {},
-  vaxc_admitted: [], ovmx_founded: {}, bugchecks: {}, sca: {}, cn3: false,
+  vaxc_admitted: [], ovmx_founded: {}, bugchecks: {}, sca: {}, cn3: false, lost_unnamed: {},
   // How many times a panel's console only advanced after it was scrolled into
   // view -- the page defect in rd vms-0bc, counted rather than hidden.
   repaint_stalls: {},
@@ -129,6 +139,9 @@ export function verdictOf(R) {
   const quiet = NODES.filter((w) => !(R.sca || {})[w]);
   if (quiet.length) why.push(`no SCA frames from ${quiet.join(',')}`);
   if (Object.keys(R.lost || {}).length) why.push(`lost: ${JSON.stringify(R.lost)}`);
+  if (Object.keys(R.lost_unnamed || {}).length) {
+    why.push(`unnamed connection losses: ${JSON.stringify(R.lost_unnamed)}`);
+  }
   const stalls = R.repaint_stalls || {};
   if (Object.keys(stalls).length) {
     why.push(`panels that only repainted once revealed: ${JSON.stringify(stalls)} (rd vms-0bc)`);

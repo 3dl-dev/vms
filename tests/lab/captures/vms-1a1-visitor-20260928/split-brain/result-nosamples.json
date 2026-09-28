@@ -1,0 +1,29 @@
+{
+ "label": "backgrounded",
+ "url": "https://openvmx.3dl.dev/demo/cluster/",
+ "order": "A,B,C",
+ "gap_ms": 5000,
+ "throttle": 1,
+ "background": true,
+ "member": {
+  "OVMXA": true,
+  "OVMXB": true
+ },
+ "added": {
+  "OVMXA": [
+   "7c4"
+  ],
+  "OVMXB": [
+   "7c4",
+   "7c3"
+  ],
+  "VAXC": []
+ },
+ "lost": {},
+ "vaxc_admitted": [],
+ "bugchecks": {},
+ "hub_drops": [],
+ "page_errors": [],
+ "verdict": "NOT CN=3",
+ "cn3": false
+}

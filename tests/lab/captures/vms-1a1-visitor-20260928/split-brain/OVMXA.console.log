@@ -1,0 +1,71 @@
+
+%NIC-CFG, initramfs=nodeA/initramfs-ovmx-nodeA.cpio.gz sysdisk=nodeA/sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFD0EE0+0EF30EE0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-2 - OpenVMS-compatible
+    27-SEP-2026 17:04:58.06
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   45.965419] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   46.003739] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 27-SEP-2026 17:05:19.16
+[   46.108264] %PEA0, channel verified
+[   46.156699] %PEA0, virtual circuit open
+[   46.650370] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   46.757760] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition
+[   47.014920] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   47.164595] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   47.175865] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   48.230562] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   48.624412] %PEA0, channel verified
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+[   48.652607] %PEA0, virtual circuit open
+[   53.350912] %CNXMAN, membership request to the selected member not answered
+[   53.361947] %CNXMAN, re-issuing this node's membership request to another cluster member
+[   58.771497] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition
+[   59.555693] %CNXMAN, membership request to the selected member not answered
+[   59.568583] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   60.388834] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+[   66.534705] %CNXMAN, the systems this node can see have quorum: forming an OpenVMS Cluster
+[   66.550225] %CNXMAN, this node is a member of the cluster
+[   66.559645] %CNXMAN, completed VAXcluster state transition
+[   66.565970] %CNXMAN, this node is now a VAXcluster member
+%RUN-S-PROC_ID, identification of created process is 10000003
+[   67.683321] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   69.137802] %CNXMAN, proposing addition of a system to the cluster
+[   69.220492] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[   69.237817] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[   69.273823] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[   69.284548] %CNXMAN, system 00000000000007c4 was added to the cluster
+[   69.762788] %CNXMAN, completed VAXcluster state transition
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-2 (OpenVMS-compatible)
+
+Username: [   80.023938] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   80.036968] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   80.049923] %CNXMAN, this node is already a member of this cluster: it introduces itself to the new system and asks nobody to admit it
+
+Error reading command input
+Timeout period expired
+

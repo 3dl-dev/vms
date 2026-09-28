@@ -162,3 +162,32 @@ test('a panel that only repaints when revealed is named in the verdict', () => {
   R.repaint_stalls = { VAXC: 4 };
   assert.match(verdictOf(R), /panels that only repainted once revealed: \{"VAXC":4\} \(rd vms-0bc\)/);
 });
+
+test('a lost connection is reported in the node\'s own words, or not at all', () => {
+  // Real lines from the all-at-once run in
+  // tests/lab/captures/vms-1a1-visitor-20260928/.
+  const R = newObservations();
+  observe(R, 'VAXC', [
+    '%CNXMAN,  lost connection to system OVMXB',
+    '%CNXMAN,  timed-out lost connection to system OVMXB',
+    '%%%%% OPCOM  Node VAXC (csid 00010001) lost connection to node OVMXB',
+  ].join('\n'));
+  assert.deepEqual(R.lost.VAXC, ['OVMXB'], 'the VAX names the peer; say which one');
+
+  observe(R, 'OVMXA', [
+    '%CNXMAN, lost connection to a cluster member, reconnecting',
+    '%CNXMAN, lost the VMS$VAXcluster connection before this node was admitted: waiting',
+    'vms: SCS path lost to system 0:1988 -> SS$ 2692',
+  ].join('\n'));
+  assert.deepEqual(R.lost.OVMXA, ['0:1988'], 'OVMX names the system by id, so use the id');
+  assert.equal(R.lost_unnamed.OVMXA, 2, 'and the unnamed losses are counted, not invented');
+  assert.match(verdictOf(R), /unnamed connection losses: \{"OVMXA":2\}/);
+});
+
+test('an MSCP disk-client message is not a lost cluster connection', () => {
+  const R = newObservations();
+  observe(R, 'OVMXB', '%CNXMAN, lost the MSCP$DISK disk-client connection: this node ' +
+                      'enumerates none of that member\'s units, and the join goes on\n');
+  assert.deepEqual(R.lost, {}, 'a benign join step must not read as a dropped circuit');
+  assert.deepEqual(R.lost_unnamed, {});
+});

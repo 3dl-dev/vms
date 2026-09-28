@@ -1077,6 +1077,9 @@ static void test_reconnect_inside_the_window_carries_the_dialogue(void)
 	cnxman_csb_dialogue_sent(csb);
 	cnxman_csb_dialogue_heard(csb, 14811u);
 	ct_check_eq_u32(csb->cm_ack_msg, 14811u, "14811 taken from the peer");
+	/* ...and it has introduced itself on that connection (E73's mask). */
+	csb->cm_advert_conid = 0x4e620009u;
+	csb->cm_advert_sent = 0x03u;
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
 
 	cnxman_csb_bind_reconnect(csb, 0x4e62000fu);
@@ -1093,6 +1096,13 @@ static void test_reconnect_inside_the_window_carries_the_dialogue(void)
 			"...which is the cell the connect data carries");
 	ct_check_eq_u32(csb->cm_dialogues_carried, 1u, "counted as CARRIED");
 	ct_check_eq_u32(csb->cm_dialogue_resets, 0u, "and NOT as a reset");
+	ct_check_eq_u32(csb->cm_advert_conid, 0x4e62000fu,
+			"and what this node told that system about itself "
+			"moved with it: a re-established member does NOT "
+			"re-introduce itself, and the VAX bugchecked when it "
+			"did (arm F-4)");
+	ct_check(csb->cm_advert_sent != 0u,
+		 "...with the mask intact, not cleared");
 	ct_check(cnxman_csb_dialogue_is_on(csb, 0x4e62000fu),
 		 "the dialogue is now the new connection's");
 

@@ -1431,6 +1431,25 @@ void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
 	csb->cm_dialogues_carried++;
 	csb->cm_txn = csb_next_nonzero(csb->cm_txn);
 	csb->cm_token = 0u;
+	/*
+	 * ...AND WHAT THIS NODE HAS TOLD THAT SYSTEM ABOUT ITSELF MOVES WITH
+	 * IT (rd vms-8c54). E73 scopes the cat-0x01 MODEL/PARAMS mask to a
+	 * Con.ID on the reasoning that "whatever was said down the old
+	 * connection was not said down the new one" -- true of a NEW
+	 * conversation, and false of a re-establishment: the peer is the same
+	 * system, it never forgot our model or our votes, and its CSB for us
+	 * survived exactly as ours for it did.
+	 *
+	 * MEASURED, rig arm F-4. With the dialogue carried but the mask reset,
+	 * the re-established connection opened correctly -- the real OpenVMS
+	 * VAX V7.3 printed "%CNXMAN, re-established connection to system
+	 * OVMXB", which it had never printed for this implementation before --
+	 * and this node's very next two frames were cat-0x01 op-0x14 MODEL and
+	 * op-0x01 PARAMS at send-msg# 97 and 98. A member re-introducing
+	 * itself mid-stream on a connection the peer has just re-established
+	 * is a contradiction, and the VAX bugchecked on it.
+	 */
+	csb->cm_advert_conid = conid;
 }
 
 void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)

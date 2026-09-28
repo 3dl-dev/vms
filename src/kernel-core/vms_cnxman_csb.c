@@ -1366,6 +1366,73 @@ void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
  * changes nothing -- the glue writes it on every accept and on every reconnect
  * that returned the connection already held.
  */
+/*
+ * MAY THIS BLOCK CARRY ITS DIALOGUE ONTO A NEW CONNECTION? (rd vms-8c54.)
+ *
+ * TWO MEASUREMENTS THAT LOOK LIKE A CONTRADICTION, AND THE RULE THAT HOLDS
+ * BOTH. E76/E77 (see vms_cluster.h) measured a real node at send-msg# 15880
+ * open its NEXT Con.ID at 1 with ack 0, and measured this executive crash two
+ * real VAXes by carrying counters across a teardown. rd vms-8c54's oracle --
+ * two real OpenVMS VAX V7.3 MEMBERS reconnecting after a 10 s stall -- measured
+ * the opposite: VAX1 continued 10249 -> 10250 on a brand-new Con.ID and
+ * advertised ack 14811 in the connect data, and VAX2 continued 14811 -> 14812.
+ *
+ * The discriminator is WHICH KIND of new connection it is, and it is the same
+ * distinction p. 7-24 and p. 7-25 already draw:
+ *
+ *   a RE-ESTABLISHMENT inside the reconnect window, of a connection to a
+ *   system the cluster still holds and whose incarnation has not changed, is
+ *   the SAME conversation carried on a new pair -- the CSB survived, and the
+ *   dialogue is CSB state (p. 7-24 RECONNECT/REACCEPT);
+ *
+ *   anything else -- a fresh join, a new incarnation, a system this node gave
+ *   up on -- is a NEW conversation and starts at 1/0 (p. 7-25 deallocate and
+ *   rebuild), which is E76/E77's case and stays exactly as it was.
+ *
+ * So this predicate is narrow and every clause is a READ:
+ *   - there IS a dialogue to carry (a bound Con.ID, not the first bind);
+ *   - p. 7-49 SELECTED: the cluster has not removed this system;
+ *   - the ladder is really in the reconnect window (or still OPEN).
+ * A block that fails any of them resets, which is the old behaviour.
+ */
+static int csb_dialogue_may_continue(const struct vms_csb *csb)
+{
+	if (csb->cm_dialogue_conid == 0u)
+		return 0;
+	if ((csb->flags & VMS_CSB_F_SELECTED) == 0u)
+		return 0;
+	return csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN ||
+	       csb->state == (uint8_t)VMS_CNXMAN_CSB_WAIT ||
+	       csb->state == (uint8_t)VMS_CNXMAN_CSB_RECONNECT ||
+	       csb->state == (uint8_t)VMS_CNXMAN_CSB_REACCEPT;
+}
+
+/*
+ * RE-ESTABLISH the pair's connection and CARRY the dialogue with it, when this
+ * block is entitled to (csb_dialogue_may_continue above); otherwise this is
+ * exactly cnxman_csb_bind_connection().
+ *
+ * The counters are the only thing carried. The Con.ID moves, `cm_txn` still
+ * moves on and `cm_token` still restarts, because those two are per-dialogue
+ * by their own measurement (E85) and nothing in the oracle says otherwise.
+ */
+void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
+{
+	if (csb == NULL)
+		return;
+	if (!csb_dialogue_may_continue(csb)) {
+		cnxman_csb_bind_connection(csb, conid);
+		return;
+	}
+	csb->cdt_conid = conid;
+	if (csb->cm_dialogue_conid == conid)
+		return;
+	csb->cm_dialogue_conid = conid;
+	csb->cm_dialogues_carried++;
+	csb->cm_txn = csb_next_nonzero(csb->cm_txn);
+	csb->cm_token = 0u;
+}
+
 void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 {
 	if (csb == NULL)
@@ -1452,4 +1519,9 @@ void cnxman_envelope_originate(struct vms_csb *csb, uint8_t body[132],
 	if (mints)
 		cnxman_csb_transaction_opened(csb);
 	cnxman_envelope_stamp(csb, body, !mints);
+}
+
+uint16_t cnxman_csb_dialogue_ack(const struct vms_csb *csb)
+{
+	return (csb == NULL) ? 0u : csb->cm_ack_msg;
 }

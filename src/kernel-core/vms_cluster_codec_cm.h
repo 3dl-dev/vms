@@ -1314,6 +1314,34 @@ struct vms_cm_conndata_in {
 	uint16_t cluster_nodes;   /* CLUB cluster_nodes (p. 7-49 SELECTED)   */
 	uint8_t  member;          /* 1 iff a committed member of a cluster   */
 	uint8_t  pad0;
+	/*
+	 * WHERE THIS NODE'S RECEIVE STREAM FROM *THIS PEER* STANDS (rd
+	 * vms-8c54). content[106:108], LE u16: the highest `VMS$VAXcluster`
+	 * CM send-msg# this node has taken from the system it is dialling --
+	 * the very number it stamps at abs 74 (VMS_OFB_CM_ACK_MSG) of the CM
+	 * messages it sends on that connection.
+	 *
+	 * GROUNDED, two independent pairs in one capture of two real OpenVMS
+	 * VAX V7.3 nodes reconnecting after a 10 s stall
+	 * (tests/lab/captures/vms-8c54-stalled-guest-20260928/):
+	 *
+	 *   VAX1's last CM frame before the loss: send=10249 ack=14811
+	 *   VAX2's last CM frame before the loss: send=14811 ack=10248
+	 *   -> VAX1's CONNECT_REQ carries 14811, VAX2's ACCEPT_REQ carries
+	 *      10249, and the first CM frame on the NEW Con.ID continues
+	 *      VAX1 send=10250 ack=14811 / VAX2 send=14812 ack=10249.
+	 *
+	 *   VAX3 had retransmitted send=1799 three times UNANSWERED; VAX1's
+	 *      CONNECT_REQ carries 1798, not 1799. The off-by-one is the proof
+	 *      that the cell is "the highest I have TAKEN", not "the last I
+	 *      have SEEN on the wire".
+	 *
+	 * A node that has taken nothing from that peer carries 0, which is the
+	 * measured joiner form -- so zero here is an honest reading and never a
+	 * placeholder (INV-6).
+	 */
+	uint16_t peer_ack_msg;
+	uint16_t pad1;
 };
 
 /*
@@ -1323,6 +1351,25 @@ struct vms_cm_conndata_in {
  * A NON-MEMBER's three counts are written as ZERO whatever the caller passed,
  * because that is the measured joiner form and because a node that is not in a
  * cluster has no cluster arithmetic to report (INV-6).
+ *
+ * THREE CELLS THE CALLER'S head/tail NO LONGER DECIDE (rd vms-8c54). The E31
+ * head/tail were copied from ONE capture of a JOINER, and this file's own note
+ * has always said so: "the bench VAX moved [2], [11] and [12] inside one run
+ * ... Nothing in the library says what moves them." The oracle says what:
+ *
+ *   [12:14]  this node's CM ack counter for the peer -- `in->peer_ack_msg`
+ *   [2]      0x01 when [12:14] is 0, 0x02 when it carries one
+ *   [11]     0x08 when [12:14] is 0, 0x0a when it carries one
+ *
+ * The first two follow the THIRD, not membership. The four real-VAX rows in
+ * test_codec_cm.c are members carrying 0x01/0x08, and the rig caught one real
+ * VAX sending both forms minutes apart with its membership unchanged; what
+ * every sample agrees on is the ack cell (0x08 -> 0x0a is its two bytes).
+ * Eleven samples across two independent clusters, no counterexample.
+ *
+ * The caller still supplies head/tail so the version quad and the [14:16] tail
+ * stay exactly the bytes E31 grounded; head[2] and tail[0] are overridden HERE
+ * rather than asking every caller to know a wire byte (design sec 3.9 rule 2).
  */
 vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
 					 const uint8_t *head, uint32_t head_len,

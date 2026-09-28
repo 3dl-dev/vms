@@ -289,6 +289,14 @@ struct vms_cnxman {
 	 * ever in flight; a second one before the first's opened() arrives
 	 * would overwrite this and is counted, never guessed at.
 	 */
+	/* The peer the 16 bytes in `conndata` were last built FOR (rd
+	 * vms-8c54): its CM ack counter, and whether one was ever named.
+	 * Readback-and-build state only -- every emitter refreshes it
+	 * immediately before use. */
+	uint16_t        conndata_peer_ack;
+	uint8_t         conndata_peer_valid;
+	uint8_t         conndata_pad0;
+
 	vms_scs_sysid_t pending_accept_sysid;
 	uint8_t         pending_accept_valid;
 	uint32_t        pending_accept_overwritten;
@@ -1035,6 +1043,11 @@ static void cnxman_notify_membership_changes(struct vms_cnxman *cn,
  * connection.
  * ========================================================================== */
 
+/* Defined with the rest of the connect-data builders, far below; declared here
+ * because the inbound accept path is the FIRST user (rd vms-8c54). */
+static void cnxman_refresh_conndata_for(struct vms_cnxman *cn,
+					const struct vms_csb *csb);
+
 static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 				 vms_scs_sysid_t peer, vms_conid_t peer_conid,
 				 const uint8_t *conndata, uint32_t conndata_len)
@@ -1100,6 +1113,21 @@ static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 		cn->pending_accept_overwritten++;
 	cn->pending_accept_sysid = peer;
 	cn->pending_accept_valid = 1u;
+	/*
+	 * THE ACCEPT'S OWN 16 BYTES, BUILT FOR THIS PEER AND NOTHING ELSE
+	 * (rd vms-8c54). Returning 0 IS the accept: vms_scs_fsm.c issues the
+	 * ACCEPT_REQ synchronously from here, out of the registered SYSAP's
+	 * `accept_conndata` -- which points at `cn->conndata`. So this is the
+	 * last instruction before those bytes go on the wire, and it is where
+	 * content[106:108] is read out of THIS system's CSB.
+	 *
+	 * MEASURED: the oracle's accepting member answered a member-form
+	 * CONNECT_REQ with 02 ... 0a and its own ack counter; this executive
+	 * answered with the joiner form and a zero, and the real VAX's
+	 * connection manager bugchecked in the same millisecond as its
+	 * ACCEPT_RSP (rig arms N-6 and V-1).
+	 */
+	cnxman_refresh_conndata_for(cn, csb);
 	return 0;
 }
 
@@ -1121,10 +1149,12 @@ static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 		accepted = 1u;
 		csb = csb_ensure(&cn->cl->club, accepted_from);
 		if (csb != NULL)
-			/* E77: an ACCEPTED connection is a fresh dialogue too --
-			 * the peer opens it at ITS send-msg# 1 and has heard
-			 * nothing from us on it. */
-			cnxman_csb_bind_connection(csb, (uint32_t)local_conid);
+			/* rd vms-8c54: an accepted RE-ESTABLISHMENT carries the
+			 * dialogue for the same reason an issued one does -- the
+			 * oracle's accepting member continued 14811 -> 14812.
+			 * A block not entitled to carry starts fresh, which is
+			 * E77's "the peer opens it at ITS send-msg# 1". */
+			cnxman_csb_bind_reconnect(csb, (uint32_t)local_conid);
 		cn->pending_accept_valid = 0u;
 	}
 
@@ -2498,13 +2528,14 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 		/* Same VMS$VAXcluster CONNECT_REQ verb the join sends -- E31's
 		 * protocol-version conndata, not the all-zero a real VAX
 		 * rejects. */
+		cnxman_refresh_conndata_for(cn, csb);   /* rd vms-8c54 */
 		rc = scs_connect(cn->cl->scs, cnxman_join_name_vaxcluster,
 				 cnxman_join_name_vaxcluster, csb->sysid,
 				 cn->conndata, &new_conid);
 		if (rc == (int)SS__NORMAL) {
-			/* E77: same rule on the once-a-second beat's reconnect
-			 * as on the close-path one above. */
-			cnxman_csb_bind_connection(csb, (uint32_t)new_conid);
+			/* Same rule on the once-a-second beat's reconnect as on
+			 * the close-path one above. */
+			cnxman_csb_bind_reconnect(csb, (uint32_t)new_conid);
 			cn->reconnects_issued++;
 			(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 						  CNXMAN_CSB_EV_CONNECT_SENT,
@@ -2751,6 +2782,14 @@ static int cnxman_refresh_conndata(struct vms_cnxman *cn)
 	in.member = (uint8_t)((cn->cl->state == VMS_CLUSTER_MEMBER &&
 			       cn->cl->club.cluster_nodes > 0u) ? 1 : 0);
 	in.pad0 = 0u;
+	/*
+	 * content[106:108], rd vms-8c54: where this node's receive stream from
+	 * the peer these bytes are FOR stands. Set by
+	 * cnxman_refresh_conndata_for() out of that peer's CSB; zero -- an
+	 * honest "nothing taken from it yet" -- until some caller names a peer.
+	 */
+	in.peer_ack_msg = cn->conndata_peer_valid ? cn->conndata_peer_ack : 0u;
+	in.pad1 = 0u;
 
 	if (vms_cm_conndata_build(&in, cnxman_e31_head,
 				  (uint32_t)sizeof(cnxman_e31_head),
@@ -2775,6 +2814,35 @@ static int cnxman_refresh_conndata(struct vms_cnxman *cn)
 	}
 	cn->cfg.conndata_valid = 1u;
 	return moved;
+}
+
+/*
+ * THE SAME SIXTEEN BYTES, FOR ONE PEER (rd vms-8c54).
+ *
+ * content[106:108] is not a property of this node: it is where this node's
+ * RECEIVE stream from the system it is about to speak to stands, read out of
+ * that system's own CSB (cnxman_csb_dialogue_ack). So the connect data has to
+ * be built per peer, at the moment of use.
+ *
+ * WHY THE ONE BUFFER IS STILL SAFE. `cn->conndata` is what the registered
+ * SYSAP hands SCS for an accept (cn->vc_sysap.accept_conndata points at it),
+ * and vms_scs_fsm.c issues that accept synchronously inside connect_req().
+ * This executive dispatches one SCS event at a time in one fork context -- the
+ * same property the pending-accept slot above already relies on -- so the
+ * bytes SCS reads are the bytes this call just wrote for that same peer.
+ * Every use site refreshes IMMEDIATELY before it, and none of them keeps a
+ * copy: nothing here is plumbed frame to frame.
+ */
+static void cnxman_refresh_conndata_for(struct vms_cnxman *cn,
+					const struct vms_csb *csb)
+{
+	uint16_t ack = cnxman_csb_dialogue_ack(csb);
+
+	if (cn->conndata_peer_ack == ack && cn->conndata_peer_valid)
+		; /* fall through: the arithmetic may still have moved */
+	cn->conndata_peer_ack = ack;
+	cn->conndata_peer_valid = 1u;
+	(void)cnxman_refresh_conndata(cn);
 }
 
 /* ...and the join's INSTALLED copy, re-set only on a real change. */

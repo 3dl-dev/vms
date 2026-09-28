@@ -527,11 +527,39 @@ static void test_glue_bindings(void)
 		  "a connection and restarting its dialogue are one act");
 	check_has("cnxman_csb_bind_connection(csb, (uint32_t)*out_conid)",
 		  "E77: an outbound connect binds the Con.ID SCS minted");
-	check_has("cnxman_csb_bind_connection(csb, (uint32_t)local_conid)",
-		  "E77: an ACCEPTED connection is bound the same way");
-	check_has("cnxman_csb_bind_connection(csb, (uint32_t)new_conid)",
-		  "E77: and so is a reconnect's -- the case where a burned "
-		  "number used to cross a teardown");
+	/*
+	 * ...AND THE TWO RE-ESTABLISHMENT SITES BIND THROUGH THE *CARRYING*
+	 * BINDER (rd vms-8c54). Same single-writer rule -- neither of them
+	 * touches cdt_conid either -- but a connection re-established inside
+	 * the p. 7-24 window, to a system the cluster still holds, is the SAME
+	 * conversation on a new pair and keeps its send/ack numbers: both real
+	 * OpenVMS VAX V7.3 members continued theirs across exactly that, and
+	 * this executive's reset made it advertise "I have taken nothing from
+	 * you" to a peer that held it as a member. cnxman_csb_bind_reconnect()
+	 * decides from the block's own state whether it is entitled to carry,
+	 * so E77's reset is still what a block that is NOT entitled gets.
+	 */
+	check_has("cnxman_csb_bind_reconnect(csb, (uint32_t)local_conid)",
+		  "rd vms-8c54: an ACCEPTED re-establishment carries its "
+		  "dialogue through the single writer");
+	check_has("cnxman_csb_bind_reconnect(csb, (uint32_t)new_conid)",
+		  "rd vms-8c54: and so does an ISSUED one");
+
+	/*
+	 * AND THE 16 BYTES ARE BUILT FOR THE PEER, AT THE POINT OF USE.
+	 * content[106:108] is a fact about the conversation with ONE system,
+	 * so a connect or an accept that emitted the node-wide buffer would be
+	 * asserting another peer's receive position -- the "plumbed from a
+	 * template" defect this programme keeps finding. Each of the three
+	 * emission sites must name the CSB it is about to speak to.
+	 */
+	check_has("cnxman_refresh_conndata_for(cn, csb)",
+		  "rd vms-8c54: the connect data is rebuilt for the peer "
+		  "before it goes on the wire");
+	check_has("cnxman_refresh_conndata_for(cn, csb);   /* rd vms-8c54 */\n"
+		  "\t\trc = scs_connect(cn->cl->scs,",
+		  "...on the beat's reconnect, in the statement immediately "
+		  "before the connect that carries it");
 
 	/*
 	 * E81. A rejected connect is a fact about the SYSTEM, so the CSB ladder

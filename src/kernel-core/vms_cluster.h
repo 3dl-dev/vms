@@ -502,6 +502,18 @@ struct vms_csb {
 	 */
 	uint32_t cm_dialogue_conid;
 	uint32_t cm_dialogue_resets;
+	/*
+	 * ...AND HOW OFTEN IT WAS CARRIED INSTEAD (rd vms-8c54). A
+	 * re-establishment inside the p. 7-24 reconnect window, of a
+	 * connection to a system the cluster still holds at the same
+	 * incarnation, is the SAME conversation on a new pair: both real
+	 * OpenVMS VAX V7.3 nodes in the vms-8c54 oracle continued their
+	 * send-msg# across exactly that. Counted separately from the resets
+	 * above so the two cases are never confused in a readback --
+	 * carrying one where a reset was due is the E76/E77 crash, and this
+	 * is the number that says which happened.
+	 */
+	uint32_t cm_dialogues_carried;
 
 	/*
 	 * ---- what this node has ADVERTISED about ITSELF on the connection it

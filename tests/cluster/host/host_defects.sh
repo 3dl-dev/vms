@@ -146,7 +146,9 @@ coord-admission-not-selected-disarmed
 coord-admission-open-gate-disarmed
 coord-removal-open-gate-disarmed
 pe-last-gasp-once-per-port
-pe-late-frame-revives-channel"
+pe-late-frame-revives-channel
+codec-conndata-ack-cell-dropped
+csb-reconnect-never-carries"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -574,6 +576,40 @@ EOF
                       ;;
         esac;;
 
+    codec-conndata-ack-cell-dropped)
+        case "$_f" in
+        facility)     echo "content[106:108] of the VMS\$VAXcluster connect data -- where this node's receive stream from the peer it is dialling stands (rd vms-8c54), and the [2]/[11] form that follows it";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_conndata_build() writes 0 into content[106:108] instead of the caller's peer_ack_msg, so the two bytes that follow it collapse to the short form as well. The four rd vms-b87 rows are all ack-0 and stay green; only the rd vms-8c54 oracle rows -- two real OpenVMS VAX V7.3 members reconnecting, whose connects carry 14811 and 10249 -- go red. MEASURED consequence, rig arms N-6 and V-1: a zero there says 'I have taken nothing from you' to a peer that holds this node as a member, and the real VAX's connection manager bugchecked CNXMGRERR in the same millisecond as its own ACCEPT_RSP.";;
+        require_fail) cat <<'EOF'
+VAX1 re-establishing: it carries the 14811 it had TAKEN from VAX2
+VAX2 accepting it: its own 10249, not VAX1's number
+VAX1 -> VAX3: 1798, NOT the 1799 VAX3 kept retransmitting unanswered
+...and with ONE message taken: long form, and the 1 is little-endian at [12:14]
+EOF
+        ;;
+        esac;;
+
+    csb-reconnect-never-carries)
+        case "$_f" in
+        facility)     echo "p. 7-24's reconnect window as the SAME conversation (rd vms-8c54: a connection re-established to a system the cluster still holds keeps its send/ack dialogue)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "csb_dialogue_may_continue() is disarmed to return 0, so cnxman_csb_bind_reconnect() always falls through to the E77 reset and a re-established connection restarts at send-msg# 1 / ack 0. Every NOT-entitled case still resets, so nothing about E77 changes -- only the entitled one, which is the case both real OpenVMS VAX V7.3 members took when they continued 10249 -> 10250 and 14811 -> 14812 across a new Con.ID pair.";;
+        require_fail) cat <<'EOF'
+the send side CONTINUES -- the next origination is 3, as VAX1's 10249 became 10250
+and so does the ack: this node really HAS taken 14811 from that system, and saying 0 to a peer that holds it as a member is the lie the VAX bugchecks on
+...which is the cell the connect data carries
+counted as CARRIED
+and NOT as a reset
+counted as a reset
+EOF
+        ;;
+        esac;;
+
     pe-late-frame-revives-channel)
         case "$_f" in
         facility)     echo "SS4(M)'s listen timeout as a fact about ELAPSED TIME (rd vms-8c54: a stalled guest wakes with its clock AND its receive queue jumped together, and the queued frames are consumed before any beat runs)";;
@@ -860,6 +896,19 @@ apply_edit() {
 
     coord-admission-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    codec-conndata-ack-cell-dropped)
+        # `out[12] = (uint8_t)(in->peer_ack_msg & 0xffu);` is unique here;
+        # zeroing the low byte is enough to break the cell AND the form,
+        # because out[2]/out[11] are derived from the same input.
+        sed -i 's|out\[2\] = (uint8_t)(in->peer_ack_msg != 0u ? 0x02u : 0x01u);|out[2] = 0x01u; /* NEGCTL codec-conndata-ack-cell-dropped */|' "$_file"
+        sed -i 's|out\[11\] = (uint8_t)(in->peer_ack_msg != 0u ? 0x0au : 0x08u);|out[11] = 0x08u;|' "$_file"
+        sed -i 's|out\[12\] = (uint8_t)(in->peer_ack_msg \& 0xffu);|out[12] = 0u;|' "$_file"
+        sed -i 's|out\[13\] = (uint8_t)((in->peer_ack_msg >> 8) \& 0xffu);|out[13] = 0u;|' "$_file";;
+
+    csb-reconnect-never-carries)
+        # `if (csb->cm_dialogue_conid == 0u)` is unique in this file.
+        sed -i 's|if (csb->cm_dialogue_conid == 0u)|if (1) /* NEGCTL csb-reconnect-never-carries: never entitled */|' "$_file";;
 
     pe-late-frame-revives-channel)
         # `if (ch->deadline_ms == 0u)` is unique in this file.

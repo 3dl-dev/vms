@@ -81,3 +81,13 @@ jobs:
 
       - name: build-cluster-demo bundle generator and its negative controls
         run: sh tools/cluster-web-demo/test/build-cluster-demo.test.sh
+
+      # The in-page L2 hub, the wire codec, the postMessage transport, the
+      # qemu socket framing AND the visitor gate's judgement all have node
+      # suites in tools/cluster-web-demo/test/, and NOTHING ran them either.
+      # The gate's cost of that was paid twice: it failed a healthy CN=3
+      # cluster whose console had merely scrolled, and it diagnosed a "split
+      # brain" its own evidence did not carry (rd vms-1a1).
+      - name: L2 hub, wire codec and visitor-gate judgement (node --test)
+        working-directory: tools/cluster-web-demo
+        run: npm test

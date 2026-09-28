@@ -15,6 +15,19 @@
 
 export const NODES = ['OVMXA', 'OVMXB', 'VAXC'];
 
+// The matrix. Each row is a way a real person might use the page. The two that
+// matter most are the FAST ones, and the ones that do not click Node C first:
+// those are what the old grader never did, and what the field report came from.
+// Throttled rows stand in for the laptop the visitor actually has.
+export const MATRIX = [
+  { label: 'page-order',             order: ['A', 'B', 'C'], gap: 5000, throttle: 1 },
+  { label: 'all-at-once',            order: ['A', 'B', 'C'], gap: 500,  throttle: 1 },
+  { label: 'page-order-throttled4',  order: ['A', 'B', 'C'], gap: 5000, throttle: 4 },
+  { label: 'b-first',                order: ['B', 'A', 'C'], gap: 3000, throttle: 1 },
+  { label: 'c-first-legacy',         order: ['C', 'A', 'B'], gap: 5000, throttle: 1 },
+  { label: 'all-at-once-throttled2', order: ['A', 'B', 'C'], gap: 500,  throttle: 2 },
+];
+
 // The three system ids the roster declares (mk_democonfig.py DEMO_ROSTER).
 export const WANT = ['0x7c3', '0x7c4', '0x7c5'];
 

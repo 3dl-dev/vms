@@ -11,9 +11,11 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  joinScrollback, observe, isCN3, verdictOf, newObservations, restartsIn, setOf, ADDED,
-} from '../gate-eval.mjs';
+import fs from 'node:fs';
+import * as GATE from '../gate-eval.mjs';
+const {
+  joinScrollback, observe, isCN3, verdictOf, newObservations, restartsIn, setOf, ADDED, MATRIX,
+} = GATE;
 
 const CN3_LINES = (self, a, b) => [
   '%CNXMAN, this node is now a VAXcluster member',
@@ -126,4 +128,27 @@ test('a node the hub never heard from is named', () => {
 test('the ADDED pattern reads a CNXMAN system id', () => {
   assert.deepEqual(setOf('%CNXMAN, system 00000000000007c3 was added to the cluster', ADDED),
                    ['7c3']);
+});
+
+// visitor-gate.mjs cannot be imported here -- it pulls in playwright and drives
+// a browser -- so check its seam the cheap way. `node --check` only parses; an
+// import of a name the module does not export fails at RUN time, which on a
+// gate means 20 minutes into a deploy window. This caught exactly that.
+test('every name visitor-gate.mjs imports from gate-eval.mjs exists', () => {
+  const src = fs.readFileSync(new URL('../visitor-gate.mjs', import.meta.url), 'utf8');
+  const m = src.match(/import\s*\{([^}]*)\}\s*from\s*'\.\/gate-eval\.mjs'/);
+  assert.ok(m, 'visitor-gate.mjs must take its judgement from gate-eval.mjs');
+  const names = m[1].split(',').map((x) => x.trim().split(/\s+as\s+/)[0]).filter(Boolean);
+  assert.ok(names.length >= 4);
+  for (const n of names) assert.ok(n in GATE, `gate-eval.mjs exports no '${n}'`);
+});
+
+test('the matrix tests click ORDER and SPEED, not just the easy path', () => {
+  const labels = MATRIX.map((r) => r.label);
+  assert.ok(MATRIX.some((r) => r.order.join('') === 'ABC' && r.gap <= 1000),
+    'a visitor clicks top-to-bottom within seconds');
+  assert.ok(MATRIX.some((r) => r.throttle >= 4), 'and does it on a slow laptop');
+  assert.ok(MATRIX.some((r) => r.order[0] !== 'C'),
+    'the old grader always gave the real VAX a head start; this one must not');
+  assert.equal(new Set(labels).size, labels.length, 'labels select rows, so they must be unique');
 });

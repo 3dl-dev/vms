@@ -25,6 +25,10 @@
 //   * a fresh browser context per run: new profile, COLD cache, so the 58 MB
 //     Node B and 30 MB Node C images are fetched over the wire while the guests
 //     are running, as they are for a first-time visitor.
+//   * it reports each run's worst main-thread drift, because every inter-node
+//     frame in this demo crosses FOUR main threads (node worker -> node iframe ->
+//     PARENT page's L2 hub -> node iframe -> worker), so main-thread starvation
+//     is latency on every frame, and an SCS virtual circuit dies on latency.
 //   * it TYPES NOTHING. Membership must form with nobody touching a console.
 //     (A grader that logs in also keeps the main threads hot, which is another
 //     thing a visitor does not do.)
@@ -48,6 +52,29 @@ const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
 const RUN_MS = +(process.env.RUN_MS || 1200000);
 const ONLY = process.env.RUNS ? +process.env.RUNS : 0;
+// FREEZE_MS > 0 suspends the page mid-formation (CDP Page.setWebLifecycleState
+// 'frozen' -- the state Chrome really puts an aggressively backgrounded tab in)
+// and then thaws it, which is what a visitor does by switching tabs. It is OFF
+// by default: while the page is frozen the L2 hub stops relaying, every virtual
+// circuit goes quiet, and the real VAX's connection manager reacts to that --
+// which is rd vms-8c54's territory (the executive side), not this gate's. Turn
+// it on to REPRODUCE 8c54, not to gate a deploy on it.
+const FREEZE_MS = +(process.env.FREEZE_MS || 0);
+const FREEZE_AT_MS = +(process.env.FREEZE_AT_MS || 60000);
+
+// Injected before any page script: let the page report its own main-thread
+// health. A starved or throttled document shows up here as a large drift, which
+// is the condition an SCS virtual circuit cannot survive.
+const PROBE = `(() => {
+  window.__probe = { worstDriftMs: 0, ticks: 0 };
+  let last = performance.now();
+  setInterval(() => {
+    const now = performance.now();
+    const d = (now - last) - 250;
+    if (d > window.__probe.worstDriftMs) window.__probe.worstDriftMs = Math.round(d);
+    window.__probe.ticks++; last = now;
+  }, 250);
+})()`;
 
 // The matrix. Each row is a way a real person might use the page. The two that
 // matter most are the fast ones: they are what the old grader never did.
@@ -99,6 +126,7 @@ async function oneRun(spec, idx) {
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   const ctx = await browser.newContext();                 // fresh profile, cold cache
   const page = await ctx.newPage();
+  await page.addInitScript(PROBE);
   page.on('pageerror', (e) => log('  [pageerr]', String(e.message).slice(0, 120)));
 
   try {
@@ -112,6 +140,20 @@ async function oneRun(spec, idx) {
     const btn = { A: '#bootbtn-a', B: '#bootbtn-b', C: '#bootbtn-c' };
     const t0 = Date.now();
     for (const n of spec.order) { await page.click(btn[n]); await sleep(spec.gap); }
+
+    if (FREEZE_MS > 0) {
+      setTimeout(async () => {
+        try {
+          const cdp = await ctx.newCDPSession(page);
+          log(`  freezing the page for ${FREEZE_MS}ms (a visitor switched tabs)`);
+          await cdp.send('Page.setWebLifecycleState', { state: 'frozen' });
+          R.froze = true;
+          await sleep(FREEZE_MS);
+          await cdp.send('Page.setWebLifecycleState', { state: 'active' });
+          log('  page thawed');
+        } catch (e) { R.freeze_error = String(e.message).slice(0, 140); }
+      }, FREEZE_AT_MS);
+    }
 
     while (Date.now() - t0 < RUN_MS) {
       const el = Math.round((Date.now() - t0) / 1000);
@@ -130,12 +172,19 @@ async function oneRun(spec, idx) {
         if (w !== 'VAXC' && FOUNDED.test(c)) R.ovmx_founded[w] = true;
         if (w === 'VAXC') R.vaxc_admitted = setOf(c, VADD);
       }
+      const health = await page.evaluate(() => ({
+        vis: document.visibilityState,
+        drift: window.__probe ? window.__probe.worstDriftMs : null,
+      })).catch(() => ({}));
+      R.worstDriftMs = health.drift; R.vis = health.vis;
       const ok = NODES.slice(0, 2).every((w) => WANT.every((id) => (R.added[w] || []).includes(id))) &&
                  R.vaxc_admitted.length >= 2;
       R.samples.push({ t: el, sca: hub, member: { ...R.member }, added: { ...R.added },
-                       vaxc_admitted: R.vaxc_admitted, lost: { ...R.lost } });
-      log(`  t=${el}s sca=${JSON.stringify(hub)} added=${JSON.stringify(R.added)} ` +
-          `vaxcAdm=${JSON.stringify(R.vaxc_admitted)} lost=${JSON.stringify(R.lost)}`);
+                       vaxc_admitted: R.vaxc_admitted, lost: { ...R.lost },
+                       vis: health.vis, worstDriftMs: health.drift });
+      log(`  t=${el}s vis=${health.vis} drift=${health.drift}ms sca=${JSON.stringify(hub)} ` +
+          `added=${JSON.stringify(R.added)} vaxcAdm=${JSON.stringify(R.vaxc_admitted)} ` +
+          `lost=${JSON.stringify(R.lost)}`);
       fs.writeFileSync(`${dir}/result.json`, JSON.stringify(R, null, 1));
       if (ok) { R.cn3 = true; break; }
       if (Object.keys(R.bugchecks).length) break;
@@ -177,7 +226,8 @@ async function oneRun(spec, idx) {
     results.push({ label: rows[i].label, order: r.order, gap: rows[i].gap,
                    throttle: rows[i].throttle, verdict: r.verdict, cn3: r.cn3,
                    added: r.added, vaxc_admitted: r.vaxc_admitted,
-                   ovmx_founded: r.ovmx_founded, bugchecks: r.bugchecks, lost: r.lost });
+                   ovmx_founded: r.ovmx_founded, bugchecks: r.bugchecks, lost: r.lost,
+                   worstDriftMs: r.worstDriftMs, froze: r.froze || false });
     fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 1));
   }
   const bad = results.filter((r) => !r.cn3);

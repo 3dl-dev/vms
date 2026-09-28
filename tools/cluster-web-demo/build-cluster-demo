@@ -159,16 +159,22 @@ echo "== $PROG: roster -- A=$NODE_A_NAME/$NODE_A_ID B=$NODE_B_NAME/$NODE_B_ID C=
 
 # --- (2) Node A: inject + stage (LIVE today) -----------------------------------
 echo "== $PROG: Node A ($NODE_A_NAME) config injection =="
-"$INJECT_INITRAMFS" "$X86_INITRAMFS" "$BUNDLE/initramfs-ovmx-nodeA.cpio.gz" \
+# The injected pair goes under nodeA/ because that is where the page this bundle
+# SHIPS looks for it (demo/cluster/index.html defaults to nodeA/...). They used
+# to land at the bundle root, so a bundle could not boot its own Node A -- the
+# live site only worked because the deploy hand-copied them into place
+# (rd vms-1a1).
+mkdir -p "$BUNDLE/nodeA"
+"$INJECT_INITRAMFS" "$X86_INITRAMFS" "$BUNDLE/nodeA/initramfs-ovmx-nodeA.cpio.gz" \
     --scsnode "$NODE_A_NAME" --scssystemid "$NODE_A_ID" \
     --votes "$NODE_A_VOTES" --expected-votes "$NODE_A_EV" --group "$NODE_A_GROUP"
 
 if command -v qemu-img >/dev/null 2>&1 && command -v "${CC:-cc}" >/dev/null 2>&1; then
-    "$INJECT_ODS2" "$X86_SYSDISK" "$BUNDLE/sysdisk-nodeA.qcow2" \
+    "$INJECT_ODS2" "$X86_SYSDISK" "$BUNDLE/nodeA/sysdisk-nodeA.qcow2" \
         --scsnode "$NODE_A_NAME" --scssystemid "$NODE_A_ID" \
         --votes "$NODE_A_VOTES" --expected-votes "$NODE_A_EV"
-    gzip -n -9 -c "$BUNDLE/sysdisk-nodeA.qcow2" > "$BUNDLE/sysdisk-nodeA.qcow2.gz"
-    rm -f "$BUNDLE/sysdisk-nodeA.qcow2"
+    gzip -n -9 -c "$BUNDLE/nodeA/sysdisk-nodeA.qcow2" > "$BUNDLE/nodeA/sysdisk-nodeA.qcow2.gz"
+    rm -f "$BUNDLE/nodeA/sysdisk-nodeA.qcow2"
     NODE_A_SYSDISK_DONE=1
 else
     echo "== $PROG: WARNING -- qemu-img/cc unavailable, Node A ODS-2 sysdisk injection SKIPPED" >&2

@@ -37,6 +37,16 @@
 
 #include "sim_lan.h"
 
+/*
+ * How many frames one stalled node's receive queue holds (rd vms-8c54). A real
+ * stall of ten seconds beside a 2 s HELLO cadence and a three-node cluster
+ * defers a handful; sixty-four is many times that. A scenario that overruns
+ * it is TOLD so -- `stall_queue_overflow` rises and every scenario asserts it
+ * is zero -- because a dropped frame would quietly turn this back into the
+ * dark-wire fault it exists to be different from.
+ */
+#define SIM_NODE_STALL_QUEUE 64u
+
 struct sim;   /* the engine; a node reaches the LAN and the clock through it */
 
 /* ==========================================================================
@@ -148,7 +158,54 @@ struct sim_node {
 	/* The stand-in upper layer's send accounting (sim_msg.c). */
 	uint32_t msgs_offered, msgs_accepted, msgs_refused;
 	int32_t  last_send_status;      /* enum pe_vc_send_status              */
+
+	/* ---- THE STALLED GUEST (rd vms-8c54) ----
+	 *
+	 * A DARK WIRE AND A STOPPED GUEST ARE NOT THE SAME FAULT, and the
+	 * simulator could only express the first one. sim_lan's loss window
+	 * DESTROYS frames: the node keeps running, its timers fire, and it
+	 * observes SS4(M)'s deadline pass on its own beat. A stalled guest --
+	 * a visitor's machine starving the emulator, which is how this was
+	 * found in the field -- DEFERS them: the CPU stops, so no timer of
+	 * that node fires, and the frames pile up in its receive queue. When
+	 * it runs again its clock and its queue jump TOGETHER and the queued
+	 * frames are consumed BEFORE any beat runs.
+	 *
+	 * That ORDER is the whole fault, so the harness reproduces it exactly
+	 * and in that order: while stalled the node's timer fires are dropped
+	 * (its CPU was not running to take the interrupt) and its deliveries
+	 * are queued here; at resume the queue is drained into the SHIPPING
+	 * pe_fsm_rx() first, and only then is one coalesced tick delivered --
+	 * which is what a guest gets from a virtual timer on SIGCONT.
+	 *
+	 * MEASURED against the rig it stands for (arm N-1): on wake the real
+	 * OVMX guest put its queued sequenced traffic on the wire before any
+	 * beat of its own ran.
+	 */
+	uint64_t stalled_until_ms;      /* 0 = running                         */
+	uint32_t stall_queue_n;
+	uint32_t stall_queue_len[SIM_NODE_STALL_QUEUE];
+	uint32_t stall_dropped_timers;  /* fires its CPU was not there to take */
+	uint32_t stall_frames_deferred; /* not destroyed -- DEFERRED           */
+	uint32_t stall_queue_overflow;  /* frames the QUEUE could not hold:
+					 * an honest harness limit, never a
+					 * silent loss                        */
+	uint8_t  stall_queue[SIM_NODE_STALL_QUEUE][SIM_FRAME_MAX];
 };
+
+/*
+ * STOP THIS NODE'S CPU for `ms` of virtual time, and start it again.
+ *
+ * Nothing on the wire is touched: no loss window, no delay, no frame altered
+ * or injected. The only thing that changes is whether this node's FSM runs.
+ */
+void sim_node_stall(struct sim_node *n, uint64_t ms);
+
+/* Is this node's CPU stopped right now? Read, never assumed. */
+static inline int sim_node_is_stalled(const struct sim_node *n)
+{
+	return n != NULL && n->stalled_until_ms != 0u;
+}
 
 /* Fill `cfg` with the harness defaults for a simulated OVMX node: the group
  * AB-00-04-01-01-01, a locally-administered hardware address derived from

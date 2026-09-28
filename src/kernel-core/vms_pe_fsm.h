@@ -1236,6 +1236,12 @@ struct pe_fsm {
 	struct pe_wire_rev wire_rev;
 	uint32_t tx_errors;         /* ops->send returned non-zero               */
 	uint32_t last_gasps_built;
+	/* WHICH INCARNATION THE LAST GASP ANNOUNCED (rd vms-8c54). A departure
+	 * belongs to an incarnation, not to a port: a real node announces,
+	 * reboots, and announces again next time, and OVMX's CLUEXIT does the
+	 * same thing WITHOUT reallocating the port. Read back out of the port's
+	 * own identity, never assumed. */
+	uint64_t last_gasp_incarnation;
 
 	/* ---- FC-P1.2: the virtual-circuit half ----
 	 *

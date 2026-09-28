@@ -461,3 +461,15 @@ struct pe_channel *sim_node_channel_to(struct sim_node *n,
 {
 	return pe_fsm_channel_by_mac(&n->fsm, peer_mac);
 }
+
+/* ------------------------------------------------------------------ *
+ * The stalled guest (rd vms-8c54)
+ * ------------------------------------------------------------------ */
+
+void sim_node_stall(struct sim_node *n, uint64_t ms)
+{
+	if (n == NULL || ms == 0u)
+		return;
+	n->stalled_until_ms = sim_now_ms(n->sim) + ms;
+	n->stall_queue_n = 0u;
+}

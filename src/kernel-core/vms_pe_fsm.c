@@ -1080,6 +1080,54 @@ static enum pe_event pe_event_for(const uint8_t *frame, uint32_t len,
 	}
 }
 
+/*
+ * THE LISTEN TIMEOUT IS A FACT ABOUT ELAPSED TIME, NOT ABOUT WHICH CODE PATH
+ * NOTICES IT (rd vms-8c54).
+ *
+ * SS4(M)'s deadline is checked on the channel tick. Every receive path then
+ * REFRESHES that deadline, and the two together hold one assumption: that the
+ * tick gets to run between a deadline passing and the next frame arriving.
+ *
+ * A STALLED GUEST BREAKS EXACTLY THAT ASSUMPTION, and a dark wire never does.
+ * netem DESTROYS frames -- the guest keeps ticking, the deadline passes, the
+ * tick observes it. SIGSTOP DEFERS them: nothing is destroyed, the guest's
+ * clock and its receive queue BOTH jump at once, and on wake the queued HELLOs
+ * are consumed first. Each one refreshed a deadline that had already expired,
+ * so the channel was never declared lost, the circuit on it was never torn
+ * down, and this node went on writing sequenced messages on a circuit the peer
+ * had closed seconds earlier.
+ *
+ * MEASURED, rig arm N-1 (10 s guest stall of an admitted member, real
+ * OpenVMS VAX V7.3 founder): on wake OVMXB put 0x5b/0x4b/0x48 sequenced
+ * traffic on the old circuit, the VAX -- which had closed its virtual circuit
+ * 8.2 s earlier -- re-verified the channel and sent a fresh START, and OVMXB
+ * answered STACK from a circuit it still believed was OPEN. The VAX never
+ * acknowledged it: it re-STARTed every 5 s while OVMXB re-sent that STACK
+ * eight times a beat for the rest of the run, and 20 s later each side removed
+ * the other. THE ORACLE, same fault on two real V7.3 nodes (10 s SIGSTOP of
+ * VAX2, /lab/k8s-labs/s8lab/oracle-stall-o1.pcap): the stalled node logged
+ * "%CNXMAN, lost connection to system VAX1" 1.4 s after wake -- it NOTICED --
+ * then both sides sent their own START, STACKed each other and ACKed, and the
+ * cluster never lost a member.
+ *
+ * So the deadline is read HERE too, before any receive path refreshes it, and
+ * when it has already passed the channel's own PE_EV_TIMER_CHANNEL edge is
+ * dispatched: the same table cell, the same verdict, the same notification to
+ * the circuit above. Nothing new is decided -- the beat the stall deferred is
+ * simply run at the first moment this port is running again.
+ *
+ * Returns the action the expiry produced, or PE_CH_ACT_NONE if nothing was due.
+ */
+static enum pe_channel_action pe_channel_expire_if_due(struct pe_fsm *f,
+						       struct pe_channel *ch)
+{
+	if (ch->deadline_ms == 0u)
+		return PE_CH_ACT_NONE;      /* no deadline has ever been armed */
+	if (!pe_reached(pe_now(f), ch->deadline_ms))
+		return PE_CH_ACT_NONE;
+	return pe_dispatch(f, ch, PE_EV_TIMER_CHANNEL, &pe_rx_none);
+}
+
 /* Everything the frame honestly tells us about the station that sent it. Each
  * value carries its own validity: a name is learned only from a frame that
  * carried one, a sysid only from an address that really is a LOGICAL one. */
@@ -1345,6 +1393,11 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 		if (ch == NULL)
 			return PE_CH_ACT_NONE;
 	}
+	/* The deferred beat, before this frame refreshes anything. */
+	act = pe_channel_expire_if_due(f, ch);
+	if (act != PE_CH_ACT_NONE)
+		pe_vc_follow_channel(f, (uint32_t)(ch - f->ch), act);
+
 	pe_channel_learn(f, ch, &rx);
 	pe_learn_join_nonce(f, &rx);
 	pe_learn_disc_format(f, &rx);
@@ -1494,20 +1547,51 @@ void pe_fsm_shutdown(struct pe_fsm *f)
 	(void)pe_broadcast(f, PE_EV_SHUTDOWN, NULL, 0u);
 }
 
+/*
+ * HAS *THIS* INCARNATION ALREADY ANNOUNCED ITS DEPARTURE?
+ *
+ * AT MOST ONCE PER INCARNATION, not per port (rd vms-8c54).
+ *
+	 * p. 7-29's departure announcement belongs to the incarnation that is
+	 * departing: a real node gasps, bugchecks, REBOOTS, and its next
+	 * departure is announced again -- it gets a fresh port each time, so
+	 * "once per port" and "once per incarnation" are the same sentence on
+	 * real VMS. They are NOT the same here: rd vms-0f9's CLUEXIT
+	 * re-incarnates IN PLACE (cnxman_cluexit_run: gasp, re-sample the
+	 * incarnation, rebuild), and the port is never reallocated. Guarded on
+	 * the port lifecycle, the SECOND and every later CLUEXIT announced
+	 * NOTHING: peers kept a CSB for a node that had already thrown its
+	 * cluster state away and come back as someone else, which is precisely
+	 * the state the E81 crash family lives in. MEASURED: capture
+	 * H-2.pcap has cluexits=1 and zero abs-30 0xb1 frames, while the two
+	 * single-CLUEXIT campaign captures each carry exactly one.
+	 *
+	 * The idempotence this guard was written for is untouched: on a clean
+	 * CLUSTER_STOP both the connection manager's departure path
+	 * (vms_cnxman_stop) and the port teardown (vms_pe_stop) reach this
+	 * builder within ONE incarnation, and whichever runs second is still a
+	 * benign no-op.
+	 *
+	 * The incarnation is READ from the port's own identity (INV-6): if the
+	 * port holds none, there is nothing to distinguish departures by and
+	 * the original once-per-port rule stands.
+	 */
+static int pe_gasp_already_sent(const struct pe_fsm *f)
+{
+	if (f->last_gasps_built == 0u)
+		return 0;
+	if (!f->id.incarnation_time_valid)
+		return 1;
+	return f->last_gasp_incarnation == f->id.incarnation_time;
+}
+
 int pe_fsm_send_last_gasp(struct pe_fsm *f)
 {
 	struct vms_hello_frame h;
 
 	if (f == NULL)
 		return -1;
-	/* AT MOST ONCE per port lifecycle: a node leaves the cluster once
-	 * (p. 7-29). On a clean CLUSTER_STOP both the connection manager's
-	 * departure path (vms_cnxman_stop) and the port teardown (vms_pe_stop)
-	 * reach this builder; this guard makes whichever runs second a benign
-	 * no-op, so exactly one gasp goes on the wire regardless of order. The
-	 * counter is reset to 0 when a fresh port is allocated (vms_pe_start),
-	 * so a later rejoin+leave announces again. */
-	if (f->last_gasps_built != 0u)
+	if (pe_gasp_already_sent(f))
 		return 0;
 	if (!pe_may_send(f) || !f->id.mcast_valid)
 		return -1;
@@ -1520,6 +1604,7 @@ int pe_fsm_send_last_gasp(struct pe_fsm *f)
 	if (pe_emit_plain(f, &h) != 0)
 		return -1;
 	f->last_gasps_built++;
+	f->last_gasp_incarnation = f->id.incarnation_time;
 	pe_log(f, "%PEA0, leaving the cluster, last gasp sent");
 	return 0;
 }
@@ -3457,6 +3542,17 @@ static void pe_vc_rx_frame(struct pe_fsm *f, const uint8_t *frame, uint32_t len,
 	if (ch == NULL) {
 		f->vc_rx_no_channel++;
 		return;
+	}
+	/* The deferred beat first, for the same reason as on the discovery
+	 * path (pe_channel_expire_if_due): a circuit's own traffic must not
+	 * refresh a deadline that had already run out while this node was not
+	 * running. */
+	{
+		enum pe_channel_action expired = pe_channel_expire_if_due(f, ch);
+
+		if (expired != PE_CH_ACT_NONE)
+			pe_vc_follow_channel(f, (uint32_t)(ch - f->ch),
+					     expired);
 	}
 	/* An SCS frame is evidence the station is alive, exactly as a HELLO is,
 	 * so it refreshes the SS4(M) listen deadline. Without this a channel

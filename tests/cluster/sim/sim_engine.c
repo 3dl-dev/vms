@@ -134,7 +134,57 @@ static void sim_dispatch_delivery(struct sim *s, uint32_t slot)
 	n = sim_node_at(s, to);
 	if (n == NULL || !n->booted)
 		return;
+	/* A STALLED GUEST DEFERS, IT DOES NOT DESTROY (rd vms-8c54). The
+	 * frame reached the node's receive queue; its CPU is not running to
+	 * take it. sim_node_resume_if_due() hands it to the FSM, in arrival
+	 * order, at the instant the node runs again. */
+	if (sim_node_is_stalled(n)) {
+		if (n->stall_queue_n < SIM_NODE_STALL_QUEUE) {
+			memcpy(n->stall_queue[n->stall_queue_n], frame, len);
+			n->stall_queue_len[n->stall_queue_n] = len;
+			n->stall_queue_n++;
+			n->stall_frames_deferred++;
+		} else {
+			n->stall_queue_overflow++;
+		}
+		return;
+	}
 	(void)pe_fsm_rx(&n->fsm, frame, len);
+}
+
+/*
+ * THE WAKE (rd vms-8c54), and its ORDER is the whole point.
+ *
+ * The queued frames go into the SHIPPING pe_fsm_rx() FIRST -- that is what a
+ * guest's NIC ring hands it on SIGCONT, and it is what the rig measured (arm
+ * N-1: the woken OVMX member put its queued sequenced traffic on the wire
+ * before any beat of its own ran). Only then does the coalesced tick run.
+ * Reversed, this harness would prove the opposite of the fault.
+ */
+static void sim_node_wake(struct sim_node *n)
+{
+	uint32_t i;
+
+	n->stalled_until_ms = 0u;
+	for (i = 0; i < n->stall_queue_n; i++)
+		(void)pe_fsm_rx(&n->fsm, n->stall_queue[i],
+				n->stall_queue_len[i]);
+	n->stall_queue_n = 0u;
+	(void)pe_fsm_tick(&n->fsm, NULL, 0u);
+}
+
+/* Every node whose stall has run out, before this step's event is dispatched. */
+static void sim_resume_stalled(struct sim *s)
+{
+	uint32_t i;
+
+	for (i = 0; i < s->n_nodes; i++) {
+		struct sim_node *n = sim_node_at(s, i);
+
+		if (n != NULL && n->booted && n->stalled_until_ms != 0u &&
+		    s->clock.now_ms >= n->stalled_until_ms)
+			sim_node_wake(n);
+	}
 }
 
 /*
@@ -181,6 +231,12 @@ static void sim_dispatch_timer(struct sim *s, uint32_t slot)
 	n = sim_node_at(s, t.node);
 	if (n == NULL || !n->booted)
 		return;
+	/* A stopped CPU takes no timer interrupt (rd vms-8c54). The fire is
+	 * counted, so a scenario can say how many beats the stall cost. */
+	if (sim_node_is_stalled(n)) {
+		n->stall_dropped_timers++;
+		return;
+	}
 	sim_fire_pe_timer(n, &t);
 }
 
@@ -235,6 +291,9 @@ static void sim_step(struct sim *s, const struct sim_next *ev)
 {
 	if (ev->due_ms > s->clock.now_ms)
 		s->clock.now_ms = ev->due_ms;
+	/* The clock has moved; any node whose stall has run out is running
+	 * again, and must be, before this event is dispatched to it. */
+	sim_resume_stalled(s);
 	s->events++;
 	if (ev->kind == SIM_EV_DELIVERY)
 		sim_dispatch_delivery(s, ev->slot);

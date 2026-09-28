@@ -144,7 +144,9 @@ coord-relay-epoch-advanced-early
 coord-membrec-epoch-zero
 coord-admission-not-selected-disarmed
 coord-admission-open-gate-disarmed
-coord-removal-open-gate-disarmed"
+coord-removal-open-gate-disarmed
+pe-last-gasp-once-per-port
+pe-late-frame-revives-channel"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -572,6 +574,39 @@ EOF
                       ;;
         esac;;
 
+    pe-late-frame-revives-channel)
+        case "$_f" in
+        facility)     echo "SS4(M)'s listen timeout as a fact about ELAPSED TIME (rd vms-8c54: a stalled guest wakes with its clock AND its receive queue jumped together, and the queued frames are consumed before any beat runs)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "pe_channel_expire_if_due() is disarmed at its first line, so a receive path refreshes a deadline that has ALREADY passed and the channel is never declared lost. The tick still finds it on the next beat, so nothing about an ordinary timeout changes -- only the stalled-guest case, where the frames were DEFERRED rather than destroyed and arrive before any beat. MEASURED consequence, rig arm N-1: the woken member wrote sequenced traffic on a circuit the real OpenVMS VAX V7.3 had closed 8.2 s earlier and answered its fresh START with a STACK from a circuit it still believed was OPEN; 20 s later each side removed the other.";;
+        require_fail) cat <<'EOF'
+the deferred beat ran: the channel went, not the circuit's own TIMVCFAIL
+and SCS was told the circuit is gone
+the circuit is NOT still open on a channel that timed out
+a late SEQUENCED message does not revive it either
+SCS was told, once
+EOF
+        ;;
+        esac;;
+
+    pe-last-gasp-once-per-port)
+        case "$_f" in
+        facility)     echo "p. 7-29's departure announcement, once per INCARNATION (rd vms-8c54: CLUEXIT re-incarnates IN PLACE, so a guard scoped to the port lifecycle silences every announcement after the first)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_formation";;
+        isolation)    echo "isolated";;
+        why)          echo "pe_gasp_already_sent() is reverted to the once-per-PORT rule by returning 1 for any port that has ever gasped. A real node reboots between departures and so gets a fresh port each time; OVMX's CLUEXIT does not, so under this defect the SECOND and every later re-incarnation announces NOTHING and every peer keeps a CSB for a node that has already thrown its cluster state away -- the state the measured E81 CNXMGRERR family lives in. The last gasp is still built, still counted and still correct for the FIRST departure, so nothing but the per-incarnation property goes red.";;
+        require_fail) cat <<'EOF'
+a re-incarnated node ANNOUNCES ITS DEPARTURE AGAIN
+and it is the same b1 marker, not some other frame
+both are counted
+still two
+EOF
+        ;;
+        esac;;
+
     coord-removal-open-gate-disarmed)
         case "$_f" in
         facility)     echo "the INV-6 refusal to originate a class-0x03 REMOVAL open toward a connection manager this executive cannot build one for (rd vms-0f9: a real op-0x08 carries 44 bytes OVMX has no derivation for)";;
@@ -825,6 +860,15 @@ apply_edit() {
 
     coord-admission-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    pe-late-frame-revives-channel)
+        # `if (ch->deadline_ms == 0u)` is unique in this file.
+        sed -i 's|if (ch->deadline_ms == 0u)|if (1) /* NEGCTL pe-late-frame-revives-channel: a late frame refreshes the deadline */|' "$_file";;
+
+    pe-last-gasp-once-per-port)
+        # The `return f->last_gasp_incarnation == f->id.incarnation_time;`
+        # line is unique in this file: grep -c is 1.
+        sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
 
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;

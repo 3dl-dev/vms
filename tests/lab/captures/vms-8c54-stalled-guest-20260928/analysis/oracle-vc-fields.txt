@@ -1,0 +1,6 @@
+t=   14.076 00:01:04 START  sys=0x0401 recv_ack=    0 send_seq=10871 echo=    2 rnd=0 inc=0x00bc03899ae48e82 
+t=   14.076 57:a4:30 START  sys=0x0402 recv_ack=    0 send_seq=15432 echo=    2 rnd=0 inc=0x00bc03899ae48ec7 
+t=   14.076 00:01:04 STACK  sys=0x0401 recv_ack=    0 send_seq=    1 echo=    2 rnd=1 inc=0x00bc03899ae48e82 
+t=   14.077 57:a4:30 STACK  sys=0x0402 recv_ack=    0 send_seq=    1 echo=    2 rnd=1 inc=0x00bc03899ae48ec7 
+t=   14.077 57:a4:30 ACK    sys=0x0000 recv_ack=    0 send_seq=    1 echo=    2 rnd=-1 inc=0x0000000000000000 
+t=   14.077 00:01:04 ACK    sys=0x0000 recv_ack=    0 send_seq=    1 echo=    2 rnd=-1 inc=0x0000000000000000 

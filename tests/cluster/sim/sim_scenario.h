@@ -214,6 +214,7 @@ enum sim_step_kind {
 	SIM_STEP_CUT,           /* partition / heal one pair (both ways)   */
 	SIM_STEP_NODE_LINK,     /* a node's NIC up / down                  */
 	SIM_STEP_HALT,          /* clean leave: last gasp, then shutdown   */
+	SIM_STEP_STALL,         /* stop a node's CPU for `ms` (rd vms-8c54)*/
 	SIM_STEP_BOOT,          /* boot a node that is not booted          */
 	SIM_STEP_RUN,           /* advance the clock                       */
 	SIM_STEP_UNTIL_VCS,     /* run until every circuit is OPEN         */
@@ -257,6 +258,14 @@ struct sim_step {
 	{ SIM_STEP_NODE_LINK, 0, 0, 1, 0, 0, 0, (n), NULL, NULL, { 0 } }
 #define SIM_HALT(n) \
 	{ SIM_STEP_HALT, 0, 0, 0, 0, 0, 0, (n), NULL, NULL, { 0 } }
+/*
+ * STOP A NODE'S CPU for `msec` of virtual time (rd vms-8c54) -- the visitor's
+ * starved machine, which is NOT SIM_CUT and NOT a loss window: nothing on the
+ * wire is touched, the frames addressed to it are DEFERRED rather than
+ * destroyed, and no timer of that node fires while it is stopped.
+ */
+#define SIM_STALL(n, msec) \
+	{ SIM_STEP_STALL, 0, 0, 0, (msec), 0, 0, (n), NULL, NULL, { 0 } }
 #define SIM_BOOT(n) \
 	{ SIM_STEP_BOOT, 0, 0, 0, 0, 0, 0, (n), NULL, NULL, { 0 } }
 

@@ -1745,6 +1745,75 @@ static void test_channel_loss_tears_the_circuit_down(void)
 			"a re-verified channel re-forms the circuit");
 }
 
+/*
+ * THE STALLED GUEST (rd vms-8c54). The listen timeout is a fact about elapsed
+ * time, not about which code path notices it.
+ *
+ * A dark wire and a stopped guest are not the same fault. netem DESTROYS
+ * frames: the guest keeps ticking and the beat above observes the deadline.
+ * SIGSTOP DEFERS them: the clock and the receive queue jump TOGETHER, and on
+ * wake the queued frames are consumed BEFORE any beat runs. Each one used to
+ * refresh a deadline that had already expired, so the channel was never
+ * declared lost and the circuit on it was never torn down.
+ *
+ * MEASURED, rig arm N-1 (10 s guest stall of an admitted member beside a real
+ * OpenVMS VAX V7.3): the woken node wrote 0x5b/0x4b/0x48 sequenced traffic on
+ * a circuit the VAX had closed 8.2 s earlier, then answered the VAX's fresh
+ * START with a STACK from a circuit it still believed was OPEN. The VAX never
+ * acknowledged it; 20 s later each side removed the other. THE ORACLE, the
+ * same 10 s SIGSTOP applied to a real V7.3 member: it logged "%CNXMAN, lost
+ * connection to system VAX1" 1.4 s after wake -- it NOTICED -- re-formed the
+ * circuit from its own side, and the cluster never lost a member.
+ *
+ * NO TICK IS CALLED IN THIS TEST. That is the whole point: the only thing
+ * that happens after the clock jumps is a frame arriving.
+ */
+static void test_a_late_frame_does_not_refresh_a_dead_deadline(void)
+{
+	struct pe_vc *vc;
+
+	printf("-- a frame arriving after the listen timeout does not revive "
+	       "the channel\n");
+
+	/* --- a periodic HELLO, on the discovery path: the ordinary keepalive,
+	 * which is what a deferred receive queue is mostly made of. --- */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	g_env.fake.now_ms += 25000;          /* the guest was not running */
+	rx_hello(&g_env, 1, PE_PFW_MULTICAST, 1);
+
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->last_down_reason, PE_VC_DOWN_CHANNEL,
+			"the deferred beat ran: the channel went, "
+			"not the circuit's own TIMVCFAIL");
+	ct_check_eq_u32(g_env.upper_rec.downs, 1,
+			"and SCS was told the circuit is gone");
+	ct_check(vc->state != VMS_PE_VC_OPEN,
+		 "the circuit is NOT still open on a channel that timed out");
+
+	/* --- and on the circuit's own traffic, which refreshes the same
+	 * deadline (a busy circuit must not time out on its own frames, but a
+	 * frame that arrives 25 s late is not a busy circuit). --- */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	g_env.fake.now_ms += 25000;
+	rx_seqmsg(&g_env, 1, 0);
+
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->last_down_reason, PE_VC_DOWN_CHANNEL,
+			"a late SEQUENCED message does not revive it either");
+	ct_check_eq_u32(g_env.upper_rec.downs, 1, "SCS was told, once");
+
+	/* --- AND THE ORDINARY CASE IS UNTOUCHED: a frame that arrives while
+	 * the deadline still stands refreshes it and changes nothing. --- */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	g_env.fake.now_ms += 1000;
+	rx_seqmsg(&g_env, 1, 0);
+
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->state, VMS_PE_VC_OPEN,
+			"an on-time frame leaves the circuit OPEN");
+	ct_check_eq_u32(g_env.upper_rec.downs, 0, "and SCS is told nothing");
+}
+
 /* ------------------------------------------------------------------ *
  * E83: the circuit is with the SYSTEM; a channel is one of its paths
  *
@@ -2175,6 +2244,7 @@ int main(void)
 	test_credit_window();
 	test_timvcfail_breaks_and_reforms();
 	test_channel_loss_tears_the_circuit_down();
+	test_a_late_frame_does_not_refresh_a_dead_deadline();
 	test_second_channel_is_a_path_not_a_circuit();
 	test_idle_circuit_survives_one_path_failing();
 	test_retransmit_follows_the_surviving_path();

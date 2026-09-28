@@ -81,6 +81,10 @@ cluster_sim_test(test_sim_vc test_sim_vc.c)
 # (cluster_host_cnxman), inbound frames from the manifest-hashed specimens
 # (cluster_host_fixture), time from the simulator's own virtual clock. This is
 # the "add the file, then ONE line here" path the comment above describes.
+# rd vms-8c54: the STALLED GUEST. Pure pe stacks, no cnxman, no fixtures --
+# the "add the file, then ONE line here" path in its simplest form.
+cluster_sim_test(test_sim_pe_stalled_guest scenarios/pe_stalled_guest.c)
+
 cluster_sim_test(test_sim_cnxman_join scenarios/cnxman_join.c)
 target_link_libraries(test_sim_cnxman_join PRIVATE
     cluster_host_cnxman cluster_host_fixture)

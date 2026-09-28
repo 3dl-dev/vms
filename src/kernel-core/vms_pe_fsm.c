@@ -757,6 +757,7 @@ static enum pe_channel_action h_verify_b4(struct pe_fsm *f,
 		return PE_CH_ACT_NONE;      /* the steady b3<->b4 oscillation */
 
 	ch->state = (uint8_t)VMS_PE_CH_B4;
+	ch->verifies++;
 	pe_log(f, "%PEA0, channel verified");
 	pe_probe_start(f, ch, 0u);          /* SS4(k) step 2: advertise our size */
 	return PE_CH_ACT_VERIFIED;
@@ -2824,17 +2825,28 @@ static void h_vc_own_start(struct pe_fsm *f, struct pe_vc *vc,
 	if (vc->own_start_sent)
 		return;                 /* h_vc_idle: E83's path case */
 	/*
-	 * ...AND ONLY FOR A RE-FORMATION. A circuit that has never been up is
-	 * having its FIRST formation, and there the peer's START already
-	 * carries the whole handshake: adding one of ours lands on a peer that
-	 * our STACK may already have opened, and it reads as "peer re-started
-	 * the circuit" and breaks it. Measured -- it cost the simulator's
-	 * 10 %-loss acceptance two circuit breaks during formation, where the
-	 * bar is zero. `opens` is the circuit's own count of times it reached
-	 * OPEN, so this is a read, not a guess about which case we are in.
+	 * ...AND ONLY FOR A RE-FORMATION. A circuit in its FIRST formation
+	 * needs nothing from this edge: the peer's START carries the whole
+	 * handshake, and adding one of ours lands on a peer that our STACK may
+	 * already have opened, where it reads as "peer re-started the circuit"
+	 * and breaks it. Measured -- without this guard the simulator's
+	 * 10 %-loss acceptance lost two circuits during formation, where the
+	 * bar is zero.
+	 *
+	 * THE READ IS THE CHANNEL'S, NOT THE CIRCUIT'S, and that correction
+	 * was measured too (rig arm Z-3): a circuit torn down by a channel
+	 * loss is not necessarily the same OBJECT afterwards -- the peer's
+	 * START can allocate a fresh one, whose `opens` is 0 -- so keying on
+	 * the circuit made this edge silently never fire on the very path it
+	 * exists for. The CHANNEL survives, and "this channel has been
+	 * verified before" is exactly "the circuit on it is re-forming".
 	 */
-	if (vc->opens == 0u)
-		return;
+	{
+		const struct pe_channel *ch = pe_fsm_channel_at(f, vc->channel);
+
+		if (ch == NULL || ch->verifies <= 1u)
+			return;
+	}
 	(void)vc_send_start(f, vc, 0u);
 }
 

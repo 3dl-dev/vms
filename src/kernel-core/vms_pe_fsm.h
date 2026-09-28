@@ -1185,6 +1185,11 @@ struct pe_channel {
 	uint32_t b3_rx;
 	uint32_t b3_tx;
 	uint32_t b4_rx;
+	/* How many times this channel has ENTERED the verified state (rd
+	 * vms-8c54). 1 is a channel being verified for the first time; more
+	 * is one that went and came back, which is what tells a circuit on it
+	 * that it is RE-forming rather than forming. */
+	uint32_t verifies;
 	uint32_t b4_tx;
 	uint32_t padded_rx;
 	uint32_t padded_tx;

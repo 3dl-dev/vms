@@ -639,7 +639,14 @@ struct pe_vc {
 	uint32_t form_due_ms;      /* next formation retry                   */
 	uint32_t vcfail_due_ms;    /* TIMVCFAIL: no ACK PROGRESS by here     */
 	uint8_t  vcfail_armed;
-	uint8_t  pad3[3];
+	/*
+	 * HAS THIS CIRCUIT STARTED *THIS* FORMATION FROM ITS OWN SIDE?
+	 * (rd vms-8c54.) Cleared by vc_reset_sequence(), so it is a property
+	 * of the generation and not of the circuit's whole life. See
+	 * h_vc_own_start().
+	 */
+	uint8_t  own_start_sent;
+	uint8_t  pad3[2];
 
 	/* ---- counters, every one from a real dispatch ---- */
 	uint32_t starts_tx, starts_rx;

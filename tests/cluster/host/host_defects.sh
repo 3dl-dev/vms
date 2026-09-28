@@ -148,7 +148,8 @@ coord-removal-open-gate-disarmed
 pe-last-gasp-once-per-port
 pe-late-frame-revives-channel
 codec-conndata-ack-cell-dropped
-csb-reconnect-never-carries"
+csb-reconnect-never-carries
+pe-reformation-never-starts"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -576,6 +577,20 @@ EOF
                       ;;
         esac;;
 
+    pe-reformation-never-starts)
+        case "$_f" in
+        facility)     echo "a RE-FORMING circuit starting from its own side when its channel comes back (rd vms-8c54: the peer's START and this node's own verify race, and losing the race used to mean never sending one)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "h_vc_own_start() returns before sending, so CHANNEL_UP in STACK SENT is the bare no-op it used to be. A FIRST formation is unaffected (it returns early there anyway), and so is E83's second-path case; only the re-formation loses its START. MEASURED consequence, rig arm W-1: the real OpenVMS VAX V7.3 re-STARTed every 5 s for the rest of the run, never acknowledged the STACK this node kept re-sending eight times a beat, and 20 s later each side removed the other.";;
+        require_fail) cat <<'EOF'
+and the circuit sends its OWN START -- the frame the real VAX waits for and never got
+a second CHANNEL_UP does NOT start it again: E83's path case is untouched
+EOF
+        ;;
+        esac;;
+
     codec-conndata-ack-cell-dropped)
         case "$_f" in
         facility)     echo "content[106:108] of the VMS\$VAXcluster connect data -- where this node's receive stream from the peer it is dialling stands (rd vms-8c54), and the [2]/[11] form that follows it";;
@@ -896,6 +911,10 @@ apply_edit() {
 
     coord-admission-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    pe-reformation-never-starts)
+        # `if (vc->own_start_sent)` is unique in this file.
+        sed -i 's|if (vc->own_start_sent)|if (1) /* NEGCTL pe-reformation-never-starts */|' "$_file";;
 
     codec-conndata-ack-cell-dropped)
         # `out[12] = (uint8_t)(in->peer_ack_msg & 0xffu);` is unique here;

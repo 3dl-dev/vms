@@ -2432,10 +2432,12 @@ static int vc_send_start(struct pe_fsm *f, struct pe_vc *vc, uint16_t round)
 		return -1;
 
 	vc->config_round = (uint8_t)round;
-	if (round == 0u)
+	if (round == 0u) {
 		vc->starts_tx++;
-	else
+		vc->own_start_sent = 1u;
+	} else {
 		vc->stacks_tx++;
+	}
 	return 0;
 }
 
@@ -2638,6 +2640,16 @@ static void vc_close(struct pe_fsm *f, struct pe_vc *vc)
 	 * goes straight back to the pool for the circuits that are still up. */
 	vc_credit_release_from(f, vc);
 	vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+	/*
+	 * rd vms-8c54: a CLOSED circuit has started nothing. Cleared HERE and
+	 * not in vc_reset_sequence(), which also runs when the PEER's START
+	 * resets an in-flight formation -- clearing it there would forget that
+	 * this node had already started, and h_vc_own_start would put a second
+	 * START on a circuit the peer has moved past. (Measured: it broke the
+	 * simulator's lossless formation, VC_DOWNS 2 where the acceptance is
+	 * 0, because that second START read to the peer as "re-started".)
+	 */
+	vc->own_start_sent = 0u;
 	vc->form_due_ms = 0u;
 	vc->form_tries = 0u;
 }
@@ -2776,6 +2788,54 @@ static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
 	vc_arm_vcfail(f, vc);
 	if (vc_send_start(f, vc, 1u) != 0)
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+}
+
+/*
+ * OUR OWN CHANNEL CAME BACK WHILE WE WERE ANSWERING THE PEER'S START
+ * (rd vms-8c54).
+ *
+ * THE RACE THIS CLOSES. When a stalled node wakes, two things happen within a
+ * few hundred milliseconds in an order nothing controls: this node's channel
+ * re-verifies (PE_EV_CHANNEL_UP), and the peer's re-formation START arrives.
+ * Win the race and h_vc_channel_up() starts the formation from this side, the
+ * peer's START crosses it, both sides STACK, and the circuit opens -- measured
+ * on rig arm V-1 and byte-identical to the oracle's four frames in one
+ * millisecond. LOSE it and the START lands first, this circuit goes to
+ * STACK_SENT, and CHANNEL_UP was swallowed as "a PATH (E83)": this node then
+ * answered every one of the peer's STARTs with a STACK and NEVER SENT ONE OF
+ * ITS OWN. MEASURED, rig arm W-1: the real OpenVMS VAX V7.3 re-STARTed every
+ * 5 s for the rest of the run, never acknowledged the STACK, and 20 s later
+ * each side removed the other.
+ *
+ * So a verified channel still means "start this circuit from my side" while
+ * the circuit is FORMING and has not done so on this generation. E83's rule is
+ * untouched, and it is untouched precisely because it is about a different
+ * situation: a second path verifying to a circuit that is already OPEN, or one
+ * that has already started, changes nothing and still lands on h_vc_idle.
+ *
+ * At most one START per generation -- `own_start_sent` is cleared only by
+ * vc_reset_sequence() -- so a flapping second path cannot turn this into a
+ * storm.
+ */
+static void h_vc_own_start(struct pe_fsm *f, struct pe_vc *vc,
+			   const struct pe_vc_rx *rx)
+{
+	(void)rx;
+	if (vc->own_start_sent)
+		return;                 /* h_vc_idle: E83's path case */
+	/*
+	 * ...AND ONLY FOR A RE-FORMATION. A circuit that has never been up is
+	 * having its FIRST formation, and there the peer's START already
+	 * carries the whole handshake: adding one of ours lands on a peer that
+	 * our STACK may already have opened, and it reads as "peer re-started
+	 * the circuit" and breaks it. Measured -- it cost the simulator's
+	 * 10 %-loss acceptance two circuit breaks during formation, where the
+	 * bar is zero. `opens` is the circuit's own count of times it reached
+	 * OPEN, so this is a read, not a guess about which case we are in.
+	 */
+	if (vc->opens == 0u)
+		return;
+	(void)vc_send_start(f, vc, 0u);
 }
 
 /* A STACK arrived: p. 2-14, the circuit is OPEN and an ACK goes back. In OPEN
@@ -3384,7 +3444,10 @@ pe_vc_table[VMS_PE_VC_STATE__COUNT][PE_EV__COUNT] = {
 	 * circuit opens on an ACK, on a STACK, or -- p. 2-16 -- on any packet
 	 * that requires a circuit at all. */
 	[VMS_PE_VC_STACK_SENT] = {
-		[PE_EV_CHANNEL_UP]      = h_vc_idle,          /* a PATH (E83) */
+		/* rd vms-8c54: still a PATH once this generation has started
+		 * from our side, but the FIRST verify of our own channel is
+		 * this circuit's cue to start too -- see h_vc_own_start. */
+		[PE_EV_CHANNEL_UP]      = h_vc_own_start,
 		[PE_EV_RX_ACK]          = h_vc_rx_ack,
 		[PE_EV_RX_STACK]        = h_vc_rx_stack,
 		[PE_EV_RX_START]        = h_vc_rx_start,      /* re-send STACK */

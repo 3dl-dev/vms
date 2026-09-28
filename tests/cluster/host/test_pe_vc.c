@@ -1746,6 +1746,104 @@ static void test_channel_loss_tears_the_circuit_down(void)
 }
 
 /*
+ * THE RACE ON THE WAY BACK (rd vms-8c54).
+ *
+ * When a stalled node wakes, its own channel re-verifies and the peer's
+ * re-formation START arrive within a few hundred milliseconds, in an order
+ * nothing controls. Win the race and the circuit re-forms from this side, the
+ * peer's START crosses it, both sides STACK, and it opens -- four frames in one
+ * millisecond, which is exactly what the two real OpenVMS VAX V7.3 nodes in the
+ * oracle did. Lose it and CHANNEL_UP used to be swallowed as "a PATH": this
+ * node answered every one of the peer's STARTs with a STACK and never sent one
+ * of its own. MEASURED, rig arm W-1: the real VAX re-STARTed every 5 s for the
+ * rest of the run, never acknowledged the STACK, and 20 s later each side
+ * removed the other.
+ *
+ * The control is in the same test, because it is what makes the edge narrow:
+ * a FIRST formation must NOT send one (there the peer's START carries the whole
+ * handshake, and an extra one lands on a circuit our STACK may already have
+ * opened and breaks it -- it cost the simulator's 10 %-loss acceptance two
+ * circuit breaks when this edge was written without that guard).
+ */
+static void test_a_reformation_starts_from_this_side_too(void)
+{
+	struct pe_vc *vc;
+	uint32_t starts_before;
+
+	printf("-- a circuit that has been up re-forms from its OWN side when "
+	       "its channel comes back\n");
+
+	/* A circuit that has been up, whose channel then went. */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "the circuit exists");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->opens, 1u, "it reached OPEN once");
+	starts_before = vc->starts_tx;
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_CLOSED,
+			"and the channel took it down");
+
+	/* The PEER gets there first: its START lands while our channel is
+	 * still down, so the circuit answers with a STACK and waits. */
+	rx_start(&g_env, 0, 1, 0);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "and still exists after the peer's START");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->state, VMS_PE_VC_STACK_SENT,
+			"the peer's START is answered with a STACK");
+	ct_check_eq_u32(vc->starts_tx, starts_before,
+			"...and answering it is NOT starting one");
+
+	/* NOW our own channel comes back. */
+	channel_to_b4(&g_env, 1);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "the circuit survived the verify");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->starts_tx, starts_before + 1u,
+			"and the circuit sends its OWN START -- the frame the "
+			"real VAX waits for and never got");
+
+	/* At most one per generation. Dispatched straight at the circuit --
+	 * channel_to_b4() would re-run the channel ladder and close it, which
+	 * is a different event. */
+	pe_fsm_vc_event(&g_env.fsm, 0u, PE_EV_CHANNEL_UP);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->starts_tx == starts_before + 1u,
+		 "a second CHANNEL_UP does NOT start it again: E83's path "
+		 "case is untouched");
+
+	/* ---- the control: a FIRST formation sends nothing here ---- */
+	env_init(&g_env, 1, 1);
+	channel_to_b4(&g_env, 1);          /* our own formation starts */
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "a fresh circuit");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->opens, 0u, "which has never been up");
+	starts_before = vc->starts_tx;
+	rx_start(&g_env, 0, 1, 0);         /* the peer's START crosses it */
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->state == VMS_PE_VC_STACK_SENT,
+		 "and is now answering the peer's START");
+
+	pe_fsm_vc_event(&g_env.fsm, 0u, PE_EV_CHANNEL_UP);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "still there");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->starts_tx, starts_before,
+			"a FIRST formation sends NO further start of its own: "
+			"the peer's handshake is the whole handshake, and a "
+			"second START reads to it as 'peer re-started the "
+			"circuit' and breaks it");
+}
+
+/*
  * THE STALLED GUEST (rd vms-8c54). The listen timeout is a fact about elapsed
  * time, not about which code path notices it.
  *
@@ -2245,6 +2343,7 @@ int main(void)
 	test_timvcfail_breaks_and_reforms();
 	test_channel_loss_tears_the_circuit_down();
 	test_a_late_frame_does_not_refresh_a_dead_deadline();
+	test_a_reformation_starts_from_this_side_too();
 	test_second_channel_is_a_path_not_a_circuit();
 	test_idle_circuit_survives_one_path_failing();
 	test_retransmit_follows_the_surviving_path();

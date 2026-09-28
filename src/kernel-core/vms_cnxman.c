@@ -2752,11 +2752,26 @@ static int cnxman_refresh_conndata(struct vms_cnxman *cn)
 			       cn->cl->club.cluster_nodes > 0u) ? 1 : 0);
 	in.pad0 = 0u;
 
-	if (vms_cm_conndata_build(&in, cnxman_e31_head,
-				  (uint32_t)sizeof(cnxman_e31_head),
-				  cnxman_e31_tail,
-				  (uint32_t)sizeof(cnxman_e31_tail),
-				  next, (uint32_t)sizeof(next)) != VMS_CODEC_OK)
+	/* EXPERIMENT ONLY (rd vms-8c54, NOT FOR MERGE): the oracle shows two
+	 * real V7.3 MEMBERS carry 0x02 at [2] and 0x0a at [11] where a joiner
+	 * carries 0x01/0x08. Does answering the VAX's member-form open in the
+	 * member form stop the CNXMGRERR? [12:13] stays honestly zero. */
+	{
+		uint8_t head[4], tail[5];
+
+		head[0] = cnxman_e31_head[0]; head[1] = cnxman_e31_head[1];
+		head[2] = in.member ? 0x02u : cnxman_e31_head[2];
+		head[3] = cnxman_e31_head[3];
+		tail[0] = in.member ? 0x0au : cnxman_e31_tail[0];
+		tail[1] = cnxman_e31_tail[1]; tail[2] = cnxman_e31_tail[2];
+		tail[3] = cnxman_e31_tail[3]; tail[4] = cnxman_e31_tail[4];
+		if (vms_cm_conndata_build(&in, head, (uint32_t)sizeof(head),
+					  tail, (uint32_t)sizeof(tail),
+					  next, (uint32_t)sizeof(next)) !=
+		    VMS_CODEC_OK)
+			return 0;
+	}
+	if (0)
 		return 0;   /* the builder refused: the old bytes stand */
 
 	/*

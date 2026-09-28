@@ -3695,8 +3695,24 @@ static void pe_vc_follow_channel(struct pe_fsm *f, uint32_t ch_index,
 		 * that already has a circuit is another PATH to it, never a
 		 * second circuit (E83). */
 		vc = vc_for_path(f, ch_index);
-		if (vc == NULL)
+		if (vc == NULL) {
+			/*
+			 * SAY SO (rd vms-8c54). "The channel verified and no
+			 * circuit followed" is the single hardest state to
+			 * diagnose in this port -- it is what a stalled node
+			 * that never comes back looks like from the console --
+			 * and until this line it was indistinguishable from a
+			 * circuit that formed and failed. The only reason
+			 * vc_for_path() declines is that the SYSTEM already has
+			 * a circuit on a path it measured as live, so that is
+			 * what the line says, and the counter it reports is the
+			 * one vc_for_path() really bumped.
+			 */
+			pe_log(f, "%PEA0, a verified channel formed no "
+				  "circuit: this system already has one on a "
+				  "path that is still live");
 			return;
+		}
 		pe_vc_dispatch(f, vc, PE_EV_CHANNEL_UP, &pe_vc_rx_none);
 		return;
 	}

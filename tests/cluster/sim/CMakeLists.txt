@@ -222,3 +222,17 @@ target_compile_definitions(test_replay PRIVATE
     OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
     OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256"
 )
+
+# rd vms-8c54's rung-R2 leg: the p. 7-24 reconnect window run beat by beat on
+# the virtual clock by the SHIPPING reconnect FSM over the SHIPPING CSB ladder,
+# and the sixteen bytes the reconnect it produces would emit -- built by the
+# SHIPPING codec from that block's own counters and compared against the two
+# real OpenVMS VAX V7.3 members' own connects. The CONTROL is the other half of
+# the rule in the same file: a system the cluster has REMOVED starts over,
+# which is E76/E77's case and must not change.
+cluster_sim_test(test_sim_cnxman_reconnect_dialogue
+                 scenarios/cnxman_reconnect_carries_dialogue.c)
+target_link_libraries(test_sim_cnxman_reconnect_dialogue PRIVATE
+    cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_reconnect_dialogue PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)

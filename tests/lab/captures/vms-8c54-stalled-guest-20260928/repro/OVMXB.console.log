@@ -1,0 +1,319 @@
+[OVMXB] caps: CapPrm:	000001ffffffdfff CapEff:	000001ffffffdfff CapBnd:	000001ffffffdfff 
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+3EFCAD00+3EF0AD00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [OVMXB] SYSBOOT> reached
+SET SCSNODE OVMXB
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXB
+SYSBOOT> SET SCSSYSTEMID 1988
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1988
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-2 - OpenVMS-compatible
+    28-SEP-2026 16:02:45.22
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   15.545450] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   15.553263] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 28-SEP-2026 16:02:46.00
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-2 (OpenVMS-compatible)
+
+Username: [   17.248453] %PEA0, channel verified
+[   17.357352] %PEA0, virtual circuit open
+[   17.597754] %CNXMAN, a connection manager was discovered on the interconnect
+[   17.609032] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+SYSTEM
+Password: [   19.069591] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   19.653838] %PEA0, channel verified
+
+
+   Welcome to OpenVMX V0.7-2 - OpenVMS-compatible
+
+
+$ [   19.715949] %PEA0, virtual circuit open
+[   20.669637] %CNXMAN, a connection manager was discovered on the interconnect
+SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ [   24.189661] %CNXMAN, membership request to the selected member not answered
+[   24.195601] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   24.765573] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-0"
+B36-POLL-OVMXB-0
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:02:57
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | ACCEPT           |
++---------------------------------------------------------------+
+$ [   27.071047] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   36.029613] %CNXMAN, another system is also waiting to form an OpenVMS Cluster and takes precedence; this node will join it
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-15"
+B36-POLL-OVMXB-15
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:03:12
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ [   47.194367] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   47.203881] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   47.217823] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   50.359849] %CNXMAN, the cluster assigned this node a cluster system id
+[   51.389566] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[   53.464696] %CNXMAN, the cluster assigned this node a cluster system id
+[   53.634439] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-30"
+B36-POLL-OVMXB-30
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:03:27
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-45"
+B36-POLL-OVMXB-45
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:03:42
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-60"
+B36-POLL-OVMXB-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:03:57
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-75"
+B36-POLL-OVMXB-75
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:04:12
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-90"
+B36-POLL-OVMXB-90
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:04:27
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-105"
+B36-POLL-OVMXB-105
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:04:42
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-120"
+B36-POLL-OVMXB-120
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:04:57
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-135"
+B36-POLL-OVMXB-135
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:05:12
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-150"
+B36-POLL-OVMXB-150
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:05:27
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   | 00010001 |                 | OPEN             |
++---------------------------------------------------------------+
+$ [   58.877557] %SCS-W-DISCTIMO, disconnect unmatched, connection closed
+[  186.314562] %CNXMAN, this node is a member of the cluster
+[  186.323798] %CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+[  186.332449] %CNXMAN, VAXcluster state transition in progress
+[  186.337145] %CNXMAN, this node is now a VAXcluster member
+[  186.342373] %CNXMAN, system 00000000000007c4 was added to the cluster
+[  186.346407] %CNXMAN, system 00000000000007c3 was added to the cluster
+[  186.352751] %CNXMAN, system 00000000000007c5 was added to the cluster
+[  186.356687] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[  187.919242] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-165"
+SHOW CLUS[  202.400239] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+TER
+B36-POLL-OVMXB-165
+$ View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:05:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | MEMBER           |
+| 1987   | 00010002 |                 | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ [  202.400248] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  202.801277] %PEA0, peer advertised a new incarnation, channel reset
+[  202.807300] %PEA0, channel lost, virtual circuit closed
+[  202.811307] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[  202.822362] %CNXMAN, aborting VAXcluster state transition
+[  202.829532] %CNXMAN, lost connection to a cluster member, reconnecting
+[  202.834933] %CNXMAN, lost the VMS$VAXcluster connection to a cluster member
+[  202.839248] vms: SCS path lost to system 0:1989 -> SS$ 2692
+[  202.897654] %PEA0, channel verified
+[  202.951542] %PEA0, virtual circuit open
+[  203.301687] %PEA0, peer announced departure, channel closed
+[  203.304487] %PEA0, peer departed, virtual circuit closed
+[  203.311236] vms: SCS path lost to system 0:1989 -> SS$ 2692
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-180"
+B36-POLL-OVMXB-180
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:05:57
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | MEMBER           |
+| 1987   | 00010002 |                 | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-195"
+B36-POLL-OVMXB-195
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:06:12
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | MEMBER           |
+| 1987   | 00010002 |                 | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ [  222.909584] %CNXMAN, reconnect interval expired, proposing removal
+[  222.916094] %CNXMAN, proposing removal of a system from the cluster
+[  222.920112] %CNXMAN, system 00000000000007c5 was removed from the cluster
+[  222.982941] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[  235.135781] %PEA0, peer advertised a new incarnation, channel reset
+[  235.162016] %PEA0, channel verified
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-210"
+B36-POLL-OVMXB-210
+$ [  235.221663] %PEA0, virtual circuit open
+[  236.221557] %CNXMAN, a connection manager was discovered on the interconnect
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    28-SEP-2026 16:06:27
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | MEMBER           |
+| 1987   | 00010002 |                 | MEMBER           |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  239.879700] %CNXMAN, the cluster opened the VMS$VAXcluster connection to this node

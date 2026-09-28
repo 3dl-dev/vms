@@ -65,6 +65,50 @@ guests under KVM. `stall.sh` SIGSTOPs `OVMXB`'s QEMU process tree 2 s after
   except `abs 112` (the frame-composition time)**. The STACK was never the
   problem; the missing START was.
 
+## `repro/` — arm N-6: the CNXMGRERR itself, reproduced
+
+A **14 s** stall of the just-admitted member bugchecked the real VAX. Its
+console is the shape of Baron's live paste, line for line:
+
+```
+%CNXMAN,  completing VAXcluster state transition      <- OVMXB admitted
+%CNXMAN,  lost connection to system OVMXB
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE OVMXB
+  
+**** Fatal BUG CHECK, version = V7.3     CNXMGRERR
+```
+
+— with **no `timed-out lost connection`** before it: the VAX died inside its own
+reconnect window, exactly as the visitor saw.
+
+`crash-window.txt` and `wake-to-crash.txt` are the last second on the wire. The
+VAX last-gasped **0.88 s after the guest woke**:
+
+| t after wake | |
+|---|---|
+| +0.021 s | OVMXB puts a `0x4b` 204-byte sequenced CM message and credit returns on the circuit **the VAX closed 8.3 s earlier** |
+| +0.31 s → +0.57 s | the VAX re-verifies the channel (`b2`/`b3`/`b4`) and the pair re-forms the circuit (`0x41` START/STACK/ACK) |
+| +0.805 s | the VAX dials `VMS$VAXcluster` `CONNECT_REQ` |
+| +0.876 s | OVMXB `CONNECT_RSP`, then `ACCEPT_REQ` — it accepts |
+| +0.877 s | the VAX `ACCEPT_RSP`s **and last-gasps in the same millisecond** |
+
+### An open question, recorded and NOT acted on
+
+`conndata-form-vs-oracle.txt`. The VAX opened that reconnect with the **member
+form** of the 16-byte SCA connect data (`content[94:110]`): byte 2 `0x02`,
+byte 11 `0x0a`, bytes 12–13 a non-zero value. Two real V7.3 members
+reconnecting after the same SIGSTOP both carry `02 … 0a`. OVMX — itself a
+member at that instant, and carrying the member's real vote/quorum/node counts
+— answered with the **joiner form**: byte 2 `0x01`, byte 11 `0x08`, bytes 12–13
+`00 00`. OVMX has no member form at all; those two bytes come from the baked
+E31 head/tail, not from executive state.
+
+That is a real infidelity, but it is **not** established as the cause: arms
+`M-4` and `M-5` show the identical mismatch with **no** bugcheck. And bytes
+12–13 cannot be derived from anything this executive holds — inventing them
+would be exactly the placeholder INV-6 forbids. Raised for a ruling rather than
+guessed at.
+
 ## The matrices
 
 `analysis/loop-M.log` — the stall armed on the **real VAX's** commit of the

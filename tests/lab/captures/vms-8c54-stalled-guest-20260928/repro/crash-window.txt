@@ -1,0 +1,30 @@
+
+=== last gasp: frame 4125, 08:00:2b:fb:91:86 announced departure ===
+  [  4100] -  0.850 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=120  mtype30=0xb4
+  [  4101] -  0.850 s  52:54:00:00:df:0b -> 52:54:00:00:df:0a content=120  mtype30=0xb4
+  [  4102] -  0.850 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=41   mtype30=0x48
+  [  4103] -  0.850 s  52:54:00:00:df:0b -> 52:54:00:00:df:0a content=120  mtype30=0xb4
+  [  4104] -  0.850 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=41   mtype30=0x48
+  [  4105] -  0.850 s  52:54:00:00:df:0b -> 52:54:00:00:df:0a content=120  mtype30=0xb4
+  [  4106] -  0.850 s  52:54:00:00:df:0b -> 52:54:00:00:df:0a content=120  mtype30=0xb4
+  [  4107] -  0.850 s  52:54:00:00:df:0b -> 52:54:00:00:df:0a content=120  mtype30=0xb4
+  [  4108] -  0.569 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=120  mtype30=0xb2
+  [  4109] -  0.451 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=120  mtype30=0xb3
+  [  4110] -  0.451 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=120  mtype30=0xb4
+  [  4111] -  0.451 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=106  mtype30=0x41
+  [  4112] -  0.361 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=1500 mtype30=0xb3
+  [  4113] -  0.361 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=106  mtype30=0x41
+  [  4114] -  0.361 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=120  mtype30=0xb4
+  [  4115] -  0.361 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=106  mtype30=0x41
+  [  4116] -  0.327 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=106  mtype30=0x41
+  [  4117] -  0.327 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=46   mtype30=0x41
+  [  4118] -  0.307 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=46   mtype30=0x41
+  [  4119] -  0.072 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=110  mtype30=0x5b  CONNECT_REQ    rem=00000000 loc=dbf0000a  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  4120] -  0.001 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=41   mtype30=0x48
+  [  4121] -  0.001 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=66   mtype30=0x5b  CONNECT_RSP    rem=dbf0000a loc=00000000
+  [  4122] -  0.001 s  52:54:00:00:df:0b -> 08:00:2b:fb:91:86 content=110  mtype30=0x5b  ACCEPT_REQ     rem=dbf0000a loc=b09f0012  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  4123] -  0.000 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=41   mtype30=0x48
+  [  4124] -  0.000 s  08:00:2b:fb:91:86 -> 52:54:00:00:df:0b content=62   mtype30=0x5b  ACCEPT_RSP     rem=b09f0012 loc=dbf0000a
+  -- last frame each station sent before the gasp --
+     08:00:2b:fb:91:86  -  0.000 s  frame 4124  content=62   mtype30=0x5b  ACCEPT_RSP     rem=b09f0012 loc=dbf0000a
+     52:54:00:00:df:0b  -  0.001 s  frame 4122  content=110  mtype30=0x5b  ACCEPT_REQ     rem=dbf0000a loc=b09f0012  n1='VMS$VAXcluster' n2='VMS$VAXcluster'

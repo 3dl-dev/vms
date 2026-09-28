@@ -87,4 +87,7 @@ above, whatever the VAX printed between two samples is replaced rather than appe
 with the CNXMGRERR bugcheck-and-reboot seen live, and it is **rd vms-8c54 / vms-b36 (cluster lane)** —
 not a page defect and not fixed here.
 
-The grader now reproduces it: run `CASE=all-at-once` against the bundle.
+The grader reproduces it on demand: `CASE=all-at-once node visitor-gate.mjs` against the bundle.
+Repeated four times on this host (once in the matrix above, three times back to back): **2 CN=3, 2
+failures**, both failures carrying guest restarts (`OVMXB restarted 5x; VAXC restarted 2x`) and the real
+VAX's own `lost connection to system OVMXB`. The other five cases did not fail once.

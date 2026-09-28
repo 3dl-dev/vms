@@ -165,12 +165,20 @@ async function oneRun(spec, idx) {
       for (const w of NODES) {
         const c = await consoleOf(page, w);
         try { fs.writeFileSync(`${dir}/${w}.console.log`, c); } catch (e) {}
+        // ACCUMULATE, never recompute. These consoles are CAPPED scrollbacks
+        // (pcjs's VaxTerminal trims to MAX_LINES, node.html keeps the last
+        // 40000 chars), so a "was added to the cluster" line scrolls away on a
+        // long run -- and a set recomputed from the current text SHRINKS, which
+        // fails a perfectly healthy cluster. Observed once is true forever: a
+        // node does not un-join because its console scrolled.
         if (MEMBER.test(c)) R.member[w] = true;
-        R.added[w] = setOf(c, ADDED).map((h) => '0x' + h.replace(/^0x/, ''));
-        const l = setOf(c, LOST); if (l.length) R.lost[w] = l;
+        const seen = new Set(R.added[w] || []);
+        for (const h of setOf(c, ADDED)) seen.add('0x' + h.replace(/^0x/, ''));
+        R.added[w] = [...seen];
+        const l = setOf(c, LOST); if (l.length) R.lost[w] = [...new Set([...(R.lost[w] || []), ...l])];
         if (BUG.test(c)) R.bugchecks[w] = (c.match(BUG) || [''])[0];
         if (w !== 'VAXC' && FOUNDED.test(c)) R.ovmx_founded[w] = true;
-        if (w === 'VAXC') R.vaxc_admitted = setOf(c, VADD);
+        if (w === 'VAXC') R.vaxc_admitted = [...new Set([...R.vaxc_admitted, ...setOf(c, VADD)])];
       }
       const health = await page.evaluate(() => ({
         vis: document.visibilityState,

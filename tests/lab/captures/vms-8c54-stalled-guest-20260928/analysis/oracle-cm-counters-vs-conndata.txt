@@ -1,0 +1,54 @@
+t=   -3.527 57:a4:30->00:01:04 APPDATA     rem=2f5b000a loc=2f5b000a  CM send=   13 ack= 8085 clen=94
+t=   -3.526 00:01:04->57:a4:30 APPDATA     rem=2f5b000a loc=2f5b000a  CM send=   13 ack= 8085 clen=110
+t=   -3.212 57:a4:30->00:01:04 APPDATA     rem=2f520009 loc=2f520009  CM send=14806 ack=10245 clen=190
+t=   -3.212 00:01:04->57:a4:30 APPDATA     rem=2f520009 loc=2f520009  CM send=10246 ack=14806 clen=190
+t=   -3.209 57:a4:30->00:01:04 APPDATA     rem=2f520009 loc=2f520009  CM send=14807 ack=10246 clen=190
+t=   -3.209 00:01:04->57:a4:30 APPDATA     rem=2f520009 loc=2f520009  CM send=10247 ack=14807 clen=190
+t=   -3.207 57:a4:30->00:01:04 APPDATA     rem=2f520009 loc=2f520009  CM send=14808 ack=10247 clen=190
+t=   -3.207 00:01:04->57:a4:30 APPDATA     rem=2f520009 loc=2f520009  CM send=10248 ack=14808 clen=190
+t=   -3.205 57:a4:30->00:01:04 APPDATA     rem=2f520009 loc=2f520009  CM send=14809 ack=10248 clen=190
+t=   -3.204 57:a4:30->00:01:04 APPDATA     rem=2f520009 loc=2f520009  CM send=14810 ack=10248 clen=190
+t=   -3.203 57:a4:30->00:01:04 APPDATA     rem=2f520009 loc=2f520009  CM send=14811 ack=10248 clen=190
+t=   -3.203 00:01:04->57:a4:30 APPDATA     rem=2f520009 loc=2f520009  CM send=10249 ack=14811 clen=190
+t=   -2.850 00:01:04->57:a4:30 APPDATA     rem=2f52000b loc=2f52000b  CM send=   12 ack= 8100 clen=94
+t=   -2.849 57:a4:30->00:01:04 APPDATA     rem=2f52000b loc=2f52000b  CM send=   12 ack= 8100 clen=110
+t=   14.185 00:01:04->57:a4:30 APPDATA     rem=2f530009 loc=2f5f0009  CM send=    0 ack=    0 clen=94
+t=   14.186 57:a4:30->00:01:04 APPDATA     rem=2f5f0009 loc=2f530009  CM send=    1 ack=    0 clen=94
+t=   14.187 00:01:04->57:a4:30 APPDATA     rem=2f530009 loc=2f5f0009  CM send=    0 ack=    0 clen=94
+t=   14.187 57:a4:30->00:01:04 APPDATA     rem=2f5f0009 loc=2f530009  CM send=    1 ack=    0 clen=94
+t=   14.188 00:01:04->57:a4:30 APPDATA     rem=2f530009 loc=2f5f0009  CM send=    0 ack=    0 clen=94
+t=   14.188 57:a4:30->00:01:04 APPDATA     rem=2f5f0009 loc=2f530009  CM send=    1 ack=    0 clen=94
+t=   14.189 00:01:04->57:a4:30 APPDATA     rem=2f530009 loc=2f5f0009  CM send=    0 ack=    0 clen=94
+t=   14.189 57:a4:30->00:01:04 APPDATA     rem=2f5f0009 loc=2f530009  CM send=    1 ack=    0 clen=94
+t=   14.341 00:01:04->57:a4:30 CONNECT_REQ loc=2f670007 cd[12:14]=db 39 (=14811)
+t=   14.341 57:a4:30->00:01:04 ACCEPT_REQ  loc=2f670007 cd[12:14]=09 28 (=10249)
+t=   14.342 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10250 ack=14811 clen=190
+t=   14.342 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14812 ack=10249 clen=190
+t=   14.343 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10251 ack=14812 clen=190
+t=   14.343 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14813 ack=10251 clen=190
+t=   14.415 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14814 ack=10251 clen=190
+t=   14.417 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10252 ack=14814 clen=190
+t=   14.417 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14815 ack=10251 clen=190
+t=   14.417 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14816 ack=10251 clen=190
+t=   14.417 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10253 ack=14815 clen=190
+t=   14.419 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10254 ack=14816 clen=190
+t=   14.421 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14817 ack=10254 clen=190
+t=   14.423 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14818 ack=10254 clen=190
+t=   14.424 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14819 ack=10254 clen=190
+t=   14.424 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10255 ack=14819 clen=190
+t=   14.424 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14820 ack=10255 clen=190
+t=   14.425 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10256 ack=14820 clen=190
+t=   14.425 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14821 ack=10256 clen=190
+t=   14.425 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14822 ack=10256 clen=190
+t=   14.426 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14823 ack=10256 clen=190
+t=   14.426 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10257 ack=14823 clen=190
+t=   14.427 57:a4:30->00:01:04 APPDATA     rem=2f670007 loc=2f670007  CM send=14824 ack=10257 clen=190
+t=   14.428 00:01:04->57:a4:30 APPDATA     rem=2f670007 loc=2f670007  CM send=10258 ack=14824 clen=190
+t=   14.682 57:a4:30->00:01:04 APPDATA     rem=2f5c000a loc=2f5d000a  CM send=    0 ack=    0 clen=94
+t=   14.682 00:01:04->57:a4:30 APPDATA     rem=2f5d000a loc=2f5c000a  CM send=    1 ack=    0 clen=94
+t=   14.682 57:a4:30->00:01:04 APPDATA     rem=2f5c000a loc=2f5d000a  CM send=    0 ack=    0 clen=94
+t=   14.683 00:01:04->57:a4:30 APPDATA     rem=2f5d000a loc=2f5c000a  CM send=    1 ack=    0 clen=94
+t=   14.683 57:a4:30->00:01:04 APPDATA     rem=2f5c000a loc=2f5d000a  CM send=    0 ack=    0 clen=94
+t=   14.683 00:01:04->57:a4:30 APPDATA     rem=2f5d000a loc=2f5c000a  CM send=    1 ack=    0 clen=94
+t=   14.683 57:a4:30->00:01:04 APPDATA     rem=2f5c000a loc=2f5d000a  CM send=    0 ack=    0 clen=94
+t=   14.684 00:01:04->57:a4:30 APPDATA     rem=2f5d000a loc=2f5c000a  CM send=    1 ack=    0 clen=94

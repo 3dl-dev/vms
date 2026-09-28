@@ -92,7 +92,40 @@ VAX last-gasped **0.88 s after the guest woke**:
 | +0.876 s | OVMXB `CONNECT_RSP`, then `ACCEPT_REQ` — it accepts |
 | +0.877 s | the VAX `ACCEPT_RSP`s **and last-gasps in the same millisecond** |
 
-### An open question, recorded and NOT acted on
+### The cell, DERIVED — `analysis/oracle-cm-counters-vs-conndata.txt`
+
+`content[106:108]` is **this node's own connection-manager ack counter for the
+peer it is dialling**: the highest `VMS$VAXcluster` CM send-msg# it has TAKEN
+from that system, the same number it stamps at `abs 74` of the CM messages it
+sends on the connection. Read straight off the oracle:
+
+```
+before the loss   VAX2 -> VAX1   CM send=14811 ack=10248
+                  VAX1 -> VAX2   CM send=10249 ack=14811
+the reconnect     VAX1 -> VAX2   CONNECT_REQ  cd[12:14] = db 39  (14811)
+                  VAX2 -> VAX1   ACCEPT_REQ   cd[12:14] = 09 28  (10249)
+after it          VAX1 -> VAX2   CM send=10250 ack=14811
+                  VAX2 -> VAX1   CM send=14812 ack=10249
+```
+
+The conversation did not restart. It **moved** onto the new Con.ID pair, and
+each side advertised where its receive stream stood so the other could resume
+without a hole.
+
+**The off-by-one is the proof** (`analysis/oracle-vax3-offbyone.txt`): VAX3 had
+retransmitted `send=1799` three times unanswered, and VAX1's connect to it
+carries **1798**. The cell is "the highest I have TAKEN", not "the last I have
+SEEN on the wire" — a distinction only a real receive counter can make.
+
+And `[2]`/`[11]` follow **that cell**, not membership: `0x01`/`0x08` when none
+is carried, `0x02`/`0x0a` when one is (`0x08` → `0x0a` is its two bytes).
+Eleven samples across two independent clusters, no counterexample — including
+the four real-VAX rows already in `test_codec_cm.c`, which are *members*
+carrying `0x01`/`0x08` because they had taken nothing from the peer they were
+dialling, and one real VAX observed sending both forms minutes apart with its
+membership unchanged.
+
+### The earlier reading, recorded because it was WRONG
 
 `conndata-form-vs-oracle.txt`. The VAX opened that reconnect with the **member
 form** of the 16-byte SCA connect data (`content[94:110]`): byte 2 `0x02`,
@@ -103,11 +136,12 @@ member at that instant, and carrying the member's real vote/quorum/node counts
 `00 00`. OVMX has no member form at all; those two bytes come from the baked
 E31 head/tail, not from executive state.
 
-That is a real infidelity, but it is **not** established as the cause: arms
-`M-4` and `M-5` show the identical mismatch with **no** bugcheck. And bytes
-12–13 cannot be derived from anything this executive holds — inventing them
-would be exactly the placeholder INV-6 forbids. Raised for a ruling rather than
-guessed at.
+That first reading — "member form vs joiner form" — is **wrong**, and the
+experiment that disproved it is worth keeping: a build that sent `0x02`/`0x0a`
+whenever this node was a member (branch `exp/vms-8c54-member-conndata`,
+artifacts `3ca53b57`, matrix `X`) put the right two bytes on the wire and the
+VAX **still bugchecked**, 2 of 3 injected arms. The bytes were never the
+point; the **ack cell they announce** was.
 
 ## The matrices
 

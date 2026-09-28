@@ -149,7 +149,8 @@ pe-last-gasp-once-per-port
 pe-late-frame-revives-channel
 codec-conndata-ack-cell-dropped
 csb-reconnect-never-carries
-pe-reformation-never-starts"
+pe-reformation-never-starts
+pe-start-refusal-silent"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -577,6 +578,20 @@ EOF
                       ;;
         esac;;
 
+    pe-start-refusal-silent)
+        case "$_f" in
+        facility)     echo "saying WHY a circuit refused to form (rd vms-18a: counted-but-silent made a refused formation indistinguishable on a real console from one that was never asked)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "vc_log_start_refused() returns before saying anything, so vc_begin_formation() puts the circuit back in CLOSED with nothing on the console -- the state that looks exactly like a node that never rejoins ('%PEA0, channel verified' and then silence). The counters are untouched, so the INV-6 accounting is unaffected: only the line goes.";;
+        require_fail) cat <<'EOF'
+and it is SAID on the console, not only counted
+...naming WHICH read came back empty
+EOF
+        ;;
+        esac;;
+
     pe-reformation-never-starts)
         case "$_f" in
         facility)     echo "a RE-FORMING circuit starting from its own side when its channel comes back (rd vms-8c54: the peer's START and this node's own verify race, and losing the race used to mean never sending one)";;
@@ -912,6 +927,11 @@ apply_edit() {
 
     coord-admission-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    pe-start-refusal-silent)
+        # The CALL is unique and VANISHES when replaced, so the mutation is not
+        # repeatable; the function stays referenced so nothing goes unused.
+        sed -i 's|vc_log_start_refused(f, vc);|(void)vc_log_start_refused; /* NEGCTL pe-start-refusal-silent */|' "$_file";;
 
     pe-reformation-never-starts)
         # `if (vc->own_start_sent)` is unique in this file.

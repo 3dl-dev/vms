@@ -2330,10 +2330,17 @@ static void vc_put_nodename(const struct pe_fsm *f,
  * Absent either, this node forms NO circuit and counts it. That is the honest
  * end of the road (Rule 9), not a zero on the wire.
  */
+/* The PURE read, so a diagnostic can ask the same question without moving the
+ * counter (rd vms-18a: asking it twice counted one refusal as two). */
+static int vc_identity_present(const struct pe_fsm *f)
+{
+	return f->id.incarnation_time_valid && f->ops != NULL &&
+	       f->ops->now_vms != NULL;
+}
+
 static int vc_identity_ok(struct pe_fsm *f)
 {
-	if (!f->id.incarnation_time_valid || f->ops == NULL ||
-	    f->ops->now_vms == NULL) {
+	if (!vc_identity_present(f)) {
 		f->vc_no_identity++;
 		return 0;
 	}
@@ -2657,6 +2664,34 @@ static void vc_close(struct pe_fsm *f, struct pe_vc *vc)
 
 /* Start (or restart) formation: reset, send the round-0 START, arm both the
  * retry cadence and the TIMVCFAIL deadline. */
+/*
+ * SAY WHY A FORMATION WAS REFUSED (rd vms-18a).
+ *
+ * vc_send_start() declines for one of four reasons and every one of them is a
+ * READ that came back empty. Two are counted (vc_no_incarnation,
+ * vc_no_identity) and none was ever said out loud, so a circuit that refused
+ * to form looked EXACTLY like one that was never asked: "%PEA0, channel
+ * verified" and then silence, which is the console of a node that never
+ * rejoins. This names the missing read instead. Each clause is the same read
+ * vc_send_start() just made, in the same order; nothing is inferred.
+ */
+static void vc_log_start_refused(struct pe_fsm *f, const struct pe_vc *vc)
+{
+	if (pe_fsm_channel_at(f, vc->channel) == NULL)
+		pe_log(f, "%PEA0, no circuit formed: the path this circuit was "
+			  "bound to is gone");
+	else if (!vc->echo_valid)
+		pe_log(f, "%PEA0, no circuit formed: this member has not "
+			  "advertised an incarnation for this node, so there is "
+			  "no echo to carry (SS4(i).B)");
+	else if (!vc_identity_present(f))
+		pe_log(f, "%PEA0, no circuit formed: this port holds no "
+			  "incarnation of its own to put in a START");
+	else
+		pe_log(f, "%PEA0, no circuit formed: the START could not be "
+			  "built or could not be transmitted");
+}
+
 static void vc_begin_formation(struct pe_fsm *f, struct pe_vc *vc)
 {
 	vc_reset_sequence(f, vc);
@@ -2664,8 +2699,10 @@ static void vc_begin_formation(struct pe_fsm *f, struct pe_vc *vc)
 	vc->form_due_ms = pe_now(f) + vc_retransmit_ms(f);
 	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
 	vc_arm_vcfail(f, vc);
-	if (vc_send_start(f, vc, 0u) != 0)
+	if (vc_send_start(f, vc, 0u) != 0) {
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+		vc_log_start_refused(f, vc);
+	}
 }
 
 static void vc_open(struct pe_fsm *f, struct pe_vc *vc)

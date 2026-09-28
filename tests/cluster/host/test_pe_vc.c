@@ -671,6 +671,20 @@ static void test_no_boot_time_no_circuit(void)
 			"no formation frame was built");
 	ct_check_eq_u32(g_env.fsm.vc_no_identity, 1,
 			"and the refusal is COUNTED");
+	/*
+	 * ...AND SAID (rd vms-18a). Counted-but-silent is what made a circuit
+	 * that REFUSED to form indistinguishable, on a real console, from one
+	 * that was never asked: "%PEA0, channel verified" and then nothing,
+	 * which is exactly what a node that never rejoins looks like. The line
+	 * must name the missing read, and asking for it must not move the
+	 * counter above (it did, and counted one refusal as two).
+	 */
+	ct_check(strstr(g_env.fake.last_log, "no circuit formed") != NULL,
+		 "and it is SAID on the console, not only counted");
+	ct_check(strstr(g_env.fake.last_log, "incarnation of its own") != NULL,
+		 "...naming WHICH read came back empty");
+	ct_check_eq_u32(g_env.fsm.vc_no_identity, 1,
+			"and saying it did not count the refusal twice");
 }
 
 /*

@@ -163,3 +163,32 @@ A note on the harness itself: the first run of the live-shaped matrix graded
 *and* exits 1 on zero, so `|| echo 0` produced two lines and every integer test
 died). `stall.sh` now counts through one helper, and `grade3.sh` grades an arm
 with no injected fault `NOFAULT`, never `PASS`.
+
+
+## The fix, and what the rig says about it
+
+Five defects, in the order the wire gave them up. Each build is a boot-artifact
+set in the pod (`/lab/run-s8/art/`), each matrix one full sweep of
+16/14/13/10/20/6 s stalls of a just-admitted member.
+
+| build | what it adds | arms | VAX bugchecks | all-MEMBER |
+|---|---|---:|---:|---:|
+| `m1` 53062cd3 | main at V0.7-2 | 6 (N) | **1** | 1/5 |
+| `m2` ecac8db0 | the deferred beat + the per-incarnation gasp | 7 (V) | **2** | 3/6 |
+| `m3` 3ca53b57 | *experiment*: the "member form" for `[2]`/`[11]` | 4 (X) | **2** | 1/3 |
+| `m5` a717245e | the ack cell + the carried dialogue + the own START | 8 (Z) | **0** | 3/7 |
+| `m6` 7c8eda48 | the re-formation keyed on the channel | 8 (F) | **2** | 2/6 |
+| `m7` 9e314e3f | a re-established member does not re-introduce itself | 6 (G) | **0** | 4/5 |
+
+The crash is closed by the ack cell: the two builds without it crash, the ones
+with it do not, and the one crash after it (`F-4`) had the real VAX printing
+**`%CNXMAN, re-established connection to system OVMXB`** — the oracle's own line,
+which it had never printed for this implementation — followed by this node
+re-introducing itself at send-msg# 97. `m7` fixes that and the VAX has not
+bugchecked since.
+
+**What is NOT done:** the bar is ≥20 consecutive arms with everybody MEMBER
+afterwards. Bugchecks are 0, but a stalled node still fails to re-form its
+circuit in roughly a third of arms — tracked as its own item, narrowed to
+"CHANNEL_UP reaches the circuit and the formation is refused silently", with the
+next diagnostic named.

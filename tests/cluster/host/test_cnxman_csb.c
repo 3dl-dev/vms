@@ -208,6 +208,13 @@ static const struct ladder_case ladder[] = {
 	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-25/D12 + 7-30" },
 	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_REMOTE_DISCONNECT,
 	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-27 + 7-30 / E81" },
+	/* rd vms-1f40: the attempt's CONNECT is out -- it holds the beat --
+	 * and a connection that closes under it (lost path, unanswered verb)
+	 * is an attempt that FAILED: back to WAIT for the next one. */
+	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_CONNECT_SENT,
+	  VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_ACT_NONE, "7-24 RECONNECT" },
+	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_CONN_LOST,
+	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "7-24 WAIT, repeated" },
 
 	/* REACCEPT -- the peer is reconnecting to us */
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_CONN_OPEN,

@@ -152,7 +152,8 @@ csb-reconnect-never-carries
 csb-resume-ignores-peer-position
 pe-start-refusal-silent
 pe-reformation-stacks-before-it-starts
-pe-peer-start-keeps-dead-echo"
+pe-peer-start-keeps-dead-echo
+recnx-attempt-supersedes-in-flight"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -608,6 +609,22 @@ EOF
         ;;
         esac;;
 
+    recnx-attempt-supersedes-in-flight)
+        case "$_f" in
+        facility)     echo "one reconnect attempt in flight per CSB (rd vms-1f40: the once-a-second beat superseded an attempt the peer was still answering)";;
+        targets)      echo "kernel-core/vms_cnxman_recnx_fsm.c";;
+        suites_red)   echo "test_cnxman_recnx";;
+        isolation)    echo "isolated";;
+        why)          echo "recnx_tick_one()'s in-flight guard is disarmed, so the beat issues a new VMS\$VAXcluster CONNECT_REQ every second whether or not the previous one is still being answered. MEASURED consequence, rig arm P-9: a node woken from a 20 s stall answered ~1 s late, every ACCEPT arrived after the block had been re-bound to a newer attempt, six CONNECT_REQs went out, the peer accepted five, the block owned none, and the window ran out with a member removed. Attempts that ENDED (failed, no path) still re-fire once a second -- only the held beat goes.";;
+        require_fail) cat <<'EOF'
+t=2000: NO second CONNECT over the one being answered
+t=3000: still none
+one attempt, not three
+and the two held beats are COUNTED, not silent
+EOF
+        ;;
+        esac;;
+
     pe-start-refusal-silent)
         case "$_f" in
         facility)     echo "saying WHY a circuit refused to form (rd vms-18a: counted-but-silent made a refused formation indistinguishable on a real console from one that was never asked)";;
@@ -982,6 +999,10 @@ apply_edit() {
         # one in h_vc_rx_start (`vc->starts_rx++;` is unique in this file), and
         # the call VANISHES when replaced, so the mutation is not repeatable.
         sed -i '/vc->starts_rx++;/,/vc_learn_peer(f, vc, rx);/ s|vc_take_echo(f, vc);|(void)vc_take_echo; /* NEGCTL pe-peer-start-keeps-dead-echo */|' "$_file";;
+
+    recnx-attempt-supersedes-in-flight)
+        # `    csb->attempt_in_flight) {` is unique in this file.
+        sed -i 's|    csb->attempt_in_flight) {|    0 \&\& csb->attempt_in_flight) { /* NEGCTL recnx-attempt-supersedes-in-flight */|' "$_file";;
 
     pe-start-refusal-silent)
         # The CALL is unique and VANISHES when replaced, so the mutation is not

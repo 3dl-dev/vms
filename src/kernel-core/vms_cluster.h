@@ -413,7 +413,10 @@ struct vms_csb {
 	 */
 	uint32_t remote_port_secs;   /* the number the REMOTE CM supplies (p. 7-30) */
 	uint8_t  remote_port_valid;  /* 0 = not supplied; the local value stands alone */
-	uint8_t  pad3[3];
+	/* 1 while THIS break's reconnect CONNECT is out and has not ended --
+	 * set by CONNECT_SENT in [RECONNECT], and meaningful only there. */
+	uint8_t  attempt_in_flight;
+	uint8_t  pad3[2];
 	uint32_t lost_ms;            /* when connectivity was lost */
 	uint32_t deadline_ms;        /* lost_ms + the p. 7-30 reconnect period */
 	uint32_t next_attempt_ms;    /* the once-a-second beat's next due time */
@@ -452,6 +455,14 @@ struct vms_csb {
 	 * disagreeing about whether the pair should be connected at all.
 	 */
 	uint32_t remote_disconnects;
+
+	/*
+	 * ...and how many once-a-second beats issued NO new attempt because this
+	 * block's previous one was still in flight (rd vms-1f40). "Waiting on an
+	 * answer" and "not trying" are different diagnoses, and a peer that
+	 * answers slower than the beat shows up here and nowhere else.
+	 */
+	uint32_t attempts_held;
 
 	/*
 	 * ---- the SYSAP dialogue counters (design sec 3.2.4 ruling E1) ----

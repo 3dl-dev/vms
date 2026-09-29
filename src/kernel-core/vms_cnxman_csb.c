@@ -443,9 +443,34 @@ static enum cnxman_csb_action h_recnx_attempt(struct vms_club *club,
 {
 	(void)club;
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_RECONNECT;
+	csb->attempt_in_flight = 0u;    /* nothing is out until CONNECT_SENT */
 	csb->attempts++;
 	csb->next_attempt_ms = csb_now(ops) + CNXMAN_RECNX_ATTEMPT_MS;
 	return CNXMAN_CSB_ACT_RECONNECT;
+}
+
+/*
+ * THE ATTEMPT IS OUT (rd vms-1f40). The executive issued this break's
+ * VMS$VAXcluster CONNECT_REQ; until that connection ends -- opened, rejected,
+ * disconnected, or closed for a lost path or an unanswered verb (SCS's own
+ * connect timeout) -- it IS the attempt, and the beat does not issue another
+ * over it. There is exactly one VMS$VAXcluster connection per pair of systems
+ * (measured on the reference join); a second CONNECT while the first is being
+ * answered opens a second one.
+ *
+ * MEASURED, rig arm P-9: a node woken from a 20 s stall answered its peer ~1 s
+ * late, the beat re-dialled every second regardless, and each ACCEPT arrived
+ * after this block had been re-bound to a newer attempt -- six CONNECT_REQs,
+ * five of them accepted by the peer, none of them this block's, until the
+ * window ran out and a member was removed.
+ */
+static enum cnxman_csb_action h_recnx_sent(struct vms_club *club,
+					   struct vms_csb *csb,
+					   const struct cnxman_ops *ops)
+{
+	(void)club; (void)ops;
+	csb->attempt_in_flight = 1u;
+	return CNXMAN_CSB_ACT_NONE;
 }
 
 /*
@@ -530,6 +555,7 @@ static enum cnxman_csb_action h_recnx_failed(struct vms_club *club,
 {
 	(void)club; (void)ops;
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	csb->attempt_in_flight = 0u;
 	return CNXMAN_CSB_ACT_NONE;
 }
 
@@ -686,11 +712,15 @@ static const csb_handler_t csb_table[VMS_CNXMAN_CSB_STATE__COUNT]
 		[CNXMAN_CSB_EV_NEW_INCARNATION] = h_dead,
 	},
 
-	/* [RECONNECT] our attempt is in flight. The once-a-second beat keeps
-	 * firing from here too: p. 7-30's cadence runs for the whole period,
-	 * not just for the first attempt. */
+	/* [RECONNECT] our attempt is in flight. p. 7-30's once-a-second
+	 * cadence runs for the whole period -- for attempts that ENDED: an
+	 * attempt whose CONNECT is out holds the beat (rd vms-1f40, see
+	 * h_recnx_sent), and one whose connection closes on a lost path or an
+	 * unanswered verb has failed and goes back to WAIT for the next. */
 	[VMS_CNXMAN_CSB_RECONNECT] = {
 		[CNXMAN_CSB_EV_RECNX_ATTEMPT]   = h_recnx_attempt,
+		[CNXMAN_CSB_EV_CONNECT_SENT]    = h_recnx_sent,
+		[CNXMAN_CSB_EV_CONN_LOST]       = h_recnx_failed,
 		[CNXMAN_CSB_EV_CONNECT_REJECTED] = h_connect_rejected,
 		[CNXMAN_CSB_EV_REMOTE_DISCONNECT] = h_remote_disconnect,
 		[CNXMAN_CSB_EV_CONN_OPEN]       = h_open,

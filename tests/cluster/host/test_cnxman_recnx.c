@@ -753,6 +753,70 @@ static void test_a_peer_disconnect_does_not_stop_us_answering(void)
 	ct_check(cnxman_csb_is_member(peer), "membership never lapsed");
 }
 
+/*
+ * 11. rd vms-1f40 -- AN ATTEMPT THAT IS OUT IS THE ATTEMPT
+ *
+ * Rig arm P-9: a node woken from a 20 s stall answered its peer ~1 s late, and
+ * the beat re-dialled every second regardless -- each ACCEPT arrived after the
+ * block had been re-bound to a newer attempt, and the window ran out with the
+ * peer having accepted five connections this block owned none of. p. 7-30's
+ * cadence is for attempts that ENDED.
+ */
+static void test_an_attempt_in_flight_is_not_superseded(void)
+{
+	struct vms_csb *peer;
+	struct cnxman_recnx_rec rec[4];
+
+	printf("[recnx] an attempt whose CONNECT is out is not re-dialled over\n");
+	peer = bed(20, 0, 0);
+	g_fake.now_ms = 0;
+	(void)cnxman_recnx_connectivity_lost(&g_recnx, peer, 0);
+	g_fake.now_ms = 1000;
+	ct_check_eq_u32(cnxman_recnx_tick(&g_recnx, rec, 4), 1,
+			"the first attempt fires at t=1000");
+	(void)cnxman_csb_dispatch(&g_cl.club, peer, CNXMAN_CSB_EV_CONNECT_SENT,
+				  &g_ops);          /* the executive issued it */
+	ct_check_eq_u32(peer->attempt_in_flight, 1u, "and its CONNECT is out");
+
+	g_fake.now_ms = 2000;
+	ct_check_eq_u32(cnxman_recnx_tick(&g_recnx, rec, 4), 0,
+			"t=2000: NO second CONNECT over the one being answered");
+	g_fake.now_ms = 3000;
+	ct_check_eq_u32(cnxman_recnx_tick(&g_recnx, rec, 4), 0,
+			"t=3000: still none");
+	ct_check_eq_u32(peer->attempts, 1u, "one attempt, not three");
+	ct_check_eq_u32(peer->attempts_held, 2u,
+			"and the two held beats are COUNTED, not silent");
+	ct_check(cnxman_csb_is_member(peer), "membership held throughout");
+
+	(void)cnxman_csb_dispatch(&g_cl.club, peer, CNXMAN_CSB_EV_CONN_OPEN,
+				  &g_ops);          /* the peer's ACCEPT landed */
+	ct_check_eq_u32(peer->state, VMS_CNXMAN_CSB_OPEN,
+			"the late ACCEPT opens THIS block's connection");
+
+	/* ---- an attempt that FAILS is followed by the next one ---- */
+	peer = bed(20, 0, 0);
+	g_fake.now_ms = 0;
+	(void)cnxman_recnx_connectivity_lost(&g_recnx, peer, 0);
+	g_fake.now_ms = 1000;
+	(void)cnxman_recnx_tick(&g_recnx, rec, 4);
+	(void)cnxman_csb_dispatch(&g_cl.club, peer, CNXMAN_CSB_EV_CONNECT_SENT,
+				  &g_ops);
+	g_fake.now_ms = 1500;              /* its path went, or SCS timed it out */
+	(void)cnxman_recnx_connectivity_lost(&g_recnx, peer, 0);
+	ct_check_eq_u32(peer->state, VMS_CNXMAN_CSB_WAIT,
+			"a closed attempt has FAILED -> back to WAIT");
+	ct_check_eq_u32(peer->attempt_in_flight, 0u, "and nothing is out");
+	ct_check_eq_u32(peer->deadline_ms, 20000u,
+			"the window set at the first loss is not extended");
+	ct_check(cnxman_csb_is_member(peer), "still a held member");
+	g_fake.now_ms = 2000;
+	ct_check_eq_u32(cnxman_recnx_tick(&g_recnx, rec, 4), 1,
+			"and the next second fires the next attempt");
+	ct_check_eq_u32(rec[0].action, CNXMAN_CSB_ACT_RECONNECT, "a reconnect");
+	ct_check_eq_u32(peer->attempts, 2u, "two attempts, each one ended");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_recnx: RECNXINTERVAL/TIMVCFAIL + last gasp ===\n");
@@ -773,5 +837,6 @@ int main(void)
 	test_a_reject_does_not_stop_us_answering();
 	test_a_peer_disconnect_is_not_re_dialled();
 	test_a_peer_disconnect_does_not_stop_us_answering();
+	test_an_attempt_in_flight_is_not_superseded();
 	return ct_summary("test_cnxman_recnx");
 }

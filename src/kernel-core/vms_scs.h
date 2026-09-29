@@ -410,6 +410,21 @@ int scs_credit_return_due(const struct vms_scs *scs, vms_conid_t local_conid);
 int scs_cdt_view(struct vms_scs *scs, vms_conid_t local_conid,
 		 struct vms_scs_cdt_view *out);
 
+/*
+ * WHICH SYSTEM IS THIS CONNECTION TO? (rd vms-1f40). The system the CDT behind
+ * `local_conid` rides -- the SB it is queued on, set when SCS allocated the CDT
+ * (the destination of a connect this node opened, or the requester of one it
+ * accepted). A SYSAP learns an ACCEPTED connection's Con.ID only at opened(),
+ * and the peer only at connect_req(); with two accepts outstanding at once
+ * nothing but this ties the two together. Unlike scs_cdt_view() this is a
+ * SYSAP-facing READ that a SYSAP may act on: it is the CDT's own identity, not
+ * a diagnostic projection. SS$_NORMAL with *out set; SS$_NOSUCHDEV with no SCS;
+ * SS$_BADPARAM when the Con.ID names no live CDT or the CDT names no system --
+ * never a 0 presented as a system (INV-6).
+ */
+int scs_conid_peer(struct vms_scs *scs, vms_conid_t local_conid,
+		   vms_scs_sysid_t *out);
+
 /* ==========================================================================
  * 6. Directory service (the SCS$DIRECTORY SYSAP, FC-P2.3)
  * ========================================================================== */

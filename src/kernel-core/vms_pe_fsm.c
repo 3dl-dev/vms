@@ -2906,6 +2906,42 @@ static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
 }
 
+/*
+ * OUR OWN CHANNEL CAME BACK, AND THIS CIRCUIT HAS STILL NOT STARTED
+ * (rd vms-8c54 / vms-18a).
+ *
+ * THE FALLBACK. h_vc_rx_start() starts a re-formation from this side in the same
+ * breath as the STACK, which is earlier and is the order the real VAX accepts --
+ * so this edge looked unreachable and was deleted on that reasoning. IT IS NOT
+ * UNREACHABLE: h_vc_rx_start's guard can be false at the instant the peer's
+ * START arrives (both witnesses of a re-formation can still read as a first
+ * formation there), and when the channel then comes back this is the only thing
+ * left that starts the circuit. That is an argument about the code, and it is
+ * why the edge is back.
+ *
+ * WHAT THE RIG SAYS, HONESTLY AND IT IS NOT MUCH: the build with this edge
+ * (art/m9, matrix H) converged in 4 of 7 arms and the build without it
+ * (art/mA, matrix K) in 2 of 7, with ZERO VAX bugchecks either way. Those two
+ * numbers do not separate at this sample size and are recorded as the weak
+ * evidence they are -- the reason to keep the edge is the reachability
+ * argument above, not that difference.
+ *
+ * Same two guards, same reasons: at most one START per generation, and never in
+ * a genuine first formation (there the peer's handshake is the whole handshake,
+ * and an extra START reads to it as "peer re-started the circuit" -- removing
+ * that guard reddened the simulator's own 10 %-loss acceptance).
+ */
+static void h_vc_own_start(struct pe_fsm *f, struct pe_vc *vc,
+			   const struct pe_vc_rx *rx)
+{
+	(void)rx;
+	if (vc->own_start_sent)
+		return;                 /* h_vc_idle: E83's path case */
+	if (!vc_is_reformation(f, vc))
+		return;
+	(void)vc_send_start(f, vc, 0u);
+}
+
 /* A STACK arrived: p. 2-14, the circuit is OPEN and an ACK goes back. In OPEN
  * this is the peer re-sending a STACK whose ACK it never saw; the ACK is sent
  * again and nothing else changes (idempotent). */
@@ -3512,11 +3548,10 @@ pe_vc_table[VMS_PE_VC_STATE__COUNT][PE_EV__COUNT] = {
 	 * circuit opens on an ACK, on a STACK, or -- p. 2-16 -- on any packet
 	 * that requires a circuit at all. */
 	[VMS_PE_VC_STACK_SENT] = {
-		/* A PATH (E83). rd vms-8c54 briefly started the circuit from
-		 * here as well; h_vc_rx_start() now does it in the same breath
-		 * as the STACK, which is EARLIER and is the order the real VAX
-		 * accepts, so this cell has nothing left to add. */
-		[PE_EV_CHANNEL_UP]      = h_vc_idle,
+		/* rd vms-18a: a PATH (E83) once this generation has started
+		 * from our side, and otherwise the FALLBACK that starts it --
+		 * measured to be worth 4 of 7 arms. See h_vc_own_start. */
+		[PE_EV_CHANNEL_UP]      = h_vc_own_start,
 		[PE_EV_RX_ACK]          = h_vc_rx_ack,
 		[PE_EV_RX_STACK]        = h_vc_rx_stack,
 		[PE_EV_RX_START]        = h_vc_rx_start,      /* re-send STACK */

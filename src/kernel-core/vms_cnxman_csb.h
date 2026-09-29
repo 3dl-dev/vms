@@ -558,6 +558,25 @@ enum cnxman_envelope_kind {
  * nonzero only when this block's dialogue state IS that connection's.
  */
 void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid);
+
+/*
+ * The same bind for a RE-ESTABLISHMENT inside the p. 7-24 reconnect window
+ * (rd vms-8c54): the Con.ID moves and the send/ack dialogue is CARRIED, because
+ * a connection re-established to a system the cluster still holds, at the same
+ * incarnation, is the same conversation on a new pair -- measured on two real
+ * OpenVMS VAX V7.3 members. A block that is not entitled to carry (no dialogue,
+ * not SELECTED, or not in the reconnect ladder) falls through to
+ * cnxman_csb_bind_connection() and starts at 1/0 exactly as before, which is
+ * the E76/E77 case.
+ */
+void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid);
+
+/*
+ * Where this node's receive stream from that system stands: the highest
+ * `VMS$VAXcluster` CM send-msg# it has taken from it, which is the cell the
+ * connect data carries at content[106:108]. 0 when nothing has been taken.
+ */
+uint16_t cnxman_csb_dialogue_ack(const struct vms_csb *csb);
 int  cnxman_csb_dialogue_is_on(const struct vms_csb *csb, uint32_t conid);
 
 /*

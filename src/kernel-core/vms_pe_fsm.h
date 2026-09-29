@@ -639,7 +639,14 @@ struct pe_vc {
 	uint32_t form_due_ms;      /* next formation retry                   */
 	uint32_t vcfail_due_ms;    /* TIMVCFAIL: no ACK PROGRESS by here     */
 	uint8_t  vcfail_armed;
-	uint8_t  pad3[3];
+	/*
+	 * HAS THIS CIRCUIT STARTED *THIS* FORMATION FROM ITS OWN SIDE?
+	 * (rd vms-8c54.) Cleared by vc_reset_sequence(), so it is a property
+	 * of the generation and not of the circuit's whole life. See
+	 * h_vc_own_start().
+	 */
+	uint8_t  own_start_sent;
+	uint8_t  pad3[2];
 
 	/* ---- counters, every one from a real dispatch ---- */
 	uint32_t starts_tx, starts_rx;
@@ -1178,6 +1185,11 @@ struct pe_channel {
 	uint32_t b3_rx;
 	uint32_t b3_tx;
 	uint32_t b4_rx;
+	/* How many times this channel has ENTERED the verified state (rd
+	 * vms-8c54). 1 is a channel being verified for the first time; more
+	 * is one that went and came back, which is what tells a circuit on it
+	 * that it is RE-forming rather than forming. */
+	uint32_t verifies;
 	uint32_t b4_tx;
 	uint32_t padded_rx;
 	uint32_t padded_tx;
@@ -1236,6 +1248,12 @@ struct pe_fsm {
 	struct pe_wire_rev wire_rev;
 	uint32_t tx_errors;         /* ops->send returned non-zero               */
 	uint32_t last_gasps_built;
+	/* WHICH INCARNATION THE LAST GASP ANNOUNCED (rd vms-8c54). A departure
+	 * belongs to an incarnation, not to a port: a real node announces,
+	 * reboots, and announces again next time, and OVMX's CLUEXIT does the
+	 * same thing WITHOUT reallocating the port. Read back out of the port's
+	 * own identity, never assumed. */
+	uint64_t last_gasp_incarnation;
 
 	/* ---- FC-P1.2: the virtual-circuit half ----
 	 *

@@ -1,0 +1,14 @@
+=== N-6 (the arm that bugchecked the real VAX): the reconnect after the stall
+1790611553.645323 fb:91:86 -> 00:df:0b CONNECT_REQ rem=00000000 loc=dbf0000a conndata=01 1b 02 03 02 00 03 00 03 00 01 0a 63 00 06 00
+1790611553.716533 00:df:0b -> fb:91:86 ACCEPT_REQ  rem=dbf0000a loc=b09f0012 conndata=01 1b 01 03 03 00 02 00 03 00 01 08 00 00 06 00
+
+=== ORACLE: two real OpenVMS VAX V7.3 members reconnecting after the same 10 s SIGSTOP
+1790532578.341118 00:01:04 -> 57:a4:30 CONNECT_REQ rem=00000000 loc=2f670007 conndata=01 1b 02 03 01 00 01 00 02 00 01 0a db 39 06 00
+1790532578.341474 57:a4:30 -> 00:01:04 ACCEPT_REQ  rem=2f670007 loc=2f670007 conndata=01 1b 02 03 01 00 01 00 02 00 01 0a 09 28 06 00
+
+=== arms M-4 and M-5: the SAME form mismatch, and NO bugcheck
+1790531182.512889 fb:91:86 -> 00:df:0b CONNECT_REQ rem=00000000 loc=dc0a0008 conndata=01 1b 02 03 02 00 03 00 03 00 01 0a 5e 00 06 00
+1790531182.621774 00:df:0b -> fb:91:86 ACCEPT_REQ  rem=dc0a0008 loc=a7a50014 conndata=01 1b 01 03 00 00 00 00 00 00 00 08 00 00 06 00
+1790531717.774281 fb:91:86 -> 00:df:0b CONNECT_REQ rem=00000000 loc=dbe9000b conndata=01 1b 02 03 02 00 03 00 03 00 01 0a 5e 00 06 00
+1790531717.842563 00:df:0b -> fb:91:86 ACCEPT_REQ  rem=dbe9000b loc=aacb0015 conndata=01 1b 01 03 03 00 02 00 03 00 01 08 00 00 06 00
+

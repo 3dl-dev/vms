@@ -144,7 +144,13 @@ coord-relay-epoch-advanced-early
 coord-membrec-epoch-zero
 coord-admission-not-selected-disarmed
 coord-admission-open-gate-disarmed
-coord-removal-open-gate-disarmed"
+coord-removal-open-gate-disarmed
+pe-last-gasp-once-per-port
+pe-late-frame-revives-channel
+codec-conndata-ack-cell-dropped
+csb-reconnect-never-carries
+pe-start-refusal-silent
+pe-reformation-stacks-before-it-starts"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -572,6 +578,105 @@ EOF
                       ;;
         esac;;
 
+    pe-reformation-stacks-before-it-starts)
+        case "$_f" in
+        facility)     echo "the ORDER of a re-formation's two 0x41 frames (rd vms-18a: the oracle's four frames are VAX1 START, VAX2 START, VAX1 STACK, VAX2 STACK, and a START sent AFTER the STACK is discarded)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "h_vc_rx_start()'s own-START is disarmed, so a re-forming circuit whose channel was ALREADY back answers the peer's START with a STACK and nothing else -- h_vc_own_start() cannot help, because the CHANNEL_UP it needs was spent before the START arrived. MEASURED consequence, rig arm D-5: the real OpenVMS VAX V7.3 discarded the late START, re-STARTed every 5 s for the rest of the run, and 20 s later each side removed the other. The FIRST-formation case is untouched (the same verifies>1 guard).";;
+        require_fail) cat <<'EOF'
+...and, because this is a RE-formation, answering it ALSO starts one from this side -- the frame the real VAX waits for and never got
+and it answered with TWO 0x41 frames, not one
+EOF
+        ;;
+        esac;;
+
+    pe-start-refusal-silent)
+        case "$_f" in
+        facility)     echo "saying WHY a circuit refused to form (rd vms-18a: counted-but-silent made a refused formation indistinguishable on a real console from one that was never asked)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "vc_log_start_refused() returns before saying anything, so vc_begin_formation() puts the circuit back in CLOSED with nothing on the console -- the state that looks exactly like a node that never rejoins ('%PEA0, channel verified' and then silence). The counters are untouched, so the INV-6 accounting is unaffected: only the line goes.";;
+        require_fail) cat <<'EOF'
+and it is SAID on the console, not only counted
+...naming WHICH read came back empty
+EOF
+        ;;
+        esac;;
+
+
+    codec-conndata-ack-cell-dropped)
+        case "$_f" in
+        facility)     echo "content[106:108] of the VMS\$VAXcluster connect data -- where this node's receive stream from the peer it is dialling stands (rd vms-8c54), and the [2]/[11] form that follows it";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_conndata_build() writes 0 into content[106:108] instead of the caller's peer_ack_msg, so the two bytes that follow it collapse to the short form as well. The four rd vms-b87 rows are all ack-0 and stay green; only the rd vms-8c54 oracle rows -- two real OpenVMS VAX V7.3 members reconnecting, whose connects carry 14811 and 10249 -- go red. MEASURED consequence, rig arms N-6 and V-1: a zero there says 'I have taken nothing from you' to a peer that holds this node as a member, and the real VAX's connection manager bugchecked CNXMGRERR in the same millisecond as its own ACCEPT_RSP.";;
+        require_fail) cat <<'EOF'
+VAX1 re-establishing: it carries the 14811 it had TAKEN from VAX2
+VAX2 accepting it: its own 10249, not VAX1's number
+VAX1 -> VAX3: 1798, NOT the 1799 VAX3 kept retransmitting unanswered
+...and with ONE message taken: long form, and the 1 is little-endian at [12:14]
+EOF
+        ;;
+        esac;;
+
+    csb-reconnect-never-carries)
+        case "$_f" in
+        facility)     echo "p. 7-24's reconnect window as the SAME conversation (rd vms-8c54: a connection re-established to a system the cluster still holds keeps its send/ack dialogue)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "csb_dialogue_may_continue() is disarmed to return 0, so cnxman_csb_bind_reconnect() always falls through to the E77 reset and a re-established connection restarts at send-msg# 1 / ack 0. Every NOT-entitled case still resets, so nothing about E77 changes -- only the entitled one, which is the case both real OpenVMS VAX V7.3 members took when they continued 10249 -> 10250 and 14811 -> 14812 across a new Con.ID pair.";;
+        require_fail) cat <<'EOF'
+the send side CONTINUES -- the next origination is 3, as VAX1's 10249 became 10250
+and so does the ack: this node really HAS taken 14811 from that system, and saying 0 to a peer that holds it as a member is the lie the VAX bugchecks on
+...which is the cell the connect data carries
+counted as CARRIED
+and NOT as a reset
+the transaction id CARRIES: a re-established member does not renumber mid-conversation (oracle VAX1 ran txn 3 across it)
+and so does the correlation token -- restarting it at 1 offers the peer a correlation it never issued, and the VAX bugchecked on it (arm K-10)
+and what this node told that system about itself moved with it: a re-established member does NOT re-introduce itself, and the VAX bugchecked when it did (arm F-4)
+counted as a reset
+EOF
+        ;;
+        esac;;
+
+    pe-late-frame-revives-channel)
+        case "$_f" in
+        facility)     echo "SS4(M)'s listen timeout as a fact about ELAPSED TIME (rd vms-8c54: a stalled guest wakes with its clock AND its receive queue jumped together, and the queued frames are consumed before any beat runs)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "pe_channel_expire_if_due() is disarmed at its first line, so a receive path refreshes a deadline that has ALREADY passed and the channel is never declared lost. The tick still finds it on the next beat, so nothing about an ordinary timeout changes -- only the stalled-guest case, where the frames were DEFERRED rather than destroyed and arrive before any beat. MEASURED consequence, rig arm N-1: the woken member wrote sequenced traffic on a circuit the real OpenVMS VAX V7.3 had closed 8.2 s earlier and answered its fresh START with a STACK from a circuit it still believed was OPEN; 20 s later each side removed the other.";;
+        require_fail) cat <<'EOF'
+the deferred beat ran: the channel went, not the circuit's own TIMVCFAIL
+and SCS was told the circuit is gone
+the circuit is NOT still open on a channel that timed out
+a late SEQUENCED message does not revive it either
+SCS was told, once
+EOF
+        ;;
+        esac;;
+
+    pe-last-gasp-once-per-port)
+        case "$_f" in
+        facility)     echo "p. 7-29's departure announcement, once per INCARNATION (rd vms-8c54: CLUEXIT re-incarnates IN PLACE, so a guard scoped to the port lifecycle silences every announcement after the first)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_formation";;
+        isolation)    echo "isolated";;
+        why)          echo "pe_gasp_already_sent() is reverted to the once-per-PORT rule by returning 1 for any port that has ever gasped. A real node reboots between departures and so gets a fresh port each time; OVMX's CLUEXIT does not, so under this defect the SECOND and every later re-incarnation announces NOTHING and every peer keeps a CSB for a node that has already thrown its cluster state away -- the state the measured E81 CNXMGRERR family lives in. The last gasp is still built, still counted and still correct for the FIRST departure, so nothing but the per-incarnation property goes red.";;
+        require_fail) cat <<'EOF'
+a re-incarnated node ANNOUNCES ITS DEPARTURE AGAIN
+and it is the same b1 marker, not some other frame
+both are counted
+still two
+EOF
+        ;;
+        esac;;
+
     coord-removal-open-gate-disarmed)
         case "$_f" in
         facility)     echo "the INV-6 refusal to originate a class-0x03 REMOVAL open toward a connection manager this executive cannot build one for (rd vms-0f9: a real op-0x08 carries 44 bytes OVMX has no derivation for)";;
@@ -825,6 +930,38 @@ apply_edit() {
 
     coord-admission-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    pe-reformation-stacks-before-it-starts)
+        # `if (ch != NULL && ch->verifies > 1u)` is unique in this file.
+        sed -i 's|if (!vc->own_start_sent \&\& vc_is_reformation(f, vc))|if ((void)vc_is_reformation, 0) /* NEGCTL pe-reformation-stacks-before-it-starts */|' "$_file";;
+
+    pe-start-refusal-silent)
+        # The CALL is unique and VANISHES when replaced, so the mutation is not
+        # repeatable; the function stays referenced so nothing goes unused.
+        sed -i 's|vc_log_start_refused(f, vc);|(void)vc_log_start_refused; /* NEGCTL pe-start-refusal-silent */|' "$_file";;
+
+
+    codec-conndata-ack-cell-dropped)
+        # `out[12] = (uint8_t)(in->peer_ack_msg & 0xffu);` is unique here;
+        # zeroing the low byte is enough to break the cell AND the form,
+        # because out[2]/out[11] are derived from the same input.
+        sed -i 's|out\[2\] = (uint8_t)(in->peer_ack_msg != 0u ? 0x02u : 0x01u);|out[2] = 0x01u; /* NEGCTL codec-conndata-ack-cell-dropped */|' "$_file"
+        sed -i 's|out\[11\] = (uint8_t)(in->peer_ack_msg != 0u ? 0x0au : 0x08u);|out[11] = 0x08u;|' "$_file"
+        sed -i 's|out\[12\] = (uint8_t)(in->peer_ack_msg \& 0xffu);|out[12] = 0u;|' "$_file"
+        sed -i 's|out\[13\] = (uint8_t)((in->peer_ack_msg >> 8) \& 0xffu);|out[13] = 0u;|' "$_file";;
+
+    csb-reconnect-never-carries)
+        # `if (csb->cm_dialogue_conid == 0u)` is unique in this file.
+        sed -i 's|if (csb->cm_dialogue_conid == 0u)|if (1) /* NEGCTL csb-reconnect-never-carries: never entitled */|' "$_file";;
+
+    pe-late-frame-revives-channel)
+        # `if (ch->deadline_ms == 0u)` is unique in this file.
+        sed -i 's|if (ch->deadline_ms == 0u)|if (1) /* NEGCTL pe-late-frame-revives-channel: a late frame refreshes the deadline */|' "$_file";;
+
+    pe-last-gasp-once-per-port)
+        # The `return f->last_gasp_incarnation == f->id.incarnation_time;`
+        # line is unique in this file: grep -c is 1.
+        sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
 
     coord-removal-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;

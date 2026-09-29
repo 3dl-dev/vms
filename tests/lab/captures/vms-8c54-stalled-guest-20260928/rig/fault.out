@@ -1,0 +1,6 @@
+STALL: baseline count of 'this node is now a VAXcluster member' = 0
+MARKER seen at 15:33:36.800: this node is now a VAXcluster member
+STALL on  tapBs8 pids [302832
+302836] at 15:33:38.811 for 10s
+STALL off tapBs8 pids [302832
+302836] at 15:33:48.814 after 10s

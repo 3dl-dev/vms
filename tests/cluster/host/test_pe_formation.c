@@ -706,6 +706,75 @@ static void test_last_gasp(void)
 }
 
 /* ------------------------------------------------------------------ *
+ * 6b. A DEPARTURE BELONGS TO AN INCARNATION, NOT TO A PORT (rd vms-8c54)
+ *
+ * rd vms-0f9's CLUEXIT re-incarnates IN PLACE: cnxman_cluexit_run() gasps,
+ * re-samples the incarnation through pe_reincarnate(), and rebuilds -- the
+ * port is never reallocated. Guarded on the port lifecycle, the SECOND and
+ * every later CLUEXIT put NOTHING on the wire, and every peer kept a CSB for
+ * a node that had already thrown its cluster state away.
+ *
+ * MEASURED, and why this test exists in this shape: /lab/run-s8 capture
+ * H-2.pcap has cluexits=1 on the console and ZERO abs-30 0xb1 frames in it,
+ * while campaign_F-2 and campaign_F-3 -- one CLUEXIT each -- carry exactly
+ * one gasp apiece.
+ * ------------------------------------------------------------------ */
+static void test_last_gasp_per_incarnation(void)
+{
+	struct pe_identity id;
+	struct fake_pe_decoded gasp;
+
+	printf("-- SS4(O.30): a re-incarnated node announces again\n");
+
+	fake_pe_ops_init(&g_ops, &g_fake);
+	memset(&id, 0, sizeof(id));
+	memcpy(id.hw_mac, ovmx_hw, 6);
+	id.hw_mac_valid = 1;
+	memcpy(id.mcast, group1, 6);
+	id.mcast_valid = 1;
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
+	/* The port holds a real incarnation stamp, as a started port does. */
+	id.incarnation_time = 0x00c0ffee00000001ull;
+	id.incarnation_time_valid = 1u;
+	(void)pe_fsm_init(&g_fsm, &id, 1030, &g_ops);
+
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0, "incarnation 1 gasps");
+	ct_check_eq_u32(g_fake.n_frames, 1, "exactly one gasp on the wire");
+	gasp = fake_pe_decode(&g_fake, 0);
+	ct_check(gasp.ok && gasp.chan_word == PE_PFW_LAST_GASP,
+		 "and it is the abs-30 b1 departure marker");
+
+	/* Same incarnation, second caller: still the benign no-op the clean
+	 * CLUSTER_STOP path depends on. */
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0, "same incarnation");
+	ct_check_eq_u32(g_fake.n_frames, 0, "puts NO second gasp on the wire");
+	ct_check_eq_u32(g_fsm.last_gasps_built, 1, "and is not counted twice");
+
+	/* CLUEXIT: pe_reincarnate() re-samples the stamp in place. The next
+	 * departure is a DIFFERENT node's departure as far as every peer is
+	 * concerned, and it must be announced. */
+	g_fsm.id.incarnation_time = 0x00c0ffee00000002ull;
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0, "incarnation 2 gasps");
+	ct_check_eq_u32(g_fake.n_frames, 1,
+			"a re-incarnated node ANNOUNCES ITS DEPARTURE AGAIN");
+	gasp = fake_pe_decode(&g_fake, 0);
+	ct_check(gasp.ok && gasp.chan_word == PE_PFW_LAST_GASP,
+		 "and it is the same b1 marker, not some other frame");
+	ct_check_eq_u32(g_fsm.last_gasps_built, 2, "both are counted");
+
+	/* ...and the guard has moved with it: the new incarnation is idempotent
+	 * in its turn, so CLUSTER_STOP after a CLUEXIT still gasps once. */
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0, "incarnation 2 again");
+	ct_check_eq_u32(g_fake.n_frames, 0, "no third gasp");
+	ct_check_eq_u32(g_fsm.last_gasps_built, 2, "still two");
+}
+
+/* ------------------------------------------------------------------ *
  * 7. Honest refusals
  * ------------------------------------------------------------------ */
 static void test_refusals(void)
@@ -768,6 +837,7 @@ int main(void)
 	test_size_ladder_steps_down();
 	test_size_ladder_respects_the_mtu();
 	test_last_gasp();
+	test_last_gasp_per_incarnation();
 	test_refusals();
 
 	return ct_summary("test_pe_formation");

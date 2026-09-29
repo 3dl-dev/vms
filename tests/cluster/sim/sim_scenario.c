@@ -115,6 +115,17 @@ static void step_halt(struct sim_run_ctx *c)
 		sim_node_halt(n);
 }
 
+/* rd vms-8c54: the node's CPU stops here and starts again by itself, `ms`
+ * later, inside the engine -- so the scenario's next RUN step is what carries
+ * it across the stall. */
+static void step_stall(struct sim_run_ctx *c)
+{
+	struct sim_node *n = need_node(c, c->step->a);
+
+	if (n != NULL)
+		sim_node_stall(n, (uint64_t)c->step->ms);
+}
+
 static void step_boot(struct sim_run_ctx *c)
 {
 	struct sim_node *n = need_node(c, c->step->a);
@@ -232,6 +243,7 @@ static const sim_step_fn sim_step_table[SIM_STEP__COUNT] = {
 	[SIM_STEP_CUT]            = step_cut,
 	[SIM_STEP_NODE_LINK]      = step_node_link,
 	[SIM_STEP_HALT]           = step_halt,
+	[SIM_STEP_STALL]          = step_stall,
 	[SIM_STEP_BOOT]           = step_boot,
 	[SIM_STEP_RUN]            = step_run,
 	[SIM_STEP_UNTIL_VCS]      = step_until_vcs,

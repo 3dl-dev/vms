@@ -1,0 +1,4 @@
+t=   14.076  aa:00:04:00:01:04 -> 08:00:2b:57:a4:30  0x41 START   round=0 sysid=0x0401 clen=106
+t=   14.076  08:00:2b:57:a4:30 -> aa:00:04:00:01:04  0x41 START   round=0 sysid=0x0402 clen=106
+t=   14.076  aa:00:04:00:01:04 -> 08:00:2b:57:a4:30  0x41 STACK   round=1 sysid=0x0401 clen=106
+t=   14.077  08:00:2b:57:a4:30 -> aa:00:04:00:01:04  0x41 STACK   round=1 sysid=0x0402 clen=106

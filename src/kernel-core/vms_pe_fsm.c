@@ -757,6 +757,7 @@ static enum pe_channel_action h_verify_b4(struct pe_fsm *f,
 		return PE_CH_ACT_NONE;      /* the steady b3<->b4 oscillation */
 
 	ch->state = (uint8_t)VMS_PE_CH_B4;
+	ch->verifies++;
 	pe_log(f, "%PEA0, channel verified");
 	pe_probe_start(f, ch, 0u);          /* SS4(k) step 2: advertise our size */
 	return PE_CH_ACT_VERIFIED;
@@ -1080,6 +1081,54 @@ static enum pe_event pe_event_for(const uint8_t *frame, uint32_t len,
 	}
 }
 
+/*
+ * THE LISTEN TIMEOUT IS A FACT ABOUT ELAPSED TIME, NOT ABOUT WHICH CODE PATH
+ * NOTICES IT (rd vms-8c54).
+ *
+ * SS4(M)'s deadline is checked on the channel tick. Every receive path then
+ * REFRESHES that deadline, and the two together hold one assumption: that the
+ * tick gets to run between a deadline passing and the next frame arriving.
+ *
+ * A STALLED GUEST BREAKS EXACTLY THAT ASSUMPTION, and a dark wire never does.
+ * netem DESTROYS frames -- the guest keeps ticking, the deadline passes, the
+ * tick observes it. SIGSTOP DEFERS them: nothing is destroyed, the guest's
+ * clock and its receive queue BOTH jump at once, and on wake the queued HELLOs
+ * are consumed first. Each one refreshed a deadline that had already expired,
+ * so the channel was never declared lost, the circuit on it was never torn
+ * down, and this node went on writing sequenced messages on a circuit the peer
+ * had closed seconds earlier.
+ *
+ * MEASURED, rig arm N-1 (10 s guest stall of an admitted member, real
+ * OpenVMS VAX V7.3 founder): on wake OVMXB put 0x5b/0x4b/0x48 sequenced
+ * traffic on the old circuit, the VAX -- which had closed its virtual circuit
+ * 8.2 s earlier -- re-verified the channel and sent a fresh START, and OVMXB
+ * answered STACK from a circuit it still believed was OPEN. The VAX never
+ * acknowledged it: it re-STARTed every 5 s while OVMXB re-sent that STACK
+ * eight times a beat for the rest of the run, and 20 s later each side removed
+ * the other. THE ORACLE, same fault on two real V7.3 nodes (10 s SIGSTOP of
+ * VAX2, /lab/k8s-labs/s8lab/oracle-stall-o1.pcap): the stalled node logged
+ * "%CNXMAN, lost connection to system VAX1" 1.4 s after wake -- it NOTICED --
+ * then both sides sent their own START, STACKed each other and ACKed, and the
+ * cluster never lost a member.
+ *
+ * So the deadline is read HERE too, before any receive path refreshes it, and
+ * when it has already passed the channel's own PE_EV_TIMER_CHANNEL edge is
+ * dispatched: the same table cell, the same verdict, the same notification to
+ * the circuit above. Nothing new is decided -- the beat the stall deferred is
+ * simply run at the first moment this port is running again.
+ *
+ * Returns the action the expiry produced, or PE_CH_ACT_NONE if nothing was due.
+ */
+static enum pe_channel_action pe_channel_expire_if_due(struct pe_fsm *f,
+						       struct pe_channel *ch)
+{
+	if (ch->deadline_ms == 0u)
+		return PE_CH_ACT_NONE;      /* no deadline has ever been armed */
+	if (!pe_reached(pe_now(f), ch->deadline_ms))
+		return PE_CH_ACT_NONE;
+	return pe_dispatch(f, ch, PE_EV_TIMER_CHANNEL, &pe_rx_none);
+}
+
 /* Everything the frame honestly tells us about the station that sent it. Each
  * value carries its own validity: a name is learned only from a frame that
  * carried one, a sysid only from an address that really is a LOGICAL one. */
@@ -1345,6 +1394,11 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 		if (ch == NULL)
 			return PE_CH_ACT_NONE;
 	}
+	/* The deferred beat, before this frame refreshes anything. */
+	act = pe_channel_expire_if_due(f, ch);
+	if (act != PE_CH_ACT_NONE)
+		pe_vc_follow_channel(f, (uint32_t)(ch - f->ch), act);
+
 	pe_channel_learn(f, ch, &rx);
 	pe_learn_join_nonce(f, &rx);
 	pe_learn_disc_format(f, &rx);
@@ -1494,20 +1548,51 @@ void pe_fsm_shutdown(struct pe_fsm *f)
 	(void)pe_broadcast(f, PE_EV_SHUTDOWN, NULL, 0u);
 }
 
+/*
+ * HAS *THIS* INCARNATION ALREADY ANNOUNCED ITS DEPARTURE?
+ *
+ * AT MOST ONCE PER INCARNATION, not per port (rd vms-8c54).
+ *
+	 * p. 7-29's departure announcement belongs to the incarnation that is
+	 * departing: a real node gasps, bugchecks, REBOOTS, and its next
+	 * departure is announced again -- it gets a fresh port each time, so
+	 * "once per port" and "once per incarnation" are the same sentence on
+	 * real VMS. They are NOT the same here: rd vms-0f9's CLUEXIT
+	 * re-incarnates IN PLACE (cnxman_cluexit_run: gasp, re-sample the
+	 * incarnation, rebuild), and the port is never reallocated. Guarded on
+	 * the port lifecycle, the SECOND and every later CLUEXIT announced
+	 * NOTHING: peers kept a CSB for a node that had already thrown its
+	 * cluster state away and come back as someone else, which is precisely
+	 * the state the E81 crash family lives in. MEASURED: capture
+	 * H-2.pcap has cluexits=1 and zero abs-30 0xb1 frames, while the two
+	 * single-CLUEXIT campaign captures each carry exactly one.
+	 *
+	 * The idempotence this guard was written for is untouched: on a clean
+	 * CLUSTER_STOP both the connection manager's departure path
+	 * (vms_cnxman_stop) and the port teardown (vms_pe_stop) reach this
+	 * builder within ONE incarnation, and whichever runs second is still a
+	 * benign no-op.
+	 *
+	 * The incarnation is READ from the port's own identity (INV-6): if the
+	 * port holds none, there is nothing to distinguish departures by and
+	 * the original once-per-port rule stands.
+	 */
+static int pe_gasp_already_sent(const struct pe_fsm *f)
+{
+	if (f->last_gasps_built == 0u)
+		return 0;
+	if (!f->id.incarnation_time_valid)
+		return 1;
+	return f->last_gasp_incarnation == f->id.incarnation_time;
+}
+
 int pe_fsm_send_last_gasp(struct pe_fsm *f)
 {
 	struct vms_hello_frame h;
 
 	if (f == NULL)
 		return -1;
-	/* AT MOST ONCE per port lifecycle: a node leaves the cluster once
-	 * (p. 7-29). On a clean CLUSTER_STOP both the connection manager's
-	 * departure path (vms_cnxman_stop) and the port teardown (vms_pe_stop)
-	 * reach this builder; this guard makes whichever runs second a benign
-	 * no-op, so exactly one gasp goes on the wire regardless of order. The
-	 * counter is reset to 0 when a fresh port is allocated (vms_pe_start),
-	 * so a later rejoin+leave announces again. */
-	if (f->last_gasps_built != 0u)
+	if (pe_gasp_already_sent(f))
 		return 0;
 	if (!pe_may_send(f) || !f->id.mcast_valid)
 		return -1;
@@ -1520,6 +1605,7 @@ int pe_fsm_send_last_gasp(struct pe_fsm *f)
 	if (pe_emit_plain(f, &h) != 0)
 		return -1;
 	f->last_gasps_built++;
+	f->last_gasp_incarnation = f->id.incarnation_time;
 	pe_log(f, "%PEA0, leaving the cluster, last gasp sent");
 	return 0;
 }
@@ -1942,8 +2028,30 @@ static struct pe_vc *vc_for_path(struct pe_fsm *f, uint32_t ch_index)
 	if (vc != NULL)
 		return vc;
 	vc = vc_by_channel_system(f, ch);
-	if (vc == NULL)
+	if (vc == NULL) {
+		/*
+		 * A CIRCUIT FOR A STATION WHOSE SYSTEM THIS PORT CANNOT NAME
+		 * (rd vms-18a). E83's rule is one circuit per SYSTEM, and
+		 * vc_by_channel_system() is how that is enforced -- it answers
+		 * only for a channel that has learned a cluster-LOGICAL address
+		 * to read an SCSSYSTEMID out of. A channel that has NOT gets a
+		 * circuit of its own here, and if the same system is also
+		 * reachable on a channel that HAS, that system now has two --
+		 * the second with no history, which is why a re-formation on it
+		 * looks like a first formation.
+		 *
+		 * MEASURED, failing arms G-2/H-1/K-1: on the wake the woken node
+		 * answers the real VAX's START with a STACK and never starts
+		 * from its own side, and BOTH witnesses of a re-formation read
+		 * as a first formation. Said out loud so the next arm names it
+		 * instead of leaving it to be inferred from a pcap.
+		 */
+		if (ch != NULL && !ch->remote_sysid_valid)
+			pe_log(f, "%PEA0, a circuit was formed for a station "
+				  "whose system this port cannot name: it has "
+				  "advertised no cluster-logical address yet");
 		return vc_alloc(f, ch_index);
+	}
 	if (pe_channel_is_live(vc_path(f, vc), pe_now(f))) {
 		f->vc_paths_redundant++;
 		return NULL;
@@ -2244,10 +2352,17 @@ static void vc_put_nodename(const struct pe_fsm *f,
  * Absent either, this node forms NO circuit and counts it. That is the honest
  * end of the road (Rule 9), not a zero on the wire.
  */
+/* The PURE read, so a diagnostic can ask the same question without moving the
+ * counter (rd vms-18a: asking it twice counted one refusal as two). */
+static int vc_identity_present(const struct pe_fsm *f)
+{
+	return f->id.incarnation_time_valid && f->ops != NULL &&
+	       f->ops->now_vms != NULL;
+}
+
 static int vc_identity_ok(struct pe_fsm *f)
 {
-	if (!f->id.incarnation_time_valid || f->ops == NULL ||
-	    f->ops->now_vms == NULL) {
+	if (!vc_identity_present(f)) {
 		f->vc_no_identity++;
 		return 0;
 	}
@@ -2347,10 +2462,12 @@ static int vc_send_start(struct pe_fsm *f, struct pe_vc *vc, uint16_t round)
 		return -1;
 
 	vc->config_round = (uint8_t)round;
-	if (round == 0u)
+	if (round == 0u) {
 		vc->starts_tx++;
-	else
+		vc->own_start_sent = 1u;
+	} else {
 		vc->stacks_tx++;
+	}
 	return 0;
 }
 
@@ -2553,12 +2670,50 @@ static void vc_close(struct pe_fsm *f, struct pe_vc *vc)
 	 * goes straight back to the pool for the circuits that are still up. */
 	vc_credit_release_from(f, vc);
 	vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+	/*
+	 * rd vms-8c54: a CLOSED circuit has started nothing. Cleared HERE and
+	 * not in vc_reset_sequence(), which also runs when the PEER's START
+	 * resets an in-flight formation -- clearing it there would forget that
+	 * this node had already started, and h_vc_own_start would put a second
+	 * START on a circuit the peer has moved past. (Measured: it broke the
+	 * simulator's lossless formation, VC_DOWNS 2 where the acceptance is
+	 * 0, because that second START read to the peer as "re-started".)
+	 */
+	vc->own_start_sent = 0u;
 	vc->form_due_ms = 0u;
 	vc->form_tries = 0u;
 }
 
 /* Start (or restart) formation: reset, send the round-0 START, arm both the
  * retry cadence and the TIMVCFAIL deadline. */
+/*
+ * SAY WHY A FORMATION WAS REFUSED (rd vms-18a).
+ *
+ * vc_send_start() declines for one of four reasons and every one of them is a
+ * READ that came back empty. Two are counted (vc_no_incarnation,
+ * vc_no_identity) and none was ever said out loud, so a circuit that refused
+ * to form looked EXACTLY like one that was never asked: "%PEA0, channel
+ * verified" and then silence, which is the console of a node that never
+ * rejoins. This names the missing read instead. Each clause is the same read
+ * vc_send_start() just made, in the same order; nothing is inferred.
+ */
+static void vc_log_start_refused(struct pe_fsm *f, const struct pe_vc *vc)
+{
+	if (pe_fsm_channel_at(f, vc->channel) == NULL)
+		pe_log(f, "%PEA0, no circuit formed: the path this circuit was "
+			  "bound to is gone");
+	else if (!vc->echo_valid)
+		pe_log(f, "%PEA0, no circuit formed: this member has not "
+			  "advertised an incarnation for this node, so there is "
+			  "no echo to carry (SS4(i).B)");
+	else if (!vc_identity_present(f))
+		pe_log(f, "%PEA0, no circuit formed: this port holds no "
+			  "incarnation of its own to put in a START");
+	else
+		pe_log(f, "%PEA0, no circuit formed: the START could not be "
+			  "built or could not be transmitted");
+}
+
 static void vc_begin_formation(struct pe_fsm *f, struct pe_vc *vc)
 {
 	vc_reset_sequence(f, vc);
@@ -2566,8 +2721,10 @@ static void vc_begin_formation(struct pe_fsm *f, struct pe_vc *vc)
 	vc->form_due_ms = pe_now(f) + vc_retransmit_ms(f);
 	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
 	vc_arm_vcfail(f, vc);
-	if (vc_send_start(f, vc, 0u) != 0)
+	if (vc_send_start(f, vc, 0u) != 0) {
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+		vc_log_start_refused(f, vc);
+	}
 }
 
 static void vc_open(struct pe_fsm *f, struct pe_vc *vc)
@@ -2665,6 +2822,36 @@ static void vc_learn_peer(struct pe_fsm *f, struct pe_vc *vc,
 }
 
 /*
+ * IS THIS A RE-FORMATION? (rd vms-8c54 / vms-18a.)
+ *
+ * Two independent witnesses, and the answer is yes if EITHER survives, because
+ * the rig measured each of them being lost on its own:
+ *
+ *   vc->opens      the circuit reached OPEN before. Reliable -- no path in this
+ *                  port frees a pe_vc, so vc_by_channel_system() finds the same
+ *                  object with its history -- but it is the CIRCUIT's, and the
+ *                  circuit is not always the thing that was asked.
+ *   ch->verifies   this channel entered the verified state before. Survives a
+ *                  circuit's troubles, but a SYSTEM reachable at two LAN
+ *                  addresses has two channels, and `vc->channel` names only the
+ *                  one the circuit formed over: measured FALSE in failing arm
+ *                  H-1, where the other path was the one that came back.
+ *
+ * Neither is a fabrication and neither is enough alone. A genuine FIRST
+ * formation has both at their initial values, which is the case both callers
+ * must not act on.
+ */
+static int vc_is_reformation(const struct pe_fsm *f, const struct pe_vc *vc)
+{
+	const struct pe_channel *ch;
+
+	if (vc->opens != 0u)
+		return 1;
+	ch = pe_fsm_channel_at((struct pe_fsm *)f, vc->channel);
+	return ch != NULL && ch->verifies > 1u;
+}
+
+/*
  * A START arrived. p. 2-14: in START SENT and in START RECEIVED the response
  * is the same -- send a STACK -- and SS4(h)(4a) adds that a START in EITHER
  * direction resets the circuit's counters. On an OPEN circuit that means the
@@ -2689,8 +2876,70 @@ static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
 	vc->form_due_ms = pe_now(f) + vc_retransmit_ms(f);
 	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
 	vc_arm_vcfail(f, vc);
+	/*
+	 * OUR OWN START GOES FIRST, AND THE ORDER IS THE ORACLE'S
+	 * (rd vms-8c54 / vms-18a).
+	 *
+	 * p. 2-14's "both ends started" case, and the oracle's four frames in
+	 * one millisecond are in this exact order: VAX1 START, VAX2 START,
+	 * VAX1 STACK, VAX2 STACK. h_vc_own_start() covers the race when OUR
+	 * channel comes back first; this covers it when the PEER'S START gets
+	 * here first, which is the other half and the half that was still
+	 * failing.
+	 *
+	 * ORDER, MEASURED, and it is the whole finding. Arm V-1 (passes) sent
+	 * START then STACK and the real OpenVMS VAX V7.3 STACKed it 0 ms
+	 * later. Arm D-5 (fails) sent the STACK at +1.682 and the same START
+	 * at +1.738 -- 38 ms LATER, because it waited for CHANNEL_UP -- and the
+	 * VAX DISCARDED it and went on re-STARTing every 5 s until each side
+	 * removed the other. A START that arrives after this node has already
+	 * acknowledged the peer's is a node re-starting a circuit it just
+	 * agreed to; before it, it is the second half of one handshake.
+	 *
+	 * Same two guards as h_vc_own_start(), same reasons: at most one per
+	 * generation, and never in a FIRST formation (there the peer's START is
+	 * the whole handshake).
+	 */
+	if (!vc->own_start_sent && vc_is_reformation(f, vc))
+		(void)vc_send_start(f, vc, 0u);
 	if (vc_send_start(f, vc, 1u) != 0)
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+}
+
+/*
+ * OUR OWN CHANNEL CAME BACK, AND THIS CIRCUIT HAS STILL NOT STARTED
+ * (rd vms-8c54 / vms-18a).
+ *
+ * THE FALLBACK. h_vc_rx_start() starts a re-formation from this side in the same
+ * breath as the STACK, which is earlier and is the order the real VAX accepts --
+ * so this edge looked unreachable and was deleted on that reasoning. IT IS NOT
+ * UNREACHABLE: h_vc_rx_start's guard can be false at the instant the peer's
+ * START arrives (both witnesses of a re-formation can still read as a first
+ * formation there), and when the channel then comes back this is the only thing
+ * left that starts the circuit. That is an argument about the code, and it is
+ * why the edge is back.
+ *
+ * WHAT THE RIG SAYS, HONESTLY AND IT IS NOT MUCH: the build with this edge
+ * (art/m9, matrix H) converged in 4 of 7 arms and the build without it
+ * (art/mA, matrix K) in 2 of 7, with ZERO VAX bugchecks either way. Those two
+ * numbers do not separate at this sample size and are recorded as the weak
+ * evidence they are -- the reason to keep the edge is the reachability
+ * argument above, not that difference.
+ *
+ * Same two guards, same reasons: at most one START per generation, and never in
+ * a genuine first formation (there the peer's handshake is the whole handshake,
+ * and an extra START reads to it as "peer re-started the circuit" -- removing
+ * that guard reddened the simulator's own 10 %-loss acceptance).
+ */
+static void h_vc_own_start(struct pe_fsm *f, struct pe_vc *vc,
+			   const struct pe_vc_rx *rx)
+{
+	(void)rx;
+	if (vc->own_start_sent)
+		return;                 /* h_vc_idle: E83's path case */
+	if (!vc_is_reformation(f, vc))
+		return;
+	(void)vc_send_start(f, vc, 0u);
 }
 
 /* A STACK arrived: p. 2-14, the circuit is OPEN and an ACK goes back. In OPEN
@@ -3299,7 +3548,10 @@ pe_vc_table[VMS_PE_VC_STATE__COUNT][PE_EV__COUNT] = {
 	 * circuit opens on an ACK, on a STACK, or -- p. 2-16 -- on any packet
 	 * that requires a circuit at all. */
 	[VMS_PE_VC_STACK_SENT] = {
-		[PE_EV_CHANNEL_UP]      = h_vc_idle,          /* a PATH (E83) */
+		/* rd vms-18a: a PATH (E83) once this generation has started
+		 * from our side, and otherwise the FALLBACK that starts it --
+		 * measured to be worth 4 of 7 arms. See h_vc_own_start. */
+		[PE_EV_CHANNEL_UP]      = h_vc_own_start,
 		[PE_EV_RX_ACK]          = h_vc_rx_ack,
 		[PE_EV_RX_STACK]        = h_vc_rx_stack,
 		[PE_EV_RX_START]        = h_vc_rx_start,      /* re-send STACK */
@@ -3458,6 +3710,17 @@ static void pe_vc_rx_frame(struct pe_fsm *f, const uint8_t *frame, uint32_t len,
 		f->vc_rx_no_channel++;
 		return;
 	}
+	/* The deferred beat first, for the same reason as on the discovery
+	 * path (pe_channel_expire_if_due): a circuit's own traffic must not
+	 * refresh a deadline that had already run out while this node was not
+	 * running. */
+	{
+		enum pe_channel_action expired = pe_channel_expire_if_due(f, ch);
+
+		if (expired != PE_CH_ACT_NONE)
+			pe_vc_follow_channel(f, (uint32_t)(ch - f->ch),
+					     expired);
+	}
 	/* An SCS frame is evidence the station is alive, exactly as a HELLO is,
 	 * so it refreshes the SS4(M) listen deadline. Without this a channel
 	 * carrying a BUSY circuit would time out on its own traffic. */
@@ -3524,8 +3787,24 @@ static void pe_vc_follow_channel(struct pe_fsm *f, uint32_t ch_index,
 		 * that already has a circuit is another PATH to it, never a
 		 * second circuit (E83). */
 		vc = vc_for_path(f, ch_index);
-		if (vc == NULL)
+		if (vc == NULL) {
+			/*
+			 * SAY SO (rd vms-8c54). "The channel verified and no
+			 * circuit followed" is the single hardest state to
+			 * diagnose in this port -- it is what a stalled node
+			 * that never comes back looks like from the console --
+			 * and until this line it was indistinguishable from a
+			 * circuit that formed and failed. The only reason
+			 * vc_for_path() declines is that the SYSTEM already has
+			 * a circuit on a path it measured as live, so that is
+			 * what the line says, and the counter it reports is the
+			 * one vc_for_path() really bumped.
+			 */
+			pe_log(f, "%PEA0, a verified channel formed no "
+				  "circuit: this system already has one on a "
+				  "path that is still live");
 			return;
+		}
 		pe_vc_dispatch(f, vc, PE_EV_CHANNEL_UP, &pe_vc_rx_none);
 		return;
 	}

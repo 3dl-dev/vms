@@ -1366,6 +1366,109 @@ void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
  * changes nothing -- the glue writes it on every accept and on every reconnect
  * that returned the connection already held.
  */
+/*
+ * MAY THIS BLOCK CARRY ITS DIALOGUE ONTO A NEW CONNECTION? (rd vms-8c54.)
+ *
+ * TWO MEASUREMENTS THAT LOOK LIKE A CONTRADICTION, AND THE RULE THAT HOLDS
+ * BOTH. E76/E77 (see vms_cluster.h) measured a real node at send-msg# 15880
+ * open its NEXT Con.ID at 1 with ack 0, and measured this executive crash two
+ * real VAXes by carrying counters across a teardown. rd vms-8c54's oracle --
+ * two real OpenVMS VAX V7.3 MEMBERS reconnecting after a 10 s stall -- measured
+ * the opposite: VAX1 continued 10249 -> 10250 on a brand-new Con.ID and
+ * advertised ack 14811 in the connect data, and VAX2 continued 14811 -> 14812.
+ *
+ * The discriminator is WHICH KIND of new connection it is, and it is the same
+ * distinction p. 7-24 and p. 7-25 already draw:
+ *
+ *   a RE-ESTABLISHMENT inside the reconnect window, of a connection to a
+ *   system the cluster still holds and whose incarnation has not changed, is
+ *   the SAME conversation carried on a new pair -- the CSB survived, and the
+ *   dialogue is CSB state (p. 7-24 RECONNECT/REACCEPT);
+ *
+ *   anything else -- a fresh join, a new incarnation, a system this node gave
+ *   up on -- is a NEW conversation and starts at 1/0 (p. 7-25 deallocate and
+ *   rebuild), which is E76/E77's case and stays exactly as it was.
+ *
+ * So this predicate is narrow and every clause is a READ:
+ *   - there IS a dialogue to carry (a bound Con.ID, not the first bind);
+ *   - p. 7-49 SELECTED: the cluster has not removed this system;
+ *   - the ladder is really in the reconnect window (or still OPEN).
+ * A block that fails any of them resets, which is the old behaviour.
+ */
+static int csb_dialogue_may_continue(const struct vms_csb *csb)
+{
+	if (csb->cm_dialogue_conid == 0u)
+		return 0;
+	if ((csb->flags & VMS_CSB_F_SELECTED) == 0u)
+		return 0;
+	return csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN ||
+	       csb->state == (uint8_t)VMS_CNXMAN_CSB_WAIT ||
+	       csb->state == (uint8_t)VMS_CNXMAN_CSB_RECONNECT ||
+	       csb->state == (uint8_t)VMS_CNXMAN_CSB_REACCEPT;
+}
+
+/*
+ * RE-ESTABLISH the pair's connection and CARRY the dialogue with it, when this
+ * block is entitled to (csb_dialogue_may_continue above); otherwise this is
+ * exactly cnxman_csb_bind_connection().
+ *
+ * The counters are the only thing carried. The Con.ID moves, `cm_txn` still
+ * moves on and `cm_token` still restarts, because those two are per-dialogue
+ * by their own measurement (E85) and nothing in the oracle says otherwise.
+ */
+void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
+{
+	if (csb == NULL)
+		return;
+	if (!csb_dialogue_may_continue(csb)) {
+		cnxman_csb_bind_connection(csb, conid);
+		return;
+	}
+	csb->cdt_conid = conid;
+	if (csb->cm_dialogue_conid == conid)
+		return;
+	csb->cm_dialogue_conid = conid;
+	csb->cm_dialogues_carried++;
+	/*
+	 * THE TRANSACTION ID AND THE TOKEN CARRY TOO (rd vms-8c54).
+	 *
+	 * cnxman_csb_bind_connection() advances `cm_txn` and restarts
+	 * `cm_token` because E85 measured a FRESH connection opening at 1 --
+	 * and that is a fresh CONVERSATION, not a re-established one. The
+	 * oracle's re-established pair continued both: VAX1 opened txn 3 with
+	 * token 8173 and its next carried 8174, VAX2 ran 9529 -> 9530, and
+	 * every one of those numbers is the same magnitude as the tokens on the
+	 * wire BEFORE the loss. A member that restarts its token at 1
+	 * mid-conversation is offering the peer a correlation the peer never
+	 * issued.
+	 *
+	 * MEASURED, rig arm K-10: after the re-establishment the real VAX ran
+	 * cat-0x02 op-0x0d at send 279..283 with tokens 51957..51961 and its
+	 * ack STUCK at 101 -- it was discarding this node's 102 and 103 -- and
+	 * it bugchecked. So the two cells that scope a transaction move with the
+	 * dialogue they belong to, exactly as the send/ack pair does.
+	 */
+	/*
+	 * ...AND WHAT THIS NODE HAS TOLD THAT SYSTEM ABOUT ITSELF MOVES WITH
+	 * IT (rd vms-8c54). E73 scopes the cat-0x01 MODEL/PARAMS mask to a
+	 * Con.ID on the reasoning that "whatever was said down the old
+	 * connection was not said down the new one" -- true of a NEW
+	 * conversation, and false of a re-establishment: the peer is the same
+	 * system, it never forgot our model or our votes, and its CSB for us
+	 * survived exactly as ours for it did.
+	 *
+	 * MEASURED, rig arm F-4. With the dialogue carried but the mask reset,
+	 * the re-established connection opened correctly -- the real OpenVMS
+	 * VAX V7.3 printed "%CNXMAN, re-established connection to system
+	 * OVMXB", which it had never printed for this implementation before --
+	 * and this node's very next two frames were cat-0x01 op-0x14 MODEL and
+	 * op-0x01 PARAMS at send-msg# 97 and 98. A member re-introducing
+	 * itself mid-stream on a connection the peer has just re-established
+	 * is a contradiction, and the VAX bugchecked on it.
+	 */
+	csb->cm_advert_conid = conid;
+}
+
 void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 {
 	if (csb == NULL)
@@ -1452,4 +1555,9 @@ void cnxman_envelope_originate(struct vms_csb *csb, uint8_t body[132],
 	if (mints)
 		cnxman_csb_transaction_opened(csb);
 	cnxman_envelope_stamp(csb, body, !mints);
+}
+
+uint16_t cnxman_csb_dialogue_ack(const struct vms_csb *csb)
+{
+	return (csb == NULL) ? 0u : csb->cm_ack_msg;
 }

@@ -1276,6 +1276,24 @@ vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
 
 	for (i = 0; i < head_len; i++)
 		out[i] = head[i];
+	/*
+	 * [2] AND [11] FOLLOW [12:14], NOT MEMBERSHIP (rd vms-8c54).
+	 *
+	 * The first reading of the oracle was "member form vs joiner form", and
+	 * it was WRONG -- this file's own four real-VAX rows are members that
+	 * carry 0x01/0x08, and the rig caught the same real VAX sending both
+	 * forms minutes apart with its membership unchanged. What actually
+	 * moves them is whether the frame carries an ack cell at all:
+	 *
+	 *   0x01 / 0x08  no ack carried, [12:14] = 0   (the SHORT form)
+	 *   0x02 / 0x0a  an ack is carried in [12:14]  (the LONG form)
+	 *
+	 * 0x08 -> 0x0a is the two extra bytes, which is what [11] reads like
+	 * and why the two always move together. NO COUNTEREXAMPLE in either
+	 * lab: 11 samples across two independent clusters, including the same
+	 * node sending each form.
+	 */
+	out[2] = (uint8_t)(in->peer_ack_msg != 0u ? 0x02u : 0x01u);
 
 	out[4] = (uint8_t)(votes & 0xffu);
 	out[5] = (uint8_t)((votes >> 8) & 0xffu);
@@ -1287,6 +1305,16 @@ vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
 
 	for (i = 0; i < tail_len; i++)
 		out[11u + i] = tail[i];
+	/* [11]: moves with [2], same measurement, same rule. */
+	out[11] = (uint8_t)(in->peer_ack_msg != 0u ? 0x0au : 0x08u);
+	/*
+	 * [12:14]: where this node's receive stream from THIS peer stands --
+	 * the same number it stamps at abs 74 of the CM messages it sends on
+	 * the connection. Read from the caller, never computed here, and
+	 * honestly zero when nothing has been taken from that peer yet.
+	 */
+	out[12] = (uint8_t)(in->peer_ack_msg & 0xffu);
+	out[13] = (uint8_t)((in->peer_ack_msg >> 8) & 0xffu);
 
 	return VMS_CODEC_OK;
 }

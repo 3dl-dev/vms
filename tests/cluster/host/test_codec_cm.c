@@ -991,8 +991,9 @@ static void test_open_bitmap_span(void)
 static const uint8_t CD_HEAD[4] = { 0x01, 0x1b, 0x01, 0x03 };
 static const uint8_t CD_TAIL[5] = { 0x08, 0x00, 0x00, 0x06, 0x00 };
 
-static void cd_case(const char *what, uint16_t votes, uint16_t quorum,
-		    uint16_t nodes, uint8_t member, const uint8_t *want)
+static void cd_case_ack(const char *what, uint16_t votes, uint16_t quorum,
+			uint16_t nodes, uint8_t member, uint16_t peer_ack,
+			const uint8_t *want)
 {
 	struct vms_cm_conndata_in in;
 	uint8_t out[VMS_CM_CONNDATA_LEN];
@@ -1003,11 +1004,22 @@ static void cd_case(const char *what, uint16_t votes, uint16_t quorum,
 	in.cluster_nodes = nodes;
 	in.member = member;
 	in.pad0 = 0u;
+	in.peer_ack_msg = peer_ack;
+	in.pad1 = 0u;
 
 	st = vms_cm_conndata_build(&in, CD_HEAD, 4u, CD_TAIL, 5u, out,
 				   (uint32_t)sizeof(out));
 	ct_check_eq_u32((uint32_t)st, (uint32_t)VMS_CODEC_OK, what);
 	ct_check(memcmp(out, want, sizeof(out)) == 0, what);
+}
+
+/* The four rd vms-b87 rows are all nodes that had taken NOTHING from the peer
+ * they were dialling, so their ack cell is 0 -- which is why they are the SHORT
+ * form. Said once, here, rather than repeated at each call. */
+static void cd_case(const char *what, uint16_t votes, uint16_t quorum,
+		    uint16_t nodes, uint8_t member, const uint8_t *want)
+{
+	cd_case_ack(what, votes, quorum, nodes, member, 0u, want);
 }
 
 static void test_conndata_against_real_nodes(void)
@@ -1048,6 +1060,78 @@ static void test_conndata_against_real_nodes(void)
 		0u, 0u, 0u, 0u, joining);
 
 	/*
+	 * ==================================================================
+	 * rd vms-8c54 -- content[106:108], AND THE TWO BYTES THAT FOLLOW IT
+	 *
+	 * These rows are a SECOND, independent cluster: two real OpenVMS VAX
+	 * V7.3 nodes reconnecting to each other after one of them was
+	 * SIGSTOPped for 10 s (tests/lab/captures/vms-8c54-stalled-guest-
+	 * 20260928/analysis/oracle-vc-fields.txt and the conndata census
+	 * beside it). Every byte below was on that wire.
+	 *
+	 * WHAT THEY PIN THAT THE FOUR ROWS ABOVE CANNOT. The four rows are all
+	 * ack-0, so they fix the SHORT form and say nothing about the other
+	 * one. Here the same builder must produce the LONG form -- 0x02 at
+	 * [2], 0x0a at [11], the counter little-endian at [12:14] -- purely
+	 * because an ack is carried. Delete these and a builder that has never
+	 * heard of [12:14] passes the whole file.
+	 *
+	 * THE OFF-BY-ONE IS DELIBERATE and is the proof the cell is "the
+	 * highest I have TAKEN from you": VAX3 had retransmitted send-msg#
+	 * 1799 three times unanswered, and VAX1's connect carries 1798.
+	 * ================================================================== */
+	{
+		/* VAX1 -> VAX2, the reconnect: cluster votes 1, quorum 1,
+		 * 2 members, and VAX1 had taken VAX2's send-msg# 14811. */
+		static const uint8_t v1_reconnect[16] = {
+			0x01,0x1b,0x02,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00,
+			0x01, 0x0a,0xdb,0x39,0x06,0x00 };
+		/* VAX2's ACCEPT on the same pair: it had taken 10249. */
+		static const uint8_t v2_accept[16] = {
+			0x01,0x1b,0x02,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00,
+			0x01, 0x0a,0x09,0x28,0x06,0x00 };
+		/* VAX1 -> VAX3 in the same capture, a 3-member cluster, and
+		 * VAX1 had taken 1798 of VAX3's 1799 sends. */
+		static const uint8_t v1_to_v3[16] = {
+			0x01,0x1b,0x02,0x03, 0x01,0x00, 0x01,0x00, 0x03,0x00,
+			0x01, 0x0a,0x06,0x07,0x06,0x00 };
+
+		printf("-- rd vms-8c54: the ack cell, and the form that "
+		       "follows it\n");
+		cd_case_ack("VAX1 re-establishing: it carries the 14811 it "
+			    "had TAKEN from VAX2", 1u, 1u, 2u, 1u, 14811u,
+			    v1_reconnect);
+		cd_case_ack("VAX2 accepting it: its own 10249, not VAX1's "
+			    "number", 1u, 1u, 2u, 1u, 10249u, v2_accept);
+		cd_case_ack("VAX1 -> VAX3: 1798, NOT the 1799 VAX3 kept "
+			    "retransmitting unanswered", 1u, 1u, 3u, 1u,
+			    1798u, v1_to_v3);
+	}
+
+	/*
+	 * ...AND THE FORM FOLLOWS THE CELL, NOT THE MEMBERSHIP. The four rows
+	 * above are MEMBERS carrying 0x01/0x08, and the rig caught one real
+	 * VAX sending both forms minutes apart with its membership unchanged.
+	 * So the same membership with and without an ack must give the two
+	 * different forms, and that is asserted here rather than left to the
+	 * reader to notice.
+	 */
+	{
+		static const uint8_t short_form[16] = {
+			0x01,0x1b,0x01,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00,
+			0x01, 0x08,0x00,0x00,0x06,0x00 };
+		static const uint8_t long_form[16] = {
+			0x01,0x1b,0x02,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00,
+			0x01, 0x0a,0x01,0x00,0x06,0x00 };
+
+		cd_case_ack("the SAME member with nothing taken yet: short "
+			    "form", 1u, 1u, 2u, 1u, 0u, short_form);
+		cd_case_ack("...and with ONE message taken: long form, and "
+			    "the 1 is little-endian at [12:14]", 1u, 1u, 2u,
+			    1u, 1u, long_form);
+	}
+
+	/*
 	 * ...AND A NON-MEMBER CANNOT REPORT ONE EVEN IF ITS CALLER TRIES.
 	 * A stale count surviving into the joining form would be this node
 	 * claiming a membership it does not have, which is the INV-6 case.
@@ -1057,6 +1141,8 @@ static void test_conndata_against_real_nodes(void)
 	in.cluster_nodes = 9u;
 	in.member = 0u;
 	in.pad0 = 0u;
+	in.peer_ack_msg = 0u;
+	in.pad1 = 0u;
 	ct_check_eq_u32((uint32_t)vms_cm_conndata_build(&in, CD_HEAD, 4u,
 							CD_TAIL, 5u, out,
 							(uint32_t)sizeof(out)),

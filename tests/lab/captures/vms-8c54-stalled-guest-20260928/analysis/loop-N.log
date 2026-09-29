@@ -1,0 +1,53 @@
+===== N-1 stall=10s start 15:29:14 =====
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[N-1] VAXC booting...
+[N-1] VAXC formed at 15:30:51
+started A (art=/lab/run-s8/art/m1)
+[N-1] OVMXA MEMBER at 15:31:12
+started B (art=/lab/run-s8/art/m1)
+[N-1] OVMXB booting with a 10s GUEST STALL armed at 15:31:13
+[N-1(10s)] FAIL  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=2/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== N-2 stall=13s start 15:34:39 =====
+b36start.sh: line 6: 302579 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[N-2] VAXC booting...
+[N-2] VAXC formed at 15:36:15
+started A (art=/lab/run-s8/art/m1)
+[N-2] OVMXA MEMBER at 15:36:36
+started B (art=/lab/run-s8/art/m1)
+[N-2] OVMXB booting with a 13s GUEST STALL armed at 15:36:37
+[N-2(13s)] FAIL  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=2/3 wedged=1 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== N-3 stall=16s start 15:40:38 =====
+b36start.sh: line 6: 316490 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[N-3] VAXC booting...
+[N-3] VAXC formed at 15:42:14
+started A (art=/lab/run-s8/art/m1)
+[N-3] OVMXA MEMBER at 15:42:35
+started B (art=/lab/run-s8/art/m1)
+[N-3] OVMXB booting with a 16s GUEST STALL armed at 15:42:36
+[N-3(16s)] FAIL  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=2/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== N-4 stall=6s start 15:46:04 =====
+b36start.sh: line 6: 333538 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[N-4] VAXC booting...
+[N-4] VAXC formed at 15:47:41
+started A (art=/lab/run-s8/art/m1)
+[N-4] OVMXA MEMBER at 15:48:02
+started B (art=/lab/run-s8/art/m1)
+[N-4] OVMXB booting with a 6s GUEST STALL armed at 15:48:03
+[N-4(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== N-5 stall=11s start 15:51:51 =====
+b36start.sh: line 6: 347332 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[N-5] VAXC booting...
+[N-5] VAXC formed at 15:53:28
+started A (art=/lab/run-s8/art/m1)
+[N-5] OVMXA MEMBER at 15:53:49
+started B (art=/lab/run-s8/art/m1)
+[N-5] OVMXB booting with a 11s GUEST STALL armed at 15:53:50

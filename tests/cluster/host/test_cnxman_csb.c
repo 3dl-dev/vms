@@ -1040,6 +1040,122 @@ static void test_dialogue_is_per_connection(void)
 }
 
 /*
+ * rd vms-8c54 -- A RE-ESTABLISHMENT INSIDE THE WINDOW IS THE SAME CONVERSATION
+ *
+ * E77's rule above is right for a NEW conversation and wrong for a resumed
+ * one, and the oracle says which is which. Two real OpenVMS VAX V7.3 MEMBERS,
+ * one of them SIGSTOPped for 10 s and the other having closed its virtual
+ * circuit, re-established their VMS$VAXcluster connection on a brand-new
+ * Con.ID pair and CONTINUED: VAX1 10249 -> 10250 acking 14811, VAX2
+ * 14811 -> 14812 acking 10249, and each advertised its own ack in the connect
+ * data (tests/lab/captures/vms-8c54-stalled-guest-20260928/).
+ *
+ * The entitlement is narrow and every clause is a read of this block: there is
+ * a dialogue, the cluster still holds the system (p. 7-49 SELECTED), and the
+ * ladder is really in the reconnect window. A block that fails any of them
+ * gets E77's reset -- which is what keeps the E76/E77 crash closed.
+ */
+static void test_reconnect_inside_the_window_carries_the_dialogue(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-8c54: a re-establishment carries its dialogue; "
+	       "anything else does not\n");
+
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+
+	/* A member, mid-conversation, whose connection has just been lost and
+	 * whose ladder is inside the p. 7-30 window. */
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(csb, 0x4e620009u);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_heard(csb, 14811u);
+	ct_check_eq_u32(csb->cm_ack_msg, 14811u, "14811 taken from the peer");
+	/* ...and it has introduced itself on that connection (E73's mask), and
+	 * is mid-transaction with a token the PEER issued. */
+	csb->cm_advert_conid = 0x4e620009u;
+	csb->cm_advert_sent = 0x03u;
+	csb->cm_txn = 0x2222u;
+	csb->cm_token = 0x8173u;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+
+	cnxman_csb_bind_reconnect(csb, 0x4e62000fu);
+	ct_check_eq_u32(csb->cdt_conid, 0x4e62000fu,
+			"the new connection is bound through the same writer");
+	ct_check_eq_u32(csb->cm_send_msg, 2u,
+			"the send side CONTINUES -- the next origination is 3, "
+			"as VAX1's 10249 became 10250");
+	ct_check_eq_u32(csb->cm_ack_msg, 14811u,
+			"and so does the ack: this node really HAS taken 14811 "
+			"from that system, and saying 0 to a peer that holds "
+			"it as a member is the lie the VAX bugchecks on");
+	ct_check_eq_u32(cnxman_csb_dialogue_ack(csb), 14811u,
+			"...which is the cell the connect data carries");
+	ct_check_eq_u32(csb->cm_dialogues_carried, 1u, "counted as CARRIED");
+	ct_check_eq_u32(csb->cm_dialogue_resets, 0u, "and NOT as a reset");
+	ct_check_eq_u32(csb->cm_txn, 0x2222u,
+			"the transaction id CARRIES: a re-established member "
+			"does not renumber mid-conversation (oracle VAX1 ran "
+			"txn 3 across it)");
+	ct_check_eq_u32(csb->cm_token, 0x8173u,
+			"and so does the correlation token -- restarting it at "
+			"1 offers the peer a correlation it never issued, and "
+			"the VAX bugchecked on it (arm K-10)");
+	ct_check_eq_u32(csb->cm_advert_conid, 0x4e62000fu,
+			"and what this node told that system about itself "
+			"moved with it: a re-established member does NOT "
+			"re-introduce itself, and the VAX bugchecked when it "
+			"did (arm F-4)");
+	ct_check(csb->cm_advert_sent != 0u,
+		 "...with the mask intact, not cleared");
+	ct_check(cnxman_csb_dialogue_is_on(csb, 0x4e62000fu),
+		 "the dialogue is now the new connection's");
+
+	/* ---- and every way of NOT being entitled resets, E77's rule ---- */
+
+	/* (1) the cluster has removed this system: p. 7-49 SELECTED is clear. */
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	cnxman_csb_bind_reconnect(csb, 0x4e620021u);
+	ct_check_eq_u32(csb->cm_ack_msg, 0u,
+			"a system the cluster has REMOVED starts a new "
+			"conversation, whatever the caller asked for");
+	ct_check_eq_u32(csb->cm_dialogue_resets, 1u, "counted as a reset");
+
+	/* (2) the ladder is not in the window at all -- a block parked in
+	 *     DISCONNECT has given this connection up (p. 7-24). */
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(csb, 0x4e620030u);
+	cnxman_csb_dialogue_heard(csb, 77u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_DISCONNECT;
+	cnxman_csb_bind_reconnect(csb, 0x4e620031u);
+	ct_check_eq_u32(csb->cm_ack_msg, 0u,
+			"a block that has given the connection up starts over");
+
+	/* (3) the first bind of all has nothing to carry. */
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000102ull, 1);
+	ct_check(csb != NULL, "a second CSB");
+	if (csb == NULL)
+		return;
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(csb, 0x4e620040u);
+	ct_check_eq_u32(csb->cm_send_msg, 0u,
+			"a first bind starts a dialogue, it does not carry one");
+	ct_check_eq_u32(csb->cm_dialogues_carried, 0u, "and is not counted");
+	ct_check_eq_u32(cnxman_csb_dialogue_ack(NULL), 0u,
+			"no block has taken nothing from anybody");
+	cnxman_csb_bind_reconnect(NULL, 1u);   /* safe */
+}
+
+/*
  * E81 -- THE RECONNECT LADDER'S OWN REBIND, AND THE REJECT THAT FOLLOWS IT.
  *
  * E77 proved the rule on the connection the JOIN adopts. The p. 7-30 reconnect
@@ -1262,6 +1378,7 @@ int main(void)
 	test_projection();
 	test_dialogue_is_per_connection();
 	test_reconnect_dialogue_never_carries_the_old_ack();
+	test_reconnect_inside_the_window_carries_the_dialogue();
 	test_correlation_pair_is_maintained();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");

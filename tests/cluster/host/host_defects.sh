@@ -149,7 +149,6 @@ pe-last-gasp-once-per-port
 pe-late-frame-revives-channel
 codec-conndata-ack-cell-dropped
 csb-reconnect-never-carries
-pe-reformation-never-starts
 pe-start-refusal-silent
 pe-reformation-stacks-before-it-starts"
 
@@ -587,6 +586,9 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "h_vc_rx_start()'s own-START is disarmed, so a re-forming circuit whose channel was ALREADY back answers the peer's START with a STACK and nothing else -- h_vc_own_start() cannot help, because the CHANNEL_UP it needs was spent before the START arrived. MEASURED consequence, rig arm D-5: the real OpenVMS VAX V7.3 discarded the late START, re-STARTed every 5 s for the rest of the run, and 20 s later each side removed the other. The FIRST-formation case is untouched (the same verifies>1 guard).";;
         require_fail) cat <<'EOF'
+...and, because this is a RE-formation, answering it ALSO starts one from this side -- the frame the real VAX waits for and never got
+a second CHANNEL_UP does NOT start it again: E83's path case is untouched
+and CHANNEL_UP does not start a second one
 and it answered with TWO 0x41 frames, not one
 EOF
         ;;
@@ -606,19 +608,6 @@ EOF
         ;;
         esac;;
 
-    pe-reformation-never-starts)
-        case "$_f" in
-        facility)     echo "a RE-FORMING circuit starting from its own side when its channel comes back (rd vms-8c54: the peer's START and this node's own verify race, and losing the race used to mean never sending one)";;
-        targets)      echo "kernel-core/vms_pe_fsm.c";;
-        suites_red)   echo "test_pe_vc";;
-        isolation)    echo "isolated";;
-        why)          echo "h_vc_own_start() returns before sending, so CHANNEL_UP in STACK SENT is the bare no-op it used to be. A FIRST formation is unaffected (it returns early there anyway), and so is E83's second-path case; only the re-formation loses its START. MEASURED consequence, rig arm W-1: the real OpenVMS VAX V7.3 re-STARTed every 5 s for the rest of the run, never acknowledged the STACK this node kept re-sending eight times a beat, and 20 s later each side removed the other.";;
-        require_fail) cat <<'EOF'
-and the circuit sends its OWN START -- the frame the real VAX waits for and never got
-a second CHANNEL_UP does NOT start it again: E83's path case is untouched
-EOF
-        ;;
-        esac;;
 
     codec-conndata-ack-cell-dropped)
         case "$_f" in
@@ -944,16 +933,13 @@ apply_edit() {
 
     pe-reformation-stacks-before-it-starts)
         # `if (ch != NULL && ch->verifies > 1u)` is unique in this file.
-        sed -i 's|if (ch != NULL \&\& ch->verifies > 1u)|if ((void)ch, 0) /* NEGCTL pe-reformation-stacks-before-it-starts */|' "$_file";;
+        sed -i 's|if (!vc->own_start_sent \&\& vc_is_reformation(f, vc))|if ((void)vc_is_reformation, 0) /* NEGCTL pe-reformation-stacks-before-it-starts */|' "$_file";;
 
     pe-start-refusal-silent)
         # The CALL is unique and VANISHES when replaced, so the mutation is not
         # repeatable; the function stays referenced so nothing goes unused.
         sed -i 's|vc_log_start_refused(f, vc);|(void)vc_log_start_refused; /* NEGCTL pe-start-refusal-silent */|' "$_file";;
 
-    pe-reformation-never-starts)
-        # `if (vc->own_start_sent)` is unique in this file.
-        sed -i 's|if (vc->own_start_sent)|if (1) /* NEGCTL pe-reformation-never-starts */|' "$_file";;
 
     codec-conndata-ack-cell-dropped)
         # `out[12] = (uint8_t)(in->peer_ack_msg & 0xffu);` is unique here;

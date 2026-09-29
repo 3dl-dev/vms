@@ -1809,8 +1809,10 @@ static void test_a_reformation_starts_from_this_side_too(void)
 		return;
 	ct_check_eq_u32(vc->state, VMS_PE_VC_STACK_SENT,
 			"the peer's START is answered with a STACK");
-	ct_check_eq_u32(vc->starts_tx, starts_before,
-			"...and answering it is NOT starting one");
+	ct_check_eq_u32(vc->starts_tx, starts_before + 1u,
+			"...and, because this is a RE-formation, answering it "
+			"ALSO starts one from this side -- the frame the real "
+			"VAX waits for and never got");
 
 	/*
 	 * ...AND IF THE PEER'S START HAD ARRIVED ON AN ALREADY-VERIFIED
@@ -1822,15 +1824,15 @@ static void test_a_reformation_starts_from_this_side_too(void)
 	 * below, on a channel that is already back.
 	 */
 
-	/* NOW our own channel comes back. */
+	/* NOW our own channel comes back, and there is nothing left to do:
+	 * this generation has already started from this side. */
 	channel_to_b4(&g_env, 1);
 	vc = the_vc(&g_env);
 	ct_check(vc != NULL, "the circuit survived the verify");
 	if (vc == NULL)
 		return;
 	ct_check_eq_u32(vc->starts_tx, starts_before + 1u,
-			"and the circuit sends its OWN START -- the frame the "
-			"real VAX waits for and never got");
+			"and CHANNEL_UP does not start a second one");
 
 	/* At most one per generation. Dispatched straight at the circuit --
 	 * channel_to_b4() would re-run the channel ladder and close it, which

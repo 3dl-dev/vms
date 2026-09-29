@@ -514,6 +514,16 @@ struct vms_csb {
 	 * is the number that says which happened.
 	 */
 	uint32_t cm_dialogues_carried;
+	/*
+	 * ...AND WHETHER THE NEXT FRAME FROM THAT PEER STILL OWES US ITS
+	 * POSITION (rd vms-1f40). Armed by cnxman_csb_bind_reconnect() and
+	 * taken by the first inbound envelope on the re-established
+	 * connection; `cm_resumes` counts the times that really moved the send
+	 * counter back, which is the number that says a hole was prevented.
+	 */
+	uint8_t  cm_resume_pending;
+	uint8_t  cm_resume_pad[3];
+	uint32_t cm_resumes;
 
 	/*
 	 * ---- what this node has ADVERTISED about ITSELF on the connection it

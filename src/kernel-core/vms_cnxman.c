@@ -1583,8 +1583,13 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	 * lower number cannot walk it back.
 	 */
 	env_ok = (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK);
-	if (csb != NULL && env_ok)
+	if (csb != NULL && env_ok) {
 		cnxman_csb_dialogue_heard(csb, env.send_msg);
+		/* rd vms-1f40: and where ITS receive stream from us got to. A
+		 * carried dialogue resumes from that, once, so the stream the
+		 * peer is waiting on has no hole in it. */
+		cnxman_csb_dialogue_acked(csb, env.ack_msg);
+	}
 
 	/*
 	 * THE IDENTITY FACTS MUST BE CURRENT AT THE DECISION POINT (rd vms-1ee).

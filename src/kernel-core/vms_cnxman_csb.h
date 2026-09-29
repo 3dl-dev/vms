@@ -577,6 +577,16 @@ void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid);
  * connect data carries at content[106:108]. 0 when nothing has been taken.
  */
 uint16_t cnxman_csb_dialogue_ack(const struct vms_csb *csb);
+
+/*
+ * Where the PEER's receive stream from us stands, read from abs 74 of its own
+ * CM frame (rd vms-1f40). Applied BACKWARDS only: a carried dialogue resumes
+ * from the peer's acknowledged position, because anything sent on the
+ * connection that died was never delivered and continuing past it leaves a hole
+ * in a stream spec sec 4(j) makes strictly monotonic -- which bugchecked a real
+ * VAX (arm M2-5). A peer can never use this to push the counter forward.
+ */
+void cnxman_csb_dialogue_acked(struct vms_csb *csb, uint16_t peer_ack_msg);
 int  cnxman_csb_dialogue_is_on(const struct vms_csb *csb, uint32_t conid);
 
 /*

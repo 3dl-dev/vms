@@ -1156,6 +1156,84 @@ static void test_reconnect_inside_the_window_carries_the_dialogue(void)
 }
 
 /*
+ * rd vms-1f40 -- A CARRIED DIALOGUE RESUMES FROM THE PEER'S POSITION, NOT ITS
+ * OWN.
+ *
+ * Carrying the counter is only half the rule. Anything this node sent on the
+ * connection that DIED was never delivered, so continuing from its own last
+ * send leaves a HOLE in a stream spec sec 4(j) makes strictly monotonic and has
+ * the peer acknowledge by highest CONTIGUOUS number.
+ *
+ * MEASURED, rig arm M2-5, in four frames: this node sent send=103 TWICE on the
+ * old Con.ID pair; the real OpenVMS VAX V7.3 then re-established and sent
+ * ack=102 on the NEW pair -- it had never seen 103 -- and this node's next
+ * frame carried send=104. The VAX bugchecked CNXMGRERR.
+ */
+static void test_a_carried_dialogue_resumes_where_the_peer_got_to(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-1f40: a carried dialogue resumes from the PEER's "
+	       "acknowledged position\n");
+
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(csb, 0x4e620009u);
+
+	/* 103 sent, and the arm's own numbers: the peer only ever took 102. */
+	while (csb->cm_send_msg < 103u)
+		cnxman_csb_dialogue_sent(csb);
+	ct_check_eq_u32(csb->cm_send_msg, 103u, "103 sent on the old pair");
+
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(csb, 0x4e62000fu);
+	ct_check_eq_u32(csb->cm_send_msg, 103u,
+			"the carry is intact across the rebind");
+
+	/* The peer's FIRST frame on the re-established connection says where it
+	 * really got to. */
+	cnxman_csb_dialogue_acked(csb, 102u);
+	ct_check_eq_u32(csb->cm_send_msg, 102u,
+			"...and this node resumes THERE, so its next "
+			"origination is 103 -- the number the peer is waiting "
+			"for, not the 104 that bugchecked the VAX");
+	ct_check_eq_u32(csb->cm_resumes, 1u, "counted as a resume");
+
+	cnxman_csb_dialogue_sent(csb);
+	ct_check_eq_u32(csb->cm_send_msg, 103u, "and it really originates 103");
+
+	/*
+	 * ONCE, AND NEVER AGAIN. On a healthy connection the peer's ack lags
+	 * this node's send by whatever is in flight, and a rewind on every
+	 * frame would walk the counter backwards over live traffic.
+	 */
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);
+	ct_check_eq_u32(csb->cm_send_msg, 105u, "two more sent, in flight");
+	cnxman_csb_dialogue_acked(csb, 103u);
+	ct_check_eq_u32(csb->cm_send_msg, 105u,
+			"a LATER ack does not walk the counter back: the "
+			"resume is armed for exactly one frame");
+	ct_check_eq_u32(csb->cm_resumes, 1u, "and is not counted again");
+
+	/* NEVER FORWARD, either: a peer cannot make this node skip a number it
+	 * has already sent, which is the same hole from the other side. */
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(csb, 0x4e620021u);
+	cnxman_csb_dialogue_acked(csb, 9999u);
+	ct_check_eq_u32(csb->cm_send_msg, 105u,
+			"an ack AHEAD of this node's own send is refused");
+	ct_check_eq_u32(csb->cm_resumes, 1u, "and counts as no resume");
+
+	cnxman_csb_dialogue_acked(NULL, 1u);   /* safe */
+}
+
+/*
  * E81 -- THE RECONNECT LADDER'S OWN REBIND, AND THE REJECT THAT FOLLOWS IT.
  *
  * E77 proved the rule on the connection the JOIN adopts. The p. 7-30 reconnect
@@ -1379,6 +1457,7 @@ int main(void)
 	test_dialogue_is_per_connection();
 	test_reconnect_dialogue_never_carries_the_old_ack();
 	test_reconnect_inside_the_window_carries_the_dialogue();
+	test_a_carried_dialogue_resumes_where_the_peer_got_to();
 	test_correlation_pair_is_maintained();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");

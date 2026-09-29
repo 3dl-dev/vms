@@ -1429,6 +1429,10 @@ void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
 		return;
 	csb->cm_dialogue_conid = conid;
 	csb->cm_dialogues_carried++;
+	/* rd vms-1f40: the next frame this peer sends tells us where its
+	 * receive stream from us really got to, and a carried dialogue resumes
+	 * from there. Armed for that one frame only. */
+	csb->cm_resume_pending = 1u;
 	/*
 	 * THE TRANSACTION ID AND THE TOKEN CARRY TOO (rd vms-8c54).
 	 *
@@ -1538,6 +1542,57 @@ void cnxman_csb_dialogue_heard(struct vms_csb *csb, uint16_t peer_send_msg)
 		return;
 	if (peer_send_msg > csb->cm_ack_msg)
 		csb->cm_ack_msg = peer_send_msg;
+}
+
+/*
+ * THE OTHER HALF OF WHAT A PEER'S ENVELOPE TELLS US (rd vms-1f40): where ITS
+ * receive stream from US stands, at abs 74 of every CM frame it sends.
+ *
+ * CARRYING THE COUNTER ACROSS A RE-ESTABLISHMENT IS ONLY HALF THE RULE.
+ * rd vms-8c54 established that a connection re-established inside the p. 7-24
+ * window is the same conversation and its send-msg# continues rather than
+ * restarting -- both real OpenVMS VAX V7.3 members do exactly that. But
+ * anything this node sent on the connection that DIED was never delivered, and
+ * continuing from its own last send leaves a HOLE in a stream spec sec 4(j)
+ * makes strictly monotonic and has the peer acknowledge by highest CONTIGUOUS
+ * number. A connection manager cannot absorb a hole.
+ *
+ * MEASURED, rig arm M2-5, and the frames say it outright:
+ *
+ *   -7.9 s  this node -> VAX  send=103  on the OLD Con.ID pair
+ *   -7.2 s  this node -> VAX  send=103  again, on the same dead pair
+ *   -2.7 s  VAX -> this node  send=280 ack=102  on the NEW pair -- it never
+ *                                               saw 103
+ *   +0.5 s  this node -> VAX  send=104 ack=280  on the NEW pair
+ *           ... and the VAX bugchecked CNXMGRERR.
+ *
+ * So a carried dialogue RESUMES FROM THE PEER'S ACKNOWLEDGED POSITION. The
+ * value is read from the peer's own frame and is only ever applied BACKWARDS:
+ * a peer cannot use this to make this node skip a number it has already sent,
+ * which would be the same hole from the other direction.
+ *
+ * NOT A RETRANSMIT ENGINE, and deliberately so: rewinding the counter means the
+ * next origination carries 103, which is the number the peer is waiting for.
+ * What that message CONTAINS is the connection manager's business, exactly as
+ * it is for the first origination on any connection.
+ *
+ * ONCE, AT THE RE-ESTABLISHMENT, AND NEVER AGAIN. On a healthy connection the
+ * peer's ack legitimately lags this node's send by whatever is in flight, so a
+ * rewind on every frame would walk the counter backwards over live traffic and
+ * manufacture the very duplicate it exists to prevent. cnxman_csb_bind_reconnect
+ * arms this for exactly one frame -- the first the peer sends on the connection
+ * it has just re-established, which is the one that tells us where it got to --
+ * and taking it disarms it.
+ */
+void cnxman_csb_dialogue_acked(struct vms_csb *csb, uint16_t peer_ack_msg)
+{
+	if (csb == NULL || !csb->cm_resume_pending)
+		return;
+	csb->cm_resume_pending = 0u;
+	if (peer_ack_msg < csb->cm_send_msg) {
+		csb->cm_send_msg = peer_ack_msg;
+		csb->cm_resumes++;
+	}
 }
 
 void cnxman_envelope_originate(struct vms_csb *csb, uint8_t body[132],

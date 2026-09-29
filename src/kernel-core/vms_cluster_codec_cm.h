@@ -373,8 +373,26 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
  * (LOCKMGRERR); that is why this family has its own accessor names. */
 #define VMS_OFF_CM_DLM_L1_TAG   (VMS_OFF_SYSAP_BODY + 12) /* abs 84, LE u16,
 							     * invariant 0x0001 */
-#define VMS_OFF_CM_DLM_L1_TAG2  (VMS_OFF_SYSAP_BODY + 14) /* abs 86, LE u16,
-							     * invariant 0x0003 */
+/*
+ * abs 86, LE u16. DOCUMENTED HERE AS "invariant 0x0003" AND IT IS NOT (rd
+ * vms-1f40). A census of every cat-0x02/0x82 op-0x0d frame in two independent
+ * real-cluster captures says so:
+ *
+ *   three real OpenVMS VAX V7.3 nodes  (oracle-stall-o1.pcap): 0x0003 x 358+92
+ *                                       and 0x0004 x 270+68, from BOTH
+ *                                       directions;
+ *   a real V7.3 beside this executive  (rig arm M2-5):         0x0002 x 205
+ *                                       and 0x0003 x 21, every one of them
+ *                                       ORIGINATED BY THE VAX.
+ *
+ * So the cell varies, the real nodes vary it, and treating it as a constant is
+ * a reading of one capture. NOTHING IN THIS TREE DEPENDS ON THE OLD CLAIM:
+ * vms_cm_dlm_op0d_response_build() echoes the request body verbatim, so the
+ * value this executive emits is the value the peer sent -- which the same
+ * census confirms one-for-one, 205 <-> 205. The comment is corrected rather
+ * than the code, because the code was already right for the right reason.
+ */
+#define VMS_OFF_CM_DLM_L1_TAG2  (VMS_OFF_SYSAP_BODY + 14)
 #define VMS_OFF_CM_DLM_L1_LEN   (VMS_OFF_SYSAP_BODY + 16) /* abs 88, L1 length*/
 #define VMS_OFF_CM_DLM_RESULT   (VMS_OFF_SYSAP_BODY + 34) /* abs 106, result
 							     * stamp; 0xf9 on

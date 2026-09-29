@@ -1,3 +1,4 @@
-[ 50%] Built target cluster_host_codec
+[ 33%] Built target cluster_host_fixture
+[ 66%] Built target cluster_host_codec
 [100%] Built target cluster_host_cnxman
-[100%] Built target test_cnxman_genesis
+[100%] Built target test_cnxman_csb

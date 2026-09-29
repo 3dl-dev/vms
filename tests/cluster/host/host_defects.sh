@@ -149,6 +149,7 @@ pe-last-gasp-once-per-port
 pe-late-frame-revives-channel
 codec-conndata-ack-cell-dropped
 csb-reconnect-never-carries
+csb-resume-ignores-peer-position
 pe-start-refusal-silent
 pe-reformation-stacks-before-it-starts"
 
@@ -623,6 +624,23 @@ EOF
         ;;
         esac;;
 
+    csb-resume-ignores-peer-position)
+        case "$_f" in
+        facility)     echo "a carried dialogue resuming from the PEER'S acknowledged position (rd vms-1f40: anything sent on the connection that died was never delivered, and continuing past it leaves a hole in a strictly-monotonic stream)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_dialogue_acked() takes the peer's position but never applies it, so a re-established connection resumes from this node's own last send. The arming, the one-frame scope and the never-forward rule are all untouched -- only the rewind itself goes. MEASURED consequence, rig arm M2-5: this node sent send=103 twice on the old Con.ID pair, the real OpenVMS VAX V7.3 re-established and acked 102 having never seen 103, this node's next frame carried 104, and the VAX bugchecked CNXMGRERR.";;
+        require_fail) cat <<'EOF'
+...and this node resumes THERE, so its next origination is 103 -- the number the peer is waiting for, not the 104 that bugchecked the VAX
+a LATER ack does not walk the counter back: the resume is armed for exactly one frame
+an ack AHEAD of this node's own send is refused
+and it really originates 103
+two more sent, in flight
+EOF
+        ;;
+        esac;;
+
     csb-reconnect-never-carries)
         case "$_f" in
         facility)     echo "p. 7-24's reconnect window as the SAME conversation (rd vms-8c54: a connection re-established to a system the cluster still holds keeps its send/ack dialogue)";;
@@ -949,6 +967,10 @@ apply_edit() {
         sed -i 's|out\[11\] = (uint8_t)(in->peer_ack_msg != 0u ? 0x0au : 0x08u);|out[11] = 0x08u;|' "$_file"
         sed -i 's|out\[12\] = (uint8_t)(in->peer_ack_msg \& 0xffu);|out[12] = 0u;|' "$_file"
         sed -i 's|out\[13\] = (uint8_t)((in->peer_ack_msg >> 8) \& 0xffu);|out[13] = 0u;|' "$_file";;
+
+    csb-resume-ignores-peer-position)
+        # `csb->cm_send_msg = peer_ack_msg;` is unique in this file.
+        sed -i 's|csb->cm_send_msg = peer_ack_msg;|/* NEGCTL csb-resume-ignores-peer-position: the position is not taken */|' "$_file";;
 
     csb-reconnect-never-carries)
         # `if (csb->cm_dialogue_conid == 0u)` is unique in this file.

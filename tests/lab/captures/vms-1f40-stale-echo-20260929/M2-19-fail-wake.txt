@@ -1,0 +1,23 @@
+   0.013 df:0b->91:86 mt=4b a36=1 len=72 ack=285 seq=113
+   0.013 df:0b->91:86 mt=48 a36=1 len=60 ack=286 seq=0
+   0.013 df:0b->91:86 mt=b4 a36=261 len=134 adv=1
+   0.013 df:0b->01:02 mt=a0 a36=261 len=134 adv=0
+   0.013 df:0b->91:86 mt=b3 a36=261 len=134 adv=1
+   0.013 df:0b->91:86 mt=48 a36=1 len=60 ack=286 seq=0
+   0.013 df:0b->91:86 mt=48 a36=1 len=60 ack=286 seq=0
+   0.631 df:0b->91:86 mt=7b a36=1 len=72 ack=286 seq=113
+   1.271 df:0b->91:86 mt=7b a36=1 len=72 ack=286 seq=113
+   1.320 91:86->df:0b mt=b2 a36=261 len=134 adv=2
+   1.417 df:0b->91:86 mt=b3 a36=261 len=134 adv=1
+   1.417 91:86->df:0b mt=b4 a36=261 len=134 adv=2
+   1.417 91:86->df:0b mt=41 a36=1 len=120 ack=0 seq=288
+   1.489 df:0b->91:86 mt=41 a36=1 len=120 ack=0 seq=1
+   1.489 df:0b->91:86 mt=41 a36=1 len=120 ack=0 seq=1
+   1.541 df:0b->91:86 mt=b3 a36=261 len=1514 adv=1
+   1.541 91:86->df:0b mt=b4 a36=261 len=134 adv=2
+   1.870 91:86->01:02 mt=a0 a36=261 len=134 adv=0
+   2.039 df:0b->01:02 mt=a0 a36=261 len=134 adv=0
+   2.039 df:0b->91:86 mt=b3 a36=261 len=134 adv=1
+   2.039 91:86->df:0b mt=b4 a36=261 len=134 adv=2
+   2.167 df:0b->91:86 mt=41 a36=1 len=120 ack=0 seq=1
+   2.807 df:0b->91:86 mt=41 a36=1 len=120 ack=0 seq=1

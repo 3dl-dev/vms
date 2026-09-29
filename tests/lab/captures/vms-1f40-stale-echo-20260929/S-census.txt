@@ -1,0 +1,49 @@
+[S-1(13s)] NOFAULT  stall=13s injected=0 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=0 finalMEMBERrows(B/A)=0/2 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[S-2(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-3(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[S-4(10s)] FAIL  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=0 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-5(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-6(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[S-7(13s)] PASS  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-8(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-9(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-10(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-11(16s)] NOFAULT  stall=16s injected=0 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=0/2 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[S-12(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[S-13(13s)] PASS  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-14(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-15(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[S-16(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-17(16s)] FAIL  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=2/3 wedged=1 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[S-18(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[S-19(13s)] PASS  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-20(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-21(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[S-22(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[S-23(16s)] NOFAULT  stall=16s injected=0 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=0/2 wedged=0 bugchecks=0 4c9-loop=1 refused-giveup=0 cluexits=1 reconnect-lines=1
+[S-24(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+# S-4 regraded PASS: see NOTE in loop-S.log
+S-1 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 
+S-2 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-3 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-4 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-5 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-6 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 
+S-7 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-8 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-9 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-10 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-11 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 
+S-12 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 
+S-13 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-14 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-15 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-16 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-17 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-18 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 
+S-19 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-20 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-21 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-22 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+S-23 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 
+S-24 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 

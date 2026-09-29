@@ -1,0 +1,5 @@
+   3.997 0104->a430 mt=4b ack=11 seq=11 CONNECT_REQ    rem=00000000 loc=2f670007 VMS$VAXcluster
+   3.997 a430->0104 mt=4b ack=12 seq=13 ACCEPT_REQ     rem=2f670007 loc=2f670007 VMS$VAXcluster
+# original formation, oracle.pcap (Sep 27):
+1790527959.910 a430->8042 mt=4b ack=7 seq=8 CONNECT_REQ    rem=00000000 loc=2f520009 VMS$VAXcluster
+1790527959.910 8042->a430 mt=4b ack=9 seq=10 ACCEPT_REQ     rem=2f520009 loc=2f520009 VMS$VAXcluster

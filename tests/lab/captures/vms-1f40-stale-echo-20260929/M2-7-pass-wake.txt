@@ -1,0 +1,40 @@
+  -0.012 91:86->01:02 mt=a0 a36=261 len=134 adv=0
+   0.006 df:0b->91:86 mt=4b a36=1 len=72 ack=283 seq=112
+   0.006 df:0b->01:02 mt=a0 a36=261 len=134 adv=0
+   0.006 df:0b->91:86 mt=b3 a36=261 len=134 adv=1
+   0.006 df:0b->91:86 mt=48 a36=1 len=60 ack=284 seq=0
+   0.006 df:0b->91:86 mt=b4 a36=261 len=134 adv=1
+   0.006 df:0b->91:86 mt=48 a36=1 len=60 ack=284 seq=0
+   0.006 df:0b->91:86 mt=48 a36=1 len=60 ack=284 seq=0
+   0.680 df:0b->91:86 mt=7b a36=1 len=72 ack=284 seq=112
+   1.320 df:0b->91:86 mt=7b a36=1 len=72 ack=284 seq=112
+   1.437 91:86->df:0b mt=b2 a36=261 len=134 adv=2
+   1.544 df:0b->91:86 mt=b3 a36=261 len=134 adv=1
+   1.544 91:86->df:0b mt=b4 a36=261 len=134 adv=2
+   1.544 91:86->df:0b mt=41 a36=1 len=120 ack=0 seq=286
+   1.675 df:0b->91:86 mt=b3 a36=261 len=1514 adv=1
+   1.675 df:0b->91:86 mt=41 a36=2 len=120 ack=0 seq=1
+   1.675 91:86->df:0b mt=b4 a36=261 len=134 adv=2
+   1.675 91:86->df:0b mt=41 a36=1 len=120 ack=0 seq=1
+   1.720 df:0b->91:86 mt=41 a36=2 len=120 ack=0 seq=1
+   1.720 91:86->df:0b mt=41 a36=1 len=60 ack=0 seq=1
+   1.729 df:0b->91:86 mt=41 a36=2 len=60 ack=0 seq=1
+   1.730 91:86->df:0b mt=5b a36=1 len=124 ack=0 seq=1
+   1.875 df:0b->91:86 mt=48 a36=2 len=60 ack=1 seq=0
+   1.875 df:0b->91:86 mt=5b a36=2 len=80 ack=1 seq=1
+   1.875 df:0b->91:86 mt=5b a36=2 len=124 ack=1 seq=2
+   1.875 91:86->df:0b mt=48 a36=1 len=60 ack=2 seq=0
+   1.875 91:86->df:0b mt=5b a36=1 len=124 ack=2 seq=2
+   1.875 91:86->df:0b mt=5b a36=1 len=76 ack=2 seq=3
+   1.931 df:0b->91:86 mt=48 a36=2 len=60 ack=1 seq=0
+   1.960 df:0b->91:86 mt=48 a36=2 len=60 ack=2 seq=0
+   1.960 df:0b->91:86 mt=5b a36=2 len=80 ack=2 seq=3
+   1.960 df:0b->91:86 mt=5b a36=2 len=124 ack=2 seq=4
+   1.960 91:86->df:0b mt=5b a36=1 len=108 ack=2 seq=4
+   1.960 91:86->df:0b mt=5b a36=1 len=108 ack=2 seq=5
+   1.960 91:86->df:0b mt=48 a36=1 len=60 ack=4 seq=0
+   2.024 df:0b->01:02 mt=a0 a36=261 len=134 adv=0
+   2.024 df:0b->91:86 mt=b3 a36=261 len=134 adv=1
+   2.024 91:86->df:0b mt=b4 a36=261 len=134 adv=2
+   2.030 df:0b->91:86 mt=48 a36=2 len=60 ack=2 seq=0
+   2.060 df:0b->91:86 mt=48 a36=2 len=60 ack=2 seq=0

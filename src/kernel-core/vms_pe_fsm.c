@@ -2028,8 +2028,30 @@ static struct pe_vc *vc_for_path(struct pe_fsm *f, uint32_t ch_index)
 	if (vc != NULL)
 		return vc;
 	vc = vc_by_channel_system(f, ch);
-	if (vc == NULL)
+	if (vc == NULL) {
+		/*
+		 * A CIRCUIT FOR A STATION WHOSE SYSTEM THIS PORT CANNOT NAME
+		 * (rd vms-18a). E83's rule is one circuit per SYSTEM, and
+		 * vc_by_channel_system() is how that is enforced -- it answers
+		 * only for a channel that has learned a cluster-LOGICAL address
+		 * to read an SCSSYSTEMID out of. A channel that has NOT gets a
+		 * circuit of its own here, and if the same system is also
+		 * reachable on a channel that HAS, that system now has two --
+		 * the second with no history, which is why a re-formation on it
+		 * looks like a first formation.
+		 *
+		 * MEASURED, failing arms G-2/H-1/K-1: on the wake the woken node
+		 * answers the real VAX's START with a STACK and never starts
+		 * from its own side, and BOTH witnesses of a re-formation read
+		 * as a first formation. Said out loud so the next arm names it
+		 * instead of leaving it to be inferred from a pcap.
+		 */
+		if (ch != NULL && !ch->remote_sysid_valid)
+			pe_log(f, "%PEA0, a circuit was formed for a station "
+				  "whose system this port cannot name: it has "
+				  "advertised no cluster-logical address yet");
 		return vc_alloc(f, ch_index);
+	}
 	if (pe_channel_is_live(vc_path(f, vc), pe_now(f))) {
 		f->vc_paths_redundant++;
 		return NULL;

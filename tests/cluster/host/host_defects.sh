@@ -151,7 +151,8 @@ codec-conndata-ack-cell-dropped
 csb-reconnect-never-carries
 csb-resume-ignores-peer-position
 pe-start-refusal-silent
-pe-reformation-stacks-before-it-starts"
+pe-reformation-stacks-before-it-starts
+pe-peer-start-keeps-dead-echo"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -593,6 +594,20 @@ EOF
         ;;
         esac;;
 
+    pe-peer-start-keeps-dead-echo)
+        case "$_f" in
+        facility)     echo "the SS4(i).B echo a formation the PEER starts stamps (rd vms-1f40: taken only at CHANNEL_UP, a re-formation whose START beat the b4 stamped the dead generation's number)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "h_vc_rx_start() no longer takes the echo from its channel, so a circuit re-formed by the PEER'S START keeps stamping the number the previous generation was formed with. MEASURED consequence, rig arm M2-19: the real OpenVMS VAX V7.3 advertised 2, its START beat its b4 to the circuit, this node answered START+STACK stamped 1, and the VAX discarded both and re-STARTed every 5 s until each side removed the other. CHANNEL_UP's own take is untouched, which is why the b4-first order (arm M2-7) still passes.";;
+        require_fail) cat <<'EOF'
+every 0x41 in answer carries 2, the number the peer advertises now -- never the dead generation's 1 the real VAX discarded for 20 s
+and the circuit keeps stamping 2 on everything after
+EOF
+        ;;
+        esac;;
+
     pe-start-refusal-silent)
         case "$_f" in
         facility)     echo "saying WHY a circuit refused to form (rd vms-18a: counted-but-silent made a refused formation indistinguishable on a real console from one that was never asked)";;
@@ -961,6 +976,12 @@ apply_edit() {
     pe-reformation-stacks-before-it-starts)
         # `if (ch != NULL && ch->verifies > 1u)` is unique in this file.
         sed -i 's|if (!vc->own_start_sent \&\& vc_is_reformation(f, vc))|if ((void)vc_is_reformation, 0) /* NEGCTL pe-reformation-stacks-before-it-starts */|' "$_file";;
+
+    pe-peer-start-keeps-dead-echo)
+        # vc_take_echo() is called at three formation sites; the range pins the
+        # one in h_vc_rx_start (`vc->starts_rx++;` is unique in this file), and
+        # the call VANISHES when replaced, so the mutation is not repeatable.
+        sed -i '/vc->starts_rx++;/,/vc_learn_peer(f, vc, rx);/ s|vc_take_echo(f, vc);|(void)vc_take_echo; /* NEGCTL pe-peer-start-keeps-dead-echo */|' "$_file";;
 
     pe-start-refusal-silent)
         # The CALL is unique and VANISHES when replaced, so the mutation is not

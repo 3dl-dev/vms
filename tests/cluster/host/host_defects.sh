@@ -649,15 +649,24 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "csb_dialogue_may_continue() is disarmed to return 0, so cnxman_csb_bind_reconnect() always falls through to the E77 reset and a re-established connection restarts at send-msg# 1 / ack 0. Every NOT-entitled case still resets, so nothing about E77 changes -- only the entitled one, which is the case both real OpenVMS VAX V7.3 members took when they continued 10249 -> 10250 and 14811 -> 14812 across a new Con.ID pair.";;
         require_fail) cat <<'EOF'
-the send side CONTINUES -- the next origination is 3, as VAX1's 10249 became 10250
-and so does the ack: this node really HAS taken 14811 from that system, and saying 0 to a peer that holds it as a member is the lie the VAX bugchecks on
+...and this node resumes THERE, so its next origination is 103 -- the number the peer is waiting for, not the 104 that bugchecked the VAX
 ...which is the cell the connect data carries
-counted as CARRIED
+a LATER ack does not walk the counter back: the resume is armed for exactly one frame
+an ack AHEAD of this node's own send is refused
 and NOT as a reset
-the transaction id CARRIES: a re-established member does not renumber mid-conversation (oracle VAX1 ran txn 3 across it)
+and counts as no resume
+and is not counted again
+and it really originates 103
+and so does the ack: this node really HAS taken 14811 from that system, and saying 0 to a peer that holds it as a member is the lie the VAX bugchecks on
 and so does the correlation token -- restarting it at 1 offers the peer a correlation it never issued, and the VAX bugchecked on it (arm K-10)
 and what this node told that system about itself moved with it: a re-established member does NOT re-introduce itself, and the VAX bugchecked when it did (arm F-4)
+counted as CARRIED
 counted as a reset
+counted as a resume
+the carry is intact across the rebind
+the send side CONTINUES -- the next origination is 3, as VAX1's 10249 became 10250
+the transaction id CARRIES: a re-established member does not renumber mid-conversation (oracle VAX1 ran txn 3 across it)
+two more sent, in flight
 EOF
         ;;
         esac;;

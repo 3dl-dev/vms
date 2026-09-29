@@ -1,0 +1,248 @@
+[
+ {
+  "label": "page-order",
+  "order": "A,B,C",
+  "gap": 5000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 2,
+   "VAXC": 3
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {
+   "OVMXA": [
+    "0:1988"
+   ],
+   "OVMXB": [
+    "0:1989",
+    "0:1987"
+   ],
+   "VAXC": [
+    "OVMXB"
+   ]
+  },
+  "repaint_stalls": {},
+  "lost_unnamed": {
+   "OVMXB": 2
+  },
+  "worstDriftMs": 36,
+  "froze": false
+ },
+ {
+  "label": "all-at-once",
+  "order": "A,B,C",
+  "gap": 500,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 3,
+   "VAXC": 2
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "worstDriftMs": 111,
+  "froze": false
+ },
+ {
+  "label": "page-order-throttled4",
+  "order": "A,B,C",
+  "gap": 5000,
+  "throttle": 4,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c5",
+    "0x7c4"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c3",
+    "0x7c5"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXA",
+   "OVMXB"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 4,
+   "VAXC": 3
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "worstDriftMs": 916,
+  "froze": false
+ },
+ {
+  "label": "b-first",
+  "order": "B,A,C",
+  "gap": 3000,
+  "throttle": 1,
+  "verdict": "NOT CN=3: OVMXA never named 0x7c5; the real VAX admitted OVMXB; OVMXB restarted 5x; VAXC restarted 4x; lost: {\"VAXC\":[\"OVMXA\"],\"OVMXB\":[\"0:1987\"]}; unnamed connection losses: {\"OVMXB\":1}; panels that only repainted once revealed: {\"VAXC\":1} (rd vms-0bc)",
+  "cn3": false,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c3",
+    "0x7c5"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 5,
+   "VAXC": 4
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {
+   "VAXC": [
+    "OVMXA"
+   ],
+   "OVMXB": [
+    "0:1987"
+   ]
+  },
+  "repaint_stalls": {
+   "VAXC": 1
+  },
+  "lost_unnamed": {
+   "OVMXB": 1
+  },
+  "worstDriftMs": 63,
+  "froze": false
+ },
+ {
+  "label": "c-first-legacy",
+  "order": "C,A,B",
+  "gap": 5000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 4,
+   "VAXC": 3
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "worstDriftMs": 28,
+  "froze": false
+ },
+ {
+  "label": "all-at-once-throttled2",
+  "order": "A,B,C",
+  "gap": 500,
+  "throttle": 2,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 4,
+   "VAXC": 3
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {
+   "OVMXB": 1
+  },
+  "lost_unnamed": {},
+  "worstDriftMs": 376,
+  "froze": false
+ }
+]

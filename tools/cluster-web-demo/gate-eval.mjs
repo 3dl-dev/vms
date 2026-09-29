@@ -76,13 +76,46 @@ export const restartsIn = (transcript) =>
 //
 // This is what makes an observation MONOTONIC: a node does not un-join because
 // its console scrolled.
-export function joinScrollback(acc, cur) {
-  if (!cur) return acc || '';
-  if (!acc) return cur;
+//
+// THE CURSOR IS NOT OUTPUT. pcjs paints its cursor into the screen text as a
+// block glyph at the write position -- the end of the screen, often on a line
+// of its own -- and the next poll has printed where it stood. Left in, the
+// recorded tail never matches the next screen's head, the WHOLE screen is
+// appended again on every poll, and each copy re-reads the power-on banner as
+// a restart. MEASURED, deploy V0.7-3 pass1 all-at-once: "OVMXB restarted 33x"
+// was one boot whose screen was re-appended 33 times (the copies end at
+// uptimes 98, 152, 206 ... 1858 s -- one clock, never reset).
+const CURSOR_TAIL = /[\s\u2588]+$/u;
+const tidyScreen = (s) => String(s || '').replace(CURSOR_TAIL, '');
+
+// The longest prefix of `cur` that `acc` ends with, stitched; null if none.
+function stitchOnto(acc, cur) {
   for (let k = Math.min(acc.length, cur.length); k > 0; k--) {
     if (acc.endsWith(cur.slice(0, k))) return acc + cur.slice(k);
   }
-  return acc + cur;
+  return null;
+}
+
+export function joinScrollback(acc, cur) {
+  acc = tidyScreen(acc);
+  cur = tidyScreen(cur);
+  if (!cur) return acc;
+  if (!acc) return cur;
+  const exact = stitchOnto(acc, cur);
+  if (exact !== null) return exact;
+  // THE CURSOR'S LINE IS PROVISIONAL. The terminal may still rewrite the line
+  // it is on -- a countdown redrawn with CR ("autoboot 2" -> "autoboot 0"),
+  // the cursor block painted over the character the next poll shows there --
+  // so before calling it a cleared screen, match against the settled lines
+  // only and let the new screen supply the last one.
+  const cut = acc.lastIndexOf('\n');
+  if (cut >= 0) {
+    const settled = stitchOnto(acc.slice(0, cut + 1), cur);
+    if (settled !== null) return settled;
+  }
+  // No overlap: the guest cleared its screen. The line break the tidy took off
+  // the old tail goes back, so the two screens stay two lines.
+  return acc + '\n' + cur;
 }
 
 // Fold one poll of one node's screen into the run's observations, in place.

@@ -2379,6 +2379,19 @@ static void test_peer_restart_resets_the_circuit(void)
 			PE_VC_DOWN_PEER_RESTART, "SCS was told why");
 }
 
+/* rd vms-1f40: a restart of an OPEN circuit names the START that did it, by
+ * the peer's own send-msg# -- the field that ties the console to a capture. */
+static void test_peer_restart_names_its_start(void)
+{
+	printf("-- a peer restart names the START that caused it\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	rx_start(&g_env, 0, 292, 0);
+	ct_check(strstr(g_env.fake.last_log,
+			"peer re-started the circuit (its START carries "
+			"send-msg# 292), re-forming") != NULL,
+		 "the console line carries the START's own send-msg#");
+}
+
 /* The snapshot is a projection of executive state and nothing else: a value
  * never learned stays zero (INV-6). */
 static void test_projection(void)
@@ -2502,6 +2515,7 @@ int main(void)
 	test_failover_refuses_a_different_incarnation();
 	test_last_gasp_closes_without_reforming();
 	test_peer_restart_resets_the_circuit();
+	test_peer_restart_names_its_start();
 	test_projection();
 	test_projection_down_reason();
 	test_no_table_no_circuits();

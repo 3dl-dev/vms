@@ -87,6 +87,32 @@ static void pe_log(const struct pe_fsm *f, const char *msg)
 		f->ops->log(f->ops->ctx, msg);
 }
 
+/*
+ * pe_log() with one number appended: "<msg><n><tail>". Freestanding (no
+ * printf in the core); the buffer is sized for the longest caller plus a
+ * 10-digit u32. Diagnostics only -- nothing branches on the text.
+ */
+static void pe_log_u32(const struct pe_fsm *f, const char *msg, uint32_t n,
+		       const char *tail)
+{
+	char buf[160], dig[10];
+	uint32_t i = 0u, k = 0u;
+
+	while (msg[k] != '\0' && i < (uint32_t)sizeof(buf) - 12u)
+		buf[i++] = msg[k++];
+	k = 0u;
+	do {
+		dig[k++] = (char)('0' + (n % 10u));
+		n /= 10u;
+	} while (n != 0u && k < (uint32_t)sizeof(dig));
+	while (k > 0u)
+		buf[i++] = dig[--k];
+	for (k = 0u; tail[k] != '\0' && i < (uint32_t)sizeof(buf) - 1u; k++)
+		buf[i++] = tail[k];
+	buf[i] = '\0';
+	pe_log(f, buf);
+}
+
 static uint32_t pe_hello_interval(const struct pe_fsm *f)
 {
 	return f->id.hello_interval_ms != 0u ? f->id.hello_interval_ms
@@ -2896,7 +2922,12 @@ static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
 		vc->last_down_reason = (uint8_t)PE_VC_DOWN_PEER_RESTART;
 		vc->downs++;
 		vc_notify_down(f, vc, PE_VC_DOWN_PEER_RESTART);
-		pe_log(f, "%PEA0, peer re-started the circuit, re-forming");
+		/* rd vms-1f40: WHICH START -- its own send-msg# names the frame
+		 * on a capture (arm P-15 restarted an open circuit on a START
+		 * the wire shows only once, 180 ms before). */
+		pe_log_u32(f, "%PEA0, peer re-started the circuit (its START "
+			      "carries send-msg# ", (uint32_t)rx->start.send_seq,
+			   "), re-forming");
 	}
 	vc_reset_sequence(f, vc);
 	vc_take_echo(f, vc);
@@ -2931,8 +2962,12 @@ static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
 	 */
 	if (!vc->own_start_sent && vc_is_reformation(f, vc))
 		(void)vc_send_start(f, vc, 0u);
-	if (vc_send_start(f, vc, 1u) != 0)
+	if (vc_send_start(f, vc, 1u) != 0) {
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+		/* Said, not only counted (rd vms-1f40): an unanswered peer
+		 * START is otherwise invisible on a console. */
+		vc_log_start_refused(f, vc);
+	}
 }
 
 /*

@@ -1812,6 +1812,16 @@ static void test_a_reformation_starts_from_this_side_too(void)
 	ct_check_eq_u32(vc->starts_tx, starts_before,
 			"...and answering it is NOT starting one");
 
+	/*
+	 * ...AND IF THE PEER'S START HAD ARRIVED ON AN ALREADY-VERIFIED
+	 * CHANNEL, the START goes out BEFORE the STACK -- the oracle's order
+	 * (VAX1 START, VAX2 START, VAX1 STACK, VAX2 STACK, four frames in one
+	 * millisecond). Sent after the STACK the real VAX DISCARDS it: arm D-5
+	 * answered at +1.682 and started at +1.720, and the VAX re-STARTed
+	 * every 5 s until each side removed the other. Asserted separately
+	 * below, on a channel that is already back.
+	 */
+
 	/* NOW our own channel comes back. */
 	channel_to_b4(&g_env, 1);
 	vc = the_vc(&g_env);
@@ -1855,6 +1865,74 @@ static void test_a_reformation_starts_from_this_side_too(void)
 			"the peer's handshake is the whole handshake, and a "
 			"second START reads to it as 'peer re-started the "
 			"circuit' and breaks it");
+}
+
+/*
+ * THE OTHER HALF OF THE RACE, AND THE FRAME ORDER (rd vms-8c54 / vms-18a).
+ *
+ * When the peer's re-formation START arrives on a channel that is ALREADY back,
+ * there is no CHANNEL_UP left to come: this node has to start from its own side
+ * inside the START handler, and it has to do it BEFORE the STACK. The oracle's
+ * four frames are in that order, and the rig measured what the other order
+ * costs -- arm D-5 STACKed at +1.682 and started at +1.720, and the real
+ * OpenVMS VAX V7.3 discarded the late START and re-STARTed every 5 s until each
+ * side removed the other.
+ */
+static void test_a_reformation_starts_before_it_stacks(void)
+{
+	struct pe_vc *vc;
+	struct fake_vc_decoded first, second;
+
+	printf("-- on a re-formation, our START goes out BEFORE our STACK\n");
+
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	ct_check(the_vc(&g_env) != NULL, "a circuit that has been up");
+	if (the_vc(&g_env) == NULL)
+		return;
+
+	/* The channel goes and comes back FIRST, so the circuit is closed and
+	 * re-verified before the peer's START arrives -- and CHANNEL_UP has
+	 * already been spent by the time it does. */
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	channel_to_b4(&g_env, 1);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "the circuit is back in formation");
+	if (vc == NULL)
+		return;
+
+	/* A second generation: close it again, re-verify, and let the PEER's
+	 * START be the first thing that reaches the fresh circuit. */
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	channel_to_b4(&g_env, 1);
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->state == VMS_PE_VC_CLOSED,
+		 "closed, with its channel about to come back");
+	if (vc == NULL)
+		return;
+	/* Bring the channel back WITHOUT letting the circuit start: feed only
+	 * the peer's b2/b4 pair, then its START. */
+	fake_pe_clear_frames(&g_env.fake);
+	rx_start(&g_env, 0, 1, 0);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "the peer's START reached a circuit");
+	if (vc == NULL || g_env.fake.n_frames < 2u) {
+		ct_check(g_env.fake.n_frames >= 2u,
+			 "and it answered with TWO 0x41 frames, not one");
+		return;
+	}
+	first = fake_vc_decode(&g_env.fake, 0);
+	second = fake_vc_decode(&g_env.fake, 1);
+	ct_check(first.is_start && second.is_start,
+		 "both frames out are 0x41 formation frames");
+	ct_check_eq_u32(first.config_round, 0u,
+			"the FIRST frame out is our own START (round 0) -- the "
+			"oracle's order, and the one the real VAX accepts");
+	ct_check_eq_u32(second.config_round, 1u,
+			"and the STACK follows it (round 1)");
 }
 
 /*
@@ -2358,6 +2436,7 @@ int main(void)
 	test_channel_loss_tears_the_circuit_down();
 	test_a_late_frame_does_not_refresh_a_dead_deadline();
 	test_a_reformation_starts_from_this_side_too();
+	test_a_reformation_starts_before_it_stacks();
 	test_second_channel_is_a_path_not_a_circuit();
 	test_idle_circuit_survives_one_path_failing();
 	test_retransmit_follows_the_surviving_path();

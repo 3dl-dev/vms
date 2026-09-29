@@ -150,7 +150,8 @@ pe-late-frame-revives-channel
 codec-conndata-ack-cell-dropped
 csb-reconnect-never-carries
 pe-reformation-never-starts
-pe-start-refusal-silent"
+pe-start-refusal-silent
+pe-reformation-stacks-before-it-starts"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -578,6 +579,19 @@ EOF
                       ;;
         esac;;
 
+    pe-reformation-stacks-before-it-starts)
+        case "$_f" in
+        facility)     echo "the ORDER of a re-formation's two 0x41 frames (rd vms-18a: the oracle's four frames are VAX1 START, VAX2 START, VAX1 STACK, VAX2 STACK, and a START sent AFTER the STACK is discarded)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "h_vc_rx_start()'s own-START is disarmed, so a re-forming circuit whose channel was ALREADY back answers the peer's START with a STACK and nothing else -- h_vc_own_start() cannot help, because the CHANNEL_UP it needs was spent before the START arrived. MEASURED consequence, rig arm D-5: the real OpenVMS VAX V7.3 discarded the late START, re-STARTed every 5 s for the rest of the run, and 20 s later each side removed the other. The FIRST-formation case is untouched (the same verifies>1 guard).";;
+        require_fail) cat <<'EOF'
+and it answered with TWO 0x41 frames, not one
+EOF
+        ;;
+        esac;;
+
     pe-start-refusal-silent)
         case "$_f" in
         facility)     echo "saying WHY a circuit refused to form (rd vms-18a: counted-but-silent made a refused formation indistinguishable on a real console from one that was never asked)";;
@@ -927,6 +941,10 @@ apply_edit() {
 
     coord-admission-open-gate-disarmed)
         sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    pe-reformation-stacks-before-it-starts)
+        # `if (ch != NULL && ch->verifies > 1u)` is unique in this file.
+        sed -i 's|if (ch != NULL \&\& ch->verifies > 1u)|if ((void)ch, 0) /* NEGCTL pe-reformation-stacks-before-it-starts */|' "$_file";;
 
     pe-start-refusal-silent)
         # The CALL is unique and VANISHES when replaced, so the mutation is not

@@ -2824,6 +2824,36 @@ static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
 	vc->form_due_ms = pe_now(f) + vc_retransmit_ms(f);
 	vc_arm(f, vc, PE_TIMER_RETRANSMIT, vc_retransmit_ms(f));
 	vc_arm_vcfail(f, vc);
+	/*
+	 * OUR OWN START GOES FIRST, AND THE ORDER IS THE ORACLE'S
+	 * (rd vms-8c54 / vms-18a).
+	 *
+	 * p. 2-14's "both ends started" case, and the oracle's four frames in
+	 * one millisecond are in this exact order: VAX1 START, VAX2 START,
+	 * VAX1 STACK, VAX2 STACK. h_vc_own_start() covers the race when OUR
+	 * channel comes back first; this covers it when the PEER'S START gets
+	 * here first, which is the other half and the half that was still
+	 * failing.
+	 *
+	 * ORDER, MEASURED, and it is the whole finding. Arm V-1 (passes) sent
+	 * START then STACK and the real OpenVMS VAX V7.3 STACKed it 0 ms
+	 * later. Arm D-5 (fails) sent the STACK at +1.682 and the same START
+	 * at +1.738 -- 38 ms LATER, because it waited for CHANNEL_UP -- and the
+	 * VAX DISCARDED it and went on re-STARTing every 5 s until each side
+	 * removed the other. A START that arrives after this node has already
+	 * acknowledged the peer's is a node re-starting a circuit it just
+	 * agreed to; before it, it is the second half of one handshake.
+	 *
+	 * Same two guards as h_vc_own_start(), same reasons: at most one per
+	 * generation, and never in a FIRST formation (there the peer's START is
+	 * the whole handshake).
+	 */
+	if (!vc->own_start_sent) {
+		const struct pe_channel *ch = pe_fsm_channel_at(f, vc->channel);
+
+		if (ch != NULL && ch->verifies > 1u)
+			(void)vc_send_start(f, vc, 0u);
+	}
 	if (vc_send_start(f, vc, 1u) != 0)
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
 }

@@ -47,7 +47,7 @@
 // runs qemu-wasm + two pcjs VAXen). Use k3s-worker, not a small dev host.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
-import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf }
+import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall }
   from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
@@ -122,25 +122,33 @@ async function reveal(page, who) {
   await sleep(REVEAL_MS);
 }
 
+// A STALL is not "the console moved while we revealed it" -- a booting guest
+// prints all the time, so that counted a healthy panel. It is: the panel showed
+// NOTHING NEW for a whole poll interval, and then revealing it produced output.
+// That signature is the page defect (rd vms-0bc) and nothing else.
 async function consoleOf(page, who, R) {
   const before = await rawConsoleOf(page, who);
   await reveal(page, who);
   const after = await rawConsoleOf(page, who);
-  if (R && after.length > before.length + 8) {
-    R.repaint_stalls[who] = (R.repaint_stalls[who] || 0) + 1;
+  if (R) {
+    if (isRepaintStall(R.lastSeen[who], before, after)) {
+      R.repaint_stalls[who] = (R.repaint_stalls[who] || 0) + 1;
+    }
+    R.lastSeen[who] = after;
   }
   return after.length >= before.length ? after : before;
 }
 
 // The transcripts live in the .console.log files; keeping them out of the JSON
 // keeps result.json readable.
-const asJson = (R) => JSON.stringify(R, (k, v) => (k === 'transcript' ? undefined : v), 1);
+const asJson = (R) => JSON.stringify(
+  R, (k, v) => (k === 'transcript' || k === 'lastSeen' ? undefined : v), 1);
 
 async function oneRun(spec, idx) {
   const dir = `${OUT}/${String(idx).padStart(2, '0')}-${spec.label}`;
   fs.mkdirSync(dir, { recursive: true });
   const R = { ...spec, order: spec.order.join(','), url: URL_, samples: [],
-              verdict: null, ...newObservations() };
+              verdict: null, lastSeen: {}, ...newObservations() };
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
   const ctx = await browser.newContext();                 // fresh profile, cold cache
   const page = await ctx.newPage();

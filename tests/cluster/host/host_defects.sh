@@ -714,6 +714,8 @@ the carry is intact across the rebind
 the send side CONTINUES -- the next origination is 3, as VAX1's 10249 became 10250
 the transaction id CARRIES: a re-established member does not renumber mid-conversation (oracle VAX1 ran txn 3 across it)
 two more sent, in flight
+and the dialogue is carried, never restarted
+dialogue carried across the move
 EOF
         ;;
         esac;;

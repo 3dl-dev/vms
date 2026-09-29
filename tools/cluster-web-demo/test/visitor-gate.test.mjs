@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import * as GATE from '../gate-eval.mjs';
 const {
   joinScrollback, observe, isCN3, verdictOf, newObservations, restartsIn, setOf, ADDED, MATRIX,
+  isRepaintStall,
 } = GATE;
 
 const CN3_LINES = (self, a, b) => [
@@ -190,4 +191,18 @@ test('an MSCP disk-client message is not a lost cluster connection', () => {
                       'enumerates none of that member\'s units, and the join goes on\n');
   assert.deepEqual(R.lost, {}, 'a benign join step must not read as a dropped circuit');
   assert.deepEqual(R.lost_unnamed, {});
+});
+
+test('a panel that keeps printing is not a repaint stall', () => {
+  // The first cut of this counter incremented whenever the console grew across
+  // the reveal, which a booting guest does constantly -- so it reported stalls
+  // on a perfectly live page and the number meant nothing.
+  const t1 = 'KA655-B V5.3, VMB 2.7\n';
+  const t2 = t1 + 'Performing normal system tests.\n';
+  const t3 = t2 + '%SYSINIT, waiting to form or join a VMScluster system\n';
+  assert.equal(isRepaintStall(t1, t2, t3), false, 'it moved on its own since the last poll');
+  assert.equal(isRepaintStall(undefined, t1, t2), false, 'the first sample cannot be a stall');
+  assert.equal(isRepaintStall(t1, t1, t1), false, 'stuck and still stuck is not a stall either');
+  assert.equal(isRepaintStall(t1, t1, t3), true,
+    'byte-identical for a whole poll, then output the moment it was revealed');
 });

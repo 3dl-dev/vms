@@ -1,0 +1,20 @@
+[08:32:05] === run 1/2: all-at-once (order A,B,C, gap 500ms, cpu x1) ===
+[08:32:10]   t=2s vis=visible drift=47ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[08:32:28]   t=20s vis=visible drift=47ms sca={"VAXC":1} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[08:32:46]   t=38s vis=visible drift=47ms sca={"VAXC":17} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[08:33:04]   t=56s vis=visible drift=47ms sca={"VAXC":480,"OVMXB":673} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[08:33:22]   t=74s vis=visible drift=47ms sca={"VAXC":1159,"OVMXB":1150,"OVMXA":758} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={}
+[08:33:26] --> all-at-once: CN=3
+[08:33:26] === run 2/2: page-order-throttled4 (order A,B,C, gap 5000ms, cpu x4) ===
+[08:33:45]   t=15s vis=visible drift=878ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[08:34:03]   t=34s vis=visible drift=878ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[08:34:21]   t=52s vis=visible drift=878ms sca={"VAXC":12} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[08:34:39]   t=70s vis=visible drift=878ms sca={"VAXC":472,"OVMXA":125,"OVMXB":639} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[08:34:57]   t=88s vis=visible drift=878ms sca={"VAXC":564,"OVMXA":203,"OVMXB":764} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[08:35:15]   t=106s vis=visible drift=878ms sca={"VAXC":1075,"OVMXA":806,"OVMXB":1071} added={"OVMXA":["0x7c3","0x7c5","0x7c4"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={}
+[08:35:19] --> page-order-throttled4: CN=3
+
+PASS  all-at-once              CN=3
+PASS  page-order-throttled4    CN=3
+
+VISITOR_GATE={"runs":2,"failed":0,"pass":true}

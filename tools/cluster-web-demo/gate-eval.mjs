@@ -110,6 +110,16 @@ export const isCN3 = (R) =>
   NODES.slice(0, 2).every((w) => WANT.every((id) => (R.added[w] || []).includes(id))) &&
   (R.vaxc_admitted || []).length >= 2;
 
+// Did revealing a panel expose the page defect in rd vms-0bc?
+//
+// Not "the console moved while we revealed it": a booting guest prints all the
+// time, and counting that called every healthy panel stalled. The signature is
+// that the panel showed NOTHING NEW for a whole poll interval -- the text is
+// byte-identical to the previous poll -- and then being scrolled into view
+// produced output.
+export const isRepaintStall = (lastSeen, before, after) =>
+  lastSeen !== undefined && before === lastSeen && after.length > before.length + 8;
+
 // A fresh, empty set of observations.
 export const newObservations = () => ({
   transcript: {}, restarts: {}, member: {}, added: {}, lost: {},

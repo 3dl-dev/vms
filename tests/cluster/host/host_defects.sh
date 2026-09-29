@@ -638,6 +638,8 @@ and so does the ack: this node really HAS taken 14811 from that system, and sayi
 ...which is the cell the connect data carries
 counted as CARRIED
 and NOT as a reset
+the transaction id CARRIES: a re-established member does not renumber mid-conversation (oracle VAX1 ran txn 3 across it)
+and so does the correlation token -- restarting it at 1 offers the peer a correlation it never issued, and the VAX bugchecked on it (arm K-10)
 and what this node told that system about itself moved with it: a re-established member does NOT re-introduce itself, and the VAX bugchecked when it did (arm F-4)
 counted as a reset
 EOF

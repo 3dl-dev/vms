@@ -1077,9 +1077,12 @@ static void test_reconnect_inside_the_window_carries_the_dialogue(void)
 	cnxman_csb_dialogue_sent(csb);
 	cnxman_csb_dialogue_heard(csb, 14811u);
 	ct_check_eq_u32(csb->cm_ack_msg, 14811u, "14811 taken from the peer");
-	/* ...and it has introduced itself on that connection (E73's mask). */
+	/* ...and it has introduced itself on that connection (E73's mask), and
+	 * is mid-transaction with a token the PEER issued. */
 	csb->cm_advert_conid = 0x4e620009u;
 	csb->cm_advert_sent = 0x03u;
+	csb->cm_txn = 0x2222u;
+	csb->cm_token = 0x8173u;
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
 
 	cnxman_csb_bind_reconnect(csb, 0x4e62000fu);
@@ -1096,6 +1099,14 @@ static void test_reconnect_inside_the_window_carries_the_dialogue(void)
 			"...which is the cell the connect data carries");
 	ct_check_eq_u32(csb->cm_dialogues_carried, 1u, "counted as CARRIED");
 	ct_check_eq_u32(csb->cm_dialogue_resets, 0u, "and NOT as a reset");
+	ct_check_eq_u32(csb->cm_txn, 0x2222u,
+			"the transaction id CARRIES: a re-established member "
+			"does not renumber mid-conversation (oracle VAX1 ran "
+			"txn 3 across it)");
+	ct_check_eq_u32(csb->cm_token, 0x8173u,
+			"and so does the correlation token -- restarting it at "
+			"1 offers the peer a correlation it never issued, and "
+			"the VAX bugchecked on it (arm K-10)");
 	ct_check_eq_u32(csb->cm_advert_conid, 0x4e62000fu,
 			"and what this node told that system about itself "
 			"moved with it: a re-established member does NOT "

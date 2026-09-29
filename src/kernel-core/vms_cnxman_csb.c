@@ -1429,8 +1429,25 @@ void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid)
 		return;
 	csb->cm_dialogue_conid = conid;
 	csb->cm_dialogues_carried++;
-	csb->cm_txn = csb_next_nonzero(csb->cm_txn);
-	csb->cm_token = 0u;
+	/*
+	 * THE TRANSACTION ID AND THE TOKEN CARRY TOO (rd vms-8c54).
+	 *
+	 * cnxman_csb_bind_connection() advances `cm_txn` and restarts
+	 * `cm_token` because E85 measured a FRESH connection opening at 1 --
+	 * and that is a fresh CONVERSATION, not a re-established one. The
+	 * oracle's re-established pair continued both: VAX1 opened txn 3 with
+	 * token 8173 and its next carried 8174, VAX2 ran 9529 -> 9530, and
+	 * every one of those numbers is the same magnitude as the tokens on the
+	 * wire BEFORE the loss. A member that restarts its token at 1
+	 * mid-conversation is offering the peer a correlation the peer never
+	 * issued.
+	 *
+	 * MEASURED, rig arm K-10: after the re-establishment the real VAX ran
+	 * cat-0x02 op-0x0d at send 279..283 with tokens 51957..51961 and its
+	 * ack STUCK at 101 -- it was discarding this node's 102 and 103 -- and
+	 * it bugchecked. So the two cells that scope a transaction move with the
+	 * dialogue they belong to, exactly as the send/ack pair does.
+	 */
 	/*
 	 * ...AND WHAT THIS NODE HAS TOLD THAT SYSTEM ABOUT ITSELF MOVES WITH
 	 * IT (rd vms-8c54). E73 scopes the cat-0x01 MODEL/PARAMS mask to a

@@ -184,10 +184,20 @@ fire grades `NOFAULT` and is excluded.
 | `m8` 5a12bbf4 | two console diagnostics | 4 | **0** | 3 |
 | `m9` 2041922d | the START goes out BEFORE the STACK | 8 | **0** | 4 |
 | `mA` b62f8c60 | two witnesses of a re-formation | 13 | **1** | 6 |
+| `mB` 25892f62 | the carried transaction id + token | 20 | **1** | 8 |
 
 **Before the ack cell: 6 bugchecks in 15 injected arms** — one crash every 2.5
-arms. **Since the re-introduction fix (`m7` onward): 2 in 45** — arms `K-10` and
-`M2-5`. So the crash is roughly **9× rarer and NOT closed.**
+arms, and 1 arm in 15 with everybody MEMBER afterwards. **Since the
+re-introduction fix (`m7` onward): 2 bugchecks in 58 injected arms, and 30 of
+those 58 fully converged.** So the crash is about **12× rarer** and convergence
+went from 7 % to 52 % — and **neither is the bar**, which is ≥20 consecutive arms
+with zero bugchecks and everybody MEMBER.
+
+`mB`'s 20-arm run is the fullest single-build measurement and is the one to
+compare against: 8 of 20 converged, 1 bugcheck. The carried transaction id and
+token did not move the crash rate (`mA` 1-in-13, `mB` 1-in-20), which is exactly
+what the DLM finding below predicts — by then the envelope is right and the
+remaining exposure is not the envelope.
 
 Both survivors of that reduction land in the same place, and it is no longer the
 reconnect plumbing. In each, the real VAX prints its own

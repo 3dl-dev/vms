@@ -153,7 +153,8 @@ csb-resume-ignores-peer-position
 pe-start-refusal-silent
 pe-reformation-stacks-before-it-starts
 pe-peer-start-keeps-dead-echo
-recnx-attempt-supersedes-in-flight"
+recnx-attempt-supersedes-in-flight
+csb-dropped-spare-reads-as-loss"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -625,6 +626,20 @@ EOF
         ;;
         esac;;
 
+    csb-dropped-spare-reads-as-loss)
+        case "$_f" in
+        facility)     echo "two VMS\$VAXcluster connections for one pair (rd vms-1f40: the peer disconnecting the redundant one of a crossing is not a loss of that system)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_second_closed() no longer recognises the pair's spare connection, so the peer disconnecting the redundant half of a crossing falls through to the ordinary remote-disconnect path: this node stops asking and the window ends in a removal while the connection the peer kept stands open. MEASURED consequence, rig arm Q-2: both ends re-dialled, both accepted, the real OpenVMS VAX V7.3 dropped the one it had initiated and kept this node's, and this node removed the VAX from its cluster.";;
+        require_fail) cat <<'EOF'
+the peer closing the spare is NOT a loss of the system
+the spare is gone
+EOF
+        ;;
+        esac;;
+
     pe-start-refusal-silent)
         case "$_f" in
         facility)     echo "saying WHY a circuit refused to form (rd vms-18a: counted-but-silent made a refused formation indistinguishable on a real console from one that was never asked)";;
@@ -1003,6 +1018,10 @@ apply_edit() {
     recnx-attempt-supersedes-in-flight)
         # `    csb->attempt_in_flight) {` is unique in this file.
         sed -i 's|    csb->attempt_in_flight) {|    0 \&\& csb->attempt_in_flight) { /* NEGCTL recnx-attempt-supersedes-in-flight */|' "$_file";;
+
+    csb-dropped-spare-reads-as-loss)
+        # `	if (csb->alt_conid == conid) {` is unique in this file.
+        sed -i 's|	if (csb->alt_conid == conid) {|	if (0 \&\& csb->alt_conid == conid) { /* NEGCTL csb-dropped-spare-reads-as-loss */|' "$_file";;
 
     pe-start-refusal-silent)
         # The CALL is unique and VANISHES when replaced, so the mutation is not

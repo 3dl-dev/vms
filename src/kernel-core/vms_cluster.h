@@ -465,6 +465,21 @@ struct vms_csb {
 	uint32_t attempts_held;
 
 	/*
+	 * ---- TWO CONNECTIONS FOR ONE PAIR (rd vms-1f40) ----
+	 * When both ends re-dial at once, each accepts the other's CONNECT and
+	 * the pair briefly holds two VMS$VAXcluster connections; the real VAX
+	 * then disconnects one (measured 4/4 on the stall rig: it kept the one
+	 * THIS node initiated). `attempt_conid` is this node's own outstanding
+	 * reconnect CONNECT, remembered even after an accept re-binds
+	 * `cdt_conid`; `alt_conid` is the pair's second OPEN connection. Both
+	 * are 0 when there is nothing to remember.
+	 */
+	uint32_t attempt_conid;
+	uint32_t alt_conid;
+	uint32_t second_conns;       /* times the pair held two at once */
+	uint32_t second_promotions;  /* the peer closed one; this block moved on */
+
+	/*
 	 * ---- the SYSAP dialogue counters (design sec 3.2.4 ruling E1) ----
 	 * This node's own body[0:8] state for the `VMS$VAXcluster` SYSAP
 	 * dialogue with THIS remote connection manager: the send/ack message

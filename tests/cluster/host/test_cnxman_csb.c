@@ -1444,6 +1444,98 @@ static void test_null_safety(void)
 	ct_check(cnxman_csb_is_member(NULL) == 0, "is_member(NULL) is 0");
 }
 
+/*
+ * rd vms-1f40: TWO CONNECTIONS FOR ONE PAIR, and the one the peer keeps.
+ *
+ * Rig arm Q-2, in order: this node's reconnect CONNECT went out on ...11; the
+ * real VAX's own CONNECT was accepted and opened on ...12 FIRST; then the VAX
+ * accepted ...11 too; then it DISCONNECTED ...12 -- the one it had initiated --
+ * and kept ...11. The block had bound ...12 last, read the drop as the peer
+ * hanging up, stopped asking and removed the VAX. 4 crossings of 4 on the rig
+ * went this way: the VAX keeps the connection THIS node initiated.
+ */
+static void test_two_connections_follow_the_one_the_peer_keeps(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-1f40: two connections for one pair\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(csb, 0x10u);
+	while (csb->cm_send_msg < 40u)
+		cnxman_csb_dialogue_sent(csb);
+
+	/* the break, and this node's own attempt */
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_RECONNECT;
+	cnxman_csb_bind_reconnect(csb, 0x11u);
+	cnxman_csb_note_attempt(csb, 0x11u);
+
+	/* the PEER's connect is accepted and opens first: it is the block's */
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_REACCEPT;
+	ct_check_eq_u32(cnxman_csb_second_open(csb, 0x12u, 0),
+			CNXMAN_CSB_CONN_BIND,
+			"a block not yet OPEN binds the first connection to open");
+	cnxman_csb_bind_reconnect(csb, 0x12u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+
+	/* ...then this node's own attempt opens */
+	ct_check_eq_u32(cnxman_csb_second_open(csb, 0x11u, 1),
+			CNXMAN_CSB_CONN_SECOND,
+			"its own attempt opening on an OPEN block is the pair's "
+			"SECOND connection, not a new block event");
+	ct_check_eq_u32(csb->cdt_conid, 0x11u,
+			"the block runs on the one THIS node initiated -- the one "
+			"the real VAX kept in 4 crossings of 4");
+	ct_check_eq_u32(csb->alt_conid, 0x12u, "the other is the spare");
+	ct_check_eq_u32(csb->cm_send_msg, 40u,
+			"and the dialogue is carried, never restarted");
+	ct_check_eq_u32(csb->second_conns, 1u, "counted");
+	ct_check(cnxman_csb_holds_conid(csb, 0x11u) &&
+		 cnxman_csb_holds_conid(csb, 0x12u),
+		 "traffic on EITHER belongs to this system");
+
+	/* the peer drops the redundant one: the pair stands */
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x12u, 1), 1u,
+			"the peer closing the spare is NOT a loss of the system");
+	ct_check_eq_u32(csb->alt_conid, 0u, "the spare is gone");
+	ct_check_eq_u32(csb->cdt_conid, 0x11u, "the kept one is still the block's");
+
+	/* ---- the other order: the peer keeps the one the block did NOT run on ---- */
+	csb->alt_conid = 0x13u;
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x11u, 1), 1u,
+			"the peer closing the one the block ran on, while the "
+			"pair holds another, is still NOT a loss");
+	ct_check_eq_u32(csb->cdt_conid, 0x13u, "the block moves to the one kept");
+	ct_check_eq_u32(csb->second_promotions, 1u, "and the move is counted");
+	ct_check_eq_u32(csb->cm_send_msg, 40u, "dialogue carried across the move");
+
+	/* ---- a lost path takes both; one connection alone is a real loss ---- */
+	csb->alt_conid = 0x14u;
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x13u, 0), 0u,
+			"a lost PATH is a loss: both rode the same circuit");
+	ct_check_eq_u32(csb->alt_conid, 0u, "and the spare goes with it");
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x13u, 1), 0u,
+			"the peer closing the ONLY connection is the ordinary "
+			"remote disconnect");
+
+	/* an extra attempt that fails while the block runs on another */
+	cnxman_csb_bind_reconnect(csb, 0x20u);
+	cnxman_csb_note_attempt(csb, 0x21u);
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x21u, 0), 1u,
+			"an attempt that failed while the block runs on another "
+			"connection is not the block's loss");
+	ct_check_eq_u32(csb->attempt_conid, 0u, "and is forgotten");
+
+	ct_check_eq_u32(cnxman_csb_second_open(NULL, 1u, 1),
+			CNXMAN_CSB_CONN_BIND, "NULL is safe");
+	ct_check_eq_u32(cnxman_csb_second_closed(NULL, 1u, 1), 0u, "NULL is safe");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
@@ -1465,6 +1557,7 @@ int main(void)
 	test_reconnect_dialogue_never_carries_the_old_ack();
 	test_reconnect_inside_the_window_carries_the_dialogue();
 	test_a_carried_dialogue_resumes_where_the_peer_got_to();
+	test_two_connections_follow_the_one_the_peer_keeps();
 	test_correlation_pair_is_maintained();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");

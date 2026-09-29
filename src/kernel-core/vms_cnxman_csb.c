@@ -1538,6 +1538,80 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 	csb->cm_token = 0u;
 }
 
+/* ==========================================================================
+ * Two connections for one pair (rd vms-1f40) -- contract in vms_cnxman_csb.h
+ * ========================================================================== */
+
+void cnxman_csb_note_attempt(struct vms_csb *csb, uint32_t conid)
+{
+	if (csb != NULL)
+		csb->attempt_conid = conid;
+}
+
+/* Is the block running on a live connection other than `conid`? Only OPEN
+ * says so: every other state either has none or is re-establishing one. */
+static int csb_open_elsewhere(const struct vms_csb *csb, uint32_t conid)
+{
+	return csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN &&
+	       csb->cdt_conid != 0u && csb->cdt_conid != conid;
+}
+
+enum cnxman_csb_conn cnxman_csb_second_open(struct vms_csb *csb,
+					    uint32_t conid, int ours)
+{
+	if (csb == NULL || conid == 0u)
+		return CNXMAN_CSB_CONN_BIND;
+	if (csb->attempt_conid == conid)
+		csb->attempt_conid = 0u;       /* the attempt has an outcome */
+	if (!csb_open_elsewhere(csb, conid))
+		return CNXMAN_CSB_CONN_BIND;
+
+	csb->second_conns++;
+	if (ours) {
+		/* Run on the one the real VAX keeps; the other is the spare. */
+		csb->alt_conid = csb->cdt_conid;
+		cnxman_csb_bind_reconnect(csb, conid);
+	} else {
+		csb->alt_conid = conid;
+	}
+	return CNXMAN_CSB_CONN_SECOND;
+}
+
+int cnxman_csb_second_closed(struct vms_csb *csb, uint32_t conid, int by_peer)
+{
+	if (csb == NULL || conid == 0u)
+		return 0;
+	if (csb->attempt_conid == conid && csb->cdt_conid != conid) {
+		csb->attempt_conid = 0u;       /* an extra attempt that failed */
+		return 1;
+	}
+	if (csb->alt_conid == conid) {
+		csb->alt_conid = 0u;           /* the redundant one went */
+		return 1;
+	}
+	if (csb->attempt_conid == conid)
+		csb->attempt_conid = 0u;       /* the attempt has an outcome */
+	if (csb->cdt_conid != conid || csb->alt_conid == 0u)
+		return 0;
+	if (!by_peer) {
+		/* A lost path takes both: they ride the same circuit. */
+		csb->alt_conid = 0u;
+		return 0;
+	}
+	/* The peer kept the other one. Move to it, dialogue carried. */
+	cnxman_csb_bind_reconnect(csb, csb->alt_conid);
+	csb->alt_conid = 0u;
+	csb->second_promotions++;
+	return 1;
+}
+
+int cnxman_csb_holds_conid(const struct vms_csb *csb, uint32_t conid)
+{
+	if (csb == NULL || conid == 0u || !csb->in_use)
+		return 0;
+	return csb->cdt_conid == conid || csb->alt_conid == conid;
+}
+
 /*
  * Is this block's dialogue state the dialogue of `conid`? An emitter that is
  * about to put a body on a connection asks this before stamping: a body stamped

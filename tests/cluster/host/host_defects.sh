@@ -587,8 +587,6 @@ EOF
         why)          echo "h_vc_rx_start()'s own-START is disarmed, so a re-forming circuit whose channel was ALREADY back answers the peer's START with a STACK and nothing else -- h_vc_own_start() cannot help, because the CHANNEL_UP it needs was spent before the START arrived. MEASURED consequence, rig arm D-5: the real OpenVMS VAX V7.3 discarded the late START, re-STARTed every 5 s for the rest of the run, and 20 s later each side removed the other. The FIRST-formation case is untouched (the same verifies>1 guard).";;
         require_fail) cat <<'EOF'
 ...and, because this is a RE-formation, answering it ALSO starts one from this side -- the frame the real VAX waits for and never got
-a second CHANNEL_UP does NOT start it again: E83's path case is untouched
-and CHANNEL_UP does not start a second one
 and it answered with TWO 0x41 frames, not one
 EOF
         ;;

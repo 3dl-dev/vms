@@ -186,11 +186,27 @@ fire grades `NOFAULT` and is excluded.
 | `mA` b62f8c60 | two witnesses of a re-formation | 13 | **1** | 6 |
 
 **Before the ack cell: 6 bugchecks in 15 injected arms** — one crash every 2.5
-arms. **Since the re-introduction fix (`m7` onward): 1 in 38.** That one is arm
-`K-10`, and its cause is identified from the oracle and fixed at the head of the
-branch (the carried dialogue must carry its transaction id and correlation
-token too — the oracle's re-established pair continued txn 3 / token 8173→8174
-where this executive restarted the token at 1); it is **not yet lab-verified**.
+arms. **Since the re-introduction fix (`m7` onward): 2 in 45** — arms `K-10` and
+`M2-5`. So the crash is roughly **9× rarer and NOT closed.**
+
+Both survivors of that reduction land in the same place, and it is no longer the
+reconnect plumbing. In each, the real VAX prints its own
+`%CNXMAN, re-established connection to node OVMXB` — the re-establishment
+*works* — and then dies inside the **DLM lock-directory rebuild** that follows
+it. `M2-5`'s last frames:
+
+```
+VAX  -> OVMXB  cat=02 op=0d send=280 ack=102 txn=14 tok=51957
+VAX  -> OVMXB  cat=81 op=0b send=281 ack=102 txn= 1 tok=    5
+VAX  -> OVMXB  cat=02 op=0d send=282 ack=102 txn=13 tok=51961
+OVMXB -> VAX   cat=82 op=0d send=104 ack=280 txn=14 tok=51957
+                                                   ... VAX last gasp
+```
+
+OVMX's envelope is now correct — it echoes txn 14 / token 51957 exactly and its
+send/ack continue — but the VAX has **three** transactions outstanding and OVMX
+answers **one**. That is tracked as its own item, with the oracle measurement to
+make first named on it.
 
 **What is NOT done.** The bar is ≥20 consecutive arms with everybody MEMBER
 afterwards. Convergence improved from 1-in-5 to 9-of-13 and is not there:

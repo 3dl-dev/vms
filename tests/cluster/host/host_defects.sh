@@ -160,7 +160,8 @@ join-connectivity-gate-disarmed
 join-unheard-gate-disarmed
 join-same-breath-gate-disarmed
 join-follow-csb-conn-disarmed
-join-member-count-to-foreign"
+join-member-count-to-foreign
+join-asks-a-system-in-no-cluster"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -673,7 +674,7 @@ EOF
         targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
         suites_red)   echo "test_cnxman_join";;
         isolation)    echo "isolated";;
-        why)          echo "join_admission_held() asks a member that has sent this node no PARAMS, so the join cannot know whether it is asking a member at all. MEASURED consequence, rig arm T-15: the request went to the real VAX before the VAX had said a word on that connection, and the VAX never answered it.";;
+        why)          echo "join_admission_held() no longer waits for the member being asked to send its own PARAMS; a member that has said nothing is treated as one that said 'no cluster'. MEASURED consequence, rig arm T-15: the join acted on the real VAX before the VAX had said a word on that connection, and the VAX never answered the request.";;
         require_fail) cat <<'EOF'
 ... held as UNHEARD
 a member that has sent no PARAMS is not asked
@@ -700,7 +701,6 @@ MODEL and PARAMS, and not op-0x02 with them
 and the identity records reached SCS this time
 held as the same breath
 op 0x02 is due, but never in the same breath as the identity records it follows (rd vms-e88)
-the identity records go out on the new connection at once
 EOF
         ;;
         esac;;
@@ -731,6 +731,25 @@ EOF
         require_fail) cat <<'EOF'
 a foreign connection manager still hears 0
 and nothing new goes to the foreign one
+EOF
+        ;;
+        esac;;
+
+    join-asks-a-system-in-no-cluster)
+        case "$_f" in
+        facility)     echo "no membership request to a system whose own PARAMS say it belongs to no cluster (rd vms-e88: trio B -- a real V7.3 joiner never asked a system that was itself still joining)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() asks the member it is driving through even when that member's PARAMS carried a member count of 0 -- a system that is joining too and cannot admit anybody. MEASURED consequence, rig arm E2-1 (the first build of this item): the joining OVMX node's first request went to the other OVMX node while it was still being admitted, went unanswered for five seconds, and admission waited for the re-issue.";;
+        require_fail) cat <<'EOF'
+... and not one request went out
+... as an exhausted round, the fact the founding election reads
+... said on the console
+every system in sight says no cluster: the attempt ends with nobody asked
+no request to a system that is itself joining, while another in sight has not yet said what it is
+once the other says it is a member, the request goes to it
+held as NO_MEMBER
 EOF
         ;;
         esac;;
@@ -1159,6 +1178,11 @@ apply_edit() {
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
         # replacement no longer matches the pattern, so it is not repeatable.
         sed -i 's|	if (csb == NULL \|\| !csb->peer_is_ours \|\| !join_node_already_member(j))|	if (csb == NULL \|\| !join_node_already_member(j)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
+
+    join-asks-a-system-in-no-cluster)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (csb->adv_valid \&\& !join_says_member(csb))|	if (0 \&\& csb->adv_valid \&\& !join_says_member(csb)) /* NEGCTL join-asks-a-system-in-no-cluster */|' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

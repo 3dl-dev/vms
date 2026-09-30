@@ -282,6 +282,10 @@ static void join_stopped(struct cnxman_join *j, enum cnxman_join_failure why,
 	j->admit_answered = 0u;
 	j->admit_target_acked = 0u;
 	j->admit_silent_beats = 0u;
+	j->admit_hold = (uint8_t)CNXMAN_JOIN_HOLD_NONE;
+	j->admit_hold_said = (uint8_t)CNXMAN_JOIN_HOLD_NONE;
+	j->admit_unheard_beats = 0u;
+	j->ident_ms_valid = 0u;
 	j->units_found = 0u;
 	vms_mscp_cl_fsm_init(&j->mscp);
 	join_goto(j, CNXMAN_JOIN_IDLE);
@@ -3375,6 +3379,9 @@ static void join_decline_target(struct cnxman_join *j)
 
 struct join_view {
 	uint32_t        members_connected; /* say "member" AND hold an OPEN conn */
+	uint32_t        unheard;           /* in sight (not the target), no PARAMS */
+	uint32_t        unreached;         /* say "member", not yet reachable,
+					    * and not asked this attempt */
 	uint16_t        max_advertised;    /* the largest count any system said  */
 	struct vms_csb *best;              /* highest of the connected, undeclined */
 	int32_t         best_slot;
@@ -3397,10 +3404,17 @@ static int join_has_connectivity(const struct cnxman_join *j,
 static void join_view_take(struct cnxman_join *j, struct join_view *v,
 			   struct vms_csb *c, uint32_t slot)
 {
+	if (!c->adv_valid && (int32_t)slot != j->target_csb)
+		v->unheard++;
 	if (c->adv_valid && c->adv_members > v->max_advertised)
 		v->max_advertised = c->adv_members;
-	if (!join_says_member(c) || !join_has_connectivity(j, c, slot))
+	if (!join_says_member(c))
 		return;
+	if (!join_has_connectivity(j, c, slot)) {
+		if (!join_slot_declined(j, slot))
+			v->unreached++;
+		return;
+	}
 	v->members_connected++;
 	if (join_slot_declined(j, slot) || !join_outranks(c, v->best))
 		return;
@@ -3471,6 +3485,9 @@ static const char *join_hold_line(uint8_t why)
 	if (why == (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD)
 		return "%CNXMAN, waiting for the cluster member to send its "
 		       "cluster parameters before asking for admission";
+	if (why == (uint8_t)CNXMAN_JOIN_HOLD_NO_MEMBER)
+		return "%CNXMAN, waiting for every system in sight to say "
+		       "whether it is a cluster member";
 	return NULL;   /* FRESH is a breath, not news */
 }
 
@@ -3481,6 +3498,8 @@ static int join_hold(struct cnxman_join *j, uint8_t why)
 
 	if (why == (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD)
 		j->holds_unheard++;
+	else if (why == (uint8_t)CNXMAN_JOIN_HOLD_NO_MEMBER)
+		j->holds_no_member++;
 	else if (why == (uint8_t)CNXMAN_JOIN_HOLD_CONNECTIVITY)
 		j->holds_connectivity++;
 	else
@@ -3490,6 +3509,46 @@ static int join_hold(struct cnxman_join *j, uint8_t why)
 		join_log(j, line);
 	if (line != NULL)
 		j->admit_hold_said = why;
+	return 1;
+}
+
+/*
+ * THE MEMBER TO BE ASKED SAYS IT BELONGS TO NO CLUSTER (its PARAMS carried a
+ * member count of 0), and no system in sight says it is a member. A real
+ * joiner does not ask such a system: in trio B the joiner held PARAMS from a
+ * system that was itself still joining and never sent it a request.
+ *
+ * While some system in sight has not yet said what it is, that is a wait (the
+ * UNHEARD hold, bounded as always). Once every one of them has said "no
+ * cluster", this attempt has found nobody to ask: it ends as E80's exhausted
+ * round does -- counted, a RECNXINTERVAL back-off, and the round the founding
+ * election (SS8b clause 2) reads -- without a request to a system that could
+ * not have admitted anybody.
+ */
+static int join_target_in_no_cluster(struct cnxman_join *j,
+				     const struct join_view *v)
+{
+	/* A member this attempt has not asked is in sight but not yet in reach:
+	 * that is the p. 7-37 wait, not an empty LAN. (Members already asked
+	 * and silent are E80's business: the round ends and a fresh one asks
+	 * them again.) */
+	if (v->unreached != 0u)
+		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_CONNECTIVITY);
+	if (v->unheard != 0u)
+		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_NO_MEMBER);
+	if (v->max_advertised != 0u) {
+		/* There are members, and every one this node reaches was asked
+		 * this attempt and said nothing: E80's exhausted round. */
+		join_attempt_exhausted(j);
+		return 1;
+	}
+	j->no_member_rounds++;
+	j->attempts_exhausted++;
+	join_backoff_start(j);
+	join_stopped(j, CNXMAN_JOIN_FAIL_UNANSWERED,
+		     "%CNXMAN, no system this node can reach belongs to a "
+		     "cluster: this node is NOT a cluster member, and will ask "
+		     "again");
 	return 1;
 }
 
@@ -3508,6 +3567,10 @@ static int join_admission_held(struct cnxman_join *j)
 		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_FRESH);
 	if (csb == NULL || !csb->adv_valid)
 		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD);
+	/* A target that TOLD us it is in no cluster (adv_valid is restated so
+	 * that this clause reads alone: it is about what the system said). */
+	if (csb->adv_valid && !join_says_member(csb))
+		return join_target_in_no_cluster(j, &v);
 	if (join_ident_fresh(j))
 		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_FRESH);
 	if ((uint32_t)v.max_advertised > v.members_connected)
@@ -3586,7 +3649,8 @@ static void join_admit_beat(struct cnxman_join *j)
 		j->admit_beats_held++;
 		return;
 	}
-	if (j->admit_hold == (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD &&
+	if ((j->admit_hold == (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD ||
+	     j->admit_hold == (uint8_t)CNXMAN_JOIN_HOLD_NO_MEMBER) &&
 	    !join_admit_request_outstanding(j)) {
 		join_unheard_beat(j);
 		return;

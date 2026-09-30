@@ -5848,6 +5848,101 @@ static void test_e88_a_member_advertises_its_count_to_ours_only(void)
 			"a fellow member is waiting on nobody's count");
 }
 
+
+/* Trio B, and stall-rig arm E2-1 of this item's own proof: the system the join
+ * is driving through says, in its own PARAMS, that it belongs to no cluster --
+ * it is joining too. A real joiner never asked such a system. */
+static void test_e88_a_system_in_no_cluster_is_not_asked(void)
+{
+	struct vms_csb *other, *member;
+	int round;
+
+	printf("\n-- rd vms-e88: a system that says it is in no cluster is not "
+	       "asked --\n");
+	for (round = 0; round < 2; round++) {
+		bed_init_order(OTHER_SYSID, 0u);
+		other = g.member_csb;
+		(void)cnxman_join_start(&g.j);
+		cnxman_join_dir_result(&g.j, OTHER_SYSID,
+				       cnxman_join_name_mscp_disk, 0);
+		cnxman_join_dir_result(&g.j, OTHER_SYSID,
+				       cnxman_join_name_vaxcluster, 1);
+		cnxman_join_opened(&g.j, CM_CONID);
+		other->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+		(void)join_feed_from(other, OTHER_CSID,
+				     mk_member_params(0u, 0u, 0x0002));
+		member = cnxman_club_alloc_csb(&g.cl.club, MEMBER_SYSID, 1);
+		cnxman_csb_set_csid(member, MEMBER_CSID);
+		bed_peer_connected(member, E88_MEMBER_CONID);
+
+		/* negctl: join-asks-a-system-in-no-cluster */
+		bed_beats(3u);
+		if (round == 0) {
+			ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG,
+						     VMS_CM_OP_CONFIG), 0u,
+					"no request to a system that is itself "
+					"joining, while another in sight has not "
+					"yet said what it is");
+			ct_check_eq_u32(g.j.admit_hold,
+					CNXMAN_JOIN_HOLD_NO_MEMBER,
+					"held as NO_MEMBER");
+			(void)join_feed_from(member, MEMBER_CSID,
+					     mk_member_params(1u, 1u, 0x0002));
+			bed_beats(3u);
+			ct_check_eq_u32(n_sent_on(E88_MEMBER_CONID) > 0u &&
+					sent_on_is(E88_MEMBER_CONID,
+						   n_sent_on(E88_MEMBER_CONID) - 1u,
+						   VMS_CM_CAT_CONFIG,
+						   VMS_CM_OP_CONFIG), 1u,
+					"once the other says it is a member, the "
+					"request goes to it");
+			ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG,
+						     VMS_CM_OP_CONFIG), 1u,
+					"and the joining system never got one");
+		} else {
+			(void)join_feed_from(member, MEMBER_CSID,
+					     mk_member_params(1u, 0u, 0x0002));
+			bed_beats(3u);
+			ct_check_eq_u32(g.j.no_member_rounds, 1u,
+					"every system in sight says no cluster: "
+					"the attempt ends with nobody asked");
+			ct_check_eq_u32(g.j.attempts_exhausted, 1u,
+					"... as an exhausted round, the fact the "
+					"founding election reads");
+			ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG,
+						     VMS_CM_OP_CONFIG), 0u,
+					"... and not one request went out");
+			ct_check(bed_logged("no system this node can reach "
+					    "belongs to a cluster"),
+				 "... said on the console");
+		}
+	}
+}
+
+
+/* The member asked says nothing (E80 declines it); the only other system in
+ * reach is itself joining. The round must END -- counted, backed off, and
+ * asked again fresh -- never park on a system that cannot admit anybody. */
+static void test_e88_a_declined_member_and_a_joiner_end_the_round(void)
+{
+	struct vms_csb *other;
+
+	printf("\n-- rd vms-e88: a silent member and a joiner end the round --\n");
+	other = bed_admit_with_a_second_member();
+	if (other == NULL)
+		return;
+	(void)join_feed_from(other, OTHER_CSID, mk_member_params(0u, 0u, 0x0001));
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);
+	ct_check_eq_u32(g.j.requests_unanswered, 1u,
+			"the silent member is declined (E80)");
+	ct_check_eq_u32(g.j.attempts_exhausted, 1u,
+			"and with only a joining system left, the round ends");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 1u,
+			"the joining system is never asked");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_IDLE,
+			"the join is back in IDLE to ask again, not parked");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -5937,6 +6032,8 @@ int main(void)
 	test_e88_never_in_the_same_breath();
 	test_e88_asks_on_the_connection_the_member_kept();
 	test_e88_a_member_advertises_its_count_to_ours_only();
+	test_e88_a_system_in_no_cluster_is_not_asked();
+	test_e88_a_declined_member_and_a_joiner_end_the_round();
 
 	return ct_summary("test_cnxman_join");
 }

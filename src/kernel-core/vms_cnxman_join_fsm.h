@@ -587,6 +587,10 @@ struct cnxman_join_ops {
  *                   the same breath: op-0x02 is never bundled with them (spec
  *                   sec 4(o): "sending 0x02 inside the initial burst leaves the
  *                   peer silent"), or the join has just moved connection.
+ *   NO_MEMBER    -- the member being asked says, in its own PARAMS, that it
+ *                   belongs to no cluster, and some other system in sight has
+ *                   not yet said what it is (e88 trio B: a real joiner never
+ *                   asked a system that was itself still joining).
  *   CONNECTIVITY -- the members advertise more members than this node has
  *                   connectivity with (Davis p. 7-37; measured on V7.3, trio
  *                   C3: a joiner that could reach one of two members asked
@@ -596,6 +600,7 @@ struct cnxman_join_ops {
 #define CNXMAN_JOIN_HOLD_UNHEARD       1u
 #define CNXMAN_JOIN_HOLD_FRESH         2u
 #define CNXMAN_JOIN_HOLD_CONNECTIVITY  3u
+#define CNXMAN_JOIN_HOLD_NO_MEMBER     4u
 
 /*
  * THE DECLINED SET (E80): one bit per CLUB slot, so "which members has THIS
@@ -896,9 +901,14 @@ struct cnxman_join {
 	uint32_t holds_unheard;
 	uint32_t holds_fresh;
 	uint32_t holds_connectivity;
+	uint32_t holds_no_member;
 	uint32_t retargets;
 	uint32_t conn_follows;
 	uint32_t unheard_declines;
+	/* ...and attempts that ended because every system in sight said, in its
+	 * own PARAMS, that it belongs to no cluster (also counted in
+	 * attempts_exhausted, which the founding election reads). */
+	uint32_t no_member_rounds;
 	uint32_t attempts_exhausted;
 	uint32_t starts_backed_off;
 	uint32_t reissue_targets_absent;

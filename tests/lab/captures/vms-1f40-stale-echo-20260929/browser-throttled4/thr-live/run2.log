@@ -1,0 +1,13 @@
+[00:37:07] === run 1/1: page-order-throttled4 (order A,B,C, gap 5000ms, cpu x4) ===
+[00:37:28]   t=16s vis=visible drift=1098ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[00:37:46]   t=35s vis=visible drift=1261ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[00:38:04]   t=53s vis=visible drift=1261ms sca={"VAXC":7} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[00:38:22]   t=71s vis=visible drift=1261ms sca={"VAXC":61,"OVMXB":57} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[00:38:40]   t=89s vis=visible drift=1261ms sca={"VAXC":581,"OVMXB":830} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[00:38:58]   t=107s vis=visible drift=1261ms sca={"VAXC":667,"OVMXB":928} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"OVMXB":1}
+[00:39:16]   t=125s vis=visible drift=1261ms sca={"VAXC":1314,"OVMXB":1339,"OVMXA":768} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={"OVMXB":1}
+[00:39:20] --> page-order-throttled4: CN=3
+
+PASS  page-order-throttled4    CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}

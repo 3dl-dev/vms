@@ -1,0 +1,14 @@
+[00:05:28] === run 1/1: all-at-once (order A,B,C, gap 500ms, cpu x1) ===
+[00:05:34]   t=2s vis=visible drift=14ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[00:05:52]   t=20s vis=visible drift=24ms sca={"VAXC":2} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[00:06:10]   t=38s vis=visible drift=24ms sca={"VAXC":18} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[00:06:28]   t=56s vis=visible drift=24ms sca={"VAXC":78,"OVMXB":59} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[00:06:46]   t=74s vis=visible drift=24ms sca={"VAXC":586,"OVMXB":828} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[00:07:04]   t=92s vis=visible drift=24ms sca={"VAXC":671,"OVMXB":927} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[00:07:22]   t=110s vis=visible drift=24ms sca={"VAXC":777,"OVMXB":1071,"OVMXA":100} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={}
+[00:07:40]   t=128s vis=visible drift=24ms sca={"VAXC":1418,"OVMXB":1459,"OVMXA":820} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={}
+[00:07:44] --> all-at-once: CN=3
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}

@@ -81,7 +81,17 @@ every per-arm fact below from `runs/<arm>/` on the rig.
 | M2 (before) | `25892f62` | 20 | 8 | 12 | 1 | 1 (M2-5) | 11 of 12 FAILs |
 | P | `40399422` echo fix | 16 | 14 | 2 (P-9, P-15, both 20 s) | 0 | 0 | 0 |
 | S | `ae3bf895` + reconnect + two-connection | 21 | 20 | 1 (S-17) | 3 | 0 | 0 |
-| T | `b8fb125c` + accepted-connection attribution | T_RESULTS |
+| T | `b8fb125c` + accepted-connection attribution | 20 | **20 in a row** (T-1..T-14, T-16..T-21) | 0 | 1 (T-15, rd vms-e88) | 0 | 0 failing (T-9: 2 frames, recovered) |
+
+**THE BAR IS MET on T**: 20 consecutive injected arms across 6/10/13/14/16/20 s,
+zero VAX bugchecks, and all three MEMBER -- both OVMX nodes' own SHOW CLUSTER at
+3/3 (`grade3.sh`) and the real VAX's console carrying no removal and no bugcheck
+(`T-census.txt`, read independently of the grader). T was stopped after 21 graded
+arms once the bar was met, to free the node for the browser runs. T-9 stamped the
+old echo on 2 frames and still passed: OVMXB took the VAX's START while its
+channel still held the pre-stall advertisement, the VAX's fresh advertisement then
+reset the channel, and the circuit re-formed at the new number 0.2 s later -- the
+reset path doing its job, not the failure this item closed.
 
 (Q and R were started on intermediate builds and stopped after 3 arms each when a
 newer fix landed; `loop-Q.log` / `loop-R.log` on the rig say so. S-4 graded FAIL
@@ -149,4 +159,31 @@ encodes a mechanism the oracle did not show.
 
 ## The browser failures were not restarts
 
-BROWSER_PLACEHOLDER
+The V0.7-3 deploy read its failures as "emulated VAX halts -> reboot -> the cluster
+refuses the new incarnation". There were no reboots: the visitor gate's
+scrollback stitch re-appended the whole screen on every poll (pcjs paints its
+cursor into the screen text), so each copy re-read the power-on banner as a
+restart. Fixed in `tools/cluster-web-demo/gate-eval.mjs` (`681cb70d`, unit-tested
+on the real shapes); replayed through the fix, every node in all three failing
+V0.7-3 runs had ZERO restarts -- see the correction appended to
+`../vms-deploy-v073-20260929/README.md`. The quick-reboot oracle the halt reading
+called for was therefore not the question; the real all-at-once shape is an
+initial-join failure (rd vms-e88).
+
+**Branch bundle vs the live V0.7-3 page, same pod, same gate** (`browser-*/`). The
+branch bundle is this PR's own build (`b8fb125c`) for both OVMX nodes -- Node A's
+initramfs, sysdisk and kernel from build-boot-artifacts, Node B's slim disk from
+`run-boot.sh sysboot-single` at the same SHA -- with the pinned real-V7.3 Node C,
+served from two localhost origins exactly as the live page splits
+openvmx.3dl.dev / vax.3dl.network, no query parameters, cold profile per run:
+
+| case | branch `b8fb125c` | live V0.7-3 |
+|---|---|---|
+| all-at-once (x1 CPU) | **5/5 CN=3** (~2 min 15 s each) | 5/5 CN=3 |
+| page-order-throttled4 (x4 CPU) | **3/3 CN=3** | 2/3 -- run1: OVMXA put no SCA frame on the hub in 20 min |
+
+No restarts, no bugchecks, no losses, no OVMX founding on any branch run. HONEST
+READING: this pod does not reproduce the V0.7-3 all-at-once failure even against
+the live page, so these runs show NO REGRESSION under visitor conditions, not an
+improvement; the stall rig above is where the improvement is measured.
+

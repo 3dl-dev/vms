@@ -3372,9 +3372,11 @@ static void join_decline_target(struct cnxman_join *j)
  * what each system advertised (cnxman_csb_set_advert, from its own bytes), the
  * CSB ladder's OPEN, the Con.ID the CSB records, and this join's own record of
  * what it just sent. Nothing is asserted about anybody. A system that has sent
- * no PARAMS is never counted as a member -- and never as a non-member either:
- * a cluster in which nobody says anything leaves the rank and the count out of
- * it, which is exactly the join this FSM ran before this item.
+ * no PARAMS is counted neither as a member nor as a non-member: it is WAITED
+ * for, as long as a silent member is (E80's window), and then given up on the
+ * same way. A system that says it is in no cluster is never asked; when nobody
+ * in sight is a member the attempt ends counted -- the round the founding
+ * election reads -- with no request made to anybody.
  * ========================================================================== */
 
 struct join_view {

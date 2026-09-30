@@ -1381,6 +1381,7 @@ static int join_open(struct cnxman_join *j, const uint8_t *local_name,
 /* Forward: the burst the moment the CM connection is OPEN, whichever side
  * opened it (defined with the other step-5 handlers, below). */
 static void join_cm_advertise(struct cnxman_join *j);
+static int join_drive_to_member(struct cnxman_join *j);
 
 /* Forward: reconcile this join with what the executive records on the target
  * CSB -- the Con.ID it holds and whether that connection is OPEN (defined with
@@ -2891,6 +2892,8 @@ static enum cnxman_join_rx join_h_watch_lookup(struct cnxman_join *j,
 					       const struct join_ev *e)
 {
 	(void)e;
+	if (join_drive_to_member(j))
+		return CNXMAN_JOIN_RX_CONSUMED;
 	j->slow_steps++;
 	if (j->slow_steps == 1u)
 		join_log(j, "%CNXMAN, waiting for a directory answer from the "
@@ -3046,6 +3049,8 @@ static void join_vc_beat(struct cnxman_join *j)
 static enum cnxman_join_rx join_h_watch_vc(struct cnxman_join *j,
 					   const struct join_ev *e)
 {
+	if (join_drive_to_member(j))
+		return CNXMAN_JOIN_RX_CONSUMED;
 	join_vc_beat(j);
 	if (j->state != (uint8_t)CNXMAN_JOIN_VC_CONNECT)
 		return CNXMAN_JOIN_RX_CONSUMED;   /* the beat moved the drive */
@@ -3501,6 +3506,58 @@ static int join_follow_csb_conn(struct cnxman_join *j, struct vms_csb *csb)
 	join_cm_take(j, (vms_conid_t)csb->cdt_conid);
 	j->cm_open = 1u;
 	j->conn_follows++;
+	return 1;
+}
+
+/*
+ * A SYSTEM THAT IS NOT A MEMBER IS NOT DRIVEN THROUGH ONCE ONE THAT IS, IS IN
+ * REACH (rd vms-e88, stall-rig arm P-2).
+ *
+ * At CLUSTER_START nobody has said what it is, so the drive (directory round,
+ * disk-client connect, VMS$VAXcluster connect) starts toward the highest
+ * SCSSYSTEMID in sight -- which can be another system that is itself joining.
+ * join_admission_held() moves an [ADMIT] join to the member the moment that
+ * member's PARAMS says it is one; this is the same move made EARLIER, for a
+ * drive that has not reached [ADMIT] because the system it is driving through
+ * is not answering a VMS$VAXcluster connect (P-2: the other OVMX node was
+ * being admitted itself, never accepted, and the joiner sat in [VC CONNECT]
+ * for the rest of the run beside a real VAX that had dialled it, said it was a
+ * member, and was never asked). A real joiner asks only a system that says it
+ * is a member (trios B, C3).
+ *
+ * Only when the system being driven through has NOT said it is a member, and
+ * a system that HAS is connected (the CSB ladder's OPEN) and so outranks it
+ * (join_outranks). Both reads are executive state. This node's own identity
+ * goes out on that member's connection first if it has not already (the
+ * per-connection record keeps it from going twice), and the request follows
+ * through join_walk_complete() -> join_send_config(), so every admission hold
+ * still applies. Nonzero when the drive moved.
+ */
+static int join_drive_to_member(struct cnxman_join *j)
+{
+	struct vms_csb *target = join_target_csb(j);
+	struct join_view v;
+
+	if (j->cl == NULL || join_node_already_member(j) ||
+	    (target != NULL && join_says_member(target)))
+		return 0;
+	join_survey(j, &v);
+	if (v.best == NULL || v.best_slot == j->target_csb ||
+	    !join_says_member(v.best))
+		return 0;
+	join_retarget(j, v.best, v.best_slot);
+	j->drive_retargets++;
+	join_log(j, "%CNXMAN, a system that says it is a cluster member is "
+		    "connected: asking it, not the system this join was "
+		    "driving through");
+	join_goto(j, CNXMAN_JOIN_ADVERTISE);
+	join_send_model(j);
+	if (j->state != (uint8_t)CNXMAN_JOIN_ADVERTISE)
+		return 1;
+	join_send_params(j);
+	if (j->state != (uint8_t)CNXMAN_JOIN_ADVERTISE)
+		return 1;
+	join_walk_complete(j);
 	return 1;
 }
 

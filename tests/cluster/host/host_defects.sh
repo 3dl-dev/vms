@@ -164,7 +164,8 @@ join-member-count-to-foreign
 join-asks-a-system-in-no-cluster
 join-does-not-reach-ours
 coord-genesis-ignores-says-member
-join-no-member-backoff-not-cut"
+join-no-member-backoff-not-cut
+join-drive-stays-on-a-joiner"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -646,6 +647,10 @@ EOF
         why)          echo "join_outranks() answers yes to every later candidate, so the member asked is the last askable block in CLUB (discovery) order -- the p. 7-38 queue-tail rule this code ran before rd vms-e88. MEASURED consequence, rig arm S-1: the joining OVMX node discovered the other OVMX node 2 s before the real VAX, asked it -- an outranked member that discards the request by design -- and was never admitted.";;
         require_fail) cat <<'EOF'
 trio A/A2 order: the higher member is asked though the lower was discovered last (nearest the CLUB tail)
+nobody has spoken: the drive starts toward the highest
+a connected system that has said nothing moves nothing
+its PARAMS says it is a member: the drive moves to it
+... on that system
 EOF
         ;;
         esac;;
@@ -804,6 +809,24 @@ EOF
         require_fail) cat <<'EOF'
 a member appearing: the next start runs, a second later, not twenty
 ... counted as a back-off cut short
+EOF
+        ;;
+        esac;;
+
+    join-drive-stays-on-a-joiner)
+        case "$_f" in
+        facility)     echo "a join driving toward a system that is not a member moves, before ADMIT, to a connected system that says it is one (rd vms-e88)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_drive_to_member() never moves the drive, so a join that started toward another joining system waits in VC CONNECT for a connect that system never accepts. MEASURED consequence, stall-rig arm P-2 of this item: the joiner drove toward the other OVMX node (the highest SCSSYSTEMID at CLUSTER_START) while it was being admitted, and sat in VC CONNECT for the rest of the run beside a real VAX that had dialled it and said it was a member.";;
+        require_fail) cat <<'EOF'
+its PARAMS says it is a member: the drive moves to it
+... that system
+... straight to ADMIT, where every hold still applies
+the request goes to the member, on its own connection
+... after this node's own identity on that connection
+once, and the joiner never got one
 EOF
         ;;
         esac;;
@@ -1252,6 +1275,11 @@ apply_edit() {
         # rd vms-e88: the guard is unique in vms_cnxman_join_fsm.c and the
         # replacement no longer matches the pattern, so it is not repeatable.
         sed -i 's|	if (j->backoff_no_member \&\& j->cl != NULL \&\& join_member_in_sight(j)) {|	if (0 \&\& j->backoff_no_member \&\& j->cl != NULL \&\& join_member_in_sight(j)) { /* NEGCTL join-no-member-backoff-not-cut */|' "$_file";;
+
+    join-drive-stays-on-a-joiner)
+        # rd vms-e88: the guard is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (v.best == NULL \|\| v.best_slot == j->target_csb \|\||	if (1 \|\| v.best == NULL \|\| v.best_slot == j->target_csb \|\| /* NEGCTL join-drive-stays-on-a-joiner */|' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

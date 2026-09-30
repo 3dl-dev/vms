@@ -5984,6 +5984,76 @@ static void test_e88_a_declined_member_and_a_joiner_end_the_round(void)
 
 
 /*
+ * Stall-rig arm P-2 of this item. At CLUSTER_START nobody has said anything,
+ * so the drive starts toward the highest SCSSYSTEMID in sight -- here another
+ * OVMX system that is itself being admitted, and that never accepts this
+ * node's VMS$VAXcluster connect. Meanwhile the real VAX dials this node and
+ * says, in its PARAMS, that it is a member. A real joiner asks the system
+ * that says it is a member; this one sat in [VC CONNECT] toward the joiner
+ * for the rest of the run.
+ */
+static void test_e88_a_drive_leaves_a_joiner_for_a_connected_member(void)
+{
+	struct vms_csb *joiner, *member;
+	uint32_t n;
+
+	printf("\n-- rd vms-e88: the drive leaves a system in no cluster for a "
+	       "connected member --\n");
+	bed_init_order(MEMBER_SYSID, OTHER_SYSID);
+	joiner = cnxman_club_find_sysid(&g.cl.club, MEMBER_SYSID);
+	member = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	joiner->peer_is_ours = 1u;
+	(void)cnxman_join_start(&g.j);
+	ct_check(g.j.target_sysid == MEMBER_SYSID,
+		 "nobody has spoken: the drive starts toward the highest");
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk, 0);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster, 1);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"... and waits in VC CONNECT for a connect never "
+			"accepted");
+
+	bed_peer_connected(member, E88_OTHER_CONID);   /* the VAX dials us */
+	bed_beats(2u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"a connected system that has said nothing moves nothing");
+
+	/* negctl: join-drive-stays-on-a-joiner */
+	(void)join_feed_from(member, OTHER_CSID, mk_member_params(1u, 1u, 0x0001));
+	bed_beats(1u);
+	ct_check_eq_u32(g.j.drive_retargets, 1u,
+			"its PARAMS says it is a member: the drive moves to it");
+	ct_check(g.j.target_sysid == OTHER_SYSID, "... that system");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"... straight to ADMIT, where every hold still applies");
+	bed_beats(3u);
+	n = n_sent_on(E88_OTHER_CONID);
+	ct_check(n > 0u && sent_on_is(E88_OTHER_CONID, n - 1u,
+				      VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG),
+		 "the request goes to the member, on its own connection");
+	ct_check(n >= 3u && sent_on_is(E88_OTHER_CONID, 0u, VMS_CM_CAT_CONFIG,
+				       VMS_CM_OP_MODEL),
+		 "... after this node's own identity on that connection");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 1u,
+			"once, and the joiner never got one");
+
+	/* Control: a target that says it is a member is never left. */
+	bed_init_order(MEMBER_SYSID, OTHER_SYSID);
+	joiner = cnxman_club_find_sysid(&g.cl.club, MEMBER_SYSID);
+	member = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk, 0);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster, 1);
+	cnxman_csb_set_advert(joiner, 2u);
+	bed_peer_connected(member, E88_OTHER_CONID);
+	(void)join_feed_from(member, OTHER_CSID, mk_member_params(1u, 2u, 0x0001));
+	bed_beats(2u);
+	ct_check_eq_u32(g.j.drive_retargets, 0u,
+			"a drive toward a system that says it is a member stays");
+	ct_check(g.j.target_sysid == MEMBER_SYSID, "... on that system");
+}
+
+
+/*
  * Stall-rig arm M-8 of this item: the joiner drives through the real VAX,
  * which says the cluster has two members; the other member is an OVMX node
  * that nobody has connected -- neither is the other's target, and an OVMX
@@ -6136,6 +6206,7 @@ int main(void)
 	test_e88_a_system_in_no_cluster_is_not_asked();
 	test_e88_a_declined_member_and_a_joiner_end_the_round();
 	test_e88_the_joiner_reaches_a_member_of_its_own_kind();
+	test_e88_a_drive_leaves_a_joiner_for_a_connected_member();
 
 	return ct_summary("test_cnxman_join");
 }

@@ -918,6 +918,9 @@ struct cnxman_join {
 	uint32_t ours_dialled;
 	/* back-offs ended early because a system said it is a member */
 	uint32_t backoffs_cut;
+	/* A drive toward a system that is not a member, moved before [ADMIT]
+	 * to a connected one that says it is (rd vms-e88, rig arm P-2). */
+	uint32_t drive_retargets;
 	uint32_t attempts_exhausted;
 	uint32_t starts_backed_off;
 	uint32_t reissue_targets_absent;

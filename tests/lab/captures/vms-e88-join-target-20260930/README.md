@@ -109,6 +109,18 @@ driving through. It went unanswered for 5 s and the re-issue to the VAX admitted
 it. Trio B is exactly this position and the real joiner asked nobody; the no-cluster
 rule above is the result.
 
+## Later rig arms, and what each one added
+
+Each was a FAIL/NOFAULT arm on the stall rig (`/lab/run-e88`, a private copy of
+`run-s8` on its own bridge), decoded from its consoles and capture before the
+next change:
+
+| arm | build | shape | change |
+|---|---|---|---|
+| M-8 | `85fc56c8` | the joiner held CONNECTIVITY forever: the VAX said "2 members", the other member was an OVMX node, and nobody connected the two OVMX nodes (neither was the other's target; an OVMX member dials nobody) | `join_reach_ours`: while held for CONNECTIVITY the joiner dials a NEW system running this implementation it holds no connection to (a real joiner dials the members it discovers, C3). A foreign system is never dialled this way -- a real VAX dials a joiner itself. |
+| M-9 (and T-15 again) | `85fc56c8` | after crossing connects the request followed the CSB onto the VAX-kept connection, but the join's own connect had never been recorded as this node's attempt, so the crossing resolved onto the wrong one | `cnxman_jop_connect` records its Con.ID with `cnxman_csb_note_attempt` -- the join's connect IS this node's attempt |
+| N-3 | `6df60e16` | the joiner found only the other joining OVMX node (the VAX's PARAMS not yet in), ended the round with nobody asked and backed off RECNXINTERVAL; during those 20 s the other OVMX node -- beside a VAX that HAD said in its PARAMS that it was a member -- founded a second cluster | the founding election's "peer in a cluster" clause also reads the member count a system advertised (`coord_peer_says_member`); a back-off that followed a no-member round ends as soon as some system says it is a member (`backoffs_cut`) -- a round of SILENT members is still waited out in full (E80) |
+
 ## Files
 
 * `e88-{A,A2,B,C3}-20260930.pcap` — the trimmed captures.

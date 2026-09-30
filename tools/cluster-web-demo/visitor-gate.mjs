@@ -41,13 +41,16 @@
 //   node visitor-gate.mjs                      # the full matrix
 //   RUNS=1 node visitor-gate.mjs               # first case only (smoke)
 //   CASE=c-first-legacy node visitor-gate.mjs  # one named case
+//   REVEAL=1            node visitor-gate.mjs  # scroll panels in before reading
+//                                              # (diagnosing rd vms-0bc only:
+//                                              #  it starves node A)
 //   DEMO_URL=... OUT_DIR=... node visitor-gate.mjs
 //
 // Needs: playwright, and a host that can carry three emulators (the browser
 // runs qemu-wasm + two pcjs VAXen). Use k3s-worker, not a small dev host.
 import { chromium } from 'playwright';
 import fs from 'node:fs';
-import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall }
+import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal }
   from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
@@ -68,6 +71,9 @@ const FREEZE_MS = +(process.env.FREEZE_MS || 0);
 const FREEZE_AT_MS = +(process.env.FREEZE_AT_MS || 60000);
 // How long to let a revealed panel catch up before reading it (rd vms-0bc).
 const REVEAL_MS = +(process.env.REVEAL_MS || 1500);
+// Scrolling a panel into view before reading it is OPT-IN (REVEAL=1) -- see
+// wantsReveal() in gate-eval.mjs for what it cost when it was not.
+const REVEAL = wantsReveal(process.env);
 
 // Injected before any page script: let the page report its own main-thread
 // health. A starved or throttled document shows up here as a large drift, which
@@ -113,6 +119,7 @@ async function rawConsoleOf(page, who) {
 // before reading it, and COUNT the times that was what made it move: that
 // count is the page defect, measured, not a thing the gate hides.
 async function reveal(page, who) {
+  if (!REVEAL) return;
   const key = who === 'OVMXB' ? '0B' : who === 'VAXC' ? '0C' : null;
   if (!key) return;                                  // node A's console is a JS string
   await page.evaluate((k) => {

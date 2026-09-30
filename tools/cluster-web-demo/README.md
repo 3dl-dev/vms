@@ -85,7 +85,15 @@ way a visitor does and nothing else: no query parameters, a fresh profile and co
 DEMO_URL=http://localhost:8110/index.html OUT_DIR=/out/gate node visitor-gate.mjs
 CASE=c-first-legacy node visitor-gate.mjs        # re-run one row of the matrix
 FREEZE_MS=45000     node visitor-gate.mjs        # suspend the tab mid-formation (rd vms-8c54)
+REVEAL=1            node visitor-gate.mjs        # scroll each panel in before reading it
 ```
+
+`REVEAL` is **off by default and must stay off while grading.** It scrolled three canvas-heavy
+cross-origin iframes into view every 15 s — which existed because an offscreen panel used to stop
+repainting (rd vms-0bc, since fixed in the embed) — and that starved Node A's qemu-wasm worker badly
+enough to fail the run: measured on the live V0.7-4 page, same pod, same hour, **6 of 12 runs failed
+with `no SCA frames from OVMXA` with it on, and 6 of 6 passed with it off**. Turn it on only to
+diagnose a repaint regression.
 
 The matrix varies the two things the old grader assumed away — **click order and speed** — plus CPU
 throttling, because every inter-node frame crosses four main threads (node worker → node iframe → the

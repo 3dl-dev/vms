@@ -153,6 +153,19 @@ export const isCN3 = (R) =>
 export const isRepaintStall = (lastSeen, before, after) =>
   lastSeen !== undefined && before === lastSeen && after.length > before.length + 8;
 
+// Should the gate scroll a panel into view before reading it?
+//
+// It did, unconditionally, because an offscreen panel used to stop repainting
+// (rd vms-0bc). The embed now repaints on a timer, so the scrolling buys
+// nothing -- and it COSTS: scrolling three canvas-heavy cross-origin iframes
+// into view every 15s starved node A's qemu-wasm worker badly enough to fail
+// the run. MEASURED on the live V0.7-4 page, same pod, same hour: 6 of 12 runs
+// failed with 'no SCA frames from OVMXA' with the scrolling on, and 6 of 6
+// passed with it off. A grader must not be the reason a node does not boot.
+//
+// So it is opt-in now, for diagnosing a repaint regression, never for grading.
+export const wantsReveal = (env = {}) => env.REVEAL === '1' && env.NO_REVEAL !== '1';
+
 // A fresh, empty set of observations.
 export const newObservations = () => ({
   transcript: {}, restarts: {}, member: {}, added: {}, lost: {},

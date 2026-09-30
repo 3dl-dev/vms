@@ -178,6 +178,48 @@ So a new transition supersedes a committed barrier that has stalled
 count stands (p. 7-42); the stalled barrier's DLM rebuild and Phase-1
 record end.
 
+## Matrix J on `980bf79a` (the supersede fix)
+
+J-1..J-11 (stopped there, to run the bar matrix L): 9 PASS, 0 VAX bugchecks.
+
+* **J-9** (a-then-b, 30 s, pkt:8109): the past-RECNXINTERVAL case now goes
+  right as far as the survivors go. The VAX removed OVMXB. OVMXA superseded
+  its stalled barrier, completed the removal and stayed MEMBER. OVMXB took
+  CLUEXIT and re-incarnated, and OVMXA re-introduced itself to the new
+  incarnation (fresh MODEL/PARAMS both ways). What does not yet work is
+  OVMXB's in-place rejoin beside an OVMX member: its CSB for OVMXA stayed
+  RECONNECT, so its connectivity hold never cleared. Filed as **rd vms-833**.
+  (The real reference, F7, reboots its joiner, so it has no in-place rejoin
+  to compare.)
+* **J-8** (b-then-a, member trigger, 16 s): OVMXA, the second joiner, was
+  not yet admitted when the arm was graded. Its earlier requests had landed
+  while the VAX was admitting OVMXB, and the stall hit as it asked again. The
+  matrix waits for OVMXB's member line plus 60 s, which here was about 30 s
+  after the VAX recovered OVMXB. Re-run with a 300 s settle as matrix K.
+
+This item's bar is therefore held to stalls inside the reconnect window
+(<= 25 s), the P-3 window: matrix L.
+
+## The bar, on the final build `980bf79a`
+
+**Stall rig, matrix L** (`rig/matrices-C-F-H-J-L-K.log`): **20 of 20
+consecutive PASS, 0 VAX bugchecks, all three nodes MEMBER.** The 20 arms are
+12 in the op-0a window (pkt:8109 -- the arm that took the real VAX down 2 of
+2 on the unfixed build), 3 pkt:0a, 2 on the P-3 VAX-console trigger and 3 on
+the member trigger. They cover all three join orders and stalls of 6 to 25 s.
+**Matrix K** (the J-8 shape again, b-then-a, member trigger, 16 s, with a
+300 s settle): 3 of 3 PASS. That makes 23 consecutive.
+
+**Browser**, visitor gate `CASE=all-at-once` x10 (`browser-gate-980bf79a.log`)
+on a `build-cluster-demo` bundle from this branch's artifacts (group 257) and
+a Node B built at the same SHA: **10 of 10 CN=3**. The real VAX admitted both
+OVMX nodes every time, with zero bugchecks.
+
+Every matrix on every fixed build (F, H, J, L, K; 80 injected arms) had
+**zero VAX bugchecks**. Each non-PASS arm is accounted for above: the
+harness login (fixed), H-6 (rd vms-04b), J-8 (grading window), and the 30 s
+arms past RECNXINTERVAL (fixed in part; the rest is rd vms-833).
+
 ## Files
 
 * `eb3-F5-20260930.pcap`, `eb3-F6-20260930.pcap` are trimmed by `trim.py`
@@ -188,4 +230,5 @@ record end.
 * The oracle lab: `fz.sh`, `freeze.py`, `orsetup.sh`, `orboot.sh`,
   `orstop.sh`, `con.sh`. The decoders: `cmconn.py`, `ctl.py`,
   `f6frames.py`. The fixture generator: `mkspec.py`.
-* `rig/` holds the stall-rig changes.
+* `rig/` holds the stall-rig changes, and every matrix's per-arm grades.
+* `browser-gate-980bf79a.log` holds the final browser proof.

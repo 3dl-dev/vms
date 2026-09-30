@@ -215,7 +215,7 @@ on a `build-cluster-demo` bundle from this branch's artifacts (group 257) and
 a Node B built at the same SHA: **10 of 10 CN=3**. The real VAX admitted both
 OVMX nodes every time, with zero bugchecks.
 
-Every matrix on every fixed build (F, H, J, L, K; 80 injected arms) had
+Every matrix on every fixed build (F, H, J, L, K; 62 injected arms) had
 **zero VAX bugchecks**. Each non-PASS arm is accounted for above: the
 harness login (fixed), H-6 (rd vms-04b), J-8 (grading window), and the 30 s
 arms past RECNXINTERVAL (fixed in part; the rest is rd vms-833).

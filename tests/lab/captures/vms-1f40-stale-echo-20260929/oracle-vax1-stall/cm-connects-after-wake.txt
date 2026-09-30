@@ -1,0 +1,13 @@
+   0.870 0104->a430 mt=4b ack=7 seq=8 DISCONNECT_REQ rem=2f5b0009 loc=2f610009 
+   0.870 a430->0104 mt=4b ack=8 seq=9 DISCONNECT_REQ rem=2f610009 loc=2f5b0009 
+   1.064 a430->0104 mt=4b ack=9 seq=10 CONNECT_REQ    rem=00000000 loc=2f5c0009 VMS$VAXcluster
+   1.065 0104->a430 mt=4b ack=10 seq=11 ACCEPT_REQ     rem=2f5c0009 loc=2f620009 VMS$VAXcluster
+   1.211 a430->0104 mt=4b ack=34 seq=37 DISCONNECT_REQ rem=2f61000a loc=2f5f000a 
+   1.211 0104->a430 mt=4b ack=37 seq=36 DISCONNECT_REQ rem=2f5f000a loc=2f61000a 
+
+t=    0.570 57:a4:30 START  sys=0x0402 recv_ack=    0 send_seq=50212 echo=    3 rnd=0 inc=0x00bc03899ae48ec7 
+t=    0.571 00:01:04 START  sys=0x0401 recv_ack=    0 send_seq=36862 echo=    3 rnd=0 inc=0x00bc03899ae48e82 
+t=    0.571 00:01:04 STACK  sys=0x0401 recv_ack=    0 send_seq=    1 echo=    3 rnd=1 inc=0x00bc03899ae48e82 
+t=    0.571 57:a4:30 STACK  sys=0x0402 recv_ack=    0 send_seq=    1 echo=    3 rnd=1 inc=0x00bc03899ae48ec7 
+t=    0.571 57:a4:30 ACK    sys=0x0000 recv_ack=    0 send_seq=    1 echo=    3 rnd=-1 inc=0x0000000000000000 
+t=    0.571 00:01:04 ACK    sys=0x0000 recv_ack=    0 send_seq=    1 echo=    3 rnd=-1 inc=0x0000000000000000 

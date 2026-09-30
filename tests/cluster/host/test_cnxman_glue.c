@@ -1022,6 +1022,23 @@ static void test_glue_bindings(void)
 		  "cnxman_find_csb() is implemented");
 	check_has("cnxman_club_project(&cl->club, cl->state, out)",
 		  "... a pure projection, taken under the fork mutex");
+
+	/*
+	 * rd vms-1f40: WHOSE connection opened. An accepted connection is bound
+	 * to the system SCS says it rides, never to the single pending-accept
+	 * slot -- a second accept outstanding at the same time overwrote that
+	 * slot and bound OVMXA's reconnect to the VAX's CSB (rig arm S-17).
+	 */
+	check_has("scs_conid_peer(cn->cl->scs, local_conid, &peer)",
+		  "an accepted connection's system is read from SCS");
+	check_absent("accepted_from = cn->pending_accept_sysid",
+		     "... and never taken from the pending-accept slot");
+	check_has("cn->accepts_unattributed++",
+		  "a connection SCS names no system for is counted, not guessed");
+	check_before("cnxman_vc_opened_attempt(cn, local_conid)",
+		     "accepted_from = cnxman_bind_accepted(cn, local_conid)",
+		     "this node's own connections are recognised BEFORE anything "
+		     "is treated as accepted");
 }
 
 int main(void)

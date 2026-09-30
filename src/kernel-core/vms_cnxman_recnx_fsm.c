@@ -187,6 +187,15 @@ static enum cnxman_csb_action recnx_tick_one(struct cnxman_recnx *r,
 	if (csb->state == (uint8_t)VMS_CNXMAN_CSB_REACCEPT)
 		return CNXMAN_CSB_ACT_NONE;
 
+	/* ...and while OUR attempt is out, it is the attempt: the beat waits
+	 * for it to end rather than superseding it (rd vms-1f40). */
+	if (csb->state == (uint8_t)VMS_CNXMAN_CSB_RECONNECT &&
+	    csb->attempt_in_flight) {
+		if (recnx_reached(now, csb->next_attempt_ms))
+			csb->attempts_held++;
+		return CNXMAN_CSB_ACT_NONE;
+	}
+
 	if (recnx_reached(now, csb->next_attempt_ms))
 		return cnxman_csb_dispatch(club, csb,
 					   CNXMAN_CSB_EV_RECNX_ATTEMPT, r->ops);

@@ -572,11 +572,61 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid);
 void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid);
 
 /*
+ * TWO CONNECTIONS FOR ONE PAIR (rd vms-1f40). When both ends re-dial inside
+ * the same window, each accepts the other's CONNECT and the pair holds two
+ * VMS$VAXcluster connections until the peer disconnects one. MEASURED on the
+ * stall rig, 4 crossings of 4: the real OpenVMS VAX V7.3 kept the connection
+ * THIS node initiated and disconnected its own. Before this, the block kept
+ * whichever opened last, and when that was the one the VAX dropped it read the
+ * drop as the peer hanging up, stopped asking, and removed the VAX while a good
+ * connection stood open (arm Q-2).
+ *
+ * cnxman_csb_note_attempt -- this node issued its reconnect CONNECT on `conid`.
+ *
+ * cnxman_csb_second_open -- a VMS$VAXcluster connection to this block's system
+ *   opened on `conid`; `ours` = this node initiated it. Returns
+ *     CNXMAN_CSB_CONN_BIND   it is the block's connection: bind it and open
+ *                            the block exactly as before;
+ *     CNXMAN_CSB_CONN_SECOND the block was already OPEN on another one and
+ *                            has now recorded the pair's second (as the one
+ *                            it runs on if `ours`, as the spare if not) --
+ *                            nothing else changes, no event.
+ *
+ * cnxman_csb_second_closed -- `conid` closed. Returns 1 when the pair still
+ *   holds its other connection and the block runs on it (the redundant one
+ *   went, or -- `by_peer` -- the peer closed the one the block ran on and the
+ *   block moved to the one the peer kept, dialogue carried); 0 when this is
+ *   the block's only connection and the ordinary loss rules apply.
+ *
+ * cnxman_csb_holds_conid -- nonzero when `conid` is the block's connection or
+ *   the pair's second: traffic on either belongs to this system.
+ */
+enum cnxman_csb_conn {
+	CNXMAN_CSB_CONN_BIND   = 0,
+	CNXMAN_CSB_CONN_SECOND = 1
+};
+void cnxman_csb_note_attempt(struct vms_csb *csb, uint32_t conid);
+enum cnxman_csb_conn cnxman_csb_second_open(struct vms_csb *csb,
+					    uint32_t conid, int ours);
+int cnxman_csb_second_closed(struct vms_csb *csb, uint32_t conid, int by_peer);
+int cnxman_csb_holds_conid(const struct vms_csb *csb, uint32_t conid);
+
+/*
  * Where this node's receive stream from that system stands: the highest
  * `VMS$VAXcluster` CM send-msg# it has taken from it, which is the cell the
  * connect data carries at content[106:108]. 0 when nothing has been taken.
  */
 uint16_t cnxman_csb_dialogue_ack(const struct vms_csb *csb);
+
+/*
+ * Where the PEER's receive stream from us stands, read from abs 74 of its own
+ * CM frame (rd vms-1f40). Applied BACKWARDS only: a carried dialogue resumes
+ * from the peer's acknowledged position, because anything sent on the
+ * connection that died was never delivered and continuing past it leaves a hole
+ * in a stream spec sec 4(j) makes strictly monotonic -- which bugchecked a real
+ * VAX (arm M2-5). A peer can never use this to push the counter forward.
+ */
+void cnxman_csb_dialogue_acked(struct vms_csb *csb, uint16_t peer_ack_msg);
 int  cnxman_csb_dialogue_is_on(const struct vms_csb *csb, uint32_t conid);
 
 /*

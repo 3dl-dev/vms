@@ -1,0 +1,41 @@
+[
+ {
+  "label": "all-at-once",
+  "order": "A,B,C",
+  "gap": 500,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {
+   "OVMXB": 2
+  },
+  "lost_unnamed": {},
+  "worstDriftMs": 294,
+  "froze": false
+ }
+]

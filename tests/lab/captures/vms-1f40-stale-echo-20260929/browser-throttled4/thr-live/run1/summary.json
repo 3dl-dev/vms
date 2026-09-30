@@ -1,0 +1,33 @@
+[
+ {
+  "label": "page-order-throttled4",
+  "order": "A,B,C",
+  "gap": 5000,
+  "throttle": 4,
+  "verdict": "NOT CN=3: OVMXA never named 0x7c3,0x7c4,0x7c5; OVMXB never named 0x7c3; the real VAX admitted OVMXB; no SCA frames from OVMXA",
+  "cn3": false,
+  "added": {
+   "OVMXA": [],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "worstDriftMs": 1091,
+  "froze": false
+ }
+]

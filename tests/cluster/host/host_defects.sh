@@ -149,8 +149,12 @@ pe-last-gasp-once-per-port
 pe-late-frame-revives-channel
 codec-conndata-ack-cell-dropped
 csb-reconnect-never-carries
+csb-resume-ignores-peer-position
 pe-start-refusal-silent
-pe-reformation-stacks-before-it-starts"
+pe-reformation-stacks-before-it-starts
+pe-peer-start-keeps-dead-echo
+recnx-attempt-supersedes-in-flight
+csb-dropped-spare-reads-as-loss"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -592,6 +596,50 @@ EOF
         ;;
         esac;;
 
+    pe-peer-start-keeps-dead-echo)
+        case "$_f" in
+        facility)     echo "the SS4(i).B echo a formation the PEER starts stamps (rd vms-1f40: taken only at CHANNEL_UP, a re-formation whose START beat the b4 stamped the dead generation's number)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "h_vc_rx_start() no longer takes the echo from its channel, so a circuit re-formed by the PEER'S START keeps stamping the number the previous generation was formed with. MEASURED consequence, rig arm M2-19: the real OpenVMS VAX V7.3 advertised 2, its START beat its b4 to the circuit, this node answered START+STACK stamped 1, and the VAX discarded both and re-STARTed every 5 s until each side removed the other. CHANNEL_UP's own take is untouched, which is why the b4-first order (arm M2-7) still passes.";;
+        require_fail) cat <<'EOF'
+every 0x41 in answer carries 2, the number the peer advertises now -- never the dead generation's 1 the real VAX discarded for 20 s
+and the circuit keeps stamping 2 on everything after
+EOF
+        ;;
+        esac;;
+
+    recnx-attempt-supersedes-in-flight)
+        case "$_f" in
+        facility)     echo "one reconnect attempt in flight per CSB (rd vms-1f40: the once-a-second beat superseded an attempt the peer was still answering)";;
+        targets)      echo "kernel-core/vms_cnxman_recnx_fsm.c";;
+        suites_red)   echo "test_cnxman_recnx";;
+        isolation)    echo "isolated";;
+        why)          echo "recnx_tick_one()'s in-flight guard is disarmed, so the beat issues a new VMS\$VAXcluster CONNECT_REQ every second whether or not the previous one is still being answered. MEASURED consequence, rig arm P-9: a node woken from a 20 s stall answered ~1 s late, every ACCEPT arrived after the block had been re-bound to a newer attempt, six CONNECT_REQs went out, the peer accepted five, the block owned none, and the window ran out with a member removed. Attempts that ENDED (failed, no path) still re-fire once a second -- only the held beat goes.";;
+        require_fail) cat <<'EOF'
+t=2000: NO second CONNECT over the one being answered
+t=3000: still none
+one attempt, not three
+and the two held beats are COUNTED, not silent
+EOF
+        ;;
+        esac;;
+
+    csb-dropped-spare-reads-as-loss)
+        case "$_f" in
+        facility)     echo "two VMS\$VAXcluster connections for one pair (rd vms-1f40: the peer disconnecting the redundant one of a crossing is not a loss of that system)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_second_closed() no longer recognises the pair's spare connection, so the peer disconnecting the redundant half of a crossing falls through to the ordinary remote-disconnect path: this node stops asking and the window ends in a removal while the connection the peer kept stands open. MEASURED consequence, rig arm Q-2: both ends re-dialled, both accepted, the real OpenVMS VAX V7.3 dropped the one it had initiated and kept this node's, and this node removed the VAX from its cluster.";;
+        require_fail) cat <<'EOF'
+the peer closing the spare is NOT a loss of the system
+the spare is gone
+EOF
+        ;;
+        esac;;
+
     pe-start-refusal-silent)
         case "$_f" in
         facility)     echo "saying WHY a circuit refused to form (rd vms-18a: counted-but-silent made a refused formation indistinguishable on a real console from one that was never asked)";;
@@ -623,6 +671,23 @@ EOF
         ;;
         esac;;
 
+    csb-resume-ignores-peer-position)
+        case "$_f" in
+        facility)     echo "a carried dialogue resuming from the PEER'S acknowledged position (rd vms-1f40: anything sent on the connection that died was never delivered, and continuing past it leaves a hole in a strictly-monotonic stream)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_dialogue_acked() takes the peer's position but never applies it, so a re-established connection resumes from this node's own last send. The arming, the one-frame scope and the never-forward rule are all untouched -- only the rewind itself goes. MEASURED consequence, rig arm M2-5: this node sent send=103 twice on the old Con.ID pair, the real OpenVMS VAX V7.3 re-established and acked 102 having never seen 103, this node's next frame carried 104, and the VAX bugchecked CNXMGRERR.";;
+        require_fail) cat <<'EOF'
+...and this node resumes THERE, so its next origination is 103 -- the number the peer is waiting for, not the 104 that bugchecked the VAX
+a LATER ack does not walk the counter back: the resume is armed for exactly one frame
+an ack AHEAD of this node's own send is refused
+and it really originates 103
+two more sent, in flight
+EOF
+        ;;
+        esac;;
+
     csb-reconnect-never-carries)
         case "$_f" in
         facility)     echo "p. 7-24's reconnect window as the SAME conversation (rd vms-8c54: a connection re-established to a system the cluster still holds keeps its send/ack dialogue)";;
@@ -631,15 +696,26 @@ EOF
         isolation)    echo "isolated";;
         why)          echo "csb_dialogue_may_continue() is disarmed to return 0, so cnxman_csb_bind_reconnect() always falls through to the E77 reset and a re-established connection restarts at send-msg# 1 / ack 0. Every NOT-entitled case still resets, so nothing about E77 changes -- only the entitled one, which is the case both real OpenVMS VAX V7.3 members took when they continued 10249 -> 10250 and 14811 -> 14812 across a new Con.ID pair.";;
         require_fail) cat <<'EOF'
-the send side CONTINUES -- the next origination is 3, as VAX1's 10249 became 10250
-and so does the ack: this node really HAS taken 14811 from that system, and saying 0 to a peer that holds it as a member is the lie the VAX bugchecks on
+...and this node resumes THERE, so its next origination is 103 -- the number the peer is waiting for, not the 104 that bugchecked the VAX
 ...which is the cell the connect data carries
-counted as CARRIED
+a LATER ack does not walk the counter back: the resume is armed for exactly one frame
+an ack AHEAD of this node's own send is refused
 and NOT as a reset
-the transaction id CARRIES: a re-established member does not renumber mid-conversation (oracle VAX1 ran txn 3 across it)
+and counts as no resume
+and is not counted again
+and it really originates 103
+and so does the ack: this node really HAS taken 14811 from that system, and saying 0 to a peer that holds it as a member is the lie the VAX bugchecks on
 and so does the correlation token -- restarting it at 1 offers the peer a correlation it never issued, and the VAX bugchecked on it (arm K-10)
 and what this node told that system about itself moved with it: a re-established member does NOT re-introduce itself, and the VAX bugchecked when it did (arm F-4)
+counted as CARRIED
 counted as a reset
+counted as a resume
+the carry is intact across the rebind
+the send side CONTINUES -- the next origination is 3, as VAX1's 10249 became 10250
+the transaction id CARRIES: a re-established member does not renumber mid-conversation (oracle VAX1 ran txn 3 across it)
+two more sent, in flight
+and the dialogue is carried, never restarted
+dialogue carried across the move
 EOF
         ;;
         esac;;
@@ -935,6 +1011,20 @@ apply_edit() {
         # `if (ch != NULL && ch->verifies > 1u)` is unique in this file.
         sed -i 's|if (!vc->own_start_sent \&\& vc_is_reformation(f, vc))|if ((void)vc_is_reformation, 0) /* NEGCTL pe-reformation-stacks-before-it-starts */|' "$_file";;
 
+    pe-peer-start-keeps-dead-echo)
+        # vc_take_echo() is called at three formation sites; the range pins the
+        # one in h_vc_rx_start (`vc->starts_rx++;` is unique in this file), and
+        # the call VANISHES when replaced, so the mutation is not repeatable.
+        sed -i '/vc->starts_rx++;/,/vc_learn_peer(f, vc, rx);/ s|vc_take_echo(f, vc);|(void)vc_take_echo; /* NEGCTL pe-peer-start-keeps-dead-echo */|' "$_file";;
+
+    recnx-attempt-supersedes-in-flight)
+        # `    csb->attempt_in_flight) {` is unique in this file.
+        sed -i 's|    csb->attempt_in_flight) {|    0 \&\& csb->attempt_in_flight) { /* NEGCTL recnx-attempt-supersedes-in-flight */|' "$_file";;
+
+    csb-dropped-spare-reads-as-loss)
+        # `	if (csb->alt_conid == conid) {` is unique in this file.
+        sed -i 's|	if (csb->alt_conid == conid) {|	if (0 \&\& csb->alt_conid == conid) { /* NEGCTL csb-dropped-spare-reads-as-loss */|' "$_file";;
+
     pe-start-refusal-silent)
         # The CALL is unique and VANISHES when replaced, so the mutation is not
         # repeatable; the function stays referenced so nothing goes unused.
@@ -949,6 +1039,10 @@ apply_edit() {
         sed -i 's|out\[11\] = (uint8_t)(in->peer_ack_msg != 0u ? 0x0au : 0x08u);|out[11] = 0x08u;|' "$_file"
         sed -i 's|out\[12\] = (uint8_t)(in->peer_ack_msg \& 0xffu);|out[12] = 0u;|' "$_file"
         sed -i 's|out\[13\] = (uint8_t)((in->peer_ack_msg >> 8) \& 0xffu);|out[13] = 0u;|' "$_file";;
+
+    csb-resume-ignores-peer-position)
+        # `csb->cm_send_msg = peer_ack_msg;` is unique in this file.
+        sed -i 's|csb->cm_send_msg = peer_ack_msg;|/* NEGCTL csb-resume-ignores-peer-position: the position is not taken */|' "$_file";;
 
     csb-reconnect-never-carries)
         # `if (csb->cm_dialogue_conid == 0u)` is unique in this file.

@@ -55,6 +55,38 @@ test('joinScrollback appends only the new tail', () => {
   assert.equal(joinScrollback('abc', 'abc'), 'abc', 'an unchanged screen adds nothing');
 });
 
+test('the cursor glyph at the write position is not output (V0.7-3 "33 restarts")', () => {
+  // The real shape: pcjs paints the cursor as a block on a line of its own at
+  // the end of the screen, and the next poll has printed where it stood.
+  const banner = 'KA655-B V5.3, VMB 2.7\n';
+  const poll1 = banner + '[  98.02] %CNXMAN, waiting to form or join\n\u2588\n\n';
+  const poll2 = banner + '[  98.02] %CNXMAN, waiting to form or join\n' +
+                '[ 113.20] %PEA0, channel verified\n\u2588\n\n';
+  const R = newObservations();
+  observe(R, 'OVMXB', poll1);
+  observe(R, 'OVMXB', poll2);
+  observe(R, 'OVMXB', poll2);
+  assert.equal(R.restarts.OVMXB, 0, 'one boot, however many polls');
+  assert.equal(R.transcript.OVMXB,
+    banner + '[  98.02] %CNXMAN, waiting to form or join\n[ 113.20] %PEA0, channel verified');
+  // ...and a cursor that stood where the next line's first character lands.
+  assert.equal(joinScrollback('line one\n\u2588', 'line one\n%CNXMAN, next'),
+    'line one\n%CNXMAN, next');
+  // The cursor's line is provisional: painted over a character (VAXC's
+  // "\u2588CNXMAN, completing") or redrawn in place (a boot countdown).
+  assert.equal(joinScrollback('db\n\u2588MSCPLOAD, loading ', 'db\n%MSCPLOAD, loading done\nnext'),
+    'db\n%MSCPLOAD, loading done\nnext');
+  assert.equal(joinScrollback('<<\n>> abort autoboot 2', '<<\n>> abort autoboot 0\nnfs_open'),
+    '<<\n>> abort autoboot 0\nnfs_open');
+  // A cleared screen is still a restart.
+  const C = newObservations();
+  observe(C, 'VAXC', 'KA655-B V5.3, VMB 2.7\nline\n\u2588');
+  observe(C, 'VAXC', 'KA655-B V5.3, VMB 2.7\nline\nmore\n\u2588');
+  assert.equal(C.restarts.VAXC, 0);
+  observe(C, 'VAXC', 'KA655-B V5.3, VMB 2.7\nPerforming normal system tests.');
+  assert.equal(C.restarts.VAXC, 1);
+});
+
 test('a guest that clears its screen is a restart, not an erasure', () => {
   const R = newObservations();
   observe(R, 'VAXC', 'KA655-B V5.3, VMB 2.7\nboot\n' + VAXC_ADMITS);

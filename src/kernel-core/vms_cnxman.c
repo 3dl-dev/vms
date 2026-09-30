@@ -284,10 +284,17 @@ struct vms_cnxman {
 	 * returned 0) but has not yet reached OPEN: the peer identity the CSB
 	 * ladder needs is known now, the connection's own Con.ID only at
 	 * opened() (vms_scs.h: "local_conid is the LISTENING CDT's Con.ID, not
-	 * the connection's ... the SYSAP learns it from opened()"). The fork
-	 * context dispatches one SCS event at a time, so exactly one accept is
-	 * ever in flight; a second one before the first's opened() arrives
-	 * would overwrite this and is counted, never guessed at.
+	 * the connection's ... the SYSAP learns it from opened()").
+	 *
+	 * THIS SLOT NO LONGER DECIDES WHOSE CONNECTION OPENED (rd vms-1f40). It
+	 * assumed one accept in flight at a time; but an accept reaches opened()
+	 * only when the PEER's ACCEPT_RSP arrives, and a second CONNECT can be
+	 * accepted first. MEASURED, rig arm S-17: a woken node accepted OVMXA's
+	 * reconnect and then the VAX's before OVMXA's ACCEPT_RSP was processed;
+	 * OVMXA's connection opened against this slot -- by then naming the VAX
+	 * -- and was bound to the VAX's CSB, OVMXA's never re-opened, and OVMXA
+	 * was removed. The system an accepted connection belongs to is now read
+	 * from SCS (scs_conid_peer); the slot is kept for its overwrite count.
 	 */
 	/* The peer the 16 bytes in `conndata` were last built FOR (rd
 	 * vms-8c54): its CM ack counter, and whether one was ever named.
@@ -300,6 +307,9 @@ struct vms_cnxman {
 	vms_scs_sysid_t pending_accept_sysid;
 	uint8_t         pending_accept_valid;
 	uint32_t        pending_accept_overwritten;
+	/* accepted connections SCS could name no system for -- left unbound
+	 * and counted, never attributed by guess (INV-6) */
+	uint32_t        accepts_unattributed;
 
 	/* ---- $SETCLUEVT (SS7): a single registration, this node's own ----
 	 * `proc` is an opaque handle (this header stays substrate-agnostic);
@@ -447,10 +457,29 @@ static struct vms_csb *csb_by_conid(struct vms_club *club, vms_conid_t conid)
 
 	if (club == NULL || conid == 0u)
 		return NULL;
+	/* The pair's connection, or its second while it holds two (rd
+	 * vms-1f40): traffic on either belongs to that system. */
 	for (i = 0; i < club->n_csb; i++) {
 		struct vms_csb *csb = &club->csb[i];
 
-		if (csb->in_use && csb->cdt_conid == conid)
+		if (cnxman_csb_holds_conid(csb, (uint32_t)conid))
+			return csb;
+	}
+	return NULL;
+}
+
+/* The block whose own reconnect CONNECT went out on `conid` -- remembered even
+ * after an accept re-bound `cdt_conid` (rd vms-1f40). */
+static struct vms_csb *csb_by_attempt(struct vms_club *club, vms_conid_t conid)
+{
+	uint32_t i;
+
+	if (club == NULL || conid == 0u)
+		return NULL;
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *csb = &club->csb[i];
+
+		if (csb->in_use && csb->attempt_conid == (uint32_t)conid)
 			return csb;
 	}
 	return NULL;
@@ -1131,6 +1160,57 @@ static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 	return 0;
 }
 
+/*
+ * THIS NODE'S OWN RECONNECT OPENED, AFTER AN ACCEPT RE-BOUND ITS BLOCK (rd
+ * vms-1f40). Returns 1 when the pair now holds two connections and the block
+ * was already OPEN on the other (cnxman_csb_second_open() has recorded both and
+ * nothing else is to be done); 0 when the ordinary open path applies -- no
+ * block remembers this attempt, or the block is not yet OPEN and this becomes
+ * its connection (re-bound here, dialogue carried).
+ */
+static int cnxman_vc_opened_attempt(struct vms_cnxman *cn,
+				    vms_conid_t local_conid)
+{
+	struct vms_csb *csb = csb_by_attempt(&cn->cl->club, local_conid);
+
+	if (csb == NULL || csb->cdt_conid == (uint32_t)local_conid)
+		return 0;
+	if (cnxman_csb_second_open(csb, (uint32_t)local_conid, 1) ==
+	    CNXMAN_CSB_CONN_SECOND)
+		return 1;
+	cnxman_csb_bind_reconnect(csb, (uint32_t)local_conid);
+	return 0;
+}
+
+/*
+ * AN ACCEPTED CONNECTION OPENED: bind it to the block of the system SCS says it
+ * belongs to. Returns that system, or 0 when SCS names none (counted, left
+ * unbound). rd vms-8c54: an accepted RE-ESTABLISHMENT carries the dialogue for
+ * the same reason an issued one does -- the oracle's accepting member continued
+ * 14811 -> 14812; a block not entitled to carry starts fresh (E77). rd
+ * vms-1f40: a block already OPEN on another connection keeps this one as the
+ * pair's second instead of being re-bound under its own traffic.
+ */
+static vms_scs_sysid_t cnxman_bind_accepted(struct vms_cnxman *cn,
+					    vms_conid_t local_conid)
+{
+	vms_scs_sysid_t peer = 0u;
+	struct vms_csb *csb;
+
+	if (cn->cl->scs == NULL ||
+	    scs_conid_peer(cn->cl->scs, local_conid, &peer) !=
+		    (int)SS__NORMAL) {
+		cn->accepts_unattributed++;
+		return 0u;
+	}
+	csb = csb_ensure(&cn->cl->club, peer);
+	if (csb != NULL &&
+	    cnxman_csb_second_open(csb, (uint32_t)local_conid, 0) ==
+		    CNXMAN_CSB_CONN_BIND)
+		cnxman_csb_bind_reconnect(csb, (uint32_t)local_conid);
+	return peer;
+}
+
 static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 {
 	struct vms_cnxman *cn = (struct vms_cnxman *)ctx;
@@ -1138,28 +1218,29 @@ static void cnxman_vc_opened(void *ctx, vms_conid_t local_conid)
 	uint8_t accepted = 0u;
 	struct vms_csb *csb;
 
-	/* The INBOUND half: bind the Con.ID this SYSAP just learned to the
-	 * peer identity connect_req recorded (see the pending-slot's own
-	 * comment on struct vms_cnxman above). An OUTBOUND connect already set
-	 * cdt_conid in cnxman_jop_connect(); csb_by_conid() finds that CSB too,
-	 * so both halves reach the SAME CNXMAN_CSB_EV_CONN_OPEN dispatch below
-	 * without this function needing to know which one it is. */
-	if (cn->pending_accept_valid) {
-		accepted_from = cn->pending_accept_sysid;
-		accepted = 1u;
-		csb = csb_ensure(&cn->cl->club, accepted_from);
-		if (csb != NULL)
-			/* rd vms-8c54: an accepted RE-ESTABLISHMENT carries the
-			 * dialogue for the same reason an issued one does -- the
-			 * oracle's accepting member continued 14811 -> 14812.
-			 * A block not entitled to carry starts fresh, which is
-			 * E77's "the peer opens it at ITS send-msg# 1". */
-			cnxman_csb_bind_reconnect(csb, (uint32_t)local_conid);
+	/*
+	 * WHICH HALF, AND WHOSE (rd vms-1f40). An OUTBOUND connect recorded its
+	 * Con.ID in its CSB when it was issued (cnxman_jop_connect, and the
+	 * reconnect ladder's bind + note_attempt), so a Con.ID some block holds
+	 * is this node's own. Anything else is a connection this node ACCEPTED,
+	 * and SCS says which system it belongs to -- not the pending slot.
+	 */
+	if (cnxman_vc_opened_attempt(cn, local_conid)) {
+		/* this node's own attempt opened while the pair already held
+		 * the connection an accept bound: the pair's second, and the
+		 * block is already OPEN */
+		cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_OPEN, 0,
+				 (uint32_t)local_conid);
+		return;
+	}
+	if (csb_by_conid(&cn->cl->club, local_conid) == NULL) {
+		accepted_from = cnxman_bind_accepted(cn, local_conid);
+		accepted = (uint8_t)(accepted_from != 0u);
 		cn->pending_accept_valid = 0u;
 	}
 
 	csb = csb_by_conid(&cn->cl->club, local_conid);
-	if (csb != NULL)
+	if (csb != NULL && csb->cdt_conid == (uint32_t)local_conid)
 		(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 					  CNXMAN_CSB_EV_CONN_OPEN, &cn->ops);
 
@@ -1583,8 +1664,13 @@ static int cnxman_vc_route(void *ctx, vms_conid_t local_conid,
 	 * lower number cannot walk it back.
 	 */
 	env_ok = (vms_cm_envelope_parse(body, len, &env) == VMS_CODEC_OK);
-	if (csb != NULL && env_ok)
+	if (csb != NULL && env_ok) {
 		cnxman_csb_dialogue_heard(csb, env.send_msg);
+		/* rd vms-1f40: and where ITS receive stream from us got to. A
+		 * carried dialogue resumes from that, once, so the stream the
+		 * peer is waiting on has no hole in it. */
+		cnxman_csb_dialogue_acked(csb, env.ack_msg);
+	}
 
 	/*
 	 * THE IDENTITY FACTS MUST BE CURRENT AT THE DECISION POINT (rd vms-1ee).
@@ -1817,6 +1903,35 @@ static void cnxman_log_cm_close(struct vms_cnxman *cn, const struct vms_csb *csb
 				    (enum scs_close_reason)reason));
 }
 
+/*
+ * ONE OF THE PAIR'S TWO CONNECTIONS WENT (rd vms-1f40). Returns 1 when the pair
+ * still holds the other and the block runs on it -- the close is then not a
+ * loss of that system and nothing else runs. MEASURED, arm Q-2: the real VAX
+ * disconnected the connection it had initiated 0.34 s after both were open and
+ * kept the one this node initiated; treated as a loss, that close stopped every
+ * reconnect attempt and the VAX was removed while its kept connection stood.
+ */
+static int cnxman_vc_closed_second(struct vms_cnxman *cn, struct vms_csb *csb,
+				   vms_conid_t local_conid, uint32_t reason)
+{
+	struct vms_csb *att = csb_by_attempt(&cn->cl->club, local_conid);
+	int by_peer = (reason == (uint32_t)SCS_CLOSE_REMOTE);
+	int had_two;
+
+	if (csb == NULL && att != NULL)
+		csb = att;
+	if (csb == NULL)
+		return 0;
+	had_two = (csb->alt_conid != 0u);
+	if (!cnxman_csb_second_closed(csb, (uint32_t)local_conid, by_peer))
+		return 0;
+	if (had_two && by_peer)
+		cnxman_ops_log(cn, "%CNXMAN, a cluster member closed one of the "
+				   "two VMS$VAXcluster connections this pair "
+				   "held: continuing on the one it kept");
+	return 1;
+}
+
 static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 			     uint32_t reason)
 {
@@ -1827,6 +1942,8 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 	 * reason SCS gave, not an interpretation of it. */
 	cnxman_diag_note(cn, CNXMAN_DIAG_R_CDT_CLOSED, (int32_t)reason,
 			 (uint32_t)local_conid);
+	if (cnxman_vc_closed_second(cn, csb, local_conid, reason))
+		return;
 	cnxman_log_cm_close(cn, csb, reason);
 
 	/*
@@ -1899,6 +2016,8 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 				 * on it included. */
 				cnxman_csb_bind_connection(csb,
 							   (uint32_t)new_conid);
+				cnxman_csb_note_attempt(csb,
+							(uint32_t)new_conid);
 				cn->reconnects_issued++;
 				(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 							  CNXMAN_CSB_EV_CONNECT_SENT,
@@ -2536,6 +2655,7 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 			/* Same rule on the once-a-second beat's reconnect as on
 			 * the close-path one above. */
 			cnxman_csb_bind_reconnect(csb, (uint32_t)new_conid);
+			cnxman_csb_note_attempt(csb, (uint32_t)new_conid);
 			cn->reconnects_issued++;
 			(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 						  CNXMAN_CSB_EV_CONNECT_SENT,

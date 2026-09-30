@@ -83,3 +83,27 @@ guest, open) and the incarnation-rejection observation under vms-735.
 it was scrolled into view (rd vms-0bc) — fired **3 times across 12 runs**, versus a panel-by-panel
 count on every run before the embed fix. Note the counter was also made stricter in the same window, so
 treat that as "the panels are no longer visibly stuck", not as a measured ratio.
+
+## Correction (rd vms-1f40): the restarts were the grader's, not the guests'
+
+The restart counts above are wrong, and the "emulated VAX halts" reading built on them is withdrawn.
+`gate-eval.mjs`'s `joinScrollback()` stitched each poll's screen onto the transcript by suffix/prefix
+overlap, and pcjs paints its cursor into the screen text at the write position (a `█` on its own line,
+or painted over the next line's first character) and redraws a boot countdown in place. Either one broke
+the overlap, so the WHOLE screen was appended again on every poll and each copy re-read the KA655 banner
+as a restart. `pass1/02-all-at-once/OVMXB.console.log` is ONE boot: its 34 copies end at kernel uptimes
+98, 152, 206 ... 1858 s — one clock, never reset.
+
+Replayed poll by poll through the fixed stitch (commit `681cb70d`), **every node in all three failing
+runs has zero restarts**: all-at-once OVMXB 0 (was 33) / VAXC 0 (was 3); page-order-throttled4 OVMXB 0
+(was 5) / VAXC 0 (was 2); b-first OVMXB 0 (was 5) / VAXC 0 (was 4).
+
+What the three runs really show, read off the single real transcript of each node:
+
+* **all-at-once** — OVMXB is never admitted. It loses its VMS$VAXcluster connection before admission, is
+  rejected on reconnect, CLUEXITs in place twice, then asks for admission 65 times over "the
+  VMS$VAXcluster connection the executive holds for this member" and is never answered; the VAX never logs
+  another membership request from it. Same shape as stall-rig arms M2-21/Q-1/S-1 (rd vms-e88).
+* **page-order-throttled4** and **b-first** — OVMXB IS admitted, then the cluster loses a member under
+  starvation (OVMXA removed; a path lost during the barrier). These are the stalled-guest family of
+  rd vms-8c54 / vms-1f40, not a reboot.

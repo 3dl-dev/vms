@@ -32,7 +32,11 @@ STALLSECS=$(cat "$D/stall-seconds" 2>/dev/null || echo "?")
 
 bmem=$(grep -ac 'this node is now a VAXcluster member' "$B")
 amem=$(grep -ac 'this node is now a VAXcluster member' "$A")
-vaxadd=$(grep -ac 'proposing addition of system OVMXB' "$C")
+# The VAX says it twice -- its %CNXMAN line and its OPCOM line -- and console
+# interleaving can cut the first ("%CNXMAN,  p"), which graded arm S-4 FAIL
+# while the VAX's OPCOM line read "proposed addition of node OVMXB" (rd
+# vms-1f40). Same criterion, either rendering; gate-eval.mjs's VADD matches both.
+vaxadd=$(grep -acE 'proposing addition of system OVMXB|proposed addition of node OVMXB' "$C")
 bug=$(cat "$A" "$B" "$C" | grep -ac 'BUG CHECK\|BUGCHECK\|bugcheck')
 loss=$(cat "$A" "$B" | grep -ac 'lost connection to a cluster member')
 loop=$(cat "$A" "$B" | grep -ac 'closed: remote disconnect')

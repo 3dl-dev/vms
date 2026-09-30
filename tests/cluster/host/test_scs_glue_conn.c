@@ -557,6 +557,17 @@ static void test_glue_bindings(void)
 	check_glue_has("scs_fsm_cdt_project(&cl->scs->fsm, cdt, out)",
 		       "vms_scs_cdt_snapshot is scs_fsm_cdt_project, and only "
 		       "for a CDT that is in_use");
+
+	/* rd vms-1f40: which system a connection is to is the CDT's OWN
+	 * peer_sysid -- the "Remote" column proved for both halves in
+	 * test_open_rows_are_the_sda_decoder_ring -- read by Con.ID, and a
+	 * CDT that names none is refused, never answered with a zero. */
+	check_glue_has("cdt = scs_fsm_cdt_by_conid(&scs->fsm, local_conid);\n"
+		       "\tif (cdt == (struct scs_cdt *)0 || cdt->peer_sysid == 0u)\n"
+		       "\t\treturn SS__BADPARAM;\n"
+		       "\t*out = cdt->peer_sysid;",
+		       "scs_conid_peer is the CDT's own peer_sysid, by Con.ID, "
+		       "and refuses a CDT that names no system");
 }
 
 int main(void)

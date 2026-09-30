@@ -1938,6 +1938,61 @@ static void test_a_reformation_starts_before_it_stacks(void)
 }
 
 /*
+ * THE ECHO IS TAKEN AT EVERY FORMATION, INCLUDING ONE THE PEER STARTS
+ * (rd vms-1f40, rig arm M2-19).
+ *
+ * After a 13 s guest stall the real OpenVMS VAX V7.3 advertised a NEW number
+ * for this node in its b2 (+1.320 after wake) and its re-formation START
+ * reached the circuit before its b4. This node answered START+STACK stamped
+ * with the DEAD generation's number, and the VAX discarded both and re-STARTed
+ * every 5 s until each side removed the other. Arm M2-7 of the same build had
+ * the b4 win the race, stamped the new number, and opened in 55 ms.
+ *
+ * So: a circuit that was up at 1; the peer's b2 says 2 (a channel RESET, the
+ * circuit goes down); then the peer's START, with no b4 in between. Every 0x41
+ * this node sends in answer must carry 2.
+ */
+static void test_a_peer_started_formation_takes_the_new_echo(void)
+{
+	struct fake_vc_decoded d;
+	struct pe_vc *vc;
+	uint32_t i, n41 = 0u, stale = 0u;
+
+	printf("-- a formation the PEER starts stamps the number the peer "
+	       "advertises NOW\n");
+	drive_vc_open_incarnation(&g_env, 1u);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->state == (uint8_t)VMS_PE_VC_OPEN,
+		 "a circuit that has been up, stamping 1");
+	if (vc == NULL)
+		return;
+
+	rx_hello(&g_env, 1, PE_PFW_VERIFY_B2, 2u);   /* the new generation */
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->state != (uint8_t)VMS_PE_VC_OPEN,
+		 "the new advertisement took the old circuit down");
+
+	fake_pe_clear_frames(&g_env.fake);
+	rx_start(&g_env, 0, 288, 0);                 /* START before b4 */
+	for (i = 0; i < g_env.fake.n_frames; i++) {
+		d = fake_vc_decode(&g_env.fake, i);
+		if (!d.ok || !d.is_start)
+			continue;
+		n41++;
+		if (d.incarnation != 2u)
+			stale++;
+	}
+	ct_check(n41 >= 1u, "the peer's START was answered");
+	ct_check_eq_u32(stale, 0u,
+			"every 0x41 in answer carries 2, the number the peer "
+			"advertises now -- never the dead generation's 1 the "
+			"real VAX discarded for 20 s");
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->echo_incarnation == 2u,
+		 "and the circuit keeps stamping 2 on everything after");
+}
+
+/*
  * THE STALLED GUEST (rd vms-8c54). The listen timeout is a fact about elapsed
  * time, not about which code path notices it.
  *
@@ -2324,6 +2379,19 @@ static void test_peer_restart_resets_the_circuit(void)
 			PE_VC_DOWN_PEER_RESTART, "SCS was told why");
 }
 
+/* rd vms-1f40: a restart of an OPEN circuit names the START that did it, by
+ * the peer's own send-msg# -- the field that ties the console to a capture. */
+static void test_peer_restart_names_its_start(void)
+{
+	printf("-- a peer restart names the START that caused it\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	rx_start(&g_env, 0, 292, 0);
+	ct_check(strstr(g_env.fake.last_log,
+			"peer re-started the circuit (its START carries "
+			"send-msg# 292), re-forming") != NULL,
+		 "the console line carries the START's own send-msg#");
+}
+
 /* The snapshot is a projection of executive state and nothing else: a value
  * never learned stays zero (INV-6). */
 static void test_projection(void)
@@ -2439,6 +2507,7 @@ int main(void)
 	test_a_late_frame_does_not_refresh_a_dead_deadline();
 	test_a_reformation_starts_from_this_side_too();
 	test_a_reformation_starts_before_it_stacks();
+	test_a_peer_started_formation_takes_the_new_echo();
 	test_second_channel_is_a_path_not_a_circuit();
 	test_idle_circuit_survives_one_path_failing();
 	test_retransmit_follows_the_surviving_path();
@@ -2446,6 +2515,7 @@ int main(void)
 	test_failover_refuses_a_different_incarnation();
 	test_last_gasp_closes_without_reforming();
 	test_peer_restart_resets_the_circuit();
+	test_peer_restart_names_its_start();
 	test_projection();
 	test_projection_down_reason();
 	test_no_table_no_circuits();

@@ -87,6 +87,32 @@ static void pe_log(const struct pe_fsm *f, const char *msg)
 		f->ops->log(f->ops->ctx, msg);
 }
 
+/*
+ * pe_log() with one number appended: "<msg><n><tail>". Freestanding (no
+ * printf in the core); the buffer is sized for the longest caller plus a
+ * 10-digit u32. Diagnostics only -- nothing branches on the text.
+ */
+static void pe_log_u32(const struct pe_fsm *f, const char *msg, uint32_t n,
+		       const char *tail)
+{
+	char buf[160], dig[10];
+	uint32_t i = 0u, k = 0u;
+
+	while (msg[k] != '\0' && i < (uint32_t)sizeof(buf) - 12u)
+		buf[i++] = msg[k++];
+	k = 0u;
+	do {
+		dig[k++] = (char)('0' + (n % 10u));
+		n /= 10u;
+	} while (n != 0u && k < (uint32_t)sizeof(dig));
+	while (k > 0u)
+		buf[i++] = dig[--k];
+	for (k = 0u; tail[k] != '\0' && i < (uint32_t)sizeof(buf) - 1u; k++)
+		buf[i++] = tail[k];
+	buf[i] = '\0';
+	pe_log(f, buf);
+}
+
 static uint32_t pe_hello_interval(const struct pe_fsm *f)
 {
 	return f->id.hello_interval_ms != 0u ? f->id.hello_interval_ms
@@ -2822,6 +2848,34 @@ static void vc_learn_peer(struct pe_fsm *f, struct pe_vc *vc,
 }
 
 /*
+ * SS4(i).B / SS4(h)(4c): THE ECHO IS TAKEN AT FORMATION -- EVERY formation.
+ *
+ * The echo is the member's number for US, read from the directed HELLO its
+ * channel last carried, and copied once per formation so the whole handshake
+ * and every frame after it carry one consistent value (a CHANGE on the channel
+ * is itself a channel RESET and tears the circuit down).
+ *
+ * A formation starts in TWO places: our channel reaching b4 (CHANNEL_UP) and
+ * the PEER'S START. Taking it only at CHANNEL_UP left the second one stamping
+ * the dead generation's number. MEASURED, rig arm M2-19 (rd vms-1f40): after a
+ * 13 s guest stall the real OpenVMS VAX V7.3 advertised 2 in its b2 (+1.320)
+ * and its re-formation START reached the circuit before its b4 did; this node
+ * answered START+STACK stamped 1, the VAX discarded both and re-STARTed every
+ * 5 s until each side removed the other. Arm M2-7, same build, had the b4 win
+ * the race, stamped 2, and opened in 55 ms. A channel with no advertisement
+ * leaves the echo invalid, and vc_send_start() then sends nothing (INV-6).
+ */
+static void vc_take_echo(struct pe_fsm *f, struct pe_vc *vc)
+{
+	const struct pe_channel *ch = pe_fsm_channel_at(f, vc->channel);
+
+	if (ch == NULL)
+		return;
+	vc->echo_incarnation = ch->peer_incarnation;
+	vc->echo_valid = ch->peer_incarnation_valid;
+}
+
+/*
  * IS THIS A RE-FORMATION? (rd vms-8c54 / vms-18a.)
  *
  * Two independent witnesses, and the answer is yes if EITHER survives, because
@@ -2868,9 +2922,15 @@ static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
 		vc->last_down_reason = (uint8_t)PE_VC_DOWN_PEER_RESTART;
 		vc->downs++;
 		vc_notify_down(f, vc, PE_VC_DOWN_PEER_RESTART);
-		pe_log(f, "%PEA0, peer re-started the circuit, re-forming");
+		/* rd vms-1f40: WHICH START -- its own send-msg# names the frame
+		 * on a capture (arm P-15 restarted an open circuit on a START
+		 * the wire shows only once, 180 ms before). */
+		pe_log_u32(f, "%PEA0, peer re-started the circuit (its START "
+			      "carries send-msg# ", (uint32_t)rx->start.send_seq,
+			   "), re-forming");
 	}
 	vc_reset_sequence(f, vc);
+	vc_take_echo(f, vc);
 	vc_learn_peer(f, vc, rx);
 	vc->state = (uint8_t)VMS_PE_VC_STACK_SENT;
 	vc->form_due_ms = pe_now(f) + vc_retransmit_ms(f);
@@ -2902,8 +2962,12 @@ static void h_vc_rx_start(struct pe_fsm *f, struct pe_vc *vc,
 	 */
 	if (!vc->own_start_sent && vc_is_reformation(f, vc))
 		(void)vc_send_start(f, vc, 0u);
-	if (vc_send_start(f, vc, 1u) != 0)
+	if (vc_send_start(f, vc, 1u) != 0) {
 		vc->state = (uint8_t)VMS_PE_VC_CLOSED;
+		/* Said, not only counted (rd vms-1f40): an unanswered peer
+		 * START is otherwise invisible on a console. */
+		vc_log_start_refused(f, vc);
+	}
 }
 
 /*
@@ -3371,12 +3435,7 @@ static void h_vc_channel_up(struct pe_fsm *f, struct pe_vc *vc,
 	(void)rx;
 	if (ch == NULL)
 		return;
-	/* SS4(i).B: the echo is the member's number for US, taken from a real
-	 * directed HELLO. Copied at formation so the whole handshake carries
-	 * one consistent value even if the channel learns a new one mid-way
-	 * (which is itself a channel RESET, and tears this circuit down). */
-	vc->echo_incarnation = ch->peer_incarnation;
-	vc->echo_valid = ch->peer_incarnation_valid;
+	vc_take_echo(f, vc);
 	if (ch->remote_sysid_valid && !vc->peer_sysid_valid) {
 		vc->peer_sysid = ch->remote_sysid;
 		vc->peer_sysid_valid = 1u;
@@ -3749,8 +3808,7 @@ static void pe_vc_rx_frame(struct pe_fsm *f, const uint8_t *frame, uint32_t len,
 		vc = vc_alloc(f, ch_index);
 		if (vc == NULL)
 			return;
-		vc->echo_incarnation = ch->peer_incarnation;
-		vc->echo_valid = ch->peer_incarnation_valid;
+		vc_take_echo(f, vc);
 	} else if (vc->channel != (uint8_t)ch_index) {
 		/*
 		 * A frame from this system on a channel other than the one its

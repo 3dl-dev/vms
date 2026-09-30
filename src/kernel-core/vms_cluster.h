@@ -413,7 +413,10 @@ struct vms_csb {
 	 */
 	uint32_t remote_port_secs;   /* the number the REMOTE CM supplies (p. 7-30) */
 	uint8_t  remote_port_valid;  /* 0 = not supplied; the local value stands alone */
-	uint8_t  pad3[3];
+	/* 1 while THIS break's reconnect CONNECT is out and has not ended --
+	 * set by CONNECT_SENT in [RECONNECT], and meaningful only there. */
+	uint8_t  attempt_in_flight;
+	uint8_t  pad3[2];
 	uint32_t lost_ms;            /* when connectivity was lost */
 	uint32_t deadline_ms;        /* lost_ms + the p. 7-30 reconnect period */
 	uint32_t next_attempt_ms;    /* the once-a-second beat's next due time */
@@ -452,6 +455,29 @@ struct vms_csb {
 	 * disagreeing about whether the pair should be connected at all.
 	 */
 	uint32_t remote_disconnects;
+
+	/*
+	 * ...and how many once-a-second beats issued NO new attempt because this
+	 * block's previous one was still in flight (rd vms-1f40). "Waiting on an
+	 * answer" and "not trying" are different diagnoses, and a peer that
+	 * answers slower than the beat shows up here and nowhere else.
+	 */
+	uint32_t attempts_held;
+
+	/*
+	 * ---- TWO CONNECTIONS FOR ONE PAIR (rd vms-1f40) ----
+	 * When both ends re-dial at once, each accepts the other's CONNECT and
+	 * the pair briefly holds two VMS$VAXcluster connections; the real VAX
+	 * then disconnects one (measured 4/4 on the stall rig: it kept the one
+	 * THIS node initiated). `attempt_conid` is this node's own outstanding
+	 * reconnect CONNECT, remembered even after an accept re-binds
+	 * `cdt_conid`; `alt_conid` is the pair's second OPEN connection. Both
+	 * are 0 when there is nothing to remember.
+	 */
+	uint32_t attempt_conid;
+	uint32_t alt_conid;
+	uint32_t second_conns;       /* times the pair held two at once */
+	uint32_t second_promotions;  /* the peer closed one; this block moved on */
 
 	/*
 	 * ---- the SYSAP dialogue counters (design sec 3.2.4 ruling E1) ----
@@ -514,6 +540,16 @@ struct vms_csb {
 	 * is the number that says which happened.
 	 */
 	uint32_t cm_dialogues_carried;
+	/*
+	 * ...AND WHETHER THE NEXT FRAME FROM THAT PEER STILL OWES US ITS
+	 * POSITION (rd vms-1f40). Armed by cnxman_csb_bind_reconnect() and
+	 * taken by the first inbound envelope on the re-established
+	 * connection; `cm_resumes` counts the times that really moved the send
+	 * counter back, which is the number that says a hole was prevented.
+	 */
+	uint8_t  cm_resume_pending;
+	uint8_t  cm_resume_pad[3];
+	uint32_t cm_resumes;
 
 	/*
 	 * ---- what this node has ADVERTISED about ITSELF on the connection it

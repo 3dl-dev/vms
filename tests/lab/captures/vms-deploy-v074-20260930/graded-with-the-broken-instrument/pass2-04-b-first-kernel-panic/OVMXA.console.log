@@ -1,0 +1,28 @@
+
+%NIC-CFG, initramfs=nodeA/initramfs-ovmx-nodeA.cpio.gz sysdisk=nodeA/sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFD0EE0+0EF30EE0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2J[    0.000000] ..MP-BIOS bug: 8254 timer not connected to IO-APIC
+[    0.000000] Kernel panic - not syncing: IO-APIC + timer doesn't work!  Boot with apic=debug and send a report.  Then try booting with the 'noapic' option.
+[    0.000000] CPU: 0 UID: 0 PID: 0 Comm: swapper/0 Not tainted 6.12.103-ovmx #1
+[    0.000000] Hardware name: QEMU Standard PC (i440FX + PIIX, 1996), BIOS rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org 04/01/2014
+[    0.000000] Call Trace:
+[    0.000000]  <TASK>
+[    0.000000]  panic+0x326/0x380
+[    0.000000]  setup_IO_APIC+0x836/0x850
+[    0.000000]  ? __pfx_native_io_apic_read+0x10/0x10
+[    0.000000]  ? clear_IO_APIC_pin+0x167/0x260
+[    0.000000]  apic_intr_mode_init+0x53/0xe0
+[    0.000000]  x86_late_time_init+0x1f/0x40
+[    0.000000]  start_kernel+0x483/0x7d0
+[    0.000000]  x86_64_start_reservations+0x18/0x30
+[    0.000000]  x86_64_start_kernel+0xc5/0xe0
+[    0.000000]  common_startup_64+0x12c/0x138
+[    0.000000]  </TASK>
+[    0.000000] ---[ end Kernel panic - not syncing: IO-APIC + timer doesn't work!  Boot with apic=debug and send a report.  Then try booting with the 'noapic' option. ]---

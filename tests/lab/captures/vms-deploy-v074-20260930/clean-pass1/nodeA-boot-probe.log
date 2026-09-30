@@ -1,0 +1,7 @@
+iter 1/6: reached-CNXMAN
+iter 2/6: reached-CNXMAN
+iter 3/6: reached-CNXMAN
+iter 4/6: reached-CNXMAN
+iter 5/6: reached-CNXMAN
+iter 6/6: reached-CNXMAN
+NODEA_PROBE={"url":"https://openvmx.3dl.dev/demo/cluster/","n":6,"tally":{"reached-CNXMAN":6}}

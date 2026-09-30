@@ -238,3 +238,13 @@ test('a panel that keeps printing is not a repaint stall', () => {
   assert.equal(isRepaintStall(t1, t1, t3), true,
     'byte-identical for a whole poll, then output the moment it was revealed');
 });
+
+test('the gate does not scroll panels while grading', () => {
+  // Scrolling three canvas-heavy cross-origin iframes into view every 15s
+  // starved node A's worker: on the live V0.7-4 page, 6 of 12 runs failed with
+  // "no SCA frames from OVMXA" with it on, 6 of 6 passed with it off. The
+  // instrument must not be the reason a node does not boot, so it is opt-in.
+  assert.equal(GATE.wantsReveal({}), false, 'off by default');
+  assert.equal(GATE.wantsReveal({ REVEAL: '1' }), true, 'opt in to diagnose a repaint regression');
+  assert.equal(GATE.wantsReveal({ REVEAL: '1', NO_REVEAL: '1' }), false, 'NO_REVEAL still wins');
+});

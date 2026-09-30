@@ -1,0 +1,75 @@
+{
+ "label": "b-first",
+ "order": "B,A,C",
+ "gap": 3000,
+ "throttle": 1,
+ "url": "https://openvmx.3dl.dev/demo/cluster/",
+ "samples": [
+  {
+   "t": 9,
+   "sca": {},
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 83
+  },
+  {
+   "t": 27,
+   "sca": {
+    "VAXC": 1
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 83
+  }
+ ],
+ "verdict": "BUGCHECK: {\"OVMXA\":\"Kernel panic\"}",
+ "restarts": {
+  "OVMXA": 0,
+  "OVMXB": 0,
+  "VAXC": 0
+ },
+ "member": {},
+ "added": {
+  "OVMXA": [],
+  "OVMXB": [],
+  "VAXC": []
+ },
+ "lost": {},
+ "vaxc_admitted": [],
+ "ovmx_founded": {},
+ "bugchecks": {
+  "OVMXA": "Kernel panic"
+ },
+ "sca": {
+  "VAXC": 1
+ },
+ "cn3": false,
+ "lost_unnamed": {},
+ "repaint_stalls": {},
+ "worstDriftMs": 83,
+ "vis": "visible"
+}

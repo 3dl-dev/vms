@@ -750,6 +750,8 @@ every system in sight says no cluster: the attempt ends with nobody asked
 no request to a system that is itself joining, while another in sight has not yet said what it is
 once the other says it is a member, the request goes to it
 held as NO_MEMBER
+and with only a joining system left, the round ends
+the join is back in IDLE to ask again, not parked
 EOF
         ;;
         esac;;

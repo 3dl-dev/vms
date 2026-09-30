@@ -95,6 +95,19 @@ as a non-event (E68).
   connectivity with, and for one beat after this node's own MODEL/PARAMS; the join
   moves to a higher member once that member's PARAMS says it is one, and onto the
   connection the CSB records for its member after a crossing.
+* A system whose own PARAMS says it is in no cluster is never asked (trio B). If
+  every system in sight says so, the attempt ends as an exhausted round (the fact
+  the founding election reads) with nobody asked.
+
+## The first build of this fix on the stall rig, and what it taught
+
+Rig arm E2-1 (`JOIN_ORDER=together`, build `5e7e4b50`) still PASSED, but its
+decode showed the joiner's FIRST request go to the other OVMX node while that node
+was itself being admitted: its PARAMS then still said 0, the real VAX had not yet
+sent its own, and the rule as first written fell back to asking whatever it was
+driving through. It went unanswered for 5 s and the re-issue to the VAX admitted
+it. Trio B is exactly this position and the real joiner asked nobody; the no-cluster
+rule above is the result.
 
 ## Files
 

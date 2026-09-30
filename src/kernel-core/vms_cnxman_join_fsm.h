@@ -620,7 +620,7 @@ struct cnxman_join_ops {
  * fixed text plus VMS_SCSNODE_MAX characters plus the terminator -- and the
  * composer never writes past it (it stops at the buffer, not at the name).
  */
-#define CNXMAN_JOIN_MSGBUF 64u
+#define CNXMAN_JOIN_MSGBUF 96u
 
 /* How many served units this FSM will record from one walk. The walk itself is
  * unbounded (it ends at the peer's own OFFLINE terminator); this bounds only

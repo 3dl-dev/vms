@@ -756,7 +756,11 @@ struct cnxman_join {
 	 */
 	uint32_t retry_at_ms;
 	uint8_t  retry_at_valid;
-	uint8_t  pad1[3];
+	/* 1 when that back-off followed a round that found NO member at all
+	 * (rd vms-e88): one appearing since ends it, where a round of silent
+	 * members is still waited out in full (E80's rate bound). */
+	uint8_t  backoff_no_member;
+	uint8_t  pad1[2];
 
 	/* ---- the disk-client discovery walk (FC-P3.4) ---- */
 	struct vms_mscp_cl_fsm  mscp;
@@ -912,6 +916,8 @@ struct cnxman_join {
 	/* VMS$VAXcluster connects this join put out to systems running this
 	 * implementation that nobody had connected (join_reach_ours). */
 	uint32_t ours_dialled;
+	/* back-offs ended early because a system said it is a member */
+	uint32_t backoffs_cut;
 	uint32_t attempts_exhausted;
 	uint32_t starts_backed_off;
 	uint32_t reissue_targets_absent;

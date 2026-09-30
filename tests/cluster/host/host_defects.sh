@@ -162,7 +162,9 @@ join-same-breath-gate-disarmed
 join-follow-csb-conn-disarmed
 join-member-count-to-foreign
 join-asks-a-system-in-no-cluster
-join-does-not-reach-ours"
+join-does-not-reach-ours
+coord-genesis-ignores-says-member
+join-no-member-backoff-not-cut"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -757,6 +759,9 @@ once the other says it is a member, the request goes to it
 held as NO_MEMBER
 and with only a joining system left, the round ends
 the join is back in IDLE to ask again, not parked
+while nobody is a member, the start waits out RECNXINTERVAL
+... counted as a back-off cut short
+a member that stayed silent is waited out in full (E80's rate bound), though it says it is a member
 EOF
         ;;
         esac;;
@@ -772,6 +777,33 @@ EOF
 ... that system
 and not again while that connect stands
 so it dials the OVMX system nobody had connected, once
+EOF
+        ;;
+        esac;;
+
+    coord-genesis-ignores-says-member)
+        case "$_f" in
+        facility)     echo "a system whose own PARAMS say it belongs to a cluster bars founding (rd vms-e88; the peer-in-cluster clause of the founding election, SS8b (1))";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_genesis_negctl";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_peer_in_cluster() no longer reads what the system advertised in its op-0x01 PARAMS, so only a CSID this node learned or a MEMBER flag bars founding. MEASURED consequence, stall-rig arm N-3 of this item: a voting OVMX node beside the real VAX -- which had said it was a member -- founded a cluster of its own with the other OVMX node, and the real VAX admitted that node into a second cluster.";;
+        require_fail) cat <<'EOF'
+... because that system belongs to a cluster
+EOF
+        ;;
+        esac;;
+
+    join-no-member-backoff-not-cut)
+        case "$_f" in
+        facility)     echo "a joiner whose last round found no member asks the first member that appears, not RECNXINTERVAL later (rd vms-e88)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_backoff_pending() no longer ends a no-member back-off when a system says it is a member, so the joiner sits out the whole RECNXINTERVAL. MEASURED consequence, stall-rig arm N-3 of this item: the joiner found only the other joining OVMX node, backed off 20 s, and while it waited that node founded a cluster of its own.";;
+        require_fail) cat <<'EOF'
+a member appearing: the next start runs, a second later, not twenty
+... counted as a back-off cut short
 EOF
         ;;
         esac;;
@@ -1210,6 +1242,16 @@ apply_edit() {
         # rd vms-e88: the call is unique in vms_cnxman_join_fsm.c and VANISHES
         # when replaced, so the mutation is not repeatable.
         sed -i 's|		join_reach_ours(j);|		(void)join_reach_ours; /* NEGCTL join-does-not-reach-ours */|' "$_file";;
+
+    coord-genesis-ignores-says-member)
+        # rd vms-e88: the edited line is unique in vms_cnxman_coord_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	       coord_peer_says_member(csb);|	       (0 \&\& coord_peer_says_member(csb)); /* NEGCTL coord-genesis-ignores-says-member */|' "$_file";;
+
+    join-no-member-backoff-not-cut)
+        # rd vms-e88: the guard is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (j->backoff_no_member \&\& j->cl != NULL \&\& join_member_in_sight(j)) {|	if (0 \&\& j->backoff_no_member \&\& j->cl != NULL \&\& join_member_in_sight(j)) { /* NEGCTL join-no-member-backoff-not-cut */|' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

@@ -473,6 +473,45 @@ static void test_refusal_speaks_again_when_the_reason_changes(void)
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u, "nothing was minted");
 }
 
+
+/*
+ * rd vms-e88 -- stall-rig arm N-3: a voting node beside a system whose own
+ * PARAMS says it belongs to a cluster founded one of its own, because that
+ * system held no CSID this node had learned. What a system SAYS it is is an
+ * honest read too, and it bars founding exactly as a learned CSID does,
+ * however many admission rounds the evidence carries.
+ */
+static void test_a_system_that_says_member_bars_founding(void)
+{
+	struct cnxman_form_evidence ev;
+	struct vms_csb *peer;
+	int rc;
+
+	printf("[negctl] a system whose PARAMS say 'member' bars founding\n");
+	bed_init(1u, 1u, (vms_scs_sysid_t)FOUNDER_SYSID);
+	peer = cnxman_club_alloc_csb(&g.cl.club, (vms_scs_sysid_t)1020u, 1);
+	cnxman_csb_set_scsnode(peer, (const uint8_t *)"VAXC", 4u);
+	/* negctl: coord-genesis-ignores-says-member */
+	cnxman_csb_set_advert(peer, 1u);
+	bed_snapshot();
+
+	ev.admission_rounds = 99u;
+	rc = cnxman_coord_found(&g.c, &ev);
+	ct_check(rc != 0, "a system that says it is a member: REFUSED");
+	ct_check_eq_u32(g.c.last_refusal,
+			(unsigned long)CNXMAN_COORD_REF_PEER_CLUSTER,
+			"... because that system belongs to a cluster");
+	bed_check_unchanged("the CLUB is byte-for-byte what it was");
+
+	/* CONTROL: the same system saying 0 -- in no cluster -- does not. */
+	bed_init(1u, 1u, (vms_scs_sysid_t)FOUNDER_SYSID);
+	peer = cnxman_club_alloc_csb(&g.cl.club, (vms_scs_sysid_t)1020u, 1);
+	cnxman_csb_set_advert(peer, 0u);
+	(void)cnxman_coord_found(&g.c, NULL);
+	ct_check(g.c.last_refusal != (unsigned long)CNXMAN_COORD_REF_PEER_CLUSTER,
+		 "CONTROL: a system in no cluster is no peer-in-cluster bar");
+}
+
 int main(void)
 {
 	test_votes_zero_never_founds();
@@ -482,6 +521,7 @@ int main(void)
 	test_peer_present_joins_not_founds();
 	test_member_present_never_founds();
 	test_member_present_outranks_any_evidence();
+	test_a_system_that_says_member_bars_founding();
 	test_election_loser_never_founds();
 	test_unexpressible_csid_refused();
 	test_transition_active_refused();

@@ -5915,6 +5915,7 @@ static void test_e88_a_system_in_no_cluster_is_not_asked(void)
 						     VMS_CM_OP_CONFIG), 1u,
 					"and the joining system never got one");
 		} else {
+			g.cl.club.recnxinterval = 20u;   /* SYSGEN's own */
 			(void)join_feed_from(member, MEMBER_CSID,
 					     mk_member_params(1u, 0u, 0x0002));
 			bed_beats(3u);
@@ -5930,6 +5931,23 @@ static void test_e88_a_system_in_no_cluster_is_not_asked(void)
 			ct_check(bed_logged("no system this node can reach "
 					    "belongs to a cluster"),
 				 "... said on the console");
+
+			/* That back-off waited out a cluster that did not
+			 * exist. The moment one does, it is asked -- not
+			 * RECNXINTERVAL later (stall-rig arm N-3: the joiner
+			 * sat out 20 s and its partner founded alone). */
+			ct_check_eq_u32(cnxman_join_start(&g.j), -1,
+					"while nobody is a member, the start "
+					"waits out RECNXINTERVAL");
+			/* negctl: join-no-member-backoff-not-cut */
+			(void)join_feed_from(member, MEMBER_CSID,
+					     mk_member_params(1u, 1u, 0x0002));
+			g.fake.now_ms += 1000u;
+			ct_check_eq_u32(cnxman_join_start(&g.j), 0,
+					"a member appearing: the next start "
+					"runs, a second later, not twenty");
+			ct_check_eq_u32(g.j.backoffs_cut, 1u,
+					"... counted as a back-off cut short");
 		}
 	}
 }
@@ -5946,6 +5964,7 @@ static void test_e88_a_declined_member_and_a_joiner_end_the_round(void)
 	other = bed_admit_with_a_second_member();
 	if (other == NULL)
 		return;
+	g.cl.club.recnxinterval = 20u;   /* SYSGEN's own */
 	(void)join_feed_from(other, OTHER_CSID, mk_member_params(0u, 0u, 0x0001));
 	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS);
 	ct_check_eq_u32(g.j.requests_unanswered, 1u,
@@ -5956,6 +5975,11 @@ static void test_e88_a_declined_member_and_a_joiner_end_the_round(void)
 			"the joining system is never asked");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_IDLE,
 			"the join is back in IDLE to ask again, not parked");
+	g.fake.now_ms += 1000u;
+	ct_check_eq_u32(cnxman_join_start(&g.j), -1,
+			"a member that stayed silent is waited out in full "
+			"(E80's rate bound), though it says it is a member");
+	ct_check_eq_u32(g.j.backoffs_cut, 0u, "... nothing cut short");
 }
 
 

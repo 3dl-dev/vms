@@ -1268,6 +1268,21 @@ static enum cnxman_join_rx join_start_deferred(struct cnxman_join *j,
 	return CNXMAN_JOIN_RX_CONSUMED;
 }
 
+/* Has any system in sight said, since, that it IS a member (rd vms-e88)? */
+static int join_member_in_sight(struct cnxman_join *j)
+{
+	struct vms_club *club = &j->cl->club;
+	uint32_t i;
+
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *c = cnxman_club_csb_at(club, i);
+
+		if (c != NULL && c->in_use && join_says_member(c))
+			return 1;
+	}
+	return 0;
+}
+
 /*
  * IS A BACK-OFF STILL RUNNING? (E80)
  *
@@ -1285,6 +1300,15 @@ static int join_backoff_pending(struct cnxman_join *j)
 {
 	if (!j->retry_at_valid)
 		return 0;
+	/* The back-off waits out a cluster that did not answer or did not
+	 * exist. One that has since said it exists is asked now (rd vms-e88:
+	 * an attempt that found nobody in a cluster must not sit out twenty
+	 * seconds while the member that appeared a moment later waits). */
+	if (j->backoff_no_member && j->cl != NULL && join_member_in_sight(j)) {
+		j->retry_at_valid = 0u;
+		j->backoffs_cut++;
+		return 0;
+	}
 	if ((int32_t)(join_now_ms(j) - j->retry_at_ms) < 0)
 		return 1;
 	j->retry_at_valid = 0u;   /* it elapsed: this is the fresh attempt */
@@ -3282,6 +3306,7 @@ static void join_attempt_exhausted(struct cnxman_join *j)
 {
 	j->attempts_exhausted++;
 	join_backoff_start(j);
+	j->backoff_no_member = 0u;   /* members exist and said nothing: wait */
 	join_stopped(j, CNXMAN_JOIN_FAIL_UNANSWERED,
 		     "%CNXMAN, no cluster member answered this node's membership "
 		     "request: this node is NOT a cluster member, and will ask "
@@ -3594,6 +3619,7 @@ static int join_target_in_no_cluster(struct cnxman_join *j,
 	j->no_member_rounds++;
 	j->attempts_exhausted++;
 	join_backoff_start(j);
+	j->backoff_no_member = 1u;   /* ends early if a member appears */
 	join_stopped(j, CNXMAN_JOIN_FAIL_UNANSWERED,
 		     "%CNXMAN, no system this node can reach belongs to a "
 		     "cluster: this node is NOT a cluster member, and will ask "

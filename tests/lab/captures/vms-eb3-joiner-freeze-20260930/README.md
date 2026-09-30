@@ -115,6 +115,69 @@ arms took the real VAX down on the unfixed build.
 pattern had the path order reversed. Arms run under those conditions are
 discarded. `runarm.sh` now also kills by tap name; see `rig/`.)
 
+## Matrix F on the first fix build (`d6644177`), and what it added
+
+F-1..F-15 (stopped there, to move the proof onto the final build): **13 PASS,
+0 VAX bugchecks** in 15 injected arms, including 8 in the op-0a window
+(pkt:8109; the arm that crashed the unfixed build 2 of 2 passes 7 of 7 at
+<= 25 s). Two FAILs, neither a bugcheck:
+
+* **F-6** (together, VAX-console trigger): every node reached MEMBER and the
+  VAX admitted OVMXB, but the harness's blind-typed login on OVMXB raced a
+  Password: prompt that came 14 s late while the node was joining. The session
+  never existed, so the grader read no view of OVMXB. `rig/b36node.sh` now
+  waits for each prompt and proves the login (`B36-LOGIN-OK`), retrying on
+  failure.
+* **F-13** (a-then-b, **30 s**, pkt:8109): past RECNXINTERVAL the VAX correctly
+  timed OVMXB out, removed it and refused its reconnect. OVMXB took CLUEXIT
+  and re-incarnated, as a real node does (vms-b36 oracle). The other member,
+  OVMXA (also OVMX), still held its old block in the reconnect window. It
+  re-established the new incarnation's connection as the **old**
+  conversation -- counters and the "already introduced" mask carried -- and
+  never sent its MODEL/PARAMS, so OVMXB waited for connectivity for the rest
+  of the arm. p. 7-24 DEAD / p. 7-25: a new incarnation is a new
+  conversation. `cnxman_csb_set_incarnation()` now records the change
+  (`cm_new_incarnation`) and the carry predicate refuses it -- the contract
+  the predicate's own comment already stated ("whose incarnation has not
+  changed").
+
+## Matrix H on `37afccda`, and oracle F7 (a stall past RECNXINTERVAL)
+
+H-1..H-13 (stopped there, to move to the next build): 11 PASS, **0 VAX
+bugchecks**. Two FAILs:
+
+* **H-6** (together, VAX-console trigger, 14 s) is not this item's window.
+  OVMXB was frozen before it asked, right after its VMS$VAXcluster
+  CONNECT_REQ to OVMXA was answered. The OVMX<->OVMX connect never completed
+  (OVMXA held OVMXB at ACCEPT for 400 s), and the VAX timed out the idle
+  OVMXA while its DLM requests went unanswered. Filed as **rd vms-04b**.
+* **H-13** (a-then-b, 30 s, pkt:8109), and F-13 before it: past RECNXINTERVAL
+  the VAX removed OVMXB. OVMXA was still inside the addition's barrier (step
+  1 sent, never released), and it refused the VAX's removal: "a new
+  transition opened while one is committed; the running one stands" (a rule
+  the code marked INFERRED, "no capture shows one").
+
+**Oracle F7** is the capture. The same freeze, 30 s, on three real V7.3
+nodes (`consoles/F7-*`, `/lab/k8s-labs/eb3lab/F7/F7.pcap`):
+
+```
+158.149 VAX3->VAX1 cat=01 op=0a              the addition's GO
+158.150 VAX1->VAX3 cat=01 op=0b smsg=12009   step 1 -- never released
+185.547 VAX1->VAX3 cat=01 op=03/op=08/op=0a  VAX1 opens the REMOVAL
+185.548 VAX3->VAX1 cat=81 op=08              VAX3, inside the stalled
+185.549 VAX3->VAX1 cat=01 op=0b ...          barrier, answers it and runs it
+```
+
+The real members removed the joiner and completed. The thawed joiner found
+itself removed and took CLUEXIT. (What followed is lab artifact: the
+CLUEXIT reboot came up on VAX1's root, a duplicate VAX1, and the real VAX1
+then bugchecked CNXMGRERR. Nothing here is drawn from after that point.)
+
+So a new transition supersedes a committed barrier that has stalled
+(`barrier_supersede_committed`: its open or a bare removal GO). Phase 2's
+count stands (p. 7-42); the stalled barrier's DLM rebuild and Phase-1
+record end.
+
 ## Files
 
 * `eb3-F5-20260930.pcap`, `eb3-F6-20260930.pcap` are trimmed by `trim.py`

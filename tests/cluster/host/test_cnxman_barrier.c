@@ -1365,6 +1365,73 @@ static void test_reopen_supersedes_before_the_go(void)
 	ct_check_eq_u32(g.n_sent, 2, "both proposals were acknowledged");
 }
 
+/*
+ * rd vms-eb3, oracle F7 (three real V7.3 nodes, the joiner frozen 30 s after
+ * its Phase-1 answer): the addition's barrier had started -- GO sent, step 1
+ * taken, never released, because the joiner was frozen -- and when the joiner
+ * timed out, a REMOVAL was opened. The real VAX inside the stalled addition
+ * barrier answered the removal and ran it to the end. Stall-rig arms F-13 and
+ * H-13: an OVMX member in the same place refused it ("the running one stands",
+ * an INFERRED rule) and was later timed out by the real VAX itself.
+ */
+static void test_a_new_transition_supersedes_a_stalled_barrier(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n, sent_before, nodes;
+
+	printf("[barrier] rd vms-eb3: a new transition supersedes a committed, "
+	       "stalled barrier (MEASURED, oracle F7)\n");
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_STEP && g.b.steps_sent == 1,
+		 "the addition's barrier runs: step 1 out, never released");
+	nodes = g.cl.club.cluster_nodes;
+
+	/* negctl: barrier-stalled-refuses-new-transition */
+	sent_before = g.n_sent;
+	(void)feed(f, mk_open_remove(f, EPOCH + 1u));
+	ct_check_eq_u32(g.b.transitions_superseded, 1u,
+			"the removal supersedes the stalled barrier");
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_OPEN &&
+		 g.b.epoch == EPOCH + 1u, "...and is now the transition");
+	ct_check(g.n_sent == sent_before + 1u &&
+		 sent_cat(g.n_sent - 1u) == 0x81u &&
+		 sent_op(g.n_sent - 1u) == VMS_CM_OP_XITION_REM,
+		 "its open is answered (0x81/0x08)");
+	ct_check_eq_u32(g.cl.club.cluster_nodes, nodes,
+			"p. 7-42: the count Phase 2 committed is not rolled back");
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 1u,
+			"and the new transition names who is in it");
+
+	(void)feed(f, mk_go(f, EPOCH + 1u, VMS_CM_CLASS_REMOVE, VMS_CM_ROLE_GO));
+	for (n = 1; n <= CNXMAN_BARRIER_STEPS; n++)
+		(void)feed(f, mk_release(f, EPOCH + 1u, n));
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_COMPLETE,
+		 "the removal's barrier runs to the end");
+
+	/* The same shape with a bare removal GO (spec SS4(p): a class-0x03
+	 * removal may start at op 0x0a with no open). */
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	/* negctl: barrier-stalled-ignores-new-go */
+	(void)feed(f, mk_go(f, EPOCH + 1u, VMS_CM_CLASS_REMOVE, VMS_CM_ROLE_GO));
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_STEP &&
+		 g.b.epoch == EPOCH + 1u && g.b.transitions_superseded == 1u,
+		 "a bare removal GO supersedes it too, and its barrier starts");
+
+	/* Control: the running epoch's own GO again changes nothing. */
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	sent_before = g.n_sent;
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	ct_check(g.b.transitions_superseded == 0u && g.n_sent == sent_before &&
+		 g.b.epoch == EPOCH,
+		 "the running epoch's GO again is not a new transition");
+}
+
 /* A retransmitted open is answered again and changes nothing -- the
  * coordinator retransmits, and an unanswered request strands it. */
 static void test_retransmitted_open_is_reanswered(void)
@@ -1416,6 +1483,7 @@ int main(void)
 	test_state_names();
 	test_two_transitions_back_to_back();
 	test_reopen_supersedes_before_the_go();
+	test_a_new_transition_supersedes_a_stalled_barrier();
 	test_retransmitted_open_is_reanswered();
 	return ct_summary("test_cnxman_barrier");
 }

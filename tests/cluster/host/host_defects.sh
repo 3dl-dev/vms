@@ -172,7 +172,9 @@ barrier-phase1-not-cleared
 join-transition-loss-redriven
 join-transition-reoffers-burst
 glue-close-abandons-held-transition
-csb-new-incarnation-carried"
+csb-new-incarnation-carried
+barrier-stalled-refuses-new-transition
+barrier-stalled-ignores-new-go"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -864,6 +866,7 @@ EOF
 and the member the nodemap names
 it stands through the GO and the barrier
 the coordinator's block is named at Phase 1
+and the new transition names who is in it
 EOF
         ;;
         esac;;
@@ -938,6 +941,33 @@ EOF
 a NEW incarnation is a new conversation: 1/0 (p. 7-25)
 and nothing is recorded as already said to it -- this node introduces itself again
 the fresh bind ends the record
+EOF
+        ;;
+        esac;;
+
+    barrier-stalled-refuses-new-transition)
+        case "$_f" in
+        facility)     echo "a new transition's open supersedes a committed, stalled barrier (rd vms-eb3, oracle F7)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_reopen() refuses a new epoch while a barrier is committed. MEASURED consequence, stall-rig arms F-13/H-13: an OVMX member stuck in the addition barrier of a joiner the real VAX had timed out refused the VAX's removal, and the VAX later timed the member out too.";;
+        require_fail) cat <<'EOF'
+...and is now the transition
+the removal supersedes the stalled barrier
+EOF
+        ;;
+        esac;;
+
+    barrier-stalled-ignores-new-go)
+        case "$_f" in
+        facility)     echo "a new transition's bare GO supersedes a committed, stalled barrier (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_go_in_step() treats every GO in STEP as a repeat, so a class-0x03 removal that starts at op 0x0a never reaches a member whose barrier stalled.";;
+        require_fail) cat <<'EOF'
+a bare removal GO supersedes it too, and its barrier starts
 EOF
         ;;
         esac;;
@@ -1429,6 +1459,16 @@ apply_edit() {
         # rd vms-eb3: the matched text is unique in its file and the replacement
         # no longer matches, so the mutation is not repeatable.
         sed -i 's|	if (csb->cm_new_incarnation)|	if (0 \&\& csb->cm_new_incarnation) /* NEGCTL csb-new-incarnation-carried */|' "$_file";;
+
+    barrier-stalled-refuses-new-transition)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|		barrier_supersede_committed(b);\n|X|; s|^		barrier_h_open(b, m);$|		barrier_h_open(b, m);|; /^	if (b->state == (uint8_t)CNXMAN_BARRIER_STEP) {$/,/^	}$/ s|^		barrier_supersede_committed(b);$|		barrier_respond_echo(b, m); return; /* NEGCTL barrier-stalled-refuses-new-transition */|' "$_file";;
+
+    barrier-stalled-ignores-new-go)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	    go.role != VMS_CM_ROLE_GO \|\| go.epoch == b->epoch) {|	    1) { /* NEGCTL barrier-stalled-ignores-new-go */|' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

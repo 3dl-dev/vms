@@ -1,0 +1,149 @@
+[02:30:34] === run 1/6: page-order (order A,B,C, gap 5000ms, cpu x1) ===
+[02:30:53]   t=15s vis=visible drift=132ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:31:11]   t=33s vis=visible drift=132ms sca={"VAXC":3} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:31:29]   t=51s vis=visible drift=132ms sca={"VAXC":15} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:31:47]   t=69s vis=visible drift=132ms sca={"VAXC":125,"OVMXB":128} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:32:05]   t=88s vis=visible drift=132ms sca={"VAXC":557,"OVMXB":788} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:32:23]   t=106s vis=visible drift=132ms sca={"VAXC":623,"OVMXB":864} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:32:41]   t=124s vis=visible drift=132ms sca={"VAXC":704,"OVMXB":957} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:32:59]   t=142s vis=visible drift=132ms sca={"VAXC":794,"OVMXB":1085,"OVMXA":84} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:33:17]   t=160s vis=visible drift=132ms sca={"VAXC":1388,"OVMXB":1427,"OVMXA":756} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={}
+[02:33:21] --> page-order: CN=3
+[02:33:21] === run 2/6: all-at-once (order A,B,C, gap 500ms, cpu x1) ===
+[02:33:27]   t=2s vis=visible drift=124ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:33:45]   t=20s vis=visible drift=145ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:34:03]   t=38s vis=visible drift=145ms sca={"VAXC":8} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:34:21]   t=56s vis=visible drift=145ms sca={"VAXC":20} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={"VAXC":1}
+[02:34:39]   t=74s vis=visible drift=145ms sca={"VAXC":184,"OVMXB":202} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:34:57]   t=92s vis=visible drift=145ms sca={"VAXC":582,"OVMXB":830} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:35:15]   t=110s vis=visible drift=145ms sca={"VAXC":634,"OVMXB":894} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:35:33]   t=128s vis=visible drift=145ms sca={"VAXC":688,"OVMXB":963} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:35:51]   t=146s vis=visible drift=145ms sca={"VAXC":756,"OVMXB":1053} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:36:09]   t=164s vis=visible drift=145ms sca={"VAXC":823,"OVMXB":1143} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:36:27]   t=182s vis=visible drift=145ms sca={"VAXC":879,"OVMXB":1218} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:36:45]   t=200s vis=visible drift=145ms sca={"VAXC":947,"OVMXB":1306} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:37:03]   t=218s vis=visible drift=145ms sca={"VAXC":1004,"OVMXB":1380} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:37:22]   t=236s vis=visible drift=145ms sca={"VAXC":1072,"OVMXB":1465} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:37:40]   t=255s vis=visible drift=145ms sca={"VAXC":1127,"OVMXB":1534} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:37:58]   t=273s vis=visible drift=145ms sca={"VAXC":1193,"OVMXB":1619} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:38:16]   t=291s vis=visible drift=145ms sca={"VAXC":1251,"OVMXB":1694} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:38:34]   t=309s vis=visible drift=145ms sca={"VAXC":1317,"OVMXB":1780} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:38:52]   t=327s vis=visible drift=145ms sca={"VAXC":1385,"OVMXB":1870} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:39:10]   t=345s vis=visible drift=145ms sca={"VAXC":1440,"OVMXB":1942} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:39:28]   t=363s vis=visible drift=145ms sca={"VAXC":1507,"OVMXB":2030} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:39:46]   t=381s vis=visible drift=145ms sca={"VAXC":1563,"OVMXB":2103} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:40:04]   t=399s vis=visible drift=145ms sca={"VAXC":1630,"OVMXB":2191} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:40:22]   t=417s vis=visible drift=145ms sca={"VAXC":1686,"OVMXB":2264} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:40:40]   t=435s vis=visible drift=145ms sca={"VAXC":1753,"OVMXB":2351} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:40:58]   t=453s vis=visible drift=145ms sca={"VAXC":1823,"OVMXB":2442} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:41:16]   t=471s vis=visible drift=145ms sca={"VAXC":1881,"OVMXB":2517} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:41:34]   t=489s vis=visible drift=145ms sca={"VAXC":1949,"OVMXB":2605} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:41:52]   t=507s vis=visible drift=145ms sca={"VAXC":2006,"OVMXB":2680} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:42:10]   t=525s vis=visible drift=145ms sca={"VAXC":2074,"OVMXB":2770} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:42:28]   t=543s vis=visible drift=145ms sca={"VAXC":2141,"OVMXB":2860} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:42:46]   t=561s vis=visible drift=145ms sca={"VAXC":2200,"OVMXB":2935} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:43:04]   t=579s vis=visible drift=145ms sca={"VAXC":2268,"OVMXB":3025} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:43:22]   t=597s vis=visible drift=145ms sca={"VAXC":2333,"OVMXB":3112} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[02:43:41] --> all-at-once: NOT CN=3: OVMXA never named 0x7c3,0x7c4,0x7c5; OVMXB never named 0x7c3; the real VAX admitted OVMXB; no SCA frames from OVMXA; panels that only repainted once revealed: {"VAXC":1} (rd vms-0bc)
+[02:43:41] === run 3/6: page-order-throttled4 (order A,B,C, gap 5000ms, cpu x4) ===
+[02:44:02]   t=16s vis=visible drift=1340ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:44:20]   t=35s vis=visible drift=1557ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:44:38]   t=53s vis=visible drift=1557ms sca={"VAXC":1} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:44:56]   t=71s vis=visible drift=1557ms sca={"VAXC":12} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:45:14]   t=89s vis=visible drift=1557ms sca={"VAXC":216,"OVMXB":255} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:45:32]   t=107s vis=visible drift=1557ms sca={"VAXC":538,"OVMXB":738} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:45:50]   t=125s vis=visible drift=1557ms sca={"VAXC":608,"OVMXB":819} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:46:08]   t=143s vis=visible drift=1557ms sca={"VAXC":712,"OVMXB":967,"OVMXA":87} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={"VAXC":1}
+[02:46:26]   t=161s vis=visible drift=1557ms sca={"VAXC":1242,"OVMXB":1269,"OVMXA":694} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={"VAXC":1}
+[02:46:31] --> page-order-throttled4: CN=3
+[02:46:31] === run 4/6: b-first (order B,A,C, gap 3000ms, cpu x1) ===
+[02:46:43]   t=9s vis=visible drift=87ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:47:02]   t=27s vis=visible drift=87ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:47:20]   t=45s vis=visible drift=87ms sca={"VAXC":11} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:47:38]   t=63s vis=visible drift=87ms sca={"VAXC":66,"OVMXB":63} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:47:56]   t=82s vis=visible drift=87ms sca={"VAXC":541,"OVMXB":763} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:48:14]   t=100s vis=visible drift=87ms sca={"VAXC":627,"OVMXB":859} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:48:32]   t=118s vis=visible drift=87ms sca={"VAXC":714,"OVMXB":960} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:48:50]   t=136s vis=visible drift=87ms sca={"VAXC":789,"OVMXB":1045} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:49:08]   t=154s vis=visible drift=87ms sca={"VAXC":878,"OVMXB":1146} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:49:26]   t=172s vis=visible drift=87ms sca={"VAXC":965,"OVMXB":1246} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:49:44]   t=190s vis=visible drift=87ms sca={"VAXC":1044,"OVMXB":1335} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:50:02]   t=208s vis=visible drift=87ms sca={"VAXC":1126,"OVMXB":1426} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:50:20]   t=226s vis=visible drift=87ms sca={"VAXC":1211,"OVMXB":1521} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:50:38]   t=244s vis=visible drift=87ms sca={"VAXC":1285,"OVMXB":1602} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:50:56]   t=262s vis=visible drift=87ms sca={"VAXC":1371,"OVMXB":1698} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:51:14]   t=280s vis=visible drift=87ms sca={"VAXC":1445,"OVMXB":1779} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:51:32]   t=298s vis=visible drift=87ms sca={"VAXC":1529,"OVMXB":1874} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:51:50]   t=316s vis=visible drift=87ms sca={"VAXC":1615,"OVMXB":1969} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:52:08]   t=334s vis=visible drift=87ms sca={"VAXC":1691,"OVMXB":2053} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:52:26]   t=352s vis=visible drift=87ms sca={"VAXC":1779,"OVMXB":2151} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:52:44]   t=370s vis=visible drift=87ms sca={"VAXC":1853,"OVMXB":2232} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:53:02]   t=388s vis=visible drift=87ms sca={"VAXC":1940,"OVMXB":2327} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:53:20]   t=406s vis=visible drift=87ms sca={"VAXC":2014,"OVMXB":2411} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:53:38]   t=424s vis=visible drift=87ms sca={"VAXC":2101,"OVMXB":2509} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:53:56]   t=442s vis=visible drift=87ms sca={"VAXC":2189,"OVMXB":2607} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:54:14]   t=460s vis=visible drift=87ms sca={"VAXC":2261,"OVMXB":2690} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:54:32]   t=478s vis=visible drift=87ms sca={"VAXC":2348,"OVMXB":2786} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:54:50]   t=496s vis=visible drift=87ms sca={"VAXC":2438,"OVMXB":2885} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:55:08]   t=514s vis=visible drift=87ms sca={"VAXC":2513,"OVMXB":2968} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:55:26]   t=532s vis=visible drift=87ms sca={"VAXC":2600,"OVMXB":3066} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:55:44]   t=550s vis=visible drift=87ms sca={"VAXC":2676,"OVMXB":3149} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:56:03]   t=568s vis=visible drift=87ms sca={"VAXC":2763,"OVMXB":3249} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:56:21]   t=586s vis=visible drift=87ms sca={"VAXC":2848,"OVMXB":3343} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:56:39] --> b-first: NOT CN=3: OVMXA never named 0x7c3,0x7c4,0x7c5; OVMXB never named 0x7c3; the real VAX admitted OVMXB; no SCA frames from OVMXA
+[02:56:39] === run 5/6: c-first-legacy (order C,A,B, gap 5000ms, cpu x1) ===
+[02:56:59]   t=16s vis=visible drift=105ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:57:17]   t=34s vis=visible drift=105ms sca={"VAXC":7} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:57:35]   t=52s vis=visible drift=105ms sca={"VAXC":18} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[02:57:53]   t=70s vis=visible drift=105ms sca={"VAXC":32} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:58:11]   t=88s vis=visible drift=105ms sca={"VAXC":589,"OVMXB":833} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:58:29]   t=106s vis=visible drift=105ms sca={"VAXC":662,"OVMXB":913} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:58:47]   t=124s vis=visible drift=105ms sca={"VAXC":750,"OVMXB":1014} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:59:05]   t=142s vis=visible drift=105ms sca={"VAXC":837,"OVMXB":1116} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:59:23]   t=160s vis=visible drift=105ms sca={"VAXC":924,"OVMXB":1217} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:59:41]   t=178s vis=visible drift=105ms sca={"VAXC":997,"OVMXB":1302} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[02:59:59]   t=196s vis=visible drift=105ms sca={"VAXC":1077,"OVMXB":1397} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:00:17]   t=214s vis=visible drift=105ms sca={"VAXC":1137,"OVMXB":1469} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:00:35]   t=232s vis=visible drift=105ms sca={"VAXC":1211,"OVMXB":1560} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:00:53]   t=250s vis=visible drift=105ms sca={"VAXC":1286,"OVMXB":1653} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:01:11]   t=268s vis=visible drift=105ms sca={"VAXC":1348,"OVMXB":1729} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:01:29]   t=286s vis=visible drift=105ms sca={"VAXC":1426,"OVMXB":1823} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:01:47]   t=304s vis=visible drift=105ms sca={"VAXC":1485,"OVMXB":1897} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:02:05]   t=322s vis=visible drift=105ms sca={"VAXC":1555,"OVMXB":1989} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:02:23]   t=340s vis=visible drift=105ms sca={"VAXC":1626,"OVMXB":2080} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:02:41]   t=358s vis=visible drift=105ms sca={"VAXC":1685,"OVMXB":2155} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:02:59]   t=376s vis=visible drift=105ms sca={"VAXC":1753,"OVMXB":2245} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:03:17]   t=394s vis=visible drift=105ms sca={"VAXC":1817,"OVMXB":2328} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:03:35]   t=412s vis=visible drift=105ms sca={"VAXC":1881,"OVMXB":2410} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:03:53]   t=430s vis=visible drift=105ms sca={"VAXC":1951,"OVMXB":2501} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:04:11]   t=448s vis=visible drift=105ms sca={"VAXC":2010,"OVMXB":2577} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:04:30]   t=466s vis=visible drift=105ms sca={"VAXC":2079,"OVMXB":2667} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:04:48]   t=484s vis=visible drift=105ms sca={"VAXC":2148,"OVMXB":2756} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:05:06]   t=502s vis=visible drift=105ms sca={"VAXC":2206,"OVMXB":2833} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:05:24]   t=521s vis=visible drift=105ms sca={"VAXC":2274,"OVMXB":2922} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:05:42]   t=539s vis=visible drift=105ms sca={"VAXC":2331,"OVMXB":2997} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:06:00]   t=557s vis=visible drift=105ms sca={"VAXC":2401,"OVMXB":3087} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:06:18]   t=575s vis=visible drift=105ms sca={"VAXC":2472,"OVMXB":3178} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:06:36]   t=593s vis=visible drift=105ms sca={"VAXC":2533,"OVMXB":3254} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[03:06:54] --> c-first-legacy: NOT CN=3: OVMXA never named 0x7c3,0x7c4,0x7c5; OVMXB never named 0x7c3; the real VAX admitted OVMXB; no SCA frames from OVMXA
+[03:06:54] === run 6/6: all-at-once-throttled2 (order A,B,C, gap 500ms, cpu x2) ===
+[03:07:00]   t=2s vis=visible drift=71ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[03:07:18]   t=20s vis=visible drift=313ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[03:07:36]   t=38s vis=visible drift=313ms sca={"VAXC":6} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[03:07:54]   t=56s vis=visible drift=313ms sca={"VAXC":19} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={"VAXC":1}
+[03:08:12]   t=74s vis=visible drift=313ms sca={"VAXC":510,"OVMXB":737} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[03:08:30]   t=92s vis=visible drift=313ms sca={"VAXC":566,"OVMXB":806} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[03:08:48]   t=110s vis=visible drift=313ms sca={"VAXC":638,"OVMXB":892} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[03:09:06]   t=128s vis=visible drift=313ms sca={"VAXC":699,"OVMXB":967} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":1}
+[03:09:25]   t=146s vis=visible drift=313ms sca={"VAXC":794,"OVMXB":1106,"OVMXA":83} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={"VAXC":2}
+[03:09:43]   t=164s vis=visible drift=313ms sca={"VAXC":1384,"OVMXB":1445,"OVMXA":766} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={"VAXC":2}
+[03:09:46] --> all-at-once-throttled2: CN=3
+
+PASS  page-order               CN=3
+FAIL  all-at-once              NOT CN=3: OVMXA never named 0x7c3,0x7c4,0x7c5; OVMXB never named 0x7c3; the real VAX admitted OVMXB; no SCA frames from OVMXA; panels that only repainted once revealed: {"VAXC":1} (rd vms-0bc)
+PASS  page-order-throttled4    CN=3
+FAIL  b-first                  NOT CN=3: OVMXA never named 0x7c3,0x7c4,0x7c5; OVMXB never named 0x7c3; the real VAX admitted OVMXB; no SCA frames from OVMXA
+FAIL  c-first-legacy           NOT CN=3: OVMXA never named 0x7c3,0x7c4,0x7c5; OVMXB never named 0x7c3; the real VAX admitted OVMXB; no SCA frames from OVMXA
+PASS  all-at-once-throttled2   CN=3
+
+VISITOR_GATE={"runs":6,"failed":3,"pass":false}

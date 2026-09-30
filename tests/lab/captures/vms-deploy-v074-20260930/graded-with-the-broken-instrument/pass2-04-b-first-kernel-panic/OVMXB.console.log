@@ -1,0 +1,61 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+>> NetBSD/vax boot [1.12 (Mon Dec 16 13:08:11 UTC 2024)] <<
+>> Press any key to abort autoboot 0
+nfs_open: must mount first.
+open netbsd.vax: Device not configured
+> boot netbsd
+3644384+185792 [255056+241286]=0x420888
+[   1.0000000] Copyright (c) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
+[   1.0000000]     2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013,
+[   1.0000000]     2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023,
+[   1.0000000]     2024
+[   1.0000000]     The NetBSD Foundation, Inc.  All rights reserved.
+[   1.0000000] Copyright (c) 1982, 1986, 1989, 1991, 1993
+[   1.0000000]     The Regents of the University of California.  All rights reserved.
+
+[   1.0000000] NetBSD 10.1 (OVMX) #9: Sat Aug 29 08:54:46 UTC 2026
+[   1.0000000]  root@646cfb5fbb9e:/obj/sys/arch/vax/compile/OVMX
+[   1.0000000] MicroVAX 3800/3900
+[   1.0000000] total memory = 16328 KB
+[   1.0000000] avail memory = 11144 KB
+[   1.0000000] Detecting hardware...|
+: version 3 model 3
+[   1.0000000] mscpbus0: DMA burst size set to 4
+[   1.0000000] qt !Turbo
+[   1.0000000] WARNING: system needs entropy for security; see entropy(7)
+ drive 0: RD54
+ drive 1: RD54
+ drive 2: RD54
+ drive 3: RX50
+[   1.4500030] ra0: size 664360 sectors
+ unit offline (not mounted) (code 3, subcode 1)
+ unit offline (not mounted) (code 3, subcode 1)
+ unit offline (not mounted) (code 3, subcode 1)
+[   1.5600030]  done.
+[   1.5600030] WARNING: 3 errors while detecting hardware; check system log.
+[   1.5600030] boot device: ra0
+[   1.6300030] WARNING: preposterous TOD clock time
+[   1.6300030] WARNING: using filesystem time
+[   1.6300030] WARNING: CHECK AND RESET THE DATE!
+OVMX/NetBSD -- SYSKRNL (NetBSD kernel)
+[   5.1300030] DEBUG: module: Loading module from /stand/vax/10.1/modules/vms/vms.kmod
+[   6.7900030] DEBUG: module: Loading plist from /stand/vax/10.1/modules/vms/vms.plist
+[   7.1300030] entropy: best effort
+[   7.1400030] DEBUG: module: plist load returned error 2 for `/stand/vax/10.1/modules/vms/vms.kmod'

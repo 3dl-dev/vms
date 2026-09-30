@@ -1,0 +1,5 @@
+1790762838.485113 DROP_GO armed on tapo2
+1790762838.485345 armed match=8109 joiner=1026 pid=5064 secs=14.0
+1790762863.769874 FREEZE on cat=81 op=09 src=1026 dst=1027
+1790762864.274390 DROP_GO removed: Sent 204 bytes 1 pkt (dropped 1, overlimits 0 requeues 0)
+1790762877.775011 THAW after 14.0s

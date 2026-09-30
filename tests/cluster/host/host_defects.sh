@@ -154,7 +154,13 @@ pe-start-refusal-silent
 pe-reformation-stacks-before-it-starts
 pe-peer-start-keeps-dead-echo
 recnx-attempt-supersedes-in-flight
-csb-dropped-spare-reads-as-loss"
+csb-dropped-spare-reads-as-loss
+join-asks-the-last-discovered
+join-connectivity-gate-disarmed
+join-unheard-gate-disarmed
+join-same-breath-gate-disarmed
+join-follow-csb-conn-disarmed
+join-member-count-to-foreign"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -516,6 +522,7 @@ three cat-0x01 originations on the member's connection
 MODEL first (sec 4(o) row 1)
 ... then PARAMS (row 2)
 ... then op-0x02, the request that starts admission, on the MEMBER-INITIATED connection and not on one of this node's own
+and nothing at all was put on a connection of ours: there is not one
 EOF
                       ;;
         esac;;
@@ -622,6 +629,108 @@ t=2000: NO second CONNECT over the one being answered
 t=3000: still none
 one attempt, not three
 and the two held beats are COUNTED, not silent
+EOF
+        ;;
+        esac;;
+
+    join-asks-the-last-discovered)
+        case "$_f" in
+        facility)     echo "the joiner's rank of whom to ask (rd vms-e88: trios A and A2 -- a real V7.3 joiner asks the highest-SCSSYSTEMID member, not the one it discovered last)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_outranks() answers yes to every later candidate, so the member asked is the last askable block in CLUB (discovery) order -- the p. 7-38 queue-tail rule this code ran before rd vms-e88. MEASURED consequence, rig arm S-1: the joining OVMX node discovered the other OVMX node 2 s before the real VAX, asked it -- an outranked member that discards the request by design -- and was never admitted.";;
+        require_fail) cat <<'EOF'
+trio A/A2 order: the higher member is asked though the lower was discovered last (nearest the CLUB tail)
+EOF
+        ;;
+        esac;;
+
+    join-connectivity-gate-disarmed)
+        case "$_f" in
+        facility)     echo "the joiner's p. 7-37 connectivity gate (rd vms-e88: trio C3 -- a real V7.3 joiner that could reach one of two members asked nobody for five minutes)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() no longer holds a request while the members advertise more members than this node has connectivity with, so the join asks the one member it can see. MEASURED consequence, rig arm S-1: that member was the outranked OVMX node, which discards the request by design (rd vms-1ac), and the joiner was never admitted.";;
+        require_fail) cat <<'EOF'
+... a RETARGET, not a decline: nobody had been asked
+... the third is op-0x02
+MODEL, PARAMS, then the request, on ITS connection
+and VMS's own console line names whom it asked
+and said on the console
+held for CONNECTIVITY
+no op-0x02 while one of two members is out of reach -- thirty beats, as the real joiner waited five minutes
+nobody was asked, so nobody was declined
+the join moves to the higher member once it is in reach
+EOF
+        ;;
+        esac;;
+
+    join-unheard-gate-disarmed)
+        case "$_f" in
+        facility)     echo "no membership request before the member's own PARAMS (rd vms-e88: every real V7.3 joiner's op-0x02 followed the member's op-0x01)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() asks a member that has sent this node no PARAMS, so the join cannot know whether it is asking a member at all. MEASURED consequence, rig arm T-15: the request went to the real VAX before the VAX had said a word on that connection, and the VAX never answered it.";;
+        require_fail) cat <<'EOF'
+... held as UNHEARD
+a member that has sent no PARAMS is not asked
+and said on the console
+and still nothing was asked of anybody
+held as UNHEARD
+the silence window later it is given up on, like an unanswered member
+EOF
+        ;;
+        esac;;
+
+    join-same-breath-gate-disarmed)
+        case "$_f" in
+        facility)     echo "op-0x02 is never in the identity burst (spec sec 4(o): sending 0x02 inside the initial burst leaves the peer silent; every real V7.3 joiner's request came >= 0.7 s after its own PARAMS)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() no longer waits one beat after this node's own MODEL/PARAMS, so MODEL, PARAMS and CONFIG leave in one burst. MEASURED consequence, rig arm T-15: exactly that three-frame burst went to the real VAX and the VAX never acknowledged the request.";;
+        require_fail) cat <<'EOF'
+... and the re-offer counter does not move
+... but NOT op-0x02 in the same breath (rd vms-e88; spec sec 4(o): 0x02 inside the identity burst leaves the peer silent)
+... re-offered on that beat, once
+MODEL and PARAMS, and not op-0x02 with them
+and the identity records reached SCS this time
+held as the same breath
+op 0x02 is due, but never in the same breath as the identity records it follows (rd vms-e88)
+the identity records go out on the new connection at once
+EOF
+        ;;
+        esac;;
+
+    join-follow-csb-conn-disarmed)
+        case "$_f" in
+        facility)     echo "the request rides the connection the executive records for the member (rd vms-e88: rig arm T-15 -- two crossed connects, the CSB kept the one the real VAX keeps, the join held the other)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() no longer moves the join onto the CSB's own Con.ID, so after a crossing the join keeps the connection the real VAX abandons; its E77 gate then refuses to stamp there and no request reaches any connection.";;
+        require_fail) cat <<'EOF'
+E77: the kept connection's dialogue opens at 1
+on the kept connection, after this node's identity there
+one request in the world
+the join moves to the connection the executive records
+EOF
+        ;;
+        esac;;
+
+    join-member-count-to-foreign)
+        case "$_f" in
+        facility)     echo "a member's count goes only to a peer running this implementation (rd vms-e88; the rd vms-1ac rule -- member-only bytes OVMX does not ground are symmetric between two OVMX nodes and a bugcheck risk in front of a VAX)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_members_for() drops the peer_is_ours test, so a foreign connection manager is sent a member-form count beside the zero member-only fields OVMX cannot ground: a record in a shape no real node writes.";;
+        require_fail) cat <<'EOF'
+a foreign connection manager still hears 0
+and nothing new goes to the foreign one
 EOF
         ;;
         esac;;
@@ -1020,6 +1129,36 @@ apply_edit() {
     recnx-attempt-supersedes-in-flight)
         # `    csb->attempt_in_flight) {` is unique in this file.
         sed -i 's|    csb->attempt_in_flight) {|    0 \&\& csb->attempt_in_flight) { /* NEGCTL recnx-attempt-supersedes-in-flight */|' "$_file";;
+
+    join-asks-the-last-discovered)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	return a->sysid > b->sysid;|	return 1; /* NEGCTL join-asks-the-last-discovered: the last askable block wins, the old queue-tail rule */|' "$_file";;
+
+    join-connectivity-gate-disarmed)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if ((uint32_t)v.max_advertised > v.members_connected)|	if (0 \&\& (uint32_t)v.max_advertised > v.members_connected) /* NEGCTL join-connectivity-gate-disarmed */|' "$_file";;
+
+    join-unheard-gate-disarmed)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (csb == NULL \|\| !csb->adv_valid)|	if (csb == NULL) /* NEGCTL join-unheard-gate-disarmed */|' "$_file";;
+
+    join-same-breath-gate-disarmed)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (join_ident_fresh(j))|	if (0 \&\& join_ident_fresh(j)) /* NEGCTL join-same-breath-gate-disarmed */|' "$_file";;
+
+    join-follow-csb-conn-disarmed)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (csb != NULL \&\& join_follow_csb_conn(j, csb))|	if (0 \&\& csb != NULL \&\& join_follow_csb_conn(j, csb)) /* NEGCTL join-follow-csb-conn-disarmed */|' "$_file";;
+
+    join-member-count-to-foreign)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (csb == NULL \|\| !csb->peer_is_ours \|\| !join_node_already_member(j))|	if (csb == NULL \|\| !join_node_already_member(j)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

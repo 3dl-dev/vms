@@ -497,8 +497,10 @@ static void replay(void)
 	cnxman_join_opened(&g.j, CM_CONID);
 
 	/* sec 4(o) row 3: the peer reciprocates in kind within ~1 ms. THIS is
-	 * the manifest-hashed op-0x01 specimen. */
-	(void)feed_fixture("cm-params");
+	 * a manifest-hashed op-0x01 specimen: a real V7.3 that is the sole
+	 * member of its cluster, saying so at body[18:20] (rd vms-e88) -- the
+	 * record every real joiner had in hand before it asked. */
+	(void)feed_fixture("cm-params-sole-member-oracle");
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -506,6 +508,11 @@ static void replay(void)
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	/* The walk takes real time on the wire -- the e88 trios measured
+	 * 0.7..1.9 s from the joiner's own PARAMS to its op-0x02 -- and the
+	 * virtual clock moves with it. No timer fires: the terminator below
+	 * is still what releases the request. */
+	g.clock.now_ms += CNXMAN_JOIN_WATCH_MS;
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_OFFLINE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -649,7 +656,7 @@ static void replay_through_a_transient(uint32_t *timers_fired)
 
 	cnxman_join_opened(&g.j, CM_CONID);
 
-	(void)feed_fixture("cm-params");
+	(void)feed_fixture("cm-params-sole-member-oracle");   /* rd vms-e88 */
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -657,6 +664,7 @@ static void replay_through_a_transient(uint32_t *timers_fired)
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	g.clock.now_ms += CNXMAN_JOIN_WATCH_MS;   /* the walk takes time (rd vms-e88) */
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_OFFLINE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -781,7 +789,7 @@ static void replay_rejoin(void)
 	cnxman_join_opened(&g.j, MSCP_CONID);
 	/* ... and step 4 opens NOTHING: the connection already exists. */
 
-	(void)feed_fixture("cm-params");
+	(void)feed_fixture("cm-params-sole-member-oracle");   /* rd vms-e88 */
 
 	len = mk_scc_end(VMS_MSCP_CL_SCC_MSGID0);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -789,6 +797,7 @@ static void replay_rejoin(void)
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	g.clock.now_ms += CNXMAN_JOIN_WATCH_MS;   /* the walk takes time (rd vms-e88) */
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_OFFLINE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -869,7 +878,8 @@ int main(void)
 	}
 	printf("  loaded %d manifest-hashed specimens from %s\n", g_nfx,
 	       OVMX_FIXTURE_DIR);
-	ct_check(fixture("cm-params") != NULL, "cm-params specimen present");
+	ct_check(fixture("cm-params-sole-member-oracle") != NULL,
+		 "cm-params-sole-member-oracle specimen present");
 	ct_check(fixture("cm-open-add-req") != NULL,
 		 "cm-open-add-req specimen present");
 	ct_check(fixture("cm-commit-req") != NULL,

@@ -553,6 +553,27 @@ static void join_advert_mark(struct vms_csb *csb, vms_conid_t conid,
 	csb->cm_advert_sent |= bit;
 }
 
+/* This node's own identity records just went to `csb`. Remembered only for the
+ * member this join is asking -- the one an op-0x02 must not ride in the same
+ * breath as (rd vms-e88, CNXMAN_JOIN_HOLD_FRESH). */
+static void join_note_ident(struct cnxman_join *j, const struct vms_csb *csb)
+{
+	if (csb == NULL || csb != join_target_csb(j))
+		return;
+	j->ident_ms = join_now_ms(j);
+	j->ident_ms_valid = 1u;
+}
+
+/* Is it still the same breath? One watchdog beat, on the injected clock,
+ * wrap-safe. */
+static int join_ident_fresh(const struct cnxman_join *j)
+{
+	if (!j->ident_ms_valid)
+		return 0;
+	return (int32_t)(join_now_ms(j) - j->ident_ms) <
+	       (int32_t)CNXMAN_JOIN_WATCH_MS;
+}
+
 /* Build this node's model advertisement into `scratch`. Nonzero when the codec
  * refused, which has already ended the join honestly. */
 static vms_codec_status_t join_build_model(struct cnxman_join *j)
@@ -577,6 +598,7 @@ static void join_send_model(struct cnxman_join *j)
 	if (join_emit_cm(j, 0) == 0) {
 		j->model_sent++;
 		j->burst_on_conn |= CNXMAN_JOIN_B_MODEL;
+		join_note_ident(j, csb);
 		join_advert_mark(csb, j->cm_conid, CNXMAN_JOIN_B_MODEL);
 	}
 }
@@ -603,11 +625,67 @@ static void join_note_lockdirwt(struct cnxman_join *j)
 	}
 }
 
-/* Build this node's cluster-parameters record into `scratch`, VOTES read from
- * the REAL SYSGEN parameters this node booted with -- never a default (spec
- * sec 4(j) pinned body[22:24] byte-exact across four configured values; 0 is a
- * legitimate one). */
-static vms_codec_status_t join_build_params(struct cnxman_join *j)
+static int join_node_already_member(const struct cnxman_join *j);
+
+/*
+ * THE MEMBER COUNT this node puts in a PARAMS to `csb` (rd vms-e88): the
+ * CLUB's own count of committed members while this node is one, 0 while it is
+ * not -- exactly what a real joiner and a real member send (VMS_OFF_CM_MEMBERS).
+ *
+ * ONLY TO A PEER RUNNING THIS IMPLEMENTATION (`peer_is_ours`). A real member's
+ * PARAMS carries more member-only state beside the count -- body[12], two VMS
+ * time quadwords at body[28:44] and body[44] -- none of which OVMX grounds, so
+ * the count alone in front of a foreign connection manager would be a member
+ * record in a shape no real node writes: the rd vms-1ac rule (an admission's
+ * ungrounded op-0x09 bytes are symmetric between two OVMX nodes and a
+ * bugcheck risk in front of a VAX), applied to this record. A foreign peer
+ * keeps getting the 0 OVMX has always sent there.
+ */
+static uint16_t join_members_for(const struct cnxman_join *j,
+				 const struct vms_csb *csb)
+{
+	uint32_t n;
+
+	if (csb == NULL || !csb->peer_is_ours || !join_node_already_member(j))
+		return 0u;
+	n = j->cl->club.cluster_nodes;
+	return (uint16_t)(n > 0xffffu ? 0xffffu : n);
+}
+
+/*
+ * IS A PARAMS DUE ON `conid` TO `csb`? Either this connection has not carried
+ * one, or it carried a member count that is no longer this node's to a system
+ * that is not a member yet -- a real member re-sends its PARAMS to a waiting
+ * joiner when a transition changes the count (e88 trio B: both members
+ * re-sent within 1 ms of committing an addition), and a joiner gating on that
+ * count must see it move.
+ */
+static int join_params_due(const struct cnxman_join *j,
+			   const struct vms_csb *csb, vms_conid_t conid)
+{
+	if (join_advert_due(csb, conid, CNXMAN_JOIN_B_PARAMS))
+		return 1;
+	if (csb == NULL || conid == 0u || csb->cm_advert_conid != (uint32_t)conid)
+		return 0;
+	if ((csb->flags & VMS_CSB_F_MEMBER) != 0u)
+		return 0;   /* a fellow member is waiting on nobody's count */
+	return csb->cm_advert_members != join_members_for(j, csb);
+}
+
+static void join_params_mark(struct cnxman_join *j, struct vms_csb *csb,
+			     vms_conid_t conid)
+{
+	join_advert_mark(csb, conid, CNXMAN_JOIN_B_PARAMS);
+	if (csb != NULL)
+		csb->cm_advert_members = join_members_for(j, csb);
+}
+
+/* Build this node's cluster-parameters record for `csb` into `scratch`, VOTES
+ * read from the REAL SYSGEN parameters this node booted with -- never a default
+ * (spec sec 4(j) pinned body[22:24] byte-exact across four configured values;
+ * 0 is a legitimate one) -- and the member count join_members_for() gives. */
+static vms_codec_status_t join_build_params(struct cnxman_join *j,
+					    const struct vms_csb *csb)
 {
 	struct vms_cm_node_params own;
 	uint16_t votes = 0u;
@@ -617,22 +695,24 @@ static vms_codec_status_t join_build_params(struct cnxman_join *j)
 
 	join_own_params(j, &own);
 	join_note_lockdirwt(j);
-	return vms_cm_params_build(votes, &own, j->scratch,
-				   (uint32_t)sizeof(j->scratch), NULL);
+	return vms_cm_params_build(votes, join_members_for(j, csb), &own,
+				   j->scratch, (uint32_t)sizeof(j->scratch),
+				   NULL);
 }
 
 static void join_send_params(struct cnxman_join *j)
 {
 	struct vms_csb *csb = join_target_csb(j);
 
-	if (!join_advert_due(csb, j->cm_conid, CNXMAN_JOIN_B_PARAMS))
+	if (!join_params_due(j, csb, j->cm_conid))
 		return;
-	if (join_build_failed(j, join_build_params(j)))
+	if (join_build_failed(j, join_build_params(j, csb)))
 		return;
 	if (join_emit_cm(j, 0) == 0) {
 		j->params_sent++;
 		j->burst_on_conn |= CNXMAN_JOIN_B_PARAMS;
-		join_advert_mark(csb, j->cm_conid, CNXMAN_JOIN_B_PARAMS);
+		join_note_ident(j, csb);
+		join_params_mark(j, csb, j->cm_conid);
 	}
 }
 
@@ -734,18 +814,19 @@ static void join_advert_peer(struct cnxman_join *j, struct vms_csb *csb,
 		if (join_emit_to_csb(j, csb, idx) == 0) {
 			j->model_sent++;
 			j->peer_adverts_sent++;
+			join_note_ident(j, csb);
 			join_advert_mark(csb, csb->cdt_conid,
 					 CNXMAN_JOIN_B_MODEL);
 		}
 	}
-	if (join_advert_due(csb, csb->cdt_conid, CNXMAN_JOIN_B_PARAMS)) {
-		if (join_note_codec_failure(j, join_build_params(j)))
+	if (join_params_due(j, csb, csb->cdt_conid)) {
+		if (join_note_codec_failure(j, join_build_params(j, csb)))
 			return;
 		if (join_emit_to_csb(j, csb, idx) == 0) {
 			j->params_sent++;
 			j->peer_adverts_sent++;
-			join_advert_mark(csb, csb->cdt_conid,
-					 CNXMAN_JOIN_B_PARAMS);
+			join_note_ident(j, csb);
+			join_params_mark(j, csb, csb->cdt_conid);
 		}
 	}
 }
@@ -767,7 +848,7 @@ void cnxman_join_advertise_peers(struct cnxman_join *j)
 		if (!join_peer_advertisable(c, local))
 			continue;
 		if (!join_advert_due(c, c->cdt_conid, CNXMAN_JOIN_B_MODEL) &&
-		    !join_advert_due(c, c->cdt_conid, CNXMAN_JOIN_B_PARAMS))
+		    !join_params_due(j, c, c->cdt_conid))
 			continue;
 		j->peers_advertised++;
 		join_advert_peer(j, c, (int32_t)i);
@@ -843,6 +924,11 @@ static void join_withhold_admission(struct cnxman_join *j)
 			    "and asks nobody to admit it");
 }
 
+/* Forward: WHOM to ask and WHEN (rd vms-e88), defined with the E80 re-issue
+ * machinery it shares. Nonzero = op-0x02 is not to go out on this call. */
+static int join_admission_held(struct cnxman_join *j);
+static void join_log_request(struct cnxman_join *j);
+
 static void join_send_config(struct cnxman_join *j)
 {
 	vms_codec_status_t st;
@@ -853,6 +939,8 @@ static void join_send_config(struct cnxman_join *j)
 		join_withhold_admission(j);
 		return;
 	}
+	if (join_admission_held(j))
+		return;
 
 	st = vms_cm_config_build(j->scratch, (uint32_t)sizeof(j->scratch),
 				 NULL);
@@ -861,6 +949,7 @@ static void join_send_config(struct cnxman_join *j)
 	if (join_emit_cm(j, 0) == 0) {
 		j->config_sent++;
 		j->burst_on_conn |= CNXMAN_JOIN_B_CONFIG;
+		join_log_request(j);
 	}
 }
 
@@ -1023,8 +1112,8 @@ static int join_askable(const struct cnxman_join *j, const struct vms_csb *c,
 	       !join_csb_abandoned(c) && !join_slot_declined(j, slot);
 }
 
-/* Adopt slot `slot` as the member this join drives through. The two unusable
- * ranking rules are COUNTED here (see below), once per selection. */
+/* Adopt slot `slot` as the member this join drives through. The one unusable
+ * ranking rule -- protocol/ECO level -- is COUNTED here, once per selection. */
 static void join_set_target(struct cnxman_join *j, const struct vms_csb *c,
 			    uint32_t slot)
 {
@@ -1032,22 +1121,43 @@ static void join_set_target(struct cnxman_join *j, const struct vms_csb *c,
 	j->target_csb = (int32_t)slot;
 	j->target_valid = 1u;
 	j->target_level_unpinned++;
-	j->member_count_ungated++;
+}
+
+/* Has this system told us, in its own PARAMS, that it belongs to a cluster?
+ * (rd vms-e88; `adv_valid` 0 is "it has told us nothing", never "no".) */
+static int join_says_member(const struct vms_csb *c)
+{
+	return c->adv_valid && c->adv_members != 0u;
 }
 
 /*
- * Choose the member to join through. Book pp. 7-37/7-38 (correction D7) ranks
- * by VAXcluster protocol level, then ECO level, then "the CSB nearest the end
- * of the CLUB's CSB queue". Neither level has an isolated wire offset, so only
- * the LAST rule is evaluable from real state -- and it is evaluated here, on
- * the CLUB's own table, with the two unusable rules COUNTED so the gap shows
- * up in the diagnostics instead of on a real cluster.
+ * DOES `a` RANK AHEAD OF `b` AS THE SYSTEM TO ASK? (rd vms-e88; header note E)
+ *
+ * A system that says it is a member ranks ahead of one that has not; between
+ * two of the same kind, the higher SCSSYSTEMID. Both reads are executive
+ * state: the member count the system itself advertised, and the SCSSYSTEMID
+ * its own records carried into the CSB. `b` NULL is "nobody yet".
+ */
+static int join_outranks(const struct vms_csb *a, const struct vms_csb *b)
+{
+	if (b == NULL)
+		return 1;
+	if (join_says_member(a) != join_says_member(b))
+		return join_says_member(a);
+	return a->sysid > b->sysid;
+}
+
+/*
+ * Choose the member to join through: the highest-ranked askable system
+ * (join_outranks). At CLUSTER_START nobody has usually sent PARAMS yet, so this
+ * is simply the highest SCSSYSTEMID in sight; join_admission_held() moves the
+ * join to a better member the moment one's own PARAMS says it is one.
  */
 static int join_select_target(struct cnxman_join *j)
 {
 	struct vms_club *club;
-	struct vms_csb *local;
-	uint32_t i;
+	struct vms_csb *local, *best = NULL;
+	uint32_t i, best_slot = 0u;
 
 	j->target_valid = 0u;
 	j->target_csb = -1;
@@ -1057,15 +1167,18 @@ static int join_select_target(struct cnxman_join *j)
 	club = &j->cl->club;
 	local = cnxman_club_local(club);
 
-	for (i = club->n_csb; i > 0u; i--) {
-		struct vms_csb *c = cnxman_club_csb_at(club, i - 1u);
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *c = cnxman_club_csb_at(club, i);
 
-		if (!join_askable(j, c, local, i - 1u))
+		if (!join_askable(j, c, local, i) || !join_outranks(c, best))
 			continue;
-		join_set_target(j, c, i - 1u);
-		return 0;
+		best = c;
+		best_slot = i;
 	}
-	return -1;
+	if (best == NULL)
+		return -1;
+	join_set_target(j, best, best_slot);
+	return 0;
 }
 
 /* Declare what a directory HIT on our own VMS$VAXcluster name carries
@@ -1972,6 +2085,13 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	 */
 	cnxman_csb_set_params(csb, p.votes, csb->expected_votes,
 			      csb->qdskvotes);
+	/*
+	 * ...AND WHAT IT SAYS IT IS (rd vms-e88): the member count at
+	 * body[18:20], 0 from a system in no cluster. The joiner's choice of
+	 * whom to ask, and when, is made from exactly this and nothing else
+	 * (join_admission_held).
+	 */
+	cnxman_csb_set_advert(csb, p.members);
 
 	/*
 	 * AND THE ARITHMETIC RUNS ON WHAT WAS JUST LEARNED (rd vms-d0d).
@@ -3105,9 +3225,10 @@ static int join_admit_request_outstanding(const struct cnxman_join *j)
 }
 
 /*
- * The next member to ask: the CSB nearest the CLUB queue tail that this attempt
- * has not already asked AND that the executive holds an OPEN VMS$VAXcluster
- * connection to (p. 7-24 OPEN, plus a real Con.ID to put the body on).
+ * The next member to ask: the highest-ranked (join_outranks) system this
+ * attempt has not already asked AND that the executive holds an OPEN
+ * VMS$VAXcluster connection to (p. 7-24 OPEN, plus a real Con.ID to put the
+ * body on).
  *
  * The OPEN requirement is not a shortcut, it is the honest bound on what can be
  * asked NOW: a member this node has no connection to cannot be sent an op-0x02
@@ -3121,25 +3242,30 @@ static int join_admit_request_outstanding(const struct cnxman_join *j)
 static int32_t join_next_askable(struct cnxman_join *j, struct vms_csb **out)
 {
 	struct vms_club *club;
-	struct vms_csb *local;
+	struct vms_csb *local, *best = NULL;
 	uint32_t i;
+	int32_t best_slot = -1;
 
 	if (j->cl == NULL)
 		return -1;
 	club = &j->cl->club;
 	local = cnxman_club_local(club);
 
-	for (i = club->n_csb; i > 0u; i--) {
-		struct vms_csb *c = cnxman_club_csb_at(club, i - 1u);
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *c = cnxman_club_csb_at(club, i);
 
-		if (!join_askable(j, c, local, i - 1u))
+		if (!join_askable(j, c, local, i))
 			continue;
 		if (!join_csb_connected(c) || c->cdt_conid == 0u)
 			continue;
-		*out = c;
-		return (int32_t)(i - 1u);
+		if (!join_outranks(c, best))
+			continue;
+		best = c;
+		best_slot = (int32_t)i;
 	}
-	return -1;
+	if (best != NULL)
+		*out = best;
+	return best_slot;
 }
 
 /*
@@ -3187,18 +3313,13 @@ static void join_reissue_to(struct cnxman_join *j, struct vms_csb *c,
 	join_reoffer_burst(j);
 }
 
-/* The member this join asked has said nothing for long enough. Name it, mark it
- * declined for this attempt, and ask the next one -- or, with nobody left to
- * ask, end the attempt honestly. */
-static void join_decline_target(struct cnxman_join *j)
+/* Mark the member this join is driving through declined for this attempt and
+ * ask the next one -- or, with nobody left to ask, end the attempt honestly. */
+static void join_decline_next(struct cnxman_join *j)
 {
 	struct vms_csb *next = NULL;
 	int32_t slot;
 
-	j->requests_unanswered++;
-	if (j->admit_target_acked)
-		j->declines_after_ack++;
-	join_log_not_answered(j, join_target_csb(j));
 	if (j->target_csb >= 0)
 		join_slot_decline(j, (uint32_t)j->target_csb);
 
@@ -3209,6 +3330,229 @@ static void join_decline_target(struct cnxman_join *j)
 		return;
 	}
 	join_reissue_to(j, next, slot);
+}
+
+/* The member this join asked has said nothing for long enough. Name it, then
+ * decline it and ask the next. */
+static void join_decline_target(struct cnxman_join *j)
+{
+	j->requests_unanswered++;
+	if (j->admit_target_acked)
+		j->declines_after_ack++;
+	join_log_not_answered(j, join_target_csb(j));
+	join_decline_next(j);
+}
+
+/* ==========================================================================
+ * WHOM TO ASK, AND WHEN (rd vms-e88)
+ *
+ * THE WALL, measured. The browser demo's all-at-once failure and the stall
+ * rig's NOFAULT arms are one shape seen twice: the joiner put its op-0x02
+ * where no coordinator would take it. Rig arm S-1 asked the OTHER OVMX node --
+ * discovered 2 s before the real VAX, so nearest the CLUB tail -- which is
+ * outranked there and discards it by design (rd vms-1ac). Arm T-15 asked the
+ * real VAX, but in the SAME burst as its own MODEL/PARAMS, on the connection
+ * of a crossed pair the VAX was abandoning, before the VAX had said a word on
+ * it; the VAX answered its PARAMS on the other connection and never saw a
+ * request there.
+ *
+ * WHAT A REAL JOINER DOES, measured on four real V7.3 trios
+ * (tests/lab/captures/vms-e88-join-target-20260930/): it asks only a system
+ * whose own PARAMS say it is a member; only once it has connectivity with as
+ * many members as they say there are (C3: five minutes of silence while one
+ * of two was out of reach); the highest-SCSSYSTEMID one (A, A2, B, C3); on the
+ * connection that member is talking on; and never in the same breath as its
+ * own identity records.
+ *
+ * Every clause below is a read of executive state, re-taken on every call:
+ * what each system advertised (cnxman_csb_set_advert, from its own bytes), the
+ * CSB ladder's OPEN, the Con.ID the CSB records, and this join's own record of
+ * what it just sent. Nothing is asserted about anybody. A system that has sent
+ * no PARAMS is never counted as a member -- and never as a non-member either:
+ * a cluster in which nobody says anything leaves the rank and the count out of
+ * it, which is exactly the join this FSM ran before this item.
+ * ========================================================================== */
+
+struct join_view {
+	uint32_t        members_connected; /* say "member" AND hold an OPEN conn */
+	uint16_t        max_advertised;    /* the largest count any system said  */
+	struct vms_csb *best;              /* highest of the connected, undeclined */
+	int32_t         best_slot;
+};
+
+/* Connectivity with `c`: the CSB ladder's p. 7-24 OPEN, or this join's own
+ * open connection to it -- set only from a real CDT open or accept, on the
+ * Con.ID that CSB records. Either is the executive's own answer. */
+static int join_has_connectivity(const struct cnxman_join *j,
+				 const struct vms_csb *c, uint32_t slot)
+{
+	if (c->cdt_conid == 0u)
+		return 0;
+	if (join_csb_connected(c))
+		return 1;
+	return j->cm_open && j->target_valid && j->target_csb == (int32_t)slot &&
+	       (uint32_t)j->cm_conid == c->cdt_conid;
+}
+
+static void join_view_take(struct cnxman_join *j, struct join_view *v,
+			   struct vms_csb *c, uint32_t slot)
+{
+	if (c->adv_valid && c->adv_members > v->max_advertised)
+		v->max_advertised = c->adv_members;
+	if (!join_says_member(c) || !join_has_connectivity(j, c, slot))
+		return;
+	v->members_connected++;
+	if (join_slot_declined(j, slot) || !join_outranks(c, v->best))
+		return;
+	v->best = c;
+	v->best_slot = (int32_t)slot;
+}
+
+static void join_survey(struct cnxman_join *j, struct join_view *v)
+{
+	struct vms_club *club = &j->cl->club;
+	struct vms_csb *local = cnxman_club_local(club);
+	uint32_t i;
+
+	join_bzero(v, (uint32_t)sizeof(*v));
+	v->best_slot = -1;
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *c = cnxman_club_csb_at(club, i);
+
+		if (c == NULL || c == local || !c->in_use || !c->sysid_valid ||
+		    join_csb_abandoned(c))
+			continue;
+		join_view_take(j, v, c, i);
+	}
+}
+
+/*
+ * Move this join to `c` -- a higher-ranked member whose own PARAMS just said it
+ * is one. NOT a decline and NOT a re-issue: nobody has been asked anything, so
+ * nothing is marked and no clock was running. The body goes out, later, on
+ * that CSB's own connection, stamped from its own dialogue (E77).
+ */
+static void join_retarget(struct cnxman_join *j, struct vms_csb *c,
+			  int32_t slot)
+{
+	join_set_target(j, c, (uint32_t)slot);
+	join_cm_take(j, (vms_conid_t)c->cdt_conid);
+	j->cm_open = 1u;
+	j->admit_answered = 0u;
+	j->admit_target_acked = 0u;
+	j->admit_silent_beats = 0u;
+	j->admit_unheard_beats = 0u;
+	j->retargets++;
+}
+
+/*
+ * RIDE THE CONNECTION THE EXECUTIVE RECORDS FOR THIS MEMBER. When a pair's two
+ * connects cross, the CSB keeps the one the real VAX keeps (rd vms-1f40) and
+ * the join may still be holding the other -- T-15's request went down exactly
+ * that one. The CSB's Con.ID is the executive's answer (p. 7-23), and its
+ * dialogue is the one join_emit_gate() will stamp from. Nonzero if it moved.
+ */
+static int join_follow_csb_conn(struct cnxman_join *j, struct vms_csb *csb)
+{
+	if (!join_csb_connected(csb) || csb->cdt_conid == 0u ||
+	    csb->cdt_conid == (uint32_t)j->cm_conid)
+		return 0;
+	join_cm_take(j, (vms_conid_t)csb->cdt_conid);
+	j->cm_open = 1u;
+	j->conn_follows++;
+	return 1;
+}
+
+static const char *join_hold_line(uint8_t why)
+{
+	if (why == (uint8_t)CNXMAN_JOIN_HOLD_CONNECTIVITY)
+		return "%CNXMAN, waiting for connectivity to every cluster "
+		       "member before asking for admission";
+	if (why == (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD)
+		return "%CNXMAN, waiting for the cluster member to send its "
+		       "cluster parameters before asking for admission";
+	return NULL;   /* FRESH is a breath, not news */
+}
+
+/* Record a hold; say it when the reason is new. Always returns 1. */
+static int join_hold(struct cnxman_join *j, uint8_t why)
+{
+	const char *line = join_hold_line(why);
+
+	if (why == (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD)
+		j->holds_unheard++;
+	else if (why == (uint8_t)CNXMAN_JOIN_HOLD_CONNECTIVITY)
+		j->holds_connectivity++;
+	else
+		j->holds_fresh++;
+	j->admit_hold = why;
+	if (why != j->admit_hold_said && line != NULL)
+		join_log(j, line);
+	if (line != NULL)
+		j->admit_hold_said = why;
+	return 1;
+}
+
+static int join_admission_held(struct cnxman_join *j)
+{
+	struct join_view v;
+	struct vms_csb *csb;
+
+	join_survey(j, &v);
+	if (v.best != NULL && v.best_slot != j->target_csb) {
+		join_retarget(j, v.best, v.best_slot);
+		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_FRESH);
+	}
+	csb = join_target_csb(j);
+	if (csb != NULL && join_follow_csb_conn(j, csb))
+		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_FRESH);
+	if (csb == NULL || !csb->adv_valid)
+		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD);
+	if (join_ident_fresh(j))
+		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_FRESH);
+	if ((uint32_t)v.max_advertised > v.members_connected)
+		return join_hold(j, (uint8_t)CNXMAN_JOIN_HOLD_CONNECTIVITY);
+	j->admit_hold = (uint8_t)CNXMAN_JOIN_HOLD_NONE;
+	j->admit_hold_said = (uint8_t)CNXMAN_JOIN_HOLD_NONE;
+	j->admit_unheard_beats = 0u;
+	return 0;
+}
+
+/*
+ * A member that never tells this node what it is cannot be asked, and waiting
+ * on it forever is a stall. Bounded exactly as an unanswered request is (the
+ * E80 silence window), then declined and the next member asked.
+ */
+static void join_unheard_beat(struct cnxman_join *j)
+{
+	if (j->admit_unheard_beats < 0xffu)
+		j->admit_unheard_beats++;
+	if (j->admit_unheard_beats < (uint8_t)CNXMAN_JOIN_ADMIT_SILENCE_BEATS)
+		return;
+	j->unheard_declines++;
+	j->admit_unheard_beats = 0u;
+	join_log(j, "%CNXMAN, the selected member sent no cluster parameters: "
+		    "asking another cluster member");
+	join_decline_next(j);
+}
+
+/* VMS's own console line for the act (e88 trios: "%CNXMAN, sending
+ * VAXcluster membership request to system VAX3"), named from the member's
+ * LEARNED scsnode -- or not named, when none was learned (INV-6). */
+static void join_log_request(struct cnxman_join *j)
+{
+	const struct vms_csb *csb = join_target_csb(j);
+	uint32_t n;
+
+	n = join_msg_put(j, 0u, "%CNXMAN, sending VAXcluster membership "
+				"request to ");
+	if (csb != NULL && csb->scsnode_len > 0u) {
+		n = join_msg_put(j, n, "system ");
+		(void)join_msg_put_node(j, n, csb);
+	} else {
+		(void)join_msg_put(j, n, "the selected member");
+	}
+	join_log(j, j->msgbuf);
 }
 
 /*
@@ -3240,6 +3584,11 @@ static void join_admit_beat(struct cnxman_join *j)
 {
 	if (join_transition_in_progress(j)) {
 		j->admit_beats_held++;
+		return;
+	}
+	if (j->admit_hold == (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD &&
+	    !join_admit_request_outstanding(j)) {
+		join_unheard_beat(j);
 		return;
 	}
 	if (!join_admit_request_outstanding(j)) {

@@ -1094,6 +1094,14 @@ void cnxman_csb_set_params(struct vms_csb *csb, uint16_t votes,
 	csb->params_valid = 1u;
 }
 
+void cnxman_csb_set_advert(struct vms_csb *csb, uint16_t members)
+{
+	if (csb == NULL)
+		return;
+	csb->adv_members = members;
+	csb->adv_valid = 1u;
+}
+
 /* p. 7-23: "The Connection Manager is responsible for rebuilding the Lock
  * Directory Weight Vector, so each CSB also contains the value of its system's
  * LOCKDIRWT parameter." Absent until FC-P3.2 pins which wire byte carries it

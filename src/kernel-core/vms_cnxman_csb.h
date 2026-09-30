@@ -283,6 +283,10 @@ uint32_t cnxman_club_recount_members(struct vms_club *club);
 void cnxman_csb_set_csid(struct vms_csb *csb, vms_csid_t csid);
 void cnxman_csb_set_sysid(struct vms_csb *csb, vms_scs_sysid_t sysid);
 void cnxman_csb_set_scsnode(struct vms_csb *csb, const uint8_t *name, uint8_t len);
+/* rd vms-e88: the member count this system's own op-0x01 PARAMS advertised
+ * (body[18:20]; 0 = "I belong to no cluster"). Latest wins: a member re-sends
+ * its PARAMS when a transition changes the count. */
+void cnxman_csb_set_advert(struct vms_csb *csb, uint16_t members);
 void cnxman_csb_set_params(struct vms_csb *csb, uint16_t votes,
 			   uint16_t expected_votes, uint16_t qdskvotes);
 void cnxman_csb_set_lockdirwt(struct vms_csb *csb, uint8_t lockdirwt);

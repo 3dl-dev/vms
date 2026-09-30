@@ -194,6 +194,7 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 
 	vms_wire_view_init(&v, body, len);
 	out->votes    = vms_wire_get_le16(&v, VMS_OFB_CM_VOTES);
+	out->members  = vms_wire_get_le16(&v, VMS_OFB_CM_MEMBERS);
 	out->param_f1 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F1);
 	out->param_f2 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F2);
 	vms_wire_get_bytes(&v, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
@@ -904,7 +905,7 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_params_build(uint16_t votes,
+vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 				       const struct vms_cm_node_params *own_params,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written)
@@ -938,6 +939,9 @@ vms_codec_status_t vms_cm_params_build(uint16_t votes,
 	 * out zero; a caller whose real LOCKDIRWT is nonzero cannot advertise
 	 * it and must say so (FC-P3.3 counts and logs exactly that). */
 	vms_wire_put_le16(&w, VMS_OFB_CM_VOTES, votes);
+	/* body[18:20] the member count (rd vms-e88): the caller's, and 0 --
+	 * "in no cluster" -- is a real value a joiner sends, not a default. */
+	vms_wire_put_le16(&w, VMS_OFB_CM_MEMBERS, members);
 	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F1, own_params->param_f1);
 	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F2, own_params->param_f2);
 	vms_wire_put_bytes(&w, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,

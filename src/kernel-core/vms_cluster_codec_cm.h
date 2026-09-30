@@ -188,6 +188,20 @@ extern "C" {
 /* cat-0x01 op-0x01 cluster-parameters (VOTES) + the node-parameter block
  * (sec 4(j) VOTES table; sec 4(p) cat-0x06 close reuses the same block). */
 #define VMS_OFF_CM_VOTES      (VMS_OFF_SYSAP_BODY + 22)  /* abs 94, LE u16 */
+/*
+ * ...and the SENDER'S CLUSTER MEMBER COUNT, body[18:20] (rd vms-e88). The
+ * number of members of the cluster the sender belongs to, as the sender sees
+ * it; ZERO from a system that belongs to no cluster (a joiner). GROUNDED on
+ * four real OpenVMS VAX V7.3 trios (tests/lab/captures/vms-e88-join-target-
+ * 20260930/): every PARAMS a member sent carried its own member count (1 alone,
+ * 2 with two), every PARAMS a joiner sent carried 0, and a joiner's copy moved
+ * 0 -> 2 on the frame its sender was admitted. It is the count Davis p. 7-37
+ * has the joiner compare its connectivity against before it asks for
+ * admission. Only the low byte has ever been nonzero (the high byte is 0 in
+ * every specimen). ALIASES VMS_OFF_CM_RESP_MARK, which is a different message's
+ * field at the same place: on op-0x01 there is no response marker.
+ */
+#define VMS_OFF_CM_MEMBERS    (VMS_OFF_SYSAP_BODY + 18)  /* abs 90, LE u16 */
 #define VMS_OFF_CM_PARAM_F1   (VMS_OFF_SYSAP_BODY + 72)  /* abs 144, LE u32,
 							    * observed const 0x10*/
 #define VMS_OFF_CM_PARAM_F2   (VMS_OFF_SYSAP_BODY + 76)  /* abs 148, LE u32,
@@ -457,6 +471,7 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
 /* FC-P3.3's three joiner originations (sec 5c) need the body-relative form of
  * the VOTES word and the model-string pair as well. */
 #define VMS_OFB_CM_VOTES       (VMS_OFF_CM_VOTES       - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_MEMBERS     (VMS_OFF_CM_MEMBERS     - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_MODEL_LEN   (VMS_OFF_CM_MODEL_LEN   - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_MODEL_NAME  (VMS_OFF_CM_MODEL_NAME  - VMS_OFF_SYSAP_BODY)
 
@@ -629,6 +644,9 @@ struct vms_cm_params {
 	struct vms_cm_envelope env;
 	uint16_t votes;   /* body[22:24] LE u16, GROUNDED across four vote
 			   * configurations (sec 4(j)); 0 == non-voting     */
+	uint16_t members; /* body[18:20] LE u16: the sender's cluster member
+			   * count, 0 from a system in no cluster (rd vms-e88,
+			   * VMS_OFF_CM_MEMBERS)                             */
 	uint32_t param_f1; /* body[72:76], observed constant 0x10             */
 	uint32_t param_f2; /* body[76:80], observed constant 0x01             */
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], 8-byte space-padded ASCII version field (e.g. V7.3) */
@@ -1101,7 +1119,10 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
  * vms_cm_params_build - cat 0x01 op 0x01, the cluster-parameters message.
  *
  * body[22:24] = `votes`, the field sec 4(j) pinned byte-exact by controlled
- * reconfiguration across four vote values, plus the node-parameter block
+ * reconfiguration across four vote values; body[18:20] = `members`, this
+ * node's own cluster member count, or 0 when it is in no cluster or when the
+ * caller will not assert one to this peer (VMS_OFF_CM_MEMBERS); plus the
+ * node-parameter block
  * (`own_params`, the same struct vms_cm_close_build takes) at
  * body[72:76]/[76:80]/[88:96]. Both come from the caller's real SYSGEN and
  * identity state; this builder has no defaults and bakes in no version.
@@ -1116,7 +1137,7 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
  *
  * STAMP with is_response=0.
  */
-vms_codec_status_t vms_cm_params_build(uint16_t votes,
+vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 				       const struct vms_cm_node_params *own_params,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);

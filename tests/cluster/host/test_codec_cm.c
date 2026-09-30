@@ -390,6 +390,52 @@ static void test_params_parse(void)
 		 "  version == \"V7.3    \"");
 }
 
+/*
+ * rd vms-e88: op-0x01 body[18:20] is the SENDER'S MEMBER COUNT, read off two
+ * real V7.3 records from the e88 trio C3 -- a member of a two-member cluster
+ * and a joiner -- and OVMX's builder puts its own count at exactly those two
+ * bytes: built with the oracle's own count, the span is byte-identical.
+ */
+static void test_e88_params_member_count(void)
+{
+	const struct vms_fixture *m = fixture("cm-params-member-oracle");
+	const struct vms_fixture *j = fixture("cm-params-joiner-oracle");
+	struct vms_cm_node_params own;
+	struct vms_cm_params p;
+	uint8_t built[VMS_CM_BODY_LEN];
+	uint32_t written = 0;
+
+	printf("-- rd vms-e88: op 0x01 body[18:20] is the sender's member "
+	       "count\n");
+	ct_check(m != NULL && j != NULL, "both e88 oracle specimens present");
+	if (m == NULL || j == NULL)
+		return;
+
+	ct_check(vms_cm_params_parse(fx_body(m), fx_body_len(m), &p)
+		 == VMS_CODEC_OK, "the member's record parses");
+	ct_check_eq_u32(p.members, 2u,
+			"  a member of a two-member cluster advertises 2");
+	ct_check_eq_u32(p.votes, 1u, "  ... beside its VOTES 1");
+	ct_check(vms_cm_params_parse(fx_body(j), fx_body_len(j), &p)
+		 == VMS_CODEC_OK, "the joiner's record parses");
+	ct_check_eq_u32(p.members, 0u,
+			"  a system in no cluster advertises 0");
+
+	memset(&own, 0, sizeof(own));
+	ct_check(vms_cm_params_build(1u, 2u, &own, built, sizeof(built),
+				     &written) == VMS_CODEC_OK,
+		 "OVMX builds a member's PARAMS");
+	ct_check(memcmp(built + VMS_OFB_CM_MEMBERS,
+			fx_body(m) + VMS_OFB_CM_MEMBERS, 2u) == 0,
+		 "  its body[18:20] is byte-identical to the real member's");
+	ct_check(vms_cm_params_build(0u, 0u, &own, built, sizeof(built),
+				     &written) == VMS_CODEC_OK,
+		 "OVMX builds a joiner's PARAMS");
+	ct_check(memcmp(built + VMS_OFB_CM_MEMBERS,
+			fx_body(j) + VMS_OFB_CM_MEMBERS, 2u) == 0,
+		 "  its body[18:20] is byte-identical to the real joiner's");
+}
+
 static void test_model_parse(void)
 {
 	/* Reuses the existing FC-P0.6-era fixture for the SAME 190-byte class
@@ -604,7 +650,7 @@ static void test_joiner_originations(void)
 	own.param_f1 = 0x11223344u;
 	own.param_f2 = 0x55667788u;
 	memcpy(own.version, "VMX V0.6", VMS_CM_VERSION_LEN);
-	ct_check(vms_cm_params_build(2u, &own, built, sizeof(built), &written)
+	ct_check(vms_cm_params_build(2u, 3u, &own, built, sizeof(built), &written)
 		 == VMS_CODEC_OK, "params builds");
 	ct_check(vms_frame_compose(&l, built, frame, sizeof(frame),
 				   &frame_written) == VMS_CODEC_OK,
@@ -615,12 +661,14 @@ static void test_joiner_originations(void)
 		 == VMS_CODEC_OK, "  round-trips through vms_cm_params_parse");
 	ct_check_eq_u32(params.env.opcode, VMS_CM_OP_PARAMS, "  op 0x01");
 	ct_check_eq_u32(params.votes, 2u, "  VOTES at body[22:24]");
+	ct_check_eq_u32(params.members, 3u,
+			"  the caller's member count at body[18:20] (rd vms-e88)");
 	ct_check_eq_u32(params.param_f1, 0x11223344u,
 			"  the caller's own param_f1 -- never a captured 0x10");
 	ct_check_eq_u32(params.param_f2, 0x55667788u, "  ... and param_f2");
 	ct_check(memcmp(params.version, "VMX V0.6", VMS_CM_VERSION_LEN) == 0,
 		 "  the caller's OWN version string, never a baked \"V7.3\"");
-	ct_check(vms_cm_params_build(0u, NULL, built, sizeof(built), &written)
+	ct_check(vms_cm_params_build(0u, 0u, NULL, built, sizeof(built), &written)
 		 == VMS_CODEC_E_INVAL,
 		 "  a NULL parameter block is refused, not zero-filled");
 
@@ -1199,6 +1247,7 @@ int main(void)
 	test_open_parse();
 	test_barrier_parse();
 	test_params_parse();
+	test_e88_params_member_count();
 	test_model_parse();
 	test_dlm_rebuild_parse();
 

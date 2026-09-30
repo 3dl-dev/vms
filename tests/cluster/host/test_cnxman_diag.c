@@ -514,8 +514,10 @@ static void test_name_tables_agree(void)
  * VMS$VAXcluster connect and the MODEL/PARAMS burst.
  * ========================================================================== */
 
-#define MEMBER_SYSID 0x000004000101ull
-#define OTHER_SYSID  0x000004000102ull
+/* MEMBER outranks OTHER: a joiner asks the highest-SCSSYSTEMID member (rd
+ * vms-e88), so this numbering is what makes MEMBER the one the drive asks. */
+#define MEMBER_SYSID 0x000004000102ull
+#define OTHER_SYSID  0x000004000101ull
 #define OWN_SYSID    0x000004000103ull
 #define CM_CONID     0x4e620009u
 
@@ -611,6 +613,27 @@ static void jbed_init(int with_ring)
  * IDLE table has no cell for, so the transcript has to show an EMPTY CELL as
  * well as the transitions that fired.
  */
+/*
+ * The member's own op-0x01 PARAMS -- VOTES 1, a one-member cluster (rd
+ * vms-e88: body[18:20]) -- delivered the way the glue delivers a body, on the
+ * member's CSB. Every real joiner held this before it asked for admission.
+ */
+static void jbed_member_speaks(void)
+{
+	struct vms_cm_node_params own;
+	uint8_t body[VMS_CM_BODY_LEN];
+	struct vms_csb *m = cnxman_club_find_sysid(&g_b.cl.club, MEMBER_SYSID);
+
+	memset(&own, 0, sizeof(own));
+	if (vms_cm_params_build(1u, 1u, &own, body, sizeof(body), NULL) !=
+	    VMS_CODEC_OK || m == NULL)
+		return;
+	body[VMS_OFB_CM_SEND_MSG] = 2u;
+	(void)cnxman_join_rx_body(&g_b.j, body, sizeof(body), 0x00010001u, 1,
+				  (int32_t)cnxman_club_csb_index(&g_b.cl.club,
+								 m));
+}
+
 static void jbed_drive(void)
 {
 	uint8_t mscp_frame[VMS_MSCP_CMD_FRAME_LEN];
@@ -624,6 +647,7 @@ static void jbed_drive(void)
 			       cnxman_join_name_mscp_disk, 0);
 	cnxman_join_dir_result(&g_b.j, MEMBER_SYSID,
 			       cnxman_join_name_vaxcluster, 1);
+	jbed_member_speaks();
 	cnxman_join_opened(&g_b.j, CM_CONID);
 }
 
@@ -711,6 +735,12 @@ static void test_live_join_is_recorded(void)
 		 "the cat-0x01 op-0x01 PARAMS origination is recorded");
 	ct_check_eq_u32(rec.cat, VMS_CM_CAT_CONFIG,
 			"the category is READ BACK from the body being sent");
+	/* rd vms-e88: op-0x02 never rides in the same breath as the identity
+	 * records; the next beat of the watchdog releases it. */
+	ct_check(!find_emit(VMS_CM_OP_CONFIG, &rec),
+		 "op-0x02 is NOT in the identity burst");
+	g_b.fake.now_ms += CNXMAN_JOIN_WATCH_MS;
+	cnxman_join_timer(&g_b.j);
 	ct_check(find_emit(VMS_CM_OP_CONFIG, &rec),
 		 "the cat-0x01 op-0x02 CONFIG that starts admission is recorded");
 

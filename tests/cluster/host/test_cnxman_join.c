@@ -47,8 +47,11 @@
  * The bed
  * ========================================================================== */
 
-#define MEMBER_SYSID  0x000004000101ull   /* VAX1's LAVC-derived SCSSYSTEMID */
-#define OTHER_SYSID   0x000004000102ull   /* VAX2                            */
+/* The member this bed's join must ask OUTRANKS the other one: a joiner asks
+ * the highest-SCSSYSTEMID member (rd vms-e88, measured on four real V7.3
+ * trios), so the numbering below is what makes MEMBER "the one to ask". */
+#define MEMBER_SYSID  0x000004000102ull   /* the higher: the one asked       */
+#define OTHER_SYSID   0x000004000101ull   /* the lower                       */
 #define OWN_SYSID     0x000004000103ull   /* this node                       */
 #define MEMBER_CSID   0x00010001u
 #define OTHER_CSID    0x00010002u
@@ -302,8 +305,11 @@ static void bed_init(void)
 	(void)cnxman_club_init(&g.cl);
 
 	/* Two members the port has really formed circuits with. The join
-	 * target is the CSB nearest the queue TAIL (book p. 7-38), so the
-	 * SECOND one allocated is the one this node must ask. */
+	 * target is the highest-SCSSYSTEMID member (rd vms-e88), so the
+	 * member this node must ask is MEMBER_SYSID, allocated SECOND so that
+	 * the old "nearest the queue tail" rule would pick it too -- a bed
+	 * that passes under either rule proves nothing about the rule; the
+	 * ranking has its own tests (test_e88_*). */
 	other = cnxman_club_alloc_csb(&g.cl.club, OTHER_SYSID, 1);
 	cnxman_csb_set_csid(other, OTHER_CSID);
 	g.member_csb = cnxman_club_alloc_csb(&g.cl.club, MEMBER_SYSID, 1);
@@ -458,6 +464,33 @@ static uint32_t mk_peer_params(uint16_t votes, uint16_t send_msg)
 	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
 	vms_wire_put_le16(&w, VMS_OFF_CM_VOTES, votes);
 	return n;
+}
+
+/* A member's own PARAMS as a real one writes it: its VOTES and the member
+ * count of the cluster it belongs to (rd vms-e88, body[18:20]). */
+static uint32_t mk_member_params(uint16_t votes, uint16_t members,
+				 uint16_t send_msg)
+{
+	vms_wire_buf_t w;
+	uint32_t n = mk_peer_params(votes, send_msg);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le16(&w, VMS_OFF_CM_MEMBERS, members);
+	return n;
+}
+
+static void bed_beats(uint32_t n);
+
+/*
+ * THE MEMBER ANSWERS OUR IDENTITY WITH ITS OWN (rd vms-e88): its PARAMS --
+ * one vote, a one-member cluster -- arrives on its connection, and a beat
+ * later the join's watchdog releases the op-0x02 the hold kept back. Every
+ * real V7.3 joiner's request followed exactly this frame.
+ */
+static void bed_member_answers_and_a_beat_passes(uint16_t send_msg)
+{
+	(void)join_feed(mk_member_params(1u, 1u, send_msg));
+	bed_beats(1);
 }
 
 static uint32_t mk_open_add(uint32_t epoch, uint8_t bitmap)
@@ -752,6 +785,31 @@ static void bed_cm_accepted(vms_scs_sysid_t sysid, vms_conid_t conid)
 	cnxman_join_cm_accepted(&g.j, sysid, conid);
 }
 
+/*
+ * WHAT THE REAL MEMBER HAS DONE BY THE TIME A REAL JOINER ASKS IT (rd vms-e88).
+ *
+ * In every real V7.3 join measured (tests/lab/captures/vms-e88-join-target-
+ * 20260930/, trios A/A2/B/C3) the member's own op-0x01 PARAMS -- saying it is a
+ * member -- reached the joiner BEFORE the joiner's op-0x02, and the joiner's
+ * request went out at least 0.7 s after its own identity records, the disk walk
+ * in between. The drive helpers below reproduce both facts as preconditions:
+ * the CSB ladder has the member's connection OPEN (what the glue's CDT_OPEN
+ * does in production), its PARAMS has been heard (a one-member cluster: the
+ * bed's OTHER system is not in it), and the walk took a watchdog beat of the
+ * injected clock. The rx path that records the PARAMS, the hold that waits for
+ * it and the hold that keeps op-0x02 out of the identity burst each have their
+ * own tests (test_e88_*); this is only the bed standing where the wire stood.
+ */
+static void bed_beats(uint32_t n);
+
+static void bed_member_has_spoken(void)
+{
+	if (g.member_csb->cdt_conid != 0u)
+		g.member_csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_set_advert(g.member_csb, 1u);
+	g.fake.now_ms += CNXMAN_JOIN_WATCH_MS;
+}
+
 /* Drive from IDLE to ADMIT with two served units enumerated. Returns the
  * number of MSCP commands the walk emitted. */
 static void drive_to_admit(void)
@@ -776,6 +834,7 @@ static void drive_to_admit(void)
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 2u,
 			 VMS_MSCP_ST_AVAILABLE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	bed_member_has_spoken();
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 2u), 3u,
 			 VMS_MSCP_ST_OFFLINE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -801,9 +860,9 @@ static void test_reference_sequence(void)
 	ct_check_eq_u32(g.n_connect, 0u,
 			"NOTHING is connected before a name is resolved "
 			"(sec 4(L) shared-sequence deadlock)");
-	/* Book p. 7-38: the joiner picks the CSB nearest the CLUB queue tail. */
+	/* rd vms-e88: the joiner asks the highest-SCSSYSTEMID member. */
 	ct_check(g.j.target_sysid == MEMBER_SYSID,
-		 "the join target is the CSB nearest the queue tail (p. 7-38)");
+		 "the join target is the highest-SCSSYSTEMID member (rd vms-e88)");
 
 	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
 			       1);
@@ -862,6 +921,9 @@ static void test_reference_sequence(void)
 		ct_check_eq_u32(g.j.config_sent, 0u,
 				"op 0x02 still deferred while the walk runs");
 
+		/* The member's own PARAMS has arrived and the walk took its
+		 * time, exactly as on the reference wire (rd vms-e88). */
+		bed_member_has_spoken();
 		len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 2u), 3u,
 				 VMS_MSCP_ST_OFFLINE);
 		cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -1289,9 +1351,6 @@ static void test_identity_omissions_are_counted(void)
 			"... advertising NO model rather than a fake one");
 	ct_check_eq_u32(g.j.target_level_unpinned, 1u,
 			"the protocol/ECO selection rule is counted unpinned");
-	ct_check_eq_u32(g.j.member_count_ungated, 1u,
-			"the p. 7-37 member-count precondition is counted "
-			"ungated (never faked into a gate)");
 }
 
 /* ==========================================================================
@@ -1435,8 +1494,14 @@ static void test_pathlost_keeps_the_join_alive(void)
 		 "MODEL");
 	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
 			    VMS_CM_OP_PARAMS), "... PARAMS");
+	ct_check(!sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			     VMS_CM_OP_CONFIG),
+		 "... but NOT op-0x02 in the same breath (rd vms-e88; spec "
+		 "sec 4(o): 0x02 inside the identity burst leaves the peer "
+		 "silent)");
+	bed_beats(1);
 	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
-			    VMS_CM_OP_CONFIG), "... and op-0x02");
+			    VMS_CM_OP_CONFIG), "... and op-0x02 one beat later");
 
 	/* Nothing about this recovery asserts membership. */
 	ct_check_eq_u32(cnxman_join_handed_off(&g.j), 0,
@@ -2225,6 +2290,7 @@ static void drive_to_admit_member_dialled(void)
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
 	len = mk_gus_end(VMS_MSCP_CL_GUS_MSGID0, 1u, VMS_MSCP_ST_AVAILABLE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
+	bed_member_has_spoken();
 	len = mk_gus_end((uint16_t)(VMS_MSCP_CL_GUS_MSGID0 + 1u), 3u,
 			 VMS_MSCP_ST_OFFLINE);
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
@@ -2297,15 +2363,26 @@ static void test_member_dialled_connection_still_promotes(void)
 	cnxman_join_rx_mscp(&g.j, MSCP_CONID, g_mscp, len);
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"the disk walk's own terminator starts admission");
-	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
-			    VMS_CM_OP_CONFIG),
-		 "op-0x02 CONFIG goes out on the member's connection too");
+	ct_check(!sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			     VMS_CM_OP_CONFIG),
+		 "... but op-0x02 waits: the member has not yet said it is "
+		 "one (rd vms-e88)");
+	ct_check_eq_u32(g.j.admit_hold, CNXMAN_JOIN_HOLD_UNHEARD,
+			"... held as UNHEARD");
 
-	len = mk_peer_params(2u, 0x0007);
+	len = mk_member_params(2u, 1u, 0x0007);
 	(void)join_feed(len);
 	ct_check_eq_u32(g.member_csb->votes, 2u,
 			"the member's reciprocated PARAMS reached the CSB: the "
 			"dialogue is alive on the accepted connection");
+	ct_check_eq_u32(g.member_csb->adv_members, 1u,
+			"... carrying the member count it advertised");
+	g.fake.now_ms += CNXMAN_JOIN_WATCH_MS;
+	bed_beats(1);
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "op-0x02 CONFIG then goes out on the member's connection "
+		 "too");
 }
 
 static void test_member_dialled_reaches_the_barrier(void)
@@ -2448,9 +2525,11 @@ static void test_refusal_then_member_dialled_still_promotes(void)
 	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
 			    VMS_CM_OP_PARAMS),
 		 "... then PARAMS");
+	bed_member_answers_and_a_beat_passes(0x0002);
 	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
 			    VMS_CM_OP_CONFIG),
-		 "... then the op-0x02 that starts admission");
+		 "... then, once the member has answered with its own PARAMS, "
+		 "the op-0x02 that starts admission");
 	ct_check_eq_u32(n_sent_on(CM_CONID), 0u,
 			"and no second VMS$VAXcluster connection was opened");
 	/* ... and the PARAMS body carries this node's REAL SYSGEN votes (the bed
@@ -2547,6 +2626,7 @@ static void test_e70_sequence_reaches_the_membership_offer(void)
 			"into an empty [FAILED] row");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"... and this node advertises itself at last");
+	bed_member_answers_and_a_beat_passes(0x0002);
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
 			"three CM frames leave this node -- the run that "
 			"produced ZERO in 1600 s");
@@ -2932,6 +3012,7 @@ static void test_rejoin_admission_rides_the_member_initiated_connection(void)
 			"... and the executive's own record was never re-bound "
 			"away from it");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "admission started");
+	bed_member_answers_and_a_beat_passes(0x0002);
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
 			"three cat-0x01 originations on the member's "
 			"connection");
@@ -3100,6 +3181,10 @@ static void test_e77_a_new_connection_opens_at_send_msg_1(void)
 	ct_check_eq_u32(g.member_csb->cm_dialogue_resets, 1u,
 			"the CSB restarted its dialogue when the connection "
 			"changed under it");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 2u,
+			"the identity records go out on the new connection at "
+			"once");
+	bed_member_answers_and_a_beat_passes(0x0001);
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
 			"the sec 4(o) burst goes out on the new connection");
 	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, VMS_OFB_CM_SEND_MSG), 1u,
@@ -3124,11 +3209,11 @@ static void test_e77_a_new_connection_opens_at_send_msg_1(void)
 
 	/* The ack side comes back the same way: only from what really arrives
 	 * on B, and only as high as the peer really went there. */
-	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0001));
-	ct_check_eq_u32(g.member_csb->cm_ack_msg, 1u,
+	(void)join_feed(mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0x0002));
+	ct_check_eq_u32(g.member_csb->cm_ack_msg, 2u,
 			"B's ack-msg# is the peer's REAL send-msg# on B");
 	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, n_sent_on(ACC_CM_CONID) - 1u,
-				     VMS_OFB_CM_ACK_MSG), 1u,
+				     VMS_OFB_CM_ACK_MSG), 2u,
 			"... and that -- not the old connection's 0x0011 -- is "
 			"what the echo carries back");
 }
@@ -3258,12 +3343,12 @@ static void test_a_refused_burst_is_reoffered(void)
 	/* The refusal clears -- a port window that filled and drained again,
 	 * which is what several of SCS's refusals really are. */
 	g.fail_send = 0;
-	cnxman_join_timer(&g.j);
+	bed_beats(1);
 
 	ct_check_eq_u32(g.j.burst_reoffers, 1u,
-			"the watchdog re-offered the burst exactly once");
-	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
-			"and all three originations reached SCS this time");
+			"the watchdog re-offered the burst");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 2u,
+			"and the identity records reached SCS this time");
 	ct_check(sent_on_is(ACC_CM_CONID, 0, VMS_CM_CAT_CONFIG,
 			    VMS_CM_OP_MODEL),
 		 "in the measured order: cat 0x01 op 0x14 first (sec 4(o) "
@@ -3271,22 +3356,33 @@ static void test_a_refused_burst_is_reoffered(void)
 	ct_check(sent_on_is(ACC_CM_CONID, 1, VMS_CM_CAT_CONFIG,
 			    VMS_CM_OP_PARAMS),
 		 "... then op 0x01 (row 2)");
-	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
-			    VMS_CM_OP_CONFIG),
-		 "... then op 0x02, which is due because the disk walk "
-		 "finished (row 6)");
+	ct_check_eq_u32(g.j.admit_hold, CNXMAN_JOIN_HOLD_FRESH,
+			"op 0x02 is due, but never in the same breath as the "
+			"identity records it follows (rd vms-e88)");
 	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 0, 0u), 4u,
 			"a re-offer is a NEW origination with its own "
 			"send-msg#: the refused ones burned 1..3, so this is "
 			"4 -- a gap, never a repeat (spec sec 4(j))");
+
+	bed_beats(1);
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
+			"one beat later the request goes too");
+	ct_check(sent_on_is(ACC_CM_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "... then op 0x02, which is due because the disk walk "
+		 "finished (row 6)");
+	ct_check_eq_u32(sent_on_le16(ACC_CM_CONID, 2, 0u), 6u,
+			"... numbered straight on from the identity records");
+	ct_check_eq_u32(g.j.burst_reoffers, 2u,
+			"... re-offered on that beat, once");
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"and the join is still in ADMIT, driving");
 
-	/* NOTHING IS SENT TWICE. A second tick has nothing left to re-offer. */
-	cnxman_join_timer(&g.j);
+	/* NOTHING IS SENT TWICE. A further tick has nothing left to re-offer. */
+	bed_beats(1);
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
 			"a message that really went is never offered again");
-	ct_check_eq_u32(g.j.burst_reoffers, 1u,
+	ct_check_eq_u32(g.j.burst_reoffers, 2u,
 			"... and the re-offer counter does not move");
 }
 
@@ -3421,6 +3517,10 @@ static void test_e72_members_open_connection_supersedes_our_connect(void)
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"the CDT_OPEN drives [VC CONNECT] -> ADVERTISE, and with "
 			"no disk walk to run, on to admission");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 2u,
+			"the identity records go at once; the request waits for "
+			"the member's own PARAMS (rd vms-e88)");
+	bed_member_answers_and_a_beat_passes(0x0002);
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 3u,
 			"three cat-0x01 originations reach SCS -- the run that "
 			"produced ZERO in 1471 beats");
@@ -3504,20 +3604,28 @@ static void test_e72_beat_advertises_on_the_open_it_missed(void)
 	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
 			"the beat reads p. 7-24 OPEN off the CSB and the drive "
 			"resumes -- instead of 1471 silent beats");
-	ct_check_eq_u32(n_sent_on(CM_CONID), 3u,
-			"MODEL, PARAMS and op-0x02 went out on it");
+	ct_check_eq_u32(n_sent_on(CM_CONID), 2u,
+			"MODEL and PARAMS went out on it");
 	ct_check(sent_on_is(CM_CONID, 0, VMS_CM_CAT_CONFIG, VMS_CM_OP_MODEL),
 		 "... in the measured order");
 	ct_check_eq_u32(g.j.cm_reattempts, 0u,
 			"... and no SECOND connection was opened to a pair that "
 			"holds one");
 
+	/* rd vms-e88: the request follows the member's own PARAMS. */
+	bed_member_answers_and_a_beat_passes(0x0002);
+	ct_check_eq_u32(n_sent_on(CM_CONID), 3u,
+			"... and op-0x02 once the member said what it is");
+	ct_check_eq_u32(g.j.burst_reoffers, 1u,
+			"... released by the watchdog's re-offer");
+
 	/* A further beat re-offers nothing: everything really went. */
 	g.fake.now_ms += 1000u;
 	cnxman_join_timer(&g.j);
 	ct_check_eq_u32(n_sent_on(CM_CONID), 3u,
 			"a message that really went is never sent twice");
-	ct_check_eq_u32(g.j.burst_reoffers, 0u, "... and nothing was re-offered");
+	ct_check_eq_u32(g.j.burst_reoffers, 1u,
+			"... and nothing more was re-offered");
 }
 
 /* ==========================================================================
@@ -4541,6 +4649,18 @@ static void test_e80_a_silent_member_is_re_issued_to_the_next(void)
 			"and the join now drives the OTHER member");
 	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), sent_to_first,
 			"NOT A FAN-OUT: the declined member gets nothing more");
+	ct_check_eq_u32(n_sent_on(OTHER_CONID), 2u,
+			"the new member hears this node's identity on ITS OWN "
+			"connection at once");
+	ct_check_eq_u32(g.j.config_sent, 1u,
+			"... but not yet a request: it has not said what it is "
+			"(rd vms-e88)");
+
+	/* It answers in kind, as every real member does, and a beat later
+	 * the request follows. */
+	(void)join_feed_from(other, OTHER_CSID,
+			     mk_member_params(1u, 1u, 0x0001));
+	bed_beats(1u);
 	ct_check_eq_u32(g.j.config_sent, 2u,
 			"exactly ONE further op-0x02 exists in the world");
 
@@ -4561,10 +4681,13 @@ static void test_e80_a_silent_member_is_re_issued_to_the_next(void)
 			"member's");
 	ct_check_eq_u32(sent_on_le16(OTHER_CONID, 2, VMS_OFB_CM_SEND_MSG), 3u,
 			"... and advance by one per body, with no gap");
-	ct_check_eq_u32(sent_on_le16(OTHER_CONID, 2, VMS_OFB_CM_ACK_MSG), 0u,
-			"S2 (crash-safety): it acks NOTHING, because that "
-			"member has sent this node nothing on it -- acking a "
-			"message a peer never sent is the E76 CNXMGRERR");
+	ct_check_eq_u32(sent_on_le16(OTHER_CONID, 0, VMS_OFB_CM_ACK_MSG), 0u,
+			"S2 (crash-safety): the first body acks NOTHING, because "
+			"that member had sent this node nothing on it -- acking "
+			"a message a peer never sent is the E76 CNXMGRERR");
+	ct_check_eq_u32(sent_on_le16(OTHER_CONID, 2, VMS_OFB_CM_ACK_MSG), 1u,
+			"... and the request acks exactly the one message it "
+			"then really sent there");
 
 	/* INV-6: a re-issue re-asks a question. */
 	ct_check_eq_u32(cnxman_club_local(&g.cl.club)->csid_valid, 0u,
@@ -5151,6 +5274,10 @@ static void test_f3ec_abort_rearms_the_admission_clock(void)
 	ct_check_eq_u32(g.j.reissues, 1u, "and the request is re-issued");
 	ct_check_eq_u32(g.j.target_sysid == OTHER_SYSID, 1,
 			"to the OTHER member");
+	/* rd vms-e88: which says what it is before it is asked. */
+	(void)join_feed_from(other, OTHER_CSID,
+			     mk_member_params(1u, 1u, 0x0001));
+	bed_beats(1u);
 	ct_check_eq_u32(n_sent_on(OTHER_CONID), 3u,
 			"which hears the sec 4(o) burst on ITS OWN connection");
 	ct_check(sent_on_is(OTHER_CONID, 0, VMS_CM_CAT_CONFIG,
@@ -5443,6 +5570,284 @@ static void test_4f0_no_class_answers_nothing(void)
 		 "and said out loud on the console");
 }
 
+
+/* ==========================================================================
+ * rd vms-e88 -- WHOM THE JOINER ASKS, AND WHEN
+ *
+ * Each case below is one measured fact from four real OpenVMS VAX V7.3 trios
+ * (tests/lab/captures/vms-e88-join-target-20260930/) and, where it names one,
+ * one of the stall rig's NOFAULT arms it closes. A second connected member
+ * needs its own Con.ID; these are this section's.
+ * ========================================================================== */
+
+#define E88_MEMBER_CONID 0x4e62002au
+#define E88_OTHER_CONID  0x4e62002bu
+
+/* A CLUB holding `first` then (if nonzero) `second`, in that DISCOVERY order,
+ * and a fresh join over it. g.member_csb names MEMBER_SYSID's block if it is
+ * one of them, else the first -- it is only what bed_connect binds. */
+static void bed_init_order(vms_scs_sysid_t first, vms_scs_sysid_t second)
+{
+	struct vms_csb *a, *b = NULL;
+
+	bed_init();
+	(void)cnxman_club_init(&g.cl);
+	a = cnxman_club_alloc_csb(&g.cl.club, first, 1);
+	cnxman_csb_set_csid(a, first == MEMBER_SYSID ? MEMBER_CSID : OTHER_CSID);
+	if (second != 0u) {
+		b = cnxman_club_alloc_csb(&g.cl.club, second, 1);
+		cnxman_csb_set_csid(b, second == MEMBER_SYSID ? MEMBER_CSID
+							 : OTHER_CSID);
+	}
+	g.member_csb = cnxman_club_find_sysid(&g.cl.club, MEMBER_SYSID);
+	if (g.member_csb == NULL)
+		g.member_csb = a;
+	cnxman_barrier_init(&g.b, &g.cl, &g.ops);
+	cnxman_join_init(&g.j, &g.cl, &g.ops, &g.jops);
+	cnxman_join_set_barrier(&g.j, &g.b);
+	bed_set_identity();
+}
+
+/* Trios A and A2: the joiner discovered the LOWER member last (so it sat
+ * nearest the CLUB tail) and still asked the higher -- once the founder, once
+ * the most recent to join. */
+static void test_e88_asks_the_highest_not_the_last_discovered(void)
+{
+	printf("\n-- rd vms-e88: the joiner asks the highest-SCSSYSTEMID member, "
+	       "not the last one it discovered --\n");
+
+	/* negctl: join-asks-the-last-discovered */
+	bed_init_order(MEMBER_SYSID, OTHER_SYSID);   /* higher discovered FIRST */
+	(void)cnxman_join_start(&g.j);
+	ct_check(g.j.target_sysid == MEMBER_SYSID,
+		 "trio A/A2 order: the higher member is asked though the lower "
+		 "was discovered last (nearest the CLUB tail)");
+
+	bed_init_order(OTHER_SYSID, MEMBER_SYSID);   /* the other order */
+	(void)cnxman_join_start(&g.j);
+	ct_check(g.j.target_sysid == MEMBER_SYSID,
+		 "and in the other discovery order too: discovery order is "
+		 "not the rank");
+}
+
+/*
+ * Trio C3, and rig arm S-1. The joiner can reach ONE member; that member says
+ * the cluster has TWO. A real V7.3 joiner in exactly this position asked
+ * nobody for five minutes, and asked the other member 9.8 s after it came
+ * into reach. OVMX used to ask the one it could see -- an outranked member
+ * that discards the request by design (rd vms-1ac) -- and was never admitted.
+ */
+static void test_e88_waits_for_connectivity_to_every_member(void)
+{
+	struct vms_csb *other, *member;
+
+	printf("\n-- rd vms-e88: no request while a member the others count is "
+	       "out of reach --\n");
+	bed_init_order(OTHER_SYSID, 0u);             /* only the lower one yet */
+	other = g.member_csb;
+	cnxman_csb_set_scsnode(other, (const uint8_t *)"VAX1", 4u);
+
+	(void)cnxman_join_start(&g.j);
+	ct_check(g.j.target_sysid == OTHER_SYSID,
+		 "with one system in sight, that is the one the drive starts on");
+	cnxman_join_dir_result(&g.j, OTHER_SYSID, cnxman_join_name_mscp_disk,
+			       0);
+	cnxman_join_dir_result(&g.j, OTHER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, CM_CONID);
+	other->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	(void)join_feed_from(other, OTHER_CSID, mk_member_params(1u, 2u, 0x0002));
+	ct_check_eq_u32(other->adv_members, 2u,
+			"that member says its cluster has TWO members");
+
+	/* negctl: join-connectivity-gate-disarmed */
+	bed_beats(30u);
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 0u,
+			"no op-0x02 while one of two members is out of reach -- "
+			"thirty beats, as the real joiner waited five minutes");
+	ct_check_eq_u32(g.j.admit_hold, CNXMAN_JOIN_HOLD_CONNECTIVITY,
+			"held for CONNECTIVITY");
+	ct_check(bed_logged("waiting for connectivity to every cluster member"),
+		 "and said on the console");
+	ct_check_eq_u32(g.j.requests_unanswered, 0u,
+			"nobody was asked, so nobody was declined");
+
+	/* The other member comes into reach and says what it is. */
+	member = cnxman_club_alloc_csb(&g.cl.club, MEMBER_SYSID, 1);
+	cnxman_csb_set_csid(member, MEMBER_CSID);
+	cnxman_csb_set_scsnode(member, (const uint8_t *)"VAX3", 4u);
+	bed_peer_connected(member, E88_MEMBER_CONID);
+	(void)join_feed_from(member, MEMBER_CSID,
+			     mk_member_params(1u, 2u, 0x0002));
+	bed_beats(3u);
+
+	ct_check(g.j.target_sysid == MEMBER_SYSID,
+		 "the join moves to the higher member once it is in reach");
+	ct_check_eq_u32(g.j.retargets, 1u,
+			"... a RETARGET, not a decline: nobody had been asked");
+	ct_check_eq_u32(n_sent_on(E88_MEMBER_CONID), 3u,
+			"MODEL, PARAMS, then the request, on ITS connection");
+	ct_check(sent_on_is(E88_MEMBER_CONID, 2, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_CONFIG),
+		 "... the third is op-0x02");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 1u,
+			"exactly one op-0x02 in the world -- the lower member "
+			"never got one");
+	ct_check(bed_logged("sending VAXcluster membership request to system "
+			    "VAX3"),
+		 "and VMS's own console line names whom it asked");
+}
+
+/* Every real joiner's request followed the member's own PARAMS; rig arm T-15
+ * put it out before the real VAX had said a word. A member that never speaks
+ * is given up on exactly as an unanswered one is. */
+static void test_e88_no_request_before_the_member_says_what_it_is(void)
+{
+	printf("\n-- rd vms-e88: no request before the member's own PARAMS --\n");
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       0);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, CM_CONID);
+
+	/* negctl: join-unheard-gate-disarmed */
+	bed_beats(CNXMAN_JOIN_ADMIT_SILENCE_BEATS - 1u);
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 0u,
+			"a member that has sent no PARAMS is not asked");
+	ct_check_eq_u32(g.j.admit_hold, CNXMAN_JOIN_HOLD_UNHEARD,
+			"held as UNHEARD");
+	ct_check(bed_logged("waiting for the cluster member to send its "
+			    "cluster parameters"),
+		 "and said on the console");
+
+	bed_beats(1u);
+	ct_check_eq_u32(g.j.unheard_declines, 1u,
+			"the silence window later it is given up on, like an "
+			"unanswered member");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 0u,
+			"and still nothing was asked of anybody");
+}
+
+/* The identity records and the request never share a breath (spec sec 4(o);
+ * every real joiner's op-0x02 came >= 0.7 s after its own PARAMS). */
+static void test_e88_never_in_the_same_breath(void)
+{
+	printf("\n-- rd vms-e88: op-0x02 is never in the identity burst --\n");
+	bed_init();
+	bed_set_identity();
+	cnxman_csb_set_advert(g.member_csb, 1u);   /* it already spoke */
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       0);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	cnxman_join_opened(&g.j, CM_CONID);
+
+	/* negctl: join-same-breath-gate-disarmed */
+	ct_check_eq_u32(n_sent_on(CM_CONID), 2u,
+			"MODEL and PARAMS, and not op-0x02 with them");
+	ct_check_eq_u32(g.j.admit_hold, CNXMAN_JOIN_HOLD_FRESH,
+			"held as the same breath");
+	bed_beats(1u);
+	ct_check(sent_on_is(CM_CONID, 2, VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG),
+		 "a beat later the request goes");
+}
+
+/*
+ * Rig arm T-15. The pair's two connects crossed; the CSB kept the one the real
+ * VAX keeps and the join went on holding the other, so its request went down
+ * a connection the VAX never read. The member's PARAMS came on the kept one.
+ */
+static void test_e88_asks_on_the_connection_the_member_kept(void)
+{
+	printf("\n-- rd vms-e88: the request rides the connection the member "
+	       "kept --\n");
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);    /* the member's dial */
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk,
+			       0);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster,
+			       1);
+	ct_check(g.j.cm_conid == ACC_CM_CONID,
+		 "the join rides the member-initiated connection");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 2u,
+			"its identity went down that one");
+
+	/* Our own dial completes; the CSB keeps it (rd vms-1f40 -- the real
+	 * VAX keeps the one the OVMX node initiated), and the member speaks
+	 * THERE. */
+	bed_peer_connected(g.member_csb, CM_CONID);
+	(void)join_feed(mk_member_params(1u, 1u, 0x0002));
+
+	/* negctl: join-follow-csb-conn-disarmed */
+	bed_beats(3u);
+	ct_check_eq_u32(g.j.conn_follows, 1u,
+			"the join moves to the connection the executive records");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 1u,
+			"one request in the world");
+	ct_check(sent_on_is(CM_CONID, 2, VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG),
+		 "on the kept connection, after this node's identity there");
+	ct_check_eq_u32(sent_on_le16(CM_CONID, 0, VMS_OFB_CM_SEND_MSG), 1u,
+			"E77: the kept connection's dialogue opens at 1");
+	ct_check_eq_u32(n_sent_on(ACC_CM_CONID), 2u,
+			"and the abandoned one carried no request at all");
+}
+
+/*
+ * The member side. A member tells a waiting joiner running this
+ * implementation how many members there are -- and re-tells it when a
+ * transition changes the number (trio B: both members re-sent within 1 ms of
+ * committing an addition) -- and tells a foreign connection manager nothing
+ * it has not always told it: the count alone, beside the member-only bytes
+ * OVMX does not ground, is a record in a shape no real node writes.
+ */
+static void test_e88_a_member_advertises_its_count_to_ours_only(void)
+{
+	struct vms_csb *ours, *theirs;
+
+	printf("\n-- rd vms-e88: a member's PARAMS carries its member count -- "
+	       "to this implementation only --\n");
+	bed_init();
+	bed_set_identity();
+	bed_make_committed_member(0x00010001u);
+	g.cl.club.cluster_nodes = 2u;
+	ours = cnxman_club_find_sysid(&g.cl.club, MEMBER_SYSID);
+	theirs = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	bed_peer_connected(ours, E88_MEMBER_CONID);
+	bed_peer_connected(theirs, E88_OTHER_CONID);
+	ours->peer_is_ours = 1u;
+	theirs->peer_is_ours = 0u;
+
+	/* negctl: join-member-count-to-foreign */
+	cnxman_join_advertise_peers(&g.j);
+	ct_check(sent_on_is(E88_MEMBER_CONID, 1, VMS_CM_CAT_CONFIG,
+			    VMS_CM_OP_PARAMS), "PARAMS to the joiner of ours");
+	ct_check_eq_u32(sent_on_le16(E88_MEMBER_CONID, 1, VMS_OFB_CM_MEMBERS),
+			2u, "... carrying this node's member count");
+	ct_check_eq_u32(sent_on_le16(E88_OTHER_CONID, 1, VMS_OFB_CM_MEMBERS),
+			0u, "a foreign connection manager still hears 0");
+
+	g.cl.club.cluster_nodes = 3u;   /* a transition added a member */
+	cnxman_join_advertise_peers(&g.j);
+	ct_check_eq_u32(n_sent_on(E88_MEMBER_CONID), 3u,
+			"the changed count is re-sent to the waiting joiner");
+	ct_check_eq_u32(sent_on_le16(E88_MEMBER_CONID, 2, VMS_OFB_CM_MEMBERS),
+			3u, "... as the new number");
+	ct_check_eq_u32(n_sent_on(E88_OTHER_CONID), 2u,
+			"and nothing new goes to the foreign one");
+
+	ours->flags |= VMS_CSB_F_MEMBER;   /* ... which is now a member */
+	g.cl.club.cluster_nodes = 4u;
+	cnxman_join_advertise_peers(&g.j);
+	ct_check_eq_u32(n_sent_on(E88_MEMBER_CONID), 3u,
+			"a fellow member is waiting on nobody's count");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -5526,6 +5931,12 @@ int main(void)
 	test_4f0_member_answers_the_relay_like_a_real_vax();
 	test_4f0_relay_epoch_is_ours_not_the_coordinators();
 	test_4f0_no_class_answers_nothing();
+	test_e88_asks_the_highest_not_the_last_discovered();
+	test_e88_waits_for_connectivity_to_every_member();
+	test_e88_no_request_before_the_member_says_what_it_is();
+	test_e88_never_in_the_same_breath();
+	test_e88_asks_on_the_connection_the_member_kept();
+	test_e88_a_member_advertises_its_count_to_ours_only();
 
 	return ct_summary("test_cnxman_join");
 }

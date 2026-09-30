@@ -1,0 +1,138 @@
+===== C-1 order=a-then-b stall=14s mode=pkt:8109 start 11:01:20 =====
+[C-1(14s)] FAIL  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=2/3 wedged=0 bugchecks=1 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== C-2 order=a-then-b stall=14s mode=pkt:0a start 11:07:31 =====
+[C-2(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== C-3 order=a-then-b stall=14s mode=pkt:8109 start 11:13:50 =====
+[C-3(14s)] FAIL  stall=14s injected=1 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=0/2 wedged=0 bugchecks=1 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== C-4 order=together stall=14s mode=pkt:8109 start 11:22:31 =====
+[C-4(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== C done: 2 PASS / 2 FAIL =====
+===== F-1 order=a-then-b stall=14s mode=pkt:8109 start 11:28:51 =====
+[F-1(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== F-2 order=together stall=10s mode=pkt:8109 start 11:34:50 =====
+[F-2(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== F-3 order=b-then-a stall=14s mode=pkt:8109 start 11:40:58 =====
+[F-3(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== F-4 order=a-then-b stall=6s mode=pkt:8109 start 11:47:05 =====
+[F-4(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== F-5 order=a-then-b stall=20s mode=pkt:0a start 11:52:46 =====
+[F-5(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== F-6 order=together stall=14s mode=console mark=%CNXMAN,  completing VAXcluster state transition start 11:59:09 =====
+[F-6(14s)] FAIL  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=0/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== F-7 order=a-then-b stall=25s mode=pkt:8109 start 12:04:55 =====
+[F-7(25s)] PASS  stall=25s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== F-8 order=b-then-a stall=16s mode=console mark=this node is now a VAXcluster member start 12:11:25 =====
+[F-8(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== F-9 order=a-then-b stall=14s mode=console mark=%CNXMAN,  completing VAXcluster state transition start 12:17:35 =====
+[F-9(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== F-10 order=together stall=14s mode=pkt:8109 start 12:23:42 =====
+[F-10(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== F-11 order=a-then-b stall=10s mode=pkt:8109 start 12:29:49 =====
+[F-11(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== F-12 order=b-then-a stall=6s mode=pkt:0a start 12:35:56 =====
+[F-12(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== F-13 order=a-then-b stall=30s mode=pkt:8109 start 12:41:46 =====
+[F-13(30s)] FAIL  stall=30s injected=1 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=0/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=1 reconnect-lines=4
+===== F-14 order=together stall=18s mode=console mark=this node is now a VAXcluster member start 12:50:27 =====
+[F-14(18s)] PASS  stall=18s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== F-15 order=a-then-b stall=14s mode=pkt:0a start 12:56:13 =====
+[F-15(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== F-16 order=b-then-a stall=20s mode=pkt:8109 start 13:02:43 =====
+===== H-1 order=a-then-b stall=14s mode=pkt:8109 start 13:23:16 =====
+[H-1(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== H-2 order=together stall=10s mode=pkt:8109 start 13:28:59 =====
+[H-2(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== H-3 order=b-then-a stall=14s mode=pkt:8109 start 13:34:28 =====
+[H-3(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== H-4 order=a-then-b stall=6s mode=pkt:8109 start 13:40:38 =====
+[H-4(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== H-5 order=a-then-b stall=20s mode=pkt:0a start 13:46:25 =====
+[H-5(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== H-6 order=together stall=14s mode=console mark=%CNXMAN,  completing VAXcluster state transition start 13:52:22 =====
+[H-6(14s)] FAIL  stall=14s injected=1 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=0/2 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== H-7 order=a-then-b stall=25s mode=pkt:8109 start 14:01:44 =====
+[H-7(25s)] PASS  stall=25s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== H-8 order=b-then-a stall=16s mode=console mark=this node is now a VAXcluster member start 14:08:00 =====
+[H-8(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== H-9 order=a-then-b stall=14s mode=console mark=%CNXMAN,  completing VAXcluster state transition start 14:13:46 =====
+[H-9(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== H-10 order=together stall=14s mode=pkt:8109 start 14:19:43 =====
+[H-10(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== H-11 order=a-then-b stall=10s mode=pkt:8109 start 14:25:30 =====
+[H-11(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== H-12 order=b-then-a stall=6s mode=pkt:0a start 14:31:37 =====
+[H-12(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== H-13 order=a-then-b stall=30s mode=pkt:8109 start 14:37:35 =====
+[H-13(30s)] FAIL  stall=30s injected=1 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=3 finalMEMBERrows(B/A)=0/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=1 reconnect-lines=5
+===== H-14 order=together stall=18s mode=console mark=this node is now a VAXcluster member start 14:47:16 =====
+===== J-1 order=a-then-b stall=14s mode=pkt:8109 start 15:29:19 =====
+[J-1(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== J-2 order=together stall=10s mode=pkt:8109 start 15:35:29 =====
+[J-2(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== J-3 order=b-then-a stall=14s mode=pkt:8109 start 15:41:23 =====
+[J-3(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== J-4 order=a-then-b stall=6s mode=pkt:8109 start 15:47:53 =====
+[J-4(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== J-5 order=a-then-b stall=20s mode=pkt:0a start 15:54:12 =====
+[J-5(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== J-6 order=a-then-b stall=14s mode=console mark=%CNXMAN,  completing VAXcluster state transition start 16:00:29 =====
+[J-6(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== J-7 order=a-then-b stall=25s mode=pkt:8109 start 16:06:43 =====
+[J-7(25s)] PASS  stall=25s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== J-8 order=b-then-a stall=16s mode=console mark=this node is now a VAXcluster member start 16:13:26 =====
+[J-8(16s)] FAIL  stall=16s injected=1 B-MEMBER=1 A-MEMBER=0 VAX-proposed-B=2 finalMEMBERrows(B/A)=2/0 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== J-9 order=a-then-b stall=30s mode=pkt:8109 start 16:18:44 =====
+[J-9(30s)] FAIL  stall=30s injected=1 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=3 finalMEMBERrows(B/A)=0/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=1 reconnect-lines=5
+===== J-10 order=together stall=14s mode=pkt:8109 start 16:28:25 =====
+[J-10(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== J-11 order=a-then-b stall=10s mode=pkt:8109 start 16:34:25 =====
+[J-11(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== J-12 order=b-then-a stall=6s mode=pkt:0a start 16:40:43 =====
+===== L-1 order=a-then-b stall=14s mode=pkt:8109 start 16:43:58 =====
+[L-1(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-2 order=together stall=10s mode=pkt:8109 start 16:50:11 =====
+[L-2(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-3 order=b-then-a stall=14s mode=pkt:8109 start 16:55:32 =====
+[L-3(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-4 order=a-then-b stall=6s mode=pkt:8109 start 17:01:32 =====
+[L-4(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== L-5 order=a-then-b stall=20s mode=pkt:0a start 17:07:25 =====
+[L-5(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== L-6 order=a-then-b stall=14s mode=console mark=%CNXMAN,  completing VAXcluster state transition start 17:13:44 =====
+[L-6(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-7 order=a-then-b stall=25s mode=pkt:8109 start 17:19:32 =====
+[L-7(25s)] PASS  stall=25s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== L-8 order=together stall=14s mode=pkt:8109 start 17:25:53 =====
+[L-8(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-9 order=a-then-b stall=10s mode=pkt:8109 start 17:31:23 =====
+[L-9(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-10 order=b-then-a stall=6s mode=pkt:0a start 17:37:16 =====
+[L-10(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== L-11 order=a-then-b stall=18s mode=pkt:8109 start 17:43:11 =====
+[L-11(18s)] PASS  stall=18s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-12 order=together stall=18s mode=console mark=this node is now a VAXcluster member start 17:49:22 =====
+[L-12(18s)] PASS  stall=18s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== L-13 order=a-then-b stall=14s mode=pkt:0a start 17:55:10 =====
+[L-13(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-14 order=b-then-a stall=20s mode=pkt:8109 start 18:01:33 =====
+[L-14(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== L-15 order=a-then-b stall=16s mode=console mark=%CNXMAN,  completing VAXcluster state transition start 18:07:24 =====
+[L-15(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-16 order=a-then-b stall=14s mode=pkt:8109 start 18:13:49 =====
+[L-16(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-17 order=together stall=6s mode=console mark=this node is now a VAXcluster member start 18:19:56 =====
+[L-17(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== L-18 order=a-then-b stall=12s mode=pkt:8109 start 18:25:58 =====
+[L-18(12s)] PASS  stall=12s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== L-19 order=b-then-a stall=22s mode=pkt:8109 start 18:31:56 =====
+[L-19(22s)] PASS  stall=22s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== L-20 order=together stall=25s mode=pkt:0a start 18:38:08 =====
+[L-20(25s)] PASS  stall=25s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== L done: 20 PASS / 0 FAIL =====
+===== K-1 order=b-then-a stall=16s mode=console mark=this node is now a VAXcluster member start 18:44:28 =====
+[K-1(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== K-2 order=b-then-a stall=16s mode=console mark=this node is now a VAXcluster member start 18:53:42 =====
+[K-2(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== K-3 order=b-then-a stall=16s mode=console mark=this node is now a VAXcluster member start 19:03:37 =====
+[K-3(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== K done: 3 PASS / 0 FAIL =====

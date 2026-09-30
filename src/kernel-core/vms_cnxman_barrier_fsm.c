@@ -544,6 +544,28 @@ static void barrier_start_transition(struct cnxman_barrier *b,
 }
 
 /*
+ * WHO IS IN THIS TRANSITION, recorded at Phase 1 (rd vms-eb3). The
+ * coordinator's block and every block the proposal's nodemap names are marked,
+ * so that a connection to one of them lost before the transition ends is
+ * re-established with its dialogue carried (vms_cnxman_csb.h). Measured on a
+ * real V7.3 trio: a joiner frozen between its Phase-1 answer and the GO
+ * re-established both members, and the coordinator re-sent the GO on the new
+ * connection (oracle F6); one frozen just after it ran the barrier on
+ * (oracle F5). The mark ends with the transition.
+ */
+static void barrier_phase1_mark(struct cnxman_barrier *b)
+{
+	cnxman_club_phase1_mark(&b->cl->club, b->bitmap_valid,
+				(uint32_t)b->bitmap,
+				CNXMAN_PHASE2_BITMAP_SLOTS, b->coordinator_csb);
+}
+
+static void barrier_phase1_clear(struct cnxman_barrier *b)
+{
+	cnxman_club_phase1_clear(&b->cl->club);
+}
+
+/*
  * [*][RX_TR_OPEN] -- PHASE 1. Record the proposal, then acknowledge it with the
  * grounded 0x81 echo (p. 7-41: "each system normally acknowledges to VAX_A that
  * it has received and processed the information"; spec SS4(p): 0x81/0x09 is
@@ -562,6 +584,7 @@ static void barrier_h_open(struct cnxman_barrier *b, const struct barrier_msg *m
 
 	barrier_start_transition(b, m, &open);
 	barrier_take_bitmap(b, m, &open);
+	barrier_phase1_mark(b);
 	b->state = (uint8_t)CNXMAN_BARRIER_OPEN;
 	barrier_dlm_begin(b);
 
@@ -570,19 +593,41 @@ static void barrier_h_open(struct cnxman_barrier *b, const struct barrier_msg *m
 }
 
 /*
+ * A NEW TRANSITION OPENED WHILE THIS NODE'S BARRIER IS COMMITTED AND STALLED
+ * (rd vms-eb3). MEASURED, oracle F7 (three real V7.3 nodes, the joiner frozen
+ * 30 s after its Phase-1 answer): the coordinator VAX3 had sent the addition's
+ * GO, taken VAX1's step 1 and never released it -- it was waiting on the
+ * frozen joiner -- and when the joiner timed out VAX1 opened the REMOVAL. VAX3,
+ * still inside the addition barrier, answered the new open and ran the new
+ * barrier to its end. The stalled one is superseded, not defended.
+ *
+ * p. 7-42 still holds: Phase 2 committed the count and nothing rolls it back
+ * -- the removal's own nodemap is what changes membership. What ends here is
+ * the stalled barrier's work: its DLM rebuild (completed = 0) and its Phase-1
+ * record. Replaced rule: "the running one stands" (INFERRED, no capture);
+ * measured on stall-rig arms F-13/H-13, where it left an OVMX member refusing
+ * the real VAX's removal until the VAX timed that member out too.
+ */
+static void barrier_supersede_committed(struct cnxman_barrier *b)
+{
+	b->transitions_superseded++;
+	barrier_dlm_end(b, 0);
+	barrier_phase1_clear(b);
+	barrier_log(b, "%CNXMAN, a new transition opened while one is "
+		       "committed and stalled; it supersedes the running one");
+}
+
+/*
  * [OPEN][RX_TR_OPEN] and [STEP][RX_TR_OPEN]. A repeat of the SAME epoch is the
  * coordinator retransmitting: answer it again and change nothing. A DIFFERENT
- * epoch while a barrier is already running is past p. 7-42's point of no
- * return, so it cannot replace the running transition; it is answered (a
- * coordinator that gates on the acknowledgement must not be stranded) and
- * COUNTED. Before the GO, a new epoch supersedes the pending proposal, which is
- * what abandoning-and-reproposing looks like from here.
+ * epoch supersedes what is running, and is answered and run:
  *
- * INFERRED. p. 7-41 gives the coordinator's abandon rules but not what a
- * participant does with an unsolicited second proposal, and no capture shows
- * one. The alternative -- ignoring it -- strands the coordinator, which is the
- * documented cluster-breaking outcome; answering and instrumenting is the
- * failure-safe reading.
+ *   - before the GO, the pending proposal was abandoned and re-proposed
+ *     (INFERRED: p. 7-41 gives the coordinator's abandon rules, not the
+ *     participant's view of them);
+ *   - after the GO, the committed barrier has stalled and the cluster has
+ *     moved on (MEASURED, rd vms-eb3 oracle F7 -- see
+ *     barrier_supersede_committed()). The count Phase 2 committed stands.
  */
 static void barrier_h_reopen(struct cnxman_barrier *b,
 			     const struct barrier_msg *m)
@@ -602,15 +647,13 @@ static void barrier_h_reopen(struct cnxman_barrier *b,
 		return;
 	}
 	if (b->state == (uint8_t)CNXMAN_BARRIER_STEP) {
-		b->transitions_superseded++;
-		barrier_log(b, "%CNXMAN, a new transition opened while one is "
-			       "committed; the running one stands");
-		barrier_respond_echo(b, m);
-		b->opens_answered++;
+		barrier_supersede_committed(b);
+		barrier_h_open(b, m);
 		return;
 	}
 	b->transitions_superseded++;
 	barrier_dlm_end(b, 0);
+	barrier_phase1_clear(b);
 	barrier_h_open(b, m);
 }
 
@@ -678,6 +721,7 @@ static void barrier_h_go(struct cnxman_barrier *b, const struct barrier_msg *m)
 		b->cl->club.reformations++;
 		b->transitions_completed++;
 		barrier_dlm_end(b, 1);
+		barrier_phase1_clear(b);
 		barrier_log(b, "%CNXMAN, completed VAXcluster state transition");
 		return;
 	}
@@ -685,6 +729,28 @@ static void barrier_h_go(struct cnxman_barrier *b, const struct barrier_msg *m)
 	b->state = (uint8_t)CNXMAN_BARRIER_STEP;
 	barrier_send_step(b, 1u);
 	b->cl->club.barrier_step = b->step;
+}
+
+/*
+ * [STEP][RX_TR_GO]. The same epoch's GO again changes nothing (the barrier is
+ * already running on it). A DIFFERENT epoch's GO is a new transition -- a
+ * class-0x03 removal "starts directly at op 0x0a" with no open (spec SS4(p))
+ * -- and it supersedes the stalled barrier exactly as a new open does (rd
+ * vms-eb3, oracle F7).
+ */
+static void barrier_h_go_in_step(struct cnxman_barrier *b,
+				 const struct barrier_msg *m)
+{
+	struct vms_cm_open go;
+
+	if (vms_cm_open_parse(m->body, m->len, &go) != VMS_CODEC_OK ||
+	    go.role != VMS_CM_ROLE_GO || go.epoch == b->epoch) {
+		b->ignored_events++;
+		return;
+	}
+	barrier_supersede_committed(b);
+	b->open_seen = 0u;
+	barrier_h_go(b, m);
 }
 
 /*
@@ -723,6 +789,7 @@ static void barrier_finish(struct cnxman_barrier *b)
 	b->cl->club.reformations++;
 	b->transitions_completed++;
 	barrier_dlm_end(b, 1);
+	barrier_phase1_clear(b);
 	barrier_log(b, "%CNXMAN, completed VAXcluster state transition");
 }
 
@@ -859,6 +926,7 @@ static void barrier_h_abort(struct cnxman_barrier *b,
 	b->cl->club.transition_active = 0u;
 	b->transitions_abandoned++;
 	barrier_dlm_end(b, 0);
+	barrier_phase1_clear(b);
 	barrier_log(b, "%CNXMAN, aborting VAXcluster state transition");
 }
 
@@ -904,9 +972,11 @@ barrier_table[CNXMAN_BARRIER_STATE__COUNT][CNXMAN_EV__COUNT] = {
 		[CNXMAN_EV_RX_CLOSE]     = barrier_h_abort,
 	},
 
-	/* [STEP] Phase 2 committed and the barrier is running. */
+	/* [STEP] Phase 2 committed and the barrier is running. A NEW
+	 * transition supersedes a stalled one (MEASURED, rd vms-eb3 F7). */
 	[CNXMAN_BARRIER_STEP] = {
-		[CNXMAN_EV_RX_TR_OPEN]    = barrier_h_reopen,  /* INFERRED */
+		[CNXMAN_EV_RX_TR_OPEN]    = barrier_h_reopen,
+		[CNXMAN_EV_RX_TR_GO]      = barrier_h_go_in_step,
 		[CNXMAN_EV_RX_BARRIER]    = barrier_h_release,
 		[CNXMAN_EV_RX_BARRIER_ACK] = barrier_h_step_ack,
 		[CNXMAN_EV_RX_REBUILD]    = barrier_h_rebuild,
@@ -1069,6 +1139,7 @@ void cnxman_barrier_coordinator_lost(struct cnxman_barrier *b)
 	b->cl->club.transition_active = 0u;
 	b->transitions_abandoned++;
 	barrier_dlm_end(b, 0);
+	barrier_phase1_clear(b);
 	barrier_log(b, "%CNXMAN, aborting VAXcluster state transition");
 }
 

@@ -806,6 +806,9 @@ struct cnxman_join {
 	/* A VMS$VAXcluster connection this join HELD went away (p. 7-30: do not
 	 * presume the member left). */
 	uint32_t cm_lost;
+	/* ...of which during an open transition this node answered, and held
+	 * across the loss rather than re-driven (rd vms-eb3) */
+	uint32_t cm_lost_in_transition;
 	/* Beats on which VC_CONNECT re-issued the connect (p. 7-30's cadence). */
 	uint32_t cm_reattempts;
 	/* Beats on which the Con.ID was taken from the TARGET CSB instead --

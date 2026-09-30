@@ -548,7 +548,29 @@ struct vms_csb {
 	 * counter back, which is the number that says a hole was prevented.
 	 */
 	uint8_t  cm_resume_pending;
-	uint8_t  cm_resume_pad[3];
+	/*
+	 * ...AND WHETHER THIS SYSTEM IS NAMED IN A STATE TRANSITION THIS NODE
+	 * HAS ACKNOWLEDGED AND THAT HAS NOT YET ENDED (rd vms-eb3). Set at
+	 * p. 7-41's Phase 1 -- the coordinator's own block, and every block
+	 * the proposal's nodemap names -- and cleared when the transition
+	 * completes or is abandoned. It is the one fact that makes a lost
+	 * connection to that system a RE-ESTABLISHMENT before p. 7-42's
+	 * Phase 2 has set SELECTED: measured on a real V7.3 trio, a joiner
+	 * frozen between its Phase-1 answer and the GO re-established both
+	 * members with its dialogue carried, and the coordinator re-sent the
+	 * GO on the new connection (vms-eb3 oracle F5/F6).
+	 */
+	uint8_t  cm_phase1_named;
+	/*
+	 * ...AND WHETHER THE SYSTEM HAS COME BACK AS A NEW INCARNATION SINCE
+	 * THIS BLOCK'S DIALOGUE BEGAN (rd vms-eb3). p. 7-24 DEAD / p. 7-25: the
+	 * old incarnation's conversation died with it, and the new one is dealt
+	 * with "just as if it were joining the cluster for the first time". Set
+	 * when the circuit advertises an incarnation different from the one
+	 * this block recorded; cleared when a fresh dialogue is bound.
+	 */
+	uint8_t  cm_new_incarnation;
+	uint8_t  cm_resume_pad[1];
 	uint32_t cm_resumes;
 
 	/*

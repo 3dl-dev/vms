@@ -106,6 +106,19 @@ target_compile_definitions(test_sim_cnxman_join_member_count PRIVATE
 target_include_directories(test_sim_cnxman_join_member_count PRIVATE
     ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
+# rd vms-eb3's rung-R2 leg: the real V7.3 oracle F6 -- a joiner frozen after its
+# Phase-1 answer, the GO lost -- replayed through the shipping barrier, CSB
+# ladder and reconnect FSM on the virtual clock.
+cluster_sim_test(test_sim_cnxman_joiner_frozen_across_the_go
+                 scenarios/cnxman_joiner_frozen_across_the_go.c)
+target_link_libraries(test_sim_cnxman_joiner_frozen_across_the_go PRIVATE
+    cluster_host_cnxman cluster_host_fixture)
+target_compile_definitions(test_sim_cnxman_joiner_frozen_across_the_go PRIVATE
+    OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
+    OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256")
+target_include_directories(test_sim_cnxman_joiner_frozen_across_the_go PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 # FC-P6.5's rung-R2 leg: TWO simulated nodes complete an MSCP WRITE over the
 # virtual LAN -- the client's class driver, the server's MSCP server, and BOTH
 # ports' block-transfer services (the server's REQUEST DATA and the client

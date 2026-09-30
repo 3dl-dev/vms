@@ -59,3 +59,5 @@ a3fe5d3225847de27e99ff37129eb9939664ea32f965ca09d153e8ed7ed22784  tests/lab/capt
 fc058972c33811bb42c2279ec2b7d8b9a4157fe51df1af51651ebc8e6329de1e  tests/lab/captures/vms-e88-join-target-20260930/e88-A2-20260930.pcap
 9e7dac6c1bfb3bfacac884b9a3cc283e9630483c9f1d369b3a18a5cd5f7d9eed  tests/lab/captures/vms-e88-join-target-20260930/e88-B-20260930.pcap
 a1edec4bdd38065c9f54c8d44fa92f82b3581aed53d55176cb0102aa08b9a753  tests/lab/captures/vms-e88-join-target-20260930/e88-C3-20260930.pcap
+e0b4da5bbbf626b12e08c644524950c180c0de0c3dcef308b69b83d5480e6691  tests/lab/captures/vms-eb3-joiner-freeze-20260930/eb3-F5-20260930.pcap
+11c017518e3eaa3496183cb2d3f485e89854c910c79bc3aa8c3fe8fe15f24a30  tests/lab/captures/vms-eb3-joiner-freeze-20260930/eb3-F6-20260930.pcap

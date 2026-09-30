@@ -1173,6 +1173,55 @@ static void test_release_out_of_order_does_not_advance(void)
 	ct_check_eq_u32(g.b.step, 2, "the RIGHT release advances to step 2");
 }
 
+/*
+ * rd vms-eb3: Phase 1 records WHO IS IN THE TRANSITION on the CSBs -- the
+ * coordinator's own block and every block the nodemap names -- so a connection
+ * to one of them lost before the transition ends is re-established with its
+ * dialogue carried (a real V7.3 joiner did exactly that, oracle F5/F6). The
+ * record ends with the transition: completed, aborted, or its coordinator lost.
+ */
+static void test_phase1_names_who_is_in_the_transition(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	struct vms_csb *peer;
+	uint32_t n;
+
+	printf("[barrier] rd vms-eb3: Phase 1 names the transition's systems "
+	       "on their CSBs, and the end of the transition un-names them\n");
+	bed_init();
+	peer = cnxman_club_find_csid(&g.cl.club, PEER_CSID);
+	/* negctl: barrier-phase1-not-marked */
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 1u,
+			"the coordinator's block is named at Phase 1");
+	ct_check(peer != NULL && peer->cm_phase1_named == 1u,
+		 "and the member the nodemap names");
+	ct_check_eq_u32(cnxman_club_local(&g.cl.club)->cm_phase1_named, 0u,
+			"this node itself is not a peer to carry a dialogue with");
+
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 1u,
+			"it stands through the GO and the barrier");
+	for (n = 1; n <= CNXMAN_BARRIER_STEPS; n++)
+		(void)feed(f, mk_release(f, EPOCH, n));
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_COMPLETE, "completed");
+	/* negctl: barrier-phase1-not-cleared */
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 0u,
+			"and ends with the transition");
+
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_abort(f));
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 0u,
+			"an abandoned transition un-names too");
+
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	cnxman_barrier_coordinator_lost(&g.b);
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 0u,
+			"and so does one whose coordinator was lost for good");
+}
+
 static void test_coordinator_lost_abandons_locally(void)
 {
 	uint8_t f[VMS_CM_FRAME_LEN];
@@ -1316,6 +1365,73 @@ static void test_reopen_supersedes_before_the_go(void)
 	ct_check_eq_u32(g.n_sent, 2, "both proposals were acknowledged");
 }
 
+/*
+ * rd vms-eb3, oracle F7 (three real V7.3 nodes, the joiner frozen 30 s after
+ * its Phase-1 answer): the addition's barrier had started -- GO sent, step 1
+ * taken, never released, because the joiner was frozen -- and when the joiner
+ * timed out, a REMOVAL was opened. The real VAX inside the stalled addition
+ * barrier answered the removal and ran it to the end. Stall-rig arms F-13 and
+ * H-13: an OVMX member in the same place refused it ("the running one stands",
+ * an INFERRED rule) and was later timed out by the real VAX itself.
+ */
+static void test_a_new_transition_supersedes_a_stalled_barrier(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n, sent_before, nodes;
+
+	printf("[barrier] rd vms-eb3: a new transition supersedes a committed, "
+	       "stalled barrier (MEASURED, oracle F7)\n");
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_STEP && g.b.steps_sent == 1,
+		 "the addition's barrier runs: step 1 out, never released");
+	nodes = g.cl.club.cluster_nodes;
+
+	/* negctl: barrier-stalled-refuses-new-transition */
+	sent_before = g.n_sent;
+	(void)feed(f, mk_open_remove(f, EPOCH + 1u));
+	ct_check_eq_u32(g.b.transitions_superseded, 1u,
+			"the removal supersedes the stalled barrier");
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_OPEN &&
+		 g.b.epoch == EPOCH + 1u, "...and is now the transition");
+	ct_check(g.n_sent == sent_before + 1u &&
+		 sent_cat(g.n_sent - 1u) == 0x81u &&
+		 sent_op(g.n_sent - 1u) == VMS_CM_OP_XITION_REM,
+		 "its open is answered (0x81/0x08)");
+	ct_check_eq_u32(g.cl.club.cluster_nodes, nodes,
+			"p. 7-42: the count Phase 2 committed is not rolled back");
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 1u,
+			"and the new transition names who is in it");
+
+	(void)feed(f, mk_go(f, EPOCH + 1u, VMS_CM_CLASS_REMOVE, VMS_CM_ROLE_GO));
+	for (n = 1; n <= CNXMAN_BARRIER_STEPS; n++)
+		(void)feed(f, mk_release(f, EPOCH + 1u, n));
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_COMPLETE,
+		 "the removal's barrier runs to the end");
+
+	/* The same shape with a bare removal GO (spec SS4(p): a class-0x03
+	 * removal may start at op 0x0a with no open). */
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	/* negctl: barrier-stalled-ignores-new-go */
+	(void)feed(f, mk_go(f, EPOCH + 1u, VMS_CM_CLASS_REMOVE, VMS_CM_ROLE_GO));
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_STEP &&
+		 g.b.epoch == EPOCH + 1u && g.b.transitions_superseded == 1u,
+		 "a bare removal GO supersedes it too, and its barrier starts");
+
+	/* Control: the running epoch's own GO again changes nothing. */
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	sent_before = g.n_sent;
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	ct_check(g.b.transitions_superseded == 0u && g.n_sent == sent_before &&
+		 g.b.epoch == EPOCH,
+		 "the running epoch's GO again is not a new transition");
+}
+
 /* A retransmitted open is answered again and changes nothing -- the
  * coordinator retransmits, and an unanswered request strands it. */
 static void test_retransmitted_open_is_reanswered(void)
@@ -1360,12 +1476,14 @@ int main(void)
 	test_abort_does_not_roll_back_a_committed_count();
 	test_release_out_of_order_does_not_advance();
 	test_coordinator_lost_abandons_locally();
+	test_phase1_names_who_is_in_the_transition();
 	test_no_link_originates_nothing();
 	test_ignored_events_are_counted();
 	test_transition_readback();
 	test_state_names();
 	test_two_transitions_back_to_back();
 	test_reopen_supersedes_before_the_go();
+	test_a_new_transition_supersedes_a_stalled_barrier();
 	test_retransmitted_open_is_reanswered();
 	return ct_summary("test_cnxman_barrier");
 }

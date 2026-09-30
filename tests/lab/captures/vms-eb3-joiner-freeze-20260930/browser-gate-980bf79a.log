@@ -1,0 +1,51 @@
+=== run 1/10 19:14:46 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 2/10 19:16:04 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 3/10 19:17:07 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 4/10 19:18:09 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 5/10 19:19:12 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 6/10 19:20:15 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 7/10 19:21:17 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 8/10 19:22:20 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 9/10 19:23:22 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== run 10/10 19:24:25 ===
+
+PASS  all-at-once              CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true}
+=== DONE 19:25:57 ===

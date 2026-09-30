@@ -573,7 +573,27 @@ struct vms_csb {
 	 */
 	uint32_t cm_advert_conid;
 	uint8_t  cm_advert_sent;    /* CNXMAN_JOIN_B_* bits, per that Con.ID  */
-	uint8_t  pad4[3];
+	/*
+	 * ---- what this system has told US it is (rd vms-e88) ----
+	 *
+	 * `adv_members` is the cluster member count its latest op-0x01 PARAMS
+	 * carried at body[18:20] -- its own count if it is a member, 0 if it
+	 * belongs to no cluster -- and `adv_valid` 0 is the honest "no PARAMS
+	 * from it yet", never "0 members". A joiner reads the two to decide
+	 * WHOM it may ask for admission and WHEN (Davis p. 7-37, measured on
+	 * real V7.3 trios): only a system that says it is a member, and only
+	 * once it has connectivity with as many members as they say there are.
+	 */
+	uint8_t  adv_valid;
+	uint16_t adv_members;
+	/*
+	 * ...and the member count THIS node last put in a PARAMS on
+	 * `cm_advert_conid`, so a count that has changed since is said again
+	 * (a real member re-sends its PARAMS to a waiting joiner when a
+	 * transition changes it -- measured, e88 trio B).
+	 */
+	uint16_t cm_advert_members;
+	uint8_t  pad4[2];
 };
 
 /*

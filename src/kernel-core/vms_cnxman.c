@@ -750,6 +750,19 @@ static int cnxman_jop_connect(void *ctx, vms_scs_sysid_t dst,
 			 * send/ack dialogue, because the numbers it was holding
 			 * belonged to the connection this one replaces. */
 			cnxman_csb_bind_connection(csb, (uint32_t)*out_conid);
+			/*
+			 * ...AND IT IS THIS NODE'S OWN ATTEMPT (rd vms-e88), so a
+			 * crossing resolves the way rd vms-1f40 resolves a
+			 * reconnect's: when the peer's own connect opens first
+			 * and is bound, this one -- the connection the real VAX
+			 * keeps -- takes the block back when it opens
+			 * (cnxman_csb_second_open, `ours`). Without the note the
+			 * join's own connect was classified as a second ACCEPT
+			 * and parked as the spare, and the join ran on the one
+			 * the VAX abandons: rig arms T-15 and M-9, the VAX's
+			 * PARAMS on one connection and our request on the other.
+			 */
+			cnxman_csb_note_attempt(csb, (uint32_t)*out_conid);
 			(void)cnxman_csb_dispatch(&cn->cl->club, csb,
 						  CNXMAN_CSB_EV_CONNECT_SENT,
 						  &cn->ops);

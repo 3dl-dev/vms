@@ -3766,6 +3766,28 @@ properties, not a role marker. The only predicate surviving both specimens is
 which is confounded with "highest SCSSYSTEMID" and "last to have joined".
 OVMX implements that observable and labels it INFERRED (`cm_pick_coordinator`).
 
+> **UPDATE (GROUNDED, `vms-e88`, 2026-09-30) — the joiner's rule, measured on
+> four all-real V7.3 trios** (`tests/lab/captures/vms-e88-join-target-20260930/`).
+> The confound is broken: with the founder the HIGHEST (trio A) and with the most
+> recent joiner the highest (trio A2), and in both cases the lower member the one
+> discovered LAST, the joiner asked the **highest-SCSSYSTEMID member** every time
+> — not the last discovered, not the founder, not the last to join. And a joiner
+> asks only a system whose own op-0x01 PARAMS says it is a member, only once it
+> has connectivity with as many members as the members advertise (Davis
+> p. 7-37): in trio C3 a joiner that could reach one of two members asked
+> **nobody** for five minutes, and asked the other 9.8 s after it came into reach.
+> The count is on the wire:
+>
+> | op-0x01 `body` | abs | meaning | grounding |
+> |---|---|---|---|
+> | `[18:20]` | 90 | the SENDER's cluster member count; **0 from a system in no cluster** | 12 member / 9 joiner PARAMS across trios A, A2, B, C3; moves 0 -> 2 on the frame the sender is admitted |
+>
+> Member PARAMS also carry `body[12]=0x21` and two nonzero VMS time quadwords at
+> `body[28:44]` (zero from joiners) — **not decoded, not used**. A joiner's op-0x02
+> always followed the member's own PARAMS, 0.7 s or more after its own identity
+> records; real members re-send their PARAMS to a waiting joiner when a
+> transition changes the count.
+
 #### Never answer a (category, opcode) pair you have not grounded
 
 Once the relay works, the **non-coordinator members open their own

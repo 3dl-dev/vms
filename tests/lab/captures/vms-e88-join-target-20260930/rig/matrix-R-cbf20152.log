@@ -1,0 +1,31 @@
+===== R-1 order=together stall=12s start 06:47:57 =====
+[R-1(12s)] PASS  stall=12s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== R-2 order=b-then-a stall=6s start 06:53:34 =====
+[R-2(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== R-3 order=a-then-b stall=14s start 06:59:18 =====
+[R-3(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== R-4 order=together stall=25s start 07:04:53 =====
+[R-4(25s)] PASS  stall=25s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== R-5 order=b-then-a stall=13s start 07:10:30 =====
+[R-5(13s)] PASS  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== R-6 order=a-then-b stall=6s start 07:15:48 =====
+[R-6(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== R-7 order=together stall=16s start 07:21:53 =====
+[R-7(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== R-8 order=b-then-a stall=30s start 07:27:12 =====
+[R-8(30s)] PASS  stall=30s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=9 refused-giveup=0 cluexits=0 reconnect-lines=12
+===== R-9 order=a-then-b stall=20s start 07:32:46 =====
+[R-9(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== R-10 order=together stall=6s start 07:38:36 =====
+[R-10(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== R-11 order=b-then-a stall=10s start 07:44:02 =====
+[R-11(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== R-12 order=a-then-b stall=25s start 07:50:20 =====
+[R-12(25s)] PASS  stall=25s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== R-13 order=together stall=14s start 07:56:10 =====
+[R-13(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== R-14 order=b-then-a stall=18s start 08:01:38 =====
+[R-14(18s)] PASS  stall=18s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== R-15 order=a-then-b stall=10s start 08:07:12 =====
+[R-15(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== R done: 15 PASS / 0 FAIL =====

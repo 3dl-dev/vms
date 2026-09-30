@@ -1996,6 +1996,20 @@ static int coord_is_peer_csb(const struct vms_csb *csb)
 }
 
 /*
+ * ...OR HAS IT TOLD US, IN ITS OWN op-0x01 PARAMS, THAT IT BELONGS TO ONE?
+ * (rd vms-e88: body[18:20] is the sender's member count, 0 from a system in
+ * no cluster.) That is a third honest read, and the earliest: a real VAX
+ * member's PARAMS reaches a newcomer the moment their connection opens, long
+ * before any CSID could be learned. MEASURED on the stall rig (arm N-3 of this
+ * item): a voting OVMX node beside the real VAX founded a cluster of its own
+ * because the VAX had said it was a member and no clause here listened.
+ */
+static int coord_peer_says_member(const struct vms_csb *csb)
+{
+	return csb->adv_valid && csb->adv_members != 0u;
+}
+
+/*
  * (1) DOES THIS SYSTEM ALREADY HOLD A CLUSTER IDENTITY? Then there is a cluster
  * to JOIN and this node must not form one beside it. Two honest reads, no
  * inference: a CSID on its CSB (a value only a cluster ever assigns -- this
@@ -2005,7 +2019,8 @@ static int coord_is_peer_csb(const struct vms_csb *csb)
 static int coord_peer_in_cluster(const struct vms_csb *csb)
 {
 	return csb->csid_valid ||
-	       (csb->flags & (VMS_CSB_F_MEMBER | VMS_CSB_F_SELECTED)) != 0u;
+	       (csb->flags & (VMS_CSB_F_MEMBER | VMS_CSB_F_SELECTED)) != 0u ||
+	       coord_peer_says_member(csb);
 }
 
 /*

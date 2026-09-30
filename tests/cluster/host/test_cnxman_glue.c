@@ -509,6 +509,13 @@ static void test_glue_bindings(void)
 	check_absent("cnxman_csb_dialogue_sent(",
 		  "E73: no transport thunk assigns a send-msg# -- exactly one "
 		  "function does, before the stamp");
+	/* rd vms-e88: the join's OWN VMS$VAXcluster connect is recorded as this
+	 * node's attempt, so a crossing hands the block back to it when it
+	 * opens (the connection the real VAX keeps: rig arms T-15 and M-9). */
+	check_has("cnxman_csb_bind_connection(csb, (uint32_t)*out_conid);\n",
+		  "the join's own connect binds its CSB (E77)");
+	check_has("cnxman_csb_note_attempt(csb, (uint32_t)*out_conid);",
+		  "... and is noted as this node's own attempt (rd vms-e88)");
 	check_has("cnxman_csb_dialogue_heard(csb, env.send_msg)",
 		  "inbound frames update the peer's ack-msg# for the barrier/"
 		  "coordinator path (the join does its own, internally)");

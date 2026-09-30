@@ -191,29 +191,35 @@
  *    otherwise it declares nothing, the directory service falls back to its
  *    honest name-echo, and `dir_descriptor_omitted` counts it.
  *
- * E. THE JOIN TARGET'S PROTOCOL/ECO LEVEL. Book p. 7-37/7-38 (correction D7)
- *    has the JOINER select whom to ask, by highest VAXcluster protocol level,
- *    then highest ECO level, then the CSB nearest the end of the CLUB's CSB
- *    queue -- and asks only once the members it has connectivity with equal
- *    the member count those CSBs advertise. Neither the protocol/ECO pair nor
- *    the advertised member count has an isolated wire offset (FC-P3.2's
- *    scope). This FSM implements the RESIDUAL rule it really can evaluate --
- *    the CSB nearest the queue tail, which is live CLUB state -- and counts
- *    `target_level_unpinned` / `member_count_ungated` so the two omissions
- *    are visible in the diagnostics rather than discovered on a real cluster.
- *    It does NOT gate the join on a count it cannot read: that would be a
- *    deadlock chosen over an honest omission.
+ * E. WHOM THE JOINER ASKS, AND WHEN (rd vms-e88). Book pp. 7-37/7-38
+ *    (correction D7) has the JOINER select whom to ask, by highest VAXcluster
+ *    protocol level, then highest ECO level, then "the CSB nearest the end of
+ *    the CLUB's CSB queue" -- and ask only once the members it has
+ *    connectivity with equal the member count those CSBs advertise.
  *
- *    E80 LOOKED AT THIS AGAIN AND LEFT IT ALONE, for two independent reasons.
- *    The connect data a peer sent is not recorded in any CSB -- it reaches
- *    cnxman_join_connect_req() and is counted, never stored -- so there is no
- *    executive state to rank on; and WHICH of its bytes carry the protocol and
- *    ECO levels, in which order, is unpinned (E74 flags exactly that), while
- *    every VAX-sourced `VMS$VAXcluster` connect frame in the library carries
- *    the SAME quad, so no capture could falsify a guess. Ranking on an
- *    unpinned interpretation of a constant is not a rank. What E80 DID add is
- *    orthogonal and fully grounded: the tail-first walk now also SKIPS a
- *    member that has already been asked and said nothing during this attempt.
+ *    THE COUNT IS NOW GROUNDED AND GATED. op-0x01 PARAMS body[18:20] is the
+ *    sender's member count (VMS_OFF_CM_MEMBERS; 0 from a system in no
+ *    cluster), measured on four real V7.3 trios
+ *    (tests/lab/captures/vms-e88-join-target-20260930/). In trio C3 a joiner
+ *    that could reach only one of two members -- that member advertising 2 --
+ *    sent no membership request to anybody for five minutes, and asked the
+ *    other member 9.8 s after it became reachable. So a joiner asks only a
+ *    system that SAYS it is a member, and only once it has connectivity with
+ *    as many members as they say there are (join_admission_held()).
+ *
+ *    THE RANK IS THE ONE THE WIRE SHOWS. The CLUB's queue order is VMS's own
+ *    and not observable; OVMX's CLUB is in discovery order, which is not it:
+ *    in trios A and A2 the joiner discovered the lower-numbered member LAST
+ *    and still asked the higher -- once when that member was the founder, once
+ *    when it was the most recent to join. Across A, A2, B and C3 the member
+ *    asked was the highest-SCSSYSTEMID member every time, the same predicate
+ *    the receiver side already uses to decide who coordinates (rd vms-1ac,
+ *    107/113 over the reference trees). Protocol/ECO level stays unpinned --
+ *    every VAX connect in the library carries the same quad, so there is
+ *    nothing to rank on -- and `target_level_unpinned` still counts it.
+ *
+ *    E80's decline set is unchanged and orthogonal: a member that was asked
+ *    and said nothing is still skipped for the rest of the attempt.
  *
  * INCLUDES: kernel-core headers only (CI gate tools/ci/cluster_core_includes_gate.sh).
  * This TU is PURE: no seam call, no allocation, no clock but ops->now_ms, so
@@ -572,6 +578,31 @@ struct cnxman_join_ops {
 #define CNXMAN_JOIN_B_CONFIG  0x04u
 
 /*
+ * WHY an op-0x02 that is due has not gone out yet (rd vms-e88). Each is a read
+ * of executive state, re-taken on every beat; see join_admission_held().
+ *   UNHEARD      -- the member to be asked has not sent this node its own
+ *                   op-0x01 PARAMS, so this node does not know it is a member
+ *                   (every real joiner's op-0x02 follows the member's PARAMS).
+ *   FRESH        -- this node's own MODEL/PARAMS went down that connection in
+ *                   the same breath: op-0x02 is never bundled with them (spec
+ *                   sec 4(o): "sending 0x02 inside the initial burst leaves the
+ *                   peer silent"), or the join has just moved connection.
+ *   NO_MEMBER    -- the member being asked says, in its own PARAMS, that it
+ *                   belongs to no cluster, and some other system in sight has
+ *                   not yet said what it is (e88 trio B: a real joiner never
+ *                   asked a system that was itself still joining).
+ *   CONNECTIVITY -- the members advertise more members than this node has
+ *                   connectivity with (Davis p. 7-37; measured on V7.3, trio
+ *                   C3: a joiner that could reach one of two members asked
+ *                   nobody for five minutes).
+ */
+#define CNXMAN_JOIN_HOLD_NONE          0u
+#define CNXMAN_JOIN_HOLD_UNHEARD       1u
+#define CNXMAN_JOIN_HOLD_FRESH         2u
+#define CNXMAN_JOIN_HOLD_CONNECTIVITY  3u
+#define CNXMAN_JOIN_HOLD_NO_MEMBER     4u
+
+/*
  * THE DECLINED SET (E80): one bit per CLUB slot, so "which members has THIS
  * attempt already asked and got silence from" is answerable without a second
  * table. Cleared at the start of every fresh attempt -- a member that could not
@@ -594,7 +625,7 @@ struct cnxman_join_ops {
  * fixed text plus VMS_SCSNODE_MAX characters plus the terminator -- and the
  * composer never writes past it (it stops at the buffer, not at the name).
  */
-#define CNXMAN_JOIN_MSGBUF 64u
+#define CNXMAN_JOIN_MSGBUF 96u
 
 /* How many served units this FSM will record from one walk. The walk itself is
  * unbounded (it ends at the peer's own OFFLINE terminator); this bounds only
@@ -693,6 +724,22 @@ struct cnxman_join {
 	uint8_t  admit_silent_beats;
 
 	/*
+	 * ---- WHY op-0x02 IS NOT OUT YET (rd vms-e88) ----
+	 * `admit_hold` is this beat's CNXMAN_JOIN_HOLD_* answer and
+	 * `admit_hold_said` the last one announced on the console, so a reason
+	 * that persists is said once. `admit_unheard_beats` bounds the UNHEARD
+	 * wait exactly as the silence clock bounds an unanswered request.
+	 * `ident_ms` is when this node's own MODEL/PARAMS last really went out
+	 * to the member being asked (`ident_ms_valid` 0 = never): op-0x02 waits
+	 * one beat past it -- the "same breath" test, on the injected clock.
+	 */
+	uint8_t  admit_hold;
+	uint8_t  admit_hold_said;
+	uint8_t  admit_unheard_beats;
+	uint8_t  ident_ms_valid;
+	uint32_t ident_ms;
+
+	/*
 	 * Members THIS attempt has already asked and got silence from
 	 * (CNXMAN_JOIN_DECLINE_WORDS above). The re-selection excludes them, so
 	 * one attempt asks each member at most once -- a joiner NEVER fans an
@@ -709,7 +756,11 @@ struct cnxman_join {
 	 */
 	uint32_t retry_at_ms;
 	uint8_t  retry_at_valid;
-	uint8_t  pad1[3];
+	/* 1 when that back-off followed a round that found NO member at all
+	 * (rd vms-e88): one appearing since ends it, where a round of silent
+	 * members is still waited out in full (E80's rate bound). */
+	uint8_t  backoff_no_member;
+	uint8_t  pad1[2];
 
 	/* ---- the disk-client discovery walk (FC-P3.4) ---- */
 	struct vms_mscp_cl_fsm  mscp;
@@ -841,6 +892,35 @@ struct cnxman_join {
 	uint32_t declines_after_ack;
 	uint32_t admit_beats_held;
 	uint32_t reissues;
+	/*
+	 * ---- THE MEMBER TO ASK, AND WHEN (rd vms-e88) ----
+	 * `holds_unheard` / `holds_fresh` / `holds_connectivity` -- beats (or
+	 *   events) on which a due op-0x02 was held, by reason.
+	 * `retargets` -- the join moved to a higher-ranked member once that
+	 *   member's own PARAMS said it was one: NOT a decline, nobody was asked.
+	 * `conn_follows` -- the join moved onto the connection the CSB records
+	 *   for its member (the pair's live one, after two crossed).
+	 * `unheard_declines` -- members given up on for never sending PARAMS.
+	 */
+	uint32_t holds_unheard;
+	uint32_t holds_fresh;
+	uint32_t holds_connectivity;
+	uint32_t holds_no_member;
+	uint32_t retargets;
+	uint32_t conn_follows;
+	uint32_t unheard_declines;
+	/* ...and attempts that ended because every system in sight said, in its
+	 * own PARAMS, that it belongs to no cluster (also counted in
+	 * attempts_exhausted, which the founding election reads). */
+	uint32_t no_member_rounds;
+	/* VMS$VAXcluster connects this join put out to systems running this
+	 * implementation that nobody had connected (join_reach_ours). */
+	uint32_t ours_dialled;
+	/* back-offs ended early because a system said it is a member */
+	uint32_t backoffs_cut;
+	/* A drive toward a system that is not a member, moved before [ADMIT]
+	 * to a connected one that says it is (rd vms-e88, rig arm P-2). */
+	uint32_t drive_retargets;
 	uint32_t attempts_exhausted;
 	uint32_t starts_backed_off;
 	uint32_t reissue_targets_absent;
@@ -1064,7 +1144,6 @@ struct cnxman_join {
 	uint32_t version_omitted;
 	uint32_t node_params_omitted;
 	uint32_t target_level_unpinned;
-	uint32_t member_count_ungated;
 
 	/*
 	 * The ONE scratch buffer every built body goes through. In the

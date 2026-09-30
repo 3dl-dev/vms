@@ -121,9 +121,39 @@ next change:
 | M-9 (and T-15 again) | `85fc56c8` | after crossing connects the request followed the CSB onto the VAX-kept connection, but the join's own connect had never been recorded as this node's attempt, so the crossing resolved onto the wrong one | `cnxman_jop_connect` records its Con.ID with `cnxman_csb_note_attempt` -- the join's connect IS this node's attempt |
 | N-3 | `6df60e16` | the joiner found only the other joining OVMX node (the VAX's PARAMS not yet in), ended the round with nobody asked and backed off RECNXINTERVAL; during those 20 s the other OVMX node -- beside a VAX that HAD said in its PARAMS that it was a member -- founded a second cluster | the founding election's "peer in a cluster" clause also reads the member count a system advertised (`coord_peer_says_member`); a back-off that followed a no-member round ends as soon as some system says it is a member (`backoffs_cut`) -- a round of SILENT members is still waited out in full (E80) |
 
+| P-2 | `b2726966` | at CLUSTER_START nobody had said anything, so the drive started toward the highest SCSSYSTEMID in sight -- the other OVMX node, being admitted itself, which never accepted the VMS$VAXcluster connect; the joiner sat in [VC CONNECT] for the rest of the run beside a real VAX that had dialled it and said it was a member | `join_drive_to_member`: on the directory-round and VC-CONNECT beats, a drive toward a system that has not said it is a member moves to a connected one that has, sends its identity there if not yet said, and enters ADMIT (every hold still applies) |
+
+**Not this item: P-3 (`b2726966`), a real-VAX CNXMGRERR, filed as rd vms-eb3.**
+Matrix P was launched through `matrix.sh` directly, so its stall armed on the
+VAX's own "completing" line rather than `startL.sh`'s member line (the marker
+the vms-1f40 bar ran on). In a-then-b that freezes the joiner 12 ms after the
+coordinator's op-0a. On waking it saw the closed circuit first, stayed a joiner,
+and re-sent MODEL/PARAMS with send-msg# 1 on the ladder's new connection while
+the VAX still held it as a member in its reconnect window -- the VAX's last
+frame. Control arms X-1/X-2 of the same shape on the pre-e88 bar build
+(`b8fb125c`) woke the other way (processed op-0a first, became MEMBER, took the
+member reconnect path) and passed: a wake-order race in code this item does not
+touch.
+
+## Results on the final build (`cbf20152`)
+
+**Stall rig, matrix R** (`rig/matrix-R-cbf20152.log`): 15 injected arms via
+`startL.sh` (the member-line marker the vms-1f40 bar used), join order shuffled
+per arm -- together / b-then-a / a-then-b, 5 each -- across stalls of 6, 10, 12,
+13, 14, 16, 18, 20, 25 and 30 s. **15 PASS, 0 FAIL, 0 NOFAULT, 0 VAX bugchecks**;
+every arm ends with all three MEMBER and the real VAX proposing OVMXB.
+
+**Browser, visitor gate `CASE=all-at-once` x10** (`browser-gate-cbf20152.log`), on
+a bundle built by `build-cluster-demo` from this branch's boot artifacts
+(`cluster_auth_group=257`) and Node B built at the same SHA, the page served from
+two localhost origins (the site, and a static stand-in for the pcjs origin):
+**10/10 CN=3**. In every run the real V7.3 VAX admitted both OVMX nodes, no OVMX
+node founded a cluster of its own, nothing was lost, zero bugchecks.
+
 ## Files
 
 * `e88-{A,A2,B,C3}-20260930.pcap` — the trimmed captures.
+* `rig/matrix-R-cbf20152.log`, `browser-gate-cbf20152.log` — the final proof runs.
 * `consoles/<trio>-vax<n>.log` — every node's console.
 * `orsetup.sh`, `orboot.sh`, `con.sh`, `orstop.sh`, `seq.sh`, `expC.sh` — the lab.
 * `op02.py`, `firsts.py`, `joinseq.py`, `p01all.py`, `cmconn.py`, `rej.py`,

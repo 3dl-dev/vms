@@ -1163,6 +1163,94 @@ static void test_reconnect_inside_the_window_carries_the_dialogue(void)
 }
 
 /*
+ * rd vms-eb3, oracle F5/F6: a real V7.3 joiner frozen between its Phase-1
+ * answer (cat-0x81 op-0x09) and the coordinator's GO re-established BOTH
+ * members with its dialogue carried (op-0x0b smsg 95 / ack 266 on the new
+ * connection) -- before p. 7-42's Phase 2 had set SELECTED on anybody. The
+ * entitlement at Phase 1 is `cm_phase1_named`, written by the barrier from the
+ * proposal (the coordinator's own block and every block its nodemap names),
+ * and it ends with the transition.
+ */
+static void test_a_system_in_an_answered_transition_carries_its_dialogue(void)
+{
+	struct vms_csb *coord, *member, *other, *local;
+
+	printf("-- rd vms-eb3: a system named in a transition this node "
+	       "answered carries its dialogue before Phase 2\n");
+	(void)cnxman_club_init(&g_cl);
+	local = cnxman_club_alloc_csb(&g_cl.club, 0x000004000105ull, 1);
+	coord = cnxman_club_alloc_csb(&g_cl.club, 0x000004000103ull, 1);
+	member = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	other = cnxman_club_alloc_csb(&g_cl.club, 0x000004000104ull, 1);
+	ct_check(local && coord && member && other, "four CSBs");
+	if (!local || !coord || !member || !other)
+		return;
+	local->flags |= VMS_CSB_F_LOCAL;
+	cnxman_csb_set_csid(member, 0x00010002u);   /* slot 2 */
+	cnxman_csb_set_csid(other, 0x00010005u);    /* slot 5 */
+
+	/* The coordinator's proposal came in on `coord`'s CLUB slot and its
+	 * nodemap names slots 1..3 -- the member, not `other`. */
+	cnxman_club_phase1_mark(&g_cl.club, 1, 0x0eu, 8u,
+				(int32_t)cnxman_club_csb_index(&g_cl.club, coord));
+	ct_check_eq_u32(coord->cm_phase1_named, 1u,
+			"the coordinator's own block is named, CSID or not");
+	ct_check_eq_u32(member->cm_phase1_named, 1u,
+			"a block whose learned CSID the nodemap names is named");
+	ct_check_eq_u32(other->cm_phase1_named, 0u,
+			"a block the nodemap does not name is not");
+	ct_check_eq_u32(local->cm_phase1_named, 0u, "and this node is never");
+
+	/* negctl: csb-phase1-named-not-carried */
+	coord->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(coord, 0x72290009u);
+	cnxman_csb_dialogue_sent(coord);
+	cnxman_csb_dialogue_heard(coord, 266u);
+	coord->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(coord, 0x722a0009u);
+	ct_check_eq_u32(coord->cm_ack_msg, 266u,
+			"not SELECTED yet, but in the answered transition: the "
+			"re-established connection carries the ack (F5: 266)");
+	ct_check_eq_u32(coord->cm_send_msg, 1u, "and the send side");
+	ct_check_eq_u32(coord->cm_dialogues_carried, 1u, "counted as CARRIED");
+
+	/* Control: `other` is not in the transition and is not SELECTED. */
+	other->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(other, 0x11u);
+	cnxman_csb_dialogue_heard(other, 40u);
+	other->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(other, 0x12u);
+	ct_check_eq_u32(other->cm_ack_msg, 0u,
+			"a system outside the transition starts over (E77)");
+
+	/* The transition ended: the entitlement goes with it. */
+	cnxman_club_phase1_clear(&g_cl.club);
+	ct_check_eq_u32(coord->cm_phase1_named + member->cm_phase1_named, 0u,
+			"cleared everywhere when the transition ends");
+	coord->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(coord, 0x722b0009u);
+	ct_check_eq_u32(coord->cm_ack_msg, 0u,
+			"and a later loss, outside any transition and not "
+			"SELECTED, starts over");
+
+	/* An unlearned CSID is not guessed into the transition, and a proposal
+	 * without a nodemap names only its coordinator. */
+	(void)cnxman_club_init(&g_cl);
+	coord = cnxman_club_alloc_csb(&g_cl.club, 0x000004000103ull, 1);
+	member = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	if (coord == NULL || member == NULL)
+		return;
+	cnxman_club_phase1_mark(&g_cl.club, 1, 0xffu, 8u, 0);
+	ct_check_eq_u32(member->cm_phase1_named, 0u,
+			"a block with no learned CSID is not matched to a slot");
+	cnxman_club_phase1_mark(&g_cl.club, 0, 0u, 8u, -1);
+	ct_check_eq_u32(coord->cm_phase1_named, 0u,
+			"no nodemap and no coordinator slot: nobody is named");
+	cnxman_club_phase1_mark(NULL, 1, 1u, 8u, 0);   /* safe */
+	cnxman_club_phase1_clear(NULL);                /* safe */
+}
+
+/*
  * rd vms-1f40 -- A CARRIED DIALOGUE RESUMES FROM THE PEER'S POSITION, NOT ITS
  * OWN.
  *
@@ -1596,6 +1684,7 @@ int main(void)
 	test_dialogue_is_per_connection();
 	test_reconnect_dialogue_never_carries_the_old_ack();
 	test_reconnect_inside_the_window_carries_the_dialogue();
+	test_a_system_in_an_answered_transition_carries_its_dialogue();
 	test_a_carried_dialogue_resumes_where_the_peer_got_to();
 	test_two_connections_follow_the_one_the_peer_keeps();
 	test_a_first_join_crossing_runs_on_the_joiners_connect();

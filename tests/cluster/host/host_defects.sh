@@ -165,7 +165,13 @@ join-asks-a-system-in-no-cluster
 join-does-not-reach-ours
 coord-genesis-ignores-says-member
 join-no-member-backoff-not-cut
-join-drive-stays-on-a-joiner"
+join-drive-stays-on-a-joiner
+csb-phase1-named-not-carried
+barrier-phase1-not-marked
+barrier-phase1-not-cleared
+join-transition-loss-redriven
+join-transition-reoffers-burst
+glue-close-abandons-held-transition"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -831,6 +837,95 @@ EOF
         ;;
         esac;;
 
+    csb-phase1-named-not-carried)
+        case "$_f" in
+        facility)     echo "a system named in a transition this node answered at Phase 1 re-establishes with its dialogue carried (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "csb_dialogue_may_continue() ignores cm_phase1_named, so before Phase 2 has set SELECTED a lost connection to the coordinator restarts its dialogue at 1/0. MEASURED consequence, stall-rig arm P-3: the joiner, frozen between its Phase-1 answer and the GO, re-sent MODEL/PARAMS at send-msg# 1 on the connection the real VAX was re-establishing as a member's, and the VAX bugchecked CNXMGRERR.";;
+        require_fail) cat <<'EOF'
+and the send side
+counted as CARRIED
+not SELECTED yet, but in the answered transition: the re-established connection carries the ack (F5: 266)
+EOF
+        ;;
+        esac;;
+
+    barrier-phase1-not-marked)
+        case "$_f" in
+        facility)     echo "the participant's barrier names the transition's systems on their CSBs at Phase 1 (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_open() no longer records the coordinator and the nodemap's systems on their CSBs, so nothing entitles a connection lost before the GO to carry its dialogue -- the P-3 CNXMGRERR shape.";;
+        require_fail) cat <<'EOF'
+and the member the nodemap names
+it stands through the GO and the barrier
+the coordinator's block is named at Phase 1
+EOF
+        ;;
+        esac;;
+
+    barrier-phase1-not-cleared)
+        case "$_f" in
+        facility)     echo "the Phase-1 record ends with the transition (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_phase1_clear() clears nothing, so a system stays entitled to carry its dialogue after the transition that named it has ended -- a later, unrelated loss would carry a dialogue E77 says must restart.";;
+        require_fail) cat <<'EOF'
+an abandoned transition un-names too
+and ends with the transition
+and so does one whose coordinator was lost for good
+EOF
+        ;;
+        esac;;
+
+    join-transition-loss-redriven)
+        case "$_f" in
+        facility)     echo "a connection lost inside a transition this node answered is held, not re-driven (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_cm_connection_gone() no longer holds an ADMIT join whose transition is open, so the loss sends it to VC CONNECT and it re-drives MODEL/PARAMS and a second request. MEASURED consequence, stall-rig arm P-3: the real VAX, re-establishing the joiner as a member, bugchecked CNXMGRERR on the fresh identity burst.";;
+        require_fail) cat <<'EOF'
+... and said on the console
+... it is held, counted
+no MODEL, no PARAMS and no second request on the re-established connection (F5/F6: none)
+once the transition is abandoned, the ADMIT beat takes the not-yet-admitted path
+the loss does NOT send the join back to VC CONNECT
+EOF
+        ;;
+        esac;;
+
+    join-transition-reoffers-burst)
+        case "$_f" in
+        facility)     echo "nothing is re-offered on a connection re-established inside an answered transition (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_reoffer_burst() re-offers the identity burst and the membership request on a re-established connection while the transition runs, because the burst mask is per-Con.ID. A real V7.3 joiner re-offered nothing there (oracle F5/F6).";;
+        require_fail) cat <<'EOF'
+no MODEL, no PARAMS and no second request on the re-established connection (F5/F6: none)
+with exactly the one membership request it made
+EOF
+        ;;
+        esac;;
+
+    glue-close-abandons-held-transition)
+        case "$_f" in
+        facility)     echo "a path-loss close does not abandon the participant's transition; the end of the coordinator's window does (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_cnxman_glue";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_transition_peer_lost() abandons the participant's barrier on every close again, so a joiner that loses its coordinator's connection across the GO drops the transition the coordinator is about to re-send -- the P-3 CNXMGRERR shape.";;
+        require_fail) cat <<'EOF'
+vms-c06: the participant half fires only for the block the barrier is taking its transition FROM
+EOF
+        ;;
+        esac;;
+
     csb-dropped-spare-reads-as-loss)
         case "$_f" in
         facility)     echo "two VMS\$VAXcluster connections for one pair (rd vms-1f40: the peer disconnecting the redundant one of a crossing is not a loss of that system)";;
@@ -921,6 +1016,8 @@ the transaction id CARRIES: a re-established member does not renumber mid-conver
 two more sent, in flight
 and the dialogue is carried, never restarted
 dialogue carried across the move
+not SELECTED yet, but in the answered transition: the re-established connection carries the ack (F5: 266)
+and the send side
 EOF
         ;;
         esac;;
@@ -1280,6 +1377,36 @@ apply_edit() {
         # rd vms-e88: the guard is unique in vms_cnxman_join_fsm.c and the
         # replacement no longer matches the pattern, so it is not repeatable.
         sed -i 's|	if (v.best == NULL \|\| v.best_slot == j->target_csb \|\||	if (1 \|\| v.best == NULL \|\| v.best_slot == j->target_csb \|\| /* NEGCTL join-drive-stays-on-a-joiner */|' "$_file";;
+
+    csb-phase1-named-not-carried)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	if ((csb->flags \& VMS_CSB_F_SELECTED) == 0u \&\& !csb->cm_phase1_named)|	if ((csb->flags \& VMS_CSB_F_SELECTED) == 0u) /* NEGCTL csb-phase1-named-not-carried */|' "$_file";;
+
+    barrier-phase1-not-marked)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|^	barrier_phase1_mark(b);$|	(void)barrier_phase1_mark; /* NEGCTL barrier-phase1-not-marked */|' "$_file";;
+
+    barrier-phase1-not-cleared)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	cnxman_club_phase1_clear(\&b->cl->club);|	(void)b; /* NEGCTL barrier-phase1-not-cleared */|' "$_file";;
+
+    join-transition-loss-redriven)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i '/^static void join_cm_connection_gone/,/^}/ s|	if (join_transition_in_progress(j)) {|	if (0 \&\& join_transition_in_progress(j)) { /* NEGCTL join-transition-loss-redriven */|' "$_file";;
+
+    join-transition-reoffers-burst)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i '/^static void join_reoffer_burst/,/^}/ s|	if (join_transition_in_progress(j))$|	if (0 \&\& join_transition_in_progress(j)) /* NEGCTL join-transition-reoffers-burst */|' "$_file";;
+
+    glue-close-abandons-held-transition)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	if (window_over \&\& cn->barrier.coordinator_csb == idx)|	if (cn->barrier.coordinator_csb == idx) /* NEGCTL glue-close-abandons-held-transition */|' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

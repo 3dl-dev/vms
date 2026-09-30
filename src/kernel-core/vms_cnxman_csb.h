@@ -576,6 +576,27 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid);
 void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid);
 
 /*
+ * PHASE 1'S RECORD OF WHO IS IN THE TRANSITION (rd vms-eb3).
+ *
+ * cnxman_club_phase1_mark() is called by the participant's barrier when it
+ * acknowledges a transition OPEN (p. 7-41 Phase 1): it sets `cm_phase1_named`
+ * on the coordinator's block (`coordinator_index`, the CLUB slot the proposal
+ * arrived on, -1 = unknown) and on every block whose LEARNED CSID the
+ * proposal's nodemap names (`bitmap`, `slots` wide, when `bitmap_valid`), and
+ * clears it everywhere else. cnxman_club_phase1_clear() clears it everywhere;
+ * the barrier calls it when the transition completes or is abandoned.
+ *
+ * The cell's only reader is the dialogue-carry predicate behind
+ * cnxman_csb_bind_reconnect(): a connection to a system in a transition this
+ * node has answered is RE-ESTABLISHED with its dialogue carried, exactly as a
+ * SELECTED member's is -- measured on real V7.3 (vms-eb3 oracle F5/F6).
+ */
+void cnxman_club_phase1_mark(struct vms_club *club, int bitmap_valid,
+			     uint32_t bitmap, uint32_t slots,
+			     int32_t coordinator_index);
+void cnxman_club_phase1_clear(struct vms_club *club);
+
+/*
  * TWO CONNECTIONS FOR ONE PAIR (rd vms-1f40). When both ends re-dial inside
  * the same window, each accepts the other's CONNECT and the pair holds two
  * VMS$VAXcluster connections until the peer disconnects one. MEASURED on the

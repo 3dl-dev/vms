@@ -2696,6 +2696,31 @@ static enum cnxman_join_rx join_h_abort(struct cnxman_join *j,
  * ========================================================================== */
 
 /*
+ * THE CONNECTION WENT WHILE A TRANSITION THIS NODE IS BEING ADMITTED IN IS OPEN
+ * (rd vms-eb3). This node has answered the coordinator's Phase-1 proposal; the
+ * join has nothing more to ask and the barrier owns what follows. A real V7.3
+ * joiner in exactly this position (oracle F5/F6: frozen after its Phase-1
+ * answer, before or just after the GO) sent no new identity and no new
+ * request: its connections were re-established with the dialogue carried, the
+ * coordinator re-sent the GO, and the barrier ran. So the join stays in
+ * [ADMIT], held by join_transition_in_progress(), and re-drives nothing; the
+ * CSB ladder re-establishes the connection (the coordinator's block is marked
+ * at Phase 1, which is what lets it carry). If the transition ends without the
+ * connection -- the coordinator given up, the barrier abandoned -- the ADMIT
+ * beat takes the old "not yet admitted" path from there
+ * (join_admit_lost_connection).
+ */
+static int join_transition_in_progress(const struct cnxman_join *j);
+
+static void join_hold_transition_across_loss(struct cnxman_join *j)
+{
+	j->cm_lost_in_transition++;
+	join_log(j, "%CNXMAN, lost the VMS$VAXcluster connection during the "
+		    "state transition this node is being admitted in: holding "
+		    "the transition while it is re-established");
+}
+
+/*
  * The VMS$VAXcluster connection this join was using is gone (E71).
  *
  * TWO different positions, and the book separates them:
@@ -2732,6 +2757,10 @@ static void join_cm_connection_gone(struct cnxman_join *j)
 	    state == (uint8_t)CNXMAN_JOIN_MEMBER) {
 		join_log(j, "%CNXMAN, lost the VMS$VAXcluster connection to a "
 			    "cluster member");
+		return;
+	}
+	if (join_transition_in_progress(j)) {
+		join_hold_transition_across_loss(j);
 		return;
 	}
 	join_log(j, "%CNXMAN, lost the VMS$VAXcluster connection before this "
@@ -3099,6 +3128,12 @@ static void join_reoffer_burst(struct cnxman_join *j)
 		return;
 	if (state != (uint8_t)CNXMAN_JOIN_ADVERTISE &&
 	    state != (uint8_t)CNXMAN_JOIN_ADMIT)
+		return;
+	/* ...and nothing while a transition this node answered is open (rd
+	 * vms-eb3). The request has been taken and the coordinator is running
+	 * it; a connection re-established inside it is the same conversation,
+	 * and a real V7.3 joiner re-offered nothing on it (oracle F5/F6). */
+	if (join_transition_in_progress(j))
 		return;
 
 	/* IN THE ORDER sec 4(o) MEASURED, and only what is DUE in this state:
@@ -3773,6 +3808,24 @@ static int join_transition_in_progress(const struct cnxman_join *j)
 	return cnxman_barrier_transition(j->barrier, &tr) == 0;
 }
 
+/*
+ * A connection lost DURING a transition was held (join_hold_transition_across_
+ * loss). The transition is over and no connection came back to this join: the
+ * position is now the ordinary "lost it before this node was admitted" one,
+ * and it is taken exactly as join_cm_connection_gone() takes it. Nonzero if
+ * the join moved.
+ */
+static int join_admit_lost_connection(struct cnxman_join *j)
+{
+	if (j->cm_conid != 0u || j->cm_open)
+		return 0;
+	join_log(j, "%CNXMAN, lost the VMS$VAXcluster connection before this "
+		    "node was admitted: waiting for it to come back");
+	join_goto(j, CNXMAN_JOIN_VC_CONNECT);
+	join_arm_watch(j);
+	return 1;
+}
+
 /* One beat of the silence clock. Runs only in [ADMIT], where a request has
  * really been made. */
 static void join_admit_beat(struct cnxman_join *j)
@@ -3781,6 +3834,8 @@ static void join_admit_beat(struct cnxman_join *j)
 		j->admit_beats_held++;
 		return;
 	}
+	if (join_admit_lost_connection(j))
+		return;
 	if ((j->admit_hold == (uint8_t)CNXMAN_JOIN_HOLD_UNHEARD ||
 	     j->admit_hold == (uint8_t)CNXMAN_JOIN_HOLD_NO_MEMBER) &&
 	    !join_admit_request_outstanding(j)) {

@@ -907,17 +907,28 @@ static void test_glue_bindings(void)
 	check_has("cnxman_barrier_coordinator_lost(&cn->barrier)",
 		  "vms-c06: ... and, when it was OUR coordinator, the "
 		  "PARTICIPANT half");
-	check_has("if (cn->barrier.coordinator_csb == idx)",
+	check_has("if (window_over && cn->barrier.coordinator_csb == idx)",
 		  "vms-c06: the participant half fires only for the block the "
 		  "barrier is taking its transition FROM");
-	check_has("cnxman_transition_peer_lost(cn, csb);\n\n"
+	check_has("cnxman_transition_peer_lost(cn, csb,\n"
+		  "\t\t\t\t    reason == (uint32_t)SCS_CLOSE_REJECTED);\n\n"
 		  "\tif (reason == (uint32_t)SCS_CLOSE_REJECTED)",
 		  "vms-c06: EVERY close -- rejection included -- reports the "
 		  "loss, and does it BEFORE the ladder proposes a removal "
 		  "the coordinator would refuse as BUSY");
-	check_has("cnxman_transition_peer_lost(cn, csb);\n\t\t(void)cnxman_coord_propose_remove",
+	check_has("cnxman_transition_peer_lost(cn, csb, 1);\n\t\t(void)cnxman_coord_propose_remove",
 		  "vms-c06: the reconnect beat reports it too -- the only path "
 		  "for a system that went silent without its CDT closing");
+	/*
+	 * rd vms-eb3: a PATH-LOSS close no longer abandons the participant's
+	 * transition -- only a rejection, the window's expiry on the beat, or
+	 * the coordinator's block given up does (oracle F5/F6: a real joiner
+	 * held the transition across the re-establishment). The give-up check
+	 * runs every beat, BEFORE the reclaim frees the block it reads.
+	 */
+	check_has("cnxman_held_transition_check(cn);\n\t\tcnxman_reclaim_abandoned_csbs(cn);",
+		  "vms-eb3: a held transition whose coordinator was given up is "
+		  "abandoned on the beat, before the block is reclaimed");
 
 	/* $SETCLUEVT. */
 	check_has("vms_cnxman_cluevt_set(", "the registration entry point exists");

@@ -1173,6 +1173,55 @@ static void test_release_out_of_order_does_not_advance(void)
 	ct_check_eq_u32(g.b.step, 2, "the RIGHT release advances to step 2");
 }
 
+/*
+ * rd vms-eb3: Phase 1 records WHO IS IN THE TRANSITION on the CSBs -- the
+ * coordinator's own block and every block the nodemap names -- so a connection
+ * to one of them lost before the transition ends is re-established with its
+ * dialogue carried (a real V7.3 joiner did exactly that, oracle F5/F6). The
+ * record ends with the transition: completed, aborted, or its coordinator lost.
+ */
+static void test_phase1_names_who_is_in_the_transition(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	struct vms_csb *peer;
+	uint32_t n;
+
+	printf("[barrier] rd vms-eb3: Phase 1 names the transition's systems "
+	       "on their CSBs, and the end of the transition un-names them\n");
+	bed_init();
+	peer = cnxman_club_find_csid(&g.cl.club, PEER_CSID);
+	/* negctl: barrier-phase1-not-marked */
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 1u,
+			"the coordinator's block is named at Phase 1");
+	ct_check(peer != NULL && peer->cm_phase1_named == 1u,
+		 "and the member the nodemap names");
+	ct_check_eq_u32(cnxman_club_local(&g.cl.club)->cm_phase1_named, 0u,
+			"this node itself is not a peer to carry a dialogue with");
+
+	(void)feed(f, mk_go(f, EPOCH, VMS_CM_CLASS_ADD, VMS_CM_ROLE_GO));
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 1u,
+			"it stands through the GO and the barrier");
+	for (n = 1; n <= CNXMAN_BARRIER_STEPS; n++)
+		(void)feed(f, mk_release(f, EPOCH, n));
+	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_COMPLETE, "completed");
+	/* negctl: barrier-phase1-not-cleared */
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 0u,
+			"and ends with the transition");
+
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	(void)feed(f, mk_abort(f));
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 0u,
+			"an abandoned transition un-names too");
+
+	bed_init();
+	(void)feed(f, mk_open_add(f, EPOCH, 0x0eu));
+	cnxman_barrier_coordinator_lost(&g.b);
+	ct_check_eq_u32(g.coord_csb->cm_phase1_named, 0u,
+			"and so does one whose coordinator was lost for good");
+}
+
 static void test_coordinator_lost_abandons_locally(void)
 {
 	uint8_t f[VMS_CM_FRAME_LEN];
@@ -1360,6 +1409,7 @@ int main(void)
 	test_abort_does_not_roll_back_a_committed_count();
 	test_release_out_of_order_does_not_advance();
 	test_coordinator_lost_abandons_locally();
+	test_phase1_names_who_is_in_the_transition();
 	test_no_link_originates_nothing();
 	test_ignored_events_are_counted();
 	test_transition_readback();

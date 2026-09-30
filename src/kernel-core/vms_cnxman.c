@@ -1806,7 +1806,7 @@ static int cnxman_vc_message(void *ctx, vms_conid_t local_conid,
  * the close path and the reconnect beat may both report the same loss.
  */
 static void cnxman_transition_peer_lost(struct vms_cnxman *cn,
-					struct vms_csb *csb)
+					struct vms_csb *csb, int window_over)
 {
 	int32_t idx;
 
@@ -1822,9 +1822,46 @@ static void cnxman_transition_peer_lost(struct vms_cnxman *cn,
 	 * one this node's barrier is taking its transition FROM. A barrier
 	 * abandoned because some OTHER member lost its circuit would abandon a
 	 * transition whose coordinator is alive and still releasing steps.
+	 *
+	 * ...AND ONLY ONCE THE COORDINATOR IS REALLY GONE (rd vms-eb3). A lost
+	 * connection opens p. 7-30's reconnect window, and the transition
+	 * stands across it: measured on a real V7.3 trio, a joiner frozen
+	 * between its Phase-1 answer and the GO re-established its connection
+	 * to the coordinator, the coordinator re-sent the GO on it, and the
+	 * barrier ran to completion (oracle F6); frozen just after the GO, it
+	 * ran on the same way (F5). Abandoning here instead turned a
+	 * re-establishment into a fresh join mid-transition -- a new identity
+	 * burst at send-msg# 1 on a connection the coordinator was
+	 * re-establishing as a member's -- and the real VAX bugchecked
+	 * (CNXMGRERR, rig arm P-3). So the close only reports the loss; the
+	 * window's end (the beat's expiry, or the block given up) abandons.
 	 */
-	if (cn->barrier.coordinator_csb == idx)
+	if (window_over && cn->barrier.coordinator_csb == idx)
 		cnxman_barrier_coordinator_lost(&cn->barrier);
+}
+
+/*
+ * THE HELD TRANSITION'S COORDINATOR WAS GIVEN UP (rd vms-eb3). The close no
+ * longer abandons a participant's transition (cnxman_transition_peer_lost), so
+ * the end of the coordinator's reconnect window has to: the block has left
+ * the window -- abandoned, or deallocated -- without a connection coming
+ * back. Read off the CSB the barrier recorded, once a beat.
+ */
+static void cnxman_held_transition_check(struct vms_cnxman *cn)
+{
+	struct cnxman_transition tr;
+	struct vms_csb *csb;
+
+	if (cnxman_barrier_transition(&cn->barrier, &tr) != 0 ||
+	    cn->barrier.coordinator_csb < 0)
+		return;
+	csb = cnxman_club_csb_at(&cn->cl->club,
+				 (uint32_t)cn->barrier.coordinator_csb);
+	if (csb != NULL && csb->in_use &&
+	    csb->state != (uint8_t)VMS_CNXMAN_CSB_DISCONNECT &&
+	    csb->state != (uint8_t)VMS_CNXMAN_CSB_DEAD)
+		return;
+	cnxman_barrier_coordinator_lost(&cn->barrier);
 }
 
 /*
@@ -1966,7 +2003,8 @@ static void cnxman_vc_closed(void *ctx, vms_conid_t local_conid,
 	 * CNXMAN_COORD_REF_BUSY -- the coordinator is still holding the
 	 * transition this very loss has just made unfinishable.
 	 */
-	cnxman_transition_peer_lost(cn, csb);
+	cnxman_transition_peer_lost(cn, csb,
+				    reason == (uint32_t)SCS_CLOSE_REJECTED);
 
 	if (reason == (uint32_t)SCS_CLOSE_REJECTED) {
 		cnxman_vc_rejected(cn, csb, local_conid, reason);
@@ -2683,7 +2721,7 @@ static void cnxman_act_on_recnx_rec(struct vms_cnxman *cn,
 		 * expiring on its own), so the loss is reported here too --
 		 * and, as on the close path, BEFORE the removal is proposed.
 		 */
-		cnxman_transition_peer_lost(cn, csb);
+		cnxman_transition_peer_lost(cn, csb, 1);
 		(void)cnxman_coord_propose_remove(&cn->coord,
 						  (int32_t)rec->csb_index);
 		cnxman_glue_preload_proposed(cn);
@@ -2727,6 +2765,9 @@ static void cnxman_work_handler(void *ctx, const struct cf_work *w)
 			cnxman_cluexit_run(cn);
 			return;
 		}
+		/* rd vms-eb3: before the reclaim below frees the block, so the
+		 * given-up coordinator is still readable as given up. */
+		cnxman_held_transition_check(cn);
 		cnxman_reclaim_abandoned_csbs(cn);
 		/* E36: discovery FIRST, so a system that appeared since the
 		 * last beat has a CSB before the reconnect ladder and the join

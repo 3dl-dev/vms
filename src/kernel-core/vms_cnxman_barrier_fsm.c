@@ -544,6 +544,28 @@ static void barrier_start_transition(struct cnxman_barrier *b,
 }
 
 /*
+ * WHO IS IN THIS TRANSITION, recorded at Phase 1 (rd vms-eb3). The
+ * coordinator's block and every block the proposal's nodemap names are marked,
+ * so that a connection to one of them lost before the transition ends is
+ * re-established with its dialogue carried (vms_cnxman_csb.h). Measured on a
+ * real V7.3 trio: a joiner frozen between its Phase-1 answer and the GO
+ * re-established both members, and the coordinator re-sent the GO on the new
+ * connection (oracle F6); one frozen just after it ran the barrier on
+ * (oracle F5). The mark ends with the transition.
+ */
+static void barrier_phase1_mark(struct cnxman_barrier *b)
+{
+	cnxman_club_phase1_mark(&b->cl->club, b->bitmap_valid,
+				(uint32_t)b->bitmap,
+				CNXMAN_PHASE2_BITMAP_SLOTS, b->coordinator_csb);
+}
+
+static void barrier_phase1_clear(struct cnxman_barrier *b)
+{
+	cnxman_club_phase1_clear(&b->cl->club);
+}
+
+/*
  * [*][RX_TR_OPEN] -- PHASE 1. Record the proposal, then acknowledge it with the
  * grounded 0x81 echo (p. 7-41: "each system normally acknowledges to VAX_A that
  * it has received and processed the information"; spec SS4(p): 0x81/0x09 is
@@ -562,6 +584,7 @@ static void barrier_h_open(struct cnxman_barrier *b, const struct barrier_msg *m
 
 	barrier_start_transition(b, m, &open);
 	barrier_take_bitmap(b, m, &open);
+	barrier_phase1_mark(b);
 	b->state = (uint8_t)CNXMAN_BARRIER_OPEN;
 	barrier_dlm_begin(b);
 
@@ -678,6 +701,7 @@ static void barrier_h_go(struct cnxman_barrier *b, const struct barrier_msg *m)
 		b->cl->club.reformations++;
 		b->transitions_completed++;
 		barrier_dlm_end(b, 1);
+		barrier_phase1_clear(b);
 		barrier_log(b, "%CNXMAN, completed VAXcluster state transition");
 		return;
 	}
@@ -723,6 +747,7 @@ static void barrier_finish(struct cnxman_barrier *b)
 	b->cl->club.reformations++;
 	b->transitions_completed++;
 	barrier_dlm_end(b, 1);
+	barrier_phase1_clear(b);
 	barrier_log(b, "%CNXMAN, completed VAXcluster state transition");
 }
 
@@ -859,6 +884,7 @@ static void barrier_h_abort(struct cnxman_barrier *b,
 	b->cl->club.transition_active = 0u;
 	b->transitions_abandoned++;
 	barrier_dlm_end(b, 0);
+	barrier_phase1_clear(b);
 	barrier_log(b, "%CNXMAN, aborting VAXcluster state transition");
 }
 
@@ -1069,6 +1095,7 @@ void cnxman_barrier_coordinator_lost(struct cnxman_barrier *b)
 	b->cl->club.transition_active = 0u;
 	b->transitions_abandoned++;
 	barrier_dlm_end(b, 0);
+	barrier_phase1_clear(b);
 	barrier_log(b, "%CNXMAN, aborting VAXcluster state transition");
 }
 

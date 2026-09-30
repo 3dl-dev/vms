@@ -1429,7 +1429,10 @@ void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
  *
  * So this predicate is narrow and every clause is a READ:
  *   - there IS a dialogue to carry (a bound Con.ID, not the first bind);
- *   - p. 7-49 SELECTED: the cluster has not removed this system;
+ *   - p. 7-49 SELECTED: the cluster has not removed this system -- OR the
+ *     system is named in a transition this node answered at Phase 1 and
+ *     that has not ended (`cm_phase1_named`, rd vms-eb3: a real joiner
+ *     frozen before the GO carried its dialogue with both members);
  *   - the ladder is really in the reconnect window (or still OPEN).
  * A block that fails any of them resets, which is the old behaviour.
  */
@@ -1437,7 +1440,7 @@ static int csb_dialogue_may_continue(const struct vms_csb *csb)
 {
 	if (csb->cm_dialogue_conid == 0u)
 		return 0;
-	if ((csb->flags & VMS_CSB_F_SELECTED) == 0u)
+	if ((csb->flags & VMS_CSB_F_SELECTED) == 0u && !csb->cm_phase1_named)
 		return 0;
 	return csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN ||
 	       csb->state == (uint8_t)VMS_CNXMAN_CSB_WAIT ||
@@ -1727,4 +1730,53 @@ void cnxman_envelope_originate(struct vms_csb *csb, uint8_t body[132],
 uint16_t cnxman_csb_dialogue_ack(const struct vms_csb *csb)
 {
 	return (csb == NULL) ? 0u : csb->cm_ack_msg;
+}
+
+/* ==========================================================================
+ * Phase 1's record of who is in the transition (rd vms-eb3) -- contract in
+ * vms_cnxman_csb.h
+ * ========================================================================== */
+
+void cnxman_club_phase1_clear(struct vms_club *club)
+{
+	uint32_t i;
+
+	if (club == NULL)
+		return;
+	for (i = 0; i < club->n_csb; i++)
+		club->csb[i].cm_phase1_named = 0u;
+}
+
+/* Is `csb` named by the proposal's nodemap? Only a block whose CSID this node
+ * has LEARNED can be matched (nodemap bit = CSID low 16 bits, p. 7-34 fn); an
+ * unlearned one is not guessed into the transition. */
+static int csb_in_phase1_map(const struct vms_csb *csb, uint32_t bitmap,
+			     uint32_t slots)
+{
+	uint32_t slot;
+
+	if (!csb->csid_valid)
+		return 0;
+	slot = (uint32_t)(csb->csid & 0xffffu);
+	return slot < slots && (bitmap & (1u << slot)) != 0u;
+}
+
+void cnxman_club_phase1_mark(struct vms_club *club, int bitmap_valid,
+			     uint32_t bitmap, uint32_t slots,
+			     int32_t coordinator_index)
+{
+	uint32_t i;
+
+	if (club == NULL)
+		return;
+	cnxman_club_phase1_clear(club);
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *csb = &club->csb[i];
+
+		if (!csb->in_use || (csb->flags & VMS_CSB_F_LOCAL) != 0u)
+			continue;
+		if ((int32_t)i == coordinator_index ||
+		    (bitmap_valid && csb_in_phase1_map(csb, bitmap, slots)))
+			csb->cm_phase1_named = 1u;
+	}
 }

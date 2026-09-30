@@ -6114,6 +6114,82 @@ static void test_e88_the_joiner_reaches_a_member_of_its_own_kind(void)
 			"a system not running this implementation is not dialled");
 }
 
+/*
+ * rd vms-eb3, stall-rig arm P-3 and the real V7.3 oracle F5/F6. This node
+ * asked, the coordinator opened the transition (op-0x09) and this node
+ * answered it (Phase 1), and then the connection went -- the node was frozen
+ * across the GO. A real joiner in exactly that place re-drove NOTHING: its
+ * connections were re-established with the dialogue carried, the coordinator
+ * re-sent the GO, and the barrier ran. OVMX dropped to VC CONNECT and re-sent
+ * MODEL/PARAMS at send-msg# 1 on a connection the real VAX was re-establishing
+ * as a member's, and the VAX bugchecked (CNXMGRERR).
+ */
+static void test_eb3_a_loss_inside_an_answered_transition_is_held(void)
+{
+	uint32_t len, sent_before;
+
+	printf("\n-- rd vms-eb3: a connection lost inside the transition this "
+	       "node answered is held, not re-driven --\n");
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	len = mk_open_add(EPOCH, 0x0eu);
+	(void)join_feed(len);                    /* Phase 1, answered */
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "in ADMIT, Phase 1 open");
+
+	/* negctl: join-transition-loss-redriven */
+	cnxman_join_closed(&g.j, CM_CONID, 0u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"the loss does NOT send the join back to VC CONNECT");
+	ct_check_eq_u32(g.j.cm_lost_in_transition, 1u, "... it is held, counted");
+	ct_check(bed_logged("holding the transition while it is re-established"),
+		 "... and said on the console");
+
+	/* The coordinator re-establishes the connection (p. 7-24 REACCEPT),
+	 * and the beats run on it while the transition is still open. */
+	bed_cm_accepted(MEMBER_SYSID, ACC_CM_CONID);
+	sent_before = g.n_sent;
+	/* negctl: join-transition-reoffers-burst */
+	bed_beats(6u);
+	ct_check_eq_u32(g.n_sent, sent_before,
+			"no MODEL, no PARAMS and no second request on the "
+			"re-established connection (F5/F6: none)");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT, "still held");
+
+	/* ...and the coordinator re-sends the GO on it (F6). */
+	len = mk_go(EPOCH);
+	(void)join_feed(len);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_BARRIER,
+			"the re-sent GO runs the barrier");
+	ct_check(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER) >= 1u,
+		 "... and this node's step 1 goes out");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 1u,
+			"with exactly the one membership request it made");
+
+	/* The transition ends without the connection: the old position. */
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	len = mk_open_add(EPOCH, 0x0eu);
+	(void)join_feed(len);
+	cnxman_join_closed(&g.j, CM_CONID, 0u);
+	cnxman_barrier_coordinator_lost(&g.b);   /* its window ran out */
+	bed_beats(1u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"once the transition is abandoned, the ADMIT beat takes "
+			"the not-yet-admitted path");
+
+	/* Control: no transition open -- the loss is the old path at once. */
+	bed_init();
+	bed_set_identity();
+	drive_to_admit();
+	cnxman_join_closed(&g.j, CM_CONID, 0u);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_VC_CONNECT,
+			"with no transition open the loss is re-driven as "
+			"before");
+	ct_check_eq_u32(g.j.cm_lost_in_transition, 0u, "and not counted held");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -6206,6 +6282,7 @@ int main(void)
 	test_e88_a_system_in_no_cluster_is_not_asked();
 	test_e88_a_declined_member_and_a_joiner_end_the_round();
 	test_e88_the_joiner_reaches_a_member_of_its_own_kind();
+	test_eb3_a_loss_inside_an_answered_transition_is_held();
 	test_e88_a_drive_leaves_a_joiner_for_a_connected_member();
 
 	return ct_summary("test_cnxman_join");

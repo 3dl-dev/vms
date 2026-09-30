@@ -98,6 +98,23 @@ OVMXB's tap (F5). `rig/matrix.sh` tokens are `ORDER:SECONDS:MODE`, where
 MODE is `vax` (P-3's console trigger), `member` (the vms-1f40 bar's),
 `pkt:8109` or `pkt:0a`.
 
+## The pre-fix control (matrix C, build `cbf20152`, main before this item)
+
+| arm | order | trigger | result |
+|---|---|---|---|
+| C-1 | a-then-b | pkt:8109, 14 s | **FAIL, VAX CNXMGRERR**: OVMXB logged "path lost", "aborting VAXcluster state transition", "lost ... before this node was admitted" -- the P-3 shape |
+| C-2 | a-then-b | pkt:0a, 14 s | PASS (the queued GO was processed before the close) |
+| C-3 | a-then-b | pkt:8109, 14 s | **FAIL, VAX CNXMGRERR** |
+| C-4 | together | pkt:8109, 14 s | PASS |
+
+So the wire-armed stall lands in the P-3 window: two of two a-then-b pkt:8109
+arms took the real VAX down on the unfixed build.
+
+(A note on the rig itself: an art directory outside `/lab/run-eb3` escaped
+`runarm.sh`'s between-arms kill, and so did two stale matrices whose kill
+pattern had the path order reversed. Arms run under those conditions are
+discarded. `runarm.sh` now also kills by tap name; see `rig/`.)
+
 ## Files
 
 * `eb3-F5-20260930.pcap`, `eb3-F6-20260930.pcap` are trimmed by `trim.py`

@@ -192,6 +192,11 @@ void cnxman_csb_set_incarnation(struct vms_club *club, struct vms_csb *csb,
 	    !cnxman_club_gave_up_on(club, csb->sysid, incarnation))
 		giveup_clear(club, csb->sysid);
 
+	/* p. 7-24 DEAD: "a new incarnation of a VAX system has been seen". Its
+	 * old conversation is over; the next connection starts a new one (rd
+	 * vms-eb3, rig arm F-13). */
+	if (csb->incarnation_valid && csb->incarnation != incarnation)
+		csb->cm_new_incarnation = 1u;
 	csb->incarnation = incarnation;
 	csb->incarnation_valid = 1u;
 }
@@ -1433,7 +1438,11 @@ void cnxman_envelope_stamp(const struct vms_csb *csb, uint8_t body[132],
  *     system is named in a transition this node answered at Phase 1 and
  *     that has not ended (`cm_phase1_named`, rd vms-eb3: a real joiner
  *     frozen before the GO carried its dialogue with both members);
- *   - the ladder is really in the reconnect window (or still OPEN).
+ *   - the ladder is really in the reconnect window (or still OPEN);
+ *   - the system has not come back as a NEW INCARNATION since the dialogue
+ *     began (`cm_new_incarnation`, p. 7-24/7-25; rd vms-eb3 arm F-13: a
+ *     member carried a re-incarnated joiner's connection as the old
+ *     conversation, never re-introduced itself, and the joiner waited).
  * A block that fails any of them resets, which is the old behaviour.
  */
 static int csb_dialogue_may_continue(const struct vms_csb *csb)
@@ -1442,6 +1451,8 @@ static int csb_dialogue_may_continue(const struct vms_csb *csb)
 		return 0;
 	if ((csb->flags & VMS_CSB_F_SELECTED) == 0u && !csb->cm_phase1_named)
 		return 0;
+	if (csb->cm_new_incarnation)
+		return 0;   /* p. 7-25: a new incarnation is a new conversation */
 	return csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN ||
 	       csb->state == (uint8_t)VMS_CNXMAN_CSB_WAIT ||
 	       csb->state == (uint8_t)VMS_CNXMAN_CSB_RECONNECT ||
@@ -1534,6 +1545,7 @@ void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid)
 	if (csb->cm_dialogue_conid != 0u)
 		csb->cm_dialogue_resets++;   /* a LIVE dialogue was discarded */
 	csb->cm_dialogue_conid = conid;
+	csb->cm_new_incarnation = 0u;   /* this IS the new conversation */
 	csb->cm_send_msg = 0u;
 	csb->cm_ack_msg  = 0u;
 	/*

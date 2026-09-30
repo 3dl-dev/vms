@@ -171,7 +171,8 @@ barrier-phase1-not-marked
 barrier-phase1-not-cleared
 join-transition-loss-redriven
 join-transition-reoffers-burst
-glue-close-abandons-held-transition"
+glue-close-abandons-held-transition
+csb-new-incarnation-carried"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -926,6 +927,21 @@ EOF
         ;;
         esac;;
 
+    csb-new-incarnation-carried)
+        case "$_f" in
+        facility)     echo "a system back as a new incarnation starts a new conversation (p. 7-24/7-25; rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "csb_dialogue_may_continue() ignores cm_new_incarnation, so a member re-establishes a re-incarnated system's connection as the old conversation, with the 'already introduced' mask. MEASURED consequence, stall-rig arm F-13: the joiner, removed after a 30 s stall and back after CLUEXIT, never heard the OVMX member's PARAMS and waited for connectivity for the rest of the run.";;
+        require_fail) cat <<'EOF'
+a NEW incarnation is a new conversation: 1/0 (p. 7-25)
+and nothing is recorded as already said to it -- this node introduces itself again
+the fresh bind ends the record
+EOF
+        ;;
+        esac;;
+
     csb-dropped-spare-reads-as-loss)
         case "$_f" in
         facility)     echo "two VMS\$VAXcluster connections for one pair (rd vms-1f40: the peer disconnecting the redundant one of a crossing is not a loss of that system)";;
@@ -1018,6 +1034,7 @@ and the dialogue is carried, never restarted
 dialogue carried across the move
 not SELECTED yet, but in the answered transition: the re-established connection carries the ack (F5: 266)
 and the send side
+the SAME incarnation re-established: carried
 EOF
         ;;
         esac;;
@@ -1407,6 +1424,11 @@ apply_edit() {
         # rd vms-eb3: the matched text is unique in its file and the replacement
         # no longer matches, so the mutation is not repeatable.
         sed -i 's|	if (window_over \&\& cn->barrier.coordinator_csb == idx)|	if (cn->barrier.coordinator_csb == idx) /* NEGCTL glue-close-abandons-held-transition */|' "$_file";;
+
+    csb-new-incarnation-carried)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	if (csb->cm_new_incarnation)|	if (0 \&\& csb->cm_new_incarnation) /* NEGCTL csb-new-incarnation-carried */|' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

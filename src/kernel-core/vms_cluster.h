@@ -561,7 +561,16 @@ struct vms_csb {
 	 * GO on the new connection (vms-eb3 oracle F5/F6).
 	 */
 	uint8_t  cm_phase1_named;
-	uint8_t  cm_resume_pad[2];
+	/*
+	 * ...AND WHETHER THE SYSTEM HAS COME BACK AS A NEW INCARNATION SINCE
+	 * THIS BLOCK'S DIALOGUE BEGAN (rd vms-eb3). p. 7-24 DEAD / p. 7-25: the
+	 * old incarnation's conversation died with it, and the new one is dealt
+	 * with "just as if it were joining the cluster for the first time". Set
+	 * when the circuit advertises an incarnation different from the one
+	 * this block recorded; cleared when a fresh dialogue is bound.
+	 */
+	uint8_t  cm_new_incarnation;
+	uint8_t  cm_resume_pad[1];
 	uint32_t cm_resumes;
 
 	/*

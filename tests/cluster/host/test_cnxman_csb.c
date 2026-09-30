@@ -1251,6 +1251,66 @@ static void test_a_system_in_an_answered_transition_carries_its_dialogue(void)
 }
 
 /*
+ * rd vms-eb3, rig arm F-13: a joiner stalled past RECNXINTERVAL was removed,
+ * took CLUEXIT and came back as a NEW INCARNATION. The OVMX member still held
+ * its old block in the reconnect window, re-established the new incarnation's
+ * connection as the OLD conversation -- carried counters and the "already
+ * introduced" mask -- never re-introduced itself, and the joiner waited for
+ * its PARAMS forever. p. 7-24 DEAD / p. 7-25: a new incarnation is dealt with
+ * "just as if it were joining the cluster for the first time".
+ */
+static void test_a_new_incarnation_is_a_new_conversation(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-eb3: a system back as a new incarnation starts a new "
+	       "conversation, however much the old one was entitled to carry\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0x00a1b2c3d4e5f601ull, 1);
+	cnxman_csb_bind_connection(csb, 0x30e90010u);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_heard(csb, 300u);
+	csb->cm_advert_conid = 0x30e90010u;
+	csb->cm_advert_sent = 0x03u;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+
+	/* Control: the same incarnation re-establishes and carries. */
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0x00a1b2c3d4e5f601ull, 1);
+	cnxman_csb_bind_reconnect(csb, 0x30e90011u);
+	ct_check_eq_u32(csb->cm_ack_msg, 300u,
+			"the SAME incarnation re-established: carried");
+
+	/* negctl: csb-new-incarnation-carried */
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0x00a1b2c3d4e5f702ull, 1);
+	ct_check_eq_u32(csb->cm_new_incarnation, 1u,
+			"a different incarnation on the circuit is recorded");
+	cnxman_csb_bind_reconnect(csb, 0x30e90029u);
+	ct_check_eq_u32(csb->cm_ack_msg + csb->cm_send_msg, 0u,
+			"a NEW incarnation is a new conversation: 1/0 (p. 7-25)");
+	ct_check(csb->cm_advert_conid != 0x30e90029u,
+		 "and nothing is recorded as already said to it -- this node "
+		 "introduces itself again");
+	ct_check_eq_u32(csb->cm_new_incarnation, 0u,
+			"the fresh bind ends the record");
+
+	/* The first incarnation ever learned is not a change. */
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000102ull, 1);
+	if (csb == NULL)
+		return;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0x1234ull, 1);
+	ct_check_eq_u32(csb->cm_new_incarnation, 0u,
+			"learning the first incarnation is not a new one");
+}
+
+/*
  * rd vms-1f40 -- A CARRIED DIALOGUE RESUMES FROM THE PEER'S POSITION, NOT ITS
  * OWN.
  *
@@ -1685,6 +1745,7 @@ int main(void)
 	test_reconnect_dialogue_never_carries_the_old_ack();
 	test_reconnect_inside_the_window_carries_the_dialogue();
 	test_a_system_in_an_answered_transition_carries_its_dialogue();
+	test_a_new_incarnation_is_a_new_conversation();
 	test_a_carried_dialogue_resumes_where_the_peer_got_to();
 	test_two_connections_follow_the_one_the_peer_keeps();
 	test_a_first_join_crossing_runs_on_the_joiners_connect();

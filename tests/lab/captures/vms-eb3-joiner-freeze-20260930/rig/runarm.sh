@@ -45,6 +45,11 @@ for p in $(ps -eo pid,args | grep -E 'qemu-system-x86_64|nodedrv[.]py|tcpdum[p] 
            | grep -v grep | grep -E "$R|breb3r" | awk '{print $1}'); do
     kill -9 "$p" 2>/dev/null
 done
+# rd vms-eb3: ...and every QEMU on THIS rig's taps, whatever art it booted --
+# an art dir outside $R would otherwise survive into the next arm.
+for p in $(pgrep -f 'qemu-system-x86_64'); do
+    grep -qaE 'ifname=tap[AB]x,' /proc/$p/cmdline 2>/dev/null && kill -9 "$p" 2>/dev/null
+done
 for p in $(ls -l /proc/*/cwd 2>/dev/null | grep "$R/nodeC" | sed 's|.*/proc/\([0-9]*\)/cwd.*|\1|'); do
     kill -9 "$p" 2>/dev/null
 done

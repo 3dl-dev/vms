@@ -3479,6 +3479,51 @@ static int join_follow_csb_conn(struct cnxman_join *j, struct vms_csb *csb)
 	return 1;
 }
 
+/*
+ * THE RULE OF TOTAL CONNECTIVITY, FROM THIS SIDE (Davis p. 7-39; rd vms-e88).
+ *
+ * A join held for connectivity is waiting for a connection to every member,
+ * and something has to make those connections. A real VMS member dials a
+ * joiner itself (trios A and C3: the members' VMS$VAXcluster CONNECT_REQs to
+ * the joiner), and a real joiner dials the members it discovers (C3: VAX2 to
+ * VAX3 the moment it came into reach). An OVMX member dials nobody that its
+ * own join is not driving through -- so two OVMX systems, neither of which is
+ * the other's target, never get a connection, and the joiner waits forever for
+ * a member it could reach (stall-rig arm M-8 of this item).
+ *
+ * So the joiner dials, once, each system in sight that RUNS THIS
+ * IMPLEMENTATION (`peer_is_ours`) and that its CSB ladder still holds at NEW --
+ * never tried, no Con.ID. Limited to its own implementation on purpose: a real
+ * VAX dials a joiner by itself, and a VMS$VAXcluster connect it did not look up
+ * first can open an in-order hole in a real VAX's shared sequence (spec 4(L)).
+ * The Con.ID the glue mints is bound into that system's CSB there
+ * (cnxman_jop_connect), which is what the CSB ladder then answers for.
+ */
+static void join_reach_ours(struct cnxman_join *j)
+{
+	struct vms_club *club = &j->cl->club;
+	struct vms_csb *local = cnxman_club_local(club);
+	const uint8_t *cd = j->cfg.conndata_valid ? j->cfg.conndata : NULL;
+	uint32_t i;
+
+	if (j->jops == NULL || j->jops->connect == NULL)
+		return;
+	for (i = 0; i < club->n_csb; i++) {
+		struct vms_csb *c = cnxman_club_csb_at(club, i);
+		vms_conid_t conid = 0u;
+
+		if (c == NULL || c == local || !c->in_use || !c->sysid_valid ||
+		    !c->peer_is_ours || c->cdt_conid != 0u ||
+		    c->state != (uint8_t)VMS_CNXMAN_CSB_NEW)
+			continue;
+		if (j->jops->connect(j->jops->ctx, c->sysid,
+				     cnxman_join_name_vaxcluster,
+				     cnxman_join_name_vaxcluster, cd,
+				     CNXMAN_JOIN_CM_CREDITS, &conid) == 0)
+			j->ours_dialled++;
+	}
+}
+
 static const char *join_hold_line(uint8_t why)
 {
 	if (why == (uint8_t)CNXMAN_JOIN_HOLD_CONNECTIVITY)
@@ -3507,6 +3552,8 @@ static int join_hold(struct cnxman_join *j, uint8_t why)
 	else
 		j->holds_fresh++;
 	j->admit_hold = why;
+	if (why == (uint8_t)CNXMAN_JOIN_HOLD_CONNECTIVITY)
+		join_reach_ours(j);
 	if (why != j->admit_hold_said && line != NULL)
 		join_log(j, line);
 	if (line != NULL)

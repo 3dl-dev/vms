@@ -909,6 +909,9 @@ struct cnxman_join {
 	 * own PARAMS, that it belongs to no cluster (also counted in
 	 * attempts_exhausted, which the founding election reads). */
 	uint32_t no_member_rounds;
+	/* VMS$VAXcluster connects this join put out to systems running this
+	 * implementation that nobody had connected (join_reach_ours). */
+	uint32_t ours_dialled;
 	uint32_t attempts_exhausted;
 	uint32_t starts_backed_off;
 	uint32_t reissue_targets_absent;

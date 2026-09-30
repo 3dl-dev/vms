@@ -161,7 +161,8 @@ join-unheard-gate-disarmed
 join-same-breath-gate-disarmed
 join-follow-csb-conn-disarmed
 join-member-count-to-foreign
-join-asks-a-system-in-no-cluster"
+join-asks-a-system-in-no-cluster
+join-does-not-reach-ours"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -664,6 +665,10 @@ held for CONNECTIVITY
 no op-0x02 while one of two members is out of reach -- thirty beats, as the real joiner waited five minutes
 nobody was asked, so nobody was declined
 the join moves to the higher member once it is in reach
+... that system
+and not again while that connect stands
+held: the member counts two, this node reaches one
+so it dials the OVMX system nobody had connected, once
 EOF
         ;;
         esac;;
@@ -752,6 +757,21 @@ once the other says it is a member, the request goes to it
 held as NO_MEMBER
 and with only a joining system left, the round ends
 the join is back in IDLE to ask again, not parked
+EOF
+        ;;
+        esac;;
+
+    join-does-not-reach-ours)
+        case "$_f" in
+        facility)     echo "the joiner dials the systems of its own implementation nobody has connected (rd vms-e88: the Rule of Total Connectivity, Davis p. 7-39; trio C3 -- a real joiner dials each member it discovers)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_hold() no longer dials, so a join held for connectivity waits for a connection nobody will make: an OVMX member dials nobody its own join is not driving through, and the joiner is driving through the real VAX. MEASURED consequence, stall-rig arm M-8 of this item: OVMXB held 'waiting for connectivity to every cluster member' for the whole run, the VAX counting two members and OVMXB reaching one.";;
+        require_fail) cat <<'EOF'
+... that system
+and not again while that connect stands
+so it dials the OVMX system nobody had connected, once
 EOF
         ;;
         esac;;
@@ -1185,6 +1205,11 @@ apply_edit() {
         # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
         # replacement no longer matches the pattern, so it is not repeatable.
         sed -i 's|	if (csb->adv_valid \&\& !join_says_member(csb))|	if (0 \&\& csb->adv_valid \&\& !join_says_member(csb)) /* NEGCTL join-asks-a-system-in-no-cluster */|' "$_file";;
+
+    join-does-not-reach-ours)
+        # rd vms-e88: the call is unique in vms_cnxman_join_fsm.c and VANISHES
+        # when replaced, so the mutation is not repeatable.
+        sed -i 's|		join_reach_ours(j);|		(void)join_reach_ours; /* NEGCTL join-does-not-reach-ours */|' "$_file";;
 
     csb-dropped-spare-reads-as-loss)
         # `	if (csb->alt_conid == conid) {` is unique in this file.

@@ -59,6 +59,7 @@
 
 #define MSCP_CONID  0x4e620008u
 #define CM_CONID    0x4e620009u
+#define DIAL_CONID  0x4e62003cu   /* rd vms-e88: a connect to a non-target */
 
 /* The Con.ID SCS mints for a connection the MEMBER opened and this node
  * ACCEPTED. Deliberately different from CM_CONID: an accepted connection is
@@ -115,6 +116,8 @@ struct bed {
 	char     logs[MAX_LOGS][160];
 	uint32_t n_logs;
 
+	uint32_t n_dial_other;       /* rd vms-e88: connects to a non-target */
+	vms_scs_sysid_t last_dial_dst;
 	int      fail_connect;
 	int      fail_send;
 	/* WHAT the injected SCS answers when `fail_send` fires. 0 keeps the
@@ -159,6 +162,18 @@ static int bed_connect(void *ctx, vms_scs_sysid_t dst,
 	*out_conid = (memcmp(remote_name, cnxman_join_name_mscp_disk,
 			     VMS_SCS_PROCNAME_LEN) == 0) ? MSCP_CONID
 						       : CM_CONID;
+	/* rd vms-e88: a VMS$VAXcluster connect to a system OTHER than the one
+	 * the bed's join drives through gets a Con.ID of its own. */
+	if (*out_conid == CM_CONID && g.member_csb != NULL &&
+	    dst != g.member_csb->sysid) {
+		*out_conid = DIAL_CONID;
+		g.n_dial_other++;
+		g.last_dial_dst = dst;
+		cnxman_csb_bind_connection(cnxman_club_find_sysid(&g.cl.club,
+								  dst),
+					   DIAL_CONID);
+		return 0;
+	}
 	/* Mirror the production glue: cnxman_jop_connect() writes the Con.ID
 	 * SCS minted into the destination CSB at that instant, which is what
 	 * makes the block the record of the connection (book p. 7-23) and what
@@ -5943,6 +5958,68 @@ static void test_e88_a_declined_member_and_a_joiner_end_the_round(void)
 			"the join is back in IDLE to ask again, not parked");
 }
 
+
+/*
+ * Stall-rig arm M-8 of this item: the joiner drives through the real VAX,
+ * which says the cluster has two members; the other member is an OVMX node
+ * that nobody has connected -- neither is the other's target, and an OVMX
+ * member dials nobody. A real joiner dials the members it discovers (trio C3),
+ * so this one dials the system of its own implementation it holds no
+ * connection to, and asks once it has reached both.
+ */
+static void test_e88_the_joiner_reaches_a_member_of_its_own_kind(void)
+{
+	struct vms_csb *other;
+
+	printf("\n-- rd vms-e88: the joiner dials the member nobody connected --\n");
+	bed_init();
+	bed_set_identity();
+	other = cnxman_club_find_sysid(&g.cl.club, OTHER_SYSID);
+	other->peer_is_ours = 1u;              /* an OVMX system, NEW, no conn */
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk, 0);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster, 1);
+	cnxman_join_opened(&g.j, CM_CONID);
+	g.member_csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	(void)join_feed(mk_member_params(1u, 2u, 0x0002));   /* "2 members" */
+
+	/* negctl: join-does-not-reach-ours */
+	bed_beats(2u);
+	ct_check_eq_u32(g.j.admit_hold, CNXMAN_JOIN_HOLD_CONNECTIVITY,
+			"held: the member counts two, this node reaches one");
+	ct_check_eq_u32(g.n_dial_other, 1u,
+			"so it dials the OVMX system nobody had connected, once");
+	ct_check(g.last_dial_dst == OTHER_SYSID, "... that system");
+	bed_beats(2u);
+	ct_check_eq_u32(g.n_dial_other, 1u,
+			"and not again while that connect stands");
+
+	bed_peer_connected(other, DIAL_CONID);
+	(void)join_feed_from(other, OTHER_CSID, mk_member_params(0u, 2u, 0x0001));
+	bed_beats(2u);
+	ct_check(n_sent_on(CM_CONID) > 0u &&
+		 sent_on_is(CM_CONID, n_sent_on(CM_CONID) - 1u,
+			    VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG),
+		 "with both members reached, the request goes to the member "
+		 "asked");
+	ct_check_eq_u32(n_sent_catop(VMS_CM_CAT_CONFIG, VMS_CM_OP_CONFIG), 1u,
+			"once");
+
+	/* A foreign system is never dialled this way: a real VAX dials a
+	 * joiner itself, and an unlooked-up connect risks its sequence. */
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_mscp_disk, 0);
+	cnxman_join_dir_result(&g.j, MEMBER_SYSID, cnxman_join_name_vaxcluster, 1);
+	cnxman_join_opened(&g.j, CM_CONID);
+	g.member_csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	(void)join_feed(mk_member_params(1u, 2u, 0x0002));
+	bed_beats(3u);
+	ct_check_eq_u32(g.n_dial_other, 0u,
+			"a system not running this implementation is not dialled");
+}
+
 int main(void)
 {
 	printf("test_cnxman_join: the join FSM (FC-P3.3, rung R1)\n");
@@ -6034,6 +6111,7 @@ int main(void)
 	test_e88_a_member_advertises_its_count_to_ours_only();
 	test_e88_a_system_in_no_cluster_is_not_asked();
 	test_e88_a_declined_member_and_a_joiner_end_the_round();
+	test_e88_the_joiner_reaches_a_member_of_its_own_kind();
 
 	return ct_summary("test_cnxman_join");
 }

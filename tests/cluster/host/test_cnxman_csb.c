@@ -1536,6 +1536,46 @@ static void test_two_connections_follow_the_one_the_peer_keeps(void)
 	ct_check_eq_u32(cnxman_csb_second_closed(NULL, 1u, 1), 0u, "NULL is safe");
 }
 
+
+/*
+ * rd vms-e88: the SAME crossing at a FIRST join, where the block is not
+ * SELECTED and so carries no dialogue. The joiner dials (its own attempt,
+ * noted by the glue's cnxman_jop_connect), the member's own connect opens
+ * first and is bound, then the joiner's opens: the block goes back to the
+ * joiner's -- the one the real VAX answered its PARAMS on in rig arms T-15 and
+ * M-9 -- and, a first join having no conversation to carry, opens a fresh one.
+ */
+static void test_a_first_join_crossing_runs_on_the_joiners_connect(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-e88: a first-join crossing runs on the joiner's own\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the member");
+	if (csb == NULL)
+		return;
+	cnxman_csb_bind_connection(csb, 0x31u);   /* the joiner's own dial */
+	cnxman_csb_note_attempt(csb, 0x31u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_CONNECT;
+
+	ct_check_eq_u32(cnxman_csb_second_open(csb, 0x32u, 0),
+			CNXMAN_CSB_CONN_BIND,
+			"the member's connect opens first: bound");
+	cnxman_csb_bind_reconnect(csb, 0x32u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_dialogue_sent(csb);             /* MODEL went out on it */
+
+	ct_check_eq_u32(cnxman_csb_second_open(csb, 0x31u, 1),
+			CNXMAN_CSB_CONN_SECOND,
+			"the joiner's own then opens: the pair's second");
+	ct_check_eq_u32(csb->cdt_conid, 0x31u,
+			"and the block runs on the joiner's own");
+	ct_check_eq_u32(csb->alt_conid, 0x32u, "the member's is the spare");
+	ct_check_eq_u32(csb->cm_send_msg, 0u,
+			"a first join carries no dialogue: a fresh one opens");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
@@ -1558,6 +1598,7 @@ int main(void)
 	test_reconnect_inside_the_window_carries_the_dialogue();
 	test_a_carried_dialogue_resumes_where_the_peer_got_to();
 	test_two_connections_follow_the_one_the_peer_keeps();
+	test_a_first_join_crossing_runs_on_the_joiners_connect();
 	test_correlation_pair_is_maintained();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");

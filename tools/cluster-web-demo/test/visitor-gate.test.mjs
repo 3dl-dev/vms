@@ -15,7 +15,7 @@ import fs from 'node:fs';
 import * as GATE from '../gate-eval.mjs';
 const {
   joinScrollback, observe, isCN3, verdictOf, newObservations, restartsIn, setOf, ADDED, MATRIX,
-  isRepaintStall,
+  isRepaintStall, silentNeverStarts,
 } = GATE;
 
 const CN3_LINES = (self, a, b) => [
@@ -237,6 +237,41 @@ test('a panel that keeps printing is not a repaint stall', () => {
   assert.equal(isRepaintStall(t1, t1, t1), false, 'stuck and still stuck is not a stall either');
   assert.equal(isRepaintStall(t1, t1, t3), true,
     'byte-identical for a whole poll, then output the moment it was revealed');
+});
+
+test('rd vms-bfdd: a silent never-start is flagged only when the panel said nothing at all', () => {
+  // The captured defect: Node B's console stayed at 0 bytes for 586s, with
+  // nothing (no error, no retry affordance) for a visitor to act on. The
+  // watchdog (node-pcjs.html) is the fix -- it either sees a sign of life
+  // (__nodeState.started) or says so (__nodeState.watchdogFired). A SILENT
+  // never-start is the one combination that must never happen again: empty
+  // console AND no started signal AND no watchdog fire.
+  const R = newObservations();
+  R.panel_started = { OVMXB: false, VAXC: true };
+  R.panel_watchdog_fired = { OVMXB: false, VAXC: false };
+  assert.deepEqual(silentNeverStarts(R, ['OVMXB', 'VAXC']), ['OVMXB'],
+    'VAXC started; OVMXB neither started nor said anything -- that one is silent');
+
+  // The honest-failure path: the panel never started, but its watchdog DID
+  // fire -- the visitor saw a message and a retry button, so this is not the
+  // silent defect, even though the console is still empty.
+  const R2 = newObservations();
+  R2.panel_started = { OVMXB: false };
+  R2.panel_watchdog_fired = { OVMXB: true };
+  assert.deepEqual(silentNeverStarts(R2, ['OVMXB']), [],
+    'a fired watchdog is an HONEST failure, not a silent one');
+});
+
+test('verdictOf names a silent never-start distinctly from the usual NOT CN=3 reasons', () => {
+  const R = newObservations();
+  observe(R, 'OVMXA', CN3_LINES('c3', 'c4', 'c5'));
+  R.sca = { OVMXA: 10 };
+  R.panel_started = { OVMXB: false, VAXC: false };
+  R.panel_watchdog_fired = { OVMXB: false, VAXC: false };
+  const v = verdictOf(R);
+  assert.match(v, /SILENT never-start/);
+  assert.match(v, /OVMXB/);
+  assert.match(v, /VAXC/);
 });
 
 test('the gate does not scroll panels while grading', () => {

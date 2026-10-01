@@ -70,6 +70,24 @@ MEOF
   echo "patched machdep.c (+module_init_md)"
 fi
 
+# --- rd vms-553: OVMX_QUIET console (idempotent) -----------------------------
+# The OpenVMX/VAX console shows the VMS personality, not NetBSD's boot. This is
+# done at the source: netbsd-ovmx-quiet.patch adds an OVMX_QUIET kernel option
+# (kernel printf goes to the message buffer only; panics, the executive's
+# operator lines and verbose/debug boots still reach the console) and a silent
+# autoboot to the vax secondary bootstrap (/boot). Nothing is deleted: dmesg
+# keeps every kernel line. NetBSD source is BSD-licensed; this is not VMS code.
+QUIET_PATCH="${QUIET_PATCH:-/src/tools/cross-vax/netbsd-ovmx-quiet.patch}"
+[ -f "$QUIET_PATCH" ] || { echo "FAIL: $QUIET_PATCH not found"; exit 2; }
+if grep -q 'TOCONSOP' "$SRC/sys/sys/kprintf.h"; then
+  echo "netbsd-ovmx-quiet.patch already applied"
+else
+  patch -d "$SRC" -p1 --dry-run -s < "$QUIET_PATCH" \
+    || { echo "FAIL: netbsd-ovmx-quiet.patch does not apply to $SRC"; exit 1; }
+  patch -d "$SRC" -p1 -s < "$QUIET_PATCH"
+  echo "applied netbsd-ovmx-quiet.patch (OVMX_QUIET kernel option + quiet /boot)"
+fi
+
 # --- custom kernel config: GENERIC + the module framework (idempotent) -------
 CONF="$SRC/sys/arch/vax/conf/OVMX"
 if [ ! -f "$CONF" ]; then
@@ -82,8 +100,21 @@ if [ ! -f "$CONF" ]; then
 include "arch/vax/conf/GENERIC"
 options MODULAR
 options MODULAR_DEFAULT_VERBOSE
+# rd vms-553: the console belongs to the VMS personality. OVMX_QUIET keeps the
+# kernel's own boot/run-time messages in the message buffer (dmesg) only; panics,
+# the executive's operator lines (TOCONSOP) and verbose/debug boots still reach
+# the console. MSGBUFSIZE is raised from vax's 512-byte default so dmesg really
+# holds the whole boot. See tools/cross-vax/netbsd-ovmx-quiet.patch.
+options OVMX_QUIET
+options MSGBUFSIZE=65536
 EOF
   echo "wrote sys/arch/vax/conf/OVMX"
+fi
+# A tree configured before rd vms-553 carries an OVMX config without the quiet
+# options: add them rather than silently building a talkative kernel.
+if ! grep -q '^options OVMX_QUIET' "$CONF"; then
+  printf '# rd vms-553 (see netbsd-ovmx-quiet.patch)\noptions OVMX_QUIET\noptions MSGBUFSIZE=65536\n' >> "$CONF"
+  echo "added OVMX_QUIET + MSGBUFSIZE to an existing sys/arch/vax/conf/OVMX"
 fi
 
 echo "=== host toolchain ==="; cc --version | head -1
@@ -102,4 +133,13 @@ K="/obj/sys/arch/vax/compile/OVMX/netbsd"
 [ -f "$K" ] || { echo "FAIL: kernel not found under /obj"; exit 1; }
 mkdir -p "$OUT"; cp "$K" "$OUT/netbsd-OVMX"
 ls -lh "$OUT/netbsd-OVMX"
-echo "KERNEL_BUILD_OK: NetBSD/vax MODULAR kernel built ($OUT/netbsd-OVMX)"
+
+# --- the quiet secondary bootstrap, installed on the disk as /boot (vms-553) --
+echo "=== nbmake-vax sys/arch/vax/boot/boot (OVMX_QUIET) ==="
+( cd "$SRC/sys/arch/vax/boot/boot" && /tools/bin/nbmake-vax obj >/dev/null \
+    && /tools/bin/nbmake-vax OVMX_QUIET=yes dependall )
+B="$(cd "$SRC/sys/arch/vax/boot/boot" && /tools/bin/nbmake-vax -V .OBJDIR)/boot"
+[ -f "$B" ] || { echo "FAIL: quiet /boot not built ($B)"; exit 1; }
+cp "$B" "$OUT/boot-OVMX"
+ls -lh "$OUT/boot-OVMX"
+echo "KERNEL_BUILD_OK: NetBSD/vax MODULAR+OVMX_QUIET kernel built ($OUT/netbsd-OVMX, $OUT/boot-OVMX)"

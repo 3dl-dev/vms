@@ -1820,9 +1820,12 @@ int main(void)
      * Unconditional (not gated on getpid() == 1): cheap, and every
      * invocation of this binary is still OVMX/Linux underneath regardless
      * of PID.
+     *
+     * WHERE it is announced is the backend's call (rd vms-553): the console
+     * on Linux, the kernel message buffer on NetBSD -- see
+     * ovmx_boot_announce_syskrnl().
      */
-    printf("%s\n", ovmx_syskrnl_banner());
-    fflush(stdout);
+    ovmx_boot_announce_syskrnl(ovmx_syskrnl_banner());
 
     /* If we are PID 1 on bare metal (a fresh kernel whose base filesystems
      * are not yet mounted), set up the substrate plumbing. */

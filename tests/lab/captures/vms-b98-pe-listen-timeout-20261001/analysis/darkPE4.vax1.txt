@@ -1,0 +1,3 @@
+T1 stop@1790873625.461 last_rx=1.095 before stop, close=7.490  SILENCE->CLOSE=8.585  dir=1.33:b3 7.49:b3
+T2 stop@1790873701.633 last_rx=0.638 before stop, close=8.157  SILENCE->CLOSE=8.795  dir=2.79:b3 8.79:b3
+T3 stop@1790873778.562 last_rx=1.246 before stop, close=7.679  SILENCE->CLOSE=8.925  dir=1.78:b3 7.92:b3

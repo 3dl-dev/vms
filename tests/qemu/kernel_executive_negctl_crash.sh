@@ -70,7 +70,7 @@ echo "=============================================================="
 [ -f "$REPLAY" ] || { echo "FAIL: BROKEN FIXTURE: $REPLAY is missing"; exit 1; }
 
 # Ground the fixture in a REAL suite name from THIS checkout, derived the
-# same way ci.yml derives EXPECTED, so this file cannot drift from what the
+# same way ci-kernel-executive.yml derives EXPECTED, so this file cannot drift from what the
 # step actually iterates over.
 CRASH_SUITE=$(cd "$ROOT" && ls tests/qemu/test_syssvc_*.c 2>/dev/null \
               | xargs -n1 basename | sed 's/\.c$//' | sort | head -n1)

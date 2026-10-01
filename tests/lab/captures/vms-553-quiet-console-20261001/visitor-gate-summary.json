@@ -1,0 +1,48 @@
+[
+ {
+  "label": "page-order",
+  "order": "A,B,C",
+  "gap": 5000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c5",
+    "0x7c4"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c3",
+    "0x7c5"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXA",
+   "OVMXB"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "worstDriftMs": 37,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": []
+ }
+]

@@ -273,6 +273,40 @@ static void test_null_handling(void)
 	         "NULL in: struct vms_cluster.params still untouched");
 }
 
+/*
+ * rd vms-b98: TIMVCFAIL reaches the port in milliseconds, out of SYSGEN's own
+ * 10 ms unit (SYSGEN SHOW TIMVCFAIL on a real OpenVMS VAX V7.3: 1600, unit
+ * "10Ms"), and an unloaded record leaves the port's default (0).
+ */
+static void test_timvcfail_reaches_the_port_in_ms(void)
+{
+	struct vms_cluster_params p;
+
+	printf("[sysgen] rd vms-b98: TIMVCFAIL, converted once, for the port\n");
+	memset(&g_cl, 0, sizeof(g_cl));
+	ct_check_eq_u32(cluster_sysgen_timvcfail_ms(&g_cl), 0,
+			"never loaded: 0, the port keeps its own default");
+
+	fill_valid_params(&p);
+	p.timvcfail = 1600;
+	ct_check(cluster_sysgen_load(&g_cl, &p) != 0, "the record commits");
+	ct_check_eq_u32(cluster_sysgen_timvcfail_ms(&g_cl), 16000,
+			"the V7.3 default 1600 is 16 000 ms");
+
+	p.timvcfail = 100;
+	memset(&g_cl, 0, sizeof(g_cl));
+	(void)cluster_sysgen_load(&g_cl, &p);
+	ct_check_eq_u32(cluster_sysgen_timvcfail_ms(&g_cl), 1000,
+			"an operator's own value is what the port gets");
+
+	p.timvcfail = 65535;
+	memset(&g_cl, 0, sizeof(g_cl));
+	(void)cluster_sysgen_load(&g_cl, &p);
+	ct_check_eq_u32(cluster_sysgen_timvcfail_ms(&g_cl), 655350,
+			"SYSGEN's maximum converts without wrapping");
+	ct_check_eq_u32(cluster_sysgen_timvcfail_ms(NULL), 0, "NULL cl refused");
+}
+
 int main(void)
 {
 	test_valid_load_commits();
@@ -280,6 +314,7 @@ int main(void)
 	test_missing_scsnode_vaxcluster2_refused();
 	test_vaxcluster_zero_no_scsnode_ok();
 	test_null_handling();
+	test_timvcfail_reaches_the_port_in_ms();
 
 	return ct_summary("test_cluster_sysgen_load");
 }

@@ -1235,6 +1235,10 @@ struct pe_fsm {
 	uint32_t rx_not_sca;        /* not ethertype 0x6007                      */
 	uint32_t rx_unclassified;   /* the codec could not name the class        */
 	uint32_t rx_not_for_us;     /* addressed to neither us nor the group     */
+	uint32_t rx_not_addressed;  /* Ethernet destination is neither this
+				     * station's own address nor the group
+				     * multicast: the frame a real adapter
+				     * never passes up (rd vms-6b1)          */
 	uint32_t rx_parse_failed;   /* classified, then failed to decode         */
 	uint32_t rx_solicit;        /* SS4(c): counted, NEVER answered (P6/P7)   */
 	uint32_t rx_no_slot;        /* channel table full: refused, not recycled */

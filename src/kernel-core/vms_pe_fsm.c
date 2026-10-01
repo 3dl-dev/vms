@@ -1283,6 +1283,62 @@ static void pe_learn_revision(struct pe_fsm *f, struct pe_channel *ch,
 		pe_rev_from_hello(&f->wire_rev, rx->hello);
 }
 
+/*
+ * WOULD THIS STATION'S ADAPTER HAVE PASSED THE FRAME UP AT ALL? (rd vms-6b1)
+ *
+ * A real PEDRIVER sits behind a LAN adapter that hands it two kinds of frame:
+ * the ones sent to the adapter's own station address, and the ones sent to a
+ * multicast address the driver enabled -- for the cluster, its group's HELLO
+ * multicast. Nothing else ever reaches the port. MEASURED, rd vms-1f40 rig arm
+ * T-1 (`s8.pcap`, every 0x6007 frame of a three-node VAXC/OVMXA/OVMXB run): each
+ * directed frame's Ethernet destination is the recipient's own hardware
+ * address -- the address that recipient transmits from -- and every other
+ * frame is sent to AB-00-04-01-<group>. A third destination never occurs.
+ *
+ * OVMX's port does not get that filter for free. A hub that floods every
+ * frame to every port (the in-browser demo's L2 switch does, by design), an
+ * adapter left promiscuous, or a bridge that has not learned a station yet all
+ * deliver a frame meant for ANOTHER node, and without this test it was bound
+ * to a circuit by its SOURCE address alone: a foreign START restarted our
+ * circuit and foreign sequenced traffic read as gaps and duplicates.
+ *
+ * So the adapter's rule is applied here, once, for BOTH families, before any
+ * channel or circuit sees the frame. The two addresses are this node's own
+ * executive state (the hardware address the port transmits from, read off the
+ * interface through the seam, and the multicast built from CLUSTER_AUTHORIZE's
+ * group) -- an address that is not valid accepts nothing.
+ */
+static int pe_station_accepts(const struct pe_fsm *f,
+			      const uint8_t dst[VMS_ETH_ADDR_LEN])
+{
+	if (f->id.hw_mac_valid && pe_mac_eq(dst, f->id.hw_mac))
+		return 1;
+	if (f->id.mcast_valid && pe_mac_eq(dst, f->id.mcast))
+		return 1;
+	return 0;
+}
+
+/* Returns 1 when the frame may go on to its family's receive path. A frame the
+ * codec cannot read a header out of goes on too: that path counts it as the
+ * parse failure it is, exactly as before this filter existed. A frame for some
+ * other station is counted in rx_not_addressed and goes nowhere. */
+static int pe_frame_reaches_port(struct pe_fsm *f, const uint8_t *frame,
+				 uint32_t len)
+{
+	struct vms_sca_hdr hdr;
+
+	if (vms_sca_hdr_parse(frame, len, &hdr) != VMS_CODEC_OK)
+		return 1;
+	if (pe_station_accepts(f, hdr.eth_dst))
+		return 1;
+	/* Said once per port, because it is a fact about the LAN this node is
+	 * on (a flooding hub, a promiscuous adapter), not about a frame. */
+	if (f->rx_not_addressed++ == 0u)
+		pe_log(f, "%PEA0, frames addressed to another station reach "
+			  "this port; each is refused and counted");
+	return 0;
+}
+
 /* Is this frame ours? A directed frame names THIS node's LOGICAL address at
  * abs 16; a multicast one names the cluster group. Anything else is somebody
  * else's traffic on a shared LAN and is counted, not processed. */
@@ -1384,6 +1440,8 @@ enum pe_channel_action pe_fsm_rx(struct pe_fsm *f, const uint8_t *frame,
 		f->rx_not_sca++;
 		return PE_CH_ACT_NONE;
 	}
+	if (!pe_frame_reaches_port(f, frame, len))
+		return PE_CH_ACT_NONE;
 	/* The SCS envelope is the VIRTUAL CIRCUIT's (FC-P1.2): formation,
 	 * sequenced messages and credit-returns all ride it, and it is routed
 	 * to the circuit on the channel the sending station owns. */

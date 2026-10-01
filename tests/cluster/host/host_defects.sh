@@ -153,6 +153,7 @@ csb-resume-ignores-peer-position
 pe-start-refusal-silent
 pe-reformation-stacks-before-it-starts
 pe-peer-start-keeps-dead-echo
+pe-station-filter-disarmed
 recnx-attempt-supersedes-in-flight
 csb-dropped-spare-reads-as-loss
 join-asks-the-last-discovered
@@ -1069,6 +1070,26 @@ EOF
         ;;
         esac;;
 
+    pe-station-filter-disarmed)
+        case "$_f" in
+        facility)     echo "the LAN adapter's address filter a real PEDRIVER sits behind: only this station's own address and the group multicast ever reach the port (rd vms-6b1)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "pe_frame_reaches_port() accepts every Ethernet destination ('1 ||'), so a frame a flooding hub or a promiscuous adapter delivers -- VAX1 talking to ANOTHER node -- is bound to this node's circuit by its source address alone: the foreign START re-forms our OPEN circuit (SCS told it went down, a STACK sent back) and the foreign sequenced messages are taken as ours, which is exactly the in-browser L2 hub's flood (tools/cluster-web-demo/l2/hub.mjs) the item names.";;
+        require_fail) cat <<'EOF'
+a START for another station does not re-form our circuit
+a sequenced message for another station is not taken
+and SCS is told nothing went down
+and nothing is sent back: no STACK, no re-ack
+each one is counted where an operator can see it
+and the console says so
+nor read as a gap
+while our own next message is taken as usual
+EOF
+        ;;
+        esac;;
+
     pe-late-frame-revives-channel)
         case "$_f" in
         facility)     echo "SS4(M)'s listen timeout as a fact about ELAPSED TIME (rd vms-8c54: a stalled guest wakes with its clock AND its receive queue jumped together, and the queued frames are consumed before any beat runs)";;
@@ -1496,6 +1517,10 @@ apply_edit() {
     csb-reconnect-never-carries)
         # `if (csb->cm_dialogue_conid == 0u)` is unique in this file.
         sed -i 's|if (csb->cm_dialogue_conid == 0u)|if (1) /* NEGCTL csb-reconnect-never-carries: never entitled */|' "$_file";;
+
+    pe-station-filter-disarmed)
+        # `if (pe_station_accepts(f, hdr.eth_dst))` is unique in this file.
+        sed -i 's|if (pe_station_accepts(f, hdr.eth_dst))|if (1 \|\| pe_station_accepts(f, hdr.eth_dst)) /* NEGCTL pe-station-filter-disarmed */|' "$_file";;
 
     pe-late-frame-revives-channel)
         # `if (ch->deadline_ms == 0u)` is unique in this file.

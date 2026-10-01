@@ -2392,6 +2392,94 @@ static void test_peer_restart_names_its_start(void)
 		 "the console line carries the START's own send-msg#");
 }
 
+/*
+ * rd vms-6b1: A FRAME ADDRESSED TO ANOTHER STATION NEVER REACHES A CIRCUIT.
+ *
+ * The shape the in-browser demo's flooding L2 hub produces: VAX1, the peer
+ * this node has an OPEN circuit with, talks to a THIRD node (OVMXB, its own
+ * station and logical address), and the hub hands this node a copy. A real
+ * adapter would never have passed it up. Before the filter it was bound to OUR
+ * circuit by its source address alone: a foreign START re-formed our circuit
+ * and a foreign sequenced message was taken as ours.
+ */
+static const uint8_t other_hw[6] = { 0x52, 0x54, 0x00, 0x00, 0xdf, 0x0b };
+#define OTHER_SYSID 1988u
+
+static void rx_start_to_other(struct vc_env *e, uint16_t send_seq)
+{
+	uint8_t other_lavc[6];
+
+	vms_cluster_lavc_addr_build(OTHER_SYSID, other_lavc);
+	rx_frame(e, fake_peer_start(&e->peer, VAX1_SYSID, other_hw, other_lavc,
+				    0, send_seq, 0, LAB_CREDITS, e->buf,
+				    sizeof(e->buf)));
+}
+
+static void rx_seqmsg_to_other(struct vc_env *e, uint16_t seq)
+{
+	uint8_t other_lavc[6];
+
+	vms_cluster_lavc_addr_build(OTHER_SYSID, other_lavc);
+	rx_frame(e, fake_peer_seqmsg(&e->peer, other_hw, other_lavc, seq, 0,
+				     0x62c50009u, 0x33580008u, e->buf,
+				     sizeof(e->buf)));
+}
+
+static void test_a_frame_for_another_station_reaches_no_circuit(void)
+{
+	struct pe_vc *vc;
+	uint32_t downs, msgs;
+
+	printf("-- rd vms-6b1: SCS traffic for ANOTHER station is not ours\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	rx_seqmsg(&g_env, 1, 0);
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->recv_seq, 1, "our own circuit is carrying");
+	downs = g_env.upper_rec.downs;
+	msgs = g_env.upper_rec.messages;
+	fake_pe_clear_frames(&g_env.fake);
+
+	rx_start_to_other(&g_env, 292);
+	ct_check_eq_u32(vc->state, VMS_PE_VC_OPEN,
+			"a START for another station does not re-form our circuit");
+	ct_check_eq_u32(g_env.upper_rec.downs, downs,
+			"and SCS is told nothing went down");
+
+	rx_seqmsg_to_other(&g_env, 2);
+	rx_seqmsg_to_other(&g_env, 7);
+	ct_check_eq_u32(vc->recv_seq, 1,
+			"a sequenced message for another station is not taken");
+	ct_check_eq_u32(g_env.upper_rec.messages, msgs,
+			"and nothing is delivered upward");
+	ct_check_eq_u32(vc->rx_gaps, 0, "nor read as a gap");
+	ct_check_eq_u32(g_env.fake.n_frames, 0,
+			"and nothing is sent back: no STACK, no re-ack");
+	ct_check_eq_u32(g_env.fsm.rx_not_addressed, 3,
+			"each one is counted where an operator can see it");
+	ct_check(strstr(g_env.fake.last_log, "addressed to another station") !=
+		 NULL, "and the console says so");
+
+	rx_seqmsg(&g_env, 2, 0);
+	ct_check_eq_u32(vc->recv_seq, 2,
+			"while our own next message is taken as usual");
+}
+
+/* The adapter's two addresses are this node's own, and the group multicast
+ * is one of them: a multicast HELLO still reaches the channel. */
+static void test_the_group_multicast_still_reaches_the_port(void)
+{
+	uint32_t before;
+
+	printf("-- rd vms-6b1: the group multicast is still this station's\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	before = g_env.fsm.ch[0].hello_rx;
+	rx_hello(&g_env, 0, PE_PFW_MULTICAST, 0);
+	ct_check_eq_u32(g_env.fsm.ch[0].hello_rx, before + 1u,
+			"a multicast HELLO to the group is heard");
+	ct_check_eq_u32(g_env.fsm.rx_not_addressed, 0,
+			"and nothing was refused");
+}
+
 /* The snapshot is a projection of executive state and nothing else: a value
  * never learned stays zero (INV-6). */
 static void test_projection(void)
@@ -2516,6 +2604,8 @@ int main(void)
 	test_last_gasp_closes_without_reforming();
 	test_peer_restart_resets_the_circuit();
 	test_peer_restart_names_its_start();
+	test_a_frame_for_another_station_reaches_no_circuit();
+	test_the_group_multicast_still_reaches_the_port();
 	test_projection();
 	test_projection_down_reason();
 	test_no_table_no_circuits();

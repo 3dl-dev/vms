@@ -173,7 +173,27 @@ export const newObservations = () => ({
   // How many times a panel's console only advanced after it was scrolled into
   // view -- the page defect in rd vms-0bc, counted rather than hidden.
   repaint_stalls: {},
+  // rd vms-bfdd: whether a pcjs node's own node-pcjs.html wrapper ever saw a
+  // sign of life (__nodeState.started) and whether its boot watchdog fired
+  // (an HONEST "this did not start" the visitor can see and retry, not a
+  // silent hang). Populated by the caller from the node-pcjs.html frame, not
+  // from the inner pcjs machine frame (consoleOf reads) -- the watchdog lives
+  // one frame up, specifically so it survives the inner frame never loading.
+  panel_started: {}, panel_watchdog_fired: {},
 });
+
+// A SILENT never-start: the raw console stayed empty (nothing to show a
+// visitor) AND the node's own wrapper never reported a sign of life AND its
+// watchdog never fired to say so. This is the exact defect rd vms-bfdd
+// captured (0-byte console, zero hub frames, 586s, no message to the
+// visitor) -- the one failure the watchdog exists to turn into an HONEST one.
+// A node the matrix never clicked (VAXC in a 2-node check, say) also reads
+// "not started", so this is only meaningful for nodes the caller actually
+// knows were booted; the caller filters by its own click list.
+export function silentNeverStarts(R, pcjsNodes) {
+  return pcjsNodes.filter((w) =>
+    !(R.transcript[w] || '').length && !R.panel_started[w] && !R.panel_watchdog_fired[w]);
+}
 
 // State the outcome in terms of what was OBSERVED, never a diagnosis the
 // evidence does not carry.
@@ -201,6 +221,10 @@ export function verdictOf(R) {
   const stalls = R.repaint_stalls || {};
   if (Object.keys(stalls).length) {
     why.push(`panels that only repainted once revealed: ${JSON.stringify(stalls)} (rd vms-0bc)`);
+  }
+  const silent = silentNeverStarts(R, ['OVMXB', 'VAXC'].filter((w) => w in (R.panel_started || {})));
+  if (silent.length) {
+    why.push(`SILENT never-start (no console, no watchdog): ${silent.join(',')} (rd vms-bfdd)`);
   }
   return `NOT CN=3: ${why.join('; ')}`;
 }

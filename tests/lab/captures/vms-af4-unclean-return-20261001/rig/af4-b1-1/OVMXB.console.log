@@ -1,0 +1,576 @@
+[OVMXB] caps: CapPrm:	00000000a80415fb CapEff:	00000000a80415fb CapBnd:	00000000a80415fb 
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+3EFCAE00+3EF0AE00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [OVMXB] SYSBOOT> reached
+SET SCSNODE OVMXB
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXB
+SYSBOOT> SET SCSSYSTEMID 1988
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1988
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> === OVMXB done ===
+WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-5 - OpenVMS-compatible
+     1-OCT-2026 17:35:53.10
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   17.461585] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   17.467666] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  1-OCT-2026 17:35:54.31
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+[   18.060646] %PEA0, channel verified
+[   18.065168] %PEA0, virtual circuit open
+[   18.496960] %CNXMAN, a connection manager was discovered on the interconnect
+[   18.502012] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   18.520974] %CNXMAN, waiting for the cluster member to send its cluster parameters before asking for admission
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+[   19.584905] %CNXMAN, waiting for connectivity to every cluster member before asking for admission
+[   19.589598] %CNXMAN, waiting to form or join an OpenVMS Cluster
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-5 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: [   21.278842] %PEA0, channel verified
+[   21.279967] %PEA0, virtual circuit open
+[   21.502595] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+
+
+   Welcome to OpenVMX V0.7-5 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-0"
+B36-POLL-OVMXB-0
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:36:06
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-15"
+B36-POLL-OVMXB-15
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:36:21
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-30"
+B36-POLL-OVMXB-30
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:36:36
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ RUN SYS$SYSTEM:CNXTRACE
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=ADMIT failure=none ignored_events=1 recording=yes
+%CNXTRACE-I-COUNT, held=18 recorded=18 dropped=0
+CNXTRACE seq=00000000 t=00018490 kind=DISPATCH state=IDLE->DIR_ROUND ev=START detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000001 t=00018494 kind=DISPATCH state=DIR_ROUND->DIR_ROUND ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000002 t=00018496 kind=DISPATCH state=DIR_ROUND->VC_CONNECT ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000003 t=00018501 kind=ARRIVAL  state=VC_CONNECT->VC_CONNECT ev=- detail=cdt-open rx=- rc=0 aux=0x5cd30006
+CNXTRACE seq=00000004 t=00018503 kind=EMIT     state=ADVERTISE->ADVERTISE ev=- detail=SENT rx=- rc=0 aux=0x5cd30006 cat=0x01 op=0x14
+CNXTRACE seq=00000005 t=00018504 kind=EMIT     state=ADVERTISE->ADVERTISE ev=- detail=SENT rx=- rc=0 aux=0x5cd30006 cat=0x01 op=0x01
+CNXTRACE seq=00000006 t=00018508 kind=DISPATCH state=VC_CONNECT->ADMIT ev=CDT_OPEN detail=fired rx=consumed rc=0 aux=0x5cd30006
+CNXTRACE seq=00000007 t=00019064 kind=DISPATCH state=ADMIT->ADMIT ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00019065
+CNXTRACE seq=00000008 t=00019578 kind=DISPATCH state=ADMIT->ADMIT ev=TIMER_JOIN detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00020596
+CNXTRACE seq=00000009 t=00021485 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=accepted rx=- rc=0 aux=0x000007c5
+CNXTRACE seq=00000010 t=00021486 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=cm-accept rx=- rc=0 aux=0x5cd30007
+CNXTRACE seq=00000011 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=CM_ACCEPTED detail=fired rx=consumed rc=0 aux=0x000007c5
+CNXTRACE seq=00000012 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=CDT_OPEN detail=EMPTY-CELL rx=consumed rc=0 aux=0x5cd30007
+CNXTRACE seq=00000013 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=3 tlast=00021495
+CNXTRACE seq=00000014 t=00021553 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x5cd30007 cat=0x01 op=0x14
+CNXTRACE seq=00000015 t=00021553 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x5cd30007 cat=0x01 op=0x01
+CNXTRACE seq=00000016 t=00021556 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x0000040c
+CNXTRACE seq=00000017 t=00021616 kind=DISPATCH state=ADMIT->ADMIT ev=TIMER_JOIN detail=fired rx=consumed rc=0 aux=0x00000000 rep=43 tlast=00064624
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=0 lockdirwt=0 gen=0 proxy_lkbs=0
+%CNXTRACE-I-DLMREQ, requests sent=0 received=0 grants sent=0 received=0 declined=0
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=0 unparsed=0 foreign=0
+%CNXTRACE-I-DLMRECV, releases received=0 refused=0  blkasts unparsed=0  deferred grants owed=0
+%CNXTRACE-I-DLMPOST, posts queued=0 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=0 refused=0 frames_rx=0 replies_sent=0 declined=0
+%CNXTRACE-I-END, 18 records printed
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-45"
+B36-POLL-OVMXB-45
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:36:59
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-60"
+B36-POLL-OVMXB-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:37:14
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ RUN SYS$SYSTEM:CNXTRACE
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=ADMIT failure=none ignored_events=1 recording=yes
+%CNXTRACE-I-COUNT, held=18 recorded=18 dropped=0
+CNXTRACE seq=00000000 t=00018490 kind=DISPATCH state=IDLE->DIR_ROUND ev=START detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000001 t=00018494 kind=DISPATCH state=DIR_ROUND->DIR_ROUND ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000002 t=00018496 kind=DISPATCH state=DIR_ROUND->VC_CONNECT ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000003 t=00018501 kind=ARRIVAL  state=VC_CONNECT->VC_CONNECT ev=- detail=cdt-open rx=- rc=0 aux=0x5cd30006
+CNXTRACE seq=00000004 t=00018503 kind=EMIT     state=ADVERTISE->ADVERTISE ev=- detail=SENT rx=- rc=0 aux=0x5cd30006 cat=0x01 op=0x14
+CNXTRACE seq=00000005 t=00018504 kind=EMIT     state=ADVERTISE->ADVERTISE ev=- detail=SENT rx=- rc=0 aux=0x5cd30006 cat=0x01 op=0x01
+CNXTRACE seq=00000006 t=00018508 kind=DISPATCH state=VC_CONNECT->ADMIT ev=CDT_OPEN detail=fired rx=consumed rc=0 aux=0x5cd30006
+CNXTRACE seq=00000007 t=00019064 kind=DISPATCH state=ADMIT->ADMIT ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00019065
+CNXTRACE seq=00000008 t=00019578 kind=DISPATCH state=ADMIT->ADMIT ev=TIMER_JOIN detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00020596
+CNXTRACE seq=00000009 t=00021485 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=accepted rx=- rc=0 aux=0x000007c5
+CNXTRACE seq=00000010 t=00021486 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=cm-accept rx=- rc=0 aux=0x5cd30007
+CNXTRACE seq=00000011 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=CM_ACCEPTED detail=fired rx=consumed rc=0 aux=0x000007c5
+CNXTRACE seq=00000012 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=CDT_OPEN detail=EMPTY-CELL rx=consumed rc=0 aux=0x5cd30007
+CNXTRACE seq=00000013 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=3 tlast=00021495
+CNXTRACE seq=00000014 t=00021553 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x5cd30007 cat=0x01 op=0x14
+CNXTRACE seq=00000015 t=00021553 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x5cd30007 cat=0x01 op=0x01
+CNXTRACE seq=00000016 t=00021556 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x0000040c
+CNXTRACE seq=00000017 t=00021616 kind=DISPATCH state=ADMIT->ADMIT ev=TIMER_JOIN detail=fired rx=consumed rc=0 aux=0x00000000 rep=80 tlast=00102512
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=0 lockdirwt=0 gen=0 proxy_lkbs=0
+%CNXTRACE-I-DLMREQ, requests sent=0 received=0 grants sent=0 received=0 declined=0
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=0 unparsed=0 foreign=0
+%CNXTRACE-I-DLMRECV, releases received=0 refused=0  blkasts unparsed=0  deferred grants owed=0
+%CNXTRACE-I-DLMPOST, posts queued=0 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=0 refused=0 frames_rx=0 replies_sent=0 declined=0
+%CNXTRACE-I-END, 18 records printed
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-75"
+B36-POLL-OVMXB-75
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:37:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-90"
+B36-POLL-OVMXB-90
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:37:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-105"
+B36-POLL-OVMXB-105
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:38:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-120"
+B36-POLL-OVMXB-120
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:38:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ RUN SYS$SYSTEM:CNXTRACE
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=ADMIT failure=none ignored_events=1 recording=yes
+%CNXTRACE-I-COUNT, held=18 recorded=18 dropped=0
+CNXTRACE seq=00000000 t=00018490 kind=DISPATCH state=IDLE->DIR_ROUND ev=START detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000001 t=00018494 kind=DISPATCH state=DIR_ROUND->DIR_ROUND ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000002 t=00018496 kind=DISPATCH state=DIR_ROUND->VC_CONNECT ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000003 t=00018501 kind=ARRIVAL  state=VC_CONNECT->VC_CONNECT ev=- detail=cdt-open rx=- rc=0 aux=0x5cd30006
+CNXTRACE seq=00000004 t=00018503 kind=EMIT     state=ADVERTISE->ADVERTISE ev=- detail=SENT rx=- rc=0 aux=0x5cd30006 cat=0x01 op=0x14
+CNXTRACE seq=00000005 t=00018504 kind=EMIT     state=ADVERTISE->ADVERTISE ev=- detail=SENT rx=- rc=0 aux=0x5cd30006 cat=0x01 op=0x01
+CNXTRACE seq=00000006 t=00018508 kind=DISPATCH state=VC_CONNECT->ADMIT ev=CDT_OPEN detail=fired rx=consumed rc=0 aux=0x5cd30006
+CNXTRACE seq=00000007 t=00019064 kind=DISPATCH state=ADMIT->ADMIT ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00019065
+CNXTRACE seq=00000008 t=00019578 kind=DISPATCH state=ADMIT->ADMIT ev=TIMER_JOIN detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00020596
+CNXTRACE seq=00000009 t=00021485 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=accepted rx=- rc=0 aux=0x000007c5
+CNXTRACE seq=00000010 t=00021486 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=cm-accept rx=- rc=0 aux=0x5cd30007
+CNXTRACE seq=00000011 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=CM_ACCEPTED detail=fired rx=consumed rc=0 aux=0x000007c5
+CNXTRACE seq=00000012 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=CDT_OPEN detail=EMPTY-CELL rx=consumed rc=0 aux=0x5cd30007
+CNXTRACE seq=00000013 t=00021495 kind=DISPATCH state=ADMIT->ADMIT ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=3 tlast=00021495
+CNXTRACE seq=00000014 t=00021553 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x5cd30007 cat=0x01 op=0x14
+CNXTRACE seq=00000015 t=00021553 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x5cd30007 cat=0x01 op=0x01
+CNXTRACE seq=00000016 t=00021556 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x0000040c
+CNXTRACE seq=00000017 t=00021616 kind=DISPATCH state=ADMIT->ADMIT ev=TIMER_JOIN detail=fired rx=consumed rc=0 aux=0x00000000 rep=147 tlast=00171120
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=0 lockdirwt=0 gen=0 proxy_lkbs=0
+%CNXTRACE-I-DLMREQ, requests sent=0 received=0 grants sent=0 received=0 declined=0
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=0 unparsed=0 foreign=0
+%CNXTRACE-I-DLMRECV, releases received=0 refused=0  blkasts unparsed=0  deferred grants owed=0
+%CNXTRACE-I-DLMPOST, posts queued=0 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=0 refused=0 frames_rx=0 replies_sent=0 declined=0
+%CNXTRACE-I-END, 18 records printed
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-135"
+B36-POLL-OVMXB-135
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:38:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-150"
+B36-POLL-OVMXB-150
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:39:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-165"
+B36-POLL-OVMXB-165
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:39:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-180"
+B36-POLL-OVMXB-180
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:39:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-195"
+B36-POLL-OVMXB-195
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:39:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-210"
+B36-POLL-OVMXB-210
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:40:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-225"
+B36-POLL-OVMXB-225
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:40:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-240"
+B36-POLL-OVMXB-240
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:40:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-255"
+B36-POLL-OVMXB-255
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:40:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-270"
+B36-POLL-OVMXB-270
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:41:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-285"
+B36-POLL-OVMXB-285
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:41:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-300"
+B36-POLL-OVMXB-300
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:41:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-315"
+B36-POLL-OVMXB-315
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:41:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-330"
+B36-POLL-OVMXB-330
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:42:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-345"
+B36-POLL-OVMXB-345
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:42:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-360"
+B36-POLL-OVMXB-360
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:42:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-375"
+B36-POLL-OVMXB-375
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:42:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-390"
+B36-POLL-OVMXB-390
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:43:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-405"
+B36-POLL-OVMXB-405
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:43:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-420"
+B36-POLL-OVMXB-420
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:43:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-435"
+B36-POLL-OVMXB-435
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    01-OCT-2026 17:43:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ 

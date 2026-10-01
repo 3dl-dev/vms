@@ -1,0 +1,48 @@
+
+%NIC-CFG, initramfs=nodeA/initramfs-ovmx-nodeA.cpio.gz sysdisk=nodeA/sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFD0EE0+0EF30EE0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-5 - OpenVMS-compatible
+     1-OCT-2026 17:26:01.79
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   57.059705] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   57.108780] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  1-OCT-2026 17:26:32.23
+[   57.673025] %PEA0, channel verified
+[   57.812305] %PEA0, virtual circuit open
+[   58.187165] %CNXMAN, a connection manager was discovered on the interconnect
+[   58.207210] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   58.532080] %CNXMAN, waiting for the cluster member to send its cluster parameters before asking for admission
+[   59.223975] %PEA0, channel verified
+[   59.252190] %PEA0, virtual circuit open
+[   59.276645] %CNXMAN, a connection manager was discovered on the interconnect
+[   59.573800] %CNXMAN, waiting for connectivity to every cluster member before asking for admission
+[   59.588135] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   59.618315] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   61.691120] %CNXMAN, sending VAXcluster membership request to the selected member
+[   61.788185] %CNXMAN, the cluster assigned this node a cluster system id
+[   61.828815] %CNXMAN, the cluster assigned this node a cluster system id
+[   61.868645] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   63.760240] %CNXMAN, this node is a member of the cluster
+[   63.768100] %CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+[   63.803935] %CNXMAN, VAXcluster state transition in progress
+[   63.810270] %CNXMAN, this node is now a VAXcluster member
+[   63.824990] %CNXMAN, system 00000000000007c3 was added to the cluster
+[   63.835320] %CNXMAN, system 00000000000007c4 was added to the cluster
+[   63.843055] %CNXMAN, system 00000000000007c5 was added to the cluster
+[   64.568410] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   66.000100] %CNXMAN, completed VAXcluster state transition

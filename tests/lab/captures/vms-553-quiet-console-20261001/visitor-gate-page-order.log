@@ -1,0 +1,11 @@
+[19:18:19] === run 1/1: page-order (order A,B,C, gap 5000ms, cpu x1) ===
+[19:18:34]   t=15s vis=visible drift=37ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[19:18:49]   t=30s vis=visible drift=37ms sca={"VAXC":9} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[19:19:04]   t=45s vis=visible drift=37ms sca={"VAXC":25} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[19:19:19]   t=60s vis=visible drift=37ms sca={"VAXC":607,"OVMXA":853,"OVMXB":128} added={"OVMXA":["0x7c3","0x7c5"],"OVMXB":[],"VAXC":[]} vaxcAdm=["OVMXA"] lost={} stalls={}
+[19:19:34]   t=75s vis=visible drift=37ms sca={"VAXC":1228,"OVMXA":1149,"OVMXB":884} added={"OVMXA":["0x7c3","0x7c5","0x7c4"],"OVMXB":["0x7c4","0x7c3","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXA","OVMXB"] lost={} stalls={}
+[19:19:35] --> page-order: CN=3
+
+PASS  page-order               CN=3
+
+VISITOR_GATE={"runs":1,"failed":0,"pass":true,"silent_never_starts":0}

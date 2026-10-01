@@ -1821,17 +1821,11 @@ int main(void)
      * invocation of this binary is still OVMX/Linux underneath regardless
      * of PID.
      *
-     * NOT on the NetBSD SYSKRNL (rd vms-553, operator ruling 2026-10-01):
-     * the OpenVMX/VAX console shows the VMS personality and no NetBSD boot
-     * output, done at the source -- the OVMX_QUIET kernel keeps its own
-     * banner off the console, and so does this. The substrate identity is not
-     * lost: the kernel's own banner ("NetBSD 10.1 (OVMX) ...") is in dmesg,
-     * and ovmx_syskrnl_banner() still names it for every other surface.
+     * WHERE it is announced is the backend's call (rd vms-553): the console
+     * on Linux, the kernel message buffer on NetBSD -- see
+     * ovmx_boot_announce_syskrnl().
      */
-#if !defined(__NetBSD__)
-    printf("%s\n", ovmx_syskrnl_banner());
-    fflush(stdout);
-#endif
+    ovmx_boot_announce_syskrnl(ovmx_syskrnl_banner());
 
     /* If we are PID 1 on bare metal (a fresh kernel whose base filesystems
      * are not yet mounted), set up the substrate plumbing. */

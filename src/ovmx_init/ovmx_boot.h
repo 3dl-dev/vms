@@ -151,6 +151,20 @@ void ovmx_boot_start_console_log_bridge(void);
 void ovmx_boot_mute_kernel_console(void);
 
 /*
+ * ovmx_boot_announce_syskrnl - announce the SYSKRNL identity line
+ * (ovmx_syskrnl_banner()) at the start of boot.
+ *
+ * Linux: on the console, as it always has been. NetBSD (rd vms-553, operator
+ * ruling 2026-10-01): NOT on the console -- the OpenVMX/VAX console shows the
+ * VMS personality and no NetBSD boot output, done at the source (the
+ * OVMX_QUIET kernel keeps its own boot off the console too), so this prints
+ * nothing there. The substrate identity is not lost: the kernel's own banner
+ * ("NetBSD 10.1 (OVMX) #n ...") is in the message buffer (dmesg), and
+ * ovmx_syskrnl_banner() still names it for every other surface.
+ */
+void ovmx_boot_announce_syskrnl(const char *banner);
+
+/*
  * ovmx_boot_load_module - load an OVMX executive/filesystem kernel module by
  * LOGICAL name ("vms" for the executive, "vmsfs" for the filesystem). Returns
  * 0 on success; -1 with errno set otherwise. The caller decides whether a

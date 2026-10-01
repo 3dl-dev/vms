@@ -161,16 +161,18 @@ static const struct sysgen_param default_params[] = {
       .min_val = 0, .max_val = 32767, .flags = SYSGEN_F_DYNAMIC,
       .description = "Quorum disk votes (0 = no quorum disk configured)",
       .type = SYSGEN_TYPE_NUMERIC },
-    /* TIMVCFAIL / CLUSTER_CREDITS: OVMX's OWN defaults for a port whose
-     * SYSGEN value has not been loaded -- see vms_pe_fsm.h's
-     * PE_TIMVCFAIL_DEFAULT_MS (16000 ms == 1600 here, the lab's captured
-     * TIMVCFAIL in its own SYSGEN unit) and the same comment's "CLUSTER_
-     * CREDITS, 10 in the lab". Neither is a published VMS constant; both are
-     * disclosed here as OVMX choices, matching the lab's own values so an
-     * unconfigured store and a captured configuration agree. */
+    /* CLUSTER_CREDITS: OVMX's OWN default for a port whose SYSGEN value has
+     * not been loaded -- vms_pe_fsm.h's "CLUSTER_CREDITS, 10 in the lab". Not
+     * a published VMS constant; disclosed here as an OVMX choice matching the
+     * lab's own value so an unconfigured store and a captured configuration
+     * agree. */
+    /* TIMVCFAIL: GROUNDED (rd vms-b98) by SYSGEN SHOW TIMVCFAIL on a real
+     * OpenVMS VAX V7.3, which prints current 1600, default 1600, min 100,
+     * max 65535, unit "10Ms", dynamic. The executive converts the 10 ms unit
+     * (cluster_sysgen_timvcfail_ms) and the port runs on the loaded value. */
     { .name = "TIMVCFAIL", .current = 1600, .default_val = 1600,
-      .min_val = 1, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
-      .description = "Virtual circuit failure detection time (OVMX default; see vms_pe_fsm.h)",
+      .min_val = 100, .max_val = 65535, .flags = SYSGEN_F_DYNAMIC,
+      .description = "Virtual circuit failure detection time, 10 ms units",
       .type = SYSGEN_TYPE_NUMERIC },
     { .name = "CLUSTER_CREDITS",
       .current = SYSGEN_DEFAULT_CLUSTER_CREDITS,

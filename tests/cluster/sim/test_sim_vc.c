@@ -313,7 +313,10 @@ static const struct sim_step steps_retransmit[] = {
 			"the message consumed sequence 1, exactly once"),
 	SIM_EXPECT_PAIR(SIM_CMP_EQ, "OVMXA", "OVMXB", SIM_M_UNACKED, 1,
 			"and it is held in the unacked ring"),
-	SIM_RUN(9000),
+	/* Shorter than the listen timeout (8 s, the real port's measured
+	 * constant -- rd vms-b98): B hears nothing from A for this long, and
+	 * this scenario is about the retransmit, not about B giving up. */
+	SIM_RUN(6000),
 	SIM_EXPECT_PAIR(SIM_CMP_GE, "OVMXA", "OVMXB", SIM_M_RETRANSMITS, 2,
 			"the ladder re-sent it while the wire swallowed it"),
 	SIM_EXPECT_PAIR(SIM_CMP_EQ, "OVMXA", "OVMXB", SIM_M_SEND_SEQ, 2,

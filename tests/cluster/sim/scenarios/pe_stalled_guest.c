@@ -77,9 +77,10 @@ static const struct sim_node_decl pair[] = {
 
 /*
  * THE STALL IS LONGER THAN THE LISTEN TIMEOUT (PE_LISTEN_TIMEOUT_DEFAULT_MS is
- * 20 s, the HELLO cadence 2 s), which is the case the field failure is: the
- * deadline expired while the node was not running, and roughly a dozen of the
- * peer's HELLOs were waiting for it when it came back.
+ * 8 s, the oracle's measured port constant -- rd vms-b98; the HELLO cadence
+ * 2 s), which is the case the field failure is: the deadline expired while the
+ * node was not running, and roughly a dozen of the peer's HELLOs were waiting
+ * for it when it came back.
  */
 static const struct sim_step steps[] = {
 	SIM_UNTIL_ALL_VCS_OPEN(120000),

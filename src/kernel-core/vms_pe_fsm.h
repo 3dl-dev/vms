@@ -170,21 +170,27 @@
  * The HELLO cadence. SS4(q) measures the steady-state cadence of a real member
  * at ~2.3 s and names keeping it an ongoing membership obligation; SS4(M)
  * measures the longest silence any healthy node showed in 747 s of captured
- * wire at 3.153 s. 2000 ms sits under both, so an OVMX node is never the
- * quietest thing on the LAN. OVMX's choice, not a published VMS parameter.
+ * wire at 3.153 s, and rd vms-b98's oracle (a real V7.3 pair, 328 multicast
+ * HELLO intervals) 1.539 s min / 2.250 s median / 3.162 s max. 2000 ms sits
+ * inside that range. No SYSGEN parameter names the cadence on V7.3.
  */
 #define PE_HELLO_INTERVAL_DEFAULT_MS 2000u
 
 /*
  * The listen timeout: how long a channel may hear nothing before this node
- * declares it gone. SS4(M) grounds the two populations -- healthy silence never
- * exceeded 3.153 s, a real departure showed 395.955 s, and they do not overlap.
- * The default is RECNXINTERVAL seconds (20 in the lab), 6.3x the longest healthy
- * silence and 20x under the observed departure. Again OVMX's choice: SS4(M) is
- * explicit that RECNXINTERVAL governs removal AFTER a circuit breaks, not the
- * timer that breaks it, and no published document names this one.
+ * declares it gone. MEASURED, rd vms-b98 (SS4(M);
+ * tests/lab/captures/vms-b98-pe-listen-timeout-20261001): a real OpenVMS VAX
+ * V7.3 closes the virtual circuit 8.15-9.30 s after the last frame it heard
+ * from the peer (n = 24, both directions, two fault methods, mean 8.80 s) --
+ * an 8 s threshold checked on the port's own periodic tick. OVMX checks its
+ * deadline on the HELLO beat and on every receive (pe_channel_expire_if_due),
+ * so its own closure lands 8-10 s after the last frame.
+ *
+ * NOT A SYSGEN PARAMETER, MEASURED: V7.3's SYSGEN names none; SCACP and SDA
+ * show no value; PE4 = 20 on one node left its closure where it was. It is a
+ * port constant there and a port constant here.
  */
-#define PE_LISTEN_TIMEOUT_DEFAULT_MS 20000u
+#define PE_LISTEN_TIMEOUT_DEFAULT_MS 8000u
 
 /*
  * The size-probe retransmit interval. GROUNDED: 6.010 s +- 0.15 across 24/24
@@ -459,11 +465,11 @@ enum pe_channel_action {
 
 /*
  * TIMVCFAIL: "the time required for an SCS virtual circuit failure to be
- * detected". A SYSGEN parameter; the glue converts it out of its SYSGEN unit
- * and puts milliseconds in pe_identity, so this FSM never does unit
- * arithmetic. The default below is OVMX's own choice for a port whose
- * SYSGEN value has not been loaded -- it is NOT a published VMS constant --
- * and it is the lab's TIMVCFAIL 1600 read as centiseconds.
+ * detected". A SYSGEN parameter; the glue converts it out of its 10 ms SYSGEN
+ * unit (cluster_sysgen_timvcfail_ms) and puts milliseconds in pe_identity, so
+ * this FSM never does unit arithmetic. The default below is used only by a
+ * port whose parameters were never loaded: V7.3's own default, 1600 x 10 ms
+ * (SYSGEN SHOW TIMVCFAIL on a real V7.3: "1600 1600 100 65535 10Ms D").
  */
 #define PE_TIMVCFAIL_DEFAULT_MS 16000u
 
@@ -956,7 +962,9 @@ struct pe_identity {
 	 */
 	uint16_t max_sca_len;
 
-	/* 0 selects the documented default above. A SYSGEN value always wins. */
+	/* 0 selects the measured defaults above. Neither is a SYSGEN parameter
+	 * on V7.3 (rd vms-b98); the fields exist so a test or the simulator can
+	 * run the port on its own clock. */
 	uint32_t hello_interval_ms;
 	uint32_t listen_timeout_ms;
 

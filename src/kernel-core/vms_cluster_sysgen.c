@@ -82,3 +82,13 @@ uint8_t cluster_sysgen_depart_from_wire(uint8_t clean_depart_off)
 {
 	return clean_depart_off != 0u ? 0u : 1u;
 }
+
+/* TIMVCFAIL's SYSGEN unit is 10 ms (see vms_cluster_sysgen.h). */
+#define CLUSTER_TIMVCFAIL_UNIT_MS 10u
+
+uint32_t cluster_sysgen_timvcfail_ms(const struct vms_cluster *cl)
+{
+	if (cl == NULL || !cl->params_valid)
+		return 0u;
+	return (uint32_t)cl->params.timvcfail * CLUSTER_TIMVCFAIL_UNIT_MS;
+}

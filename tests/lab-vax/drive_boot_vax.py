@@ -418,8 +418,10 @@ def do_kernel_quiet(a, boot_deadline, cmd_timeout):
         hits = substrate_lines(boot_text)
         child.send("\n")
         child.expect(r"# ")
+        # Root stays read-only (this is the SHARED disk); the console helper
+        # needs a writable /tmp, so give it a tmpfs rather than remounting /.
         child.sendline("PATH=/sbin:/bin:/usr/sbin:/usr/bin; export PATH; "
-                       "stty -echo 2>/dev/null; true")
+                       "stty -echo 2>/dev/null; mount_tmpfs tmpfs /tmp; true")
         child.expect(r"# ")
         con = console(child)
         con.set_unique_prompt()

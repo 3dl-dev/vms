@@ -209,16 +209,32 @@ cross_build() {
     || die "cross-build missing artifacts"
 }
 
-# 2. build (or reuse) the custom MODULAR kernel, cached as ARTIFACTS_DIR/netbsd-OVMX.
+# rd vms-553: the identity of the kernel + /boot this checkout builds -- the
+# build script and the OVMX_QUIET source patch it applies. A cached netbsd-OVMX
+# (or an installed one) whose stamp differs is STALE and is rebuilt/reinstalled:
+# the kernel is otherwise cached on the artifact FILE alone, which is how a
+# patched-kernel experiment once silently booted the old kernel (rd vms-bcd).
+KERNEL_STAMP="$(cat "${REPO}/tools/cross-vax/build-vax-modular-kernel.sh" \
+                    "${REPO}/tools/cross-vax/netbsd-ovmx-quiet.patch" | sha256sum | cut -c1-16)"
+
+# 2. build (or reuse) the custom MODULAR kernel, cached as ARTIFACTS_DIR/netbsd-OVMX
+#    (+ the OVMX_QUIET secondary bootstrap boot-OVMX, rd vms-553).
+kernel_artifacts_current() {   # <dir>
+  [ -f "$1/netbsd-OVMX" ] && [ -f "$1/boot-OVMX" ] \
+    && [ "$(cat "$1/netbsd-OVMX.stamp" 2>/dev/null)" = "${KERNEL_STAMP}" ]
+}
 build_kernel() {
-  if [ -f "${ARTIFACTS_DIR}/netbsd-OVMX" ]; then
-    log "MODULAR kernel artifact present -- NOT rebuilding"; return 0; fi
-  # Reuse a sibling's already-built kernel if present (same build script/pin).
-  for sib in "${CACHE_DIR}/vmsfs-artifacts/netbsd-OVMX" "${CACHE_DIR}/devvms-artifacts/netbsd-OVMX"; do
-    if [ -f "${sib}" ]; then
-      log "reusing sibling MODULAR kernel: ${sib}"
-      mkdir -p "${ARTIFACTS_DIR}"; cp "${sib}" "${ARTIFACTS_DIR}/netbsd-OVMX"; return 0; fi
+  if kernel_artifacts_current "${ARTIFACTS_DIR}"; then
+    log "MODULAR kernel artifact present (stamp ${KERNEL_STAMP}) -- NOT rebuilding"; return 0; fi
+  # Reuse a sibling's already-built kernel if present AND built from the same inputs.
+  for sib in "${CACHE_DIR}/vmsfs-artifacts" "${CACHE_DIR}/devvms-artifacts"; do
+    if kernel_artifacts_current "${sib}"; then
+      log "reusing sibling MODULAR kernel: ${sib}/netbsd-OVMX"
+      mkdir -p "${ARTIFACTS_DIR}"
+      cp "${sib}/netbsd-OVMX" "${sib}/boot-OVMX" "${sib}/netbsd-OVMX.stamp" "${ARTIFACTS_DIR}/"
+      return 0; fi
   done
+  rm -f "${ARTIFACTS_DIR}/netbsd-OVMX" "${ARTIFACTS_DIR}/boot-OVMX" "${ARTIFACTS_DIR}/netbsd-OVMX.stamp"
   ensure_src
   mkdir -p "${KBUILD_DIR}/obj" "${KBUILD_DIR}/tools" "${KBUILD_DIR}/dest" "${ARTIFACTS_DIR}"
   log "building the GENERIC+MODULAR NetBSD/vax kernel (build.sh; hard cap ${KBUILD_TIMEOUT}s)"
@@ -233,6 +249,8 @@ build_kernel() {
   rc=$?; set -e
   [ "${rc}" -eq 0 ] || { docker kill "${cid}" >/dev/null 2>&1 || true; die "kernel build failed/timed out (rc=${rc})"; }
   [ -f "${ARTIFACTS_DIR}/netbsd-OVMX" ] || die "kernel build finished but netbsd-OVMX missing"
+  [ -f "${ARTIFACTS_DIR}/boot-OVMX" ] || die "kernel build finished but boot-OVMX (quiet /boot) missing"
+  echo "${KERNEL_STAMP}" > "${ARTIFACTS_DIR}/netbsd-OVMX.stamp"
 }
 
 # 3. master a small GENUINE ODS-2 volume (host cc; arch-independent). Cached/shared.
@@ -637,11 +655,13 @@ run_acceptance() {
 
 # 5. swap the MODULAR kernel onto the SHARED disk (shared marker).
 ensure_modular_kernel() {
-  if [ -f "${KERNEL_MARKER}" ]; then
-    log "MODULAR kernel already installed on the shared disk -- skipping"; return 0; fi
-  log "installing the MODULAR kernel onto the shared disk (boot GENERIC single-user)"
+  if [ "$(cat "${KERNEL_MARKER}" 2>/dev/null)" = "${KERNEL_STAMP}" ]; then
+    log "MODULAR kernel (stamp ${KERNEL_STAMP}) already installed on the shared disk -- skipping"; return 0; fi
+  log "installing the MODULAR+OVMX_QUIET kernel and quiet /boot onto the shared disk (boot single-user)"
   run_session install-kernel /cache/anita-work || die "MODULAR-kernel install session failed"
-  touch "${KERNEL_MARKER}"
+  echo "${KERNEL_STAMP}" > "${KERNEL_MARKER}"
+  # Everything cloned from the shared disk before this carries the OLD kernel.
+  rm -f "${BOOT_COPY_MARKER}" "${BOOT_INSTALL_MARKER}"
 }
 
 # 6. clone the shared (MODULAR-kernel) disk to an ISOLATED boot-work copy.
@@ -958,6 +978,18 @@ case "${MODE}" in
     fi
     die "GATE FAILED (vms-065) -- see console output above"
     ;;
+  kernel-quiet)
+    # rd vms-553: boot the shared disk (stock init -> a single-user shell) on the
+    # installed OVMX_QUIET kernel + quiet /boot and assert BOTH halves: the RAW
+    # console from the KA655 >>> to the shell prompt carries no NetBSD substrate
+    # output, AND dmesg still holds every kernel boot line.
+    #   tests/lab-vax/run-boot.sh kernel-quiet
+    if run_session kernel-quiet /cache/anita-work; then
+      log "KERNEL-QUIET PASSED (rd vms-553): quiet console, complete dmesg"
+      exit 0
+    fi
+    die "KERNEL-QUIET FAILED (rd vms-553) -- see console output above"
+    ;;
   sysboot-single)
     # vms-7b15: the SLIM SINGLE-disk proof. Build the mastered ODS-2 SYSTEM
     # volume (same as two-disk sysboot), assemble ONE slim disk that carries both
@@ -996,5 +1028,5 @@ case "${MODE}" in
     run_install && exit 0
     exit 1
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | acceptance | gate | install)" ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install)" ;;
 esac

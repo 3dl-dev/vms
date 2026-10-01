@@ -50,6 +50,12 @@
 #include <sys/syscall.h>
 #include <sys/reboot.h>
 
+void ovmx_boot_announce_syskrnl(const char *banner)
+{
+    printf("%s\n", banner);
+    fflush(stdout);
+}
+
 /* The Linux host path for the DEFAULT system/boot disk (vda) -- the fallback
  * when boot discovery selects no other unit; ovmx_boot_system_disk_dev() derives
  * the actual node from the discovered unit (vms-9f5, boot_sysdev_dev below). The

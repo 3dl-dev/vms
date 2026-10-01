@@ -1,0 +1,39 @@
+--- RAW console, power-on to /Username:/ (988 chars) ---
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B/R5:2 DUA0
+(BOOT/R5:2 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-5 - OpenVMS-compatible
+     1-JAN-2010 12:07:54.60
+
+%OVMX-I-SYSDISK, mounting system disk DUA0:
+%OVMX-I-MOUNTED, system disk DUA0: mounted
+%OVMX-I-SCSNODE, node name OVMX set from SYS$SYSTEM:OVMXVMSSYS.PAR
+%STDRV-I-STARTUP, OpenVMX startup begun at  1-JAN-2010 12:09:05.80
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+%OVMX-I-STARTUP, handing SYS$MANAGER:STARTUP.COM to DCL for ACP resolution
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 0000006A
+
+ Welcome to the OpenVMX VAX Operating System, Version V0.7-5 (OpenVMS-compatible)
+
+
+
+---
+PASS  no NetBSD substrate output on the RAW console
+single rc=0

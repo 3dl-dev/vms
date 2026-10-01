@@ -1,0 +1,182 @@
+--- a/sys/arch/vax/boot/boot/Makefile
++++ b/sys/arch/vax/boot/boot/Makefile
+@@ -20,6 +20,9 @@
+ CPPFLAGS+=-DSUPPORT_BOOTPARAMS -DSUPPORT_BOOTP -DSUPPORT_DHCP -D_STANDALONE \
+ 	-DNO_MID_CHECK
+ CPPFLAGS+=-DLIBSA_CREAD_NOCRC
++.if defined(OVMX_QUIET)
++CPPFLAGS+=-DOVMX_QUIET	# OpenVMX: silent autoboot (rd vms-553)
++.endif
+ #CPPFLAGS+=-DBOOTP_DEBUG -DNETIF_DEBUG -DETHER_DEBUG -DNFS_DEBUG -DDEV_DEBUG \
+ #	-DRPC_DEBUG -DRARP_DEBUG -DPARANOID
+ BINDIR=	
+--- a/sys/arch/vax/boot/boot/boot.c
++++ b/sys/arch/vax/boot/boot/boot.c
+@@ -101,6 +101,16 @@
+ 	autoconf();
+ 
+ 	askname = bootrpb.rpb_bootr5 & RB_ASKNAME;
++#ifdef OVMX_QUIET
++	/*
++	 * OpenVMX (rd vms-553): an unattended autoboot prints nothing; the
++	 * console belongs to the VMS personality the kernel will start.  A key
++	 * pressed during the countdown, RB_ASKNAME, or a failed autoboot all
++	 * restore the normal, talkative loader before it prompts.
++	 */
++	boot_quiet = (askname == 0 &&
++	    (bootrpb.rpb_bootr5 & (AB_VERBOSE|AB_DEBUG)) == 0);
++#endif
+ 	printf("\n\r>> NetBSD/vax boot [%s] <<\n", bootprog_rev);
+ 	printf(">> Press any key to abort autoboot  ");
+ 	sluttid = getsecs() + 5;
+@@ -116,6 +126,13 @@
+ 		senast = nu;
+ 		if ((j = (testkey() & 0177))) {
+ 			skip = 1;
++#ifdef OVMX_QUIET
++			if (boot_quiet) {
++				boot_quiet = 0;
++				printf("\n>> NetBSD/vax boot [%s] <<",
++				    bootprog_rev);
++			}
++#endif
+ 			if (j != 10 && j != 13) {
+ 				printf("\nPress '?' for help");
+ 				askname = 1;
+@@ -157,6 +174,13 @@
+ 		}
+ 	}
+ 
++#ifdef OVMX_QUIET
++	if (boot_quiet) {
++		boot_quiet = 0;
++		printf("\n>> NetBSD/vax boot [%s] <<\n", bootprog_rev);
++		printf("autoboot failed: no loadable kernel\n");
++	}
++#endif
+ 	/* If any key pressed, go to conversational boot */
+ 	for (;;) {
+ 		const struct vals *v = &val[0];
+--- a/sys/arch/vax/boot/boot/consio.c
++++ b/sys/arch/vax/boot/boot/consio.c
+@@ -85,9 +85,17 @@
+ void consinit(void);
+ void _rtt(void);
+ 
++#ifdef OVMX_QUIET
++int boot_quiet;		/* OpenVMX: suppress output during autoboot */
++#endif
++
+ void
+ putchar(int c)
+ {
++#ifdef OVMX_QUIET
++	if (boot_quiet)
++		return;
++#endif
+ 	(*put_fp)(c);
+ 	if (c == 10)
+ 		(*put_fp)(13);		/* CR/LF */
+--- a/sys/arch/vax/boot/boot/vaxstand.h
++++ b/sys/arch/vax/boot/boot/vaxstand.h
+@@ -26,6 +26,9 @@
+ 
+ /* Variables used in autoconf */
+ extern int askname;
++#ifdef OVMX_QUIET
++extern int boot_quiet;
++#endif
+ extern struct rpb bootrpb;
+ extern int csrbase, nexaddr;
+ 
+--- a/sys/arch/vax/vax/machdep.c
++++ b/sys/arch/vax/vax/machdep.c
+@@ -86,6 +86,7 @@
+ __KERNEL_RCSID(0, "$NetBSD: machdep.c,v 1.196.20.3 2024/06/17 16:48:57 martin Exp $");
+ 
+ #include "opt_ddb.h"
++#include "opt_param.h"	/* MSGBUFSIZE (OVMX, rd vms-553) */
+ #include "opt_compat_netbsd.h"
+ #include "opt_compat_ultrix.h"
+ #include "opt_modular.h"
+--- a/sys/arch/vax/vax/pmap.c
++++ b/sys/arch/vax/vax/pmap.c
+@@ -28,6 +28,7 @@
+ __KERNEL_RCSID(0, "$NetBSD: pmap.c,v 1.195.2.3 2023/12/23 13:08:50 martin Exp $");
+ 
+ #include "opt_ddb.h"
++#include "opt_param.h"	/* MSGBUFSIZE (OVMX, rd vms-553) */
+ #include "opt_cputype.h"
+ #include "opt_modular.h"
+ #include "opt_multiprocessor.h"
+--- a/sys/kern/kern_subr.c
++++ b/sys/kern/kern_subr.c
+@@ -328,6 +328,12 @@
+ 	int len;
+ 	char buf[128];
+ 
++#ifdef OVMX_QUIET
++	/* The kernel is about to ask the operator a question: unquiet. */
++	extern int ovmx_quiet_console;
++	ovmx_quiet_console = 0;
++#endif
++
+ 	for (;;) {
+ 		printf("root device");
+ 		if (bootdv != NULL) {
+--- a/sys/kern/subr_prf.c
++++ b/sys/kern/subr_prf.c
+@@ -127,6 +127,31 @@
+  */
+ 
+ void (*v_putc)(int) = cnputc;	/* start with cnputc (normal cons) */
++
++#ifdef OVMX_QUIET
++/*
++ * OVMX_QUIET (OpenVMX, rd vms-553): the console of an OpenVMX/VAX system
++ * belongs to the VMS personality, so this kernel does not print its own
++ * boot and run-time chatter there.  Every kernel message still goes to the
++ * message buffer (dmesg) exactly as before -- nothing is dropped, it is only
++ * not echoed to the console.  The console still receives:
++ *   - everything once panicstr is set (panics, and what follows them);
++ *   - lines printed with TOCONSOP (the OpenVMX executive's operator lines);
++ *   - everything, when booted verbose or debug (AB_VERBOSE / AB_DEBUG), or
++ *     when the kernel has to ask the operator something (RB_ASKNAME,
++ *     RB_USERCONF, or setroot_ask() clearing ovmx_quiet_console).
++ * ddb writes the console through cnputc() directly and is never gated.
++ */
++int ovmx_quiet_console = 1;
++
++static inline bool
++ovmx_console_is_quiet(int flags)
++{
++	if (!ovmx_quiet_console || panicstr != NULL || (flags & TOCONSOP))
++		return false;
++	return (boothowto & (AB_VERBOSE|AB_DEBUG|RB_ASKNAME|RB_USERCONF)) == 0;
++}
++#endif /* OVMX_QUIET */
+ void (*v_flush)(void) = cnflush;	/* start with cnflush (normal cons) */
+ 
+ const char hexdigits[] = "0123456789abcdef";
+@@ -415,6 +440,11 @@
+ 	if (panicstr)
+ 		atomic_store_relaxed(&constty, NULL);
+ 
++#ifdef OVMX_QUIET
++	if ((flags & TOCONS) && ovmx_console_is_quiet(flags))
++		flags &= ~TOCONS;	/* message buffer only (dmesg) */
++#endif
++
+ 	if ((flags & TOCONS) &&
+ 	    (ctp = atomic_load_consume(&constty)) != NULL &&
+ 	    tp == NULL) {
+--- a/sys/sys/kprintf.h
++++ b/sys/sys/kprintf.h
+@@ -56,6 +56,7 @@
+ #define	TODDB		0x0010	/* to ddb console */
+ #define	NOLOCK		0x1000	/* don't acquire a tty lock */
+ #define	NOTSTAMP	0x2000	/* no time stamp on console */
++#define	TOCONSOP	0x4000	/* OVMX_QUIET: operator line, console even when quiet */
+ 
+ void	kprintf_init(void);
+ void	kprintf_init_callout(void);

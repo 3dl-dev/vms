@@ -153,14 +153,14 @@ class NetBSDConsole(object):
         """
         self.child.timeout = cmd_timeout
         self.child.send("\n")
-        self.child.expect(r"login:")
+        self._expect_robust(r"login:")
         self.child.send("root\n")
-        self.child.expect(r"# ")
+        self._expect_robust(r"# ")
         self.child.sendline("exec /bin/sh")
-        self.child.expect(r"# ")
+        self._expect_robust(r"# ")
         self.child.sendline(
             "PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH; umask 022")
-        self.child.expect(r"# ")
+        self._expect_robust(r"# ")
         # CRITICAL for TCG reliability (rd vms-2d9): tame the serial console's
         # line discipline before running any real command.
         #   * `-echo': DISABLE input echo. Under loaded CI TCG the guest tty echoes
@@ -174,7 +174,7 @@ class NetBSDConsole(object):
         #     command Python-side, so nothing is lost for debugging.
         #   * wide `columns'/`rows': so any long OUTPUT line does not wrap either.
         self.child.sendline("stty -echo columns 1000 rows 200 2>/dev/null")
-        self.child.expect(r"# ")
+        self._expect_robust(r"# ")
         self.set_unique_prompt()
 
     def set_unique_prompt(self):
@@ -188,11 +188,50 @@ class NetBSDConsole(object):
         tag = _nonce(8)
         var = "__OVMXP"
         self.child.sendline("%s=%s" % (var, tag))
-        self.child.expect(r"# ")                       # still the default prompt
+        self._expect_robust(r"# ")                     # still the default prompt
         prompt = "OVMX-RDY-%s> " % tag
         self.prompt_re = re.escape(prompt)
         self.child.sendline('PS1="OVMX-RDY-${%s}> "' % var)
-        self.child.expect(self.prompt_re)              # sync onto the new prompt
+        self._expect_robust(self.prompt_re)            # sync onto the new prompt
+
+    def _expect_robust(self, pattern, timeout=None):
+        """Wait for `pattern`, nudging with a bare newline if a slice elapses
+        with nothing matching (rd vms-4e72: the NetBSD/amd64 P2c "boot hang" --
+        4 independent CI failures on 2026-09-25/27 all timed out inside THIS
+        pre-unique-prompt handshake, not inside wait_for_login's own DA/DSR
+        loop: the pexpect `buffer`/`before` dump on every one showed the just-
+        sent line echoed back with NO subsequent `# '/unique-prompt ever
+        arriving within the whole per-command deadline).
+
+        This is the exact dropped-byte-under-TCG symptom run()/_await_marker
+        and _resync_prompt already recover from (rd vms-d83/vms-f8a/vms-d984),
+        just hitting the one stretch of the driver that still used a single,
+        unretried expect() -- because no unique end-marker exists yet this
+        early (the marker protocol needs self.prompt_re, which is exactly
+        what this stretch is still establishing). A bare-newline nudge is
+        always safe here: every command this guards is either idempotent (a
+        plain shell variable assignment, `stty -echo`, a `PATH=' export) or
+        has already fully executed by the time `pattern' is awaited, so an
+        extra blank input line can only ever produce one more harmless prompt
+        cycle -- it can never re-run anything with a side effect.
+        """
+        if timeout is None:
+            timeout = self.child.timeout
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                # Let the final attempt raise pexpect.TIMEOUT itself so the
+                # exception carries pexpect's own full before/after diagnostics.
+                self.child.expect(pattern, timeout=0)
+                return
+            try:
+                self.child.expect(pattern, timeout=min(remaining, self._MARKER_SLICE))
+                return
+            except pexpect.TIMEOUT:
+                if time.time() >= deadline:
+                    raise
+                self.child.sendline("")
 
     # ---- command execution ----------------------------------------------
     def run(self, cmd, timeout=300, echo=True, retriable=True, bg_safe=False):

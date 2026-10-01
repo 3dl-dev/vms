@@ -232,10 +232,62 @@ def _assert_wedge_fail_fast():
           "transient-burst length)" % threshold)
 
 
+def _assert_expect_robust():
+    """_expect_robust() (rd vms-4e72) must nudge with a bare newline when a
+    slice elapses with nothing matching -- the SAME dropped-byte recovery as
+    run()/_resync_prompt, generalized to the pre-unique-prompt boot handshake
+    (login_root_sh/set_unique_prompt) that has no end-marker protocol yet.
+    Exercises it against the single-pattern expect() branch (the one
+    login_root_sh/set_unique_prompt actually call), driven by
+    `single_outcomes' exactly like the existing nudge/resync tests above."""
+    # Clean: pattern matches on the very first attempt, no nudge sent.
+    child = _FakeChild(single_outcomes=["prompt"])
+    con = _console(child)
+    con._MARKER_SLICE = 5
+    con._expect_robust(r"# ", timeout=30)
+    assert child.sent == [], \
+        "expect-robust-clean: no nudge should have been sent, got %r" % child.sent
+    print("PASS expect-robust-clean: matched on the first attempt, no nudge sent")
+
+    # One dropped slice (the measured failure: the shell's reply was lost) then
+    # the nudge's own probe sees the pattern -> recovers within the deadline.
+    child = _FakeChild(single_outcomes=["timeout", "prompt"])
+    con = _console(child)
+    con._MARKER_SLICE = 0.02
+    con._expect_robust(r"# ", timeout=30)
+    assert child.sent == [""], \
+        "expect-robust-one-drop: expected exactly one nudge, got %r" % child.sent
+    print("PASS expect-robust-one-drop: recovered after one dropped slice via a "
+          "single bare-newline nudge")
+
+    # Several consecutive dropped slices still recover, same as run()'s burst case.
+    child = _FakeChild(single_outcomes=["timeout", "timeout", "timeout", "prompt"])
+    con = _console(child)
+    con._MARKER_SLICE = 0.02
+    con._expect_robust(r"# ", timeout=30)
+    assert child.sent == ["", "", ""], \
+        "expect-robust-burst: expected 3 nudges, got %r" % child.sent
+    print("PASS expect-robust-burst: recovered after 3 consecutive dropped "
+          "slices (3 nudges)")
+
+    # Pattern NEVER arrives: must honor the overall deadline and raise
+    # pexpect.TIMEOUT (not hang, not loop forever).
+    child = _FakeChild(single_outcomes=[])  # every single-pattern expect() times out
+    con = _console(child)
+    con._MARKER_SLICE = 0.02
+    try:
+        con._expect_robust(r"# ", timeout=0.1)
+        raise AssertionError("expect-robust-never: expected pexpect.TIMEOUT")
+    except pexpect.TIMEOUT:
+        print("PASS expect-robust-never: pattern never arriving honors the "
+              "deadline -> TIMEOUT, no hang")
+
+
 def main():
     _assert_console_carries_only_markers()
     _assert_drain_stale()
     _assert_wedge_fail_fast()
+    _assert_expect_robust()
 
     # Idempotent command: recovered across 0, 1, 2 dropped markers.
     _run_ok("clean",        ["marker"],                    3, 1)

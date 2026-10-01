@@ -1,0 +1,56 @@
+[14:25:00] === run 1/6: page-order (order A,B,C, gap 5000ms, cpu x1) ===
+[14:25:16]   t=15s vis=visible drift=40ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:25:31]   t=30s vis=visible drift=40ms sca={"VAXC":5} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:25:46]   t=45s vis=visible drift=40ms sca={"VAXC":19} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:26:01]   t=60s vis=visible drift=40ms sca={"VAXC":556,"OVMXA":758,"OVMXB":91} added={"OVMXA":["0x7c3","0x7c5"],"OVMXB":[],"VAXC":[]} vaxcAdm=["OVMXA"] lost={} stalls={}
+[14:26:16]   t=75s vis=visible drift=40ms sca={"VAXC":1157,"OVMXA":1044,"OVMXB":817} added={"OVMXA":["0x7c3","0x7c5","0x7c4"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXA","OVMXB"] lost={} stalls={}
+[14:26:16] --> page-order: CN=3
+[14:26:16] === run 2/6: all-at-once (order A,B,C, gap 500ms, cpu x1) ===
+[14:26:19]   t=2s vis=visible drift=40ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:26:34]   t=17s vis=visible drift=40ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:26:49]   t=32s vis=visible drift=40ms sca={"VAXC":15} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:27:04]   t=47s vis=visible drift=40ms sca={"VAXC":30} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:27:19]   t=62s vis=visible drift=40ms sca={"VAXC":608,"OVMXB":880,"OVMXA":147} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[14:27:34]   t=77s vis=visible drift=40ms sca={"VAXC":716,"OVMXB":1026,"OVMXA":231} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[14:27:49]   t=92s vis=visible drift=40ms sca={"VAXC":1378,"OVMXB":1402,"OVMXA":982} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={}
+[14:27:49] --> all-at-once: CN=3
+[14:27:49] === run 3/6: page-order-throttled4 (order A,B,C, gap 5000ms, cpu x4) ===
+[14:28:05]   t=15s vis=visible drift=976ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:28:21]   t=31s vis=visible drift=1072ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:28:36]   t=46s vis=visible drift=1072ms sca={"VAXC":7} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:28:51]   t=61s vis=visible drift=1072ms sca={"VAXC":63,"OVMXA":55,"OVMXB":1} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:29:06]   t=76s vis=visible drift=1072ms sca={"VAXC":668,"OVMXA":679,"OVMXB":348} added={"OVMXA":["0x7c3","0x7c5"],"OVMXB":[],"VAXC":[]} vaxcAdm=["OVMXA","OVMXB"] lost={} stalls={}
+[14:29:21]   t=91s vis=visible drift=1072ms sca={"VAXC":1025,"OVMXA":870,"OVMXB":791} added={"OVMXA":["0x7c3","0x7c5","0x7c4"],"OVMXB":["0x7c4","0x7c3","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXA","OVMXB"] lost={} stalls={}
+[14:29:21] --> page-order-throttled4: CN=3
+[14:29:21] === run 4/6: b-first (order B,A,C, gap 3000ms, cpu x1) ===
+[14:29:31]   t=9s vis=visible drift=57ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:29:46]   t=24s vis=visible drift=57ms sca={"VAXC":3} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:30:01]   t=39s vis=visible drift=57ms sca={"VAXC":18} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:30:16]   t=54s vis=visible drift=57ms sca={"VAXC":452,"OVMXB":620} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[14:30:31]   t=69s vis=visible drift=57ms sca={"VAXC":1150,"OVMXB":1139,"OVMXA":752} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={}
+[14:30:31] --> b-first: CN=3
+[14:30:31] === run 5/6: c-first-legacy (order C,A,B, gap 5000ms, cpu x1) ===
+[14:30:47]   t=15s vis=visible drift=76ms sca={"VAXC":1} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:31:02]   t=30s vis=visible drift=76ms sca={"VAXC":14} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:31:17]   t=45s vis=visible drift=76ms sca={"VAXC":28} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:31:32]   t=60s vis=visible drift=76ms sca={"VAXC":326,"OVMXA":369,"OVMXB":68} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=["OVMXA"] lost={} stalls={}
+[14:31:47]   t=75s vis=visible drift=76ms sca={"VAXC":1235,"OVMXA":1178,"OVMXB":855} added={"OVMXA":["0x7c3","0x7c5","0x7c4"],"OVMXB":["0x7c4","0x7c3","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXA","OVMXB"] lost={} stalls={}
+[14:31:48] --> c-first-legacy: CN=3
+[14:31:48] === run 6/6: all-at-once-throttled2 (order A,B,C, gap 500ms, cpu x2) ===
+[14:31:50]   t=2s vis=visible drift=8ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:32:05]   t=17s vis=visible drift=224ms sca={} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:32:20]   t=32s vis=visible drift=224ms sca={"VAXC":8} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:32:35]   t=47s vis=visible drift=224ms sca={"VAXC":19} added={"OVMXA":[],"OVMXB":[],"VAXC":[]} vaxcAdm=[] lost={} stalls={}
+[14:32:50]   t=62s vis=visible drift=224ms sca={"VAXC":520,"OVMXA":113,"OVMXB":764} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[14:33:05]   t=77s vis=visible drift=224ms sca={"VAXC":612,"OVMXA":185,"OVMXB":882} added={"OVMXA":[],"OVMXB":["0x7c4","0x7c5"],"VAXC":[]} vaxcAdm=["OVMXB"] lost={} stalls={}
+[14:33:20]   t=92s vis=visible drift=224ms sca={"VAXC":1220,"OVMXA":884,"OVMXB":1226} added={"OVMXA":["0x7c3","0x7c4","0x7c5"],"OVMXB":["0x7c4","0x7c5","0x7c3"],"VAXC":[]} vaxcAdm=["OVMXB","OVMXA"] lost={} stalls={}
+[14:33:20] --> all-at-once-throttled2: CN=3
+
+PASS  page-order               CN=3
+PASS  all-at-once              CN=3
+PASS  page-order-throttled4    CN=3
+PASS  b-first                  CN=3
+PASS  c-first-legacy           CN=3
+PASS  all-at-once-throttled2   CN=3
+
+VISITOR_GATE={"runs":6,"failed":0,"pass":true}

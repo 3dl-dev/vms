@@ -97,9 +97,36 @@ static enum pe_channel_action feed(const uint8_t *frame, uint32_t len)
 	return pe_fsm_rx(&g_fsm, frame, len);
 }
 
+/*
+ * A captured specimen, DELIVERED TO THIS STATION. The test node stands in the
+ * specimen's destination slot (its SCSSYSTEMID, so abs 16 names it), and the
+ * member that sent the specimen delivers a directed frame to its joiner's own
+ * HARDWARE address -- the addressing these very tests assert on the answer
+ * ("delivered to the member's HARDWARE MAC (abs 0)"). In the capture that
+ * joiner was a VAX whose station address is not this node's, so the copy is
+ * re-addressed at abs 0 (and only there, through the codec's own header
+ * build) before it is fed. A multicast specimen is left exactly as captured.
+ * The un-re-addressed specimen is test_specimen_for_another_station's input:
+ * a real adapter never passes it up (rd vms-6b1).
+ */
+static uint8_t g_fxbuf[VMS_HELLO_PADDED_MAX_FRAME];
+
 static enum pe_channel_action feed_fixture(const struct vms_fixture *f)
 {
-	return feed(f->bytes, f->wire_len);
+	struct vms_sca_hdr h;
+	uint32_t written = 0;
+
+	if (f->wire_len > sizeof(g_fxbuf) ||
+	    vms_sca_hdr_parse(f->bytes, f->wire_len, &h) != VMS_CODEC_OK)
+		return feed(f->bytes, f->wire_len);
+	memcpy(g_fxbuf, f->bytes, f->wire_len);
+	if ((h.eth_dst[0] & 0x01u) == 0u) {
+		memcpy(h.eth_dst, ovmx_hw, 6);
+		if (vms_sca_hdr_build(&h, g_fxbuf, sizeof(g_fxbuf), &written) !=
+		    VMS_CODEC_OK)
+			return PE_CH_ACT_NONE;
+	}
+	return feed(g_fxbuf, f->wire_len);
 }
 
 /* One HELLO from a codec-built peer. */
@@ -815,6 +842,38 @@ static void test_refusals(void)
 	ct_check(g_fsm.tx_errors > 0, "a failed exec_lan_xmit is counted");
 }
 
+/*
+ * rd vms-6b1: THE CAPTURED b2, AS CAPTURED, IS NOT THIS STATION'S FRAME.
+ *
+ * Its abs 16 names SCSSYSTEMID 1025 -- the slot this node stands in -- but
+ * its Ethernet destination is the real VAX1's own hardware address. A hub that
+ * floods, or an adapter left promiscuous, hands exactly that frame to a node
+ * whose station address differs, and a real adapter never would have passed
+ * it up. Same frame, re-delivered to this station: answered (the control).
+ */
+static void test_specimen_for_another_station(void)
+{
+	const struct vms_fixture *fx = fixture("hello-directed-vax2-to-vax1");
+
+	printf("-- rd vms-6b1: a discovery frame for another station\n");
+	if (fx == NULL) {
+		ct_check(0, "fixture hello-directed-vax2-to-vax1 present");
+		return;
+	}
+	port_up(1025, 1500);
+	(void)feed(fx->bytes, fx->wire_len);
+	ct_check_eq_u32(g_fake.n_frames, 0,
+			"delivered to VAX1's station, it is never answered");
+	ct_check_eq_u32(g_fsm.n_channels, 0, "and no channel is learned from it");
+	ct_check_eq_u32(g_fsm.rx_not_addressed, 1, "it is counted, once");
+	ct_check_eq_u32(g_fsm.rx_not_for_us, 0,
+			"as the ADAPTER's refusal, not the logical-address one");
+
+	(void)feed_fixture(fx);
+	ct_check_eq_u32(g_fake.n_frames, 1,
+			"the same frame delivered to THIS station is answered");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -839,6 +898,7 @@ int main(void)
 	test_last_gasp();
 	test_last_gasp_per_incarnation();
 	test_refusals();
+	test_specimen_for_another_station();
 
 	return ct_summary("test_pe_formation");
 }

@@ -937,10 +937,37 @@ uint64_t exec_ticks_ms(void);
  * that it is deliberately NON-interruptible. */
 void exec_wait_ms(uint32_t ms);
 
-/* SS18: a macro for the same reason the Linux side is one -- the format string
- * reaches printf(9) directly, so the compiler checks the call site. This one is
- * ALREADY the real binding (printf(9) writes the NetBSD console, which is OPA0:
- * on the VAX rail); FC-P0.4 does not need to revisit it. */
-#define exec_console_printf(fmt, ...) printf(fmt, ##__VA_ARGS__)
+/* SS18: the executive's operator (OPA0:) lines -- "%CNXMAN, ...", "%PEA0, ..."
+ * -- on the NetBSD console, which is OPA0: on the VAX rail.
+ *
+ * rd vms-553: the OVMX NetBSD/vax kernel is built with OVMX_QUIET
+ * (tools/cross-vax/netbsd-ovmx-quiet.patch), which keeps the kernel's own
+ * printf(9) chatter in the message buffer only, so the console carries the VMS
+ * personality rather than NetBSD's boot. These lines ARE that personality, so
+ * they carry TOCONSOP, the patch's "operator line" flag, and still reach the
+ * console. They are written twice on purpose: once to the message buffer with
+ * the kernel's usual timestamp (dmesg keeps the full record), and once to the
+ * console WITHOUT it (NOTSTAMP) -- a VMS operator line has no "[  83.27]"
+ * prefix. On a kernel without the patch TOCONSOP is an unknown bit that
+ * kprintf ignores, and this degrades to an ordinary console printf.
+ * __printflike keeps the compiler checking every call site, the reason this
+ * used to be a macro. */
+#include <sys/kprintf.h>   /* TOCONS, TOLOG, NOTSTAMP */
+#ifndef TOCONSOP
+#define TOCONSOP 0x4000    /* == netbsd-ovmx-quiet.patch's sys/kprintf.h value */
+#endif
+static inline void exec_console_printf(const char *fmt, ...) __printflike(1, 2);
+static inline void
+exec_console_printf(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vprintf_flags(TOLOG, fmt, ap);
+	va_end(ap);
+	va_start(ap, fmt);
+	vprintf_flags(TOCONS | TOCONSOP | NOTSTAMP, fmt, ap);
+	va_end(ap);
+}
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

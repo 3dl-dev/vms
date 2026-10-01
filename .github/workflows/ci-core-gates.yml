@@ -308,6 +308,12 @@ jobs:
       # the test itself.
       - name: Run build_source_iso extra_files self-tests
         run: python3 -m pytest tests/lab-vax/test_build_source_iso.py -v
+
+      # rd vms-553: the RAW-console substrate check every SIMH boot driver applies
+      # (no NetBSD boot output on the OpenVMX/VAX console), pinned against a real
+      # pre-quiet Node B capture (teeth) and a quiet VMS console (no false red).
+      - name: Run console-quiet (substrate_lines) self-tests
+        run: python3 -m pytest tests/lab-vax/test_substrate_quiet.py -v
   # -----------------------------------------------------------------------
   # Job: NetBSD/amd64 console driver self-test (rd vms-d83 / vms-d984)
   #

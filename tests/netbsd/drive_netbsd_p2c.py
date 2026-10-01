@@ -100,9 +100,16 @@ def kvm_available():
 
 
 def accel_args():
+    # NOT `-cpu host' (rd vms-8a8): on a GitHub-hosted runner it passes
+    # through brand-new CPU surface a 2024-era NetBSD 10.1 GENERIC kernel was
+    # never tested against -- measured as a fatal page fault ~1.75s into boot
+    # (job 108120866684, Xeon 6973P-C, landing in ddb). `qemu64' is a
+    # conservative, stable baseline; KVM still executes every guest
+    # instruction on real hardware, so the acceleration win is unchanged. See
+    # drive_netbsd.py's accel_args() for the full trail.
     if kvm_available():
         log("acceleration: KVM (/dev/kvm present and writable)")
-        return ["-accel", "kvm", "-cpu", "host", "-smp", "4"]
+        return ["-accel", "kvm", "-cpu", "qemu64", "-smp", "4"]
     log("acceleration: TCG (no usable /dev/kvm) -- build/boot will be slower")
     return ["-smp", "2"]
 

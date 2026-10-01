@@ -384,8 +384,9 @@ endforeach()
 # provenance forbids editing or duplicating them) with the SAME
 # qemu_syssvc_add_test() recipe every real src/libvms-linked suite in this
 # file uses, so they run against a genuine /dev/vms inside this QEMU
-# harness. Named test_corpus_* (not test_syssvc_*) deliberately: ci.yml's
-# kernel-executive-negative-control job polices every test_syssvc_*.c to
+# harness. Named test_corpus_* (not test_syssvc_*) deliberately:
+# ci-kernel-executive.yml's kernel-executive-negative-control job polices
+# every test_syssvc_*.c to
 # return the honest-skip code 77 with no executive -- a contract this
 # project wrote for ITS OWN suites. These two are unmodified upstream
 # programs whose no-executive behavior is whatever errchk_sig()/lib$signal()
@@ -422,7 +423,7 @@ qemu_syssvc_add_test(corpus_seed_lnm
 # control job flag a correct pass as a fabricated one (main went red on
 # test_syssvc_imgact_bind for exactly this reason). test_imgact_* is the
 # correct, non-executive name: it is excluded from the test_syssvc_*.c glob
-# above (and so from ci.yml's and run_facility_negctl.sh's test_syssvc_*
+# above (and so from ci-kernel-executive.yml's and run_facility_negctl.sh's test_syssvc_*
 # policing) automatically, by construction, not by an added exception.
 #
 # Built through the SAME qemu_syssvc_add_test() plumbing (same libvms link,
@@ -703,7 +704,8 @@ add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg
 # an unguarded `var=$(cmd)` assignment that fails aborts the step -- with
 # ZERO diagnostic, before the per-suite verdicts or the vms.ko/vmsfs.ko
 # checks are ever reached. tools/replay_ci_kernel_executive.py extracts that
-# step's `run:` block VERBATIM out of ci.yml and executes it against a
+# step's `run:` block VERBATIM out of ci-kernel-executive.yml (the domain
+# file ci.yml was split into by vms-1af) and executes it against a
 # synthetic capture, so this control is exercised against the SAME TEXT CI
 # runs -- no QEMU, no container, no /dev/vms needed.
 add_test(
@@ -712,6 +714,22 @@ add_test(
             ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(kernel_executive_negctl_crash PROPERTIES LABELS "harness")
+
+# ---------------------------------------------------------------------------
+# TOTAL GUEST DEATH vs a genuine per-facility defect red (rd vms-df4).
+#
+# Same shape as kernel_executive_negctl_crash above, so it is GATED unlike the
+# _negctl.sh declaration-only family vms-49f tore out (see that note, above):
+# it feeds the REAL fnd_all_suites_missing() a fabricated but realistically-
+# shaped captured $OUTFILE and asserts the function's own behaviour -- a
+# property of run_facility_negctl.sh itself, not a claim about the manifest or
+# the executive. No QEMU, no container, no /dev/vms needed.
+add_test(
+    NAME facility_negctl_total_death_check
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_negctl_total_death_check.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(facility_negctl_total_death_check PROPERTIES LABELS "harness")
 
 # ---------------------------------------------------------------------------
 # THE 0.2 DEMO, END TO END (vms-5dd, parent vms-2579).

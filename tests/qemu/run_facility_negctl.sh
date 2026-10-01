@@ -151,6 +151,18 @@ if [ ! -f "$EQUALITY_LIB" ]; then
     exit 2
 fi
 . "$EQUALITY_LIB"
+
+# Distinguishes TOTAL GUEST DEATH from a genuine per-facility defect red (rd
+# vms-df4). See facility_negctl_total_death.sh's own header for the measured
+# CI failure this closes.
+TOTAL_DEATH_LIB="$REPO_ROOT/tests/qemu/facility_negctl_total_death.sh"
+if [ ! -f "$TOTAL_DEATH_LIB" ]; then
+    echo "FATAL: $TOTAL_DEATH_LIB is missing. Without it a one-off boot/infra"
+    echo "       death (the guest never producing a single verdict) would be"
+    echo "       misattributed to whichever defect happened to be running."
+    exit 2
+fi
+. "$TOTAL_DEATH_LIB"
 COMMITTED_RECORD=$(fnr_record_path "$REPO_ROOT/tests/qemu")
 # Defaults to a temp file: this script must never dirty the checkout it is
 # judging. Set FACILITY_NEGCTL_RECORD_OUT to keep the emitted record at a known
@@ -598,6 +610,23 @@ for defect in $DEFECT_LIST; do
     if [ "$RUN_RC" -eq 125 ]; then
         bad "container engine exited 125 running the harness for '$defect' -- this is the transient registry/storage-layer failure, NOT a verdict about '$defect'. Re-run. Last 30 lines:"
         tail -30 "$OUTFILE" | sed 's/^/  | /'
+        fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
+    fi
+
+    # 0. TOTAL GUEST DEATH, caught here for the same reason 125/3/4 are above
+    #    (rd vms-df4): an ISOLATED defect can only ever reach ITS OWN facility
+    #    -- it has no path to stopping an UNRELATED suite (e.g. the very first
+    #    test_kmod_* probe) from running at all. When NONE of EXEC_ORDER's
+    #    suites produced a verdict, the guest died (or never booted) for a
+    #    reason that predates the mutation ever being exercised -- an
+    #    infrastructure failure, not a verdict about '$defect'. Skipped for
+    #    `fatal`, which is EXPECTED to stop the run partway through (check 3
+    #    below judges that case with EXEC_ORDER + stop_at).
+    # shellcheck disable=SC2086
+    if [ "$isolation" != "fatal" ] && \
+       [ "$(fnd_all_suites_missing "$OUTFILE" $EXEC_ORDER)" = "1" ]; then
+        bad "TOTAL GUEST DEATH: not ONE of the $N_EXPECTED expected suites produced a verdict -- not even ones unrelated to '$facility' (e.g. the first test_kmod_* probe). An isolated defect cannot reach that; this is a boot/infrastructure failure (crash before any suite ran, QEMU never came up, or the whole-VM wall fired before FINAL RESULTS), NOT a verdict about '$defect'. Re-run. Last 40 lines:"
+        tail -40 "$OUTFILE" | sed 's/^/  | /'
         fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
     fi
 

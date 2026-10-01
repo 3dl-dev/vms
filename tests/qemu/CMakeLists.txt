@@ -714,6 +714,22 @@ add_test(
 set_tests_properties(kernel_executive_negctl_crash PROPERTIES LABELS "harness")
 
 # ---------------------------------------------------------------------------
+# TOTAL GUEST DEATH vs a genuine per-facility defect red (rd vms-df4).
+#
+# Same shape as kernel_executive_negctl_crash above, so it is GATED unlike the
+# _negctl.sh declaration-only family vms-49f tore out (see that note, above):
+# it feeds the REAL fnd_all_suites_missing() a fabricated but realistically-
+# shaped captured $OUTFILE and asserts the function's own behaviour -- a
+# property of run_facility_negctl.sh itself, not a claim about the manifest or
+# the executive. No QEMU, no container, no /dev/vms needed.
+add_test(
+    NAME facility_negctl_total_death_check
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_negctl_total_death_check.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(facility_negctl_total_death_check PROPERTIES LABELS "harness")
+
+# ---------------------------------------------------------------------------
 # THE 0.2 DEMO, END TO END (vms-5dd, parent vms-2579).
 #
 # Boots the ACTUAL mastered bootable image (distro/Dockerfile.bootable),

@@ -418,6 +418,10 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 		(uint8_t)cluster_sysgen_credits(cl, &id->credits_requested);
 	id->rx_pool_bufs = cf_rx_pool_bufs(cl->fork);
 
+	/* SYSGEN TIMVCFAIL, converted out of its 10 ms unit by the parameter
+	 * TU (rd vms-b98). 0 -- nothing loaded -- leaves the port's default. */
+	id->timvcfail_ms = cluster_sysgen_timvcfail_ms(cl);
+
 	id->incarnation_time = exec_time_now_vms();
 	id->incarnation_time_valid = 1u;
 }

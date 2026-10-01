@@ -513,6 +513,15 @@ static void test_cadence_and_timeout(void)
 	ct_check_eq_u32(pe_fsm_channel_at(&g_fsm, 0)->state,
 			(unsigned)VMS_PE_CH_B4, "the channel is still usable");
 
+	/* rd vms-b98: a real V7.3 port never closed a circuit sooner than
+	 * 8.15 s after the last frame (n = 24). 7.9 s of silence is still a
+	 * live channel here too. */
+	g_fake.now_ms += 7900 - 3200;
+	n = pe_fsm_tick(&g_fsm, rec, 4);
+	ct_check_eq_u32(n, 0, "7.9 s: inside the measured listen timeout");
+	ct_check_eq_u32(PE_LISTEN_TIMEOUT_DEFAULT_MS, 8000,
+			"the port constant the oracle measured (8 s)");
+
 	g_fake.now_ms += PE_LISTEN_TIMEOUT_DEFAULT_MS;
 	n = pe_fsm_tick(&g_fsm, rec, 4);
 	ct_check_eq_u32(n, 1, "past the listen timeout the channel reports");

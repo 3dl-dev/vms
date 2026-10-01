@@ -133,4 +133,21 @@ int cluster_sysgen_clean_depart(const struct vms_cluster *cl);
  */
 uint8_t cluster_sysgen_depart_from_wire(uint8_t clean_depart_off);
 
+/*
+ * cluster_sysgen_timvcfail_ms - SYSGEN TIMVCFAIL, "the time required for an
+ * SCS virtual circuit failure to be detected", in MILLISECONDS for the port
+ * (struct pe_identity.timvcfail_ms), read out of the loaded parameters.
+ *
+ * THE UNIT IS SYSGEN's OWN, READ OFF A REAL SYSTEM (rd vms-b98): SYSGEN SHOW
+ * TIMVCFAIL on a real OpenVMS VAX V7.3 prints "1600 1600 100 65535 10Ms D" --
+ * current, default, min, max, unit, dynamic -- so the stored value counts 10 ms
+ * units and 1600 is 16 s. The conversion is done here, once, so the FSM never
+ * does unit arithmetic (vms_pe_fsm.h's contract for this field).
+ *
+ * Returns 0 when the parameters were never loaded, or when the loaded value is
+ * 0 (no SYSGEN value): 0 is the field's own "use the port's default" sense, so
+ * an unloaded record can never shorten a circuit's failure time to nothing.
+ */
+uint32_t cluster_sysgen_timvcfail_ms(const struct vms_cluster *cl);
+
 #endif /* OVMX_VMS_CLUSTER_SYSGEN_H */

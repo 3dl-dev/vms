@@ -2996,15 +2996,36 @@ The two populations do not overlap, and they do not overlap **inside** the
 departure capture either: VAX1, which stayed up the whole time, never exceeds
 3.12 s in the same window as VAX2's 395.955 s gap.
 
-**What OVMX does with it (OVMX design choice, labeled per Rule 8).** The default
-listen timeout is **20 000 ms** — the value of the lab's SYSGEN `RECNXINTERVAL`
-(20, §3) — which is 6.3× the longest healthy silence measured and 20× below the
-observed departure. This is **not** a claim that VMS uses 20 s as a listen
-timeout: `RECNXINTERVAL` governs removal *after* a circuit breaks, not the timer
-that breaks it. The book (ch. 2) describes circuit loss but publishes no
-detection timer; that lives in the port drivers, which ch. 2 is not about.
-`OVMX_PEER_LISTEN_TIMEOUT_MS` overrides it and SCSD logs the value at startup, so
-a capture is never read as a spontaneous departure.
+**What a real port does — MEASURED (`vms-b98`, 2026-10-01,
+`tests/lab/captures/vms-b98-pe-listen-timeout-20261001/`).** The healthy/departure
+bracket above says only that the threshold lies somewhere between 3.153 s and
+395.955 s; it does not say where a real port puts it. A real OpenVMS VAX V7.3
+pair (no OVMX node on the wire, consoles timestamped at 10 ms, bridge captured)
+was given ten seconds of silence in both directions by taking one node's tap
+down, eight times, and in two further runs one node's emulator was SIGSTOPped.
+The survivor closed the virtual circuit (`%PEA0, Port has Closed Virtual
+Circuit`, `%CNXMAN, lost connection`) **8.15–9.30 s after the last frame it had
+heard from the peer** — n = 24 across both directions and both methods, mean
+8.80 s, median 8.82 s. The closure lands on the port's own periodic tick: in four
+trials the survivor's `b3` channel-verify probe to the silent peer went out within
+15 ms of the closure. So the real port holds an **8 s** listen timeout and checks
+it about once a second.
+
+**It is not a SYSGEN parameter (MEASURED).** V7.3's SYSGEN names no such
+parameter; `SCACP SHOW CHANNEL/ALL` counts `Timeouts: Listen` but shows no value;
+`SDA SHOW PORTS` shows none. The only PE-named parameters, `PE1`..`PE6`, are all 0
+and undocumented, and setting `PE4` to 20 on one node left its closure at
+8.585/8.795/8.925 s against 8.285/9.178/9.301 s on the node at 0.
+
+**What OVMX does with it.** `PE_LISTEN_TIMEOUT_DEFAULT_MS` is **8 000 ms**, the
+measured port constant, held as one (it was 20 000 ms, the lab's `RECNXINTERVAL`,
+an OVMX choice made before any real port had been timed; rd `vms-1f40` arm P-9
+showed what that cost: a 20 s stall made OVMX's own expiry coincide with the
+peer's wake). OVMX evaluates the deadline on its 2 s HELLO beat and on every
+receive, so its own closure falls 8–10 s after the last frame. `TIMVCFAIL`, which
+*is* a SYSGEN parameter (`SYSGEN SHOW TIMVCFAIL` on V7.3: `1600 1600 100 65535
+10Ms D`), now reaches the port from the loaded parameters in that 10 ms unit
+rather than from a compiled-in default.
 
 **Explicit non-claim.** 3.153 s is the largest silence in 747 s of captured wire
 from a 2–3 node lab, not an upper bound. A larger cluster, a loaded node or a

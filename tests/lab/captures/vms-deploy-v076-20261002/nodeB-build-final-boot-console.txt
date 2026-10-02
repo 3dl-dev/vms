@@ -1,0 +1,79 @@
+[run-boot] single-disk pre-boot sha256:  c8b2e40adbc8208842e5106a26fc6844d0e225b139076e2785f04d75df510448
+[drive_boot_vax] NetBSD 10.1/vax  (OVMX/NetBSD bootable system disk; ovmx_init as PID 1, vms-7b1)
+[drive_boot_vax] boot-disk workdir: /cache/single-work   iso: /cache/NetBSD-10.1-vax.iso
+[drive_boot_vax] artifacts:         /artifacts   ods2: /cache/ovmx-ods2-vax.img
+[drive_boot_vax] ensuring the target disk is present (cache-aware install no-op)...
+[drive_boot_vax] SYSBOOT-SINGLE: booting ONE disk on rq0 (RAUSER=340) -- VMB boots the NetBSD root ('a') AND the executive mounts the ODS-2 SYSTEM volume from PARTITION 'e' of the SAME disk (DUA0: -> ra0e), NO rq1 (deadline 1800s)
+vax \
+    /cache/single-work/netbsd.ini
+child pid is 7
+
+MicroVAX 3900 simulator Open SIMH V4.1-0 Current        git commit id: 2e0d51e9
+/cache/single-work/netbsd.ini-6> attach -r rq3 /cache/NetBSD-10.1-vax.iso
+%SIM-INFO: RQ3: Unit is read only
+%SIM-INFO: RQ3: '/cache/NetBSD-10.1-vax.iso' Contains an ISO 9660 filesystem
+%SIM-INFO: RQ3: Volume Identifier: NETBSD_101   Containing 218387 2048 Byte Sectors
+/cache/single-work/netbsd.ini-7> boot cpu
+%SIM-INFO: Loading boot code from internal ka655x.bin
+
+[c
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B/R5:2 DUA0
+(BOOT/R5:2 DUA0
+
+
+
+  2..
+-DUA0
+  1..0..
+
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+[drive_boot_vax] MILESTONE: saw 'VMS executive attached on /dev/vms'
+
+    OpenVMX V0.7-6 - OpenVMS-compatible
+[drive_boot_vax] MILESTONE: saw 'OpenVMS-compatible'
+     1-JAN-2010 13:07:37.72
+
+%OVMX-I-SYSDISK, mounting system disk DUA0:
+%OVMX-I-MOUNTED, system disk DUA0: mounted
+[drive_boot_vax] MILESTONE: saw 'system disk DUA0: mounted'
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+%PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  1-JAN-2010 13:07:39.59
+[drive_boot_vax] MILESTONE: saw '%STDRV-I-STARTUP' -- PAST the installed-system gate; PID 1 is at the SYS$SYSTEM:PROVISION.EXE exec
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+[drive_boot_vax] MILESTONE: 'system identity SYSTEM' -- PROVISION.EXE demand-paged off the ODS-2 volume and RUNS; executive established SYSTEM identity
+%OVMX-I-STARTUP, handing SYS$MANAGER:STARTUP.COM to DCL for ACP resolution
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 0000006C
+
+ Welcome to the OpenVMX VAX Operating System, Version V0.7-6 (OpenVMS-compatible)
+
+Username: [drive_boot_vax] CAPSTONE: reached Username: -- PROVISION created the system logicals and STARTUP ran to LOGINOUT (vms-72da clears LNMFAIL; DCL login capstone vms-d59)
+SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7-6 - OpenVMS-compatible
+
+
+$ [drive_boot_vax] PERSIST: SYSTEM/MANAGER authenticated, reached $ (Purdy fix confirmed on the installed system)
+SHOW TIME
+   1-JAN-2010 13:07:51.96
+$ SHOW TIME
+   1-JAN-2010 13:07:52.03
+$ [drive_boot_vax] PERSIST-PASS: DCL session survived TWO post-login commands -> installed-system login is USABLE (vms-865 scoped to install-media path = p2)
+[drive_boot_vax] post-identity console tail:
+SHOW TIME
+   1-JAN-2010 13:07:52.03
+[drive_boot_vax] OK: no %OVMX-W-OWNER warnings after SYSTEM identity -- PROVISION's provision_ownership() stamped UIC file ownership on the RW-ODS2 volume with NO failures (vms-e7a)
+[drive_boot_vax] OK: 'The OVMX system is now executing the site-specific startup commands' seen -- STARTUP.COM is actively EXECUTING commands (SYSTARTUP_VMS.COM running), not just an absence of errors
+[drive_boot_vax] ======================================================================
+[drive_boot_vax]   SYSBOOT-SINGLE PASSED: ovmx_init booted as PID 1 on NetBSD/vax

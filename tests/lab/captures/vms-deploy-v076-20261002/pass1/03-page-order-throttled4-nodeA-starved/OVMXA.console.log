@@ -1,0 +1,11 @@
+
+%NIC-CFG, initramfs=nodeA/initramfs-ovmx-nodeA.cpio.gz sysdisk=nodeA/sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFD0EE0+0EF30EE0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2J

@@ -2829,14 +2829,23 @@ long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg)
     if (cl->cnxman == NULL)
         goto out;   /* no connection manager: no CSBs, honestly zero rows */
 
+    /*
+     * EVERY IN-USE BLOCK, HOLES SKIPPED (rd vms-af4). p. 7-25 deallocates a
+     * departed or dead incarnation's block, and its slot is reused only by a
+     * LATER allocation -- so the table has holes, and a block allocated after
+     * one (a member's NEW incarnation, measured on the rig) sits past it. This
+     * walk used to stop at the first free slot and SHOW CLUSTER lost that
+     * member's row while the cluster counted it.
+     */
     vms_cluster_fork_enter(cl);
-    for (i = 0; i < VMS_CLUSTER_MEMBER_MAX; i++) {
+    for (i = 0; i < cl->club.n_csb && args->n_members < VMS_CLUSTER_MEMBER_MAX;
+         i++) {
         struct vms_csb *csb = cnxman_club_csb_at(&cl->club, i);
 
         if (csb == NULL)
-            break;
-        csb_to_member_row(csb, &args->members[i]);
-        args->n_members = i + 1u;
+            continue;
+        csb_to_member_row(csb, &args->members[args->n_members]);
+        args->n_members++;
     }
     vms_cluster_fork_leave(cl);
 

@@ -601,19 +601,36 @@ static enum cnxman_csb_action h_recnx_expired(struct vms_club *club,
 	return act;
 }
 
-/* p. 7-24 DEAD: "A new incarnation of a VAX system has been seen. The CSB whose
+/*
+ * p. 7-24 DEAD: "A new incarnation of a VAX system has been seen. The CSB whose
  * connection state is DEAD represents the old incarnation." The CLUB keeps it
  * until the caller deallocates it and builds a fresh CSB for the new
- * incarnation (p. 7-25). */
+ * incarnation (p. 7-25).
+ *
+ * THE OLD INCARNATION IS GONE, AND NOTHING WAITS FOR IT (rd vms-af4). The
+ * oracle: a real OpenVMS VAX V7.3 member SIGKILLed and rebooted inside its
+ * survivor's 300 s reconnect window -- the survivor accepted the new
+ * incarnation's VMS$VAXcluster connect and, 4 ms later, logged "timed-out lost
+ * connection" and "proposing reconfiguration", removing the old incarnation
+ * 277 s before its RECNXINTERVAL would have. So the block releases its
+ * connection claim (the connection was the dead incarnation's), and if the
+ * cluster still holds that incarnation as a member its removal is proposed --
+ * or deferred to a transition already running, exactly as for a last gasp.
+ * SELECTED itself is only ever moved by the transition (p. 7-49).
+ */
 static enum cnxman_csb_action h_dead(struct vms_club *club,
 				     struct vms_csb *csb,
 				     const struct cnxman_ops *ops)
 {
-	(void)club;
 	csb->state = (uint8_t)VMS_CNXMAN_CSB_DEAD;
 	csb->flags &= (uint16_t)~VMS_CSB_F_MEMBER;
+	csb->next_attempt_ms = 0u;
+	csb->deadline_ms = 0u;
+	cnxman_csb_bind_connection(csb, 0u);
 	csb_log(ops, "%CNXMAN, new incarnation seen, old CSB is dead");
-	return CNXMAN_CSB_ACT_NONE;
+	if ((csb->flags & VMS_CSB_F_SELECTED) == 0u)
+		return CNXMAN_CSB_ACT_NONE;
+	return csb_propose_or_defer(club, csb, ops);
 }
 
 /*
@@ -967,7 +984,11 @@ uint32_t cnxman_club_reclaim_abandoned(struct vms_club *club,
 		 * calling again, which is why the batch may be small enough to
 		 * live on a VAX kernel stack.
 		 */
-		if (csb->sysid_valid) {
+		/* A p. 7-24 DEAD block is an old INCARNATION, not the system:
+		 * the system lives on in the block its new incarnation got
+		 * (rd vms-af4), so nothing driving through it is told. */
+		if (csb->sysid_valid &&
+		    csb->state != (uint8_t)VMS_CNXMAN_CSB_DEAD) {
 			if (released == NULL || n >= max)
 				break;
 			released[n] = csb->sysid;
@@ -988,6 +1009,12 @@ struct vms_csb *cnxman_club_find_sysid(struct vms_club *club,
 		return NULL;
 	for (i = 0; i < club->n_csb; i++) {
 		if (!club->csb[i].in_use || !club->csb[i].sysid_valid)
+			continue;
+		/* p. 7-24 DEAD is the OLD incarnation's block: the system that
+		 * answers to this SCSSYSTEMID now is whoever comes next (rd
+		 * vms-af4). The dead block stays reachable by its CSID, which is
+		 * how the transition that removes it names it. */
+		if (club->csb[i].state == (uint8_t)VMS_CNXMAN_CSB_DEAD)
 			continue;
 		if (club->csb[i].sysid == sysid)
 			return &club->csb[i];

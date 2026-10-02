@@ -1245,7 +1245,7 @@ static void test_remove_class(void)
 	uint8_t f[VMS_CM_FRAME_LEN];
 	uint32_t n, step, i;
 
-	printf("\n-- a class-0x03 removal: op 0x08, no nodemap, same 12 steps --\n");
+	printf("\n-- a class-0x03 removal: op 0x08, the kept members' nodemap, same 12 steps --\n");
 	bed_init(2);
 
 	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
@@ -1262,8 +1262,12 @@ static void test_remove_class(void)
 	s = nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM, 0);
 	ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_CLASS), VMS_CM_CLASS_REMOVE,
 			"class 0x03: tag 0x0340");
-	ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_BITMAP), 0,
-			"and NO nodemap (spec sec 4(p))");
+	/* rd vms-af4: a real coordinator's op 0x08 names the members the
+	 * removal KEEPS at body[55] (spec sec 4(p).R) -- here VAX1 (slot 1)
+	 * and this node (slot 3), never VAX2 (slot 2): 0x0a, the e88-A2
+	 * specimen's own byte for the same shape. */
+	ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_BITMAP), 0x0a,
+			"and the nodemap of the members it keeps (spec sec 4(p).R)");
 
 	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM);
 	(void)coord_feed(&g.c, f, n, CSB_VAX1);

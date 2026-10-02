@@ -1,5 +1,10 @@
 # rd vms-af4 — a member that leaves uncleanly and comes straight back
 
+> **Resolved:** both (a) and (b) below are implemented and proven in
+> `../vms-af4-readmit-20261001/` (12/12 kill+reboot arms readmitted). (b) was settled by
+> grounding op 0x08 from real captures: it DOES carry the kept members' nodemap at
+> `body[55]` (spec §4(p).R); the "no readable nodemap" premise below was a misreading.
+
 **Short version.** The browser observation from the V0.7-2 capture (PR #1324) does
 not reproduce on V0.7-5. The defect behind it does: if a member leaves uncleanly
 and comes back while an OVMX member still holds it, it is never readmitted. A

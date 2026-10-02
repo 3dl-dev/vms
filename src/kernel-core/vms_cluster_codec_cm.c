@@ -106,6 +106,11 @@ vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
  * sec 4: opcode-specific body parsers
  * ------------------------------------------------------------------ */
 
+int vms_cm_open_carries_nodemap(uint8_t opcode)
+{
+	return opcode == VMS_CM_OP_XITION_ADD || opcode == VMS_CM_OP_XITION_REM;
+}
+
 vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 				     struct vms_cm_open *out)
 {
@@ -122,7 +127,7 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 	out->epoch = vms_wire_get_le32(&v, VMS_OFB_CM_EPOCH);
 	out->role  = vms_wire_get_u8(&v, VMS_OFB_CM_ROLE);
 	out->cls   = vms_wire_get_u8(&v, VMS_OFB_CM_CLASS);
-	out->has_bitmap = (out->env.opcode == VMS_CM_OP_XITION_ADD);
+	out->has_bitmap = vms_cm_open_carries_nodemap(out->env.opcode);
 	out->bitmap = out->has_bitmap
 			      ? vms_wire_get_u8(&v, VMS_OFB_CM_BITMAP)
 			      : 0;
@@ -145,10 +150,11 @@ vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *body, uint32_t len,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	/* Only the op-0x09 ADD open carries a membership bitmap (spec sec
-	 * 4(p)); on any other opcode this span is somebody else's payload. */
+	/* Only the op-0x09 ADD and op-0x08 REMOVE opens carry a membership
+	 * bitmap (spec sec 4(p), 4(p).R); on any other opcode this span is
+	 * somebody else's payload. */
 	if (env.category != VMS_CM_CAT_CONFIG ||
-	    env.opcode != VMS_CM_OP_XITION_ADD)
+	    !vms_cm_open_carries_nodemap(env.opcode))
 		return VMS_CODEC_E_CLASS;
 
 	vms_wire_view_init(&v, body, len);
@@ -674,10 +680,11 @@ vms_codec_status_t vms_cm_xition_open_build(uint8_t tr_class, uint32_t epoch,
 
 	if (opcode == 0u)
 		return VMS_CODEC_E_CLASS;
-	/* Only the class-0x02 ADD open carries a nodemap (sec 4(p)). Asking for
-	 * one on any other class is refused rather than dropped, so a caller
+	/* The ADD and the REMOVE open carry the post-transition nodemap
+	 * (sec 4(p), and sec 4(p).R for op 0x08); the class-0x04 departure does
+	 * not. Asking for one there is refused rather than dropped, so a caller
 	 * cannot believe it published a membership map that never went out. */
-	if (has_bitmap && tr_class != VMS_CM_CLASS_ADD)
+	if (has_bitmap && !vms_cm_open_carries_nodemap(opcode))
 		return VMS_CODEC_E_INVAL;
 
 	st = cm_originate_begin(opcode, out_body, cap, &w);

@@ -347,6 +347,69 @@ static void test_open_parse(void)
 	ct_check_eq_u32(o.bitmap, 0x0e, "  bitmap == 0x0e (M=3)");
 }
 
+/*
+ * rd vms-af4: EVERY REAL op-0x08 REMOVE OPEN CARRIES THE NODEMAP OF THE MEMBERS
+ * IT KEEPS (spec sec 4(p).R).
+ *
+ * Nine real captured opens, five distinct removals, three coordinators (a real
+ * OpenVMS VAX V7.3 VAX1, VAX2 and VAXC), removed slots 2, 3 and 4, from three-
+ * and four-member clusters -- each specimen's own comment says which system was
+ * removed and which CSID slots the cluster held. body[55] is, in every one, the
+ * set of slots the transition keeps: the removed slot's bit clear, every kept
+ * member's bit set, popcount == the post-removal member count. The two
+ * specimens of one removal (sent to two different members) carry the same byte.
+ */
+static void test_remove_open_carries_the_kept_nodemap(void)
+{
+	static const struct { const char *name; uint8_t keeps; uint8_t gone; } r[] = {
+		{ "cm-open-remove-s4d-1",    0x0e, 4 },   /* slots 1,2,3 kept */
+		{ "cm-open-remove-s4d-2",    0x0e, 4 },
+		{ "cm-open-remove-s4a-1",    0x1a, 2 },   /* slots 1,3,4 kept */
+		{ "cm-open-remove-s4a-2",    0x1a, 2 },
+		{ "cm-open-remove-s4b-1",    0x16, 3 },   /* slots 1,2,4 kept */
+		{ "cm-open-remove-s4b-2",    0x16, 3 },
+		{ "cm-open-remove-b36or-1",  0x06, 3 },   /* three real VAXes */
+		{ "cm-open-remove-b36or-2",  0x06, 4 },   /* ...VAX3 again, as csid 4 */
+		{ "cm-open-remove-af4rig-1", 0x06, 3 },
+	};
+	uint32_t i;
+
+	printf("-- vms_cm_open_parse: op 0x08 REMOVE opens carry the kept "
+	       "members' nodemap (rd vms-af4)\n");
+	for (i = 0; i < sizeof(r) / sizeof(r[0]); i++) {
+		const struct vms_fixture *f = fixture(r[i].name);
+		struct vms_cm_open o;
+		uint8_t span[VMS_CM_BITMAP_SPAN_LEN];
+		uint32_t k, residue = 0u;
+
+		ct_check(f != NULL, r[i].name);
+		if (f == NULL)
+			continue;
+		ct_check(vms_cm_open_parse(fx_body(f), fx_body_len(f), &o) ==
+			 VMS_CODEC_OK && o.env.category == VMS_CM_CAT_CONFIG &&
+			 o.env.opcode == VMS_CM_OP_XITION_REM &&
+			 o.role == VMS_CM_ROLE_XITION &&
+			 o.cls == VMS_CM_CLASS_REMOVE,
+			 "a cat-0x01 op-0x08 class-0x03 open, tag 0x0340");
+		ct_check(o.has_bitmap, "and it carries a nodemap");
+		ct_check_eq_u32(o.bitmap, r[i].keeps,
+				"body[55] == the slots the removal keeps");
+		ct_check((o.bitmap & (uint8_t)(1u << r[i].gone)) == 0u &&
+			 (o.bitmap & 0x01u) == 0u,
+			 "the removed slot's bit is clear (and slot 0 never set)");
+		ct_check(vms_cm_open_bitmap_span(fx_body(f), fx_body_len(f),
+						 span) == VMS_CODEC_OK,
+			 "its span is readable");
+		for (k = 0; k < VMS_CM_BITMAP_SPAN_LEN; k++)
+			if (k != VMS_CM_BITMAP_SPAN_IDX && span[k] != 0u)
+				residue++;
+		ct_check_eq_u32(residue, 0,
+				"and every other byte of body[52:60] is zero");
+	}
+	ct_check(!vms_cm_open_carries_nodemap(VMS_CM_OP_DEPART_XITION),
+		 "the class-0x04 departure open is not read as carrying one");
+}
+
 static void test_barrier_parse(void)
 {
 	const struct vms_fixture *f = fixture("cm-barrier-step");
@@ -1254,6 +1317,7 @@ int main(void)
 	test_barrier_build();      /* FC-P3.5 */
 	test_body_build();         /* FC-P3.5 */
 	test_open_bitmap_span();   /* FC-P3.5 */
+	test_remove_open_carries_the_kept_nodemap();   /* rd vms-af4 */
 
 	test_joiner_originations();     /* FC-P3.3 */
 	test_membership_rec();                /* the op-0x05 record   */

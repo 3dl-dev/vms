@@ -276,10 +276,12 @@ uint32_t cnxman_phase2_commit(struct vms_cluster *cl,
 		return 0u;
 	club = &cl->club;
 
-	/* The nodemap only exists on a class-0x02 ADD open (wire spec SS4(p): a
-	 * class-0x03 removal "has no op 0x09 at all ... and so carries no
-	 * bitmap"). Without one, membership stands as the CSB ladder already
-	 * left it and only the count is recomputed. */
+	/* The nodemap rides the class-0x02 ADD open and the class-0x03 REMOVE
+	 * open (wire spec SS4(p), SS4(p).R: body[55] names the members the
+	 * transition keeps, so a removed member's slot is absent and task 1
+	 * clears its SELECTED flag here -- rd vms-af4). Without one (a class-0x04
+	 * departure), membership stands as the CSB ladder already left it and
+	 * only the count is recomputed. */
 	if (in->bitmap_valid && phase2_apply_nodemap(club, in, st) == 0u) {
 		st->nodemap_unreadable++;
 		phase2_log(ops, "%CNXMAN, no nodemap slot matched a known "

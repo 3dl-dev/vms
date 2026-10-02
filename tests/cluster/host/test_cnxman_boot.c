@@ -339,6 +339,13 @@ static void test_cnxman_wiring(void)
 	    "rather than composed from the status");
 	has("cnxman_club_csb_at(&cl->club, i)",
 	    "E35: CLUSTER_MEMBER_GET walks the CONNECTION MANAGER's CSB table");
+	/* rd vms-af4: the table has HOLES once p. 7-25 deallocates a block, and
+	 * a member's new incarnation sits past one. The walk skips them; it used
+	 * to stop at the first and SHOW CLUSTER lost that member's row. */
+	has("for (i = 0; i < cl->club.n_csb && args->n_members < VMS_CLUSTER_MEMBER_MAX;",
+	    "rd vms-af4: CLUSTER_MEMBER_GET walks to the table's high-water mark");
+	absent("        if (csb == NULL)\n            break;\n        csb_to_member_row",
+	       "rd vms-af4: ...and a free slot no longer ends the walk");
 	absent("vms_cluster_members[",
 	       "... and the module-global mirror the daemon wrote is GONE");
 	absent("vms_ioctl_cluster_member_set",

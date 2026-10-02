@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-09-24",
+    "generated": "2026-10-01",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -2855,7 +2855,7 @@
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vms_cnxman_recnx_fsm.c",
       "verified_against": null,
-      "notes": "FC-P3.6, pure, on an injected clock. Drives the p. 7-30 reconnect window per CSB and decides RECONNECT vs PROPOSE_TRANSITION. RECNXINTERVAL comes from the SYSGEN parameters the executive actually committed, and a zero is replaced by the published default with the substitution FLAGGED (recnxinterval_defaulted), never silently. DISCLOSED GAP: the last-gasp DATAGRAM is not sent. The ladder raises the LAST_GASP action, but no port-level builder is wired to it, so a shutting-down node is removed by the survivors' reconnect timeout rather than at once. An honest gap, not a fabricated send. PROVEN AT R1/R2: test_cnxman_recnx.c, plus the simulator's departure loops.\n",
+      "notes": "FC-P3.6, pure, on an injected clock. Drives the p. 7-30 reconnect window per CSB and decides RECONNECT vs PROPOSE_TRANSITION. RECNXINTERVAL comes from the SYSGEN parameters the executive actually committed, and a zero is replaced by the published default with the substitution FLAGGED (recnxinterval_defaulted), never silently. DISCLOSED GAP: the last-gasp DATAGRAM is not sent. The ladder raises the LAST_GASP action, but no port-level builder is wired to it, so a shutting-down node is removed by the survivors' reconnect timeout rather than at once. An honest gap, not a fabricated send. PROVEN AT R1/R2: test_cnxman_recnx.c, plus the simulator's departure loops. A MEMBER BACK AS A NEW INCARNATION (rd vms-af4): the old block takes p. 7-24 DEAD and its removal is proposed at once (the real V7.3 oracle removed it 4 ms after accepting the new incarnation's connect), the new incarnation gets a fresh p. 7-25 block, and a participant applies the op-0x08 REMOVE open's kept-members nodemap (spec 4(p).R, nine real specimens) so the removal a real VAX coordinates deselects it. Rig: kill+reboot of a member inside the reconnect window, readmitted (tests/lab/captures/vms-af4-readmit-20261001/).\n",
       "plan_ref": "vms-694"
     },
     {

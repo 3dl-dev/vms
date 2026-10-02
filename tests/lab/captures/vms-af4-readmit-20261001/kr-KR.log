@@ -1,0 +1,85 @@
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-1] PASS readmitted=yes kill->member=28.1s VAX-readded=1 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  3648 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-2] PASS readmitted=yes kill->member=28.1s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  4188 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-3] PASS readmitted=yes kill->member=28.1s VAX-readded=1 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  4735 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-4] PASS readmitted=yes kill->member=28.0s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  5287 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-5] PASS readmitted=yes kill->member=28.1s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  5882 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-6] PASS readmitted=yes kill->member=28.1s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  6426 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-7] PASS readmitted=yes kill->member=28.1s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  6983 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-8] PASS readmitted=yes kill->member=26.1s VAX-readded=1 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  7529 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-9] PASS readmitted=yes kill->member=26.1s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  8079 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-10] PASS readmitted=yes kill->member=28.1s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  8679 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-11] PASS readmitted=yes kill->member=28.1s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+b36start.sh: line 6:  9284 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-af4rig/art)
+started C (art=/lab/run-af4rig/art)
+started A (art=art/a2)
+started B (art=art/a2)
+started B (art=art/a2)
+[KR-12] PASS readmitted=yes kill->member=26.1s VAX-readded=2 finalMEMBERrows(A/B)=3/3 bugchecks=0
+== KR done: 12 PASS / 0 FAIL / 0 NOFAULT
+b36start.sh: line 6:  9894 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null

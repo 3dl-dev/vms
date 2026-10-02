@@ -267,8 +267,10 @@ static uint32_t mk_open_add(uint8_t *f, uint32_t epoch, uint8_t bitmap)
 	return n;
 }
 
-/* op 0x08: the class-0x03 REMOVE open. Carries NO bitmap (spec sec 4(p)). */
-static uint32_t mk_open_remove(uint8_t *f, uint32_t epoch)
+/* op 0x08: the class-0x03 REMOVE open. It carries the post-transition
+ * nodemap at body[55] -- the members the transition KEEPS (spec sec 4(p).R,
+ * every real-VAX op 0x08 in the capture library; rd vms-af4). */
+static uint32_t mk_open_remove(uint8_t *f, uint32_t epoch, uint8_t keeps)
 {
 	vms_wire_buf_t w;
 	uint32_t n = mk_frame(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM);
@@ -277,6 +279,7 @@ static uint32_t mk_open_remove(uint8_t *f, uint32_t epoch)
 	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, epoch);
 	vms_wire_put_u8(&w, VMS_OFF_CM_ROLE, VMS_CM_ROLE_XITION);
 	vms_wire_put_u8(&w, VMS_OFF_CM_CLASS, VMS_CM_CLASS_REMOVE);
+	vms_wire_put_u8(&w, VMS_OFF_CM_BITMAP, keeps);
 	return n;
 }
 
@@ -922,14 +925,56 @@ static void test_class_remove_open_is_answered(void)
 {
 	uint8_t f[VMS_CM_FRAME_LEN];
 
-	printf("[barrier] the class-0x03 op-0x08 open is acknowledged and "
-	       "carries no bitmap\n");
+	printf("[barrier] the class-0x03 op-0x08 open is acknowledged and its "
+	       "nodemap read\n");
 	bed_init();
-	(void)feed(f, mk_open_remove(f, 0x12u));
+	(void)feed(f, mk_open_remove(f, 0x12u, 0x0au));
 	ct_check_eq_u32(g.n_sent, 1, "it is answered");
 	ct_check_eq_u32(sent_op(0), VMS_CM_OP_XITION_REM, "with the 0x81 echo");
-	ct_check_eq_u32(g.b.bitmap_valid, 0, "no nodemap was read from it");
+	ct_check_eq_u32(g.b.bitmap_valid, 1,
+			"rd vms-af4: the nodemap is read from the REMOVE open");
+	ct_check_eq_u32(g.b.bitmap, 0x0au, "the members it keeps, as sent");
 	ct_check_eq_u32(g.b.tr_class, VMS_CM_CLASS_REMOVE, "class recorded");
+}
+
+/*
+ * rd vms-af4: A PARTICIPANT ACTS ON THE REMOVAL THE PAYLOAD NAMES.
+ *
+ * The real VAX coordinator removing VAX2 (CSID slot 2) from {VAX1 slot 1, VAX2,
+ * this node slot 3} sends op 0x08 with body[55] = 0x0a -- the e88-A2 specimen's
+ * byte, slots 1 and 3. After the transition commits, the removed member is no
+ * longer SELECTED here, and the two kept members are. Before this, the open was
+ * read as carrying no nodemap, phase 2 left membership alone, and the removed
+ * incarnation stayed a member on this node forever.
+ */
+static void test_class_remove_drops_the_named_member(void)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	struct vms_csb *coord, *peer, *local;
+	uint32_t i;
+
+	printf("[barrier] rd vms-af4: a REMOVE's nodemap deselects exactly the "
+	       "member it omits\n");
+	bed_init();
+	coord = cnxman_club_find_csid(&g.cl.club, COORD_CSID);
+	peer = cnxman_club_find_csid(&g.cl.club, PEER_CSID);
+	local = cnxman_club_local(&g.cl.club);
+	cnxman_csb_set_flags(coord, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	cnxman_csb_set_flags(peer, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	cnxman_csb_set_flags(local, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+
+	(void)feed(f, mk_open_remove(f, 0x12u, 0x0au));
+	(void)feed(f, mk_go(f, 0x12u, VMS_CM_CLASS_REMOVE, VMS_CM_ROLE_GO));
+	ct_check(cnxman_barrier_phase2_committed(&g.b), "the removal commits");
+	ct_check((peer->flags & VMS_CSB_F_SELECTED) == 0u,
+		 "the member the nodemap omits is no longer SELECTED");
+	ct_check((coord->flags & VMS_CSB_F_SELECTED) != 0u &&
+		 (local->flags & VMS_CSB_F_SELECTED) != 0u,
+		 "and both members it names still are");
+	for (i = 1; i <= CNXMAN_BARRIER_STEPS; i++)
+		(void)feed(f, mk_release(f, 0x12u, i));
+	ct_check_eq_u32(g.cl.club.cluster_nodes, 2,
+			"the committed count is the nodemap's popcount");
 }
 
 static void test_class_depart_starts_no_barrier(void)
@@ -962,7 +1007,7 @@ static void test_op0f_extra_step(void)
 	printf("[barrier] op-0x0f, the class-0x03 extra step, is echoed and "
 	       "changes no state (spec sec 4(r))\n");
 	bed_init();
-	(void)feed(f, mk_open_remove(f, 0x12u));
+	(void)feed(f, mk_open_remove(f, 0x12u, 0x0au));
 	g.n_sent = 0;
 	ct_check(feed(f, mk_frame(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_0F)) ==
 		 CNXMAN_BARRIER_RX_CONSUMED, "it is ours");
@@ -1390,7 +1435,7 @@ static void test_a_new_transition_supersedes_a_stalled_barrier(void)
 
 	/* negctl: barrier-stalled-refuses-new-transition */
 	sent_before = g.n_sent;
-	(void)feed(f, mk_open_remove(f, EPOCH + 1u));
+	(void)feed(f, mk_open_remove(f, EPOCH + 1u, 0x0au));
 	ct_check_eq_u32(g.b.transitions_superseded, 1u,
 			"the removal supersedes the stalled barrier");
 	ct_check(g.b.state == (uint8_t)CNXMAN_BARRIER_OPEN &&
@@ -1465,6 +1510,7 @@ int main(void)
 	test_dlm_seam();
 	test_class_remove_runs_the_same_barrier();
 	test_class_remove_open_is_answered();
+	test_class_remove_drops_the_named_member();
 	test_class_depart_starts_no_barrier();
 	test_op0f_extra_step();
 	test_bitmap_popcount_and_slots();

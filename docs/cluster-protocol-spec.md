@@ -3677,12 +3677,73 @@ body[55]  = 0x00       cleared            (op 0x09 only)
 >
 > **A joiner can therefore read the expected barrier-participant set out of the
 > open it receives.** Two cautions: a class-`0x03` removal has **no `op 0x09` at
-> all** (it starts directly at `op 0x0a` / tag `0x0360`) and so carries no bitmap;
+> all** (it starts directly at `op 0x0a` / tag `0x0360`) and so carries no `op 0x09`
+> bitmap -- but a removal run with other members opens with its own `op 0x08`, which
+> DOES carry the kept members' nodemap (§4(p).R, corrected by `vms-af4`);
 > and one byte holds only 8 slots while the library already reaches slot 5.
 > `body[52:55]` and `body[56:60]` are all-zero in every specimen, so the field is
 > certainly **wider than a byte**, but its extent and endianness are UNDETERMINED
 > — a BE u32 at `body[52:56]` fits the data as well as an LE map based at
 > `body[55]`. **Do not assume 8 slots.**
+
+#### 4(p).R The class-0x03 REMOVE open (`op 0x08`) carries the KEPT members' nodemap (GROUNDED, `vms-af4`)
+
+**Correction.** The caution above ("a class-`0x03` removal has no `op 0x09` and so
+carries no bitmap") was true of `op 0x09` and wrongly generalised to the removal: a
+removal that a coordinator runs with other members DOES open with its own
+`op 0x08`, and every one in the library carries the nodemap at `body[55]`. OVMX had
+read `op 0x08` as nodemap-less, so a participant committed a removal without
+touching membership and kept the removed system SELECTED forever (rd `vms-af4`: a
+member SIGKILLed and booted again was never readmitted in 300 s).
+
+**Specimens** (`tests/lab/captures/vms-af4-op08-remove-20261001/`, codec specimens
+`tests/cluster/host/fixtures/cm-open-remove-*.spec`): nine real captured opens,
+five distinct removals, three coordinators — real OpenVMS VAX V7.3 `VAX1`, `VAX2`
+(an all-VAX three-node cluster, `vms-b36` oracle) and `VAXC` (four- and three-member
+clusters on the rd `vms-af4` rig). The rig removals were made for this: four
+members join in a fixed order (CSIDs `00010001`..`00010004`, read back from VAXC's
+own OPCOM lines) and one is SIGKILLed; VAXC coordinates its removal and sends
+`op 0x08` to each survivor.
+
+| specimen(s) | coordinator | members before (slot) | removed | `body[55]` | kept slots |
+|---|---|---|---|---|---|
+| `s4d-1`, `s4d-2` | VAXC | VAXC 1, OVMXA 2, OVMXB 3, OVMXC 4 | OVMXC (4) | `0x0e` | 1,2,3 |
+| `s4a-1`, `s4a-2` | VAXC | same | OVMXA (2) | `0x1a` | 1,3,4 |
+| `s4b-1`, `s4b-2` | VAXC | same | OVMXB (3) | `0x16` | 1,2,4 |
+| `b36or-1` | VAX1 | VAX1 1, VAX2 2, VAX3 3 | VAX3 (3) | `0x06` | 1,2 |
+| `b36or-2` | VAX2 | VAX1 1, VAX2 2, VAX3 readmitted at 4 | VAX3 (4) | `0x06` | 1,2 |
+| `af4rig-1` | VAXC | VAXC 1, OVMXA 2, OVMXB 3 | OVMXB (3) | `0x06` | 1,2 |
+
+**Rule (zero residuals).** `body[55]` bit *k* is set iff the member holding CSID
+slot *k* is KEPT; the removed slot's bit is clear; slot 0 is never set;
+`popcount == post-removal member count`; the two copies of one removal (to two
+different members) carry the same byte; `body[52:55]` and `body[56:60]` are zero
+in all nine. The `e88-A2` and `cn3-achieved` captures add two more real `op 0x08`
+(`0x0a`: slots 1,3 kept, slot 2 removed; `0x06`) with the same rule. **Not
+captured:** a removal of slot 1 (the founder is always a real VAX here, and a
+removal of it is coordinated by nobody this executive can observe without a second
+real VAX); the rule is pinned by slots 2, 3 and 4 each appearing both set and clear.
+
+**The rest of the 132-byte body** — census over the nine plus the two:
+
+| bytes | status |
+|---|---|
+| `[0:8]` send/ack/txn/token, `[8]` cat `0x01`, `[9]` op `0x08`, `[12:16]` epoch, `[16]` role `0x40`, `[17]` class `0x03` | as §4(j)/§4(r) |
+| `[10:12]` | zero in 10 of 11; `58 63` in one (a coordinator's REQUEST pair, §4(r)) |
+| `[18:20]`, `[21]`, `[23]`, `[27]`, `[30:32]`, `[52:55]`, `[56:87]`, `[88:91]`, `[92]` | zero in all eleven |
+| `[32:40]` | VMS time quadword: the cluster's FOUNDATION time. The same value in both removals of one cluster (`b36or` epochs 6 and 8), a different one per cluster, and on the rig 4 s before VAXC's first OPCOM line after "proposing formation" (`s4d`: 22:56:38.01 vs 22:56:42.16) |
+| `[40:48]` | VMS time quadword: the transition time (§4(s)) |
+| `[48]`, `[51]` | zero in all eleven; `[49:51]` LE16 = the cluster FOUNDER's SCSSYSTEMID — 1989 (VAXC) on every rig removal, 1025 (VAX1) on every VAX1-founded one, **including `b36or-2`, which VAX2 coordinated**: the founder, not the coordinator |
+| `[106:114]` | `00 60 ee 78 de ff ff ff` in all eleven |
+| `[20:22]`, `[22:24]`, `[24]`, `[25]`, `[26]`, `[28]`, `[29]`, `[87]`, `[91]`, `[93:106]`, `[114:132]` | vary; small integers that move with cluster size and history (e.g. `[87]` is 4 in every four-member removal and 3 or 5 in three-member ones), and `[114:132]` differs between the two copies of one removal. **Not pinned** — no controlled variation of votes/expected votes was run |
+
+**What OVMX does with it.** A participant reads `body[55]` from `op 0x08` exactly as
+from `op 0x09` and phase 2 (p. 7-42 task 1) applies it, so the removed member is
+deselected; OVMX as coordinator writes the kept members' map there
+(`coord_take_nodemap`). OVMX still **does not originate** an `op 0x08` toward a
+connection manager that is not OVMX (`coord_open_is_grounded_for`): the bytes marked
+*not pinned* above are part of what a real coordinator asserts, and OVMX has no
+derivation for them (INV-6).
 
 #### Category is per-SYSAP, and the response SHAPE is per-category
 

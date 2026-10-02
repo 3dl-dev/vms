@@ -119,7 +119,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_NEW, CNXMAN_CSB_EV_CONNECT_RCVD,
 	  VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_ACT_NONE, "7-24 ACCEPT" },
 	{ VMS_CNXMAN_CSB_NEW, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* CONNECT -- our initial CONNECT is outstanding */
 	{ VMS_CNXMAN_CSB_CONNECT, CNXMAN_CSB_EV_CONN_OPEN,
@@ -129,7 +130,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_CONNECT, CNXMAN_CSB_EV_DISCONNECT,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_NONE, "7-24 DISCONNECT" },
 	{ VMS_CNXMAN_CSB_CONNECT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* ACCEPT -- we are accepting their initial CONNECT */
 	{ VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_EV_CONN_OPEN,
@@ -139,7 +141,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_EV_DISCONNECT,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_NONE, "7-24 DISCONNECT" },
 	{ VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* E81: the peer's REJECT of our INITIAL connect. No reconnect window
 	 * exists and there is no membership to hold, so the CSB rests in NEW --
@@ -160,11 +163,13 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_OPEN, CNXMAN_CSB_EV_REMOTE_DISCONNECT,
 	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-27 + 7-30 / E81" },
 	{ VMS_CNXMAN_CSB_OPEN, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* DISCONNECT -- also where a departed system's retained CSB rests */
 	{ VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD / 7-25" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD / 7-25 + af4 oracle" },
 
 	/* WAIT -- the p. 7-30 timeout is running */
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_RECNX_ATTEMPT,
@@ -180,7 +185,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_LAST_GASP,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 	/* E81: a reject can land after the beat has already stepped the CSB
 	 * back to WAIT under the outstanding attempt. */
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_CONNECT_REJECTED,
@@ -200,7 +206,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_LAST_GASP,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
 	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 	/* E81: the peer ANSWERED our reconnect. Back to WAIT, and this ladder
 	 * stops asking for the rest of the window (proved behaviourally in
 	 * test_cnxman_recnx.c). */
@@ -228,7 +235,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_LAST_GASP,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* DEAD and LOCAL have no outgoing edge at all -- p. 7-25 deallocates a
 	 * DEAD CSB rather than reviving it, and p. 7-24 reserves LOCAL for the
@@ -753,15 +761,19 @@ static void test_club_reclaims_only_what_was_given_up(void)
 	n = cnxman_club_reclaim_abandoned(&g_cl.club, released,
 					  (uint32_t)VMS_CLUB_MAX_CSB);
 
-	ct_check_eq_u32(n, 2u, "exactly two blocks are released");
-	ct_check_eq_u32(g_cl.club.csb_reclaimed, 2u, "... and counted");
+	/* rd vms-af4: both blocks are FREED, but only the timed-out system is
+	 * reported released -- the DEAD block is an old incarnation of a system
+	 * that lives on in its new incarnation's block, so nothing driving
+	 * through that system may be told it is gone. */
+	ct_check_eq_u32(n, 1u, "exactly one SYSTEM is released");
+	ct_check_eq_u32(g_cl.club.csb_reclaimed, 2u,
+			"... though both blocks are freed and counted");
 	ct_check(cnxman_club_find_sysid(&g_cl.club, 0x000004000201ull) == NULL,
 		 "the timed-out member's block is gone (p. 7-25)");
 	ct_check(cnxman_club_find_sysid(&g_cl.club, 0x000004000202ull) == NULL,
 		 "the old incarnation's block is gone (p. 7-24 DEAD)");
-	ct_check((released[0] == 0x000004000201ull &&
-		  released[1] == 0x000004000202ull),
-		 "... and both are NAMED by their own learned SCSSYSTEMID");
+	ct_check(released[0] == 0x000004000201ull,
+		 "... NAMED by its own learned SCSSYSTEMID");
 
 	ct_check(cnxman_club_find_sysid(&g_cl.club, 0x000004000203ull) ==
 		 selected,
@@ -1724,6 +1736,99 @@ static void test_a_first_join_crossing_runs_on_the_joiners_connect(void)
 			"a first join carries no dialogue: a fresh one opens");
 }
 
+/*
+ * rd vms-af4: A MEMBER CAME BACK AS A NEW INCARNATION.
+ *
+ * The oracle (tests/lab/captures/vms-af4-unclean-return-20261001/oracle/): a
+ * real OpenVMS VAX V7.3 member SIGKILLed and rebooted inside its survivor's
+ * reconnect window. The survivor accepted the new incarnation's connect as a
+ * NEW connection and removed the old incarnation 4 ms later. Here: the old
+ * block takes p. 7-24 DEAD, gives its connection up, and asks for its removal
+ * (or defers to a transition already running); it stops answering to the
+ * SCSSYSTEMID, so p. 7-25's fresh block is what the system is found as from
+ * now on; and once a transition has deselected it, the old block is reclaimed.
+ */
+static void test_a_new_incarnation_retires_the_old_block(void)
+{
+	struct vms_csb *old, *fresh;
+	enum cnxman_csb_action act;
+	const vms_scs_sysid_t sid = 0x000004000207ull;
+	vms_scs_sysid_t released[4];
+	uint32_t reclaimed;
+
+	printf("[csb] rd vms-af4: a member back as a new incarnation\n");
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	old = cnxman_club_alloc_csb(&g_cl.club, sid, 1);
+	cnxman_csb_set_csid(old, 0x00010003u);
+	cnxman_csb_set_flags(old, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	old->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;   /* in its 7-30 window */
+	cnxman_csb_bind_connection(old, 0x5cd30006u);
+
+	act = cnxman_csb_dispatch(&g_cl.club, old,
+				  CNXMAN_CSB_EV_NEW_INCARNATION, &g_ops);
+	ct_check_eq_u32(old->state, VMS_CNXMAN_CSB_DEAD, "the old block is DEAD");
+	ct_check_eq_u32(act, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+			"and the cluster's member is proposed for removal at once, "
+			"not after RECNXINTERVAL (the oracle's 4 ms)");
+	ct_check_eq_u32(old->cdt_conid, 0u,
+			"the old incarnation's connection claim is released");
+	ct_check((old->flags & VMS_CSB_F_MEMBER) == 0u &&
+		 (old->flags & VMS_CSB_F_SELECTED) != 0u,
+		 "MEMBER cleared, SELECTED left to the transition (p. 7-49)");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, sid) == NULL,
+		 "the SCSSYSTEMID no longer finds the old incarnation");
+	ct_check(cnxman_club_find_csid(&g_cl.club, 0x00010003u) == old,
+		 "...which the transition still names by its CSID");
+
+	fresh = cnxman_club_alloc_csb(&g_cl.club, sid, 1);
+	ct_check(fresh != NULL && fresh != old,
+		 "p. 7-25: a fresh block is built for the new incarnation");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, sid) == fresh,
+		 "and it is what the system is found as from now on");
+
+	reclaimed = g_cl.club.csb_reclaimed;
+	(void)cnxman_club_reclaim_abandoned(&g_cl.club, released, 4);
+	ct_check_eq_u32(g_cl.club.csb_reclaimed - reclaimed, 0,
+			"a still-SELECTED dead block is not reclaimed");
+	cnxman_csb_clear_flags(old, VMS_CSB_F_SELECTED);   /* the transition */
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 4),
+			0, "once the removal deselects it, it is deallocated -- "
+			"and no SYSTEM is reported released: the system lives on "
+			"as its new incarnation");
+	ct_check_eq_u32(g_cl.club.csb_reclaimed - reclaimed, 1,
+			"...the old incarnation's block alone was freed");
+	ct_check(!old->in_use, "and its slot is free");
+	ct_check(fresh->in_use && fresh->state == (uint8_t)VMS_CNXMAN_CSB_NEW,
+		 "and the new incarnation's block is untouched");
+
+	/* A transition already running removes it: defer, as a last gasp does. */
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	old = cnxman_club_alloc_csb(&g_cl.club, sid, 1);
+	cnxman_csb_set_flags(old, VMS_CSB_F_SELECTED);
+	old->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	g_cl.club.transition_active = 1u;
+	act = cnxman_csb_dispatch(&g_cl.club, old,
+				  CNXMAN_CSB_EV_NEW_INCARNATION, &g_ops);
+	ct_check_eq_u32(act, CNXMAN_CSB_ACT_NONE,
+			"a transition already running: deferred to it");
+
+	/* A block the cluster never admitted has nothing to remove. */
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	old = cnxman_club_alloc_csb(&g_cl.club, sid, 1);
+	old->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	act = cnxman_csb_dispatch(&g_cl.club, old,
+				  CNXMAN_CSB_EV_NEW_INCARNATION, &g_ops);
+	ct_check_eq_u32(act, CNXMAN_CSB_ACT_NONE,
+			"never admitted: dead, nothing proposed");
+	reclaimed = g_cl.club.csb_reclaimed;
+	(void)cnxman_club_reclaim_abandoned(&g_cl.club, released, 4);
+	ct_check_eq_u32(g_cl.club.csb_reclaimed - reclaimed, 1,
+			"and reclaimed on the next sweep");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
@@ -1750,6 +1855,7 @@ int main(void)
 	test_two_connections_follow_the_one_the_peer_keeps();
 	test_a_first_join_crossing_runs_on_the_joiners_connect();
 	test_correlation_pair_is_maintained();
+	test_a_new_incarnation_retires_the_old_block();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");
 }

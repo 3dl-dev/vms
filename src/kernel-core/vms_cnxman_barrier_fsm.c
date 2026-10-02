@@ -445,7 +445,7 @@ static void barrier_take_bitmap(struct cnxman_barrier *b,
 	b->bitmap = 0u;
 	b->bitmap_popcount = 0u;
 	if (!open->has_bitmap)
-		return;   /* op 0x08 / cat-01 op 0x0d carry no nodemap at all */
+		return;   /* cat-01 op 0x0d carries no nodemap at all */
 
 	b->bitmap_valid = 1u;
 	b->bitmap = open->bitmap;

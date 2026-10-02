@@ -153,6 +153,8 @@ csb-resume-ignores-peer-position
 pe-start-refusal-silent
 pe-reformation-stacks-before-it-starts
 pe-peer-start-keeps-dead-echo
+codec-remove-nodemap-unread
+csb-dead-found-by-sysid
 pe-station-filter-disarmed
 recnx-attempt-supersedes-in-flight
 csb-dropped-spare-reads-as-loss
@@ -1090,6 +1092,35 @@ EOF
         ;;
         esac;;
 
+    codec-remove-nodemap-unread)
+        case "$_f" in
+        facility)     echo "the op-0x08 REMOVE open's post-transition nodemap at body[55] (spec sec 4(p).R, rd vms-af4): nine real captured opens, five removals, three coordinators, removed slots 2/3/4";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_open_carries_nodemap() answers yes for op 0x09 only, so the REMOVE open is read as carrying no nodemap -- the pre-af4 reading. A participant then commits a removal with membership untouched and keeps the removed system SELECTED: MEASURED on the rig, a member SIGKILLed and booted again stayed a MEMBER row on the surviving OVMX node with its old CSID for 300 s and the returning node was never readmitted.";;
+        require_fail) cat <<'EOF'
+and it carries a nodemap
+body[55] == the slots the removal keeps
+its span is readable
+EOF
+        ;;
+        esac;;
+
+    csb-dead-found-by-sysid)
+        case "$_f" in
+        facility)     echo "p. 7-25: the SCSSYSTEMID belongs to the new incarnation's fresh block, never to the old incarnation's DEAD one (rd vms-af4)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_club_find_sysid() matches a DEAD block, so every lookup by SCSSYSTEMID -- the accept path's csb_ensure(), the discovery sweep, the join -- lands on the old incarnation's block and the new incarnation is driven through a dead one: the REACCEPT-into-the-old-block failure the rig measured.";;
+        require_fail) cat <<'EOF'
+and it is what the system is found as from now on
+the SCSSYSTEMID no longer finds the old incarnation
+EOF
+        ;;
+        esac;;
+
     pe-late-frame-revives-channel)
         case "$_f" in
         facility)     echo "SS4(M)'s listen timeout as a fact about ELAPSED TIME (rd vms-8c54: a stalled guest wakes with its clock AND its receive queue jumped together, and the queued frames are consumed before any beat runs)";;
@@ -1521,6 +1552,12 @@ apply_edit() {
     pe-station-filter-disarmed)
         # `if (pe_station_accepts(f, hdr.eth_dst))` is unique in this file.
         sed -i 's|if (pe_station_accepts(f, hdr.eth_dst))|if (1 \|\| pe_station_accepts(f, hdr.eth_dst)) /* NEGCTL pe-station-filter-disarmed */|' "$_file";;
+
+    codec-remove-nodemap-unread)
+        sed -i 's#return opcode == VMS_CM_OP_XITION_ADD || opcode == VMS_CM_OP_XITION_REM;#return opcode == VMS_CM_OP_XITION_ADD; /* NEGCTL codec-remove-nodemap-unread */#' "$_file";;
+
+    csb-dead-found-by-sysid)
+        sed -i 's#\t\tif (club->csb\[i\].state == (uint8_t)VMS_CNXMAN_CSB_DEAD)#\t\tif (0 \&\& club->csb[i].state == (uint8_t)VMS_CNXMAN_CSB_DEAD) /* NEGCTL csb-dead-found-by-sysid */#' "$_file";;
 
     pe-late-frame-revives-channel)
         # `if (ch->deadline_ms == 0u)` is unique in this file.

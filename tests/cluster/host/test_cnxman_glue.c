@@ -800,13 +800,32 @@ static void test_glue_bindings(void)
 	 * refuse a system that has just re-incarnated, or accept one that has
 	 * not -- and accepting one that has not is what bugchecked a real VAX.
 	 */
-	check_before("pe_peer_incarnation(cn->cl->pe, peer, &inc)",
+	check_before("csb = cnxman_track_incarnation(cn, csb);",
 		     "/* THE SERVER HALF",
 		     "rd vms-0f9: ...and the incarnation is read from the "
 		     "circuit BEFORE the policy is asked");
 	check_before("csb = csb_ensure(&cn->cl->club, peer);",
-		     "pe_peer_incarnation(cn->cl->pe, peer, &inc)",
+		     "csb = cnxman_track_incarnation(cn, csb);",
 		     "... into the block that connect just ensured");
+	/*
+	 * rd vms-af4: a connect from a NEW incarnation does not go into the old
+	 * incarnation's block. The tracker reads the circuit's incarnation,
+	 * takes the p. 7-24 DEAD edge on a block that learned a different one,
+	 * and hands back a fresh p. 7-25 block; the once-a-second beat runs the
+	 * same tracker, so the old block dies as soon as the new incarnation's
+	 * circuit forms, connect or no connect.
+	 */
+	check_before("pe_peer_incarnation(cn->cl->pe, csb->sysid, &inc)",
+		     "cnxman_retire_incarnation(cn, csb);",
+		     "rd vms-af4: the tracker reads the live circuit's incarnation "
+		     "before it retires anything");
+	check_before("CNXMAN_CSB_EV_NEW_INCARNATION, &cn->ops);",
+		     "fresh = cnxman_club_alloc_csb(club, csb->sysid, 1);",
+		     "rd vms-af4: the old block takes p. 7-24 DEAD before p. 7-25's "
+		     "fresh block is built");
+	check_before("static void cnxman_sync_peer_incarnation",
+		     "(void)cnxman_track_incarnation(cn, csb);",
+		     "rd vms-af4: the beat's incarnation sync runs the same tracker");
 	check_absent("conndata_len);\n\tif (rc != 0)\n\t\treturn rc;\n\n"
 		     "\tcsb = csb_ensure(",
 		     "... and the order that lost the first offer is gone");

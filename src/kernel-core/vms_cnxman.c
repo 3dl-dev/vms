@@ -246,6 +246,8 @@ struct vms_cnxman {
 	uint8_t  pad_cx;
 	uint32_t cluexits;
 	uint32_t cluexit_refused;    /* re-incarnations NOT spent, and counted */
+	uint32_t incarnations_retired; /* p. 7-24 DEAD edges taken: a peer came
+					* back as a new incarnation (rd vms-af4) */
 
 	/*
 	 * ---- THIS NODE'S OWN 16-BYTE CONNECT DATA (rd vms-b87) ----
@@ -496,6 +498,11 @@ static struct vms_csb *csb_ensure(struct vms_club *club, vms_scs_sysid_t sysid)
 		return csb;
 	return cnxman_club_alloc_csb(club, sysid, 1);
 }
+
+/* p. 7-24/7-25: the block for the incarnation a circuit advertises now (rd
+ * vms-af4); defined beside the beat that also calls it. */
+static struct vms_csb *cnxman_track_incarnation(struct vms_cnxman *cn,
+						 struct vms_csb *csb);
 
 /* ==========================================================================
  * 2. struct cnxman_ops -- DOWNWARD, to SCS and the fork context
@@ -1128,14 +1135,7 @@ static int cnxman_vc_connect_req(void *ctx, vms_conid_t local_conid,
 	 * Read off the same circuit the connect arrived on; not told is not
 	 * told, and the policy then accepts (INV-6).
 	 */
-	if (csb != NULL && cn->cl->pe != NULL) {
-		uint64_t inc = 0u;
-
-		if (pe_peer_incarnation(cn->cl->pe, peer, &inc) != 0)
-			cnxman_csb_set_incarnation(&cn->cl->club, csb, 0u, 0);
-		else
-			cnxman_csb_set_incarnation(&cn->cl->club, csb, inc, 1);
-	}
+	csb = cnxman_track_incarnation(cn, csb);
 
 	/* THE SERVER HALF (spec SS4(y)): total connectivity requires this node
 	 * accept every member's own connect. cnxman_join_connect_req() is that
@@ -2359,6 +2359,80 @@ static void cnxman_sync_peer_swver(struct vms_cnxman *cn)
 }
 
 /*
+ * THE OLD INCARNATION'S BLOCK IS DEAD (rd vms-af4, book pp. 7-24/7-25).
+ *
+ * The p. 7-24 edge is taken in the CSB table (h_dead); this is its consequence
+ * at the glue: the block gives up the old connection, and if the cluster still
+ * holds that incarnation as a member its removal is proposed through the same
+ * coordinator door a lost member's is (and refused there, honestly, where this
+ * executive cannot originate one). Any transition the old incarnation was part
+ * of has lost it.
+ */
+static void cnxman_retire_incarnation(struct vms_cnxman *cn, struct vms_csb *csb)
+{
+	enum cnxman_csb_action act;
+
+	act = cnxman_csb_dispatch(&cn->cl->club, csb,
+				  CNXMAN_CSB_EV_NEW_INCARNATION, &cn->ops);
+	cnxman_transition_peer_lost(cn, csb, 1);
+	if (act != CNXMAN_CSB_ACT_PROPOSE_TRANSITION)
+		return;
+	(void)cnxman_coord_propose_remove(&cn->coord,
+		(int32_t)cnxman_club_csb_index(&cn->cl->club, csb));
+	cnxman_glue_preload_proposed(cn);
+}
+
+/*
+ * WHICH BLOCK IS THIS INCARNATION'S? (rd vms-af4.)
+ *
+ * The quadword a system puts in its own formation body is the one fact on the
+ * wire that tells one incarnation of a node from the next (spec SS4(g) abs 80).
+ * When the live circuit to `csb`'s system advertises a DIFFERENT one from the
+ * incarnation the block already learned, the system came back: p. 7-24 makes
+ * the old block DEAD and p. 7-25 builds "a new CSB ... just as if it were
+ * joining the cluster for the first time".
+ *
+ * MEASURED, the reason this exists: a member SIGKILLed and booted again inside
+ * the survivors' reconnect window. A real OpenVMS VAX V7.3 survivor accepted
+ * the new incarnation's connect as a fresh connection and removed the old one
+ * 4 ms later; this executive took the same connect into the OLD block
+ * (p. 7-24 REACCEPT, the reconnect of a system it still believed in), held
+ * the old incarnation MEMBER, and the node was never readmitted in 300 s
+ * (tests/lab/captures/vms-af4-unclean-return-20261001/).
+ *
+ * Returns the block for the incarnation the circuit advertises now -- `csb`
+ * itself when nothing changed, a fresh block when it did, NULL when the CLUB
+ * has no room for one (the caller then has no block, which is the honest
+ * answer). Every value is read off the live circuit; a circuit that has not
+ * told its incarnation records "not told" and changes nothing (INV-6).
+ */
+static struct vms_csb *cnxman_track_incarnation(struct vms_cnxman *cn,
+						 struct vms_csb *csb)
+{
+	struct vms_club *club = &cn->cl->club;
+	struct vms_csb *fresh;
+	uint64_t inc = 0u;
+
+	if (csb == NULL || cn->cl->pe == NULL ||
+	    (csb->flags & VMS_CSB_F_LOCAL) != 0u)
+		return csb;
+	if (pe_peer_incarnation(cn->cl->pe, csb->sysid, &inc) != 0) {
+		cnxman_csb_set_incarnation(club, csb, 0u, 0);
+		return csb;
+	}
+	if (!csb->incarnation_valid || csb->incarnation == inc) {
+		cnxman_csb_set_incarnation(club, csb, inc, 1);
+		return csb;
+	}
+	cn->incarnations_retired++;
+	cnxman_retire_incarnation(cn, csb);
+	fresh = cnxman_club_alloc_csb(club, csb->sysid, 1);
+	if (fresh != NULL)
+		cnxman_csb_set_incarnation(club, fresh, inc, 1);
+	return fresh;
+}
+
+/*
  * ...AND THE SAME FOR THE INCARNATION (rd vms-0f9).
  *
  * The quadword a system put in its own formation body (spec SS4(g) abs 80) is
@@ -2380,16 +2454,14 @@ static void cnxman_sync_peer_incarnation(struct vms_cnxman *cn)
 		return;
 	for (i = 0; i < club->n_csb; i++) {
 		struct vms_csb *csb = &club->csb[i];
-		uint64_t inc = 0u;
 
 		if (!csb->in_use || !csb->sysid_valid)
 			continue;
 		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
 			continue;   /* our own incarnation is not learned */
-		if (pe_peer_incarnation(cn->cl->pe, csb->sysid, &inc) != 0)
-			cnxman_csb_set_incarnation(club, csb, 0u, 0);
-		else
-			cnxman_csb_set_incarnation(club, csb, inc, 1);
+		if (csb->state == (uint8_t)VMS_CNXMAN_CSB_DEAD)
+			continue;   /* an old incarnation learns nothing new */
+		(void)cnxman_track_incarnation(cn, csb);
 	}
 }
 

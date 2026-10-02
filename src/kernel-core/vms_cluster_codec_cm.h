@@ -590,19 +590,33 @@ vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
  * ------------------------------------------------------------------ */
 
 /* Transition-open family: op 0x08 (class-0x03 REMOVE), op 0x09
- * (class-0x02 ADD, carries the bitmap), op 0x0d-in-cat-0x01 (class-0x04
- * self-departure). */
+ * (class-0x02 ADD), op 0x0d-in-cat-0x01 (class-0x04 self-departure). The ADD
+ * and the REMOVE open both carry the post-transition nodemap at body[55]. */
 struct vms_cm_open {
 	struct vms_cm_envelope env;
 	uint32_t epoch;  /* body[12:16] LE u32, GROUNDED sec 4(j)/(p)         */
 	uint8_t  role;   /* body[16], GROUNDED sec 4(r)                       */
 	uint8_t  cls;    /* body[17], GROUNDED sec 4(r): the TRANSITION CLASS */
-	uint8_t  bitmap; /* body[55], op 0x09 ONLY; GROUNDED presence + the
-			  * popcount==member-count fact (sec 4(p)), but the
-			  * field's full WIDTH is undetermined beyond this
-			  * one byte -- do not assume 8 slots is the ceiling */
-	int      has_bitmap; /* 1 iff opcode == VMS_CM_OP_XITION_ADD           */
+	uint8_t  bitmap; /* body[55], op 0x09 and op 0x08; GROUNDED presence +
+			  * the popcount==post-transition-member-count fact
+			  * (sec 4(p); op 0x08: sec 4(p).R, every specimen),
+			  * bit k = the member holding CSID slot k. Its full
+			  * WIDTH is undetermined beyond this one byte -- do
+			  * not assume 8 slots is the ceiling */
+	int      has_bitmap; /* vms_cm_open_carries_nodemap(opcode)           */
 };
+
+/*
+ * vms_cm_open_carries_nodemap - does a transition open with this cat-0x01
+ * opcode carry the post-transition nodemap byte at body[55]?
+ *
+ * op 0x09 (ADD): sec 4(p), 54/54 library opens. op 0x08 (REMOVE): sec 4(p).R
+ * (rd vms-af4) -- every real-VAX op 0x08 in the capture library carries it,
+ * across removals of slots 2, 3 and 4 from three- and four-member clusters,
+ * the byte naming exactly the members the transition KEEPS. The class-0x04
+ * departure (op 0x0d) is not grounded as carrying one and is answered no.
+ */
+int vms_cm_open_carries_nodemap(uint8_t opcode);
 
 vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 				     struct vms_cm_open *out);
@@ -617,9 +631,9 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
  * that every byte but index VMS_CM_BITMAP_SPAN_IDX is zero -- as it is in
  * 54 of 54 library opens -- and to COUNT it when one is not.
  *
- * VMS_CODEC_E_CLASS unless this really is a cat-0x01 op-0x09 open: op 0x08
- * (class-0x03 REMOVE) and cat-0x01 op 0x0d (class-0x04 departure) carry no
- * bitmap at all, and reading this span from them would report residue as
+ * VMS_CODEC_E_CLASS unless this really is a cat-0x01 op-0x09 or op-0x08 open
+ * (vms_cm_open_carries_nodemap): cat-0x01 op 0x0d (class-0x04 departure)
+ * carries no bitmap, and reading this span from it would report residue as
  * membership.
  */
 vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *body, uint32_t len,
@@ -923,15 +937,15 @@ vms_codec_status_t vms_cm_barrier_build(uint32_t epoch, uint32_t step,
  * census pairs them with zero residuals and a mismatch is not representable:
  *
  *   class 0x02 ADD     -> op 0x09, tag 0x0240, and it CARRIES the nodemap
- *   class 0x03 REMOVE  -> op 0x08, tag 0x0340, NO nodemap (sec 4(p))
+ *   class 0x03 REMOVE  -> op 0x08, tag 0x0340, and it CARRIES the nodemap
+ *                         (sec 4(p).R, rd vms-af4)
  *   class 0x04 DEPART  -> op 0x0d, tag 0x0440, NO nodemap
  *
- * `bitmap` is the caller's membership nodemap byte and is written to body[55]
- * ONLY for class 0x02. It must be built from REAL CSBs (bit k = the member
- * holding CSID index k, sec 4(p), 54/54 opens with zero residuals); this
- * builder has no way to check that and does not try -- FC-P3.12 owns it.
- * Passing has_bitmap on a non-ADD class is VMS_CODEC_E_INVAL rather than a
- * silently-dropped field.
+ * `bitmap` is the caller's post-transition membership nodemap byte and is
+ * written to body[55] for classes 0x02 and 0x03. It must be built from REAL
+ * CSBs (bit k = the member holding CSID index k); this builder has no way to
+ * check that and does not try -- FC-P3.12 owns it. Passing has_bitmap on
+ * class 0x04 is VMS_CODEC_E_INVAL rather than a silently-dropped field.
  *
  * STAMP with is_response=0: a genuine origination.
  */

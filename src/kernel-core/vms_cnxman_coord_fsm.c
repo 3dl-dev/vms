@@ -1385,6 +1385,49 @@ static void coord_abandon_internal(struct cnxman_coord *c, const char *why)
  * removal). The assignment happens here, after the map holds, so a refusal
  * cannot leave a half-admitted system carrying a CSID the cluster never saw.
  */
+/*
+ * THE NODEMAP THE OPEN CARRIES. The class-0x02 ADD and the class-0x03 REMOVE
+ * open both put the post-transition membership at body[55] (spec SS4(p) and
+ * SS4(p).R): for an ADD the members plus the joiner's about-to-be slot, for a
+ * REMOVE the members the transition KEEPS -- every real-VAX op 0x08 in the
+ * capture library names exactly those and omits the departing system's slot.
+ * The participant set frozen just before this call already excludes a REMOVE's
+ * subject (coord_freeze_participants), so the same builder serves both.
+ * A class-0x04 departure carries none. Returns 0, or nonzero when a member's
+ * slot cannot be expressed, in which case nothing has been assigned.
+ */
+static int coord_take_nodemap(struct cnxman_coord *c, uint8_t tr_class,
+			      int32_t subject_csb, uint32_t subject_slot)
+{
+	struct vms_csb *subject = coord_csb_at(c, subject_csb);
+	uint8_t map = 0u;
+
+	if (tr_class != VMS_CM_CLASS_ADD && tr_class != VMS_CM_CLASS_REMOVE)
+		return 0;
+	if (tr_class == VMS_CM_CLASS_REMOVE)
+		subject_slot = 0u;   /* the departing slot is never in the map */
+	/*
+	 * `subject_csb < 0` is the FOUNDING open (cnxman_coord_found): the only
+	 * system it names is this one, so there is no joiner to resolve and no
+	 * slot to assign. Every other ADD is a system asking to be admitted and
+	 * MUST resolve to a real CSB -- we will not invent one.
+	 */
+	if (tr_class == VMS_CM_CLASS_ADD && subject_csb >= 0 && subject == NULL)
+		return -1;
+	if (coord_build_nodemap(c, subject_slot, &map) != 0)
+		return -1;
+	c->bitmap = map;
+	c->bitmap_valid = 1u;
+	c->bitmap_popcount = (uint8_t)cnxman_phase2_popcount8(map);
+	/* Book p. 7-25: a rejoining system gets a NEW CSID, never its old one
+	 * back -- so any csid already on this CSB is replaced. A founding open
+	 * has no subject and assigns nothing: the founder's own CSID was minted
+	 * before this call. */
+	if (tr_class == VMS_CM_CLASS_ADD && subject != NULL)
+		coord_assign_slot(c, subject, subject_slot);
+	return 0;
+}
+
 static int coord_open_transition(struct cnxman_coord *c, uint8_t tr_class,
 				 int32_t subject_csb, uint32_t subject_slot)
 {
@@ -1398,35 +1441,12 @@ static int coord_open_transition(struct cnxman_coord *c, uint8_t tr_class,
 
 	(void)coord_freeze_participants(c);
 
-	/* Only the class-0x02 ADD open carries a nodemap (spec SS4(p)). */
-	if (tr_class == VMS_CM_CLASS_ADD) {
-		struct vms_csb *subject = coord_csb_at(c, subject_csb);
-		uint8_t map = 0u;
-
-		/*
-		 * `subject_csb < 0` is the FOUNDING open (cnxman_coord_found):
-		 * the only system it names is this one, so there is no joiner
-		 * to resolve and no slot to assign. Every other ADD is a
-		 * system asking to be admitted and MUST resolve to a real CSB
-		 * -- we will not invent one.
-		 */
-		if ((subject_csb >= 0 && subject == NULL) ||
-		    coord_build_nodemap(c, subject_slot, &map) != 0) {
-			(void)coord_refuse(c, CNXMAN_COORD_REF_NO_NODEMAP,
-				"%CNXMAN, a system's cluster system id falls "
-				"outside the membership map this protocol can "
-				"express; transition not proposed");
-			return -1;
-		}
-		c->bitmap = map;
-		c->bitmap_valid = 1u;
-		c->bitmap_popcount = (uint8_t)cnxman_phase2_popcount8(map);
-		/* Book p. 7-25: a rejoining system gets a NEW CSID, never its
-		 * old one back -- so any csid already on this CSB is replaced.
-		 * A founding open has no subject and assigns nothing: the
-		 * founder's own CSID was minted before this call. */
-		if (subject != NULL)
-			coord_assign_slot(c, subject, subject_slot);
+	if (coord_take_nodemap(c, tr_class, subject_csb, subject_slot) != 0) {
+		(void)coord_refuse(c, CNXMAN_COORD_REF_NO_NODEMAP,
+			"%CNXMAN, a system's cluster system id falls "
+			"outside the membership map this protocol can "
+			"express; transition not proposed");
+		return -1;
 	}
 
 	coord_claim_club(c);

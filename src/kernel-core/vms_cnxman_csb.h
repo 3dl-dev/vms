@@ -251,7 +251,9 @@ uint32_t cnxman_club_reclaim_abandoned(struct vms_club *club,
 
 /* Find by identity. Both skip free slots and both refuse to match on a value
  * the CSB has not LEARNED (a CSB with csid_valid == 0 never matches any CSID,
- * including 0). NULL when there is none. */
+ * including 0). find_sysid also skips a p. 7-24 DEAD block: that is an OLD
+ * incarnation, and the SCSSYSTEMID now belongs to whoever came back (rd
+ * vms-af4). NULL when there is none. */
 struct vms_csb *cnxman_club_find_sysid(struct vms_club *club,
 				       vms_scs_sysid_t sysid);
 struct vms_csb *cnxman_club_find_csid(struct vms_club *club, vms_csid_t csid);

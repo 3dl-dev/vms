@@ -100,8 +100,13 @@ throttling, because every inter-node frame crosses four main threads (node worke
 parent page's L2 hub → node iframe → worker) and an SCS virtual circuit dies on latency. Each run reports
 its worst main-thread drift.
 
-Pass bar: **both** OVMX nodes' own CNXMAN naming all three systems **and** the real VAX admitting both in
-its own words, with no bugcheck. `gate-eval.mjs` holds every judgement the gate makes as pure functions
+Pass bar: **both** OVMX nodes' own CNXMAN naming all three systems, **and** the real VAX admitting both in
+its own words, with no bugcheck — **and** the OVMX/VAX node's RAW console carrying no NetBSD boot output.
+rd vms-553 silenced the substrate at the source (an `OVMX_QUIET` kernel option plus a quiet secondary
+bootstrap) and the pcjs page filters nothing, so the raw console is the claim: an OpenVMX/VAX node shows
+the VMS personality and nothing else. `netbsdNoise()` names which markers appeared; the positive control
+is this repo's own V0.7-2 Node B console, and OVMX's substrate announcement, the KA655 ROM banner and the
+executive's bracketed-uptime operator lines are all deliberately not matched. `gate-eval.mjs` holds every judgement the gate makes as pure functions
 over console text, unit-tested by `test/visitor-gate.test.mjs` without a browser — the gate has twice been
 wrong about a run (it failed a healthy cluster whose console had scrolled, and it named a cause its
 evidence did not carry), and a grader that lies in either direction is worse than no grader.

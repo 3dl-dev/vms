@@ -51,7 +51,7 @@
 import { chromium } from 'playwright';
 import fs from 'node:fs';
 import { NODES, MATRIX, newObservations, observe, isCN3, verdictOf, isRepaintStall, wantsReveal,
-         silentNeverStarts } from './gate-eval.mjs';
+         silentNeverStarts, isPass, isQuiet } from './gate-eval.mjs';
 
 const URL_ = process.env.DEMO_URL || 'https://openvmx.3dl.dev/demo/cluster/';
 const OUT = process.env.OUT_DIR || '/out/visitor-gate';
@@ -276,15 +276,16 @@ await (async () => {
                    added: r.added, vaxc_admitted: r.vaxc_admitted, restarts: r.restarts,
                    ovmx_founded: r.ovmx_founded, bugchecks: r.bugchecks, lost: r.lost,
                    repaint_stalls: r.repaint_stalls, lost_unnamed: r.lost_unnamed,
+                   substrate_noise: r.substrate_noise, quiet: isQuiet(r), pass: isPass(r),
                    worstDriftMs: r.worstDriftMs, froze: r.froze || false,
                    panel_started: r.panel_started, panel_watchdog_fired: r.panel_watchdog_fired,
                    silent_never_starts: silentNeverStarts(r, ['OVMXB', 'VAXC']) });
     fs.writeFileSync(`${OUT}/summary.json`, JSON.stringify(results, null, 1));
   }
-  const bad = results.filter((r) => !r.cn3);
+  const bad = results.filter((r) => !r.pass);
   const silentTotal = results.reduce((n, r) => n + (r.silent_never_starts || []).length, 0);
   console.log('');
-  for (const r of results) console.log(`${r.cn3 ? 'PASS' : 'FAIL'}  ${r.label.padEnd(24)} ${r.verdict}`);
+  for (const r of results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.label.padEnd(24)} ${r.verdict}`);
   console.log(`\nVISITOR_GATE=${JSON.stringify({ runs: results.length, failed: bad.length,
       pass: bad.length === 0, silent_never_starts: silentTotal })}`);
   process.exit(bad.length === 0 ? 0 : 1);

@@ -1,0 +1,296 @@
+[
+ {
+  "label": "page-order",
+  "order": "A,B,C",
+  "gap": 5000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "substrate_noise": {},
+  "quiet": true,
+  "pass": true,
+  "worstDriftMs": 170,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": []
+ },
+ {
+  "label": "all-at-once",
+  "order": "A,B,C",
+  "gap": 500,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "substrate_noise": {},
+  "quiet": true,
+  "pass": true,
+  "worstDriftMs": 59,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": []
+ },
+ {
+  "label": "page-order-throttled4",
+  "order": "A,B,C",
+  "gap": 5000,
+  "throttle": 4,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "substrate_noise": {},
+  "quiet": true,
+  "pass": true,
+  "worstDriftMs": 2027,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": []
+ },
+ {
+  "label": "b-first",
+  "order": "B,A,C",
+  "gap": 3000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "substrate_noise": {},
+  "quiet": true,
+  "pass": true,
+  "worstDriftMs": 68,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": []
+ },
+ {
+  "label": "c-first-legacy",
+  "order": "C,A,B",
+  "gap": 5000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "substrate_noise": {},
+  "quiet": true,
+  "pass": true,
+  "worstDriftMs": 32,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": []
+ },
+ {
+  "label": "all-at-once-throttled2",
+  "order": "A,B,C",
+  "gap": 500,
+  "throttle": 2,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 0,
+   "VAXC": 0
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {},
+  "lost_unnamed": {},
+  "substrate_noise": {},
+  "quiet": true,
+  "pass": true,
+  "worstDriftMs": 597,
+  "froze": false,
+  "panel_started": {
+   "OVMXB": true,
+   "VAXC": true
+  },
+  "panel_watchdog_fired": {
+   "OVMXB": false,
+   "VAXC": false
+  },
+  "silent_never_starts": []
+ }
+]

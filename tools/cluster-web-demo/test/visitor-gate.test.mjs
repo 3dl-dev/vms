@@ -283,3 +283,56 @@ test('the gate does not scroll panels while grading', () => {
   assert.equal(GATE.wantsReveal({ REVEAL: '1' }), true, 'opt in to diagnose a repaint regression');
   assert.equal(GATE.wantsReveal({ REVEAL: '1', NO_REVEAL: '1' }), false, 'NO_REVEAL still wins');
 });
+
+// --- rd vms-553: the OVMX/VAX console shows the VMS personality, nothing else --
+
+test('the substrate markers fire on the console that actually had them', () => {
+  // Positive control from this repo's own history: the V0.7-2 deploy's Node B
+  // console, before the substrate was silenced at the source.
+  const noisy = fs.readFileSync(new URL(
+    '../../../tests/lab/captures/vms-e18e-cn3-live-v072-20260926/OVMXB.console.log',
+    import.meta.url), 'utf8');
+  const seen = GATE.netbsdNoise(noisy);
+  assert.ok(Object.keys(seen).length >= 5, `expected several markers, got ${JSON.stringify(seen)}`);
+  assert.ok(seen['secondary bootstrap banner'], 'the >> NetBSD/vax boot [ banner');
+  assert.ok(seen['memory sizing'], 'total/avail memory = N KB');
+});
+
+test('OVMX output is not mistaken for substrate noise', () => {
+  // The executive naming its own substrate IS the VMS personality speaking, the
+  // KA655 banner is the machine's ROM, and the executive's operator lines carry
+  // the same bracketed uptime the kernel's did -- none of them is NetBSD's boot.
+  const ovmx = [
+    'OVMX/NetBSD-vax -- SYSKRNL (NetBSD kernel)',
+    '%OVMX-I-EXEC, VMS executive attached on /dev/vms',
+    'KA655-B V5.3, VMB 2.7',
+    '[   45.269670] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)',
+    '[   48.036579] %CNXMAN, this node is a member of the cluster',
+  ].join('\n');
+  assert.deepEqual(GATE.netbsdNoise(ovmx), {});
+});
+
+test('a noisy console fails the run even when the cluster formed', () => {
+  const R = newObservations();
+  observe(R, 'OVMXA', CN3_LINES('c3', 'c4', 'c5'));
+  observe(R, 'OVMXB', CN3_LINES('c4', 'c3', 'c5'));
+  observe(R, 'VAXC', VAXC_ADMITS);
+  R.sca = { OVMXA: 1, OVMXB: 1, VAXC: 1 };
+  R.cn3 = true;
+  assert.equal(GATE.isPass(R), true, 'quiet and clustered passes');
+
+  observe(R, 'OVMXB', '\n[   1.0000000] total memory = 16328 KB\n');
+  assert.equal(GATE.isQuiet(R), false);
+  assert.equal(GATE.isPass(R), false, 'membership alone is not the bar any more');
+  assert.match(verdictOf(R), /^CN=3 but NOT QUIET: NetBSD substrate lines/);
+});
+
+test('only the OVMX/VAX node is held to the quiet claim', () => {
+  // Node C is a real VAX/VMS machine and node A runs on Linux: neither has a
+  // NetBSD substrate to be quiet about, so their text must not be scanned.
+  const R = newObservations();
+  observe(R, 'VAXC', '>> NetBSD/vax boot [1.12] <<\ntotal memory = 16328 KB\n');
+  observe(R, 'OVMXA', '>> NetBSD/vax boot [1.12] <<\n');
+  assert.deepEqual(R.substrate_noise, {});
+  assert.equal(GATE.isQuiet(R), true);
+});

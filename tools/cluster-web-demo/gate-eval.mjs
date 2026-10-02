@@ -53,6 +53,50 @@ export const BUG = /\*\*\*\s*Fatal BUG CHECK|\*\*\*\s*FATAL BUGCHECK|CNXMGRERR|B
 // from a screenshot taken after the fact.
 export const POWERON = /KA655-B V5\.3, VMB/g;
 
+// NetBSD's own boot output on an OVMX/VAX console. rd vms-553 silenced the
+// substrate AT THE SOURCE (an OVMX_QUIET kernel option plus a quiet secondary
+// bootstrap), and the pcjs page no longer filters anything, so the RAW console
+// is the claim: an OpenVMX/VAX node shows the VMS personality and nothing else.
+//
+// Each marker is a line the substrate used to print, taken from a console this
+// repo already keeps -- tests/lab/captures/vms-e18e-cn3-live-v072-20260926/
+// OVMXB.console.log, the V0.7-2 deploy:
+//
+//   >> NetBSD/vax boot [1.12 (Mon Dec 16 13:08:11 UTC 2024)] <<
+//   [ 1.0000000] NetBSD 10.1 (OVMX) #9: Sat Aug 29 08:54:46 UTC 2026
+//   [ 1.0000000] Copyright (c) 1996, ... The NetBSD Foundation, Inc. ...
+//   [ 1.0000000] MicroVAX 3800/3900
+//   [ 1.0000000] total memory = 16328 KB / avail memory = 11144 KB
+//   [ 1.0000000] Detecting hardware...
+//
+// What is deliberately NOT here: OVMX's own substrate announcement (it NAMES
+// the substrate -- "OVMX/NetBSD-vax -- SYSKRNL (NetBSD kernel)" -- and that is
+// the VMS personality speaking, which is what we want on the console), the
+// KA655 firmware banner (that is the machine's ROM, not NetBSD), and anything
+// matching on the bracketed-uptime form alone (the executive's own operator
+// lines print that way too).
+export const NETBSD_NOISE = [
+  { name: 'secondary bootstrap banner', re: />>\s*NetBSD\/vax boot\s*\[/g },
+  { name: 'kernel version line',        re: /NetBSD \d+\.\d+[^\n]*#\d+/g },
+  { name: 'NetBSD Foundation copyright', re: /The NetBSD Foundation, Inc\./g },
+  { name: 'machine identification',     re: /MicroVAX \d{4}\/\d{4}/g },
+  { name: 'memory sizing',              re: /(?:total|avail) memory = \d+ KB/g },
+  { name: 'device autoconfiguration',   re: /Detecting hardware\.\.\./g },
+  { name: 'root mount',                 re: /root on \w+\d+\w* dumps on|root file system type:/g },
+];
+
+// Which substrate markers a console shows, and how many times. {} is the claim
+// rd vms-553 makes; anything else is the console telling on it.
+export function netbsdNoise(text) {
+  const t = String(text || '');
+  const out = {};
+  for (const { name, re } of NETBSD_NOISE) {
+    const n = (t.match(new RegExp(re.source, 'g')) || []).length;
+    if (n) out[name] = n;
+  }
+  return out;
+}
+
 // Every capture group match of a /g regex, de-duplicated, in first-seen order.
 export function setOf(text, re) {
   const seen = new Set();
@@ -133,6 +177,13 @@ export function observe(R, who, screen) {
   if (BUG.test(t)) R.bugchecks[who] = (t.match(BUG) || [''])[0];
   if (who !== 'VAXC' && FOUNDED.test(t)) R.ovmx_founded[who] = true;
   if (who === 'VAXC') R.vaxc_admitted = setOf(t, VADD);
+  // The OVMX/VAX node's raw console must carry no NetBSD boot output (rd
+  // vms-553). Node C is a real VAX/VMS machine and node A is Linux-substrate:
+  // neither has a NetBSD substrate to be quiet about.
+  if (who === 'OVMXB') {
+    const noise = netbsdNoise(t);
+    if (Object.keys(noise).length) R.substrate_noise[who] = noise;
+  }
   return R;
 }
 
@@ -180,6 +231,8 @@ export const newObservations = () => ({
   // from the inner pcjs machine frame (consoleOf reads) -- the watchdog lives
   // one frame up, specifically so it survives the inner frame never loading.
   panel_started: {}, panel_watchdog_fired: {},
+  // NetBSD boot output seen on the OVMX/VAX node's raw console (rd vms-553).
+  substrate_noise: {},
 });
 
 // A SILENT never-start: the raw console stayed empty (nothing to show a
@@ -195,6 +248,19 @@ export function silentNeverStarts(R, pcjsNodes) {
     !(R.transcript[w] || '').length && !R.panel_started[w] && !R.panel_watchdog_fired[w]);
 }
 
+// Is the OVMX/VAX node's raw console free of NetBSD boot output (rd vms-553)?
+export const isQuiet = (R) => !Object.keys(R.substrate_noise || {}).length;
+
+// The run's pass bar: the cluster formed AND the console a visitor reads shows
+// the VMS personality only. Membership alone is no longer enough -- V0.7-6
+// claims the substrate is silent at the source, and this is where that claim is
+// either true in public or not.
+export const isPass = (R) => !!R.cn3 && isQuiet(R);
+
+// How a console that is not quiet is said, once, in one place.
+const noiseWhy = (R) =>
+  `NetBSD substrate lines on the OVMX/VAX console: ${JSON.stringify(R.substrate_noise)} (rd vms-553)`;
+
 // State the outcome in terms of what was OBSERVED, never a diagnosis the
 // evidence does not carry.
 export function verdictOf(R) {
@@ -203,7 +269,7 @@ export function verdictOf(R) {
            `-- the OVMX nodes must be NON-VOTING (rd vms-1a1)`;
   }
   if (Object.keys(R.bugchecks || {}).length) return `BUGCHECK: ${JSON.stringify(R.bugchecks)}`;
-  if (R.cn3) return 'CN=3';
+  if (R.cn3) return isQuiet(R) ? 'CN=3' : `CN=3 but NOT QUIET: ${noiseWhy(R)}`;
   const why = [];
   for (const w of NODES.slice(0, 2)) {
     const miss = WANT.filter((id) => !(R.added[w] || []).includes(id));
@@ -222,6 +288,7 @@ export function verdictOf(R) {
   if (Object.keys(stalls).length) {
     why.push(`panels that only repainted once revealed: ${JSON.stringify(stalls)} (rd vms-0bc)`);
   }
+  if (!isQuiet(R)) why.push(noiseWhy(R));
   const silent = silentNeverStarts(R, ['OVMXB', 'VAXC'].filter((w) => w in (R.panel_started || {})));
   if (silent.length) {
     why.push(`SILENT never-start (no console, no watchdog): ${silent.join(',')} (rd vms-bfdd)`);

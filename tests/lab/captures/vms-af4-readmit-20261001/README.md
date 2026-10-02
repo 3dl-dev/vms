@@ -2,7 +2,7 @@
 
 **Result.** Each arm SIGKILLs a member and boots it again at once, still inside the
 survivors' reconnect window. **12 of 12 arms readmitted the member, with 0
-bugchecks.** The standing stall matrix on the same build is in `stall-matrix.txt`.
+bugchecks.** The standing stall matrix on the same build: **24/24 PASS, 0 VAX bugchecks** (`stall-matrix.txt`).
 
 The defect is from `tests/lab/captures/vms-af4-unclean-return-20261001/`. There, main
 `ff4a7160` never readmitted the returning node in 300 s, and the surviving OVMX node

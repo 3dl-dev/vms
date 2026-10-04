@@ -864,7 +864,17 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # Its real compile IS the include-surface proof gate. Anchored + $-terminated
 # so it excludes exactly this one file, never the include-surface directory (a
 # future host-compilable .c added there must still be scanned).
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$"
+#
+# ONE MORE file-level exclusion (rd vms-032):
+#   tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc.c
+# is a musl arch-override source (src/malloc/$(ARCH)/ replaces the generic
+# lite_malloc.c inside the musl-1.2.5 tree build-musl.sh extracts). It includes
+# musl's INTERNAL "libc.h" and uses weak_alias(), which exist only inside that
+# tree, so it cannot compile standalone in a host scan. It defines only
+# __libc_malloc / malloc forwarders to mallocng -- no sys$ symbol to certify.
+# Its real compile + the one-heap nm gate run in build-musl.sh. Anchored +
+# $-terminated so it excludes exactly this one file.
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

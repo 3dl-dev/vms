@@ -72,6 +72,9 @@ import subprocess
 import traceback
 
 import anita
+import netbsd_download
+
+netbsd_download.install(anita)
 
 import netbsd_console
 

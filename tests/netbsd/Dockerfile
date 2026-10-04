@@ -67,6 +67,7 @@ COPY tests/netbsd/netbsd_version.env tests/netbsd/drive_netbsd.py tests/netbsd/r
 # (drive_netbsd.py, drive_netbsd_p2b.py, drive_netbsd_p2c.py). It sits in /netbsd
 # next to the drivers, so `import netbsd_console' resolves via the script dir.
 COPY tests/netbsd/netbsd_console.py /netbsd/netbsd_console.py
+COPY tests/netbsd/netbsd_download.py /netbsd/netbsd_download.py
 
 # P2b (rd vms-bfe) + P2c (rd vms-4b4): the OVMX/NetBSD `vms' pseudo-device, the
 # transport seam leaf, and the userspace probes -- staged for the in-guest build.

@@ -3001,7 +3001,7 @@ struct fal_server_arg { struct fal_xport xp; uint32_t status; };
 static void *fal_server_thread(void *v)
 {
     struct fal_server_arg *a = v;
-    struct dnet_dap_transport t = { fal_xport_send, fal_xport_recv, &a->xp };
+    struct dnet_dap_transport t = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &a->xp };
     a->status = dnet_fal_server_run(&t);
     return NULL;
 }
@@ -3067,7 +3067,7 @@ static int run_fal_selftest(void)
         pthread_t th;
         if (pthread_create(&th, NULL, fal_server_thread, &sarg) == 0) {
             struct fal_xport cxp = { &L2, sv2[0], sv2[0], &tick };
-            struct dnet_dap_transport ct = { fal_xport_send, fal_xport_recv, &cxp };
+            struct dnet_dap_transport ct = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &cxp };
             uint32_t cst = dnet_fal_client_get("OVMXR::DKA0:[X]NOPE.TXT",
                                                "DKA0:[X]LOCAL.TXT", &ct);
             pthread_join(th, NULL);
@@ -3185,7 +3185,7 @@ static int run_fal_accept_test(void)
             struct fal_server_arg sarg = { { &R, sv[1], sv[1], &tick }, 0 };
             pthread_t th; pthread_create(&th, NULL, fal_server_thread, &sarg);
             struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
-            struct dnet_dap_transport ct = { fal_xport_send, fal_xport_recv, &cxp };
+            struct dnet_dap_transport ct = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &cxp };
             uint32_t cst = dnet_fal_client_put(SRC, DEST, &ct);
             pthread_join(th, NULL);
             FA_CHECK(cst == SS$_NORMAL && sarg.status == SS$_NORMAL,
@@ -3208,7 +3208,7 @@ static int run_fal_accept_test(void)
             struct fal_server_arg sarg = { { &R, sv[1], sv[1], &tick }, 0 };
             pthread_t th; pthread_create(&th, NULL, fal_server_thread, &sarg);
             struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
-            struct dnet_dap_transport ct = { fal_xport_send, fal_xport_recv, &cxp };
+            struct dnet_dap_transport ct = { .send = fal_xport_send, .recv = fal_xport_recv, .ctx = &cxp };
             uint32_t cst = dnet_fal_client_get(DEST, BACK, &ct);
             pthread_join(th, NULL);
             FA_CHECK(cst == SS$_NORMAL && sarg.status == SS$_NORMAL,
@@ -3512,7 +3512,7 @@ static uint32_t copy_client_run(struct copy_wire *w,
         (void)w->txf(w, frame, flen);
 
     struct copy_dap_ctx dc = { w };
-    struct dnet_dap_transport t = { copy_dap_send, copy_dap_recv, &dc };
+    struct dnet_dap_transport t = { .send = copy_dap_send, .recv = copy_dap_recv, .ctx = &dc };
     uint32_t status = plan->is_get
         ? dnet_fal_client_get(plan->remote_spec, plan->local_spec, &t)
         : dnet_fal_client_put(plan->local_spec, plan->remote_spec, &t);
@@ -3565,7 +3565,7 @@ static void *copy_server_thread(void *v)
         return NULL;
 
     struct copy_dap_ctx dc = { w };
-    struct dnet_dap_transport t = { copy_dap_send, copy_dap_recv, &dc };
+    struct dnet_dap_transport t = { .send = copy_dap_send, .recv = copy_dap_recv, .ctx = &dc };
     a->status = dnet_fal_server_run(&t);
     return NULL;
 }
@@ -3713,7 +3713,7 @@ static void *copy_noauth_server_thread(void *v)
         return NULL;
 
     struct copy_dap_ctx dc = { w };
-    struct dnet_dap_transport t = { copy_dap_send, copy_dap_recv, &dc };
+    struct dnet_dap_transport t = { .send = copy_dap_send, .recv = copy_dap_recv, .ctx = &dc };
     a->status = dnet_fal_server_run(&t);
     return NULL;
 }

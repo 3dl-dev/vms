@@ -43,10 +43,10 @@
  * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- validates the range, echoes it back
  *     in retadr and returns SS$_NORMAL; no pages are locked.
  * OVMX-USERSPACE: sys$ulwset (vms-e0a) -- the same, for unlocking.
- * OVMX-USERSPACE: sys$lckpag (vms-44a) -- mlock (vms_sys_mlock) of the page-rounded range in
+ * OVMX-USERSPACE: sys$lckpag (vms-44a) -- mlock() of the page-rounded range in
  *     the calling process only; the lock is the Linux VMM's, not an executive
  *     balance-set entry, so no other process or $GETJPI can see it.
- * OVMX-USERSPACE: sys$ulkpag (vms-44a) -- munlock of the same.
+ * OVMX-USERSPACE: sys$ulkpag (vms-44a) -- munlock() of the same.
  * OVMX-USERSPACE: sys$purge_ws (vms-e0a) -- the 64-bit-range form of $PURGWS;
  *     validates the range and returns SS$_NORMAL, nothing is purged.
  */
@@ -57,7 +57,6 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
-#include "vms_syscall.h"   /* vms_sys_mlock/munlock: the libc has no mlock the DECC$SHR vector exports */
 #include "starlet.h"
 #include "va_rangedef.h"
 
@@ -387,9 +386,8 @@ uint32_t sys$lckpag(const void *inadr, void *retadr, uint32_t acmode)
     uint32_t st = pag_range((const VA_RANGE *)inadr, &got, &len);
     if (!(st & 1))
         return st;
-    int rc = vms_sys_mlock(got.va_range$ps_start_va, len);
-    if (rc < 0) {
-        if (rc == -ENOMEM) return SS$_ACCVIO;
+    if (mlock(got.va_range$ps_start_va, len) < 0) {
+        if (errno == ENOMEM) return SS$_ACCVIO;
         return SS$_NOPRIV;
     }
     if (retadr)
@@ -408,9 +406,8 @@ uint32_t sys$ulkpag(const void *inadr, void *retadr, uint32_t acmode)
     uint32_t st = pag_range((const VA_RANGE *)inadr, &got, &len);
     if (!(st & 1))
         return st;
-    int rc = vms_sys_munlock(got.va_range$ps_start_va, len);
-    if (rc < 0)
-        return (rc == -ENOMEM) ? SS$_ACCVIO : SS$_NOPRIV;
+    if (munlock(got.va_range$ps_start_va, len) < 0)
+        return (errno == ENOMEM) ? SS$_ACCVIO : SS$_NOPRIV;
     if (retadr)
         *(VA_RANGE *)retadr = got;
     return SS$_NORMAL;

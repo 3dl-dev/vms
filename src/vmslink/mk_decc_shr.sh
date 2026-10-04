@@ -1090,6 +1090,13 @@ fi
 # is appended here rather than inserted next to waitpid.
 VEC="$VEC,waitid=PROCEDURE"
 
+# mlock/munlock/getrandom APPENDED for vms-44a (corpus R2) at the very end of the
+# vector -> no prior universal's index moves (GSMATCH LEQUAL-compatible).
+# sys$lckpag/sys$ulkpag (libvms syssvc/sys_memory.c) lock/unlock page ranges and
+# sys$get_entropy (syssvc/sys_misc.c) reads the kernel CSPRNG; all three are plain
+# musl entry points, so DECC$SHR is the producer, same as nanosleep above.
+VEC="$VEC,mlock=PROCEDURE,munlock=PROCEDURE,getrandom=PROCEDURE"
+
 # Whole-archive, strict (NO --allow-undefined): a complete C-RTL shareable must
 # link with zero deferred externals. libc.a first so its strong defs win; the
 # loader-glue object last (it only REFERENCES __libc, which libc.a defines).

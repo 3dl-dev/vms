@@ -456,9 +456,14 @@ uint32_t sys$get_entropy(void *buffer, uint32_t length)
 {
     if (!buffer)
         return SS$_ACCVIO;
-#ifndef __linux__
+#if defined(__NetBSD__)
     arc4random_buf(buffer, length);     /* BSD kernel CSPRNG; cannot fail */
     return SS$_NORMAL;
+#elif !defined(__linux__)
+    /* A substrate with no CSPRNG entry point libvms knows: honest refusal, never
+     * a buffer of zeros or of a weak generator's output. */
+    (void)buffer; (void)length;
+    return SS$_NOSUCHDEV;
 #else
     uint8_t *p = (uint8_t *)buffer;
     while (length > 0) {

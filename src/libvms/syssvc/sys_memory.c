@@ -386,10 +386,15 @@ uint32_t sys$lckpag(const void *inadr, void *retadr, uint32_t acmode)
     uint32_t st = pag_range((const VA_RANGE *)inadr, &got, &len);
     if (!(st & 1))
         return st;
+#if defined(__linux__) || defined(__NetBSD__)
     if (mlock(got.va_range$ps_start_va, len) < 0) {
         if (errno == ENOMEM) return SS$_ACCVIO;
         return SS$_NOPRIV;
     }
+#else
+    (void)len;
+    return SS$_NOSUCHDEV;       /* no page-lock entry point on this substrate */
+#endif
     if (retadr)
         *(VA_RANGE *)retadr = got;
     return SS$_NORMAL;
@@ -406,8 +411,13 @@ uint32_t sys$ulkpag(const void *inadr, void *retadr, uint32_t acmode)
     uint32_t st = pag_range((const VA_RANGE *)inadr, &got, &len);
     if (!(st & 1))
         return st;
+#if defined(__linux__) || defined(__NetBSD__)
     if (munlock(got.va_range$ps_start_va, len) < 0)
         return (errno == ENOMEM) ? SS$_ACCVIO : SS$_NOPRIV;
+#else
+    (void)len;
+    return SS$_NOSUCHDEV;
+#endif
     if (retadr)
         *(VA_RANGE *)retadr = got;
     return SS$_NORMAL;

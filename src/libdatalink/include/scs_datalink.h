@@ -220,6 +220,12 @@ ssize_t scs_datalink_recv(int fd, uint8_t *buf, size_t buf_len);
  */
 int scs_datalink_set_recv_timeout(int fd, int seconds);
 
+/* Millisecond form (rd vms-6af1): NETACP serving several live sessions waits
+ * on the wire only briefly so session output is not held for a whole second.
+ * The executive backend's L2_RECV takes milliseconds natively; the AF_PACKET
+ * and bpf backends map it onto SO_RCVTIMEO / BIOCSRTIMEOUT. */
+int scs_datalink_set_recv_timeout_ms(int fd, int ms);
+
 #ifdef __cplusplus
 }
 #endif

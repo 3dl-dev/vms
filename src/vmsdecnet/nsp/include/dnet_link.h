@@ -150,6 +150,8 @@ enum dnet_link_event {
  * (no such object served here, or no session could be created) -- a measured
  * value, not an invented one.
  */
+#define DNET_LINK_REASON_RESOURCE      1   /* DNA Session Control: insufficient resources at the object (spec) */
+#define DNET_LINK_REASON_ACCESS       34   /* access control rejected -- a real VMS FAL's bad-password refusal (rd vms-a8a lab, fal-probe.pcap) */
 #define DNET_LINK_REASON_OBJREJ        9   /* object rejected/ended the connect (oracle frame 117) */
 #define DNET_LINK_REASON_DISCOMPLETE  42   /* disconnect complete (oracle frame 118) */
 

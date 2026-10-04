@@ -52,18 +52,24 @@ extern "C" {
 #define DNET_FAL_PASS_MAX   64
 
 /*
- * The DAP message transport the caller provides. This is the seam between the
- * DAP presentation layer (this module) and the NSP session layer (the caller's
- * logical link): send() ships one DAP message as an NSP data segment, recv()
- * delivers the next one. Both return 0 on success and a negative value on a
- * wire/protocol failure or a closed link. NEITHER is a "fake transfer": the
- * bytes that cross are real DAP messages inside real NSP data segments on a
- * real (veth) or socketpair datalink.
+ * The NSP SEGMENT transport the caller provides -- the seam between the DAP
+ * presentation layer (this module) and the NSP session layer (the caller's
+ * logical link). send() ships ONE Session Control buffer (one NSP data
+ * segment carrying one DAP message -- OVMX never blocks on send); recv()
+ * delivers the next received segment, which a real VMS peer may fill with
+ * SEVERAL blocked DAP messages (spec sec. 3.2: e.g. ATTRIBUTES+NAME+ACK in one
+ * segment, observed live). This module splits them with the bounded decoder,
+ * holding the remainder in rx[]. Both callbacks return 0 on success and a
+ * negative value on a wire failure or a closed link. The rx* members are
+ * private to this module; zero-initialise the struct.
  */
+#define DNET_FAL_SEG_MAX 2048
 struct dnet_dap_transport {
-    int  (*send)(void *ctx, const struct dnet_dap_msg *msg);
-    int  (*recv)(void *ctx, struct dnet_dap_msg *msg);
+    int  (*send)(void *ctx, const uint8_t *seg, size_t len);
+    int  (*recv)(void *ctx, uint8_t *buf, size_t cap, size_t *len);
     void  *ctx;
+    uint8_t rx[DNET_FAL_SEG_MAX];
+    size_t  rxlen, rxoff;
 };
 
 /*

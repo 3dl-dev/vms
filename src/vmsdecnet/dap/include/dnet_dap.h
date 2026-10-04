@@ -1,56 +1,51 @@
 /*
  * dnet_dap.h - DECnet Phase IV DAP (Data Access Protocol) message codec, the
  * presentation layer that rides an established NSP logical link to move a file
- * (rd vms-8c2, epic vms-30e; north-star demo leg vms-e4dc). This is the layer
- * behind `$ COPY node"user pw"::file localfile` and the FAL (File Access
- * Listener, DECnet object 17) server.
+ * (rd vms-8c2 -> re-grounded rd vms-a8a, epic vms-30e; north-star vms-e4dc).
+ * This is the layer behind `$ COPY node"user pw"::file localfile` and the FAL
+ * (File Access Listener, DECnet object 17) server.
  *
  * ================== CLEAN-ROOM PROVENANCE (Rule 8) ==================
- * TWO sources, and every byte here traces to one of them -- nothing is invented
+ * Every byte here traces to one of two PUBLIC sources -- nothing is invented
  * and nothing comes from a VSI disassembly:
  *
- *   1. docs/oracle/vax-copy-fal-dap.{md,wire.txt,hex.txt} (rd vms-cd3) -- a REAL
- *      OpenVMS VAX V7.3 -> V7.3 `$ COPY` over DECnet, captured on the lab. It
- *      FIXES the ground truth this codec is forbidden to contradict:
- *        - the connect names Session Control OBJECT 17 (FAL) and CARRIES the
- *          username + password in the access-control fields (handled by the
- *          FAL server + the existing dnet_cterm_sc_connect_build, not here);
- *        - the message SEQUENCE over the link: CONFIGURATION (both ways) ->
- *          ATTRIBUTES/NAME (filename, resolved full spec, owner UIC, RMS
- *          attributes) -> CONTROL -> DATA (the file records VERBATIM) ->
- *          STATUS / ACCESS-COMPLETE -> clean NSP disconnect;
- *        - the file records travel VERBATIM as counted records inside DATA
- *          messages, and the resolved full spec / owner UIC travel as counted
- *          strings inside the attributes/name exchange (the oracle's hex shows
- *          "OVMXDAP_R.TXT;", "SYS$SYSROOT:[SYSMGR]OVMXDAP_R.TXT;1" and
- *          "[000001,000004]" in the clear, locatable by their ASCII).
+ *   1. The DEC "DECnet DIGITAL Network Architecture Data Access Protocol
+ *      Functional Specification, Version 5.6.0" (AA-K177A-TK, Oct 1980): the
+ *      generic message format (OPERATOR = TYPE + FLAGS, optional STREAMID /
+ *      LENGTH / LEN256 / BITCNT / SYSPEC), the field types (B = binary,
+ *      EX-n = extensible bitmap of up to n bytes with bit 7 = "more",
+ *      I-n = image field: 1 count byte + up to n bytes), and every message's
+ *      field list and order (sec. 3.3 - 3.17), the setup + transfer sequences
+ *      (sec. 5.1, 5.2.1, 5.2.2) and the MACCODE table (sec. 3.11).
  *
- *   2. The PUBLIC DEC DAP (Data Access Protocol) functional specification
- *      (AA-K177A-TK and successors) -- the message TYPES (CONFIGURATION,
- *      ATTRIBUTES, ACCESS, CONTROL, CONTINUE, ACKNOWLEDGE, ACCESS COMPLETE,
- *      DATA, STATUS, NAME) and the generic message framing (an OPERATOR byte, a
- *      FLAGS byte, an optional LENGTH field, then typed fields; counted "image"
- *      fields for strings; extensible bitmap fields).
+ *   2. Real OpenVMS VAX V7.3 FAL behaviour on the wire: the vms-cd3 oracle
+ *      (docs/oracle/vax-copy-fal-dap.*) and the vms-a8a lab captures
+ *      (tests/lab/captures/decnet-fal-dap-20261004/) in which an independent
+ *      probe and then this codec drove a real VAX FAL through GET and PUT.
  *
- * HONEST SCOPE (INV-6). The oracle §3 states plainly that it fixes the ground-
- * truth BYTES and the credential/object/SEQUENCE semantics but "does not hand-
- * transcribe every DAP sub-field". So the per-field FRAMING of each message
- * here is coded against the PUBLIC SPEC (source 2) and is self-round-tripping;
- * it is NOT asserted byte-identical to the real-VAX DAP sub-framing. Two OVMX
- * nodes interoperate over this codec faithfully (the sequence + the carried
- * values are the oracle's); byte-level wire interop with a stock VAX FAL is a
- * separate, harder rung (exact VAX DAP sub-field reversing beyond the oracle's
- * transcription) and is a FILED follow-on, never faked as done here.
+ * WHAT THE PREVIOUS CUT GOT WRONG (rd vms-a8a, recorded so it is not repeated):
+ * the vms-8c2 codec used an OVMX-invented frame (FLAGS always LENGTH, fixed-
+ * width fields, NAME = 10 where the spec's NAME is 15 and 10 is KEY DEFINITION,
+ * OSTYPE 1 = RT-11 for "VMS"), so it self-round-tripped but could not talk to a
+ * real VMS FAL. This codec decodes every captured real-VMS DAP message field by
+ * field (tests/vmsdecnet/test_dnet_dap.c anchors them) and its encoder output
+ * was accepted by a real VMS FAL for a full GET and PUT.
  *
- * PURITY / SECURITY. Like the NSP and CTERM codecs, this is a PURE byte library:
- * no socket, no fd, no clock, no allocation beyond memcpy/memset. It links
- * equally into the daemon, the FAL server and the deterministic unit test.
- * EVERY decode path is fully BOUNDED against hostile input: DAP rides an NSP
- * link that, on the inbound (FAL) side, an unauthenticated attacker can drive,
- * so a malformed message must be REJECTED cleanly (a negative code the caller
- * turns into an NSP disconnect), never over-read -- "OVMX never crashes a peer",
- * both directions. The decoder never reads past buf[len-1] and refuses (does
- * not clip) an over-long counted field.
+ * VERSION / SCOPE (INV-6). OVMX speaks DAP 5.6 and advertises in SYSCAP only
+ * what it implements: sequential organisation, sequential FILE TRANSFER
+ * (RAC = 3), blocking up to response (it can receive several messages in one
+ * segment), the 2-byte LENGTH, and the NAME message. Messages and fields
+ * beyond that are decoded (and bounded) but never served or faked:
+ * the extended-attribute messages (KEY DEFINITION, ALLOCATION, SUMMARY,
+ * DATE/TIME, PROTECTION, ACL) decode as "known type, body skipped";
+ * segmented messages (FLAGS bit 6) are refused DNET_DAP_EUNSUP.
+ *
+ * PURITY / SECURITY. A PURE byte library: no socket, no fd, no clock, no
+ * allocation. EVERY decode path is fully BOUNDED against hostile input (the
+ * inbound FAL side is attacker-driven before and after auth): it never reads
+ * past buf[len-1], refuses (does not clip) an over-long image field, and a
+ * malformed message yields a negative code the caller turns into an NSP
+ * disconnect -- "OVMX never crashes a peer", both directions.
  */
 #ifndef DNET_DAP_H
 #define DNET_DAP_H
@@ -62,146 +57,271 @@
 extern "C" {
 #endif
 
-/* DAP message OPERATOR (type) codes -- the public DAP specification message
- * set. Only the members this rung's sequential-file COPY needs are served;
- * others decode to DNET_DAP_MSG_UNKNOWN honestly rather than being faked. */
+/* DAP message TYPE codes (spec sec. 3; operator field TYPE). */
 enum dnet_dap_op {
-    DNET_DAP_CONFIG        = 1,  /* CONFIGURATION: buffer size, OS/filesys, version */
-    DNET_DAP_ATTRIBUTES    = 2,  /* ATTRIBUTES: RMS org/rfm/rat/mrs/allocation      */
-    DNET_DAP_ACCESS        = 3,  /* ACCESS: open/create a file by name              */
-    DNET_DAP_CONTROL       = 4,  /* CONTROL: initiate data transfer (GET/PUT)       */
-    DNET_DAP_CONTINUE      = 5,  /* CONTINUE-TRANSFER: resume/skip/ack              */
-    DNET_DAP_ACKNOWLEDGE   = 6,  /* ACKNOWLEDGE: positive ack of ACCESS/CONTROL     */
-    DNET_DAP_ACCESS_COMPLETE = 7,/* ACCESS COMPLETE: end of file access             */
-    DNET_DAP_DATA          = 8,  /* DATA: one file record, verbatim                 */
-    DNET_DAP_STATUS        = 9,  /* STATUS: MACRO/MICRO condition (RMS-style)       */
-    DNET_DAP_NAME          = 10, /* NAME: resolved full spec / owner (attribute set)*/
-    DNET_DAP_MSG_UNKNOWN   = 0   /* decoded a known-format frame of an unserved op  */
+    DNET_DAP_MSG_UNKNOWN     = 0,  /* a well-formed message of an unknown type */
+    DNET_DAP_CONFIG          = 1,  /* Configuration                            */
+    DNET_DAP_ATTRIBUTES      = 2,  /* Attributes (main)                        */
+    DNET_DAP_ACCESS          = 3,  /* Access                                   */
+    DNET_DAP_CONTROL         = 4,  /* Control                                  */
+    DNET_DAP_CONTINUE        = 5,  /* Continue Transfer                        */
+    DNET_DAP_ACKNOWLEDGE     = 6,  /* Acknowledge                              */
+    DNET_DAP_ACCESS_COMPLETE = 7,  /* Access Complete                          */
+    DNET_DAP_DATA            = 8,  /* Data                                     */
+    DNET_DAP_STATUS          = 9,  /* Status                                   */
+    DNET_DAP_KEYDEF          = 10, /* Key Definition Attributes Extension      */
+    DNET_DAP_ALLOC           = 11, /* Allocation Attributes Extension          */
+    DNET_DAP_SUMMARY         = 12, /* Summary Attributes Extension             */
+    DNET_DAP_DATETIME        = 13, /* Date and Time Attributes Extension       */
+    DNET_DAP_PROTECTION      = 14, /* Protection Attributes Extension          */
+    DNET_DAP_NAME            = 15, /* Name                                     */
+    DNET_DAP_ACL             = 16  /* Access Control List Attributes Extension */
 };
 
-/* DAP FLAGS byte bits (public spec). This codec always emits LENGTH-present so
- * every message is self-delimiting on the wire -- the property that makes the
- * bounded decoder possible when several messages ride one NSP segment. */
-#define DNET_DAP_FLAG_STREAMID  0x01
-#define DNET_DAP_FLAG_LENGTH    0x02
-#define DNET_DAP_FLAG_LEN256    0x04
-#define DNET_DAP_FLAG_BITCNT    0x08
+/* FLAGS byte (spec sec. 3.2). */
+#define DNET_DAP_FLAG_STREAMID   0x01
+#define DNET_DAP_FLAG_LENGTH     0x02
+#define DNET_DAP_FLAG_LEN256     0x04
+#define DNET_DAP_FLAG_BITCNT     0x08
+#define DNET_DAP_FLAG_RSVD4      0x10
+#define DNET_DAP_FLAG_SYSPEC     0x20
+#define DNET_DAP_FLAG_SEGMENTED  0x40
 
-/* CONTROL CTLFUNC values (public spec: the operation the transfer performs). */
-#define DNET_DAP_CTL_GET     1   /* transfer records FROM the remote file (read)  */
-#define DNET_DAP_CTL_PUT     3   /* transfer records TO the remote file (write)   */
-#define DNET_DAP_CTL_CONNECT 8   /* establish the record stream                   */
+/* CONFIGURATION OSTYPE / FILESYS values (spec sec. 3.3). */
+#define DNET_DAP_OS_VAXVMS       7
+#define DNET_DAP_FS_RMS32        3
 
-/* ACCESS ACCFUNC values (public spec). */
-#define DNET_DAP_ACC_OPEN    1   /* open an existing file (a GET/read source)     */
-#define DNET_DAP_ACC_CREATE  2   /* create a file       (a PUT/write sink)        */
+/* SYSCAP bit numbers (spec sec. 3.3) OVMX tests / advertises. */
+#define DNET_DAP_CAP_SEQ_ORG        1
+#define DNET_DAP_CAP_SEQ_XFER       5
+#define DNET_DAP_CAP_BLOCK_TO_RESP  18
+#define DNET_DAP_CAP_LEN256         20
+#define DNET_DAP_CAP_SEQ_RECORD     33
+#define DNET_DAP_CAP_NAME_MSG       40
 
-/* RMS file-organization / record-format bytes carried in ATTRIBUTES (public
- * spec ORG/RFM). This rung serves SEQUENTIAL, variable-length records -- the
- * oracle's captured case. Other org/rfm decode honestly and are refused with
- * DNET_DAP_EUNSUP by the server (INV-6: indexed/relative are filed follow-ons). */
-#define DNET_DAP_ORG_SEQ     0x00
-#define DNET_DAP_RFM_VAR     0x02   /* variable-length records                    */
-#define DNET_DAP_RFM_STMLF   0x05   /* stream-LF                                  */
+/* ATTMENU bits (spec sec. 3.4) in field order. */
+enum {
+    DNET_DAP_ATT_DATATYPE = 0, DNET_DAP_ATT_ORG = 1,  DNET_DAP_ATT_RFM = 2,
+    DNET_DAP_ATT_RAT = 3,      DNET_DAP_ATT_BLS = 4,  DNET_DAP_ATT_MRS = 5,
+    DNET_DAP_ATT_ALQ = 6,      DNET_DAP_ATT_BKS = 7,  DNET_DAP_ATT_FSZ = 8,
+    DNET_DAP_ATT_MRN = 9,      DNET_DAP_ATT_RUNSYS = 10, DNET_DAP_ATT_DEQ = 11,
+    DNET_DAP_ATT_FOP = 12,     DNET_DAP_ATT_BSZ = 13, DNET_DAP_ATT_DEV = 14,
+    DNET_DAP_ATT_SDC = 15,     DNET_DAP_ATT_LRL = 16, DNET_DAP_ATT_HBK = 17,
+    DNET_DAP_ATT_EBK = 18,     DNET_DAP_ATT_FFB = 19, DNET_DAP_ATT_SBN = 20,
+    DNET_DAP_ATT_LAST_KNOWN = 20
+};
 
-/* Field caps. A DAP filespec / record longer than these is REFUSED (not
- * clipped) by the bounded decoder -- a clipped filespec that happens to resolve
- * is exactly the class of bug this decoder must not have. */
-#define DNET_DAP_MAX_SPEC    255    /* a counted DAP image field is 1..255 bytes  */
-#define DNET_DAP_MAX_REC     512    /* one sequential record this rung carries    */
-#define DNET_DAP_MAX_MSG     600    /* an encoded message never exceeds this      */
+/* DATATYPE bits, ORG, RFM, RAT values (spec sec. 3.4). */
+#define DNET_DAP_DT_ASCII     0x01
+#define DNET_DAP_DT_IMAGE     0x02
+#define DNET_DAP_ORG_SEQ      0x00
+#define DNET_DAP_ORG_REL      0x10
+#define DNET_DAP_ORG_IDX      0x20
+#define DNET_DAP_RFM_UDF      0
+#define DNET_DAP_RFM_FIX      1
+#define DNET_DAP_RFM_VAR      2
+#define DNET_DAP_RFM_VFC      3
+#define DNET_DAP_RFM_STM      4
+#define DNET_DAP_RAT_FTN      0x01
+#define DNET_DAP_RAT_CR       0x02
+#define DNET_DAP_RAT_PRN      0x04
 
-/* Decode / encode return codes. OK is 0; every error is negative so a caller
- * can `if (rc < 0)` and turn it into an NSP disconnect (INV-6, never crash). */
+/* ACCESS ACCFUNC (spec sec. 3.5). */
+#define DNET_DAP_ACC_OPEN     1
+#define DNET_DAP_ACC_CREATE   2
+#define DNET_DAP_ACC_RENAME   3
+#define DNET_DAP_ACC_ERASE    4
+#define DNET_DAP_ACC_DIRLIST  6
+
+/* FAC / SHR bits (spec sec. 3.5). */
+#define DNET_DAP_FB_PUT       0x01
+#define DNET_DAP_FB_GET       0x02
+
+/* DISPLAY bits (spec sec. 3.5 / 3.6). */
+#define DNET_DAP_DSP_MAIN     0x0001
+#define DNET_DAP_DSP_NAME     0x0100
+
+/* CONTROL CTLFUNC (spec sec. 3.6). */
+#define DNET_DAP_CTL_GET      1
+#define DNET_DAP_CTL_CONNECT  2
+#define DNET_DAP_CTL_UPDATE   3
+#define DNET_DAP_CTL_PUT      4
+/* CTLMENU bits */
+#define DNET_DAP_CTLM_RAC     0x01
+#define DNET_DAP_CTLM_KEY     0x02
+#define DNET_DAP_CTLM_KRF     0x04
+#define DNET_DAP_CTLM_ROP     0x08
+#define DNET_DAP_CTLM_HSH     0x10
+#define DNET_DAP_CTLM_DISPLAY 0x20
+#define DNET_DAP_CTLM_BLKCNT  0x40
+/* RAC values */
+#define DNET_DAP_RAC_SEQ      0
+#define DNET_DAP_RAC_KEY      1
+#define DNET_DAP_RAC_RFA      2
+#define DNET_DAP_RAC_SEQFILE  3   /* sequential file transfer */
+#define DNET_DAP_RAC_BLOCK    4
+#define DNET_DAP_RAC_BLKFILE  5   /* block mode file transfer */
+
+/* ACCESS COMPLETE CMPFUNC (spec sec. 3.9). */
+#define DNET_DAP_CMP_CLOSE    1
+#define DNET_DAP_CMP_RESPONSE 2
+#define DNET_DAP_CMP_PURGE    3
+#define DNET_DAP_CMP_EOS      4
+#define DNET_DAP_CMP_SKIP     5
+
+/* STATUS: STSCODE = MACCODE<<12 | MICCODE (spec sec. 3.11, Table 2). */
+#define DNET_DAP_MAC(sts)     (((sts) >> 12) & 0xF)
+#define DNET_DAP_MIC(sts)     ((sts) & 0x0FFF)
+#define DNET_DAP_MAC_PENDING  0
+#define DNET_DAP_MAC_SUCCESS  1
+#define DNET_DAP_MAC_UNSUPP   2
+#define DNET_DAP_MAC_OPEN     4   /* error before the file was opened          */
+#define DNET_DAP_MAC_XFER     5   /* error after open (incl. EOF on a GET)     */
+#define DNET_DAP_MAC_WARN     6
+#define DNET_DAP_MAC_TERM     7
+#define DNET_DAP_MAC_FORMAT   8
+#define DNET_DAP_MAC_INVALID  9
+#define DNET_DAP_MAC_SYNC     10
+/* MICCODEs OVMX emits/recognises (spec Table 3, RMS-derived, octal in spec). */
+#define DNET_DAP_MIC_EOF      047   /* end of file                              */
+#define DNET_DAP_MIC_FNF      062   /* file not found                           */
+#define DNET_DAP_MIC_PRV      0125  /* privilege violation                      */
+#define DNET_DAP_MIC_CRE      030   /* ACP could not create file (STV = sys code) */
+#define DNET_DAP_STS_EOF      ((DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_EOF)
+
+/* Caps. A field longer than these is REFUSED (never clipped). */
+#define DNET_DAP_MAX_SPEC     255
+#define DNET_DAP_MAX_REC      1500   /* one record in one DATA message          */
+#define DNET_DAP_MAX_MSG      1600   /* an encoded message never exceeds this   */
+#define DNET_DAP_MAX_EX       12     /* longest EX field (SYSCAP EX-12)         */
+
+/* Return codes: OK is 0, every error negative. */
 #define DNET_DAP_OK          0
-#define DNET_DAP_ETRUNC     (-1)   /* message runs past the buffer end            */
-#define DNET_DAP_EBADLEN    (-2)   /* a counted field exceeds its cap / the msg   */
-#define DNET_DAP_EINVAL     (-3)   /* malformed / unsupported framing             */
-#define DNET_DAP_ENOSPACE   (-4)   /* encode: output buffer too small             */
-#define DNET_DAP_EUNSUP     (-5)   /* well-formed but an unserved feature         */
+#define DNET_DAP_ETRUNC     (-1)
+#define DNET_DAP_EBADLEN    (-2)
+#define DNET_DAP_EINVAL     (-3)
+#define DNET_DAP_ENOSPACE   (-4)
+#define DNET_DAP_EUNSUP     (-5)
 
 /*
- * A decoded DAP message. Everything reachable on the FAL (inbound) side is
- * UNTRUSTED input. The union is discriminated by `op`; only the members named
- * for that op are meaningful.
+ * A decoded DAP message. EX bitmaps are returned as uint64_t (bit n = bit n
+ * of the field); an EX field longer than 64 bits sets only what fits and its
+ * presence is still bounded. I-n numeric fields are little-endian, up to 8
+ * bytes. Everything on the FAL (inbound) side is UNTRUSTED input.
  */
 struct dnet_dap_msg {
     enum dnet_dap_op op;
+    uint8_t  type;              /* raw TYPE byte (also for unknown types)      */
+    uint8_t  flags;             /* raw FLAGS                                    */
+    uint8_t  streamid;          /* STREAMID if FLAGS bit 0, else 0              */
+    uint8_t  bitcnt;            /* BITCNT if FLAGS bit 3                        */
 
     union {
         struct {                       /* CONFIGURATION */
-            uint16_t bufsiz;           /* buffer size the peer offers            */
-            uint8_t  ostype;           /* OS type (OVMX identifies as VMS)       */
-            uint8_t  filesys;          /* file system (RMS)                      */
-            uint8_t  version;          /* DAP version (root)                     */
+            uint16_t bufsiz;
+            uint8_t  ostype, filesys;
+            uint8_t  vernum, econum, usrnum, softver, usrsoft;
+            uint8_t  syscap[DNET_DAP_MAX_EX];
+            uint8_t  syscap_len;
         } config;
 
         struct {                       /* ATTRIBUTES */
-            uint8_t  org;              /* file organization (SEQ served)         */
-            uint8_t  rfm;              /* record format (VAR/STMLF served)       */
-            uint8_t  rat;             /* record attributes (CR carriage-control) */
-            uint16_t mrs;              /* maximum record size                    */
-            uint32_t alq;              /* allocation quantity (blocks/size hint) */
+            uint64_t menu;
+            uint64_t datatype;
+            uint8_t  org, rfm;
+            uint64_t rat;
+            uint16_t bls, mrs;
+            uint64_t alq;
+            uint8_t  bks, fsz;
+            uint64_t mrn;
+            uint16_t deq;
+            uint64_t fop;
+            uint8_t  bsz;
+            uint64_t dev, sdc;
+            uint16_t lrl;
+            uint64_t hbk, ebk;
+            uint16_t ffb;
+            uint64_t sbn;
         } attr;
 
         struct {                       /* ACCESS */
-            uint8_t  accfunc;          /* DNET_DAP_ACC_*                         */
-            char     filespec[DNET_DAP_MAX_SPEC + 1]; /* the file being accessed */
+            uint8_t  accfunc;
+            uint64_t accopt;
+            char     filespec[DNET_DAP_MAX_SPEC + 1];
+            int      have_fac, have_shr, have_display;
+            uint64_t fac, shr, display;
         } access;
 
         struct {                       /* CONTROL */
-            uint8_t  ctlfunc;          /* DNET_DAP_CTL_*                         */
+            uint8_t  ctlfunc;
+            uint64_t menu;
+            uint8_t  rac;
+            uint8_t  key[DNET_DAP_MAX_SPEC];
+            uint8_t  keylen;
+            uint8_t  krf;
+            uint64_t rop;
+            uint64_t display;
         } control;
 
-        struct {                       /* NAME */
-            uint8_t  nametype;         /* 1 = full file spec, 2 = owner UIC      */
-            char     namespec[DNET_DAP_MAX_SPEC + 1]; /* resolved spec / [g,m]   */
-        } name;
+        struct {                       /* CONTINUE TRANSFER */
+            uint8_t  confunc;
+        } cont;
+
+        struct {                       /* ACCESS COMPLETE */
+            uint8_t  cmpfunc;
+            int      have_fop, have_check;
+            uint64_t fop;
+            uint16_t check;
+        } complete;
 
         struct {                       /* DATA */
-            uint16_t reclen;           /* record length (bounded by MAX_REC)     */
-            uint8_t  rec[DNET_DAP_MAX_REC];  /* the record bytes, VERBATIM       */
+            uint64_t recnum;
+            uint8_t  recnum_len;       /* 0 = absent (count byte 0)            */
+            uint16_t reclen;
+            uint8_t  rec[DNET_DAP_MAX_REC];
         } data;
 
         struct {                       /* STATUS */
-            uint16_t stscode;          /* MACRO<<12 | MICRO (RMS-style condition)*/
+            uint16_t stscode;
+            uint64_t rfa, recnum, stv;
+            int      have_stv;
         } status;
 
-        struct {                       /* ACCESS COMPLETE / CONTINUE / ACK */
-            uint8_t  func;             /* completion / continue function code    */
-        } complete;
+        struct {                       /* NAME */
+            uint64_t nametype;         /* 1 = file spec, 2 = file name, ...    */
+            char     namespec[DNET_DAP_MAX_SPEC + 1];
+        } name;
     } u;
 };
 
-/* DAP STATUS codes this rung uses (public spec MACRO/MICRO split). SUCCESS is
- * the "operation completed" macro; the specific micro values are OVMX-chosen
- * within the spec's ranges and only carried between two OVMX nodes. */
-#define DNET_DAP_STS_SUCCESS   0x0000  /* pending / normal                        */
-#define DNET_DAP_STS_EOF       0x0A00  /* end of file on a GET                    */
-#define DNET_DAP_STS_ACCFAIL   0x2800  /* access denied / could not open the file */
-
 /*
- * dnet_dap_encode - encode `msg` into `buf` (OPERATOR .. end of body). Writes
- * the byte count to *outlen. Returns DNET_DAP_OK, DNET_DAP_ENOSPACE if `cap` is
- * too small, or DNET_DAP_EINVAL on a malformed message. Every encoder emits a
- * LENGTH-present frame so the decoder can walk a blocked stream.
+ * dnet_dap_encode - encode `msg` (OPERATOR .. end of fields) into `buf`.
+ * `with_length`: 0 emits the unblocked form (FLAGS = 0, the message runs to the
+ * end of its NSP segment -- what OVMX sends, one message per segment); nonzero
+ * emits FLAGS.LENGTH (+LEN256 when > 255) so it can be blocked. Field presence
+ * is driven by the menu/have_* members. Returns DNET_DAP_OK and *outlen, or a
+ * negative code.
  */
-int dnet_dap_encode(const struct dnet_dap_msg *msg,
+int dnet_dap_encode(const struct dnet_dap_msg *msg, int with_length,
                     uint8_t *buf, size_t cap, size_t *outlen);
 
 /*
- * dnet_dap_decode - decode ONE DAP message from `buf`/`len` into `out`. Fully
- * bounded: never reads past buf[len-1]; refuses (does not clip) an over-long
- * counted field or a LENGTH that overruns the buffer; refuses an unknown FLAGS
- * shape. On success sets *consumed to the bytes this message occupied (so the
- * caller can decode the next message in a blocked NSP segment) and returns
- * DNET_DAP_OK. *out is zeroed first, so a failure leaves nothing half-filled.
- * A well-formed message of an unserved OPERATOR decodes with op set to that
- * value (or DNET_DAP_MSG_UNKNOWN) and consumed advanced -- the caller decides
- * whether to serve or honestly refuse it, the decoder never faults on it.
+ * dnet_dap_decode - decode ONE DAP message at buf[0..len). Fully bounded.
+ * A message without FLAGS.LENGTH extends to the end of `len` (spec: the last
+ * message of a segment); with LENGTH it occupies exactly its header + operand.
+ * Trailing bytes inside a message's operand beyond the fields this codec knows
+ * are ignored (spec: later DAP versions append fields); unknown message TYPES
+ * decode as op = DNET_DAP_MSG_UNKNOWN with type set. *consumed gets the bytes
+ * this message occupied. On error *out is zeroed and a negative code returned.
  */
 int dnet_dap_decode(const uint8_t *buf, size_t len,
                     struct dnet_dap_msg *out, size_t *consumed);
+
+/* Test a SYSCAP bit in a decoded CONFIGURATION. */
+int dnet_dap_syscap_has(const struct dnet_dap_msg *config, unsigned bit);
+
+/* Build OVMX's own CONFIGURATION (DAP 5.6, VMS/RMS-32, OVMX SYSCAP). */
+void dnet_dap_ovmx_config(struct dnet_dap_msg *m, uint16_t bufsiz);
 
 /* Human name of an operator, for logs. Never NULL. */
 const char *dnet_dap_op_name(enum dnet_dap_op op);

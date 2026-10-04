@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-10-01",
+    "generated": "2026-10-04",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -76,8 +76,8 @@
   "overall": {
     "count": 462,
     "by_status": {
-      "verified": 23,
-      "implemented": 278,
+      "verified": 24,
+      "implemented": 277,
       "partial": 53,
       "stub": 14,
       "designed": 1,
@@ -97,8 +97,8 @@
   "overall_in_scope": {
     "count": 416,
     "by_status": {
-      "verified": 23,
-      "implemented": 278,
+      "verified": 24,
+      "implemented": 277,
       "partial": 52,
       "stub": 10,
       "designed": 1,
@@ -475,8 +475,8 @@
       "rollup": {
         "count": 16,
         "by_status": {
-          "verified": 2,
-          "implemented": 9,
+          "verified": 3,
+          "implemented": 8,
           "partial": 4,
           "stub": 0,
           "designed": 0,
@@ -3524,13 +3524,13 @@
       "facility_name": "DECnet Phase IV (Routing, NSP, Task-to-Task, SET HOST)",
       "id": "decnet$dap",
       "kind": "protocol",
-      "vms": "DAP (Data Access Protocol) message codec \u2014 CONFIGURATION/ATTRIBUTES/ACCESS/CONTROL/DATA/STATUS/NAME/ACCESS-COMPLETE encode+decode",
-      "status": "implemented",
+      "vms": "DAP (Data Access Protocol) 5.6 message codec -- generic header (FLAGS STREAMID/LENGTH/LEN256/BITCNT/SYSPEC, blocked messages) + CONFIGURATION, ATTRIBUTES, ACCESS, CONTROL, CONTINUE, ACKNOWLEDGE, ACCESS COMPLETE, DATA, STATUS, NAME; extended-attribute messages decoded+bounded",
+      "status": "verified",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/vmsdecnet/dap/dnet_dap.c",
-      "verified_against": "docs/oracle/vax-copy-fal-dap.* (rd vms-cd3): the message SEQUENCE + carried values (filename, resolved full spec, owner UIC, verbatim records) are the real VAX<->VAX COPY's ground truth; the per-field framing is the PUBLIC DAP spec",
-      "notes": "Pure byte codec, self-round-tripping. CLEAN-ROOM (Rule 8): message set + generic framing from the public DEC DAP functional specification; sequence + credential/object/carried-value semantics from the oracle. FULLY BOUNDED against hostile input \u2014 decoder fuzzed 200k inputs + every truncated prefix, ASan/UBSan-clean (tests/vmsdecnet/test_dnet_dap.c). HONEST SCOPE (INV-6): the field sub-framing is NOT asserted byte-identical to the real-VAX DAP sub-framing (the oracle \u00a73 does not transcribe every sub-field); two OVMX nodes interoperate over it faithfully, byte-level stock-VAX FAL wire interop is a filed follow-on.",
+      "verified_against": "rd vms-a8a: every real OpenVMS VAX V7.3 DAP buffer in docs/oracle/vax-copy-fal-dap.* and tests/lab/captures/decnet-fal-dap-20261004/ decodes field by field to the values VMS put there (tests/vmsdecnet/test_dnet_dap.c), and OVMX's encoder output was accepted by a real VMS FAL through a full GET and PUT (fal-ovmxclient.pcap)",
+      "notes": "Re-grounded (rd vms-a8a) on the PUBLIC DAP 5.6 spec AA-K177A-TK field types (B / EX-n / I-n) and message layouts; the vms-8c2 cut's frame was invented (FLAGS always LENGTH, fixed widths, NAME=10, OSTYPE 1) and could not talk to real VMS. OVMX speaks DAP 5.6 and advertises in SYSCAP only sequential org + sequential FILE TRANSFER + blocking-to-response + 2-byte length. Decoder fully bounded (200k random + oracle-seeded mutation/truncation walks, ASan/UBSan): unknown trailing operand bytes from later DAP versions are ignored, segmented messages refused. NOT served (honest): block mode, record-at-a-time access, file checksum, indexed/relative, wildcards, extended-attribute content.",
       "plan_ref": "vms-30e"
     },
     {
@@ -3539,13 +3539,13 @@
       "facility_name": "DECnet Phase IV (Routing, NSP, Task-to-Task, SET HOST)",
       "id": "decnet$fal",
       "kind": "feature",
-      "vms": "FAL \u2014 File Access Listener (DECnet Session Control object 17): inbound file COPY authenticated at connect + served/stored via RMS; the COPY node:: client",
+      "vms": "FAL -- File Access Listener (DECnet Session Control object 17): inbound file COPY authenticated at connect + served/stored via RMS; the COPY node:: client",
       "status": "partial",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/vmsdecnet/fal/dnet_fal.c",
-      "verified_against": "DECNETD.EXE --fal-accept-test in the booted acceptance battery (tests/qemu/lib/dcl_acceptance_battery.sh): real SYSUAF/Purdy auth (GUEST/GUEST accepted, a wrong password + DISABLED/DISUSER refused) then a sequential file transferred BOTH directions through real DAP over an NSP link + real RMS over the ACP, byte-verified",
-      "notes": "SECURITY SURFACE. An inbound object-17 connect CARRIES the username+password (oracle \u00a71 \u2014 the OPPOSITE of CTERM's empty creds); FAL authenticates them through THE ONE faithful authenticator (sysuaf_lookup + sysuaf_authenticate Purdy + the disabled-account gate, the SAME path LOGINOUT/SSHD use) BEFORE accepting the link, and REFUSES with an NSP Disconnect on a bad password \u2014 the FAL analogue of the no-auth-CTERM hole (INV-6, no file served on an unauthenticated connect). The connect-carried creds are decoded by a bounded, fuzz-clean decoder (dnet_fal_access_decode) that never over-reads and wipes the password after the check. File I/O is rms_textfile_* (RMS over the ODS-2 ACP), fail-honest with no /dev/vms \u2014 no userspace fallback that fakes a transfer (Rule 9). No fork/exec/openpty/dup2, no raw-fd/termios file mechanics. HONEST FLOOR (no executive, runs anywhere): DECNETD.EXE --fal-selftest proves the client emits a real object-17 connect carrying the creds + the honest refusal + the DAP-over-NSP transport pump. OUTBOUND COPY COMMAND LAYER (rd vms-ea8/vms-6a4): DECNETD.EXE --copy SRC DST is the outbound `$ COPY` client (decnetd.c run_copy_loop) whose command-layer floor is proven host-side + CI by --copy-selftest (run_copy_selftest); the NODE\"user pw acct\"::spec splitter is dnet_nodespec.c (bounds/control-byte-hardened, fuzzed ASan/UBSan-clean, tests/vmsdecnet/test_dnet_nodespec.c). NOT yet (filed follow-ons, never faked): the outbound COPY client wired into a DCL process over the LIVE datalink (the command layer + host floor exist; the DCL->live-datalink bridge does not); advanced DAP (indexed/relative files, wildcards, DIRECTORY, block mode, proxy-instead-of-password access); byte-level stock-VAX FAL wire interop; network-access-class (NETMBX) enforcement distinct from the password/DISUSER gates.",
+      "verified_against": "OUTBOUND CLIENT vs a real VMS FAL (rd vms-a8a, tests/lab/captures/decnet-fal-dap-20261004/fal-ovmxclient.pcap): OVMX's compiled dnet_fal_client_get/put, with the object-17 connect from dnet_cterm_sc_connect_build, completed a GET (records byte-identical) and a PUT (TYPE on the VAX prints them verbatim) against OpenVMS VAX V7.3, and mapped the remote file-not-found STATUS to SS$_NOSUCHFILE. INBOUND SERVER: DECNETD.EXE --fal-accept-test in the booted acceptance battery (real SYSUAF/Purdy auth, both directions over a real NSP link + RMS over the ACP, byte-verified, OVMX<->OVMX).",
+      "notes": "SECURITY SURFACE. An inbound object-17 connect CARRIES username+password in cleartext (oracle s1, protocol-mandated); FAL authenticates them through THE ONE authenticator (sysuaf_lookup + Purdy + disabled-account gate) BEFORE accepting, refuses with an NSP Disconnect on a bad password, wipes the password after the check. The connect carries FOUR counted access-control fields (user, password, account, usrdata) exactly as the real oracle frame (rd vms-a8a corrected an earlier three-field reading). DAP sequence per spec 5.1/5.2.1/5.2.2: ATTRIBUTES+ACCESS -> ATTRIBUTES..ACK; CONTROL CONNECT -> ACK; CONTROL GET/PUT RAC=sequential-file-transfer; DATA; ACCESS COMPLETE CLOSE -> RESPONSE. File I/O is rms_textfile_* (RMS over the ACP), fail-honest with no /dev/vms (Rule 9). Records are text lines: a record with an embedded NUL is REFUSED, never truncated. Server omits DAP STV until ssdef values match real VMS (rd vms-ef2). NOT yet (filed, never faked): the outbound client running from a BOOTED OVMX over the live datalink (needs rd vms-1f69, booted DECnet node); the INBOUND server reached live from a real VMS COPY (live object-17 dispatch in NETACP + rd vms-d85 authorization/persona); one access per link (no wildcard/multi-file links); block mode; post-auth UIC persona + filespec confinement (rd vms-d85).",
       "plan_ref": "vms-30e"
     },
     {

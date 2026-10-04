@@ -2897,24 +2897,24 @@ struct fal_xport {
     dnet_tick_t *tick;         /* shared monotonic tick (per test run)          */
 };
 
-/* Ship one DAP message as an NSP data segment on the link. */
-static int fal_xport_send(void *ctx, const struct dnet_dap_msg *m)
+/* Ship one DAP segment (one NSP data segment) on the link. */
+static int fal_xport_send(void *ctx, const uint8_t *seg, size_t seglen)
 {
     struct fal_xport *x = ctx;
-    uint8_t dap[DNET_DAP_MAX_MSG], frame[DNET_FRAME_MAX];
-    size_t  daplen = 0, flen = 0;
-    if (dnet_dap_encode(m, dap, sizeof dap, &daplen) != DNET_DAP_OK) return -1;
-    if (dnet_engine_link_send(x->eng, dap, daplen, frame, sizeof frame, &flen,
+    uint8_t frame[DNET_FRAME_MAX];
+    size_t  flen = 0;
+    if (dnet_engine_link_send(x->eng, seg, seglen, frame, sizeof frame, &flen,
                               (*x->tick)++) != 0)
         return -1;
     if (write(x->wfd, frame, flen) != (ssize_t)flen) return -1;
     return 0;
 }
 
-/* Receive the next DAP message. Absorbs NSP acks and ships the ack owed for a
- * received data segment (real NSP flow), so the caller sees only DAP messages.
- * Returns 0 with *m filled, or -1 on a closed link / decode failure. */
-static int fal_xport_recv(void *ctx, struct dnet_dap_msg *m)
+/* Receive the next NSP data segment's payload (it may carry several blocked
+ * DAP messages; dnet_fal splits them). Absorbs NSP acks and ships the ack owed
+ * for a received data segment (real NSP flow). Returns 0 with the payload, or
+ * -1 on a closed link. */
+static int fal_xport_recv(void *ctx, uint8_t *buf, size_t cap, size_t *outlen)
 {
     struct fal_xport *x = ctx;
     uint8_t rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX];
@@ -2928,10 +2928,9 @@ static int fal_xport_recv(void *ctx, struct dnet_dap_msg *m)
             return -1;
         if (has_reply && write(x->wfd, reply, rlen) != (ssize_t)rlen) return -1;
         if (ev == DNET_LINK_EV_DATA) {
-            size_t consumed = 0;
-            if (dnet_dap_decode(x->eng->rx_data, x->eng->rx_datalen, m, &consumed)
-                != DNET_DAP_OK)
-                return -1;
+            if (x->eng->rx_datalen > cap) return -1;
+            memcpy(buf, x->eng->rx_data, x->eng->rx_datalen);
+            *outlen = x->eng->rx_datalen;
             return 0;
         }
         if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF)
@@ -3415,18 +3414,17 @@ static int cw_dl_rx(struct copy_wire *w, dnet_tick_t now)
 /* The DAP presentation transport over copy_wire (the copy_wire twin of the
  * fal_xport used by --fal-accept-test). */
 struct copy_dap_ctx { struct copy_wire *w; };
-static int copy_dap_send(void *ctx, const struct dnet_dap_msg *m)
+static int copy_dap_send(void *ctx, const uint8_t *seg, size_t seglen)
 {
     struct copy_wire *w = ((struct copy_dap_ctx *)ctx)->w;
-    uint8_t dap[DNET_DAP_MAX_MSG], frame[DNET_FRAME_MAX];
-    size_t  daplen = 0, flen = 0;
-    if (dnet_dap_encode(m, dap, sizeof dap, &daplen) != DNET_DAP_OK) return -1;
-    if (dnet_engine_link_send(w->eng, dap, daplen, frame, sizeof frame, &flen,
+    uint8_t frame[DNET_FRAME_MAX];
+    size_t  flen = 0;
+    if (dnet_engine_link_send(w->eng, seg, seglen, frame, sizeof frame, &flen,
                               cw_now(w)) != 0)
         return -1;
     return w->txf(w, frame, flen);
 }
-static int copy_dap_recv(void *ctx, struct dnet_dap_msg *m)
+static int copy_dap_recv(void *ctx, uint8_t *buf, size_t cap, size_t *outlen)
 {
     struct copy_wire *w = ((struct copy_dap_ctx *)ctx)->w;
     /* Bound a dead-peer hang on the LIVE datalink: cw_dl_rx returns NONE on each
@@ -3438,10 +3436,9 @@ static int copy_dap_recv(void *ctx, struct dnet_dap_msg *m)
         int ev = w->rxev(w, cw_now(w));
         if (ev < 0) return -1;
         if (ev == DNET_LINK_EV_DATA) {
-            size_t consumed = 0;
-            if (dnet_dap_decode(w->eng->rx_data, w->eng->rx_datalen, m, &consumed)
-                != DNET_DAP_OK)
-                return -1;
+            if (w->eng->rx_datalen > cap) return -1;
+            memcpy(buf, w->eng->rx_data, w->eng->rx_datalen);
+            *outlen = w->eng->rx_datalen;
             return 0;
         }
         if (ev == DNET_LINK_EV_DISCONNECT || ev == DNET_LINK_EV_DISCONNECT_CONF)

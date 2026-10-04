@@ -14,6 +14,7 @@
  *      executive-resident LNM$SYSTEM table;
  *   2. $MOUNT that volume (executive-global, so every later process sees it).
  *
+ * (It also mounts the boot unit VDA0:, the default device for relative names.)
  * It replaces corpus_seed_lnm (which defines the same logicals over the boot
  * default VDA0:) in corpus mode only. Not a suite: no PASS/FAIL lines.
  */
@@ -34,5 +35,10 @@ int main(void)
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
     uint32_t st = vms_kif_acp_mount(SYSVOL_UNIT);
     printf("corpus_seed_sysvol: SYS$SYSDEVICE -> %s, $MOUNT status %u\n", SYSVOL_UNIT, st);
+    /* The process default device (RMS_ACP_DEFAULT_DEV, the substrate's boot unit
+     * VDA0: -- the generated real-VAX ODS-2 volume tests/qemu stages) is where a
+     * relative file name lands; mount it too so $CREATE of "x.dat" has a volume. */
+    uint32_t st0 = vms_kif_acp_mount(SYSDISK_DEVICE ":");
+    printf("corpus_seed_sysvol: default device %s: $MOUNT status %u\n", SYSDISK_DEVICE, st0);
     return (st & 1) ? 0 : 1;
 }

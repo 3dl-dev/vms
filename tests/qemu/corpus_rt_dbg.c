@@ -33,6 +33,21 @@ static void asg(const char *n)
 int main(void)
 {
     sysuaf_record_t rec;
+    {
+        static char dev[1+31], dir[1+63]; static unsigned flags;
+        static ILE3 it[] = { {63, UAI$_DEFDIR, dir, NULL}, {31, UAI$_DEFDEV, dev, NULL}, {4, UAI$_FLAGS, &flags, NULL}, {0,0,NULL,NULL} };
+        const char *u[] = { "DEFAULT", "SYSTEM" };
+        for (int k = 0; k < 2; k++) {
+            struct dsc$descriptor_s d = { (unsigned short)strlen(u[k]), DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)u[k] };
+            uint32_t st = sys$getuai(0, 0, &d, it, 0, 0, 0);
+            printf("DBG FIRST getuai %s st=%u\n", u[k], st);
+        }
+        char un[16]; struct dsc$descriptor_s ud = { sizeof(un)-1, DSC$K_DTYPE_T, DSC$K_CLASS_S, un };
+        memset(un, ' ', sizeof un);
+        uint32_t code = JPI$_USERNAME;
+        uint32_t st = lib$getjpi(&code, 0, 0, 0, &ud, &ud.dsc$w_length);
+        printf("DBG getjpi username st=%u '%.*s'\n", st, ud.dsc$w_length, un);
+    }
     tr("SYS$SYSDEVICE"); tr("SYS$SYSROOT"); tr("SYS$SYSTEM"); tr("SYS$COMMON");
     printf("DBG lookup DEFAULT=%d SYSTEM=%d\n", sysuaf_lookup("DEFAULT", &rec), sysuaf_lookup("SYSTEM", &rec));
     {
@@ -59,21 +74,6 @@ int main(void)
             printf("DBG extend st=%u stv=%u\n", st, fab.fab$l_stv);
             sys$close(&fab, 0, 0);
         }
-    }
-    {
-        static char dev[1+31], dir[1+63]; static unsigned flags;
-        static ILE3 it[] = { {63, UAI$_DEFDIR, dir, NULL}, {31, UAI$_DEFDEV, dev, NULL}, {4, UAI$_FLAGS, &flags, NULL}, {0,0,NULL,NULL} };
-        const char *u[] = { "DEFAULT", "SYSTEM" };
-        for (int k = 0; k < 2; k++) {
-            struct dsc$descriptor_s d = { (unsigned short)strlen(u[k]), DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)u[k] };
-            uint32_t st = sys$getuai(0, 0, &d, it, 0, 0, 0);
-            printf("DBG getuai %s st=%u\n", u[k], st);
-        }
-        char un[16]; struct dsc$descriptor_s ud = { sizeof(un)-1, DSC$K_DTYPE_T, DSC$K_CLASS_S, un };
-        memset(un, ' ', sizeof un);
-        uint32_t code = JPI$_USERNAME;
-        uint32_t st = lib$getjpi(&code, 0, 0, 0, &ud, &ud.dsc$w_length);
-        printf("DBG getjpi username st=%u '%.*s'\n", st, ud.dsc$w_length, un);
     }
     return 1;
 }

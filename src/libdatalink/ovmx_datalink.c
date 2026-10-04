@@ -152,7 +152,15 @@ static struct l2_slot *l2_alloc(int fd, uint32_t handle)
     return NULL;
 }
 
+const char *scs_datalink_backend(void) { return "executive"; }
+
 int scs_datalink_open(const char *ifname, uint16_t ethertype)
+{
+    return scs_datalink_open_station(ifname, ethertype, NULL);
+}
+
+int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
+                              const uint8_t station[6])
 {
     int fd = open("/dev/vms", O_RDWR);
     if (fd < 0)
@@ -170,12 +178,17 @@ int scs_datalink_open(const char *ifname, uint16_t ethertype)
     memset(&a, 0, sizeof(a));
     strncpy(a.ifname, ifname, sizeof(a.ifname) - 1);
     a.ethertype = ethertype;
-    if (ioctl(fd, VMS_IOCTL_L2_OPEN, &a) < 0) { close(fd); return -1; }
+    if (station)                       /* rd vms-1f69: the executive validates
+                                        * it and owns every send's source */
+        memcpy(a.station, station, sizeof(a.station));
+    if (ioctl(fd, VMS_IOCTL_L2_OPEN, &a) < 0) { int e = errno; close(fd); errno = e; return -1; }
     if (a.status != 1u) {          /* SS$_NORMAL == 1; anything else is honest
-                                    * refusal (SS$_NOPRIV without PHY_IO,
-                                    * SS$_NOSUCHDEV 2680 for an absent iface). */
+                                    * refusal (SS$_NOPRIV 36 without PHY_IO,
+                                    * SS$_NOSUCHDEV 2680 for an absent iface,
+                                    * SS$_BADPARAM 20 for a refused station). */
         close(fd);
-        errno = (a.status == 2680u) ? ENODEV : EACCES;
+        errno = (a.status == 2680u) ? ENODEV
+              : (a.status == 20u)   ? EINVAL : EACCES;
         return -1;
     }
     if (l2_alloc(fd, a.handle) == NULL) { close(fd); errno = ENOMEM; return -1; }
@@ -252,6 +265,15 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
  * instead, and this raw-socket code is then absent from that binary entirely. */
 
 #include <netpacket/packet.h>
+
+const char *scs_datalink_backend(void) { return "AF_PACKET probe"; }
+
+int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
+                              const uint8_t station[6])
+{
+    (void)station;   /* the caller's frame carries its own source verbatim */
+    return scs_datalink_open(ifname, ethertype);
+}
 
 int scs_datalink_open(const char *ifname, uint16_t ethertype)
 {
@@ -411,6 +433,17 @@ static void bpfbuf_free(int fd)
     }
     free(e->buf);
     memset(e, 0, sizeof(*e));
+}
+
+const char *scs_datalink_backend(void) { return "bpf"; }
+
+int scs_datalink_open(const char *ifname, uint16_t ethertype);
+
+int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
+                              const uint8_t station[6])
+{
+    (void)station;   /* the caller's frame carries its own source verbatim */
+    return scs_datalink_open(ifname, ethertype);
 }
 
 int scs_datalink_open(const char *ifname, uint16_t ethertype)

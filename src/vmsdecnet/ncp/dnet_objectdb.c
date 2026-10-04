@@ -198,6 +198,64 @@ const struct dnet_object_entry *dnet_objectdb_at(const struct dnet_objectdb *db,
     return best_for_i;
 }
 
+const char *const DNET_OBJECTDB_HEADER[2] = {
+    "# OVMX DECnet Phase IV object database (NCP DEFINE/SET OBJECT).",
+    "# Format: OBJECT <number> [NAME <name>] [FILE <spec>]  -- OVMX"
+    " layout, not the VMS permanent object database.",
+};
+
+int dnet_objectdb_format_entry(const struct dnet_object_entry *e, char *buf,
+                               size_t bufsz)
+{
+    if (!e || !buf || bufsz == 0)
+        return DNET_OBJECTDB_EINVAL;
+    int m = snprintf(buf, bufsz, "OBJECT %u%s%s%s%s", (unsigned)e->number,
+                     e->name[0] ? " NAME " : "", e->name,
+                     e->file[0] ? " FILE " : "", e->file);
+    return (m > 0 && (size_t)m < bufsz) ? DNET_OBJECTDB_OK : DNET_OBJECTDB_EIO;
+}
+
+int dnet_objectdb_apply_line(struct dnet_objectdb *db, const char *raw)
+{
+    if (!db || !raw)
+        return DNET_OBJECTDB_EINVAL;
+    char line[512];
+    snprintf(line, sizeof(line), "%s", raw);
+    char *p = line;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p == '#' || *p == '\n' || *p == '\0' || *p == '\r')
+        return DNET_OBJECTDB_OK;          /* comment / blank: nothing to apply */
+
+    char *save = NULL;
+    char *kw = strtok_r(p, " \t\r\n", &save);
+    char *numtok = strtok_r(NULL, " \t\r\n", &save);
+    if (!kw || strcmp(kw, "OBJECT") != 0 || !numtok)
+        return DNET_OBJECTDB_EIO;
+    /* object number: 1..255 */
+    char *end = NULL;
+    long num = strtol(numtok, &end, 10);
+    if (!end || *end != '\0' || num < 1 || num > 255)
+        return DNET_OBJECTDB_EIO;
+    const char *name = "";
+    const char *file = "";
+    char *tok;
+    while ((tok = strtok_r(NULL, " \t\r\n", &save)) != NULL) {
+        char *val = strtok_r(NULL, " \t\r\n", &save);
+        if (!val)
+            return DNET_OBJECTDB_EIO;
+        if (strcmp(tok, "NAME") == 0)
+            name = val;
+        else if (strcmp(tok, "FILE") == 0)
+            file = val;
+        else
+            return DNET_OBJECTDB_EIO;
+    }
+    if (dnet_objectdb_set(db, (uint8_t)num, name, file) != DNET_OBJECTDB_OK)
+        return DNET_OBJECTDB_EIO;
+    return DNET_OBJECTDB_OK;
+}
+
 int dnet_objectdb_save(const struct dnet_objectdb *db, const char *path)
 {
     if (!db || !path)
@@ -209,19 +267,18 @@ int dnet_objectdb_save(const struct dnet_objectdb *db, const char *path)
     FILE *f = fopen(tmp, "w");
     if (!f)
         return DNET_OBJECTDB_EIO;
-    fprintf(f, "# OVMX DECnet Phase IV object database (NCP DEFINE/SET OBJECT).\n");
-    fprintf(f, "# Format: OBJECT <number> [NAME <name>] [FILE <spec>]  -- OVMX"
-               " layout, not the VMS permanent object database.\n");
+    fprintf(f, "%s\n%s\n", DNET_OBJECTDB_HEADER[0], DNET_OBJECTDB_HEADER[1]);
     for (unsigned i = 0; i < db->count; i++) {
         const struct dnet_object_entry *e = dnet_objectdb_at(db, i);
+        char line[512];
         if (!e)
             break;
-        fprintf(f, "OBJECT %u", (unsigned)e->number);
-        if (e->name[0])
-            fprintf(f, " NAME %s", e->name);
-        if (e->file[0])
-            fprintf(f, " FILE %s", e->file);
-        fprintf(f, "\n");
+        if (dnet_objectdb_format_entry(e, line, sizeof(line)) != DNET_OBJECTDB_OK) {
+            fclose(f);
+            remove(tmp);
+            return DNET_OBJECTDB_EIO;
+        }
+        fprintf(f, "%s\n", line);
     }
     if (fflush(f) != 0 || ferror(f)) {
         fclose(f);
@@ -247,47 +304,7 @@ int dnet_objectdb_load(struct dnet_objectdb *db, const char *path)
     char line[512];
     int rc = DNET_OBJECTDB_OK;
     while (fgets(line, sizeof(line), f)) {
-        char *p = line;
-        while (*p == ' ' || *p == '\t')
-            p++;
-        if (*p == '#' || *p == '\n' || *p == '\0' || *p == '\r')
-            continue;
-
-        char *save = NULL;
-        char *kw = strtok_r(p, " \t\r\n", &save);
-        char *numtok = strtok_r(NULL, " \t\r\n", &save);
-        if (!kw || strcmp(kw, "OBJECT") != 0 || !numtok) {
-            rc = DNET_OBJECTDB_EIO;
-            break;
-        }
-        /* object number: 1..255 */
-        char *end = NULL;
-        long num = strtol(numtok, &end, 10);
-        if (!end || *end != '\0' || num < 1 || num > 255) {
-            rc = DNET_OBJECTDB_EIO;
-            break;
-        }
-        const char *name = "";
-        const char *file = "";
-        char *tok;
-        while ((tok = strtok_r(NULL, " \t\r\n", &save)) != NULL) {
-            char *val = strtok_r(NULL, " \t\r\n", &save);
-            if (!val) {
-                rc = DNET_OBJECTDB_EIO;
-                break;
-            }
-            if (strcmp(tok, "NAME") == 0)
-                name = val;
-            else if (strcmp(tok, "FILE") == 0)
-                file = val;
-            else {
-                rc = DNET_OBJECTDB_EIO;
-                break;
-            }
-        }
-        if (rc != DNET_OBJECTDB_OK)
-            break;
-        if (dnet_objectdb_set(db, (uint8_t)num, name, file) != DNET_OBJECTDB_OK) {
+        if (dnet_objectdb_apply_line(db, line) != DNET_OBJECTDB_OK) {
             rc = DNET_OBJECTDB_EIO;
             break;
         }

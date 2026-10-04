@@ -33,20 +33,34 @@ $! configured" exit DCL would render as %DCL-E-ABORT is exactly the pollution th
 $! avoids (vms-a70). NETACP ALSO self-checks (defense in depth): launched detached
 $! with no argv it self-sources the executor address and, finding none, logs a
 $! not-configured note to SYS$MANAGER:NETACP.LOG and exits cleanly -- so even a
-$! stray launch serves nothing and fabricates nothing. Arming the configured
-$! branch (writing NETNODE_LOCAL.DAT + the substrate executor.dat NCP/DECNETD
-$! read) is the DECnet-configure / inbound-SET-HOST bracket rung under vms-30e;
-$! this procedure's configured path is exercised there, not by the default image.
+$! stray launch serves nothing and fabricates nothing. The configured branch is
+$! armed the VMS way (rd vms-1f69): NCP SET/DEFINE EXECUTOR writes
+$! SYS$SYSTEM:NETNODE_LOCAL.DAT through RMS over the Files-11 ACP, so this gate
+$! sees it -- on the next boot, or when the operator runs @SYS$MANAGER:STARTNET
+$! by hand after configuring:
+$!     $ NCP :== $SYS$SYSTEM:NCP.EXE
+$!     $ NCP SET EXECUTOR ADDRESS 1.42
+$!     $ NCP SET EXECUTOR NAME OVMX
+$!     $ NCP SET EXECUTOR STATE ON
+$!     $ @SYS$MANAGER:STARTNET
+$! (the record layout inside NETNODE_LOCAL.DAT is OVMX's documented text, not
+$! the VMS binary format -- labelled in the file itself).
 $!
-$! INV-6 (fail-honest, no facade): NETACP opens its 0x6003 datalink as a raw
-$! AF_PACKET socket on the primary NIC (auto-detected -- the same NIC the
-$! executive's _NET: rides; src/libdatalink/ovmx_datalink.c), so DECNETD.EXE
-$! needs CAP_NET_RAW (it has it as a SYSTEM-booted detached process). With no
-$! NIC / no privilege it fails honestly (%DECNETD-E-NOSOCKET in NETACP.LOG) --
-$! it never fabricates a per-process listener that serves nothing. The SESSION
-$! side IS executive-backed (an inbound object-42 connect mints RTAn: and
-$! $CREPRCs LOGINOUT through /dev/vms); moving DECnet's L2 into the executive
-$! (as the cluster wire did, vms_pe.c) is a later rung under vms-30e, not here.
+$! INV-6 (fail-honest, no facade): NETACP opens its 0x6003 datalink on the
+$! primary NIC (auto-detected -- the same NIC the executive's _NET: rides)
+$! THROUGH THE EXECUTIVE: the booted DECNETD.EXE is built with the executive L2
+$! backend (src/libdatalink, OVMX_DATALINK_VIA_EXECUTIVE), so the kernel owns
+$! the raw socket (VMS_IOCTL_L2_OPEN) and the open is gated on the VMS PHY_IO
+$! privilege -- a booted VMS process holds no CAP_NET_RAW and needs none. NETACP
+$! inherits PHY_IO from its creator (SYSTEM at boot or at the console: RUN
+$! /DETACHED with no /PRIVILEGES gives the detached process the creator's current
+$! privileges, sys$creprc). It sources every frame from its Phase IV
+$! algorithmic station address AA-00-04-00-<LE16(area*1024+node)>, which the
+$! executive validates and stamps. With no NIC, or no PHY_IO, it fails honestly
+$! (%DECNETD-E-NOSOCKET ... SS$_NOSUCHDEV / SS$_NOPRIV in NETACP.LOG) -- it never
+$! fabricates a per-process listener that serves nothing. The SESSION side is
+$! executive-backed too (an inbound object-42 connect mints RTAn: and $CREPRCs
+$! LOGINOUT through /dev/vms).
 $!
 $! INVOCATION:
 $!   @SYS$MANAGER:STARTNET

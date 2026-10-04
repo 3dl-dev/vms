@@ -23,6 +23,11 @@ target_include_directories(vmsdecnet_engine PUBLIC
 # the NSP transport codec + logical-link FSM (vmsdecnet_nsp).
 target_link_libraries(vmsdecnet_engine PUBLIC vmsdecnet_routing vmsdecnet_nsp)
 
+# DATALINK BACKEND (rd vms-1f69): ${OVMX_DECNETD_DATALINK_LIB} is ovmx_datalink_exec
+# (the executive L2 path, /dev/vms + PHY_IO, no CAP_NET_RAW) for the booted
+# runtime build and ovmx_datalink (the AF_PACKET probe) for the host/lab build --
+# see src/libdatalink/CMakeLists.txt OVMX_DATALINK_VIA_EXECUTIVE. Exactly one is
+# linked; there is no runtime fallback between them.
 # decnetd -- THE DAEMON. The DECnet analogue of scsd_exe: the ONLY place the raw
 # datalink (scs_datalink_{open,send,recv}, the generic raw-L2 abstraction in
 # src/libdatalink, written engine-agnostic for exactly this consumer) is
@@ -70,7 +75,8 @@ find_package(Threads REQUIRED)
 target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm
                                           vmsdecnet_cterm_host vmsdecnet_fal
                                           vmsdecnet_dap vmsdecnet_broker
-                                          ovmx_datalink
+                                          vmsdecnet_ncpstore
+                                          ${OVMX_DECNETD_DATALINK_LIB}
                                           vmsrms
                                           Threads::Threads)
 target_include_directories(decnetd_exe PRIVATE

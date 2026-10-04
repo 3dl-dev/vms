@@ -94,7 +94,18 @@ struct vms_l2_open_args {
     uint8_t  hwaddr[6];     /* out: the bound interface's MAC */
     uint16_t pad1;          /* zero */
     uint32_t status;        /* out: SS$_ status */
+    uint8_t  station[6];    /* in: requested station (Ethernet SOURCE) address
+                             * for every frame sent on this handle; all-zero =
+                             * the NIC's own hwaddr (the pre-vms-1f69 default).
+                             * Validated by vms_l2_station_check() (the NIC
+                             * hwaddr or the DECnet Phase IV AA-00-04-00 block,
+                             * else SS$_BADPARAM and no handle).
+                             * out: the effective station address. */
+    uint16_t pad2;          /* zero */
 };
+
+/* The station-address policy VMS_IOCTL_L2_OPEN enforces (rd vms-1f69). */
+#include "vms_l2_station.h"
 
 /*
  * VMS_IOCTL_L2_SEND -- send one frame's payload out `handle` to `dst_mac` on
@@ -142,7 +153,7 @@ struct vms_l2_close_args {
  * them across the boundary by raw address, and _IOWR folds sizeof(struct)
  * into the request number, so a size change also renumbers the request.
  */
-_Static_assert(sizeof(struct vms_l2_open_args) == 40,
+_Static_assert(sizeof(struct vms_l2_open_args) == 48,
                "vms_l2_open_args changed size -- VMS_IOCTL_L2_OPEN ABI break");
 _Static_assert(sizeof(struct vms_l2_send_args) == 2072,
                "vms_l2_send_args changed size -- VMS_IOCTL_L2_SEND ABI break");
@@ -151,7 +162,7 @@ _Static_assert(sizeof(struct vms_l2_recv_args) == 2064,
 _Static_assert(sizeof(struct vms_l2_close_args) == 8,
                "vms_l2_close_args changed size -- VMS_IOCTL_L2_CLOSE ABI break");
 
-_Static_assert(VMS_IOCTL_L2_OPEN == 0xC0285692u,
+_Static_assert(VMS_IOCTL_L2_OPEN == 0xC0305692u,
                "VMS_IOCTL_L2_OPEN encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_L2_SEND == 0xC8185693u,
                "VMS_IOCTL_L2_SEND encodes differently here than on the reference build");

@@ -68,6 +68,7 @@
 #include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
 #include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
+#include "dnet_ncpstore.h"  /* SYS$SYSTEM:NETNODE_*.DAT via RMS (rd vms-1f69) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
@@ -190,71 +191,45 @@ static int parse_addr(const char *s, unsigned *area, unsigned *node)
 }
 
 /*
- * DECnet configuration self-sourcing for the --set-host CLIENT (rd vms-f54).
+ * DECnet configuration self-sourcing (rd vms-f54; storage rd vms-1f69).
  *
- * DCL's SET HOST wiring activates "DECNETD.EXE --set-host <node> [--user ...]"
- * on the caller's terminal and leaves the DECnet configuration to the daemon --
- * correct layering: DCL knows nothing of DECnet internals. So in client mode the
- * daemon reads its OWN executor address and resolves a target NODE NAME from the
- * node's DECnet configuration files, the SAME files NCP writes (src/vmsdecnet/
- * ncp/): the executor database and the node database. Paths match ncp.c exactly
- * (env override, then the /etc/ovmx/decnet defaults) so there is ONE config SSOT,
- * never a second ledger. Missing/uncofigured -> honest failure, never a guess.
+ * The daemon reads its OWN executor address and resolves a target NODE NAME
+ * from the node's DECnet configuration databases -- the SAME databases NCP
+ * writes, through the SAME store (src/vmsdecnet/ncp/dnet_ncpstore.c):
+ * SYS$SYSTEM:NETNODE_LOCAL.DAT (executor) and SYS$SYSTEM:NETNODE_REMOTE.DAT
+ * (nodes), reached through the VMS file layer (RMS over the Files-11 ACP), so
+ * there is ONE config SSOT, never a second ledger, and no Linux-path default.
+ * (OVMX_DECNET_EXECUTOR / _NODEDB remain the host-test hook.) Missing or
+ * unconfigured -> honest failure, never a guess (INV-6).
  */
-static const char *decnet_executor_path(void)
-{
-    const char *p = getenv("OVMX_DECNET_EXECUTOR");
-    return (p && p[0]) ? p : "/etc/ovmx/decnet/executor.dat";
-}
-static const char *decnet_nodedb_path(void)
-{
-    const char *p = getenv("OVMX_DECNET_NODEDB");
-    return (p && p[0]) ? p : "/etc/ovmx/decnet/netnode_remote.dat";
-}
 
-/* Read the local executor address from executor.dat ("EXECUTOR <a.n> NAME <name>
- * STATE <on|off>", the ncp.c format). Returns 0 and fills area/node on success. */
+/* Read the local executor address. Returns 0 and fills area/node on success. */
 static int sethost_source_executor(unsigned *area, unsigned *node)
 {
-    FILE *f = fopen(decnet_executor_path(), "r");
-    if (!f)
+    struct dnet_executor x;
+    if (dnet_store_load_executor(&x) != DNET_STORE_OK || !x.have_addr)
         return -1;
-    char astr[32] = "", name[64] = "", st[16] = "";
-    int ok = -1;
-    if (fscanf(f, "EXECUTOR %31s NAME %63s STATE %15s", astr, name, st) == 3 &&
-        parse_addr(astr, area, node) == 0)
-        ok = 0;
-    fclose(f);
-    return ok;
+    *area = dnet_area_of(x.addr);
+    *node = dnet_node_of(x.addr);
+    return 0;
 }
 
 /* Resolve a --set-host target: accept "area.node" directly, else look the token
- * up as a NODE NAME (case-insensitive) in netnode_remote.dat ("NODE <a.n> [NAME
- * <name>]", the dnet_nodedb_save format). Returns 0 and fills area/node. */
+ * up as a NODE NAME (case-insensitive) in the remote node database. Returns 0
+ * and fills area/node. */
 static int sethost_resolve_target(const char *token, unsigned *area, unsigned *node)
 {
     if (parse_addr(token, area, node) == 0)
         return 0;
-    FILE *f = fopen(decnet_nodedb_path(), "r");
-    if (!f)
+    static struct dnet_nodedb db;
+    if (dnet_store_load_nodes(&db) != DNET_STORE_OK)
         return -1;
-    char line[256];
-    int found = -1;
-    while (fgets(line, sizeof(line), f)) {
-        char *p = line;
-        while (*p == ' ' || *p == '\t') p++;
-        if (*p == '#' || *p == '\n' || *p == '\0')
-            continue;
-        char kw[16], astr[32], namekw[16], nm[64];
-        int nf = sscanf(p, "%15s %31s %15s %63s", kw, astr, namekw, nm);
-        if (nf >= 4 && strcmp(kw, "NODE") == 0 && strcmp(namekw, "NAME") == 0 &&
-            strcasecmp(nm, token) == 0 && parse_addr(astr, area, node) == 0) {
-            found = 0;
-            break;
-        }
-    }
-    fclose(f);
-    return found;
+    const struct dnet_node_entry *e = dnet_nodedb_by_name(&db, token);
+    if (!e)
+        return -1;
+    *area = dnet_area_of(e->addr);
+    *node = dnet_node_of(e->addr);
+    return 0;
 }
 
 /*
@@ -4275,21 +4250,68 @@ int main(int argc, char **argv)
          * no socket is opened here. */
         printf("Datalink interface = %s%s\n", ifname,
                ifname_explicit ? " (--iface)" : " (auto-detected primary NIC)");
+        /* Which raw-L2 path this binary was BUILT with (rd vms-1f69) -- a
+         * compile-time fact, no runtime fallback between them: "executive"
+         * (/dev/vms VMS_IOCTL_L2_*, PHY_IO; the booted runtime), "AF_PACKET
+         * probe" (CAP_NET_RAW; a host/lab instrument) or "bpf" (NetBSD). */
+        printf("Datalink backend = %s\n", scs_datalink_backend());
+        printf("Executor database = %s\n",
+               dnet_store_location(DNET_STORE_EXECUTOR));
         return 0;
     }
 
     /* Open the raw-L2 datalink (INV-6 fail-honest: no per-process fake if the
-     * netdev cannot be opened). Same abstraction scsd.c uses. */
-    int sock = scs_datalink_open(ifname, DNET_ETHERTYPE);
+     * netdev cannot be opened). Same abstraction scsd.c used.
+     *
+     * STATION ADDRESS (rd vms-1f69). A Phase IV node sources every frame from
+     * its ALGORITHMIC address AA-00-04-00-<LE16(area<<10|node)> (the engine
+     * already writes that as each frame's source -- dnet_engine.c my_id) and
+     * receives unicast addressed to it. On the booted runtime the datalink is
+     * the EXECUTIVE's (VMS_IOCTL_L2_OPEN, gated on PHY_IO, no CAP_NET_RAW):
+     * it validates this station and stamps it on every send. */
+    uint8_t station[6];
+    {
+        unsigned a16 = ((area & 0x3fu) << 10) | (node & 0x3ffu);
+        station[0] = 0xAA; station[1] = 0x00; station[2] = 0x04; station[3] = 0x00;
+        station[4] = (uint8_t)(a16 & 0xffu);
+        station[5] = (uint8_t)((a16 >> 8) & 0xffu);
+    }
+    int sock = scs_datalink_open_station(ifname, DNET_ETHERTYPE, station);
     if (sock < 0) {
-        fprintf(stderr,
-                "DECNETD-E-NOSOCKET, scs_datalink_open('%s', 0x%04x) failed: %s\n"
-                "  (Linux needs CAP_NET_RAW -- run as root or"
-                " setcap cap_net_raw+ep on this binary; the interface must exist"
-                " and share the Phase IV L2 segment)\n",
-                ifname, (unsigned)DNET_ETHERTYPE, strerror(errno));
+        int e = errno;
+        if (strcmp(scs_datalink_backend(), "executive") == 0) {
+            const char *why =
+                (e == EACCES) ? "SS$_NOPRIV -- the executive refused: NETACP"
+                                " requires the PHY_IO privilege"
+              : (e == ENODEV) ? "SS$_NOSUCHDEV -- no such network interface"
+              : (e == EINVAL) ? "SS$_BADPARAM -- the executive refused the"
+                                " station address"
+                              : strerror(e);
+            fprintf(stderr,
+                    "DECNETD-E-NOSOCKET, executive datalink open on '%s'"
+                    " (ethertype 0x%04x) failed: %s\n",
+                    ifname, (unsigned)DNET_ETHERTYPE, why);
+        } else {
+            fprintf(stderr,
+                    "DECNETD-E-NOSOCKET, %s datalink open on '%s' (0x%04x)"
+                    " failed: %s\n"
+                    "  (the AF_PACKET probe needs CAP_NET_RAW -- a host/lab"
+                    " instrument; the booted runtime builds the executive"
+                    " backend, OVMX_DATALINK_VIA_EXECUTIVE)\n",
+                    scs_datalink_backend(), ifname, (unsigned)DNET_ETHERTYPE,
+                    strerror(e));
+        }
         return 1;
     }
+    log_ts(stdout);
+    printf(" DECNETD-I-DATALINK, datalink open on %s via the %s"
+           " (%s), station address %02X-%02X-%02X-%02X-%02X-%02X\n",
+           ifname, scs_datalink_backend(),
+           strcmp(scs_datalink_backend(), "executive") == 0
+               ? "VMS_IOCTL_L2_OPEN, PHY_IO; no CAP_NET_RAW"
+               : "not executive-resident",
+           station[0], station[1], station[2], station[3], station[4], station[5]);
+    fflush(stdout);
     unsigned ifindex = if_nametoindex(ifname);
     if (ifindex == 0) {
         fprintf(stderr, "DECNETD-E-NOIFACE, unknown interface '%s': %s\n",
@@ -4339,8 +4361,8 @@ int main(int argc, char **argv)
      * hidden behind the executive device face _NET: (Rule 1, vms-515 §3.3). */
     log_ts(stdout);
     printf(" DECNETD-I-STARTED, NETACP up: DECnet Phase IV %s on circuit %s"
-           " (wire engine demoted to NETACP's datalink; AF_PACKET hidden behind"
-           " the _NET: device face, Rule 1)\n",
+           " (wire engine demoted to NETACP's datalink; the raw L2 path hidden"
+           " behind the _NET: device face, Rule 1)\n",
            router_mode ? "L1 router" : "endnode", eng.circuit);
     dnet_engine_show_executor(&eng, stdout);
     dnet_engine_show_circuit(&eng, stdout);

@@ -499,7 +499,7 @@ RUN cmake -B build-static \
     -DOVMX_STATIC=ON \
     -DBUILD_TESTS=OFF \
     -DBUILD_TOOLS=ON \
-    -DOVMX_SCS_DATALINK_EXECUTIVE=ON \
+    -DOVMX_DATALINK_VIA_EXECUTIVE=ON \
     && cmake --build build-static --parallel $(nproc) 2>&1
 
 # TCC.EXE (vms-992e / self-host spine): the OVMX-native C compiler. Built by
@@ -664,9 +664,10 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # NCP.EXE is portable C and ships on BOTH arches (see the ovmx-images vax
     # aggregate). DECNETD.EXE (staged above) is ALSO on all three rails now
     # (rd vms-c1f): its raw-L2 datalink goes only through src/libdatalink's
-    # scs_datalink_* abstraction, which already ships both backends this
-    # facility needs -- AF_PACKET here and on Alpha (Linux-ABI), NetBSD bpf(4)
-    # on the VAX sysvol (tests/lab-vax/stage_sysvol.sh) -- so there was no
+    # scs_datalink_* abstraction -- the EXECUTIVE backend here and on Alpha
+    # (build-static is OVMX_STATIC, so OVMX_DATALINK_VIA_EXECUTIVE defaults ON:
+    # /dev/vms VMS_IOCTL_L2_*, PHY_IO-gated, no CAP_NET_RAW; rd vms-1f69), NetBSD
+    # bpf(4) on the VAX sysvol (tests/lab-vax/stage_sysvol.sh) -- so there was no
     # unbuilt-parity gap to wait on; the earlier claim that DECNETD.EXE needed
     # a netbsd-vax userspace port was a stale premise, corrected here. Plain
     # `cp ... SYSEXE/` form so the image-parity scanner sees it.

@@ -66,6 +66,9 @@ struct vms_l2_handle {
     uint32_t handle;            /* this process's L2 handle number */
     uint32_t ifindex;           /* the bound interface's index (from OPEN) */
     exec_socket_t sock;         /* refcounted host AF_PACKET socket */
+    uint8_t station[6];         /* the validated station (Ethernet SOURCE)
+                                 * address every SEND on this handle carries
+                                 * (rd vms-1f69; vms_l2_station.h) */
 };
 
 /* L2 handle numbers are node-wide and monotonic, like vms_bg_next_unit for
@@ -85,17 +88,20 @@ static struct vms_l2_handle *l2h_find_locked(struct vms_proc *proc, uint32_t han
     return NULL;
 }
 
-/* Find a handle and lift out its socket under the lock, so the (possibly
- * sleeping) host socket op below runs with the lock dropped. Returns the
- * handle record (for its identity) and *sock; NULL means "no such handle". */
+/* Find a handle and lift out its socket (and, if `station` is non-NULL, its
+ * station address) under the lock, so the (possibly sleeping) host socket op
+ * below runs with the lock dropped. Returns the handle record (for its
+ * identity) and *sock; NULL means "no such handle". */
 static struct vms_l2_handle *l2h_lookup(struct vms_proc *proc, uint32_t handle,
-                                        exec_socket_t *sock)
+                                        exec_socket_t *sock, uint8_t *station)
 {
     struct vms_l2_handle *h;
 
     spin_lock(&proc->l2_lock);
     h = l2h_find_locked(proc, handle);
     *sock = h ? h->sock : NULL;
+    if (h && station)
+        memcpy(station, h->station, sizeof(h->station));
     spin_unlock(&proc->l2_lock);
     return h;
 }
@@ -128,6 +134,19 @@ static bool l2_priv_check(uint64_t cur_privs, uint32_t *status)
  * VMS_IOCTL_L2_OPEN -- open a kernel AF_PACKET/SOCK_RAW socket bound to the
  * requested interface/ethertype (exec_l2_open), gated on PHY_IO. On success,
  * mints a fresh handle and hands back the resolved interface index and MAC.
+ *
+ * STATION ADDRESS (rd vms-1f69). args.station names the Ethernet SOURCE
+ * address every frame sent on this handle will carry. All-zero (what every
+ * pre-vms-1f69 caller passes, having memset its args) means the NIC's own
+ * hwaddr -- the old behaviour. Otherwise it must be the NIC hwaddr or a
+ * DECnet Phase IV algorithmic address AA-00-04-00-xx-xx
+ * (vms_l2_station_check, vms_l2_station.h); anything else is refused
+ * SS$_BADPARAM BEFORE a socket is opened, so a refused request mints nothing.
+ * The check runs after the PHY_IO gate: an unprivileged caller learns nothing
+ * about which addresses would have been accepted. Unicast addressed to an
+ * accepted Phase IV station reaches the handle because exec_l2_open puts the
+ * NIC in promiscuous mode (exec_kbackend_linux.h, vms-a84d) -- the same
+ * reason the cluster wire's aa:00:04:00 SCA address is received.
  */
 long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
 {
@@ -135,6 +154,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
     struct vms_l2_handle *h;
     exec_socket_t sock;
     uint32_t ifindex = 0;
+    uint8_t nic[6];
     int rc;
 
     memset(&args, 0, sizeof(args));
@@ -148,6 +168,26 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
      * full, non-NUL-terminated 16 bytes from userspace cannot run the backend
      * past the buffer. */
     args.ifname[sizeof(args.ifname) - 1] = '\0';
+
+    /* Resolve the NIC's hwaddr first: it is both the default station and the
+     * one non-Phase-IV address a caller may name. No such interface -> the
+     * same honest SS$_NOSUCHDEV exec_l2_open would have returned. */
+    memset(nic, 0, sizeof(nic));
+    if (exec_l2_hwaddr(args.ifname, nic) != 0) {
+        args.status = SS__NOSUCHDEV;
+        goto out;
+    }
+    switch (vms_l2_station_check(args.station, nic)) {
+    case VMS_L2_STATION_USE_NIC:
+        memcpy(args.station, nic, sizeof(args.station));
+        break;
+    case VMS_L2_STATION_OK:
+        break;
+    default:
+        args.status = SS__BADPARAM;   /* not the NIC, not Phase IV: refused */
+        memset(args.station, 0, sizeof(args.station));
+        goto out;
+    }
 
     rc = exec_l2_open(args.ifname, args.ethertype, &ifindex, &sock);
     if (rc) {
@@ -163,6 +203,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
     h->handle = (uint32_t)atomic_inc_return(&vms_l2_next_handle);
     h->ifindex = ifindex;
     h->sock = sock;
+    memcpy(h->station, args.station, sizeof(h->station));
 
     spin_lock(&proc->l2_lock);
     list_add_tail(&h->list, &proc->l2_channels);
@@ -170,8 +211,7 @@ long vms_ioctl_l2_open(struct vms_proc *proc, unsigned long arg)
 
     args.handle = h->handle;
     args.ifindex = ifindex;
-    memset(args.hwaddr, 0, sizeof(args.hwaddr));
-    (void)exec_l2_hwaddr(args.ifname, args.hwaddr);   /* best-effort; zeroed on failure */
+    memcpy(args.hwaddr, nic, sizeof(args.hwaddr));
     args.status = SS__NORMAL;
 
 out:
@@ -183,11 +223,19 @@ out:
 /*
  * VMS_IOCTL_L2_SEND -- send one frame out `handle` to `dst_mac` on `ifindex`
  * (exec_l2_send). No connect step: every send names its destination.
+ *
+ * The frame is a COMPLETE Ethernet frame (dst | src | ethertype | payload) --
+ * exec_l2_send transmits it verbatim (vms-a84d). The executive OWNS its source
+ * field: bytes 6..11 are overwritten with the handle's validated station
+ * address (rd vms-1f69), so a PHY_IO holder cannot source a frame from an
+ * address OPEN never approved. A frame too short to carry an Ethernet header
+ * is refused SS$_BADPARAM.
  */
 long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_l2_send_args *a;
     exec_socket_t sock;
+    uint8_t station[6];
     long ret = 0;
     long n;
 
@@ -199,15 +247,16 @@ long vms_ioctl_l2_send(struct vms_proc *proc, unsigned long arg)
         goto out_free;
     }
 
-    if (a->len > VMS_L2_MAXLEN) {
-        a->status = SS__BADPARAM;
+    if (a->len > VMS_L2_MAXLEN || a->len < 14u) {
+        a->status = SS__BADPARAM;   /* over the cap, or no room for the header */
         goto out_copy;
     }
 
-    if (!l2h_lookup(proc, a->handle, &sock)) {
+    if (!l2h_lookup(proc, a->handle, &sock, station)) {
         a->status = SS__IVCHAN;   /* no such L2 handle */
         goto out_copy;
     }
+    memcpy(a->data + 6, station, sizeof(station));   /* the executive's source */
 
     n = exec_l2_send(sock, (int)a->ifindex, a->ethertype, a->dst_mac, a->data, a->len);
     if (n < 0) {
@@ -246,7 +295,7 @@ long vms_ioctl_l2_recv(struct vms_proc *proc, unsigned long arg)
         goto out_free;
     }
 
-    if (!l2h_lookup(proc, a->handle, &sock)) {
+    if (!l2h_lookup(proc, a->handle, &sock, NULL)) {
         a->status = SS__IVCHAN;   /* no such L2 handle */
         goto out_copy;
     }

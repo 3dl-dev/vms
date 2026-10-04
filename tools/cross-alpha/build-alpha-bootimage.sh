@@ -177,9 +177,11 @@ docker run --rm --memory=8g --cpus="$(nproc)" \
     # DECNETD.EXE (rd vms-c1f/vms-f40): the DECnet Phase IV endnode -- staged
     # here (not started; no startup procedure runs it) so the shared DCL/SHOW
     # acceptance battery DECnet CTERM section hard-gates on this rail the same
-    # way it does on x86_64/VAX. Alpha is Linux-ABI, so its DECNETD.EXE links
-    # against libdatalink AF_PACKET backend (the same backend x86_64 uses),
-    # not the NetBSD bpf(4) one VAX needs. (No apostrophes in this block -- it
+    # way it does on x86_64/VAX. Alpha is Linux-ABI and this is an OVMX_STATIC
+    # build, so its DECNETD.EXE links the libdatalink EXECUTIVE backend (the raw
+    # L2 wire through /dev/vms VMS_IOCTL_L2_*, PHY_IO-gated; rd vms-1f69) exactly
+    # as the x86_64 booted image does, not the NetBSD bpf(4) one VAX needs.
+    # (No apostrophes in this block -- it
     # runs inside the assemble docker bash -c single-quote.)
     for e in PROVISION.EXE JOB_CONTROL.EXE LOGINOUT.EXE DCL.EXE HELP.EXE \
              AUTHORIZE.EXE MAIL.EXE MONITOR.EXE INITIALIZE.EXE INSTALL.EXE \

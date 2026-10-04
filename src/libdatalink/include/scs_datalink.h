@@ -79,6 +79,36 @@ extern "C" {
 int scs_datalink_open(const char *ifname, uint16_t ethertype);
 
 /*
+ * scs_datalink_open_station - scs_datalink_open() with a STATION address
+ * (rd vms-1f69): the Ethernet SOURCE address every frame sent on the returned
+ * datalink carries. NULL or all-zero = the NIC's own hwaddr.
+ *
+ *   Executive backend (SCS_DATALINK_VIA_EXECUTIVE, the booted runtime): passed
+ *           to VMS_IOCTL_L2_OPEN, which validates it (the NIC hwaddr or the
+ *           DECnet Phase IV block AA-00-04-00-xx-xx, else SS$_BADPARAM ->
+ *           errno EINVAL) and then OWNS the source field of every send --
+ *           src/kernel/vms_l2_station.h.
+ *   AF_PACKET probe / NetBSD bpf(4): the frame the caller builds goes out
+ *           verbatim, so its own source field is what is sent; `station` is
+ *           accepted for interface parity and not otherwise enforced (these
+ *           are a lab instrument / a not-yet-executive substrate).
+ *
+ * Executive-backend errno on failure: ENOENT/ENODEV no /dev/vms or no such
+ * interface, EACCES SS$_NOPRIV (PHY_IO not held), EINVAL a refused station.
+ */
+int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
+                              const uint8_t station[6]);
+
+/*
+ * scs_datalink_backend - a fixed, human-readable name of the raw-L2 backend
+ * THIS binary was compiled with ("executive", "AF_PACKET probe", "bpf"), so a
+ * daemon can say honestly, in its log and its dry-run readout, which path its
+ * datalink takes. A compile-time fact: there is no runtime fallback between
+ * backends.
+ */
+const char *scs_datalink_backend(void);
+
+/*
  * scs_datalink_close - release a datalink fd opened by scs_datalink_open().
  *
  *   Linux:  close(2).

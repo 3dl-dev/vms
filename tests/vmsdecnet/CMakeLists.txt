@@ -85,6 +85,39 @@ add_test(NAME vmsdecnet_ncp_object
 set_tests_properties(vmsdecnet_ncp_object PROPERTIES
     ENVIRONMENT "NCP_EXE=$<TARGET_FILE:ncp_exe>")
 
+# rd vms-1f69: the DECnet configuration STORE (SYS$SYSTEM:NETNODE_LOCAL.DAT /
+# NETNODE_REMOTE.DAT / NETOBJECT.DAT through the VMS file layer) NCP.EXE and
+# NETACP share. Links LIBVMS but deliberately NOT LIBVMSRMS, so the no-file-layer
+# honest-failure path is exercised deterministically; the env hook round-trips.
+add_executable(test_dnet_ncpstore test_dnet_ncpstore.c)
+target_link_libraries(test_dnet_ncpstore PRIVATE vmsdecnet_ncpstore)
+target_compile_options(test_dnet_ncpstore PRIVATE -Werror)
+add_test(NAME vmsdecnet_ncpstore_unit COMMAND test_dnet_ncpstore)
+
+# rd vms-1f69: NCP.EXE SET/DEFINE/SHOW EXECUTOR + NODE dispatch end to end over
+# the host-test hook (the booted VMS-file path is the acceptance battery's).
+add_test(NAME vmsdecnet_ncp_executor
+         COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test_dnet_ncp_executor.sh)
+set_tests_properties(vmsdecnet_ncp_executor PROPERTIES
+    ENVIRONMENT "NCP_EXE=$<TARGET_FILE:ncp_exe>")
+
+# rd vms-1f69: the executive L2 station-address policy (src/kernel/
+# vms_l2_station.h), the same header vms.ko enforces in VMS_IOCTL_L2_OPEN.
+add_executable(test_l2_station test_l2_station.c)
+target_include_directories(test_l2_station PRIVATE ${CMAKE_SOURCE_DIR}/src/kernel)
+target_compile_options(test_l2_station PRIVATE -Werror)
+add_test(NAME vmsdecnet_l2_station_unit COMMAND test_l2_station)
+
+# rd vms-1f69: the EXECUTIVE datalink backend the booted DECNETD links
+# (ovmx_datalink_exec): names itself, and with no /dev/vms fails honestly with
+# no AF_PACKET fallback compiled in.
+if(TARGET ovmx_datalink_exec)
+    add_executable(test_datalink_exec_backend test_datalink_exec_backend.c)
+    target_link_libraries(test_datalink_exec_backend PRIVATE ovmx_datalink_exec)
+    target_compile_options(test_datalink_exec_backend PRIVATE -Werror)
+    add_test(NAME vmsdecnet_datalink_exec_backend COMMAND test_datalink_exec_backend)
+endif()
+
 # rd vms-ea8/vms-6a4: node-filespec splitter (NODE"user pw acct"::spec) that
 # feeds the FAL/DAP COPY client. Pure logic -- compile the splitter TU directly
 # (no FAL/RMS/auth link stack needed for a syntax-only unit).

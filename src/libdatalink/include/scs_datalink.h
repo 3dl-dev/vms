@@ -109,6 +109,15 @@ int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
 const char *scs_datalink_backend(void);
 
 /*
+ * scs_datalink_last_status - the executive backend's VMS condition value for
+ * the last REFUSED datalink open (SS$_NOPRIV, SS$_NOSUCHDEV, SS$_BADPARAM,
+ * SS$_ABORT, ...), 0 if none or for a non-executive backend. errno carries a
+ * coarse mapping (EACCES/ENODEV/EINVAL, EIO for anything else); this carries
+ * the exact status so a caller reports what the executive actually said.
+ */
+uint32_t scs_datalink_last_status(void);
+
+/*
  * scs_datalink_close - release a datalink fd opened by scs_datalink_open().
  *
  *   Linux:  close(2).

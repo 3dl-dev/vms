@@ -92,9 +92,20 @@ $ RUN /DETACHED -
        /INPUT=NL: /OUTPUT=SYS$MANAGER:NETACP.LOG -
        /ERROR=SYS$MANAGER:NETACP.LOG -
        SYS$SYSTEM:DECNETD.EXE
+$! HONEST LAUNCH REPORT (rd vms-1f69): the announcement is made only when RUN
+$! /DETACHED actually created the process. A refused $CREPRC (%RUN-F-CREPRC,
+$! e.g. -SYSTEM-F-NOPRIV / -DUPLNAM) is reported with its status and NOTHING
+$! claims NETACP is running. (Copy $STATUS first: a later command resets it.)
+$ run_status = $STATUS
+$ IF .NOT. run_status THEN GOTO run_failed
 $ SAY "%DECNET-I-STARTNET, NETACP launched detached to serve inbound $ SET HOST."
 $ SAY ""
 $ EXIT
+$!
+$ run_failed:
+$ SAY "%DECNET-E-STARTNET, NETACP was NOT started (RUN/DETACHED status " + F$STRING(run_status) + ")"
+$ SAY ""
+$ EXIT run_status
 $!
 $ no_decnet:
 $! DECnet not configured -- nothing to do, and nothing on the console.

@@ -1262,7 +1262,14 @@ run_dcl_acceptance_battery() {
             "NETACP [vms-1f69]: the executor database NETACP reads is the VMS file, not a Linux path"
         if printf '%s\n' "$SEG" | grep -qF 'Datalink backend = executive'; then
             ok "NETACP [vms-1f69]: this runtime's DECNETD.EXE is built with the EXECUTIVE datalink backend (no AF_PACKET code in the image)"
-            # 3. live datalink through the executive, hellos out.
+            # 3. live datalink through the executive, hellos out. PRECONDITION:
+            # this DCL process's OWN executive row holds PHY_IO (SYSTEM does; set
+            # it explicitly so the assertion below tests the image's inheritance
+            # of it, not the account's defaults).
+            run_cmd 'SET PROCESS/PRIVILEGES=PHY_IO'
+            run_cmd 'SHOW PROCESS/PRIVILEGES'
+            must_have "$SEG" 'PHY_IO' \
+                "NETACP [vms-1f69]: precondition -- the SYSTEM DCL process's executive row holds PHY_IO"
             local DL_OFF; DL_OFF=$(wc -c <"$LOG")
             send 'DNETACC --iface lo --hello-interval 1 --duration 5'
             if wait_for 'DECNETD-I-COUNTERS' 60 "$DL_OFF" || wait_for 'DECNETD-E-' 5 "$DL_OFF"; then
@@ -1294,12 +1301,26 @@ run_dcl_acceptance_battery() {
         else
             note "NETACP [vms-1f69]: DECNETD.EXE on this runtime is not built with the executive datalink backend (its --show-executor names another; NetBSD/VAX has no executive L2 binding yet) -- the executive-datalink proof DID NOT RUN here"
         fi
-        # STARTNET now passes its gate and launches NETACP detached. (On this
-        # NIC-less VM NETACP's own datalink then refuses honestly into
-        # SYS$MANAGER:NETACP.LOG; the launch is what is pinned here.)
+        # STARTNET now passes its NETNODE_LOCAL.DAT gate and attempts the
+        # detached NETACP launch -- and REPORTS IT HONESTLY: it may announce
+        # %DECNET-I-STARTNET only if RUN/DETACHED actually created the process.
+        # (From an interactive, non-root DCL session RUN/DETACHED is currently
+        # refused %RUN-F-CREPRC -SYSTEM-F-NOPRIV for ANY image -- rd vms-ff75, a
+        # general $CREPRC defect; then STARTNET must say %DECNET-E-STARTNET.
+        # The NETACP-actually-running proof is the boot-time STARTNET in
+        # tests/qemu/test_decnet_startnet_boot_e2e.sh, which runs it as the
+        # system does at LPBETA, on a VM with a NIC, and checks the wire.)
         run_cmd '@SYS$MANAGER:STARTNET'
-        must_have "$SEG" '%DECNET-I-STARTNET' \
-            "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its NETNODE_LOCAL.DAT gate and launches NETACP detached"
+        if printf '%s\n' "$SEG" | grep -qF '%RUN-F-CREPRC'; then
+            must_not_have "$SEG" '%DECNET-I-STARTNET' \
+                "STARTNET [vms-1f69]: a REFUSED RUN/DETACHED is never announced as a NETACP launch (honest .COM)"
+            must_have "$SEG" '%DECNET-E-STARTNET' \
+                "STARTNET [vms-1f69]: a refused NETACP launch is reported %DECNET-E-STARTNET with its status"
+            note "STARTNET [vms-1f69]: interactive RUN/DETACHED from this non-root session was refused (rd vms-ff75); the running-NETACP proof is the boot-time e2e"
+        else
+            must_have "$SEG" '%DECNET-I-STARTNET' \
+                "STARTNET [vms-1f69]: on the CONFIGURED node @SYS\$MANAGER:STARTNET passes its gate and launches NETACP detached"
+        fi
     fi
     wait_for '$ ' 20 "$DN_OFF"
 

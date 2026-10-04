@@ -154,6 +154,12 @@ static struct l2_slot *l2_alloc(int fd, uint32_t handle)
 
 const char *scs_datalink_backend(void) { return "executive"; }
 
+/* The VMS condition value of the last failed VMS_IOCTL_L2_OPEN (0 if none), so
+ * a caller reports the executive's ACTUAL refusal instead of a guess from errno
+ * (rd vms-1f69: every non-NOSUCHDEV status used to read as "NOPRIV"). */
+static uint32_t g_l2_last_status;
+uint32_t scs_datalink_last_status(void) { return g_l2_last_status; }
+
 int scs_datalink_open(const char *ifname, uint16_t ethertype)
 {
     return scs_datalink_open_station(ifname, ethertype, NULL);
@@ -187,8 +193,10 @@ int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
                                     * SS$_NOSUCHDEV 2680 for an absent iface,
                                     * SS$_BADPARAM 20 for a refused station). */
         close(fd);
+        g_l2_last_status = a.status;
         errno = (a.status == 2680u) ? ENODEV
-              : (a.status == 20u)   ? EINVAL : EACCES;
+              : (a.status == 20u)   ? EINVAL
+              : (a.status == 36u)   ? EACCES : EIO;
         return -1;
     }
     if (l2_alloc(fd, a.handle) == NULL) { close(fd); errno = ENOMEM; return -1; }
@@ -267,6 +275,7 @@ int scs_datalink_set_recv_timeout(int fd, int seconds)
 #include <netpacket/packet.h>
 
 const char *scs_datalink_backend(void) { return "AF_PACKET probe"; }
+uint32_t scs_datalink_last_status(void) { return 0; }
 
 int scs_datalink_open_station(const char *ifname, uint16_t ethertype,
                               const uint8_t station[6])
@@ -436,6 +445,7 @@ static void bpfbuf_free(int fd)
 }
 
 const char *scs_datalink_backend(void) { return "bpf"; }
+uint32_t scs_datalink_last_status(void) { return 0; }
 
 int scs_datalink_open(const char *ifname, uint16_t ethertype);
 

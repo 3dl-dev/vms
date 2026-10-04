@@ -123,31 +123,17 @@ static void on_signal(int signo) { (void)signo; g_stop = 1; }
  */
 static int decnet_autodetect_iface(char *buf, size_t sz)
 {
-#if defined(AF_PACKET)
-    struct ifaddrs *ifs = NULL, *p;
-    int found = 0;
-
-    if (!buf || sz == 0 || getifaddrs(&ifs) != 0)
+    /* rd vms-1f69: the FIRST non-loopback Ethernet netdev, via the shared
+     * userspace twin of the executive's exec_netdev_primary()
+     * (scs_datalink_primary_iface) -- the SAME classification that names
+     * ETH0:/_NET:. It deliberately does NOT require IFF_UP: on a booted node
+     * nothing brings eth0 up before NETACP starts (the executive's L2_OPEN does,
+     * exec_netdev_ensure_up), so an up-only scan found nothing and fell back to
+     * the dev-lab "br0" -- observed: --show-executor reported br0 on a booted
+     * guest whose NIC is eth0, and the datalink then failed SS$_NOSUCHDEV. */
+    if (!buf || sz == 0)
         return 0;
-    for (p = ifs; p; p = p->ifa_next) {
-        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_PACKET)
-            continue;                       /* only link-layer (L2) entries   */
-        if (p->ifa_flags & IFF_LOOPBACK)
-            continue;                       /* never lo                       */
-        if (!(p->ifa_flags & IFF_UP))
-            continue;                       /* must be up                     */
-        if (p->ifa_name && p->ifa_name[0]) {
-            snprintf(buf, sz, "%s", p->ifa_name);
-            found = 1;
-            break;                          /* first match: the primary NIC   */
-        }
-    }
-    freeifaddrs(ifs);
-    return found;
-#else
-    (void)buf; (void)sz;
-    return 0;
-#endif
+    return scs_datalink_primary_iface(buf, sz) == 0 && buf[0] != '\0';
 }
 
 /* A monotonic seconds tick -- the unit the engine's T3/listen timers use. */
@@ -4280,17 +4266,34 @@ int main(int argc, char **argv)
     if (sock < 0) {
         int e = errno;
         if (strcmp(scs_datalink_backend(), "executive") == 0) {
+            uint32_t vst = scs_datalink_last_status();
             const char *why =
-                (e == EACCES) ? "SS$_NOPRIV -- the executive refused: NETACP"
-                                " requires the PHY_IO privilege"
-              : (e == ENODEV) ? "SS$_NOSUCHDEV -- no such network interface"
-              : (e == EINVAL) ? "SS$_BADPARAM -- the executive refused the"
-                                " station address"
-                              : strerror(e);
+                (vst == SS$_NOPRIV)    ? "SS$_NOPRIV -- the executive refused:"
+                                         " NETACP requires the PHY_IO privilege"
+              : (vst == SS$_NOSUCHDEV) ? "SS$_NOSUCHDEV -- no such network interface"
+              : (vst == SS$_BADPARAM)  ? "SS$_BADPARAM -- the executive refused the"
+                                         " station address"
+              : (vst == SS$_ABORT)     ? "SS$_ABORT -- the executive could not open"
+                                         " the interface's raw socket"
+              : vst                    ? "the executive refused the datalink"
+                                       : strerror(e);
             fprintf(stderr,
                     "DECNETD-E-NOSOCKET, executive datalink open on '%s'"
-                    " (ethertype 0x%04x) failed: %s\n",
-                    ifname, (unsigned)DNET_ETHERTYPE, why);
+                    " (ethertype 0x%04x) failed: %s (status %%X%08X)\n",
+                    ifname, (unsigned)DNET_ETHERTYPE, why, (unsigned)vst);
+            /* Say WHOSE privileges the executive judged: this process's own
+             * executive row (pid, user, current privilege mask, PHY_IO bit),
+             * read back from the executive -- so a refusal is diagnosable
+             * from the log alone (rd vms-1f69). */
+            struct vms_procinfo me;
+            memset(&me, 0, sizeof(me));
+            if (vms_kif_getjpi_self(&me) & 1)
+                fprintf(stderr,
+                        "-DECNETD-I-PROCPRIV, executive row pid %08X user %.12s"
+                        " curpriv %016llX (PHY_IO %s)\n",
+                        (unsigned)me.vms_pid, me.username,
+                        (unsigned long long)me.cur_privs,
+                        (me.cur_privs & (1ULL << 22)) ? "held" : "NOT held");
         } else {
             fprintf(stderr,
                     "DECNETD-E-NOSOCKET, %s datalink open on '%s' (0x%04x)"

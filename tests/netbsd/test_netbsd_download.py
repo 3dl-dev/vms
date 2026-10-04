@@ -20,6 +20,9 @@ class H(http.server.BaseHTTPRequestHandler):
             return
         start = 0
         rng = self.headers.get("Range")
+        if rng and getattr(H, "no_range", False):
+            self.send_error(404)
+            return
         if rng:
             start = int(rng.split("=")[1].rstrip("-"))
         body = DATA[start:]
@@ -58,6 +61,17 @@ def main():
     except RuntimeError:
         pass
     print("PASS netbsd_download: persistent no-progress -> RuntimeError")
+    # an edge that 404s every Range request must not make the file "missing":
+    # restart from 0 each time, and with a truncating server end as a loud
+    # RuntimeError, never an IOError that anita would cache as .MISSING.
+    H.no_range = True
+    try:
+        nd.make_download_file(max_stalls=3, sleep=q, logfn=q)(base + "/big", os.path.join(d, "r"))
+        raise SystemExit("range-404 did not raise")
+    except RuntimeError:
+        pass
+    H.no_range = False
+    print("PASS netbsd_download: Range-404 is not 'missing' (loud RuntimeError)")
     srv.shutdown()
 
 

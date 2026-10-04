@@ -37,6 +37,12 @@ def _fetch_from(url, part, offset, opener):
         resp = opener(req, timeout=60)
     except urllib.error.HTTPError as e:
         if e.code == 404:
+            if offset:
+                # Range on a file that exists: an edge that cannot serve the
+                # range (observed: 404 for any offset > 0 while offset 0 is
+                # 200) is not "the file is missing". Restart from byte 0.
+                open(part, "wb").close()
+                raise OSError("range request not served (404 at offset %d)" % offset)
             raise IOError("HTTP error code 404")
         if e.code == 416:                    # range past EOF: already complete
             return offset
@@ -61,6 +67,7 @@ def make_download_file(opener=urllib.request.urlopen, max_stalls=_MAX_STALLS,
     def download_file(url, file):
         part = file + ".part"
         stalls = 0
+        high = 0          # most bytes ever held; progress = beating it
         last = None
         while True:
             have = os.path.getsize(part) if os.path.exists(part) else 0
@@ -80,7 +87,8 @@ def make_download_file(opener=urllib.request.urlopen, max_stalls=_MAX_STALLS,
             except (OSError, http.client.HTTPException) as e:  # URLError, timeouts, resets
                 last = e
             got = os.path.getsize(part) if os.path.exists(part) else 0
-            stalls = 0 if got > have else stalls + 1
+            stalls = 0 if got > high else stalls + 1
+            high = max(high, got)
             logfn("download of %s interrupted at %d bytes (%s: %s), stall %d/%d"
                   % (url, got, type(last).__name__, last, stalls, max_stalls))
             if stalls >= max_stalls:

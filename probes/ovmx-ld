@@ -1,0 +1,45 @@
+#!/bin/bash
+# ovmx-ld -- the alpha-dec-vms cross toolchain's `ld`, backed by OVMX LINK.EXE.
+#
+# The cross gcc driver (via collect2) calls `ld` GNU-style:
+#   ld [vms-dwarf2eh.o] -o OUT crt0.o crtbegin.o -L... OBJS... -lgcc [-lc] crtend.o
+# This maps that onto the link a VMS host does: LINK the objects against the
+# OVMX shareables (DECC$SHR = the C RTL, LIBOTS$SHR = OTS$ integer divide,
+# LIBVMSRMS$SHR = RMS for the CRTL->RMS veneer) with the port crt0, STRICT
+# (an undefined symbol fails the link, %LINK-F-UNDEF) -- so autoconf link tests
+# get truthful answers from the real OVMX surface.
+#
+# Layout ($OVMX_ALPHA_SYSROOT, default: this script's directory):
+#   LINK.EXE  crt0.obj  DECC$SHR.EXE  LIBOTS_SHR.EXE  [LIBVMSRMS$SHR.EXE]
+set -u
+S=${OVMX_ALPHA_SYSROOT:-$(cd "$(dirname "$0")" && pwd)}
+LINK="$S/LINK.EXE"
+out=a.out
+objs=()
+libs=()
+Ldirs=()
+note() { [ -n "${OVMX_LD_VERBOSE:-}" ] && echo "%OVMX-LD-I, $*" >&2; return 0; }
+while [ $# -gt 0 ]; do
+  a=$1; shift
+  case "$a" in
+    -o) out=$1; shift ;;
+    -o*) out=${a#-o} ;;
+    -L) Ldirs+=("$1"); shift ;;
+    -L*) Ldirs+=("${a#-L}") ;;
+    -lc|-lc_p|-lg) note "$a -> DECC\$SHR (C RTL shareable)" ;;
+    -lgcc) note "-lgcc -> compiler support routines are in DECC\$SHR/LIBOTS\$SHR" ;;
+    -l*)
+      n=${a#-l}; f=""
+      for d in "${Ldirs[@]}"; do [ -f "$d/lib$n.a" ] && { f="$d/lib$n.a"; break; }; done
+      [ -n "$f" ] || { echo "%OVMX-LD-F-NOLIB, library -l$n not found" >&2; exit 1; }
+      libs+=(--library "$f") ;;
+    crt0.o|*/crt0.o) note "startfile crt0.o -> $S/crt0.obj" ;;
+    crtbegin.o|crtend.o|vms-dwarf2eh.o)
+      note "startfile $a not provided (EH frame / ctor registration: vms-43c)" ;;
+    -*) note "flag $a ignored" ;;
+    *) objs+=("$a") ;;
+  esac
+done
+uses=(--use "$S/DECC\$SHR.EXE" --use "$S/LIBOTS_SHR.EXE")
+[ -f "$S/LIBVMSRMS\$SHR.EXE" ] && uses+=(--use "$S/LIBVMSRMS\$SHR.EXE")
+exec "$LINK" --transfer __main "${uses[@]}" -o "$out" "$S/crt0.obj" "${objs[@]}" "${libs[@]}"

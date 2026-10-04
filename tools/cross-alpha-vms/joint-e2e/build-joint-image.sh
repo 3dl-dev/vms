@@ -330,7 +330,7 @@ done
 # this is inert -- no extra --use flag -- when the veneer is not opted in).
 RMS_USE_FLAG=""
 [ -n "$RMS" ] && RMS_USE_FLAG="--use $RMS"
-# vms-035: LINK.EXE links an EVAX executable at OpenVMS Alpha's P0 base 0x10000
+# vms-035: LINK.EXE links an EVAX executable at the OpenVMS Alpha P0 base 0x10000
 # by default (ET_EXEC; IMGACT then places the shareables in P0 above it).
 # JOINT_LINK_BASE overrides it (0 = the relocatable ET_DYN form).
 "$WORK/LINK.EXE" --transfer __main ${JOINT_LINK_BASE:+--base $JOINT_LINK_BASE} \

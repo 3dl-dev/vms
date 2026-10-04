@@ -1626,6 +1626,21 @@ uint32_t sys$get_entropy(void *buffer, uint32_t length);
 uint32_t sys$lckpag(const void *inadr, void *retadr, uint32_t acmode);
 uint32_t sys$ulkpag(const void *inadr, void *retadr, uint32_t acmode);
 
+/** sys$schdwk - Schedule a wakeup (pidadr/prcnam NULL = self; reptim unsupported) */
+uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                    const uint64_t *daytim, const uint64_t *reptim);
+
+/** sys$canwak - Cancel scheduled wakeups of the target (pidadr NULL = self) */
+uint32_t sys$canwak(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam);
+
+/** sys$alloc - Allocate a device (phylen/phybuf receive the physical name) */
+uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
+                   struct dsc$descriptor_s *phybuf, uint32_t acmode,
+                   uint32_t flags);
+
+/** sys$dalloc - Deallocate a device */
+uint32_t sys$dalloc(const struct dsc$descriptor_s *devnam, uint32_t acmode);
+
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

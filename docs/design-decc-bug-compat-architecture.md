@@ -79,9 +79,14 @@ a register of behaviors, not a backlog of bugs.
   `__INITIAL_POINTER_SIZE`. This is an **LLP64-shaped** model, *not* LP64 and *not*
   ILP32 — the same shape as Win64, which is exactly why LP64 (Linux/Alpha, Linux/x86)
   assumptions misfire.
-- `size_t`/`ptrdiff_t` track the *active* pointer size (mixed 32/64 within one
-  translation unit via `#pragma pointer_size` regions). VMS system headers toggle
-  pointer size around individual declarations — this is pervasive, not exotic.
+- `size_t` is **32-bit regardless of pointer size** (`unsigned int`; the port
+  compiler's `gcc/config/vms/vms.h`: SIZE_TYPE "Always a 32 bit type"), while
+  `ptrdiff_t` tracks the *active* pointer size (`int` / `long long` under 64-bit
+  pointers). OVMX's alpha CRTL follows this (vms-537): `::size_t` must equal the
+  compiler's `__SIZE_TYPE__` or C++ and the port's own sources do not compile.
+  Pointer size itself can be mixed 32/64 within one translation unit via
+  `#pragma pointer_size` regions; VMS system headers toggle it around individual
+  declarations — this is pervasive, not exotic.
 - **Architectural consequence:** every OVMX header, test, and hand-written port
   source must assume `long`==32. A standing lint (`sizeof(long)` assumptions,
   `%ld`-for-64-bit, `unsigned long` type-puns of 64-bit objects) would have caught

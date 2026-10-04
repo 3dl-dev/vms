@@ -54,6 +54,7 @@
 #endif
 #include <errno.h>
 #include <time.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "vms/pcb.h"
 #include "sysgen_params.h"
@@ -140,7 +141,7 @@ uint32_t sys$setprv(uint32_t enbflg, const uint64_t *prvadr,
  *   SYI$_CLUSTER_NODES - Cluster node count (1 for standalone; no live
  *                        cluster wire yet, see vms-ci.3)
  */
-uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
+static uint32_t getsyi_impl(uint32_t efn, const uint32_t *csidadr,
                     const struct dsc$descriptor_s *nodename,
                     const struct item_list_3 *itmlst,
                     void *iosb,
@@ -336,6 +337,24 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
     }
 
     return SS$_NORMAL;
+}
+
+/*
+ * sys$getsyi - public entry: the getsyi body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
+                    const struct dsc$descriptor_s *nodename,
+                    const struct item_list_3 *itmlst,
+                    void *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint32_t st = getsyi_impl(efn, csidadr, nodename, itmlst, iosb, astadr, astprm);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }
 
 /*

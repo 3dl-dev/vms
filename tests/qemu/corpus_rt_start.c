@@ -28,6 +28,12 @@ static void corpus_rt_image_context(void)
 {
     if (vms_pcb_get())
         return;
+    /* The corpus guest has no login: every program runs as the process STARTUP
+     * runs under, SYSTEM [1,4] with the executive's own full privilege mask --
+     * vms_kif_establish_system() asks the executive for exactly that (it refuses
+     * without CAP_SYS_ADMIN, which init.sh's root has). Programs that look their
+     * own user name up in SYSUAF ($GETUAI, $CREPRC) need a name that is in it. */
+    (void)vms_kif_establish_system();
     struct vms_procinfo self;
     memset(&self, 0, sizeof self);
     if (!(vms_kif_getjpi_self(&self) & 1))

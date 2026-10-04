@@ -166,6 +166,7 @@
 #include <signal.h>
 #include <time.h>
 #include <stdio.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
@@ -342,7 +343,7 @@ static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
  * target -- the honest answer is SS$_NONEXPR, which is what VMS returns
  * for a process that does not exist.
  */
-uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
+static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                     void *prcnam_arg,
                     void *itmlst_arg,
                     void *iosb,
@@ -502,6 +503,24 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
     }
 
     return SS$_NORMAL;
+}
+
+/*
+ * sys$getjpi - public entry: the getjpi body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
+                    void *prcnam_arg,
+                    void *itmlst_arg,
+                    void *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint32_t st = getjpi_impl(efn, pidadr, prcnam_arg, itmlst_arg, iosb, astadr, astprm);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }
 
 /*

@@ -50,6 +50,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "dvidef.h"
 #include "dcdef.h"
@@ -300,7 +301,7 @@ static uint32_t device_lookup_translated(const char *devnam_in,
  * @param astprm   AST parameter (ignored)
  * @param nullarg  Reserved, pass 0
  */
-uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
+static uint32_t getdvi_impl(uint32_t efn, uint16_t chan,
                     struct dsc$descriptor_s *devnam,
                     void *itmlst, struct _iosb *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm,
@@ -346,6 +347,24 @@ uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
         iosb->iosb$w_bcnt   = 0;
     }
     return status;
+}
+
+/*
+ * sys$getdvi - public entry: the getdvi body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
+                    struct dsc$descriptor_s *devnam,
+                    void *itmlst, struct _iosb *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm,
+                    uint32_t nullarg)
+{
+    uint32_t st = getdvi_impl(efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }
 
 /*

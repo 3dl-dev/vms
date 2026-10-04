@@ -87,6 +87,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "iosbdef.h"      /* extended struct _iosb (iosb$l_getxxi_status) -- must precede starlet.h */
 #include "starlet.h"
 #include "ssdef.h"
 #include "vms_kif.h"
@@ -166,3 +167,40 @@ uint32_t sys$setast(uint32_t enbflg) {
 }
 
 /* sys$dclexh is implemented in sys_process.c */
+
+/*
+ * vms$$async_finish - complete an asynchronous system service that has already
+ * done its work (OVMX services run synchronously).
+ *
+ * The caller's contract on a SUCCESSFUL queue-and-complete: the I/O status block
+ * carries the final status, the event flag is set, and the AST routine is queued
+ * with its parameter.  When the service itself returned an error (an argument
+ * problem, a process that does not exist) VMS leaves all three untouched and
+ * returns the condition -- so does this.  The same status is returned.
+ *
+ * efn values at or above 128 (EFN$C_ENF and friends) mean "no event flag".
+ */
+uint32_t vms$$async_finish(uint32_t efn, void *iosb, uint32_t status,
+                           void (*astadr)(uint32_t), uint32_t astprm)
+{
+    if (!(status & 1))
+        return status;
+    if (iosb) {
+        struct _iosb *b = (struct _iosb *)iosb;
+        b->iosb$w_status = (uint16_t)status;
+        b->iosb$w_bcnt = 0;
+        b->iosb$l_getxxi_status = status;
+    }
+    if (efn < 128)
+        (void)sys$setef(efn);
+    if (astadr) {
+        uint32_t st = sys$dclast(astadr, astprm, 0);
+        if (!(st & 1))
+            return st;
+        /* A running process at user mode with ASTs enabled takes a queued AST
+         * on its way back from the service; dispatch what is deliverable now
+         * (an AST the caller has disabled stays queued in the executive). */
+        vms$$deliver_pending_asts();
+    }
+    return status;
+}

@@ -27,7 +27,15 @@ BASELINE=${2:-}
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIST=${3:-$HERE/corpus_runtime_programs.txt}
 
-declare -A rc sig began
+declare -A rc sig began expected_exit
+# designed non-zero exits (tests/corpus/expected_exit.txt): run-pass iff exactly that code
+EXPECTED_EXIT_FILE="$HERE/../corpus/expected_exit.txt"
+if [ -f "$EXPECTED_EXIT_FILE" ]; then
+    while read -r _en _ec _rest; do
+        case "$_en" in ''|\#*) continue ;; esac
+        expected_exit["$_en"]="$_ec"
+    done < "$EXPECTED_EXIT_FILE"
+fi
 while IFS= read -r line; do
     line=${line%$'\r'}
     case "$line" in
@@ -48,7 +56,7 @@ while IFS= read -r name; do
     total=$((total+1))
     if [ -n "${rc[$name]+x}" ]; then
         r=${rc[$name]}
-        if [ "$r" -eq 0 ]; then st=run-pass; pass=$((pass+1)); [ "${sig[$name]}" = 1 ] && signaled=$((signaled+1))
+        if [ "$r" -eq 0 ] || { [ -n "${expected_exit[$name]:-}" ] && [ "$r" -eq "${expected_exit[$name]}" ]; }; then st=run-pass; pass=$((pass+1)); [ "${sig[$name]}" = 1 ] && signaled=$((signaled+1))
         elif [ "$r" -gt 128 ]; then st=run-crash; crash=$((crash+1))
         else st=run-fail; fail=$((fail+1)); fi
     elif [ -n "${began[$name]+x}" ]; then st=vm-crash; vmcrash=$((vmcrash+1))

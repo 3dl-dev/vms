@@ -138,8 +138,9 @@ grep -q '^TYPEDEF unsigned int size_t;$' include/alltypes.h.in \
  || { echo "vms-537 PATCH FAIL: size_t/ssize_t/iovec in include/alltypes.h.in" >&2; exit 7; }
 # mprotect() rounds the ADDRESS through size_t; with a 32-bit size_t that
 # truncates a 64-bit pointer. Round through uintptr_t instead.
+grep -q '^#include <stdint.h>$' src/mman/mprotect.c || sed -i 's/^#include <sys\/mman.h>$/#include <sys\/mman.h>\n#include <stdint.h>/' src/mman/mprotect.c
 sed -i 's/^\tsize_t start, end;$/\tuintptr_t start, end;/; s/(size_t)addr/(uintptr_t)addr/; s/end = (size_t)(/end = (uintptr_t)(/' src/mman/mprotect.c
-grep -q 'uintptr_t start, end;' src/mman/mprotect.c && ! grep -q '(size_t)' src/mman/mprotect.c \
+grep -q 'uintptr_t start, end;' src/mman/mprotect.c && grep -q '^#include <stdint.h>$' src/mman/mprotect.c && ! grep -q '(size_t)' src/mman/mprotect.c \
  || { echo "vms-537 PATCH FAIL: src/mman/mprotect.c" >&2; exit 7; }
 echo "== vms-537 DEC C size_t model applied (size_t/ssize_t 32-bit, iovec + mprotect kernel-width) =="
 

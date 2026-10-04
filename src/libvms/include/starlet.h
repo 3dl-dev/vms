@@ -587,7 +587,9 @@ uint32_t sys$getjpiw(
  * sys$getsyi - Get system information
  *
  * @param efn       Event flag for completion
- * @param csidadr   Optional pointer to cluster system ID
+ * @param csidadr   Optional pointer to cluster system ID; in/out wildcard context
+ *                  (-1 starts a walk of the cluster, updated on return;
+ *                  SS$_NOMORENODE ends it)
  * @param nodename  Optional pointer to descriptor of node name
  * @param itmlst    Pointer to item list
  * @param iosb      Pointer to I/O status block
@@ -598,7 +600,7 @@ uint32_t sys$getjpiw(
  */
 uint32_t sys$getsyi(
     uint32_t efn,
-    const uint32_t *csidadr,
+    uint32_t *csidadr,
     const struct dsc$descriptor_s *nodename,
     const struct item_list_3 *itmlst,
     void *iosb,
@@ -611,7 +613,7 @@ uint32_t sys$getsyi(
  */
 uint32_t sys$getsyiw(
     uint32_t efn,
-    const uint32_t *csidadr,
+    uint32_t *csidadr,
     const struct dsc$descriptor_s *nodename,
     const struct item_list_3 *itmlst,
     void *iosb,
@@ -1623,6 +1625,33 @@ uint32_t sys$get_entropy(void *buffer, uint32_t length);
 /** sys$lckpag / sys$ulkpag - Lock / unlock pages in memory (inadr, retadr are VA_RANGE) */
 uint32_t sys$lckpag(const void *inadr, void *retadr, uint32_t acmode);
 uint32_t sys$ulkpag(const void *inadr, void *retadr, uint32_t acmode);
+
+/** sys$schdwk - Schedule a wakeup (pidadr/prcnam NULL = self; reptim unsupported) */
+uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                    const uint64_t *daytim, const uint64_t *reptim);
+
+/** sys$canwak - Cancel scheduled wakeups of the target (pidadr NULL = self) */
+uint32_t sys$canwak(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam);
+
+/** sys$alloc - Allocate a device (phylen/phybuf receive the physical name) */
+uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
+                   struct dsc$descriptor_s *phybuf, uint32_t acmode,
+                   uint32_t flags);
+
+/** sys$dalloc - Deallocate a device */
+uint32_t sys$dalloc(const struct dsc$descriptor_s *devnam, uint32_t acmode);
+
+/** sys$resched - Give up the processor */
+uint32_t sys$resched(void);
+
+/** sys$setrwm - Set resource wait mode (1 = disable resource wait); SS$_WASSET if it was disabled */
+uint32_t sys$setrwm(uint32_t watflg);
+
+/** sys$setswm - Set process swap mode (1 = disable swapping; needs PSWAPM) */
+uint32_t sys$setswm(uint32_t swpflg);
+
+/** sys$setprn - Set process name */
+uint32_t sys$setprn(const struct dsc$descriptor_s *prcnam);
 
 /** sys$purge_ws - Purge working set, 64-bit range form */
 uint32_t sys$purge_ws(const void *inadr, uint64_t count);

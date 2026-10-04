@@ -219,17 +219,29 @@ uint32_t lib$day_of_week(const void *time_value, int32_t *day) {
 /*
  * lib$cvt_dtb - Convert decimal text to binary integer.
  *
- * Parses ndigits characters of decimal text and converts to int32_t.
+ * Parses ndigits characters of signed decimal text and converts to int32_t.
  */
 uint32_t lib$cvt_dtb(int32_t ndigits, const char *text, int32_t *value) {
     if (!text || !value || ndigits <= 0) return SS$_BADPARAM;
 
-    int32_t result = 0;
-    for (int32_t i = 0; i < ndigits; i++) {
+    /* A signed decimal integer: an optional leading '+' or '-' (LIB$ Manual,
+     * LIB$CVT_DTB: "Convert Decimal Text to Binary"), then at least one digit. */
+    int32_t i = 0;
+    int neg = 0;
+    if (text[0] == '-' || text[0] == '+') {
+        neg = (text[0] == '-');
+        i = 1;
+        if (ndigits == 1) return SS$_BADPARAM;
+    }
+    int64_t result = 0;
+    for (; i < ndigits; i++) {
         if (!isdigit((unsigned char)text[i])) return SS$_BADPARAM;
         result = result * 10 + (text[i] - '0');
+        if (result > 2147483648LL) return SS$_BADPARAM;   /* does not fit a longword */
     }
-    *value = result;
+    if (neg) result = -result;
+    if (result > 2147483647LL) return SS$_BADPARAM;
+    *value = (int32_t)result;
 
     return SS$_NORMAL;
 }

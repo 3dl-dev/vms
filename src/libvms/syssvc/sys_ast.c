@@ -87,6 +87,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "iosbdef.h"      /* extended struct _iosb (iosb$l_getxxi_status) -- must precede starlet.h */
 #include "starlet.h"
 #include "ssdef.h"
 #include "vms_kif.h"
@@ -110,6 +111,9 @@
  * because an AST became deliverable (vms-feb). Intra-image call within
  * LIBVMS$SHR -- no symbol-vector universal.
  */
+/* Nonzero while an AST routine this layer dispatched is running (LIB$AST_IN_PROG). */
+static __thread int ast_in_progress;
+
 void vms$$deliver_pending_asts(void) {
     uint64_t astadr;
     uint64_t astprm;
@@ -118,9 +122,20 @@ void vms$$deliver_pending_asts(void) {
     while (vms_kif_deliverast(&astadr, &astprm, &acmode) == 0) {
         if (astadr) {
             void (*fn)(uint32_t) = (void (*)(uint32_t))(uintptr_t)astadr;
+            ast_in_progress++;
             fn((uint32_t)astprm);
+            ast_in_progress--;
         }
     }
+}
+
+/*
+ * lib$ast_in_prog - Is the caller running as an AST routine?  Returns 1 inside
+ * an AST dispatched by this layer, else 0 (the VMS RTL's boolean result).
+ */
+uint32_t lib$ast_in_prog(void)
+{
+    return ast_in_progress > 0 ? 1 : 0;
 }
 
 /*
@@ -166,3 +181,40 @@ uint32_t sys$setast(uint32_t enbflg) {
 }
 
 /* sys$dclexh is implemented in sys_process.c */
+
+/*
+ * vms$$async_finish - complete an asynchronous system service that has already
+ * done its work (OVMX services run synchronously).
+ *
+ * The caller's contract on a SUCCESSFUL queue-and-complete: the I/O status block
+ * carries the final status, the event flag is set, and the AST routine is queued
+ * with its parameter.  When the service itself returned an error (an argument
+ * problem, a process that does not exist) VMS leaves all three untouched and
+ * returns the condition -- so does this.  The same status is returned.
+ *
+ * efn values at or above 128 (EFN$C_ENF and friends) mean "no event flag".
+ */
+uint32_t vms$$async_finish(uint32_t efn, void *iosb, uint32_t status,
+                           void (*astadr)(uint32_t), uint32_t astprm)
+{
+    if (!(status & 1))
+        return status;
+    if (iosb) {
+        struct _iosb *b = (struct _iosb *)iosb;
+        b->iosb$w_status = (uint16_t)status;
+        b->iosb$w_bcnt = 0;
+        b->iosb$l_getxxi_status = status;
+    }
+    if (efn < 128)
+        (void)sys$setef(efn);
+    if (astadr) {
+        uint32_t st = sys$dclast(astadr, astprm, 3 /* user mode: the access mode of the caller */);
+        if (!(st & 1))
+            return st;
+        /* A running process at user mode with ASTs enabled takes a queued AST
+         * on its way back from the service; dispatch what is deliverable now
+         * (an AST the caller has disabled stays queued in the executive). */
+        vms$$deliver_pending_asts();
+    }
+    return status;
+}

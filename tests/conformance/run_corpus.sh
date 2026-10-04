@@ -79,6 +79,18 @@ LIB_FLAGS="-L${BUILD_LIB_DIR} -l:LIBVMSRMS\$SHR.EXE -l:LIBVMSFS\$SHR.EXE -l:LIBV
 # inflation — same class of harness correctness fix as the -l: link fix above.)
 CFLAGS="-O2 -D__IEEE_FLOAT=1"
 
+# DESIGNED non-zero exits (vms-44a): programs whose demonstration IS a failing exit
+# (tests/corpus/expected_exit.txt, "<program> <code>  # reason"). run-pass iff the
+# program exits with exactly its documented code.
+declare -A expected_exit
+EXPECTED_EXIT_FILE="${SCRIPT_DIR}/../corpus/expected_exit.txt"
+if [ -f "${EXPECTED_EXIT_FILE}" ]; then
+    while read -r _en _ec _rest; do
+        case "${_en}" in ''|\#*) continue ;; esac
+        expected_exit["${_en}"]="${_ec}"
+    done < "${EXPECTED_EXIT_FILE}"
+fi
+
 # errchk.h is in the tier1-examples directory itself
 INCLUDE_FLAGS="${INCLUDE_FLAGS} -I${CORPUS_DIR}"
 
@@ -245,7 +257,7 @@ for src_file in "${CORPUS_DIR}"/*.c; do
     # the repository checkout the harness was started from.
     (cd "${BUILD_DIR}" && LD_LIBRARY_PATH="${BUILD_LIB_DIR}" timeout 10 "${bin}" </dev/null >"${run_log}" 2>&1) || run_rc=$?
 
-    if [ ${run_rc} -eq 0 ]; then
+    if [ ${run_rc} -eq 0 ] || { [ -n "${expected_exit[${name}]:-}" ] && [ "${run_rc}" -eq "${expected_exit[${name}]}" ]; }; then
         status="run-pass"
         count_run_pass=$((count_run_pass + 1))
         if grep -qE '^%[A-Z0-9_$]+-[EF]-' "${run_log}" 2>/dev/null; then

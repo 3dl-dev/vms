@@ -129,6 +129,20 @@
  * OVMX-LOCAL: sys$suspnd -- SIGSTOP is delivered to the resolved Linux pid; the
  *     signal is the suspend mechanism, same as sys$delprc's SIGTERM, now aimed at
  *     the process the executive named rather than a mis-cast VMS pid.
+ * OVMX-USERSPACE: sys$resched (vms-44a) -- sched_yield(2): the host scheduler
+ *     gives up the CPU; there is no VMS scheduling queue to requeue onto.
+ * OVMX-USERSPACE: sys$setrwm (vms-44a) -- records the resource-wait-mode flag in
+ *     this process's memory and reports its previous value; Linux has no
+ *     resource-wait mode, so nothing consults the flag (a recorded setting, not
+ *     an enforced one).
+ * OVMX-PARTIAL: sys$setswm (vms-44a) -- exec: the PSWAPM privilege test is the
+ *     executive's (vms_kif_chkpriv).
+ * OVMX-LOCAL: sys$setswm -- the process-swap-mode flag itself is a bit in this
+ *     process's memory that nothing consults (Linux has no balance set).
+ * OVMX-PARTIAL: sys$setprn (vms-44a) -- exec: the process name lives in the
+ *     executive's process table; vms_kif_setprn renames this process there and
+ *     refuses a duplicate name in the group (SS$_DUPLNAM).
+ * OVMX-LOCAL: sys$setprn -- only the descriptor-to-string copy happens here.
  * OVMX-PARTIAL: sys$suspend (vms-pt1) -- exec: a pure backwards-compat alias
  *     that tail-calls sys$suspnd, so the executive resolution + authorization of
  *     the target are sys$suspnd's (vms-904).
@@ -166,9 +180,11 @@
 #include <signal.h>
 #include <time.h>
 #include <stdio.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
+#include <sched.h>
 #include "prvdef.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
@@ -342,7 +358,7 @@ static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
  * target -- the honest answer is SS$_NONEXPR, which is what VMS returns
  * for a process that does not exist.
  */
-uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
+static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                     void *prcnam_arg,
                     void *itmlst_arg,
                     void *iosb,
@@ -502,6 +518,24 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
     }
 
     return SS$_NORMAL;
+}
+
+/*
+ * sys$getjpi - public entry: the getjpi body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
+                    void *prcnam_arg,
+                    void *itmlst_arg,
+                    void *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint32_t st = getjpi_impl(efn, pidadr, prcnam_arg, itmlst_arg, iosb, astadr, astprm);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }
 
 /*
@@ -1893,4 +1927,58 @@ uint32_t sys$cancel(uint16_t chan) {
     /* KNOWN GAP (vms-c8c): QIO is async (io_uring), so pending I/O CAN exist;
      * this no-op does not cancel it -- see the header note above. */
     return SS$_NORMAL;
+}
+
+/*
+ * sys$resched - Cause the process to give up the processor ($RESCHED).
+ */
+uint32_t sys$resched(void)
+{
+    sched_yield();
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$setrwm - Set resource wait mode.  watflg 1 disables resource wait, 0
+ * enables it.  Returns SS$_WASSET if wait was previously disabled, else
+ * SS$_WASCLR (the same condition values $SETEF uses).
+ */
+static int process_rwm_disabled;
+
+uint32_t sys$setrwm(uint32_t watflg)
+{
+    int prev = process_rwm_disabled;
+    process_rwm_disabled = (watflg & 1) ? 1 : 0;
+    return prev ? SS$_WASSET : SS$_WASCLR;
+}
+
+/*
+ * sys$setswm - Set process swap mode.  swpflg 1 disables swapping (locks the
+ * process in the balance set) and needs PSWAPM; 0 enables it.  Returns
+ * SS$_WASSET if swapping was previously disabled, else SS$_WASCLR.
+ */
+static int process_swap_disabled;
+
+uint32_t sys$setswm(uint32_t swpflg)
+{
+    uint32_t pr = vms_kif_chkpriv(PRV$M_PSWAPM);
+    if (!(pr & 1))
+        return SS$_NOPRIV;
+    int prev = process_swap_disabled;
+    process_swap_disabled = (swpflg & 1) ? 1 : 0;
+    return prev ? SS$_WASSET : SS$_WASCLR;
+}
+
+/*
+ * sys$setprn - Set the process name.  The name is registered in the executive's
+ * process table; a name already held by another process in the caller's UIC
+ * group is SS$_DUPLNAM.  A null/empty descriptor leaves the process unnamed.
+ */
+uint32_t sys$setprn(const struct dsc$descriptor_s *prcnam)
+{
+    char name[VMS_PRCNAM_XFER];
+    name[0] = '\0';
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0)
+        dsc$strncpy(name, prcnam, sizeof(name));
+    return vms_kif_setprn(name);
 }

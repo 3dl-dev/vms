@@ -40,6 +40,15 @@
  *     from the compiled-in months[] table in this file.
  * OVMX-USERSPACE: sys$bintim (vms-f90) -- parses the caller's string against
  *     that same compiled-in table.
+ * OVMX-USERSPACE: sys$schdwk (vms-44a) -- the schedule is this process's own
+ *     POSIX timer (the sys$setimr table below): a scheduled wakeup dies with the
+ *     image that requested it and no executive timer queue holds it. At expiry
+ *     the timer's AST issues $WAKE (the wake state IS the executive's -- reached
+ *     through an AST function pointer, which this register's static call graph
+ *     cannot see). A repeat interval, or a target named by process name, is
+ *     refused.
+ * OVMX-USERSPACE: sys$canwak (vms-44a) -- cancels the timers sys$schdwk armed in
+ *     that same process-local table.
  * OVMX-USERSPACE: sys$setimr (vms-642) -- arms a POSIX timer recorded in the
  *     process-local timer_table[] in this file. There is no executive timer
  *     queue, so the request dies with the process and nothing else can see it.
@@ -445,4 +454,74 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
 uint32_t sys$gettim_prec(uint64_t *timadr)
 {
     return sys$gettim(timadr);
+}
+
+/*
+ * $SCHDWK / $CANWAK -- schedule a wakeup of a process, cancel scheduled wakeups.
+ *
+ * Built on the process-local timer table of sys$setimr: each request occupies a
+ * slot recording the target, and the timer's AST issues $WAKE for it. reqidt
+ * values carry WAKE_REQID_BASE so $CANWAK cancels only wakeups, never a
+ * caller's own timers.
+ */
+#define WAKE_REQID_BASE 0x57414B00u      /* 'WAK' + slot */
+#define WAKE_SLOTS      16
+
+static struct {
+    int      in_use;
+    int      has_pid;
+    uint32_t pid;
+} wake_slot[WAKE_SLOTS];
+
+static void wake_ast(uint32_t reqidt)
+{
+    unsigned slot = reqidt & 0xFFu;
+    if (slot >= WAKE_SLOTS || !wake_slot[slot].in_use)
+        return;
+    uint32_t pid = wake_slot[slot].pid;
+    int has = wake_slot[slot].has_pid;
+    wake_slot[slot].in_use = 0;
+    (void)sys$wake(has ? &pid : NULL, NULL);
+}
+
+uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                    const uint64_t *daytim, const uint64_t *reptim)
+{
+    if (!daytim)
+        return SS$_BADPARAM;
+    if (reptim)
+        return SS$_BADPARAM;            /* a repeating wakeup is not supported */
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0)
+        return SS$_BADPARAM;            /* waking by process name is not supported */
+
+    unsigned slot;
+    for (slot = 0; slot < WAKE_SLOTS; slot++)
+        if (!wake_slot[slot].in_use)
+            break;
+    if (slot == WAKE_SLOTS)
+        return SS$_EXQUOTA;
+    wake_slot[slot].in_use = 1;
+    wake_slot[slot].has_pid = (pidadr && *pidadr != 0);
+    wake_slot[slot].pid = wake_slot[slot].has_pid ? *pidadr : 0;
+
+    uint32_t st = sys$setimr(0, daytim, wake_ast, WAKE_REQID_BASE | slot, 0);
+    if (!(st & 1))
+        wake_slot[slot].in_use = 0;
+    return st;
+}
+
+uint32_t sys$canwak(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam)
+{
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0)
+        return SS$_BADPARAM;
+    int has = (pidadr && *pidadr != 0);
+    for (unsigned slot = 0; slot < WAKE_SLOTS; slot++) {
+        if (!wake_slot[slot].in_use)
+            continue;
+        if (has != wake_slot[slot].has_pid || (has && wake_slot[slot].pid != *pidadr))
+            continue;
+        (void)sys$cantim(WAKE_REQID_BASE | slot, 0);
+        wake_slot[slot].in_use = 0;
+    }
+    return SS$_NORMAL;
 }

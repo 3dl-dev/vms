@@ -25,10 +25,12 @@
  *     one, not the retired daemon's file). No fabricated membership.
  * OVMX-LOCAL: sys$getsyi -- the REMAINING items (NODENAME/VERSION/SCSNODE/
  *     SCSSYSTEMID/... ) answer from uname()/host sysconf(), not an executive
- *     system block. csidadr and nodename are still discarded
- *     ((void)csidadr; (void)nodename;), so a request aimed at another cluster
- *     node is answered with this machine's numbers as though aimed here (vms-642
- *     open; the cluster-item cutover above is the first executive-backed slice).
+ *     system block. nodename is still discarded ((void)nodename;) and csidadr
+ *     is read only as a wildcard-walk context that is one node long (-1 returns
+ *     this node, the next call SS$_NOMORENODE), so a request aimed at another
+ *     cluster node is answered with this machine's numbers as though aimed here
+ *     (vms-642 open; the cluster-item cutover above is the first executive-backed
+ *     slice).
  * OVMX-PARTIAL: sys$getsyiw (vms-5919) -- exec: the same SYI$_CLUSTER_MEMBER /
  *     SYI$_CLUSTER_NODES read of the connection manager's CLUB as sys$getsyi
  *     above (this is the wait form of the same service).
@@ -54,6 +56,7 @@
 #endif
 #include <errno.h>
 #include <time.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "vms/pcb.h"
 #include "sysgen_params.h"
@@ -140,15 +143,34 @@ uint32_t sys$setprv(uint32_t enbflg, const uint64_t *prvadr,
  *   SYI$_CLUSTER_NODES - Cluster node count (1 for standalone; no live
  *                        cluster wire yet, see vms-ci.3)
  */
-uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
+/* Wildcard-walk context value meaning "the node just returned was the last". */
+#define SYI_WILD_DONE 0xFFFFFFFEu
+
+static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
                     const struct dsc$descriptor_s *nodename,
                     const struct item_list_3 *itmlst,
                     void *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm) {
-    (void)efn; (void)csidadr; (void)nodename; (void)iosb;
+    (void)efn; (void)nodename; (void)iosb;
     (void)astadr; (void)astprm;
 
     if (!itmlst) return SS$_BADPARAM;
+
+    /*
+     * csidadr as a WILDCARD CONTEXT (OpenVMS System Services Reference Manual,
+     * $GETSYI): -1 asks for "the next node" and the service updates the longword
+     * so repeated calls walk the cluster, ending in SS$_NOMORENODE. This answers
+     * only for THIS node (it knows no other -- see the OVMX-LOCAL note above), so
+     * the walk is one node long: the -1 call returns this node and leaves the
+     * context at SYI_WILD_DONE, the next call has no node left.  Before this a
+     * walker (Eight-Cubed lib_getsyi.c) got this node back forever.
+     */
+    if (csidadr) {
+        if (*csidadr == 0xFFFFFFFFu)
+            *csidadr = SYI_WILD_DONE;
+        else if (*csidadr == SYI_WILD_DONE)
+            return SS$_NOMORENODE;
+    }
 
     struct utsname uts;
     uname(&uts);
@@ -339,9 +361,27 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
 }
 
 /*
+ * sys$getsyi - public entry: the getsyi body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getsyi(uint32_t efn, uint32_t *csidadr,
+                    const struct dsc$descriptor_s *nodename,
+                    const struct item_list_3 *itmlst,
+                    void *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint32_t st = getsyi_impl(efn, csidadr, nodename, itmlst, iosb, astadr, astprm);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
+}
+
+/*
  * sys$getsyiw - Get system information (synchronous wrapper).
  */
-uint32_t sys$getsyiw(uint32_t efn, const uint32_t *csidadr,
+uint32_t sys$getsyiw(uint32_t efn, uint32_t *csidadr,
                      const struct dsc$descriptor_s *nodename,
                      const struct item_list_3 *itmlst,
                      void *iosb,

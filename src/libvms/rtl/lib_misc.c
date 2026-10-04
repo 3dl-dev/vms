@@ -122,7 +122,7 @@ uint32_t lib$getjpi(const uint32_t *item_code, const uint32_t *pid,
  */
 uint32_t lib$getsyi(const uint32_t *item_code,
                     void *result, struct dsc$descriptor_s *result_str,
-                    uint16_t *result_len, const uint32_t *csid,
+                    uint16_t *result_len, uint32_t *csid,
                     const struct dsc$descriptor_s *node) {
     if (!item_code) return SS$_BADPARAM;
 

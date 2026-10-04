@@ -53,7 +53,7 @@ NETBSD_VERSION="${NETBSD_VERSION:-10.1}"
 ISO_NAME="NetBSD-${NETBSD_VERSION}-vax.iso"
 ISO_SHA512="${ISO_SHA512:-aa763aa2240e4623adf09dd1a1ed2da0e3b96959d33544d52026a0c7c7448c6f0da8517bf059b9c53a9786782c0373b2e3da84de4b36cc5aeb669d219ac0f225}"
 SETS="${SETS:-kern-GENERIC,base,etc}"
-SRC_BASE="${SRC_BASE:-https://cdn.netbsd.org/pub/NetBSD/NetBSD-${NETBSD_VERSION}/source/sets}"
+SRC_BASE="${SRC_BASE:-https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-${NETBSD_VERSION}/source/sets}"
 # NetBSD source sets needed to build a kernel with build.sh (sys + build infra +
 # in-tree toolchain source). SHA512s from the release's own source/sets/SHA512.
 SRC_SHA512="${SRC_SHA512:-6ae2053b4b75821238c0757d4f7258daece425de72524c616e07d3adee7c48d87422dd47d852a137918cec3dd3c0d339e372f4504dfe9f1bc5520011775bdb86}"

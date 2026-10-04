@@ -39,7 +39,7 @@ MODE="${1:-smoke}"
 # kernel -- the lab substrate and the cross-build target are one version.
 NETBSD_VERSION="${NETBSD_VERSION:-10.1}"
 ISO_NAME="NetBSD-${NETBSD_VERSION}-vax.iso"
-ISO_URL="${ISO_URL:-https://cdn.netbsd.org/pub/NetBSD/NetBSD-${NETBSD_VERSION}/images/${ISO_NAME}}"
+ISO_URL="${ISO_URL:-https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-${NETBSD_VERSION}/images/${ISO_NAME}}"
 # SHA512 of NetBSD-10.1-vax.iso (cdn.netbsd.org .../NetBSD-10.1/images/SHA512).
 # If you bump NETBSD_VERSION you MUST update this from that release's SHA512.
 ISO_SHA512="${ISO_SHA512:-aa763aa2240e4623adf09dd1a1ed2da0e3b96959d33544d52026a0c7c7448c6f0da8517bf059b9c53a9786782c0373b2e3da84de4b36cc5aeb669d219ac0f225}"

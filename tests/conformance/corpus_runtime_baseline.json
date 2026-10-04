@@ -1,7 +1,7 @@
 {
- "total": 133,
+ "total": 138,
  "summary": {
-  "run-pass": 127,
+  "run-pass": 132,
   "run-fail": 5,
   "run-crash": 1,
   "vm-crash": 0,
@@ -31,6 +31,11 @@
   },
   {
    "name": "lib_analyze_sdesc_64",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_ast_in_prog",
    "status": "run-pass",
    "signaled": false
   },
@@ -640,6 +645,11 @@
    "signaled": true
   },
   {
+   "name": "sys_resched",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
    "name": "sys_rms_seq",
    "status": "run-fail",
    "signaled": true
@@ -660,7 +670,22 @@
    "signaled": false
   },
   {
+   "name": "sys_setprn",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
    "name": "sys_setprv",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setrwm",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setswm",
    "status": "run-pass",
    "signaled": false
   },
@@ -675,6 +700,6 @@
    "signaled": false
   }
  ],
- "timestamp": "2026-10-04T21:54:31Z",
+ "timestamp": "2026-10-04T22:29:54Z",
  "note": "Runtime column: tier-1 programs run in the QEMU guest under a live vms.ko (OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh). Re-derive with tests/qemu/corpus_runtime_report.sh; raise the floor only from a real run."
 }

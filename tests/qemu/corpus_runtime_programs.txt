@@ -11,6 +11,7 @@ lib_add_times
 lib_addx
 lib_analyze_sdesc
 lib_analyze_sdesc_64
+lib_ast_in_prog
 lib_bbcci
 lib_bbssi
 lib_char
@@ -132,10 +133,14 @@ sys_numtim
 sys_purge_ws
 sys_purgws
 sys_putmsg
+sys_resched
 sys_rms_seq
 sys_setast
 sys_setimr
 sys_setpri
+sys_setprn
 sys_setprv
+sys_setrwm
+sys_setswm
 sys_sndopr
 sys_trnlnm

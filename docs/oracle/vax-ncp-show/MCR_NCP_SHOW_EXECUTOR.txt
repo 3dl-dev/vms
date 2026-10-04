@@ -1,0 +1,12 @@
+MCR NCP SHOW EXECUTOR
+
+
+Node Volatile Summary as of  4-OCT-2026 21:19:55
+
+Executor node = 1.1 (VAX1)
+
+State                    = on
+Identification           = DECnet for OpenVMS VAX V7.3
+
+
+$

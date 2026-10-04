@@ -1,0 +1,10 @@
+MCR NCP SHOW KNOWN CIRCUITS
+
+
+Known Circuit Volatile Summary as of  4-OCT-2026 21:19:59
+
+   Circuit          State                   Loopback     Adjacent
+                                              Name      Routing Node
+
+  QNA-0             on
+$

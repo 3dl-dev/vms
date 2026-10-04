@@ -40,15 +40,15 @@
  *     from the compiled-in months[] table in this file.
  * OVMX-USERSPACE: sys$bintim (vms-f90) -- parses the caller's string against
  *     that same compiled-in table.
- * OVMX-PARTIAL: sys$schdwk (vms-44a) -- exec: the wake itself is $WAKE, i.e.
- *     the executive's sticky wake bit on the resolved process (VMS_IOCTL_WAKE).
- * OVMX-LOCAL: sys$schdwk -- the schedule is this process's own POSIX timer (the
- *     sys$setimr table below), so a scheduled wakeup dies with the image that
- *     requested it; no executive timer queue holds it. A repeat interval is not
- *     supported and is refused.
- * OVMX-PARTIAL: sys$canwak (vms-44a) -- exec: none of its own; it cancels the
- *     timers sys$schdwk armed (sys$cantim).
- * OVMX-LOCAL: sys$canwak -- the cancelled entries are this process's timer table.
+ * OVMX-USERSPACE: sys$schdwk (vms-44a) -- the schedule is this process's own
+ *     POSIX timer (the sys$setimr table below): a scheduled wakeup dies with the
+ *     image that requested it and no executive timer queue holds it. At expiry
+ *     the timer's AST issues $WAKE (the wake state IS the executive's -- reached
+ *     through an AST function pointer, which this register's static call graph
+ *     cannot see). A repeat interval, or a target named by process name, is
+ *     refused.
+ * OVMX-USERSPACE: sys$canwak (vms-44a) -- cancels the timers sys$schdwk armed in
+ *     that same process-local table.
  * OVMX-USERSPACE: sys$setimr (vms-642) -- arms a POSIX timer recorded in the
  *     process-local timer_table[] in this file. There is no executive timer
  *     queue, so the request dies with the process and nothing else can see it.

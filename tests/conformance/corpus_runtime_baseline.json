@@ -1,12 +1,12 @@
 {
  "total": 133,
  "summary": {
-  "run-pass": 117,
-  "run-fail": 14,
-  "run-crash": 2,
+  "run-pass": 127,
+  "run-fail": 5,
+  "run-crash": 1,
   "vm-crash": 0,
   "not-run": 0,
-  "run-pass-signaled": 6
+  "run-pass-signaled": 9
  },
  "programs": [
   {
@@ -66,8 +66,8 @@
   },
   {
    "name": "lib_cvt_dtb",
-   "status": "run-fail",
-   "signaled": true
+   "status": "run-pass",
+   "signaled": false
   },
   {
    "name": "lib_cvt_dx_dx",
@@ -136,7 +136,7 @@
   },
   {
    "name": "lib_establish",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": true
   },
   {
@@ -231,7 +231,7 @@
   },
   {
    "name": "lib_getsyi",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": false
   },
   {
@@ -346,7 +346,7 @@
   },
   {
    "name": "lib_signal",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": true
   },
   {
@@ -366,7 +366,7 @@
   },
   {
    "name": "lib_stop",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": true
   },
   {
@@ -546,7 +546,7 @@
   },
   {
    "name": "sys_delprc",
-   "status": "run-crash",
+   "status": "run-pass",
    "signaled": false
   },
   {
@@ -556,7 +556,7 @@
   },
   {
    "name": "sys_exit",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": false
   },
   {
@@ -576,7 +576,7 @@
   },
   {
    "name": "sys_getdvi",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": false
   },
   {
@@ -586,7 +586,7 @@
   },
   {
    "name": "sys_getjpi",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": false
   },
   {
@@ -596,7 +596,7 @@
   },
   {
    "name": "sys_getsyi",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": false
   },
   {
@@ -675,6 +675,6 @@
    "signaled": false
   }
  ],
- "timestamp": "2026-10-04T21:16:27Z",
+ "timestamp": "2026-10-04T21:54:31Z",
  "note": "Runtime column: tier-1 programs run in the QEMU guest under a live vms.ko (OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh). Re-derive with tests/qemu/corpus_runtime_report.sh; raise the floor only from a real run."
 }

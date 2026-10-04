@@ -13,7 +13,7 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
- * OVMX-USERSPACE: sys$get_entropy (vms-44a) -- getrandom(2) (arc4random_buf on BSD): the host kernel's
+ * OVMX-USERSPACE: sys$get_entropy (vms-44a) -- getrandom (vms_sys_getrandom; arc4random_buf on BSD): the host kernel's
  *     CSPRNG, not an executive entropy pool; the bytes are real entropy.
  * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
  *     SYI$_CLUSTER_NODES read the CONNECTION MANAGER's own CLUB through the one
@@ -49,9 +49,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/utsname.h>
-#ifdef __linux__
-#include <sys/random.h>
-#endif
 #include <errno.h>
 #include <time.h>
 #include "starlet.h"
@@ -59,6 +56,7 @@
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
 #include "vms_kif.h"        /* the executive OWNS privilege + cluster membership */
+#include "vms_syscall.h"    /* vms_sys_getrandom */
 
 /*
  * sys$setprv - Set or clear process privileges.
@@ -456,20 +454,15 @@ uint32_t sys$get_entropy(void *buffer, uint32_t length)
 {
     if (!buffer)
         return SS$_ACCVIO;
-#ifndef __linux__
-    arc4random_buf(buffer, length);     /* BSD kernel CSPRNG; cannot fail */
-    return SS$_NORMAL;
-#else
     uint8_t *p = (uint8_t *)buffer;
     while (length > 0) {
-        ssize_t n = getrandom(p, length, 0);
+        vms_ssize_t n = vms_sys_getrandom(p, length, 0);
         if (n < 0) {
-            if (errno == EINTR) continue;
+            if (n == -EINTR) continue;
             return SS$_NOSUCHDEV;   /* no entropy source: honest, not zero bytes */
         }
         p += n;
         length -= (uint32_t)n;
     }
     return SS$_NORMAL;
-#endif
 }

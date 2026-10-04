@@ -39,6 +39,9 @@
 #define __NR_mmap               9
 #define __NR_mprotect           10
 #define __NR_munmap             11
+#define __NR_mlock              149
+#define __NR_munlock            150
+#define __NR_getrandom          318
 #define __NR_brk                12
 #define __NR_rt_sigaction       13
 #define __NR_rt_sigprocmask     14
@@ -105,6 +108,9 @@
 #define __NR_mmap               222
 #define __NR_mprotect           226
 #define __NR_munmap             215
+#define __NR_mlock              228
+#define __NR_munlock            229
+#define __NR_getrandom          278
 #define __NR_brk                214
 #define __NR_rt_sigaction       134
 #define __NR_rt_sigprocmask     135
@@ -192,6 +198,9 @@
 #define __NR_mmap               71
 #define __NR_mprotect           74
 #define __NR_munmap             73
+#define __NR_mlock              314
+#define __NR_munlock            315
+#define __NR_getrandom          511
 #define __NR_brk                17
 #define __NR_rt_sigaction       352
 #define __NR_rt_sigprocmask     353
@@ -386,6 +395,22 @@ static inline void *vms_sys_mmap(void *addr, vms_size_t length, int prot,
 static inline int vms_sys_munmap(void *addr, vms_size_t length)
 {
     return (int)__vms_syscall2(__NR_munmap, (vms_reg_t)addr, length);
+}
+
+static inline int vms_sys_mlock(const void *addr, vms_size_t length)
+{
+    return (int)__vms_syscall2(__NR_mlock, (vms_reg_t)addr, length);
+}
+
+static inline int vms_sys_munlock(const void *addr, vms_size_t length)
+{
+    return (int)__vms_syscall2(__NR_munlock, (vms_reg_t)addr, length);
+}
+
+/* Fill buf with kernel CSPRNG bytes; returns the count or -errno. */
+static inline vms_ssize_t vms_sys_getrandom(void *buf, vms_size_t length, unsigned int flags)
+{
+    return (vms_ssize_t)__vms_syscall3(__NR_getrandom, (vms_reg_t)buf, length, flags);
 }
 
 static inline int vms_sys_mprotect(void *addr, vms_size_t length, int prot)

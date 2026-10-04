@@ -561,14 +561,16 @@ run_boot_a() {
   docker rm -f "$cname" >/dev/null 2>&1 || true
   rm -f "$WORK/modgpA.img"
   [ -f "$WORK/modgpA.log" ] || die "BOOT A produced no console log (qemu-system-alpha never started?)"
-  # vms-035: an image linked at a fixed P0 base (JOINT_LINK_BASE) must have
-  # activated with itself AND every shareable in P0 -- IMGACT's seam reports it.
-  if [ -n "${JOINT_LINK_BASE:-}" ]; then
+  # vms-035: the image is linked at OpenVMS Alpha's P0 base (LINK.EXE's default
+  # for an executable, or JOINT_LINK_BASE) and must have activated with itself
+  # AND every shareable in P0 -- IMGACT's seam reports it. JOINT_LINK_BASE=0
+  # (the relocatable form) is the only opt-out.
+  if [ "${JOINT_LINK_BASE:-0x10000}" != "0" ]; then
     if grep -aqE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]* p0=1" "$WORK/modgpA.log"; then
-      log "P0 layout confirmed: JOINT_E2E.EXE and its shareables activated in P0 (base $JOINT_LINK_BASE)"
+      log "P0 layout confirmed: JOINT_E2E.EXE and its shareables activated in P0 (base ${JOINT_LINK_BASE:-0x10000})"
     else
       grep -aE "OVMX-SEAM:" "$WORK/modgpA.log" | sed 's/^/  /' || true
-      die "JOINT_LINK_BASE=$JOINT_LINK_BASE but the activation seam does not report p0=1 (an image or shareable landed outside P0)"
+      die "P0 image (base ${JOINT_LINK_BASE:-0x10000}) but the activation seam does not report p0=1 (an image or shareable landed outside P0)"
     fi
   fi
 }

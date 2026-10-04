@@ -365,10 +365,11 @@ jobs:
             exit 1
           fi
           readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL: joint_e2e.exe is not EM_ALPHA"; exit 1; }
-          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL: joint_e2e.exe is not ET_DYN"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*EXEC'    || { echo "GATE FAIL: joint_e2e.exe is not ET_EXEC (linked in P0, vms-035)"; exit 1; }
+          readelf -l "$OUT/joint_e2e.exe" | grep -qE 'LOAD +0x0+ 0x0+10000 ' || { echo "GATE FAIL: joint_e2e.exe PT_LOAD is not at P0 0x10000 (vms-035)"; exit 1; }
           # C$_EXIT1 should fold as a globalvalue (no import cell) — informational
           if grep -q 'GVALFOLD' "$OUT/build.log"; then echo "ok: C\$_EXIT1 folded as globalvalue"; else echo "note: no GVALFOLD line logged"; fi
-          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
+          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_EXEC in P0 (vms-035); %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
 
       # vms-4d0: LINK.EXE EVAX object-library search (--library, VMS LINK
       # /LIBRARY semantics) + names past 31 characters. Reuses the OUT dir the
@@ -415,15 +416,15 @@ jobs:
           echo "$TAIL" | grep -q 'LINK-F-UNDEF'  && { echo "GATE FAIL (vms-2655): LINK-F-UNDEF in the final port-image link"; exit 1; }
           echo "$TAIL" | grep -q 'LINK-F-MULDEF' && { echo "GATE FAIL (vms-2655): LINK-F-MULDEF in the final port-image link"; exit 1; }
           echo "$TAIL" | grep -q 'LINK-W-DEFERRED' && { echo "GATE FAIL (vms-2655): LINK-W-DEFERRED in the final port-image link"; exit 1; }
-          echo "$TAIL" | grep -qE "LINK-S-CREATED, .*joint_e2e.exe: EVAX/Alpha ET_DYN" \
-            || { echo "GATE FAIL (vms-2655): joint_e2e.exe (veneer build) not created EVAX/Alpha ET_DYN"; exit 1; }
+          echo "$TAIL" | grep -qE "LINK-S-CREATED, .*joint_e2e.exe: EVAX/Alpha ET_EXEC \(P0\)" \
+            || { echo "GATE FAIL (vms-2655): joint_e2e.exe (veneer build) not created EVAX/Alpha ET_EXEC (P0)"; exit 1; }
           # (4) the port image's OWN decc$fopen import binds to the pass-2 (veneer)
           #     DECC$SHR.EXE producer -- the chain from (1)+(2) above proves THAT
           #     producer's decc$fopen is the crtl_rms_stdio.c veneer, not musl-POSIX.
           echo "$TAIL" | grep -qE "cross-image import 'decc\\\$fopen' bound to --use producer DECC\\\$SHR.EXE" \
             || { echo "GATE FAIL (vms-2655): port image decc\$fopen did not bind to the veneer-wired DECC\$SHR producer"; exit 1; }
           readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not EM_ALPHA"; exit 1; }
-          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not ET_DYN"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*EXEC'    || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not ET_EXEC (P0, vms-035)"; exit 1; }
           test -f "$OUT/LIBVMSRMS\$SHR.EXE" || { echo "GATE FAIL (vms-2655): LIBVMSRMS\$SHR.EXE not staged in OUTDIR"; exit 1; }
           echo "GATE PASS (vms-2655): port image STRICT-links --use veneer-wired DECC\$SHR + LIBVMSRMS\$SHR + LIBOTS zero-deferred;"
           echo "  decc\$fopen binds to the veneer producer, whose own build resolved sys\$create/open/connect/put/get/close"
@@ -521,7 +522,7 @@ jobs:
           test -f /tmp/rms-substrate-out/LIBVMSRMS\$SHR.EXE
           test -f /tmp/rms-substrate-out/rms_substrate_test.exe
           readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -q 'Machine:.*Alpha'
-          readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -qE 'Type:.*DYN'
+          readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -qE 'Type:.*EXEC'
           echo "vms-a7a rung-1 CI gate PASSED"
 
   # -----------------------------------------------------------------------

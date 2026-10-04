@@ -308,8 +308,10 @@ address on VMS fits a sign-extended longword, and the port depends on it:
 **Staging.** Stage 1 adds `--base` and the IMGACT placement with the default
 unchanged; the six Alpha activation gates run both ways on k3s-worker
 (`JOINT_LINK_BASE=0x10000` makes `build-joint-image.sh` link in P0, and the gate
-then requires the seam's `p0=1`). Stage 2 makes P0 the default for Alpha
-VMS-standard executables. Host proof: `src/vmslink/test/run_evax_p0base.sh`.
+then requires the seam's `p0=1`). Stage 2 makes P0 the default: LINK.EXE links
+every EVAX executable at 0x10000 unless told `--base 0` (the relocatable form,
+kept only for the `.vms$rel` unit tests), and every Alpha activation gate
+requires `p0=1`. Host proof: `src/vmslink/test/run_evax_p0base.sh`.
 
 ## 4. Open questions
 

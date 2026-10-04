@@ -3923,6 +3923,11 @@ static void evax_fold_globalvalue(struct evax_input *in, int ii,
  * image address fits a 32-bit slot (LIB$INITIALIZE entries, 32-bit-pointer
  * code) and no load-bias fixups exist: the image is never moved. */
 static uint64_t g_evax_vbase = 0;
+/* The default for an EVAX executable is P0 (stage 2 of vms-035): OpenVMS Alpha
+ * LINK bases every executable image there. `--base 0` asks for the relocatable
+ * ET_DYN form instead (kept for the .vms$rel unit tests). */
+#define OVMX_P0_DEFAULT_BASE 0x10000ULL
+static int g_evax_base_set = 0;
 #define OVMX_P0_TOP 0x40000000ULL   /* P0 ends where P1 (stack/control) begins */
 
 static void evax_rel_add(uint64_t **arr, int *n, int *cap, uint64_t off)
@@ -5237,9 +5242,10 @@ int main(int argc, char **argv)
             /* vms-035: link the EVAX/Alpha executable at a fixed P0 address. */
             char *e = NULL;
             unsigned long long b = strtoull(argv[++i], &e, 0);
-            if (!e || *e || b == 0 || (b & 0xffff) || b >= OVMX_P0_TOP)
-                die("--base must be a nonzero 64 KB-aligned P0 address below 0x40000000");
+            if (!e || *e || (b & 0xffff) || b >= OVMX_P0_TOP)
+                die("--base must be 0 (relocatable) or a 64 KB-aligned P0 address below 0x40000000");
             g_evax_vbase = b;
+            g_evax_base_set = 1;
         } else if (strcmp(argv[i], "--library") == 0 && i + 1 < argc) {
             libs[nlibs++] = argv[++i];   /* EVAX object library: searched (vms-4d0) */
         } else if (strcmp(argv[i], "--transfer") == 0 && i + 1 < argc) {
@@ -5308,8 +5314,10 @@ int main(int argc, char **argv)
             evax_dump_universals(ein, nein);
             return 0;
         }
-        if (shareable && g_evax_vbase)
+        if (shareable && g_evax_base_set && g_evax_vbase)
             die("--base applies to an executable; a shareable is placed by IMGACT");
+        if (!shareable && !g_evax_base_set)
+            g_evax_vbase = OVMX_P0_DEFAULT_BASE;   /* executables live in P0 */
         if (shareable) {
             if (executable)
                 die("specify at most one of --shareable / --executable");

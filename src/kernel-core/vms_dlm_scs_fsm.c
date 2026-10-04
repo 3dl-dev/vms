@@ -209,7 +209,7 @@ static enum dlm_req_status dq_emit(struct dlm_req_fsm *f, vms_csid_t dst)
  * nowhere for one to come from.
  *
  * The directory hash rides ONLY when the executive holds a wire-learned one
- * (`dir_hash_known`); the codec then writes body[10:12], and writes nothing
+ * (`dir_hash_known`); the codec then writes body[128:132], and writes nothing
  * there otherwise. A zero written there is the grant storm.
  */
 static enum dlm_req_status dq_build_request(struct dlm_req_fsm *f,
@@ -534,7 +534,7 @@ static enum dlm_req_status dq_reresolve(struct dlm_req_fsm *f,
 
 	if (r->redirects >= (uint8_t)DLM_REQ_MAX_REDIRECTS)
 		return DLM_REQ_E_NODIR;
-	if (f->ops->dir_resolve == (int (*)(void *, uint16_t, vms_csid_t *))0)
+	if (f->ops->dir_resolve == (int (*)(void *, uint32_t, vms_csid_t *))0)
 		return DLM_REQ_E_NODIR;
 
 	/* The hash comes out of the EXECUTIVE, on this read, and is passed to a
@@ -1423,13 +1423,13 @@ uint32_t dlm_req_fsm_observe_body(struct dlm_req_fsm *f, const uint8_t *body,
 				  uint32_t len)
 {
 	char name[VMS_DLM_NAME_MAX + 1u];
-	uint16_t hash = 0u;
+	uint32_t hash = 0u;
 
 	if (f == (struct dlm_req_fsm *)0 || body == (const uint8_t *)0)
 		return 0u;
 	if (f->ops == (const struct dlm_req_ops *)0 ||
 	    f->ops->learn_dir_hash == (int (*)(void *, const char *,
-					       uint16_t))0)
+					       uint32_t))0)
 		return 0u;
 	if (vms_dlm_dir_hash_parse_body(body, len, &hash) != VMS_CODEC_OK)
 		return 0u;
@@ -1525,13 +1525,13 @@ uint32_t dlm_req_fsm_observe(struct dlm_req_fsm *f, const uint8_t *frame,
 {
 	struct vms_frame_info fi;
 	char name[VMS_DLM_NAME_MAX + 1u];
-	uint16_t hash = 0u;
+	uint32_t hash = 0u;
 
 	if (f == (struct dlm_req_fsm *)0 || frame == (const uint8_t *)0)
 		return 0u;
 	if (f->ops == (const struct dlm_req_ops *)0 ||
 	    f->ops->learn_dir_hash == (int (*)(void *, const char *,
-					       uint16_t))0)
+					       uint32_t))0)
 		return 0u;
 	if (vms_frame_classify(frame, len, &fi) != VMS_CODEC_OK)
 		return 0u;

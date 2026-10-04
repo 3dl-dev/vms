@@ -73,7 +73,7 @@ struct fake_lkb {
 	uint32_t flags;
 	char     resnam[32];
 	uint8_t  valblk[VMS_DLM_VALBLK_LEN];
-	uint16_t dir_hash;
+	uint32_t dir_hash;
 	uint8_t  hash_known;
 	uint8_t  write_valblk;   /* engine marks a demote-from-write convert as an
 				  * op-0x06 value-block write (vms-727)         */
@@ -108,7 +108,7 @@ struct fake_engine {
 	uint32_t   dir_generation;
 	int        dir_refuse;
 	uint32_t   dir_calls;
-	uint16_t   dir_last_hash;
+	uint32_t   dir_last_hash;
 
 	/* what the FSM asked the engine to do */
 	uint32_t refills;
@@ -125,7 +125,7 @@ struct fake_engine {
 	int      blkast_refuse;
 	uint32_t learn_calls;
 	char     learn_name[40];
-	uint16_t learn_hash;
+	uint32_t learn_hash;
 	uint32_t fail_calls;
 	uint32_t fail_lkid;
 	enum dlm_req_fail_reason fail_why;
@@ -190,7 +190,7 @@ static int fe_refill(void *ctx, uint32_t req_lkid, uint32_t op,
 	return 0;
 }
 
-static int fe_dir_resolve(void *ctx, uint16_t hash16, vms_csid_t *out_csid)
+static int fe_dir_resolve(void *ctx, uint32_t hash16, vms_csid_t *out_csid)
 {
 	struct fake_engine *e = ctx;
 
@@ -273,7 +273,7 @@ static int fe_blkast(void *ctx, uint32_t req_lkid)
 	return 0;
 }
 
-static int fe_learn(void *ctx, const char *resnam, uint16_t hash16)
+static int fe_learn(void *ctx, const char *resnam, uint32_t hash16)
 {
 	struct fake_engine *e = ctx;
 
@@ -305,7 +305,7 @@ static void fe_log(void *ctx, const char *msg)
 
 static struct dlm_req_ops g_ops;
 
-static void fe_reset(const char *resnam, uint32_t lkmode, uint16_t hash,
+static void fe_reset(const char *resnam, uint32_t lkmode, uint32_t hash,
 		     int hash_known, uint32_t master_csid)
 {
 	memset(&g, 0, sizeof(g));
@@ -473,17 +473,17 @@ static void check_settled_terminal(uint32_t lkid, const char *label)
 	ct_check_eq_u32(r->tries, 0u, what);
 }
 
-/* Is the 16-bit directory hash physically present at body[10:12]? A frame that
+/* Is the directory hash physically present at body[128:132]? A frame that
  * carries none must carry a ZERO there -- not because zero is a hash, but
  * because the builder left the span untouched over a zeroed frame. */
-static uint16_t read_dir_hash(const struct sent_frame *s)
+static uint32_t read_dir_hash(const struct sent_frame *s)
 {
 	uint8_t frame[VMS_CM_FRAME_LEN];
 	vms_wire_view_t v;
 	uint32_t len = splice(s, frame);
 
 	vms_wire_view_init(&v, frame, len);
-	return vms_wire_get_le16(&v, VMS_OFF_DLM_DIR_HASH);
+	return vms_wire_get_le32(&v, VMS_OFF_DLM_DIR_HASH);
 }
 
 /*
@@ -522,7 +522,7 @@ static void check_frame_traces_to_lkb(const struct sent_frame *s,
 		 memcmp(req.name, l->resnam, namelen) == 0, what);
 
 	snprintf(what, sizeof(what),
-		 "%s: body[10:12] == the RSB's LEARNED hash (or absent)", label);
+		 "%s: body[128:132] == the RSB's LEARNED hash (or absent)", label);
 	ct_check(read_dir_hash(s) == (l->hash_known ? l->dir_hash : 0u), what);
 
 	snprintf(what, sizeof(what),
@@ -1658,7 +1658,7 @@ static void test_observe_learns_the_hash(void)
 	struct vms_dlm_enq_request req;
 	uint32_t written = 0, len;
 
-	printf("-- E49: body[10:12] + the root name, learned off the wire\n");
+	printf("-- E49: body[128:132] + the root name, learned off the wire\n");
 	fe_reset("F11B$aSYSDSK1", VMS_LCK_EX, 0u, 0, 0u);
 
 	/* An inbound REQUEST from another system, carrying ITS hash. */

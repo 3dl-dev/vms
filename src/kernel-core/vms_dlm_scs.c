@@ -206,17 +206,18 @@ struct vms_dlm_scs {
  *    re-derived here.
  * ========================================================================== */
 
-/* THE DIRECTORY. `hash16` is a value some system in this cluster put on the
+/* THE DIRECTORY. `dir_hash` is a value some system in this cluster put on the
  * wire for the name (Davis p. 6-50) and that the engine learned; this resolves
  * it through the connection manager's weight vector and nothing else. 0 in
  * *out means THIS node (p. 6-32). */
-static int dlm_arm_dir_resolve(void *ctx, uint16_t hash16, vms_csid_t *out_csid)
+static int dlm_arm_dir_resolve(void *ctx, uint32_t dir_hash, vms_csid_t *out_csid)
 {
 	struct vms_dlm_scs *d = (struct vms_dlm_scs *)ctx;
 
 	if (d == NULL || d->cl == NULL || out_csid == NULL)
 		return -1;
-	return vms_ldwv_resolve(&d->cl->club.ldwv, hash16, out_csid) ==
+	return vms_ldwv_resolve(&d->cl->club.ldwv, vms_ldwv_key(dir_hash),
+				out_csid) ==
 	       VMS_LDWV_OK ? 0 : -1;
 }
 
@@ -286,10 +287,10 @@ static int dlm_arm_blkast_deliver(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int dlm_arm_learn_dir_hash(void *ctx, const char *resnam, uint16_t hash16)
+static int dlm_arm_learn_dir_hash(void *ctx, const char *resnam, uint32_t dir_hash)
 {
 	(void)ctx;
-	return vms_lock_dlm_learn_dir_hash(resnam, hash16) == SS__NORMAL ?
+	return vms_lock_dlm_learn_dir_hash(resnam, dir_hash) == SS__NORMAL ?
 	       0 : -1;
 }
 
@@ -603,12 +604,12 @@ static void dlm_arm_run_release(struct vms_dlm_scs *d, uint32_t slot,
 
 /* The engine's directory ops are defined below, after their long rationale;
  * forward-declared here because bind_engine_ops takes their addresses. */
-static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint16_t hash16,
+static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint32_t dir_hash,
 					uint32_t *out_csid);
 static uint32_t dlm_arm_eng_dir_generation(void *ctx);
 static int dlm_arm_eng_dir_groundable(void *ctx);
 static uint32_t dlm_arm_eng_dir_ground(void *ctx, const char *name,
-				       uint32_t name_len, uint16_t *out_hash16);
+				       uint32_t name_len, uint32_t *out_hash);
 
 static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
 {
@@ -686,12 +687,12 @@ static void dlm_arm_bind_engine_ops(struct vms_dlm_scs *d)
  * mixed cluster the old floor stands: each node may master a novel name locally
  * (not cluster-wide) -- unchanged, and named, not hidden.
  */
-static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint16_t hash16,
+static uint32_t dlm_arm_eng_dir_resolve(void *ctx, uint32_t dir_hash,
 					uint32_t *out_csid)
 {
 	vms_csid_t csid = 0;
 
-	if (dlm_arm_dir_resolve(ctx, hash16, &csid) != 0)
+	if (dlm_arm_dir_resolve(ctx, dir_hash, &csid) != 0)
 		return SS__UNSUPPORTED;
 	*out_csid = (uint32_t)csid;
 	return SS__NORMAL;
@@ -703,24 +704,28 @@ static uint32_t dlm_arm_eng_dir_generation(void *ctx)
 }
 
 /*
- * OVMX'S OWN 16-BIT DIRECTORY HASH (rung A", design SS3.6; vms-3e3).
+ * OVMX'S OWN DIRECTORY HASH (rung A", design SS3.6; vms-3e3).
  *
  * This is OVMX's own function, and it is documented as OVMX's own. It is NOT
  * DEC's directory hash -- that function is unpublished and Rule-8-forbidden to
  * reproduce, and it is never needed here because this value NEVER reaches a real
- * VAX (the all-OVMX gate below, plus RULE C on the send side). It reuses the
- * FNV-1a spelling the lock manager already computes over a resource name for its
- * own hash table (vms_lock.c resource_hash_key: offset basis 2166136261,
- * prime 16777619), folded to 16 bits -- a public, well-understood function of
- * the NAME BYTES, chosen precisely because it bears no relationship to DEC's.
+ * VAX (the all-OVMX gate below, plus RULE C on the send side). It is the FNV-1a
+ * spelling the lock manager already computes over a resource name for its own
+ * hash table (vms_lock.c resource_hash_key: offset basis 2166136261, prime
+ * 16777619) -- a public, well-understood function of the NAME BYTES, chosen
+ * precisely because it bears no relationship to DEC's.
+ *
+ * It is a 32-bit value in the WIRE's own shape (body[128:132], rd vms-4fb): the
+ * vector indexes it exactly as it indexes a learned one, by its high 16 bits
+ * (vms_ldwv_key()), so a grounded name and a learned name take one path.
  *
  * The only property that matters for correctness is CONSISTENCY (p. 6-32): every
- * OVMX node must map a given name to the same 16-bit value, so all members agree
- * on the master. That holds by construction -- every node runs this one function
+ * OVMX node must map a given name to the same value, so all members agree on
+ * the master. That holds by construction -- every node runs this one function
  * over the same bytes -- with no dependence on byte order (each byte is folded
  * in on its own).
  */
-static uint16_t vms_dlm_ovmx_dir_hash(const char *name, uint32_t len)
+static uint32_t vms_dlm_ovmx_dir_hash(const char *name, uint32_t len)
 {
 	uint32_t h = 2166136261u;     /* FNV-1a offset basis */
 	uint32_t i;
@@ -731,7 +736,7 @@ static uint16_t vms_dlm_ovmx_dir_hash(const char *name, uint32_t len)
 		h ^= (uint32_t)(unsigned char)name[i];
 		h *= 16777619u;           /* FNV-1a prime */
 	}
-	return (uint16_t)((h >> 16) ^ (h & 0xFFFFu));   /* fold 32 -> 16 */
+	return h;
 }
 
 /*
@@ -756,13 +761,13 @@ static int dlm_arm_eng_dir_groundable(void *ctx)
  * compatibility (that is FC-P3.2, oracle-grounded). INV-6.
  */
 static uint32_t dlm_arm_eng_dir_ground(void *ctx, const char *name,
-				       uint32_t name_len, uint16_t *out_hash16)
+				       uint32_t name_len, uint32_t *out_hash)
 {
-	if (out_hash16 == NULL || name == NULL)
+	if (out_hash == NULL || name == NULL)
 		return SS__BADPARAM;
 	if (!dlm_arm_eng_dir_groundable(ctx))
 		return SS__UNSUPPORTED;   /* not all-OVMX: never ground here */
-	*out_hash16 = vms_dlm_ovmx_dir_hash(name, name_len);
+	*out_hash = vms_dlm_ovmx_dir_hash(name, name_len);
 	return SS__NORMAL;
 }
 

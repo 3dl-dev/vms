@@ -246,10 +246,10 @@ struct vms_dlm_enq_request {
 	uint8_t  name[VMS_DLM_NAME_MAX];
 
 	/*
-	 * THE ROOT NAME'S DIRECTORY HASH, body[10:12] (see the section below).
+	 * THE ROOT NAME'S DIRECTORY HASH, body[128:132] (see the section below).
 	 *
 	 * `dir_hash_valid` is 0 when this executive holds NO wire-learned hash
-	 * for the name, and then the builder writes NOTHING at body[10:12] --
+	 * for the name, and then the builder writes NOTHING at body[128:132] --
 	 * the honest omission, never a zero passed off as a hash (INV-6). It is
 	 * the FSM's job (FC-P4.6) to refuse to send a directory LOOKUP at all
 	 * in that case; a request addressed to a MASTER the cluster already
@@ -261,7 +261,7 @@ struct vms_dlm_enq_request {
 	 * must itself be a value `vms_lock_dlm_learn_dir_hash()` recorded on
 	 * that resource block from a received frame.
 	 */
-	uint16_t dir_hash;
+	uint32_t dir_hash;
 	uint8_t  dir_hash_valid;
 };
 
@@ -326,7 +326,7 @@ vms_codec_status_t vms_dlm_enq_response_parse_body(const uint8_t *body,
 						   uint32_t len,
 						   struct vms_dlm_enq_response *out);
 vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len,
-					       uint16_t *out);
+					       uint32_t *out);
 vms_codec_status_t vms_dlm_enq_request_parse(const uint8_t *frame, uint32_t len,
 					     const struct vms_frame_info *fi,
 					     uint8_t *opcode_out,
@@ -398,65 +398,71 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 						   uint32_t *written);
 
 /* ------------------------------------------------------------------ *
- * THE DIRECTORY HASH -- body[10:12] (abs 82), FC-P4.3
+ * THE DIRECTORY HASH -- body[128:132] (abs 200), LE u32 (rd vms-4fb)
  *
- * The 16-bit hash of the ROOT resource name, computed by the SENDING
- * system and carried on the wire. Davis p. 6-50: a directory lookup
- * request carries the resource name AND the hash value the sender
- * derived from it, "as an optimization" because every system would
- * derive the same value, and the receiving directory node right-shifts
- * the RECEIVED value to index its own Resource Hash Table.
+ * The hash of the resource name, computed by the SENDING system and
+ * carried on the wire. Davis p. 6-50: a directory lookup carries the
+ * resource name AND the hash value the sender derived from it, "as an
+ * optimization" because every system would derive the same value, and
+ * the receiving directory node uses the RECEIVED value.
  *
- * WHY OVMX ONLY EVER READS IT. The hash FUNCTION is not published at the
- * bit level (docs/research-dlm-directory-algorithm.md SS3, checked over
- * Davis pp. 6-18..6-53), so computing one is both Rule-8-forbidden and
- * wrong: a mismatched value makes the directory node scan the wrong
- * chain, miss the name, and create a directory entry naming the SENDER
- * as master (p. 6-31 outcome 3). That is the campaign's 35/s grant storm
- * (memory cluster-promotion-gap). So there is a PARSER here and there is
- * deliberately NO BUILDER: a builder would be a place to put a value
- * nobody received. FC-P4.6's requester echoes the learned value through
- * the ENQ builder's own fields when it has one, and refuses to send a
- * lookup at all when it does not.
+ * WHERE IT RIDES -- GROUNDED on a private three-node OpenVMS VAX V7.3
+ * cluster (rd vms-4fb; /lab/k8s-labs/dlmlab L1+L2, 14237 op-0x01
+ * requests): body[128:132] of a cat-0x02 op-0x01 request is a constant
+ * of the resource across every sender and every occurrence and differs
+ * between resources -- 939 ROOT resources, zero with two values. The
+ * cat-0x82 answer carries the same four bytes back. A SUB-resource's value differs
+ * by parent (the same short name under two parents carries two values),
+ * which is why a value is only ever learned for a ROOT (below).
  *
- * SO FC-P4.6 DID EXACTLY THAT, AND NOTHING MORE. `struct
- * vms_dlm_enq_request` grew `dir_hash` + `dir_hash_valid`, and
- * vms_dlm_enq_request_build() writes body[10:12] ONLY when the flag is
- * set. There is still no `vms_dlm_dir_hash_build()`: the value cannot be
- * placed on the wire on its own, only as a field of a request whose lock
- * id, mode and resource name were already read out of a real LKB by
- * vms_lock.c's dlm_proxy_fill_post() -- which is also where `dir_hash`
- * itself comes from (res->hash16/res->hash_known, learned from a received
- * frame and never computed).
+ * WHAT THE DIRECTORY INDEXES WITH -- GROUNDED (vms_dlm_ldwv.h
+ * vms_ldwv_key()): the vector index is the HIGH 16 bits of this value
+ * mod n. That is where the published 16-bit hash (p. 6-49) sits.
  *
- * OFFSET PROVENANCE -- INFERRED, pending FC-P4.2's offline confirmation.
- * The strawman daemon's op-01 builder placed a 16-bit `dir_hash` here
- * (`feat/coord-rebuild-completion:src/vmsscs/scs_member.c:852`) and a
- * real VAX accepted those registrations, which names the field but does
- * not prove it. FC-P4.2 confirms it offline from existing captures by
- * the two properties any hash field must have: constant per resource
- * name across senders and occurrences, and varying across names. Until
- * then this offset is INFERRED, and the consumer is built so that a
- * wrong offset SHOWS UP rather than corrupting anything: a learned value
- * that disagrees with a previously learned one for the same name is
- * counted (vms_lock.c `dir_hash_conflicts`), and every directory lookup
- * OVMX receives is checked against its own vector
- * (`dir_lookup_misaddressed`, vms_dlm_ldwv.h SS5).
+ * NOT body[10:12]. FC-P4.3 placed the hash there on the strawman's word
+ * (INFERRED); the same capture refutes it -- one name reads a300 from
+ * one sender and c800 from another, so that field tracks the SENDER.
+ *
+ * WHY OVMX NEVER COMPUTES ONE FOR A REAL VAX. The hash FUNCTION is not
+ * published at the bit level (docs/research-dlm-directory-algorithm.md
+ * SS3), so computing one is both Rule-8-forbidden and wrong: a mismatched
+ * value makes the directory node look in the wrong place, miss the name,
+ * and name the SENDER as master (p. 6-31 outcome 3) -- the campaign's
+ * 35/s grant storm. So there is a PARSER here and there is deliberately
+ * NO standalone BUILDER: the value only rides an ENQ/CONVERT whose other
+ * fields come from a real LKB, and only when it was learned off the wire
+ * (or, in an all-OVMX cluster only, grounded by OVMX's own function --
+ * vms_dlm_scs.c, rung A").
  * ------------------------------------------------------------------ */
-#define VMS_OFF_DLM_DIR_HASH      82u  /* body[10:12] LE u16, INFERRED     */
+#define VMS_OFF_DLM_DIR_HASH     200u  /* body[128:132] LE u32, GROUNDED  */
 #define VMS_OFB_DLM_DIR_HASH    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DIR_HASH)
 
 /*
- * Read the directory hash out of any cat-0x02 frame that carries it.
- * Returns VMS_CODEC_E_CLASS for a frame that is not a cat-0x02 SCS_MSG,
- * and the view's own error for a frame too short to hold the field.
+ * THE PARENT SPAN, body[36:44] (abs 108..116), of a cat-0x02 op-0x01
+ * request. All zero on every request for a ROOT resource and nonzero (the
+ * parent lock's handles) on every request for a SUB-resource in the same
+ * dataset; the field contents are not decoded and not used -- only "is it
+ * zero", which is what makes a learned hash a property of the NAME.
+ */
+#define VMS_OFF_DLM_PARENT_SPAN  108u  /* body[36:44], 8 bytes            */
+#define VMS_DLM_PARENT_SPAN_LEN    8u
+#define VMS_OFB_DLM_PARENT_SPAN VMS_OFB_FROM_FRAME(VMS_OFF_DLM_PARENT_SPAN)
+
+/*
+ * Read the directory hash out of a cat-0x02 op-0x01 REQUEST for a ROOT
+ * resource (parent span all zero) -- never out of the 0x82 answer, which
+ * rewrites body[28:40] and, from a master, carries no name. Returns
+ * VMS_CODEC_E_CLASS for any other frame: another category or opcode (the
+ * value is only GROUNDED on op-0x01), or a sub-resource (whose value is a
+ * property of the parent too, so it cannot be learned against a name), and
+ * the view's own error for a frame too short to hold the field.
  * `*out` is written only on VMS_CODEC_OK -- there is no "hash 0" fallback,
  * because "the frame did not carry one" and "the hash is 0" are different
  * facts and only one of them may be put on the wire (INV-6).
  */
 vms_codec_status_t vms_dlm_dir_hash_parse(const uint8_t *frame, uint32_t len,
 					  const struct vms_frame_info *fi,
-					  uint16_t *out);
+					  uint32_t *out);
 
 /*
  * req_csid: "who is asking" for a DLM request. The DLM body itself carries
@@ -837,7 +843,7 @@ vms_dlm_valblk_convert_parse(const uint8_t *frame, uint32_t len,
  * grounded op-0x06 fields (see the BUILD layout comment) from `c`, sourcing
  * the per-lock SERIAL at body[32]==body[52] from `c->serial`, and ZERO-FILLS
  * body[56:88] rather than emit sender-buffer garbage. `*written` is the full
- * VMS_DLM_VALBLK_BODY_LEN-based frame length. Never populates body[10:12]:
+ * VMS_DLM_VALBLK_BODY_LEN-based frame length. Never populates body[128:132]:
  * the value-block convert is routed by master_lkid, not by a directory hash.
  */
 vms_codec_status_t vms_dlm_valblk_convert_build(const struct vms_dlm_valblk_convert *c,

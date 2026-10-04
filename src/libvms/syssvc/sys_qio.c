@@ -297,7 +297,7 @@ static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
     sigset_t blk, old;
     sigemptyset(&blk);
     sigaddset(&blk, SIGRTMIN + 1);
-    pthread_sigmask(SIG_BLOCK, &blk, &old);
+    sigprocmask(SIG_BLOCK, &blk, &old);
 
     struct async_rd *r = &async_rd[slot];
     r->chan = chan;
@@ -320,14 +320,14 @@ static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
         uint32_t st = vms_kif_mbx_read(r->exec_chan, p1, p2, &actlen, 1);
         if (st != SS$_ENDOFFILE) {
             async_rd_complete(r, st, (st & 1) ? actlen : 0);
-            pthread_sigmask(SIG_SETMASK, &old, NULL);
+            sigprocmask(SIG_SETMASK, &old, NULL);
             return SS$_NORMAL;
         }
     }
     if (!async_timer_armed)
         async_timer_arm(1);
 
-    pthread_sigmask(SIG_SETMASK, &old, NULL);
+    sigprocmask(SIG_SETMASK, &old, NULL);
     return SS$_NORMAL;
 }
 
@@ -338,7 +338,7 @@ void vms$$qio_cancel_chan(uint16_t chan)
     sigset_t blk, old;
     sigemptyset(&blk);
     sigaddset(&blk, SIGRTMIN + 1);
-    pthread_sigmask(SIG_BLOCK, &blk, &old);
+    sigprocmask(SIG_BLOCK, &blk, &old);
     int pending = 0;
     for (int i = 0; i < ASYNC_RD_MAX; i++) {
         struct async_rd *r = &async_rd[i];
@@ -351,7 +351,7 @@ void vms$$qio_cancel_chan(uint16_t chan)
     }
     if (!pending && async_timer_armed)
         async_timer_arm(0);
-    pthread_sigmask(SIG_SETMASK, &old, NULL);
+    sigprocmask(SIG_SETMASK, &old, NULL);
 }
 
 /*

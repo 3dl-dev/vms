@@ -912,7 +912,7 @@ jobs:
           . tests/netbsd/netbsd_version.env
           if [ ! -d .netbsd-src/usr/src/sys ]; then
             mkdir -p .netbsd-src
-            curl -sSL -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL"
+            curl -sSL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL"
             echo "$NETBSD_SYSSRC_SHA512  /tmp/syssrc.tgz" | sha512sum -c -
             tar xzf /tmp/syssrc.tgz -C .netbsd-src usr/src/sys usr/src/common
           fi

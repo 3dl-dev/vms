@@ -102,6 +102,7 @@ ots_powcj
 ots_powjj
 ots_scopy_dxdx
 ots_scopy_r_dx
+sys_alloc
 sys_asctim
 sys_assign
 sys_bintim
@@ -135,6 +136,7 @@ sys_purgws
 sys_putmsg
 sys_resched
 sys_rms_seq
+sys_schdwk
 sys_setast
 sys_setimr
 sys_setpri

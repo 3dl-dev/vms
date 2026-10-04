@@ -11,11 +11,11 @@ including the programs that do not run and why.
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
 | host (gcc container, no executive) | 108 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 132 | 138 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| **runtime (guest, live /dev/vms)** | 134 | 140 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
-**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **132 of 229**.
+**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **134 of 229**.
 
-Host column detail: compile-fail 44, link-fail 46, run-fail 8, run-crash 23; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
+Host column detail: compile-fail 44, link-fail 44, run-fail 8, run-crash 25; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
 Runtime column detail: run-fail 5, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits
@@ -30,7 +30,7 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 
-### Not running (97)
+### Not running (95)
 
 | program | host | runtime | reason |
 |---|---|---|---|
@@ -60,7 +60,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_acm` | compile-fail | - | compile: missing header acmemsgdef.h |
 | `sys_adjwsl` | link-fail | - | link: undefined sys$adjwsl |
 | `sys_align_faults` | compile-fail | - | link: undefined sys$get_align_fault_data, sys$start_align_fault_report, sys$stop_align_fault_report |
-| `sys_alloc` | link-fail | - | link: undefined sys$alloc, sys$dalloc |
 | `sys_asctoid` | link-fail | - | link: undefined sys$asctoid |
 | `sys_ascutc` | link-fail | - | link: undefined sys$ascutc, sys$binutc, sys$numutc |
 | `sys_audit_event` | compile-fail | - | link: undefined sys$audit_eventw |
@@ -115,7 +114,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_queue` | compile-fail | - | compile: missing header sjcdef.h |
 | `sys_rms_seq` | run-pass | run-fail | product-gap: $EXTEND on a newly created sequential file fails (RMS$_CRE from the ACP MODIFY) in the guest (vms-967e) |
 | `sys_rpcc_64` | compile-fail | - | link: undefined sys$rpcc_64 |
-| `sys_schdwk` | link-fail | - | link: undefined sys$canwak, sys$schdwk |
 | `sys_set_implicit_affinity` | compile-fail | - | link: undefined sys$set_implicit_affinity |
 | `sys_set_process_properties` | link-fail | - | link: undefined sys$set_process_propertiesw |
 | `sys_set_security` | compile-fail | - | link: undefined sys$parse_acl, sys$set_security |

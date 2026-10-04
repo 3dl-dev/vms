@@ -1,7 +1,7 @@
 {
- "total": 138,
+ "total": 140,
  "summary": {
-  "run-pass": 132,
+  "run-pass": 134,
   "run-fail": 5,
   "run-crash": 1,
   "vm-crash": 0,
@@ -490,6 +490,11 @@
    "signaled": false
   },
   {
+   "name": "sys_alloc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
    "name": "sys_asctim",
    "status": "run-pass",
    "signaled": false
@@ -655,6 +660,11 @@
    "signaled": true
   },
   {
+   "name": "sys_schdwk",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
    "name": "sys_setast",
    "status": "run-pass",
    "signaled": false
@@ -700,6 +710,6 @@
    "signaled": false
   }
  ],
- "timestamp": "2026-10-04T22:29:54Z",
+ "timestamp": "2026-10-04T22:41:09Z",
  "note": "Runtime column: tier-1 programs run in the QEMU guest under a live vms.ko (OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh). Re-derive with tests/qemu/corpus_runtime_report.sh; raise the floor only from a real run."
 }

@@ -1,0 +1,66 @@
+===== J run 1/6 start 03:17:19 =====
+started cap (art=/lab/run-b36/art)
+started C (art=/lab/run-b36/art)
+[J-1] VAXC booting...
+[J-1] VAXC formed at 03:18:55
+started A (art=/lab/run-b36/art/g1)
+[J-1] OVMXA MEMBER at 03:19:16
+started B (art=/lab/run-b36/art/g1)
+[J-1] OVMXB booting with blackout armed (45s) at 03:19:17
+[J-1] PASS  B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=2 cluexits=1 reconnect-lines=2
+===== J run 2/6 start 03:22:04 =====
+b36start.sh: line 6: 108803 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-b36/art)
+started C (art=/lab/run-b36/art)
+[J-2] VAXC booting...
+[J-2] VAXC formed at 03:23:40
+started A (art=/lab/run-b36/art/g1)
+[J-2] OVMXA MEMBER at 03:24:01
+started B (art=/lab/run-b36/art/g1)
+[J-2] OVMXB booting with blackout armed (45s) at 03:24:02
+[J-2] PASS  B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== J run 3/6 start 03:26:20 =====
+b36start.sh: line 6: 110690 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-b36/art)
+started C (art=/lab/run-b36/art)
+[J-3] VAXC booting...
+[J-3] VAXC formed at 03:27:56
+started A (art=/lab/run-b36/art/g1)
+[J-3] OVMXA MEMBER at 03:28:17
+started B (art=/lab/run-b36/art/g1)
+[J-3] OVMXB booting with blackout armed (45s) at 03:28:18
+[J-3] FAIL  B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=0/2 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=2 cluexits=1 reconnect-lines=3
+===== J run 4/6 start 03:35:01 =====
+b36start.sh: line 6: 112289 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-b36/art)
+started C (art=/lab/run-b36/art)
+[J-4] VAXC booting...
+[J-4] VAXC formed at 03:36:37
+started A (art=/lab/run-b36/art/g1)
+[J-4] OVMXA MEMBER at 03:36:58
+started B (art=/lab/run-b36/art/g1)
+[J-4] OVMXB booting with blackout armed (45s) at 03:36:59
+[J-4] PASS  B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=3 cluexits=1 reconnect-lines=3
+===== J run 5/6 start 03:39:38 =====
+b36start.sh: line 6: 114261 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-b36/art)
+started C (art=/lab/run-b36/art)
+[J-5] VAXC booting...
+[J-5] VAXC formed at 03:41:14
+started A (art=/lab/run-b36/art/g1)
+[J-5] OVMXA MEMBER at 03:41:35
+started B (art=/lab/run-b36/art/g1)
+[J-5] OVMXB booting with blackout armed (45s) at 03:41:36
+[J-5] PASS  B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=2 cluexits=1 reconnect-lines=3
+===== J run 6/6 start 03:43:54 =====
+b36start.sh: line 6: 116541 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-b36/art)
+started C (art=/lab/run-b36/art)
+[J-6] VAXC booting...
+[J-6] VAXC formed at 03:45:31
+started A (art=/lab/run-b36/art/g1)
+[J-6] OVMXA MEMBER at 03:45:52
+started B (art=/lab/run-b36/art/g1)
+[J-6] OVMXB booting with blackout armed (45s) at 03:45:53
+[J-6] PASS  B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=2 cluexits=1 reconnect-lines=3
+===== J done: 5 PASS / 1 FAIL =====

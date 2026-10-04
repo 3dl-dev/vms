@@ -108,6 +108,33 @@ enum cnxman_csb_event {
 	 */
 	CNXMAN_CSB_EV_CONNECT_REJECTED = 10,
 
+	/*
+	 * THE PEER TORE THE CONNECTION DOWN ITSELF (rd vms-dfe) -- SCS's
+	 * `SCS_CLOSE_REMOTE`, the peer's own DISCONNECT completing (p. 2-27).
+	 *
+	 * This is E81's distinction, applied to the OTHER kind of peer answer.
+	 * CONN_LOST is "we cannot see it at the moment", which p. 7-30 answers
+	 * by attempting again a second later. A DISCONNECT is not a loss of
+	 * sight: it is the remote SYSAP saying it does not want this
+	 * connection, and it is as much an ANSWER as a REJECT is.
+	 *
+	 * MEASURED (tests/lab/captures/vms-dfe-blackout-recovery-20260925,
+	 * runs/FIN-1 and FIN-3): routed as a plain CONN_LOST, this is an
+	 * infinite loop. h_conn_lost opens a fresh 20-second window, the beat
+	 * dials a second later, the peer accepts and disconnects again,
+	 * h_open CLEARS the deadline -- so the window never expires and the
+	 * node emits a VMS$VAXcluster connect roughly twice a second for as
+	 * long as it lives: 457 reconnect cycles in one 400-second run. A node
+	 * that dials a peer 2 Hz forever is the E81 CNXMGRERR shape, and OVMX
+	 * never gets to make that decision for a peer.
+	 *
+	 * So it takes h_connect_rejected's edge: no further attempt in THIS
+	 * reconnect window, the window itself untouched, membership HELD, and
+	 * the peer's own re-offer still ACCEPTED (p. 7-24 REACCEPT). This node
+	 * stops ASKING; it does not stop ANSWERING.
+	 */
+	CNXMAN_CSB_EV_REMOTE_DISCONNECT = 11,
+
 	CNXMAN_CSB_EV__COUNT
 };
 
@@ -195,9 +222,38 @@ struct vms_csb *cnxman_club_alloc_csb(struct vms_club *club,
  * first time"). */
 void cnxman_club_free_csb(struct vms_club *club, struct vms_csb *csb);
 
+/*
+ * Deallocate every CSB the connection manager has GIVEN UP ON -- p. 7-25's
+ * "its old CSB is deallocated, and a new CSB is created for it just as if it
+ * were joining the cluster for the first time", and p. 7-24 DEAD's "until the
+ * caller deallocates it and builds a fresh CSB for the new incarnation".
+ * A block qualifies only when it is in DISCONNECT or DEAD, is neither the
+ * LOCAL block nor a SELECTED member, and claims no Con.ID -- see the function's
+ * own header for why each of those is a read of executive state. This asserts
+ * nothing and opens nothing: rebuilding a block for a system is
+ * cnxman_discover_peers()' answer, and only for a circuit the port really has.
+ *
+ * `released` receives the SCSSYSTEMID of each released block that carried one,
+ * up to `max`, so the caller can tell whatever was still driving through that
+ * system that its block is gone. THE RETURN VALUE IS HOW MANY SYSTEMS WERE
+ * NAMED, not how many slots were freed: a block that never learned a sysid is
+ * freed silently because there is nothing honest to put in the array. The slot
+ * count is club->csb_reclaimed, which this advances for every release.
+ *
+ * A NAMED SYSTEM IS NEVER RELEASED WITHOUT BEING NAMED: when the array is full
+ * (or absent) the sweep STOPS there rather than freeing a block the caller will
+ * not hear about. So `max` may be a small batch that fits a VAX kernel stack,
+ * and a caller with more to reclaim than one batch simply calls again until it
+ * returns less than `max`.
+ */
+uint32_t cnxman_club_reclaim_abandoned(struct vms_club *club,
+				       vms_scs_sysid_t *released, uint32_t max);
+
 /* Find by identity. Both skip free slots and both refuse to match on a value
  * the CSB has not LEARNED (a CSB with csid_valid == 0 never matches any CSID,
- * including 0). NULL when there is none. */
+ * including 0). find_sysid also skips a p. 7-24 DEAD block: that is an OLD
+ * incarnation, and the SCSSYSTEMID now belongs to whoever came back (rd
+ * vms-af4). NULL when there is none. */
 struct vms_csb *cnxman_club_find_sysid(struct vms_club *club,
 				       vms_scs_sysid_t sysid);
 struct vms_csb *cnxman_club_find_csid(struct vms_club *club, vms_csid_t csid);
@@ -229,9 +285,70 @@ uint32_t cnxman_club_recount_members(struct vms_club *club);
 void cnxman_csb_set_csid(struct vms_csb *csb, vms_csid_t csid);
 void cnxman_csb_set_sysid(struct vms_csb *csb, vms_scs_sysid_t sysid);
 void cnxman_csb_set_scsnode(struct vms_csb *csb, const uint8_t *name, uint8_t len);
+/* rd vms-e88: the member count this system's own op-0x01 PARAMS advertised
+ * (body[18:20]; 0 = "I belong to no cluster"). Latest wins: a member re-sends
+ * its PARAMS when a transition changes the count. */
+void cnxman_csb_set_advert(struct vms_csb *csb, uint16_t members);
 void cnxman_csb_set_params(struct vms_csb *csb, uint16_t votes,
 			   uint16_t expected_votes, uint16_t qdskvotes);
 void cnxman_csb_set_lockdirwt(struct vms_csb *csb, uint8_t lockdirwt);
+
+/*
+ * Record the peer's OWN advertised INCARNATION (rd vms-0f9), read off the
+ * circuit's formation body (pe_peer_incarnation). `valid` 0 clears it back to
+ * "this executive has not been told", which is the honest state for a circuit
+ * whose identity has not arrived -- never incarnation 0.
+ *
+ * AND IT IS THE p. 7-25 EDGE. If the CLUB holds a give-up record for this
+ * system at a DIFFERENT incarnation, this is "a new incarnation of a VAX system
+ * has been seen": the record is cleared here, in the one place that can see
+ * both numbers, so no reader has to re-decide it.
+ */
+void cnxman_csb_set_incarnation(struct vms_club *club, struct vms_csb *csb,
+				uint64_t incarnation, int valid);
+
+/* ==========================================================================
+ * 5b. THE GIVE-UP LEDGER (rd vms-0f9) -- "we stopped dealing with THAT
+ *     incarnation of that system"
+ *
+ * Written by exactly one event, csb_give_up() inside this TU, and read by
+ * exactly one decision, the connection manager's answer to an inbound
+ * VMS$VAXcluster connect. Both halves are deliberate: the ledger is not a
+ * policy knob, it is the record of something that happened.
+ * ========================================================================== */
+
+/*
+ * Has this node given up on `sysid` AT `incarnation`?
+ *
+ * 1 only when a record really names that system at that exact incarnation.
+ * A system with no record, or one whose record names a DIFFERENT incarnation,
+ * answers 0 -- this node cannot prove it gave up on the incarnation in front
+ * of it and must not refuse on a guess (INV-6).
+ */
+int cnxman_club_gave_up_on(const struct vms_club *club, vms_scs_sysid_t sysid,
+			   uint64_t incarnation);
+
+/*
+ * Record that this node has given up on `csb`'s system at the incarnation the
+ * block currently holds. The CSB ladder calls this for itself on p. 7-29's
+ * last gasp and p. 7-30's expired window; the coordinator calls it when a
+ * class-0x03 transition really retires a member (p. 7-46). Records nothing it
+ * cannot name: no SCSSYSTEMID or no incarnation, no record.
+ */
+void cnxman_club_giveup_arm(struct vms_club *club, const struct vms_csb *csb);
+
+/*
+ * The cluster has spoken: this system is IN. A give-up record about a system a
+ * committed transition has just put in the membership is stale by definition
+ * (p. 7-42/7-49 -- membership is what the transition says it is), and keeping
+ * it would leave this node refusing a member's connection and short of the
+ * Rule of Total Connectivity. Clears one record; silent when there is none.
+ */
+void cnxman_club_giveup_clear(struct vms_club *club, vms_scs_sysid_t sysid);
+
+/* How many records the ledger currently holds. Readback for tests and the
+ * diagnostic view; nothing decides anything from it. */
+uint32_t cnxman_club_giveup_count(const struct vms_club *club);
 
 /*
  * Record the peer's OWN advertised software version (rd vms-1ee): the token it
@@ -447,6 +564,96 @@ enum cnxman_envelope_kind {
  * nonzero only when this block's dialogue state IS that connection's.
  */
 void cnxman_csb_bind_connection(struct vms_csb *csb, uint32_t conid);
+
+/*
+ * The same bind for a RE-ESTABLISHMENT inside the p. 7-24 reconnect window
+ * (rd vms-8c54): the Con.ID moves and the send/ack dialogue is CARRIED, because
+ * a connection re-established to a system the cluster still holds, at the same
+ * incarnation, is the same conversation on a new pair -- measured on two real
+ * OpenVMS VAX V7.3 members. A block that is not entitled to carry (no dialogue,
+ * not SELECTED, or not in the reconnect ladder) falls through to
+ * cnxman_csb_bind_connection() and starts at 1/0 exactly as before, which is
+ * the E76/E77 case.
+ */
+void cnxman_csb_bind_reconnect(struct vms_csb *csb, uint32_t conid);
+
+/*
+ * PHASE 1'S RECORD OF WHO IS IN THE TRANSITION (rd vms-eb3).
+ *
+ * cnxman_club_phase1_mark() is called by the participant's barrier when it
+ * acknowledges a transition OPEN (p. 7-41 Phase 1): it sets `cm_phase1_named`
+ * on the coordinator's block (`coordinator_index`, the CLUB slot the proposal
+ * arrived on, -1 = unknown) and on every block whose LEARNED CSID the
+ * proposal's nodemap names (`bitmap`, `slots` wide, when `bitmap_valid`), and
+ * clears it everywhere else. cnxman_club_phase1_clear() clears it everywhere;
+ * the barrier calls it when the transition completes or is abandoned.
+ *
+ * The cell's only reader is the dialogue-carry predicate behind
+ * cnxman_csb_bind_reconnect(): a connection to a system in a transition this
+ * node has answered is RE-ESTABLISHED with its dialogue carried, exactly as a
+ * SELECTED member's is -- measured on real V7.3 (vms-eb3 oracle F5/F6).
+ */
+void cnxman_club_phase1_mark(struct vms_club *club, int bitmap_valid,
+			     uint32_t bitmap, uint32_t slots,
+			     int32_t coordinator_index);
+void cnxman_club_phase1_clear(struct vms_club *club);
+
+/*
+ * TWO CONNECTIONS FOR ONE PAIR (rd vms-1f40). When both ends re-dial inside
+ * the same window, each accepts the other's CONNECT and the pair holds two
+ * VMS$VAXcluster connections until the peer disconnects one. MEASURED on the
+ * stall rig, 4 crossings of 4: the real OpenVMS VAX V7.3 kept the connection
+ * THIS node initiated and disconnected its own. Before this, the block kept
+ * whichever opened last, and when that was the one the VAX dropped it read the
+ * drop as the peer hanging up, stopped asking, and removed the VAX while a good
+ * connection stood open (arm Q-2).
+ *
+ * cnxman_csb_note_attempt -- this node issued its reconnect CONNECT on `conid`.
+ *
+ * cnxman_csb_second_open -- a VMS$VAXcluster connection to this block's system
+ *   opened on `conid`; `ours` = this node initiated it. Returns
+ *     CNXMAN_CSB_CONN_BIND   it is the block's connection: bind it and open
+ *                            the block exactly as before;
+ *     CNXMAN_CSB_CONN_SECOND the block was already OPEN on another one and
+ *                            has now recorded the pair's second (as the one
+ *                            it runs on if `ours`, as the spare if not) --
+ *                            nothing else changes, no event.
+ *
+ * cnxman_csb_second_closed -- `conid` closed. Returns 1 when the pair still
+ *   holds its other connection and the block runs on it (the redundant one
+ *   went, or -- `by_peer` -- the peer closed the one the block ran on and the
+ *   block moved to the one the peer kept, dialogue carried); 0 when this is
+ *   the block's only connection and the ordinary loss rules apply.
+ *
+ * cnxman_csb_holds_conid -- nonzero when `conid` is the block's connection or
+ *   the pair's second: traffic on either belongs to this system.
+ */
+enum cnxman_csb_conn {
+	CNXMAN_CSB_CONN_BIND   = 0,
+	CNXMAN_CSB_CONN_SECOND = 1
+};
+void cnxman_csb_note_attempt(struct vms_csb *csb, uint32_t conid);
+enum cnxman_csb_conn cnxman_csb_second_open(struct vms_csb *csb,
+					    uint32_t conid, int ours);
+int cnxman_csb_second_closed(struct vms_csb *csb, uint32_t conid, int by_peer);
+int cnxman_csb_holds_conid(const struct vms_csb *csb, uint32_t conid);
+
+/*
+ * Where this node's receive stream from that system stands: the highest
+ * `VMS$VAXcluster` CM send-msg# it has taken from it, which is the cell the
+ * connect data carries at content[106:108]. 0 when nothing has been taken.
+ */
+uint16_t cnxman_csb_dialogue_ack(const struct vms_csb *csb);
+
+/*
+ * Where the PEER's receive stream from us stands, read from abs 74 of its own
+ * CM frame (rd vms-1f40). Applied BACKWARDS only: a carried dialogue resumes
+ * from the peer's acknowledged position, because anything sent on the
+ * connection that died was never delivered and continuing past it leaves a hole
+ * in a stream spec sec 4(j) makes strictly monotonic -- which bugchecked a real
+ * VAX (arm M2-5). A peer can never use this to push the counter forward.
+ */
+void cnxman_csb_dialogue_acked(struct vms_csb *csb, uint16_t peer_ack_msg);
 int  cnxman_csb_dialogue_is_on(const struct vms_csb *csb, uint32_t conid);
 
 /*

@@ -69,6 +69,10 @@ static void env_init(struct pe_env *e)
 	id.scsnode_len = 6;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 	id.max_sca_len = 1500;      /* NISCS_MAX_PKTSZ 1498 + 2 (SS4(k)) */
 
 	(void)pe_fsm_init(&e->fsm, &id, OVMX_SYSID, &e->ops);
@@ -508,6 +512,10 @@ static void test_no_identity_no_frames(void)
 	id.hw_mac_valid = 1;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 
 	/* A SCSSYSTEMID that does not fit the two bytes SS4(a) grounds. */
 	(void)pe_fsm_init(&fsm, &id, 0x1234567ull, &ops);

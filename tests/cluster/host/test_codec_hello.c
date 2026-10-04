@@ -103,11 +103,24 @@ static void roundtrip_hello_class(const char *fname)
 		ct_check_eq_u32(written, f->wire_len,
 				"padded build wrote the full on-wire length");
 	} else {
+		/* The frame length is the REVISION's, read back through the
+		 * codec's own table -- never a constant retyped here. */
+		const struct vms_hello_rev_desc *rv = vms_hello_rev_for_class(&fi);
+
+		snprintf(what, sizeof(what), "%s: names a known revision", fname);
+		ct_check(rv != NULL, what);
+		if (rv == NULL)
+			return;
 		snprintf(what, sizeof(what), "%s: builds as a plain HELLO", fname);
 		ct_check(vms_hello_build(&h, built, sizeof(built), &written)
 			 == VMS_CODEC_OK, what);
-		ct_check_eq_u32(written, VMS_HELLO_FRAME_LEN,
-				"plain build wrote VMS_HELLO_FRAME_LEN");
+		snprintf(what, sizeof(what),
+			 "%s: plain build wrote the revision's frame length (%u)",
+			 fname, rv->frame_len);
+		ct_check_eq_u32(written, rv->frame_len, what);
+		snprintf(what, sizeof(what),
+			 "%s: and that IS the specimen's on-wire length", fname);
+		ct_check_eq_u32(written, f->wire_len, what);
 	}
 
 	assert_cited_bytes_match(f, built, f->wire_len, fname);
@@ -154,7 +167,285 @@ static void test_fixture_roundtrips(void)
 	roundtrip_hello_class("hello-multicast-vax1");
 	roundtrip_hello_class("hello-directed-vax2-to-vax1");
 	roundtrip_hello_class("hello-padded-vax1-channel-size-verify");
+	roundtrip_hello_class("hello-c3-vaxc-v55-multicast");
+	roundtrip_hello_class("hello-c3-vaxc-v55-directed-b2");
 	roundtrip_solicit();
+}
+
+/*
+ * The DIRECTED class-0x03 HELLO (rd vms-0f8): a real V5.5-2H4 member's
+ * sec 4(a).1 channel-verify REQUEST. This specimen exists BECAUSE of the fix --
+ * it is the frame the V5.5 node sent once OVMX could answer in its revision --
+ * and it carries the three things a multicast HELLO does not: the peer's
+ * hardware/logical address split (sec 4a.0), a NON-ZERO cluster join nonce
+ * (sec 4a/4g), and an incarnation the sender attributes to US (sec 4i.B).
+ */
+static void test_c3_directed(void)
+{
+	const struct vms_fixture *f = fixture("hello-c3-vaxc-v55-directed-b2");
+	const struct vms_fixture *m = fixture("hello-c3-vaxc-v55-multicast");
+	struct vms_frame_info fi;
+	struct vms_hello_frame h, mh;
+	uint8_t ovmxa_lavc[VMS_ETH_ADDR_LEN];
+	uint8_t word = 0;
+
+	printf("-- the DIRECTED class-0x03 HELLO (rd vms-0f8)\n");
+	ct_check(f != NULL && m != NULL, "both C03 specimens load");
+	if (f == NULL || m == NULL)
+		return;
+
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "directed C03 HELLO classifies");
+	ct_check_eq_u32(fi.cls, VMS_FCLS_HELLO_C3, "  as the same C03 class");
+	ct_check(vms_sca_chan_word(f->bytes, f->wire_len, &fi, &word)
+		 == VMS_CODEC_OK, "  the abs-30 channel word is readable");
+	ct_check_eq_u32(word, 0xb2,
+			"  == b2: the sec 4(a).1 channel-verify REQUEST");
+
+	ct_check(vms_hello_parse(f->bytes, f->wire_len, &fi, &h) == VMS_CODEC_OK,
+		 "it parses");
+
+	/* sec 4(a).0: abs 0-5 and abs 16-21 are two DIFFERENT addresses. */
+	vms_cluster_lavc_addr_build(1987, ovmxa_lavc);
+	ct_check(memcmp(h.hdr.dst_lavc, ovmxa_lavc, VMS_ETH_ADDR_LEN) == 0,
+		 "  abs 16 is OUR cluster-LOGICAL address (sec 4a.0)");
+	ct_check(memcmp(h.hdr.eth_dst, h.hdr.dst_lavc, VMS_ETH_ADDR_LEN) != 0,
+		 "  and abs 0 is a DIFFERENT address -- our hardware MAC");
+
+	/* sec 4(a)/4(g): the nonce is zero on multicast, non-zero directed. */
+	ct_check(vms_frame_classify(m->bytes, m->wire_len, &fi) == VMS_CODEC_OK &&
+		 vms_hello_parse(m->bytes, m->wire_len, &fi, &mh) == VMS_CODEC_OK,
+		 "  the multicast specimen re-parses for comparison");
+	ct_check(memcmp(h.disc.nonce, "\x77\x11\x7a\x7d", 4) == 0,
+		 "  abs 68 carries the cluster join nonce, in the clear");
+	ct_check(memcmp(mh.disc.nonce, "\0\0\0\0", 4) == 0,
+		 "  and it is ZERO on the multicast HELLO -- the sec 4(a) split "
+		 "holds in this revision too");
+
+	/* sec 4(i).B: the incarnation the sender attributes to us. */
+	ct_check_eq_u32(h.incarnation, 1,
+			"  abs 92 == 1: the incarnation VAXC attributes to us");
+	ct_check_eq_u32(mh.incarnation, 0,
+			"  and 0 on the multicast HELLO (sec 4b)");
+
+	/* The revision markers are the SAME on both frames from the same node --
+	 * they are a property of the revision, not of the frame's direction. */
+	ct_check(h.revision == mh.revision &&
+		 h.hdr.cluster_group == mh.hdr.cluster_group &&
+		 h.trailer_9205 == mh.trailer_9205 &&
+		 h.trailer_2600 == mh.trailer_2600,
+		 "  directed and multicast carry IDENTICAL revision markers");
+}
+
+/* ---- group 1b: the SECOND discovery revision (rd vms-0f8) ------------ *
+ *
+ * The specimen is a real OpenVMS VAX V5.5-2H4 node's own multicast HELLO.
+ * Before this item OVMX classified it family 0 / UNCLASSIFIED and counted
+ * all 553 of them `badclass` in an 8-minute in-browser run; what is asserted
+ * here is that it now becomes a real DISCOVERY/HELLO whose peer identity the
+ * join FSM can act on -- and that the V7.3 revision is untouched.
+ */
+static void test_c3_revision(void)
+{
+	const struct vms_fixture *f = fixture("hello-c3-vaxc-v55-multicast");
+	const struct vms_fixture *v73 = fixture("hello-multicast-vax1");
+	const struct vms_hello_rev_desc *rv;
+	struct vms_frame_info fi, fi73;
+	struct vms_hello_frame h;
+	uint8_t lavc[VMS_ETH_ADDR_LEN];
+	uint16_t sysid = 0;
+	int tick_nonzero = 0, i;
+
+	printf("-- the class-0x03 discovery revision (rd vms-0f8)\n");
+	ct_check(f != NULL && v73 != NULL, "both revisions' specimens load");
+	if (f == NULL || v73 == NULL)
+		return;
+
+	/* 1. it classifies, as its OWN class, in the discovery family */
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "V5.5 HELLO classifies without error");
+	ct_check_eq_u32(fi.family, VMS_FFAM_DISCOVERY,
+			"  family == DISCOVERY (was 0/UNCLASSIFIED -- the whole defect)");
+	ct_check_eq_u32(fi.cls, VMS_FCLS_HELLO_C3, "  class == VMS_FCLS_HELLO_C3");
+	ct_check_eq_u32(fi.sca_content, VMS_HELLO_C3_SCA_LEN,
+			"  SCA content == 114");
+	ct_check_eq_u32(fi.len_check, VMS_SCA_LEN_EXACT,
+			"  and 14 + 114 == the 128-byte wire length (sec 2 identity)");
+	ct_check((fi.caps & VMS_FCAP_DISCNAME) != 0,
+		 "  the class is entitled to the node-name accessor");
+	ct_check((fi.caps & VMS_FCAP_CHANWORD) != 0,
+		 "  and to the abs-30 channel-verify word");
+
+	/* 2. the revision table names it, and says what it does NOT have */
+	rv = vms_hello_rev_for_class(&fi);
+	ct_check(rv != NULL && rv->rev == VMS_HELLO_REV_C03,
+		 "the class maps to VMS_HELLO_REV_C03");
+	if (rv == NULL)
+		return;
+	ct_check_eq_u32(rv->disc_class, VMS_DISC_CLASS_HELLO_C3,
+			"  its format marker is the 0x03 class byte");
+	ct_check_eq_u32(rv->frame_len, 128, "  its frame length is 128");
+	ct_check(rv->has_tail128 == 0,
+		 "  it has NO abs 128-133 tail (the 6-byte length delta)");
+	ct_check(rv->has_padded == 0,
+		 "  and no sec-4(k) padded form has ever been observed in it");
+
+	/* 3. it PARSES, and the peer identity the join FSM needs comes out */
+	memset(&h, 0xAA, sizeof(h));
+	ct_check(vms_hello_parse(f->bytes, f->wire_len, &fi, &h) == VMS_CODEC_OK,
+		 "V5.5 HELLO parses (was E_CLASS)");
+	ct_check_eq_u32(h.revision, VMS_HELLO_REV_C03,
+			"  the parse records WHICH revision the wire was");
+	ct_check_eq_u32(h.disc.namelen, 6, "  namelen == 6");
+	ct_check(memcmp(h.disc.name, "VAXC  ", 6) == 0,
+		 "  SCSNODE == \"VAXC  \", read off the real frame");
+	ct_check(vms_cluster_lavc_sysid(h.hdr.src_lavc, &sysid) == VMS_CODEC_OK,
+		 "  abs 24 is a cluster-LOGICAL address");
+	ct_check_eq_u32(sysid, 1989,
+			"  SCSSYSTEMID == 1989, the node's configured value");
+	vms_cluster_lavc_addr_build(1989, lavc);
+	ct_check(memcmp(h.hdr.src_lavc, lavc, VMS_ETH_ADDR_LEN) == 0,
+		 "  and it rebuilds from that sysid exactly");
+	ct_check_eq_u32(h.hdr.word30, 0x00a0,
+			"  abs 30 == a0: a MULTICAST advertisement (sec 4a)");
+	ct_check_eq_u32(h.incarnation, 0,
+			"  incarnation 0, as sec 4(b) grounds for multicast");
+	/* The abs 96-101 tick is the one span that MOVES across the 53 real
+	 * frames, so it is UNCITED in the specimen (a live field is never a
+	 * fixture constant) and decodes as the loader's zero fill. What is
+	 * asserted is the honest thing: that the loader agrees it is uncited,
+	 * and that every span around it IS cited -- the round trip in group 1
+	 * is what proves the tick's offset, by rebuilding the 122 cited bytes
+	 * on either side of it byte-exact. */
+	for (i = 0; i < 6; i++)
+		tick_nonzero |= vms_fixture_is_cited(f, VMS_OFF_HELLO_TIMER + i, 1);
+	ct_check(!tick_nonzero,
+		 "  abs 96-101, the LIVE tick, is uncited in the specimen");
+	ct_check(vms_fixture_is_cited(f, VMS_OFF_HELLO_TIMER - 2u, 2) &&
+		 vms_fixture_is_cited(f, VMS_OFF_HELLO_TAILCONST, 10),
+		 "  and the cited spans butt right up against it on both sides");
+
+	/* 4. the fields the revision does NOT carry come back ZERO, never
+	 *    stale -- the struct was poisoned 0xAA before the parse */
+	ct_check_eq_u32(h.poller_sweep, 0,
+			"  abs 128 is not on the wire -> zero, not the poison");
+	ct_check_eq_u32(h.trailer_0064, 0, "  abs 130 likewise");
+	ct_check_eq_u32(h.trailer_0000, 0, "  abs 132 likewise");
+
+	/* 5. the marker words that DIFFER are carried as data, not baked in.
+	 *
+	 *    abs 22 IS NOT ONE OF THEM (rd vms-b34). vms-0f8 counted it as a
+	 *    third revision marker because this V5.5 specimen reads 0x0101
+	 *    where the V7.3 specimen reads 0x0001 -- but those two nodes are in
+	 *    DIFFERENT CLUSTERS (257 and 1), and abs 22 is LE16(group). It is
+	 *    asserted here as what it is: this specimen's cluster's number. */
+	ct_check_eq_u32(h.hdr.cluster_group, 257,
+			"  abs 22 == 257, Node C's CLUSTER GROUP -- not a "
+			"revision marker (the V7.3 specimen's 0x0001 is "
+			"group 1, the lab's)");
+	ct_check_eq_u32(h.trailer_9205, 0x0590,
+			"  abs 94 == 0x0590 (the 0x05 revision's is 0x0592)");
+	ct_check_eq_u32(h.trailer_2600, 0x0021,
+			"  abs 126 == 0x0021 (the 0x05 revision's is 0x0026)");
+
+	/* 6. NO REGRESSION: the V7.3 specimen is exactly what it always was */
+	ct_check(vms_frame_classify(v73->bytes, v73->wire_len, &fi73)
+		 == VMS_CODEC_OK, "V7.3 HELLO still classifies");
+	ct_check_eq_u32(fi73.cls, VMS_FCLS_HELLO,
+			"  still VMS_FCLS_HELLO, not the new class");
+	ct_check_eq_u32(fi73.sca_content, VMS_HELLO_SCA_LEN,
+			"  still 120-byte content");
+	ct_check(vms_hello_rev_for_class(&fi73)->rev == VMS_HELLO_REV_C05,
+		 "  and maps to VMS_HELLO_REV_C05");
+}
+
+/*
+ * The refusals. A codec that stretches to fit an unobserved shape is how a
+ * wrong field becomes wire truth; every one of these is a shape nobody has
+ * ever captured, and the codec says no rather than guessing.
+ */
+static void test_c3_refusals(void)
+{
+	const struct vms_fixture *f = fixture("hello-c3-vaxc-v55-multicast");
+	struct vms_frame_info fi;
+	struct vms_hello_frame h;
+	uint8_t frame[VMS_HELLO_FRAME_LEN];
+	uint8_t out[VMS_HELLO_PADDED_MAX_FRAME];
+	uint32_t written = 0;
+	uint32_t i;
+
+	printf("-- what the class-0x03 revision REFUSES\n");
+	ct_check(f != NULL, "specimen loads");
+	if (f == NULL)
+		return;
+
+	/* a class-0x03 frame at ANY other length is a shape nobody has seen */
+	memcpy(frame, f->bytes, f->wire_len);
+	frame[14] = (uint8_t)(VMS_HELLO_SCA_LEN - 2u);   /* claim 120 content */
+	ct_check(vms_frame_classify(frame, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "class 0x03 with a 120-content length field: classify returns OK");
+	ct_check_eq_u32(fi.cls, VMS_FCLS_UNKNOWN,
+			"  ...but is UNCLASSIFIED, not silently read as a HELLO");
+
+	/* the parse refuses to decode one class as the other */
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "reclassify the untouched specimen");
+	fi.cls = (uint8_t)VMS_FCLS_HELLO;   /* lie to the parser */
+	ct_check(vms_hello_parse(f->bytes, f->wire_len, &fi, &h)
+		 == VMS_CODEC_E_CLASS,
+		 "a 0x03 frame handed over as class 0x05 -> E_CLASS, never wrong data");
+
+	/* a C03 frame has no observed padded form */
+	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
+		 "reclassify again");
+	ct_check(vms_hello_parse(f->bytes, f->wire_len, &fi, &h) == VMS_CODEC_OK,
+		 "parse again");
+	ct_check(vms_hello_build_padded(&h, 1500, out, sizeof(out), &written)
+		 == VMS_CODEC_E_INVAL,
+		 "padded build of a C03 frame -> E_INVAL (sec 4k was measured on C05 only)");
+
+	/* a build whose length field contradicts its revision is refused */
+	h.hdr.sca_len_field = (uint16_t)(VMS_HELLO_SCA_LEN - 2u);
+	ct_check(vms_hello_build(&h, out, sizeof(out), &written)
+		 == VMS_CODEC_E_INVAL,
+		 "C03 revision + a 120-content length field -> E_INVAL");
+	h.hdr.sca_len_field = (uint16_t)(VMS_HELLO_C3_SCA_LEN - 2u);
+	ct_check(vms_hello_build(&h, out, sizeof(out), &written) == VMS_CODEC_OK,
+		 "  ...and is accepted again once the two agree");
+	ct_check_eq_u32(written, VMS_HELLO_C3_FRAME_LEN, "  writing 128 bytes");
+
+	/* an unknown revision id is refused, not clamped to a known one */
+	h.revision = (uint8_t)VMS_HELLO_REV__COUNT;
+	ct_check(vms_hello_build(&h, out, sizeof(out), &written)
+		 == VMS_CODEC_E_INVAL, "an unregistered revision id -> E_INVAL");
+	ct_check(vms_hello_rev_lookup((uint8_t)VMS_HELLO_REV__COUNT) == NULL,
+		 "  and the revision table itself returns NULL for it");
+
+	/* never crash a peer: every truncation of the real frame is refused
+	 * or classified, and none of them reads past the buffer */
+	{
+		uint32_t classified = 0, decoded = 0;
+
+		for (i = 0; i < f->wire_len; i++) {
+			uint8_t clip[VMS_HELLO_FRAME_LEN];
+			struct vms_frame_info tfi;
+			struct vms_hello_frame th;
+
+			memcpy(clip, f->bytes, i);
+			(void)vms_frame_classify(clip, i, &tfi);
+			if (tfi.cls != VMS_FCLS_HELLO_C3)
+				continue;
+			classified++;
+			if (vms_hello_parse(clip, i, &tfi, &th) == VMS_CODEC_OK)
+				decoded++;
+		}
+		/* The test is only worth anything if the truncations really do
+		 * reach the C03 parser -- assert that they did. */
+		ct_check(classified > 0, "truncated V5.5 frames DO reach the "
+					 "C03 parse path (the test is not vacuous)");
+		ct_check_eq_u32(decoded, 0,
+				"  and not one of them decodes as a complete HELLO");
+	}
 }
 
 /* ---- group 2: hand-built HELLO, every field at its offset ------------- */
@@ -177,7 +468,7 @@ static void fill_test_hello(struct vms_hello_frame *h)
 	memcpy(h->hdr.eth_src, test_hw_mac, 6);
 	h->hdr.sca_len_field = 0x0076; /* 120-byte content, GROUNDED sec 2 */
 	memcpy(h->hdr.dst_lavc, mcast, 6);
-	h->hdr.connect_flag = 0x0001;
+	h->hdr.cluster_group = 0x0001;
 	memcpy(h->hdr.src_lavc, src_logical, 6);
 	h->hdr.word30 = 0x00a0; /* multicast per-frame word */
 
@@ -395,29 +686,199 @@ static void test_lavc_address_helpers(void)
 }
 
 /*
- * E53: the HELLO multicast group address, ab:00:04:01:<LE16(group)>. Pins
- * the mapping a real config value must produce -- group 257 (0x0101, the lab
- * VAX cluster's CLUSTER_AUTHORIZE group, directly observed on the wire as
- * ab:00:04:01:01:01) and group 0 (the prior hardcoded/no-CLUSTER_AUTHORIZE
- * value, ab:00:04:01:00:00) -- so a regression here cannot silently point
- * OVMX's HELLO at the wrong cluster again.
+ * rd vms-147 (was E53): the HELLO multicast group address,
+ * ab:00:04:01:<LE16(group + 0x100)>.
+ *
+ * EVERY EXPECTATION BELOW IS A REAL-VMS OBSERVATION, not a restatement of what
+ * this codec happens to compute -- three of them, from three OpenVMS versions
+ * on two architectures, listed with their sources in
+ * vms_cluster_codec_hello.h. Two exist precisely because the one-point version
+ * of this test (group 1's address, mislabelled "group 257") let OVMX ship a
+ * derivation that was right for exactly one group and pointed every other
+ * cluster's node at the wrong multicast address.
+ *
+ * The refutation block is the teeth: it re-runs the three candidate formulas a
+ * reader might reach for (raw LE16, OR 0x100, XOR 0x100) against the SAME
+ * oracles and requires each to FAIL at least one, so "it matches the oracles"
+ * cannot be satisfied by an accident of one data point again.
  */
 static void test_hello_mcast_group_mapping(void)
 {
 	uint8_t mcast[VMS_ETH_ADDR_LEN];
-	static const uint8_t group_257[6] = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
-	static const uint8_t group_0[6]   = { 0xab, 0x00, 0x04, 0x01, 0x00, 0x00 };
+	/* group 1, OpenVMS VAX V7.3 -- printed by VMS itself, SYSMAN
+	 * CONFIGURATION SHOW CLUSTER_AUTHORIZATION on the lab's VAX1. */
+	static const uint8_t group_1[6]    = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
+	/* group 257, OpenVMS VAX V5.5-2H4 -- browser-demo Node C, observed
+	 * transmitting its 0x6007 HELLOs to this address (rd vms-147). */
+	static const uint8_t group_257[6]  = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x02 };
+	/* group 2026, OpenVMS Alpha V8.4 -- lab-alpha ALPHA1's HELLO multicast
+	 * (tests/lab-alpha/README.md). */
+	static const uint8_t group_2026[6] = { 0xab, 0x00, 0x04, 0x01, 0xea, 0x08 };
 
-	printf("-- CLUSTER_AUTHORIZE group <-> ab:00:04:01:<LE16(group)> HELLO mcast (E53)\n");
+	printf("-- CLUSTER_AUTHORIZE group -> ab:00:04:01:<LE16(group+0x100)> "
+	       "HELLO mcast (vms-147)\n");
+
+	vms_cluster_hello_mcast_build(1, mcast);
+	ct_check(memcmp(mcast, group_1, 6) == 0,
+		 "group 1 -> ab:00:04:01:01:01 (VMS's own SYSMAN CONFIGURATION "
+		 "SHOW CLUSTER_AUTHORIZATION output on the lab VAX1, V7.3)");
 
 	vms_cluster_hello_mcast_build(257, mcast);
 	ct_check(memcmp(mcast, group_257, 6) == 0,
-		 "group 257 (0x0101) -> ab:00:04:01:01:01 (the lab VAX cluster's "
-		 "observed group, GROUNDED not fabricated)");
+		 "group 257 -> ab:00:04:01:01:02 (observed on the wire from a "
+		 "real OpenVMS V5.5-2H4 node configured for group 257) -- NOT "
+		 "ab:00:04:01:01:01, which is group 1's address");
 
+	vms_cluster_hello_mcast_build(2026, mcast);
+	ct_check(memcmp(mcast, group_2026, 6) == 0,
+		 "group 2026 -> ab:00:04:01:ea:08 (observed from real OpenVMS "
+		 "Alpha V8.4, lab-alpha)");
+
+	/* Refutations: each wrong candidate must miss at least one oracle. */
+	{
+		struct { const char *name; uint16_t g; const uint8_t *want; } o[3] = {
+			{ "group 1",    1u,    group_1    },
+			{ "group 257",  257u,  group_257  },
+			{ "group 2026", 2026u, group_2026 },
+		};
+		int raw_hits = 0, or_hits = 0, xor_hits = 0;
+		int i;
+
+		for (i = 0; i < 3; i++) {
+			uint16_t raw = o[i].g;
+			uint16_t orv = (uint16_t)(o[i].g | 0x0100u);
+			uint16_t xorv = (uint16_t)(o[i].g ^ 0x0100u);
+
+			raw_hits += ((uint8_t)(raw & 0xffu) == o[i].want[4] &&
+				     (uint8_t)(raw >> 8) == o[i].want[5]);
+			or_hits += ((uint8_t)(orv & 0xffu) == o[i].want[4] &&
+				    (uint8_t)(orv >> 8) == o[i].want[5]);
+			xor_hits += ((uint8_t)(xorv & 0xffu) == o[i].want[4] &&
+				     (uint8_t)(xorv >> 8) == o[i].want[5]);
+		}
+		ct_check(raw_hits < 3,
+			 "a raw LE16(group) is REFUTED by the oracle set (it was "
+			 "OVMX's shipped bug: right for group 1 only)");
+		ct_check(or_hits < 3,
+			 "LE16(group | 0x100) is REFUTED by the oracle set");
+		ct_check(xor_hits < 3,
+			 "LE16(group ^ 0x100) is REFUTED by the oracle set");
+	}
+
+	/* Group 0 is not a VMS-assignable group -- it is OVMX's "nobody
+	 * configured one" state (vms_pe.c pe_hello_multicast, which says so on
+	 * the console). It gets the same single derivation, no special case. */
 	vms_cluster_hello_mcast_build(0, mcast);
-	ct_check(memcmp(mcast, group_0, 6) == 0,
-		 "group 0 -> ab:00:04:01:00:00 (the prior no-CLUSTER_AUTHORIZE value)");
+	ct_check(mcast[4] == 0x00u && mcast[5] == 0x01u,
+		 "group 0 (unconfigured, not a VMS group) -> ab:00:04:01:00:01 "
+		 "by the same arithmetic -- no second formula");
+}
+
+/*
+ * rd vms-b34: abs 22..23 is LE16(cluster group), not a constant 0x0001.
+ *
+ * THE SAME MISTAKE AS vms-147, IN THE OTHER ENCODING. The multicast address
+ * was wrong for every group but 1; this word was wrong for every group but 1,
+ * for the same reason -- every capture in the corpus came from ONE cluster,
+ * whose group number is 1 -- and it stayed wrong after vms-147 because nobody
+ * asked what else on the frame carried the group. A real OpenVMS VAX V7.3
+ * member in group 257 answered OVMX's channel-verify handshake and then
+ * discarded all 273 of its VC STACKs, which carried 0x0001; the circuit never
+ * opened, nothing was ever promoted to a CSB, and CNXMAN went silent after
+ * "waiting to form or join" (tests/lab/captures/vms-b34-group-on-wire-20260924).
+ *
+ * FOUR ORACLES, three VMS versions, two architectures. This test asserts the
+ * derivation against all four and requires each wrong candidate to FAIL at
+ * least one, so "it matches the oracle" can never again be satisfied by the
+ * single data point that made the mislabel possible.
+ */
+static void test_abs22_is_the_cluster_group(void)
+{
+	/* (group, abs22 bytes as they appear on the wire, provenance) */
+	static const struct {
+		uint16_t    group;
+		uint8_t     lo, hi;
+		const char *why;
+	} oracle[4] = {
+		{ 1u,    0x01u, 0x00u,
+		  "group 1, OpenVMS VAX V7.3 (lab VAX1) -- VMS prints the "
+		  "group itself: SYSMAN CONFIGURATION SHOW "
+		  "CLUSTER_AUTHORIZATION -> 'Cluster group number: 1'" },
+		{ 257u,  0x01u, 0x01u,
+		  "group 257, OpenVMS VAX V7.3 (demo Node C VAXC) -- observed "
+		  "on the wire, isolated bridge, CLUSTER_CONFIG_LAN dialogue "
+		  "in the capture says 257" },
+		{ 257u,  0x01u, 0x01u,
+		  "group 257, OpenVMS VAX V5.5-2H4 (demo Node C) -- observed "
+		  "in-browser: a SECOND VMS version, same number, so abs 22 "
+		  "is not a revision marker" },
+		{ 2026u, 0xeau, 0x07u,
+		  "group 2026, OpenVMS Alpha V8.4 (lab-alpha) -- a second "
+		  "ARCHITECTURE, and the row that refutes every candidate "
+		  "the two-byte groups cannot separate" },
+	};
+	int i, const1_hits = 0, mcast_rule_hits = 0, be_hits = 0;
+
+	printf("-- abs 22..23 == LE16(cluster group) (vms-b34)\n");
+
+	for (i = 0; i < 4; i++) {
+		uint16_t want = (uint16_t)(oracle[i].lo |
+					   ((uint16_t)oracle[i].hi << 8));
+
+		ct_check_eq_u32(oracle[i].group, want, oracle[i].why);
+
+		/* Refutation candidates, scored against the same oracle. */
+		const1_hits += (0x0001u == want);
+		mcast_rule_hits += ((uint16_t)(oracle[i].group + 0x0100u) == want);
+		be_hits += ((uint16_t)((oracle[i].group << 8) |
+				       (oracle[i].group >> 8)) == want);
+	}
+
+	ct_check(const1_hits < 4,
+		 "a fixed 0x0001 is REFUTED (it is right for group 1 alone -- "
+		 "which is exactly why it survived as 'the observed constant "
+		 "connect flag')");
+	ct_check(mcast_rule_hits < 4,
+		 "LE16(group + 0x100) -- the MULTICAST ADDRESS rule (vms-147) "
+		 "-- is REFUTED here: the two encodings of the group are NOT "
+		 "the same arithmetic");
+	ct_check(be_hits < 4,
+		 "BE16(group) is REFUTED by group 2026");
+}
+
+/*
+ * The codec must PLACE that number at abs 22 and read it back, for both
+ * revisions -- so a group is a property a caller supplies, never a constant
+ * this TU remembers.
+ */
+static void test_abs22_round_trips_through_the_codec(void)
+{
+	static const uint16_t groups[3] = { 1u, 257u, 2026u };
+	uint8_t frame[VMS_HELLO_FRAME_LEN];
+	struct vms_hello_frame h, back;
+	struct vms_frame_info fi;
+	uint32_t written = 0;
+	int i;
+
+	printf("-- the group a caller supplies is the group on the wire\n");
+
+	for (i = 0; i < 3; i++) {
+		fill_test_hello(&h);
+		h.hdr.cluster_group = groups[i];
+
+		ct_check(vms_hello_build(&h, frame, sizeof(frame),
+					 &written) == VMS_CODEC_OK,
+			 "  build accepts this group");
+		ct_check(frame[22] == (uint8_t)(groups[i] & 0xffu) &&
+			 frame[23] == (uint8_t)(groups[i] >> 8),
+			 "  abs 22..23 carry it, LE, byte for byte");
+		ct_check(vms_frame_classify(frame, written, &fi) == VMS_CODEC_OK &&
+			 vms_hello_parse(frame, written, &fi,
+					 &back) == VMS_CODEC_OK,
+			 "  and it re-parses");
+		ct_check_eq_u32(back.hdr.cluster_group, groups[i],
+				"  to the same number");
+	}
 }
 
 int main(void)
@@ -434,11 +895,16 @@ int main(void)
 	}
 
 	test_fixture_roundtrips();
+	test_c3_revision();
+	test_c3_directed();
+	test_c3_refusals();
 	test_handbuilt_hello_field_placement();
 	test_hello_error_paths();
 	test_lastgasp_is_a_plain_hello_diff();
 	test_lavc_address_helpers();
 	test_hello_mcast_group_mapping();
+	test_abs22_is_the_cluster_group();
+	test_abs22_round_trips_through_the_codec();
 
 	return ct_summary("test_codec_hello");
 }

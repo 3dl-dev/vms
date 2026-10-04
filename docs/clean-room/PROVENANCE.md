@@ -104,7 +104,8 @@ Any auditor can independently verify the chain:
 2. Re-run a decoder against a capture, e.g.
    `python3 docs/clean-room/tools/af2choreo.py ~/vax/cluster/captures/af2-firsttimer-established-20260728.pcap`
    and confirm the values match the design docs and the in-source citations.
-3. Cross-check the citations in `src/vmsscs/*.c` against the frames they name.
+3. Cross-check the citations in `src/kernel-core/vms_scs*.c` and
+   `src/kernel-core/vms_cluster_codec_scs.c` against the frames they name.
 
 ## 6. Ongoing retention (standing procedure)
 

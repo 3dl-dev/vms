@@ -1,0 +1,28 @@
+# rd vms-af4 stall matrix U on artifacts 7faf24a6 (cluster_auth_group=257), QEMU TCG, run root /lab/run-af4rig
+# real V7.3 VAXC + OVMXA + OVMXB; OVMXB SIGSTOPped 2 s after its own MEMBER line for 6/10/13/14/16/20 s, x4
+# (an earlier 24-arm run passed the artifact dir RELATIVE, so runarm.sh's run-root-scoped kill missed the previous arm's QEMU guests and two arms' VAXC booted beside stale nodes: voided, kept in the rig pod under void/, not counted)
+[U-1(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[U-2(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-3(13s)] PASS  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-4(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-5(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-6(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-7(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[U-8(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-9(13s)] PASS  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-10(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-11(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-12(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-13(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[U-14(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-15(13s)] PASS  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-16(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-17(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-18(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-19(6s)] PASS  stall=6s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+[U-20(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-21(13s)] PASS  stall=13s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-22(14s)] PASS  stall=14s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-23(16s)] PASS  stall=16s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=2 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[U-24(20s)] PASS  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== U done: 24 PASS / 0 FAIL =====

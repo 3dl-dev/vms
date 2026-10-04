@@ -1,0 +1,255 @@
+[
+ {
+  "label": "page-order",
+  "order": "A,B,C",
+  "gap": 5000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 4,
+   "VAXC": 3
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {
+   "OVMXB": 2,
+   "VAXC": 2
+  },
+  "lost_unnamed": {},
+  "worstDriftMs": 71,
+  "froze": false
+ },
+ {
+  "label": "all-at-once",
+  "order": "A,B,C",
+  "gap": 500,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 3,
+   "VAXC": 3
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {
+   "OVMXB": [
+    "0:1989"
+   ],
+   "VAXC": [
+    "OVMXB"
+   ]
+  },
+  "repaint_stalls": {
+   "OVMXB": 2,
+   "VAXC": 2
+  },
+  "lost_unnamed": {
+   "OVMXB": 4
+  },
+  "worstDriftMs": 35,
+  "froze": false
+ },
+ {
+  "label": "page-order-throttled4",
+  "order": "A,B,C",
+  "gap": 5000,
+  "throttle": 4,
+  "verdict": "NOT CN=3: OVMXA never named 0x7c3,0x7c5; OVMXB never named 0x7c5; the real VAX admitted nobody; OVMXB restarted 8x; VAXC restarted 5x; lost: {\"VAXC\":[\"OVMXA\"],\"OVMXB\":[\"0:1987\"]}; unnamed connection losses: {\"OVMXB\":1}; panels that only repainted once revealed: {\"OVMXB\":3,\"VAXC\":1} (rd vms-0bc)",
+  "cn3": false,
+  "added": {
+   "OVMXA": [
+    "0x7c4"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 8,
+   "VAXC": 5
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {
+   "VAXC": [
+    "OVMXA"
+   ],
+   "OVMXB": [
+    "0:1987"
+   ]
+  },
+  "repaint_stalls": {
+   "OVMXB": 3,
+   "VAXC": 1
+  },
+  "lost_unnamed": {
+   "OVMXB": 1
+  },
+  "worstDriftMs": 369,
+  "froze": false
+ },
+ {
+  "label": "b-first",
+  "order": "B,A,C",
+  "gap": 3000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 3,
+   "VAXC": 4
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {
+   "VAXC": 1,
+   "OVMXB": 1
+  },
+  "lost_unnamed": {},
+  "worstDriftMs": 166,
+  "froze": false
+ },
+ {
+  "label": "c-first-legacy",
+  "order": "C,A,B",
+  "gap": 5000,
+  "throttle": 1,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 4,
+   "VAXC": 3
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {
+   "OVMXB": 3,
+   "VAXC": 1,
+   "OVMXA": 1
+  },
+  "lost_unnamed": {},
+  "worstDriftMs": 71,
+  "froze": false
+ },
+ {
+  "label": "all-at-once-throttled2",
+  "order": "A,B,C",
+  "gap": 500,
+  "throttle": 2,
+  "verdict": "CN=3",
+  "cn3": true,
+  "added": {
+   "OVMXA": [
+    "0x7c3",
+    "0x7c4",
+    "0x7c5"
+   ],
+   "OVMXB": [
+    "0x7c4",
+    "0x7c5",
+    "0x7c3"
+   ],
+   "VAXC": []
+  },
+  "vaxc_admitted": [
+   "OVMXB",
+   "OVMXA"
+  ],
+  "restarts": {
+   "OVMXA": 0,
+   "OVMXB": 3,
+   "VAXC": 2
+  },
+  "ovmx_founded": {},
+  "bugchecks": {},
+  "lost": {},
+  "repaint_stalls": {
+   "OVMXB": 3,
+   "VAXC": 2
+  },
+  "lost_unnamed": {},
+  "worstDriftMs": 326,
+  "froze": false
+ }
+]

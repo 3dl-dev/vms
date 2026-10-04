@@ -62,6 +62,15 @@ static uint64_t le64(const uint8_t *p)
  * test_scs_vc.c so the ported whole-frame assertions stay apples-to-apples. */
 static const uint8_t ovmx_mac[6] = { 0x02, 0x00, 0x00, 0x4f, 0x56, 0x58 };
 static const uint8_t ovmx_logical[6] = { 0xaa, 0x00, 0x04, 0x00, 0x06, 0x04 };
+/*
+ * The lab cluster's REAL group number (rd vms-b34). abs 22 is LE16(group), not
+ * a constant -- VMS's own SYSMAN CONFIGURATION SHOW CLUSTER_AUTHORIZATION on
+ * VAX1 prints "Cluster group number: 1", and every byte-exact capture below
+ * came off that cluster. Build a frame with any other number here and the
+ * whole-frame comparisons fail, which is the point.
+ */
+#define LAB_CLUSTER_GROUP 0x0001u
+
 static const uint8_t vax1_mac[6] = { 0xaa, 0x00, 0x04, 0x00, 0x01, 0x04 };
 static const uint8_t vax2_log[6] = { 0xaa, 0x00, 0x04, 0x00, 0x02, 0x04 };
 static const uint8_t vax2_hw[6] = { 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9 };
@@ -211,6 +220,7 @@ static void fill_real_start_frame(struct vms_scs_start_frame *f)
 	memcpy(f->addr.src_mac, vax1_mac, 6);
 	memcpy(f->addr.dst_logical, vax2_log, 6);
 	memcpy(f->addr.src_logical, vax1_mac, 6);
+	f->addr.cluster_group = LAB_CLUSTER_GROUP;
 	f->recv_ack = 0;
 	f->send_seq = 1;
 	f->incarnation = 1;
@@ -257,6 +267,7 @@ static void test_whole_frame_ack_byte_exact(void)
 	memcpy(f.addr.src_mac, vax1_mac, 6);
 	memcpy(f.addr.dst_logical, vax2_log, 6);
 	memcpy(f.addr.src_logical, vax1_mac, 6);
+	f.addr.cluster_group = LAB_CLUSTER_GROUP;
 	f.recv_ack = 0;
 	f.send_seq = 1;
 	f.incarnation = 1;
@@ -312,6 +323,7 @@ static void test_whole_frame_credit_byte_exact(void)
 	memcpy(c.addr.src_mac, vax1_mac, 6);
 	memcpy(c.addr.dst_logical, vax2_log, 6);
 	memcpy(c.addr.src_logical, vax1_mac, 6);
+	c.addr.cluster_group = LAB_CLUSTER_GROUP;
 	c.acked_seq = 2;
 	c.secondary_seq = 1;
 	/* abs 36 of the captured frame is 0x0001: VAX1's §4(i).B echo for the
@@ -338,6 +350,7 @@ static void test_credit_field_map(void)
 	memcpy(c.addr.src_mac, ovmx_mac, 6);
 	memcpy(c.addr.dst_logical, vax1_mac, 6);
 	memcpy(c.addr.src_logical, ovmx_logical, 6);
+	c.addr.cluster_group = LAB_CLUSTER_GROUP;
 	c.acked_seq = 7;
 	c.secondary_seq = 3;
 	c.incarnation = 6;
@@ -353,8 +366,8 @@ static void test_credit_field_map(void)
 		 "SCA length 0x0027 (total 41, GROUNDED)");
 	ct_check(memcmp(out + 16, vax1_mac, 6) == 0,
 		 "SCA dst-logical == peer_logical (abs 16)");
-	ct_check(le16(out + 22) == 0x0001,
-		 "connect flag == 0x0001 (abs 22, GROUNDED)");
+	ct_check(le16(out + 22) == LAB_CLUSTER_GROUP,
+		 "abs 22 == THIS cluster's group number, LE16 (rd vms-b34)");
 	ct_check(memcmp(out + 24, ovmx_logical, 6) == 0,
 		 "SCA src-logical == cluster-LOGICAL addr, NOT HW MAC (abs 24, vms-9f3)");
 	ct_check(memcmp(out + 24, ovmx_mac, 6) != 0,
@@ -393,6 +406,7 @@ static void test_incarnation_echo(void)
 	memcpy(f.addr.src_mac, ovmx_mac, 6);
 	memcpy(f.addr.dst_logical, vax1_mac, 6);
 	memcpy(f.addr.src_logical, ovmx_logical, 6);
+	f.addr.cluster_group = LAB_CLUSTER_GROUP;
 	f.scssystemid = 1030;
 	memcpy(f.node_name, "OVMX    ", 8);
 	f.config_round = 0;
@@ -466,6 +480,7 @@ static void test_live_timestamps_are_never_a_template(void)
 	memcpy(f.addr.src_mac, ovmx_mac, 6);
 	memcpy(f.addr.dst_logical, vax1_mac, 6);
 	memcpy(f.addr.src_logical, ovmx_logical, 6);
+	f.addr.cluster_group = LAB_CLUSTER_GROUP;
 	f.scssystemid = 1030;
 	memcpy(f.software_version, "OVMX V01", 8);
 	memcpy(f.node_name, "OVMX    ", 8);
@@ -524,6 +539,7 @@ static void test_seq_envelope_build_parse(void)
 	memcpy(e.addr.src_mac, ovmx_mac, 6);
 	memcpy(e.addr.dst_logical, vax1_mac, 6);
 	memcpy(e.addr.src_logical, ovmx_logical, 6);
+	e.addr.cluster_group = LAB_CLUSTER_GROUP;
 	e.msgtype = VMS_SCS_MT_MSG; /* 0x4b */
 	e.recv_ack = 5;
 	e.send_seq = 9;
@@ -604,6 +620,7 @@ static uint32_t poisoned_seq_frame(uint8_t *out, uint32_t cap, uint8_t msgtype)
 	memcpy(e.addr.src_mac, ovmx_mac, 6);
 	memcpy(e.addr.dst_logical, vax1_mac, 6);
 	memcpy(e.addr.src_logical, ovmx_logical, 6);
+	e.addr.cluster_group = LAB_CLUSTER_GROUP;
 	e.msgtype = msgtype;
 	if (vms_scs_seq_envelope_build(&e, out, cap, &written) != VMS_CODEC_OK)
 		return 0;
@@ -764,6 +781,7 @@ static void test_credit_return_carries_the_same_echo(void)
 	memcpy(c.addr.src_mac, ovmx_mac, 6);
 	memcpy(c.addr.dst_logical, vax1_mac, 6);
 	memcpy(c.addr.src_logical, ovmx_logical, 6);
+	c.addr.cluster_group = LAB_CLUSTER_GROUP;
 	c.acked_seq = 5u;
 	c.secondary_seq = 9u;
 	c.incarnation = 8u;

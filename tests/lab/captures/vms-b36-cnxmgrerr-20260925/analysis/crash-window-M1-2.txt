@@ -1,0 +1,23 @@
+
+=== last gasp: frame 2283, 08:00:2b:3d:83:23 announced departure ===
+  [  2265] -  0.328 s  OVMXB    -> 08:00:2b:3d:83:23 content=94   mtype30=0x4b  APPDATA        rem=dbf30008 loc=325a0051  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  2266] -  0.328 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2267] -  0.328 s  OVMXB    -> 08:00:2b:3d:83:23 content=58   mtype30=0x4b
+  [  2268] -  0.328 s  08:00:2b:3d:83:23 -> OVMXB    content=58   mtype30=0x5b
+  [  2269] -  0.328 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2270] -  0.328 s  OVMXB    -> 08:00:2b:3d:83:23 content=58   mtype30=0x4b
+  [  2271] -  0.327 s  08:00:2b:3d:83:23 -> OVMXB    content=62   mtype30=0x5b  DISCONNECT_REQ rem=325a0051 loc=dbf30008
+  [  2272] -  0.327 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2273] -  0.327 s  OVMXB    -> 08:00:2b:3d:83:23 content=58   mtype30=0x4b  DISCONNECT_RSP rem=dbf30008 loc=325a0051
+  [  2274] -  0.327 s  OVMXB    -> 08:00:2b:3d:83:23 content=62   mtype30=0x4b  DISCONNECT_REQ rem=dbf30008 loc=325a0051
+  [  2275] -  0.327 s  08:00:2b:3d:83:23 -> OVMXB    content=58   mtype30=0x5b  DISCONNECT_RSP rem=325a0051 loc=dbf30008
+  [  2276] -  0.327 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2277] -  0.001 s  08:00:2b:3d:83:23 -> OVMXB    content=110  mtype30=0x5b  CONNECT_REQ    rem=00000000 loc=dbf40008  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  2278] -  0.001 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2279] -  0.001 s  OVMXB    -> 08:00:2b:3d:83:23 content=66   mtype30=0x5b  CONNECT_RSP    rem=dbf40008 loc=00000000
+  [  2280] -  0.001 s  OVMXB    -> 08:00:2b:3d:83:23 content=110  mtype30=0x5b  ACCEPT_REQ     rem=dbf40008 loc=325a0052  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  2281] -  0.000 s  08:00:2b:3d:83:23 -> OVMXB    content=41   mtype30=0x48
+  [  2282] -  0.000 s  08:00:2b:3d:83:23 -> OVMXB    content=62   mtype30=0x5b  ACCEPT_RSP     rem=325a0052 loc=dbf40008
+  -- last frame each station sent before the gasp --
+     08:00:2b:3d:83:23  -  0.000 s  frame 2282  content=62   mtype30=0x5b  ACCEPT_RSP     rem=325a0052 loc=dbf40008
+     OVMXB     -  0.001 s  frame 2280  content=110  mtype30=0x5b  ACCEPT_REQ     rem=dbf40008 loc=325a0052  n1='VMS$VAXcluster' n2='VMS$VAXcluster'

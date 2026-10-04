@@ -1,0 +1,39 @@
+[07:35:01] goto https://openvmx.3dl.dev/demo/cluster/
+[07:35:01] boot C
+[07:40:01] boot B
+[07:45:01] boot A
+[07:50:01] phase 1: waiting for each executive to announce membership (no input)
+[07:50:01]   OVMXA: announced MEMBER
+[07:50:01]   OVMXB announced MEMBER: true
+[07:50:01] phase 2: logging in and reading each membership table
+[07:50:01]   OVMXA: reached Username:
+[07:51:00]   OVMXA: password offered but no DCL yet (offer 1); continuing
+[07:51:02]   OVMXA: at DCL (after 1 username offer)
+[07:51:02]   OVMXB: reached Username:
+[07:52:43]   OVMXB: password offered but no DCL yet (offer 4); continuing
+[07:52:45]   OVMXB: at DCL (after 4 username offers)
+[07:52:45]   VAXC: reached Username:
+[07:59:45]   VAXC: never reached DCL after 30 offers
+[07:59:45]     VAXC tail: "oposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  26-SEP-2026 08:07:49.95  %%%%%%%%%%%\n08:07:49.92 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[07:59:45] logged in: {"OVMXA":true,"OVMXB":true,"VAXC":false}
+[07:59:45]   VAXC: reached Username:
+[08:06:46]   VAXC: never reached DCL after 30 offers
+[08:06:46]     VAXC tail: "oposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  26-SEP-2026 08:07:49.95  %%%%%%%%%%%\n08:07:49.92 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[08:07:20] t=1484s members={"OVMXA":3,"OVMXB":3} vaxcTx=8623 alive=true allSee=true
+[08:07:20]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[08:07:20]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[08:07:20] *** CN=3 at t=1484s -- holding 660s
+[08:08:05]   VAXC: reached Username:
+[08:15:06]   VAXC: never reached DCL after 30 offers
+[08:15:06]     VAXC tail: "oposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  26-SEP-2026 08:07:49.95  %%%%%%%%%%%\n08:07:49.92 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[08:15:40] t=1984s members={"OVMXA":3,"OVMXB":3} vaxcTx=11945 alive=true allSee=true
+[08:15:40]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[08:15:40]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[08:16:25]   VAXC: reached Username:
+[08:23:25]   VAXC: never reached DCL after 30 offers
+[08:23:25]     VAXC tail: "oposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  26-SEP-2026 08:07:49.95  %%%%%%%%%%%\n08:07:49.92 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[08:23:59] t=2483s members={"OVMXA":3,"OVMXB":3} vaxcTx=15273 alive=true allSee=true
+[08:23:59]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[08:23:59]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[08:23:59] CN3_BROWSER_RESULT={"pass":true,"hold_s":999,"elapsed_s":2938,"announced":{"OVMXA":true,"OVMXB":true},"oracle":{"OVMXA":true,"OVMXB":true,"sda_rows":0},"bugchecks":{},"losses":{}}
+GRADER_EXIT=0

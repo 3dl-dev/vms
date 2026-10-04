@@ -63,6 +63,11 @@
  * virtual LAN is address bookkeeping only (sim_lan.c has no FSM behind a
  * port unless sim_node_attach bound one), never a simulated VAX. */
 static const uint8_t vax2_hw[6] = { 0x08, 0x00, 0x2b, 0x78, 0x56, 0xb9 };
+/* VAX1's own station address: where the captured VAX2 frames were DELIVERED
+ * (abs 0 of both specimens). The replayed node stands in VAX1's slot at the
+ * adapter too, because a real adapter passes up only frames for its own
+ * address (rd vms-6b1). */
+static const uint8_t vax1_hw[6] = { 0x08, 0x00, 0x2b, 0x4a, 0xb7, 0x15 };
 static const uint8_t group1[6]  = { 0xab, 0x00, 0x04, 0x01, 0x01, 0x01 };
 
 /* VAX1's SCSSYSTEMID, the slot the fixtures address (scs-start.spec: "pl46
@@ -122,6 +127,7 @@ static void run_start_phase_replay(void)
 	/* ---- one simulated OVMX node, standing in VAX1's address slot ---- */
 	sim_init(&s, 1u);
 	sim_node_cfg_default(&cfg, "OVMX", VAX1_SYSID, 0u);
+	memcpy(cfg.hw_mac, vax1_hw, 6);
 	node_idx = sim_add_node(&s, &cfg);
 	ct_check(node_idx == 0, "the OVMX node attaches to LAN port 0");
 
@@ -208,6 +214,7 @@ static void run_determinism_check(void)
 
 	sim_init(&s1, 42u);
 	sim_node_cfg_default(&cfg, "OVMX", VAX1_SYSID, 0u);
+	memcpy(cfg.hw_mac, vax1_hw, 6);
 	(void)sim_add_node(&s1, &cfg);
 	(void)sim_lan_add_port(&s1.lan, vax2_hw, group1);
 	(void)sim_boot_all(&s1);
@@ -215,6 +222,7 @@ static void run_determinism_check(void)
 
 	sim_init(&s2, 42u);
 	sim_node_cfg_default(&cfg, "OVMX", VAX1_SYSID, 0u);
+	memcpy(cfg.hw_mac, vax1_hw, 6);
 	(void)sim_add_node(&s2, &cfg);
 	(void)sim_lan_add_port(&s2.lan, vax2_hw, group1);
 	(void)sim_boot_all(&s2);

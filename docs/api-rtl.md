@@ -574,16 +574,30 @@ uint32_t lib$delete_file(const struct dsc$descriptor_s *filespec);
 
 ### Table-Driven Parser
 
-#### lib$tparse -- Table-Driven Parser
+#### lib$tparse / lib$table_parse -- Table-Driven Parser
 
 ```c
 uint32_t lib$tparse(void *tparse_block, const void *state_table,
                     const void *key_table);
 ```
 
-**Returns:** SS$_UNSUPPORTED
+A real table-driven finite-state parser (`src/libvms/rtl/lib_tparse.c`). Each
+state holds an ordered transition list; a transition matches the input against a
+literal character, a keyword (case-blind, optional abbreviation), a special
+token class (TPA$_ALPHA/DIGIT/SYMBOL/STRING/ANY/BLANK/EOS/DECIMAL/OCTAL/HEX/
+UIC/LAMBDA), or a recursive subexpression. On a match the engine records the
+token (`tpa$l_tokenptr`/`tpa$l_tokencnt`, and `tpa$l_number` for numeric
+classes), advances the input, stores the transition parameter in `tpa$l_param`,
+and calls the action routine (an even/failure return backtracks and tries the
+next transition). The grammar/key table layout is an OVMX design choice
+(`TPA_GRAMMAR`/`TPA_STATE`/`TPA_TRAN` in `tpadef.h`); the observable behavior
+matches LIB$TABLE_PARSE. MMK and the CLD/DCL toolchain drive their grammars
+through this routine.
 
-**Status:** Stub. Returns SS$_UNSUPPORTED without processing.
+**Returns:** SS$_NORMAL on parse success (state reaches TPA$_EXIT),
+LIB$_SYNTAXERR on parse failure.
+
+**Status:** Implemented (real FSM with backtracking).
 
 ---
 

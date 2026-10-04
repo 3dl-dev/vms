@@ -1,0 +1,6 @@
+iter 1/5: screenLen=7703 bar="pcjs cluster node — real product confirmed (disk unit DUA0: " net=["resp 200 2157","resp 200 7904","resp 200 58035101"]
+iter 2/5: screenLen=7703 bar="pcjs cluster node — real product confirmed (disk unit DUA0: " net=["resp 200 2157","resp 200 7904","resp 200 58035101"]
+iter 3/5: screenLen=7703 bar="pcjs cluster node — real product confirmed (disk unit DUA0: " net=["resp 200 2157","resp 200 7904","resp 200 58035101"]
+iter 4/5: screenLen=7703 bar="pcjs cluster node — real product confirmed (disk unit DUA0: " net=["resp 200 2157","resp 200 7904","resp 200 58035101"]
+iter 5/5: screenLen=7703 bar="pcjs cluster node — real product confirmed (disk unit DUA0: " net=["resp 200 2157","resp 200 7904","resp 200 58035101"]
+NODEB_FETCH={"n":5,"empty":0}

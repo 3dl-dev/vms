@@ -112,6 +112,7 @@ struct vms_mailbox {
     exec_list_head_t msgq;      /* struct vms_mbx_msg, FIFO */
     exec_list_head_t wrtattn;   /* struct vms_mbx_wrtattn_reg, write-attention ASTs */
     exec_cv_t read_wq;
+    exec_cv_t write_wq;         /* writers waiting for bufquo to free up (vms-d26f) */
     exec_lock_t lock;           /* guards everything above except `list` */
 };
 
@@ -193,6 +194,7 @@ static void mbx_free(struct vms_mailbox *mbx)
         exec_free(w);
     }
     exec_cv_destroy(&mbx->read_wq);
+    exec_cv_destroy(&mbx->write_wq);
     exec_lock_destroy(&mbx->lock);
     exec_free(mbx);
 }
@@ -384,6 +386,7 @@ long vms_ioctl_mbx_create(struct vms_proc *proc, unsigned long arg)
     exec_list_head_init(&mbx->msgq);
     exec_list_head_init(&mbx->wrtattn);
     exec_cv_init(&mbx->read_wq);
+    exec_cv_init(&mbx->write_wq);
     exec_lock_init(&mbx->lock);
 
     mbx->maxmsg = args.maxmsg ? args.maxmsg : VMS_MBX_DEFAULT_MAXMSG;
@@ -557,17 +560,48 @@ long vms_ioctl_mbx_write(struct vms_proc *proc, unsigned long arg)
     }
 
     exec_lock(&mbx->lock);
-    if (a->len > mbx->maxmsg || mbx->bufquo_used + a->len > mbx->bufquo) {
+    if (a->len > mbx->maxmsg) {
         exec_unlock(&mbx->lock);
         /*
-         * SS$_EXQUOTA for both "too big for this mailbox" and "no room
-         * left in it": real VMS's SS$_MBFULL is not yet oracle-pinned
-         * against any reference lab (see vms_internal.h's SS__EXQUOTA
-         * comment), so this reuses an already-pinned status rather than
-         * inventing one this tree cannot cite (CLAUDE.md Rule 8).
+         * SS$_EXQUOTA: this message can NEVER fit in this mailbox (its own
+         * per-message cap), no matter how much a reader drains -- a genuine,
+         * permanent error, unlike the transient "temporarily full" case
+         * below. Real VMS's SS$_MBFULL is not yet oracle-pinned against any
+         * reference lab (see vms_internal.h's SS__EXQUOTA comment), so this
+         * reuses an already-pinned status rather than inventing one this
+         * tree cannot cite (CLAUDE.md Rule 8).
          */
         a->status = SS__EXQUOTA;
         goto out_copy;
+    }
+    /*
+     * The mailbox is merely BUSY with other processes' unread messages
+     * (vms-d26f root cause). Per the VSI OpenVMS I/O User's Reference
+     * (Mailbox Driver), a WRITEVBLK that cannot be satisfied for lack of
+     * buffer quota is QUEUED until quota frees up -- it is not failed; only a
+     * message too big for the mailbox's own maxmsg (above) is an immediate
+     * error. BLOCK for room the same way vms_ioctl_mbx_read blocks for data
+     * (write_wq mirrors read_wq; a reader's dequeue broadcasts it), instead
+     * of failing the write outright as this used to.
+     *
+     * Before this fix ANY write that found the mailbox merely busy -- e.g. a
+     * driven DCL subprocess emitting output faster than its reader drained
+     * it -- failed SS$_EXQUOTA immediately. dcl_mbx.c's writer thread (the
+     * SYS$OUTPUT relay a persistent-DCL bind sets up) treated that failure as
+     * fatal and gave up relaying output for the rest of the subprocess's
+     * life: a real deadlock in MMK's driven builds (test_syssvc_mmk_build's
+     * "pristine run" flake, vms-d26f), not a timing flake in the test.
+     */
+    while (mbx->bufquo_used + a->len > mbx->bufquo) {
+        if (exec_cv_wait(&mbx->write_wq, &mbx->lock)) {
+            /* Interrupted with the mailbox still full: no status written,
+             * same WAIT-facility contract vms_ioctl_mbx_read documents above
+             * (no "your write was interrupted" VMS condition exists) --
+             * libvmssys' vms_kif_mbx_write re-enters the wait. */
+            exec_unlock(&mbx->lock);
+            ret = -ERESTARTSYS;
+            goto out_free;
+        }
     }
     mbx->bufquo_used += a->len;
     exec_unlock(&mbx->lock);
@@ -750,6 +784,12 @@ long vms_ioctl_mbx_read(struct vms_proc *proc, unsigned long arg)
             goto out_free;
         }
     }
+    /* A message left the queue and its bytes were released from bufquo_used
+     * (vms-d26f): wake any writer waiting for room in vms_ioctl_mbx_write's
+     * write_wq, under the same lock the waiter holds across exec_cv_wait so
+     * the wake is never lost (the read_wq contract this file's header already
+     * documents, mirrored for the write side). */
+    exec_cv_broadcast(&mbx->write_wq);
     exec_unlock(&mbx->lock);
 
     n = m->len;

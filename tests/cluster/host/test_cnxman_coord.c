@@ -35,6 +35,7 @@
 #include <string.h>
 
 #include "cluster_test.h"
+#include "cluster_fixture.h"
 #include "cnxman_fake_ops.h"
 
 #include "vms_cluster.h"
@@ -159,7 +160,7 @@ static void bed_record_link(struct vms_cm_link *l)
 	memcpy(l->hdr.eth_src, smac, 6);
 	memcpy(l->hdr.dst_lavc, dmac, 6);
 	memcpy(l->hdr.src_lavc, smac, 6);
-	l->hdr.connect_flag = 0x0001;
+	l->hdr.cluster_group = 0x0001;
 	l->recv_ack = 0x0007;
 	l->send_seq = 0x0009;
 	l->remote_conid = 0x62c50009u;
@@ -258,10 +259,34 @@ static void bed_seed_dialogue(struct vms_csb *csb)
 	csb->cm_token = 0x07f5u;   /* nothing like a step or member ordinal */
 }
 
+/*
+ * WHAT THE PORT TELLS THE CLUB ABOUT A PEER (rd vms-1ac).
+ *
+ * On a live node cnxman_sync_peer_swver() copies each peer's advertised
+ * software-version token from the port onto its CSB before any CM frame is
+ * routed, and cnxman_csb_set_swver() derives `peer_is_ours` from it. Every
+ * system in THIS bed is another OVMX node, so every one of them advertises
+ * this node's own token. A bed that skipped it would model a cluster of
+ * systems that have advertised NOTHING -- which the coordinator's
+ * grounded-open gate refuses, because the class-0x02 open this executive can
+ * build is not byte-faithful for a connection manager that is not this one.
+ */
+#define BED_SWVER "OVMXV07\0"
+
+static void bed_prove_ours(struct vms_csb *csb)
+{
+	cnxman_csb_set_swver(csb, (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u),
+			     (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u));
+}
+
 static struct vms_csb *bed_member(vms_scs_sysid_t sysid, const char *name,
 				  vms_csid_t csid)
 {
 	struct vms_csb *csb = cnxman_club_alloc_csb(&g.cl.club, sysid, 1);
+
+	bed_prove_ours(csb);
 
 	cnxman_csb_set_scsnode(csb, (const uint8_t *)name, (uint8_t)strlen(name));
 	cnxman_csb_set_csid(csb, csid);
@@ -288,6 +313,8 @@ static void bed_init(uint32_t n_members)
 
 	memcpy(g.cl.params.scsnode, "OVMX01", 6);
 	g.cl.params.scsnode_len = 6;
+	memcpy(g.cl.params.sw_version, BED_SWVER, sizeof(BED_SWVER) - 1u);
+	g.cl.params.sw_version_len = (uint8_t)(sizeof(BED_SWVER) - 1u);
 	/*
 	 * REAL SCSSYSTEMIDs, CONSISTENT WITH THIS BED'S OWN CSIDs (rd vms-3a7c).
 	 *
@@ -321,6 +348,7 @@ static void bed_init(uint32_t n_members)
 	/* the joiner: a real CSB, no CSID, not selected -- but a real
 	 * connection (and so real dialogue state) all the same. */
 	joiner = cnxman_club_alloc_csb(&g.cl.club, 1028ull, 1);  /* JOIN_SLOT 4 */
+	bed_prove_ours(joiner);
 	bed_seed_dialogue(joiner);
 
 	g.rb_ops.outstanding = bed_rebuild_outstanding;
@@ -372,7 +400,7 @@ static uint32_t mk_frame(uint8_t *f, uint8_t cat, uint8_t op)
 	memcpy(l.hdr.eth_src, smac, 6);
 	memcpy(l.hdr.dst_lavc, dmac, 6);
 	memcpy(l.hdr.src_lavc, smac, 6);
-	l.hdr.connect_flag = 0x0001;
+	l.hdr.cluster_group = 0x0001;
 	l.recv_ack = 0x0011;
 	l.send_seq = 0x0012;
 	l.remote_conid = 0x33580008u;
@@ -1217,7 +1245,7 @@ static void test_remove_class(void)
 	uint8_t f[VMS_CM_FRAME_LEN];
 	uint32_t n, step, i;
 
-	printf("\n-- a class-0x03 removal: op 0x08, no nodemap, same 12 steps --\n");
+	printf("\n-- a class-0x03 removal: op 0x08, the kept members' nodemap, same 12 steps --\n");
 	bed_init(2);
 
 	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
@@ -1234,8 +1262,12 @@ static void test_remove_class(void)
 	s = nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM, 0);
 	ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_CLASS), VMS_CM_CLASS_REMOVE,
 			"class 0x03: tag 0x0340");
-	ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_BITMAP), 0,
-			"and NO nodemap (spec sec 4(p))");
+	/* rd vms-af4: a real coordinator's op 0x08 names the members the
+	 * removal KEEPS at body[55] (spec sec 4(p).R) -- here VAX1 (slot 1)
+	 * and this node (slot 3), never VAX2 (slot 2): 0x0a, the e88-A2
+	 * specimen's own byte for the same shape. */
+	ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_BITMAP), 0x0a,
+			"and the nodemap of the members it keeps (spec sec 4(p).R)");
 
 	n = mk_response(f, VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM);
 	(void)coord_feed(&g.c, f, n, CSB_VAX1);
@@ -1257,6 +1289,131 @@ static void test_remove_class(void)
 	i = count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_BARRIER_REL);
 	ct_check_eq_u32(i, 12, "12 x (M-1) with M=2: twelve releases");
 	ct_check(g.c.state == (uint8_t)CNXMAN_COORD_COMPLETE, "completed");
+}
+
+/*
+ * rd vms-b36: NOTHING IS PROPOSED TO REMOVE A SYSTEM THE CLUSTER NEVER ADMITTED.
+ *
+ * The bed's joiner is exactly the real shape: a real CSB, a real connection,
+ * real dialogue state -- and p. 7-49's SELECTED clear, because no transition
+ * ever committed it. When that system's reconnect window expires, p. 7-30 has
+ * nothing to reconfigure away.
+ *
+ * WHY IT IS HERE AS WELL AS IN test_cnxman_csb.c: the CSB ladder and this
+ * coordinator are two different entry points, and both the close path and the
+ * once-a-second beat reach the coordinator through
+ * cnxman_coord_propose_remove(). This is the funnel, so this is where the gate
+ * has to hold for a caller that has not asked the ladder first.
+ *
+ * WHAT IT COST: a real OpenVMS VAX V7.3 took a fatal CNXMGRERR bugcheck 0.6 s
+ * after it had abandoned that very system's admission.
+ */
+static void test_never_admitted_is_never_removed(void)
+{
+	printf("\n-- rd vms-b36: no removal transition for a system the "
+	       "cluster never admitted --\n");
+	bed_init(2);
+
+	ct_check((cnxman_club_csb_at(&g.cl.club, bed_join_csb(2))->flags &
+		  VMS_CSB_F_SELECTED) == 0u,
+		 "the subject really is unadmitted (p. 7-49 SELECTED clear)");
+	ct_check(cnxman_coord_propose_remove(&g.c, bed_join_csb(2)) ==
+		 CNXMAN_COORD_REFUSE,
+		 "the proposal is REFUSED, not driven");
+	ct_check_eq_u32(g.c.last_refusal,
+			(uint32_t)CNXMAN_COORD_REF_NOT_ADMITTED,
+			"...and named NOT_ADMITTED");
+	ct_check_eq_u32(g.c.not_admitted, 1,
+			"...and counted, so a run can prove the gate ran");
+	ct_check_eq_u32(g.n_sent, 0,
+			"NOTHING went on the wire -- no op 0x08, no GO, "
+			"no barrier step");
+	ct_check_eq_u32(g.cl.club.transition_active, 0,
+			"and no transition was opened");
+
+	/* POSITIVE CONTROL, same bed, same call: a COMMITTED member still
+	 * drives p. 7-30's reconfiguration, so this gate is about membership
+	 * and not about departures. */
+	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
+		 CNXMAN_COORD_DRIVE,
+		 "CONTROL: a MEMBER is still removed by the first detector");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM), 1,
+			"...with its one op 0x08");
+}
+
+/*
+ * rd vms-0f9: THE REMOVAL'S OPEN IS GATED TOO.
+ *
+ * MEASURED on the jittered three-node rig (arm V2-1): OVMXA, a committed
+ * member, lost its connection to OVMXB, its p. 7-30 window expired, and it
+ * proposed the removal -- correctly -- to a cluster containing a real
+ * OpenVMS VAX V7.3. Its op-0x08 carried the class tag and then 44 zero bytes
+ * where a real coordinator writes two VMS absolute-time quadwords and four
+ * more longwords, and the VAX put its last-gasp datagram on the multicast in
+ * the same millisecond.
+ *
+ * The gate already existed for the class-0x02 admission and said exactly this
+ * in its own comment. This is the other class asking the same question.
+ *
+ * THE CONTROL IS THE POINT: with every survivor proved to run this
+ * implementation, the removal still drives. The gate is about who has to ACT
+ * on the open, not about departures.
+ */
+static void test_0f9_a_removal_is_not_opened_for_a_foreign_cm(void)
+{
+	struct vms_csb *foreign;
+
+	printf("\n-- rd vms-0f9: no class-0x03 open toward a connection "
+	       "manager this one cannot build for --\n");
+	bed_init(2);
+
+	/* CONTROL first: everyone runs this implementation, so it drives. */
+	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
+		 CNXMAN_COORD_DRIVE,
+		 "CONTROL: with every survivor proved ours, the removal is "
+		 "driven");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_XITION_REM), 1,
+			"...with its one op 0x08");
+
+	/* Now a survivor that has NOT proved it runs this implementation. */
+	bed_init(2);
+	foreign = cnxman_club_csb_at(&g.cl.club, CSB_VAX1);
+	ct_check(foreign != NULL, "the survivor has a block");
+	cnxman_csb_set_swver(foreign, (const uint8_t *)0, 0u,
+			     (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u));
+	ct_check_eq_u32(foreign->peer_is_ours, 0,
+			"...and it has advertised nothing, which is not proof");
+
+	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
+		 CNXMAN_COORD_REFUSE,
+		 "the removal is REFUSED, not driven");
+	ct_check_eq_u32(g.c.last_refusal,
+			(uint32_t)CNXMAN_COORD_REF_OPEN_UNGROUNDED,
+			"...and named OPEN_UNGROUNDED");
+	ct_check_eq_u32(g.c.open_ungrounded, 1,
+			"...and counted, so the gap is visible without a "
+			"capture");
+	ct_check_eq_u32(g.n_sent, 0,
+			"NOTHING went on the wire -- above all no op 0x08 this "
+			"node cannot build faithfully");
+	ct_check_eq_u32(g.cl.club.transition_active, 0,
+			"and no transition was opened");
+
+	/*
+	 * ...AND THE DEPARTING SYSTEM ITSELF IS NOT ASKED TO ACT ON IT. A
+	 * removal's census excludes the subject (spec sec 4(r)), so a subject
+	 * that never proved anything does not block the survivors' removal of
+	 * it -- which is the ONLY case that matters on a mixed cluster.
+	 */
+	bed_init(2);
+	foreign = cnxman_club_csb_at(&g.cl.club, CSB_VAX2);
+	cnxman_csb_set_swver(foreign, (const uint8_t *)0, 0u,
+			     (const uint8_t *)BED_SWVER,
+			     (uint8_t)(sizeof(BED_SWVER) - 1u));
+	ct_check(cnxman_coord_propose_remove(&g.c, CSB_VAX2) ==
+		 CNXMAN_COORD_DRIVE,
+		 "the SUBJECT's own foreignness does not block its removal");
 }
 
 static void test_removing_the_last_peer_completes_locally(void)
@@ -1708,6 +1865,270 @@ static void test_names(void)
 		 "backoff");
 }
 
+/* The FSM's own "is a transition running" question, asked the way the header
+ * exports it rather than by reading `state` here. */
+static int coord_is_active_for_test(const struct cnxman_coord *c)
+{
+	return c->state == (uint8_t)CNXMAN_COORD_RELAY ||
+	       c->state == (uint8_t)CNXMAN_COORD_COMMIT ||
+	       c->state == (uint8_t)CNXMAN_COORD_OPEN ||
+	       c->state == (uint8_t)CNXMAN_COORD_BARRIER;
+}
+
+/* ==========================================================================
+ * rd vms-1ac: THE ADMISSION, AS A REAL NON-FOUNDER COORDINATOR RUNS IT
+ *
+ * All four tests below answer questions the wire settled, on evidence named in
+ * each: the epoch phasing and the membership record's epoch from
+ * `vax3-2to3-established-join-20260730.pcap` (a real OpenVMS VAX, SCSSYSTEMID
+ * 1026, admitting a third node into an established two-node cluster -- a
+ * NON-FOUNDER member coordinating, which is why that capture is the reference
+ * for this file), and the two admission gates from the corpus census and from
+ * a real V7.3 VAX's CNXMGRERR bugcheck.
+ * ========================================================================== */
+
+/* Ask this node to admit the joiner, as the glue does. */
+static void bed_ask_to_admit(uint32_t n_members)
+{
+	uint8_t f[VMS_CM_FRAME_LEN];
+	uint32_t n = mk_join_request(f);
+
+	(void)coord_feed(&g.c, f, n, bed_join_csb(n_members));
+}
+
+/*
+ * THE EPOCH ADVANCES AT THE COMMIT, NOT AT THE OPEN.
+ *
+ * Measured, VAX2 admitting VAX3 into {VAX1,VAX2}:
+ *   op 0x12 RELAY  epoch 3  <- the epoch the cluster IS at
+ *   op 0x03 COMMIT epoch 4  <- the epoch it is going to
+ *   op 0x05/0x09/0x0a  epoch 4
+ * and corpus-wide 133/133 relay->commit pairs advance by exactly one, never
+ * zero. OVMX used to advance before the relay, so it relayed at N+1 -- and
+ * then counted the member's honest answer, which carries the member's OWN
+ * epoch N, as an `epoch_mismatch`.
+ */
+static void test_1ac_relay_carries_the_current_epoch(void)
+{
+	const struct sent_frame *relay;
+	const struct sent_frame *commit;
+
+	printf("\n-- rd vms-1ac: the relay is at the CURRENT epoch, the commit "
+	       "one past it --\n");
+	bed_init(2);
+	bed_ask_to_admit(2);
+
+	relay = nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY, 0);
+	if (relay == NULL) {
+		ct_check(0, "a relay went out");
+		return;
+	}
+	ct_check_eq_u32(sent_le32(relay, VMS_OFF_CM_EPOCH), START_EPOCH,
+			"op-0x12 RELAY carries the epoch the cluster is at");
+	ct_check_eq_u32(g.cl.club.epoch, START_EPOCH,
+			"...and the CLUB has not moved yet either");
+
+	drive_relay_acks(2);
+	commit = nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, 0);
+	if (commit == NULL) {
+		ct_check(0, "a commit went out");
+		return;
+	}
+	ct_check_eq_u32(sent_le32(commit, VMS_OFF_CM_EPOCH), START_EPOCH + 1u,
+			"op-0x03 COMMIT carries exactly one past it");
+	ct_check_eq_u32(g.cl.club.epoch, START_EPOCH + 1u,
+			"...and NOW the CLUB holds the new epoch");
+	ct_check_eq_u32(g.c.epoch_mismatch, 0u,
+			"and the members' answers, which carry THEIR epoch, "
+			"were never counted as a mismatch");
+}
+
+/*
+ * EVERY op-0x05 MEMBERSHIP RECORD CARRIES ITS TRANSITION'S EPOCH.
+ *
+ * `cm-membrec-oracle.spec` is one of the real ones: body[12:16] = 4, the
+ * relay's 3 plus one. OVMX left that field zero on every record it ever sent,
+ * and a real OpenVMS VAX V7.3 bugchecked CNXMGRERR when handed membership
+ * records for a transition it could not place.
+ */
+static void test_1ac_membership_records_carry_the_epoch(void)
+{
+	struct vms_fixture oracle;
+	char path[600], err[256];
+	uint32_t i, n;
+
+	printf("\n-- rd vms-1ac: op-0x05 records carry the transition epoch "
+	       "(vs a real VAX's own record) --\n");
+
+	snprintf(path, sizeof(path), "%s/cm-membrec-oracle.spec",
+		 OVMX_FIXTURE_DIR);
+	err[0] = '\0';
+	if (vms_fixture_load(path, OVMX_CLEANROOM_MANIFEST, &oracle, err,
+			     sizeof(err)) != 0) {
+		printf("  FAIL could not load %s: %s\n", path, err);
+		ct_check(0, "the oracle membership record loads");
+		return;
+	}
+	ct_check(oracle.origin == VMS_FIXTURE_ORIGIN_CAPTURE,
+		 "the reference record is a REAL CAPTURE, not composed");
+
+	bed_init(2);
+	bed_ask_to_admit(2);
+	drive_relay_acks(2);
+	drive_commit_ack(2);
+
+	n = count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC);
+	ct_check(n > 0u, "membership records went out");
+	for (i = 0; i < n; i++) {
+		const struct sent_frame *s =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, i);
+
+		if (sent_le32(s, VMS_OFF_CM_EPOCH) == START_EPOCH + 1u)
+			continue;
+		printf("  record %u carries epoch %u, want %u\n", i,
+		       sent_le32(s, VMS_OFF_CM_EPOCH), START_EPOCH + 1u);
+		break;
+	}
+	ct_check(i == n,
+		 "EVERY op-0x05 record carries the transition's epoch -- the "
+		 "field OVMX used to leave at zero");
+	{
+		const struct sent_frame *s =
+			nth_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_MEMBREC, 0);
+		const uint8_t *o = oracle.bytes;
+
+		/* The real record's own field, read out of the capture rather
+		 * than restated here, so this cannot drift from the oracle. */
+		ct_check(o[VMS_OFF_CM_EPOCH] != 0u ||
+			 o[VMS_OFF_CM_EPOCH + 1] != 0u,
+			 "  (the real VAX's record really does carry a "
+			 "non-zero epoch there)");
+		ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_ROLE),
+				o[VMS_OFF_CM_ROLE],
+				"  body[16] role slot matches the real record");
+		ct_check_eq_u32(sent_u8(s, VMS_OFF_CM_CLASS),
+				o[VMS_OFF_CM_CLASS],
+				"  body[17] class matches the real record");
+	}
+}
+
+/*
+ * GATE 1 -- A MEMBER THAT IS NOT THE SELECTED COORDINATOR SILENTLY DISCARDS.
+ *
+ * Spec §4(p), byte-verified on `d94-e15`: all three members received a
+ * BYTE-IDENTICAL op-0x02 inside 400 ms; two answered only a cat-0x04 ack and
+ * did nothing further. The observable that survives every specimen is the one
+ * §4(p) names for the joiner's side -- the highest DECnet node number,
+ * confounded with the highest SCSSYSTEMID. Census over both reference capture
+ * trees: 107 of 113 ADD admissions were driven by the highest-SCSSYSTEMID live
+ * member, and all six exceptions are captures in which the higher-numbered
+ * "member" is an OVMX strawman node.
+ *
+ * The bed's own topology is the `d94-e15` one: this node is 1027, the members
+ * are 1025 and 1026, so it IS the selected one and drives (every other test in
+ * this file depends on that). Here one member is given a HIGHER SCSSYSTEMID
+ * and the verdict must flip.
+ */
+static void test_1ac_an_outranked_member_discards_silently(void)
+{
+	struct vms_csb *vax2;
+	uint32_t logs_before;
+
+	printf("\n-- rd vms-1ac: a member another member outranks discards the "
+	       "op-0x02, silently --\n");
+	bed_init(2);
+
+	/* CONTROL first: as the bed stands, this node is the highest member
+	 * and really does drive. */
+	bed_ask_to_admit(2);
+	ct_check(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY) > 0u,
+		 "CONTROL: the highest member drives the admission");
+	ct_check_eq_u32(g.c.not_selected, 0u, "...and counts no refusal");
+
+	/* Now the same request at a node another member outranks. */
+	bed_init(2);
+	vax2 = cnxman_club_csb_at(&g.cl.club, (uint32_t)CSB_VAX2);
+	if (vax2 == NULL) {
+		ct_check(0, "the bed has a second member");
+		return;
+	}
+	vax2->sysid = (vms_scs_sysid_t)(g.cl.params.scssystemid + 1u);
+	logs_before = g.fake.logs;
+
+	bed_ask_to_admit(2);
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY), 0u,
+			"NOT the selected coordinator: no relay");
+	ct_check_eq_u32(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT), 0u,
+			"...no commit");
+	ct_check_eq_u32(g.n_sent, 0u,
+			"...and not one frame of any kind: the op-0x02 is "
+			"DISCARDED, which is what a real non-coordinator does");
+	ct_check_eq_u32(g.c.not_selected, 1u, "the discard is COUNTED");
+	ct_check_eq_u32(g.c.last_refusal,
+			(uint32_t)CNXMAN_COORD_REF_NOT_SELECTED,
+			"...and named");
+	ct_check_eq_u32(g.fake.logs, logs_before,
+			"SILENTLY: not one console line, because a joiner that "
+			"retries would otherwise print one per retry");
+	ct_check(!coord_is_active_for_test(&g.c),
+		 "and no transition was opened");
+}
+
+/*
+ * GATE 2 -- THIS NODE DOES NOT OPEN A TRANSITION IT CANNOT BUILD.
+ *
+ * A real coordinator's op-0x09 carries 28 bytes this executive has no
+ * derivation for (body[20:28], body[32:40], body[40:48] -- measured on the
+ * same vax3-2to3 capture). Zeros there are harmless between two nodes running
+ * this implementation, which read them with the same codec; sent to a real
+ * OpenVMS connection manager they are a transition asserted in a shape it did
+ * not write, and that is the frame after which a real VAX V7.3 bugchecked
+ * CNXMGRERR and rebooted. So the admission is refused -- out loud, and
+ * counted, because a stranded joiner is a named gap and not a resting state.
+ */
+static void test_1ac_no_open_for_a_system_that_is_not_ours(void)
+{
+	struct vms_csb *joiner;
+
+	printf("\n-- rd vms-1ac: no class-0x02 open toward a connection "
+	       "manager this one cannot build for --\n");
+
+	/* CONTROL: every system proved ours, and the admission runs. */
+	bed_init(2);
+	bed_ask_to_admit(2);
+	ct_check(count_sent(VMS_CM_CAT_CONFIG, VMS_CM_OP_RELAY) > 0u,
+		 "CONTROL: all systems run this implementation; it drives");
+	ct_check_eq_u32(g.c.open_ungrounded, 0u, "...refusing nothing");
+
+	/* The joiner advertises a version that is not ours -- exactly what a
+	 * real OpenVMS VAX does. */
+	bed_init(2);
+	joiner = cnxman_club_csb_at(&g.cl.club, (uint32_t)bed_join_csb(2));
+	if (joiner == NULL) {
+		ct_check(0, "the bed has a joiner");
+		return;
+	}
+	cnxman_csb_set_swver(joiner, (const uint8_t *)"VAXVMS73", 8,
+			     g.cl.params.sw_version,
+			     g.cl.params.sw_version_len);
+	ct_check_eq_u32(joiner->peer_is_ours, 0u,
+			"the joiner has NOT proved it runs this "
+			"implementation");
+
+	bed_ask_to_admit(2);
+	ct_check_eq_u32(g.n_sent, 0u,
+			"nothing is originated: no relay, no commit, and above "
+			"all no op-0x09 this node cannot build faithfully");
+	ct_check_eq_u32(g.c.open_ungrounded, 1u, "the refusal is COUNTED");
+	ct_check_eq_u32(g.c.last_refusal,
+			(uint32_t)CNXMAN_COORD_REF_OPEN_UNGROUNDED,
+			"...and named");
+	ct_check(strstr(g.fake.last_log, "not grounded for it") != NULL,
+		 "...and SAID, because a stranded admission is a gap to close");
+	ct_check(!coord_is_active_for_test(&g.c),
+		 "and no transition was opened");
+}
+
 int main(void)
 {
 	test_nobody_asks_nothing_happens();
@@ -1745,6 +2166,8 @@ int main(void)
 	test_lost_participant_in_the_barrier_does_not_strand_it();
 
 	test_remove_class();
+	test_never_admitted_is_never_removed();
+	test_0f9_a_removal_is_not_opened_for_a_foreign_cm();
 	test_removing_the_last_peer_completes_locally();
 
 	test_no_link_originates_nothing();
@@ -1759,5 +2182,10 @@ int main(void)
 	test_transition_readback();
 	test_two_transitions_back_to_back();
 	test_names();
+	test_1ac_relay_carries_the_current_epoch();
+	test_1ac_membership_records_carry_the_epoch();
+	test_1ac_an_outranked_member_discards_silently();
+	test_1ac_no_open_for_a_system_that_is_not_ours();
+
 	return ct_summary("test_cnxman_coord");
 }

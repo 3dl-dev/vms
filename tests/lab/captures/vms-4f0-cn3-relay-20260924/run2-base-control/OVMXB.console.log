@@ -1,0 +1,289 @@
+[OVMXB] caps: CapPrm:	00000000a80415fb CapEff:	00000000a80415fb CapBnd:	00000000a80415fb 
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+2EFCAE00+2EF0AE00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [OVMXB] SYSBOOT> reached
+SET SCSNODE OVMXB
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXB
+SYSBOOT> SET SCSSYSTEMID 1988
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1988
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    24-SEP-2026 22:34:31.20
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   17.482607] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   17.489778] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 24-SEP-2026 22:34:32.38
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+[   18.333134] %PEA0, channel verified
+[   18.337833] %PEA0, virtual circuit open
+[   18.518019] %CNXMAN, a connection manager was discovered on the interconnect
+[   18.522522] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   18.581832] %CNXMAN, the cluster assigned this node a cluster system id
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+[   18.602287] %PEA0, peer announced departure, channel closed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: [   19.605409] %CNXMAN, waiting to form or join an OpenVMS Cluster
+SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-0"
+CN3-POLL-OVMXB-0
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:34:44
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-15"
+CN3-POLL-OVMXB-15
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:34:59
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
++---------------------------------------------------------------+
+$ [   49.726996] %PEA0, channel verified
+[   49.727670] %PEA0, virtual circuit open
+[   50.062404] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+WRITE SYS$OUTPUT "CN3-POLL-OVMXB-30"
+CN3-POLL-OVMXB-30
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:35:14
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-45"
+CN3-POLL-OVMXB-45
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:35:29
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-60"
+CN3-POLL-OVMXB-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:35:44
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-75"
+CN3-POLL-OVMXB-75
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:35:59
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-90"
+CN3-POLL-OVMXB-90
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:36:14
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-105"
+CN3-POLL-OVMXB-105
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:36:29
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-120"
+CN3-POLL-OVMXB-120
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:36:44
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-135"
+CN3-POLL-OVMXB-135
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:36:59
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-150"
+CN3-POLL-OVMXB-150
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:37:14
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-165"
+CN3-POLL-OVMXB-165
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:37:29
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-180"
+CN3-POLL-OVMXB-180
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:37:44
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-195"
+CN3-POLL-OVMXB-195
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:37:59
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-210"
+CN3-POLL-OVMXB-210
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:38:14
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXB-225"
+CN3-POLL-OVMXB-225
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    24-SEP-2026 22:38:29
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  | 00010003 | VMX V0.7        | LOCAL            |
+| 1987   | 00010002 |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ 

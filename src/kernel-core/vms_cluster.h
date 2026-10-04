@@ -153,7 +153,31 @@ struct vms_cluster_params {
 	uint8_t  alloclass;         /* ALLOCLASS, for $n$DUAn naming */
 	uint8_t  mscp_load;         /* MSCP_LOAD */
 	uint8_t  mscp_serve_all;    /* MSCP_SERVE_ALL */
-	uint8_t  pad1[3];
+
+	/*
+	 * OVMX_CLEAN_DEPART (rd vms-abd) -- the WIRE-VISIBLE KILL SWITCH for the
+	 * clean cluster departure. 1 (the default) = on a VMS_IOCTL_CLUSTER_STOP
+	 * this node announces its departure at the SCS layer, a symmetric
+	 * DISCONNECT_REQ per open connection, the way a real VMS node leaving
+	 * through SHUTDOWN.COM does. 0 = it does not, and the survivors fall back
+	 * on the PE last gasp and their own RECNXINTERVAL timers.
+	 *
+	 * IT IS NOT A PUBLISHED DEC SYSGEN PARAMETER and the name says so. VMS has
+	 * no such knob because VMS has no build without the behaviour; this exists
+	 * because the departure is a change to what OVMX puts on a live cluster's
+	 * wire, and every such change gets a switch that turns it off in the field
+	 * without a rebuild. Calling it CLEAN_DEPART would have implied a
+	 * parameter an operator could look up in the VMS documentation (INV-0).
+	 *
+	 * DEFAULT-ON IS THE ZERO-FILLED CASE, deliberately. The ioctl carries the
+	 * negation (`clean_depart_off`, vms_ioctl.h) so a caller that zero-fills
+	 * the args struct -- every existing one -- gets the FAITHFUL behaviour, and
+	 * only an operator who wrote OVMX_CLEAN_DEPART = 0 into OVMXVMSSYS.PAR gets
+	 * the other one. The executive stores the POSITIVE sense, because that is
+	 * what every reader here asks ("may I announce?").
+	 */
+	uint8_t  clean_depart;
+	uint8_t  pad1[2];
 
 	uint32_t niscs_max_pktsz;   /* clamped to the interface MTU by the port */
 
@@ -285,6 +309,29 @@ enum vms_cluster_state {
 #define VMS_CLUB_MAX_CSB 96
 
 /*
+ * How many "systems this node has given up on" records the CLUB carries
+ * (rd vms-0f9). Not VMS_CLUB_MAX_CSB: the set is not "every system in the
+ * cluster", it is "every system this node has given up on AND not yet seen
+ * re-incarnate", which empties itself. Sixteen is a storage bound and is
+ * labelled as one -- an overflow is COUNTED and the connect is ACCEPTED.
+ */
+#define VMS_CLUB_MAX_GIVEUP 16
+
+/*
+ * One give-up record: this node stopped dealing with system `sysid` while it
+ * was advertising incarnation `incarnation`. Both halves are required -- a
+ * record with no incarnation could not tell the old incarnation from the new
+ * one, which is the whole question -- so there is no "valid" flag for the
+ * incarnation separately from `in_use`.
+ */
+struct vms_club_giveup {
+	uint64_t        incarnation;
+	vms_scs_sysid_t sysid;
+	uint8_t         in_use;
+	uint8_t         pad0[7];
+};
+
+/*
  * One CSB: the connection manager's block for ONE system, local or remote.
  * Allocated by cnxman_club_alloc_csb() (vms_cnxman_csb.h) when a connection
  * manager is first discovered; the state machine there walks `state` through the
@@ -345,7 +392,15 @@ struct vms_csb {
 	 * connection and restarting this block's dialogue counters on it are the
 	 * same event (E77, see cm_dialogue_conid below). */
 	uint32_t cdt_conid;
-	uint64_t incarnation;       /* the peer's incarnation (spec SS4(i).B) */
+	/*
+	 * THE PEER'S INCARNATION (spec SS4(i).B / SS4(g) abs 80), copied from the
+	 * circuit's own formation body by cnxman_csb_set_incarnation() and by
+	 * nothing else. `incarnation_valid` 0 is the honest "no START/STACK has
+	 * arrived from that system yet" -- NOT "incarnation 0" (rd vms-0f9).
+	 */
+	uint64_t incarnation;
+	uint8_t  incarnation_valid;
+	uint8_t  pad5[7];
 	uint32_t last_status_ms;    /* ops.now_ms of the last CM message from it */
 
 	/*
@@ -358,13 +413,26 @@ struct vms_csb {
 	 */
 	uint32_t remote_port_secs;   /* the number the REMOTE CM supplies (p. 7-30) */
 	uint8_t  remote_port_valid;  /* 0 = not supplied; the local value stands alone */
-	uint8_t  pad3[3];
+	/* 1 while THIS break's reconnect CONNECT is out and has not ended --
+	 * set by CONNECT_SENT in [RECONNECT], and meaningful only there. */
+	uint8_t  attempt_in_flight;
+	uint8_t  pad3[2];
 	uint32_t lost_ms;            /* when connectivity was lost */
 	uint32_t deadline_ms;        /* lost_ms + the p. 7-30 reconnect period */
 	uint32_t next_attempt_ms;    /* the once-a-second beat's next due time */
 	uint32_t attempts;           /* reconnect attempts issued for this break */
 	uint32_t reconnects;         /* breaks this CSB recovered from */
 	uint32_t transitions_proposed; /* transitions THIS CSB's loss caused us to propose */
+	/*
+	 * ...and how many times this block's loss did NOT cause one because the
+	 * cluster had never admitted the system (rd vms-b36): SELECTED clear,
+	 * so p. 7-49 says there is no membership to reconfigure away. Counted
+	 * in the block, beside `transitions_proposed`, because "we gave up on a
+	 * system that was never in" and "we proposed its removal" are the two
+	 * outcomes of the same window expiring and the difference between them
+	 * is a peer bugcheck.
+	 */
+	uint32_t removals_withheld;
 	/*
 	 * How many of this CSB's own connect attempts the remote connection
 	 * manager REJECTED (book p. 2-25 / correction D12: the CMs identify
@@ -376,6 +444,40 @@ struct vms_csb {
 	 * that answered is the E81 crash-loop.
 	 */
 	uint32_t connect_rejects;
+
+	/*
+	 * ...and how many times the remote connection manager DISCONNECTED a
+	 * connection this pair had OPEN (rd vms-dfe; SCS_CLOSE_REMOTE, the
+	 * peer's own p. 2-27 DISCONNECT completing). The third diagnosis in the
+	 * same family: "the peer keeps saying no", "the peer keeps not
+	 * answering", and "the peer keeps hanging up on a connection it had".
+	 * A rising count with `reconnects` rising beside it is a node and a peer
+	 * disagreeing about whether the pair should be connected at all.
+	 */
+	uint32_t remote_disconnects;
+
+	/*
+	 * ...and how many once-a-second beats issued NO new attempt because this
+	 * block's previous one was still in flight (rd vms-1f40). "Waiting on an
+	 * answer" and "not trying" are different diagnoses, and a peer that
+	 * answers slower than the beat shows up here and nowhere else.
+	 */
+	uint32_t attempts_held;
+
+	/*
+	 * ---- TWO CONNECTIONS FOR ONE PAIR (rd vms-1f40) ----
+	 * When both ends re-dial at once, each accepts the other's CONNECT and
+	 * the pair briefly holds two VMS$VAXcluster connections; the real VAX
+	 * then disconnects one (measured 4/4 on the stall rig: it kept the one
+	 * THIS node initiated). `attempt_conid` is this node's own outstanding
+	 * reconnect CONNECT, remembered even after an accept re-binds
+	 * `cdt_conid`; `alt_conid` is the pair's second OPEN connection. Both
+	 * are 0 when there is nothing to remember.
+	 */
+	uint32_t attempt_conid;
+	uint32_t alt_conid;
+	uint32_t second_conns;       /* times the pair held two at once */
+	uint32_t second_promotions;  /* the peer closed one; this block moved on */
 
 	/*
 	 * ---- the SYSAP dialogue counters (design sec 3.2.4 ruling E1) ----
@@ -426,6 +528,50 @@ struct vms_csb {
 	 */
 	uint32_t cm_dialogue_conid;
 	uint32_t cm_dialogue_resets;
+	/*
+	 * ...AND HOW OFTEN IT WAS CARRIED INSTEAD (rd vms-8c54). A
+	 * re-establishment inside the p. 7-24 reconnect window, of a
+	 * connection to a system the cluster still holds at the same
+	 * incarnation, is the SAME conversation on a new pair: both real
+	 * OpenVMS VAX V7.3 nodes in the vms-8c54 oracle continued their
+	 * send-msg# across exactly that. Counted separately from the resets
+	 * above so the two cases are never confused in a readback --
+	 * carrying one where a reset was due is the E76/E77 crash, and this
+	 * is the number that says which happened.
+	 */
+	uint32_t cm_dialogues_carried;
+	/*
+	 * ...AND WHETHER THE NEXT FRAME FROM THAT PEER STILL OWES US ITS
+	 * POSITION (rd vms-1f40). Armed by cnxman_csb_bind_reconnect() and
+	 * taken by the first inbound envelope on the re-established
+	 * connection; `cm_resumes` counts the times that really moved the send
+	 * counter back, which is the number that says a hole was prevented.
+	 */
+	uint8_t  cm_resume_pending;
+	/*
+	 * ...AND WHETHER THIS SYSTEM IS NAMED IN A STATE TRANSITION THIS NODE
+	 * HAS ACKNOWLEDGED AND THAT HAS NOT YET ENDED (rd vms-eb3). Set at
+	 * p. 7-41's Phase 1 -- the coordinator's own block, and every block
+	 * the proposal's nodemap names -- and cleared when the transition
+	 * completes or is abandoned. It is the one fact that makes a lost
+	 * connection to that system a RE-ESTABLISHMENT before p. 7-42's
+	 * Phase 2 has set SELECTED: measured on a real V7.3 trio, a joiner
+	 * frozen between its Phase-1 answer and the GO re-established both
+	 * members with its dialogue carried, and the coordinator re-sent the
+	 * GO on the new connection (vms-eb3 oracle F5/F6).
+	 */
+	uint8_t  cm_phase1_named;
+	/*
+	 * ...AND WHETHER THE SYSTEM HAS COME BACK AS A NEW INCARNATION SINCE
+	 * THIS BLOCK'S DIALOGUE BEGAN (rd vms-eb3). p. 7-24 DEAD / p. 7-25: the
+	 * old incarnation's conversation died with it, and the new one is dealt
+	 * with "just as if it were joining the cluster for the first time". Set
+	 * when the circuit advertises an incarnation different from the one
+	 * this block recorded; cleared when a fresh dialogue is bound.
+	 */
+	uint8_t  cm_new_incarnation;
+	uint8_t  cm_resume_pad[1];
+	uint32_t cm_resumes;
 
 	/*
 	 * ---- what this node has ADVERTISED about ITSELF on the connection it
@@ -449,7 +595,27 @@ struct vms_csb {
 	 */
 	uint32_t cm_advert_conid;
 	uint8_t  cm_advert_sent;    /* CNXMAN_JOIN_B_* bits, per that Con.ID  */
-	uint8_t  pad4[3];
+	/*
+	 * ---- what this system has told US it is (rd vms-e88) ----
+	 *
+	 * `adv_members` is the cluster member count its latest op-0x01 PARAMS
+	 * carried at body[18:20] -- its own count if it is a member, 0 if it
+	 * belongs to no cluster -- and `adv_valid` 0 is the honest "no PARAMS
+	 * from it yet", never "0 members". A joiner reads the two to decide
+	 * WHOM it may ask for admission and WHEN (Davis p. 7-37, measured on
+	 * real V7.3 trios): only a system that says it is a member, and only
+	 * once it has connectivity with as many members as they say there are.
+	 */
+	uint8_t  adv_valid;
+	uint16_t adv_members;
+	/*
+	 * ...and the member count THIS node last put in a PARAMS on
+	 * `cm_advert_conid`, so a count that has changed since is said again
+	 * (a real member re-sends its PARAMS to a waiting joiner when a
+	 * transition changes it -- measured, e88 trio B).
+	 */
+	uint16_t cm_advert_members;
+	uint8_t  pad4[2];
 };
 
 /*
@@ -603,6 +769,15 @@ struct vms_club {
 	 */
 	uint32_t csb_ignored_events;
 
+	/*
+	 * OVMX instrumentation, not a VMS field (rd vms-dfe): CSBs this CLUB
+	 * DEALLOCATED because the connection manager had given up on them
+	 * (p. 7-25's "its old CSB is deallocated"). Nonzero means a system was
+	 * released back to discovery; the port decides whether a fresh block
+	 * appears for it. See cnxman_club_reclaim_abandoned().
+	 */
+	uint32_t csb_reclaimed;
+
 	/* ---- the DLM directory (FC-P4.3) ---- */
 
 	/*
@@ -634,6 +809,37 @@ struct vms_club {
 	 * the wrong offset. Both leave the vector INVALID rather than wrong.
 	 */
 	uint32_t ldwv_build_refused;
+
+	/*
+	 * ---- THE GIVE-UP LEDGER (rd vms-0f9) ----
+	 *
+	 * p. 7-24's DEAD state is "a new incarnation of a VAX system has been
+	 * seen; the CSB whose connection state is DEAD represents the OLD
+	 * incarnation" -- so the executive is expected to remember WHICH
+	 * incarnation of a system it has stopped dealing with, and to keep
+	 * remembering it until a different one shows up.
+	 *
+	 * That fact cannot live in the CSB, because p. 7-25 deallocates the
+	 * block and rebuilds it (rd vms-dfe, #1309) within a second of the
+	 * give-up. It lives here instead, beside the CSB table it outlives.
+	 *
+	 * WHAT IT IS FOR. A real OpenVMS connection manager answers REJECT_REQ
+	 * to an inbound VMS$VAXcluster connect for a relationship it has given
+	 * up on -- measured on three real V7.3 nodes in
+	 * tests/lab/captures/vms-b36-cnxmgrerr-20260925/ -- and ACCEPTS again
+	 * once the peer comes back as a new incarnation. Accepting instead is
+	 * what put a real VAX into CNXMGRERR 0.3 ms after the connection
+	 * completed.
+	 *
+	 * BOUNDED, AND HONEST WHEN IT OVERFLOWS. `giveup_overflow` counts the
+	 * records that did not fit; a system with no record is ACCEPTED, because
+	 * this node cannot prove it gave up on that incarnation and must not
+	 * refuse on a guess (INV-6).
+	 */
+	struct vms_club_giveup giveup[VMS_CLUB_MAX_GIVEUP];
+	uint32_t giveup_overflow;    /* records that did not fit -- accepted */
+	uint32_t giveup_armed;       /* records really written */
+	uint32_t giveup_cleared;     /* ...cleared by a NEW incarnation */
 
 	/* ---- the CSB table (Figure 7-4: all CSBs hang off the CLUB) ---- */
 	uint32_t       n_csb;        /* high-water: slots 0..n_csb-1 may be in use */

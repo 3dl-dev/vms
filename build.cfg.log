@@ -1,0 +1,26 @@
+-- The C compiler identification is GNU 13.3.0
+-- The ASM compiler identification is GNU
+-- Found assembler: /usr/bin/cc
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- libvmssys: building for x86_64 (freestanding)
+-- Performing Test OVMX_CLUSTER_FUZZ_SANITIZE_OK
+-- Performing Test OVMX_CLUSTER_FUZZ_SANITIZE_OK - Success
+-- Performing Test OVMX_NODESPEC_SANITIZE_OK
+-- Performing Test OVMX_NODESPEC_SANITIZE_OK - Success
+-- Performing Test OVMX_DAP_SANITIZE_OK
+-- Performing Test OVMX_DAP_SANITIZE_OK - Success
+-- Performing Test OVMX_TCPIP_FUZZ_SANITIZE_OK
+-- Performing Test OVMX_TCPIP_FUZZ_SANITIZE_OK - Success
+-- Performing Test OVMX_FILEOPS_SANITIZE_OK
+-- Performing Test OVMX_FILEOPS_SANITIZE_OK - Failed
+-- OVMX_LINK_NATIVE off (compiler target 'x86_64-linux-gnu' is not aarch64-musl or x86_64-musl) -- the VMS-native LINK.EXE shareable graph is not built for this configuration. Build inside an aarch64 or x86_64 musl toolchain to produce it (see above).
+-- Configuring done (0.8s)
+-- Generating done (0.8s)
+-- Build files have been written to: /tmp/vms-1f40/build

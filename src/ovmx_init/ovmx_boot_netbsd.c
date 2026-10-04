@@ -326,6 +326,13 @@ void ovmx_boot_mute_kernel_console(void)
 {
 }
 
+/* rd vms-553: not on the console; the identity is the kernel banner in dmesg
+ * (see ovmx_boot.h). */
+void ovmx_boot_announce_syskrnl(const char *banner)
+{
+    (void)banner;
+}
+
 /* ---- executive module load: loadable module(9) OR compiled-in kernel ----- */
 
 /*

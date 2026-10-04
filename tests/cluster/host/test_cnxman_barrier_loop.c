@@ -76,6 +76,11 @@ struct wire_msg {
 
 #define MAX_WIRE 512
 
+/* The software-version token both nodes of this OVMX<->OVMX loop advertise.
+ * Its VALUE is irrelevant -- what matters is that it is the SAME on both, so
+ * cnxman_csb_set_swver() derives peer_is_ours (rd vms-1ac). */
+#define OWN_SWVER "OVMXV07\0"
+
 struct node {
 	struct vms_cluster cl;
 	struct cnxman_ops  ops;
@@ -302,6 +307,19 @@ static void node_init(struct node *n, const char *name,
 	n->fake.now_ms = 100000u;
 	memcpy(n->cl.params.scsnode, name, strlen(name));
 	n->cl.params.scsnode_len = (uint8_t)strlen(name);
+	/*
+	 * BOTH NODES RUN THIS IMPLEMENTATION, AND SAY SO (rd vms-1ac). This
+	 * loop is OVMX<->OVMX, and on a live node the port's formation body
+	 * carries each peer's software-version token, which
+	 * cnxman_sync_peer_swver() copies onto the CSB before any CM frame is
+	 * routed. Without it the bed models a pair that has advertised NOTHING
+	 * -- which is exactly what the coordinator's grounded-open gate
+	 * refuses, and rightly: an op-0x09 this executive cannot build
+	 * byte-faithfully must not be sent to a connection manager that is not
+	 * this one.
+	 */
+	memcpy(n->cl.params.sw_version, OWN_SWVER, sizeof(OWN_SWVER) - 1u);
+	n->cl.params.sw_version_len = (uint8_t)(sizeof(OWN_SWVER) - 1u);
 	n->cl.params.scssystemid = sysid;
 	n->cl.params.vaxcluster = 2;
 	n->cl.params.votes = 1;
@@ -312,6 +330,17 @@ static void node_init(struct node *n, const char *name,
 /* A: an established single-member cluster that has just founded (epoch 1), with
  * a real CSB for the joiner carrying NO CSID -- assigning one is the
  * coordinator's job. */
+/* What cnxman_sync_peer_swver() does on a live node once the port has the
+ * peer's formation body: copy the advertised token onto the CSB and let the
+ * setter derive `peer_is_ours` from it. */
+static void bed_prove_ours(struct node *n, struct vms_csb *csb)
+{
+	cnxman_csb_set_swver(csb, n->cl.params.sw_version,
+			     n->cl.params.sw_version_len,
+			     n->cl.params.sw_version,
+			     n->cl.params.sw_version_len);
+}
+
 static void bed_init_a(void)
 {
 	struct vms_csb *local, *joiner;
@@ -329,6 +358,7 @@ static void bed_init_a(void)
 
 	joiner = cnxman_club_alloc_csb(&g.a.cl.club, B_SYSID, 1);
 	cnxman_csb_set_scsnode(joiner, (const uint8_t *)"OVMXB", 5);
+	bed_prove_ours(&g.a, joiner);
 	seed_dialogue(joiner);
 
 	cnxman_coord_init(&g.coord, &g.a.cl, &g.a.ops);
@@ -354,6 +384,7 @@ static void bed_init_b(void)
 	g.b.ops.respond = b_respond;
 
 	coord_csb = cnxman_club_alloc_csb(&g.b.cl.club, A_SYSID, 1);
+	bed_prove_ours(&g.b, coord_csb);
 	cnxman_csb_set_scsnode(coord_csb, (const uint8_t *)"OVMXA", 5);
 	cnxman_csb_set_csid(coord_csb, A_CSID);
 	cnxman_csb_set_flags(coord_csb, (uint16_t)(VMS_CSB_F_SELECTED |

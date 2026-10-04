@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """
-replay_ci_kernel_executive.py - run the ci.yml kernel-executive assertions
-VERBATIM against a captured harness run, without a GitHub runner.
+replay_ci_kernel_executive.py - run the ci-kernel-executive.yml
+kernel-executive assertions VERBATIM against a captured harness run, without
+a GitHub runner.
 
-WHY THIS EXISTS: .github/workflows/ci.yml only ever executes on push to main
-or on a PR against main, so the assertion logic in the kernel-executive and
+WHY THIS EXISTS: .github/workflows/ci-kernel-executive.yml (the
+kernel-executive / netbsd-amd64 domain file split out of the former
+monolithic ci.yml by vms-1af) only ever executes on push to main or on a PR
+against main, so the assertion logic in the kernel-executive and
 kernel-executive-negative-control jobs cannot be exercised while developing a
 branch -- and a previous round of vms-1d9 shipped assertion blocks whose
 weaknesses were only found later, by an adversary who re-derived them by hand.
@@ -12,10 +15,11 @@ Re-typing them by hand is exactly how a local "proof" drifts from what CI
 actually runs.
 
 This extracts the `run:` block of the named job's assertion step STRAIGHT OUT
-of .github/workflows/ci.yml, substitutes only the container invocation (the
-one line that must differ, since the run has already happened and is on disk),
-and executes the rest with bash. If the YAML and the local check ever
-disagree, this script is wrong by construction rather than silently stale.
+of .github/workflows/ci-kernel-executive.yml, substitutes only the container
+invocation (the one line that must differ, since the run has already happened
+and is on disk), and executes the rest with bash. If the YAML and the local
+check ever disagree, this script is wrong by construction rather than
+silently stale.
 
 Usage:
     tools/replay_ci_kernel_executive.py <positive|negative> <captured-output-file> [container-rc]
@@ -38,7 +42,7 @@ def extract_run_block(ci_yml: str, step_name: str) -> str:
         if line.strip() == f"- name: {step_name}":
             break
     else:
-        raise SystemExit(f"step not found in ci.yml: {step_name}")
+        raise SystemExit(f"step not found in ci-kernel-executive.yml: {step_name}")
 
     # Find the `run: |` that belongs to this step.
     for j in range(i + 1, len(lines)):
@@ -65,7 +69,7 @@ def main() -> int:
     rc = sys.argv[3] if len(sys.argv) > 3 else "0"
 
     repo = pathlib.Path(__file__).resolve().parent.parent
-    ci_yml = (repo / ".github/workflows/ci.yml").read_text()
+    ci_yml = (repo / ".github/workflows/ci-kernel-executive.yml").read_text()
     block = extract_run_block(ci_yml, JOBS[which])
 
     # The ONLY substitution: the container has already been run; read its
@@ -76,7 +80,7 @@ def main() -> int:
         block,
     )
     if "RAW=$(cat " not in block:
-        raise SystemExit("failed to substitute the docker-run line; ci.yml shape changed")
+        raise SystemExit("failed to substitute the docker-run line; ci-kernel-executive.yml shape changed")
 
     env = {"GITHUB_WORKSPACE": str(repo), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
     proc = subprocess.run(["bash", "-e", "-c", block], env=env)

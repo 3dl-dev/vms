@@ -86,7 +86,7 @@ static int code_composed_applmsg_specimen(uint8_t *frame, uint32_t cap,
 	memcpy(sca.eth_src, src, 6);
 	memcpy(sca.dst_lavc, dst, 6);
 	memcpy(sca.src_lavc, src, 6);
-	sca.connect_flag = 0x0001u;
+	sca.cluster_group = 0x0001u;
 	sca.sca_len_field = (uint16_t)(content - 2u);
 	sca.word30 = (uint16_t)((uint16_t)VMS_SCS_MT_MSG |
 				((uint16_t)VMS_SCS_FORMAT_V13 << 8));

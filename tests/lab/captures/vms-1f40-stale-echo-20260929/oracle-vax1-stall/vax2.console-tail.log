@@ -1,0 +1,68 @@
+lapsed time:     0 00:00:17.51
+%CNXMAN,  received VAXcluster membership request from system VAX3
+%CNXMAN,  proposing addition of system VAX3
+%CNXMAN,  completing VAXcluster state transition
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:18.61  %%%%%%%%%%%
+16:55:18.61 Node VAX2 (csid 00010002) received VAXcluster membership request from node VAX3
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:18.64  %%%%%%%%%%%
+16:55:18.61 Node VAX2 (csid 00010002) proposed addition of node VAX3
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:18.64  %%%%%%%%%%%
+16:55:18.62 Node VAX2 (csid 00010002) completed VAXcluster state transition
+
+%CNXMAN,  lost connection to system VAX3
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE VAX3           
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:29.48  %%%%%%%%%%%
+16:55:29.48 Node VAX2 (csid 00010002) lost connection to node VAX3
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:30.87  %%%%%%%%%%%    (from node VAX1   at 27-SEP-2026 16:55:30.65)
+16:55:30.65 Node VAX1 (csid 00010001) lost connection to node VAX3
+
+%CNXMAN,  timed-out lost connection to system VAX3
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:49.98  %%%%%%%%%%%
+16:55:49.98 Node VAX2 (csid 00010002) timed-out lost connection to node VAX3
+
+%CNXMAN,  removed from VAXcluster system VAX3
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:50.39  %%%%%%%%%%%
+16:55:50.39 Node VAX3 (csid 00010003) has been removed from the VAXcluster
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:50.39  %%%%%%%%%%%    (from node VAX1   at 27-SEP-2026 16:55:50.18)
+16:55:50.18 Node VAX1 (csid 00010001) timed-out lost connection to node VAX3
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:50.45  %%%%%%%%%%%    (from node VAX1   at 27-SEP-2026 16:55:50.22)
+16:55:50.18 Node VAX1 (csid 00010001) proposed reconfiguration of the VAXcluster
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 16:55:50.45  %%%%%%%%%%%    (from node VAX1   at 27-SEP-2026 16:55:50.28)
+16:55:50.18 Node VAX1 (csid 00010001) completed VAXcluster state transition
+
+%CNXMAN,  lost connection to system VAX1
+%CNXMAN,  re-established connection to system VAX1
+%%%%%%%%%%%  OPCOM  27-SEP-2026 18:09:36.15  %%%%%%%%%%%
+18:09:35.76 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 18:09:36.15  %%%%%%%%%%%
+18:09:36.08 Node VAX2 (csid 00010002) re-established connection to node VAX1
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 18:09:36.15  %%%%%%%%%%%    (from node VAX1   at 27-SEP-2026 18:09:31.74)
+18:09:31.74 Node VAX1 (csid 00010001) lost connection to node VAX2
+
+%%%%%%%%%%%  OPCOM  27-SEP-2026 18:09:36.15  %%%%%%%%%%%    (from node VAX1   at 27-SEP-2026 18:09:38.25)
+18:09:38.25 Node VAX1 (csid 00010001) re-established connection to node VAX2
+
+%CNXMAN,  lost connection to system VAX1
+%PEA0, Port has Closed Virtual Circuit - REMOTE NODE VAX1           
+
+%CNXMAN,  re-established connection to system VAX1
+%%%%%%%%%%%  OPCOM  28-SEP-2026 21:05:33.32  %%%%%%%%%%%
+21:05:30.71 Node VAX2 (csid 00010002) lost connection to node VAX1
+
+%%%%%%%%%%%  OPCOM  28-SEP-2026 21:05:33.33  %%%%%%%%%%%
+21:05:33.21 Node VAX2 (csid 00010002) re-established connection to node VAX1
+
+%%%%%%%%%%%  OPCOM  28-SEP-2026 21:05:33.34  %%%%%%%%%%%    (from node VAX1   at 28-SEP-2026 21:05:36.11)
+21:05:36.11 Node VAX1 (csid 00010001) lost connection to node VAX2
+
+%%%%%%%%%%%  OPCOM  28-SEP-2026 21:05:33.34  %%%%%%%%%%%    (from node VAX1   at 28-SEP-2026 21:05:36.47)
+21:05:36.47 Node VAX1 (csid 00010001) re-established connection to node VAX2

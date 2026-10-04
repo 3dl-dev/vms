@@ -59,7 +59,7 @@ static void mk_link(struct vms_mscp_link *l, uint16_t recv_ack,
 	memcpy(l->hdr.eth_src, eth_src, 6);
 	memcpy(l->hdr.dst_lavc, vax1_logical, 6);
 	memcpy(l->hdr.src_lavc, joiner_logical, 6);
-	l->hdr.connect_flag = 0x0001u; /* content[8:10], observed constant */
+	l->hdr.cluster_group = 0x0001u; /* content[8:10], observed constant */
 	l->recv_ack = recv_ack;
 	l->send_seq = send_seq;
 	l->credit = VMS_MSCP_ENV_CREDIT_OBSERVED;

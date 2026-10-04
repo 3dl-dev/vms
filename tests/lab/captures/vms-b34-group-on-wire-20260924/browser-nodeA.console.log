@@ -1,0 +1,58 @@
+
+%NIC-CFG, initramfs=initramfs-ovmx-nodeA.cpio.gz sysdisk=sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFD0EE0+0EF30EE0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    24-SEP-2026 17:12:05.34
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   39.071299] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   39.102474] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 24-SEP-2026 17:12:23.22
+[   41.627264] %PEA0, channel verified
+[   41.670649] %PEA0, virtual circuit open
+[   41.949672] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   42.164979] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   42.302241] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   42.315111] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   42.328621] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   42.405352] %CNXMAN, the cluster assigned this node a cluster system id
+[   42.436137] %CNXMAN, the cluster assigned this node a cluster system id
+[   42.479222] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   43.381032] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   43.692235] %CNXMAN, this node is a member of the cluster
+[   43.698155] %CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+[   43.734280] %CNXMAN, VAXcluster state transition in progress
+[   43.739395] %CNXMAN, this node is now a VAXcluster member
+[   43.745130] %CNXMAN, system 00000000000007c3 was added to the cluster
+[   43.752510] %CNXMAN, system 00000000000007c5 was added to the cluster
+[   45.001083] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+[   45.026143] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+[   45.081034] %CNXMAN, completed VAXcluster state transition
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: 

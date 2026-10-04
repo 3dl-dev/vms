@@ -1,0 +1,47 @@
+goto http://localhost:8130/cn2-stage1-driver.html?macA=52%3A54%3A00%3A00%3A00%3A0A&macD=52%3A54%3A00%3A00%3A00%3A0D&initramfsA=initramfs-nodeA-v151h.cpio.gz&sysdiskA=sysdisk-nodeA-v2.qcow2.gz&initramfsD=initramfs-nodeD-v151h.cpio.gz&sysdiskD=sysdisk-nodeD-v2.qcow2.gz
+boot triggered for both nodes
+t=5s A tx=0 rx=0 acp=false :: Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                                | Booting from ROM... | c[?7l[2J
+t=5s D tx=0 rx=0 acp=false :: Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                                | Booting from ROM... | c[?7l[2J
+t=30s A tx=0 rx=0 acp=false :: Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                                | Booting from ROM... | c[?7l[2J
+t=30s D tx=0 rx=0 acp=false :: Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                                | Booting from ROM... | c[?7l[2J
+t=35s A tx=0 rx=0 acp=true ::     23-SEP-2026 19:45:39.64 | %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=35s D tx=0 rx=0 acp=true ::     23-SEP-2026 19:45:39.23 | %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=60s A tx=0 rx=0 acp=true ::     23-SEP-2026 19:45:39.64 | %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=60s D tx=0 rx=0 acp=true ::     23-SEP-2026 19:45:39.23 | %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=65s A tx=52 rx=52 acp=true :: [   57.086213] %CNXMAN, a connection manager was discovered on the interconnect | [   57.102318] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name | [   57.812269] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition
+t=65s D tx=52 rx=52 acp=true :: d: answering with the registered name | [   57.948768] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one | [   57.975243] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+t=70s A tx=62 rx=62 acp=true :: [   57.812269] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition | [   58.364049] %CNXMAN, waiting to form or join an OpenVMS Cluster | %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+t=70s D tx=62 rx=62 acp=true :: [   57.975243] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member | [   59.072203] %CNXMAN, waiting to form or join an OpenVMS Cluster | %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+t=75s A tx=68 rx=68 acp=true :: membership request to the selected member not answered | [   63.502064] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again | [   64.378985] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+t=75s D tx=68 rx=68 acp=true :: membership request to the selected member not answered | [   64.206413] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again | [   65.020143] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+t=85s A tx=96 rx=96 acp=true :: [   76.686863] %CNXMAN, this node is a member of the cluster | [   76.702658] %CNXMAN, completed VAXcluster state transition | [   76.712153] %CNXMAN, this node is now a VAXcluster member
+t=85s D tx=96 rx=96 acp=true :: p request: this node is NOT a cluster member, and will ask again | [   65.020143] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again | [   75.261413] %CNXMAN, another system is also waiting to form an OpenVMS Cluster and takes precedence; this node will join it
+t=90s A tx=105 rx=103 acp=true :: %INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+t=90s D tx=103 rx=105 acp=true :: %INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed | %RUN-S-PROC_ID, identification of created process is 10000003
+t=95s A tx=218 rx=218 acp=true :: [   84.647810] %CNXMAN, system 00000000000007c6 was added to the cluster | [   85.150281] %CNXMAN, completed VAXcluster state transition | %RUN-S-PROC_ID, identification of created process is 10000003
+t=95s D tx=218 rx=218 acp=true :: [   84.971468] %CNXMAN, system 00000000000007c6 was added to the cluster | [   84.980108] %CNXMAN, system 00000000000007c3 was added to the cluster | [   85.442308] %CNXMAN, completed VAXcluster state transition
+CN2_STAGE1 PASS: both consoles name each other
+t=105s A tx=233 rx=233 acp=true :: %RUN-S-PROC_ID, identification of created process is 10000003 |  Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible) | Username: 
+t=105s D tx=233 rx=233 acp=true :: [   85.442308] %CNXMAN, completed VAXcluster state transition |  Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible) | Username: 
+A: sending SYSTEM
+D: sending SYSTEM
+t=110s A tx=241 rx=240 acp=true ::  Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible) | Username: SYSTEM | Password: 
+t=110s D tx=240 rx=241 acp=true ::  Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible) | Username: SYSTEM | Password: 
+A: sending MANAGER
+D: sending MANAGER
+t=115s A tx=261 rx=261 acp=true :: Username: SYSTEM | Password:  |    Welcome to OpenVMX V0.7 - OpenVMS-compatible
+t=115s D tx=261 rx=261 acp=true :: Username: SYSTEM | Password:  |    Welcome to OpenVMX V0.7 - OpenVMS-compatible
+t=120s A tx=280 rx=279 acp=true :: Username: SYSTEM | Password:  |    Welcome to OpenVMX V0.7 - OpenVMS-compatible
+t=120s D tx=279 rx=280 acp=true :: Username: SYSTEM | Password:  |    Welcome to OpenVMX V0.7 - OpenVMS-compatible
+t=126s A tx=301 rx=300 acp=true :: Password:  |    Welcome to OpenVMX V0.7 - OpenVMS-compatible | $ 
+t=126s D tx=300 rx=301 acp=true :: Password:  |    Welcome to OpenVMX V0.7 - OpenVMS-compatible | $ 
+A: at DCL prompt, sending SHOW CLUSTER/LOCAL_PORTS
+D: at DCL prompt, sending SHOW CLUSTER/LOCAL_PORTS
+t=131s A tx=307 rx=307 acp=true ::          cluster group 257 (CLUSTER_AUTHORIZE) |          frames tx 291 (errors 0), rx 291 (dropped: nobuf 0, badclass 0) | $ 
+t=131s D tx=307 rx=307 acp=true ::          cluster group 257 (CLUSTER_AUTHORIZE) |          frames tx 291 (errors 0), rx 291 (dropped: nobuf 0, badclass 0) | $ 
+A: re-issuing SHOW CLUSTER (t=171s)
+D: re-issuing SHOW CLUSTER (t=171s)
+t=176s A tx=397 rx=397 acp=true :: | 1990   | 00010002 |                 | MEMBER           | | +---------------------------------------------------------------+ | $ 
+t=176s D tx=397 rx=397 acp=true :: | 1987   | 00010001 |                 | MEMBER           | | +---------------------------------------------------------------+ | $ 
+CN2_STAGE1 READBACK: both SHOW CLUSTER tables name two members
+STAGE1_RESULT={"pass":true,"elapsed_s":176,"A_pass":true,"D_pass":true,"A_cn2":true,"D_cn2":true}

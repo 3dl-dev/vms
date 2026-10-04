@@ -1,0 +1,23 @@
+cat=02 src=00:01:04 L1tag=0001 tag2=0003  n=358
+cat=02 src=00:01:04 L1tag=0001 tag2=0004  n=270
+cat=82 src=57:a4:30 L1tag=0001 tag2=0004  n=270
+cat=82 src=79:b8:1e L1tag=0001 tag2=0003  n=218
+cat=82 src=57:a4:30 L1tag=0001 tag2=0003  n=183
+cat=02 src=57:a4:30 L1tag=0001 tag2=0003  n=92
+cat=02 src=57:a4:30 L1tag=0001 tag2=0004  n=68
+cat=82 src=00:01:04 L1tag=0001 tag2=0004  n=68
+cat=82 src=00:01:04 L1tag=0001 tag2=0003  n=50
+cat=04 src=00:01:04 L1tag=0001 tag2=0003  n=12
+cat=04 src=00:01:04 L1tag=0001 tag2=0004  n=2
+cat=02 src=79:b8:1e L1tag=0001 tag2=0003  n=1
+--- rig arm M2-5 (OVMX beside a real V7.3)
+cat=02 src=fb:91:86 L1tag=0001 tag2=0002  n=205
+cat=82 src=00:df:0a L1tag=0001 tag2=0002  n=205
+cat=02 src=fb:91:86 L1tag=0001 tag2=0003  n=21
+cat=82 src=00:df:0a L1tag=0001 tag2=0003  n=8
+cat=82 src=00:df:0b L1tag=0001 tag2=0003  n=6
+
+--- unanswered op-0x0d transactions, matched on (txn,token)
+requests=789 answered-keys=768 UNANSWERED=0
+requests=226 answered-keys=218 UNANSWERED=1
+  epoch=1790655472.458 src=fb:91:86 txn=13 tok=51961 send=282

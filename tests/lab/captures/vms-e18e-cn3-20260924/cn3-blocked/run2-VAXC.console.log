@@ -1,0 +1,356 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+%SYSBOOT-I-SYSBOOT Mapping the SYSDUMP.DMP on the System Disk
+%SYSBOOT-I-SYSBOOT SYSDUMP.DMP on System Disk successfully mapped 
+%SYSBOOT-I-SYSBOOT Mapping PAGEFILE.SYS on the System Disk
+%SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS
+   OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+%WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+%SYSINIT, waiting to form or join a VMScluster system
+%VAXcluster-I-LOADSECDB, loading the cluster security database
+%MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+%CNXMAN,  proposing formation of a VAXcluster
+%CNXMAN,  now a VAXcluster member -- system VAXC
+%CNXMAN,  completing VAXcluster state transition
+$!  Copyright 2001 Compaq Computer Corporation.
+
+%STDRV-I-STARTUP, OpenVMS startup begun at 24-SEP-2026 18:54:52.13
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+%RUN-S-PROC_ID, identification of created process is 20200208
+%DCL-S-SPAWNED, process SYSTEM_1 spawned
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:35.48  %%%%%%%%%%%
+Operator _VAXC$OPA0: has been enabled, username SYSTEM
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:35.50  %%%%%%%%%%%
+Operator status for operator _VAXC$OPA0:
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:35.66  %%%%%%%%%%%
+Logfile has been initialized by operator _VAXC$OPA0:
+Logfile is VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:35.67  %%%%%%%%%%%
+Operator status for operator VAXC::SYS$SYSROOT:[SYSMGR]OPERATOR.LOG;3
+CENTRAL, PRINTER, TAPES, DISKS, DEVICES, CARDS, NETWORK, CLUSTER, SECURITY,
+LICENSE, OPER1, OPER2, OPER3, OPER4, OPER5, OPER6, OPER7, OPER8, OPER9, OPER10,
+OPER11, OPER12
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:35.75  %%%%%%%%%%%
+18:54:48.79 Node VAXC (csid 00000000) proposed formation of a VAXcluster
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:35.77  %%%%%%%%%%%
+18:54:48.79 Node VAXC (csid 00010001) is now a VAXcluster member
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:35.80  %%%%%%%%%%%
+18:54:48.83 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%SET-I-NEWAUDSRV, identification of new audit server process is 2020020E
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:38.91  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+%JBC-E-OPENERR, error opening SYS$COMMON:[SYSEXE]QMAN$MASTER.DAT;
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:38.93  %%%%%%%%%%%
+Message from user JOB_CONTROL on VAXC
+-RMS-E-FNF, file not found
+
+%LICENSE-F-EMTLDB, license database contains no license records
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:42.95  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:43.20  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-E-NOPROXYDB, cannot find proxy database file NET$PROXY.DAT
+%RMS-E-FNF, file not found
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:43.21  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIACRECLUDB, security server created cluster intrusion database
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:43.23  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-SERVERSTARTINGU, security server starting up
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:43.25  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+
+%SMG-W-GBLNOTCRE, global section not created
+-SYSTEM-F-GPTFULL, global page table is full
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:49.36  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAX-VMS use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAX-VMS use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:49.96  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+
+
+%LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node
+-LICENSE-F-NOLICENSE, no license is active for this software product
+-LICENSE-I-SYSMGR, please see your system manager
+Startup processing continuing...
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:52.29  %%%%%%%%%%%
+Message from user SYSTEM on VAXC
+Warning: DECdtm log file not found (SYS$JOURNAL:SYSTEM$VAXC.LM$JOURNAL)
+        %RMS-E-FNF, file not found
+        TP server process waiting
+
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:55:54.89  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Audit server starting up
+Event time:               24-SEP-2026 18:55:54.56
+PID:                      20200204        
+Username:                 SYSTEM          
+
+%STARTUP-I-AUDITCONTINUE, audit server initialization complete
+
+The OpenVMS VAX system is now executing the site-specific startup commands.
+
+%SET-I-INTSET, login interactive limit = 64, current interactive value = 0
+  SYSTEM       job terminated at 24-SEP-2026 18:55:59.06
+
+  Accounting information:
+  Buffered I/O count:            1140         Peak working set size:    1883
+  Direct I/O count:               755         Peak page file size:      4920
+  Page faults:                   3257         Mounted volumes:             0
+  Charged CPU time:           0 00:00:54.62   Elapsed time:     0 00:01:07.97
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+Username: 
+Error reading command input
+Timeout period expired
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:56:20.59  %%%%%%%%%%%
+Message from user AUDIT$SERVER on VAXC
+Security alarm (SECURITY) and security audit (SECURITY) on VAXC, system id: 1989
+Auditable event:          Local interactive login failure
+Event time:               24-SEP-2026 18:56:20.50
+PID:                      20200213        
+Process name:             _OPA0:          
+Username:                 <login>         
+Process owner:            [SYSTEM]
+Terminal name:            _OPA0:
+Image name:               VAXC$DUA0:[SYS0.SYSCOMMON.][SYSEXE]LOGINOUT.EXE
+Status:                   %LOGIN-F-CMDINPUT, error reading command input
+
+%CNXMAN,  received VAXcluster membership request from system OVMXA
+%CNXMAN,  proposing addition of system OVMXA
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:58:33.81  %%%%%%%%%%%
+18:58:33.79 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXA
+
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:58:33.84  %%%%%%%%%%%
+18:58:33.79 Node VAXC (csid 00010001) proposed addition of node OVMXA
+
+%CNXMAN,  completing VAXcluster state transition
+%%%%%%%%%%%  OPCOM  24-SEP-2026 18:58:37.12  %%%%%%%%%%%
+18:58:37.09 Node VAXC (csid 00010001) completed VAXcluster state transition
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:01:06.05  %%%%%%%%%%%
+19:01:06.03 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:01:29.44  %%%%%%%%%%%
+19:01:29.43 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+
+ Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:01:51.17  %%%%%%%%%%%
+19:01:51.15 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:02:10.27  %%%%%%%%%%%
+19:02:10.26 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:02:25.80  %%%%%%%%%%%
+19:02:25.78 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:02:40.93  %%%%%%%%%%%
+19:02:40.92 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:02:56.37  %%%%%%%%%%%
+19:02:56.35 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:03:11.42  %%%%%%%%%%%
+19:03:11.41 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:03:26.47  %%%%%%%%%%%
+19:03:26.45 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:03:41.72  %%%%%%%%%%%
+19:03:41.71 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:03:56.66  %%%%%%%%%%%
+19:03:56.64 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:04:11.74  %%%%%%%%%%%
+19:04:11.73 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:04:26.64  %%%%%%%%%%%
+19:04:26.63 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:04:41.83  %%%%%%%%%%%
+19:04:41.82 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:04:57.01  %%%%%%%%%%%
+19:04:56.99 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:05:12.82  %%%%%%%%%%%
+19:05:12.81 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:05:28.98  %%%%%%%%%%%
+19:05:28.96 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:05:44.99  %%%%%%%%%%%
+19:05:44.98 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:06:01.14  %%%%%%%%%%%
+19:06:01.12 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:06:17.79  %%%%%%%%%%%
+19:06:17.78 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:06:34.45  %%%%%%%%%%%
+19:06:34.43 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:06:50.95  %%%%%%%%%%%
+19:06:50.94 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:07:07.83  %%%%%%%%%%%
+19:07:07.81 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:07:24.48  %%%%%%%%%%%
+19:07:24.47 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:07:41.44  %%%%%%%%%%%
+19:07:41.42 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:07:58.45  %%%%%%%%%%%
+19:07:58.44 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:08:15.16  %%%%%%%%%%%
+19:08:15.14 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:08:32.01  %%%%%%%%%%%
+19:08:32.00 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:08:48.67  %%%%%%%%%%%
+19:08:48.65 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:09:06.12  %%%%%%%%%%%
+19:09:06.11 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:09:23.01  %%%%%%%%%%%
+19:09:22.99 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:09:40.03  %%%%%%%%%%%
+19:09:40.02 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:09:56.92  %%%%%%%%%%%
+19:09:56.90 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:10:13.70  %%%%%%%%%%%
+19:10:13.69 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:10:30.67  %%%%%%%%%%%
+19:10:30.65 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:10:47.77  %%%%%%%%%%%
+19:10:47.76 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:11:04.58  %%%%%%%%%%%
+19:11:04.56 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:11:20.51  %%%%%%%%%%%
+19:11:20.50 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:11:36.18  %%%%%%%%%%%
+19:11:36.16 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:11:51.65  %%%%%%%%%%%
+19:11:51.64 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:12:07.23  %%%%%%%%%%%
+19:12:07.21 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:12:22.97  %%%%%%%%%%%
+19:12:22.96 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%%%%%%%%%%%  OPCOM  24-SEP-2026 19:12:38.52  %%%%%%%%%%%
+19:12:38.50 Node VAXC (csid 00010001) received VAXcluster membership request from node OVMXB
+█

@@ -200,7 +200,16 @@ endif()
 
 function(cluster_host_cnxman_test name)
     add_executable(${name} ${ARGN})
-    target_link_libraries(${name} PRIVATE cluster_host_cnxman)
+    # rd vms-4f0: the fixture loader too, so an FSM test can assert what it
+    # emits against a REAL captured frame (with the loader's own chain-of-
+    # custody check against docs/clean-room/reference-captures.sha256) rather
+    # than against a composed expectation it wrote itself.
+    target_link_libraries(${name} PRIVATE cluster_host_cnxman
+                                          cluster_host_fixture)
+    target_compile_definitions(${name} PRIVATE
+        OVMX_FIXTURE_DIR="${OVMX_CLUSTER_FIXTURE_DIR}"
+        OVMX_CLEANROOM_MANIFEST="${OVMX_CLUSTER_CLEANROOM_MANIFEST}"
+    )
     target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(${name} PRIVATE -Wall -Wextra -Werror)
@@ -471,10 +480,34 @@ endfunction()
 
 cluster_host_pe_test(test_pe_channel   test_pe_channel.c)
 
+# rd vms-b34: the cluster GROUP NUMBER -- which IS the HELLO multicast address
+# -- is REPORTED rather than silently defaulted. The mapping and the view run
+# against the real codec and the real ABI struct; the bindings are read out of
+# the shipping glue (vms_pe.c is not host-linkable -- exec_kbackend.h + the
+# fork API), the same shape test_cnxman_glue.c established.
+cluster_host_pe_test(test_pe_glue_group test_pe_glue_group.c)
+target_compile_definitions(test_pe_glue_group PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+)
+
 # E60: the receive-buffer credit ledger (vms_pe_fsm.h SS4b) as arithmetic --
 # the invariant "the sum of everything this port promised never exceeds the
 # buffers it owns", which is what makes the abs-95 byte test_pe_vc.c asserts on
 # a promise this node can actually keep.
+# rd vms-0f8: the port driven by a REAL OpenVMS VAX V5.5-2H4 node's own 128
+# bytes -- the second discovery revision. Receive (badclass -> 0, peer identity
+# out of the real frame), learn (the revision, per channel and port-wide),
+# transmit (the peer's revision carrying OUR identity), and the never-crash
+# corpus. Needs the fixture loader, which cluster_host_pe_test already links.
+cluster_host_pe_test(test_pe_rev_c3    test_pe_rev_c3.c)
+
+# rd vms-b34: abs 22 is LE16(this node's cluster group), not the constant
+# 0x0001 three builders baked. The port must put its OWN configured number on
+# every frame (HELLO, channel verify, VC START/STACK) and must ignore anybody
+# else's -- the defect that had a real group-257 OpenVMS V7.3 member discard
+# 273 OVMX VC STACKs while the channel stayed verified.
+cluster_host_pe_test(test_pe_group_on_wire test_pe_group_on_wire.c)
+
 cluster_host_pe_test(test_pe_credit    test_pe_credit.c)
 cluster_host_pe_test(test_pe_formation test_pe_formation.c)
 
@@ -559,6 +592,30 @@ endfunction()
 cluster_host_scs_test(test_scs_fsm     test_scs_fsm.c)
 cluster_host_scs_test(test_scs_fsm_credit  test_scs_fsm_credit.c)
 cluster_host_scs_test(test_scs_fsm_vcdown  test_scs_fsm_vcdown.c)
+
+# rd vms-abd: the CLEAN CLUSTER DEPARTURE. The ALGORITHM (the grounded 8->9->6
+# a departure emits, the dead-peer guard that still lands the op 6 and still
+# closes, and the dispatch-table idempotence the enumeration relies on) against
+# the real scs_fsm through the FC-P2.2 harness; the WIRING -- that the departure
+# has a caller at all, in the right order, with the fork mutex released while it
+# drains -- source-scanned out of the shipping vms_cnxman.c / vms_devtab.c /
+# ovmx_init.c, the two-proof shape test_cnxman_glue.c established. It reads the
+# boot path as well as kernel-core for test_cnxman_boot.c's own reason: the
+# chain crosses both, and reading one end would let the other drift.
+cluster_host_scs_test(test_scs_fsm_depart  test_scs_fsm_depart.c)
+target_compile_definitions(test_scs_fsm_depart PRIVATE
+    OVMX_KCORE_DIR="${OVMX_CLUSTER_CORE_DIR}"
+    OVMX_INIT_DIR="${CMAKE_SOURCE_DIR}/src/ovmx_init"
+)
+# The KILL SWITCH lives in vms_cluster_sysgen.c (cluster_sysgen_clean_depart),
+# so the test drives the REAL decision function the departure asks instead of
+# reproducing the `if' and proving nothing. It comes in by LINKING the library
+# that already carries that TU, rather than by adding the source to this target:
+# this target has quoted -D defines (OVMX_KCORE_DIR above), and a kernel-core
+# PRODUCT source compiled under them lands in compile_commands.json with a
+# backslash escape, which kif_caller_census refuses to parse (it fails loudly
+# rather than mis-splitting the command). Linking sidesteps it entirely.
+target_link_libraries(test_scs_fsm_depart PRIVATE cluster_host_cnxman)
 
 # E78: the connection manager's own half of the p. 2-43 ledger. The MECHANISM
 # runs against the real scs_fsm through the FC-P2.2 harness (an unpaid ledger
@@ -954,5 +1011,23 @@ add_test(NAME cluster_host_wire_safety_audit
 )
 set_tests_properties(cluster_host_wire_safety_audit PROPERTIES
     LABELS "unit;cluster;cluster_host;crash-safety"
+    TIMEOUT 60
+)
+
+# ---- The join-timeline reader, judged against the CN=3 baseline capture ----
+# tools/cluster/scs_join_timeline.py is the instrument that separates "OVMX was
+# flow-controlled" from "OVMX stopped talking" -- the distinction vms-f3ec's
+# credit-return COUNT could not make. Its --selftest re-derives, from the
+# in-tree cn3-achieved-20260905.pcap, the three figures the vms-d7e commit
+# published (the unaddressed op-5 at 16.315, the circuit reformation it
+# provoked at 18.289, and that the whole admission ran after that reformation).
+# If the reader ever stops finding them, it is the reader that is broken, and
+# this says so before anyone reads a join off it.
+add_test(NAME cluster_host_scs_join_timeline
+    COMMAND python3
+        "${CMAKE_SOURCE_DIR}/tools/cluster/scs_join_timeline.py" --selftest
+)
+set_tests_properties(cluster_host_scs_join_timeline PROPERTIES
+    LABELS "unit;cluster;cluster_host;scs"
     TIMEOUT 60
 )

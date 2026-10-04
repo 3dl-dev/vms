@@ -11,6 +11,10 @@
 #
 #   src/ovmx_init/ovmx_init.c   setenv("VMS_TERMINAL", "_OPA0:")
 #   src/vmsssh/vmssshd.c        setenv("VMS_TERMINAL") / setenv("VMS_DEVICE_TYPE")
+#                               [this file was later DELETED by the vms-d916
+#                               SSH-scaffold retirement; the scan below is a
+#                               dynamic find over src/, so it simply no longer
+#                               contributes -- the property is what is enforced]
 #   src/vmsdcl/dcl_main.c       the matching getenv()s, plus a private
 #                               "_FTA" name pool used when neither was set
 #

@@ -1,0 +1,132 @@
+
+%NIC-CFG, initramfs=nodeA/initramfs-ovmx-nodeA.cpio.gz sysdisk=nodeA/sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+c[?7l[2J[0mSeaBIOS (version rel-1.16.3-0-ga6ed6b701f0a-prebuilt.qemu.org)
+
+
+iPXE (http://ipxe.org) 00:03.0 CA00 PCI2.10 PnP PMM+0EFD0EE0+0EF30EE0 CA00
+Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                               
+
+
+Booting from ROM...
+c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-1 - OpenVMS-compatible
+    25-SEP-2026 16:33:51.42
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   39.505190] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   39.556470] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 25-SEP-2026 16:34:08.68
+[   39.618326] %PEA0, channel verified
+[   39.659711] %PEA0, virtual circuit open
+[   40.570285] %CNXMAN, a connection manager was discovered on the interconnect
+[   40.580170] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   41.635326] %PEA0, channel verified
+[   41.658756] %PEA0, virtual circuit open
+[   41.678726] %CNXMAN, a connection manager was discovered on the interconnect
+[   41.826082] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   41.933427] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+[   46.969772] %CNXMAN, membership request to the selected member not answered
+[   46.979507] %CNXMAN, re-issuing this node's membership request to another cluster member
+[   47.129003] %CNXMAN, the cluster assigned this node a cluster system id
+[   47.172228] %CNXMAN, the cluster assigned this node a cluster system id
+[   47.216549] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   48.568640] %CNXMAN, this node is a member of the cluster
+[   48.575355] %CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+[   48.605431] %CNXMAN, VAXcluster state transition in progress
+[   48.609750] %CNXMAN, this node is now a VAXcluster member
+[   48.616671] %CNXMAN, system 00000000000007c3 was added to the cluster
+[   48.624466] %CNXMAN, system 00000000000007c4 was added to the cluster
+[   48.628391] %CNXMAN, system 00000000000007c5 was added to the cluster
+[   48.699726] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[   48.939102] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   50.553490] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+[   50.629056] %CNXMAN, completed VAXcluster state transition
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-1 (OpenVMS-compatible)
+
+Username: 
+Error reading command input
+Timeout period expired
+
+[   90.745391] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+SYSTEM
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-1 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+OUTPUT "E18EB-2"
+
+   Welcome to OpenVMX V0.7-1 - OpenVMS-compatible
+
+
+$ %DCL-E-IVVERB, unrecognized command verb - check validity and spelling
+ \OUTPUT\
+$ SYSTEM
+%DCL-E-IVVERB, unrecognized command verb - check validity and spelling
+ \SYSTEM\
+$ MANAGER
+WRITE SYS$OUTPUT "E18EB-3"
+%DCL-E-IVVERB, unrecognized command verb - check validity and spelling
+ \MANAGER\
+$ E18EB-3
+$ [  419.056303] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+WRITE SYS$OUTPUT "E18EB-4"
+E18EB-4
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 16:50:38
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010003 | VMX V0.7        | MEMBER           |
+| 1988   | 00010002 |                 | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "E18EB-6"
+E18EB-6
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 16:57:02
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010003 | VMX V0.7        | MEMBER           |
+| 1988   | 00010002 |                 | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "E18EB-8"
+E18EB-8
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 17:03:25
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010003 | VMX V0.7        | MEMBER           |
+| 1988   | 00010002 |                 | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ 

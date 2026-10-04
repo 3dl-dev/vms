@@ -515,6 +515,90 @@ static void master_door_reports_what_the_engine_did(void)
 	vms_lock_cleanup();
 }
 
+/* ================================================================
+ * vms-04f (DLM rung H11): a concurrent BOTH-INITIATE deadlock search aborts
+ * the victim EXACTLY ONCE.
+ *
+ * When a cross-node deadlock cycle is detected, the detecting node names the
+ * global-min victim (req_csid, req_lkid) and sends the VICTIM leg to the node
+ * that MASTERS the victim's queued request. In a concurrent both-initiate
+ * race the reference lab could not stage, node A and node B independently
+ * close the SAME cycle and BOTH send a VICTIM leg naming the SAME victim. The
+ * mastering node must abort that queued request ONCE (one SS$_DEADLOCK) and
+ * treat the second VICTIM as an idempotent no-op (SS$_NORMAL) -- never a
+ * double-abort, never two SS$_DEADLOCKs, never a fabricated abort of a lock
+ * that is already gone. Driven through the REAL engine
+ * (vms_lock_dlm_xnode_dispatch) against a REAL queued cross-node waiter (a
+ * conflicting inbound $ENQ), not a stub.
+ * ================================================================ */
+static uint32_t xnode_victim(struct vms_proc *delivery, uint32_t victim_csid,
+			     uint32_t victim_lkid, uint32_t *queued_out)
+{
+	struct vms_dlm_xnode_args req;
+	uint32_t st;
+
+	memset(&req, 0, sizeof(req));
+	req.op = VMS_DLM_OP_DLKSRCH;
+	req.flags = VMS_DLM_DLK_VICTIM;
+	req.req_csid = victim_csid;
+	req.req_lkid = victim_lkid;
+	st = vms_lock_dlm_xnode_dispatch(delivery, &req);
+	*queued_out = req.queued;
+	return st;
+}
+
+static void dlksrch_both_initiate_aborts_once(void)
+{
+	struct vms_proc delivery;
+	struct vms_dlm_xnode_args enq;
+	uint32_t local_lkid = 0, queued = 0, st;
+
+	printf("-- vms-04f (H11): concurrent both-initiate deadlock aborts the "
+	       "victim EXACTLY once (one SS$_DEADLOCK, then an idempotent no-op)\n");
+
+	if (vms_lock_init() != 0) {
+		ct_check(0, "vms-04f: vms_lock_init");
+		return;
+	}
+	proc_init(&delivery);
+
+	/* This node masters DLK04FRES and holds it EX locally. */
+	st = do_enq(&delivery, "DLK04FRES", LCK_K_EXMODE, 0, &local_lkid);
+	ct_check(st == SS__NORMAL && local_lkid != 0,
+		 "a local EX grant -- this node masters and holds the resource");
+
+	/* A REMOTE node's conflicting EX $ENQ arrives: it cannot be granted (EX
+	 * held locally), so the master QUEUES it -- a real cross-node waiter on
+	 * res->waiting, held FOR the remote CSID. This is the victim-to-be. */
+	memset(&enq, 0, sizeof(enq));
+	enq.op = VMS_DLM_OP_ENQ;
+	enq.lkmode = LCK_K_EXMODE;
+	enq.req_csid = C27_REMOTE_CSID;
+	enq.req_lkid = C27_REMOTE_LKID;
+	strscpy(enq.resnam, "DLK04FRES", sizeof(enq.resnam));
+	st = vms_lock_dlm_xnode_dispatch(&delivery, &enq);
+	ct_check(st == (uint32_t)VMS_DLM_STS_QUEUED && enq.queued == 1u,
+		 "the conflicting cross-node $ENQ QUEUES -- a real waiter parked "
+		 "for the remote CSID (the deadlock victim-to-be)");
+
+	/* FIRST VICTIM leg (node A's search closed the cycle and named this
+	 * victim): the master aborts the queued waiter this call. */
+	st = xnode_victim(&delivery, C27_REMOTE_CSID, C27_REMOTE_LKID, &queued);
+	ct_check(st == SS__DEADLOCK && queued == 1u,
+		 "FIRST VICTIM: the queued waiter is aborted this call "
+		 "(SS$_DEADLOCK, queued=1) -- a REAL waiter removed, not a stub");
+
+	/* SECOND VICTIM leg (the CONCURRENT search node B initiated agrees on the
+	 * same victim and sends it too): the waiter is already gone, so this is an
+	 * IDEMPOTENT no-op -- NOT a second SS$_DEADLOCK, NOT a fabricated abort.
+	 * This is the whole H11 both-initiate invariant: aborted EXACTLY once. */
+	queued = 0xffu;
+	st = xnode_victim(&delivery, C27_REMOTE_CSID, C27_REMOTE_LKID, &queued);
+	ct_check(st == SS__NORMAL && queued == 0u,
+		 "SECOND (concurrent B-initiated) VICTIM: idempotent no-op "
+		 "(SS$_NORMAL, queued=0) -- the victim was aborted EXACTLY once");
+}
+
 int main(void)
 {
 	printf("=== test_lock_host (vms_lock.c, the real engine, R1 host unit) ===\n");
@@ -523,5 +607,6 @@ int main(void)
 	remote_lkb_is_outside_image_rundown();
 	master_door_refuses_without_a_delivery_proc();
 	master_door_reports_what_the_engine_did();
+	dlksrch_both_initiate_aborts_once();
 	return ct_summary("test_lock_host");
 }

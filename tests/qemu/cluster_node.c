@@ -237,7 +237,18 @@ static void sysgen_fill(struct vms_sysgen_load_args *a,
 	a->recnxinterval  = (uint16_t)c->recnxinterval;
 	a->vaxcluster     = (uint8_t)c->vaxcluster;
 	a->cluster_credits = (uint16_t)c->cluster_credits;
+	/*
+	 * CLUSTER_AUTHORIZE. `auth_valid` is the flag that says a real record
+	 * was read -- and the port now refuses to build a HELLO multicast
+	 * address without it (rd vms-b34, src/kernel-core/vms_pe.c), because a
+	 * group number nobody configured is a fabricated cluster identity on
+	 * the wire. This rig has no CLUSTER_AUTHORIZE.DAT: its record IS the
+	 * `ovmx.group=` kernel-command-line value, so when one was given it
+	 * says so, and when none was it leaves the flag clear and the node
+	 * honestly joins no group.
+	 */
 	a->auth_group     = (uint16_t)c->group;
+	a->auth_valid     = c->group != 0u ? 1u : 0u;
 	/*
 	 * The software-identity token STARTUP.EXE carries down from the
 	 * userland SSOT. This rig has no OVMX userland, so the token rides the

@@ -82,6 +82,10 @@ static void port_up(uint16_t sysid, uint16_t max_sca_len)
 	id.scsnode_len = 6;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 	id.max_sca_len = max_sca_len;
 
 	(void)pe_fsm_init(&g_fsm, &id, sysid, &g_ops);
@@ -93,9 +97,36 @@ static enum pe_channel_action feed(const uint8_t *frame, uint32_t len)
 	return pe_fsm_rx(&g_fsm, frame, len);
 }
 
+/*
+ * A captured specimen, DELIVERED TO THIS STATION. The test node stands in the
+ * specimen's destination slot (its SCSSYSTEMID, so abs 16 names it), and the
+ * member that sent the specimen delivers a directed frame to its joiner's own
+ * HARDWARE address -- the addressing these very tests assert on the answer
+ * ("delivered to the member's HARDWARE MAC (abs 0)"). In the capture that
+ * joiner was a VAX whose station address is not this node's, so the copy is
+ * re-addressed at abs 0 (and only there, through the codec's own header
+ * build) before it is fed. A multicast specimen is left exactly as captured.
+ * The un-re-addressed specimen is test_specimen_for_another_station's input:
+ * a real adapter never passes it up (rd vms-6b1).
+ */
+static uint8_t g_fxbuf[VMS_HELLO_PADDED_MAX_FRAME];
+
 static enum pe_channel_action feed_fixture(const struct vms_fixture *f)
 {
-	return feed(f->bytes, f->wire_len);
+	struct vms_sca_hdr h;
+	uint32_t written = 0;
+
+	if (f->wire_len > sizeof(g_fxbuf) ||
+	    vms_sca_hdr_parse(f->bytes, f->wire_len, &h) != VMS_CODEC_OK)
+		return feed(f->bytes, f->wire_len);
+	memcpy(g_fxbuf, f->bytes, f->wire_len);
+	if ((h.eth_dst[0] & 0x01u) == 0u) {
+		memcpy(h.eth_dst, ovmx_hw, 6);
+		if (vms_sca_hdr_build(&h, g_fxbuf, sizeof(g_fxbuf), &written) !=
+		    VMS_CODEC_OK)
+			return PE_CH_ACT_NONE;
+	}
+	return feed(g_fxbuf, f->wire_len);
 }
 
 /* One HELLO from a codec-built peer. */
@@ -509,6 +540,15 @@ static void test_cadence_and_timeout(void)
 	ct_check_eq_u32(pe_fsm_channel_at(&g_fsm, 0)->state,
 			(unsigned)VMS_PE_CH_B4, "the channel is still usable");
 
+	/* rd vms-b98: a real V7.3 port never closed a circuit sooner than
+	 * 8.15 s after the last frame (n = 24). 7.9 s of silence is still a
+	 * live channel here too. */
+	g_fake.now_ms += 7900 - 3200;
+	n = pe_fsm_tick(&g_fsm, rec, 4);
+	ct_check_eq_u32(n, 0, "7.9 s: inside the measured listen timeout");
+	ct_check_eq_u32(PE_LISTEN_TIMEOUT_DEFAULT_MS, 8000,
+			"the port constant the oracle measured (8 s)");
+
 	g_fake.now_ms += PE_LISTEN_TIMEOUT_DEFAULT_MS;
 	n = pe_fsm_tick(&g_fsm, rec, 4);
 	ct_check_eq_u32(n, 1, "past the listen timeout the channel reports");
@@ -670,6 +710,10 @@ static void test_last_gasp(void)
 	id.hw_mac_valid = 1;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 	id.join_nonce[0] = 0xee;
 	id.join_nonce[1] = 0x05;
 	id.join_nonce[2] = 0x39;
@@ -695,6 +739,75 @@ static void test_last_gasp(void)
 			"and puts NO second gasp on the wire");
 	ct_check_eq_u32(g_fsm.last_gasps_built, 1,
 			"still counted exactly once");
+}
+
+/* ------------------------------------------------------------------ *
+ * 6b. A DEPARTURE BELONGS TO AN INCARNATION, NOT TO A PORT (rd vms-8c54)
+ *
+ * rd vms-0f9's CLUEXIT re-incarnates IN PLACE: cnxman_cluexit_run() gasps,
+ * re-samples the incarnation through pe_reincarnate(), and rebuilds -- the
+ * port is never reallocated. Guarded on the port lifecycle, the SECOND and
+ * every later CLUEXIT put NOTHING on the wire, and every peer kept a CSB for
+ * a node that had already thrown its cluster state away.
+ *
+ * MEASURED, and why this test exists in this shape: /lab/run-s8 capture
+ * H-2.pcap has cluexits=1 on the console and ZERO abs-30 0xb1 frames in it,
+ * while campaign_F-2 and campaign_F-3 -- one CLUEXIT each -- carry exactly
+ * one gasp apiece.
+ * ------------------------------------------------------------------ */
+static void test_last_gasp_per_incarnation(void)
+{
+	struct pe_identity id;
+	struct fake_pe_decoded gasp;
+
+	printf("-- SS4(O.30): a re-incarnated node announces again\n");
+
+	fake_pe_ops_init(&g_ops, &g_fake);
+	memset(&id, 0, sizeof(id));
+	memcpy(id.hw_mac, ovmx_hw, 6);
+	id.hw_mac_valid = 1;
+	memcpy(id.mcast, group1, 6);
+	id.mcast_valid = 1;
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
+	/* The port holds a real incarnation stamp, as a started port does. */
+	id.incarnation_time = 0x00c0ffee00000001ull;
+	id.incarnation_time_valid = 1u;
+	(void)pe_fsm_init(&g_fsm, &id, 1030, &g_ops);
+
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0, "incarnation 1 gasps");
+	ct_check_eq_u32(g_fake.n_frames, 1, "exactly one gasp on the wire");
+	gasp = fake_pe_decode(&g_fake, 0);
+	ct_check(gasp.ok && gasp.chan_word == PE_PFW_LAST_GASP,
+		 "and it is the abs-30 b1 departure marker");
+
+	/* Same incarnation, second caller: still the benign no-op the clean
+	 * CLUSTER_STOP path depends on. */
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0, "same incarnation");
+	ct_check_eq_u32(g_fake.n_frames, 0, "puts NO second gasp on the wire");
+	ct_check_eq_u32(g_fsm.last_gasps_built, 1, "and is not counted twice");
+
+	/* CLUEXIT: pe_reincarnate() re-samples the stamp in place. The next
+	 * departure is a DIFFERENT node's departure as far as every peer is
+	 * concerned, and it must be announced. */
+	g_fsm.id.incarnation_time = 0x00c0ffee00000002ull;
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0, "incarnation 2 gasps");
+	ct_check_eq_u32(g_fake.n_frames, 1,
+			"a re-incarnated node ANNOUNCES ITS DEPARTURE AGAIN");
+	gasp = fake_pe_decode(&g_fake, 0);
+	ct_check(gasp.ok && gasp.chan_word == PE_PFW_LAST_GASP,
+		 "and it is the same b1 marker, not some other frame");
+	ct_check_eq_u32(g_fsm.last_gasps_built, 2, "both are counted");
+
+	/* ...and the guard has moved with it: the new incarnation is idempotent
+	 * in its turn, so CLUSTER_STOP after a CLUEXIT still gasps once. */
+	fake_pe_clear_frames(&g_fake);
+	ct_check_eq_u32(pe_fsm_send_last_gasp(&g_fsm), 0, "incarnation 2 again");
+	ct_check_eq_u32(g_fake.n_frames, 0, "no third gasp");
+	ct_check_eq_u32(g_fsm.last_gasps_built, 2, "still two");
 }
 
 /* ------------------------------------------------------------------ *
@@ -738,6 +851,38 @@ static void test_refusals(void)
 	ct_check(g_fsm.tx_errors > 0, "a failed exec_lan_xmit is counted");
 }
 
+/*
+ * rd vms-6b1: THE CAPTURED b2, AS CAPTURED, IS NOT THIS STATION'S FRAME.
+ *
+ * Its abs 16 names SCSSYSTEMID 1025 -- the slot this node stands in -- but
+ * its Ethernet destination is the real VAX1's own hardware address. A hub that
+ * floods, or an adapter left promiscuous, hands exactly that frame to a node
+ * whose station address differs, and a real adapter never would have passed
+ * it up. Same frame, re-delivered to this station: answered (the control).
+ */
+static void test_specimen_for_another_station(void)
+{
+	const struct vms_fixture *fx = fixture("hello-directed-vax2-to-vax1");
+
+	printf("-- rd vms-6b1: a discovery frame for another station\n");
+	if (fx == NULL) {
+		ct_check(0, "fixture hello-directed-vax2-to-vax1 present");
+		return;
+	}
+	port_up(1025, 1500);
+	(void)feed(fx->bytes, fx->wire_len);
+	ct_check_eq_u32(g_fake.n_frames, 0,
+			"delivered to VAX1's station, it is never answered");
+	ct_check_eq_u32(g_fsm.n_channels, 0, "and no channel is learned from it");
+	ct_check_eq_u32(g_fsm.rx_not_addressed, 1, "it is counted, once");
+	ct_check_eq_u32(g_fsm.rx_not_for_us, 0,
+			"as the ADAPTER's refusal, not the logical-address one");
+
+	(void)feed_fixture(fx);
+	ct_check_eq_u32(g_fake.n_frames, 1,
+			"the same frame delivered to THIS station is answered");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -760,7 +905,9 @@ int main(void)
 	test_size_ladder_steps_down();
 	test_size_ladder_respects_the_mtu();
 	test_last_gasp();
+	test_last_gasp_per_incarnation();
 	test_refusals();
+	test_specimen_for_another_station();
 
 	return ct_summary("test_pe_formation");
 }

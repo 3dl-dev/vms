@@ -1,0 +1,70 @@
+OVMX/Linux -- SYSKRNL (Linux kernel)
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    23-SEP-2026 19:28:12.31
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXD set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[    2.258419] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[    2.264962] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 23-SEP-2026 19:28:13.60
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+[    4.315873] %PEA0, channel verified
+[    4.316012] %PEA0, channel verified
+[    4.319358] %PEA0, virtual circuit open
+[    4.322134] %PEA0, virtual circuit open
+[    4.409352] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[    4.421557] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition
+[    5.338890] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[    5.346886] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[    5.355987] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[    6.362880] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   11.482890] %CNXMAN, membership request to the selected member not answered
+[   11.487732] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   11.495195] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+[   22.746854] %CNXMAN, another system is also waiting to form an OpenVMS Cluster and takes precedence; this node will join it
+[   31.962784] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   31.970166] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   31.979902] %CNXMAN, the cluster assigned this node a cluster system id
+[   31.989251] %CNXMAN, this node is a member of the cluster
+[   31.993443] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[   32.001606] %CNXMAN, VAXcluster state transition in progress
+[   32.006091] %CNXMAN, this node is now a VAXcluster member
+[   32.010161] %CNXMAN, system 00000000000007c6 was added to the cluster
+[   32.014929] %CNXMAN, system 00000000000007c3 was added to the cluster
+[   32.023381] %CNXMAN, completed VAXcluster state transition
+[   32.988045] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+$ SHOW CLUSTER
+View of Cluster from system ID 1990 node: OVMXD    23-SEP-2026 19:29:40
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXD  | 00010002 | VMX V0.7        | MEMBER           |
+| 1987   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ 

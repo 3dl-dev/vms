@@ -461,10 +461,11 @@
  *        "no NIC" case, in which the executive registers no ETH0: at all (INV-6:
  *        no fake device for a NIC that is not there). Linux: for_each_netdev over
  *        init_net under rtnl_lock, skipping IFF_LOOPBACK and requiring
- *        ARPHRD_ETHER, taking the first match. NetBSD: the documented
- *        contract-only twin until devtab joins the NetBSD module's SRCS
- *        (following the exec_blockdev precedent -- type-checked, never run, and
- *        names its real source in the backend comment).
+ *        ARPHRD_ETHER, taking the first match. NetBSD (rd vms-613): BOUND, in
+ *        src/kernel-netbsd/vms_lan_netbsd.c (not static-inline here, the same
+ *        exec_lan_open precedent) -- IFNET_READER_FOREACH(ifp) inside a
+ *        pserialize_read_enter()/_exit() section, skipping IFT_LOOP and
+ *        requiring IFT_ETHER, taking the first match.
  *
  * 12. Host TCP client socket  (vms-9951; called ONLY from the BGn: INET facility,
  *    src/kernel-core/vms_bg.c -- the executive-resident network pseudo-device,
@@ -884,7 +885,31 @@
  *        retransmit) are computed from this, so a wall-clock step cannot expire
  *        a virtual circuit. Linux: ktime_get_ns()/1000000. NetBSD:
  *        getnanouptime()/1000000.
+ *   void exec_wait_ms(uint32_t ms)
+ *        Sleep for AT LEAST `ms` milliseconds and return. PROCESS CONTEXT ONLY;
+ *        MAY SLEEP; never from the fork thread, a timer callback or receive
+ *        context, and never with the fork mutex or an exec_lock held.
  *
+ *        WHY THE SEAM NEEDS IT (rd vms-abd). The clean cluster departure
+ *        (VMS_IOCTL_CLUSTER_STOP -> vms_cnxman_depart) initiates a real SCS
+ *        DISCONNECT_REQ handshake per open connection and then DRAINS it: the
+ *        peer's answer arrives as a frame the FORK THREAD dispatches, so the
+ *        departing ioctl thread has to yield the processor and re-test, in a
+ *        bounded loop, without holding the mutex the fork thread needs. Every
+ *        other bounded wait in the executive owns a condition variable to sleep
+ *        on (exec_cv_wait_timeout); the connection manager owns none, and
+ *        inventing one for a shutdown poll would add a substrate object with a
+ *        lifecycle to get wrong. This is the smaller primitive.
+ *
+ *        IT IS NOT INTERRUPTIBLE, deliberately: the caller is a process that is
+ *        already shutting down, and a signal that cut the drain short would
+ *        abandon a DISCONNECT_REQ mid-handshake -- exactly the half-announced
+ *        departure this path exists to eliminate. The BOUND is the caller's
+ *        deadline, not a signal. Linux: msleep(). NetBSD: kpause(9),
+ *        non-interruptible, with the tick count floored at 1 so a sub-tick
+ *        request cannot degenerate into kpause's "sleep forever" 0.
+ *
+
  * 18. Console (design SS3.2.2 SS18; called from vms_cnxman.c for the OPCOM-class
  *    %CNXMAN / %VAXcluster lines the operator and the lab harness read on OPA0:).
  *
@@ -895,6 +920,14 @@
  *        exactly where the harness reads it (memory forking-daemon-over-bgn-
  *        ladder). NetBSD: printf(9). This op EXISTS so the cluster stack stops
  *        using pr_info(), a Linux idiom the NetBSD twin has to #define away.
+ *
+ *        "THE CONSOLE" IS NOT THE RIND'S ALONE TO GUARANTEE (rd vms-151). On
+ *        Linux the record still has to clear the console level PID 1 sets for
+ *        the product boot, and for months it did not: a whole cluster formation
+ *        was written to a console that dropped every line of it. Both numbers
+ *        and the invariant between them are src/kernel/ovmx_console_policy.h,
+ *        asserted at compile time on each side. A NEW CALL SITE NEEDS NOTHING
+ *        FROM THIS -- but a change to either level does, and the build says so.
  */
 
 #ifndef OVMX_EXEC_KBACKEND_H

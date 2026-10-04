@@ -12,7 +12,7 @@ compatibility data) that is characterized, not enumerated.
 - [Building](building.md) — all build modes, CMake options, kernel modules
 - [Cluster Configuration Guide](cluster-configuration-guide.md) — stand up a 2-node cluster via the pre-seeded `OVMXVMSSYS.PAR` (VMS-way SYSGEN/AUTOGEN authoring is post-0.6)
 - [TCP/IP Configuration Guide](tcpip-configuration-guide.md) — the `TCPIP$CONFIG` plane, `TCPIP$` logicals, interfaces
-- [Multi-Architecture Guide](building-multiarch.md) — x86_64, Alpha (LP64), VAX, and aarch64 targets
+- [Multi-Architecture Guide](building-multiarch.md) — Alpha (LP64) and VAX cross-build/boot targets (x86_64 is the primary path, covered by [Building](building.md)/[Getting Started](getting-started.md); aarch64 has a CI system-emulation boot-proof lane only, no user-facing build doc)
 - [DCL Command Reference](dcl-commands.md) — the built-in verb set (`src/vmsdcl/dcl_builtin.c`)
 - [Adding an OVMX Kernel Module](adding-an-ovmx-kernel-module.md) — extending `vms.ko`
 
@@ -28,7 +28,7 @@ compatibility data) that is characterized, not enumerated.
 
 - [Release Roadmap to 1.0](release-roadmap-to-1.0.md) — **the roadmap of record**: milestone ladder (0.3 → 1.0), the 1.0 gate set, and current status (reconciled from `rd`)
 - [Releasing](releasing.md) — release engineering and the co-release gate
-- **Release notes** — per-milestone notes: `release-notes-0.2.md`, `release-notes-0.5*.md`, `RELEASE-NOTES-0.3*.md`, and [`RELEASE-NOTES-0.6.md`](RELEASE-NOTES-0.6.md)
+- **Release notes** — per-milestone notes, all under `docs/RELEASE-NOTES-<version>.md`: [`RELEASE-NOTES-0.2.md`](RELEASE-NOTES-0.2.md), `RELEASE-NOTES-0.3*.md`, `RELEASE-NOTES-0.5*.md`, and [`RELEASE-NOTES-0.6.md`](RELEASE-NOTES-0.6.md)
 
 ## Internal / Design
 
@@ -42,6 +42,6 @@ guides above are the entry points for using OpenVMX.
 - **`design-*.md`** (~60 records) — per-feature design records: the executive core, Files-11 ACP, image activation, the distributed lock manager, DECnet, the native link toolchain, and more.
 - **`audit-*.md`** — targeted audits (ILP32/VAX width, message idents, executive boundary).
 - **Clean-room RE provenance** — `cluster-protocol-spec.md`, `decnet-provenance-register.md`, `draper-faithfulness-register.md`, `research-alpha-dlm-wire.md`.
-- **Compatibility & parity tracking** — `dcl-verb-fidelity-scoreboard.md`, `qualifier-audit.md`, `conformance-gap-report.md`, `roadmap-source-compat.md`, `vms-source-code-corpus.md`, and the source YAML under `docs/compat/`.
+- **Compatibility & parity tracking** — `dcl-verb-fidelity-scoreboard.md`, `conformance-gap-report.md`, `roadmap-source-compat.md`, `vms-source-code-corpus.md`, and the source YAML under `docs/compat/`.
 - **Oracle data** — golden captures and normalization under `docs/oracle/`.
 - **Runtime & process** — `runtime-target.md` (the one-runtime rule), `roadmap-reconcile-workflow.md`, and the internal orchestration state under `internal/` (`conductor-state.md`, `orchestration-conductor.md`, `lane-ownership.md`).

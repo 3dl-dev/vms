@@ -4,7 +4,7 @@
 
 ```bash
 # Debian/Ubuntu
-sudo apt install cmake gcc make libc6-dev libreadline-dev flex bison
+sudo apt install cmake gcc make libc6-dev libreadline-dev
 
 # For static builds
 sudo apt install musl-tools

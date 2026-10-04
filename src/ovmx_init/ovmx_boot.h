@@ -121,10 +121,14 @@ void ovmx_boot_start_console_log_bridge(void);
  * interleaves with -- and is indistinguishable from -- the VMS boot banner
  * on what is supposed to read as a faithful VMS console.
  *
- * Lowered so only EMERG/ALERT/CRIT (bugcheck-class kernel faults) still
- * reach the console -- a real catastrophic kernel fault surfaces, exactly
- * as a VAX/Alpha would bugcheck to its own console, but routine INFO/WARN
- * module chatter does not. Does NOT touch the kernel's own log ring
+ * Lowered so EMERG/ALERT/CRIT (bugcheck-class kernel faults) still reach
+ * the console -- a real catastrophic kernel fault surfaces, exactly as a
+ * VAX/Alpha would bugcheck to its own console -- and so does ERR, which is
+ * the level the EXECUTIVE writes its OPA0: operator lines at (%CNXMAN,
+ * %PEA0, ...; see src/kernel/ovmx_console_policy.h, which owns both numbers
+ * and asserts the relation -- rd vms-151, where a one-level disagreement
+ * muted a whole cluster formation). Routine INFO/WARN module chatter does
+ * not, which is what vms-300 was about. Does NOT touch the kernel's own log ring
  * buffer/log device (Linux /dev/kmsg, NetBSD /dev/klog) -- only the console
  * SINK -- so ovmx_boot_start_console_log_bridge()'s reader keeps seeing
  * every line for SYS$MANAGER:OPERATOR.LOG (vms-32a); kernel pr_info() call
@@ -145,6 +149,20 @@ void ovmx_boot_start_console_log_bridge(void);
  * yet; documented no-op there, never a faked success.
  */
 void ovmx_boot_mute_kernel_console(void);
+
+/*
+ * ovmx_boot_announce_syskrnl - announce the SYSKRNL identity line
+ * (ovmx_syskrnl_banner()) at the start of boot.
+ *
+ * Linux: on the console, as it always has been. NetBSD (rd vms-553, operator
+ * ruling 2026-10-01): NOT on the console -- the OpenVMX/VAX console shows the
+ * VMS personality and no NetBSD boot output, done at the source (the
+ * OVMX_QUIET kernel keeps its own boot off the console too), so this prints
+ * nothing there. The substrate identity is not lost: the kernel's own banner
+ * ("NetBSD 10.1 (OVMX) #n ...") is in the message buffer (dmesg), and
+ * ovmx_syskrnl_banner() still names it for every other surface.
+ */
+void ovmx_boot_announce_syskrnl(const char *banner);
 
 /*
  * ovmx_boot_load_module - load an OVMX executive/filesystem kernel module by

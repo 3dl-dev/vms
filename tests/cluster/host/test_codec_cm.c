@@ -64,7 +64,7 @@ static void fill_link(struct vms_cm_link *l)
 	memcpy(l->hdr.eth_src, src, 6);
 	memcpy(l->hdr.dst_lavc, dst, 6);
 	memcpy(l->hdr.src_lavc, src, 6);
-	l->hdr.connect_flag = 0x0001;
+	l->hdr.cluster_group = 0x0001;
 	l->recv_ack = 0x0007;
 	l->send_seq = 0x0009;
 	l->remote_conid = 0x62c50009u;
@@ -347,6 +347,69 @@ static void test_open_parse(void)
 	ct_check_eq_u32(o.bitmap, 0x0e, "  bitmap == 0x0e (M=3)");
 }
 
+/*
+ * rd vms-af4: EVERY REAL op-0x08 REMOVE OPEN CARRIES THE NODEMAP OF THE MEMBERS
+ * IT KEEPS (spec sec 4(p).R).
+ *
+ * Nine real captured opens, five distinct removals, three coordinators (a real
+ * OpenVMS VAX V7.3 VAX1, VAX2 and VAXC), removed slots 2, 3 and 4, from three-
+ * and four-member clusters -- each specimen's own comment says which system was
+ * removed and which CSID slots the cluster held. body[55] is, in every one, the
+ * set of slots the transition keeps: the removed slot's bit clear, every kept
+ * member's bit set, popcount == the post-removal member count. The two
+ * specimens of one removal (sent to two different members) carry the same byte.
+ */
+static void test_remove_open_carries_the_kept_nodemap(void)
+{
+	static const struct { const char *name; uint8_t keeps; uint8_t gone; } r[] = {
+		{ "cm-open-remove-s4d-1",    0x0e, 4 },   /* slots 1,2,3 kept */
+		{ "cm-open-remove-s4d-2",    0x0e, 4 },
+		{ "cm-open-remove-s4a-1",    0x1a, 2 },   /* slots 1,3,4 kept */
+		{ "cm-open-remove-s4a-2",    0x1a, 2 },
+		{ "cm-open-remove-s4b-1",    0x16, 3 },   /* slots 1,2,4 kept */
+		{ "cm-open-remove-s4b-2",    0x16, 3 },
+		{ "cm-open-remove-b36or-1",  0x06, 3 },   /* three real VAXes */
+		{ "cm-open-remove-b36or-2",  0x06, 4 },   /* ...VAX3 again, as csid 4 */
+		{ "cm-open-remove-af4rig-1", 0x06, 3 },
+	};
+	uint32_t i;
+
+	printf("-- vms_cm_open_parse: op 0x08 REMOVE opens carry the kept "
+	       "members' nodemap (rd vms-af4)\n");
+	for (i = 0; i < sizeof(r) / sizeof(r[0]); i++) {
+		const struct vms_fixture *f = fixture(r[i].name);
+		struct vms_cm_open o;
+		uint8_t span[VMS_CM_BITMAP_SPAN_LEN];
+		uint32_t k, residue = 0u;
+
+		ct_check(f != NULL, r[i].name);
+		if (f == NULL)
+			continue;
+		ct_check(vms_cm_open_parse(fx_body(f), fx_body_len(f), &o) ==
+			 VMS_CODEC_OK && o.env.category == VMS_CM_CAT_CONFIG &&
+			 o.env.opcode == VMS_CM_OP_XITION_REM &&
+			 o.role == VMS_CM_ROLE_XITION &&
+			 o.cls == VMS_CM_CLASS_REMOVE,
+			 "a cat-0x01 op-0x08 class-0x03 open, tag 0x0340");
+		ct_check(o.has_bitmap, "and it carries a nodemap");
+		ct_check_eq_u32(o.bitmap, r[i].keeps,
+				"body[55] == the slots the removal keeps");
+		ct_check((o.bitmap & (uint8_t)(1u << r[i].gone)) == 0u &&
+			 (o.bitmap & 0x01u) == 0u,
+			 "the removed slot's bit is clear (and slot 0 never set)");
+		ct_check(vms_cm_open_bitmap_span(fx_body(f), fx_body_len(f),
+						 span) == VMS_CODEC_OK,
+			 "its span is readable");
+		for (k = 0; k < VMS_CM_BITMAP_SPAN_LEN; k++)
+			if (k != VMS_CM_BITMAP_SPAN_IDX && span[k] != 0u)
+				residue++;
+		ct_check_eq_u32(residue, 0,
+				"and every other byte of body[52:60] is zero");
+	}
+	ct_check(!vms_cm_open_carries_nodemap(VMS_CM_OP_DEPART_XITION),
+		 "the class-0x04 departure open is not read as carrying one");
+}
+
 static void test_barrier_parse(void)
 {
 	const struct vms_fixture *f = fixture("cm-barrier-step");
@@ -388,6 +451,52 @@ static void test_params_parse(void)
 	ct_check_eq_u32(p.param_f2, 0x01, "  param_f2 == 0x01 (observed const)");
 	ct_check(memcmp(p.version, "V7.3    ", VMS_CM_VERSION_LEN) == 0,
 		 "  version == \"V7.3    \"");
+}
+
+/*
+ * rd vms-e88: op-0x01 body[18:20] is the SENDER'S MEMBER COUNT, read off two
+ * real V7.3 records from the e88 trio C3 -- a member of a two-member cluster
+ * and a joiner -- and OVMX's builder puts its own count at exactly those two
+ * bytes: built with the oracle's own count, the span is byte-identical.
+ */
+static void test_e88_params_member_count(void)
+{
+	const struct vms_fixture *m = fixture("cm-params-member-oracle");
+	const struct vms_fixture *j = fixture("cm-params-joiner-oracle");
+	struct vms_cm_node_params own;
+	struct vms_cm_params p;
+	uint8_t built[VMS_CM_BODY_LEN];
+	uint32_t written = 0;
+
+	printf("-- rd vms-e88: op 0x01 body[18:20] is the sender's member "
+	       "count\n");
+	ct_check(m != NULL && j != NULL, "both e88 oracle specimens present");
+	if (m == NULL || j == NULL)
+		return;
+
+	ct_check(vms_cm_params_parse(fx_body(m), fx_body_len(m), &p)
+		 == VMS_CODEC_OK, "the member's record parses");
+	ct_check_eq_u32(p.members, 2u,
+			"  a member of a two-member cluster advertises 2");
+	ct_check_eq_u32(p.votes, 1u, "  ... beside its VOTES 1");
+	ct_check(vms_cm_params_parse(fx_body(j), fx_body_len(j), &p)
+		 == VMS_CODEC_OK, "the joiner's record parses");
+	ct_check_eq_u32(p.members, 0u,
+			"  a system in no cluster advertises 0");
+
+	memset(&own, 0, sizeof(own));
+	ct_check(vms_cm_params_build(1u, 2u, &own, built, sizeof(built),
+				     &written) == VMS_CODEC_OK,
+		 "OVMX builds a member's PARAMS");
+	ct_check(memcmp(built + VMS_OFB_CM_MEMBERS,
+			fx_body(m) + VMS_OFB_CM_MEMBERS, 2u) == 0,
+		 "  its body[18:20] is byte-identical to the real member's");
+	ct_check(vms_cm_params_build(0u, 0u, &own, built, sizeof(built),
+				     &written) == VMS_CODEC_OK,
+		 "OVMX builds a joiner's PARAMS");
+	ct_check(memcmp(built + VMS_OFB_CM_MEMBERS,
+			fx_body(j) + VMS_OFB_CM_MEMBERS, 2u) == 0,
+		 "  its body[18:20] is byte-identical to the real joiner's");
 }
 
 static void test_model_parse(void)
@@ -604,7 +713,7 @@ static void test_joiner_originations(void)
 	own.param_f1 = 0x11223344u;
 	own.param_f2 = 0x55667788u;
 	memcpy(own.version, "VMX V0.6", VMS_CM_VERSION_LEN);
-	ct_check(vms_cm_params_build(2u, &own, built, sizeof(built), &written)
+	ct_check(vms_cm_params_build(2u, 3u, &own, built, sizeof(built), &written)
 		 == VMS_CODEC_OK, "params builds");
 	ct_check(vms_frame_compose(&l, built, frame, sizeof(frame),
 				   &frame_written) == VMS_CODEC_OK,
@@ -615,12 +724,14 @@ static void test_joiner_originations(void)
 		 == VMS_CODEC_OK, "  round-trips through vms_cm_params_parse");
 	ct_check_eq_u32(params.env.opcode, VMS_CM_OP_PARAMS, "  op 0x01");
 	ct_check_eq_u32(params.votes, 2u, "  VOTES at body[22:24]");
+	ct_check_eq_u32(params.members, 3u,
+			"  the caller's member count at body[18:20] (rd vms-e88)");
 	ct_check_eq_u32(params.param_f1, 0x11223344u,
 			"  the caller's own param_f1 -- never a captured 0x10");
 	ct_check_eq_u32(params.param_f2, 0x55667788u, "  ... and param_f2");
 	ct_check(memcmp(params.version, "VMX V0.6", VMS_CM_VERSION_LEN) == 0,
 		 "  the caller's OWN version string, never a baked \"V7.3\"");
-	ct_check(vms_cm_params_build(0u, NULL, built, sizeof(built), &written)
+	ct_check(vms_cm_params_build(0u, 0u, NULL, built, sizeof(built), &written)
 		 == VMS_CODEC_E_INVAL,
 		 "  a NULL parameter block is refused, not zero-filled");
 
@@ -970,6 +1081,203 @@ static void test_open_bitmap_span(void)
 	}
 }
 
+/* ==========================================================================
+ * rd vms-b87 -- the 16-byte SCA connect data, byte-exact against FOUR real
+ * cluster configurations
+ *
+ * Every expectation below is a string of bytes a REAL OpenVMS VAX V7.3 put on
+ * a real wire, read back out of
+ * tests/lab/captures/vms-b36-cnxmgrerr-20260925/analysis/connect-data.txt, and
+ * every INPUT is the value VMS reported for ITSELF with F$GETSYI at the same
+ * moment (VOTES / EXPECTED_VOTES / QUORUM / CLUSTER_NODES, transcript in that
+ * capture's README sec 2(d)). The test is therefore not "the builder agrees
+ * with itself": it is "the builder produces what four real nodes produced,
+ * from the numbers those nodes said they held".
+ *
+ * VAX2 IS THE DISCRIMINATOR and is in here for that reason alone: it holds
+ * ZERO votes of its own and still reports 1, which is what proves the first
+ * field is the CLUSTER's vote total and not the sender's. Delete it and a
+ * wrong builder passes.
+ * ========================================================================== */
+static const uint8_t CD_HEAD[4] = { 0x01, 0x1b, 0x01, 0x03 };
+static const uint8_t CD_TAIL[5] = { 0x08, 0x00, 0x00, 0x06, 0x00 };
+
+static void cd_case_ack(const char *what, uint16_t votes, uint16_t quorum,
+			uint16_t nodes, uint8_t member, uint16_t peer_ack,
+			const uint8_t *want)
+{
+	struct vms_cm_conndata_in in;
+	uint8_t out[VMS_CM_CONNDATA_LEN];
+	vms_codec_status_t st;
+
+	in.cluster_votes = votes;
+	in.quorum = quorum;
+	in.cluster_nodes = nodes;
+	in.member = member;
+	in.pad0 = 0u;
+	in.peer_ack_msg = peer_ack;
+	in.pad1 = 0u;
+
+	st = vms_cm_conndata_build(&in, CD_HEAD, 4u, CD_TAIL, 5u, out,
+				   (uint32_t)sizeof(out));
+	ct_check_eq_u32((uint32_t)st, (uint32_t)VMS_CODEC_OK, what);
+	ct_check(memcmp(out, want, sizeof(out)) == 0, what);
+}
+
+/* The four rd vms-b87 rows are all nodes that had taken NOTHING from the peer
+ * they were dialling, so their ack cell is 0 -- which is why they are the SHORT
+ * form. Said once, here, rather than repeated at each call. */
+static void cd_case(const char *what, uint16_t votes, uint16_t quorum,
+		    uint16_t nodes, uint8_t member, const uint8_t *want)
+{
+	cd_case_ack(what, votes, quorum, nodes, member, 0u, want);
+}
+
+static void test_conndata_against_real_nodes(void)
+{
+	/* VAX1: VOTES 1, EXPECTED_VOTES 1, QUORUM 1, CLUSTER_NODES 2. */
+	static const uint8_t vax1[16] = {
+		0x01,0x1b,0x01,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00, 0x01,
+		0x08,0x00,0x00,0x06,0x00 };
+	/* VAX2: the SAME cluster, and its OWN votes are 0. Same bytes. */
+	static const uint8_t vax2[16] = {
+		0x01,0x1b,0x01,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00, 0x01,
+		0x08,0x00,0x00,0x06,0x00 };
+	/* VAXC alone: one member, one vote, quorum one. */
+	static const uint8_t solo[16] = {
+		0x01,0x1b,0x01,0x03, 0x01,0x00, 0x01,0x00, 0x01,0x00, 0x01,
+		0x08,0x00,0x00,0x06,0x00 };
+	/* VAXC after admitting a second, EXPECTED_VOTES 2 member. */
+	static const uint8_t two[16] = {
+		0x01,0x1b,0x01,0x03, 0x02,0x00, 0x02,0x00, 0x02,0x00, 0x01,
+		0x08,0x00,0x00,0x06,0x00 };
+	/* Any node BEING ADMITTED, either direction. */
+	static const uint8_t joining[16] = {
+		0x01,0x1b,0x01,0x03, 0x00,0x00, 0x00,0x00, 0x00,0x00, 0x00,
+		0x08,0x00,0x00,0x06,0x00 };
+	struct vms_cm_conndata_in in;
+	uint8_t out[VMS_CM_CONNDATA_LEN];
+
+	printf("-- rd vms-b87: the connect data, against four real "
+	       "configurations\n");
+	cd_case("VAX1, a 2-node cluster with one vote in it",
+		1u, 1u, 2u, 1u, vax1);
+	cd_case("VAX2, the SAME cluster -- OWN votes 0, reports the "
+		"CLUSTER's 1 (the discriminator)", 1u, 1u, 2u, 1u, vax2);
+	cd_case("VAXC alone", 1u, 1u, 1u, 1u, solo);
+	cd_case("VAXC with a second member, EXPECTED_VOTES 2",
+		2u, 2u, 2u, 1u, two);
+	cd_case("a node being admitted reports no cluster arithmetic",
+		0u, 0u, 0u, 0u, joining);
+
+	/*
+	 * ==================================================================
+	 * rd vms-8c54 -- content[106:108], AND THE TWO BYTES THAT FOLLOW IT
+	 *
+	 * These rows are a SECOND, independent cluster: two real OpenVMS VAX
+	 * V7.3 nodes reconnecting to each other after one of them was
+	 * SIGSTOPped for 10 s (tests/lab/captures/vms-8c54-stalled-guest-
+	 * 20260928/analysis/oracle-vc-fields.txt and the conndata census
+	 * beside it). Every byte below was on that wire.
+	 *
+	 * WHAT THEY PIN THAT THE FOUR ROWS ABOVE CANNOT. The four rows are all
+	 * ack-0, so they fix the SHORT form and say nothing about the other
+	 * one. Here the same builder must produce the LONG form -- 0x02 at
+	 * [2], 0x0a at [11], the counter little-endian at [12:14] -- purely
+	 * because an ack is carried. Delete these and a builder that has never
+	 * heard of [12:14] passes the whole file.
+	 *
+	 * THE OFF-BY-ONE IS DELIBERATE and is the proof the cell is "the
+	 * highest I have TAKEN from you": VAX3 had retransmitted send-msg#
+	 * 1799 three times unanswered, and VAX1's connect carries 1798.
+	 * ================================================================== */
+	{
+		/* VAX1 -> VAX2, the reconnect: cluster votes 1, quorum 1,
+		 * 2 members, and VAX1 had taken VAX2's send-msg# 14811. */
+		static const uint8_t v1_reconnect[16] = {
+			0x01,0x1b,0x02,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00,
+			0x01, 0x0a,0xdb,0x39,0x06,0x00 };
+		/* VAX2's ACCEPT on the same pair: it had taken 10249. */
+		static const uint8_t v2_accept[16] = {
+			0x01,0x1b,0x02,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00,
+			0x01, 0x0a,0x09,0x28,0x06,0x00 };
+		/* VAX1 -> VAX3 in the same capture, a 3-member cluster, and
+		 * VAX1 had taken 1798 of VAX3's 1799 sends. */
+		static const uint8_t v1_to_v3[16] = {
+			0x01,0x1b,0x02,0x03, 0x01,0x00, 0x01,0x00, 0x03,0x00,
+			0x01, 0x0a,0x06,0x07,0x06,0x00 };
+
+		printf("-- rd vms-8c54: the ack cell, and the form that "
+		       "follows it\n");
+		cd_case_ack("VAX1 re-establishing: it carries the 14811 it "
+			    "had TAKEN from VAX2", 1u, 1u, 2u, 1u, 14811u,
+			    v1_reconnect);
+		cd_case_ack("VAX2 accepting it: its own 10249, not VAX1's "
+			    "number", 1u, 1u, 2u, 1u, 10249u, v2_accept);
+		cd_case_ack("VAX1 -> VAX3: 1798, NOT the 1799 VAX3 kept "
+			    "retransmitting unanswered", 1u, 1u, 3u, 1u,
+			    1798u, v1_to_v3);
+	}
+
+	/*
+	 * ...AND THE FORM FOLLOWS THE CELL, NOT THE MEMBERSHIP. The four rows
+	 * above are MEMBERS carrying 0x01/0x08, and the rig caught one real
+	 * VAX sending both forms minutes apart with its membership unchanged.
+	 * So the same membership with and without an ack must give the two
+	 * different forms, and that is asserted here rather than left to the
+	 * reader to notice.
+	 */
+	{
+		static const uint8_t short_form[16] = {
+			0x01,0x1b,0x01,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00,
+			0x01, 0x08,0x00,0x00,0x06,0x00 };
+		static const uint8_t long_form[16] = {
+			0x01,0x1b,0x02,0x03, 0x01,0x00, 0x01,0x00, 0x02,0x00,
+			0x01, 0x0a,0x01,0x00,0x06,0x00 };
+
+		cd_case_ack("the SAME member with nothing taken yet: short "
+			    "form", 1u, 1u, 2u, 1u, 0u, short_form);
+		cd_case_ack("...and with ONE message taken: long form, and "
+			    "the 1 is little-endian at [12:14]", 1u, 1u, 2u,
+			    1u, 1u, long_form);
+	}
+
+	/*
+	 * ...AND A NON-MEMBER CANNOT REPORT ONE EVEN IF ITS CALLER TRIES.
+	 * A stale count surviving into the joining form would be this node
+	 * claiming a membership it does not have, which is the INV-6 case.
+	 */
+	in.cluster_votes = 9u;
+	in.quorum = 9u;
+	in.cluster_nodes = 9u;
+	in.member = 0u;
+	in.pad0 = 0u;
+	in.peer_ack_msg = 0u;
+	in.pad1 = 0u;
+	ct_check_eq_u32((uint32_t)vms_cm_conndata_build(&in, CD_HEAD, 4u,
+							CD_TAIL, 5u, out,
+							(uint32_t)sizeof(out)),
+			(uint32_t)VMS_CODEC_OK, "a non-member still builds");
+	ct_check(memcmp(out, joining, sizeof(out)) == 0,
+		 "...and the counts a non-member was handed are DROPPED, not "
+		 "sent");
+
+	/* Refusals: a head or tail that is not the measured width, and no
+	 * room. Nothing is written on a refusal. */
+	in.member = 1u;
+	ct_check(vms_cm_conndata_build(&in, CD_HEAD, 3u, CD_TAIL, 5u, out,
+				       (uint32_t)sizeof(out)) != VMS_CODEC_OK,
+		 "a head that is not the measured four bytes is refused");
+	ct_check(vms_cm_conndata_build(&in, CD_HEAD, 4u, CD_TAIL, 4u, out,
+				       (uint32_t)sizeof(out)) != VMS_CODEC_OK,
+		 "...and a tail that is not the measured five");
+	ct_check(vms_cm_conndata_build(&in, CD_HEAD, 4u, CD_TAIL, 5u, out, 15u)
+		 != VMS_CODEC_OK, "...and a buffer that cannot hold sixteen");
+	ct_check(vms_cm_conndata_build(NULL, CD_HEAD, 4u, CD_TAIL, 5u, out,
+				       (uint32_t)sizeof(out)) != VMS_CODEC_OK,
+		 "...and a NULL input");
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -997,16 +1305,19 @@ int main(void)
 	test_ack_build();
 
 	test_allowlist();
+	test_conndata_against_real_nodes();
 
 	test_open_parse();
 	test_barrier_parse();
 	test_params_parse();
+	test_e88_params_member_count();
 	test_model_parse();
 	test_dlm_rebuild_parse();
 
 	test_barrier_build();      /* FC-P3.5 */
 	test_body_build();         /* FC-P3.5 */
 	test_open_bitmap_span();   /* FC-P3.5 */
+	test_remove_open_carries_the_kept_nodemap();   /* rd vms-af4 */
 
 	test_joiner_originations();     /* FC-P3.3 */
 	test_membership_rec();                /* the op-0x05 record   */

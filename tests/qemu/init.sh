@@ -103,7 +103,7 @@ fi
 # NOR any kernel-executive path -- pure userspace .vms$imp binding / resident-
 # producer registry logic, run here only so run_facility_negctl.sh's per-
 # facility fault-injection proofs keep seeing them execute inside this
-# harness. They are deliberately excluded from .github/workflows/ci.yml's
+# harness. They are deliberately excluded from .github/workflows/ci-*.yml (split by vms-1af)'s
 # test_syssvc_*-derived policed set (which requires rc=77 with no /dev/vms):
 # these two legitimately return 0 whether or not the executive is present.
 #
@@ -111,7 +111,7 @@ fi
 #
 #     === SUITE <name> rc=<exit code> ===
 #
-# and .github/workflows/ci.yml asserts on THAT, per suite, instead of on the
+# and .github/workflows/ci-*.yml (split by vms-1af) asserts on THAT, per suite, instead of on the
 # aggregate "FINAL RESULTS" tally below. Two real defects made this necessary,
 # both proven against running artifacts, not argued:
 #
@@ -346,7 +346,7 @@ echo ""
 # printed, no module-load check folded in under the same name. A module-load
 # failure is not silently lost by this split: /dev/vms absent means every
 # test_kmod_*/test_syssvc_* suite above fails or honest-skips against a missing
-# device, which SUITE_FAIL already reports, and .github/workflows/ci.yml's
+# device, which SUITE_FAIL already reports, and .github/workflows/ci-*.yml (split by vms-1af)'s
 # kernel-executive job additionally asserts on the "PASS: vms.ko loaded" line
 # directly.
 echo "=== MODULE LOAD: $MODULE_PASS passed, $MODULE_FAIL failed ==="

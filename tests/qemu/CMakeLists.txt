@@ -27,7 +27,7 @@
 #             including the plain host CI build job.
 #   * RUN:    tests/qemu/init.sh execs every /tests/test_syssvc_* in the
 #             initramfs and prints "=== SUITE <name> rc=<code> ===".
-#   * ASSERT: .github/workflows/ci.yml (jobs kernel-executive and
+#   * ASSERT: .github/workflows/ci-kernel-executive.yml (jobs kernel-executive and
 #             kernel-executive-negative-control) derives the expected suite
 #             set from `ls tests/qemu/test_*.c` and asserts each suite's
 #             verdict line individually.
@@ -384,8 +384,9 @@ endforeach()
 # provenance forbids editing or duplicating them) with the SAME
 # qemu_syssvc_add_test() recipe every real src/libvms-linked suite in this
 # file uses, so they run against a genuine /dev/vms inside this QEMU
-# harness. Named test_corpus_* (not test_syssvc_*) deliberately: ci.yml's
-# kernel-executive-negative-control job polices every test_syssvc_*.c to
+# harness. Named test_corpus_* (not test_syssvc_*) deliberately:
+# ci-kernel-executive.yml's kernel-executive-negative-control job polices
+# every test_syssvc_*.c to
 # return the honest-skip code 77 with no executive -- a contract this
 # project wrote for ITS OWN suites. These two are unmodified upstream
 # programs whose no-executive behavior is whatever errchk_sig()/lib$signal()
@@ -410,7 +411,7 @@ qemu_syssvc_add_test(corpus_seed_lnm
 # (main-red classification fix; test_imgact_bind was test_syssvc_imgact_bind
 # through #225).
 #
-# .github/workflows/ci.yml's kernel-executive-negative-control job derives its
+# .github/workflows/ci-kernel-executive.yml's kernel-executive-negative-control job derives its
 # "must be a real executive suite" policed set from the test_syssvc_*.c glob
 # above and requires every member to return the honest-skip code 77 when
 # /dev/vms is absent -- a test_syssvc_* suite that returns 0 with no executive
@@ -422,7 +423,7 @@ qemu_syssvc_add_test(corpus_seed_lnm
 # control job flag a correct pass as a fabricated one (main went red on
 # test_syssvc_imgact_bind for exactly this reason). test_imgact_* is the
 # correct, non-executive name: it is excluded from the test_syssvc_*.c glob
-# above (and so from ci.yml's and run_facility_negctl.sh's test_syssvc_*
+# above (and so from ci-kernel-executive.yml's and run_facility_negctl.sh's test_syssvc_*
 # policing) automatically, by construction, not by an added exception.
 #
 # Built through the SAME qemu_syssvc_add_test() plumbing (same libvms link,
@@ -682,7 +683,7 @@ add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg
 # enormous effort; a gameable declaration-gate is a tear-out, not a hardening
 # target. The property they gestured at -- "a defect is actually caught" -- is
 # already covered by the runtime proof: the QEMU per-facility negative-control
-# job (.github/workflows/ci.yml) injects each defect, rebuilds vms.ko, boots it
+# job (.github/workflows/ci-kernel-executive.yml) injects each defect, rebuilds vms.ko, boots it
 # against a REAL /dev/vms, and asserts the facility's own suite goes RED
 # (run_facility_negctl.sh checks 1-4/8). That behavioral proof stays.
 #
@@ -703,7 +704,8 @@ add_custom_target(qemu_syssvc_tests DEPENDS ${_qemu_syssvc_test_targets} testimg
 # an unguarded `var=$(cmd)` assignment that fails aborts the step -- with
 # ZERO diagnostic, before the per-suite verdicts or the vms.ko/vmsfs.ko
 # checks are ever reached. tools/replay_ci_kernel_executive.py extracts that
-# step's `run:` block VERBATIM out of ci.yml and executes it against a
+# step's `run:` block VERBATIM out of ci-kernel-executive.yml (the domain
+# file ci.yml was split into by vms-1af) and executes it against a
 # synthetic capture, so this control is exercised against the SAME TEXT CI
 # runs -- no QEMU, no container, no /dev/vms needed.
 add_test(
@@ -712,6 +714,22 @@ add_test(
             ${CMAKE_SOURCE_DIR}
 )
 set_tests_properties(kernel_executive_negctl_crash PROPERTIES LABELS "harness")
+
+# ---------------------------------------------------------------------------
+# TOTAL GUEST DEATH vs a genuine per-facility defect red (rd vms-df4).
+#
+# Same shape as kernel_executive_negctl_crash above, so it is GATED unlike the
+# _negctl.sh declaration-only family vms-49f tore out (see that note, above):
+# it feeds the REAL fnd_all_suites_missing() a fabricated but realistically-
+# shaped captured $OUTFILE and asserts the function's own behaviour -- a
+# property of run_facility_negctl.sh itself, not a claim about the manifest or
+# the executive. No QEMU, no container, no /dev/vms needed.
+add_test(
+    NAME facility_negctl_total_death_check
+    COMMAND /bin/sh ${CMAKE_CURRENT_SOURCE_DIR}/facility_negctl_total_death_check.sh
+            ${CMAKE_SOURCE_DIR}
+)
+set_tests_properties(facility_negctl_total_death_check PROPERTIES LABELS "harness")
 
 # ---------------------------------------------------------------------------
 # THE 0.2 DEMO, END TO END (vms-5dd, parent vms-2579).
@@ -815,7 +833,7 @@ set_tests_properties(product_install_e2e PROPERTIES
 # disk as the sole VDA0: system disk with the bootstrap-only slim initramfs
 # and reaches a SYSTEM login -- red on the unfixed tree, green after vms-96ec.
 # CI runs it for real (never opt-in cover): see the install-boot-e2e job in
-# .github/workflows/ci.yml, which treats a SKIP as a hard failure. Same
+# .github/workflows/ci-kernel-executive.yml, which treats a SKIP as a hard failure. Same
 # opt-in-in-ctest convention as product_install_e2e above.
 add_test(
     NAME install_boot_e2e
@@ -863,7 +881,7 @@ set_tests_properties(install_menu_e2e PROPERTIES
 # writethrough-cache lesson, and its NEGATIVE CONTROL (an install torn down
 # before the guest flush, whose verify must then fail) is the red-first proof
 # that the durability is real. CI runs it for real (never opt-in cover): the
-# release-install-e2e job in .github/workflows/ci.yml treats a SKIP as a hard
+# release-install-e2e job in .github/workflows/ci-kernel-executive.yml treats a SKIP as a hard
 # failure. Same opt-in-in-ctest convention as install_menu_e2e above.
 add_test(
     NAME release_install_e2e
@@ -884,7 +902,7 @@ set_tests_properties(release_install_e2e PROPERTIES
 # and site customization survive, the version advanced, and the machine
 # still boots. Requires the two bundles to be prebuilt -- see
 # run_upgrade_e2e.sh's header for the local reproduction recipe and
-# .github/workflows/ci.yml's upgrade-e2e job for how CI produces them.
+# .github/workflows/ci-kernel-executive.yml's upgrade-e2e job for how CI produces them.
 # Same opt-in convention as product_install_e2e above, for the same reason.
 add_test(
     NAME upgrade_e2e
@@ -947,6 +965,37 @@ add_test(
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_sysboot_cluster_params_e2e.sh
 )
 set_tests_properties(sysboot_cluster_params_e2e PROPERTIES
+    LABELS "slow;qemu-full-boot"
+    SKIP_RETURN_CODE 77
+    TIMEOUT 900)
+
+# ---------------------------------------------------------------------------
+# @CLUSTER_CONFIG_LAN.COM AUTHORS CLUSTER IDENTITY -> REBOOT -> ADOPTED, END TO
+# END (vms-23b9 rung 1, the V0.7 "clustering done" gate).
+#
+# Boots the ACTUAL mastered bootable image (same distro/Dockerfile.bootable as
+# boot_scsnode_hostname_e2e above) and proves, against the REAL mounted volume
+# and a REAL second boot -- not a mock, not a host DCL shim -- that a USER who
+# runs the DOCUMENTED operator procedure @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM
+# (the CHANGE path from docs/cluster-configuration-guide.md) INTERACTIVELY over
+# the console to author a new SCSNODE, then reboots, gets that identity ADOPTED
+# by the running system: the boot console's own %OVMX-I-SCSNODE line names it and
+# F$GETSYI("NODENAME") (the live Linux hostname PID 1 sethostname()'d from the
+# authored SCSNODE) reads it, with F$GETSYI("SCSNODE") and SYSGEN USE CURRENT
+# agreeing. Where boot_scsnode_hostname_e2e types the SYSGEN commands by hand and
+# tests/dcl/test_cluster_config_lan.sh drives the procedure through a HOST
+# interpreter against a /tmp store (never boots), THIS gate runs the real
+# procedure on a real boot -- the user experience is the test. An over-long
+# SCSNODE rejected with %CLUSTER_CONFIG-E-BADNODE is folded into boot 1.
+#
+# Same opt-in/SKIP convention as the other qemu-full-boot gates: real docker +
+# QEMU boot, real minutes, gated behind OVMX_QEMU_FULL_E2E=1 so it does not run
+# under a bare `ctest`. See tests/qemu/test_cluster_config_lan_e2e.sh's header.
+add_test(
+    NAME cluster_config_lan_e2e
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_cluster_config_lan_e2e.sh
+)
+set_tests_properties(cluster_config_lan_e2e PROPERTIES
     LABELS "slow;qemu-full-boot"
     SKIP_RETURN_CODE 77
     TIMEOUT 900)
@@ -1019,7 +1068,7 @@ set_tests_properties(job_control_negctl_e2e PROPERTIES
 # recorded in its release-manifest.json (an independent record, not
 # re-derived from the artifact under test). Includes an in-transcript
 # negative control proving the version-match comparator can actually detect
-# a disagreement; see .github/workflows/ci.yml's release-acceptance-e2e job
+# a disagreement; see .github/workflows/ci-kernel-executive.yml's release-acceptance-e2e job
 # for the heavier complementary negative control (rerunning this whole gate
 # with a genuinely wrong expected version and asserting the GATE ITSELF
 # reddens). Requires a prebuilt bundle -- see run_release_acceptance_e2e.sh's
@@ -1049,7 +1098,7 @@ set_tests_properties(release_acceptance_e2e PROPERTIES
 #
 # EXPECTED TO BE RED until the in-flight command fixes land; it must NOT be
 # weakened to go green. Same opt-in convention as the qemu-full-boot gates
-# above (OVMX_QEMU_FULL_E2E=1); .github/workflows/ci.yml's dcl-acceptance-e2e
+# above (OVMX_QEMU_FULL_E2E=1); .github/workflows/ci-kernel-executive.yml's dcl-acceptance-e2e
 # job runs it for real on the release-cut path and treats a SKIP as a hard
 # failure.
 add_test(
@@ -1094,3 +1143,17 @@ set_tests_properties(console_boot_no_newline_spam_e2e PROPERTIES
     SKIP_RETURN_CODE 77
     TIMEOUT 1200)
 
+
+# ptrace_hold_selftest (rd vms-d90) -- the ONE host-runnable test in this
+# directory, and deliberately so: it needs no /dev/vms (so the "no add_test
+# here" rule above does not apply to it). It proves the arrangement that
+# test_syssvc_procnam P13 builds with ptrace -- hold a forked child at birth,
+# release it only once it is provably stopped (tests/qemu/ptrace_hold.h)
+# -- over every event ordering, and under a one-CPU real-ptrace stress that
+# lost ~1% of rounds to the pre-fix release-at-once logic. Linux ptrace only.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(ptrace_hold_selftest
+        ${CMAKE_CURRENT_SOURCE_DIR}/ptrace_hold_selftest.c)
+    add_test(NAME ptrace_hold_selftest COMMAND ptrace_hold_selftest)
+    set_tests_properties(ptrace_hold_selftest PROPERTIES TIMEOUT 300)
+endif()

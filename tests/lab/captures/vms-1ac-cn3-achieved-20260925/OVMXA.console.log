@@ -1,0 +1,850 @@
+[OVMXA] caps: CapPrm:	000001ffffffdfff CapEff:	000001ffffffdfff CapBnd:	000001ffffffdfff 
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+3EFCAD00+3EF0AD00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [OVMXA] SYSBOOT> reached
+SET SCSNODE OVMXA
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXA
+SYSBOOT> SET SCSSYSTEMID 1987
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1987
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 2
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 2
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    24-SEP-2026 23:54:40.25
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   15.433207] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   15.442471] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 24-SEP-2026 23:54:40.95
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: [   18.534028] %PEA0, channel verified
+[   18.534282] %PEA0, virtual circuit open
+[   19.515750] %CNXMAN, a connection manager was discovered on the interconnect
+[   19.523508] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   19.534283] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   19.546505] %CNXMAN, the cluster assigned this node a cluster system id
+[   19.552038] %CNXMAN, the cluster assigned this node a cluster system id
+[   19.555980] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   19.591680] %CNXMAN, this node is a member of the cluster
+[   19.595140] %CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+[   19.603970] %CNXMAN, VAXcluster state transition in progress
+[   19.607232] %CNXMAN, this node is now a VAXcluster member
+[   19.610251] %CNXMAN, system 00000000000007c3 was added to the cluster
+[   19.614158] %CNXMAN, system 00000000000007c5 was added to the cluster
+[   19.618174] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[   19.660174] %CNXMAN, completed VAXcluster state transition
+
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+$ [   20.031810] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+[   21.352044] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-0"
+CN3-POLL-OVMXA-0
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:54:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-15"
+CN3-POLL-OVMXA-15
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:55:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ [   48.192269] %PEA0, channel verified
+[   48.192546] %PEA0, virtual circuit open
+[   48.257594] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   48.847750] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   55.027010] %CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+[   55.044126] %CNXMAN, system 00000000000007c4 was added to the cluster
+[   55.219179] %CNXMAN, completed VAXcluster state transition
+WRITE SYS$OUTPUT "CN3-POLL-OVMXA-30"
+CN3-POLL-OVMXA-30
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:55:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-45"
+CN3-POLL-OVMXA-45
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:55:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-60"
+CN3-POLL-OVMXA-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:55:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-75"
+CN3-POLL-OVMXA-75
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:56:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-90"
+CN3-POLL-OVMXA-90
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:56:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-105"
+CN3-POLL-OVMXA-105
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:56:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-120"
+CN3-POLL-OVMXA-120
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:56:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-135"
+CN3-POLL-OVMXA-135
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:57:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-150"
+CN3-POLL-OVMXA-150
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:57:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-165"
+CN3-POLL-OVMXA-165
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:57:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-180"
+CN3-POLL-OVMXA-180
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:57:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-195"
+CN3-POLL-OVMXA-195
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:58:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-210"
+CN3-POLL-OVMXA-210
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:58:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-225"
+CN3-POLL-OVMXA-225
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:58:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-240"
+CN3-POLL-OVMXA-240
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:58:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-255"
+CN3-POLL-OVMXA-255
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:59:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-270"
+CN3-POLL-OVMXA-270
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:59:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-285"
+CN3-POLL-OVMXA-285
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:59:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-300"
+CN3-POLL-OVMXA-300
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 23:59:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-315"
+CN3-POLL-OVMXA-315
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:00:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-330"
+CN3-POLL-OVMXA-330
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:00:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-345"
+CN3-POLL-OVMXA-345
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:00:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-360"
+CN3-POLL-OVMXA-360
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:00:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-375"
+CN3-POLL-OVMXA-375
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:01:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-390"
+CN3-POLL-OVMXA-390
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:01:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-405"
+CN3-POLL-OVMXA-405
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:01:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-420"
+CN3-POLL-OVMXA-420
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:01:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-435"
+CN3-POLL-OVMXA-435
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:02:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-450"
+CN3-POLL-OVMXA-450
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:02:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-465"
+CN3-POLL-OVMXA-465
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:02:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-480"
+CN3-POLL-OVMXA-480
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:02:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-495"
+CN3-POLL-OVMXA-495
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:03:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-510"
+CN3-POLL-OVMXA-510
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:03:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-525"
+CN3-POLL-OVMXA-525
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:03:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-540"
+CN3-POLL-OVMXA-540
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:03:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-555"
+CN3-POLL-OVMXA-555
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:04:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-570"
+CN3-POLL-OVMXA-570
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:04:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-585"
+CN3-POLL-OVMXA-585
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:04:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-600"
+CN3-POLL-OVMXA-600
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:04:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-615"
+CN3-POLL-OVMXA-615
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:05:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-630"
+CN3-POLL-OVMXA-630
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:05:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-645"
+CN3-POLL-OVMXA-645
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:05:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-660"
+CN3-POLL-OVMXA-660
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:05:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-675"
+CN3-POLL-OVMXA-675
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:06:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-690"
+CN3-POLL-OVMXA-690
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:06:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-705"
+CN3-POLL-OVMXA-705
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:06:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-720"
+CN3-POLL-OVMXA-720
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:06:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-735"
+CN3-POLL-OVMXA-735
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:07:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-750"
+CN3-POLL-OVMXA-750
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:07:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-765"
+CN3-POLL-OVMXA-765
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:07:37
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-780"
+CN3-POLL-OVMXA-780
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:07:52
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-795"
+CN3-POLL-OVMXA-795
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:08:07
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "CN3-POLL-OVMXA-810"
+CN3-POLL-OVMXA-810
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    25-SEP-2026 00:08:22
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
+| 1988   | 00010003 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ 

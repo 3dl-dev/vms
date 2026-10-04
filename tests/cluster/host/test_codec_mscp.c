@@ -42,7 +42,7 @@ static void mk_link(struct vms_mscp_link *l, uint16_t recv_ack,
 	memcpy(l->hdr.eth_src, src, 6);
 	memcpy(l->hdr.dst_lavc, dst, 6);
 	memcpy(l->hdr.src_lavc, src, 6);
-	l->hdr.connect_flag = 0x0001;
+	l->hdr.cluster_group = 0x0001;
 	l->recv_ack = recv_ack;
 	l->send_seq = send_seq;
 	l->credit = credit;

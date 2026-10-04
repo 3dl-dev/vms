@@ -1,0 +1,454 @@
+=== booted-OVMX node: SCSNODE=OVMXB4 SCSSYSTEMID=1834 tap=tap4 mac=52:54:00:00:00:f4 qemu=qemu-system-x86_64 (TCG) ===
+[node] recorded CAP_NET_RAW evidence -> /lab/k8s-labs/vaxlab-4/logs/ovmx-node-b34g257-1789940463.caps:
+[node]   # CAP_NET_RAW evidence for booted-OVMX node pid=2055 (OVMX_DROP_NET_RAW=1)
+[node]   CapInh:	0000000000000000
+[node]   CapPrm:	00000000a80415fb
+[node]   CapEff:	00000000a80415fb
+[node]   CapBnd:	00000000a80415fb
+[node]   CapAmb:	0000000000000000
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2[node]   verdict: (e) PASS -- CAP_NET_RAW denied to the booted node (CapEff=00000000a80415fb CapBnd=00000000a80415fb, net_raw clear):
+[node]                        a userspace AF_PACKET raw open would EPERM, so a join proves the executive did it
+)
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [node] SYSBOOT> reached
+SET SCSNODE OVMXB4
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXB4
+SYSBOOT> SET SCSSYSTEMID 1834
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1834
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 2
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 2
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    20-SEP-2026 21:41:29.67
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB4 set from SYS$SYSTEM:OVMXVMSSYS.PAR
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 20-SEP-2026 21:41:30.74
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-F4
+         MTU 1500, channels 1, circuits 1
+         frames tx 434 (errors 0), rx 325 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-0"
+OVMX-POLL-0
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:41:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-20"
+OVMX-POLL-20
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:42:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-40"
+OVMX-POLL-40
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:42:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-60"
+OVMX-POLL-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:42:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-80"
+OVMX-POLL-80
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:43:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-100"
+OVMX-POLL-100
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:43:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-120"
+OVMX-POLL-120
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:43:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-140"
+OVMX-POLL-140
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:44:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-160"
+OVMX-POLL-160
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:44:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-180"
+OVMX-POLL-180
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:44:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-200"
+OVMX-POLL-200
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:45:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-220"
+OVMX-POLL-220
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:45:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-240"
+OVMX-POLL-240
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:45:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-260"
+OVMX-POLL-260
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:46:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-280"
+OVMX-POLL-280
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:46:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-300"
+OVMX-POLL-300
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:46:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-320"
+OVMX-POLL-320
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:47:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-340"
+OVMX-POLL-340
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:47:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-360"
+OVMX-POLL-360
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:47:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-380"
+OVMX-POLL-380
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:48:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-400"
+OVMX-POLL-400
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:48:23
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-420"
+OVMX-POLL-420
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:48:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "OVMX-POLL-440"
+OVMX-POLL-440
+$ SHOW CLUSTER
+View of Cluster from system ID 1834 node: OVMXB4   20-SEP-2026 21:49:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB4 | 00010002 | VMX V0.7        | MEMBER           |
+| 1025   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ [node] join-poll held the node LIVE ~460s (full window; teardown is gated by the VAX-side STATUS==MEMBER verdict, not an OVMX self-report)
+WRITE SYS$OUTPUT "OVMX-CNXTRACE-BEGIN"
+OVMX-CNXTRACE-BEGIN
+$ RUN SYS$SYSTEM:CNXTRACE.EXE
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=MEMBER failure=none ignored_events=17 recording=yes
+%CNXTRACE-I-COUNT, held=62 recorded=62 dropped=0
+CNXTRACE seq=00000000 t=00018883 kind=ARRIVAL  state=IDLE->IDLE ev=- detail=accepted rx=- rc=0 aux=0x00000401
+CNXTRACE seq=00000001 t=00018884 kind=ARRIVAL  state=IDLE->IDLE ev=- detail=cm-accept rx=- rc=0 aux=0x1b2f0005
+CNXTRACE seq=00000002 t=00018884 kind=DISPATCH state=IDLE->IDLE ev=CM_ACCEPTED detail=fired rx=consumed rc=0 aux=0x00000401
+CNXTRACE seq=00000003 t=00018884 kind=DISPATCH state=IDLE->IDLE ev=CDT_OPEN detail=EMPTY-CELL rx=consumed rc=0 aux=0x1b2f0005
+CNXTRACE seq=00000004 t=00018886 kind=DISPATCH state=IDLE->IDLE ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00018887
+CNXTRACE seq=00000005 t=00018910 kind=DISPATCH state=IDLE->DIR_ROUND ev=START detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000006 t=00018911 kind=EMIT     state=DIR_ROUND->DIR_ROUND ev=- detail=SENT rx=- rc=0 aux=0x1b2f0005 cat=0x01 op=0x14
+CNXTRACE seq=00000007 t=00018912 kind=EMIT     state=DIR_ROUND->DIR_ROUND ev=- detail=SENT rx=- rc=0 aux=0x1b2f0005 cat=0x01 op=0x01
+CNXTRACE seq=00000008 t=00018913 kind=DISPATCH state=DIR_ROUND->DIR_ROUND ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000009 t=00018915 kind=DISPATCH state=DIR_ROUND->MSCP_CONNECT ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000010 t=00018917 kind=ARRIVAL  state=MSCP_CONNECT->MSCP_CONNECT ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0007
+CNXTRACE seq=00000011 t=00018919 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x1b2f0005 cat=0x01 op=0x02
+CNXTRACE seq=00000012 t=00018919 kind=DISPATCH state=MSCP_CONNECT->ADMIT ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0007
+CNXTRACE seq=00000013 t=00018920 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x00000400
+CNXTRACE seq=00000014 t=00018920 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x1b2f0005 cat=0x81 op=0x03
+CNXTRACE seq=00000015 t=00018920 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000016 t=00018922 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x1b2f0005 cat=0x81 op=0x05
+CNXTRACE seq=00000017 t=00018922 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000018 t=00018922 kind=DISPATCH state=ADMIT->ADMIT ev=CSID_LEARNED detail=fired rx=consumed rc=0 aux=0x00010002
+CNXTRACE seq=00000019 t=00018923 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x1b2f0005 cat=0x81 op=0x05
+CNXTRACE seq=00000020 t=00018923 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000021 t=00018923 kind=DISPATCH state=ADMIT->ADMIT ev=CSID_LEARNED detail=fired rx=consumed rc=0 aux=0x00010002
+CNXTRACE seq=00000022 t=00018923 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0x1b2f0005 cat=0x81 op=0x05
+CNXTRACE seq=00000023 t=00018923 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000024 t=00018923 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x00000449
+CNXTRACE seq=00000025 t=00018924 kind=DISPATCH state=ADMIT->ADMIT ev=RX_MEMBERSHIP detail=fired rx=consumed rc=0 aux=0x00000000 rep=255 tlast=00018999
+CNXTRACE seq=00000026 t=00019004 kind=DISPATCH state=ADMIT->ADMIT ev=RX_TR_OPEN detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000027 t=00019007 kind=DISPATCH state=ADMIT->BARRIER ev=RX_TR_GO detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000028 t=00019007 kind=DISPATCH state=BARRIER->MEMBER ev=TRANSITION_DONE detail=fired rx=consumed rc=0 aux=0x00000002
+CNXTRACE seq=00000029 t=00019007 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000030 t=00019008 kind=DISPATCH state=MEMBER->MEMBER ev=RX_CLOSE detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000031 t=00019932 kind=DISPATCH state=MEMBER->MEMBER ev=TIMER_JOIN detail=EMPTY-CELL rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000032 t=00021022 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0009
+CNXTRACE seq=00000033 t=00021022 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0009
+CNXTRACE seq=00000034 t=00052765 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f000b
+CNXTRACE seq=00000035 t=00052765 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f000b
+CNXTRACE seq=00000036 t=00084510 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f000d
+CNXTRACE seq=00000037 t=00084510 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f000d
+CNXTRACE seq=00000038 t=00116261 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f000f
+CNXTRACE seq=00000039 t=00116261 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f000f
+CNXTRACE seq=00000040 t=00147998 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0011
+CNXTRACE seq=00000041 t=00147998 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0011
+CNXTRACE seq=00000042 t=00179749 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0013
+CNXTRACE seq=00000043 t=00179749 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0013
+CNXTRACE seq=00000044 t=00211486 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0015
+CNXTRACE seq=00000045 t=00211486 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0015
+CNXTRACE seq=00000046 t=00243230 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0017
+CNXTRACE seq=00000047 t=00243230 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0017
+CNXTRACE seq=00000048 t=00274975 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0019
+CNXTRACE seq=00000049 t=00274975 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0019
+CNXTRACE seq=00000050 t=00306724 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f001b
+CNXTRACE seq=00000051 t=00306724 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f001b
+CNXTRACE seq=00000052 t=00338462 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f001d
+CNXTRACE seq=00000053 t=00338462 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f001d
+CNXTRACE seq=00000054 t=00370207 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f001f
+CNXTRACE seq=00000055 t=00370207 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f001f
+CNXTRACE seq=00000056 t=00402013 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0021
+CNXTRACE seq=00000057 t=00402013 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0021
+CNXTRACE seq=00000058 t=00433760 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0023
+CNXTRACE seq=00000059 t=00433760 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0023
+CNXTRACE seq=00000060 t=00465502 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0x1b2f0025
+CNXTRACE seq=00000061 t=00465502 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0x1b2f0025
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=1 lockdirwt=0 gen=2 proxy_lkbs=0
+%CNXTRACE-I-DLMREQ, requests sent=0 received=0 grants sent=0 received=0 declined=0
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=0 unparsed=0 foreign=0
+%CNXTRACE-I-DLMRECV, releases received=0 refused=0  blkasts unparsed=0  deferred grants owed=0
+%CNXTRACE-I-DLMPOST, posts queued=0 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=0 refused=0 frames_rx=0 replies_sent=0 declined=0
+%CNXTRACE-I-END, 62 records printed
+$ WRITE SYS$OUTPUT "OVMX-CNXTRACE-END"
+OVMX-CNXTRACE-END
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-F4
+         MTU 1500, channels 1, circuits 1
+         frames tx 1298 (errors 0), rx 1127 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-SC-DONE"
+OVMX-SC-DONE
+$ LOGOUT
+  SYSTEM      logged out at 20-SEP-2026 21:49:52.90
+
+qemu-system-x86_64: terminating on signal 15 from pid 2055 (timeout)
+=== node boot driver done (rc=0) ===

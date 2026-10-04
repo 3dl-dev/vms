@@ -189,6 +189,10 @@ static void env_init(struct vc_env *e, int with_identity, int with_upper)
 	id.scsnode_len = 6;
 	memcpy(id.mcast, group1, 6);
 	id.mcast_valid = 1;
+	/* abs 22 of every frame this node emits: the SAME group the mcast
+	 * address above encodes (rd vms-b34). */
+	id.cluster_group = 0x0001u;
+	id.cluster_group_valid = 1u;
 	id.max_sca_len = 1500;
 	if (with_identity) {
 		memcpy(id.hw_type, "X86 ", 4);
@@ -667,6 +671,20 @@ static void test_no_boot_time_no_circuit(void)
 			"no formation frame was built");
 	ct_check_eq_u32(g_env.fsm.vc_no_identity, 1,
 			"and the refusal is COUNTED");
+	/*
+	 * ...AND SAID (rd vms-18a). Counted-but-silent is what made a circuit
+	 * that REFUSED to form indistinguishable, on a real console, from one
+	 * that was never asked: "%PEA0, channel verified" and then nothing,
+	 * which is exactly what a node that never rejoins looks like. The line
+	 * must name the missing read, and asking for it must not move the
+	 * counter above (it did, and counted one refusal as two).
+	 */
+	ct_check(strstr(g_env.fake.last_log, "no circuit formed") != NULL,
+		 "and it is SAID on the console, not only counted");
+	ct_check(strstr(g_env.fake.last_log, "incarnation of its own") != NULL,
+		 "...naming WHICH read came back empty");
+	ct_check_eq_u32(g_env.fsm.vc_no_identity, 1,
+			"and saying it did not count the refusal twice");
 }
 
 /*
@@ -1126,7 +1144,7 @@ static uint32_t our_seqmsg_to(struct vc_env *e, vms_scs_sysid_t dst,
 	memcpy(h.dst_lavc, a.dst_logical, 6);
 	memcpy(h.src_lavc, a.src_logical, 6);
 	h.sca_len_field = (uint16_t)(FAKE_VC_MSG_SCA - 2u);
-	h.connect_flag = 0x0001u;
+	h.cluster_group = 0x0001u;
 	h.word30 = (uint16_t)(VMS_SCS_MT_MSG |
 			      ((uint16_t)VMS_SCS_FORMAT_V13 << 8));
 	if (vms_sca_hdr_build(&h, out, cap, &written) != VMS_CODEC_OK)
@@ -1741,6 +1759,308 @@ static void test_channel_loss_tears_the_circuit_down(void)
 			"a re-verified channel re-forms the circuit");
 }
 
+/*
+ * THE RACE ON THE WAY BACK (rd vms-8c54).
+ *
+ * When a stalled node wakes, its own channel re-verifies and the peer's
+ * re-formation START arrive within a few hundred milliseconds, in an order
+ * nothing controls. Win the race and the circuit re-forms from this side, the
+ * peer's START crosses it, both sides STACK, and it opens -- four frames in one
+ * millisecond, which is exactly what the two real OpenVMS VAX V7.3 nodes in the
+ * oracle did. Lose it and CHANNEL_UP used to be swallowed as "a PATH": this
+ * node answered every one of the peer's STARTs with a STACK and never sent one
+ * of its own. MEASURED, rig arm W-1: the real VAX re-STARTed every 5 s for the
+ * rest of the run, never acknowledged the STACK, and 20 s later each side
+ * removed the other.
+ *
+ * The control is in the same test, because it is what makes the edge narrow:
+ * a FIRST formation must NOT send one (there the peer's START carries the whole
+ * handshake, and an extra one lands on a circuit our STACK may already have
+ * opened and breaks it -- it cost the simulator's 10 %-loss acceptance two
+ * circuit breaks when this edge was written without that guard).
+ */
+static void test_a_reformation_starts_from_this_side_too(void)
+{
+	struct pe_vc *vc;
+	uint32_t starts_before;
+
+	printf("-- a circuit that has been up re-forms from its OWN side when "
+	       "its channel comes back\n");
+
+	/* A circuit that has been up, whose channel then went. */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "the circuit exists");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->opens, 1u, "it reached OPEN once");
+	starts_before = vc->starts_tx;
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	ct_check_eq_u32(the_vc(&g_env)->state, VMS_PE_VC_CLOSED,
+			"and the channel took it down");
+
+	/* The PEER gets there first: its START lands while our channel is
+	 * still down, so the circuit answers with a STACK and waits. */
+	rx_start(&g_env, 0, 1, 0);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "and still exists after the peer's START");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->state, VMS_PE_VC_STACK_SENT,
+			"the peer's START is answered with a STACK");
+	ct_check_eq_u32(vc->starts_tx, starts_before + 1u,
+			"...and, because this is a RE-formation, answering it "
+			"ALSO starts one from this side -- the frame the real "
+			"VAX waits for and never got");
+
+	/*
+	 * ...AND IF THE PEER'S START HAD ARRIVED ON AN ALREADY-VERIFIED
+	 * CHANNEL, the START goes out BEFORE the STACK -- the oracle's order
+	 * (VAX1 START, VAX2 START, VAX1 STACK, VAX2 STACK, four frames in one
+	 * millisecond). Sent after the STACK the real VAX DISCARDS it: arm D-5
+	 * answered at +1.682 and started at +1.720, and the VAX re-STARTed
+	 * every 5 s until each side removed the other. Asserted separately
+	 * below, on a channel that is already back.
+	 */
+
+	/* NOW our own channel comes back, and there is nothing left to do:
+	 * this generation has already started from this side. */
+	channel_to_b4(&g_env, 1);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "the circuit survived the verify");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->starts_tx, starts_before + 1u,
+			"and CHANNEL_UP does not start a second one");
+
+	/* At most one per generation. Dispatched straight at the circuit --
+	 * channel_to_b4() would re-run the channel ladder and close it, which
+	 * is a different event. */
+	pe_fsm_vc_event(&g_env.fsm, 0u, PE_EV_CHANNEL_UP);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->starts_tx == starts_before + 1u,
+		 "a second CHANNEL_UP does NOT start it again: E83's path "
+		 "case is untouched");
+
+	/* ---- the control: a FIRST formation sends nothing here ---- */
+	env_init(&g_env, 1, 1);
+	channel_to_b4(&g_env, 1);          /* our own formation starts */
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "a fresh circuit");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->opens, 0u, "which has never been up");
+	starts_before = vc->starts_tx;
+	rx_start(&g_env, 0, 1, 0);         /* the peer's START crosses it */
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->state == VMS_PE_VC_STACK_SENT,
+		 "and is now answering the peer's START");
+
+	pe_fsm_vc_event(&g_env.fsm, 0u, PE_EV_CHANNEL_UP);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "still there");
+	if (vc == NULL)
+		return;
+	ct_check_eq_u32(vc->starts_tx, starts_before,
+			"a FIRST formation sends NO further start of its own: "
+			"the peer's handshake is the whole handshake, and a "
+			"second START reads to it as 'peer re-started the "
+			"circuit' and breaks it");
+}
+
+/*
+ * THE OTHER HALF OF THE RACE, AND THE FRAME ORDER (rd vms-8c54 / vms-18a).
+ *
+ * When the peer's re-formation START arrives on a channel that is ALREADY back,
+ * there is no CHANNEL_UP left to come: this node has to start from its own side
+ * inside the START handler, and it has to do it BEFORE the STACK. The oracle's
+ * four frames are in that order, and the rig measured what the other order
+ * costs -- arm D-5 STACKed at +1.682 and started at +1.720, and the real
+ * OpenVMS VAX V7.3 discarded the late START and re-STARTed every 5 s until each
+ * side removed the other.
+ */
+static void test_a_reformation_starts_before_it_stacks(void)
+{
+	struct pe_vc *vc;
+	struct fake_vc_decoded first, second;
+
+	printf("-- on a re-formation, our START goes out BEFORE our STACK\n");
+
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	ct_check(the_vc(&g_env) != NULL, "a circuit that has been up");
+	if (the_vc(&g_env) == NULL)
+		return;
+
+	/* The channel goes and comes back FIRST, so the circuit is closed and
+	 * re-verified before the peer's START arrives -- and CHANNEL_UP has
+	 * already been spent by the time it does. */
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	channel_to_b4(&g_env, 1);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "the circuit is back in formation");
+	if (vc == NULL)
+		return;
+
+	/* A second generation: close it again, re-verify, and let the PEER's
+	 * START be the first thing that reaches the fresh circuit. */
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	channel_to_b4(&g_env, 1);
+	g_env.fake.now_ms += 25000;
+	(void)pe_fsm_tick(&g_env.fsm, NULL, 0);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->state == VMS_PE_VC_CLOSED,
+		 "closed, with its channel about to come back");
+	if (vc == NULL)
+		return;
+	/* Bring the channel back WITHOUT letting the circuit start: feed only
+	 * the peer's b2/b4 pair, then its START. */
+	fake_pe_clear_frames(&g_env.fake);
+	rx_start(&g_env, 0, 1, 0);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL, "the peer's START reached a circuit");
+	if (vc == NULL || g_env.fake.n_frames < 2u) {
+		ct_check(g_env.fake.n_frames >= 2u,
+			 "and it answered with TWO 0x41 frames, not one");
+		return;
+	}
+	first = fake_vc_decode(&g_env.fake, 0);
+	second = fake_vc_decode(&g_env.fake, 1);
+	ct_check(first.is_start && second.is_start,
+		 "both frames out are 0x41 formation frames");
+	ct_check_eq_u32(first.config_round, 0u,
+			"the FIRST frame out is our own START (round 0) -- the "
+			"oracle's order, and the one the real VAX accepts");
+	ct_check_eq_u32(second.config_round, 1u,
+			"and the STACK follows it (round 1)");
+}
+
+/*
+ * THE ECHO IS TAKEN AT EVERY FORMATION, INCLUDING ONE THE PEER STARTS
+ * (rd vms-1f40, rig arm M2-19).
+ *
+ * After a 13 s guest stall the real OpenVMS VAX V7.3 advertised a NEW number
+ * for this node in its b2 (+1.320 after wake) and its re-formation START
+ * reached the circuit before its b4. This node answered START+STACK stamped
+ * with the DEAD generation's number, and the VAX discarded both and re-STARTed
+ * every 5 s until each side removed the other. Arm M2-7 of the same build had
+ * the b4 win the race, stamped the new number, and opened in 55 ms.
+ *
+ * So: a circuit that was up at 1; the peer's b2 says 2 (a channel RESET, the
+ * circuit goes down); then the peer's START, with no b4 in between. Every 0x41
+ * this node sends in answer must carry 2.
+ */
+static void test_a_peer_started_formation_takes_the_new_echo(void)
+{
+	struct fake_vc_decoded d;
+	struct pe_vc *vc;
+	uint32_t i, n41 = 0u, stale = 0u;
+
+	printf("-- a formation the PEER starts stamps the number the peer "
+	       "advertises NOW\n");
+	drive_vc_open_incarnation(&g_env, 1u);
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->state == (uint8_t)VMS_PE_VC_OPEN,
+		 "a circuit that has been up, stamping 1");
+	if (vc == NULL)
+		return;
+
+	rx_hello(&g_env, 1, PE_PFW_VERIFY_B2, 2u);   /* the new generation */
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->state != (uint8_t)VMS_PE_VC_OPEN,
+		 "the new advertisement took the old circuit down");
+
+	fake_pe_clear_frames(&g_env.fake);
+	rx_start(&g_env, 0, 288, 0);                 /* START before b4 */
+	for (i = 0; i < g_env.fake.n_frames; i++) {
+		d = fake_vc_decode(&g_env.fake, i);
+		if (!d.ok || !d.is_start)
+			continue;
+		n41++;
+		if (d.incarnation != 2u)
+			stale++;
+	}
+	ct_check(n41 >= 1u, "the peer's START was answered");
+	ct_check_eq_u32(stale, 0u,
+			"every 0x41 in answer carries 2, the number the peer "
+			"advertises now -- never the dead generation's 1 the "
+			"real VAX discarded for 20 s");
+	vc = the_vc(&g_env);
+	ct_check(vc != NULL && vc->echo_incarnation == 2u,
+		 "and the circuit keeps stamping 2 on everything after");
+}
+
+/*
+ * THE STALLED GUEST (rd vms-8c54). The listen timeout is a fact about elapsed
+ * time, not about which code path notices it.
+ *
+ * A dark wire and a stopped guest are not the same fault. netem DESTROYS
+ * frames: the guest keeps ticking and the beat above observes the deadline.
+ * SIGSTOP DEFERS them: the clock and the receive queue jump TOGETHER, and on
+ * wake the queued frames are consumed BEFORE any beat runs. Each one used to
+ * refresh a deadline that had already expired, so the channel was never
+ * declared lost and the circuit on it was never torn down.
+ *
+ * MEASURED, rig arm N-1 (10 s guest stall of an admitted member beside a real
+ * OpenVMS VAX V7.3): the woken node wrote 0x5b/0x4b/0x48 sequenced traffic on
+ * a circuit the VAX had closed 8.2 s earlier, then answered the VAX's fresh
+ * START with a STACK from a circuit it still believed was OPEN. The VAX never
+ * acknowledged it; 20 s later each side removed the other. THE ORACLE, the
+ * same 10 s SIGSTOP applied to a real V7.3 member: it logged "%CNXMAN, lost
+ * connection to system VAX1" 1.4 s after wake -- it NOTICED -- re-formed the
+ * circuit from its own side, and the cluster never lost a member.
+ *
+ * NO TICK IS CALLED IN THIS TEST. That is the whole point: the only thing
+ * that happens after the clock jumps is a frame arriving.
+ */
+static void test_a_late_frame_does_not_refresh_a_dead_deadline(void)
+{
+	struct pe_vc *vc;
+
+	printf("-- a frame arriving after the listen timeout does not revive "
+	       "the channel\n");
+
+	/* --- a periodic HELLO, on the discovery path: the ordinary keepalive,
+	 * which is what a deferred receive queue is mostly made of. --- */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	g_env.fake.now_ms += 25000;          /* the guest was not running */
+	rx_hello(&g_env, 1, PE_PFW_MULTICAST, 1);
+
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->last_down_reason, PE_VC_DOWN_CHANNEL,
+			"the deferred beat ran: the channel went, "
+			"not the circuit's own TIMVCFAIL");
+	ct_check_eq_u32(g_env.upper_rec.downs, 1,
+			"and SCS was told the circuit is gone");
+	ct_check(vc->state != VMS_PE_VC_OPEN,
+		 "the circuit is NOT still open on a channel that timed out");
+
+	/* --- and on the circuit's own traffic, which refreshes the same
+	 * deadline (a busy circuit must not time out on its own frames, but a
+	 * frame that arrives 25 s late is not a busy circuit). --- */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	g_env.fake.now_ms += 25000;
+	rx_seqmsg(&g_env, 1, 0);
+
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->last_down_reason, PE_VC_DOWN_CHANNEL,
+			"a late SEQUENCED message does not revive it either");
+	ct_check_eq_u32(g_env.upper_rec.downs, 1, "SCS was told, once");
+
+	/* --- AND THE ORDINARY CASE IS UNTOUCHED: a frame that arrives while
+	 * the deadline still stands refreshes it and changes nothing. --- */
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	g_env.fake.now_ms += 1000;
+	rx_seqmsg(&g_env, 1, 0);
+
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->state, VMS_PE_VC_OPEN,
+			"an on-time frame leaves the circuit OPEN");
+	ct_check_eq_u32(g_env.upper_rec.downs, 0, "and SCS is told nothing");
+}
+
 /* ------------------------------------------------------------------ *
  * E83: the circuit is with the SYSTEM; a channel is one of its paths
  *
@@ -2059,6 +2379,107 @@ static void test_peer_restart_resets_the_circuit(void)
 			PE_VC_DOWN_PEER_RESTART, "SCS was told why");
 }
 
+/* rd vms-1f40: a restart of an OPEN circuit names the START that did it, by
+ * the peer's own send-msg# -- the field that ties the console to a capture. */
+static void test_peer_restart_names_its_start(void)
+{
+	printf("-- a peer restart names the START that caused it\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	rx_start(&g_env, 0, 292, 0);
+	ct_check(strstr(g_env.fake.last_log,
+			"peer re-started the circuit (its START carries "
+			"send-msg# 292), re-forming") != NULL,
+		 "the console line carries the START's own send-msg#");
+}
+
+/*
+ * rd vms-6b1: A FRAME ADDRESSED TO ANOTHER STATION NEVER REACHES A CIRCUIT.
+ *
+ * The shape the in-browser demo's flooding L2 hub produces: VAX1, the peer
+ * this node has an OPEN circuit with, talks to a THIRD node (OVMXB, its own
+ * station and logical address), and the hub hands this node a copy. A real
+ * adapter would never have passed it up. Before the filter it was bound to OUR
+ * circuit by its source address alone: a foreign START re-formed our circuit
+ * and a foreign sequenced message was taken as ours.
+ */
+static const uint8_t other_hw[6] = { 0x52, 0x54, 0x00, 0x00, 0xdf, 0x0b };
+#define OTHER_SYSID 1988u
+
+static void rx_start_to_other(struct vc_env *e, uint16_t send_seq)
+{
+	uint8_t other_lavc[6];
+
+	vms_cluster_lavc_addr_build(OTHER_SYSID, other_lavc);
+	rx_frame(e, fake_peer_start(&e->peer, VAX1_SYSID, other_hw, other_lavc,
+				    0, send_seq, 0, LAB_CREDITS, e->buf,
+				    sizeof(e->buf)));
+}
+
+static void rx_seqmsg_to_other(struct vc_env *e, uint16_t seq)
+{
+	uint8_t other_lavc[6];
+
+	vms_cluster_lavc_addr_build(OTHER_SYSID, other_lavc);
+	rx_frame(e, fake_peer_seqmsg(&e->peer, other_hw, other_lavc, seq, 0,
+				     0x62c50009u, 0x33580008u, e->buf,
+				     sizeof(e->buf)));
+}
+
+static void test_a_frame_for_another_station_reaches_no_circuit(void)
+{
+	struct pe_vc *vc;
+	uint32_t downs, msgs;
+
+	printf("-- rd vms-6b1: SCS traffic for ANOTHER station is not ours\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	rx_seqmsg(&g_env, 1, 0);
+	vc = the_vc(&g_env);
+	ct_check_eq_u32(vc->recv_seq, 1, "our own circuit is carrying");
+	downs = g_env.upper_rec.downs;
+	msgs = g_env.upper_rec.messages;
+	fake_pe_clear_frames(&g_env.fake);
+
+	rx_start_to_other(&g_env, 292);
+	ct_check_eq_u32(vc->state, VMS_PE_VC_OPEN,
+			"a START for another station does not re-form our circuit");
+	ct_check_eq_u32(g_env.upper_rec.downs, downs,
+			"and SCS is told nothing went down");
+
+	rx_seqmsg_to_other(&g_env, 2);
+	rx_seqmsg_to_other(&g_env, 7);
+	ct_check_eq_u32(vc->recv_seq, 1,
+			"a sequenced message for another station is not taken");
+	ct_check_eq_u32(g_env.upper_rec.messages, msgs,
+			"and nothing is delivered upward");
+	ct_check_eq_u32(vc->rx_gaps, 0, "nor read as a gap");
+	ct_check_eq_u32(g_env.fake.n_frames, 0,
+			"and nothing is sent back: no STACK, no re-ack");
+	ct_check_eq_u32(g_env.fsm.rx_not_addressed, 3,
+			"each one is counted where an operator can see it");
+	ct_check(strstr(g_env.fake.last_log, "addressed to another station") !=
+		 NULL, "and the console says so");
+
+	rx_seqmsg(&g_env, 2, 0);
+	ct_check_eq_u32(vc->recv_seq, 2,
+			"while our own next message is taken as usual");
+}
+
+/* The adapter's two addresses are this node's own, and the group multicast
+ * is one of them: a multicast HELLO still reaches the channel. */
+static void test_the_group_multicast_still_reaches_the_port(void)
+{
+	uint32_t before;
+
+	printf("-- rd vms-6b1: the group multicast is still this station's\n");
+	drive_vc_to(&g_env, VMS_PE_VC_OPEN);
+	before = g_env.fsm.ch[0].hello_rx;
+	rx_hello(&g_env, 0, PE_PFW_MULTICAST, 0);
+	ct_check_eq_u32(g_env.fsm.ch[0].hello_rx, before + 1u,
+			"a multicast HELLO to the group is heard");
+	ct_check_eq_u32(g_env.fsm.rx_not_addressed, 0,
+			"and nothing was refused");
+}
+
 /* The snapshot is a projection of executive state and nothing else: a value
  * never learned stays zero (INV-6). */
 static void test_projection(void)
@@ -2171,6 +2592,10 @@ int main(void)
 	test_credit_window();
 	test_timvcfail_breaks_and_reforms();
 	test_channel_loss_tears_the_circuit_down();
+	test_a_late_frame_does_not_refresh_a_dead_deadline();
+	test_a_reformation_starts_from_this_side_too();
+	test_a_reformation_starts_before_it_stacks();
+	test_a_peer_started_formation_takes_the_new_echo();
 	test_second_channel_is_a_path_not_a_circuit();
 	test_idle_circuit_survives_one_path_failing();
 	test_retransmit_follows_the_surviving_path();
@@ -2178,6 +2603,9 @@ int main(void)
 	test_failover_refuses_a_different_incarnation();
 	test_last_gasp_closes_without_reforming();
 	test_peer_restart_resets_the_circuit();
+	test_peer_restart_names_its_start();
+	test_a_frame_for_another_station_reaches_no_circuit();
+	test_the_group_multicast_still_reaches_the_port();
 	test_projection();
 	test_projection_down_reason();
 	test_no_table_no_circuits();

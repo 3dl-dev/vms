@@ -1085,6 +1085,30 @@ uint32_t vms_kif_cluster_start(uint32_t *out_port_up, uint32_t *out_state)
 }
 
 /*
+ * vms_kif_cluster_stop - VMS_IOCTL_CLUSTER_STOP (rd vms-abd). See vms_kif.h for
+ * the contract; like its twin above this wrapper adds no state of its own --
+ * the copyin-free call and two readbacks the EXECUTIVE filled from its own
+ * departure counts, so a caller that renders them is quoting the executive.
+ */
+uint32_t vms_kif_cluster_stop(uint32_t *out_departed, uint32_t *out_connections)
+{
+    struct vms_cluster_stop_args args;
+
+    if (!cluster_bind_ok())
+        return SS$_NOSUCHDEV;
+
+    vms_memset(&args, 0, sizeof(args));
+    KIF_CALL(VMS_IOCTL_CLUSTER_STOP, &args);
+
+    if (out_departed)
+        *out_departed = args.connections_drained;
+    if (out_connections)
+        *out_connections = args.connections_disconnected;
+
+    return args.status;
+}
+
+/*
  * vms_kif_cluster_diag_port / _diag_conn / _diag_csb - the three SDA-shaped
  * cluster diagnostics reads (FC-P0.9 / FC-P2.4 / FC-P3.8), which SHOW CLUSTER
  * issues for its LOCAL_PORTS+CIRCUITS, CONNECTIONS and CLUSTER classes
@@ -2636,6 +2660,20 @@ uint32_t vms_kif_mbx_delmbx(uint32_t exec_chan)
     return args.status;
 }
 
+/*
+ * vms_kif_mbx_write - write one message to a mailbox.
+ *
+ * BLOCKING when the mailbox is merely full of other processes' unread
+ * messages (vms-d26f): the executive's VMS_IOCTL_MBX_WRITE handler queues
+ * such a write until buffer quota frees up (a real reader draining the
+ * mailbox), returning -ERESTARTSYS with no status on a bare signal -- the
+ * same WAIT-facility contract vms_kif_mbx_read's KIF_WAIT_CALL already
+ * re-enters for (see kif_wait_call's header comment). Only a message bigger
+ * than the mailbox's own maxmsg is an immediate SS$_EXQUOTA (see vms_mbx.c);
+ * that path never blocks, so this degenerates to a single ioctl round trip
+ * exactly as it did before this file used KIF_CALL for the (then always
+ * synchronous) write.
+ */
 uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
 {
     struct vms_mbx_write_args args;
@@ -2652,7 +2690,7 @@ uint32_t vms_kif_mbx_write(uint32_t exec_chan, const void *buf, uint32_t len)
     args.len = len;
     vms_memcpy(args.data, buf, len);
 
-    KIF_CALL(VMS_IOCTL_MBX_WRITE, &args);
+    KIF_WAIT_CALL(VMS_IOCTL_MBX_WRITE, &args);
 
     return args.status;
 }

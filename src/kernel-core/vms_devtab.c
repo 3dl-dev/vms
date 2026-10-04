@@ -105,6 +105,13 @@
 static EXEC_LIST_HEAD(vms_device_list);
 static exec_lock_t vms_device_list_lock;
 
+/* Deferred deletion of a WITHDRAWN dynamic unit (rd vms-1875); defined with
+ * device_release_channel() below, used by the remove_* withdrawal entry
+ * points above it. */
+static int device_unlink_if_withdrawn_locked(struct vms_device *dev,
+                                             exec_list_head_t *reap);
+static void device_reap(exec_list_head_t *reap);
+
 /*
  * Console terminal defaults.
  *
@@ -532,6 +539,8 @@ int vms_devtab_remove_served_disk(const char *devnam)
 {
     struct vms_device *dev;
     int served;
+    int deleted = 0;
+    EXEC_LIST_HEAD(reap);
 
     if (!devnam || devnam[0] == '\0')
         return -EINVAL;
@@ -543,16 +552,24 @@ int vms_devtab_remove_served_disk(const char *devnam)
         return -ENODEV;
     }
     served = (dev->mscp_served != 0);
-    if (served)
-        exec_list_del(&dev->list);
+    if (served) {
+        /* Same last-reference rule as vms_devtab_remove_terminal (rd
+         * vms-1875): a channel still assigned to the served unit keeps the
+         * row alive until its release drops the last reference. */
+        exec_lock(&dev->lock);
+        dev->withdrawn = 1;
+        deleted = device_unlink_if_withdrawn_locked(dev, &reap);
+        exec_unlock(&dev->lock);
+    }
     exec_unlock(&vms_device_list_lock);
 
     if (!served)
         return -ENODEV;   /* not ours: another driver entered this unit */
 
-    exec_free(dev);
-    pr_info("vms: served disk unit %s withdrawn (path to the server lost)\n",
-            devnam);
+    if (deleted)
+        device_reap(&reap);
+    pr_info("vms: served disk unit %s withdrawn (path to the server lost)%s\n",
+            devnam, deleted ? "" : "; deleted when its last channel is released");
     return 0;
 }
 
@@ -962,6 +979,8 @@ int vms_devtab_remove_terminal(const char *devnam)
 {
     struct vms_device *dev;
     int dynamic_term;
+    int deleted = 0;
+    EXEC_LIST_HEAD(reap);
 
     if (!devnam || devnam[0] == '\0')
         return -EINVAL;
@@ -973,15 +992,28 @@ int vms_devtab_remove_terminal(const char *devnam)
         return -ENODEV;
     }
     dynamic_term = (dev->dynamic_term != 0);
-    if (dynamic_term)
-        exec_list_del(&dev->list);
+    if (dynamic_term) {
+        /* WITHDRAW, and delete now only if nothing still holds the unit
+         * (rd vms-1875): a channel still assigned -- the session process
+         * bound to this RTAn: has not exited yet -- keeps the row alive until
+         * its release drops the last reference (device_release_channel). */
+        exec_lock(&dev->lock);
+        dev->withdrawn = 1;
+        deleted = device_unlink_if_withdrawn_locked(dev, &reap);
+        exec_unlock(&dev->lock);
+    }
     exec_unlock(&vms_device_list_lock);
 
     if (!dynamic_term)
         return -ENODEV;   /* not ours: the console, or another driver's row */
 
-    exec_free(dev);
-    pr_info("vms: terminal unit %s withdrawn (session ended)\n", devnam);
+    if (deleted) {
+        device_reap(&reap);
+        pr_info("vms: terminal unit %s withdrawn (session ended)\n", devnam);
+    } else {
+        pr_info("vms: terminal unit %s withdrawn; deleted when its last channel is released\n",
+                devnam);
+    }
     return 0;
 }
 
@@ -1405,20 +1437,75 @@ static void device_dealloc_locked(struct vms_device *dev)
 }
 
 /*
+ * Caller holds vms_device_list_lock AND dev->lock (list lock outermost, the
+ * order every table walker already takes them in). If `dev` has been
+ * WITHDRAWN by the facility that minted it (vms_devtab_remove_terminal /
+ * _remove_served_disk) and its last reference has just gone, unlink it from
+ * the table onto `reap` and return 1: the caller frees it with
+ * device_reap() AFTER dropping both locks. Otherwise leave it and return 0.
+ *
+ * WHY DELETION WAITS FOR THE LAST REFERENCE (rd vms-1875). A channel is a
+ * bare `ch->dev` pointer; it has no way to learn that the row behind it was
+ * freed. Freeing a withdrawn unit while a channel still names it turned the
+ * holder's later $DASSGN / image rundown / process exit into writes to freed
+ * memory (device_release_channel's lock, list unlink, refcnt and owner
+ * fields) -- measured under KASAN on the booted x86_64 runtime: a DECnet
+ * CTERM session's daemon withdrew RTAn: before the LOGINOUT process bound to
+ * it had exited, and that process's exit wrote into the freed row. Without
+ * KASAN the stray writes landed in whatever reused the slab object and
+ * surfaced later as unrelated kernel faults (free_pgtables / copy_mm NULL
+ * dereferences) that killed the next console session. The same
+ * last-reference rule vms_mbx.c's mbx_put() applies to a $DELMBX'd mailbox:
+ * withdrawal marks the unit, the last release deletes it.
+ */
+static int device_unlink_if_withdrawn_locked(struct vms_device *dev,
+                                             exec_list_head_t *reap)
+{
+    if (!dev->withdrawn || dev->refcnt != 0)
+        return 0;
+    exec_list_move(&dev->list, reap);
+    return 1;
+}
+
+/* Free every unit device_unlink_if_withdrawn_locked() moved onto `reap`.
+ * Called with NO device-table lock held. */
+static void device_reap(exec_list_head_t *reap)
+{
+    struct vms_device *dev, *tmp;
+
+    exec_list_for_each_entry_safe(dev, tmp, reap, list) {
+        exec_list_del(&dev->list);
+        pr_info("vms: unit %s deleted (last reference released after withdrawal)\n",
+                dev->devnam);
+        exec_free(dev);
+    }
+}
+
+/*
  * Give a channel back: unlink it from the device, drop the reference it
- * held, and end any ownership that channel was carrying.
+ * held, and end any ownership that channel was carrying. If that was the
+ * last reference to a WITHDRAWN unit, the unit is deleted now (see
+ * device_unlink_if_withdrawn_locked). The device-list lock is taken first
+ * so the refcnt-reaches-zero decision and the unlink are one step against
+ * vms_ioctl_assign(), which bumps refcnt under the same list lock.
  */
 static void device_release_channel(struct vms_channel *ch)
 {
     struct vms_device *dev = ch->dev;
     pid_t pid = ch->owner_linux_pid;
+    EXEC_LIST_HEAD(reap);
 
+    exec_lock(&vms_device_list_lock);
     exec_lock(&dev->lock);
     exec_list_del(&ch->devlink);
     if (dev->refcnt > 0)
         dev->refcnt--;
     device_release_implicit_owner_locked(dev, pid);
+    device_unlink_if_withdrawn_locked(dev, &reap);
     exec_unlock(&dev->lock);
+    exec_unlock(&vms_device_list_lock);
+
+    device_reap(&reap);
 }
 
 /*
@@ -1433,8 +1520,9 @@ static void device_release_channel(struct vms_channel *ch)
 void vms_proc_release_channels(struct vms_proc *proc)
 {
     struct vms_channel *ch, *tmp;
-    struct vms_device *dev;
+    struct vms_device *dev, *dtmp;
     EXEC_LIST_HEAD(doomed);
+    EXEC_LIST_HEAD(reap);
 
     exec_lock(&proc->chan_lock);
     exec_list_for_each_entry_safe(ch, tmp, &proc->channels, list)
@@ -1448,13 +1536,18 @@ void vms_proc_release_channels(struct vms_proc *proc)
     }
 
     exec_lock(&vms_device_list_lock);
-    exec_list_for_each_entry(dev, &vms_device_list, list) {
+    exec_list_for_each_entry_safe(dev, dtmp, &vms_device_list, list) {
         exec_lock(&dev->lock);
-        if (dev->allocated && dev->owner_linux_pid == proc->linux_pid)
+        if (dev->allocated && dev->owner_linux_pid == proc->linux_pid) {
             device_dealloc_locked(dev);
+            /* The allocation may have been a withdrawn unit's last
+             * reference (rd vms-1875). */
+            device_unlink_if_withdrawn_locked(dev, &reap);
+        }
         exec_unlock(&dev->lock);
     }
     exec_unlock(&vms_device_list_lock);
+    device_reap(&reap);
 
     /*
      * Mailbox channels (vms-d44) are a separate list (see vms_mbx.h) --
@@ -1781,6 +1874,7 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
 {
     struct vms_alloc_args args;
     struct vms_device *dev;
+    EXEC_LIST_HEAD(reap);
     char devnam[VMS_DEVNAM_SIZE];
     uint32_t status;
 
@@ -1806,12 +1900,14 @@ long vms_ioctl_dalloc(struct vms_proc *proc, unsigned long arg)
     exec_lock(&dev->lock);
     if (dev->allocated && dev->owner_linux_pid == proc->linux_pid) {
         device_dealloc_locked(dev);
+        device_unlink_if_withdrawn_locked(dev, &reap);   /* rd vms-1875 */
         args.status = SS__NORMAL;
     } else {
         args.status = SS__DEVNOTALLOC;
     }
     exec_unlock(&dev->lock);
     exec_unlock(&vms_device_list_lock);
+    device_reap(&reap);
 
 out:
     if (exec_copyout((void *)arg, &args, sizeof(args)))
@@ -2733,14 +2829,23 @@ long vms_ioctl_cluster_member_get(struct vms_proc *proc, unsigned long arg)
     if (cl->cnxman == NULL)
         goto out;   /* no connection manager: no CSBs, honestly zero rows */
 
+    /*
+     * EVERY IN-USE BLOCK, HOLES SKIPPED (rd vms-af4). p. 7-25 deallocates a
+     * departed or dead incarnation's block, and its slot is reused only by a
+     * LATER allocation -- so the table has holes, and a block allocated after
+     * one (a member's NEW incarnation, measured on the rig) sits past it. This
+     * walk used to stop at the first free slot and SHOW CLUSTER lost that
+     * member's row while the cluster counted it.
+     */
     vms_cluster_fork_enter(cl);
-    for (i = 0; i < VMS_CLUSTER_MEMBER_MAX; i++) {
+    for (i = 0; i < cl->club.n_csb && args->n_members < VMS_CLUSTER_MEMBER_MAX;
+         i++) {
         struct vms_csb *csb = cnxman_club_csb_at(&cl->club, i);
 
         if (csb == NULL)
-            break;
-        csb_to_member_row(csb, &args->members[i]);
-        args->n_members = i + 1u;
+            continue;
+        csb_to_member_row(csb, &args->members[args->n_members]);
+        args->n_members++;
     }
     vms_cluster_fork_leave(cl);
 
@@ -2886,6 +2991,18 @@ static void sysgen_load_args_to_params(const struct vms_sysgen_load_args *args,
     out->mscp_load = args->mscp_load;
     out->mscp_serve_all = args->mscp_serve_all;
 
+    /*
+     * OVMX_CLEAN_DEPART (rd vms-abd): THE ONE FIELD WHOSE SENSE IS UNDONE HERE.
+     * The ioctl carries the negation so a zero-filled args struct -- which is
+     * what a .PAR predating the parameter produces -- means the FAITHFUL
+     * default; the executive stores the positive sense, because "may I announce
+     * my departure?" is what every reader of it asks. The inversion itself is
+     * cluster_sysgen_depart_from_wire()'s, in the pure TU, so the R1 rung can
+     * drive the real polarity with the real absent-case byte instead of a test
+     * grepping for this line (vms_cluster_sysgen.h carries the argument).
+     */
+    out->clean_depart = cluster_sysgen_depart_from_wire(args->clean_depart_off);
+
     out->niscs_max_pktsz = args->niscs_max_pktsz;
 
     memcpy(out->disk_quorum, args->disk_quorum, sizeof(out->disk_quorum));
@@ -3025,6 +3142,93 @@ long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg)
     if (status != SS__NORMAL)
         pr_info("vms: CLUSTER_START -> SS$ %u (VAXCLUSTER %u)\n",
                 (unsigned)status, (unsigned)cl->params.vaxcluster);
+
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_ioctl_cluster_stop - VMS_IOCTL_CLUSTER_STOP (rd vms-abd). CLUSTER_START's
+ * twin, and the clean cluster departure OVMX did not have: every layer
+ * vms_ioctl_cluster_start brought up is taken back down, in the REVERSE order,
+ * and -- first of all -- this node TELLS the cluster it is leaving.
+ *
+ * THE ORDER IS THE DESIGN, not a convenience:
+ *
+ *   1. vms_cnxman_depart()      The SCS departure: a symmetric DISCONNECT_REQ
+ *                               on every open peer connection, bounded-drained.
+ *                               It must run FIRST and with the FORK THREAD
+ *                               STILL LIVE, because the peer's answering frame
+ *                               is dispatched by that thread and by nothing
+ *                               else. Every later step in this list would make
+ *                               that impossible.
+ *   2. the class driver, the server and the DLM arm -- the SYSAPs, before the
+ *      transport they ride.
+ *   3. vms_cluster_fork_stop()  QUIESCE. Requests the stop, JOINS the fork
+ *                               thread, then cancels and destroys every timer.
+ *                               After it returns NOTHING in this node's cluster
+ *                               stack is running, which is what makes the frees
+ *                               below safe: the alternative -- freeing layer
+ *                               state with the fork thread and its timers still
+ *                               live -- is the use-after-free this ordering
+ *                               exists to make impossible. Each layer's own
+ *                               stop then finds cl->fork NULL and skips its
+ *                               timer work, which cfb_timers_destroy() has
+ *                               already done.
+ *   4. vms_cnxman_stop()        The PE last gasp (p. 7-29) + unlisten + free.
+ *                               The gasp goes out here, AFTER the SCS
+ *                               departure: the stack comes down top-first, the
+ *                               way CLUSTER_START built it bottom-first. It is
+ *                               a port datagram and needs no fork thread.
+ *   5. vms_scs_stop()           Force-closes any connection the drain did not
+ *                               finish ("nothing goes on the wire -- a shutdown
+ *                               is not a dialogue"), so nothing leaks.
+ *   6. vms_pe_stop()            PEA0: down, the multicast address left, and
+ *                               cl->state back to VMS_CLUSTER_OFF.
+ *
+ * Idempotent at every step, exactly like CLUSTER_START: each layer's stop is a
+ * no-op on a layer that is not up, so a second CLUSTER_STOP costs nothing and a
+ * CLUSTER_STOP on a node that never joined answers SS$_NORMAL with 0/0.
+ *
+ * THE THREE READBACKS ARE READ, NOT COMPOSED -- the same discipline
+ * vms_ioctl_cluster_start's are. The two counts come back from the departure
+ * itself (how many connections it really told, and how many really answered
+ * inside the deadline) and `cluster_state` is cl->state after the teardown, so
+ * a caller that renders "left the cluster" is quoting the executive (INV-6).
+ */
+long vms_ioctl_cluster_stop(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_cluster_stop_args args;
+    struct vms_cluster *cl = vms_cluster_node();
+    uint32_t initiated = 0, drained = 0;
+
+    (void)proc;
+    memset(&args, 0, sizeof(args));
+
+    /* 1. Announce, while the fork thread can still finish the handshake. */
+    vms_cnxman_depart(cl, &initiated, &drained);
+
+    /* 2. The SYSAPs, before the transport they ride. */
+    vms_mscp_cl_stop(cl);
+    vms_mscp_srv_stop(cl);
+    vms_dlm_scs_stop(cl);
+
+    /* 3. Quiesce: join the fork thread and destroy its timers. */
+    vms_cluster_fork_stop(cl);
+
+    /* 4-6. Nothing is running now: tear the layers down. */
+    vms_cnxman_stop(cl);
+    vms_scs_stop(cl);
+    vms_pe_stop(cl);
+
+    args.connections_disconnected = initiated;
+    args.connections_drained = drained;
+    args.cluster_state = (uint32_t)cl->state;
+    args.status = (uint32_t)SS__NORMAL;
+
+    pr_info("vms: CLUSTER_STOP -> state %u (departed %u of %u connections)\n",
+            (unsigned)cl->state, (unsigned)drained, (unsigned)initiated);
 
     if (exec_copyout((void *)arg, &args, sizeof(args)))
         return -EFAULT;

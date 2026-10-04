@@ -49,7 +49,7 @@ static uint32_t sim_build_msg(struct sim_node *from, uint16_t to_sysid,
 	memcpy(h.dst_lavc, a.dst_logical, 6);
 	memcpy(h.src_lavc, a.src_logical, 6);
 	h.sca_len_field = (uint16_t)(SIM_MSG_SCA - 2u);
-	h.connect_flag = 0x0001u;
+	h.cluster_group = a.cluster_group;
 	h.word30 = (uint16_t)(VMS_SCS_MT_MSG |
 			      ((uint16_t)VMS_SCS_FORMAT_V13 << 8));
 	if (vms_sca_hdr_build(&h, out, cap, &written) != VMS_CODEC_OK)

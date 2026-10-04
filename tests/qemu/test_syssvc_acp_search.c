@@ -47,7 +47,7 @@
  *
  * NO /dev/vms -> honest SKIP (77), never a fake pass: the ACP and its wildcard
  * search are executive-resident, so with no /dev/vms there is nothing to assert
- * (the contract every test_syssvc_* suite is held to, .github/workflows/ci.yml).
+ * (the contract every test_syssvc_* suite is held to, .github/workflows/ci-kernel-executive.yml).
  */
 
 #include <stdio.h>

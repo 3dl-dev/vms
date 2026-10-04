@@ -13,7 +13,7 @@
 # itself -- it requires them prebuilt and points at them by directory,
 # exactly like run_product_install_e2e.sh requires a prebuilt
 # INITIALIZE.EXE rather than building the whole host toolchain inline.
-# See .github/workflows/ci.yml's upgrade-e2e job for how CI produces both.
+# See .github/workflows/ci-*.yml (split by vms-1af)'s upgrade-e2e job for how CI produces both.
 #
 # Local reproduction:
 #   tools/cut-release.sh --ref <baseline-commit> --out-dir /tmp/rel-baseline

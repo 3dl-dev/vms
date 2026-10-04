@@ -147,13 +147,57 @@ else
     bad "harness did not refuse reserved id 1025 (rc=$rc)"; printf '%s\n' "$OUT" | sed 's/^/    /'
 fi
 
-# --- 6. labjoin_booted.sh refuses a non-CN_2 pod ----------------------------
+# --- 6. labjoin_booted.sh refuses a pod that is not the DECLARED cluster -----
 printf 'CN_1\r\n' >"$TMP/hostl/vax1.log"          # pod is a broken 1-node lab
 OUT="$(run_harness vaxlab-0 tagCN1 "$TMP/art" 60 OVMXJ0 1813)"; rc=$?
-if [ "$rc" -ne 0 ] && printf '%s' "$OUT" | grep -qF 'not a healthy 2-node cluster'; then
+if [ "$rc" -ne 0 ] && printf '%s' "$OUT" | grep -qF 'not the declared reference cluster'; then
     ok "harness refuses to join a non-CN_2 pod (CLUSTER_NODES=1)"
 else
     bad "harness did not refuse a CN_1 pod (rc=$rc)"; printf '%s\n' "$OUT" | sed 's/^/    /'
+fi
+
+# --- 6b. GENESIS topology (rd vms-b34): LJ_CN_BASE=1 accepts the CN_1 pod ----
+# The SAME precheck, pointed at the other reference topology -- ONE real VMS node
+# that founded the cluster on its own vote. It must accept CN_1 and, symmetrically,
+# refuse the 2-VAX pod, so neither mode can be silently run against the other's lab.
+printf 'CN_1\r\n' >"$TMP/hostl/vax1.log"
+OUT="$(LJ_CN_BASE=1 LJ_CN_JOINED=2 run_harness vaxlab-0 tagGEN1 "$TMP/art" 1 OVMXJ0 1813)"; rc=$?
+if printf '%s' "$OUT" | grep -qF 'precheck OK: pod is CN_1'; then
+    ok "genesis mode (LJ_CN_BASE=1) accepts a single-node reference cluster"
+else
+    bad "genesis mode rejected a CN_1 pod (rc=$rc)"; printf '%s\n' "$OUT" | sed 's/^/    /'
+fi
+printf 'CN_2\r\n' >"$TMP/hostl/vax1.log"
+OUT="$(LJ_CN_BASE=1 LJ_CN_JOINED=2 run_harness vaxlab-0 tagGEN2 "$TMP/art" 60 OVMXJ0 1813)"; rc=$?
+if [ "$rc" -ne 0 ] && printf '%s' "$OUT" | grep -qF 'not the declared reference cluster'; then
+    ok "genesis mode refuses the 2-VAX pod (declared CN_1, found CN_2)"
+else
+    bad "genesis mode did not refuse a CN_2 pod (rc=$rc)"; printf '%s\n' "$OUT" | sed 's/^/    /'
+fi
+
+# --- 6c. the verdict's (c) leg follows LJ_CN_JOINED, not a literal 3 ---------
+# A GENESIS join transcript: ONE real VAX, plus the admitted OVMX node.
+GEN_OVMX_SC='View of Cluster from system OVMXJ0
+  VAX1     MEMBER'
+GEN_VAX_SC='View of Cluster from system VAX1
+  VAX1   MEMBER
+  OVMXJ0 MEMBER'
+if LJ_CN_JOINED=2 lj_verdict OVMXJ0 "$GEN_OVMX_SC" "$GEN_VAX_SC" 2 "$PCAP" >"$TMP/g2.out" 2>&1; then
+    ok "genesis verdict PASSES a real admission at CLUSTER_NODES=2"
+else
+    bad "genesis verdict wrongly FAILED a real CN=2 admission"; sed 's/^/    /' "$TMP/g2.out"
+fi
+if LJ_CN_JOINED=2 lj_verdict OVMXJ0 "$GEN_OVMX_SC" "$GEN_VAX_SC" 1 "$PCAP" >"$TMP/g3.out" 2>&1; then
+    bad "genesis verdict wrongly PASSED with the cluster still at CLUSTER_NODES=1"; sed 's/^/    /' "$TMP/g3.out"
+else
+    ok "genesis verdict FAILS when the cluster never grew (CLUSTER_NODES=1)"
+fi
+# ... and the DEFAULT (lab-2) verdict must still refuse a CN=2 cluster: the knob
+# may not have made the 2-VAX gate laxer.
+if lj_verdict OVMXJ0 "$GEN_OVMX_SC" "$GEN_VAX_SC" 2 "$PCAP" >"$TMP/g4.out" 2>&1; then
+    bad "default (lab-2) verdict wrongly PASSED at CLUSTER_NODES=2"; sed 's/^/    /' "$TMP/g4.out"
+else
+    ok "default verdict still requires CLUSTER_NODES=3"
 fi
 
 echo ""

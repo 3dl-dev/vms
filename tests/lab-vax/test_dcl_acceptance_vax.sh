@@ -112,7 +112,7 @@ export EXPECT_HOST_YEAR=0
 #       was gated on isatty() (FALSE on the SIMH serial console, TRUE on QEMU's
 #       virtio console); and
 #   (c) an idle login prompt is disconnected and replaced after the LGI-style
-#       deadline (tools/login_input.h LOGIN_INPUT_TIMEOUT_SEC, 30s).
+#       deadline (tools/login_input.h LOGIN_INPUT_TIMEOUT_SEC, 20s).
 # THIS IS THE VAX CONSOLE LEG. The only other gate that types at a booting
 # console (tests/qemu/test_console_boot_no_newline_spam.sh) branches on
 # `uname -m' over aarch64/x86_64 and launches qemu-system-* directly, so it
@@ -120,7 +120,7 @@ export EXPECT_HOST_YEAR=0
 # all three arches meet, which is why the sequence is asserted there.
 # The two knobs below are the SIMH allowance: the emulated VAX runs a ~1980s CPU
 # at a fraction of real speed, so the console needs longer to settle and the
-# guest's own 30-second deadline can take substantially longer than 30 seconds
+# guest's own 20-second deadline can take substantially longer than 20 seconds
 # of HOST wall-clock to elapse. They lengthen the WAIT, never the assertion.
 export WAKE_QUIET_SECS="${WAKE_QUIET_SECS:-8}"
 export LOGIN_IDLE_WAIT="${LOGIN_IDLE_WAIT:-120}"

@@ -60,12 +60,17 @@ extern "C" {
 
 /* ------------------------------------------------------------------ *
  * Shared per-frame addressing (abs 0-31 fields a caller must supply for
- * every class in this file: the two Ethernet MACs and the two cluster-
- * LOGICAL LAVC addresses, spec sec 4(a).0/4(g)). connect_flag and the
- * SCA-length field are NOT here -- they are GROUNDED protocol constants
- * for every class this file builds (connect_flag universally 0x0001;
- * the length is fully determined by which builder ran), so they are
- * baked, not threaded.
+ * every class in this file: the two Ethernet MACs, the two cluster-LOGICAL
+ * LAVC addresses (spec sec 4(a).0/4(g)) and the cluster group number). The
+ * SCA-length field is NOT here -- it is fully determined by which builder
+ * ran, so it is baked, not threaded.
+ *
+ * THE GROUP NUMBER IS THREADED, NOT BAKED (rd vms-b34). It was baked, as
+ * "connect_flag universally 0x0001", which is true of exactly one cluster:
+ * group 1. abs 22..23 is LE16(group) -- see vms_cluster_codec.h's oracle
+ * table -- and a real VMS member discards every frame that carries anybody
+ * else's number, which is precisely how a group-257 VAX ignored OVMX's VC
+ * STACKs while answering nothing else.
  * ------------------------------------------------------------------ */
 struct vms_scs_addr {
 	uint8_t dst_mac[VMS_ETH_ADDR_LEN];      /* Ethernet dst (abs 0)      */
@@ -76,6 +81,11 @@ struct vms_scs_addr {
 						 /* OWN cluster-LOGICAL addr, */
 						 /* NOT the raw HW MAC        */
 						 /* (vms-9f3)                 */
+	uint16_t cluster_group;                 /* abs 22: THIS node's own   */
+						 /* CLUSTER_AUTHORIZE group,  */
+						 /* LE16. 0 means a node with */
+						 /* no record loaded, which   */
+						 /* is what it really has     */
 };
 
 /* ------------------------------------------------------------------ *

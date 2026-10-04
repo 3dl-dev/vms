@@ -191,29 +191,35 @@
  *    otherwise it declares nothing, the directory service falls back to its
  *    honest name-echo, and `dir_descriptor_omitted` counts it.
  *
- * E. THE JOIN TARGET'S PROTOCOL/ECO LEVEL. Book p. 7-37/7-38 (correction D7)
- *    has the JOINER select whom to ask, by highest VAXcluster protocol level,
- *    then highest ECO level, then the CSB nearest the end of the CLUB's CSB
- *    queue -- and asks only once the members it has connectivity with equal
- *    the member count those CSBs advertise. Neither the protocol/ECO pair nor
- *    the advertised member count has an isolated wire offset (FC-P3.2's
- *    scope). This FSM implements the RESIDUAL rule it really can evaluate --
- *    the CSB nearest the queue tail, which is live CLUB state -- and counts
- *    `target_level_unpinned` / `member_count_ungated` so the two omissions
- *    are visible in the diagnostics rather than discovered on a real cluster.
- *    It does NOT gate the join on a count it cannot read: that would be a
- *    deadlock chosen over an honest omission.
+ * E. WHOM THE JOINER ASKS, AND WHEN (rd vms-e88). Book pp. 7-37/7-38
+ *    (correction D7) has the JOINER select whom to ask, by highest VAXcluster
+ *    protocol level, then highest ECO level, then "the CSB nearest the end of
+ *    the CLUB's CSB queue" -- and ask only once the members it has
+ *    connectivity with equal the member count those CSBs advertise.
  *
- *    E80 LOOKED AT THIS AGAIN AND LEFT IT ALONE, for two independent reasons.
- *    The connect data a peer sent is not recorded in any CSB -- it reaches
- *    cnxman_join_connect_req() and is counted, never stored -- so there is no
- *    executive state to rank on; and WHICH of its bytes carry the protocol and
- *    ECO levels, in which order, is unpinned (E74 flags exactly that), while
- *    every VAX-sourced `VMS$VAXcluster` connect frame in the library carries
- *    the SAME quad, so no capture could falsify a guess. Ranking on an
- *    unpinned interpretation of a constant is not a rank. What E80 DID add is
- *    orthogonal and fully grounded: the tail-first walk now also SKIPS a
- *    member that has already been asked and said nothing during this attempt.
+ *    THE COUNT IS NOW GROUNDED AND GATED. op-0x01 PARAMS body[18:20] is the
+ *    sender's member count (VMS_OFF_CM_MEMBERS; 0 from a system in no
+ *    cluster), measured on four real V7.3 trios
+ *    (tests/lab/captures/vms-e88-join-target-20260930/). In trio C3 a joiner
+ *    that could reach only one of two members -- that member advertising 2 --
+ *    sent no membership request to anybody for five minutes, and asked the
+ *    other member 9.8 s after it became reachable. So a joiner asks only a
+ *    system that SAYS it is a member, and only once it has connectivity with
+ *    as many members as they say there are (join_admission_held()).
+ *
+ *    THE RANK IS THE ONE THE WIRE SHOWS. The CLUB's queue order is VMS's own
+ *    and not observable; OVMX's CLUB is in discovery order, which is not it:
+ *    in trios A and A2 the joiner discovered the lower-numbered member LAST
+ *    and still asked the higher -- once when that member was the founder, once
+ *    when it was the most recent to join. Across A, A2, B and C3 the member
+ *    asked was the highest-SCSSYSTEMID member every time, the same predicate
+ *    the receiver side already uses to decide who coordinates (rd vms-1ac,
+ *    107/113 over the reference trees). Protocol/ECO level stays unpinned --
+ *    every VAX connect in the library carries the same quad, so there is
+ *    nothing to rank on -- and `target_level_unpinned` still counts it.
+ *
+ *    E80's decline set is unchanged and orthogonal: a member that was asked
+ *    and said nothing is still skipped for the rest of the attempt.
  *
  * INCLUDES: kernel-core headers only (CI gate tools/ci/cluster_core_includes_gate.sh).
  * This TU is PURE: no seam call, no allocation, no clock but ops->now_ms, so
@@ -388,6 +394,17 @@ enum cnxman_join_failure {
 	 * again.
 	 */
 	CNXMAN_JOIN_FAIL_UNANSWERED = 9,
+	/*
+	 * The CLUB DEALLOCATED the block this attempt was driving through
+	 * (rd vms-dfe; p. 7-25's "its old CSB is deallocated"). Not a verdict
+	 * and not terminal either: the connection manager gave that connection
+	 * up, the system went back to being undiscovered, and the moment the
+	 * port reports a circuit to it again a fresh block is built and a fresh
+	 * attempt asks it -- starting, as every attempt does, at p. 2-51's
+	 * directory round, which only a member that is really ANSWERING
+	 * completes.
+	 */
+	CNXMAN_JOIN_FAIL_RELEASED   = 10,
 	CNXMAN_JOIN_FAIL__COUNT
 };
 
@@ -561,6 +578,31 @@ struct cnxman_join_ops {
 #define CNXMAN_JOIN_B_CONFIG  0x04u
 
 /*
+ * WHY an op-0x02 that is due has not gone out yet (rd vms-e88). Each is a read
+ * of executive state, re-taken on every beat; see join_admission_held().
+ *   UNHEARD      -- the member to be asked has not sent this node its own
+ *                   op-0x01 PARAMS, so this node does not know it is a member
+ *                   (every real joiner's op-0x02 follows the member's PARAMS).
+ *   FRESH        -- this node's own MODEL/PARAMS went down that connection in
+ *                   the same breath: op-0x02 is never bundled with them (spec
+ *                   sec 4(o): "sending 0x02 inside the initial burst leaves the
+ *                   peer silent"), or the join has just moved connection.
+ *   NO_MEMBER    -- the member being asked says, in its own PARAMS, that it
+ *                   belongs to no cluster, and some other system in sight has
+ *                   not yet said what it is (e88 trio B: a real joiner never
+ *                   asked a system that was itself still joining).
+ *   CONNECTIVITY -- the members advertise more members than this node has
+ *                   connectivity with (Davis p. 7-37; measured on V7.3, trio
+ *                   C3: a joiner that could reach one of two members asked
+ *                   nobody for five minutes).
+ */
+#define CNXMAN_JOIN_HOLD_NONE          0u
+#define CNXMAN_JOIN_HOLD_UNHEARD       1u
+#define CNXMAN_JOIN_HOLD_FRESH         2u
+#define CNXMAN_JOIN_HOLD_CONNECTIVITY  3u
+#define CNXMAN_JOIN_HOLD_NO_MEMBER     4u
+
+/*
  * THE DECLINED SET (E80): one bit per CLUB slot, so "which members has THIS
  * attempt already asked and got silence from" is answerable without a second
  * table. Cleared at the start of every fresh attempt -- a member that could not
@@ -583,7 +625,7 @@ struct cnxman_join_ops {
  * fixed text plus VMS_SCSNODE_MAX characters plus the terminator -- and the
  * composer never writes past it (it stops at the buffer, not at the name).
  */
-#define CNXMAN_JOIN_MSGBUF 64u
+#define CNXMAN_JOIN_MSGBUF 96u
 
 /* How many served units this FSM will record from one walk. The walk itself is
  * unbounded (it ends at the peer's own OFFLINE terminator); this bounds only
@@ -682,6 +724,22 @@ struct cnxman_join {
 	uint8_t  admit_silent_beats;
 
 	/*
+	 * ---- WHY op-0x02 IS NOT OUT YET (rd vms-e88) ----
+	 * `admit_hold` is this beat's CNXMAN_JOIN_HOLD_* answer and
+	 * `admit_hold_said` the last one announced on the console, so a reason
+	 * that persists is said once. `admit_unheard_beats` bounds the UNHEARD
+	 * wait exactly as the silence clock bounds an unanswered request.
+	 * `ident_ms` is when this node's own MODEL/PARAMS last really went out
+	 * to the member being asked (`ident_ms_valid` 0 = never): op-0x02 waits
+	 * one beat past it -- the "same breath" test, on the injected clock.
+	 */
+	uint8_t  admit_hold;
+	uint8_t  admit_hold_said;
+	uint8_t  admit_unheard_beats;
+	uint8_t  ident_ms_valid;
+	uint32_t ident_ms;
+
+	/*
 	 * Members THIS attempt has already asked and got silence from
 	 * (CNXMAN_JOIN_DECLINE_WORDS above). The re-selection excludes them, so
 	 * one attempt asks each member at most once -- a joiner NEVER fans an
@@ -698,7 +756,11 @@ struct cnxman_join {
 	 */
 	uint32_t retry_at_ms;
 	uint8_t  retry_at_valid;
-	uint8_t  pad1[3];
+	/* 1 when that back-off followed a round that found NO member at all
+	 * (rd vms-e88): one appearing since ends it, where a round of silent
+	 * members is still waited out in full (E80's rate bound). */
+	uint8_t  backoff_no_member;
+	uint8_t  pad1[2];
 
 	/* ---- the disk-client discovery walk (FC-P3.4) ---- */
 	struct vms_mscp_cl_fsm  mscp;
@@ -744,6 +806,9 @@ struct cnxman_join {
 	/* A VMS$VAXcluster connection this join HELD went away (p. 7-30: do not
 	 * presume the member left). */
 	uint32_t cm_lost;
+	/* ...of which during an open transition this node answered, and held
+	 * across the loss rather than re-driven (rd vms-eb3) */
+	uint32_t cm_lost_in_transition;
 	/* Beats on which VC_CONNECT re-issued the connect (p. 7-30's cadence). */
 	uint32_t cm_reattempts;
 	/* Beats on which the Con.ID was taken from the TARGET CSB instead --
@@ -767,6 +832,14 @@ struct cnxman_join {
 	/* The reconnect timeout period ran out (FAIL_TIMEOUT): the attempt was
 	 * released and this node went back to waiting for a cluster. */
 	uint32_t connect_windows_expired;
+	/*
+	 * Attempts released because the CLUB DEALLOCATED the block this join
+	 * was driving through (rd vms-dfe; p. 7-25). Distinct from
+	 * `connect_windows_expired`, which is this join's own reading of a
+	 * connection that never came back: this one is the connection manager
+	 * having already given up and released the system back to discovery.
+	 */
+	uint32_t targets_released;
 	/* Attempts that never started because no CSB was joinable at that
 	 * instant -- VMS's "waiting to form or join", counted rather than
 	 * turned into a terminal failure. */
@@ -822,10 +895,63 @@ struct cnxman_join {
 	uint32_t declines_after_ack;
 	uint32_t admit_beats_held;
 	uint32_t reissues;
+	/*
+	 * ---- THE MEMBER TO ASK, AND WHEN (rd vms-e88) ----
+	 * `holds_unheard` / `holds_fresh` / `holds_connectivity` -- beats (or
+	 *   events) on which a due op-0x02 was held, by reason.
+	 * `retargets` -- the join moved to a higher-ranked member once that
+	 *   member's own PARAMS said it was one: NOT a decline, nobody was asked.
+	 * `conn_follows` -- the join moved onto the connection the CSB records
+	 *   for its member (the pair's live one, after two crossed).
+	 * `unheard_declines` -- members given up on for never sending PARAMS.
+	 */
+	uint32_t holds_unheard;
+	uint32_t holds_fresh;
+	uint32_t holds_connectivity;
+	uint32_t holds_no_member;
+	uint32_t retargets;
+	uint32_t conn_follows;
+	uint32_t unheard_declines;
+	/* ...and attempts that ended because every system in sight said, in its
+	 * own PARAMS, that it belongs to no cluster (also counted in
+	 * attempts_exhausted, which the founding election reads). */
+	uint32_t no_member_rounds;
+	/* VMS$VAXcluster connects this join put out to systems running this
+	 * implementation that nobody had connected (join_reach_ours). */
+	uint32_t ours_dialled;
+	/* back-offs ended early because a system said it is a member */
+	uint32_t backoffs_cut;
+	/* A drive toward a system that is not a member, moved before [ADMIT]
+	 * to a connected one that says it is (rd vms-e88, rig arm P-2). */
+	uint32_t drive_retargets;
 	uint32_t attempts_exhausted;
 	uint32_t starts_backed_off;
 	uint32_t reissue_targets_absent;
+	/*
+	 * TRANSITIONS THE COORDINATOR ABANDONED UNDER THIS NODE -- cat-0x01
+	 * op-0x04 (rd vms-f3ec), and how many of them arrived while this FSM
+	 * was still holding an answer to its own membership request. The two
+	 * are separate because they are separate diagnoses: an abort during a
+	 * transition this node is only PARTICIPATING in costs it nothing, while
+	 * one that lands on its own pending admission is the case that used to
+	 * wedge the join in [ADMIT] forever. A join that is slow because the
+	 * cluster keeps abandoning transitions must be able to say so.
+	 */
+	uint32_t transitions_abandoned;
+	uint32_t admit_rearmed;
 	uint32_t echoes_sent;        /* 0x81 answers to op-0x03 / op-0x05     */
+	/*
+	 * THE COORDINATOR'S op-0x12 RELAY, seen and answerable vs seen and NOT
+	 * (rd vms-4f0, join_h_relay). Two counters because they are two
+	 * diagnoses: `relays_seen` moving means this node is taking part in
+	 * somebody else's admission as a real member does (the Rule of Total
+	 * Connectivity, p. 7-39), and `relays_no_class` moving means it was
+	 * asked before it held a transition class and honestly said nothing --
+	 * which STRANDS that admission, so it is a gap to close, never a
+	 * resting state.
+	 */
+	uint32_t relays_seen;
+	uint32_t relays_no_class;
 	/*
 	 * RETIRED BY E79 and kept at zero rather than deleted: this counted the
 	 * cat-0x04 this FSM emitted per op-0x06, which is the flood that halted
@@ -860,6 +986,25 @@ struct cnxman_join {
 	uint32_t peer_acks;          /* cat-0x04 acks the member sent us      */
 	uint32_t inbound_accepted;   /* members' connects (total connectivity)*/
 	uint32_t inbound_refused;    /* ... refused, with a reason            */
+	/*
+	 * ...of which THIS many were refused because the connect came from an
+	 * incarnation this node had given up on (rd vms-0f9). Separate from
+	 * `inbound_refused` above because the two are different diagnoses: one
+	 * is "a system we hold no block for", the other is "a system we hold a
+	 * give-up record for", and only the second is the answer a real V7.3
+	 * node gives in the same position. A run whose console shows a
+	 * give-up and whose counter is still 0 is a gate that did not fire.
+	 */
+	uint32_t inbound_refused_giveup;
+	/*
+	 * Committed transitions that NAMED this node and left it OUT of the
+	 * nodemap (rd vms-0f9). A subset of `commits_not_ours`, split off
+	 * because the two mean different things to a node that is already a
+	 * member: "it said nothing about me" is silence, and "it said I am not
+	 * in it" is the cluster removing this node -- which is one of the two
+	 * events that make a real V7.3 node CLUEXIT.
+	 */
+	uint32_t commits_excluded_us;
 	uint32_t cm_adopted;         /* the member won the connect race and
 				      * THIS is the one connection to it (E67)*/
 	uint32_t cm_already_held;    /* an accepted VMS$VAXcluster connection
@@ -980,9 +1125,19 @@ struct cnxman_join {
 					 * on the block this CLUB already holds
 					 * for that SCSSYSTEMID -- which is what
 					 * lets this node COUNT the cluster     */
-	uint32_t membrecs_unknown_peer; /* ... about a system this node holds no
-					 * block for: counted and dropped, never
-					 * invented (INV-6)                     */
+	uint32_t membrecs_unknown_peer; /* ... that could not be filed at all,
+					 * because the CSB table is full: counted
+					 * and dropped, never a silent overwrite */
+	/*
+	 * ...and records about a system this node held no block for, which
+	 * therefore GOT one (rd vms-8a9). Its own counter because the two are
+	 * different facts about the cluster: `peer_learned` is "we already knew
+	 * of that system", `peer_created` is "the cluster told us about a
+	 * system we did not have", and after a p. 7-25 rebuild the second is
+	 * the only way a member ever learns the CSID of the peer being
+	 * admitted.
+	 */
+	uint32_t membrecs_peer_created;
 	uint8_t  lockdirwt_unrepresentable; /* configured nonzero, no offset  */
 	uint8_t  pad3[3];
 	uint32_t lockdirwt_unpinned;
@@ -992,7 +1147,6 @@ struct cnxman_join {
 	uint32_t version_omitted;
 	uint32_t node_params_omitted;
 	uint32_t target_level_unpinned;
-	uint32_t member_count_ungated;
 
 	/*
 	 * The ONE scratch buffer every built body goes through. In the
@@ -1243,6 +1397,28 @@ void cnxman_join_csid_learned(struct cnxman_join *j, vms_csid_t csid);
  * and a connection that CHANGED has carried nothing (see `cm_advert_conid`).
  */
 void cnxman_join_advertise_peers(struct cnxman_join *j);
+
+/*
+ * THE CSB THIS JOIN WAS DRIVING THROUGH HAS BEEN DEALLOCATED (rd vms-dfe).
+ *
+ * p. 7-25 deallocates the block of a system the connection manager has given
+ * up on and builds a fresh one when the system is seen again -- so the CLUB
+ * slot this attempt selected can vanish under it, and the attempt built on it
+ * is over. Told to the FSM explicitly, on the beat that really freed the
+ * block, rather than left for the watchdog to notice: a slot reused for the
+ * SAME system between two beats would otherwise let a half-run attempt carry
+ * on over a block that has answered none of its lookups.
+ *
+ * A NODE THE CLUSTER HAS ALREADY ADMITTED IS UNTOUCHED. Membership is not
+ * unmade by a block being rebuilt (p. 7-30), and a SELECTED block is never
+ * reclaimed in the first place; this releases only an attempt that had not
+ * reached the barrier.
+ *
+ * The attempt is released the way join_no_connectivity() releases one: IDLE,
+ * reason named, no node-wide back-off -- the members this node has NOT lost
+ * are still askable on the very next beat.
+ */
+void cnxman_join_target_released(struct cnxman_join *j, vms_scs_sysid_t sysid);
 
 /*
  * The join watchdog (CNXMAN_TIMER_JOIN). INSTRUMENT-AND-REPEAT, never abandon:

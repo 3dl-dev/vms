@@ -2,7 +2,7 @@
 
 ## Mission
 
-Make OpenVMS free. OpenVMX is a **clean-room, open-source OpenVMS-compatible environment on Linux** built to run real VMS applications and **join real VMSclusters** — so organizations can migrate off VMS Software Inc (VSI) node-by-node, at zero downtime and zero license cost. (Real-VMS-cluster join is the North Star target below, not yet a proven capability.)
+Make OpenVMS free. OpenVMX is a **clean-room, open-source OpenVMS-compatible environment on Linux** built to run real VMS applications and **join real VMSclusters** — so organizations can migrate off VMS Software Inc (VSI) node-by-node, at zero downtime and zero license cost. Two OpenVMX nodes forming and joining a cluster as executive-resident members of each other is proven (`docs/release-roadmap-to-1.0.md`, V0.6, connection manager). Joining an existing VSI-coordinated VMScluster, and the rolling zero-downtime evacuation of a live workload onto OpenVMX, is the North Star target the milestone ladder is climbing toward.
 
 ### Naming: product and kernel
 
@@ -34,11 +34,6 @@ They converge at the **rolling evacuation**: moving a live workload off a VMS no
 > Can a real, unmodified VMS application build/run on OpenVMX — and can an OVMX/Linux node join a real VMScluster — with **zero Unix leaks** visible to its users?
 
 95%-compatible = 0% adoption for the risk-averse enterprise, because the missing 5% is exactly the quadword-alignment, RMS-indexed-file, condition-handler edge case their 1987 application depends on. Grinding that long tail cheaply is precisely where AI-driven development compounds — and it is the whole game.
-
-### Not near-term (stated honestly)
-
-- VSI's tier-1 support, indemnification, and certifications for defense / utilities / exchanges — a free layer does not threaten a renewal backed by an SLA and a throat to choke.
-- Deep clustering internals beyond membership / MSCP / DLM basics arrive incrementally, not at once.
 
 ## Key Decisions
 

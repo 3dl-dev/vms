@@ -1,0 +1,150 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+
+>> NetBSD/vax boot [1.12 (Mon Dec 16 13:08:11 UTC 2024)] <<
+>> Press any key to abort autoboot 0
+nfs_open: must mount first.
+open netbsd.vax: Device not configured
+> boot netbsd
+3644384+185792 [255056+241286]=0x420888
+[   1.0000000] Copyright (c) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003,
+[   1.0000000]     2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013,
+[   1.0000000]     2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023,
+[   1.0000000]     2024
+[   1.0000000]     The NetBSD Foundation, Inc.  All rights reserved.
+[   1.0000000] Copyright (c) 1982, 1986, 1989, 1991, 1993
+[   1.0000000]     The Regents of the University of California.  All rights reserved.
+
+[   1.0000000] NetBSD 10.1 (OVMX) #9: Sat Aug 29 08:54:46 UTC 2026
+[   1.0000000]  root@646cfb5fbb9e:/obj/sys/arch/vax/compile/OVMX
+[   1.0000000] MicroVAX 3800/3900
+[   1.0000000] total memory = 16328 KB
+[   1.0000000] avail memory = 11144 KB
+[   1.0000000] Detecting hardware...|
+: version 3 model 3
+[   1.0000000] mscpbus0: DMA burst size set to 4
+[   1.0000000] qt !Turbo
+[   1.0000000] WARNING: system needs entropy for security; see entropy(7)
+ drive 0: RD54
+ drive 1: RD54
+ drive 2: RD54
+ drive 3: RX50
+[   1.4500030] ra0: size 664360 sectors
+ unit offline (not mounted) (code 3, subcode 1)
+ unit offline (not mounted) (code 3, subcode 1)
+ unit offline (not mounted) (code 3, subcode 1)
+[   1.5600030]  done.
+[   1.5600030] WARNING: 3 errors while detecting hardware; check system log.
+[   1.5600030] boot device: ra0
+[   1.6300030] WARNING: preposterous TOD clock time
+[   1.6300030] WARNING: using filesystem time
+[   1.6300030] WARNING: CHECK AND RESET THE DATE!
+OVMX/NetBSD -- SYSKRNL (NetBSD kernel)
+[   5.1300030] DEBUG: module: Loading module from /stand/vax/10.1/modules/vms/vms.kmod
+[   6.7300030] DEBUG: module: Loading plist from /stand/vax/10.1/modules/vms/vms.plist
+[   7.1300030] entropy: best effort
+[   7.1400030] DEBUG: module: plist load returned error 2 for `/stand/vax/10.1/modules/vms/vms.kmod'
+[  10.2000030] vms: mailbox table initialized
+[  10.2900030] vms: logical-name arena ready (512 entries, 1208352 bytes)
+[  10.3000030] vms: lnm arena kva=0x837f0000 size=1208352 PAGE_SIZE=4096 pmap_extract=1 pa=0xc4e000 atop(pa)=0xc4e magic@kva=0x4c4e4d41
+[  10.3400030] vms: ethernet unit ETH0: -> qe0 (carrier down)
+[  10.3500030] vms: DECnet device face NET: created (NETACP layers its circuit over ETH0:)
+[  10.3600030] vms: device table initialized, console terminal OPA0: created
+ unit offline (not mounted) (code 3, subcode 1)
+[  11.1200030] vms: disk unit DUA0: -> ra0e
+[  11.1300030] vms: disk unit DUA0: -> ra0e (9:4)
+ unit offline (not mounted) (code 3, subcode 1)
+[  11.4200030] vms: disk unit DUA100: no backing device (/dev/ra2c absent) -- not entered
+[  11.4400030] vms: registered, char major 366
+[  11.4600030] vms: ODS-2 ACP mounted-volume table initialized
+[  11.4700030] vms: cluster_seam: BEGIN (FC-P0.4 R3 substrate contract self-test)
+[  11.5300030] vms: cluster_seam: FAIL: exec_time_now_vms returns a plausible post-2020 VMS time
+[  11.5500030] vms: cluster_seam: PASS: exec_time_now_vms is monotone across a real sleep
+[  11.5600030] vms: cluster_seam: PASS: exec_ticks_ms is monotone across a real sleep
+[  11.5700030] vms: cluster_seam: PASS: exec_kthread_create starts a real kthread
+[  11.6800030] vms: cluster_seam: PASS: the kthread body actually executed
+[  11.7000030] vms: cluster_seam: PASS: exec_kthread_should_stop went true and the thread observed it
+[  11.7100030] vms: cluster_seam: PASS: exec_kthread_stop leaves the handle terminal (idempotent)
+[  11.7200030] vms: cluster_seam: PASS: exec_kthread_stop is idempotent on an already-stopped handle
+[  12.0300030] vms: cluster_seam: PASS: exec_timer_arm's callback fired after the delay
+[  12.0400030] vms: cluster_seam: PASS: exec_timer_cancel/_destroy return cleanly
+[  12.0700030] vms: cluster_seam: opened qe0 for the LAN self-test
+[  12.0900030] vms: cluster_seam: PASS: exec_lan_open succeeds on a real interface
+[  12.1000030] vms: cluster_seam: PASS: exec_lan_hwaddr reads the real MAC
+[  12.1100030] vms: cluster_seam: PASS: exec_lan_mtu reads a real, nonzero MTU
+[  12.1200030] vms: cluster_seam: PASS: exec_lan_link_up answers once the port is open
+[  12.1400030] vms: cluster_seam: PASS: exec_lan_mc_add joins a real multicast group
+[  12.1500030] vms: cluster_seam: PASS: exec_lan_mc_del leaves it again
+[  12.1700030] vms: cluster_seam: PASS: exec_lan_xmit sends a real frame (if_transmit_lock)
+[  12.1800030] vms: cluster_seam: PASS: exec_lan_close tears the port down cleanly
+[  12.1900030] vms: cluster_seam: PASS: exec_lan_close is idempotent
+[  12.2000030] vms: cluster_seam: SKIP: rx: a peer's frame reaches rx_cb via the pfil hook (needs a second bridged NetBSD-VAX/SIMH node on a shared tap)
+[  12.2100030] vms: cluster_seam: SKIP: xmit is observed on a peer's rx_cb (needs the same second bridged node (or a host tap packet capture))
+[  12.2600030] vms: cluster_seam: PASS: FC-P0.16: vms_cluster_fork_start ran the REAL exec_rxlock_init/exec_cv_init/kthread(9) path
+[  12.2800030] vms: cluster_seam: PASS: FC-P0.16: the simulated receive-level producer kthread started
+[  12.2900030] vms: cluster_seam: PASS: FC-P0.16: the process-context poster kthread started -- same CPU as the receive-level producer (VAX has no SMP)
+[  14.2900030] vms: cluster_seam: PASS: FC-P0.16: the simulated receive-level producer drove cf_rx_deliver() for real
+[  14.3000030] vms: cluster_seam: PASS: FC-P0.16: at least one simulated frame was enqueued under the real exec_rxlock_t
+[  14.3100030] vms: cluster_seam: PASS: FC-P0.16: the process-context poster's cf_post() calls were accepted on the SAME CPU
+[  14.3200030] vms: cluster_seam: PASS: FC-P0.16: every enqueued item was dispatched exactly once (no lost wakeup)
+[  14.3300030] vms: cluster_seam: PASS: FC-P0.16: every posted work item was dispatched exactly once (no lost wakeup)
+[  14.3400030] vms: cluster_seam: PASS: FC-P0.16: the fork thread actually slept via exec_cv_wait_rx and was actually woken
+[  14.3500030] vms: cluster_seam: PASS: FC-P0.16: the fork thread's own rx handler saw every dispatched item
+[  14.3700030] vms: cluster_seam: PASS: FC-P0.16: the fork thread's own work handler saw every dispatched item
+[  14.3800030] vms: cluster_seam: FC-P0.16 hammer info sent=3114 rx_enqueued=810 rx_dispatched=810 posts_accepted=1536 work_posted=1536 work_dispatched=1536 waits=14
+[  14.4000030] vms: cluster_seam: DONE pass=29 fail=1 skip=2 OVERALL-FAIL
+[  14.4100030] DEBUG: module: module `vms' loaded successfully
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+     1-JAN-2010 12:39:25.84
+
+%OVMX-I-SYSDISK, mounting system disk DUA0:
+ unit offline (not mounted) (code 3, subcode 1)
+%OVMX-I-MOUNTED, system disk DUA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[  82.5000030] vms: cluster port unit PEA0: -> qe0
+[  82.5100030] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[  82.7300030] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  1-JAN-2010 12:40:34.15
+[  86.0200030] %PEA0, channel verified%PEA0, virtual circuit open%CNXMAN, a connection manager was discovered on the interconnect
+[  86.7600030] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[  87.3300030] %CNXMAN, the cluster opened the VMS$VAXcluster connection to this node
+[  87.4800030] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[  87.8100030] %CNXMAN, the cluster assigned this node a cluster system id
+[  87.8500030] %CNXMAN, the cluster assigned this node a cluster system id
+[  88.0000030] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[  88.5300030] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[  92.2900030] %CNXMAN, this node is a member of the cluster
+[  92.3000030] %CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+[  92.3300030] %CNXMAN, VAXcluster state transition in progress
+[  92.3400030] %CNXMAN, this node is now a VAXcluster member
+[  92.3500030] %CNXMAN, system 00000000000007c4 was added to the cluster
+[  92.3600030] %CNXMAN, system 00000000000007c5 was added to the cluster
+[  92.3800030] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[  98.4800030] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+[  98.7700030] %CNXMAN, completed VAXcluster state transition
+[ 126.0900030] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+%OVMX-I-STARTUP, handing SYS$MANAGER:STARTUP.COM to DCL for ACP resolution
+[ 240.2600030] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+The OVMX system is now executing the site-specific startup commands.
+%RUN-S-PROC_ID, identification of created process is 0000006B
+█

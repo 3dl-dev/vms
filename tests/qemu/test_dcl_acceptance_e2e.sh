@@ -128,7 +128,7 @@ mkfifo "$FIFO"
 #
 # vms-3e9 adds the console login-sequence gate at the FRONT of the battery: a
 # console quiet-settle plus a deliberate idle-at-the-prompt probe longer than
-# LOGIN_INPUT_TIMEOUT_SEC (30s), to prove the idle login prompt is really
+# LOGIN_INPUT_TIMEOUT_SEC (20s), to prove the idle login prompt is really
 # disconnected. That is ~90s of WAIT, so the cap grows by 120.
 WALL=$((BOOT_TIMEOUT + CMD_TIMEOUT * 20 + 360))
 

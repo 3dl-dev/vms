@@ -1,6 +1,6 @@
 {
   "meta": {
-    "generated": "2026-09-14",
+    "generated": "2026-10-01",
     "source": "docs/compat/",
     "note": "Machine export of the OVMX Compatibility Surface Register. This is an inventory with per-surface status; it deliberately carries NO coverage percentage \u2014 the total VMS surface has no known denominator. Report absolute counts; V1 progress is `overall_in_scope` (met/in_progress/not_started) against the commitment set, never a fraction of the whole."
   },
@@ -74,45 +74,45 @@
     }
   ],
   "overall": {
-    "count": 459,
+    "count": 462,
     "by_status": {
-      "verified": 24,
-      "implemented": 281,
-      "partial": 50,
+      "verified": 23,
+      "implemented": 278,
+      "partial": 53,
       "stub": 14,
-      "designed": 0,
-      "absent": 90
-    },
-    "by_authenticity": {
-      "real": 316,
-      "n/a": 90,
-      "advisory": 47,
-      "facade-risk": 6
-    },
-    "met": 305,
-    "in_progress": 50,
-    "not_started": 104,
-    "facade_risk": 6
-  },
-  "overall_in_scope": {
-    "count": 415,
-    "by_status": {
-      "verified": 24,
-      "implemented": 281,
-      "partial": 49,
-      "stub": 10,
-      "designed": 0,
-      "absent": 51
+      "designed": 1,
+      "absent": 93
     },
     "by_authenticity": {
       "real": 315,
-      "n/a": 51,
+      "n/a": 94,
+      "advisory": 47,
+      "facade-risk": 6
+    },
+    "met": 301,
+    "in_progress": 53,
+    "not_started": 108,
+    "facade_risk": 6
+  },
+  "overall_in_scope": {
+    "count": 416,
+    "by_status": {
+      "verified": 23,
+      "implemented": 278,
+      "partial": 52,
+      "stub": 10,
+      "designed": 1,
+      "absent": 52
+    },
+    "by_authenticity": {
+      "real": 314,
+      "n/a": 53,
       "advisory": 45,
       "facade-risk": 4
     },
-    "met": 305,
-    "in_progress": 49,
-    "not_started": 61,
+    "met": 301,
+    "in_progress": 52,
+    "not_started": 63,
     "facade_risk": 4
   },
   "facilities": [
@@ -1077,19 +1077,19 @@
       "vms_ref": "OpenVMS Cluster Systems manual; NISCA/NISCS wire protocol (Systems Application A)",
       "last_reviewed": "2026-09-03",
       "rollup": {
-        "count": 2,
+        "count": 3,
         "by_status": {
           "verified": 0,
-          "implemented": 2,
+          "implemented": 3,
           "partial": 0,
           "stub": 0,
           "designed": 0,
           "absent": 0
         },
         "by_authenticity": {
-          "real": 2
+          "real": 3
         },
-        "met": 2,
+        "met": 3,
         "in_progress": 0,
         "not_started": 0,
         "facade_risk": 0
@@ -1420,25 +1420,26 @@
       "domain": "networking",
       "scope_1_0": "in",
       "tier": null,
-      "plan_ref": "vms-67f",
+      "plan_ref": "vms-9ef",
       "vms_ref": "VSI OpenVMS TCP/IP Services \u2014 SSH server (OpenSSH port)",
-      "last_reviewed": "2026-09-14",
+      "last_reviewed": "2026-09-15",
       "rollup": {
         "count": 4,
         "by_status": {
           "verified": 0,
-          "implemented": 4,
-          "partial": 0,
+          "implemented": 1,
+          "partial": 1,
           "stub": 0,
-          "designed": 0,
-          "absent": 0
+          "designed": 1,
+          "absent": 1
         },
         "by_authenticity": {
-          "real": 4
+          "n/a": 2,
+          "real": 2
         },
-        "met": 4,
-        "in_progress": 0,
-        "not_started": 0,
+        "met": 1,
+        "in_progress": 1,
+        "not_started": 2,
         "facade_risk": 0
       }
     },
@@ -1924,8 +1925,8 @@
         "count": 7,
         "by_status": {
           "verified": 0,
-          "implemented": 5,
-          "partial": 2,
+          "implemented": 4,
+          "partial": 3,
           "stub": 0,
           "designed": 0,
           "absent": 0
@@ -1934,8 +1935,8 @@
           "real": 5,
           "advisory": 2
         },
-        "met": 5,
-        "in_progress": 2,
+        "met": 4,
+        "in_progress": 3,
         "not_started": 0,
         "facade_risk": 0
       }
@@ -1950,22 +1951,22 @@
       "vms_ref": "OpenVMS TCP/IP Services for OpenVMS (UCX) manuals",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 11,
+        "count": 13,
         "by_status": {
-          "verified": 1,
+          "verified": 0,
           "implemented": 9,
-          "partial": 0,
+          "partial": 1,
           "stub": 0,
           "designed": 0,
-          "absent": 1
+          "absent": 3
         },
         "by_authenticity": {
           "real": 10,
-          "n/a": 1
+          "n/a": 3
         },
-        "met": 10,
-        "in_progress": 0,
-        "not_started": 1,
+        "met": 9,
+        "in_progress": 1,
+        "not_started": 3,
         "facade_risk": 0
       }
     },
@@ -2788,13 +2789,13 @@
       "facility_name": "Connection manager / membership / quorum / rejoin",
       "id": "connection-manager$genesis",
       "kind": "feature",
-      "vms": "A node forms an OpenVMS Cluster from nothing when it has quorum by its own votes",
+      "vms": "A node forms an OpenVMS Cluster from nothing when the systems it can see have quorum between them",
       "status": "verified",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vms_cnxman_coord_fsm.c",
-      "verified_against": "tests/qemu/run_cluster_genesis_2node.sh (real /dev/vms, KVM) \u2014 the founder reaches MEMBER, csid=(1<<16)|slot1, CN counted from real executive state; + host tests/cluster/host/test_cnxman_coord.c (the votes gate) and tests/cluster/host/test_cnxman_genesis_negctl.c (VOTES=0 never mints)",
-      "notes": "The authentic VMS formation algorithm (OpenVMS Cluster Systems ch. 7), NOT a fabricated default: a booting VAXCLUSTER=2 node founds generation-1 as coordinator IFF quorum is met by its OWN configured votes (votes>0 && votes>=(max{EXPECTED_VOTES,votes}+2)/2), minting CSID=(1<<16)|(SCSSYSTEMID&0x3ff) and driving the SAME learn-CSID \u2192 coordinator \u2192 phase2 machinery a real-VAX admission runs (no fork). A VOTES=0 or sub-quorum node NEVER founds \u2014 it stays JOINING/STANDALONE honestly (the negctl proves it). #1052 removed the old unconditional CSID=1 phantom-cluster default under INV-6; this is the legitimate replacement. PROVEN AT RUNTIME on two real /dev/vms executives (node A founds \u2192 MEMBER, three agreeing executive projections; negctl held). One shared path with OVMX\u2194VAX join, not a separate platform. rd vms-3c3.\n",
+      "verified_against": "tests/qemu/run_cluster_genesis_2node.sh (real /dev/vms, KVM): RIG_MODE=proof \u2014 the founder reaches MEMBER, csid=(1<<16)|slot1, CN counted from real executive state; RIG_MODE=coldform \u2014 both nodes VOTES=1/EXPECTED_VOTES=2, node A founds NOTHING in 45s alone and the pair reaches CN=2 once B is up; RIG_MODE=negctl (VOTES=0 on both: nobody founds). Oracle: tests/lab/captures/vms-6d3d-coldform-ev2-20260924 (two real OpenVMS VAX V7.3). Host: tests/cluster/host/test_cnxman_genesis.c + test_cnxman_genesis_negctl.c",
+      "notes": "The authentic VMS formation algorithm (OpenVMS Cluster Systems ch. 7), NOT a fabricated default: a booting VAXCLUSTER=2 node founds generation-1 as coordinator IFF p. 7-6's quorum is met by the COMBINED votes of the PROPOSED SET \u2014 itself plus every system whose PARAMS record it really received over a circuit that is really OPEN (quorum=(max{largest EXPECTED_VOTES in the set, SUM VOTES, old CEVOTES}+2)/2, and SUM VOTES must reach it). It then mints the round-robin CSV slot's CSID and drives the SAME learn-CSID \u2192 coordinator \u2192 phase2 machinery a real-VAX admission runs (no fork). A VOTES=0 node NEVER founds, and a voting node whose visible systems are short of quorum stays JOINING/STANDALONE honestly and says so (the negctl proves both). rd vms-6d3d CORRECTED this from \"quorum by the founder's OWN votes\", which is strictly stronger than VMS and made the documented two-node VMScluster (VOTES=1, EXPECTED_VOTES=2 on both) unformable by any pair of OVMX nodes; the oracle above is two real V7.3 systems in that exact configuration, the first waiting 18 minutes alone with no %CNXMAN line and the pair forming 3.2 s after the second one's circuit came up. #1052 removed the old unconditional CSID=1 phantom-cluster default under INV-6; this is the legitimate replacement. PROVEN AT RUNTIME on two real /dev/vms executives in BOTH configurations. NOT claimed: VMS admits the peer in the SAME founding transition (the oracle's VAX2 never sent a membership request); OVMX founds single-node and admits on the ordinary op-0x02 path immediately after \u2014 a real remaining difference, tracked. One shared path with OVMX\u2194VAX join, not a separate platform. rd vms-3c3, rd vms-6d3d.\n",
       "plan_ref": "vms-694"
     },
     {
@@ -2854,7 +2855,7 @@
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vms_cnxman_recnx_fsm.c",
       "verified_against": null,
-      "notes": "FC-P3.6, pure, on an injected clock. Drives the p. 7-30 reconnect window per CSB and decides RECONNECT vs PROPOSE_TRANSITION. RECNXINTERVAL comes from the SYSGEN parameters the executive actually committed, and a zero is replaced by the published default with the substitution FLAGGED (recnxinterval_defaulted), never silently. DISCLOSED GAP: the last-gasp DATAGRAM is not sent. The ladder raises the LAST_GASP action, but no port-level builder is wired to it, so a shutting-down node is removed by the survivors' reconnect timeout rather than at once. An honest gap, not a fabricated send. PROVEN AT R1/R2: test_cnxman_recnx.c, plus the simulator's departure loops.\n",
+      "notes": "FC-P3.6, pure, on an injected clock. Drives the p. 7-30 reconnect window per CSB and decides RECONNECT vs PROPOSE_TRANSITION. RECNXINTERVAL comes from the SYSGEN parameters the executive actually committed, and a zero is replaced by the published default with the substitution FLAGGED (recnxinterval_defaulted), never silently. DISCLOSED GAP: the last-gasp DATAGRAM is not sent. The ladder raises the LAST_GASP action, but no port-level builder is wired to it, so a shutting-down node is removed by the survivors' reconnect timeout rather than at once. An honest gap, not a fabricated send. PROVEN AT R1/R2: test_cnxman_recnx.c, plus the simulator's departure loops. A MEMBER BACK AS A NEW INCARNATION (rd vms-af4): the old block takes p. 7-24 DEAD and its removal is proposed at once (the real V7.3 oracle removed it 4 ms after accepting the new incarnation's connect), the new incarnation gets a fresh p. 7-25 block, and a participant applies the op-0x08 REMOVE open's kept-members nodemap (spec 4(p).R, nine real specimens) so the removal a real VAX coordinates deselects it. Rig: kill+reboot of a member inside the reconnect window, readmitted (tests/lab/captures/vms-af4-readmit-20261001/).\n",
       "plan_ref": "vms-694"
     },
     {
@@ -4112,8 +4113,8 @@
       "status": "verified",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": ".github/workflows/ci.yml:1458",
-      "verified_against": "CI job install-boot-e2e (ci.yml:1458, vms-96ec) \u2014 runs tests/qemu/run_install_boot_e2e.sh on non-PR events (push/merge_group/schedule/workflow_dispatch); a real PRODUCT INSTALL of a kit, boot of the installed target, and login. Re-census 2026-09-14: job present, line ref refreshed (was :1495).",
+      "evidence": ".github/workflows/ci-release-e2e.yml:536",
+      "verified_against": "CI job install-boot-e2e (ci-release-e2e.yml:536, vms-96ec) \u2014 runs tests/qemu/run_install_boot_e2e.sh on non-PR events (push/merge_group/schedule/workflow_dispatch); a real PRODUCT INSTALL of a kit, boot of the installed target, and login. Re-census 2026-09-24 (vms-1af): ci.yml split into ci-*.yml domain files, job moved to ci-release-e2e.yml, line ref refreshed (was ci.yml:1458).",
       "notes": "",
       "plan_ref": "vms-718"
     },
@@ -5254,7 +5255,22 @@
       "scope_1_0": "in",
       "evidence": "src/kernel-core/vms_pe.c",
       "verified_against": null,
-      "notes": "FC-P0.9. The datalink is opened IN KERNEL CONTEXT (exec_l2_open(), the exec_kbackend seam: AF_PACKET on Linux, the NetBSD equivalent on the vax substrate), so a booted node needs no CAP_NET_RAW anywhere in userspace -- there is no userspace raw socket on the cluster path at all any more. Real frames on 0x6007, never a UDP/IP tunnel. PROVEN AT R1/R2/R3, in CI: tests/cluster/host/test_pe_*.c (the pure port FSM: channels, HELLO cadence, circuit formation, TIMVCFAIL, sequence/ack); the N-node simulator's virtual LAN; tests/qemu/test_cluster_vc.sh drives CLUSTER_DIAG_PORT against a real /dev/vms on a booted node. NOT claimed: interoperation with a real VAX's PEDRIVER on a live LAN -- that is R5, LAB-DEFERRED.\n",
+      "notes": "FC-P0.9. The datalink is opened IN KERNEL CONTEXT (exec_l2_open(), the exec_kbackend seam: AF_PACKET on Linux, the NetBSD equivalent on the vax substrate), so a booted node needs no CAP_NET_RAW anywhere in userspace -- there is no userspace raw socket on the cluster path at all any more. Real frames on 0x6007, never a UDP/IP tunnel. The HELLO multicast address is derived from the cluster group number as real VMS does it -- AB-00-04-01-<LE16(group + 0x100)>, the mapping VMS prints for itself at SYSMAN CONFIGURATION SHOW CLUSTER_AUTHORIZATION -- and the SAME derived value is both the transmit destination and the address enabled in the LAN device's multicast filter, so the two cannot diverge (rd vms-147; through V0.7 the derivation omitted the +0x100 and was correct for group 1 only). Grounded on three real-VMS oracles (V7.3/VAX group 1, V5.5-2H4/VAX group 257, V8.4/Alpha group 2026), pinned with refutations in tests/cluster/host/test_codec_hello.c. The group is on the wire a SECOND time, at abs 22..23 of every SCA frame, as a plain LE16(group) -- a different encoding of the same number, not the same arithmetic as the address. Both are read from the ONE CLUSTER_AUTHORIZE record in pe_build_identity(), so they cannot diverge (rd vms-b34; through V0.7 abs 22 was the constant 0x0001, right for group 1 only -- a real group-257 OpenVMS VAX V7.3 member discarded every VC STACK OVMX sent it and the circuit never opened). Four oracles (V7.3/VAX group 1, V7.3/VAX group 257, V5.5-2H4/VAX group 257, V8.4/Alpha group 2026), pinned with refutations in the same test; the port's emit/refuse behaviour in tests/cluster/host/test_pe_group_on_wire.c. A frame carrying another cluster's group is refused and counted, never processed. PROVEN AT R1/R2/R3, in CI: tests/cluster/host/test_pe_*.c (the pure port FSM: channels, HELLO cadence, circuit formation, TIMVCFAIL, sequence/ack); the N-node simulator's virtual LAN; tests/qemu/test_cluster_vc.sh drives CLUSTER_DIAG_PORT against a real /dev/vms on a booted node. NOT claimed: interoperation with a real VAX's PEDRIVER on a live LAN -- that is R5, LAB-DEFERRED.\n",
+      "plan_ref": "vms-694"
+    },
+    {
+      "domain": "clustering",
+      "facility": "nisca",
+      "facility_name": "NISCA/NISCS LAN transport",
+      "id": "nisca$discovery-revisions",
+      "kind": "protocol",
+      "vms": "NISCA discovery HELLO \u2014 both observed on-wire revisions",
+      "status": "implemented",
+      "authenticity": "real",
+      "scope_1_0": "in",
+      "evidence": "src/kernel-core/vms_cluster_codec_hello.c",
+      "verified_against": null,
+      "notes": "rd vms-0f8. OVMX's discovery corpus was harvested entirely from OpenVMS VAX V7.3 nodes (message class 0x05, 120-byte SCA content). A real OpenVMS VAX V5.5-2H4 node speaks a SECOND revision of the same HELLO: class 0x03, 114-byte content, no abs 128-133 tail, and two differing marker words at abs 94/126 -- and NOTHING else different, field position for field position, across 53 captured frames in which the only span that moves is the live tick at abs 96 (docs/cluster-protocol-spec.md 4(b.c3)). (This entry once counted abs 22 as a third marker; it is the CLUSTER GROUP number, LE16 -- the two specimens compared came from clusters 1 and 257 -- corrected under rd vms-b34, which also stopped the port echoing a peer's group back at it.) Through V0.7 the executive classified every such frame family 0/UNCLASSIFIED and counted it badclass. The codec now carries both revisions as a TABLE, keyed on the class byte AND the exact content length, so a class-0x03 frame at any other length stays UNKNOWN and is counted rather than guessed at. The port LEARNS which revision a peer speaks off that peer's own frame -- per channel for directed frames, port-wide first-wins for the multicast advertisement -- the same on-wire-assignment discipline already used for the cluster join nonce and the abs 47-67 discovery-format span, never a version table compiled in. No meaning is claimed for the differing marker values; they are carried as data exactly as the 0x05 revision's already are, and every field that asserts something about THIS node (SCSNODE, SCSSYSTEMID, hardware MAC, incarnation, tick) stays this node's own and is never echoed. PROVEN AT R1 (CI) AND R5 (live, against a REAL OpenVMS VAX V5.5-2H4): the browser-demo capture tests/lab/captures/vms-0f8-browser-c03-channel-20260923/ shows Node C->OVMX badclass fall from 553-of-553 to 402-of-1838 -- and every residual is ONE non-discovery shape (that node's SCS envelope, format byte 0x03, a SEPARATE second revision, NOT decoded). The sec 4(a).1 channel opened bidirectionally in this revision: one b2 from the member, 186 b3 from OVMX, 184 b4 CONFIRMs back, and OVMX's reply carries the cluster join nonce it LEARNED off that member's own b2 (77 11 7a 7d), its own SCSNODE/SCSSYSTEMID/MAC, and the peer's revision markers. In CI: tests/cluster/host/test_codec_hello.c (classification, parse, byte-exact round trip of the real specimen, and the refusals) and tests/cluster/host/test_pe_rev_c3.c (the real 128 bytes through pe_fsm_rx: badclass 0, peer identity off the wire, the reply emitted in the peer's revision carrying our own identity, plus 257 truncations and bit-flips that must not fault). Specimen provenance: the multicast hello-c3-vaxc-v55.spec and the DIRECTED b2 hello-c3-vaxc-directed-b2.spec under tests/cluster/host/fixtures/, both origin `capture`, both hashed in docs/clean-room/reference-captures.sha256. NOT claimed, and the reason CN=2 does not yet form: this revision's SCS LAYER. The same V5.5 node's SCS envelope carries format byte 0x03 at abs 31 rather than the 4(d) constant 0x13, msgtype 0x01 rather than the 4(g) phase-2 0x41, and a body 16 bytes shorter -- a SEPARATE second revision on which OVMX's whole SCS/CM/DLM stack is keyed, and of which exactly ONE specimen exists (that node's round-0 START, retransmitted because nothing answered it). It is not decoded and this register does not extrapolate it. Nor is a 4(k) padded frame claimed in the discovery revision -- none has ever been observed, so the port DECLINES to probe such a peer and records that it declined, rather than credit a packet size it never proved.\n",
       "plan_ref": "vms-694"
     },
     {
@@ -6509,13 +6525,13 @@
       "id": "ssh$remote-login",
       "kind": "feature",
       "vms": "SSH in and get an authenticated interactive DCL/LOGINOUT session",
-      "status": "implemented",
-      "authenticity": "real",
+      "status": "designed",
+      "authenticity": "n/a",
       "scope_1_0": "in",
-      "evidence": "src/vmsssh/sshd_session.c",
+      "evidence": "",
       "verified_against": null,
-      "notes": "Wrapped OpenSSH sshd runs a full authenticated session over BGn:. The POSITIVE SYSUAF-password path is RUNTIME-PROVEN (rd vms-9cc, tests/qemu/test_syssvc_ssh_server.c on real /dev/vms): a valid SYSUAF user (SYSTEM/MANAGER) is resolved from the real SYS$SYSTEM:SYSUAF.DAT over the Files-11 ACP, Purdy-authenticated, and lands in an interactive DCL session over the wrapped BGn: connection; the unknown-user refusal is NON-VACUOUS (coupled to the SYSTEM positive proving the reader actually opened SYSUAF). The separate 'remote command byte-exact' proof (test_syssvc_ssh_kex.c) exercises transport + BGn: exec via pubkey-as-root, NOT the SYSUAF path. Interactive SYS$WELCOME banner display is a PTY-login artifact proven separately (vms-f166). Not yet verified-status: the SSH service is disabled in TCPIP$SERVICE.DAT so the shipped bootable does not auto-launch it (vms-9ef/vms-3bf).",
-      "plan_ref": "vms-67f"
+      "notes": "NOT present. The faithful implementation is the real upstream OpenSSH port built natively on the TCP/IP + OVMX substrate (rd vms-9ef); it does not yet compile because that substrate is still being raised (DECC$SHR C-RTL holes, DECC$SOCKET routed to BGn:, a VMS PTY, native image). The substrate rungs it will stand on ARE landed and proven: the network-login -> LOGINOUT -> DCL path (tools/vms_login.c network mode, vms-65b) and the BGn: bind/listen/accept server socket path (src/kernel-core/vms_bg.c, vms-698). The earlier wrapped-OpenSSH-sshd stand-in that used to occupy this row (src/vmsssh/sshd_session.c, a --wrap + $CREPRC handoff shim) was retired as LARP (rd vms-d916): it was not the real port on real substrate, so its end-to-end 'proof' is withdrawn, not carried.",
+      "plan_ref": "vms-9ef"
     },
     {
       "domain": "networking",
@@ -6523,14 +6539,14 @@
       "facility_name": "SSH remote login",
       "id": "ssh$server-daemon",
       "kind": "utility",
-      "vms": "VMSSSHD.EXE \u2014 the OVMX SSH server image",
-      "status": "implemented",
-      "authenticity": "real",
+      "vms": "the OVMX SSH server image (VSI ships SSHD, the OpenSSH-derived sshd)",
+      "status": "absent",
+      "authenticity": "n/a",
       "scope_1_0": "in",
-      "evidence": "src/vmsssh/vmssshd.c",
+      "evidence": "",
       "verified_against": null,
-      "notes": "Built + installed to SYS$SYSTEM (src/vmsssh/CMakeLists.txt); wraps unmodified OpenSSH behind the BGn: sockets veneer.",
-      "plan_ref": "vms-67f"
+      "notes": "NOT present. VMSSSHD.EXE was a hand-rolled SSH daemon wrapped around an OpenSSH binary behind a sockets veneer; it was RETIRED as LARP (rd vms-d916) \u2014 OVMX is to provide the REAL upstream OpenSSH sshd built on the substrate, not a bespoke reimplementation. The real server image will be produced by the vms-9ef port and shipped inside the TCP/IP Services kit (vms-cb0); it does not yet build. (This retires the vms-80c 'server-daemon implemented' overclaim.)",
+      "plan_ref": "vms-9ef"
     },
     {
       "domain": "networking",
@@ -6538,14 +6554,14 @@
       "facility_name": "SSH remote login",
       "id": "ssh$cred-drop",
       "kind": "feature",
-      "vms": "SSH session credential drop to the authenticated SYSUAF UIC",
+      "vms": "session credential drop to the authenticated SYSUAF UIC",
       "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/vmsssh/cred_drop.c",
       "verified_against": null,
-      "notes": "Ordered, permanent, fail-closed drop (setgroups/setgid/setuid) exercised as the real product logic by tests/vmsssh/test_cred_drop.c; the wrapped-sshd path uses OpenSSH's own permanently_set_uid from the SYSUAF UIC (sshd_auth.c). Fixes the earlier euid=0 no-drop gap (vms-49e).",
-      "plan_ref": "vms-67f"
+      "notes": "A REAL, unit-tested substrate seam (not a facade): the ordered, permanent, fail-closed drop (setgroups/setgid-before-setuid, fail-closed on any error) exercised as the real product logic by tests/vmsssh/test_cred_drop.c. It is CONSUMED TODAY by the TCP/IP inetd per-service run-as identity drop (src/vmstcpip/services/tcpip_inetd_ident.c, rd vms-8bd) and is the same drop the real OpenSSH port (vms-9ef) will bind. Fixes the earlier euid=0 no-drop gap (vms-49e). (The wrapped-sshd consumer that formerly also cited sshd_auth.c here was retired with the scaffold, vms-d916; the seam and its live inetd consumer remain.)",
+      "plan_ref": "vms-9ef"
     },
     {
       "domain": "networking",
@@ -6553,14 +6569,14 @@
       "facility_name": "SSH remote login",
       "id": "ssh$identity-terminal-map",
       "kind": "feature",
-      "vms": "SYSUAF authentication + VMS identity / terminal mapping for the session",
-      "status": "implemented",
+      "vms": "executive-resident VMS identity + terminal mapping for a network-login session",
+      "status": "partial",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/vmsssh/sshd_auth.c",
+      "evidence": "src/vmsssh/ssh_ident.c",
       "verified_against": null,
-      "notes": "sshd_auth.c (SYSUAF lookup -> struct passwd), ssh_ident.c (vms_kif_setident), term_map.c \u2014 each unit-tested (tests/vmsssh/test_sshd_auth.c, test_ssh_ident.c, test_term_mapping.c). The SYSUAF authentication is now RUNTIME-PROVEN over the wrapped sshd on real /dev/vms (rd vms-9cc): SYSTEM resolved from the real SYSUAF over the ACP, Purdy-authenticated, identity established fail-closed (no %OVMX-F-NOIDENT) \u2014 before vms-9cc this was only unit-tested + the SYSUAF read was never runtime-exercised via the sshd.",
-      "plan_ref": "vms-67f"
+      "notes": "The SEAMS are real and unit-tested: ssh_ident.c establishes identity through the executive (vms_kif_setident) and is FAIL-HONEST \u2014 if the executive refuses (even status, or /dev/vms absent) the session is DENIED with no local privileged fallback (tests/vmsssh/test_ssh_ident.c, closing the audit \u00a73.7 soft-fail bypass); term_map.c maps TERM -> VMS device type, labelled an OVMX design choice (not VMS-authentic) per Rule 8 (tests/vmsssh/test_term_mapping.c). ssh_ident.c is reused by the TCP/IP inetd run-as path (alongside cred_drop.c); term_map.c is unit-tested substrate with NO production caller yet \u2014 it will be wired by the real OpenSSH port (vms-9ef). status=partial (not implemented) because there is no SSH session wiring them end-to-end yet \u2014 that arrives with the real OpenSSH port (vms-9ef). The former 'RUNTIME-PROVEN over the wrapped sshd' claim (and its sshd_auth.c evidence) is WITHDRAWN: that scaffold was retired as LARP (vms-d916), so the runtime proof it rested on no longer exists.",
+      "plan_ref": "vms-9ef"
     },
     {
       "domain": "programming-interfaces",
@@ -8299,7 +8315,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/rtl/sysuaf.c:390",
       "verified_against": null,
-      "notes": "vms-c8fa: READ at login. sysuaf_interactive_login_permitted() checks DISUSER|DISACNT and is enforced BEFORE start_session() in both console LOGINOUT (tools/vms_login.c) and SSH (src/vmsssh/sshd_auth.c) \u2014 a disabled account is refused with the same generic failure text even with the correct password. Was absent/facade-risk on 2026-08-13. Re-census 2026-09-14: unchanged, line ref refreshed (was :389).",
+      "notes": "vms-c8fa: READ at login. sysuaf_interactive_login_permitted() checks DISUSER|DISACNT and is enforced BEFORE start_session() in console LOGINOUT (tools/vms_login.c) \u2014 a disabled account is refused with the same generic failure text even with the correct password. (The SSH front-end that also enforced this was the hand-rolled scaffold sshd_auth.c, retired as LARP vms-d916; the enforcement returns with the real OpenSSH port, vms-9ef.) Was absent/facade-risk on 2026-08-13. Re-census 2026-09-15: SSH front-end clause corrected, line ref :390.",
       "plan_ref": "vms-8ad"
     },
     {
@@ -8314,7 +8330,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/rtl/sysuaf.c:400",
       "verified_against": null,
-      "notes": "vms-c8fa: sysuaf_account_captive() read. SSH auth passes --captive to vmsdcl (src/vmsssh/sshd_auth.c); DCL enforces it (src/vmsdcl/dcl_main.c \u2014 Ctrl-Y disabled, REPL suppressed, logs out after the login procedure). Was absent/facade-risk on 2026-08-13. Re-census 2026-09-14: unchanged, line ref refreshed (was :399).",
+      "notes": "vms-c8fa: sysuaf_account_captive() read. DCL enforces captive (src/vmsdcl/dcl_main.c \u2014 Ctrl-Y disabled, REPL suppressed, logs out after the login procedure) regardless of front-end. (The SSH front-end that passed --captive to vmsdcl was the retired scaffold sshd_auth.c, vms-d916; it returns with the real OpenSSH port, vms-9ef.) Was absent/facade-risk on 2026-08-13. Re-census 2026-09-15: SSH front-end clause corrected, line ref :400.",
       "plan_ref": "vms-8ad"
     },
     {
@@ -8329,7 +8345,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/rtl/sysuaf.c:418",
       "verified_against": null,
-      "notes": "vms-c6df: ENFORCED. sysuaf_password_expired() reads UAI$M_PWD_EXPIRED and UAF$Q_PWD_DATE+UAF$Q_PWD_LIFETIME straight from the binary $UAFDEF record (NOT the flag-name string, which omits the transient bit) against sys$gettim; an expired password is REFUSED at login on both front-ends \u2014 console LOGINOUT (tools/vms_login.c, %OVMX-F-PWDEXPIRED before start_session) and SSH (src/vmsssh/sshd_auth.c). On-disk UAF$Q_PWD_LIFETIME field at [OVMX] offset 0x188 (sysuaf.h). authenticity=advisory (not real): VMS FORCES a password change at login; OVMX honestly REFUSES instead (INV-6) \u2014 interactive force-change is the tracked follow-up vms-91f. Proof: tests/libvms/test_sysuaf_login_flags.c, tests/vmsssh/test_sshd_auth.c, tests/qemu/test_syssvc_loginout_acp.c (expired account authored + read back over the ODS-2 ACP). Re-census 2026-09-14: unchanged.",
+      "notes": "vms-c6df: ENFORCED. sysuaf_password_expired() reads UAI$M_PWD_EXPIRED and UAF$Q_PWD_DATE+UAF$Q_PWD_LIFETIME straight from the binary $UAFDEF record (NOT the flag-name string, which omits the transient bit) against sys$gettim; an expired password is REFUSED at login in console LOGINOUT (tools/vms_login.c, %OVMX-F-PWDEXPIRED before start_session). (The SSH front-end that also refused it was the retired scaffold sshd_auth.c, vms-d916; it returns with the real OpenSSH port, vms-9ef.) On-disk UAF$Q_PWD_LIFETIME field at [OVMX] offset 0x188 (sysuaf.h). authenticity=advisory (not real): VMS FORCES a password change at login; OVMX honestly REFUSES instead (INV-6) \u2014 interactive force-change is the tracked follow-up vms-91f. Proof: tests/libvms/test_sysuaf_login_flags.c, tests/qemu/test_syssvc_loginout_acp.c (expired account authored + read back over the ODS-2 ACP). Re-census 2026-09-15: SSH front-end + test_sshd_auth.c (both retired) removed from proof.",
       "plan_ref": "vms-8ad"
     },
     {
@@ -8344,7 +8360,7 @@
       "scope_1_0": "in",
       "evidence": "tools/vms_login.c:933",
       "verified_against": null,
-      "notes": "vms-843a/vms-16b (2026-09-12, #1199): loginout_network_permit() is a pure, fail-closed AUTHORIZATION DECISION for the faithful SSH->$CREPRC(LOGINOUT) handoff (Option A \u2014 SSH authenticates in-protocol against the same SYSUAF/Purdy authority, so LOGINOUT does not re-read the password). Permits a network login only if the account is enabled (DISUSER/DISACNT), UAI$M_DISNETWORK is clear, and the password is not expired; grants nothing beyond the SYSUAF record. Real, honest logic but DELIBERATELY UNWIRED into any live login path (dead until the session-establish + executive-identity conveyance land, lab-gated vms-101) \u2014 hence partial/advisory, not a facade. Proof is a plain host-side ctest (loginout_network_permit_selftest, tools/CMakeLists.txt:48, 6 cases clean->permit / DISNETWORK|DISUSER|DISACNT|expired|NULL->refuse) \u2014 a self-test, not an oracle, so NOT verified. Design: docs/design-ssh-loginout-handoff.md.",
+      "notes": "vms-843a/vms-16b (2026-09-12, #1199): loginout_network_permit() is a pure, fail-closed AUTHORIZATION DECISION for the faithful SSH->$CREPRC(LOGINOUT) handoff (Option A \u2014 SSH authenticates in-protocol against the same SYSUAF/Purdy authority, so LOGINOUT does not re-read the password). Permits a network login only if the account is enabled (DISUSER/DISACNT), UAI$M_DISNETWORK is clear, and the password is not expired; grants nothing beyond the SYSUAF record. Real, honest logic but DELIBERATELY UNWIRED into any live login path (dead until the session-establish + executive-identity conveyance land, lab-gated vms-101) \u2014 hence partial/advisory, not a facade. Proof is a plain host-side ctest (loginout_network_permit_selftest, tools/CMakeLists.txt:48, 6 cases clean->permit / DISNETWORK|DISUSER|DISACNT|expired|NULL->refuse) \u2014 a self-test, not an oracle, so NOT verified. This is a real, landed substrate rung the real OpenSSH port (rd vms-9ef) will bind. Design/plan: rd vms-9ef tree (the earlier docs/design-ssh-loginout-handoff.md was a scaffold-era design doc, not on the current tree).",
       "plan_ref": "vms-843a"
     },
     {
@@ -8353,13 +8369,13 @@
       "facility_name": "SYSUAF \u2014 Accounts + Login Authentication",
       "id": "sysuaf$ssh_credential_drop",
       "kind": "feature",
-      "vms": "Process credentials match the authenticated SYSUAF identity after SSH login",
-      "status": "implemented",
+      "vms": "Process credentials match the authenticated SYSUAF identity after a network login",
+      "status": "partial",
       "authenticity": "real",
       "scope_1_0": "in",
-      "evidence": "src/vmsssh/vmssshd.c:612",
+      "evidence": "src/vmsssh/cred_drop.c",
       "verified_against": null,
-      "notes": "vms-49e/vms-6ae: vmssshd (a) establishes the authenticated identity in the executive via vms_kif_setident, fail-closed _exit(1) on refusal (INV-6), and (b) performs a permanent setgid-before-setuid UIC drop via ovmx_cred_drop_to_uic() BEFORE execl of vmsdcl, fatal on failure (%OVMX-F-NOUIC). Unit-tested (tests/vmsssh/test_cred_drop.c, test_ssh_ident.c). Was absent/facade-risk (session ran as euid=0/root) on 2026-08-13. Re-census 2026-09-14: unchanged.",
+      "notes": "vms-49e/vms-6ae: the SEAMS are real and unit-tested \u2014 (a) ssh_ident.c establishes the authenticated identity in the executive via vms_kif_setident, fail-closed on refusal (INV-6, test_ssh_ident.c), and (b) cred_drop.c performs a permanent setgroups/setgid-before-setuid UIC drop, fail-closed on any error (test_cred_drop.c). status=partial (not implemented) because the hand-rolled daemon that used to wire these before an execl of vmsdcl (vmssshd.c) was RETIRED as LARP (vms-d916): there is no SSH login process wiring them end-to-end today. The drop seam is meanwhile consumed for real by the TCP/IP inetd per-service run-as identity (tcpip_inetd_ident.c, vms-8bd), and both seams will be bound by the real OpenSSH port (vms-9ef). Was absent/facade-risk (session ran as euid=0/root) on 2026-08-13. Re-census 2026-09-15: evidence repointed off the retired vmssshd.c to the surviving seam; status implemented->partial (no live SSH session).",
       "plan_ref": "vms-8ad"
     },
     {
@@ -8369,12 +8385,12 @@
       "id": "tcpip-services$bg-inet-device",
       "kind": "feature",
       "vms": "INET pseudo-device BGn: \u2014 $ASSIGN TCPIP$DEVICE: + $QIO (IO$_SETMODE/IO$_ACCESS/IO$_READVBLK/IO$_WRITEVBLK/IO$_DEACCESS) TCP socket path, executive-resident",
-      "status": "verified",
+      "status": "implemented",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/kernel/vms_bg_datafd.c",
       "verified_against": "tests/qemu/test_syssvc_bg_echo.c \u2014 a VMS program TCP round-trips a loopback echo via the public system services against a REAL /dev/vms (honest SS$_NOSUCHDEV/EXIT_SKIP with no executive); + the facility_defects negctl gate 'bg-recv-length-zeroed' (vms-527)",
-      "notes": "The socket is executive-resident (vms.ko), the analogue of the executive mailbox; no userspace socket, exactly as VMS BGn: is a driver not a library.",
+      "notes": "The socket is executive-resident (vms.ko), the analogue of the executive mailbox; no userspace socket, exactly as VMS BGn: is a driver not a library. STATUS=implemented not verified: the proof is a 127.0.0.1 LOOPBACK echo inside one guest under -nic none (test_syssvc_bg_echo.c) -- no real NIC path, no external peer. The 'verified' gate is a real external-peer TCP round-trip over the virtio NIC (untested).",
       "plan_ref": "vms-67f"
     },
     {
@@ -8389,7 +8405,7 @@
       "scope_1_0": "in",
       "evidence": "src/vmstcpip/sockets/vms_bgsock.c",
       "verified_against": null,
-      "notes": "707-line veneer; app speaks only BSD sockets, never BGn:/$QIO. Exercised by the qemu harness (tests/qemu/CMakeLists.txt) alongside the BGn: driver; used by the wrapped OpenSSH clients/daemon.",
+      "notes": "707-line veneer; app speaks only BSD sockets, never BGn:/$QIO. Exercised by the qemu harness (tests/qemu/CMakeLists.txt) alongside the BGn: driver, consumed by the client tools. THIN SLICE of the BSD API: socket/connect/send/recv + basic setsockopt only -- NO resolver (getaddrinfo/gethostbyname), NO AF_INET6, NO select/poll, partial setsockopt option set (see sockets-api-gaps).",
       "plan_ref": "vms-67f"
     },
     {
@@ -8398,13 +8414,13 @@
       "facility_name": "TCP/IP Services (UCX QIO + Sockets + BGn:/ETH0:)",
       "id": "tcpip-services$client-tools",
       "kind": "utility",
-      "vms": "TCP/IP client TOOLS \u2014 DCL TELNET + FTP over BGn:",
-      "status": "implemented",
+      "vms": "TCP/IP CLIENT tools \u2014 DCL TELNET + FTP client over BGn: (client-only; no server)",
+      "status": "partial",
       "authenticity": "real",
       "scope_1_0": "in",
       "evidence": "src/vmstcpip/services/tcpip_client.h",
       "verified_against": null,
-      "notes": "TELNET/FTP protocol engines driving BGn: the ordinary $ASSIGN/$QIO way; header-only static-inline so the test exercises the real product logic. Guarded by the negctl gate 'tcpip-ftp-get-length-dropped' (vms-dbb). Honest SS$_NOSUCHDEV with no executive.",
+      "notes": "TELNET/FTP protocol engines driving BGn: the ordinary $ASSIGN/$QIO way; header-only static-inline. STATUS=partial: proven ONLY by the KE harness + a negctl gate -- NO booted e2e against a real server; and these are CLIENTS only (FTP-server + TELNET-server are absent, see unbuilt-application-surface). Guarded by the negctl gate 'tcpip-ftp-get-length-dropped' (vms-dbb). Honest SS$_NOSUCHDEV with no executive.",
       "plan_ref": "vms-67f"
     },
     {
@@ -8510,6 +8526,36 @@
       "evidence": "src/vmstcpip/mgmt/tcpip_service_db.h",
       "verified_against": "tests/qemu/test_syssvc_tcpip_service_db.c \u2014 a service SET+ENABLEd through the engine over a REAL Files-11 ACP is read back through the INDEPENDENT aux-server parser (tcpip_inetd_parse_db, the same code TCPIP$INETD runs to decide what to bind); DISABLE removes it from the bound set (record retained as a '!'-line), DELETE drops it; with no executive the persistent WRITE fails ENOEXEC (honest SS$_NOSUCHDEV class, never a per-process fake); + the facility_defects negctl gate 'tcpip-svcdb-enable-not-persisted' (vms-71b)",
       "notes": "The management/persistence plane the DCL SERVICE verbs drive (#878). The database was already ACP-resident and read at boot; this adds the VMS-way management surface (was hand-edit-only) \u2014 SET SERVICE defines/updates a record, ENABLE/DISABLE toggle the '!'-disabled convention the aux-server parser already honours, DELETE removes it, and the change is persisted over the ACP the same apply/persist way the config stores are (rms_textfile_*), so a DCL-enabled service survives reboot and is reapplied on the next TCPIP$INETD start. Line format is the SAME OVMX design choice tcpip_inetd.h documents (Rule 8). A new service defaults DISABLED (operator posture). The end-to-end cold-boot double-boot serving proof (a DCL-enabled service answered on the next boot \u2014 the 'verified' oracle gate) is the tracked follow-on.",
+      "plan_ref": "vms-67f"
+    },
+    {
+      "domain": "networking",
+      "facility": "tcpip-services",
+      "facility_name": "TCP/IP Services (UCX QIO + Sockets + BGn:/ETH0:)",
+      "id": "tcpip-services$unbuilt-application-surface",
+      "kind": "subsystem",
+      "vms": "The OpenVMS UCX application service surface: SMTP, POP3, IMAP, NFS (client+server), NTP, SNMP agent, BIND/named resolver, LPD/LPR printing, FINGER, RLOGIN/RSH, FTP SERVER, TELNET SERVER",
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out",
+      "evidence": "docs/design-tcpip-services-ovmx.md",
+      "verified_against": null,
+      "notes": "NOT BUILT. src/vmstcpip/ is 11 files: the BGn: data path, a sockets veneer, an INETD aux server, a DAYTIME toy service, and client TELNET/FTP/PING. None of the real UCX servers/daemons above exist. Recorded as an explicit absent row so the register does not read as near-complete -- this is the bulk of the facility, post-1.0. (Baron 2026-09-16 anti-LARP: TCP/IP is a mile wide, inch deep; this row makes the width honest.)",
+      "plan_ref": "vms-67f"
+    },
+    {
+      "domain": "networking",
+      "facility": "tcpip-services",
+      "facility_name": "TCP/IP Services (UCX QIO + Sockets + BGn:/ETH0:)",
+      "id": "tcpip-services$sockets-api-gaps",
+      "kind": "feature",
+      "vms": "BSD sockets API completeness: DNS resolver (getaddrinfo/gethostbyname), AF_INET6, select/poll, the full setsockopt/getsockopt option set",
+      "status": "absent",
+      "authenticity": "n/a",
+      "scope_1_0": "out",
+      "evidence": "src/vmstcpip/sockets/vms_bgsock.c",
+      "verified_against": null,
+      "notes": "The DECC$SOCKET veneer covers socket/connect/send/recv + basic options only; a program needing name resolution, IPv6, readiness multiplexing, or most socket options cannot run. Absent, post-1.0.",
       "plan_ref": "vms-67f"
     },
     {

@@ -1,0 +1,18 @@
+[P-15(20s)] FAIL  stall=20s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=2/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+[P-16(10s)] PASS  stall=10s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+[P-1(13s)] PASS  vax-removals/bugchecks=0  P-1 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-2(14s)] PASS  vax-removals/bugchecks=0  P-2 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-3(20s)] PASS  vax-removals/bugchecks=0  P-3 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-4(10s)] PASS  vax-removals/bugchecks=0  P-4 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-5(16s)] PASS  vax-removals/bugchecks=0  P-5 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-6(6s)] PASS  vax-removals/bugchecks=0  P-6 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 
+[P-7(13s)] PASS  vax-removals/bugchecks=0  P-7 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-8(14s)] PASS  vax-removals/bugchecks=0  P-8 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-9(20s)] FAIL  vax-removals/bugchecks=0  P-9 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-10(10s)] PASS  vax-removals/bugchecks=0  P-10 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-11(16s)] PASS  vax-removals/bugchecks=0  P-11 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-12(6s)] PASS  vax-removals/bugchecks=0  P-12 B->VAX 0x41 after wake: 0 stale-echo: 0 start: None 
+[P-13(13s)] PASS  vax-removals/bugchecks=0  P-13 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-14(14s)] PASS  vax-removals/bugchecks=0  P-14 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-15(20s)] FAIL  vax-removals/bugchecks=0  P-15 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 
+[P-16(10s)] PASS  vax-removals/bugchecks=0  P-16 B->VAX 0x41 after wake: 3 stale-echo: 0 start: peer-first 

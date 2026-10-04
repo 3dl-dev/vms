@@ -146,7 +146,7 @@ static void credit_op_routes(uint16_t op, const char *label)
 	memcpy(cf.hdr.eth_src, "\x08\x00\x2b\x78\x56\xb9", 6);
 	memcpy(cf.hdr.dst_lavc, "\xaa\x00\x04\x00\x01\x04", 6);
 	memcpy(cf.hdr.src_lavc, "\xaa\x00\x04\x00\x02\x04", 6);
-	cf.hdr.connect_flag = 0x0001;
+	cf.hdr.cluster_group = 0x0001;
 	cf.hdr.word30 = 0x134bu; /* abs30 msgtype 0x4b, abs31 format 0x13 */
 	cf.hdr.sca_len_field = VMS_SCSCTRL_LEN_SHORT - 2u;
 	cf.recv_ack = 20;
@@ -218,7 +218,7 @@ static void mk_link(struct vms_mscp_link *l)
 	memcpy(l->hdr.eth_src, src, 6);
 	memcpy(l->hdr.dst_lavc, dst, 6);
 	memcpy(l->hdr.src_lavc, src, 6);
-	l->hdr.connect_flag = 0x0001;
+	l->hdr.cluster_group = 0x0001;
 	l->recv_ack = 0x1111;
 	l->send_seq = 0x2222;
 	l->credit = VMS_MSCP_ENV_CREDIT_OBSERVED;

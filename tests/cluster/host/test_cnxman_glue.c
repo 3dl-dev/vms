@@ -167,7 +167,7 @@ static uint32_t mk_frame(uint8_t *f, uint8_t cat, uint8_t op)
 	memcpy(l.hdr.eth_src, smac, 6);
 	memcpy(l.hdr.dst_lavc, dmac, 6);
 	memcpy(l.hdr.src_lavc, smac, 6);
-	l.hdr.connect_flag = 0x0001;
+	l.hdr.cluster_group = 0x0001;
 	l.recv_ack = 0x0011;
 	l.send_seq = 0x0012;
 	l.remote_conid = 0x33580008u;
@@ -437,6 +437,21 @@ static void check_absent(const char *needle, const char *what)
 	ct_check(strstr(glue_src, needle) == NULL, what);
 }
 
+/*
+ * The third shape: A really comes BEFORE B. Stronger than two check_has()
+ * calls and weaker than demanding they be adjacent -- adjacency is a fact
+ * about today's line breaks, ORDER is the fact the defect was about (rd
+ * vms-0f9 put the incarnation read between two lines that used to touch).
+ */
+static void check_before(const char *first, const char *second,
+			 const char *what)
+{
+	const char *a = strstr(glue_src, first);
+	const char *b = strstr(glue_src, second);
+
+	ct_check(a != NULL && b != NULL && a < b, what);
+}
+
 static void test_glue_bindings(void)
 {
 	printf("-- the bindings, read out of src/kernel-core/vms_cnxman.c --\n");
@@ -494,6 +509,13 @@ static void test_glue_bindings(void)
 	check_absent("cnxman_csb_dialogue_sent(",
 		  "E73: no transport thunk assigns a send-msg# -- exactly one "
 		  "function does, before the stamp");
+	/* rd vms-e88: the join's OWN VMS$VAXcluster connect is recorded as this
+	 * node's attempt, so a crossing hands the block back to it when it
+	 * opens (the connection the real VAX keeps: rig arms T-15 and M-9). */
+	check_has("cnxman_csb_bind_connection(csb, (uint32_t)*out_conid);\n",
+		  "the join's own connect binds its CSB (E77)");
+	check_has("cnxman_csb_note_attempt(csb, (uint32_t)*out_conid);",
+		  "... and is noted as this node's own attempt (rd vms-e88)");
 	check_has("cnxman_csb_dialogue_heard(csb, env.send_msg)",
 		  "inbound frames update the peer's ack-msg# for the barrier/"
 		  "coordinator path (the join does its own, internally)");
@@ -512,11 +534,39 @@ static void test_glue_bindings(void)
 		  "a connection and restarting its dialogue are one act");
 	check_has("cnxman_csb_bind_connection(csb, (uint32_t)*out_conid)",
 		  "E77: an outbound connect binds the Con.ID SCS minted");
-	check_has("cnxman_csb_bind_connection(csb, (uint32_t)local_conid)",
-		  "E77: an ACCEPTED connection is bound the same way");
-	check_has("cnxman_csb_bind_connection(csb, (uint32_t)new_conid)",
-		  "E77: and so is a reconnect's -- the case where a burned "
-		  "number used to cross a teardown");
+	/*
+	 * ...AND THE TWO RE-ESTABLISHMENT SITES BIND THROUGH THE *CARRYING*
+	 * BINDER (rd vms-8c54). Same single-writer rule -- neither of them
+	 * touches cdt_conid either -- but a connection re-established inside
+	 * the p. 7-24 window, to a system the cluster still holds, is the SAME
+	 * conversation on a new pair and keeps its send/ack numbers: both real
+	 * OpenVMS VAX V7.3 members continued theirs across exactly that, and
+	 * this executive's reset made it advertise "I have taken nothing from
+	 * you" to a peer that held it as a member. cnxman_csb_bind_reconnect()
+	 * decides from the block's own state whether it is entitled to carry,
+	 * so E77's reset is still what a block that is NOT entitled gets.
+	 */
+	check_has("cnxman_csb_bind_reconnect(csb, (uint32_t)local_conid)",
+		  "rd vms-8c54: an ACCEPTED re-establishment carries its "
+		  "dialogue through the single writer");
+	check_has("cnxman_csb_bind_reconnect(csb, (uint32_t)new_conid)",
+		  "rd vms-8c54: and so does an ISSUED one");
+
+	/*
+	 * AND THE 16 BYTES ARE BUILT FOR THE PEER, AT THE POINT OF USE.
+	 * content[106:108] is a fact about the conversation with ONE system,
+	 * so a connect or an accept that emitted the node-wide buffer would be
+	 * asserting another peer's receive position -- the "plumbed from a
+	 * template" defect this programme keeps finding. Each of the three
+	 * emission sites must name the CSB it is about to speak to.
+	 */
+	check_has("cnxman_refresh_conndata_for(cn, csb)",
+		  "rd vms-8c54: the connect data is rebuilt for the peer "
+		  "before it goes on the wire");
+	check_has("cnxman_refresh_conndata_for(cn, csb);   /* rd vms-8c54 */\n"
+		  "\t\trc = scs_connect(cn->cl->scs,",
+		  "...on the beat's reconnect, in the statement immediately "
+		  "before the connect that carries it");
 
 	/*
 	 * E81. A rejected connect is a fact about the SYSTEM, so the CSB ladder
@@ -561,13 +611,57 @@ static void test_glue_bindings(void)
 	check_has("cfg.conndata_valid = 1u",
 		  "E31: conndata is explicitly marked valid, not left the "
 		  "default omission");
-	check_has("memcpy(cfg.conndata, cnxman_e31_conndata",
-		  "E31: conndata is the named grounded constant, not an "
-		  "inline replay");
-	check_has("memset(&cfg, 0, sizeof(cfg))",
+	check_has("memset(&cn->cfg, 0, sizeof(cn->cfg))",
 		  "E31: every OTHER identity field (model/version/params/"
 		  "dir_descriptor) still starts fully zeroed -- only conndata "
 		  "has an operator ruling behind it");
+
+	/*
+	 * rd vms-b87 SUPERSEDES the memcpy this used to assert, the same way
+	 * E31 superseded the all-zero before it. The quad and the tail are
+	 * still the named grounded spans and are still copied; the SEVEN BYTES
+	 * BETWEEN THEM are this node's own cluster arithmetic and are now
+	 * DERIVED from the CLUB every beat.
+	 *
+	 * The teeth are negative as much as positive: a constant named at an
+	 * emit point is the defect (one value sent whatever state the node was
+	 * in), so no emit point may name one.
+	 */
+	check_has("vms_cm_conndata_build(&in, cnxman_e31_head",
+		  "rd vms-b87: the connect data is BUILT by the codec, not "
+		  "copied from a template");
+	check_has("in.cluster_votes = cn->cl->club.cevotes",
+		  "... its votes come from the CLUB a transition committed");
+	check_has("in.quorum = cn->cl->club.quorum",
+		  "... its quorum too");
+	check_has("in.cluster_nodes = (uint16_t)cn->cl->club.cluster_nodes",
+		  "... and its member count, which is p. 7-49's SELECTED set");
+	check_has("in.member = (uint8_t)((cn->cl->state == VMS_CLUSTER_MEMBER &&",
+		  "... and the role is this node's OWN cluster state, which "
+		  "only a membership record naming it can set");
+	check_has("cn->cl->club.cluster_nodes > 0u) ? 1 : 0);",
+		  "rd vms-b87: ...AND the CLUB really holding a member -- a "
+		  "member is at least itself, and the MEMBER form with zero "
+		  "votes, quorum and members is one a real VAX refuses");
+	check_has("cn->vc_sysap.accept_conndata = cn->conndata;",
+		  "rd vms-b87: the ACCEPT offers the live buffer");
+	/*
+	 * ...AND SO DOES THE JOIN'S OWN COPY. MEASURED: the first live arm of
+	 * this code filled `cn->conndata` and left `cfg.conndata` at the
+	 * memset zero, so every connect the JOIN opened carried sixteen zero
+	 * bytes -- the all-zero connect data E31 replaced -- and the real VAX
+	 * answered every one of them "version identity refused". One loop,
+	 * both copies, so they cannot drift again.
+	 */
+	check_has("cn->conndata[i] = next[i];\n\t\tcn->cfg.conndata[i] = next[i];",
+		  "rd vms-b87: ONE refresh fills BOTH copies -- the glue's "
+		  "buffer and the join's cfg");
+	check_has("cn->cfg.conndata_valid = 1u;\n\treturn moved;",
+		  "... and marks the join's copy valid in the same place");
+	check_absent("accept_conndata = cnxman_e31_conndata",
+		     "... and no emit point names a constant any more");
+	check_absent("cnxman_e31_conndata[",
+		     "... the one-size-fits-every-state template is gone");
 
 	/*
 	 * E67 -- the wall this file's source scan exists for. `vms_cnxman.c`
@@ -695,13 +789,120 @@ static void test_glue_bindings(void)
 	 * peer sweep allocated the very same block. This contiguous shape lives
 	 * only in cnxman_vc_connect_req.
 	 */
-	check_has("csb = csb_ensure(&cn->cl->club, peer);\n\n"
-		  "\t/* THE SERVER HALF",
-		  "E72: an inbound CONNECT allocates the CSB BEFORE the join's "
-		  "acceptance policy is asked");
+	check_before("csb = csb_ensure(&cn->cl->club, peer);",
+		     "/* THE SERVER HALF",
+		     "E72: an inbound CONNECT allocates the CSB BEFORE the "
+		     "join's acceptance policy is asked");
+	/*
+	 * rd vms-0f9: ...and the block learns the INCARNATION the connect's own
+	 * circuit is advertising in that same window, because the acceptance
+	 * policy's give-up test compares against it. A beat-old value would
+	 * refuse a system that has just re-incarnated, or accept one that has
+	 * not -- and accepting one that has not is what bugchecked a real VAX.
+	 */
+	check_before("csb = cnxman_track_incarnation(cn, csb);",
+		     "/* THE SERVER HALF",
+		     "rd vms-0f9: ...and the incarnation is read from the "
+		     "circuit BEFORE the policy is asked");
+	check_before("csb = csb_ensure(&cn->cl->club, peer);",
+		     "csb = cnxman_track_incarnation(cn, csb);",
+		     "... into the block that connect just ensured");
+	/*
+	 * rd vms-af4: a connect from a NEW incarnation does not go into the old
+	 * incarnation's block. The tracker reads the circuit's incarnation,
+	 * takes the p. 7-24 DEAD edge on a block that learned a different one,
+	 * and hands back a fresh p. 7-25 block; the once-a-second beat runs the
+	 * same tracker, so the old block dies as soon as the new incarnation's
+	 * circuit forms, connect or no connect.
+	 */
+	check_before("pe_peer_incarnation(cn->cl->pe, csb->sysid, &inc)",
+		     "cnxman_retire_incarnation(cn, csb);",
+		     "rd vms-af4: the tracker reads the live circuit's incarnation "
+		     "before it retires anything");
+	check_before("CNXMAN_CSB_EV_NEW_INCARNATION, &cn->ops);",
+		     "fresh = cnxman_club_alloc_csb(club, csb->sysid, 1);",
+		     "rd vms-af4: the old block takes p. 7-24 DEAD before p. 7-25's "
+		     "fresh block is built");
+	check_before("static void cnxman_sync_peer_incarnation",
+		     "(void)cnxman_track_incarnation(cn, csb);",
+		     "rd vms-af4: the beat's incarnation sync runs the same tracker");
 	check_absent("conndata_len);\n\tif (rc != 0)\n\t\treturn rc;\n\n"
 		     "\tcsb = csb_ensure(",
 		     "... and the order that lost the first offer is gone");
+
+	/* ==================================================================
+	 * rd vms-0f9 -- CLUEXIT, read out of the glue that is not linkable
+	 *
+	 * A real OpenVMS node the cluster has given up on bugchecks CLUEXIT
+	 * and reboots, and its peers see exactly two things: the last gasp,
+	 * and a NEW INCARNATION when it comes back. This executive does both
+	 * in place. The ORDER is the book's and is the part a future edit can
+	 * silently get wrong, so the order is what is asserted.
+	 * ================================================================== */
+	check_has("(void)pe_send_last_gasp(cn->cl->pe);",
+		  "rd vms-0f9: CLUEXIT announces the departure the way p. 7-29 "
+		  "says a leaving node does");
+	check_before("(void)pe_send_last_gasp(cn->cl->pe);",
+		     "pe_reincarnate(cn->cl->pe)",
+		     "... BEFORE re-incarnating, so no frame carries the new "
+		     "incarnation on the old circuit");
+	check_before("pe_reincarnate(cn->cl->pe)",
+		     "cn->cl->state = VMS_CLUSTER_JOINING;\n\tcnxman_arm_fsms(cn);",
+		     "... and the CLUB and the FSMs go last, because until "
+		     "then they are what the announcement is made out of");
+	check_has("if (pe_reincarnate(cn->cl->pe) != (int)SS__NORMAL)",
+		  "rd vms-0f9: a re-incarnation that could not happen is NOT "
+		  "claimed -- no port, no new incarnation, no reset");
+	check_has("if (cn->cluexit_pending) {\n\t\t\tcnxman_cluexit_run(cn);",
+		  "rd vms-0f9: it is spent at the TOP of the beat, where "
+		  "nothing is half-way through a dispatch");
+	check_has("if (cn->cl->state != VMS_CLUSTER_MEMBER)\n\t\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_REJECTED);",
+		  "rd vms-0f9: a peer's REJECT arms it only for a node that is "
+		  "not a member -- p. 7-30 owns a member's lost connection");
+	check_has("if (cn->cl->state != VMS_CLUSTER_MEMBER)\n\t\treturn;\n\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_REMOVED);",
+		  "... and a committed transition that left us out arms it "
+		  "only for a node that WAS one");
+	/*
+	 * And the third face: THIS node refusing a member's connect because of
+	 * its own give-up record. MEASURED, arm V3-2: without this trigger the
+	 * rig's joiner refused correctly, never crashed the VAX, and never got
+	 * back in -- a standoff with no exit.
+	 */
+	check_has("uint32_t now = cn->join.inbound_refused_giveup;",
+		  "rd vms-0f9: the standoff is read off the join's OWN count "
+		  "of refusals it really made");
+	check_has("if (cn->cl->state == VMS_CLUSTER_MEMBER)\n\t\treturn;",
+		  "... and arms it only for a node that is NOT a member -- a "
+		  "member refusing a system it removed is doing its job");
+	check_absent("cnxman_cluexit_run(cn);\n\t\tcnxman_reclaim",
+		     "... and nothing runs after it on the beat that spent it");
+	/*
+	 * ONE RE-INCARNATION PER EPISODE. MEASURED: without the latch a node
+	 * whose connect the cluster refuses for a reason that is NOT its
+	 * incarnation re-incarnated once a second for the whole run (415 times
+	 * in the first live arm). A real node CLUEXITs once and then waits.
+	 */
+	check_has("if (cn->cluexit_used) {",
+		  "rd vms-0f9: a second re-incarnation is REFUSED while the "
+		  "first has not been answered");
+	check_has("cn->cluexit_refused++;",
+		  "... and the refusal is COUNTED, so the standoff is visible "
+		  "without a capture");
+	check_has("if (!cn->join.cm_open)\n\t\treturn;\n\tcn->cluexit_used = 0u;",
+		  "... and the latch clears on the executive's OWN fact that "
+		  "the cluster is talking to this node again");
+	check_has("cnxman_recnx_start(&cn->recnx);\n\tcn->cluexits++;",
+		  "rd vms-0f9: ...and the re-incarnated node re-arms its own "
+		  "beat -- cnxman_recnx_init() zeroed `running`, and a node "
+		  "that does not re-arm never runs again");
+	check_before("cn->cl->state = VMS_CLUSTER_JOINING;\n\tcnxman_arm_fsms(cn);",
+		     "cnxman_recnx_start(&cn->recnx);",
+		     "rd vms-b87: ...and it is a JOINER before its identity is "
+		     "rebuilt, so the connect data it offers is the joiner "
+		     "form and not a membership with nothing behind it");
+	check_has("if (cn->join.cm_open)\n\t\treturn;\n\tcnxman_cluexit_arm(cn, CNXMAN_CLUEXIT_STANDOFF);",
+		  "rd vms-0f9: a node the cluster is TALKING to is not in a "
+		  "standoff, whatever it refused a moment ago");
 
 	/* E29. */
 	check_has("SCS_CLOSE_REJECTED",
@@ -725,17 +926,28 @@ static void test_glue_bindings(void)
 	check_has("cnxman_barrier_coordinator_lost(&cn->barrier)",
 		  "vms-c06: ... and, when it was OUR coordinator, the "
 		  "PARTICIPANT half");
-	check_has("if (cn->barrier.coordinator_csb == idx)",
+	check_has("if (window_over && cn->barrier.coordinator_csb == idx)",
 		  "vms-c06: the participant half fires only for the block the "
 		  "barrier is taking its transition FROM");
-	check_has("cnxman_transition_peer_lost(cn, csb);\n\n"
+	check_has("cnxman_transition_peer_lost(cn, csb,\n"
+		  "\t\t\t\t    reason == (uint32_t)SCS_CLOSE_REJECTED);\n\n"
 		  "\tif (reason == (uint32_t)SCS_CLOSE_REJECTED)",
 		  "vms-c06: EVERY close -- rejection included -- reports the "
 		  "loss, and does it BEFORE the ladder proposes a removal "
 		  "the coordinator would refuse as BUSY");
-	check_has("cnxman_transition_peer_lost(cn, csb);\n\t\t(void)cnxman_coord_propose_remove",
+	check_has("cnxman_transition_peer_lost(cn, csb, 1);\n\t\t(void)cnxman_coord_propose_remove",
 		  "vms-c06: the reconnect beat reports it too -- the only path "
 		  "for a system that went silent without its CDT closing");
+	/*
+	 * rd vms-eb3: a PATH-LOSS close no longer abandons the participant's
+	 * transition -- only a rejection, the window's expiry on the beat, or
+	 * the coordinator's block given up does (oracle F5/F6: a real joiner
+	 * held the transition across the re-establishment). The give-up check
+	 * runs every beat, BEFORE the reclaim frees the block it reads.
+	 */
+	check_has("cnxman_held_transition_check(cn);\n\t\tcnxman_reclaim_abandoned_csbs(cn);",
+		  "vms-eb3: a held transition whose coordinator was given up is "
+		  "abandoned on the beat, before the block is reclaimed");
 
 	/* $SETCLUEVT. */
 	check_has("vms_cnxman_cluevt_set(", "the registration entry point exists");
@@ -761,10 +973,15 @@ static void test_glue_bindings(void)
 	 */
 	check_has("if (cnxman_join_drive(cn))\n\t\treturn;\n\n"
 		  "\tif (cl->params.vaxcluster == 2u) {",
-		  "GENESIS: CLUSTER_START tries to JOIN and then, finding "
-		  "nobody, does NOT found -- nothing has had time to be heard");
-	check_has("cnxman_genesis_arm(cn);",
-		  "... it ARMS the discovery window instead");
+		  "GENESIS: CLUSTER_START tries to JOIN and does NOT found -- "
+		  "nothing has had time to be heard");
+	check_has("if (cl->params.vaxcluster == 2u)\n\t\tcnxman_genesis_arm(cn);"
+		  "\n\n\tif (cnxman_join_drive(cn))",
+		  "GENESIS (vms-151): the discovery window is ARMED for EVERY "
+		  "VAXCLUSTER=2 node and BEFORE the join drive -- a node that "
+		  "could see a peer at CLUSTER_START used to never arm it, so "
+		  "when that join ended unanswered the window it needed in "
+		  "order to form had never been running");
 	check_has("uint32_t secs = cn->cl->club.recnxinterval;",
 		  "GENESIS: the window is RECNXINTERVAL -- the executive's own "
 		  "configured answer to \"how long before an absence is real\", "
@@ -777,12 +994,30 @@ static void test_glue_bindings(void)
 		  "GENESIS: only VAXCLUSTER=2 (\"always a member\") may form "
 		  "one; =1 is \"a member when a cluster is PRESENT\", and from "
 		  "cold there is none");
-	check_has("if (cnxman_join_target_present(cn))\n\t\treturn 0;",
-		  "GENESIS: a system this node could join -- a real VAX "
-		  "included -- means JOIN, never FORM");
-	check_has("if (!cnxman_quorum_own_votes_suffice(cl, (uint16_t *)0))",
-		  "GENESIS: quorum by this node's own votes is asked through "
-		  "the ONE shared predicate, not a second formula here");
+	/*
+	 * vms-151. "Is there a system to join?" is no longer asked HERE, and
+	 * that is a tightening, not a loosening: this glue's version refused
+	 * whenever any system was visible, which deadlocked two fresh nodes
+	 * that could see each other and neither of which was in a cluster to be
+	 * joined. The question now belongs to cnxman_coord_found(), which can
+	 * ask it precisely against the CLUB's own CSBs -- and what this file
+	 * must still do is hand it the one fact only the JOIN FSM holds.
+	 */
+	check_absent("if (cnxman_join_target_present(cn))\n\t\treturn 0;",
+		     "GENESIS: the blanket \"any system is visible\" refusal is "
+		     "gone from this glue -- it deadlocked symmetric genesis");
+	check_has("ev.admission_rounds = cn->join.attempts_exhausted;",
+		  "GENESIS: ... and the precise question is fed the JOIN FSM's "
+		  "OWN count of complete rounds in which every visible system "
+		  "was asked to admit this node and none did -- read at the "
+		  "decision, never cached here");
+	check_has("cnxman_coord_found(&cn->coord, &ev)",
+		  "GENESIS: the FORM decision is cnxman_coord_found()'s, taken "
+		  "against real CSBs with that evidence in hand");
+	check_has("if (!cnxman_quorum_form_votes_suffice(cl, (const struct cnxman_form_set *)0,",
+		  "GENESIS: quorum over the systems this node can SEE is asked "
+		  "through the ONE shared predicate, not a second formula here "
+		  "(rd vms-6d3d: the founder's own votes are not the test)");
 	check_has("return cnxman_genesis_window_elapsed(cn);",
 		  "GENESIS: ... and only once the discovery window has elapsed");
 	check_absent("cnxman_club_learn_local_csid",
@@ -824,6 +1059,23 @@ static void test_glue_bindings(void)
 		  "cnxman_find_csb() is implemented");
 	check_has("cnxman_club_project(&cl->club, cl->state, out)",
 		  "... a pure projection, taken under the fork mutex");
+
+	/*
+	 * rd vms-1f40: WHOSE connection opened. An accepted connection is bound
+	 * to the system SCS says it rides, never to the single pending-accept
+	 * slot -- a second accept outstanding at the same time overwrote that
+	 * slot and bound OVMXA's reconnect to the VAX's CSB (rig arm S-17).
+	 */
+	check_has("scs_conid_peer(cn->cl->scs, local_conid, &peer)",
+		  "an accepted connection's system is read from SCS");
+	check_absent("accepted_from = cn->pending_accept_sysid",
+		     "... and never taken from the pending-accept slot");
+	check_has("cn->accepts_unattributed++",
+		  "a connection SCS names no system for is counted, not guessed");
+	check_before("cnxman_vc_opened_attempt(cn, local_conid)",
+		     "accepted_from = cnxman_bind_accepted(cn, local_conid)",
+		     "this node's own connections are recognised BEFORE anything "
+		     "is treated as accepted");
 }
 
 int main(void)

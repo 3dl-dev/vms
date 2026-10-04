@@ -80,40 +80,137 @@ uint16_t cnxman_quorum_of_cevotes(uint16_t cevotes)
 	return (uint16_t)(((uint32_t)cevotes + 2u) / 2u);
 }
 
+/* ==========================================================================
+ * FORMING FROM NOTHING -- p. 7-6 over a COLD formation's proposed set
+ * (vms_cnxman_quorum.h SS "FORMING FROM NOTHING"; rd vms-6d3d's oracle)
+ * ========================================================================== */
+
+/* Defined with the enforcement predicates below; declared here because the
+ * founding gate needs the same ONE spelling of "this node's own block". */
+static const struct vms_csb *quorum_local_csb(const struct vms_club *club);
+
 /*
- * THE FOUNDING PREDICATE (vms_cnxman_quorum.h SS "FORMING FROM NOTHING").
+ * IS THIS CSB IN A COLD FORMATION'S PROPOSED SET? Deliberately NOT
+ * quorum_csb_counts() above: that one requires SELECTED, which is the
+ * membership a formation does not have yet. What it shares is the fact that
+ * matters -- a CSB that never received a PARAMS record contributes nothing,
+ * because an un-advertised VOTES is unknown and not zero (INV-6).
  *
- * Read entirely from executive state: this node's own SYSGEN VOTES and
- * EXPECTED_VOTES (FC-P0.10, loaded before CLUSTER_START) and the CLUB's own
- * Old CEVOTES, through the same two functions above that every recompute
- * uses. Nothing about a peer is assumed: the sum of votes in the proposed set
- * is this node's own VOTES, because the proposed set is this node alone.
- *
- * VOTES == 0 is refused FIRST and on its own terms. A non-voting node can
- * never satisfy quorum by itself, and reaching the arithmetic with a zero
- * would let an EXPECTED_VOTES of 0 (a cluster nobody configured) produce
- * quorum 1 > 0 and still refuse -- correct, but by accident. The explicit
- * refusal is what makes "a VOTES=0 node never founds" a property of this
- * function rather than of the numbers it happens to be handed.
+ * Reachability is the same p. 7-4/7-5 rule quorum_csb_present() applies: the
+ * LOCAL CSB always counts (it is this system, not a connection that can be
+ * down), a remote one only while its circuit is OPEN. The oracle is explicit
+ * about the ordering -- the real VAX logged `established connection to node
+ * VAX2` BEFORE it proposed the formation their combined votes carried.
  */
-int cnxman_quorum_own_votes_suffice(const struct vms_cluster *cl,
-				    uint16_t *out_quorum)
+int cnxman_quorum_form_set_contains(const struct vms_csb *csb)
 {
+	if (csb == NULL || !csb->in_use || !csb->params_valid)
+		return 0;
+	if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
+		return 1;
+	return csb->state == (uint8_t)VMS_CNXMAN_CSB_OPEN;
+}
+
+void cnxman_quorum_form_set(const struct vms_club *club,
+			    struct cnxman_form_set *out)
+{
+	uint32_t i;
+
+	if (out == NULL)
+		return;
+	out->sum_votes = 0u;
+	out->max_expected = 0u;
+	out->n_systems = 0u;
+	out->local_counted = 0u;
+	if (club == NULL)
+		return;
+
+	for (i = 0; i < club->n_csb; i++) {
+		const struct vms_csb *csb = &club->csb[i];
+
+		if (!cnxman_quorum_form_set_contains(csb))
+			continue;
+		out->sum_votes += (uint32_t)csb->votes;
+		if ((uint32_t)csb->expected_votes > out->max_expected)
+			out->max_expected = (uint32_t)csb->expected_votes;
+		out->n_systems++;
+		if ((csb->flags & VMS_CSB_F_LOCAL) != 0u)
+			out->local_counted = 1u;
+	}
+}
+
+int cnxman_quorum_could_found(uint16_t old_cevotes, uint16_t votes,
+			      uint16_t expected_votes,
+			      const struct cnxman_form_set *set,
+			      uint16_t *out_quorum)
+{
+	uint32_t expected;
 	uint16_t cevotes;
 	uint16_t quorum;
 
 	if (out_quorum != NULL)
 		*out_quorum = 0u;
-	if (cl == NULL || cl->params.votes == 0u)
+	/*
+	 * VOTES == 0 FIRST and on its own terms (pp. 7-28, 7-33). Reaching the
+	 * arithmetic with a zero would let an EXPECTED_VOTES of 0 -- a cluster
+	 * nobody configured -- produce quorum 1 > 0 and still refuse: correct,
+	 * but by accident. The explicit refusal is what makes "a non-voting
+	 * system never founds" a property of this function.
+	 */
+	if (set == NULL || votes == 0u)
 		return 0;
 
-	cevotes = cnxman_quorum_cevotes(cl->club.cevotes,
-					(uint32_t)cl->params.expected_votes,
-					(uint32_t)cl->params.votes);
+	/* p. 7-6 step 2's EXPECTED_VOTES term is the LARGEST one in the
+	 * proposed set, and the system being asked about is in it -- but a
+	 * caller may ask about a system whose CSB is not (the election's
+	 * "could that one have formed this?"), so its own figure is folded in
+	 * explicitly rather than assumed to be inside the max already. */
+	expected = set->max_expected;
+	if ((uint32_t)expected_votes > expected)
+		expected = (uint32_t)expected_votes;
+
+	cevotes = cnxman_quorum_cevotes(old_cevotes, expected, set->sum_votes);
 	quorum = cnxman_quorum_of_cevotes(cevotes);
 	if (out_quorum != NULL)
 		*out_quorum = quorum;
-	return (uint32_t)cl->params.votes >= (uint32_t)quorum;
+	return set->sum_votes >= (uint32_t)quorum;
+}
+
+int cnxman_quorum_form_votes_suffice(const struct vms_cluster *cl,
+				     const struct cnxman_form_set *set,
+				     uint16_t *out_quorum)
+{
+	struct cnxman_form_set own;
+	const struct vms_csb *local;
+
+	if (out_quorum != NULL)
+		*out_quorum = 0u;
+	if (cl == NULL)
+		return 0;
+	if (set == NULL) {
+		cnxman_quorum_form_set(&cl->club, &own);
+		set = &own;
+	}
+	/*
+	 * THE FOUNDER MUST BE IN ITS OWN PROPOSED SET. The same reasoning
+	 * cnxman_quorum_enforce_ready() applies to a running member: a sum that
+	 * silently omits the local system is worse than no sum.
+	 */
+	if (!set->local_counted)
+		return 0;
+	local = quorum_local_csb(&cl->club);
+	if (local == NULL)
+		return 0;
+	/*
+	 * ... and the founder's own VOTES / EXPECTED_VOTES are read from that
+	 * same block, the one already inside set->sum_votes and
+	 * set->max_expected. cnxman_club_init() loaded it from SYSGEN; reading
+	 * cl->params again here would be a SECOND source for a number the sum
+	 * already took from the first.
+	 */
+	return cnxman_quorum_could_found(cl->club.cevotes, local->votes,
+					 local->expected_votes, set,
+					 out_quorum);
 }
 
 void cnxman_quorum_recompute(struct vms_club *club)

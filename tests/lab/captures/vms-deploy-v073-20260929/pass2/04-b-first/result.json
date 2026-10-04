@@ -1,0 +1,1292 @@
+{
+ "label": "b-first",
+ "order": "B,A,C",
+ "gap": 3000,
+ "throttle": 1,
+ "url": "https://openvmx.3dl.dev/demo/cluster/",
+ "samples": [
+  {
+   "t": 9,
+   "sca": {},
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 27,
+   "sca": {
+    "VAXC": 3
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 1,
+    "VAXC": 1
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 45,
+   "sca": {
+    "VAXC": 16
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 1,
+    "VAXC": 1
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 63,
+   "sca": {
+    "VAXC": 439,
+    "OVMXB": 610,
+    "OVMXA": 115
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 2,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 81,
+   "sca": {
+    "VAXC": 677,
+    "OVMXB": 1215,
+    "OVMXA": 428
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 3,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 99,
+   "sca": {
+    "VAXC": 812,
+    "OVMXB": 1578,
+    "OVMXA": 731
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 117,
+   "sca": {
+    "VAXC": 933,
+    "OVMXB": 1746,
+    "OVMXA": 829
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 135,
+   "sca": {
+    "VAXC": 1064,
+    "OVMXB": 1920,
+    "OVMXA": 951
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 153,
+   "sca": {
+    "VAXC": 1187,
+    "OVMXB": 2076,
+    "OVMXA": 1037
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 171,
+   "sca": {
+    "VAXC": 1306,
+    "OVMXB": 2240,
+    "OVMXA": 1158
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 189,
+   "sca": {
+    "VAXC": 1428,
+    "OVMXB": 2408,
+    "OVMXA": 1256
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 207,
+   "sca": {
+    "VAXC": 1561,
+    "OVMXB": 2585,
+    "OVMXA": 1380
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 225,
+   "sca": {
+    "VAXC": 1696,
+    "OVMXB": 2766,
+    "OVMXA": 1504
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 243,
+   "sca": {
+    "VAXC": 1818,
+    "OVMXB": 2934,
+    "OVMXA": 1602
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 261,
+   "sca": {
+    "VAXC": 1949,
+    "OVMXB": 3101,
+    "OVMXA": 1711
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 2
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 280,
+   "sca": {
+    "VAXC": 2071,
+    "OVMXB": 3267,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 4,
+    "VAXC": 3
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 298,
+   "sca": {
+    "VAXC": 2153,
+    "OVMXB": 3373,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 316,
+   "sca": {
+    "VAXC": 2249,
+    "OVMXB": 3480,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 334,
+   "sca": {
+    "VAXC": 2342,
+    "OVMXB": 3583,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 352,
+   "sca": {
+    "VAXC": 2436,
+    "OVMXB": 3689,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 370,
+   "sca": {
+    "VAXC": 2532,
+    "OVMXB": 3793,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 388,
+   "sca": {
+    "VAXC": 2613,
+    "OVMXB": 3884,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 406,
+   "sca": {
+    "VAXC": 2707,
+    "OVMXB": 3990,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 424,
+   "sca": {
+    "VAXC": 2801,
+    "OVMXB": 4094,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 442,
+   "sca": {
+    "VAXC": 2895,
+    "OVMXB": 4200,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 460,
+   "sca": {
+    "VAXC": 2977,
+    "OVMXB": 4291,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 478,
+   "sca": {
+    "VAXC": 3073,
+    "OVMXB": 4397,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 496,
+   "sca": {
+    "VAXC": 3167,
+    "OVMXB": 4503,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 514,
+   "sca": {
+    "VAXC": 3265,
+    "OVMXB": 4612,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 532,
+   "sca": {
+    "VAXC": 3359,
+    "OVMXB": 4718,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 550,
+   "sca": {
+    "VAXC": 3456,
+    "OVMXB": 4827,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 568,
+   "sca": {
+    "VAXC": 3539,
+    "OVMXB": 4918,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  },
+  {
+   "t": 586,
+   "sca": {
+    "VAXC": 3634,
+    "OVMXB": 5024,
+    "OVMXA": 1805
+   },
+   "member": {
+    "OVMXA": true,
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c3",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {
+    "VAXC": [
+     "OVMXA"
+    ],
+    "OVMXB": [
+     "0:1987"
+    ]
+   },
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 5,
+    "VAXC": 4
+   },
+   "vis": "visible",
+   "worstDriftMs": 63
+  }
+ ],
+ "verdict": "NOT CN=3: OVMXA never named 0x7c5; the real VAX admitted OVMXB; OVMXB restarted 5x; VAXC restarted 4x; lost: {\"VAXC\":[\"OVMXA\"],\"OVMXB\":[\"0:1987\"]}; unnamed connection losses: {\"OVMXB\":1}; panels that only repainted once revealed: {\"VAXC\":1} (rd vms-0bc)",
+ "restarts": {
+  "OVMXA": 0,
+  "OVMXB": 5,
+  "VAXC": 4
+ },
+ "member": {
+  "OVMXA": true,
+  "OVMXB": true
+ },
+ "added": {
+  "OVMXA": [
+   "0x7c3",
+   "0x7c4"
+  ],
+  "OVMXB": [
+   "0x7c4",
+   "0x7c3",
+   "0x7c5"
+  ],
+  "VAXC": []
+ },
+ "lost": {
+  "VAXC": [
+   "OVMXA"
+  ],
+  "OVMXB": [
+   "0:1987"
+  ]
+ },
+ "vaxc_admitted": [
+  "OVMXB"
+ ],
+ "ovmx_founded": {},
+ "bugchecks": {},
+ "sca": {
+  "VAXC": 3634,
+  "OVMXB": 5024,
+  "OVMXA": 1805
+ },
+ "cn3": false,
+ "lost_unnamed": {
+  "OVMXB": 1
+ },
+ "repaint_stalls": {
+  "VAXC": 1
+ },
+ "worstDriftMs": 63,
+ "vis": "visible"
+}

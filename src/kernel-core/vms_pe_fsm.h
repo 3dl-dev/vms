@@ -170,21 +170,27 @@
  * The HELLO cadence. SS4(q) measures the steady-state cadence of a real member
  * at ~2.3 s and names keeping it an ongoing membership obligation; SS4(M)
  * measures the longest silence any healthy node showed in 747 s of captured
- * wire at 3.153 s. 2000 ms sits under both, so an OVMX node is never the
- * quietest thing on the LAN. OVMX's choice, not a published VMS parameter.
+ * wire at 3.153 s, and rd vms-b98's oracle (a real V7.3 pair, 328 multicast
+ * HELLO intervals) 1.539 s min / 2.250 s median / 3.162 s max. 2000 ms sits
+ * inside that range. No SYSGEN parameter names the cadence on V7.3.
  */
 #define PE_HELLO_INTERVAL_DEFAULT_MS 2000u
 
 /*
  * The listen timeout: how long a channel may hear nothing before this node
- * declares it gone. SS4(M) grounds the two populations -- healthy silence never
- * exceeded 3.153 s, a real departure showed 395.955 s, and they do not overlap.
- * The default is RECNXINTERVAL seconds (20 in the lab), 6.3x the longest healthy
- * silence and 20x under the observed departure. Again OVMX's choice: SS4(M) is
- * explicit that RECNXINTERVAL governs removal AFTER a circuit breaks, not the
- * timer that breaks it, and no published document names this one.
+ * declares it gone. MEASURED, rd vms-b98 (SS4(M);
+ * tests/lab/captures/vms-b98-pe-listen-timeout-20261001): a real OpenVMS VAX
+ * V7.3 closes the virtual circuit 8.15-9.30 s after the last frame it heard
+ * from the peer (n = 24, both directions, two fault methods, mean 8.80 s) --
+ * an 8 s threshold checked on the port's own periodic tick. OVMX checks its
+ * deadline on the HELLO beat and on every receive (pe_channel_expire_if_due),
+ * so its own closure lands 8-10 s after the last frame.
+ *
+ * NOT A SYSGEN PARAMETER, MEASURED: V7.3's SYSGEN names none; SCACP and SDA
+ * show no value; PE4 = 20 on one node left its closure where it was. It is a
+ * port constant there and a port constant here.
  */
-#define PE_LISTEN_TIMEOUT_DEFAULT_MS 20000u
+#define PE_LISTEN_TIMEOUT_DEFAULT_MS 8000u
 
 /*
  * The size-probe retransmit interval. GROUNDED: 6.010 s +- 0.15 across 24/24
@@ -459,11 +465,11 @@ enum pe_channel_action {
 
 /*
  * TIMVCFAIL: "the time required for an SCS virtual circuit failure to be
- * detected". A SYSGEN parameter; the glue converts it out of its SYSGEN unit
- * and puts milliseconds in pe_identity, so this FSM never does unit
- * arithmetic. The default below is OVMX's own choice for a port whose
- * SYSGEN value has not been loaded -- it is NOT a published VMS constant --
- * and it is the lab's TIMVCFAIL 1600 read as centiseconds.
+ * detected". A SYSGEN parameter; the glue converts it out of its 10 ms SYSGEN
+ * unit (cluster_sysgen_timvcfail_ms) and puts milliseconds in pe_identity, so
+ * this FSM never does unit arithmetic. The default below is used only by a
+ * port whose parameters were never loaded: V7.3's own default, 1600 x 10 ms
+ * (SYSGEN SHOW TIMVCFAIL on a real V7.3: "1600 1600 100 65535 10Ms D").
  */
 #define PE_TIMVCFAIL_DEFAULT_MS 16000u
 
@@ -639,7 +645,14 @@ struct pe_vc {
 	uint32_t form_due_ms;      /* next formation retry                   */
 	uint32_t vcfail_due_ms;    /* TIMVCFAIL: no ACK PROGRESS by here     */
 	uint8_t  vcfail_armed;
-	uint8_t  pad3[3];
+	/*
+	 * HAS THIS CIRCUIT STARTED *THIS* FORMATION FROM ITS OWN SIDE?
+	 * (rd vms-8c54.) Cleared by vc_reset_sequence(), so it is a property
+	 * of the generation and not of the circuit's whole life. See
+	 * h_vc_own_start().
+	 */
+	uint8_t  own_start_sent;
+	uint8_t  pad3[2];
 
 	/* ---- counters, every one from a real dispatch ---- */
 	uint32_t starts_tx, starts_rx;
@@ -860,6 +873,23 @@ struct pe_identity {
 	uint8_t  mcast_valid;
 
 	/*
+	 * THE SAME NUMBER, THE OTHER ENCODING (rd vms-b34). `mcast` carries the
+	 * group as AB-00-04-01-<LE16(group + 0x100)>; abs 22 of every SCA frame
+	 * carries it as a plain LE16 -- see vms_cluster_codec.h's oracle table.
+	 * Both are read from the ONE CLUSTER_AUTHORIZE record the port opened
+	 * with, so they can never again disagree, which is exactly how OVMX came
+	 * to transmit to group 257's address with group 1's number in the frame
+	 * and be ignored by a real V7.3 member for 20 minutes.
+	 *
+	 * `cluster_group_valid` is 0 when no record was loaded; the 0 that then
+	 * goes on the wire is the group this node really has, not a placeholder
+	 * (INV-6) -- and it is disclosed on OPA0: and in SHOW CLUSTER/LOCAL_PORTS
+	 * exactly as the multicast default already is.
+	 */
+	uint16_t cluster_group;
+	uint8_t  cluster_group_valid;
+
+	/*
 	 * The connect/join nonce (spec SS4(a) abs 68). ZERO on a multicast HELLO
 	 * is GROUNDED; on a directed HELLO the real cluster carries a shared
 	 * token that is the SAME value on every node's directed HELLO because it
@@ -932,7 +962,9 @@ struct pe_identity {
 	 */
 	uint16_t max_sca_len;
 
-	/* 0 selects the documented default above. A SYSGEN value always wins. */
+	/* 0 selects the measured defaults above. Neither is a SYSGEN parameter
+	 * on V7.3 (rd vms-b98); the fields exist so a test or the simulator can
+	 * run the port on its own clock. */
 	uint32_t hello_interval_ms;
 	uint32_t listen_timeout_ms;
 
@@ -1061,6 +1093,45 @@ uint8_t pe_credit_reserve(struct pe_credit_ledger *l, uint32_t want);
 void pe_credit_release(struct pe_credit_ledger *l, uint8_t granted);
 
 /* ==========================================================================
+ * 4b. The DISCOVERY REVISION this port speaks (rd vms-0f8)
+ *
+ * vms_cluster_codec_hello.h's revision table measures TWO revisions of the
+ * same HELLO on real VMS wires: the sec 4(a)/4(b) one every OpenVMS VAX V7.3
+ * node in the clean-room corpus speaks (class 0x05, SCA content 120), and the
+ * one a real OpenVMS VAX V5.5-2H4 node speaks (class 0x03, content 114, no
+ * abs 128-133 tail, and three differing marker words at abs 22 / 94 / 126).
+ *
+ * A revision is a property of the CLUSTER ON THE WIRE, not of this source
+ * tree -- so the port LEARNS it off a real peer's own frame, exactly as it
+ * already learns the join nonce (spec sec 4(g)) and the abs 47-67 discovery-
+ * format span (E56). Nothing in this struct is ever populated from a stored
+ * capture, a version number, or a compiled-in table: `valid == 0` means no
+ * peer has been heard yet and the port speaks its OWN grounded default, and
+ * says so through pe_fsm_wire_rev_learned().
+ *
+ * THE DEFAULT IS UNCHANGED BEHAVIOUR. With no peer heard the port emits
+ * precisely the frame it emitted before vms-0f8; in a V7.3 cluster the first
+ * peer teaches it the V7.3 revision, which is the same frame again. The
+ * V7.3 lab's join path is therefore byte-identical either way.
+ * ========================================================================== */
+/*
+ * ⚠ abs 22 IS NOT PART OF THE REVISION (rd vms-b34). vms-0f8 recorded three
+ * "differing marker words at abs 22 / 94 / 126" between the V7.3 and the
+ * V5.5-2H4 HELLO, but the two frames it compared came from clusters with
+ * DIFFERENT GROUP NUMBERS (1 and 257): abs 22 is LE16(cluster group), a
+ * property of the cluster, not of the revision, and it is now emitted from
+ * this node's own CLUSTER_AUTHORIZE record (struct pe_identity). abs 94 and
+ * abs 126 remain real revision markers -- the V5.5 frame differs there with
+ * the group held constant.
+ */
+struct pe_wire_rev {
+	uint8_t  rev;           /* enum vms_hello_rev                        */
+	uint8_t  valid;         /* 0 = nothing learned; the default is in use */
+	uint16_t trailer_9205;  /* abs 94                                    */
+	uint16_t trailer_2600;  /* abs 126                                   */
+};
+
+/* ==========================================================================
  * 5. One channel
  *
  * Everything here is either read off a real received frame or counted from a
@@ -1092,13 +1163,23 @@ struct pe_channel {
 	uint8_t  peer_incarnation_valid;
 	uint8_t  pad2;
 
+	/* The discovery revision THIS PEER speaks, learned off its own HELLO
+	 * (rd vms-0f8). Every frame this port directs AT this peer is emitted
+	 * in it. `valid == 0` means no HELLO has been decoded from this
+	 * station yet, and the port-wide revision is used instead. */
+	struct pe_wire_rev peer_rev;
+
 	/* ---- the size verification (SS4(k)) ---- */
 	uint16_t verified_pktsz;  /* SCA content a b4 CONFIRMED. 0 = not proven */
 	uint16_t probe_sca_len;   /* the probe in flight. 0 = none outstanding  */
 	uint8_t  probe_rung;      /* index into pe_probe_ladder                 */
 	uint8_t  probe_tries;     /* attempts made at this rung                 */
 	uint8_t  probe_exhausted; /* ladder walked out; counted, never invented */
-	uint8_t  pad3;
+	uint8_t  probe_rev_unsupported; /* rd vms-0f8: this peer speaks a
+					 * revision in which no sec 4(k) padded
+					 * frame has ever been observed, so the
+					 * port declined to probe. An honest
+					 * "not attempted", never a claimed size */
 	uint32_t probe_due_ms;    /* injected-clock deadline of the retransmit  */
 
 	/* ---- liveness, on the injected clock, compared wrap-safely ---- */
@@ -1112,6 +1193,11 @@ struct pe_channel {
 	uint32_t b3_rx;
 	uint32_t b3_tx;
 	uint32_t b4_rx;
+	/* How many times this channel has ENTERED the verified state (rd
+	 * vms-8c54). 1 is a channel being verified for the first time; more
+	 * is one that went and came back, which is what tells a circuit on it
+	 * that it is RE-forming rather than forming. */
+	uint32_t verifies;
 	uint32_t b4_tx;
 	uint32_t padded_rx;
 	uint32_t padded_tx;
@@ -1149,6 +1235,10 @@ struct pe_fsm {
 	uint32_t rx_not_sca;        /* not ethertype 0x6007                      */
 	uint32_t rx_unclassified;   /* the codec could not name the class        */
 	uint32_t rx_not_for_us;     /* addressed to neither us nor the group     */
+	uint32_t rx_not_addressed;  /* Ethernet destination is neither this
+				     * station's own address nor the group
+				     * multicast: the frame a real adapter
+				     * never passes up (rd vms-6b1)          */
 	uint32_t rx_parse_failed;   /* classified, then failed to decode         */
 	uint32_t rx_solicit;        /* SS4(c): counted, NEVER answered (P6/P7)   */
 	uint32_t rx_no_slot;        /* channel table full: refused, not recycled */
@@ -1159,8 +1249,23 @@ struct pe_fsm {
 	uint32_t disc_format_absent;/* discovery frames sent with abs 47-67 zero */
 	uint32_t disc_format_learned;/* 0 or 1: the abs 47-67 span was learned
 				      * live off a real peer this run (E56)     */
+	uint32_t rx_hello_c03;      /* HELLOs decoded in the class-0x03 revision */
+	uint32_t rx_wrong_group;    /* frames carrying ANOTHER cluster's group
+				     * number at abs 22 -- refused, counted, and
+				     * never processed (rd vms-b34)            */
+
+	/* The revision the port's own MULTICAST advertisement goes out in,
+	 * learned off the first peer HELLO decoded this run (rd vms-0f8).
+	 * Until then `.valid == 0` and the grounded sec 4(b) default is used. */
+	struct pe_wire_rev wire_rev;
 	uint32_t tx_errors;         /* ops->send returned non-zero               */
 	uint32_t last_gasps_built;
+	/* WHICH INCARNATION THE LAST GASP ANNOUNCED (rd vms-8c54). A departure
+	 * belongs to an incarnation, not to a port: a real node announces,
+	 * reboots, and announces again next time, and OVMX's CLUEXIT does the
+	 * same thing WITHOUT reallocating the port. Read back out of the port's
+	 * own identity, never assumed. */
+	uint64_t last_gasp_incarnation;
 
 	/* ---- FC-P1.2: the virtual-circuit half ----
 	 *
@@ -1709,6 +1814,20 @@ struct pe_vc *pe_fsm_vc_by_sysid(struct pe_fsm *f, vms_scs_sysid_t sysid);
  * anything else is the honest "this executive has not been told", never a
  * default (INV-6). rd vms-1ee: the split-brain gate's trust anchor.
  */
+/*
+ * The INCARNATION `sysid` advertised in its own formation body (spec SS4(g)
+ * abs 80) -- the quadword a real VAX fills with the time that system came up,
+ * and the ONE fact on the wire that tells one incarnation of a system from the
+ * next (book p. 7-24/7-25: "A new incarnation of a VAX system has been seen").
+ *
+ * Returns 0 and fills *out only when a real 106-byte START/STACK actually
+ * arrived from that system; anything else is the honest "this executive has
+ * not been told" and the caller must NOT substitute a value of its own
+ * (INV-6). rd vms-0f9: the connection manager's give-up record is keyed on it.
+ */
+int pe_fsm_peer_incarnation(struct pe_fsm *f, vms_scs_sysid_t sysid,
+			    uint64_t *out);
+
 int pe_fsm_peer_swver(struct pe_fsm *f, vms_scs_sysid_t sysid, uint8_t *out,
 		      uint32_t cap, uint8_t *out_len);
 

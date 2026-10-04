@@ -23,6 +23,13 @@ sha256:    8558c1f17d10486a60242e786133a9aa7a6e377221d5666aa7c3e36b6d8e6194
 @30   4b                         ; msgtype
 @31   13                         ; format constant
 ;
+; ⚠ SUPERSEDED IN PART by the rd vms-4f0 correction (spec 4(r)): body[12:16]
+; and body[20:24] of a real 0x81/0x12 both carry the RESPONDER'S OWN epoch,
+; not the request's. This specimen still pins vms_cm_echo_response_build()'s
+; own behaviour, which is correct for every other opcode of the echo family;
+; op-0x12 is built by vms_cm_relay_response_build() and diffed against a REAL
+; VAX's answer in cm-relay-oracle-resp.spec.
+;
 ; The response to cm-relay-req.spec with own_class = 0x04: body[17] is
 ; OVERWRITTEN with the responder's own class (not echoed, unlike every
 ; other opcode this file handles) and body[20:24] gets a FRESH LE u32

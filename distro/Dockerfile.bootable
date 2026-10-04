@@ -168,10 +168,14 @@ ARG KERNEL_SHA256=f143aaade8877ba5616e788b4482576db28481bcf557ef537f4fcc3938fc31
 ARG SOURCE_DATE_EPOCH=0
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     gcc binutils make bc bison flex libssl-dev libelf-dev openssl \
     xz-utils curl ca-certificates kmod cpio \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 # Fetch + integrity-verify + unpack the pinned source. The build FAILS closed
 # if the sha256 does not match -- no unpinned/tampered source ever compiles.
@@ -411,10 +415,14 @@ ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 # module build -- without it the vms.ko compile dies with
 # "libelf.so.1: cannot open shared object file". (The stock-kernel path used to
 # get libelf transitively via linux-headers-generic, now dropped.)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     cmake gcc make musl-tools linux-libc-dev \
     kmod cpio binutils libelf1 \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 # The from-source OVMX kernel (vms-448): its built tree (for external module
 # builds) + the bzImage that becomes the bootable vmlinuz + the exact
@@ -1112,10 +1120,23 @@ RUN cp -r /system-stage/vms /system-stage-install-media-vms && \
 # Real VMS writes this once, at CLUSTER_CONFIG.COM time, onto the persistent
 # system disk; OVMX has no interactive equivalent yet (a disclosed gap, not a
 # silent one), so a specific boot's group/password is staged at IMAGE-BUILD
-# time here, gated on a build-arg that defaults OFF -- an ordinary build
-# (no --build-arg) stages nothing and boots with auth_group=0, byte-identical
-# to today. Only a caller who explicitly names a real cluster's group (e.g.
-# the lab VAX cluster's group 257) gets a CLUSTER_AUTHORIZE.DAT written.
+# time here, gated on a build-arg that defaults OFF. Only a caller who
+# explicitly names a real cluster's group (e.g. the lab VAX cluster's group 1,
+# whose HELLO multicast is AB-00-04-01-01-01 -- the address is
+# AB-00-04-01-<LE16(group+0x100)>, rd vms-147) gets a CLUSTER_AUTHORIZE.DAT
+# written.
+#
+# WHAT AN ORDINARY BUILD THEREFORE IS, SAID OUT LOUD (rd vms-b34). No
+# --build-arg stages no record, the port falls back to group 0, and
+# AB-00-04-01-00-00 is a group no real cluster is on. That is why a shipped
+# V0.7 node sat beside a real single-node OpenVMS V7.3 cluster on the same
+# bridge for 195 s without exchanging ONE frame with it, while every surface
+# read healthy (tests/lab/captures/cn2-genesis-vaxlab4-20260920/). The node
+# now ANNOUNCES that at port start and in SHOW CLUSTER/LOCAL_PORTS -- "cluster
+# group 0 -- NOT CONFIGURED" -- instead of looking like a working cluster
+# node. Joining any real cluster still requires naming that cluster's group:
+# here, or via tests/lab/tools/stage_cluster_group.sh for an already-built
+# artifact, or ovmx.group= on the QEMU genesis rig.
 ARG CLUSTER_AUTH_GROUP=0
 ARG CLUSTER_AUTH_PASSWORD=""
 
@@ -1248,9 +1269,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # kmod: provides `modinfo`, which tests/qemu/test_intree_modules.sh (vms-934)
 # runs on the shipped vms.ko to prove it is stamped intree=Y. Test
 # tooling only (CLAUDE.md Rule 9 distinction), like `expect` above.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN n=0; until [ "$n" -ge 3 ]; do \
+    apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
     qemu-system-x86 qemu-system-arm qemu-efi-aarch64 cpio expect kmod \
-    && rm -rf /var/lib/apt/lists/*
+    && break; \
+    n=$((n + 1)); echo "apt-get update+install failed (attempt $n/3); retrying after backoff" >&2; sleep $((n * 5)); \
+done; [ "$n" -lt 3 ] && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /boot/vmlinuz /boot/vmlinuz
 COPY --from=builder /boot/initramfs-ovmx.cpio.gz /boot/initramfs-ovmx.cpio.gz

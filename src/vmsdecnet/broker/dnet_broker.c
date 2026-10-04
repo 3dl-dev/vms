@@ -51,8 +51,9 @@ int dnet_broker_req_encode(const struct dnet_broker_req *r,
     put_u32(buf + 4,  r->corr_id);
     put_u32(buf + 8,  r->owner_pid);
     put_u32(buf + 12, r->link_handle);
-    put_u16(buf + 16, r->op);
-    put_u16(buf + 18, r->datalen);
+    put_u32(buf + 16, r->reply_unit);
+    put_u16(buf + 20, r->op);
+    put_u16(buf + 22, r->datalen);
     if (r->datalen)
         memcpy(buf + DNET_BROKER_REQ_HDR, r->data, r->datalen);
 
@@ -98,7 +99,7 @@ int dnet_broker_req_decode(const uint8_t *buf, size_t len,
     if (get_u32(buf + 0) != DNET_BROKER_REQ_MAGIC)
         return DNET_BROKER_EMAGIC;
 
-    uint16_t datalen = get_u16(buf + 18);
+    uint16_t datalen = get_u16(buf + 22);
     if (datalen > DNET_NSP_MAX_DATA)
         return DNET_BROKER_EBADLEN;          /* over the payload bound */
     if (len < (size_t)DNET_BROKER_REQ_HDR + datalen)
@@ -107,7 +108,8 @@ int dnet_broker_req_decode(const uint8_t *buf, size_t len,
     out->corr_id     = get_u32(buf + 4);
     out->owner_pid   = get_u32(buf + 8);
     out->link_handle = get_u32(buf + 12);
-    out->op          = get_u16(buf + 16);
+    out->reply_unit  = get_u32(buf + 16);
+    out->op          = get_u16(buf + 20);
     out->datalen     = datalen;
     if (datalen)
         memcpy(out->data, buf + DNET_BROKER_REQ_HDR, datalen);

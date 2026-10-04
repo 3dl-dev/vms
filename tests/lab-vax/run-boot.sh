@@ -209,16 +209,32 @@ cross_build() {
     || die "cross-build missing artifacts"
 }
 
-# 2. build (or reuse) the custom MODULAR kernel, cached as ARTIFACTS_DIR/netbsd-OVMX.
+# rd vms-553: the identity of the kernel + /boot this checkout builds -- the
+# build script and the OVMX_QUIET source patch it applies. A cached netbsd-OVMX
+# (or an installed one) whose stamp differs is STALE and is rebuilt/reinstalled:
+# the kernel is otherwise cached on the artifact FILE alone, which is how a
+# patched-kernel experiment once silently booted the old kernel (rd vms-bcd).
+KERNEL_STAMP="$(cat "${REPO}/tools/cross-vax/build-vax-modular-kernel.sh" \
+                    "${REPO}/tools/cross-vax/netbsd-ovmx-quiet.patch" | sha256sum | cut -c1-16)"
+
+# 2. build (or reuse) the custom MODULAR kernel, cached as ARTIFACTS_DIR/netbsd-OVMX
+#    (+ the OVMX_QUIET secondary bootstrap boot-OVMX, rd vms-553).
+kernel_artifacts_current() {   # <dir>
+  [ -f "$1/netbsd-OVMX" ] && [ -f "$1/boot-OVMX" ] \
+    && [ "$(cat "$1/netbsd-OVMX.stamp" 2>/dev/null)" = "${KERNEL_STAMP}" ]
+}
 build_kernel() {
-  if [ -f "${ARTIFACTS_DIR}/netbsd-OVMX" ]; then
-    log "MODULAR kernel artifact present -- NOT rebuilding"; return 0; fi
-  # Reuse a sibling's already-built kernel if present (same build script/pin).
-  for sib in "${CACHE_DIR}/vmsfs-artifacts/netbsd-OVMX" "${CACHE_DIR}/devvms-artifacts/netbsd-OVMX"; do
-    if [ -f "${sib}" ]; then
-      log "reusing sibling MODULAR kernel: ${sib}"
-      mkdir -p "${ARTIFACTS_DIR}"; cp "${sib}" "${ARTIFACTS_DIR}/netbsd-OVMX"; return 0; fi
+  if kernel_artifacts_current "${ARTIFACTS_DIR}"; then
+    log "MODULAR kernel artifact present (stamp ${KERNEL_STAMP}) -- NOT rebuilding"; return 0; fi
+  # Reuse a sibling's already-built kernel if present AND built from the same inputs.
+  for sib in "${CACHE_DIR}/vmsfs-artifacts" "${CACHE_DIR}/devvms-artifacts"; do
+    if kernel_artifacts_current "${sib}"; then
+      log "reusing sibling MODULAR kernel: ${sib}/netbsd-OVMX"
+      mkdir -p "${ARTIFACTS_DIR}"
+      cp "${sib}/netbsd-OVMX" "${sib}/boot-OVMX" "${sib}/netbsd-OVMX.stamp" "${ARTIFACTS_DIR}/"
+      return 0; fi
   done
+  rm -f "${ARTIFACTS_DIR}/netbsd-OVMX" "${ARTIFACTS_DIR}/boot-OVMX" "${ARTIFACTS_DIR}/netbsd-OVMX.stamp"
   ensure_src
   mkdir -p "${KBUILD_DIR}/obj" "${KBUILD_DIR}/tools" "${KBUILD_DIR}/dest" "${ARTIFACTS_DIR}"
   log "building the GENERIC+MODULAR NetBSD/vax kernel (build.sh; hard cap ${KBUILD_TIMEOUT}s)"
@@ -233,6 +249,8 @@ build_kernel() {
   rc=$?; set -e
   [ "${rc}" -eq 0 ] || { docker kill "${cid}" >/dev/null 2>&1 || true; die "kernel build failed/timed out (rc=${rc})"; }
   [ -f "${ARTIFACTS_DIR}/netbsd-OVMX" ] || die "kernel build finished but netbsd-OVMX missing"
+  [ -f "${ARTIFACTS_DIR}/boot-OVMX" ] || die "kernel build finished but boot-OVMX (quiet /boot) missing"
+  echo "${KERNEL_STAMP}" > "${ARTIFACTS_DIR}/netbsd-OVMX.stamp"
 }
 
 # 3. master a small GENUINE ODS-2 volume (host cc; arch-independent). Cached/shared.
@@ -375,6 +393,38 @@ master_system_volume() {
   echo "${listing}" | grep -qiE '\]USERS\.DIR' \
     || die "mastered system volume is MISSING [USERS] -- PROVISION cannot create the account home directories over the ACP (vms-329)"
   log "mastered system volume carries DCL.EXE + PROVISION.EXE + OVMXVMSSYS.PAR + [USERS]"
+}
+
+# rd vms-cee (OPTIONAL, no-op unless CLUSTER_SCSNODE is set): rewrite the
+# mastered SYSTEM volume's SYS$SYSTEM:OVMXVMSSYS.PAR (SCSNODE/SCSSYSTEMID/
+# VOTES/EXPECTED_VOTES/VAXCLUSTER) so a browser-demo node (or any other VAX
+# cluster node) boots pre-configured, rather than with the stock stand-alone
+# seed master_system_volume() ships. Runs BEFORE build_single_disk() dd's
+# SYSVOL_IMG into the disklabel's ODS-2 partition 'e', so no disklabel/offset
+# knowledge is needed here -- SYSVOL_IMG is still a bare ODS-2 volume file,
+# exactly the shape tools/cluster-web-demo/inject-ods2-config.sh (the SAME
+# tested x86 Node-A injector) already writes. REUSE ONLY: no parallel ODS-2
+# code. inject-ods2-config.sh always emits qcow2 (matching the x86 sysdisk
+# convention); converted back to raw here since SYSVOL_IMG must stay a plain
+# raw file for mk_single_disk.py's dd-style embed.
+inject_cluster_sysvol_config() {
+  [ -n "${CLUSTER_SCSNODE:-}" ] || return 0
+  [ -n "${CLUSTER_SCSSYSTEMID:-}" ] || die "CLUSTER_SCSNODE is set but CLUSTER_SCSSYSTEMID is not"
+  command -v qemu-img >/dev/null 2>&1 || die "CLUSTER_SCSNODE requested but qemu-img is not on PATH"
+  local injector="${REPO}/tools/cluster-web-demo/inject-ods2-config.sh"
+  [ -f "${injector}" ] || die "inject-ods2-config.sh not found at ${injector}"
+  local tmp_qcow2="${SYSVOL_IMG}.cluster-inject.qcow2"
+  log "injecting cluster config onto the mastered SYSTEM volume: SCSNODE=${CLUSTER_SCSNODE} SCSSYSTEMID=${CLUSTER_SCSSYSTEMID} VOTES=${CLUSTER_VOTES:-1} EXPECTED_VOTES=${CLUSTER_EXPECTED_VOTES:-1} VAXCLUSTER=${CLUSTER_VAXCLUSTER:-2}"
+  sh "${injector}" "${SYSVOL_IMG}" "${tmp_qcow2}" \
+    --scsnode "${CLUSTER_SCSNODE}" --scssystemid "${CLUSTER_SCSSYSTEMID}" \
+    --votes "${CLUSTER_VOTES:-1}" --expected-votes "${CLUSTER_EXPECTED_VOTES:-1}" \
+    --vaxcluster "${CLUSTER_VAXCLUSTER:-2}" \
+    || die "cluster config injection onto the mastered SYSTEM volume failed"
+  qemu-img convert -O raw "${tmp_qcow2}" "${SYSVOL_IMG}.raw-new" \
+    || die "qcow2->raw convert-back of the injected SYSTEM volume failed"
+  mv "${SYSVOL_IMG}.raw-new" "${SYSVOL_IMG}"
+  rm -f "${tmp_qcow2}"
+  log "OK: mastered SYSTEM volume now carries the injected cluster config"
 }
 
 # 3d (install). Cross-build the FULL shipped vax image set via the top-level
@@ -605,11 +655,13 @@ run_acceptance() {
 
 # 5. swap the MODULAR kernel onto the SHARED disk (shared marker).
 ensure_modular_kernel() {
-  if [ -f "${KERNEL_MARKER}" ]; then
-    log "MODULAR kernel already installed on the shared disk -- skipping"; return 0; fi
-  log "installing the MODULAR kernel onto the shared disk (boot GENERIC single-user)"
+  if [ "$(cat "${KERNEL_MARKER}" 2>/dev/null)" = "${KERNEL_STAMP}" ]; then
+    log "MODULAR kernel (stamp ${KERNEL_STAMP}) already installed on the shared disk -- skipping"; return 0; fi
+  log "installing the MODULAR+OVMX_QUIET kernel and quiet /boot onto the shared disk (boot single-user)"
   run_session install-kernel /cache/anita-work || die "MODULAR-kernel install session failed"
-  touch "${KERNEL_MARKER}"
+  echo "${KERNEL_STAMP}" > "${KERNEL_MARKER}"
+  # Everything cloned from the shared disk before this carries the OLD kernel.
+  rm -f "${BOOT_COPY_MARKER}" "${BOOT_INSTALL_MARKER}"
 }
 
 # 6. clone the shared (MODULAR-kernel) disk to an ISOLATED boot-work copy.
@@ -805,10 +857,27 @@ build_single_disk() {
   #    gives a shell), target=single on rq1, artifact CD on rq2 -- resize_ffs the
   #    target root FFS down to SINGLE_A_SECTORS, MAKEDEV ra0 on it (so /dev/ra0e
   #    exists), replace its module_path vms.kmod with the ra0e-aware build.
+  #    CLUSTER_AUTH_FILE (rd vms-cee, optional, unset by default): a host path
+  #    UNDER ${CACHE_DIR} carrying an authored CLUSTER_AUTHORIZE.DAT to install
+  #    onto the target's FFS root at /etc/ovmx/cluster_authorize.dat in the SAME
+  #    session (build-time, not a second boot). Unset -> byte-identical to
+  #    before (no cluster_authorize.dat touched, zero regression for every
+  #    existing sysboot-single caller, e.g. the single-node VAX browser demo).
   log "single-disk in-guest assembly (resize_ffs + ra0 nodes + kmod swap)"
+  local cluster_auth_env=()
+  if [ -n "${CLUSTER_AUTH_FILE:-}" ]; then
+    case "${CLUSTER_AUTH_FILE}" in
+      "${CACHE_DIR}"/*) ;;
+      *) die "CLUSTER_AUTH_FILE must be under CACHE_DIR (${CACHE_DIR}) so the build container can see it: ${CLUSTER_AUTH_FILE}" ;;
+    esac
+    [ -f "${CLUSTER_AUTH_FILE}" ] || die "CLUSTER_AUTH_FILE not found: ${CLUSTER_AUTH_FILE}"
+    cluster_auth_env=(-e "OVMX_CLUSTER_AUTH_FILE=/cache/${CLUSTER_AUTH_FILE#"${CACHE_DIR}"/}")
+    log "  + injecting CLUSTER_AUTHORIZE.DAT from ${CLUSTER_AUTH_FILE}"
+  fi
   run_session assemble-single /cache/anita-work \
     -e OVMX_SINGLE_IMG=/cache/single-work/wd0.img \
     -e OVMX_SINGLE_A_SECTORS="${SINGLE_A_SECTORS}" \
+    "${cluster_auth_env[@]}" \
     || die "single-disk in-guest assembly session failed"
 
   # 4. Host-side finish: rewrite the disklabel (shrink 'a', add ODS-2 'e', slim
@@ -909,6 +978,18 @@ case "${MODE}" in
     fi
     die "GATE FAILED (vms-065) -- see console output above"
     ;;
+  kernel-quiet)
+    # rd vms-553: boot the shared disk (stock init -> a single-user shell) on the
+    # installed OVMX_QUIET kernel + quiet /boot and assert BOTH halves: the RAW
+    # console from the KA655 >>> to the shell prompt carries no NetBSD substrate
+    # output, AND dmesg still holds every kernel boot line.
+    #   tests/lab-vax/run-boot.sh kernel-quiet
+    if run_session kernel-quiet /cache/anita-work; then
+      log "KERNEL-QUIET PASSED (rd vms-553): quiet console, complete dmesg"
+      exit 0
+    fi
+    die "KERNEL-QUIET FAILED (rd vms-553) -- see console output above"
+    ;;
   sysboot-single)
     # vms-7b15: the SLIM SINGLE-disk proof. Build the mastered ODS-2 SYSTEM
     # volume (same as two-disk sysboot), assemble ONE slim disk that carries both
@@ -916,8 +997,12 @@ case "${MODE}" in
     # single `attach rq0' (NO rq1) and prove it reaches Username: with DUA0:
     # bound to the boot disk's ODS-2 partition (ra0e).
     #   tests/lab-vax/run-boot.sh sysboot-single
+    # (rd vms-cee: CLUSTER_SCSNODE/CLUSTER_SCSSYSTEMID etc, unset by default,
+    # inject a cluster config onto the mastered volume between the two -- see
+    # inject_cluster_sysvol_config()'s own comment.)
     build_boot_image_set
     master_system_volume
+    inject_cluster_sysvol_config
     build_single_disk
     run_sysboot_single && exit 0
     exit 1
@@ -943,5 +1028,5 @@ case "${MODE}" in
     run_install && exit 0
     exit 1
     ;;
-  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | acceptance | gate | install)" ;;
+  *) die "unknown mode '${MODE}' (want: prove | negctl | sysboot | sysboot-negctl | sysboot-single | kernel-quiet | acceptance | gate | install)" ;;
 esac

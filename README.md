@@ -57,7 +57,7 @@ hands off to the VMS-native toolchain (the `IMGACT.EXE` image activator and
 docker build -f distro/Dockerfile.bootable -o dist .
 
 # Boot it
-./distro/boot/run-qemu.sh dist/vmlinuz dist/initramfs-ovmx.cpio.gz
+./distro/boot/run-qemu.sh dist/boot/vmlinuz dist/boot/initramfs-ovmx.cpio.gz
 ```
 
 ### Local Build — libraries, DCL, tests

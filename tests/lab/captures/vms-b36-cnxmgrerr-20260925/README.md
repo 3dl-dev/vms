@@ -1,0 +1,415 @@
+# vms-b36 — the real VAX's CNXMGRERR, made deterministic, and an all-real-VMS oracle beside it
+
+**2026-09-25, a temporary `ovmx-lab/b36lab` pod on `k3s-worker`, created for
+this work and deleted after it. TWO isolated rigs inside that one pod, on two
+bridges that cannot see each other:**
+
+| rig | bridge | nodes |
+|---|---|---|
+| **the bench** (`/lab/run-b36`) | `brb36` + `tapCb36`/`tapAb36`/`tapBb36` | a **real** OpenVMS VAX V7.3 under SIMH (`VAXC`, SCSSYSTEMID 1989) founds; two booted OVMX/x86_64 nodes under QEMU/**KVM** (`OVMXA` 1987, `OVMXB` 1988) join. Cluster group 257, `VAXCLUSTER=2`, `EXPECTED_VOTES` 1/2/3. `CAP_NET_RAW` dropped from both QEMU subtrees. |
+| **the oracle** (`/lab/k8s-labs/b36lab`) | `br0` + `tap1`/`tap2`/`tap3` | **THREE real OpenVMS VAX V7.3 nodes and nothing else** — `VAX1` (SYS0), `VAX2` (SYS1), `VAX3` (SYS2), one shared system disk cloned from the lab's own `.3node-golden` snapshot, cluster group 1. |
+
+**The lab's live reference cluster (`vaxlab-0..4`) was never touched**, and
+neither was any other lane's pod. Both rigs were built from copies.
+
+---
+
+## 1. What was measured, and where it differs from the filed premise
+
+rd vms-b36 was filed off `vms-dfe-blackout-recovery-20260925/vax-bugcheck-on-main/`
+and reads the crash as landing "around OVMXA's admission". **Re-read from the
+kept console, it does not.** `VAXC.console.log` in that exhibit says:
+
+```
+%CNXMAN,  received VAXcluster membership request from system OVMXA
+%CNXMAN,  proposing addition of system OVMXA
+%CNXMAN,  completing VAXcluster state transition        <- OVMXA is IN, cleanly
+%CNXMAN,  received VAXcluster membership request from system OVMXB
+%CNXMAN,  proposing addition of system OVMXB            <- the transition OPENS
+%CNXMAN,  lost connection to system OVMXB
+%CNXMAN,  timed-out lost connection to system OVMXB
+%CNXMAN,  aborting VAXcluster state transition
+**** Fatal BUG CHECK, version = V7.3     CNXMGRERR, ...
+```
+
+The crash is in **OVMXB's** admission, not OVMXA's. That correction is what
+made the fault reproducible: see §3.
+
+## 2. The oracle — three REAL V7.3 nodes, the same faults
+
+`oracle/` is the control. A real three-node VMScluster was built in this pod
+(`vax3` boots system root SYS2 with `B/R5:20000000 DUA0`), and then the bench
+rig's own faults were injected on `tap3` with `tc netem` — which only DROPS or
+DELAYS: nothing is injected on the wire and no frame is altered.
+
+**(a) A member that vanishes.** `vax3` killed, twice:
+
+```
+VAX1: lost connection to system VAX3 / timed-out / proposing reconfiguration
+      / removed from VAXcluster system VAX3 / completing state transition
+VAX2: lost connection to system VAX3 / removed from VAXcluster system VAX3
+```
+
+and on the second occasion the roles were **reversed** — VAX2 proposed and VAX1
+followed. So the proposer is the first detector and it races; the loser says
+nothing at all. **Zero bugchecks on either survivor, both times.**
+
+**(b) A node blacked out for 45 s mid-admission** (`oracle/fault3.sh`, armed on
+the coordinator's own "proposing addition of system VAX3" line). The survivors
+removed it and completed the transition; the isolated node lost quorum,
+proposed its own reconfiguration, and took
+
+```
+**** Fatal BUG CHECK, version = V7.3     CLUEXIT, Node voluntarily exiting VAXcluster
+```
+
+— which is how a real node leaves that state: it **re-incarnates**. Again **zero
+CNXMGRERR on the survivors.**
+
+**(c) THE FINDING (`analysis/oracle-accept-vs-reject.txt`).** Across the
+blackout, every `VMS$VAXcluster` connect between the survivors and the removed
+node is answered — and the answer changes:
+
+```
+t=   0.000  VAX2  dials VAX3   ->  ACCEPT        (VAX3 is being admitted)
+t=   1.143  VAX1  dials VAX3   ->  ACCEPT
+t=  52.283  VAX2  dials VAX3   ->  REJECT        (VAX3 has been removed)
+t=  53.277  VAX1  dials VAX3   ->  REJECT
+t=  53.897  VAX3  dials VAX2   ->  REJECT        (...and the member refuses it too)
+t=  54.278  VAX1  dials VAX3   ->  REJECT
+t=  55.278  VAX1  dials VAX3   ->  REJECT
+t=  56.278  VAX1  dials VAX3   ->  (no answer)   (VAX3 has CLUEXITed)
+```
+
+**A real OpenVMS connection manager REJECTS an inbound `VMS$VAXcluster` connect
+for a relationship it has given up on, once a second, both ways, until the peer
+comes back as a new incarnation.** This is the first capture in this repo of a
+real VMS node refusing that connect at all; the standing escalation in
+`docs/cluster-integration-notes.md` (carried to FC-P3.3) and correction D12 in
+`docs/design-cluster-book-grounding.md` both record that nothing grounded it.
+
+**OVMX, in the same position, ACCEPTS.** See §4.
+
+**(d) The connect data is derived, not a constant**
+(`analysis/connect-data.txt`). The 16-byte SCA connect data at content
+`[94:110]` on `VMS$VAXcluster`:
+
+```
+real VAX2/VAX1, MEMBERS      011b0103 01000100 02000108 00000600
+real VAX3, being ADMITTED    011b0103 00000000 00000008 00000600
+real VAXC alone (bench)      011b0103 01000100 01000108 00000600
+real VAXC, 2 members         011b0103 02000200 02000108 00000600
+real VAXC, later in the run  011b0203 02000200 02000109 02000600   <- [2] and [12] MOVE
+OVMX, EVERY frame it sends   011b0103 00000000 00000008 00000600
+```
+
+Two things follow. First, the real field tracks the sender's own cluster state
+and **`content[96]` and `content[106]` are not the constants §4(N) of the
+protocol spec records them as** — the bench VAX moved both inside one run.
+Second, OVMX emits one baked template (`cnxman_e31_conndata`) on every connect
+and every accept regardless of its own state; that is the thing the operator
+memory `executive-backed-not-wire-plumbing` forbids, and the spec's own §4(N)
+already admits it ("OVMX copies a real joiner's observed bytes and therefore
+cannot generate connect data for a role it has not captured").
+
+## 3. The bench rig, made deterministic
+
+`rig/` is derived from `vms-dfe-blackout-recovery-20260925/` with ONE change,
+in `runarm.sh`: **where the fault lands.**
+
+* rd vms-dfe armed on the JOINER's console line that its `VMS$VAXcluster`
+  connection was open. On this build the joiner frequently loses that
+  connection *before its membership request ever reaches the member*, so the
+  member never opens a transition and the window the CNXMGRERR lives in is
+  never entered. Measured here: `CTL-1` and `CTL-2` both ended in the peer-driven
+  connect/disconnect loop with **0 bugchecks** and no transition at all.
+* rd vms-b36 arms on **the real VAX's own console line that it has opened the
+  transition** — `%CNXMAN,  proposing addition of system OVMXB` — and blacks the
+  joiner's tap out at that instant for 45 s. Same fault, landed where the
+  archived exhibit landed it.
+
+### The A/B, twelve arms
+
+Both arms are boot artifacts from the **same** workflow
+(`build-boot-artifacts.yml`, `cluster_auth_group=257`), one patch apart,
+`sha256sum -c`'d in the pod before use. Nothing else differs: same pinned VAXC
+volume restored before every arm, same bridge, same trigger, same 45 s.
+
+| arm | commit | what is in it | arms | fault injected | CN=3 | **VAX bugchecks** |
+|---|---|---|---|---|---|---|
+| `M1` | `7d053b50` (main) | — | 6 | 6 | 4 | **2** |
+| `F1` | `9d94dde5` | the never-admitted-removal gate | 6 | 5¹ | 3 | **2** |
+
+¹ `F1-4`'s marker never appeared (the VAX never opened a transition for OVMXB
+in that arm), so no fault was injected in it and it is not an arm of the
+experiment. It is reported rather than dropped.
+
+**The gate this branch lands does not change the bugcheck rate on this rig, and
+this table says so.** The vector this rig exposes is §4's accept, not the
+removal: in every crashing arm of either colour `proposing removal of a system
+from the cluster` never appears at all — the VAX dies before the joiner's
+reconnect window ever expires. What the gate closes is the vector the ARCHIVED
+`vms-dfe-blackout-recovery-20260925/vax-bugcheck-on-main/` run shows, where the
+window did expire and the removal was proposed 0.6 s before the VAX went.
+
+The window is entered **every** run now — against 1 run in 5 on the rd vms-dfe
+trigger. That is the rig this item needed, and it is what makes §4 readable at
+all.
+
+## 4. The crash frame
+
+`analysis/crash-window-M1-2.txt`, produced by
+`tools/cluster/cm_crash_window.py`, is the whole answer. The pair is in the
+rd vms-4c9 connect/disconnect loop, and then:
+
+```
+[2277] -0.001 s  VAXC  -> OVMXB  CONNECT_REQ  rem=00000000 loc=dbf40008  VMS$VAXcluster
+[2279] -0.001 s  OVMXB -> VAXC   CONNECT_RSP  rem=dbf40008 loc=00000000
+[2280] -0.001 s  OVMXB -> VAXC   ACCEPT_REQ   rem=dbf40008 loc=325a0052  VMS$VAXcluster
+[2282] -0.000 s  VAXC  -> OVMXB  ACCEPT_RSP   rem=325a0052 loc=dbf40008
+[2283]  0.000 s  VAXC  -> AB-00-04-01-01-02   msgtype 0xb1   <- the last gasp
+```
+
+**OVMX ACCEPTS the connect. 0.3 ms after the connection completes, the real VAX
+puts its last-gasp datagram on the cluster multicast and bugchecks CNXMGRERR.**
+In the same position a real V7.3 node sends `REJECT_REQ` (§2(c)).
+
+`analysis/crash-window-F1-2.txt` and `crash-window-F1-3.txt` are the SAME four
+frames on the **fixed** arm, which is what makes the shape a signature rather
+than one run's accident:
+
+```
+CONNECT_REQ (VAXC) -> CONNECT_RSP + ACCEPT_REQ (OVMXB) -> ACCEPT_RSP (VAXC) -> 0xb1
+```
+
+`M1-1` is the same family one step earlier: OVMXB accepts a **second**
+`VMS$VAXcluster` connection (`loc=e09a0053`) from the VAX while the first
+(`loc=e09a0008`) has never been disconnected on the wire — the VAX had been
+sending CM messages on that first pair, unanswered, once every three seconds
+for 35 s — and the VAX dies moments later.
+
+**So rd vms-b36 and rd vms-4c9 are two outcomes of ONE defect:** OVMX answers
+`ACCEPT_REQ` where a real connection manager answers `REJECT_REQ`. Sometimes the
+peer merely hangs up (rd vms-4c9's 2 Hz loop, 460 cycles in one arm here);
+sometimes completing the connection tips its CM into CNXMGRERR.
+
+`analysis/` also records the 16-bit code on those loop disconnects: the VAX's
+460 loop `DISCONNECT_REQ`s carry `0x8004`, where its ordinary disconnects carry
+`0x0000`/`0x0001` and its `REJECT_REQ` carries `0x002c`.
+
+## 5. What was FIXED in this item, and what was not
+
+**Fixed and proven (R1 + R2):** this executive proposed a class-0x03 removal
+transition for a system the cluster had **never admitted** — p. 7-49's SELECTED
+flag clear, no membership to remove. In the archived bugcheck run the line
+`proposing removal of a system from the cluster` appears in exactly the one arm
+of four that bugchecked a peer, 0.6 s after the VAX abandoned that very
+system's admission; and the oracle above shows real VMS abandoning such a
+joiner and never removing it. `tests/cluster/host/test_cnxman_csb.c`,
+`test_cnxman_coord.c` and
+`tests/cluster/sim/scenarios/cnxman_never_admitted_not_removed.c` all go red
+with the gate stubbed out.
+
+**NOT fixed, and escalated rather than guessed:** the ACCEPT-vs-REJECT predicate
+of §2(c)/§4. What is now grounded is *that* a real connection manager refuses,
+and in which two situations it was observed refusing (a member refusing a system
+it has removed; a removed node refusing everything until it re-incarnates). What
+is **not** grounded is the predicate an executive should evaluate on its own
+state to decide, and inventing one is exactly what Rule 8 and INV-6 forbid —
+especially on the accept path, where refusing a peer's legitimate p. 7-24
+REACCEPT would break every recovery this lane has built. It is also visibly
+entangled with a second missing behaviour: a real node in OVMXB's position
+**CLUEXITs and reboots**, and OVMX has no CLUEXIT.
+
+## Reproducing
+
+```
+# a temporary PRIVILEGED pod on k3s-worker (privileged is what gets the device
+# cgroup for /dev/kvm; TCG timing confounds this work), with the vax-lab PVC.
+
+# the bench
+ip link add brb36 type bridge; ip link set brb36 up
+for t in tapCb36 tapAb36 tapBb36; do ip tuntap add dev $t mode tap
+  ip link set $t master brb36; ip link set $t up; done
+# artifacts: gh workflow run build-boot-artifacts.yml --ref <branch> \
+#                -f cluster_auth_group=257   (then gh run download, sha256sum -c)
+MARK_LOG=/lab/run-b36/VAXC.console.log \
+MARK="%CNXMAN,  proposing addition of system OVMXB" \
+  bash rig/startloop.sh <artifacts-dir> <TAG> 6
+
+# the oracle (three REAL V7.3 nodes)
+POD_NAME=<pod> LAB_ROOT=/lab NODES="vax1 vax2" \
+  GOLDEN_SUFFIX=".3node-golden.bak" bash /usr/local/bin/entrypoint.sh &
+# then stage vax3 on tap3 and boot system root SYS2:
+#   nodedrv.py <dir> <log> --boot "B/R5:20000000 DUA0"
+TAG=f1 bash oracle/fault3.sh
+```
+
+---
+
+# vms-0f9 — the ruling, implemented and run on the rig
+
+**2026-09-25, the same disposable `ovmx-lab/b36lab` pod, the same deterministic
+bench rig described above, and the same three-real-node oracle.** This section
+is the second half of the rd vms-b36 story: §4 above identified the defect
+(OVMX ACCEPTS where a real V7.3 node REJECTS), the conductor ruled on rd
+vms-0f9, and this is what implementing that ruling did on the wire.
+
+## The rig, unchanged except for one number
+
+Same nodes, same bridge, same 80±40 ms jitter, same 45 s blackout, same trigger
+(the real VAX's own `%CNXMAN,  proposing addition of system OVMXB`). The one
+change is `JOIN_WAIT_BEATS` 120 → 170: a node that **re-incarnates** starts its
+admission again from the directory round, and a 240-second window cut two arms
+off mid-progress rather than mid-failure. **No grading criterion changed** —
+`grade3.sh` is the grader for every arm below and it is stricter than
+`grade2.sh`, because it adds the rd vms-4c9 loop as a *pass criterion* rather
+than a reported number.
+
+## What the arms measured, in order — every one of them found something
+
+The rig was re-run after every change. Each arm is listed with what it found,
+because the sequence is the evidence that these were measured and not designed:
+
+| arm | outcome | what it found |
+|---|---|---|
+| `V1-1` | OVMXA never joined | the join's own `cfg.conndata` was left at the memset **zero** — the all-zero connect data E31 replaced. The real VAX answered *"version identity refused"* on the node's first attempt. |
+| `V1-1` | 415 re-incarnations | CLUEXIT **looped**: refused → re-incarnate → refused. Re-incarnating cures a refusal that is *about* this incarnation; one that survives the new one is about something else. |
+| `V2-1` | VAX bugchecked | OVMXA's own class-0x03 **removal open** carried the class tag and 44 zero bytes where a real coordinator writes two VMS absolute-time quadwords and four longwords. The VAX's last gasp is in the same millisecond. |
+| `C-1` | joiner never rejoined | CLUEXIT fired 0.8 s **after** the cluster had opened its connection to the joiner, throwing away the admission that connection was the start of. |
+| `C-1` | *"version identity refused"* again | the re-incarnated node advertised the **MEMBER** form with zero votes, zero quorum and zero members, because `cl->state` still said MEMBER while the CLUB it was built from had just been emptied. |
+| `D-1`,`D-2` | 3/2 MEMBER rows | a member that had given up on the joiner during the blackout went on refusing it **after the cluster had committed it as a member** — a member short of the Rule of Total Connectivity. |
+
+Every one of those has a test in this branch, and the negctl mutation gate
+carries a new control (`coord-removal-open-gate-disarmed`) for the removal
+open.
+
+## The campaign — `loop-F.log`
+
+Twenty-two consecutive arms on `b7b33bfc`, boot artifacts checksum-verified in
+the pod, the real VAX volume restored from the pinned copy before every arm.
+
+**13 PASS / 9 FAIL, and the two numbers the bar is about:**
+
+* **VAX bugchecks: ZERO. In every arm.** And zero in every arm of every rig run
+  since the removal gate landed — `V3-1`..`V3-3`, `C-1`, `C-2`, and the whole
+  of `F`. Against **two in six** on `main` (§3 above) with the same fault at
+  the same point.
+* **The rd vms-4c9 accept-and-be-hung-up-on loop: ZERO in every arm.** Against
+  460 cycles in a single arm before.
+
+Per-arm, from `campaign/loop-F.log`: **bugchecks 0 in all 22**; `4c9-loop` 0 in
+21 arms and **1** in the twenty-second (one disconnect line, against 460 in a
+single pre-fix arm). `cluexits` totals **13** and `refused-giveup` **28** across
+the campaign, so the mechanism is visible rather than inferred: the arms that
+take the blackout show the joiner refusing the incarnation it gave up on,
+re-incarnating once, and being admitted again.
+
+`campaign/F-2/` is one of those arms kept whole, with its capture.
+`campaign/loop-E-short-window.log` is the earlier five-arm run on the same
+build with `JOIN_WAIT_BEATS` at 120, kept because it is where the window was
+measured to be too short.
+
+## What did NOT reach the bar, and why it is filed rather than argued away
+
+`grade3.sh` also requires **both** OVMX nodes' own `SHOW CLUSTER` to name all
+three systems MEMBER, and **nine arms** miss it: `F-3`, `F-9`, `F-13`, `F-15`
+and `F-17` end with the surviving member showing the joiner as `NEW`; `F-10`
+and `F-16` had the joiner still re-joining when the window closed; `F-14`'s own
+last table was taken between polls; and `F-1` is not an arm of the experiment
+at all -- its trigger never fired, so no fault was injected (its
+`blackout.out` says so, and it reached CN=3 anyway). Its console says why: *"committed member count differs from
+the transition nodemap"*.
+
+**The chain, from the arms' own transcripts.** The survivor learned the
+joiner's CSID from an op-0x05 membership record, lost its connection in the
+blackout, gave up on the block, and p. 7-25's reclaim (rd vms-dfe, #1309) freed
+it. The rebuilt block is `NEW` with `csid_valid` 0, and
+`phase2_csb_in_nodemap()` needs `csid_valid` to match a CSB to a nodemap bit —
+so the coordinator's admission commit cannot name the joiner on that node and
+`SELECTED` is never set for it.
+
+**It is not a crash and not the accept defect.** It is a convergence gap in the
+rebuild path, adjacent to rd vms-dfe, and it is filed as **rd vms-8a9** with
+this evidence rather than being closed over. Fixing it means deciding whether a
+peer's CSID should survive the p. 7-25 rebuild — the CLUB already keeps a
+give-up ledger beside the CSB table for exactly that class of fact — and that
+is a membership-accounting decision, not a line of code to guess at.
+
+## The oracle, still the reference
+
+`oracle/` is unchanged and is what every rule in this branch is measured
+against: a real connection manager REJECTS an inbound `VMS$VAXcluster` connect
+for a relationship it has given up on, both directions, once a second, until
+the peer re-incarnates — and the node the cluster gave up on takes CLUEXIT,
+reboots, and is accepted again. Both halves are now what this executive does.
+
+`campaign/F-3/` is one of those arms kept whole, and `campaign/F-1/` is the
+no-fault one, kept so the nine failures can be read apart rather than counted
+together.
+
+---
+
+# vms-8a9 — where a member gets a rebuilt peer's CSID, and the campaign that closes it
+
+**2026-09-26, a temporary `ovmx-lab/b8alab` pod, the same deterministic bench
+rig and the same oracle captures.** This is the third section: §5 above closed
+the crash, the rd vms-0f9 campaign left nine arms missing "all three MEMBER on
+both nodes", and five of those were rd vms-8a9.
+
+## The oracle already held the answer
+
+No new lab run was needed to ground it — the three-real-node captures in
+`oracle/` contain both halves:
+
+```
+oracle-3node-clean.pcap     frame  266   VAX2 -> VAX1   sysid 1027  csid 00010003  idx 2
+oracle-3node-fault-f1.pcap  frame 1523   VAX2 -> VAX1   sysid 1027  csid 00010004  idx 3
+```
+
+A real coordinator sends the **joiner** the full member set and sends every
+**existing member** exactly **one** op-0x05 record: the one naming the system
+being admitted. VAX3 was removed at CSID `00010003` / CSV index 2, came back as
+a **new incarnation** (its boot quadword changed) and was re-admitted at
+`00010004` / index **3** — round-robin, never its old slot. Frame 1523 is that
+single record going to the surviving member, and VAX1 answers it. **A real
+member's knowledge of a re-admitted peer's CSID comes from that record and from
+nothing it held before; VMS does not re-run the admission for the survivor.**
+
+And the record really did arrive on the rig too: `campaign/F-3`'s own capture,
+frame 2299, is VAXC → OVMXA naming sysid 1988, csid `00010003`, idx 2 — and
+OVMXA answered it. This executive parsed it, found no block for 1988 (p. 7-25
+had freed it), counted `membrecs_unknown_peer` and **dropped it**. That is the
+whole defect.
+
+## The campaign — `campaign-8a9/`
+
+Twenty-eight arms on `15bb286d`, same rig, same fault at the same point.
+`fault-classification.txt` classifies every arm by whether the fault really
+fired, because that is the difference between an arm of the experiment and an
+arm in which the joiner never asked the real VAX at all.
+
+| | |
+|---|---|
+| arms run | **28** (`loop-H.log` 22, `loop-J.log` 6) |
+| **VAX bugchecks** | **0 — in all 28** |
+| **rd vms-4c9 loop** | **0 — in all 28** |
+| arms with the fault really injected | 25 |
+| ...of which passed every criterion | **24** |
+| **longest consecutive run of fault-injected arms passing** | **21** |
+| **arms showing the rd vms-8a9 signature (one node short)** | **0**, against **5 of 22** before |
+
+The three arms with no fault injected (`H-5`, `H-15`, `H-19`) are the same
+class as `F-1` in §5: the joiner's first admission request went to the OVMX
+member rather than the real VAX, that member cannot coordinate an admission
+while a real VAX is a participant (the rd vms-1ac grounded-open gate, working
+as designed), so it says nothing, and the joiner was still working through
+E80's re-issue when the arm's window closed. The VAX therefore never proposed
+and the trigger line never appeared. `J-3` is the one fault-injected arm that
+did not pass: it re-incarnated and was still re-joining at the window. Both are
+harness-window behaviour, not correctness — and both are named rather than
+folded into a pass rate.
+
+`campaign-8a9/H-2/` is a passing arm kept whole; `campaign-8a9/J-3/` is the one
+that did not.
+

@@ -1,0 +1,769 @@
+[OVMXB] caps: CapPrm:	000001ffffffdfff CapEff:	000001ffffffdfff CapBnd:	000001ffffffdfff 
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+3EFCAD00+3EF0AD00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [OVMXB] SYSBOOT> reached
+SET SCSNODE OVMXB
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXB
+SYSBOOT> SET SCSSYSTEMID 1988
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1988
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-1 - OpenVMS-compatible
+    26-SEP-2026 03:28:32.96
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   15.260004] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   15.264577] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 26-SEP-2026 03:28:33.47
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7-1 (OpenVMS-compatible)
+
+Username: [   17.348632] %PEA0, virtual circuit open
+SYSTEM
+Password: [   17.363940] %PEA0, channel verified
+[   18.363824] %CNXMAN, a connection manager was discovered on the interconnect
+[   18.371007] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   19.007415] %PEA0, channel verified
+[   19.148440] %PEA0, virtual circuit open
+[   19.387718] %CNXMAN, a connection manager was discovered on the interconnect
+[   19.395692] %CNXMAN, waiting for a directory answer from the cluster
+
+
+   Welcome to OpenVMX V0.7-1 - OpenVMS-compatible
+
+
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-0"
+B36-POLL-OVMXB-0
+$ [   26.219795] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   26.747681] %CNXMAN, membership request to the selected member not answered
+[   26.755189] %CNXMAN, re-issuing this node's membership request to another cluster member
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:28:44
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ WRITE SYS$OUTPUT "B36-POLL-OVMXB-15"
+B36-POLL-OVMXB-15
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:28:59
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ [   43.003702] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[   43.009858] %CNXMAN, lost connection to a cluster member, reconnecting
+[   43.013725] %CNXMAN, lost the VMS$VAXcluster connection before this node was admitted: waiting for it to come back
+[   43.021935] vms: SCS path lost to system 0:1989 -> SS$ 2692
+[   43.025437] %PEA0, TIMVCFAIL expired, circuit re-formed
+[   44.027667] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   45.947681] %PEA0, no HELLO within the listen timeout, channel lost
+[   45.947686] %PEA0, channel lost, virtual circuit closed
+[   45.956161] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[   45.966117] %CNXMAN, lost connection to a cluster member, reconnecting
+[   45.972892] vms: SCS path lost to system 0:1987 -> SS$ 2692
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-30"
+B36-POLL-OVMXB-30
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:29:14
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | RECONNECT        |
+| 1989   |          |                 | RECONNECT        |
++---------------------------------------------------------------+
+$ [   47.995747] %PEA0, no HELLO within the listen timeout, channel lost
+[   63.419686] %CNXMAN, the cluster never admitted this system: giving up its connection and proposing no state transition
+[   63.483714] %CNXMAN, the reconnect interval expired with no VMS$VAXcluster connection to the member: this node is NOT a cluster member
+[   64.443746] %CNXMAN, could not open an SCS$DIRECTORY connection to the cluster: retrying
+[   66.491674] %CNXMAN, the cluster never admitted this system: giving up its connection and proposing no state transition
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-45"
+B36-POLL-OVMXB-45
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:29:29
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ [   71.797830] %PEA0, virtual circuit open
+[   72.181856] %CNXMAN, refused a VMS$VAXcluster connection from an incarnation this node has given up on: it must come back as a new one
+[   72.195425] %PEA0, channel verified
+[   72.635715] %CNXMAN, this node and the cluster have given up on each other: CLUEXIT, this node is re-incarnating and will ask to join again
+[   72.645383] %PEA0, leaving the cluster, last gasp sent
+[   72.645389] %CNXMAN, a connection manager was discovered on the interconnect
+[   72.653012] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   73.569859] %PEA0, channel verified
+[   73.570267] %PEA0, virtual circuit open
+[   73.659779] %CNXMAN, this node has already re-incarnated and the cluster still refuses it: waiting to form or join an OpenVMS Cluster
+[   73.671860] %CNXMAN, a connection manager was discovered on the interconnect
+[   73.723734] %CNXMAN, waiting for a directory answer from the cluster
+[   74.620919] vms: SCS path lost to system 0:1987 -> SS$ 2692
+[   74.625417] %PEA0, peer re-started the circuit, re-forming
+[   74.626140] %PEA0, virtual circuit open
+[   80.891720] %CNXMAN, membership request to the selected member not answered
+[   80.900141] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   81.851781] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-60"
+B36-POLL-OVMXB-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:29:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [   93.115690] %CNXMAN, another system is also waiting to form an OpenVMS Cluster and takes precedence; this node will join it
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-75"
+B36-POLL-OVMXB-75
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:30:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  106.427686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  107.451665] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  108.475666] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  109.499690] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  110.523691] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  111.547655] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  111.611704] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  112.571688] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  113.595692] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  114.619702] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-90"
+B36-POLL-OVMXB-90
+$ [  115.643718] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:30:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  116.667698] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  117.691701] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  118.715705] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  119.739686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  120.763693] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  121.787685] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  121.851679] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  122.811704] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  123.835777] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  124.859693] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  125.883675] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  126.907683] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  127.931666] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  128.955681] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-105"
+B36-POLL-OVMXB-105
+$ [  129.979704] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:30:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  131.004234] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  132.027658] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  132.091718] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  133.051688] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  134.075703] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  135.099780] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  136.123683] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  137.147712] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  138.171690] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  139.195670] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  140.219681] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  141.243689] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  142.267758] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  142.331766] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  143.291685] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  144.315736] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-120"
+B36-POLL-OVMXB-120
+$ [  145.339675] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:30:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  146.363675] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  147.387700] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  148.411667] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  149.435691] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  150.459699] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  151.483683] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  152.507694] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  152.571672] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  153.531811] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  154.555720] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  155.579686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  156.603685] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  157.627692] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  158.651681] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  159.675685] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-135"
+B36-POLL-OVMXB-135
+$ [  160.699732] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:31:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  161.723723] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  162.747732] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  162.811699] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  163.771697] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  164.795701] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  165.819703] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  166.843733] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  167.867729] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  168.891722] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  169.915701] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  170.939686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  171.963764] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  172.987783] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  173.051669] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  174.011773] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-150"
+B36-POLL-OVMXB-150
+$ [  175.035757] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:31:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  176.059742] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  177.083691] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  178.107695] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  179.131740] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  180.155722] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  181.179718] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  182.203691] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  183.227711] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  183.291748] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  184.251708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  185.275686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  186.299708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  187.323843] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  188.347696] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  189.371704] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-165"
+B36-POLL-OVMXB-165
+$ [  190.395684] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:31:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  191.419722] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  192.443700] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  193.467686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  193.531729] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  194.491695] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  195.515699] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  196.539671] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  197.563695] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  198.587679] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  199.611679] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  200.635693] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  201.659700] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  202.683681] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  203.707674] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  203.771689] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  204.731695] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-180"
+B36-POLL-OVMXB-180
+$ [  205.755734] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:31:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  206.779692] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  207.803707] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  208.827650] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  209.851658] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  210.875640] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  211.899685] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  212.923684] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  213.947695] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  214.011671] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  214.971739] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  215.995714] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  217.019703] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  218.043672] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  219.067702] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-195"
+B36-POLL-OVMXB-195
+$ [  220.091698] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:32:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  221.115692] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  222.139711] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  223.163726] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  224.187734] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  224.251738] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  225.211700] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  226.235681] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  227.259730] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  228.283702] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  229.307726] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  230.331692] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  231.355679] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  232.379692] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  233.403690] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  234.431056] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  234.491854] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-210"
+B36-POLL-OVMXB-210
+$ [  235.451687] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:32:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  236.475659] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  237.499714] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  238.523742] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  239.547803] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  240.571680] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  241.595680] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  242.619698] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  243.643686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  244.667709] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  244.731686] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  245.691726] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  246.715720] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  247.739677] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  248.763685] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  249.787689] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-225"
+B36-POLL-OVMXB-225
+$ [  250.811698] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:32:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  251.835706] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  252.859683] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  253.883717] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  254.907735] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  254.971698] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  255.931708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  256.955674] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  257.979739] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  259.003697] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  260.027681] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  261.051712] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  262.075818] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  263.099696] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  264.123703] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  265.147698] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-240"
+B36-POLL-OVMXB-240
+$ [  265.211667] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:32:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  266.171693] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  267.195728] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  268.219685] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  269.243743] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  270.267681] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  271.291727] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  272.315695] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  273.339639] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  274.363680] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  275.387675] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  275.451694] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  276.411679] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  277.435722] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  278.459721] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  279.483676] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-255"
+B36-POLL-OVMXB-255
+$ [  280.507715] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:33:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  281.531706] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  282.555682] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  283.579713] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  284.603715] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  285.627664] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  285.691709] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  286.651722] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  287.675714] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  288.699681] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  289.723663] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  290.747694] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  291.771705] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  292.795701] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  293.819728] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-270"
+B36-POLL-OVMXB-270
+$ [  294.843708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  295.867668] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:33:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |[  295.931696] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  296.894115] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  297.915694] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  298.939711] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  299.963656] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  300.987744] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  302.011737] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  303.035708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  304.059866] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  305.083690] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  306.107879] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  306.171691] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  307.131704] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  308.155790] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  309.179748] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-285"
+B36-POLL-OVMXB-285
+$ [  310.203692] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:33:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  311.227713] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  312.251730] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  313.275701] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  314.299698] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  315.323679] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  316.347682] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  316.411713] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  317.371693] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  318.395679] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  319.419708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  320.443711] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  321.467702] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  322.491676] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  323.515707] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  324.539683] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-300"
+B36-POLL-OVMXB-300
+$ [  325.563686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  326.587701] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:33:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  326.651690] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  327.611731] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  328.635679] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  329.659693] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  330.683686] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  331.707774] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  332.731657] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  333.755692] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  334.779712] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  335.803684] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  336.827737] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  336.891687] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  337.851742] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  338.875729] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-315"
+B36-POLL-OVMXB-315
+$ [  339.899663] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:34:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  340.923734] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  341.947853] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  342.971697] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  343.995716] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  345.019663] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  346.043708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  347.067830] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  347.131691] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  348.091770] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  349.115713] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  350.139696] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  351.163701] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  352.187734] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  353.211640] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  354.235711] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-330"
+B36-POLL-OVMXB-330
+$ [  355.259710] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:34:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  356.283718] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  357.307744] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  357.371762] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  358.331714] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  359.355714] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  360.379706] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  361.403700] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  362.427676] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  363.451733] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  364.475825] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  365.499687] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  366.523704] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  367.547699] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  367.611700] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  368.571698] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  369.595717] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-345"
+B36-POLL-OVMXB-345
+$ [  370.619744] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:34:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  371.643730] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  372.667694] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  373.691689] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  374.715679] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  375.739685] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  376.763698] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  377.787664] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  377.851687] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  378.811708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  379.835647] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  380.859695] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  381.883726] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  382.907695] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  383.931742] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-360"
+B36-POLL-OVMXB-360
+$ [  384.955722] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    26-SEP-2026 03:34:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | NEW              |
++---------------------------------------------------------------+
+$ [  385.979725] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  387.003731] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  388.027703] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  388.091702] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  389.051724] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  390.075734] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  391.099708] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  392.123694] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  393.147699] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  394.171714] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  395.195721] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  396.219823] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  397.243655] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  398.267755] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+[  398.331701] %SCS-W-CONNTIMO, connect verb unanswered, connection closed
+[  399.291791] %SCS-W-DIRNOANSWER, directory inquiry unanswered
+WRITE SYS$OUTPUT "B36-POLL-OVMXB-375"
+B36-POLL-OVMXB-375
+$ 

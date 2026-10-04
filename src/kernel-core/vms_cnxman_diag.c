@@ -317,6 +317,7 @@ const char *cnxman_diag_event_name(uint8_t event)
 	case CNXMAN_EV_RX_COMMIT:      return "RX_COMMIT";
 	case CNXMAN_EV_CM_ACCEPTED:    return "CM_ACCEPTED";
 	case CNXMAN_EV_TRANSITION_DONE: return "TRANSITION_DONE";
+	case CNXMAN_EV_RX_ABORT:       return "RX_ABORT";
 	case CNXMAN_DIAG_EV_NONE:      return "-";
 	default:                       return "?";
 	}

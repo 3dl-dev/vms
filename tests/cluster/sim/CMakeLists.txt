@@ -81,6 +81,10 @@ cluster_sim_test(test_sim_vc test_sim_vc.c)
 # (cluster_host_cnxman), inbound frames from the manifest-hashed specimens
 # (cluster_host_fixture), time from the simulator's own virtual clock. This is
 # the "add the file, then ONE line here" path the comment above describes.
+# rd vms-8c54: the STALLED GUEST. Pure pe stacks, no cnxman, no fixtures --
+# the "add the file, then ONE line here" path in its simplest form.
+cluster_sim_test(test_sim_pe_stalled_guest scenarios/pe_stalled_guest.c)
+
 cluster_sim_test(test_sim_cnxman_join scenarios/cnxman_join.c)
 target_link_libraries(test_sim_cnxman_join PRIVATE
     cluster_host_cnxman cluster_host_fixture)
@@ -88,6 +92,31 @@ target_compile_definitions(test_sim_cnxman_join PRIVATE
     OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
     OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256")
 target_include_directories(test_sim_cnxman_join PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
+# rd vms-e88's rung-R2 leg: the real V7.3 trio C3 -- a joiner that can reach one
+# of two members -- replayed at one simulated joiner over five virtual minutes.
+cluster_sim_test(test_sim_cnxman_join_member_count
+                 scenarios/cnxman_join_waits_for_the_member_count.c)
+target_link_libraries(test_sim_cnxman_join_member_count PRIVATE
+    cluster_host_cnxman cluster_host_fixture)
+target_compile_definitions(test_sim_cnxman_join_member_count PRIVATE
+    OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
+    OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256")
+target_include_directories(test_sim_cnxman_join_member_count PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
+# rd vms-eb3's rung-R2 leg: the real V7.3 oracle F6 -- a joiner frozen after its
+# Phase-1 answer, the GO lost -- replayed through the shipping barrier, CSB
+# ladder and reconnect FSM on the virtual clock.
+cluster_sim_test(test_sim_cnxman_joiner_frozen_across_the_go
+                 scenarios/cnxman_joiner_frozen_across_the_go.c)
+target_link_libraries(test_sim_cnxman_joiner_frozen_across_the_go PRIVATE
+    cluster_host_cnxman cluster_host_fixture)
+target_compile_definitions(test_sim_cnxman_joiner_frozen_across_the_go PRIVATE
+    OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
+    OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256")
+target_include_directories(test_sim_cnxman_joiner_frozen_across_the_go PRIVATE
     ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
 # FC-P6.5's rung-R2 leg: TWO simulated nodes complete an MSCP WRITE over the
@@ -109,6 +138,18 @@ target_include_directories(test_sim_mscp_write PRIVATE
 cluster_sim_test(test_sim_dlm_directory scenarios/dlm_directory.c)
 target_link_libraries(test_sim_dlm_directory PRIVATE cluster_host_cnxman)
 
+# rd vms-dfe's rung-R2 leg: the MEASURED in-browser join stall
+# (tests/lab/captures/vms-e18e-cn3-browser-20260925/cn3-intermittent/), replayed
+# on the virtual clock. The whole 20-second p. 7-30 reconnect window is really
+# run, beat by beat, by the SHIPPING reconnect FSM over the SHIPPING CSB ladder
+# and join FSM -- no state is hand-set -- and the assertion is that the node
+# ASKS AGAIN within a bounded number of beats (p. 7-25's deallocate-and-rebuild)
+# without dialling the peer once a second to do it.
+cluster_sim_test(test_sim_cnxman_recover scenarios/cnxman_recover_after_giveup.c)
+target_link_libraries(test_sim_cnxman_recover PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_recover PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
 # rd vms-ci.6 (the V1.0 R5 release gate): the ROLLING-EVACUATION harness. A
 # workload is moved off a departing member onto a survivor and the cluster
 # STAYS UP -- proven as the shipping quorum ENFORCEMENT (cnxman_quorum_*, needs
@@ -120,6 +161,44 @@ target_link_libraries(test_sim_dlm_directory PRIVATE cluster_host_cnxman)
 # line here" path as dlm_directory above.
 cluster_sim_test(test_sim_rolling_evacuation scenarios/rolling_evacuation.c)
 target_link_libraries(test_sim_rolling_evacuation PRIVATE cluster_host_cnxman)
+
+# rd vms-b36's rung-R2 leg: a system the cluster NEVER ADMITTED loses its
+# connection and its whole p. 7-30 window runs out on the virtual clock, driven
+# by the SHIPPING reconnect FSM over the SHIPPING CSB ladder, with every PROPOSE
+# action followed through into the SHIPPING coordinator FSM. The assertion is
+# that NOTHING reaches the wire -- proposing a class-0x03 removal for a system
+# p. 7-49 never selected is what bugchecked a real OpenVMS VAX V7.3 CNXMGRERR --
+# with a positive control that a COMMITTED member is still removed.
+cluster_sim_test(test_sim_cnxman_never_admitted
+                 scenarios/cnxman_never_admitted_not_removed.c)
+target_link_libraries(test_sim_cnxman_never_admitted PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_never_admitted PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
+# rd vms-0f9's rung-R2 leg: the whole standoff on the virtual clock. The
+# p. 7-30 window really runs out, the SHIPPING acceptance policy then refuses
+# the same incarnation once a second, CLUEXIT re-incarnates, and the very next
+# offer is taken -- plus the other way out, a PEER that re-incarnates and is
+# taken back with no CLUEXIT at all (p. 7-25). The teeth: p. 7-24's REACCEPT is
+# asserted INSIDE the window, so a gate that refused everything reds here.
+cluster_sim_test(test_sim_cnxman_giveup_reject
+                 scenarios/cnxman_giveup_reject_cluexit.c)
+target_link_libraries(test_sim_cnxman_giveup_reject PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_giveup_reject PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
+
+# rd vms-8a9's rung-R2 leg: a member whose block for a peer p. 7-25 deallocated
+# (#1309) relearns that peer's CSID from the ONE membership record the
+# coordinator sends an existing member -- byte-grounded on the three-real-node
+# oracle, where VAX3 was removed at CSID 00010003/index 2 and re-admitted at
+# 00010004/index 3 -- and the SHIPPING phase-2 commit can then name it. The
+# CONTROL is the measured defect itself: without the record the identical
+# commit leaves the peer NEW and the member count one short.
+cluster_sim_test(test_sim_cnxman_rebuilt_view
+                 scenarios/cnxman_rebuilt_view_relearns_csid.c)
+target_link_libraries(test_sim_cnxman_rebuilt_view PRIVATE cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_rebuilt_view PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)
 
 # FC-P4.6's rung-R2 leg: the REAL lock engine (vms_lock.c on FC-P4.9's host
 # backend), the REAL requester FSM and the REAL Lock Directory Weight Vector in
@@ -168,3 +247,17 @@ target_compile_definitions(test_replay PRIVATE
     OVMX_FIXTURE_DIR="${CMAKE_SOURCE_DIR}/tests/cluster/host/fixtures"
     OVMX_CLEANROOM_MANIFEST="${CMAKE_SOURCE_DIR}/docs/clean-room/reference-captures.sha256"
 )
+
+# rd vms-8c54's rung-R2 leg: the p. 7-24 reconnect window run beat by beat on
+# the virtual clock by the SHIPPING reconnect FSM over the SHIPPING CSB ladder,
+# and the sixteen bytes the reconnect it produces would emit -- built by the
+# SHIPPING codec from that block's own counters and compared against the two
+# real OpenVMS VAX V7.3 members' own connects. The CONTROL is the other half of
+# the rule in the same file: a system the cluster has REMOVED starts over,
+# which is E76/E77's case and must not change.
+cluster_sim_test(test_sim_cnxman_reconnect_dialogue
+                 scenarios/cnxman_reconnect_carries_dialogue.c)
+target_link_libraries(test_sim_cnxman_reconnect_dialogue PRIVATE
+    cluster_host_cnxman)
+target_include_directories(test_sim_cnxman_reconnect_dialogue PRIVATE
+    ${CMAKE_SOURCE_DIR}/tests/cluster/host)

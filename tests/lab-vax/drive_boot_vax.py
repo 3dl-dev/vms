@@ -50,9 +50,12 @@
 # command here has its own console deadline, so nothing hangs.
 
 import os
+import re
+import shutil
 import sys
 import signal
 import subprocess
+import tempfile
 import time
 import traceback
 
@@ -73,7 +76,10 @@ from vaxharness import HARNESS_ERROR, PROOF_FAILED
 
 # The milestone lines ovmx_init emits, in the order the flagless NetBSD boot
 # path produces them (src/ovmx_init/ovmx_init.c bare_metal_init / main).
-MS_SYSKRNL = "OVMX/NetBSD"                                   # SYSKRNL identity
+# rd vms-553: there is no SYSKRNL ("OVMX/NetBSD -- SYSKRNL ...") milestone on
+# this substrate any more -- the VAX console carries the VMS personality only,
+# so the first OVMX line is the executive attach. What replaces it is the
+# console-quiet check below (SUBSTRATE_MARKERS), which has teeth of its own.
 MS_EXEC    = "VMS executive attached on /dev/vms"           # /dev/vms open
 MS_BANNER  = "OpenVMS-compatible"                           # product banner
 MS_MOUNTED = "system disk DUA0: mounted"                    # ODS-2 mounted
@@ -86,6 +92,53 @@ MS_MOUNTED = "system disk DUA0: mounted"                    # ODS-2 mounted
 # Seeing "-> ra0e" (not "-> ra1c") is the deterministic proof the system disk
 # came off the SAME disk that booted, with NO rq1 attached.
 MS_DUA0_RA0E = r"disk unit DUA0: -> ra0e"
+# rd vms-553: that line is a vms.kmod printf(9), and the OVMX_QUIET kernel
+# (tools/cross-vax/netbsd-ovmx-quiet.patch) keeps kernel printf in the message
+# buffer, off the console -- so it is no longer something the console shows.
+# The single-disk proof keeps its teeth structurally instead: do_sysboot attaches
+# rq0 ONLY (no rq1, no CD), so a %OVMX-I-MOUNTED for DUA0: can only have come off
+# a partition of the disk that booted; run-boot.sh's sha256 before/after then
+# proves the writes landed in that one file.
+
+# rd vms-553: the OpenVMX/VAX console shows the VMS personality, never the
+# NetBSD substrate. Fixed at the source (OVMX_QUIET kernel + quiet /boot), and
+# asserted here on the RAW console text, with no display-side filtering
+# anywhere. Any of these on the console between the KA655 `>>>' and the login
+# prompt is a failure. The last pattern is the kernel's own message timestamp:
+# every printf(9) line carries one, while the executive's operator lines
+# (TOCONSOP) are written to the console without it -- so ANY timestamped line
+# on the console is kernel chatter that leaked past the quiet gate.
+SUBSTRATE_MARKERS = [
+    r"NetBSD", r"Copyright \(c\)", r"The NetBSD Foundation", r"\bmainbus0\b",
+    r"total memory", r"avail memory", r"\broot on\b", r"boot device",
+    r"^\s*\[\s*\d+\.\d+\]\s",
+]
+_SUBSTRATE_RES = [re.compile(m) for m in SUBSTRATE_MARKERS]
+
+
+def substrate_lines(text):
+    """The lines of `text' that carry a NetBSD substrate marker."""
+    return [ln for ln in text.replace("\r", "").split("\n")
+            if any(r.search(ln) for r in _SUBSTRATE_RES)]
+
+
+def _scan_substrate(child, seen):
+    """Record any substrate line in the console text the last expect() consumed
+    (child.before). Called after every boot-phase milestone, so together the
+    calls cover the whole console from `>>>' to the login prompt."""
+    hits = substrate_lines(_console_text(child))
+    if hits:
+        seen.setdefault("substrate_lines", []).extend(hits)
+
+
+def _console_quiet(seen):
+    if seen.get("substrate_lines"):
+        log("FAIL (rd vms-553): NetBSD substrate output reached the RAW console "
+            "(%d line(s)):" % len(seen["substrate_lines"]))
+        for ln in seen["substrate_lines"][:40]:
+            log("    | %s" % ln)
+        return False
+    return True
 
 # vms-d9c: the milestones PAST the mount, on a real installed OVMX SYSTEM volume
 # (the sysboot mode). require_installed_system() halts %OVMX-F-SYSINIT with this
@@ -249,23 +302,46 @@ def _console_text(child):
     return str(raw)
 
 
-def build_source_iso(artifacts_dir, out_iso, required):
+def build_source_iso(artifacts_dir, out_iso, required, extra_files=None):
     """Bundle the boot deliverables (the WHOLE artifacts dir) into an ISO9660
     image attached as a second CD (rq2): STARTUP.EXE (-> /sbin/init), the
     loadable vms.kmod + vmsfs.kmod (-> the kernel module_path), and the custom
     MODULAR kernel netbsd-OVMX (-> /netbsd, for install-kernel). `required' is
-    the subset this mode must have present."""
+    the subset this mode must have present (in artifacts_dir OR extra_files).
+
+    extra_files (rd vms-cee): optional {basename: host_path} of additional
+    files to stage onto the CD from OUTSIDE artifacts_dir -- needed because
+    artifacts_dir is typically a read-only mount (run-boot.sh's `-v
+    ARTIFACTS_DIR:/artifacts:ro'), so a caller-authored file (e.g. a per-node
+    CLUSTER_AUTHORIZE.DAT) cannot be dropped into it directly. None/empty ->
+    byte-identical to the original behavior (the ISO is built directly from
+    artifacts_dir, no staging copy)."""
     for f in required:
         p = os.path.join(artifacts_dir, f)
-        if not os.path.isfile(p):
+        if not os.path.isfile(p) and not (extra_files and f in extra_files):
             raise RuntimeError("missing boot artifact: %s" % p)
     if os.path.exists(out_iso):
         os.remove(out_iso)
-    cmd = ["genisoimage", "-quiet", "-J", "-r", "-V", "OVMXBOOT",
-           "-o", out_iso, artifacts_dir]
-    log("building boot-artifact ISO: %s" % " ".join(cmd))
-    subprocess.check_call(cmd)
-    log("boot-artifact ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
+    src_dir = artifacts_dir
+    tmp_stage = None
+    if extra_files:
+        tmp_stage = tempfile.mkdtemp(prefix="ovmx-iso-stage-")
+        for name in os.listdir(artifacts_dir):
+            s = os.path.join(artifacts_dir, name)
+            if os.path.isfile(s):
+                shutil.copyfile(s, os.path.join(tmp_stage, name))
+        for name, path in extra_files.items():
+            shutil.copyfile(path, os.path.join(tmp_stage, name))
+        src_dir = tmp_stage
+    try:
+        cmd = ["genisoimage", "-quiet", "-J", "-r", "-V", "OVMXBOOT",
+               "-o", out_iso, src_dir]
+        log("building boot-artifact ISO: %s" % " ".join(cmd))
+        subprocess.check_call(cmd)
+        log("boot-artifact ISO built: %s (%d bytes)" % (out_iso, os.path.getsize(out_iso)))
+    finally:
+        if tmp_stage:
+            shutil.rmtree(tmp_stage, ignore_errors=True)
 
 
 def do_install_kernel(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
@@ -274,8 +350,14 @@ def do_install_kernel(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
     can load until this runs. Idempotent via run-boot.sh's marker; boots the
     current kernel single-user and copies the MODULAR kernel over /netbsd,
     keeping the original as /netbsd.GENERIC. Same operation the devvms/vmsfs
-    drivers perform on this shared disk."""
-    build_source_iso(artifacts_dir, src_iso, ("netbsd-OVMX",))
+    drivers perform on this shared disk.
+
+    rd vms-553: the same session installs the OVMX_QUIET secondary bootstrap
+    (boot-OVMX, built with the kernel by build-vax-modular-kernel.sh) as /boot,
+    keeping the stock one as /boot.GENERIC. xxboot loads /boot by name, so the
+    next boot's autoboot is silent; the kernel's own quiet is the OVMX_QUIET
+    option compiled into netbsd-OVMX."""
+    build_source_iso(artifacts_dir, src_iso, ("netbsd-OVMX", "boot-OVMX"))
     src_abs = os.path.abspath(src_iso)
     vmm_args = ["set rq2 cdrom", "attach -r rq2 " + src_abs]
     log("booting single-user to swap in the MODULAR kernel (deadline %ds)..."
@@ -292,13 +374,86 @@ def do_install_kernel(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
                   "test -n \"$ok\" || { echo NO_KERNEL_CD; exit 1; }; "
                   "test -f /netbsd.GENERIC || cp /netbsd /netbsd.GENERIC; "
                   "cp /mnt/netbsd-OVMX /netbsd.new && mv /netbsd.new /netbsd && "
-                  "sync && umount /mnt && ls -l /netbsd /netbsd.GENERIC",
+                  "test -f /boot.GENERIC || cp /boot /boot.GENERIC; "
+                  "cp /mnt/boot-OVMX /boot.new && mv /boot.new /boot && "
+                  "sync && umount /mnt && "
+                  "ls -l /netbsd /netbsd.GENERIC /boot /boot.GENERIC",
                   cmd_timeout)
     if rc != 0:
-        log("FAIL: could not install the MODULAR kernel onto /netbsd")
+        log("FAIL: could not install the MODULAR kernel + quiet /boot")
         return PROOF_FAILED
     run(child, "sync; mount -u -r / 2>/dev/null; sync", cmd_timeout)
-    log("OK: installed MODULAR kernel as /netbsd; next boot has modules(9)")
+    log("OK: installed MODULAR+OVMX_QUIET kernel as /netbsd and the quiet "
+        "secondary bootstrap as /boot; next boot has modules(9)")
+    return 0
+
+
+# rd vms-553: what the message buffer must still hold after a quiet boot. The
+# OVMX_QUIET kernel moves its output OFF the console, it does not drop it.
+DMESG_MUST_HOLD = [r"The NetBSD Foundation", r"Copyright \(c\)",
+                   r"total memory", r"avail memory", r"\bmainbus0\b",
+                   r"boot device", r"\broot on\b"]
+
+
+def do_kernel_quiet(a, boot_deadline, cmd_timeout):
+    """rd vms-553: prove BOTH halves of the OVMX_QUIET substrate on the disk
+    the MODULAR kernel was just installed onto (whose stock init still gives a
+    single-user shell): boot it from the KA655 `>>>', and assert that the RAW
+    console from there to the shell prompt carries no NetBSD substrate output
+    (SUBSTRATE_MARKERS -- secondary bootstrap, kernel banner, memory sizing,
+    autoconf, root/boot device) -- and then that `dmesg' still holds those
+    kernel lines (DMESG_MUST_HOLD), i.e. they went to the message buffer
+    instead of being deleted. Either half failing is a red."""
+    import pexpect
+
+    a.dist.set_workdir(a.workdir)
+    a.n_cdrom = 0
+    child = a.start_simh([])
+    try:
+        child.timeout = boot_deadline
+        child.expect(r">>>")
+        child.send("B/R5:2 DUA0\r")
+        child.expect(r"Enter pathname of shell or RETURN for /bin/sh:")
+        boot_text = _console_text(child)
+        hits = substrate_lines(boot_text)
+        child.send("\n")
+        child.expect(r"# ")
+        # Root stays read-only (this is the SHARED disk); the console helper
+        # needs a writable /tmp, so give it a tmpfs rather than remounting /.
+        child.sendline("PATH=/sbin:/bin:/usr/sbin:/usr/bin; export PATH; "
+                       "stty -echo 2>/dev/null; mount_tmpfs tmpfs /tmp; true")
+        child.expect(r"# ")
+        con = console(child)
+        con.set_unique_prompt()
+        rc, dmesg = run(child, "dmesg", cmd_timeout)
+        if not isinstance(dmesg, str):
+            dmesg = (dmesg or b"").decode("utf-8", "replace")
+    except (pexpect.TIMEOUT, pexpect.EOF) as e:
+        log("KERNEL-QUIET INCONCLUSIVE: the single-user boot did not reach a "
+            "shell (%s)" % type(e).__name__)
+        return PROOF_FAILED
+    finally:
+        _hard_kill(child)
+
+    log("raw console, >>> to the single-user prompt (%d chars):" % len(boot_text))
+    for ln in boot_text.replace("\r", "").split("\n"):
+        log("    | %s" % ln)
+    ok = True
+    if hits:
+        ok = False
+        log("FAIL: %d NetBSD substrate line(s) reached the RAW console:" % len(hits))
+        for ln in hits:
+            log("    ! %s" % ln)
+    missing = [m for m in DMESG_MUST_HOLD if not re.search(m, dmesg)]
+    if rc != 0 or missing:
+        ok = False
+        log("FAIL: dmesg (rc=%s) does not hold the kernel's boot lines; "
+            "missing=%s" % (rc, missing))
+    if not ok:
+        return PROOF_FAILED
+    log("PASS (rd vms-553): the RAW console showed no NetBSD substrate output, "
+        "and dmesg still holds every kernel boot line (%d bytes): %s"
+        % (len(dmesg), ", ".join(DMESG_MUST_HOLD)))
     return 0
 
 
@@ -473,7 +628,7 @@ def do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout):
 
 
 def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
-                       boot_deadline, cmd_timeout):
+                       boot_deadline, cmd_timeout, cluster_authorize_path=""):
     """vms-7b15: turn the already-assembled boot disk (ovmx_init + modules + boot
     nodes, a COPY of boot-work/wd0.img) into a SINGLE-disk image whose one MSCP
     disk both VMB-boots the NetBSD root AND carries the OVMX ODS-2 volume in a
@@ -495,13 +650,29 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
       3. replaces the target's module_path vms.kmod with the CD's freshly-built
          one  -- the boot-work copy carries a vms.kmod built BEFORE the ra0e
          discovery landed; the running executive must be the new one.
+      4. OPTIONAL (cluster_authorize_path, rd vms-cee): drops a CLUSTER_AUTHORIZE.DAT
+         onto the target's root FFS at /etc/ovmx/cluster_authorize.dat -- the ONLY
+         build-time point a browser-demo VAX node's cluster GROUP can be authored,
+         since the FFS root ('a') has no offline writer (unlike the ODS-2 'e'
+         partition, which inject-ods2-config.sh already writes offline). This
+         session already boots the target single-user with a writable root
+         specifically to edit its FFS, so writing one more small file here is the
+         sound build-time path -- not a new live-boot session, and no regression
+         to the default (empty path -> byte-identical behavior to before).
 
     The disklabel rewrite (shrink 'a', add the ODS-2 'e' partition) and the dd of
     the mastered ODS-2 volume into 'e' happen HOST-side afterwards
     (mk_single_disk.py), because they need no NetBSD tools and are deterministic.
     This session only does what genuinely needs a NetBSD kernel: the FFS resize
     and the on-target device/module edits."""
-    build_source_iso(artifacts_dir, src_iso, ("vms.kmod",))
+    want_cluster_auth = bool(cluster_authorize_path)
+    extra_files = None
+    if want_cluster_auth:
+        if not os.path.isfile(cluster_authorize_path):
+            log("FAIL: cluster-authorize path not found: %s" % cluster_authorize_path)
+            return HARNESS_ERROR
+        extra_files = {"cluster_authorize.dat": cluster_authorize_path}
+    build_source_iso(artifacts_dir, src_iso, ("vms.kmod",), extra_files=extra_files)
     src_abs = os.path.abspath(src_iso)
     single_abs = os.path.abspath(single_img)
     vmm_args = ["set rq1 ra92", "attach rq1 " + single_abs,
@@ -611,6 +782,23 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
         return PROOF_FAILED
     log("OK: /mnt/dev/ra0e (the ODS-2 partition node) created on the target")
 
+    # rd vms-cee: when requested, also drop CLUSTER_AUTHORIZE.DAT onto the
+    # target's root FFS at /etc/ovmx/cluster_authorize.dat (cluster_authorize.h
+    # CLUSTER_AUTH_DEFAULT_PATH) -- the same CD, same mount, same session; the
+    # file is already on the CD via build_source_iso's extra_files (do_assemble_
+    # single). Absent (default), this clause is empty and the shell + its
+    # verification are byte-identical to before (no regression).
+    cluster_auth_clause = ""
+    cluster_auth_verify = ""
+    if want_cluster_auth:
+        cluster_auth_clause = (
+            "test -f /cdrom/cluster_authorize.dat || "
+            "{ echo NO_CLUSTER_AUTH_CD; exit 1; }; "
+            "mkdir -p /mnt/etc/ovmx && "
+            "cp /cdrom/cluster_authorize.dat /mnt/etc/ovmx/cluster_authorize.dat.new && "
+            "mv /mnt/etc/ovmx/cluster_authorize.dat.new /mnt/etc/ovmx/cluster_authorize.dat && "
+        )
+        cluster_auth_verify = " && test -f /mnt/etc/ovmx/cluster_authorize.dat"
     rc, out = run(child,
                   "MP=`sysctl -n kern.module.path | cut -d: -f1`; "
                   "echo module_path=$MP; DEST=/mnt$MP/vms/vms.kmod; "
@@ -624,14 +812,17 @@ def do_assemble_single(a, single_img, artifacts_dir, src_iso, new_a_sectors,
                   "test -n \"$ok\" || { echo NO_KMOD_CD; exit 1; }; "
                   "test -f \"$DEST\" || { echo NO_DEST_KMOD; exit 1; }; "
                   "cp /cdrom/vms.kmod \"$DEST.new\" && mv \"$DEST.new\" \"$DEST\" && "
-                  "sync && umount /cdrom && ls -l \"$DEST\"",
+                  + cluster_auth_clause +
+                  "sync && umount /cdrom && ls -l \"$DEST\""
+                  + cluster_auth_verify,
                   cmd_timeout)
     if rc != 0:
-        log("FAIL: could not replace the target's module_path vms.kmod with the "
-            "ra0e-aware build:\n%s" % out)
+        log("FAIL: could not replace the target's module_path vms.kmod%s:\n%s"
+            % (" / drop cluster_authorize.dat" if want_cluster_auth else "", out))
         run(child, "umount /mnt 2>/dev/null; true", cmd_timeout)
         return PROOF_FAILED
-    log("OK: target module_path vms.kmod replaced with the ra0e-aware build")
+    log("OK: target module_path vms.kmod replaced with the ra0e-aware build"
+        + (" + /etc/ovmx/cluster_authorize.dat installed" if want_cluster_auth else ""))
 
     run(child, "sync; umount /mnt 2>/dev/null; sync", cmd_timeout)
     # Remove the swap file from the shared root (tidy; the next run recreates it).
@@ -671,8 +862,7 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
         # ovmx_init IS init: no shell, no login. Watch the console for the
         # milestone lines in order. Each expect has the boot deadline; a
         # milestone that never arrives times out -> honest failure.
-        want_order = [("syskrnl", MS_SYSKRNL), ("exec", MS_EXEC),
-                      ("banner", MS_BANNER)]
+        want_order = [("exec", MS_EXEC), ("banner", MS_BANNER)]
         if not negctl:
             want_order.append(("mounted", MS_MOUNTED))
 
@@ -680,6 +870,7 @@ def do_prove(a, ods2_img, negctl, boot_deadline):
             for key, pat in want_order:
                 child.expect(pat, timeout=boot_deadline)
                 seen[key] = True
+                _scan_substrate(child, seen)
                 log("MILESTONE: saw %r" % pat)
         except pexpect.TIMEOUT:
             log("timed out waiting for a boot milestone; saw=%s" % sorted(seen))
@@ -795,20 +986,16 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
         child.expect(r">>>")
         child.send("B/R5:2 DUA0\r")
 
-        # Pre-mount milestones, same order as do_prove. In single-disk mode the
-        # "DUA0: -> ra0e" backing line is inserted between MS_SYSKRNL and MS_EXEC
-        # (vms.kmod's register_units prints it during the modctl load, before
-        # ovmx_init emits the executive-attached line) -- deterministic proof the
-        # system disk bound to a PARTITION of the boot disk, not a second disk.
-        premount = [("syskrnl", MS_SYSKRNL)]
-        if single:
-            premount.append(("dka0_ra0e", MS_DUA0_RA0E))
-        premount += [("exec", MS_EXEC), ("banner", MS_BANNER),
-                     ("mounted", MS_MOUNTED)]
+        # Pre-mount milestones, same order as do_prove. (Single-disk mode used
+        # to also wait for vms.kmod's "DUA0: -> ra0e" printf here; under the
+        # OVMX_QUIET kernel that line is in dmesg only -- see MS_DUA0_RA0E.)
+        premount = [("exec", MS_EXEC), ("banner", MS_BANNER),
+                    ("mounted", MS_MOUNTED)]
         for key, pat in premount:
             try:
                 child.expect(pat, timeout=boot_deadline)
                 seen[key] = True
+                _scan_substrate(child, seen)
                 log("MILESTONE: saw %r" % pat)
             except (pexpect.TIMEOUT, pexpect.EOF):
                 log("did not reach milestone %r; saw=%s" % (pat, sorted(seen)))
@@ -822,6 +1009,7 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
             # EOF/TIMEOUT are caught below and reported as an unresolved gate.
             idx = child.expect([MS_STDRV, MS_INSTALLED_GATE_FAIL],
                                timeout=boot_deadline)
+            _scan_substrate(child, seen)
             if idx == 0:
                 seen["stdrv"] = True
                 log("MILESTONE: saw %r -- PAST the installed-system gate; PID 1 "
@@ -851,6 +1039,7 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                 # yields a re.Match with .group().
                 idx = child.expect([MS_PROVISION_RUNNING, MS_PROVISION_HALT,
                                     MS_PROVISION_NOIMG], timeout=300)
+                _scan_substrate(child, seen)
                 if idx == 0:
                     seen["provision_running"] = True
                     log("MILESTONE: %r -- PROVISION.EXE demand-paged off the ODS-2 "
@@ -907,6 +1096,7 @@ def do_sysboot(a, sysvol_img, negctl, boot_deadline, single=False,
                                           MS_PROVISION_IVLOGNAM, MS_PROVISION_HALT,
                                           MS_PROVISION_NOIMG],
                                   total_timeout=_login_deadline)
+                _scan_substrate(child, seen)
                 if idx == 0:
                     seen["login"] = True
                     seen["provision_outcome"] = "LOGIN(Username:) -- DCL capstone (vms-d59)"
@@ -1173,6 +1363,10 @@ def main():
     single_img = env("OVMX_SINGLE_IMG", "/cache/single-work/wd0.img")
     single_a_sectors = int(env("OVMX_SINGLE_A_SECTORS", "524288"))  # 256 MiB
     single_rq0_type = env("OVMX_SINGLE_RQ0_TYPE", "RAUSER=340")     # 324 MiB
+    # rd vms-cee: OPTIONAL host path to a CLUSTER_AUTHORIZE.DAT to install onto
+    # the assemble-single target's FFS root at /etc/ovmx/cluster_authorize.dat.
+    # Empty (default) -> assemble-single is byte-identical to before.
+    cluster_authorize_path = env("OVMX_CLUSTER_AUTH_FILE", "")
 
     boot_deadline = int(env("NETBSD_BOOT_DEADLINE", "1800"))
     cmd_timeout = int(env("NETBSD_CMD_TIMEOUT", "600"))
@@ -1205,6 +1399,9 @@ def main():
         if mode == "install-boot":
             return do_install_boot(a, artifacts_dir, src_iso, boot_deadline, cmd_timeout)
 
+        if mode == "kernel-quiet":
+            return do_kernel_quiet(a, boot_deadline, cmd_timeout)
+
         if mode == "acceptance":
             # rd vms-f2c: bridge the SINGLE-disk boot's console to the shared
             # DCL/SHOW acceptance battery (the bash orchestrator
@@ -1221,7 +1418,8 @@ def main():
                     "first)" % single_img)
                 return HARNESS_ERROR
             return do_assemble_single(a, single_img, artifacts_dir, src_iso,
-                                      single_a_sectors, boot_deadline, cmd_timeout)
+                                      single_a_sectors, boot_deadline, cmd_timeout,
+                                      cluster_authorize_path=cluster_authorize_path)
 
         if mode in ("sysboot", "sysboot-negctl", "sysboot-single"):
             sb_negctl = (mode == "sysboot-negctl")
@@ -1240,19 +1438,14 @@ def main():
             # Pre-mount milestones are required in ALL cases -- a run that never
             # even mounts cannot conclude anything about the installed-system
             # gate.
-            if not (seen.get("syskrnl") and seen.get("exec")
+            if not (seen.get("exec")
                     and seen.get("banner") and seen.get("mounted")):
                 log("SYSBOOT INCONCLUSIVE: did not reach the pre-gate milestones "
                     "(executive attach + banner + MOUNTED); saw=%s" % sorted(seen))
                 return PROOF_FAILED
 
-            # vms-7b15: the single-disk proof additionally REQUIRES that DUA0:
-            # bound to /dev/ra0e (a PARTITION of the boot disk), not ra1c (a
-            # second disk) -- the whole point of the single-disk layout.
-            if sb_single and not seen.get("dka0_ra0e"):
-                log("SYSBOOT-SINGLE FAILED: the executive did NOT bind DUA0: to "
-                    "/dev/ra0e (the ODS-2 partition on the boot disk) -- expected "
-                    "the %r evidence line; saw=%s" % (MS_DUA0_RA0E, sorted(seen)))
+            # rd vms-553: the RAW console carried no NetBSD substrate output.
+            if not _console_quiet(seen):
                 return PROOF_FAILED
 
             if sb_negctl:
@@ -1409,7 +1602,7 @@ def main():
                     "appeared with no ODS-2 volume -- the mount assertion has "
                     "no teeth")
                 return PROOF_FAILED
-            if not (seen.get("syskrnl") and seen.get("exec") and seen.get("banner")):
+            if not (seen.get("exec") and seen.get("banner")):
                 log("NEGATIVE CONTROL INCONCLUSIVE: ovmx_init did not even reach "
                     "the pre-mount milestones (executive attach + banner); "
                     "cannot conclude the mount assertion is what reddened")
@@ -1419,10 +1612,12 @@ def main():
                 "NOT appear without an ODS-2 system disk")
             return 0
 
-        need = ["syskrnl", "exec", "banner", "mounted"]
+        need = ["exec", "banner", "mounted"]
         missing = [k for k in need if not seen.get(k)]
         if missing:
             log("FAIL: boot did not reach every milestone; missing=%s" % missing)
+            return PROOF_FAILED
+        if not _console_quiet(seen):
             return PROOF_FAILED
         log("======================================================================")
         log("  BOOT-VAX PASSED: ovmx_init ran as PID 1 on NetBSD/vax under SIMH,")

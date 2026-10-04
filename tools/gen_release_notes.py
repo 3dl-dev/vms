@@ -67,7 +67,18 @@ VERSION_RE = re.compile(r'^#define\s+OVMX_PRODUCT_VERSION\s+"([^"]*)"', re.M)
 # release" by previous_release_tag() below, so the NEXT release's notes
 # would silently skip straight back to the last non-suffixed tag and
 # re-list commits the point release already shipped.
-RELEASE_TAG_RE = re.compile(r'^v?[0-9]+(\.[0-9]+)+(-[0-9]+)?$')
+#
+# CASE-INSENSITIVE (bug fix, cut V0.7-1): this repo's tag convention moved to
+# an uppercase-"V" prefix starting around V0.4 (V0.5-11, V0.6, V0.6-1..16,
+# V0.7, ...), but this regex only matched a LOWERCASE optional "v". Every
+# uppercase-V tag therefore silently failed to match and was excluded from
+# previous_release_tag()'s candidate list -- previous_release_tag() fell back
+# past the entire V0.x tag run to the last tag that DID match (a stray bare
+# "0.3-8"), so every release from V0.4 through V0.7 shipped notes spanning
+# hundreds of commits already covered by earlier releases, not the true
+# delta since the immediately-preceding tag. re.IGNORECASE fixes matching for
+# both "v0.1.0"-style and "V0.6-14"-style tags.
+RELEASE_TAG_RE = re.compile(r'^v?[0-9]+(\.[0-9]+)+(-[0-9]+)?$', re.IGNORECASE)
 ATTEST_RE = re.compile(r'^Attest [0-9a-f]{40}$')
 
 # Reverse-engineering / cluster-wire-protocol work: this project's commit
@@ -140,7 +151,9 @@ def previous_release_tag(repo_root, ref):
         # ahead of it but behind the next dotted release, matching how
         # cut-release.sh names them (vms-1d28).
         main, _, suffix = tag.partition('-')
-        key = [int(p) for p in re.sub(r'^v', '', main).split('.')]
+        # Strip an optional leading "v"/"V" (case-insensitive, same bug fix as
+        # RELEASE_TAG_RE above -- this repo's real tags use uppercase "V").
+        key = [int(p) for p in re.sub(r'^[vV]', '', main).split('.')]
         key.append(int(suffix) if suffix else 0)
         return key
 

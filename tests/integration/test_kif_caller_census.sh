@@ -980,12 +980,13 @@ pp_regions() {
 #     is enforced by an explicit src/|tools/ filter -- a deliberate exclusion,
 #     not an accident of how the tree was configured.
 #   - An optional component that is not installed drops out of the build set.
-#     src/vmsssh/vmssshd.c needs libssh; on a host without it the census loses
-#     that file's call sites. MEASURED on this tree: vmssshd.c's only credit is
-#     vms_kif_setident, which tools/vms_login.c and src/ovmx_init/ovmx_init.c
-#     also credit, so the census verdict is unchanged either way TODAY. Re-run
-#     the per-file attribution rather than trusting that sentence after a
-#     change; there is no mechanism keeping it true.
+#     This used to matter for src/vmsssh/vmssshd.c (it needed libssh); the
+#     vms-d916 retirement DELETED that hand-rolled scaffold, so it is no longer
+#     a build-set variable here. Its only kif credit had been vms_kif_setident,
+#     which tools/vms_login.c and src/ovmx_init/ovmx_init.c also credit, so its
+#     removal leaves the census verdict unchanged. Re-run the per-file
+#     attribution rather than trusting that sentence after a change; there is no
+#     mechanism keeping it true.
 # ---------------------------------------------------------------------------
 case "$SRC_ROOT$WORK" in
     *[!-a-zA-Z0-9_/.]*)

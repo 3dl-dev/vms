@@ -1,0 +1,45 @@
+[07:50:25] goto http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA.cpio.gz&sysdisk=sysdisk-nodeA.qcow2.gz&nodeB=http%3A%2F%2Flocalhost%3A8301%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dka655x.bin%26diskgz%3Dovmx-vax-nodeB.img.gz&nodeC=http%3A%2F%2Flocalhost%3A8301%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dka655x.bin%26diskgz%3Dvms73-nodeC-cluster.dsk.gz
+[07:50:25] boot C
+[07:55:26] boot B
+[08:00:26] boot A
+[08:05:26] phase 1: waiting for each executive to announce membership (no input)
+[08:05:26]   OVMXA: announced MEMBER
+[08:05:26]   OVMXB: announced MEMBER
+[08:05:26] phase 2: logging in and reading each membership table
+[08:05:26]   OVMXB: reached Username:
+[08:05:36]   OVMXB: reached Password: (after 2 offers)
+[08:06:36]   OVMXB: sentinel did not echo (attempt 1); re-offering credentials
+[08:06:36]   OVMXB: Username: again
+[08:06:38]   OVMXB: reached Password: (after 1 offer)
+[08:06:40]   OVMXB: at DCL
+[08:06:40]   OVMXA: reached Username:
+[08:06:50]   OVMXA: reached Password: (after 2 offers)
+[08:07:50]   OVMXA: sentinel did not echo (attempt 1); re-offering credentials
+[08:07:50]   OVMXA: Username: again
+[08:07:52]   OVMXA: reached Password: (after 1 offer)
+[08:07:54]   OVMXA: at DCL
+[08:07:54]   VAXC: reached Username:
+[08:12:58]   VAXC: TIMED OUT waiting for reached Password: (38 offers)
+[08:12:58]     VAXC tail: "C (csid 00010001) proposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  25-SEP-2026 08:23:39.73  %%%%%%%%%%%\n08:23:39.70 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[08:12:58] logged in: {"OVMXB":true,"OVMXA":true,"VAXC":false}
+[08:12:58]   VAXC: reached Username:
+[08:18:03]   VAXC: TIMED OUT waiting for reached Password: (38 offers)
+[08:18:03]     VAXC tail: "C (csid 00010001) proposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  25-SEP-2026 08:23:39.73  %%%%%%%%%%%\n08:23:39.70 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[08:18:37] t=1353s members={"OVMXA":3,"OVMXB":3} vaxcTx=7624 alive=true allSee=true
+[08:18:37]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[08:18:37]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[08:18:37] *** CN=3 at t=1353s -- holding 660s
+[08:19:22]   VAXC: reached Username:
+[08:24:26]   VAXC: TIMED OUT waiting for reached Password: (38 offers)
+[08:24:26]     VAXC tail: "C (csid 00010001) proposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  25-SEP-2026 08:23:39.73  %%%%%%%%%%%\n08:23:39.70 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[08:25:00] t=1736s members={"OVMXA":3,"OVMXB":3} vaxcTx=10201 alive=true allSee=true
+[08:25:00]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[08:25:00]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[08:25:45]   VAXC: reached Username:
+[08:30:50]   VAXC: TIMED OUT waiting for reached Password: (38 offers)
+[08:30:50]     VAXC tail: "C (csid 00010001) proposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  25-SEP-2026 08:23:39.73  %%%%%%%%%%%\n08:23:39.70 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[08:31:24] t=2120s members={"OVMXA":3,"OVMXB":3} vaxcTx=12769 alive=true allSee=true
+[08:31:24]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[08:31:24]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[08:31:24] CN3_BROWSER_RESULT={"pass":true,"hold_s":767,"elapsed_s":2458,"announced":{"OVMXA":true,"OVMXB":true},"oracle":{"OVMXA":true,"OVMXB":true,"sda_rows":0},"bugchecks":{},"losses":{}}
+GRADER_EXIT=0

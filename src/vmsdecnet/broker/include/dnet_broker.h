@@ -56,7 +56,7 @@
 #define DNET_BROKER_OP_CLOSE   4u   /* disconnect the link (IO$_DEACCESS)          */
 
 /* On-wire header sizes (fixed LE fields; the data buffer follows). */
-#define DNET_BROKER_REQ_HDR    20u  /* magic+corr+pid+handle(4x4) + op+datalen(2x2) */
+#define DNET_BROKER_REQ_HDR    24u  /* magic+corr+pid+handle+reply_unit(5x4) + op+datalen(2x2) */
 #define DNET_BROKER_RSP_HDR    14u  /* magic+corr+status(3x4) + datalen(2)          */
 #define DNET_BROKER_REQ_MAX    (DNET_BROKER_REQ_HDR + DNET_NSP_MAX_DATA)
 #define DNET_BROKER_RSP_MAX    (DNET_BROKER_RSP_HDR + DNET_NSP_MAX_DATA)
@@ -65,6 +65,13 @@ struct dnet_broker_req {
     uint32_t corr_id;        /* correlation id (echoed in the response)          */
     uint32_t owner_pid;      /* requesting VMS process id (routing + audit)      */
     uint32_t link_handle;    /* the _NET: exec channel / link handle             */
+    uint32_t reply_unit;     /* the client's reply-mailbox unit NETACP answers to
+                              * (a1-2 mailbox seam: a mailbox read is destructive,
+                              * so each $ASSIGN _NET: channel has its OWN reply
+                              * mailbox and carries its unit here -- NETACP writes
+                              * the response to MBA<reply_unit>:, routing it to the
+                              * right waiter; see docs/design-decnet-net-qio-
+                              * mailbox-seam.md).                                 */
     uint16_t op;             /* DNET_BROKER_OP_*                                 */
     uint16_t datalen;        /* 0..DNET_NSP_MAX_DATA                             */
     uint8_t  data[DNET_NSP_MAX_DATA];

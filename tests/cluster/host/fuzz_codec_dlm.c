@@ -124,6 +124,8 @@ static int t_valblk(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_valblk_convert_parse_body(b, n, (struct vms_dlm_valblk_convert *)c); }
 static int t_cm_params(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_cm_params_parse(b, n, (struct vms_cm_params *)c); }
+static int t_dlksrch(const uint8_t *b, uint32_t n, void *c)
+{ return (int)vms_dlm_dlksrch_parse_body(b, n, (struct vms_dlm_dlksrch_record *)c); }
 
 /* Frame-level path: classify a random full frame, then run every DLM frame
  * decoder on it. Exercises classify + the body-offset extraction (a short frame
@@ -195,6 +197,7 @@ int main(void)
     struct vms_dlm_blkast blk;
     struct vms_dlm_valblk_convert cv;
     struct vms_cm_params cmp;
+    struct vms_dlm_dlksrch_record dlk;
     uint16_t hash;
 
     printf("fuzz_codec_dlm: DLM/CM wire-decode never-crash-a-peer fuzz (rd vms-5339)\n");
@@ -208,6 +211,7 @@ int main(void)
     fuzz_body(t_blkast,    &blk,  VMS_DLM_WIREOP_BLKAST,        "blkast_parse_body: 100k, no over-read/crash");
     fuzz_body(t_valblk,    &cv,   VMS_DLM_WIREOP_CONVERT_VALBLK,"valblk_convert_parse_body: 100k, no over-read/crash");
     fuzz_body(t_cm_params, &cmp,  0,                            "cm_params_parse: 100k, no over-read/crash");
+    fuzz_body(t_dlksrch,   &dlk,  VMS_DLM_WIREOP_DLKSRCH,       "dlksrch_parse_body: 100k, no over-read/crash");
 
     fuzz_grant_valblk();
     fuzz_frame();

@@ -223,6 +223,107 @@ static void t_acceptor_ladder(void)
 	ct_check_eq_u32(b_sysap.n_opened, 1u, "opened() fired");
 }
 
+/* ------------------------------------------------------------------ *
+ * 3b. vms-298 regression: a peer's SECOND connection while the FIRST is
+ *     still OPEN. Grounded in ovmx-760-MEMBER-achieved-20260730.pcap
+ *     (frames 2890/2896/2920): ~10s after its first MSCP$DISK bind a real
+ *     VAX opens a SECOND MSCP$DISK connection from the same node. The
+ *     retired scsd.c server keyed idempotence on a boolean "have we EVER
+ *     bound" (`int retx = ps->mscp_srv_bound;`) and therefore mistook the
+ *     genuinely-new second connect for a RETRANSMIT of the first: it
+ *     replayed a send_seq allocated minutes earlier and re-offered the SAME
+ *     compile-time-constant local handle -- which the VAX silently dropped
+ *     (no op-5 confirm). The executive-resident path has no such boolean
+ *     gate; connection identity keys on the PEER's Con.ID, so a distinct
+ *     remote Con.ID is a distinct connection. This locks that: the SYSAP is
+ *     asked AGAIN, the second connection gets its OWN local Con.ID, and both
+ *     coexist live with the first undisturbed.
+ * ------------------------------------------------------------------ */
+static void t_two_connects_one_peer(void)
+{
+	vms_conid_t listen1, listen2, conn1 = 0u, conn2 = 0u;
+	struct scs_cdt *c1, *c2;
+
+	printf("-- vms-298: a peer's SECOND connect (first still OPEN) gets its "
+	       "OWN Con.ID; the SYSAP is asked again, not deduped as a "
+	       "retransmit\n");
+	rig(SCS_CONNECT_DEFER);
+	b_node.drop_tx = 1;
+
+	/* FIRST connect from peer A -> accept -> OPEN. */
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_CON_REQ, 0u,
+			 0x33a00001u, 6u, scsh_name_b, scsh_name_a);
+	ct_check_eq_u32(b_sysap.n_connect_req, 1u,
+			"the first connect reached the SYSAP");
+	listen1 = b_sysap.last_listen_conid;
+	ct_check(scs_fsm_accept(&b_node.fsm, listen1, NULL, 0u, &conn1) == SCS_OK,
+		 "LOCAL_ACCEPT #1");
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_ACCP_RSP, conn1,
+			 0x33a00001u, 0u, NULL, NULL);
+	ct_check_eq_u32((unsigned long)scsh_state(&b_node, conn1),
+			VMS_SCS_CDT_OPEN, "connection #1 is OPEN");
+	c1 = scsh_cdt(&b_node, conn1);
+	ct_check_eq_u32(c1->remote_conid, 0x33a00001u,
+			"connection #1 learned peer A's FIRST Con.ID off the wire");
+
+	/*
+	 * SECOND connect from the SAME peer A, carrying a DIFFERENT remote
+	 * Con.ID (a genuinely-new connection endpoint -- a real node allocates
+	 * a separately-numbered Con.ID per connection). The listening CDT is
+	 * back in LISTEN, so this is a fresh accept, not the "busy" case.
+	 */
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_CON_REQ, 0u,
+			 0x33a00002u, 6u, scsh_name_b, scsh_name_a);
+
+	/* THE vms-298 REGRESSION GUARD: the SYSAP must be asked AGAIN. The
+	 * retired boolean gate would have swallowed this as a retransmit. */
+	ct_check_eq_u32(b_sysap.n_connect_req, 2u,
+			"the SYSAP is ASKED AGAIN -- the second connect is NOT "
+			"deduped as a retransmit of the first (vms-298)");
+	listen2 = b_sysap.last_listen_conid;
+	ct_check(scs_fsm_accept(&b_node.fsm, listen2, NULL, 0u, &conn2) == SCS_OK,
+		 "LOCAL_ACCEPT #2");
+	scsh_inject_ctrl(&b_node, a_node.sysid, SCS_MTYPE_ACCP_RSP, conn2,
+			 0x33a00002u, 0u, NULL, NULL);
+	ct_check_eq_u32((unsigned long)scsh_state(&b_node, conn2),
+			VMS_SCS_CDT_OPEN, "connection #2 is OPEN");
+
+	/* Distinct local Con.ID -- never the reused constant handle of vms-298
+	 * (there is no OVMX_MSCP_*_CONID constant on origin/main). */
+	ct_check(conn2 != conn1,
+		 "connection #2 got its OWN local Con.ID, not the first's "
+		 "reused handle (vms-298)");
+	ct_check_eq_u32(conn2 >> 16, conn1 >> 16,
+			"...same boot seed (same node)");
+
+	/* Both connections coexist LIVE: the first is undisturbed by the
+	 * second, each bound to its own distinct peer Con.ID. */
+	c1 = scsh_cdt(&b_node, conn1);
+	c2 = scsh_cdt(&b_node, conn2);
+	ct_check(c1 != (struct scs_cdt *)0 &&
+		 (unsigned long)c1->state == VMS_SCS_CDT_OPEN,
+		 "connection #1 is STILL OPEN -- undisturbed by the second");
+	ct_check_eq_u32(c1->remote_conid, 0x33a00001u,
+			"connection #1 still bound to peer A's FIRST Con.ID");
+	ct_check(c2 != (struct scs_cdt *)0 &&
+		 (unsigned long)c2->state == VMS_SCS_CDT_OPEN,
+		 "connection #2 is OPEN");
+	ct_check_eq_u32(c2->remote_conid, 0x33a00002u,
+			"connection #2 bound to peer A's SECOND, DISTINCT Con.ID");
+	ct_check_eq_u32(b_sysap.n_opened, 2u,
+			"the SYSAP saw TWO distinct opened() -- two live served "
+			"connections from one peer");
+
+	/*
+	 * send_seq: the retired code replayed the MSCP server's OWN per-SYSAP
+	 * echo/accept seq; the executive-resident server owns none. send_seq is
+	 * per-VC (vms_pe_fsm.c) and continues the live stream across both
+	 * connections to this peer. That continuity is locked by the PE/VC
+	 * sequenced-message tests; the vms-298 send_seq-replay cannot recur here
+	 * because no per-SYSAP send_seq exists to replay.
+	 */
+}
+
 /*
  * E31 -- the VMS$VAXcluster 16-byte SCA connect data (spec SS4(N)) really
  * reaches the peer's wire, byte for byte, on a CONNECT_REQ (op 0). The
@@ -884,11 +985,328 @@ static void t_e65_refusal_and_teardown_words(void)
 	}
 }
 
+/* ------------------------------------------------------------------ *
+ * vms-d7e -- the REJECT_RESPONSE names the connection it is answering
+ *
+ * The regression this pins: a booted OVMX node's op-5 went out with
+ * SCS$L_DST_CONID == 0, so the peer's port driver held a control message it
+ * could not match to a connection, complained
+ * `%PEA0, Inappropriate SCA Control Message` and -- the DOCUMENTED effect of
+ * that message, `HELP/MESSAGE "Inappropriate SCA Control"` -- closed the
+ * port-to-port virtual circuit ~2 s later. Post-admission that VC close takes
+ * an ADMITTED member's connection with it, and the peer's connection manager
+ * bugchecks CNXMGRERR.
+ *
+ * The envelope these rungs assert is MEASURED, not chosen: across the
+ * 48-capture reference corpus every REJECT_REQUEST carries a nonzero
+ * SCS$L_SRC_CONID (852/852) and every pairable REJECT_RESPONSE addresses
+ * exactly that value (698/698, zero residuals). `0x9e8f000c` below is the
+ * handle VAX1 really put on the wire in the vms-d7e crash capture.
+ * ------------------------------------------------------------------ */
+static void t_d7e_reject_response_is_addressed(void)
+{
+	struct vms_scs_ctrl_frame c;
+	vms_conid_t a_conid = 0u;
+	const vms_conid_t peer_handle = 0x9e8f000cu;
+
+	printf("-- vms-d7e: op 5 REJECT_RSP addresses the rejecter's own "
+	       "Con.ID, read off the op 4 that stated it\n");
+
+	/* Rung 1 -- [CONNECT_SENT] the peer refuses and names its handle. */
+	rig(SCS_CONNECT_DEFER);
+	a_node.drop_tx = 1;
+	b_node.drop_tx = 1;
+	(void)scsh_open_pair(&a_node, &b_node, 6u, &a_conid);
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, a_conid,
+			 peer_handle, 0u, NULL, NULL);
+	if (e65_wire(&a_node, SCS_MTYPE_REJ_RSP, &c, "op 5 is on the wire")) {
+		ct_check_eq_u32(c.conid_remote, peer_handle,
+				"SCS$L_DST_CONID == the handle the REJECT "
+				"named (698/698 corpus rule), not 0");
+		ct_check_eq_u32(c.conid_local, a_conid,
+				"SCS$L_SRC_CONID is still our own CDT");
+	}
+	ct_check(scsh_cdt(&a_node, a_conid) == (struct scs_cdt *)0,
+		 "...and the connection still closes");
+
+	/* Rung 2 -- the HONEST OMISSION control. A refusal that names no
+	 * handle teaches nothing, so nothing is invented: abs 64 stays 0. The
+	 * corpus has never shown this frame; the rung exists so the learner
+	 * cannot quietly start manufacturing an identifier. */
+	rig(SCS_CONNECT_DEFER);
+	a_node.drop_tx = 1;
+	b_node.drop_tx = 1;
+	a_conid = 0u;
+	(void)scsh_open_pair(&a_node, &b_node, 6u, &a_conid);
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, a_conid,
+			 0u, 0u, NULL, NULL);
+	if (e65_wire(&a_node, SCS_MTYPE_REJ_RSP, &c,
+		     "op 5 still goes out")) {
+		ct_check_eq_u32(c.conid_remote, 0u,
+				"a refusal that named nobody is answered with "
+				"an honest zero, never a fabricated handle");
+	}
+
+	/* Rung 3 -- [ACCEPT_RCVD] the accept already bound the pair; the
+	 * learner must not let a later frame re-point it. (This is the second
+	 * and only other state whose row routes op 4 to this handler.) */
+	rig(SCS_CONNECT_DEFER);
+	a_node.drop_tx = 1;
+	b_node.drop_tx = 1;
+	a_conid = 0u;
+	(void)scsh_open_pair(&a_node, &b_node, 6u, &a_conid);
+	a_node.fail_ctrl = 1;    /* the op-3 confirm will not go out */
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_ACCP_REQ, a_conid,
+			 0x8fd20001u, 8u, scsh_name_b, scsh_name_a);
+	a_node.fail_ctrl = 0;
+	ct_check_eq_u32((unsigned long)scsh_state(&a_node, a_conid),
+			VMS_SCS_CDT_ACCEPT_RCVD, "A is in ACCEPT_RCVD");
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, a_conid,
+			 peer_handle, 0u, NULL, NULL);
+	if (e65_wire(&a_node, SCS_MTYPE_REJ_RSP, &c,
+		     "op 5 answers from ACCEPT_RCVD")) {
+		ct_check_eq_u32(c.conid_remote, 0x8fd20001u,
+				"the handle the ACCEPT bound wins; a later "
+				"frame does not re-point the connection");
+	}
+}
+
+/* ------------------------------------------------------------------ *
+ * vms-f3ec -- a REFUSED connect must leave every OTHER CDT untouched
+ *
+ * WHY THIS SHAPE, AND WHY THESE VALUES. In the real-VAX join captures the
+ * refusal and the membership connection are not strangers: the Con.ID the
+ * REJECT_REQUEST states in SCS$L_SRC_CONID is the SAME 32-bit value as the
+ * peer handle of the live VMS$VAXcluster connection, in BOTH the CN=3
+ * baseline and the vms-f3ec re-verify --
+ *
+ *   cn3-achieved-20260905      REJ_REQ src 0x81c4000d ; membership peer
+ *                              handle 0x81c4000d
+ *   vms-f3ec re-verify         REJ_REQ src 0x4d78000d ; membership peer
+ *                              handle 0x4d78000d
+ *
+ * (the lab's two VAXes are clones and mint from the same CDL slot, so the
+ * value repeats across nodes). That is the collision under which vms-d7e's
+ * conid learn had to be proved harmless: if a refusal on ONE CDT could
+ * re-point, shadow or unbalance another CDT's handle pair or credit ledger,
+ * the membership connection would stop returning credit and the join would
+ * stall at STATUS=NEW.
+ *
+ * Both orders are walked, because the wire shows both: the refusal arriving
+ * while the membership connection is already OPEN (rung 1), and the refusal
+ * arriving FIRST, so its handle is learned and then released before the peer
+ * opens the membership connection with that same value (rung 2).
+ * ------------------------------------------------------------------ */
+struct f3ec_ledger {
+	vms_conid_t local_conid;
+	vms_conid_t remote_conid;
+	uint8_t     remote_conid_valid;
+	uint8_t     state;
+	uint16_t    grant;
+	uint16_t    receive;
+	uint16_t    held;
+	uint16_t    pending;
+	uint16_t    send;
+	uint32_t    msgs_received;
+};
+
+static void f3ec_snapshot(struct scsh_node *n, vms_conid_t conid,
+			  struct f3ec_ledger *out)
+{
+	const struct scs_cdt *c = scsh_cdt(n, conid);
+
+	if (c == (const struct scs_cdt *)0) {
+		uint32_t i;
+		uint8_t *p = (uint8_t *)out;
+
+		for (i = 0; i < (uint32_t)sizeof(*out); i++)
+			p[i] = 0u;
+		return;
+	}
+	out->local_conid = c->local_conid;
+	out->remote_conid = c->remote_conid;
+	out->remote_conid_valid = c->remote_conid_valid;
+	out->state = c->state;
+	out->grant = c->credit_grant;
+	out->receive = c->credit_receive;
+	out->held = c->credit_held;
+	out->pending = c->credit_pending;
+	out->send = c->credit_send;
+	out->msgs_received = c->msgs_received;
+}
+
+static void f3ec_check_same(const struct f3ec_ledger *before,
+			    const struct f3ec_ledger *after)
+{
+	ct_check_eq_u32(after->local_conid, before->local_conid,
+			"membership CDT keeps its OWN Con.ID");
+	ct_check_eq_u32(after->remote_conid, before->remote_conid,
+			"membership CDT keeps the PEER handle it learned");
+	ct_check_eq_u32(after->remote_conid_valid, before->remote_conid_valid,
+			"...and keeps knowing that it learned one");
+	ct_check_eq_u32(after->state, before->state,
+			"membership CDT is still OPEN");
+	ct_check_eq_u32(after->grant, before->grant, "Grant unmoved");
+	ct_check_eq_u32(after->receive, before->receive,
+			"Receive Credit unmoved");
+	ct_check_eq_u32(after->held, before->held, "Held unmoved");
+	ct_check_eq_u32(after->pending, before->pending,
+			"PENDING RECEIVE CREDIT unmoved -- the count the next "
+			"carrier returns to the peer");
+	ct_check_eq_u32(after->send, before->send, "Send Credit unmoved");
+	ct_check_eq_u32(after->msgs_received, before->msgs_received,
+			"the delivered-message count is unmoved");
+}
+
+/* Feed `n` messages to the membership connection and answer the way the
+ * shipping VMS$VAXcluster SYSAP does, so the ledger is a real one. */
+static void f3ec_feed(vms_conid_t m_conid, vms_conid_t peer_handle,
+		      uint32_t n, uint8_t fill)
+{
+	uint32_t i;
+
+	for (i = 0; i < n; i++)
+		scsh_inject_msg(&a_node, b_node.sysid, m_conid, peer_handle,
+				0u, (uint8_t)(fill + i));
+}
+
+static void t_f3ec_reject_leaves_membership_cdt_alone(void)
+{
+	struct vms_scs_ctrl_frame c;
+	struct f3ec_ledger before, after;
+	struct scs_cdt *m;
+	vms_conid_t m_conid = 0u, r_conid = 0u, peer_handle = 0u;
+	uint32_t carriers_before;
+	int due_before;
+
+	printf("-- vms-f3ec: a REFUSED connect does not perturb the "
+	       "membership CDT's handle pair or its credit ledger\n");
+
+	/* ---- Rung 1: membership OPEN with credit due, THEN the refusal ---- */
+	rig(0 /* B accepts immediately */);
+	a_sysap.return_credit_immediately = 1u;
+	a_sysap.carrier_on_credit_due = 1u;
+	ct_check(scsh_open_pair(&a_node, &b_node, 10u, &m_conid) == 0,
+		 "the membership-style connection opens (10 credits)");
+	m = scsh_cdt(&a_node, m_conid);
+	ct_check(m != (struct scs_cdt *)0 &&
+		 m->state == (uint8_t)VMS_SCS_CDT_OPEN,
+		 "...and it is OPEN");
+	if (m == (struct scs_cdt *)0)
+		return;
+	peer_handle = m->remote_conid;
+	ct_check(peer_handle != 0u,
+		 "the peer handle is REAL -- read off the op-2 it sent");
+
+	/* A real inbound burst, so the ledger under test is a live one. */
+	f3ec_feed(m_conid, peer_handle, 3u, 0xa0u);
+	(void)scsh_pump();
+	ct_check_eq_u32(a_sysap.n_message, 3u,
+			"three membership messages were delivered");
+	due_before = scs_fsm_credit_return_due(&a_node.fsm, m_conid);
+	carriers_before = a_sysap.n_carriers;
+	f3ec_snapshot(&a_node, m_conid, &before);
+	ct_check(scsh_ledger_balanced(scsh_cdt(&a_node, m_conid)),
+		 "the membership ledger balances before the refusal");
+
+	/*
+	 * Now OVMX's own second connect (the MSCP$DISK discovery connect on
+	 * the wire) is refused, and the refusal names the SAME Con.ID the
+	 * membership connection already holds -- the measured collision.
+	 */
+	a_node.drop_tx = 1;                  /* B must not answer this one */
+	ct_check(scsh_open_pair(&a_node, &b_node, 4u, &r_conid) == 0,
+		 "a SECOND, separately-initiated connect goes out");
+	a_node.drop_tx = 0;
+	ct_check(r_conid != m_conid, "it minted its own Con.ID");
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, r_conid,
+			 peer_handle, 0u, NULL, NULL);
+
+	/* vms-d7e stays fixed: the answer still names the refuser. */
+	if (e65_wire(&a_node, SCS_MTYPE_REJ_RSP, &c, "op 5 is on the wire")) {
+		ct_check_eq_u32(c.conid_remote, peer_handle,
+				"vms-d7e holds: op 5 still ADDRESSES the "
+				"handle the refusal stated");
+		ct_check_eq_u32(c.conid_local, r_conid,
+				"and it answers from the REFUSED connect's "
+				"own CDT, not the membership one");
+	}
+	ct_check(scsh_cdt(&a_node, r_conid) == (struct scs_cdt *)0,
+		 "the refused connection is gone");
+	ct_check_eq_u32(a_sysap.last_closed_conid, r_conid,
+			"the SYSAP was told THAT connection closed");
+
+	/* THE MEASUREMENT: nothing of the membership CDT moved. */
+	f3ec_snapshot(&a_node, m_conid, &after);
+	ct_check(scsh_cdt(&a_node, m_conid) != (struct scs_cdt *)0,
+		 "the membership connection survives the refusal");
+	f3ec_check_same(&before, &after);
+	ct_check_eq_u32((unsigned long)scs_fsm_credit_return_due(&a_node.fsm,
+								 m_conid),
+			(unsigned long)due_before,
+			"p. 2-44's credit-return decision is unchanged");
+	ct_check(scsh_ledger_balanced(scsh_cdt(&a_node, m_conid)),
+		 "and the ledger still balances");
+
+	/* And credit still FLOWS: the next inbound message is delivered and
+	 * answered by a carrier whose credit byte is the ledger read. */
+	f3ec_feed(m_conid, peer_handle, 4u, 0xb0u);
+	(void)scsh_pump();
+	ct_check_eq_u32(a_sysap.n_message, 7u,
+			"messages after the refusal are still delivered");
+	ct_check(a_sysap.n_carriers > carriers_before,
+		 "CREDIT IS STILL RETURNED after the refusal -- the "
+		 "vms-f3ec stall would show as zero carriers here");
+
+	/* ---- Rung 2: the refusal arrives FIRST, then the peer opens the
+	 * membership connection with that very Con.ID (the vms-f3ec order) -- */
+	rig(0);
+	a_sysap.return_credit_immediately = 1u;
+	a_sysap.carrier_on_credit_due = 1u;
+	r_conid = 0u;
+	m_conid = 0u;
+	a_node.drop_tx = 1;
+	ct_check(scsh_open_pair(&a_node, &b_node, 4u, &r_conid) == 0,
+		 "the discovery connect goes out first");
+	a_node.drop_tx = 0;
+	scsh_inject_ctrl(&a_node, b_node.sysid, SCS_MTYPE_REJ_REQ, r_conid,
+			 peer_handle, 0u, NULL, NULL);
+	ct_check(scsh_cdt(&a_node, r_conid) == (struct scs_cdt *)0,
+		 "it is refused and released");
+
+	ct_check(scsh_open_pair(&a_node, &b_node, 10u, &m_conid) == 0,
+		 "the membership connection then opens");
+	m = scsh_cdt(&a_node, m_conid);
+	ct_check(m != (struct scs_cdt *)0 &&
+		 m->state == (uint8_t)VMS_SCS_CDT_OPEN,
+		 "...to OPEN, with a handle of its own");
+	if (m == (struct scs_cdt *)0)
+		return;
+	ct_check(m->remote_conid_valid && m->remote_conid != 0u,
+		 "the peer handle is the one the ACCEPT stated, not a "
+		 "leftover from the refusal");
+	carriers_before = a_sysap.n_carriers;
+	f3ec_feed(m_conid, m->remote_conid, 4u, 0xc0u);
+	(void)scsh_pump();
+	ct_check_eq_u32(a_sysap.n_message, 4u,
+			"its messages are delivered");
+	ct_check(a_sysap.n_carriers > carriers_before,
+		 "and it returns credit normally");
+	ct_check(scsh_ledger_balanced(scsh_cdt(&a_node, m_conid)),
+		 "with a balanced ledger");
+	ct_check_eq_u32(a_node.fsm.rx_no_cdt, 0u,
+			"no membership frame was ever lost to an unmatched "
+			"Con.ID -- the suspected frame->CDT failure");
+	ct_check_eq_u32(a_node.fsm.rx_conid_mismatch, 0u,
+			"and none landed on the wrong CDT");
+}
+
 int main(void)
 {
 	t_conid_allocator();
 	t_initiator_ladder();
 	t_acceptor_ladder();
+	t_two_connects_one_peer();
 	t_connect_data_on_wire();
 	t_reject_ladder();
 	t_accept_rcvd_is_real();
@@ -904,5 +1322,7 @@ int main(void)
 	t_e65_acceptor_words();
 	t_e80_accept_conndata();
 	t_e65_refusal_and_teardown_words();
+	t_d7e_reject_response_is_addressed();
+	t_f3ec_reject_leaves_membership_cdt_alone();
 	return ct_summary("test_scs_fsm");
 }

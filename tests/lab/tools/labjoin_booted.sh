@@ -33,6 +33,19 @@
 #   W       identity registry / work dir         (/data/training/vax/cluster/work)
 #   MK      mk_sysgen.py path                    (<repo>/tests/lab/tools/mk_sysgen.py)
 #   DUR_POLL join poll iterations (x ~15s)       (40 -- TCG boot is slow)
+#
+# REFERENCE-CLUSTER SIZE (rd vms-b34). The default lab-2 reference cluster is
+# TWO VAXes, so a join takes it 2 -> 3 and both numbers are baked in below. A
+# GENESIS reference cluster -- ONE real VMS node that founded the cluster on its
+# own vote -- is a DIFFERENT topology that the demo's Node C has and this pod can
+# be put into (boot vax1 alone with EXPECTED_VOTES=1), and there a join takes it
+# 1 -> 2. The two numbers are therefore parameters, not literals:
+#   LJ_CN_BASE    CLUSTER_NODES the pod MUST report before the join   (2)
+#   LJ_CN_JOINED  CLUSTER_NODES a REAL admission must produce         (3)
+# Defaults reproduce the existing lab-2 gate exactly; a genesis run passes
+# LJ_CN_BASE=1 LJ_CN_JOINED=2. Neither number is ever inferred from what the
+# cluster happens to report -- the caller states the topology it set up, and a
+# pod that disagrees is refused (INV-6: the precheck is the instrument).
 set -u
 
 POD="${1:?usage: labjoin_booted.sh <pod> <tag> <artifacts-dir> <duration> [SCSNODE SCSSYSTEMID]}"
@@ -49,6 +62,9 @@ W="${W:-/data/training/vax/cluster/work}"
 REPO="${REPO:-$(cd "$(dirname "$0")/../../.." && pwd)}"
 MK="${MK:-$REPO/tests/lab/tools/mk_sysgen.py}"
 DUR_POLL="${DUR_POLL:-40}"
+LJ_CN_BASE="${LJ_CN_BASE:-2}"       # the reference cluster BEFORE the join
+LJ_CN_JOINED="${LJ_CN_JOINED:-3}"   # what a REAL admission must make it
+export LJ_CN_JOINED
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=labjoin_lib.sh
 . "$HERE/labjoin_lib.sh"
@@ -85,18 +101,19 @@ else
 fi
 lj_guard_identity "$SCSSYSID" || exit 2   # refuse the pod's reserved VAX ids
 
-# --- 2. CN_2 precheck: the pod MUST be a healthy 2-node cluster -------------
+# --- 2. CN precheck: the pod MUST already be the cluster the caller declared -
 # (tests/lab/README.md "Check the pod is a CLUSTER": a Running pod can be CN_1,
 # and a join test against it fails for reasons unrelated to the node under test.)
 vsay "WRITE SYS\$OUTPUT \"CN_\"+F\$STRING(F\$GETSYI(\"CLUSTER_NODES\"))" 4
 CN0="$(vclean | lj_parse_cn)"
-if [ "$CN0" != "2" ]; then
-    echo "labjoin: FATAL -- pod $POD is not a healthy 2-node cluster (CLUSTER_NODES=${CN0:-?}, want 2)." >&2
-    echo "  A join against a CN_1/CN_3 pod is unattributable. Scale a fresh replica:" >&2
+if [ "$CN0" != "$LJ_CN_BASE" ]; then
+    echo "labjoin: FATAL -- pod $POD is not the declared reference cluster (CLUSTER_NODES=${CN0:-?}, want $LJ_CN_BASE)." >&2
+    echo "  A join against a pod of a different size is unattributable. Scale a fresh replica:" >&2
     echo "    kubectl -n $NS scale sts/vaxlab --replicas=N   # gives a virgin CN_2 pod" >&2
+    echo "  (a GENESIS run wants LJ_CN_BASE=1 LJ_CN_JOINED=2 and vax1 booted ALONE with EXPECTED_VOTES=1)" >&2
     exit 2
 fi
-log "precheck OK: pod is CN_2 (healthy 2-node VAX cluster)"
+log "precheck OK: pod is CN_$LJ_CN_BASE (the declared reference VAX cluster)"
 
 # --- 3. Create the OVMX node's tap on the pod's br0 -------------------------
 # vax1/vax2/vax3 own tap1/tap2/tap3 (entrypoint.sh node_tap); the OVMX node takes
@@ -149,7 +166,7 @@ sleep 2
 # proof the executive did the L2 I/O, not the pod's ambient cap. CAP_EVID is where
 # labjoin_pod_boot.sh records the actual capability set for the verdict to grade.
 kubectl -n "$NS" exec "$POD" -- sh -c \
-    "cd $RDIR && ART_DIR=$RDIR OUT_LOG=$NODE_LOG CAP_EVID=$CAP_EVID OVMX_DROP_NET_RAW=1 SCSNODE=$SCSNODE SCSSYSID=$SCSSYSID OVMX_TAP=$OVMX_TAP JOIN_POLL=$DUR BOOT_TO=$((DUR + 120)) ./labjoin_pod_boot.sh" \
+    "cd $RDIR && ART_DIR=$RDIR OUT_LOG=$NODE_LOG CAP_EVID=$CAP_EVID OVMX_DROP_NET_RAW=1 SCSNODE=$SCSNODE SCSSYSID=$SCSSYSID OVMX_TAP=$OVMX_TAP JOIN_POLL=$DUR BOOT_TO=$((DUR + 120)) OVMX_VOTES='${OVMX_VOTES:-}' OVMX_EXPECTED_VOTES='${OVMX_EXPECTED_VOTES:-}' ./labjoin_pod_boot.sh" \
     >/dev/null 2>&1 &
 NODEP=$!
 log "OVMX node booting in $POD (exec sessions held open: tcpdump=$TCPD node=$NODEP)"
@@ -194,8 +211,8 @@ $sc"
     # CURRENT iteration; a full member requires STATUS==MEMBER AND CN=3, sustained
     # to the final read the verdict actually grades.
     if [ -n "$st" ] || [ -z "$VAX_SC" ]; then VAX_SC="$sc"; fi
-    if [ "$st" = "MEMBER" ] && [ "$n" = "3" ]; then
-        [ "$joined" = 0 ] && log "  ${NODE_UP} STATUS==MEMBER at CN=3 -- watching whether it SUSTAINS to window end"
+    if [ "$st" = "MEMBER" ] && [ "$n" = "$LJ_CN_JOINED" ]; then
+        [ "$joined" = 0 ] && log "  ${NODE_UP} STATUS==MEMBER at CN=$LJ_CN_JOINED -- watching whether it SUSTAINS to window end"
         joined=1
     else
         joined=0   # not a full member this sample; only a SUSTAINED member at the end counts

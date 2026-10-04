@@ -1,0 +1,6 @@
+[18:53:32] goto http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA.cpio.gz&sysdisk=sysdisk-nodeA.qcow2.gz&nodeB=http%3A%2F%2Flocalhost%3A8301%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dka655x.bin%26diskgz%3Dovmx-vax-nodeB.img.gz&nodeC=http%3A%2F%2Flocalhost%3A8301%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dka655x.bin%26diskgz%3Dvms73-nodeC-cluster.dsk.gz
+[18:53:32] boot C
+[18:54:32] boot A
+[18:55:32] boot B
+[18:56:32]   VAXC: saw Username:
+[18:59:33]   VAXC: no Password: prompt (attempt 1)

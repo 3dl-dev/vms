@@ -87,4 +87,50 @@ if grep -q "since \`0.2\`" "$OUT"; then
 fi
 
 echo "PASS: gen_release_notes.py cuts <prev-tag>..<tag> when --ref is a release tag (non-empty notes)"
+
+# --- 3. Uppercase-"V" tags (this repo's real convention since ~V0.4) must be
+# recognized as release-shaped too. RELEASE_TAG_RE used to match only a
+# lowercase optional "v", so every "V0.x"-tagged release silently fell back
+# past the whole V0.x run to the last lowercase/bare tag that matched --
+# caught cutting V0.7-1 (gen_release_notes: previous-tag regex was
+# case-sensitive). Extend the history: v0.1.0 <- 0.2 <- (commit) <- V0.3.
+echo c > c.txt && git add -A && git commit -q -m "feat: gamma feature between 0.2 and V0.3"
+id_header "V0.3"
+git add -A && git commit -q -m "release: cut V0.3"
+git tag V0.3
+
+OUT_V="$WORK/notes-V0.3.md"
+python3 "$GEN" --repo-root "$REPO" --ref V0.3 --out "$OUT_V" 2>"$WORK/gen-v.err" \
+    || { cat "$WORK/gen-v.err" >&2; fail "gen_release_notes.py exited nonzero for --ref V0.3"; }
+
+grep -q "since \`0.2\`" "$OUT_V" \
+    || fail "expected previous-release tag 0.2 in the V0.3 notes (uppercase-V tag detection), got:\n$(cat "$OUT_V")"
+grep -qF "feat: gamma feature between 0.2 and V0.3" "$OUT_V" \
+    || fail "notes for V0.3 do not list the feature commit between 0.2 and V0.3"
+if grep -q "beginning of history" "$OUT_V"; then
+    fail "REGRESSION: uppercase-V tags (0.2) not recognized as release-shaped -- fell back to the beginning of history"
+fi
+
+echo "PASS: gen_release_notes.py recognizes uppercase-V release tags (V0.3) as previous-release candidates"
+
+# --- 4. sort_key() over TWO uppercase-V ancestor candidates (V0.3 and a new
+# V0.4) -- the exact path that crashed on int('V0') before the sort_key fix
+# (it strips only a lowercase leading "v", so an uppercase-V candidate's
+# major-version component failed int() and previous_release_tag() raised
+# instead of returning). Extend history: ... <- V0.3 <- (commit) <- V0.4.
+echo d > d.txt && git add -A && git commit -q -m "feat: delta feature between V0.3 and V0.4"
+id_header "V0.4"
+git add -A && git commit -q -m "release: cut V0.4"
+git tag V0.4
+
+OUT_V4="$WORK/notes-V0.4.md"
+python3 "$GEN" --repo-root "$REPO" --ref V0.4 --out "$OUT_V4" 2>"$WORK/gen-v4.err" \
+    || { cat "$WORK/gen-v4.err" >&2; fail "gen_release_notes.py exited nonzero for --ref V0.4 (two uppercase-V ancestor candidates)"; }
+
+grep -q "since \`V0.3\`" "$OUT_V4" \
+    || fail "expected previous-release tag V0.3 in the V0.4 notes (sort_key over two uppercase-V candidates), got:\n$(cat "$OUT_V4")"
+grep -qF "feat: delta feature between V0.3 and V0.4" "$OUT_V4" \
+    || fail "notes for V0.4 do not list the feature commit between V0.3 and V0.4"
+
+echo "PASS: gen_release_notes.py's sort_key() ranks two uppercase-V release tags without raising"
 exit 0

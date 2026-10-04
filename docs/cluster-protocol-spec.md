@@ -2,6 +2,15 @@
 
 > Status: DRAFT, derived entirely from wire observation (vms-ci.2).
 > Companion dissector: `tools/cluster/dissect_sca.py`.
+>
+> **Implementation home (2026-09-17).** The wire-protocol findings below
+> (byte layouts, timing rules, the b2/b3/b4 response rule, the
+> REJECT_REQ/REJECT_RSP misattribution) are about the real VMS wire. OVMX's
+> own implementation of these findings lives in the executive-resident
+> cluster stack — `vms.ko`, `src/kernel-core/vms_cnxman*.c`,
+> `vms_cluster_codec_hello.c`, `vms_cluster_codec_dlm.c`. Where this doc names
+> a `src/vmsscs/`/`scsd.c` file for OVMX's side of a finding, ground the cited
+> bug or behavior against that kernel-core code before acting on it.
 
 ## 0. Clean-room provenance
 
@@ -168,6 +177,59 @@ Cluster group `1` → multicast `AB-00-04-01-01-01` (SYSMAN CONFIGURATION
 SHOW CLUSTER_AUTHORIZATION: `Cluster group number: 1`, `Multicast address:
 AB-00-04-01-01-01`).
 
+**The group → multicast derivation (rd `vms-147`), GROUNDED on three real-VMS
+observations across three VMS versions and two architectures:**
+
+| Cluster group | Multicast address | Oracle |
+|---|---|---|
+| 1 | `AB-00-04-01-01-01` | **VMS's own output** — SYSMAN `CONFIGURATION SHOW CLUSTER_AUTHORIZATION` on the lab VAX1 (OpenVMS VAX V7.3), `sda-scs-extract-vax1.txt` |
+| 257 | `AB-00-04-01-01-02` | observed on the wire from the browser-demo Node C (OpenVMS VAX V5.5-2H4), whose volume was configured for group 257 |
+| 2026 | `AB-00-04-01-EA-08` | observed from OpenVMS Alpha V8.4, `tests/lab-alpha/README.md` (CLUSTER_CONFIG_LAN group number 2026) |
+
+The last two bytes are **`LE16(group + 0x100)`** — low byte first, with the
+group number **biased by 256**: `1+0x100=0x0101`→`01 01`,
+`257+0x100=0x0201`→`01 02`, `2026+0x100=0x08EA`→`EA 08`. A plain `LE16(group)`
+fits group 1 alone (it was OVMX's implementation through V0.7 and put a
+group-257 node on group 1's address); `group | 0x100` and `group ^ 0x100` are
+both refuted by the group-257 point. VMS group numbers run 1–4095, so the bias
+never carries out of the 16-bit field. Pinned in
+`tests/cluster/host/test_codec_hello.c`.
+
+⚠ **Reading a group number back out of a capture:** `group = LE16(bytes 4,5) −
+0x100`. Several earlier notes in this repo name the lab cluster "group 257"
+because they inverted the defective rule; the lab cluster is group **1**, as
+VMS itself prints above.
+
+**The group is ALSO on every frame, at abs 22..23, as a plain `LE16(group)`
+(rd `vms-b34`).** The field this document called "connect flag, constant
+`0x0001`" is the cluster group number. It read as a constant for as long as
+every capture in the corpus came from ONE cluster — the lab's, which is group
+**1** — and it survived `vms-147` because that item corrected the multicast
+address and nobody asked what else carried the number.
+
+| Cluster group | abs 22..23 on the wire | Oracle |
+|---|---|---|
+| 1 | `01 00` | OpenVMS VAX V7.3, lab VAX1 — the cluster VMS itself prints as group 1 (above) |
+| 257 | `01 01` | OpenVMS VAX **V7.3**, demo Node C `VAXC`, isolated bridge in `vaxlab-4`, `CLUSTER_CONFIG_LAN` dialogue in the same capture answers `257` |
+| 257 | `01 01` | OpenVMS VAX **V5.5-2H4**, demo Node C in-browser — a second VMS version, same number: abs 22 is **not** a revision marker |
+| 2026 | `ea 07` | OpenVMS **Alpha** V8.4, lab-alpha — a second architecture, and the row that separates every candidate the two-byte groups cannot |
+
+So the group appears in two encodings, and they are **not** the same
+arithmetic: the multicast address biases by `0x100`, abs 22 does not. A fixed
+`0x0001` is refuted by groups 257 and 2026; `LE16(group + 0x100)` is refuted by
+all four rows; `BE16(group)` is refuted by 2026. The `0x03e8` §4(m) once called
+an unaccepted "connect class" variant is **1000** — another cluster's group,
+correctly ignored by a member of group 1.
+
+It is load-bearing on the wire: a real OpenVMS VAX V7.3 member in group 257
+completed the `b2`/`b3`/`b4` channel verify with an OVMX node, sent it 96
+`0x41` VC STARTs, and **discarded all 803 of OVMX's STACKs** because they
+claimed group 1 — so the circuit never opened, nothing was promoted to a CSB,
+and CNXMAN said nothing after "waiting to form or join".
+`tests/lab/captures/vms-b34-group-on-wire-20260924/`. Pinned in
+`tests/cluster/host/test_codec_hello.c` and
+`tests/cluster/host/test_pe_group_on_wire.c`.
+
 SCS connections (SDA `SHOW CONNECTIONS` CDTs):
 
 | Local SYSAP | Remote | Local Con.ID | Remote Con.ID | Credit (Send/Recv) |
@@ -197,7 +259,7 @@ multicast and directed) and `satellite-niscs-boot-solicit.pcap` frame 1100
 |---|---|---|---|
 | 14 | 2 | SCA length field | GROUNDED (§2) |
 | 16 | 6 | Dest/group logical LAVC addr | GROUNDED (matches multicast group or peer's logical MAC) |
-| 22 | 2 | Connect flag, constant `0x0001` | observed constant |
+| 22 | 2 | **Cluster group number, `LE16(group)`** (rd `vms-b34`) | **GROUNDED** on four real-VMS observations, §3 |
 | 24 | 6 | Src logical LAVC addr (sender's own) | GROUNDED |
 | 30 | 2 | per-frame word: `a000` on multicast HELLO / `b600` on VAX3 SOLICIT / **`b200`,`b300`,`b400` on directed HELLO = the NISCA channel-verify request/response counter** | **GROUNDED (directed values) in the offset-30 subsection below (`vms-d94`)**; the multicast `a0`/SOLICIT `b6` values remain inferred-constant |
 | 32 | 4 | constant prefix `08 00 00 80` | unknown/inferred |
@@ -400,6 +462,123 @@ Verified against `scs-idle-baseline.pcap` frames 1 (VAX1→multicast), 2
 | 130 | 2 | constant `0x0064` (100 decimal) | unknown/inferred — not corroborated against any decoder-ring value |
 | 132 | 2 | trailer, always `0x0000` | unknown |
 
+#### 4(b.c3) A SECOND discovery revision — the class-`0x03`, 114-content HELLO (GROUNDED, `vms-0f8`)
+
+Everything above §4(b) was harvested from **OpenVMS VAX V7.3** nodes. A real
+**OpenVMS VAX V5.5-2H4** node speaks a second revision of the same HELLO. This
+section records what was measured and nothing more.
+
+**The specimens.** 53 consecutive multicast HELLOs from `VAXC` — an unmodified
+V5.5-2H4 system disk, cluster group 257, in the in-browser cluster demo —
+against 7 from OVMX in the same capture. Raw bytes:
+`tests/lab/captures/vms147-browser-nodea-vaxc-20260922/hub-frames.json`,
+SHA-256 in `docs/clean-room/reference-captures.sha256`. The extracted first
+frame is the host-test fixture
+`tests/cluster/host/fixtures/hello-c3-vaxc-v55.spec`.
+
+**It is the same frame.** Field position for field position:
+
+| abs | V7.3 (class `0x05`) | V5.5-2H4 (class `0x03`) | |
+|---|---|---|---|
+| 14–15 | `76 00` → content **120** | `70 00` → content **114** | **differs** |
+| 16–21 | dst/group logical | dst/group logical | same shape |
+| 22–23 | `01 00` | **`01 01`** | **differs** |
+| 24–29 | src logical LAVC | src logical LAVC | same shape |
+| 30–31 | `a0 00` multicast | `a0 00` | identical |
+| 32–35 | `08 00 00 80` | `08 00 00 80` | identical |
+| 36 | **`05`** | **`03`** | **differs** |
+| 37–39 | `01 00 00` | `01 00 00` | identical |
+| 40–46 | namelen + SCSNODE | namelen + SCSNODE | same shape |
+| 47–63 | `00 80 01 ff 83 00 04 00×9 18` | `... 00×9 `**`10`** | differs at abs 63 only |
+| 64–67 | `03 00 00 00` | `03 00 00 00` | identical |
+| 68–71 | join nonce (0 on multicast) | join nonce (0 on multicast) | same shape |
+| 72–91 | zero | zero | identical |
+| 92–93 | incarnation (0 on multicast) | incarnation (0 on multicast) | same shape |
+| 94–95 | `92 05` | **`90 05`** | **differs** |
+| 96–101 | live 48-bit tick | live 48-bit tick | same offset, same width |
+| 102–111 | `bc 00 03 58 51 41 00 00 00 00` | identical | identical |
+| 112–119 | zero | zero | identical |
+| 120–125 | sender's real HW MAC | sender's real HW MAC | same shape |
+| 126–127 | `26 00` | **`21 00`** | **differs** |
+| 128–133 | poller-sweep / `0064` / `0000` | **absent — frame ends at 127** | **differs** |
+
+Five differing values, one absent tail. The 6-byte length delta at abs 14 **is**
+that absent tail. Across all 53 frames the only span that changes is abs 96–101,
+the live tick, walking monotonically upward — the same field at the same offset
+the `0x05` revision carries.
+
+**Why "revision" and not "a second message class."** Across every capture in
+`docs/clean-room/reference-captures.sha256` — ~75 000 discovery frames from five
+real V7.3 VAXes plus OVMX — abs 36 takes exactly two values: `0x05` (HELLO,
+74 817 at content 120 plus the §4(k) padded sizes) and `0x02` (SOLICIT, content
+78). `0x03` appears **zero** times, and on the V5.5 node it is the **only**
+discovery class that node ever sends.
+
+**What is NOT claimed.** No meaning is assigned to `0x03`, to `0x0101`, to
+`0x0590`, to `0x0021`, or to the abs-63 `0x10`↔`0x18` difference. Whatever
+selects or encodes them is unpublished and is not reconstructed here (Rule 8).
+Nothing here says the class byte is a version number. Nor is anything claimed
+about this revision's **directed** HELLO, its §4(a).1 `b2`/`b3`/`b4` channel
+verify, its §4(k) padded size-verify frame, or its SCS layer: **no specimen of
+any of those exists** — the only V5.5 frames ever captured are multicast HELLOs.
+
+**The DIRECTED form, and the channel that proved it (GROUNDED, second capture).**
+Once OVMX could answer in this revision, the same V5.5 node opened a §4(a).1
+channel with it. `tests/lab/captures/vms-0f8-browser-c03-channel-20260923/`
+(census of every distinct frame shape over a 7-minute run, first and last full
+frame of each kept; SHA-256 in `docs/clean-room/reference-captures.sha256`):
+
+| shape | n | |
+|---|---|---|
+| `VAXC/128/w30=b200/b36=03` | **1** | the member's channel-verify REQUEST |
+| `OVMXA/128/w30=b300/b36=03` | 186 | OVMX's REQUEST, in the peer's revision |
+| `VAXC/128/w30=b400/b36=03` | 184 | the member's CONFIRM, steady |
+
+One `b2` → `b3` → `b4` then steady keepalives — §4(a).1's rule, unchanged in
+this revision. The directed frame differs from the multicast one exactly as
+§4(a).0/§4(a)/§4(i).B say it should, and in no other way: abs 16 is the
+target's cluster-LOGICAL address (not the hardware MAC at abs 0), abs 30 is the
+verify counter, abs 68–71 carries the cluster join nonce **non-zero and in the
+clear** (`77 11 7a 7d`) where the multicast frame carries zero, and abs 92 is
+the incarnation the sender attributes to the target (1) where the multicast
+frame carries 0. The revision markers at abs 94/126 are **identical on both**
+— they are a property of the revision, not of the frame's direction. (This
+paragraph once counted abs 22 as a third revision marker; it is the cluster
+GROUP number — see §3, rd `vms-b34` — and it is identical on both frames for
+the ordinary reason that both came from the same cluster.) Specimen:
+`tests/cluster/host/fixtures/hello-c3-vaxc-directed-b2.spec`.
+
+**The SCS layer has its OWN second revision — NOT decoded (`vms-0f8`).** In that
+same capture the V5.5 node also emits `VAXC/104/w30=0103/b36=01` (n=184): SCA
+content 90, **abs 31 == `0x03`, not the §4(d) format constant `0x13`**, and
+abs 30 == `0x01` rather than the §4(g) phase-2 `0x41`. It is the **only**
+remaining unclassified shape on that wire, and it is all of the residual
+`badclass`. Aligned against OVMX's own round-0 START, the two bodies are the
+same structure offset by exactly 16 bytes:
+
+```
+OVMXA  abs30=41 abs31=13  content 106   ... 12 00 | <16 bytes> | 3e 00 00 00 | c3 07 | ... "VMX V0.7" ... "X86 " ... "OVMXA   "
+VAXC   abs30=01 abs31=03  content  90   ... 03 00 |            | 3e 00 00 00 | c5 07 | ... "VMS V5.5" ... "VAX  " ... "VAXC    "
+```
+
+Nothing further is claimed about it. One specimen exists (the member's round-0
+START, retransmitted because nothing answered it); §4(d)/§4(g)/§4(h)'s Con.ID
+offsets, inner-length identity and credit protocol are **not** re-grounded for
+this revision, and this spec does not extrapolate them. Decoding it is an
+iterative live-oracle campaign, not a passive-capture exercise.
+
+**What OVMX does with that.** `vms_cluster_codec_hello.h` carries the two
+revisions as a table; the classifier keys on the class byte **and** the exact
+content length, so a class-`0x03` frame at any other length stays
+`VMS_FCLS_UNKNOWN`. `vms_pe_fsm.c` **learns** a peer's revision off that peer's
+own frame — per channel for directed frames, and port-wide (first-wins) for the
+multicast advertisement — the same mechanism §4(g)/`E55` sanctions for the join
+nonce and §4(a).2/`E56` for the discovery-format span. Because no padded frame
+has ever been observed in this revision, the port **declines** the §4(k) size
+probe against such a peer and records that it declined
+(`pe_channel.probe_rev_unsupported`), rather than extrapolate a shape nobody has
+seen and then credit a packet size it never proved.
+
 ### 4(c) SOLICIT / connect-and-directory-lookup phase
 
 **Boot-time SOLICIT** (satellite VC establishment on disk-server discovery),
@@ -461,7 +640,7 @@ DLM and MSCP sections below.
 |---|---|---|---|
 | 14 | 2 | SCA length field (`0x00BC` = 188 → 190 total) | GROUNDED |
 | 16 | 6 | Destination logical LAVC addr | GROUNDED |
-| 22 | 2 | Connect flag | constant `0x0001` |
+| 22 | 2 | **Cluster group number, `LE16(group)`** (rd `vms-b34`) | **GROUNDED**, §3 |
 | 24 | 6 | Source logical LAVC addr (sender's own) | GROUNDED |
 | 30 | 2 | SCS sequence/type word (varies per-message, e.g. `4b13`) | unknown/inferred |
 | 32 | 32 | SCS sequence-number region: two 16-bit counters, each repeated up to 3×, zero-padded to 32 bits; a constant `0x0012` (=18 decimal) sits at offset 38–39 | the `18` is **GROUNDED**: byte-exact match to SYSGEN `NISCS_LAN_OVRHD 18`. The repeated 16-bit values plausibly correspond to the CSB's "Next seq. number" / "Last seq num rcvd" / "Last ack. seq num" triad documented in SDA `SHOW CLUSTER`, but the specific mapping of which repeat is which CSB field is **inferred**, not independently confirmed. |
@@ -2521,7 +2700,7 @@ HELLO with a zero-pad tail**. Verified byte-exact:
 |---|---|---|---|
 | 0 | 2 | SCA length field (LE u16 + 2 = total) | GROUNDED (§2): `0x05da`→1500, `0x042b`→1069, `0x0353`→853, `0x02e7`→745 |
 | 2 | 6 | dest logical LAVC addr (the joiner) | GROUNDED (§4a) |
-| 8 | 2 | connect flag `0x0001` | observed constant |
+| 8 | 2 | **cluster group number, `LE16(group)`** (abs 22, rd `vms-b34`) | **GROUNDED**, §3 |
 | 10 | 6 | src logical LAVC addr (VAX1 `aa:00:04:00:01:04`) | GROUNDED (§4a) |
 | **16** | **1** | **per-frame word `0xb3`** (§4a offset-30) | GROUNDED value: VAX1's directed-HELLO per-frame word (the `b2/b3/b4` channel-handshake stepping, §4g phase 1). **This is `vms-224`'s "op-0xb3": it is a directed-HELLO per-frame word, NOT a distinct block-transfer opcode** — a genuine 120-byte directed HELLO carries the same `0xb3` (a `0xb2`-step directed HELLO differs from the padded frame in this one byte only). The padded frame's distinguishing feature is its **size**, not this byte. |
 | 17 | 1 | `0x00` | observed (note: **not** the `0x13` SCS-envelope format constant — this is a HELLO-family frame, not an `0x4b` sequenced message) |
@@ -2817,15 +2996,36 @@ The two populations do not overlap, and they do not overlap **inside** the
 departure capture either: VAX1, which stayed up the whole time, never exceeds
 3.12 s in the same window as VAX2's 395.955 s gap.
 
-**What OVMX does with it (OVMX design choice, labeled per Rule 8).** The default
-listen timeout is **20 000 ms** — the value of the lab's SYSGEN `RECNXINTERVAL`
-(20, §3) — which is 6.3× the longest healthy silence measured and 20× below the
-observed departure. This is **not** a claim that VMS uses 20 s as a listen
-timeout: `RECNXINTERVAL` governs removal *after* a circuit breaks, not the timer
-that breaks it. The book (ch. 2) describes circuit loss but publishes no
-detection timer; that lives in the port drivers, which ch. 2 is not about.
-`OVMX_PEER_LISTEN_TIMEOUT_MS` overrides it and SCSD logs the value at startup, so
-a capture is never read as a spontaneous departure.
+**What a real port does — MEASURED (`vms-b98`, 2026-10-01,
+`tests/lab/captures/vms-b98-pe-listen-timeout-20261001/`).** The healthy/departure
+bracket above says only that the threshold lies somewhere between 3.153 s and
+395.955 s; it does not say where a real port puts it. A real OpenVMS VAX V7.3
+pair (no OVMX node on the wire, consoles timestamped at 10 ms, bridge captured)
+was given ten seconds of silence in both directions by taking one node's tap
+down, eight times, and in two further runs one node's emulator was SIGSTOPped.
+The survivor closed the virtual circuit (`%PEA0, Port has Closed Virtual
+Circuit`, `%CNXMAN, lost connection`) **8.15–9.30 s after the last frame it had
+heard from the peer** — n = 24 across both directions and both methods, mean
+8.80 s, median 8.82 s. The closure lands on the port's own periodic tick: in four
+trials the survivor's `b3` channel-verify probe to the silent peer went out within
+15 ms of the closure. So the real port holds an **8 s** listen timeout and checks
+it about once a second.
+
+**It is not a SYSGEN parameter (MEASURED).** V7.3's SYSGEN names no such
+parameter; `SCACP SHOW CHANNEL/ALL` counts `Timeouts: Listen` but shows no value;
+`SDA SHOW PORTS` shows none. The only PE-named parameters, `PE1`..`PE6`, are all 0
+and undocumented, and setting `PE4` to 20 on one node left its closure at
+8.585/8.795/8.925 s against 8.285/9.178/9.301 s on the node at 0.
+
+**What OVMX does with it.** `PE_LISTEN_TIMEOUT_DEFAULT_MS` is **8 000 ms**, the
+measured port constant, held as one (it was 20 000 ms, the lab's `RECNXINTERVAL`,
+an OVMX choice made before any real port had been timed; rd `vms-1f40` arm P-9
+showed what that cost: a 20 s stall made OVMX's own expiry coincide with the
+peer's wake). OVMX evaluates the deadline on its 2 s HELLO beat and on every
+receive, so its own closure falls 8–10 s after the last frame. `TIMVCFAIL`, which
+*is* a SYSGEN parameter (`SYSGEN SHOW TIMVCFAIL` on V7.3: `1600 1600 100 65535
+10Ms D`), now reaches the port from the loaded parameters in that 10 ms unit
+rather than from a compiled-in default.
 
 **Explicit non-claim.** 3.153 s is the largest silence in 747 s of captured wire
 from a 2–3 node lab, not an upper bound. A larger cluster, a loaded node or a
@@ -3072,6 +3272,61 @@ carried the stamped bytes, so that direction is byte-unchanged. Kill switch
 `OVMX_NO_CONNECT_DATA=1` suppresses the stamp and restores the template bytes
 exactly; both directions are asserted in the unit test.
 
+> ### ⚠ §4(N) CORRECTED — `[98:105]` IS RESOLVED, AND THE "CONSTANTS" ARE NOT (`vms-b87`, 2026-09-25)
+>
+> The gap recorded below is **closed**, and one of the section's GROUNDED
+> claims is **withdrawn**. Both come from the same measurement: three real
+> OpenVMS VAX V7.3 nodes plus a fourth on a second bridge, each node's frames
+> read off the wire *and* the same quantities read out of VMS's own mouth with
+> `F$GETSYI` at the same moment (capture
+> `tests/lab/captures/vms-b36-cnxmgrerr-20260925/`, `analysis/connect-data.txt`
+> and README §2(d)).
+>
+> | node / configuration | VOTES | EXPECTED | QUORUM | CLUSTER_NODES | `[98:105]` |
+> |---|---|---|---|---|---|
+> | VAX1, 2-node lab | 1 | 1 | 1 | 2 | `01 00 01 00 02 00 01` |
+> | **VAX2, same cluster** | **0** | 1 | 1 | 2 | `01 00 01 00 02 00 01` |
+> | VAXC alone | 1 | 1 | 1 | 1 | `01 00 01 00 01 00 01` |
+> | VAXC + one member | 1 | 2 | 2 | 2 | `02 00 02 00 02 00 01` |
+> | any node being admitted | — | — | — | — | `00 00 00 00 00 00 00` |
+>
+> **VAX2 is the discriminator.** It holds ZERO votes of its own and still
+> reports `1`, so the first field is the CLUSTER's vote total and not the
+> sender's — which no census restricted to one cluster could have separated.
+> The field resolves as three little-endian 16-bit counts and a flag:
+>
+> ```
+> [98:100] the cluster's total votes      (CLUB cevotes)
+> [100:102] the cluster quorum            (CLUB quorum)
+> [102:104] the number of members         (CLUB cluster_nodes, p. 7-49 SELECTED)
+> [104]     1 for a member, 0 for a node being admitted
+> ```
+>
+> **This reading explains all five values in the table below, including the
+> one the section says "does not fit the shape".** `01 00 00 00 02 00 01` is
+> votes 1, **quorum 0**, members 2 — a member whose quorum cell is momentarily
+> zero, which is exactly p. 7-48's proposed-vs-effective window before Phase 2
+> copies the proposed cells. The old `01 00 01 00 NN 00 01` reading was the
+> THIRD field alone, and "NN = the count of members the sender sees" was right
+> about that field and silent about the other two.
+>
+> **AND `[94:98]` / `[105:110]` ARE NOT CONSTANTS.** §4(N) records them as
+> GROUNDED constants (`01 1b 01 03` and `08 00 00 06 00`). On the bench VAX
+> `[96]` moved `01 -> 02`, `[105]` moved `08 -> 09` and `[106]` moved
+> `00 -> 02` **inside one run** (`analysis/connect-data.txt`, the `011b0203 ...
+> 0109 0200 0600` frame). What the census established is that they are stable
+> across identity, node number, root, boot and role — not that they are
+> constant. Nothing in the library says what moves them, so OVMX still COPIES
+> both spans rather than composing them (`vms_cluster_codec_cm.h` §7), and that
+> is now a NAMED gap instead of an assumed constant.
+>
+> **What OVMX does with this:** `vms_cm_conndata_build()` derives `[98:105]`
+> from the CLUB every beat, so the bytes this node offers on a connect AND on
+> an accept are its own cluster arithmetic at that moment. The "OVMX cannot
+> generate connect data for a role it has not observed" limit recorded at the
+> end of this gap is **lifted for the member role**; the version quad and tail
+> keep it.
+
 **RE gap left in §4(N) (honest).** What `[98:105]` **encodes is unknown.** All
 five values it takes over the 148 VAX-sourced frames, exhaustively:
 
@@ -3092,8 +3347,9 @@ OVMX does depends on any of it: OVMX copies a real joiner's observed bytes
 rather than computing them. Two candidate readings are **REFUTED**: it is not
 the member-state sequence (`af2-established-rejoin` runs Member State Seq 2→3→4
 while VAX1 sends `NN=1` throughout) and not the node number (VAX1, node 1, sends
-`NN=2` in the 2-member specimen). **Consequence, and it is a real limit:** OVMX
-cannot yet *generate* connect data for a role it has not observed, and it must
+`NN=2` in the 2-member specimen). **Consequence, and it is a real limit** (LIFTED for the member role by the
+`vms-b87` correction boxed above; still true of the version quad and tail)**:**
+OVMX cannot yet *generate* connect data for a role it has not observed, and it must
 not claim to.
 
 **OVMX does NOT act on the peer's value.** It decodes and logs it
@@ -3162,12 +3418,16 @@ answered with a `0x4b` echo/response. Sending a connect as `0x4b` when the peer 
 an establishing connection, or a post-establishment lookup as `0x5b`, causes the member
 to **echo (op 1) but never accept (op 2)** — the signature failure mode.
 
-#### Connect-class at abs 22 (`sca[8:10]`)
+#### Cluster group at abs 22 (`sca[8:10]`) — rd `vms-b34`
 
-Connection-control frames carry **`0x0001`** here. (`0x03e8` appears in some
-fresh-formation captures and is *not* accepted by an established member — a member that
-receives it echoes and stalls.) The same field carries the node-incarnation echo on
-`0x41` START frames (§4i); it is phase-dependent, not a single global constant.
+**CORRECTED.** This subsection previously read "connection-control frames carry
+`0x0001` here", with `0x03e8` an unaccepted variant. There is no connect class
+at abs 22: it is `LE16(cluster group)` on **every** SCA frame class (§3's
+four-oracle table). `0x0001` is group 1 — the lab cluster every capture that
+supported the old reading came from — and `0x03e8` is group **1000**, i.e.
+another cluster's frames, which an established member of group 1 correctly
+declines to act on. The node-incarnation echo on `0x41` START frames is at
+abs 36 (§4i), not here.
 
 #### Ordering invariant
 
@@ -3417,12 +3677,73 @@ body[55]  = 0x00       cleared            (op 0x09 only)
 >
 > **A joiner can therefore read the expected barrier-participant set out of the
 > open it receives.** Two cautions: a class-`0x03` removal has **no `op 0x09` at
-> all** (it starts directly at `op 0x0a` / tag `0x0360`) and so carries no bitmap;
+> all** (it starts directly at `op 0x0a` / tag `0x0360`) and so carries no `op 0x09`
+> bitmap -- but a removal run with other members opens with its own `op 0x08`, which
+> DOES carry the kept members' nodemap (§4(p).R, corrected by `vms-af4`);
 > and one byte holds only 8 slots while the library already reaches slot 5.
 > `body[52:55]` and `body[56:60]` are all-zero in every specimen, so the field is
 > certainly **wider than a byte**, but its extent and endianness are UNDETERMINED
 > — a BE u32 at `body[52:56]` fits the data as well as an LE map based at
 > `body[55]`. **Do not assume 8 slots.**
+
+#### 4(p).R The class-0x03 REMOVE open (`op 0x08`) carries the KEPT members' nodemap (GROUNDED, `vms-af4`)
+
+**Correction.** The caution above ("a class-`0x03` removal has no `op 0x09` and so
+carries no bitmap") was true of `op 0x09` and wrongly generalised to the removal: a
+removal that a coordinator runs with other members DOES open with its own
+`op 0x08`, and every one in the library carries the nodemap at `body[55]`. OVMX had
+read `op 0x08` as nodemap-less, so a participant committed a removal without
+touching membership and kept the removed system SELECTED forever (rd `vms-af4`: a
+member SIGKILLed and booted again was never readmitted in 300 s).
+
+**Specimens** (`tests/lab/captures/vms-af4-op08-remove-20261001/`, codec specimens
+`tests/cluster/host/fixtures/cm-open-remove-*.spec`): nine real captured opens,
+five distinct removals, three coordinators — real OpenVMS VAX V7.3 `VAX1`, `VAX2`
+(an all-VAX three-node cluster, `vms-b36` oracle) and `VAXC` (four- and three-member
+clusters on the rd `vms-af4` rig). The rig removals were made for this: four
+members join in a fixed order (CSIDs `00010001`..`00010004`, read back from VAXC's
+own OPCOM lines) and one is SIGKILLed; VAXC coordinates its removal and sends
+`op 0x08` to each survivor.
+
+| specimen(s) | coordinator | members before (slot) | removed | `body[55]` | kept slots |
+|---|---|---|---|---|---|
+| `s4d-1`, `s4d-2` | VAXC | VAXC 1, OVMXA 2, OVMXB 3, OVMXC 4 | OVMXC (4) | `0x0e` | 1,2,3 |
+| `s4a-1`, `s4a-2` | VAXC | same | OVMXA (2) | `0x1a` | 1,3,4 |
+| `s4b-1`, `s4b-2` | VAXC | same | OVMXB (3) | `0x16` | 1,2,4 |
+| `b36or-1` | VAX1 | VAX1 1, VAX2 2, VAX3 3 | VAX3 (3) | `0x06` | 1,2 |
+| `b36or-2` | VAX2 | VAX1 1, VAX2 2, VAX3 readmitted at 4 | VAX3 (4) | `0x06` | 1,2 |
+| `af4rig-1` | VAXC | VAXC 1, OVMXA 2, OVMXB 3 | OVMXB (3) | `0x06` | 1,2 |
+
+**Rule (zero residuals).** `body[55]` bit *k* is set iff the member holding CSID
+slot *k* is KEPT; the removed slot's bit is clear; slot 0 is never set;
+`popcount == post-removal member count`; the two copies of one removal (to two
+different members) carry the same byte; `body[52:55]` and `body[56:60]` are zero
+in all nine. The `e88-A2` and `cn3-achieved` captures add two more real `op 0x08`
+(`0x0a`: slots 1,3 kept, slot 2 removed; `0x06`) with the same rule. **Not
+captured:** a removal of slot 1 (the founder is always a real VAX here, and a
+removal of it is coordinated by nobody this executive can observe without a second
+real VAX); the rule is pinned by slots 2, 3 and 4 each appearing both set and clear.
+
+**The rest of the 132-byte body** — census over the nine plus the two:
+
+| bytes | status |
+|---|---|
+| `[0:8]` send/ack/txn/token, `[8]` cat `0x01`, `[9]` op `0x08`, `[12:16]` epoch, `[16]` role `0x40`, `[17]` class `0x03` | as §4(j)/§4(r) |
+| `[10:12]` | zero in 10 of 11; `58 63` in one (a coordinator's REQUEST pair, §4(r)) |
+| `[18:20]`, `[21]`, `[23]`, `[27]`, `[30:32]`, `[52:55]`, `[56:87]`, `[88:91]`, `[92]` | zero in all eleven |
+| `[32:40]` | VMS time quadword: the cluster's FOUNDATION time. The same value in both removals of one cluster (`b36or` epochs 6 and 8), a different one per cluster, and on the rig 4 s before VAXC's first OPCOM line after "proposing formation" (`s4d`: 22:56:38.01 vs 22:56:42.16) |
+| `[40:48]` | VMS time quadword: the transition time (§4(s)) |
+| `[48]`, `[51]` | zero in all eleven; `[49:51]` LE16 = the cluster FOUNDER's SCSSYSTEMID — 1989 (VAXC) on every rig removal, 1025 (VAX1) on every VAX1-founded one, **including `b36or-2`, which VAX2 coordinated**: the founder, not the coordinator |
+| `[106:114]` | `00 60 ee 78 de ff ff ff` in all eleven |
+| `[20:22]`, `[22:24]`, `[24]`, `[25]`, `[26]`, `[28]`, `[29]`, `[87]`, `[91]`, `[93:106]`, `[114:132]` | vary; small integers that move with cluster size and history (e.g. `[87]` is 4 in every four-member removal and 3 or 5 in three-member ones), and `[114:132]` differs between the two copies of one removal. **Not pinned** — no controlled variation of votes/expected votes was run |
+
+**What OVMX does with it.** A participant reads `body[55]` from `op 0x08` exactly as
+from `op 0x09` and phase 2 (p. 7-42 task 1) applies it, so the removed member is
+deselected; OVMX as coordinator writes the kept members' map there
+(`coord_take_nodemap`). OVMX still **does not originate** an `op 0x08` toward a
+connection manager that is not OVMX (`coord_open_is_grounded_for`): the bytes marked
+*not pinned* above are part of what a real coordinator asserts, and OVMX has no
+derivation for them (INV-6).
 
 #### Category is per-SYSAP, and the response SHAPE is per-category
 
@@ -3526,6 +3847,28 @@ properties, not a role marker. The only predicate surviving both specimens is
 **highest DECnet node number** (VAX2 of {VAX1,VAX2}; VAX3 of {VAX1,VAX2,VAX3}),
 which is confounded with "highest SCSSYSTEMID" and "last to have joined".
 OVMX implements that observable and labels it INFERRED (`cm_pick_coordinator`).
+
+> **UPDATE (GROUNDED, `vms-e88`, 2026-09-30) — the joiner's rule, measured on
+> four all-real V7.3 trios** (`tests/lab/captures/vms-e88-join-target-20260930/`).
+> The confound is broken: with the founder the HIGHEST (trio A) and with the most
+> recent joiner the highest (trio A2), and in both cases the lower member the one
+> discovered LAST, the joiner asked the **highest-SCSSYSTEMID member** every time
+> — not the last discovered, not the founder, not the last to join. And a joiner
+> asks only a system whose own op-0x01 PARAMS says it is a member, only once it
+> has connectivity with as many members as the members advertise (Davis
+> p. 7-37): in trio C3 a joiner that could reach one of two members asked
+> **nobody** for five minutes, and asked the other 9.8 s after it came into reach.
+> The count is on the wire:
+>
+> | op-0x01 `body` | abs | meaning | grounding |
+> |---|---|---|---|
+> | `[18:20]` | 90 | the SENDER's cluster member count; **0 from a system in no cluster** | 12 member / 9 joiner PARAMS across trios A, A2, B, C3; moves 0 -> 2 on the frame the sender is admitted |
+>
+> Member PARAMS also carry `body[12]=0x21` and two nonzero VMS time quadwords at
+> `body[28:44]` (zero from joiners) — **not decoded, not used**. A joiner's op-0x02
+> always followed the member's own PARAMS, 0.7 s or more after its own identity
+> records; real members re-send their PARAMS to a waiting joiner when a
+> transition changes the count.
 
 #### Never answer a (category, opcode) pair you have not grounded
 
@@ -3667,9 +4010,32 @@ record in category `0x02`, and a single join carries **216** of the latter.
 |---|---|
 | `0x03`, `0x05`, `0x08`, `0x09`, `0x0d` | `body[18] = 0x01`; `body[55] = 0x00` on `0x09` only (§4(p)) |
 | `0x0f` | **none** — `body[18]` is *echoed*, not forced |
-| `0x12` | `body[18] = 0x01`; `body[17]` = the responder's own current class; `body[20:24]` = LE u32 copy of the request's `body[12:16]` (the epoch) |
+| `0x12` | `body[18] = 0x01`; `body[17]` = the responder's own current class; `body[12:16]` **and** `body[20:24]` = the **responder's OWN** current epoch, LE u32 — **not** the request's (corrected, see below) |
 | `0x06` | never `0x81` — answered with cat-`0x04` acks |
 | `0x0a`, `0x0c` | never answered (`txn = 0`) |
+
+> **CORRECTION to the `0x12` row (rd vms-4f0).** This row previously read
+> "`body[20:24]` = LE u32 copy of the request's `body[12:16]`". Across the
+> corpus that is indistinguishable from "the responder's own epoch": in 141 of
+> the 143 matched `0x12`/`0x81 0x12` pairs the coordinator and the member held
+> the **same** epoch. The three specimens in which they DIFFER settle it, and
+> all three agree that the responder states its **own** epoch, in **both**
+> fields, and echoes neither:
+>
+> | specimen | request `body[12:16]` | response `body[12:16]` | response `body[20:24]` |
+> |---|---|---|---|
+> | `d94-ctl1.pcap` | `07` | `06` | `06` |
+> | `d94-rej3.pcap` | `10` | `0f` | `0f` |
+> | rd vms-4f0 lab run, 2026-09-24 | `04` (OVMX) | `03` (real VAX V7.3) | `03` |
+>
+> The third is the decisive one because it was produced on purpose: OVMX, as
+> transition coordinator, relayed at epoch 4 to a real OpenVMS VAX V7.3 that
+> was at epoch 3, and the VAX answered `3` in both fields 0.2 ms later. This
+> is also the only INV-6-clean reading — a responder can stand behind its own
+> club's epoch and cannot stand behind somebody else's. `body[12:16]` is
+> therefore the **one** field of the `0x81/0x12` that is not a verbatim echo
+> besides `body[17]`, which is why the earlier verbatim census flagged
+> "extra mutation at [12]" in exactly `d94-ctl1` and `d94-rej3`.
 
 > The `0x0f` row reconciles two censuses that looked contradictory. One found a
 > single real `0x0f` response with `body[18] == 1`; the other found six that leave

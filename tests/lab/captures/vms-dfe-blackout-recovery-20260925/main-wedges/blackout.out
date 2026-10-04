@@ -1,0 +1,6 @@
+MARKER seen at 12:23:15.140: %CNXMAN, (the cluster opened the VMS[$]VAXcluster connection to this node|a cluster member opened a VMS[$]VAXcluster connection to this node|the executive already holds this pair.s VMS[$]VAXcluster connection|adopting the VMS[$]VAXcluster connection)
+BLACKOUT on  tapBdfe at 12:23:15.145
+$ [   20.399983] %PEA0, virtual circuit open
+[   21.180826] %CNXMAN, a connection manager was discovered on the interconnect
+[   24.203389] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+BLACKOUT off tapBdfe at 12:24:00.151 after 45s

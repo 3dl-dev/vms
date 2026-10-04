@@ -22,7 +22,7 @@
 # object built in the same run still yields EM_AARCH64 (regression check).
 #
 # Companion to run_test.sh (the aarch64 MVP harness, still the CI job of
-# record — see .github/workflows/ci.yml vmslink-mvp). This script targets the
+# record — see .github/workflows/ci-*.yml (split by vms-1af) vmslink-mvp). This script targets the
 # x86_64-native dev host directly; no arm64 QEMU/container needed.
 
 set -e
@@ -283,7 +283,7 @@ echo
 echo "== regression: an aarch64 input in the SAME LINK.EXE build must still =="
 echo "   yield EM_AARCH64 (the gate is additive, not a replacement) =="
 # Cross-compile a real aarch64 .o via the same arm64/alpine container CI uses
-# for the vmslink-mvp job (.github/workflows/ci.yml) -- no native aarch64
+# for the vmslink-mvp job (.github/workflows/ci-*.yml (split by vms-1af)) -- no native aarch64
 # cross-compiler is assumed on this host. Only the COMPILE step runs under
 # arm64 emulation; the produced .o is then fed to the NATIVE x86_64 LINK.EXE
 # built above, so the gate/emission code under test runs unemulated.

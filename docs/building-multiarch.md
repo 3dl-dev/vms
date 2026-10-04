@@ -117,7 +117,7 @@ To exit QEMU: `Ctrl-A` then `X`.
 | `tools/cross-alpha/run-syssvc-tests-alpha.sh` | System-service suite over ODS-2 fixture disks. |
 | `tools/cross-alpha/boot-alpha-probe.sh` | Diagnostic probes (`PROBE=provision\|contention\|exec`). |
 
-### Alpha CI gates (`.github/workflows/ci.yml`)
+### Alpha CI gates (`.github/workflows/ci-alpha.yml`)
 
 Per-PR jobs run when the `alpha_activation` path filter matches; each builds the
 `ovmx-cross-alpha` image, then runs:
@@ -212,7 +212,7 @@ exercises one executive facility cross-process): `run-devvms.sh` (`/dev/vms`
 PING), `run-eflag.sh`, `run-access.sh`, `run-proctab.sh`, `run-mbx.sh`,
 `run-devalloc.sh`, and `run-purdy.sh` (binary-SYSUAF Purdy authentication).
 
-### VAX CI gates (`.github/workflows/ci.yml`)
+### VAX CI gates (`.github/workflows/ci-vax.yml`)
 
 | Job | Command | Notes |
 |-----|---------|-------|

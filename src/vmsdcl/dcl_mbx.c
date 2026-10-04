@@ -304,10 +304,98 @@ done:
 }
 
 /*
- * writer_main - drain DCL's stdout pipe to the SYS$OUTPUT mailbox. Each read()
- * of DCL's output becomes one IO$_WRITEVBLK message the parent reads back. Ends
- * when the pipe's last write end is closed (DCL exited and dcl_mbx_shutdown()
- * closed fd 1), which returns 0 from read().
+ * LINE-ORIENTED RELAY (vms-d26f). A Unix pipe carries no message boundaries,
+ * so a single read() of DCL's stdout pipe can return bytes from TWO logically
+ * distinct writes concatenated -- e.g. a foreign command's own diagnostic
+ * print (its exit-time stdio flush) immediately followed by DCL's own
+ * end-of-command status echo (a driven build's "MMK____status=" marker,
+ * tests/corpus/tier3-mmk/build_target.c's send_cmd_and_wait/echo_ast
+ * protocol). The OLD code forwarded each read() verbatim as ONE mailbox
+ * message, so that concatenation became ONE message whose FIRST bytes were
+ * the diagnostic print, not the marker -- and echo_ast only recognizes the
+ * marker when it is the first thing in a message (a strncmp at offset 0),
+ * exactly the real VMS record-oriented mailbox semantics (one $QIO WRITE is
+ * one message) this relay exists to preserve. The marker then silently
+ * fails to match, is echoed as ordinary output instead of consumed, and the
+ * command that owned it never completes -- MMK's send_cmd_and_wait $HIBERs
+ * forever waiting for a wake that was already missed, and the spawned DCL
+ * has nothing further queued to send it (test_syssvc_mmk_build's "pristine
+ * run" flake: LINK never runs because the PRECEDING command's own
+ * completion marker was the one lost this way).
+ *
+ * The fix: buffer across read()s and cut a mailbox message at each '\n', so
+ * a message boundary lines up with a DCL-level LINE boundary -- the same
+ * granularity a real VMS SYS$OUTPUT write would have produced -- regardless
+ * of how the underlying pipe happened to batch the bytes. A trailing PARTIAL
+ * line (no '\n' yet) is held and flushed once the pipe runs momentarily dry
+ * (line_relay_flush_partial), which is still needed for an interactive
+ * prompt ("$ ", vms-195) that never ends in a newline and must still reach
+ * the mailbox promptly via dcl_mbx_output_drain_sync.
+ */
+static char   g_linebuf[DCL_MBX_BUF];
+static size_t g_linelen = 0;
+
+/*
+ * line_relay_feed - append `n` new bytes and emit one mailbox message per
+ * complete ('\n'-terminated) line found. Returns 1 on success, 0 on a fatal
+ * sink failure (caller treats exactly like a failed out_sink_write used to).
+ * A single "line" that alone fills the buffer with no '\n' is flushed as-is
+ * rather than grown unboundedly or left to stall a pathological producer.
+ */
+static int line_relay_feed(const char *data, size_t n)
+{
+    size_t off = 0;
+
+    while (off < n) {
+        size_t room = sizeof(g_linebuf) - g_linelen;
+        size_t take = n - off;
+        if (take > room)
+            take = room;
+        memcpy(g_linebuf + g_linelen, data + off, take);
+        g_linelen += take;
+        off += take;
+
+        for (;;) {
+            char *nl = memchr(g_linebuf, '\n', g_linelen);
+            if (!nl)
+                break;
+            size_t reclen = (size_t)(nl - g_linebuf) + 1;
+            if (!out_sink_write(g_linebuf, reclen))
+                return 0;
+            memmove(g_linebuf, g_linebuf + reclen, g_linelen - reclen);
+            g_linelen -= reclen;
+        }
+
+        if (room == 0 && g_linelen == sizeof(g_linebuf)) {
+            /* No newline anywhere in a full buffer: flush it whole rather
+             * than stall waiting for one that may never come. */
+            if (!out_sink_write(g_linebuf, g_linelen))
+                return 0;
+            g_linelen = 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * line_relay_flush_partial - forward a held-back partial line (no trailing
+ * '\n' yet). Called once the pipe runs momentarily dry, so a newline-less
+ * prompt still reaches the mailbox instead of waiting forever for one.
+ */
+static int line_relay_flush_partial(void)
+{
+    if (g_linelen == 0)
+        return 1;
+    int ok = out_sink_write(g_linebuf, g_linelen);
+    g_linelen = 0;
+    return ok;
+}
+
+/*
+ * writer_main - drain DCL's stdout pipe to the SYS$OUTPUT mailbox, one
+ * mailbox message per complete line (line_relay_feed above). Ends when the
+ * pipe's last write end is closed (DCL exited and dcl_mbx_shutdown() closed
+ * fd 1), which returns 0 from read().
  */
 static void *writer_main(void *arg)
 {
@@ -326,7 +414,7 @@ static void *writer_main(void *arg)
             break;
         }
         int eof = 0;
-        if (!out_sink_write(buf, (size_t)n))
+        if (!line_relay_feed(buf, (size_t)n))
             break;
 
         /* Drain whatever else is queued without blocking, until the pipe is
@@ -335,7 +423,7 @@ static void *writer_main(void *arg)
         for (;;) {
             ssize_t m = read(g_out_pipe_r, buf, sizeof(buf));
             if (m > 0) {
-                if (!out_sink_write(buf, (size_t)m)) { eof = 1; break; }
+                if (!line_relay_feed(buf, (size_t)m)) { eof = 1; break; }
             } else if (m == 0) {
                 eof = 1;
                 break;
@@ -347,8 +435,11 @@ static void *writer_main(void *arg)
             }
         }
 
-        /* Pipe drained to empty: every byte written before now is out through
-         * the mailbox. Publish the epoch so a prompt drain barrier can proceed. */
+        /* Pipe drained to empty: flush any held-back partial line (a
+         * newline-less prompt) so every byte written before now is really
+         * out through the mailbox before the epoch advances. */
+        if (!line_relay_flush_partial())
+            eof = 1;
         publish_drained();
         if (eof)
             break;
@@ -507,6 +598,7 @@ int dcl_mbx__test_start_output(int sink_fd, int *out_write_fd)
     g_out_pipe_r  = p[0];   /* writer toggles O_NONBLOCK per batch */
     g_out_sink_fd = sink_fd;
     g_drain_epoch = 0;
+    g_linelen     = 0;      /* fresh line-relay state for this hermetic run */
     if (pthread_create(&g_writer, NULL, writer_main, NULL) != 0) {
         close(p[0]); close(p[1]);
         g_out_pipe_r  = -1;

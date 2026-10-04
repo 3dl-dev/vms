@@ -258,6 +258,28 @@ enum cnxman_event {
 	 */
 	CNXMAN_EV_TRANSITION_DONE = 23,
 
+	/*
+	 * THE COORDINATOR ABANDONED THE TRANSITION -- cat-0x01 op-0x04, role
+	 * 0x50 (rd vms-f3ec).
+	 *
+	 * WHY IT IS ITS OWN EVENT rather than a state inside RX_TR_OPEN, which
+	 * is where it used to arrive. An abort is the exact OPPOSITE of the
+	 * frames that share that cell: an open, a GO and op-0x0f all say the
+	 * transition is proceeding, and every table that reads the transcript
+	 * treats them as progress. On the vms-f3ec real-VAX run that conflation
+	 * was the whole `NEW -> MEMBER` stall -- the join FSM counted the abort
+	 * as its membership request having been TAKEN, and then waited forever
+	 * for an answer to a question the cluster had already thrown away.
+	 *
+	 * IT IS NOT CNXMAN_EV_RX_CLOSE either, though the barrier maps op-0x04
+	 * onto that name today: the join table already spends RX_CLOSE on the
+	 * cat-0x06 transaction close / recurring member poll (spec sec
+	 * 4(p)/(q)), which is a different verb with a different meaning, and
+	 * one enum value cannot be both without misnaming one of them in every
+	 * transcript. Both FSMs can now say "abort" and mean it.
+	 */
+	CNXMAN_EV_RX_ABORT      = 24,
+
 	CNXMAN_EV__COUNT
 };
 
@@ -431,10 +453,109 @@ int cnxman_get_transition(struct vms_cluster *cl, struct cnxman_transition *out)
  * IDEMPOTENT. A second call while the connection manager is up is
  * SS$_NORMAL and starts nothing -- it does not re-drive a join in flight.
  */
+/* ==========================================================================
+ * 7b. CLUEXIT -- re-incarnating in place (rd vms-0f9)
+ *
+ * A real OpenVMS node the cluster has given up on does not sit there: it
+ * bugchecks CLUEXIT ("Node voluntarily exiting VAXcluster") and reboots, and
+ * comes back as a NEW INCARNATION, which is what lets every peer's p. 7-25
+ * edge fire and lets the node be admitted again. MEASURED twice on three real
+ * OpenVMS VAX V7.3 nodes in tests/lab/captures/vms-b36-cnxmgrerr-20260925/:
+ * the isolated node lost quorum, ran its own reconfiguration, took CLUEXIT and
+ * rebooted, and only then did its peers stop refusing it.
+ *
+ * WHAT OVMX DOES INSTEAD OF REBOOTING, and why it is the same thing on the
+ * wire: this executive re-incarnates IN PLACE. It announces the departure the
+ * way p. 7-29 says a leaving node does (the port's last gasp, which makes every
+ * peer close the circuit at once instead of waiting out RECNXINTERVAL),
+ * re-samples the port's incarnation quadword, throws away every scrap of
+ * cluster state it held, and starts its connection manager again. A peer
+ * cannot tell that apart from a reboot, because the only thing a peer ever saw
+ * of a reboot was the last gasp and the new incarnation. The node's own
+ * processes are not disturbed, which is the one honest difference and is
+ * recorded here rather than hidden.
+ *
+ * WHAT RAISES IT: exactly the two things the cluster does to say it has given
+ * up on this node -- a peer REJECTING this node's VMS$VAXcluster connect
+ * (p. 2-25: a reject is the peer's judgement), and a committed transition that
+ * NAMES this node and leaves it out. Neither is inferred; both are events this
+ * executive already receives.
+ * ========================================================================== */
+enum cnxman_cluexit_reason {
+	CNXMAN_CLUEXIT_NONE     = 0,
+	CNXMAN_CLUEXIT_REJECTED = 1, /* a peer refused our own connect       */
+	CNXMAN_CLUEXIT_REMOVED  = 2, /* a committed transition left us out   */
+	/*
+	 * ...and the same event seen from the other side: THIS node refused a
+	 * member's connect because of its own give-up record. A node that has
+	 * given up on the cluster and is now turning the cluster away is in
+	 * the standoff the oracle filmed, and re-incarnating is the only thing
+	 * that ends it -- which is what the real V7.3 node did (CLUEXIT, then
+	 * accepted again). MEASURED: without this trigger the rig's joiner
+	 * refused correctly, never crashed the VAX, and never got back in
+	 * (arm V3-2).
+	 */
+	CNXMAN_CLUEXIT_STANDOFF = 3
+};
+
+/*
+ * How many times this node has really re-incarnated, and why the last one
+ * happened. Readback only -- nothing decides anything from these -- but a run
+ * in which the console shows the standoff and this count is still 0 is a
+ * CLUEXIT that did not happen. 0 before CLUSTER_START.
+ */
+uint32_t vms_cnxman_cluexits(const struct vms_cluster *cl);
+enum cnxman_cluexit_reason vms_cnxman_cluexit_reason(
+	const struct vms_cluster *cl);
+
 int vms_cnxman_start(struct vms_cluster *cl);
 
+/*
+ * ANNOUNCE THIS NODE'S DEPARTURE AT THE SCS LAYER (rd vms-abd) -- step one of a
+ * clean VMS_IOCTL_CLUSTER_STOP, and the half OVMX did not have.
+ *
+ * A real VMS node leaving through SHUTDOWN.COM tells the cluster twice: the
+ * PORT sends the last gasp (p. 7-29, which vms_cnxman_stop below already emits)
+ * and SCS sends a SYMMETRIC DISCONNECT_REQ on every open connection (p. 2-26/
+ * 27). This is the second one. Without it a departing node simply stopped
+ * answering and every survivor carried a dead CSB until RECNXINTERVAL expired.
+ *
+ * WHAT IT DOES: enumerates the OPEN peer connections out of LIVE executive
+ * state (each in-use CSB's `cdt_conid`, the request currently being dispatched,
+ * and the join's own `VMS$VAXcluster` / `VMS$DISK_CL_DRVR` connections), calls
+ * scs_disconnect() on each -- the ORDINARY teardown path, so every byte of
+ * every DISCONNECT_REQ is built by the SCS FSM out of that connection's own CDT
+ * and nothing here composes a frame -- and then DRAINS, bounded, until each
+ * teardown's op 6 is really on the wire.
+ *
+ * CONTEXT, AND WHY IT IS NOT NEGOTIABLE: PROCESS CONTEXT, FORK THREAD RUNNING,
+ * FORK MUTEX NOT HELD. The handshake is completed by the peer's answering frame
+ * and only the fork thread can dispatch that, so this call has to be able to
+ * yield to it -- which is impossible from a fork callback (it IS the fork
+ * thread) and impossible while holding the fork mutex (the only dispatcher,
+ * cf_dispatch_one, takes that same non-recursive mutex). It takes the mutex
+ * itself, briefly, for each state read and for the initiation pass.
+ * MAY SLEEP; bounded by CNXMAN_DEPART_DRAIN_MS whatever the peers do.
+ *
+ * GATED by the OVMX_CLEAN_DEPART SYSGEN switch (struct vms_cluster_params), on
+ * by default; with it off this returns having emitted nothing.
+ *
+ * `*out_initiated` / `*out_drained` (either may be NULL) receive how many
+ * connections really got a DISCONNECT_REQ and how many really finished inside
+ * the deadline -- counted, never asserted: a node with nothing open reports
+ * 0/0, and a peer that went silent shows up as drained < initiated (INV-6).
+ *
+ * Idempotent: a second call finds no OPEN connection left and does nothing.
+ */
+void vms_cnxman_depart(struct vms_cluster *cl, uint32_t *out_initiated,
+		       uint32_t *out_drained);
+
 /* Leave the cluster: emit the last gasp, close the connections, stop the
- * timers. Idempotent. */
+ * timers. Idempotent.
+ *
+ * This is the TEARDOWN half; vms_cnxman_depart() above is the ANNOUNCEMENT
+ * half and runs FIRST, while the fork thread is still live. Nothing here waits
+ * for a peer -- by the time this runs the departure is already on the wire. */
 void vms_cnxman_stop(struct vms_cluster *cl);
 
 /* ==========================================================================

@@ -14,7 +14,7 @@
 #   1. It boots the ACTUAL cut artifacts -- $RELEASE_DIR/vmlinuz,
 #      $RELEASE_DIR/initramfs-ovmx-slim.cpio.gz, $RELEASE_DIR/ovmx-distrib.img
 #      -- bind-mounted in from a real tools/cut-release.sh run (see
-#      run_release_acceptance_e2e.sh's header + .github/workflows/ci.yml's
+#      run_release_acceptance_e2e.sh's header + .github/workflows/ci-*.yml (split by vms-1af)'s
 #      release-acceptance-e2e job for how CI produces $RELEASE_DIR). This
 #      script never builds anything; it only boots what it is handed.
 #   2. It runs the SAME acceptance scenario as test_parts_demo_e2e.sh (the

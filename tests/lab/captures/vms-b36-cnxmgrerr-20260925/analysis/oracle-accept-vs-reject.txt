@@ -1,0 +1,19 @@
+# Real OpenVMS VAX V7.3, three nodes: who ACCEPTS and who REJECTS an
+# inbound VMS$VAXcluster connect. Produced by tools/cluster/cm_connect_census.py.
+
+
+### oracle-3node-clean.pcap  (8 VMS$VAXcluster connect-family events)
+  t=   0.000  VAX3  dials VAX2   ->  ACCEPT
+  t=   0.899  VAX1  dials VAX3   ->  ACCEPT
+
+### oracle-3node-fault-f1.pcap  (38 VMS$VAXcluster connect-family events)
+  t=   0.000  VAX2  dials VAX3   ->  ACCEPT
+  t=   1.143  VAX1  dials VAX3   ->  ACCEPT
+  t=  52.283  VAX2  dials VAX3   ->  REJECT
+  t=  53.277  VAX1  dials VAX3   ->  REJECT
+  t=  53.285  VAX2  dials VAX3   ->  REJECT
+  t=  53.897  VAX3  dials VAX2   ->  REJECT
+  t=  54.278  VAX1  dials VAX3   ->  REJECT
+  t=  54.288  VAX2  dials VAX3   ->  REJECT
+  t=  55.278  VAX1  dials VAX3   ->  REJECT
+  t=  56.278  VAX1  dials VAX3   ->  (no answer)

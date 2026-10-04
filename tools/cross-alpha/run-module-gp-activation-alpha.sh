@@ -418,8 +418,8 @@ assert_fileop() {
 
   echo "  (a) port self-verify (informational)      : port_ok=$port_ok  seam=${seam:-<ABSENT>}  sentinel=$sentinel (7 = full)"
   echo "  (b) INDEPENDENT ACP reader (DIRECTORY):"
-  echo "      b1 creat  FOPCRE.DAT present, fid=${cre_fid:-<none>}  ok=$cre_ok"
-  echo "      b2 rename FOPDST.DAT present, fid=${dst_fid:-<none>}  ok=$dst_ok"
+  echo "      b1 creat  FOPCRE.DAT (want present+FID) fid=${cre_fid:-<none>}  ok=$cre_ok"
+  echo "      b2 rename FOPDST.DAT (want present+FID) fid=${dst_fid:-<none>}  ok=$dst_ok"
   echo "      b3 unlink FOPDEL.DAT GONE (%DIRECT-W-NOFILES)         ok=$del_ok"
   echo "      b4 rnsrc  FOPSRC.DAT GONE (%DIRECT-W-NOFILES)         ok=$src_ok"
   echo "  (c) image activated (no load failure)     : ok=$err_ok"

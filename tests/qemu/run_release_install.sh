@@ -6,7 +6,7 @@
 # Same convention as run_install_boot_e2e.sh / run_install_menu.sh (read those
 # headers): gated behind OVMX_QEMU_FULL_E2E=1 so a bare `ctest` never pays for a
 # real docker+QEMU boot it cannot use, and CI does NOT rely on that opt-in as
-# cover -- .github/workflows/ci.yml's release-install-e2e job runs it for real
+# cover -- .github/workflows/ci-*.yml (split by vms-1af)'s release-install-e2e job runs it for real
 # with OVMX_QEMU_FULL_E2E=1 and treats a SKIP (exit 77) as a hard failure.
 #
 # Unlike the sibling gates this one is a HOST-side orchestrator that fans out

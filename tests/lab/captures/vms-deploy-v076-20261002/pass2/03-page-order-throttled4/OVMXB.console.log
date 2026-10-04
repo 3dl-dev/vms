@@ -1,0 +1,71 @@
+
+
+KA655-B V5.3, VMB 2.7
+Performing normal system tests.
+40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25..
+24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+08..07..06..05..04..03..
+Tests completed.
+>>>B DUA0
+(BOOT/R5:0 DUA0)
+
+
+
+  2..
+-DUA0
+  1..0..
+
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7-6 - OpenVMS-compatible
+     1-JAN-2010 13:07:47.62
+
+%OVMX-I-SYSDISK, mounting system disk DUA0:
+%OVMX-I-MOUNTED, system disk DUA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+%PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at  1-JAN-2010 13:08:59.47
+%PEA0, channel verified%PEA0, virtual circuit open%CNXMAN, a connection manager was discovered on the interconnect
+%CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+%CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+%CNXMAN, waiting for the cluster member to send its cluster parameters before asking for admission
+%CNXMAN, no system this node can reach belongs to a cluster: this node is NOT a cluster member, and will ask again
+%CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+%CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+%CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+%CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+%CNXMAN, no system this node can reach belongs to a cluster: this node is NOT a cluster member, and will ask again
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+%OVMX-I-STARTUP, handing SYS$MANAGER:STARTUP.COM to DCL for ACP resolution
+%CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+%CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+%CNXMAN, no system this node can reach belongs to a cluster: this node is NOT a cluster member, and will ask again
+%CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+%CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+%CNXMAN, sending VAXcluster membership request to the selected member
+%CNXMAN, the cluster assigned this node a cluster system id
+%CNXMAN, the cluster assigned this node a cluster system id
+%CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, this node is a member of the cluster
+%CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+%CNXMAN, VAXcluster state transition in progress
+%CNXMAN, this node is now a VAXcluster member
+%CNXMAN, system 00000000000007c4 was added to the cluster
+%CNXMAN, system 00000000000007c5 was added to the cluster
+%DLM, refusing a lock message from a system that has not proved it runs this implementation
+%DLM, refusing a lock message from a system that has not proved it runs this implementation
+%CNXMAN, completed VAXcluster state transition
+%DLM, refusing a lock message from a system that has not proved it runs this implementation
+%DLM, refusing a lock message from a system that has not proved it runs this implementation
+%DLM, refusing a lock message from a system that has not proved it runs this implementation
+%DLM, refusing a lock message from a system that has not proved it runs this implementation
+%DLM, refusing a lock message from a system that has not proved it runs this implementation
+%PEA0, channel verified%PEA0, virtual circuit open%CNXMAN, a connection manager was discovered on the interconnect
+%MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks%CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+%CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+%CNXMAN, system 00000000000007c3 was added to the cluster
+%CNXMAN, completed VAXcluster state transition

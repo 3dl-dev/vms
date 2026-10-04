@@ -71,6 +71,17 @@ uint32_t ovmx_vterm_create(char *devnam, size_t devnam_size, int *master_fd)
     mfd = posix_openpt(O_RDWR | O_NOCTTY);
     if (mfd < 0)
         return SS$_DEVALLOC;
+    /* The master is the DAEMON's end of the link and must not leak into the
+     * session process $CREPRC is about to create (rd vms-1875). An inherited
+     * copy keeps the master open inside the session itself, so the daemon's
+     * ovmx_vterm_delete() -- the link going down -- never hangs the terminal
+     * up: the session sits at its prompt until the login idle deadline
+     * instead of running down, and its channel keeps the withdrawn RTAn:
+     * alive that long. */
+    if (fcntl(mfd, F_SETFD, FD_CLOEXEC) != 0) {
+        close(mfd);
+        return SS$_DEVOFFLINE;
+    }
     if (grantpt(mfd) != 0 || unlockpt(mfd) != 0) {
         close(mfd);
         return SS$_DEVOFFLINE;

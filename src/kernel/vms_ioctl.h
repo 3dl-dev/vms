@@ -761,15 +761,16 @@ _Static_assert(VMS_IOCTL_DLM_ENUM_WAITS == 0xC1905638u,
  * locks the executive holds for the node's LIFE -- today the per-volume
  * "F11B$v<label>" lock a faithful MOUNT holds from $MOUNT to $DISMOUNT (vms-25e),
  * later the mount (MOU$) and clusterwide-logical (LNM$CWLOGICALS) locks -- that
- * the connection manager (scsd) must register to the coordinator during a
+ * the connection manager (executive-resident since FC-P3.9; formerly the
+ * retired userspace scsd daemon) must register to the coordinator during a
  * directory rebuild. Each entry gives the resource name and this node's LOCAL
  * lock handle, which becomes the op-0x01 requester lkid on the wire.
  *
  * INV-6: a READ of REAL lock-manager state -- one entry per lock the executive
  * genuinely holds (a nonzero vol_lkid on a mounted volume). count=0 when the node
  * holds no standing locks; never a fabricated lock. This is the honest boundary
- * scsd registers FROM: it can only announce to the cluster what the executive
- * actually holds.
+ * the connection manager registers FROM: it can only announce to the cluster
+ * what the executive actually holds.
  */
 #define VMS_DLM_ENUM_STANDING_MAX 16u   /* standing system locks returned per call */
 struct vms_dlm_standing_ent {
@@ -878,7 +879,8 @@ struct vms_pe_view_wire {
     uint8_t  hwaddr_valid;
     uint8_t  hwaddr[6];
     uint8_t  link_up;
-    uint8_t  pad0[3];
+    uint8_t  cluster_group_valid;   /* 0 = group 0 by DEFAULT, not by config  */
+    uint16_t cluster_group;         /* the group the HELLO mcast addr is built from */
     uint32_t mtu;
     uint32_t max_pktsz;
     uint32_t n_channels;
@@ -1495,7 +1497,22 @@ struct vms_sysgen_load_args {
      */
     uint8_t  sw_version[8];         /* in: the SSOT's token, blank/NUL padded     */
     uint8_t  sw_version_len;        /* in: significant chars, 0 = not supplied    */
-    uint8_t  pad3;
+
+    /*
+     * OVMX_CLEAN_DEPART's wire half (rd vms-abd), carved out of this struct's
+     * former `pad3' -- so the struct's SIZE and every _Static_assert below it
+     * are UNCHANGED and no ABI moved (#928: the NetBSD mirror in
+     * src/kernel-netbsd/vms_lock_nb.h carries the identical field).
+     *
+     * THE SENSE IS INVERTED ON PURPOSE. This field says "the operator turned
+     * the clean departure OFF", not "it is on", because a pad byte reads 0 and
+     * every caller that predates this field zero-fills the struct: the
+     * zero-filled case must therefore be the FAITHFUL one. The executive stores
+     * the positive sense (struct vms_cluster_params.clean_depart), which is what
+     * its readers ask; vms_devtab.c's sysgen_load_args_to_params() is the one
+     * place the negation is undone.
+     */
+    uint8_t  clean_depart_off;      /* in: 1 = OVMX_CLEAN_DEPART 0 (switch OFF)   */
 
     uint32_t status;                /* return: SS$_ status                        */
 };
@@ -1542,6 +1559,56 @@ _Static_assert(sizeof(struct vms_cluster_start_args) == 12,
 #define VMS_IOCTL_CLUSTER_START _IOWR(VMS_IOC_MAGIC, 0x3f, struct vms_cluster_start_args)
 _Static_assert(VMS_IOCTL_CLUSTER_START == 0xC00C563Fu,
                "VMS_IOCTL_CLUSTER_START encodes differently than the reference build");
+
+/*
+ * VMS_IOCTL_CLUSTER_STOP (rd vms-abd) -- CLUSTER_START's missing twin: the
+ * CLEAN CLUSTER DEPARTURE.
+ *
+ * WHAT WAS WRONG WITHOUT IT. A real VMS node leaving through SHUTDOWN.COM
+ * announces its departure BOTH ways -- the PORT-level "last gasp" datagram
+ * (VAXcluster Principles p. 7-29) and a symmetric SCS DISCONNECT_REQ per open
+ * connection (p. 2-26/27). OVMX announced NEITHER, because it had no clean
+ * shutdown sequence at all: vms_cnxman_stop(), vms_scs_stop() and vms_pe_stop()
+ * were written and then never called by anything. A departing OVMX node simply
+ * VANISHED, and every survivor had to time it out over RECNXINTERVAL where a
+ * real VAX removes it at once.
+ *
+ * WHY IT IS AN IOCTL AND NOT A KERNEL-SIDE HOOK. Because CLUSTER_START is, and
+ * a departure has to run in the SAME context its arrival did: PROCESS CONTEXT,
+ * on the issuing thread, with the cluster FORK THREAD STILL RUNNING and the
+ * fork mutex NOT held. That is not an incidental property, it is the whole
+ * mechanism -- the DISCONNECT_REQ handshake this call drives is finished by the
+ * PEER's answering frame, which only the fork thread can dispatch, so the
+ * departing thread must be able to yield to it and re-test (vms_cnxman_depart,
+ * src/kernel-core/vms_cnxman.c). A teardown driven from a fork-thread callback
+ * or from an already-quiesced context could not wait for that answer and would
+ * put a half-finished handshake on the wire.
+ *
+ * Takes no `in:` fields, exactly like CLUSTER_START: what is torn down is
+ * vms_cluster_node()'s own state, never a description of it riding this call.
+ *
+ * `connections_disconnected` and `connections_drained` are READ BACK from the
+ * executive's own counts -- how many OPEN peer connections this node really
+ * initiated a DISCONNECT_REQ on, and how many of those really completed their
+ * handshake before the bounded deadline. They are diagnostics, and they are
+ * honest ones: a node with no open connections answers 0/0 rather than a
+ * plausible number, and `drained < disconnected` is the real statement "a peer
+ * did not answer in time", never smoothed over (INV-6). `cluster_state` is
+ * cl->state after the teardown, read the same way CLUSTER_START reads it.
+ */
+struct vms_cluster_stop_args {
+    uint32_t status;                   /* return: SS$_ status                  */
+    uint32_t cluster_state;            /* return: enum vms_cluster_state       */
+    uint32_t connections_disconnected; /* return: DISCONNECT_REQs initiated    */
+    uint32_t connections_drained;      /* return: ... that completed in time   */
+};
+_Static_assert(sizeof(struct vms_cluster_stop_args) == 16,
+               "vms_cluster_stop_args changed size -- VMS_IOCTL_CLUSTER_STOP ABI break");
+/* NR 0x6f: the 0x30-0x3f block is full and 0x63-0x6e are taken, so this is the
+ * next free number, chosen the same way CLUSTER_DIAG_CONN's 0x69 was. */
+#define VMS_IOCTL_CLUSTER_STOP _IOWR(VMS_IOC_MAGIC, 0x6f, struct vms_cluster_stop_args)
+_Static_assert(VMS_IOCTL_CLUSTER_STOP == 0xC010566Fu,
+               "VMS_IOCTL_CLUSTER_STOP encodes differently than the reference build");
 
 /* ================================================================
  * Process registration
@@ -2198,8 +2265,9 @@ _Static_assert(VMS_IOCTL_TERM_RESOLVE == 0xC028565Bu,
  * The conveyance channel that lets an inbound network daemon which has ALREADY
  * authenticated a user in its own protocol (SSH: cryptographic/Purdy password
  * against the same SYSUAF authority) hand that user to a $CREPRC(LOGINOUT,
- * RTAn:, PRC$M_LOGINOUT) session WITHOUT LOGINOUT re-challenging (Option A,
- * design docs/design-ssh-loginout-handoff.md). Under PRC$M_LOGINOUT the creator
+ * RTAn:, PRC$M_LOGINOUT) session WITHOUT LOGINOUT re-challenging (Option A; the
+ * network-login handoff is the landed substrate the real upstream OpenSSH port
+ * binds -- rd vms-9ef, network stamp rung rd vms-65b). Under PRC$M_LOGINOUT the creator
  * stamps NO identity (sys_process.c) and $SETIDENT is self-targeted, so the
  * daemon cannot reach into the LOGINOUT child; instead it stamps the
  * pre-authenticated user name onto the RTAn: DEVICE record it minted, and the

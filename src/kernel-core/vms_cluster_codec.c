@@ -276,6 +276,24 @@ static const struct frame_class_rule g_rules[] = {
 	  M_DISCCLASS | M_LEN_GT, VMS_DISC_CLASS_HELLO,
 	  0, { 0, 0, 0 }, 0, { 0, 0, 0 }, 120, 0, 0 },
 
+	/*
+	 * The SECOND discovery revision's HELLO (rd vms-0f8): abs 36 == 0x03
+	 * with a 114-byte SCA content. Keyed on BOTH the class byte and the
+	 * exact length, exactly like the 0x05 row above -- a class-0x03
+	 * discovery frame of any OTHER length is a shape nobody has ever
+	 * observed, and this codec refuses to guess at it (INV-6): it stays
+	 * VMS_FCLS_UNKNOWN and is counted.
+	 *
+	 * Cannot collide with either 0x05 row: M_DISCCLASS partitions the
+	 * discovery family by the class byte, so table order is not
+	 * load-bearing here.
+	 */
+	{ { VMS_FCLS_HELLO_C3, VMS_FFAM_DISCOVERY,
+	    VMS_FCAP_CHANWORD | VMS_FCAP_DISCNAME,
+	    40, VMS_SCA_HDR_LEN, "hello-c3", "spec §4(a),§4(b.c3)" },
+	  M_DISCCLASS | M_LEN_EQ, VMS_DISC_CLASS_HELLO_C3,
+	  0, { 0, 0, 0 }, 1, { 114, 0, 0 }, 0, 0, 0 },
+
 	{ { VMS_FCLS_SOLICIT, VMS_FFAM_DISCOVERY,
 	    VMS_FCAP_CHANWORD | VMS_FCAP_DISCNAME,
 	    40, VMS_SCA_HDR_LEN, "solicit", "spec §4(c)" },
@@ -694,7 +712,7 @@ vms_codec_status_t vms_sca_hdr_parse(const uint8_t *frame, uint32_t len,
 	vms_wire_get_bytes(&v, VMS_OFF_ETH_SRC, VMS_ETH_ADDR_LEN, out->eth_src);
 	out->sca_len_field = vms_wire_get_le16(&v, VMS_OFF_SCA_LEN);
 	vms_wire_get_bytes(&v, VMS_OFF_DST_LAVC, VMS_ETH_ADDR_LEN, out->dst_lavc);
-	out->connect_flag = vms_wire_get_le16(&v, VMS_OFF_CONNECT_FLAG);
+	out->cluster_group = vms_wire_get_le16(&v, VMS_OFF_CLUSTER_GROUP);
 	vms_wire_get_bytes(&v, VMS_OFF_SRC_LAVC, VMS_ETH_ADDR_LEN, out->src_lavc);
 	out->word30 = vms_wire_get_le16(&v, VMS_OFF_WORD30);
 
@@ -718,7 +736,7 @@ vms_codec_status_t vms_sca_hdr_build(const struct vms_sca_hdr *h,
 	vms_wire_put_be16(&w, VMS_OFF_ETHERTYPE, VMS_SCA_ETHERTYPE);
 	vms_wire_put_le16(&w, VMS_OFF_SCA_LEN, h->sca_len_field);
 	vms_wire_put_bytes(&w, VMS_OFF_DST_LAVC, VMS_ETH_ADDR_LEN, h->dst_lavc);
-	vms_wire_put_le16(&w, VMS_OFF_CONNECT_FLAG, h->connect_flag);
+	vms_wire_put_le16(&w, VMS_OFF_CLUSTER_GROUP, h->cluster_group);
 	vms_wire_put_bytes(&w, VMS_OFF_SRC_LAVC, VMS_ETH_ADDR_LEN, h->src_lavc);
 	vms_wire_put_le16(&w, VMS_OFF_WORD30, h->word30);
 

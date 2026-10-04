@@ -299,18 +299,26 @@ console_login_acceptance() {
     fi
 
     # Now leave the prompt strictly alone for longer than the deadline
-    # (LOGIN_INPUT_TIMEOUT_SEC in tools/login_input.h, the public LGI_PWD_TMO
-    # default of 30s). LOGINOUT must DISCONNECT -- silently, printing no
-    # farewell, as VMS does -- and JOB_CONTROL must create the next session on
-    # OPA0:, which then waits for its own RETURN.
+    # (LOGIN_INPUT_TIMEOUT_SEC in tools/login_input.h: 20s, the LGI_RETRY_TMO
+    # default a real V7.3 console applies to its login reads -- rd vms-29e).
+    # LOGINOUT must say so exactly as VMS does ("Error reading command input" /
+    # "Timeout period expired", the oracle bytes in login_input.h), end the
+    # session, and JOB_CONTROL must create the next session on OPA0:, which then
+    # waits for its own RETURN.
     local IDLE_WAIT="${LOGIN_IDLE_WAIT:-45}"
     local IDLE_OFF; IDLE_OFF=$(wc -c <"$LOG")
     echo "  (idle-timeout probe: leaving the login prompt untouched for ${IDLE_WAIT}s)"
     sleep "$IDLE_WAIT"
     local IDLE_SEG; IDLE_SEG=$(_batt_seg_since "$IDLE_OFF")
-    # Silent: no invented sign-off line (the MAX_ATTEMPTS rule, vms-417).
+    # NOT silent, and not invented either: the two lines the V7.3 oracle prints
+    # (rd vms-29e). A silent timeout is what let an idle console pass for a
+    # login read "abandoned" by operator output.
+    must_have "$IDLE_SEG" 'Error reading command input' \
+        "IDLE TIMEOUT (vms-29e): the expiry is REPORTED as VMS reports it -- 'Error reading command input'"
+    must_have "$IDLE_SEG" 'Timeout period expired' \
+        "IDLE TIMEOUT (vms-29e): ... followed by the reason, 'Timeout period expired'"
     must_not_have "$IDLE_SEG" 'timed out' \
-        "IDLE TIMEOUT (vms-3e9 c): the disconnect is SILENT -- no invented 'timed out' farewell"
+        "IDLE TIMEOUT (vms-3e9 c): no invented 'timed out' farewell beyond the VMS text"
     must_not_have "$IDLE_SEG" 'Username:' \
         "IDLE TIMEOUT (vms-3e9 c): the replacement session does not prompt on its own -- it waits for RETURN like any OPA0: session"
     # THE REAL PROOF: the session that was sitting at "Username:" is GONE. Only
@@ -1111,6 +1119,46 @@ run_dcl_acceptance_battery() {
         bad "FAL COPY [vms-8c2]: DECNETD.EXE --fal-accept-test produced no verdict line within 180s -- the inbound-FAL COPY proof did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung transfer)"
     fi
     wait_for '$ ' 20 "$FAL_OFF"
+
+    # =======================================================================
+    # DECnet _NET: $QIO BROKER — T1 MAILBOX TRANSPORT (vms-22c, a1-2 slice 2b).
+    # The exec<->NETACP hop the broker rides: a client $CREMBXs a reply mailbox,
+    # marshals a broker request carrying reply_unit, and writes it to NETACP's
+    # request mailbox; NETACP reads it (IO$M_NOW), bounds-decodes it, services it
+    # (dnet_broker_serve), assigns the client's reply mailbox BY UNIT and writes
+    # the response; the client reads it back and correlation-matches. Only means
+    # anything against the REAL executive mailbox (vms_mbx over /dev/vms). This
+    # battery runs INSIDE the booted OVMX image where /dev/vms is real, so the
+    # round-trip must actually complete: DECNETD.EXE --net-mbx-selftest does NOT
+    # probe for the executive and does NOT skip (Rule 9, ONE RUNTIME) -- it always
+    # attempts the real mailbox creates, and on any absence they fail SS$_NOSUCHDEV
+    # and the selftest reports a TERMINAL FAIL. The HARNESS, not the engine, owns
+    # WHERE this runs -- a hard gate on the rails that ship the image, a loud note
+    # where DECNETD.EXE is absent (the VAX/Alpha staging follow-on, same as FAL).
+    local NMBX_OFF; NMBX_OFF=$(wc -c <"$LOG")
+    send 'DNETACC --net-mbx-selftest'
+    if wait_for 'IVIMAGE' 15 "$NMBX_OFF"; then
+        note "NET mailbox [vms-22c]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the T1 mailbox transport round-trip DID NOT RUN here (hard gate on the rails that ship the image)"
+    elif wait_for 'DECNETD-NET-MBX-SELFTEST:' 60 "$NMBX_OFF"; then
+        local NMBXSEG; NMBXSEG=$(tail -c "+$((NMBX_OFF + 1))" "$LOG" | tr -d '\r')
+        # Rule 9 / ONE RUNTIME: --net-mbx-selftest does NOT skip -- it always
+        # attempts the real mailbox round-trip and reports a TERMINAL FAIL on any
+        # executive absence. This battery runs booted where /dev/vms is real, so
+        # this is an unconditional hard PASS-gate (the harness owns WHERE it runs).
+            must_have "$NMBXSEG" 'DECNETD-NET-MBX-SELFTEST: PASS' \
+                "NET mailbox [vms-22c]: the T1 mailbox round-trip completed on the real executive mailbox (one PASS line per assertion above this verdict)"
+            must_have "$NMBXSEG" 'NETACP reads + bounds-decodes the request' \
+                "NET mailbox [vms-22c]: NETACP reads the request from its mailbox and bounds-decodes it (correlation + reply_unit intact)"
+            must_have "$NMBXSEG" 'assigns the client'"'"'s reply mailbox by unit' \
+                "NET mailbox [vms-22c]: NETACP routes the response to the client's OWN reply mailbox by unit (MBA<reply_unit>:)"
+            must_have "$NMBXSEG" 'correlation matches; status round-trips' \
+                "NET mailbox [vms-22c]: the client reads the response from its reply mailbox and correlation-matches it (the anti-cross-talk guard end to end)"
+            must_not_have "$NMBXSEG" 'DECNETD-NET-MBX-SELFTEST: FAIL' \
+                "NET mailbox [vms-22c]: no assertion in the T1 mailbox round-trip failed (a TERMINAL FAIL here means the real executive mailbox facility is broken, never a skipped proof)"
+    else
+        bad "NET mailbox [vms-22c]: DECNETD.EXE --net-mbx-selftest produced no verdict line within 60s -- the T1 mailbox round-trip did not run (a missing DECNETD.EXE, an absent /dev/vms, or a hung mailbox)"
+    fi
+    wait_for '$ ' 20 "$NMBX_OFF"
 
     # The DECnet device FACE _NET: is executive-resident and cross-process real
     # (vms-9ab, P5; design §2b/§7.5). $GETDVI it from DCL -- a process that is

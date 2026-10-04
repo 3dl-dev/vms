@@ -1,0 +1,260 @@
+{
+ "label": "all-at-once",
+ "order": "A,B,C",
+ "gap": 500,
+ "throttle": 1,
+ "url": "https://openvmx.3dl.dev/demo/cluster/",
+ "samples": [
+  {
+   "t": 2,
+   "sca": {},
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 14
+  },
+  {
+   "t": 20,
+   "sca": {
+    "VAXC": 2
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 24
+  },
+  {
+   "t": 38,
+   "sca": {
+    "VAXC": 18
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 24
+  },
+  {
+   "t": 56,
+   "sca": {
+    "VAXC": 78,
+    "OVMXB": 59
+   },
+   "member": {},
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 24
+  },
+  {
+   "t": 74,
+   "sca": {
+    "VAXC": 586,
+    "OVMXB": 828
+   },
+   "member": {
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 24
+  },
+  {
+   "t": 92,
+   "sca": {
+    "VAXC": 671,
+    "OVMXB": 927
+   },
+   "member": {
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 24
+  },
+  {
+   "t": 110,
+   "sca": {
+    "VAXC": 777,
+    "OVMXB": 1071,
+    "OVMXA": 100
+   },
+   "member": {
+    "OVMXB": true
+   },
+   "added": {
+    "OVMXA": [],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c5"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB",
+    "OVMXA"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 24
+  },
+  {
+   "t": 128,
+   "sca": {
+    "VAXC": 1418,
+    "OVMXB": 1459,
+    "OVMXA": 820
+   },
+   "member": {
+    "OVMXB": true,
+    "OVMXA": true
+   },
+   "added": {
+    "OVMXA": [
+     "0x7c3",
+     "0x7c4",
+     "0x7c5"
+    ],
+    "OVMXB": [
+     "0x7c4",
+     "0x7c5",
+     "0x7c3"
+    ],
+    "VAXC": []
+   },
+   "vaxc_admitted": [
+    "OVMXB",
+    "OVMXA"
+   ],
+   "lost": {},
+   "restarts": {
+    "OVMXA": 0,
+    "OVMXB": 0,
+    "VAXC": 0
+   },
+   "vis": "visible",
+   "worstDriftMs": 24
+  }
+ ],
+ "verdict": "CN=3",
+ "restarts": {
+  "OVMXA": 0,
+  "OVMXB": 0,
+  "VAXC": 0
+ },
+ "member": {
+  "OVMXB": true,
+  "OVMXA": true
+ },
+ "added": {
+  "OVMXA": [
+   "0x7c3",
+   "0x7c4",
+   "0x7c5"
+  ],
+  "OVMXB": [
+   "0x7c4",
+   "0x7c5",
+   "0x7c3"
+  ],
+  "VAXC": []
+ },
+ "lost": {},
+ "vaxc_admitted": [
+  "OVMXB",
+  "OVMXA"
+ ],
+ "ovmx_founded": {},
+ "bugchecks": {},
+ "sca": {
+  "VAXC": 1418,
+  "OVMXB": 1459,
+  "OVMXA": 820
+ },
+ "cn3": true,
+ "lost_unnamed": {},
+ "repaint_stalls": {},
+ "worstDriftMs": 24,
+ "vis": "visible"
+}

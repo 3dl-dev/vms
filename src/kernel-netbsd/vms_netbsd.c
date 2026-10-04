@@ -1315,6 +1315,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_CLUSTER_GETSYI:
 	case VMS_IOCTL_SYSGEN_LOAD:
 	case VMS_IOCTL_CLUSTER_START:
+	case VMS_IOCTL_CLUSTER_STOP:
 		uarg = data;
 		proc = vms_proc_get(l->l_proc->p_pid);
 		if (proc == NULL)
@@ -1351,6 +1352,9 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_sysgen_load(proc, (unsigned long)uarg);   break;
 		case VMS_IOCTL_CLUSTER_START:
 			r = vms_ioctl_cluster_start(proc, (unsigned long)uarg); break;
+		/* rd vms-abd: the clean DEPARTURE, CLUSTER_START's twin. */
+		case VMS_IOCTL_CLUSTER_STOP:
+			r = vms_ioctl_cluster_stop(proc, (unsigned long)uarg); break;
 		default:
 			return ENOTTY;   /* unreachable */
 		}

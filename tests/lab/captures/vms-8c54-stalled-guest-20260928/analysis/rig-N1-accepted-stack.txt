@@ -1,0 +1,15 @@
+t= -126.139 fb:91:86 START  sys=0x07c5 recv_ack=    0 send_seq=    1 echo=    1 rnd=0 inc=0x00bc2f159b60cf00 
+t= -126.078 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t= -126.077 fb:91:86 ACK    sys=0x0000 recv_ack=    0 send_seq=    1 echo=    1 rnd=-1 inc=0x0000000000000000 
+t=   12.246 fb:91:86 START  sys=0x07c5 recv_ack=    0 send_seq=  295 echo=    1 rnd=0 inc=0x00bc2f159b60cf00 
+t=   12.300 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   12.921 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   13.561 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   14.201 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   14.841 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   15.481 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   16.121 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   16.761 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   17.003 fb:91:86 START  sys=0x07c5 recv_ack=    0 send_seq=  295 echo=    1 rnd=0 inc=0x00bc2f159b60cf00 
+t=   17.165 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 
+t=   17.785 00:df:0b STACK  sys=0x07c4 recv_ack=    0 send_seq=    1 echo=    1 rnd=1 inc=0x00bc32e6e48315d1 

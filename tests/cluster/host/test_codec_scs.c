@@ -209,7 +209,7 @@ static void test_dir_lookup_affirmative_roundtrip(void)
 	memcpy(cf.hdr.eth_src, "\x08\x00\x2b\x78\x56\xb9", 6);
 	memcpy(cf.hdr.dst_lavc, "\xaa\x00\x04\x00\x01\x04", 6);
 	memcpy(cf.hdr.src_lavc, "\xaa\x00\x04\x00\x02\x04", 6);
-	cf.hdr.connect_flag = 0x0001;
+	cf.hdr.cluster_group = 0x0001;
 	cf.hdr.word30 = 0x134bu; /* abs30 msgtype 0x4b, abs31 format 0x13 */
 	cf.hdr.sca_len_field = VMS_SCSCTRL_LEN_LOOKUP - 2u;
 	cf.recv_ack = 5;
@@ -302,7 +302,7 @@ static void test_reject_req_structural(void)
 	memcpy(cf.hdr.eth_src, "\x08\x00\x2b\x4a\xb7\x15", 6);
 	memcpy(cf.hdr.dst_lavc, "\xaa\x00\x04\x00\x02\x04", 6);
 	memcpy(cf.hdr.src_lavc, "\xaa\x00\x04\x00\x01\x04", 6);
-	cf.hdr.connect_flag = 0x0001;
+	cf.hdr.cluster_group = 0x0001;
 	cf.hdr.word30 = 0x134bu; /* abs30 msgtype 0x4b, abs31 format 0x13 */
 	cf.hdr.sca_len_field = VMS_SCSCTRL_LEN_MARKER - 2u;
 	cf.recv_ack = 9;
@@ -362,7 +362,7 @@ static void credit_op_structural(uint16_t op, const char *label)
 	memcpy(cf.hdr.eth_src, "\x08\x00\x2b\x78\x56\xb9", 6);
 	memcpy(cf.hdr.dst_lavc, "\xaa\x00\x04\x00\x01\x04", 6);
 	memcpy(cf.hdr.src_lavc, "\xaa\x00\x04\x00\x02\x04", 6);
-	cf.hdr.connect_flag = 0x0001;
+	cf.hdr.cluster_group = 0x0001;
 	cf.hdr.word30 = 0x134bu; /* abs30 msgtype 0x4b, abs31 format 0x13 */
 	cf.hdr.sca_len_field = VMS_SCSCTRL_LEN_SHORT - 2u;
 	cf.recv_ack = 20;

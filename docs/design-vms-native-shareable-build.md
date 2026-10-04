@@ -196,7 +196,7 @@ The capability the recipes bypass **already exists in the toolchain**:
   reference symbols another member defines"* (`link.c:566-571`). A `.OLB` is searched
   selectively; a `.a` archive is still ingested whole (`file_is_olb`, `link.c:593`).
   This is exercised end-to-end by the CI job **"LIBRARIAN.EXE .OLB + LINK.EXE Selective
-  Pull + Activate (self-host spine #3, x86_64)"** (`.github/workflows/ci.yml:4922`).
+  Pull + Activate (self-host spine #3, x86_64)"** (`.github/workflows/ci-selfhost-x86.yml:1681`, moved from `ci.yml` by vms-1af).
 
 - **`--symbol-vector` + `--gsmatch`** already declare the universal interface and the
   version match rule at link time, and `--use <producer>.EXE` binds cross-image imports

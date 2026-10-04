@@ -41,6 +41,7 @@
 #include <linux/compiler.h>   /* __user */
 #include <linux/gfp.h>
 #include <linux/jiffies.h>    /* msecs_to_jiffies (exec_cv_wait_timeout) */
+#include <linux/delay.h>      /* msleep (exec_wait_ms) */
 /* Phase F (host-task / RCU-lite / sleepable mutex) backing headers. */
 #include <linux/pid.h>            /* struct pid, pid_task, PIDTYPE_PID */
 #include <linux/capability.h>     /* capable, CAP_SYS_ADMIN */
@@ -64,6 +65,8 @@
 #include <linux/kthread.h>        /* struct task_struct (exec_kthread_t) */
 #include <linux/timer.h>          /* struct timer_list (exec_timer_t) */
 #include <linux/printk.h>         /* printk / KERN_ERR (exec_console_printf) */
+#include <linux/build_bug.h>      /* static_assert (the console-level invariant) */
+#include "ovmx_console_policy.h"  /* OVMX_OPA0_PRINTK_LEVEL vs PID 1's mute */
 /* vms-9d2 (primary Ethernet net device -> ETH0:) backing headers. */
 #include <linux/netdevice.h>      /* struct net_device, for_each_netdev, netif_carrier_ok */
 #include <linux/rtnetlink.h>      /* rtnl_lock / rtnl_unlock */
@@ -1452,10 +1455,34 @@ static inline uint64_t exec_ticks_ms(void)
 	return (uint64_t)(ktime_get_ns() / 1000000ULL);
 }
 
-/* A macro, not a function: it forwards the caller's format string straight to
- * printk so the compiler's -Wformat checks the call site, and KERN_ERR is the
- * level the QEMU console actually shows. Already the real binding as of
- * FC-P0.1; unchanged here, listed for SS18 completeness. */
+/*
+ * SS17b: the BOUNDED PROCESS-CONTEXT WAIT (rd vms-abd). msleep() is an
+ * uninterruptible bounded sleep -- which is what the contract asks for: the
+ * clean-departure drain must not be cut short by a signal arriving at the
+ * shutting-down process, or the DISCONNECT_REQ handshake it is waiting out
+ * would be abandoned half-way. 0 ms is a no-op rather than a schedule.
+ */
+static inline void exec_wait_ms(uint32_t ms)
+{
+	if (ms == 0u)
+		return;
+	msleep((unsigned int)ms);
+}
+
+/*
+ * A macro, not a function: it forwards the caller's format string straight to
+ * printk so the compiler's -Wformat checks the call site.
+ *
+ * THE LEVEL IS NOT A LOCAL CHOICE (rd vms-151). KERN_ERR is what the OPA0:
+ * lines have always been emitted at, but the number that matters is the one
+ * PID 1 lowers the console sink to -- and when the two disagreed by one, the
+ * executive spoke to a console that dropped every word. Both now come from
+ * ovmx_console_policy.h, which asserts that this level survives that sink;
+ * static_assert below binds the level named there to the one this macro
+ * actually passes, so the two cannot drift apart silently.
+ */
+static_assert(OVMX_OPA0_PRINTK_LEVEL == LOGLEVEL_ERR,
+	      "ovmx_console_policy.h names a level this macro does not emit");
 #define exec_console_printf(fmt, ...) printk(KERN_ERR fmt, ##__VA_ARGS__)
 
 #endif /* OVMX_EXEC_KBACKEND_LINUX_H */

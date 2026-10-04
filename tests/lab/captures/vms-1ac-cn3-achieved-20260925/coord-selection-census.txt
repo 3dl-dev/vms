@@ -1,0 +1,123 @@
+control-member-meets-late-node-20260730.pcap t=  30.82 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-760-MEMBER-achieved-20260730.pcap     t=  11.84 joiner=1179  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+ovmx-760-barrier1-stall-20260730.pcap      t=  11.28 joiner=1176  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+ovmx-760-barrier5-dlmrefused-20260730.pcap t=  11.68 joiner=1173  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+ovmx-760-dlm-refused-20260730.pcap         t=  11.68 joiner=1173  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+ovmx-760-lockmgrerr-20260730.pcap          t=   9.78 joiner=1172  COORD=1027  members=[1025, 1027]             highest=1027  HIGHEST
+ovmx-760-persist-10min-20260730.pcap       t=  10.36 joiner=1193  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+ovmx-760-relay-crash-20260730.pcap         t=  11.52 joiner=1170  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+ovmx-e4b-class03-removal-survived-20260731.pcap t=  10.25 joiner=1206  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+ovmx-e81-by10-vc-bound-vax3-stalls-20260731.pcap t=  10.21 joiner=1205  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-by10-vc-bound-vax3-stalls-20260731.pcap t= 733.46 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-by11-reciprocated-still-no-join-20260731.pcap t=   9.54 joiner=1207  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-bystander-ADDITION-SUCCESS-20260731.pcap t=   9.39 joiner=1209  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-bystander-ADDITION-SUCCESS-20260731.pcap t=  58.58 joiner=1027  COORD=1026  members=[1025, 1026, 1209]       highest=1209  *** NOT ***
+ovmx-e81-bystander-deadlock-20260730.pcap  t=  10.15 joiner=1197  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-bystander-fail-20260730.pcap      t=   8.80 joiner=1195  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-bystander-fail-20260730.pcap      t= 552.87 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-membergreet-nofire-20260730.pcap  t=   9.77 joiner=1198  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-membergreet-nofire-20260730.pcap  t= 612.05 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-newcomer-ignores-us-20260731.pcap t=  10.63 joiner=1199  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+ovmx-e81-newcomer-ignores-us-20260731.pcap t= 610.46 joiner=1027  COORD=1026  members=[1025, 1026, 1199]       highest=1199  *** NOT ***
+ovmx-e81-newcomer-refuses-60retx-20260731.pcap t=   9.59 joiner=1200  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+vax3-2to3-established-join-20260730.pcap   t=  34.76 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+vax3-class03-crash-REJOIN-SUCCESS-20260801.pcap t= 111.60 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+942-return-vs-firstjoin.pcap               t=  26.00 joiner=1981  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+control-vax3-late.pcap                     t=  30.82 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by10.pcap                              t=  10.21 joiner=1205  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by10.pcap                              t= 733.46 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by11.pcap                              t=   9.54 joiner=1207  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by11.pcap                              t= 733.07 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by12.pcap                              t=  10.02 joiner=1208  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by13.pcap                              t=   9.39 joiner=1209  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by13.pcap                              t=  58.58 joiner=1027  COORD=1026  members=[1025, 1026, 1209]       highest=1209  *** NOT ***
+d94-by3.pcap                               t=  10.15 joiner=1197  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by4.pcap                               t=   9.77 joiner=1198  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by4.pcap                               t= 612.05 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by5.pcap                               t=  10.63 joiner=1199  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by5.pcap                               t= 610.46 joiner=1027  COORD=1026  members=[1025, 1026, 1199]       highest=1199  *** NOT ***
+d94-by6.pcap                               t=   9.59 joiner=1200  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by6.pcap                               t= 690.95 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-by7.pcap                               t= 133.61 joiner=1027  COORD=1026  members=[1025, 1026, 1201]       highest=1201  *** NOT ***
+d94-by8.pcap                               t= 142.60 joiner=1027  COORD=1026  members=[1025, 1026, 1202]       highest=1202  *** NOT ***
+d94-by9.pcap                               t=  10.38 joiner=1204  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-bystand.pcap                           t=   8.80 joiner=1195  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-bystand.pcap                           t= 552.87 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-c9A.pcap                               t=   3.44 joiner=1030  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-coord1.pcap                            t=  11.52 joiner=1170  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-coord10.pcap                           t=  11.84 joiner=1179  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-coord11.pcap                           t=  11.02 joiner=1191  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-coord12.pcap                           t=  11.25 joiner=1192  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-coord2.pcap                            t=   9.83 joiner=1171  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-coord3.pcap                            t=   9.78 joiner=1172  COORD=1027  members=[1025, 1027]             highest=1027  HIGHEST
+d94-coord4.pcap                            t=  11.68 joiner=1173  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-coord6.pcap                            t=  12.21 joiner=1175  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-coord7.pcap                            t=  11.28 joiner=1176  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-ctl1.pcap                              t=  98.61 joiner=1222  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-cyc1.pcap                              t=   3.70 joiner=1220  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-cyc2.pcap                              t=   2.72 joiner=1222  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep1.pcap                              t=   4.00 joiner=1210  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep1.pcap                              t= 559.23 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-dep1.pcap                              t= 696.45 joiner=1211  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep10.pcap                             t=   3.57 joiner=1219  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep10.pcap                             t=1274.58 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-dep10.pcap                             t=1390.83 joiner=1220  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep2.pcap                              t=   3.65 joiner=1211  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep2.pcap                              t= 502.13 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-dep2.pcap                              t= 633.43 joiner=1212  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep3.pcap                              t=   3.39 joiner=1212  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep6.pcap                              t=   4.74 joiner=1214  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep7.pcap                              t=   4.29 joiner=1216  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep7.pcap                              t= 662.50 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-dep7.pcap                              t= 834.25 joiner=1217  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep7.pcap                              t=1366.03 joiner=1218  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep8.pcap                              t=   3.85 joiner=1217  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep8.pcap                              t= 372.17 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-dep8.pcap                              t= 535.63 joiner=1218  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep9.pcap                              t=   3.50 joiner=1218  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-dep9.pcap                              t=1117.04 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-dep9.pcap                              t=1292.46 joiner=1219  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-e15.pcap                               t=  10.26 joiner=1164  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-fresh1.pcap                            t=   2.93 joiner=1223  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-fresh2.pcap                            t=   4.01 joiner=1226  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-g1A.pcap                               t=   2.67 joiner=1030  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-g1B.pcap                               t=   1.52 joiner=1030  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-inc1.pcap                              t=   2.42 joiner=1222  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-inc2.pcap                              t=   3.20 joiner=1222  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-n1A.pcap                               t=   3.39 joiner=1030  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-persist.pcap                           t=  10.36 joiner=1193  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-q1.pcap                                t=   2.96 joiner=1221  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-r1A.pcap                               t=   2.43 joiner=1240  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-r1B.pcap                               t=   8.51 joiner=1240  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-r2A.pcap                               t=   8.92 joiner=1241  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-rej2.pcap                              t=   2.38 joiner=1226  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-rej3.pcap                              t=   2.18 joiner=1226  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-rm1.pcap                               t=  10.25 joiner=1206  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-rm2.pcap                               t=   3.67 joiner=1215  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-rm2.pcap                               t= 482.19 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-rm2.pcap                               t= 631.55 joiner=1216  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-s1A.pcap                               t=  10.64 joiner=1242  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-s2A.pcap                               t=   8.85 joiner=1243  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-s3A.pcap                               t=  10.42 joiner=1244  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-s4A.pcap                               t=   9.29 joiner=1245  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-s5A.pcap                               t=  10.69 joiner=1246  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-s7A.pcap                               t=  15.96 joiner=1248  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-s8B.pcap                               t=   9.35 joiner=1249  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-v1.pcap                                t=  10.34 joiner=1203  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-vax3crash.pcap                         t= 111.60 joiner=1027  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+d94-w1A.pcap                               t=  16.39 joiner=1250  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-w2A.pcap                               t=   9.50 joiner=1251  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-w3A.pcap                               t=  26.03 joiner=1252  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-w4A.pcap                               t=   9.84 joiner=1253  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+d94-w5A.pcap                               t=  15.34 joiner=1254  COORD=1027  members=[1025, 1026, 1027]       highest=1027  HIGHEST
+o32.pcap                                   t=  26.11 joiner=1981  COORD=1026  members=[1025, 1026]             highest=1026  HIGHEST
+
+ADD admissions: 113 ; coordinator == HIGHEST-SCSSYSTEMID live member: 107
+
+EXCEPTIONS:
+  ovmx-e81-bystander-ADDITION-SUCCESS-20260731.pcap t=  58.58 joiner=1027  COORD=1026  members=[1025, 1026, 1209]       highest=1209  *** NOT ***
+  ovmx-e81-newcomer-ignores-us-20260731.pcap t= 610.46 joiner=1027  COORD=1026  members=[1025, 1026, 1199]       highest=1199  *** NOT ***
+  d94-by13.pcap                              t=  58.58 joiner=1027  COORD=1026  members=[1025, 1026, 1209]       highest=1209  *** NOT ***
+  d94-by5.pcap                               t= 610.46 joiner=1027  COORD=1026  members=[1025, 1026, 1199]       highest=1199  *** NOT ***
+  d94-by7.pcap                               t= 133.61 joiner=1027  COORD=1026  members=[1025, 1026, 1201]       highest=1201  *** NOT ***
+  d94-by8.pcap                               t= 142.60 joiner=1027  COORD=1026  members=[1025, 1026, 1202]       highest=1202  *** NOT ***

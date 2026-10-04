@@ -1,0 +1,8 @@
+T1 stop@1790873192.004 last_rx=1.898 before stop, close=7.226  SILENCE->CLOSE=9.124  dir=2.96:b3 5.64:4b 6.40:7b 7.66:7b 9.11:b3
+T2 stop@1790873247.204 last_rx=0.238 before stop, close=7.914  SILENCE->CLOSE=8.152  dir=1.00:b3 1.80:4b 3.51:7b 6.55:7b 7.15:b3
+T3 stop@1790873302.214 last_rx=1.329 before stop, close=7.524  SILENCE->CLOSE=8.853  dir=1.70:b3 3.88:4b 5.55:7b 7.72:b3 8.60:7b
+T4 stop@1790873357.669 last_rx=0.620 before stop, close=8.537  SILENCE->CLOSE=9.158  dir=2.73:4b 3.16:b3 4.56:7b 7.61:7b 9.15:b3
+T5 stop@1790873414.420 last_rx=0.634 before stop, close=8.529  SILENCE->CLOSE=9.163  dir=2.02:4b 3.17:b3 3.86:7b 6.91:7b 9.16:b3
+T6 stop@1790873469.971 last_rx=0.335 before stop, close=8.609  SILENCE->CLOSE=8.944  dir=1.76:b3 3.18:4b 5.01:7b 7.91:b3 8.06:7b
+T7 stop@1790873525.736 last_rx=1.411 before stop, close=7.265  SILENCE->CLOSE=8.675  dir=2.52:b3 4.52:4b 6.37:7b 8.67:b3
+T8 stop@1790873580.379 last_rx=0.423 before stop, close=8.192  SILENCE->CLOSE=8.615  dir=0.47:b3 2.89:4b 4.75:7b 6.60:b3 7.80:7b

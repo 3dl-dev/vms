@@ -1,0 +1,17 @@
+
+=== last gasp: frame 2196, 08:00:2b:3d:83:23 announced departure ===
+  [  2184] -  0.061 s  08:00:2b:3d:83:23 -> OVMXB    content=62   mtype30=0x5b  DISCONNECT_REQ rem=e83e0054 loc=dbeb000a
+  [  2185] -  0.061 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2186] -  0.061 s  OVMXB    -> 08:00:2b:3d:83:23 content=58   mtype30=0x4b  DISCONNECT_RSP rem=dbeb000a loc=e83e0054
+  [  2187] -  0.061 s  OVMXB    -> 08:00:2b:3d:83:23 content=62   mtype30=0x4b  DISCONNECT_REQ rem=dbeb000a loc=e83e0054
+  [  2188] -  0.060 s  08:00:2b:3d:83:23 -> OVMXB    content=58   mtype30=0x5b  DISCONNECT_RSP rem=e83e0054 loc=dbeb000a
+  [  2189] -  0.060 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2190] -  0.004 s  08:00:2b:3d:83:23 -> OVMXB    content=110  mtype30=0x5b  CONNECT_REQ    rem=00000000 loc=dbec000a  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  2191] -  0.000 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2192] -  0.000 s  OVMXB    -> 08:00:2b:3d:83:23 content=66   mtype30=0x5b  CONNECT_RSP    rem=dbec000a loc=00000000
+  [  2193] -  0.000 s  OVMXB    -> 08:00:2b:3d:83:23 content=110  mtype30=0x5b  ACCEPT_REQ     rem=dbec000a loc=e83e0055  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  2194] -  0.000 s  08:00:2b:3d:83:23 -> OVMXB    content=41   mtype30=0x48
+  [  2195] -  0.000 s  08:00:2b:3d:83:23 -> OVMXB    content=62   mtype30=0x5b  ACCEPT_RSP     rem=e83e0055 loc=dbec000a
+  -- last frame each station sent before the gasp --
+     08:00:2b:3d:83:23  -  0.000 s  frame 2195  content=62   mtype30=0x5b  ACCEPT_RSP     rem=e83e0055 loc=dbec000a
+     OVMXB     -  0.000 s  frame 2193  content=110  mtype30=0x5b  ACCEPT_REQ     rem=dbec000a loc=e83e0055  n1='VMS$VAXcluster' n2='VMS$VAXcluster'

@@ -118,19 +118,111 @@ struct vms_pe {
 	 */
 	uint32_t tx_frames;
 	uint32_t tx_errors;
+
+	/*
+	 * WHICH CLUSTER GROUP THIS PORT IS IN, AND WHETHER ANYONE CONFIGURED IT
+	 * (rd vms-b34). Two different facts, both recorded at start from the
+	 * parameters this port actually opened with, so the console cannot
+	 * disagree with the wire even if a later SYSGEN load changes them:
+	 *
+	 *   group        the number the HELLO multicast address was built from.
+	 *   group_valid  0 when no CLUSTER_AUTHORIZE record was ever loaded, so
+	 *                `group` is 0 BY DEFAULT rather than by configuration.
+	 *
+	 * The second is the one vms_cluster.h's own contract is about -- "the
+	 * port driver NEVER substitutes a default" -- and it is reported rather
+	 * than acted on here; see pe_hello_multicast() below.
+	 */
+	uint16_t group;
+	uint8_t  group_valid;
+	uint8_t  pad0;
 };
 
-/* The cluster HELLO multicast group, spec SS4(a): AB-00-04-01-<group>, with the
- * group number coming from CLUSTER_AUTHORIZE (params.auth_group, loaded off
+/* The cluster HELLO multicast group: AB-00-04-01-<LE16(group + 0x100)>, with
+ * the group number coming from CLUSTER_AUTHORIZE (params.auth_group, loaded off
  * CLUSTER_AUTHORIZE.DAT at boot -- src/libvms/include/cluster_authorize.h,
  * ovmx_init.c load_cluster_sysgen_params()). Never hard-coded: the last two
  * bytes are the operator's real per-cluster configuration. The byte layout
  * itself is the codec's own helper (vms_cluster_codec_hello.c, the same TU
  * that already builds the LAVC address the same way), so the R1 host tests
- * can pin the mapping without pulling in this glue TU's substrate seam. */
-static void pe_hello_multicast(const struct vms_cluster_params *p, uint8_t mac[6])
+ * can pin the mapping without pulling in this glue TU's substrate seam.
+ *
+ * THE SAME ADDRESS IS BOTH DIRECTIONS, AND THAT IS STRUCTURAL (rd vms-147).
+ * pe_port_start() below builds it ONCE and uses that one value twice: it goes
+ * into the port identity the FSM stamps on every transmitted HELLO, and it is
+ * the address handed to exec_lan_mc_add() to enable in the LAN device's
+ * multicast filter. A node that transmits to one address while filtering for
+ * another is invisible in both directions on any NIC that actually implements
+ * its filter -- which is exactly what OVMX did through V0.7, when this
+ * derivation omitted the +0x100 and was therefore right for group 1 and wrong
+ * for every other group (a group-257 node sat on group 1's address).
+ *
+ * ===========================================================================
+ * WHAT HAPPENS WHEN NOBODY CONFIGURED ONE -- AND WHY THAT IS SAID, LOUDLY,
+ * RATHER THAN SILENTLY DEFAULTED (rd vms-b34)
+ *
+ * With no record loaded `auth_group` is 0, and the address built from it is
+ * AB-00-04-01-00-01 (0 is not a VMS-assignable group number, and what VMS
+ * would do with one is unobserved -- the executive applies its one derivation
+ * rather than growing a second, rd vms-147) -- an address no real cluster is
+ * on either way. vms_cluster.h states the
+ * contract this is in tension with: "`auth_valid` is 0 until the record is
+ * loaded; the port driver NEVER substitutes a default". Until rd vms-b34 that
+ * flag had exactly ONE reader in the whole executive (a copy in vms_devtab.c),
+ * nothing distinguished "group 0 because configured" from "group 0 because
+ * nothing was", and the port said nothing either way.
+ *
+ * MEASURED, lab-2 vaxlab-4 2026-09-20 (tests/lab/captures/
+ * cn2-genesis-vaxlab4-20260920/): a booted V0.7 release node -- whose shipped
+ * initramfs carries an EMPTY /etc/ovmx, so no record -- transmitted 225 frames
+ * to AB-00-04-01-00-00 across a 195 s join window while the real OpenVMS V7.3
+ * single-node cluster on the same bridge transmitted 180 to AB-00-04-01-01-01
+ * (group 1 -- that capture's notes call it "group 257" because they inverted
+ * the then-defective derivation to name it; rd vms-147). Neither received one
+ * frame of the other's: SHOW CLUSTER/
+ * LOCAL_PORTS read `channels 0, circuits 0, rx 0` and the executive's own join
+ * ring held ZERO records. Staging the cluster's real group into the same
+ * artifacts and changing nothing else, the SAME node was MEMBER on the VAX's
+ * own SDA CSB inside 30 s. The defect was never in CNXMAN or the join FSM.
+ *
+ * SO WHY NOT REFUSE TO ASSERT IT? Because OVMX today has NO operator path that
+ * authors a CLUSTER_AUTHORIZE record at all -- CLUSTER_CONFIG_LAN.COM authors
+ * SCSNODE/SCSSYSTEMID/VOTES and not the group, and the only writer is an
+ * image-build argument. A port that refused an unconfigured group would make
+ * the documented procedure unable to form ANY cluster (it is a must-not-skip
+ * CI gate: tests/qemu/test_cluster_config_lan_2node_e2e.sh boots two nodes
+ * through that procedure and requires CN=2). Refusing therefore has to land
+ * WITH the operator path that VMS spells SYSMAN CONFIGURATION SET
+ * CLUSTER_AUTHORIZATION, and that is its own item. Until then this stays an
+ * OPENLY DISCLOSED default rather than a silent one: the group in use and
+ * whether anyone chose it are both reported, at port start and in
+ * SHOW CLUSTER/LOCAL_PORTS.
+ * ===========================================================================
+ *
+ * Fills `mac` either way. Returns 1 when the number came from a real
+ * CLUSTER_AUTHORIZE record, 0 when it is the unconfigured default.
+ */
+static int pe_hello_multicast(const struct vms_cluster_params *p, uint8_t mac[6])
 {
 	vms_cluster_hello_mcast_build(p->auth_group, mac);
+	return p->auth_valid && p->auth_group != 0u;
+}
+
+/* Say which group this port is in, and whether anyone chose it. One line at
+ * port start, where an operator reading the boot console sees it beside PEA0
+ * coming up -- the silence in its place is what cost a 195 s lab join window
+ * and a 13.6-minute demo run before anyone looked at a pcap. */
+static void pe_announce_group(const struct vms_pe *pe)
+{
+	if (pe->group_valid) {
+		exec_console_printf("%%PEA0, cluster HELLO multicast group %u "
+				    "(CLUSTER_AUTHORIZE)\n", (unsigned)pe->group);
+		return;
+	}
+	exec_console_printf("%s",
+		"%PEA0, no cluster group is configured (CLUSTER_AUTHORIZE): "
+		"using group 0, which no real cluster is on -- this node cannot "
+		"join one until its cluster's group number is configured\n");
 }
 
 /* ==========================================================================
@@ -228,7 +320,7 @@ static void pe_ops_bind(struct vms_pe *pe)
  * adds nothing that is not real executive state.
  * ========================================================================== */
 static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
-			      struct pe_identity *id)
+			      int group_valid, struct pe_identity *id)
 {
 	uint32_t mtu = 0;
 	uint32_t nlen;
@@ -246,6 +338,15 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 
 	memcpy(id->mcast, mcast, 6);
 	id->mcast_valid = 1u;
+
+	/*
+	 * The SAME group number the multicast address above was built from,
+	 * in the OTHER encoding the wire uses for it (abs 22, LE16 -- rd
+	 * vms-b34). One read of one record feeds both, so the address and the
+	 * in-frame number can never disagree again.
+	 */
+	id->cluster_group = cl->params.auth_group;
+	id->cluster_group_valid = (uint8_t)(group_valid ? 1u : 0u);
 
 	/*
 	 * The largest SCA content this port may put on the wire: the real
@@ -316,6 +417,10 @@ static void pe_build_identity(struct vms_cluster *cl, const uint8_t mcast[6],
 	id->credits_requested_valid =
 		(uint8_t)cluster_sysgen_credits(cl, &id->credits_requested);
 	id->rx_pool_bufs = cf_rx_pool_bufs(cl->fork);
+
+	/* SYSGEN TIMVCFAIL, converted out of its 10 ms unit by the parameter
+	 * TU (rd vms-b98). 0 -- nothing loaded -- leaves the port's default. */
+	id->timvcfail_ms = cluster_sysgen_timvcfail_ms(cl);
 
 	id->incarnation_time = exec_time_now_vms();
 	id->incarnation_time_valid = 1u;
@@ -409,6 +514,7 @@ int vms_pe_start(struct vms_cluster *cl)
 	struct vms_pe *pe;
 	struct pe_identity id;
 	uint8_t mcast[6];
+	int group_valid;
 	int status;
 
 	if (!cl)
@@ -438,7 +544,7 @@ int vms_pe_start(struct vms_cluster *cl)
 	if (status != 0)
 		return status;           /* honest: no interconnect, no PEA0: */
 
-	pe_hello_multicast(&cl->params, mcast);
+	group_valid = pe_hello_multicast(&cl->params, mcast);
 	status = exec_lan_mc_add(mcast);
 	if (status != 0) {
 		exec_lan_close();
@@ -451,9 +557,13 @@ int vms_pe_start(struct vms_cluster *cl)
 		return SS__INSFMEM;
 	}
 	pe->cl = cl;
+	/* Recorded from the parameters this port really opened with, before
+	 * anything can change them under it (rd vms-b34). */
+	pe->group = cl->params.auth_group;
+	pe->group_valid = (uint8_t)(group_valid ? 1u : 0u);
 	pe_ops_bind(pe);
 
-	pe_build_identity(cl, mcast, &id);
+	pe_build_identity(cl, mcast, group_valid, &id);
 	if (pe_fsm_init(&pe->fsm, &id, cl->params.scssystemid, &pe->ops) != 0 ||
 	    !pe->fsm.id.lavc_valid) {
 		/* SCSSYSTEMID does not fit the two bytes the wire grounds
@@ -474,6 +584,7 @@ int vms_pe_start(struct vms_cluster *cl)
 	}
 
 	pe_fsm_start(&pe->fsm);
+	pe_announce_group(pe);
 
 	cl->pe = pe;
 	cl->state = VMS_CLUSTER_PORT_UP;
@@ -504,7 +615,12 @@ void vms_pe_stop(struct vms_cluster *cl)
 		(void)cf_set_work_handler(cl->fork, CF_OWNER_PE, NULL, NULL);
 	}
 
-	pe_hello_multicast(&cl->params, mcast);
+	/*
+	 * Leave the group this port ACTUALLY joined (rd vms-b34) -- read off
+	 * the identity it has been running with, not recomputed from the
+	 * parameters, which a later SYSGEN load may have changed underneath it.
+	 */
+	memcpy(mcast, pe->fsm.id.mcast, sizeof(mcast));
 	(void)exec_lan_mc_del(mcast);
 	exec_lan_close();
 
@@ -642,6 +758,26 @@ int pe_peer_swver(struct vms_pe *pe, vms_scs_sysid_t sysid, uint8_t *out,
 	if (pe == (struct vms_pe *)0)
 		return -1;
 	return pe_fsm_peer_swver(&pe->fsm, sysid, out, cap, out_len);
+}
+
+int pe_peer_incarnation(struct vms_pe *pe, vms_scs_sysid_t sysid,
+			uint64_t *out)
+{
+	if (pe == (struct vms_pe *)0)
+		return -1;
+	return pe_fsm_peer_incarnation(&pe->fsm, sysid, out);
+}
+
+int pe_reincarnate(struct vms_pe *pe)
+{
+	if (pe == (struct vms_pe *)0)
+		return SS__NOSUCHDEV;
+	/* The SAME seam clock pe_build_identity() sampled, read again. The
+	 * quadword is a fact about when this incarnation came up, and this IS
+	 * a new incarnation. */
+	pe->fsm.id.incarnation_time = exec_time_now_vms();
+	pe->fsm.id.incarnation_time_valid = 1u;
+	return SS__NORMAL;
 }
 
 int pe_addr(struct vms_pe *pe, vms_scs_sysid_t dst, struct vms_scs_addr *out)
@@ -801,6 +937,12 @@ int vms_pe_snapshot(struct vms_cluster *cl, struct vms_pe_view *out)
 	out->tx_frames = cl->pe->tx_frames;
 	out->tx_errors = cl->pe->tx_errors;
 	vms_cluster_fork_leave(cl);
+
+	/* The cluster group this port really opened with, and whether anyone
+	 * chose it (rd vms-b34) -- from the port object, so the console reads
+	 * the same two facts the wire was built from. */
+	out->cluster_group = cl->pe->group;
+	out->cluster_group_valid = cl->pe->group_valid;
 
 	/* Live seam reads: the interface's real, current state, not a value
 	 * cached at CLUSTER_START. */

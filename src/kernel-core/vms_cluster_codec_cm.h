@@ -188,6 +188,20 @@ extern "C" {
 /* cat-0x01 op-0x01 cluster-parameters (VOTES) + the node-parameter block
  * (sec 4(j) VOTES table; sec 4(p) cat-0x06 close reuses the same block). */
 #define VMS_OFF_CM_VOTES      (VMS_OFF_SYSAP_BODY + 22)  /* abs 94, LE u16 */
+/*
+ * ...and the SENDER'S CLUSTER MEMBER COUNT, body[18:20] (rd vms-e88). The
+ * number of members of the cluster the sender belongs to, as the sender sees
+ * it; ZERO from a system that belongs to no cluster (a joiner). GROUNDED on
+ * four real OpenVMS VAX V7.3 trios (tests/lab/captures/vms-e88-join-target-
+ * 20260930/): every PARAMS a member sent carried its own member count (1 alone,
+ * 2 with two), every PARAMS a joiner sent carried 0, and a joiner's copy moved
+ * 0 -> 2 on the frame its sender was admitted. It is the count Davis p. 7-37
+ * has the joiner compare its connectivity against before it asks for
+ * admission. Only the low byte has ever been nonzero (the high byte is 0 in
+ * every specimen). ALIASES VMS_OFF_CM_RESP_MARK, which is a different message's
+ * field at the same place: on op-0x01 there is no response marker.
+ */
+#define VMS_OFF_CM_MEMBERS    (VMS_OFF_SYSAP_BODY + 18)  /* abs 90, LE u16 */
 #define VMS_OFF_CM_PARAM_F1   (VMS_OFF_SYSAP_BODY + 72)  /* abs 144, LE u32,
 							    * observed const 0x10*/
 #define VMS_OFF_CM_PARAM_F2   (VMS_OFF_SYSAP_BODY + 76)  /* abs 148, LE u32,
@@ -284,6 +298,15 @@ struct vms_cm_membership_rec {
 	uint32_t csid;         /* the CSID the cluster assigned it            */
 	uint32_t boot_lo;      /* its boot time, low word                     */
 	uint32_t boot_hi;      /* ... high word                               */
+	/*
+	 * body[12:16]: the epoch of the transition this record belongs to (rd
+	 * vms-1ac). It is NOT decoration -- OVMX left it zero and a real
+	 * OpenVMS VAX V7.3 connection manager, handed membership records for a
+	 * transition it could not place, bugchecked CNXMGRERR. Measured: all
+	 * 791 real op-0x05 records in the reference trees carry their
+	 * transition's epoch, which is the relaying coordinator's epoch + 1.
+	 */
+	uint32_t epoch;
 	uint16_t index;        /* 0-based CSV index, == (csid & 0xffff) - 1   */
 	uint8_t  boot_valid;   /* 0 = no boot time was carried/held           */
 	uint8_t  pad;
@@ -364,8 +387,26 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
  * (LOCKMGRERR); that is why this family has its own accessor names. */
 #define VMS_OFF_CM_DLM_L1_TAG   (VMS_OFF_SYSAP_BODY + 12) /* abs 84, LE u16,
 							     * invariant 0x0001 */
-#define VMS_OFF_CM_DLM_L1_TAG2  (VMS_OFF_SYSAP_BODY + 14) /* abs 86, LE u16,
-							     * invariant 0x0003 */
+/*
+ * abs 86, LE u16. DOCUMENTED HERE AS "invariant 0x0003" AND IT IS NOT (rd
+ * vms-1f40). A census of every cat-0x02/0x82 op-0x0d frame in two independent
+ * real-cluster captures says so:
+ *
+ *   three real OpenVMS VAX V7.3 nodes  (oracle-stall-o1.pcap): 0x0003 x 358+92
+ *                                       and 0x0004 x 270+68, from BOTH
+ *                                       directions;
+ *   a real V7.3 beside this executive  (rig arm M2-5):         0x0002 x 205
+ *                                       and 0x0003 x 21, every one of them
+ *                                       ORIGINATED BY THE VAX.
+ *
+ * So the cell varies, the real nodes vary it, and treating it as a constant is
+ * a reading of one capture. NOTHING IN THIS TREE DEPENDS ON THE OLD CLAIM:
+ * vms_cm_dlm_op0d_response_build() echoes the request body verbatim, so the
+ * value this executive emits is the value the peer sent -- which the same
+ * census confirms one-for-one, 205 <-> 205. The comment is corrected rather
+ * than the code, because the code was already right for the right reason.
+ */
+#define VMS_OFF_CM_DLM_L1_TAG2  (VMS_OFF_SYSAP_BODY + 14)
 #define VMS_OFF_CM_DLM_L1_LEN   (VMS_OFF_SYSAP_BODY + 16) /* abs 88, L1 length*/
 #define VMS_OFF_CM_DLM_RESULT   (VMS_OFF_SYSAP_BODY + 34) /* abs 106, result
 							     * stamp; 0xf9 on
@@ -430,6 +471,7 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
 /* FC-P3.3's three joiner originations (sec 5c) need the body-relative form of
  * the VOTES word and the model-string pair as well. */
 #define VMS_OFB_CM_VOTES       (VMS_OFF_CM_VOTES       - VMS_OFF_SYSAP_BODY)
+#define VMS_OFB_CM_MEMBERS     (VMS_OFF_CM_MEMBERS     - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_MODEL_LEN   (VMS_OFF_CM_MODEL_LEN   - VMS_OFF_SYSAP_BODY)
 #define VMS_OFB_CM_MODEL_NAME  (VMS_OFF_CM_MODEL_NAME  - VMS_OFF_SYSAP_BODY)
 
@@ -548,19 +590,33 @@ vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
  * ------------------------------------------------------------------ */
 
 /* Transition-open family: op 0x08 (class-0x03 REMOVE), op 0x09
- * (class-0x02 ADD, carries the bitmap), op 0x0d-in-cat-0x01 (class-0x04
- * self-departure). */
+ * (class-0x02 ADD), op 0x0d-in-cat-0x01 (class-0x04 self-departure). The ADD
+ * and the REMOVE open both carry the post-transition nodemap at body[55]. */
 struct vms_cm_open {
 	struct vms_cm_envelope env;
 	uint32_t epoch;  /* body[12:16] LE u32, GROUNDED sec 4(j)/(p)         */
 	uint8_t  role;   /* body[16], GROUNDED sec 4(r)                       */
 	uint8_t  cls;    /* body[17], GROUNDED sec 4(r): the TRANSITION CLASS */
-	uint8_t  bitmap; /* body[55], op 0x09 ONLY; GROUNDED presence + the
-			  * popcount==member-count fact (sec 4(p)), but the
-			  * field's full WIDTH is undetermined beyond this
-			  * one byte -- do not assume 8 slots is the ceiling */
-	int      has_bitmap; /* 1 iff opcode == VMS_CM_OP_XITION_ADD           */
+	uint8_t  bitmap; /* body[55], op 0x09 and op 0x08; GROUNDED presence +
+			  * the popcount==post-transition-member-count fact
+			  * (sec 4(p); op 0x08: sec 4(p).R, every specimen),
+			  * bit k = the member holding CSID slot k. Its full
+			  * WIDTH is undetermined beyond this one byte -- do
+			  * not assume 8 slots is the ceiling */
+	int      has_bitmap; /* vms_cm_open_carries_nodemap(opcode)           */
 };
+
+/*
+ * vms_cm_open_carries_nodemap - does a transition open with this cat-0x01
+ * opcode carry the post-transition nodemap byte at body[55]?
+ *
+ * op 0x09 (ADD): sec 4(p), 54/54 library opens. op 0x08 (REMOVE): sec 4(p).R
+ * (rd vms-af4) -- every real-VAX op 0x08 in the capture library carries it,
+ * across removals of slots 2, 3 and 4 from three- and four-member clusters,
+ * the byte naming exactly the members the transition KEEPS. The class-0x04
+ * departure (op 0x0d) is not grounded as carrying one and is answered no.
+ */
+int vms_cm_open_carries_nodemap(uint8_t opcode);
 
 vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 				     struct vms_cm_open *out);
@@ -575,9 +631,9 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
  * that every byte but index VMS_CM_BITMAP_SPAN_IDX is zero -- as it is in
  * 54 of 54 library opens -- and to COUNT it when one is not.
  *
- * VMS_CODEC_E_CLASS unless this really is a cat-0x01 op-0x09 open: op 0x08
- * (class-0x03 REMOVE) and cat-0x01 op 0x0d (class-0x04 departure) carry no
- * bitmap at all, and reading this span from them would report residue as
+ * VMS_CODEC_E_CLASS unless this really is a cat-0x01 op-0x09 or op-0x08 open
+ * (vms_cm_open_carries_nodemap): cat-0x01 op 0x0d (class-0x04 departure)
+ * carries no bitmap, and reading this span from it would report residue as
  * membership.
  */
 vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *body, uint32_t len,
@@ -602,6 +658,9 @@ struct vms_cm_params {
 	struct vms_cm_envelope env;
 	uint16_t votes;   /* body[22:24] LE u16, GROUNDED across four vote
 			   * configurations (sec 4(j)); 0 == non-voting     */
+	uint16_t members; /* body[18:20] LE u16: the sender's cluster member
+			   * count, 0 from a system in no cluster (rd vms-e88,
+			   * VMS_OFF_CM_MEMBERS)                             */
 	uint32_t param_f1; /* body[72:76], observed constant 0x10             */
 	uint32_t param_f2; /* body[76:80], observed constant 0x01             */
 	uint8_t  version[VMS_CM_VERSION_LEN]; /* body[88:96], 8-byte space-padded ASCII version field (e.g. V7.3) */
@@ -662,6 +721,13 @@ vms_codec_status_t vms_cm_dlm_rebuild_parse(const uint8_t *body, uint32_t len,
  *   body[18]  = ECHOED, not forced                 op == 0x0f
  *   body[55]  = 0x00                               op == 0x09 ONLY
  *   body[17]  = own_class ; body[20:24] = epoch     op == 0x12 ONLY
+ *
+ * ⚠ op-0x12 HAS ITS OWN BUILDER (rd vms-4f0). The op-0x12 line above leaves
+ * body[12:16] echoed and body[20:24] holding the REQUEST's epoch, which is
+ * only right when the two nodes are at the same epoch. A member answering a
+ * coordinator must state its OWN epoch in both -- call
+ * vms_cm_relay_response_build() below, never this builder directly, for
+ * op-0x12.
  *   everything else                                 echoed verbatim
  *
  * `own_class` is this node's own current transition class (sec 4(r):
@@ -677,6 +743,39 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
 					      uint8_t own_class,
 					      uint8_t *out_body, uint32_t cap,
 					      uint32_t *written);
+
+/*
+ * vms_cm_relay_response_build - the 0x81/0x12 answer a MEMBER owes the
+ * transition coordinator (rd vms-4f0; spec §4(r), CORRECTED below).
+ *
+ * THE EPOCH IN AN 0x81/0x12 IS THE RESPONDER'S OWN, NOT THE REQUEST'S.
+ * §4(r) read the corpus as "body[20:24] = LE u32 copy of the request's
+ * body[12:16]", and in 141 of 143 pairs that is indistinguishable, because
+ * the coordinator and the member held the SAME epoch. The three specimens
+ * in which they DIFFER settle it, and all three agree:
+ *
+ *   d94-ctl1.pcap   request epoch 0x07 -> response body[12:16] = body[20:24] = 0x06
+ *   d94-rej3.pcap   request epoch 0x10 -> response body[12:16] = body[20:24] = 0x0f
+ *   the rd vms-4f0 lab run: OVMX relayed at epoch 4 to a real OpenVMS VAX
+ *   V7.3 at epoch 3, and the VAX answered body[12:16] = body[20:24] = 3.
+ *
+ * So a real member does NOT parrot the coordinator's epoch back: it states
+ * the epoch it is actually at, in BOTH fields. That is also the only
+ * INV-6-clean reading -- a responder can stand behind its own club's
+ * epoch and cannot stand behind somebody else's.
+ *
+ * `own_class` and `own_epoch` are both read from this node's real state by
+ * the caller (the join FSM's tr_class and the CLUB's epoch); neither is
+ * ever composed here. Everything else is the echo family's recipe.
+ *
+ * STAMP with is_response=1, exactly as for the echo builder.
+ */
+vms_codec_status_t vms_cm_relay_response_build(const uint8_t *req_body,
+					       uint32_t req_len,
+					       uint8_t own_class,
+					       uint32_t own_epoch,
+					       uint8_t *out_body, uint32_t cap,
+					       uint32_t *written);
 
 /*
  * vms_cm_close_build - the cat-0x06 close recipe (sec 4(p): "closes the
@@ -838,15 +937,15 @@ vms_codec_status_t vms_cm_barrier_build(uint32_t epoch, uint32_t step,
  * census pairs them with zero residuals and a mismatch is not representable:
  *
  *   class 0x02 ADD     -> op 0x09, tag 0x0240, and it CARRIES the nodemap
- *   class 0x03 REMOVE  -> op 0x08, tag 0x0340, NO nodemap (sec 4(p))
+ *   class 0x03 REMOVE  -> op 0x08, tag 0x0340, and it CARRIES the nodemap
+ *                         (sec 4(p).R, rd vms-af4)
  *   class 0x04 DEPART  -> op 0x0d, tag 0x0440, NO nodemap
  *
- * `bitmap` is the caller's membership nodemap byte and is written to body[55]
- * ONLY for class 0x02. It must be built from REAL CSBs (bit k = the member
- * holding CSID index k, sec 4(p), 54/54 opens with zero residuals); this
- * builder has no way to check that and does not try -- FC-P3.12 owns it.
- * Passing has_bitmap on a non-ADD class is VMS_CODEC_E_INVAL rather than a
- * silently-dropped field.
+ * `bitmap` is the caller's post-transition membership nodemap byte and is
+ * written to body[55] for classes 0x02 and 0x03. It must be built from REAL
+ * CSBs (bit k = the member holding CSID index k); this builder has no way to
+ * check that and does not try -- FC-P3.12 owns it. Passing has_bitmap on
+ * class 0x04 is VMS_CODEC_E_INVAL rather than a silently-dropped field.
  *
  * STAMP with is_response=0: a genuine origination.
  */
@@ -1034,7 +1133,10 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
  * vms_cm_params_build - cat 0x01 op 0x01, the cluster-parameters message.
  *
  * body[22:24] = `votes`, the field sec 4(j) pinned byte-exact by controlled
- * reconfiguration across four vote values, plus the node-parameter block
+ * reconfiguration across four vote values; body[18:20] = `members`, this
+ * node's own cluster member count, or 0 when it is in no cluster or when the
+ * caller will not assert one to this peer (VMS_OFF_CM_MEMBERS); plus the
+ * node-parameter block
  * (`own_params`, the same struct vms_cm_close_build takes) at
  * body[72:76]/[76:80]/[88:96]. Both come from the caller's real SYSGEN and
  * identity state; this builder has no defaults and bakes in no version.
@@ -1049,7 +1151,7 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
  *
  * STAMP with is_response=0.
  */
-vms_codec_status_t vms_cm_params_build(uint16_t votes,
+vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 				       const struct vms_cm_node_params *own_params,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written);
@@ -1183,13 +1285,18 @@ vms_codec_status_t vms_cm_membership_coordinator_csid(const uint8_t *body,
  * 0x3FF, E30) the shape test above is derived from.
  *
  * NEITHER ARGUMENT MAY BE INVENTED, and this function cannot check that --
- * its two callers are what make it honest. vms_cnxman_join_fsm.c takes the
+ * its caller is what makes it honest. vms_cnxman_join_fsm.c takes the
  * generation off a coordinator CSID it really read from a real op-0x06 and the
- * SCSSYSTEMID from real SYSGEN state; vms_cnxman_coord_fsm.c's founding path
- * takes generation 1 (a cluster formed from nothing) and the same SYSGEN
- * SCSSYSTEMID, and only after the quorum predicate has passed. There is no
- * third caller, and a CSID assembled anywhere else in the executive would be a
- * placeholder -- the fabrication that bugchecked a real VAX.
+ * SCSSYSTEMID from real SYSGEN state. A CSID assembled anywhere else in the
+ * executive would be a placeholder -- the fabrication that bugchecked a real
+ * VAX.
+ *
+ * NOT THE ASSIGNMENT RULE (rd vms-3a7c, vms-151). This construction is the
+ * SHAPE a CSID has; what a COORDINATOR puts in the low half is the round-robin
+ * CSV slot (p. 7-25), which the oracle proved is not a function of the
+ * SCSSYSTEMID -- 1986 was assigned slot 3. Every coordinator-side CSID, the
+ * founder's included, is therefore built by vms_cnxman_coord_fsm.c's
+ * coord_csid_of_slot() from a slot the CLUB's own CSIDs seeded, not here.
  */
 uint32_t vms_cm_csid_of(uint32_t generation, uint32_t scssystemid);
 
@@ -1208,6 +1315,119 @@ enum vms_cm_recipe {
 	 * mutation at body[16] and NOT the ECHO family's body[18] marker. */
 	VMS_CM_RECIPE_STEP_ACK
 };
+
+/* ------------------------------------------------------------------ *
+ * sec 7  THE 16-BYTE SCA CONNECT DATA of the VMS$VAXcluster connect
+ *        (SCA content [94:110]; spec sec 4(N)) -- rd vms-b87
+ * ------------------------------------------------------------------ *
+ *
+ * WHAT IS GROUNDED, AND HOW IT WAS MEASURED. On three REAL OpenVMS VAX V7.3
+ * nodes and one more on a second bridge (capture
+ * tests/lab/captures/vms-b36-cnxmgrerr-20260925/analysis/connect-data.txt),
+ * four independent cluster configurations were read off the wire and, for each
+ * node, the SAME quantities were read out of VMS's own mouth with F$GETSYI:
+ *
+ *   node / configuration        VOTES EXP QUORUM NODES   content[98:105]
+ *   VAX1, 2-node lab              1    1     1     2     01 00 01 00 02 00 01
+ *   VAX2, same cluster, VOTES 0   0    1     1     2     01 00 01 00 02 00 01
+ *   VAXC alone                    1    1     1     1     01 00 01 00 01 00 01
+ *   VAXC + one member             1    2     2     2     02 00 02 00 02 00 01
+ *   any node BEING ADMITTED       -    -     -     -     00 00 00 00 00 00 00
+ *
+ * VAX2 is the discriminator: it holds ZERO votes of its own and still reports
+ * 1 in the first field, so the field is the CLUSTER's vote total and not the
+ * sender's. With that, three fields resolve with no residual across all four
+ * configurations:
+ *
+ *   body[0:2]  LE16  the cluster's total votes   (CLUB cevotes)
+ *   body[2:4]  LE16  the cluster quorum          (CLUB quorum)
+ *   body[4:6]  LE16  the number of members       (CLUB cluster_nodes)
+ *   body[6]          1 for a member, 0 for a node being admitted
+ *
+ * ...and a node that is not a member reports all four as ZERO, which is not an
+ * omission: it is what every real joiner in the library puts there.
+ *
+ * WHAT IS NOT GROUNDED, AND IS THEREFORE NOT COMPOSED HERE. content[94:98]
+ * (`01 1b 01 03`) and content[105:110] (`08 00 00 06 00`) are the version/
+ * protocol quad and tail of integration note E31. They are NOT constants --
+ * the bench VAX moved content[96] 01->02, content[105] 08->09 and content[106]
+ * 00->02 inside one run, which corrects spec sec 4(N)'s "GROUNDED constant"
+ * reading and is filed as rd vms-b87 -- but nothing in the library says what
+ * moves them. So this builder takes both spans from the CALLER, which passes
+ * the bytes this node already sends, and derives ONLY the seven bytes above.
+ * No byte of this frame changes meaning without a measurement behind it.
+ */
+/* The field is SIXTEEN bytes because spec sec 4(N) measured it at sixteen
+ * (content [94:110]); it is not the SYSAP-name length that happens to match. */
+#define VMS_CM_CONNDATA_LEN 16u
+
+struct vms_cm_conndata_in {
+	uint16_t cluster_votes;   /* CLUB cevotes -- the CLUSTER's, not ours */
+	uint16_t quorum;          /* CLUB quorum                             */
+	uint16_t cluster_nodes;   /* CLUB cluster_nodes (p. 7-49 SELECTED)   */
+	uint8_t  member;          /* 1 iff a committed member of a cluster   */
+	uint8_t  pad0;
+	/*
+	 * WHERE THIS NODE'S RECEIVE STREAM FROM *THIS PEER* STANDS (rd
+	 * vms-8c54). content[106:108], LE u16: the highest `VMS$VAXcluster`
+	 * CM send-msg# this node has taken from the system it is dialling --
+	 * the very number it stamps at abs 74 (VMS_OFB_CM_ACK_MSG) of the CM
+	 * messages it sends on that connection.
+	 *
+	 * GROUNDED, two independent pairs in one capture of two real OpenVMS
+	 * VAX V7.3 nodes reconnecting after a 10 s stall
+	 * (tests/lab/captures/vms-8c54-stalled-guest-20260928/):
+	 *
+	 *   VAX1's last CM frame before the loss: send=10249 ack=14811
+	 *   VAX2's last CM frame before the loss: send=14811 ack=10248
+	 *   -> VAX1's CONNECT_REQ carries 14811, VAX2's ACCEPT_REQ carries
+	 *      10249, and the first CM frame on the NEW Con.ID continues
+	 *      VAX1 send=10250 ack=14811 / VAX2 send=14812 ack=10249.
+	 *
+	 *   VAX3 had retransmitted send=1799 three times UNANSWERED; VAX1's
+	 *      CONNECT_REQ carries 1798, not 1799. The off-by-one is the proof
+	 *      that the cell is "the highest I have TAKEN", not "the last I
+	 *      have SEEN on the wire".
+	 *
+	 * A node that has taken nothing from that peer carries 0, which is the
+	 * measured joiner form -- so zero here is an honest reading and never a
+	 * placeholder (INV-6).
+	 */
+	uint16_t peer_ack_msg;
+	uint16_t pad1;
+};
+
+/*
+ * Build the 16 bytes. `head` is content[94:98] and `tail` is content[105:110],
+ * supplied by the caller; `out` must have room for VMS_CM_CONNDATA_LEN.
+ *
+ * A NON-MEMBER's three counts are written as ZERO whatever the caller passed,
+ * because that is the measured joiner form and because a node that is not in a
+ * cluster has no cluster arithmetic to report (INV-6).
+ *
+ * THREE CELLS THE CALLER'S head/tail NO LONGER DECIDE (rd vms-8c54). The E31
+ * head/tail were copied from ONE capture of a JOINER, and this file's own note
+ * has always said so: "the bench VAX moved [2], [11] and [12] inside one run
+ * ... Nothing in the library says what moves them." The oracle says what:
+ *
+ *   [12:14]  this node's CM ack counter for the peer -- `in->peer_ack_msg`
+ *   [2]      0x01 when [12:14] is 0, 0x02 when it carries one
+ *   [11]     0x08 when [12:14] is 0, 0x0a when it carries one
+ *
+ * The first two follow the THIRD, not membership. The four real-VAX rows in
+ * test_codec_cm.c are members carrying 0x01/0x08, and the rig caught one real
+ * VAX sending both forms minutes apart with its membership unchanged; what
+ * every sample agrees on is the ack cell (0x08 -> 0x0a is its two bytes).
+ * Eleven samples across two independent clusters, no counterexample.
+ *
+ * The caller still supplies head/tail so the version quad and the [14:16] tail
+ * stay exactly the bytes E31 grounded; head[2] and tail[0] are overridden HERE
+ * rather than asking every caller to know a wire byte (design sec 3.9 rule 2).
+ */
+vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
+					 const uint8_t *head, uint32_t head_len,
+					 const uint8_t *tail, uint32_t tail_len,
+					 uint8_t *out, uint32_t cap);
 
 /* The grounded rows, exposed as a table the caller (a later FSM item, or
  * a test) looks up through vms_wire_allow_find() -- never a bespoke

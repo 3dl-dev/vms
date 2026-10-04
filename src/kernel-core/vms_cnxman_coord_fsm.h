@@ -245,9 +245,48 @@ enum cnxman_coord_refusal {
 	CNXMAN_COORD_REF_NO_NODEMAP = 4, /* a member's slot is outside that
 					  * byte: an open would LOSE it      */
 	CNXMAN_COORD_REF_BUSY       = 5, /* we are already coordinating one   */
-	CNXMAN_COORD_REF_NO_QUORUM  = 6  /* GENESIS only: this node's own
+	CNXMAN_COORD_REF_NO_QUORUM  = 6, /* GENESIS only: this node's own
 					  * VOTES do not satisfy quorum, so it
 					  * may not FORM a cluster (p. 7-6)   */
+	/*
+	 * GENESIS only, and the three halves of "is there already a cluster
+	 * here?" -- see SS8b's ELECTION note. Each one is a read of real CSB
+	 * state and each one means JOIN, not FORM.
+	 */
+	CNXMAN_COORD_REF_PEER_CLUSTER  = 7, /* a system present already holds a
+					     * cluster identity: a CSID, or this
+					     * CLUB's own MEMBER/SELECTED flag  */
+	CNXMAN_COORD_REF_PEER_UNASKED  = 8, /* a system is present and this node
+					     * has not yet completed a round of
+					     * asking it to admit this node     */
+	CNXMAN_COORD_REF_OUTRANKED     = 9, /* another founding candidate is
+					     * present whose SCSSYSTEMID ranks
+					     * ahead of ours: IT forms, we join */
+	/*
+	 * ADMISSION only (rd vms-1ac): this node was ASKED to admit a system,
+	 * but it is not the member VMS's own observable names as the
+	 * coordinator -- another MEMBER outranks it. Spec §4(p)'s "a
+	 * NON-COORDINATOR peer SILENTLY DISCARDS op 0x02", carried out.
+	 */
+	CNXMAN_COORD_REF_NOT_SELECTED  = 10,
+	/*
+	 * ADMISSION only (rd vms-1ac): this node IS the one that would drive
+	 * it, but a participant has not proved it runs this implementation and
+	 * the class-0x02 transition-open this node can build is not grounded
+	 * byte-for-byte for a foreign connection manager (see
+	 * coord_open_is_grounded_for()). Refusing costs an admission round;
+	 * emitting it cost a real OpenVMS VAX V7.3 a CNXMGRERR bugcheck.
+	 */
+	CNXMAN_COORD_REF_OPEN_UNGROUNDED = 11,
+	/*
+	 * DEPARTURE only (rd vms-b36): this node lost contact with a system the
+	 * cluster had NEVER ADMITTED, so p. 7-49's SELECTED flag is clear for it
+	 * and there is no membership to reconfigure away. Proposing its removal
+	 * anyway asserts a membership change that never happened (INV-6) and
+	 * cost a real OpenVMS VAX V7.3 a CNXMGRERR bugcheck 0.6 s after it
+	 * abandoned that very system's admission.
+	 */
+	CNXMAN_COORD_REF_NOT_ADMITTED = 12
 };
 
 /* ==========================================================================
@@ -388,6 +427,28 @@ struct cnxman_coord {
 	uint32_t nodemap_unmapped;
 	uint32_t bitmap_short;
 	uint32_t unknown_peer;         /* a frame from no CSB we could resolve */
+	/*
+	 * THE TWO ADMISSION GATES (rd vms-1ac). `not_selected` counts the
+	 * op-0x02s this node silently discarded because another MEMBER
+	 * outranks it -- moving is NORMAL and is what a real non-coordinator
+	 * does. `open_ungrounded` counts the admissions this node WOULD have
+	 * driven and refused because it cannot build a byte-grounded
+	 * class-0x02 open for a participant that does not run this
+	 * implementation -- moving is a NAMED GAP, never a resting state.
+	 */
+	uint32_t not_selected;
+	uint32_t open_ungrounded;
+	/*
+	 * THE DEPARTURE GATE (rd vms-b36). Removals this node did NOT propose
+	 * because the subject was never a committed member (p. 7-49's SELECTED
+	 * clear). Moving is NORMAL whenever a join is abandoned; a zero here in
+	 * a run whose console shows a joiner abandoned is the tripwire that
+	 * says the gate did not run.
+	 */
+	uint32_t not_admitted;
+	/* 1 once coord_advance_epoch() has run for the transition in progress
+	 * (rd vms-1ac). Per-transition, cleared by coord_open_transition(). */
+	uint8_t  epoch_advanced;
 	uint32_t ignored_events;       /* no table cell: ignored and COUNTED   */
 
 	/* ---- GENESIS (SS9), both outcomes counted from a real call ---- */
@@ -395,9 +456,43 @@ struct cnxman_coord {
 	uint32_t genesis_refused_noquorum; /* asked to found without quorum by
 					    * its own votes -- REFUSED, and the
 					    * count is the anti-LARP tripwire  */
-	uint32_t genesis_refused_peer;     /* asked to found with another system
-					    * present -- REFUSED: this node
-					    * JOINS, it does not compete       */
+	uint32_t genesis_refused_peer;     /* asked to found beside a system that
+					    * already holds a cluster identity --
+					    * REFUSED: this node JOINS, it does
+					    * not compete                      */
+	uint32_t genesis_refused_unasked;  /* asked to found while a system this
+					    * node has not finished asking for
+					    * admission is present -- REFUSED  */
+	uint32_t genesis_refused_outranked;/* asked to found while a founding
+					    * candidate that ranks ahead of this
+					    * node is present -- REFUSED: THAT
+					    * node forms and this one joins it */
+	/*
+	 * The SCSSYSTEMID this node last deferred to, read out of that peer's
+	 * own CSB at the moment of the refusal. Diagnostics only, and an
+	 * OMISSION when there has been none: `deferred_to_valid` 0 means this
+	 * node has never stood down for anybody, never "system 0".
+	 */
+	vms_scs_sysid_t deferred_to_sysid;
+	uint8_t  deferred_to_valid;
+	/*
+	 * THE FOUNDING REFUSAL THIS NODE HAS ALREADY SAID OUT LOUD (rd vms-151).
+	 * The founding gate is asked once a second, by the same reconnect beat
+	 * that does the discovery -- so a node that is waiting for the system
+	 * ahead of it to form refuses once a second, for as long as it takes.
+	 * The refusal is right; saying it every second is not: OPA0: is an
+	 * operator's console, and VMS does not repeat itself there while a
+	 * situation simply persists.
+	 *
+	 * So the line is EDGE-triggered on the reason: said when the reason
+	 * CHANGES, silent while it holds, said again if it comes back. The
+	 * COUNTERS above are untouched by this -- they count every refusal,
+	 * because a count is state and not speech. CNXMAN_COORD_REF_NONE = this
+	 * node has said nothing yet, which is where cnxman_coord_init()'s zeroed
+	 * context starts and what a successful founding restores.
+	 */
+	uint8_t  genesis_said;     /* enum cnxman_coord_refusal, last ANNOUNCED */
+	uint8_t  pad_form[2];
 
 	/* The one scratch buffer every built BODY goes through (design sec
 	 * 3.2.4: this FSM emits bodies, never a frame) -- in the context, not
@@ -495,12 +590,25 @@ void cnxman_coord_abandon(struct cnxman_coord *c, const char *why);
 /* ==========================================================================
  * 8b. GENESIS -- forming a cluster from nothing (docs/design-cluster-genesis.md)
  *
- * The published formation algorithm: the first node up that satisfies quorum
- * BY ITS OWN VOTES forms a single-node cluster as its founding member and
- * coordinator, taking cluster generation 1; every later node joins THROUGH it
- * on the ordinary op-0x02 path. Without this the executive cannot form a
- * cluster at all -- a node needs a CSID to coordinate, and a CSID is only ever
- * learned from a coordinator's op-0x06, so two fresh nodes deadlock.
+ * The published formation algorithm: a node waiting to form or join applies
+ * p. 7-6 to the PROPOSED SET -- itself plus every system it can currently see
+ * -- and, when their COMBINED votes meet quorum, forms the cluster as its
+ * founding member and coordinator, taking cluster generation 1; every later
+ * node joins THROUGH it on the ordinary op-0x02 path. Without this the
+ * executive cannot form a cluster at all -- a node needs a CSID to coordinate,
+ * and a CSID is only ever learned from a coordinator's op-0x06, so two fresh
+ * nodes deadlock.
+ *
+ * THE VOTES ARE COMBINED, NOT THIS NODE'S ALONE (rd vms-6d3d, MEASURED on two
+ * real OpenVMS VAX V7.3 systems, capture vms-6d3d-coldform-ev2-20260924):
+ * VOTES=1 / EXPECTED_VOTES=2 -- the documented two-node VMScluster -- has NO
+ * node whose own vote meets quorum 2, and the oracle's first node sat in
+ * `%SYSINIT, waiting to form or join a VMScluster system` for eighteen minutes
+ * printing not one %CNXMAN line. The instant its peer appeared it logged
+ * `established connection to node VAX2` and, 3.2 s later, `proposed formation
+ * of a VAXcluster`. Demanding quorum from the FOUNDER's own votes -- what this
+ * file did before -- is strictly stronger than VMS and made that configuration
+ * unformable by any pair of OVMX nodes.
  *
  * THIS IS NOT A SECOND KIND OF CLUSTER. What it forms is an ordinary
  * VMScluster whose first member happens to be this executive; the systems that
@@ -521,15 +629,94 @@ void cnxman_coord_abandon(struct cnxman_coord *c, const char *why);
  *
  * THE GATE (INV-6, and interop safety). Refused -- minting NOTHING and leaving
  * this node's state untouched -- unless ALL of: no CSID already learned; no
- * transition already in progress; a real local CSB; NO OTHER SYSTEM PRESENT AT
- * ALL (any non-local CSB with a known SCSSYSTEMID, or already SELECTED, means
- * there is something to JOIN -- a real VAX included -- and this node joins it
- * instead of forming a competing cluster beside it); the node satisfies quorum
- * on its own VOTES (cnxman_quorum_own_votes_suffice(), p. 7-6); and the CSID it
- * would mint is nameable in the grounded nodemap byte. The votes gate is the
- * load-bearing one for INV-6 -- a VOTES=0 node NEVER founds, however this is
- * called -- and the peer gate is the load-bearing one for interop. Both
- * refusals are counted (`genesis_refused_noquorum`, `genesis_refused_peer`).
+ * transition already in progress; a real local CSB; NOBODY ELSE MAY BE FORMING
+ * OR HOLDING A CLUSTER HERE (the three clauses of the ELECTION note below); the
+ * proposed set's combined votes satisfy quorum
+ * (cnxman_quorum_form_votes_suffice(), p. 7-6); and the CSID it would mint is
+ * nameable in the grounded nodemap byte. The votes gate is the load-bearing one
+ * for INV-6 -- a VOTES=0 node NEVER founds, however this is called, and every
+ * vote in the sum was read from a CSB that really received that system's PARAMS
+ * record over a circuit that is really OPEN -- and the peer gates are the
+ * load-bearing ones for interop. Every refusal is counted (`genesis_refused_noquorum`,
+ * `genesis_refused_peer`, `genesis_refused_unasked`,
+ * `genesis_refused_outranked`).
+ *
+ * ---------------------------------------------------------------------------
+ * THE ELECTION -- WHO FORMS, WHEN TWO FRESH SYSTEMS CAN SEE EACH OTHER
+ *
+ * THE DEADLOCK THIS RESOLVES, measured. Two fresh OVMX nodes booted onto one
+ * LAN open their SCS virtual circuits to each other within seconds and then sit
+ * there: each holds a CSB for the other, so the old "NO OTHER SYSTEM PRESENT AT
+ * ALL" clause refused BOTH of them, and neither could admit the other because
+ * admission needs a coordinator and a coordinator needs a CSID. Twenty-five
+ * minutes, blank CSID on both consoles, no `%CNXMAN ... is now a VAXcluster
+ * member` on either (rd vms-151). "There is a system present" is the right
+ * question to ask; "therefore I join it" was the wrong conclusion to draw from
+ * it, because a system that is not in a cluster cannot admit anybody.
+ *
+ * So the clause is split into the three DIFFERENT facts it was conflating, and
+ * only the first two forbid forming:
+ *
+ *  (1) THAT SYSTEM IS ALREADY IN A CLUSTER -> JOIN IT, never form. The honest
+ *      executive reads: its CSB carries a CSID (a value only a cluster ever
+ *      assigns -- this node learns one, it never guesses one), or this CLUB
+ *      has it MEMBER/SELECTED. This is the clause that keeps a booting OVMX
+ *      node from forming a singleton beside a live VAXcluster, and it is
+ *      unchanged in strength (`genesis_refused_peer`).
+ *
+ *  (2) THAT SYSTEM HAS NOT BEEN ASKED YET -> ASK BEFORE FORMING. A CSID is not
+ *      the only way a peer can be in a cluster -- a member this node has not
+ *      yet exchanged membership records with carries none HERE. What settles it
+ *      is the question the join FSM already asks: a member takes a membership
+ *      request and coordinates an admission within milliseconds (spec SS4(o)),
+ *      and a system that is not in a cluster cannot. So this node may form only
+ *      after it has completed at least one FULL round in which every system it
+ *      could see was asked to admit it and none did -- the join FSM's own
+ *      `attempts_exhausted`, passed in as `struct cnxman_form_evidence` because
+ *      it is the JOIN's fact and this file will not guess at it. Nobody visible
+ *      at all needs no round: there was nobody to ask (`genesis_refused_unasked`).
+ *
+ *  (3) THAT SYSTEM IS ANOTHER FOUNDING CANDIDATE -> EXACTLY ONE OF US FORMS.
+ *      Both nodes reach clause (2) together, so something must break the
+ *      symmetry or they form two clusters and partition. Book p. 7-32's
+ *      published mechanism is the COORDINATOR LOCK -- a would-be coordinator
+ *      asks every selected system for permission, one already granted to
+ *      another refuses, and a collision backs off a random short interval.
+ *      OVMX CANNOT ASK: no capture in this project's library contains a
+ *      coordinator-lock request or grant and no opcode is grounded for one, and
+ *      inventing a frame for it is the failure class that bugchecked two real
+ *      VAXes. What this file implements instead is a TOTAL ORDER over a value
+ *      every candidate already advertises and every candidate therefore
+ *      computes the same answer from -- the SCSSYSTEMID in its CSB -- and the
+ *      LOWEST one forms. It is labelled for what it is: an OVMX DESIGN VALUE
+ *      standing in for a mechanism OVMX has no grounding to speak, chosen
+ *      because it is total (it cannot elect two), symmetric (both nodes decide
+ *      identically from the same wire-learned numbers), and needs no frame.
+ *      The DIRECTION is arbitrary and is not claimed to be VMS's.
+ *
+ *      WHO IS A CANDIDATE is itself read, not assumed, and it is read with the
+ *      SAME predicate this node's own founding gate is about to be asked:
+ *      cnxman_quorum_could_found() over the SAME proposed set, with that
+ *      peer's own advertised VOTES and EXPECTED_VOTES in place of this node's.
+ *      One formula, two subjects -- a second copy is how a node comes to defer
+ *      forever to a system that could never have formed anything (rd vms-6d3d).
+ *      FORM requires VOTES > 0 (pp. 7-28, 7-33), so a peer advertising zero
+ *      votes falls out of that predicate rather than being special-cased.
+ *
+ *      Old CEVOTES is the one term a peer does not advertise, so 0 stands in
+ *      for it -- the value that makes the peer MOST likely to qualify, i.e.
+ *      most likely to be treated as a rival. Two peers are rivals with no
+ *      arithmetic at all: one whose PARAMS have NOT arrived (an un-advertised
+ *      VOTES is unknown, never a zero) and one this node cannot currently
+ *      reach, so it is not in the proposed set and there is nothing to judge
+ *      it against. Standing down costs a beat, forming beside somebody costs a
+ *      partition (`genesis_refused_outranked`).
+ *
+ * WHAT THE LOSER DOES is nothing new: it keeps the join drive it was already
+ * running, and the moment the winner is a member its op-0x02 is taken and it is
+ * admitted on the ORDINARY path. There is no second code path for "the node
+ * that lost the election".
+ * ---------------------------------------------------------------------------
  *
  * WHAT THIS FUNCTION DOES NOT DECIDE: *when* to ask. A booting node must not
  * conclude "there is nobody here" faster than it can hear somebody -- the
@@ -548,7 +735,48 @@ void cnxman_coord_abandon(struct cnxman_coord *c, const char *why);
  * and inventing one is what INV-6 forbids (design note, "Generation source"). */
 #define CNXMAN_COORD_GENESIS_GEN 1u
 
-int cnxman_coord_found(struct cnxman_coord *c);
+/*
+ * THE FOUNDER'S CSV SLOT, and why it is not `SCSSYSTEMID & 0x3ff`.
+ *
+ * rd vms-3a7c settled the assignment rule against the lab oracle and both
+ * repository captures: a coordinator hands out the ROUND-ROBIN, monotonically
+ * advancing CSV slot (p. 7-25), never a function of the SCSSYSTEMID -- SCSSYSTEMID
+ * 1986 was assigned slot 3 and 1026 was assigned slot 3, neither of which its own
+ * system id can produce. coord_assign_slot() has implemented that for every
+ * admission since. The FOUNDING path had not been moved over, and still built
+ * `(1 << 16) | (SCSSYSTEMID & 0x3ff)` -- a reading the capture that suggested it
+ * cannot distinguish, because the two real founders it shows (sysid 1025 -> CSID
+ * 0x00010001, sysid 1027 -> 0x00010003) have system ids whose bottom ten bits
+ * happen to EQUAL their slots.
+ *
+ * It is not a harmless difference. A cluster formed from nothing has used no
+ * slot, so the founder takes the first one the same round-robin walk would hand
+ * out -- slot 1, since slot 0 is never used -- and any node whose SCSSYSTEMID's
+ * bottom ten bits fall outside the grounded nodemap byte could not found AT ALL
+ * under the old rule: SCSSYSTEMID 1987 asks for slot 963 and is refused
+ * NO_SLOT. The founder now goes through coord_next_slot(), the one walk every
+ * other assignment already uses, so a founder and an admission cannot assign
+ * slots differently.
+ */
+
+/*
+ * THE JOIN'S FACT, carried to the FORM decision (SS8b clause (2)).
+ *
+ * `admission_rounds` is the join FSM's own `attempts_exhausted`: how many
+ * COMPLETE rounds this node has finished in which every system it could see was
+ * asked to admit it and none took the request. It is read out of the real join
+ * FSM by the caller and passed here because it is that FSM's state, not this
+ * one's -- there is no second counter and nothing is inferred from a clock.
+ *
+ * A NULL evidence pointer means "no round has been completed", which is the
+ * strictest reading and the one a caller that does not run a join FSM must get.
+ */
+struct cnxman_form_evidence {
+	uint32_t admission_rounds;
+};
+
+int cnxman_coord_found(struct cnxman_coord *c,
+		       const struct cnxman_form_evidence *ev);
 
 /* ==========================================================================
  * 9. Readback

@@ -255,6 +255,50 @@ grant`.
 > acknowledged at least once, which is the only baseline a capture that began
 > mid-circuit can honestly have.
 
+### C10 — A refusal that names no connection  ▸ `S15-REJECT-UNADDRESSED`
+
+**Mechanism.** A `REJECT_RESPONSE` (SCS `$SCSDEF` `REJ_RSP`, the op-5 verb at
+abs 60) is addressed to the handle the **rejecter** stated in `SCS$L_SRC_CONID`
+on its `REJECT_REQUEST`. The initiator has no peer handle until that frame
+arrives, so an implementation that never reads it answers with
+`SCS$L_DST_CONID = 0`. The peer's port driver then holds a control message it
+cannot match to a connection. Its complaint is
+`%PEA0, Inappropriate SCA Control Message`, and the **documented effect** of
+that message — VMS's own `HELP/MESSAGE "Inappropriate SCA Control"`, quoted in
+spec §4(h) — is *"The port driver closes the port-to-port virtual circuit to
+the remote port."*
+
+**Invariant.** MEASURED over the 48-capture reference corpus: every
+`REJECT_REQUEST` carries a **nonzero** `SCS$L_SRC_CONID` — **852 of 852** — and
+every `REJECT_RESPONSE` pairable with its request addresses **exactly** that
+value — **698 of 698, zero residuals** (a further 355 are unpairable only
+because their request predates the capture window). Auditing **every** source
+across the corpus, this vector fires **0** times on a real VMS node.
+
+**The observed crash (`vms-d7e`).** A booted OVMX node emitted **11 of 11** with
+that field zero — the single verb of the eleven it emits that sits outside the
+corpus's Con.ID-presence envelope. Both captures then show the documented
+effect, twice, with the same latency:
+
+| capture | OVMX op-5 with DST_CONID 0 | peer `0x41` VC restart | Δ |
+|---|---|---|---|
+| `cn3-achieved-20260905` (E85) | t = 16.3150 s → VAX2 | t = 18.2892 s | **1.974 s** |
+| `vms-d7e-cnxmgrerr-20260917` | t = 25.1024/25.1031 s → VAX1 **and** VAX2 | t = 27.0858 s, both | **1.983 s** |
+
+On E85 that connect — and so the VC bounce — happened **once and before
+admission**, and cost nothing. The regressing build repeats the `SCS$DIRECTORY`
++ `MSCP$DISK` discovery round against both members ~5 s **after** OVMXJ1 is a
+full `MEMBER` (CSID `00010003`), so the port-driver VC close now lands on an
+admitted member's circuit: `%CNXMAN, lost connection to system OVMXJ1`, then
+`Fatal BUG CHECK CNXMGRERR` on VAX1, three times at the same PC.
+
+> **Honest scope.** What is measured is the corpus rule, the field OVMX got
+> wrong, and the two 2-second correlations. What is *not* claimed is a lab
+> bracket proving this single field is the whole of the CNXMGRERR chain — the
+> `%PEA0, OPC/22` byte itself remains undecoded (spec §4(h), `vms-0fe`), and the
+> post-admission re-discovery above is a **separate** open behaviour recorded
+> here rather than fixed with it. The real-VAX survival proof is the gate.
+
 ### Classes considered and NOT retained
 
 - **Duplicate / replayed dialogue.** No corpus signature separates a legitimate
@@ -313,7 +357,9 @@ Both WARN classes are fully characterised, which is why they are WARN.
 `--self-test` synthesizes a clean CM dialogue that must produce **zero**
 findings, and one **single-factor** violation fixture per vector that must each
 be detected — so a fixture that stops firing means the *check* broke, not the
-fixture. 11 vectors, all detected, clean fixture clean. This is what CI runs.
+fixture. 14 vectors, all detected, clean fixture clean. This is what CI runs.
+`S15`'s fixture carries a correctly addressed refusal alongside the unaddressed
+one, so a check that fired unconditionally would fail its own case.
 
 ---
 
@@ -344,6 +390,18 @@ the in-tree `tests/lab/captures/`):
 `e55`, `e56`, `e57`, `e60`, `e63`, `e65`–`e74`, `e77`, `op06`, `op06-join`, and
 both in-tree captures: **0 findings**. On this corpus the gate is a clean
 discriminator — it fires on the crash runs and nowhere else.
+
+> **Amended by `vms-d7e` (C10 / `S15-REJECT-UNADDRESSED`).** That sentence is no
+> longer true of one capture, and the exception is the point rather than a
+> false positive: `cn3-achieved-20260905.pcap` — the E85 run that reached CN=3
+> and crashed nobody — carries **one** `S15` finding. The defect was already
+> there; the E85 join simply issued its one unaddressed refusal *before*
+> admission, where the port-driver VC close it draws costs nothing. The
+> regressing `vms-d7e` capture carries **ten**, the first pair of them ~5 s
+> *after* OVMXJ1 was a full MEMBER. A gate that had existed at E85 would have
+> named this vector before a real VAX bugchecked on it — which is the whole
+> argument of §0. Auditing every source across the 48-capture reference corpus,
+> `S15` still fires **0** times on a real VMS node.
 
 ### NEW vectors the retro-audit surfaced (not yet hit as a crash)
 

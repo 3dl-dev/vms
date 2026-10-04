@@ -1,0 +1,24 @@
+
+=== last gasp: frame 2171, 08:00:2b:3d:83:23 announced departure ===
+  [  2153] -  0.813 s  OVMXA    -> OVMXB    content=120  mtype30=0xb4
+  [  2154] -  0.002 s  08:00:2b:3d:83:23 -> OVMXB    content=110  mtype30=0x5b  CONNECT_REQ    rem=00000000 loc=dbed000a  n1='SCS$DIRECTORY' n2='SCS$DIR_LOOKUP'
+  [  2155] -  0.002 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2156] -  0.002 s  OVMXB    -> 08:00:2b:3d:83:23 content=66   mtype30=0x5b  CONNECT_RSP    rem=dbed000a loc=00000000
+  [  2157] -  0.002 s  OVMXB    -> 08:00:2b:3d:83:23 content=110  mtype30=0x5b  ACCEPT_REQ     rem=dbed000a loc=e09a0052  n1='SCS$DIR_LOOKUP' n2='SCS$DIRECTORY'
+  [  2158] -  0.001 s  08:00:2b:3d:83:23 -> OVMXB    content=41   mtype30=0x48
+  [  2159] -  0.001 s  08:00:2b:3d:83:23 -> OVMXB    content=110  mtype30=0x5b  CONNECT_REQ    rem=00000000 loc=dbf70008  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  2160] -  0.001 s  08:00:2b:3d:83:23 -> OVMXB    content=62   mtype30=0x5b  ACCEPT_RSP     rem=e09a0052 loc=dbed000a
+  [  2161] -  0.001 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2162] -  0.001 s  OVMXB    -> 08:00:2b:3d:83:23 content=66   mtype30=0x5b  CONNECT_RSP    rem=dbf70008 loc=00000000
+  [  2163] -  0.001 s  OVMXB    -> 08:00:2b:3d:83:23 content=110  mtype30=0x5b  ACCEPT_REQ     rem=dbf70008 loc=e09a0053  n1='VMS$VAXcluster' n2='VMS$VAXcluster'
+  [  2164] -  0.001 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2165] -  0.001 s  08:00:2b:3d:83:23 -> OVMXB    content=94   mtype30=0x5b  APPDATA        rem=e09a0052 loc=dbed000a  n1='MSCP$TAPE' n2='SG.EXE;'
+  [  2166] -  0.001 s  08:00:2b:3d:83:23 -> OVMXB    content=94   mtype30=0x5b  APPDATA        rem=e09a0052 loc=dbed000a  n1='MSCP$DISK' n2='\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00@'
+  [  2167] -  0.001 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2168] -  0.000 s  OVMXB    -> 08:00:2b:3d:83:23 content=94   mtype30=0x5b  APPDATA        rem=dbed000a loc=e09a0052  n1='MSCP$TAPE' n2='NOT PRESENT HERE'
+  [  2169] -  0.000 s  OVMXB    -> 08:00:2b:3d:83:23 content=41   mtype30=0x48
+  [  2170] -  0.000 s  OVMXB    -> 08:00:2b:3d:83:23 content=94   mtype30=0x4b  APPDATA        rem=dbed000a loc=e09a0052  n1='MSCP$DISK' n2='NOT PRESENT HERE'
+  -- last frame each station sent before the gasp --
+     OVMXB     -  0.000 s  frame 2170  content=94   mtype30=0x4b  APPDATA        rem=dbed000a loc=e09a0052  n1='MSCP$DISK' n2='NOT PRESENT HERE'
+     08:00:2b:3d:83:23  -  0.001 s  frame 2166  content=94   mtype30=0x5b  APPDATA        rem=e09a0052 loc=dbed000a  n1='MSCP$DISK' n2='\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00@'
+     OVMXA     -  0.813 s  frame 2153  content=120  mtype30=0xb4

@@ -29,6 +29,7 @@
 #include "cluster_test.h"
 #include "vms_cluster_codec_dlm.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static struct vms_fixture g_fx[VMS_FIXTURE_MAX_FILES];
@@ -620,6 +621,71 @@ static void test_rebuild_echo_recipe(void)
 				 "dlm-rebuild-response");
 }
 
+/*
+ * REAL rejoin op-0x0d frames: the byte-identical round-trip crash-guard
+ * (vms-20c, FC-P5.5). Unlike the spec-composed dlm-rebuild-request (mostly
+ * zero body), these are FOUR REAL captured records from the 2-VAX rejoin
+ * (VAX1 survivor -> VAX2). They (a) exercise the rebuild-TYPE fix -- every
+ * one carries body[14:16]=0x0004 (REJOIN), which the old 0x0003-only
+ * "invariant" wrongly rejected; and (b) prove the codec round-trips a REAL
+ * record byte-identical -- including the frame-specific stale-buffer tail --
+ * which is the never-crash foundation the survivor-side SENDER links against.
+ */
+static void test_rebuild_rejoin_roundtrip(void)
+{
+	static const struct { const char *fx; const char *res; uint8_t reslen; }
+	cases[] = {
+		{ "dlm-rebuild-rejoin-sys",  "SYS$SYS_ID",    16 },
+		{ "dlm-rebuild-rejoin-vcc",  "VCC$vSYSDSK1",  17 },
+		{ "dlm-rebuild-rejoin-f11b", "F11B$aSYSDSK1", 22 },
+		{ "dlm-rebuild-rejoin-mscp", "MSCP$LOADBAL",  12 },
+	};
+	unsigned i;
+
+	printf("-- dlm-rebuild-rejoin-*: REAL op-0x0d rejoin frames, byte-identical "
+	       "round-trip (rebuild-type 0x0004)\n");
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		const struct vms_fixture *f = fixture(cases[i].fx);
+		struct vms_frame_info fi;
+		struct vms_dlm_rebuild_record rec;
+		uint8_t built[256];
+		uint32_t written = 0;
+		char msg[96];
+
+		snprintf(msg, sizeof(msg), "  %s: fixture loads", cases[i].fx);
+		ct_check(f != NULL, msg);
+		if (f == NULL)
+			continue;
+
+		ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi)
+			 == VMS_CODEC_OK, "    classifies as SCS_MSG");
+		/* The rebuild-type fix: a REJOIN frame (body[14:16]=0x0004) MUST
+		 * parse -- the prior 0x0003-only gate rejected every one. */
+		ct_check(vms_dlm_rebuild_parse(f->bytes, f->wire_len, &fi, &rec)
+			 == VMS_CODEC_OK,
+			 "    parses (rebuild-type 0x0004 REJOIN accepted)");
+		ct_check_eq_u32(rec.rebuild_type, VMS_DLM_REBUILD_TYPE_REJOIN,
+				"    rebuild_type == REJOIN (0x0004)");
+		ct_check_eq_u32(rec.name_len, cases[i].reslen,
+				"    reslen (body[47]) matches the capture");
+		ct_check(memcmp(rec.name, cases[i].res, strlen(cases[i].res)) == 0,
+			 "    resource name (body[48]) matches the capture");
+
+		/* Byte-identical round-trip: rebuild the request, compare the whole
+		 * body against the real captured frame (origin:capture -> every byte
+		 * cited). The crash guard: the codec preserves the real record
+		 * verbatim, stale-buffer tail included, never a mis-shift. */
+		memset(built, 0xAA, sizeof(built));
+		ct_check(vms_dlm_rebuild_request_build(&rec, built, sizeof(built),
+						       &written) == VMS_CODEC_OK,
+			 "    request_build OK");
+		ct_check_eq_u32(written, VMS_DLM_REBUILD_ECHO_LEN,
+				"    wrote the 132-byte body span");
+		assert_cited_bytes_match(f, built, VMS_OFF_SYSAP_BODY, f->wire_len,
+					 cases[i].fx);
+	}
+}
+
 /* ---- group 3: allowlist rows ------------------------------------------ */
 
 static void test_allowlist_rows(void)
@@ -986,6 +1052,74 @@ static void test_body_entries_are_what_scs_delivers(void)
 	}
 }
 
+/* ---- group 5: op-0e DLKSRCH twin (H11, vms-d55) ----------------------- *
+ * No captured fixture exists (OVMX-derived, Rule 8: the do-it-like-VMS
+ * successor to the retired-scsd SEARCH orchestration). The proof is a
+ * build->parse twin over a fully-populated record, into a HEAP buffer
+ * sized to EXACTLY `written` so ASan red-zones a one-byte over-write, plus
+ * a one-byte-short refusal to prove the builder is bounded, not scribbling.
+ * Non-vacuous: all eight fields carry distinct non-zero values and are
+ * each compared after the round trip.
+ */
+static void test_dlksrch_twin(void)
+{
+	struct vms_dlm_dlksrch_record in, out;
+	uint8_t probe[256];
+	uint32_t written = 0, body_off = VMS_OFF_SYSAP_BODY;
+	uint8_t *exact;
+	vms_codec_status_t st;
+
+	memset(&in, 0, sizeof(in));
+	in.flag           = 2u; /* VMS_DLM_DLK_VICTIM -- every field meaningful */
+	in.initiator_csid = 0x11112222u;
+	in.initiator_lkid = 0x33334444u;
+	in.blocked_csid   = 0x55556666u;
+	in.blocked_lkid   = 0x77778888u;
+	in.victim_csid    = 0x9999AAAAu;
+	in.victim_lkid    = 0xBBBBCCCCu;
+	in.ttl            = 16u;
+
+	/* Size discovery into a poisoned oversize buffer. */
+	memset(probe, 0xAA, sizeof(probe));
+	st = vms_dlm_dlksrch_build(&in, probe, sizeof(probe), &written);
+	ct_check(st == VMS_CODEC_OK, "DLKSRCH build OK");
+	ct_check_eq_u32(written, VMS_OFF_DLM_DLK_TTL + 1u,
+			"  frame high-water == TTL offset + 1 (109)");
+
+	/* Rebuild into a heap buffer of EXACTLY `written` bytes: a one-byte
+	 * over-write trips ASan here rather than passing silently. */
+	exact = (uint8_t *)malloc(written);
+	ct_check(exact != NULL, "  exact-sized buffer allocates");
+	st = vms_dlm_dlksrch_build(&in, exact, written, &written);
+	ct_check(st == VMS_CODEC_OK, "  build into exact-sized buffer OK");
+
+	/* Parse the body span back and compare every field (non-vacuous). */
+	memset(&out, 0, sizeof(out));
+	st = vms_dlm_dlksrch_parse_body(exact + body_off, written - body_off,
+					&out);
+	ct_check(st == VMS_CODEC_OK, "  DLKSRCH parse_body OK");
+	ct_check_eq_u32(out.flag, in.flag, "    flag survives");
+	ct_check_eq_u32(out.initiator_csid, in.initiator_csid,
+			"    initiator_csid survives");
+	ct_check_eq_u32(out.initiator_lkid, in.initiator_lkid,
+			"    initiator_lkid survives");
+	ct_check_eq_u32(out.blocked_csid, in.blocked_csid,
+			"    blocked_csid survives");
+	ct_check_eq_u32(out.blocked_lkid, in.blocked_lkid,
+			"    blocked_lkid survives");
+	ct_check_eq_u32(out.victim_csid, in.victim_csid,
+			"    victim_csid survives");
+	ct_check_eq_u32(out.victim_lkid, in.victim_lkid,
+			"    victim_lkid survives");
+	ct_check_eq_u32(out.ttl, in.ttl, "    ttl survives");
+
+	/* One byte short must FAIL, not scribble (bounded-write proof). */
+	ct_check(vms_dlm_dlksrch_build(&in, exact, written - 1u, NULL)
+		 != VMS_CODEC_OK, "  build REFUSES a one-byte-short buffer");
+
+	free(exact);
+}
+
 int main(void)
 {
 	char err[VMS_FIXTURE_ERRLEN];
@@ -1001,10 +1135,12 @@ int main(void)
 
 	test_fixture_roundtrips();
 	test_rebuild_echo_recipe();
+	test_rebuild_rejoin_roundtrip();
 	test_allowlist_rows();
 	test_no_builder_accepts_a_placeholder_lock_id();
 	test_dir_hash_accessor();
 	test_body_entries_are_what_scs_delivers();
+	test_dlksrch_twin();
 
 	return ct_summary("test_codec_dlm");
 }

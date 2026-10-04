@@ -339,6 +339,13 @@ static void test_cnxman_wiring(void)
 	    "rather than composed from the status");
 	has("cnxman_club_csb_at(&cl->club, i)",
 	    "E35: CLUSTER_MEMBER_GET walks the CONNECTION MANAGER's CSB table");
+	/* rd vms-af4: the table has HOLES once p. 7-25 deallocates a block, and
+	 * a member's new incarnation sits past one. The walk skips them; it used
+	 * to stop at the first and SHOW CLUSTER lost that member's row. */
+	has("for (i = 0; i < cl->club.n_csb && args->n_members < VMS_CLUSTER_MEMBER_MAX;",
+	    "rd vms-af4: CLUSTER_MEMBER_GET walks to the table's high-water mark");
+	absent("        if (csb == NULL)\n            break;\n        csb_to_member_row",
+	       "rd vms-af4: ...and a free slot no longer ends the walk");
 	absent("vms_cluster_members[",
 	       "... and the module-global mirror the daemon wrote is GONE");
 	absent("vms_ioctl_cluster_member_set",
@@ -356,6 +363,27 @@ static void test_cnxman_wiring(void)
 	    "the boot path takes the executive's cluster state back");
 	has("report_cluster_state(state)",
 	    "... and renders the operator line from THAT, never from the status");
+	/*
+	 * rd vms-b34. The cluster GROUP NUMBER is the LAVC HELLO multicast
+	 * address, so a node in the wrong one is on nobody's wire -- and
+	 * nothing used to say which group it was in, or whether anyone had
+	 * chosen it. A shipped V0.7 node sat beside a real OpenVMS V7.3
+	 * cluster for 195 s exchanging zero frames with it while this very
+	 * line printed "waiting to form or join" (tests/lab/captures/
+	 * cn2-genesis-vaxlab4-20260920/). Both facts are READ BACK from the
+	 * port the executive really opened, not from the config this image
+	 * handed down.
+	 */
+	has("report_cluster_group();",
+	    "the boot path also announces WHICH cluster group the port is in");
+	has("a.row = VMS_CLUSTER_DIAG_PORT_ROW;",
+	    "... read back from the executive's own port row (INV-6), never "
+	    "echoed from the configuration this image loaded");
+	has("a.port.cluster_group_valid",
+	    "... and it distinguishes a CONFIGURED group from the default");
+	has("is NOT CONFIGURED (no CLUSTER_AUTHORIZE",
+	    "... saying plainly, on OPA0:, when this system cannot reach a "
+	    "real cluster");
 	has("start_cluster_port(cluster_vaxcluster);",
 	    "CLUSTER_START is issued at boot Step 2d ...");
 	{
@@ -372,6 +400,10 @@ static void test_cnxman_wiring(void)
 		ct_check(0, "could not open dcl_cmd_show.c");
 		return;
 	}
+	has("a.port.cluster_group_valid",
+	    "rd vms-b34: SHOW CLUSTER/LOCAL_PORTS reports the cluster group "
+	    "and whether it was configured -- the surface that read healthy "
+	    "on a node that could never join anything");
 	has("vms_kif_cluster_get_members(members, VMS_CLUSTER_MEMBER_MAX",
 	    "SHOW CLUSTER's default report reads the executive's member table");
 	has("vms_kif_cluster_diag_csb(&a)",

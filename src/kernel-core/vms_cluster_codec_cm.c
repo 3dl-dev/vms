@@ -106,6 +106,11 @@ vms_codec_status_t vms_cm_body_kind(const uint8_t *body, uint32_t len,
  * sec 4: opcode-specific body parsers
  * ------------------------------------------------------------------ */
 
+int vms_cm_open_carries_nodemap(uint8_t opcode)
+{
+	return opcode == VMS_CM_OP_XITION_ADD || opcode == VMS_CM_OP_XITION_REM;
+}
+
 vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 				     struct vms_cm_open *out)
 {
@@ -122,7 +127,7 @@ vms_codec_status_t vms_cm_open_parse(const uint8_t *body, uint32_t len,
 	out->epoch = vms_wire_get_le32(&v, VMS_OFB_CM_EPOCH);
 	out->role  = vms_wire_get_u8(&v, VMS_OFB_CM_ROLE);
 	out->cls   = vms_wire_get_u8(&v, VMS_OFB_CM_CLASS);
-	out->has_bitmap = (out->env.opcode == VMS_CM_OP_XITION_ADD);
+	out->has_bitmap = vms_cm_open_carries_nodemap(out->env.opcode);
 	out->bitmap = out->has_bitmap
 			      ? vms_wire_get_u8(&v, VMS_OFB_CM_BITMAP)
 			      : 0;
@@ -145,10 +150,11 @@ vms_codec_status_t vms_cm_open_bitmap_span(const uint8_t *body, uint32_t len,
 	if (st != VMS_CODEC_OK)
 		return st;
 
-	/* Only the op-0x09 ADD open carries a membership bitmap (spec sec
-	 * 4(p)); on any other opcode this span is somebody else's payload. */
+	/* Only the op-0x09 ADD and op-0x08 REMOVE opens carry a membership
+	 * bitmap (spec sec 4(p), 4(p).R); on any other opcode this span is
+	 * somebody else's payload. */
 	if (env.category != VMS_CM_CAT_CONFIG ||
-	    env.opcode != VMS_CM_OP_XITION_ADD)
+	    !vms_cm_open_carries_nodemap(env.opcode))
 		return VMS_CODEC_E_CLASS;
 
 	vms_wire_view_init(&v, body, len);
@@ -194,6 +200,7 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 
 	vms_wire_view_init(&v, body, len);
 	out->votes    = vms_wire_get_le16(&v, VMS_OFB_CM_VOTES);
+	out->members  = vms_wire_get_le16(&v, VMS_OFB_CM_MEMBERS);
 	out->param_f1 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F1);
 	out->param_f2 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F2);
 	vms_wire_get_bytes(&v, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
@@ -370,6 +377,50 @@ vms_codec_status_t vms_cm_echo_response_build(const uint8_t *req_body,
 		return w.err;
 	if (written != (uint32_t *)0)
 		*written = VMS_CM_BODY_LEN;
+	return VMS_CODEC_OK;
+}
+
+/*
+ * The member's 0x81/0x12 -- the echo family's recipe with the ONE field a
+ * responder states for itself overwritten (rd vms-4f0; see the header's
+ * "THE EPOCH IN AN 0x81/0x12 IS THE RESPONDER'S OWN"). Built ON TOP of the
+ * echo builder rather than beside it, so the verbatim copy, the response
+ * bit, body[18] and body[17] have exactly ONE implementation.
+ */
+vms_codec_status_t vms_cm_relay_response_build(const uint8_t *req_body,
+					       uint32_t req_len,
+					       uint8_t own_class,
+					       uint32_t own_epoch,
+					       uint8_t *out_body, uint32_t cap,
+					       uint32_t *written)
+{
+	struct vms_cm_envelope req_env;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+
+	if (req_body == (const uint8_t *)0 || out_body == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	st = vms_cm_envelope_parse(req_body, req_len, &req_env);
+	if (st != VMS_CODEC_OK)
+		return st;
+	/* This recipe is op-0x12's alone; anything else belongs to the echo
+	 * family and must not be given a caller-supplied epoch. */
+	if (req_env.category != VMS_CM_CAT_CONFIG ||
+	    req_env.opcode != VMS_CM_OP_RELAY)
+		return VMS_CODEC_E_CLASS;
+
+	st = vms_cm_echo_response_build(req_body, req_len, own_class,
+					out_body, cap, written);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, out_body, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, own_epoch);
+	vms_wire_put_le32(&w, VMS_OFB_CM_RELAY_EPOCH, own_epoch);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
 	return VMS_CODEC_OK;
 }
 
@@ -629,10 +680,11 @@ vms_codec_status_t vms_cm_xition_open_build(uint8_t tr_class, uint32_t epoch,
 
 	if (opcode == 0u)
 		return VMS_CODEC_E_CLASS;
-	/* Only the class-0x02 ADD open carries a nodemap (sec 4(p)). Asking for
-	 * one on any other class is refused rather than dropped, so a caller
+	/* The ADD and the REMOVE open carry the post-transition nodemap
+	 * (sec 4(p), and sec 4(p).R for op 0x08); the class-0x04 departure does
+	 * not. Asking for one there is refused rather than dropped, so a caller
 	 * cannot believe it published a membership map that never went out. */
-	if (has_bitmap && tr_class != VMS_CM_CLASS_ADD)
+	if (has_bitmap && !vms_cm_open_carries_nodemap(opcode))
 		return VMS_CODEC_E_INVAL;
 
 	st = cm_originate_begin(opcode, out_body, cap, &w);
@@ -860,7 +912,7 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
 	return cm_originate_end(&w, written);
 }
 
-vms_codec_status_t vms_cm_params_build(uint16_t votes,
+vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 				       const struct vms_cm_node_params *own_params,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written)
@@ -894,6 +946,9 @@ vms_codec_status_t vms_cm_params_build(uint16_t votes,
 	 * out zero; a caller whose real LOCKDIRWT is nonzero cannot advertise
 	 * it and must say so (FC-P3.3 counts and logs exactly that). */
 	vms_wire_put_le16(&w, VMS_OFB_CM_VOTES, votes);
+	/* body[18:20] the member count (rd vms-e88): the caller's, and 0 --
+	 * "in no cluster" -- is a real value a joiner sends, not a default. */
+	vms_wire_put_le16(&w, VMS_OFB_CM_MEMBERS, members);
 	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F1, own_params->param_f1);
 	vms_wire_put_le32(&w, VMS_OFB_CM_PARAM_F2, own_params->param_f2);
 	vms_wire_put_bytes(&w, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
@@ -978,6 +1033,9 @@ vms_codec_status_t vms_cm_membership_rec_build(const struct vms_cm_membership_re
 	if (st != VMS_CODEC_OK)
 		return st;
 
+	/* The transition this record belongs to. 791/791 real op-0x05 records
+	 * carry it; OVMX used to leave it zero (rd vms-1ac). */
+	vms_wire_put_le32(&w, VMS_OFB_CM_EPOCH, rec->epoch);
 	vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_TAG, VMS_CM_MEMBREC_TAG);
 	vms_wire_put_le32(&w, VMS_OFB_CM_MEMBREC_SYSID, rec->sysid);
 	if (rec->boot_valid) {
@@ -1194,4 +1252,80 @@ static const struct vms_wire_allow_table g_cm_allow_table = {
 const struct vms_wire_allow_table *vms_cm_allow_table(void)
 {
 	return &g_cm_allow_table;
+}
+
+/* ==========================================================================
+ * sec 7 -- the 16-byte SCA connect data (rd vms-b87)
+ *
+ * The grounding, the four measured configurations and the reason the head and
+ * tail spans are the CALLER's rather than this file's are all in
+ * vms_cluster_codec_cm.h sec 7. This is the encode.
+ * ========================================================================== */
+vms_codec_status_t vms_cm_conndata_build(const struct vms_cm_conndata_in *in,
+					 const uint8_t *head, uint32_t head_len,
+					 const uint8_t *tail, uint32_t tail_len,
+					 uint8_t *out, uint32_t cap)
+{
+	uint32_t i;
+	uint16_t votes, quorum, nodes;
+
+	if (in == (const struct vms_cm_conndata_in *)0 ||
+	    head == (const uint8_t *)0 || tail == (const uint8_t *)0 ||
+	    out == (uint8_t *)0)
+		return VMS_CODEC_E_INVAL;
+	if (head_len != 4u || tail_len != 5u ||
+	    cap < (uint32_t)VMS_CM_CONNDATA_LEN)
+		return VMS_CODEC_E_INVAL;
+
+	/* A node that is not a member has no cluster arithmetic to report, and
+	 * a real one puts zeroes here. Forced rather than trusted, so a caller
+	 * that passes stale counts cannot assert a membership it does not have
+	 * (INV-6). */
+	votes  = in->member ? in->cluster_votes : 0u;
+	quorum = in->member ? in->quorum : 0u;
+	nodes  = in->member ? in->cluster_nodes : 0u;
+
+	for (i = 0; i < head_len; i++)
+		out[i] = head[i];
+	/*
+	 * [2] AND [11] FOLLOW [12:14], NOT MEMBERSHIP (rd vms-8c54).
+	 *
+	 * The first reading of the oracle was "member form vs joiner form", and
+	 * it was WRONG -- this file's own four real-VAX rows are members that
+	 * carry 0x01/0x08, and the rig caught the same real VAX sending both
+	 * forms minutes apart with its membership unchanged. What actually
+	 * moves them is whether the frame carries an ack cell at all:
+	 *
+	 *   0x01 / 0x08  no ack carried, [12:14] = 0   (the SHORT form)
+	 *   0x02 / 0x0a  an ack is carried in [12:14]  (the LONG form)
+	 *
+	 * 0x08 -> 0x0a is the two extra bytes, which is what [11] reads like
+	 * and why the two always move together. NO COUNTEREXAMPLE in either
+	 * lab: 11 samples across two independent clusters, including the same
+	 * node sending each form.
+	 */
+	out[2] = (uint8_t)(in->peer_ack_msg != 0u ? 0x02u : 0x01u);
+
+	out[4] = (uint8_t)(votes & 0xffu);
+	out[5] = (uint8_t)((votes >> 8) & 0xffu);
+	out[6] = (uint8_t)(quorum & 0xffu);
+	out[7] = (uint8_t)((quorum >> 8) & 0xffu);
+	out[8] = (uint8_t)(nodes & 0xffu);
+	out[9] = (uint8_t)((nodes >> 8) & 0xffu);
+	out[10] = (uint8_t)(in->member ? 1u : 0u);
+
+	for (i = 0; i < tail_len; i++)
+		out[11u + i] = tail[i];
+	/* [11]: moves with [2], same measurement, same rule. */
+	out[11] = (uint8_t)(in->peer_ack_msg != 0u ? 0x0au : 0x08u);
+	/*
+	 * [12:14]: where this node's receive stream from THIS peer stands --
+	 * the same number it stamps at abs 74 of the CM messages it sends on
+	 * the connection. Read from the caller, never computed here, and
+	 * honestly zero when nothing has been taken from that peer yet.
+	 */
+	out[12] = (uint8_t)(in->peer_ack_msg & 0xffu);
+	out[13] = (uint8_t)((in->peer_ack_msg >> 8) & 0xffu);
+
+	return VMS_CODEC_OK;
 }

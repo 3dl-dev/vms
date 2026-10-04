@@ -748,36 +748,16 @@ exec_blockdev_write_block(unsigned int major_, unsigned int minor_,
 
 /* ---- 11. primary Ethernet net device (vms-9d2; see exec_kbackend.h) ----
  *
- * STATUS AFTER THE DEVTAB PORT (rd vms-618). The device table (vms_devtab.c),
- * the ONLY caller, IS in this module's SRCS now, so vms_devtab_probe_nic() DOES
- * call this once at module init. It answers "no NIC", which the executive
- * handles by entering NO ETH0: unit at all -- so SHOW DEVICE has no ETH0: row
- * and $ASSIGN/$ALLOC ETH0: is SS$_NOSUCHDEV. That is the honest "this node has
- * no ENUMERATED Ethernet controller" state, not a fake device (INV-6): the VAX
- * under SIMH may well have a DEQNA, but this backend does not yet ask the ifnet
- * list, and reporting a unit it never looked up would be the fabrication.
- * Binding it is a later item (the VAX networking lane). The REAL NetBSD binding
- * is the generic ifnet list: IFNET_LOCK() /
- * IFNET_READER_FOREACH(ifp) over the interface list, skipping ifp->if_type ==
- * IFT_LOOP and requiring IFT_ETHER, copying ifp->if_xname and reading the link
- * state through if_link_state (LINK_STATE_UP) -- the exact NetBSD twins of
- * Linux for_each_netdev / ARPHRD_ETHER / netif_carrier_ok, and just as
- * driver-agnostic. Binding that -- and registering ETH0: on NetBSD -- is the
- * devtab-on-NetBSD proof's concern (a later item, following exec_blockdev).
- * Until then this is a compile-safe documented stub that touches no ifnet
- * internals and reports "no such device", naming its real source here. It is
- * never on a live path (INV-6 / Rule 11: it fabricates nothing). */
-static __inline int
-exec_netdev_primary(char *name, unsigned int namesz, int *link_up)
-{
-	/* vms-9d2: bind to IFNET_READER_FOREACH(ifp) filtered on IFT_ETHER when
-	 * the VAX networking lane needs ETH0:. Reached once per module load
-	 * (vms-618); answers "no NIC", so no unit is entered. See above. */
-	(void)name;
-	(void)namesz;
-	(void)link_up;
-	return -1;   /* no such device */
-}
+ * BOUND (rd vms-613's SCS-on-VAX-in-browser spike: the real join proof empirically
+ * hit this exact stub -- CLUSTER_START failed SS$_NOSUCHDEV because no ETH0: was
+ * ever entered, even though NetBSD's own boot log shows a real DELQA (`qt0`)
+ * probed and attached). The real body lives in vms_lan_netbsd.c (not here,
+ * static-inline), following the exec_lan_open/_close/_xmit precedent in this same
+ * file: <net/if.h>'s IFNET_READER_FOREACH collides with vms_internal.h's rbtree
+ * macros the same way pfil.h's uvm pull-in does (see vms_lan_netbsd.c's own
+ * header comment), so the real body needs a TU that does not include
+ * vms_internal.h. Declared extern here; defined in vms_lan_netbsd.c. */
+int exec_netdev_primary(char *name, unsigned int namesz, int *link_up);
 
 /* ---- 9. store/load memory barriers (vms-d61; see exec_kbackend.h) ----
  * Real mapping: membar_producer/membar_consumer are the portable NetBSD
@@ -952,10 +932,42 @@ void exec_timer_destroy(exec_timer_t *t);
 uint64_t exec_time_now_vms(void);
 uint64_t exec_ticks_ms(void);
 
-/* SS18: a macro for the same reason the Linux side is one -- the format string
- * reaches printf(9) directly, so the compiler checks the call site. This one is
- * ALREADY the real binding (printf(9) writes the NetBSD console, which is OPA0:
- * on the VAX rail); FC-P0.4 does not need to revisit it. */
-#define exec_console_printf(fmt, ...) printf(fmt, ##__VA_ARGS__)
+/* SS17b (rd vms-abd): the bounded PROCESS-CONTEXT wait the clean-departure
+ * drain yields on. See exec_kbackend.h for the full contract -- in particular
+ * that it is deliberately NON-interruptible. */
+void exec_wait_ms(uint32_t ms);
+
+/* SS18: the executive's operator (OPA0:) lines -- "%CNXMAN, ...", "%PEA0, ..."
+ * -- on the NetBSD console, which is OPA0: on the VAX rail.
+ *
+ * rd vms-553: the OVMX NetBSD/vax kernel is built with OVMX_QUIET
+ * (tools/cross-vax/netbsd-ovmx-quiet.patch), which keeps the kernel's own
+ * printf(9) chatter in the message buffer only, so the console carries the VMS
+ * personality rather than NetBSD's boot. These lines ARE that personality, so
+ * they carry TOCONSOP, the patch's "operator line" flag, and still reach the
+ * console. They are written twice on purpose: once to the message buffer with
+ * the kernel's usual timestamp (dmesg keeps the full record), and once to the
+ * console WITHOUT it (NOTSTAMP) -- a VMS operator line has no "[  83.27]"
+ * prefix. On a kernel without the patch TOCONSOP is an unknown bit that
+ * kprintf ignores, and this degrades to an ordinary console printf.
+ * __printflike keeps the compiler checking every call site, the reason this
+ * used to be a macro. */
+#include <sys/kprintf.h>   /* TOCONS, TOLOG, NOTSTAMP */
+#ifndef TOCONSOP
+#define TOCONSOP 0x4000    /* == netbsd-ovmx-quiet.patch's sys/kprintf.h value */
+#endif
+static inline void exec_console_printf(const char *fmt, ...) __printflike(1, 2);
+static inline void
+exec_console_printf(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vprintf_flags(TOLOG, fmt, ap);
+	va_end(ap);
+	va_start(ap, fmt);
+	vprintf_flags(TOCONS | TOCONSOP | NOTSTAMP, fmt, ap);
+	va_end(ap);
+}
 
 #endif /* OVMX_EXEC_KBACKEND_NETBSD_H */

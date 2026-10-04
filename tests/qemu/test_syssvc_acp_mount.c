@@ -39,7 +39,7 @@
  *
  * NO /dev/vms -> honest SKIP (77), never a fake pass: with no executive the
  * mount table does not exist, so there is nothing to assert -- the contract
- * every test_syssvc_* suite is held to (.github/workflows/ci.yml).
+ * every test_syssvc_* suite is held to (.github/workflows/ci-kernel-executive.yml).
  */
 
 #include <stdio.h>

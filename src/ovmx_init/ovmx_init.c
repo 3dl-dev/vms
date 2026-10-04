@@ -1249,6 +1249,38 @@ static uint16_t cluster_credits_requested(void)
 }
 
 /*
+ * clean_depart_requested - OVMX_CLEAN_DEPART: may this node announce its
+ * departure at the SCS layer when it leaves the cluster? (rd vms-abd)
+ *
+ * THE SECOND PARAMETER WITH A FALLBACK, and for cluster_credits_requested()'s
+ * exact reason. sysgen_read_param() reads the PERSISTED store only, so a
+ * parameter this system knows but OVMXVMSSYS.PAR has never carried reads
+ * ABSENT -- and an absent read leaves the caller's memset zero standing. For a
+ * switch whose OFF value is 0 that is not a harmless default: it would turn the
+ * faithful departure OFF on every .PAR written before the parameter existed,
+ * i.e. on every existing install. A default that is off everywhere is not a
+ * default, it is a hollow control.
+ *
+ * So ABSENT resolves to SYSGEN_DEFAULT_OVMX_CLEAN_DEPART (sysgen_params.h, the
+ * SSOT) and ONLY an operator's explicit 0 turns the switch off. The two cases
+ * the store CAN state -- 0 and non-0 -- are both honoured verbatim; the fallback
+ * covers the third, which is the store having no opinion at all.
+ *
+ * Silent, like the credits fallback and like SYSBOOT's own parameter table: no
+ * per-parameter "absent, using default" line belongs on the boot console
+ * (vms-1fb, the boot-console conformance gate).
+ */
+static uint8_t clean_depart_requested(void)
+{
+    uint32_t u32;
+
+    if (sysgen_read_param("OVMX_CLEAN_DEPART", &u32) == 0)
+        return u32 != 0 ? 1u : 0u;   /* configured, either way, verbatim */
+
+    return (uint8_t)SYSGEN_DEFAULT_OVMX_CLEAN_DEPART;
+}
+
+/*
  * load_cluster_sysgen_params - STARTUP.EXE's own case of SYSBOOT (FC-P0.10,
  * docs/plan-faithful-cluster-executive.md). Reads the cluster SYSGEN
  * parameters off SYS$SYSTEM:OVMXVMSSYS.PAR through the SAME shared reader
@@ -1336,6 +1368,18 @@ static uint32_t load_cluster_sysgen_params(void)
     if (sysgen_read_param("MSCP_SERVE_ALL", &u32) == 0)
         args.mscp_serve_all = (uint8_t)u32;
 
+    /*
+     * OVMX_CLEAN_DEPART (rd vms-abd) -- the wire-visible kill switch for the
+     * clean cluster departure. clean_depart_requested() above resolves ABSENT
+     * to the faithful default (it must: an absent read leaves a zero standing,
+     * and 0 is this switch's OFF); this line is only the wire NEGATION.
+     *
+     * The negation exists so the zero-filled args struct -- which is what every
+     * caller that predates the field produces -- means ON. It is undone once,
+     * on the far side, by cluster_sysgen_depart_from_wire().
+     */
+    args.clean_depart_off = clean_depart_requested() ? 0 : 1;
+
     if (sysgen_read_string("DISK_QUORUM", strval, sizeof(strval)) == 0 && strval[0] != '\0')
         sysgen_str_into(strval, args.disk_quorum, sizeof(args.disk_quorum),
                         &args.disk_quorum_len);
@@ -1409,6 +1453,47 @@ static uint32_t load_cluster_sysgen_params(void)
  * (vms_cnxman.c), and it is repeated on the console because OPA0: is where
  * SYSINIT puts it and the executive's log is not OPA0: on either substrate.
  */
+/*
+ * report_cluster_group - which cluster group this node's port is in, and
+ * whether anyone configured it (rd vms-b34).
+ *
+ * WHY THIS IS AN OPERATOR LINE AND NOT A DEBUG DETAIL. The cluster group
+ * number IS the LAVC HELLO multicast address (AB-00-04-01-<lo>-<hi>), so two
+ * nodes with different numbers are not on the same cluster's wire at all -- and
+ * with no CLUSTER_AUTHORIZE record the port uses group 0, which no real cluster
+ * is on. Measured: a shipped V0.7 node sat beside a real single-node OpenVMS
+ * V7.3 cluster on one bridge for 195 s and exchanged ZERO frames with it, while
+ * "%CNXMAN, waiting to form or join" and every SHOW surface read healthy
+ * (tests/lab/captures/cn2-genesis-vaxlab4-20260920/). This is the line that
+ * makes that one glance instead of a pcap.
+ *
+ * The executive says the same thing on ITS console (vms_pe.c
+ * pe_announce_group), but that is the kernel log, not OPA0: -- the same reason
+ * report_cluster_state() below repeats the connection manager's own wording
+ * here. Both values are READ BACK from the port the executive really opened
+ * (CLUSTER_DIAG_PORT's PORT row), never from the configuration this image
+ * handed down (INV-6): if the two ever disagreed, this prints what the port is
+ * actually doing. A node whose port is not up prints nothing.
+ */
+static void report_cluster_group(void)
+{
+    struct vms_cluster_diag_port_args a;
+
+    memset(&a, 0, sizeof(a));
+    a.row = VMS_CLUSTER_DIAG_PORT_ROW;
+    if (vms_kif_cluster_diag_port(&a) != SS$_NORMAL || !a.port.port_open)
+        return;
+
+    if (a.port.cluster_group_valid) {
+        printf("%%CNXMAN, cluster group %u (CLUSTER_AUTHORIZE)\n",
+               (unsigned)a.port.cluster_group);
+        return;
+    }
+    printf("%%CNXMAN, cluster group %u is NOT CONFIGURED (no CLUSTER_AUTHORIZE"
+           " record): this system cannot reach a real cluster\n",
+           (unsigned)a.port.cluster_group);
+}
+
 static void report_cluster_state(uint32_t state)
 {
     switch (state) {
@@ -1484,7 +1569,48 @@ static void start_cluster_port(uint32_t vaxcluster)
                 " PEA0: is not up\n");
         return;
     }
+    report_cluster_group();
     report_cluster_state(state);
+}
+
+/*
+ * stop_cluster_port - the exact mirror of start_cluster_port(), on the way out
+ * (rd vms-abd). This is SHUTDOWN.COM's cluster step: a real VMS node announces
+ * its departure so the survivors remove it AT ONCE instead of carrying a dead
+ * CSB until RECNXINTERVAL expires. STARTUP.EXE issued the CLUSTER_START, so
+ * STARTUP.EXE issues the CLUSTER_STOP -- nobody else knows this node joined.
+ *
+ * UNCONDITIONAL, unlike its twin: it does NOT re-read VAXCLUSTER, because the
+ * question on the way out is not "was a cluster wanted?" but "is one running?",
+ * and only the executive holds that. A node that never started one gets
+ * SS$_NOSUCHDEV or a 0-of-0 answer and prints nothing. Asking the parameter
+ * again would let a SYSGEN edit between boot and shutdown silence a departure
+ * this node genuinely owes its members.
+ *
+ * Bounded by the executive (vms_cnxman_depart's own drain deadline), so it
+ * cannot hang the shutdown whatever the peers do.
+ */
+static void stop_cluster_port(void)
+{
+    uint32_t departed = 0, connections = 0;
+    uint32_t status = vms_kif_cluster_stop(&departed, &connections);
+
+    if (status != SS$_NORMAL) {
+        if (status != SS$_NOSUCHDEV)
+            fprintf(stderr,
+                    "%%OVMX-W-CLUSTERSTOP, the cluster departure did not"
+                    " complete (status %#x)\n", (unsigned)status);
+        return;
+    }
+    if (connections == 0)
+        return;   /* nothing was open: nothing to announce, nothing to say */
+
+    /* Both numbers come back from the executive's own count of what really
+     * happened on the wire, so this line reports a departure rather than
+     * asserting one (INV-6). */
+    printf("%%OVMX-I-CLUSTEREXIT, departed %u of %u cluster connections\n",
+           (unsigned)departed, (unsigned)connections);
+    fflush(stdout);
 }
 
 /*
@@ -1694,9 +1820,12 @@ int main(void)
      * Unconditional (not gated on getpid() == 1): cheap, and every
      * invocation of this binary is still OVMX/Linux underneath regardless
      * of PID.
+     *
+     * WHERE it is announced is the backend's call (rd vms-553): the console
+     * on Linux, the kernel message buffer on NetBSD -- see
+     * ovmx_boot_announce_syskrnl().
      */
-    printf("%s\n", ovmx_syskrnl_banner());
-    fflush(stdout);
+    ovmx_boot_announce_syskrnl(ovmx_syskrnl_banner());
 
     /* If we are PID 1 on bare metal (a fresh kernel whose base filesystems
      * are not yet mounted), set up the substrate plumbing. */
@@ -1899,6 +2028,18 @@ int main(void)
     while (!shutdown_requested) {
         pause();
     }
+
+    /*
+     * The system is going down. Announce this node's cluster departure before
+     * returning (rd vms-abd) -- the mirror of the CLUSTER_START issued above,
+     * and the step that makes a clean OVMX shutdown look like a clean VMS one
+     * to the members: a DISCONNECT_REQ per open connection and the port's last
+     * gasp, instead of a node that simply stops answering.
+     *
+     * A no-op on a node with no cluster running, and bounded by the executive
+     * even when a member has gone silent, so it cannot delay a shutdown.
+     */
+    stop_cluster_port();
 
     return 0;
 }

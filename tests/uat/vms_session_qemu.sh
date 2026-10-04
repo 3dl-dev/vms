@@ -1212,6 +1212,27 @@ check_response 'TYPE UATUSER.TXT' 'Per-user login command procedure'
 check_response 'COPY SYS$MANAGER:LOGIN.COM SYS$SYSTEM:UATDENY.TXT' 'RMS-E-CRE'
 check_not_response 'TYPE SYS$SYSTEM:UATDENY.TXT' 'Per-user login command procedure'
 
+# BOOT-TIME PROVISIONING MUST NOT WARN, AND MUST NOT MIS-OWN A HOME (rd vms-93b).
+# This mirrors the netbsd-vax boot gate (tests/lab-vax/drive_boot_vax.py, the
+# MS_PROVISION_OWNER_WARN "%OVMX-W-OWNER" flood check): SYS$SYSTEM:PROVISION.EXE
+# stamps every account's login-directory owner over the Files-11 ACP, and any
+# ACP fileop it could not complete prints %OVMX-W-OWNER. The x86 UAT is the ONLY
+# gate that also drives a POSITIVE unprivileged home-write (the GUEST COPY
+# above), so it owns both halves here:
+#   (a) NO %OVMX-W-OWNER anywhere in the boot/console log -- provisioning wrote
+#       every home's ownership without a single failed ACP call; AND
+#   (b) the GUEST COPY into [USERS.GUEST] above SUCCEEDED (check_not_response
+#       ...UATUSER.TXT 'RMS-E' + the TYPE-back) -- GUEST really owns its own
+#       login directory and can create in it.
+# The regression this pins: an account whose default directory is the shared
+# [USERS] container (the TCPIP$DAYTIME service account) used to make
+# provision_home() recursively re-own [USERS] AND every sibling home beneath it,
+# clobbering [USERS.GUEST]'s owner so GUEST -- no longer the owner, and denied
+# write by the directory's Group protection -- got %RMS-E-CRE creating a file in
+# its own home. A silent regression there reddens (b); this OWNER-flood check is
+# the paired provisioning-side signal.
+check_not_contains 'OVMX-W-OWNER'
+
 # The second session really is GUEST and not another SYSTEM login. Whole-log
 # grep and safe as one: this is DCL's OWN logout line ('  GUEST      logged
 # out at ...'), not the echo of the username we typed at the prompt -- the

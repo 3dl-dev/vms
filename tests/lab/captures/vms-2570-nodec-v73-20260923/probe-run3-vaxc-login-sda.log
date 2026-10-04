@@ -1,0 +1,31 @@
+probe goto http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA.cpio.gz&sysdisk=sysdisk-nodeA.qcow2.gz&nodeC=http%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fovmx-cluster.html%3From%3Dhttp%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fka655x.bin%26diskgz%3Dhttp%3A%2F%2Flocalhost%3A8765%2Fmachines%2Fdec%2Fvax%2Fbrowser%2Fvms73-nodeC-cluster.dsk.gz
+t=0s NODEA: %NIC-CFG, initramfs=initramfs-ovmx-nodeA.cpio.gz sysdisk=sysdisk-nodeA.qcow2.gz mac=52:54:00:00:00:0A
+t=3s NODEA: Press Ctrl-B to configure iPXE (PCI 00:03.0)...                                                                                | Booting from ROM...
+t=6s NODEA: Booting from ROM... | c[?7l[2J
+t=9s VAXC[boot]: 40..39..38..37..36..35..34..33..32..31..30..29..28..27..26..25.. | 24..23..22..21..20..19..18..17..16..15..14..13..12..11..10..09..
+t=12s VAXC[boot]: %SYSBOOT-I-SYSBOOT SAVEDUMP parameter not set to protect the PAGEFILE.SYS |    OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0
+t=15s VAXC[boot]:    OpenVMS (TM) VAX Version V7.3     Major version id = 1 Minor version id = 0 | %WBM-I-WBMINFO Write Bitmap has successfully completed initialization.
+t=21s VAXC[boot]: %VAXcluster-I-LOADSECDB, loading the cluster security database | MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+t=42s NODEA: %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=57s VAXC[boot]: %CNXMAN,  now a VAXcluster member -- system VAXC | CNXMAN,  completing VAXcluster state transition
+t=60s VAXC[boot]: $!  Copyright 2001 Compaq Computer Corporation. | STDRV-I-STARTUP, OpenVMS startup begun at 23-SEP-2026 19:12:58.90
+t=69s VAXC[boot]: %STDRV-I-STARTUP, OpenVMS startup begun at 23-SEP-2026 19:12:58.90 | MSCPLOAD-I-CONFIGSCAN, enabled automatic disk serving
+t=72s VAXC[boot]: %RUN-S-PROC_ID, identification of created process is 20200208 | DCL-S-SPAWNED, process SYSTEM_1 spawned
+t=75s VAXC[boot]: Message from user JOB_CONTROL on VAXC | -RMS-E-FNF, file not found
+t=78s VAXC[boot]: Message from user SYSTEM on VAXC | %SECSRV-I-CIASTARTINGUP, breakin detection and evasion processing now starting up
+t=81s VAXC[boot]: %STARTUP-I-AUDITCONTINUE, audit server initialization complete | The OpenVMS VAX system is now executing the site-specific startup commands.
+t=84s VAXC[boot]:  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3     | Username: 
+t=84s -> VAXC: typing SYSTEM
+t=88s VAXC[user]: Username: SYSTEM | Password: 
+t=88s NODEA: %CNXMAN, waiting to form or join an OpenVMS Cluster | %STDRV-I-STARTUP, OpenVMX startup begun at 23-SEP-2026 19:12:53.86
+t=88s -> VAXC: typing password
+t=91s VAXC[pass]:  Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 |    Last interactive login on Wednesday, 23-SEP-2026 18:54
+t=94s VAXC[pass]: -SET-I-UNKTERM, unknown terminal type | $ 
+t=94s NODEA: %STDRV-I-STARTUP, OpenVMX startup begun at 23-SEP-2026 19:12:53.86 | %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+t=94s -> VAXC: at DCL, ANALYZE/SYSTEM
+t=98s VAXC[sda]: OpenVMS (TM) VAX System analyzer | SDA> 
+t=98s -> VAXC: SDA SHOW CLUSTER
+t=102s VAXC[shown]: Cache Protocol  00000000                                                         | SDA> 
+t=120s NODEA: %INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed | %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+t=123s NODEA: %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed | %RUN-S-PROC_ID, identification of created process is 10000003
+PROBE_DONE {"vPhase":"done"}

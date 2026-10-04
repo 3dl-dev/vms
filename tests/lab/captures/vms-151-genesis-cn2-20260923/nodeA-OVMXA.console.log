@@ -1,0 +1,72 @@
+OVMX/Linux -- SYSKRNL (Linux kernel)
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    23-SEP-2026 19:28:12.34
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[    2.315119] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[    2.321418] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 23-SEP-2026 19:28:13.65
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+[    4.309230] %PEA0, channel verified
+[    4.312750] %PEA0, virtual circuit open
+[    4.324724] %PEA0, channel verified
+[    4.327544] %PEA0, virtual circuit open
+[    4.388593] %CNXMAN, a connection manager was discovered on the interconnect
+[    4.395153] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[    5.355658] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition
+[    5.412233] %CNXMAN, waiting to form or join an OpenVMS Cluster
+[   10.532217] %CNXMAN, membership request to the selected member not answered
+[   10.537411] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+[   10.546201] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+[   22.820298] %CNXMAN, this node has quorum by its own votes: forming an OpenVMS Cluster
+[   22.825318] %CNXMAN, this node is a member of the cluster
+[   22.828497] %CNXMAN, completed VAXcluster state transition
+[   22.831691] %CNXMAN, this node is now a VAXcluster member
+[   22.835884] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   22.835891] %MSCP_CL, the member answered NOT PRESENT HERE for MSCP$DISK: it serves no disks
+[   31.012173] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   31.024366] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   31.032858] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   31.038241] %CNXMAN, this node is already a member of this cluster: it introduces itself to the new system and asks nobody to admit it
+[   31.968986] %CNXMAN, proposing addition of a system to the cluster
+[   31.973602] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[   31.978672] %CNXMAN, an unroutable VMS$VAXcluster frame was received
+[   31.982506] %CNXMAN, lock directory weight vector built on the unadvertised reading: no system has advertised a LOCKDIRWT
+[   31.988848] %CNXMAN, system 00000000000007c6 was added to the cluster
+[   32.016846] %CNXMAN, completed VAXcluster state transition
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: 
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    23-SEP-2026 19:29:40
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010001 | VMX V0.7        | MEMBER           |
+| 1990   | 00010002 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ 

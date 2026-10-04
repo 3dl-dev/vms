@@ -800,11 +800,12 @@ out:
 /*
  * vms_ioctl_dlm_enum_standing - enumerate this node's STANDING cluster-registrable
  * system locks (vms-1f4). These are the locks the executive holds for the node's
- * LIFE that the connection manager (scsd) registers to the coordinator during a
+ * LIFE that the connection manager (executive-resident since FC-P3.9; formerly
+ * the retired userspace scsd daemon) registers to the coordinator during a
  * directory rebuild: today the per-volume F11B$v<label> lock a MOUNT holds
  * (vms-25e), one entry per mounted volume that genuinely holds it (vol_lkid != 0).
  * Each entry carries the resource name and this node's LOCAL lock handle -- the
- * op-0x01 requester lkid scsd puts on the wire.
+ * op-0x01 requester lkid the connection manager puts on the wire.
  *
  * INV-6: a READ of REAL lock state. count is exactly the number of standing locks
  * the executive genuinely holds; a volume whose best-effort acquire failed

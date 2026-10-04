@@ -1,0 +1,8 @@
+T1 stop@1790873192.004 last_rx=1.123 before stop, close=7.377  SILENCE->CLOSE=8.500  dir=
+T2 stop@1790873247.204 last_rx=2.088 before stop, close=7.065  SILENCE->CLOSE=9.153  dir=
+T3 stop@1790873302.214 last_rx=1.177 before stop, close=7.782  SILENCE->CLOSE=8.959  dir=
+T4 stop@1790873357.669 last_rx=0.620 before stop, close=7.927  SILENCE->CLOSE=8.548  dir=
+T5 stop@1790873414.420 last_rx=0.634 before stop, close=7.637  SILENCE->CLOSE=8.271  dir=
+T6 stop@1790873469.971 last_rx=0.424 before stop, close=8.797  SILENCE->CLOSE=9.221  dir=
+T7 stop@1790873525.736 last_rx=0.788 before stop, close=7.519  SILENCE->CLOSE=8.307  dir=
+T8 stop@1790873580.379 last_rx=0.423 before stop, close=8.733  SILENCE->CLOSE=9.156  dir=

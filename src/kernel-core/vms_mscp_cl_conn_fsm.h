@@ -194,7 +194,13 @@ struct mscp_cl_conn_peer {
 				      * retry period (the reference joiner's
 				      * reciprocal half starts one beat after
 				      * its own join, not thirty seconds)    */
-	uint8_t         pad0;
+	uint8_t         said_absent; /* this member's "NOT PRESENT HERE" has
+				      * already been said on OPA0: -- so the
+				      * thirty-second RE-ask, which is right
+				      * and which this FSM keeps making, does
+				      * not repeat the same line for the life
+				      * of the cluster. Cleared the moment the
+				      * member's answer changes (rd vms-151)  */
 	vms_scs_sysid_t sysid;
 	vms_conid_t     conid;       /* 0 unless CONNECTING or OPEN          */
 	uint32_t        since_ms;    /* when this state was entered          */

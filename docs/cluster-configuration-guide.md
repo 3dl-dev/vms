@@ -17,69 +17,156 @@ described as working unless a real code path ships it over the real executive at
 ## Cluster identity parameters
 
 An OVMX node's cluster identity lives in the SYSGEN parameter store,
-`SYS$SYSTEM:OVMXVMSSYS.PAR` — the OVMX analogue of VMS's `VAXVMSSYS.PAR`. The
-cluster daemon `scsd` reads it at boot through `sysgen_read_string()` /
-`sysgen_read_param()` (honoring `OVMX_SYSGEN_PATH`; see `src/vmsscs/scsd.c`).
+`SYS$SYSTEM:OVMXVMSSYS.PAR` — the OVMX analogue of VMS's `VAXVMSSYS.PAR`. It is
+read **at boot** by `STARTUP.EXE` (PID 1, `src/ovmx_init/ovmx_init.c`):
+`read_boot_parameters()` applies `SCSNODE` to the running node's name, and
+`load_cluster_sysgen_params()` loads the whole cluster set into the **executive**
+through `VMS_IOCTL_SYSGEN_LOAD` (`src/kernel-core/vms_cluster_sysgen.c`). There is
+no `scsd` daemon reading the file for itself any more. `OVMX_SYSGEN_PATH` is a
+developer override used by host-side tests; the booted system resolves the store
+through the Files-11 ODS-2 ACP over `/dev/vms`.
 
-| Parameter | Meaning | Read by `scsd`? | Notes |
+| Parameter | Meaning | Adopted at boot? | Notes |
 |---|---|---|---|
-| `SCSNODE` | Cluster node name (max 6 chars) | Yes (`resolve_node_identity`) | Half of the fatal identity pair. Falls back to `OVMX` only if the store is unreadable. |
-| `SCSSYSTEMID` | Cluster system ID | Yes (`resolve_scssystemid`) | The other half of the identity pair. Falls back to `1030`. `SCSNODE`+`SCSSYSTEMID` must be cluster-wide unique. |
-| `ALLOCLASS` | Allocation class for shared cluster devices | Yes (`resolve_alloclass`) | Read and reported only; `0` is the documented default. Does not touch any wire frame. |
-| `RECNXINTERVAL` | Reconnection interval, seconds | Yes (`scsd_recnxinterval`) | Sizes the reconnect period after a VC break. Default `20`. |
-| `VAXCLUSTER` | Cluster participation (0/1/2) | No | Pre-seeded in the `.PAR`, but **not currently consulted** by `scsd`; participation is not gated on it at V0.6. |
-| `VOTES` | Votes this node contributes | No | Pre-seeded, but `scsd` does **not** read or advertise the local value — OVMX always joins **non-voting** (advertises `VOTES=0`). See [votes/quorum](#votes-and-quorum-are-not-enforced). |
-| `EXPECTED_VOTES` | Expected total cluster votes | No | Pre-seeded, but not reconciled — see [votes/quorum](#votes-and-quorum-are-not-enforced). |
+| `SCSNODE` | Cluster node name (max 6 chars) | Yes | Half of the identity pair; `STARTUP.EXE` sets the running node name from it (proven end to end — see below). Falls back to `OVMX` only if the store is unreadable. |
+| `SCSSYSTEMID` | Cluster system ID | Yes | The other half of the identity pair; loaded into the executive at boot. `SCSNODE`+`SCSSYSTEMID` must be cluster-wide unique. |
+| `ALLOCLASS` | Allocation class for shared cluster devices | Recorded | Loaded and reported only; `0` is the documented default. Does not touch any wire frame. |
+| `RECNXINTERVAL` | Reconnection interval, seconds | Yes | Sizes the reconnect period after a VC break. Default `20`. |
+| `VAXCLUSTER` | Cluster participation (0/1/2) | Yes | The boot-time decision: `0` (the shipped default) brings up **no** cluster port at all; `1`/`2` bring the SCS port up and join/form. It gates the port only — the identity above is loaded regardless of its value. |
+| `VOTES` | Votes this node contributes | Yes | Loaded into the executive and **effectual for genesis**: a node whose own `VOTES` already meet the quorum its `EXPECTED_VOTES` implies is the one allowed to *found* a cluster (`cnxman_coord_found()`, `src/kernel-core/vms_cnxman_coord_fsm.c`); a `VOTES=0` node can never found, only join. The value is carried onto the wire in this node's own CSB and PARAMS record — it is no longer a hardcoded non-voting `0`. See [votes/quorum](#votes-and-quorum-are-not-enforced) for what is *still* tracking-only. |
+| `EXPECTED_VOTES` | Expected total cluster votes | Yes | Loaded into the executive; together with `VOTES` it decides the genesis predicate above (`CEVOTES`/`QUORUM`, `src/kernel-core/vms_cnxman_quorum.c`). |
 
-### How you author these at V0.6: edit the pre-seeded `.PAR`
+### How you author these: `@SYS$MANAGER:CLUSTER_CONFIG_LAN.COM`
 
-The identity parameters are **pre-seeded** in the shipped
-`OVMXVMSSYS.PAR`. To configure a node, you edit that pre-seeded store — that is
-the only authoring path at V0.6.
+The VMS-canon way to configure a node's cluster identity **is shipped**: the
+operator procedure `SYS$MANAGER:CLUSTER_CONFIG_LAN.COM` (`CLUSTER_CONFIG.COM`
+forwards to it, exactly as on VMS). It is the front door a VMScluster admin
+expects — an interactive
 
-**The VMS-way authoring surface is not shipped at V0.6.** OVMX does **not** yet
-provide any of:
+```
+$ @SYS$MANAGER:CLUSTER_CONFIG_LAN.COM
+```
+
+that drives SYSGEN (`USE CURRENT` / `SET SCSNODE`… / `WRITE CURRENT`) to author
+`SCSNODE` / `SCSSYSTEMID` / `ALLOCLASS` / `VOTES` / `EXPECTED_VOTES` into
+`SYS$SYSTEM:OVMXVMSSYS.PAR`, and is **adopted on the next reboot** by
+`STARTUP.EXE` (above). This author → reboot → adopt round-trip is proven end to
+end, on a real boot, by
+[`tests/qemu/test_cluster_config_lan_e2e.sh`](../tests/qemu/test_cluster_config_lan_e2e.sh):
+after the procedure authors a new `SCSNODE` and the node reboots, the boot
+console announces `%OVMX-I-SCSNODE, node name … set from SYS$SYSTEM:OVMXVMSSYS.PAR`
+and `F$GETSYI("NODENAME")` (the live node name) reads the authored value.
+
+To change this node's identity, run the procedure and pick **CHANGE** (menu
+option 2), which reconfigures the local node without altering `VAXCLUSTER`; pick
+**ADD** (option 1) to additionally enable cluster participation (`VAXCLUSTER=2`)
+on a node that is standalone today. Then reboot. The procedure prints an honest
+"not available at this edition" for verbs OVMX cannot perform (REMOVE of a remote
+member's root, CREATE of a duplicate system disk) — it never fakes them.
+
+**Still not shipped** (these remain the honest deferrals; the procedure above
+does not depend on any of them):
 
 - `SYSMAN PARAMETERS SET`/`SHOW`/`WRITE` for string parameters (numeric-only
   today; string params are filed as `vms-8da`),
-- a `.PAR` *write* mechanism or conversational **SYSBOOT**,
-- **AUTOGEN** / `MODPARAMS.DAT` feedback,
-- `CLUSTER_CONFIG(_LAN).COM`.
+- **AUTOGEN** / `MODPARAMS.DAT` feedback.
 
-So you cannot yet author cluster identity "the VMS way" and reboot into it. You
-set identity by editing the pre-seeded `.PAR` (or by pointing `OVMX_SYSGEN_PATH`
-at a store you have prepared), and `scsd` adopts it on the next boot. This
-matches the reconciled milestone status in
-[`docs/design-cluster-config-authoring.md`](design-cluster-config-authoring.md).
+Conversational **SYSBOOT** (`ovmx.flags=0,1` → the `SYSBOOT>` prompt) is also
+available as an alternate pre-boot authoring surface for the same parameters
+(see [`docs/design-cluster-config-authoring.md`](design-cluster-config-authoring.md)),
+and editing the pre-seeded `.PAR` directly (or pointing `OVMX_SYSGEN_PATH` at a
+prepared store) still works for scripted setups. But
+`CLUSTER_CONFIG_LAN.COM` is the documented operator path.
 
 ## Standing up a two-node cluster
 
-1. **Give each node a unique identity.** In each node's pre-seeded
-   `OVMXVMSSYS.PAR`, set a distinct `SCSNODE` (≤6 chars) and a distinct
-   `SCSSYSTEMID`. Reusing a `SCSNODE`/`SCSSYSTEMID` a peer has recently seen on
-   another system causes the join to be refused outright (the lab documents this
-   as `%PEA0, Remote System Conflicts with Known System`).
+This exact sequence is CI-proven end to end, on two real, separately booted
+OVMX nodes, by
+[`tests/qemu/test_cluster_config_lan_2node_e2e.sh`](../tests/qemu/test_cluster_config_lan_2node_e2e.sh)
+(rd vms-23b9 rung 2): one node founds, the other joins, and both independently
+report the other as a `MEMBER`.
 
-2. **Match the cluster group.** OVMX joins the reference lab's **group 1** by
-   default (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
+1. **Give each node a unique identity, and pick ADD, not CHANGE.** On each
+   node run `@SYS$MANAGER:CLUSTER_CONFIG_LAN.COM` (see
+   [How you author these](#how-you-author-these-sysmanagercluster_config_lancom))
+   and choose menu option **1 (ADD)** — CHANGE (option 2) never touches
+   `VAXCLUSTER`, so a CHANGE-only node stays at the shipped default
+   `VAXCLUSTER=0` and its executive never brings up a cluster port at all, no
+   matter what identity or votes it carries. ADD authors a distinct `SCSNODE`
+   (≤6 chars), a distinct `SCSSYSTEMID`, and enables `VAXCLUSTER=2`. Reusing a
+   `SCSNODE`/`SCSSYSTEMID` a peer has recently seen on another system causes
+   the join to be refused outright (the lab documents this as `%PEA0, Remote
+   System Conflicts with Known System`).
+
+2. **Set `EXPECTED_VOTES` to the total votes the finished cluster will hold.**
+   That is the VMS rule, and it is what decides quorum:
+   `QUORUM = (EXPECTED_VOTES + 2) / 2`, integer. A two-node cluster with one
+   vote each is `VOTES=1`/`EXPECTED_VOTES=2` on **both** nodes — quorum 2,
+   which neither node reaches alone and both reach together. A node forms the
+   cluster when the **combined** votes of the systems it can see (itself
+   included, and only systems whose parameters it has really received over an
+   open circuit) reach that quorum; until then it waits, and says
+   `%CNXMAN, the systems this node can see do not have quorum; waiting to form
+   or join an OpenVMS Cluster`. A node with `VOTES=0` can never found
+   (`cnxman_coord_found()`'s own predicate) — it can only join what another
+   node already formed.
+
+   The simplest case, and the one the `test_cluster_config_lan_2node_e2e.sh`
+   gate uses, is `VOTES=1`/`EXPECTED_VOTES=1` on the founder and `VOTES=0` on
+   the joiner: the founder then forms alone, before the other node is even up.
+   The `RIG_MODE=coldform` gate
+   ([`tests/qemu/run_cluster_genesis_2node.sh`](../tests/qemu/run_cluster_genesis_2node.sh))
+   covers the textbook pair instead. Both prompts default to `1` at the
+   `CLUSTER_CONFIG_LAN.COM` "Votes this node contributes" step.
+
+3. **Match the cluster group.** Every node in a cluster must carry the **same
+   cluster group number** — it selects the LAVC HELLO multicast address
+   (`AB-00-04-01-<LE16(group + 0x100)>`, the mapping VMS prints at `SYSMAN>
+   CONFIGURATION SHOW CLUSTER_AUTHORIZATION`), so nodes on different groups
+   never hear each other. Note the `+ 0x100`: group 1 is `AB-00-04-01-01-01`
+   and group 257 is `AB-00-04-01-01-02`, **not** the other way round (rd
+   vms-147 — OVMX got this wrong through V0.7).
+   OVMX's group is set at image-build time by the `CLUSTER_AUTH_GROUP` build-arg
+   (`distro/Dockerfile.bootable`; default `0` stages no `CLUSTER_AUTHORIZE.DAT`
+   and boots group 0; e.g. `1` to match the reference VAX lab), also settable
+   via the `build-boot-artifacts` workflow's `cluster_auth_group` dispatch input
+   (`CLUSTER_AUTHORIZE` is a minimal stand-in — see
    [Not yet supported](#cluster_authorize-is-a-lab-only-stand-in)). Both nodes
-   must be on the same LAN segment carrying the LAVC/SCA ethertype `0x6007`; the
-   transport is genuine raw Ethernet, not a UDP tunnel (`src/vmsscs/scs_hello.c`,
-   requires `CAP_NET_RAW`).
+   must be on the same LAN segment carrying the LAVC/SCA ethertype `0x6007`;
+   the transport is genuine raw Ethernet framed and sent by the **executive's
+   own kernel socket** (`src/kernel-core/vms_l2.c`), not a userspace raw
+   socket and not a UDP tunnel — a booted OVMX node needs **no `CAP_NET_RAW`**
+   to join a cluster (`vms-fa1a`, proven with the capability dropped from the
+   node's whole process tree).
 
-3. **Boot both nodes.** As the cluster forms, `scsd` on each node populates the
-   executive membership block (below). Formation takes on the order of a minute.
+4. **Reboot both nodes, the first-up one alone.** The first node to boot with
+   `VAXCLUSTER` enabled spends its whole `RECNXINTERVAL` (default 20s)
+   discovery window before it founds anything — a cluster is formed by
+   booting its first member and then booting the rest, exactly as on a real
+   VAXcluster. With the `VOTES=1`/`EXPECTED_VOTES=1` founder above it forms at
+   the end of that window whether or not anyone else is there; with the
+   textbook `EXPECTED_VOTES=2` pair it waits until the second node's circuit is
+   up and then forms on their combined votes (which is what a real V7.3 system
+   does — `tests/lab/captures/vms-6d3d-coldform-ev2-20260924/`). Boot the
+   second node only after the first has founded (or at
+   least come up); a node that hears a peer during its own boot joins rather
+   than founding one of its own.
 
-4. **Confirm membership** with `SHOW CLUSTER`.
+5. **Confirm membership** with `SHOW CLUSTER` on both nodes: each should list
+   both `SCSNODE`s with `STATUS=MEMBER`. `SHOW CLUSTER/CLUSTER` also reports
+   `Nodes  2` — the same `SYI$_CLUSTER_NODES` value the `$GETSYI` *system
+   service* would return (the plain DCL `F$GETSYI` lexical does not implement
+   `CLUSTER_NODES`/`CLUSTER_MEMBER` — see `src/vmsdcl/dcl_lexical.c`
+   `lex_getsyi()` — only `SHOW CLUSTER`'s classes and the system service read
+   that field today).
 
 ## What SHOW CLUSTER reports
 
 `SHOW CLUSTER` reads the **real executive membership block** through `/dev/vms`
-(`VMS_IOCTL_CLUSTER_MEMBER_GET` via `vms_kif_cluster_get_members()`), which
-`scsd` populates with `VMS_IOCTL_CLUSTER_MEMBER_SET`/`CLEAR` as members join and
-depart (`src/vmsdcl/dcl_cmd_show.c`, `src/vmsscs/scsd.c`). Every process reading
-`/dev/vms` sees the same member set — there is no per-process fake behind it
-(INV-6).
+(`VMS_IOCTL_CLUSTER_MEMBER_GET` via `vms_kif_cluster_get_members()`), which the
+executive populates with `VMS_IOCTL_CLUSTER_MEMBER_SET`/`CLEAR` as members join
+and depart (`src/vmsdcl/dcl_cmd_show.c`). Every process reading `/dev/vms` sees
+the same member set — there is no per-process fake behind it (INV-6).
 
 Three distinct outcomes, never conflated:
 
@@ -141,23 +228,33 @@ plainly so no one designs against a capability that is not there.
 
 ### Votes and quorum are not enforced
 
-**There is no split-brain protection at V0.6.** Be precise about why:
+**There is no split-brain protection at V0.6.** Be precise about why — this is
+narrower than it used to be, now that clustering is executive-resident
+(FC-P3.9 retired the userspace `scsd`/`src/vmsscs` stack this section used to
+describe):
 
-- OVMX always joins **non-voting**: `scsd` hardcodes an advertised `VOTES=0`
-  (`SCS_MEMBER_VOTES_NONVOTING`) so it can never affect a VAX cluster's quorum.
-  The local `VOTES`/`EXPECTED_VOTES` in your `.PAR` are **not read** by `scsd`.
-- A quorum *model* is present and does run: `scsd` folds each peer's
-  wire-advertised `VOTES` into a connection-manager quorum computation
-  (`src/vmsscs/scs_quorum.c`, `cm_quorum_note_peer_votes`) and logs
-  `SCSD-I-QUORUM ... quorum PRESENT/LOST`. But the gate result is **only
-  logged** — it is **never wired to suspend I/O or reconfigure** the cluster.
-  Quorum loss does not block anything.
-- `EXPECTED_VOTES` is an open reverse-engineering gap on the wire (held at 1 in
-  every capture), so the model seeds each peer's `EXPECTED_VOTES` from its
-  advertised `VOTES` rather than reconciling a real value.
+- `VOTES`/`EXPECTED_VOTES` **are** real and effectual for one decision:
+  whether *this* node may **found** a cluster (`cnxman_coord_found()`'s own
+  predicate, `src/kernel-core/vms_cnxman_coord_fsm.c`) — a node founds only if
+  its own `VOTES` already meet the quorum its own `EXPECTED_VOTES` implies.
+  This is proven on two real nodes by
+  [`test_cluster_config_lan_2node_e2e.sh`](../tests/qemu/test_cluster_config_lan_2node_e2e.sh)'s
+  negative control: with `VOTES=0` on *both* nodes, neither ever founds and
+  neither ever claims membership.
+- The connection manager also computes `CEVOTES`/`QUORUM`/`quorum_lost` on
+  every membership transition from every member's advertised `VOTES`
+  (`src/kernel-core/vms_cnxman_quorum.c`, `SHOW CLUSTER/CLUSTER`'s "Votes /
+  quorum" and "Quorum lost" lines) — real arithmetic over real wire-learned
+  state, not a stub.
+- What is **still** tracking-only: a **lost** quorum, once the cluster is
+  already formed, does not yet suspend any activity or block any `$ENQ` — the
+  arithmetic runs and is displayed, but nothing acts on `quorum_lost` yet
+  (post-0.6 work, `vms-b6d`).
 
-Net effect for an operator: do not rely on OVMX for quorum arbitration or
-split-brain avoidance.
+Net effect for an operator: `VOTES` genuinely decides *who may found* a
+cluster today, but a cluster that has already formed does not yet protect
+itself from a subsequent quorum loss — do not rely on OVMX for split-brain
+avoidance once a cluster is running.
 
 ### MSCP-served volumes — absent
 
@@ -176,9 +273,14 @@ members; the scope degrades to system-wide (`docs/compat/facilities/cluster-logi
 ### CLUSTER_AUTHORIZE is a lab-only stand-in
 
 `CLUSTER_AUTHORIZE` is a **minimal OVMX stand-in** (`src/libvms/include/cluster_authorize.h`):
-a tiny typed file holding a group number and a cleartext password, defaulting to
-the reference lab's **group 1** only. There is no real `CLUSTER_AUTHORIZE.DAT`
-on-disk format, no credential hashing, and no wire authentication. Joining an
+a tiny typed file holding a group number and a cleartext password. Its group is
+chosen at **image-build time** via the `CLUSTER_AUTH_GROUP` build-arg
+(`distro/Dockerfile.bootable`) — the default `0` stages **no** file and boots
+group 0, while e.g. `257` stages a `CLUSTER_AUTHORIZE.DAT` for the reference VAX
+lab's group; the `build-boot-artifacts` workflow exposes it as the
+`cluster_auth_group` dispatch input. There is no interactive on-node
+`CLUSTER_AUTHORIZE.DAT` authoring yet, no credential hashing, and no wire
+authentication. Authoring the group/password on a running node and joining an
 **arbitrary** VMScluster (any group/password) is 1.0 work (`vms-732`, `vms-405`).
 
 ### DECnet — essentially greenfield

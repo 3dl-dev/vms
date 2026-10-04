@@ -1,0 +1,111 @@
+nodeC frame present: true
+booted A + C; URL=http://localhost:8110/index.html?mac=52%3A54%3A00%3A00%3A00%3A0A&initramfs=initramfs-ovmx-nodeA-vms0f8.cpio.gz&sysdisk=sysdisk-nodeA-vms0f8.qcow2.gz
+t=0s [rx] execLP=null nic{tx=0 rx=0 wrkRx=0 delivCall=0 delivOk=0 hadNic=null} acp=false | hub.sca={}
+t=0s   [diag] counts={} last=[]
+t=0s A: %NIC-CFG, initramfs=initramfs-ovmx-nodeA-vms0f8.cpio.gz sysdisk=sysdisk-nodeA-vms0f8.qcow2.gz mac=52:54:00:00:00:0A
+t=5s A: Booting from ROM... | c[?7l[2J
+t=5s C:   1..0.. |    VAX/VMS Version V5.5-2H4 Major version id = 1 Minor version id = 0
+t=15s [rx] execLP=null nic{tx=0 rx=6 wrkRx=6 delivCall=6 delivOk=6 hadNic=true} acp=false | hub.sca={"VAXC":4}
+t=15s   [diag] counts={"sockfs-patched":1,"xterm-poll-var-patched":1,"proxytable-poll-patch-installed":1,"proxytable-poll-patched-active":1,"construct":1,"onmessage-set":1,"sockfs-poll-queuechange":2,"sockfs-snapshot":2,"proxytable-poll-snapshot":2,"deliver-attempt":6,"deliver-result":6,"sockfs-recvmsg-drained":1} last=[{"t":"deliver-result","hadHandler":true},{"t":"deliver-attempt","len":132,"first20":"00 00 00 80 ab 00 04 01 01 02 52 54 00 00 00 0c 60 07 70 00","prefix":[0,0,0,128],"hasOnmessage":true},{"t":"deliver-result","hadHandler":true}]
+t=15s C: %VAXcluster-I-LOADSECDB, loading the cluster security database | MSCPLOAD-I-LOADMSCP, loading the MSCP disk server
+t=30s [rx] execLP=null nic{tx=0 rx=18 wrkRx=18 delivCall=18 delivOk=18 hadNic=true} acp=true | hub.sca={"VAXC":16}
+t=30s   [diag] counts={"sockfs-patched":1,"xterm-poll-var-patched":1,"proxytable-poll-patch-installed":1,"proxytable-poll-patched-active":1,"construct":1,"onmessage-set":1,"sockfs-poll-queuechange":3,"sockfs-snapshot":6,"proxytable-poll-snapshot":6,"deliver-attempt":18,"deliver-result":18,"sockfs-recvmsg-drained":2} last=[{"t":"deliver-result","hadHandler":true},{"t":"sockfs-snapshot","pollCalls":358435,"pollMaskWithPOLLIN":2,"recvmsgCalls":2,"recvmsgWithData":2,"lastQueueLen":12},{"t":"proxytable-poll-snapshot","calls":1095069,"forcedTotal":9647091}]
+t=30s A: %OVMX-I-SYSDISK, mounting system disk VDA0: | %OVMX-I-MOUNTED, system disk VDA0: mounted
+t=35s C: %CNXMAN,  Now a VAXcluster member -- system VAXC | CNXMAN,  Completing VAXcluster state transition
+t=40s C: $!  Copyright (c) 1993 Digital Equipment Corporation.  All rights reserved. | STDRV-I-STARTUP, VMS startup begun at 23-SEP-2026 01:05:58.52
+t=45s [rx] execLP=null nic{tx=0 rx=33 wrkRx=33 delivCall=33 delivOk=33 hadNic=true} acp=true | hub.sca={"VAXC":31}
+t=45s   [diag] counts={"sockfs-patched":1,"xterm-poll-var-patched":1,"proxytable-poll-patch-installed":1,"proxytable-poll-patched-active":1,"construct":1,"onmessage-set":1,"sockfs-poll-queuechange":3,"sockfs-snapshot":9,"proxytable-poll-snapshot":9,"deliver-attempt":33,"deliver-result":33,"sockfs-recvmsg-drained":2} last=[{"t":"deliver-result","hadHandler":true},{"t":"sockfs-snapshot","pollCalls":358435,"pollMaskWithPOLLIN":2,"recvmsgCalls":2,"recvmsgWithData":2,"lastQueueLen":12},{"t":"proxytable-poll-snapshot","calls":1525484,"forcedTotal":14381656}]
+t=45s C: %%%%%%%%%%%  OPCOM  23-SEP-2026 01:06:26.93  %%%%%%%%%%% | 01:05:56.02 Node VAXC (csid 00010001) completed VAXcluster state transition
+t=50s A: %STDRV-I-STARTUP, OpenVMX startup begun at 23-SEP-2026 01:05:27.72 | %OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+t=50s C: %LICENSE-E-NOAUTH, DEC VAXCLUSTER use is not authorized on this node | -L
+t=55s C:         Welcome to VAX/VMS V5.5-2H4 | Username: 
+t=55s C login cand 1
+t=66s A: %INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed | %RUN-S-PROC_ID, identification of created process is 10000003
+t=66s C: -SET-I-UNKTERM, unknown terminal type | $ 
+t=75s [rx] execLP=null nic{tx=77 rx=99 wrkRx=99 delivCall=99 delivOk=99 hadNic=true} acp=true | hub.sca={"VAXC":97,"OVMXA":69}
+t=75s   [diag] counts={"sockfs-patched":1,"xterm-poll-var-patched":1,"proxytable-poll-patch-installed":1,"proxytable-poll-patched-active":1,"construct":1,"onmessage-set":1,"sockfs-poll-queuechange":159,"sockfs-snapshot":14,"proxytable-poll-snapshot":14,"deliver-attempt":99,"deliver-result":99,"sockfs-recvmsg-drained":99,"send-raw":77} last=[{"t":"sockfs-poll-queuechange","recvQueueLen":1,"mask":69,"pollCallsSoFar":1259228},{"t":"sockfs-recvmsg-drained","recvQueueLenBefore":1,"gotBytes":132,"reqLen":69632,"first20":"00 00 00 80 ab 00 04 01 01 02 52 54 00 00 00 0c 60 07 70 00","recvmsgCallsSoFar":99},{"t":"sockfs-poll-queuechange","recvQueueLen":0,"mask":4,"pollCallsSoFar":1259229}]
+t=75s A:  Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible) | Username: 
+t=75s C: +--------+----------+---------+ | $ 
+t=75s A login
+t=80s membership: max 1 A={} C={VAXC}
+t=85s A:    Welcome to OpenVMX V0.7 - OpenVMS-compatible | $ 
+t=89s *** Node A executive frames: tx=99 RX=91 (nobuf=0 badclass=19) ***
+t=94s A:          frames tx 99 (errors 0), rx 91 (dropped: nobuf 0, badclass 19) | $ 
+t=102s A: +---------------------------------------------------------------+ | $ 
+t=120s [rx] execLP={"tx":99,"rx":91,"nobuf":0,"badclass":19} nic{tx=198 rx=208 wrkRx=208 delivCall=208 delivOk=208 hadNic=true} acp=true | hub.sca={"VAXC":206,"OVMXA":188}
+t=120s   [diag] counts={"sockfs-patched":1,"xterm-poll-var-patched":1,"proxytable-poll-patch-installed":1,"proxytable-poll-patched-active":1,"construct":1,"onmessage-set":1,"sockfs-poll-queuechange":372,"sockfs-snapshot":24,"proxytable-poll-snapshot":24,"deliver-attempt":208,"deliver-result":208,"sockfs-recvmsg-drained":208,"send-raw":198} last=[{"t":"sockfs-recvmsg-drained","recvQueueLenBefore":1,"gotBytes":132,"reqLen":69632,"first20":"00 00 00 80 ab 00 04 01 01 02 52 54 00 00 00 0c 60 07 70 00","recvmsgCallsSoFar":208},{"t":"sockfs-poll-queuechange","recvQueueLen":0,"mask":4,"pollCallsSoFar":2717597},{"t":"send-raw","len":124,"prefix":[0,0,0,120],"declaredLen":120}]
+t=120s C: +--------+----------+---------+ | $ 
+t=124s *** Node A executive frames: tx=188 RX=174 (nobuf=0 badclass=36) ***
+t=129s A:          frames tx 188 (errors 0), rx 174 (dropped: nobuf 0, badclass 36) | $ 
+t=147s A: +---------------------------------------------------------------+ | $ 
+t=155s *** Node A executive frames: tx=267 RX=242 (nobuf=0 badclass=51) ***
+t=160s A:          frames tx 267 (errors 0), rx 242 (dropped: nobuf 0, badclass 51) | $ 
+t=169s C: +--------+----------+---------+ | $ 
+t=187s *** Node A executive frames: tx=349 RX=315 (nobuf=0 badclass=67) ***
+t=192s A:          frames tx 349 (errors 0), rx 315 (dropped: nobuf 0, badclass 67) | $ 
+t=200s A: +---------------------------------------------------------------+ | $ 
+t=214s C: +--------+----------+---------+ | $ 
+t=217s *** Node A executive frames: tx=424 RX=382 (nobuf=0 badclass=81) ***
+t=222s A:          frames tx 424 (errors 0), rx 382 (dropped: nobuf 0, badclass 81) | $ 
+t=245s A: +---------------------------------------------------------------+ | $ 
+t=249s *** Node A executive frames: tx=506 RX=452 (nobuf=0 badclass=97) ***
+t=254s A:          frames tx 506 (errors 0), rx 452 (dropped: nobuf 0, badclass 97) | $ 
+t=262s C: +--------+----------+---------+ | $ 
+t=281s *** Node A executive frames: tx=587 RX=519 (nobuf=0 badclass=112) ***
+t=286s A:          frames tx 587 (errors 0), rx 519 (dropped: nobuf 0, badclass 112) | $ 
+t=294s A: +---------------------------------------------------------------+ | $ 
+t=307s C: +--------+----------+---------+ | $ 
+t=310s *** Node A executive frames: tx=664 RX=581 (nobuf=0 badclass=126) ***
+t=315s [rx] execLP={"tx":664,"rx":581,"nobuf":0,"badclass":126} nic{tx=697 rx=635 wrkRx=635 delivCall=635 delivOk=635 hadNic=true} acp=true | hub.sca={"VAXC":632,"OVMXA":686}
+t=315s   [diag] counts={"proxytable-poll-snapshot":30,"send-raw":374,"deliver-attempt":319,"deliver-result":319,"sockfs-poll-queuechange":610,"sockfs-recvmsg-drained":319,"sockfs-snapshot":29} last=[{"t":"sockfs-snapshot","pollCalls":8687554,"pollMaskWithPOLLIN":635,"recvmsgCalls":635,"recvmsgWithData":635,"lastQueueLen":0},{"t":"proxytable-poll-snapshot","calls":9888931,"forcedTotal":114708692},{"t":"send-raw","len":124,"prefix":[0,0,0,120],"declaredLen":120}]
+t=315s A:          frames tx 664 (errors 0), rx 581 (dropped: nobuf 0, badclass 126) | $ 
+t=339s A: +---------------------------------------------------------------+ | $ 
+t=342s *** Node A executive frames: tx=744 RX=651 (nobuf=0 badclass=141) ***
+t=347s A:          frames tx 744 (errors 0), rx 651 (dropped: nobuf 0, badclass 141) | $ 
+t=355s C: +--------+----------+---------+ | $ 
+t=360s [rx] execLP={"tx":744,"rx":651,"nobuf":0,"badclass":141} nic{tx=813 rx=741 wrkRx=741 delivCall=741 delivOk=741 hadNic=true} acp=true | hub.sca={"VAXC":737,"OVMXA":801}
+t=360s   [diag] counts={"sockfs-poll-queuechange":611,"sockfs-recvmsg-drained":320,"send-raw":373,"deliver-attempt":319,"deliver-result":319,"sockfs-snapshot":29,"proxytable-poll-snapshot":29} last=[{"t":"sockfs-poll-queuechange","recvQueueLen":1,"mask":69,"pollCallsSoFar":10106349},{"t":"sockfs-recvmsg-drained","recvQueueLenBefore":1,"gotBytes":108,"reqLen":69632,"first20":"00 00 00 68 52 54 00 00 00 0a 52 54 00 00 00 0c 60 07 58 00","recvmsgCallsSoFar":741},{"t":"sockfs-poll-queuechange","recvQueueLen":0,"mask":4,"pollCallsSoFar":10106350}]
+t=374s *** Node A executive frames: tx=827 RX=728 (nobuf=0 badclass=157) ***
+t=379s A:          frames tx 827 (errors 0), rx 728 (dropped: nobuf 0, badclass 157) | $ 
+t=387s A: +---------------------------------------------------------------+ | $ 
+t=400s C: +--------+----------+---------+ | $ 
+t=404s *** Node A executive frames: tx=902 RX=798 (nobuf=0 badclass=171) ***
+t=409s A:          frames tx 902 (errors 0), rx 798 (dropped: nobuf 0, badclass 171) | $ 
+t=432s A: +---------------------------------------------------------------+ | $ 
+t=435s *** Node A executive frames: tx=985 RX=867 (nobuf=0 badclass=187) ***
+t=449s C: +--------+----------+---------+ | $ 
+t=467s *** Node A executive frames: tx=1065 RX=938 (nobuf=0 badclass=203) ***
+t=480s [rx] execLP={"tx":1065,"rx":938,"nobuf":0,"badclass":203} nic{tx=1119 rx=1010 wrkRx=1010 delivCall=1010 delivOk=1010 hadNic=true} acp=true | hub.sca={"VAXC":1006,"OVMXA":1107}
+t=480s   [diag] counts={"sockfs-poll-queuechange":621,"sockfs-recvmsg-drained":321,"send-raw":360,"sockfs-snapshot":29,"proxytable-poll-snapshot":29,"deliver-attempt":320,"deliver-result":320} last=[{"t":"sockfs-poll-queuechange","recvQueueLen":0,"mask":4,"pollCallsSoFar":13668258},{"t":"sockfs-snapshot","pollCalls":13668899,"pollMaskWithPOLLIN":1010,"recvmsgCalls":1010,"recvmsgWithData":1010,"lastQueueLen":0},{"t":"proxytable-poll-snapshot","calls":14870277,"forcedTotal":174484844}]
+t=494s C: +--------+----------+---------+ | $ 
+t=497s *** Node A executive frames: tx=1143 RX=1005 (nobuf=0 badclass=217) ***
+t=525s [rx] execLP={"tx":1143,"rx":1005,"nobuf":0,"badclass":217} nic{tx=1235 rx=1106 wrkRx=1106 delivCall=1106 delivOk=1106 hadNic=true} acp=true | hub.sca={"VAXC":1102,"OVMXA":1223}
+t=525s   [diag] counts={"sockfs-recvmsg-drained":319,"sockfs-poll-queuechange":616,"send-raw":371,"deliver-attempt":318,"deliver-result":318,"sockfs-snapshot":29,"proxytable-poll-snapshot":29} last=[{"t":"sockfs-recvmsg-drained","recvQueueLenBefore":1,"gotBytes":132,"reqLen":69632,"first20":"00 00 00 80 ab 00 04 01 01 02 52 54 00 00 00 0c 60 07 70 00","recvmsgCallsSoFar":1106},{"t":"sockfs-poll-queuechange","recvQueueLen":0,"mask":4,"pollCallsSoFar":14995053},{"t":"send-raw","len":124,"prefix":[0,0,0,120],"declaredLen":120}]
+t=529s *** Node A executive frames: tx=1223 RX=1070 (nobuf=0 badclass=233) ***
+t=542s C: +--------+----------+---------+ | $ 
+t=561s *** Node A executive frames: tx=1305 RX=1140 (nobuf=0 badclass=248) ***
+t=587s C: +--------+----------+---------+ | $ 
+t=591s *** Node A executive frames: tx=1383 RX=1205 (nobuf=0 badclass=263) ***
+t=622s *** Node A executive frames: tx=1464 RX=1269 (nobuf=0 badclass=278) ***
+t=636s C: +--------+----------+---------+ | $ 
+t=654s *** Node A executive frames: tx=1546 RX=1343 (nobuf=0 badclass=294) ***
+t=680s C: +--------+----------+---------+ | $ 
+t=689s *** Node A executive frames: tx=1635 RX=1422 (nobuf=0 badclass=311) ***
+t=721s *** Node A executive frames: tx=1715 RX=1490 (nobuf=0 badclass=326) ***
+t=729s C: +--------+----------+---------+ | $ 
+t=752s *** Node A executive frames: tx=1798 RX=1563 (nobuf=0 badclass=342) ***
+t=765s [rx] execLP={"tx":1798,"rx":1563,"nobuf":0,"badclass":342} nic{tx=1854 rx=1638 wrkRx=1638 delivCall=1638 delivOk=1638 hadNic=true} acp=true | hub.sca={"VAXC":1633,"OVMXA":1841}
+t=765s   [diag] counts={"deliver-attempt":320,"deliver-result":320,"sockfs-poll-queuechange":618,"sockfs-recvmsg-drained":320,"send-raw":364,"sockfs-snapshot":29,"proxytable-poll-snapshot":29} last=[{"t":"sockfs-recvmsg-drained","recvQueueLenBefore":1,"gotBytes":132,"reqLen":69632,"first20":"00 00 00 80 ab 00 04 01 01 02 52 54 00 00 00 0c 60 07 70 00","recvmsgCallsSoFar":1638},{"t":"sockfs-poll-queuechange","recvQueueLen":0,"mask":4,"pollCallsSoFar":22113805},{"t":"send-raw","len":124,"prefix":[0,0,0,120],"declaredLen":120}]
+t=774s C: +--------+----------+---------+ | $ 
+t=782s *** Node A executive frames: tx=1874 RX=1630 (nobuf=0 badclass=357) ***
+t=810s [rx] execLP={"tx":1874,"rx":1630,"nobuf":0,"badclass":357} nic{tx=1969 rx=1736 wrkRx=1736 delivCall=1736 delivOk=1736 hadNic=true} acp=true | hub.sca={"VAXC":1730,"OVMXA":1956}
+t=810s   [diag] counts={"send-raw":371,"deliver-attempt":318,"deliver-result":318,"sockfs-poll-queuechange":617,"sockfs-recvmsg-drained":318,"sockfs-snapshot":29,"proxytable-poll-snapshot":29} last=[{"t":"sockfs-poll-queuechange","recvQueueLen":1,"mask":69,"pollCallsSoFar":23476799},{"t":"sockfs-recvmsg-drained","recvQueueLenBefore":1,"gotBytes":132,"reqLen":69632,"first20":"00 00 00 80 ab 00 04 01 01 02 52 54 00 00 00 0c 60 07 70 00","recvmsgCallsSoFar":1736},{"t":"sockfs-poll-queuechange","recvQueueLen":0,"mask":4,"pollCallsSoFar":23476800}]
+t=814s *** Node A executive frames: tx=1956 RX=1698 (nobuf=0 badclass=372) ***
+t=822s C: +--------+----------+---------+ | $ 
+t=846s *** Node A executive frames: tx=2036 RX=1769 (nobuf=0 badclass=387) ***
+t=867s C: +--------+----------+---------+ | $ 
+t=876s *** Node A executive frames: tx=2113 RX=1838 (nobuf=0 badclass=402) ***
+HUBBYTES=60
+HUBSHAPES=VAXC/128/w30=a000/b36=03:1103 OVMXA/128/w30=b300/b36=03:420 OVMXA/128/w30=a000/b36=03:418 VAXC/128/w30=b200/b36=03:1 VAXC/128/w30=b400/b36=03:418 VAXC/104/w30=0103/b36=01:417 OVMXA/120/w30=4113/b36=01:1356
+P2_RESULT={"cn":1,"execLP":{"tx":2113,"rx":1838,"nobuf":0,"badclass":402},"sca":{"VAXC":1939,"OVMXA":2194},"aNicRx":1945,"aWrkRx":1945,"aDelivOk":1945,"aNames":["OVMXA"],"cNames":["VAXC"]}
+DRIVER0F8_DONE rc=2

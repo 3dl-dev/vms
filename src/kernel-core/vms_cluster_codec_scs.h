@@ -384,11 +384,15 @@ vms_codec_status_t vms_scs_msg_body_build(const struct vms_scs_hdr *h,
 					  uint8_t *out, uint32_t cap);
 
 /*
- * The abs-22 connect-class word every connection-control frame carries
- * (spec sec 4(m), "Connect-class at abs 22": GROUNDED 0x0001; the 0x03e8 seen
- * in some fresh-formation captures is NOT accepted by an established member).
+ * abs 22 carries no "connect class". It is the CLUSTER GROUP NUMBER, LE16
+ * (vms_cluster_codec.h's oracle table, rd vms-b34), and the reason a fixed
+ * 0x0001 "was GROUNDED" is that every capture in the corpus came from the
+ * lab cluster, whose group number is 1. The 0x03e8 this note used to call an
+ * unaccepted variant is 1000 -- another cluster's group, correctly ignored by
+ * a member of group 1. Emitters take the number from the executive's loaded
+ * CLUSTER_AUTHORIZE record (struct vms_scs_addr::cluster_group); there is no
+ * constant to bake.
  */
-#define VMS_SCSCTRL_CONNECT_FLAG 0x0001u
 
 /* ------------------------------------------------------------------ *
  * Directory lookup (sec 4(h)(2)) -- the semantic reading of the op-10,

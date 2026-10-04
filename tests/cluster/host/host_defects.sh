@@ -91,9 +91,36 @@
 #   mscp-srv-fsm-writeprotect-uncounted  vms_mscp_srv_fsm.c
 #   mscp-srv-io-worker-registers-handler vms_mscp_srv_io.c
 #
+# GROWN (vms-4f0) with the defect that BLOCKED CN=3 against a real OpenVMS VAX
+# V7.3 -- a member that does not answer the coordinator's op-0x12 relay:
+#
+#   join-relay-unanswered                vms_cnxman_join_fsm.c
+#
+# GROWN (vms-6d3d) with the COLD-FORMATION vote sum, the property that decides
+# whether an executive may mint a cluster system id:
+#
+#   quorum-form-set-ignores-peers        vms_cnxman_quorum.c
+#   makes cnxman_quorum_form_set() sum only the LOCAL system's votes, i.e.
+#   restores the pre-vms-6d3d rule that a node may found only a cluster its
+#   OWN votes already carry. Every refusal in the negctl suite still holds
+#   (a lone or non-voting node still founds nothing); what goes is the
+#   documented two-node VMScluster -- VOTES=1 / EXPECTED_VOTES=2 on both --
+#   which two real OpenVMS VAX V7.3 systems do form
+#   (tests/lab/captures/vms-6d3d-coldform-ev2-20260924/) and which no pair of
+#   OVMX nodes could form under the old rule.
+#
+# GROWN (vms-1ac) with the four properties of an admission this node
+# COORDINATES -- the defect class that bugchecked a real OpenVMS VAX V7.3:
+#
+#   coord-relay-epoch-advanced-early      vms_cnxman_coord_fsm.c
+#   coord-membrec-epoch-zero              vms_cnxman_coord_fsm.c
+#   coord-admission-not-selected-disarmed vms_cnxman_coord_fsm.c
+#   coord-admission-open-gate-disarmed    vms_cnxman_coord_fsm.c
+#
 SELF="$0"
 
 DEFECTS="coord-genesis-refusal-uncounted
+quorum-form-set-ignores-peers
 codec-vc-zero-incarnation-not-refused
 codec-cm-short-body-not-refused
 codec-blk-no-trailer-not-honest
@@ -111,7 +138,46 @@ mscp-cl-io-empty-cell-uncounted
 mscp-srv-glue-end-message-leaked
 mscp-srv-fsm-writeprotect-uncounted
 mscp-srv-io-worker-registers-handler
-join-own-connect-not-suppressed"
+join-own-connect-not-suppressed
+join-relay-unanswered
+coord-relay-epoch-advanced-early
+coord-membrec-epoch-zero
+coord-admission-not-selected-disarmed
+coord-admission-open-gate-disarmed
+coord-removal-open-gate-disarmed
+pe-last-gasp-once-per-port
+pe-late-frame-revives-channel
+codec-conndata-ack-cell-dropped
+csb-reconnect-never-carries
+csb-resume-ignores-peer-position
+pe-start-refusal-silent
+pe-reformation-stacks-before-it-starts
+pe-peer-start-keeps-dead-echo
+codec-remove-nodemap-unread
+csb-dead-found-by-sysid
+pe-station-filter-disarmed
+recnx-attempt-supersedes-in-flight
+csb-dropped-spare-reads-as-loss
+join-asks-the-last-discovered
+join-connectivity-gate-disarmed
+join-unheard-gate-disarmed
+join-same-breath-gate-disarmed
+join-follow-csb-conn-disarmed
+join-member-count-to-foreign
+join-asks-a-system-in-no-cluster
+join-does-not-reach-ours
+coord-genesis-ignores-says-member
+join-no-member-backoff-not-cut
+join-drive-stays-on-a-joiner
+csb-phase1-named-not-carried
+barrier-phase1-not-marked
+barrier-phase1-not-cleared
+join-transition-loss-redriven
+join-transition-reoffers-burst
+glue-close-abandons-held-transition
+csb-new-incarnation-carried
+barrier-stalled-refuses-new-transition
+barrier-stalled-ignores-new-go"
 
 # ---------------------------------------------------------------------------
 # HOST_OWNED_UNITS (vms-181, 2026-09-13)
@@ -183,6 +249,29 @@ cmd_owned() { echo "$HOST_OWNED_UNITS"; }
 defect_field() {
     _d="$1"; _f="$2"
     case "$_d" in
+
+    quorum-form-set-ignores-peers)
+        case "$_f" in
+        facility)     echo "cluster COLD-FORMATION quorum: p. 7-6 step 1's proposed set is this system PLUS the systems it can see, and the votes weighed against quorum are their COMBINED votes (rd vms-6d3d)";;
+        targets)      echo "kernel-core/vms_cnxman_quorum.c";;
+        suites_red)   echo "test_cnxman_genesis";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_quorum_form_set() sums only the LOCAL CSB's votes, so a peer whose PARAMS really arrived over a really-open circuit contributes nothing -- the pre-vms-6d3d rule that a node may found only a cluster its OWN votes already carry. Every refusal still refuses; what stops forming is the documented two-node VMScluster (VOTES=1/EXPECTED_VOTES=2 on both), which two real OpenVMS VAX V7.3 systems do form.";;
+        require_fail) cat <<'EOF'
+VOTES=1/EV=2 + a seen VOTES=1/EV=2 peer: FOUNDS on 2 votes
+a peer expecting 3 votes: quorum 2, and 2 votes meet it
+VOTES=2 + a seen VOTES=1/EV=5 peer: 3 votes meet quorum 3
+VOTES=1/EV=2 founds on the COMBINED two votes
+... at generation 1, CSV slot 1
+... and phase2 committed it a member
+EXACTLY ONE of the two founds
+... it stands down for the other candidate
+... but now because that system takes precedence
+... and it is named
+... by its real sysid
+EOF
+                      ;;
+        esac;;
 
     coord-genesis-refusal-uncounted)
         case "$_f" in
@@ -450,6 +539,651 @@ three cat-0x01 originations on the member's connection
 MODEL first (sec 4(o) row 1)
 ... then PARAMS (row 2)
 ... then op-0x02, the request that starts admission, on the MEMBER-INITIATED connection and not on one of this node's own
+and nothing at all was put on a connection of ours: there is not one
+EOF
+                      ;;
+        esac;;
+
+    join-relay-unanswered)
+        case "$_f" in
+        facility)     echo "the sitting member's answer to the coordinator's cat-0x01 op-0x12 RELAY (the Rule of Total Connectivity, VAXcluster Principles p. 7-39; spec 4(O.31) -- the relay sits between op 0x02 and op 0x03 and is the commit gate for admitting a THIRD node)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_h_relay() still SEES the coordinator's relay and still counts it, but returns before building the answer, so the member emits nothing. That is the pre-vms-4f0 behaviour in one property: measured against a real OpenVMS VAX V7.3 an unanswered relay made the VAX log a third node's membership request ~30 times without ever proposing it, and then stop transmitting altogether. The response recipe, the allowlist row and the table cells are untouched -- only the answer.";;
+        require_fail) cat <<'EOF'
+EXACTLY ONE frame went back -- the answer the coordinator's whole admission gates on
+every body byte from [4] up is what the REAL OpenVMS VAX member put on the wire
+  body[9]: the opcode, echoed
+  body[20:24]: the epoch, LE u32
+body[20:24] is OUR epoch, not the coordinator's
+EOF
+                      ;;
+        esac;;
+
+    coord-relay-epoch-advanced-early)
+        case "$_f" in
+        facility)     echo "WHEN the cluster epoch advances during an admission this node coordinates (spec 4(r) + rd vms-1ac: the op-0x12 RELAY carries the epoch the cluster IS at, the op-0x03 COMMIT one past it -- 133/133 real relay/commit pairs)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_claim_club() advances the epoch again, as it did before rd vms-1ac, so the op-0x12 RELAY goes out at N+1 instead of N. Everything downstream still reads N+1 and still agrees with itself -- which is exactly why this went unnoticed against OVMX peers and only showed up when a real OpenVMS VAX answered the relay with ITS OWN epoch N and every answer was counted as an epoch_mismatch.";;
+        require_fail) cat <<'EOF'
+op-0x12 RELAY carries the epoch the cluster is at
+...and the CLUB has not moved yet either
+EOF
+                      ;;
+        esac;;
+
+    coord-membrec-epoch-zero)
+        case "$_f" in
+        facility)     echo "the epoch field of every op-0x05 MEMBERSHIP RECORD this node originates (rd vms-1ac; 791/791 real records carry their transition's epoch, and cm-membrec-oracle.spec is one of them)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_send_membrec() stops filling rec.epoch, so every membership record goes out with body[12:16] zero -- the shipped behaviour before rd vms-1ac. The records are otherwise complete and correct, which is the point: a receiver cannot place them in any transition, and a real OpenVMS VAX V7.3 handed them took a fatal CNXMGRERR.";;
+        require_fail) cat <<'EOF'
+EVERY op-0x05 record carries the transition's epoch -- the field OVMX used to leave at zero
+EOF
+                      ;;
+        esac;;
+
+    coord-admission-not-selected-disarmed)
+        case "$_f" in
+        facility)     echo "the receiver half of coordinator selection (spec 4(p): 'a NON-COORDINATOR peer SILENTLY DISCARDS op 0x02'), implemented as cnxman_coord_select()'s outranked-by-a-member gate";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_coord_select()'s coord_outranked_for_admission() call is disarmed with '0 &&', so this node takes EVERY op-0x02 it is handed and appoints itself transition coordinator even when another member outranks it. That is the shipped behaviour before rd vms-1ac, and on the lab rig it is how a sitting OVMX member came to drive a transition at a real OpenVMS VAX V7.3 that the VAX bugchecked on.";;
+        require_fail) cat <<'EOF'
+NOT the selected coordinator: no relay
+...and not one frame of any kind: the op-0x02 is DISCARDED, which is what a real non-coordinator does
+the discard is COUNTED
+...and named
+SILENTLY: not one console line, because a joiner that retries would otherwise print one per retry
+and no transition was opened
+EOF
+                      ;;
+        esac;;
+
+    pe-reformation-stacks-before-it-starts)
+        case "$_f" in
+        facility)     echo "the ORDER of a re-formation's two 0x41 frames (rd vms-18a: the oracle's four frames are VAX1 START, VAX2 START, VAX1 STACK, VAX2 STACK, and a START sent AFTER the STACK is discarded)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "h_vc_rx_start()'s own-START is disarmed, so a re-forming circuit whose channel was ALREADY back answers the peer's START with a STACK and nothing else -- h_vc_own_start() cannot help, because the CHANNEL_UP it needs was spent before the START arrived. MEASURED consequence, rig arm D-5: the real OpenVMS VAX V7.3 discarded the late START, re-STARTed every 5 s for the rest of the run, and 20 s later each side removed the other. The FIRST-formation case is untouched (the same verifies>1 guard).";;
+        require_fail) cat <<'EOF'
+...and, because this is a RE-formation, answering it ALSO starts one from this side -- the frame the real VAX waits for and never got
+and it answered with TWO 0x41 frames, not one
+EOF
+        ;;
+        esac;;
+
+    pe-peer-start-keeps-dead-echo)
+        case "$_f" in
+        facility)     echo "the SS4(i).B echo a formation the PEER starts stamps (rd vms-1f40: taken only at CHANNEL_UP, a re-formation whose START beat the b4 stamped the dead generation's number)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "h_vc_rx_start() no longer takes the echo from its channel, so a circuit re-formed by the PEER'S START keeps stamping the number the previous generation was formed with. MEASURED consequence, rig arm M2-19: the real OpenVMS VAX V7.3 advertised 2, its START beat its b4 to the circuit, this node answered START+STACK stamped 1, and the VAX discarded both and re-STARTed every 5 s until each side removed the other. CHANNEL_UP's own take is untouched, which is why the b4-first order (arm M2-7) still passes.";;
+        require_fail) cat <<'EOF'
+every 0x41 in answer carries 2, the number the peer advertises now -- never the dead generation's 1 the real VAX discarded for 20 s
+and the circuit keeps stamping 2 on everything after
+EOF
+        ;;
+        esac;;
+
+    recnx-attempt-supersedes-in-flight)
+        case "$_f" in
+        facility)     echo "one reconnect attempt in flight per CSB (rd vms-1f40: the once-a-second beat superseded an attempt the peer was still answering)";;
+        targets)      echo "kernel-core/vms_cnxman_recnx_fsm.c";;
+        suites_red)   echo "test_cnxman_recnx";;
+        isolation)    echo "isolated";;
+        why)          echo "recnx_tick_one()'s in-flight guard is disarmed, so the beat issues a new VMS\$VAXcluster CONNECT_REQ every second whether or not the previous one is still being answered. MEASURED consequence, rig arm P-9: a node woken from a 20 s stall answered ~1 s late, every ACCEPT arrived after the block had been re-bound to a newer attempt, six CONNECT_REQs went out, the peer accepted five, the block owned none, and the window ran out with a member removed. Attempts that ENDED (failed, no path) still re-fire once a second -- only the held beat goes.";;
+        require_fail) cat <<'EOF'
+t=2000: NO second CONNECT over the one being answered
+t=3000: still none
+one attempt, not three
+and the two held beats are COUNTED, not silent
+EOF
+        ;;
+        esac;;
+
+    join-asks-the-last-discovered)
+        case "$_f" in
+        facility)     echo "the joiner's rank of whom to ask (rd vms-e88: trios A and A2 -- a real V7.3 joiner asks the highest-SCSSYSTEMID member, not the one it discovered last)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_outranks() answers yes to every later candidate, so the member asked is the last askable block in CLUB (discovery) order -- the p. 7-38 queue-tail rule this code ran before rd vms-e88. MEASURED consequence, rig arm S-1: the joining OVMX node discovered the other OVMX node 2 s before the real VAX, asked it -- an outranked member that discards the request by design -- and was never admitted.";;
+        require_fail) cat <<'EOF'
+trio A/A2 order: the higher member is asked though the lower was discovered last (nearest the CLUB tail)
+nobody has spoken: the drive starts toward the highest
+a connected system that has said nothing moves nothing
+its PARAMS says it is a member: the drive moves to it
+... on that system
+EOF
+        ;;
+        esac;;
+
+    join-connectivity-gate-disarmed)
+        case "$_f" in
+        facility)     echo "the joiner's p. 7-37 connectivity gate (rd vms-e88: trio C3 -- a real V7.3 joiner that could reach one of two members asked nobody for five minutes)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() no longer holds a request while the members advertise more members than this node has connectivity with, so the join asks the one member it can see. MEASURED consequence, rig arm S-1: that member was the outranked OVMX node, which discards the request by design (rd vms-1ac), and the joiner was never admitted.";;
+        require_fail) cat <<'EOF'
+... a RETARGET, not a decline: nobody had been asked
+... the third is op-0x02
+MODEL, PARAMS, then the request, on ITS connection
+and VMS's own console line names whom it asked
+and said on the console
+held for CONNECTIVITY
+no op-0x02 while one of two members is out of reach -- thirty beats, as the real joiner waited five minutes
+nobody was asked, so nobody was declined
+the join moves to the higher member once it is in reach
+... that system
+and not again while that connect stands
+held: the member counts two, this node reaches one
+so it dials the OVMX system nobody had connected, once
+EOF
+        ;;
+        esac;;
+
+    join-unheard-gate-disarmed)
+        case "$_f" in
+        facility)     echo "no membership request before the member's own PARAMS (rd vms-e88: every real V7.3 joiner's op-0x02 followed the member's op-0x01)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() no longer waits for the member being asked to send its own PARAMS; a member that has said nothing is treated as one that said 'no cluster'. MEASURED consequence, rig arm T-15: the join acted on the real VAX before the VAX had said a word on that connection, and the VAX never answered the request.";;
+        require_fail) cat <<'EOF'
+... held as UNHEARD
+a member that has sent no PARAMS is not asked
+and said on the console
+and still nothing was asked of anybody
+held as UNHEARD
+the silence window later it is given up on, like an unanswered member
+EOF
+        ;;
+        esac;;
+
+    join-same-breath-gate-disarmed)
+        case "$_f" in
+        facility)     echo "op-0x02 is never in the identity burst (spec sec 4(o): sending 0x02 inside the initial burst leaves the peer silent; every real V7.3 joiner's request came >= 0.7 s after its own PARAMS)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() no longer waits one beat after this node's own MODEL/PARAMS, so MODEL, PARAMS and CONFIG leave in one burst. MEASURED consequence, rig arm T-15: exactly that three-frame burst went to the real VAX and the VAX never acknowledged the request.";;
+        require_fail) cat <<'EOF'
+... and the re-offer counter does not move
+... but NOT op-0x02 in the same breath (rd vms-e88; spec sec 4(o): 0x02 inside the identity burst leaves the peer silent)
+... re-offered on that beat, once
+MODEL and PARAMS, and not op-0x02 with them
+and the identity records reached SCS this time
+held as the same breath
+op 0x02 is due, but never in the same breath as the identity records it follows (rd vms-e88)
+EOF
+        ;;
+        esac;;
+
+    join-follow-csb-conn-disarmed)
+        case "$_f" in
+        facility)     echo "the request rides the connection the executive records for the member (rd vms-e88: rig arm T-15 -- two crossed connects, the CSB kept the one the real VAX keeps, the join held the other)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() no longer moves the join onto the CSB's own Con.ID, so after a crossing the join keeps the connection the real VAX abandons; its E77 gate then refuses to stamp there and no request reaches any connection.";;
+        require_fail) cat <<'EOF'
+E77: the kept connection's dialogue opens at 1
+on the kept connection, after this node's identity there
+one request in the world
+the join moves to the connection the executive records
+EOF
+        ;;
+        esac;;
+
+    join-member-count-to-foreign)
+        case "$_f" in
+        facility)     echo "a member's count goes only to a peer running this implementation (rd vms-e88; the rd vms-1ac rule -- member-only bytes OVMX does not ground are symmetric between two OVMX nodes and a bugcheck risk in front of a VAX)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_members_for() drops the peer_is_ours test, so a foreign connection manager is sent a member-form count beside the zero member-only fields OVMX cannot ground: a record in a shape no real node writes.";;
+        require_fail) cat <<'EOF'
+a foreign connection manager still hears 0
+and nothing new goes to the foreign one
+EOF
+        ;;
+        esac;;
+
+    join-asks-a-system-in-no-cluster)
+        case "$_f" in
+        facility)     echo "no membership request to a system whose own PARAMS say it belongs to no cluster (rd vms-e88: trio B -- a real V7.3 joiner never asked a system that was itself still joining)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_admission_held() asks the member it is driving through even when that member's PARAMS carried a member count of 0 -- a system that is joining too and cannot admit anybody. MEASURED consequence, rig arm E2-1 (the first build of this item): the joining OVMX node's first request went to the other OVMX node while it was still being admitted, went unanswered for five seconds, and admission waited for the re-issue.";;
+        require_fail) cat <<'EOF'
+... and not one request went out
+... as an exhausted round, the fact the founding election reads
+... said on the console
+every system in sight says no cluster: the attempt ends with nobody asked
+no request to a system that is itself joining, while another in sight has not yet said what it is
+once the other says it is a member, the request goes to it
+held as NO_MEMBER
+and with only a joining system left, the round ends
+the join is back in IDLE to ask again, not parked
+while nobody is a member, the start waits out RECNXINTERVAL
+... counted as a back-off cut short
+a member that stayed silent is waited out in full (E80's rate bound), though it says it is a member
+EOF
+        ;;
+        esac;;
+
+    join-does-not-reach-ours)
+        case "$_f" in
+        facility)     echo "the joiner dials the systems of its own implementation nobody has connected (rd vms-e88: the Rule of Total Connectivity, Davis p. 7-39; trio C3 -- a real joiner dials each member it discovers)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_hold() no longer dials, so a join held for connectivity waits for a connection nobody will make: an OVMX member dials nobody its own join is not driving through, and the joiner is driving through the real VAX. MEASURED consequence, stall-rig arm M-8 of this item: OVMXB held 'waiting for connectivity to every cluster member' for the whole run, the VAX counting two members and OVMXB reaching one.";;
+        require_fail) cat <<'EOF'
+... that system
+and not again while that connect stands
+so it dials the OVMX system nobody had connected, once
+EOF
+        ;;
+        esac;;
+
+    coord-genesis-ignores-says-member)
+        case "$_f" in
+        facility)     echo "a system whose own PARAMS say it belongs to a cluster bars founding (rd vms-e88; the peer-in-cluster clause of the founding election, SS8b (1))";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_genesis_negctl";;
+        isolation)    echo "isolated";;
+        why)          echo "coord_peer_in_cluster() no longer reads what the system advertised in its op-0x01 PARAMS, so only a CSID this node learned or a MEMBER flag bars founding. MEASURED consequence, stall-rig arm N-3 of this item: a voting OVMX node beside the real VAX -- which had said it was a member -- founded a cluster of its own with the other OVMX node, and the real VAX admitted that node into a second cluster.";;
+        require_fail) cat <<'EOF'
+... because that system belongs to a cluster
+EOF
+        ;;
+        esac;;
+
+    join-no-member-backoff-not-cut)
+        case "$_f" in
+        facility)     echo "a joiner whose last round found no member asks the first member that appears, not RECNXINTERVAL later (rd vms-e88)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_backoff_pending() no longer ends a no-member back-off when a system says it is a member, so the joiner sits out the whole RECNXINTERVAL. MEASURED consequence, stall-rig arm N-3 of this item: the joiner found only the other joining OVMX node, backed off 20 s, and while it waited that node founded a cluster of its own.";;
+        require_fail) cat <<'EOF'
+a member appearing: the next start runs, a second later, not twenty
+... counted as a back-off cut short
+EOF
+        ;;
+        esac;;
+
+    join-drive-stays-on-a-joiner)
+        case "$_f" in
+        facility)     echo "a join driving toward a system that is not a member moves, before ADMIT, to a connected system that says it is one (rd vms-e88)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_drive_to_member() never moves the drive, so a join that started toward another joining system waits in VC CONNECT for a connect that system never accepts. MEASURED consequence, stall-rig arm P-2 of this item: the joiner drove toward the other OVMX node (the highest SCSSYSTEMID at CLUSTER_START) while it was being admitted, and sat in VC CONNECT for the rest of the run beside a real VAX that had dialled it and said it was a member.";;
+        require_fail) cat <<'EOF'
+its PARAMS says it is a member: the drive moves to it
+... that system
+... straight to ADMIT, where every hold still applies
+the request goes to the member, on its own connection
+... after this node's own identity on that connection
+once, and the joiner never got one
+EOF
+        ;;
+        esac;;
+
+    csb-phase1-named-not-carried)
+        case "$_f" in
+        facility)     echo "a system named in a transition this node answered at Phase 1 re-establishes with its dialogue carried (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "csb_dialogue_may_continue() ignores cm_phase1_named, so before Phase 2 has set SELECTED a lost connection to the coordinator restarts its dialogue at 1/0. MEASURED consequence, stall-rig arm P-3: the joiner, frozen between its Phase-1 answer and the GO, re-sent MODEL/PARAMS at send-msg# 1 on the connection the real VAX was re-establishing as a member's, and the VAX bugchecked CNXMGRERR.";;
+        require_fail) cat <<'EOF'
+and the send side
+counted as CARRIED
+not SELECTED yet, but in the answered transition: the re-established connection carries the ack (F5: 266)
+EOF
+        ;;
+        esac;;
+
+    barrier-phase1-not-marked)
+        case "$_f" in
+        facility)     echo "the participant's barrier names the transition's systems on their CSBs at Phase 1 (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_open() no longer records the coordinator and the nodemap's systems on their CSBs, so nothing entitles a connection lost before the GO to carry its dialogue -- the P-3 CNXMGRERR shape.";;
+        require_fail) cat <<'EOF'
+and the member the nodemap names
+it stands through the GO and the barrier
+the coordinator's block is named at Phase 1
+and the new transition names who is in it
+EOF
+        ;;
+        esac;;
+
+    barrier-phase1-not-cleared)
+        case "$_f" in
+        facility)     echo "the Phase-1 record ends with the transition (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_phase1_clear() clears nothing, so a system stays entitled to carry its dialogue after the transition that named it has ended -- a later, unrelated loss would carry a dialogue E77 says must restart.";;
+        require_fail) cat <<'EOF'
+an abandoned transition un-names too
+and ends with the transition
+and so does one whose coordinator was lost for good
+EOF
+        ;;
+        esac;;
+
+    join-transition-loss-redriven)
+        case "$_f" in
+        facility)     echo "a connection lost inside a transition this node answered is held, not re-driven (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_cm_connection_gone() no longer holds an ADMIT join whose transition is open, so the loss sends it to VC CONNECT and it re-drives MODEL/PARAMS and a second request. MEASURED consequence, stall-rig arm P-3: the real VAX, re-establishing the joiner as a member, bugchecked CNXMGRERR on the fresh identity burst.";;
+        require_fail) cat <<'EOF'
+... and said on the console
+... it is held, counted
+no MODEL, no PARAMS and no second request on the re-established connection (F5/F6: none)
+once the transition is abandoned, the ADMIT beat takes the not-yet-admitted path
+the loss does NOT send the join back to VC CONNECT
+EOF
+        ;;
+        esac;;
+
+    join-transition-reoffers-burst)
+        case "$_f" in
+        facility)     echo "nothing is re-offered on a connection re-established inside an answered transition (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_join_fsm.c";;
+        suites_red)   echo "test_cnxman_join";;
+        isolation)    echo "isolated";;
+        why)          echo "join_reoffer_burst() re-offers the identity burst and the membership request on a re-established connection while the transition runs, because the burst mask is per-Con.ID. A real V7.3 joiner re-offered nothing there (oracle F5/F6).";;
+        require_fail) cat <<'EOF'
+no MODEL, no PARAMS and no second request on the re-established connection (F5/F6: none)
+with exactly the one membership request it made
+EOF
+        ;;
+        esac;;
+
+    glue-close-abandons-held-transition)
+        case "$_f" in
+        facility)     echo "a path-loss close does not abandon the participant's transition; the end of the coordinator's window does (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman.c";;
+        suites_red)   echo "test_cnxman_glue";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_transition_peer_lost() abandons the participant's barrier on every close again, so a joiner that loses its coordinator's connection across the GO drops the transition the coordinator is about to re-send -- the P-3 CNXMGRERR shape.";;
+        require_fail) cat <<'EOF'
+vms-c06: the participant half fires only for the block the barrier is taking its transition FROM
+EOF
+        ;;
+        esac;;
+
+    csb-new-incarnation-carried)
+        case "$_f" in
+        facility)     echo "a system back as a new incarnation starts a new conversation (p. 7-24/7-25; rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "csb_dialogue_may_continue() ignores cm_new_incarnation, so a member re-establishes a re-incarnated system's connection as the old conversation, with the 'already introduced' mask. MEASURED consequence, stall-rig arm F-13: the joiner, removed after a 30 s stall and back after CLUEXIT, never heard the OVMX member's PARAMS and waited for connectivity for the rest of the run.";;
+        require_fail) cat <<'EOF'
+a NEW incarnation is a new conversation: 1/0 (p. 7-25)
+and nothing is recorded as already said to it -- this node introduces itself again
+the fresh bind ends the record
+EOF
+        ;;
+        esac;;
+
+    barrier-stalled-refuses-new-transition)
+        case "$_f" in
+        facility)     echo "a new transition's open supersedes a committed, stalled barrier (rd vms-eb3, oracle F7)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_reopen() refuses a new epoch while a barrier is committed. MEASURED consequence, stall-rig arms F-13/H-13: an OVMX member stuck in the addition barrier of a joiner the real VAX had timed out refused the VAX's removal, and the VAX later timed the member out too.";;
+        require_fail) cat <<'EOF'
+...and is now the transition
+the removal supersedes the stalled barrier
+EOF
+        ;;
+        esac;;
+
+    barrier-stalled-ignores-new-go)
+        case "$_f" in
+        facility)     echo "a new transition's bare GO supersedes a committed, stalled barrier (rd vms-eb3)";;
+        targets)      echo "kernel-core/vms_cnxman_barrier_fsm.c";;
+        suites_red)   echo "test_cnxman_barrier";;
+        isolation)    echo "isolated";;
+        why)          echo "barrier_h_go_in_step() treats every GO in STEP as a repeat, so a class-0x03 removal that starts at op 0x0a never reaches a member whose barrier stalled.";;
+        require_fail) cat <<'EOF'
+a bare removal GO supersedes it too, and its barrier starts
+EOF
+        ;;
+        esac;;
+
+    csb-dropped-spare-reads-as-loss)
+        case "$_f" in
+        facility)     echo "two VMS\$VAXcluster connections for one pair (rd vms-1f40: the peer disconnecting the redundant one of a crossing is not a loss of that system)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_second_closed() no longer recognises the pair's spare connection, so the peer disconnecting the redundant half of a crossing falls through to the ordinary remote-disconnect path: this node stops asking and the window ends in a removal while the connection the peer kept stands open. MEASURED consequence, rig arm Q-2: both ends re-dialled, both accepted, the real OpenVMS VAX V7.3 dropped the one it had initiated and kept this node's, and this node removed the VAX from its cluster.";;
+        require_fail) cat <<'EOF'
+the peer closing the spare is NOT a loss of the system
+the spare is gone
+EOF
+        ;;
+        esac;;
+
+    pe-start-refusal-silent)
+        case "$_f" in
+        facility)     echo "saying WHY a circuit refused to form (rd vms-18a: counted-but-silent made a refused formation indistinguishable on a real console from one that was never asked)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "vc_log_start_refused() returns before saying anything, so vc_begin_formation() puts the circuit back in CLOSED with nothing on the console -- the state that looks exactly like a node that never rejoins ('%PEA0, channel verified' and then silence). The counters are untouched, so the INV-6 accounting is unaffected: only the line goes.";;
+        require_fail) cat <<'EOF'
+and it is SAID on the console, not only counted
+...naming WHICH read came back empty
+EOF
+        ;;
+        esac;;
+
+
+    codec-conndata-ack-cell-dropped)
+        case "$_f" in
+        facility)     echo "content[106:108] of the VMS\$VAXcluster connect data -- where this node's receive stream from the peer it is dialling stands (rd vms-8c54), and the [2]/[11] form that follows it";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_conndata_build() writes 0 into content[106:108] instead of the caller's peer_ack_msg, so the two bytes that follow it collapse to the short form as well. The four rd vms-b87 rows are all ack-0 and stay green; only the rd vms-8c54 oracle rows -- two real OpenVMS VAX V7.3 members reconnecting, whose connects carry 14811 and 10249 -- go red. MEASURED consequence, rig arms N-6 and V-1: a zero there says 'I have taken nothing from you' to a peer that holds this node as a member, and the real VAX's connection manager bugchecked CNXMGRERR in the same millisecond as its own ACCEPT_RSP.";;
+        require_fail) cat <<'EOF'
+VAX1 re-establishing: it carries the 14811 it had TAKEN from VAX2
+VAX2 accepting it: its own 10249, not VAX1's number
+VAX1 -> VAX3: 1798, NOT the 1799 VAX3 kept retransmitting unanswered
+...and with ONE message taken: long form, and the 1 is little-endian at [12:14]
+EOF
+        ;;
+        esac;;
+
+    csb-resume-ignores-peer-position)
+        case "$_f" in
+        facility)     echo "a carried dialogue resuming from the PEER'S acknowledged position (rd vms-1f40: anything sent on the connection that died was never delivered, and continuing past it leaves a hole in a strictly-monotonic stream)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_csb_dialogue_acked() takes the peer's position but never applies it, so a re-established connection resumes from this node's own last send. The arming, the one-frame scope and the never-forward rule are all untouched -- only the rewind itself goes. MEASURED consequence, rig arm M2-5: this node sent send=103 twice on the old Con.ID pair, the real OpenVMS VAX V7.3 re-established and acked 102 having never seen 103, this node's next frame carried 104, and the VAX bugchecked CNXMGRERR.";;
+        require_fail) cat <<'EOF'
+...and this node resumes THERE, so its next origination is 103 -- the number the peer is waiting for, not the 104 that bugchecked the VAX
+a LATER ack does not walk the counter back: the resume is armed for exactly one frame
+an ack AHEAD of this node's own send is refused
+and it really originates 103
+two more sent, in flight
+EOF
+        ;;
+        esac;;
+
+    csb-reconnect-never-carries)
+        case "$_f" in
+        facility)     echo "p. 7-24's reconnect window as the SAME conversation (rd vms-8c54: a connection re-established to a system the cluster still holds keeps its send/ack dialogue)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "csb_dialogue_may_continue() is disarmed to return 0, so cnxman_csb_bind_reconnect() always falls through to the E77 reset and a re-established connection restarts at send-msg# 1 / ack 0. Every NOT-entitled case still resets, so nothing about E77 changes -- only the entitled one, which is the case both real OpenVMS VAX V7.3 members took when they continued 10249 -> 10250 and 14811 -> 14812 across a new Con.ID pair.";;
+        require_fail) cat <<'EOF'
+...and this node resumes THERE, so its next origination is 103 -- the number the peer is waiting for, not the 104 that bugchecked the VAX
+...which is the cell the connect data carries
+a LATER ack does not walk the counter back: the resume is armed for exactly one frame
+an ack AHEAD of this node's own send is refused
+and NOT as a reset
+and counts as no resume
+and is not counted again
+and it really originates 103
+and so does the ack: this node really HAS taken 14811 from that system, and saying 0 to a peer that holds it as a member is the lie the VAX bugchecks on
+and so does the correlation token -- restarting it at 1 offers the peer a correlation it never issued, and the VAX bugchecked on it (arm K-10)
+and what this node told that system about itself moved with it: a re-established member does NOT re-introduce itself, and the VAX bugchecked when it did (arm F-4)
+counted as CARRIED
+counted as a reset
+counted as a resume
+the carry is intact across the rebind
+the send side CONTINUES -- the next origination is 3, as VAX1's 10249 became 10250
+the transaction id CARRIES: a re-established member does not renumber mid-conversation (oracle VAX1 ran txn 3 across it)
+two more sent, in flight
+and the dialogue is carried, never restarted
+dialogue carried across the move
+not SELECTED yet, but in the answered transition: the re-established connection carries the ack (F5: 266)
+and the send side
+the SAME incarnation re-established: carried
+EOF
+        ;;
+        esac;;
+
+    pe-station-filter-disarmed)
+        case "$_f" in
+        facility)     echo "the LAN adapter's address filter a real PEDRIVER sits behind: only this station's own address and the group multicast ever reach the port (rd vms-6b1)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "pe_frame_reaches_port() accepts every Ethernet destination ('1 ||'), so a frame a flooding hub or a promiscuous adapter delivers -- VAX1 talking to ANOTHER node -- is bound to this node's circuit by its source address alone: the foreign START re-forms our OPEN circuit (SCS told it went down, a STACK sent back) and the foreign sequenced messages are taken as ours, which is exactly the in-browser L2 hub's flood (tools/cluster-web-demo/l2/hub.mjs) the item names.";;
+        require_fail) cat <<'EOF'
+a START for another station does not re-form our circuit
+a sequenced message for another station is not taken
+and SCS is told nothing went down
+and nothing is sent back: no STACK, no re-ack
+each one is counted where an operator can see it
+and the console says so
+nor read as a gap
+while our own next message is taken as usual
+EOF
+        ;;
+        esac;;
+
+    codec-remove-nodemap-unread)
+        case "$_f" in
+        facility)     echo "the op-0x08 REMOVE open's post-transition nodemap at body[55] (spec sec 4(p).R, rd vms-af4): nine real captured opens, five removals, three coordinators, removed slots 2/3/4";;
+        targets)      echo "kernel-core/vms_cluster_codec_cm.c";;
+        suites_red)   echo "test_codec_cm";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_cm_open_carries_nodemap() answers yes for op 0x09 only, so the REMOVE open is read as carrying no nodemap -- the pre-af4 reading. A participant then commits a removal with membership untouched and keeps the removed system SELECTED: MEASURED on the rig, a member SIGKILLed and booted again stayed a MEMBER row on the surviving OVMX node with its old CSID for 300 s and the returning node was never readmitted.";;
+        require_fail) cat <<'EOF'
+and it carries a nodemap
+body[55] == the slots the removal keeps
+its span is readable
+EOF
+        ;;
+        esac;;
+
+    csb-dead-found-by-sysid)
+        case "$_f" in
+        facility)     echo "p. 7-25: the SCSSYSTEMID belongs to the new incarnation's fresh block, never to the old incarnation's DEAD one (rd vms-af4)";;
+        targets)      echo "kernel-core/vms_cnxman_csb.c";;
+        suites_red)   echo "test_cnxman_csb";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_club_find_sysid() matches a DEAD block, so every lookup by SCSSYSTEMID -- the accept path's csb_ensure(), the discovery sweep, the join -- lands on the old incarnation's block and the new incarnation is driven through a dead one: the REACCEPT-into-the-old-block failure the rig measured.";;
+        require_fail) cat <<'EOF'
+and it is what the system is found as from now on
+the SCSSYSTEMID no longer finds the old incarnation
+EOF
+        ;;
+        esac;;
+
+    pe-late-frame-revives-channel)
+        case "$_f" in
+        facility)     echo "SS4(M)'s listen timeout as a fact about ELAPSED TIME (rd vms-8c54: a stalled guest wakes with its clock AND its receive queue jumped together, and the queued frames are consumed before any beat runs)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_vc";;
+        isolation)    echo "isolated";;
+        why)          echo "pe_channel_expire_if_due() is disarmed at its first line, so a receive path refreshes a deadline that has ALREADY passed and the channel is never declared lost. The tick still finds it on the next beat, so nothing about an ordinary timeout changes -- only the stalled-guest case, where the frames were DEFERRED rather than destroyed and arrive before any beat. MEASURED consequence, rig arm N-1: the woken member wrote sequenced traffic on a circuit the real OpenVMS VAX V7.3 had closed 8.2 s earlier and answered its fresh START with a STACK from a circuit it still believed was OPEN; 20 s later each side removed the other.";;
+        require_fail) cat <<'EOF'
+the deferred beat ran: the channel went, not the circuit's own TIMVCFAIL
+and SCS was told the circuit is gone
+the circuit is NOT still open on a channel that timed out
+a late SEQUENCED message does not revive it either
+SCS was told, once
+EOF
+        ;;
+        esac;;
+
+    pe-last-gasp-once-per-port)
+        case "$_f" in
+        facility)     echo "p. 7-29's departure announcement, once per INCARNATION (rd vms-8c54: CLUEXIT re-incarnates IN PLACE, so a guard scoped to the port lifecycle silences every announcement after the first)";;
+        targets)      echo "kernel-core/vms_pe_fsm.c";;
+        suites_red)   echo "test_pe_formation";;
+        isolation)    echo "isolated";;
+        why)          echo "pe_gasp_already_sent() is reverted to the once-per-PORT rule by returning 1 for any port that has ever gasped. A real node reboots between departures and so gets a fresh port each time; OVMX's CLUEXIT does not, so under this defect the SECOND and every later re-incarnation announces NOTHING and every peer keeps a CSB for a node that has already thrown its cluster state away -- the state the measured E81 CNXMGRERR family lives in. The last gasp is still built, still counted and still correct for the FIRST departure, so nothing but the per-incarnation property goes red.";;
+        require_fail) cat <<'EOF'
+a re-incarnated node ANNOUNCES ITS DEPARTURE AGAIN
+and it is the same b1 marker, not some other frame
+both are counted
+still two
+EOF
+        ;;
+        esac;;
+
+    coord-removal-open-gate-disarmed)
+        case "$_f" in
+        facility)     echo "the INV-6 refusal to originate a class-0x03 REMOVAL open toward a connection manager this executive cannot build one for (rd vms-0f9: a real op-0x08 carries 44 bytes OVMX has no derivation for)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_coord_select()'s DEPARTURE branch has its coord_open_is_grounded_for() call disarmed with '0 &&', so a survivor opens a class-0x03 removal toward a system that has NOT proved it runs this implementation -- putting an op-0x08 with 44 zero bytes where a real coordinator writes two VMS absolute-time quadwords and four longwords. MEASURED consequence, jittered three-node rig arm V2-1: the real OpenVMS VAX V7.3 put its last-gasp datagram on the multicast in the SAME millisecond.";;
+        require_fail) cat <<'EOF'
+the removal is REFUSED, not driven
+...and named OPEN_UNGROUNDED
+...and counted, so the gap is visible without a capture
+NOTHING went on the wire -- above all no op 0x08 this node cannot build faithfully
+and no transition was opened
+EOF
+        ;;
+        esac;;
+
+    coord-admission-open-gate-disarmed)
+        case "$_f" in
+        facility)     echo "the INV-6 refusal to originate a class-0x02 transition open toward a connection manager this executive cannot build one for (rd vms-1ac: a real op-0x09 carries 28 bytes OVMX has no derivation for)";;
+        targets)      echo "kernel-core/vms_cnxman_coord_fsm.c";;
+        suites_red)   echo "test_cnxman_coord";;
+        isolation)    echo "isolated";;
+        why)          echo "cnxman_coord_select()'s coord_open_is_grounded_for() call is disarmed with '0 &&', so this node opens a class-0x02 transition toward a system that has NOT proved it runs this implementation -- putting an op-0x09 with 28 zero bytes where a real coordinator writes times and identities in front of a foreign connection manager. The measured consequence is a fatal CNXMGRERR on a real OpenVMS VAX V7.3 1.3 ms later.";;
+        require_fail) cat <<'EOF'
+nothing is originated: no relay, no commit, and above all no op-0x09 this node cannot build faithfully
+the refusal is COUNTED
+...and named
+...and SAID, because a stranded admission is a gap to close
+and no transition was opened
 EOF
                       ;;
         esac;;
@@ -471,6 +1205,12 @@ EOF
 apply_edit() {
     _file="$1"; _d="$2"
     case "$_d" in
+    quorum-form-set-ignores-peers)
+        # The ONE unconditional add of a CSB's votes into the cold-formation
+        # sum; making it conditional on the LOCAL flag is exactly the old
+        # own-votes-only rule, with nothing else in the walk touched.
+        sed -i 's|^\t\tout->sum_votes += (uint32_t)csb->votes;$|\t\tif ((csb->flags \& VMS_CSB_F_LOCAL) != 0u)  /* NEGCTL quorum-form-set-ignores-peers */\n\t\t\tout->sum_votes += (uint32_t)csb->votes;|' "$_file";;
+
     coord-genesis-refusal-uncounted)
         # c->genesis_refused_noquorum++; is unique in this file (grep -c is
         # 1) -- no line anchor needed. The refusal three lines below is left
@@ -635,6 +1375,201 @@ apply_edit() {
         # Idempotency-safe: the edit consumes the pattern, so a second apply
         # matches nothing and cmd_apply reports BROKEN FIXTURE.
         sed -i 's|if (join_cm_take_held(j))|if (0 \&\& join_cm_take_held(j)) /* NEGCTL join-own-connect-not-suppressed: this node dials even when the executive already holds the connection */|' "$_file";;
+
+    join-relay-unanswered)
+        # `j->relays_seen++;` is unique in this file (grep -c is 1):
+        # join_h_relay()'s own accounting line. An early return is INSERTED
+        # after it, so the handler still runs, still counts, and still takes
+        # its argument -- the file builds -Wall -Wextra -Werror and only the
+        # ANSWER disappears. Idempotency-safe: the guard the edit inserts
+        # carries the NEGCTL marker, and a second apply would insert a
+        # second copy AFTER the first return, changing nothing -- which
+        # cmd_apply's pristine-compare reports as BROKEN FIXTURE only if the
+        # file is unchanged, so the marker is matched instead.
+        if grep -q 'NEGCTL join-relay-unanswered' "$_file"; then
+            return 0    # already injected: leave it byte-identical so
+        fi              # cmd_apply's pristine-compare reports BROKEN FIXTURE
+        sed -i 's|\tj->relays_seen++;|\tj->relays_seen++;\n\tif (j != (struct cnxman_join *)0)\n\t\treturn CNXMAN_JOIN_RX_CONSUMED; /* NEGCTL join-relay-unanswered: the member answers the coordinator nothing */|' "$_file";;
+
+    coord-relay-epoch-advanced-early)
+        # coord_claim_club()'s two lines, replaced with the pre-vms-1ac pair.
+        # `c->epoch_advanced = 1u` keeps coord_advance_epoch() idempotent, so
+        # the transition still runs -- only WHEN the epoch moved changes.
+        sed -i 's|\tc->epoch = club->epoch;|\tc->epoch = club->epoch + 1u; club->epoch = c->epoch; /* NEGCTL coord-relay-epoch-advanced-early */|' "$_file"
+        sed -i 's|\tc->epoch_advanced = 0u;|\tc->epoch_advanced = 1u;|' "$_file";;
+
+    coord-membrec-epoch-zero)
+        # `rec.epoch   = c->epoch;` is unique in this file.
+        sed -i 's|rec.epoch   = c->epoch;.*|/* NEGCTL coord-membrec-epoch-zero: the record names no transition */|' "$_file";;
+
+    coord-admission-not-selected-disarmed)
+        sed -i 's|if (coord_outranked_for_admission(c, subject_csb)) {|if (0 \&\& coord_outranked_for_admission(c, subject_csb)) { /* NEGCTL coord-admission-not-selected-disarmed */|' "$_file";;
+
+    coord-admission-open-gate-disarmed)
+        sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 1)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 1)) { /* NEGCTL coord-admission-open-gate-disarmed */|' "$_file";;
+
+    pe-reformation-stacks-before-it-starts)
+        # `if (ch != NULL && ch->verifies > 1u)` is unique in this file.
+        sed -i 's|if (!vc->own_start_sent \&\& vc_is_reformation(f, vc))|if ((void)vc_is_reformation, 0) /* NEGCTL pe-reformation-stacks-before-it-starts */|' "$_file";;
+
+    pe-peer-start-keeps-dead-echo)
+        # vc_take_echo() is called at three formation sites; the range pins the
+        # one in h_vc_rx_start (`vc->starts_rx++;` is unique in this file), and
+        # the call VANISHES when replaced, so the mutation is not repeatable.
+        sed -i '/vc->starts_rx++;/,/vc_learn_peer(f, vc, rx);/ s|vc_take_echo(f, vc);|(void)vc_take_echo; /* NEGCTL pe-peer-start-keeps-dead-echo */|' "$_file";;
+
+    recnx-attempt-supersedes-in-flight)
+        # `    csb->attempt_in_flight) {` is unique in this file.
+        sed -i 's|    csb->attempt_in_flight) {|    0 \&\& csb->attempt_in_flight) { /* NEGCTL recnx-attempt-supersedes-in-flight */|' "$_file";;
+
+    join-asks-the-last-discovered)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	return a->sysid > b->sysid;|	return 1; /* NEGCTL join-asks-the-last-discovered: the last askable block wins, the old queue-tail rule */|' "$_file";;
+
+    join-connectivity-gate-disarmed)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if ((uint32_t)v.max_advertised > v.members_connected)|	if (0 \&\& (uint32_t)v.max_advertised > v.members_connected) /* NEGCTL join-connectivity-gate-disarmed */|' "$_file";;
+
+    join-unheard-gate-disarmed)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (csb == NULL \|\| !csb->adv_valid)|	if (csb == NULL) /* NEGCTL join-unheard-gate-disarmed */|' "$_file";;
+
+    join-same-breath-gate-disarmed)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (join_ident_fresh(j))|	if (0 \&\& join_ident_fresh(j)) /* NEGCTL join-same-breath-gate-disarmed */|' "$_file";;
+
+    join-follow-csb-conn-disarmed)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (csb != NULL \&\& join_follow_csb_conn(j, csb))|	if (0 \&\& csb != NULL \&\& join_follow_csb_conn(j, csb)) /* NEGCTL join-follow-csb-conn-disarmed */|' "$_file";;
+
+    join-member-count-to-foreign)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (csb == NULL \|\| !csb->peer_is_ours \|\| !join_node_already_member(j))|	if (csb == NULL \|\| !join_node_already_member(j)) /* NEGCTL join-member-count-to-foreign */|' "$_file";;
+
+    join-asks-a-system-in-no-cluster)
+        # rd vms-e88: the edited line is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (csb->adv_valid \&\& !join_says_member(csb))|	if (0 \&\& csb->adv_valid \&\& !join_says_member(csb)) /* NEGCTL join-asks-a-system-in-no-cluster */|' "$_file";;
+
+    join-does-not-reach-ours)
+        # rd vms-e88: the call is unique in vms_cnxman_join_fsm.c and VANISHES
+        # when replaced, so the mutation is not repeatable.
+        sed -i 's|		join_reach_ours(j);|		(void)join_reach_ours; /* NEGCTL join-does-not-reach-ours */|' "$_file";;
+
+    coord-genesis-ignores-says-member)
+        # rd vms-e88: the edited line is unique in vms_cnxman_coord_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	       coord_peer_says_member(csb);|	       (0 \&\& coord_peer_says_member(csb)); /* NEGCTL coord-genesis-ignores-says-member */|' "$_file";;
+
+    join-no-member-backoff-not-cut)
+        # rd vms-e88: the guard is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (j->backoff_no_member \&\& j->cl != NULL \&\& join_member_in_sight(j)) {|	if (0 \&\& j->backoff_no_member \&\& j->cl != NULL \&\& join_member_in_sight(j)) { /* NEGCTL join-no-member-backoff-not-cut */|' "$_file";;
+
+    join-drive-stays-on-a-joiner)
+        # rd vms-e88: the guard is unique in vms_cnxman_join_fsm.c and the
+        # replacement no longer matches the pattern, so it is not repeatable.
+        sed -i 's|	if (v.best == NULL \|\| v.best_slot == j->target_csb \|\||	if (1 \|\| v.best == NULL \|\| v.best_slot == j->target_csb \|\| /* NEGCTL join-drive-stays-on-a-joiner */|' "$_file";;
+
+    csb-phase1-named-not-carried)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	if ((csb->flags \& VMS_CSB_F_SELECTED) == 0u \&\& !csb->cm_phase1_named)|	if ((csb->flags \& VMS_CSB_F_SELECTED) == 0u) /* NEGCTL csb-phase1-named-not-carried */|' "$_file";;
+
+    barrier-phase1-not-marked)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|^	barrier_phase1_mark(b);$|	(void)barrier_phase1_mark; /* NEGCTL barrier-phase1-not-marked */|' "$_file";;
+
+    barrier-phase1-not-cleared)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	cnxman_club_phase1_clear(\&b->cl->club);|	(void)b; /* NEGCTL barrier-phase1-not-cleared */|' "$_file";;
+
+    join-transition-loss-redriven)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i '/^static void join_cm_connection_gone/,/^}/ s|	if (join_transition_in_progress(j)) {|	if (0 \&\& join_transition_in_progress(j)) { /* NEGCTL join-transition-loss-redriven */|' "$_file";;
+
+    join-transition-reoffers-burst)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i '/^static void join_reoffer_burst/,/^}/ s|	if (join_transition_in_progress(j))$|	if (0 \&\& join_transition_in_progress(j)) /* NEGCTL join-transition-reoffers-burst */|' "$_file";;
+
+    glue-close-abandons-held-transition)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	if (window_over \&\& cn->barrier.coordinator_csb == idx)|	if (cn->barrier.coordinator_csb == idx) /* NEGCTL glue-close-abandons-held-transition */|' "$_file";;
+
+    csb-new-incarnation-carried)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	if (csb->cm_new_incarnation)|	if (0 \&\& csb->cm_new_incarnation) /* NEGCTL csb-new-incarnation-carried */|' "$_file";;
+
+    barrier-stalled-refuses-new-transition)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|		barrier_supersede_committed(b);\n|X|; s|^		barrier_h_open(b, m);$|		barrier_h_open(b, m);|; /^	if (b->state == (uint8_t)CNXMAN_BARRIER_STEP) {$/,/^	}$/ s|^		barrier_supersede_committed(b);$|		barrier_respond_echo(b, m); return; /* NEGCTL barrier-stalled-refuses-new-transition */|' "$_file";;
+
+    barrier-stalled-ignores-new-go)
+        # rd vms-eb3: the matched text is unique in its file and the replacement
+        # no longer matches, so the mutation is not repeatable.
+        sed -i 's|	    go.role != VMS_CM_ROLE_GO \|\| go.epoch == b->epoch) {|	    1) { /* NEGCTL barrier-stalled-ignores-new-go */|' "$_file";;
+
+    csb-dropped-spare-reads-as-loss)
+        # `	if (csb->alt_conid == conid) {` is unique in this file.
+        sed -i 's|	if (csb->alt_conid == conid) {|	if (0 \&\& csb->alt_conid == conid) { /* NEGCTL csb-dropped-spare-reads-as-loss */|' "$_file";;
+
+    pe-start-refusal-silent)
+        # The CALL is unique and VANISHES when replaced, so the mutation is not
+        # repeatable; the function stays referenced so nothing goes unused.
+        sed -i 's|vc_log_start_refused(f, vc);|(void)vc_log_start_refused; /* NEGCTL pe-start-refusal-silent */|' "$_file";;
+
+
+    codec-conndata-ack-cell-dropped)
+        # `out[12] = (uint8_t)(in->peer_ack_msg & 0xffu);` is unique here;
+        # zeroing the low byte is enough to break the cell AND the form,
+        # because out[2]/out[11] are derived from the same input.
+        sed -i 's|out\[2\] = (uint8_t)(in->peer_ack_msg != 0u ? 0x02u : 0x01u);|out[2] = 0x01u; /* NEGCTL codec-conndata-ack-cell-dropped */|' "$_file"
+        sed -i 's|out\[11\] = (uint8_t)(in->peer_ack_msg != 0u ? 0x0au : 0x08u);|out[11] = 0x08u;|' "$_file"
+        sed -i 's|out\[12\] = (uint8_t)(in->peer_ack_msg \& 0xffu);|out[12] = 0u;|' "$_file"
+        sed -i 's|out\[13\] = (uint8_t)((in->peer_ack_msg >> 8) \& 0xffu);|out[13] = 0u;|' "$_file";;
+
+    csb-resume-ignores-peer-position)
+        # `csb->cm_send_msg = peer_ack_msg;` is unique in this file.
+        sed -i 's|csb->cm_send_msg = peer_ack_msg;|/* NEGCTL csb-resume-ignores-peer-position: the position is not taken */|' "$_file";;
+
+    csb-reconnect-never-carries)
+        # `if (csb->cm_dialogue_conid == 0u)` is unique in this file.
+        sed -i 's|if (csb->cm_dialogue_conid == 0u)|if (1) /* NEGCTL csb-reconnect-never-carries: never entitled */|' "$_file";;
+
+    pe-station-filter-disarmed)
+        # `if (pe_station_accepts(f, hdr.eth_dst))` is unique in this file.
+        sed -i 's|if (pe_station_accepts(f, hdr.eth_dst))|if (1 \|\| pe_station_accepts(f, hdr.eth_dst)) /* NEGCTL pe-station-filter-disarmed */|' "$_file";;
+
+    codec-remove-nodemap-unread)
+        sed -i 's#return opcode == VMS_CM_OP_XITION_ADD || opcode == VMS_CM_OP_XITION_REM;#return opcode == VMS_CM_OP_XITION_ADD; /* NEGCTL codec-remove-nodemap-unread */#' "$_file";;
+
+    csb-dead-found-by-sysid)
+        sed -i 's#\t\tif (club->csb\[i\].state == (uint8_t)VMS_CNXMAN_CSB_DEAD)#\t\tif (0 \&\& club->csb[i].state == (uint8_t)VMS_CNXMAN_CSB_DEAD) /* NEGCTL csb-dead-found-by-sysid */#' "$_file";;
+
+    pe-late-frame-revives-channel)
+        # `if (ch->deadline_ms == 0u)` is unique in this file.
+        sed -i 's|if (ch->deadline_ms == 0u)|if (1) /* NEGCTL pe-late-frame-revives-channel: a late frame refreshes the deadline */|' "$_file";;
+
+    pe-last-gasp-once-per-port)
+        # The `return f->last_gasp_incarnation == f->id.incarnation_time;`
+        # line is unique in this file: grep -c is 1.
+        sed -i 's|return f->last_gasp_incarnation == f->id.incarnation_time;|return 1; /* NEGCTL pe-last-gasp-once-per-port: once per PORT, as before */|' "$_file";;
+
+    coord-removal-open-gate-disarmed)
+        sed -i 's|if (!coord_open_is_grounded_for(c, subject_csb, 0)) {|if (0 \&\& !coord_open_is_grounded_for(c, subject_csb, 0)) { /* NEGCTL coord-removal-open-gate-disarmed */|' "$_file";;
 
     *)
         echo "host_defects.sh: unknown defect '$_d'" >&2

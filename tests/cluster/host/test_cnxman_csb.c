@@ -119,7 +119,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_NEW, CNXMAN_CSB_EV_CONNECT_RCVD,
 	  VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_ACT_NONE, "7-24 ACCEPT" },
 	{ VMS_CNXMAN_CSB_NEW, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* CONNECT -- our initial CONNECT is outstanding */
 	{ VMS_CNXMAN_CSB_CONNECT, CNXMAN_CSB_EV_CONN_OPEN,
@@ -129,7 +130,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_CONNECT, CNXMAN_CSB_EV_DISCONNECT,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_NONE, "7-24 DISCONNECT" },
 	{ VMS_CNXMAN_CSB_CONNECT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* ACCEPT -- we are accepting their initial CONNECT */
 	{ VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_EV_CONN_OPEN,
@@ -139,7 +141,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_EV_DISCONNECT,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_NONE, "7-24 DISCONNECT" },
 	{ VMS_CNXMAN_CSB_ACCEPT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* E81: the peer's REJECT of our INITIAL connect. No reconnect window
 	 * exists and there is no membership to hold, so the CSB rests in NEW --
@@ -154,16 +157,25 @@ static const struct ladder_case ladder[] = {
 	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "7-24 WAIT / 7-30" },
 	{ VMS_CNXMAN_CSB_OPEN, CNXMAN_CSB_EV_LAST_GASP,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
+	/* rd vms-dfe: the PEER'S own DISCONNECT (p. 2-27) is the peer's ANSWER,
+	 * so it takes E81's stop-asking edge rather than p. 7-30's dial-again
+	 * one. The window starts here exactly as CONN_LOST starts it. */
+	{ VMS_CNXMAN_CSB_OPEN, CNXMAN_CSB_EV_REMOTE_DISCONNECT,
+	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-27 + 7-30 / E81" },
 	{ VMS_CNXMAN_CSB_OPEN, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* DISCONNECT -- also where a departed system's retained CSB rests */
 	{ VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD / 7-25" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD / 7-25 + af4 oracle" },
 
 	/* WAIT -- the p. 7-30 timeout is running */
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_RECNX_ATTEMPT,
 	  VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_ACT_RECONNECT, "7-24/7-30" },
+	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_REMOTE_DISCONNECT,
+	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-27 + 7-30 / E81" },
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_RECNX_EXPIRED,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-30" },
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_CONNECT_RCVD,
@@ -173,7 +185,8 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_LAST_GASP,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 	/* E81: a reject can land after the beat has already stepped the CSB
 	 * back to WAIT under the outstanding attempt. */
 	{ VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_EV_CONNECT_REJECTED,
@@ -193,24 +206,37 @@ static const struct ladder_case ladder[] = {
 	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_LAST_GASP,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
 	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 	/* E81: the peer ANSWERED our reconnect. Back to WAIT, and this ladder
 	 * stops asking for the rest of the window (proved behaviourally in
 	 * test_cnxman_recnx.c). */
 	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_CONNECT_REJECTED,
 	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-25/D12 + 7-30" },
+	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_REMOTE_DISCONNECT,
+	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-27 + 7-30 / E81" },
+	/* rd vms-1f40: the attempt's CONNECT is out -- it holds the beat --
+	 * and a connection that closes under it (lost path, unanswered verb)
+	 * is an attempt that FAILED: back to WAIT for the next one. */
+	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_CONNECT_SENT,
+	  VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_ACT_NONE, "7-24 RECONNECT" },
+	{ VMS_CNXMAN_CSB_RECONNECT, CNXMAN_CSB_EV_CONN_LOST,
+	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "7-24 WAIT, repeated" },
 
 	/* REACCEPT -- the peer is reconnecting to us */
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_CONN_OPEN,
 	  VMS_CNXMAN_CSB_OPEN, CNXMAN_CSB_ACT_NONE, "7-24 OPEN" },
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_RECNX_FAILED,
 	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "7-24 WAIT, repeated" },
+	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_REMOTE_DISCONNECT,
+	  VMS_CNXMAN_CSB_WAIT, CNXMAN_CSB_ACT_NONE, "2-27 + 7-30 / E81" },
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_RECNX_EXPIRED,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-30" },
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_LAST_GASP,
 	  VMS_CNXMAN_CSB_DISCONNECT, CNXMAN_CSB_ACT_PROPOSE_TRANSITION, "7-29" },
 	{ VMS_CNXMAN_CSB_REACCEPT, CNXMAN_CSB_EV_NEW_INCARNATION,
-	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_NONE, "7-24 DEAD" },
+	  VMS_CNXMAN_CSB_DEAD, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+	  "7-24 DEAD + af4 oracle" },
 
 	/* DEAD and LOCAL have no outgoing edge at all -- p. 7-25 deallocates a
 	 * DEAD CSB rather than reviving it, and p. 7-24 reserves LOCAL for the
@@ -244,6 +270,15 @@ static struct vms_csb *ladder_csb(uint8_t state)
 	csb->state = state;
 	csb->deadline_ms = 60000u;      /* far away: expiry must come from the event */
 	csb->next_attempt_ms = 60000u;
+	/*
+	 * THE SWEEP'S SUBJECT IS A COMMITTED MEMBER (rd vms-b36). p. 7-29's
+	 * last gasp and p. 7-30's reconnect window are both about a system that
+	 * IS in the cluster -- p. 7-49's SELECTED flag -- and the table rows
+	 * below assert what happens to one. A block the cluster never admitted
+	 * takes a DIFFERENT edge (nothing to remove, nothing proposed), proved
+	 * on its own in test_never_admitted_is_not_removed().
+	 */
+	csb->flags |= VMS_CSB_F_SELECTED;
 	return csb;
 }
 
@@ -326,6 +361,216 @@ static void test_ladder_exhaustive(void)
 	ct_check_eq_u32(ignored_cells, cells - (unsigned)(sizeof(ladder) /
 							 sizeof(ladder[0])),
 			"every other cell is an honestly ignored event");
+}
+
+/*
+ * rd vms-b36: A SYSTEM THE CLUSTER NEVER ADMITTED IS NOT REMOVED FROM IT.
+ *
+ * p. 7-49 makes SELECTED the cluster's committed membership, and p. 7-30's
+ * reconfiguration is the answer to losing contact with a system that IS in the
+ * cluster. A CSB allocated by discovery (p. 7-23 NEW: "a newly discovered
+ * remote Connection Manager") and never admitted has no membership to remove.
+ *
+ * MEASURED COST OF GETTING THIS WRONG: a real OpenVMS VAX V7.3 abandoned a
+ * second OVMX node's admission and 0.6 s later this executive proposed a
+ * cluster reconfiguration removing that same never-admitted system; the VAX
+ * took a fatal CNXMGRERR bugcheck (rd vms-b36, capture
+ * tests/lab/captures/vms-b36-cnxmgrerr-20260925/).
+ *
+ * THE TEETH: both p. 7-29's announced departure and p. 7-30's expired window
+ * are driven, on the SAME block, with SELECTED clear and then set. Revert the
+ * gate in vms_cnxman_csb.c and the four "no transition" checks go red.
+ */
+static void test_never_admitted_is_not_removed(void)
+{
+	struct vms_csb *csb;
+	enum cnxman_csb_action act;
+
+	printf("[csb] a system the cluster never admitted is not removed "
+	       "from it (pp. 7-30/7-49, rd vms-b36)\n");
+
+	/* p. 7-30: the window expires on a block that was never admitted. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	act = cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g_ops);
+	ct_check_eq_u32((uint32_t)act, (uint32_t)CNXMAN_CSB_ACT_NONE,
+			"the expired window proposes NO state transition");
+	ct_check_eq_u32(csb->state, (uint32_t)VMS_CNXMAN_CSB_DISCONNECT,
+			"...but the block still gives up: the window is over");
+	ct_check_eq_u32(csb->transitions_proposed, 0u,
+			"nothing was counted as proposed");
+	ct_check_eq_u32(csb->removals_withheld, 1u,
+			"and the withholding is COUNTED, not silent");
+
+	/* p. 7-29: an announced departure from a system never admitted. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	act = cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_LAST_GASP, &g_ops);
+	ct_check_eq_u32((uint32_t)act, (uint32_t)CNXMAN_CSB_ACT_NONE,
+			"a last gasp from a never-admitted system proposes "
+			"nothing either");
+	ct_check_eq_u32(csb->state, (uint32_t)VMS_CNXMAN_CSB_DISCONNECT,
+			"...and the connection still goes (p. 7-29)");
+	ct_check_eq_u32(csb->removals_withheld, 1u,
+			"counted once for that block too");
+
+	/* POSITIVE CONTROL: the SAME two edges on a COMMITTED member still
+	 * propose, so the gate is about membership and nothing else. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	act = cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g_ops);
+	ct_check_eq_u32((uint32_t)act,
+			(uint32_t)CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+			"CONTROL: a MEMBER's expired window still proposes "
+			"p. 7-30's reconfiguration");
+	ct_check_eq_u32(csb->removals_withheld, 0u,
+			"...and withholds nothing");
+
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
+	act = cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_LAST_GASP, &g_ops);
+	ct_check_eq_u32((uint32_t)act,
+			(uint32_t)CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+			"CONTROL: a MEMBER's last gasp still proposes "
+			"p. 7-29's reconfiguration");
+}
+
+/*
+ * rd vms-0f9 -- THE GIVE-UP LEDGER.
+ *
+ * p. 7-24's DEAD state is written in terms of knowing WHICH incarnation of a
+ * system this node stopped dealing with, and p. 7-25 deallocates the block
+ * within a second of the give-up (rd vms-dfe). So the record has to outlive
+ * the block, and the FIRST test below is the one that matters: a ledger that
+ * died with its CSB would answer "no" one beat later and the refusal that
+ * keeps a real VAX alive would never fire.
+ */
+static void test_giveup_ledger(void)
+{
+	struct vms_csb *csb;
+	vms_scs_sysid_t released[VMS_CLUB_MAX_CSB];
+	uint32_t n;
+
+	printf("[csb] the give-up ledger outlives the block (pp. 7-24/7-25, "
+	       "rd vms-0f9)\n");
+
+	/*
+	 * p. 7-30's window expires on a system this node has learned the
+	 * incarnation of. SELECTED is cleared first, because the case that
+	 * matters on the rig -- and the case p. 7-25 reclaims -- is a system
+	 * the cluster never committed (rd vms-b36), and a SELECTED block is
+	 * deliberately never reclaimed.
+	 */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xAAAAu, 1);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g_ops);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 1u,
+			"the expired window armed a record");
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xAAAAu),
+		 "...naming that system at that incarnation");
+	ct_check(!cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xBBBBu),
+		 "...and NOT at any other");
+
+	/* THE ONE THAT MATTERS: p. 7-25 deallocates the block. */
+	n = cnxman_club_reclaim_abandoned(&g_cl.club, released,
+					  (uint32_t)VMS_CLUB_MAX_CSB);
+	ct_check_eq_u32(n, 1u, "the block really was reclaimed (rd vms-dfe)");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, released[0]) == NULL,
+		 "...and is gone");
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, released[0], 0xAAAAu),
+		 "AND THE RECORD SURVIVED IT -- which is the whole point");
+
+	/* p. 7-25's other half: a new incarnation clears it, and only a
+	 * DIFFERENT one does. */
+	csb = cnxman_club_alloc_csb(&g_cl.club, released[0], 1);
+	ct_check(csb != NULL, "the system is rediscovered and rebuilt NEW");
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xAAAAu, 1);
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xAAAAu),
+		 "the SAME incarnation does not clear it");
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xCCCCu, 1);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 0u,
+			"a NEW incarnation does");
+
+	/*
+	 * ...AND SO DOES THE CLUSTER COMMITTING IT AS A MEMBER (rd vms-0f9).
+	 * MEASURED, arms D-1/D-2: both OVMX nodes reached MEMBER and the real
+	 * VAX admitted the joiner, but the node that had given up on it during
+	 * the blackout went on refusing its connection, so its own SHOW
+	 * CLUSTER was one system short of the Rule of Total Connectivity.
+	 */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xF00Du, 1);
+	cnxman_club_giveup_arm(&g_cl.club, csb);
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xF00Du),
+		 "given up on it");
+	cnxman_club_giveup_clear(&g_cl.club, csb->sysid);
+	ct_check(!cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xF00Du),
+		 "...and a committed membership clears it, at the SAME "
+		 "incarnation");
+
+	/* p. 7-29's last gasp arms one too. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xD00Du, 1);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb, CNXMAN_CSB_EV_LAST_GASP,
+				  &g_ops);
+	ct_check(cnxman_club_gave_up_on(&g_cl.club, csb->sysid, 0xD00Du),
+		 "a last gasp arms a record as well (p. 7-29)");
+
+	/* INV-6: nothing is recorded that cannot be named. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_WAIT);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_RECNX_EXPIRED, &g_ops);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 0u,
+			"INV-6: a give-up with no incarnation learned records "
+			"NOTHING, so nothing is refused on a guess");
+
+	/* An orderly close of OUR own is not a give-up on the peer. */
+	csb = ladder_csb((uint8_t)VMS_CNXMAN_CSB_OPEN);
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0xE11Eu, 1);
+	(void)cnxman_csb_dispatch(&g_cl.club, csb,
+				  CNXMAN_CSB_EV_DISCONNECT, &g_ops);
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club), 0u,
+			"an SCS disconnect this node initiated arms nothing");
+}
+
+/*
+ * ...and the bound is honest. A ledger that silently dropped the seventeenth
+ * record would refuse nothing for that system and say so nowhere.
+ */
+static void test_giveup_overflow_is_counted(void)
+{
+	uint32_t i;
+
+	printf("[csb] the ledger's bound is counted, not silent\n");
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	for (i = 0; i < (uint32_t)VMS_CLUB_MAX_GIVEUP + 3u; i++) {
+		struct vms_csb *csb =
+			cnxman_club_alloc_csb(&g_cl.club,
+					      0x000004000200ull + i, 1);
+
+		if (csb == NULL)
+			break;
+		cnxman_csb_set_incarnation(&g_cl.club, csb, 0x5000u + i, 1);
+		cnxman_club_giveup_arm(&g_cl.club, csb);
+	}
+	ct_check_eq_u32(cnxman_club_giveup_count(&g_cl.club),
+			(uint32_t)VMS_CLUB_MAX_GIVEUP,
+			"the ledger fills to its bound");
+	ct_check_eq_u32(g_cl.club.giveup_overflow, 3u,
+			"...and every record that did not fit is COUNTED");
+	ct_check(!cnxman_club_gave_up_on(&g_cl.club,
+					 0x000004000200ull +
+						 (uint32_t)VMS_CLUB_MAX_GIVEUP,
+					 0x5000u +
+						 (uint32_t)VMS_CLUB_MAX_GIVEUP),
+		 "a system that did not fit is not claimed to be given up on "
+		 "-- it is ACCEPTED");
 }
 
 /* The two absorbing states, called out by name because getting either wrong is
@@ -458,6 +703,166 @@ static void test_club_alloc_find_free(void)
 	}
 	ct_check_eq_u32(allocated, (uint32_t)VMS_CLUB_MAX_CSB - 1u,
 			"a full CSB table refuses (the local CSB holds slot 0)");
+}
+
+/*
+ * rd vms-dfe -- THE RECLAIM, AND THE FOUR THINGS IT MUST NOT TOUCH.
+ *
+ * p. 7-25 deallocates the block of a system the connection manager has given up
+ * on so that the system can be rebuilt "just as if it were joining the cluster
+ * for the first time"; p. 7-24 DEAD says the same of the old incarnation's
+ * block. Until rd vms-dfe nothing performed either, and a node whose one member
+ * had timed out could never speak to it again (the in-browser stall capture).
+ * This pins the reclaim's contract and, in the same breath, everything it is
+ * forbidden to reclaim -- because each of those is a way to lose a member or a
+ * membership to a swept table.
+ */
+static void test_club_reclaims_only_what_was_given_up(void)
+{
+	struct vms_csb *local, *gone, *dead, *selected, *open, *busy;
+	vms_scs_sysid_t released[VMS_CLUB_MAX_CSB];
+	uint32_t n, i;
+
+	printf("[club] p. 7-25: a given-up CSB is DEALLOCATED (vms-dfe)\n");
+	cluster_reset(20);
+	local = cnxman_club_init(&g_cl);
+
+	gone     = cnxman_club_alloc_csb(&g_cl.club, 0x000004000201ull, 1);
+	dead     = cnxman_club_alloc_csb(&g_cl.club, 0x000004000202ull, 1);
+	selected = cnxman_club_alloc_csb(&g_cl.club, 0x000004000203ull, 1);
+	open     = cnxman_club_alloc_csb(&g_cl.club, 0x000004000204ull, 1);
+	busy     = cnxman_club_alloc_csb(&g_cl.club, 0x000004000205ull, 1);
+
+	/* The one the p. 7-30 window really ran out on. */
+	gone->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	(void)cnxman_csb_dispatch(&g_cl.club, gone, CNXMAN_CSB_EV_CONN_LOST,
+				  &g_ops);
+	(void)cnxman_csb_dispatch(&g_cl.club, gone, CNXMAN_CSB_EV_RECNX_EXPIRED,
+				  &g_ops);
+	ct_check_eq_u32(gone->state, VMS_CNXMAN_CSB_DISCONNECT,
+			"the ladder gave that connection up");
+
+	/* p. 7-24 DEAD: the old incarnation, waiting to be deallocated. */
+	(void)cnxman_csb_dispatch(&g_cl.club, dead,
+				  CNXMAN_CSB_EV_NEW_INCARNATION, &g_ops);
+
+	/* A member the cluster has COMMITTED, whose connection then went. */
+	cnxman_csb_set_flags(selected, VMS_CSB_F_SELECTED);
+	selected->state = (uint8_t)VMS_CNXMAN_CSB_DISCONNECT;
+
+	/* A perfectly healthy connection. */
+	open->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+
+	/* An ORDERLY disconnect this node has in flight: given up on, but the
+	 * Con.ID is still claimed, so SCS can still call back about it. */
+	busy->state = (uint8_t)VMS_CNXMAN_CSB_DISCONNECT;
+	cnxman_csb_bind_connection(busy, 0x11223344u);
+
+	n = cnxman_club_reclaim_abandoned(&g_cl.club, released,
+					  (uint32_t)VMS_CLUB_MAX_CSB);
+
+	/* rd vms-af4: both blocks are FREED, but only the timed-out system is
+	 * reported released -- the DEAD block is an old incarnation of a system
+	 * that lives on in its new incarnation's block, so nothing driving
+	 * through that system may be told it is gone. */
+	ct_check_eq_u32(n, 1u, "exactly one SYSTEM is released");
+	ct_check_eq_u32(g_cl.club.csb_reclaimed, 2u,
+			"... though both blocks are freed and counted");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, 0x000004000201ull) == NULL,
+		 "the timed-out member's block is gone (p. 7-25)");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, 0x000004000202ull) == NULL,
+		 "the old incarnation's block is gone (p. 7-24 DEAD)");
+	ct_check(released[0] == 0x000004000201ull,
+		 "... NAMED by its own learned SCSSYSTEMID");
+
+	ct_check(cnxman_club_find_sysid(&g_cl.club, 0x000004000203ull) ==
+		 selected,
+		 "a SELECTED member keeps its block: only a transition may "
+		 "unmake the membership the cluster committed (p. 7-49)");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, 0x000004000204ull) == open,
+		 "an OPEN connection is not a given-up one");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, 0x000004000205ull) == busy,
+		 "a block still claiming a Con.ID is one SCS can still call "
+		 "back about");
+	ct_check(cnxman_club_local(&g_cl.club) == local,
+		 "and this node's OWN block is never swept");
+
+	/* And the slot really is free: p. 7-25's "a new CSB is created for it". */
+	ct_check(cnxman_club_alloc_csb(&g_cl.club, 0x000004000201ull, 1) != NULL,
+		 "the system can be discovered again");
+
+	/* Idempotent: a second sweep finds nothing left to do. */
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released,
+						      (uint32_t)VMS_CLUB_MAX_CSB),
+			0u, "a second sweep releases nothing");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(NULL, released, 1u), 0u,
+			"and a NULL CLUB releases nothing");
+
+	/*
+	 * A NAMED SYSTEM IS NEVER RELEASED WITHOUT BEING NAMED. The caller's
+	 * array may be a small batch (it lives on a VAX kernel stack), so the
+	 * sweep must STOP when it is full rather than free a block the caller
+	 * will never hear about -- and the caller drains the rest by calling
+	 * again.
+	 */
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	for (i = 0; i < 3u; i++) {
+		struct vms_csb *c = cnxman_club_alloc_csb(&g_cl.club,
+							  0x000004000210ull + i, 1);
+		c->state = (uint8_t)VMS_CNXMAN_CSB_DISCONNECT;
+	}
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 1u),
+			1u, "a one-entry batch names one system ...");
+	ct_check_eq_u32(g_cl.club.csb_reclaimed, 1u,
+			"... and frees exactly that one, not the other two");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 1u),
+			1u, "the caller drains the next by calling again");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 1u),
+			1u, "... and the last");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 1u),
+			0u, "then there is nothing left");
+	ct_check_eq_u32(g_cl.club.csb_reclaimed, 3u, "three in all");
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, NULL, 4u), 0u,
+			"a caller that offers nowhere to put the names releases "
+			"nothing");
+}
+
+/*
+ * Giving up on a connection RELEASES THE CLAIM TO HOLD IT (rd vms-dfe). A stale
+ * `cdt_conid` on a block the ladder has given up on reads to everything above
+ * as "the executive holds this pair's connection" -- which is how a join comes
+ * to suppress its own connect in favour of a CDT that does not exist.
+ */
+static void test_giving_up_releases_the_conid_claim(void)
+{
+	struct vms_csb *csb;
+
+	printf("[csb] give-up drops the Con.ID claim (vms-dfe)\n");
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000201ull, 1);
+
+	cnxman_csb_bind_connection(csb, 0x4e620008u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	ct_check_eq_u32(csb->cdt_conid, 0x4e620008u, "the block holds one");
+
+	(void)cnxman_csb_dispatch(&g_cl.club, csb, CNXMAN_CSB_EV_CONN_LOST,
+				  &g_ops);
+	ct_check_eq_u32(csb->cdt_conid, 0x4e620008u,
+			"a LOST connection still has a Con.ID to reconnect on "
+			"-- p. 7-30 holds the member, and the claim with it");
+
+	(void)cnxman_csb_dispatch(&g_cl.club, csb, CNXMAN_CSB_EV_RECNX_EXPIRED,
+				  &g_ops);
+	ct_check_eq_u32(csb->state, VMS_CNXMAN_CSB_DISCONNECT,
+			"the window ran out");
+	ct_check_eq_u32(csb->cdt_conid, 0u,
+			"... and the block no longer claims a connection it "
+			"does not have");
+	ct_check_eq_u32(csb->cm_send_msg, 0u,
+			"... the dialogue that died with it is discarded too "
+			"(E77): nothing is stamped from a burnt counter");
 }
 
 static void test_club_member_count(void)
@@ -651,6 +1056,348 @@ static void test_dialogue_is_per_connection(void)
 	ct_check(!cnxman_csb_dialogue_is_on(NULL, 0x4e62000fu),
 		 "and no CSB is no dialogue");
 	cnxman_csb_bind_connection(NULL, 1u);   /* safe */
+}
+
+/*
+ * rd vms-8c54 -- A RE-ESTABLISHMENT INSIDE THE WINDOW IS THE SAME CONVERSATION
+ *
+ * E77's rule above is right for a NEW conversation and wrong for a resumed
+ * one, and the oracle says which is which. Two real OpenVMS VAX V7.3 MEMBERS,
+ * one of them SIGSTOPped for 10 s and the other having closed its virtual
+ * circuit, re-established their VMS$VAXcluster connection on a brand-new
+ * Con.ID pair and CONTINUED: VAX1 10249 -> 10250 acking 14811, VAX2
+ * 14811 -> 14812 acking 10249, and each advertised its own ack in the connect
+ * data (tests/lab/captures/vms-8c54-stalled-guest-20260928/).
+ *
+ * The entitlement is narrow and every clause is a read of this block: there is
+ * a dialogue, the cluster still holds the system (p. 7-49 SELECTED), and the
+ * ladder is really in the reconnect window. A block that fails any of them
+ * gets E77's reset -- which is what keeps the E76/E77 crash closed.
+ */
+static void test_reconnect_inside_the_window_carries_the_dialogue(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-8c54: a re-establishment carries its dialogue; "
+	       "anything else does not\n");
+
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+
+	/* A member, mid-conversation, whose connection has just been lost and
+	 * whose ladder is inside the p. 7-30 window. */
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(csb, 0x4e620009u);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_heard(csb, 14811u);
+	ct_check_eq_u32(csb->cm_ack_msg, 14811u, "14811 taken from the peer");
+	/* ...and it has introduced itself on that connection (E73's mask), and
+	 * is mid-transaction with a token the PEER issued. */
+	csb->cm_advert_conid = 0x4e620009u;
+	csb->cm_advert_sent = 0x03u;
+	csb->cm_txn = 0x2222u;
+	csb->cm_token = 0x8173u;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+
+	cnxman_csb_bind_reconnect(csb, 0x4e62000fu);
+	ct_check_eq_u32(csb->cdt_conid, 0x4e62000fu,
+			"the new connection is bound through the same writer");
+	ct_check_eq_u32(csb->cm_send_msg, 2u,
+			"the send side CONTINUES -- the next origination is 3, "
+			"as VAX1's 10249 became 10250");
+	ct_check_eq_u32(csb->cm_ack_msg, 14811u,
+			"and so does the ack: this node really HAS taken 14811 "
+			"from that system, and saying 0 to a peer that holds "
+			"it as a member is the lie the VAX bugchecks on");
+	ct_check_eq_u32(cnxman_csb_dialogue_ack(csb), 14811u,
+			"...which is the cell the connect data carries");
+	ct_check_eq_u32(csb->cm_dialogues_carried, 1u, "counted as CARRIED");
+	ct_check_eq_u32(csb->cm_dialogue_resets, 0u, "and NOT as a reset");
+	ct_check_eq_u32(csb->cm_txn, 0x2222u,
+			"the transaction id CARRIES: a re-established member "
+			"does not renumber mid-conversation (oracle VAX1 ran "
+			"txn 3 across it)");
+	ct_check_eq_u32(csb->cm_token, 0x8173u,
+			"and so does the correlation token -- restarting it at "
+			"1 offers the peer a correlation it never issued, and "
+			"the VAX bugchecked on it (arm K-10)");
+	ct_check_eq_u32(csb->cm_advert_conid, 0x4e62000fu,
+			"and what this node told that system about itself "
+			"moved with it: a re-established member does NOT "
+			"re-introduce itself, and the VAX bugchecked when it "
+			"did (arm F-4)");
+	ct_check(csb->cm_advert_sent != 0u,
+		 "...with the mask intact, not cleared");
+	ct_check(cnxman_csb_dialogue_is_on(csb, 0x4e62000fu),
+		 "the dialogue is now the new connection's");
+
+	/* ---- and every way of NOT being entitled resets, E77's rule ---- */
+
+	/* (1) the cluster has removed this system: p. 7-49 SELECTED is clear. */
+	csb->flags &= (uint16_t)~VMS_CSB_F_SELECTED;
+	cnxman_csb_bind_reconnect(csb, 0x4e620021u);
+	ct_check_eq_u32(csb->cm_ack_msg, 0u,
+			"a system the cluster has REMOVED starts a new "
+			"conversation, whatever the caller asked for");
+	ct_check_eq_u32(csb->cm_dialogue_resets, 1u, "counted as a reset");
+
+	/* (2) the ladder is not in the window at all -- a block parked in
+	 *     DISCONNECT has given this connection up (p. 7-24). */
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(csb, 0x4e620030u);
+	cnxman_csb_dialogue_heard(csb, 77u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_DISCONNECT;
+	cnxman_csb_bind_reconnect(csb, 0x4e620031u);
+	ct_check_eq_u32(csb->cm_ack_msg, 0u,
+			"a block that has given the connection up starts over");
+
+	/* (3) the first bind of all has nothing to carry. */
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000102ull, 1);
+	ct_check(csb != NULL, "a second CSB");
+	if (csb == NULL)
+		return;
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(csb, 0x4e620040u);
+	ct_check_eq_u32(csb->cm_send_msg, 0u,
+			"a first bind starts a dialogue, it does not carry one");
+	ct_check_eq_u32(csb->cm_dialogues_carried, 0u, "and is not counted");
+	ct_check_eq_u32(cnxman_csb_dialogue_ack(NULL), 0u,
+			"no block has taken nothing from anybody");
+	cnxman_csb_bind_reconnect(NULL, 1u);   /* safe */
+}
+
+/*
+ * rd vms-eb3, oracle F5/F6: a real V7.3 joiner frozen between its Phase-1
+ * answer (cat-0x81 op-0x09) and the coordinator's GO re-established BOTH
+ * members with its dialogue carried (op-0x0b smsg 95 / ack 266 on the new
+ * connection) -- before p. 7-42's Phase 2 had set SELECTED on anybody. The
+ * entitlement at Phase 1 is `cm_phase1_named`, written by the barrier from the
+ * proposal (the coordinator's own block and every block its nodemap names),
+ * and it ends with the transition.
+ */
+static void test_a_system_in_an_answered_transition_carries_its_dialogue(void)
+{
+	struct vms_csb *coord, *member, *other, *local;
+
+	printf("-- rd vms-eb3: a system named in a transition this node "
+	       "answered carries its dialogue before Phase 2\n");
+	(void)cnxman_club_init(&g_cl);
+	local = cnxman_club_alloc_csb(&g_cl.club, 0x000004000105ull, 1);
+	coord = cnxman_club_alloc_csb(&g_cl.club, 0x000004000103ull, 1);
+	member = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	other = cnxman_club_alloc_csb(&g_cl.club, 0x000004000104ull, 1);
+	ct_check(local && coord && member && other, "four CSBs");
+	if (!local || !coord || !member || !other)
+		return;
+	local->flags |= VMS_CSB_F_LOCAL;
+	cnxman_csb_set_csid(member, 0x00010002u);   /* slot 2 */
+	cnxman_csb_set_csid(other, 0x00010005u);    /* slot 5 */
+
+	/* The coordinator's proposal came in on `coord`'s CLUB slot and its
+	 * nodemap names slots 1..3 -- the member, not `other`. */
+	cnxman_club_phase1_mark(&g_cl.club, 1, 0x0eu, 8u,
+				(int32_t)cnxman_club_csb_index(&g_cl.club, coord));
+	ct_check_eq_u32(coord->cm_phase1_named, 1u,
+			"the coordinator's own block is named, CSID or not");
+	ct_check_eq_u32(member->cm_phase1_named, 1u,
+			"a block whose learned CSID the nodemap names is named");
+	ct_check_eq_u32(other->cm_phase1_named, 0u,
+			"a block the nodemap does not name is not");
+	ct_check_eq_u32(local->cm_phase1_named, 0u, "and this node is never");
+
+	/* negctl: csb-phase1-named-not-carried */
+	coord->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(coord, 0x72290009u);
+	cnxman_csb_dialogue_sent(coord);
+	cnxman_csb_dialogue_heard(coord, 266u);
+	coord->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(coord, 0x722a0009u);
+	ct_check_eq_u32(coord->cm_ack_msg, 266u,
+			"not SELECTED yet, but in the answered transition: the "
+			"re-established connection carries the ack (F5: 266)");
+	ct_check_eq_u32(coord->cm_send_msg, 1u, "and the send side");
+	ct_check_eq_u32(coord->cm_dialogues_carried, 1u, "counted as CARRIED");
+
+	/* Control: `other` is not in the transition and is not SELECTED. */
+	other->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(other, 0x11u);
+	cnxman_csb_dialogue_heard(other, 40u);
+	other->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(other, 0x12u);
+	ct_check_eq_u32(other->cm_ack_msg, 0u,
+			"a system outside the transition starts over (E77)");
+
+	/* The transition ended: the entitlement goes with it. */
+	cnxman_club_phase1_clear(&g_cl.club);
+	ct_check_eq_u32(coord->cm_phase1_named + member->cm_phase1_named, 0u,
+			"cleared everywhere when the transition ends");
+	coord->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(coord, 0x722b0009u);
+	ct_check_eq_u32(coord->cm_ack_msg, 0u,
+			"and a later loss, outside any transition and not "
+			"SELECTED, starts over");
+
+	/* An unlearned CSID is not guessed into the transition, and a proposal
+	 * without a nodemap names only its coordinator. */
+	(void)cnxman_club_init(&g_cl);
+	coord = cnxman_club_alloc_csb(&g_cl.club, 0x000004000103ull, 1);
+	member = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	if (coord == NULL || member == NULL)
+		return;
+	cnxman_club_phase1_mark(&g_cl.club, 1, 0xffu, 8u, 0);
+	ct_check_eq_u32(member->cm_phase1_named, 0u,
+			"a block with no learned CSID is not matched to a slot");
+	cnxman_club_phase1_mark(&g_cl.club, 0, 0u, 8u, -1);
+	ct_check_eq_u32(coord->cm_phase1_named, 0u,
+			"no nodemap and no coordinator slot: nobody is named");
+	cnxman_club_phase1_mark(NULL, 1, 1u, 8u, 0);   /* safe */
+	cnxman_club_phase1_clear(NULL);                /* safe */
+}
+
+/*
+ * rd vms-eb3, rig arm F-13: a joiner stalled past RECNXINTERVAL was removed,
+ * took CLUEXIT and came back as a NEW INCARNATION. The OVMX member still held
+ * its old block in the reconnect window, re-established the new incarnation's
+ * connection as the OLD conversation -- carried counters and the "already
+ * introduced" mask -- never re-introduced itself, and the joiner waited for
+ * its PARAMS forever. p. 7-24 DEAD / p. 7-25: a new incarnation is dealt with
+ * "just as if it were joining the cluster for the first time".
+ */
+static void test_a_new_incarnation_is_a_new_conversation(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-eb3: a system back as a new incarnation starts a new "
+	       "conversation, however much the old one was entitled to carry\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0x00a1b2c3d4e5f601ull, 1);
+	cnxman_csb_bind_connection(csb, 0x30e90010u);
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_heard(csb, 300u);
+	csb->cm_advert_conid = 0x30e90010u;
+	csb->cm_advert_sent = 0x03u;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+
+	/* Control: the same incarnation re-establishes and carries. */
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0x00a1b2c3d4e5f601ull, 1);
+	cnxman_csb_bind_reconnect(csb, 0x30e90011u);
+	ct_check_eq_u32(csb->cm_ack_msg, 300u,
+			"the SAME incarnation re-established: carried");
+
+	/* negctl: csb-new-incarnation-carried */
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0x00a1b2c3d4e5f702ull, 1);
+	ct_check_eq_u32(csb->cm_new_incarnation, 1u,
+			"a different incarnation on the circuit is recorded");
+	cnxman_csb_bind_reconnect(csb, 0x30e90029u);
+	ct_check_eq_u32(csb->cm_ack_msg + csb->cm_send_msg, 0u,
+			"a NEW incarnation is a new conversation: 1/0 (p. 7-25)");
+	ct_check(csb->cm_advert_conid != 0x30e90029u,
+		 "and nothing is recorded as already said to it -- this node "
+		 "introduces itself again");
+	ct_check_eq_u32(csb->cm_new_incarnation, 0u,
+			"the fresh bind ends the record");
+
+	/* The first incarnation ever learned is not a change. */
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000102ull, 1);
+	if (csb == NULL)
+		return;
+	cnxman_csb_set_incarnation(&g_cl.club, csb, 0x1234ull, 1);
+	ct_check_eq_u32(csb->cm_new_incarnation, 0u,
+			"learning the first incarnation is not a new one");
+}
+
+/*
+ * rd vms-1f40 -- A CARRIED DIALOGUE RESUMES FROM THE PEER'S POSITION, NOT ITS
+ * OWN.
+ *
+ * Carrying the counter is only half the rule. Anything this node sent on the
+ * connection that DIED was never delivered, so continuing from its own last
+ * send leaves a HOLE in a stream spec sec 4(j) makes strictly monotonic and has
+ * the peer acknowledge by highest CONTIGUOUS number.
+ *
+ * MEASURED, rig arm M2-5, in four frames: this node sent send=103 TWICE on the
+ * old Con.ID pair; the real OpenVMS VAX V7.3 then re-established and sent
+ * ack=102 on the NEW pair -- it had never seen 103 -- and this node's next
+ * frame carried send=104. The VAX bugchecked CNXMGRERR.
+ */
+static void test_a_carried_dialogue_resumes_where_the_peer_got_to(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-1f40: a carried dialogue resumes from the PEER's "
+	       "acknowledged position\n");
+
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(csb, 0x4e620009u);
+
+	/* 103 sent, and the arm's own numbers: the peer only ever took 102. */
+	while (csb->cm_send_msg < 103u)
+		cnxman_csb_dialogue_sent(csb);
+	ct_check_eq_u32(csb->cm_send_msg, 103u, "103 sent on the old pair");
+
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(csb, 0x4e62000fu);
+	ct_check_eq_u32(csb->cm_send_msg, 103u,
+			"the carry is intact across the rebind");
+
+	/* The peer's FIRST frame on the re-established connection says where it
+	 * really got to. */
+	cnxman_csb_dialogue_acked(csb, 102u);
+	ct_check_eq_u32(csb->cm_send_msg, 102u,
+			"...and this node resumes THERE, so its next "
+			"origination is 103 -- the number the peer is waiting "
+			"for, not the 104 that bugchecked the VAX");
+	ct_check_eq_u32(csb->cm_resumes, 1u, "counted as a resume");
+
+	cnxman_csb_dialogue_sent(csb);
+	ct_check_eq_u32(csb->cm_send_msg, 103u, "and it really originates 103");
+
+	/*
+	 * ONCE, AND NEVER AGAIN. On a healthy connection the peer's ack lags
+	 * this node's send by whatever is in flight, and a rewind on every
+	 * frame would walk the counter backwards over live traffic.
+	 */
+	cnxman_csb_dialogue_sent(csb);
+	cnxman_csb_dialogue_sent(csb);
+	ct_check_eq_u32(csb->cm_send_msg, 105u, "two more sent, in flight");
+	cnxman_csb_dialogue_acked(csb, 103u);
+	ct_check_eq_u32(csb->cm_send_msg, 105u,
+			"a LATER ack does not walk the counter back: the "
+			"resume is armed for exactly one frame");
+	ct_check_eq_u32(csb->cm_resumes, 1u, "and is not counted again");
+
+	/* NEVER FORWARD, either: a peer cannot make this node skip a number it
+	 * has already sent, which is the same hole from the other side. */
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;
+	cnxman_csb_bind_reconnect(csb, 0x4e620021u);
+	cnxman_csb_dialogue_acked(csb, 9999u);
+	ct_check_eq_u32(csb->cm_send_msg, 105u,
+			"an ack AHEAD of this node's own send is refused");
+	ct_check_eq_u32(csb->cm_resumes, 1u, "and counts as no resume");
+
+	cnxman_csb_dialogue_acked(NULL, 1u);   /* safe */
 }
 
 /*
@@ -857,21 +1604,258 @@ static void test_null_safety(void)
 	ct_check(cnxman_csb_is_member(NULL) == 0, "is_member(NULL) is 0");
 }
 
+/*
+ * rd vms-1f40: TWO CONNECTIONS FOR ONE PAIR, and the one the peer keeps.
+ *
+ * Rig arm Q-2, in order: this node's reconnect CONNECT went out on ...11; the
+ * real VAX's own CONNECT was accepted and opened on ...12 FIRST; then the VAX
+ * accepted ...11 too; then it DISCONNECTED ...12 -- the one it had initiated --
+ * and kept ...11. The block had bound ...12 last, read the drop as the peer
+ * hanging up, stopped asking and removed the VAX. 4 crossings of 4 on the rig
+ * went this way: the VAX keeps the connection THIS node initiated.
+ */
+static void test_two_connections_follow_the_one_the_peer_keeps(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-1f40: two connections for one pair\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the peer");
+	if (csb == NULL)
+		return;
+	csb->flags |= VMS_CSB_F_SELECTED;
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_bind_connection(csb, 0x10u);
+	while (csb->cm_send_msg < 40u)
+		cnxman_csb_dialogue_sent(csb);
+
+	/* the break, and this node's own attempt */
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_RECONNECT;
+	cnxman_csb_bind_reconnect(csb, 0x11u);
+	cnxman_csb_note_attempt(csb, 0x11u);
+
+	/* the PEER's connect is accepted and opens first: it is the block's */
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_REACCEPT;
+	ct_check_eq_u32(cnxman_csb_second_open(csb, 0x12u, 0),
+			CNXMAN_CSB_CONN_BIND,
+			"a block not yet OPEN binds the first connection to open");
+	cnxman_csb_bind_reconnect(csb, 0x12u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+
+	/* ...then this node's own attempt opens */
+	ct_check_eq_u32(cnxman_csb_second_open(csb, 0x11u, 1),
+			CNXMAN_CSB_CONN_SECOND,
+			"its own attempt opening on an OPEN block is the pair's "
+			"SECOND connection, not a new block event");
+	ct_check_eq_u32(csb->cdt_conid, 0x11u,
+			"the block runs on the one THIS node initiated -- the one "
+			"the real VAX kept in 4 crossings of 4");
+	ct_check_eq_u32(csb->alt_conid, 0x12u, "the other is the spare");
+	ct_check_eq_u32(csb->cm_send_msg, 40u,
+			"and the dialogue is carried, never restarted");
+	ct_check_eq_u32(csb->second_conns, 1u, "counted");
+	ct_check(cnxman_csb_holds_conid(csb, 0x11u) &&
+		 cnxman_csb_holds_conid(csb, 0x12u),
+		 "traffic on EITHER belongs to this system");
+
+	/* the peer drops the redundant one: the pair stands */
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x12u, 1), 1u,
+			"the peer closing the spare is NOT a loss of the system");
+	ct_check_eq_u32(csb->alt_conid, 0u, "the spare is gone");
+	ct_check_eq_u32(csb->cdt_conid, 0x11u, "the kept one is still the block's");
+
+	/* ---- the other order: the peer keeps the one the block did NOT run on ---- */
+	csb->alt_conid = 0x13u;
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x11u, 1), 1u,
+			"the peer closing the one the block ran on, while the "
+			"pair holds another, is still NOT a loss");
+	ct_check_eq_u32(csb->cdt_conid, 0x13u, "the block moves to the one kept");
+	ct_check_eq_u32(csb->second_promotions, 1u, "and the move is counted");
+	ct_check_eq_u32(csb->cm_send_msg, 40u, "dialogue carried across the move");
+
+	/* ---- a lost path takes both; one connection alone is a real loss ---- */
+	csb->alt_conid = 0x14u;
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x13u, 0), 0u,
+			"a lost PATH is a loss: both rode the same circuit");
+	ct_check_eq_u32(csb->alt_conid, 0u, "and the spare goes with it");
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x13u, 1), 0u,
+			"the peer closing the ONLY connection is the ordinary "
+			"remote disconnect");
+
+	/* an extra attempt that fails while the block runs on another */
+	cnxman_csb_bind_reconnect(csb, 0x20u);
+	cnxman_csb_note_attempt(csb, 0x21u);
+	ct_check_eq_u32(cnxman_csb_second_closed(csb, 0x21u, 0), 1u,
+			"an attempt that failed while the block runs on another "
+			"connection is not the block's loss");
+	ct_check_eq_u32(csb->attempt_conid, 0u, "and is forgotten");
+
+	ct_check_eq_u32(cnxman_csb_second_open(NULL, 1u, 1),
+			CNXMAN_CSB_CONN_BIND, "NULL is safe");
+	ct_check_eq_u32(cnxman_csb_second_closed(NULL, 1u, 1), 0u, "NULL is safe");
+}
+
+
+/*
+ * rd vms-e88: the SAME crossing at a FIRST join, where the block is not
+ * SELECTED and so carries no dialogue. The joiner dials (its own attempt,
+ * noted by the glue's cnxman_jop_connect), the member's own connect opens
+ * first and is bound, then the joiner's opens: the block goes back to the
+ * joiner's -- the one the real VAX answered its PARAMS on in rig arms T-15 and
+ * M-9 -- and, a first join having no conversation to carry, opens a fresh one.
+ */
+static void test_a_first_join_crossing_runs_on_the_joiners_connect(void)
+{
+	struct vms_csb *csb;
+
+	printf("-- rd vms-e88: a first-join crossing runs on the joiner's own\n");
+	(void)cnxman_club_init(&g_cl);
+	csb = cnxman_club_alloc_csb(&g_cl.club, 0x000004000101ull, 1);
+	ct_check(csb != NULL, "a CSB for the member");
+	if (csb == NULL)
+		return;
+	cnxman_csb_bind_connection(csb, 0x31u);   /* the joiner's own dial */
+	cnxman_csb_note_attempt(csb, 0x31u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_CONNECT;
+
+	ct_check_eq_u32(cnxman_csb_second_open(csb, 0x32u, 0),
+			CNXMAN_CSB_CONN_BIND,
+			"the member's connect opens first: bound");
+	cnxman_csb_bind_reconnect(csb, 0x32u);
+	csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	cnxman_csb_dialogue_sent(csb);             /* MODEL went out on it */
+
+	ct_check_eq_u32(cnxman_csb_second_open(csb, 0x31u, 1),
+			CNXMAN_CSB_CONN_SECOND,
+			"the joiner's own then opens: the pair's second");
+	ct_check_eq_u32(csb->cdt_conid, 0x31u,
+			"and the block runs on the joiner's own");
+	ct_check_eq_u32(csb->alt_conid, 0x32u, "the member's is the spare");
+	ct_check_eq_u32(csb->cm_send_msg, 0u,
+			"a first join carries no dialogue: a fresh one opens");
+}
+
+/*
+ * rd vms-af4: A MEMBER CAME BACK AS A NEW INCARNATION.
+ *
+ * The oracle (tests/lab/captures/vms-af4-unclean-return-20261001/oracle/): a
+ * real OpenVMS VAX V7.3 member SIGKILLed and rebooted inside its survivor's
+ * reconnect window. The survivor accepted the new incarnation's connect as a
+ * NEW connection and removed the old incarnation 4 ms later. Here: the old
+ * block takes p. 7-24 DEAD, gives its connection up, and asks for its removal
+ * (or defers to a transition already running); it stops answering to the
+ * SCSSYSTEMID, so p. 7-25's fresh block is what the system is found as from
+ * now on; and once a transition has deselected it, the old block is reclaimed.
+ */
+static void test_a_new_incarnation_retires_the_old_block(void)
+{
+	struct vms_csb *old, *fresh;
+	enum cnxman_csb_action act;
+	const vms_scs_sysid_t sid = 0x000004000207ull;
+	vms_scs_sysid_t released[4];
+	uint32_t reclaimed;
+
+	printf("[csb] rd vms-af4: a member back as a new incarnation\n");
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	old = cnxman_club_alloc_csb(&g_cl.club, sid, 1);
+	cnxman_csb_set_csid(old, 0x00010003u);
+	cnxman_csb_set_flags(old, VMS_CSB_F_SELECTED | VMS_CSB_F_MEMBER);
+	old->state = (uint8_t)VMS_CNXMAN_CSB_WAIT;   /* in its 7-30 window */
+	cnxman_csb_bind_connection(old, 0x5cd30006u);
+
+	act = cnxman_csb_dispatch(&g_cl.club, old,
+				  CNXMAN_CSB_EV_NEW_INCARNATION, &g_ops);
+	ct_check_eq_u32(old->state, VMS_CNXMAN_CSB_DEAD, "the old block is DEAD");
+	ct_check_eq_u32(act, CNXMAN_CSB_ACT_PROPOSE_TRANSITION,
+			"and the cluster's member is proposed for removal at once, "
+			"not after RECNXINTERVAL (the oracle's 4 ms)");
+	ct_check_eq_u32(old->cdt_conid, 0u,
+			"the old incarnation's connection claim is released");
+	ct_check((old->flags & VMS_CSB_F_MEMBER) == 0u &&
+		 (old->flags & VMS_CSB_F_SELECTED) != 0u,
+		 "MEMBER cleared, SELECTED left to the transition (p. 7-49)");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, sid) == NULL,
+		 "the SCSSYSTEMID no longer finds the old incarnation");
+	ct_check(cnxman_club_find_csid(&g_cl.club, 0x00010003u) == old,
+		 "...which the transition still names by its CSID");
+
+	fresh = cnxman_club_alloc_csb(&g_cl.club, sid, 1);
+	ct_check(fresh != NULL && fresh != old,
+		 "p. 7-25: a fresh block is built for the new incarnation");
+	ct_check(cnxman_club_find_sysid(&g_cl.club, sid) == fresh,
+		 "and it is what the system is found as from now on");
+
+	reclaimed = g_cl.club.csb_reclaimed;
+	(void)cnxman_club_reclaim_abandoned(&g_cl.club, released, 4);
+	ct_check_eq_u32(g_cl.club.csb_reclaimed - reclaimed, 0,
+			"a still-SELECTED dead block is not reclaimed");
+	cnxman_csb_clear_flags(old, VMS_CSB_F_SELECTED);   /* the transition */
+	ct_check_eq_u32(cnxman_club_reclaim_abandoned(&g_cl.club, released, 4),
+			0, "once the removal deselects it, it is deallocated -- "
+			"and no SYSTEM is reported released: the system lives on "
+			"as its new incarnation");
+	ct_check_eq_u32(g_cl.club.csb_reclaimed - reclaimed, 1,
+			"...the old incarnation's block alone was freed");
+	ct_check(!old->in_use, "and its slot is free");
+	ct_check(fresh->in_use && fresh->state == (uint8_t)VMS_CNXMAN_CSB_NEW,
+		 "and the new incarnation's block is untouched");
+
+	/* A transition already running removes it: defer, as a last gasp does. */
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	old = cnxman_club_alloc_csb(&g_cl.club, sid, 1);
+	cnxman_csb_set_flags(old, VMS_CSB_F_SELECTED);
+	old->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	g_cl.club.transition_active = 1u;
+	act = cnxman_csb_dispatch(&g_cl.club, old,
+				  CNXMAN_CSB_EV_NEW_INCARNATION, &g_ops);
+	ct_check_eq_u32(act, CNXMAN_CSB_ACT_NONE,
+			"a transition already running: deferred to it");
+
+	/* A block the cluster never admitted has nothing to remove. */
+	cluster_reset(20);
+	(void)cnxman_club_init(&g_cl);
+	old = cnxman_club_alloc_csb(&g_cl.club, sid, 1);
+	old->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+	act = cnxman_csb_dispatch(&g_cl.club, old,
+				  CNXMAN_CSB_EV_NEW_INCARNATION, &g_ops);
+	ct_check_eq_u32(act, CNXMAN_CSB_ACT_NONE,
+			"never admitted: dead, nothing proposed");
+	reclaimed = g_cl.club.csb_reclaimed;
+	(void)cnxman_club_reclaim_abandoned(&g_cl.club, released, 4);
+	ct_check_eq_u32(g_cl.club.csb_reclaimed - reclaimed, 1,
+			"and reclaimed on the next sweep");
+}
+
 int main(void)
 {
 	printf("=== test_cnxman_csb: the CLUB/CSB model + the ten-state ladder ===\n");
 	test_state_vocabulary();
 	test_ladder_exhaustive();
+	test_never_admitted_is_not_removed();
+	test_giveup_ledger();
+	test_giveup_overflow_is_counted();
 	test_absorbing_states();
 	test_club_init();
 	test_club_recnxinterval_default();
 	test_club_alloc_find_free();
+	test_club_reclaims_only_what_was_given_up();
+	test_giving_up_releases_the_conid_claim();
 	test_club_member_count();
 	test_learn_local_csid();
 	test_projection();
 	test_dialogue_is_per_connection();
 	test_reconnect_dialogue_never_carries_the_old_ack();
+	test_reconnect_inside_the_window_carries_the_dialogue();
+	test_a_system_in_an_answered_transition_carries_its_dialogue();
+	test_a_new_incarnation_is_a_new_conversation();
+	test_a_carried_dialogue_resumes_where_the_peer_got_to();
+	test_two_connections_follow_the_one_the_peer_keeps();
+	test_a_first_join_crossing_runs_on_the_joiners_connect();
 	test_correlation_pair_is_maintained();
+	test_a_new_incarnation_retires_the_old_block();
 	test_null_safety();
 	return ct_summary("test_cnxman_csb");
 }

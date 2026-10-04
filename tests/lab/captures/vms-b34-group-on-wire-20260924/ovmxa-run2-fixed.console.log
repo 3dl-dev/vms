@@ -1,0 +1,1014 @@
+=== booted-OVMX node: SCSNODE=OVMXA SCSSYSTEMID=1987 tap=tap6 mac=52:54:00:00:00:0a qemu=qemu-system-x86_64 (TCG) ===
+[node] recorded CAP_NET_RAW evidence -> /lab/b34-repro/logs/ovmxa-fix.caps:
+[node]   # CAP_NET_RAW evidence for booted-OVMX node pid=7555 (OVMX_DROP_NET_RAW=1)
+[node]   CapInh:	0000000000000000
+[node]   CapPrm:	00000000a80415fb
+[node]   CapEff:	00000000a80415fb
+[node]   CapBnd:	00000000a80415fb
+[node]   CapAmb:	0000000000000000
+[node]   verdict: (e) PASS -- CAP_NET_RAW denied to the booted node (CapEff=00000000a80415fb CapBnd=00000000a80415fb, net_raw clear):
+[node]                        a userspace AF_PACKET raw open would EPERM, so a join proves the executive did it
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [node] SYSBOOT> reached
+SET SCSNODE OVMXA
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXA
+SYSBOOT> SET SCSSYSTEMID 1987
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1987
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 2
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 2
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    24-SEP-2026 16:20:47.26
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXA set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   15.385036] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   15.392040] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 24-SEP-2026 16:20:48.29
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: SYSTEM
+Password: [   18.921313] %PEA0, channel verified
+[   18.924281] %PEA0, virtual circuit open
+[   19.214702] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+[   19.472775] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+[   19.486402] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   19.489990] %CNXMAN, the executive already holds this pair's VMS$VAXcluster connection: this node opens none of its own and drives its admission on that one
+[   19.493755] %CNXMAN, adopting the VMS$VAXcluster connection the executive holds for this member
+[   19.501973] %CNXMAN, the cluster assigned this node a cluster system id
+[   19.505409] %CNXMAN, the cluster assigned this node a cluster system id
+[   19.510414] %CNXMAN, no coordinator CSID seen yet: this node's CSID was NOT learned
+[   19.578704] %CNXMAN, this node is a member of the cluster
+[   19.580931] %CNXMAN, lock directory weight vector not rebuilt: a member is not running this implementation and its directory weights cannot be read
+[   19.585656] %CNXMAN, VAXcluster state transition in progress
+[   19.587115] %CNXMAN, this node is now a VAXcluster member
+[   19.588541] %CNXMAN, system 00000000000007c3 was added to the cluster
+[   19.590042] %CNXMAN, system 00000000000007c5 was added to the cluster
+[   19.592373] %CNXMAN, transaction close not answered: this node holds no value for a required field
+[   19.677107] %CNXMAN, completed VAXcluster state transition
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 877 (errors 0), rx 553 (dropped: nobuf 0, badclass 0)
+$ [   24.503916] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+WRITE SYS$OUTPUT "OVMX-POLL-0"
+OVMX-POLL-0
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:21:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     342    527        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 900 (errors 0), rx 574 (dropped: nobuf 0, badclass 0)
+$ [   47.236070] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+WRITE SYS$OUTPUT "OVMX-POLL-20"
+OVMX-POLL-20
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:21:21
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     350    536        0            0
+$ [   55.556942] %DLM, refusing a lock message from a system that has not proved it runs this implementation
+SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 943 (errors 0), rx 616 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-40"
+OVMX-POLL-40
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:21:42
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     350    537        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 970 (errors 0), rx 642 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-60"
+OVMX-POLL-60
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:22:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     358    545        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1014 (errors 0), rx 681 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-80"
+OVMX-POLL-80
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:22:24
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     366    553        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1055 (errors 0), rx 718 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-100"
+OVMX-POLL-100
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:22:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     366    553        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1082 (errors 0), rx 744 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-120"
+OVMX-POLL-120
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:23:06
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     374    561        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1124 (errors 0), rx 783 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-140"
+OVMX-POLL-140
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:23:27
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     382    569        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1168 (errors 0), rx 822 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-160"
+OVMX-POLL-160
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:23:48
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     382    569        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1195 (errors 0), rx 849 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-180"
+OVMX-POLL-180
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:24:09
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     390    577        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1236 (errors 0), rx 886 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-200"
+OVMX-POLL-200
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:24:30
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     396    583        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1278 (errors 0), rx 924 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-220"
+OVMX-POLL-220
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:24:51
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     398    585        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1307 (errors 0), rx 952 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-240"
+OVMX-POLL-240
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:25:12
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     406    593        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1348 (errors 0), rx 990 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-260"
+OVMX-POLL-260
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:25:33
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     412    599        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1390 (errors 0), rx 1028 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-280"
+OVMX-POLL-280
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:25:54
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     414    601        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1417 (errors 0), rx 1055 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-300"
+OVMX-POLL-300
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:26:15
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     422    609        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1461 (errors 0), rx 1095 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-320"
+OVMX-POLL-320
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:26:36
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     422    609        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1503 (errors 0), rx 1134 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-340"
+OVMX-POLL-340
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:26:57
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     430    617        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1529 (errors 0), rx 1159 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-360"
+OVMX-POLL-360
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:27:18
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     438    625        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1571 (errors 0), rx 1197 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-380"
+OVMX-POLL-380
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:27:39
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     438    625        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1615 (errors 0), rx 1237 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-400"
+OVMX-POLL-400
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:28:00
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     446    633        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1641 (errors 0), rx 1261 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-420"
+OVMX-POLL-420
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:28:21
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     454    641        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1684 (errors 0), rx 1301 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-440"
+OVMX-POLL-440
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:28:42
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     454    641        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1725 (errors 0), rx 1339 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-460"
+OVMX-POLL-460
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:29:03
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     462    649        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1754 (errors 0), rx 1366 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-480"
+OVMX-POLL-480
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:29:24
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     470    657        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1796 (errors 0), rx 1406 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-500"
+OVMX-POLL-500
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:29:45
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     470    657        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1837 (errors 0), rx 1444 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-520"
+OVMX-POLL-520
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:30:06
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     478    665        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1864 (errors 0), rx 1470 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-540"
+OVMX-POLL-540
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:30:27
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     486    673        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1908 (errors 0), rx 1511 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-560"
+OVMX-POLL-560
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:30:48
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     486    673        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1950 (errors 0), rx 1549 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-POLL-580"
+OVMX-POLL-580
+$ SHOW CLUSTER
+View of Cluster from system ID 1987 node: OVMXA    24-SEP-2026 16:31:09
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXA  | 00010002 | VMX V0.7        | MEMBER           |
+| 1989   | 00010001 |                 | MEMBER           |
++---------------------------------------------------------------+
+$ SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     494    681        0            0
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 1977 (errors 0), rx 1576 (dropped: nobuf 0, badclass 0)
+$ [node] join-poll held the node LIVE ~600s (full window; teardown is gated by the VAX-side STATUS==MEMBER verdict, not an OVMX self-report)
+SHOW CLUSTER/CIRCUITS
+Circuits
+
+  Remote system ID  State  Send   Recv   Unacked  Retransmits
+  00000000000007C5      3     502    689        0            0
+$ SHOW CLUSTER/CONNECTIONS
+SCS connections
+
+  Local SYSAP      Remote SYSAP     Local Con.ID Remote Con.ID Credit S/R  State
+  SCS$DIRECTORY                     E7ED0001                     0/0      1
+  VMS$VAXcluster                    E7ED0002                     0/0      1
+  VMS$DISK_CL_DRVR                  E7ED0003                     0/0      1
+  VMS$VAXcluster   VMS$VAXcluster   E7ED0005     D3640009       12/8      6
+$ WRITE SYS$OUTPUT "OVMX-CNXTRACE-BEGIN"
+OVMX-CNXTRACE-BEGIN
+$ RUN SYS$SYSTEM:CNXTRACE.EXE
+%CNXTRACE-I-BEGIN, CNXMAN join transition ring (executive-resident, read-only)
+%CNXTRACE-I-STATE, join state=MEMBER failure=none ignored_events=23 recording=yes
+%CNXTRACE-I-COUNT, held=102 recorded=102 dropped=0
+CNXTRACE seq=00000000 t=00019200 kind=ARRIVAL  state=IDLE->IDLE ev=- detail=accepted rx=- rc=0 aux=0x000007c5
+CNXTRACE seq=00000001 t=00019201 kind=ARRIVAL  state=IDLE->IDLE ev=- detail=cm-accept rx=- rc=0 aux=0xe7ed0005
+CNXTRACE seq=00000002 t=00019206 kind=DISPATCH state=IDLE->IDLE ev=CM_ACCEPTED detail=fired rx=consumed rc=0 aux=0x000007c5
+CNXTRACE seq=00000003 t=00019206 kind=DISPATCH state=IDLE->IDLE ev=CDT_OPEN detail=EMPTY-CELL rx=consumed rc=0 aux=0xe7ed0005
+CNXTRACE seq=00000004 t=00019207 kind=DISPATCH state=IDLE->IDLE ev=RX_CONFIG detail=fired rx=consumed rc=0 aux=0x00000000 rep=2 tlast=00019208
+CNXTRACE seq=00000005 t=00019463 kind=DISPATCH state=IDLE->DIR_ROUND ev=START detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000006 t=00019468 kind=EMIT     state=DIR_ROUND->DIR_ROUND ev=- detail=SENT rx=- rc=0 aux=0xe7ed0005 cat=0x01 op=0x14
+CNXTRACE seq=00000007 t=00019468 kind=EMIT     state=DIR_ROUND->DIR_ROUND ev=- detail=SENT rx=- rc=0 aux=0xe7ed0005 cat=0x01 op=0x01
+CNXTRACE seq=00000008 t=00019471 kind=DISPATCH state=DIR_ROUND->DIR_ROUND ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000009 t=00019472 kind=DISPATCH state=DIR_ROUND->MSCP_CONNECT ev=DIR_RESULT detail=fired rx=consumed rc=0 aux=0x00000001
+CNXTRACE seq=00000010 t=00019472 kind=ARRIVAL  state=MSCP_CONNECT->MSCP_CONNECT ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0007
+CNXTRACE seq=00000011 t=00019484 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0xe7ed0005 cat=0x01 op=0x02
+CNXTRACE seq=00000012 t=00019484 kind=DISPATCH state=MSCP_CONNECT->ADMIT ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0007
+CNXTRACE seq=00000013 t=00019485 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x00000400
+CNXTRACE seq=00000014 t=00019486 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0xe7ed0005 cat=0x81 op=0x03
+CNXTRACE seq=00000015 t=00019487 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000016 t=00019488 kind=DISPATCH state=ADMIT->ADMIT ev=CSID_LEARNED detail=fired rx=consumed rc=0 aux=0x00010002
+CNXTRACE seq=00000017 t=00019490 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0xe7ed0005 cat=0x81 op=0x05
+CNXTRACE seq=00000018 t=00019490 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000019 t=00019491 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0xe7ed0005 cat=0x81 op=0x05
+CNXTRACE seq=00000020 t=00019491 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000021 t=00019491 kind=DISPATCH state=ADMIT->ADMIT ev=CSID_LEARNED detail=fired rx=consumed rc=0 aux=0x00010002
+CNXTRACE seq=00000022 t=00019494 kind=EMIT     state=ADMIT->ADMIT ev=- detail=SENT rx=- rc=0 aux=0xe7ed0005 cat=0x81 op=0x05
+CNXTRACE seq=00000023 t=00019494 kind=DISPATCH state=ADMIT->ADMIT ev=RX_COMMIT detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000024 t=00019496 kind=ARRIVAL  state=ADMIT->ADMIT ev=- detail=peer-ack rx=- rc=0 aux=0x00000401
+CNXTRACE seq=00000025 t=00019500 kind=DISPATCH state=ADMIT->ADMIT ev=RX_MEMBERSHIP detail=fired rx=consumed rc=0 aux=0x00000000 rep=255 tlast=00019563
+CNXTRACE seq=00000026 t=00019564 kind=DISPATCH state=ADMIT->ADMIT ev=RX_TR_OPEN detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000027 t=00019573 kind=DISPATCH state=ADMIT->BARRIER ev=RX_TR_GO detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000028 t=00019575 kind=DISPATCH state=BARRIER->MEMBER ev=TRANSITION_DONE detail=fired rx=consumed rc=0 aux=0x00000002
+CNXTRACE seq=00000029 t=00019581 kind=DISPATCH state=MEMBER->MEMBER ev=RX_CLOSE detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000030 t=00019582 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000031 t=00019583 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000032 t=00019583 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000033 t=00019583 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000034 t=00019584 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000035 t=00019584 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000036 t=00019585 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000037 t=00019585 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000038 t=00019586 kind=DISPATCH state=MEMBER->MEMBER ev=RX_REBUILD detail=fired rx=consumed rc=0 aux=0x00000000 rep=5 tlast=00019586
+CNXTRACE seq=00000039 t=00019586 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000040 t=00019586 kind=DISPATCH state=MEMBER->MEMBER ev=RX_REBUILD detail=fired rx=consumed rc=0 aux=0x00000000 rep=201 tlast=00019644
+CNXTRACE seq=00000041 t=00019644 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=peer-ack rx=- rc=0 aux=0x0000040b
+CNXTRACE seq=00000042 t=00019645 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000043 t=00019645 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000044 t=00019645 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000045 t=00019647 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000046 t=00019647 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000047 t=00019648 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000048 t=00019648 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000049 t=00019649 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000050 t=00019655 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000051 t=00019657 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000052 t=00019657 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000053 t=00019658 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000054 t=00019658 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000055 t=00019658 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER_ACK detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000056 t=00019665 kind=DISPATCH state=MEMBER->MEMBER ev=RX_BARRIER detail=fired rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000057 t=00020547 kind=DISPATCH state=MEMBER->MEMBER ev=TIMER_JOIN detail=EMPTY-CELL rx=consumed rc=0 aux=0x00000000
+CNXTRACE seq=00000058 t=00021508 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0009
+CNXTRACE seq=00000059 t=00021508 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0009
+CNXTRACE seq=00000060 t=00024489 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201 rep=2 tlast=00047222
+CNXTRACE seq=00000061 t=00053251 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed000b
+CNXTRACE seq=00000062 t=00053251 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed000b
+CNXTRACE seq=00000063 t=00055543 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=not-mine rx=- rc=0 aux=0x00000201
+CNXTRACE seq=00000064 t=00084995 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed000d
+CNXTRACE seq=00000065 t=00084995 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed000d
+CNXTRACE seq=00000066 t=00116739 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed000f
+CNXTRACE seq=00000067 t=00116739 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed000f
+CNXTRACE seq=00000068 t=00148484 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0011
+CNXTRACE seq=00000069 t=00148484 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0011
+CNXTRACE seq=00000070 t=00180227 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0013
+CNXTRACE seq=00000071 t=00180227 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0013
+CNXTRACE seq=00000072 t=00211971 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0015
+CNXTRACE seq=00000073 t=00211971 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0015
+CNXTRACE seq=00000074 t=00243715 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0017
+CNXTRACE seq=00000075 t=00243715 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0017
+CNXTRACE seq=00000076 t=00275460 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0019
+CNXTRACE seq=00000077 t=00275460 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0019
+CNXTRACE seq=00000078 t=00307203 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed001b
+CNXTRACE seq=00000079 t=00307203 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed001b
+CNXTRACE seq=00000080 t=00338948 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed001d
+CNXTRACE seq=00000081 t=00338948 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed001d
+CNXTRACE seq=00000082 t=00370692 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed001f
+CNXTRACE seq=00000083 t=00370692 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed001f
+CNXTRACE seq=00000084 t=00402436 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0021
+CNXTRACE seq=00000085 t=00402436 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0021
+CNXTRACE seq=00000086 t=00434179 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0023
+CNXTRACE seq=00000087 t=00434179 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0023
+CNXTRACE seq=00000088 t=00465924 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0025
+CNXTRACE seq=00000089 t=00465924 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0025
+CNXTRACE seq=00000090 t=00497668 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0027
+CNXTRACE seq=00000091 t=00497668 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0027
+CNXTRACE seq=00000092 t=00529411 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0029
+CNXTRACE seq=00000093 t=00529411 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0029
+CNXTRACE seq=00000094 t=00561155 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed002b
+CNXTRACE seq=00000095 t=00561155 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed002b
+CNXTRACE seq=00000096 t=00592899 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed002d
+CNXTRACE seq=00000097 t=00592899 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed002d
+CNXTRACE seq=00000098 t=00624643 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed002f
+CNXTRACE seq=00000099 t=00624643 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed002f
+CNXTRACE seq=00000100 t=00656387 kind=ARRIVAL  state=MEMBER->MEMBER ev=- detail=cdt-closed rx=- rc=3 aux=0xe7ed0031
+CNXTRACE seq=00000101 t=00656387 kind=DISPATCH state=MEMBER->MEMBER ev=CDT_CLOSED detail=fired rx=consumed rc=0 aux=0xe7ed0031
+%CNXTRACE-I-DLM, lock-manager wire arm: connected=1 lockdirwt=0 gen=2 proxy_lkbs=0
+%CNXTRACE-I-DLMREQ, requests sent=0 received=0 grants sent=0 received=0 declined=3
+%CNXTRACE-I-DLMEMIT, releases sent=0 none=0  blkasts sent=0 none=0 rx=0 delivered=0  queued=0 unparsed=0 foreign=3
+%CNXTRACE-I-DLMRECV, releases received=0 refused=0  blkasts unparsed=0  deferred grants owed=0
+%CNXTRACE-I-DLMPOST, posts queued=0 unqueued=0 lock_gone=0 refused=0
+%CNXTRACE-I-DLMLEG, connection manager: sends=0 refused=0 frames_rx=3 replies_sent=0 declined=3
+%CNXTRACE-I-END, 102 records printed
+$ WRITE SYS$OUTPUT "OVMX-CNXTRACE-END"
+OVMX-CNXTRACE-END
+$ SHOW CLUSTER/LOCAL_PORTS
+Local ports
+
+  PEA0:  open, link up
+         hardware address 52-54-00-00-00-0A
+         MTU 1500, channels 1, circuits 1
+         cluster group 257 (CLUSTER_AUTHORIZE)
+         frames tx 2061 (errors 0), rx 1653 (dropped: nobuf 0, badclass 0)
+$ WRITE SYS$OUTPUT "OVMX-SC-DONE"
+OVMX-SC-DONE
+$ LOGOUT
+  SYSTEM      logged out at 24-SEP-2026 16:32:07.53
+
+qemu-system-x86_64: terminating on signal 15 from pid 7555 (timeout)
+=== node boot driver done (rc=0) ===

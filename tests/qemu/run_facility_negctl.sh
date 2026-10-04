@@ -151,6 +151,18 @@ if [ ! -f "$EQUALITY_LIB" ]; then
     exit 2
 fi
 . "$EQUALITY_LIB"
+
+# Distinguishes TOTAL GUEST DEATH from a genuine per-facility defect red (rd
+# vms-df4). See facility_negctl_total_death.sh's own header for the measured
+# CI failure this closes.
+TOTAL_DEATH_LIB="$REPO_ROOT/tests/qemu/facility_negctl_total_death.sh"
+if [ ! -f "$TOTAL_DEATH_LIB" ]; then
+    echo "FATAL: $TOTAL_DEATH_LIB is missing. Without it a one-off boot/infra"
+    echo "       death (the guest never producing a single verdict) would be"
+    echo "       misattributed to whichever defect happened to be running."
+    exit 2
+fi
+. "$TOTAL_DEATH_LIB"
 COMMITTED_RECORD=$(fnr_record_path "$REPO_ROOT/tests/qemu")
 # Defaults to a temp file: this script must never dirty the checkout it is
 # judging. Set FACILITY_NEGCTL_RECORD_OUT to keep the emitted record at a known
@@ -445,13 +457,24 @@ echo ""
 # nothing.
 # ---------------------------------------------------------------------------
 echo "--- building the harness image (once) ---"
-if ! "$ENGINE" build -f "$REPO_ROOT/tests/qemu/Dockerfile" -t "$BASE_TAG" "$REPO_ROOT" \
+# REUSE, DON'T REBUILD (vms-216): CI runs this script from 22 separate
+# facility-negative-controls-shard matrix legs, each independently rebuilding
+# this image from scratch (a live apt-get per leg -- see the Dockerfile's own
+# Acquire::Retries hardening). If a caller has already put $BASE_TAG in the
+# local engine (e.g. a future pre-build step sharing a GHA layer cache across
+# shards -- deferred: ci.yml is within ~1KB of GitHub's workflow-file size
+# ceiling, see vms-216's follow-up item), reuse it instead of rebuilding. A
+# bare local run, with nothing pre-built, still builds normally below.
+if "$ENGINE" image inspect "$BASE_TAG" >/dev/null 2>&1; then
+    echo "  $BASE_TAG already present -- reusing it, not rebuilding"
+elif ! "$ENGINE" build -f "$REPO_ROOT/tests/qemu/Dockerfile" -t "$BASE_TAG" "$REPO_ROOT" \
         >"$RUNLOG" 2>&1; then
     echo "FATAL: the harness image does not build -- no verdict is possible."
     tail -40 "$RUNLOG" | sed 's/^/  | /'
     exit 2
+else
+    echo "  built $BASE_TAG"
 fi
-echo "  built $BASE_TAG"
 echo ""
 
 echo "--- positive control: pristine image, every suite green ---"
@@ -492,6 +515,25 @@ if [ "$DEFECT_BAD" -eq 0 ]; then
 else
     fail_n=$((fail_n + 1))
     FAILED_DEFECTS="$FAILED_DEFECTS positive-control"
+    # DIAGNOSTIC (vms-c09f): the CI log otherwise shows only this summary, not the
+    # guest console -- so a pristine-red suite's ACTUAL per-assertion PASS/FAIL (and
+    # any activation/exec error) is invisible. Dump each failing suite's raw guest
+    # console section from $OUTFILE so the first real failure is classifiable from
+    # the log alone (e.g. activation-gap vs a build/CLI/staging error).
+    echo ""
+    echo "--- DIAGNOSTIC: raw guest console for the pristine-red suite(s) ---"
+    for _fs in $EXPECTED; do
+        [ "$(suite_rc "$_fs")" = "0" ] && continue
+        echo "======== console: $_fs ========"
+        awk -v s="$_fs" '
+            /^=== SUITE / {
+                if ($0 ~ ("^=== SUITE " s " rc=")) { printf "%s", buf; print; exit }
+                buf = ""; next
+            }
+            { buf = buf $0 "\n" }
+        ' "$OUTFILE" | tail -120
+        echo "======== end console: $_fs ========"
+    done
     echo ""
     echo "The positive control failed. Refusing to run the negative controls: their"
     echo "verdicts would be unfounded."
@@ -568,6 +610,23 @@ for defect in $DEFECT_LIST; do
     if [ "$RUN_RC" -eq 125 ]; then
         bad "container engine exited 125 running the harness for '$defect' -- this is the transient registry/storage-layer failure, NOT a verdict about '$defect'. Re-run. Last 30 lines:"
         tail -30 "$OUTFILE" | sed 's/^/  | /'
+        fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
+    fi
+
+    # 0. TOTAL GUEST DEATH, caught here for the same reason 125/3/4 are above
+    #    (rd vms-df4): an ISOLATED defect can only ever reach ITS OWN facility
+    #    -- it has no path to stopping an UNRELATED suite (e.g. the very first
+    #    test_kmod_* probe) from running at all. When NONE of EXEC_ORDER's
+    #    suites produced a verdict, the guest died (or never booted) for a
+    #    reason that predates the mutation ever being exercised -- an
+    #    infrastructure failure, not a verdict about '$defect'. Skipped for
+    #    `fatal`, which is EXPECTED to stop the run partway through (check 3
+    #    below judges that case with EXEC_ORDER + stop_at).
+    # shellcheck disable=SC2086
+    if [ "$isolation" != "fatal" ] && \
+       [ "$(fnd_all_suites_missing "$OUTFILE" $EXEC_ORDER)" = "1" ]; then
+        bad "TOTAL GUEST DEATH: not ONE of the $N_EXPECTED expected suites produced a verdict -- not even ones unrelated to '$facility' (e.g. the first test_kmod_* probe). An isolated defect cannot reach that; this is a boot/infrastructure failure (crash before any suite ran, QEMU never came up, or the whole-VM wall fired before FINAL RESULTS), NOT a verdict about '$defect'. Re-run. Last 40 lines:"
+        tail -40 "$OUTFILE" | sed 's/^/  | /'
         fail_n=$((fail_n + 1)); FAILED_DEFECTS="$FAILED_DEFECTS $defect"; echo ""; continue
     fi
 
@@ -820,7 +879,7 @@ done
 # job prints the record it just produced and uploads it as an artifact, and
 # facility_defects.sh's coverage prints NOT MEASURED and withholds both
 # cardinals. FACILITY_NEGCTL_REQUIRE_RECORD is set EXPLICITLY by the CI job
-# (.github/workflows/ci.yml) and is 0 only while the tree has no record; flip
+# (.github/workflows/ci-*.yml (split by vms-1af)) and is 0 only while the tree has no record; flip
 # it to 1 in the same change that commits the first one.
 # ---------------------------------------------------------------------------
 echo "--- the execution record this run observed vs the one committed ---"

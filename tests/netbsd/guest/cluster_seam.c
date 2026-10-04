@@ -216,16 +216,6 @@ cluster_seam_test_timer(void)
  * ---- SS14 LAN port (best effort, single node -- see file header NOTE) --
  */
 
-/* Candidate primary-interface names: virtio-net (the amd64/QEMU harness rung)
- * first, then the VAX-relevant Qbus Ethernet drivers (the real SIMH rail).
- * exec_netdev_primary (SS11) is still a Linux-only-wired contract-only twin on
- * NetBSD (exec_kbackend_netbsd.h SS11), so this self-test cannot discover the
- * name generically yet and tries the short, honest list instead -- an open
- * failure on every candidate is reported as SKIP, never a fabricated PASS. */
-static const char *const cluster_seam_ifnames[] = {
-	"vioif0", "wm0", "le0", "qe0", NULL
-};
-
 static void
 cluster_seam_lan_rx_cb(void *ctx, const uint8_t *frame, uint32_t len)
 {
@@ -241,7 +231,8 @@ cluster_seam_test_lan(void)
 {
 	unsigned int rx_hits = 0;
 	const char *ifname = NULL;
-	int rv, i;
+	char primary_ifname[16];
+	int rv;
 	uint8_t hwaddr[6];
 	uint32_t mtu;
 	int link_up;
@@ -252,13 +243,19 @@ cluster_seam_test_lan(void)
 	 * parse as cluster traffic. */
 	const uint16_t test_ethertype = 0x9000;
 
-	for (i = 0; cluster_seam_ifnames[i] != NULL; i++) {
-		rv = exec_lan_open(cluster_seam_ifnames[i], test_ethertype,
+	/* rd vms-613: exec_netdev_primary (SS11) is BOUND on NetBSD now (the
+	 * same discovery vms_pe_start uses in production, vms_devtab.c ->
+	 * vms_devtab_probe_nic), so this self-test asks the SAME question a
+	 * real cluster-start would rather than guessing from a driver-name
+	 * list -- an open failure (or no primary NIC at all) is reported as
+	 * SKIP, never a fabricated PASS. */
+	primary_ifname[0] = '\0';
+	if (exec_netdev_primary(primary_ifname, sizeof(primary_ifname),
+	    NULL) == 0 && primary_ifname[0] != '\0') {
+		rv = exec_lan_open(primary_ifname, test_ethertype,
 		    cluster_seam_lan_rx_cb, &rx_hits);
-		if (rv == 0) {
-			ifname = cluster_seam_ifnames[i];
-			break;
-		}
+		if (rv == 0)
+			ifname = primary_ifname;
 	}
 
 	if (ifname == NULL) {

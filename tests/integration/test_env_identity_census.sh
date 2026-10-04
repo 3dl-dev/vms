@@ -11,12 +11,21 @@
 #     "the VMS_USERNAME / VMS_UIC_* / VMS_PRIVILEGES env facades are written
 #      ONLY by vmssshd, which is never launched"
 #
-# That sentence is FALSE. tools/vms_login.c -- LOGINOUT, on the console login
+# That sentence was FALSE. tools/vms_login.c -- LOGINOUT, on the console login
 # path, which runs for every interactive session there is -- writes
 # VMS_USERNAME too, and its own source comment says so. The review's whole
 # argument was "the only writer is unreachable", so a second, REACHABLE
 # writer invalidated the argument even though it did not invalidate the
 # conclusion.
+#
+# vms-d916 UPDATE: the SSH scaffold (src/vmsssh/vmssshd.c and its --wrap veneer)
+# has since been RETIRED entirely -- OVMX now builds the REAL upstream OpenSSH
+# port on the TCP/IP substrate, not a hand-rolled daemon. With vmssshd.c gone,
+# its LOGNAME / USER / VMS_UIC_* / VMS_PRIVILEGES setenv() sites are gone too
+# (Rule 10 wanted them deleted; the retirement did it). The one surviving
+# declared writer is tools/vms_login.c's VMS_USERNAME, and this gate still
+# fails the instant any new invisible writer or reader of these variables
+# appears anywhere in src/ or tools/.
 #
 # The defect was not the reviewer's carelessness. It was that the census was
 # PROSE. Nothing derived it, nothing printed it, and nothing failed when it
@@ -47,13 +56,11 @@
 #
 #   - VMS_UIC_GROUP, VMS_UIC_MEMBER, VMS_PRIVILEGES and VMS_TERMINAL have
 #     ZERO readers in the trees this gate scans (src/ and tools/ -- see the
-#     scope note at the bottom before reading that as "anywhere"). They are
-#     write-only. Their sole writer, vmssshd, is not merely unlaunched --
-#     MEASURED: it is not in the runtime image at all (the fat initramfs
-#     contains exactly 8 executables and vmssshd is not one of them). Per
-#     Rule 10 those four setenv() calls should be DELETED rather than
-#     documented; that is filed, not done here, because src/vmsssh/ belongs
-#     to vms-475.
+#     scope note at the bottom before reading that as "anywhere"). Their only
+#     writer used to be vmssshd, which was never in the runtime image; the
+#     vms-d916 scaffold retirement DELETED vmssshd and those setenv() sites
+#     with it (the Rule 10 delete the earlier review filed but did not do).
+#     They now have ZERO writers as well.
 #
 #   - VMS_USERNAME now has ZERO readers. It had exactly one -- tools/vms_mail.c,
 #     which used it to choose whose mailbox to open -- and vms-a30 deleted that
@@ -63,10 +70,11 @@
 #     that no longer exists, and a stale argument for why something is safe is
 #     worse than none.
 #
-#   - USER and LOGNAME are written by vmssshd (not in the runtime image) and
-#     read by nothing. tools/vms_authorize.c read USER to decide who could
-#     manage SYSUAF until vms-b2e; AUTHORIZE now takes its privilege mask from
-#     the executive, so that reader is gone too.
+#   - USER and LOGNAME used to be written by vmssshd (never in the runtime
+#     image) and read by nothing. tools/vms_authorize.c read USER to decide who
+#     could manage SYSUAF until vms-b2e; AUTHORIZE now takes its privilege mask
+#     from the executive, so that reader is gone. With vmssshd retired
+#     (vms-d916), USER and LOGNAME now have no writer either.
 #
 # IF YOU ARE HERE BECAUSE THIS FAILED: adding your new site to the declared
 # set below is the WRONG first move. Ask Rule 10's question first -- does VMS
@@ -129,12 +137,6 @@ echo ""
 # what carries the security meaning.
 # ---------------------------------------------------------------------------
 DECLARED=$(cat <<'EOF'
-WRITE src/vmsssh/vmssshd.c LOGNAME
-WRITE src/vmsssh/vmssshd.c USER
-WRITE src/vmsssh/vmssshd.c VMS_PRIVILEGES
-WRITE src/vmsssh/vmssshd.c VMS_UIC_GROUP
-WRITE src/vmsssh/vmssshd.c VMS_UIC_MEMBER
-WRITE src/vmsssh/vmssshd.c VMS_USERNAME
 WRITE tools/vms_login.c VMS_USERNAME
 EOF
 )

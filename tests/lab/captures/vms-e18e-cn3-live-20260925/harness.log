@@ -1,0 +1,42 @@
+[16:23:19] goto https://openvmx.3dl.dev/demo/cluster/
+[16:23:20] boot C
+[16:28:20] boot B
+[16:33:20] boot A
+[16:38:20] phase 1: waiting for each executive to announce membership (no input)
+[16:38:20]   OVMXA: announced MEMBER
+[16:38:20]   OVMXB: announced MEMBER
+[16:38:20] phase 2: logging in and reading each membership table
+[16:38:20]   OVMXB: reached Username:
+[16:39:02]   OVMXB: reached Password: (after 6 offers)
+[16:39:14]   OVMXB: at DCL
+[16:39:14]   OVMXA: reached Username:
+[16:39:24]   OVMXA: reached Password: (after 2 offers)
+[16:40:24]   OVMXA: sentinel did not echo (attempt 1); re-offering credentials
+[16:40:24]   OVMXA: Username: again
+[16:40:26]   OVMXA: reached Password: (after 1 offer)
+[16:40:28]   OVMXA: at DCL
+[16:40:28]   VAXC: reached Username:
+[16:45:33]   VAXC: TIMED OUT waiting for reached Password: (38 offers)
+[16:45:33]     VAXC tail: "C (csid 00010001) proposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  25-SEP-2026 16:54:04.25  %%%%%%%%%%%\n16:54:04.23 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[16:45:33] logged in: {"OVMXB":true,"OVMXA":true,"VAXC":false}
+[16:45:33]   VAXC: reached Username:
+[16:50:37]   VAXC: TIMED OUT waiting for reached Password: (38 offers)
+[16:50:37]     VAXC tail: "C (csid 00010001) proposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  25-SEP-2026 16:54:04.25  %%%%%%%%%%%\n16:54:04.23 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[16:51:11] t=1333s members={"OVMXA":3,"OVMXB":3} vaxcTx=7131 alive=true allSee=true
+[16:51:11]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[16:51:11]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[16:51:11] *** CN=3 at t=1333s -- holding 660s
+[16:51:56]   VAXC: reached Username:
+[16:57:00]   VAXC: TIMED OUT waiting for reached Password: (38 offers)
+[16:57:00]     VAXC tail: "C (csid 00010001) proposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  25-SEP-2026 16:54:04.25  %%%%%%%%%%%\n16:54:04.23 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[16:57:34] t=1716s members={"OVMXA":3,"OVMXB":3} vaxcTx=9560 alive=true allSee=true
+[16:57:34]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[16:57:34]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[16:58:19]   VAXC: reached Username:
+[17:03:24]   VAXC: TIMED OUT waiting for reached Password: (38 offers)
+[17:03:24]     VAXC tail: "C (csid 00010001) proposed addition of node OVMXA\n\n%CNXMAN,  completing VAXcluster state transition\n%%%%%%%%%%%  OPCOM  25-SEP-2026 16:54:04.25  %%%%%%%%%%%\n16:54:04.23 Node VAXC (csid 00010001) completed VAXcluster state transition\n\n\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3    \n█"
+[17:03:58] t=2100s members={"OVMXA":3,"OVMXB":3} vaxcTx=11990 alive=true allSee=true
+[17:03:58]     OVMXA: ["OVMXA=00010003","1988=00010002","1989=00010001"]
+[17:03:58]     OVMXB: ["OVMXB=00010002","1989=00010001","1987=00010003"]
+[17:03:58] CN3_BROWSER_RESULT={"pass":true,"hold_s":767,"elapsed_s":2438,"announced":{"OVMXA":true,"OVMXB":true},"oracle":{"OVMXA":true,"OVMXB":true,"sda_rows":0},"bugchecks":{},"losses":{}}
+GRADER_EXIT=0

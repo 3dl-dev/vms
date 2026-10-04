@@ -130,6 +130,13 @@ struct scsh_node {
 	uint32_t            armed[SCS_TIMER__COUNT];
 	uint32_t            cancelled[SCS_TIMER__COUNT];
 	uint32_t            last_key[SCS_TIMER__COUNT];
+	/* ...and WHAT IT WAS ARMED WITH (rd vms-abd). The clean departure's whole
+	 * dead-peer guarantee is that the DISCONNECT timer is armed with a value
+	 * SMALLER than the drain budget, so the FSM emits its own op 6 while the
+	 * departing thread is still draining. Without recording the ms, a test
+	 * could only assert THAT a timer was armed -- which is true of the 5000 ms
+	 * default that would miss the window entirely. */
+	uint32_t            last_ms[SCS_TIMER__COUNT];
 
 	struct scsh_sysap  *sysap;
 	uint32_t            now_ms;
@@ -277,6 +284,11 @@ SCSH_UNUSED static int scsh_send_msg(void *ctx, vms_scs_sysid_t dst, vms_conid_t
 	return 0;
 }
 
+/* The harness cluster's group number (abs 22, LE16 -- rd vms-b34). Any value
+ * will do so long as EVERY frame in one harness cluster carries the same one;
+ * 1 keeps the existing golden frames byte-identical. */
+#define SCSH_CLUSTER_GROUP 0x0001u
+
 SCSH_UNUSED static int scsh_addr(void *ctx, vms_scs_sysid_t dst, struct vms_scs_addr *out)
 {
 	struct scsh_node *n = (struct scsh_node *)ctx;
@@ -292,6 +304,7 @@ SCSH_UNUSED static int scsh_addr(void *ctx, vms_scs_sysid_t dst, struct vms_scs_
 		out->dst_logical[i] = (uint8_t)(dst & 0xffu);
 		out->src_logical[i] = (uint8_t)(n->sysid & 0xffu);
 	}
+	out->cluster_group = SCSH_CLUSTER_GROUP;
 	return 0;
 }
 
@@ -299,9 +312,9 @@ SCSH_UNUSED static void scsh_arm(void *ctx, enum scs_timer which, uint32_t key, 
 {
 	struct scsh_node *n = (struct scsh_node *)ctx;
 
-	(void)ms;
 	n->armed[which]++;
 	n->last_key[which] = key;
+	n->last_ms[which] = ms;
 }
 
 SCSH_UNUSED static void scsh_cancel(void *ctx, enum scs_timer which, uint32_t key)
@@ -543,7 +556,7 @@ SCSH_UNUSED static void scsh_inject_ctrl_mincr(struct scsh_node *dst,
 		c.hdr.dst_lavc[i] = (uint8_t)(dst->sysid & 0xffu);
 		c.hdr.src_lavc[i] = (uint8_t)(from & 0xffu);
 	}
-	c.hdr.connect_flag = VMS_SCSCTRL_CONNECT_FLAG;
+	c.hdr.cluster_group = SCSH_CLUSTER_GROUP;
 	c.hdr.word30 = (uint16_t)(VMS_SCS_MT_SETUP |
 				  ((uint16_t)VMS_SCS_FORMAT_V13 << 8));
 	c.hdr.sca_len_field = (uint16_t)(content - 2u);

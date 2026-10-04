@@ -1,0 +1,1265 @@
+[OVMXB] caps: CapPrm:	000001ffffffdfff CapEff:	000001ffffffdfff CapBnd:	000001ffffffdfff 
+c[?7l[2J[0mSeaBIOS (version 1.16.3-debian-1.16.3-2)
+
+
+iPXE (https://ipxe.org) 00:02.0 C000 PCI2.10 PnP PMM+3EFCAD00+3EF0AD00 C000
+Press Ctrl-B to configure iPXE (PCI 00:02.0)...                                                                               
+
+
+Booting from ROM..c[?7l[2JOVMX/Linux -- SYSKRNL (Linux kernel)
+SYSBOOT> [OVMXB] SYSBOOT> reached
+SET SCSNODE OVMXB
+%SYSGEN-I-SETPARAM, SCSNODE changed from OVMX to OVMXB
+SYSBOOT> SET SCSSYSTEMID 1988
+%SYSGEN-I-SETPARAM, SCSSYSTEMID changed from 0 to 1988
+SYSBOOT> SET VAXCLUSTER 2
+%SYSGEN-I-SETPARAM, VAXCLUSTER changed from 0 to 2
+SYSBOOT> SET VOTES 1
+%SYSGEN-I-SETPARAM, VOTES changed from 1 to 1
+SYSBOOT> SET EXPECTED_VOTES 3
+%SYSGEN-I-SETPARAM, EXPECTED_VOTES changed from 1 to 3
+SYSBOOT> WRITE
+%SYSGEN-I-WRITTEN, 31 parameters written to SYS$SYSTEM:OVMXVMSSYS.PAR;2
+SYSBOOT> CONTINUE
+%OVMX-I-EXEC, VMS executive attached on /dev/vms
+
+    OpenVMX V0.7 - OpenVMS-compatible
+    25-SEP-2026 13:32:01.25
+
+%OVMX-I-SYSDISK, mounting system disk VDA0:
+%OVMX-I-MOUNTED, system disk VDA0: mounted
+%OVMX-I-SCSNODE, node name OVMXB set from SYS$SYSTEM:OVMXVMSSYS.PAR
+[   15.663996] %PEA0, cluster HELLO multicast group 257 (CLUSTER_AUTHORIZE)
+[   15.672219] %CNXMAN, waiting to form or join an OpenVMS Cluster
+%CNXMAN, cluster group 257 (CLUSTER_AUTHORIZE)
+%CNXMAN, waiting to form or join an OpenVMS Cluster
+%STDRV-I-STARTUP, OpenVMX startup begun at 25-SEP-2026 13:32:02.19
+%OVMX-I-EXEC, system identity SYSTEM [1,4] established by the executive
+The OVMX system is now executing the site-specific startup commands.
+%INSTALL-I-ADDED, DECC$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSSYS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSPROCESS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSLNM$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSFS$SHR.EXE installed
+%INSTALL-I-ADDED, LIBVMSRMS$SHR.EXE installed
+%RUN-S-PROC_ID, identification of created process is 10000003
+
+ Welcome to the OpenVMX X86_64 Operating System, Version V0.7 (OpenVMS-compatible)
+
+Username: [   17.162776] %PEA0, channel verified
+[   17.196411] %PEA0, virtual circuit open
+[   17.725867] %CNXMAN, a connection manager was discovered on the interconnect
+[   17.733338] %CNXMAN, VMS$VAXcluster directory descriptor is not grounded: answering with the registered name
+SYSTEM
+Password: [   18.749270] %CNXMAN, waiting for a directory answer from the cluster
+[   19.698971] %PEA0, channel verified
+
+
+   Welcome to OpenVMX V0.7 - OpenVMS-compatible
+
+
+[   19.730599] %PEA0, virtual circuit open
+[   19.773576] %CNXMAN, a connection manager was discovered on the interconnect
+$ SET TERMINAL/PAGE=0/WIDTH=132/NOBROADCAST
+$ WRITE SYS$OUTPUT "DFE-POLL-OVMXB-0"
+DFE-POLL-OVMXB-0
+$ [   26.685259] %CNXMAN, membership request to the selected member not answered
+[   26.689636] %CNXMAN, no cluster member answered this node's membership request: this node is NOT a cluster member, and will ask again
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:32:13
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | ACCEPT           |
++---------------------------------------------------------------+
+$ [   26.941277] %CNXMAN, waiting out the reconnect interval before asking the cluster for admission again
+[   27.190431] %CNXMAN, a cluster member opened a VMS$VAXcluster connection to this node that is not the member this join is driving through
+[   36.157284] %CNXMAN, another system is also waiting to form an OpenVMS Cluster and takes precedence; this node will join it
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-15"
+DFE-POLL-OVMXB-15
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:32:28
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | OPEN             |
++---------------------------------------------------------------+
+$ [   44.029316] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[   44.035559] %CNXMAN, lost connection to a cluster member, reconnecting
+[   44.039254] vms: SCS path lost to system 0:1989 -> SS$ 2692
+[   44.042356] %PEA0, TIMVCFAIL expired, circuit re-formed
+[   46.397320] %PEA0, no HELLO within the listen timeout, channel lost
+[   46.400751] %PEA0, channel lost, virtual circuit closed
+[   46.404632] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: path lost
+[   46.412410] %CNXMAN, lost connection to a cluster member, reconnecting
+[   46.416360] vms: SCS path lost to system 0:1987 -> SS$ 2692
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-30"
+DFE-POLL-OVMXB-30
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:32:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | RECONNECT        |
+| 1989   |          |                 | RECONNECT        |
++---------------------------------------------------------------+
+$ [   48.445261] %PEA0, no HELLO within the listen timeout, channel lost
+[   64.829272] %CNXMAN, reconnect interval expired, proposing removal
+[   64.840123] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition
+[   66.877372] %CNXMAN, reconnect interval expired, proposing removal
+[   66.881884] %CNXMAN, this node has no cluster system id; it cannot coordinate a state transition
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-45"
+DFE-POLL-OVMXB-45
+$ SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:32:58
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
++---------------------------------------------------------------+
+$ [   72.312244] %PEA0, channel verified
+[   72.312515] %PEA0, virtual circuit open
+[   72.374642] %CNXMAN, the cluster opened the VMS$VAXcluster connection to this node
+[   72.427330] %PEA0, virtual circuit open
+[   73.021362] %CNXMAN, a connection manager was discovered on the interconnect
+[   73.033155] %CNXMAN, lost the MSCP$DISK disk-client connection: this node enumerates none of that member's units, and the join goes on
+[   73.560821] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   73.568138] %CNXMAN, lost connection to a cluster member, reconnecting
+[   73.572107] %CNXMAN, a cluster member disconnected this node's VMS$VAXcluster connection: not dialling it again until the reconnect interval expires
+[   73.778054] %PEA0, channel verified
+[   74.058409] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   74.066075] %CNXMAN, lost connection to a cluster member, reconnecting
+[   74.561206] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   74.569232] %CNXMAN, lost connection to a cluster member, reconnecting
+[   75.063618] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   75.068750] %CNXMAN, lost connection to a cluster member, reconnecting
+[   75.560039] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   75.569304] %CNXMAN, lost connection to a cluster member, reconnecting
+[   76.066737] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   76.072725] %CNXMAN, lost connection to a cluster member, reconnecting
+[   76.570531] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   76.578462] %CNXMAN, lost connection to a cluster member, reconnecting
+[   77.070062] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   77.078446] %CNXMAN, lost connection to a cluster member, reconnecting
+[   77.569004] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   77.577842] %CNXMAN, lost connection to a cluster member, reconnecting
+[   78.075431] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   78.080976] %CNXMAN, lost connection to a cluster member, reconnecting
+[   78.568015] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   78.573813] %CNXMAN, lost connection to a cluster member, reconnecting
+[   79.069373] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   79.078117] %CNXMAN, lost connection to a cluster member, reconnecting
+[   79.574303] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   79.583433] %CNXMAN, lost connection to a cluster member, reconnecting
+[   80.076122] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   80.085428] %CNXMAN, lost connection to a cluster member, reconnecting
+[   80.575711] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   80.583266] %CNXMAN, lost connection to a cluster member, reconnecting
+[   81.074732] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   81.082858] %CNXMAN, lost connection to a cluster member, reconnecting
+[   81.569450] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   81.574832] %CNXMAN, lost connection to a cluster member, reconnecting
+[   82.075466] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   82.081684] %CNXMAN, lost connection to a cluster member, reconnecting
+[   82.572193] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   82.577921] %CNXMAN, lost connection to a cluster member, reconnecting
+[   83.073890] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   83.081222] %CNXMAN, lost connection to a cluster member, reconnecting
+[   83.575637] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   83.581983] %CNXMAN, lost connection to a cluster member, reconnecting
+[   84.073534] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   84.079861] %CNXMAN, lost connection to a cluster member, reconnecting
+[   84.575518] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   84.585469] %CNXMAN, lost connection to a cluster member, reconnecting
+[   85.080362] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   85.091852] %CNXMAN, lost connection to a cluster member, reconnecting
+[   85.584066] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   85.589916] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-60"
+DFE-POLL-OVMXB-60
+$ [   86.083551] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   86.090001] %CNXMAN, lost connection to a cluster member, reconnecting
+[   86.578043] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   86.585798] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:33:13
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [   87.082444] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   87.091733] %CNXMAN, lost connection to a cluster member, reconnecting
+[   87.583852] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   87.595952] %CNXMAN, lost connection to a cluster member, reconnecting
+[   88.086800] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   88.092146] %CNXMAN, lost connection to a cluster member, reconnecting
+[   88.592964] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   88.598983] %CNXMAN, lost connection to a cluster member, reconnecting
+[   89.091134] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   89.100192] %CNXMAN, lost connection to a cluster member, reconnecting
+[   89.590731] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   89.596680] %CNXMAN, lost connection to a cluster member, reconnecting
+[   90.089429] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   90.096098] %CNXMAN, lost connection to a cluster member, reconnecting
+[   90.594374] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   90.600294] %CNXMAN, lost connection to a cluster member, reconnecting
+[   91.090757] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   91.098245] %CNXMAN, lost connection to a cluster member, reconnecting
+[   91.588396] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   91.595370] %CNXMAN, lost connection to a cluster member, reconnecting
+[   92.087900] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   92.093459] %CNXMAN, lost connection to a cluster member, reconnecting
+[   92.588745] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   92.594263] %CNXMAN, lost connection to a cluster member, reconnecting
+[   93.088436] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   93.094652] %CNXMAN, lost connection to a cluster member, reconnecting
+[   93.587739] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   93.593339] %CNXMAN, lost connection to a cluster member, reconnecting
+[   94.087488] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   94.093209] %CNXMAN, lost connection to a cluster member, reconnecting
+[   94.586373] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   94.592160] %CNXMAN, lost connection to a cluster member, reconnecting
+[   95.089145] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   95.095447] %CNXMAN, lost connection to a cluster member, reconnecting
+[   95.591792] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   95.597579] %CNXMAN, lost connection to a cluster member, reconnecting
+[   96.092446] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   96.102470] %CNXMAN, lost connection to a cluster member, reconnecting
+[   96.593793] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   96.600149] %CNXMAN, lost connection to a cluster member, reconnecting
+[   97.090153] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   97.096209] %CNXMAN, lost connection to a cluster member, reconnecting
+[   97.587744] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   97.597157] %CNXMAN, lost connection to a cluster member, reconnecting
+[   98.092092] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   98.098235] %CNXMAN, lost connection to a cluster member, reconnecting
+[   98.588054] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   98.593670] %CNXMAN, lost connection to a cluster member, reconnecting
+[   99.087969] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   99.093334] %CNXMAN, lost connection to a cluster member, reconnecting
+[   99.587524] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[   99.593020] %CNXMAN, lost connection to a cluster member, reconnecting
+[  100.087085] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  100.092561] %CNXMAN, lost connection to a cluster member, reconnecting
+[  100.588495] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  100.593899] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-75"
+DFE-POLL-OVMXB-75
+$ [  101.088828] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  101.094150] %CNXMAN, lost connection to a cluster member, reconnecting
+[  101.588931] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  101.594300] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:33:28
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  102.088782] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  102.093859] %CNXMAN, lost connection to a cluster member, reconnecting
+[  102.587362] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  102.593264] %CNXMAN, lost connection to a cluster member, reconnecting
+[  103.088736] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  103.094758] %CNXMAN, lost connection to a cluster member, reconnecting
+[  103.587962] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  103.593885] %CNXMAN, lost connection to a cluster member, reconnecting
+[  104.088497] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  104.094325] %CNXMAN, lost connection to a cluster member, reconnecting
+[  104.588213] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  104.594030] %CNXMAN, lost connection to a cluster member, reconnecting
+[  105.092976] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  105.098713] %CNXMAN, lost connection to a cluster member, reconnecting
+[  105.588740] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  105.594487] %CNXMAN, lost connection to a cluster member, reconnecting
+[  106.088902] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  106.095097] %CNXMAN, lost connection to a cluster member, reconnecting
+[  106.585772] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  106.591539] %CNXMAN, lost connection to a cluster member, reconnecting
+[  107.086246] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  107.092073] %CNXMAN, lost connection to a cluster member, reconnecting
+[  107.589312] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  107.596884] %CNXMAN, lost connection to a cluster member, reconnecting
+[  108.089932] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  108.100229] %CNXMAN, lost connection to a cluster member, reconnecting
+[  108.587936] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  108.593517] %CNXMAN, lost connection to a cluster member, reconnecting
+[  109.087947] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  109.096247] %CNXMAN, lost connection to a cluster member, reconnecting
+[  109.588575] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  109.594008] %CNXMAN, lost connection to a cluster member, reconnecting
+[  110.088951] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  110.095249] %CNXMAN, lost connection to a cluster member, reconnecting
+[  110.594010] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  110.603063] %CNXMAN, lost connection to a cluster member, reconnecting
+[  111.091645] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  111.098417] %CNXMAN, lost connection to a cluster member, reconnecting
+[  111.594399] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  111.600545] %CNXMAN, lost connection to a cluster member, reconnecting
+[  112.095205] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  112.101201] %CNXMAN, lost connection to a cluster member, reconnecting
+[  112.590251] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  112.596929] %CNXMAN, lost connection to a cluster member, reconnecting
+[  113.094495] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  113.105134] %CNXMAN, lost connection to a cluster member, reconnecting
+[  113.587719] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  113.593875] %CNXMAN, lost connection to a cluster member, reconnecting
+[  114.088408] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  114.093749] %CNXMAN, lost connection to a cluster member, reconnecting
+[  114.588037] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  114.593379] %CNXMAN, lost connection to a cluster member, reconnecting
+[  115.093130] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  115.100687] %CNXMAN, lost connection to a cluster member, reconnecting
+[  115.588067] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  115.594611] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-90"
+DFE-POLL-OVMXB-90
+$ [  116.087477] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  116.093540] %CNXMAN, lost connection to a cluster member, reconnecting
+[  116.587901] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  116.597633] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:33:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  117.088217] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  117.093679] %CNXMAN, lost connection to a cluster member, reconnecting
+[  117.592386] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  117.599199] %CNXMAN, lost connection to a cluster member, reconnecting
+[  118.089603] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  118.097950] %CNXMAN, lost connection to a cluster member, reconnecting
+[  118.593733] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  118.599795] %CNXMAN, lost connection to a cluster member, reconnecting
+[  119.090515] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  119.096514] %CNXMAN, lost connection to a cluster member, reconnecting
+[  119.587811] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  119.593565] %CNXMAN, lost connection to a cluster member, reconnecting
+[  120.089313] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  120.095206] %CNXMAN, lost connection to a cluster member, reconnecting
+[  120.592114] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  120.598435] %CNXMAN, lost connection to a cluster member, reconnecting
+[  121.096239] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  121.104200] %CNXMAN, lost connection to a cluster member, reconnecting
+[  121.595410] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  121.601592] %CNXMAN, lost connection to a cluster member, reconnecting
+[  122.095420] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  122.107667] %CNXMAN, lost connection to a cluster member, reconnecting
+[  122.590490] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  122.599194] %CNXMAN, lost connection to a cluster member, reconnecting
+[  123.096507] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  123.102520] %CNXMAN, lost connection to a cluster member, reconnecting
+[  123.601890] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  123.607587] %CNXMAN, lost connection to a cluster member, reconnecting
+[  124.105849] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  124.111000] %CNXMAN, lost connection to a cluster member, reconnecting
+[  124.598035] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  124.605450] %CNXMAN, lost connection to a cluster member, reconnecting
+[  125.100866] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  125.196390] %CNXMAN, lost connection to a cluster member, reconnecting
+[  125.599130] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  125.606339] %CNXMAN, lost connection to a cluster member, reconnecting
+[  126.096219] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  126.102365] %CNXMAN, lost connection to a cluster member, reconnecting
+[  126.600222] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  126.606353] %CNXMAN, lost connection to a cluster member, reconnecting
+[  127.100048] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  127.105230] %CNXMAN, lost connection to a cluster member, reconnecting
+[  127.603356] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  127.609987] %CNXMAN, lost connection to a cluster member, reconnecting
+[  128.111765] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  128.117908] %CNXMAN, lost connection to a cluster member, reconnecting
+[  128.611945] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  128.620092] %CNXMAN, lost connection to a cluster member, reconnecting
+[  129.112148] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  129.117429] %CNXMAN, lost connection to a cluster member, reconnecting
+[  129.619063] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  129.625138] %CNXMAN, lost connection to a cluster member, reconnecting
+[  130.123564] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  130.129911] %CNXMAN, lost connection to a cluster member, reconnecting
+[  130.621215] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  130.626622] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-105"
+DFE-POLL-OVMXB-105
+$ [  131.122452] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  131.128822] %CNXMAN, lost connection to a cluster member, reconnecting
+[  131.619581] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  131.624738] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:33:58
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  132.124696] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  132.131515] %CNXMAN, lost connection to a cluster member, reconnecting
+[  132.627498] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  132.636505] %CNXMAN, lost connection to a cluster member, reconnecting
+[  133.127889] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  133.133415] %CNXMAN, lost connection to a cluster member, reconnecting
+[  133.634614] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  133.640395] %CNXMAN, lost connection to a cluster member, reconnecting
+[  134.127764] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  134.133355] %CNXMAN, lost connection to a cluster member, reconnecting
+[  134.627617] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  134.636286] %CNXMAN, lost connection to a cluster member, reconnecting
+[  135.134911] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  135.140939] %CNXMAN, lost connection to a cluster member, reconnecting
+[  135.629332] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  135.634802] %CNXMAN, lost connection to a cluster member, reconnecting
+[  136.134038] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  136.139937] %CNXMAN, lost connection to a cluster member, reconnecting
+[  136.634022] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  136.640341] %CNXMAN, lost connection to a cluster member, reconnecting
+[  137.131017] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  137.141573] %CNXMAN, lost connection to a cluster member, reconnecting
+[  137.626776] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  137.632632] %CNXMAN, lost connection to a cluster member, reconnecting
+[  138.128752] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  138.135029] %CNXMAN, lost connection to a cluster member, reconnecting
+[  138.628078] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  138.634855] %CNXMAN, lost connection to a cluster member, reconnecting
+[  139.131017] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  139.137711] %CNXMAN, lost connection to a cluster member, reconnecting
+[  139.637834] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  139.645036] %CNXMAN, lost connection to a cluster member, reconnecting
+[  140.138962] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  140.144293] %CNXMAN, lost connection to a cluster member, reconnecting
+[  140.637688] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  140.644353] %CNXMAN, lost connection to a cluster member, reconnecting
+[  141.137833] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  141.143374] %CNXMAN, lost connection to a cluster member, reconnecting
+[  141.644514] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  141.650568] %CNXMAN, lost connection to a cluster member, reconnecting
+[  142.138772] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  142.145244] %CNXMAN, lost connection to a cluster member, reconnecting
+[  142.649158] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  142.656023] %CNXMAN, lost connection to a cluster member, reconnecting
+[  143.141300] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  143.149304] %CNXMAN, lost connection to a cluster member, reconnecting
+[  143.642972] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  143.650301] %CNXMAN, lost connection to a cluster member, reconnecting
+[  144.145109] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  144.153067] %CNXMAN, lost connection to a cluster member, reconnecting
+[  144.642991] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  144.648774] %CNXMAN, lost connection to a cluster member, reconnecting
+[  145.143070] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  145.150162] %CNXMAN, lost connection to a cluster member, reconnecting
+[  145.641468] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  145.648236] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-120"
+DFE-POLL-OVMXB-120
+$ [  146.145967] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  146.151656] %CNXMAN, lost connection to a cluster member, reconnecting
+[  146.640672] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  146.647506] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:34:13
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  147.139228] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  147.145620] %CNXMAN, lost connection to a cluster member, reconnecting
+[  147.638396] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  147.643970] %CNXMAN, lost connection to a cluster member, reconnecting
+[  148.137612] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  148.143726] %CNXMAN, lost connection to a cluster member, reconnecting
+[  148.638514] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  148.644032] %CNXMAN, lost connection to a cluster member, reconnecting
+[  149.142378] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  149.149104] %CNXMAN, lost connection to a cluster member, reconnecting
+[  149.638979] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  149.646583] %CNXMAN, lost connection to a cluster member, reconnecting
+[  150.143452] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  150.156811] %CNXMAN, lost connection to a cluster member, reconnecting
+[  150.640974] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  150.648300] %CNXMAN, lost connection to a cluster member, reconnecting
+[  151.141568] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  151.148687] %CNXMAN, lost connection to a cluster member, reconnecting
+[  151.640131] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  151.649218] %CNXMAN, lost connection to a cluster member, reconnecting
+[  152.138642] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  152.145536] %CNXMAN, lost connection to a cluster member, reconnecting
+[  152.641723] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  152.648102] %CNXMAN, lost connection to a cluster member, reconnecting
+[  153.138085] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  153.144324] %CNXMAN, lost connection to a cluster member, reconnecting
+[  153.650296] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  153.655657] %CNXMAN, lost connection to a cluster member, reconnecting
+[  154.153280] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  154.158640] %CNXMAN, lost connection to a cluster member, reconnecting
+[  154.648404] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  154.654623] %CNXMAN, lost connection to a cluster member, reconnecting
+[  155.150798] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  155.156558] %CNXMAN, lost connection to a cluster member, reconnecting
+[  155.654277] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  155.660591] %CNXMAN, lost connection to a cluster member, reconnecting
+[  156.156346] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  156.162236] %CNXMAN, lost connection to a cluster member, reconnecting
+[  156.653562] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  156.663076] %CNXMAN, lost connection to a cluster member, reconnecting
+[  157.151743] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  157.157244] %CNXMAN, lost connection to a cluster member, reconnecting
+[  157.654062] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  157.659544] %CNXMAN, lost connection to a cluster member, reconnecting
+[  158.152137] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  158.157750] %CNXMAN, lost connection to a cluster member, reconnecting
+[  158.651693] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  158.657961] %CNXMAN, lost connection to a cluster member, reconnecting
+[  159.151000] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  159.160298] %CNXMAN, lost connection to a cluster member, reconnecting
+[  159.648906] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  159.654405] %CNXMAN, lost connection to a cluster member, reconnecting
+[  160.147047] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  160.152967] %CNXMAN, lost connection to a cluster member, reconnecting
+[  160.655136] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  160.661980] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-135"
+DFE-POLL-OVMXB-135
+$ [  161.148671] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  161.154876] %CNXMAN, lost connection to a cluster member, reconnecting
+[  161.656360] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  161.663976] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:34:28
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  162.161161] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  162.166605] %CNXMAN, lost connection to a cluster member, reconnecting
+[  162.657841] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  162.663865] %CNXMAN, lost connection to a cluster member, reconnecting
+[  163.162514] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  163.168314] %CNXMAN, lost connection to a cluster member, reconnecting
+[  163.658220] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  163.665486] %CNXMAN, lost connection to a cluster member, reconnecting
+[  164.157951] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  164.164027] %CNXMAN, lost connection to a cluster member, reconnecting
+[  164.663540] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  164.670343] %CNXMAN, lost connection to a cluster member, reconnecting
+[  165.160869] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  165.166342] %CNXMAN, lost connection to a cluster member, reconnecting
+[  165.664866] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  165.672567] %CNXMAN, lost connection to a cluster member, reconnecting
+[  166.161963] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  166.167372] %CNXMAN, lost connection to a cluster member, reconnecting
+[  166.660531] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  166.665741] %CNXMAN, lost connection to a cluster member, reconnecting
+[  167.159716] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  167.165849] %CNXMAN, lost connection to a cluster member, reconnecting
+[  167.659168] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  167.664429] %CNXMAN, lost connection to a cluster member, reconnecting
+[  168.155951] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  168.161202] %CNXMAN, lost connection to a cluster member, reconnecting
+[  168.658045] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  168.663069] %CNXMAN, lost connection to a cluster member, reconnecting
+[  169.157429] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  169.163901] %CNXMAN, lost connection to a cluster member, reconnecting
+[  169.653549] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  169.659714] %CNXMAN, lost connection to a cluster member, reconnecting
+[  170.157571] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  170.164612] %CNXMAN, lost connection to a cluster member, reconnecting
+[  170.654337] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  170.659959] %CNXMAN, lost connection to a cluster member, reconnecting
+[  171.154489] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  171.161097] %CNXMAN, lost connection to a cluster member, reconnecting
+[  171.658141] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  171.663406] %CNXMAN, lost connection to a cluster member, reconnecting
+[  172.155295] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  172.161218] %CNXMAN, lost connection to a cluster member, reconnecting
+[  172.655088] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  172.661488] %CNXMAN, lost connection to a cluster member, reconnecting
+[  173.151482] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  173.156950] %CNXMAN, lost connection to a cluster member, reconnecting
+[  173.659234] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  173.664862] %CNXMAN, lost connection to a cluster member, reconnecting
+[  174.161910] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  174.168628] %CNXMAN, lost connection to a cluster member, reconnecting
+[  174.664974] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  174.671503] %CNXMAN, lost connection to a cluster member, reconnecting
+[  175.161122] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  175.167136] %CNXMAN, lost connection to a cluster member, reconnecting
+[  175.666106] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  175.672374] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-150"
+DFE-POLL-OVMXB-150
+$ [  176.157784] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  176.163634] %CNXMAN, lost connection to a cluster member, reconnecting
+[  176.664999] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  176.672283] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:34:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  177.158155] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  177.167368] %CNXMAN, lost connection to a cluster member, reconnecting
+[  177.657234] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  177.662673] %CNXMAN, lost connection to a cluster member, reconnecting
+[  178.157491] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  178.164061] %CNXMAN, lost connection to a cluster member, reconnecting
+[  178.657712] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  178.662995] %CNXMAN, lost connection to a cluster member, reconnecting
+[  179.157013] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  179.165531] %CNXMAN, lost connection to a cluster member, reconnecting
+[  179.659933] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  179.667262] %CNXMAN, lost connection to a cluster member, reconnecting
+[  180.152430] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  180.158016] %CNXMAN, lost connection to a cluster member, reconnecting
+[  180.653332] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  180.659337] %CNXMAN, lost connection to a cluster member, reconnecting
+[  181.167268] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  181.174199] %CNXMAN, lost connection to a cluster member, reconnecting
+[  181.674084] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  181.680312] %CNXMAN, lost connection to a cluster member, reconnecting
+[  182.167846] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  182.175909] %CNXMAN, lost connection to a cluster member, reconnecting
+[  182.677109] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  182.683577] %CNXMAN, lost connection to a cluster member, reconnecting
+[  183.178141] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  183.184612] %CNXMAN, lost connection to a cluster member, reconnecting
+[  183.677736] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  183.683111] %CNXMAN, lost connection to a cluster member, reconnecting
+[  184.177275] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  184.183405] %CNXMAN, lost connection to a cluster member, reconnecting
+[  184.677627] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  184.687061] %CNXMAN, lost connection to a cluster member, reconnecting
+[  185.181974] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  185.187514] %CNXMAN, lost connection to a cluster member, reconnecting
+[  185.681516] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  185.687282] %CNXMAN, lost connection to a cluster member, reconnecting
+[  186.178104] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  186.184724] %CNXMAN, lost connection to a cluster member, reconnecting
+[  186.683325] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  186.690076] %CNXMAN, lost connection to a cluster member, reconnecting
+[  187.183912] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  187.190544] %CNXMAN, lost connection to a cluster member, reconnecting
+[  187.683784] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  187.693596] %CNXMAN, lost connection to a cluster member, reconnecting
+[  188.178413] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  188.184883] %CNXMAN, lost connection to a cluster member, reconnecting
+[  188.683838] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  188.693192] %CNXMAN, lost connection to a cluster member, reconnecting
+[  189.178818] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  189.186406] %CNXMAN, lost connection to a cluster member, reconnecting
+[  189.679769] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  189.686198] %CNXMAN, lost connection to a cluster member, reconnecting
+[  190.179547] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  190.186590] %CNXMAN, lost connection to a cluster member, reconnecting
+[  190.675468] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  190.684704] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-165"
+DFE-POLL-OVMXB-165
+$ [  191.180110] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  191.190447] %CNXMAN, lost connection to a cluster member, reconnecting
+[  191.680386] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  191.686001] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:34:58
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  192.176830] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  192.182873] %CNXMAN, lost connection to a cluster member, reconnecting
+[  192.681783] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  192.687026] %CNXMAN, lost connection to a cluster member, reconnecting
+[  193.180589] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  193.186116] %CNXMAN, lost connection to a cluster member, reconnecting
+[  193.678654] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  193.684062] %CNXMAN, lost connection to a cluster member, reconnecting
+[  194.177825] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  194.184725] %CNXMAN, lost connection to a cluster member, reconnecting
+[  194.679887] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  194.685566] %CNXMAN, lost connection to a cluster member, reconnecting
+[  195.180627] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  195.192455] %CNXMAN, lost connection to a cluster member, reconnecting
+[  195.687501] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  195.702637] %CNXMAN, lost connection to a cluster member, reconnecting
+[  196.190808] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  196.197753] %CNXMAN, lost connection to a cluster member, reconnecting
+[  196.694421] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  196.701130] %CNXMAN, lost connection to a cluster member, reconnecting
+[  197.191947] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  197.197787] %CNXMAN, lost connection to a cluster member, reconnecting
+[  197.695138] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  197.700435] %CNXMAN, lost connection to a cluster member, reconnecting
+[  198.187688] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  198.193105] %CNXMAN, lost connection to a cluster member, reconnecting
+[  198.693606] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  198.705074] %CNXMAN, lost connection to a cluster member, reconnecting
+[  199.187925] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  199.194253] %CNXMAN, lost connection to a cluster member, reconnecting
+[  199.689969] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  199.696228] %CNXMAN, lost connection to a cluster member, reconnecting
+[  200.190310] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  200.195809] %CNXMAN, lost connection to a cluster member, reconnecting
+[  200.688076] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  200.693268] %CNXMAN, lost connection to a cluster member, reconnecting
+[  201.194394] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  201.199945] %CNXMAN, lost connection to a cluster member, reconnecting
+[  201.687862] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  201.693266] %CNXMAN, lost connection to a cluster member, reconnecting
+[  202.188424] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  202.197371] %CNXMAN, lost connection to a cluster member, reconnecting
+[  202.688023] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  202.694515] %CNXMAN, lost connection to a cluster member, reconnecting
+[  203.188836] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  203.195108] %CNXMAN, lost connection to a cluster member, reconnecting
+[  203.689127] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  203.694929] %CNXMAN, lost connection to a cluster member, reconnecting
+[  204.188318] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  204.194528] %CNXMAN, lost connection to a cluster member, reconnecting
+[  204.687058] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  204.693033] %CNXMAN, lost connection to a cluster member, reconnecting
+[  205.188141] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  205.197944] %CNXMAN, lost connection to a cluster member, reconnecting
+[  205.690373] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  205.702826] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-180"
+DFE-POLL-OVMXB-180
+$ [  206.188587] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  206.194497] %CNXMAN, lost connection to a cluster member, reconnecting
+[  206.687457] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  206.693917] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:35:13
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  207.190224] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  207.195312] %CNXMAN, lost connection to a cluster member, reconnecting
+[  207.687371] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  207.693522] %CNXMAN, lost connection to a cluster member, reconnecting
+[  208.187977] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  208.194814] %CNXMAN, lost connection to a cluster member, reconnecting
+[  208.688527] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  208.699519] %CNXMAN, lost connection to a cluster member, reconnecting
+[  209.188537] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  209.195733] %CNXMAN, lost connection to a cluster member, reconnecting
+[  209.688219] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  209.694479] %CNXMAN, lost connection to a cluster member, reconnecting
+[  210.184437] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  210.191677] %CNXMAN, lost connection to a cluster member, reconnecting
+[  210.683363] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  210.689059] %CNXMAN, lost connection to a cluster member, reconnecting
+[  211.184030] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  211.190826] %CNXMAN, lost connection to a cluster member, reconnecting
+[  211.689855] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  211.697630] %CNXMAN, lost connection to a cluster member, reconnecting
+[  212.187093] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  212.197368] %CNXMAN, lost connection to a cluster member, reconnecting
+[  212.687743] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  212.694004] %CNXMAN, lost connection to a cluster member, reconnecting
+[  213.188015] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  213.196939] %CNXMAN, lost connection to a cluster member, reconnecting
+[  213.688837] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  213.694963] %CNXMAN, lost connection to a cluster member, reconnecting
+[  214.188583] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  214.194712] %CNXMAN, lost connection to a cluster member, reconnecting
+[  214.687421] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  214.693088] %CNXMAN, lost connection to a cluster member, reconnecting
+[  215.193400] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  215.198949] %CNXMAN, lost connection to a cluster member, reconnecting
+[  215.691769] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  215.698723] %CNXMAN, lost connection to a cluster member, reconnecting
+[  216.187709] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  216.192496] %CNXMAN, lost connection to a cluster member, reconnecting
+[  216.688763] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  216.696157] %CNXMAN, lost connection to a cluster member, reconnecting
+[  217.187825] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  217.194384] %CNXMAN, lost connection to a cluster member, reconnecting
+[  217.689001] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  217.698373] %CNXMAN, lost connection to a cluster member, reconnecting
+[  218.186986] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  218.192371] %CNXMAN, lost connection to a cluster member, reconnecting
+[  218.688331] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  218.694734] %CNXMAN, lost connection to a cluster member, reconnecting
+[  219.188062] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  219.193053] %CNXMAN, lost connection to a cluster member, reconnecting
+[  219.690615] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  219.696228] %CNXMAN, lost connection to a cluster member, reconnecting
+[  220.187229] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  220.193350] %CNXMAN, lost connection to a cluster member, reconnecting
+[  220.688534] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  220.694021] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-195"
+DFE-POLL-OVMXB-195
+$ [  221.191581] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  221.197107] %CNXMAN, lost connection to a cluster member, reconnecting
+[  221.691080] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  221.697963] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:35:28
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  222.191908] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  222.197187] %CNXMAN, lost connection to a cluster member, reconnecting
+[  222.690141] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  222.696051] %CNXMAN, lost connection to a cluster member, reconnecting
+[  223.187570] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  223.193256] %CNXMAN, lost connection to a cluster member, reconnecting
+[  223.689532] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  223.696580] %CNXMAN, lost connection to a cluster member, reconnecting
+[  224.186338] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  224.192062] %CNXMAN, lost connection to a cluster member, reconnecting
+[  224.689348] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  224.698148] %CNXMAN, lost connection to a cluster member, reconnecting
+[  225.190344] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  225.196766] %CNXMAN, lost connection to a cluster member, reconnecting
+[  225.688815] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  225.699778] %CNXMAN, lost connection to a cluster member, reconnecting
+[  226.187941] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  226.199484] %CNXMAN, lost connection to a cluster member, reconnecting
+[  226.688083] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  226.693463] %CNXMAN, lost connection to a cluster member, reconnecting
+[  227.188981] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  227.197493] %CNXMAN, lost connection to a cluster member, reconnecting
+[  227.687792] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  227.696082] %CNXMAN, lost connection to a cluster member, reconnecting
+[  228.187869] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  228.194207] %CNXMAN, lost connection to a cluster member, reconnecting
+[  228.689523] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  228.695186] %CNXMAN, lost connection to a cluster member, reconnecting
+[  229.186506] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  229.192452] %CNXMAN, lost connection to a cluster member, reconnecting
+[  229.688272] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  229.699585] %CNXMAN, lost connection to a cluster member, reconnecting
+[  230.187802] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  230.193673] %CNXMAN, lost connection to a cluster member, reconnecting
+[  230.688239] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  230.693731] %CNXMAN, lost connection to a cluster member, reconnecting
+[  231.188215] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  231.194041] %CNXMAN, lost connection to a cluster member, reconnecting
+[  231.688349] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  231.696817] %CNXMAN, lost connection to a cluster member, reconnecting
+[  232.189930] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  232.200102] %CNXMAN, lost connection to a cluster member, reconnecting
+[  232.683597] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  232.690764] %CNXMAN, lost connection to a cluster member, reconnecting
+[  233.184113] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  233.190849] %CNXMAN, lost connection to a cluster member, reconnecting
+[  233.685150] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  233.691645] %CNXMAN, lost connection to a cluster member, reconnecting
+[  234.188358] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  234.193982] %CNXMAN, lost connection to a cluster member, reconnecting
+[  234.688462] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  234.693632] %CNXMAN, lost connection to a cluster member, reconnecting
+[  235.193845] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  235.206047] %CNXMAN, lost connection to a cluster member, reconnecting
+[  235.688158] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  235.694657] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-210"
+DFE-POLL-OVMXB-210
+$ [  236.191945] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  236.199430] %CNXMAN, lost connection to a cluster member, reconnecting
+[  236.697753] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  236.707366] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:35:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  237.205772] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  237.211548] %CNXMAN, lost connection to a cluster member, reconnecting
+[  237.705051] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  237.712745] %CNXMAN, lost connection to a cluster member, reconnecting
+[  238.197816] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  238.204456] %CNXMAN, lost connection to a cluster member, reconnecting
+[  238.699029] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  238.708337] %CNXMAN, lost connection to a cluster member, reconnecting
+[  239.198501] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  239.203663] %CNXMAN, lost connection to a cluster member, reconnecting
+[  239.701725] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  239.707414] %CNXMAN, lost connection to a cluster member, reconnecting
+[  240.196088] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  240.202747] %CNXMAN, lost connection to a cluster member, reconnecting
+[  240.696939] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  240.702772] %CNXMAN, lost connection to a cluster member, reconnecting
+[  241.198660] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  241.205934] %CNXMAN, lost connection to a cluster member, reconnecting
+[  241.700635] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  241.708038] %CNXMAN, lost connection to a cluster member, reconnecting
+[  242.195851] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  242.201339] %CNXMAN, lost connection to a cluster member, reconnecting
+[  242.697784] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  242.703021] %CNXMAN, lost connection to a cluster member, reconnecting
+[  243.196914] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  243.203247] %CNXMAN, lost connection to a cluster member, reconnecting
+[  243.696276] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  243.702489] %CNXMAN, lost connection to a cluster member, reconnecting
+[  244.197234] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  244.202468] %CNXMAN, lost connection to a cluster member, reconnecting
+[  244.697304] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  244.702784] %CNXMAN, lost connection to a cluster member, reconnecting
+[  245.197995] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  245.206352] %CNXMAN, lost connection to a cluster member, reconnecting
+[  245.701613] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  245.708406] %CNXMAN, lost connection to a cluster member, reconnecting
+[  246.200464] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  246.207697] %CNXMAN, lost connection to a cluster member, reconnecting
+[  246.705010] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  246.710648] %CNXMAN, lost connection to a cluster member, reconnecting
+[  247.204156] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  247.209904] %CNXMAN, lost connection to a cluster member, reconnecting
+[  247.700539] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  247.712429] %CNXMAN, lost connection to a cluster member, reconnecting
+[  248.198094] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  248.204622] %CNXMAN, lost connection to a cluster member, reconnecting
+[  248.697349] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  248.705368] %CNXMAN, lost connection to a cluster member, reconnecting
+[  249.200477] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  249.207881] %CNXMAN, lost connection to a cluster member, reconnecting
+[  249.697308] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  249.703437] %CNXMAN, lost connection to a cluster member, reconnecting
+[  250.197259] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  250.204021] %CNXMAN, lost connection to a cluster member, reconnecting
+[  250.697692] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  250.706785] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-225"
+DFE-POLL-OVMXB-225
+$ [  251.198240] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  251.207150] %CNXMAN, lost connection to a cluster member, reconnecting
+[  251.701140] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  251.713999] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:35:58
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  252.194334] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  252.201713] %CNXMAN, lost connection to a cluster member, reconnecting
+[  252.708762] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  252.714947] %CNXMAN, lost connection to a cluster member, reconnecting
+[  253.193002] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  253.198921] %CNXMAN, lost connection to a cluster member, reconnecting
+[  253.696311] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  253.702003] %CNXMAN, lost connection to a cluster member, reconnecting
+[  254.198551] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  254.206365] %CNXMAN, lost connection to a cluster member, reconnecting
+[  254.703269] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  254.710215] %CNXMAN, lost connection to a cluster member, reconnecting
+[  255.201778] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  255.207906] %CNXMAN, lost connection to a cluster member, reconnecting
+[  255.699223] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  255.706364] %CNXMAN, lost connection to a cluster member, reconnecting
+[  256.205074] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  256.210741] %CNXMAN, lost connection to a cluster member, reconnecting
+[  256.703641] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  256.709298] %CNXMAN, lost connection to a cluster member, reconnecting
+[  257.198234] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  257.204335] %CNXMAN, lost connection to a cluster member, reconnecting
+[  257.697552] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  257.704009] %CNXMAN, lost connection to a cluster member, reconnecting
+[  258.198599] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  258.205876] %CNXMAN, lost connection to a cluster member, reconnecting
+[  258.700572] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  258.706348] %CNXMAN, lost connection to a cluster member, reconnecting
+[  259.199164] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  259.205248] %CNXMAN, lost connection to a cluster member, reconnecting
+[  259.703773] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  259.710866] %CNXMAN, lost connection to a cluster member, reconnecting
+[  260.200556] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  260.208123] %CNXMAN, lost connection to a cluster member, reconnecting
+[  260.707918] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  260.713144] %CNXMAN, lost connection to a cluster member, reconnecting
+[  261.207155] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  261.213190] %CNXMAN, lost connection to a cluster member, reconnecting
+[  261.709895] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  261.716899] %CNXMAN, lost connection to a cluster member, reconnecting
+[  262.207233] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  262.213687] %CNXMAN, lost connection to a cluster member, reconnecting
+[  262.707824] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  262.722782] %CNXMAN, lost connection to a cluster member, reconnecting
+[  263.207582] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  263.213018] %CNXMAN, lost connection to a cluster member, reconnecting
+[  263.710857] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  263.718547] %CNXMAN, lost connection to a cluster member, reconnecting
+[  264.207754] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  264.215129] %CNXMAN, lost connection to a cluster member, reconnecting
+[  264.709007] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  264.721198] %CNXMAN, lost connection to a cluster member, reconnecting
+[  265.208520] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  265.215223] %CNXMAN, lost connection to a cluster member, reconnecting
+[  265.711898] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  265.721733] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-240"
+DFE-POLL-OVMXB-240
+$ [  266.211584] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  266.218281] %CNXMAN, lost connection to a cluster member, reconnecting
+[  266.711314] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  266.721420] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:36:13
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  267.208141] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  267.214605] %CNXMAN, lost connection to a cluster member, reconnecting
+[  267.720062] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  267.735027] %CNXMAN, lost connection to a cluster member, reconnecting
+[  268.218594] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  268.224545] %CNXMAN, lost connection to a cluster member, reconnecting
+[  268.727277] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  268.735101] %CNXMAN, lost connection to a cluster member, reconnecting
+[  269.232720] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  269.238126] %CNXMAN, lost connection to a cluster member, reconnecting
+[  269.731424] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  269.738946] %CNXMAN, lost connection to a cluster member, reconnecting
+[  270.228291] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  270.236519] %CNXMAN, lost connection to a cluster member, reconnecting
+[  270.729017] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  270.740076] %CNXMAN, lost connection to a cluster member, reconnecting
+[  271.230293] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  271.236998] %CNXMAN, lost connection to a cluster member, reconnecting
+[  271.733290] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  271.741908] %CNXMAN, lost connection to a cluster member, reconnecting
+[  272.230248] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  272.239629] %CNXMAN, lost connection to a cluster member, reconnecting
+[  272.735387] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  272.741453] %CNXMAN, lost connection to a cluster member, reconnecting
+[  273.228296] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  273.233790] %CNXMAN, lost connection to a cluster member, reconnecting
+[  273.731608] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  273.741302] %CNXMAN, lost connection to a cluster member, reconnecting
+[  274.228129] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  274.237409] %CNXMAN, lost connection to a cluster member, reconnecting
+[  274.729143] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  274.736492] %CNXMAN, lost connection to a cluster member, reconnecting
+[  275.237362] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  275.244870] %CNXMAN, lost connection to a cluster member, reconnecting
+[  275.746554] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  275.754200] %CNXMAN, lost connection to a cluster member, reconnecting
+[  276.256143] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  276.263541] %CNXMAN, lost connection to a cluster member, reconnecting
+[  276.768888] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  276.775547] %CNXMAN, lost connection to a cluster member, reconnecting
+[  277.275492] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  277.284444] %CNXMAN, lost connection to a cluster member, reconnecting
+[  277.773992] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  277.781196] %CNXMAN, lost connection to a cluster member, reconnecting
+[  278.271206] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  278.279198] %CNXMAN, lost connection to a cluster member, reconnecting
+[  278.770151] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  278.776509] %CNXMAN, lost connection to a cluster member, reconnecting
+[  279.271667] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  279.277316] %CNXMAN, lost connection to a cluster member, reconnecting
+[  279.771557] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  279.779566] %CNXMAN, lost connection to a cluster member, reconnecting
+[  280.275229] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  280.284073] %CNXMAN, lost connection to a cluster member, reconnecting
+[  280.777416] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  280.783464] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-255"
+DFE-POLL-OVMXB-255
+$ [  281.278761] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  281.287626] %CNXMAN, lost connection to a cluster member, reconnecting
+[  281.782321] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  281.789820] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:36:28
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  282.278852] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  282.285625] %CNXMAN, lost connection to a cluster member, reconnecting
+[  282.785945] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  282.791502] %CNXMAN, lost connection to a cluster member, reconnecting
+[  283.292477] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  283.298493] %CNXMAN, lost connection to a cluster member, reconnecting
+[  283.788752] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  283.794452] %CNXMAN, lost connection to a cluster member, reconnecting
+[  284.287534] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  284.295931] %CNXMAN, lost connection to a cluster member, reconnecting
+[  284.787786] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  284.796547] %CNXMAN, lost connection to a cluster member, reconnecting
+[  285.290357] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  285.296448] %CNXMAN, lost connection to a cluster member, reconnecting
+[  285.792876] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  285.801483] %CNXMAN, lost connection to a cluster member, reconnecting
+[  286.289927] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  286.295772] %CNXMAN, lost connection to a cluster member, reconnecting
+[  286.795783] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  286.801689] %CNXMAN, lost connection to a cluster member, reconnecting
+[  287.303883] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  287.310943] %CNXMAN, lost connection to a cluster member, reconnecting
+[  287.804115] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  287.811901] %CNXMAN, lost connection to a cluster member, reconnecting
+[  288.308206] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  288.314555] %CNXMAN, lost connection to a cluster member, reconnecting
+[  288.818614] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  288.824127] %CNXMAN, lost connection to a cluster member, reconnecting
+[  289.321610] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  289.327120] %CNXMAN, lost connection to a cluster member, reconnecting
+[  289.825344] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  289.832448] %CNXMAN, lost connection to a cluster member, reconnecting
+[  290.323469] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  290.329756] %CNXMAN, lost connection to a cluster member, reconnecting
+[  290.821615] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  290.828463] %CNXMAN, lost connection to a cluster member, reconnecting
+[  291.318533] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  291.324428] %CNXMAN, lost connection to a cluster member, reconnecting
+[  291.821085] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  291.832890] %CNXMAN, lost connection to a cluster member, reconnecting
+[  292.323275] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  292.330565] %CNXMAN, lost connection to a cluster member, reconnecting
+[  292.827157] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  292.833285] %CNXMAN, lost connection to a cluster member, reconnecting
+[  293.336291] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  293.341927] %CNXMAN, lost connection to a cluster member, reconnecting
+[  293.840592] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  293.848733] %CNXMAN, lost connection to a cluster member, reconnecting
+[  294.337953] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  294.343494] %CNXMAN, lost connection to a cluster member, reconnecting
+[  294.840754] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  294.846931] %CNXMAN, lost connection to a cluster member, reconnecting
+[  295.337146] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  295.345127] %CNXMAN, lost connection to a cluster member, reconnecting
+[  295.837790] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  295.843931] %CNXMAN, lost connection to a cluster member, reconnecting
+WRITE SYS$OUTPUT "DFE-POLL-OVMXB-270"
+DFE-POLL-OVMXB-270
+$ [  296.339316] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  296.350646] %CNXMAN, lost connection to a cluster member, reconnecting
+[  296.838507] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  296.845369] %CNXMAN, lost connection to a cluster member, reconnecting
+SHOW CLUSTER
+View of Cluster from system ID 1988 node: OVMXB    25-SEP-2026 13:36:43
+
++---------------------------------------------------------------+
+|                 SYSTEMS                |      MEMBERS         |
+|----------------------------------------+----------------------|
+| NODE   | CSID     | SOFTWARE        | STATUS           |
+|--------+----------+-----------------+------------------|
+| OVMXB  |          | VMX V0.7        | LOCAL            |
+| 1987   |          |                 | OPEN             |
+| 1989   |          |                 | WAIT             |
++---------------------------------------------------------------+
+$ [  297.337141] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  297.345860] %CNXMAN, lost connection to a cluster member, reconnecting
+[  297.842497] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  297.847739] %CNXMAN, lost connection to a cluster member, reconnecting
+[  298.340397] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  298.347506] %CNXMAN, lost connection to a cluster member, reconnecting
+[  298.839343] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  298.844993] %CNXMAN, lost connection to a cluster member, reconnecting
+[  299.339119] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  299.344571] %CNXMAN, lost connection to a cluster member, reconnecting
+[  299.838602] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  299.844191] %CNXMAN, lost connection to a cluster member, reconnecting
+[  300.337476] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  300.343936] %CNXMAN, lost connection to a cluster member, reconnecting
+[  300.837671] %CNXMAN, the VMS$VAXcluster connection to a cluster member closed: remote disconnect
+[  300.843800] %CNXMAN, lost connection to a cluster member, reconnecting

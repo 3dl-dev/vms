@@ -1,0 +1,67 @@
+===== M-1 stall=5s start 17:19:49 =====
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[M-1] VAXC booting...
+[M-1] VAXC formed at 17:21:25
+started A (art=/lab/run-s8/art/m1)
+[M-1] OVMXA MEMBER at 17:21:46
+started B (art=/lab/run-s8/art/m1)
+[M-1] OVMXB booting with a 5s GUEST STALL armed at 17:21:47
+[M-1(5s)] PASS  stalled=0 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== M-2 stall=8s start 17:26:03 =====
+b36start.sh: line 6: 15882 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[M-2] VAXC booting...
+[M-2] VAXC formed at 17:27:39
+started A (art=/lab/run-s8/art/m1)
+[M-2] OVMXA MEMBER at 17:28:00
+started B (art=/lab/run-s8/art/m1)
+[M-2] OVMXB booting with a 8s GUEST STALL armed at 17:28:01
+[M-2(8s)] PASS  stall=8s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=0
+===== M-3 stall=15s start 17:32:15 =====
+b36start.sh: line 6: 27134 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[M-3] VAXC booting...
+[M-3] VAXC formed at 17:33:51
+started A (art=/lab/run-s8/art/m1)
+[M-3] OVMXA MEMBER at 17:34:12
+started B (art=/lab/run-s8/art/m1)
+[M-3] OVMXB booting with a 15s GUEST STALL armed at 17:34:13
+[M-3(15s)] FAIL  stall=15s injected=1 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=0/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== M-4 stall=18s start 17:40:56 =====
+b36start.sh: line 6: 38052 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[M-4] VAXC booting...
+[M-4] VAXC formed at 17:42:32
+started A (art=/lab/run-s8/art/m1)
+[M-4] OVMXA MEMBER at 17:42:53
+started B (art=/lab/run-s8/art/m1)
+[M-4] OVMXB booting with a 18s GUEST STALL armed at 17:42:54
+[M-4(18s)] FAIL  stall=18s injected=1 B-MEMBER=0 A-MEMBER=1 VAX-proposed-B=0 finalMEMBERrows(B/A)=0/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=1 reconnect-lines=2
+===== M-5 stall=22s start 17:49:37 =====
+b36start.sh: line 6: 48955 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[M-5] VAXC booting...
+[M-5] VAXC formed at 17:51:14
+started A (art=/lab/run-s8/art/m1)
+[M-5] OVMXA MEMBER at 17:51:35
+started B (art=/lab/run-s8/art/m1)
+[M-5] OVMXB booting with a 22s GUEST STALL armed at 17:51:36
+[M-5(22s)] PASS  stall=22s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=1 finalMEMBERrows(B/A)=3/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=1
+===== M-6 stall=30s start 17:56:15 =====
+b36start.sh: line 6: 59984 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null
+started cap (art=/lab/run-s8/art)
+started C (art=/lab/run-s8/art)
+[M-6] VAXC booting...
+[M-6] VAXC formed at 17:57:51
+started A (art=/lab/run-s8/art/m1)
+[M-6] OVMXA MEMBER at 17:58:13
+started B (art=/lab/run-s8/art/m1)
+[M-6] OVMXB booting with a 30s GUEST STALL armed at 17:58:14
+[M-6(30s)] FAIL  stall=30s injected=1 B-MEMBER=1 A-MEMBER=1 VAX-proposed-B=0 finalMEMBERrows(B/A)=2/3 wedged=0 bugchecks=0 4c9-loop=0 refused-giveup=0 cluexits=0 reconnect-lines=3
+===== M done: 3 PASS / 3 FAIL =====
+b36start.sh: line 6: 71170 Killed                  setsid nohup python3 $R/nodedrv.py $R/nodeC $R/VAXC.console.log --boot "B DUA0" > $R/nodeC.drv.out 2>&1 < /dev/null

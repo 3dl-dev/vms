@@ -1,8 +1,8 @@
 # What OVMX Can Do at V0.6
 
 A concise, honest read for a human evaluator: what actually works in OVMX as of the
-V0.6 release, and what does not yet. Every claim below is grounded in the source and in
-the per-surface register. For the exhaustive, per-surface inventory (459 surfaces across
+V0.6 release. Every claim below is grounded in the source and in
+the per-surface register. For the exhaustive, per-surface inventory (461 surfaces across
 9 domains, each with a status and an authenticity rating), see
 [`compatibility-surface.md`](compatibility-surface.md). This page is the prose overview;
 that register is the ground truth.
@@ -42,14 +42,13 @@ OVMX is a genuine VMScluster participant, not a simulation of one.
 - **The wire is real.** The LAN transport under SCS uses genuine raw-Ethernet frames on
   the LAVC/SCA ethertype (0x6007), not a UDP/IP tunnel. (Register: `nisca`, `scs`.)
 
-**What's not there yet:** a **voting cluster under a real quorum algorithm** (quorum
-recompute exists, but forming/holding a cluster on votes is post-0.6);
-**MSCP-served volumes** as the cluster storage path (MSCP disk serving does real
-`pread`/`pwrite`, but serving into a cluster is tracked separately);
-**cluster-wide logical names and global sections** (absent — cluster-wide scope degrades
-to system-wide); and an **application-process cross-node lock acquisition** (an app
-`$ENQ` of a remotely-mastered resource returns the honest `SS$_UNSUPPORTED` stub today;
-cross-node locks are currently daemon-choreographed — tracked as `vms-d1f`, post-1.0).
+**Quorum and lock-acquisition scope today:** quorum votes are computed and recomputed
+on membership change; a cluster's lock activity freezes on quorum loss and resumes on
+regain (the executive's own enforcement, not convention). MSCP disk serving does real
+`pread`/`pwrite` against a genuine ODS-2 volume. Cross-node lock acquisition today is
+daemon-choreographed — the DLM daemon holds and coordinates cross-node resources on
+behalf of the node; a direct application-process `$ENQ` of a remotely-mastered resource
+is tracked as follow-on work (`vms-d1f`).
 
 ## Files-11 ODS-2 and login
 

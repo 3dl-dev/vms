@@ -52,3 +52,17 @@ f0b8b49818f74912f82b1851c3c6f9cd71437d3eae07ebd0b8a5bfc76e6e16f8  cluster/captur
 e2e2be59f93d23233fbfa7a9c2bf6f936f3313c23c16054ead85c494b5be72eb  tests/lab/captures/vms-c03-dlm-opcodes-20260911/dlm-deq-20260911.pcap
 6ac0de0512f7b6111da4397dae6a8ee516781164a65db53d24d3b0fa89861c0c  tests/lab/captures/vms-c03-dlm-opcodes-20260911/dlm-lvb3-20260911.pcap
 69c572a633685525c967cf5035fe8232c5f7a24924cc47d2e2a2619a12200b44  tests/lab/captures/vms-727-lvb-20260911/c2-seq.pcap
+3b991432c0e12422ca234014a8885919c790bc5120ff8443616ca2fd31fde112  tests/lab/captures/vms-20c-rebuild-1789489597/rejoin-rebuild.pcap
+c6c70a2e926460c058fd0e3cedb55a56c4690acc8567371acb719270373db2d1  tests/lab/captures/vms147-browser-nodea-vaxc-20260922/hub-frames.json
+97bbeaf49b10507b849c4d5814b55cbfeca43d081c4753786d4a6e5264c3c0ce  tests/lab/captures/vms-0f8-browser-c03-channel-20260923/hubshapes.json
+a3fe5d3225847de27e99ff37129eb9939664ea32f965ca09d153e8ed7ed22784  tests/lab/captures/vms-e88-join-target-20260930/e88-A-20260930.pcap
+fc058972c33811bb42c2279ec2b7d8b9a4157fe51df1af51651ebc8e6329de1e  tests/lab/captures/vms-e88-join-target-20260930/e88-A2-20260930.pcap
+9e7dac6c1bfb3bfacac884b9a3cc283e9630483c9f1d369b3a18a5cd5f7d9eed  tests/lab/captures/vms-e88-join-target-20260930/e88-B-20260930.pcap
+a1edec4bdd38065c9f54c8d44fa92f82b3581aed53d55176cb0102aa08b9a753  tests/lab/captures/vms-e88-join-target-20260930/e88-C3-20260930.pcap
+e0b4da5bbbf626b12e08c644524950c180c0de0c3dcef308b69b83d5480e6691  tests/lab/captures/vms-eb3-joiner-freeze-20260930/eb3-F5-20260930.pcap
+11c017518e3eaa3496183cb2d3f485e89854c910c79bc3aa8c3fe8fe15f24a30  tests/lab/captures/vms-eb3-joiner-freeze-20260930/eb3-F6-20260930.pcap
+5e6157002717a06d31e5ff187fe1ee8df393e2178fdfcd429fe161fcb107a1c4  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-af4rig.pcap
+1dfef8d017f976161c9259af2d81c85ed563596210a7157fe8c94af569c11e51  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-b36or.pcap
+dd8d94d19c0980fde8b48203eafedb00b06164cd44523de14f71ad098c456599  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-s4a.pcap
+2f13202da072fc98137eb0f844635e5a62d4b1fbfe5647d9b282d76666ba521a  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-s4b.pcap
+6e578b6e26e84e1e2a03564836d7bdd2ccccf0c4f0ff12b8f16fe64c97c09a7e  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-s4d.pcap

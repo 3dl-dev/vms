@@ -99,8 +99,9 @@ Consequences under the standing rulings:
   no callers. Reusable as the syscall floor of the sockets API.
 - **⛔ Runtime has no NIC.** `run-qemu.sh:70` and `Dockerfile.bootable` both pass `-nic none`.
   **Nothing networks until this changes** — Phase 0 below.
-- **Reusable pattern:** `src/vmsscs/` already runs raw Ethernet over `AF_PACKET SOCK_RAW`
-  (ethertype 0x6007) with the executive device model — the datalink/device idioms transfer.
+- **Reusable pattern:** `src/kernel-core/vms_l2.c` already runs raw Ethernet over
+  `AF_PACKET SOCK_RAW` (ethertype 0x6007) for the SCS cluster wire, with the executive
+  device model — the datalink/device idioms transfer.
 
 ## 4. Architecture (layers, bottom-up)
 
@@ -207,8 +208,9 @@ is a *behaviour* oracle for command output only, not required to make progress.
 
 ## 8. Coordination / lane ownership
 
-New-file lane `src/vmstcpip/**` — disjoint from clustering (`src/vmsscs/**`) and parity
-(`src/vmsdcl/**`) except two shared touch-points, both handled append-only / by-sequencing:
+New-file lane `src/vmstcpip/**` — disjoint from clustering (the SCS/DLM/cluster family in
+`src/kernel-core/`) and parity (`src/vmsdcl/**`) except two shared touch-points, both handled
+append-only / by-sequencing:
 the DCL **verb table** (the `TCPIP` verb front-end; one owner per week, append-only) and the
 **executive device table** (`src/kernel/**` — Executive seat owns; BGn: registration lands
 through the bridge, never a parallel edit). Runtime NIC touches `distro/boot/run-qemu.sh` +

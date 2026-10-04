@@ -356,18 +356,33 @@ static void own_dir_contents_acp(uint32_t chan,
 }
 
 /*
- * Resolve `dirpath` (dotted, no brackets) on `chan` and give that directory --
- * its own header AND everything beneath it -- to [grp,mem] over the ACP.
+ * Resolve `dirpath` (dotted, no brackets) on `chan` and give that directory to
+ * [grp,mem] over the ACP. With `recurse` non-zero the WHOLE subtree beneath it
+ * is re-owned too; with `recurse` zero ONLY the directory's own header is set.
  * Returns 1 if the directory resolved (and was re-owned), 0 otherwise.
+ *
+ * WHY `recurse` MATTERS (rd vms-93b). Per-account home provisioning must NOT
+ * recurse: an account whose default directory is a SHARED container of other
+ * accounts' homes -- e.g. the TCPIP$DAYTIME service account's SYS$SYSDEVICE:
+ * [USERS], the base of every user login directory -- would otherwise seize
+ * [USERS] AND EVERY SIBLING HOME beneath it, clobbering (say) [USERS.GUEST]'s
+ * owner from GUEST's UIC to the service account's. GUEST then no longer owns its
+ * own login directory and, falling to the Group protection (dirs are G:RE, no
+ * write), cannot create a file in it (%RMS-E-CRE). VMS's account-provisioning
+ * step (CREATE/DIRECTORY/OWNER=[g,m]) owns the created directory, never a
+ * pre-existing sibling tree, so header-only is also the faithful behaviour; the
+ * system tree is still owned recursively by provision_ownership (recurse=1).
  */
 static int own_spec_tree_acp(uint32_t chan, const char *dirpath,
-                             uint32_t grp, uint32_t mem, const char *label)
+                             uint32_t grp, uint32_t mem, const char *label,
+                             int recurse)
 {
     uint16_t dn, ds; uint8_t dr, dx;
     if (!(rms_acp_resolve_did(chan, dirpath, &dn, &ds, &dr, &dx) & 1))
         return 0;
     own_object_acp(chan, dn, ds, dr, dx, grp, mem, label);    /* the dir header */
-    own_dir_contents_acp(chan, dn, ds, dr, dx, grp, mem, 0);  /* its contents   */
+    if (recurse)
+        own_dir_contents_acp(chan, dn, ds, dr, dx, grp, mem, 0);  /* + contents */
     return 1;
 }
 
@@ -407,7 +422,8 @@ static void provision_ownership(uint32_t sys_grp, uint32_t sys_mem)
     /* [SYS0] -- the top of the OpenVMS system tree (parent of VMS_SYSROOT
      * [SYS0.SYSCOMMON]); its own header lives in [000000]. Own it, then walk
      * everything beneath -- SYS$SYSTEM: and SYS$MANAGER: are under here. */
-    if (!own_spec_tree_acp(chan, "SYS0", sys_grp, sys_mem, "[000000]SYS0.DIR"))
+    if (!own_spec_tree_acp(chan, "SYS0", sys_grp, sys_mem, "[000000]SYS0.DIR",
+                           /*recurse=*/1))
         fprintf(stderr,
                 "%%OVMX-W-OWNER, system tree [SYS0] did not resolve over the "
                 "ACP\n");
@@ -458,8 +474,13 @@ static void provision_home(uint32_t uic_group, uint32_t uic_member,
         if (!(vms_kif_acp_assign(dev, &chan) & 1))
             continue;                          /* try the next candidate */
 
-        /* Present already? -> just (re)own it (and anything under it). */
-        if (own_spec_tree_acp(chan, dir, uic_group, uic_member, home_spec)) {
+        /* Present already? -> (re)own the home directory itself, but NOT its
+         * contents: a home that is a shared container (a service account's
+         * [USERS]) must never re-own the sibling homes beneath it (rd vms-93b,
+         * see own_spec_tree_acp). A per-account home's own files are created by
+         * that account and already carry its owner, so header-only is correct. */
+        if (own_spec_tree_acp(chan, dir, uic_group, uic_member, home_spec,
+                              /*recurse=*/0)) {
             vms_kif_dassgn(chan);
             return;
         }

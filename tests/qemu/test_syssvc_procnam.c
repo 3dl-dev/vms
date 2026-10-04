@@ -84,6 +84,7 @@
 #include "jpidef.h"
 #include "lib$routines.h"
 #include "vms_kif.h"
+#include "ptrace_hold.h"
 
 #define EXIT_SKIP 77
 
@@ -682,21 +683,43 @@ static void sigprobe_child(int repfd)
  *      with PTRACE_CONT(..., SIGALRM) -- so the handler runs and the read
  *      returns EINTR, exactly as it would for a DCL user pressing Ctrl-C.
  *   4. Only THEN is the child released (PTRACE_DETACH), so it registers,
- *      reports and execs its image as usual.
+ *      reports and execs its image as usual -- and only once the child is
+ *      PROVABLY in its birth stop. The fork event does not mean the child
+ *      has stopped yet: it stops when it is first scheduled, and a
+ *      PTRACE_DETACH before that fails with ESRCH. The tracer here used to
+ *      ignore that, forget the child, and leave it stopped for ever once it
+ *      did stop -- a caller correctly waiting for ever on a child that could
+ *      never report, printed as "sys$creprc did not return" (rd vms-d90;
+ *      seen only under KVM, where the tracer can win the single vCPU back
+ *      before the child first runs). ptrace_hold.h makes the release
+ *      a request honoured at whichever of the two events comes second.
  *
  * Correct code retries the read and returns the child's real status. The
  * pre-fix code takes the EINTR as "the child died", reports OVMX$_PRCLOST
  * and reaps a live process -- which blocks for the lifetime of the image
  * it just started, and is what the suite's bounded wait catches.
  */
+/* Carry out a release ptrace_hold.h decided on. The child is known to be
+ * in a ptrace-stop, so a failure here is not a lost race but something
+ * unforeseen: say so on the console, where a timeout's diagnosis will look,
+ * rather than let the P13 bound report it as $CREPRC blocking. */
+static void sigprobe_release(pid_t child)
+{
+    if (child > 0 && ptrace(PTRACE_DETACH, child, 0, 0) != 0)
+        dprintf(STDOUT_FILENO, "  (P13 tracer: PTRACE_DETACH of held child "
+                "%d failed, errno %d)\n", (int)child, errno);
+}
+
 static void sigprobe_tracer(int repfd)
 {
     struct sigprobe_report rep, prep;
     int a[2] = { -1, -1 };
-    pid_t probe, held = -1;
+    struct ptrace_hold hold;
+    pid_t probe;
     int status, probe_alive = 1;
 
     memset(&rep, 0, sizeof(rep));
+    ptrace_hold_init(&hold);
     setpgid(0, 0);                  /* one group the suite can kill */
 
     if (pipe(a) != 0) {
@@ -747,8 +770,11 @@ static void sigprobe_tracer(int repfd)
         event = (status >> 16) & 0xff;
 
         if (pid != probe) {
-            /* The held child's birth stop. Leave it stopped: releasing it
-             * here is exactly the race this design exists to remove. */
+            /* The held child's birth stop. Leave it stopped -- releasing it
+             * here is exactly the race this design exists to remove --
+             * UNLESS its release was already requested and was only
+             * waiting for this stop (ptrace_hold.h). */
+            sigprobe_release(ptrace_hold_on_stop(&hold, pid));
             continue;
         }
 
@@ -757,7 +783,7 @@ static void sigprobe_tracer(int repfd)
             int i;
 
             if (ptrace(PTRACE_GETEVENTMSG, probe, 0, &msg) == 0)
-                held = (pid_t)msg;
+                ptrace_hold_on_fork(&hold, (pid_t)msg);
             ptrace(PTRACE_CONT, probe, 0, 0);
 
             for (i = 0; i < SIGPROBE_SLEEP_POLLS; i++) {
@@ -767,12 +793,11 @@ static void sigprobe_tracer(int repfd)
             if (i < SIGPROBE_SLEEP_POLLS) {
                 kill(probe, SIGALRM);   /* interrupts the handshake read */
                 rep.arranged++;
-            } else if (held > 0) {
+            } else {
                 /* Never observed the caller blocked: release the child
                  * rather than wedge, and do not count this call as
                  * arranged. */
-                ptrace(PTRACE_DETACH, held, 0, 0);
-                held = -1;
+                sigprobe_release(ptrace_hold_release(&hold));
             }
             continue;
         }
@@ -784,10 +809,9 @@ static void sigprobe_tracer(int repfd)
 
         if (sig == SIGALRM) {
             ptrace(PTRACE_CONT, probe, 0, SIGALRM);     /* inject it */
-            if (held > 0) {
-                ptrace(PTRACE_DETACH, held, 0, 0);      /* now let it run */
-                held = -1;
-            }
+            /* now let it run -- at once if it is already in its birth
+             * stop, else the moment that stop is reported */
+            sigprobe_release(ptrace_hold_release(&hold));
             continue;
         }
 

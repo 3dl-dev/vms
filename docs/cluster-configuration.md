@@ -81,10 +81,20 @@ perform — see [Not available at this edition](#not-available-at-this-edition).
 
 The group number (and optional password) live in
 `SYS$SYSTEM:CLUSTER_AUTHORIZE.DAT`, exactly as on VMS. The executive loads it at
-boot; the group number becomes the SCA multicast group your `HELLO`s are scoped
-to (`vms_cluster_hello_mcast_build`). A node with no `CLUSTER_AUTHORIZE.DAT`
-boots with group 0 and reaches no cluster. Set it to the group the target
-cluster uses (for example, the lab cluster is group 257).
+boot; the group number selects the SCA multicast address your `HELLO`s are
+scoped to — `AB-00-04-01-<LE16(group + 0x100)>`, the mapping real VMS prints
+for itself at `SYSMAN> CONFIGURATION SHOW CLUSTER_AUTHORIZATION`
+(`vms_cluster_hello_mcast_build`). A node with no `CLUSTER_AUTHORIZE.DAT` boots
+with group 0 and reaches no cluster. Set it to the group the target cluster
+uses (for example, the reference VAX lab is group **1**, whose multicast
+address is `AB-00-04-01-01-01`).
+
+> Before rd vms-147 OVMX built that address as a plain `LE16(group)`, which is
+> correct for group 1 and wrong for every other group — a node configured for
+> the target cluster's real group transmitted to, and filtered for, a different
+> cluster's address. If you carried a group number that was read back OUT of a
+> multicast address by the old rule, re-derive it: `group = LE16(last two
+> bytes) - 0x100`.
 
 ---
 

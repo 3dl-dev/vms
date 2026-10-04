@@ -817,6 +817,20 @@ struct vms_device {
 	uint32_t            dynamic_term;
 
 	/*
+	 * WITHDRAWN, DELETION DEFERRED TO THE LAST REFERENCE (rd vms-1875). Set by
+	 * vms_devtab_remove_terminal() / vms_devtab_remove_served_disk() when the
+	 * facility that minted a dynamic unit withdraws it while channels (or an
+	 * allocation) still hold it -- e.g. a network session's daemon tearing down
+	 * its RTAn: before the LOGINOUT process bound to it has exited. The unit is
+	 * then unlinked and freed by whichever release drops `refcnt` to zero
+	 * (device_release_channel / the dealloc paths), never while a channel's
+	 * `dev` pointer can still reach it. The same last-reference rule
+	 * vms_mbx.c's delete_pending applies to a $DELMBX'd mailbox. Guarded by
+	 * `lock`, read/written with vms_device_list_lock also held.
+	 */
+	uint32_t            withdrawn;
+
+	/*
 	 * The SSH-pre-authenticated user name a network daemon vouched for this
 	 * RTAn: (rd vms-65b), stamped by VMS_IOCTL_TERM_SETLOGIN and read back by
 	 * the $CREPRC(LOGINOUT) child bound here (VMS_IOCTL_TERM_GETLOGIN). Empty
@@ -996,6 +1010,10 @@ long vms_ioctl_sysgen_load(struct vms_proc *proc, unsigned long arg);
  * through connection manager, returning the executive's cluster state
  * (vms_devtab.c). */
 long vms_ioctl_cluster_start(struct vms_proc *proc, unsigned long arg);
+/* VMS_IOCTL_CLUSTER_STOP (rd vms-abd): mirror of the src/kernel/vms_internal.h
+ * decl -- the clean departure, announcing at the SCS layer before it takes the
+ * stack down in reverse order (vms_devtab.c). */
+long vms_ioctl_cluster_stop(struct vms_proc *proc, unsigned long arg);
 
 /* ----------------------------------------------------------------
  * LOGICAL-NAME facility (LNM$SYSTEM/GROUP/JOB, rd vms-72da) -- DEFINED in

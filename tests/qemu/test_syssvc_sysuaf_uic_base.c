@@ -142,7 +142,7 @@ int main(void)
      * meaningful when SYS$SYSTEM composes through the concealed-rooted chain and
      * the Files-11 ACP reads the shipped SYSUAF.DAT off a MOUNTED ODS-2 volume.
      * With no /dev/vms it honest-skips (77), never a fake pass -- the contract
-     * every test_syssvc_* is held to (.github/workflows/ci.yml). Nothing is
+     * every test_syssvc_* is held to (.github/workflows/ci-kernel-executive.yml). Nothing is
      * asserted on the skip path (matching tests/qemu/test_syssvc_setuai.c).
      */
     if (!executive_present()) {

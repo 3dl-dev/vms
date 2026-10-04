@@ -168,26 +168,31 @@ master via `GET_RESMASTER` before it can send an ENQ to the right node.
 When a member LEAVES the cluster, the directory vector shrinks and every name
 re-hashes over the survivors, so a resource whose directory (or master) resolved
 to the departed node must re-resolve. In OVMX the **graceful-departure directory
-re-resolution** is the departure INGRESS, and it rides **NO new wire op**: scsd,
-observing the connection manager's own graceful class-0x04 self-departure
-(`SCS_MEMBER_OP_DEPART`) on the VC, issues the **LOCAL** ioctl
-`VMS_IOCTL_DLM_MEMBER_DEPART` to its own executive with the departed CSID. The
+re-resolution** is the departure INGRESS, and it rides **NO new wire op**: the
+connection manager (`vms_cnxman.c`) observes its own graceful class-0x04
+self-departure (`SCS_MEMBER_OP_DEPART`) and fires the departure sweep
+internally — the kernel-core door onto it is `VMS_IOCTL_DLM_MEMBER_DEPART`
+(`src/kernel-core/vms_dlm_master.h:257`), routed with the departed CSID. The
 executive marks that CSID gone from the LIVE directory membership (the static
 `dlm_member_csids` vector is not mutated — a runtime departed-set filters it) and
 invalidates cached `res->dir_csid`, so `dlm_directory_csid` re-resolves over the
 survivors on next use and a departed master's resources re-master to a survivor.
 This is the DIRECTORY re-resolution only; the cross-node **lock-STATE rebuild** —
 COLLECTing survivors' origin records and reconstructing `res->granted`, which IS a
-new SCS message class — is the **H10b** rung (`vms-dca9`). Proven on the 3-node
-`tests/qemu/run_dlm_harness_h10.sh` live harness (real `/dev/vms` on all three).
+new SCS message class — is the **H10b** rung (`vms-dca9`). A live
+executive-resident multi-node proof of this rebuild is open work, tracked by
+`vms-1ee`.
 
 ---
 
 ## 4. Cross-node message flow — [DOCUMENTED] semantics, [OBSERVED/RE] bytes
 
 The four cross-node DLM message kinds and their direction — OVMX's
-`VMS_DLM_OP_*` (`src/kernel-netbsd/vms_lock_nb.h`), which `scsd.c` static-asserts
-equal to `scs_dlm.h`'s `SCS_DLM_OP_*`:
+`VMS_DLM_OP_*`, mirrored in `src/kernel-netbsd/vms_lock_nb.h` and
+`src/kernel/vms_ioctl.h` (`_Static_assert`s pin the two encodings equal, the
+#928 twin trap). The op codec lives in one place,
+`src/kernel-core/vms_cluster_codec_dlm.{c,h}` (FC-P4.5, typed
+GROUNDED/OBSERVED codec entries):
 
 | OVMX op | value | direction | `$ENQ`/`$DEQ` correspondence [DOCUMENTED] |
 |---|---|---|---|
@@ -224,24 +229,24 @@ and §6 for the emulator constraint on observing the real one.
 
 ---
 
-## 5. [code] How OVMX encodes it today — what observation must corroborate
+## 5. [code] How OVMX encodes it — what observation must corroborate
 
-`src/vmsscs/scs_dlm.c` builds the DLM datagram as a **clean-room replay** of an
-[OBSERVED] NISCA sequenced-message frame: the fields OVMX understands (destination
-/ source logical address, `recv_ack` / `send_seq` / incarnation, the SCS envelope
-at content-offset 42) are **substituted**, and the PPD fields OVMX has **not**
-decoded (`0x4b`-class markers, format `0x13`) are **replayed verbatim** from the
-captured frame — the standard clean-room approach when the public docs don't
-publish a field. The DLM body (`scs_dlm_build_body`) then appends: op (one of the
-four), mode (0..`LCK$K_EXMODE`), and the 32-byte resource-name field.
+OVMX's DLM wire codec is `src/kernel-core/vms_cluster_codec_dlm.{c,h}`
+(FC-P4.5): typed, per-field GROUNDED/OBSERVED entries for the four op kinds
+(ENQ/CONVERT, GRANT, DEQ, BLKAST), built over the transport frame established
+in §1 and the body semantics in §§2-4. It carries its own corrected reading of
+the wire (`vms-c03`): the "completion 0x04 + commit 0x03" pair once assumed
+here was a phantom — 0x03 is `$DEQ`, 0x04 is BLKAST, and 0x06 carries the
+value block.
 
-**This is where the oracle bites:** the replayed PPD bytes and the body offsets
-are OVMX's current best reconstruction. A captured real-VMS DLM datagram (§6)
-would either **confirm** the replayed framing carries a genuine lock message or
-reveal a field OVMX is mis-placing. Until then the framing is corroborated at the
-**transport** level (§1, solid) and the **body semantics** level (§2–4, solid);
-the exact DLM-body byte offsets remain the RE target and any OVMX-chosen offset
-the docs don't specify is an **OVMX design choice**, not claimed as VMS-authentic.
+**This is where the oracle bites:** the codec's per-field entries are OVMX's
+current best reconstruction of the DLM body layout. A captured real-VMS DLM
+datagram (§6) would either **confirm** a given field's placement or reveal one
+OVMX has mis-placed. The framing is corroborated at the **transport** level
+(§1, solid) and the **body semantics** level (§2–4, solid); the exact
+DLM-body byte offsets remain the RE target, and any OVMX-chosen offset the
+public docs don't specify is an **OVMX design choice**, not claimed as
+VMS-authentic.
 
 ---
 
@@ -327,7 +332,8 @@ honest `SS$_UNSUPPORTED` (INV-6) stays until rung 2 wires the real lock manager.
   `$GETLKI`); `$LCKDEF`; *OpenVMS Cluster Systems*; *OpenVMS Internals and Data
   Structures Manual* (SCS + lock-manager chapters).
 - **[code]** `src/kernel-core/vms_lock.c`, `src/kernel-netbsd/vms_lock_nb.h`,
-  `src/vmsscs/scs_dlm.c` (OVMX DLM-over-SCS transport + dispatch).
+  `src/kernel-core/vms_cluster_codec_dlm.{c,h}` (OVMX's executive-resident
+  DLM-over-SCS codec).
 
 _Clean-room (Rule 8): observation + public documentation only. No VSI/HPE source
 or binary was disassembled, decompiled, or copied._

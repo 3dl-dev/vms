@@ -52,7 +52,7 @@ wrapped in a hard `timeout`.
   debugging session may be using) and re-runs the actual boot, from a fresh
   disk copy, every invocation — modes: `gate` (default), `build`, `boot`,
   `validate [N]` (N consecutive real boots, for reliability validation).
-  Deliberately **not** wired into `.github/workflows/ci.yml`; it's release
+  Deliberately **not** wired into any `.github/workflows/ci-*.yml`; it's release
   process tooling, invoked by the conductor at cut time on the frozen SHA.
 - `boot-alpha-probe.sh` (`PROBE=provision|contention|exec`) drives the three
   diagnostic inits that root-caused the frontier stall, each as PID 1 under the

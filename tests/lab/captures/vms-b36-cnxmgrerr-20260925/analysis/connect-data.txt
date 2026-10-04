@@ -1,0 +1,42 @@
+# The 16-byte SCA connect data (content[94:110]) on VMS$VAXcluster
+# CONNECT_REQ / ACCEPT_REQ. REAL VMS first, then OVMX.
+
+## REAL OpenVMS VAX V7.3 (three nodes, this lane's own pod)
+[   118] CONNECT_REQ aa:00:04:00:03:04 -> aa:00:04:00:02:04  min_cr=0 status=0x0001
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103000000000000000800000600  |................|
+[   121] ACCEPT_REQ  aa:00:04:00:02:04 -> aa:00:04:00:03:04  min_cr=0 status=0x0000
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103010001000200010800000600  |................|
+[   203] CONNECT_REQ aa:00:04:00:01:04 -> aa:00:04:00:03:04  min_cr=0 status=0x0001
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103010001000200010800000600  |................|
+[   207] ACCEPT_REQ  aa:00:04:00:03:04 -> aa:00:04:00:01:04  min_cr=0 status=0x0000
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103000000000000000800000600  |................|
+
+## OVMX on the bench rig (arm M1-1)
+[    66] CONNECT_REQ aa:00:04:00:c3:07 -> aa:00:04:00:c5:07  min_cr=0 status=0x0001
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103000000000000000800000600  |................|
+[    72] ACCEPT_REQ  aa:00:04:00:c5:07 -> aa:00:04:00:c3:07  min_cr=0 status=0x0000
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103010001000100010800000600  |................|
+[  1548] CONNECT_REQ aa:00:04:00:c4:07 -> aa:00:04:00:c3:07  min_cr=0 status=0x0001
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103000000000000000800000600  |................|
+[  1552] ACCEPT_REQ  aa:00:04:00:c3:07 -> aa:00:04:00:c4:07  min_cr=0 status=0x0000
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103000000000000000800000600  |................|
+[  1558] ACCEPT_REQ  aa:00:04:00:c3:07 -> aa:00:04:00:c4:07  min_cr=0 status=0x0000
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103000000000000000800000600  |................|
+[  1633] CONNECT_REQ aa:00:04:00:c5:07 -> aa:00:04:00:c4:07  min_cr=0 status=0x0001
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103020002000200010800000600  |................|
+[  1636] ACCEPT_REQ  aa:00:04:00:c4:07 -> aa:00:04:00:c5:07  min_cr=0 status=0x0000
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103000000000000000800000600  |................|
+[  2052] CONNECT_REQ aa:00:04:00:c3:07 -> aa:00:04:00:c4:07  min_cr=0 status=0x0001
+        name1='VMS$VAXcluster  ' name2='VMS$VAXcluster  '
+        connect-data[94:110] = 011b0103000000000000000800000600  |................|

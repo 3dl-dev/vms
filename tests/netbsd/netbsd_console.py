@@ -42,6 +42,16 @@ THE DETERMINISTIC CONTRACT
   4. BOUNDED PER-COMMAND OUTPUT is the caller's job (redirect verbose builds to a
      file; see the drivers). Combined with (2), the pexpect buffer stays small so
      the O(n^2) scan can never dominate.
+  5. STALE-BYTE DRAIN + WEDGE FAIL-FAST (rd vms-d83 / vms-d984). Before each
+     re-issue attempt the console stream is flushed of anything already
+     buffered, so a leftover fragment from an earlier nudge can never be
+     mistaken for fresh evidence that THIS attempt's command finished. And if
+     the marker is STILL never delivered after many consecutive re-issues of
+     the same command, that is a persistent desync or a genuinely wedged guest,
+     not the transient one-or-two-byte-drop this recovery targets -- run()
+     fails fast with a "console wedged" error instead of grinding out the rest
+     of the per-command deadline (observed without this: 9389 futile re-issues
+     of one `test -f' in 600s, ~15/sec, marker dropped every single time).
 
 This is OVMX's own code, written against the public pexpect API; it copies no
 third-party source (CLAUDE.md Rule 8).
@@ -88,6 +98,23 @@ class NetBSDConsole(object):
     _LASTOUT = "/tmp/ovmx_lastcmd.out"
     _TAIL = 4000
 
+    # rd vms-d984: a run() that keeps re-issuing an idempotent command and NEVER
+    # once sees its marker, however many times it retries, is not the transient
+    # "a few bytes dropped in a burst" case this recovery was built for -- it is
+    # a PERSISTENT desync or a genuinely wedged guest. Observed: drive_netbsd_p2b
+    # re-issued a single `test -f' 9389 times in 600s (~15/sec) with the marker
+    # dropped EVERY time, burning the whole CI deadline on a foregone conclusion
+    # and burying the one useful diagnostic under thousands of identical lines.
+    # Past this many CONSECUTIVE marker-less re-issues of the SAME command, fail
+    # fast with a clear "console wedged" error instead of grinding to the
+    # deadline. Must stay ABOVE the largest genuine multi-drop burst this module
+    # already recovers from (its own unit test proves a 12-drop burst still
+    # completes cleanly on the 13th try -- that is a real, if unlucky, transient
+    # run and must keep succeeding), while staying far below "thousands": 20
+    # gives that legitimate 12-drop case comfortable headroom yet still fails
+    # fast almost two orders of magnitude short of the observed 9389.
+    _WEDGE_MAX_CONSECUTIVE_MARKER_LOSSES = 20
+
     def __init__(self, child, logfn=None):
         self.child = child
         self._log = logfn or (lambda _m: None)
@@ -126,14 +153,14 @@ class NetBSDConsole(object):
         """
         self.child.timeout = cmd_timeout
         self.child.send("\n")
-        self.child.expect(r"login:")
+        self._expect_robust(r"login:")
         self.child.send("root\n")
-        self.child.expect(r"# ")
+        self._expect_robust(r"# ")
         self.child.sendline("exec /bin/sh")
-        self.child.expect(r"# ")
+        self._expect_robust(r"# ")
         self.child.sendline(
             "PATH=/sbin:/usr/sbin:/bin:/usr/bin; export PATH; umask 022")
-        self.child.expect(r"# ")
+        self._expect_robust(r"# ")
         # CRITICAL for TCG reliability (rd vms-2d9): tame the serial console's
         # line discipline before running any real command.
         #   * `-echo': DISABLE input echo. Under loaded CI TCG the guest tty echoes
@@ -147,7 +174,7 @@ class NetBSDConsole(object):
         #     command Python-side, so nothing is lost for debugging.
         #   * wide `columns'/`rows': so any long OUTPUT line does not wrap either.
         self.child.sendline("stty -echo columns 1000 rows 200 2>/dev/null")
-        self.child.expect(r"# ")
+        self._expect_robust(r"# ")
         self.set_unique_prompt()
 
     def set_unique_prompt(self):
@@ -161,11 +188,50 @@ class NetBSDConsole(object):
         tag = _nonce(8)
         var = "__OVMXP"
         self.child.sendline("%s=%s" % (var, tag))
-        self.child.expect(r"# ")                       # still the default prompt
+        self._expect_robust(r"# ")                     # still the default prompt
         prompt = "OVMX-RDY-%s> " % tag
         self.prompt_re = re.escape(prompt)
         self.child.sendline('PS1="OVMX-RDY-${%s}> "' % var)
-        self.child.expect(self.prompt_re)              # sync onto the new prompt
+        self._expect_robust(self.prompt_re)            # sync onto the new prompt
+
+    def _expect_robust(self, pattern, timeout=None):
+        """Wait for `pattern`, nudging with a bare newline if a slice elapses
+        with nothing matching (rd vms-4e72: the NetBSD/amd64 P2c "boot hang" --
+        4 independent CI failures on 2026-09-25/27 all timed out inside THIS
+        pre-unique-prompt handshake, not inside wait_for_login's own DA/DSR
+        loop: the pexpect `buffer`/`before` dump on every one showed the just-
+        sent line echoed back with NO subsequent `# '/unique-prompt ever
+        arriving within the whole per-command deadline).
+
+        This is the exact dropped-byte-under-TCG symptom run()/_await_marker
+        and _resync_prompt already recover from (rd vms-d83/vms-f8a/vms-d984),
+        just hitting the one stretch of the driver that still used a single,
+        unretried expect() -- because no unique end-marker exists yet this
+        early (the marker protocol needs self.prompt_re, which is exactly
+        what this stretch is still establishing). A bare-newline nudge is
+        always safe here: every command this guards is either idempotent (a
+        plain shell variable assignment, `stty -echo`, a `PATH=' export) or
+        has already fully executed by the time `pattern' is awaited, so an
+        extra blank input line can only ever produce one more harmless prompt
+        cycle -- it can never re-run anything with a side effect.
+        """
+        if timeout is None:
+            timeout = self.child.timeout
+        deadline = time.time() + timeout
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                # Let the final attempt raise pexpect.TIMEOUT itself so the
+                # exception carries pexpect's own full before/after diagnostics.
+                self.child.expect(pattern, timeout=0)
+                return
+            try:
+                self.child.expect(pattern, timeout=min(remaining, self._MARKER_SLICE))
+                return
+            except pexpect.TIMEOUT:
+                if time.time() >= deadline:
+                    raise
+                self.child.sendline("")
 
     # ---- command execution ----------------------------------------------
     def run(self, cmd, timeout=300, echo=True, retriable=True, bg_safe=False):
@@ -190,6 +256,15 @@ class NetBSDConsole(object):
         withheld, still gets the full `timeout'. A backgrounding command is NEVER
         re-issued (that would spawn a duplicate job); pass retriable=False for any
         other non-idempotent command (e.g. modload).
+
+        WEDGE FAIL-FAST (rd vms-d83 fix / vms-d984). A stale buffered fragment
+        from an earlier attempt is flushed before every re-issue, so a false
+        "marker lost" verdict can no longer be manufactured from leftover bytes
+        that belong to a previous attempt. And if the marker still never arrives
+        after _WEDGE_MAX_CONSECUTIVE_MARKER_LOSSES consecutive re-issues of the
+        SAME command, that is treated as a persistent desync or a wedged guest,
+        not another transient drop -- raises pexpect.TIMEOUT early with a
+        "console wedged" message instead of exhausting `timeout`.
         """
         if self.prompt_re is None:
             raise RuntimeError("login_root_sh()/set_unique_prompt() not called")
@@ -212,11 +287,24 @@ class NetBSDConsole(object):
         # phase as ONE in-guest command that emits a single result token.
         overall_deadline = time.time() + timeout
         attempt = 0
+        consecutive_losses = 0
         while True:
             attempt += 1
             remaining = overall_deadline - time.time()
             if remaining <= 0:
                 break
+            # rd vms-d83: flush any bytes already sitting in the console stream
+            # before sending a brand-new attempt. A queued-but-unread fragment
+            # left over from an earlier nudge/resync (its trailing newline can
+            # land late under TCG load) would otherwise satisfy
+            # expect([marker_re, prompt_re]) on THIS attempt's very first check,
+            # near-instantly and with no real wait -- i.e. the shell looks
+            # "idle, no marker" immediately, even though that evidence is STALE
+            # and belongs to a previous attempt, not this one. Draining first
+            # guarantees any match _await_marker sees below was generated by
+            # THIS attempt's own command, closing that sync-loss hole outright.
+            if attempt > 1:
+                self._drain_stale()
             mk = "OVMXm-%s" % _nonce(8)
             if is_bg:
                 # A background LAUNCH: the caller already redirects the job's own
@@ -272,12 +360,56 @@ class NetBSDConsole(object):
             # safely re-run, so give up now with a clear timeout.
             if not can_retry:
                 break
+            consecutive_losses += 1
+            # rd vms-d984: a WEDGE, not a transient burst -- the marker has now
+            # been lost this many times IN A ROW for the SAME command, with the
+            # shell reaching its idle prompt every single time. A real transient
+            # burst self-heals within a handful of drops (this module's own unit
+            # test proves a 12-drop burst still recovers on the 13th try); this
+            # many consecutive losses is the signature of a persistent desync or
+            # a genuinely wedged guest console (observed: 9389 re-issues of one
+            # `test -f' in 600s, the marker dropped every time). Fail fast with a
+            # clear diagnostic instead of grinding out the rest of the deadline.
+            if consecutive_losses >= self._WEDGE_MAX_CONSECUTIVE_MARKER_LOSSES:
+                raise pexpect.TIMEOUT(
+                    "console wedged: `%s' end marker was not delivered on %d "
+                    "consecutive re-issues (the shell reached its idle prompt "
+                    "every time but never once echoed the marker) -- this is a "
+                    "persistent desync, not a transient dropped byte; failing "
+                    "fast instead of grinding to the %ds deadline (retriable=%s, "
+                    "is_bg=%s)" %
+                    (cmd, consecutive_losses, timeout, retriable, is_bg))
             self._log("  (console: end marker for `%s' lost to a serial desync; "
                       "shell is idle -- re-issuing, attempt %d)" % (cmd, attempt + 1))
 
         raise pexpect.TIMEOUT(
             "end marker never returned for `%s' within %ds after %d attempt(s) "
             "(retriable=%s, is_bg=%s)" % (cmd, timeout, attempt, retriable, is_bg))
+
+    def _drain_stale(self, budget=2.0):
+        """Non-blocking flush of any bytes already sitting in the console stream.
+
+        Called right before sending a re-issue attempt so a stray, already-
+        buffered fragment left over from an earlier nudge/resync can never be
+        mistaken for freshly-generated evidence of THIS attempt's completion (rd
+        vms-d83). Reads raw bytes -- not just text matching prompt_re -- so a
+        partial or garbled leftover fragment is discarded too, not only a clean
+        prompt line. Bounded and best-effort: on a live guest there is normally
+        nothing to drain and this returns immediately.
+        """
+        deadline = time.time() + budget
+        drained = 0
+        while time.time() < deadline:
+            try:
+                data = self.child.read_nonblocking(size=4096, timeout=0.2)
+            except pexpect.TIMEOUT:
+                break
+            except EOFError:
+                break
+            if not data:
+                break
+            drained += len(data)
+        return drained
 
     def _resync_prompt(self, timeout):
         """Wait for the idle unique prompt after a command's marker was seen.

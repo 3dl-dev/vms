@@ -19,11 +19,11 @@
 # banner (OVMX_PRODUCT_NAME + OVMX_PRODUCT_VERSION) and the VMS-compat version
 # (OVMX_VMS_COMPAT_VERSION_X86_64) out of src/libvms/include/ovmx_identity.h
 # and passes them to the gate -- never a literal here (the same pattern
-# .github/workflows/ci.yml's executive-integral step uses for the banner).
+# .github/workflows/ci-*.yml (split by vms-1af)'s executive-integral step uses for the banner).
 #
 # EXPECT THIS GATE TO FAIL today: the commands it asserts are the ones that
 # shipped broken in V0.5-2; it goes green only as the in-flight fixes land.
-# CI (.github/workflows/ci.yml's dcl-acceptance-e2e job) treats a SKIP (77) as
+# CI (.github/workflows/ci-*.yml (split by vms-1af)'s dcl-acceptance-e2e job) treats a SKIP (77) as
 # a hard failure so it can never silently no-op on the release-cut path.
 #
 # Env knobs:

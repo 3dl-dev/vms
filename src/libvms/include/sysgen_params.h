@@ -79,6 +79,30 @@
  */
 #define SYSGEN_DEFAULT_CLUSTER_CREDITS  10u
 
+/*
+ * OVMX_CLEAN_DEPART's default (rd vms-abd), here for the SAME reason and with
+ * the SAME hazard as CLUSTER_CREDITS above.
+ *
+ * 1 = on a clean shutdown this node announces its departure at the SCS layer, a
+ * symmetric DISCONNECT_REQUEST per open connection, the way a real VMS node
+ * leaving through SHUTDOWN.COM does. 0 = it does not, and the survivors fall
+ * back on the PE last gasp and their own RECNXINTERVAL timers.
+ *
+ * WHY THE DEFAULT IS A NAMED CONSTANT AND NOT "whatever the zero-fill gives".
+ * sysgen_read_param() reads the PERSISTED store: a parameter this system knows
+ * but the file has never carried reads ABSENT, and an absent read leaves the
+ * caller's memset zero standing. For a switch whose OFF value is 0, that would
+ * silently disable the faithful behaviour on EVERY OVMXVMSSYS.PAR written
+ * before the parameter existed -- a default-on that is off everywhere, which is
+ * a hollow control rather than a default. So the reader falls back to THIS
+ * value when the store has no record, exactly as SYSBOOT's built-in parameter
+ * table supplies one on VMS, and only an operator's explicit 0 turns it off.
+ *
+ * OVMX's OWN parameter, disclosed as such: it is not a published DEC SYSGEN
+ * parameter (CLAUDE.md Rule 8), and the OVMX_ prefix on the name says so.
+ */
+#define SYSGEN_DEFAULT_OVMX_CLEAN_DEPART  1u
+
 struct sysgen_param {
     char        name[32];
     uint32_t    current;

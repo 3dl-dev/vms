@@ -441,6 +441,77 @@ jobs:
           echo "PASS: test_kmod_devtab_terminal ran with rc=0 against a real /dev/vms in its own VM"
 
   # -----------------------------------------------------------------------
+  # Job 3c: Corpus RUNTIME column (rd vms-44a, roadmap R2.3).
+  #
+  # The host corpus job (ci-core-gates.yml corpus-conformance) cannot run a
+  # program that needs /dev/vms or a PCB. This boots the SAME guest image, loads
+  # vms.ko, and runs every tier-1 program that links
+  # (tests/qemu/corpus_runtime_programs.txt) under the live executive
+  # (OVMX_CORPUS_RT=1 -> init.sh's ovmx.corpus mode), then compares the per-
+  # program verdicts with tests/conformance/corpus_runtime_baseline.json:
+  # a falsifiable run-pass FLOOR plus a per-entry no-regression rule, same shape
+  # as the host gate. The report is uploaded as a build artifact.
+  # -----------------------------------------------------------------------
+  kernel-executive-corpus-runtime:
+    name: Corpus Runtime Conformance (programs run under /dev/vms, QEMU)
+    needs: changes
+    if: ${{ (github.event_name != 'pull_request' || needs.changes.outputs.kernel == 'true' || needs.changes.outputs.core == 'true') && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build kernel executive test image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tests/qemu/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-ktest:latest
+          cache-from: type=gha,scope=kernel-executive
+          cache-to: type=gha,mode=max,scope=kernel-executive
+
+      - name: Boot QEMU, insmod vms.ko, run every corpus program against /dev/vms
+        env:
+          KE_WALL_TIMEOUT: 1800
+          OVMX_CORPUS_RT: 1
+        run: |
+          set +e
+          RAW=$(docker run --rm -e KE_WALL_TIMEOUT -e OVMX_CORPUS_RT ovmx-ktest:latest 2>&1)
+          RC=$?
+          set -e
+          printf '%s\n' "$RAW" | tr -d '\r' > corpus_rt_output.txt
+          cat corpus_rt_output.txt
+          [ "$RC" -eq 0 ] || { echo "FAIL: the corpus runtime guest exited nonzero (rc=$RC; 124 = the ${KE_WALL_TIMEOUT}s wall)"; exit 1; }
+          grep -qF 'PASS: vms.ko loaded, /dev/vms present' corpus_rt_output.txt \
+            || { echo "FAIL: vms.ko did not load / /dev/vms absent"; exit 1; }
+          grep -qE '=== CORPUS-RT DONE: [0-9]+ programs ===' corpus_rt_output.txt \
+            || { echo "FAIL: the guest never reached its CORPUS-RT DONE line (a program took the VM down, or the wall fired)"; exit 1; }
+
+      - name: Compare with the committed runtime floor (falsifiable gate)
+        run: |
+          bash tests/qemu/corpus_runtime_report.sh corpus_rt_output.txt \
+            tests/conformance/corpus_runtime_baseline.json > corpus_runtime_report.json
+
+      - name: Upload corpus runtime report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-runtime-report-${{ github.sha }}
+          path: |
+            corpus_runtime_report.json
+            corpus_rt_output.txt
+          retention-days: 90
+
+  # -----------------------------------------------------------------------
   # Job 3b-aggregate: Kernel Executive (vms.ko via /dev/vms, QEMU) — REQUIRED
   # CHECK NAME PRESERVED (rd vms-ea7)
   #

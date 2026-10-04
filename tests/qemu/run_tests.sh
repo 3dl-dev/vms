@@ -110,6 +110,21 @@ if [ -n "${OVMX_KTEST_ONLY:-}" ]; then
     esac
 fi
 
+# CORPUS RUNTIME MODE (rd vms-44a, R2.3). OVMX_CORPUS_RT=1 boots the same guest
+# but init.sh runs the corpus programs staged in /tests/corpus_rt instead of the
+# executive suites and prints one "CORPUS-RT <name> rc=.. signaled=.." line per
+# program. Verdict is NOT this script's: with zero suites run it reports "0 suites
+# failed" and the scoreboard comparison is tests/qemu/corpus_runtime_report.sh's.
+# OVMX_CORPUS_SKIP=a,b lists programs an earlier boot took the whole guest down on.
+KCMD_CORPUS=""
+if [ "${OVMX_CORPUS_RT:-0}" = "1" ]; then
+    KCMD_CORPUS="ovmx.corpus=1"
+    case "${OVMX_CORPUS_SKIP:-}" in
+    ''|*[!A-Za-z0-9_,]*) ;;
+    *) KCMD_CORPUS="$KCMD_CORPUS ovmx.corpus_skip=$OVMX_CORPUS_SKIP" ;;
+    esac
+fi
+
 # ASSERTION TRANSCRIPT (vms-b5b round 2). ttyS0 (below) carries the boot
 # banner, kernel printk and init.sh's own aggregate lines -- exactly what it
 # always has. A SECOND serial port, ttyS1, is wired to a plain file so that
@@ -275,7 +290,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -nographic \
-    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD $KCMD_HAMMER $KCMD_ONLY" \
+    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD $KCMD_HAMMER $KCMD_ONLY $KCMD_CORPUS" \
     -m 512M \
     -no-reboot \
     -smp 1 \

@@ -193,6 +193,34 @@ class NetBSDConsole(object):
         self.prompt_re = re.escape(prompt)
         self.child.sendline('PS1="OVMX-RDY-${%s}> "' % var)
         self._expect_robust(self.prompt_re)            # sync onto the new prompt
+        self._sync_barrier()
+
+    def _sync_barrier(self):
+        """Consume every stale idle prompt queued before the first run() (vms-bdc).
+
+        Each bare-newline nudge _expect_robust() sends during the pre-unique-prompt
+        handshake makes the shell print one more idle prompt AFTER the unique one
+        is installed. Left in the stream, the first run() matches such a stale
+        prompt before its own marker, reads "idle, no marker", and re-issues: the
+        original command is still running, so each re-issue queues another copy,
+        every completion prints a prompt that again beats the current attempt's
+        marker, and the cascade trips the 20-lost-markers wedge detector (observed
+        on the P4a mount_cd9660+cp -R staging step, run 36912621119: the marker of
+        the 1st attempt was on the console, just never what was being awaited).
+
+        The tty delivers input in order, so a unique echo is processed only after
+        every earlier nudge: once its output and the prompt that follows arrive,
+        nothing stale precedes the next command.
+        """
+        mk = "OVMXsync-%s" % _nonce(8)
+        self.child.sendline("echo %s=$?=" % mk)
+        self._expect_robust(r"%s=\d+=" % re.escape(mk))
+        self._expect_robust(self.prompt_re)
+        while True:      # a nudge's prompt may trail in just behind
+            try:
+                self.child.expect(self.prompt_re, timeout=0.5)
+            except pexpect.TIMEOUT:
+                break
 
     def _expect_robust(self, pattern, timeout=None):
         """Wait for `pattern`, nudging with a bare newline if a slice elapses

@@ -10,6 +10,7 @@
 #   ptr32       a source idiom that assumes 32-bit pointers; cannot hold in a 64-bit image
 #   executive   needs an OVMX executive facility that does not exist yet (tracked item)
 #   product-gap an OVMX service the program exercises is wrong/absent (tracked item)
+#   flaky       passes in some environments and not others; held out of the floor until fixed (tracked item)
 lib_callg   ptr32       LIB$CALLG takes an argument list of 32-bit longwords holding pointers; the program asserts sizeof(unsigned)==sizeof(void*) (vms-95b)
 lib_que     ptr32       interlocked queue entries are linked by 32-bit self-relative displacements; the program's entries and header sit in a 64-bit address space (vms-95b)
 sys_cancel  executive   $QIO is synchronous in OVMX: the demonstration queues a mailbox read that never completes and expects $CANCEL to abort it, so the read blocks (async $QIO, vms-003)
@@ -17,3 +18,4 @@ sys_creprc  product-gap $CREPRC looks the caller's user name up in SYSUAF.DAT; t
 sys_getuai  product-gap $GETUAI of account DEFAULT returns SS$_NOSUCHID in the guest although the system disk is mounted (vms-f07)
 sys_getdviw product-gap $ASSIGN of SYS$SYSDEVICE answers SS$_NOSUCHDEV in the guest, so the $GETDVIW by channel gets channel 0 (vms-1e98)
 sys_rms_seq product-gap $EXTEND on a newly created sequential file fails (RMS$_CRE from the ACP MODIFY) in the guest (vms-967e)
+sys_forcex  flaky       timing-dependent: a spawned DCL subprocess plus two 5s sleeps; passes on a local KVM guest, hangs to the 40s budget on the CI runner; held at its CI verdict until the race is root-caused (vms-f45)

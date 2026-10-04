@@ -33,6 +33,7 @@
 #include "dnet_fal.h"
 #include "dnet_cterm.h"     /* dnet_fal_access_decode (bounded cred decoder) */
 
+#include <stdio.h>
 #include <string.h>
 
 #include "sysuaf.h"         /* the ONE faithful authenticator (Purdy)        */
@@ -167,28 +168,34 @@ static int config_exchange_client(struct dnet_dap_transport *t)
 
 /* ---- authentication ------------------------------------------------------ */
 
-uint32_t dnet_fal_authenticate(const char *username, const char *password)
+/* Authenticate and, on success, hand back the verified SYSUAF record. */
+static uint32_t fal_authenticate_rec(const char *username, const char *password,
+                                     sysuaf_record_t *rec)
 {
     if (!username || !password || username[0] == '\0')
         return SS$_INVLOGIN;
-
-    sysuaf_record_t rec;
     /* No-such-user and a wrong password both surface as SS$_INVLOGIN so the
      * peer cannot probe which usernames exist -- exactly as a real login does
      * not distinguish them. Fail-honest: no SYSUAF / no /dev/vms -> lookup
      * fails -> refuse (never fabricate a pass). */
-    if (sysuaf_lookup(username, &rec) != 0)
+    if (sysuaf_lookup(username, rec) != 0)
         return SS$_INVLOGIN;
-    if (!sysuaf_authenticate(&rec, password))
+    if (!sysuaf_authenticate(rec, password))
         return SS$_INVLOGIN;
     /* A real account with the right password but DISUSER/DISACNT is refused --
      * the disabled-account gate, same as the interactive/SSH paths. */
-    if (!sysuaf_interactive_login_permitted(&rec))
+    if (!sysuaf_interactive_login_permitted(rec))
         return SS$_NOPRIV;
     return SS$_NORMAL;
 }
 
-/* ---- FAL SERVER ----------------------------------------------------------- */
+uint32_t dnet_fal_authenticate(const char *username, const char *password)
+{
+    sysuaf_record_t rec;
+    uint32_t st = fal_authenticate_rec(username, password, &rec);
+    memset(&rec, 0, sizeof rec);
+    return st;
+}
 
 /* A record is storable as a text line iff it carries no NUL. */
 static int rec_to_line(const struct dnet_dap_msg *m, char *line, size_t cap)
@@ -302,7 +309,23 @@ static uint32_t server_create_phase(struct dnet_dap_transport *t, const char *sp
 uint32_t dnet_fal_connect_auth(const uint8_t *conn_data, size_t conn_len,
                                char *authed_user, size_t authed_user_cap)
 {
-    if (authed_user && authed_user_cap) authed_user[0] = '\0';
+    struct dnet_fal_identity id;
+    uint32_t st = dnet_fal_connect_auth_id(conn_data, conn_len, &id);
+    if (authed_user && authed_user_cap) {
+        authed_user[0] = '\0';
+        if (st == SS$_NORMAL) {
+            strncpy(authed_user, id.username, authed_user_cap - 1);
+            authed_user[authed_user_cap - 1] = '\0';
+        }
+    }
+    memset(&id, 0, sizeof id);
+    return st;
+}
+
+uint32_t dnet_fal_connect_auth_id(const uint8_t *conn_data, size_t conn_len,
+                                  struct dnet_fal_identity *id)
+{
+    if (id) memset(id, 0, sizeof *id);
 
     /* Decode the connect-carried credentials (bounded), authenticate, wipe. */
     char user[DNET_FAL_USER_MAX + 1];
@@ -314,22 +337,27 @@ uint32_t dnet_fal_connect_auth(const uint8_t *conn_data, size_t conn_len,
                                      acct, sizeof acct);
     /* A malformed connect never reaches the authenticator -- it is refused as
      * an invalid login, exactly as a wrong password is. */
-    uint32_t auth = (drc != 0) ? SS$_INVLOGIN : dnet_fal_authenticate(user, pass);
+    sysuaf_record_t rec;
+    memset(&rec, 0, sizeof rec);
+    uint32_t auth = (drc != 0) ? SS$_INVLOGIN : fal_authenticate_rec(user, pass, &rec);
 
     /* The password never outlives the check. */
     memset(pass, 0, sizeof pass);
     memset(acct, 0, sizeof acct);
 
-    if (auth != SS$_NORMAL) {
-        memset(user, 0, sizeof user);
-        return auth;   /* caller sends the NSP disconnect; no CC, no DAP, no file */
-    }
-    if (authed_user && authed_user_cap) {
-        strncpy(authed_user, user, authed_user_cap - 1);
-        authed_user[authed_user_cap - 1] = '\0';
+    if (auth == SS$_NORMAL && id) {
+        snprintf(id->username, sizeof id->username, "%s", user);
+        id->uic = (rec.uic_group << 16) | (rec.uic_member & 0xffffu);
+        const uint8_t *dp = rec.raw.uaf$q_def_priv;
+        id->def_privs = (uint64_t)dp[0] | ((uint64_t)dp[1] << 8) |
+                        ((uint64_t)dp[2] << 16) | ((uint64_t)dp[3] << 24) |
+                        ((uint64_t)dp[4] << 32) | ((uint64_t)dp[5] << 40) |
+                        ((uint64_t)dp[6] << 48) | ((uint64_t)dp[7] << 56);
+        snprintf(id->default_dir, sizeof id->default_dir, "%s", rec.default_dir);
     }
     memset(user, 0, sizeof user);
-    return SS$_NORMAL;
+    memset(&rec, 0, sizeof rec);   /* the record carries the password hash */
+    return auth;   /* non-NORMAL: caller sends the NSP disconnect; no CC, no DAP */
 }
 
 uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)

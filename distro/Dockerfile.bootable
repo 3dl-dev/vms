@@ -672,6 +672,7 @@ RUN mkdir -p /system-stage/dev /system-stage/proc /system-stage/sys \
     # a netbsd-vax userspace port was a stale premise, corrected here. Plain
     # `cp ... SYSEXE/` form so the image-parity scanner sees it.
     cp build-static/bin/NCP.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
+    cp build-static/bin/FAL.EXE        /system-stage/vms/SYS0/SYSCOMMON/SYSEXE/ 2>/dev/null ; \
     # TCC.EXE (compiler) + LINK.EXE (linker) -- the self-host toolchain on the
     # shipped disk (vms-992e). LINK.EXE comes from build-static (BUILD_TOOLS
     # vmslink target); TCC.EXE from the mk_tcc_static.sh step above. LIBRARIAN.EXE

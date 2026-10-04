@@ -104,6 +104,26 @@ uint32_t dnet_fal_connect_auth(const uint8_t *conn_data, size_t conn_len,
                                char *authed_user, size_t authed_user_cap);
 
 /*
+ * The identity a successful connect-time authentication establishes -- what
+ * the FAL server process is created with (rd vms-d85): the account's UIC, its
+ * DEFAULT privileges and its SYS$LOGIN, straight from the SYSUAF record the
+ * password was verified against.
+ */
+struct dnet_fal_identity {
+    char     username[33];
+    uint32_t uic;                 /* (group << 16) | member */
+    uint64_t def_privs;           /* uaf$q_def_priv          */
+    char     default_dir[256];    /* SYSUAF default device:[directory] */
+};
+
+/*
+ * dnet_fal_connect_auth_id - dnet_fal_connect_auth, plus the authenticated
+ * account's identity in *id on SS$_NORMAL (zeroed on any refusal).
+ */
+uint32_t dnet_fal_connect_auth_id(const uint8_t *conn_data, size_t conn_len,
+                                  struct dnet_fal_identity *id);
+
+/*
  * dnet_fal_server_run - serve one AUTHENTICATED, ACCEPTED FAL session to
  * completion. The caller has already run dnet_fal_connect_auth (got SS$_NORMAL)
  * and accepted the link (sent the Connect Confirm), so this runs only the DAP

@@ -1216,6 +1216,7 @@ if(BUILD_TOOLS)
         vms_sysgen           # SYSGEN.EXE
         vms_cnxtrace         # CNXTRACE.EXE
         decnetd_exe          # DECNETD.EXE
+        fal_exe              # FAL.EXE
         PARTS                # PARTS.EXE
         ncp_exe              # NCP.EXE
     )

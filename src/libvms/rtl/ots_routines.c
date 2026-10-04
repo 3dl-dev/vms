@@ -16,6 +16,7 @@
 #include <complex.h>
 #include "ssdef.h"
 #include "descrip.h"
+#include "lib$routines.h"   /* lib$scopy_*, lib$sget1_dd/sfree1_dd — OTS$ string routines delegate to them */
 /* NB: ots$routines.h is deliberately NOT included here — several of the
  * older ots$cvt_* signatures in this file predate and diverge from the
  * prototypes in that header (a pre-existing divergence).  The routines
@@ -667,4 +668,78 @@ uint32_t ots$cvt_t_f(const struct dsc$descriptor_s *src, float *dest, ...) {
     uint32_t st = ots_cvt_t_impl(src, &v, 0);
     if (st == SS$_NORMAL && dest) *dest = (float)v;
     return st;
+}
+
+/* ================================================================
+ * OTS$ string support: OTS$SCOPY_DXDX, OTS$SCOPY_R_DX, OTS$SGET1_DD,
+ * OTS$SFREE1_DD, OTS$SFREEN_DD
+ *
+ * Reference: OpenVMS RTL Library (OTS$) Manual.  The language-support string
+ * routines of the Fortran/Pascal runtimes: same copy and allocation behavior as
+ * the LIB$ string routines they sit beside, but the copy routines return the
+ * number of source bytes that did NOT fit (0 when nothing was truncated) rather
+ * than a condition value.
+ * ================================================================ */
+
+/* Bytes of a `srclen`-byte string that cannot be held by *dest. */
+static int32_t ots_untransferred(const struct dsc$descriptor_s *dest, uint32_t srclen)
+{
+    uint32_t cap;
+    switch (dest->dsc$b_class) {
+    case DSC$K_CLASS_VS:
+        cap = ((const struct dsc$descriptor_vs *)dest)->dsc$w_maxstrlen;
+        break;
+    case DSC$K_CLASS_D:
+        return 0;               /* a dynamic destination is resized to fit */
+    default:
+        cap = dest->dsc$w_length;
+        break;
+    }
+    return srclen > cap ? (int32_t)(srclen - cap) : 0;
+}
+
+int32_t ots$scopy_dxdx(const struct dsc$descriptor_s *src,
+                       struct dsc$descriptor_s *dest)
+{
+    if (!src || !dest)
+        return -1;
+    uint32_t srclen = src->dsc$w_length;
+    if (src->dsc$b_class == DSC$K_CLASS_VS && src->dsc$a_pointer)
+        srclen = ((const struct dsc$varying_string *)src->dsc$a_pointer)->dsc$w_curlen;
+    uint32_t st = lib$scopy_dxdx(src, dest);
+    if (!(st & 1) && st != LIB$_STRTRU)
+        return -1;
+    return ots_untransferred(dest, srclen);
+}
+
+int32_t ots$scopy_r_dx(const uint32_t srclen, const char *srcadr,
+                       struct dsc$descriptor_s *dest)
+{
+    if (!dest || srclen > 0xFFFFu)
+        return -1;
+    uint16_t n = (uint16_t)srclen;
+    uint32_t st = lib$scopy_r_dx(&n, srcadr, dest);
+    if (!(st & 1) && st != LIB$_STRTRU)
+        return -1;
+    return ots_untransferred(dest, srclen);
+}
+
+uint32_t ots$sget1_dd(const uint32_t length, uint64_t *desc)
+{
+    return lib$sget1_dd(&length, (struct dsc$descriptor_d *)desc);
+}
+
+uint32_t ots$sfree1_dd(uint64_t *desc)
+{
+    return lib$sfree1_dd(desc);
+}
+
+uint32_t ots$sfreen_dd(const uint32_t count, uint64_t *desc)
+{
+    if (!desc)
+        return SS$_BADPARAM;
+    struct dsc$descriptor_d *d = (struct dsc$descriptor_d *)desc;
+    for (uint32_t i = 0; i < count; i++)
+        lib$sfree1_dd((uint64_t *)&d[i]);
+    return SS$_NORMAL;
 }

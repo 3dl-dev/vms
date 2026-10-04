@@ -285,6 +285,19 @@ uint32_t lib$sig_to_ret(
 );
 
 /**
+ * lib$sig_to_stop - Convert signal to stop
+ *
+ * @param signal_args    Pointer to signal argument vector
+ * @param mechanism_args Pointer to mechanism argument vector
+ *
+ * A condition handler that re-signals a failure condition as LIB$STOP.
+ */
+uint32_t lib$sig_to_stop(
+    void *signal_args,
+    void *mechanism_args
+);
+
+/**
  * lib$establish - Establish a condition handler
  *
  * @param handler  Pointer to handler routine
@@ -878,7 +891,11 @@ uint32_t lib$spawn(
 uint32_t lib$find_file(
     const struct dsc$descriptor_s *filespec,
     struct dsc$descriptor_s *resultspec,
-    uint32_t *context
+    uint32_t *context,
+    const struct dsc$descriptor_s *default_filespec,
+    const struct dsc$descriptor_s *related_filespec,
+    uint32_t *status_value,
+    const uint32_t *flags
 );
 
 /**
@@ -902,7 +919,17 @@ uint32_t lib$find_file_end(
  */
 uint32_t lib$rename_file(
     const struct dsc$descriptor_s *old_filespec,
-    const struct dsc$descriptor_s *new_filespec
+    const struct dsc$descriptor_s *new_filespec,
+    const struct dsc$descriptor_s *default_filespec,
+    const struct dsc$descriptor_s *related_filespec,
+    const uint32_t *flags,
+    uint32_t (*user_success_procedure)(const struct dsc$descriptor_s *, const struct dsc$descriptor_s *, void *),
+    uint32_t (*user_error_procedure)(const struct dsc$descriptor_s *, const struct dsc$descriptor_s *, uint32_t, uint32_t, void *),
+    uint32_t (*user_confirm_procedure)(const struct dsc$descriptor_s *, const struct dsc$descriptor_s *, void *),
+    void *user_specified_argument,
+    struct dsc$descriptor_s *old_resultant_name,
+    struct dsc$descriptor_s *new_resultant_name,
+    uint32_t *file_scan_context
 );
 
 /**
@@ -913,7 +940,16 @@ uint32_t lib$rename_file(
  * @return  RMS$_NORMAL on success
  */
 uint32_t lib$delete_file(
-    const struct dsc$descriptor_s *filespec
+    const struct dsc$descriptor_s *filespec,
+    const struct dsc$descriptor_s *default_filespec,
+    const struct dsc$descriptor_s *related_filespec,
+    uint32_t (*user_success_procedure)(const struct dsc$descriptor_s *, void *),
+    uint32_t (*user_error_procedure)(const struct dsc$descriptor_s *, uint32_t, uint32_t, void *),
+    uint32_t (*user_confirm_procedure)(const struct dsc$descriptor_s *, void *),
+    void *user_specified_argument,
+    struct dsc$descriptor_s *resultant_name,
+    uint32_t *file_scan_context,
+    const uint32_t *flags
 );
 
 /* ================================================================
@@ -1673,6 +1709,15 @@ uint32_t lib$traverse_tree(
 
 #ifdef __cplusplus
 }
+#endif
+
+#ifndef OVMX_NO_PAD_MACROS
+#include "ovmx_optargs.h"
+/* Omitted trailing arguments pad with 0 (VMS argument-count semantics). */
+#define lib$spawn(...) OVMX_PAD_13(lib$spawn, __VA_ARGS__)
+#define lib$find_file(...) OVMX_PAD_7(lib$find_file, __VA_ARGS__)
+#define lib$rename_file(...) OVMX_PAD_12(lib$rename_file, __VA_ARGS__)
+#define lib$delete_file(...) OVMX_PAD_10(lib$delete_file, __VA_ARGS__)
 #endif
 
 #endif /* __LIB_ROUTINES_H */

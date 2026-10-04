@@ -515,6 +515,18 @@ BEGIN {
         macnode = line
         sub(/^[ \t]*#[ \t]*define[ \t]+/, "", macnode)
         sub(/\(.*$/, "", macnode)
+        # A SELF-FORWARDING PAD MACRO is not a definition (vms-44a): the
+        # omitted-trailing-argument spelling `#define sys$x(...) OVMX_PAD_<n>(sys$x,
+        # __VA_ARGS__)` (ovmx_optargs.h) expands to a call of the SAME-NAMED
+        # function with the omitted arguments zero-filled. It cannot stand in for
+        # a service -- the function it calls is the one the register already
+        # declares -- so it is not emitted as a second definition. Anything else
+        # (a macro that aliases or inlines a service) is still a definition.
+        padrest = line
+        sub(/^[ \t]*#[ \t]*define[ \t]+[A-Za-z_][A-Za-z0-9_$]*/, "", padrest)
+        if (padrest ~ /^\(\.\.\.\)[ \t]+OVMX_PAD_[0-9]+\(/ \
+            && index(padrest, "(" macnode ", __VA_ARGS__)") > 0 \
+            && padrest !~ /\\[ \t]*$/) next
         print "D\t" SRC "\tmacro\t" macnode
         rest = line
         sub(/^[ \t]*#[ \t]*define[ \t]+[A-Za-z_][A-Za-z0-9_$]*/, "", rest)

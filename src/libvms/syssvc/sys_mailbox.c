@@ -89,15 +89,19 @@
  *   SS$_NOPRIV    - Caller lacks PRMMBX (permanent) or TMPMBX (temporary)
  *   SS$_NOSUCHDEV - The executive is unreachable (INV-6: no fallback)
  */
-uint32_t sys$crembx(int prmflg,
-                    uint16_t *chan,
-                    uint32_t maxmsg,
-                    uint32_t bufquo,
-                    uint32_t promsk,
-                    uint32_t acmode,
-                    const struct dsc$descriptor_s *lognam) {
+uint32_t (sys$crembx)(int prmflg,
+                      uint16_t *chan,
+                      uint32_t maxmsg,
+                      uint32_t bufquo,
+                      uint32_t promsk,
+                      uint32_t acmode,
+                      const struct dsc$descriptor_s *lognam,
+                      uint32_t flags,
+                      void *nullarg) {
     (void)promsk;
     (void)acmode;
+    (void)flags;     /* reserved option bits */
+    (void)nullarg;   /* documented reserved argument, must be 0 */
 
     if (!chan) return SS$_BADPARAM;
 

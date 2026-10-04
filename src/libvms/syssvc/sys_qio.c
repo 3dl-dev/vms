@@ -37,6 +37,9 @@
 #include <errno.h>
 #include <pthread.h>
 #include <termios.h>
+#include <signal.h>
+#include <time.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "vms/pcb.h"
 #include "vms_kif.h"
@@ -171,6 +174,184 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
     }
 
     return SS$_NORMAL;
+}
+
+
+/*
+ * ASYNCHRONOUS MAILBOX READ ($QIO, not $QIOW) -- vms-003.
+ *
+ * A mailbox read with no writer does not complete; on VMS $QIO queues it and
+ * returns at once, the IOSB/event flag/AST complete when a message arrives, and
+ * $CANCEL aborts it (SS$_ABORT in the IOSB). qio_mailbox_op below is correct for
+ * $QIOW (the caller waits) but used to block $QIO as well, so a program that
+ * queued a read and then did other work -- Eight-Cubed sys_cancel -- never got
+ * its next statement.
+ *
+ * The executive offers a non-blocking dequeue (VMS_MBX_READ_NOW -> SS$_ENDOFFILE
+ * when empty) but no pending-read queue, so the request is held here and driven
+ * by a short interval timer that polls it (every ~5 ms) from the owning process's
+ * own signal context -- the same context the $SETIMR timers deliver ASTs from. A
+ * message found completes the request: IOSB, event flag, AST (dispatched through
+ * the executive's AST queue). $CANCEL completes it with SS$_ABORT. A proper
+ * executive-resident pending-read queue (vms_mbx.c) would remove the polling; that
+ * is the follow-on. This is process-local: no other process sees the request.
+ */
+#define ASYNC_RD_MAX 16
+static struct async_rd {
+    int      in_use;
+    uint16_t chan;
+    uint32_t exec_chan;
+    void    *buf;
+    uint32_t bufsz;
+    struct _iosb *iosb;
+    uint32_t efn;
+    void   (*astadr)(uint32_t);
+    uint32_t astprm;
+} async_rd[ASYNC_RD_MAX];
+static timer_t async_timer;
+static int async_timer_created;
+static int async_timer_armed;
+static int async_handler_set;
+
+static void async_rd_complete(struct async_rd *r, uint32_t st, uint32_t actlen)
+{
+    struct _iosb *iosb = r->iosb;
+    void (*ast)(uint32_t) = r->astadr;
+    uint32_t prm = r->astprm, efn = r->efn;
+    r->in_use = 0;
+    if (iosb) {
+        iosb->iosb$w_status = (uint16_t)st;
+        iosb->iosb$w_bcnt = (actlen > 65535) ? 65535 : (uint16_t)actlen;
+        iosb->iosb$l_dev_depend = actlen;
+    }
+    if (efn < 128)
+        (void)sys$setef(efn);
+    if (ast) {
+        if (sys$dclast(ast, prm, 3) & 1)
+            vms$$deliver_pending_asts();
+    }
+}
+
+static void async_timer_arm(int on)
+{
+    struct itimerspec its;
+    memset(&its, 0, sizeof its);
+    if (on) {
+        its.it_value.tv_nsec = 5 * 1000 * 1000;
+        its.it_interval.tv_nsec = 5 * 1000 * 1000;
+    }
+    if (async_timer_created)
+        timer_settime(async_timer, 0, &its, NULL);
+    async_timer_armed = on;
+}
+
+static void async_rd_poll(int sig, siginfo_t *si, void *uc)
+{
+    (void)sig; (void)si; (void)uc;
+    int pending = 0;
+    for (int i = 0; i < ASYNC_RD_MAX; i++) {
+        struct async_rd *r = &async_rd[i];
+        if (!r->in_use)
+            continue;
+        uint32_t actlen = 0;
+        uint32_t st = vms_kif_mbx_read(r->exec_chan, r->buf, r->bufsz, &actlen, 1);
+        if (st == SS$_ENDOFFILE) {      /* nothing queued yet: still pending */
+            pending = 1;
+            continue;
+        }
+        async_rd_complete(r, st, (st & 1) ? actlen : 0);
+    }
+    if (!pending)
+        async_timer_arm(0);
+}
+
+/* Queue an asynchronous blocking mailbox read; returns SS$_NORMAL once queued. */
+static uint32_t qio_mailbox_read_async(uint16_t chan, void *iosb_ptr, void *p1,
+                                       uint32_t p2, uint32_t efn,
+                                       void (*astadr)(uint32_t), uint32_t astprm)
+{
+    int slot = -1;
+    for (int i = 0; i < ASYNC_RD_MAX; i++)
+        if (!async_rd[i].in_use) { slot = i; break; }
+    if (slot < 0)
+        return SS$_EXQUOTA;
+
+    if (!async_handler_set) {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_flags = SA_SIGINFO | SA_RESTART;
+        sa.sa_sigaction = async_rd_poll;
+        sigaction(SIGRTMIN + 1, &sa, NULL);
+        async_handler_set = 1;
+    }
+    if (!async_timer_created) {
+        struct sigevent sev;
+        memset(&sev, 0, sizeof sev);
+        sev.sigev_notify = SIGEV_SIGNAL;
+        sev.sigev_signo = SIGRTMIN + 1;
+        if (timer_create(CLOCK_MONOTONIC, &sev, &async_timer) < 0)
+            return SS$_INSFMEM;
+        async_timer_created = 1;
+    }
+
+    sigset_t blk, old;
+    sigemptyset(&blk);
+    sigaddset(&blk, SIGRTMIN + 1);
+    pthread_sigmask(SIG_BLOCK, &blk, &old);
+
+    struct async_rd *r = &async_rd[slot];
+    r->chan = chan;
+    r->exec_chan = vms$$chan_exec_chan(chan);
+    r->buf = p1;
+    r->bufsz = p2;
+    r->iosb = (struct _iosb *)iosb_ptr;
+    r->efn = efn;
+    r->astadr = astadr;
+    r->astprm = astprm;
+    if (r->iosb)
+        memset(r->iosb, 0, sizeof *r->iosb);       /* pending: status 0 */
+    if (efn < 128)
+        (void)sys$clref(efn);
+    r->in_use = 1;
+    {
+        /* A message already queued completes the request at once; only an empty
+         * mailbox leaves it pending. */
+        uint32_t actlen = 0;
+        uint32_t st = vms_kif_mbx_read(r->exec_chan, p1, p2, &actlen, 1);
+        if (st != SS$_ENDOFFILE) {
+            async_rd_complete(r, st, (st & 1) ? actlen : 0);
+            pthread_sigmask(SIG_SETMASK, &old, NULL);
+            return SS$_NORMAL;
+        }
+    }
+    if (!async_timer_armed)
+        async_timer_arm(1);
+
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
+    return SS$_NORMAL;
+}
+
+/* $CANCEL support: complete every pending asynchronous mailbox read on `chan`
+ * with SS$_ABORT. Called by sys$cancel. */
+void vms$$qio_cancel_chan(uint16_t chan)
+{
+    sigset_t blk, old;
+    sigemptyset(&blk);
+    sigaddset(&blk, SIGRTMIN + 1);
+    pthread_sigmask(SIG_BLOCK, &blk, &old);
+    int pending = 0;
+    for (int i = 0; i < ASYNC_RD_MAX; i++) {
+        struct async_rd *r = &async_rd[i];
+        if (!r->in_use)
+            continue;
+        if (r->chan == chan)
+            async_rd_complete(r, SS$_ABORT, 0);
+        else
+            pending = 1;
+    }
+    if (!pending && async_timer_armed)
+        async_timer_arm(0);
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
 }
 
 /*
@@ -661,8 +842,14 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
                   uint32_t p4, uint32_t p5, uint32_t p6) {
     (void)p4; (void)p5; (void)p6;
 
-    if (vms$$chan_is_mailbox(chan))
+    if (vms$$chan_is_mailbox(chan)) {
+        uint32_t bf = func & IO$M_FCODE;
+        if ((bf == IO$_READVBLK || bf == IO$_READLBLK || bf == IO$_READPBLK) &&
+            !(func & IO$M_NOW) && p1)
+            return qio_mailbox_read_async(chan, iosb_ptr, p1, p2, efn,
+                                          astadr, astprm);
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
+    }
 
     if (vms$$chan_is_bg(chan))
         return qio_bg_op(chan, func, iosb_ptr, p1, p2, p3, efn, astadr, astprm);

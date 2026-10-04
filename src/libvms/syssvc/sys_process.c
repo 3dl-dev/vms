@@ -159,8 +159,14 @@
  *     success that changed the CALLER's own priority (vms-dff7).
  * OVMX-LOCAL: sys$setpri -- the VMS-priority<->Linux-nice mapping and the
  *     getpriority/setpriority applied to the resolved Linux pid are local.
- * OVMX-USERSPACE: sys$cancel (vms-pt1) -- KNOWN GAP (facade-risk, tracked
- *     vms-c8c): returns SS$_NORMAL without cancelling. QIO is genuinely
+ * OVMX-PARTIAL: sys$cancel (vms-pt1) -- exec: the mailbox a pending read waits on
+ *     is the executive's (the poll that decides "no message yet" is
+ *     vms_kif_mbx_read(nowait)); $CANCEL completes this process's pending
+ *     asynchronous MAILBOX reads on the channel with SS$_ABORT (vms-003).
+ * OVMX-LOCAL: sys$cancel -- the pending-request table is this process's memory (no
+ *     executive pending-read queue yet), and KNOWN GAP (facade-risk, tracked
+ *     vms-c8c) for io_uring-submitted file I/O: that is still not cancelled and
+ *     $CANCEL returns SS$_NORMAL for it. QIO file I/O is genuinely
  *     ASYNCHRONOUS (io_uring; sys_qio.c/sys_uring.c), so pending async I/O on a
  *     channel CAN exist -- this no-op does NOT cancel it. A real $CANCEL must
  *     io_uring_prep_cancel the channel's inflight SQEs and complete each IOSB
@@ -1921,11 +1927,13 @@ uint32_t (sys$setpri)(const uint32_t *pidadr,
  *   2. Cancel the operation (io_uring_prep_cancel or aio_cancel)
  *   3. Complete the I/O with SS$_CANCEL status
  */
-uint32_t sys$cancel(uint16_t chan) {
-    (void)chan;
+extern void vms$$qio_cancel_chan(uint16_t chan);
 
-    /* KNOWN GAP (vms-c8c): QIO is async (io_uring), so pending I/O CAN exist;
-     * this no-op does not cancel it -- see the header note above. */
+uint32_t sys$cancel(uint16_t chan) {
+    /* Pending asynchronous MAILBOX reads on the channel complete with SS$_ABORT
+     * (vms-003). KNOWN GAP (vms-c8c): io_uring-submitted file I/O in flight on
+     * the channel is still not cancelled. */
+    vms$$qio_cancel_chan(chan);
     return SS$_NORMAL;
 }
 

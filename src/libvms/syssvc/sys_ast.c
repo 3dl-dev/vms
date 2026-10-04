@@ -194,7 +194,7 @@ uint32_t vms$$async_finish(uint32_t efn, void *iosb, uint32_t status,
     if (efn < 128)
         (void)sys$setef(efn);
     if (astadr) {
-        uint32_t st = sys$dclast(astadr, astprm, 0);
+        uint32_t st = sys$dclast(astadr, astprm, 3 /* user mode: the access mode of the caller */);
         if (!(st & 1))
             return st;
         /* A running process at user mode with ASTs enabled takes a queued AST

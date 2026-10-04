@@ -5027,7 +5027,7 @@ static struct evax_input *push_evax(struct evax_input **ein, int *n, int *cap)
 
 /* Parse every EVAX object member of an `ar` archive into the growable ein array. */
 static void load_archive_evax(const char *path, struct evax_input **ein,
-                              int *n, int *cap)
+                              int *n, int *cap, int whole)
 {
     size_t asize;
     uint8_t *abuf = slurp(path, &asize);   /* kept live: members reference it */
@@ -5064,9 +5064,125 @@ static void load_archive_evax(const char *path, struct evax_input **ein,
         pos = mdata + msize;
         if (pos & 1) pos++;
     }
-    fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
-            "(whole-archive)\n", path, members, members == 1 ? "" : "s");
+    if (whole)
+        fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
+                "(whole-archive)\n", path, members, members == 1 ? "" : "s");
 }
+
+/* --------------------------------------------------------------------------
+ * EVAX object LIBRARY search (vms-4d0): VMS LINK /LIBRARY semantics for an
+ * `ar` archive named with --library. Unlike a plain `.a` input (whole-archive:
+ * every member is linked, which the C-RTL shareable build relies on), a
+ * library contributes only the members that define a symbol the link still
+ * needs, repeated until nothing new is pulled (a pulled member's own
+ * references may need further members). "Needed" = referenced by a loaded
+ * input, defined by no loaded input, and exported by no --use'd producer.
+ * This is what a C++ program needs from libstdc++.a: whole-archiving all of it
+ * drags in every facility (and its own unresolved dependencies). */
+struct evax_nameset { char **slot; size_t cap, n; };
+
+static uint64_t evax_fnv(const char *s)
+{
+    uint64_t h = 1469598103934665603ULL;
+    while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
+    return h;
+}
+
+static int evax_ns_has(const struct evax_nameset *ns, const char *s)
+{
+    if (!ns->cap) return 0;
+    for (size_t i = evax_fnv(s) & (ns->cap - 1); ns->slot[i]; i = (i + 1) & (ns->cap - 1))
+        if (strcmp(ns->slot[i], s) == 0) return 1;
+    return 0;
+}
+
+static void evax_ns_add(struct evax_nameset *ns, char *s)
+{
+    if (evax_ns_has(ns, s)) return;
+    if ((ns->n + 1) * 2 > ns->cap) {
+        size_t nc = ns->cap ? ns->cap * 2 : 1024;
+        char **ns2 = calloc(nc, sizeof *ns2);
+        if (!ns2) die("oom growing library name set");
+        for (size_t i = 0; i < ns->cap; i++) {
+            if (!ns->slot[i]) continue;
+            size_t j = evax_fnv(ns->slot[i]) & (nc - 1);
+            while (ns2[j]) j = (j + 1) & (nc - 1);
+            ns2[j] = ns->slot[i];
+        }
+        free(ns->slot);
+        ns->slot = ns2; ns->cap = nc;
+    }
+    size_t j = evax_fnv(s) & (ns->cap - 1);
+    while (ns->slot[j]) j = (j + 1) & (ns->cap - 1);
+    ns->slot[j] = s; ns->n++;
+}
+
+static void evax_ns_free(struct evax_nameset *ns) { free(ns->slot); ns->slot = NULL; ns->cap = ns->n = 0; }
+
+static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
+                                  const char **libs, int nlibs,
+                                  struct producer *producers, int np)
+{
+    if (nlibs == 0) return;
+    /* Load every library member into a candidate pool (parsed, not yet linked). */
+    struct evax_input *pool = NULL;
+    int npool = 0, cappool = 0;
+    int *lib_of = NULL;
+    for (int l = 0; l < nlibs; l++) {
+        int before = npool;
+        load_archive_evax(libs[l], &pool, &npool, &cappool, 0);
+        lib_of = realloc(lib_of, (size_t)(npool ? npool : 1) * sizeof *lib_of);
+        if (!lib_of) die("oom indexing library members");
+        for (int k = before; k < npool; k++) lib_of[k] = l;
+    }
+    char *pulled = calloc((size_t)(npool ? npool : 1), 1);
+    int *npulled = calloc((size_t)nlibs, sizeof *npulled);
+    if (!pulled || !npulled) die("oom tracking library members");
+
+    for (;;) {
+        /* Rebuild the defined / referenced name sets over the linked inputs. */
+        struct evax_nameset def = {0}, ref = {0};
+        for (int i = 0; i < *nein; i++) {
+            struct evax_object *o = &(*ein)[i].obj;
+            for (int s = 0; s < o->nsym; s++)
+                evax_ns_add(o->sym[s].defined ? &def : &ref, o->sym[s].name);
+            for (int r = 0; r < o->nreloc; r++)
+                if (o->reloc[r].sym[0]) evax_ns_add(&ref, o->reloc[r].sym);
+        }
+        int changed = 0;
+        for (int m = 0; m < npool; m++) {
+            if (pulled[m]) continue;
+            struct evax_object *o = &pool[m].obj;
+            for (int s = 0; s < o->nsym; s++) {
+                const struct evax_symbol *y = &o->sym[s];
+                if (!y->defined || !evax_ns_has(&ref, y->name) || evax_ns_has(&def, y->name))
+                    continue;
+                int pidx; uint32_t svidx;
+                if (np > 0 && find_universal(producers, np, y->name, &pidx, &svidx))
+                    continue;   /* a --use'd shareable provides it: not needed */
+                struct evax_input *slot = push_evax(ein, nein, cap);
+                *slot = pool[m];
+                pulled[m] = 1; npulled[lib_of[m]]++; changed = 1;
+                /* Its definitions satisfy later candidates in this same pass. */
+                for (int t = 0; t < o->nsym; t++)
+                    if (o->sym[t].defined) evax_ns_add(&def, o->sym[t].name);
+                break;
+            }
+        }
+        evax_ns_free(&def); evax_ns_free(&ref);
+        if (!changed) break;
+    }
+    for (int l = 0; l < nlibs; l++) {
+        int total = 0;
+        for (int m = 0; m < npool; m++) if (lib_of[m] == l) total++;
+        fprintf(stderr, "%%LINK-I-LIBRARY, %s: %d of %d member%s pulled to resolve "
+                "references (library search)\n", libs[l], npulled[l], total,
+                total == 1 ? "" : "s");
+    }
+    free(pulled); free(npulled); free(lib_of);
+    /* pool storage (member buffers, parsed objects) stays live like every input. */
+}
+
 
 int main(int argc, char **argv)
 {
@@ -5080,8 +5196,10 @@ int main(int argc, char **argv)
     struct producer *producers = calloc((size_t)argc, sizeof *producers);
     int np = 0;
     const char *transfer = NULL;   /* EVAX/Alpha main transfer symbol (vms-cbe) */
+    const char **libs = calloc((size_t)argc, sizeof *libs);  /* --library FILE (vms-4d0) */
+    int nlibs = 0;
     uint32_t gk = OVMX_GSMATCH_EQUAL, gmaj = 0, gmin = 0;
-    if (!ins || !producers) die("oom parsing arguments");
+    if (!ins || !producers || !libs) die("oom parsing arguments");
     memset(uv, 0, sizeof uv);
 
     for (int i = 1; i < argc; i++) {
@@ -5099,6 +5217,8 @@ int main(int argc, char **argv)
             nuniv = parse_symbol_vector(argv[++i], uv);
         } else if (strcmp(argv[i], "--gsmatch") == 0 && i + 1 < argc) {
             parse_gsmatch(argv[++i], &gk, &gmaj, &gmin);
+        } else if (strcmp(argv[i], "--library") == 0 && i + 1 < argc) {
+            libs[nlibs++] = argv[++i];   /* EVAX object library: searched (vms-4d0) */
         } else if (strcmp(argv[i], "--transfer") == 0 && i + 1 < argc) {
             transfer = argv[++i];   /* EVAX/Alpha main transfer address (vms-cbe) */
         } else if (argv[i][0] == '-') {
@@ -5139,7 +5259,7 @@ int main(int argc, char **argv)
                  * and errors on a non-EVAX one (the mixed-format guard). An empty
                  * archive (0 members, e.g. a libgcc.a the alpha port never needed)
                  * contributes nothing — accepted, not rejected. */
-                load_archive_evax(ins[i], &ein, &nein, &cap_ein);
+                load_archive_evax(ins[i], &ein, &nein, &cap_ein, 1);
                 continue;
             }
             size_t sz; uint8_t *b = slurp(ins[i], &sz);
@@ -5154,6 +5274,8 @@ int main(int argc, char **argv)
             }
         }
         if (nein == 0) die("no EVAX object members found in inputs");
+        /* --library: pull only the members the link still needs (vms-4d0). */
+        evax_search_libraries(&ein, &nein, &cap_ein, libs, nlibs, producers, np);
         /* vms-614: linker-view universal dump — list the DEFINED decc$ symbols
          * evax_read resolves (weak-alias equates included), for mk_decc_shr.sh to
          * build the symbol vector from, then stop before any emit. Runs after the
@@ -5176,6 +5298,8 @@ int main(int argc, char **argv)
         }
         return 0;
     }
+    if (nlibs)
+        die("--library searches EVAX/Alpha object libraries only");
     /* ELF object set: fall through to emit_shareable. load_obj does the single
      * byte-exact RMS read per input; no slurp happened above. */
 

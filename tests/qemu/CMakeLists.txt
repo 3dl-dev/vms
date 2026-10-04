@@ -444,7 +444,10 @@ endforeach()
 qemu_syssvc_add_test(corpus_seed_sysvol
     ${CMAKE_CURRENT_SOURCE_DIR}/corpus_seed_sysvol.c STANDALONE)
 set_target_properties(corpus_seed_sysvol PROPERTIES EXCLUDE_FROM_ALL TRUE)
-add_custom_target(qemu_corpus_rt DEPENDS ${_corpus_rt_targets} corpus_seed_sysvol)
+qemu_syssvc_add_test(corpus_rt_dbgx ${CMAKE_CURRENT_SOURCE_DIR}/corpus_rt_dbg.c STANDALONE)
+set_target_properties(corpus_rt_dbgx PROPERTIES EXCLUDE_FROM_ALL TRUE)
+target_sources(corpus_rt_dbgx PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/corpus_rt_start.c)
+add_custom_target(qemu_corpus_rt DEPENDS ${_corpus_rt_targets} corpus_seed_sysvol corpus_rt_dbgx)
 
 # ---------------------------------------------------------------------------
 # USERSPACE-ONLY imgact tests -- test_imgact_bind, test_imgact_publish

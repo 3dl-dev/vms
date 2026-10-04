@@ -287,7 +287,7 @@ if [ "$CORPUS_RT" = "1" ]; then
         echo "CORPUS-RT $name rc=$rc signaled=$sig" >&4
         if [ "$rc" -ne 0 ]; then
             # the last lines the program printed, for the CI log (diagnostic only)
-            tail -n 3 /tmp/corpus_out.$$ 2>/dev/null | while IFS= read -r _l; do
+            tail -n 14 /tmp/corpus_out.$$ 2>/dev/null | while IFS= read -r _l; do
                 echo "CORPUS-RT-LOG $name| $_l" >&4
             done
         fi

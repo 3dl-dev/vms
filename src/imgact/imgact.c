@@ -1520,6 +1520,56 @@ static struct ovmx_prod g_exe;
  * universals from another producer (a lib shareable -> DECC$SHR). These three
  * are mutually recursive (bind -> load -> resolve -> bind), so forward-declare. */
 static struct ovmx_prod *load_ovmx_producer(const char *soname);
+
+/* --------------------------------------------------------------------------
+ * P0 placement of shareable images (vms-035).
+ *
+ * OpenVMS Alpha activates a main image in P0 space (from 0x10000) and maps each
+ * shareable image it needs into P0 directly above it, so every image address is
+ * a 32-bit (sign-extended longword) address -- what LIB$INITIALIZE entries and
+ * 32-bit-pointer code rely on. When LINK.EXE links the main executable at a
+ * fixed P0 base (--base, an ET_EXEC: load bias 0, top below P1 at 0x40000000),
+ * IMGACT does the same for the producers: each one goes at the next free
+ * 64 KB-aligned P0 address above the main image, mapped MAP_FIXED_NOREPLACE so
+ * nothing already there is ever clobbered. If P0 is exhausted (or the main
+ * image is not a P0 image) the producer is mapped wherever the kernel chooses,
+ * as before. Alpha only: the other OVMX targets keep their placement. */
+#define OVMX_P0_TOP 0x40000000UL
+#define OVMX_P0_GRAIN 0x10000UL
+static unsigned long g_p0_next;   /* 0 = main image is not a P0 image */
+static int g_p0_all;              /* 1 = main image AND every shareable in P0 */
+
+#if defined(__alpha__)
+#define IMGACT_MAP_FIXED_NOREPLACE 0x200000   /* Linux/Alpha <asm/mman.h> */
+static void *imgact_map_span(unsigned long span)
+{
+	while (g_p0_next && g_p0_next + span <= OVMX_P0_TOP) {
+		void *want = (void *)g_p0_next;
+		void *m = sys_mmap(want, span, PROT_READ | PROT_WRITE,
+				   MAP_PRIVATE | MAP_ANONYMOUS | IMGACT_MAP_FIXED_NOREPLACE,
+				   -1, 0);
+		if (m == want) {
+			g_p0_next = (g_p0_next + span + OVMX_P0_GRAIN - 1) &
+				    ~(OVMX_P0_GRAIN - 1);
+			return m;
+		}
+		/* syscall6 returns -errno on failure (EEXIST: something is there). A
+		 * success at another address means the kernel ignored the flag. */
+		if ((unsigned long)m < (unsigned long)-4095L)
+			sys_munmap(m, span);
+		g_p0_next += OVMX_P0_GRAIN;   /* occupied: try the next 64 KB */
+	}
+	g_p0_all = 0;                     /* this producer lands outside P0 */
+	return sys_mmap(0, span, PROT_READ | PROT_WRITE,
+			MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+}
+#else
+static void *imgact_map_span(unsigned long span)
+{
+	return sys_mmap(0, span, PROT_READ | PROT_WRITE,
+			MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+}
+#endif
 static void bind_imports(unsigned long base, const struct ovmx_imp_header *ih,
 			 const char *whoami);
 static void resolve_producer_imports(struct ovmx_prod *p, unsigned long imp_addr);
@@ -1557,8 +1607,7 @@ static struct ovmx_prod *load_ovmx_producer(const char *soname)
 	}
 	if (lo == ~0UL) { imgsrc_close(&src); return 0; }
 	unsigned long span = PAGE_UP(hi) - lo;
-	void *map = sys_mmap(0, span, PROT_READ | PROT_WRITE,
-			     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	void *map = imgact_map_span(span);   /* P0 above the main image (vms-035) */
 	if (map == MAP_FAILED) { imgsrc_close(&src); return 0; }
 	unsigned long base = (unsigned long)map - lo;
 	for (int i = 0; i < eh.e_phnum; i++) {
@@ -2502,6 +2551,8 @@ static void imgact_vms_exit(unsigned long cond)
 		xstrcat(line, he);
 		xstrcat(line, " $STATUS=0x");
 		xstrcat(line, hex);
+		/* vms-035: 1 iff the main image and every shareable sit in P0. */
+		xstrcat(line, g_p0_all ? " p0=1" : " p0=0");
 		xstrcat(line, "\n");
 		eputs(line);
 	}
@@ -2593,6 +2644,21 @@ static void activate_symbol_vector(unsigned long exe_base, const char *execfn,
 	struct imgsrc src;
 	if (imgsrc_open(&src, execfn) < 0)
 		die_imgnotfnd(execfn);
+	/* vms-035: a main image linked at a fixed P0 address (bias 0, wholly below
+	 * P1) gets its shareables placed in P0 directly above it, as on VMS. */
+#if defined(__alpha__)
+	if (exe_base == 0) {
+		unsigned long top = 0;
+		for (int i = 0; i < ephnum; i++)
+			if (ephdr[i].p_type == PT_LOAD &&
+			    ephdr[i].p_vaddr + ephdr[i].p_memsz > top)
+				top = ephdr[i].p_vaddr + ephdr[i].p_memsz;
+		if (top && top < OVMX_P0_TOP) {
+			g_p0_next = (top + OVMX_P0_GRAIN - 1) & ~(OVMX_P0_GRAIN - 1);
+			g_p0_all = 1;
+		}
+	}
+#endif
 	unsigned long imp_addr, imp_size;
 	int ok = ovmx_find_section(&src, OVMX_IMP_SECTION, &imp_addr, &imp_size);
 	/* Bias the executable's own self-relative slots (its GOT/pointer data), if

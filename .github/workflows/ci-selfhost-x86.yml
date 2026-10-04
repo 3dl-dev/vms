@@ -326,6 +326,14 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_vmsrel.sh
 
+      # vms-035: LINK.EXE --base links an EVAX/Alpha executable at a fixed OpenVMS
+      # Alpha P0 address (ET_EXEC, never moved, no .vms$rel). Proven equal to the
+      # relocatable link of the same object pre-biased to 0x10000, slot by slot;
+      # must-fail: --base on a shareable, an unaligned base, a base in P1.
+      - name: Prove LINK.EXE --base links an EVAX executable in P0 (vms-035)
+        run: |
+          sh src/vmslink/test/run_evax_p0base.sh
+
       # vms-c65: LINK.EXE's EVAX/Alpha path emits a SHAREABLE (a .vms$sv producer)
       # from alpha-dec-vms objects — the half a real Alpha DECC$SHR needs (the
       # other half, the Alpha C-RTL archive, is the Alpha lane's). Links the

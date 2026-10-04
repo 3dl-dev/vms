@@ -370,6 +370,14 @@ jobs:
           if grep -q 'GVALFOLD' "$OUT/build.log"; then echo "ok: C\$_EXIT1 folded as globalvalue"; else echo "note: no GVALFOLD line logged"; fi
           echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
 
+      # vms-4d0: LINK.EXE EVAX object-library search (--library, VMS LINK
+      # /LIBRARY semantics) + names past 31 characters. Reuses the OUT dir the
+      # step above built (its LINK.EXE / crt0.obj / DECC$SHR.EXE). Three cases,
+      # two of them must-fail: selective pull ("2 of 3"), whole-archive of the
+      # same library fails UNDEF, a library lacking the definition fails UNDEF.
+      - name: "LINK.EXE library search: pulls only needed members; names past 31 chars stay distinct (vms-4d0)"
+        run: IMG=ovmx-cross-alpha-vms tools/cross-alpha-vms/joint-e2e/run-library-search-test.sh /tmp/joint-e2e-out
+
       # vms-2655 (rung 3 of vms-b4f): the port-link recipe, opted into the rung-2
       # CRTL->RMS stdio veneer (JOINT_CRTL_RMS_VENEER=1 -- see build-joint-image.sh's
       # two-pass bootstrap block), STRICT-links the crtl_rms_test.c port program

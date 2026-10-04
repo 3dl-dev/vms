@@ -168,9 +168,12 @@ static void ldwv_survey_add(struct ldwv_survey *s, const struct vms_ldwv_member 
  * So: all peers unknown -> the shared all-zero reading; any peer known -> we do
  * not participate, and say so.
  *
- * IT AUTO-RETIRES. When FC-P3.2 pins the LOCKDIRWT wire byte, peers advertise,
- * `any_peer_learned` becomes true and this stops firing on its own -- the real
- * weighted vector takes over with no code change here.
+ * IT HAS AUTO-RETIRED (rd vms-fcb). The LOCKDIRWT wire byte is pinned (PARAMS
+ * body[26:28]) and every member -- this implementation and a real VAX alike --
+ * advertises it, so `any_peer_learned` is true as soon as any peer's PARAMS has
+ * arrived and the real weighted vector is built from real weights. What is left
+ * is the window before a peer's first PARAMS, which is never a Phase 2 the peer
+ * is counted in (its PARAMS precede its admission, rd vms-e88).
  * ==========================================================================
  */
 static void ldwv_survey_finish(struct ldwv_survey *s)
@@ -546,6 +549,18 @@ enum vms_ldwv_status cnxman_ldwv_rebuild(struct vms_club *club,
 
 	club->ldwv.n_members = (uint8_t)((s.n_members > 255u) ? 255u : s.n_members);
 	club->ldwv.weights_learned = s.any_learned;
+	/*
+	 * THE ALL-OVMX GATE'S INPUT, ON THE PATH THE EXECUTIVE ACTUALLY RUNS
+	 * (rd vms-fcb). vms_ldwv_build() above always carried it; this rebuild
+	 * did not, and never had to: until a real VAX's LOCKDIRWT could be read
+	 * off the wire, a foreign member always arrived with an UNKNOWN weight
+	 * and the vector was refused before it got here. Now a VAX's weight is
+	 * learned and a mixed cluster's vector BUILDS -- so the fact that one of
+	 * its members cannot be proven OVMX has to travel with it, or
+	 * vms_ldwv_all_ovmx() would read a vector with a VAX in it as
+	 * all-OVMX and open cross-node routing toward that VAX.
+	 */
+	club->ldwv.any_foreign = s.any_foreign;
 	/*
 	 * SAY IT WHEN THE FALLBACK FIRED (rd vms-1ee). A vector built on the
 	 * unadvertised reading is a DIFFERENT fact from one built on real

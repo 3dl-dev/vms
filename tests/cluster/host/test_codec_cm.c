@@ -454,6 +454,46 @@ static void test_params_parse(void)
 }
 
 /*
+ * rd vms-fcb (plan row FC-P3.2): op-0x01 body[26:28] is the sender's LOCKDIRWT,
+ * read off four real V7.3 records from a controlled reconfiguration -- the same
+ * two systems booted with SYSBOOT> SET LOCKDIRWT 3/0, then 1/2 -- and OVMX's
+ * builder puts its own SYSGEN value at exactly those two bytes.
+ */
+static void test_fcb_params_lockdirwt(void)
+{
+	static const struct { const char *name; uint16_t w; } k[] = {
+		{ "cm-params-lockdirwt3-oracle", 3u },
+		{ "cm-params-lockdirwt0-oracle", 0u },
+		{ "cm-params-lockdirwt1-oracle", 1u },
+		{ "cm-params-lockdirwt2-oracle", 2u },
+	};
+	struct vms_cm_node_params own;
+	struct vms_cm_params p;
+	uint8_t built[VMS_CM_BODY_LEN];
+	uint32_t i, written = 0;
+
+	printf("-- rd vms-fcb: op 0x01 body[26:28] is the sender's LOCKDIRWT\n");
+	memset(&own, 0, sizeof(own));
+	for (i = 0; i < sizeof(k) / sizeof(k[0]); i++) {
+		const struct vms_fixture *f = fixture(k[i].name);
+
+		ct_check(f != NULL, k[i].name);
+		if (f == NULL)
+			continue;
+		ct_check(vms_cm_params_parse(fx_body(f), fx_body_len(f), &p)
+			 == VMS_CODEC_OK, "  the real record parses");
+		ct_check_eq_u32(p.lockdirwt, k[i].w,
+				"  LOCKDIRWT == the SYSBOOT-configured value");
+		ct_check(vms_cm_params_build(p.votes, p.members, k[i].w, &own,
+					     built, sizeof(built), &written)
+			 == VMS_CODEC_OK, "  OVMX builds a PARAMS with it");
+		ct_check(memcmp(built + VMS_OFB_CM_LOCKDIRWT,
+				fx_body(f) + VMS_OFB_CM_LOCKDIRWT, 2u) == 0,
+			 "  its body[26:28] is byte-identical to the real one");
+	}
+}
+
+/*
  * rd vms-e88: op-0x01 body[18:20] is the SENDER'S MEMBER COUNT, read off two
  * real V7.3 records from the e88 trio C3 -- a member of a two-member cluster
  * and a joiner -- and OVMX's builder puts its own count at exactly those two
@@ -485,13 +525,13 @@ static void test_e88_params_member_count(void)
 			"  a system in no cluster advertises 0");
 
 	memset(&own, 0, sizeof(own));
-	ct_check(vms_cm_params_build(1u, 2u, &own, built, sizeof(built),
+	ct_check(vms_cm_params_build(1u, 2u, 0u, &own, built, sizeof(built),
 				     &written) == VMS_CODEC_OK,
 		 "OVMX builds a member's PARAMS");
 	ct_check(memcmp(built + VMS_OFB_CM_MEMBERS,
 			fx_body(m) + VMS_OFB_CM_MEMBERS, 2u) == 0,
 		 "  its body[18:20] is byte-identical to the real member's");
-	ct_check(vms_cm_params_build(0u, 0u, &own, built, sizeof(built),
+	ct_check(vms_cm_params_build(0u, 0u, 0u, &own, built, sizeof(built),
 				     &written) == VMS_CODEC_OK,
 		 "OVMX builds a joiner's PARAMS");
 	ct_check(memcmp(built + VMS_OFB_CM_MEMBERS,
@@ -713,7 +753,7 @@ static void test_joiner_originations(void)
 	own.param_f1 = 0x11223344u;
 	own.param_f2 = 0x55667788u;
 	memcpy(own.version, "VMX V0.6", VMS_CM_VERSION_LEN);
-	ct_check(vms_cm_params_build(2u, 3u, &own, built, sizeof(built), &written)
+	ct_check(vms_cm_params_build(2u, 3u, 0u, &own, built, sizeof(built), &written)
 		 == VMS_CODEC_OK, "params builds");
 	ct_check(vms_frame_compose(&l, built, frame, sizeof(frame),
 				   &frame_written) == VMS_CODEC_OK,
@@ -731,7 +771,7 @@ static void test_joiner_originations(void)
 	ct_check_eq_u32(params.param_f2, 0x55667788u, "  ... and param_f2");
 	ct_check(memcmp(params.version, "VMX V0.6", VMS_CM_VERSION_LEN) == 0,
 		 "  the caller's OWN version string, never a baked \"V7.3\"");
-	ct_check(vms_cm_params_build(0u, 0u, NULL, built, sizeof(built), &written)
+	ct_check(vms_cm_params_build(0u, 0u, 0u, NULL, built, sizeof(built), &written)
 		 == VMS_CODEC_E_INVAL,
 		 "  a NULL parameter block is refused, not zero-filled");
 
@@ -1310,6 +1350,7 @@ int main(void)
 	test_open_parse();
 	test_barrier_parse();
 	test_params_parse();
+	test_fcb_params_lockdirwt();
 	test_e88_params_member_count();
 	test_model_parse();
 	test_dlm_rebuild_parse();

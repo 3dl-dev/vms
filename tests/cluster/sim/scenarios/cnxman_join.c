@@ -600,7 +600,7 @@ static void test_no_step_waited_on_a_timer(void)
 
 static void test_honest_omissions_survive_the_replay(void)
 {
-	printf("\n-- E8/E24/FC-P3.2: the omissions are still omissions --\n");
+	printf("\n-- E8/E24: the omissions are still omissions --\n");
 	ct_check_eq_u32(g.cl.club.local_csid_valid, 0u,
 			"no CSID was learned or invented across the whole "
 			"replay (integration note E8)");
@@ -609,8 +609,6 @@ static void test_honest_omissions_survive_the_replay(void)
 	ct_check_eq_u32(g.j.dir_descriptor_omitted, 1u,
 			"the VMS$VAXcluster directory descriptor was not "
 			"declared (integration note E24)");
-	ct_check(g.j.lockdirwt_unpinned >= 1u,
-		 "LOCKDIRWT's absence is counted on every PARAMS (FC-P3.2)");
 	ct_check_eq_u32(g.j.codec_failures, 0u, "no codec refusal");
 	ct_check_eq_u32(g.j.send_failures, 0u, "no send refusal");
 }

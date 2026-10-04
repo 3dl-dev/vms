@@ -45,9 +45,13 @@
  * a software-version token byte-identical to our own (the E80 identity,
  * `csb->peer_is_ours`). The gate has two halves and both are counted: this file
  * refuses to SERVE a request from a system that is not proven ours, and
- * vms_cnxman.c refuses to EMIT to one. The Lock Directory Weight Vector's own
- * FOREIGN refusal (vms_dlm_ldwv.h) already stops the ROUTING upstream of both;
- * these are the emission-side teeth for anything that gets past it.
+ * vms_cnxman.c refuses to EMIT to one. Upstream of both, the ALL-OVMX gate
+ * (vms_ldwv_all_ovmx(), read through `dir_groundable` and `all_ovmx`) keeps the
+ * lock engine from ROUTING anything off this node while any member cannot be
+ * proven ours -- and since rd vms-fcb a mixed cluster's vector BUILDS (a real
+ * VAX's LOCKDIRWT is read off its PARAMS), so that gate, not a refused vector,
+ * is what stops it. These are the emission-side teeth for anything that gets
+ * past it.
  * ===========================================================================
  *
  * WHAT THIS FILE NOW EMITS, AND WHERE IT STILL HONESTLY STOPS (rd vms-d7a3):

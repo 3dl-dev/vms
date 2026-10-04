@@ -201,6 +201,7 @@ vms_codec_status_t vms_cm_params_parse(const uint8_t *body, uint32_t len,
 	vms_wire_view_init(&v, body, len);
 	out->votes    = vms_wire_get_le16(&v, VMS_OFB_CM_VOTES);
 	out->members  = vms_wire_get_le16(&v, VMS_OFB_CM_MEMBERS);
+	out->lockdirwt = vms_wire_get_le16(&v, VMS_OFB_CM_LOCKDIRWT);
 	out->param_f1 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F1);
 	out->param_f2 = vms_wire_get_le32(&v, VMS_OFB_CM_PARAM_F2);
 	vms_wire_get_bytes(&v, VMS_OFB_CM_VERSION, VMS_CM_VERSION_LEN,
@@ -913,6 +914,7 @@ vms_codec_status_t vms_cm_model_build(const uint8_t *name, uint8_t namelen,
 }
 
 vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
+				       uint16_t lockdirwt,
 				       const struct vms_cm_node_params *own_params,
 				       uint8_t *out_body, uint32_t cap,
 				       uint32_t *written)
@@ -938,14 +940,14 @@ vms_codec_status_t vms_cm_params_build(uint16_t votes, uint16_t members,
 	 * its own version and sec 4(L)(6) measured that a real VAX accepts and
 	 * DISPLAYS a non-"VMS" string here).
 	 *
-	 * EXPECTED_VOTES and LOCKDIRWT are ABSENT, and that is an honest
-	 * omission rather than an oversight: sec 4(j)'s own RE-gap list says
-	 * EXPECTED_VOTES "was held at 1 in every captured configuration, so no
-	 * wire contrast exists to locate it", and LOCKDIRWT's offset is plan
-	 * row FC-P3.2 (lab). Every ungrounded byte of this body therefore goes
-	 * out zero; a caller whose real LOCKDIRWT is nonzero cannot advertise
-	 * it and must say so (FC-P3.3 counts and logs exactly that). */
+	 * EXPECTED_VOTES is ABSENT, and that is an honest omission rather than
+	 * an oversight: sec 4(j)'s own RE-gap list says it "was held at 1 in
+	 * every captured configuration, so no wire contrast exists to locate
+	 * it". Every ungrounded byte of this body therefore goes out zero. */
 	vms_wire_put_le16(&w, VMS_OFB_CM_VOTES, votes);
+	/* body[26:28] LOCKDIRWT -- GROUNDED by controlled reconfiguration
+	 * (rd vms-fcb): the caller's SYSGEN value, 0 included. */
+	vms_wire_put_le16(&w, VMS_OFB_CM_LOCKDIRWT, lockdirwt);
 	/* body[18:20] the member count (rd vms-e88): the caller's, and 0 --
 	 * "in no cluster" -- is a real value a joiner sends, not a default. */
 	vms_wire_put_le16(&w, VMS_OFB_CM_MEMBERS, members);

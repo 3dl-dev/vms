@@ -285,6 +285,13 @@ uint32_t lib$sig_to_ret(
 );
 
 /**
+ * lib$ast_in_prog - Is the caller executing as an AST routine?
+ *
+ * @return  1 if an AST routine is running in the caller's context, else 0
+ */
+uint32_t lib$ast_in_prog(void);
+
+/**
  * lib$sig_to_stop - Convert signal to stop
  *
  * @param signal_args    Pointer to signal argument vector

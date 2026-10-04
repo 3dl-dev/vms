@@ -1626,6 +1626,18 @@ uint32_t sys$get_entropy(void *buffer, uint32_t length);
 uint32_t sys$lckpag(const void *inadr, void *retadr, uint32_t acmode);
 uint32_t sys$ulkpag(const void *inadr, void *retadr, uint32_t acmode);
 
+/** sys$resched - Give up the processor */
+uint32_t sys$resched(void);
+
+/** sys$setrwm - Set resource wait mode (1 = disable resource wait); SS$_WASSET if it was disabled */
+uint32_t sys$setrwm(uint32_t watflg);
+
+/** sys$setswm - Set process swap mode (1 = disable swapping; needs PSWAPM) */
+uint32_t sys$setswm(uint32_t swpflg);
+
+/** sys$setprn - Set process name */
+uint32_t sys$setprn(const struct dsc$descriptor_s *prcnam);
+
 /** sys$purge_ws - Purge working set, 64-bit range form */
 uint32_t sys$purge_ws(const void *inadr, uint64_t count);
 

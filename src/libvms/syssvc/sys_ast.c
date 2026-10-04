@@ -111,6 +111,9 @@
  * because an AST became deliverable (vms-feb). Intra-image call within
  * LIBVMS$SHR -- no symbol-vector universal.
  */
+/* Nonzero while an AST routine this layer dispatched is running (LIB$AST_IN_PROG). */
+static __thread int ast_in_progress;
+
 void vms$$deliver_pending_asts(void) {
     uint64_t astadr;
     uint64_t astprm;
@@ -119,9 +122,20 @@ void vms$$deliver_pending_asts(void) {
     while (vms_kif_deliverast(&astadr, &astprm, &acmode) == 0) {
         if (astadr) {
             void (*fn)(uint32_t) = (void (*)(uint32_t))(uintptr_t)astadr;
+            ast_in_progress++;
             fn((uint32_t)astprm);
+            ast_in_progress--;
         }
     }
+}
+
+/*
+ * lib$ast_in_prog - Is the caller running as an AST routine?  Returns 1 inside
+ * an AST dispatched by this layer, else 0 (the VMS RTL's boolean result).
+ */
+uint32_t lib$ast_in_prog(void)
+{
+    return ast_in_progress > 0 ? 1 : 0;
 }
 
 /*

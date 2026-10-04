@@ -2613,6 +2613,23 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 	 * layout (six 64-bit args), never a hard-coded 6. */
 	unsigned long ai = OVMX_AI_VMS_ACTIVATION;
 
+	/* vms-43c: a transfer vector with more than one entry (LINK.EXE put the
+	 * LIB$INITIALIZE dispatcher ahead of the main transfer address) is
+	 * started the VMS way: the activator calls the FIRST transfer address
+	 * with the address of the transfer vector (absolute procedure values,
+	 * zero-terminated) as its first argument; LIB$INITIALIZE runs the image's
+	 * initialization routines and then calls the next entry -- the main
+	 * transfer -- itself. */
+	static unsigned long xvec[9];
+	if (g_xfer.count > 1) {
+		unsigned int n = g_xfer.count < 8 ? g_xfer.count : 8;
+		for (unsigned int i = 0; i < n; i++)
+			xvec[i] = exe_base + g_xfer.entries[i];
+		xvec[n] = 0;
+		args[0] = (unsigned long)xvec;
+		pv = (void *)(exe_base + g_xfer.first_off);
+	}
+
 	unsigned long cond = imgact_vms_transfer(pv, ai, args);
 
 	imgact_vms_exit(cond);          /* executive $EXIT; does not return */

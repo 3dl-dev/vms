@@ -27,7 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # python3/pip      : anita is a Python program
 # python3-pexpect  : anita "screen scrapes" the serial console via pexpect
 # genisoimage      : anita builds the install-sets ISO with mkisofs/genisoimage
-# curl/ca-certs    : anita downloads the pinned release from cdn.netbsd.org
+# curl/ca-certs    : anita downloads the pinned release from archive.netbsd.org
 # gzip, cpio       : anita unpacks release media
 RUN n=0; until [ "$n" -ge 3 ]; do \
     apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \

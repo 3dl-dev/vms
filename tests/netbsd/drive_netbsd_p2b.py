@@ -148,7 +148,7 @@ def main():
     version = env("NETBSD_VERSION", "10.1")
     arch = env("NETBSD_ARCH", "amd64")
     url = env("NETBSD_URL",
-              "https://cdn.netbsd.org/pub/NetBSD/NetBSD-%s/%s/" % (version, arch))
+              "https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-%s/%s/" % (version, arch))
     iso_name = env("NETBSD_BOOT_ISO", "boot-com.iso")
     iso_sha512 = env("NETBSD_BOOT_ISO_SHA512", "")
 

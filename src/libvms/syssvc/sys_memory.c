@@ -43,6 +43,12 @@
  * OVMX-USERSPACE: sys$lkwset (vms-e0a) -- validates the range, echoes it back
  *     in retadr and returns SS$_NORMAL; no pages are locked.
  * OVMX-USERSPACE: sys$ulwset (vms-e0a) -- the same, for unlocking.
+ * OVMX-USERSPACE: sys$lckpag (vms-44a) -- mlock() of the page-rounded range in
+ *     the calling process only; the lock is the Linux VMM's, not an executive
+ *     balance-set entry, so no other process or $GETJPI can see it.
+ * OVMX-USERSPACE: sys$ulkpag (vms-44a) -- munlock() of the same.
+ * OVMX-USERSPACE: sys$purge_ws (vms-e0a) -- the 64-bit-range form of $PURGWS;
+ *     validates the range and returns SS$_NORMAL, nothing is purged.
  */
 
 #include <stdint.h>
@@ -50,7 +56,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include "starlet.h"
+#include "va_rangedef.h"
 
 /* VMS page size is 512 bytes (Alpha/Itanium may use larger, but 512 is the classic) */
 #define VMS_PAGE_SIZE 512
@@ -339,4 +347,79 @@ uint32_t sys$ulwset(const void *inadr, void *retadr, uint32_t acmode) {
     }
 
     return SS$_NORMAL;
+}
+
+/*
+ * Page-rounded range helper for $LCKPAG/$ULKPAG: VMS locks whole pages, and the
+ * range it reports back is the page-rounded one actually locked.
+ */
+static uint32_t pag_range(const VA_RANGE *in, VA_RANGE *out, size_t *len)
+{
+    uintptr_t pg = (uintptr_t)sysconf(_SC_PAGESIZE);
+    uintptr_t start = (uintptr_t)in->va_range$ps_start_va;
+    uintptr_t end   = (uintptr_t)in->va_range$ps_end_va;
+    if (end < start)
+        return SS$_BADPARAM;
+    uintptr_t lo = start & ~(pg - 1);
+    uintptr_t hi = end | (pg - 1);
+    out->va_range$ps_start_va = (void *)lo;
+    out->va_range$ps_end_va   = (void *)hi;
+    *len = (size_t)(hi - lo + 1);
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$lckpag - Lock pages in memory.
+ *
+ * Locks the pages containing the inadr range into physical memory (mlock) and
+ * returns the page-rounded range actually locked in retadr.  A refusal by the
+ * host (no CAP_IPC_LOCK / RLIMIT_MEMLOCK) is SS$_NOPRIV -- the VMS PSWAPM
+ * requirement -- and an unmapped range is SS$_ACCVIO; never a faked lock.
+ */
+uint32_t sys$lckpag(const void *inadr, void *retadr, uint32_t acmode)
+{
+    (void)acmode;
+    if (!inadr)
+        return SS$_BADPARAM;
+    VA_RANGE got;
+    size_t len;
+    uint32_t st = pag_range((const VA_RANGE *)inadr, &got, &len);
+    if (!(st & 1))
+        return st;
+    if (mlock(got.va_range$ps_start_va, len) < 0) {
+        if (errno == ENOMEM) return SS$_ACCVIO;
+        return SS$_NOPRIV;
+    }
+    if (retadr)
+        *(VA_RANGE *)retadr = got;
+    return SS$_NORMAL;
+}
+
+/* sys$ulkpag - Unlock pages locked by $LCKPAG (munlock). */
+uint32_t sys$ulkpag(const void *inadr, void *retadr, uint32_t acmode)
+{
+    (void)acmode;
+    if (!inadr)
+        return SS$_BADPARAM;
+    VA_RANGE got;
+    size_t len;
+    uint32_t st = pag_range((const VA_RANGE *)inadr, &got, &len);
+    if (!(st & 1))
+        return st;
+    if (munlock(got.va_range$ps_start_va, len) < 0)
+        return (errno == ENOMEM) ? SS$_ACCVIO : SS$_NOPRIV;
+    if (retadr)
+        *(VA_RANGE *)retadr = got;
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$purge_ws - Purge working set (64-bit range form).  See sys$purgws: no
+ * adjustable working set exists under the Linux VMM; the range is validated and
+ * nothing is purged.  The second argument is the 64-bit byte count of the range.
+ */
+uint32_t sys$purge_ws(const void *inadr, uint64_t count)
+{
+    (void)count;
+    return sys$purgws(inadr);
 }

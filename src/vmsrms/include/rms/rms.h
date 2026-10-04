@@ -136,4 +136,10 @@ int rms_status_is_executive_absent(uint32_t st);
 uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));     /* Rewind to beginning of file */
 uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *));      /* Flush buffers to disk */
 
+#if !defined(OVMX_NO_PAD_MACROS) && defined(__has_include)
+# if __has_include(<ovmx_rms_optargs.h>)
+#  include <ovmx_rms_optargs.h>
+# endif
+#endif
+
 #endif /* __RMS_RMS_H */

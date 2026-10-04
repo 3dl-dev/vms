@@ -487,6 +487,29 @@ uint32_t lib$sig_to_ret(void *signal_args, void *mechanism_args) {
 }
 
 /* ================================================================
+ * lib$sig_to_stop - Convert a signalled condition into a stop.
+ *
+ * A handler that re-signals the original condition as LIB$STOP: execution
+ * cannot continue after it, the image exits with the condition value.
+ * ================================================================ */
+
+uint32_t lib$sig_to_stop(void *signal_args, void *mechanism_args) {
+    struct chf$signal_array *sigarray = (struct chf$signal_array *)signal_args;
+    (void)mechanism_args;
+
+    if (sigarray == NULL) {
+        return SS$_RESIGNAL;
+    }
+    /* Success/informational conditions are not stops (the VMS RTL treats
+     * only conditions with the failure bit pattern as stoppable). */
+    if ($VMS_STATUS_SUCCESS(sigarray->chf$is_sig_name)) {
+        return SS$_RESIGNAL;
+    }
+    lib$stop(sigarray->chf$is_sig_name);
+    return SS$_RESIGNAL;     /* not reached: lib$stop does not return */
+}
+
+/* ================================================================
  * Internal accessors for SYS$UNWIND (sys_condition.c)
  *
  * SYS$UNWIND pops handlers off this file's thread-local chain down to a

@@ -51,11 +51,12 @@ uint32_t ovmx_mmk_lib_get_foreign(void *result, ...)
 uint32_t ovmx_mmk_sys_parse(void *fab, ...)  { return sys$parse(fab, 0, 0); }
 uint32_t ovmx_mmk_sys_search(void *fab, ...) { return sys$search(fab, 0, 0); }
 
-/* $FILESCAN: MMK passes (src,list,flags) or (src,list,flags,0,0); OVMX takes 3. */
+/* $FILESCAN: MMK passes (src,list,flags) or (src,list,flags,0,0); OVMX takes the
+ * full five (auxout, retlen are the documented optional trailing arguments). */
 uint32_t ovmx_mmk_sys_filescan(const void *srcstr, void *valuelst, void *fldflags, ...)
 {
     return sys$filescan((const struct dsc$descriptor_s *)srcstr,
-                        (ILE2 *)valuelst, (uint32_t *)fldflags);
+                        (ILE2 *)valuelst, (uint32_t *)fldflags, NULL, NULL);
 }
 
 /* LIB$GETDVI: MMK's older form (item, &chan, devnam, &result); OVMX's full form

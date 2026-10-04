@@ -31,6 +31,9 @@
  *     converted to VMS 100ns ticks; the host clock, not an executive EXE$GQ_
  *     system time cell, so no system-time base can be set or observed.
  * OVMX-USERSPACE: sys$getutc (vms-642) -- the same host clock read.
+ * OVMX-USERSPACE: sys$gettim_prec (vms-642) -- the same host clock read; the
+ *     host clock already has sub-tick resolution, so it never reports
+ *     reduced precision.
  * OVMX-USERSPACE: sys$numtim (vms-f90) -- converts the caller's quadword (or
  *     the host clock when timadr is NULL) into the caller's timbuf.
  * OVMX-USERSPACE: sys$asctim (vms-f90) -- formats into the caller's buffer
@@ -432,4 +435,14 @@ uint32_t sys$cantim(uint32_t reqidt, uint32_t acmode) {
     pthread_mutex_unlock(&timer_mutex);
 
     return SS$_NORMAL;
+}
+
+/*
+ * sys$gettim_prec - Get the current time at the best precision available.
+ * The host's CLOCK_REALTIME is read at nanosecond resolution and reported in
+ * VMS 100ns ticks, so the full-precision answer is the only one given.
+ */
+uint32_t sys$gettim_prec(uint64_t *timadr)
+{
+    return sys$gettim(timadr);
 }

@@ -368,12 +368,14 @@ static int assign_resolve_mailbox_by_name(const char *name,
  *   SS$_EXQUOTA   - No free channels available
  *   SS$_NOSUCHDEV - Could not open the device/file
  */
-uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
-                    uint16_t *chan,
-                    uint32_t acmode,
-                    const struct dsc$descriptor_s *mbxnam) {
+uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
+                      uint16_t *chan,
+                      uint32_t acmode,
+                      const struct dsc$descriptor_s *mbxnam,
+                      uint32_t flags) {
     (void)acmode;
     (void)mbxnam;
+    (void)flags;   /* ASSIGN$M_* options: none changes what a channel is here */
 
     if (!devnam || !chan) return SS$_BADPARAM;
     if (!devnam->dsc$a_pointer || devnam->dsc$w_length == 0)

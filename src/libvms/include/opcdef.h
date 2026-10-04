@@ -61,6 +61,7 @@ struct opcdef {
     /* Message text follows immediately (variable length) */
     char     opc$l_ms_text[1]; /* First byte of message text */
 };
+typedef struct opcdef OPCDEF;
 
 /*
  * THE SIZE OF THE HEADER THAT PRECEDES THE MESSAGE TEXT, DERIVED FROM THE

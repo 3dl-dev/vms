@@ -140,6 +140,66 @@ extern "C" {
  * verbatim EVALUATE transcript.
  * ================================================================ */
 
+
+/* ================================================================
+ * PRVDEF - the privilege mask as a structure with one bit-field per
+ * privilege (the DEC C <prvdef.h> shape: two longwords, the second
+ * holding privileges 32 and up).  The field set is exactly the PRV$V_
+ * list above, so the two views cannot disagree.
+ * ================================================================ */
+typedef struct _prvdef {
+    union {
+        uint32_t prv$l_l1_bits;
+        struct {
+            uint32_t prv$v_cmkrnl : 1;
+            uint32_t prv$v_cmexec : 1;
+            uint32_t prv$v_sysnam : 1;
+            uint32_t prv$v_grpnam : 1;
+            uint32_t prv$v_allspool : 1;
+            uint32_t prv$v_detach : 1;
+            uint32_t prv$v_diagnose : 1;
+            uint32_t prv$v_log_io : 1;
+            uint32_t prv$v_group : 1;
+            uint32_t prv$v_acnt : 1;
+            uint32_t prv$v_prmceb : 1;
+            uint32_t prv$v_prmmbx : 1;
+            uint32_t prv$v_pswapm : 1;
+            uint32_t prv$v_setpri : 1;
+            uint32_t prv$v_setprv : 1;
+            uint32_t prv$v_tmpmbx : 1;
+            uint32_t prv$v_world : 1;
+            uint32_t prv$v_mount : 1;
+            uint32_t prv$v_oper : 1;
+            uint32_t prv$v_exquota : 1;
+            uint32_t prv$v_netmbx : 1;
+            uint32_t prv$v_volpro : 1;
+            uint32_t prv$v_phy_io : 1;
+            uint32_t prv$v_bugchk : 1;
+            uint32_t prv$v_prmgbl : 1;
+            uint32_t prv$v_sysgbl : 1;
+            uint32_t prv$v_pfnmap : 1;
+            uint32_t prv$v_shmem : 1;
+            uint32_t prv$v_sysprv : 1;
+            uint32_t prv$v_bypass : 1;
+            uint32_t prv$v_syslck : 1;
+            uint32_t prv$v_share : 1;
+        };
+    };
+    union {
+        uint32_t prv$l_l2_bits;
+        struct {
+            uint32_t prv$v_upgrade : 1;
+            uint32_t prv$v_downgrade : 1;
+            uint32_t prv$v_grpprv : 1;
+            uint32_t prv$v_readall : 1;
+            uint32_t prv$v_altpri : 1;
+            uint32_t prv$v_impersonate : 1;
+            uint32_t prv$v_security : 1;
+            uint32_t prv$v_fill32_0 : 25;
+        };
+    };
+} PRVDEF;
+
 #ifdef __cplusplus
 }
 #endif

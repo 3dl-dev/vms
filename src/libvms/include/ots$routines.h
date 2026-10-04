@@ -31,6 +31,7 @@
 #include <stdint.h>
 #include <complex.h>
 #include "descrip.h"
+#include "gen64def.h"   /* __int64 / unsigned __int64 as DEC C builtin aliases (ots$sfree1_dd takes unsigned __int64 *) */
 
 #ifdef __cplusplus
 extern "C" {
@@ -467,7 +468,7 @@ uint32_t ots$cnvout_t(
  * @param src   Pointer to source descriptor
  * @param dest  Pointer to destination descriptor
  *
- * @return  Number of bytes copied (not a status code), or negative on error
+ * @return  Number of source bytes NOT copied (0 = all fit), or -1 on a bad argument
  */
 int32_t ots$scopy_dxdx(
     const struct dsc$descriptor_s *src,

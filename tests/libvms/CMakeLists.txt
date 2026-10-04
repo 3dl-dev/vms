@@ -34,6 +34,12 @@ libvms_add_test(test_libvms_putmsg_facnam
 libvms_add_test(test_libvms_filescan
     ${CMAKE_CURRENT_SOURCE_DIR}/test_filescan.c)
 
+# Test 1c: routines and conventions added for the R2 corpus lane (vms-44a) --
+# omitted-trailing-argument padding, OTS$ string copy, $GET_ENTROPY, $LCKPAG,
+# $GETTIM_PREC, and the honest refusals of the extended $SETPRI/$DELPRC/$CREPRC.
+libvms_add_test(test_libvms_corpus_surface
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_corpus_surface.c)
+
 # Test 2: lib$get_vm / lib$free_vm / lib$create_vm_zone / lib$delete_vm_zone
 libvms_add_test(test_libvms_lib_vm
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lib_vm.c)

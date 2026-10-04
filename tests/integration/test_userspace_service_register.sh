@@ -515,6 +515,18 @@ BEGIN {
         macnode = line
         sub(/^[ \t]*#[ \t]*define[ \t]+/, "", macnode)
         sub(/\(.*$/, "", macnode)
+        # A SELF-FORWARDING PAD MACRO is not a definition (vms-44a): the
+        # omitted-trailing-argument spelling `#define sys$x(...) OVMX_PAD_<n>(sys$x,
+        # __VA_ARGS__)` (ovmx_optargs.h) expands to a call of the SAME-NAMED
+        # function with the omitted arguments zero-filled. It cannot stand in for
+        # a service -- the function it calls is the one the register already
+        # declares -- so it is not emitted as a second definition. Anything else
+        # (a macro that aliases or inlines a service) is still a definition.
+        padrest = line
+        sub(/^[ \t]*#[ \t]*define[ \t]+[A-Za-z_][A-Za-z0-9_$]*/, "", padrest)
+        if (padrest ~ /^\(\.\.\.\)[ \t]+OVMX_PAD_[0-9]+\(/ \
+            && index(padrest, "(" macnode ", __VA_ARGS__)") > 0 \
+            && padrest !~ /\\[ \t]*$/) next
         print "D\t" SRC "\tmacro\t" macnode
         rest = line
         sub(/^[ \t]*#[ \t]*define[ \t]+[A-Za-z_][A-Za-z0-9_$]*/, "", rest)
@@ -864,7 +876,17 @@ grep -E '\.[sS]$' "$WORK/buildset" > "$WORK/prodasm" 2>/dev/null || : > "$WORK/p
 # Its real compile IS the include-surface proof gate. Anchored + $-terminated
 # so it excludes exactly this one file, never the include-surface directory (a
 # future host-compilable .c added there must still be scanned).
-SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$"
+#
+# ONE MORE file-level exclusion (rd vms-032):
+#   tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc.c
+# is a musl arch-override source (src/malloc/$(ARCH)/ replaces the generic
+# lite_malloc.c inside the musl-1.2.5 tree build-musl.sh extracts). It includes
+# musl's INTERNAL "libc.h" and uses weak_alias(), which exist only inside that
+# tree, so it cannot compile standalone in a host scan. It defines only
+# __libc_malloc / malloc forwarders to mallocng -- no sys$ symbol to certify.
+# Its real compile + the one-heap nm gate run in build-musl.sh. Anchored +
+# $-terminated so it excludes exactly this one file.
+SYMSCAN_EXCLUDE_RE="^src/kernel/|^src/kernel-netbsd/|^src/kernel-core/|^src/vmsfs/ods2/ods2_block_kern\.c$|^tools/cross-alpha-vms/musl-arch/src/internal/vms_alpha_syscall\.c$|^tools/cross-alpha-vms/musl-arch/src/thread/alpha-dec-vms/__set_thread_area\.c$|^tools/cross-alpha-vms/include-surface/compile_vms_unwind\.c$|^tools/cross-alpha-vms/musl-arch/src/malloc/alpha-dec-vms/lite_malloc\.c$"
 
 SYMCC=""
 for _c in cc gcc; do

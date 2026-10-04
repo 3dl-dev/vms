@@ -256,12 +256,12 @@ static uint32_t do_enq(uint32_t efn, uint32_t lkmode, struct lksb *lksb,
  *              segregate lock namespaces by access mode)
  *   rsdm_id  - Resource domain ID (unused; single-domain kernel manager)
  */
-uint32_t sys$enqw(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
-                  uint32_t flags, const struct dsc$descriptor_s *resnam,
-                  uint32_t parid, void (*astadr)(uint32_t), uint32_t astprm,
-                  void (*blkastadr)(uint32_t), uint32_t acmode,
-                  uint32_t rsdm_id) {
-    (void)acmode; (void)rsdm_id;
+uint32_t (sys$enqw)(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
+                    uint32_t flags, const struct dsc$descriptor_s *resnam,
+                    uint32_t parid, void (*astadr)(uint32_t), uint32_t astprm,
+                    void (*blkastadr)(uint32_t), uint32_t acmode,
+                    uint32_t rsdm_id, void *nullarg) {
+    (void)acmode; (void)rsdm_id; (void)nullarg;
 
     uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
                               resnam, parid, astadr, astprm, blkastadr, 1);
@@ -281,12 +281,12 @@ uint32_t sys$enqw(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
  * the missing completion AST), or SS$_NOTQUEUED if LCK$M_NOQUEUE was
  * specified and the mode is incompatible.
  */
-uint32_t sys$enq(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
-                 uint32_t flags, const struct dsc$descriptor_s *resnam,
-                 uint32_t parid, void (*astadr)(uint32_t), uint32_t astprm,
-                 void (*blkastadr)(uint32_t), uint32_t acmode,
-                 uint32_t rsdm_id) {
-    (void)acmode; (void)rsdm_id;
+uint32_t (sys$enq)(uint32_t efn, uint32_t lkmode, void *lksb_ptr,
+                   uint32_t flags, const struct dsc$descriptor_s *resnam,
+                   uint32_t parid, void (*astadr)(uint32_t), uint32_t astprm,
+                   void (*blkastadr)(uint32_t), uint32_t acmode,
+                   uint32_t rsdm_id, void *nullarg) {
+    (void)acmode; (void)rsdm_id; (void)nullarg;
 
     uint32_t status = do_enq(efn, lkmode, (struct lksb *)lksb_ptr, flags,
                               resnam, parid, astadr, astprm, blkastadr, 0);

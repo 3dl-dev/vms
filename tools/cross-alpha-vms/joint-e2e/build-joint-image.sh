@@ -339,6 +339,11 @@ cp "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$WORK/libots/LIBOTS_SHR.EXE" "$OUT/"
 # SYS$SHARE search-path set -- with no extra copy needed when the veneer path
 # built it; a plain (non-veneer) run leaves $RMS empty and stages nothing new.
 echo "== joint-e2e image built (genuine alpha path, vms-864) =="
+# vms-3320: the FILE-OP veneer gate (JOINT_MAIN=crtl_rms3_test.c) drops a marker
+# so build-alpha-bootimage.sh stages the FILE-OP independent-reader SYSTARTUP
+# (DIRECTORY of the FOP*.DAT set) instead of the stdio VENEER one (which reads
+# PORTTEST.DAT). Any other JOINT_MAIN leaves it absent -> unchanged behaviour.
+[ "$JOINT_MAIN" = crtl_rms3_test.c ] && { : > "$OUT/FILEOP_PROOF"; echo "== FILEOP_PROOF marker staged (vms-3320 file-op veneer gate) =="; }
 ls -la "$OUT/"
 readelf -h "$OUT/joint_e2e.exe" | grep -E "Type|Machine|Entry"
 readelf -SW "$OUT/joint_e2e.exe" | grep -E "vms\\\$xfer|vms\\\$imp|CODE|DATA" || true

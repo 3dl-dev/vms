@@ -79,6 +79,8 @@
  *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
  * OVMX-USERSPACE: sys$dclexh (vms-pt1) -- appends to that same per-process
  *     array; no executive records that the process has an exit handler.
+ * OVMX-USERSPACE: sys$canexh (vms-44a) -- removes a block from that same
+ *     per-process array (all of them when desblk is NULL).
  * OVMX-PARTIAL: sys$forcex (vms-pt1) -- exec: with no pidadr/prcnam it
  *     degenerates to sys$exit on the caller; otherwise the target is RESOLVED in
  *     the executive (by prcnam or by VMS pid, the same way sys$delprc resolves),
@@ -840,15 +842,27 @@ static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
  *
  * Reference: OpenVMS System Services Reference Manual ($CREPRC).
  */
-uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
-                    const struct dsc$descriptor_s *input,
-                    const struct dsc$descriptor_s *output,
-                    const struct dsc$descriptor_s *error,
-                    const void *prvadr, const void *quota,
-                    const struct dsc$descriptor_s *prcnam,
-                    uint32_t baspri, uint32_t uic, uint32_t mbxunt,
-                    uint32_t stsflg) {
+uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
+                      const struct dsc$descriptor_s *input,
+                      const struct dsc$descriptor_s *output,
+                      const struct dsc$descriptor_s *error,
+                      const void *prvadr, const void *quota,
+                      const struct dsc$descriptor_s *prcnam,
+                      uint32_t baspri, uint32_t uic, uint32_t mbxunt,
+                      uint32_t stsflg, const void *itemlst,
+                      const struct dsc$descriptor_s *node) {
     (void)quota; (void)baspri; (void)mbxunt;
+
+    /* Creating a process on another cluster node, or a non-empty $CREPRC item
+     * list, is not supported: refuse honestly instead of creating a local
+     * process the caller did not ask for. */
+    if (node && node->dsc$w_length != 0)
+        return SS$_BADPARAM;
+    if (itemlst) {
+        const uint16_t *e = (const uint16_t *)itemlst;
+        if (e[0] != 0 || e[1] != 0)
+            return SS$_BADPARAM;
+    }
 
     if (!image || !image->dsc$a_pointer) return SS$_BADPARAM;
 
@@ -1547,10 +1561,20 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
  * lab confirmation pass is follow-up work, not blocking (Rule 10 permits
  * citing the public Dictionary directly; nothing here is invented).
  */
-uint32_t sys$delprc(const uint32_t *pidadr,
-                    const struct dsc$descriptor_s *prcnam) {
+uint32_t (sys$delprc)(const uint32_t *pidadr,
+                      const struct dsc$descriptor_s *prcnam,
+                      const void *itmlst) {
     struct vms_procinfo target, self_info;
     uint32_t status;
+
+    /* itmlst (DELPRC$_* options) is not supported; a non-empty list is refused
+     * honestly rather than silently dropped.  An absent or empty (leading
+     * zero-length / zero-code) list is the ordinary form. */
+    if (itmlst) {
+        const uint16_t *e = (const uint16_t *)itmlst;
+        if (e[0] != 0 || e[1] != 0)
+            return SS$_BADPARAM;
+    }
 
     if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
         char key[VMS_PRCNAM_XFER];
@@ -1628,6 +1652,31 @@ uint32_t sys$dclexh(void *desblk) {
         (struct pcb_exit_handler *)desblk;
 
     return SS$_NORMAL;
+}
+
+/*
+ * sys$canexh - Cancel exit handler.
+ *
+ * Removes the exit-handler control block desblk from the PCB's list; a NULL
+ * desblk cancels every declared handler.  Handlers keep their LIFO order.
+ */
+uint32_t sys$canexh(void *desblk) {
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb) return SS$_BADPARAM;
+
+    if (!desblk) {
+        pcb->exit_handler_count = 0;
+        return SS$_NORMAL;
+    }
+    for (int i = 0; i < pcb->exit_handler_count; i++) {
+        if ((void *)pcb->exit_handlers[i] == desblk) {
+            for (int j = i + 1; j < pcb->exit_handler_count; j++)
+                pcb->exit_handlers[j - 1] = pcb->exit_handlers[j];
+            pcb->exit_handler_count--;
+            return SS$_NORMAL;
+        }
+    }
+    return SS$_NORMAL;   /* not declared: nothing to cancel */
 }
 
 /*
@@ -1731,8 +1780,10 @@ uint32_t sys$forcex(const uint32_t *pidadr,
  * The VMS system service name is sys$suspnd (no trailing 'e').
  * sys$suspend is provided as a backwards-compatibility alias.
  */
-uint32_t sys$suspnd(const uint32_t *pidadr,
-                    const struct dsc$descriptor_s *prcnam) {
+uint32_t (sys$suspnd)(const uint32_t *pidadr,
+                      const struct dsc$descriptor_s *prcnam,
+                      uint32_t flags) {
+    (void)flags;   /* SUSP$M_ALERT / SUSP$M_KERNEL: Linux SIGSTOP has one mode */
     /* Suspend the RESOLVED target's real Linux pid, not a mis-cast VMS pid
      * (vms-904); no pidadr/prcnam resolves to self. */
     return signal_target_process(pidadr, prcnam, SIGSTOP);
@@ -1773,12 +1824,21 @@ uint32_t sys$resume(const uint32_t *pidadr,
  * operate on the current process (this simplifies the implementation
  * while still satisfying most use cases).
  */
-uint32_t sys$setpri(const uint32_t *pidadr,
-                    const struct dsc$descriptor_s *prcnam,
-                    uint32_t pri,
-                    uint32_t *prvpri) {
+uint32_t (sys$setpri)(const uint32_t *pidadr,
+                      const struct dsc$descriptor_s *prcnam,
+                      uint32_t pri,
+                      uint32_t *prvpri,
+                      uint32_t schedpol,
+                      uint32_t *prevpol) {
     struct vms_procinfo target;
     uint32_t status;
+
+    /* Only the default (timesharing) scheduling policy exists here: a request
+     * to change policy is refused rather than reported as done. */
+    if (schedpol != 0)
+        return SS$_BADPARAM;
+    if (prevpol)
+        *prevpol = 0;   /* the default policy */
 
     /* Clamp VMS priority to the valid range (0-31). */
     if (pri > 31) pri = 31;

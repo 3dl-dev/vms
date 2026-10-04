@@ -74,10 +74,10 @@
     }
   ],
   "overall": {
-    "count": 462,
+    "count": 463,
     "by_status": {
       "verified": 24,
-      "implemented": 277,
+      "implemented": 278,
       "partial": 53,
       "stub": 14,
       "designed": 1,
@@ -86,19 +86,19 @@
     "by_authenticity": {
       "real": 315,
       "n/a": 94,
-      "advisory": 47,
+      "advisory": 48,
       "facade-risk": 6
     },
-    "met": 301,
+    "met": 302,
     "in_progress": 53,
     "not_started": 108,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 416,
+    "count": 417,
     "by_status": {
       "verified": 24,
-      "implemented": 277,
+      "implemented": 278,
       "partial": 52,
       "stub": 10,
       "designed": 1,
@@ -107,10 +107,10 @@
     "by_authenticity": {
       "real": 314,
       "n/a": 53,
-      "advisory": 45,
+      "advisory": 46,
       "facade-risk": 4
     },
-    "met": 301,
+    "met": 302,
     "in_progress": 52,
     "not_started": 63,
     "facade_risk": 4
@@ -241,21 +241,21 @@
       "vms_ref": "OpenVMS Programming Concepts Manual \u2014 Condition Handling; OpenVMS Calling Standard (Condition Handling / Exception Vectors); OpenVMS RTL LIB$ Manual",
       "last_reviewed": "2026-09-14",
       "rollup": {
-        "count": 15,
+        "count": 16,
         "by_status": {
           "verified": 0,
-          "implemented": 12,
+          "implemented": 13,
           "partial": 0,
           "stub": 0,
           "designed": 0,
           "absent": 3
         },
         "by_authenticity": {
-          "advisory": 9,
+          "advisory": 10,
           "n/a": 3,
           "real": 3
         },
-        "met": 12,
+        "met": 13,
         "in_progress": 0,
         "not_started": 3,
         "facade_risk": 0
@@ -2316,6 +2316,21 @@
       "evidence": "src/libvms/rtl/lib_signal.c",
       "verified_against": null,
       "notes": "writes chf$is_mch_savr0 = the signalled condition name",
+      "plan_ref": "vms-2e72"
+    },
+    {
+      "domain": "programming-interfaces",
+      "facility": "chf",
+      "facility_name": "Condition Handling Facility (LIB$SIGNAL/ESTABLISH, SYS$UNWIND, SYS$SETEXV)",
+      "id": "lib$sig_to_stop",
+      "kind": "routine",
+      "vms": "Convert a signal to a stop",
+      "status": "implemented",
+      "authenticity": "advisory",
+      "scope_1_0": "in",
+      "evidence": "src/libvms/rtl/lib_signal.c",
+      "verified_against": null,
+      "notes": "re-signals a failure condition through lib$stop; success/informational conditions are resignalled untouched",
       "plan_ref": "vms-2e72"
     },
     {

@@ -66,6 +66,12 @@ cp -v  "${OVERLAY}/src/setjmp/${TARGET}/"* "src/setjmp/${TARGET}/"
 mkdir -p "src/thread/${TARGET}"
 cp -v  "${OVERLAY}/src/thread/${TARGET}/"* "src/thread/${TARGET}/"
 cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
+# vms-032: one heap. Replace generic lite_malloc.c (a second, brk-sharing bump
+# allocator reached through section-relative self-binds the linker cannot
+# redirect) with forwarders that name mallocng's __libc_malloc_impl. See the
+# header of src/malloc/alpha-dec-vms/lite_malloc.c.
+mkdir -p "src/malloc/${TARGET}"
+cp -v  "${OVERLAY}/src/malloc/${TARGET}/"* "src/malloc/${TARGET}/"
 # vms-430: LLP64 syscall RETURN-leg width fix. syscall_ret.c is a full overlay
 # (widened __syscall_ret to long long / unsigned long long). Its declaration in
 # syscall.h and the one truncating local in mmap.c are one-line widenings patched
@@ -385,6 +391,30 @@ else
 	cat /tmp/pgsz.err >&2
 	exit 7
 fi
+
+# --------------------------------------------------------------------------
+# ONE-HEAP GATE (vms-032): lite_malloc.o must be the alpha-dec-vms override --
+# it may only REFERENCE __libc_malloc_impl (mallocng's), never define it. A
+# local (weak) definition is what the back end self-binds section-relatively,
+# splitting DECC$SHR into two allocators over one brk.
+# --------------------------------------------------------------------------
+echo "== one-heap gate (vms-032): lite_malloc.o references mallocng, defines no allocator =="
+rm -rf /tmp/lmck && mkdir -p /tmp/lmck
+LMEMB=$(grep -m1 -E '(^|/)lite_malloc\.' /tmp/libc.members || true)
+[ -n "${LMEMB}" ] || { echo "VERIFY FAIL (vms-032): no lite_malloc member in libc.a" >&2; exit 8; }
+( cd /tmp/lmck && ar x "${LIBCA}" "${LMEMB}" ) 2>/dev/null || true
+"${NM}" "/tmp/lmck/${LMEMB}" >/tmp/lmck/nm.out 2>&1 || { cat /tmp/lmck/nm.out >&2; exit 8; }
+if grep -qE '^[0-9a-fA-F]+[[:space:]]+[A-TV-Za-tv-z][[:space:]]+(__libc_malloc_impl|__simple_malloc)$' /tmp/lmck/nm.out; then
+	echo "VERIFY FAIL (vms-032): lite_malloc.o DEFINES an allocator (generic lite_malloc.c, not the alpha-dec-vms override):" >&2
+	cat /tmp/lmck/nm.out >&2
+	exit 8
+fi
+if ! grep -qE '[[:space:]]U[[:space:]]+__libc_malloc_impl$' /tmp/lmck/nm.out; then
+	echo "VERIFY FAIL (vms-032): lite_malloc.o does not reference __libc_malloc_impl by name:" >&2
+	cat /tmp/lmck/nm.out >&2
+	exit 8
+fi
+echo "  OK      lite_malloc.o: U __libc_malloc_impl, no local allocator -> one heap (mallocng)"
 
 if [ "$PARTIAL" = "1" ]; then
 	echo "=== vms-960 RUNG 1 VERIFY OK on a PARTIAL alpha-dec-vms libc.a (${NMEMB} members) ==="

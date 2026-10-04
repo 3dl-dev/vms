@@ -13,6 +13,8 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
+ * OVMX-USERSPACE: sys$get_entropy (vms-44a) -- getrandom(2) (arc4random_buf on BSD): the host kernel's
+ *     CSPRNG, not an executive entropy pool; the bytes are real entropy.
  * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
  *     SYI$_CLUSTER_NODES read the CONNECTION MANAGER's own CLUB through the one
  *     projection that owns them (vms_kif_cluster_getsyi ->
@@ -47,6 +49,10 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/utsname.h>
+#ifdef __linux__
+#include <sys/random.h>
+#endif
+#include <errno.h>
 #include <time.h>
 #include "starlet.h"
 #include "vms/pcb.h"
@@ -439,4 +445,36 @@ uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
 
     vms_pcb_set_default_dir(merged);
     return SS$_NORMAL;
+}
+
+/*
+ * sys$get_entropy - Fill a buffer with cryptographically strong random bytes.
+ * The request is satisfied in full from the host kernel's CSPRNG or refused;
+ * a short or failed read is never padded.
+ */
+uint32_t sys$get_entropy(void *buffer, uint32_t length)
+{
+    if (!buffer)
+        return SS$_ACCVIO;
+#if defined(__NetBSD__)
+    arc4random_buf(buffer, length);     /* BSD kernel CSPRNG; cannot fail */
+    return SS$_NORMAL;
+#elif !defined(__linux__)
+    /* A substrate with no CSPRNG entry point libvms knows: honest refusal, never
+     * a buffer of zeros or of a weak generator's output. */
+    (void)buffer; (void)length;
+    return SS$_NOSUCHDEV;
+#else
+    uint8_t *p = (uint8_t *)buffer;
+    while (length > 0) {
+        ssize_t n = getrandom(p, length, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return SS$_NOSUCHDEV;   /* no entropy source: honest, not zero bytes */
+        }
+        p += n;
+        length -= (uint32_t)n;
+    }
+    return SS$_NORMAL;
+#endif
 }

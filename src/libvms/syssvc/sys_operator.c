@@ -519,15 +519,20 @@ static int resolve_terminal(const char *devnam,
  * @param astadr   AST completion routine (ignored)
  * @param astprm   AST parameter (ignored)
  */
-uint32_t sys$brkthruw(uint32_t efn,
-                       struct dsc$descriptor_s *msgbuf,
-                       struct dsc$descriptor_s *sendto,
-                       uint32_t sndtyp,
-                       struct _iosb *iosb,
-                       void (*astadr)(uint32_t),
-                       uint32_t astprm)
+uint32_t (sys$brkthruw)(uint32_t efn,
+                         struct dsc$descriptor_s *msgbuf,
+                         struct dsc$descriptor_s *sendto,
+                         uint32_t sndtyp,
+                         struct _iosb *iosb,
+                         uint32_t carcon,
+                         uint32_t flags,
+                         uint32_t reqid,
+                         uint32_t timout,
+                         void (*astadr)(uint32_t),
+                         uint32_t astprm)
 {
     (void)efn; (void)sndtyp; (void)astadr; (void)astprm;
+    (void)carcon; (void)flags; (void)reqid; (void)timout;
 
     if (!msgbuf || !msgbuf->dsc$a_pointer)
         return SS$_BADPARAM;

@@ -1,0 +1,24 @@
+MCR NCP SHOW KNOWN OBJECTS
+
+
+Known Object Volatile Summary as of  4-OCT-2026 21:20:02
+
+   Object   Number  File/PID                   User Id          Password
+
+  $IPCACP        0  2020020A
+  $MOM           0
+  $NICONFIG      0
+  SMISERVER      0  20200212
+  TASK           0                             ILLEGAL          DISABLED
+  FAL           17  FAL.EXE
+  HLD           18
+  NML           19  NML.EXE                    NML$SERVER       xxxxxxxx
+  REMACP        23  20200216
+  MIRROR        25                             MIRRO$SERVER     xxxxxxxxxx
+  EVL           26  20200215
+  MAIL          27  MAIL_SERVER.EXE            MAIL$SERVER      xxxxxxxxx
+  PHONE         29  PHONE.EXE                  PHONE$SERVER     xxxxxxxxxx
+  CTERM         42  20200216
+  VPM           51  VPM.EXE                    VPM$SERVER       xxxxxxxx
+  DTR           63
+$

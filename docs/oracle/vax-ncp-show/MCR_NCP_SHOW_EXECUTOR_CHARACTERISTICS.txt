@@ -1,0 +1,44 @@
+MCR NCP SHOW EXECUTOR CHARACTERISTICS
+
+
+Node Volatile Characteristics as of  4-OCT-2026 21:19:56
+
+Executor node = 1.1 (VAX1)
+
+Identification           = DECnet for OpenVMS VAX V7.3
+Management version       = V4.0.0
+Incoming timer           = 45
+Outgoing timer           = 60
+Incoming Proxy           = Enabled
+Outgoing Proxy           = Enabled
+NSP version              = V4.1.0
+Maximum links            = 32
+Delay factor             = 80
+Delay weight             = 5
+Inactivity timer         = 60
+Retransmit factor        = 10
+Routing version          = V2.0.0
+Type                     = nonrouting IV
+Routing timer            = 600
+Broadcast routing timer  = 180
+Maximum address          = 1023
+Maximum circuits         = 16
+Maximum cost             = 1022
+Maximum hops             = 30
+Maximum visits           = 63
+Maximum area             = 63
+Max broadcast nonrouters = 64
+Max broadcast routers    = 32
+Maximum path splits      = 1
+Area maximum cost        = 1022
+Area maximum hops        = 30
+Maximum buffers          = 100
+Buffer size              = 576
+Default access           = incoming and outgoing
+Pipeline quota           = 4032
+Alias maximum links      = 32
+Path split policy        = Normal
+Maximum Declared Objects = 31
+
+
+$

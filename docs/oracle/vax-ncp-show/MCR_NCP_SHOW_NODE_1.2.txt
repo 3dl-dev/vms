@@ -1,0 +1,10 @@
+MCR NCP SHOW NODE 1.2
+
+
+Node Volatile Summary as of  4-OCT-2026 21:19:58
+
+    Node           State      Active  Delay   Circuit     Next node
+                              Links
+
+ 1.2 (VAX2)                                   QNA-0          0
+$

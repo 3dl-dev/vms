@@ -1,0 +1,9 @@
+MCR NCP SHOW KNOWN LINES
+
+
+Known Line Volatile Summary as of  4-OCT-2026 21:20:01
+
+   Line             State
+
+  QNA-0             on
+$

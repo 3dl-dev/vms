@@ -246,7 +246,11 @@ suite_in_shard() {
 # NOT through its glob, whose iteration order this must not depend on. Not a
 # suite itself: no "=== SUITE ... ===" line, its own exit code is not
 # tallied (see tests/qemu/corpus_seed_lnm.c's header for why).
-if [ -x /tests/corpus_seed_lnm ]; then
+if [ "$CORPUS_RT" = "1" ] && [ -x /tests/corpus_seed_sysvol ]; then
+    # corpus runtime mode boots the system disk instead (VDA300:, mounted, with
+    # the shipped SYSUAF.DAT) -- see tests/qemu/corpus_seed_sysvol.c
+    /tests/corpus_seed_sysvol >&4 2>&1
+elif [ -x /tests/corpus_seed_lnm ]; then
     /tests/corpus_seed_lnm >&4 2>&1
 fi
 

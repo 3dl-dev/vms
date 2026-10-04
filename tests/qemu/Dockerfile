@@ -570,6 +570,9 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
         cp "$f" "/initramfs/tests/corpus_rt/$(basename "$f" | sed 's/^corpus_rt_//')"; \
         n_corpus_rt=$((n_corpus_rt+1)); \
     done && \
+    { cp /src/repo/build-static/bin/corpus_seed_sysvol /initramfs/tests/corpus_seed_sysvol || \
+      { echo "FATAL: corpus_seed_sysvol was not built into the static tree -- the corpus guest would have no mounted system disk"; exit 1; }; } && \
+    chmod +x /initramfs/tests/corpus_seed_sysvol && \
     { [ "$n_corpus_rt" -ge 100 ] || { echo "FATAL: expected at least 100 corpus_rt_* binaries (tests/qemu/corpus_runtime_programs.txt) staged into /tests/corpus_rt, found $n_corpus_rt -- the corpus runtime column would silently shrink"; exit 1; }; } && \
     { cp /src/repo/build-static/bin/corpus_seed_lnm /initramfs/tests/corpus_seed_lnm || \
       { echo "FATAL: corpus_seed_lnm was not built into the static tree -- lib_getdvi's SYS\$SYSDEVICE lookup would go unseeded"; exit 1; }; } && \

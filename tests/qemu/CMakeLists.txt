@@ -439,7 +439,12 @@ foreach(_n ${_corpus_rt_lines})
     target_compile_options(corpus_rt_${_n} PRIVATE -w)
     list(APPEND _corpus_rt_targets corpus_rt_${_n})
 endforeach()
-add_custom_target(qemu_corpus_rt DEPENDS ${_corpus_rt_targets})
+# corpus_seed_sysvol: the guest's system-disk bootstrap (see its header); not a
+# scoreboard entry, so it does not carry the corpus_rt_ prefix the initramfs glob stages.
+qemu_syssvc_add_test(corpus_seed_sysvol
+    ${CMAKE_CURRENT_SOURCE_DIR}/corpus_seed_sysvol.c STANDALONE)
+set_target_properties(corpus_seed_sysvol PROPERTIES EXCLUDE_FROM_ALL TRUE)
+add_custom_target(qemu_corpus_rt DEPENDS ${_corpus_rt_targets} corpus_seed_sysvol)
 
 # ---------------------------------------------------------------------------
 # USERSPACE-ONLY imgact tests -- test_imgact_bind, test_imgact_publish

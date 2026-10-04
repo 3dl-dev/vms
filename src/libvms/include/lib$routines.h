@@ -688,7 +688,8 @@ uint32_t lib$getjpi(
  * @param resultant_value   Optional pointer to receive longword result
  * @param resultant_string  Optional pointer to descriptor to receive string
  * @param resultant_length  Optional pointer to receive string length
- * @param cluster_id        Optional pointer to cluster system ID
+ * @param cluster_id        Optional pointer to cluster system ID; in/out wildcard
+ *                          context (-1 starts a walk, SS$_NOMORENODE ends it)
  * @param node_name         Optional pointer to descriptor of node name
  *
  * @return  SS$_NORMAL on success
@@ -698,7 +699,7 @@ uint32_t lib$getsyi(
     void *resultant_value,
     struct dsc$descriptor_s *resultant_string,
     uint16_t *resultant_length,
-    const uint32_t *cluster_id,
+    uint32_t *cluster_id,
     const struct dsc$descriptor_s *node_name
 );
 

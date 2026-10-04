@@ -587,7 +587,9 @@ uint32_t sys$getjpiw(
  * sys$getsyi - Get system information
  *
  * @param efn       Event flag for completion
- * @param csidadr   Optional pointer to cluster system ID
+ * @param csidadr   Optional pointer to cluster system ID; in/out wildcard context
+ *                  (-1 starts a walk of the cluster, updated on return;
+ *                  SS$_NOMORENODE ends it)
  * @param nodename  Optional pointer to descriptor of node name
  * @param itmlst    Pointer to item list
  * @param iosb      Pointer to I/O status block
@@ -598,7 +600,7 @@ uint32_t sys$getjpiw(
  */
 uint32_t sys$getsyi(
     uint32_t efn,
-    const uint32_t *csidadr,
+    uint32_t *csidadr,
     const struct dsc$descriptor_s *nodename,
     const struct item_list_3 *itmlst,
     void *iosb,
@@ -611,7 +613,7 @@ uint32_t sys$getsyi(
  */
 uint32_t sys$getsyiw(
     uint32_t efn,
-    const uint32_t *csidadr,
+    uint32_t *csidadr,
     const struct dsc$descriptor_s *nodename,
     const struct item_list_3 *itmlst,
     void *iosb,

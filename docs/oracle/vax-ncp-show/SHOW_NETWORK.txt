@@ -1,0 +1,5 @@
+SHOW NETWORK
+
+Product:  DECNET        Node:  VAX1                 Address(es):  1.1
+Product:  TCP/IP        Node:  vax1.3dl.dev         Address(es):  10.2.1.1
+$

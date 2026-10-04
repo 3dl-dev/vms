@@ -1,0 +1,17 @@
+MCR NCP SHOW KNOWN NODES
+
+
+Known Node Volatile Summary as of  4-OCT-2026 21:19:57
+
+Executor node = 1.1 (VAX1)
+
+State                    = on
+Identification           = DECnet for OpenVMS VAX V7.3
+
+
+    Node           State      Active  Delay   Circuit     Next node
+                              Links
+
+ 1.2 (VAX2)                                   QNA-0          0
+ 1.42 (OVMX)                                  QNA-0          0
+$

@@ -29,15 +29,15 @@ extern "C" {
  * FSCN$_ item codes for SYS$FILESCAN item lists (ILE2 entries)
  * ================================================================ */
 
-#define FSCN$_NODE         0x0001  /* Node name field */
-#define FSCN$_NODE_ACS     0x0002  /* Node access control string field */
+#define FSCN$_NODE         0x2  /* Node name field */
+#define FSCN$_NODE_ACS     0x000A  /* Node access control string field */
 #define FSCN$_DEVICE       0x0003  /* Device name field */
 #define FSCN$_ROOT         0x0004  /* Root directory field */
 #define FSCN$_DIRECTORY    0x0005  /* Directory field */
 #define FSCN$_NAME         0x0006  /* File name field */
 #define FSCN$_TYPE         0x0007  /* File type field */
 #define FSCN$_VERSION      0x0008  /* File version field */
-#define FSCN$_FILESPEC     0x0009  /* Whole normalized file spec */
+#define FSCN$_FILESPEC     0x1  /* Whole normalized file spec */
 
 /* ================================================================
  * FSCN$M_ — bits set in the "flags" longword returned by SYS$FILESCAN,
@@ -45,8 +45,8 @@ extern "C" {
  * ================================================================ */
 
 #define FSCN$M_NODE         0x00000001
-#define FSCN$M_NODE_ACS     0x00000002
-#define FSCN$M_DEVICE       0x00000004
+#define FSCN$M_NODE_ACS     0x100
+#define FSCN$M_DEVICE       0x2
 #define FSCN$M_DIRECTORY    0x00000008
 #define FSCN$M_NAME         0x00000010
 #define FSCN$M_TYPE         0x00000020
@@ -57,7 +57,7 @@ extern "C" {
  * bit; this sequential 0x80 assignment matches the numbering style already in
  * use here and is flagged (like the codes above, vms-531) for operator sign-off.
  */
-#define FSCN$M_ROOT         0x00000080
+#define FSCN$M_ROOT         0x4
 
 /* ================================================================
  * FSCN$V_ — bit POSITIONS corresponding to the FSCN$M_ masks above,
@@ -65,13 +65,13 @@ extern "C" {
  * ================================================================ */
 
 #define FSCN$V_NODE         0
-#define FSCN$V_NODE_ACS     1
-#define FSCN$V_DEVICE       2
+#define FSCN$V_NODE_ACS     8
+#define FSCN$V_DEVICE       1
 #define FSCN$V_DIRECTORY    3
 #define FSCN$V_NAME         4
 #define FSCN$V_TYPE         5
 #define FSCN$V_VERSION      6
-#define FSCN$V_ROOT         7
+#define FSCN$V_ROOT         2
 
 #ifdef __cplusplus
 }

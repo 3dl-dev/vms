@@ -112,6 +112,58 @@ imgact_vms_transfer:
 	.end   imgact_vms_transfer
 
 /*
+ * unsigned long imgact_vms_transfer_stack(void *pv, unsigned long ai,
+ *                                         const unsigned long args[6],
+ *                                         unsigned long sp)
+ *   $19 = sp  (the stack the called image runs on; 0 = stay on this one)
+ *
+ * imgact_vms_transfer, run on the image's own user stack (vms-ce5). On OpenVMS
+ * Alpha the user stack lives in P1 (0x40000000-0x7FFFFFFF), so a frame
+ * address is a valid 32-bit value -- longword invocation handles (the low 32
+ * bits of FP) and 32-bit-pointer code taking the address of a local rely on
+ * it. IMGACT maps that stack and the standard call runs on it: our own frame
+ * stays on the activator's stack, remembered in $9 (preserved across the call
+ * by the calling standard), and is resumed when the image returns.
+ */
+	.globl imgact_vms_transfer_stack
+	.hidden imgact_vms_transfer_stack
+	.ent   imgact_vms_transfer_stack
+imgact_vms_transfer_stack:
+	ldgp	$29, 0($27)
+	lda	$30, -32($30)
+	.frame	$30, 32, $26, 0
+	stq	$26, 0($30)
+	stq	$9, 8($30)
+	.mask	0x04000200, -32
+	.prologue 1
+
+	mov	$16, $3			/* $3 = pv                                 */
+	mov	$17, $4			/* $4 = ai                                 */
+	mov	$18, $5			/* $5 = args                               */
+	mov	$30, $9			/* $9 = our frame, preserved by the callee */
+	beq	$19, 1f
+	mov	$19, $30		/* run the image on its own (P1) stack      */
+1:
+	ldq	$16, 0($5)
+	ldq	$17, 8($5)
+	ldq	$18, 16($5)
+	ldq	$19, 24($5)
+	ldq	$20, 32($5)
+	ldq	$21, 40($5)
+	mov	$4, $25			/* R25 = AI                                */
+	ldq	$1, 8($3)		/* entry = *(PDSC + 8)                     */
+	mov	$3, $27			/* R27 = PV = PDSC                         */
+	jsr	$26, ($1)
+	ldgp	$29, 0($26)
+
+	mov	$9, $30			/* back on the activator's stack           */
+	ldq	$26, 0($30)
+	ldq	$9, 8($30)
+	lda	$30, 32($30)
+	ret
+	.end   imgact_vms_transfer_stack
+
+/*
  * unsigned long imgact_sv_call(unsigned long pv, unsigned long a0,
  *                              unsigned long a1)
  *   $16 = pv  (PROCEDURE VALUE = the PROCEDURE DESCRIPTOR address; the entry

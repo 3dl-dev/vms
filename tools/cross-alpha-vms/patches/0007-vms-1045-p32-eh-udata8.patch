@@ -1,0 +1,32 @@
+vms-1045: alpha VMS -- 32-bit-pointer code encodes its EH addresses as 8-byte values
+
+libgcc (and with it the DWARF unwinder) is always built with 64-bit pointers
+on VMS (libgcc/config/vms/t-vms: HOST_LIBGCC2_CFLAGS=-mpointer-size=64), so it
+reads a DW_EH_PE_absptr value as 8 bytes.  Code compiled at the DEC C default
+pointer size emitted absptr with 4-byte values (.long), so the unwinder misread
+every CIE/FDE of 32-bit code and a C++ throw from it terminated (measured on
+qemu-system-alpha + the OVMX executive: a 32-bit C++ program runs its static
+constructor, virtual call and std::string/vector, then aborts at throw).  For
+POINTER_SIZE == 32, prefer DW_EH_PE_udata8: the same addresses, written in a
+width the 64-bit unwinder decodes by the encoding byte.  64-bit code is
+byte-identical (absptr is 8 bytes there).
+
+--- a/gcc/config/alpha/vms.h	2026-10-05 06:36:00.464714237 +0000
++++ b/gcc/config/alpha/vms.h	2026-10-05 06:36:00.483713963 +0000
+@@ -211,6 +211,16 @@
+   gen_rtx_MEM (Pmode, plus_constant (Pmode, stack_pointer_rtx, 8))
+ 
+ #define LINK_EH_SPEC "vms-dwarf2eh.o%s "
++
++/* The unwinder (libgcc) is always built with 64-bit pointers on VMS
++   (libgcc/config/vms/t-vms), so it reads a DW_EH_PE_absptr value as 8 bytes.
++   Code compiled with 32-bit pointers must therefore encode its EH addresses
++   (FDE pc ranges, personality, LSDA, type table) as explicit 8-byte values,
++   or the unwinder misreads every CIE/FDE it emits and a C++ throw terminates.
++   64-bit code is unchanged (absptr is already 8 bytes there).  */
++#undef ASM_PREFERRED_EH_DATA_FORMAT
++#define ASM_PREFERRED_EH_DATA_FORMAT(CODE, GLOBAL) \
++  (POINTER_SIZE == 32 ? DW_EH_PE_udata8 : DW_EH_PE_absptr)
+ #define LINK_GCC_C_SEQUENCE_SPEC "%G"
+ 
+ /* This is how to output an assembler line

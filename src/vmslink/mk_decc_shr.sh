@@ -259,10 +259,10 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # -g0: same reason as libc.a/libgcc.a above — the cross nm cannot read
     # DST, and WE must nm these two objects ourselves next to ground-truth
     # their decc$ universals (never hand-guessed).
-    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 \
+    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
         -o "$ALPHA_STUB_OBJ" "$STUB_SRC"
     # shellcheck disable=SC2086
-    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 \
+    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
         $ALPHA_MUSL_INC -I"$IMGACT_INC" -o "$ALPHA_CRTL_OBJ" "$CRTL_SRC"
     # vms-5bc9: the DEC C 32-bit-pointer entry points that need code (pointer-
     # to-pointer parameters, ovmx_decc_p32.c). Compiled -mpointer-size=32 on
@@ -360,7 +360,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
         VENEER_DIR=$(mktemp -d)
         VENEER_OBJ="$VENEER_DIR/crtl_rms_stdio.o"
         # shellcheck disable=SC2086
-        "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 \
+        "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 -D__OVMX_LIBC_BUILD \
             -I"$RMS_INC" -I"$LIBVMS_INC_VENEER" $ALPHA_MUSL_INC \
             -o "$VENEER_OBJ" "$RMS_SRC_DIR/crtl_rms_stdio.c"
 

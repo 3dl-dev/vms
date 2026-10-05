@@ -8,7 +8,8 @@
 # CRTL name map does not cover (so a client call would bind a bare name that
 # DECC$SHR does not export) is wrapped in
 #   #if !defined(__VMS) || defined(__OVMX_LIBC_BUILD)
-# so the C RTL's own build still sees it and an alpha-dec-vms client does not.
+# so the C RTL's own build -- musl and OVMX's runtime shareables, both built
+# -D__OVMX_LIBC_BUILD -- still sees it and an alpha-dec-vms client does not.
 # Kept regardless: the RTL's reserved __ names (errno and stdio macros expand to
 # them), and the threads headers (pthread.h, sched.h, semaphore.h, threads.h --
 # on OpenVMS those come from the separate threads RTL, not DECC$SHR; their

@@ -176,6 +176,10 @@ static int frame_has_caller(uint64_t pc, uint64_t fp, uint64_t sp)
  * there is no caller to produce.
  * ================================================================ */
 
+/* vms-bfd03 (lib_signal.c): the condition-dispatcher frame records. */
+void *vms$$chfctx_for_frame(uint64_t fp);
+const INVO_CONTEXT_BLK *vms$$chf_signal_context(uint64_t fp);
+
 uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
 {
     if (icb == NULL) {
@@ -188,6 +192,22 @@ uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
     uint64_t pc = icb->libicb$q_program_counter;
     uint64_t fp = icb->libicb$q_ireg[ALPHA_REG_FP];
     uint64_t sp = icb->libicb$q_ireg[ALPHA_REG_SP];
+
+#if OVMX_ALPHA_VMS_ABI
+    /* vms-bfd03: a condition-dispatcher frame (one calling a handler) is
+     * followed, outward, by the SIGNALLING POINT -- as on VMS, where the frame
+     * before SYS$CALL_HANDL's is the one that signalled: its full register
+     * state is in the dispatch record (captured by LIB$SIGNAL). */
+    {
+        const INVO_CONTEXT_BLK *sigp = vms$$chf_signal_context(fp);
+        if (sigp != NULL) {
+            *icb = *sigp;
+            icb->libicb$ph_chfctx_addr = vms$$chfctx_for_frame(
+                icb->libicb$q_ireg[ALPHA_REG_FP]);
+            return SS$_NORMAL;
+        }
+    }
+#endif
     const struct pdsc_descriptor *pd = resolve_pdsc(pc, fp);
     if (pd == NULL) {
         icb->libicb$v_bottom_of_stack = 1;
@@ -245,6 +265,10 @@ uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
     icb->libicb$q_ireg[ALPHA_REG_FP] = caller_fp;
     icb->libicb$q_ireg[ALPHA_REG_SP] = caller_sp;
     icb->libicb$q_stack_pointer = caller_sp;
+#if OVMX_ALPHA_VMS_ABI
+    /* vms-bfd03: a condition-dispatcher frame carries its CHF context. */
+    icb->libicb$ph_chfctx_addr = vms$$chfctx_for_frame(caller_fp);
+#endif
 
     /* Report the caller's established condition handler, if any. */
     const struct pdsc_descriptor *cpd = resolve_pdsc(caller_pc, caller_fp);
@@ -349,7 +373,14 @@ INVO_HANDLE lib$get_invo_handle(INVO_CONTEXT_BLK *icb)
     if (icb == NULL) {
         return LIBICB$K_INVO_HANDLE_NULL;
     }
+#if OVMX_ALPHA_VMS_ABI
+    /* On the Alpha runtime the handle is the frame pointer, as on OpenVMS:
+     * callers (libgcc's vms-unwind.h among them) build an ICB holding only FP
+     * and ask for its handle. */
+    return (INVO_HANDLE)icb->libicb$q_ireg[ALPHA_REG_FP];
+#else
     return (INVO_HANDLE)icb->libicb$q_ireg[ALPHA_REG_SP];
+#endif
 }
 
 /* ================================================================

@@ -130,7 +130,12 @@ static _Thread_local uint64_t uw_savr0    = 0;  /* vms-ed1: mech savr0 at reques
  * The invocation-context walk (lib_invo.c) asks for it by frame pointer.
  * ================================================================ */
 
+#if OVMX_ALPHA_VMS_ABI
 int SYS$GL_CALL_HANDL = 0;
+#else
+/* In .data, not .bss: the ELF LINK.EXE path exports initialized data only. */
+__attribute__((section(".data"))) int SYS$GL_CALL_HANDL = 0;
+#endif
 
 struct ovmx_vms_mech {             /* = vms/chfdef.h struct chf$mech_array */
     uint32_t args, flags;

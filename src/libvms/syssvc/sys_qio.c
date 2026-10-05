@@ -42,6 +42,7 @@
 #include "ovmx_async.h"
 #include "starlet.h"
 #include "vms/pcb.h"
+#include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
 
 /* Import from sys_assign.c */

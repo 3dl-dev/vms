@@ -59,6 +59,7 @@
 #include "ovmx_async.h"
 #include "starlet.h"
 #include "vms/pcb.h"
+#include "ovmx_pcb_ctx.h"
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
 #include "vms_kif.h"        /* the executive OWNS privilege + cluster membership */
@@ -517,4 +518,32 @@ uint32_t sys$get_entropy(void *buffer, uint32_t length)
     }
     return SS$_NORMAL;
 #endif
+}
+
+/*
+ * vms$$pcb_for_service - see ovmx_pcb_ctx.h. Seeds the main thread's PCB from the
+ * executive's row for this process the first time a PCB-backed service needs it.
+ */
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
+struct vms_pcb *vms$$pcb_for_service(void)
+{
+    struct vms_pcb *pcb = (vms_pcb_get)();
+    if (pcb)
+        return pcb;
+#if defined(__linux__)
+    /* A thread other than the main one would register a second VMS process with the
+     * executive; only the process's own thread establishes the process context. */
+    if ((long)syscall(SYS_gettid) != (long)getpid())
+        return NULL;
+#endif
+    struct vms_procinfo self;
+    memset(&self, 0, sizeof(self));
+    if (!(vms_kif_getjpi_self(&self) & 1))
+        return NULL;                    /* no executive row: no context (honest) */
+    pcb = vms_pcb_init(self.cur_privs);
+    if (pcb)
+        vms_pcb_set_identity(self.vms_pid, self.uic, self.username, self.prcnam);
+    return pcb;
 }

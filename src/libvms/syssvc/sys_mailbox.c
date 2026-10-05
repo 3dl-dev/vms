@@ -66,6 +66,7 @@
 #include "starlet.h"
 #include "lnmdef.h"
 #include "vms/pcb.h"
+#include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
 
 /*

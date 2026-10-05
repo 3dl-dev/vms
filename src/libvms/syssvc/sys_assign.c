@@ -45,6 +45,7 @@
 #include "descrip.h"
 #include "lnmdef.h"
 #include "vms/pcb.h"
+#include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
 #include "ovmx_console.h"   /* vms-948: single OPA0:/TT: -> console resolver */
 #include "ovmx_layout.h"    /* vms-9f5: SYSDISK_DEVICE -- the native boot unit */

@@ -193,6 +193,7 @@
 #include <sched.h>
 #include "prvdef.h"
 #include "vms/pcb.h"
+#include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
 /* ovmx_boot_stage_exec_path() + OVMX_BOOT_STAGE_DIR: the ACP-read bootstrap
  * bridge (vms-5f0). $CREPRC genuinely fork()+execve()s a new process, so its

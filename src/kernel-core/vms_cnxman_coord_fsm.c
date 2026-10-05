@@ -1253,15 +1253,66 @@ static void coord_advance_epoch(struct cnxman_coord *c)
 	c->epoch_advanced = 1u;
 }
 
+/*
+ * THE COMMIT GOES TO EVERY PARTICIPANT, THE OTHER MEMBERS FIRST (rd vms-9484).
+ *
+ * The wire, twice: a real coordinator sends op 0x03 to the other member, takes
+ * its 0x81/0x03, and only then commits the subject --
+ * vax3-2to3-established-join-20260730.pcap (1026->1025 op03 31.4839, ack
+ * 31.4844, then 1026->1027 31.4861) and, against two OVMX members of a real
+ * VAX's cluster, tests/lab/captures/vms-1ac-cn3-achieved-20260925/cn3.pcap
+ * (VAXC->OVMXA 732.3696, ack 732.3699, then VAXC->OVMXB 732.3700). Both show
+ * ONE other member; with several, this node sends to all of them at once, as
+ * it already does the op 0x12 relay -- an OVMX choice, and "members first, the
+ * subject after every one has answered" holds either way.
+ */
+static void coord_commit_to(struct cnxman_coord *c, uint32_t i)
+{
+	c->part_flags[i] |= CNXMAN_COORD_P_COMMIT_SENT;
+	coord_send_commit(c, i);
+}
+
+/* Has every OTHER member answered our commit? (The subject is not counted.) */
+static int coord_members_committed(const struct cnxman_coord *c)
+{
+	uint32_t i;
+
+	for (i = 0; i < c->cl->club.n_csb; i++) {
+		if (!coord_is_participant(c, i) || (int32_t)i == c->subject_csb)
+			continue;
+		if ((c->part_flags[i] & CNXMAN_COORD_P_COMMIT_ACK) == 0u)
+			return 0;
+	}
+	return 1;
+}
+
+/* Commit the subject once -- and only once every other member has answered. */
+static void coord_try_commit_subject(struct cnxman_coord *c)
+{
+	uint32_t s = (uint32_t)c->subject_csb;
+
+	if ((c->part_flags[s] & CNXMAN_COORD_P_COMMIT_SENT) != 0u)
+		return;
+	if (!coord_members_committed(c))
+		return;
+	coord_commit_to(c, s);
+}
+
 static void coord_enter_commit(struct cnxman_coord *c)
 {
+	uint32_t i;
+
 	coord_advance_epoch(c);
 	if (c->tr_class != VMS_CM_CLASS_ADD || c->subject_csb < 0) {
 		coord_enter_open(c);
 		return;
 	}
 	c->state = (uint8_t)CNXMAN_COORD_COMMIT;
-	coord_send_commit(c, (uint32_t)c->subject_csb);
+	for (i = 0; i < c->cl->club.n_csb; i++) {
+		if (coord_is_participant(c, i) && (int32_t)i != c->subject_csb)
+			coord_commit_to(c, i);
+	}
+	coord_try_commit_subject(c);
 }
 
 /* Release step N to every frozen participant. */
@@ -1572,11 +1623,37 @@ static void coord_h_relay_ack(struct cnxman_coord *c, const struct coord_msg *m)
 	coord_try_commit(c);
 }
 
-/* [COMMIT][RX_TR_ACK] -- the subject echoed its membership commit. */
+/*
+ * A MEMBER answered our commit: record it, and commit the subject once every
+ * member has. An answer to a commit this node never sent that participant is
+ * not an answer, and is counted as ignored rather than recorded.
+ */
+static void coord_member_commit_ack(struct cnxman_coord *c, uint32_t i)
+{
+	if ((c->part_flags[i] & CNXMAN_COORD_P_COMMIT_SENT) == 0u) {
+		c->ignored_events++;
+		return;
+	}
+	c->part_flags[i] |= CNXMAN_COORD_P_COMMIT_ACK;
+	c->commit_acks++;
+	coord_try_commit_subject(c);
+}
+
+/* [COMMIT][RX_TR_ACK] -- a member, or finally the subject, echoed the commit. */
 static void coord_h_commit_ack(struct cnxman_coord *c, const struct coord_msg *m)
 {
 	if (m->env.opcode != VMS_CM_OP_COMMIT) {
 		c->ignored_events++;
+		return;
+	}
+	if (m->from_csb >= 0 && m->from_csb != c->subject_csb &&
+	    coord_is_participant(c, (uint32_t)m->from_csb)) {
+		coord_member_commit_ack(c, (uint32_t)m->from_csb);
+		return;
+	}
+	if (m->from_csb == c->subject_csb &&
+	    (c->part_flags[c->subject_csb] & CNXMAN_COORD_P_COMMIT_SENT) == 0u) {
+		c->ignored_events++;   /* the subject's commit has not gone out */
 		return;
 	}
 	if (m->from_csb != c->subject_csb) {
@@ -1584,15 +1661,16 @@ static void coord_h_commit_ack(struct cnxman_coord *c, const struct coord_msg *m
 		 * SAY IT, ONCE. A transition that stalls here stalls forever
 		 * and, until this line existed, said nothing at all: the
 		 * counter was the only trace, and the counters are not
-		 * projected through any ioctl. An answer from a block other
-		 * than the one this transition is admitting is a real
+		 * projected through any ioctl. Members' answers were routed
+		 * above (rd vms-9484), so what reaches here came from a
+		 * system that is not part of this transition at all -- a real
 		 * diagnosis, not noise.
 		 */
 		c->unknown_peer++;
 		if (c->unknown_peer == 1u)
 			coord_log(c, "%CNXMAN, a membership commit was "
-				     "answered by a system this transition is "
-				     "not admitting");
+				     "answered by a system that is not part of "
+				     "this transition");
 		return;
 	}
 	c->commit_acks++;

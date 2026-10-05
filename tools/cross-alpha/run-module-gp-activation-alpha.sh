@@ -287,6 +287,33 @@ assert_invo() {
   return 1
 }
 
+assert_chf() {
+  # vms-bfd03: inside the handler, the walk met a dispatcher frame whose PV is
+  # SYS$GL_CALL_HANDL with a CHF context, then the signalling point g, f, main.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaF 'OVMX CHF dispatcher test: handler=1 disp=1 chfctx=1 sigpt=1 f=1 main=1 resumed=1 r=6 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) dispatcher frame + CHFCTX : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -869,6 +896,46 @@ EOF
       exit 0
     fi
     echo "FAIL: the anchorless return-to-main did not happen. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  chf-gate)
+    # vms-bfd03: SYS$GL_CALL_HANDL + the condition-dispatcher frame's CHF
+    # context, seen from inside a handler through the genuine invocation walk.
+    MILESTONE_MAIN=chf_test.c
+    export JOINT_MAIN_CFLAGS="-ffreestanding -I/src/src/libvms/include"
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export JOINT_USE_LIBVMS=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX CHF dispatcher test: handler=1 disp=1 chfctx=1 sigpt=1 f=1 main=1 resumed=1 r=6 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX CHF dispatcher test: handler=1 disp=0 chfctx=0 sigpt=0 f=0 main=0 resumed=1 r=6 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/popped.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- chf selftest 1/3: dispatcher frame, CHF context and chain all found must PASS --"
+    if assert_chf "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- chf selftest 2/3: no dispatcher frame / CHF context must FAIL --"
+    if assert_chf "$_st/popped.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- chf selftest 3/3: a crash in the walk must FAIL --"
+    if assert_chf "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "chf selftest failed -- assert_chf cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- SYS\$GL_CALL_HANDL dispatcher frame on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX CHF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_chf "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: from inside a condition handler the genuine invocation walk found the"
+      echo "      dispatcher frame (PV == SYS\$GL_CALL_HANDL) with its CHF context, then the"
+      echo "      signalling point, f and main -- on the real OVMX/Alpha executive."
+      exit 0
+    fi
+    echo "FAIL: the dispatcher frame / CHF context was not found as required. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

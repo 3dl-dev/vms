@@ -446,3 +446,4 @@ ovmx_vterm_delete=PROCEDURE
 sysuaf_password_expired=PROCEDURE
 sys$setcluevt=PROCEDURE
 sys$clrcluevt=PROCEDURE
+SYS$GL_CALL_HANDL=DATA

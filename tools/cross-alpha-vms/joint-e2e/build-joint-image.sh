@@ -155,6 +155,7 @@ docker run --rm \
     -e JOINT_EXTRA \
     -e JOINT_CRTL_RMS_VENEER \
     -e JOINT_USE_LIBVMS \
+    -e JOINT_MAIN_CFLAGS \
     -e JOINT_LINK_BASE \
     "$IMG" bash -c '
 set -euxo pipefail
@@ -294,7 +295,9 @@ echo "-- assembling crt0.obj (real port vms-ucrt0.c -> crt0.s, cross as) --"
 
 JOINT_MAIN=${JOINT_MAIN:-joint_main.c}
 echo "-- compiling joint_main.obj from $JOINT_MAIN (cross cc1, -mpointer-size=64) --"
-"$ALPHA_CC" -mpointer-size=64 -g0 -c "/joint/$JOINT_MAIN" -o "$OUT/joint_main.obj"
+# vms-bfd03: JOINT_MAIN_CFLAGS adds flags for the main source only (e.g. the
+# OVMX LIB$/STARLET include surface for a program that uses INVO_CONTEXT_BLK).
+"$ALPHA_CC" -mpointer-size=64 -g0 ${JOINT_MAIN_CFLAGS:-} -c "/joint/$JOINT_MAIN" -o "$OUT/joint_main.obj"
 
 # vms-bdd: JOINT_EXTRA additional objects — each compiled by the SAME cross cc1
 # into its OWN .obj, added to the STRICT link below. This is the multi-.o rung:

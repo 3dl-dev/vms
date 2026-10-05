@@ -19,7 +19,15 @@
  * libc and its LLP64 correctness is a tracked open item, not proven by rung 1.
  * ==========================================================================
  */
+/* vms-ce6: the pointer-width types (intptr_t, uintptr_t, ptrdiff_t, regoff_t)
+ * follow the CLIENT's pointer size, as the compiler's own __INTPTR_TYPE__ /
+ * __PTRDIFF_TYPE__ do: 64-bit under -mpointer-size=64 (the C RTL itself is
+ * always built that way), 32-bit under the DEC C default. */
+#if defined(__INITIAL_POINTER_SIZE) && __INITIAL_POINTER_SIZE == 64
 #define _Addr long long
+#else
+#define _Addr int
+#endif
 #define _Int64 long long
 #define _Reg long long
 

@@ -13,9 +13,19 @@ typedef uint32_t uint_fast32_t;
 #define UINT_FAST16_MAX UINT32_MAX
 #define UINT_FAST32_MAX UINT32_MAX
 
+/* vms-ce6: pointer-width limits follow the client's pointer size (see
+ * bits/alltypes.h.in _Addr). */
+#if defined(__INITIAL_POINTER_SIZE) && __INITIAL_POINTER_SIZE == 64
 #define INTPTR_MIN      INT64_MIN
 #define INTPTR_MAX      INT64_MAX
 #define UINTPTR_MAX     UINT64_MAX
 #define PTRDIFF_MIN     INT64_MIN
 #define PTRDIFF_MAX     INT64_MAX
+#else
+#define INTPTR_MIN      INT32_MIN
+#define INTPTR_MAX      INT32_MAX
+#define UINTPTR_MAX     UINT32_MAX
+#define PTRDIFF_MIN     INT32_MIN
+#define PTRDIFF_MAX     INT32_MAX
+#endif
 #define SIZE_MAX        UINT32_MAX

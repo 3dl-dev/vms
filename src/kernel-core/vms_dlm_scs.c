@@ -1270,20 +1270,24 @@ static int dlm_arm_handle_reply(struct vms_dlm_scs *d,
  * engine's own all-OVMX routing owns the directory (vms-3e3).
  * ========================================================================== */
 
-/* The engine keys resources by a C string; a wire name with an embedded NUL
- * has no exact engine spelling, so it is reported as held (refuse, never
- * guess). */
+/*
+ * Does THIS node hold locks on the resource? The engine keys resources by a C
+ * string, so a wire name with an embedded NUL (the real VAX's F11B$a<label>
+ * allocation locks carry binary bytes after the label) is asked about by its
+ * prefix -- the same spelling the hash learner files it under. A prefix that
+ * names a resource this node holds locks on is refused (a superset of the
+ * exact collision); anything else cannot be this node's.
+ */
 static int dlm_arm_dir_name_held(const struct vms_dlm_res_ident *id)
 {
 	char nm[VMS_DLM_NAME_MAX + 1u];
 	uint32_t i;
 
-	for (i = 0u; i < id->name_len; i++) {
-		if (id->name[i] == 0u)
-			return 1;
+	for (i = 0u; i < id->name_len && id->name[i] != 0u; i++)
 		nm[i] = (char)id->name[i];
-	}
 	nm[i] = '\0';
+	if (i == 0u)
+		return 0;          /* a name that starts with NUL is no engine name */
 	return vms_lock_dlm_name_in_use(nm);
 }
 

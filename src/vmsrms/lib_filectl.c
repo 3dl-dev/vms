@@ -274,11 +274,32 @@ uint32_t lib$file_scan(unsigned int *fab_addr,
     if (!fab || fab->fab$b_bid != FAB$C_BID || !context)
         return SS$_BADPARAM;
 
+    /*
+     * $SEARCH works from the expanded string $PARSE leaves in the NAM's ESA
+     * buffer. A caller that gave no ESA (the wildcard-scan idiom needs none on
+     * VMS) would make the search fail with RMS$_SYN, so lend the scan a
+     * buffer of its own for the duration of the call and put the NAM back as
+     * the caller left it.
+     */
+    char lent_esa[255];
+    struct NAM *scan_nam = fab->fab$l_nam;
+    char *saved_esa = NULL;
+    uint8_t saved_ess = 0;
+    int lent = 0;
+    if (scan_nam && scan_nam->nam$b_bid == NAM$C_BID && !scan_nam->nam$l_esa) {
+        saved_esa = scan_nam->nam$l_esa;
+        saved_ess = scan_nam->nam$b_ess;
+        scan_nam->nam$l_esa = lent_esa;
+        scan_nam->nam$b_ess = (uint8_t)sizeof(lent_esa);
+        lent = 1;
+    }
+
     if (*context == 0) {
         uint32_t ps = sys$parse(fab, 0, 0);
         if (!(ps & 1)) {
             if (fab->fab$l_nam)
                 rms_search_end(fab->fab$l_nam);
+            if (lent) { scan_nam->nam$l_esa = saved_esa; scan_nam->nam$b_ess = saved_ess; }
             return ps;
         }
         *context = 1;
@@ -314,6 +335,7 @@ uint32_t lib$file_scan(unsigned int *fab_addr,
     if (fab->fab$l_nam)
         rms_search_end(fab->fab$l_nam);
     *context = 0;
+    if (lent) { scan_nam->nam$l_esa = saved_esa; scan_nam->nam$b_ess = saved_ess; }
     return result;
 }
 

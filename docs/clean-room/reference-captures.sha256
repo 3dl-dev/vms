@@ -74,3 +74,6 @@ f00cc8a88cb3892d89cbd490cea7bf748c2b22e611b4463bdaee8022779ebf81  tests/lab/capt
 fcd452526c2e55faddd8f496e7c05b422bb4c27f1a4e4119b16a13764aff3876  tests/lab/captures/vms-6d3d-coldform-ev2-20260924/coldform-ev2-formation.pcap
 07d0942bbf8e25db0118f2ea3356091e730989c1e25d44aa6f0144232cf2ebe8  tests/lab/captures/vms-f29-formation-20261005/F29-2-cm.pcap
 c234ecfff984a4cef43426d93bc85e7fd63db32dea24def748a15fb30ffdd2a1  tests/lab/captures/vms-f29-formation-20261005/F29-base-main-cm.pcap
+c7f8c7a7121cff83c4abf5b9376ae9f8cb40defa16807f0ddbfd5fb48a7b0397  tests/lab/captures/vms-ec2-vc-reorder-20261005/R2-rx3.pcap
+c499415795bb6906dd15dcf6cffd473b78831200e1420ca68de7c1cbfc7e15f5  tests/lab/captures/vms-ec2-vc-reorder-20261005/R2.pcap
+d1765c0910291cc8396997a048a20963b32020446ec0f8817c34b071b8356ba7  tests/lab/captures/vms-ec2-vc-reorder-20261005/ovmx-B3-7-s8.pcap

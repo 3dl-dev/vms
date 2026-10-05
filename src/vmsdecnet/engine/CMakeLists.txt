@@ -81,6 +81,8 @@ target_link_libraries(decnetd_exe PRIVATE vmsdecnet_engine vmsdecnet_cterm
                                           Threads::Threads)
 target_include_directories(decnetd_exe PRIVATE
     ${CMAKE_SOURCE_DIR}/src/libvmssys                 # vms_kif.h ($GETDVI readback)
+    ${CMAKE_SOURCE_DIR}/src/vmsrms                    # rms_io.h (FAL persona fixture protection)
+    ${CMAKE_SOURCE_DIR}/src/vmsrms/include            # rms/*.h, transitive of rms_io.h
 )
 set_target_properties(decnetd_exe PROPERTIES
     OUTPUT_NAME "DECNETD"

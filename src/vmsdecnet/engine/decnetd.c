@@ -71,6 +71,8 @@
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
 #include "dnet_ncpstore.h"  /* SYS$SYSTEM:NETNODE_*.DAT via RMS (rd vms-1f69) */
 #include "rms_textfile.h"   /* --fal-accept-test byte-verify: RMS over the ACP */
+#include "rms_io.h"         /* --fal-proc-accept-test: a fixture with an explicit protection */
+#include "vmsfs/ods2.h"     /* ODS2_FK_DATA_STMLF */
 #include "ovmx_identity.h"  /* INV-1 identity SSOT: human banner = OVMX product id */
 #include "scs_datalink.h"   /* the shared raw-L2 datalink (src/libdatalink) */
 #include "ssdef.h"          /* SS$_BADPARAM (isolation-seam refusal, vms-9ab) */
@@ -3316,6 +3318,23 @@ out:
     return cst;
 }
 
+/* The persona fixture must be genuinely SYSTEM-only: protection
+ * (S:RWED,O:RWED,G,W) -- ODS-2 fileprot 0xFF00, a set bit denies -- set by the
+ * ACP at CREATE. A default-protected file is W:RE, and VMS lets GUEST read
+ * that, so a GUEST refusal on it would be wrong, not a proof. */
+static int falp_write_private(const char *spec, const char *line)
+{
+    uint32_t st = 0;
+    rms_file_t *h = rms_open_named_handle_kind_prot(spec, 1, 1, ODS2_FK_DATA_STMLF,
+                                                    0xFF00u, &st);
+    if (!h) return -1;
+    int rc = (rms_io_write_exact(h, line, strlen(line)) == 0 &&
+              rms_io_write_exact(h, "\n", 1) == 0) ? 0 : -1;
+    if (rc == 0) rms_io_fsync(h);
+    rms_close_named_handle(h);
+    return rc;
+}
+
 static int run_fal_proc_accept_test(void)
 {
     printf("DECNETD-I-FALPROC, inbound FAL access runs in a FAL.EXE server process"
@@ -3329,8 +3348,8 @@ static int run_fal_proc_accept_test(void)
     const char *EVIL  = "SYS$SYSROOT:[SYSMGR]FALP_EVIL.TXT";
     const char *LOCAL = "SYS$SYSROOT:[SYSMGR]FALP_LOCAL.TXT";
     static const char *lines[] = { "FAL persona proof: a SYSTEM-owned record" };
-    FP_CHECK(rms_textfile_write_line(PRIV, lines[0]) == 0,
-             "a SYSTEM-owned file is laid down in SYS$SYSROOT:[SYSMGR] via RMS");
+    FP_CHECK(falp_write_private(PRIV, lines[0]) == 0,
+             "a SYSTEM-only file (S:RWED,O:RWED,G,W) is laid down in SYS$SYSROOT:[SYSMGR] via RMS");
 
     uint32_t auth = 0, uic = 0, xst = 0, st;
 

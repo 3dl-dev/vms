@@ -216,6 +216,8 @@ jobs:
               - 'tools/cross-alpha-vms/**'
               - 'src/vmslink/**'
               - 'src/imgact/**'
+              # the libinit/invo/chf/cxx gates link this build's LIBVMS$SHR
+              - 'src/libvms/**'
             # vms-21b: the TCP/IP aux-server launch mechanism + daytime cold-boot
             # proof. Fires the tcpip-daytime-boot-e2e gate on any PR touching the
             # aux server, its service images, the shipped/test SERVICE.DAT +

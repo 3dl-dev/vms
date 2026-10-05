@@ -3730,9 +3730,71 @@ static int cmd_show_cluster(struct dcl_command *cmd)
 /*
  * SHOW NETWORK - Display DECnet/TCP network configuration.
  */
+/*
+ * The DECNET product line of SHOW NETWORK (rd vms-30e). On VMS, SHOW NETWORK asks
+ * the RUNNING network: a DECnet line appears only when NETACP is serving, and
+ * everything on it is NETACP's. So does OVMX: $ASSIGN _NET: + $QIO IO$_ACPCONTROL
+ * (brokered by libvms to NETACP), and NETACP answers its executor block from its
+ * live state (dnet_netshow.h). No _NET: device, no NETACP, or a snapshot that
+ * fails its bounds-validated decode -> no DECNET line (never a remembered or
+ * configured-but-not-running node, INV-6). The record codec + the oracle-layout
+ * line are the SAME source NCP.EXE and NETACP use, compiled here as a private
+ * (static) copy -- one record format, no new LIBVMS$SHR universal.
+ */
+#define DNET_NETSHOW_API static __attribute__((unused))
+#include "../vmsdecnet/broker/include/dnet_netshow.h"
+#include "../vmsdecnet/broker/dnet_netshow.c"
+#include "iodef.h"
+
+static uint32_t show_network_query(void *ctx, const uint8_t *req, size_t reqlen,
+                                   uint8_t *rsp, size_t rspcap, size_t *rsplen)
+{
+    uint16_t chan = *(const uint16_t *)ctx;
+    struct _iosb iosb;
+    *rsplen = 0;
+    if (reqlen > rspcap)
+        return SS$_BADPARAM;
+    memmove(rsp, req, reqlen);
+    memset(&iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, chan, IO$_ACPCONTROL, &iosb, NULL, 0, rsp,
+                           (uint32_t)rspcap, (uint32_t)reqlen, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    if (st & 1)
+        *rsplen = iosb.iosb$l_dev_depend;
+    return st;
+}
+
+/* 1 and the line in buf when a NETACP is serving; 0 otherwise. */
+static int show_network_decnet_line(char *buf, size_t cap)
+{
+    static struct dnet_netshow_view v;
+    static char netdev[] = "_NET:";
+    struct dsc$descriptor_s d;
+    uint16_t chan = 0;
+    d.dsc$w_length = (uint16_t)strlen(netdev);
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = netdev;
+    if (!(sys$assign(&d, &chan, 0, NULL) & 1))
+        return 0;                              /* no DECnet device face here */
+    uint32_t st = dnet_netshow_fetch(show_network_query, &chan,
+                                     DNET_NETSHOW_ENT_EXECUTOR, &v);
+    (void)sys$dassgn(chan);
+    if (!(st & 1) || !v.exec.state_on)
+        return 0;                              /* no NETACP serving */
+    dnet_netshow_fmt_network_line(&v.exec, buf, cap);
+    return 1;
+}
+
 static int cmd_show_network(struct dcl_command *cmd)
 {
     (void)cmd;
+    char decnet[128];
+    if (show_network_decnet_line(decnet, sizeof decnet)) {
+        /* Oracle: a blank line, then one "Product:" line per network product. */
+        printf("\n%s\n", decnet);
+    }
     char netnode[OVMX_IDENTITY_MAXLEN];
     ovmx_node_name(netnode, sizeof(netnode));
     printf("Product: OVMX TCP/IP Services %s\n", ovmx_product_version());

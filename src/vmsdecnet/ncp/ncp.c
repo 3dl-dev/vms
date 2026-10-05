@@ -18,12 +18,22 @@
  * PROVENANCE (Rule 8): the NCP command grammar + SHOW layout are public (DECnet
  * for OpenVMS Networking Manual, NCP chapter). It also manages the OBJECT
  * database (SET/DEFINE/SHOW/CLEAR/PURGE OBJECT -- the Session Control objects
- * this node offers, e.g. 42=CTERM, 17=FAL; rd vms-f52, dnet_objectdb). HONEST
- * SCOPE, not yet built: OVMX keeps ONE persisted database, so SET (volatile) and
- * DEFINE (permanent) both act on it -- the volatile/permanent split, circuits,
- * lines, counters, LOOP, and live reachability state are later rungs and are not
- * faked here (INV-6: counters/circuit state must be read from the live executive,
- * never invented).
+ * this node offers, e.g. 42=CTERM, 17=FAL; rd vms-f52, dnet_objectdb).
+ *
+ * SHOW READS THE RUNNING NETWORK (rd vms-30e). As on VMS, SHOW EXECUTOR [SUMMARY|
+ * CHARACTERISTICS|COUNTERS], SHOW KNOWN NODES, SHOW NODE and SHOW KNOWN LINKS
+ * ask the RUNNING NETACP: $ASSIGN _NET:, then $QIO IO$_ACPCONTROL, which libvms
+ * brokers to NETACP; NETACP answers one snapshot record from its live state
+ * (dnet_netshow.h) and NCP prints it in the layout of a real OpenVMS VAX V7.3
+ * (docs/oracle/vax-ncp-show/). With no NETACP serving, SHOW fails -- there is no
+ * volatile database to read -- and the permanent database is read with LIST,
+ * exactly the VMS split.
+ *
+ * HONEST SCOPE, not yet built: OVMX keeps ONE persisted database, so SET
+ * (volatile) and DEFINE (permanent) both act on it (a running NETACP re-reads it
+ * per request) -- the volatile/permanent split for SET, circuits, lines, LOOP and
+ * the object database's volatile view are later rungs and are not faked here
+ * (INV-6).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +43,18 @@
 #include "dnet_nodedb.h"
 #include "dnet_objectdb.h"
 #include "dnet_ncpstore.h"
+#include "dnet_netshow.h"   /* the NETACP snapshot record + oracle-layout formatters */
+
+#include "descrip.h"
+#include "iodef.h"
+#include "ssdef.h"
+#include "starlet.h"
+
+/* An image run outside an executive-activated context (the host test) has no
+ * process context yet; the system services need one for the channel table. */
+struct vms_pcb;
+extern struct vms_pcb *vms_pcb_get(void);
+extern struct vms_pcb *vms_pcb_init(uint64_t initial_privs);
 
 /* --- the databases (rd vms-1f69) ------------------------------------------
  * Executor, node and object databases live at SYS$SYSTEM:NETNODE_LOCAL.DAT /
@@ -81,21 +103,20 @@ static int objects_save(const struct dnet_objectdb *db)
     return dnet_store_save_objects(db) == DNET_STORE_OK ? DNET_OBJECTDB_OK : DNET_OBJECTDB_EIO;
 }
 
-/* --- SHOW output (VMS-faithful shape) ------------------------------------ */
+/* --- LIST output: the PERMANENT database (the files NCP DEFINEs) ---------- */
 static void show_executor(const struct dnet_executor *x, int characteristics)
 {
     char astr[16] = "not configured";
     if (x->have_addr)
         snprintf(astr, sizeof(astr), "%u.%u", dnet_area_of(x->addr), dnet_node_of(x->addr));
-    printf("\nNode Volatile %s\n\n", characteristics ? "Characteristics" : "Summary");
+    printf("\nNode Permanent %s\n\n", characteristics ? "Characteristics" : "Summary");
     if (x->have_addr && x->name[0])
         printf("Executor node = %s (%s)\n", astr, x->name);
     else
         printf("Executor node = %s\n", astr);
     printf("State                    = %s\n", x->state_on ? "on" : "off");
     if (characteristics) {
-        printf("Identification           = OVMX DECnet-compatible networking\n");
-        /* The bound NETACP sizes its inbound logical-link pool from (vms-f91);
+        /* The bound NETACP sizes its logical-link pool from this (vms-f91);
          * unset, the VMS default 32 (dnet_ncpstore.h). */
         printf("Maximum links            = %u\n", dnet_executor_max_links(x));
     }
@@ -110,7 +131,7 @@ static void show_node(const struct dnet_node_entry *e)
 
 static void show_known_nodes(const struct dnet_nodedb *db)
 {
-    printf("\nKnown Node Volatile Summary\n\n");
+    printf("\nKnown Node Permanent Summary\n\n");
     printf("Node         Name\n\n");
     for (unsigned i = 0; i < db->count; i++) {
         const struct dnet_node_entry *e = dnet_nodedb_at(db, i);
@@ -140,6 +161,127 @@ static void show_known_objects(const struct dnet_objectdb *db)
 /* --- helpers ------------------------------------------------------------- */
 static int ieq(const char *a, const char *b) { return strcasecmp(a, b) == 0; }
 
+/* An NCP keyword, which may be abbreviated to at least `min` characters. */
+static int kw(const char *w, const char *full, size_t min)
+{
+    size_t n = strlen(w);
+    return n >= min && n <= strlen(full) && strncasecmp(w, full, n) == 0;
+}
+
+/* --- SHOW: the RUNNING NETACP's volatile database (rd vms-30e) ------------ */
+struct ncp_net {
+    uint16_t chan;
+};
+
+/* One NETACP query: the request goes at p1, NETACP's snapshot comes back in
+ * the same buffer (IO$_ACPCONTROL on _NET:, libvms qio_net_op). */
+static uint32_t ncp_query(void *ctx, const uint8_t *req, size_t reqlen,
+                          uint8_t *rsp, size_t rspcap, size_t *rsplen)
+{
+    struct ncp_net *n = ctx;
+    struct _iosb iosb;
+    *rsplen = 0;
+    if (reqlen > rspcap)
+        return SS$_BADPARAM;
+    memmove(rsp, req, reqlen);
+    memset(&iosb, 0, sizeof iosb);
+    uint32_t st = sys$qiow(0, n->chan, IO$_ACPCONTROL, &iosb, NULL, 0, rsp,
+                           (uint32_t)rspcap, (uint32_t)reqlen, 0, 0, 0);
+    if (st & 1)
+        st = iosb.iosb$w_status;
+    if (st & 1)
+        *rsplen = iosb.iosb$l_dev_depend;
+    return st;
+}
+
+static void ncp_emit(void *ctx, const char *line)
+{
+    (void)ctx;
+    printf("%s\n", line);
+}
+
+/* The network is not up (no _NET: device, or no NETACP behind it): fail the
+ * way NCP does, with the status underneath. (%NCP-F-OPEFAI is NCP's "Operation
+ * failure" response; the secondary line is the real $ASSIGN/$QIO status text.
+ * A capture of real NCP on a node with the network stopped has not been taken
+ * -- re-ground this wording when one is.) */
+static int ncp_net_fail(uint32_t st)
+{
+    char txt[256];
+    struct dsc$descriptor_s d;
+    uint16_t len = 0;
+    d.dsc$w_length = (uint16_t)(sizeof txt - 1);
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = txt;
+    fprintf(stderr, "%%NCP-F-OPEFAI, Operation failure\n");
+    if ((sys$getmsg(st, &len, &d, 0x0F, NULL) & 1) && len > 0) {
+        txt[len < sizeof txt ? len : sizeof txt - 1] = '\0';
+        if (txt[0] == '%')
+            txt[0] = '-';
+        fprintf(stderr, "%s\n", txt);
+    } else {
+        fprintf(stderr, "-SYSTEM-F-STATUS, status %%X%08X\n", (unsigned)st);
+    }
+    return 1;
+}
+
+static struct dnet_netshow_view g_view;   /* ~20 KB: not on the stack */
+
+/* Read `entity` from the running NETACP into g_view. 1 = got it. */
+static int ncp_fetch(uint8_t entity)
+{
+    if (!vms_pcb_get())
+        vms_pcb_init(0);
+    struct ncp_net n = { 0 };
+    struct dsc$descriptor_s d;
+    static char netdev[] = "_NET:";
+    d.dsc$w_length = (uint16_t)strlen(netdev);
+    d.dsc$b_dtype = DSC$K_DTYPE_T;
+    d.dsc$b_class = DSC$K_CLASS_S;
+    d.dsc$a_pointer = netdev;
+    uint32_t st = sys$assign(&d, &n.chan, 0, NULL);
+    if (!(st & 1)) {
+        ncp_net_fail(st);
+        return 0;
+    }
+    st = dnet_netshow_fetch(ncp_query, &n, entity, &g_view);
+    (void)sys$dassgn(n.chan);
+    if (st == DNET_NETSHOW_ST_BADREC) {
+        fprintf(stderr, "%%NCP-F-INVRSP, invalid response from the network ACP"
+                        " (its snapshot record did not validate)\n");
+        return 0;
+    }
+    if (!(st & 1)) {
+        ncp_net_fail(st);
+        return 0;
+    }
+    return 1;
+}
+
+/* SHOW NODE x: the executor itself, or an entry of NETACP's known-node table. */
+static int ncp_show_node(const char *arg)
+{
+    if (!ncp_fetch(DNET_NETSHOW_ENT_NODES))
+        return 1;
+    uint16_t a = 0;
+    int by_addr = dnet_nodedb_parse_addr(arg, &a) == DNET_NODEDB_OK;
+    if ((by_addr && a == g_view.exec.addr) ||
+        (!by_addr && g_view.exec.name[0] && ieq(arg, g_view.exec.name))) {
+        dnet_netshow_fmt_node(&g_view, NULL, ncp_emit, NULL);
+        return 0;
+    }
+    for (unsigned i = 0; i < g_view.nnodes; i++) {
+        const struct dnet_netshow_node *e = &g_view.nodes[i];
+        if ((by_addr && e->addr == a) || (!by_addr && e->name[0] && ieq(arg, e->name))) {
+            dnet_netshow_fmt_node(&g_view, e, ncp_emit, NULL);
+            return 0;
+        }
+    }
+    fprintf(stderr, "%%NCP-E-UNRNODE, unrecognized node name or address\n");
+    return 1;
+}
+
 static int fail(const char *msg)
 {
     fprintf(stderr, "%%NCP-E-%s\n", msg);
@@ -164,10 +306,11 @@ static void usage(void)
         "usage: NCP <command>\n"
         "  SET|DEFINE NODE <area.node> [NAME <name>]\n"
         "  CLEAR|PURGE NODE <area.node>|<name>\n"
-        "  SHOW KNOWN NODES\n"
+        "  SHOW KNOWN NODES | KNOWN LINKS        (the running network)\n"
         "  SHOW NODE <area.node>|<name>\n"
+        "  SHOW EXECUTOR [SUMMARY|CHARACTERISTICS|COUNTERS]\n"
+        "  LIST KNOWN NODES | NODE <x> | EXECUTOR (the permanent database)\n"
         "  SET EXECUTOR ADDRESS <area.node> | NAME <name> | STATE ON|OFF | MAXIMUM LINKS <n>\n"
-        "  SHOW EXECUTOR [CHARACTERISTICS]\n"
         "  SET|DEFINE OBJECT <name> NUMBER <1..255> [FILE <spec>]\n"
         "  CLEAR|PURGE OBJECT <name>|<number>\n"
         "  SHOW KNOWN OBJECTS\n"
@@ -183,23 +326,61 @@ int main(int argc, char **argv)
     const char *verb = argv[1];
     const char *ent  = (argc >= 3) ? argv[2] : "";
 
-    /* ---- SHOW ---- */
-    if (ieq(verb, "SHOW")) {
-        if (ieq(ent, "KNOWN") && argc >= 4 && ieq(argv[3], "NODES")) {
+    /* ---- SHOW: the running NETACP's volatile database (rd vms-30e) ---- */
+    if (kw(verb, "SHOW", 3)) {
+        if (kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "NODES", 3)) {
+            if (!ncp_fetch(DNET_NETSHOW_ENT_NODES))
+                return 1;
+            dnet_netshow_fmt_known_nodes(&g_view, ncp_emit, NULL);
+            return 0;
+        }
+        if (kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "LINKS", 3)) {
+            if (!ncp_fetch(DNET_NETSHOW_ENT_LINKS))
+                return 1;
+            dnet_netshow_fmt_known_links(&g_view, ncp_emit, NULL);
+            return 0;
+        }
+        if (kw(ent, "NODE", 4) && argc >= 4)
+            return ncp_show_node(argv[3]);
+        if (kw(ent, "EXECUTOR", 4)) {
+            int kind = DNET_NETSHOW_EXEC_SUMMARY;
+            if (argc >= 4) {
+                if (kw(argv[3], "CHARACTERISTICS", 4))
+                    kind = DNET_NETSHOW_EXEC_CHAR;
+                else if (kw(argv[3], "COUNTERS", 4))
+                    kind = DNET_NETSHOW_EXEC_COUNTERS;
+                else if (!kw(argv[3], "SUMMARY", 3)) {
+                    usage();
+                    return 1;
+                }
+            }
+            if (!ncp_fetch(DNET_NETSHOW_ENT_EXECUTOR))
+                return 1;
+            dnet_netshow_fmt_executor(&g_view, kind, ncp_emit, NULL);
+            return 0;
+        }
+    }
+
+    /* ---- LIST: the permanent database. SHOW OBJECT / SHOW KNOWN OBJECTS stay
+     *      on it too: NETACP has no volatile object view yet (labelled). ---- */
+    if (kw(verb, "LIST", 3) || kw(verb, "SHOW", 3)) {
+        int list = kw(verb, "LIST", 3);
+        if (list && kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "NODES", 3)) {
+
             struct dnet_nodedb db;
             if (nodes_load(&db) != DNET_NODEDB_OK)
                 return fail("DBRDERR, node database is corrupt");
             show_known_nodes(&db);
             return 0;
         }
-        if (ieq(ent, "KNOWN") && argc >= 4 && ieq(argv[3], "OBJECTS")) {
+        if (kw(ent, "KNOWN", 3) && argc >= 4 && kw(argv[3], "OBJECTS", 3)) {
             struct dnet_objectdb db;
             if (objects_load(&db) != DNET_OBJECTDB_OK)
                 return fail("DBRDERR, object database is corrupt");
             show_known_objects(&db);
             return 0;
         }
-        if (ieq(ent, "OBJECT") && argc >= 4) {
+        if (kw(ent, "OBJECT", 3) && argc >= 4) {
             struct dnet_objectdb db;
             if (objects_load(&db) != DNET_OBJECTDB_OK)
                 return fail("DBRDERR, object database is corrupt");
@@ -216,7 +397,7 @@ int main(int argc, char **argv)
             show_object(e);
             return 0;
         }
-        if (ieq(ent, "NODE") && argc >= 4) {
+        if (list && kw(ent, "NODE", 4) && argc >= 4) {
             struct dnet_nodedb db;
             if (nodes_load(&db) != DNET_NODEDB_OK)
                 return fail("DBRDERR, node database is corrupt");
@@ -228,14 +409,14 @@ int main(int argc, char **argv)
                 e = dnet_nodedb_by_name(&db, argv[3]);
             if (!e)
                 return fail("UNRNODE, unrecognized node name or address");
-            printf("\nNode Volatile Summary\n\nNode         Name\n\n");
+            printf("\nNode Permanent Summary\n\nNode         Name\n\n");
             show_node(e);
             return 0;
         }
-        if (ieq(ent, "EXECUTOR")) {
+        if (list && kw(ent, "EXECUTOR", 4)) {
             struct dnet_executor x;
             exec_load(&x);
-            show_executor(&x, argc >= 4 && ieq(argv[3], "CHARACTERISTICS"));
+            show_executor(&x, argc >= 4 && kw(argv[3], "CHARACTERISTICS", 4));
             return 0;
         }
         usage();

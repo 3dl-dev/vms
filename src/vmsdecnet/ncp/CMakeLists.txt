@@ -43,7 +43,7 @@ target_link_libraries(vmsdecnet_ncpstore PUBLIC
 # would fail before any ACP call (the decnetd_rms_bind.c / tcpip_service_db
 # trap). vmsrms supplies the producers.
 add_executable(ncp_exe ncp.c ncp_rms_bind.c)
-target_link_libraries(ncp_exe PRIVATE vmsdecnet_ncpstore vmsdecnet_nodedb
+target_link_libraries(ncp_exe PRIVATE vmsdecnet_ncpstore vmsdecnet_broker vmsdecnet_nodedb
                                       vmsdecnet_objectdb vmsrms)
 set_target_properties(ncp_exe PROPERTIES OUTPUT_NAME "NCP" SUFFIX ".EXE")
 install(TARGETS ncp_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

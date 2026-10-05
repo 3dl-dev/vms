@@ -72,6 +72,7 @@
 #include "dnet_mail_proc.h" /* MAIL_SERVER.EXE network server process      */       /* FAL server + COPY client (object 17, rd vms-8c2) */
 #include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
 #include "dnet_netqio.h"    /* a _NET: $QIOW ends with its IOSB status (rd vms-d01) */
+#include "dnet_netshow.h"    /* NCP SHOW snapshot record NETACP answers (rd vms-30e) */
 #include "ovmx_status.h"     /* vms_status_string: the authentic %FAC-S-ID text */
 #include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
@@ -4855,6 +4856,9 @@ static void usage(const char *argv0)
         "                      executive): the real VAX capture replayed through\n"
         "                      NETACP to MAIL_SERVER.EXE, replies byte-exact;\n"
         "                      the message is stored in SYSTEM's mail (vms-47fd)\n"
+        "  --netacp-show-selftest [--oracle-dir D]  run the NCP SHOW / SHOW NETWORK\n"
+        "                      floor (snapshot codec, NETACP serving from live state,\n"
+        "                      oracle layout vs docs/oracle/vax-ncp-show) and exit\n"
         "  --netacp-broker-selftest  run the outbound-links-through-NETACP floor and\n"
         "                      exit (no executive): _NET: broker records -> NETACP\n"
         "                      pool -> NSP link; COPY, refusals, bounds (vms-dda)\n"
@@ -5300,6 +5304,198 @@ static uint32_t netacp_new_handle(void)
     }
 }
 
+/*
+ * ================= NCP SHOW / SHOW NETWORK served from NETACP (rd vms-30e) =================
+ * A _NET: IO$_ACPCONTROL reaches NETACP as DNET_BROKER_OP_SHOW (dnet_broker_control
+ * in libvms's qio_net_op), and NETACP answers ONE dnet_netshow snapshot record
+ * built HERE from its own live state -- nothing else answers it and nothing in it
+ * is a constant dressed up as state (INV-6):
+ *   executor   the NETACP engine's address/name/type, the identification this
+ *              NETACP image carries, its circuit, the NSP version it connects
+ *              with (NETACP_NSP_VERSION, the value its Connect Initiates carry),
+ *              the routing version its hellos carry (DNET_ENGINE_ROUTING_*), its
+ *              pool size, the links in use now, and the one executor counter it
+ *              really keeps -- the high-water mark of links in use;
+ *   nodes      the node database NETACP resolves NODE:: names against (read at
+ *              request time, the same read broker_open_connect does) merged with
+ *              its adjacency table, each with the links NETACP holds to it now;
+ *   links      every used slot of the logical-link pool, inbound and outbound.
+ * The query is bounds-validated (dnet_netshow_req_decode); a malformed one is
+ * answered SS$_BADPARAM, never a partial record. Read-only: it changes nothing.
+ */
+#define NETACP_NSP_VERSION   DNET_NSP_VER_41    /* every Connect Initiate NETACP sends */
+static unsigned g_netacp_links_hwm;            /* counter: Maximum logical links active */
+
+static void netacp_note_links(const struct netacp_slot *slots)
+{
+    unsigned used = 0;
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        used += slots[i].used ? 1u : 0u;
+    if (used > g_netacp_links_hwm)
+        g_netacp_links_hwm = used;
+}
+
+static void netacp_show_name(const struct dnet_nodedb *db, uint16_t addr, char *out)
+{
+    const struct dnet_node_entry *e = db ? dnet_nodedb_by_addr(db, addr) : NULL;
+    snprintf(out, DNET_NETSHOW_NAMEMAX + 1, "%s", e && e->name[0] ? e->name : "");
+}
+
+static void netacp_show_exec(const struct netacp_slot *slots, const struct dnet_engine *node,
+                             struct dnet_netshow_exec *x)
+{
+    memset(x, 0, sizeof *x);
+    x->addr = node->addr;
+    x->state_on = 1;                                  /* this NETACP is serving */
+    x->type = dnet_engine_is_router(node) ? DNET_NETSHOW_TYPE_ROUTING
+                                          : DNET_NETSHOW_TYPE_NONROUTING;
+    snprintf(x->name, sizeof x->name, "%s", node->node_name);
+    /* The identification THIS NETACP image carries: OVMX's product id, never
+     * the DEC/VSI mark (INV-0); <= 32 characters, the NCP bound. */
+    int n = snprintf(x->ident, sizeof x->ident, "OVMX DECnet-compatible %s",
+                     ovmx_product_version());
+    if (n < 0 || (size_t)n >= sizeof x->ident)
+        snprintf(x->ident, sizeof x->ident, "OVMX DECnet-compatible");
+    snprintf(x->circuit, sizeof x->circuit, "%s", node->circuit);
+    x->nsp_ver[0] = 4; x->nsp_ver[1] = 1; x->nsp_ver[2] = 0;   /* NETACP_NSP_VERSION */
+    _Static_assert(NETACP_NSP_VERSION == DNET_NSP_VER_41,
+                   "the NSP version NCP reports is the one NETACP connects with");
+    x->rtg_ver[0] = DNET_ENGINE_ROUTING_VERSION;
+    x->rtg_ver[1] = DNET_ENGINE_ROUTING_ECO;
+    x->rtg_ver[2] = DNET_ENGINE_ROUTING_UECO;
+    x->max_links = NETACP_MAX_SESSIONS;
+    unsigned used = 0;
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        used += slots[i].used ? 1u : 0u;
+    x->active_links = (uint16_t)used;
+    x->max_links_active = (uint16_t)(g_netacp_links_hwm > 0xffff ? 0xffff : g_netacp_links_hwm);
+    x->have_dr = node->have_dr ? 1 : 0;
+    x->dr_addr = node->have_dr ? dnet_addr_from_id(node->dr_id) : 0;
+}
+
+static int netacp_show_addr_cmp(const void *a, const void *b)
+{
+    uint16_t x = ((const struct dnet_netshow_node *)a)->addr;
+    uint16_t y = ((const struct dnet_netshow_node *)b)->addr;
+    return (x > y) - (x < y);
+}
+
+/* Build NETACP's known-node table (DB + adjacencies, executor excluded),
+ * sorted by address. Returns the count. */
+static unsigned netacp_show_nodes(const struct netacp_slot *slots,
+                                  const struct dnet_engine *node,
+                                  const struct dnet_nodedb *db,
+                                  struct dnet_netshow_node *out, unsigned cap)
+{
+    unsigned n = 0;
+    for (unsigned i = 0; db && i < db->count && n < cap; i++) {
+        const struct dnet_node_entry *e = dnet_nodedb_at(db, i);
+        if (!e || e->addr == node->addr)
+            continue;
+        memset(&out[n], 0, sizeof out[n]);
+        out[n].addr = e->addr;
+        snprintf(out[n].name, sizeof out[n].name, "%s", e->name);
+        out[n].flags = DNET_NETSHOW_NF_INDB;
+        n++;
+    }
+    for (size_t k = 0; k < DNET_ADJ_MAX_NEIGHBORS; k++) {
+        const struct dnet_adj_neighbor *a = &node->adj.nbr[k];
+        if (!a->in_use || a->addr == node->addr)
+            continue;
+        unsigned j = 0;
+        while (j < n && out[j].addr != a->addr)
+            j++;
+        if (j == n) {
+            if (n >= cap)
+                continue;
+            memset(&out[n], 0, sizeof out[n]);
+            out[n].addr = a->addr;
+            netacp_show_name(db, a->addr, out[n].name);
+            n++;
+        }
+        out[j].flags |= DNET_NETSHOW_NF_ADJ;
+        out[j].adj_state = a->state == DNET_ADJ_UP ? DNET_NETSHOW_ADJ_UP
+                         : a->state == DNET_ADJ_INITIALIZING ? DNET_NETSHOW_ADJ_INIT
+                         : DNET_NETSHOW_ADJ_NONE;
+    }
+    uint16_t dr = node->have_dr ? dnet_addr_from_id(node->dr_id) : 0;
+    for (unsigned j = 0; j < n; j++) {
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            if (slots[i].used && slots[i].peer == out[j].addr)
+                out[j].active_links++;
+        /* Next hop: a router reaches an adjacent node directly; an endnode sends
+         * everything through its designated router, 0 while it has none (the
+         * oracle endnode shows 0). */
+        if (dnet_engine_is_router(node))
+            out[j].next_node = out[j].adj_state == DNET_NETSHOW_ADJ_UP ? out[j].addr : 0;
+        else
+            out[j].next_node = dr;
+    }
+    qsort(out, n, sizeof out[0], netacp_show_addr_cmp);
+    return n;
+}
+
+static void netacp_show(const struct netacp_slot *slots, const struct dnet_engine *node,
+                        const struct dnet_broker_req *req)
+{
+    static struct dnet_netshow_rsp r;
+    static struct dnet_netshow_node all[DNET_NODEDB_MAX + DNET_ADJ_MAX_NEIGHBORS];
+    static struct dnet_nodedb db;
+    struct dnet_netshow_req q;
+    uint8_t out[DNET_NETSHOW_RSP_MAX + 16];
+    size_t olen = 0;
+
+    if (dnet_netshow_req_decode(req->data, req->datalen, &q) != DNET_NETSHOW_OK) {
+        netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_BADPARAM, NULL, 0);
+        return;
+    }
+    memset(&r, 0, sizeof r);
+    r.entity = q.entity;
+    r.as_of = (uint32_t)time(NULL);
+    netacp_show_exec(slots, node, &r.exec);
+
+    int have_db = dnet_store_load_nodes(&db) == DNET_STORE_OK;
+    if (q.entity == DNET_NETSHOW_ENT_NODES) {
+        unsigned n = netacp_show_nodes(slots, node, have_db ? &db : NULL, all,
+                                       (unsigned)(sizeof all / sizeof all[0]));
+        r.total = (uint16_t)n;
+        r.first = q.cursor > n ? (uint16_t)n : q.cursor;
+        unsigned c = n - r.first;
+        r.count = (uint8_t)(c > DNET_NETSHOW_NODES_PER ? DNET_NETSHOW_NODES_PER : c);
+        memcpy(r.u.node, &all[r.first], r.count * sizeof all[0]);
+    } else if (q.entity == DNET_NETSHOW_ENT_LINKS) {
+        unsigned n = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            n += slots[i].used ? 1u : 0u;
+        r.total = (uint16_t)n;
+        r.first = q.cursor > n ? (uint16_t)n : q.cursor;
+        unsigned k = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS && r.count < DNET_NETSHOW_LINKS_PER; i++) {
+            const struct netacp_slot *sl = &slots[i];
+            if (!sl->used)
+                continue;
+            if (k++ < r.first)
+                continue;
+            struct dnet_netshow_link *l = &r.u.link[r.count++];
+            l->local_link = sl->lk.link.local_addr;
+            l->remote_link = sl->lk.link.remote_addr;
+            l->node = sl->peer;
+            netacp_show_name(have_db ? &db : NULL, sl->peer, l->name);
+            l->pid = sl->outbound ? sl->owner_pid
+                   : sl->object == DNET_FAL_OBJECT ? sl->fal.pid
+                   : sl->host.session_pid;
+            l->object = (uint8_t)(sl->object < 0 || sl->object > 255 ? 0 : sl->object);
+            l->outbound = sl->outbound ? 1 : 0;
+            l->running = dnet_link_is_up(&sl->lk.link) ? 1 : 0;
+        }
+    }
+    if (dnet_netshow_rsp_encode(&r, out, sizeof out, &olen) != DNET_NETSHOW_OK) {
+        netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_BADPARAM, NULL, 0);
+        return;
+    }
+    netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_NORMAL, out, olen);
+}
+
 /* Answer a pending OPEN (if any) and free the outbound slot. */
 static void netacp_outbound_release(struct netacp_slot *sl, const char *why)
 {
@@ -5412,6 +5608,10 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
     uint16_t base = (uint16_t)(req->op & DNET_BROKER_OP_MASK);
     char pa[8];
 
+    if (base == DNET_BROKER_OP_SHOW) {          /* NCP SHOW: read-only, no link */
+        netacp_show(slots, node, req);
+        return;
+    }
     if (base == DNET_BROKER_OP_OPEN) {
         int free_i = -1, mine = 0;
         for (int i = 0; i < NETACP_MAX_SESSIONS; i++) {
@@ -5452,7 +5652,7 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
         if (*next_lla < 0x2100) *next_lla = 0x2100;
         uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
         int orc = dnet_engine_link_open(&sl->lk, ra, rn, lla, desc, dlen, 1459, 1,
-                                        DNET_NSP_VER_41, fr, sizeof fr, &fn, now);
+                                        NETACP_NSP_VERSION, fr, sizeof fr, &fn, now);
         memset(desc, 0, sizeof desc);      /* it carried the access-control password */
         if (orc != DNET_ENGINE_OK) {
             netacp_respond(NULL, req->reply_unit, req->corr_id, SS$_ABORT, NULL, 0);
@@ -5460,6 +5660,7 @@ static void netacp_broker_request(struct netacp_slot *slots, const struct dnet_e
             return;
         }
         sl->used = 1;
+        netacp_note_links(slots);
         sl->open_corr = req->corr_id;      /* answered on CC / DI / give-up */
         log_ts(stdout);
         printf(" DECNETD-I-LINKCI, process %08X: Connect Initiate to %s object %d\n",
@@ -5747,6 +5948,7 @@ static void netacp_dispatch_frame(struct netacp_slot *slots, const struct dnet_e
         }
     }
     sl->used = 1;
+    netacp_note_links(slots);
     uint16_t lla = (*next_lla)++;
     if (*next_lla < 0x2100) *next_lla = 0x2100;
     uint8_t fr[DNET_FRAME_MAX]; size_t fn = 0;
@@ -6768,6 +6970,535 @@ static int run_netacp_broker_selftest(void)
 }
 
 /*
+ * ===================== --netacp-show-selftest (rd vms-30e) =====================
+ * The HOST FLOOR of NCP SHOW / SHOW NETWORK read from the running NETACP. No
+ * executive. It proves:
+ *   A. the snapshot record codec: every entity round-trips; every truncated
+ *      prefix, an over-bound count / string length, trailing bytes, a bad
+ *      version or entity and a control byte in a name are REFUSED; 200k random
+ *      mutations never over-read (ASan/UBSan in the sanitizer leg) and anything
+ *      that does decode is in bounds and printable; the query codec likewise;
+ *   B. NETACP SERVES a SHOW from its live state: a real NETACP pool (the code
+ *      the daemon runs) on node 1.10 with a node database on disk, an adjacency
+ *      learned from a real endnode hello, one outbound link that completed its
+ *      NSP handshake with a peer engine across a socketpair and one still
+ *      connecting -- reached ONLY through broker records (dnet_broker_control,
+ *      what libvms's IO$_ACPCONTROL runs) and gathered by the client NCP and
+ *      DCL use (dnet_netshow_fetch). Every number checked is one the test made
+ *      true in NETACP's state; a malformed query is refused BADPARAM; a silent
+ *      NETACP is DEVOFFLINE;
+ *   C. the formatters reproduce the REAL OpenVMS VAX V7.3 oracle
+ *      (docs/oracle/vax-ncp-show/) byte for byte when fed the oracle node's
+ *      values -- the "as of" timestamp normalized; for CHARACTERISTICS and
+ *      COUNTERS, which print only what NETACP keeps, every OVMX line is a line
+ *      of the oracle, in the oracle's order.
+ */
+static const char *g_show_oracle_dir;
+
+struct show_lines { char l[64][260]; int n; };
+static void show_collect(void *ctx, const char *line)
+{
+    struct show_lines *s = ctx;
+    if (s->n < 64)
+        snprintf(s->l[s->n++], sizeof s->l[0], "%s", line);
+}
+/* "... as of <anything>" -> "... as of <T>" (the dynamic field). */
+static void show_norm(char *line)
+{
+    char *p = strstr(line, " as of ");
+    if (p)
+        strcpy(p + 7, "<T>");
+}
+/* Load an oracle transcript: drop the echoed command (first line) and the
+ * trailing DCL prompt ("$"); CRs stripped; "as of" normalized. */
+static int show_oracle(const char *file, struct show_lines *o)
+{
+    char path[512];
+    memset(o, 0, sizeof *o);
+    snprintf(path, sizeof path, "%s/%s", g_show_oracle_dir ? g_show_oracle_dir : ".", file);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return -1;
+    char buf[256];
+    int first = 1;
+    while (fgets(buf, sizeof buf, f) && o->n < 64) {
+        buf[strcspn(buf, "\r\n")] = '\0';
+        if (first) { first = 0; continue; }
+        snprintf(o->l[o->n++], sizeof o->l[0], "%s", buf);
+    }
+    fclose(f);
+    if (o->n > 0 && strcmp(o->l[o->n - 1], "$") == 0)
+        o->n--;
+    for (int i = 0; i < o->n; i++)
+        show_norm(o->l[i]);
+    return 0;
+}
+static int show_equal(struct show_lines *a, struct show_lines *b, const char *what)
+{
+    for (int i = 0; i < a->n; i++)
+        show_norm(a->l[i]);
+    if (a->n != b->n) {
+        printf("    %s: %d lines vs the oracle's %d\n", what, a->n, b->n);
+        return 0;
+    }
+    for (int i = 0; i < a->n; i++)
+        if (strcmp(a->l[i], b->l[i]) != 0) {
+            printf("    %s line %d:\n      ovmx  : '%s'\n      oracle: '%s'\n", what, i,
+                   a->l[i], b->l[i]);
+            return 0;
+        }
+    return 1;
+}
+/* Every OVMX line is an oracle line, in order; the first `head` lines and the
+ * last `tail` lines match exactly. */
+static int show_subseq(struct show_lines *a, struct show_lines *b, int head, int tail,
+                       const char *what)
+{
+    for (int i = 0; i < a->n; i++)
+        show_norm(a->l[i]);
+    if (a->n < head + tail || b->n < head + tail)
+        return 0;
+    for (int i = 0; i < head; i++)
+        if (strcmp(a->l[i], b->l[i]) != 0) {
+            printf("    %s head line %d: '%s' vs '%s'\n", what, i, a->l[i], b->l[i]);
+            return 0;
+        }
+    for (int i = 1; i <= tail; i++)
+        if (strcmp(a->l[a->n - i], b->l[b->n - i]) != 0)
+            return 0;
+    int j = head;
+    for (int i = head; i < a->n - tail; i++) {
+        while (j < b->n - tail && strcmp(a->l[i], b->l[j]) != 0)
+            j++;
+        if (j >= b->n - tail) {
+            printf("    %s: '%s' is not an oracle line (or out of order)\n", what, a->l[i]);
+            return 0;
+        }
+        j++;
+    }
+    return 1;
+}
+
+/* The client transport onto the in-process NETACP (broker records). */
+struct show_cli { struct dnet_broker_chan *bc; const struct dnet_broker_io *io; };
+static uint32_t show_cli_query(void *ctx, const uint8_t *req, size_t reqlen,
+                               uint8_t *rsp, size_t rspcap, size_t *rsplen)
+{
+    struct show_cli *c = ctx;
+    return dnet_broker_control(c->bc, c->io, req, reqlen, rsp, rspcap, rsplen);
+}
+/* A query whose answer is another entity's record (the client must refuse). */
+static uint32_t show_wrong_entity(void *ctx, const uint8_t *req, size_t reqlen,
+                                  uint8_t *rsp, size_t rspcap, size_t *rsplen)
+{
+    (void)ctx; (void)req; (void)reqlen;
+    static struct dnet_netshow_rsp r;
+    memset(&r, 0, sizeof r);
+    r.entity = DNET_NETSHOW_ENT_LINKS;
+    return dnet_netshow_rsp_encode(&r, rsp, rspcap, rsplen) == DNET_NETSHOW_OK ? 1u : 20u;
+}
+static int nbs_silent_get(void *ctx, uint8_t *buf, size_t cap, size_t *len)
+{ (void)ctx; (void)buf; (void)cap; (void)len; return 0; }
+
+static int show_printable(const char *s)
+{
+    for (; *s; s++)
+        if ((unsigned char)*s < 0x20 || (unsigned char)*s > 0x7e)
+            return 0;
+    return 1;
+}
+
+static int run_netacp_show_selftest(void)
+{
+    printf("DECNETD-I-NETACPSHOW, NCP SHOW / SHOW NETWORK read the running NETACP: snapshot"
+           " codec, NETACP serving from its live state, oracle layout (no executive,"
+           " rd vms-30e)\n");
+    int pass = 0, fail = 0;
+#define NS2_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
+    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+
+    static struct dnet_netshow_rsp r, d;
+    static struct dnet_netshow_view v;
+    uint8_t rec[DNET_NETSHOW_RSP_MAX + 64], fz[DNET_NETSHOW_RSP_MAX + 64];
+    size_t n = 0;
+
+    /* ---------------- A. the record codec ---------------- */
+    {
+        memset(&r, 0, sizeof r);
+        r.entity = DNET_NETSHOW_ENT_NODES;
+        r.total = 5; r.first = 2; r.count = 3; r.as_of = 1791148795u;
+        r.exec.addr = (1u << 10) | 1u; r.exec.state_on = 1;
+        snprintf(r.exec.name, sizeof r.exec.name, "VAX1");
+        snprintf(r.exec.ident, sizeof r.exec.ident, "a test identification");
+        snprintf(r.exec.circuit, sizeof r.exec.circuit, "QNA-0");
+        r.exec.nsp_ver[0] = 4; r.exec.nsp_ver[1] = 1;
+        r.exec.rtg_ver[0] = 2; r.exec.max_links = 32; r.exec.max_links_active = 3;
+        for (int i = 0; i < 3; i++) {
+            r.u.node[i].addr = (uint16_t)((1u << 10) | (2u + (unsigned)i));
+            snprintf(r.u.node[i].name, sizeof r.u.node[i].name, "N%d", i);
+            r.u.node[i].flags = DNET_NETSHOW_NF_INDB;
+            r.u.node[i].active_links = (uint16_t)i;
+        }
+        int e = dnet_netshow_rsp_encode(&r, rec, sizeof rec, &n);
+        int dd = e == DNET_NETSHOW_OK ? dnet_netshow_rsp_decode(rec, n, &d) : -99;
+        NS2_CHECK(e == DNET_NETSHOW_OK && dd == DNET_NETSHOW_OK && n ==
+                  DNET_NETSHOW_HDR_LEN + DNET_NETSHOW_EXEC_LEN + 3 * DNET_NETSHOW_NODE_LEN &&
+                  d.total == 5 && d.first == 2 && d.count == 3 && d.as_of == r.as_of &&
+                  !strcmp(d.exec.ident, r.exec.ident) && !strcmp(d.exec.circuit, "QNA-0") &&
+                  d.exec.max_links_active == 3 && !strcmp(d.u.node[2].name, "N2") &&
+                  d.u.node[2].active_links == 2,
+                  "a NODES snapshot record round-trips field for field");
+
+        int all_refused = 1;
+        for (size_t k = 0; k < n; k++)
+            if (dnet_netshow_rsp_decode(rec, k, &d) == DNET_NETSHOW_OK) all_refused = 0;
+        NS2_CHECK(all_refused, "every truncated prefix of the record is refused (never an over-read)");
+
+        memcpy(fz, rec, n); fz[n] = 0;
+        NS2_CHECK(dnet_netshow_rsp_decode(fz, n + 1, &d) == DNET_NETSHOW_EBADLEN,
+                  "a record with trailing bytes is refused");
+        memcpy(fz, rec, n); fz[0] = 2;
+        NS2_CHECK(dnet_netshow_rsp_decode(fz, n, &d) == DNET_NETSHOW_EVERS,
+                  "an unknown record version is refused");
+        memcpy(fz, rec, n); fz[1] = 9;
+        NS2_CHECK(dnet_netshow_rsp_decode(fz, n, &d) == DNET_NETSHOW_EINVAL,
+                  "an unknown entity is refused");
+        memcpy(fz, rec, n); fz[6] = 200;
+        NS2_CHECK(dnet_netshow_rsp_decode(fz, n, &d) == DNET_NETSHOW_EBADLEN,
+                  "an entry count over the page bound is refused");
+        memcpy(fz, rec, n); fz[2] = 4; fz[3] = 0;      /* total 4 < first 2 + count 3 */
+        NS2_CHECK(dnet_netshow_rsp_decode(fz, n, &d) == DNET_NETSHOW_EBADLEN,
+                  "a page that runs past the table total is refused");
+        memcpy(fz, rec, n); fz[DNET_NETSHOW_HDR_LEN + 4] = 7;   /* exec name length */
+        NS2_CHECK(dnet_netshow_rsp_decode(fz, n, &d) == DNET_NETSHOW_EBADLEN,
+                  "a string length over its slot is refused");
+        memcpy(fz, rec, n); fz[DNET_NETSHOW_HDR_LEN + 5] = 0x1b;  /* ESC in the name */
+        NS2_CHECK(dnet_netshow_rsp_decode(fz, n, &d) == DNET_NETSHOW_EINVAL &&
+                  d.count == 0 && d.exec.name[0] == '\0',
+                  "a control byte in a name is refused, and *out is left zeroed");
+
+        uint32_t seed = 0x30eu;
+        unsigned long decoded = 0, bad = 0;
+        for (int it = 0; it < 200000; it++) {
+            size_t ln = n;
+            memcpy(fz, rec, n);
+            int flips = 1 + (int)(nbself_rand(&seed) % 4);
+            for (int k = 0; k < flips; k++)
+                fz[nbself_rand(&seed) % n] = (uint8_t)nbself_rand(&seed);
+            if (nbself_rand(&seed) % 8 == 0)
+                ln = nbself_rand(&seed) % (n + 1);
+            if (dnet_netshow_rsp_decode(fz, ln, &d) == DNET_NETSHOW_OK) {
+                decoded++;
+                if (d.count > DNET_NETSHOW_NODES_PER || (uint32_t)d.first + d.count > d.total ||
+                    !show_printable(d.exec.name) || !show_printable(d.exec.ident) ||
+                    !show_printable(d.exec.circuit) || strlen(d.exec.name) > DNET_NETSHOW_NAMEMAX)
+                    bad++;
+                for (unsigned k = 0; k < d.count && d.entity == DNET_NETSHOW_ENT_NODES; k++)
+                    if (!show_printable(d.u.node[k].name)) bad++;
+            }
+        }
+        printf("    (fuzz: 200000 mutations, %lu still decoded, all bounds-checked)\n", decoded);
+        NS2_CHECK(bad == 0, "200k random mutations: nothing over-reads, and every record that"
+                            " still decodes is in bounds with printable strings");
+
+        memset(&r, 0, sizeof r);
+        r.entity = DNET_NETSHOW_ENT_LINKS;
+        r.total = 1; r.count = 1;
+        r.u.link[0].local_link = 0x2101; r.u.link[0].remote_link = 0x0c05;
+        r.u.link[0].node = (1u << 10) | 2u; r.u.link[0].pid = 0x20200216u;
+        r.u.link[0].object = 42; r.u.link[0].running = 1;
+        snprintf(r.u.link[0].name, sizeof r.u.link[0].name, "VAX2");
+        e = dnet_netshow_rsp_encode(&r, rec, sizeof rec, &n);
+        dd = e == DNET_NETSHOW_OK ? dnet_netshow_rsp_decode(rec, n, &d) : -99;
+        NS2_CHECK(dd == DNET_NETSHOW_OK && d.u.link[0].pid == 0x20200216u &&
+                  d.u.link[0].remote_link == 0x0c05 && d.u.link[0].object == 42 &&
+                  d.u.link[0].running == 1 && !strcmp(d.u.link[0].name, "VAX2"),
+                  "a LINKS snapshot record round-trips field for field");
+        memset(r.exec.name, 'X', sizeof r.exec.name);           /* 7 chars, no NUL */
+        NS2_CHECK(dnet_netshow_rsp_encode(&r, rec, sizeof rec, &n) == DNET_NETSHOW_EBADLEN,
+                  "the encoder refuses an over-bound string instead of truncating it");
+
+        struct dnet_netshow_req q = { DNET_NETSHOW_VERSION, DNET_NETSHOW_ENT_LINKS, 7 }, qd;
+        uint8_t qb[8];
+        size_t qn = 0;
+        int qe = dnet_netshow_req_encode(&q, qb, sizeof qb, &qn);
+        NS2_CHECK(qe == DNET_NETSHOW_OK && dnet_netshow_req_decode(qb, qn, &qd) == DNET_NETSHOW_OK &&
+                  qd.entity == DNET_NETSHOW_ENT_LINKS && qd.cursor == 7 &&
+                  dnet_netshow_req_decode(qb, qn - 1, &qd) == DNET_NETSHOW_ETRUNC &&
+                  dnet_netshow_req_decode(qb, qn + 1, &qd) == DNET_NETSHOW_EBADLEN,
+                  "the query round-trips; a short or long query is refused");
+        qb[1] = 0;
+        NS2_CHECK(dnet_netshow_req_decode(qb, qn, &qd) == DNET_NETSHOW_EINVAL,
+                  "a query for an unknown entity is refused");
+        NS2_CHECK(dnet_netshow_fetch(show_wrong_entity, NULL, DNET_NETSHOW_ENT_NODES, &v) ==
+                  DNET_NETSHOW_ST_BADREC,
+                  "the client refuses an answer that is not the entity it asked for");
+    }
+
+    /* ---------------- B. NETACP serves the SHOW from its live state ---------------- */
+    char dbpath[] = "/tmp/dnshow-nodedbXXXXXX";
+    int dbfd = mkstemp(dbpath);
+    if (dbfd >= 0) close(dbfd);
+    setenv("OVMX_DECNET_NODEDB", dbpath, 1);
+    {
+        static struct dnet_nodedb db;
+        dnet_nodedb_init(&db);
+        dnet_nodedb_set(&db, (1u << 10) | 2u, "VAX2");
+        dnet_nodedb_set(&db, (1u << 10) | 5u, "");
+        dnet_nodedb_set(&db, (1u << 10) | 11u, "VAXB");
+        NS2_CHECK(dbfd >= 0 && dnet_store_save_nodes(&db) == DNET_STORE_OK,
+                  "NETACP's node database holds 1.2 VAX2, 1.5 and 1.11 VAXB (the file it resolves by)");
+    }
+    const uint8_t hwA[6] = { 0x02,0,0,0,0,0x0a };
+    const uint8_t hwB[6] = { 0x02,0,0,0,0,0x0b };
+    static struct dnet_engine B;
+    dnet_engine_init(&g_nbnode, 1, 10, "OVMXA", "EWA0", NULL, hwA, 0, 0, 0);
+    dnet_engine_init(&B, 1, 11, "VAXB", "EWA0", NULL, hwB, 0, 0, 0);
+    memcpy(g_netacp_self, g_nbnode.my_id, 6);
+    g_netacp_self_set = 1;
+    g_netacp_tx = nb_tx;
+    g_netacp_reply = nb_reply_capture;
+    g_netacp_links_hwm = 0;
+    memset(g_nbslots, 0, sizeof g_nbslots);
+    g_nbreq_n = g_nbrep_n = 0;
+
+    struct nb_client cl = { 0x52 };
+    struct dnet_broker_io io = { &cl, nb_put, nb_get, nb_idle, 2000, 20000 };
+    struct dnet_broker_chan bc;
+    memset(&bc, 0, sizeof bc);
+    bc.reply_unit = cl.unit;
+    struct show_cli sc = { &bc, &io };
+
+    /* Live state 1: the adjacency -- B's real endnode hello, received. */
+    {
+        uint8_t f[DNET_FRAME_MAX], from[6];
+        size_t fl = 0;
+        enum dnet_adj_state ast = DNET_ADJ_DOWN;
+        int hb = dnet_engine_build_hello_frame(&B, f, sizeof f, &fl);
+        int rx = hb == DNET_ENGINE_OK ? dnet_engine_rx_frame(&g_nbnode, 5, f, fl, from, &ast) : -1;
+        NS2_CHECK(rx == 1 && dnet_adj_state_of(&g_nbnode.adj, B.my_id) != DNET_ADJ_DOWN,
+                  "NETACP heard 1.11's endnode hello: an adjacency exists in its table");
+    }
+    /* Live state 2: an outbound link that RUNS -- a real NSP handshake with B. */
+    int sv[2] = { -1, -1 };
+    uint32_t corr = 0;
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) == 0) {
+        g_nb_wire_fd = sv[0];
+        uint32_t c1 = nb_raw_open(0x20200212u, 0x61, "1.11::\"42=\"", &corr);
+        uint8_t f[DNET_FRAME_MAX], rep[DNET_FRAME_MAX];
+        ssize_t fl = recv(sv[1], f, sizeof f, MSG_DONTWAIT);
+        size_t rl = 0, al = 0;
+        int has = 0;
+        enum dnet_link_event ev = DNET_LINK_EV_NONE;
+        B.link_active = 0;
+        int lr = fl > 0 ? dnet_engine_link_rx(&B, 6, f, (size_t)fl, rep, sizeof rep, &rl,
+                                              &has, &ev) : -1;
+        int ac = (lr == 0 && ev == DNET_LINK_EV_CONNECT_IND)
+                 ? dnet_engine_link_accept(&B, 0x0c05, rep, sizeof rep, &al, 6) : -1;
+        if (ac == 0)
+            (void)write(sv[1], rep, al);
+        nb_pump();
+        NS2_CHECK(ac == 0 && nb_reply_status(0x61, c1) == SS$_NORMAL,
+                  "process 20200212's outbound link to 1.11 object 42 completed its NSP"
+                  " handshake through NETACP (OPEN answered on the remote's Connect Confirm)");
+    }
+    /* Live state 3: a second link still connecting (nobody answers). */
+    g_nb_wire_fd = -1;
+    (void)nb_raw_open(0x20200213u, 0x62, "1.2::\"17=\"", &corr);
+    NS2_CHECK(nb_used() == 2, "NETACP's pool holds the two links");
+    /* Close the connecting one: the high-water mark must stay 2, active go to 1. */
+    {
+        int closed = 0;
+        for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+            if (g_nbslots[i].used && g_nbslots[i].owner_pid == 0x20200213u) {
+                netacp_slot_end(&g_nbslots[i], -1, 0, monotonic_sec(), "selftest");
+                closed = 1;
+            }
+        NS2_CHECK(closed && nb_used() == 1, "the connecting link is released (one link left)");
+        (void)nb_raw_open(0x20200213u, 0x62, "1.2::\"17=\"", &corr);   /* again: connecting */
+    }
+
+    /* The SHOW, through broker records only. */
+    uint32_t st = dnet_netshow_fetch(show_cli_query, &sc, DNET_NETSHOW_ENT_EXECUTOR, &v);
+    const struct dnet_netshow_exec *x = &v.exec;
+    NS2_CHECK(st == 1 && x->addr == ((1u << 10) | 10u) && !strcmp(x->name, "OVMXA") &&
+              x->state_on && x->type == DNET_NETSHOW_TYPE_NONROUTING &&
+              !strcmp(x->circuit, "EWA-0") && !strncmp(x->ident, "OVMX DECnet-compatible", 22),
+              "SHOW EXECUTOR: NETACP answers its own address, name, state, type, circuit and"
+              " OVMX identification (read from its engine, not a constant)");
+    NS2_CHECK(x->max_links == NETACP_MAX_SESSIONS && x->active_links == 2 &&
+              x->max_links_active == 2 && x->nsp_ver[0] == 4 && x->nsp_ver[1] == 1 &&
+              x->rtg_ver[0] == DNET_ENGINE_ROUTING_VERSION,
+              "CHARACTERISTICS/COUNTERS: pool size, links in use (2) and the high-water"
+              " counter (2) are NETACP's own; the NSP version is what its CIs carry, the routing version what its hellos carry");
+    NS2_CHECK(v.as_of != 0 && v.nnodes == 0 && v.nlinks == 0,
+              "an EXECUTOR query carries the executor block only");
+
+    st = dnet_netshow_fetch(show_cli_query, &sc, DNET_NETSHOW_ENT_NODES, &v);
+    int ok_nodes = st == 1 && v.nnodes == 3 &&
+        v.nodes[0].addr == ((1u << 10) | 2u) && !strcmp(v.nodes[0].name, "VAX2") &&
+        v.nodes[0].active_links == 1 && v.nodes[0].flags == DNET_NETSHOW_NF_INDB &&
+        v.nodes[1].addr == ((1u << 10) | 5u) && v.nodes[1].name[0] == '\0' &&
+        v.nodes[1].active_links == 0 &&
+        v.nodes[2].addr == ((1u << 10) | 11u) && !strcmp(v.nodes[2].name, "VAXB") &&
+        v.nodes[2].active_links == 1 &&
+        v.nodes[2].flags == (DNET_NETSHOW_NF_INDB | DNET_NETSHOW_NF_ADJ) &&
+        v.nodes[2].adj_state != DNET_NETSHOW_ADJ_NONE && v.nodes[2].next_node == 0;
+    NS2_CHECK(ok_nodes, "SHOW KNOWN NODES: the database's nodes in address order, 1.11 also in"
+                        " the adjacency table, each with the links NETACP holds to it now;"
+                        " next node 0 (no designated router) -- the executor not listed");
+
+    st = dnet_netshow_fetch(show_cli_query, &sc, DNET_NETSHOW_ENT_LINKS, &v);
+    int run = -1, conn = -1;
+    for (unsigned i = 0; i < v.nlinks; i++) {
+        if (v.links[i].pid == 0x20200212u) run = (int)i;
+        if (v.links[i].pid == 0x20200213u) conn = (int)i;
+    }
+    NS2_CHECK(st == 1 && v.nlinks == 2 && run >= 0 && conn >= 0 &&
+              v.links[run].running == 1 && v.links[run].remote_link == 0x0c05 &&
+              v.links[run].object == 42 && v.links[run].outbound == 1 &&
+              !strcmp(v.links[run].name, "VAXB") && v.links[run].local_link >= 0x2100 &&
+              v.links[conn].running == 0 && v.links[conn].object == 17 &&
+              v.links[conn].node == ((1u << 10) | 2u),
+              "SHOW KNOWN LINKS: both links of the pool, with their process, local and remote"
+              " link addresses, object and state (running / connecting) as NETACP holds them");
+
+    /* Paging: a pool larger than a page is walked by cursor. */
+    {
+        struct dnet_netshow_req q = { DNET_NETSHOW_VERSION, DNET_NETSHOW_ENT_NODES, 1 };
+        uint8_t qb[8], out[DNET_NETSHOW_RSP_MAX + 16];
+        size_t qn = 0, on = 0;
+        dnet_netshow_req_encode(&q, qb, sizeof qb, &qn);
+        uint32_t ps = dnet_broker_control(&bc, &io, qb, qn, out, sizeof out, &on);
+        NS2_CHECK((ps & 1) && dnet_netshow_rsp_decode(out, on, &d) == DNET_NETSHOW_OK &&
+                  d.first == 1 && d.count == 2 && d.total == 3 &&
+                  d.u.node[0].addr == ((1u << 10) | 5u),
+                  "a query with cursor 1 answers the table from its second entry (page walk)");
+        uint8_t junk[3] = { 1, 2, 3 };
+        ps = dnet_broker_control(&bc, &io, junk, sizeof junk, out, sizeof out, &on);
+        NS2_CHECK(ps == SS$_BADPARAM && on == 0,
+                  "NETACP refuses a malformed query SS$_BADPARAM, with no record");
+        ps = dnet_broker_control(&bc, &io, qb, qn, out, 10, &on);
+        NS2_CHECK(ps == SS$_BUFFEROVF && on == 10,
+                  "an answer longer than the caller's buffer completes SS$_BUFFEROVF (never an overrun)");
+        struct dnet_broker_io silent = { NULL, nbs_put, nbs_silent_get, NULL, 3, 3 };
+        struct nb_script scr;
+        memset(&scr, 0, sizeof scr);
+        silent.ctx = &scr;
+        ps = dnet_broker_control(&bc, &silent, qb, qn, out, sizeof out, &on);
+        NS2_CHECK(ps == SS$_DEVOFFLINE && on == 0,
+                  "a NETACP that does not answer is SS$_DEVOFFLINE -- no snapshot is invented");
+    }
+
+    /* The live view through the formatters. */
+    {
+        static struct show_lines s;
+        memset(&s, 0, sizeof s);
+        (void)dnet_netshow_fetch(show_cli_query, &sc, DNET_NETSHOW_ENT_NODES, &v);
+        dnet_netshow_fmt_known_nodes(&v, show_collect, &s);
+        int found_row = 0, found_exec = 0;
+        for (int i = 0; i < s.n; i++) {
+            if (!strcmp(s.l[i], " 1.11 (VAXB)                      1           EWA-0          0"))
+                found_row = 1;
+            if (!strcmp(s.l[i], "Executor node = 1.10 (OVMXA)"))
+                found_exec = 1;
+        }
+        NS2_CHECK(found_row && found_exec,
+                  "the live table prints NETACP's own values in the oracle columns"
+                  " (' 1.11 (VAXB)  ... 1 ... EWA-0  0')");
+        memset(&s, 0, sizeof s);
+        (void)dnet_netshow_fetch(show_cli_query, &sc, DNET_NETSHOW_ENT_EXECUTOR, &v);
+        dnet_netshow_fmt_executor(&v, DNET_NETSHOW_EXEC_COUNTERS, show_collect, &s);
+        int hwm = 0;
+        for (int i = 0; i < s.n; i++)
+            if (!strcmp(s.l[i], "           2  Maximum logical links active")) hwm = 1;
+        NS2_CHECK(hwm, "SHOW EXECUTOR COUNTERS prints NETACP's counted high-water (2)");
+    }
+
+    for (int i = 0; i < NETACP_MAX_SESSIONS; i++)
+        netacp_slot_end(&g_nbslots[i], -1, 0, monotonic_sec(), "selftest teardown");
+    g_nb_wire_fd = -1;
+    g_netacp_tx = scs_datalink_send;
+    g_netacp_reply = netacp_reply_mbx;
+    g_netacp_self_set = 0;
+    if (sv[0] >= 0) { close(sv[0]); close(sv[1]); }
+    unlink(dbpath);
+
+    /* ---------------- C. the formatters reproduce the real VAX ---------------- */
+    {
+        static struct dnet_netshow_view ov;
+        static struct show_lines o, s;
+        memset(&ov, 0, sizeof ov);
+        ov.as_of = 1791148795u;
+        ov.exec.addr = (1u << 10) | 1u; ov.exec.state_on = 1;
+        ov.exec.type = DNET_NETSHOW_TYPE_NONROUTING;
+        snprintf(ov.exec.name, sizeof ov.exec.name, "VAX1");
+        /* The oracle node's own Identification, taken from its transcript (the
+         * fixture copies the VAX's values; only the layout is under test). */
+        if (show_oracle("MCR_NCP_SHOW_EXECUTOR.txt", &o) == 0)
+            for (int i = 0; i < o.n; i++)
+                if (!strncmp(o.l[i], "Identification           = ", 27))
+                    snprintf(ov.exec.ident, sizeof ov.exec.ident, "%s", o.l[i] + 27);
+        snprintf(ov.exec.circuit, sizeof ov.exec.circuit, "QNA-0");
+        ov.exec.nsp_ver[0] = 4; ov.exec.nsp_ver[1] = 1; ov.exec.nsp_ver[2] = 0;
+        ov.exec.rtg_ver[0] = 2; ov.exec.max_links = 32; ov.exec.max_links_active = 3;
+        ov.nnodes = 2;
+        ov.nodes[0].addr = (1u << 10) | 2u;  snprintf(ov.nodes[0].name, 7, "VAX2");
+        ov.nodes[1].addr = (1u << 10) | 42u; snprintf(ov.nodes[1].name, 7, "OVMX");
+
+        int have = show_oracle("MCR_NCP_SHOW_EXECUTOR.txt", &o) == 0;
+        memset(&s, 0, sizeof s);
+        dnet_netshow_fmt_executor(&ov, DNET_NETSHOW_EXEC_SUMMARY, show_collect, &s);
+        NS2_CHECK(have && show_equal(&s, &o, "SHOW EXECUTOR"),
+                  "NCP SHOW EXECUTOR matches the real VAX transcript line for line");
+
+        have = show_oracle("MCR_NCP_SHOW_KNOWN_NODES.txt", &o) == 0;
+        memset(&s, 0, sizeof s);
+        dnet_netshow_fmt_known_nodes(&ov, show_collect, &s);
+        NS2_CHECK(have && show_equal(&s, &o, "SHOW KNOWN NODES"),
+                  "NCP SHOW KNOWN NODES matches the real VAX transcript line for line (table columns included)");
+
+        have = show_oracle("MCR_NCP_SHOW_NODE_1.2.txt", &o) == 0;
+        memset(&s, 0, sizeof s);
+        dnet_netshow_fmt_node(&ov, &ov.nodes[0], show_collect, &s);
+        NS2_CHECK(have && show_equal(&s, &o, "SHOW NODE 1.2"),
+                  "NCP SHOW NODE 1.2 matches the real VAX transcript line for line");
+
+        have = show_oracle("MCR_NCP_SHOW_KNOWN_LINKS.txt", &o) == 0;
+        memset(&s, 0, sizeof s);
+        dnet_netshow_fmt_known_links(&ov, show_collect, &s);
+        NS2_CHECK(have && show_equal(&s, &o, "SHOW KNOWN LINKS"),
+                  "NCP SHOW KNOWN LINKS with no links matches the real VAX ('No information in database')");
+
+        have = show_oracle("MCR_NCP_SHOW_EXECUTOR_CHARACTERISTICS.txt", &o) == 0;
+        memset(&s, 0, sizeof s);
+        dnet_netshow_fmt_executor(&ov, DNET_NETSHOW_EXEC_CHAR, show_collect, &s);
+        NS2_CHECK(have && show_subseq(&s, &o, 5, 2, "SHOW EXECUTOR CHARACTERISTICS"),
+                  "NCP SHOW EXECUTOR CHARACTERISTICS: header exact, and every parameter OVMX"
+                  " prints is a real VAX line in the real order (the rest honestly omitted)");
+
+        have = show_oracle("MCR_NCP_SHOW_EXECUTOR_COUNTERS.txt", &o) == 0;
+        memset(&s, 0, sizeof s);
+        dnet_netshow_fmt_executor(&ov, DNET_NETSHOW_EXEC_COUNTERS, show_collect, &s);
+        NS2_CHECK(have && show_subseq(&s, &o, 5, 2, "SHOW EXECUTOR COUNTERS"),
+                  "NCP SHOW EXECUTOR COUNTERS: header exact, 'Maximum logical links active' in"
+                  " the real column (the routing-loss counters NETACP does not keep are omitted)");
+
+        have = show_oracle("SHOW_NETWORK.txt", &o) == 0;
+        char line[128];
+        dnet_netshow_fmt_network_line(&ov.exec, line, sizeof line);
+        NS2_CHECK(have && o.n >= 2 && o.l[0][0] == '\0' && !strcmp(o.l[1], line),
+                  "DCL SHOW NETWORK's DECNET product line matches the real VAX column for column");
+    }
+
+    printf("DECNETD-I-NETACPSHOW, %d passed, %d failed\n", pass, fail);
+    if (fail == 0 && pass > 0) { printf("DECNETD-NETACP-SHOW-SELFTEST: PASS\n"); return 0; }
+    printf("DECNETD-NETACP-SHOW-SELFTEST: FAIL\n");
+    return 1;
+#undef NS2_CHECK
+}
+
+/*
  * ================= --net-loopback-accept-test (rd vms-dda, booted) =================
  * The BOOTED proof that a $QIO on _NET: reaches a NETACP and a real FAL server
  * through it: this process runs a NETACP (its broker request mailbox published
@@ -7115,6 +7846,7 @@ int main(int argc, char **argv)
     int ifname_explicit = 0;      /* did the caller pin --iface?             */
     const char *addr_s = NULL;
     const char *name = "OVMX";
+    int name_explicit = 0;        /* did the caller pin --name?              */
     const char *device = "EWA0";
     const char *circuit = NULL;
     int hello_interval = (int)DNET_T3_DEFAULT;
@@ -7159,7 +7891,7 @@ int main(int argc, char **argv)
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--address") && i + 1 < argc)      addr_s = argv[++i];
-        else if (!strcmp(argv[i], "--name") && i + 1 < argc)    name = argv[++i];
+        else if (!strcmp(argv[i], "--name") && i + 1 < argc)    { name = argv[++i]; name_explicit = 1; }
         else if (!strcmp(argv[i], "--iface") && i + 1 < argc)   { ifname = argv[++i]; ifname_explicit = 1; }
         else if (!strcmp(argv[i], "--device") && i + 1 < argc)  device = argv[++i];
         else if (!strcmp(argv[i], "--circuit") && i + 1 < argc) circuit = argv[++i];
@@ -7189,6 +7921,11 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--netacp-pool-selftest")) return run_netacp_pool_selftest();
         else if (!strcmp(argv[i], "--mail11-accept-test")) return run_mail11_accept_test();
         else if (!strcmp(argv[i], "--netacp-broker-selftest")) return run_netacp_broker_selftest();
+        else if (!strcmp(argv[i], "--netacp-show-selftest")) {
+            if (i + 2 < argc && !strcmp(argv[i + 1], "--oracle-dir"))
+                g_show_oracle_dir = argv[i + 2];
+            return run_netacp_show_selftest();
+        }
         else if (!strcmp(argv[i], "--net-loopback-accept-test")) return run_net_loopback_accept_test();
         else if (!strcmp(argv[i], "--copy-selftest")) copy_self_test = 1;
         else if (!strcmp(argv[i], "--copy-accept-test")) copy_accept_test = 1;
@@ -7322,11 +8059,21 @@ int main(int argc, char **argv)
      * absent the NOADDRESS error below fires -- DECnet is simply not configured
      * on this node, and no address is ever invented (INV-6). */
     static char sethost_addrbuf[16];
+    static char exec_namebuf[DNET_NODEDB_NAMEMAX + 1];
     if (!addr_s) {
         unsigned ea = 0, en = 0;
         if (sethost_source_executor(&ea, &en) == 0) {
             snprintf(sethost_addrbuf, sizeof(sethost_addrbuf), "%u.%u", ea, en);
             addr_s = sethost_addrbuf;
+            /* The executor NAME comes from the same database (rd vms-30e): a
+             * self-sourced NETACP is the node NCP configured, so NCP SHOW
+             * EXECUTOR reads back NCP's name -- never the compiled-in default.
+             * An unnamed executor stays unnamed. */
+            struct dnet_executor ex;
+            if (!name_explicit && dnet_store_load_executor(&ex) == DNET_STORE_OK) {
+                snprintf(exec_namebuf, sizeof exec_namebuf, "%s", ex.name);
+                name = exec_namebuf;
+            }
         }
     }
 

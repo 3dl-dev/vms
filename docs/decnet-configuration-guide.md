@@ -93,33 +93,67 @@ $ NCP :== $SYS$SYSTEM:NCP.EXE
 $ NCP SET EXECUTOR ADDRESS 1.2
 $ NCP SET EXECUTOR NAME VAX2
 $ NCP SET EXECUTOR STATE ON
-$ NCP SHOW EXECUTOR CHARACTERISTICS
+$ NCP LIST EXECUTOR
 
-Node Volatile Characteristics
+Node Permanent Summary
 
 Executor node = 1.2 (VAX2)
 State                    = on
-Identification           = OVMX DECnet-compatible networking
 ```
+
+`LIST` reads the permanent database (the files above). `SHOW` reads the
+**running** network: NCP `$ASSIGN`s `_NET:` and issues `$QIO IO$_ACPCONTROL`,
+which libvms brokers to the running NETACP, and NETACP answers from its live
+state. With no NETACP running, `SHOW` fails (`%NCP-F-OPEFAI, Operation
+failure`), as it does on VMS when the network is not up. Once STARTNET has
+started NETACP:
+
+```
+$ NCP SHOW EXECUTOR
+
+
+Node Volatile Summary as of  5-OCT-2026 09:12:40
+
+Executor node = 1.2 (VAX2)
+
+State                    = on
+Identification           = OVMX DECnet-compatible V0.7-6
+```
+
+`SHOW EXECUTOR CHARACTERISTICS` and `SHOW EXECUTOR COUNTERS` print only what
+NETACP actually holds (NSP and routing version, maximum links, type; the
+"Maximum logical links active" counter). Parameters a VMS executor has and
+OVMX's NETACP does not keep (delay factor, routing timers, maximum
+cost/hops/visits, buffer size, the routing-loss counters, ...) are left out,
+never filled with a plausible value. The layouts are those of a real OpenVMS
+VAX V7.3 (`docs/oracle/vax-ncp-show/`). `SHOW NETWORK` in DCL prints a
+`Product:  DECNET` line only while NETACP is serving.
 
 ### The remote-node database
 
-`SET`/`DEFINE NODE` add or update an entry; `SHOW KNOWN NODES` / `SHOW NODE`
-read it back; `CLEAR`/`PURGE NODE` remove one. This database is what
+`SET`/`DEFINE NODE` add or update an entry; `LIST KNOWN NODES` / `LIST NODE`
+read it back (`SHOW KNOWN NODES` / `SHOW NODE` show NETACP's view of it,
+merged with its adjacencies and the links it holds); `CLEAR`/`PURGE NODE`
+remove one. This database is what
 `SET HOST <node>` and a `NODE::` filespec resolve a name or address through
 (`decnet$node-database`, implemented).
 
 ```
 $ NCP SET NODE 1.2 NAME VAX2
-$ NCP SHOW KNOWN NODES
+$ NCP LIST KNOWN NODES
 
-Known Node Volatile Summary
+Known Node Permanent Summary
 
 Node         Name
 
 1.2          VAX2
 
-$ NCP SHOW NODE VAX2
+$ NCP LIST NODE VAX2
+
+Node Permanent Summary
+
+Node         Name
+
 1.2          VAX2
 
 $ NCP CLEAR NODE VAX2
@@ -133,10 +167,11 @@ name — both forms accept either.
   `DEFINE` (permanent, in the permanent database) act on two databases; OVMX
   keeps a single persisted database, so `SET` and `DEFINE` both write the same
   store today.
-- **No circuits, objects, lines, counters, or LOOP.** NCP configures the node
-  database and the executor's address/name/state only. There is no
-  `SET CIRCUIT`, `SET OBJECT`, `SET LINE`, `SHOW ... COUNTERS`, or `LOOP`
-  surface.
+- **No circuits, lines, or LOOP.** There is no `SET`/`SHOW CIRCUIT`,
+  `SET`/`SHOW LINE`, or `LOOP` surface. `SHOW EXECUTOR COUNTERS` prints the
+  one executor counter NETACP keeps ("Maximum logical links active"); the
+  routing-loss counters are not kept and not printed. `SHOW OBJECT` still reads
+  the object database file (NETACP has no volatile object view yet).
 - **NCP is config-only.** It does not itself bring the network up or down —
   it edits the database NETACP and the engine read.
 - **Record layout is OVMX's.** The databases live at their VMS names in

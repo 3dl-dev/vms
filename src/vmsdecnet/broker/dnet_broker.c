@@ -289,3 +289,44 @@ DNET_BROKER_API uint32_t dnet_broker_xfer(struct dnet_broker_chan *bc,
         }
     }
 }
+
+DNET_BROKER_API uint32_t dnet_broker_control(struct dnet_broker_chan *bc,
+                                             const struct dnet_broker_io *io,
+                                             const void *in, size_t inlen,
+                                             void *out, size_t outcap, size_t *xfer)
+{
+    struct dnet_broker_req req;
+    struct dnet_broker_rsp rsp;
+
+    if (xfer)
+        *xfer = 0;
+    if (!bc || !io || inlen > DNET_NSP_MAX_DATA || (inlen && !in))
+        return DNET_BROKER_ST_BADPARAM;
+
+    memset(&req, 0, sizeof req);
+    req.corr_id     = dnet_broker_corr_next(&bc->corr_state);
+    req.owner_pid   = bc->owner_pid;
+    req.link_handle = 0;                      /* a query names no link */
+    req.reply_unit  = bc->reply_unit;
+    req.op          = DNET_BROKER_OP_SHOW;
+    req.datalen     = (uint16_t)inlen;
+    if (inlen)
+        memcpy(req.data, in, inlen);
+    if (dnet_broker_call(io, &req, &rsp, io->reply_polls, &bc->mismatched) != DNET_BROKER_OK)
+        return DNET_BROKER_ST_DEVOFFLINE;     /* NETACP did not answer */
+    if (!(rsp.status & 1u))
+        return rsp.status;
+    size_t n = rsp.datalen;
+    uint32_t st = rsp.status;
+    if (n > outcap) {
+        n = outcap;
+        st = DNET_BROKER_ST_BUFFEROVF;
+    }
+    if (n && !out)
+        return DNET_BROKER_ST_BADPARAM;
+    if (n)
+        memcpy(out, rsp.data, n);
+    if (xfer)
+        *xfer = n;
+    return st;
+}

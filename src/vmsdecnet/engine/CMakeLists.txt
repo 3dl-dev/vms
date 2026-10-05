@@ -141,6 +141,18 @@ if(BUILD_TESTS)
     add_test(NAME decnetd_netacp_broker_selftest
              COMMAND decnetd_exe --netacp-broker-selftest)
     set_tests_properties(decnetd_netacp_broker_selftest PROPERTIES TIMEOUT 120)
+    # rd vms-30e: NCP SHOW / DCL SHOW NETWORK read the RUNNING NETACP -- the host
+    # floor. The snapshot record codec (round-trip, every truncated prefix,
+    # over-bound counts/strings, control bytes, 200k mutations); a real NETACP
+    # pool serving IO$_ACPCONTROL queries through broker records from its live
+    # state (node database on disk, an adjacency from a real hello, one link that
+    # completed its NSP handshake and one connecting, the high-water counter,
+    # paging, BADPARAM / BUFFEROVF / DEVOFFLINE); and the formatters diffed line
+    # for line against the real OpenVMS VAX V7.3 transcripts in
+    # docs/oracle/vax-ncp-show (timestamps normalized). No executive.
+    add_test(NAME decnetd_netacp_show_selftest
+             COMMAND decnetd_exe --netacp-show-selftest
+                     --oracle-dir ${CMAKE_SOURCE_DIR}/docs/oracle/vax-ncp-show)
     # rd vms-ea8: the OUTBOUND $ COPY client transport PUMP floor -- copy_client_run
     # (the same client the live $ COPY drives) brings up an object-17 link + NSP
     # link-service + a DAP session over the copy_wire transport against a threaded

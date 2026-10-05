@@ -15,7 +15,12 @@
 # parses into {node, task/object} before building the SC connect descriptor.
 # Pure, bounds-checked, spec-derived (never a wire field). Grouped with the
 # broker record as the client-side transport helpers libvms will link.
-add_library(vmsdecnet_broker STATIC dnet_broker.c dnet_ncb.c)
+# dnet_netshow (rd vms-30e): the NETACP volatile-database SNAPSHOT record NCP
+# SHOW / SHOW NETWORK read over _NET: IO$_ACPCONTROL (DNET_BROKER_OP_SHOW), plus
+# the formatters that print it in the observed OpenVMS VAX V7.3 layout. Pure,
+# bounds-validated at decode. DCL compiles a private (static) copy of the same
+# source, as libvms does with dnet_broker.c.
+add_library(vmsdecnet_broker STATIC dnet_broker.c dnet_ncb.c dnet_netshow.c)
 target_include_directories(vmsdecnet_broker PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/../nsp/include   # dnet_nsp.h (DNET_NSP_MAX_DATA)

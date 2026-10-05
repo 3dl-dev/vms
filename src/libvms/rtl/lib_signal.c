@@ -213,7 +213,7 @@ uint32_t vms$$call_handler(chf$handler_t h, struct chf$signal_array *sig,
 }
 
 /* Record the signalling point (the caller of LIB$SIGNAL/LIB$STOP). */
-static void capture_signal_point(void)
+__attribute__((noinline)) static void capture_signal_point(void)
 {
 #if OVMX_ALPHA_VMS_ABI
     INVO_CONTEXT_BLK icb;

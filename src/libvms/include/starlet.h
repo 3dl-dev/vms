@@ -1648,6 +1648,11 @@ uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id, uint32_t
 uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nambuf,
                      uint32_t *resid, uint32_t *attrib, uint32_t *ctx);
 
+/** sys$check_privilegew - Check the caller's privileges (auditing disabled: nothing logged) */
+uint32_t sys$check_privilegew(uint32_t efn, const void *privnam, uint32_t bitnum,
+                              uint32_t flags, const void *itmlst, uint32_t *audsts,
+                              void *astadr, uint64_t astprm);
+
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

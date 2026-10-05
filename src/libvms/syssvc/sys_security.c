@@ -35,6 +35,13 @@
  * OVMX-PARTIAL: sys$idtoasc (vms-44a) -- exec: the same ACP read of RIGHTSLIST.DAT.
  * OVMX-LOCAL: sys$idtoasc -- the value-to-name lookup runs in this process; a
  *     wildcard context (ctx) is refused, one identifier is looked up.
+ * OVMX-PARTIAL: sys$check_privilegew (vms-44a) -- exec: the privilege mask the
+ *     request is checked against is the executive's own current mask for this
+ *     process (vms_kif_getjpi_self); this process never supplies it.
+ * OVMX-LOCAL: sys$check_privilegew -- the mask comparison and the bit-to-SS$_NOxxx
+ *     mapping (10244 + 8*bit, the oracle's SS$ numbering) run in this process;
+ *     the audit item list is read but, as on a system with auditing disabled,
+ *     nothing is logged.
  * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
  *     caller's own getuid()/getgid() and the protection word the caller
  *     itself passed in. There is no executive reference monitor, no rights
@@ -52,6 +59,7 @@
 #include "ssdef.h"
 #include "ovmx_secparam.h"
 #include "ovmx_fileprot.h"
+#include "vms_kif.h"
 
 /*
  * Protection access type flags and category offsets -- aliased onto the
@@ -290,4 +298,39 @@ uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nam
     if (attrib)
         *attrib = 0;
     return SS$_NORMAL;
+}
+
+/*
+ * sys$check_privilegew - test the caller's current privileges.
+ *
+ * privnam points at a 64-bit privilege mask (the form the corpus uses, flags 0).
+ * Every requested bit must be held in the executive's current mask; the first
+ * missing bit (lowest first) yields the real per-privilege code
+ * SS$_NOCMKRNL + 8*bit (oracle SS$ numbering, V7.3 SSDEF), SS$_NOPRIV beyond the
+ * named range. The audit status block, when given, receives SS$_NORMAL (auditing
+ * of the check is disabled; nothing is written to an audit log).
+ */
+uint32_t (sys$check_privilegew)(uint32_t efn, const void *privnam, uint32_t bitnum,
+                                uint32_t flags, const void *itmlst, uint32_t *audsts,
+                                void *astadr, uint64_t astprm)
+{
+    struct vms_procinfo self;
+    uint64_t req, missing;
+    uint32_t status = SS$_NORMAL;
+
+    (void)efn; (void)bitnum; (void)flags; (void)itmlst; (void)astadr; (void)astprm;
+    if (!privnam)
+        return SS$_ACCVIO;
+    memcpy(&req, privnam, sizeof(req));
+    memset(&self, 0, sizeof(self));
+    if (!(vms_kif_getjpi_self(&self) & 1))
+        return SS$_NOSUCHDEV;   /* no executive: fail honestly, never fake */
+    missing = req & ~self.cur_privs;
+    if (missing) {
+        unsigned bit = (unsigned)__builtin_ctzll(missing);
+        status = bit <= 38 ? SS$_NOCMKRNL + 8u * bit : SS$_NOPRIV;
+    }
+    if (audsts)
+        *audsts = SS$_NORMAL;
+    return status;
 }

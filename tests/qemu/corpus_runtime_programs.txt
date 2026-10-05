@@ -37,6 +37,7 @@ lib_extv
 lib_extzv
 lib_ffc
 lib_ffs
+lib_file_scan
 lib_find_file
 lib_format_date_time
 lib_free_ef
@@ -111,6 +112,7 @@ sys_brkthruw
 sys_cancel
 sys_cef
 sys_check_fen
+sys_check_privilege
 sys_crembx
 sys_creprc
 sys_dclast

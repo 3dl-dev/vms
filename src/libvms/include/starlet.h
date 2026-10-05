@@ -1641,6 +1641,13 @@ uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
 /** sys$dalloc - Deallocate a device */
 uint32_t sys$dalloc(const struct dsc$descriptor_s *devnam, uint32_t acmode);
 
+/** sys$asctoid - Convert identifier name to binary value (attrib is reported 0) */
+uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id, uint32_t *attrib);
+
+/** sys$idtoasc - Convert binary identifier to name (no wildcard context) */
+uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nambuf,
+                     uint32_t *resid, uint32_t *attrib, uint32_t *ctx);
+
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

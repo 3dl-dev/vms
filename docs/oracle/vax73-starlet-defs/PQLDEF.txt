@@ -1,0 +1,16 @@
+$EQU    PQL$_LISTEND    0
+$EQU    PQL$_ASTLM      1
+$EQU    PQL$_BIOLM      2
+$EQU    PQL$_BYTLM      3
+$EQU    PQL$_CPULM      4
+$EQU    PQL$_DIOLM      5
+$EQU    PQL$_FILLM      6
+$EQU    PQL$_PGFLQUOTA  7
+$EQU    PQL$_PRCLM      8
+$EQU    PQL$_TQELM      9
+$EQU    PQL$_WSQUOTA    10
+$EQU    PQL$_WSDEFAULT  11
+$EQU    PQL$_ENQLM      12
+$EQU    PQL$_WSEXTENT   13
+$EQU    PQL$_JTQUOTA    14
+$EQU    PQL$_LENGTH     15

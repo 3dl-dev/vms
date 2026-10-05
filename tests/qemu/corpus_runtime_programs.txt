@@ -104,6 +104,7 @@ ots_scopy_dxdx
 ots_scopy_r_dx
 sys_alloc
 sys_asctim
+sys_asctoid
 sys_assign
 sys_bintim
 sys_brkthruw

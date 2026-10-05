@@ -1,0 +1,7 @@
+$EQU    ERA$K_LODUMMY   0
+$EQU    ERA$K_MEMORY    1
+$EQU    ERA$K_DISK      2
+$EQU    ERA$K_TAPE      3
+$EQU    ERA$K_HIDUMMY   4
+$EQU    ERA$K_MINTYPE   1
+$EQU    ERA$K_MAXTYPE   3

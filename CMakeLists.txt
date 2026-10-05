@@ -591,6 +591,19 @@ if(BUILD_TESTS)
     set_tests_properties(corpus_scoreboard_negctl PROPERTIES
         LABELS "integration;release" TIMEOUT 60)
 
+    # vms-619: header constants vs the OpenVMS VAX V7.3 oracle (ratchet; the
+    # known-mismatch list only shrinks). Pure text -- no docker, no QEMU.
+    add_test(NAME oracle_constants_gate
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_oracle_constants.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(oracle_constants_gate PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+    add_test(NAME oracle_constants_negctl
+        COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration/test_oracle_constants_negctl.sh
+                ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(oracle_constants_negctl PROPERTIES
+        LABELS "integration;authenticity" TIMEOUT 60)
+
     # vms-1af: no .github/workflows/*.yml file may silently approach GitHub's
     # ~512000-byte workflow-file ceiling (ci.yml crossed it at 511343 bytes;
     # GitHub ran ZERO jobs with no error anywhere in the UI or API). Pure

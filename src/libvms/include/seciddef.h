@@ -38,6 +38,11 @@ typedef struct _seciddef {
     unsigned int secid$l_secid;     /* Section ID value (used iff SEC$K_MATIDENT) */
 } SECID;
 
+/* Section match-control values (OpenVMS VAX V7.3 oracle, SECDEF.txt, vms-619). */
+#define SEC$K_MATALL 0      /* match all versions */
+#define SEC$K_MATEQU 1      /* match the version exactly */
+#define SEC$K_MATLEQ 2      /* match any version <= the given one */
+
 #ifdef __cplusplus
 }
 #endif

@@ -1,0 +1,2 @@
+$EQU    DVS$_DEVCLASS   1
+$EQU    DVS$_DEVTYPE    2

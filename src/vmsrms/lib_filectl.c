@@ -248,3 +248,77 @@ uint32_t (lib$rename_file)(const struct dsc$descriptor_s *old_filespec,
     return result;
 }
 
+
+/*
+ * LIB$FILE_SCAN / LIB$FILE_SCAN_END - run a user routine over every file a
+ * wildcard FAB matches.
+ *
+ *   lib$file_scan(fab, success_routine, error_routine, &context)
+ *
+ * The caller's FAB (with its NAM) names the wildcard. One call $PARSEs it (on the
+ * first call, context == 0) and $SEARCHes it to exhaustion, calling
+ * success_routine(fab) for every file found (the resultant name is in the NAM) and
+ * error_routine(fab) when a search step fails other than by running out of files;
+ * a routine returning a failure status ends the scan with that status. The call
+ * returns RMS$_NMF when the matches are used up (RMS$_FNF if there were none), so a
+ * caller's "loop until NMF" form terminates. lib$file_scan_end releases the search
+ * context.
+ */
+uint32_t lib$file_scan(unsigned int *fab_addr,
+                       int (*success_routine)(),
+                       int (*error_routine)(),
+                       unsigned int *context)
+{
+    struct FAB *fab = (struct FAB *)(void *)fab_addr;
+    if (!fab || fab->fab$b_bid != FAB$C_BID || !context)
+        return SS$_BADPARAM;
+
+    if (*context == 0) {
+        uint32_t ps = sys$parse(fab, 0, 0);
+        if (!(ps & 1)) {
+            if (fab->fab$l_nam)
+                rms_search_end(fab->fab$l_nam);
+            return ps;
+        }
+        *context = 1;
+    }
+
+    int matched = 0;
+    uint32_t result = RMS$_NMF;
+    for (;;) {
+        uint32_t st = sys$search(fab, 0, 0);
+        if (st == RMS$_NMF || st == RMS$_FNF) {
+            result = matched ? RMS$_NMF : st;
+            break;
+        }
+        if (st & 1) {
+            matched++;
+            if (success_routine) {
+                uint32_t r = (uint32_t)((int (*)(struct FAB *))success_routine)(fab);
+                if (!(r & 1)) { result = r; break; }
+            }
+        } else {
+            if (error_routine) {
+                uint32_t r = (uint32_t)((int (*)(struct FAB *))error_routine)(fab);
+                if (!(r & 1)) { result = r; break; }
+                continue;
+            }
+            result = st;
+            break;
+        }
+    }
+    if (fab->fab$l_nam)
+        rms_search_end(fab->fab$l_nam);
+    *context = 0;
+    return result;
+}
+
+uint32_t lib$file_scan_end(unsigned int *fab_addr, unsigned int *context)
+{
+    struct FAB *fab = (struct FAB *)(void *)fab_addr;
+    if (fab && fab->fab$l_nam)
+        rms_search_end(fab->fab$l_nam);
+    if (context)
+        *context = 0;
+    return SS$_NORMAL;
+}

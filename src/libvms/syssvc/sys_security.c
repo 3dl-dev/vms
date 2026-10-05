@@ -26,6 +26,15 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
+ * OVMX-PARTIAL: sys$asctoid (vms-44a) -- exec: RIGHTSLIST.DAT is read over the
+ *     executive's Files-11 ACP (RMS-over-ACP, LIBVMSRMS), and the logicals that
+ *     locate it are the executive's.
+ * OVMX-LOCAL: sys$asctoid -- the name-to-value lookup in the rights-database
+ *     reader (rtl/rightslist.c) runs in this process; the identifier's ATTRIBUTE
+ *     flags are not read back: attrib is reported 0.
+ * OVMX-PARTIAL: sys$idtoasc (vms-44a) -- exec: the same ACP read of RIGHTSLIST.DAT.
+ * OVMX-LOCAL: sys$idtoasc -- the value-to-name lookup runs in this process; a
+ *     wildcard context (ctx) is refused, one identifier is looked up.
  * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
  *     caller's own getuid()/getgid() and the protection word the caller
  *     itself passed in. There is no executive reference monitor, no rights
@@ -38,6 +47,9 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include "starlet.h"
+#include "rightslist.h"
+#include "lib$routines.h"
+#include "ssdef.h"
 #include "ovmx_secparam.h"
 #include "ovmx_fileprot.h"
 
@@ -222,3 +234,60 @@ uint32_t sys$chkpro(void *objpro) {
  * let the real open()/unlink() -- and the executive behind it -- be the
  * only enforcer, exactly as the DCL path already does.
  */
+
+/*
+ * $ASCTOID - convert an identifier name to its binary value.
+ *
+ *   sys$asctoid(name, &id, &attrib)
+ *
+ * SS$_NOSUCHID when the rights database has no such identifier (or cannot be
+ * read -- never a built-in table, rtl/rightslist.c).
+ */
+uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id,
+                     uint32_t *attrib)
+{
+    if (!name || !name->dsc$a_pointer || name->dsc$w_length == 0 || !id)
+        return SS$_BADPARAM;
+    char buf[64];
+    size_t n = name->dsc$w_length;
+    while (n > 0 && name->dsc$a_pointer[n - 1] == ' ')
+        n--;                                    /* a descriptor may be blank-padded */
+    if (n == 0 || n >= sizeof(buf))
+        return SS$_IVIDENT;
+    memcpy(buf, name->dsc$a_pointer, n);
+    buf[n] = '\0';
+    uint32_t v = 0;
+    if (rightslist_name_to_value(buf, &v) != 0)
+        return SS$_NOSUCHID;
+    *id = v;
+    if (attrib)
+        *attrib = 0;
+    return SS$_NORMAL;
+}
+
+/*
+ * $IDTOASC - convert a binary identifier to its name.
+ *
+ *   sys$idtoasc(id, &namlen, nambuf, &resid, &attrib, &ctx)
+ */
+uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nambuf,
+                     uint32_t *resid, uint32_t *attrib, uint32_t *ctx)
+{
+    if (ctx && *ctx != 0)
+        return SS$_BADPARAM;                    /* wildcard continuation not supported */
+    char buf[64];
+    if (rightslist_value_to_name(id, buf, sizeof(buf)) != 0)
+        return SS$_NOSUCHID;
+    size_t n = strlen(buf);
+    if (nambuf && nambuf->dsc$a_pointer) {
+        uint16_t l = (uint16_t)n;
+        (void)lib$scopy_r_dx(&l, buf, nambuf);
+    }
+    if (namlen)
+        *namlen = (uint16_t)n;
+    if (resid)
+        *resid = id;
+    if (attrib)
+        *attrib = 0;
+    return SS$_NORMAL;
+}

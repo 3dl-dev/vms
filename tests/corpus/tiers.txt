@@ -10,4 +10,4 @@ tier4-mx            not-running  MX is BLISS/MACRO-32 plus C over NETLIB; no BLI
 tier6-cmatrix       not-running  needs a terminal-screen library (curses/SMG$) OVMX does not provide, and an autoconf config.h
 tier6-ipc-benchmark not-running  the IPC bodies compile; the VMS shims need the DEC C RTL feature switches (unixlib.h decc$feature_*, LIB$INITIALIZE psect) which DECC$SHR does not carry
 tier6-laxdriver     not-running  a VMS device driver (DPT/DDT, driver prologue tables), not an application; needs a VMS driver loading environment OVMX does not have (vms-df4)
-tier6-memtester     not-running  compiles; not yet wired into the guest corpus runner (needs argv and multi-file targets)
+tier6-memtester     running      memtester (3 sources, args "1 1") runs to completion in the guest under a live /dev/vms (tests/qemu/corpus_runtime_apps.txt); counted in the runtime column

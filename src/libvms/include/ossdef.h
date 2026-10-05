@@ -45,6 +45,10 @@ extern "C" {
  * OVMX therefore assigns OSS$M_RELCTX the next free bit and labels it
  * as an OVMX representation, not a VMS-authentic value. */
 #define OSS$M_RELCTX        0x00000004  /* Release object security context */
+/* OSS$M_LOCAL is 4 on the OpenVMS VAX V7.3 oracle; OVMX already spent 0x04 on
+ * OSS$M_RELCTX (above), so, like RELCTX, it takes the next free bit and is an OVMX
+ * representation, not a VMS-authentic value (vms-619). */
+#define OSS$M_LOCAL         0x00000008  /* Operate on the local (non-cluster) object */
 
 /* ================================================================
  * OSS$C_ — Object class codes (for the "objclass" argument)

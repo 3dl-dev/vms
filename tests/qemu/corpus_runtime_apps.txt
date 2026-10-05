@@ -1,0 +1,5 @@
+# Non-tier-1 corpus applications the guest runs (vms-44a), one per line:
+#   name|corpus directory|compile definitions (comma-separated)|sources (comma-separated)|arguments
+# They are scoreboard entries like the tier-1 programs (tests/qemu/corpus_runtime_programs.txt):
+# the guest runs each with its arguments and tests/qemu/corpus_runtime_report.sh grades it.
+memtester|tier6-memtester|POSIX,_POSIX_C_SOURCE=200809L,_FILE_OFFSET_BITS=64|memtester.c,tests.c,output.c|1 1

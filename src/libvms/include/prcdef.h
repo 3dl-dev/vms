@@ -134,51 +134,52 @@ typedef struct _uic UIC;
  * to request specific pieces of process information.
  * ================================================================ */
 
-#define JPI$_PRCNAM         0x0100  /* Process name (string) */
-#define JPI$_PID            0x0101  /* Process ID (longword) */
-#define JPI$_MASTER_PID     0x0102  /* Master PID (longword) */
-#define JPI$_OWNER          0x0103  /* Owner PID (longword) */
-#define JPI$_UIC            0x0104  /* UIC (longword) */
-#define JPI$_USERNAME       0x0105  /* Username (string, 12 chars) */
-#define JPI$_ACCOUNT        0x0106  /* Account name (string, 8 chars) */
-#define JPI$_GRP            0x0107  /* UIC group (word) */
-#define JPI$_MEM            0x0108  /* UIC member (word) */
-#define JPI$_STATE          0x0109  /* Process state (longword) */
-#define JPI$_PRI            0x010A  /* Current priority (longword) */
-#define JPI$_TERMINAL       0x010B  /* Terminal name (string) */
-#define JPI$_IMAGNAME       0x010C  /* Image name (string) */
-#define JPI$_CPUTIM         0x010D  /* CPU time in 10ms units (longword) */
-#define JPI$_BUFIO          0x010E  /* Buffered I/O count (longword) */
-#define JPI$_DIRIO          0x010F  /* Direct I/O count (longword) */
-#define JPI$_PAGEFLTS       0x0110  /* Page fault count (longword) */
-#define JPI$_PPGCNT         0x0111  /* Process page count (longword) */
-#define JPI$_VIRTPEAK       0x0112  /* Peak virtual size (longword) */
-#define JPI$_WSPEAK         0x0113  /* Peak working set (longword) */
-#define JPI$_WSSIZE         0x0114  /* Working set size (longword) */
-#define JPI$_LOGINTIM       0x0115  /* Login time (quadword) */
-#define JPI$_MODE           0x0116  /* Process mode (longword) */
-#define JPI$_CURPRIV        0x0117  /* Current privileges (quadword) */
-#define JPI$_PROCPRIV       0x0118  /* Process privileges (quadword) */
-#define JPI$_RIGHTS_SIZE    0x0119  /* Rights list size (longword) */
-#define JPI$_RIGHTSLIST     0x011A  /* Rights list (array) */
+#define JPI$_PRCNAM         0x031C  /* Process name (string) */
+#define JPI$_PID            0x0319  /* Process ID (longword) */
+#define JPI$_MASTER_PID     0x0325  /* Master PID (longword) */
+#define JPI$_OWNER          0x0303  /* Owner PID (longword) */
+#define JPI$_UIC            0x0304  /* UIC (longword) */
+#define JPI$_NODENAME       809     /* Node name (string) -- oracle: VAX V7.3 JPIDEF (vms-619) */
+#define JPI$_USERNAME       0x0202  /* Username (string, 12 chars) */
+#define JPI$_ACCOUNT        0x0203  /* Account name (string, 8 chars) */
+#define JPI$_GRP            0x0308  /* UIC group (word) */
+#define JPI$_MEM            0x0307  /* UIC member (word) */
+#define JPI$_STATE          0x0306  /* Process state (longword) */
+#define JPI$_PRI            0x0302  /* Current priority (longword) */
+#define JPI$_TERMINAL       0x031D  /* Terminal name (string) */
+#define JPI$_IMAGNAME       0x0207  /* Image name (string) */
+#define JPI$_CPUTIM         0x0407  /* CPU time in 10ms units (longword) */
+#define JPI$_BUFIO          0x040C  /* Buffered I/O count (longword) */
+#define JPI$_DIRIO          0x040B  /* Direct I/O count (longword) */
+#define JPI$_PAGEFLTS       0x040A  /* Page fault count (longword) */
+#define JPI$_PPGCNT         0x030D  /* Process page count (longword) */
+#define JPI$_VIRTPEAK       0x0200  /* Peak virtual size (longword) */
+#define JPI$_WSPEAK         0x0201  /* Peak working set (longword) */
+#define JPI$_WSSIZE         0x0411  /* Working set size (longword) */
+#define JPI$_LOGINTIM       0x0206  /* Login time (quadword) */
+#define JPI$_MODE           0x0322  /* Process mode (longword) */
+#define JPI$_CURPRIV        0x0400  /* Current privileges (quadword) */
+#define JPI$_PROCPRIV       0x0204  /* Process privileges (quadword) */
+#define JPI$_RIGHTS_SIZE    0x0331  /* Rights list size (longword) */
+#define JPI$_RIGHTSLIST     0x0326  /* Rights list (array) */
 #define JPI$_DFPROT         0x011B  /* Default protection (word) */
 #define JPI$_DFDEV          0x011C  /* Default device (string) */
 #define JPI$_DFDIR          0x011D  /* Default directory (string) */
-#define JPI$_PRIB           0x011E  /* Base priority (longword) */
-#define JPI$_APTCNT         0x011F  /* Active page table count (longword) */
-#define JPI$_ASTLM          0x0120  /* AST limit (longword) */
-#define JPI$_BIOLM          0x0121  /* Buffered I/O limit (longword) */
-#define JPI$_DIOLM          0x0122  /* Direct I/O limit (longword) */
-#define JPI$_ENQLM          0x0123  /* Enqueue limit (longword) */
-#define JPI$_FILLM          0x0124  /* Open file limit (longword) */
-#define JPI$_PGFLQUOTA      0x0125  /* Page file quota (longword) */
-#define JPI$_PRCLM          0x0126  /* Subprocess limit (longword) */
-#define JPI$_TQLM           0x0127  /* Timer queue limit (longword) */
-#define JPI$_WSQUOTA        0x0128  /* Working set quota (longword) */
-#define JPI$_WSEXTENT       0x0129  /* Working set extent (longword) */
-#define JPI$_CLINAME        0x012A  /* CLI name (string) */
-#define JPI$_TABLENAME      0x012B  /* CLI table name (string) */
-#define JPI$_JOBTYPE        0x012C  /* Job type (longword) */
+#define JPI$_PRIB           0x0309  /* Base priority (longword) */
+#define JPI$_APTCNT         0x030A  /* Active page table count (longword) */
+#define JPI$_ASTLM          0x0409  /* AST limit (longword) */
+#define JPI$_BIOLM          0x0310  /* Buffered I/O limit (longword) */
+#define JPI$_DIOLM          0x0313  /* Direct I/O limit (longword) */
+#define JPI$_ENQLM          0x0320  /* Enqueue limit (longword) */
+#define JPI$_FILLM          0x040F  /* Open file limit (longword) */
+#define JPI$_PGFLQUOTA      0x040E  /* Page file quota (longword) */
+#define JPI$_PRCLM          0x0408  /* Subprocess limit (longword) */
+#define JPI$_TQLM           0x0410  /* Timer queue limit (longword) */
+#define JPI$_WSQUOTA        0x0402  /* Working set quota (longword) */
+#define JPI$_WSEXTENT       0x0416  /* Working set extent (longword) */
+#define JPI$_CLINAME        0x020A  /* CLI name (string) */
+#define JPI$_TABLENAME      0x020B  /* CLI table name (string) */
+#define JPI$_JOBTYPE        0x0323  /* Job type (longword) */
 
 /* ================================================================
  * SYI$_ item codes for SYS$GETSYI
@@ -187,23 +188,24 @@ typedef struct _uic UIC;
  * to request system-level information.
  * ================================================================ */
 
-#define SYI$_NODENAME       0x0200  /* Node name (string) */
-#define SYI$_BOOTTIME       0x0201  /* Boot time (quadword) */
-#define SYI$_VERSION        0x0202  /* VMS version string */
-#define SYI$_SID            0x0203  /* System ID (longword) */
-#define SYI$_HW_NAME        0x0204  /* Hardware name (string) */
-#define SYI$_AVAILCPU_CNT   0x0205  /* Available CPU count (longword) */
-#define SYI$_ACTIVECPU_CNT  0x0206  /* Active CPU count (longword) */
-#define SYI$_MEMSIZE        0x0207  /* Physical memory size in pages (longword) */
-#define SYI$_PAGEFILE_FREE  0x0208  /* Free pagefile pages (longword) */
-#define SYI$_SWAPFILE_FREE  0x0209  /* Free swapfile pages (longword) */
-#define SYI$_ARCH_TYPE      0x020A  /* Architecture type (longword) */
-#define SYI$_ARCH_NAME      0x020B  /* Architecture name (string) */
-#define SYI$_HW_MODEL       0x020C  /* Hardware model (longword) */
-#define SYI$_CLUSTER_MEMBER 0x020D  /* Cluster member flag (longword) */
-#define SYI$_CLUSTER_NODES  0x020E  /* Number of cluster nodes (longword) */
-#define SYI$_SCSNODE        0x020F  /* Node's SCS system name (string); OVMX-private code; see vms-3ab */
-#define SYI$_SCSSYSTEMID    0x0210  /* Node's cluster system ID (longword); OVMX-private code; see vms-3ab */
+#define SYI$_NODENAME       0x10D9  /* Node name (string) */
+#define SYI$_BOOTTIME       0x10BF  /* Boot time (quadword) */
+#define SYI$_VERSION        0x1000  /* VMS version string */
+#define SYI$_SID            0x1001  /* System ID (longword) */
+#define SYI$_HW_NAME        0x110A  /* Hardware name (string) */
+#define SYI$_AVAILCPU_CNT   0x111D  /* Available CPU count (longword) */
+#define SYI$_ACTIVECPU_CNT  0x111E  /* Active CPU count (longword) */
+#define SYI$_MEMSIZE        0x116B  /* Physical memory size in pages (longword) */
+#define SYI$_PAGE_SIZE      4452    /* Page size in bytes (oracle: VAX V7.3 SYIDEF, vms-619) */
+#define SYI$_PAGEFILE_FREE  0x10F4  /* Free pagefile pages (longword) */
+#define SYI$_SWAPFILE_FREE  0x10F5  /* Free swapfile pages (longword) */
+#define SYI$_ARCH_TYPE      0x1165  /* Architecture type (longword) */
+#define SYI$_ARCH_NAME      0x1166  /* Architecture name (string) */
+#define SYI$_HW_MODEL       0x1109  /* Hardware model (longword) */
+#define SYI$_CLUSTER_MEMBER 0x10CF  /* Cluster member flag (longword) */
+#define SYI$_CLUSTER_NODES  0x10CA  /* Number of cluster nodes (longword) */
+#define SYI$_SCSNODE        0x1067  /* Node's SCS system name (string); OVMX-private code; see vms-3ab */
+#define SYI$_SCSSYSTEMID    0x1065  /* Node's cluster system ID (longword); OVMX-private code; see vms-3ab */
 /* CPU-inventory item codes (vms-f16).  OVMX-private codes continuing the
  * scheme above: the 2026-08-13 oracle dump confirms OVMX's whole SYI$_
  * numbering is already private (SYI$_NODENAME is 0x0200 here vs 4313 on

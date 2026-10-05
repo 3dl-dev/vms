@@ -52,6 +52,7 @@
 #include "ssdef.h"
 #include "descrip.h"
 #include "dvidef.h"
+#include "devdef.h"
 #include "dcdef.h"
 #include "dvsdef.h"
 #include "gen64def.h"
@@ -62,8 +63,8 @@
 #define EXIT_SKIP 77
 
 /* DEV$M_ALL -- the "allocated" device-characteristic bit sys_device.c derives
- * from the executive's allocation state. Must match sys_device.c. */
-#define DEV$M_ALL    0x00000008
+ * from the executive's allocation state: the V7.3 value, from devdef.h (this test
+ * once carried a private 0x8, which is DEV$M_DIR on a real system). */
 
 /* Bound on the child reporting its $ALLOC verdict. A failure bound, not
  * pacing: the child answers in milliseconds. Well inside run_tests.sh's QEMU

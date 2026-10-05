@@ -982,6 +982,183 @@ out:
     return 0;
 }
 
+/* ================================================================
+ * DETACHED-PROCESS IDENTITY TICKETS (rd vms-ff75). See the vms_creprc_ticket_args
+ * comment in vms_ioctl.h for the design: the CREATOR's row authorizes the
+ * identity a detached process will carry; the detached grandchild claims it
+ * once, proving the creator is its ancestor.
+ * ================================================================ */
+
+#define VMS_CREPRC_TICKET_MAX 16    /* OVMX design cap (Rule 8) */
+
+struct vms_creprc_ticket {
+    int      in_use;
+    uint64_t id;
+    uint32_t creator_vms_pid;
+    uint32_t creator_linux_pid;
+    uint64_t issued;                       /* exec_time_now_vms() units (100ns) */
+    char     username[VMS_USERNAME_SIZE];
+    uint32_t uic;
+    uint64_t privs;
+};
+
+/* Guarded by vms_proc_hash_lock (the ticket's validity is a fact about the
+ * process table: its creator must still be a live row). */
+static struct vms_creprc_ticket vms_creprc_tickets[VMS_CREPRC_TICKET_MAX];
+static uint64_t vms_creprc_ticket_seq;
+
+/* Caller holds vms_proc_hash_lock. A ticket is stale once its TTL lapsed or
+ * its creator's row is gone (a creator that died, or a fork that failed, can
+ * never be claimed for). */
+static bool creprc_ticket_stale(const struct vms_creprc_ticket *t, uint64_t now)
+{
+    const struct vms_proc *c;
+
+    if (now - t->issued > (uint64_t)VMS_CREPRC_TICKET_TTL_SECS * 10000000ull)
+        return true;
+    c = find_by_vms_pid(t->creator_vms_pid);
+    return c == NULL || (uint32_t)c->linux_pid != t->creator_linux_pid;
+}
+
+/*
+ * VMS_IOCTL_CREPRC_TICKET -- the creator records the identity its detached
+ * child will carry. Authorized against the CREATOR's row with the SETIDENT
+ * rule (vms_ioctl_setident above): SETPRV in the current mask, or the SAME
+ * user name, the SAME UIC and privileges within the authorized mask. Refused
+ * SS$_NOPRIV before any process exists.
+ */
+long vms_ioctl_creprc_ticket(struct vms_proc *proc, unsigned long arg)
+{
+    struct vms_creprc_ticket_args args;
+    struct vms_creprc_ticket *slot = NULL;
+    uint64_t now;
+    bool ok;
+    int i;
+
+    memset(&args, 0, sizeof(args));
+    if (exec_copyin(&args, (const void *)arg, sizeof(args)))
+        return -EFAULT;
+    args.ticket = 0;
+
+    if (!username_is_valid(args.username)) {
+        args.status = SS__IVLOGNAM;
+        goto out;
+    }
+
+    exec_lock(&vms_proc_hash_lock);
+    exec_lock(&proc->mode_lock);
+    ok = (proc->cur_privs & VMS_PRV_M_SETPRV) != 0 ||
+         ((args.privs & ~proc->perm_privs) == 0 &&
+          args.uic == proc->uic &&
+          strncmp(proc->username, args.username, VMS_USERNAME_SIZE) == 0);
+    exec_unlock(&proc->mode_lock);
+    if (!ok) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    now = exec_time_now_vms();
+    for (i = 0; i < VMS_CREPRC_TICKET_MAX; i++) {
+        struct vms_creprc_ticket *t = &vms_creprc_tickets[i];
+        if (t->in_use && creprc_ticket_stale(t, now))
+            t->in_use = 0;
+        if (!t->in_use && !slot)
+            slot = t;
+    }
+    if (!slot) {
+        exec_unlock(&vms_proc_hash_lock);
+        args.status = SS__INSFMEM;
+        goto out;
+    }
+    memset(slot, 0, sizeof(*slot));
+    slot->in_use = 1;
+    /* Opaque, never zero; mixed with the clock so a number is not reused
+     * across a module reload. It is NOT the security boundary -- the
+     * ancestry check at claim time is. */
+    slot->id = (++vms_creprc_ticket_seq << 20) ^ (now & 0xFFFFFull) ^ 0x5A5Aull;
+    if (slot->id == 0)
+        slot->id = 1;
+    slot->creator_vms_pid   = proc->vms_pid;
+    slot->creator_linux_pid = (uint32_t)proc->linux_pid;
+    slot->issued            = now;
+    strncpy(slot->username, args.username, VMS_USERNAME_SIZE - 1);
+    slot->uic   = args.uic;
+    slot->privs = args.privs;
+    args.ticket = slot->id;
+    exec_unlock(&vms_proc_hash_lock);
+    args.status = SS__NORMAL;
+
+out:
+    if (exec_copyout((void *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
+/*
+ * vms_proc_creprc_ticket_claim - the substrate's VMS_IOCTL_REGISTER_DETACHED
+ * hands in the ticket and the caller's ANCESTOR host pids (nearest first,
+ * walked from the unforgeable real-parent chain). Succeeds only if a live,
+ * unexpired ticket with that id names a creator that is one of those
+ * ancestors and is still the same registered process; the ticket is consumed
+ * either way it matches. Copies the identity out. 0 / -1.
+ */
+int vms_proc_creprc_ticket_claim(uint64_t id, const uint32_t *ancestors, int n,
+                                 char *username /* VMS_USERNAME_SIZE bytes */,
+                                 uint32_t *uic, uint64_t *privs)
+{
+    uint64_t now = exec_time_now_vms();
+    int i, k, rc = -1;
+
+    if (id == 0)
+        return -1;
+    exec_lock(&vms_proc_hash_lock);
+    for (i = 0; i < VMS_CREPRC_TICKET_MAX; i++) {
+        struct vms_creprc_ticket *t = &vms_creprc_tickets[i];
+        bool anc = false;
+
+        if (!t->in_use || t->id != id)
+            continue;
+        t->in_use = 0;                       /* single use, matched or not */
+        if (creprc_ticket_stale(t, now))
+            break;
+        for (k = 0; k < n; k++)
+            if (ancestors[k] != 0 && ancestors[k] == t->creator_linux_pid)
+                anc = true;
+        if (!anc)
+            break;
+        memcpy(username, t->username, VMS_USERNAME_SIZE);
+        username[VMS_USERNAME_SIZE - 1] = '\0';
+        *uic   = t->uic;
+        *privs = t->privs;
+        rc = 0;
+        break;
+    }
+    exec_unlock(&vms_proc_hash_lock);
+    return rc;
+}
+
+/*
+ * vms_proc_apply_ticket_identity - stamp a claimed ticket's identity onto the
+ * caller's OWN, just-registered row (the executive, not the process, is
+ * writing it: the identity was authorized by the creator's row at ticket
+ * time). Same field set and lock order as vms_ioctl_setident; no quota block
+ * is sourced (honest omission, as for any $CREPRC child).
+ */
+void vms_proc_apply_ticket_identity(struct vms_proc *proc, const char *username,
+                                    uint32_t uic, uint64_t privs)
+{
+    exec_lock(&vms_proc_hash_lock);
+    exec_lock(&proc->mode_lock);
+    memset(proc->username, 0, VMS_USERNAME_SIZE);
+    strncpy(proc->username, username, VMS_USERNAME_SIZE - 1);
+    proc->uic        = uic;
+    proc->perm_privs = privs;
+    proc->cur_privs  = privs;
+    exec_unlock(&proc->mode_lock);
+    exec_unlock(&vms_proc_hash_lock);
+}
+
 /*
  * vms_ioctl_establish_system - construct the SYSTEM identity onto the
  * caller (vms-a17e).

@@ -236,6 +236,143 @@ int main(void)
         }
     }
 
+    /* ==== rd vms-ff75: DETACHED identity, authorized by the CREATOR ==========
+     * C) creator (SYSTEM, SETPRV) gets a ticket for a FOREIGN identity --
+     *    UIC [128,129], TMPMBX only; its detached GRANDCHILD (non-root, real
+     *    parent an unregistered intermediate, exactly sys$creprc's shape)
+     *    claims it and its $GETJPI row shows that identity + a fresh PID.
+     * D) the same ticket presented again is REFUSED (single use).
+     * E) an ORPHANED grandchild (intermediate already gone, so the creator is
+     *    no longer its ancestor) is REFUSED its ticket.
+     * F) a creator WITHOUT SETPRV is refused a foreign UIC (SS$_NOPRIV) but may
+     *    ticket a subset of its own identity.  */
+    {
+        /* VMS UIC [128,129] -- the DCL display is octal, the packed word is
+         * (group<<16)|member; this pins the numeric value the caller asked for. */
+        const uint32_t FUIC_D = (128u << 16) | 129u;
+        const uint64_t FPRIV = PRV$M_TMPMBX;
+        uint64_t tk = 0, tk_orphan = 0;
+        uint32_t tst = vms_kif_creprc_ticket(SYS_NAME, FUIC_D, FPRIV, &tk);
+        CHECK(tst == 1 && tk != 0,
+              "C: a SETPRV creator is issued a ticket for UIC [128,129] + TMPMBX");
+        uint32_t tst2 = vms_kif_creprc_ticket(SYS_NAME, FUIC_D, FPRIV, &tk_orphan);
+        CHECK(tst2 == 1 && tk_orphan != 0 && tk_orphan != tk,
+              "C: a second, distinct ticket for the orphan check");
+
+        /* run one grandchild claim; orphan=1 makes the intermediate exit first */
+        for (int round = 0; round < 3; round++) {
+            uint64_t use = (round == 2) ? tk_orphan : tk;  /* round 1 = replay */
+            int orphan = (round == 2);
+            int relay[2];
+            if (pipe(relay) < 0) { CHECK(0, "C: pipe()"); break; }
+            fflush(NULL);
+            pid_t p = fork();
+            if (p == 0) {                                    /* intermediate */
+                close(relay[0]);
+                (void)setsid();
+                pid_t g = fork();
+                if (g > 0) {
+                    if (!orphan)
+                        waitpid(g, NULL, 0);                 /* stay the link */
+                    _exit(0);
+                }
+                if (g < 0) _exit(1);
+                if (orphan) {                                /* wait to be orphaned */
+                    for (int w = 0; w < 200 && getppid() != 1; w++)
+                        usleep(10000);
+                }
+                (void)drop_to_unprivileged();
+                uint32_t vp = 0;
+                uint32_t rs = vms_kif_register_detached(use, &vp);
+                struct vms_procinfo self;
+                memset(&self, 0, sizeof(self));
+                uint32_t gj = (rs & 1) ? vms_kif_getjpi_self(&self) : 0;
+                dprintf(relay[1], "EUID=%u\nRS=%u\nGJ=%u\nUSER=%s\nUIC=%u\nPRIVS=%016llx\nVMSPID=%u\n",
+                        (unsigned)geteuid(), (unsigned)rs, (unsigned)gj, self.username,
+                        (unsigned)self.uic, (unsigned long long)self.cur_privs,
+                        (unsigned)self.vms_pid);
+                close(relay[1]);
+                _exit(0);
+            }
+            close(relay[1]);
+            char out[2048]; size_t used = 0; ssize_t n;
+            while ((n = read(relay[0], out + used, sizeof(out) - 1 - used)) > 0) {
+                used += (size_t)n;
+                if (used >= sizeof(out) - 1) break;
+            }
+            out[used] = '\0';
+            close(relay[0]);
+            if (p > 0) waitpid(p, NULL, 0);
+            printf("  ---- %s ----\n%s  ---- end ----\n",
+                   round == 0 ? "C: detached claim" : round == 1 ? "D: replay" : "E: orphan", out);
+            unsigned euid = 0, rs = 0, uic = 0, vmspid = 0;
+            unsigned long long privs = 0;
+            char user[64] = {0};
+            if (strstr(out, "EUID=")) sscanf(strstr(out, "EUID="), "EUID=%u", &euid);
+            if (strstr(out, "RS=")) sscanf(strstr(out, "RS="), "RS=%u", &rs);
+            if (strstr(out, "UIC=")) sscanf(strstr(out, "UIC="), "UIC=%u", &uic);
+            if (strstr(out, "PRIVS=")) sscanf(strstr(out, "PRIVS="), "PRIVS=%016llx", &privs);
+            if (strstr(out, "VMSPID=")) sscanf(strstr(out, "VMSPID="), "VMSPID=%u", &vmspid);
+            { char *u = strstr(out, "USER="); if (u) sscanf(u, "USER=%63[^\n]", user); }
+            if (round == 0) {
+                CHECK(euid != 0, "C: the detached grandchild is genuinely NON-ROOT");
+                CHECK(rs == 1, "C: VMS_IOCTL_REGISTER_DETACHED honoured the creator's ticket");
+                CHECK(uic == FUIC_D, "C: the detached process's $GETJPI row shows UIC [128,129]");
+                CHECK(privs == (unsigned long long)FPRIV,
+                      "C: the detached process's $GETJPI row shows exactly TMPMBX");
+                CHECK(strcmp(user, SYS_NAME) == 0, "C: it carries the creator-authorized user name");
+                CHECK(vmspid != 0 && vmspid != creator_vms_pid,
+                      "C: it is a NEW VMS process (fresh, distinct PID)");
+            } else if (round == 1) {
+                CHECK(rs == SS$_NOPRIV, "D: the same ticket presented again is REFUSED (single use)");
+            } else {
+                CHECK(rs == SS$_NOPRIV,
+                      "E: an orphaned claimant (creator no longer its ancestor) is REFUSED its ticket");
+            }
+        }
+
+        /* F: a creator without SETPRV */
+        int relay[2];
+        if (pipe(relay) == 0) {
+            fflush(NULL);
+            pid_t p = fork();
+            if (p == 0) {
+                close(relay[0]);
+                (void)drop_to_unprivileged();
+                uint32_t r = vms_kif_register_subprocess();   /* SYSTEM, SETPRV */
+                uint64_t prev = 0, t1 = 0, t2 = 0;
+                uint32_t sp = vms_kif_setprv(PRV$M_SETPRV, 0, 0, &prev);
+                uint32_t a = vms_kif_creprc_ticket(SYS_NAME, FUIC_D, FPRIV, &t1);
+                uint32_t b = vms_kif_creprc_ticket(SYS_NAME, SYS_UIC, FPRIV, &t2);
+                dprintf(relay[1], "REG=%u\nSP=%u\nFOREIGN=%u\nSUBSET=%u\n",
+                        (unsigned)r, (unsigned)sp, (unsigned)a, (unsigned)b);
+                close(relay[1]);
+                _exit(0);
+            }
+            close(relay[1]);
+            char out[512]; size_t used = 0; ssize_t n;
+            while ((n = read(relay[0], out + used, sizeof(out) - 1 - used)) > 0) {
+                used += (size_t)n;
+                if (used >= sizeof(out) - 1) break;
+            }
+            out[used] = '\0';
+            close(relay[0]);
+            if (p > 0) waitpid(p, NULL, 0);
+            printf("  ---- F: creator without SETPRV ----\n%s  ---- end F ----\n", out);
+            unsigned sp = 0, fo = 1, su = 0;
+            if (strstr(out, "SP=")) sscanf(strstr(out, "SP="), "SP=%u", &sp);
+            if (strstr(out, "FOREIGN=")) sscanf(strstr(out, "FOREIGN="), "FOREIGN=%u", &fo);
+            if (strstr(out, "SUBSET=")) sscanf(strstr(out, "SUBSET="), "SUBSET=%u", &su);
+            CHECK(sp == 1, "F: the creator disabled SETPRV");
+            CHECK(fo == SS$_NOPRIV,
+                  "F: a creator WITHOUT SETPRV is REFUSED a ticket for a foreign UIC [128,129] (SS$_NOPRIV)");
+            CHECK(su == 1,
+                  "F: the same creator may ticket a SUBSET of its own identity (own UIC, TMPMBX)");
+        } else {
+            CHECK(0, "F: pipe()");
+        }
+    }
+
     printf("=== test_syssvc_creprc_inherit: %d passed, %d failed ===\n", pass, fail);
     return fail > 0 ? 1 : 0;
 }

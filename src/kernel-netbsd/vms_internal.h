@@ -1265,6 +1265,13 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
+/* rd vms-ff75: creator-authorized detached-process identity (vms_proctab.c) */
+long vms_ioctl_creprc_ticket(struct vms_proc *proc, unsigned long arg);
+int  vms_proc_creprc_ticket_claim(uint64_t id, const uint32_t *ancestors, int n,
+                                  char *username /* VMS_USERNAME_SIZE bytes */,
+                                  uint32_t *uic, uint64_t *privs);
+void vms_proc_apply_ticket_identity(struct vms_proc *proc, const char *username,
+                                    uint32_t uic, uint64_t privs);
 long vms_ioctl_establish_system(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_hiber(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_wake(struct vms_proc *proc, unsigned long arg);

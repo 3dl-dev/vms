@@ -258,8 +258,9 @@ uint32_t (lib$rename_file)(const struct dsc$descriptor_s *old_filespec,
  * The caller's FAB (with its NAM) names the wildcard. One call $PARSEs it (on the
  * first call, context == 0) and $SEARCHes it to exhaustion, calling
  * success_routine(fab) for every file found (the resultant name is in the NAM) and
- * error_routine(fab) when a search step fails other than by running out of files;
- * a routine returning a failure status ends the scan with that status. The call
+ * error_routine(fab) when a search step fails other than by running out of files
+ * (that failure then ends the scan with its status); a routine returning a failure
+ * status ends the scan with that status. The call
  * returns RMS$_NMF when the matches are used up (RMS$_FNF if there were none), so a
  * caller's "loop until NMF" form terminates. lib$file_scan_end releases the search
  * context.
@@ -301,8 +302,11 @@ uint32_t lib$file_scan(unsigned int *fab_addr,
             if (error_routine) {
                 uint32_t r = (uint32_t)((int (*)(struct FAB *))error_routine)(fab);
                 if (!(r & 1)) { result = r; break; }
-                continue;
             }
+            /* A failed $SEARCH other than by running out of files (DNF, device
+             * or protection errors) does not advance the search context: going
+             * round again would fail forever. The scan ends with that status
+             * after the error routine has been told once. */
             result = st;
             break;
         }

@@ -14,3 +14,4 @@
 lib_callg   ptr32       LIB$CALLG takes an argument list of 32-bit longwords holding pointers; the program asserts sizeof(unsigned)==sizeof(void*) (vms-95b)
 lib_que     ptr32       interlocked queue entries are linked by 32-bit self-relative displacements; the program's entries and header sit in a 64-bit address space (vms-95b)
 sys_forcex  flaky       timing-dependent: a spawned DCL subprocess plus two 5s sleeps; passes on a local KVM guest, hangs to the 40s budget on the CI runner; held at its CI verdict until the race is root-caused (vms-f45)
+lib_file_scan  product-gap  LIB$FILE_SCAN's $SEARCH of SYS$SYSTEM:ANALYZR*.EXE fails in the guest (the scan looped on it; now ends with the status); root cause being chased (vms-44a)

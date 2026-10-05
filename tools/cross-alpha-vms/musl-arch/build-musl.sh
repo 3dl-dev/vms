@@ -503,6 +503,19 @@ if "${TARGET}-gcc" -mpointer-size=64 -D__OVMX_LIBC_BUILD -nostdinc -Iarch/${TARG
 fi
 echo "  OK      control: the same TU is rejected under the C RTL's own POSIX forms"
 
+# vms-fe03: a header with no DEC C RTL function (sys/prctl.h) is refused whole
+# for a client, and still compiles for the C RTL's own build.
+printf '#include <sys/prctl.h>\nint fe03_x;\n' > /tmp/fe03_prctl.c
+if "${TARGET}-gcc" -nostdinc -Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
+	-fsyntax-only /tmp/fe03_prctl.c 2>/dev/null; then
+	echo "VERIFY FAIL (vms-fe03): <sys/prctl.h> (no DECC\$SHR entry point) was accepted for an alpha-dec-vms client" >&2
+	exit 7
+fi
+"${TARGET}-gcc" -mpointer-size=64 -D__OVMX_LIBC_BUILD -nostdinc -Iarch/${TARGET} -Iarch/generic \
+	-Iobj/include -Iinclude -fsyntax-only /tmp/fe03_prctl.c \
+	|| { echo "VERIFY FAIL (vms-fe03): <sys/prctl.h> rejected for the C RTL's own build" >&2; exit 7; }
+echo "  OK      a header with no DEC C RTL function is refused for clients, kept for the RTL build"
+
 echo "== page-size gate (vms-c5d): PAGE_SIZE must be a compile-time 8192 on alpha-dec-vms =="
 PGSZ_HDR="arch/${TARGET}/bits/limits.h"
 if ! grep -qE '^[[:space:]]*#[[:space:]]*define[[:space:]]+PAGESIZE[[:space:]]+8192' "${PGSZ_HDR}"; then

@@ -13,7 +13,9 @@
 # Kept regardless: the RTL's reserved __ names (errno and stdio macros expand to
 # them), and the threads headers (pthread.h, sched.h, semaphore.h, threads.h --
 # on OpenVMS those come from the separate threads RTL, not DECC$SHR; their
-# surface is its own rung). Prints the hidden count; idempotent.
+# surface is its own rung). A header whose functions are ALL outside the RTL,
+# and which no other header includes, is refused whole (#error) for clients.
+# Prints the counts; idempotent.
 use strict;
 use warnings;
 
@@ -27,8 +29,17 @@ my %skipfile = map { $_ => 1 } qw(pthread.h sched.h semaphore.h threads.h);
 my %kw = map { $_ => 1 } qw(void int char short long unsigned signed float double
     const volatile struct union enum restrict inline static extern _Noreturn);
 my $guard = '#if !defined(__VMS) || defined(__OVMX_LIBC_BUILD) /* vms-fe03: not in DECC$SHR */';
-my ($hidden, $files) = (0, 0);
-for my $f (sort glob("$inc/*.h"), glob("$inc/*/*.h")) {
+my ($hidden, $files, $refused) = (0, 0, 0);
+my @all = (sort glob("$inc/*.h"), glob("$inc/*/*.h"));
+# Headers another public header includes: never refused whole (sys/types.h pulls
+# in sys/select.h, ...), only filtered.
+my %included;
+for my $f (@all) {
+    open(my $fh, '<', $f) or die "$f: $!\n";
+    while (<$fh>) { $included{$1} = 1 if /^\s*#\s*include\s*<([^>]+)>/; }
+    close $fh;
+}
+for my $f (@all) {
     (my $base = $f) =~ s{.*/}{};
     next if $skipfile{$base} && $f eq "$inc/$base";
     open(my $fh, '<', $f) or die "$f: $!\n";
@@ -36,7 +47,7 @@ for my $f (sort glob("$inc/*.h"), glob("$inc/*/*.h")) {
     close $fh;
     next if grep { index($_, 'vms-fe03') >= 0 } @in;    # already filtered
     my @out;
-    my $n = 0;
+    my ($n, $kept) = (0, 0);
     for my $l (@in) {
         if ($l =~ /^[A-Za-z_]/ && $l !~ /^(typedef|struct|union|enum|static|extern\s+"C"|#)/
             && $l =~ /\)\s*;\s*$/ && $l !~ /\(\s*\*/
@@ -47,14 +58,27 @@ for my $f (sort glob("$inc/*.h"), glob("$inc/*/*.h")) {
                 $n++;
                 next;
             }
+            $kept++;
         }
         push @out, $l;
     }
     next unless $n;
+    # A header ALL of whose functions are outside the DEC C RTL (and that no
+    # other header includes) is not part of it at all: an alpha-dec-vms client
+    # that includes it gets an error, as it would on OpenVMS, so a configure
+    # header check (HAVE_SYS_PRCTL_H ...) sees it absent rather than present
+    # with nothing callable behind it.
+    (my $rel = $f) =~ s{^\Q$inc\E/}{};
+    if ($kept == 0 && !$included{$rel}) {
+        unshift @out, "#if defined(__VMS) && !defined(__OVMX_LIBC_BUILD) /* vms-fe03 */\n",
+                      "#error \"<$rel> is not part of the DEC C RTL (no DECC\$SHR entry point)\"\n",
+                      "#endif\n";
+        $refused++;
+    }
     open(my $oh, '>', $f) or die "$f: $!\n";
     print $oh @out;
     close $oh;
     $hidden += $n;
     $files++;
 }
-print "filter-headers: hid $hidden declaration(s) in $files header(s) from alpha-dec-vms clients\n";
+print "filter-headers: hid $hidden declaration(s) in $files header(s) from alpha-dec-vms clients; $refused header(s) refused whole\n";

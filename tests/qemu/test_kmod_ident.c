@@ -84,7 +84,7 @@
  */
 #define SS_NORMAL       1
 #define SS_NOPRIV       36
-#define SS_NOTALLPRIV   1664
+#define SS_NOTALLPRIV   1665   /* V7.3 $SSDEF value (vms-f811) */
 /* SS$_NONEXPR -- the wildcard-scan terminator, same value the process
  * table tests already use (tests/qemu/test_kmod_procnam.c). */
 #define SS_NONEXPR      2280

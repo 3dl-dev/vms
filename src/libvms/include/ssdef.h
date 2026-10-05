@@ -98,15 +98,17 @@ extern "C" {
  * only because the section split predates the pinning. */
 #define SS$_DUPLNAM         148     /* Duplicate name (%SYSTEM-F-DUPLNAM) */
 #define SS$_NOLOGNAM        444     /* No logical name match */
-/* ORACLE-PINNED (vms-2b8). MEASURED on the reference lab OpenVMS VAX
- * V7.3 node VAX1, 2026-07-30 (docs/oracle/vax73-privileges.md §1):
- *   $ WRITE SYS$OUTPUT "1664="+F$MESSAGE(1664)
- *   1664=%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized
- * This was 532, which the SAME oracle session disproves:
- *   $ WRITE SYS$OUTPUT "532="+F$MESSAGE(532)
- *   532=%SYSTEM-F-RESULTOVF, resultant string overflow
- * Severity is W, matching the partial-success condition it reports. */
-#define SS$_NOTALLPRIV      1664    /* Not all requested privileges authorized (%SYSTEM-W-NOTALLPRIV) */
+/* ORACLE-PINNED (vms-2b8, corrected vms-f811). The reference lab OpenVMS VAX
+ * V7.3 node's own STARLET.MLB defines SS$_NOTALLPRIV = 1665 (docs/oracle/
+ * vax73-starlet-defs/SSDEF.txt), severity SUCCESS (low bits 001) like
+ * SS$_SUPERSEDE and SS$_CREATED -- a partial-success condition:
+ *   $ WRITE SYS$OUTPUT F$MESSAGE(1665)
+ *   %SYSTEM-S-NOTALLPRIV, not all requested privileges authorized
+ * vms-2b8 took 1664 from F$MESSAGE(1664) printing %SYSTEM-W-NOTALLPRIV; that
+ * works because F$MESSAGE keys on the message id and takes the severity letter
+ * from the low bits of whatever code it is given, so both 1664 and 1665 print --
+ * but the symbol's value is 1665. (532 was RESULTOVF; see below.) */
+#define SS$_NOTALLPRIV      1665    /* Not all requested privileges authorized (%SYSTEM-S-NOTALLPRIV) */
 #define SS$_IVIDENT         8740     /* Invalid identifier */
 /* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
  * 564 is SS$_UNASEFC; this collision was created by pinning UNASEFC,

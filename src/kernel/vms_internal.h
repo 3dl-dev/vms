@@ -310,6 +310,9 @@
  * by the implementer of vms-2b8 (docs/oracle/vax73-privileges.md §1):
  *   $ WRITE SYS$OUTPUT "1664="+F$MESSAGE(1664)
  *   1664=%SYSTEM-W-NOTALLPRIV, not all requested privileges authorized
+ * (vms-f811: the lab's own $SSDEF gives the SYMBOL the value 1665, severity S;
+ * F$MESSAGE prints the message for 1664 too because it keys on the id and takes
+ * the severity letter from the code's low bits. The value below is 1665.)
  *
  * This tree's src/libvms/include/ssdef.h carried 532, which the SAME
  * oracle disproves in the same session:
@@ -320,7 +323,7 @@
  * SS__NOPRIV (36) was verified in the same session and already agreed:
  *   36=%SYSTEM-F-NOPRIV, insufficient privilege or object protection violation
  */
-#define SS__NOTALLPRIV  1664
+#define SS__NOTALLPRIV  1665   /* the V7.3 $SSDEF value (vms-f811; severity SUCCESS, a partial-success condition) */
 
 /*
  * Logical-name statuses (vms-d37). Values are this tree's existing

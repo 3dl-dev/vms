@@ -149,6 +149,21 @@ int dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat)
     r->fab.fab$b_fns = (uint8_t)strlen(r->spec);
     r->fab.fab$b_fac = FAB$M_GET;
     r->fab.fab$b_shr = FAB$M_SHRGET;
+    /* The file's own record format, from its Files-11 header (FAT). VMS $OPEN
+     * fills these FAB fields itself; OVMX RMS $OPEN does not yet (rd vms-158)
+     * and $GET frames by the FAB's rfm -- so a VAR file opened with the
+     * default FAB read back as ONE record of raw length-prefixed bytes (seen
+     * live: a real VAX COPY from a booted OVMX). Setting them from the header
+     * before $OPEN is what VMS would leave there anyway. */
+    {
+        struct rms_fileattr fa;
+        memset(&fa, 0, sizeof fa);
+        if (rms_file_attr(r->spec, &fa) & 1) {
+            r->fab.fab$b_rfm = fa.rfm;
+            r->fab.fab$b_rat = fa.rat;
+            r->fab.fab$w_mrs = fa.mrs;
+        }
+    }
     if (!(sys$open(&r->fab, 0, 0) & 1)) { free(r); return -1; }
     r->rab = cc$rms_rab;
     r->rab.rab$l_fab = &r->fab;

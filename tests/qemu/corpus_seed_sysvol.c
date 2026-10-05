@@ -8,8 +8,8 @@
  * corpus loop (init.sh, ovmx.corpus mode):
  *
  *   1. publish the system unit (OVMX_SYSDEVICE -- the variable the boot chain
- *      uses, see lnm_setup_defaults()) = VDA300:, the generated system-disk ODS-2
- *      fixture tests/qemu stages (mkimage_ods2_sysvol: the REAL shipped SYSUAF.DAT
+ *      uses, see lnm_setup_defaults()) = VDA0:, which in corpus mode is the generated
+ *      system-disk ODS-2 volume (run_tests.sh attaches it as vda) (mkimage_ods2_sysvol: the REAL shipped SYSUAF.DAT
  *      and RIGHTSLIST.DAT), and define the system logicals over it in the
  *      executive-resident LNM$SYSTEM table;
  *   2. $MOUNT that volume (executive-global, so every later process sees it).
@@ -26,7 +26,7 @@
 #include "vmsfs/device.h"
 #include "vms_kif.h"
 
-#define SYSVOL_UNIT "VDA300:"
+#define SYSVOL_UNIT SYSDISK_DEVICE ":"   /* corpus mode boots from the system disk: vda */
 
 int main(void)
 {
@@ -35,10 +35,5 @@ int main(void)
     lnm_setup_defaults(lnm_get_manager(), SYSDISK_MOUNT);
     uint32_t st = vms_kif_acp_mount(SYSVOL_UNIT);
     printf("corpus_seed_sysvol: SYS$SYSDEVICE -> %s, $MOUNT status %u\n", SYSVOL_UNIT, st);
-    /* The process default device (RMS_ACP_DEFAULT_DEV, the substrate's boot unit
-     * VDA0: -- the generated real-VAX ODS-2 volume tests/qemu stages) is where a
-     * relative file name lands; mount it too so $CREATE of "x.dat" has a volume. */
-    uint32_t st0 = vms_kif_acp_mount(SYSDISK_DEVICE ":");
-    printf("corpus_seed_sysvol: default device %s: $MOUNT status %u\n", SYSDISK_DEVICE, st0);
     return (st & 1) ? 0 : 1;
 }

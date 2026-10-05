@@ -486,7 +486,8 @@ struct vms_lock_resource {
 	/*
 	 * THE DIRECTORY (FC-P4.3, src/kernel-core/vms_dlm_ldwv.h).
 	 *
-	 * hash16 is the resource name's 16-bit directory hash AS THE CLUSTER
+	 * dir_hash is the resource's directory hash value (32 bits, cat-0x02 op-0x01
+	 * body[128:132], rd vms-4fb) AS THE CLUSTER
 	 * PUTS IT ON THE WIRE (Davis p. 6-50). It is LEARNED -- by
 	 * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame -- and
 	 * never computed: the hash function is not published at the bit level,
@@ -502,7 +503,7 @@ struct vms_lock_resource {
 	 *
 	 * master_csid is the node that masters the resource; 0 = unmastered.
 	 */
-	uint16_t            hash16;
+	uint32_t            dir_hash;
 	uint8_t             hash_known;
 	uint8_t             dir_valid;
 	uint32_t            dir_gen;

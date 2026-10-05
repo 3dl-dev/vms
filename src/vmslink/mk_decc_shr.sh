@@ -264,11 +264,18 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     # shellcheck disable=SC2086
     "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 \
         $ALPHA_MUSL_INC -I"$IMGACT_INC" -o "$ALPHA_CRTL_OBJ" "$CRTL_SRC"
+    # vms-5bc9: the DEC C 32-bit-pointer entry points that need code (pointer-
+    # to-pointer parameters, ovmx_decc_p32.c). Compiled at the DEC C DEFAULT
+    # pointer size (32-bit) on purpose: that is what makes the cc1 decorate its
+    # definitions to the 32-bit names (strtol -> decc$strtol).
+    ALPHA_P32_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_p32.o"
+    "$ALPHA_CC" -c -fPIC -ffreestanding -g0 \
+        -o "$ALPHA_P32_OBJ" "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_p32.c"
 
     # Ground-truth the decc$ universals these two objects ACTUALLY define —
     # same enumeration as libc.a/libgcc.a above, never a hardcoded name list.
     ALPHA_BOOT_VEC=$(mktemp)
-    "$NM" --defined-only "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" 2>/dev/null \
+    "$NM" --defined-only "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" 2>/dev/null \
       | awk '
           $NF ~ /^decc\$/ && $NF !~ /\.\.[a-z]+$/ {
               t=$(NF-1); n=$NF;
@@ -280,6 +287,26 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     [ "$NBOOT" -ge 1 ] || { echo "mk_decc_shr: FAIL 0 decc\$ universals from the bootstrap surface -- did the alpha-dec-vms cc1's CRTL auto-decoration not fire (wrong ALPHA_CC)?" >&2; exit 2; }
     VEC="$VEC,$(paste -sd, "$ALPHA_BOOT_VEC")"
     rm -f "$ALPHA_BOOT_VEC"
+
+    # vms-5bc9: the pointer-transparent 32-bit entry points. For each name in
+    # decc_p32_alias.txt whose 64-bit form decc$_<name>64 is exported and whose
+    # 32-bit form decc$<name> is not, export decc$<name> bound to the 64-bit
+    # implementation (universal/internal alias form). Appended at the tail, in
+    # file order, identically in every pass, so no existing sv# moves (vms-b14).
+    P32_LIST="$(CDPATH= cd "$(dirname "$0")" && pwd)/decc_p32_alias.txt"
+    NP32=0
+    while read -r n; do
+        case "$n" in ''|'#'*) continue;; esac
+        case ",$VEC," in
+            *",decc\$_${n}64=PROCEDURE,"*) ;;
+            *) continue;;
+        esac
+        case ",$VEC," in *",decc\$${n}="*|*",decc\$${n}/"*) continue;; esac
+        VEC="$VEC,decc\$${n}/decc\$_${n}64=PROCEDURE"
+        NP32=$((NP32 + 1))
+    done < "$P32_LIST"
+    echo "mk_decc_shr: $NP32 DEC C 32-bit-pointer entry points bound to their 64-bit implementations (decc_p32_alias.txt)"
+    [ "$NP32" -ge 30 ] || { echo "mk_decc_shr: FAIL only $NP32 32-bit-pointer aliases resolved -- the _<name>64 enumeration changed shape" >&2; exit 2; }
 
     # ----------------------------------------------------------------------
     # CRTL->RMS STDIO VENEER (vms-ed1e, rung 2 of vms-b4f). Opt-in via
@@ -482,7 +509,7 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     [ -n "${ALPHA_CRTL_RMS_USE:-}" ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --use $ALPHA_CRTL_RMS_USE"
     [ "${DECC_ALLOW_UNDEF:-0}" = 1 ] && ALPHA_LINK_FLAGS="$ALPHA_LINK_FLAGS --allow-undefined"
     # shellcheck disable=SC2086
-    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" ${ALPHA_VENEER_OBJ:-}
+    "$LINK_EXE" $ALPHA_LINK_FLAGS -o "$OUT" "$LIBC" "$LIBGCC" "$ALPHA_STUB_OBJ" "$ALPHA_CRTL_OBJ" "$ALPHA_P32_OBJ" ${ALPHA_VENEER_OBJ:-}
     rm -rf "$ALPHA_BOOT_DIR"
     [ -n "${VENEER_DIR:-}" ] && rm -rf "$VENEER_DIR"
     echo "mk_decc_shr: created $OUT (alpha/EVAX)"

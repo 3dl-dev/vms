@@ -811,6 +811,18 @@ int vms$$chan_to_fd(uint16_t chan) {
  * executive before doing real I/O on it, instead of trusting a local slot
  * number the executive never saw.
  */
+/*
+ * vms$$chan_devnam - the device name this PCB slot was assigned by name, or
+ * NULL if the slot is not in use / records none. Lets $GETDVI by channel ask
+ * the executive about the device a process-local channel stands for.
+ */
+const char *vms$$chan_devnam(uint16_t chan) {
+    if (chan == 0 || chan >= PCB_MAX_CHANNELS) return NULL;
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb || !pcb->channels[chan].in_use) return NULL;
+    return pcb->channels[chan].devnam[0] ? pcb->channels[chan].devnam : NULL;
+}
+
 uint32_t vms$$chan_exec_chan(uint16_t chan) {
     if (chan == 0 || chan >= PCB_MAX_CHANNELS) return 0;
 

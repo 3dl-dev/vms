@@ -255,6 +255,9 @@ static void fill_dvi_item(const struct item_list_3 *item,
  */
 #define DEVICE_XLATE_MAX_DEPTH 8
 
+extern uint32_t vms$$chan_exec_chan(uint16_t chan);
+extern const char *vms$$chan_devnam(uint16_t chan);
+
 static uint32_t device_lookup_translated(const char *devnam_in,
                                          struct vms_devinfo *info)
 {
@@ -336,9 +339,26 @@ static uint32_t getdvi_impl(uint32_t efn, uint16_t chan,
 
     /* Ask the executive for the row. */
     struct vms_devinfo info;
-    uint32_t status = have_name
-        ? device_lookup_translated(devnam_str, &info)
-        : vms_kif_getdvi_chan(chan, &info);
+    uint32_t status;
+    if (have_name) {
+        status = device_lookup_translated(devnam_str, &info);
+    } else {
+        /*
+         * A channel number is process-local (sys$assign records it in the PCB;
+         * the executive never saw it unless $ASSIGN bound an executive channel).
+         * Translate it: the executive's own channel if one was bound, else the
+         * device the slot was assigned by name. A slot this process does not
+         * hold is SS$_IVCHAN, as on VMS.
+         */
+        uint32_t ec = vms$$chan_exec_chan(chan);
+        const char *dn = ec ? NULL : vms$$chan_devnam(chan);
+        if (ec)
+            status = vms_kif_getdvi_chan(ec, &info);
+        else if (dn)
+            status = device_lookup_translated(dn, &info);
+        else
+            status = SS$_IVCHAN;
+    }
 
     if (status == SS$_NORMAL) {
         info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';

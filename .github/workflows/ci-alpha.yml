@@ -192,6 +192,14 @@ jobs:
             -e OVERLAY=/overlay \
             ovmx-cross-alpha-vms:latest bash /overlay/build-musl.sh
 
+      # vms-fd1 (patches/0006): the port compiler eliminates the soft frame
+      # pointer when reload turns a frameless (PT_NULL) procedure into a stack
+      # procedure; unpatched it emitted `stq ..,0($63)` (GMP's mpn_get_d).
+      - name: Port compiler -- soft frame pointer eliminated after a reload-time frame (vms-fd1)
+        run: |
+          docker run --rm -v "${{ github.workspace }}/tools/cross-alpha-vms/test":/t:ro \
+            ovmx-cross-alpha-vms:latest bash /t/run_pt_null_elim.sh
+
       # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
       # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
       # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they

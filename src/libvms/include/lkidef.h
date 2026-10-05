@@ -27,17 +27,17 @@ extern "C" {
  * LKI$_ item codes for SYS$GETLKI/SYS$GETLKIW item lists
  * ================================================================ */
 
-#define LKI$_PID           0x0001  /* PID of lock holder (L) */
-#define LKI$_RESNAM        0x0002  /* Resource name (T) */
-#define LKI$_STATE         0x0003  /* Lock state (B) — see LKI$C_ below */
-#define LKI$_GRANTCOUNT    0x0004  /* Number of granted locks on resource (L) */
+#define LKI$_PID           0x100  /* PID of lock holder (L) */
+#define LKI$_RESNAM        0x201  /* Resource name (T) */
+#define LKI$_STATE         0x101  /* Lock state (B) — see LKI$C_ below */
+#define LKI$_GRANTCOUNT    0x20B  /* Number of granted locks on resource (L) */
 
 /* ================================================================
  * LKI$C_ — lock state values returned via LKI$_STATE
  * ================================================================ */
 
 #define LKI$C_GRANTED    1   /* Lock is granted */
-#define LKI$C_CONVERT    2   /* Lock is converting (waiting for a new mode) */
+#define LKI$C_CONVERT    0   /* Lock is converting (waiting for a new mode) */
 
 #ifdef __cplusplus
 }

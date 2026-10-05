@@ -75,11 +75,11 @@ extern "C" {
 #define PSL$M_IV        0x00000020  /* Integer overflow enable */
 #define PSL$M_T         0x00000010  /* Trace pending */
 
-/* Current access mode field (bits 22-23 on VAX, encoded in PSL) */
-#define PSL$M_CURMOD    0x00C00000  /* Current mode field mask */
+/* Current access mode field (bits 24-25 on VAX, V7.3 $PSLDEF) */
+#define PSL$M_CURMOD    0x03000000  /* Current mode field mask */
 
-/* Previous access mode field (bits 20-21 on VAX) */
-#define PSL$M_PRVMOD    0x00300000  /* Previous mode field mask */
+/* Previous access mode field (bits 22-23 on VAX, V7.3 $PSLDEF) */
+#define PSL$M_PRVMOD    0x00C00000  /* Previous mode field mask */
 
 /* Interrupt priority level (bits 16-19 on VAX) */
 #define PSL$M_IPL       0x001F0000  /* IPL field mask */
@@ -93,8 +93,8 @@ extern "C" {
 #define PSL$V_Z         2   /* Zero flag bit position */
 #define PSL$V_N         3   /* Negative flag bit position */
 #define PSL$V_IPL       16  /* IPL field start bit */
-#define PSL$V_PRVMOD    20  /* Previous mode field start bit */
-#define PSL$V_CURMOD    22  /* Current mode field start bit */
+#define PSL$V_PRVMOD    22  /* Previous mode field start bit */
+#define PSL$V_CURMOD    24  /* Current mode field start bit */
 
 /* ================================================================
  * PSL$S_ — Field width constants

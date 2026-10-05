@@ -1,0 +1,13 @@
+# Status of the corpus tiers other than tier-1 (vms-44a, roadmap R2: "every tier-2/3
+# program either running or carrying a written, published reason it does not").
+# Rendered into docs/corpus-scoreboard.md; checked by tests/integration/test_corpus_scoreboard.sh
+# (every tests/corpus/tier* directory other than tier1-examples must be listed).
+#
+# format:  <directory>  <running|not-running>  <text ...>
+tier3-mmk           running      MadGoat MMK builds as MMK.EXE (VMS-native link + activate) and drives real builds in CI (self-host spine gates)
+tier3-netlib        not-running  VAX C era source: includes <varargs.h> (removed from GCC) and uses variant_union; needs an old-style varargs shim and UCX/QIO socket glue (vms-801.7)
+tier4-mx            not-running  MX is BLISS/MACRO-32 plus C over NETLIB; no BLISS or MACRO-32 compiler exists in the toolchain and NETLIB (tier3-netlib) does not build yet
+tier6-cmatrix       not-running  needs a terminal-screen library (curses/SMG$) OVMX does not provide, and an autoconf config.h
+tier6-ipc-benchmark not-running  the IPC bodies compile; the VMS shims need the DEC C RTL feature switches (unixlib.h decc$feature_*, LIB$INITIALIZE psect) which DECC$SHR does not carry
+tier6-laxdriver     not-running  a VMS device driver (DPT/DDT, driver prologue tables), not an application; needs a VMS driver loading environment OVMX does not have (vms-df4)
+tier6-memtester     running      memtester (3 sources, args "1 1") runs to completion in the guest under a live /dev/vms (tests/qemu/corpus_runtime_apps.txt); counted in the runtime column

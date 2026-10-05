@@ -32,10 +32,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define EVAX_NAME_MAX     32     /* VMS symbol/psect names are <= 31 chars + NUL */
+/* EVAX names: the alpha-dec-vms back end (gas obj-evax) keeps every name at
+ * <= 64 characters, shortening a longer one (C++ mangled names) to a 64-char
+ * prefix+hash form such as "_ZN9__gnu_cxx17__normal_iteratorIPKcNSt7__cxx11_hbDhqfIbaSha".
+ * Clamping at 31 silently merged distinct C++ symbols (vms-4d0). */
+#define EVAX_NAME_MAX     65     /* <= 64 chars + NUL */
 #define EVAX_MAX_SECTIONS 64
-#define EVAX_MAX_SYMBOLS  1024
-#define EVAX_MAX_RELOCS   4096
+/* Symbols and relocations are unbounded (grown on demand): one libstdc++ member
+ * (cp-demangle) alone carries > 4096 relocations (vms-4d0). */
 
 /* A psect (program section) definition from an EGSD PSC entry. `flags` are the
  * EGPS__V_* bits (REL/EXE/WRT/RD/…); `alloc` is this object's contribution size;
@@ -109,10 +113,10 @@ struct evax_object {
     char                module[EVAX_NAME_MAX];
     int                 nsec;
     struct evax_section sec[EVAX_MAX_SECTIONS];
-    int                 nsym;
-    struct evax_symbol  sym[EVAX_MAX_SYMBOLS];
-    int                 nreloc;
-    struct evax_reloc   reloc[EVAX_MAX_RELOCS];
+    int                 nsym, sym_cap;
+    struct evax_symbol *sym;       /* [nsym], grown by evax_read */
+    int                 nreloc, reloc_cap;
+    struct evax_reloc  *reloc;     /* [nreloc], grown by evax_read */
 };
 
 /* 1 if `buf` (length `len`) looks like an EVAX object: its first record is an

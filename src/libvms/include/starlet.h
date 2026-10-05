@@ -65,6 +65,7 @@ extern "C" {
  * @param chan      Pointer to receive assigned channel number
  * @param acmode   Access mode for channel (0=kernel .. 3=user)
  * @param mbxnam   Optional pointer to descriptor of mailbox name
+ * @param flags    Optional flags longword (ASSIGN$M_* ; 0 = none)
  *
  * @return  SS$_NORMAL on success
  */
@@ -72,7 +73,8 @@ uint32_t sys$assign(
     const struct dsc$descriptor_s *devnam,
     uint16_t *chan,
     uint32_t acmode,
-    const struct dsc$descriptor_s *mbxnam
+    const struct dsc$descriptor_s *mbxnam,
+    uint32_t flags
 );
 
 /**
@@ -101,6 +103,8 @@ uint32_t sys$dassgn(uint16_t chan);
  * @param promsk  Protection mask (0 = default)
  * @param acmode  Access mode for the channel (0 = kernel)
  * @param lognam  Optional pointer to descriptor of logical name
+ * @param flags   Optional flags longword (0 = none)
+ * @param nullarg Reserved; must be 0
  *
  * @return  SS$_NORMAL on success
  */
@@ -111,7 +115,9 @@ uint32_t sys$crembx(
     uint32_t bufquo,
     uint32_t promsk,
     uint32_t acmode,
-    const struct dsc$descriptor_s *lognam
+    const struct dsc$descriptor_s *lognam,
+    uint32_t flags,
+    void *nullarg
 );
 
 /**
@@ -475,7 +481,9 @@ uint32_t sys$creprc(
     uint32_t baspri,
     uint32_t uic,
     uint32_t mbxunt,
-    uint32_t stsflg
+    uint32_t stsflg,
+    const void *itemlst,
+    const struct dsc$descriptor_s *node
 );
 
 /**
@@ -483,12 +491,14 @@ uint32_t sys$creprc(
  *
  * @param pidadr  Optional pointer to process ID (NULL = current process)
  * @param prcnam  Optional pointer to descriptor of process name
+ * @param itmlst  Optional item list (not supported: a non-empty list is SS$_BADPARAM)
  *
  * @return  SS$_NORMAL on success
  */
 uint32_t sys$delprc(
     const uint32_t *pidadr,
-    const struct dsc$descriptor_s *prcnam
+    const struct dsc$descriptor_s *prcnam,
+    const void *itmlst
 );
 
 /**
@@ -577,7 +587,9 @@ uint32_t sys$getjpiw(
  * sys$getsyi - Get system information
  *
  * @param efn       Event flag for completion
- * @param csidadr   Optional pointer to cluster system ID
+ * @param csidadr   Optional pointer to cluster system ID; in/out wildcard context
+ *                  (-1 starts a walk of the cluster, updated on return;
+ *                  SS$_NOMORENODE ends it)
  * @param nodename  Optional pointer to descriptor of node name
  * @param itmlst    Pointer to item list
  * @param iosb      Pointer to I/O status block
@@ -588,7 +600,7 @@ uint32_t sys$getjpiw(
  */
 uint32_t sys$getsyi(
     uint32_t efn,
-    const uint32_t *csidadr,
+    uint32_t *csidadr,
     const struct dsc$descriptor_s *nodename,
     const struct item_list_3 *itmlst,
     void *iosb,
@@ -601,7 +613,7 @@ uint32_t sys$getsyi(
  */
 uint32_t sys$getsyiw(
     uint32_t efn,
-    const uint32_t *csidadr,
+    uint32_t *csidadr,
     const struct dsc$descriptor_s *nodename,
     const struct item_list_3 *itmlst,
     void *iosb,
@@ -960,7 +972,8 @@ uint32_t sys$enq(
     uint32_t astprm,
     void (*blkastadr)(uint32_t),
     uint32_t acmode,
-    uint32_t rsdm_id
+    uint32_t rsdm_id,
+    void *nullarg
 );
 
 /**
@@ -977,7 +990,8 @@ uint32_t sys$enqw(
     uint32_t astprm,
     void (*blkastadr)(uint32_t),
     uint32_t acmode,
-    uint32_t rsdm_id
+    uint32_t rsdm_id,
+    void *nullarg
 );
 
 /**
@@ -1105,6 +1119,8 @@ uint32_t sys$rewind(void *rab, void (*err)(void *), void (*suc)(void *));
 /** sys$flush - Flush buffers to disk (cb=RAB) */
 uint32_t sys$flush(void *rab, void (*err)(void *), void (*suc)(void *));
 
+#include "ovmx_rms_optargs.h"
+
 /* ================================================================
  * Formatted ASCII Output (FAO) Services
  * ================================================================ */
@@ -1178,7 +1194,9 @@ uint32_t sys$faol(
 uint32_t sys$filescan(
     const struct dsc$descriptor_s *srcstr,
     ILE2                          *valuelst,
-    uint32_t                      *fldflags
+    uint32_t                      *fldflags,
+    struct dsc$descriptor_s       *auxout,
+    uint16_t                      *retlen
 );
 
 /* ================================================================
@@ -1250,7 +1268,8 @@ uint32_t sys$forcex(
  */
 uint32_t sys$suspnd(
     const uint32_t *pidadr,
-    const struct dsc$descriptor_s *prcnam
+    const struct dsc$descriptor_s *prcnam,
+    uint32_t flags
 );
 
 /**
@@ -1293,7 +1312,9 @@ uint32_t sys$setpri(
     const uint32_t *pidadr,
     const struct dsc$descriptor_s *prcnam,
     uint32_t pri,
-    uint32_t *prvpri
+    uint32_t *prvpri,
+    uint32_t schedpol,
+    uint32_t *prevpol
 );
 
 /**
@@ -1508,6 +1529,10 @@ uint32_t sys$brkthruw(
     struct dsc$descriptor_s *sendto,
     uint32_t sndtyp,
     struct _iosb *iosb,
+    uint32_t carcon,
+    uint32_t flags,
+    uint32_t reqid,
+    uint32_t timout,
     void (*astadr)(uint32_t),
     uint32_t astprm
 );
@@ -1582,6 +1607,75 @@ uint32_t sys$unwind(
 
 #ifdef __cplusplus
 }
+#endif
+
+/* ================================================================
+ * Services added for the corpus (vms-44a)
+ * ================================================================ */
+
+/** sys$canexh - Cancel exit handler (desblk NULL cancels all declared handlers) */
+uint32_t sys$canexh(void *desblk);
+
+/** sys$gettim_prec - Get current time at best available precision (100ns ticks) */
+uint32_t sys$gettim_prec(uint64_t *timadr);
+
+/** sys$get_entropy - Fill buffer with random bytes from the host CSPRNG */
+uint32_t sys$get_entropy(void *buffer, uint32_t length);
+
+/** sys$lckpag / sys$ulkpag - Lock / unlock pages in memory (inadr, retadr are VA_RANGE) */
+uint32_t sys$lckpag(const void *inadr, void *retadr, uint32_t acmode);
+uint32_t sys$ulkpag(const void *inadr, void *retadr, uint32_t acmode);
+
+/** sys$schdwk - Schedule a wakeup (pidadr/prcnam NULL = self; reptim unsupported) */
+uint32_t sys$schdwk(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam,
+                    const uint64_t *daytim, const uint64_t *reptim);
+
+/** sys$canwak - Cancel scheduled wakeups of the target (pidadr NULL = self) */
+uint32_t sys$canwak(const uint32_t *pidadr, const struct dsc$descriptor_s *prcnam);
+
+/** sys$alloc - Allocate a device (phylen/phybuf receive the physical name) */
+uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
+                   struct dsc$descriptor_s *phybuf, uint32_t acmode,
+                   uint32_t flags);
+
+/** sys$dalloc - Deallocate a device */
+uint32_t sys$dalloc(const struct dsc$descriptor_s *devnam, uint32_t acmode);
+
+/** sys$asctoid - Convert identifier name to binary value (attrib is reported 0) */
+uint32_t sys$asctoid(const struct dsc$descriptor_s *name, uint32_t *id, uint32_t *attrib);
+
+/** sys$idtoasc - Convert binary identifier to name (no wildcard context) */
+uint32_t sys$idtoasc(uint32_t id, uint16_t *namlen, struct dsc$descriptor_s *nambuf,
+                     uint32_t *resid, uint32_t *attrib, uint32_t *ctx);
+
+/** sys$resched - Give up the processor */
+uint32_t sys$resched(void);
+
+/** sys$setrwm - Set resource wait mode (1 = disable resource wait); SS$_WASSET if it was disabled */
+uint32_t sys$setrwm(uint32_t watflg);
+
+/** sys$setswm - Set process swap mode (1 = disable swapping; needs PSWAPM) */
+uint32_t sys$setswm(uint32_t swpflg);
+
+/** sys$setprn - Set process name */
+uint32_t sys$setprn(const struct dsc$descriptor_s *prcnam);
+
+/** sys$purge_ws - Purge working set, 64-bit range form */
+uint32_t sys$purge_ws(const void *inadr, uint64_t count);
+
+#ifndef OVMX_NO_PAD_MACROS
+#include "ovmx_optargs.h"
+/* Omitted trailing arguments pad with 0 (VMS argument-count semantics). */
+#define sys$assign(...) OVMX_PAD_5(sys$assign, __VA_ARGS__)
+#define sys$crembx(...) OVMX_PAD_9(sys$crembx, __VA_ARGS__)
+#define sys$delprc(...) OVMX_PAD_3(sys$delprc, __VA_ARGS__)
+#define sys$suspnd(...) OVMX_PAD_3(sys$suspnd, __VA_ARGS__)
+#define sys$setpri(...) OVMX_PAD_6(sys$setpri, __VA_ARGS__)
+#define sys$enq(...) OVMX_PAD_12(sys$enq, __VA_ARGS__)
+#define sys$enqw(...) OVMX_PAD_12(sys$enqw, __VA_ARGS__)
+#define sys$filescan(...) OVMX_PAD_5(sys$filescan, __VA_ARGS__)
+#define sys$brkthruw(...) OVMX_PAD_11(sys$brkthruw, __VA_ARGS__)
+#define sys$creprc(...) OVMX_PAD_14(sys$creprc, __VA_ARGS__)
 #endif
 
 #endif /* __STARLET_H */

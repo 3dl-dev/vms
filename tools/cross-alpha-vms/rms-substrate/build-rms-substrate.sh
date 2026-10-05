@@ -148,10 +148,10 @@ for s in create open connect put get close; do
     grep -qE "cross-image import 'sys\\\$${s}' bound to --use producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
         || { echo "GATE FAIL: sys\$${s} not bound to LIBVMSRMS\$SHR in the test link"; fail=1; }
 done
-# (4) the test image links: EVAX/Alpha ET_DYN, %LINK-S-CREATED, zero UNDEF
+# (4) the test image links: EVAX/Alpha ET_EXEC in P0 (vms-035), %LINK-S-CREATED, zero UNDEF
 grep -qE "LINK-S-CREATED, .*rms_substrate_test.exe: EVAX/Alpha" "$LOG" || { echo "GATE FAIL: rms_substrate_test.exe not created"; fail=1; }
 grep -q "Machine:.*Alpha" "$LOG" || { echo "GATE FAIL: test image not EM_ALPHA"; fail=1; }
-grep -qE "Type:.*DYN" "$LOG" || { echo "GATE FAIL: test image not ET_DYN"; fail=1; }
+grep -qE "Type:.*EXEC" "$LOG" || { echo "GATE FAIL: test image not ET_EXEC (linked in P0, vms-035)"; fail=1; }
 # the test link (last link) must have no LINK-F-UNDEF at all
 [ "$(grep -c 'LINK-F-UNDEF' "$LOG")" = 0 ] || { echo "GATE FAIL: LINK-F-UNDEF present"; fail=1; }
 if [ "$fail" = 0 ]; then

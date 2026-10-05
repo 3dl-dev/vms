@@ -178,7 +178,7 @@ cited to a file or a commit, not recalled.
 | # | Gap | Evidence | rd item |
 |---|---|---|---|
 | R5 | **Include surface** — `rtldef`/`starlet_c` text-libraries on the CRTL include path, include-name canonicalization, `$` in identifiers — **LANDED (vms-714c, 2026-09-08)**: `src/libvms/include/vms/{ssdef,chfdef,pdscdef}.h`, a canonicalized `vms/` include-surface shim, additive and separate from OVMX's internal CHF/PDSC headers (owned by vms-1fa/vms-2e72). PROVEN by `tools/cross-alpha-vms/include-surface/run_include_surface_proof.sh` (CI gate `gcc-port-include-surface`): the GENUINE unpatched upstream `libgcc/config/alpha/vms-gcc_shell_handler.c` (GCC 14.2.0) compiles to real VMS/Alpha assembly against the shim, with a baseline control proving the SAME file fails unresolved (`vms/chfdef.h: No such file or directory`) without it. `$`-in-identifiers needed no fix — the alpha-dec-vms cross cc1 already accepts it by default (only host-side x86_64/aarch64 builds of `$`-bearing OVMX C need `-fdollars-in-identifiers`, unaffected by this item). **Residual, tracked separately:** `libgcc/config/alpha/vms-unwind.h` needs a `CHFCTX` type + `chfctxdef.h` (currently absent) and more `chf$mech_array`/fuller struct fidelity — folds into the deeper CHF/condition-handling dispatch rung (`vms-2e72`), not this item. | `grep -rn "rtldef\|starlet_c" origin/main -- src/` = 0 hits (pre-fix); shim + CI proof land the row | `vms-714c` |
-| R7 | **LIB$INITIALIZE PSECT multi-constructor collection** for executable images — `link.c:4143` hard-codes `xfer_count == 1` ("no LIB$INITIALIZE handlers"); OVMX's real ctor path is ELF `.init_array` (`link.c:295-299`, explicitly documented as *not* a PSECT-collection reproduction) | `link.c:4143`, `link.c:295-299` | `vms-43c` |
+| R7 | **LIB$INITIALIZE PSECT multi-constructor collection** -- **LANDED (vms-43c, 2026-10-05)**: LINK.EXE concatenates every object's `LIB$INITIALIZE` psect (longword procedure values, as the port's crtbegin/crtend and real VMS code emit them) and publishes its bounds; an image that links the OVMX STARLET `LIB$INITIALIZE` dispatcher (`src/vmslink/starlet/lib_initialize.c`, pulled by library search when referenced) gets a two-entry transfer vector `[LIB$INITIALIZE, main]`; IMGACT calls the first entry with the transfer vector, and the dispatcher runs each routine in psect order (with a real init-coroutine) before calling main. Needs the P0 image layout (vms-035). PROVEN by `libinit-gate` (qemu-system-alpha + /dev/vms): two registered routines run in order before main, sentinel 7. | `src/vmslink/link.c` (LIB$INITIALIZE transfer entry), `src/imgact/imgact.c` (first-transfer call), `tools/cross-alpha/run-module-gp-activation-alpha.sh libinit-gate` | `vms-43c` |
 | — | **`decc$feature_*` runtime switches** (`DECC$UNIX_LEVEL`, `DECC$EFS_CHARSET`, POSIX-vs-VMS filename mode) — not emulated at all; plus the crtlmap coverage delta (597-of-~900 as of the last audit, 2026-08-22) has never been re-measured against current DECC$SHR | `grep -rn "decc\$feature" origin/main -- src/` = 0 hits | `vms-06d` |
 | R8 | **Real VMS condition-handling dispatch** — `SYS$SETEXV`, `chf$signal_array`/`chf$mech_array`/`CHFCTX`, `LIB$GET_INVO_HANDLE`/`LIB$GET_INVO_CONTEXT`/`LIB$GET_PREV_INVO_CONTEXT`, real frame-transfer unwind (`sys$unwind`'s `newpc` is currently ignored — `sys_condition.c:44-68`). `src/libvms/rtl/lib_signal.c` is a thread-local handler-stack **emulation**, not CHF dispatch. The narrower `SS$_HPARITH` FP-trap bridge (`vms-db3`/GAP3, done) proves the *pattern* (`lib$signal`→handler-chain search→`$STATUS`) works for one condition, but the port's own `libgcc/config/alpha/vms-unwind.h` needs the full CHF/invocation-context machinery for real EH/error unwinding. **Rung-1 landed** (`docs/design-chf-condition-handling.md`): real `SYS$SETEXV` primary/secondary/last-chance vectors, authentic dispatch search order, and a real establisher-frame/depth mechanism array replace the stub; rungs 2–5 (frame-transfer `SYS$UNWIND`, Alpha ICB primitives, HW-exception unification, libgcc EH) are children of `vms-2e72` | `lib_signal.c`, `sys_setexv.c`, `sys_condition.c:44-68`, `docs/design-chf-condition-handling.md`, `vms-db3` (done, narrower) | `vms-2e72` |
 
@@ -370,6 +370,23 @@ The remaining hole is **narrow and specific**: wiring that veneer into the alpha
 PORT image's DECC$SHR (a build sub-project — the alpha-dec-vms port world has no
 `vms_kif`/RMS substrate yet; the `vms-47e` child, §3.1). Until that lands, the
 alpha port image's own file writes are still musl-POSIX → Linux-Alpha VFS.
+
+> **UPDATE (vms-3320, blocks vms-fd1):** the CRTL→RMS veneer is now extended
+> **beyond the stdio family** to the eight file-ops the GCC-port driver leans on:
+> `open`/`creat` (temp-file minting → `sys$create`/`sys$open`), `unlink`/`remove`
+> (cleanup → `sys$erase`), `rename` (atomic output finalization → the new
+> `sys$rename` RMS service → executive ACP `IO$_MODIFY!IO$M_MOVE`, vms-de7: a
+> directory-entry re-link that KEEPS the File ID, NOT erase+create), and
+> `opendir`/`readdir`/`closedir` (directory enumeration → `sys$parse`+`sys$search`
+> + `rms_search_fid`). All eight are added to `src/vmsrms/crtl_rms_stdio.c` and
+> **vector-substituted into the alpha DECC$SHR in their sorted sv# slots**
+> (`mk_decc_shr.sh` ALPHA_CRTL_RMS_USE block, in-place — never tail-appended;
+> sv# skew is the vms-b14/vms-f49 trap). Proven un-fakeably on the real executive
+> by an INDEPENDENT ACP reader for each op (`tests/qemu/test_syssvc_crtl_rms_veneer.c`,
+> 40/40 — incl. rename keeping the SAME File ID), and wired as the alpha activation
+> gate `crtl-rms-fileop-gate` (`crtl_rms3_test.c` + an independent DIRECTORY reader).
+> This closes the **PORT-CRTL binding** for the file-op family; the compiler driver's
+> temp-file/cleanup/dir-enum now reach real RMS/ODS-2, not musl-POSIX.
 
 > **rd-ID caveat (Rule 10):** this table's "rd item" column reads `vms-1b5`, but
 > in rd `vms-1b5` is actually the *decc$feature* item; the RMS-beyond-stdio item

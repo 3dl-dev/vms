@@ -88,7 +88,12 @@ function(qemu_syssvc_add_test name source)
         pthread
         m
     )
-    set_property(GLOBAL APPEND PROPERTY QEMU_SYSSVC_TEST_TARGETS ${name})
+    # STANDALONE: built and staged by its OWN aggregate (qemu_corpus_rt below),
+    # not by the executive-suite glob/aggregate -- a corpus program is a scoreboard
+    # entry, not a gating suite, and its failure must not red every shard.
+    if(NOT "STANDALONE" IN_LIST ARGN)
+        set_property(GLOBAL APPEND PROPERTY QEMU_SYSSVC_TEST_TARGETS ${name})
+    endif()
 endfunction()
 
 # Discover every test_syssvc_*.c in this directory and register it. Note:
@@ -405,6 +410,76 @@ qemu_syssvc_add_test(test_corpus_sys_device_scan
 # exact LNM$SYSTEM arena) the two corpus suites above run against.
 qemu_syssvc_add_test(corpus_seed_lnm
     ${CMAKE_SOURCE_DIR}/tests/qemu/corpus_seed_lnm.c)
+
+# ---------------------------------------------------------------------------
+# CORPUS RUNTIME COLUMN (vms-44a, roadmap R2.3).
+#
+# The host harness (tests/conformance/run_corpus.sh) cannot run a program that
+# needs /dev/vms or a PCB: sys$assign, $CREMBX, $GETJPI, $DCLAST, ... answer
+# honestly BADPARAM/BUGCHECK with no executive. This builds every tier-1 program
+# that links (tests/qemu/corpus_runtime_programs.txt) as a static-musl binary
+# against the SAME libvms/libvmsrms graph the executive suites use, so the guest
+# runs them under a real vms.ko -- the column the release notes can honestly
+# publish. They are STANDALONE targets (EXCLUDE_FROM_ALL, own aggregate
+# qemu_corpus_rt): a scoreboard entry that fails is a scoreboard row, not a red
+# shard. The guest runner is init.sh's ovmx.corpus mode.
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/corpus_runtime_programs.txt
+     _corpus_rt_lines REGEX "^[A-Za-z0-9_]+$")
+set(_corpus_rt_targets "")
+foreach(_n ${_corpus_rt_lines})
+    qemu_syssvc_add_test(corpus_rt_${_n}
+        ${CMAKE_SOURCE_DIR}/tests/corpus/tier1-examples/${_n}.c STANDALONE)
+    set_target_properties(corpus_rt_${_n} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    # image start-up PCB seeding (stands in for the product's image start-up path)
+    target_sources(corpus_rt_${_n} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/corpus_rt_start.c)
+    target_include_directories(corpus_rt_${_n} PRIVATE
+        ${CMAKE_SOURCE_DIR}/tests/corpus/tier1-examples
+        ${CMAKE_SOURCE_DIR}/src/vmsprocess/include)
+    target_compile_definitions(corpus_rt_${_n} PRIVATE __IEEE_FLOAT=1)
+    target_compile_options(corpus_rt_${_n} PRIVATE -w)
+    list(APPEND _corpus_rt_targets corpus_rt_${_n})
+endforeach()
+# Non-tier-1 corpus applications (tests/qemu/corpus_runtime_apps.txt): multi-file
+# programs the guest also runs. Line format (pipe separated):
+#   name|corpus-dir|compile-definitions (,-list)|sources (,-list)|arguments
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/corpus_runtime_apps.txt
+     _corpus_app_lines REGEX "^[A-Za-z0-9_]+\\|")
+foreach(_l ${_corpus_app_lines})
+    string(REPLACE "|" ";" _f "${_l}")
+    list(GET _f 0 _an)
+    list(GET _f 1 _adir)
+    list(GET _f 2 _adefs)
+    list(GET _f 3 _asrcs)
+    list(GET _f 4 _aargs)
+    string(REPLACE "," ";" _adefs "${_adefs}")
+    string(REPLACE "," ";" _asrcs "${_asrcs}")
+    set(_src_paths "")
+    foreach(_sf ${_asrcs})
+        list(APPEND _src_paths ${CMAKE_SOURCE_DIR}/tests/corpus/${_adir}/${_sf})
+    endforeach()
+    # first source through the standard recipe, the rest added as sources
+    list(GET _src_paths 0 _first)
+    qemu_syssvc_add_test(corpus_rt_${_an} ${_first} STANDALONE)
+    set_target_properties(corpus_rt_${_an} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    list(REMOVE_AT _src_paths 0)
+    if(_src_paths)
+        target_sources(corpus_rt_${_an} PRIVATE ${_src_paths})
+    endif()
+    target_sources(corpus_rt_${_an} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/corpus_rt_start.c)
+    target_include_directories(corpus_rt_${_an} PRIVATE ${CMAKE_SOURCE_DIR}/tests/corpus/${_adir})
+    target_compile_definitions(corpus_rt_${_an} PRIVATE ${_adefs})
+    target_compile_options(corpus_rt_${_an} PRIVATE -w)
+    # the guest runner reads the arguments from <program>.args next to the binary
+    file(WRITE ${CMAKE_BINARY_DIR}/bin/corpus_rt_${_an}.args "${_aargs}\n")
+    list(APPEND _corpus_rt_targets corpus_rt_${_an})
+endforeach()
+
+# corpus_seed_sysvol: the guest's system-disk bootstrap (see its header); not a
+# scoreboard entry, so it does not carry the corpus_rt_ prefix the initramfs glob stages.
+qemu_syssvc_add_test(corpus_seed_sysvol
+    ${CMAKE_CURRENT_SOURCE_DIR}/corpus_seed_sysvol.c STANDALONE)
+set_target_properties(corpus_seed_sysvol PROPERTIES EXCLUDE_FROM_ALL TRUE)
+add_custom_target(qemu_corpus_rt DEPENDS ${_corpus_rt_targets} corpus_seed_sysvol)
 
 # ---------------------------------------------------------------------------
 # USERSPACE-ONLY imgact tests -- test_imgact_bind, test_imgact_publish

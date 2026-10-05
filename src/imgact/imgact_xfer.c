@@ -13,6 +13,8 @@ int ovmx_parse_xfer(const void *sec, unsigned long size,
 	out->flavor   = OVMX_ACT_SYSV;   /* default: today's tail-jump path */
 	out->count    = 0;
 	out->main_off = 0;
+	out->first_off = 0;
+	out->entries  = 0;
 	out->valid    = 0;
 
 	if (!sec || size < sizeof(struct ovmx_xfer_header))
@@ -38,6 +40,8 @@ int ovmx_parse_xfer(const void *sec, unsigned long size,
 	out->flavor   = h->flavor;
 	out->count    = h->count;
 	out->main_off = entries[h->count - 1];  /* last == main transfer addr */
+	out->first_off = entries[0];           /* called first (LIB$INITIALIZE) */
+	out->entries  = entries;
 	out->valid    = 1;
 	return 1;
 }

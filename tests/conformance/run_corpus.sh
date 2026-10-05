@@ -79,6 +79,18 @@ LIB_FLAGS="-L${BUILD_LIB_DIR} -l:LIBVMSRMS\$SHR.EXE -l:LIBVMSFS\$SHR.EXE -l:LIBV
 # inflation — same class of harness correctness fix as the -l: link fix above.)
 CFLAGS="-O2 -D__IEEE_FLOAT=1"
 
+# DESIGNED non-zero exits (vms-44a): programs whose demonstration IS a failing exit
+# (tests/corpus/expected_exit.txt, "<program> <code>  # reason"). run-pass iff the
+# program exits with exactly its documented code.
+declare -A expected_exit
+EXPECTED_EXIT_FILE="${SCRIPT_DIR}/../corpus/expected_exit.txt"
+if [ -f "${EXPECTED_EXIT_FILE}" ]; then
+    while read -r _en _ec _rest; do
+        case "${_en}" in ''|\#*) continue ;; esac
+        expected_exit["${_en}"]="${_ec}"
+    done < "${EXPECTED_EXIT_FILE}"
+fi
+
 # errchk.h is in the tier1-examples directory itself
 INCLUDE_FLAGS="${INCLUDE_FLAGS} -I${CORPUS_DIR}"
 
@@ -91,6 +103,11 @@ declare -A prog_status
 declare -A prog_errors
 declare -A prog_missing_symbols
 declare -A prog_missing_headers
+# run-pass programs whose run log carries an unhandled %FAC-E-/-F- condition
+# message (lib$signal'd error that the image survived). Informational: the
+# run-pass verdict stays "exited 0", but a pass that printed a failed status is
+# not the same evidence as a clean one, and the scoreboard says so.
+declare -A prog_signaled
 
 declare -a all_missing_functions
 declare -a all_missing_headers
@@ -102,6 +119,7 @@ count_link_fail=0
 count_run_pass=0
 count_run_fail=0
 count_run_crash=0
+count_run_pass_signaled=0
 total=0
 
 # ---------------------------------------------------------------------------
@@ -234,11 +252,18 @@ for src_file in "${CORPUS_DIR}"/*.c; do
     # harness's tty; /dev/null gives a clean, immediate EOF — the same closed
     # stdin the non-interactive CI container sees — so the measurement is
     # reproducible and the committed floor is honest, not flaky.
-    LD_LIBRARY_PATH="${BUILD_LIB_DIR}" timeout 10 "${bin}" </dev/null >"${run_log}" 2>&1 || run_rc=$?
+    # Run in the scratch build dir, not the caller's cwd: several programs create
+    # files in "." (lib$delete_file / lib$rename_file demos) and must not litter
+    # the repository checkout the harness was started from.
+    (cd "${BUILD_DIR}" && LD_LIBRARY_PATH="${BUILD_LIB_DIR}" timeout 10 "${bin}" </dev/null >"${run_log}" 2>&1) || run_rc=$?
 
-    if [ ${run_rc} -eq 0 ]; then
+    if [ ${run_rc} -eq 0 ] || { [ -n "${expected_exit[${name}]:-}" ] && [ "${run_rc}" -eq "${expected_exit[${name}]}" ]; }; then
         status="run-pass"
         count_run_pass=$((count_run_pass + 1))
+        if grep -qE '^%[A-Z0-9_$]+-[EF]-' "${run_log}" 2>/dev/null; then
+            prog_signaled["${name}"]=1
+            count_run_pass_signaled=$((count_run_pass_signaled + 1))
+        fi
     elif [ ${run_rc} -gt 128 ]; then
         status="run-crash"
         count_run_crash=$((count_run_crash + 1))
@@ -335,7 +360,8 @@ printf '    "compile-fail": %d,\n' "${count_compile_fail}"
 printf '    "link-fail": %d,\n' "${count_link_fail}"
 printf '    "run-pass": %d,\n' "${count_run_pass}"
 printf '    "run-fail": %d,\n' "${count_run_fail}"
-printf '    "run-crash": %d\n' "${count_run_crash}"
+printf '    "run-crash": %d,\n' "${count_run_crash}"
+printf '    "run-pass-signaled": %d\n' "${count_run_pass_signaled}"
 printf '  },\n'
 printf '  "programs": [\n'
 
@@ -364,6 +390,7 @@ for src_file in "${CORPUS_DIR}"/*.c; do
     printf '      "name": "%s",\n' "$(json_escape "${name}")"
     printf '      "file": "%s",\n' "$(json_escape "${rel_file}")"
     printf '      "status": "%s",\n' "$(json_escape "${status}")"
+    printf '      "signaled_error": %s,\n' "$([ -n "${prog_signaled[${name}]:-}" ] && echo true || echo false)"
     printf '      "errors": '
     emit_errors_array "${prog_errors[${name}]:-}"
     printf ',\n'

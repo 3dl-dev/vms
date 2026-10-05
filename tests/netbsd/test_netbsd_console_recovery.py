@@ -283,11 +283,81 @@ def _assert_expect_robust():
               "deadline -> TIMEOUT, no hang")
 
 
+class _StreamChild(object):
+    """Byte-stream fake of an in-order tty + shell: expect() scans/consumes a
+    real buffer and sendline() makes the 'shell' append the output a real one
+    would (the echo's text, then the idle prompt). Models stale prompts."""
+
+    PROMPT = "OVMX-RDY-deadbeef> "
+
+    def __init__(self, buf):
+        self.buf = buf
+        self.sent = []
+        self.before = b""
+        self.match = None
+        self.timeout = 5
+
+    def sendline(self, line):
+        self.sent.append(line)
+        m = re.match(r"echo (\S+?)=\$\?=$", line)
+        if m:
+            self.buf += "%s=0=\n" % m.group(1)
+        self.buf += self.PROMPT
+
+    def expect(self, patterns, timeout=None):
+        pats = patterns if isinstance(patterns, (list, tuple)) else [patterns]
+        best = None
+        for i, p in enumerate(pats):
+            m = re.search(p, self.buf)
+            if m and (best is None or m.start() < best[1].start()):
+                best = (i, m)
+        if best is None:
+            raise pexpect.TIMEOUT("scripted: no match")
+        i, m = best
+        self.before = self.buf[:m.start()].encode()
+        self.buf = self.buf[m.end():]
+        self.match = m
+        return i
+
+
+def _assert_sync_barrier():
+    """vms-bdc: stale idle prompts left by pre-unique-prompt nudges must not
+    precede the first run()'s marker (cascading re-issue -> wedge)."""
+    P = _StreamChild.PROMPT
+    child = _StreamChild(P + "\n" + P + "\n" + P)    # unique prompt + 2 stale
+    con = nc.NetBSDConsole(child, logfn=lambda _m: None)
+    con.prompt_re = re.escape(P)
+    con._sync_barrier()
+    assert child.buf == "", "barrier left stale bytes: %r" % child.buf
+    # Without the barrier the very first expect sees a prompt, not the marker.
+    stale = _StreamChild(P + "\n" + P)
+    c2 = nc.NetBSDConsole(stale, logfn=lambda _m: None)
+    c2.prompt_re = re.escape(P)
+    assert c2._await_marker("OVMXm-x", 1) is None, "control: stale prompt must read as lost"
+    # With the barrier, run() gets its own marker first try (one send).
+    child = _StreamChild(P + "\n" + P)
+    con = nc.NetBSDConsole(child, logfn=lambda _m: None)
+    con.prompt_re = re.escape(P)
+    con._sync_barrier()
+    orig = child.sendline
+    def send(line):
+        orig(line)
+        m = re.search(r"echo (OVMXm-\w+)=\$__r=", line)
+        if m:
+            child.buf = child.buf[:-len(P)] + "%s=0=\n" % m.group(1) + P
+    child.sendline = send
+    rc, _ = con.run("mount_cd9660 /dev/cd0a /mnt", timeout=5, echo=False)
+    assert rc == 0 and len([x for x in child.sent if "mount_cd9660" in x]) == 1, \
+        "first run after barrier must not re-issue: %r" % child.sent
+    print("PASS sync-barrier: stale prompts drained; first run() needs 1 send")
+
+
 def main():
     _assert_console_carries_only_markers()
     _assert_drain_stale()
     _assert_wedge_fail_fast()
     _assert_expect_robust()
+    _assert_sync_barrier()
 
     # Idempotent command: recovered across 0, 1, 2 dropped markers.
     _run_ok("clean",        ["marker"],                    3, 1)

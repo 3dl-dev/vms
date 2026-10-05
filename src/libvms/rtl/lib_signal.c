@@ -86,6 +86,8 @@ struct handler_record {
     void           *est_pc;         /* return address into establisher */
     int             active;         /* re-entrancy guard: handler running */
     int             has_anchor;     /* rung-2: resume_ctx armed for transfer */
+    uint64_t        est_handle;     /* vms-ed1: establisher's invocation handle
+                                     * from the genuine Alpha walk (0 = none) */
     jmp_buf         resume_ctx;     /* rung-2: setjmp'd in establisher frame */
 };
 
@@ -106,6 +108,135 @@ static _Thread_local int   uw_pending     = 0;  /* an unwind was requested */
 static _Thread_local int   uw_target      = 0;  /* target depth (handlers kept) */
 static _Thread_local void *uw_newpc       = NULL;
 static _Thread_local int   uw_requester   = -1; /* index of requesting handler */
+static _Thread_local uint64_t uw_savr0    = 0;  /* vms-ed1: mech savr0 at request */
+
+/* ================================================================
+ * vms-bfd03: SYS$GL_CALL_HANDL and the condition-dispatcher frame.
+ *
+ * On OpenVMS Alpha, SYS$GL_CALL_HANDL is a system data cell holding the
+ * procedure value of the routine that CALLS condition handlers. An unwinder
+ * that meets a frame of that routine (libgcc's vms-unwind.h
+ * DENOTES_EXC_DISPATCHER) knows it has reached a condition-dispatch frame: its
+ * invocation context carries a CHF context (libicb$ph_chfctx_addr -> CHFCTX:
+ * signal args, mechanism args with the signalling point's saved registers,
+ * the exception FP/PC), and the frame "before" it is the signalling point.
+ *
+ * In OVMX the routine that calls every frame handler is vms$$call_handler;
+ * SYS$GL_CALL_HANDL holds its procedure value (a longword: LIBVMS$SHR lives in
+ * P0, vms-035). While a handler runs, vms$$call_handler keeps a dispatch record
+ * for its own frame: the CHFCTX, an Alpha-layout mechanism array (vms/chfdef.h)
+ * whose saved registers are the signalling point's, captured by LIB$SIGNAL with
+ * the genuine LIB$GET_CURR_INVO_CONTEXT, and that full signalling-point context.
+ * The invocation-context walk (lib_invo.c) asks for it by frame pointer.
+ * ================================================================ */
+
+#if OVMX_ALPHA_VMS_ABI
+int SYS$GL_CALL_HANDL = 0;
+#else
+/* In .data, not .bss: the ELF LINK.EXE path exports initialized data only. */
+__attribute__((section(".data"))) int SYS$GL_CALL_HANDL = 0;
+#endif
+
+struct ovmx_vms_mech {             /* = vms/chfdef.h struct chf$mech_array */
+    uint32_t args, flags;
+    uint64_t frame, depth, esf_addr;
+    uint64_t savr[29];             /* chf$q_mch_savr0 .. savr28           */
+};
+struct ovmx_chfctx {               /* = vms/chfctxdef.h CHFCTX            */
+    uint64_t flink, blink, sigarglst, mcharglst, expt_fp, expt_pc, expt_ps;
+    uint64_t headroom[9];
+};
+struct chf_dispatch_rec {
+    uint64_t             fp;       /* vms$$call_handler's frame pointer  */
+    struct ovmx_chfctx   ctx;
+    struct ovmx_vms_mech vmech;
+    INVO_CONTEXT_BLK     sig_icb;  /* the signalling point's context     */
+    int                  have_sig;
+};
+#define MAX_DISPATCH 16
+static _Thread_local struct chf_dispatch_rec *disp_stack[MAX_DISPATCH];
+static _Thread_local int disp_depth = 0;
+static _Thread_local INVO_CONTEXT_BLK g_sig_icb;   /* set by lib$signal/lib$stop */
+static _Thread_local int g_sig_icb_valid = 0;
+
+void *vms$$chfctx_for_frame(uint64_t fp)
+{
+    for (int i = disp_depth - 1; i >= 0; i--)
+        if (disp_stack[i]->fp == fp)
+            return &disp_stack[i]->ctx;
+    return NULL;
+}
+
+const INVO_CONTEXT_BLK *vms$$chf_signal_context(uint64_t fp)
+{
+    for (int i = disp_depth - 1; i >= 0; i--)
+        if (disp_stack[i]->fp == fp && disp_stack[i]->have_sig)
+            return &disp_stack[i]->sig_icb;
+    return NULL;
+}
+
+/* Call one condition handler. Every frame-handler call goes through here, so
+ * SYS$GL_CALL_HANDL names exactly the frames that are calling a handler. */
+__attribute__((noinline))
+uint32_t vms$$call_handler(chf$handler_t h, struct chf$signal_array *sig,
+                           struct chf$mech_array *mech)
+{
+    struct chf_dispatch_rec rec;
+    memset(&rec, 0, sizeof rec);
+#if OVMX_ALPHA_VMS_ABI
+    /* This frame's FP register itself (R29) -- the value the invocation walk
+     * holds for this frame; __builtin_frame_address need not equal it. */
+    __asm__ __volatile__("mov $29,%0" : "=r"(rec.fp));
+#else
+    rec.fp = (uint64_t)(uintptr_t)__builtin_frame_address(0);
+#endif
+    rec.ctx.sigarglst = (uint64_t)(uintptr_t)sig;
+    rec.ctx.mcharglst = (uint64_t)(uintptr_t)&rec.vmech;
+    rec.vmech.args  = 43;          /* the Alpha mechanism array's arg count */
+    rec.vmech.frame = (uint64_t)(uintptr_t)(mech ? mech->chf$ph_mch_frame : NULL);
+    rec.vmech.depth = mech ? mech->chf$is_mch_depth : 0;
+    if (g_sig_icb_valid) {
+        rec.sig_icb  = g_sig_icb;
+        rec.have_sig = 1;
+        for (int r = 0; r <= 28; r++)
+            rec.vmech.savr[r] = g_sig_icb.libicb$q_ireg[r];
+        rec.ctx.expt_fp = g_sig_icb.libicb$q_ireg[ALPHA_REG_FP];
+        rec.ctx.expt_pc = g_sig_icb.libicb$q_program_counter;
+    }
+    uint64_t pv = (uint64_t)(uintptr_t)&vms$$call_handler;
+    if (pv < 0x80000000ULL)        /* a longword cell: only a P0/P1 address */
+        SYS$GL_CALL_HANDL = (int)pv;
+    int pushed = 0;
+    if (disp_depth < MAX_DISPATCH) {
+        disp_stack[disp_depth++] = &rec;
+        pushed = 1;
+    }
+    uint32_t r = h(sig, mech);
+    if (pushed)
+        disp_depth--;
+    return r;
+}
+
+/* Record the signalling point (the caller of LIB$SIGNAL/LIB$STOP). */
+__attribute__((noinline)) static void capture_signal_point(void)
+{
+#if OVMX_ALPHA_VMS_ABI
+    INVO_CONTEXT_BLK icb;
+    /* Current context = this (non-inlined) frame; one out = lib$signal or
+     * lib$stop; one more = the routine that signalled. */
+    g_sig_icb_valid = 0;
+    if (lib$get_curr_invo_context(&icb) == SS$_NORMAL &&
+        !icb.libicb$v_bottom_of_stack &&
+        vms$$invo_walk_prev(&icb) == SS$_NORMAL &&
+        !icb.libicb$v_bottom_of_stack &&
+        vms$$invo_walk_prev(&icb) == SS$_NORMAL) {
+        g_sig_icb = icb;
+        g_sig_icb_valid = 1;
+    }
+#else
+    g_sig_icb_valid = 0;
+#endif
+}
 
 /* ================================================================
  * lib$establish - Establish a condition handler
@@ -141,6 +272,22 @@ void *lib$establish(void *handler) {
     handler_stack[handler_count].est_pc     = est_pc;
     handler_stack[handler_count].active     = 0;
     handler_stack[handler_count].has_anchor = 0;
+    handler_stack[handler_count].est_handle = 0;
+#if OVMX_ALPHA_VMS_ABI
+    /* vms-ed1: identify the establisher by its invocation handle from the
+     * genuine Calling-Standard walk: the current context is lib$establish's
+     * own frame; one frame out is the establisher. An anchorless SYS$UNWIND
+     * finds this frame again by that handle and resumes it. */
+    {
+        INVO_CONTEXT_BLK icb;
+        if (lib$get_curr_invo_context(&icb) == SS$_NORMAL &&
+            !icb.libicb$v_bottom_of_stack &&
+            vms$$invo_walk_prev(&icb) == SS$_NORMAL) {
+            handler_stack[handler_count].est_handle =
+                (uint64_t)lib$get_invo_handle(&icb);
+        }
+    }
+#endif
     handler_count++;
 
     return previous;
@@ -259,7 +406,7 @@ static void perform_unwind(struct chf$signal_array *sigarray)
         mech.chf$is_mch_depth = (uint32_t)i;
         mech.chf$is_mch_flags = CHF$M_UNWINDING;
         rec->active = 1;
-        (void)rec->handler(sigarray, &mech);   /* return value ignored in unwind */
+        (void)vms$$call_handler(rec->handler, sigarray, &mech);   /* return value ignored in unwind */
         rec->active = 0;
     }
 
@@ -296,6 +443,32 @@ static void perform_unwind(struct chf$signal_array *sigarray)
      * Alpha machine context to restore into, so vms$$invo_transfer() reports
      * "not transferred" and the rung-1 pop-only unwind (already done above)
      * stands. The reconstruction itself is host-proven (test_invo_context). */
+#if OVMX_ALPHA_VMS_ABI
+    /* vms-ed1: the genuine Alpha path. The target establisher was identified
+     * at lib$establish by its invocation handle; walk the live chain out to
+     * that frame (each step restores the preserved registers its callee
+     * saved), hand it R0 = the mechanism array's saved R0 -- the value the
+     * call it made "returns" -- and resume it at its call's return point (or
+     * newpc). This is VMS's anchorless "return to the establisher". */
+    if (target >= 0 && target < MAX_HANDLERS && handler_stack[target].est_handle) {
+        INVO_CONTEXT_BLK ticb;
+        uint64_t want = handler_stack[target].est_handle;
+        if (lib$get_curr_invo_context(&ticb) == SS$_NORMAL) {
+            for (;;) {
+                if ((uint64_t)lib$get_invo_handle(&ticb) == want) {
+                    ticb.libicb$q_ireg[0] = uw_savr0;
+                    uw_newpc = newpc;
+                    vms$$invo_transfer(&ticb, newpc);   /* does not return */
+                    break;
+                }
+                if (ticb.libicb$v_bottom_of_stack ||
+                    vms$$invo_walk_prev(&ticb) != SS$_NORMAL) {
+                    break;
+                }
+            }
+        }
+    }
+#else
     if (target >= 0 && target < MAX_HANDLERS && handler_stack[target].est_pc) {
         INVO_CONTEXT_BLK ticb;
         uint64_t target_pc =
@@ -308,6 +481,7 @@ static void perform_unwind(struct chf$signal_array *sigarray)
             /* else: fall through to the pop-only contract below. */
         }
     }
+#endif
     /* No anchor armed: pop-only unwind already done above (rung-1 contract). */
     (void)newpc;
 }
@@ -354,8 +528,9 @@ static uint32_t dispatch_condition(struct chf$signal_array *sigarray)
 
         rec->active = 1;
         uw_requester = i;   /* frame the handler could unwind from */
-        uint32_t result = rec->handler(sigarray, &mecharray);
+        uint32_t result = vms$$call_handler(rec->handler, sigarray, &mecharray);
         rec->active = 0;
+        uw_savr0 = (uint64_t)mecharray.chf$is_mch_savr0;   /* vms-ed1 */
 
         /* rung-2: the handler may have called sys$unwind, which deferred a
          * transfer. Perform it now (as real VMS does on handler return). If
@@ -420,6 +595,8 @@ uint32_t lib$signal(uint32_t condition, ...) {
     uint32_t sigarray_buf[32];
     struct chf$signal_array *sigarray = (struct chf$signal_array *)sigarray_buf;
 
+    capture_signal_point();   /* vms-bfd03: the CHF context's signalling point */
+
     va_start(ap, condition);
     build_signal_array(sigarray, condition, ap);
     va_end(ap);
@@ -451,6 +628,8 @@ uint32_t lib$stop(uint32_t condition, ...) {
     va_list ap;
     uint32_t sigarray_buf[32];
     struct chf$signal_array *sigarray = (struct chf$signal_array *)sigarray_buf;
+
+    capture_signal_point();   /* vms-bfd03 */
 
     va_start(ap, condition);
     build_signal_array(sigarray, condition, ap);
@@ -484,6 +663,29 @@ uint32_t lib$sig_to_ret(void *signal_args, void *mechanism_args) {
 
     mecharray->chf$is_mch_savr0 = sigarray->chf$is_sig_name;
     return SS$_CONTINUE;
+}
+
+/* ================================================================
+ * lib$sig_to_stop - Convert a signalled condition into a stop.
+ *
+ * A handler that re-signals the original condition as LIB$STOP: execution
+ * cannot continue after it, the image exits with the condition value.
+ * ================================================================ */
+
+uint32_t lib$sig_to_stop(void *signal_args, void *mechanism_args) {
+    struct chf$signal_array *sigarray = (struct chf$signal_array *)signal_args;
+    (void)mechanism_args;
+
+    if (sigarray == NULL) {
+        return SS$_RESIGNAL;
+    }
+    /* Success/informational conditions are not stops (the VMS RTL treats
+     * only conditions with the failure bit pattern as stoppable). */
+    if ($VMS_STATUS_SUCCESS(sigarray->chf$is_sig_name)) {
+        return SS$_RESIGNAL;
+    }
+    lib$stop(sigarray->chf$is_sig_name);
+    return SS$_RESIGNAL;     /* not reached: lib$stop does not return */
 }
 
 /* ================================================================
@@ -572,7 +774,8 @@ uint32_t vms$$unwind_request(const uint32_t *depadr, void *newpc)
     int can_transfer =
         uw_dispatching && depadr &&
         target >= 0 && target < current &&
-        handler_stack[target].has_anchor;
+        (handler_stack[target].has_anchor ||
+         handler_stack[target].est_handle != 0);   /* vms-ed1: anchorless */
 
     if (can_transfer) {
         /* Defer: the dispatcher performs the transfer when the requesting

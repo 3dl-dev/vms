@@ -285,9 +285,45 @@ int dcl_parse_line(const char *line, struct dcl_command *cmd)
     }
 
     /* Parse the rest of the tokens */
+    int last_was_param = 0;       /* previous token was a WORD/STRING/NUMBER param */
+    int last_param_quoted = 0;    /* ...and that param came from a bare STRING     */
     while (1) {
+        size_t before = lex.pos;
         if (dcl_lexer_next(&lex, &tok) != 0) break;
         if (tok.type == TOK_EOF || tok.type == TOK_NEWLINE) break;
+        /* ADJACENT tokens with no blank between them are ONE DCL parameter
+         * (rd vms-a8a lab: `COPY VAX1"SYSTEM pw"::T1.TXT X` was split into three
+         * parameters at the quotes). DCL keeps an embedded quoted span inside
+         * the parameter WITH its quotes and its case; only a parameter that is
+         * entirely one quoted string loses them (the unchanged path below). */
+        int adjacent = before < lex.length && lex.input[before] != ' ' &&
+                       lex.input[before] != '\t';
+        if (adjacent && last_was_param && cmd->param_count > 0 &&
+            (tok.type == TOK_WORD || tok.type == TOK_STRING || tok.type == TOK_NUMBER)) {
+            char *dst = cmd->params[cmd->param_count - 1];
+            char merged[sizeof(cmd->params[0])];
+            size_t m = 0, cap = sizeof merged - 1;
+            const char *src = dst;
+            if (last_param_quoted && m < cap) merged[m++] = '"';
+            for (; *src && m < cap; src++) {
+                if (last_param_quoted && *src == '"' && m + 1 < cap) merged[m++] = '"';
+                merged[m++] = *src;
+            }
+            if (last_param_quoted && m < cap) merged[m++] = '"';
+            if (tok.type == TOK_STRING && m < cap) merged[m++] = '"';
+            for (src = tok.value; *src && m < cap; src++) {
+                if (tok.type == TOK_STRING && *src == '"' && m + 1 < cap) merged[m++] = '"';
+                merged[m++] = *src;
+            }
+            if (tok.type == TOK_STRING && m < cap) merged[m++] = '"';
+            merged[m] = '\0';
+            memcpy(dst, merged, m + 1);
+            last_param_quoted = 0;
+            continue;
+        }
+        last_was_param = (tok.type == TOK_WORD || tok.type == TOK_STRING ||
+                          tok.type == TOK_NUMBER);
+        last_param_quoted = (tok.type == TOK_STRING);
 
         switch (tok.type) {
         case TOK_QUALIFIER:

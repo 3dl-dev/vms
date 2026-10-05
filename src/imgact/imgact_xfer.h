@@ -23,6 +23,9 @@ struct ovmx_xfer_info {
 	unsigned int  flavor;    /* enum ovmx_act_flavor (0 == OVMX_ACT_SYSV)  */
 	unsigned int  count;     /* number of transfer entries (0 when !valid) */
 	uint64_t      main_off;  /* image-relative main transfer address       */
+	uint64_t      first_off; /* FIRST entry: what the activator calls first
+				  * (LIB$INITIALIZE when count > 1, vms-43c)   */
+	const uint64_t *entries; /* the count entries, in image order          */
 	int           valid;     /* 1 == a well-formed .vms$xfer was parsed     */
 };
 

@@ -39,6 +39,16 @@
  * OVMX-PARTIAL: sys$getdviw (vms-dv1) -- exec: tail-calls sys$getdvi, so the
  *     executive supplies exactly the same half.
  * OVMX-LOCAL: sys$getdviw -- inherits sys$getdvi's userspace remainder exactly.
+ * OVMX-PARTIAL: sys$alloc (vms-44a) -- exec: the device is resolved in the
+ *     executive's device table and the allocation CLAIM is the executive's
+ *     (vms_kif_alloc), so a second process is refused SS$_DEVALLOC.
+ * OVMX-LOCAL: sys$alloc -- the physical-name echo (phylen/phybuf) is the table
+ *     row's name with the leading underscore VMS prints; acmode/flags are not
+ *     consulted.
+ * OVMX-PARTIAL: sys$dalloc (vms-44a) -- exec: the release is the executive's
+ *     (vms_kif_dalloc; SS$_DEVNOTALLOC if this process does not hold it).
+ * OVMX-LOCAL: sys$dalloc -- only the descriptor-to-string copy and the device
+ *     name resolution happen here.
  * OVMX-PARTIAL: sys$device_scan (vms-dv1) -- exec: every device it yields is a
  *     row of the EXECUTIVE'S I/O database, enumerated through vms_kif_devscan();
  *     it can no longer report a device the executive does not have.
@@ -49,7 +59,9 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "dvidef.h"
 #include "dcdef.h"
@@ -300,7 +312,7 @@ static uint32_t device_lookup_translated(const char *devnam_in,
  * @param astprm   AST parameter (ignored)
  * @param nullarg  Reserved, pass 0
  */
-uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
+static uint32_t getdvi_impl(uint32_t efn, uint16_t chan,
                     struct dsc$descriptor_s *devnam,
                     void *itmlst, struct _iosb *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm,
@@ -346,6 +358,24 @@ uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
         iosb->iosb$w_bcnt   = 0;
     }
     return status;
+}
+
+/*
+ * sys$getdvi - public entry: the getdvi body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getdvi(uint32_t efn, uint16_t chan,
+                    struct dsc$descriptor_s *devnam,
+                    void *itmlst, struct _iosb *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm,
+                    uint32_t nullarg)
+{
+    uint32_t st = getdvi_impl(efn, chan, devnam, itmlst, iosb, astadr, astprm, nullarg);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }
 
 /*
@@ -487,4 +517,65 @@ uint32_t sys$device_scan(struct dsc$descriptor_s *devnam, uint16_t *devnamlen,
         ctx->gen64$l_longword[1] = 1;
         return SS$_NORMAL;
     }
+}
+
+/*
+ * sys$alloc - Allocate a device to the calling process.
+ *
+ * devnam may be a physical unit or a logical name (translated through LNM$SYSTEM
+ * as $GETDVI does) and may carry the leading underscore of a physical name. The
+ * executive records the claim; phybuf receives the physical name ("_UNIT:").
+ */
+uint32_t sys$alloc(const struct dsc$descriptor_s *devnam, uint16_t *phylen,
+                   struct dsc$descriptor_s *phybuf, uint32_t acmode,
+                   uint32_t flags)
+{
+    (void)acmode; (void)flags;
+    if (!devnam || !devnam->dsc$a_pointer || devnam->dsc$w_length == 0)
+        return SS$_BADPARAM;
+
+    char name[VMS_DEVNAM_SIZE];
+    dsc$strncpy(name, devnam, sizeof(name));
+    const char *n = (name[0] == '_') ? name + 1 : name;
+
+    struct vms_devinfo info;
+    uint32_t st = device_lookup_translated(n, &info);
+    if (!(st & 1))
+        return st;
+    info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+
+    st = vms_kif_alloc(info.devnam);
+    if (!(st & 1))
+        return st;
+
+    if (phybuf && phybuf->dsc$a_pointer) {
+        char phys[VMS_DEVNAM_SIZE + 2];
+        int len = snprintf(phys, sizeof(phys), "_%s", info.devnam);
+        if (len > 0) {
+            uint16_t l = (uint16_t)len;
+            (void)lib$scopy_r_dx(&l, phys, phybuf);
+            if (phylen) *phylen = l < phybuf->dsc$w_length || phybuf->dsc$b_class == DSC$K_CLASS_D
+                                      ? l : phybuf->dsc$w_length;
+        }
+    }
+    return SS$_NORMAL;
+}
+
+/* sys$dalloc - Deallocate a device allocated with $ALLOC. */
+uint32_t sys$dalloc(const struct dsc$descriptor_s *devnam, uint32_t acmode)
+{
+    (void)acmode;
+    if (!devnam || !devnam->dsc$a_pointer || devnam->dsc$w_length == 0)
+        return SS$_BADPARAM;
+
+    char name[VMS_DEVNAM_SIZE];
+    dsc$strncpy(name, devnam, sizeof(name));
+    const char *n = (name[0] == '_') ? name + 1 : name;
+
+    struct vms_devinfo info;
+    uint32_t st = device_lookup_translated(n, &info);
+    if (!(st & 1))
+        return st;
+    info.devnam[VMS_DEVNAM_SIZE - 1] = '\0';
+    return vms_kif_dalloc(info.devnam);
 }

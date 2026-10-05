@@ -1,0 +1,18 @@
+MCR NCP SHOW EXECUTOR COUNTERS
+
+
+Node Counters as of  4-OCT-2026 21:20:04
+
+Executor node = 1.1 (VAX1)
+
+           3  Maximum logical links active
+           0  Aged packet loss
+           0  Node unreachable packet loss
+           0  Node out-of-range packet loss
+           0  Oversized packet loss
+           0  Packet format error
+           0  Partial routing update loss
+           0  Verification reject
+
+
+$

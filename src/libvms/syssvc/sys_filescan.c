@@ -290,11 +290,18 @@ static int fscn_field_for_code(const fscn_parse_t *pr, uint16_t code,
     }
 }
 
-uint32_t sys$filescan(
+uint32_t (sys$filescan)(
     const struct dsc$descriptor_s *srcstr,
     ILE2                          *valuelst,
-    uint32_t                      *fldflags)
+    uint32_t                      *fldflags,
+    struct dsc$descriptor_s       *auxout,
+    uint16_t                      *retlen)
 {
+    /* auxout/retlen carry the auxiliary (access-control) string of a node
+     * specification; this scan never produces one, so it reports length 0. */
+    (void)auxout;
+    if (retlen)
+        *retlen = 0;
     if (!srcstr || !valuelst)
         return SS$_BADPARAM;
 

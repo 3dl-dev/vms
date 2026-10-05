@@ -8,7 +8,9 @@
  * -mpointer-size=64). `long` is 32-bit by VMS ABI and cannot be widened without
  * breaking VMS binary compatibility. So we must decouple the address/register
  * width from `long`:
- *   _Addr  = long long   (64-bit: intptr_t/ptrdiff_t/size_t width == pointer)
+ *   _Addr  = long long   (64-bit: intptr_t/uintptr_t/ptrdiff_t width == pointer)
+ *   size_t/ssize_t are 32-bit, as DEC C and the port compiler define them
+ *   (vms-537; patched into include/alltypes.h.in by build-musl.sh)
  *   _Int64 = long long   (64-bit integer)
  *   _Reg   = long long   (64-bit register width)
  *   __LONG_MAX = 0x7fffffffL  (32-bit long)

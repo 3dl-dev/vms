@@ -260,7 +260,7 @@ RUN cd /src/repo && \
         -DOVMX_STATIC=ON \
         -DBUILD_TESTS=ON \
         -DBUILD_TOOLS=ON \
-    && cmake --build build-static --target qemu_syssvc_tests vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
+    && cmake --build build-static --target qemu_syssvc_tests qemu_corpus_rt vmsdcl vms_login vms_authorize vms_initialize mmk_native vmslibrarian vmslink vms_tcpip_daytime --parallel $(nproc) 2>&1 && \
     echo "--- test_syssvc_* binaries (public sys\$ API, static musl) ---" && \
     ls -la build-static/bin/test_syssvc_* && \
     echo "--- PIPESTAGE.EXE (the stage image test_syssvc_spawn_pipeline drives, vms-e9a B2) ---" && \
@@ -564,6 +564,16 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     # comment). Absence is FATAL, not skipped: without it lib_getdvi's
     # SYS$SYSDEVICE lookup would silently miss and the corpus suite above
     # would go red for the wrong reason (fixture absent, not a real defect).
+    mkdir -p /initramfs/tests/corpus_rt && n_corpus_rt=0 && \
+    for f in /src/repo/build-static/bin/corpus_rt_*; do \
+        [ -f "$f" ] || continue; \
+        cp "$f" "/initramfs/tests/corpus_rt/$(basename "$f" | sed 's/^corpus_rt_//')"; \
+        case "$f" in *.args) ;; *) n_corpus_rt=$((n_corpus_rt+1));; esac; \
+    done && \
+    { cp /src/repo/build-static/bin/corpus_seed_sysvol /initramfs/tests/corpus_seed_sysvol || \
+      { echo "FATAL: corpus_seed_sysvol was not built into the static tree -- the corpus guest would have no mounted system disk"; exit 1; }; } && \
+    chmod +x /initramfs/tests/corpus_seed_sysvol && \
+    { [ "$n_corpus_rt" -ge 100 ] || { echo "FATAL: expected at least 100 corpus_rt_* binaries (tests/qemu/corpus_runtime_programs.txt) staged into /tests/corpus_rt, found $n_corpus_rt -- the corpus runtime column would silently shrink"; exit 1; }; } && \
     { cp /src/repo/build-static/bin/corpus_seed_lnm /initramfs/tests/corpus_seed_lnm || \
       { echo "FATAL: corpus_seed_lnm was not built into the static tree -- lib_getdvi's SYS\$SYSDEVICE lookup would go unseeded"; exit 1; }; } && \
     chmod +x /initramfs/tests/corpus_seed_lnm && \

@@ -334,6 +334,17 @@ extern "C" {
 #define SS$_INVLOGIN        2228    /* Invalid login */
 #define SS$_NOSUCHID        2580    /* No such user identifier */
 
+/* Values below read from the OpenVMS VAX V7.3 oracle (docs/oracle/vax73-starlet-defs/SSDEF.txt, vms-619). */
+#define SS$_FLTDIV          1172    /* Arithmetic trap, floating/decimal divide by zero */
+#define SS$_FLTDIV_F        1212    /* Arithmetic fault, floating divide by zero */
+#define SS$_NOMOREITEMS     1777    /* No more items */
+#define SS$_WRONGSTATE      9076    /* Object is in the wrong state for the request */
+#define SS$_CPUCAP          9236    /* Operation not permitted by CPU capabilities */
+#define SS$_NONETMBX        10404   /* Network mailbox privilege required (NETMBX) */
+#define SS$_NOSYSPRV        10468   /* SYSPRV privilege required */
+#define SS$_NOAUDIT         10540   /* Event is not audited */
+#define SS$_NOSECURITY      10548   /* SECURITY privilege required */
+
 /* ================================================================
  * Timer and AST status codes
  * ================================================================ */

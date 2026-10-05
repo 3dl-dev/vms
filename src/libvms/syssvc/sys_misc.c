@@ -13,6 +13,8 @@
  * tests/integration/test_userspace_service_register.sh
  *
  * OVMX-EXECUTIVE: sys$setprv (vms-pv1) proof=tests/qemu/test_syssvc_setprv.c -- the privilege mutation is the executive's: sys$setprv routes to vms_kif_setprv (VMS_IOCTL_SETPRV -> vms_ioctl_setprv, kernel/vms_access.c), which authorizes the grant against this process's AUTHORIZED mask (a caller without SETPRV cannot widen past it -- SS$_NOTALLPRIV/SS$_NOPRIV) and OWNS the result. A process can no longer award itself a privilege by writing pcb->cur_privs (the vms-b2e LARP class this closes). The PCB masks below are only a COPY of the executive's, re-read via $GETJPI-self for the two remaining in-process readers (sys_process.c fork inheritance, vmsprocess/access_modes.c's CMKRNL/CMEXEC mode gate) -- not part of the answer sys$setprv returns, which is wholly the executive's.
+ * OVMX-USERSPACE: sys$get_entropy (vms-44a) -- getrandom(2) (arc4random_buf on BSD): the host kernel's
+ *     CSPRNG, not an executive entropy pool; the bytes are real entropy.
  * OVMX-PARTIAL: sys$getsyi (vms-5919) -- exec: SYI$_CLUSTER_MEMBER and
  *     SYI$_CLUSTER_NODES read the CONNECTION MANAGER's own CLUB through the one
  *     projection that owns them (vms_kif_cluster_getsyi ->
@@ -23,10 +25,12 @@
  *     one, not the retired daemon's file). No fabricated membership.
  * OVMX-LOCAL: sys$getsyi -- the REMAINING items (NODENAME/VERSION/SCSNODE/
  *     SCSSYSTEMID/... ) answer from uname()/host sysconf(), not an executive
- *     system block. csidadr and nodename are still discarded
- *     ((void)csidadr; (void)nodename;), so a request aimed at another cluster
- *     node is answered with this machine's numbers as though aimed here (vms-642
- *     open; the cluster-item cutover above is the first executive-backed slice).
+ *     system block. nodename is still discarded ((void)nodename;) and csidadr
+ *     is read only as a wildcard-walk context that is one node long (-1 returns
+ *     this node, the next call SS$_NOMORENODE), so a request aimed at another
+ *     cluster node is answered with this machine's numbers as though aimed here
+ *     (vms-642 open; the cluster-item cutover above is the first executive-backed
+ *     slice).
  * OVMX-PARTIAL: sys$getsyiw (vms-5919) -- exec: the same SYI$_CLUSTER_MEMBER /
  *     SYI$_CLUSTER_NODES read of the connection manager's CLUB as sys$getsyi
  *     above (this is the wait form of the same service).
@@ -47,9 +51,15 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/utsname.h>
+#ifdef __linux__
+#include <sys/random.h>
+#endif
+#include <errno.h>
 #include <time.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "vms/pcb.h"
+#include "ovmx_pcb_ctx.h"
 #include "sysgen_params.h"
 #include "ovmx_identity.h"
 #include "vms_kif.h"        /* the executive OWNS privilege + cluster membership */
@@ -134,15 +144,34 @@ uint32_t sys$setprv(uint32_t enbflg, const uint64_t *prvadr,
  *   SYI$_CLUSTER_NODES - Cluster node count (1 for standalone; no live
  *                        cluster wire yet, see vms-ci.3)
  */
-uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
+/* Wildcard-walk context value meaning "the node just returned was the last". */
+#define SYI_WILD_DONE 0xFFFFFFFEu
+
+static uint32_t getsyi_impl(uint32_t efn, uint32_t *csidadr,
                     const struct dsc$descriptor_s *nodename,
                     const struct item_list_3 *itmlst,
                     void *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm) {
-    (void)efn; (void)csidadr; (void)nodename; (void)iosb;
+    (void)efn; (void)nodename; (void)iosb;
     (void)astadr; (void)astprm;
 
     if (!itmlst) return SS$_BADPARAM;
+
+    /*
+     * csidadr as a WILDCARD CONTEXT (OpenVMS System Services Reference Manual,
+     * $GETSYI): -1 asks for "the next node" and the service updates the longword
+     * so repeated calls walk the cluster, ending in SS$_NOMORENODE. This answers
+     * only for THIS node (it knows no other -- see the OVMX-LOCAL note above), so
+     * the walk is one node long: the -1 call returns this node and leaves the
+     * context at SYI_WILD_DONE, the next call has no node left.  Before this a
+     * walker (Eight-Cubed lib_getsyi.c) got this node back forever.
+     */
+    if (csidadr) {
+        if (*csidadr == 0xFFFFFFFFu)
+            *csidadr = SYI_WILD_DONE;
+        else if (*csidadr == SYI_WILD_DONE)
+            return SS$_NOMORENODE;
+    }
 
     struct utsname uts;
     uname(&uts);
@@ -333,9 +362,27 @@ uint32_t sys$getsyi(uint32_t efn, const uint32_t *csidadr,
 }
 
 /*
+ * sys$getsyi - public entry: the getsyi body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getsyi(uint32_t efn, uint32_t *csidadr,
+                    const struct dsc$descriptor_s *nodename,
+                    const struct item_list_3 *itmlst,
+                    void *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint32_t st = getsyi_impl(efn, csidadr, nodename, itmlst, iosb, astadr, astprm);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
+}
+
+/*
  * sys$getsyiw - Get system information (synchronous wrapper).
  */
-uint32_t sys$getsyiw(uint32_t efn, const uint32_t *csidadr,
+uint32_t sys$getsyiw(uint32_t efn, uint32_t *csidadr,
                      const struct dsc$descriptor_s *nodename,
                      const struct item_list_3 *itmlst,
                      void *iosb,
@@ -439,4 +486,64 @@ uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
 
     vms_pcb_set_default_dir(merged);
     return SS$_NORMAL;
+}
+
+/*
+ * sys$get_entropy - Fill a buffer with cryptographically strong random bytes.
+ * The request is satisfied in full from the host kernel's CSPRNG or refused;
+ * a short or failed read is never padded.
+ */
+uint32_t sys$get_entropy(void *buffer, uint32_t length)
+{
+    if (!buffer)
+        return SS$_ACCVIO;
+#if defined(__NetBSD__)
+    arc4random_buf(buffer, length);     /* BSD kernel CSPRNG; cannot fail */
+    return SS$_NORMAL;
+#elif !defined(__linux__)
+    /* A substrate with no CSPRNG entry point libvms knows: honest refusal, never
+     * a buffer of zeros or of a weak generator's output. */
+    (void)buffer; (void)length;
+    return SS$_NOSUCHDEV;
+#else
+    uint8_t *p = (uint8_t *)buffer;
+    while (length > 0) {
+        ssize_t n = getrandom(p, length, 0);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return SS$_NOSUCHDEV;   /* no entropy source: honest, not zero bytes */
+        }
+        p += n;
+        length -= (uint32_t)n;
+    }
+    return SS$_NORMAL;
+#endif
+}
+
+/*
+ * vms$$pcb_for_service - see ovmx_pcb_ctx.h. Seeds the main thread's PCB from the
+ * executive's row for this process the first time a PCB-backed service needs it.
+ */
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
+struct vms_pcb *vms$$pcb_for_service(void)
+{
+    struct vms_pcb *pcb = (vms_pcb_get)();
+    if (pcb)
+        return pcb;
+#if defined(__linux__)
+    /* A thread other than the main one would register a second VMS process with the
+     * executive; only the process's own thread establishes the process context. */
+    if ((long)syscall(SYS_gettid) != (long)getpid())
+        return NULL;
+#endif
+    struct vms_procinfo self;
+    memset(&self, 0, sizeof(self));
+    if (!(vms_kif_getjpi_self(&self) & 1))
+        return NULL;                    /* no executive row: no context (honest) */
+    pcb = vms_pcb_init(self.cur_privs);
+    if (pcb)
+        vms_pcb_set_identity(self.vms_pid, self.uic, self.username, self.prcnam);
+    return pcb;
 }

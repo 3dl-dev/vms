@@ -122,7 +122,7 @@ uint32_t lib$getjpi(const uint32_t *item_code, const uint32_t *pid,
  */
 uint32_t lib$getsyi(const uint32_t *item_code,
                     void *result, struct dsc$descriptor_s *result_str,
-                    uint16_t *result_len, const uint32_t *csid,
+                    uint16_t *result_len, uint32_t *csid,
                     const struct dsc$descriptor_s *node) {
     if (!item_code) return SS$_BADPARAM;
 
@@ -295,7 +295,7 @@ static void spawn_resolve_spec(const struct dsc$descriptor_s *spec,
     }
 }
 
-uint32_t lib$spawn(const struct dsc$descriptor_s *command,
+uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
                    const struct dsc$descriptor_s *input_file,
                    const struct dsc$descriptor_s *output_file,
                    const uint32_t *flags,
@@ -548,9 +548,15 @@ uint32_t lib$spawn(const struct dsc$descriptor_s *command,
  *   resultspec - Descriptor to receive matched filename
  *   context    - Context pointer (must be 0 on first call)
  */
-uint32_t lib$find_file(const struct dsc$descriptor_s *filespec,
-                       struct dsc$descriptor_s *resultspec,
-                       uint32_t *context) {
+uint32_t (lib$find_file)(const struct dsc$descriptor_s *filespec,
+                         struct dsc$descriptor_s *resultspec,
+                         uint32_t *context,
+                         const struct dsc$descriptor_s *default_filespec,
+                         const struct dsc$descriptor_s *related_filespec,
+                         uint32_t *status_value,
+                         const uint32_t *flags) {
+    (void)default_filespec; (void)related_filespec; (void)flags;
+    if (status_value) *status_value = 0;   /* no secondary RMS STV on this path */
     if (!filespec || !resultspec || !context) return SS$_BADPARAM;
     if (!filespec->dsc$a_pointer) return SS$_BADPARAM;
 
@@ -677,6 +683,7 @@ uint32_t lib$find_file_end(uint32_t *context) {
 
     return SS$_NORMAL;
 }
+
 
 /* ================================================================
  * Message and keyword-table routines

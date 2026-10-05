@@ -154,6 +154,9 @@ docker run --rm \
     -e JOINT_MAIN \
     -e JOINT_EXTRA \
     -e JOINT_CRTL_RMS_VENEER \
+    -e JOINT_USE_LIBVMS \
+    -e JOINT_MAIN_CFLAGS \
+    -e JOINT_LINK_BASE \
     "$IMG" bash -c '
 set -euxo pipefail
 OUT=/out
@@ -292,7 +295,9 @@ echo "-- assembling crt0.obj (real port vms-ucrt0.c -> crt0.s, cross as) --"
 
 JOINT_MAIN=${JOINT_MAIN:-joint_main.c}
 echo "-- compiling joint_main.obj from $JOINT_MAIN (cross cc1, -mpointer-size=64) --"
-"$ALPHA_CC" -mpointer-size=64 -g0 -c "/joint/$JOINT_MAIN" -o "$OUT/joint_main.obj"
+# vms-bfd03: JOINT_MAIN_CFLAGS adds flags for the main source only (e.g. the
+# OVMX LIB$/STARLET include surface for a program that uses INVO_CONTEXT_BLK).
+"$ALPHA_CC" -mpointer-size=64 -g0 ${JOINT_MAIN_CFLAGS:-} -c "/joint/$JOINT_MAIN" -o "$OUT/joint_main.obj"
 
 # vms-bdd: JOINT_EXTRA additional objects — each compiled by the SAME cross cc1
 # into its OWN .obj, added to the STRICT link below. This is the multi-.o rung:
@@ -302,8 +307,12 @@ EXTRA_OBJS=""
 JOINT_EXTRA=${JOINT_EXTRA:-}
 for _e in $JOINT_EXTRA; do
     _obj="$OUT/${_e%.c}.obj"
-    echo "-- compiling extra $_obj from $_e (cross cc1, -mpointer-size=64) --"
-    "$ALPHA_CC" -mpointer-size=64 -g0 -c "/joint/$_e" -o "$_obj"
+    # vms-43c: a *_p32.c extra is compiled with the DEFAULT (32-bit) pointer
+    # size, like port code that never asks for 64-bit pointers -- its pointer
+    # initializers are longwords (e.g. LIB$INITIALIZE entries).
+    _psz="-mpointer-size=64"; case "$_e" in *_p32.c) _psz="" ;; esac
+    echo "-- compiling extra $_obj from $_e (cross cc1, ${_psz:-32-bit pointers}) --"
+    "$ALPHA_CC" $_psz -g0 -c "/joint/$_e" -o "$_obj"
     EXTRA_OBJS="$EXTRA_OBJS $_obj"
 done
 
@@ -329,9 +338,23 @@ done
 # this is inert -- no extra --use flag -- when the veneer is not opted in).
 RMS_USE_FLAG=""
 [ -n "$RMS" ] && RMS_USE_FLAG="--use $RMS"
-"$WORK/LINK.EXE" --transfer __main \
+# vms-43c: OVMX STARLET -- the object library every image is searched against,
+# as OpenVMS LINK searches SYS$LIBRARY:STARLET.OLB. Today it carries the
+# LIB$INITIALIZE dispatcher (src/vmslink/starlet/lib_initialize.c); library
+# search pulls it only into an image that references LIB$INITIALIZE.
+"$ALPHA_CC" -mpointer-size=64 -g0 -c /src/src/vmslink/starlet/lib_initialize.c -o "$OUT/lib_initialize.obj"
+rm -f "$OUT/STARLET.a"; ar rcS "$OUT/STARLET.a" "$OUT/lib_initialize.obj"
+# vms-ed1: JOINT_USE_LIBVMS=1 (veneer builds only, where the LIB$/CHF producer
+# LIBVMS$SHR exists) also binds the image to LIBVMS$SHR -- for a port program
+# that calls LIB$ESTABLISH / LIB$SIGNAL / SYS$UNWIND / LIB$GET_*_INVO_*.
+[ -n "$RMS" ] && [ "${JOINT_USE_LIBVMS:-0}" = 1 ] && RMS_USE_FLAG="$RMS_USE_FLAG --use $OUT/LIBVMS\$SHR.EXE"
+# vms-035: LINK.EXE links an EVAX executable at the OpenVMS Alpha P0 base 0x10000
+# by default (ET_EXEC; IMGACT then places the shareables in P0 above it).
+# JOINT_LINK_BASE overrides it (0 = the relocatable ET_DYN form).
+"$WORK/LINK.EXE" --transfer __main ${JOINT_LINK_BASE:+--base $JOINT_LINK_BASE} \
     --use "$WORK/DECC\$SHR.EXE" $RMS_USE_FLAG --use "$WORK/libots/LIBOTS_SHR.EXE" \
-    -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj" $EXTRA_OBJS
+    -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj" $EXTRA_OBJS \
+    --library "$OUT/STARLET.a"
 
 cp "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$WORK/libots/LIBOTS_SHR.EXE" "$OUT/"
 # vms-2655: LIBVMSRMS$SHR.EXE was already built directly into $OUT (above), so
@@ -339,6 +362,11 @@ cp "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$WORK/libots/LIBOTS_SHR.EXE" "$OUT/"
 # SYS$SHARE search-path set -- with no extra copy needed when the veneer path
 # built it; a plain (non-veneer) run leaves $RMS empty and stages nothing new.
 echo "== joint-e2e image built (genuine alpha path, vms-864) =="
+# vms-3320: the FILE-OP veneer gate (JOINT_MAIN=crtl_rms3_test.c) drops a marker
+# so build-alpha-bootimage.sh stages the FILE-OP independent-reader SYSTARTUP
+# (DIRECTORY of the FOP*.DAT set) instead of the stdio VENEER one (which reads
+# PORTTEST.DAT). Any other JOINT_MAIN leaves it absent -> unchanged behaviour.
+[ "$JOINT_MAIN" = crtl_rms3_test.c ] && { : > "$OUT/FILEOP_PROOF"; echo "== FILEOP_PROOF marker staged (vms-3320 file-op veneer gate) =="; }
 ls -la "$OUT/"
 readelf -h "$OUT/joint_e2e.exe" | grep -E "Type|Machine|Entry"
 readelf -SW "$OUT/joint_e2e.exe" | grep -E "vms\\\$xfer|vms\\\$imp|CODE|DATA" || true

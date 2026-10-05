@@ -35,6 +35,7 @@
  */
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -44,6 +45,7 @@
 #include "descrip.h"
 #include "lnmdef.h"
 #include "vms/pcb.h"
+#include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
 #include "ovmx_console.h"   /* vms-948: single OPA0:/TT: -> console resolver */
 #include "ovmx_layout.h"    /* vms-9f5: SYSDISK_DEVICE -- the native boot unit */
@@ -112,6 +114,27 @@ struct vms_device_result {
  *
  * Returns 1 if the name was resolved (use result), 0 if not (fall through).
  */
+/*
+ * assign_is_disk_unit - does `upper` (upper-case, trailing ':' already removed,
+ * optional leading '_') spell a physical disk unit: a 2-3 letter disk class
+ * prefix (VDA, DUA, DKA, DQA, DRA, DJA, DMA, SDA) followed by decimal digits?
+ */
+static int assign_is_disk_unit(const char *upper) {
+    static const char *const prefixes[] = { "VDA", "DUA", "DKA", "DQA", "DRA",
+                                            "DJA", "DMA", "SDA" };
+    if (upper[0] == '_') upper++;
+    for (size_t i = 0; i < sizeof(prefixes) / sizeof(prefixes[0]); i++) {
+        size_t pl = strlen(prefixes[i]);
+        if (strncmp(upper, prefixes[i], pl) != 0) continue;
+        const char *d = upper + pl;
+        if (*d == '\0') return 0;
+        for (; *d; d++)
+            if (*d < '0' || *d > '9') return 0;
+        return 1;
+    }
+    return 0;
+}
+
 static int resolve_vms_device(const char *name, struct vms_device_result *result) {
     char upper[256];
     size_t len;
@@ -213,6 +236,18 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
         return 1;
     }
 
+    /*
+     * Any physical disk unit (VDA300:, DUA1:, SDA0:, ...), not only the boot
+     * unit: the Files-11 ACP can mount any of them, and $ASSIGN of one is the
+     * executive's to grant or refuse (vms_kif_acp_assign: SS$_DEVNOTMOUNT /
+     * SS$_NOSUCHDEV). Before this only the boot unit's spelling reached the ACP,
+     * so a second mounted volume could not be assigned a channel (vms-1e98).
+     */
+    if (assign_is_disk_unit(upper)) {
+        result->is_file = 1;
+        return 1;
+    }
+
     if (strcmp(upper, "SYS$DISK") == 0) {
         struct vms_pcb *pcb = vms_pcb_get();
         if (pcb && pcb->default_dir[0]) {
@@ -290,7 +325,11 @@ static int resolve_vms_device(const char *name, struct vms_device_result *result
  * iterates (a logical may point at another logical) with the same small cap
  * VMS uses, and stops the instant a translation resolves to a mailbox device.
  *
- * SCOPED TO THE MAILBOX CASE ON PURPOSE. The caller consults this ONLY when
+ * It ALSO adopts a translation that lands on a physical disk unit (SYS$SYSDEVICE
+ * -> VDA300:), so a logical name for a Files-11 volume is assigned like the unit
+ * itself -- $ASSIGN translates its device argument (vms-1e98).
+ *
+ * SCOPED TO THE MAILBOX (AND DISK-UNIT) CASE ON PURPOSE. The caller consults this ONLY when
  * the raw name is not already a recognized device, and ADOPTS the result ONLY
  * when it resolves to a mailbox -- so SYS$INPUT/SYS$OUTPUT/OPA0: and ordinary
  * file assignment keep exactly the behaviour they had before this item. The
@@ -335,7 +374,8 @@ static int assign_resolve_mailbox_by_name(const char *name,
         equiv[rl] = '\0';
         if (rl == 0 || strcmp(equiv, cur) == 0) return 0;  /* no progress */
 
-        if (resolve_vms_device(equiv, devres) && devres->is_mailbox) {
+        if (resolve_vms_device(equiv, devres) &&
+            (devres->is_mailbox || devres->is_file)) {
             strncpy(out, equiv, outsz - 1);
             out[outsz - 1] = '\0';
             return 1;
@@ -368,12 +408,14 @@ static int assign_resolve_mailbox_by_name(const char *name,
  *   SS$_EXQUOTA   - No free channels available
  *   SS$_NOSUCHDEV - Could not open the device/file
  */
-uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
-                    uint16_t *chan,
-                    uint32_t acmode,
-                    const struct dsc$descriptor_s *mbxnam) {
+uint32_t (sys$assign)(const struct dsc$descriptor_s *devnam,
+                      uint16_t *chan,
+                      uint32_t acmode,
+                      const struct dsc$descriptor_s *mbxnam,
+                      uint32_t flags) {
     (void)acmode;
     (void)mbxnam;
+    (void)flags;   /* ASSIGN$M_* options: none changes what a channel is here */
 
     if (!devnam || !chan) return SS$_BADPARAM;
     if (!devnam->dsc$a_pointer || devnam->dsc$w_length == 0)
@@ -407,6 +449,33 @@ uint32_t sys$assign(const struct dsc$descriptor_s *devnam,
     uint32_t exec_chan = 0;
 
     int resolved = resolve_vms_device(name, &devres);
+    if (!resolved && !strchr(name, ':') && !strchr(name, '/') && !strchr(name, '.')) {
+        /* A VMS device name needs no trailing colon: "VDA300" is "VDA300:". */
+        char withcolon[260];
+        snprintf(withcolon, sizeof(withcolon), "%s:", name);
+        if (resolve_vms_device(withcolon, &devres)) {
+            strncpy(name, withcolon, sizeof(name) - 1);
+            name[sizeof(name) - 1] = '\0';
+            resolved = 1;
+        }
+    }
+    if (resolved && devres.is_file) {
+        /* A logical spelling of a volume (SYS$SYSDEVICE:) names the unit it
+         * translates to; the ACP is asked about the unit, not the logical. */
+        char unitname[256];
+        struct vms_device_result tmp;
+        char bare[256];
+        size_t bl = strlen(name);
+        if (bl >= sizeof(bare)) bl = sizeof(bare) - 1;
+        memcpy(bare, name, bl); bare[bl] = '\0';
+        if (bl > 0 && bare[bl - 1] == ':') bare[bl - 1] = '\0';
+        for (char *c = bare; *c; c++) *c = (char)toupper((unsigned char)*c);
+        if (!assign_is_disk_unit(bare) &&
+            assign_resolve_mailbox_by_name(name, unitname, sizeof(unitname), &tmp)) {
+            strncpy(name, unitname, sizeof(name) - 1);
+            name[sizeof(name) - 1] = '\0';
+        }
+    }
     if (!resolved) {
         /*
          * vms-mb1: the raw name is not a literal device -- it may be a

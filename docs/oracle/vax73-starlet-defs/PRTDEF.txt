@@ -1,0 +1,16 @@
+$EQU    PRT$C_NA        0
+$EQU    PRT$C_KR        3
+$EQU    PRT$C_KW        2
+$EQU    PRT$C_ER        7
+$EQU    PRT$C_EW        5
+$EQU    PRT$C_SR        11
+$EQU    PRT$C_SW        8
+$EQU    PRT$C_UR        15
+$EQU    PRT$C_UW        4
+$EQU    PRT$C_ERKW      6
+$EQU    PRT$C_SRKW      10
+$EQU    PRT$C_SREW      9
+$EQU    PRT$C_URKW      14
+$EQU    PRT$C_UREW      13
+$EQU    PRT$C_URSW      12
+$EQU    PRT$C_RESERVED  1

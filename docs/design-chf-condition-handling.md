@@ -3,9 +3,9 @@
 - **rd item:** `vms-2e72` (gap register R8 — see `docs/design-gcc-port-surface-gaps-register.md`)
 - **Status:** rung-1, rung-2 and rung-3 landed (rung-3 = the host-proven Alpha
   invocation-context walk engine + primitives + the anchorless-unwind wiring;
-  the real Alpha register-file capture and the machine register-restore transfer
-  are the deferred Alpha-runtime children); rungs 4–5 filed as children of
-  `vms-2e72`.
+  vms-ed1 made it genuine on the Alpha runtime: FP-located PDSCs, live register
+  capture and the machine transfer, proven by an anchorless SYS$UNWIND return
+  to main on qemu-system-alpha); rungs 4–5 filed as children of `vms-2e72`.
 - **Rule:** VMS-compatibility-first (Rule 1, "do it like VMS"); Rule 9 / INV-6
   (real executive path, no per-process fake); clean-room (Rule 8 — this design is
   from the public OpenVMS Programming Concepts Manual + Calling Standard + System
@@ -87,7 +87,8 @@ Gap versus the target, itemised:
 | G2 | mechanism array carries the **real** establisher frame + depth + saved regs | `NULL` frame, `handler_count` as depth, zero regs |
 | G3 | handler search follows the **real invocation (frame) chain** | walks a side array unrelated to actual frames |
 | G4 | `SYS$UNWIND` runs intervening handlers in `CHF$V_UNWINDING` mode and **transfers control** to a target frame at `newpc` | **closed (rung-2)** for an anchored target frame: deferred unwind, intervening `CHF$V_UNWINDING` calls, `setjmp`/`longjmp` transfer, `newpc` honoured, frames abandoned. Resuming into an *un-anchored* ancestor frame → rung-3 (G5). |
-| G5 | Alpha ICB primitives (`LIB$GET_INVO_*`) expose the chain | **closed (rung-3)** on the host: real PDSC/RSA walk (`rtl/lib_invo.c`) reconstructs each caller's PC/FP/SP/handler/bottom from constructed Alpha frames; `perform_unwind` consults it on the anchorless path. Real Alpha register capture + the machine transfer are the deferred children. |
+| G5 | Alpha ICB primitives (`LIB$GET_INVO_*`) expose the chain | **closed (rung-3 + vms-ed1)**: real PDSC/RSA walk (`rtl/lib_invo.c`), host-proven against constructed frames; on the OpenVMS Alpha ABI the PDSC is found through each frame's FP, `LIB$GET_CURR_INVO_CONTEXT` captures the live register file, and `vms$$invo_transfer` restores a frame and jumps. `lib$establish` records the establisher's invocation handle, so `SYS$UNWIND` to an un-anchored establisher resumes it at its call with R0 = the mechanism array's saved R0 -- proven on qemu-system-alpha + /dev/vms (`invo-gate`, return to main). FP registers F2-F9 are not restored. |
+| G5b | `SYS$GL_CALL_HANDL` + the condition-dispatcher frame (libgcc `vms-unwind.h` `DENOTES_EXC_DISPATCHER`) | **closed (vms-bfd03)**: every frame handler is called through `vms$$call_handler`; `SYS$GL_CALL_HANDL` (DATA universal of LIBVMS$SHR, a longword: P0) holds its procedure value. While a handler runs, that frame's ICB carries `libicb$ph_chfctx_addr` -> a CHFCTX (signal args, an Alpha-layout mechanism array per `vms/chfdef.h` whose saved R0..R28 are the signalling point's, captured by LIB$SIGNAL/LIB$STOP with the genuine `LIB$GET_CURR_INVO_CONTEXT`, the exception FP/PC), and the frame "before" it is the signalling point. Invocation handles are frame pointers on the Alpha runtime (as VMS, and as `vms-unwind.h` assumes). Proven by `chf-gate`. Open: the mechanism array OVMX hands *to handlers* is still the simplified internal layout, not the Alpha `CHF$MECH_ARRAY` (vms-5a7). |
 | G6 | one dispatcher serves both software signals **and** hardware exceptions | software path only; the `SS$_HPARITH` bridge (`vms-db3`/GAP3) proves the HW→condition→handler-chain pattern for one code but is not unified |
 
 The narrower `SS$_HPARITH` FP-trap bridge (`src/libvms/rtl/arith_signal.c`,

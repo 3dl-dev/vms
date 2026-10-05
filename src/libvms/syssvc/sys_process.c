@@ -79,6 +79,8 @@
  *     pcb->exit_handlers[] in the per-process PCB, then _exit()s.
  * OVMX-USERSPACE: sys$dclexh (vms-pt1) -- appends to that same per-process
  *     array; no executive records that the process has an exit handler.
+ * OVMX-USERSPACE: sys$canexh (vms-44a) -- removes a block from that same
+ *     per-process array (all of them when desblk is NULL).
  * OVMX-PARTIAL: sys$forcex (vms-pt1) -- exec: with no pidadr/prcnam it
  *     degenerates to sys$exit on the caller; otherwise the target is RESOLVED in
  *     the executive (by prcnam or by VMS pid, the same way sys$delprc resolves),
@@ -127,6 +129,20 @@
  * OVMX-LOCAL: sys$suspnd -- SIGSTOP is delivered to the resolved Linux pid; the
  *     signal is the suspend mechanism, same as sys$delprc's SIGTERM, now aimed at
  *     the process the executive named rather than a mis-cast VMS pid.
+ * OVMX-USERSPACE: sys$resched (vms-44a) -- sched_yield(2): the host scheduler
+ *     gives up the CPU; there is no VMS scheduling queue to requeue onto.
+ * OVMX-USERSPACE: sys$setrwm (vms-44a) -- records the resource-wait-mode flag in
+ *     this process's memory and reports its previous value; Linux has no
+ *     resource-wait mode, so nothing consults the flag (a recorded setting, not
+ *     an enforced one).
+ * OVMX-PARTIAL: sys$setswm (vms-44a) -- exec: the PSWAPM privilege test is the
+ *     executive's (vms_kif_chkpriv).
+ * OVMX-LOCAL: sys$setswm -- the process-swap-mode flag itself is a bit in this
+ *     process's memory that nothing consults (Linux has no balance set).
+ * OVMX-PARTIAL: sys$setprn (vms-44a) -- exec: the process name lives in the
+ *     executive's process table; vms_kif_setprn renames this process there and
+ *     refuses a duplicate name in the group (SS$_DUPLNAM).
+ * OVMX-LOCAL: sys$setprn -- only the descriptor-to-string copy happens here.
  * OVMX-PARTIAL: sys$suspend (vms-pt1) -- exec: a pure backwards-compat alias
  *     that tail-calls sys$suspnd, so the executive resolution + authorization of
  *     the target are sys$suspnd's (vms-904).
@@ -143,8 +159,14 @@
  *     success that changed the CALLER's own priority (vms-dff7).
  * OVMX-LOCAL: sys$setpri -- the VMS-priority<->Linux-nice mapping and the
  *     getpriority/setpriority applied to the resolved Linux pid are local.
- * OVMX-USERSPACE: sys$cancel (vms-pt1) -- KNOWN GAP (facade-risk, tracked
- *     vms-c8c): returns SS$_NORMAL without cancelling. QIO is genuinely
+ * OVMX-PARTIAL: sys$cancel (vms-pt1) -- exec: the mailbox a pending read waits on
+ *     is the executive's (the poll that decides "no message yet" is
+ *     vms_kif_mbx_read(nowait)); $CANCEL completes this process's pending
+ *     asynchronous MAILBOX reads on the channel with SS$_ABORT (vms-003).
+ * OVMX-LOCAL: sys$cancel -- the pending-request table is this process's memory (no
+ *     executive pending-read queue yet), and KNOWN GAP (facade-risk, tracked
+ *     vms-c8c) for io_uring-submitted file I/O: that is still not cancelled and
+ *     $CANCEL returns SS$_NORMAL for it. QIO file I/O is genuinely
  *     ASYNCHRONOUS (io_uring; sys_qio.c/sys_uring.c), so pending async I/O on a
  *     channel CAN exist -- this no-op does NOT cancel it. A real $CANCEL must
  *     io_uring_prep_cancel the channel's inflight SQEs and complete each IOSB
@@ -164,11 +186,14 @@
 #include <signal.h>
 #include <time.h>
 #include <stdio.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "ovmx_status.h"
 #include "prcdef.h"
+#include <sched.h>
 #include "prvdef.h"
 #include "vms/pcb.h"
+#include "ovmx_pcb_ctx.h"
 #include "vms_kif.h"
 /* ovmx_boot_stage_exec_path() + OVMX_BOOT_STAGE_DIR: the ACP-read bootstrap
  * bridge (vms-5f0). $CREPRC genuinely fork()+execve()s a new process, so its
@@ -340,7 +365,7 @@ static uint32_t jpi_cputim(uint32_t linux_pid, uint32_t *out)
  * target -- the honest answer is SS$_NONEXPR, which is what VMS returns
  * for a process that does not exist.
  */
-uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
+static uint32_t getjpi_impl(uint32_t efn, const uint32_t *pidadr,
                     void *prcnam_arg,
                     void *itmlst_arg,
                     void *iosb,
@@ -500,6 +525,24 @@ uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
     }
 
     return SS$_NORMAL;
+}
+
+/*
+ * sys$getjpi - public entry: the getjpi body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getjpi(uint32_t efn, const uint32_t *pidadr,
+                    void *prcnam_arg,
+                    void *itmlst_arg,
+                    void *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint32_t st = getjpi_impl(efn, pidadr, prcnam_arg, itmlst_arg, iosb, astadr, astprm);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
 }
 
 /*
@@ -840,15 +883,27 @@ static uint32_t creprc_bind_terminal(const char *devnam, const char *devpath)
  *
  * Reference: OpenVMS System Services Reference Manual ($CREPRC).
  */
-uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
-                    const struct dsc$descriptor_s *input,
-                    const struct dsc$descriptor_s *output,
-                    const struct dsc$descriptor_s *error,
-                    const void *prvadr, const void *quota,
-                    const struct dsc$descriptor_s *prcnam,
-                    uint32_t baspri, uint32_t uic, uint32_t mbxunt,
-                    uint32_t stsflg) {
+uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
+                      const struct dsc$descriptor_s *input,
+                      const struct dsc$descriptor_s *output,
+                      const struct dsc$descriptor_s *error,
+                      const void *prvadr, const void *quota,
+                      const struct dsc$descriptor_s *prcnam,
+                      uint32_t baspri, uint32_t uic, uint32_t mbxunt,
+                      uint32_t stsflg, const void *itemlst,
+                      const struct dsc$descriptor_s *node) {
     (void)quota; (void)baspri; (void)mbxunt;
+
+    /* Creating a process on another cluster node, or a non-empty $CREPRC item
+     * list, is not supported: refuse honestly instead of creating a local
+     * process the caller did not ask for. */
+    if (node && node->dsc$w_length != 0)
+        return SS$_BADPARAM;
+    if (itemlst) {
+        const uint16_t *e = (const uint16_t *)itemlst;
+        if (e[0] != 0 || e[1] != 0)
+            return SS$_BADPARAM;
+    }
 
     if (!image || !image->dsc$a_pointer) return SS$_BADPARAM;
 
@@ -1547,10 +1602,20 @@ uint32_t sys$creprc(uint32_t *pidadr, const struct dsc$descriptor_s *image,
  * lab confirmation pass is follow-up work, not blocking (Rule 10 permits
  * citing the public Dictionary directly; nothing here is invented).
  */
-uint32_t sys$delprc(const uint32_t *pidadr,
-                    const struct dsc$descriptor_s *prcnam) {
+uint32_t (sys$delprc)(const uint32_t *pidadr,
+                      const struct dsc$descriptor_s *prcnam,
+                      const void *itmlst) {
     struct vms_procinfo target, self_info;
     uint32_t status;
+
+    /* itmlst (DELPRC$_* options) is not supported; a non-empty list is refused
+     * honestly rather than silently dropped.  An absent or empty (leading
+     * zero-length / zero-code) list is the ordinary form. */
+    if (itmlst) {
+        const uint16_t *e = (const uint16_t *)itmlst;
+        if (e[0] != 0 || e[1] != 0)
+            return SS$_BADPARAM;
+    }
 
     if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0) {
         char key[VMS_PRCNAM_XFER];
@@ -1628,6 +1693,31 @@ uint32_t sys$dclexh(void *desblk) {
         (struct pcb_exit_handler *)desblk;
 
     return SS$_NORMAL;
+}
+
+/*
+ * sys$canexh - Cancel exit handler.
+ *
+ * Removes the exit-handler control block desblk from the PCB's list; a NULL
+ * desblk cancels every declared handler.  Handlers keep their LIFO order.
+ */
+uint32_t sys$canexh(void *desblk) {
+    struct vms_pcb *pcb = vms_pcb_get();
+    if (!pcb) return SS$_BADPARAM;
+
+    if (!desblk) {
+        pcb->exit_handler_count = 0;
+        return SS$_NORMAL;
+    }
+    for (int i = 0; i < pcb->exit_handler_count; i++) {
+        if ((void *)pcb->exit_handlers[i] == desblk) {
+            for (int j = i + 1; j < pcb->exit_handler_count; j++)
+                pcb->exit_handlers[j - 1] = pcb->exit_handlers[j];
+            pcb->exit_handler_count--;
+            return SS$_NORMAL;
+        }
+    }
+    return SS$_NORMAL;   /* not declared: nothing to cancel */
 }
 
 /*
@@ -1731,8 +1821,10 @@ uint32_t sys$forcex(const uint32_t *pidadr,
  * The VMS system service name is sys$suspnd (no trailing 'e').
  * sys$suspend is provided as a backwards-compatibility alias.
  */
-uint32_t sys$suspnd(const uint32_t *pidadr,
-                    const struct dsc$descriptor_s *prcnam) {
+uint32_t (sys$suspnd)(const uint32_t *pidadr,
+                      const struct dsc$descriptor_s *prcnam,
+                      uint32_t flags) {
+    (void)flags;   /* SUSP$M_ALERT / SUSP$M_KERNEL: Linux SIGSTOP has one mode */
     /* Suspend the RESOLVED target's real Linux pid, not a mis-cast VMS pid
      * (vms-904); no pidadr/prcnam resolves to self. */
     return signal_target_process(pidadr, prcnam, SIGSTOP);
@@ -1773,12 +1865,21 @@ uint32_t sys$resume(const uint32_t *pidadr,
  * operate on the current process (this simplifies the implementation
  * while still satisfying most use cases).
  */
-uint32_t sys$setpri(const uint32_t *pidadr,
-                    const struct dsc$descriptor_s *prcnam,
-                    uint32_t pri,
-                    uint32_t *prvpri) {
+uint32_t (sys$setpri)(const uint32_t *pidadr,
+                      const struct dsc$descriptor_s *prcnam,
+                      uint32_t pri,
+                      uint32_t *prvpri,
+                      uint32_t schedpol,
+                      uint32_t *prevpol) {
     struct vms_procinfo target;
     uint32_t status;
+
+    /* Only the default (timesharing) scheduling policy exists here: a request
+     * to change policy is refused rather than reported as done. */
+    if (schedpol != 0)
+        return SS$_BADPARAM;
+    if (prevpol)
+        *prevpol = 0;   /* the default policy */
 
     /* Clamp VMS priority to the valid range (0-31). */
     if (pri > 31) pri = 31;
@@ -1827,10 +1928,66 @@ uint32_t sys$setpri(const uint32_t *pidadr,
  *   2. Cancel the operation (io_uring_prep_cancel or aio_cancel)
  *   3. Complete the I/O with SS$_CANCEL status
  */
-uint32_t sys$cancel(uint16_t chan) {
-    (void)chan;
+extern void vms$$qio_cancel_chan(uint16_t chan);
 
-    /* KNOWN GAP (vms-c8c): QIO is async (io_uring), so pending I/O CAN exist;
-     * this no-op does not cancel it -- see the header note above. */
+uint32_t sys$cancel(uint16_t chan) {
+    /* Pending asynchronous MAILBOX reads on the channel complete with SS$_ABORT
+     * (vms-003). KNOWN GAP (vms-c8c): io_uring-submitted file I/O in flight on
+     * the channel is still not cancelled. */
+    vms$$qio_cancel_chan(chan);
     return SS$_NORMAL;
+}
+
+/*
+ * sys$resched - Cause the process to give up the processor ($RESCHED).
+ */
+uint32_t sys$resched(void)
+{
+    sched_yield();
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$setrwm - Set resource wait mode.  watflg 1 disables resource wait, 0
+ * enables it.  Returns SS$_WASSET if wait was previously disabled, else
+ * SS$_WASCLR (the same condition values $SETEF uses).
+ */
+static int process_rwm_disabled;
+
+uint32_t sys$setrwm(uint32_t watflg)
+{
+    int prev = process_rwm_disabled;
+    process_rwm_disabled = (watflg & 1) ? 1 : 0;
+    return prev ? SS$_WASSET : SS$_WASCLR;
+}
+
+/*
+ * sys$setswm - Set process swap mode.  swpflg 1 disables swapping (locks the
+ * process in the balance set) and needs PSWAPM; 0 enables it.  Returns
+ * SS$_WASSET if swapping was previously disabled, else SS$_WASCLR.
+ */
+static int process_swap_disabled;
+
+uint32_t sys$setswm(uint32_t swpflg)
+{
+    uint32_t pr = vms_kif_chkpriv(PRV$M_PSWAPM);
+    if (!(pr & 1))
+        return SS$_NOPRIV;
+    int prev = process_swap_disabled;
+    process_swap_disabled = (swpflg & 1) ? 1 : 0;
+    return prev ? SS$_WASSET : SS$_WASCLR;
+}
+
+/*
+ * sys$setprn - Set the process name.  The name is registered in the executive's
+ * process table; a name already held by another process in the caller's UIC
+ * group is SS$_DUPLNAM.  A null/empty descriptor leaves the process unnamed.
+ */
+uint32_t sys$setprn(const struct dsc$descriptor_s *prcnam)
+{
+    char name[VMS_PRCNAM_XFER];
+    name[0] = '\0';
+    if (prcnam && prcnam->dsc$a_pointer && prcnam->dsc$w_length > 0)
+        dsc$strncpy(name, prcnam, sizeof(name));
+    return vms_kif_setprn(name);
 }

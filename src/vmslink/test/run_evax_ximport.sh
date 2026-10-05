@@ -48,7 +48,7 @@ echo
 echo "== link the EVAX fixture (link_main.obj ALONE) against the producer =="
 # No link_helper.obj: HELPER_PROC is undefined in the object set and must bind as
 # a cross-image import against HELPER$SHR.EXE.
-"$WORK/LINK.EXE" --transfer MAIN_PROC --use "$WORK/HELPER\$SHR.EXE" \
+"$WORK/LINK.EXE" --base 0 --transfer MAIN_PROC --use "$WORK/HELPER\$SHR.EXE" \
     -o "$WORK/main_ximport.exe" "$FIX/link_main.obj"
 
 echo
@@ -65,7 +65,7 @@ $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/other.o" "$WORK/o
     --gsmatch LEQUAL,1,0 -o "$WORK/OTHER\$SHR.EXE" "$WORK/other.o"
 
 # This link MUST fail with %LINK-F-UNDEF — HELPER_PROC is exported by no producer.
-if "$WORK/LINK.EXE" --transfer MAIN_PROC --use "$WORK/OTHER\$SHR.EXE" \
+if "$WORK/LINK.EXE" --base 0 --transfer MAIN_PROC --use "$WORK/OTHER\$SHR.EXE" \
         -o "$WORK/should_not_exist.exe" "$FIX/link_main.obj" \
         > "$WORK/fail.log" 2>&1; then
     echo "FAIL: link SUCCEEDED against a producer that does not export HELPER_PROC"

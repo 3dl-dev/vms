@@ -1,8 +1,8 @@
 {
  "total": 144,
  "summary": {
-  "run-pass": 141,
-  "run-fail": 2,
+  "run-pass": 142,
+  "run-fail": 1,
   "run-crash": 1,
   "vm-crash": 0,
   "not-run": 0,
@@ -166,7 +166,7 @@
   },
   {
    "name": "lib_file_scan",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": false
   },
   {

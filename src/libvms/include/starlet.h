@@ -1653,6 +1653,10 @@ uint32_t sys$check_privilegew(uint32_t efn, const void *privnam, uint32_t bitnum
                               uint32_t flags, const void *itmlst, uint32_t *audsts,
                               void *astadr, uint64_t astprm);
 
+/** sys$audit_eventw - Request a security audit event (needs AUDIT; no audit server: unforced events are not audited, forced ones SS$_UNSUPPORTED) */
+uint32_t sys$audit_eventw(uint32_t efn, uint32_t flags, const void *itmlst,
+                          void *audsts, void *astadr, uint64_t astprm);
+
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

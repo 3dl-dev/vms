@@ -428,8 +428,8 @@ _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
  * file (extend/allocate, truncate, write attributes, write a directory entry).
  *
  * IOCTL-MAPPING DECISION (OVMX design choice, justified). On real OpenVMS these
- * are THREE distinct $QIO function codes (IO$_CREATE=9, IO$_DELETE=3,
- * IO$_MODIFY=6 in $IODEF), each with the same five FIB/name/ATR parameters. The
+ * are THREE distinct $QIO function codes (IO$_CREATE=51, IO$_DELETE=53,
+ * IO$_MODIFY=54 in $IODEF), each with the same five FIB/name/ATR parameters. The
  * ACP band 0x68-0x6F is FULL (0x68 MOUNT ... 0x6F ACPCONTROL) and 0x70 begins
  * the mailbox band, so there is no free ioctl NUMBER for three more per-function
  * ioctls. Rather than burn scarce ioctl numbers -- or, worse, restructure the
@@ -463,9 +463,9 @@ _Static_assert(VMS_IOCTL_ACP_ACPCONTROL == 0xC0C8566Fu,
  */
 
 /* The `func` selector == the $QIO function code ($IODEF): create/delete/modify. */
-#define VMS_ACP_FOP_CREATE   9u    /* IO$_CREATE */
-#define VMS_ACP_FOP_DELETE   3u    /* IO$_DELETE */
-#define VMS_ACP_FOP_MODIFY   6u    /* IO$_MODIFY */
+#define VMS_ACP_FOP_CREATE   51u   /* IO$_CREATE */
+#define VMS_ACP_FOP_DELETE   53u   /* IO$_DELETE */
+#define VMS_ACP_FOP_MODIFY   54u   /* IO$_MODIFY */
 
 /* `modifiers` bits (IO$M_* roles; OVMX-original bit values, Rule 8 D2). */
 #define VMS_ACP_M_CREATE     0x0001u  /* IO$M_CREATE: enter the file in a directory */

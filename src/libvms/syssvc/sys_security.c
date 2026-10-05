@@ -26,13 +26,15 @@
  * OVMX userspace service register (rd vms-5b4) -- gate:
  * tests/integration/test_userspace_service_register.sh
  *
- * OVMX-USERSPACE: sys$asctoid (vms-44a) -- name -> identifier value, answered from
- *     the world-readable RIGHTSLIST.DAT by the rights-database reader
- *     (rtl/rightslist.c -> LIBVMSRMS, bound through a weak reference the call graph
- *     here cannot see); no rights-database facility of the executive's is involved.
- *     The identifier's ATTRIBUTE flags are not read back: attrib is reported 0.
- * OVMX-USERSPACE: sys$idtoasc (vms-44a) -- identifier value -> name, the same
- *     reader; a wildcard context (ctx) is refused, one identifier is looked up.
+ * OVMX-PARTIAL: sys$asctoid (vms-44a) -- exec: RIGHTSLIST.DAT is read over the
+ *     executive's Files-11 ACP (RMS-over-ACP, LIBVMSRMS), and the logicals that
+ *     locate it are the executive's.
+ * OVMX-LOCAL: sys$asctoid -- the name-to-value lookup in the rights-database
+ *     reader (rtl/rightslist.c) runs in this process; the identifier's ATTRIBUTE
+ *     flags are not read back: attrib is reported 0.
+ * OVMX-PARTIAL: sys$idtoasc (vms-44a) -- exec: the same ACP read of RIGHTSLIST.DAT.
+ * OVMX-LOCAL: sys$idtoasc -- the value-to-name lookup runs in this process; a
+ *     wildcard context (ctx) is refused, one identifier is looked up.
  * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
  *     caller's own getuid()/getgid() and the protection word the caller
  *     itself passed in. There is no executive reference monitor, no rights

@@ -334,6 +334,13 @@ jobs:
         run: |
           sh src/vmslink/test/run_evax_p0base.sh
 
+      # vms-122: LINK.EXE resolves a same-TU weak override by the address a
+      # section-relative reloc names, not by the section base -- the exported
+      # decc$_mmap64/decc$munmap used to enter the strong __vm_wait (a no-op).
+      - name: Prove LINK.EXE weak override is exact-address, not section-base (vms-122)
+        run: |
+          sh src/vmslink/test/run_evax_weakalias.sh
+
       # vms-4d0: LINK.EXE places a ZERO-length psect contribution (a boundary
       # marker such as crtbegin's __EH_FRAME_BEGIN__) where it falls in the
       # psect; it used to resolve to 0, so C++ EH frames were never registered.

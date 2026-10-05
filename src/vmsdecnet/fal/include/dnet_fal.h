@@ -124,6 +124,25 @@ uint32_t dnet_fal_connect_auth_id(const uint8_t *conn_data, size_t conn_len,
                                   struct dnet_fal_identity *id);
 
 /*
+ * FILE NAME RESOLUTION for the FAL server (directory list + NAME): begin a
+ * search of `spec` (wildcards allowed), return each RESULTANT spec
+ * ("DEV:[DIR]NAME.TYP;V"), end. The shipped implementation is RMS $PARSE +
+ * $SEARCH over the ACP (dnet_fal_search.c); 0 = ok / a match, -1 = no (more)
+ * files or failure. Never composes a name RMS did not return.
+ */
+int  dnet_fal_search_begin(const char *spec, void **ctx);
+int  dnet_fal_search_next(void *ctx, char *rsa, size_t cap);
+void dnet_fal_search_end(void *ctx);
+
+/* Record output for a FAL CREATE: $CREATE the file (sequential, the given
+ * RMS record format + attributes) returning its RESULTANT spec, $PUT records
+ * verbatim, $CLOSE. RMS over the ACP (dnet_fal_search.c); 0 = ok, -1 = fail. */
+int  dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, void **h,
+                    char *rsa, size_t cap);
+int  dnet_fal_wput(void *h, const uint8_t *rec, size_t len);
+int  dnet_fal_wclose(void *h);
+
+/*
  * dnet_fal_server_run - serve one AUTHENTICATED, ACCEPTED FAL session to
  * completion. The caller has already run dnet_fal_connect_auth (got SS$_NORMAL)
  * and accepted the link (sent the Connect Confirm), so this runs only the DAP

@@ -34,7 +34,8 @@
  * VERSION / SCOPE (INV-6). OVMX speaks DAP 5.6 and advertises in SYSCAP only
  * what it implements: sequential organisation, sequential FILE TRANSFER
  * (RAC = 3), blocking up to response (it can receive several messages in one
- * segment), the 2-byte LENGTH, and the NAME message. Messages and fields
+ * segment), the 2-byte LENGTH, sequential RECORD access (RAC 0), the DIRECTORY
+ * LIST access and the NAME message (resultants from RMS $SEARCH). Messages and fields
  * beyond that are decoded (and bounded) but never served or faked:
  * the extended-attribute messages (KEY DEFINITION, ALLOCATION, SUMMARY,
  * DATE/TIME, PROTECTION, ACL) decode as "known type, body skipped";
@@ -96,6 +97,7 @@ enum dnet_dap_op {
 #define DNET_DAP_CAP_SEQ_XFER       5
 #define DNET_DAP_CAP_BLOCK_TO_RESP  18
 #define DNET_DAP_CAP_LEN256         20
+#define DNET_DAP_CAP_DIRLIST        25
 #define DNET_DAP_CAP_SEQ_RECORD     33
 #define DNET_DAP_CAP_NAME_MSG       40
 
@@ -136,6 +138,12 @@ enum {
 /* FAC / SHR bits (spec sec. 3.5). */
 #define DNET_DAP_FB_PUT       0x01
 #define DNET_DAP_FB_GET       0x02
+
+/* NAMETYPE bits (spec sec. 3.17). */
+#define DNET_DAP_NT_FILESPEC  0x01
+#define DNET_DAP_NT_FILENAME  0x02
+#define DNET_DAP_NT_DIRECTORY 0x04
+#define DNET_DAP_NT_VOLUME    0x08
 
 /* DISPLAY bits (spec sec. 3.5 / 3.6). */
 #define DNET_DAP_DSP_MAIN     0x0001

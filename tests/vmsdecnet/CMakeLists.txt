@@ -153,6 +153,14 @@ add_test(NAME vmsdecnet_nodespec_unit COMMAND test_dnet_nodespec)
 # is fuzz-clean and leaks no credential on any malformed input. Attacker-facing
 # decoders, so it is built WITH -fsanitize=address,undefined -- an over-read is
 # a hard failure. Warning-clean under -Werror.
+# rd vms-d85 inbound: the FAL SERVER replayed against the exact DAP segments a
+# real OpenVMS VAX COPY sent it (PUT, DIRECTORY LIST, OPEN+GET, honest miss).
+# File I/O is captured in memory by the test (it defines the RMS-facing hooks).
+add_executable(test_dnet_fal_server test_dnet_fal_server.c)
+target_link_libraries(test_dnet_fal_server PRIVATE vmsdecnet_fal vmsdecnet_dap vmsdecnet_cterm)
+target_compile_options(test_dnet_fal_server PRIVATE -Werror)
+add_test(NAME vmsdecnet_fal_server_replay COMMAND test_dnet_fal_server)
+
 add_executable(test_dnet_dap test_dnet_dap.c)
 target_link_libraries(test_dnet_dap PRIVATE vmsdecnet_dap vmsdecnet_cterm)
 target_compile_options(test_dnet_dap PRIVATE -Werror)

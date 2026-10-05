@@ -1,0 +1,10 @@
+Real OpenVMS VAX V7.3 (VAX1, dnlab-1, 2026-10-05): Ctrl/Z struck at the DCL
+"$ " prompt inside a SET HOST 0 session. The terminal echoes *EXIT*, DCL
+prompts again, and the session continues (SHOW PROCESS afterwards still names
+the RTA session). Ctrl/Z at the prompt never logs out.
+
+$ ^Z
+*EXIT*
+$ SHOW PROCESS
+                          Node: VAX1             Process name: "_RTA1:"
+Terminal:           RTA1:  (VAX1::SYSTEM)

@@ -352,3 +352,21 @@ set_tests_properties(vmsrms_sysuaf_live PROPERTIES
     LABELS "unit;rms;ods2;sysuaf"
     TIMEOUT 30
 )
+
+# LIB$FIND_FILE / LIB$FILE_SCAN / LIB$DELETE_FILE / LIB$RENAME_FILE over the RMS
+# wildcard engine, against files that exist under a temp device (host, no
+# /dev/vms). lib$find_file lives in LIBVMS and reaches RMS weakly; the test
+# carries the force-bind anchor.
+add_executable(test_lib_filectl test_lib_filectl.c)
+target_include_directories(test_lib_filectl PRIVATE
+    ${VMS_RMS_INCLUDE_DIR}
+    ${VMS_FS_INCLUDE_DIR}
+    ${VMS_LNM_INCLUDE_DIR}
+    ${VMS_INCLUDE_DIR}
+)
+target_link_libraries(test_lib_filectl PRIVATE vmsrms vms vmsfs vmslnm pthread)
+add_test(NAME vmsrms_lib_filectl COMMAND test_lib_filectl)
+set_tests_properties(vmsrms_lib_filectl PROPERTIES
+    LABELS "unit;rms"
+    TIMEOUT 30
+)

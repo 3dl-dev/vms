@@ -1897,6 +1897,26 @@ static int copy_dnet_activate(struct dcl_context *ctx, const char *src, const ch
     char src_clean[1024], dst_clean[1024], src_pw[128], dst_pw[128];
     copy_dnet_split_access(src, src_clean, sizeof(src_clean), src_pw, sizeof(src_pw));
     copy_dnet_split_access(dst, dst_clean, sizeof(dst_clean), dst_pw, sizeof(dst_pw));
+
+    /*
+     * THE LOCAL SIDE IS THE USER'S FILE, IN THE USER'S DEFAULT DIRECTORY.
+     * DECNETD.EXE hands its local spec straight to RMS, which completes a
+     * missing device/directory from SYS$DISK's root -- not from this DCL's
+     * SET DEFAULT. Found live (booted OVMX, default SYS$SYSROOT:[SYSMGR]):
+     * `COPY 1.1"SYSTEM pw"::TOOVMX.TXT FROMVAX.TXT` reported success and the
+     * file landed in VDA0:[000000]. DCL completes the local spec the way its
+     * own file commands do (dcl_rms_effective_spec) before handing it over;
+     * the NODE:: side is the remote FAL's to resolve.
+     */
+    {
+        char *local = strstr(src_clean, "::") ? dst_clean : src_clean;
+        size_t localsz = (local == dst_clean) ? sizeof(dst_clean) : sizeof(src_clean);
+        char eff[1024];
+        if (!strstr(local, "::") &&
+            dcl_rms_effective_spec(ctx, local, eff, sizeof(eff)) == 0 && eff[0] &&
+            strlen(eff) < localsz)
+            memcpy(local, eff, strlen(eff) + 1);
+    }
     const char *pw = src_pw[0] ? src_pw : (dst_pw[0] ? dst_pw : "");
 
     int pfd[2] = { -1, -1 };

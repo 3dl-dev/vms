@@ -1163,8 +1163,10 @@ static int run_net_mbx_selftest(void)
            " match), against the booted executive /dev/vms (rd vms-22c)\n");
 
     int pass = 0, fail = 0;
+/* A FAIL names the executive status that caused it (the VMS condition the
+ * service returned), so a red on a rail is diagnosable from the log alone. */
 #define MB_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
-    else { fail++; printf("  FAIL: %s\n", msg); } } while (0)
+    else { fail++; printf("  FAIL: %s (last status %08X)\n", msg, (unsigned)st); } } while (0)
 
     const uint32_t MAXMSG = DNET_BROKER_REQ_MAX + 16;   /* > the 1024 default */
     uint32_t req_chan = 0, req_unit = 0;   char req_dev[64]   = {0};

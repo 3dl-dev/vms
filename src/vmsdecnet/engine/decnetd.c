@@ -71,6 +71,7 @@
 #include "dnet_mail11.h"    /* MAIL-11 receiver (object 27, rd vms-47fd)    */
 #include "dnet_mail_proc.h" /* MAIL_SERVER.EXE network server process      */       /* FAL server + COPY client (object 17, rd vms-8c2) */
 #include "dnet_broker.h"    /* exec<->NETACP T1 broker record codec (rd vms-22c) */
+#include "ovmx_status.h"     /* vms_status_string: the authentic %FAC-S-ID text */
 #include "dnet_ncb.h"       /* NCB connect-block parser ($QIO IO$_ACCESS, vms-22c) */
 #include "dnet_nodespec.h"  /* node-filespec splitter + COPY plan (rd vms-ea8) */
 #include "dnet_ncpstore.h"  /* SYS$SYSTEM:NETNODE_*.DAT via RMS (rd vms-1f69) */
@@ -2619,6 +2620,7 @@ struct sh_ctx {
     struct dnet_cterm_inq inq;
     int read_pending, passall_on, session_bound_ever, stdin_eof, rc, done;
     int skip_lf;                        /* CTERM Write "newline" flag state  */
+    int quiet;                          /* a user's SET HOST: no DECNETD-I chatter */
     uint16_t ch_in, ch_out;
     /* the link: the standalone engine (eng/sock/ifindex) OR a _NET: channel */
     struct dnet_engine *eng;
@@ -2691,10 +2693,12 @@ static void sethost_on_data(struct sh_ctx *x, const uint8_t *data, size_t len)
         }
         if (!x->done && dnet_cterm_is_bound(&x->term) && !x->session_bound_ever) {
             x->session_bound_ever = 1;
-            log_ts(stdout);
-            printf(" DECNETD-I-BOUND, CTERM foundation negotiated -- terminal session"
-                   " BOUND on %s\n", x->where);
-            fflush(stdout);
+            if (!x->quiet) {
+                log_ts(stdout);
+                printf(" DECNETD-I-BOUND, CTERM foundation negotiated -- terminal session"
+                       " BOUND on %s\n", x->where);
+                fflush(stdout);
+            }
             /* Hand echo/editing to the REMOTE session: pass-all the LOCAL
              * terminal through the executive driver. */
             sethost_set_line(x->ch_in, 1);
@@ -2867,6 +2871,8 @@ static void sethost_finish(struct sh_ctx *x, const char *local_node)
                  "%%REM-S-END, control returned to node %s::\n", local_node);
         sethost_term_write(x->ch_out, msg);
     }
+    if (x->quiet)
+        return;
     log_ts(stdout);
     printf(" DECNETD-I-SETHOSTEND, SET HOST session ended: cterm writes_recv=%lu"
            " reads_sent=%lu on %s\n", x->term.writes_recv, x->term.reads_sent, x->where);
@@ -4640,24 +4646,25 @@ static int run_copy_net(const char *src, const char *dst, int password_fd)
         memset(password, 0, sizeof password);
         return 1;
     }
-    log_ts(stdout);
-    printf(" DECNETD-I-COPYPLAN, %s %s%s%s::%s <-> local %s (link brokered by"
-           " NETACP over _NET:)\n", plan.is_get ? "GET" : "PUT", plan.node,
-           plan.has_access ? "\"" : "", plan.has_access ? plan.username : "",
-           plan.remote_spec, plan.local_spec);
-    fflush(stdout);
+    /* VMS COPY is SILENT on success; on failure it names the file and the
+     * reason (%COPY-E-OPENIN/OPENOUT, then the status, as a continuation
+     * line). The DECNETD-I progress chatter belongs to the standalone/lab
+     * path, never to a user's DCL COPY. */
     uint32_t status = copy_client_run_net(&c, &plan, password);
     memset(password, 0, sizeof password);
     sys$dassgn(c.chan);
-    log_ts(stdout);
-    if (status == SS$_NORMAL) {
-        printf(" DECNETD-I-COPYDONE, $ COPY %s completed (%08X)\n",
-               plan.is_get ? "GET" : "PUT", status);
-        fflush(stdout);
+    if (status == SS$_NORMAL)
         return 0;
-    }
-    printf(" DECNETD-W-COPYFAIL, $ COPY %s did not complete (status %08X) --"
-           " no file transferred (INV-6)\n", plan.is_get ? "GET" : "PUT", status);
+    char why[256] = "";
+    (void)vms_status_string(status, why, sizeof why);
+    if (why[0] == '%') why[0] = '-';
+    if (plan.is_get)
+        printf("%%COPY-E-OPENIN, error opening %s::%s as input\n%s\n",
+               plan.node, plan.remote_spec, why[0] ? why : "");
+    else
+        printf("%%COPY-E-OPENOUT, error opening %s::%s as output\n%s\n"
+               "%%COPY-W-NOTCOPIED, %s not copied\n",
+               plan.node, plan.remote_spec, why[0] ? why : "", plan.local_spec);
     fflush(stdout);
     return 1;
 }
@@ -4677,31 +4684,25 @@ static int run_set_host_net(struct netcli *c, const char *target, const char *lo
         return 1;
     x.nc = c;
     x.where = "a NETACP-brokered _NET: link";
+    x.quiet = 1;                        /* VMS SET HOST shows only the remote */
     if (sethost_open_terminal(&x) != 0)
         return 1;
     int term_fd = vms$$chan_to_fd(x.ch_in);
 
     char ncb[64];
     int n = snprintf(ncb, sizeof ncb, "%s::\"%d=\"", target, DNET_CTERM_OBJECT);
-    log_ts(stdout);
-    printf(" DECNETD-I-SETHOST, $ SET HOST %s -- connecting to CTERM object %d"
-           " through NETACP (_NET:)\n", target, DNET_CTERM_OBJECT);
-    fflush(stdout);
     size_t xf = 0;
     uint32_t st = (n > 0 && (size_t)n < sizeof ncb)
         ? netcli_op(c, DNET_BROKER_OP_OPEN, ncb, (size_t)n, NULL, 0, &xf) : SS$_BADPARAM;
     if (!(st & 1)) {
-        log_ts(stdout);
-        printf(" DECNETD-W-UNREACH, SET HOST %s: the logical link was not established"
-               " (status %08X)\n", target, (unsigned)st);
+        /* VMS SET HOST reports only the reason the link failed. */
+        char why[256] = "";
+        (void)vms_status_string(st, why, sizeof why);
+        printf("%s\n", why[0] ? why : "%SYSTEM-F-ABORT, abort");
         fflush(stdout);
         sys$dassgn(x.ch_in); sys$dassgn(x.ch_out);
         return 1;
     }
-    log_ts(stdout);
-    printf(" DECNETD-I-LINKUP, logical link to %s is RUN -- awaiting host foundation\n",
-           target);
-    fflush(stdout);
     sethost_on_linkup(&x);
 
     while (!g_stop && !x.done) {
@@ -4713,10 +4714,6 @@ static int run_set_host_net(struct netcli *c, const char *target, const char *lo
             if (st == SS$_ENDOFFILE)
                 break;
             if (!(st & 1)) {
-                log_ts(stdout);
-                printf(" DECNETD-I-LINKDOWN, logical link closed (status %08X)\n",
-                       (unsigned)st);
-                fflush(stdout);
                 x.done = 1;
                 break;
             }

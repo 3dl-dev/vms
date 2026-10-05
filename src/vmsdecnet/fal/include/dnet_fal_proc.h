@@ -73,6 +73,7 @@ struct dnet_fal_proc {
     uint32_t ch_to, ch_from;   /* NETACP's channels to the two mailboxes       */
     uint32_t unit_to, unit_from;
     uint32_t uic;              /* the persona the server runs with            */
+    const char *fail_stage;    /* on a refused start: which service refused   */
 };
 
 /*

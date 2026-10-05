@@ -3282,7 +3282,8 @@ static uint32_t falp_session(const char *user, const char *pw, int is_get,
     uint32_t pst = dnet_fal_proc_start(&fp, id.uic, id.def_privs, id.username,
                                        id.default_dir);
     if (!(pst & 1)) {
-        printf("  NOTE: FAL server process not created (status %08X)\n", (unsigned)pst);
+        printf("  NOTE: FAL server process not created (status %08X at %s)\n", (unsigned)pst,
+               fp.fail_stage ? fp.fail_stage : "?");
         cst = pst; goto out;
     }
     {

@@ -69,12 +69,13 @@ uint32_t dnet_fal_proc_start(struct dnet_fal_proc *p, uint32_t uic,
     char devto[32] = {0}, devfrom[32] = {0};
     uint32_t st = vms_kif_mbx_create(0, DNET_FALP_MAXMSG, DNET_FALP_MAXMSG * 8,
                                      &p->ch_to, &p->unit_to, devto, sizeof devto);
-    if (!(st & 1)) return st;
+    if (!(st & 1)) { p->fail_stage = "$CREMBX"; return st; }
     st = vms_kif_mbx_create(0, DNET_FALP_MAXMSG, DNET_FALP_MAXMSG * 8,
                             &p->ch_from, &p->unit_from, devfrom, sizeof devfrom);
     if (!(st & 1)) {
         vms_kif_mbx_delmbx(p->ch_to);
         memset(p, 0, sizeof *p);
+        p->fail_stage = "$CREMBX";
         return st;
     }
 
@@ -85,12 +86,14 @@ uint32_t dnet_fal_proc_start(struct dnet_fal_proc *p, uint32_t uic,
     snprintf(lb.default_dir, sizeof lb.default_dir, "%s", default_dir ? default_dir : "");
     if (put_rec(p->ch_to, DNET_FALP_REC_LINKBLK, &lb, sizeof lb) != 0) {
         dnet_fal_proc_close(p);
+        p->fail_stage = "mailbox $QIO";
         return SS$_EXQUOTA;
     }
 
     char img[512], prcnam[16];
     if (!fal_image_path(img, sizeof img)) {
         dnet_fal_proc_close(p);
+        p->fail_stage = "image lookup";
         return SS$_NOSUCHFILE;
     }
     snprintf(prcnam, sizeof prcnam, DNET_FALP_PRCNAM_FMT,
@@ -107,6 +110,7 @@ uint32_t dnet_fal_proc_start(struct dnet_fal_proc *p, uint32_t uic,
                     0, uic, 0, PRC$M_DETACH);
     if (!(st & 1)) {
         dnet_fal_proc_close(p);
+        p->fail_stage = "$CREPRC";
         return st;
     }
     p->pid = pid;

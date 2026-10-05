@@ -3076,17 +3076,20 @@ static int run_fal_selftest(void)
 
 /* Compare a stored ODS-2 file's records to an expected multi-line body.
  * Returns 1 on an exact match. Reads through RMS over the ACP (real file I/O). */
+/* Byte-verify a file record for record through RMS $OPEN/$GET -- the same
+ * reader the FAL server uses, which frames by the file's own record format (a
+ * GET stores VAR records; rms_textfile_* reads only stream text). */
 static int fal_file_matches(const char *spec, const char *const *lines, int nlines)
 {
-    rms_textfile_t *tf = rms_textfile_open(spec);
-    if (!tf) return 0;
-    char buf[DNET_DAP_MAX_REC]; int too_long = 0, i = 0, ok = 1;
-    while (rms_textfile_getline(tf, buf, sizeof buf, &too_long)) {
-        if (i >= nlines || strcmp(buf, lines[i]) != 0) { ok = 0; break; }
+    void *rf = NULL;
+    if (dnet_fal_ropen(spec, &rf, NULL, NULL) != 0) return 0;
+    uint8_t buf[DNET_DAP_MAX_REC]; size_t n = 0; int i = 0, ok = 1, g;
+    while ((g = dnet_fal_rget(rf, buf, sizeof buf, &n)) == 1) {
+        if (i >= nlines || n != strlen(lines[i]) || memcmp(buf, lines[i], n) != 0) { ok = 0; break; }
         i++;
     }
-    rms_textfile_close(tf);
-    return ok && i == nlines;
+    (void)dnet_fal_rclose(rf);
+    return ok && g == 0 && i == nlines;
 }
 
 static int run_fal_accept_test(void)

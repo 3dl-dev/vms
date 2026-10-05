@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <poll.h>
 #include <signal.h>
 #include <ctype.h>
 #include <time.h>
@@ -773,6 +774,7 @@ int main(int argc, char *argv[])
     }
 
     /* Main REPL */
+    unsigned ctrlz_run = 0;   /* consecutive Ctrl/Z EOFs at the prompt (vms-a70) */
     while (!dcl_ctx.exit_requested && !dcl_ctx.logout_requested) {
         char *line = NULL;
 
@@ -782,10 +784,19 @@ int main(int argc, char *argv[])
 #ifdef HAVE_READLINE
             line = readline(dcl_ctx.prompt);
             if (!line) {
-                /* EOF (Ctrl-Z on VMS) — treat as LOGOUT */
+                /* Ctrl/Z at the prompt does not log out (vms-a70; see the
+                 * fgets branch below for the oracle). readline reports a
+                 * Ctrl/Z and a hangup alike, so ask the terminal: a hung-up
+                 * terminal polls POLLHUP/POLLERR and ends the session. */
+                struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+                int hung = poll(&pfd, 1, 0) < 0 ||
+                           (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) != 0;
                 printf("\n");
+                if (!hung && isatty(STDIN_FILENO) && ++ctrlz_run <= 64)
+                    continue;
                 break;
             }
+            ctrlz_run = 0;
             /* Add to history if non-empty */
             if (line[0] != '\0') {
                 add_history(line);
@@ -803,9 +814,33 @@ int main(int argc, char *argv[])
              * which arms that echo. A no-op for a terminal/file SYS$OUTPUT. */
             dcl_mbx_output_drain_sync();
             if (!fgets(fgets_buf, sizeof(fgets_buf), stdin)) {
+                /*
+                 * Ctrl/Z AT THE DCL PROMPT DOES NOT LOG OUT (vms-a70). On VMS
+                 * the terminal driver echoes "*EXIT*" and DCL simply prompts
+                 * again; the session ends only on LOGOUT or a hangup. Oracle: a
+                 * real VAX V7.3, Ctrl/Z at "$ " inside SET HOST 0 -> "*EXIT*",
+                 * new "$ " prompt, session still there (tests/lab/captures/
+                 * decnet-sethost-inbound-20261005/vax-dcl-ctrlz.txt). Breaking
+                 * here made a VAX SET HOST to OVMX drop the whole session on
+                 * Ctrl/Z.
+                 *
+                 * The terminal's VEOF is Ctrl/Z (configured above), so the
+                 * keystroke reads as a clean EOF with no error. A HANGUP is
+                 * different: once the terminal's far side is gone the read
+                 * fails (EIO -> ferror), and that still ends the session. The
+                 * consecutive-EOF bound is a guard against a terminal that
+                 * reports EOF forever without input: it cannot spin DCL.
+                 */
+                if (feof(stdin) && !ferror(stdin) && isatty(STDIN_FILENO) &&
+                    ++ctrlz_run <= 64) {
+                    clearerr(stdin);
+                    printf("\n");
+                    continue;
+                }
                 printf("\n");
                 break;
             }
+            ctrlz_run = 0;
             size_t flen = strlen(fgets_buf);
             if (flen > 0 && fgets_buf[flen - 1] == '\n')
                 fgets_buf[flen - 1] = '\0';

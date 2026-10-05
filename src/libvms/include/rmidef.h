@@ -27,7 +27,7 @@ extern "C" {
  * RMI$_ item codes for SYS$GETRMI item lists
  * ================================================================ */
 
-#define RMI$_CPUIDLE    0x0001  /* Cumulative CPU idle ticks (Q) */
+#define RMI$_CPUIDLE    0x52D0  /* Cumulative CPU idle ticks (Q) */
 #define RMI$_HIB        0x1011  /* Number of processes in HIB state (L) */
 
 #ifdef __cplusplus

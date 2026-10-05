@@ -26,12 +26,12 @@
  *     (pdsc$b_save_ra, default R26); the caller shares this frame's stack.
  *     Caller PC = ireg[save_ra]; FP/SP unchanged.
  *   - STACK-frame procedure: locate the RSA at (frame_base + pdsc$w_rsa_offset)
- *     where frame_base is FP(R29) if PDSC$V_BASE_REG_IS_FP else SP(R30). The
+ *     where frame_base is FP(R29) if PDSC$M_BASE_REG_IS_FP else SP(R30). The
  *     caller PC is RSA$Q_SAVED_RETURN; every integer register whose bit is set
  *     in pdsc$l_ireg_mask is restored from the RSA in ascending register order
  *     (this recovers the caller's FP=R29 and any preserved registers); the
  *     caller SP = frame_base + pdsc$l_size.
- *   - libicb$v_handler_present reflects PDSC$V_HANDLER_VALID; the walk stops
+ *   - libicb$v_handler_present reflects PDSC$M_HANDLER_VALID; the walk stops
  *     (libicb$v_bottom_of_stack) when the next-out PC is 0 or unresolvable.
  *
  * WHERE IT RUNS (vms-ed1). On the OpenVMS Alpha ABI (alpha-dec-vms code,
@@ -154,7 +154,7 @@ static int frame_has_caller(uint64_t pc, uint64_t fp, uint64_t sp)
     }
     unsigned kind = PDSC$KIND(pd->pdsc$w_flags);
     if (kind == PDSC$K_KIND_FP_STACK) {
-        uint64_t base = (pd->pdsc$w_flags & PDSC$V_BASE_REG_IS_FP) ? fp : sp;
+        uint64_t base = (pd->pdsc$w_flags & PDSC$M_BASE_REG_IS_FP) ? fp : sp;
         const uint64_t *rsa =
             (const uint64_t *)(uintptr_t)(base + pd->pdsc$w_rsa_offset
                                           + RSA$Q_SAVED_RETURN);
@@ -219,7 +219,7 @@ uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
 
     if (kind == PDSC$K_KIND_FP_STACK) {
         /* Stack-frame procedure: recover the caller from the RSA. */
-        uint64_t base = (pd->pdsc$w_flags & PDSC$V_BASE_REG_IS_FP) ? fp : sp;
+        uint64_t base = (pd->pdsc$w_flags & PDSC$M_BASE_REG_IS_FP) ? fp : sp;
         uint64_t rsa  = base + pd->pdsc$w_rsa_offset;
 
         const uint64_t *saved_ret =
@@ -273,7 +273,7 @@ uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
     /* Report the caller's established condition handler, if any. */
     const struct pdsc_descriptor *cpd = resolve_pdsc(caller_pc, caller_fp);
     icb->libicb$v_handler_present =
-        (cpd && (cpd->pdsc$w_flags & PDSC$V_HANDLER_VALID)) ? 1 : 0;
+        (cpd && (cpd->pdsc$w_flags & PDSC$M_HANDLER_VALID)) ? 1 : 0;
 
     /* One-level look-ahead: is the caller itself the outermost frame? */
     icb->libicb$v_bottom_of_stack =

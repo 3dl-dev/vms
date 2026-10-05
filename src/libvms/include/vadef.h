@@ -37,8 +37,8 @@ extern "C" {
  * VA$_ — Item codes for sys$get_region_info function parameter
  * ================================================================ */
 
-#define VA$_REGSUM_BY_ID    1   /* Get region summary by region ID */
-#define VA$_REGSUM_BY_VA    2   /* Get region summary by virtual address */
+#define VA$_REGSUM_BY_ID    0   /* Get region summary by region ID */
+#define VA$_REGSUM_BY_VA    1   /* Get region summary by virtual address */
 #define VA$_REGMAP_BY_ID    3   /* Get region map by region ID */
 #define VA$_REGMAP_BY_VA    4   /* Get region map by virtual address */
 

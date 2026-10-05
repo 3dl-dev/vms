@@ -25,15 +25,15 @@ extern "C" {
  * persona system services.
  * ================================================================ */
 
-#define ISS$_NOAUDIT        1   /* Suppress audit records for this persona */
-#define ISS$_USERNAME       2   /* Username for the new persona */
+#define ISS$_NOAUDIT        11   /* Suppress audit records for this persona */
+#define ISS$_USERNAME       9   /* Username for the new persona */
 #define ISS$_PASSWORD       3   /* Password for authentication */
-#define ISS$_UIC            4   /* UIC (User Identification Code) */
+#define ISS$_UIC            22   /* UIC (User Identification Code) */
 #define ISS$_PRIVILEGES     5   /* Privilege mask */
 #define ISS$_AUTH_PRIVS     6   /* Authorized privilege mask */
 #define ISS$_DEFPRIV        7   /* Default privilege mask */
-#define ISS$_PERSONA_ID     8   /* Persona identifier */
-#define ISS$_RIGHTS_LIST    9   /* Rights identifiers list */
+#define ISS$_PERSONA_ID     20   /* Persona identifier */
+#define ISS$_RIGHTS_LIST    100 /* [OVMX] rights identifiers list (not in V8.4 $ISSDEF) */
 
 /* ================================================================
  * ISS$M_ — Flag bits for ISS$_NOAUDIT and other flag items

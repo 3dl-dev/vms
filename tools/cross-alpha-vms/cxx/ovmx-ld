@@ -32,8 +32,12 @@ while [ $# -gt 0 ]; do
       n=${a#-l}; f=""
       for d in "${Ldirs[@]}"; do [ -f "$d/lib$n.a" ] && { f="$d/lib$n.a"; break; }; done
       if [ -z "$f" ]; then
-        [ "$n" = m ] && continue             # libm is part of the C RTL
-        echo "%OVMX-LD-F-NOLIB, library -l$n not found" >&2; exit 1
+        # libm is part of the C RTL. Any other library that is absent is
+        # reported and skipped: a symbol it would have supplied still fails
+        # the STRICT link as %LINK-F-UNDEF (e.g. libstdc++'s own configure,
+        # whose link tests run before libstdc++.a exists).
+        [ "$n" = m ] || echo "%OVMX-LD-W-NOLIB, library -l$n not found, not searched" >&2
+        continue
       fi
       args+=(--library "$f") ;;
     -*) ;;                                   # GNU-ld options with no LINK meaning

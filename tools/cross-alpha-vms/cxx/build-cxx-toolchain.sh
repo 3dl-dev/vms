@@ -128,8 +128,22 @@ AR=ar AR_FLAGS=crS RANLIB=true \
 "../gcc-$GCC_VER/libstdc++-v3/configure" --host=$TARGET --build=x86_64-pc-linux-gnu \
     --prefix="$X" --with-cross-host=x86_64-pc-linux-gnu \
     --disable-shared --disable-nls --disable-libstdcxx-pch --disable-multilib \
-    --with-gxx-include-dir="$X/$TARGET/include/c++/$GCC_VER" \
+    --with-gxx-include-dir="$X/$TARGET/include/c++/$VERDIR" \
     > /tmp/cxx/lsc-configure.log 2>&1 || { tail -40 /tmp/cxx/lsc-configure.log; exit 1; }
+# Some of libstdc++'s HAVE_<function> results come from compile-only checks
+# against the CRTL headers, which declare more than DECC$SHR provides. Re-check
+# every detected C function with a real link through OVMX LINK.EXE and drop the
+# ones the OVMX C RTL does not provide, so libstdc++ uses its fallbacks instead
+# of a symbol no image can resolve.
+for m in $(grep -E '^#define HAVE_[A-Z0-9_]+ 1$' config.h | awk '{print $2}' \
+           | grep -vE '_H$|^HAVE_(ATOMIC_|C99_|DECL_|GETIPINFO|LC_|LIMIT_|MBSTATE_T)'); do
+    fn=$(echo "${m#HAVE_}" | tr 'A-Z' 'a-z')
+    printf 'char %s(void);\nint main(void){return %s();}\n' "$fn" "$fn" > /tmp/cxx/probe.c
+    if ! "$X/bin/$TARGET-gcc" -mpointer-size=64 -fno-builtin /tmp/cxx/probe.c -o /tmp/cxx/probe.exe >/dev/null 2>&1; then
+        sed -i "s|^#define $m 1\$|/* #undef $m -- $fn is not provided by the OVMX C RTL (DECC\$SHR) */|" config.h
+        echo "   $fn: not in the OVMX C RTL -> $m undefined"
+    fi
+done
 # libstdc++ adds -ffunction-sections/-fdata-sections itself (SECTION_FLAGS);
 # strip them (vms-5f9, as above).
 grep -rl -e '-ffunction-sections -fdata-sections' --include=Makefile . | xargs -r sed -i 's/-ffunction-sections -fdata-sections//g'

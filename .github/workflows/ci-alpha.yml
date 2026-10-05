@@ -200,6 +200,13 @@ jobs:
           docker run --rm -v "${{ github.workspace }}/tools/cross-alpha-vms/test":/t:ro \
             ovmx-cross-alpha-vms:latest bash /t/run_pt_null_elim.sh
 
+      # vms-1045 (patches/0007): 32-bit-pointer code encodes its EH addresses as
+      # udata8 for the always-64-bit libgcc unwinder (unpatched: 4-byte absptr).
+      - name: Port compiler -- 32-bit-pointer EH addresses are 8-byte (vms-1045)
+        run: |
+          docker run --rm -v "${{ github.workspace }}/tools/cross-alpha-vms/test":/t:ro \
+            ovmx-cross-alpha-vms:latest bash /t/run_p32_eh_encoding.sh
+
       # OTS$ runtime (LIBOTS$) — RUNG completeness (vms-bfd6). Builds LINK.EXE +
       # LIBOTS$SHR.EXE, links DECC$SHR whole-archiving libc.a+libgcc.a WITH
       # --use LIBOTS$, and ASSERTS zero OTS$ references are left deferred (they
@@ -1275,6 +1282,63 @@ jobs:
         env:
           OVMX_CXX_TOOLCHAIN: ${{ github.workspace }}/.cxxtc
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh cxx-gate
+  # -----------------------------------------------------------------------
+  # alpha-cxx32 (vms-1045): the C++ gate at the DEC C default (32-bit) pointer
+  # size, against the stage-2 toolchain's 32-bit libstdc++ ($X/p32). Shares the
+  # toolchain cache with alpha-cxx (same key).
+  # -----------------------------------------------------------------------
+  alpha-cxx32:
+    name: "OVMX/Alpha C++ at the DEC C default 32-bit pointer size — the same program against the toolchain's 32-bit libstdc++ (vms-1045)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: Restore the stage-2 C/C++ toolchain
+        uses: actions/cache@v4
+        with:
+          path: .cxxtc
+          key: alpha-cxx-tc-${{ hashFiles('tools/cross-alpha-vms/cxx/**', 'tools/cross-alpha-vms/patches/**', 'tools/cross-alpha-vms/Dockerfile', 'tools/cross-alpha-vms/musl-arch/**', 'src/libvms/include/**', 'src/vmslink/decc_crtl_map.txt', 'src/vmslink/libvms_shr.vec') }}
+
+      - name: "C++ gate — stage-2 g++ over the OVMX C RTL, qemu-system-alpha + /dev/vms; can-fail selftest first"
+        env:
+          OVMX_CXX_TOOLCHAIN: ${{ github.workspace }}/.cxxtc
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh cxx32-gate
   # -----------------------------------------------------------------------
   # alpha-shipped-shareable-activation (vms-410, vms-deec Decision B): Alpha
   # ships + activates real VMS shareable images. The Alpha VMS-format

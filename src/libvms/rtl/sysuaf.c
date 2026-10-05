@@ -98,10 +98,10 @@ static const struct { const char *name; uint32_t bit; } sysuaf_flag_names[] = {
     { "DISACNT",      UAI$M_DISACNT },
     { "DISBATCH",     UAI$M_DISBATCH },
     { "DISUSER",      UAI$M_DISUSER },
-    { "DISWELCOME",   UAI$M_DISWELCOME },
+    { "DISWELCOME",   UAI$M_DISWELCOM },
     { "EXTAUTH",      UAI$M_EXTAUTH },
     { "PWDMIX",       UAI$M_PWDMIX },
-    { "GENERATE_PWD", UAI$M_GENERATE_PWD },
+    { "GENERATE_PWD", UAI$M_GENPWD },
 };
 
 uint32_t sysuaf_flags_to_mask(const char *flags)

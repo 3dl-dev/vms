@@ -79,13 +79,9 @@ fi
 # finds it first in libexec. Here the linker IS OVMX LINK.EXE through ovmx-ld,
 # so the libexec `ld` points at it.
 # GCC's VMS configuration names the driver's version directory the VMS way
-# (14_2_0) while the target libraries install under the dotted version: make the
-# driver's directory the same one so it finds crt0.o/crtbegin.o/libgcc.a.
+# (14_2_0) while the target libraries (libgcc's install) land under the dotted
+# version: after libgcc is installed, the driver's directory gets them too.
 VERDIR=$(basename "$(dirname "$("$X/bin/$TARGET-gcc" -print-prog-name=cc1)")")
-if [ "$VERDIR" != "$GCC_VER" ] && [ ! -e "$X/lib/gcc/$TARGET/$VERDIR" ]; then
-    mkdir -p "$X/lib/gcc/$TARGET/$GCC_VER"
-    ln -s "$GCC_VER" "$X/lib/gcc/$TARGET/$VERDIR"
-fi
 LIBEXEC_LD=$("$X/bin/$TARGET-gcc" -print-prog-name=ld)
 case "$LIBEXEC_LD" in
     "$X"/libexec/*) ln -sf "$X/$TARGET/bin/ld" "$LIBEXEC_LD" ;;
@@ -96,12 +92,20 @@ echo "== [5/6] libgcc: compiler runtime + the EH unwinder + the port's crt0/crtb
 # reads), built WITHOUT function sections (vms-5f9: the alpha-dec-vms `as`
 # mis-classifies per-function sections).
 LGFLAGS="-g0 -O2 -mpointer-size=64 -fno-function-sections -fno-data-sections"
-LGDIR=$(dirname "$("$X/bin/$TARGET-gcc" -print-libgcc-file-name)")   # (a VMS-style version dir, e.g. 14_2_0)
+LGDIR="$X/lib/gcc/$TARGET/$VERDIR"
 if [ ! -f "$LGDIR/libgcc.a" ]; then
-make all-target-libgcc -j"$JOBS" CFLAGS_FOR_TARGET="$LGFLAGS" \
-    AR_FOR_TARGET=ar AR_FLAGS=rcS RANLIB_FOR_TARGET=true > /tmp/cxx/libgcc.log 2>&1 \
-    || { tail -40 /tmp/cxx/libgcc.log; exit 1; }
-make install-target-libgcc RANLIB_FOR_TARGET=true > /dev/null
+    if [ ! -f "$X/lib/gcc/$TARGET/$GCC_VER/libgcc.a" ]; then
+        make all-target-libgcc -j"$JOBS" CFLAGS_FOR_TARGET="$LGFLAGS" \
+            AR_FOR_TARGET=ar AR_FLAGS=rcS RANLIB_FOR_TARGET=true > /tmp/cxx/libgcc.log 2>&1 \
+            || { tail -40 /tmp/cxx/libgcc.log; exit 1; }
+        make install-target-libgcc RANLIB_FOR_TARGET=true > /tmp/cxx/libgcc-install.log 2>&1 || true
+    fi
+    if [ "$VERDIR" != "$GCC_VER" ]; then
+        mkdir -p "$LGDIR"
+        for f in "$X/lib/gcc/$TARGET/$GCC_VER"/*; do
+            [ -e "$LGDIR/$(basename "$f")" ] || ln -s "$f" "$LGDIR/"
+        done
+    fi
 fi
 for f in libgcc.a crt0.o crtbegin.o crtend.o vms-dwarf2eh.o; do
     [ -f "$LGDIR/$f" ] || { echo "FAIL: libgcc did not install $f"; exit 1; }

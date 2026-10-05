@@ -2618,6 +2618,7 @@ struct sh_ctx {
     struct dnet_cterm_session term;
     struct dnet_cterm_inq inq;
     int read_pending, passall_on, session_bound_ever, stdin_eof, rc, done;
+    int skip_lf;                        /* CTERM Write "newline" flag state  */
     uint16_t ch_in, ch_out;
     /* the link: the standalone engine (eng/sock/ifindex) OR a _NET: channel */
     struct dnet_engine *eng;
@@ -2655,6 +2656,8 @@ static int sethost_send_queued_line(struct sh_ctx *x)
 
 /* The link is RUN: arm the CTERM client FSM and wait for the host, which
  * speaks first (rd vms-6165). */
+static void sethost_on_bound_msg(struct sh_ctx *x, const uint8_t *data, size_t len);
+
 static void sethost_on_linkup(struct sh_ctx *x)
 {
     if (dnet_cterm_client_open(&x->term) != 0) {
@@ -2700,7 +2703,45 @@ static void sethost_on_data(struct sh_ctx *x, const uint8_t *data, size_t len)
         return;
     }
 
-    /* BOUND: real terminal I/O, all inside 09-envelopes. */
+    /* BOUND: real terminal I/O inside 09 Common Data messages. ONE segment
+     * carries SEVERAL CTERM messages, each LENGTH-prefixed (AA-DY89A-TK); a
+     * real VAX packs a whole screen of Writes into one. Each is handled on its
+     * own -- reading the segment as one message put every following LENGTH
+     * word on the screen as a stray character (seen live: OVMX SET HOST VAX1). */
+    struct dnet_cth_cd_iter it;
+    if (dnet_cth_cd_iter_init(&it, data, len) != DNET_CTH_OK)
+        return;
+    const uint8_t *sub;
+    size_t sublen;
+    while (!x->done && dnet_cth_cd_iter_next(&it, &sub, &sublen) == 1) {
+        if (sublen == 0)
+            continue;
+        if (sub[0] == 0x07) {                     /* Write: render it properly */
+            uint8_t shown[DNET_CTERM_MAX_DATA + 512];
+            size_t sn = 0;
+            x->term.writes_recv++;
+            if (dnet_cterm_write_render(sub, sublen, &x->skip_lf, shown,
+                                        sizeof shown, &sn) == 0 && sn) {
+                struct _iosb iosb;
+                (void)sys$qiow(0, x->ch_out, IO$_WRITEVBLK, &iosb, NULL, 0,
+                               shown, (uint32_t)sn, 0, 0, 0, 0);
+            }
+            continue;
+        }
+        uint8_t one[4 + DNET_CTERM_MAX_DATA + 64];
+        if (sublen + 4 > sizeof one)
+            continue;
+        one[0] = 0x09; one[1] = 0x00;
+        one[2] = (uint8_t)(sublen & 0xff); one[3] = (uint8_t)(sublen >> 8);
+        memcpy(one + 4, sub, sublen);
+        sethost_on_bound_msg(x, one, sublen + 4);
+    }
+}
+
+/* One BOUND-phase CTERM message (re-wrapped in its own 09 envelope). */
+static void sethost_on_bound_msg(struct sh_ctx *x, const uint8_t *data, size_t len)
+{
+    size_t clen = 0;
     enum dnet_cterm_found_term_kind tk = DNET_CTERM_TK_NONE;
     uint8_t txt[DNET_CTERM_MAX_DATA];
     size_t txtlen = 0;

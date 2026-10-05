@@ -1415,6 +1415,64 @@ static void test_terminal_input_queue(void)
           " never closed for lack of EOF");
 }
 
+
+/* ---- 9. a real VAX screen: several Writes in ONE Common Data segment ------ */
+/* NSP data segment 9, VAX1 (OpenVMS VAX V7.3) -> booted OVMX during
+ * `SET HOST VAX1` through NETACP, 2026-10-05, on the DECnet lane's lab pod
+ * (the session pcap is not committed: it carries the lab password typed at
+ * the VAX prompt). Three CTERM Writes,
+ * each LENGTH-prefixed, flags 0x0272 (prefix NEW-LINES 1, postfix CHARACTER
+ * <CR>). Reading the segment as one message printed each LENGTH word as a stray
+ * character ("<", "@") between the lines. */
+static const uint8_t k_vax_login_screen[] = { 0x09, 0x00, 0x4d, 0x00, 0x07, 0x72, 0x02, 0x01, 0x0d, 0x20, 0x57, 0x65, 0x6c, 0x63, 0x6f, 0x6d, 0x65, 0x20, 0x74, 0x6f, 0x20, 0x4f, 0x70, 0x65, 0x6e, 0x56, 0x4d, 0x53, 0x20, 0x28, 0x54, 0x4d, 0x29, 0x20, 0x56, 0x41, 0x58, 0x20, 0x4f, 0x70, 0x65, 0x72, 0x61, 0x74, 0x69, 0x6e, 0x67, 0x20, 0x53, 0x79, 0x73, 0x74, 0x65, 0x6d, 0x2c, 0x20, 0x56, 0x65, 0x72, 0x73, 0x69, 0x6f, 0x6e, 0x20, 0x56, 0x37, 0x2e, 0x33, 0x20, 0x6f, 0x6e, 0x20, 0x6e, 0x6f, 0x64, 0x65, 0x20, 0x56, 0x41, 0x58, 0x31, 0x3c, 0x00, 0x07, 0x72, 0x02, 0x01, 0x0d, 0x20, 0x20, 0x20, 0x20, 0x4c, 0x61, 0x73, 0x74, 0x20, 0x69, 0x6e, 0x74, 0x65, 0x72, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x20, 0x6c, 0x6f, 0x67, 0x69, 0x6e, 0x20, 0x6f, 0x6e, 0x20, 0x4d, 0x6f, 0x6e, 0x64, 0x61, 0x79, 0x2c, 0x20, 0x20, 0x35, 0x2d, 0x4f, 0x43, 0x54, 0x2d, 0x32, 0x30, 0x32, 0x36, 0x20, 0x30, 0x35, 0x3a, 0x30, 0x35, 0x40, 0x00, 0x07, 0x72, 0x02, 0x01, 0x0d, 0x20, 0x20, 0x20, 0x20, 0x4c, 0x61, 0x73, 0x74, 0x20, 0x6e, 0x6f, 0x6e, 0x2d, 0x69, 0x6e, 0x74, 0x65, 0x72, 0x61, 0x63, 0x74, 0x69, 0x76, 0x65, 0x20, 0x6c, 0x6f, 0x67, 0x69, 0x6e, 0x20, 0x6f, 0x6e, 0x20, 0x4d, 0x6f, 0x6e, 0x64, 0x61, 0x79, 0x2c, 0x20, 0x20, 0x35, 0x2d, 0x4f, 0x43, 0x54, 0x2d, 0x32, 0x30, 0x32, 0x36, 0x20, 0x30, 0x35, 0x3a, 0x30, 0x35 };
+
+static void test_write_render_real_vax(void)
+{
+    printf("[9] CTERM Write rendering of a real VAX multi-Write segment\n");
+    const uint8_t *b = k_vax_login_screen;
+    size_t n = sizeof k_vax_login_screen, o = 2;
+    char screen[1024]; size_t sl = 0; int skip = 0, msgs = 0, ok = 1;
+    check(b[0] == 0x09 && b[1] == 0x00, "segment is a Common Data message");
+    while (o + 2 <= n) {
+        size_t l = (size_t)b[o] | ((size_t)b[o + 1] << 8);
+        if (l > n - o - 2) { ok = 0; break; }
+        uint8_t out[512]; size_t ol = 0;
+        if (dnet_cterm_write_render(b + o + 2, l, &skip, out, sizeof out, &ol) != 0 ||
+            sl + ol >= sizeof screen) { ok = 0; break; }
+        memcpy(screen + sl, out, ol); sl += ol; msgs++;
+        o += 2 + l;
+    }
+    screen[sl] = '\0';
+    check(ok && o == n && msgs == 3, "three length-prefixed Writes, each rendered");
+    check(strstr(screen, "\r\n Welcome to OpenVMS (TM) VAX Operating System, Version V7.3 on node VAX1\r") != NULL,
+          "prefix NEW-LINES 1 = <CR><LF> before, postfix CHARACTER <CR> after");
+    check(strstr(screen, "VAX1\r\r\n    Last interactive login") != NULL,
+          "the next Write starts on its own line (no stray LENGTH byte between)");
+    check(strchr(screen, '<') == NULL && strchr(screen, '@') == NULL,
+          "NEGCTL: no LENGTH word (0x3c '<', 0x40 '@') leaks onto the screen");
+    /* the "newline" flag (L, 0x0004): trailing <LF>, then a leading <LF> skipped */
+    {
+        const uint8_t w1[] = { 0x07, 0x34, 0x00, 0x00, 0x00, 'A' };
+        const uint8_t w2[] = { 0x07, 0x30, 0x00, 0x00, 0x00, 0x0a, 'B' };
+        uint8_t out[16]; size_t ol = 0; int sk = 0;
+        check(dnet_cterm_write_render(w1, sizeof w1, &sk, out, sizeof out, &ol) == 0 &&
+              ol == 2 && out[0] == 'A' && out[1] == 0x0a && sk == 1,
+              "newline flag: data then <LF>, skip-line-feed armed");
+        check(dnet_cterm_write_render(w2, sizeof w2, &sk, out, sizeof out, &ol) == 0 &&
+              ol == 1 && out[0] == 'B' && sk == 0,
+              "newline flag: the next Write's leading <LF> is skipped");
+    }
+    {
+        const uint8_t notw[] = { 0x02, 0x08, 0, 0, 0 };
+        uint8_t out[4]; size_t ol = 0; int sk = 0;
+        const uint8_t big[] = { 0x07, 0x40, 0x00, 0xff, 0x00, 'x' };
+        check(dnet_cterm_write_render(notw, sizeof notw, &sk, out, sizeof out, &ol) == -1,
+              "NEGCTL: a non-Write message is refused");
+        check(dnet_cterm_write_render(big, sizeof big, &sk, out, sizeof out, &ol) == -1,
+              "NEGCTL: a 255-newline prefix that does not fit is refused, not truncated");
+    }
+}
+
 int main(void)
 {
     printf("test_dnet_cterm: DECnet Phase IV CTERM (Command Terminal / SET HOST)\n");
@@ -1426,6 +1484,7 @@ int main(void)
     test_session();
     test_engine_e2e();
     test_client_response_fuzz();
+    test_write_render_real_vax();
     if (failures == 0) { printf("test_dnet_cterm: ALL CHECKS PASSED\n"); return 0; }
     printf("test_dnet_cterm: %d CHECK(S) FAILED\n", failures);
     return 1;

@@ -567,7 +567,7 @@ struct vms_lock_resource {
     /*
      * DLM directory + mastering. On OpenVMS every resource TREE is MASTERED on
      * one node, found by routing a lookup to the tree's DIRECTORY node -- the
-     * entry of the Lock Directory Weight Vector at `hash16 mod n` (Davis
+     * entry of the Lock Directory Weight Vector at `(dir_hash >> 16) mod n` (Davis
      * pp. 6-31/6-32). All five fields below are read and written under `lock`
      * above; the full contract is in src/kernel-core/vms_dlm_ldwv.h and the
      * mirror of these fields is in src/kernel-netbsd/vms_internal.h.
@@ -576,7 +576,8 @@ struct vms_lock_resource {
     /*
      * THE DIRECTORY (FC-P4.3, src/kernel-core/vms_dlm_ldwv.h).
      *
-     * hash16 is the resource name's 16-bit directory hash AS THE CLUSTER
+     * dir_hash is the resource's directory hash value (32 bits, cat-0x02 op-0x01
+     * body[128:132], rd vms-4fb) AS THE CLUSTER
      * PUTS IT ON THE WIRE (Davis p. 6-50). It is LEARNED -- by
      * vms_lock_dlm_learn_dir_hash() from a parsed cat-0x02 frame -- and
      * never computed: the hash function is not published at the bit level,
@@ -592,7 +593,7 @@ struct vms_lock_resource {
      *
      * master_csid is the node that masters the resource; 0 = unmastered.
      */
-    uint16_t            hash16;
+    uint32_t            dir_hash;
     uint8_t             hash_known;
     uint8_t             dir_valid;
     uint32_t            dir_gen;
@@ -1401,6 +1402,13 @@ long vms_ioctl_setprn(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_getjpi(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_procscan(struct vms_proc *proc, unsigned long arg);
 long vms_ioctl_setident(struct vms_proc *proc, unsigned long arg);
+/* rd vms-ff75: creator-authorized detached-process identity (vms_proctab.c) */
+long vms_ioctl_creprc_ticket(struct vms_proc *proc, unsigned long arg);
+int  vms_proc_creprc_ticket_claim(uint64_t id, const uint32_t *ancestors, int n,
+                                  char *username /* VMS_USERNAME_SIZE bytes */,
+                                  uint32_t *uic, uint64_t *privs);
+void vms_proc_apply_ticket_identity(struct vms_proc *proc, const char *username,
+                                    uint32_t uic, uint64_t privs);
 /*
  * $EXIT / $STATUS and CLI invocation context (vms-f60d) -- the executive
  * half of IMGACT's crt0 return path (ovmx_activation.h). SETEXIT records

@@ -198,6 +198,29 @@ static void arm_bindings(void)
 	       "... and the directory hash is learned from ANY sender, because "
 	       "learning emits nothing (Davis p. 6-50)");
 
+	/* rd vms-8219: THE DIRECTORY ROLE toward a real VMS system -- the one
+	 * thing above RULE C that may answer, and only with the real
+	 * directory's own answer shape. */
+	has("if (dlm_arm_directory(d, req, reply) == 0)",
+	    "the directory role is consulted for every cat-0x02 request");
+	before("dlm_arm_dir_register(d, req);",
+	       "if (dlm_arm_directory(d, req, reply) == 0)",
+	       "op-0x0d registrations are recorded in the rebuild branch, which "
+	       "still hands the answer to the grounded echo");
+	before("if (dlm_arm_directory(d, req, reply) == 0)",
+	       "if (!dlm_arm_peer_is_ours(d, req))",
+	       "the directory role sits ABOVE RULE C (its answer is the real "
+	       "directory's byte-for-byte; test_dlm_dir.c)");
+	has("if (req->peer_is_ours || req->from_csid == 0u ||",
+	    "... and serves ONLY a system that is not this implementation, with "
+	    "a known CSID (between OVMX nodes the engine owns the directory)");
+	has("if (vms_dlm_dir_answer_build(req->body, req->len, status,",
+	    "every directory answer is built by the grounded builder");
+	has("if (dlm_arm_dir_name_held(id)) {",
+	    "a name THIS node holds locks on is never answered 'you master it'");
+	has("o = vms_dlm_dir_lookup(&d->dir, id, req->from_csid, &master);",
+	    "the outcome comes from this node's own directory entries");
+
 	/*
 	 * THE HASH BOOTSTRAP DEADLOCK IS RESOLVED behind the all-OVMX gate (rung
 	 * A", vms-3e3), pinned as a PROPERTY of the shipped file. The deadlock was:
@@ -221,11 +244,12 @@ static void arm_bindings(void)
 	has("if (!dlm_arm_eng_dir_groundable(ctx))\n\t\treturn SS__UNSUPPORTED;",
 	    "dir_ground REFUSES unless the all-OVMX gate holds -- never a name->hash "
 	    "against a real VAX (the 90b3bbbd storm cannot recur)");
-	has("*out_hash16 = vms_dlm_ovmx_dir_hash(name, name_len);",
+	has("*out_hash = vms_dlm_ovmx_dir_hash(name, name_len);",
 	    "... and the grounded value is OVMX's OWN directory hash, not DEC's");
 	has("h *= 16777619u;           /* FNV-1a prime */",
-	    "OVMX's own hash is FNV-1a over the name bytes, folded to 16 -- clean-"
-	    "room, deterministic, identical on every OVMX node");
+	    "OVMX's own hash is FNV-1a over the name bytes, a 32-bit value in "
+	    "the wire's own shape (rd vms-4fb) -- clean-room, deterministic, "
+	    "identical on every OVMX node");
 	has("d->eng_ops.post           = dlm_arm_post;",
 	    "the engine's POST op is installed too -- the remote route it serves is "
 	    "now reachable behind the gate");

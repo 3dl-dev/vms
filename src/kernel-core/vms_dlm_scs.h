@@ -87,7 +87,7 @@ enum dlm_role {
  *     OVMX never computes one. It does not need to: p. 6-50 documents that
  *     every directory lookup carries the SENDER'S 16-bit hash on the wire and
  *     that the directory node uses the received value. OVMX learns it
- *     (vms_lock.c `hash16`/`hash_known`, fed from the codec's
+ *     (vms_lock.c `dir_hash`/`hash_known`, fed from the codec's
  *     vms_dlm_dir_hash_parse) and sends a lookup ONLY with a value it received.
  *     A root name OVMX is the first in the cluster to touch has no hash and is
  *     refused SS$_UNSUPPORTED -- the honest floor, and a narrow one.
@@ -100,7 +100,7 @@ enum dlm_role {
  * interface somebody can implement by hashing the name -- which is exactly the
  * thing that broke a real cluster (commit 90b3bbbd) and later produced the
  * grant storm. The seam the lock engine actually uses takes the HASH
- * (src/kernel-core/vms_dlm_proxy.h `dir_resolve(ctx, hash16, &csid)`), so the
+ * (src/kernel-core/vms_dlm_proxy.h `dir_resolve(ctx, dir_hash, &csid)`), so the
  * fabrication is not merely forbidden, it is unrepresentable.
  * ========================================================================== */
 

@@ -31,12 +31,12 @@ extern "C" {
 
 #define LNM$_INDEX          1   /* Translation index (for multi-valued names) */
 #define LNM$_STRING         2   /* Equivalence string */
-#define LNM$_LENGTH         3   /* Length of equivalence string */
-#define LNM$_ACMODE         4   /* Access mode */
-#define LNM$_ATTRIBUTES     5   /* Logical name attributes */
-#define LNM$_TABLE          6   /* Logical name table */
+#define LNM$_LENGTH         5   /* Length of equivalence string */
+#define LNM$_ACMODE         6   /* Access mode */
+#define LNM$_ATTRIBUTES     3   /* Logical name attributes */
+#define LNM$_TABLE          4   /* Logical name table */
 #define LNM$_MAX_INDEX      7   /* Maximum translation index */
-#define LNM$_CHAIN          8   /* Chain to next table (table attribute) */
+#define LNM$_CHAIN          -1   /* Chain to next table (table attribute) */
 #define LNM$_LNMB_ADDR     9   /* Address of LNM block (internal) */
 
 /* ================================================================
@@ -46,21 +46,38 @@ extern "C" {
  * logical name table.  They are used with LNM$_ATTRIBUTES.
  * ================================================================ */
 
-#define LNM$M_CONCEALED     0x01    /* Bit 0: Concealed device (RMS hides translation) */
-#define LNM$M_TERMINAL      0x02    /* Bit 1: Terminal (do not translate further) */
-#define LNM$M_CONFINE       0x04    /* Bit 2: Do not copy to subprocess */
-#define LNM$M_NO_ALIAS      0x08    /* Bit 3: Do not allow outer-mode alias */
-#define LNM$M_CRELOG        0x10    /* Bit 4: Created with CRELOG (compatibility) */
-#define LNM$M_TABLE         0x20    /* Bit 5: Entry is a table name */
-#define LNM$M_CREATE_IF     0x40    /* Bit 6: Create only if not existing */
-#define LNM$M_CASE_BLIND    0x80    /* Bit 7: Case-blind name comparison */
+#define LNM$M_CONCEALED     0x100    /* Concealed device (RMS hides translation) */
+#define LNM$M_TERMINAL      0x200    /* Terminal (do not translate further) */
+#define LNM$M_CONFINE       0x2    /* Do not copy to subprocess */
+#define LNM$M_NO_ALIAS      0x1    /* Do not allow outer-mode alias */
+#define LNM$M_CRELOG        0x4    /* Created with CRELOG (compatibility) */
+#define LNM$M_TABLE         0x8    /* Entry is a table name */
+#define LNM$M_CREATE_IF     0x1000000    /* Create only if not existing */
+#define LNM$M_CASE_BLIND    0x2000000    /* Case-blind name comparison */
 
 /* Additional attribute bits */
-#define LNM$M_INTERLOCKED   0x100   /* Bit 8: Interlocked for cluster use */
-#define LNM$M_LOCAL_ACTION  0x200   /* Bit 9: Local action only */
-#define LNM$M_CLUSTERWIDE   0x400   /* Bit 10: Cluster-wide logical name */
-#define LNM$M_EXISTS        0x800   /* Bit 11: Name exists (returned by TRNLNM) */
-#define LNM$M_SHAREABLE     0x1000  /* Bit 12: Table is shareable */
+#define LNM$M_INTERLOCKED   0x4000000   /* Interlocked for cluster use */
+#define LNM$M_LOCAL_ACTION  0x8000000   /* Local action only */
+#define LNM$M_CLUSTERWIDE   0x20000   /* Cluster-wide logical name */
+#define LNM$M_EXISTS        0x400   /* Name exists (returned by TRNLNM) */
+#define LNM$M_SHAREABLE     0x10000  /* Table is shareable */
+
+/* Remaining V7.3 $LNMDEF names (rd vms-f811) */
+#define LNM$V_NO_ALIAS         0
+#define LNM$V_CONFINE          1
+#define LNM$V_CRELOG           2
+#define LNM$V_TABLE            3
+#define LNM$V_CONCEALED        8
+#define LNM$V_TERMINAL         9
+#define LNM$V_EXISTS           10
+#define LNM$V_SHAREABLE        16
+#define LNM$V_CLUSTERWIDE      17
+#define LNM$V_CREATE_IF        24
+#define LNM$V_CASE_BLIND       25
+#define LNM$V_INTERLOCKED      26
+#define LNM$V_LOCAL_ACTION     27
+#define LNM$_PARENT            8
+#define LNM$_AGENT_ACMODE      10
 
 /* ================================================================
  * Size and depth limits

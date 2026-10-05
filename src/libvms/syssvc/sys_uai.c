@@ -189,8 +189,8 @@ static uint32_t fill_uai_item(const struct item_list_3 *item,
             break;
         }
 
-        case UAI$_LSTLOGIN_I:
-        case UAI$_LSTLOGIN_N: {
+        case UAI$_LASTLOGIN_I:
+        case UAI$_LASTLOGIN_N: {
             /* Not tracked in sysuaf.dat — return zero (epoch) */
             if (item->bufaddr && item->buflen >= sizeof(uint64_t))
                 *(uint64_t *)item->bufaddr = 0;

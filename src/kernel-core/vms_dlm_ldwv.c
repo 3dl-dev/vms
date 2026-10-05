@@ -350,6 +350,11 @@ int vms_ldwv_all_ovmx(const struct vms_ldwv *v)
  * The index rule (p. 6-31) -- ONE spelling, used by everything
  * ========================================================================== */
 
+uint16_t vms_ldwv_key(uint32_t wire_hash)
+{
+	return (uint16_t)(wire_hash >> 16);
+}
+
 enum vms_ldwv_status vms_ldwv_index(const struct vms_ldwv *v, uint16_t hash16,
 				    uint32_t *out_index)
 {

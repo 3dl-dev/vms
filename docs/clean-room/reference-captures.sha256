@@ -68,3 +68,5 @@ dd8d94d19c0980fde8b48203eafedb00b06164cd44523de14f71ad098c456599  tests/lab/capt
 6e578b6e26e84e1e2a03564836d7bdd2ccccf0c4f0ff12b8f16fe64c97c09a7e  tests/lab/captures/vms-af4-op08-remove-20261001/af4-op08-s4d.pcap
 f4c2703c82eb7b8810170a7710e3fa8dc2d5c19efd77b49b5cb4d911bd3d9cea  tests/lab/captures/vms-fcb-lockdirwt-20261004/fcb-L1-params.pcap
 dc5ba1b89fcfcd33bdfbb4e7615247d7012ddbcb6453963e54607f558458872b  tests/lab/captures/vms-fcb-lockdirwt-20261004/fcb-L2-params.pcap
+5083923966d23c01159421bf96229e3b1a828fb362893c92e11415fbf657b1ca  tests/lab/captures/vms-4fb-dir-hash-20261004/dirhash-L1.pcap
+f00cc8a88cb3892d89cbd490cea7bf748c2b22e611b4463bdaee8022779ebf81  tests/lab/captures/vms-8219-dir-role-20261004/dirrole-L1L2.pcap

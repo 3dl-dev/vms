@@ -109,6 +109,20 @@ void vms_lock_dlm_set_local_csid(uint32_t csid);
 /* What the engine currently believes, for the same readback discipline. */
 uint32_t vms_lock_dlm_local_csid(void);
 
+/*
+ * DOES THIS NODE HOLD ANY LOCK ON A RESOURCE OF THIS NAME? (rd vms-8219)
+ *
+ * A granted or waiting lock, or a proxy for one mastered elsewhere -- not a
+ * bare resource block (the hash learner keeps those for names it has only
+ * heard of). The directory role asks before it answers a real VMS system's
+ * lookup: if THIS node holds the resource, the faithful answer is "I am the
+ * master" (p. 6-31 outcome 1), which is the master role toward a VMS system
+ * -- a rung of its own -- so the directory must not answer "you master it"
+ * and create a second master. Nonzero = held (or the name cannot be asked
+ * about exactly: refuse rather than guess).
+ */
+int vms_lock_dlm_name_in_use(const char *resnam);
+
 /* ==========================================================================
  * 2. One inbound request, as the master sees it
  *

@@ -158,7 +158,7 @@ static int arm_refill(void *ctx, uint32_t req_lkid, uint32_t op,
 					      out) == SS__NORMAL ? 0 : -1;
 }
 
-static int arm_dir_resolve(void *ctx, uint16_t hash16, vms_csid_t *out_csid)
+static int arm_dir_resolve(void *ctx, uint32_t hash16, vms_csid_t *out_csid)
 {
 	(void)ctx;
 	(void)hash16;
@@ -206,7 +206,7 @@ static int arm_blkast(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int arm_learn(void *ctx, const char *resnam, uint16_t hash16)
+static int arm_learn(void *ctx, const char *resnam, uint32_t hash16)
 {
 	(void)ctx;
 	return vms_lock_dlm_learn_dir_hash(resnam, hash16) == SS__NORMAL ? 0 : -1;
@@ -358,7 +358,7 @@ static void arm_reset(void)
 	dlm_req_fsm_init(&a.fsm, &a.ops);
 }
 
-static uint32_t eng_dir_resolve(void *ctx, uint16_t hash16, uint32_t *out_csid)
+static uint32_t eng_dir_resolve(void *ctx, uint32_t hash16, uint32_t *out_csid)
 {
 	(void)ctx;
 	(void)hash16;

@@ -33,13 +33,14 @@
  */
 #define LNM_MAX_SEARCHLIST 8
 
-/* Attributes */
-#define LNM_ATTR_CONCEALED  0x01
-#define LNM_ATTR_TERMINAL   0x02
-#define LNM_ATTR_CONFINE    0x04
-#define LNM_ATTR_NO_ALIAS   0x08
-#define LNM_ATTR_CRELOG     0x10
-#define LNM_ATTR_TABLE      0x20
+/* Attributes -- the V7.3 LNM$M_ bit values (rd vms-f811), so the stored word IS the
+ * $LNMDEF attribute word (executive arena + $TRNLNM LNM$_ATTRIBUTES agree). */
+#define LNM_ATTR_CONCEALED  0x100
+#define LNM_ATTR_TERMINAL   0x200
+#define LNM_ATTR_CONFINE    0x02
+#define LNM_ATTR_NO_ALIAS   0x01
+#define LNM_ATTR_CRELOG     0x04
+#define LNM_ATTR_TABLE      0x08
 
 /* Access modes */
 #define LNM_MODE_KERNEL     0

@@ -1094,6 +1094,27 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
 
     if (pidadr) *pidadr = 0;
 
+    /*
+     * DETACHED IDENTITY, AUTHORIZED BY THE CREATOR (rd vms-ff75). A detached
+     * process's real parent is the short-lived intermediate below, which has
+     * no executive row, so it cannot inherit by continuation; and a fresh
+     * non-root row may not self-declare a privileged identity (SETIDENT's
+     * guard). So the CREATOR -- whose row is what authorizes the identity on
+     * VMS -- asks the executive for a single-use ticket NOW, before anything
+     * is forked: refused (SS$_NOPRIV: no SETPRV and not a subset of its own
+     * identity) -> nothing is created. The grandchild claims it as its first
+     * executive call (vms_kif_register_detached). Same engage rule as the
+     * child computes below; LOGINOUT sessions establish their own identity.
+     */
+    const int use_ticket = detached && !loginout && child_username[0] != 0;
+    uint64_t detach_ticket = 0;
+    if (use_ticket) {
+        uint32_t tst = vms_kif_creprc_ticket(child_username, child_uic,
+                                             child_privs, &detach_ticket);
+        if (!(tst & 1))
+            return tst;
+    }
+
     int namefd[2] = { -1, -1 };
     if (pipe(namefd) < 0)
         return SS$_INSFMEM;
@@ -1151,14 +1172,33 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
          * creator's read still sees EOF (and answers OVMX$_PRCLOST)
          * rather than blocking on a descriptor nothing will ever write.
          */
+        int ticket_sync = -1;   /* grandchild's end: closed once it claimed */
         if (detached) {
             setsid();
+            /* rd vms-ff75: the intermediate stays alive until the grandchild
+             * has claimed its ticket -- the executive honours the ticket only
+             * while the creator is still the grandchild's ANCESTOR, i.e. while
+             * this intermediate links them. EOF on the pipe (claim done, or
+             * the grandchild died) releases it. */
+            int syncfd[2] = { -1, -1 };
+            if (use_ticket && pipe(syncfd) < 0)
+                _exit(1);           /* creator reads EOF -> OVMX$_PRCLOST */
             pid_t svc = fork();
             if (svc < 0)
                 _exit(1);           /* creator reads EOF -> OVMX$_PRCLOST */
             if (svc > 0) {
                 close(namefd[1]);
+                if (use_ticket) {
+                    char b;
+                    close(syncfd[1]);
+                    while (read(syncfd[0], &b, 1) < 0 && errno == EINTR)
+                        ;
+                }
                 _exit(0);           /* reparent the grandchild away */
+            }
+            if (use_ticket) {
+                close(syncfd[0]);
+                ticket_sync = syncfd[1];
             }
         }
         /*
@@ -1300,6 +1340,13 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
              */
             if (!detached)
                 rep.status = vms_kif_register_subprocess();
+            else if (use_ticket) {
+                /* rd vms-ff75: claim the creator-authorized identity -- a new
+                 * job root with a fresh PID -- then release the intermediate. */
+                rep.status = vms_kif_register_detached(detach_ticket, NULL);
+                close(ticket_sync);
+                ticket_sync = -1;
+            }
 
             if ((rep.status & 1) && child_prcnam[0])
                 rep.status = vms_kif_setprn(child_prcnam);
@@ -1335,7 +1382,7 @@ uint32_t (sys$creprc)(uint32_t *pidadr, const struct dsc$descriptor_s *image,
              * VMS_PI_V_QUOTA rather than invent a quota block. JIB quota
              * inheritance is a separate facility increment.
              */
-            if ((rep.status & 1) && engage && child_username[0]) {
+            if ((rep.status & 1) && engage && child_username[0] && !use_ticket) {
                 uint32_t ist = vms_kif_setident(child_username, child_uic,
                                                 child_privs);
                 if (!(ist & 1))

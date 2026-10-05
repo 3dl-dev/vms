@@ -887,87 +887,104 @@ static void test_no_builder_accepts_a_placeholder_lock_id(void)
 }
 
 /*
- * FC-P4.3: the directory hash at body[10:12]. There is a PARSER and there is
- * deliberately NO BUILDER, and this test asserts both halves -- the second one
- * by the only means available for an absent function: the parse of a value the
- * caller could not have produced, and a link-time absence a reviewer can see.
- *
- * The offset is INFERRED (see the header) until FC-P4.2 confirms it offline,
- * so what is asserted here is the ACCESSOR's behaviour, not the field's
- * meaning: it reads the two bytes at abs 82 little-endian out of a cat-0x02
- * frame, refuses a frame of the wrong class, and writes nothing when it
- * refuses.
+ * THE DIRECTORY HASH at body[128:132] (rd vms-4fb), against REAL frames from a
+ * private three-node V7.3 cluster: one ROOT name (DLMTA) asked for by two
+ * different senders carries the SAME four bytes; a SUB-resource request and
+ * the directory node's own 0x82 answer are not learning sources and are
+ * refused; a refusal writes nothing.
  */
 static void test_dir_hash_accessor(void)
 {
-	const struct vms_fixture *f = fixture("dlm-enq-request-pw");
+	const struct vms_fixture *r2 = fixture("dlm-dirhash-root-vax2");
+	const struct vms_fixture *r3 = fixture("dlm-dirhash-root-vax3");
+	const struct vms_fixture *sub = fixture("dlm-dirhash-sub-vax2");
+	const struct vms_fixture *ans = fixture("dlm-dirhash-answer-vax1");
 	struct vms_frame_info fi;
-	uint16_t hash = 0xFFFFu;
+	uint32_t h2 = 0u, h3 = 0u, hash;
 	uint8_t frame[256];
 
-	printf("-- the directory hash at body[10:12] (FC-P4.3, p. 6-50)\n");
-	ct_check(f != NULL, "fixture loads");
-	if (f == NULL)
+	printf("-- the directory hash at body[128:132] (rd vms-4fb, p. 6-50)\n");
+	ct_check(r2 != NULL && r3 != NULL && sub != NULL && ans != NULL,
+		 "the four L1 specimens load");
+	if (r2 == NULL || r3 == NULL || sub == NULL || ans == NULL)
 		return;
-	ct_check(vms_frame_classify(f->bytes, f->wire_len, &fi) == VMS_CODEC_OK,
-		 "classifies");
 
-	ct_check(vms_dlm_dir_hash_parse(f->bytes, f->wire_len, &fi, &hash) ==
-		 VMS_CODEC_OK, "the hash field is readable on a real cat-02 frame");
-	ct_check_eq_u32(hash,
-			(uint32_t)f->bytes[VMS_OFF_DLM_DIR_HASH] |
-			((uint32_t)f->bytes[VMS_OFF_DLM_DIR_HASH + 1u] << 8),
-			"  and it is abs 82/83 read little-endian, nothing else");
+	ct_check(vms_frame_classify(r2->bytes, r2->wire_len, &fi) == VMS_CODEC_OK &&
+		 vms_dlm_dir_hash_parse(r2->bytes, r2->wire_len, &fi, &h2) ==
+		 VMS_CODEC_OK, "VAX2's root request yields a hash");
+	ct_check(vms_frame_classify(r3->bytes, r3->wire_len, &fi) == VMS_CODEC_OK &&
+		 vms_dlm_dir_hash_parse(r3->bytes, r3->wire_len, &fi, &h3) ==
+		 VMS_CODEC_OK, "VAX3's root request for the same name yields one");
+	ct_check_eq_u32(h2, 0x00336fe3u,
+			"  it is body[128:132] little-endian (e3 6f 33 00)");
+	ct_check_eq_u32(h3, h2,
+			"  *** the SAME value from a different sender: a property "
+			"of the NAME ***");
+	ct_check(r2->bytes[82] != r3->bytes[82] || r2->bytes[83] != r3->bytes[83],
+		 "  ...while body[10:12], the old INFERRED offset, differs "
+		 "between the two senders (it is not the hash)");
+
+	hash = 0xA5A5A5A5u;
+	ct_check(vms_frame_classify(sub->bytes, sub->wire_len, &fi) == VMS_CODEC_OK &&
+		 vms_dlm_dir_hash_parse(sub->bytes, sub->wire_len, &fi, &hash) ==
+		 VMS_CODEC_E_CLASS,
+		 "a SUB-resource request (parent span nonzero) is refused");
+	ct_check_eq_u32(hash, 0xA5A5A5A5u, "  writing nothing");
+	ct_check(vms_frame_classify(ans->bytes, ans->wire_len, &fi) == VMS_CODEC_OK &&
+		 vms_dlm_dir_hash_parse(ans->bytes, ans->wire_len, &fi, &hash) ==
+		 VMS_CODEC_E_CLASS,
+		 "the directory's 0x82 ANSWER is refused (body[28:40] rewritten)");
+	ct_check_eq_u32(hash, 0xA5A5A5A5u, "  writing nothing");
 
 	/* A value no name-derived function would produce, read back verbatim:
 	 * the accessor transports, it does not derive. */
-	memcpy(frame, f->bytes, f->wire_len);
-	frame[VMS_OFF_DLM_DIR_HASH] = 0x34u;
-	frame[VMS_OFF_DLM_DIR_HASH + 1u] = 0x12u;
-	hash = 0;
-	ct_check(vms_dlm_dir_hash_parse(frame, f->wire_len, &fi, &hash) ==
-		 VMS_CODEC_OK, "reads an arbitrary wire value");
-	ct_check_eq_u32(hash, 0x1234u, "  byte for byte, whatever the wire said");
+	ct_check(vms_frame_classify(r2->bytes, r2->wire_len, &fi) == VMS_CODEC_OK,
+		 "re-classify the root request");
+	memcpy(frame, r2->bytes, r2->wire_len);
+	frame[VMS_OFF_DLM_DIR_HASH] = 0x78u;
+	frame[VMS_OFF_DLM_DIR_HASH + 1u] = 0x56u;
+	frame[VMS_OFF_DLM_DIR_HASH + 2u] = 0x34u;
+	frame[VMS_OFF_DLM_DIR_HASH + 3u] = 0x12u;
+	hash = 0u;
+	ct_check(vms_dlm_dir_hash_parse(frame, r2->wire_len, &fi, &hash) ==
+		 VMS_CODEC_OK && hash == 0x12345678u,
+		 "reads an arbitrary wire value byte for byte");
 
-	/* Refusals write nothing: "the frame carried no hash" and "the hash is
-	 * 0" are different facts, and only one of them may reach the wire. */
-	hash = 0xA5A5u;
-	ct_check(vms_dlm_dir_hash_parse(frame, f->wire_len, NULL, &hash) ==
+	hash = 0xA5A5A5A5u;
+	ct_check(vms_dlm_dir_hash_parse(frame, r2->wire_len, NULL, &hash) ==
 		 VMS_CODEC_E_CLASS, "a frame with no class info is refused");
-	ct_check_eq_u32(hash, 0xA5A5u, "  and the caller's variable is untouched");
-	ct_check(vms_dlm_dir_hash_parse(frame, f->wire_len, &fi, NULL) ==
+	ct_check_eq_u32(hash, 0xA5A5A5A5u, "  and the caller's variable is untouched");
+	ct_check(vms_dlm_dir_hash_parse(frame, r2->wire_len, &fi, NULL) ==
 		 VMS_CODEC_E_CLASS, "a null output is refused");
-
 	{
 		struct vms_frame_info wrong = fi;
 
 		wrong.cls = VMS_FCLS_HELLO;
-		hash = 0xA5A5u;
-		ct_check(vms_dlm_dir_hash_parse(frame, f->wire_len, &wrong,
+		ct_check(vms_dlm_dir_hash_parse(frame, r2->wire_len, &wrong,
 						&hash) == VMS_CODEC_E_CLASS,
 			 "a non-SCS_MSG frame is refused");
-		ct_check_eq_u32(hash, 0xA5A5u, "  writing nothing");
 	}
-
 	{
-		/* A frame that is not cat-0x02 at all. */
 		uint8_t other[256];
 
-		memcpy(other, frame, f->wire_len);
+		memcpy(other, frame, r2->wire_len);
+		other[VMS_OFF_DLM_OP] = VMS_DLM_WIREOP_CONVERT;
+		ct_check(vms_dlm_dir_hash_parse(other, r2->wire_len, &fi,
+						&hash) == VMS_CODEC_E_CLASS,
+			 "an opcode the value is not grounded on is refused");
+		other[VMS_OFF_DLM_OP] = VMS_DLM_WIREOP_ENQ;
 		other[VMS_OFF_DLM_CAT] = 0x01u;
-		hash = 0xA5A5u;
-		ct_check(vms_dlm_dir_hash_parse(other, f->wire_len, &fi,
+		ct_check(vms_dlm_dir_hash_parse(other, r2->wire_len, &fi,
 						&hash) == VMS_CODEC_E_CLASS,
 			 "a cat-0x01 body is refused");
-		ct_check_eq_u32(hash, 0xA5A5u, "  writing nothing");
 	}
+	ct_check_eq_u32(hash, 0xA5A5A5A5u, "  every refusal wrote nothing");
 
 	/* A truncated frame reports the view's error, not a zero. */
-	hash = 0xA5A5u;
 	ct_check(vms_dlm_dir_hash_parse(frame, VMS_OFF_DLM_DIR_HASH + 1u, &fi,
 					&hash) != VMS_CODEC_OK,
 		 "a frame too short to hold the field is refused");
-	ct_check_eq_u32(hash, 0xA5A5u, "  writing nothing");
+	ct_check_eq_u32(hash, 0xA5A5A5A5u, "  writing nothing");
 }
 
 /*
@@ -991,7 +1008,7 @@ static void test_body_entries_are_what_scs_delivers(void)
 	uint8_t op_frame = 0, op_body = 0;
 	const uint8_t *body;
 	uint32_t blen;
-	uint16_t h_frame = 0, h_body = 0;
+	uint32_t h_frame = 0, h_body = 0;
 
 	printf("-- rd vms-1ee: the BODY entries, over the same implementation\n");
 	ct_check(f != NULL, "fixture loads");

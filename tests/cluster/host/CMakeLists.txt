@@ -190,6 +190,9 @@ add_library(cluster_host_cnxman STATIC
     # library rather than getting its own because Phase 2's commit and both
     # transition FSMs call it -- the vector is connection-manager state.
     ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_ldwv.c        # FC-P4.3
+    # rd vms-8219: the lock directory's ENTRIES, the vector's companion. Pure
+    # on the same terms (no seam, no allocation, no clock).
+    ${OVMX_CLUSTER_CORE_DIR}/vms_dlm_dir.c         # rd vms-8219
 )
 target_include_directories(cluster_host_cnxman PUBLIC ${OVMX_CLUSTER_CORE_DIR})
 target_compile_definitions(cluster_host_cnxman PUBLIC OVMX_CLUSTER_HOST)
@@ -249,6 +252,11 @@ target_include_directories(test_cnxman_diag PRIVATE ${CMAKE_SOURCE_DIR}/tools)
 # order over real CSBs, the `hash16 mod n` index rule, and the two refusals
 # (mixed/unknown weights, capacity). Pure, so it runs in milliseconds.
 cluster_host_cnxman_test(test_dlm_ldwv test_dlm_ldwv.c)
+
+# rd vms-8219: the lock directory's entries and the directory-role codec (the
+# identity a lookup/removal/registration carries, and the 0xf9/0xf8 answer),
+# against REAL frames from a private V7.3 cluster whose directory node was VAX1.
+cluster_host_cnxman_test(test_dlm_dir test_dlm_dir.c)
 
 # rd vms-1ee: the DLM's WIRE ARM (vms_dlm_scs.c). The arm itself is not
 # host-linkable (exec_kbackend.h + the fork API, test_cnxman_glue.c's own
@@ -712,6 +720,7 @@ add_library(cluster_host_hdr_alone OBJECT
     hdr_alone_vms_cnxman.c
     hdr_alone_vms_dlm_scs.c
     hdr_alone_vms_dlm_ldwv.c          # FC-P4.3
+    hdr_alone_vms_dlm_dir.c           # rd vms-8219
     hdr_alone_vms_cnxman_csb.c        # FC-P3.6
     hdr_alone_vms_cnxman_recnx_fsm.c  # FC-P3.6
     hdr_alone_vms_cluster_fork.c

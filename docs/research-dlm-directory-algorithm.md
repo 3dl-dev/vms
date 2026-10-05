@@ -90,6 +90,21 @@ name. So:
   receiving requests, or in rebuild registrations), OVMX **knows the hash
   value the cluster uses** — read off the wire, never computed.
 
+> **CORRECTED 2026-10-04 (rd vms-4fb) — measured, not inferred.** On a private
+> three-node OpenVMS VAX V7.3 cluster (`tests/lab/captures/vms-4fb-dir-hash-20261004/`)
+> the hash value rides at **`body[128:132]` (abs 200), a little-endian 32-bit
+> value**, in every cat-0x02 op-0x01 request: 939 ROOT resources across three
+> senders, every one with exactly one value, all distinct. `body[10:12]` is
+> **not** it: the same name reads `a300` from one sender and `c800` from
+> another. A sub-resource's value differs by parent (root = request
+> `body[36:44]` all zero). The directory index is the value's **high 16 bits
+> mod n**: with the vector `[VAX1, VAX2, VAX2]` (LOCKDIRWT 1/2/0, CSV order),
+> 140 of 140 root lookups by the weight-0 node went to
+> `entry[(value >> 16) mod 3]`, while the low half, the full value and each
+> single byte landed at chance. That settles both FC-P4.2 checks (the field,
+> and the CSV-index order) and puts the published 16-bit hash (p. 6-49) in
+> the value's high half. The paragraph below is kept as history.
+
 **Which byte is it?** The strawman's op-01 builder placed a 16-bit
 `dir_hash` at **body[10:12]** and sent it as "honest 0"
 (`feat/coord-rebuild-completion:src/vmsscs/scs_member.c:852`), and VAX1

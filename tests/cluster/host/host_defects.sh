@@ -61,6 +61,7 @@
 #   phase2-count-mismatch-uncounted          vms_cnxman_phase2.c
 #   recnx-last-gasp-uncounted                vms_cnxman_recnx_fsm.c
 #   ldwv-refusal-uncounted                   vms_dlm_ldwv.c
+#   dlm-dir-remove-by-anyone                 vms_dlm_dir.c   (rd vms-8219)
 #
 # (vms_dlm_ldwv.c above -- FC-P4.3's Lock Directory Weight Vector -- was the
 # seventh TU named by the item that grew this manifest; see its own defect
@@ -128,6 +129,7 @@ barrier-bit0-uncounted
 phase2-count-mismatch-uncounted
 recnx-last-gasp-uncounted
 ldwv-refusal-uncounted
+dlm-dir-remove-by-anyone
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
 codec-mscp-gus-tail2-invented
@@ -217,6 +219,7 @@ kernel-core/vms_cnxman_join_fsm.c
 kernel-core/vms_cnxman_phase2.c
 kernel-core/vms_cnxman_quorum.c
 kernel-core/vms_cnxman_recnx_fsm.c
+kernel-core/vms_dlm_dir.c
 kernel-core/vms_dlm_ldwv.c
 kernel-core/vms_dlm_scs.c
 kernel-core/vms_dlm_scs_fsm.c
@@ -378,6 +381,20 @@ EOF
         require_fail) cat <<'EOF'
 and counted in the CLUB
 the refusal is counted
+EOF
+                      ;;
+        esac;;
+
+    dlm-dir-remove-by-anyone)
+        case "$_f" in
+        facility)     echo "the lock directory's entry removal (vms_dlm_dir_remove(), rd vms-8219): only the system the entry names as master may remove it -- a removal from any other system is refused and counted";;
+        targets)      echo "kernel-core/vms_dlm_dir.c";;
+        suites_red)   echo "test_dlm_dir";;
+        isolation)    echo "isolated";;
+        why)          echo "vms_dlm_dir_remove()'s master check is disarmed, so a VMS system's op-0x04 removal deletes ANOTHER system's directory entry; the next lookup is answered 'you master it' and the resource has two masters -- the data-integrity failure the directory exists to prevent.";;
+        require_fail) cat <<'EOF'
+a removal from a system that is not the master removes nothing
+the master's removal does
 EOF
                       ;;
         esac;;
@@ -1249,6 +1266,10 @@ apply_edit() {
     recnx-last-gasp-uncounted)
         # `r->last_gasps++;` is unique in this file.
         sed -i 's|r->last_gasps++;|/* NEGCTL recnx-last-gasp-uncounted: the last gasp is not counted */|' "$_file";;
+
+    dlm-dir-remove-by-anyone)
+        # `if (i < 0 || d->slot[i].master != master) {` is unique in this file.
+        sed -i 's#if (i < 0 || d->slot\[i\].master != master) {#if (i < 0 || (d->slot[i].master != master \&\& 0)) { /* NEGCTL dlm-dir-remove-by-anyone */#' "$_file";;
 
     ldwv-refusal-uncounted)
         # `club->ldwv_build_refused++;` occurs TWICE in this file (the

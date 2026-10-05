@@ -273,6 +273,21 @@ static void index_rule(void)
 		 "and the weighted share is 1:3 over the whole hash space");
 }
 
+/*
+ * rd vms-4fb: the vector is indexed by the HIGH 16 bits of the 32-bit wire
+ * value (body[128:132]) -- grounded on a real [VAX1, VAX2, VAX2] vector, where
+ * 140/140 root lookups went to entry[(value >> 16) mod 3].
+ */
+static void index_key_is_the_high_half(void)
+{
+	printf("--- rd vms-4fb: the index key is the wire value's HIGH 16 bits ---\n");
+	ct_check_eq_u32(vms_ldwv_key(0x00336fe3u), 0x0033u,
+			"DLMTA's real wire value e3 6f 33 00 keys as 0x0033");
+	ct_check_eq_u32(vms_ldwv_key(0xffff0000u), 0xffffu, "the top half, whole");
+	ct_check_eq_u32(vms_ldwv_key(0x0000ffffu), 0x0000u,
+			"the low half contributes nothing");
+}
+
 /* ==========================================================================
  * 5. p. 6-33's discard, and the refusals
  * ========================================================================== */
@@ -867,6 +882,7 @@ int main(void)
 	all_zero_weights();
 	copies_are_logically_equivalent();
 	index_rule();
+	index_key_is_the_high_half();
 	discard_and_refusals();
 	club_build_csv_order();
 	club_build_refusal();

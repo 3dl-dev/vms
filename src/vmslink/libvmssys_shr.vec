@@ -265,3 +265,11 @@ vms_kif_terminal_resolve=PROCEDURE
 # APPENDED per the append-only contract -- never shifts an existing index.
 vms_kif_terminal_setlogin=PROCEDURE
 vms_kif_terminal_getlogin=PROCEDURE
+# rd vms-ff75: $CREPRC PRC$M_DETACH (sys_process.c, VMS-native-linked) has the
+# executive authorize the detached process's identity against the CREATOR's row
+# (VMS_IOCTL_CREPRC_TICKET) and the detached grandchild claim it
+# (VMS_IOCTL_REGISTER_DETACHED) -- RUN/DETACHED from a non-root interactive
+# session. Both WIRED; LIBVMSSYS$SHR universals. APPENDED per the append-only
+# contract -- never shifts an existing index.
+vms_kif_creprc_ticket=PROCEDURE
+vms_kif_register_detached=PROCEDURE

@@ -14,6 +14,7 @@
  */
 
 #include "vms_cluster_codec_dlm.h"
+#include "vms_cluster_codec_cm.h"   /* VMS_CM_BODY_LEN: the directory answer echoes a whole body */
 
 /* ------------------------------------------------------------------ *
  * Shared class/category gating
@@ -75,11 +76,10 @@ vms_codec_status_t vms_dlm_enq_request_parse_body(const uint8_t *body, uint32_t 
 	out->mode = vms_wire_get_u8(&v, VMS_OFB_DLM_MODE);
 	out->req_pid_or_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_REQ_LKID);
 	out->master_lkid = vms_wire_get_le32(&v, VMS_OFB_DLM_MASTER_LKID);
-	/* body[10:12]: the SENDER's own directory hash for the root name. A
-	 * request that carried one is where a receiver LEARNS it (FC-P4.3,
-	 * Davis p. 6-50); the flag is what tells the caller it may be learned
-	 * at all, because "0" and "absent" are different facts. */
-	out->dir_hash = vms_wire_get_le16(&v, VMS_OFB_DLM_DIR_HASH);
+	/* body[128:132]: the SENDER's own directory hash for the name (rd
+	 * vms-4fb, Davis p. 6-50); the flag is what tells the caller it may be
+	 * learned at all, because "0" and "absent" are different facts. */
+	out->dir_hash = vms_wire_get_le32(&v, VMS_OFB_DLM_DIR_HASH);
 	out->dir_hash_valid = 1u;
 	if (!vms_wire_view_ok(&v))
 		return v.err;
@@ -116,14 +116,14 @@ vms_codec_status_t vms_dlm_enq_request_build(const struct vms_dlm_enq_request *r
 	vms_wire_put_le32(&w, VMS_OFF_DLM_REQ_LKID, req->req_pid_or_lkid);
 	vms_wire_put_le32(&w, VMS_OFF_DLM_MASTER_LKID, req->master_lkid);
 	/*
-	 * body[10:12] ONLY when the caller holds a WIRE-LEARNED hash for this
+	 * body[128:132] ONLY when the caller holds a WIRE-LEARNED hash for this
 	 * root name. No `else` branch, on purpose: a zero written here would be
 	 * a hash nobody derived, the directory node would scan the wrong chain,
 	 * miss the name, and install US as master of a resource somebody else
 	 * already masters -- the campaign's 35/s grant storm (FC-P4.1 §3).
 	 */
 	if (req->dir_hash_valid)
-		vms_wire_put_le16(&w, VMS_OFF_DLM_DIR_HASH, req->dir_hash);
+		vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_HASH, req->dir_hash);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_MARKER, VMS_DLM_NAME_MARKER_CONST);
 	vms_wire_put_u8(&w, VMS_OFF_DLM_NAME_LEN, req->name_len);
 	vms_wire_put_bytes(&w, VMS_OFF_DLM_NAME, req->name_len, req->name);
@@ -356,34 +356,146 @@ vms_codec_status_t vms_dlm_req_csid(const struct vms_sca_hdr *hdr, uint16_t *out
 }
 
 /* ------------------------------------------------------------------ *
- * The directory hash at body[10:12] -- read only, never built.
- * See the header for the p. 6-50 grounding and the INFERRED offset.
+ * The directory hash at body[128:132] -- read only, never built alone.
+ * See the header for the grounding (rd vms-4fb).
  * ------------------------------------------------------------------ */
 
+/* Nonzero iff the body's parent span is all zero: a ROOT resource. */
+static int dlm_is_root(vms_wire_view_t *v)
+{
+	uint8_t span[VMS_DLM_PARENT_SPAN_LEN];
+	uint32_t i;
+
+	vms_wire_get_bytes(v, VMS_OFB_DLM_PARENT_SPAN, VMS_DLM_PARENT_SPAN_LEN,
+			   span);
+	if (!vms_wire_view_ok(v))
+		return 0;
+	for (i = 0u; i < VMS_DLM_PARENT_SPAN_LEN; i++) {
+		if (span[i] != 0u)
+			return 0;
+	}
+	return 1;
+}
+
 vms_codec_status_t vms_dlm_dir_hash_parse_body(const uint8_t *body, uint32_t len,
-					  uint16_t *out)
+					  uint32_t *out)
 {
 	vms_wire_view_t v;
-	uint8_t cat;
-	uint16_t hash;
+	uint8_t cat, op;
+	uint32_t hash;
 
-	if (out == (uint16_t *)0)
+	if (out == (uint32_t *)0)
 		return VMS_CODEC_E_CLASS;
 
 	vms_wire_view_init(&v, body, len);
 	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
-	/* Requests (0x02) and responses (0x82) alike: the value is a property
-	 * of the resource name, and every cat-0x02 frame that names one is a
-	 * chance to learn it. */
-	if ((cat & 0x7fu) != VMS_DLM_CAT_REQUEST)
+	/* ONLY a REQUEST (0x02) op-0x01 -- the frame the value is grounded on
+	 * -- and only for a ROOT: a sub-resource's value is a property of its
+	 * parent as well. Not the 0x82 answer: it rewrites body[28:40], parent
+	 * span included, and an answer from a MASTER carries no name at all, so
+	 * neither "root" nor the name could be read off it. */
+	if (cat != VMS_DLM_CAT_REQUEST || op != VMS_DLM_WIREOP_ENQ)
 		return VMS_CODEC_E_CLASS;
+	if (!dlm_is_root(&v)) {
+		if (!vms_wire_view_ok(&v))
+			return v.err;
+		return VMS_CODEC_E_CLASS;
+	}
 
-	hash = vms_wire_get_le16(&v, VMS_OFB_DLM_DIR_HASH);
+	hash = vms_wire_get_le32(&v, VMS_OFB_DLM_DIR_HASH);
 	if (!vms_wire_view_ok(&v))
 		return v.err;
 	*out = hash;
+	return VMS_CODEC_OK;
+}
+
+/* ------------------------------------------------------------------ *
+ * The directory role (rd vms-8219) -- see the header for the grounding.
+ * ------------------------------------------------------------------ */
+
+/* Which frames name a resource FOR A DIRECTORY, and is this one of them? */
+static int dlm_names_for_directory(vms_wire_view_t *v, uint8_t op)
+{
+	if (op == VMS_DLM_WIREOP_ENQ)
+		return dlm_is_root(v);
+	return op == VMS_DLM_WIREOP_DIR_REMOVE || op == VMS_DLM_WIREOP_REBUILD;
+}
+
+vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
+						uint32_t len,
+						struct vms_dlm_res_ident *out)
+{
+	vms_wire_view_t v;
+	struct vms_dlm_res_ident id;
+	uint8_t cat, op;
+
+	if (out == (struct vms_dlm_res_ident *)0)
+		return VMS_CODEC_E_INVAL;
+	vms_wire_view_init(&v, body, len);
+	cat = vms_wire_get_u8(&v, VMS_OFB_DLM_CAT);
+	op = vms_wire_get_u8(&v, VMS_OFB_DLM_OP);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (cat != VMS_DLM_CAT_REQUEST || !dlm_names_for_directory(&v, op))
+		return vms_wire_view_ok(&v) ? VMS_CODEC_E_CLASS : v.err;
+
+	id.group = vms_wire_get_le16(&v, VMS_OFB_DLM_RES_GROUP);
+	id.mode = vms_wire_get_u8(&v, VMS_OFB_DLM_RES_MODE);
+	id.name_len = vms_wire_get_u8(&v, VMS_OFB_DLM_NAME_LEN);
+	id.hash = vms_wire_get_le32(&v, VMS_OFB_DLM_DIR_HASH);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	if (id.name_len == 0u || id.name_len >= VMS_DLM_NAME_MAX)
+		return op == VMS_DLM_WIREOP_DIR_REMOVE && id.name_len == 0u ?
+		       VMS_CODEC_E_CLASS : VMS_CODEC_E_RANGE;
+	vms_wire_get_bytes(&v, VMS_OFB_DLM_NAME, id.name_len, id.name);
+	if (!vms_wire_view_ok(&v))
+		return v.err;
+	*out = id;
+	return VMS_CODEC_OK;
+}
+
+vms_codec_status_t vms_dlm_dir_answer_build(const uint8_t *req_body,
+					    uint32_t req_len, uint8_t status,
+					    uint32_t master_csid,
+					    uint8_t *frame, uint32_t cap,
+					    uint32_t *written)
+{
+	struct vms_dlm_res_ident id;
+	vms_wire_buf_t w;
+	vms_codec_status_t st;
+	uint32_t i;
+
+	if (status != VMS_DLM_DIR_YOU_MASTER && status != VMS_DLM_DIR_REDIRECT)
+		return VMS_CODEC_E_INVAL;
+	if (status == VMS_DLM_DIR_REDIRECT && master_csid == 0u)
+		return VMS_CODEC_E_INVAL;
+	if (req_body == (const uint8_t *)0 || req_len < VMS_CM_BODY_LEN)
+		return VMS_CODEC_E_SHORT;
+	if (req_body[VMS_OFB_DLM_OP] != VMS_DLM_WIREOP_ENQ)
+		return VMS_CODEC_E_CLASS;
+	st = vms_dlm_res_ident_parse_body(req_body, req_len, &id);
+	if (st != VMS_CODEC_OK)
+		return st;
+
+	vms_wire_buf_init(&w, frame, cap);
+	if (!vms_wire_buf_ok(&w))
+		return VMS_CODEC_E_INVAL;
+	vms_wire_put_bytes(&w, VMS_OFF_SYSAP_BODY, VMS_CM_BODY_LEN, req_body);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_CAT,
+			(uint8_t)(VMS_DLM_CAT_REQUEST | VMS_WIRE_RESPONSE_BIT));
+	for (i = VMS_DLM_DIR_ANSWER_LO; i < VMS_DLM_DIR_ANSWER_HI; i++)
+		vms_wire_put_u8(&w, VMS_OFF_SYSAP_BODY + i, 0u);
+	vms_wire_put_u8(&w, VMS_OFF_DLM_DIR_STATUS, status);
+	if (status == VMS_DLM_DIR_REDIRECT)
+		vms_wire_put_le32(&w, VMS_OFF_DLM_DIR_MASTER, master_csid);
+	if (!vms_wire_buf_ok(&w))
+		return w.err;
+	if (written != (uint32_t *)0)
+		*written = VMS_OFF_SYSAP_BODY + VMS_CM_BODY_LEN;
 	return VMS_CODEC_OK;
 }
 
@@ -877,7 +989,7 @@ vms_codec_status_t vms_dlm_enq_response_parse(const uint8_t *frame, uint32_t len
 
 vms_codec_status_t vms_dlm_dir_hash_parse(const uint8_t *frame, uint32_t len,
 					  const struct vms_frame_info *fi,
-					  uint16_t *out)
+					  uint32_t *out)
 {
 	const uint8_t *body;
 	uint32_t blen;

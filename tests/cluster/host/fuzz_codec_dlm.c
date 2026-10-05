@@ -113,7 +113,7 @@ static int t_enq_req(const uint8_t *b, uint32_t n, void *c)
 static int t_enq_resp(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_enq_response_parse_body(b, n, (struct vms_dlm_enq_response *)c); }
 static int t_dir_hash(const uint8_t *b, uint32_t n, void *c)
-{ return (int)vms_dlm_dir_hash_parse_body(b, n, (uint16_t *)c); }
+{ return (int)vms_dlm_dir_hash_parse_body(b, n, (uint32_t *)c); }
 static int t_rebuild(const uint8_t *b, uint32_t n, void *c)
 { return (int)vms_dlm_rebuild_parse_body(b, n, (struct vms_dlm_rebuild_record *)c); }
 static int t_deq(const uint8_t *b, uint32_t n, void *c)
@@ -146,7 +146,7 @@ static void fuzz_frame(void)
             struct vms_dlm_deq d;
             struct vms_dlm_blkast bk;
             struct vms_dlm_valblk_convert cv;
-            uint16_t h;
+            uint32_t h;
             (void)vms_dlm_enq_request_parse(f, n, &fi, &op, &req);
             (void)vms_dlm_enq_response_parse(f, n, &fi, &resp);
             (void)vms_dlm_dir_hash_parse(f, n, &fi, &h);
@@ -198,7 +198,7 @@ int main(void)
     struct vms_dlm_valblk_convert cv;
     struct vms_cm_params cmp;
     struct vms_dlm_dlksrch_record dlk;
-    uint16_t hash;
+    uint32_t hash;
 
     printf("fuzz_codec_dlm: DLM/CM wire-decode never-crash-a-peer fuzz (rd vms-5339)\n");
     srand(0x0D1B);

@@ -2560,6 +2560,36 @@ static void imgact_vms_exit(unsigned long cond)
 	sys_exit((int)e.exit_code);   /* the executive-mapped POSIX exit code */
 }
 
+/* vms-ce5: the image's user stack in P1.
+ *
+ * On OpenVMS Alpha the user stack is in the P1 region (0x40000000-0x7FFFFFFF),
+ * growing down from below the control region, so every frame address is a
+ * valid 32-bit value. The substrate starts a process on a stack far above
+ * 4 GB; IMGACT maps the image's stack at the top of P1 instead -- below a
+ * 64 KB control-region gap, with a 64 KB no-access guard under it so an
+ * overflow faults instead of running into P1 data -- and the standard call
+ * runs on it. MAP_FIXED_NOREPLACE never clobbers anything; if the range is
+ * taken the image runs on the substrate stack as before (64-bit code is
+ * unaffected; 32-bit frame handles are then the documented limitation). */
+#define OVMX_P1_STACK_TOP   0x7FFF0000UL
+#define OVMX_P1_STACK_SIZE  (32UL << 20)
+#define OVMX_P1_STACK_GUARD 0x10000UL
+static unsigned long imgact_p1_stack(void)
+{
+	unsigned long lo = OVMX_P1_STACK_TOP - OVMX_P1_STACK_SIZE - OVMX_P1_STACK_GUARD;
+	unsigned long len = OVMX_P1_STACK_SIZE + OVMX_P1_STACK_GUARD;
+	void *m = sys_mmap((void *)lo, len, PROT_READ | PROT_WRITE,
+			   MAP_PRIVATE | MAP_ANONYMOUS | IMGACT_MAP_FIXED_NOREPLACE,
+			   -1, 0);
+	if (m != (void *)lo) {
+		if ((unsigned long)m < (unsigned long)-4095L)
+			sys_munmap(m, len);
+		return 0;
+	}
+	sys_mprotect((void *)lo, OVMX_P1_STACK_GUARD, PROT_NONE);
+	return OVMX_P1_STACK_TOP;
+}
+
 /* Present the six-argument VMS image-activation context to a VMS-standard
  * image's transfer address by the Alpha calling standard, capture the returned
  * condition value, and route it to the executive $EXIT. Does not return. Called
@@ -2630,7 +2660,8 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 		pv = (void *)(exe_base + g_xfer.first_off);
 	}
 
-	unsigned long cond = imgact_vms_transfer(pv, ai, args);
+	unsigned long cond = imgact_vms_transfer_stack(pv, ai, args,
+						       imgact_p1_stack());
 
 	imgact_vms_exit(cond);          /* executive $EXIT; does not return */
 	sys_exit(IMGACT_EXIT_NOEXEC);   /* defensive: never reached */

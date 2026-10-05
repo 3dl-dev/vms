@@ -27,6 +27,10 @@
 #define MAP_FIXED_NOREPLACE 0x200000    /* Linux/Alpha                                 */
 #endif
 
+#ifndef hidden   /* musl's internal visibility macro (src/include/features.h) */
+#define hidden __attribute__((__visibility__("hidden")))
+#endif
+
 /* Claim len bytes in P0 for a mapping with the given prot/flags/fd/off.
  * Returns the raw syscall result: an address, or a negative errno. */
 hidden long long __ovmx_p0_map(unsigned long long len, int prot, int flags,

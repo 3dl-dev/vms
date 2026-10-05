@@ -217,9 +217,12 @@ __attribute__((noinline)) static void capture_signal_point(void)
 {
 #if OVMX_ALPHA_VMS_ABI
     INVO_CONTEXT_BLK icb;
-    /* Current context = the lib$signal frame; one out = its caller. */
+    /* Current context = this (non-inlined) frame; one out = lib$signal or
+     * lib$stop; one more = the routine that signalled. */
     g_sig_icb_valid = 0;
     if (lib$get_curr_invo_context(&icb) == SS$_NORMAL &&
+        !icb.libicb$v_bottom_of_stack &&
+        vms$$invo_walk_prev(&icb) == SS$_NORMAL &&
         !icb.libicb$v_bottom_of_stack &&
         vms$$invo_walk_prev(&icb) == SS$_NORMAL) {
         g_sig_icb = icb;

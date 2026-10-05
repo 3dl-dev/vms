@@ -448,6 +448,87 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 #define VMS_DLM_PARENT_SPAN_LEN    8u
 #define VMS_OFB_DLM_PARENT_SPAN VMS_OFB_FROM_FRAME(VMS_OFF_DLM_PARENT_SPAN)
 
+/* ------------------------------------------------------------------ *
+ * THE DIRECTORY ROLE (rd vms-8219) -- what a directory node reads and
+ * answers, GROUNDED on a private three-node V7.3 cluster whose only
+ * directory node was VAX1 (LOCKDIRWT 3 / 0 / 0; L1, 14k lookups):
+ *
+ *   A resource's identity on the wire: the name body[48..48+body[47]),
+ *   the access mode body[46] (0 kernel / 1 executive / 3 user, never a
+ *   constant), the UIC group body[44:46] (0 for a system-wide name; 1 on
+ *   JOB_CONTROL's QMAN$/JBC$ names), and the hash body[128:132]. The same
+ *   four positions carry it in an op-0x01 lookup, an op-0x04 entry
+ *   removal and an op-0x0d rebuild registration.
+ *
+ *   The directory's ANSWER to an op-0x01 lookup is the request echoed
+ *   byte-for-byte except body[0:4] (the envelope), body[8] (0x82) and
+ *   body[28:39]: 4960 of 4960 "you master it" pairs and 36 of 36
+ *   redirects differ nowhere else. body[34] is the outcome --
+ *       0xf9  nobody masters it: the REQUESTER is now the master
+ *       0xf8  the master is the CSID at body[28:32] (LE u32)
+ *   -- and the remaining bytes of body[28:39] carry the directory node's
+ *   stale buffer in a real answer (kernel addresses, text); OVMX writes
+ *   zero there, never invented content.
+ *
+ *   op-0x04 with a name is the MASTER removing its directory entry when
+ *   the resource goes away (2484 + 2396 in L1, tracking the 0xf9 count;
+ *   never answered). op-0x0d is a master registering a resource it
+ *   masters with that resource's directory node at a transition: 434 of
+ *   434 records in L2 were ROOT resources addressed to entry[(hash >> 16)
+ *   mod n] of the real vector.
+ * ------------------------------------------------------------------ */
+#define VMS_OFF_DLM_RES_GROUP    116u  /* body[44:46] LE u16, UIC group   */
+#define VMS_OFF_DLM_RES_MODE     118u  /* body[46] u8, access mode        */
+#define VMS_OFB_DLM_RES_GROUP   VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RES_GROUP)
+#define VMS_OFB_DLM_RES_MODE    VMS_OFB_FROM_FRAME(VMS_OFF_DLM_RES_MODE)
+
+#define VMS_OFF_DLM_DIR_STATUS   106u  /* body[34] u8, the outcome         */
+#define VMS_OFF_DLM_DIR_MASTER   100u  /* body[28:32] LE u32, redirect CSID*/
+#define VMS_OFB_DLM_DIR_STATUS  VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DIR_STATUS)
+#define VMS_OFB_DLM_DIR_MASTER  VMS_OFB_FROM_FRAME(VMS_OFF_DLM_DIR_MASTER)
+#define VMS_DLM_DIR_ANSWER_LO     28u  /* body[28:39] rewritten by an answer */
+#define VMS_DLM_DIR_ANSWER_HI     39u
+
+#define VMS_DLM_DIR_YOU_MASTER  0xf9u
+#define VMS_DLM_DIR_REDIRECT    0xf8u
+#define VMS_DLM_WIREOP_DIR_REMOVE 0x04u  /* named op-0x04: entry removal */
+
+/* One resource as a directory sees it. `name` is NOT NUL-terminated. */
+struct vms_dlm_res_ident {
+	uint32_t hash;                    /* body[128:132]                  */
+	uint16_t group;                   /* body[44:46]                    */
+	uint8_t  mode;                    /* body[46]                       */
+	uint8_t  name_len;                /* body[47], 1..31                */
+	uint8_t  name[VMS_DLM_NAME_MAX];
+};
+
+/*
+ * Read the identity out of a cat-0x02 request that names a resource for a
+ * directory: an op-0x01 lookup for a ROOT (parent span zero), a named
+ * op-0x04 removal, or an op-0x0d registration. VMS_CODEC_E_CLASS for any
+ * other frame (including a sub-resource lookup and an unnamed op-0x04),
+ * VMS_CODEC_E_RANGE for a name length outside 1..31. *out written only on
+ * VMS_CODEC_OK.
+ */
+vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
+						uint32_t len,
+						struct vms_dlm_res_ident *out);
+
+/*
+ * Build the directory's answer to an op-0x01 ROOT lookup: the request body
+ * echoed, body[8] = 0x82, body[28:39] zeroed, body[34] = `status`, and for
+ * VMS_DLM_DIR_REDIRECT the master's CSID at body[28:32]. Written
+ * FRAME-absolute like every builder here (body at VMS_OFF_SYSAP_BODY).
+ * Refuses (E_INVAL) any status but the two grounded ones, a REDIRECT with
+ * no master, and a body that is not an op-0x01 root lookup (E_CLASS).
+ * body[0:8] is left as the request's: the CM wrapper owns the envelope.
+ */
+vms_codec_status_t vms_dlm_dir_answer_build(const uint8_t *req_body,
+					    uint32_t req_len, uint8_t status,
+					    uint32_t master_csid,
+					    uint8_t *frame, uint32_t cap,
+					    uint32_t *written);
+
 /*
  * Read the directory hash out of a cat-0x02 op-0x01 REQUEST for a ROOT
  * resource (parent span all zero) -- never out of the 0x82 answer, which

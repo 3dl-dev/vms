@@ -751,6 +751,25 @@ static uint32_t dir_hash_store(struct vms_lock_resource *res, uint32_t dir_hash)
     return SS__NORMAL;
 }
 
+int vms_lock_dlm_name_in_use(const char *resnam)
+{
+    struct vms_lock_resource *res;
+    int busy = 0;
+
+    if (resnam == NULL || resnam[0] == '\0')
+        return 1;
+    exec_lock(&vms_res_hash_lock);
+    res = resource_find(resnam);
+    /* The same reads resource_release() makes under the same lock to decide
+     * whether a resource is still in use. */
+    if (res != NULL && (!exec_list_empty(&res->granted) ||
+                        !exec_list_empty(&res->waiting) ||
+                        !exec_list_empty(&res->proxies)))
+        busy = 1;
+    exec_unlock(&vms_res_hash_lock);
+    return busy;
+}
+
 uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash)
 {
     struct vms_lock_resource *res;

@@ -513,6 +513,18 @@ vms_codec_status_t vms_dlm_enq_response_build_deny(uint32_t req_pid_echo,
 #define VMS_DLM_DIR_REDIRECT    0xf8u
 #define VMS_DLM_WIREOP_DIR_REMOVE 0x04u  /* named op-0x04: entry removal */
 
+/*
+ * op 0x08 (rd vms-629): a ROOT lookup a real VAX sends its directory node from
+ * inside a state-transition barrier -- both samples name SYS$SYS_ID followed by
+ * the sender's own SCSSYSTEMID. The directory answers it EXACTLY as it answers
+ * an op-0x01 lookup, and the answer's opcode byte reads 0x01: in
+ * coldform-ev2-formation.pcap (records 121/123) and in the dlmlab CF1 formation
+ * the other VAX answers 82/01 within 1.5 ms -- echo, body[34] = 0xf9 -- and the
+ * barrier proceeds. Unanswered, the requester holds its next barrier release
+ * forever.
+ */
+#define VMS_DLM_WIREOP_DIR_LOOKUP_TR 0x08u
+
 /* One resource as a directory sees it. `name` is NOT NUL-terminated. */
 struct vms_dlm_res_ident {
 	uint32_t hash;                    /* body[128:132]                  */
@@ -524,8 +536,8 @@ struct vms_dlm_res_ident {
 
 /*
  * Read the identity out of a cat-0x02 request that names a resource for a
- * directory: an op-0x01 lookup for a ROOT (parent span zero), a named
- * op-0x04 removal, or an op-0x0d registration. VMS_CODEC_E_CLASS for any
+ * directory: an op-0x01 or op-0x08 lookup for a ROOT (parent span zero), a
+ * named op-0x04 removal, or an op-0x0d registration. VMS_CODEC_E_CLASS for any
  * other frame (including a sub-resource lookup and an unnamed op-0x04),
  * VMS_CODEC_E_RANGE for a name length outside 1..31. *out written only on
  * VMS_CODEC_OK.
@@ -535,8 +547,9 @@ vms_codec_status_t vms_dlm_res_ident_parse_body(const uint8_t *body,
 						struct vms_dlm_res_ident *out);
 
 /*
- * Build the directory's answer to an op-0x01 ROOT lookup: the request body
- * echoed, body[8] = 0x82, body[28:39] zeroed, body[34] = `status`, and for
+ * Build the directory's answer to an op-0x01 or op-0x08 ROOT lookup: the
+ * request body echoed, body[8] = 0x82, body[9] = 0x01 (an op-0x08 is answered
+ * as 0x01 -- rd vms-629), body[28:39] zeroed, body[34] = `status`, and for
  * VMS_DLM_DIR_REDIRECT the master's CSID at body[28:32]. Written
  * FRAME-absolute like every builder here (body at VMS_OFF_SYSAP_BODY).
  * Refuses (E_INVAL) any status but the two grounded ones, a REDIRECT with

@@ -130,3 +130,53 @@ int dnet_fal_wclose(void *h)
     free(w);
     return (st & 1) ? 0 : -1;
 }
+
+/* ---- record input for a FAL OPEN ---------------------------------------- */
+struct fal_rfile {
+    struct FAB fab;
+    struct RAB rab;
+    char spec[DNET_DAP_MAX_SPEC + 1];
+};
+
+int dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat)
+{
+    if (!spec || !h || strlen(spec) > DNET_DAP_MAX_SPEC) return -1;
+    struct fal_rfile *r = calloc(1, sizeof *r);
+    if (!r) return -1;
+    strcpy(r->spec, spec);
+    r->fab = cc$rms_fab;
+    r->fab.fab$l_fna = r->spec;
+    r->fab.fab$b_fns = (uint8_t)strlen(r->spec);
+    r->fab.fab$b_fac = FAB$M_GET;
+    r->fab.fab$b_shr = FAB$M_SHRGET;
+    if (!(sys$open(&r->fab, 0, 0) & 1)) { free(r); return -1; }
+    r->rab = cc$rms_rab;
+    r->rab.rab$l_fab = &r->fab;
+    if (!(sys$connect(&r->rab, 0, 0) & 1)) { sys$close(&r->fab, 0, 0); free(r); return -1; }
+    if (rfm) *rfm = r->fab.fab$b_rfm;
+    if (rat) *rat = r->fab.fab$b_rat;
+    *h = r;
+    return 0;
+}
+
+int dnet_fal_rget(void *h, uint8_t *rec, size_t cap, size_t *len)
+{
+    struct fal_rfile *r = h;
+    if (!r || !rec || !len || cap == 0) return -1;
+    r->rab.rab$l_ubf = (char *)rec;
+    r->rab.rab$w_usz = (uint16_t)(cap > 0xffff ? 0xffff : cap);
+    uint32_t st = sys$get(&r->rab, 0, 0);
+    if (st == RMS$_EOF) return 0;
+    if (!(st & 1)) return -1;
+    *len = r->rab.rab$w_rsz;
+    return 1;
+}
+
+int dnet_fal_rclose(void *h)
+{
+    struct fal_rfile *r = h;
+    if (!r) return -1;
+    uint32_t st = sys$close(&r->fab, 0, 0);
+    free(r);
+    return (st & 1) ? 0 : -1;
+}

@@ -12,7 +12,6 @@
 #include <stdlib.h>
 
 #include "dnet_fal.h"
-#include "rms_textfile.h"
 #include "ssdef.h"
 
 static int g_pass, g_fail;
@@ -42,14 +41,21 @@ int dnet_fal_wput(void *h, const uint8_t *rec, size_t len)
 { (void)h; if (g_put_len + len + 1 > sizeof g_put_data) return -1;
   memcpy(g_put_data + g_put_len, rec, len); g_put_len += len; g_put_data[g_put_len++] = '\n'; return 0; }
 int dnet_fal_wclose(void *h) { (void)h; g_put_closed = 1; return 0; }
-struct rms_textfile { int i; };
-static struct rms_textfile g_tf;
-rms_textfile_t *rms_textfile_open(const char *s) { if (!strstr(s, "GREET.TXT")) return NULL; g_tf.i = 0; return &g_tf; }
-int rms_textfile_getline(rms_textfile_t *t, char *b, size_t n, int *tl)
-{ if (tl) *tl = 0; if (t->i >= 2) return 0; snprintf(b, n, "%s", g_src_lines[t->i++]); return 1; }
-void rms_textfile_close(rms_textfile_t *t) { (void)t; }
-int rms_textfile_write_line(const char *s, const char *l) { (void)s; (void)l; return -1; }
-int rms_textfile_append_line(const char *s, const char *l) { (void)s; (void)l; return -1; }
+static int g_rpos, g_ropen_ok;
+int dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat)
+{ if (!strstr(spec, "GREET.TXT")) return -1; g_rpos = 0; g_ropen_ok = 1;
+  if (rfm) *rfm = 2;
+  if (rat) *rat = 2;
+  *h = &g_rpos; return 0; }
+/* The second record carries an embedded NUL: records are length-delimited,
+ * never C strings (a VAR file read back must be record-for-record). */
+int dnet_fal_rget(void *h, uint8_t *rec, size_t cap, size_t *len)
+{ int *p = h; if (*p >= 2) return 0;
+  const char *l = g_src_lines[*p]; size_t n = strlen(l);
+  if (*p == 1) { if (n + 2 > cap) return -1; memcpy(rec, l, n); rec[n] = 0; rec[n + 1] = 'Z'; *len = n + 2; }
+  else { if (n > cap) return -1; memcpy(rec, l, n); *len = n; }
+  (*p)++; return 1; }
+int dnet_fal_rclose(void *h) { (void)h; return 0; }
 
 /* ---- scripted transport ---- */
 struct script { const char **in; int nin, pos; char out[64][1600]; int nout; };
@@ -133,6 +139,8 @@ int main(void)
     CHECK(st == 1, "VMS GET session completes");
     CHECK(saw(&gs, "0f0001") >= 0, "OPEN with DISPLAY NAME returns the resultant NAME before ACK");
     CHECK(d1 >= 0 && eof > d1, "RAC=file transfer GET streams the records then STATUS EOF (MAC 5 / MIC 047)");
+    CHECK(saw(&gs, "0800007365636f6e64207265636f7264005a") >= 0,
+          "a record with an embedded NUL is sent whole (length-delimited, not truncated at the NUL)");
 
     /* 3. Honest misses: an unknown file in a DIRECTORY LIST and an OPEN. */
     static const char *miss_in[] = {

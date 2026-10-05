@@ -142,6 +142,16 @@ int  dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, void **h,
 int  dnet_fal_wput(void *h, const uint8_t *rec, size_t len);
 int  dnet_fal_wclose(void *h);
 
+/* Record input for a FAL OPEN (and the COPY client's local source): $OPEN the
+ * file and $GET its records through RMS -- which knows the file's record
+ * format (VAR, STM*, FIX), so a record is exactly what TYPE shows, NULs and
+ * all. *rfm / *rat (may be NULL) receive the file's real record format and
+ * attributes for the ATTRIBUTES reply. rget: 1 = a record (len in *len),
+ * 0 = end of file, -1 = error. 0 = ok / -1 = fail elsewhere. */
+int  dnet_fal_ropen(const char *spec, void **h, uint8_t *rfm, uint8_t *rat);
+int  dnet_fal_rget(void *h, uint8_t *rec, size_t cap, size_t *len);
+int  dnet_fal_rclose(void *h);
+
 /*
  * dnet_fal_server_run - serve one AUTHENTICATED, ACCEPTED FAL session to
  * completion. The caller has already run dnet_fal_connect_auth (got SS$_NORMAL)

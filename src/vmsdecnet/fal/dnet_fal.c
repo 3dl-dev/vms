@@ -6,8 +6,9 @@
  *     sysuaf_lookup + sysuaf_authenticate (Purdy) + the disabled-account gate,
  *     the SAME path LOGINOUT/SSHD use. A bad password is refused; a fake would
  *     pass it. (oracle docs/oracle/vax-copy-fal-dap.md §1.)
- *   - FILE I/O IS REAL: records move through rms_textfile_* -- RMS over the
- *     ODS-2 executive ACP -- never a raw POSIX file (Rule 9 / INV-6). No
+ *   - FILE I/O IS REAL: records move through RMS $OPEN/$GET and
+ *     $CREATE/$PUT (dnet_fal_search.c) over the ODS-2 executive ACP -- never a
+ *     raw POSIX file (Rule 9 / INV-6). No
  *     fork/exec/openpty/dup2, no raw-termios/raw-fd file mechanics.
  *
  * The DAP message SEQUENCE is the public DAP 5.6 spec's (sec. 5.1 setup,
@@ -26,8 +27,9 @@
  * Field framing is dnet_dap.c (clean-room, Rule 8).
  *
  * RECORD SCOPE (INV-6): received records are $PUT verbatim to one RMS stream
- * (dnet_fal_wopen/wput/wclose, RMS over the ACP); records SENT are read as text
- * lines through rms_textfile_* (sequential text files). Binary/indexed/
+ * (dnet_fal_wopen/wput/wclose, RMS over the ACP); records SENT are $GET from
+ * the file's own RMS record format (dnet_fal_ropen/rget/rclose) -- a VAR file
+ * an earlier COPY wrote reads back record for record. Binary/indexed/
  * relative files and block mode are not advertised and not served.
  */
 #include "dnet_fal.h"
@@ -37,7 +39,6 @@
 #include <string.h>
 
 #include "sysuaf.h"         /* the ONE faithful authenticator (Purdy)        */
-#include "rms_textfile.h"   /* RMS over the ACP -- real file I/O             */
 #include "ssdef.h"
 
 #define FAL_BUFSIZ  1459   /* the NSP segment size OVMX negotiates (oracle) */
@@ -111,8 +112,8 @@ static int send_config(struct dnet_dap_transport *t)
 }
 
 /* The attributes OVMX presents for a text file it serves or sends: ASCII,
- * sequential, variable-length records, implied CR carriage control -- what
- * rms_textfile_* reads and writes. */
+ * sequential, variable-length records, implied CR carriage control. An OPEN
+ * overrides rfm/rat with the file's real ones. */
 static void text_attributes(struct dnet_dap_msg *m)
 {
     memset(m, 0, sizeof *m);
@@ -199,15 +200,14 @@ uint32_t dnet_fal_authenticate(const char *username, const char *password)
 
 
 /* Serve an opened file (GET). Returns SS$_NORMAL after ACCESS COMPLETE. */
-static int send_record(struct dnet_dap_transport *t, const char *line)
+static int send_record_n(struct dnet_dap_transport *t, const uint8_t *rec, size_t n)
 {
     struct dnet_dap_msg d;
     memset(&d, 0, sizeof d);
     d.op = DNET_DAP_DATA;
-    size_t n = strlen(line);
     if (n > DNET_DAP_MAX_REC) n = DNET_DAP_MAX_REC;
     d.u.data.reclen = (uint16_t)n;
-    if (n) memcpy(d.u.data.rec, line, n);
+    if (n) memcpy(d.u.data.rec, rec, n);
     return fal_send(t, &d);
 }
 
@@ -219,16 +219,17 @@ static int send_record(struct dnet_dap_transport *t, const char *line)
 static uint32_t server_open_phase(struct dnet_dap_transport *t, const char *spec)
 {
     struct dnet_dap_msg m;
-    rms_textfile_t *tf = NULL;           /* the open record stream          */
+    void *rf = NULL;                     /* the open RMS record stream      */
     int at_eof = 0;
-    char line[DNET_DAP_MAX_REC + 1];
-    int too_long = 0;
+    uint8_t rec[DNET_DAP_MAX_REC];
+    size_t rlen = 0;
     uint32_t result = SS$_ABORT;
     for (;;) {
         if (fal_recv(t, &m) < 0) break;
         if (m.op == DNET_DAP_CONTROL && m.u.control.ctlfunc == DNET_DAP_CTL_CONNECT) {
-            if (!tf) { tf = rms_textfile_open(spec); at_eof = 0; }
-            if (!tf) {
+            if (!rf && dnet_fal_ropen(spec, &rf, NULL, NULL) != 0) rf = NULL;
+            at_eof = 0;
+            if (!rf) {
                 if (send_status(t, (DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_FNF, 0) < 0) break;
                 continue;
             }
@@ -243,21 +244,23 @@ static uint32_t server_open_phase(struct dnet_dap_transport *t, const char *spec
                 if (send_status(t, (DNET_DAP_MAC_UNSUPP << 12) | 0, 0) < 0) break;
                 continue;
             }
-            if (!tf) { tf = rms_textfile_open(spec); at_eof = 0; }
-            if (!tf) {
+            if (!rf && dnet_fal_ropen(spec, &rf, NULL, NULL) != 0) rf = NULL;
+            if (!rf) {
                 if (send_status(t, (DNET_DAP_MAC_XFER << 12) | DNET_DAP_MIC_FNF, 0) < 0) break;
                 continue;
             }
+            int g = 0;
             if (rac == DNET_DAP_RAC_SEQFILE) {
                 int ok = 1;
-                while (!at_eof && rms_textfile_getline(tf, line, sizeof line, &too_long))
-                    if (send_record(t, line) < 0) { ok = 0; break; }
-                if (!ok) break;
+                while (!at_eof && (g = dnet_fal_rget(rf, rec, sizeof rec, &rlen)) == 1)
+                    if (send_record_n(t, rec, rlen) < 0) { ok = 0; break; }
+                if (!ok || g < 0) break;      /* a read error ends the access */
                 at_eof = 1;
                 if (send_status(t, DNET_DAP_STS_EOF, 0) < 0) break;
-            } else if (!at_eof && rms_textfile_getline(tf, line, sizeof line, &too_long)) {
-                if (send_record(t, line) < 0) break;
+            } else if (!at_eof && (g = dnet_fal_rget(rf, rec, sizeof rec, &rlen)) == 1) {
+                if (send_record_n(t, rec, rlen) < 0) break;
             } else {
+                if (g < 0) break;
                 at_eof = 1;
                 if (send_status(t, DNET_DAP_STS_EOF, 0) < 0) break;
             }
@@ -272,7 +275,7 @@ static uint32_t server_open_phase(struct dnet_dap_transport *t, const char *spec
         (void)send_status(t, (DNET_DAP_MAC_SYNC << 12) | (m.type & 0xfff), 0);
         break;
     }
-    if (tf) rms_textfile_close(tf);
+    if (rf) (void)dnet_fal_rclose(rf);
     return result;
 }
 
@@ -554,16 +557,20 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
         int want_name = m.u.access.have_display && (m.u.access.display & DNET_DAP_DSP_NAME);
         struct dnet_dap_msg a;
         if (m.u.access.accfunc == DNET_DAP_ACC_OPEN) {
-            rms_textfile_t *tf = rms_textfile_open(spec);
-            if (!tf) {
+            void *rf = NULL;
+            uint8_t frfm = DNET_DAP_RFM_VAR, frat = DNET_DAP_RAT_CR;
+            if (dnet_fal_ropen(spec, &rf, &frfm, &frat) != 0) {
                 if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_FNF, 0) < 0)
                     return SS$_ABORT;
                 result = SS$_NOSUCHFILE;
                 continue;
             }
-            rms_textfile_close(tf);
+            (void)dnet_fal_rclose(rf);
             char rsa[DNET_DAP_MAX_SPEC + 1];
             text_attributes(&a);
+            /* The file's REAL record format and attributes, as RMS opened it. */
+            if (frfm >= DNET_DAP_RFM_FIX && frfm <= 6) a.u.attr.rfm = frfm;
+            a.u.attr.rat = (uint8_t)(frat & 0x0f);
             if (fal_send(t, &a) < 0) return SS$_ABORT;
             if (want_name && resolve_one(spec, rsa, sizeof rsa) == 0 &&
                 send_name(t, DNET_DAP_NT_FILESPEC, rsa) < 0)
@@ -682,27 +689,22 @@ uint32_t dnet_fal_client_put(const char *local_spec, const char *remote_spec,
     if (!t || !t->send || !t->recv || !local_spec || !remote_spec) return SS$_ABORT;
     t->rxlen = t->rxoff = 0;
 
-    rms_textfile_t *tf = rms_textfile_open(local_spec);
-    if (!tf) return SS$_NOSUCHFILE;
+    void *rf = NULL;
+    if (dnet_fal_ropen(local_spec, &rf, NULL, NULL) != 0) return SS$_NOSUCHFILE;
 
-    if (config_exchange_client(t) < 0) { rms_textfile_close(tf); return SS$_ABORT; }
+    if (config_exchange_client(t) < 0) { (void)dnet_fal_rclose(rf); return SS$_ABORT; }
     uint32_t st = client_setup(t, DNET_DAP_ACC_CREATE, remote_spec, DNET_DAP_FB_PUT);
-    if (st != SS$_NORMAL) { rms_textfile_close(tf); return st; }
-    if (send_control_xfer(t, DNET_DAP_CTL_PUT) < 0) { rms_textfile_close(tf); return SS$_ABORT; }
+    if (st != SS$_NORMAL) { (void)dnet_fal_rclose(rf); return st; }
+    if (send_control_xfer(t, DNET_DAP_CTL_PUT) < 0) { (void)dnet_fal_rclose(rf); return SS$_ABORT; }
 
-    char line[DNET_DAP_MAX_REC + 1];
-    int too_long = 0;
-    while (rms_textfile_getline(tf, line, sizeof line, &too_long)) {
-        struct dnet_dap_msg d;
-        memset(&d, 0, sizeof d);
-        d.op = DNET_DAP_DATA;
-        size_t n = strlen(line);
-        if (n > DNET_DAP_MAX_REC) n = DNET_DAP_MAX_REC;
-        d.u.data.reclen = (uint16_t)n;
-        if (n) memcpy(d.u.data.rec, line, n);
-        if (fal_send(t, &d) < 0) { rms_textfile_close(tf); return SS$_ABORT; }
+    uint8_t rec[DNET_DAP_MAX_REC];
+    size_t rlen = 0;
+    int g;
+    while ((g = dnet_fal_rget(rf, rec, sizeof rec, &rlen)) == 1) {
+        if (send_record_n(t, rec, rlen) < 0) { (void)dnet_fal_rclose(rf); return SS$_ABORT; }
     }
-    rms_textfile_close(tf);
+    (void)dnet_fal_rclose(rf);
+    if (g < 0) return SS$_ABORT;      /* a local read error is not a clean EOF */
     return client_close(t);
 }
 

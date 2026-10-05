@@ -76,7 +76,7 @@
 #include "vms_proctab_nb.h"
 #include "vms_mbx_nb.h"
 
-#define VMS_SS_NOSUCHDEV 2680u
+#define VMS_SS_NOSUCHDEV 2312u
 
 /* Distinctive AST parameters so a dropped/confused astprm is visible. */
 #define SELFTEST_ASTADR  0x00A5F8A1ull

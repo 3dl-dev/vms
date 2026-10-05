@@ -79,22 +79,22 @@
  * this constant disagreeing is vms-6d3, not this change. */
 #define SS$_ILLIOFUNC    244
 #define SS$_BUGCHECK     676
-#define SS$_NOSUCHDEV    2680
-#define SS$_NOSUCHFILE   2696
+#define SS$_NOSUCHDEV    2312
+#define SS$_NOSUCHFILE   2320
 #define SS$_ENDOFFILE    2160
-#define SS$_IVCHAN       602
-#define SS$_IVDEVNAM     608
-#define SS$_SSFAIL       636
+#define SS$_IVCHAN       316
+#define SS$_IVDEVNAM     324
+#define SS$_SSFAIL       1116
 /* ORACLE-PINNED (vms-8019): $SSDEF on the reference lab VAX V7.3 gives
  * SS$_NONEXPR 2280 / SS$_DUPLNAM 148; F$MESSAGE round-trips both. The
  * old 2540 / 434 are SS$_RIGHTSFULL / SS$_NOIOCHAN there. */
 #define SS$_NONEXPR      2280
-#define SS$_DEADLOCK     708
+#define SS$_DEADLOCK     3594
 #define SS$_DUPLNAM      148
-#define SS$_FILALRACC    2736
+#define SS$_FILALRACC    164
 #define SS$_BUGCHECK     676
 #define SS$_CANCEL       2096
-#define SS$_UNSUPPORTED  2296
+#define SS$_UNSUPPORTED  3658
 #endif
 
 /*

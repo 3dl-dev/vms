@@ -26,7 +26,7 @@ These demonstrations exist to end an image with a failing status; they are run-p
 |---|---:|---|
 | `lib_establish` | 12 | handler is established, then removed, then lib$signal(SS$_ACCVIO) "crashes the program" by design |
 | `lib_signal` | 12 | lib$signal(SS$_ACCVIO=12): "Demonstrate how to signal an error" -- fatal, unhandled -> exit(12) |
-| `lib_stop` | 76 | lib$stop(SS$_NOMORENODE=588) "converts a warning to a fatal": exit(588 & 0xFF) |
+| `lib_stop` | 4 | lib$stop(SS$_NOMORENODE=2560, a warning) is forced to severe: exit((2560/4) & 0xFF) |
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 

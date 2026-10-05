@@ -171,7 +171,7 @@ struct vms_ef_common_args {
 #ifndef VMS_SS_NOSUCHDEV
 /* SS$_NOSUCHDEV -- the honest device-unreachable verdict the probe reports when
  * the executive device cannot be opened (never a fabricated success). */
-#define VMS_SS_NOSUCHDEV 2680u
+#define VMS_SS_NOSUCHDEV 2312u
 #endif
 
 #endif /* _VMS_EFLAG_NB_H */

@@ -69,7 +69,7 @@ extern "C" {
  * Do not "disambiguate" these by inventing a distinct value. */
 #define SS$_WASCLR          1       /* Previous state was clear (== SS$_NORMAL on VMS) */
 #define SS$_WASSET          9       /* Previous state was set */
-#define SS$_BUFFEROVF       4       /* Buffer overflow (warning, sev=0) */
+#define SS$_BUFFEROVF       1537       /* Buffer overflow (warning, sev=0) */
 
 /* ================================================================
  * Error/failure status codes
@@ -107,7 +107,7 @@ extern "C" {
  *   532=%SYSTEM-F-RESULTOVF, resultant string overflow
  * Severity is W, matching the partial-success condition it reports. */
 #define SS$_NOTALLPRIV      1664    /* Not all requested privileges authorized (%SYSTEM-W-NOTALLPRIV) */
-#define SS$_IVIDENT         548     /* Invalid identifier */
+#define SS$_IVIDENT         8740     /* Invalid identifier */
 /* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
  * 564 is SS$_UNASEFC; this collision was created by pinning UNASEFC,
  * so it is that change's blast radius, not vms-c90's. */
@@ -140,7 +140,7 @@ extern "C" {
  * ($EQU SS$_BUGCHECK 676; F$MESSAGE(676) -> %SYSTEM-F-BUGCHECK, internal
  * consistency failure). */
 #define SS$_ILLIOFUNC       244     /* Illegal I/O function (%SYSTEM-F-ILLIOFUNC) */
-#define SS$_NOMORENODE      588     /* No more cluster nodes (VMS: 0x24C) */
+#define SS$_NOMORENODE      2560     /* No more cluster nodes (VMS: 0x24C) */
 /* ================================================================
  * ORACLE-PINNED VALUES (vms-8019, 2026-07-30)
  *
@@ -199,7 +199,7 @@ extern "C" {
 #define SS$_RESULTOVF       532     /* Resultant string overflow (%SYSTEM-F-RESULTOVF) */
 #define SS$_CANCEL          2096    /* I/O operation canceled */
 #define SS$_ENDOFFILE       2160    /* End of file */
-#define SS$_NOSUCHDEV       2680    /* No such device */
+#define SS$_NOSUCHDEV       2312    /* No such device */
 /* SS$_NOMOREDEV: needed as the sys$device_scan wildcard-scan-exhausted
  * terminator (see starlet.h). PROVENANCE: 0x0A58/2648, sourced this
  * session from a GCC-for-Alpha OpenVMS toolkit SSDEF.H mirror
@@ -213,24 +213,24 @@ extern "C" {
  * until confirmed. Tracked in vms-fb3 findings.
  */
 #define SS$_NOMOREDEV       2648
-#define SS$_DEVMOUNT        2684    /* Device already mounted */
-#define SS$_DEVNOTMOUNT     2688    /* Device not mounted */
-#define SS$_NOSUCHFILE      2696    /* No such file */
+#define SS$_DEVMOUNT        108    /* Device already mounted */
+#define SS$_DEVNOTMOUNT     124    /* Device not mounted */
+#define SS$_NOSUCHFILE      2320    /* No such file */
 
 /* ================================================================
  * Additional commonly-used status codes
  * ================================================================ */
 
-#define SS$_ITEMNOTFOUND    35820   /* Item not found */
+#define SS$_ITEMNOTFOUND    2640   /* Item not found */
 #define SS$_BUGCHECK        676     /* Internal consistency failure */
-#define SS$_FILALRACC       2736    /* File already accessed */
-#define SS$_DEVOFFLINE      2692    /* Device offline */
-#define SS$_DEVINACT        2704    /* Device inactive */
-#define SS$_IVCHAN          602     /* Invalid channel */
-#define SS$_IVDEVNAM        608     /* Invalid device name */
-#define SS$_IVSSRQ          620     /* Invalid system service request */
-#define SS$_SSFAIL          636     /* System service failure */
-#define SS$_NOTRAN          2700    /* No translation for logical name */
+#define SS$_FILALRACC       164    /* File already accessed */
+#define SS$_DEVOFFLINE      132    /* Device offline */
+#define SS$_DEVINACT        8404    /* Device inactive */
+#define SS$_IVCHAN          316     /* Invalid channel */
+#define SS$_IVDEVNAM        324     /* Invalid device name */
+#define SS$_IVSSRQ          372     /* Invalid system service request */
+#define SS$_SSFAIL          1116     /* System service failure */
+#define SS$_NOTRAN          1577    /* No translation for logical name */
 
 /* ================================================================
  * Process-related status codes
@@ -238,9 +238,9 @@ extern "C" {
 
 /* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM. */
 #define SS$_NONEXPR         2280    /* Nonexistent process (%SYSTEM-W-NONEXPR) */
-#define SS$_SUSPENDED       2584    /* Process suspended */
-#define SS$_INCOMPAT        2632    /* Incompatible attributes */
-#define SS$_NOSLOT          2732    /* No PCB slot available */
+#define SS$_SUSPENDED       932    /* Process suspended */
+#define SS$_INCOMPAT        1689    /* Incompatible attributes */
+#define SS$_NOSLOT          924    /* No PCB slot available */
 
 /* ================================================================
  * Condition handling status codes
@@ -248,23 +248,23 @@ extern "C" {
 
 #define SS$_CONTROLC        1617    /* Ctrl-C interrupt */
 #define SS$_RESIGNAL        2328    /* Resignal condition */
-#define SS$_UNWIND          2204    /* Unwind in progress */
+#define SS$_UNWIND          2336    /* Unwind in progress */
 #define SS$_CONTINUE        1       /* Continue execution (same as SS$_NORMAL) */
 
 /* ================================================================
  * Success/informational status codes
  * ================================================================ */
 
-#define SS$_CREATED         836     /* Object created */
-#define SS$_SUPERSEDE       844     /* Object superseded */
-#define SS$_CONCEALED       852     /* Concealed device */
-#define SS$_REMOTE          860     /* Remote node */
+#define SS$_CREATED         1561     /* Object created */
+#define SS$_SUPERSEDE       1585     /* Object superseded */
+#define SS$_CONCEALED       1681     /* Concealed device */
+#define SS$_REMOTE          1609     /* Remote node */
 /* ORACLE-PINNED (vms-8019) -- see the block above SS$_IVLOGNAM.
  * 868 is SS$_POWERFAIL; SS$_SYNCH is 1673, and it really is a success
  * status (1673 & 7 == 1 == STS$K_SUCCESS), so it belongs in this
  * section on its own merits. */
 #define SS$_SYNCH           1673    /* Synchronous successful completion (%SYSTEM-S-SYNCH) */
-#define SS$_OPINCOMPL       2552    /* Operation incomplete */
+#define SS$_OPINCOMPL       724    /* Operation incomplete */
 
 /* ================================================================
  * Lock manager status codes
@@ -280,7 +280,7 @@ extern "C" {
 #define SS$_NOTQUEUED       2488    /* Not queued (0x9B8) */
 #define SS$_DEADLOCK        3594    /* Deadlock detected (0xE0A) */
 #define SS$_VALNOTVALID     2544    /* Value block not valid (0x9F0) */
-#define SS$_PARNOTGRANT     716     /* Parent lock not granted (UNVERIFIED — not
+#define SS$_PARNOTGRANT     8500     /* Parent lock not granted (UNVERIFIED — not
                                      * in the researched set; see vms-b27 sweep) */
 #define SS$_CVTUNGRANT      8508    /* Convert ungrantable (0x213C) */
 #define SS$_IVLOCKID        8484    /* Invalid lock ID (0x2124) */
@@ -319,20 +319,20 @@ extern "C" {
  * a public OpenVMS doc source that does NOT already disagree with a pinned
  * neighbour. Do not "fix" this by inventing a different number either --
  * that is the same self-certification error in the other direction. */
-#define SS$_EXASTLM         2756    /* Exceeded AST limit -- UNVERIFIED, see
+#define SS$_EXASTLM         10756    /* Exceeded AST limit -- UNVERIFIED, see
                                      * the block above (vms-cd41) */
-#define SS$_EXBYTLM         2764    /* Exceeded byte count limit */
+#define SS$_EXBYTLM         10772    /* Exceeded byte count limit */
 
 /* ================================================================
  * Privilege and security status codes
  * ================================================================ */
 
-#define SS$_NOCMKRNL        2212    /* No CMKRNL privilege */
-#define SS$_NOCMEXEC        2216    /* No CMEXEC privilege */
-#define SS$_NOSYSNAM        2220    /* No SYSNAM privilege */
+#define SS$_NOCMKRNL        10244    /* No CMKRNL privilege */
+#define SS$_NOCMEXEC        10252    /* No CMEXEC privilege */
+#define SS$_NOSYSNAM        10260    /* No SYSNAM privilege */
 #define SS$_NOGRACELOGIN    2224    /* No grace login */
-#define SS$_INVLOGIN        2228    /* Invalid login */
-#define SS$_NOSUCHID        2580    /* No such user identifier */
+#define SS$_INVLOGIN        8348    /* Invalid login */
+#define SS$_NOSUCHID        8684    /* No such user identifier */
 
 /* Values below read from the OpenVMS VAX V7.3 oracle (docs/oracle/vax73-starlet-defs/SSDEF.txt, vms-619). */
 #define SS$_FLTDIV          1172    /* Arithmetic trap, floating/decimal divide by zero */
@@ -349,7 +349,7 @@ extern "C" {
  * Timer and AST status codes
  * ================================================================ */
 
-#define SS$_ASTFLT          2244    /* AST fault */
+#define SS$_ASTFLT          1036    /* AST fault */
 /* ORACLE-PINNED (vms-68c, 2026-07-30) on reference lab node VAX1, OpenVMS
  * VAX V7.3, by the two documented-tool observations used throughout this
  * header (full transcript: docs/oracle/vax73-event-flags.md):
@@ -378,11 +378,11 @@ extern "C" {
  * I/O-related status codes
  * ================================================================ */
 
-#define SS$_ENDOFTAPE       2164    /* End of tape */
-#define SS$_DATACHECK       2168    /* Data check error */
-#define SS$_PARITY          2172    /* Parity error */
-#define SS$_NOREADER        2176    /* No reader on mailbox */
-#define SS$_NOWRITER        2180    /* No writer on mailbox */
+#define SS$_ENDOFTAPE       2168    /* End of tape */
+#define SS$_DATACHECK       92    /* Data check error */
+#define SS$_PARITY          500    /* Parity error */
+#define SS$_NOREADER        9412    /* No reader on mailbox */
+#define SS$_NOWRITER        9420    /* No writer on mailbox */
 #define SS$_NOMSG           2184    /* No message */
 
 /* ================================================================
@@ -397,17 +397,17 @@ extern "C" {
  * Miscellaneous status codes
  * ================================================================ */
 
-#define SS$_UNSUPPORTED     2296    /* Unsupported operation */
+#define SS$_UNSUPPORTED     3658    /* Unsupported operation */
 #define SS$_ACCVIO_RO       2340    /* Read-only access violation */
-#define SS$_PAGOWNVIO       2344    /* Page owner violation */
-#define SS$_NOSOLICIT       4268    /* No solicitation */
-#define SS$_FILNOTACC       2744    /* File not accessed */
-#define SS$_IVMODE          2300    /* Invalid access mode */
-#define SS$_CHANINTLK       2304    /* Channel interlock */
-#define SS$_MSGNOTFND       2308    /* Message not found */
+#define SS$_PAGOWNVIO       492    /* Page owner violation */
+#define SS$_NOSOLICIT       644    /* No solicitation */
+#define SS$_FILNOTACC       172    /* File not accessed */
+#define SS$_IVMODE          852    /* Invalid access mode */
+#define SS$_CHANINTLK       76    /* Channel interlock */
+#define SS$_MSGNOTFND       1569    /* Message not found */
 
 /* Additional status codes */
-#define SS$_FILACCERR       2312    /* File access error */
+#define SS$_FILACCERR       156    /* File access error */
 /*
  * SS$_DEVALLOC / SS$_DEVNOTALLOC.
  *
@@ -446,8 +446,8 @@ extern "C" {
  */
 #define SS$_DEVALLOC        2112    /* Device already allocated to another user */
 #define SS$_DEVNOTALLOC     2136    /* Device not allocated */
-#define SS$_IVLOGTAB        2320    /* Invalid logical name table */
-#define SS$_NOLOGTAB        2324    /* No such logical name table */
+#define SS$_IVLOGTAB        348    /* Invalid logical name table */
+#define SS$_NOLOGTAB        8852    /* No such logical name table */
 
 /* ================================================================
  * Additional SYSTEM-facility condition values (vms-f16).

@@ -72,7 +72,7 @@ from vaxharness import HARNESS_ERROR, PROOF_FAILED
 SS_NORMAL = 1
 SS_DEVALLOC = 2112       # device already allocated to another user
 SS_DEVNOTALLOC = 2136    # device not allocated (by this process)
-SS_NOSUCHDEV = 2680      # no such device available
+SS_NOSUCHDEV = 2312      # no such device available
 
 TARGET = "DUA0:"         # a REAL disk unit, entered from the real device ra1c
 CONSOLE = "OPA0:"        # the executive-created console terminal

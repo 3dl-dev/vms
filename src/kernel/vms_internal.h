@@ -113,7 +113,7 @@
  * expecting a WASCLR value distinct from success. Do not "fix" this back.
  */
 #define SS__INSFMEM     292         /* insufficient dynamic memory (ssdef.h SS$_INSFMEM) */
-#define SS__EXASTLM     0x00000038  /* AST quota exceeded */
+#define SS__EXASTLM     0x00002A04  /* AST quota exceeded */
 #define SS__WASSET      9           /* flag/AST was enabled/set (ssdef.h SS$_WASSET) */
 #define SS__WASCLR      1           /* flag/AST was disabled/clear (ssdef.h SS$_WASCLR) */
 #define SS__ILLEFC      236         /* illegal event flag cluster (ssdef.h SS$_ILLEFC) */
@@ -162,7 +162,7 @@
 
 /*
  * SS__UNSUPPORTED -- this tree's existing src/libvms/include/ssdef.h value
- * (SS$_UNSUPPORTED == 2296; also src/libvmssys/vms_errno.h), NOT independently
+ * (SS$_UNSUPPORTED == 3658; also src/libvmssys/vms_errno.h), NOT independently
  * re-derived here, same discipline as the device-table block above so the
  * executive and the runtime cannot drift apart. The kernel DLM scaffolding
  * (vms-ci.5 DB) returns it for the paths that are honestly 0.4, not yet built:
@@ -171,7 +171,7 @@
  * remastering (DD). It is the honest "not built yet" answer -- never a
  * fabricated remote grant (INV-6 spirit).
  */
-#define SS__UNSUPPORTED 2296        /* unsupported operation (ssdef.h SS$_UNSUPPORTED) */
+#define SS__UNSUPPORTED 3658        /* unsupported operation (ssdef.h SS$_UNSUPPORTED) */
 
 /*
  * Device-table statuses. Values are this tree's existing ssdef.h
@@ -186,13 +186,13 @@
  *   %SYSTEM-W-NOSUCHDEV, no such device available
  * (docs/oracle/vax73-terminal-device.md).
  */
-#define SS__IVCHAN      602         /* invalid I/O channel */
-#define SS__IVDEVNAM    608         /* invalid device name */
+#define SS__IVCHAN      316         /* invalid I/O channel */
+#define SS__IVDEVNAM    324         /* invalid device name */
 #define SS__NOMOREDEV   2648        /* device scan exhausted */
-#define SS__NOSUCHDEV   2680        /* no such device available */
-#define SS__DEVMOUNT    2684        /* device already mounted (ssdef.h SS$_DEVMOUNT) */
+#define SS__NOSUCHDEV   2312        /* no such device available */
+#define SS__DEVMOUNT    108        /* device already mounted (ssdef.h SS$_DEVMOUNT) */
 /*
- * SS__DEVNOTMOUNT (SS$_DEVNOTMOUNT == 2688, this tree's src/libvms/include/
+ * SS__DEVNOTMOUNT (SS$_DEVNOTMOUNT == 124, this tree's src/libvms/include/
  * ssdef.h value, single-lineage the same way SS__NOSUCHDEV above is). The
  * Files-11 ODS-2 ACP $MOUNT (vms_ioctl_acp_mount, vms-127) returns it when the
  * named unit's backing block device is NOT a genuine ODS-2 volume -- the home
@@ -204,9 +204,9 @@
  * answers "this device could not be mounted" -- SS$_DEVNOTMOUNT -- rather than
  * inventing a status it cannot cite. Labelled as such in vmsfs_acp.c.
  */
-#define SS__DEVNOTMOUNT 2688        /* device not mounted / not a mountable volume */
+#define SS__DEVNOTMOUNT 124        /* device not mounted / not a mountable volume */
 /*
- * SS__DEVOFFLINE (SS$_DEVOFFLINE == 2692, this tree's src/libvms/include/
+ * SS__DEVOFFLINE (SS$_DEVOFFLINE == 132, this tree's src/libvms/include/
  * ssdef.h value, single-lineage the same way SS__NOSUCHDEV above is; the
  * NetBSD twin carries the identical number for the identical reason).
  *
@@ -221,7 +221,7 @@
  * lab extracts $SSDEF the way the $SCSDEF oracle table was extracted, this
  * becomes a one-line correction in vms_pe.c / vms_scs.c's two mapping tables.
  */
-#define SS__DEVOFFLINE  2692        /* device offline (ssdef.h SS$_DEVOFFLINE) */
+#define SS__DEVOFFLINE  132        /* device offline (ssdef.h SS$_DEVOFFLINE) */
 /*
  * SS__ABORT (SS$_ABORT == 44, this tree's src/libvms/include/ssdef.h value,
  * single-lineage the same way SS__EXQUOTA / SS__ENDOFFILE below are). The BGn:
@@ -247,15 +247,15 @@
 #define SS__DEVNOTALLOC 2136        /* device not allocated */
 /*
  * Files-11 ACP file-open statuses (vms-204, epic vms-208). Single-lineage from
- * this tree's src/libvms/include/ssdef.h -- SS$_NOSUCHFILE == 2696 ("no such
+ * this tree's src/libvms/include/ssdef.h -- SS$_NOSUCHFILE == 2320 ("no such
  * file", the fail-honest answer when an IO$_ACCESS name/FID resolves to no
- * directory entry / header) and SS$_FILNOTACC == 2744 ("file not accessed", an
+ * directory entry / header) and SS$_FILNOTACC == 172 ("file not accessed", an
  * IO$_DEACCESS of a channel with no file accessed on it). Not re-derived; the
  * same values ssdef.h carries. (SS$_NOPRIV for a protection-denied open is
  * SS__NOPRIV, already defined above.)
  */
-#define SS__NOSUCHFILE  2696        /* no such file (IO$_ACCESS resolve miss) */
-#define SS__FILNOTACC   2744        /* file not accessed (IO$_DEACCESS w/o access) */
+#define SS__NOSUCHFILE  2320        /* no such file (IO$_ACCESS resolve miss) */
+#define SS__FILNOTACC   172        /* file not accessed (IO$_DEACCESS w/o access) */
 /*
  * SS__DEVICEFULL (SS$_DEVICEFULL == 2664): a PUBLIC STARLET SYSTEM-facility code
  * ("%SYSTEM-?-DEVICEFULL, device full"), added for the ACP IO$_WRITEVBLK
@@ -267,7 +267,7 @@
  * constant on an asserted path (the oracle-authentic SS$_WRITLCK is a labelled
  * follow-up, the same footing #633 used for its SS__DEVALLOC "busy" choice).
  */
-#define SS__DEVICEFULL  2664        /* device full (extend cannot allocate) */
+#define SS__DEVICEFULL  2128        /* device full (extend cannot allocate) */
 /*
  * SS__NOMOREFILES (SS$_NOMOREFILES == 2352, %X0930) -- ORACLE-PINNED (vms-a0b,
  * 2026-08-17). MEASURED on the reference lab OpenVMS VAX V7.3 node VAX1 by
@@ -328,7 +328,7 @@
  * executive and the runtime cannot drift apart -- same discipline as the
  * device-table block above.
  *
- *   SS$_SUPERSEDE 844  -- an existing name was replaced (ssdef.h, oracle
+ *   SS$_SUPERSEDE 1585  -- an existing name was replaced (ssdef.h, oracle
  *                         provenance recorded there)
  *   SS$_NOLOGNAM  444  -- no logical name match (ssdef.h, ORACLE-PINNED
  *                         vms-8019)
@@ -341,7 +341,7 @@
  * executive returns when the fixed arena is full -- VMS's "exceeded logical
  * name quota" condition, not "insufficient memory".
  */
-#define SS__SUPERSEDE   844
+#define SS__SUPERSEDE   1585
 #define SS__NOLOGNAM    444
 #define SS__EXLNMQUOTA  8780        /* oracle-pinned lab-1 F$MESSAGE (design §4.2, vms-556) */
 

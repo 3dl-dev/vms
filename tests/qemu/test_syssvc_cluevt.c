@@ -33,7 +33,7 @@
 #include "cluevtdef.h"
 
 #define SS_NORMAL       1u
-#define SS_NOSUCHDEV    2680u
+#define SS_NOSUCHDEV    2312u
 #define EXIT_SKIP       77
 
 static int pass = 0, fail = 0;

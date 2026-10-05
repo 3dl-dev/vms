@@ -1779,7 +1779,7 @@ static int lex_message(struct dcl_context *ctx, const char *args,
         const char *text;
     } msg_table[] = {
         { 1,     "SYSTEM", 'S', "NORMAL",       "normal successful completion" },
-        { 4,     "SYSTEM", 'W', "BUFFEROVF",    "buffer overflow" },
+        { 1537,     "SYSTEM", 'S', "BUFFEROVF",    "output buffer overflow" },
         { 8,     "SYSTEM", 'E', "ERROR",         "error" },
         { 9,     "SYSTEM", 'S', "WASSET",        "previous state was set" },
         { 12,    "SYSTEM", 'E', "ACCVIO",        "access violation" },
@@ -1844,7 +1844,7 @@ static int lex_message(struct dcl_context *ctx, const char *args,
          * F$MESSAGE answered a different condition than VMS's for both
          * codes. Note the text too: "authorized", not "available". */
         { 532,   "SYSTEM", 'F', "RESULTOVF",     "resultant string overflow" },
-        { 548,   "SYSTEM", 'E', "IVIDENT",       "invalid identifier" },
+        { 8740,   "SYSTEM", 'F', "IVIDENT",       "invalid identifier format" },
         { 556,   "SYSTEM", 'E', "TIMEOUT",       "device timeout" },
         /* ORACLE-PINNED (vms-9fc): $SSDEF SS$_VASFULL 580;
          * F$MESSAGE(580) -> "%SYSTEM-F-VASFULL, virtual address space is
@@ -1852,51 +1852,50 @@ static int lex_message(struct dcl_context *ctx, const char *args,
          * meant F$MESSAGE(580) rendered "illegal I/O function" for a
          * status that means address-space exhaustion. */
         { 580,   "SYSTEM", 'F', "VASFULL",       "virtual address space is full" },
-        { 588,   "SYSTEM", 'E', "NOMORENODE",    "no more cluster nodes" },
+        { 2560,   "SYSTEM", 'W', "NOMORENODE",    "no more nodes" },
         /* ORACLE-PINNED (vms-8019): $SSDEF SS$_VOLINV 596;
          * F$MESSAGE(596) -> "%SYSTEM-F-VOLINV, volume is not software
          * enabled". This slot used to be mislabelled IVLOGNAM. */
         { 596,   "SYSTEM", 'F', "VOLINV",        "volume is not software enabled" },
-        { 602,   "SYSTEM", 'E', "IVCHAN",        "invalid channel" },
-        { 608,   "SYSTEM", 'E', "IVDEVNAM",      "invalid device name" },
-        { 620,   "SYSTEM", 'E', "IVSSRQ",        "invalid system service request" },
-        { 636,   "SYSTEM", 'E', "SSFAIL",        "system service failure" },
+        { 316,   "SYSTEM", 'F', "IVCHAN",        "invalid I/O channel" },
+        { 324,   "SYSTEM", 'F', "IVDEVNAM",      "invalid device name" },
+        { 372,   "SYSTEM", 'F', "IVSSRQ",        "invalid system service request" },
+        { 1116,   "SYSTEM", 'F', "SSFAIL",        "system service failure exception" },
         { 676,   "SYSTEM", 'F', "BUGCHECK",      "internal consistency failure" },
-        { 708,   "SYSTEM", 'E', "DEADLOCK",      "deadlock detected" },
-        { 712,   "SYSTEM", 'E', "VALNOTVALID",   "value block not valid" },
-        { 716,   "SYSTEM", 'E', "PARNOTGRANT",   "parent lock not granted" },
-        { 836,   "SYSTEM", 'S', "CREATED",       "object created" },
-        { 844,   "SYSTEM", 'S', "SUPERSEDE",     "object superseded" },
+        { 3594,   "SYSTEM", 'E', "DEADLOCK",      "deadlock detected" },
+        { 2544,   "SYSTEM", 'W', "VALNOTVALID",   "value block is not valid" },
+        { 8500,   "SYSTEM", 'F', "PARNOTGRANT",   "parent lock must be granted" },
+        { 1561,   "SYSTEM", 'S', "CREATED",       "file or section did not exist; has been created" },
+        { 1585,   "SYSTEM", 'S', "SUPERSEDE",     "logical name superseded" },
         /* ORACLE-PINNED (vms-2b8), docs/oracle/vax73-privileges.md §1 --
          * the correct home for NOTALLPRIV, measured on VAX1 2026-07-30. */
         { 1664,  "SYSTEM", 'W', "NOTALLPRIV",    "not all requested privileges authorized" },
         { 2096,  "SYSTEM", 'W', "CANCEL",        "I/O operation canceled" },
         { 2160,  "SYSTEM", 'W', "ENDOFFILE",     "end of file" },
-        { 2204,  "SYSTEM", 'W', "UNWIND",        "unwind in progress" },
-        { 2212,  "SYSTEM", 'E', "NOCMKRNL",      "no CMKRNL privilege" },
+        { 2336,  "SYSTEM", 'W', "UNWIND",        "unwind currently in progress" },
+        { 10244,  "SYSTEM", 'F', "NOCMKRNL",      "operation requires CMKRNL privilege" },
         /* ORACLE-PINNED (vms-8019): $SSDEF SS$_NONEXPR 2280;
          * F$MESSAGE(2280) -> "%SYSTEM-W-NONEXPR, nonexistent process".
          * Replaces 2540/'E' -- F$MESSAGE(2540) on the oracle is
          * "%SYSTEM-F-RIGHTSFULL, rights list is full". */
         { 2280,  "SYSTEM", 'W', "NONEXPR",       "nonexistent process" },
         { 2328,  "SYSTEM", 'W', "RESIGNAL",      "resignal condition" },
-        { 2340,  "SYSTEM", 'S', "CONTINUE",      "continue execution" },
-        { 2552,  "SYSTEM", 'W', "OPINCOMPL",     "operation incomplete" },
-        { 2584,  "SYSTEM", 'W', "SUSPENDED",     "process suspended" },
-        { 2588,  "SYSTEM", 'W', "NOTQUEUED",     "not queued" },
-        { 2632,  "SYSTEM", 'E', "INCOMPAT",      "incompatible attributes" },
-        { 2680,  "SYSTEM", 'E', "NOSUCHDEV",     "no such device" },
-        { 2688,  "SYSTEM", 'E', "DEVNOTMOUNT",   "device not mounted" },
-        { 2696,  "SYSTEM", 'E', "NOSUCHFILE",    "no such file" },
-        { 2700,  "SYSTEM", 'W', "NOTRAN",        "no translation for logical name" },
-        { 2704,  "SYSTEM", 'E', "DEVINACT",      "device inactive" },
-        { 2720,  "SYSTEM", 'W', "CVTUNGRANT",    "convert ungrantable" },
-        { 2732,  "SYSTEM", 'E', "NOSLOT",        "no PCB slot available" },
-        { 2736,  "SYSTEM", 'E', "FILALRACC",     "file already accessed" },
-        { 2748,  "SYSTEM", 'E', "EXENQLM",       "exceeded enqueue limit" },
-        { 2756,  "SYSTEM", 'E', "EXASTLM",       "exceeded AST limit" },
-        { 2764,  "SYSTEM", 'E', "EXBYTLM",       "exceeded byte count limit" },
-        { 35820, "SYSTEM", 'W', "ITEMNOTFOUND",  "item not found" },
+        { 724,  "SYSTEM", 'F', "OPINCOMPL",     "operation is incomplete" },
+        { 932,  "SYSTEM", 'F', "SUSPENDED",     "process is suspended" },
+        { 2488,  "SYSTEM", 'W', "NOTQUEUED",     "request not queued" },
+        { 1689,  "SYSTEM", 'S', "INCOMPAT",      "feature incompatible with previous system version" },
+        { 2312,  "SYSTEM", 'W', "NOSUCHDEV",     "no such device available" },
+        { 124,  "SYSTEM", 'F', "DEVNOTMOUNT",   "device is not mounted" },
+        { 2320,  "SYSTEM", 'W', "NOSUCHFILE",    "no such file" },
+        { 1577,  "SYSTEM", 'S', "NOTRAN",        "no string translation performed" },
+        { 8404,  "SYSTEM", 'F', "DEVINACT",      "device inactive" },
+        { 8508,  "SYSTEM", 'F', "CVTUNGRANT",    "cannot convert an ungranted lock" },
+        { 924,  "SYSTEM", 'F', "NOSLOT",        "no PCB available" },
+        { 164,  "SYSTEM", 'F', "FILALRACC",     "file already accessed on channel" },
+        { 10820,  "SYSTEM", 'F', "EXENQLM",       "exceeded enqueue quota" },
+        { 10756,  "SYSTEM", 'F', "EXASTLM",       "exceeded AST quota" },
+        { 10772,  "SYSTEM", 'F', "EXBYTLM",       "exceeded byte count quota" },
+        { 2640, "SYSTEM", 'W', "ITEMNOTFOUND",  "requested item cannot be returned" },
         { 0, NULL, 0, NULL, NULL }
     };
 

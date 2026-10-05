@@ -390,7 +390,7 @@ void lnm_setup_defaults(lnm_manager_t *mgr, const char *vms_root)
  *
  * Contract and doc citations are on the declaration in vms/logical.h.
  */
-/* lnm_create() reports a replaced name with SS$_SUPERSEDE (844), which is an
+/* lnm_create() reports a replaced name with SS$_SUPERSEDE (1585), which is an
  * EVEN success code -- so plain (status & 1) would read a supersede as a
  * failure. SYS$LOGIN et al. deliberately supersede the generic defaults
  * lnm_setup_defaults() seeded, so both codes are success here (the same pair

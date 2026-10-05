@@ -655,7 +655,7 @@ void vms_pe_stop(struct vms_cluster *cl)
  * status rather than inventing one this tree cannot cite", CLAUDE.md Rule 8).
  * Named per case rather than folded, so a reader sees which refusal is which:
  *   NOCIRCUIT/RINGFULL  the path to that system cannot carry this right now
- *                       -> SS$_DEVOFFLINE (2692)
+ *                       -> SS$_DEVOFFLINE (132)
  *   NOCREDIT            the peer's window is spent          -> SS$_EXQUOTA
  *   BADFRAME/TOOBIG     the caller handed down something unsendable
  *                       -> SS$_BADPARAM

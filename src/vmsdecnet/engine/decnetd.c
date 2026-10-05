@@ -4188,8 +4188,11 @@ int main(int argc, char **argv)
      * detection finds nothing the compiled default stands and the open below
      * fails honestly. */
     static char ifname_auto[IF_NAMESIZE];
-    if (!ifname_explicit && decnet_autodetect_iface(ifname_auto, sizeof(ifname_auto)))
+    int ifname_detected = 0;     /* did auto-detection actually pick a NIC?   */
+    if (!ifname_explicit && decnet_autodetect_iface(ifname_auto, sizeof(ifname_auto))) {
         ifname = ifname_auto;
+        ifname_detected = 1;
+    }
 
     /* SELF-SOURCE the executor address from the node's DECnet configuration
      * (executor.dat, rd vms-f54) whenever --address was not given -- for the
@@ -4271,7 +4274,9 @@ int main(int argc, char **argv)
          * unless --iface pinned it) -- the dry-run readout of gap-B resolution;
          * no socket is opened here. */
         printf("Datalink interface = %s%s\n", ifname,
-               ifname_explicit ? " (--iface)" : " (auto-detected primary NIC)");
+               ifname_explicit ? " (--iface)"
+               : ifname_detected ? " (auto-detected primary NIC)"
+               : " (compiled default; no usable NIC detected)");
         return 0;
     }
 

@@ -53,13 +53,14 @@
  *     genuinely not audited (SS$_NORMAL, nothing written). A caller that FORCES
  *     a record (NSA$M_NOEVTCHECK or NSA$M_MANDATORY) is refused SS$_UNSUPPORTED
  *     rather than told a record was written.
- * OVMX-USERSPACE: sys$create_uid (vms-44a) -- generated in this process, as an
- *     OSF DCE uuid version 1: the clock (sys$gettim) and a per-process random
- *     clock sequence, with the node field holding the system's SCSNODE name (the
- *     same as the lab OpenVMS Alpha V8.4 node, whose uids carry "ALPHA1" there).
- *     Uniqueness is the uuid argument (time + sequence + node), not an
- *     executive-issued number. A node with no readable SCSNODE falls back to a
- *     random multicast-bit node (RFC 4122 4.5).
+ * OVMX-PARTIAL: sys$create_uid (vms-44a) -- exec: the node field is the system's
+ *     SCSNODE name, read through $GETSYI (the same as the lab OpenVMS Alpha V8.4
+ *     node, whose uids carry "ALPHA1" there).
+ * OVMX-LOCAL: sys$create_uid -- the uid is assembled in this process as an OSF DCE
+ *     uuid version 1: the clock (sys$gettim), a per-process random clock sequence
+ *     (sys$get_entropy) and that node field. Uniqueness is the uuid argument (time +
+ *     sequence + node), not an executive-issued number. A node with no readable
+ *     SCSNODE falls back to a random multicast-bit node (RFC 4122 4.5).
  * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
  *     caller's own getuid()/getgid() and the protection word the caller
  *     itself passed in. There is no executive reference monitor, no rights

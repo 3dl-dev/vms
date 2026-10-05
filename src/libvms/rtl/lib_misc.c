@@ -14,7 +14,6 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <stdio.h>
-#include <glob.h>
 #include "ssdef.h"
 #include "descrip.h"
 #include "lib$routines.h"
@@ -30,14 +29,16 @@
 
 /*
  * Side table for lib$find_file context handles.
- * Maps uint32 handles (1..MAX_FIND_FILE_CONTEXTS) to glob_t pointers,
- * avoiding 64-bit pointer truncation when stored in uint32_t *context.
+ * Maps uint32 handles (1..MAX_FIND_FILE_CONTEXTS) to search contexts (the RMS
+ * FAB/NAM of the scan), avoiding 64-bit pointer truncation when stored in
+ * uint32_t *context.
  */
 #define MAX_FIND_FILE_CONTEXTS 64
-static glob_t *find_file_table[MAX_FIND_FILE_CONTEXTS];
+struct find_file_ctx;
+static struct find_file_ctx *find_file_table[MAX_FIND_FILE_CONTEXTS];
 static pthread_mutex_t find_file_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static uint32_t find_file_alloc(glob_t *pglob) {
+static uint32_t find_file_alloc(struct find_file_ctx *pglob) {
     pthread_mutex_lock(&find_file_lock);
     for (uint32_t i = 0; i < MAX_FIND_FILE_CONTEXTS; i++) {
         if (!find_file_table[i]) {
@@ -50,7 +51,7 @@ static uint32_t find_file_alloc(glob_t *pglob) {
     return 0;  /* table full */
 }
 
-static glob_t *find_file_lookup(uint32_t handle) {
+static struct find_file_ctx *find_file_lookup(uint32_t handle) {
     if (handle == 0 || handle > MAX_FIND_FILE_CONTEXTS) return NULL;
     return find_file_table[handle - 1];
 }
@@ -536,18 +537,60 @@ uint32_t (lib$spawn)(const struct dsc$descriptor_s *command,
  */
 
 /*
- * lib$find_file - Find file matching wildcard specification.
+ * lib$find_file - Find the next file matching a wildcard specification.
  *
- * Uses glob() to expand wildcards and stores the result in *context
- * (cast as a glob_t*). On first call (*context == 0), performs glob().
- * On subsequent calls, returns the next match. Returns RMS$_NORMAL
- * when a file is found, RMS$_NMF when no more files.
+ * OVER RMS, not the host filesystem: the scan is an RMS $PARSE/$SEARCH of the
+ * specification (default spec as the FAB's DNA), so on a booted system it walks
+ * the Files-11 volumes through the executive ACP exactly as DIRECTORY and
+ * LIB$FILE_SCAN do. (An earlier version ran glob(3) on the spec as a host path:
+ * a plausible answer from the wrong namespace, which on a mounted ODS-2 volume
+ * matched nothing and let callers that ignore the status loop on garbage.)
  *
- * Parameters:
- *   filespec   - Descriptor of file specification (may contain * or ?)
- *   resultspec - Descriptor to receive matched filename
- *   context    - Context pointer (must be 0 on first call)
+ * The RMS entry points are referenced WEAKLY (the same layering seam
+ * rms_textfile.c documents: LIBVMSRMS$SHR links LIBVMS, not the reverse). An
+ * image with no RMS in its link closure gets SS$_NOSUCHDEV, never a fallback to
+ * the host filesystem.
+ *
+ * First call (*context == 0): $PARSE, remember the scan in a context handle.
+ * Each call: $SEARCH, return the resultant (full) specification in resultspec.
+ * RMS$_NMF when the matches are used up -- or RMS$_FNF when there were none --
+ * and the context is released. *status_value gets the RMS STV of a failure.
+ *
+ *   filespec         - specification, may contain wildcards
+ *   resultspec       - receives the matched specification
+ *   context          - 0 on first call; opaque handle afterwards
+ *   default_filespec - supplies fields filespec leaves out (RMS DNA)
+ *   related_filespec - not honoured; it is refused rather than ignored
+ *   status_value     - receives the RMS STV on failure
  */
+#if defined(OVMX_HAVE_ACP)
+#include "rms/rms.h"
+#pragma weak sys$parse
+#pragma weak sys$search
+#pragma weak rms_search_end
+
+struct find_file_ctx {
+    struct FAB fab;
+    struct NAM nam;
+    char spec[256], dflt[256], esa[256], rsa[256];
+};
+
+static void ff_dsc_to_str(const struct dsc$descriptor_s *d, char *buf, size_t sz)
+{
+    buf[0] = '\0';
+    if (d && d->dsc$a_pointer && d->dsc$w_length) {
+        size_t n = d->dsc$w_length < sz - 1 ? d->dsc$w_length : sz - 1;
+        memcpy(buf, d->dsc$a_pointer, n);
+        buf[n] = '\0';
+    }
+}
+
+static void ff_close(struct find_file_ctx *c)
+{
+    if (rms_search_end)
+        rms_search_end(&c->nam);
+}
+
 uint32_t (lib$find_file)(const struct dsc$descriptor_s *filespec,
                          struct dsc$descriptor_s *resultspec,
                          uint32_t *context,
@@ -555,134 +598,112 @@ uint32_t (lib$find_file)(const struct dsc$descriptor_s *filespec,
                          const struct dsc$descriptor_s *related_filespec,
                          uint32_t *status_value,
                          const uint32_t *flags) {
-    (void)default_filespec; (void)related_filespec; (void)flags;
-    if (status_value) *status_value = 0;   /* no secondary RMS STV on this path */
+    (void)flags;
+    if (status_value) *status_value = 0;
     if (!filespec || !resultspec || !context) return SS$_BADPARAM;
     if (!filespec->dsc$a_pointer) return SS$_BADPARAM;
+    if (related_filespec && related_filespec->dsc$a_pointer
+            && related_filespec->dsc$w_length)
+        return SS$_BADPARAM;               /* not implemented: refuse, don't ignore */
+    if (!sys$parse || !sys$search)
+        return SS$_NOSUCHDEV;              /* no RMS in this image: fail honestly */
 
-    glob_t *pglob;
-
-    /* First call: perform glob() */
+    struct find_file_ctx *c;
     if (*context == 0) {
-        /* Convert descriptor to C string */
-        char spec[1024];
-        dsc$strncpy(spec, filespec, sizeof(spec));
-
-        pglob = (glob_t *)malloc(sizeof(glob_t));
-        if (!pglob) return SS$_INSFMEM;
-
-        int result = glob(spec, GLOB_NOCHECK | GLOB_TILDE, NULL, pglob);
-        if (result == GLOB_NOSPACE || result == GLOB_ABORTED) {
-            if (result == GLOB_ABORTED) globfree(pglob);
-            free(pglob);
-            return SS$_INSFMEM;
+        c = calloc(1, sizeof(*c));
+        if (!c) return SS$_INSFMEM;
+        ff_dsc_to_str(filespec, c->spec, sizeof c->spec);
+        ff_dsc_to_str(default_filespec, c->dflt, sizeof c->dflt);
+        if (c->spec[0] == '\0') { free(c); return SS$_BADPARAM; }
+        c->fab = cc$rms_fab;
+        c->fab.fab$l_fna = c->spec;
+        c->fab.fab$b_fns = (uint8_t)strlen(c->spec);
+        c->fab.fab$l_dna = c->dflt;
+        c->fab.fab$b_dns = (uint8_t)strlen(c->dflt);
+        c->nam = cc$rms_nam;
+        c->nam.nam$l_esa = c->esa;
+        c->nam.nam$b_ess = 255;
+        c->nam.nam$l_rsa = c->rsa;
+        c->nam.nam$b_rss = 255;
+        c->fab.fab$l_nam = &c->nam;
+        uint32_t ps = sys$parse(&c->fab, 0, 0);
+        if (!(ps & 1)) {
+            if (status_value) *status_value = c->fab.fab$l_stv;
+            ff_close(c);
+            free(c);
+            return ps;
         }
-
-        /* Store glob result in side table, return handle */
-        uint32_t handle = find_file_alloc(pglob);
-        if (handle == 0) {
-            globfree(pglob);
-            free(pglob);
-            return SS$_INSFMEM;
-        }
+        uint32_t handle = find_file_alloc(c);
+        if (handle == 0) { ff_close(c); free(c); return SS$_INSFMEM; }
         *context = handle;
-
-        /* If no matches, return NMF immediately */
-        if (pglob->gl_pathc == 0 ||
-            (pglob->gl_pathc == 1 && strcmp(pglob->gl_pathv[0], spec) == 0)) {
-            /* GLOB_NOCHECK means no match - just returned input */
-            globfree(pglob);
-            free(pglob);
-            find_file_release(*context);
-            *context = 0;
-            return RMS$_NMF;
-        }
-
-        /* Mark that we're at the first result */
-        pglob->gl_offs = 0;
     } else {
-        /* Subsequent call: retrieve stored glob_t from side table */
-        pglob = find_file_lookup(*context);
-        if (!pglob) return RMS$_NMF;
-
-        /* Move to next match */
-        pglob->gl_offs++;
+        c = find_file_lookup(*context);
+        if (!c) return RMS$_NMF;
     }
 
-    /* Check if we've exhausted all matches */
-    if (pglob->gl_offs >= pglob->gl_pathc) {
-        globfree(pglob);
-        free(pglob);
+    uint32_t st = sys$search(&c->fab, 0, 0);
+    if (!(st & 1)) {
+        if (status_value) *status_value = c->fab.fab$l_stv;
+        ff_close(c);
         find_file_release(*context);
+        free(c);
         *context = 0;
-        return RMS$_NMF;
+        return st;                         /* RMS$_NMF at the end, RMS$_FNF if none */
     }
 
-    /* Copy current match to result descriptor */
-    const char *match = pglob->gl_pathv[pglob->gl_offs];
-    uint16_t len = (uint16_t)strlen(match);
-
-    if (resultspec->dsc$b_class == DSC$K_CLASS_D) {
-        /* Dynamic descriptor - reallocate */
-        struct dsc$descriptor_d *ddest = (struct dsc$descriptor_d *)resultspec;
-        if (ddest->dsc$a_pointer) free(ddest->dsc$a_pointer);
-        ddest->dsc$a_pointer = (char *)malloc(len);
-        if (!ddest->dsc$a_pointer) {
-            ddest->dsc$w_length = 0;
-            globfree(pglob);
-            free(pglob);
-            *context = 0;
-            return SS$_INSFMEM;
-        }
-        memcpy(ddest->dsc$a_pointer, match, len);
-        ddest->dsc$w_length = len;
-    } else {
-        /* Static descriptor - truncate if needed */
-        if (!resultspec->dsc$a_pointer) {
-            globfree(pglob);
-            free(pglob);
-            *context = 0;
-            return SS$_BADPARAM;
-        }
-        uint16_t copylen = len;
-        if (copylen > resultspec->dsc$w_length) {
-            copylen = resultspec->dsc$w_length;
-        }
-        memcpy(resultspec->dsc$a_pointer, match, copylen);
-        /* Pad with spaces if shorter */
-        if (copylen < resultspec->dsc$w_length) {
-            memset(resultspec->dsc$a_pointer + copylen, ' ',
-                   resultspec->dsc$w_length - copylen);
-        }
+    uint16_t len = c->nam.nam$b_rsl;
+    if (resultspec->dsc$b_class == DSC$K_CLASS_VS) {
+        /* variable string: length word precedes the data, maxstrlen bounds it */
+        struct dsc$descriptor_vs *v = (struct dsc$descriptor_vs *)resultspec;
+        uint16_t room = v->dsc$w_maxstrlen;
+        uint16_t n = len < room ? len : room;
+        if (!v->dsc$a_pointer) return SS$_BADPARAM;
+        *(uint16_t *)v->dsc$a_pointer = n;
+        memcpy(v->dsc$a_pointer + 2, c->rsa, n);
+        return n < len ? SS$_RESULTOVF : RMS$_NORMAL;
     }
-
-    return RMS$_NORMAL;
+    uint32_t r = lib$scopy_r_dx(&len, c->rsa, resultspec);
+    return (r & 1) ? RMS$_NORMAL : r;
 }
 
 /*
- * lib$find_file_end - End find file sequence.
- *
- * Frees the glob result stored in *context and resets *context to 0.
- *
- * Parameters:
- *   context - Context pointer from lib$find_file
+ * lib$find_file_end - End a find-file sequence: release the RMS search context
+ * and reset *context to 0.
  */
 uint32_t lib$find_file_end(uint32_t *context) {
     if (!context) return SS$_BADPARAM;
     if (*context == 0) return SS$_NORMAL;
 
-    glob_t *pglob = find_file_lookup(*context);
-    if (!pglob) {
+    struct find_file_ctx *c = find_file_lookup(*context);
+    if (!c) {
         *context = 0;
         return SS$_BADPARAM;
     }
-    globfree(pglob);
-    free(pglob);
+    ff_close(c);
     find_file_release(*context);
+    free(c);
     *context = 0;
-
     return SS$_NORMAL;
 }
+#else  /* !OVMX_HAVE_ACP: no RMS in this build -- fail honestly */
+struct find_file_ctx { int unused; };
+uint32_t (lib$find_file)(const struct dsc$descriptor_s *filespec,
+                         struct dsc$descriptor_s *resultspec,
+                         uint32_t *context,
+                         const struct dsc$descriptor_s *default_filespec,
+                         const struct dsc$descriptor_s *related_filespec,
+                         uint32_t *status_value,
+                         const uint32_t *flags) {
+    (void)filespec; (void)resultspec; (void)context; (void)default_filespec;
+    (void)related_filespec; (void)flags;
+    if (status_value) *status_value = 0;
+    return SS$_NOSUCHDEV;
+}
+uint32_t lib$find_file_end(uint32_t *context) {
+    if (context) *context = 0;
+    return SS$_NORMAL;
+}
+#endif
 
 
 /* ================================================================

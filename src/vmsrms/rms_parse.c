@@ -64,36 +64,51 @@ static int apply_filespec_defaults(const char *spec, const char *default_spec,
                                    char *result, size_t resultlen)
 {
     vmsfs_filespec_t parsed, defaults;
+    int filled = 0;
 
-    if (vmsfs_parse_filespec(spec, &parsed) != 0)
+    /*
+     * vmsfs_parse_filespec / vmsfs_compose_filespec return a VMS STATUS
+     * (SS$_NORMAL == 1 on success), not 0-on-success. This function used to test
+     * `!= 0` for failure, so it failed on every call and $PARSE ignored the
+     * default filespec (DNA) entirely -- the same wrong-sense status check the
+     * resolve_filename() comment above records for vmsfs_to_linux_path. A
+     * $PARSE of "*.TXT" with DNA "DEV:[DIR]" expanded to "*.TXT" and a $SEARCH
+     * of it listed the process's current directory.
+     */
+    if (!$VMS_STATUS_SUCCESS(vmsfs_parse_filespec(spec, &parsed)))
         return -1;
 
     if (default_spec) {
-        if (vmsfs_parse_filespec(default_spec, &defaults) == 0) {
+        if ($VMS_STATUS_SUCCESS(vmsfs_parse_filespec(default_spec, &defaults))) {
             if (!parsed.has_device && defaults.has_device) {
                 memcpy(parsed.device, defaults.device, sizeof(parsed.device));
-                parsed.has_device = 1;
+                parsed.has_device = 1; filled = 1;
             }
             if (!parsed.has_directory && defaults.has_directory) {
                 memcpy(parsed.directory, defaults.directory, sizeof(parsed.directory));
-                parsed.has_directory = 1;
+                parsed.has_directory = 1; filled = 1;
             }
             if (!parsed.has_name && defaults.has_name) {
                 memcpy(parsed.name, defaults.name, sizeof(parsed.name));
-                parsed.has_name = 1;
+                parsed.has_name = 1; filled = 1;
             }
             if (!parsed.has_type && defaults.has_type) {
                 memcpy(parsed.type, defaults.type, sizeof(parsed.type));
-                parsed.has_type = 1;
+                parsed.has_type = 1; filled = 1;
             }
             if (!parsed.has_version && defaults.has_version) {
                 parsed.version = defaults.version;
-                parsed.has_version = 1;
+                parsed.has_version = 1; filled = 1;
             }
         }
     }
 
-    if (vmsfs_compose_filespec(&parsed, result, resultlen) != 0)
+    /* Nothing to fill in: keep the caller's spec exactly as written (the
+     * caller's fallback), rather than re-composing it. */
+    if (!filled)
+        return -1;
+
+    if (!$VMS_STATUS_SUCCESS(vmsfs_compose_filespec(&parsed, result, resultlen)))
         return -1;
 
     return 0;

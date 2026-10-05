@@ -8,10 +8,24 @@
  * explicit anonymous mmap -- writes and re-reads a pattern through each, and
  * requires every address to lie in P0. Sentinel 7 = all held.
  */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
+/* The joint harness compiles with the bare cross cc1 (no C RTL headers on its
+ * include path), so the RTL entry points are declared here, as the other
+ * joint-e2e programs do. size_t is 32-bit in the DEC C data model; off_t is
+ * 64-bit; the mmap flag values are Linux/Alpha's (the substrate kernel ABI). */
+typedef unsigned int size_t;
+extern int printf(const char *, ...);
+extern void *malloc(size_t);
+extern void *calloc(size_t, size_t);
+extern void *realloc(void *, size_t);
+extern void free(void *);
+extern void *memset(void *, int, size_t);
+extern void *mmap(void *, size_t, int, int, int, long long);
+extern int munmap(void *, size_t);
+#define PROT_READ     0x1
+#define PROT_WRITE    0x2
+#define MAP_PRIVATE   0x02
+#define MAP_ANONYMOUS 0x10
+#define MAP_FAILED    ((void *)-1)
 
 #define P0_END 0x40000000ULL
 
@@ -21,9 +35,10 @@ static int bad;
 static void check(void *p, unsigned long long len, const char *what)
 {
     unsigned long long a = (unsigned long long)p;
-    if (!p) { printf("  %s: NULL\n", what); bad++; return; }
+    (void)what;   /* one printf only: see vms-377 (a second stdout line is lost at exit) */
+    if (!p) { bad++; return; }
     if (a + len > maxaddr) maxaddr = a + len;
-    if (a + len > P0_END) { printf("  %s: %#llx+%#llx outside P0\n", what, a, len); bad++; }
+    if (a + len > P0_END) bad++;
 }
 
 static int fill_ok(unsigned char *p, unsigned long long len, unsigned char seed)
@@ -77,7 +92,7 @@ int main(int argc, char **argv)
     if (m) munmap(m, 3u << 20);
 
     int ok = !bad && small_ok && large_ok && realloc_ok && mmap_ok;
-    fprintf(stderr, "OVMX p0heap test: small=%d large=%d realloc=%d mmap=%d maxaddr=%#llx inP0=%d argc=%d\n",
+    printf("OVMX p0heap test: small=%d large=%d realloc=%d mmap=%d maxaddr=%#llx inP0=%d argc=%d\n",
             small_ok, large_ok, realloc_ok, mmap_ok, maxaddr, bad == 0, argc);
     return ok ? 7 : 3;
 }

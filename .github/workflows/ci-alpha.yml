@@ -906,6 +906,58 @@ jobs:
       - name: "multi-.o STRICT-link gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, STRICT-links (no --allow-undefined) a real multi-object program (mf_main.obj + mf_util.obj across a .o boundary, cross-.o malloc/free/strlen/strcmp/memcpy resolved incl. the ex-blocker decc$free), activates it on the real /dev/vms executive over the ODS-2 ACP, asserts the cross-.o port-test OK + $STATUS=%X0035A029 (sentinel 5); runs its own can-fail selftest before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate
 
+
+  # -----------------------------------------------------------------------
+  # alpha-libinit (vms-43c): LIB$INITIALIZE. Two longword procedure values in
+  # the LIB$INITIALIZE psect (libinit_tab_p32.c); LINK.EXE puts the STARLET
+  # dispatcher first in the P0 image's transfer vector; it must run both, in
+  # order, before main (sentinel 7). Can-fail selftest first.
+  # -----------------------------------------------------------------------
+  alpha-libinit:
+    name: "OVMX/Alpha LIB$INITIALIZE gate — the STARLET dispatcher runs the image's LIB$INITIALIZE routines in psect order before main, on the real /dev/vms executive (vms-43c)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "LIB$INITIALIZE gate — two longword LIB$INITIALIZE entries run in order before main on the real executive (P0 image); can-fail selftest first"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh libinit-gate
+
   # -----------------------------------------------------------------------
   # alpha-shipped-shareable-activation (vms-410, vms-deec Decision B): Alpha
   # ships + activates real VMS shareable images. The Alpha VMS-format

@@ -234,6 +234,41 @@ uint32_t vms_kif_register_subprocess(void)
 }
 
 /*
+ * vms_kif_register_detached - register the CALLING task (the detached
+ * grandchild of $CREPRC PRC$M_DETACH) as a new VMS process -- a fresh PID, its
+ * own job -- carrying the identity its creator's ticket authorized (rd
+ * vms-ff75). Must be the task's FIRST executive call. Same fd discipline as
+ * vms_kif_register_subprocess(): the descriptor in TLS was inherited across
+ * fork() from the creator and is dropped for a fresh one. The executive
+ * honours the ticket only if its creator is one of this task's ancestors;
+ * otherwise SS$_NOPRIV and nothing is registered or stamped.
+ */
+uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid)
+{
+    struct vms_register_detached_args args;
+    int rc;
+
+    if (vms_dev_fd >= 0) {
+        kif_xport_dev_close(vms_dev_fd);
+        vms_dev_fd = -1;
+    }
+    vms_bound_pid = 0;
+    (void)vms_kif_open();
+
+    vms_memset(&args, 0, sizeof(args));
+    args.ticket = ticket;
+    rc = kif_xport_ioctl(vms_dev_fd, VMS_IOCTL_REGISTER_DETACHED, &args);
+    if (rc < 0)
+        return vms_kif_kerr_to_ss(rc);
+    if (args.status & 1) {
+        vms_bound_pid = vms_sys_getpid();
+        if (vms_pid)
+            *vms_pid = args.vms_pid;
+    }
+    return args.status;
+}
+
+/*
  * kif_bind - complete the documented open -> register sequence for the
  * calling task, once, before any ioctl that needs a registered process.
  *
@@ -1772,6 +1807,35 @@ uint32_t vms_kif_setident(const char *username, uint32_t uic,
                           uint64_t authorized_privs)
 {
     return vms_kif_setident_quota(username, uic, authorized_privs, NULL);
+}
+
+/*
+ * vms_kif_creprc_ticket - ask the executive to authorize, against the CALLING
+ * (creator's) row, the identity a detached process is about to be created with
+ * (rd vms-ff75). Issued by $CREPRC PRC$M_DETACH in the creator BEFORE it forks,
+ * so a refused identity (SS$_NOPRIV: no SETPRV and not a subset of the
+ * creator's own identity) creates nothing. On success *ticket is the
+ * single-use ticket the detached grandchild presents to
+ * vms_kif_register_detached().
+ */
+uint32_t vms_kif_creprc_ticket(const char *username, uint32_t uic,
+                               uint64_t privs, uint64_t *ticket)
+{
+    struct vms_creprc_ticket_args args;
+
+    if (!username || !ticket)
+        return 0x00000014; /* SS$_BADPARAM */
+    vms_memset(&args, 0, sizeof(args));
+    vms_strncpy(args.username, username, VMS_USERNAME_SIZE - 1);
+    args.username[VMS_USERNAME_SIZE - 1] = '\0';
+    args.uic = uic;
+    args.privs = privs;
+
+    KIF_CALL(VMS_IOCTL_CREPRC_TICKET, &args);
+
+    if (args.status & 1)
+        *ticket = args.ticket;
+    return args.status;
 }
 
 /*

@@ -2758,6 +2758,62 @@ struct vms_ident_args {
 };
 
 /*
+ * DETACHED-PROCESS IDENTITY, AUTHORIZED BY THE CREATOR (rd vms-ff75).
+ *
+ * $CREPRC PRC$M_DETACH creates a process that is NOT in its creator's job and
+ * whose identity ($CREPRC uic / prvadr, defaulting to the creator's) is
+ * authorized by the CREATOR -- on VMS a creator holding SETPRV may give the
+ * new process any UIC and privileges; without it, no more than its own
+ * (System Services Reference, $CREPRC). OVMX creates it with fork(): the
+ * detached process is a GRANDCHILD (setsid+fork, so the creator cannot wait
+ * on it), whose real parent is a short-lived intermediate with no executive
+ * row, so continuation from the creator is impossible. Before this, the
+ * grandchild registered fresh from its own Linux credentials and then
+ * self-declared the identity with SETIDENT, which the executive rightly
+ * refuses a non-root, non-SETPRV row -- so RUN/DETACHED from an interactive
+ * (non-root) session failed %RUN-F-CREPRC -SYSTEM-F-NOPRIV for every image.
+ *
+ * THE TWO STEPS.
+ *   VMS_IOCTL_CREPRC_TICKET  -- the CREATOR, before it forks, asks the
+ *     executive to record the identity the new process will have. The
+ *     executive authorizes it against the CREATOR's row with exactly the
+ *     SETIDENT rule (SETPRV, or a subset of the creator's own identity:
+ *     same user name, same UIC, privileges within its authorized mask) and
+ *     returns a single-use ticket. A refused identity is refused HERE, before
+ *     any process exists.
+ *   VMS_IOCTL_REGISTER_DETACHED -- the GRANDCHILD, as its first executive
+ *     call, presents the ticket. The executive honours it only if the ticket's
+ *     creator (still registered, same PID) is one of the caller's ANCESTORS
+ *     (the substrate walks the caller's real parent chain), consumes it, and
+ *     registers the caller as a NEW JOB ROOT with a fresh VMS PID carrying the
+ *     ticketed identity. A ticket cannot be replayed, used by an unrelated
+ *     process, or used to exceed what the creator could grant. The SETIDENT
+ *     guard is unchanged.
+ * Tickets expire unclaimed after VMS_CREPRC_TICKET_TTL_SECS (OVMX design
+ * choice, Rule 8); the table is small and bounded.
+ */
+struct vms_creprc_ticket_args {
+    char     username[VMS_USERNAME_SIZE]; /* in: the new process's user name   */
+    uint32_t uic;                         /* in: (group << 16) | member          */
+    uint32_t status;                      /* out: SS$_ status                     */
+    uint64_t privs;                       /* in: the new process's privileges     */
+    uint64_t ticket;                      /* out: single-use ticket               */
+};
+
+struct vms_register_detached_args {
+    uint64_t ticket;                      /* in: from VMS_IOCTL_CREPRC_TICKET     */
+    uint32_t vms_pid;                     /* out: the new process's VMS PID       */
+    uint32_t status;                      /* out: SS$_ status                     */
+};
+
+#define VMS_CREPRC_TICKET_TTL_SECS 60u
+
+#define VMS_IOCTL_CREPRC_TICKET \
+            _IOWR(VMS_IOC_MAGIC, 0x4E, struct vms_creprc_ticket_args)
+#define VMS_IOCTL_REGISTER_DETACHED \
+            _IOWR(VMS_IOC_MAGIC, 0x4F, struct vms_register_detached_args)
+
+/*
  * Construct the SYSTEM identity onto the calling process (vms-a17e).
  *
  * THE OPA0: PRECEDENT, APPLIED TO IDENTITY. On OpenVMS, EXEC_INIT
@@ -3115,6 +3171,14 @@ _Static_assert(VMS_IOCTL_REGISTER_CONTINUE == 0xC0085641u,
                "VMS_IOCTL_REGISTER_CONTINUE encodes differently here than on the reference build");
 _Static_assert(VMS_IOCTL_REGISTER_SUBPROCESS == 0xC0085642u,
                "VMS_IOCTL_REGISTER_SUBPROCESS encodes differently here than on the reference build");
+_Static_assert(sizeof(struct vms_creprc_ticket_args) == 56,
+               "vms_creprc_ticket_args layout changed: VMS_IOCTL_CREPRC_TICKET ABI break");
+_Static_assert(sizeof(struct vms_register_detached_args) == 16,
+               "vms_register_detached_args layout changed: VMS_IOCTL_REGISTER_DETACHED ABI break");
+_Static_assert(VMS_IOCTL_CREPRC_TICKET == 0xC038564Eu,
+               "VMS_IOCTL_CREPRC_TICKET encodes differently here than on the reference build");
+_Static_assert(VMS_IOCTL_REGISTER_DETACHED == 0xC010564Fu,
+               "VMS_IOCTL_REGISTER_DETACHED encodes differently here than on the reference build");
 _Static_assert(sizeof(struct vms_getsyi_mem_args) == 32,
                "vms_getsyi_mem_args layout changed: VMS_IOCTL_GETSYIMEM ABI break");
 _Static_assert(VMS_IOCTL_GETSYIMEM == 0xC0205668u,

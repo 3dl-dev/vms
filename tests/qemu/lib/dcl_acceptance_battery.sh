@@ -1212,6 +1212,41 @@ run_dcl_acceptance_battery() {
     wait_for '$ ' 20 "$NETDEV_OFF"
 
     # =======================================================================
+    # DETACHED $CREPRC FROM AN INTERACTIVE (NON-ROOT) SESSION (rd vms-ff75).
+    # RUN/DETACHED used to fail %RUN-F-CREPRC -SYSTEM-F-NOPRIV for EVERY image
+    # from the SYSTEM console: the detached grandchild registered fresh from its
+    # non-root Linux credential and self-declared the identity with SETIDENT,
+    # which the executive refuses. Now the CREATOR's row authorizes the identity
+    # (VMS_IOCTL_CREPRC_TICKET, SETPRV or a subset of its own) and the detached
+    # process claims it as a new job root. PINNED:
+    #   1. interactive SYSTEM RUN/DETACHED creates the process (%RUN-S-PROC_ID);
+    #   2. /UIC=[128,129]/PRIVILEGES=TMPMBX (a FOREIGN identity) is granted to a
+    #      SETPRV creator -- the exact row readback ($GETJPI UIC + privileges of
+    #      the detached process) is test_syssvc_creprc_inherit C on the kmod leg;
+    #   3. the same request from a creator WITHOUT SETPRV is REFUSED
+    #      %RUN-F-CREPRC -SYSTEM-F-NOPRIV, and nothing is created.
+    # (The subject image is DECNETD.EXE, shipped on every rail; with no argv it
+    # exits at once -- creation, not the image's work, is what is pinned.)
+    run_cmd 'RUN/DETACHED/PROCESS_NAME=FF75A/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
+    must_have "$SEG" '%RUN-S-PROC_ID' \
+        "RUN/DETACHED [vms-ff75]: the interactive SYSTEM session creates a detached process (no %RUN-F-CREPRC -SYSTEM-F-NOPRIV)"
+    must_not_have "$SEG" '%RUN-F-CREPRC' \
+        "RUN/DETACHED [vms-ff75]: no process-creation refusal for a SETPRV creator"
+    run_cmd 'RUN/DETACHED/UIC=[128,129]/PRIVILEGES=TMPMBX/PROCESS_NAME=FF75C/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
+    must_have "$SEG" '%RUN-S-PROC_ID' \
+        "RUN/DETACHED [vms-ff75]: a SETPRV creator may create a detached process with a FOREIGN UIC [128,129] + TMPMBX"
+    run_cmd 'SET PROCESS/PRIVILEGES=NOSETPRV'
+    run_cmd 'RUN/DETACHED/UIC=[128,129]/PRIVILEGES=TMPMBX/PROCESS_NAME=FF75N/INPUT=NL: SYS$SYSTEM:DECNETD.EXE'
+    must_have "$SEG" '%RUN-F-CREPRC' \
+        "RUN/DETACHED [vms-ff75]: a creator WITHOUT SETPRV is REFUSED a foreign UIC (the creator's row authorizes the identity)"
+    must_have "$SEG" 'NOPRIV' \
+        "RUN/DETACHED [vms-ff75]: the refusal is -SYSTEM-F-NOPRIV"
+    must_not_have "$SEG" '%RUN-S-PROC_ID' \
+        "RUN/DETACHED [vms-ff75]: a refused identity creates NOTHING"
+    negctl "$SEG" 'FF75N' "RUN/DETACHED creator-authorized identity"
+    run_cmd 'SET PROCESS/PRIVILEGES=SETPRV'
+
+    # =======================================================================
     # SESSION PRIMITIVE (vms-3e9) -- $CREPRC creates the session, LOGINOUT
     # re-personas it. Design record docs/design/faithful-sessions-and-network-
     # subsystems.md §3.1/§6-P1, ratification gates §7.1/§7.5.

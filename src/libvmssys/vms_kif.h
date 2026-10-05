@@ -101,6 +101,19 @@ uint32_t vms_kif_register_continue(void);
  * vms_kif_register_continue() instead. */
 uint32_t vms_kif_register_subprocess(void);
 
+/* DETACHED $CREPRC identity, authorized by the CREATOR (rd vms-ff75). The
+ * creator calls vms_kif_creprc_ticket() before it forks: the executive checks
+ * the requested identity against the creator's OWN row (SETPRV, or a subset of
+ * its identity) and returns a single-use ticket, or SS$_NOPRIV with nothing
+ * created. The detached grandchild then calls vms_kif_register_detached() as
+ * its first executive call: honoured only if the ticket's creator is one of
+ * its ancestors, it becomes a new VMS process (fresh PID, own job) carrying
+ * that identity. Replaces the grandchild's self-declared vms_kif_setident(),
+ * which a non-root, non-SETPRV fresh row is (rightly) refused. */
+uint32_t vms_kif_creprc_ticket(const char *username, uint32_t uic,
+                               uint64_t privs, uint64_t *ticket);
+uint32_t vms_kif_register_detached(uint64_t ticket, uint32_t *vms_pid);
+
 /* Stamp an AUTHENTICATED identity onto this process ($GETJPI reads it
  * back, from any process). The caller must already hold SETPRV to
  * establish an identity that is not a weakening of its own -- so this

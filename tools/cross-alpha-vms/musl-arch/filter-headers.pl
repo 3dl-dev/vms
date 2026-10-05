@@ -14,7 +14,8 @@
 # them), and the threads headers (pthread.h, sched.h, semaphore.h, threads.h --
 # on OpenVMS those come from the separate threads RTL, not DECC$SHR; their
 # surface is its own rung). A header whose functions are ALL outside the RTL,
-# and which no other header includes, is refused whole (#error) for clients.
+# and which no other header includes (and is not an ISO C header), is refused
+# whole (#error) for clients.
 # Prints the counts; idempotent.
 use strict;
 use warnings;
@@ -26,6 +27,12 @@ open(my $nf, '<', $names) or die "$names: $!\n";
 while (<$nf>) { next if /^#/; chomp; $keep{$_} = 1 if length; }
 close $nf;
 my %skipfile = map { $_ => 1 } qw(pthread.h sched.h semaphore.h threads.h);
+# ISO C standard headers are never refused whole (a C++ runtime includes them
+# unconditionally); their unexported functions are still hidden.
+my %isoc = map { $_ => 1 } qw(assert.h complex.h ctype.h errno.h fenv.h float.h
+    inttypes.h iso646.h limits.h locale.h math.h setjmp.h signal.h stdalign.h
+    stdarg.h stdatomic.h stdbool.h stddef.h stdint.h stdio.h stdlib.h
+    stdnoreturn.h string.h tgmath.h threads.h time.h uchar.h wchar.h wctype.h);
 my %kw = map { $_ => 1 } qw(void int char short long unsigned signed float double
     const volatile struct union enum restrict inline static extern _Noreturn);
 my $guard = '#if !defined(__VMS) || defined(__OVMX_LIBC_BUILD) /* vms-fe03: not in DECC$SHR */';
@@ -69,7 +76,7 @@ for my $f (@all) {
     # header check (HAVE_SYS_PRCTL_H ...) sees it absent rather than present
     # with nothing callable behind it.
     (my $rel = $f) =~ s{^\Q$inc\E/}{};
-    if ($kept == 0 && !$included{$rel}) {
+    if ($kept == 0 && !$included{$rel} && !$isoc{$rel}) {
         unshift @out, "#if defined(__VMS) && !defined(__OVMX_LIBC_BUILD) /* vms-fe03 */\n",
                       "#error \"<$rel> is not part of the DEC C RTL (no DECC\$SHR entry point)\"\n",
                       "#endif\n";

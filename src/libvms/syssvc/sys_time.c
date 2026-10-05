@@ -309,7 +309,7 @@ static void timer_signal_handler(int sig, siginfo_t *si, void *uc) {
     if (!te || !te->active) return;
 
     /* Set the event flag */
-    if (te->efn > 0) {
+    if (te->efn > 0 && te->efn < 128) {
         sys$setef(te->efn);
     }
 

@@ -74,43 +74,43 @@
     }
   ],
   "overall": {
-    "count": 464,
+    "count": 465,
     "by_status": {
       "verified": 24,
-      "implemented": 279,
+      "implemented": 280,
       "partial": 53,
       "stub": 14,
       "designed": 1,
       "absent": 93
     },
     "by_authenticity": {
-      "real": 316,
+      "real": 317,
       "n/a": 94,
       "advisory": 48,
       "facade-risk": 6
     },
-    "met": 303,
+    "met": 304,
     "in_progress": 53,
     "not_started": 108,
     "facade_risk": 6
   },
   "overall_in_scope": {
-    "count": 418,
+    "count": 419,
     "by_status": {
       "verified": 24,
-      "implemented": 279,
+      "implemented": 280,
       "partial": 52,
       "stub": 10,
       "designed": 1,
       "absent": 52
     },
     "by_authenticity": {
-      "real": 315,
+      "real": 316,
       "n/a": 53,
       "advisory": 46,
       "facade-risk": 4
     },
-    "met": 303,
+    "met": 304,
     "in_progress": 52,
     "not_started": 63,
     "facade_risk": 4

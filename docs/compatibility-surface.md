@@ -5,14 +5,14 @@
 
 ## Inventory
 
-**464 surfaces catalogued** across 9 domains, each with a per-surface status.
+**465 surfaces catalogued** across 9 domains, each with a per-surface status.
 
 > This register is an **inventory, not a percentage.** The total VMS compatibility surface has **no known denominator** — it is not version-scoped and cannot be counted — so no "% compatible" is claimed or computable. The catalogue is **incomplete by construction** and grows as surfaces are identified. Below are absolute counts; V1 progress is tracked separately against the commitment set we define, and is never conflated with the whole surface.
 
 | Status | Count | | Authenticity | Count |
 |---|---|---|---|---|
-| ✅ verified | 24 | | real | 316 |
-| 🟢 implemented | 279 | | n/a | 94 |
+| ✅ verified | 24 | | real | 317 |
+| 🟢 implemented | 280 | | n/a | 94 |
 | 🟡 partial | 53 | | advisory | 48 |
 | 🟠 stub | 14 | | facade-risk | 6 |
 | 🔵 designed | 1 | |  |  |
@@ -24,7 +24,7 @@ Legend: ✅ verified · 🟢 implemented · 🟡 partial · 🟠 stub · 🔵 de
 
 Of the surfaces **committed to V1** (`scope_1_0: in` — a set we define, not a measure of the whole surface):
 
-- **418 committed** — **303 met** (implemented/verified), 52 in progress (partial), 63 not started (absent/stub/designed).
+- **419 committed** — **304 met** (implemented/verified), 52 in progress (partial), 63 not started (absent/stub/designed).
 - ⚠ **4 of the committed surfaces carry facade-risk** — they must reach honest behaviour, not just "done".
 - Not in the V1 commitment set: 10 out · 27 stretch · 9 undecided (incl. the language scope calls, `vms-082`).
 

@@ -34,19 +34,21 @@
  *   - libicb$v_handler_present reflects PDSC$V_HANDLER_VALID; the walk stops
  *     (libicb$v_bottom_of_stack) when the next-out PC is 0 or unresolvable.
  *
- * HOST SCOPE (honest, no silent drop). The WALK ENGINE above is pure control
- * flow over the descriptors/RSA and is proven on the host against constructed
- * Alpha frames (tests/libvms/test_invo_context.c) - byte-for-byte the 64-bit
- * layout the Alpha runtime uses (host x86_64 is LP64 like Alpha). What is
- * inherently Alpha-runtime and deferred to the children:
- *   - LIB$GET_CURR_INVO_CONTEXT capturing a REAL Alpha register file (the host
- *     has no Alpha context; off-Alpha it seeds a best-effort generic frame and
- *     the walk halts at the first unresolved PC) - proven on qemu-alpha by the
- *     Alpha-rig oracle (child vms-cc8 bracket);
- *   - the actual MACHINE transfer into a reconstructed anchorless frame (a
- *     register restore + jump) that perform_unwind() performs on Alpha - the
- *     reconstruction (building the target ICB) is host-testable; the register
- *     restore is Alpha-only (child vms-cc8 / vms-8e8c libgcc EH).
+ * WHERE IT RUNS (vms-ed1). On the OpenVMS Alpha ABI (alpha-dec-vms code,
+ * OVMX_ALPHA_VMS_ABI) the primitives are genuine:
+ *   - the PDSC is found the Calling-Standard way, through each frame's FP:
+ *     0(FP) holds the procedure value for a stack frame, FP is the PDSC for a
+ *     register frame -- validated (kind, NATIVE, PC within the procedure) so the
+ *     walk stops cleanly at a non-VMS frame such as the image activator;
+ *   - LIB$GET_CURR_INVO_CONTEXT stores the live integer register file and
+ *     walks one frame out, so the ICB is the caller's state at its call;
+ *   - vms$$invo_transfer loads a reconstructed frame's registers and jumps.
+ * Proven on qemu-system-alpha + /dev/vms by the invo-gate (an anchorless
+ * SYS$UNWIND returns to main with R0 from the mechanism array). Off that ABI
+ * (host builds, Linux/Alpha userland) the WALK ENGINE is exercised through
+ * the resolver/context seams against constructed frames
+ * (tests/libvms/test_invo_context.c); capture there is a best-effort generic
+ * frame and transfer reports "not transferred".
  *
  * CLEAN-ROOM (Rule 8): from the public Alpha/OpenVMS Calling Standard and the
  * OVMX-Alpha toolchain's own emitted descriptors; never VSI/HPE source.
@@ -86,7 +88,7 @@ void vms$$invo_set_curr_context(const INVO_CONTEXT_BLK *icb)
     g_curr_valid = 1;
 }
 
-#if defined(__alpha) || defined(__alpha__)
+#if OVMX_ALPHA_VMS_ABI
 /* The genuine lookup (vms-ed1), per the Alpha Calling Standard: a procedure's
  * frame pointer (R29) identifies its procedure descriptor. A stack-frame
  * procedure stores its procedure value (the PDSC address) at 0(FP); a
@@ -129,7 +131,7 @@ static const struct pdsc_descriptor *resolve_pdsc(uint64_t pc, uint64_t fp)
     if (g_resolver != NULL) {
         return g_resolver(pc, g_resolver_user);   /* host test seam */
     }
-#if defined(__alpha) || defined(__alpha__)
+#if OVMX_ALPHA_VMS_ABI
     return fp_pdsc(pc, fp);
 #else
     (void)fp;
@@ -279,7 +281,7 @@ uint32_t lib$get_curr_invo_context(INVO_CONTEXT_BLK *icb)
 
     memset(icb, 0, sizeof(*icb));
 
-#if defined(__alpha) || defined(__alpha__)
+#if OVMX_ALPHA_VMS_ABI
     /* Genuine capture (vms-ed1): store this procedure's live integer register
      * file, take a PC inside this procedure, then walk ONE frame outward with
      * the Calling-Standard walk -- which restores, from this frame's RSA, every
@@ -438,7 +440,7 @@ uint32_t vms$$invo_reconstruct_target(uint64_t target_pc, INVO_CONTEXT_BLK *out)
 
 int vms$$invo_transfer(const INVO_CONTEXT_BLK *icb, void *newpc)
 {
-#if defined(__alpha) || defined(__alpha__)
+#if OVMX_ALPHA_VMS_ABI
     /* vms-ed1: resume in the reconstructed frame. Load its integer register
      * file (R0..R26, R29 FP, R30 SP) and jump to newpc, or to the frame's own
      * PC -- the instruction after its call, as if that call had returned. R27

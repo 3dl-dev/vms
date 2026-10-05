@@ -64,6 +64,17 @@ extern "C" {
  *                           frame for the purpose of the walk).
  * ================================================================ */
 
+/* The OpenVMS Alpha Calling Standard (procedure descriptors; R29 = FP, which
+ * locates the PDSC) holds only for code built by the alpha-dec-vms compiler --
+ * the GCC-port images and their OVMX shareables. OVMX userland built by
+ * alpha-linux-gnu follows the Linux/Alpha ABI, where R29 is the GP, so the
+ * genuine walk/capture/transfer (vms-ed1) is compiled only for the former. */
+#if (defined(__alpha) || defined(__alpha__)) && (defined(__VMS) || defined(__vms) || defined(__VMS__))
+#define OVMX_ALPHA_VMS_ABI 1
+#else
+#define OVMX_ALPHA_VMS_ABI 0
+#endif
+
 #define PDSC$K_KIND_NULL            8
 #define PDSC$K_KIND_FP_STACK        9
 #define PDSC$K_KIND_FP_REGISTER     10

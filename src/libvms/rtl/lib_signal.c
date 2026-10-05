@@ -145,7 +145,7 @@ void *lib$establish(void *handler) {
     handler_stack[handler_count].active     = 0;
     handler_stack[handler_count].has_anchor = 0;
     handler_stack[handler_count].est_handle = 0;
-#if defined(__alpha) || defined(__alpha__)
+#if OVMX_ALPHA_VMS_ABI
     /* vms-ed1: identify the establisher by its invocation handle from the
      * genuine Calling-Standard walk: the current context is lib$establish's
      * own frame; one frame out is the establisher. An anchorless SYS$UNWIND
@@ -315,7 +315,7 @@ static void perform_unwind(struct chf$signal_array *sigarray)
      * Alpha machine context to restore into, so vms$$invo_transfer() reports
      * "not transferred" and the rung-1 pop-only unwind (already done above)
      * stands. The reconstruction itself is host-proven (test_invo_context). */
-#if defined(__alpha) || defined(__alpha__)
+#if OVMX_ALPHA_VMS_ABI
     /* vms-ed1: the genuine Alpha path. The target establisher was identified
      * at lib$establish by its invocation handle; walk the live chain out to
      * that frame (each step restores the preserved registers its callee

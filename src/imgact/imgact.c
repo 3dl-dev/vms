@@ -2574,6 +2574,9 @@ static void imgact_vms_exit(unsigned long cond)
 #define OVMX_P1_STACK_TOP   0x7FFF0000UL
 #define OVMX_P1_STACK_SIZE  (32UL << 20)
 #define OVMX_P1_STACK_GUARD 0x10000UL
+#ifndef PROT_NONE
+#define PROT_NONE 0
+#endif
 static unsigned long imgact_p1_stack(void)
 {
 	unsigned long lo = OVMX_P1_STACK_TOP - OVMX_P1_STACK_SIZE - OVMX_P1_STACK_GUARD;

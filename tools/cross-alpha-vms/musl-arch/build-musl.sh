@@ -145,12 +145,11 @@ grep -q '^TYPEDEF unsigned int size_t;$' include/alltypes.h.in \
  && grep -q '^TYPEDEF int ssize_t;$' include/alltypes.h.in \
  && grep -q '^STRUCT iovec { void \*iov_base; unsigned long long iov_len; };$' include/alltypes.h.in \
  || { echo "vms-537 PATCH FAIL: size_t/ssize_t/iovec in include/alltypes.h.in" >&2; exit 7; }
-# vms-ce6: regoff_t is an OFFSET (regmatch_t's rm_so/rm_eo), not a pointer-
-# width type; once _Addr follows the client's pointer size it must not follow
-# it, or a 32-bit client's regmatch_t would disagree with DECC$SHR's regexec.
-sed -i 's/^TYPEDEF _Addr regoff_t;$/TYPEDEF _Int64 regoff_t;/' include/alltypes.h.in
-grep -q '^TYPEDEF _Int64 regoff_t;$' include/alltypes.h.in \
- || { echo "vms-ce6 PATCH FAIL: regoff_t in include/alltypes.h.in" >&2; exit 7; }
+# vms-ce6: ptrdiff_t follows the client's pointer size (_Ptrdiff, arch
+# bits/alltypes.h.in), as the port compiler's __PTRDIFF_TYPE__ does.
+sed -i 's/^TYPEDEF _Addr ptrdiff_t;$/TYPEDEF _Ptrdiff ptrdiff_t;/' include/alltypes.h.in
+grep -q '^TYPEDEF _Ptrdiff ptrdiff_t;$' include/alltypes.h.in \
+ || { echo "vms-ce6 PATCH FAIL: ptrdiff_t in include/alltypes.h.in" >&2; exit 7; }
 # mprotect() rounds the ADDRESS through size_t; with a 32-bit size_t that
 # truncates a 64-bit pointer. Round through uintptr_t instead.
 grep -q '^#include <stdint.h>$' src/mman/mprotect.c || sed -i 's/^#include <sys\/mman.h>$/#include <sys\/mman.h>\n#include <stdint.h>/' src/mman/mprotect.c
@@ -456,9 +455,8 @@ echo "  OK      ${NM} read DST member '${MEMBER}' (DST on): ${NSYMS} symbol(s) e
 # DEC C HEADER-FORMS GATE (vms-28d). A client TU in the shape of the GCC port's
 # host sources (libiberty strsignal.c defines its own psignal; getpwd.c calls
 # getcwd(buf, len, 0); xstrerror.c reads vaxc$errno) must compile against the
-# installed public headers at BOTH pointer sizes, with the pointer-width types
-# (intptr_t/uintptr_t/ptrdiff_t, vms-ce6) equal to the compiler's own at each
-# size. Control: the SAME TU compiled
+# installed public headers at BOTH pointer sizes, with ptrdiff_t/intptr_t/
+# uintptr_t (vms-ce6) equal to the compiler's own types at each size. Control: the SAME TU compiled
 # as the C RTL's own build (__OVMX_LIBC_BUILD: plain POSIX forms) must FAIL, so
 # the forms demonstrably come from the patched __VMS client declarations.
 # ==========================================================================
@@ -473,10 +471,9 @@ char *forms_pwd(char *b, size_t n) { return getcwd(b, n, 0); }
 int forms_vms_status(void) { return vaxc$errno; }
 /* vms-ce6: the pointer-width types match the compiler's at this pointer size */
 #include <stdint.h>
-_Static_assert(sizeof(intptr_t) == sizeof(void *), "intptr_t is pointer-width");
-_Static_assert(sizeof(uintptr_t) == sizeof(void *), "uintptr_t is pointer-width");
 _Static_assert(__builtin_types_compatible_p(ptrdiff_t, __PTRDIFF_TYPE__), "ptrdiff_t is the compiler's");
 _Static_assert(__builtin_types_compatible_p(intptr_t, __INTPTR_TYPE__), "intptr_t is the compiler's");
+_Static_assert(__builtin_types_compatible_p(uintptr_t, __UINTPTR_TYPE__), "uintptr_t is the compiler's");
 _Static_assert(INTPTR_MAX == __INTPTR_MAX__ && PTRDIFF_MAX == __PTRDIFF_MAX__, "pointer-width limits");
 EOF
 for ps in "" "-mpointer-size=64"; do

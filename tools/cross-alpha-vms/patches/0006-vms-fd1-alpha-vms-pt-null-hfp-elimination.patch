@@ -1,0 +1,44 @@
+vms-fd1: alpha VMS -- keep the hard-frame-pointer elimination for PT_NULL procedures
+
+alpha_vms_can_eliminate denied every elimination except to the stack pointer
+for a PT_NULL (frameless) procedure.  Reload evaluates can_eliminate when it
+sets up its elimination table and afterwards only withdraws eliminations.
+When reload itself allocates a stack slot -- secondary memory for a GENERAL_REGS
+<-> FP_REGS move on a non-FIX CPU (the default), e.g. an integer computation
+whose result is the double return value (GMP's mpn_get_d) -- the frame layout
+is recomputed, the procedure becomes PT_STACK with the hard frame pointer as
+its unwind register, and the stack-pointer elimination is withdrawn.  The
+hard-frame-pointer elimination had been denied at the start, so no elimination
+remained for the soft frame pointer and `stq $22,0($63)` reached the
+assembler ("syntax error").  Keeping the hard-frame-pointer elimination
+available lets reload switch to it (frame_pointer_needed), which is exactly
+the frame the prologue then builds.  While the procedure stays PT_NULL the
+stack-pointer elimination, listed first, is the one used, so code for
+procedures that never needed a frame is unchanged.
+
+--- a/gcc/config/alpha/alpha.cc	2026-10-05 03:06:57.688317965 +0000
++++ b/gcc/config/alpha/alpha.cc	2026-10-05 03:06:57.708317668 +0000
+@@ -7403,8 +7403,21 @@
+     {
+     case PT_NULL:
+       /* NULL procedures have no frame of their own and we only
+-	 know how to resolve from the current stack pointer.  */
+-      return to == STACK_POINTER_REGNUM;
++	 know how to resolve from the current stack pointer.  The
++	 elimination to the hard frame pointer is nevertheless kept
++	 available: reload computes can_eliminate once at its start and
++	 only ever withdraws an elimination afterwards.  If a stack slot
++	 appears during reload (e.g. secondary memory for an integer <->
++	 FP register move on a target without FIX), the procedure becomes
++	 a stack procedure whose unwind register is the hard frame
++	 pointer, the elimination to the stack pointer is withdrawn, and
++	 with the hard-frame-pointer one already gone the soft frame
++	 pointer ($63) was left in the insn stream -- an operand the
++	 assembler rejects.  While the procedure stays PT_NULL the stack
++	 pointer elimination comes first in ELIMINABLE_REGS and is the one
++	 used.  */
++      return (to == STACK_POINTER_REGNUM
++	      || to == HARD_FRAME_POINTER_REGNUM);
+ 
+     case PT_REGISTER:
+     case PT_STACK:

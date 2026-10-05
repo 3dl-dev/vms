@@ -3284,6 +3284,20 @@ static uint32_t falp_session(const char *user, const char *pw, int is_get,
     if (!(pst & 1)) {
         printf("  NOTE: FAL server process not created (status %08X at %s)\n", (unsigned)pst,
                fp.fail_stage ? fp.fail_stage : "?");
+        {
+            /* Diagnose a $CREPRC refusal: this process's own executive row,
+             * and whether the executive will issue it a detached-identity
+             * ticket (rd vms-ff75) for the persona asked for. */
+            struct vms_procinfo me; memset(&me, 0, sizeof me);
+            uint32_t jst = vms_kif_getjpi_self(&me);
+            uint64_t tk = 0;
+            uint32_t tst = vms_kif_creprc_ticket(me.username, id.uic, id.def_privs, &tk);
+            printf("  NOTE: creator row %08X: pid %08X user '%.12s' uic %08X curpriv %016llX"
+                   " permpriv %016llX row linux pid %u getpid %d; ticket for uic %08X -> %08X\n",
+                   (unsigned)jst, (unsigned)me.vms_pid, me.username, (unsigned)me.uic,
+                   (unsigned long long)me.cur_privs, (unsigned long long)me.perm_privs, (unsigned)me.linux_pid,
+                   (int)getpid(), (unsigned)id.uic, (unsigned)tst);
+        }
         cst = pst; goto out;
     }
     {

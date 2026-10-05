@@ -190,6 +190,17 @@ echo "== PREFLIGHT OK: alpha-dec-vms is LLP64 (int=4,long=4,ll=8,ptr=8) little-e
 	--disable-shared \
 	2>&1 | tee /tmp/musl-configure.log
 
+# vms-4d0: MUSL_HEADERS_ONLY=<dir> installs this alpha-dec-vms CRTL header set
+# (every overlay + patch above applied: the DEC C size_t model, kernel-shaped
+# iovec, ...) under <dir>/usr/include and stops -- the C RTL headers of the
+# OVMX sysroot the stage-2 C/C++ toolchain is configured against.
+if [ -n "${MUSL_HEADERS_ONLY:-}" ]; then
+	make install-headers DESTDIR="${MUSL_HEADERS_ONLY}" prefix=/usr includedir=/usr/include >/tmp/musl-headers.log 2>&1 \
+		|| { cat /tmp/musl-headers.log >&2; exit 1; }
+	echo "== musl alpha-dec-vms headers installed in ${MUSL_HEADERS_ONLY}/usr/include =="
+	exit 0
+fi
+
 # lib/libc.a is the rung-1 deliverable. Try the full archive first; if the
 # alpha-dec-vms toolchain (cc1 + EVAX binutils) cannot yet compile every member
 # (known gaps: weak-alias/visibility, some complex-math relocs), fall back to a

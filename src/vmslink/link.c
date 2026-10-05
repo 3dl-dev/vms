@@ -3548,6 +3548,7 @@ struct ovmx_xfer_header {
 struct evax_input {
     struct evax_object obj;
     const char *name;
+    int         lib;    /* vms-4d0: --library index a pulled member came from */
     uint64_t    sec_base[EVAX_MAX_SECTIONS];  /* placed image vaddr per psect */
 };
 
@@ -5175,9 +5176,11 @@ static void evax_ns_free(struct evax_nameset *ns) { free(ns->slot); ns->slot = N
 
 static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
                                   const char **libs, int nlibs,
+                                  const int *lib_at,
                                   struct producer *producers, int np)
 {
     if (nlibs == 0) return;
+    const int n_orig = *nein;   /* inputs before any library member is pulled */
     /* Load every library member into a candidate pool (parsed, not yet linked). */
     struct evax_input *pool = NULL;
     int npool = 0, cappool = 0;
@@ -5216,6 +5219,7 @@ static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
                     continue;   /* a --use'd shareable provides it: not needed */
                 struct evax_input *slot = push_evax(ein, nein, cap);
                 *slot = pool[m];
+                slot->lib = lib_of[m];   /* remembered for link-order placement */
                 pulled[m] = 1; npulled[lib_of[m]]++; changed = 1;
                 /* Its definitions satisfy later candidates in this same pass. */
                 for (int t = 0; t < o->nsym; t++)
@@ -5235,6 +5239,31 @@ static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
     }
     free(pulled); free(npulled); free(lib_of);
     /* pool storage (member buffers, parsed objects) stays live like every input. */
+
+    /* Link order: a pulled member takes the place of its --library argument
+     * among the inputs, as VMS LINK and every Unix linker place a library's
+     * members where the library appears. It matters for psects whose
+     * concatenation order is meaningful -- the C++ constructor list (crtbegin's
+     * ctors head ... members ... crtend's terminator), eh_frame, LIB$INITIALIZE:
+     * a library member must land BEFORE crtend.o, which follows -l on the line.
+     * lib_at[k] is the number of loaded input objects that precede library k. */
+    int n_pulled = *nein - n_orig;
+    if (n_pulled > 0 && lib_at) {
+        struct evax_input *re = malloc((size_t)*nein * sizeof *re);
+        if (!re) die("oom ordering library members");
+        int o = 0;
+        for (int at = 0; at <= n_orig; at++) {
+            for (int l = 0; l < nlibs; l++) {
+                if (lib_at[l] != at) continue;
+                for (int m = n_orig; m < *nein; m++)
+                    if ((*ein)[m].lib == l) re[o++] = (*ein)[m];
+            }
+            if (at < n_orig) re[o++] = (*ein)[at];
+        }
+        if (o != *nein) die("library member ordering lost an input");
+        memcpy(*ein, re, (size_t)*nein * sizeof *re);
+        free(re);
+    }
 }
 
 
@@ -5251,9 +5280,10 @@ int main(int argc, char **argv)
     int np = 0;
     const char *transfer = NULL;   /* EVAX/Alpha main transfer symbol (vms-cbe) */
     const char **libs = calloc((size_t)argc, sizeof *libs);  /* --library FILE (vms-4d0) */
+    int *lib_pos = calloc((size_t)argc, sizeof *lib_pos);
     int nlibs = 0;
     uint32_t gk = OVMX_GSMATCH_EQUAL, gmaj = 0, gmin = 0;
-    if (!ins || !producers || !libs) die("oom parsing arguments");
+    if (!ins || !producers || !libs || !lib_pos) die("oom parsing arguments");
     memset(uv, 0, sizeof uv);
 
     for (int i = 1; i < argc; i++) {
@@ -5280,6 +5310,7 @@ int main(int argc, char **argv)
             g_evax_vbase = b;
             g_evax_base_set = 1;
         } else if (strcmp(argv[i], "--library") == 0 && i + 1 < argc) {
+            lib_pos[nlibs] = nin;        /* plain inputs before it (link order) */
             libs[nlibs++] = argv[++i];   /* EVAX object library: searched (vms-4d0) */
         } else if (strcmp(argv[i], "--transfer") == 0 && i + 1 < argc) {
             transfer = argv[++i];   /* EVAX/Alpha main transfer address (vms-cbe) */
@@ -5312,7 +5343,10 @@ int main(int argc, char **argv)
          * (or, for an archive, a first-member peek), not a counted slurp (vms-cbe). */
         struct evax_input *ein = NULL;
         int nein = 0, cap_ein = 0;
+        int *ein_after = calloc((size_t)nin + 1, sizeof *ein_after);  /* objects loaded before input i */
+        if (!ein_after) die("oom tracking input order");
         for (int i = 0; i < nin; i++) {
+            ein_after[i] = nein;
             if (file_is_olb(ins[i]))
                 die("the EVAX/Alpha link does not take .OLB libraries "
                     "(use a .a archive or plain EVAX objects)");
@@ -5335,9 +5369,18 @@ int main(int argc, char **argv)
                 exit(1);
             }
         }
+        ein_after[nin] = nein;
         if (nein == 0) die("no EVAX object members found in inputs");
-        /* --library: pull only the members the link still needs (vms-4d0). */
-        evax_search_libraries(&ein, &nein, &cap_ein, libs, nlibs, producers, np);
+        /* --library: pull only the members the link still needs (vms-4d0),
+         * placed where each --library appeared among the inputs. */
+        int *lib_at = calloc((size_t)(nlibs ? nlibs : 1), sizeof *lib_at);
+        if (!lib_at) die("oom placing libraries");
+        for (int l = 0; l < nlibs; l++) lib_at[l] = ein_after[lib_pos[l]];
+        evax_search_libraries(&ein, &nein, &cap_ein, libs, nlibs, lib_at, producers, np);
+        free(lib_at); free(ein_after);
+        if (getenv("OVMX_LINK_INPUT_ORDER"))   /* the final link order (tests) */
+            for (int i = 0; i < nein; i++)
+                fprintf(stderr, "%%LINK-I-INPUT, #%d %s\n", i, ein[i].name);
         /* vms-614: linker-view universal dump — list the DEFINED decc$ symbols
          * evax_read resolves (weak-alias equates included), for mk_decc_shr.sh to
          * build the symbol vector from, then stop before any emit. Runs after the

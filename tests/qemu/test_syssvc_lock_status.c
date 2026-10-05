@@ -91,11 +91,8 @@ struct lksb_caller {
  * in-kernel on a sync $ENQW cannot be woken by a userspace signal). */
 #define REPORT_TIMEOUT_MS 20000
 
-/* How long the parent waits, after the child reports it has entered its
- * blocking wait, before issuing the closing request -- gives the child time
- * to actually reach the in-kernel wait via the ioctl, not just return from
- * write(). Mirrors tests/qemu/test_kmod_lock_sync.c's SETTLE_US. */
-#define SETTLE_US 300000
+/* (SETTLE_US removed, vms-5bb: scenario 3 orders the cycle by the child
+ * reporting only AFTER its async X request is queued, not by sleeping.) */
 
 static int pass = 0, fail = 0;
 
@@ -315,16 +312,42 @@ static void child_deadlock(int c2p_w)
     uint32_t sty = sys$enqw(0, LCK$K_EXMODE, &lksb_y, 0, &resy, 0, NULL, 0, NULL, 0, 0);
     CHECK(sty & 1, "child: EX granted on SYSSVC_STATUS_DLY (public API)");
 
+    /* DETERMINISTIC ORDERING (vms-5bb): the child's request on X must be
+     * QUEUED in the executive before the parent closes the cycle, and that was
+     * previously "hoped" via a 300ms usleep after the child's sync enqw (a
+     * lost race degraded to an intermittent red on the one assertion that
+     * guards the public SS$_DEADLOCK status). So the child queues X with the
+     * ASYNC sys$enq, whose return is already on the resource's wait queue
+     * (the same synchronous-queue guarantee tests/qemu/test_kmod_lock_sync.c
+     * relies on), and only THEN reports 'A' over the pipe. Parent reading 'A'
+     * therefore establishes the wait-for edge child->parent; no sleep. The
+     * child then waits for its grant by observing executive state
+     * (vms_kif_getlki) rather than blocking in enqw. */
+    $DESCRIPTOR(resx, "SYSSVC_STATUS_DLX");
+    struct lksb_caller lksb_x = {0};
+    uint32_t stx = sys$enq(0, LCK$K_EXMODE, &lksb_x, 0, &resx, 0, NULL, 0, NULL, 0, 0);
+    /* No separate CHECK for the queueing: a failed enq is reported by the
+     * "blocked EX ... granted" check below (same red set the facility_defects
+     * unbound-process expectation names; no new assertion text). */
+
     char a = 'A';
     if (write(c2p_w, &a, 1) != 1)
         _exit(2);
 
-    /* Blocks in-kernel until the parent releases X (parent's own request on
-     * Y is the one rejected for deadlock; this one drains once X is free). */
-    $DESCRIPTOR(resx, "SYSSVC_STATUS_DLX");
-    struct lksb_caller lksb_x = {0};
-    uint32_t stx = sys$enqw(0, LCK$K_EXMODE, &lksb_x, 0, &resx, 0, NULL, 0, NULL, 0, 0);
-    CHECK(stx & 1, "child: blocked EX on SYSSVC_STATUS_DLX granted after parent releases X (public API)");
+    /* Drains once the parent releases X: poll the executive's own state. */
+    uint32_t gm = 0;
+    int granted = 0;
+    for (int i = 0; (stx & 1) && i < REPORT_TIMEOUT_MS / 10; i++) {
+        if (vms_kif_getlki(lksb_x.lksb$l_lkid, &gm, NULL, NULL, NULL) == SS$_NORMAL &&
+            gm == LCK$K_EXMODE) {
+            granted = 1;
+            break;
+        }
+        struct pollfd nothing = { .fd = -1, .events = 0 };
+        poll(&nothing, 1, 10);
+    }
+    CHECK(granted, "child: blocked EX on SYSSVC_STATUS_DLX granted after parent releases X (public API)");
+    stx = granted ? 1 : 0;
 
     if (stx & 1)
         sys$deq(lksb_x.lksb$l_lkid, NULL, 0, 0);
@@ -370,7 +393,8 @@ static void scenario_deadlock(void)
     char a = 0;
     if (read_bounded(c2p[0], &a, 1, REPORT_TIMEOUT_MS) != 1)
         fail++;
-    usleep(SETTLE_US);
+    /* No settle sleep: the child sends 'A' only after its X request is queued
+     * (see child_deadlock), so the wait-for edge already exists (vms-5bb). */
 
     /* Parent requests Y (held by child) -> closes the cycle (parent waits
      * on child's Y; child waits on parent's X). Rejected with SS$_DEADLOCK. */

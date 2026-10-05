@@ -133,6 +133,10 @@ AR=ar AR_FLAGS=crS RANLIB=true \
 # libstdc++ adds -ffunction-sections/-fdata-sections itself (SECTION_FLAGS);
 # strip them (vms-5f9, as above).
 grep -rl -e '-ffunction-sections -fdata-sections' --include=Makefile . | xargs -r sed -i 's/-ffunction-sections -fdata-sections//g'
+# libtool names a -S output after the object suffix, which on this target is
+# .obj, not .o; the ios_failure typeinfo-rewrite rule only renames the .o form.
+perl -pi -e 's/^(\t-test -f tmp-cxx11-ios_failure-lt)\.o( && mv -f tmp-cxx11-ios_failure-lt)\.o (.*)$/$1.o$2.o $3\n$1.obj$2.obj $3/' src/c++11/Makefile
+grep -q 'tmp-cxx11-ios_failure-lt.obj' src/c++11/Makefile || { echo "FAIL: ios_failure rule patch"; exit 1; }
 make -C include > /tmp/cxx/lsc-make.log 2>&1
 # src/c++11/debug.cc casts a pointer to std::size_t for a hash bucket; under the
 # DEC C data model size_t is 32-bit (vms-537), so that cast needs -fpermissive.

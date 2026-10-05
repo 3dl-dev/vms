@@ -10,12 +10,12 @@ including the programs that do not run and why.
 
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
-| host (gcc container, no executive) | 108 | 229 | `tests/conformance/run_corpus.sh` |
+| host (gcc container, no executive) | 109 | 229 | `tests/conformance/run_corpus.sh` |
 | **runtime (guest, live /dev/vms)** | 138 | 140 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
-**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **138 of 229**.
+**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **139 of 229**.
 
-Host column detail: compile-fail 44, link-fail 44, run-fail 8, run-crash 25; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
+Host column detail: compile-fail 38, link-fail 49, run-fail 8, run-crash 25; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
 Runtime column detail: run-fail 1, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits
@@ -30,7 +30,7 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 
-### Not running (91)
+### Not running (90)
 
 | program | host | runtime | reason |
 |---|---|---|---|
@@ -60,14 +60,13 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_acm` | compile-fail | - | compile: missing header acmemsgdef.h |
 | `sys_adjwsl` | link-fail | - | link: undefined sys$adjwsl |
 | `sys_align_faults` | compile-fail | - | link: undefined sys$get_align_fault_data, sys$start_align_fault_report, sys$stop_align_fault_report |
-| `sys_asctoid` | link-fail | - | link: undefined sys$asctoid |
 | `sys_ascutc` | link-fail | - | link: undefined sys$ascutc, sys$binutc, sys$numutc |
-| `sys_audit_event` | compile-fail | - | link: undefined sys$audit_eventw |
+| `sys_audit_event` | link-fail | - | link: undefined sys$audit_eventw |
 | `sys_avoid_preempt` | link-fail | - | link: undefined sys$avoid_preempt, sys$setup_avoid_preempt |
 | `sys_bio` | compile-fail | - | link: undefined sys$enter, sys$read, sys$remove, sys$wait, sys$write |
 | `sys_capabilities` | compile-fail | - | link: undefined sys$cpu_capabilities, sys$free_user_capability, sys$get_user_capability, sys$process_capabilities |
 | `sys_check_access` | link-fail | - | link: undefined sys$check_access |
-| `sys_check_privilege` | compile-fail | - | link: undefined sys$check_privilegew |
+| `sys_check_privilege` | link-fail | - | link: undefined sys$check_privilegew |
 | `sys_chkpro` | compile-fail | - | link: undefined sys$create_user_profile, sys$get_security |
 | `sys_clrast` | link-fail | - | link: undefined SYS$CLRAST |
 | `sys_cluevt` | link-fail | - | link: undefined sys$tstcluevt |
@@ -85,7 +84,7 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_erapat` | compile-fail | - | compile: missing header eradef.h |
 | `sys_fao` | compile-fail | - | compile: error: initializer element is not constant |
 | `sys_fastio` | compile-fail | - | compile: missing header iosadef.h |
-| `sys_find_held` | link-fail | - | link: undefined sys$find_held, sys$find_holder, sys$finish_rdb, sys$idtoasc |
+| `sys_find_held` | link-fail | - | link: undefined sys$find_held, sys$find_holder, sys$finish_rdb |
 | `sys_forcex` | run-crash | run-fail | flaky: timing-dependent: a spawned DCL subprocess plus two 5s sleeps; passes on a local KVM guest, hangs to the 40s budget on the CI runner; held at its CI verdict until the race is root-caused (vms-f45) |
 | `sys_format_audit` | link-fail | - | link: undefined sys$format_audit |
 | `sys_get_arith` | compile-fail | - | link: undefined sys$get_arith_exception |
@@ -96,8 +95,8 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_gs64` | compile-fail | - | link: undefined sys$crmpsc_gdzro_64, sys$mgblsc_64 |
 | `sys_hash_pwd` | compile-fail | - | compile: missing header smg$routines.h |
 | `sys_icc` | compile-fail | - | compile: missing header iccdef.h |
-| `sys_ident` | link-fail | - | link: undefined sys$add_holder, sys$add_ident, sys$asctoid, sys$grantid, sys$rem_holder, sys$rem_ident, sys$revokid |
-| `sys_ieee` | compile-fail | - | link: undefined sys$ieee_set_fp_control, sys$ieee_set_precision_mode, sys$ieee_set_rounding_mode |
+| `sys_ident` | link-fail | - | link: undefined sys$add_holder, sys$add_ident, sys$grantid, sys$rem_holder, sys$rem_ident, sys$revokid |
+| `sys_ieee` | link-fail | - | link: undefined sys$ieee_set_fp_control, sys$ieee_set_precision_mode, sys$ieee_set_rounding_mode |
 | `sys_init_vol` | link-fail | - | link: undefined sys$init_vol |
 | `sys_io_fastpath` | compile-fail | - | link: undefined sys$io_fastpathw |
 | `sys_lkwset` | compile-fail | - | compile: error: lvalue required as unary '&' operand |
@@ -107,16 +106,16 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_power` | compile-fail | - | link: undefined sys$power_control |
 | `sys_process_affinity` | compile-fail | - | link: undefined sys$process_affinity |
 | `sys_process_scan` | compile-fail | - | link: undefined sys$process_scan |
-| `sys_proxy` | compile-fail | - | link: undefined sys$add_proxy, sys$delete_proxy, sys$display_proxy, sys$verify_proxy |
+| `sys_proxy` | link-fail | - | link: undefined sys$add_proxy, sys$delete_proxy, sys$display_proxy, sys$verify_proxy |
 | `sys_queue` | compile-fail | - | compile: missing header sjcdef.h |
 | `sys_rpcc_64` | compile-fail | - | link: undefined sys$rpcc_64 |
 | `sys_set_implicit_affinity` | compile-fail | - | link: undefined sys$set_implicit_affinity |
 | `sys_set_process_properties` | link-fail | - | link: undefined sys$set_process_propertiesw |
-| `sys_set_security` | compile-fail | - | link: undefined sys$parse_acl, sys$set_security |
+| `sys_set_security` | link-fail | - | link: undefined sys$parse_acl, sys$set_security |
 | `sys_setdfprot` | link-fail | - | link: undefined sys$setdfprot |
 | `sys_setpra` | link-fail | - | link: undefined sys$setpra |
 | `sys_setshlv` | link-fail | - | link: undefined sys$setshlv |
-| `sys_show_intr` | compile-fail | - | link: undefined sys$delete_intrusion, sys$show_intrusion |
+| `sys_show_intr` | link-fail | - | link: undefined sys$delete_intrusion, sys$show_intrusion |
 | `sys_sigprc` | compile-fail | - | link: undefined signal |
 | `sys_snderr` | link-fail | - | link: undefined sys$snderr |
 | `sys_subsystem` | link-fail | - | link: undefined sys$subsystem |

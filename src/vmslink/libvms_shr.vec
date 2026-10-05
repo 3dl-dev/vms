@@ -455,3 +455,4 @@ LIB$GET_PREV_INVO_CONTEXT=PROCEDURE
 vms$$chan_devnam=PROCEDURE
 sys$check_privilegew=PROCEDURE
 sys$audit_eventw=PROCEDURE
+sys$create_uid=PROCEDURE

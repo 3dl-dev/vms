@@ -1657,6 +1657,9 @@ uint32_t sys$check_privilegew(uint32_t efn, const void *privnam, uint32_t bitnum
 uint32_t sys$audit_eventw(uint32_t efn, uint32_t flags, const void *itmlst,
                           void *audsts, void *astadr, uint64_t astprm);
 
+/** sys$create_uid - Create a universal identifier (128 bits; DCE/RFC 4122 version-1 uuid) */
+uint32_t sys$create_uid(void *uid);
+
 /** sys$resched - Give up the processor */
 uint32_t sys$resched(void);
 

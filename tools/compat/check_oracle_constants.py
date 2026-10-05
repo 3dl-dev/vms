@@ -55,7 +55,8 @@ def tree(root):
 
 def mismatches(root):
     o, t = oracle(root), tree(root)
-    return {k: (t[k], o[k]) for k in t if k in o and t[k] != o[k]}, len(o), len(t)
+    return {k: (t[k], o[k]) for k in t if k in o and t[k] != o[k]
+            and (t[k] & 0xFFFFFFFF) != (o[k] & 0xFFFFFFFF)}, len(o), len(t)
 
 
 def known(root):

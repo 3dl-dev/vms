@@ -30,16 +30,16 @@ extern "C" {
 #define SEC$M_CRF           0x00000002  /* Copy-on-reference */
 #define SEC$M_DZRO          0x00000004  /* Demand-zero pages */
 #define SEC$M_WRT           0x00000008  /* Writable section */
-#define SEC$M_PERM          0x00000010  /* Permanent (survives image exit) */
-#define SEC$M_SYSGBL        0x00000020  /* System global section */
-#define SEC$M_PFNMAP        0x00000040  /* PFN-mapped section */
-#define SEC$M_EXPREG        0x00000100  /* Expand region (P1 space) */
+#define SEC$M_PERM          0x4000  /* Permanent (survives image exit) */
+#define SEC$M_SYSGBL        0x8000  /* System global section */
+#define SEC$M_PFNMAP        0x10000  /* PFN-mapped section */
+#define SEC$M_EXPREG        0x20000  /* Expand region (P1 space) */
 #define SEC$M_OVERLAYD      0x00000200  /* Overlaid section */
-#define SEC$M_PROTECT       0x00000400  /* Protected section */
-#define SEC$M_PAGFIL        0x00001000  /* Page file backed */
-#define SEC$M_EXECUTE       0x00002000  /* Execute access */
-#define SEC$M_NOCOPY        0x00004000  /* No copy on fork */
-#define SEC$M_64BIT         0x00008000  /* 64-bit mapped section */
+#define SEC$M_PROTECT       0x40000  /* Protected section */
+#define SEC$M_PAGFIL        0x80000  /* Page file backed */
+#define SEC$M_EXECUTE       0x100000  /* Execute access */
+#define SEC$M_NOCOPY        0x20000000  /* [OVMX] no copy on fork (not in V7.3 $SECDEF; bit above every V7.3 flag) */
+#define SEC$M_64BIT         0x40000000  /* [OVMX] 64-bit mapped section (not in V7.3 $SECDEF) */
 
 /* ================================================================
  * SEC$C_ — Section type / access mode codes

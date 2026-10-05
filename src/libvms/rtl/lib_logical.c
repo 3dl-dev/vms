@@ -1,7 +1,7 @@
 /*
  * lib_logical.c - LIB$ Simplified Logical Name Routines
  *
- * Implements LIB$SET_LOGICAL and LIB$DELETE_LOGICAL, the RTL
+ * Implements LIB$SET_LOGICAL, LIB$DELETE_LOGICAL and LIB$GET_LOGICAL, the RTL
  * convenience wrappers around the SYS$CRELNM / SYS$DELLNM system
  * services. These let a caller define or delete a single-valued
  * logical name without building an item list by hand (LIB$SET_LOGICAL
@@ -67,6 +67,79 @@ uint32_t lib$set_logical(
     built[1].retlen = NULL;
 
     return sys$crelnm(attr, tbl, lognam, NULL, built);
+}
+
+/*
+ * lib$get_logical - Translate a logical name (simplified interface).
+ *
+ * The RTL wrapper over SYS$TRNLNM: it asks for LNM$_STRING (and, when the caller
+ * wants them, the LNM$_INDEX selected translation and LNM$_MAX_INDEX) and copies
+ * the equivalence string into the caller's descriptor.
+ *
+ * @param lognam   Logical name (required).
+ * @param resstr   Receives the equivalence string (required; any string class).
+ * @param reslen   Optional; receives the length of the equivalence string. It may
+ *                 alias resstr's own length field (a common idiom): the string is
+ *                 copied first, the length stored last.
+ * @param tabnam   Optional table (or search list of tables); default LNM$FILE_DEV.
+ * @param maxidx   Optional; receives the highest translation index.
+ * @param index    Optional; the translation to return (0 = first); a search list
+ *                 has several.
+ * @param acmode   Optional access-mode mask passed through to SYS$TRNLNM.
+ * @param flags    Optional attribute flags (LNM$M_CASE_BLIND ...) passed to
+ *                 SYS$TRNLNM.
+ *
+ * @return  SS$_NORMAL; SS$_NOLOGNAM when there is no such name; the status of
+ *          SYS$TRNLNM otherwise; SS$_BADPARAM for a missing required argument.
+ */
+uint32_t lib$get_logical(
+    const struct dsc$descriptor_s *lognam,
+    struct dsc$descriptor_s *resstr,
+    uint16_t *reslen,
+    const struct dsc$descriptor_s *tabnam,
+    int32_t *maxidx,
+    const uint32_t *index,
+    const uint8_t *acmode,
+    const uint32_t *flags)
+{
+    if (!lognam || !resstr)
+        return SS$_BADPARAM;
+
+    static const struct dsc$descriptor_s default_table = {
+        13, DSC$K_DTYPE_T, DSC$K_CLASS_S, (char *)"LNM$FILE_DEV"
+    };
+    const struct dsc$descriptor_s *tbl = tabnam ? tabnam : &default_table;
+
+    char buf[LNM$C_MAXVALLEN + 1];
+    uint16_t len = 0;
+    int32_t mx = 0;
+    uint32_t idx = index ? *index : 0;
+    struct item_list_3 il[4];
+    int n = 0;
+
+    if (index) {
+        il[n].buflen = sizeof(idx); il[n].item_code = LNM$_INDEX;
+        il[n].bufaddr = &idx;       il[n].retlen = NULL; n++;
+    }
+    il[n].buflen = LNM$C_MAXVALLEN; il[n].item_code = LNM$_STRING;
+    il[n].bufaddr = buf;            il[n].retlen = &len; n++;
+    if (maxidx) {
+        il[n].buflen = sizeof(mx);  il[n].item_code = LNM$_MAX_INDEX;
+        il[n].bufaddr = &mx;        il[n].retlen = NULL; n++;
+    }
+    il[n].buflen = 0; il[n].item_code = 0; il[n].bufaddr = NULL; il[n].retlen = NULL;
+
+    uint32_t st = sys$trnlnm(flags, tbl, lognam, acmode, il);
+    if (!(st & 1))
+        return st;
+
+    uint16_t copy = len;
+    uint32_t cs = lib$scopy_r_dx(&copy, buf, resstr);
+    if (maxidx)
+        *maxidx = mx;
+    if (reslen)
+        *reslen = len;
+    return (cs & 1) ? st : cs;
 }
 
 /*

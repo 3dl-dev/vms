@@ -26,11 +26,11 @@ extern "C" {
 
 #define CHP$_ACCESS         1   /* Access rights to check (ARM bitmask) */
 #define CHP$_FLAGS          2   /* Flags controlling the check */
-#define CHP$_OWNER          3   /* Owner UIC of the object */
-#define CHP$_PROT           4   /* Protection mask of the object */
-#define CHP$_ACL            5   /* ACL to check against */
+#define CHP$_OWNER          12   /* Owner UIC of the object */
+#define CHP$_PROT           13   /* Protection mask of the object */
+#define CHP$_ACL            14   /* ACL to check against */
 #define CHP$_USERNAME       6   /* Username to check access for */
-#define CHP$_PRIV           7   /* Privilege mask of the accessor */
+#define CHP$_PRIV           3   /* Privilege mask of the accessor */
 
 /* ================================================================
  * CHP$M_ — Flag bits for CHP$_FLAGS item

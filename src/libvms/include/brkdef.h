@@ -26,9 +26,9 @@ extern "C" {
 
 #define BRK$C_DEVICE        1   /* Send to a specific device */
 #define BRK$C_USERNAME      2   /* Send to all terminals of a username */
-#define BRK$C_ALLTERMS      3   /* Send to all terminals */
-#define BRK$C_USER1         4   /* Send to user terminals (type 1) */
-#define BRK$C_USER2         5   /* Send to user terminals (type 2) */
+#define BRK$C_ALLTERMS      4   /* Send to all terminals */
+#define BRK$C_USER1         32   /* Send to user terminals (type 1) */
+#define BRK$C_USER2         33   /* Send to user terminals (type 2) */
 
 /* ================================================================
  * BRK$M_ — Broadcast flag bits
@@ -36,7 +36,7 @@ extern "C" {
  * Passed as the "flags" argument to sys$brkthruw.
  * ================================================================ */
 
-#define BRK$M_CLUSTER       0x00000001  /* Send to all nodes in cluster */
+#define BRK$M_CLUSTER       0x800  /* Send to all nodes in cluster */
 #define BRK$M_NOQUEUE       0x00000002  /* Do not queue if terminal is busy */
 
 #ifdef __cplusplus

@@ -53,6 +53,12 @@
  *     genuinely not audited (SS$_NORMAL, nothing written). A caller that FORCES
  *     a record (NSA$M_NOEVTCHECK or NSA$M_MANDATORY) is refused SS$_UNSUPPORTED
  *     rather than told a record was written.
+ * OVMX-USERSPACE: sys$create_uid (vms-44a) -- generated in this process: the
+ *     clock (sys$gettim), a per-process random clock sequence and a random
+ *     47-bit node (sys$get_entropy), laid out as an OSF DCE / RFC 4122
+ *     version-1 uuid. Uniqueness is the usual uuid argument (time + sequence +
+ *     node), not an executive-issued number; the field layout is the DCE uuid's,
+ *     not observed from a VMS $CREATE_UID.
  * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
  *     caller's own getuid()/getgid() and the protection word the caller
  *     itself passed in. There is no executive reference monitor, no rights
@@ -381,5 +387,69 @@ uint32_t (sys$audit_eventw)(uint32_t efn, uint32_t flags, const void *itmlst,
         return SS$_BADPARAM;
     if (flags & (NSA$M_NOEVTCHECK | NSA$M_MANDATORY))
         return SS$_UNSUPPORTED;
+    return SS$_NORMAL;
+}
+
+/*
+ * sys$create_uid - create a universal identifier (a 128-bit unique value).
+ *
+ * An OSF DCE uuid, version 1 (RFC 4122 section 4.2): the 60-bit count of 100 ns
+ * intervals since 15-OCT-1582 (the VMS system time plus the 1582->1858 offset),
+ * a 14-bit clock sequence, and a node field. A faithful IEEE address is not
+ * available to a process here, so the node is 47 random bits with the multicast
+ * bit set (RFC 4122 section 4.5: such a node can never collide with a real
+ * address). The timestamp never repeats within a process: if the clock has not
+ * advanced since the last uid, it is bumped by one tick.
+ *
+ * Layout (bytes): time_low[4] time_mid[2] time_hi_and_version[2]
+ *                 clock_seq_hi_and_reserved[1] clock_seq_low[1] node[6]
+ */
+#include <pthread.h>
+
+#define UID_VMS_TO_UUID_EPOCH 0x01B21DD213814000ull  /* 100ns: 1582-10-15 -> 1858-11-17 */
+
+uint32_t (sys$create_uid)(void *uid)
+{
+    static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+    static uint64_t last_time;
+    static uint16_t clock_seq;
+    static uint8_t  node[6];
+    static int      seeded;
+    uint64_t now;
+    uint8_t out[16];
+
+    if (!uid)
+        return SS$_ACCVIO;
+
+    if (!(sys$gettim(&now) & 1))
+        return SS$_BADPARAM;
+
+    pthread_mutex_lock(&lock);
+    if (!seeded) {
+        uint8_t r[8];
+        if (!(sys$get_entropy(r, sizeof(r)) & 1)) {
+            pthread_mutex_unlock(&lock);
+            return SS$_INSFMEM;      /* no entropy: refuse rather than mint a guessable uid */
+        }
+        clock_seq = (uint16_t)(((r[0] << 8) | r[1]) & 0x3FFF);
+        memcpy(node, r + 2, 6);
+        node[0] |= 0x01;             /* multicast bit: not an IEEE address */
+        seeded = 1;
+    }
+    uint64_t t = now + UID_VMS_TO_UUID_EPOCH;
+    if (t <= last_time)
+        t = last_time + 1;
+    last_time = t;
+    pthread_mutex_unlock(&lock);
+
+    out[0] = (uint8_t)(t);          out[1] = (uint8_t)(t >> 8);
+    out[2] = (uint8_t)(t >> 16);    out[3] = (uint8_t)(t >> 24);
+    out[4] = (uint8_t)(t >> 32);    out[5] = (uint8_t)(t >> 40);
+    out[6] = (uint8_t)(t >> 48);
+    out[7] = (uint8_t)(((t >> 56) & 0x0F) | 0x10);          /* version 1 */
+    out[8] = (uint8_t)(((clock_seq >> 8) & 0x3F) | 0x80);   /* RFC 4122 variant */
+    out[9] = (uint8_t)clock_seq;
+    memcpy(out + 10, node, 6);
+    memcpy(uid, out, sizeof(out));
     return SS$_NORMAL;
 }

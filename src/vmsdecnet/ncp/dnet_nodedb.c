@@ -180,6 +180,46 @@ const struct dnet_node_entry *dnet_nodedb_at(const struct dnet_nodedb *db, unsig
     }
 }
 
+const char *const DNET_NODEDB_HEADER[2] = {
+    "# OVMX DECnet Phase IV node database (NCP DEFINE/SET NODE).",
+    "# Format: NODE <area>.<node> [NAME <name>]  -- OVMX layout, not"
+    " VMS NETNODE_REMOTE.DAT.",
+};
+
+int dnet_nodedb_format_entry(const struct dnet_node_entry *e, char *buf, size_t bufsz)
+{
+    if (!e || !buf || bufsz == 0)
+        return DNET_NODEDB_EINVAL;
+    unsigned area = dnet_area_of(e->addr), node = dnet_node_of(e->addr);
+    int m = e->name[0] ? snprintf(buf, bufsz, "NODE %u.%u NAME %s", area, node, e->name)
+                       : snprintf(buf, bufsz, "NODE %u.%u", area, node);
+    return (m > 0 && (size_t)m < bufsz) ? DNET_NODEDB_OK : DNET_NODEDB_EIO;
+}
+
+int dnet_nodedb_apply_line(struct dnet_nodedb *db, const char *line)
+{
+    if (!db || !line)
+        return DNET_NODEDB_EINVAL;
+    const char *p = line;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p == '#' || *p == '\n' || *p == '\r' || *p == '\0')
+        return DNET_NODEDB_OK;            /* comment / blank: nothing to apply */
+    char kw[16], astr[32], namekw[16], name[64];
+    int nf = sscanf(p, "%15s %31s %15s %63s", kw, astr, namekw, name);
+    if (nf < 2 || strcmp(kw, "NODE") != 0)
+        return DNET_NODEDB_EIO;
+    uint16_t addr = 0;
+    if (dnet_nodedb_parse_addr(astr, &addr) != DNET_NODEDB_OK)
+        return DNET_NODEDB_EIO;
+    const char *nm = "";
+    if (nf >= 4 && strcmp(namekw, "NAME") == 0)
+        nm = name;
+    if (dnet_nodedb_set(db, addr, nm) != DNET_NODEDB_OK)
+        return DNET_NODEDB_EIO;
+    return DNET_NODEDB_OK;
+}
+
 int dnet_nodedb_save(const struct dnet_nodedb *db, const char *path)
 {
     if (!db || !path)
@@ -191,18 +231,18 @@ int dnet_nodedb_save(const struct dnet_nodedb *db, const char *path)
     FILE *f = fopen(tmp, "w");
     if (!f)
         return DNET_NODEDB_EIO;
-    fprintf(f, "# OVMX DECnet Phase IV node database (NCP DEFINE/SET NODE).\n");
-    fprintf(f, "# Format: NODE <area>.<node> [NAME <name>]  -- OVMX layout, not"
-               " VMS NETNODE_REMOTE.DAT.\n");
+    fprintf(f, "%s\n%s\n", DNET_NODEDB_HEADER[0], DNET_NODEDB_HEADER[1]);
     for (unsigned i = 0; i < db->count; i++) {
         const struct dnet_node_entry *e = dnet_nodedb_at(db, i);
+        char line[64];
         if (!e)
             break;
-        unsigned area = dnet_area_of(e->addr), node = dnet_node_of(e->addr);
-        if (e->name[0])
-            fprintf(f, "NODE %u.%u NAME %s\n", area, node, e->name);
-        else
-            fprintf(f, "NODE %u.%u\n", area, node);
+        if (dnet_nodedb_format_entry(e, line, sizeof(line)) != DNET_NODEDB_OK) {
+            fclose(f);
+            remove(tmp);
+            return DNET_NODEDB_EIO;
+        }
+        fprintf(f, "%s\n", line);
     }
     if (fflush(f) != 0 || ferror(f)) {
         fclose(f);
@@ -228,26 +268,7 @@ int dnet_nodedb_load(struct dnet_nodedb *db, const char *path)
     char line[256];
     int rc = DNET_NODEDB_OK;
     while (fgets(line, sizeof(line), f)) {
-        char *p = line;
-        while (*p == ' ' || *p == '\t')
-            p++;
-        if (*p == '#' || *p == '\n' || *p == '\0')
-            continue;
-        char kw[16], astr[32], namekw[16], name[64];
-        int nf = sscanf(p, "%15s %31s %15s %63s", kw, astr, namekw, name);
-        if (nf < 2 || strcmp(kw, "NODE") != 0) {
-            rc = DNET_NODEDB_EIO;
-            break;
-        }
-        uint16_t addr = 0;
-        if (dnet_nodedb_parse_addr(astr, &addr) != DNET_NODEDB_OK) {
-            rc = DNET_NODEDB_EIO;
-            break;
-        }
-        const char *nm = "";
-        if (nf >= 4 && strcmp(namekw, "NAME") == 0)
-            nm = name;
-        if (dnet_nodedb_set(db, addr, nm) != DNET_NODEDB_OK) {
+        if (dnet_nodedb_apply_line(db, line) != DNET_NODEDB_OK) {
             rc = DNET_NODEDB_EIO;
             break;
         }

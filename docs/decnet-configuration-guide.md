@@ -38,9 +38,14 @@ socket library. Three pieces matter to an operator:
   attacker-controlled wire bytes: a low-privilege engine decodes the wire and
   hands NETACP only a validated, typed connection descriptor
   (`decnet$wire-isolation`, implemented).
-- **The wire engine** is a userspace Phase IV implementation — datalink, NSP
-  logical links, and routing/HELLO adjacency — over `AF_PACKET SOCK_RAW`
-  (ethertype `0x6003`), hidden entirely behind the executive device face. This
+- **The wire engine** is a userspace Phase IV implementation — NSP logical
+  links and routing/HELLO adjacency — over a raw Ethernet datalink (ethertype
+  `0x6003`), hidden entirely behind the executive device face. On a booted node
+  that datalink is the EXECUTIVE's (rd vms-1f69): the kernel owns the raw
+  socket (`VMS_IOCTL_L2_OPEN`), the open is gated on the VMS `PHY_IO`
+  privilege (no Linux `CAP_NET_RAW`), and every frame is sourced from the
+  node's Phase IV algorithmic station address `AA-00-04-00-<LE16(area*1024+node)>`,
+  which the executive validates and stamps (`decnet$datalink`). This
   is a deliberate substitution: Linux removed its in-kernel `AF_DECnet` stack in
   kernel 6.1, so unlike TCP/IP there is no live kernel facility left to ride
   (ruling vms-a1c; full rationale in `design-decnet-ovmx.md` §2). Nothing above
@@ -73,16 +78,22 @@ itself (INV-0).
 
 `NCP` is the real Network Control Program: a persisted node database plus
 executor (local-node) configuration, driven one command per invocation
-(`MCR NCP <command...>`), grammar from the public *DECnet for OpenVMS
-Networking Manual*. Register row: `decnet$ncp`, **partial/real**.
+through a foreign command (`$ NCP :== $SYS$SYSTEM:NCP.EXE`, then
+`$ NCP <command...>`), grammar from the public *DECnet for OpenVMS
+Networking Manual*. Register row: `decnet$ncp`, **partial/real**. The
+databases are the VMS files `SYS$SYSTEM:NETNODE_LOCAL.DAT` (executor),
+`SYS$SYSTEM:NETNODE_REMOTE.DAT` (nodes) and `SYS$SYSTEM:NETOBJECT.DAT`
+(objects), written and read through RMS over the Files-11 ACP — the same
+files NETACP reads when the network starts.
 
 ### Executor identity
 
 ```
-$ MCR NCP SET EXECUTOR ADDRESS 1.2
-$ MCR NCP SET EXECUTOR NAME VAX2
-$ MCR NCP SET EXECUTOR STATE ON
-$ MCR NCP SHOW EXECUTOR CHARACTERISTICS
+$ NCP :== $SYS$SYSTEM:NCP.EXE
+$ NCP SET EXECUTOR ADDRESS 1.2
+$ NCP SET EXECUTOR NAME VAX2
+$ NCP SET EXECUTOR STATE ON
+$ NCP SHOW EXECUTOR CHARACTERISTICS
 
 Node Volatile Characteristics
 
@@ -99,8 +110,8 @@ read it back; `CLEAR`/`PURGE NODE` remove one. This database is what
 (`decnet$node-database`, implemented).
 
 ```
-$ MCR NCP SET NODE 1.2 NAME VAX2
-$ MCR NCP SHOW KNOWN NODES
+$ NCP SET NODE 1.2 NAME VAX2
+$ NCP SHOW KNOWN NODES
 
 Known Node Volatile Summary
 
@@ -108,10 +119,10 @@ Node         Name
 
 1.2          VAX2
 
-$ MCR NCP SHOW NODE VAX2
+$ NCP SHOW NODE VAX2
 1.2          VAX2
 
-$ MCR NCP CLEAR NODE VAX2
+$ NCP CLEAR NODE VAX2
 ```
 A node may be looked up and cleared by either its `area.node` address or its
 name — both forms accept either.
@@ -128,12 +139,22 @@ name — both forms accept either.
   surface.
 - **NCP is config-only.** It does not itself bring the network up or down —
   it edits the database NETACP and the engine read.
-- **Storage-location caveat (rd vms-20e).** The node database and executor
-  configuration persist at a Linux host path (`/etc/ovmx/decnet/` by default,
-  overridable with `OVMX_DECNET_NODEDB` / `OVMX_DECNET_EXECUTOR`), not through
-  the VMS file layer at `SYS$SYSTEM:NETNODE_REMOTE.DAT`. The data and the
-  command surface are real; the on-disk location is an OVMX-choice
-  faithfulness gap tracked separately.
+- **Record layout is OVMX's.** The databases live at their VMS names in
+  `SYS$SYSTEM:` through the VMS file layer (rd vms-1f69), but the records
+  inside are OVMX's documented plain text (each file's header comment says
+  so), not the VMS binary indexed format. A write that cannot reach the file
+  (no executive or system volume) fails with `%NCP-E-CFGWRERR` /
+  `%NCP-E-DBWRERR` naming the file — it is never redirected elsewhere.
+
+### Starting the network
+
+Once the executor is configured, `@SYS$MANAGER:STARTNET` (also run at boot,
+LPBETA phase) finds `SYS$SYSTEM:NETNODE_LOCAL.DAT` and starts NETACP
+(`SYS$SYSTEM:DECNETD.EXE`) detached. NETACP self-sources its address from that
+file, opens its datalink through the executive on the primary NIC, and sends
+endnode hellos. It needs `PHY_IO`, which it inherits from its creator (SYSTEM);
+without it the executive refuses the datalink with `SS$_NOPRIV`, logged to
+`SYS$MANAGER:NETACP.LOG`. On an unconfigured node STARTNET is a silent no-op.
 
 ## 3. Remote interactive login — SET HOST
 
@@ -271,7 +292,7 @@ second ledger).
 | Inbound FAL file server (object 17) | partial | real | §4. Authenticated at the connect (SYSUAF/Purdy + disabled gate, bad password refused before accept); serves/stores via RMS over the ACP. Outbound DCL `COPY` bridge is a follow-on (rd vms-ea8). |
 | DAP codec | implemented | real | §4. Bounded, fuzz-clean; oracle-verified message sequence + carried values, public-spec field framing. |
 | Task-to-task programmatic `$QIO` | **absent** | n/a | Generic user-program logical-link `$QIO` to a DECnet object is not built (distinct from FAL, which is real above). |
-| NCP (node/executor config) | partial | real | §2 above. No circuits/objects/lines/counters/LOOP; single persisted DB; node DB stored at a Linux path, not `NETNODE_REMOTE.DAT` (rd vms-20e). |
+| NCP (node/executor config) | partial | real | §2 above. No circuits/objects/lines/counters/LOOP; single persisted DB; databases at `SYS$SYSTEM:NETNODE_LOCAL.DAT`/`NETNODE_REMOTE.DAT`/`NETOBJECT.DAT` via RMS over the ACP, OVMX text record layout (rd vms-1f69). |
 | Node database + name↔address resolution | implemented | real | Backs NCP and `SET HOST`/`NODE::` resolution. |
 | Session Control CONNECT codec | verified | real | Oracle byte-identical against a real VAX capture; access-control fields correctly empty for CTERM. |
 | Inbound SET HOST (CTERM session auth) | implemented | real | §3 above. Fresh LOGINOUT auth; one session at a time; no live-VAX bracket proof yet. |

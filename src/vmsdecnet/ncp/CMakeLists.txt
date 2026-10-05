@@ -21,9 +21,29 @@ target_include_directories(vmsdecnet_objectdb PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
+# dnet_ncpstore (rd vms-1f69, subsumes vms-20e): WHERE the three databases live
+# -- SYS$SYSTEM:NETNODE_LOCAL.DAT (executor), NETNODE_REMOTE.DAT (nodes),
+# NETOBJECT.DAT (objects) -- reached through the VMS file layer (rms_textfile_*,
+# RMS over the Files-11 ACP, LIBVMS), plus the executor record codec. Shared by
+# NCP.EXE and NETACP (DECNETD.EXE) so there is ONE reader/writer for the config.
+# The OVMX_DECNET_* env overrides select a host POSIX path (the host-test hook).
+add_library(vmsdecnet_ncpstore STATIC dnet_ncpstore.c)
+target_include_directories(vmsdecnet_ncpstore PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src/libvms/include              # rms_textfile.h
+)
+target_link_libraries(vmsdecnet_ncpstore PUBLIC
+    vmsdecnet_nodedb vmsdecnet_objectdb vms)
+
 # NCP.EXE -- the Network Control Program utility that drives the database +
 # executor config (SET/DEFINE/SHOW/CLEAR NODE + OBJECT, SET/SHOW EXECUTOR).
-add_executable(ncp_exe ncp.c)
-target_link_libraries(ncp_exe PRIVATE vmsdecnet_nodedb vmsdecnet_objectdb)
+# ncp_rms_bind.c: force-bind anchor (rd vms-1f69). The store reaches RMS through
+# LIBVMS's `#pragma weak` seam (rms_textfile.c); under the static booted link a
+# weak-only reference extracts nothing, so without the anchor every NCP write
+# would fail before any ACP call (the decnetd_rms_bind.c / tcpip_service_db
+# trap). vmsrms supplies the producers.
+add_executable(ncp_exe ncp.c ncp_rms_bind.c)
+target_link_libraries(ncp_exe PRIVATE vmsdecnet_ncpstore vmsdecnet_nodedb
+                                      vmsdecnet_objectdb vmsrms)
 set_target_properties(ncp_exe PROPERTIES OUTPUT_NAME "NCP" SUFFIX ".EXE")
 install(TARGETS ncp_exe RUNTIME DESTINATION ${VMS_SYSTEM_DIR})

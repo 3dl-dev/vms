@@ -20,6 +20,7 @@
 #ifndef DNET_OBJECTDB_H
 #define DNET_OBJECTDB_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #define DNET_OBJECTDB_NAMEMAX  16         /* DNA object name: 1..16 chars       */
@@ -67,5 +68,12 @@ const struct dnet_object_entry *dnet_objectdb_at(const struct dnet_objectdb *db,
 
 int dnet_objectdb_save(const struct dnet_objectdb *db, const char *path);
 int dnet_objectdb_load(struct dnet_objectdb *db, const char *path);
+
+/* Record-level primitives shared with the VMS-file-layer store
+ * (dnet_ncpstore.h, rd vms-1f69) -- same contract as dnet_nodedb's twins. */
+extern const char *const DNET_OBJECTDB_HEADER[2];
+int dnet_objectdb_apply_line(struct dnet_objectdb *db, const char *line);
+int dnet_objectdb_format_entry(const struct dnet_object_entry *e, char *buf,
+                               size_t bufsz);
 
 #endif /* DNET_OBJECTDB_H */

@@ -1189,7 +1189,11 @@ uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
  * ================================================================ */
 
 /* Open a kernel AF_PACKET socket bound to `ifname`/`ethertype` (host order).
- * Requires PHY_IO -- without it, SS$_NOPRIV. On success, *out_handle gets this
+ * Requires PHY_IO -- without it, SS$_NOPRIV. `station` (NULL or all-zero = the
+ * NIC's own hwaddr) is the Ethernet SOURCE address the executive stamps on
+ * every frame sent on the handle; it must be the NIC hwaddr or a DECnet Phase
+ * IV AA-00-04-00-xx-xx address, else SS$_BADPARAM and no handle (rd vms-1f69,
+ * src/kernel/vms_l2_station.h). On success, *out_handle gets this
  * process's L2 handle, *out_ifindex the resolved interface index, and hwaddr
  * (if non-NULL) the interface's MAC. Any out param may be NULL if not wanted.
  * OVMX-UNWIRED: vms_kif_l2_open (vms-7eb) -- the raw kernel primitive + the
@@ -1202,6 +1206,7 @@ uint32_t vms_kif_bg_accept(uint32_t listen_exec_chan, uint32_t accept_exec_chan,
  * directly by tests/qemu/test_syssvc_l2_datalink.c against a real /dev/vms,
  * the same footing as vms_kif_get_resmaster above. */
 uint32_t vms_kif_l2_open(const char *ifname, uint16_t ethertype,
+                         const uint8_t station[6],
                          uint32_t *out_handle, uint32_t *out_ifindex,
                          uint8_t hwaddr[6]);
 /* Send one frame (<= VMS_L2_MAXLEN bytes) out `handle` to `dst_mac` on

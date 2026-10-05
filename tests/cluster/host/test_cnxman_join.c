@@ -1349,6 +1349,61 @@ static void test_lockdirwt_on_the_wire(void)
 			"a value outside 0..255 is not a weight: not learned");
 }
 
+/* rd vms-f29: a class-0x01 FORMATION commit, arriving before this node ever
+ * asked to be admitted, makes it a founding member: answered with the echo
+ * (class 0x01), and the join moves to ADMIT where the rest of the formation
+ * is handled. A commit of any other class in that state is not answered. */
+static uint32_t mk_class_commit(uint8_t cls, uint16_t send_msg)
+{
+	vms_wire_buf_t w;
+	uint32_t n = mk_cm(VMS_CM_CAT_CONFIG, VMS_CM_OP_COMMIT, send_msg);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le32(&w, VMS_OFF_CM_EPOCH, 3u);
+	vms_wire_put_u8(&w, VMS_OFF_CM_ROLE, VMS_CM_ROLE_COMMIT);
+	vms_wire_put_u8(&w, VMS_OFF_CM_CLASS, cls);
+	return n;
+}
+
+static void test_formation_commit_makes_a_founding_member(void)
+{
+	uint32_t before;
+
+	printf("\n-- rd vms-f29: a FORMATION commit before any request --\n");
+	bed_init();
+	bed_set_identity();
+	(void)cnxman_join_start(&g.j);
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_DIR_ROUND, "the join is in its directory round");
+	/* The member dialled this node: the glue binds its connection into the
+	 * CSB (as cnxman_jop_connect/accept do), and the ladder says OPEN. */
+	cnxman_csb_bind_connection(g.member_csb, CM_CONID);
+	g.member_csb->state = (uint8_t)VMS_CNXMAN_CSB_OPEN;
+
+	before = g.n_sent;
+	(void)join_feed(mk_class_commit(VMS_CM_CLASS_ADD, 0x0040));
+	ct_check_eq_u32(g.n_sent, before,
+			"an ADD-class commit before admission is NOT answered");
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_DIR_ROUND, "  and moves nothing");
+
+	(void)join_feed(mk_class_commit(VMS_CM_CLASS_FORM, 0x0041));
+	ct_check_eq_u32(g.j.state, CNXMAN_JOIN_ADMIT,
+			"a FORMATION commit makes this node a founding member: ADMIT");
+	ct_check_eq_u32(g.j.formations_joined, 1u, "  counted");
+	if (g.n_sent != before + 1u) {
+		ct_check(0, "  and the commit is answered (0x81/0x03)");
+		return;
+	}
+	ct_check(g.sent[g.n_sent - 1u].body[VMS_OFB_CM_CATEGORY] == 0x81u &&
+		 g.sent[g.n_sent - 1u].body[VMS_OFB_CM_OPCODE] == VMS_CM_OP_COMMIT,
+		 "  and the commit is answered (0x81/0x03)");
+	ct_check_eq_u32(g.sent[g.n_sent - 1u].body[VMS_OFB_CM_CLASS],
+			VMS_CM_CLASS_FORM,
+			"  carrying this node's own class, 0x01 (the real founding "
+			"member's answer)");
+	ct_check_eq_u32(g.sent[g.n_sent - 1u].conid, CM_CONID,
+			"  on the coordinator's own connection");
+}
+
 static void test_no_invented_connect_data_or_descriptor(void)
 {
 	printf("\n-- E24 / sec 4(N): no replayed connect data, no invented "
@@ -6242,6 +6297,7 @@ int main(void)
 	test_membrec_unusable_is_answered_not_adopted();
 	test_csid_learned_edge_exists();
 	test_lockdirwt_on_the_wire();
+	test_formation_commit_makes_a_founding_member();
 	test_no_invented_connect_data_or_descriptor();
 	test_identity_omissions_are_counted();
 	test_envelope_is_csb_state();

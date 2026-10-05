@@ -15,3 +15,11 @@ alpha-dec-vms toolchain images. Order and what each established:
    and the port's crt0/crtbegin/crtend; archive with host `ar rcS`.
 5. cxxlink4.sh + cxx1.cc -- C++ link with LINK.EXE --library (PR #1362):
    stops at %LINK-F-UNDEF SYS$GL_CALL_HANDL (rd vms-bfd03).
+
+## vms-fd1 canadian-cross probes (2026-10-05)
+- `fd1-probe.sh` -- first probe (64-bit host; superseded by the 32-bit host decision).
+- `fd1-probe32.sh` -- host=target=alpha-dec-vms at the DEC C default pointer size,
+  with the stage-2 toolchain (/out), its 32-bit libstdc++ ($X/p32) and a joint
+  DECC$SHR (/joint). Run in the ovmx-cross-alpha-vms image on the k3s rail.
+- `probe32-shim.h`, `probe-shim.h` -- PROBE-ONLY stand-ins (st_fab_rfm; early
+  vaxc$errno/getcwd/__char_ptr32) used to see past a wall. Never deliverables.

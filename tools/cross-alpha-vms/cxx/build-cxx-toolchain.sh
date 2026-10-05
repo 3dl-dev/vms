@@ -130,13 +130,14 @@ AR=ar AR_FLAGS=crS RANLIB=true \
     --disable-shared --disable-nls --disable-libstdcxx-pch --disable-multilib \
     --with-gxx-include-dir="$X/$TARGET/include/c++/$VERDIR" \
     > /tmp/cxx/lsc-configure.log 2>&1 || { tail -40 /tmp/cxx/lsc-configure.log; exit 1; }
-# Some of libstdc++'s HAVE_<function> results come from compile-only checks
-# against the CRTL headers, which declare more than DECC$SHR provides. Re-check
-# every detected C function with a real link through OVMX LINK.EXE and drop the
-# ones the OVMX C RTL does not provide, so libstdc++ uses its fallbacks instead
-# of a symbol no image can resolve.
-for m in $(grep -E '^#define HAVE_[A-Z0-9_]+ 1$' config.h | awk '{print $2}' \
-           | grep -vE '_H$|^HAVE_(ATOMIC_|C99_|DECL_|GETIPINFO|LC_|LIMIT_|MBSTATE_T)'); do
+# A few of libstdc++'s HAVE_<function> results come from compile-only checks
+# against the CRTL headers, which declare more than DECC$SHR provides. For the
+# ones libstdc++ treats as OPTIONAL (it has a fallback when they are absent),
+# re-check with a real link through OVMX LINK.EXE and drop the ones the OVMX C
+# RTL does not provide. (Functions libstdc++ uses unconditionally are left as
+# detected: a program that needs one the RTL lacks fails its link honestly.)
+for m in HAVE_STRERROR_R HAVE_STRERROR_L HAVE_STRXFRM_L HAVE_USLEEP HAVE_SLEEP HAVE_GETS; do
+    grep -qE "^#define $m 1\$" config.h || continue
     fn=$(echo "${m#HAVE_}" | tr 'A-Z' 'a-z')
     printf 'char %s(void);\nint main(void){return %s();}\n' "$fn" "$fn" > /tmp/cxx/probe.c
     if ! "$X/bin/$TARGET-gcc" -mpointer-size=64 -fno-builtin /tmp/cxx/probe.c -o /tmp/cxx/probe.exe >/dev/null 2>&1; then

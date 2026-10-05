@@ -1514,10 +1514,10 @@ static void cnxman_cluexit_clear_on_contact(struct vms_cnxman *cn);
  * LOCKMGRERR on two more. So nothing DLM leaves this node for such a system --
  * counted and logged, never silently dropped and never sent anyway.
  *
- * The Lock Directory Weight Vector's own FOREIGN refusal (vms_dlm_ldwv.h)
- * already stops the ROUTING before a frame is ever built. This is the teeth
- * under it: a gate that is only upstream is a gate that one new call site
- * bypasses.
+ * The all-OVMX gate on the Lock Directory Weight Vector (vms_ldwv_all_ovmx(),
+ * vms_dlm_ldwv.h) already stops the ROUTING before a frame is ever built. This
+ * is the teeth under it: a gate that is only upstream is a gate that one new
+ * call site bypasses.
  */
 static int cnxman_dlm_peer_proven(struct vms_cnxman *cn,
 				  const struct vms_csb *csb)
@@ -3399,7 +3399,7 @@ int vms_cnxman_start(struct vms_cluster *cl)
 	 * Nothing here is asserted that the executive does not hold: model/
 	 * version/params/dir_descriptor stay `_valid = 0` -- every one of
 	 * those fields is still an operator-reserved or lab-pinned decision
-	 * (the LOCKDIRWT/params offsets FC-P3.2, E24's directory descriptor),
+	 * (the remaining params offsets, E24's directory descriptor),
 	 * never this glue's default to invent. `conndata` is the one field
 	 * with an operator ruling behind it (E31, above): the grounded CM
 	 * protocol quad, not a default.

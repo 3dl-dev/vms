@@ -15,7 +15,9 @@
 #   2. the same archive as a plain input (whole-archive) FAILS %LINK-F-UNDEF on
 #      b.obj's unresolvable reference -- the search is genuinely selective;
 #   3. a library without a.obj FAILS %LINK-F-UNDEF on main's reference -- the
-#      search does not invent definitions.
+#      search does not invent definitions;
+#   4. pulled members take the --library position in the link order (they
+#      precede an object named after the library, as crtend.o follows -l).
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUT=$(cd "${1:?usage: $0 <joint-out-dir>}" && pwd)
@@ -30,7 +32,7 @@ docker run --rm -v "$HERE/libsearch:/ls:ro" -v "$OUT:/out" -e LINK_EXE "$IMG" ba
 set -uo pipefail
 export PATH=/opt/cross-alpha-vms/bin:$PATH
 W=/out/libsearch; rm -rf "$W"; mkdir -p "$W"; cd "$W"
-for s in main a b c; do
+for s in main a b c after; do
   alpha-dec-vms-gcc -mpointer-size=64 -g0 -c /ls/$s.c -o $s.obj || { echo "FAIL: compile $s.c"; exit 1; }
 done
 ar rcS libsearch.a a.obj b.obj c.obj
@@ -64,6 +66,17 @@ elif grep -q "LINK-F-UNDEF.*ovmx_library_search_long_routine_name_" t3.log \
   echo "  PASS (rejected: %LINK-F-UNDEF on alpha; only c.obj pulled)"
 else
   echo "  FAIL: wrong failure"; cat t3.log; fails=$((fails+1))
+fi
+
+echo "-- 4: pulled members take the --library position in link order (before a later object) --"
+OVMX_LINK_INPUT_ORDER=1 $L -o ord.exe /out/crt0.obj main.obj --library libsearch.a after.obj > t4.log 2>&1
+la=$(grep -n "LINK-I-INPUT.*libsearch.a(a.obj" t4.log | cut -d: -f1)
+lc=$(grep -n "LINK-I-INPUT.*libsearch.a(c.obj" t4.log | cut -d: -f1)
+lz=$(grep -n "LINK-I-INPUT.*after.obj" t4.log | cut -d: -f1)
+if [ -n "$la" ] && [ -n "$lc" ] && [ -n "$lz" ] && [ "$la" -lt "$lz" ] && [ "$lc" -lt "$lz" ]; then
+  echo "  PASS"
+else
+  echo "  FAIL"; grep "LINK-I-INPUT" t4.log; fails=$((fails+1))
 fi
 
 [ "$fails" -eq 0 ] && echo "LIBRARY SEARCH TEST PASS (vms-4d0)" || { echo "LIBRARY SEARCH TEST FAIL ($fails)"; exit 1; }

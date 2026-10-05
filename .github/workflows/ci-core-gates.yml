@@ -359,6 +359,9 @@ jobs:
 
       - name: Run netbsd_download.py self-tests (vms-8a8)
         run: python3 tests/netbsd/test_netbsd_download.py
+
+      - name: Run cross-vax fetch_verified.sh self-test (CI health)
+        run: python3 tools/cross-vax/test_fetch_verified.py
   # -----------------------------------------------------------------------
   # Job: aarch64 system-emulation boot proof (rd vms-f66)
   #
@@ -405,7 +408,7 @@ jobs:
           load: true
           tags: ovmx-aarch64-boot:latest
           cache-from: type=gha,scope=aarch64-boot
-          cache-to: type=gha,mode=max,scope=aarch64-boot
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=aarch64-boot' || '' }}
 
       - name: Boot arm64 kernel under qemu-system-aarch64, run OVMX EM_AARCH64 init as PID 1
         run: |
@@ -986,7 +989,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Run UAT session on the real runtime (QEMU console)
         timeout-minutes: 10

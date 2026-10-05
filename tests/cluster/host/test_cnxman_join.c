@@ -1285,31 +1285,68 @@ static void test_csid_learned_edge_exists(void)
 	ct_check_eq_u32(g.cl.club.local_csid, 0x00010003u, "... with the value");
 }
 
-static void test_lockdirwt_is_not_advertised(void)
+/* A peer PARAMS carrying a LOCKDIRWT at the offset rd vms-fcb pinned. */
+static uint32_t mk_peer_params_lockdirwt(uint16_t votes, uint16_t lockdirwt,
+					 uint16_t send_msg)
 {
-	printf("\n-- FC-P3.2: LOCKDIRWT has no pinned offset, and we say so --\n");
+	vms_wire_buf_t w;
+	uint32_t n = mk_peer_params(votes, send_msg);
+
+	vms_wire_buf_init(&w, g_frame, VMS_CM_FRAME_LEN);
+	vms_wire_put_le16(&w, VMS_OFF_CM_LOCKDIRWT, lockdirwt);
+	return n;
+}
+
+/* Every PARAMS this node put on the CM connection carries `want` at
+ * body[26:28]; returns how many PARAMS were checked (0 = vacuous). */
+static uint32_t params_sent_with_lockdirwt(uint16_t want, int *all_match)
+{
+	uint32_t i, n = 0;
+
+	*all_match = 1;
+	for (i = 0; i < n_cm_sent(); i++) {
+		if (!sent_is(i, VMS_CM_CAT_CONFIG, VMS_CM_OP_PARAMS))
+			continue;
+		n++;
+		if (sent_le16(i, VMS_OFB_CM_LOCKDIRWT) != want)
+			*all_match = 0;
+	}
+	return n;
+}
+
+static void test_lockdirwt_on_the_wire(void)
+{
+	int all = 0;
+
+	printf("\n-- rd vms-fcb: LOCKDIRWT is advertised at body[26:28] and "
+	       "learned from a peer --\n");
 	bed_init();
 	bed_set_identity();
-	g.cl.params.lockdirwt = 1;    /* a node that WANTS directory duty */
+	g.cl.params.lockdirwt = 3;    /* SYSGEN LOCKDIRWT 3 */
 	drive_to_admit();
+	ct_check(params_sent_with_lockdirwt(3u, &all) >= 1u,
+		 "at least one PARAMS went out");
+	ct_check(all, "  every one carries this node's SYSGEN LOCKDIRWT 3");
 
-	ct_check(g.j.lockdirwt_unpinned >= 1u,
-		 "every PARAMS counts the unpinned LOCKDIRWT field");
-	ct_check_eq_u32(g.j.lockdirwt_unrepresentable, 1u,
-			"a NONZERO LOCKDIRWT is reported as unrepresentable");
-	ct_check(strstr(g.fake.last_log, "LOCKDIRWT") != NULL ||
-		 g.fake.logs > 0u,
-		 "... and logged on the console");
-
-	/* And the zero case: honest, but still counted, because the bytes
-	 * agreeing with the truth is a coincidence and not a placement. */
 	bed_init();
-	bed_set_identity();
+	bed_set_identity();           /* SYSGEN LOCKDIRWT 0, the default */
 	drive_to_admit();
-	ct_check_eq_u32(g.j.lockdirwt_unrepresentable, 0u,
-			"LOCKDIRWT 0 is representable (as an omitted field)");
-	ct_check(g.j.lockdirwt_unpinned >= 1u,
-		 "... and the omission is STILL counted");
+	ct_check(params_sent_with_lockdirwt(0u, &all) >= 1u && all,
+		 "LOCKDIRWT 0 goes out as the value 0");
+
+	ct_check_eq_u32(g.member_csb->lockdirwt_valid, 0u,
+			"the member's weight is unknown before its PARAMS");
+	(void)join_feed(mk_peer_params_lockdirwt(1u, 2u, 0x0087));
+	ct_check_eq_u32(g.member_csb->lockdirwt_valid, 1u,
+			"a peer's PARAMS teaches its LOCKDIRWT");
+	ct_check_eq_u32(g.member_csb->lockdirwt, 2u, "  ... the value 2");
+	(void)join_feed(mk_peer_params_lockdirwt(1u, 0u, 0x0088));
+	ct_check_eq_u32(g.member_csb->lockdirwt, 0u,
+			"  ... and a 0 is learned as 0, not as 'unknown'");
+	ct_check_eq_u32(g.member_csb->lockdirwt_valid, 1u, "  (still valid)");
+	(void)join_feed(mk_peer_params_lockdirwt(1u, 0x0100u, 0x0089));
+	ct_check_eq_u32(g.member_csb->lockdirwt, 0u,
+			"a value outside 0..255 is not a weight: not learned");
 }
 
 static void test_no_invented_connect_data_or_descriptor(void)
@@ -6204,7 +6241,7 @@ int main(void)
 	test_membrec_readopted_on_a_new_assignment();
 	test_membrec_unusable_is_answered_not_adopted();
 	test_csid_learned_edge_exists();
-	test_lockdirwt_is_not_advertised();
+	test_lockdirwt_on_the_wire();
 	test_no_invented_connect_data_or_descriptor();
 	test_identity_omissions_are_counted();
 	test_envelope_is_csb_state();

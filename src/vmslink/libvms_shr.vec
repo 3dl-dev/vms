@@ -446,4 +446,11 @@ ovmx_vterm_delete=PROCEDURE
 sysuaf_password_expired=PROCEDURE
 sys$setcluevt=PROCEDURE
 sys$clrcluevt=PROCEDURE
+SYS$GL_CALL_HANDL=DATA
+# vms-4d0: the VMS-convention (uppercase) LIB$ invocation-context entry points
+# the GCC port's libgcc unwinder (vms-unwind.h) calls; rtl/lib_invo.c.
+LIB$GET_INVO_HANDLE=PROCEDURE
+LIB$GET_INVO_CONTEXT=PROCEDURE
+LIB$GET_PREV_INVO_CONTEXT=PROCEDURE
 vms$$chan_devnam=PROCEDURE
+||||||| ec499db9

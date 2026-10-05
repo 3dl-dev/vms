@@ -287,6 +287,60 @@ assert_invo() {
   return 1
 }
 
+assert_chf() {
+  # vms-bfd03: inside the handler, the walk met a dispatcher frame whose PV is
+  # SYS$GL_CALL_HANDL with a CHF context, then the signalling point g, f, main.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaF 'OVMX CHF dispatcher test: handler=1 disp=1 chfctx=1 sigpt=1 f=1 main=1 resumed=1 r=6 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) dispatcher frame + CHFCTX : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
+assert_cxx() {
+  # vms-4d0: the C++ image ran its static constructor, virtual dispatch,
+  # std::string/vector and a caught exception, and returned sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaF 'OVMX C++ test: ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) C++ runtime line          : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -869,6 +923,106 @@ EOF
       exit 0
     fi
     echo "FAIL: the anchorless return-to-main did not happen. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  chf-gate)
+    # vms-bfd03: SYS$GL_CALL_HANDL + the condition-dispatcher frame's CHF
+    # context, seen from inside a handler through the genuine invocation walk.
+    MILESTONE_MAIN=chf_test.c
+    export JOINT_MAIN_CFLAGS="-ffreestanding -I/src/src/libvms/include"
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export JOINT_USE_LIBVMS=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX CHF dispatcher test: handler=1 disp=1 chfctx=1 sigpt=1 f=1 main=1 resumed=1 r=6 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX CHF dispatcher test: handler=1 disp=0 chfctx=0 sigpt=0 f=0 main=0 resumed=1 r=6 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/popped.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- chf selftest 1/3: dispatcher frame, CHF context and chain all found must PASS --"
+    if assert_chf "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- chf selftest 2/3: no dispatcher frame / CHF context must FAIL --"
+    if assert_chf "$_st/popped.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- chf selftest 3/3: a crash in the walk must FAIL --"
+    if assert_chf "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "chf selftest failed -- assert_chf cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- SYS\$GL_CALL_HANDL dispatcher frame on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX CHF|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_chf "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: from inside a condition handler the genuine invocation walk found the"
+      echo "      dispatcher frame (PV == SYS\$GL_CALL_HANDL) with its CHF context, then the"
+      echo "      signalling point, f and main -- on the real OVMX/Alpha executive."
+      exit 0
+    fi
+    echo "FAIL: the dispatcher frame / CHF context was not found as required. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  cxx-gate)
+    # vms-4d0: a C++ program on OVMX/Alpha. The producer graph comes from a
+    # veneer joint build (DECC$SHR, LIBVMS$SHR for SYS$GL_CALL_HANDL, STARLET);
+    # the stage-2 C/C++ toolchain is built over it (cxx/build-cxx-toolchain.sh,
+    # reused from $OVMX_CXX_TOOLCHAIN or $GATE_ROOT/cxxtc when present); the
+    # test is compiled + linked by that g++ (ld = OVMX LINK.EXE against THIS
+    # build's shareables) and replaces the milestone image before the boot.
+    MILESTONE_MAIN=joint_main.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export JOINT_USE_LIBVMS=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX C++ test: ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX C++ test: ctor=0 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/noctor.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 6)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/abort.log"
+    echo "-- cxx selftest 1/3: ctor + virtual + string/vector + caught exception must PASS --"
+    if assert_cxx "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- cxx selftest 2/3: static constructor never ran must FAIL --"
+    if assert_cxx "$_st/noctor.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- cxx selftest 3/3: an uncaught exception (abort) must FAIL --"
+    if assert_cxx "$_st/abort.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "cxx selftest failed -- assert_cxx cannot be trusted"
+    echo ""
+    build_joint_images
+    _tc="${OVMX_CXX_TOOLCHAIN:-$GATE_ROOT/cxxtc}"
+    if [ ! -x "$_tc/cxx/bin/alpha-dec-vms-g++" ]; then
+      log "step 1c: build the stage-2 C/C++ toolchain over this build's C RTL (long: GCC + libgcc + libstdc++)"
+      mkdir -p "$_tc"
+      docker run --rm -v "$REPO:/src:ro" -v "$GATE_ROOT/joint-n3:/joint:ro" -v "$_tc:/out" "$VMS_IMG" \
+        bash /src/tools/cross-alpha-vms/cxx/build-cxx-toolchain.sh > "$GATE_ROOT/cxx-toolchain.log" 2>&1 \
+        || { tail -60 "$GATE_ROOT/cxx-toolchain.log"; die "stage-2 C/C++ toolchain build failed -- see $GATE_ROOT/cxx-toolchain.log"; }
+    fi
+    log "step 1d: compile + link cxx_test.cc with the stage-2 g++ (ld = OVMX LINK.EXE over this build's shareables)"
+    mkdir -p "$GATE_ROOT/cxximg"
+    docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$GATE_ROOT/joint-n3:/joint:ro" -v "$GATE_ROOT/cxximg:/img" \
+      -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" \
+      /out/cxx/bin/alpha-dec-vms-g++ -mpointer-size=64 -O1 -o /img/joint_e2e.exe \
+      /src/tools/cross-alpha-vms/joint-e2e/cxx_test.cc > "$GATE_ROOT/cxx-link.log" 2>&1 \
+      || { tail -40 "$GATE_ROOT/cxx-link.log"; die "C++ test did not link"; }
+    grep -E "LINK-I-LIBRARY|LINK-I-LIBINIT|LINK-S-CREATED" "$GATE_ROOT/cxx-link.log" | sed 's/^/  | /'
+    cp "$GATE_ROOT/cxximg/joint_e2e.exe" "$WORK/joint/joint_e2e.exe"
+    assemble_boot_image
+    log "step 3: BOOT A -- activate the C++ image on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX C\+\+|OVMX-SEAM:|%IMGACT|%DCL-|terminate" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_cxx "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: a C++ program -- static constructor, virtual dispatch, std::string/vector,"
+      echo "      a thrown-and-caught exception -- built by the stage-2 alpha-dec-vms g++"
+      echo "      over the OVMX C RTL ran on the real OVMX/Alpha executive (P0 image)."
+      exit 0
+    fi
+    echo "FAIL: the C++ image did not run as required. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

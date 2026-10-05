@@ -176,6 +176,10 @@ static int frame_has_caller(uint64_t pc, uint64_t fp, uint64_t sp)
  * there is no caller to produce.
  * ================================================================ */
 
+/* vms-bfd03 (lib_signal.c): the condition-dispatcher frame records. */
+void *vms$$chfctx_for_frame(uint64_t fp);
+const INVO_CONTEXT_BLK *vms$$chf_signal_context(uint64_t fp);
+
 uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
 {
     if (icb == NULL) {
@@ -188,6 +192,22 @@ uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
     uint64_t pc = icb->libicb$q_program_counter;
     uint64_t fp = icb->libicb$q_ireg[ALPHA_REG_FP];
     uint64_t sp = icb->libicb$q_ireg[ALPHA_REG_SP];
+
+#if OVMX_ALPHA_VMS_ABI
+    /* vms-bfd03: a condition-dispatcher frame (one calling a handler) is
+     * followed, outward, by the SIGNALLING POINT -- as on VMS, where the frame
+     * before SYS$CALL_HANDL's is the one that signalled: its full register
+     * state is in the dispatch record (captured by LIB$SIGNAL). */
+    {
+        const INVO_CONTEXT_BLK *sigp = vms$$chf_signal_context(fp);
+        if (sigp != NULL) {
+            *icb = *sigp;
+            icb->libicb$ph_chfctx_addr = vms$$chfctx_for_frame(
+                icb->libicb$q_ireg[ALPHA_REG_FP]);
+            return SS$_NORMAL;
+        }
+    }
+#endif
     const struct pdsc_descriptor *pd = resolve_pdsc(pc, fp);
     if (pd == NULL) {
         icb->libicb$v_bottom_of_stack = 1;
@@ -245,6 +265,10 @@ uint32_t vms$$invo_walk_prev(INVO_CONTEXT_BLK *icb)
     icb->libicb$q_ireg[ALPHA_REG_FP] = caller_fp;
     icb->libicb$q_ireg[ALPHA_REG_SP] = caller_sp;
     icb->libicb$q_stack_pointer = caller_sp;
+#if OVMX_ALPHA_VMS_ABI
+    /* vms-bfd03: a condition-dispatcher frame carries its CHF context. */
+    icb->libicb$ph_chfctx_addr = vms$$chfctx_for_frame(caller_fp);
+#endif
 
     /* Report the caller's established condition handler, if any. */
     const struct pdsc_descriptor *cpd = resolve_pdsc(caller_pc, caller_fp);
@@ -349,7 +373,14 @@ INVO_HANDLE lib$get_invo_handle(INVO_CONTEXT_BLK *icb)
     if (icb == NULL) {
         return LIBICB$K_INVO_HANDLE_NULL;
     }
+#if OVMX_ALPHA_VMS_ABI
+    /* On the Alpha runtime the handle is the frame pointer, as on OpenVMS:
+     * callers (libgcc's vms-unwind.h among them) build an ICB holding only FP
+     * and ask for its handle. */
+    return (INVO_HANDLE)icb->libicb$q_ireg[ALPHA_REG_FP];
+#else
     return (INVO_HANDLE)icb->libicb$q_ireg[ALPHA_REG_SP];
+#endif
 }
 
 /* ================================================================
@@ -485,4 +516,44 @@ int vms$$invo_transfer(const INVO_CONTEXT_BLK *icb, void *newpc)
      * that precedes this (vms$$invo_reconstruct_target) is host-proven. */
     return 0;
 #endif
+}
+
+/* ================================================================
+ * VMS-convention (uppercase) entry points -- the spellings the GCC port's
+ * libgcc unwinder (libgcc/config/alpha/vms-unwind.h, through vms/libicb.h)
+ * calls. On OpenVMS the RTL exports these names and an invocation handle is a
+ * longword (the stack lives in P1, below 2 GB). The handle here is the
+ * low-order longword of the frame pointer; with OVMX's Linux-placed user stack
+ * (above 4 GB) LIB$GET_INVO_CONTEXT matches a handle against the low longword
+ * of each frame's FP, which identifies the frame within one stack. (vms-4d0)
+ * ================================================================ */
+
+int LIB$GET_INVO_HANDLE(INVO_CONTEXT_BLK *icb)
+{
+    return (int)(uint32_t)lib$get_invo_handle(icb);
+}
+
+int LIB$GET_INVO_CONTEXT(int invo_handle, INVO_CONTEXT_BLK *icb)
+{
+    if (icb == NULL) {
+        return SS$_BADPARAM;
+    }
+    INVO_CONTEXT_BLK scratch;
+    uint32_t st = lib$get_curr_invo_context(&scratch);   /* this frame */
+    while ($VMS_STATUS_SUCCESS(st)) {
+        if ((uint32_t)lib$get_invo_handle(&scratch) == (uint32_t)invo_handle) {
+            *icb = scratch;
+            return SS$_NORMAL;
+        }
+        if (scratch.libicb$v_bottom_of_stack) {
+            break;
+        }
+        st = lib$get_prev_invo_context(&scratch);
+    }
+    return LIBICB$_NOMOREFRAMES;
+}
+
+int LIB$GET_PREV_INVO_CONTEXT(INVO_CONTEXT_BLK *icb)
+{
+    return (int)lib$get_prev_invo_context(icb);
 }

@@ -625,7 +625,7 @@ static void jbed_member_speaks(void)
 	struct vms_csb *m = cnxman_club_find_sysid(&g_b.cl.club, MEMBER_SYSID);
 
 	memset(&own, 0, sizeof(own));
-	if (vms_cm_params_build(1u, 1u, &own, body, sizeof(body), NULL) !=
+	if (vms_cm_params_build(1u, 1u, 0u, &own, body, sizeof(body), NULL) !=
 	    VMS_CODEC_OK || m == NULL)
 		return;
 	body[VMS_OFB_CM_SEND_MSG] = 2u;

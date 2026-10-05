@@ -447,8 +447,8 @@ sysuaf_password_expired=PROCEDURE
 sys$setcluevt=PROCEDURE
 sys$clrcluevt=PROCEDURE
 SYS$GL_CALL_HANDL=DATA
-LIB$GET_INVO_HANDLE/lib$get_invo_handle=PROCEDURE
-LIB$GET_INVO_CONTEXT/lib$get_invo_context=PROCEDURE
-LIB$GET_PREV_INVO_CONTEXT/lib$get_prev_invo_context=PROCEDURE
-LIB$GET_CURR_INVO_CONTEXT/lib$get_curr_invo_context=PROCEDURE
-LIB$GET_PREV_INVO_HANDLE/lib$get_prev_invo_handle=PROCEDURE
+# vms-4d0: the VMS-convention (uppercase) LIB$ invocation-context entry points
+# the GCC port's libgcc unwinder (vms-unwind.h) calls; rtl/lib_invo.c.
+LIB$GET_INVO_HANDLE=PROCEDURE
+LIB$GET_INVO_CONTEXT=PROCEDURE
+LIB$GET_PREV_INVO_CONTEXT=PROCEDURE

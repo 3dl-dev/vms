@@ -517,3 +517,43 @@ int vms$$invo_transfer(const INVO_CONTEXT_BLK *icb, void *newpc)
     return 0;
 #endif
 }
+
+/* ================================================================
+ * VMS-convention (uppercase) entry points -- the spellings the GCC port's
+ * libgcc unwinder (libgcc/config/alpha/vms-unwind.h, through vms/libicb.h)
+ * calls. On OpenVMS the RTL exports these names and an invocation handle is a
+ * longword (the stack lives in P1, below 2 GB). The handle here is the
+ * low-order longword of the frame pointer; with OVMX's Linux-placed user stack
+ * (above 4 GB) LIB$GET_INVO_CONTEXT matches a handle against the low longword
+ * of each frame's FP, which identifies the frame within one stack. (vms-4d0)
+ * ================================================================ */
+
+int LIB$GET_INVO_HANDLE(INVO_CONTEXT_BLK *icb)
+{
+    return (int)(uint32_t)lib$get_invo_handle(icb);
+}
+
+int LIB$GET_INVO_CONTEXT(int invo_handle, INVO_CONTEXT_BLK *icb)
+{
+    if (icb == NULL) {
+        return SS$_BADPARAM;
+    }
+    INVO_CONTEXT_BLK scratch;
+    uint32_t st = lib$get_curr_invo_context(&scratch);   /* this frame */
+    while ($VMS_STATUS_SUCCESS(st)) {
+        if ((uint32_t)lib$get_invo_handle(&scratch) == (uint32_t)invo_handle) {
+            *icb = scratch;
+            return SS$_NORMAL;
+        }
+        if (scratch.libicb$v_bottom_of_stack) {
+            break;
+        }
+        st = lib$get_prev_invo_context(&scratch);
+    }
+    return LIBICB$_NOMOREFRAMES;
+}
+
+int LIB$GET_PREV_INVO_CONTEXT(INVO_CONTEXT_BLK *icb)
+{
+    return (int)lib$get_prev_invo_context(icb);
+}

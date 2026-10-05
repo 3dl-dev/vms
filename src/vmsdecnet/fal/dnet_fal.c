@@ -543,6 +543,21 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
                 result = SS$_ABORT;
                 continue;
             }
+            /* OVMX RMS $CREATE does not yet fill the NAM resultant (rd
+             * vms-1b9b); when it comes back empty, the resultant is read by a
+             * real $PARSE/$SEARCH of the file just created -- never omitted:
+             * a VMS COPY that asked for NAME rejects an ACK without it
+             * (RMS-F-BUG_DAP, DAP code 0001A006 = MAC 10 sync / MIC ACK,
+             * observed against a booted OVMX 2026-10-05). */
+            if (want_name && !rsa[0] && resolve_one(spec, rsa, sizeof rsa) != 0)
+                rsa[0] = '\0';
+            if (want_name && !rsa[0]) {
+                (void)dnet_fal_wclose(h);
+                if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_CRE, 0) < 0)
+                    return SS$_ABORT;
+                result = SS$_ABORT;
+                continue;
+            }
             text_attributes(&a);
             a.u.attr.rfm = peer_rfm;
             a.u.attr.rat = peer_rat;

@@ -21,16 +21,22 @@ static int g_pass, g_fail;
 /* ---- in-memory file system standing in for RMS ---- */
 static char g_put_spec[256], g_put_data[4096]; static size_t g_put_len;
 static int g_put_closed;
+static int g_wopen_no_rsa;   /* 1 = RMS $CREATE left the NAM resultant empty */
 static const char *g_src_lines[] = { "Served by the OVMX FAL server code", "second record" };
 
+static const char *g_found;
 int dnet_fal_search_begin(const char *spec, void **ctx)
-{ static int c; if (!strstr(spec, "GREET.TXT")) return -1; c = 0; *ctx = &c; return 0; }
+{ static int c;
+  if (strstr(spec, "GREET.TXT")) g_found = "DKA0:[SRV]GREET.TXT;1";
+  else if (strstr(spec, "PUTNAME.TXT") && g_put_spec[0]) g_found = "DKA0:[SRV]PUTNAME.TXT;1";
+  else return -1;
+  c = 0; *ctx = &c; return 0; }
 int dnet_fal_search_next(void *ctx, char *rsa, size_t cap)
-{ int *c = ctx; if ((*c)++) return -1; snprintf(rsa, cap, "DKA0:[SRV]GREET.TXT;1"); return 0; }
+{ int *c = ctx; if ((*c)++) return -1; snprintf(rsa, cap, "%s", g_found); return 0; }
 void dnet_fal_search_end(void *ctx) { (void)ctx; }
 int dnet_fal_wopen(const char *spec, uint8_t rfm, uint8_t rat, void **h, char *rsa, size_t cap)
 { (void)rfm; (void)rat; snprintf(g_put_spec, sizeof g_put_spec, "%s", spec); g_put_len = 0; g_put_closed = 0;
-  if (rsa && cap) snprintf(rsa, cap, "DKA0:[SRV]%s1", spec);
+  if (rsa && cap) { if (g_wopen_no_rsa) rsa[0] = '\0'; else snprintf(rsa, cap, "DKA0:[SRV]%s1", spec); }
   *h = g_put_spec; return 0; }
 int dnet_fal_wput(void *h, const uint8_t *rec, size_t len)
 { (void)h; if (g_put_len + len + 1 > sizeof g_put_data) return -1;
@@ -83,6 +89,21 @@ int main(void)
     CHECK(g_put_closed && g_put_len == 24 && !memcmp(g_put_data, "Hello line one\nline two\n", 24),
           "both blocked DATA records stored verbatim and the file closed");
     CHECK(saw(&ps, "070002") >= 0, "END-OF-STREAM and CLOSE answered ACCESS COMPLETE(RESPONSE)");
+
+    /* 1b. Same PUT when RMS $CREATE leaves the NAM resultant empty (the booted
+     * OVMX today, rd vms-98e): NAME must still precede ACK, read by a real
+     * search of the created file. NEGCTL: without the search the reply was
+     * ATTRIBUTES, ACK and the real VAX failed RMS-F-BUG_DAP 0001A006. */
+    g_wopen_no_rsa = 1; g_put_spec[0] = '\0';
+    static struct script ps2; memset(&ps2, 0, sizeof ps2); ps2.in = put_in; ps2.nin = 5;
+    t.ctx = &ps2; t.rxlen = t.rxoff = 0;
+    st = dnet_fal_server_run(&t);
+    i_att = saw(&ps2, "0200"); i_name = saw(&ps2, "0f0001"); i_ack = saw(&ps2, "0600");
+    CHECK(st == 1 && i_att >= 0 && i_name > i_att && i_ack > i_name,
+          "empty $CREATE resultant: NAME (from $SEARCH) still precedes ACK");
+    CHECK(i_name >= 0 && strstr(ps2.out[i_name], "5055544e414d452e5458543b31") != NULL,
+          "the NAME carries the searched resultant PUTNAME.TXT;1");
+    g_wopen_no_rsa = 0;
 
     /* 2. VMS COPY OVMX -> local: link 1 = DIRECTORY LIST, link 2 = OPEN + GET. */
     static const char *dir_in[] = {

@@ -192,7 +192,10 @@ perl -pi -e 's/^(\t-test -f tmp-cxx11-ios_failure-lt)\.o( && mv -f tmp-cxx11-ios
 grep -q 'tmp-cxx11-ios_failure-lt.obj' src/c++11/Makefile || { echo "FAIL: ios_failure rule patch (p32)"; exit 1; }
 make -j"$JOBS" > /tmp/cxx/lsc32-make.log 2>&1 || { grep -E 'error' /tmp/cxx/lsc32-make.log | head -20; exit 1; }
 make install > /dev/null
-P32LIB=$(ls -d "$X/p32/lib" "$X/p32/$TARGET/lib" 2>/dev/null | while read d; do [ -f "$d/libstdc++.a" ] && echo "$d"; done | head -1)
+P32LIB=""
+for d in "$X/p32/lib" "$X/p32/$TARGET/lib"; do
+    [ -f "$d/libstdc++.a" ] && { P32LIB=$d; break; }
+done
 [ -n "$P32LIB" ] || { echo "FAIL: 32-bit libstdc++.a not installed under $X/p32"; exit 1; }
 [ "$P32LIB" = "$X/p32/lib" ] || { mkdir -p "$X/p32/lib"; cp "$P32LIB"/lib*.a "$X/p32/lib/"; }
 cd /tmp/cxx

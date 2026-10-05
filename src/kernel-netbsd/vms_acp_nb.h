@@ -212,9 +212,9 @@ struct vms_acp_acpcontrol_args {
  * layout + the sizeof==344 hold identically on ILP32 and LP64). See vms_acp.h
  * for the FIB/ATR role documentation; retire this twin per vms-02b.
  */
-#define VMS_ACP_FOP_CREATE   9u    /* IO$_CREATE */
-#define VMS_ACP_FOP_DELETE   3u    /* IO$_DELETE */
-#define VMS_ACP_FOP_MODIFY   6u    /* IO$_MODIFY */
+#define VMS_ACP_FOP_CREATE   51u   /* IO$_CREATE */
+#define VMS_ACP_FOP_DELETE   53u   /* IO$_DELETE */
+#define VMS_ACP_FOP_MODIFY   54u   /* IO$_MODIFY */
 #define VMS_ACP_M_CREATE     0x0001u  /* IO$M_CREATE: enter the file in a directory */
 #define VMS_ACP_M_ACCESS     0x0002u  /* IO$M_ACCESS: also access it (build a window) */
 #define VMS_ACP_M_DELETE     0x0004u  /* IO$M_DELETE: also delete the file (dealloc) */

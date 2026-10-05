@@ -152,6 +152,11 @@ long dnet_cterm_host_read(struct dnet_cterm_host_session *hs,
 long dnet_cterm_host_write(struct dnet_cterm_host_session *hs,
                            const uint8_t *buf, size_t len);
 
+/* 1 if the session terminal currently echoes typed input, 0 if the session
+ * turned echo off (LOGINOUT's Password: read). The CTERM host turns that into
+ * a no-echo Start Read; the remote server does the echoing (rd vms-a70). */
+int dnet_cterm_host_echo(const struct dnet_cterm_host_session *hs);
+
 /* The substrate channel to poll(), or -1. The ONE substrate detail a caller
  * needs, and the caller may do nothing with it but wait on it. */
 int dnet_cterm_host_fd(const struct dnet_cterm_host_session *hs);

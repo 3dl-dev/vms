@@ -28,13 +28,13 @@ extern "C" {
  * returned by the security server.
  * ================================================================ */
 
-#define CIA$M_NETWORK       0x0001  /* Network-based intrusion attempt */
-#define CIA$M_TERMINAL      0x0002  /* Terminal-based intrusion attempt */
-#define CIA$M_USERNAME      0x0004  /* Username-based intrusion attempt */
+#define CIA$M_NETWORK       0x4  /* Network-based intrusion attempt */
+#define CIA$M_TERMINAL      0x10  /* Terminal-based intrusion attempt */
+#define CIA$M_USERNAME      0x20  /* Username-based intrusion attempt */
 #define CIA$M_TERM_USER     0x0008  /* Terminal+username combined entry */
 
-#define CIA$M_INTRUDER      0x0100  /* Entry is classified as intruder */
-#define CIA$M_SUSPECT       0x0200  /* Entry is classified as suspect */
+#define CIA$M_INTRUDER      0x1  /* Entry is classified as intruder */
+#define CIA$M_SUSPECT       0x2  /* Entry is classified as suspect */
 
 /* ================================================================
  * CIA$C_ — Breakin record context codes

@@ -126,15 +126,15 @@ static void build_scenario_a(struct pdsc_descriptor *pd_c,
     mem[301] = 0;
 
     memset(pd_c, 0, sizeof(*pd_c));
-    pd_c->pdsc$w_flags    = PDSC$K_KIND_FP_STACK | PDSC$V_BASE_REG_IS_FP;
+    pd_c->pdsc$w_flags    = PDSC$K_KIND_FP_STACK | PDSC$M_BASE_REG_IS_FP;
     pd_c->pdsc$w_rsa_offset = 0;
     pd_c->pdsc$l_size     = 80;
     pd_c->pdsc$l_ireg_mask = (1u << ALPHA_REG_FP);
     pd_c->pdsc$q_entry    = PC_C;
 
     memset(pd_b, 0, sizeof(*pd_b));
-    pd_b->pdsc$w_flags    = PDSC$K_KIND_FP_STACK | PDSC$V_BASE_REG_IS_FP
-                          | PDSC$V_HANDLER_VALID;
+    pd_b->pdsc$w_flags    = PDSC$K_KIND_FP_STACK | PDSC$M_BASE_REG_IS_FP
+                          | PDSC$M_HANDLER_VALID;
     pd_b->pdsc$w_rsa_offset = 0;
     pd_b->pdsc$l_size     = 80;
     pd_b->pdsc$l_ireg_mask = (1u << ALPHA_REG_FP);
@@ -142,7 +142,7 @@ static void build_scenario_a(struct pdsc_descriptor *pd_c,
     pd_b->pdsc$q_handler  = (uint64_t)(uintptr_t)&b_handler_token;
 
     memset(pd_main, 0, sizeof(*pd_main));
-    pd_main->pdsc$w_flags    = PDSC$K_KIND_FP_STACK | PDSC$V_BASE_REG_IS_FP;
+    pd_main->pdsc$w_flags    = PDSC$K_KIND_FP_STACK | PDSC$M_BASE_REG_IS_FP;
     pd_main->pdsc$w_rsa_offset = 0;
     pd_main->pdsc$l_size     = 80;
     pd_main->pdsc$l_ireg_mask = (1u << ALPHA_REG_FP);
@@ -184,7 +184,7 @@ static void test_stack_walk(void)
     check(icb.libicb$q_ireg[ALPHA_REG_FP] == fp_b,
           "frame 1 FP (R29) restored from C's RSA");
     check(icb.libicb$v_handler_present == 1,
-          "frame 1 reports an established handler (PDSC$V_HANDLER_VALID)");
+          "frame 1 reports an established handler (PDSC$M_HANDLER_VALID)");
     check(icb.libicb$v_bottom_of_stack == 0, "frame 1 is not bottom of stack");
     INVO_HANDLE h_b = lib$get_invo_handle(&icb);
 
@@ -285,7 +285,7 @@ static void test_register_frame_hop(void)
     pd_l.pdsc$q_entry   = PC_L;
 
     memset(&pd_p, 0, sizeof(pd_p));
-    pd_p.pdsc$w_flags    = PDSC$K_KIND_FP_STACK | PDSC$V_BASE_REG_IS_FP;
+    pd_p.pdsc$w_flags    = PDSC$K_KIND_FP_STACK | PDSC$M_BASE_REG_IS_FP;
     pd_p.pdsc$w_rsa_offset = 0;
     pd_p.pdsc$l_size     = 80;
     pd_p.pdsc$l_ireg_mask = (1u << ALPHA_REG_FP);

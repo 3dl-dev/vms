@@ -24,9 +24,9 @@ extern "C" {
  * the desired CPU state transition.
  * ================================================================ */
 
-#define CST$K_CPU_START         1   /* Start (bring into active set) a CPU */
-#define CST$K_CPU_STOP          2   /* Stop (remove from active set) a CPU */
-#define CST$K_CPU_HOLD          3   /* Hold a CPU at IPL 31 */
+#define CST$K_CPU_START         3   /* Start (bring into active set) a CPU */
+#define CST$K_CPU_STOP          1   /* Stop (remove from active set) a CPU */
+#define CST$K_CPU_HOLD          100 /* [OVMX] hold a CPU at IPL 31 (not in V8.4 $CSTDEF) */
 #define CST$K_CPU_RELEASE       4   /* Release a held CPU */
 
 /* ================================================================

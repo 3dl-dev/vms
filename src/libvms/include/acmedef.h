@@ -58,9 +58,9 @@ extern "C" {
  * ================================================================ */
 
 #define ACME$_PWDINHISTORY    122332594   /* facility 24, msgnum 1, severity ERROR(2) */
-#define ACME$_AUTHFAILURE     1572882   /* facility 24, msgnum 2, severity ERROR(2) */
+#define ACME$_AUTHFAILURE     122332690   /* facility 24, msgnum 2, severity ERROR(2) */
 #define ACME$_PWDTOOSHORT     122332610   /* facility 24, msgnum 3, severity ERROR(2) */
-#define ACME$_INVNEWPWD       1572898   /* facility 24, msgnum 4, severity ERROR(2) */
+#define ACME$_INVNEWPWD       122332722   /* facility 24, msgnum 4, severity ERROR(2) */
 
 /* ================================================================
  * ACMESB — ACME status block

@@ -25,9 +25,9 @@ extern "C" {
  * returned via the "old_setting" output argument.
  * ================================================================ */
 
-#define POWER$C_HIGH_PERF   1   /* High performance mode */
-#define POWER$C_LOW_POWER   2   /* Low power / energy saving mode */
-#define POWER$C_EFFICIENCY  3   /* Balanced efficiency mode */
+#define POWER$C_HIGH_PERF   0   /* High performance mode */
+#define POWER$C_LOW_POWER   1   /* Low power / energy saving mode */
+#define POWER$C_EFFICIENCY  2   /* Balanced efficiency mode */
 
 #ifdef __cplusplus
 }

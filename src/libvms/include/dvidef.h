@@ -77,7 +77,7 @@ extern "C" {
 #define DVI$_LOCKID             0x00EA  /* Lock ID for device (L) */
 
 /* Multipath */
-#define DVI$_AVAILABLE_PATH_COUNT 0x0050 /* Number of available paths (L) */
+#define DVI$_AVAILABLE_PATH_COUNT 0x1A6 /* Number of available paths (L) */
 #define DVI$_PATH_COUNT         0x0051  /* Total path count (L) */
 
 /* Media / label */

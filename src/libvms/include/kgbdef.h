@@ -29,10 +29,10 @@ extern "C" {
  * rights identifier.
  * ================================================================ */
 
-#define KGB$M_DYNAMIC       0x00000001  /* Dynamic identifier (can be granted) */
-#define KGB$M_NOACCESS      0x00000002  /* No access — subsystem use */
-#define KGB$M_RESOURCE      0x00000004  /* Resource identifier */
-#define KGB$M_HOLDER_HIDDEN 0x00000008  /* Holders are hidden */
+#define KGB$M_DYNAMIC       0x2  /* Dynamic identifier (can be granted) */
+#define KGB$M_NOACCESS      0x4  /* No access — subsystem use */
+#define KGB$M_RESOURCE      0x1  /* Resource identifier */
+#define KGB$M_HOLDER_HIDDEN 0x20  /* Holders are hidden */
 
 /* ================================================================
  * KGB$C_ — Identifier type codes

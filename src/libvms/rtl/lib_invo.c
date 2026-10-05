@@ -523,9 +523,11 @@ int vms$$invo_transfer(const INVO_CONTEXT_BLK *icb, void *newpc)
  * libgcc unwinder (libgcc/config/alpha/vms-unwind.h, through vms/libicb.h)
  * calls. On OpenVMS the RTL exports these names and an invocation handle is a
  * longword (the stack lives in P1, below 2 GB). The handle here is the
- * low-order longword of the frame pointer; with OVMX's Linux-placed user stack
- * (above 4 GB) LIB$GET_INVO_CONTEXT matches a handle against the low longword
- * of each frame's FP, which identifies the frame within one stack. (vms-4d0)
+ * low-order longword of the frame pointer. IMGACT runs an image on a user stack
+ * in P1 (vms-ce5), so for the image's own frames that longword IS the frame
+ * pointer; LIB$GET_INVO_CONTEXT matches a handle against the low longword of
+ * each frame's FP, which also identifies a frame on any other single stack.
+ * (vms-4d0)
  * ================================================================ */
 
 int LIB$GET_INVO_HANDLE(INVO_CONTEXT_BLK *icb)

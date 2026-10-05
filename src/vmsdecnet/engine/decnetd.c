@@ -3210,6 +3210,7 @@ struct falp_pump {
     struct dnet_fal_proc *fp;
     volatile int stop;
     uint32_t exit_status; int got_exit;
+    int server_lost;          /* the server died/hung without EXIT */
 };
 
 static void *falp_pump_thread(void *v)
@@ -3217,7 +3218,18 @@ static void *falp_pump_thread(void *v)
     struct falp_pump *pp = v;
     uint8_t rxbuf[DNET_FRAME_MAX], reply[DNET_FRAME_MAX], seg[DNET_FAL_SEG_MAX];
     int idle_after_exit = 0;
+    unsigned iter = 0;
     while (!pp->stop) {
+        /* Never hang the caller: a server process that died (or never got
+         * its image running) without reporting EXIT ends the session -- the
+         * shutdown unblocks the client's read with EOF -- and so does a hard
+         * deadline (~60 s of 10 ms polls). */
+        if ((++iter % 50) == 0 && !pp->got_exit &&
+            (!dnet_fal_proc_alive(pp->fp) || iter > 6000)) {
+            pp->server_lost = 1;
+            shutdown(pp->fd, SHUT_RDWR);
+            break;
+        }
         struct pollfd pfd = { pp->fd, POLLIN, 0 };
         if (poll(&pfd, 1, 10) > 0 && (pfd.revents & POLLIN)) {
             ssize_t n = read(pp->fd, rxbuf, sizeof rxbuf);
@@ -3299,7 +3311,7 @@ static uint32_t falp_session(const char *user, const char *pw, int is_get,
         dnet_fal_proc_close(&fp); goto out;
     }
 
-    struct falp_pump pp = { &R, sv[1], &tick, &fp, 0, 0, 0 };
+    struct falp_pump pp = { &R, sv[1], &tick, &fp, 0, 0, 0, 0 };
     pthread_t th;
     pthread_create(&th, NULL, falp_pump_thread, &pp);
     struct fal_xport cxp = { &L, sv[0], sv[0], &tick };
@@ -3340,6 +3352,12 @@ static int run_fal_proc_accept_test(void)
     printf("DECNETD-I-FALPROC, inbound FAL access runs in a FAL.EXE server process"
            " with the AUTHENTICATED user's UIC + privileges, never NETACP's"
            " (rd vms-d85, R4 G3)\n");
+    if (!dnet_fal_proc_image_present()) {
+        printf("DECNETD-I-FALPROC-NOIMAGE, SYS$SYSTEM:FAL.EXE is not on this system disk:"
+               " no FAL server process can be created, so the persona proof cannot run here\n");
+        printf("DECNETD-FAL-PROC-ACCEPT: NOIMAGE\n");
+        return 1;
+    }
     int pass = 0, fail = 0;
 #define FP_CHECK(c, msg) do { if (c) { pass++; printf("  PASS: %s\n", msg); } \
     else { fail++; printf("  FAIL: %s\n", msg); } } while (0)

@@ -42,9 +42,20 @@ static int fal_image_path(char *out, size_t outsz)
     if (out[0] == '\0')
         return 0;
     if (ovmx_boot_stage_exec_path(out, staged, sizeof(staged)) &&
-        access(staged, X_OK) == 0)
+        access(staged, X_OK) == 0) {
         snprintf(out, outsz, "%s", staged);
-    return 1;
+        return 1;
+    }
+    /* No runnable FAL.EXE: refuse here, honestly (SS$_NOSUCHFILE), rather
+     * than $CREPRC a server whose image activation then fails after the
+     * creation already reported success -- a server that never answers. */
+    return access(out, X_OK) == 0 ? 1 : 0;
+}
+
+int dnet_fal_proc_image_present(void)
+{
+    char img[512];
+    return fal_image_path(img, sizeof img);
 }
 
 static int put_rec(uint32_t ch, uint8_t type, const void *p, size_t n)

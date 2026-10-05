@@ -1132,7 +1132,10 @@ run_dcl_acceptance_battery() {
     send 'DNETACC --fal-proc-accept-test'
     if wait_for 'IVIMAGE' 15 "$FALP_OFF"; then
         note "FAL persona [vms-d85]: SYS\$SYSTEM:DECNETD.EXE is not on THIS runtime's system disk, so the FAL server-process persona proof DID NOT RUN here (hard gate on the rails that ship the image)"
-    elif wait_for 'DECNETD-FAL-PROC-ACCEPT:' 240 "$FALP_OFF"; then
+    elif wait_for 'DECNETD-FAL-PROC-ACCEPT:' 240 "$FALP_OFF" &&
+         tail -c "+$((FALP_OFF + 1))" "$LOG" | grep -q 'DECNETD-FAL-PROC-ACCEPT: NOIMAGE'; then
+        note "FAL persona [vms-d85]: SYS\$SYSTEM:FAL.EXE is not on THIS runtime's system disk (the VAX/Alpha staging follow-on), so the FAL server-process persona proof DID NOT RUN here"
+    elif tail -c "+$((FALP_OFF + 1))" "$LOG" | grep -q 'DECNETD-FAL-PROC-ACCEPT:'; then
         local FALPSEG; FALPSEG=$(tail -c "+$((FALP_OFF + 1))" "$LOG" | tr -d '\r')
         must_have "$FALPSEG" 'DECNETD-FAL-PROC-ACCEPT: PASS' \
             "FAL persona [vms-d85]: the inbound FAL access ran in a FAL.EXE server process with the authenticated user's identity (one PASS/FAIL line per assertion above this verdict)"

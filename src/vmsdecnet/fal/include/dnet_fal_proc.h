@@ -88,6 +88,9 @@ uint32_t dnet_fal_proc_start(struct dnet_fal_proc *p, uint32_t uic,
                              uint64_t def_privs, const char *username,
                              const char *default_dir);
 
+/* Is a runnable SYS$SYSTEM:FAL.EXE on this system disk? 1 / 0. */
+int dnet_fal_proc_image_present(void);
+
 /* Hand one received NSP data segment to the server. 0 / -1. */
 int dnet_fal_proc_put(struct dnet_fal_proc *p, const uint8_t *seg, size_t len);
 

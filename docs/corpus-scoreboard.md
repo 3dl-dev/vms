@@ -11,7 +11,7 @@ including the programs that do not run and why.
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
 | host (gcc container, no executive) | 109 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 138 | 140 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| **runtime (guest, live /dev/vms)** | 140 | 142 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
 **Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **139 of 229**.
 
@@ -135,4 +135,4 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `tier6-cmatrix` | not-running | needs a terminal-screen library (curses/SMG$) OVMX does not provide, and an autoconf config.h |
 | `tier6-ipc-benchmark` | not-running | the IPC bodies compile; the VMS shims need the DEC C RTL feature switches (unixlib.h decc$feature_*, LIB$INITIALIZE psect) which DECC$SHR does not carry |
 | `tier6-laxdriver` | not-running | a VMS device driver (DPT/DDT, driver prologue tables), not an application; needs a VMS driver loading environment OVMX does not have (vms-df4) |
-| `tier6-memtester` | not-running | compiles; not yet wired into the guest corpus runner (needs argv and multi-file targets) |
+| `tier6-memtester` | running | memtester (3 sources, args "1 1") runs to completion in the guest under a live /dev/vms (tests/qemu/corpus_runtime_apps.txt); counted in the runtime column |

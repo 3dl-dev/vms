@@ -1,7 +1,7 @@
 {
- "total": 140,
+ "total": 142,
  "summary": {
-  "run-pass": 138,
+  "run-pass": 140,
   "run-fail": 1,
   "run-crash": 1,
   "vm-crash": 0,
@@ -500,6 +500,11 @@
    "signaled": false
   },
   {
+   "name": "sys_asctoid",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
    "name": "sys_assign",
    "status": "run-pass",
    "signaled": false
@@ -708,8 +713,13 @@
    "name": "sys_trnlnm",
    "status": "run-pass",
    "signaled": false
+  },
+  {
+   "name": "memtester",
+   "status": "run-pass",
+   "signaled": false
   }
  ],
- "timestamp": "2026-10-05T00:11:15Z",
+ "timestamp": "2026-10-05T01:49:07Z",
  "note": "Runtime column: tier-1 programs run in the QEMU guest under a live vms.ko (OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh). Taken from the CI runner (the reference environment); re-derive with tests/qemu/corpus_runtime_report.sh; raise the floor only from a real run. sys_forcex is timing-dependent (5s sleeps around a subprocess) and passed on a local KVM guest but not on the CI runner: it is held at its CI verdict until rd vms-f45 (test-flaky) is fixed."
 }

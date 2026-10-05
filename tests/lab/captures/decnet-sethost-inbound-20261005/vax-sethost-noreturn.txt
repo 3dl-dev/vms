@@ -1,0 +1,5 @@
+$ SET HOST 0
+
+VAX/VMS V7.3      node VAX1
+
+Username:

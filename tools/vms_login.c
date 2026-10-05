@@ -559,13 +559,24 @@ static void start_session(const sysuaf_record_t *rec, unsigned login_failures)
  * file on stdin -- has NEITHER, so it still skips the wake and does not lose
  * its first input line to it, exactly as before.
  */
+/*
+ * REMOTE TERMINALS GET NO WAKE (vms-a70). A session on a network virtual
+ * terminal -- RTAn: (DECnet CTERM, SET HOST) or NVAn: -- was created BECAUSE a
+ * remote user connected: the peer's SET HOST is the unsolicited input that
+ * started it, so VMS LOGINOUT displays the announcement and "Username:" at
+ * once (oracle: tests/lab/captures/decnet-sethost-inbound-20261005/
+ * vax-sethost-noreturn.txt -- a real VAX V7.3 SET HOST 0 prompts with no
+ * RETURN struck). Holding it for a RETURN made a real VAX SET HOST to a booted
+ * OVMX sit silent until the user struck a key. The predicate is
+ * loginout_terminal_is_remote() (tools/loginout_display.c, unit-tested).
+ */
 static int loginout_at_operator_terminal(void)
 {
     struct vms_procinfo pi;
 
     memset(&pi, 0, sizeof(pi));
     if ((vms_kif_getjpi_self(&pi) & 1) && pi.terminal[0] != '\0')
-        return 1;
+        return loginout_terminal_is_remote(pi.terminal) ? 0 : 1;
 
     return isatty(STDIN_FILENO) ? 1 : 0;
 }

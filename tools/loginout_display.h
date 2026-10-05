@@ -123,4 +123,14 @@ void loginout_display_system_identification(FILE *out,
                                             const char *version,
                                             const char *badge);
 
+/*
+ * loginout_terminal_is_remote - is `term' (a $GETJPI terminal name, possibly
+ * with a leading '_' and a node prefix such as "OVMXC$RTA1:") a network
+ * virtual terminal -- RTAn: (DECnet CTERM / SET HOST) or NVAn:? LOGINOUT gives
+ * such a session no operator-console RETURN wake: the remote connect IS the
+ * unsolicited input, and VMS prompts at once (vms-a70; oracle
+ * tests/lab/captures/decnet-sethost-inbound-20261005/vax-sethost-noreturn.txt).
+ */
+int loginout_terminal_is_remote(const char *term);
+
 #endif /* LOGINOUT_DISPLAY_H */

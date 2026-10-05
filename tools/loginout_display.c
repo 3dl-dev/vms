@@ -6,6 +6,8 @@
 
 #include "loginout_display.h"
 
+#include <string.h>
+
 /* VMS three-letter month abbreviations (upper case), as they appear in the
  * OpenVMS standard absolute date-time format. */
 static const char *const loginout_months[] = {
@@ -98,4 +100,17 @@ void loginout_display_system_identification(FILE *out,
     if (badge && badge[0])
         fprintf(out, " (%s)", badge);
     fputs("\n\n", out);
+}
+
+int loginout_terminal_is_remote(const char *term)
+{
+    const char *d;
+
+    if (term == NULL)
+        return 0;
+    d = strrchr(term, '$');
+    d = d ? d + 1 : term;
+    while (*d == '_')
+        d++;
+    return (strncmp(d, "RTA", 3) == 0 || strncmp(d, "NVA", 3) == 0) ? 1 : 0;
 }

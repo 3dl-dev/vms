@@ -303,8 +303,12 @@ EXTRA_OBJS=""
 JOINT_EXTRA=${JOINT_EXTRA:-}
 for _e in $JOINT_EXTRA; do
     _obj="$OUT/${_e%.c}.obj"
-    echo "-- compiling extra $_obj from $_e (cross cc1, -mpointer-size=64) --"
-    "$ALPHA_CC" -mpointer-size=64 -g0 -c "/joint/$_e" -o "$_obj"
+    # vms-43c: a *_p32.c extra is compiled with the DEFAULT (32-bit) pointer
+    # size, like port code that never asks for 64-bit pointers -- its pointer
+    # initializers are longwords (e.g. LIB$INITIALIZE entries).
+    _psz="-mpointer-size=64"; case "$_e" in *_p32.c) _psz="" ;; esac
+    echo "-- compiling extra $_obj from $_e (cross cc1, ${_psz:-32-bit pointers}) --"
+    "$ALPHA_CC" $_psz -g0 -c "/joint/$_e" -o "$_obj"
     EXTRA_OBJS="$EXTRA_OBJS $_obj"
 done
 
@@ -330,12 +334,19 @@ done
 # this is inert -- no extra --use flag -- when the veneer is not opted in).
 RMS_USE_FLAG=""
 [ -n "$RMS" ] && RMS_USE_FLAG="--use $RMS"
+# vms-43c: OVMX STARLET -- the object library every image is searched against,
+# as OpenVMS LINK searches SYS$LIBRARY:STARLET.OLB. Today it carries the
+# LIB$INITIALIZE dispatcher (src/vmslink/starlet/lib_initialize.c); library
+# search pulls it only into an image that references LIB$INITIALIZE.
+"$ALPHA_CC" -mpointer-size=64 -g0 -c /src/src/vmslink/starlet/lib_initialize.c -o "$OUT/lib_initialize.obj"
+rm -f "$OUT/STARLET.a"; ar rcS "$OUT/STARLET.a" "$OUT/lib_initialize.obj"
 # vms-035: LINK.EXE links an EVAX executable at the OpenVMS Alpha P0 base 0x10000
 # by default (ET_EXEC; IMGACT then places the shareables in P0 above it).
 # JOINT_LINK_BASE overrides it (0 = the relocatable ET_DYN form).
 "$WORK/LINK.EXE" --transfer __main ${JOINT_LINK_BASE:+--base $JOINT_LINK_BASE} \
     --use "$WORK/DECC\$SHR.EXE" $RMS_USE_FLAG --use "$WORK/libots/LIBOTS_SHR.EXE" \
-    -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj" $EXTRA_OBJS
+    -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj" $EXTRA_OBJS \
+    --library "$OUT/STARLET.a"
 
 cp "$WORK/LINK.EXE" "$WORK/DECC\$SHR.EXE" "$WORK/libots/LIBOTS_SHR.EXE" "$OUT/"
 # vms-2655: LIBVMSRMS$SHR.EXE was already built directly into $OUT (above), so

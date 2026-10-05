@@ -4501,8 +4501,12 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             {".init_array",    "init_array",    0,0,0},
             {".fini_array",    "fini_array",    0,0,0},
             {".preinit_array", "preinit_array", 0,0,0},
+            /* vms-43c: the LIB$INITIALIZE psect -- every object's longword
+             * initialization-routine entries, concatenated in link order. The
+             * OVMX LIB$INITIALIZE dispatcher (STARLET) walks [start, end). */
+            {"LIB$INITIALIZE", "LIB$INITIALIZE", 0,0,0},
         };
-    for (int a = 0; a < 3; a++)
+    for (int a = 0; a < 4; a++)
         for (int k = 0; k < nos; k++)
             if ((!strcmp(osec[k].name, ld_arr[a].sec) ||
                  !strcmp(osec[k].name, ld_arr[a].alt)) && osec[k].size) {
@@ -4518,6 +4522,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         { "__fini_array_end",      ld_arr[1].e, ld_arr[1].placed },
         { "__preinit_array_start", ld_arr[2].s, ld_arr[2].placed },
         { "__preinit_array_end",   ld_arr[2].e, ld_arr[2].placed },
+        { "ovmx$lib_initialize_start", ld_arr[3].s, ld_arr[3].placed },
+        { "ovmx$lib_initialize_end",   ld_arr[3].e, ld_arr[3].placed },
         { "_DYNAMIC",              0,           0                 },
     };
     const int n_ldsyms = (int)(sizeof ldsyms / sizeof ldsyms[0]);
@@ -4526,7 +4532,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
      * psects, inside the loaded range, so IMGACT / a --use consumer reads them by
      * section vaddr. Resolution happens HERE (after placement) so every psect
      * base is final -- exactly when the transfer address is resolved. */
-    uint64_t transfer_va = 0;
+    uint64_t transfer_va = 0, libinit_va = 0;
     uint32_t xfer_count = 1;
     uint64_t xfer_addr = 0, xfer_size = 0;
     uint64_t off_sv = 0, sv_size = 0, sv_names_o = 0;
@@ -4540,6 +4546,21 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         if (evax_find_sym(in, nin, transfer, &di, &ds) < 0)
             die("--transfer symbol is not defined by any input object");
         transfer_va = evax_sym_value_addr(in, di, ds);
+
+        /* vms-43c: an image that links the LIB$INITIALIZE dispatcher (pulled
+         * in by any object referencing LIB$INITIALIZE -- the port's crtbegin/
+         * crtend do) starts there: OpenVMS LINK puts LIB$INITIALIZE ahead of
+         * the main transfer address in the transfer vector, so the activator
+         * calls it first and it runs the LIB$INITIALIZE psect's routines before
+         * calling main. Its longword entries need P0 addresses. */
+        int li_i; const struct evax_symbol *li_s;
+        if (evax_find_sym(in, nin, "LIB$INITIALIZE", &li_i, &li_s) == 0 && li_s->is_proc) {
+            if (!g_evax_vbase)
+                die("LIB$INITIALIZE needs a P0 image (its longword entries cannot "
+                    "hold relocatable addresses; drop --base 0)");
+            libinit_va = evax_sym_value_addr(in, li_i, li_s);
+            xfer_count = 2;
+        }
 
         xfer_size = sizeof(struct ovmx_xfer_header) + (uint64_t)xfer_count * 8;
         cur = ALIGN_UP(cur, 8);
@@ -4802,7 +4823,11 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         putl32(img + xfer_addr + 4,  xh.flavor);
         putl32(img + xfer_addr + 8,  xh.count);
         putl32(img + xfer_addr + 12, xh.reserved);
-        putl64(img + xfer_addr + 16, transfer_va);   /* entry[0] = main transfer */
+        if (xfer_count == 2) {
+            putl64(img + xfer_addr + 16, libinit_va);   /* entry[0] = LIB$INITIALIZE */
+            putl64(img + xfer_addr + 24, transfer_va);  /* entry[1] = main transfer  */
+        } else
+            putl64(img + xfer_addr + 16, transfer_va);  /* entry[0] = main transfer  */
     } else {
         /* .vms$sv: the SAME ovmx_sv_header + entry layout + name blob the ELF
          * emit_shareable stamps -- byte-compatible so IMGACT, the cross-image
@@ -4894,8 +4919,16 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                 osec[k].name, (unsigned long long)osec[k].addr,
                 (unsigned long long)osec[k].size);
     if (!is_shareable)
+    {
         fprintf(stderr, "%%LINK-I-XFER, transfer '%s' -> image-relative 0x%llx\n",
                 transfer, (unsigned long long)transfer_va);
+        if (xfer_count == 2)
+            fprintf(stderr, "%%LINK-I-LIBINIT, LIB$INITIALIZE first in the transfer "
+                    "vector (0x%llx); %llu byte%s of LIB$INITIALIZE entries\n",
+                    (unsigned long long)libinit_va,
+                    (unsigned long long)(ld_arr[3].e - ld_arr[3].s),
+                    ld_arr[3].e - ld_arr[3].s == 1 ? "" : "s");
+    }
     else {
         fprintf(stderr, "%%LINK-I-SYMVEC, .vms$sv at 0x%llx, %d universal%s, "
                 "GSMATCH kind=%u %u.%u\n",

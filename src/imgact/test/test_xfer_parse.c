@@ -66,6 +66,7 @@ int main(void)
         CHECK(xi.flavor == OVMX_ACT_VMS_STD, "VMS_STD one-entry: flavor VMS_STD");
         CHECK(xi.count == 1, "VMS_STD one-entry: count 1");
         CHECK(xi.main_off == 0x1234, "VMS_STD one-entry: main_off == entry");
+        CHECK(xi.first_off == 0x1234, "VMS_STD one-entry: first_off == main (no LIB$INITIALIZE)");
     }
 
     /* (1b) Multi-entry: main_off is the LAST (LIB$INITIALIZE handlers precede). */
@@ -76,6 +77,8 @@ int main(void)
         int r = ovmx_parse_xfer(buf, sz, &xi);
         CHECK(r == 1 && xi.count == 3, "VMS_STD three-entry: count 3");
         CHECK(xi.main_off == 0xCAFE, "VMS_STD three-entry: main_off == LAST entry");
+        CHECK(xi.first_off == 0xAAA, "VMS_STD three-entry: first_off == FIRST entry (LIB$INITIALIZE, vms-43c)");
+        CHECK(xi.entries && xi.entries[1] == 0xBBB, "VMS_STD three-entry: entries[] in image order");
     }
 
     /* (2) Well-formed SYSV flavor (explicit, valid). */

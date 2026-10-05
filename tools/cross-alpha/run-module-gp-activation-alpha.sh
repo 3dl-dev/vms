@@ -233,6 +233,33 @@ assert_crtl_rms() {
 # $STATUS decoding to sentinel 5 (0x0035A029), and (c) no activation-failure
 # %-error. Pure function over the console transcript; shared verbatim by the real
 # BOOT-A run and the can-fail selftest.
+assert_libinit() {
+  # vms-43c: LIB$INITIALIZE ran the image's two registered routines, in psect
+  # order, BEFORE main; main saw it and returned sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaF 'OVMX LIB$INITIALIZE test: 2 routine(s) ran before main, order 1,2 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) init routines ran first   : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -739,6 +766,45 @@ EOF
     grep -aE "%IMGACT|%RUN-|%DCL-|IMGNOTFND|NOSUCHFILE|DEVNOTMOUNT|ACCVIO|SS\\\$_" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  /' | tail -20 || echo "  (none captured)"
     exit 1
     ;;
+  libinit-gate)
+    # vms-43c: LIB$INITIALIZE. libinit_tab_p32.c puts two longword procedure
+    # values in the LIB$INITIALIZE psect; LINK.EXE (P0 image, vms-035) places the
+    # STARLET dispatcher first in the transfer vector; IMGACT calls it with the
+    # transfer vector; it runs both routines in order, then main (sentinel 7).
+    MILESTONE_MAIN=libinit_main.c
+    MILESTONE_EXTRA=libinit_tab_p32.c
+    WANT_SENTINEL=7
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX LIB$INITIALIZE test: 2 routine(s) ran before main, order 1,2 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX LIB$INITIALIZE test: 0 routine(s) ran before main, order 0,0 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/noinit.log"
+    printf '%s\n%s\n' 'OVMX LIB$INITIALIZE test: 2 routine(s) ran before main, order 2,1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/order.log"
+    echo "-- libinit selftest 1/3: both routines, in order, then main must PASS --"
+    if assert_libinit "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- libinit selftest 2/3: no routine ran must FAIL --"
+    if assert_libinit "$_st/noinit.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- libinit selftest 3/3: wrong order must FAIL --"
+    if assert_libinit "$_st/order.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "libinit selftest failed -- assert_libinit cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- activate the LIB\$INITIALIZE image on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX LIB|OVMX-SEAM:|%IMGACT|%DCL-" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_libinit "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: LIB\$INITIALIZE ran the image's registered initialization routines in"
+      echo "      psect order before main, on the real OVMX/Alpha executive (P0 image)."
+      exit 0
+    fi
+    echo "FAIL: LIB\$INITIALIZE did not run the registered routines before main. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
   mf-gate)
     # vms-bdd: the multi-.o STRICT-link + activation rung. Same real-executive
     # boot as `crtl-rms-gate', but the MILESTONE image is a genuine MULTI-object
@@ -1139,6 +1205,6 @@ EOF
     exit 1
     ;;
   *)
-    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | crtl-rms-veneer-gate | mf-gate | shipped-gate | selftest)"
+    die "unknown mode '$MODE' (use: gate | crtl-rms-gate | crtl-rms-veneer-gate | mf-gate | libinit-gate | shipped-gate | selftest)"
     ;;
 esac

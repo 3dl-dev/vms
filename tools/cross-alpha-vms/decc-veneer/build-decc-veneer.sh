@@ -149,10 +149,10 @@ for s in create open connect put get close; do
     grep -qE "cross-image import 'sys\\\$${s}' bound to --use producer LIBVMSRMS\\\$SHR.EXE" "$LOG" \
         || { echo "GATE FAIL: sys\$${s} not bound to LIBVMSRMS\$SHR inside DECC\$SHR pass 2"; fail=1; }
 done
-# (4) the test image links: EVAX/Alpha ET_DYN, %LINK-S-CREATED, zero UNDEF
+# (4) the test image links: EVAX/Alpha ET_EXEC in P0 (vms-035), %LINK-S-CREATED, zero UNDEF
 grep -qE "LINK-S-CREATED, .*decc_veneer_test.exe: EVAX/Alpha" "$LOG" || { echo "GATE FAIL: decc_veneer_test.exe not created"; fail=1; }
 grep -q "Machine:.*Alpha" "$LOG" || { echo "GATE FAIL: test image not EM_ALPHA"; fail=1; }
-grep -qE "Type:.*DYN" "$LOG" || { echo "GATE FAIL: test image not ET_DYN"; fail=1; }
+grep -qE "Type:.*EXEC" "$LOG" || { echo "GATE FAIL: test image not ET_EXEC (linked in P0, vms-035)"; fail=1; }
 [ "$(grep -c 'LINK-F-UNDEF' "$LOG")" = 0 ] || { echo "GATE FAIL: LINK-F-UNDEF present"; fail=1; }
 [ "$(grep -c 'LINK-F-MULDEF' "$LOG")" = 0 ] || { echo "GATE FAIL: LINK-F-MULDEF present (suppression did not prevent a collision)"; fail=1; }
 # LINK-W-DEFERRED is EXPECTED earlier in the pipeline (e.g. LIBVMS$SHR's own

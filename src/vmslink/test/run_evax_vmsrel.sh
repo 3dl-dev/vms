@@ -50,7 +50,7 @@ $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" \
 
 echo
 echo "== PART A: link gdata.obj (a global initialized pointer) =="
-"$WORK/LINK.EXE" --transfer main -o "$WORK/gdata.exe" "$FIX/gdata.obj"
+"$WORK/LINK.EXE" --base 0 --transfer main -o "$WORK/gdata.exe" "$FIX/gdata.obj"
 echo
 echo "== verify EMIT + CONSUME: g_ptr survives load bias $BIAS =="
 "$WORK/evax_vmsrel_verify" emit-consume "$WORK/gdata.exe" "$BIAS"
@@ -63,7 +63,7 @@ EOF
 $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/dummy.o" "$WORK/dummy.c"
 "$WORK/LINK.EXE" --shareable --symbol-vector "C\$_EXIT1=GLOBALVALUE:$GVAL" \
     --gsmatch LEQUAL,1,0 -o "$WORK/CEXIT\$SHR.EXE" "$WORK/dummy.o"
-"$WORK/LINK.EXE" --transfer MAIN --use "$WORK/CEXIT\$SHR.EXE" \
+"$WORK/LINK.EXE" --base 0 --transfer MAIN --use "$WORK/CEXIT\$SHR.EXE" \
     -o "$WORK/ref_gvalfold.exe" "$FIX/gvalfold_ref.obj"
 "$WORK/evax_vmsrel_verify" no-rel "$WORK/ref_gvalfold.exe"
 
@@ -75,7 +75,7 @@ EOF
 $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/helper.o" "$WORK/helper.c"
 "$WORK/LINK.EXE" --shareable --symbol-vector "HELPER_PROC=PROCEDURE" \
     --gsmatch LEQUAL,1,0 -o "$WORK/HELPER\$SHR.EXE" "$WORK/helper.o"
-"$WORK/LINK.EXE" --transfer MAIN_PROC --use "$WORK/HELPER\$SHR.EXE" \
+"$WORK/LINK.EXE" --base 0 --transfer MAIN_PROC --use "$WORK/HELPER\$SHR.EXE" \
     -o "$WORK/main_ximport.exe" "$FIX/link_main.obj"
 "$WORK/evax_vmsrel_verify" import-exclude "$WORK/main_ximport.exe"
 

@@ -330,9 +330,9 @@ done
 # this is inert -- no extra --use flag -- when the veneer is not opted in).
 RMS_USE_FLAG=""
 [ -n "$RMS" ] && RMS_USE_FLAG="--use $RMS"
-# vms-035: JOINT_LINK_BASE (e.g. 0x10000) links the image at a fixed OpenVMS
-# Alpha P0 address (ET_EXEC; IMGACT then places the shareables in P0 above it).
-# Unset = the relocatable ET_DYN image.
+# vms-035: LINK.EXE links an EVAX executable at the OpenVMS Alpha P0 base 0x10000
+# by default (ET_EXEC; IMGACT then places the shareables in P0 above it).
+# JOINT_LINK_BASE overrides it (0 = the relocatable ET_DYN form).
 "$WORK/LINK.EXE" --transfer __main ${JOINT_LINK_BASE:+--base $JOINT_LINK_BASE} \
     --use "$WORK/DECC\$SHR.EXE" $RMS_USE_FLAG --use "$WORK/libots/LIBOTS_SHR.EXE" \
     -o "$OUT/joint_e2e.exe" "$OUT/crt0.obj" "$OUT/joint_main.obj" $EXTRA_OBJS

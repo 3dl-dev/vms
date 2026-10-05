@@ -4,7 +4,8 @@
 #
 # On OpenVMS Alpha a main image lives in P0 space from 0x10000, so every image
 # address fits a 32-bit (sign-extended longword) slot. `--base 0x10000` links
-# the executable there as an ET_EXEC that is never moved. The proof compares it
+# the executable there as an ET_EXEC that is never moved; it is the default
+# for an EVAX executable (vms-035 stage 2), `--base 0` the relocatable form. The proof compares it
 # with the relocatable (ET_DYN + .vms$rel) link of the SAME object:
 #   - ET_EXEC, one PT_LOAD at vaddr 0x10000 / file offset 0, PT_PHDR consistent
 #     (so IMGACT's exec_bias is 0), e_entry == .vms$xfer entry[0], inside P0;
@@ -25,8 +26,8 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 
 $CC -std=gnu11 -O2 -Wall -Wextra -I"$SRC/include" -o "$WORK/LINK.EXE" "$SRC/link.c"
 
-"$WORK/LINK.EXE" --transfer main -o "$WORK/rel.exe" "$FIX/gdata.obj" 2>"$WORK/rel.log"
-"$WORK/LINK.EXE" --transfer main --base 0x10000 -o "$WORK/p0.exe" "$FIX/gdata.obj" 2>"$WORK/p0.log"
+"$WORK/LINK.EXE" --base 0 --transfer main -o "$WORK/rel.exe" "$FIX/gdata.obj" 2>"$WORK/rel.log"
+"$WORK/LINK.EXE" --transfer main -o "$WORK/p0.exe" "$FIX/gdata.obj" 2>"$WORK/p0.log"
 grep -q 'ET_EXEC (P0)' "$WORK/p0.log"
 
 python3 - "$WORK/rel.exe" "$WORK/p0.exe" <<'PYEOF'
@@ -48,7 +49,7 @@ pd, pt, pentry, pph, psec = load(sys.argv[2])
 def ok(c, m):
     print(('  PASS ' if c else '  FAIL ') + m)
     if not c: sys.exit(1)
-ok(rt == 3 and pt == 2, 'relocatable link is ET_DYN, --base link is ET_EXEC')
+ok(rt == 3 and pt == 2, '--base 0 link is ET_DYN; the DEFAULT executable link is ET_EXEC in P0')
 load_ = [p for p in pph if p[0] == 1]
 ok(len(load_) == 1 and load_[0][3] == B and load_[0][2] == 0, 'one PT_LOAD at vaddr 0x10000, file offset 0')
 phdr = [p for p in pph if p[0] == 6]

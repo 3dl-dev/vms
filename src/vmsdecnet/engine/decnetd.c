@@ -49,6 +49,7 @@
 #include <net/if.h>      /* if_nametoindex() */
 #include <ifaddrs.h>    /* getifaddrs(): auto-detect the primary NIC (no argv) */
 #include <poll.h>       /* the --cterm-server loop waits on wire + session */
+#include <sys/wait.h>   /* waitpid: the FAL server $CREPRC handshake diagnostic */
 #include <pthread.h>    /* --fal-accept-test / --fal-selftest: two blocking peers */
 #include <signal.h>
 #include <stdio.h>
@@ -3297,6 +3298,33 @@ static uint32_t falp_session(const char *user, const char *pw, int is_get,
                    (unsigned)jst, (unsigned)me.vms_pid, me.username, (unsigned)me.uic,
                    (unsigned long long)me.cur_privs, (unsigned long long)me.perm_privs, (unsigned)me.linux_pid,
                    (int)getpid(), (unsigned)id.uic, (unsigned)tst);
+            /* Replay $CREPRC's detached handshake step by step (fork,
+             * setsid, fork, claim, setprn) and report each status. */
+            int rp[2], sy[2];
+            if ((tst & 1) && pipe(rp) == 0 && pipe(sy) == 0) {
+                pid_t a = fork();
+                if (a == 0) {
+                    setsid();
+                    pid_t b = fork();
+                    if (b > 0) { char c; close(sy[1]); while (read(sy[0], &c, 1) > 0) ; _exit(0); }
+                    close(sy[0]);
+                    uint32_t r[3] = { 0, 0, 0 };
+                    r[0] = vms_kif_register_detached(tk, NULL);
+                    close(sy[1]);
+                    if (r[0] & 1) r[1] = vms_kif_setprn("FALDIAG_1");
+                    struct vms_procinfo g; memset(&g, 0, sizeof g);
+                    r[2] = vms_kif_getjpi_self(&g);
+                    (void)!write(rp[1], r, sizeof r);
+                    _exit(0);
+                }
+                close(rp[1]); close(sy[0]); close(sy[1]);
+                uint32_t r[3] = { 0, 0, 0 };
+                ssize_t got = read(rp[0], r, sizeof r);
+                close(rp[0]);
+                if (a > 0) (void)waitpid(a, NULL, 0);
+                printf("  NOTE: handshake replay: claim %08X setprn %08X getjpi %08X (%zd bytes)\n",
+                       (unsigned)r[0], (unsigned)r[1], (unsigned)r[2], got);
+            }
         }
         cst = pst; goto out;
     }

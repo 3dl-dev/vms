@@ -298,7 +298,11 @@ extern "C" {
 #define VMS_OFB_CM_MEMBREC_CSID   36u /* body[36:40] LE32 assigned CSID     */
 #define VMS_OFB_CM_MEMBREC_INDEX  40u /* body[40:42] LE16, 0-based CSV index*/
 #define VMS_OFB_CM_MEMBREC_STALE  42u /* body[42:132] uninterpreted         */
-#define VMS_CM_MEMBREC_TAG   0x00000220u  /* 8/8 real frames                */
+#define VMS_CM_MEMBREC_TAG   0x00000220u  /* 8/8 real ADD-class frames      */
+/* ...and in a FORMATION the same record carries the formation's class:
+ * role 0x20, class 0x01 -- both records of the real V7.3 cold formation
+ * (tests/lab/captures/vms-6d3d-coldform-ev2-20260924, rd vms-f29). */
+#define VMS_CM_MEMBREC_TAG_FORM 0x00000120u
 
 /*
  * One membership record, as this codec reads and writes it. Fixed-width and
@@ -512,6 +516,8 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
  */
 #define VMS_CM_OP_MEMBREC      0x05u /* cat 0x01: MEMBERSHIP RECORD, sec 5c */
 #define VMS_CM_OP_MEMBERSHIP   0x06u /* cat 0x01: post-commit MEMBERSHIP burst*/
+#define VMS_CM_OP_XITION_FORM  0x07u /* cat 0x01: class-0x01 FORMATION open
+				      * (rd vms-f29; coldform-ev2 oracle)    */
 #define VMS_CM_OP_XITION_REM   0x08u /* cat 0x01: class-0x03 transition open*/
 #define VMS_CM_OP_XITION_ADD   0x09u /* cat 0x01: class-0x02 transition open*/
 #define VMS_CM_OP_XITION_GO    0x0au /* cat 0x01: barrier GO, never answered*/
@@ -534,6 +540,9 @@ vms_codec_status_t vms_cm_membership_rec_parse(const uint8_t *body, uint32_t len
 #define VMS_CM_ROLE_GO      0x60u /* body[16] on op 0x0a                        */
 #define VMS_CM_ROLE_ABORT   0x50u /* body[16] on the cat-0x01 op-0x04 abort     */
 
+#define VMS_CM_CLASS_FORM    0x01u /* body[17]: FORM the cluster: every founding
+				    * member in ONE transition (has the barrier;
+				    * rd vms-f29, coldform-ev2-formation.pcap) */
 #define VMS_CM_CLASS_ADD     0x02u /* body[17]: ADD a member (has the barrier) */
 #define VMS_CM_CLASS_REMOVE  0x03u /* body[17]: REMOVE a failed member         */
 #define VMS_CM_CLASS_DEPART  0x04u /* body[17]: self-departure (NO barrier)    */

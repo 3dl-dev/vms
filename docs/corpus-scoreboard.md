@@ -11,12 +11,12 @@ including the programs that do not run and why.
 | column | run-pass | of | measured by |
 |---|---:|---:|---|
 | host (gcc container, no executive) | 108 | 229 | `tests/conformance/run_corpus.sh` |
-| **runtime (guest, live /dev/vms)** | 133 | 140 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
+| **runtime (guest, live /dev/vms)** | 138 | 140 (programs that link) | `OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh` + `tests/qemu/corpus_runtime_report.sh` |
 
-**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **133 of 229**.
+**Running** (run-pass in the runtime column, or on the host for programs not in the runtime list): **138 of 229**.
 
 Host column detail: compile-fail 44, link-fail 44, run-fail 8, run-crash 25; 7 host passes printed an unhandled %E/%F condition (`run-pass-signaled`).
-Runtime column detail: run-fail 6, run-crash 1, vm-crash 0, not-run 0.
+Runtime column detail: run-fail 1, run-crash 1, vm-crash 0, not-run 0.
 
 ### Designed non-zero exits
 
@@ -30,7 +30,7 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_delprc` | 143 | "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15) |
 | `sys_exit` | 1 | sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status |
 
-### Not running (96)
+### Not running (91)
 
 | program | host | runtime | reason |
 |---|---|---|---|
@@ -65,7 +65,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_audit_event` | compile-fail | - | link: undefined sys$audit_eventw |
 | `sys_avoid_preempt` | link-fail | - | link: undefined sys$avoid_preempt, sys$setup_avoid_preempt |
 | `sys_bio` | compile-fail | - | link: undefined sys$enter, sys$read, sys$remove, sys$wait, sys$write |
-| `sys_cancel` | run-fail | run-fail | executive: $QIO is synchronous in OVMX: the demonstration queues a mailbox read that never completes and expects $CANCEL to abort it, so the read blocks (async $QIO, vms-003) |
 | `sys_capabilities` | compile-fail | - | link: undefined sys$cpu_capabilities, sys$free_user_capability, sys$get_user_capability, sys$process_capabilities |
 | `sys_check_access` | link-fail | - | link: undefined sys$check_access |
 | `sys_check_privilege` | compile-fail | - | link: undefined sys$check_privilegew |
@@ -77,7 +76,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_cpu_transition` | link-fail | - | link: undefined sys$cpu_transitionw |
 | `sys_create_gpfn` | compile-fail | - | link: undefined sys$create_gpfn, sys$mgblsc_gpfn_64 |
 | `sys_create_uid` | link-fail | - | link: undefined sys$create_uid |
-| `sys_creprc` | run-crash | run-fail | product-gap: $CREPRC looks the caller's user name up in SYSUAF.DAT; the guest returns SS$_NOSUCHID although the system disk is mounted (vms-f07) |
 | `sys_cretva_64` | compile-fail | - | link: undefined sys$create_region_64, sys$cretva_64, sys$delete_region_64, sys$expreg_64, sys$setprt_64 |
 | `sys_crmpsc` | compile-fail | - | link: undefined sys$updsecw |
 | `sys_cvt_filename` | link-fail | - | link: undefined sys$cvt_filename |
@@ -92,10 +90,8 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_format_audit` | link-fail | - | link: undefined sys$format_audit |
 | `sys_get_arith` | compile-fail | - | link: undefined sys$get_arith_exception |
 | `sys_get_region_info` | link-fail | - | link: undefined sys$get_region_info |
-| `sys_getdviw` | run-fail | run-fail | product-gap: $ASSIGN of SYS$SYSDEVICE answers SS$_NOSUCHDEV in the guest, so the $GETDVIW by channel gets channel 0 (vms-1e98) |
 | `sys_getenv` | compile-fail | - | link: undefined sys$getenv |
 | `sys_getrmi` | link-fail | - | link: undefined sys$getrmi |
-| `sys_getuai` | run-fail | run-fail | product-gap: $GETUAI of account DEFAULT returns SS$_NOSUCHID in the guest although the system disk is mounted (vms-f07) |
 | `sys_glx_lock` | compile-fail | - | link: undefined sys$acquire_galaxy_lock, sys$create_galaxy_lock, sys$create_galaxy_lock_table, sys$delete_galaxy_lock, sys$delete_galaxy_lock_table, sys$get_galaxy_lock_info, sys$get_galaxy_lock_size, sys$release_galaxy_lock |
 | `sys_gs64` | compile-fail | - | link: undefined sys$crmpsc_gdzro_64, sys$mgblsc_64 |
 | `sys_hash_pwd` | compile-fail | - | compile: missing header smg$routines.h |
@@ -113,7 +109,6 @@ These demonstrations exist to end an image with a failing status; they are run-p
 | `sys_process_scan` | compile-fail | - | link: undefined sys$process_scan |
 | `sys_proxy` | compile-fail | - | link: undefined sys$add_proxy, sys$delete_proxy, sys$display_proxy, sys$verify_proxy |
 | `sys_queue` | compile-fail | - | compile: missing header sjcdef.h |
-| `sys_rms_seq` | run-pass | run-fail | product-gap: $EXTEND on a newly created sequential file fails (RMS$_CRE from the ACP MODIFY) in the guest (vms-967e) |
 | `sys_rpcc_64` | compile-fail | - | link: undefined sys$rpcc_64 |
 | `sys_set_implicit_affinity` | compile-fail | - | link: undefined sys$set_implicit_affinity |
 | `sys_set_process_properties` | link-fail | - | link: undefined sys$set_process_propertiesw |

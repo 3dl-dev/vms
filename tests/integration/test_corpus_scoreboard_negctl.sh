@@ -29,7 +29,7 @@ expect_red() {
 mk; echo "<!-- hand edit -->" >> "$TMP/t/docs/corpus-scoreboard.md"
 expect_red "a hand-edited scoreboard page"
 
-mk; sed -i '/^sys_cancel /d' "$TMP/t/tests/corpus/unreachable.txt"
+mk; sed -i '/^lib_que /d' "$TMP/t/tests/corpus/unreachable.txt"
 expect_red "a non-running program with no written reason"
 
 mk; mkdir "$TMP/t/tests/corpus/tier9-unlisted"

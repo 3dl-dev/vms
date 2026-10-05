@@ -165,6 +165,14 @@ OVMX_DISK2=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 OVMX_DISK3=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 truncate -s 16M "$OVMX_DISK1"
 OVMX_ODS2_SRC=/ods2_real.img
+# CORPUS RUNTIME MODE (vms-44a): the guest BOOTS FROM THE SYSTEM DISK -- the generated
+# system-disk volume (the shipped SYSUAF.DAT/RIGHTSLIST.DAT, room to create files)
+# is vda, so SYS$SYSDEVICE, the default device for relative names, and the rights/
+# UAF reads are one mounted volume, as on a booted system. The 400 KB real-VAX
+# fixture the executive suites use for vda has no room for a program's scratch files.
+if [ "${OVMX_CORPUS_RT:-0}" = "1" ] && [ -f /ods2_sysvol.img ]; then
+    OVMX_ODS2_SRC=/ods2_sysvol.img
+fi
 if [ -f "$OVMX_ODS2_SRC" ]; then
     cp "$OVMX_ODS2_SRC" "$OVMX_DISK0"
 else

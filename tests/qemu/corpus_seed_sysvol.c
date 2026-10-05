@@ -8,12 +8,13 @@
  * corpus loop (init.sh, ovmx.corpus mode):
  *
  *   1. publish the system unit (OVMX_SYSDEVICE -- the variable the boot chain
- *      uses, see lnm_setup_defaults()) = VDA300:, the generated system-disk ODS-2
- *      fixture tests/qemu stages (mkimage_ods2_sysvol: the REAL shipped SYSUAF.DAT
+ *      uses, see lnm_setup_defaults()) = VDA0:, which in corpus mode is the generated
+ *      system-disk ODS-2 volume (run_tests.sh attaches it as vda) (mkimage_ods2_sysvol: the REAL shipped SYSUAF.DAT
  *      and RIGHTSLIST.DAT), and define the system logicals over it in the
  *      executive-resident LNM$SYSTEM table;
  *   2. $MOUNT that volume (executive-global, so every later process sees it).
  *
+ * (It also mounts the boot unit VDA0:, the default device for relative names.)
  * It replaces corpus_seed_lnm (which defines the same logicals over the boot
  * default VDA0:) in corpus mode only. Not a suite: no PASS/FAIL lines.
  */
@@ -25,7 +26,7 @@
 #include "vmsfs/device.h"
 #include "vms_kif.h"
 
-#define SYSVOL_UNIT "VDA300:"
+#define SYSVOL_UNIT SYSDISK_DEVICE ":"   /* corpus mode boots from the system disk: vda */
 
 int main(void)
 {

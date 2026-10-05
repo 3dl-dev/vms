@@ -17,9 +17,9 @@
  * prototypes it needs are declared here, the 64-bit ones under
  * #pragma __pointer_size 64.
  */
-#if !defined(__alpha) || !defined(__VMS)
-#error "ovmx_decc_p32.c is the alpha-dec-vms 32-bit-pointer CRTL surface"
-#endif
+/* Alpha VMS only (an empty translation unit elsewhere, so host-side source
+ * scans that compile every product file still can). */
+#if defined(__alpha) && defined(__VMS)
 
 typedef unsigned int size_t;
 typedef int wchar_t;
@@ -123,3 +123,5 @@ int readdir_r(void *dir, struct dirent *ent, struct dirent **res)
     *res = P32(struct dirent *, r64);
     return rc;
 }
+
+#endif /* __alpha && __VMS */

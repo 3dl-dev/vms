@@ -22,6 +22,7 @@
 #include "descrip.h"
 #include "prcdef.h"
 #include "vms_kif.h"
+#include "vms/logical.h"     /* lnm_define_login_logicals (SYS$LOGIN)        */
 
 #define FAL_IMAGE_SPEC "SYS$SYSTEM:FAL.EXE"
 
@@ -259,6 +260,15 @@ uint32_t dnet_fal_proc_serve(void)
     if (lb.default_dir[0]) {
         struct dsc$descriptor_s d = dsc$init(lb.default_dir);
         (void)sys$setddir(&d, NULL, NULL);
+        /* The network job's SYS$LOGIN / SYS$LOGIN_DEVICE, job-wide, from the
+         * SYSUAF record -- the same LNM$JOB logicals a LOGINOUT session gets
+         * (lnm_define_login_logicals, vms-e48), so a peer's
+         * "SYS$LOGIN:FILE.TXT" names this user's home, not the system-wide
+         * [USERS] default. */
+        lnm_manager_t *mgr = lnm_get_manager();
+        if (mgr)
+            (void)lnm_define_login_logicals(mgr, LNM_JOB_TABLE, lb.default_dir);
+        dnet_fal_server_set_default(lb.default_dir);
     }
 
     /* 3. The DAP session, every file open checked against THIS process's

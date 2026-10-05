@@ -445,6 +445,36 @@ static int resolve_one(const char *spec, char *rsa, size_t cap)
     return rc;
 }
 
+static char g_srv_default[DNET_DAP_MAX_SPEC + 1];
+
+void dnet_fal_server_set_default(const char *default_dir)
+{
+    if (!default_dir || strlen(default_dir) > DNET_DAP_MAX_SPEC) {
+        g_srv_default[0] = '\0';
+        return;
+    }
+    snprintf(g_srv_default, sizeof g_srv_default, "%s", default_dir);
+}
+
+int dnet_fal_apply_default(const char *spec, char *out, size_t cap)
+{
+    if (!spec || !out || cap == 0) return -1;
+    const char *def = g_srv_default;
+    int has_dev = strchr(spec, ':') != NULL;
+    int has_dir = strchr(spec, '[') != NULL || strchr(spec, '<') != NULL;
+    int n;
+    if (!def[0] || has_dev) {
+        n = snprintf(out, cap, "%s", spec);
+    } else if (has_dir) {
+        const char *colon = strchr(def, ':');
+        int dlen = colon ? (int)(colon - def) + 1 : 0;
+        n = snprintf(out, cap, "%.*s%s", dlen, def, spec);
+    } else {
+        n = snprintf(out, cap, "%s%s", def, spec);
+    }
+    return (n < 0 || (size_t)n >= cap) ? -1 : 0;
+}
+
 uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
 {
     if (!t || !t->send || !t->recv) return SS$_ABORT;
@@ -489,6 +519,20 @@ uint32_t dnet_fal_server_run(struct dnet_dap_transport *t)
         default:
             (void)send_status(t, (DNET_DAP_MAC_SYNC << 12) | (m.type & 0xfff), 0);
             return SS$_ABORT;
+        }
+
+        /* A peer's relative filespec resolves in the accessed user's login
+         * directory, as on a VMS network job (dnet_fal_server_set_default). */
+        {
+            char full[DNET_DAP_MAX_SPEC + 1];
+            if (dnet_fal_apply_default(m.u.access.filespec, full, sizeof full) != 0) {
+                if (send_status(t, (DNET_DAP_MAC_OPEN << 12) | DNET_DAP_MIC_FNF, 0) < 0)
+                    return SS$_ABORT;
+                result = SS$_NOSUCHFILE;
+                have_attr = 0;
+                continue;
+            }
+            memcpy(m.u.access.filespec, full, strlen(full) + 1);
         }
 
         if (m.u.access.accfunc == DNET_DAP_ACC_DIRLIST) {

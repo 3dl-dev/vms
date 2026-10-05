@@ -145,6 +145,25 @@ int main(void)
     CHECK(st == SS$_NOSUCHFILE && saw(&ms, "09003240") >= 0,
           "a DIRECTORY LIST of a missing file is an honest STATUS FNF (MAC 4 / MIC 062)");
 
+    /* 4. A peer's relative filespec resolves in the user's login directory
+     * (rd vms-d85; observed: a real VAX COPY to a booted OVMX landed in
+     * VDA0:[000000] instead of the user's home). */
+    {
+        char out[300];
+        dnet_fal_server_set_default("SYS$SYSROOT:[SYSMGR]");
+        CHECK(dnet_fal_apply_default("PUT2.TXT;", out, sizeof out) == 0 &&
+              !strcmp(out, "SYS$SYSROOT:[SYSMGR]PUT2.TXT;"), "bare name -> login device + directory");
+        CHECK(dnet_fal_apply_default("[OTHER]X.TXT", out, sizeof out) == 0 &&
+              !strcmp(out, "SYS$SYSROOT:[OTHER]X.TXT"), "[dir]name -> login device only");
+        CHECK(dnet_fal_apply_default("SYS$LOGIN:INSESSION.TXT", out, sizeof out) == 0 &&
+              !strcmp(out, "SYS$LOGIN:INSESSION.TXT"), "a device/logical spec is left as the peer named it");
+        char big[260]; memset(big, 'A', sizeof big - 1); big[sizeof big - 1] = '\0';
+        CHECK(dnet_fal_apply_default(big, out, 200) == -1, "NEGCTL: an over-long result is refused, not truncated");
+        dnet_fal_server_set_default(NULL);
+        CHECK(dnet_fal_apply_default("PUT2.TXT;", out, sizeof out) == 0 && !strcmp(out, "PUT2.TXT;"),
+              "no default set: the spec is unchanged");
+    }
+
     printf("test_dnet_fal_server: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

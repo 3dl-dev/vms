@@ -22,7 +22,7 @@ target_include_directories(vmsdecnet_fal PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 target_link_libraries(vmsdecnet_fal PUBLIC
-    vmsdecnet_dap vmsdecnet_cterm vms vmsfs vmssys)
+    vmsdecnet_dap vmsdecnet_cterm vms vmsfs vmssys vmslnm)
 
 # rd vms-d85 (R4 G3): the FAL NETWORK SERVER PROCESS. dnet_fal_proc is both
 # halves of the NETACP <-> FAL.EXE mailbox link: NETACP creates the server with

@@ -42,6 +42,17 @@
  *     mapping (10244 + 8*bit, the oracle's SS$ numbering) run in this process;
  *     the audit item list is read but, as on a system with auditing disabled,
  *     nothing is logged.
+ * OVMX-PARTIAL: sys$audit_eventw (vms-44a) -- exec: the AUDIT privilege it
+ *     demands is read from the executive's own current mask for this process
+ *     (vms_kif_getjpi_self); a caller without it gets SS$_NOAUDIT, which the V7.3
+ *     lab prints as "operation requires AUDIT privilege".
+ * OVMX-LOCAL: sys$audit_eventw -- the item-list validation and the decision that
+ *     the event is not audited run in this process. OVMX has no audit server and
+ *     no audit journal (docs/compat/facilities/audit.yaml: audit$security_journal
+ *     absent), so no event class is ever enabled and an unforced event is
+ *     genuinely not audited (SS$_NORMAL, nothing written). A caller that FORCES
+ *     a record (NSA$M_NOEVTCHECK or NSA$M_MANDATORY) is refused SS$_UNSUPPORTED
+ *     rather than told a record was written.
  * OVMX-USERSPACE: sys$chkpro (vms-f15) -- decides in this process, from the
  *     caller's own getuid()/getgid() and the protection word the caller
  *     itself passed in. There is no executive reference monitor, no rights
@@ -60,6 +71,8 @@
 #include "ovmx_secparam.h"
 #include "ovmx_fileprot.h"
 #include "vms_kif.h"
+#include "prvdef.h"
+#include "nsadef.h"
 
 /*
  * Protection access type flags and category offsets -- aliased onto the
@@ -333,4 +346,40 @@ uint32_t (sys$check_privilegew)(uint32_t efn, const void *privnam, uint32_t bitn
     if (audsts)
         *audsts = SS$_NORMAL;
     return status;
+}
+
+/*
+ * sys$audit_eventw - request that a security event be audited.
+ *
+ * AUDIT privilege required (SS$_NOAUDIT otherwise), then the NSA$_ item list is
+ * walked: an NSA$_EVENT_TYPE item is mandatory (SS$_BADPARAM). The state of the
+ * system is that no auditing is enabled (there is no audit server or journal), so
+ * an event that is only audited when its class is enabled is not audited and the
+ * service returns SS$_NORMAL having logged nothing -- true of a VMS system with
+ * auditing disabled too. A caller that forces a record cannot be given one:
+ * SS$_UNSUPPORTED, never a success that wrote nothing.
+ */
+uint32_t (sys$audit_eventw)(uint32_t efn, uint32_t flags, const void *itmlst,
+                            void *audsts, void *astadr, uint64_t astprm)
+{
+    struct vms_procinfo self;
+    const struct item_list_3 *it;
+    int have_type = 0;
+
+    (void)efn; (void)audsts; (void)astadr; (void)astprm;
+    memset(&self, 0, sizeof(self));
+    if (!(vms_kif_getjpi_self(&self) & 1))
+        return SS$_NOSUCHDEV;   /* no executive: fail honestly, never fake */
+    if (!(self.cur_privs & PRV$M_AUDIT))
+        return SS$_NOAUDIT;
+    if (!itmlst)
+        return SS$_BADPARAM;
+    for (it = (const struct item_list_3 *)itmlst; it->buflen || it->item_code; it++)
+        if (it->item_code == NSA$_EVENT_TYPE)
+            have_type = 1;
+    if (!have_type)
+        return SS$_BADPARAM;
+    if (flags & (NSA$M_NOEVTCHECK | NSA$M_MANDATORY))
+        return SS$_UNSUPPORTED;
+    return SS$_NORMAL;
 }

@@ -332,6 +332,12 @@ on it. The Linux/Alpha substrate places neither there, so OVMX does:
   standard call to the image on it (`imgact_vms_transfer_stack`); IMGACT's own
   frame stays on the substrate stack and is resumed when the image returns. If
   the range cannot be claimed the image runs on the substrate stack.
+- **Environment and the 32-bit RTL entry points (vms-5bc9).** `decc$main`
+  copies the environment strings into the heap, so `getenv` results are P0
+  addresses. DECC$SHR exports the DEC C 32-bit-pointer entry points
+  (`decc$<name>` for the port's 64-flagged functions): the pointer-transparent
+  ones bound to the 64-bit implementation (`src/vmslink/decc_p32_alias.txt`), the
+  pointer-to-pointer ones as real 32-bit wrappers (`src/vmslink/ovmx_decc_p32.c`).
 
 ## 4. Open questions
 

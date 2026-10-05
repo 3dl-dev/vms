@@ -1,0 +1,74 @@
+# decc_p32_alias.txt -- the DEC C RTL's 32-bit-pointer entry points (vms-5bc9).
+#
+# The alpha-dec-vms GCC port binds a call to a function its vms-crtlmap.map flags
+# "64" to decc$_<name>64 under -mpointer-size=64 and to decc$<name> under the DEC
+# C default 32-bit pointer size. OVMX's C RTL (musl) is built 64-bit, so DECC$SHR
+# defines only the _<name>64 forms. Each name below is POINTER-TRANSPARENT: its
+# pointer arguments are read through (a 32-bit caller's sign-extended pointers
+# are valid 64-bit addresses) and any pointer it returns is derived from an
+# argument, a static, or the heap -- all below 0x40000000 on OVMX/Alpha (images
+# in P0 vms-035, heap in P0 vms-122, user stack in P1 vms-ce5). So the 32-bit
+# entry point IS the 64-bit implementation: mk_decc_shr.sh exports
+# decc$<name> bound to decc$_<name>64 (SYMBOL_VECTOR universal/internal form),
+# for every name here whose _<name>64 DECC$SHR defines and whose decc$<name> it
+# does not already define.
+#
+# NOT listed (and why): functions with pointer-to-pointer parameters (strtol &
+# co., strsep, strtok_r, wcstok, mbsrtowcs/wcsrtombs, readdir_r) -- a 64-bit
+# implementation would store 8 bytes into the caller's 4-byte slot; they have
+# real 32-bit wrappers in ovmx_decc_p32.c. Functions whose structures carry
+# pointers (readv's iovec, glob_t, struct passwd) need layout conversion and
+# are not exported yet. malloc: decc$malloc is ovmx_decc_crtl.c's _malloc32.
+basename
+bsearch
+calloc
+catgets
+crypt
+ctermid
+cuserid
+dirname
+fgetname
+fgets
+fgetws
+gcvt
+getcwd
+getname
+gets
+index
+longname
+memccpy
+memchr
+memcpy
+memmove
+memset
+mktemp
+mmap
+qsort
+realloc
+realpath
+rindex
+strcat
+strchr
+strcpy
+strdup
+strncat
+strncpy
+strpbrk
+strptime
+strrchr
+strstr
+strtok
+tmpnam
+wcscat
+wcschr
+wcscpy
+wcsncat
+wcsncpy
+wcspbrk
+wcsrchr
+wcsstr
+wcswcs
+wmemchr
+wmemcpy
+wmemmove
+wmemset

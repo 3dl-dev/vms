@@ -86,6 +86,8 @@ struct handler_record {
     void           *est_pc;         /* return address into establisher */
     int             active;         /* re-entrancy guard: handler running */
     int             has_anchor;     /* rung-2: resume_ctx armed for transfer */
+    uint64_t        est_handle;     /* vms-ed1: establisher's invocation handle
+                                     * from the genuine Alpha walk (0 = none) */
     jmp_buf         resume_ctx;     /* rung-2: setjmp'd in establisher frame */
 };
 
@@ -106,6 +108,7 @@ static _Thread_local int   uw_pending     = 0;  /* an unwind was requested */
 static _Thread_local int   uw_target      = 0;  /* target depth (handlers kept) */
 static _Thread_local void *uw_newpc       = NULL;
 static _Thread_local int   uw_requester   = -1; /* index of requesting handler */
+static _Thread_local uint64_t uw_savr0    = 0;  /* vms-ed1: mech savr0 at request */
 
 /* ================================================================
  * lib$establish - Establish a condition handler
@@ -141,6 +144,22 @@ void *lib$establish(void *handler) {
     handler_stack[handler_count].est_pc     = est_pc;
     handler_stack[handler_count].active     = 0;
     handler_stack[handler_count].has_anchor = 0;
+    handler_stack[handler_count].est_handle = 0;
+#if defined(__alpha) || defined(__alpha__)
+    /* vms-ed1: identify the establisher by its invocation handle from the
+     * genuine Calling-Standard walk: the current context is lib$establish's
+     * own frame; one frame out is the establisher. An anchorless SYS$UNWIND
+     * finds this frame again by that handle and resumes it. */
+    {
+        INVO_CONTEXT_BLK icb;
+        if (lib$get_curr_invo_context(&icb) == SS$_NORMAL &&
+            !icb.libicb$v_bottom_of_stack &&
+            vms$$invo_walk_prev(&icb) == SS$_NORMAL) {
+            handler_stack[handler_count].est_handle =
+                (uint64_t)lib$get_invo_handle(&icb);
+        }
+    }
+#endif
     handler_count++;
 
     return previous;
@@ -296,6 +315,32 @@ static void perform_unwind(struct chf$signal_array *sigarray)
      * Alpha machine context to restore into, so vms$$invo_transfer() reports
      * "not transferred" and the rung-1 pop-only unwind (already done above)
      * stands. The reconstruction itself is host-proven (test_invo_context). */
+#if defined(__alpha) || defined(__alpha__)
+    /* vms-ed1: the genuine Alpha path. The target establisher was identified
+     * at lib$establish by its invocation handle; walk the live chain out to
+     * that frame (each step restores the preserved registers its callee
+     * saved), hand it R0 = the mechanism array's saved R0 -- the value the
+     * call it made "returns" -- and resume it at its call's return point (or
+     * newpc). This is VMS's anchorless "return to the establisher". */
+    if (target >= 0 && target < MAX_HANDLERS && handler_stack[target].est_handle) {
+        INVO_CONTEXT_BLK ticb;
+        uint64_t want = handler_stack[target].est_handle;
+        if (lib$get_curr_invo_context(&ticb) == SS$_NORMAL) {
+            for (;;) {
+                if ((uint64_t)lib$get_invo_handle(&ticb) == want) {
+                    ticb.libicb$q_ireg[0] = uw_savr0;
+                    uw_newpc = newpc;
+                    vms$$invo_transfer(&ticb, newpc);   /* does not return */
+                    break;
+                }
+                if (ticb.libicb$v_bottom_of_stack ||
+                    vms$$invo_walk_prev(&ticb) != SS$_NORMAL) {
+                    break;
+                }
+            }
+        }
+    }
+#else
     if (target >= 0 && target < MAX_HANDLERS && handler_stack[target].est_pc) {
         INVO_CONTEXT_BLK ticb;
         uint64_t target_pc =
@@ -308,6 +353,7 @@ static void perform_unwind(struct chf$signal_array *sigarray)
             /* else: fall through to the pop-only contract below. */
         }
     }
+#endif
     /* No anchor armed: pop-only unwind already done above (rung-1 contract). */
     (void)newpc;
 }
@@ -356,6 +402,7 @@ static uint32_t dispatch_condition(struct chf$signal_array *sigarray)
         uw_requester = i;   /* frame the handler could unwind from */
         uint32_t result = rec->handler(sigarray, &mecharray);
         rec->active = 0;
+        uw_savr0 = (uint64_t)mecharray.chf$is_mch_savr0;   /* vms-ed1 */
 
         /* rung-2: the handler may have called sys$unwind, which deferred a
          * transfer. Perform it now (as real VMS does on handler return). If
@@ -595,7 +642,8 @@ uint32_t vms$$unwind_request(const uint32_t *depadr, void *newpc)
     int can_transfer =
         uw_dispatching && depadr &&
         target >= 0 && target < current &&
-        handler_stack[target].has_anchor;
+        (handler_stack[target].has_anchor ||
+         handler_stack[target].est_handle != 0);   /* vms-ed1: anchorless */
 
     if (can_transfer) {
         /* Defer: the dispatcher performs the transfer when the requesting

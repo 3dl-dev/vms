@@ -91,18 +91,36 @@ extern "C" {
  * ================================================================ */
 
 struct pdsc_descriptor {
-    uint16_t pdsc$w_flags;          /* kind + flags */
-    uint16_t pdsc$w_rsa_offset;     /* byte offset frame-base -> RSA (stack) */
-    uint8_t  pdsc$b_save_ra;        /* register holding the return address */
-    uint8_t  pdsc$b_save_fp;        /* register holding the caller's FP */
-    uint16_t pdsc$w_reserved;
-    uint32_t pdsc$l_size;           /* fixed stack-frame size in bytes (stack) */
-    uint32_t pdsc$l_ireg_mask;      /* bitmask of integer regs saved in the RSA */
-    uint32_t pdsc$l_freg_mask;      /* bitmask of FP regs saved in the RSA */
-    uint64_t pdsc$q_entry;          /* procedure entry code address */
-    uint64_t pdsc$q_handler;        /* established condition handler (if valid) */
-    uint64_t pdsc$q_handler_data;   /* handler data */
+    uint16_t pdsc$w_flags;          /* off  0: kind (<3:0>) + flag bits      */
+    union {                         /* off  2: (kind-dependent)              */
+        uint16_t pdsc$w_rsa_offset; /*   stack frame: frame base -> RSA       */
+        struct {                    /*   register frame:                      */
+            uint8_t pdsc$b_save_fp; /*     register holding the caller's FP   */
+            uint8_t pdsc$b_save_ra; /*     register holding the return addr   */
+        };
+    };
+    uint8_t  pdsc$b_reserved;       /* off  4                                 */
+    uint8_t  pdsc$b_type;           /* off  5: procedure type (low nibble)    */
+    uint16_t pdsc$w_signature_offset; /* off 6                                */
+    uint64_t pdsc$q_entry;          /* off  8: procedure entry code address   */
+    uint32_t pdsc$l_size;           /* off 16: fixed frame size in bytes      */
+    uint16_t pdsc$w_reserved;       /* off 20                                 */
+    uint16_t pdsc$w_entry_length;   /* off 22: prologue length                */
+    uint32_t pdsc$l_ireg_mask;      /* off 24: integer regs saved in the RSA (stack) */
+    uint32_t pdsc$l_freg_mask;      /* off 28: FP regs saved in the RSA (stack)      */
+    uint64_t pdsc$q_handler;        /* off 32: condition handler, if HANDLER_VALID   */
+    uint64_t pdsc$q_handler_data;   /* off 40: handler data                          */
 };
+/* This is the descriptor the alpha-dec-vms back end actually emits (gas .pdesc;
+ * observed in a cross-compiled object: flags 0x3089 = kind FP_STACK with
+ * BASE_REG_IS_FP, rsa_offset 8 at +2, entry at +8, frame size at +16,
+ * ireg_mask at +24) -- the OpenVMS Alpha Calling Standard PDSC. A layout that
+ * disagrees mis-reads every real frame (vms-ed1), so it is pinned here. */
+_Static_assert(__builtin_offsetof(struct pdsc_descriptor, pdsc$q_entry) == 8, "PDSC entry at +8");
+_Static_assert(__builtin_offsetof(struct pdsc_descriptor, pdsc$l_size) == 16, "PDSC size at +16");
+_Static_assert(__builtin_offsetof(struct pdsc_descriptor, pdsc$l_ireg_mask) == 24, "PDSC ireg_mask at +24");
+_Static_assert(__builtin_offsetof(struct pdsc_descriptor, pdsc$q_handler) == 32, "PDSC handler at +32");
+
 
 /* ================================================================
  * Register Save Area (RSA) layout, as built by a stack-frame procedure.

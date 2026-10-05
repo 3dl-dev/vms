@@ -260,6 +260,33 @@ assert_libinit() {
   return 1
 }
 
+assert_invo() {
+  # vms-ed1: the anchorless SYS$UNWIND resumed main after its call to f() with
+  # R0 = 42; g() and f() never returned; main's local survived; sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaF 'OVMX invo test: f() -> 42 handler=1 g_returned=0 f_returned=0 keep=1234 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) return-to-main observed   : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -802,6 +829,46 @@ EOF
       exit 0
     fi
     echo "FAIL: LIB\$INITIALIZE did not run the registered routines before main. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  invo-gate)
+    # vms-ed1: anchorless SYS$UNWIND "return to main" on the real executive.
+    # invo_test.c binds LIBVMS$SHR (LIB$ESTABLISH/LIB$SIGNAL/SYS$UNWIND), so it
+    # is built with the producer graph (veneer build) + JOINT_USE_LIBVMS=1.
+    MILESTONE_MAIN=invo_test.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    export JOINT_USE_LIBVMS=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX invo test: f() -> 42 handler=1 g_returned=0 f_returned=0 keep=1234 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX invo test: f() -> 105 handler=1 g_returned=1 f_returned=1 keep=1234 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/popped.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- invo selftest 1/3: resumed main with R0=42, nothing else returned must PASS --"
+    if assert_invo "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- invo selftest 2/3: pop-only (g and f returned normally) must FAIL --"
+    if assert_invo "$_st/popped.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- invo selftest 3/3: a crash in the transfer must FAIL --"
+    if assert_invo "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "invo selftest failed -- assert_invo cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- anchorless SYS\$UNWIND return-to-main on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX invo|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_invo "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: SYS\$UNWIND resumed main (no resume anchor) after its call with R0=42 --"
+      echo "      the genuine Alpha invocation-context capture, PDSC/RSA walk and machine"
+      echo "      transfer, on the real OVMX/Alpha executive."
+      exit 0
+    fi
+    echo "FAIL: the anchorless return-to-main did not happen. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

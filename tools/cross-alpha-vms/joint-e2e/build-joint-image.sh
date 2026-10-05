@@ -154,6 +154,7 @@ docker run --rm \
     -e JOINT_MAIN \
     -e JOINT_EXTRA \
     -e JOINT_CRTL_RMS_VENEER \
+    -e JOINT_USE_LIBVMS \
     -e JOINT_LINK_BASE \
     "$IMG" bash -c '
 set -euxo pipefail
@@ -340,6 +341,10 @@ RMS_USE_FLAG=""
 # search pulls it only into an image that references LIB$INITIALIZE.
 "$ALPHA_CC" -mpointer-size=64 -g0 -c /src/src/vmslink/starlet/lib_initialize.c -o "$OUT/lib_initialize.obj"
 rm -f "$OUT/STARLET.a"; ar rcS "$OUT/STARLET.a" "$OUT/lib_initialize.obj"
+# vms-ed1: JOINT_USE_LIBVMS=1 (veneer builds only, where the LIB$/CHF producer
+# LIBVMS$SHR exists) also binds the image to LIBVMS$SHR -- for a port program
+# that calls LIB$ESTABLISH / LIB$SIGNAL / SYS$UNWIND / LIB$GET_*_INVO_*.
+[ -n "$RMS" ] && [ "${JOINT_USE_LIBVMS:-0}" = 1 ] && RMS_USE_FLAG="$RMS_USE_FLAG --use $OUT/LIBVMS\$SHR.EXE"
 # vms-035: LINK.EXE links an EVAX executable at the OpenVMS Alpha P0 base 0x10000
 # by default (ET_EXEC; IMGACT then places the shareables in P0 above it).
 # JOINT_LINK_BASE overrides it (0 = the relocatable ET_DYN form).

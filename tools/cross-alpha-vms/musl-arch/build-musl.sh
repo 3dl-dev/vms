@@ -224,6 +224,12 @@ if ! grep -q 'vms-28d: psignal' include/signal.h; then
 fi
 grep -q 'vms-28d: psignal' include/signal.h || { echo "vms-28d PATCH FAIL: psignal in include/signal.h" >&2; exit 7; }
 echo "== vms-28d DEC C header forms applied (vaxc\$errno, getcwd 3-arg, psignal) =="
+# vms-fe03: the headers declare, for alpha-dec-vms clients, only what DECC$SHR
+# exports -- every function the port's CRTL name map covers (decc-crtl-names.txt);
+# the rest bind bare names no link can reach, so a configure probe would find a
+# declaration without a definition (GCC's strsignal cascade). See the script.
+perl "${OVERLAY}/filter-headers.pl" "${OVERLAY}/decc-crtl-names.txt" include \
+	|| { echo "vms-fe03 FAIL: header filter" >&2; exit 7; }
 
 # ---- configure + build libc.a ----
 ./configure \
@@ -467,6 +473,11 @@ cat > /tmp/decc_forms.c <<'EOF'
 #include <signal.h>
 #include <stddef.h>
 void psignal(int signo, char *message) { (void)signo; (void)message; }
+/* vms-fe03: strsignal is not in the DEC C RTL; GCC's system.h declares its own
+ * when configure finds none -- that must not conflict with <string.h>. */
+#include <string.h>
+const char *strsignal(int);
+size_t forms_len(const char *s) { return strlen(s); }   /* DEC C surface stays declared */
 char *forms_pwd(char *b, size_t n) { return getcwd(b, n, 0); }
 int forms_vms_status(void) { return vaxc$errno; }
 /* vms-ce6: the pointer-width types match the compiler's at this pointer size */
@@ -477,7 +488,7 @@ _Static_assert(__builtin_types_compatible_p(uintptr_t, __UINTPTR_TYPE__), "uintp
 _Static_assert(INTPTR_MAX == __INTPTR_MAX__ && PTRDIFF_MAX == __PTRDIFF_MAX__, "pointer-width limits");
 EOF
 for ps in "" "-mpointer-size=64"; do
-	if "${TARGET}-gcc" ${ps} -nostdinc -Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
+	if "${TARGET}-gcc" ${ps} -Werror=implicit-function-declaration -nostdinc -Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
 		-fsyntax-only /tmp/decc_forms.c 2>/tmp/decc_forms.err; then
 		echo "  OK      client TU compiles (pointer size: ${ps:-default 32})"
 	else
@@ -491,6 +502,19 @@ if "${TARGET}-gcc" -mpointer-size=64 -D__OVMX_LIBC_BUILD -nostdinc -Iarch/${TARG
 	exit 7
 fi
 echo "  OK      control: the same TU is rejected under the C RTL's own POSIX forms"
+
+# vms-fe03: a header with no DEC C RTL function (sys/prctl.h) is refused whole
+# for a client, and still compiles for the C RTL's own build.
+printf '#include <sys/prctl.h>\nint fe03_x;\n' > /tmp/fe03_prctl.c
+if "${TARGET}-gcc" -nostdinc -Iarch/${TARGET} -Iarch/generic -Iobj/include -Iinclude \
+	-fsyntax-only /tmp/fe03_prctl.c 2>/dev/null; then
+	echo "VERIFY FAIL (vms-fe03): <sys/prctl.h> (no DECC\$SHR entry point) was accepted for an alpha-dec-vms client" >&2
+	exit 7
+fi
+"${TARGET}-gcc" -mpointer-size=64 -D__OVMX_LIBC_BUILD -nostdinc -Iarch/${TARGET} -Iarch/generic \
+	-Iobj/include -Iinclude -fsyntax-only /tmp/fe03_prctl.c \
+	|| { echo "VERIFY FAIL (vms-fe03): <sys/prctl.h> rejected for the C RTL's own build" >&2; exit 7; }
+echo "  OK      a header with no DEC C RTL function is refused for clients, kept for the RTL build"
 
 echo "== page-size gate (vms-c5d): PAGE_SIZE must be a compile-time 8192 on alpha-dec-vms =="
 PGSZ_HDR="arch/${TARGET}/bits/limits.h"

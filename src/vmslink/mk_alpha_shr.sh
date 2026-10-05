@@ -67,7 +67,10 @@ MUSL_INC="-I$ALPHA_MUSL_SRC/include -I$ALPHA_MUSL_SRC/arch/alpha-dec-vms -I$ALPH
 # the shareable, -mpointer-size=64 for LP64, -ffreestanding/-fno-builtin so libc
 # calls stay real cross-image imports to DECC$SHR, -g0 because the cross nm reads
 # DST-stripped objects most reliably (the shipped image is byte-identical).
-CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mpointer-size=64 -g0 -U_FORTIFY_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE ${ALPHA_DEFS:-}"
+# -D__OVMX_LIBC_BUILD: OVMX's own runtime shareables are part of the RTL, built
+# against the full C RTL declarations (vms-28d/vms-fe03 restrict the DEC C
+# client view of the headers, not the runtime's own).
+CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -fno-stack-protector -mpointer-size=64 -g0 -U_FORTIFY_SOURCE -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE -D__OVMX_LIBC_BUILD ${ALPHA_DEFS:-}"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT

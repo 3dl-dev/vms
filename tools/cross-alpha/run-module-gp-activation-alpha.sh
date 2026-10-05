@@ -320,7 +320,9 @@ assert_cxx() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
   local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
-  port_ok=$(grep -qaF 'OVMX C++ test: ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1 ' "$log" && echo 1 || echo 0)
+  local want_ptr=64
+  [ "${CXX_GATE_P32:-0}" = 1 ] && want_ptr=32
+  port_ok=$(grep -qaE "OVMX C\+\+ test: ctor=42 virt=7 vec=OVMX,C\+\+/libstdc\+\+ caught=1 argc=[0-9]+ ptr=$want_ptr" "$log" && echo 1 || echo 0)
   seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
   mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
   if [ -n "$mile_hex" ]; then
@@ -1048,6 +1050,11 @@ EOF
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;
+  cxx32-gate)
+    # vms-1045: the same C++ program at the DEC C DEFAULT (32-bit) pointer size,
+    # against the toolchain's 32-bit libstdc++ ($TC/cxx/p32). Falls through.
+    CXX_GATE_P32=1
+    ;&
   cxx-gate)
     # vms-4d0: a C++ program on OVMX/Alpha. The producer graph comes from a
     # veneer joint build (DECC$SHR, LIBVMS$SHR for SYS$GL_CALL_HANDL, STARLET);
@@ -1060,9 +1067,10 @@ EOF
     JOINT_CRTL_RMS_VENEER=1
     export JOINT_USE_LIBVMS=1
     _st=$(mktemp -d); _fails=0
-    printf '%s\n%s\n' 'OVMX C++ test: ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1' \
+    _wp=64; [ "${CXX_GATE_P32:-0}" = 1 ] && _wp=32
+    printf '%s\n%s\n' "OVMX C++ test: ctor=42 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1 ptr=$_wp" \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
-    printf '%s\n%s\n' 'OVMX C++ test: ctor=0 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1' \
+    printf '%s\n%s\n' "OVMX C++ test: ctor=0 virt=7 vec=OVMX,C++/libstdc++ caught=1 argc=1 ptr=$_wp" \
       'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/noctor.log"
     printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 6)' \
       'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/abort.log"
@@ -1086,9 +1094,15 @@ EOF
     fi
     log "step 1d: compile + link cxx_test.cc with the stage-2 g++ (ld = OVMX LINK.EXE over this build's shareables)"
     mkdir -p "$GATE_ROOT/cxximg"
+    if [ "${CXX_GATE_P32:-0}" = 1 ]; then
+      _cxxf="-nostdinc++ -isystem /out/cxx/p32/include/c++/14_2_0 -isystem /out/cxx/p32/include/c++/14_2_0/alpha-dec-vms -L/out/cxx/p32/lib"
+    else
+      _cxxf="-mpointer-size=64"
+    fi
+    # shellcheck disable=SC2086
     docker run --rm -v "$REPO:/src:ro" -v "$_tc:/out:ro" -v "$GATE_ROOT/joint-n3:/joint:ro" -v "$GATE_ROOT/cxximg:/img" \
       -e OVMX_ALPHA_SYSROOT=/joint "$VMS_IMG" \
-      /out/cxx/bin/alpha-dec-vms-g++ -mpointer-size=64 -O1 -o /img/joint_e2e.exe \
+      /out/cxx/bin/alpha-dec-vms-g++ $_cxxf -O1 -o /img/joint_e2e.exe \
       /src/tools/cross-alpha-vms/joint-e2e/cxx_test.cc > "$GATE_ROOT/cxx-link.log" 2>&1 \
       || { tail -40 "$GATE_ROOT/cxx-link.log"; die "C++ test did not link"; }
     grep -E "LINK-I-LIBRARY|LINK-I-LIBINIT|LINK-S-CREATED" "$GATE_ROOT/cxx-link.log" | sed 's/^/  | /'

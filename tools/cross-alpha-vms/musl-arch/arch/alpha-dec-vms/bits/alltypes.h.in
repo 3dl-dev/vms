@@ -20,6 +20,16 @@
  * ==========================================================================
  */
 #define _Addr long long
+/* vms-ce6: ptrdiff_t follows the CLIENT's pointer size, as the port compiler's
+ * own __PTRDIFF_TYPE__ does (long long under -mpointer-size=64 -- the C RTL
+ * itself is always built that way -- int under the DEC C default). intptr_t
+ * and uintptr_t stay 64-bit at both sizes, as the compiler's __INTPTR_TYPE__
+ * does: they must hold any pointer, 64-bit ones included. */
+#if defined(__INITIAL_POINTER_SIZE) && __INITIAL_POINTER_SIZE == 64
+#define _Ptrdiff long long
+#else
+#define _Ptrdiff int
+#endif
 #define _Int64 long long
 #define _Reg long long
 

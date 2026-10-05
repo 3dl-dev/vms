@@ -62,6 +62,7 @@
 #   recnx-last-gasp-uncounted                vms_cnxman_recnx_fsm.c
 #   ldwv-refusal-uncounted                   vms_dlm_ldwv.c
 #   dlm-dir-remove-by-anyone                 vms_dlm_dir.c   (rd vms-8219)
+#   dlm-learner-unbounded                    vms_lock.c      (rd vms-4e9)
 #
 # (vms_dlm_ldwv.c above -- FC-P4.3's Lock Directory Weight Vector -- was the
 # seventh TU named by the item that grew this manifest; see its own defect
@@ -130,6 +131,7 @@ phase2-count-mismatch-uncounted
 recnx-last-gasp-uncounted
 ldwv-refusal-uncounted
 dlm-dir-remove-by-anyone
+dlm-learner-unbounded
 dlm-lkid-guard-disabled
 dlm-requester-hash-refusal-uncounted
 codec-mscp-gus-tail2-invented
@@ -381,6 +383,20 @@ EOF
         require_fail) cat <<'EOF'
 and counted in the CLUB
 the refusal is counted
+EOF
+                      ;;
+        esac;;
+
+    dlm-learner-unbounded)
+        case "$_f" in
+        facility)     echo "the DLM directory-hash learner's bound (dir_hash_learn_room(), rd vms-4e9): a learned hash gets a NEW resource block only while the table is under VMS_DLM_LEARN_RES_CAP; a declined learn is counted";;
+        targets)      echo "kernel-core/vms_lock.c";;
+        suites_red)   echo "test_lock_dir";;
+        isolation)    echo "isolated";;
+        why)          echo "the learner's bound is disarmed, so every distinct root name a VMS member puts on the wire leaves a preserved resource block behind for good -- the unbounded growth of a long-lived mixed cluster the bound exists to stop.";;
+        require_fail) cat <<'EOF'
+the learner keeps exactly its bound of new names
+and counts every name it declined
 EOF
                       ;;
         esac;;
@@ -1266,6 +1282,10 @@ apply_edit() {
     recnx-last-gasp-uncounted)
         # `r->last_gasps++;` is unique in this file.
         sed -i 's|r->last_gasps++;|/* NEGCTL recnx-last-gasp-uncounted: the last gasp is not counted */|' "$_file";;
+
+    dlm-learner-unbounded)
+        # `vms_res_blocks < VMS_DLM_LEARN_RES_CAP;` is unique in this file.
+        sed -i 's|vms_res_blocks < VMS_DLM_LEARN_RES_CAP;|1; /* NEGCTL dlm-learner-unbounded */|' "$_file";;
 
     dlm-dir-remove-by-anyone)
         # `if (i < 0 || d->slot[i].master != master) {` is unique in this file.

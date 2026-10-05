@@ -63,6 +63,7 @@
 #include <stdlib.h>
 #include "ovmx_async.h"
 #include "starlet.h"
+#include "devdef.h"
 #include "dvidef.h"
 #include "dcdef.h"
 #include "dvsdef.h"
@@ -83,8 +84,9 @@
  * SPL, ...) is not tracked by the executive yet and is therefore NOT invented
  * here. The disk/volume flags the old fake set from statvfs are gone with it.
  */
-#define DEV$M_ALL    0x00000008  /* Device is allocated */
-#define DEV$M_AVL    0x00000020  /* Device is available */
+/* DEV$M_ALL / DEV$M_AVL come from devdef.h: the V7.3 values (ALL 0x800000, AVL
+ * 0x40000). This file once carried private copies (0x8 / 0x20) that were really
+ * DEV$M_DIR and DEV$M_SQD on a real system. */
 
 /*
  * dev_unit - the unit number as a pure function of the physical name

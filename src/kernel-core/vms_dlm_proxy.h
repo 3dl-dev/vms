@@ -309,6 +309,11 @@ uint32_t vms_lock_dlm_learn_dir_hash(const char *resnam, uint32_t dir_hash);
  * reads it, nothing acts on it. */
 uint32_t vms_lock_dlm_dir_hash_conflicts(void);
 
+/* How many learned hashes were NOT kept because the resource table was at the
+ * learner's bound and held no block for that name (rd vms-4e9). A real $ENQ is
+ * never refused by the bound; this counts only what the learner declined. */
+uint32_t vms_lock_dlm_dir_hash_learn_full(void);
+
 /*
  * WHERE `post` COMES FROM. The DLM's wire arm implements it (FC-P4.6): it
  * builds the cat-02 frame from the fields above through the codec and hands it

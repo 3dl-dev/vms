@@ -35,6 +35,7 @@
 #include "dcl/dcl_rms.h"          /* vms-481: F$ file lexicals reach files via RMS/ACP */
 #include "dcl/symbol.h"
 #include "ssdef.h"
+#include "devdef.h"
 /* Kernel-interface client: F$DEVICE enumerates the executive's device
  * table through it (vms-fb9), and F$SETPRV routes its privilege mutation
  * through vms_kif_setprv() here -- the SAME already-wired executive edge
@@ -2494,21 +2495,14 @@ static int lex_device(struct dcl_context *ctx, const char *args,
 }
 
 /*
- * DVI$_DEVCHAR bits F$GETDVI reports (vms-050).
- *
- * PROVENANCE (CLAUDE.md Rule 8): the public docs available to this work do not
- * publish the byte-level DEV$M_ layout, so these values are an OVMX design
- * choice, deliberately IDENTICAL to the ones src/libvms/syssvc/sys_device.c's
- * $GETDVI reader (fill_dvi_item) uses, so F$GETDVI and $GETDVI report the same
- * DVI$_DEVCHAR longword for the same device. (A separate DEV$M_ table in
- * src/libvms/include/devdef.h disagrees on these values; reconciling the two,
- * against an oracle, is out of scope here and is filed as a follow-up. What
- * matters for this de-fab is that the two DCL-visible readers agree and the
- * value is derived from real executive state, never fabricated.)
+ * DVI$_DEVCHAR bits F$GETDVI reports (vms-050): the V7.3 DEV$M_ values from
+ * devdef.h (rd vms-f811), the SAME ones src/libvms/syssvc/sys_device.c's $GETDVI
+ * reader uses, so F$GETDVI and $GETDVI report one DVI$_DEVCHAR longword for the
+ * same device, derived from real executive state, never fabricated.
  */
-#define GETDVI_DEVCHAR_ALL   0x00000008u  /* device is allocated */
-#define GETDVI_DEVCHAR_AVL   0x00000020u  /* device is available */
-#define GETDVI_DEVCHAR_MNT   0x00000200u  /* a volume is mounted on it */
+#define GETDVI_DEVCHAR_ALL   DEV$M_ALL  /* device is allocated */
+#define GETDVI_DEVCHAR_AVL   DEV$M_AVL  /* device is available */
+#define GETDVI_DEVCHAR_MNT   DEV$M_MNT  /* a volume is mounted on it */
 
 /*
  * Resolve a device name to its EXECUTIVE device-table row (vms-050).

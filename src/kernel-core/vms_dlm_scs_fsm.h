@@ -289,12 +289,13 @@ struct dlm_req_ops {
 
 	/*
 	 * Which member is the directory node for the root name whose
-	 * WIRE-LEARNED hash is `hash16`? The connection manager's Lock Directory
-	 * Weight Vector, `ldwv[hash16 mod n]` (vms_dlm_ldwv.h). 0 in *out_csid
+	 * WIRE-LEARNED hash is `dir_hash`? The connection manager's Lock Directory
+	 * Weight Vector, `ldwv[vms_ldwv_key(dir_hash) mod n]` (vms_dlm_ldwv.h; the
+	 * high 16 bits of the 32-bit wire value, rd vms-4fb). 0 in *out_csid
 	 * means THIS NODE. Non-zero return means "not resolved", and then
 	 * nothing is sent. There is deliberately no variant taking a NAME.
 	 */
-	int (*dir_resolve)(void *ctx, uint16_t hash16, vms_csid_t *out_csid);
+	int (*dir_resolve)(void *ctx, uint32_t dir_hash, vms_csid_t *out_csid);
 
 	/* The vector's generation. It changes at Phase 1 of every transition
 	 * (Davis p. 6-33), which is how a routing decision made under an old
@@ -331,7 +332,7 @@ struct dlm_req_ops {
 	int (*blkast_deliver)(void *ctx, uint32_t req_lkid);
 	/* Learn a root name's directory hash from a frame that carried it
 	 * (Davis p. 6-50) -- production: vms_lock_dlm_learn_dir_hash. */
-	int (*learn_dir_hash)(void *ctx, const char *resnam, uint16_t hash16);
+	int (*learn_dir_hash)(void *ctx, const char *resnam, uint32_t dir_hash);
 	/* No answer is coming: end the proxy's wait with a real status. */
 	void (*fail)(void *ctx, uint32_t req_lkid, enum dlm_req_fail_reason why);
 
@@ -464,7 +465,7 @@ struct dlm_req_fsm {
 	uint32_t blkasts_undeliverable;
 	uint32_t blkasts_unparsed;    /* an op-0x04 body the codec refused --  */
 				       /* wrong cat/op, or a zero lock id       */
-	uint32_t hashes_learned;      /* body[10:12] -> the resource block     */
+	uint32_t hashes_learned;      /* body[128:132] -> the resource block   */
 
 	/* The refusals -- each one a place this file declines to fabricate. */
 	uint32_t hash_unknown_refused;   /* a lookup with no wire-learned hash */
@@ -618,13 +619,14 @@ uint32_t dlm_req_fsm_peer_gone(struct dlm_req_fsm *f, vms_csid_t csid);
 
 /*
  * THE HASH LEARNER (integration note E49). Called for EVERY inbound cat-0x02
- * frame this node sees, in any role: a lookup received, a request received as
- * master, a rebuild registration, a deny that echoed the name. It reads the
- * SENDER's own 16-bit value at body[10:12] together with the root NAME in the
- * same frame and records the pair through `ops->learn_dir_hash` -- Davis p.
- * 6-50's "the receiving system uses the received value".
+ * frame this node sees, in any role; it LEARNS only from the frames the value
+ * is grounded on -- an op-0x01 request (or its echo) for a ROOT resource (rd
+ * vms-4fb). It reads the SENDER's own 32-bit value at body[128:132] together
+ * with the NAME in the same frame and records the pair through
+ * `ops->learn_dir_hash` -- Davis p. 6-50's "the receiving system uses the
+ * received value".
  *
- * This is the ONLY way `rsb->hash16` is ever set, and therefore the only reason
+ * This is the ONLY way `rsb->dir_hash` is ever set, and therefore the only reason
  * OVMX can address a directory lookup at all. Returns the number of hashes
  * learned from this frame (0 or 1).
  */

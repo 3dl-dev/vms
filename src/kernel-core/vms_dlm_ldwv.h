@@ -153,7 +153,7 @@ uint32_t vms_ldwv_entry_count(const struct vms_ldwv_member *m,
  *
  * `vms_ldwv_resolve` is `dir_resolve`. It takes the hash as a PARAMETER
  * because the hash is not this layer's to produce: the caller must have
- * learned it from the wire (vms_lock.c's `rsb->hash16`/`hash_known`). There is
+ * learned it from the wire (vms_lock.c's `rsb->dir_hash`/`hash_known`). There is
  * deliberately no overload of these functions that takes a resource NAME --
  * an API that accepted a name would be an API that invited someone to hash it.
  *
@@ -166,6 +166,18 @@ uint32_t vms_ldwv_entry_count(const struct vms_ldwv_member *m,
  * ========================================================================== */
 enum vms_ldwv_status vms_ldwv_index(const struct vms_ldwv *v, uint16_t hash16,
 				    uint32_t *out_index);
+
+/*
+ * THE INDEX KEY OF A WIRE HASH (rd vms-4fb). The value VMS carries on the
+ * wire is 32 bits (cat-0x02 op-0x01 body[128:132], vms_cluster_codec_dlm.h);
+ * the vector is indexed by its HIGH 16 bits mod n -- the published 16-bit hash
+ * (Davis p. 6-49). GROUNDED on a real three-node V7.3 cluster whose vector was
+ * [VAX1, VAX2, VAX2] (LOCKDIRWT 1/2/0, CSV order): every one of 140 directory
+ * lookups a weight-0 node made for a ROOT name went to entry[(value >> 16) mod
+ * 3]; the full value, its low half and each single byte land at chance. Every
+ * `hash16` parameter of this layer is this key, never the wire value itself.
+ */
+uint16_t vms_ldwv_key(uint32_t wire_hash);
 
 enum vms_ldwv_status vms_ldwv_resolve(const struct vms_ldwv *v, uint16_t hash16,
 				      vms_csid_t *out_csid);

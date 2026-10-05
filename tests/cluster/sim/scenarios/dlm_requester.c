@@ -299,7 +299,7 @@ static void peer_receive(uint32_t sys, const uint8_t *body, uint32_t len)
 	 */
 	if (sender_addressed_the_directory(req.req_pid_or_lkid)) {
 		if (cnxman_dir_lookup_received(&g_sys[sys].cl.club,
-					       req.dir_hash,
+					       vms_ldwv_key(req.dir_hash),
 					       g_csid[SIM_OVMX],
 					       &g_sys[sys].ops))
 			g_lookups_landed++;
@@ -352,10 +352,10 @@ static int fsm_refill(void *ctx, uint32_t req_lkid, uint32_t op,
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
-static int fsm_dir_resolve(void *ctx, uint16_t hash16, vms_csid_t *out)
+static int fsm_dir_resolve(void *ctx, uint32_t hash16, vms_csid_t *out)
 {
 	(void)ctx;
-	return vms_ldwv_resolve(&g_sys[SIM_OVMX].cl.club.ldwv, hash16, out) ==
+	return vms_ldwv_resolve(&g_sys[SIM_OVMX].cl.club.ldwv, vms_ldwv_key(hash16), out) ==
 	       VMS_LDWV_OK ? 0 : -1;
 }
 
@@ -393,7 +393,7 @@ static int fsm_blkast(void *ctx, uint32_t req_lkid)
 	       (uint32_t)SS__NORMAL ? 0 : -1;
 }
 
-static int fsm_learn(void *ctx, const char *resnam, uint16_t hash16)
+static int fsm_learn(void *ctx, const char *resnam, uint32_t hash16)
 {
 	(void)ctx;
 	return vms_lock_dlm_learn_dir_hash(resnam, hash16) ==
@@ -449,7 +449,7 @@ static uint32_t eng_post(void *ctx, const struct vms_dlm_proxy_post *p)
 		       : (uint32_t)SS__UNSUPPORTED;
 }
 
-static uint32_t eng_dir_resolve(void *ctx, uint16_t hash16, uint32_t *out)
+static uint32_t eng_dir_resolve(void *ctx, uint32_t hash16, uint32_t *out)
 {
 	(void)ctx;
 	return fsm_dir_resolve(NULL, hash16, out) == 0 ? (uint32_t)SS__NORMAL
@@ -550,10 +550,10 @@ static void do_getlki(uint32_t lkid, struct vms_getlki_args *out)
 
 /*
  * Teach OVMX a root name's directory hash the ONLY way it can be taught: a
- * frame another system sent, carrying both the name and its own 16-bit value,
+ * frame another system sent, carrying both the name and its own 32-bit value,
  * through the shipping dlm_req_fsm_observe().
  */
-static void wire_teaches_hash(const char *resnam, uint16_t hash)
+static void wire_teaches_hash(const char *resnam, uint32_t hash)
 {
 	uint8_t frame[VMS_CM_FRAME_LEN];
 	struct vms_cm_link link;
@@ -579,18 +579,23 @@ static void wire_teaches_hash(const char *resnam, uint16_t hash)
 /* Find a 16-bit value the SHIPPING vector routes to `want` -- the scenario
  * never computes a hash from a name, it picks a wire value with a known
  * destination, which is exactly what the "hash from the wire" rung permits. */
-static int hash_routing_to(vms_csid_t want, uint16_t *out)
+/* Some WIRE value (32 bits, body[128:132]) whose index key -- its high 16
+ * bits, vms_ldwv_key() -- the shipping vector routes to `want`. The low half
+ * is deliberately nonzero, so a key taken from the wrong half would route
+ * somewhere else and the scenario would say so. */
+static int hash_routing_to(vms_csid_t want, uint32_t *out)
 {
-	uint32_t h;
+	uint32_t k;
 
-	for (h = 0; h < 65536u; h++) {
+	for (k = 0; k < 65536u; k++) {
 		vms_csid_t csid = 0;
+		uint32_t wire = (k << 16) | 0x5a5au;
 
 		if (vms_ldwv_resolve(&g_sys[SIM_OVMX].cl.club.ldwv,
-				     (uint16_t)h, &csid) != VMS_LDWV_OK)
+				     vms_ldwv_key(wire), &csid) != VMS_LDWV_OK)
 			continue;
 		if (csid == want) {
-			*out = (uint16_t)h;
+			*out = wire;
 			return 0;
 		}
 	}
@@ -659,7 +664,7 @@ static void cross_node_enq_resolves_and_grants(void)
 	struct vms_frame_info fi;
 	struct vms_dlm_enq_request sent;
 	uint8_t opcode = 0;
-	uint16_t hash = 0;
+	uint32_t hash = 0;
 	uint32_t lkid = 0, st, flen;
 	uint32_t settled_before = g_fsm.grants_settled;
 
@@ -699,7 +704,7 @@ static void cross_node_enq_resolves_and_grants(void)
 			 VMS_CODEC_OK,
 		 "the lookup parses as a cat-02 op-01");
 	ct_check_eq_u32(sent.dir_hash, hash,
-			"*** body[10:12] is the value the WIRE taught us ***");
+			"*** body[128:132] is the value the WIRE taught us ***");
 	ct_check_eq_u32(sent.req_pid_or_lkid, lkid,
 			"body[20:24] is the executive's own lock handle");
 
@@ -783,7 +788,7 @@ static void directory_is_the_master(void)
 {
 	struct vms_getlki_args gk;
 	struct vms_dlm_proxy_post db;
-	uint16_t hash = 0;
+	uint32_t hash = 0;
 	uint32_t lkid = 0, st;
 	uint32_t settled_before = g_fsm.grants_settled;
 
@@ -866,7 +871,7 @@ static void misaddressed_inbound_is_redirected(void)
 {
 	struct vms_dlm_proxy_post db;
 	vms_csid_t target = 0;
-	uint16_t hash = 0;
+	uint32_t hash = 0;
 	uint32_t lkid = 0, st, mlk = 0, frames_before;
 
 	printf("--- a peer mis-addresses OVMX: it is REDIRECTED to the real "
@@ -949,7 +954,7 @@ static void misaddressed_inbound_is_redirected(void)
 static void master_departs_mid_request(void)
 {
 	struct vms_getlki_args gk;
-	uint16_t hash = 0;
+	uint32_t hash = 0;
 	uint32_t lkid = 0, st, n;
 
 	printf("--- a member leaves with a request outstanding at it ---\n");

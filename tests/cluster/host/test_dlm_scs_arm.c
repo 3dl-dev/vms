@@ -221,11 +221,12 @@ static void arm_bindings(void)
 	has("if (!dlm_arm_eng_dir_groundable(ctx))\n\t\treturn SS__UNSUPPORTED;",
 	    "dir_ground REFUSES unless the all-OVMX gate holds -- never a name->hash "
 	    "against a real VAX (the 90b3bbbd storm cannot recur)");
-	has("*out_hash16 = vms_dlm_ovmx_dir_hash(name, name_len);",
+	has("*out_hash = vms_dlm_ovmx_dir_hash(name, name_len);",
 	    "... and the grounded value is OVMX's OWN directory hash, not DEC's");
 	has("h *= 16777619u;           /* FNV-1a prime */",
-	    "OVMX's own hash is FNV-1a over the name bytes, folded to 16 -- clean-"
-	    "room, deterministic, identical on every OVMX node");
+	    "OVMX's own hash is FNV-1a over the name bytes, a 32-bit value in "
+	    "the wire's own shape (rd vms-4fb) -- clean-room, deterministic, "
+	    "identical on every OVMX node");
 	has("d->eng_ops.post           = dlm_arm_post;",
 	    "the engine's POST op is installed too -- the remote route it serves is "
 	    "now reachable behind the gate");

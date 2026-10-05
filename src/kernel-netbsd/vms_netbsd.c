@@ -1097,6 +1097,47 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	}
 
 	/*
+	 * VMS_IOCTL_REGISTER_DETACHED (rd vms-ff75): the detached grandchild of a
+	 * $CREPRC PRC$M_DETACH claims the identity its CREATOR had the executive
+	 * authorize (VMS_IOCTL_CREPRC_TICKET). Mirrors the Linux twin
+	 * (src/kernel/vms_module.c vms_ioctl_register_detached): the ancestry is
+	 * read from the real parent chain (p_pptr, up to three levels), the ticket is honoured only if its creator is among them, and
+	 * the caller's own (fresh, job-root) row is stamped by the executive. A
+	 * refused ticket answers SS$_NOPRIV and stamps nothing.
+	 */
+	case VMS_IOCTL_REGISTER_DETACHED: {
+		struct vms_register_detached_args *da =
+		    (struct vms_register_detached_args *)data;
+		struct proc *pp;
+		uint32_t anc[3] = { 0, 0, 0 };
+		char uname[VMS_USERNAME_SIZE];
+		uint32_t duic = 0;
+		uint64_t dprivs = 0;
+		int i;
+
+		pp = l->l_proc->p_pptr;   /* same unlocked read as _SUBPROCESS */
+		for (i = 0; i < 3 && pp != NULL; i++) {
+			anc[i] = (uint32_t)pp->p_pid;
+			pp = pp->p_pptr;
+		}
+
+		memset(uname, 0, sizeof(uname));
+		da->vms_pid = 0;
+		if (vms_proc_creprc_ticket_claim(da->ticket, anc, 3, uname,
+		    &duic, &dprivs) != 0) {
+			da->status = SS__NOPRIV;
+			return 0;
+		}
+		proc = vms_proc_get(l->l_proc->p_pid);
+		if (proc == NULL)
+			return ENOMEM;
+		vms_proc_apply_ticket_identity(proc, uname, duic, dprivs);
+		da->vms_pid = proc->vms_pid;
+		da->status  = SS__NORMAL;
+		return 0;
+	}
+
+	/*
 	 * DEVICE-TABLE facility (src/kernel-core/vms_devtab.c) -- rd vms-618, the
 	 * LAST executive facility to join this module. Same dispatch shape as every
 	 * other facility above: find-or-create the caller's proc, hand the
@@ -1197,6 +1238,7 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 	case VMS_IOCTL_GETJPI:
 	case VMS_IOCTL_PROCSCAN:
 	case VMS_IOCTL_SETIDENT:
+	case VMS_IOCTL_CREPRC_TICKET:
 	case VMS_IOCTL_ESTABLISH_SYSTEM:
 	case VMS_IOCTL_HIBER:
 	case VMS_IOCTL_WAKE:
@@ -1219,6 +1261,8 @@ vms_ioctl(dev_t self __unused, u_long cmd, void *data, int flag __unused,
 			r = vms_ioctl_procscan(proc, (unsigned long)uarg);         break;
 		case VMS_IOCTL_SETIDENT:
 			r = vms_ioctl_setident(proc, (unsigned long)uarg);         break;
+		case VMS_IOCTL_CREPRC_TICKET:   /* rd vms-ff75 */
+			r = vms_ioctl_creprc_ticket(proc, (unsigned long)uarg);    break;
 		case VMS_IOCTL_ESTABLISH_SYSTEM:
 			r = vms_ioctl_establish_system(proc, (unsigned long)uarg); break;
 		case VMS_IOCTL_HIBER:

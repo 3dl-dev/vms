@@ -131,7 +131,7 @@ static uint32_t fm_post(void *ctx, const struct vms_dlm_proxy_post *p)
 static uint32_t test_dir_csid;
 static uint32_t test_dir_gen = 1;
 
-static uint32_t fm_dir_resolve(void *ctx, uint16_t hash16, uint32_t *out_csid)
+static uint32_t fm_dir_resolve(void *ctx, uint32_t hash16, uint32_t *out_csid)
 {
 	(void)ctx;
 	(void)hash16;   /* one directory member: every hash lands on it */

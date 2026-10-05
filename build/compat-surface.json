@@ -7835,7 +7835,7 @@
       "scope_1_0": "in",
       "evidence": "src/libvms/syssvc/sys_process.c",
       "verified_against": null,
-      "notes": "fork()+execve() + executive PCB registration; inherits identity; returns the executive-assigned VMS PID in pidadr",
+      "notes": "fork()+execve() + executive PCB registration; inherits identity; returns the executive-assigned VMS PID in pidadr. PRC$M_DETACH (rd vms-ff75): the detached process's identity (uic/prvadr, default the creator's) is AUTHORIZED BY THE CREATOR'S executive row (VMS_IOCTL_CREPRC_TICKET: SETPRV, or a subset of the creator's own identity, else SS$_NOPRIV with nothing created) and claimed once by the detached process (VMS_IOCTL_REGISTER_DETACHED, honoured only while the creator is its ancestor) as a new job root with a fresh PID -- so RUN/DETACHED works from a non-root interactive session; the SETIDENT self-declaration guard is unchanged. Proven: tests/qemu/test_syssvc_creprc_inherit.c C-F (kmod) + the shared acceptance battery RUN/DETACHED section.",
       "plan_ref": "vms-801"
     },
     {

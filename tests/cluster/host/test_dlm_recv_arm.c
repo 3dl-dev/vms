@@ -138,7 +138,7 @@ static int h_refill(void *ctx, uint32_t req_lkid, uint32_t op,
 					      out) == SS__NORMAL ? 0 : -1;
 }
 
-static int h_dir_resolve(void *ctx, uint16_t hash16, vms_csid_t *out_csid)
+static int h_dir_resolve(void *ctx, uint32_t hash16, vms_csid_t *out_csid)
 {
 	(void)ctx;
 	(void)hash16;
@@ -184,7 +184,7 @@ static int h_blkast_deliver(void *ctx, uint32_t req_lkid)
 	return vms_lock_dlm_proxy_blkast_recv(req_lkid) == SS__NORMAL ? 0 : -1;
 }
 
-static int h_learn(void *ctx, const char *resnam, uint16_t hash16)
+static int h_learn(void *ctx, const char *resnam, uint32_t hash16)
 {
 	(void)ctx;
 	return vms_lock_dlm_learn_dir_hash(resnam, hash16) == SS__NORMAL ?
@@ -210,7 +210,7 @@ static uint32_t h_post(void *ctx, const struct vms_dlm_proxy_post *p)
 							 : (uint32_t)SS__UNSUPPORTED;
 }
 
-static uint32_t h_eng_dir_resolve(void *ctx, uint16_t hash16, uint32_t *out)
+static uint32_t h_eng_dir_resolve(void *ctx, uint32_t hash16, uint32_t *out)
 {
 	(void)ctx;
 	(void)hash16;

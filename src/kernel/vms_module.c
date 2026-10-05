@@ -2015,6 +2015,70 @@ static long vms_ioctl_register(unsigned long arg, bool inherit_identity,
     return 0;
 }
 
+/*
+ * VMS_IOCTL_REGISTER_DETACHED (rd vms-ff75) -- the detached grandchild of a
+ * $CREPRC PRC$M_DETACH claims the identity its CREATOR had the executive
+ * authorize (VMS_IOCTL_CREPRC_TICKET). The caller's ancestry is read from the
+ * unforgeable real_parent chain (up to three levels: the intermediate, then
+ * the creator, plus one for slack); the ticket is honoured only if its creator
+ * is among them. The caller becomes (or already is) its own row: a fresh VMS
+ * PID and, its real parent being the unregistered intermediate, a JOB ROOT --
+ * a detached process is not in its creator's job. The ticketed identity is
+ * then stamped by the executive. A refused/absent/foreign ticket registers
+ * NOTHING and answers SS$_NOPRIV.
+ */
+static long vms_ioctl_register_detached(unsigned long arg)
+{
+    struct vms_register_detached_args args;
+    struct vms_proc *proc;
+    struct task_struct *t;
+    uint32_t anc[3] = { 0, 0, 0 };
+    char uname[VMS_USERNAME_SIZE];
+    uint32_t uic = 0;
+    uint64_t privs = 0;
+    int i;
+
+    memset(&args, 0, sizeof(args));
+    if (copy_from_user(&args, (void __user *)arg, sizeof(args)))
+        return -EFAULT;
+
+    vms_proc_reap_dead();
+
+    rcu_read_lock();
+    t = current;
+    for (i = 0; i < 3 && t; i++) {
+        t = rcu_dereference(t->real_parent);
+        anc[i] = t ? (uint32_t)task_tgid_nr(t) : 0;
+    }
+    rcu_read_unlock();
+
+    memset(uname, 0, sizeof(uname));
+    if (vms_proc_creprc_ticket_claim(args.ticket, anc, 3, uname, &uic, &privs) != 0) {
+        args.status = SS__NOPRIV;
+        goto out;
+    }
+
+    proc = vms_proc_find_or_err();
+    if (!proc) {
+        proc = vms_proc_register(current->tgid, false, false);
+        if (IS_ERR(proc)) {
+            if (PTR_ERR(proc) != -EEXIST)
+                return PTR_ERR(proc);
+            proc = vms_proc_find_or_err();
+            if (!proc)
+                return -ESRCH;
+        }
+    }
+    vms_proc_apply_ticket_identity(proc, uname, uic, privs);
+    args.vms_pid = proc->vms_pid;
+    args.status  = SS__NORMAL;
+
+out:
+    if (copy_to_user((void __user *)arg, &args, sizeof(args)))
+        return -EFAULT;
+    return 0;
+}
+
 static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     struct vms_proc *proc;
@@ -2030,6 +2094,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_register(arg, true, true);
     if (cmd == VMS_IOCTL_REGISTER_SUBPROCESS)
         return vms_ioctl_register(arg, true, false);
+    if (cmd == VMS_IOCTL_REGISTER_DETACHED)
+        return vms_ioctl_register_detached(arg);
 
     /*
      * E47 (docs/cluster-integration-notes.md): the three cluster
@@ -2232,6 +2298,8 @@ static long vms_dev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg
         return vms_ioctl_procscan(proc, arg);
     case VMS_IOCTL_SETIDENT:
         return vms_ioctl_setident(proc, arg);
+    case VMS_IOCTL_CREPRC_TICKET:
+        return vms_ioctl_creprc_ticket(proc, arg);
     case VMS_IOCTL_ESTABLISH_SYSTEM:
         return vms_ioctl_establish_system(proc, arg);
 

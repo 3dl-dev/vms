@@ -25,6 +25,13 @@
 
 #define FAL_IMAGE_SPEC "SYS$SYSTEM:FAL.EXE"
 
+/* $SETDDIR (src/libvms/syssvc/sys_misc.c). Declared here: starlet.h carries no
+ * prototype (a corpus program declares its own, conflicting one), and the
+ * Alpha toolchain rejects the implicit declaration. */
+extern uint32_t sys$setddir(const struct dsc$descriptor_s *new_dir,
+                            unsigned short *old_len,
+                            struct dsc$descriptor_s *old_dir);
+
 /* SYS$SYSTEM:FAL.EXE -> an execve-able path, resolved the way JOB_CONTROL and
  * the CTERM host resolve LOGINOUT.EXE (translator, then the boot staging). */
 static int fal_image_path(char *out, size_t outsz)

@@ -28,8 +28,8 @@
  *    rule 2 -- it is NOT rendered as the zero the scalar happens to hold.
  *
  * 2. ABSENT IS NOT ZERO. A value the executive has not LEARNED yet (the local
- *    CSID before the cluster assigns it; LOCKDIRWT before FC-P3.2 pins which
- *    byte carries it) travels with a `*_valid` flag, and the reader blanks the
+ *    CSID before the cluster assigns it; a peer's LOCKDIRWT before its PARAMS
+ *    record arrives) travels with a `*_valid` flag, and the reader blanks the
  *    column when the flag is clear. This is the identical discipline
  *    struct exec_proc_acct's has_* flags enforce for SHOW SYSTEM, and it exists
  *    for the identical reason: a fabricated zero on a cluster identity is how a
@@ -311,7 +311,7 @@ struct vms_csb_view {
 						  * flagged: an un-advertised VOTES
 						  * is not an advertised 0, INV-6) */
 	uint8_t  lockdirwt;                     /* the peer's advertised LOCKDIRWT ... */
-	uint8_t  lockdirwt_valid;               /* ... 0 until FC-P3.2 pins the byte */
+	uint8_t  lockdirwt_valid;               /* ... 0 until its PARAMS carried it */
 	uint8_t  pad0;
 	uint32_t peer_sysid_lo;                 /* the peer's SCSSYSTEMID */
 	uint32_t peer_sysid_hi;

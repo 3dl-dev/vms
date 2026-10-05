@@ -608,25 +608,32 @@ static void join_send_model(struct cnxman_join *j)
 }
 
 /*
- * LOCKDIRWT, said out loud on every PARAMS this node sends.
+ * LOCKDIRWT, said on every PARAMS this node sends (rd vms-fcb).
  *
- * Book D-DLM-1 has OVMX advertise 0. vms_cm_params_build() writes only
- * grounded placements, so a 0 and "not written" are the same bytes -- which
- * is a coincidence and not the field being placed (plan row FC-P3.2 owns the
- * offset). A node configured with a NONZERO LOCKDIRWT genuinely cannot
- * advertise it, and this says so loudly: silently understating a directory
- * weight would make the cluster route directory duty away from a node that
- * asked for it.
+ * The SYSGEN value this node booted with, at body[26:28] -- the offset pinned
+ * by controlled reconfiguration on real V7.3 (VMS_OFF_CM_LOCKDIRWT). It is the
+ * one input every member's connection manager needs from this node to build
+ * the SAME Lock Directory Weight Vector (Davis p. 6-32, p. 7-23), and 0 is a
+ * real value: "never a directory node, unless every member says 0".
  */
-static void join_note_lockdirwt(struct cnxman_join *j)
+static uint16_t join_own_lockdirwt(const struct cnxman_join *j)
 {
-	j->lockdirwt_unpinned++;
-	if (j->cl != NULL && j->cl->params.lockdirwt != 0u &&
-	    !j->lockdirwt_unrepresentable) {
-		j->lockdirwt_unrepresentable = 1u;
-		join_log(j, "%CNXMAN, LOCKDIRWT is nonzero but its wire offset "
-			    "is not pinned: it is NOT being advertised");
-	}
+	return (j->cl != NULL) ? (uint16_t)j->cl->params.lockdirwt : 0u;
+}
+
+/*
+ * A peer's advertised LOCKDIRWT, into its CSB. Nothing is rebuilt here: the
+ * vector is the connection manager's to rebuild at Phase 2 of a transition
+ * (p. 7-23, cnxman_phase2.c), and LOCKDIRWT is not a dynamic parameter, so a
+ * system's weight is fixed for its incarnation and is on the wire in the
+ * PARAMS that precede its admission (rd vms-e88) -- before the transition
+ * that counts it.
+ */
+static void join_learn_lockdirwt(struct vms_csb *csb, uint16_t lockdirwt)
+{
+	if (lockdirwt > 0xffu)
+		return;
+	cnxman_csb_set_lockdirwt(csb, (uint8_t)lockdirwt);
 }
 
 static int join_node_already_member(const struct cnxman_join *j);
@@ -698,8 +705,8 @@ static vms_codec_status_t join_build_params(struct cnxman_join *j,
 		votes = j->cl->params.votes;
 
 	join_own_params(j, &own);
-	join_note_lockdirwt(j);
-	return vms_cm_params_build(votes, join_members_for(j, csb), &own,
+	return vms_cm_params_build(votes, join_members_for(j, csb),
+				   join_own_lockdirwt(j), &own,
 				   j->scratch, (uint32_t)sizeof(j->scratch),
 				   NULL);
 }
@@ -2121,6 +2128,17 @@ static enum cnxman_join_rx join_h_peer_advert(struct cnxman_join *j,
 	 * (join_admission_held).
 	 */
 	cnxman_csb_set_advert(csb, p.members);
+
+	/*
+	 * ...AND ITS LOCK-DIRECTORY WEIGHT (rd vms-fcb): body[26:28], the
+	 * sender's own SYSGEN LOCKDIRWT. Learned for EVERY peer -- a real VAX
+	 * included -- because the weight vector is a SHARED table: every member
+	 * builds it from every member's weight, and a node that guessed one
+	 * would route directory work somewhere the rest of the cluster does not.
+	 * The parameter's range is 0..255; a value outside it is not a weight
+	 * any system sends and is left unlearned rather than truncated.
+	 */
+	join_learn_lockdirwt(csb, p.lockdirwt);
 
 	/*
 	 * AND THE ARITHMETIC RUNS ON WHAT WAS JUST LEARNED (rd vms-d0d).

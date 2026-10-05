@@ -733,6 +733,81 @@ static void club_split_brain_gate_refuses_a_foreign_member(void)
 }
 
 /*
+ * rd vms-fcb: a REAL VAX's weight, once its PARAMS has said it, lets the mixed
+ * cluster's vector be built -- the SAME vector the VAX builds -- while the
+ * all-OVMX gate stays shut (any_foreign). One local CSB (SYSGEN `local_w`) and
+ * one VAX peer that advertised "VMS V7.3" and LOCKDIRWT `vax_w`.
+ */
+static void mixed_club(struct vms_cluster *cl, struct cnxman_ops *ops,
+		       struct fake_cnx *f, uint8_t local_w, uint8_t vax_w)
+{
+	struct vms_csb *local, *peer;
+
+	memset(cl, 0, sizeof(*cl));
+	fake_ops_init(ops, f);
+	cl->params.lockdirwt = local_w;
+	cl->params.scssystemid = (vms_scs_sysid_t)1025;
+	memcpy(cl->params.sw_version, "OVMX0.6", 7);
+	cl->params.sw_version_len = 7u;
+	local = cnxman_club_init(cl);
+	if (local == NULL)
+		return;
+	cnxman_csb_set_csid(local, CSID_A);
+	cnxman_csb_set_flags(local, (uint16_t)(VMS_CSB_F_SELECTED |
+					       VMS_CSB_F_MEMBER));
+	peer = cnxman_club_alloc_csb(&cl->club, (vms_scs_sysid_t)1026, 1);
+	if (peer == NULL)
+		return;
+	cnxman_csb_set_csid(peer, CSID_B);
+	cnxman_csb_set_flags(peer, (uint16_t)(VMS_CSB_F_SELECTED |
+					      VMS_CSB_F_MEMBER));
+	cnxman_csb_set_swver(peer, (const uint8_t *)"VMS V7.3", 8u,
+			     (const uint8_t *)"OVMX0.6", 7u);
+	cnxman_csb_set_lockdirwt(peer, vax_w);   /* its PARAMS body[26:28] */
+}
+
+static void club_mixed_cluster_builds_the_vaxs_vector(void)
+{
+	struct vms_cluster cl;
+	struct cnxman_ops ops;
+	struct fake_cnx f;
+
+	printf("--- rd vms-fcb: a real VAX's ADVERTISED weight builds the "
+	       "mixed cluster's vector ---\n");
+
+	/* The V7.3 default on both sides: every weight 0 -> p. 6-32's
+	 * one-entry-per-system rule, so THIS node is a directory node too. */
+	mixed_club(&cl, &ops, &f, 0u, 0u);
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK,
+			"all weights 0 (VAX advertised 0): the vector builds");
+	ct_check_eq_u32(cl.club.ldwv.n, 2u, "  one entry per system");
+	ct_check(cl.club.ldwv.entry[0] == 0u && cl.club.ldwv.entry[1] == CSID_B,
+		 "  [this node, the VAX] in CSV order");
+	ct_check_eq_u32(cl.club.ldwv.weights_learned, 1u,
+			"  built on ADVERTISED weights, not the unadvertised "
+			"reading");
+	ct_check_eq_u32((unsigned long)vms_ldwv_all_ovmx(&cl.club.ldwv), 0ul,
+			"  and the all-OVMX gate stays SHUT: a VAX is a member");
+
+	/* VAX 1, this node 0: the VAX is the only directory node. */
+	mixed_club(&cl, &ops, &f, 0u, 1u);
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK, "VAX 1 / OVMX 0 builds");
+	ct_check_eq_u32(cl.club.ldwv.n, 1u, "  one entry");
+	ct_check(cl.club.ldwv.entry[0] == CSID_B, "  ... and it is the VAX's");
+
+	/* Both weighted: p. 6-33's contiguous runs. */
+	mixed_club(&cl, &ops, &f, 2u, 1u);
+	ct_check_eq_u32((unsigned long)cnxman_ldwv_rebuild(&cl.club, &ops),
+			(unsigned long)VMS_LDWV_OK, "OVMX 2 / VAX 1 builds");
+	ct_check_eq_u32(cl.club.ldwv.n, 3u, "  2 + 1 entries");
+	ct_check(cl.club.ldwv.entry[0] == 0u && cl.club.ldwv.entry[1] == 0u &&
+		 cl.club.ldwv.entry[2] == CSID_B,
+		 "  [this node, this node, the VAX]");
+}
+
+/*
  * THE ALL-OVMX GATE (vms-3e3, rung A"): vms_ldwv_all_ovmx() decides whether
  * OVMX's own directory hash may be grounded. Its whole job is to be a STRICTER
  * guard than the split-brain gate: a foreign member with a LEARNED weight passes
@@ -798,6 +873,7 @@ int main(void)
 	club_local_withhold_builds_when_peers_unknown();
 	club_local_withhold_refused_when_a_peer_advertised();
 	club_split_brain_gate_refuses_a_foreign_member();
+	club_mixed_cluster_builds_the_vaxs_vector();
 	all_ovmx_gate_governs_grounding();
 	return ct_summary("test_dlm_ldwv");
 }

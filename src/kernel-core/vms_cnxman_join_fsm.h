@@ -164,15 +164,12 @@
  *    the exact discipline that was already correct about the *value*, now
  *    applied to a mechanism that actually fires on real traffic.
  *
- * B. LOCKDIRWT ON THE WIRE. Book D-DLM-1 and design SS5.1 have this node
- *    advertise LOCKDIRWT = 0 honestly, but WHICH PARAMS byte carries it is
- *    plan row FC-P3.2 (lab). vms_cm_params_build() writes only grounded
- *    placements and zeroes the rest, so a LOCKDIRWT of 0 and "the field was
- *    not written" are the same bytes today -- a coincidence, NOT the field
- *    being placed. This FSM says so: it counts `lockdirwt_unpinned` on every
- *    PARAMS it sends and, if the configured LOCKDIRWT is NONZERO, counts
- *    `lockdirwt_unrepresentable` and logs, because that value genuinely
- *    cannot be advertised until the offset is pinned.
+ * B. LOCKDIRWT ON THE WIRE (rd vms-fcb). Pinned at PARAMS body[26:28] by
+ *    controlled reconfiguration on real V7.3 (VMS_OFF_CM_LOCKDIRWT). This
+ *    node advertises its own SYSGEN value there and records every peer's
+ *    into that peer's CSB, so the weight vector every member builds at
+ *    Phase 2 is built from the same facts on every member -- a real VAX's
+ *    included.
  *
  * C. THE 16-BYTE CONNECT DATA. p. 2-25 makes it the Connection Managers'
  *    version handshake and gives the peer the right to REJECT on it. Spec
@@ -1138,9 +1135,6 @@ struct cnxman_join {
 	 * admitted.
 	 */
 	uint32_t membrecs_peer_created;
-	uint8_t  lockdirwt_unrepresentable; /* configured nonzero, no offset  */
-	uint8_t  pad3[3];
-	uint32_t lockdirwt_unpinned;
 	uint32_t conndata_omitted;
 	uint32_t dir_descriptor_omitted;
 	uint32_t model_omitted;

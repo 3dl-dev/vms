@@ -1136,8 +1136,8 @@ void cnxman_csb_set_advert(struct vms_csb *csb, uint16_t members)
 
 /* p. 7-23: "The Connection Manager is responsible for rebuilding the Lock
  * Directory Weight Vector, so each CSB also contains the value of its system's
- * LOCKDIRWT parameter." Absent until FC-P3.2 pins which wire byte carries it
- * for a REMOTE system; the LOCAL CSB gets it from SYSGEN at init. */
+ * LOCKDIRWT parameter." A REMOTE system's comes from its PARAMS record
+ * (body[26:28], rd vms-fcb); the LOCAL CSB gets it from SYSGEN at init. */
 void cnxman_csb_set_lockdirwt(struct vms_csb *csb, uint8_t lockdirwt)
 {
 	if (csb == NULL)

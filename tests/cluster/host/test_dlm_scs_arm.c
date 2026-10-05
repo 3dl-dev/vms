@@ -22,7 +22,7 @@
  *          rebuild record must still reach the grounded verbatim echo; gating it
  *          would make the barrier skip the echo and strand that VAX);
  *        - the all-OVMX gate is ABOVE the BLKAST emit, and RULE C is ABOVE the
- *          port (rd vms-d7a3: the master now ORIGINATES an op-0x04 blocking AST
+ *          port (rd vms-d7a3: the master now ORIGINATES an op-0x05 blocking AST
  *          at a remote holder, and a new outbound frame shape that could reach
  *          a system this tree has not proved runs this implementation is the
  *          whole peer-crash vector this program exists to not have);
@@ -274,7 +274,7 @@ static void arm_bindings(void)
 
 	/*
 	 * ===================================================================
-	 * THE BLOCKING AST IS EMITTED (op 0x04, rd vms-d7a3), AND EVERY FIELD
+	 * THE BLOCKING AST IS EMITTED (op 0x05, rd vms-d7a3), AND EVERY FIELD
 	 * OF IT IS AN EXECUTIVE READ.
 	 *
 	 * This is the half of the item this file can prove: the arm is not
@@ -385,7 +385,7 @@ static void arm_bindings(void)
 
 	/*
 	 * ===================================================================
-	 * THE RECEIVE HALF IS WIRED (op 0x03 and op 0x04, rd vms-c72), AND
+	 * THE RECEIVE HALF IS WIRED (op 0x03 and op 0x05, rd vms-c72), AND
 	 * BOTH PATHS ARE BELOW RULE C.
 	 *
 	 * Measured on the live 2-node rig, both emits fired and the PEER threw
@@ -398,7 +398,7 @@ static void arm_bindings(void)
 	 * What a source scan is the right tool for is exactly what is pinned
 	 * here: that the two opcodes are routed at all, that each reaches the
 	 * right engine door, and that BOTH sit BELOW the RULE C gate -- an
-	 * op-0x03 destroys real lock state and an op-0x04 fires a real
+	 * op-0x03 destroys real lock state and an op-0x05 fires a real
 	 * user-mode AST, and neither may happen for a system that has not
 	 * proved it runs this implementation. What those doors DO to real lock
 	 * state is driven end-to-end against the REAL engine, the REAL FSM and
@@ -410,7 +410,7 @@ static void arm_bindings(void)
 	has("return dlm_arm_serve_deq(d, req);",
 	    "... to the master-side serve path");
 	has("if (req->opcode == (uint8_t)VMS_DLM_WIREOP_BLKAST)",
-	    "an inbound op-0x04 BLKAST is ROUTED too");
+	    "an inbound op-0x05 BLKAST is ROUTED too");
 	has("return dlm_arm_deliver_blkast(d, req);",
 	    "... to the holder-side delivery path");
 	before("if (!dlm_arm_peer_is_ours(d, req))",

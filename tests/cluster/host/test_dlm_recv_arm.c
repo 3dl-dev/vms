@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * test_dlm_recv_arm.c - rd vms-c72's R1: A PEER'S op-0x03 AND op-0x04 REALLY
+ * test_dlm_recv_arm.c - rd vms-c72's R1: A PEER'S op-0x03 AND op-0x05 REALLY
  * CHANGE THIS EXECUTIVE'S LOCK DATABASE.
  *
  * ==========================================================================
@@ -25,7 +25,7 @@
  *                REAL master-side door (vms_lock_dlm_master_serve) and the REAL
  *                holder-side blocking-AST delivery.
  *   the FSM      src/kernel-core/vms_dlm_scs_fsm.c -- the SHIPPING
- *                dlm_req_fsm_blkast_body(), the op-0x04 entry the arm calls.
+ *                dlm_req_fsm_blkast_body(), the op-0x05 entry the arm calls.
  *   the CODEC    src/kernel-core/vms_cluster_codec_dlm.c -- every byte fed in
  *                is BUILT by the shipping builder and read by the shipping
  *                parser. This file performs no byte arithmetic except where it
@@ -34,7 +34,7 @@
  * What is NOT here is the glue TU (src/kernel-core/vms_dlm_scs.c): it names
  * exec_kbackend.h and the fork API and is not host-linkable, exactly as
  * test_cnxman_glue.c and test_dlm_deq_reachable.c already document. Its routing
- * -- that op-0x03 and op-0x04 reach these two doors, and that both sit BELOW the
+ * -- that op-0x03 and op-0x05 reach these two doors, and that both sit BELOW the
  * RULE C gate -- is pinned by source-scan in test_dlm_scs_arm.c. This file owns
  * the half a scan cannot see: what the doors DO to real lock state.
  */
@@ -43,8 +43,8 @@
 #include "vms_internal.h"     /* -> lock_shim/vms_internal.h (the real engine) */
 #include "exec_kbackend.h"    /* -> lock_shim/exec_kbackend_linux.h            */
 #include "vms_dlm_master.h"   /* the MASTER-side seam the op-0x03 lands on     */
-#include "vms_dlm_proxy.h"    /* the REQUESTER seam the op-0x04 lands on       */
-#include "vms_dlm_scs_fsm.h"  /* the requester FSM + its op-0x04 body entry    */
+#include "vms_dlm_proxy.h"    /* the REQUESTER seam the op-0x05 lands on       */
+#include "vms_dlm_scs_fsm.h"  /* the requester FSM + its op-0x05 body entry    */
 #include "vms_cluster_codec_cm.h"   /* VMS_CM_FRAME_LEN / VMS_CM_BODY_LEN */
 #include "vms_cluster_codec_dlm.h"
 
@@ -102,7 +102,7 @@ static const uint8_t *body_of(const uint8_t *frame)
 }
 
 /* ==========================================================================
- * 1. THE HOLDER SIDE: an inbound op-0x04 fires a REAL user-mode blocking AST
+ * 1. THE HOLDER SIDE: an inbound op-0x05 fires a REAL user-mode blocking AST
  *
  * This node holds a cross-node lock. The master runs into a conflict and sends
  * the blocking AST this arm now consumes. The proof is not that the body parsed
@@ -317,7 +317,7 @@ static uint32_t granted_proxy_with_blkast(struct vms_proc *proc,
 	return e.lkid;
 }
 
-/* Build a REAL op-0x04 through the shipping builder. Returns 0 on success. */
+/* Build a REAL op-0x05 through the shipping builder. Returns 0 on success. */
 static int build_blkast(uint8_t *frame, uint32_t req_lkid, uint32_t master_lkid)
 {
 	struct vms_dlm_blkast b;
@@ -339,7 +339,7 @@ static void inbound_blkast_fires_a_real_ast(void)
 	struct vms_proc holder;
 	uint32_t lkid;
 
-	printf("-- an inbound op-0x04 DELIVERS a real blocking AST (rd vms-c72) "
+	printf("-- an inbound op-0x05 DELIVERS a real blocking AST (rd vms-c72) "
 	       "--\n");
 	holder_up();
 	proc_init(&holder);
@@ -352,17 +352,17 @@ static void inbound_blkast_fires_a_real_ast(void)
 			"  and no AST is queued on the holder yet");
 
 	if (build_blkast(frame, lkid, MASTER_LKID) != 0) {
-		ct_check(0, "the shipping builder produced an op-0x04");
+		ct_check(0, "the shipping builder produced an op-0x05");
 		holder_down();
 		return;
 	}
-	ct_check(1, "the shipping builder produced an op-0x04 naming that lock");
+	ct_check(1, "the shipping builder produced an op-0x05 naming that lock");
 
 	/* *** THE DELIVERY *** -- the entry point the arm's dispatch calls. */
 	ct_check(dlm_req_fsm_blkast_body(&h.fsm, (vms_csid_t)CSID_MASTER,
 					 body_of(frame), VMS_CM_BODY_LEN) ==
 		 DLM_REQ_OK,
-		 "*** the inbound op-0x04 BODY is ACCEPTED, not declined ***");
+		 "*** the inbound op-0x05 BODY is ACCEPTED, not declined ***");
 	ct_check_eq_u32(h.blkast_calls, 1u,
 			"  the engine's holder-side delivery door was invoked");
 	ct_check_eq_u32(h.last_blkast_lkid, lkid,
@@ -391,7 +391,7 @@ static void blkast_for_an_unknown_lock_delivers_nothing(void)
 	struct vms_proc holder;
 	uint32_t lkid;
 
-	printf("-- negative: an op-0x04 naming no lock of ours --\n");
+	printf("-- negative: an op-0x05 naming no lock of ours --\n");
 	holder_up();
 	proc_init(&holder);
 	lkid = granted_proxy_with_blkast(&holder, "RECV_BLK2", LCK_K_PRMODE,
@@ -400,7 +400,7 @@ static void blkast_for_an_unknown_lock_delivers_nothing(void)
 			    "HANDLE, not an empty arm)");
 
 	if (build_blkast(frame, lkid ^ 0x5A5A5A5Au, 0x11112222u) != 0) {
-		ct_check(0, "builder: a well-formed op-0x04 for another handle");
+		ct_check(0, "builder: a well-formed op-0x05 for another handle");
 		holder_down();
 		return;
 	}
@@ -435,7 +435,7 @@ static void a_zero_lock_id_and_a_garbage_body_are_refused(void)
 	struct vms_proc holder;
 	uint32_t lkid;
 
-	printf("-- negative: a zero lock id, and a body that is not an op-0x04 "
+	printf("-- negative: a zero lock id, and a body that is not an op-0x05 "
 	       "--\n");
 	holder_up();
 	proc_init(&holder);
@@ -463,7 +463,7 @@ static void a_zero_lock_id_and_a_garbage_body_are_refused(void)
 	ct_check_eq_u32(h.fsm.blkasts_unparsed, 1u,
 			"  counted as unparsed, never silent");
 
-	/* (b) a body that is a well-formed op-0x03, not an op-0x04: the codec's
+	/* (b) a body that is a well-formed op-0x03, not an op-0x05: the codec's
 	 * opcode gate refuses it, so the two lock-id-only shapes can never be
 	 * confused for one another. */
 	if (build_blkast(frame, lkid, 0x33334444u) == 0) {

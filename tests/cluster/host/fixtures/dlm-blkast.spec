@@ -1,56 +1,56 @@
 %OVMX-CLUSTER-SPECIMEN-1
 name:      dlm-blkast
 class:     scs-msg
-origin:    spec-composed
-spec:      tests/lab/captures/vms-c03-dlm-opcodes-20260911/GROUNDING.md (op 0x04 = BLKAST, frame f58)
+origin:    capture
 capture:   dlm-blk2-20260911.pcap
+frame:     48
 wire-len:  204
-sha256:    7100df43fdf313681e3eb9401d7063d9bfb04c468d770c6e81c22c762a7ef00f
+sha256:    4397fb126a78af409f4f95d37cd09657eb1e5c4712dc7ba937054ae0ffe39b52
 %bytes
-; abs 0-71: plausible classifying prefix only -- see dlm-deq-release.spec.
-; NOTE THE DIRECTION: a BLKAST travels MASTER -> HOLDER, so vax2 (the master
-; in this scenario) is the source and VAX1 (the EX holder) is the destination
-; -- the reverse of every other DLM specimen in this directory.
-@0    08 00 2b 4a b7 15          ; eth dst: VAX1 HW MAC (the blocked holder)
-@6    08 00 2b 78 56 b9          ; eth src: VAX2 HW MAC (the master)
+; Every cited byte below is VERBATIM from dlm-blk2-20260911.pcap record 48
+; (1-based pcap record number; the vms-c03 GROUNDING.md's 0-based "f47"),
+; t=1789136961.480, the master vax2 -> the EX holder VAX1. Uncited bytes are
+; zero-filled here and are NOT asserted on.
+;
+; rd vms-ea1 -- WHY THIS IS RECORD 48 AND NOT THE "f58" THIS SPECIMEN USED TO
+; CITE. The scenario: VAX1 took an EX lock on 'OVMXBLK2' with a BLKAST routine
+; (record 19, an op-0x01 ENQ to the master vax2; record 20 the grant), then
+; vax2 queued a conflicting EX request. Record 48 is the first frame after
+; that contention, it is op 0x05, and it is the first frame anywhere in the
+; capture to carry the OVMXBLK2 lock ids. The old "f58" (record 59) is a NAMED
+; op 0x04 -- 'F11B$aSYSDSK1' at body[48] -- whose lock-id bytes are a stale copy
+; of record 48's: record 61, another named op 0x04 ('DTI$SYSTEM$VAX2'), carries
+; the same bytes, and record 43's op 0x04 carries record 38's. Named op 0x04 is
+; the master removing its directory entry (rd vms-8219; 4881/4881 op-0x04
+; frames in the dlmlab L1 capture are named). The independent second sample is
+; in L1 as well: at the DLMBLK scenario the master vax1 sends the EX holder
+; vax2 an op 0x05 in the same millisecond the contending ENQ arrives.
+;
+@0    aa 00 04 00 01 04          ; eth dst: VAX1 (sysid 1025), the blocked holder
+@6    08 00 2b a9 a3 96          ; eth src: vax2's hardware MAC, the master
 @12   60 07                      ; ethertype 0x6007
 @14   bc 00                      ; SCA length field -> 190-byte content
 @16   aa 00 04 00 01 04          ; dst logical: VAX1 (sysid 1025)
 @22   01 00                      ; connect flag
-@24   aa 00 04 00 02 04          ; src logical: VAX2 (sysid 1026)
+@24   aa 00 04 00 02 04          ; src logical: vax2 (sysid 1026)
 @30   4b 13                      ; msgtype 0x4b (sequenced msg), format 0x13
 ;
-; abs 72-: the DLM SYSAP body -- CITED.
-;
-; PROVENANCE. dlm-blk2-20260911.pcap frame f58, vax2 -> VAX1. The scenario:
-; VAX1 took an EX lock on resource 'OVMXBLK2' with a BLKAST AST routine (f18,
-; an op-0x01 ENQ), then vax2 -- which masters the tree -- queued a conflicting
-; EX request, and the master sent the blocking AST below to the remote holder.
+; abs 72-: the DLM SYSAP body.
 @80   02                         ; body[8]  category 0x02 (request)
-@81   04                         ; body[9]  opcode 0x04 -- BLKAST.
-                                 ; NOT the "completion" an earlier PROVISIONAL
-                                 ; codec table claimed lived at 0x04; that op
-                                 ; does not exist on a real wire.
-@92   af 03 00 0a                ; body[20:24] req_lkid 0x0a0003af == the
-                                 ; blocked holder's own local handle
-@96   e3 04 00 59                ; body[24:28] master_lkid 0x590004e3 == the
-                                 ; master handle f18's EX ENQ for 'OVMXBLK2'
-                                 ; carried. THIS is how a BLKAST names its
-                                 ; lock -- by id, and by nothing else.
+@81   05                         ; body[9]  opcode 0x05 -- BLKAST.
+@92   af 03 00 0a                ; body[20:24] req_lkid 0x0a0003af: the id the
+                                 ; record-20 grant assigned at body[20:24], i.e.
+                                 ; the holder's own copy (spec 4(f).1, SDA row)
+@96   e3 04 00 59                ; body[24:28] master_lkid 0x590004e3: the
+                                 ; body[24:28] of the record-19 ENQ and its grant
 @102  01 05                      ; body[30:32] the mode-context pair.
-                                 ; *** OBSERVED, NOT PINNED. *** Two BLKASTs
-                                 ; for this lock (f58, f60) read 01 05; a third
-                                 ; (f42, a different F11B$a lock) read 01 00.
-                                 ; Three samples across two locks is not a
-                                 ; one-variable diff, so the codec carries
-                                 ; these bytes labelled and opt-in and does not
-                                 ; claim to know what they mean.
+                                 ; *** OBSERVED, NOT PINNED. *** Here 01 05; the
+                                 ; L1 sample reads 00 05. body[31] is the
+                                 ; contender's EX (5) in both; two samples are
+                                 ; not a one-variable diff, so the codec carries
+                                 ; the pair labelled and opt-in and does not
+                                 ; claim to know what it means.
 ;
-; DELIBERATELY NOT CITED, AND THE MOST IMPORTANT LINE IN THIS FILE: the real
-; f58 carries readable ASCII 'F11B$aSYSDSK1' at body[48]. That is STALE
-; BUFFER, not a field. The resource this BLKAST is actually about --
-; 'OVMXBLK2' -- appears in the whole 83-frame capture exactly once, in the
-; op-0x01 ENQ at f18, and never in an op-0x04. A codec that read body[48]
-; here would hand its caller a resource name belonging to a different lock:
-; a wire value that looks exactly like data and is not. So this specimen
-; leaves the span zero and vms_dlm_blkast_parse_body() has no name field.
+; DELIBERATELY NOT CITED: body[16:20] (28 44 00 80 here, and in many unrelated
+; frames of this capture) and everything past body[32]. A BLKAST names its lock
+; by lock-id and by nothing else.

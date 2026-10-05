@@ -17,7 +17,26 @@ codec field-map items: DEQ→`rd vms-fa7`, BLKAST→`rd vms-002`, LVB→`rd vms-
 |----|---------|----------------------------------|-------------|
 | **0x03** | **$DEQ** (lock release) | `dlm-deq-20260911.pcap` f14, VAX1→vax2 | master_lkid `0x3a0004eb` == my ENQ f12 (res `OVMXDEQ1`) |
 | **0x06** | **convert-down carrying the LVB** (value-block write) | `dlm-lvb3-20260911.pcap` f14, VAX1→vax2 | master_lkid `0x2b000489` == my ENQ f12 (res `OVMXLVB3`); the 16-byte pattern `WROTEBYVAX1XXXXX` appears verbatim on the wire (pkt offset 108) |
-| **0x04** | **BLKAST** (blocking AST, master→remote holder) | `dlm-blk2-20260911.pcap` f58, vax2→VAX1 | master_lkid `0x590004e3` == my EX holder f18 (res `OVMXBLK2`) |
+| ~~0x04~~ **0x05** | **BLKAST** (blocking AST, master→remote holder) | `dlm-blk2-20260911.pcap` **f47** (pcap record 48), vax2→VAX1 — *corrected, see below* | master_lkid `0x590004e3` == my EX holder f18 (res `OVMXBLK2`) |
+
+> **CORRECTION (rd vms-ea1, 2026-10-05): the BLKAST is op 0x05, not op 0x04.**
+> The row above originally cited f58 (pcap record 59), which is a **named** op 0x04
+> (`F11B$aSYSDSK1` at body[48]). Its lock-id bytes match OVMXBLK2 only because they
+> are a **stale copy** of f47's: f47 (record 48, t=…961.480) is the first frame after
+> the contention, the first anywhere in the capture to carry the OVMXBLK2 ids, and
+> it is **op 0x05**. f60 (record 61, another named op 0x04, `DTI$SYSTEM$VAX2`)
+> carries the same bytes 1 ms after f58, and f42's op 0x04 carries f37's.
+>
+> A named op 0x04 is the master removing its directory entry (rd vms-8219; all
+> 4881 op-0x04 frames in the dlmlab L1 capture are named). An independent second
+> sample in L1 confirms the BLKAST: at the DLMBLK scenario the master vax1 sends the
+> EX holder vax2 an **op 0x05**, carrying that lock's ids, in the same millisecond
+> as the contending ENQ arrives.
+>
+> The lock-id orientation (body[20:24] is the holder's copy, body[24:28] the master's)
+> is unchanged. The "f58/f60 read 01 05, f42 read 01 00" mode-context samples
+> below were op-0x04 frames. The two real BLKAST samples read 01 05 (f47) and
+> 00 05 (L1).
 
 ### Guards for the field-map items (conductor, 2026-09-11)
 - **vms-fa7 (DEQ):** 0x03 is a **collision to RESOLVE**, not just a new opcode. The

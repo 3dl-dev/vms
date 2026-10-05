@@ -93,7 +93,7 @@ echo "== [5/6] libgcc: compiler runtime + the EH unwinder + the port's crt0/crtb
 # mis-classifies per-function sections).
 LGFLAGS="-g0 -O2 -mpointer-size=64 -fno-function-sections -fno-data-sections"
 LGDIR="$X/lib/gcc/$TARGET/$VERDIR"
-if [ ! -f "$LGDIR/libgcc.a" ]; then
+if [ ! -f "$LGDIR/include/unwind.h" ] || [ ! -f "$LGDIR/libgcc.a" ]; then
     if [ ! -f "$X/lib/gcc/$TARGET/$GCC_VER/libgcc.a" ]; then
         make all-target-libgcc -j"$JOBS" CFLAGS_FOR_TARGET="$LGFLAGS" \
             AR_FOR_TARGET=ar AR_FLAGS=rcS RANLIB_FOR_TARGET=true > /tmp/cxx/libgcc.log 2>&1 \
@@ -103,7 +103,14 @@ if [ ! -f "$LGDIR/libgcc.a" ]; then
     if [ "$VERDIR" != "$GCC_VER" ]; then
         mkdir -p "$LGDIR"
         for f in "$X/lib/gcc/$TARGET/$GCC_VER"/*; do
-            [ -e "$LGDIR/$(basename "$f")" ] || ln -s "$f" "$LGDIR/"
+            b=$(basename "$f")
+            if [ ! -e "$LGDIR/$b" ]; then
+                ln -s "$f" "$LGDIR/"
+            elif [ -d "$f" ] && [ -d "$LGDIR/$b" ]; then   # e.g. include/unwind.h
+                for g in "$f"/*; do
+                    [ -e "$LGDIR/$b/$(basename "$g")" ] || ln -s "$g" "$LGDIR/$b/"
+                done
+            fi
         done
     fi
 fi

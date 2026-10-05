@@ -40,8 +40,9 @@ int main(int argc, char **argv)
         caught = (std::string(e.what()) == "ovmx");
     }
     int virt = b->f();
-    std::printf("OVMX C++ test: ctor=%d virt=%d vec=%s,%s caught=%d argc=%d\n",
-                ctor_ran, virt, v[0].c_str(), v[1].c_str(), caught, argc);
+    std::printf("OVMX C++ test: ctor=%d virt=%d vec=%s,%s caught=%d argc=%d ptr=%u\n",
+                ctor_ran, virt, v[0].c_str(), v[1].c_str(), caught, argc,
+                (unsigned)(sizeof(void *) * 8));
     int ok = ctor_ran == 42 && virt == 7 && v[1] == "C++/libstdc++" && caught;
     delete b;
     return ok ? 7 : 3;

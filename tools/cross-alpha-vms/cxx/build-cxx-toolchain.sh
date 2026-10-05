@@ -159,5 +159,42 @@ make -C src/c++11 debug.lo CXXFLAGS="-g -O2 -fpermissive" >> /tmp/cxx/lsc-make.l
 make -j"$JOBS" >> /tmp/cxx/lsc-make.log 2>&1 || { grep -E 'error' /tmp/cxx/lsc-make.log | head -20; exit 1; }
 make install > /dev/null
 [ -f "$X/$TARGET/lib/libstdc++.a" ] || { echo "FAIL: libstdc++.a not installed"; exit 1; }
+
+# vms-1045: the same library at the DEC C DEFAULT pointer size (32-bit). A
+# program compiled without -mpointer-size=64 -- the GCC port's own host build
+# among them -- has 4-byte pointers in every class layout (std::string,
+# containers, exception objects), so it needs a libstdc++ built that way.
+# Installed beside the 64-bit one under $X/p32: its own target headers
+# (bits/c++config.h is configure-generated) and libraries; select it with
+#   -isystem $X/p32/include/c++/$VERDIR -isystem $X/p32/include/c++/$VERDIR/$TARGET
+#   -L$X/p32/lib (ahead of the default libstdc++ search).
+echo "== [7/7] libstdc++-v3 at the DEC C default (32-bit) pointer size -> $X/p32 =="
+CXXF32="-fno-function-sections -fno-data-sections"
+mkdir -p /tmp/cxx/lsc32 && cd /tmp/cxx/lsc32
+CC="$X/bin/$TARGET-gcc $CXXF32" CXX="$X/bin/$TARGET-g++ $CXXF32" \
+AR=ar AR_FLAGS=crS RANLIB=true \
+"../gcc-$GCC_VER/libstdc++-v3/configure" --host=$TARGET --build=x86_64-pc-linux-gnu \
+    --prefix="$X/p32" --with-cross-host=x86_64-pc-linux-gnu \
+    --disable-shared --disable-nls --disable-libstdcxx-pch --disable-multilib \
+    --with-gxx-include-dir="$X/p32/include/c++/$VERDIR" \
+    > /tmp/cxx/lsc32-configure.log 2>&1 || { tail -40 /tmp/cxx/lsc32-configure.log; exit 1; }
+for m in HAVE_STRERROR_R HAVE_STRERROR_L HAVE_STRXFRM_L HAVE_USLEEP HAVE_SLEEP HAVE_GETS; do
+    grep -qE "^#define $m 1\$" config.h || continue
+    fn=$(echo "${m#HAVE_}" | tr 'A-Z' 'a-z')
+    printf 'char %s(void);\nint main(void){return %s();}\n' "$fn" "$fn" > /tmp/cxx/probe.c
+    if ! "$X/bin/$TARGET-gcc" -fno-builtin /tmp/cxx/probe.c -o /tmp/cxx/probe.exe >/dev/null 2>&1; then
+        sed -i "s|^#define $m 1\$|/* #undef $m -- $fn is not provided by the OVMX C RTL (DECC\$SHR) */|" config.h
+        echo "   $fn: not in the OVMX C RTL (32-bit entry) -> $m undefined"
+    fi
+done
+grep -rl -e '-ffunction-sections -fdata-sections' --include=Makefile . | xargs -r sed -i 's/-ffunction-sections -fdata-sections//g'
+perl -pi -e 's/^(\t-test -f tmp-cxx11-ios_failure-lt)\.o( && mv -f tmp-cxx11-ios_failure-lt)\.o (.*)$/$1.o$2.o $3\n$1.obj$2.obj $3/' src/c++11/Makefile
+grep -q 'tmp-cxx11-ios_failure-lt.obj' src/c++11/Makefile || { echo "FAIL: ios_failure rule patch (p32)"; exit 1; }
+make -j"$JOBS" > /tmp/cxx/lsc32-make.log 2>&1 || { grep -E 'error' /tmp/cxx/lsc32-make.log | head -20; exit 1; }
+make install > /dev/null
+P32LIB=$(ls -d "$X/p32/lib" "$X/p32/$TARGET/lib" 2>/dev/null | while read d; do [ -f "$d/libstdc++.a" ] && echo "$d"; done | head -1)
+[ -n "$P32LIB" ] || { echo "FAIL: 32-bit libstdc++.a not installed under $X/p32"; exit 1; }
+[ "$P32LIB" = "$X/p32/lib" ] || { mkdir -p "$X/p32/lib"; cp "$P32LIB"/lib*.a "$X/p32/lib/"; }
+cd /tmp/cxx
 echo "== C/C++ toolchain ready in $X =="
 "$X/bin/$TARGET-g++" --version | head -1

@@ -78,6 +78,14 @@ fi
 # which writes a VMS LINK options file and spawns the DCL LINK command; collect2
 # finds it first in libexec. Here the linker IS OVMX LINK.EXE through ovmx-ld,
 # so the libexec `ld` points at it.
+# GCC's VMS configuration names the driver's version directory the VMS way
+# (14_2_0) while the target libraries install under the dotted version: make the
+# driver's directory the same one so it finds crt0.o/crtbegin.o/libgcc.a.
+VERDIR=$(basename "$(dirname "$("$X/bin/$TARGET-gcc" -print-prog-name=cc1)")")
+if [ "$VERDIR" != "$GCC_VER" ] && [ ! -e "$X/lib/gcc/$TARGET/$VERDIR" ]; then
+    mkdir -p "$X/lib/gcc/$TARGET/$GCC_VER"
+    ln -s "$GCC_VER" "$X/lib/gcc/$TARGET/$VERDIR"
+fi
 LIBEXEC_LD=$("$X/bin/$TARGET-gcc" -print-prog-name=ld)
 case "$LIBEXEC_LD" in
     "$X"/libexec/*) ln -sf "$X/$TARGET/bin/ld" "$LIBEXEC_LD" ;;

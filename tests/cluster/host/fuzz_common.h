@@ -86,7 +86,9 @@ static inline void fz_run_body(fz_body_fn fn, const char *label)
 }
 
 /* ---- fixture-seeded SHAPE A fuzz (guaranteed reach + non-vacuity) -------- */
-#define FZ_MAX_FX 96
+/* The corpus the loader itself admits: a fixed lower cap here silently
+ * turned every fuzz unit red the day the corpus outgrew it. */
+#define FZ_MAX_FX VMS_FIXTURE_MAX_FILES
 static struct vms_fixture g_fz_fx[FZ_MAX_FX];
 static int g_fz_n = 0;
 

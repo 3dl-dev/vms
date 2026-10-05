@@ -341,6 +341,33 @@ assert_cxx() {
   return 1
 }
 
+assert_p0heap() {
+  # vms-122: every heap path (small, large, calloc, moving realloc, anon mmap)
+  # returned memory inside P0 and held its data; sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaE 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x[0-3]?[0-9a-f]{1,7} inP0=1 ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) heap in P0              : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -1023,6 +1050,42 @@ EOF
       exit 0
     fi
     echo "FAIL: the C++ image did not run as required. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  p0heap-gate)
+    # vms-122: the C RTL heap is placed in the VMS P0 region (< 0x40000000).
+    MILESTONE_MAIN=p0heap_test.c
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x9c10000 inP0=1 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX p0heap test: small=1 large=1 realloc=1 mmap=1 maxaddr=0x20006010000 inP0=0 argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/high.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- p0heap selftest 1/3: every heap path inside P0 must PASS --"
+    if assert_p0heap "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- p0heap selftest 2/3: a heap above 4 GB (the substrate default) must FAIL --"
+    if assert_p0heap "$_st/high.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- p0heap selftest 3/3: a crash must FAIL --"
+    if assert_p0heap "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "p0heap selftest failed -- assert_p0heap cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- C RTL heap placement on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX p0heap|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_p0heap "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: the C RTL heap -- small, large, calloc, a moving realloc, anonymous mmap --"
+      echo "      is placed in the VMS P0 region (< 0x40000000) on the real OVMX/Alpha executive."
+      exit 0
+    fi
+    echo "FAIL: the heap was not placed in P0. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

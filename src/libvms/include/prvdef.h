@@ -63,8 +63,10 @@ extern "C" {
 #define PRV$M_GRPPRV        ((uint64_t)1 << 34)  /* Group privilege (access) */
 #define PRV$M_READALL       ((uint64_t)1 << 35)  /* Read access to all objects */
 #define PRV$M_SECURITY      ((uint64_t)1 << 38)  /* Security administrator */
-#define PRV$M_IMPERSONATE   ((uint64_t)1 << 37)  /* Impersonate other users */
-#define PRV$M_ALTPRI        ((uint64_t)1 << 36)  /* Alter process priority */
+#define PRV$M_IMPERSONATE   ((uint64_t)1 <<  5)  /* Impersonate other users (V7.3: the same bit as DETACH) */
+#define PRV$M_IMPORT        ((uint64_t)1 << 36)  /* Mark an object import-able across a security boundary */
+#define PRV$M_AUDIT         ((uint64_t)1 << 37)  /* Direct audit events (V7.3 $PRVDEF) */
+#define PRV$M_ALTPRI        ((uint64_t)1 << 13)  /* Alter process priority (V7.3: the same bit as SETPRI) */
 
 /* Convenience: all privileges */
 #define PRV$M_ALL           (~(uint64_t)0)
@@ -112,9 +114,13 @@ extern "C" {
 #define PRV$V_DOWNGRADE     33
 #define PRV$V_GRPPRV        34
 #define PRV$V_READALL       35
-#define PRV$V_ALTPRI        36
-#define PRV$V_IMPERSONATE   37
+#define PRV$V_IMPORT        36
+#define PRV$V_AUDIT         37
 #define PRV$V_SECURITY      38
+/* V7.3 renamed/alias spellings of existing bits */
+#define PRV$V_IMPERSONATE    5   /* == DETACH */
+#define PRV$V_ALTPRI        13   /* == SETPRI */
+#define PRV$V_NOACNT         9   /* == ACNT   */
 
 /* ================================================================
  * Agreement lock with the executive (vms-2b8).

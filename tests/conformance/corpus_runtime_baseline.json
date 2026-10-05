@@ -1,7 +1,7 @@
 {
- "total": 142,
+ "total": 144,
  "summary": {
-  "run-pass": 140,
+  "run-pass": 142,
   "run-fail": 1,
   "run-crash": 1,
   "vm-crash": 0,
@@ -161,6 +161,11 @@
   },
   {
    "name": "lib_ffs",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_file_scan",
    "status": "run-pass",
    "signaled": false
   },
@@ -430,6 +435,11 @@
    "signaled": false
   },
   {
+   "name": "memtester",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
    "name": "ots_cnvout",
    "status": "run-pass",
    "signaled": false
@@ -531,6 +541,11 @@
   },
   {
    "name": "sys_check_fen",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_check_privilege",
    "status": "run-pass",
    "signaled": false
   },
@@ -711,11 +726,6 @@
   },
   {
    "name": "sys_trnlnm",
-   "status": "run-pass",
-   "signaled": false
-  },
-  {
-   "name": "memtester",
    "status": "run-pass",
    "signaled": false
   }

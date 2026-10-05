@@ -1135,6 +1135,8 @@ struct cnxman_join {
 	 * admitted.
 	 */
 	uint32_t membrecs_peer_created;
+	uint32_t formations_joined;  /* rd vms-f29: a class-0x01 commit made this
+				      * node a founding member                */
 	uint32_t conndata_omitted;
 	uint32_t dir_descriptor_omitted;
 	uint32_t model_omitted;

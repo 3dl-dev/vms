@@ -72,6 +72,12 @@ cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
 # header of src/malloc/alpha-dec-vms/lite_malloc.c.
 mkdir -p "src/malloc/${TARGET}"
 cp -v  "${OVERLAY}/src/malloc/${TARGET}/"* "src/malloc/${TARGET}/"
+# vms-122: VMS P0 placement. An address-less mmap (the heap's, and mremap's
+# moves) is placed in the P0 region below 0x40000000, as the VMS heap grows P0,
+# so every malloc result is a valid 32-bit pointer. See
+# src/mman/alpha-dec-vms/p0_region.h.
+mkdir -p "src/mman/${TARGET}"
+cp -v  "${OVERLAY}/src/mman/${TARGET}/"* "src/mman/${TARGET}/"
 # vms-430: LLP64 syscall RETURN-leg width fix. syscall_ret.c is a full overlay
 # (widened __syscall_ret to long long / unsigned long long). Its declaration in
 # syscall.h and the one truncating local in mmap.c are one-line widenings patched

@@ -285,6 +285,22 @@ uint32_t lib$sig_to_ret(
 );
 
 /**
+ * lib$file_scan - Call user routines for every file a wildcard FAB matches
+ *
+ * @param fab_addr         FAB (with NAM) naming the wildcard
+ * @param success_routine  called as int routine(struct FAB *) for each file found
+ * @param error_routine    called as int routine(struct FAB *) for a failed search step
+ * @param context          0 on the first call; reset to 0 when the scan completes
+ *
+ * @return  RMS$_NMF when the matches are used up (RMS$_FNF if there were none)
+ */
+uint32_t lib$file_scan(unsigned int *fab_addr, int (*success_routine)(),
+                       int (*error_routine)(), unsigned int *context);
+
+/** lib$file_scan_end - Release the search context of lib$file_scan */
+uint32_t lib$file_scan_end(unsigned int *fab_addr, unsigned int *context);
+
+/**
  * lib$ast_in_prog - Is the caller executing as an AST routine?
  *
  * @return  1 if an AST routine is running in the caller's context, else 0

@@ -269,10 +269,14 @@ if [ "$CORPUS_RT" = "1" ]; then
     n_corpus_rt=0
     for prog in /tests/corpus_rt/*; do
         [ -x "$prog" ] || continue
+        case "$prog" in *.args) continue ;; esac
         name=$(basename "$prog")
         case ",$CORPUS_SKIP," in *",$name,"*) continue ;; esac
         echo "CORPUS-RT-BEGIN $name" >&4
-        "$prog" </dev/null >/tmp/corpus_out.$$ 2>&1 &
+        _args=""
+        [ -f "$prog.args" ] && _args=$(cat "$prog.args")
+        # shellcheck disable=SC2086  # the .args file is a plain word list
+        "$prog" $_args </dev/null >/tmp/corpus_out.$$ 2>&1 &
         _pp=$!
         _t=0
         while kill -0 "$_pp" 2>/dev/null; do

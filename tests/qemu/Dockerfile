@@ -568,7 +568,7 @@ RUN mkdir -p /initramfs/bin /initramfs/lib/modules /initramfs/dev \
     for f in /src/repo/build-static/bin/corpus_rt_*; do \
         [ -x "$f" ] || continue; \
         cp "$f" "/initramfs/tests/corpus_rt/$(basename "$f" | sed 's/^corpus_rt_//')"; \
-        n_corpus_rt=$((n_corpus_rt+1)); \
+        case "$f" in *.args) ;; *) n_corpus_rt=$((n_corpus_rt+1));; esac; \
     done && \
     { cp /src/repo/build-static/bin/corpus_seed_sysvol /initramfs/tests/corpus_seed_sysvol || \
       { echo "FATAL: corpus_seed_sysvol was not built into the static tree -- the corpus guest would have no mounted system disk"; exit 1; }; } && \

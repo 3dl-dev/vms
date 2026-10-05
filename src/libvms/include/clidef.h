@@ -34,7 +34,7 @@ extern "C" {
  * ================================================================ */
 
 #define CLI$M_NOWAIT     0x00000001  /* Spawn asynchronously (don't wait) */
-#define CLI$M_NOTIFY     0x00000002  /* Notify via AST/event flag on completion */
+#define CLI$M_NOTIFY     0x10  /* Notify via AST/event flag on completion */
 
 #ifdef __cplusplus
 }

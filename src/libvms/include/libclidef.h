@@ -37,10 +37,10 @@ extern "C" {
 
 #define CLI$K_GETCMD        1   /* Get command line from user */
 #define CLI$K_GETQUAL       2   /* Get qualifier value */
-#define CLI$K_GETPAR        3   /* Get parameter value */
-#define CLI$K_GETOPT        4   /* Get option value */
-#define CLI$K_PRESENT       5   /* Check if qualifier present */
-#define CLI$K_CLISERV       6   /* General CLI service request */
+#define CLI$K_GETPAR        100  /* [OVMX] get parameter value (not in V7.3 $CLIDEF) */
+#define CLI$K_GETOPT        3   /* Get option value */
+#define CLI$K_PRESENT       80   /* Check if qualifier present */
+#define CLI$K_CLISERV       5   /* General CLI service request */
 
 /* ================================================================
  * CLI$ status returns (from cli$present / cli$get_value)

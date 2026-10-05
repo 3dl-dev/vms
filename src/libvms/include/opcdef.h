@@ -17,13 +17,13 @@
  * OPC$ Message Type Codes (opc$b_ms_type)
  * ================================================================ */
 
-#define OPC$_RQ_RQST    1   /* User request to operator */
-#define OPC$_RQ_REPLY   2   /* Operator reply to user request */
-#define OPC$_RQ_CANCEL  3   /* Cancel a pending request */
-#define OPC$_RQ_ENABLE  4   /* Enable operator terminal */
-#define OPC$_RQ_DISABLE 5   /* Disable operator terminal */
+#define OPC$_RQ_RQST    3   /* User request to operator */
+#define OPC$_RQ_REPLY   4   /* Operator reply to user request */
+#define OPC$_RQ_CANCEL  5   /* Cancel a pending request */
+#define OPC$_RQ_ENABLE  101 /* [OVMX] enable operator terminal (not a V7.3 request type) */
+#define OPC$_RQ_DISABLE 102 /* [OVMX] disable operator terminal (not a V7.3 request type) */
 #define OPC$_RQ_STATUS  6   /* Request operator status */
-#define OPC$_RQ_LOGFIL  7   /* Change operator log file */
+#define OPC$_RQ_LOGFIL  103 /* [OVMX] change operator log file (not a V7.3 request type) */
 
 /* ================================================================
  * OPC$ Operator Class Bitmasks (opc$b_ms_target / OPC$M_NM_*)
@@ -38,13 +38,13 @@
 #define OPC$M_NM_NETWORK 0x0040  /* NETWORK operator class */
 #define OPC$M_NM_CLUSTER 0x0080  /* CLUSTER operator class */
 #define OPC$M_NM_SECURITY 0x0100 /* SECURITY operator class */
-#define OPC$M_NM_OPER1   0x0200  /* OPER1 operator class */
-#define OPC$M_NM_OPER2   0x0400  /* OPER2 operator class */
-#define OPC$M_NM_OPER3   0x0800  /* OPER3 operator class */
-#define OPC$M_NM_OPER4   0x1000  /* OPER4 operator class */
-#define OPC$M_NM_OPER5   0x2000  /* OPER5 operator class */
-#define OPC$M_NM_OPER6   0x4000  /* OPER6 operator class */
-#define OPC$M_NM_OPER7   0x8000  /* OPER7 operator class */
+#define OPC$M_NM_OPER1   0x1000  /* OPER1 operator class */
+#define OPC$M_NM_OPER2   0x2000  /* OPER2 operator class */
+#define OPC$M_NM_OPER3   0x4000  /* OPER3 operator class */
+#define OPC$M_NM_OPER4   0x8000  /* OPER4 operator class */
+#define OPC$M_NM_OPER5   0x10000  /* OPER5 operator class */
+#define OPC$M_NM_OPER6   0x20000  /* OPER6 operator class */
+#define OPC$M_NM_OPER7   0x40000  /* OPER7 operator class */
 
 /* ================================================================
  * OPC$ Message Buffer Structure

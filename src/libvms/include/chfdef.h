@@ -55,8 +55,8 @@ struct chf$signal_array {
 
 /* Convenience macros for accessing signal array elements */
 #define CHF$L_SIG_ARGS      0   /* Offset: argument count */
-#define CHF$L_SIG_NAME      1   /* Offset: condition value */
-#define CHF$L_SIG_ARG1      2   /* Offset: first FAO argument */
+#define CHF$L_SIG_NAME      4   /* Offset: condition value */
+#define CHF$L_SIG_ARG1      8   /* Offset: first FAO argument */
 
 /* ================================================================
  * Mechanism Array (CHF$MECH_ARRAY / chf$mech_array)
@@ -83,10 +83,10 @@ struct chf$mech_array {
 /* Mechanism array offsets */
 #define CHF$L_MCH_ARGS      0
 #define CHF$L_MCH_FLAGS     1
-#define CHF$L_MCH_FRAME     2
-#define CHF$L_MCH_DEPTH     3
-#define CHF$L_MCH_SAVR0     4
-#define CHF$L_MCH_SAVR1     5
+#define CHF$L_MCH_FRAME     4
+#define CHF$L_MCH_DEPTH     8
+#define CHF$L_MCH_SAVR0     12
+#define CHF$L_MCH_SAVR1     16
 
 /* ================================================================
  * Condition Handler Function Type

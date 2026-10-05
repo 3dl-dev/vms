@@ -47,9 +47,9 @@
 
 /* SS$_ status codes (matching the kernel module, src/kernel/vms_internal.h). */
 #define SS_NORMAL     1
-#define SS_IVCHAN     602
+#define SS_IVCHAN     316
 #define SS_IVLOCKID   8484
-#define SS_NOSUCHDEV  2680
+#define SS_NOSUCHDEV  2312
 
 #define P1_WIN_SIZE   (64UL * 1024)
 

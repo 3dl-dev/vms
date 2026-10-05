@@ -8,7 +8,7 @@
 # EXPECT: contains:%DCL-W-IVQUAL, unrecognized qualifier - check validity, spelling, and placement - \BOGUS\
 # EXPECT: contains:$STATUS = "%X000008F0"
 # EXPECT: contains:%SET-E-DEVNOTMNT, device is not mounted - _VDA300:
-# EXPECT: contains:$STATUS = "%X00000A80"
+# EXPECT: contains:$STATUS = "%X0000007C"
 # EXPECT_NOT: contains:%SET-I-NOTIMPL
 # EXPECT_NOT: contains:SET VOLUME requires a mounted VMSFS volume
 #

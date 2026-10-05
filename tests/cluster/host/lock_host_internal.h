@@ -92,8 +92,8 @@ static inline void strscpy(char *dst, const char *src, size_t size)
 #define SS__NOTQUEUED   2488         /* SS$_NOTQUEUED */
 #define SS__DEADLOCK    3594         /* SS$_DEADLOCK */
 #define SS__IVLOCKID    8484         /* SS$_IVLOCKID */
-#define SS__CANCELGRANT 8508         /* SS$_CVTUNGRANT */
-#define SS__UNSUPPORTED 2296         /* SS$_UNSUPPORTED */
+#define SS__CANCELGRANT 3626         /* SS$_CVTUNGRANT */
+#define SS__UNSUPPORTED 3658         /* SS$_UNSUPPORTED */
 
 /* ================================================================
  * Lock-manager sizing constants (real values, copied from

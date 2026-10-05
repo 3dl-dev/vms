@@ -32,7 +32,7 @@
 /* SS$_NOSUCHDEV: what vms_kif_setident returns when /dev/vms is absent.
  * Even value (error) -- the exact value is not load-bearing to this test;
  * that it is EVEN is. */
-#define SS_NOSUCHDEV  0x00000660u
+#define SS_NOSUCHDEV  0x00000908u
 
 static int pass_count = 0;
 static int fail_count = 0;

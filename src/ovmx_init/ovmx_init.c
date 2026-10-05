@@ -239,7 +239,7 @@ static void sigchld_handler(int sig)
  *
  * DELIBERATELY NOT TAKEN FROM ssdef.h, which defines SS$_NOSUCHFILE as 2696
  * (0xA88) and disagrees with the oracle. That drift is real and already
- * tracked (vms-556 / vms-c90, alongside SS$_NOSUCHDEV 2680 vs the oracle's
+ * tracked (vms-556 / vms-c90, alongside SS$_NOSUCHDEV 2312 vs the oracle's
  * 2312) and needs OPERATOR SIGN-OFF -- a VMS constant is never
  * self-certified, so this file does not "fix" ssdef.h in passing. The value
  * below is used only to reproduce an observed console line, and is pinned to

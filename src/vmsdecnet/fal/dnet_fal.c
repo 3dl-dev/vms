@@ -89,7 +89,7 @@ static int send_complete(struct dnet_dap_transport *t, uint8_t cmpfunc)
 
 /* STATUS. A real VMS FAL also carries the system condition in STV (lab:
  * FNF -> STV 0x0910 = real SS$_NOSUCHFILE); OVMX sends NO STV until its own
- * ssdef values match real VMS (rd vms-ef2: OVMX SS$_NOSUCHFILE is 2696, which
+ * ssdef values match real VMS (rd vms-ef2: OVMX SS$_NOSUCHFILE is 2320, which
  * real VMS reads as NOSUCHOBJECT) -- an honest omission, not a wrong code. */
 static int send_status(struct dnet_dap_transport *t, uint16_t stscode, uint32_t stv)
 {

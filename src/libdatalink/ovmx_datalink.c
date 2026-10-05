@@ -173,9 +173,9 @@ int scs_datalink_open(const char *ifname, uint16_t ethertype)
     if (ioctl(fd, VMS_IOCTL_L2_OPEN, &a) < 0) { close(fd); return -1; }
     if (a.status != 1u) {          /* SS$_NORMAL == 1; anything else is honest
                                     * refusal (SS$_NOPRIV without PHY_IO,
-                                    * SS$_NOSUCHDEV 2680 for an absent iface). */
+                                    * SS$_NOSUCHDEV 2312 for an absent iface). */
         close(fd);
-        errno = (a.status == 2680u) ? ENODEV : EACCES;
+        errno = (a.status == 2312u) ? ENODEV : EACCES;
         return -1;
     }
     if (l2_alloc(fd, a.handle) == NULL) { close(fd); errno = ENOMEM; return -1; }

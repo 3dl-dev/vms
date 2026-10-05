@@ -46,10 +46,10 @@
 #define SS_BADPARAM     20
 #define SS_EXQUOTA      28
 #define SS_NOPRIV       36
-#define SS_IVCHAN       602
-#define SS_IVDEVNAM     608
+#define SS_IVCHAN       316
+#define SS_IVDEVNAM     324
 #define SS_ENDOFFILE    2160
-#define SS_NOSUCHDEV    2680
+#define SS_NOSUCHDEV    2312
 
 #define EXIT_SKIP 77
 

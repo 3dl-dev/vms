@@ -47,7 +47,7 @@
 #include "kif_transport.h"
 #include "vms_lock_nb.h"
 
-#define VMS_SS_NOSUCHDEV 2680u
+#define VMS_SS_NOSUCHDEV 2312u
 
 enum { OP_HOLD_RELEASE, OP_ENQW };
 

@@ -44,7 +44,7 @@
 #define SS_NORMAL     1u
 #define SS_BADPARAM   20u
 #define SS_NOPRIV     36u
-#define SS_NOSUCHDEV  2680u
+#define SS_NOSUCHDEV  2312u
 #define EXIT_SKIP     77
 
 static int pass = 0, fail = 0;

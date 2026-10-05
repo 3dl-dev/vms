@@ -79,7 +79,7 @@
 #define SS__NORMAL	0x00000001u	/* SS$_NORMAL   (vms_internal.h) */
 #endif
 #ifndef SS__NOSUCHDEV
-#define SS__NOSUCHDEV	2680u		/* SS$_NOSUCHDEV (vms_internal.h) */
+#define SS__NOSUCHDEV	2312u		/* SS$_NOSUCHDEV (vms_internal.h) */
 #endif
 
 uint32_t vms_devtab_disk_backing(const char *devnam, uint32_t *major_out,

@@ -57,7 +57,7 @@
 #include "kif_transport.h"
 #include "vms_mbx_nb.h"
 
-#define VMS_SS_NOSUCHDEV 2680u
+#define VMS_SS_NOSUCHDEV 2312u
 
 enum { OP_CREATE_HOLD, OP_WRITE, OP_READ };
 

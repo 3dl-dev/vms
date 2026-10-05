@@ -671,7 +671,7 @@
  * Every int-returning op below returns 0 on success. A NONZERO return is the
  * VMS condition value (an SS$_ code) the executive will report to the
  * personality -- so a binding that has no such interface returns
- * EXEC_SS_NOSUCHDEV (SS$_NOSUCHDEV, 2680) and VMS_IOCTL_CLUSTER_START fails
+ * EXEC_SS_NOSUCHDEV (SS$_NOSUCHDEV, 2312) and VMS_IOCTL_CLUSTER_START fails
  * honestly with it (Rule 9: fail-honest, never a simulated port). This is the
  * same 0 == success / nonzero == failure shape families 8, 11, 12 and 13 use;
  * families 14..18 additionally fix WHICH nonzero value, because their failure
@@ -993,7 +993,7 @@ struct exec_proc_acct {
  * src/kernel-core/vms_pe.c carries the _Static_assert that ties the two
  * spellings together (single lineage -- one value, asserted, not two constants
  * that happen to match today). */
-#define EXEC_SS_NOSUCHDEV 2680u
+#define EXEC_SS_NOSUCHDEV 2312u
 
 /*
  * A receive buffer the CORE owns. The port driver pre-allocates a pool of these

@@ -63,9 +63,9 @@
 #include "vms_kif.h"
 
 #define SS_NORMAL       1
-#define SS_IVCHAN       602
-#define SS_IVDEVNAM     608
-#define SS_NOSUCHDEV    2680
+#define SS_IVCHAN       316
+#define SS_IVDEVNAM     324
+#define SS_NOSUCHDEV    2312
 
 #define DC_TERM         66      /* DC$_TERM */
 

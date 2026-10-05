@@ -49,11 +49,11 @@ vms-2a0 mismatch. This script forces the real path so that cannot recur.)
 %LINK-I-IMPORT, EVAX cross-image import 'decc$malloc'  bound to --use producer DECC$SHR.EXE [sv#541]
 %LINK-I-IMPORT, EVAX cross-image import 'decc$main'    bound to --use producer DECC$SHR.EXE [sv#540]
 %LINK-I-IMPORT, EVAX cross-image import 'decc$tprintf' bound to --use producer DECC$SHR.EXE [sv#473]
-%LINK-S-CREATED, joint_e2e.exe: EVAX/Alpha ET_DYN image, .vms$xfer count=1
+%LINK-S-CREATED, joint_e2e.exe: EVAX/Alpha ET_EXEC (P0) image, .vms$xfer count=1
 ```
 
 Zero `%LINK-F-UNDEF`. `readelf -h joint_e2e.exe`: `Machine: Alpha`,
-`Type: DYN`. `.vms$imp`: 3 imports (`decc$malloc`, `decc$main`,
+`Type: EXEC` with its PT_LOAD at P0 0x10000 (vms-035). `.vms$imp`: 3 imports (`decc$malloc`, `decc$main`,
 `decc$tprintf`) — `decc$tprintf` and `decc$_malloc64` are musl-alpha's own
 (the port compiler auto-decorates `printf`/`malloc` at codegen); `decc$main`
 and the `<4 GB decc$malloc` are the OVMX bootstrap surface
@@ -117,7 +117,7 @@ activation gates stay on the plain (non-veneer) DECC$SHR until the LLP64
 width fix (vms-1fc) makes an RMS-routed `fopen` activation-safe on real
 `/dev/vms` (rung 4, vms-f49); `JOINT_CRTL_RMS_VENEER=1` proves the LINK-time
 composition only (toolchain container, no boot) — zero deferred/undef/muldef,
-EM_ALPHA/ET_DYN, and the import-map chain showing the port image's
+EM_ALPHA/ET_EXEC in P0, and the import-map chain showing the port image's
 `decc$fopen` binds to the pass-2 DECC$SHR producer whose own build log
 recorded both the veneer wiring and `sys$create/open/connect/put/get/close`
 bound to `LIBVMSRMS$SHR` — the un-fakeable proof that fopen resolves to the

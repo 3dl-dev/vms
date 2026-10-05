@@ -1,0 +1,715 @@
+{
+ "total": 140,
+ "summary": {
+  "run-pass": 138,
+  "run-fail": 1,
+  "run-crash": 1,
+  "vm-crash": 0,
+  "not-run": 0,
+  "run-pass-signaled": 9
+ },
+ "programs": [
+  {
+   "name": "lib_adawi",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_add_times",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_addx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_analyze_sdesc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_analyze_sdesc_64",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_ast_in_prog",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_bbcci",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_bbssi",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_char",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_convert_date_string",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_crc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_currency",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_cvt_dtb",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_cvt_dx_dx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_cvt_htb",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_cvt_otb",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_cvt_vectim",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_date_time",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_day",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_day_of_week",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_delete_file",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "lib_delete_logical",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_delete_symbol",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_digit_sep",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_ediv",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_emul",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_establish",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "lib_extv",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_extzv",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_ffc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_ffs",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_find_file",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "lib_format_date_time",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_free_ef",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_freen_dd",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_get_command",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_get_date_format",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_get_ef",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_get_foreign",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_get_input",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_get_symbol",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_get_users_language",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_get_vm_page",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_getdvi",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_getjpi",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_getsyi",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_ichar",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_index",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_insv",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_len",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_locc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_lookup_key",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_lp_lines",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_matchc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_movc3",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_movc5",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_movtc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_put_common",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_put_output",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_que",
+   "status": "run-crash",
+   "signaled": false
+  },
+  {
+   "name": "lib_radix_point",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_rename_file",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "lib_scanc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_scopy_dxdx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_scopy_r_dx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_set_logical",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_set_symbol",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_sig_to",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_signal",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "lib_skpc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_spanc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_spawn",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_stop",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "lib_sub_times",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_subx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_sys_asctim",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_sys_fao",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_sys_faol",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_sys_getmsg",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "lib_timer",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_tra_asc_ebc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_tree",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_vm",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "lib_wait",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_cnvout",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_cvt_t_x",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_cvt_x_xx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_cvt_xx_x",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_divc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_movx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_mulc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_powc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_powcj",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_powjj",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_scopy_dxdx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "ots_scopy_r_dx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_alloc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_asctim",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_assign",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_bintim",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_brkthruw",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_cancel",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_cef",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_check_fen",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_crembx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_creprc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_dclast",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_dclexh",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_delmbx",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_delprc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_device_scan",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_exit",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_filescan",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_forcex",
+   "status": "run-fail",
+   "signaled": false
+  },
+  {
+   "name": "sys_get_entropy",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_getdvi",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_getdviw",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "sys_getjpi",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_getjpiw",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_getsyi",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_gettim_prec",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_getuai",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_getutc",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_lckpag",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_numtim",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_purge_ws",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_purgws",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_putmsg",
+   "status": "run-pass",
+   "signaled": true
+  },
+  {
+   "name": "sys_resched",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_rms_seq",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_schdwk",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setast",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setimr",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setpri",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setprn",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setprv",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setrwm",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_setswm",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_sndopr",
+   "status": "run-pass",
+   "signaled": false
+  },
+  {
+   "name": "sys_trnlnm",
+   "status": "run-pass",
+   "signaled": false
+  }
+ ],
+ "timestamp": "2026-10-05T00:11:15Z",
+ "note": "Runtime column: tier-1 programs run in the QEMU guest under a live vms.ko (OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh). Taken from the CI runner (the reference environment); re-derive with tests/qemu/corpus_runtime_report.sh; raise the floor only from a real run. sys_forcex is timing-dependent (5s sleeps around a subprocess) and passed on a local KVM guest but not on the CI runner: it is held at its CI verdict until rd vms-f45 (test-flaky) is fixed."
+}

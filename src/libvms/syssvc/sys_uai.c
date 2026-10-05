@@ -43,6 +43,7 @@
 #include <errno.h>
 #include <time.h>
 #include <unistd.h>
+#include "ovmx_async.h"
 #include "starlet.h"
 #include "uaidef.h"
 #include "prvdef.h"
@@ -218,7 +219,7 @@ static uint32_t fill_uai_item(const struct item_list_3 *item,
  * @param astadr   AST completion routine (ignored)
  * @param astprm   AST parameter (ignored)
  */
-uint32_t sys$getuai(uint32_t efn, uint32_t *context,
+static uint32_t getuai_impl(uint32_t efn, uint32_t *context,
                     struct dsc$descriptor_s *usrnam,
                     void *itmlst, struct _iosb *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm)
@@ -263,6 +264,23 @@ uint32_t sys$getuai(uint32_t efn, uint32_t *context,
 }
 
 /*
+ * sys$getuai - public entry: the getuai body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$getuai(uint32_t efn, uint32_t *context,
+                    struct dsc$descriptor_s *usrnam,
+                    void *itmlst, struct _iosb *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint32_t st = getuai_impl(efn, context, usrnam, itmlst, iosb, astadr, astprm);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
+}
+
+/*
  * sys$setuai - Set User Authorization Information.
  *
  * Updates a user's record in /etc/ovmx/sysuaf.dat.
@@ -271,7 +289,7 @@ uint32_t sys$getuai(uint32_t efn, uint32_t *context,
  * Implementation: reads all lines, rewrites the file with the
  * modified line in place.
  */
-uint32_t sys$setuai(uint32_t efn, uint32_t *context,
+static uint32_t setuai_impl(uint32_t efn, uint32_t *context,
                     struct dsc$descriptor_s *usrnam,
                     void *itmlst, struct _iosb *iosb,
                     void (*astadr)(uint32_t), uint32_t astprm)
@@ -401,3 +419,21 @@ uint32_t sys$setuai(uint32_t efn, uint32_t *context,
     }
     return status;
 }
+
+/*
+ * sys$setuai - public entry: the setuai body above, then the completion every
+ * asynchronous system service owes its caller on success -- IOSB written, event
+ * flag set, AST queued (vms$$async_finish, sys_ast.c). The body is synchronous,
+ * so the request completes before it returns; what it used to omit was telling
+ * the caller. A program that waits on the event flag its AST sets (Eight-Cubed
+ * sys_getjpi.c) hung forever on a flag nothing ever set.
+ */
+uint32_t sys$setuai(uint32_t efn, uint32_t *context,
+                    struct dsc$descriptor_s *usrnam,
+                    void *itmlst, struct _iosb *iosb,
+                    void (*astadr)(uint32_t), uint32_t astprm)
+{
+    uint32_t st = setuai_impl(efn, context, usrnam, itmlst, iosb, astadr, astprm);
+    return vms$$async_finish(efn, iosb, st, astadr, astprm);
+}
+

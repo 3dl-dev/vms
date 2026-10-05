@@ -55,7 +55,7 @@ typedef struct {
 struct sigaltstack {
 	void *ss_sp;
 	int ss_flags;
-	size_t ss_size;
+	unsigned long long ss_size;   /* kernel-width (vms-537): size_t is 32-bit */
 };
 
 typedef struct __ucontext {

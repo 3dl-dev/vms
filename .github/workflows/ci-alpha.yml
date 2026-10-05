@@ -365,10 +365,19 @@ jobs:
             exit 1
           fi
           readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL: joint_e2e.exe is not EM_ALPHA"; exit 1; }
-          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL: joint_e2e.exe is not ET_DYN"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*EXEC'    || { echo "GATE FAIL: joint_e2e.exe is not ET_EXEC (linked in P0, vms-035)"; exit 1; }
+          readelf -l "$OUT/joint_e2e.exe" | grep -qE 'LOAD +0x0+ 0x0+10000 ' || { echo "GATE FAIL: joint_e2e.exe PT_LOAD is not at P0 0x10000 (vms-035)"; exit 1; }
           # C$_EXIT1 should fold as a globalvalue (no import cell) — informational
           if grep -q 'GVALFOLD' "$OUT/build.log"; then echo "ok: C\$_EXIT1 folded as globalvalue"; else echo "note: no GVALFOLD line logged"; fi
-          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_DYN; %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
+          echo "GATE PASS (vms-864): genuine-alpha crt0-join links zero-deferred; EM_ALPHA/ET_EXEC in P0 (vms-035); %LINK-S-CREATED; zero spurious MULDEF (vms-f1a)"
+
+      # vms-4d0: LINK.EXE EVAX object-library search (--library, VMS LINK
+      # /LIBRARY semantics) + names past 31 characters. Reuses the OUT dir the
+      # step above built (its LINK.EXE / crt0.obj / DECC$SHR.EXE). Three cases,
+      # two of them must-fail: selective pull ("2 of 3"), whole-archive of the
+      # same library fails UNDEF, a library lacking the definition fails UNDEF.
+      - name: "LINK.EXE library search: pulls only needed members; names past 31 chars stay distinct (vms-4d0)"
+        run: IMG=ovmx-cross-alpha-vms tools/cross-alpha-vms/joint-e2e/run-library-search-test.sh /tmp/joint-e2e-out
 
       # vms-2655 (rung 3 of vms-b4f): the port-link recipe, opted into the rung-2
       # CRTL->RMS stdio veneer (JOINT_CRTL_RMS_VENEER=1 -- see build-joint-image.sh's
@@ -407,15 +416,15 @@ jobs:
           echo "$TAIL" | grep -q 'LINK-F-UNDEF'  && { echo "GATE FAIL (vms-2655): LINK-F-UNDEF in the final port-image link"; exit 1; }
           echo "$TAIL" | grep -q 'LINK-F-MULDEF' && { echo "GATE FAIL (vms-2655): LINK-F-MULDEF in the final port-image link"; exit 1; }
           echo "$TAIL" | grep -q 'LINK-W-DEFERRED' && { echo "GATE FAIL (vms-2655): LINK-W-DEFERRED in the final port-image link"; exit 1; }
-          echo "$TAIL" | grep -qE "LINK-S-CREATED, .*joint_e2e.exe: EVAX/Alpha ET_DYN" \
-            || { echo "GATE FAIL (vms-2655): joint_e2e.exe (veneer build) not created EVAX/Alpha ET_DYN"; exit 1; }
+          echo "$TAIL" | grep -qE "LINK-S-CREATED, .*joint_e2e.exe: EVAX/Alpha ET_EXEC \(P0\)" \
+            || { echo "GATE FAIL (vms-2655): joint_e2e.exe (veneer build) not created EVAX/Alpha ET_EXEC (P0)"; exit 1; }
           # (4) the port image's OWN decc$fopen import binds to the pass-2 (veneer)
           #     DECC$SHR.EXE producer -- the chain from (1)+(2) above proves THAT
           #     producer's decc$fopen is the crtl_rms_stdio.c veneer, not musl-POSIX.
           echo "$TAIL" | grep -qE "cross-image import 'decc\\\$fopen' bound to --use producer DECC\\\$SHR.EXE" \
             || { echo "GATE FAIL (vms-2655): port image decc\$fopen did not bind to the veneer-wired DECC\$SHR producer"; exit 1; }
           readelf -h "$OUT/joint_e2e.exe" | grep -q 'Machine:.*Alpha' || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not EM_ALPHA"; exit 1; }
-          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*DYN'     || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not ET_DYN"; exit 1; }
+          readelf -h "$OUT/joint_e2e.exe" | grep -qE 'Type:.*EXEC'    || { echo "GATE FAIL (vms-2655): joint_e2e.exe is not ET_EXEC (P0, vms-035)"; exit 1; }
           test -f "$OUT/LIBVMSRMS\$SHR.EXE" || { echo "GATE FAIL (vms-2655): LIBVMSRMS\$SHR.EXE not staged in OUTDIR"; exit 1; }
           echo "GATE PASS (vms-2655): port image STRICT-links --use veneer-wired DECC\$SHR + LIBVMSRMS\$SHR + LIBOTS zero-deferred;"
           echo "  decc\$fopen binds to the veneer producer, whose own build resolved sys\$create/open/connect/put/get/close"
@@ -513,7 +522,7 @@ jobs:
           test -f /tmp/rms-substrate-out/LIBVMSRMS\$SHR.EXE
           test -f /tmp/rms-substrate-out/rms_substrate_test.exe
           readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -q 'Machine:.*Alpha'
-          readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -qE 'Type:.*DYN'
+          readelf -h /tmp/rms-substrate-out/rms_substrate_test.exe | grep -qE 'Type:.*EXEC'
           echo "vms-a7a rung-1 CI gate PASSED"
 
   # -----------------------------------------------------------------------
@@ -788,6 +797,58 @@ jobs:
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-veneer-gate
 
   # -----------------------------------------------------------------------
+  # alpha-crtl-rms-fileop (vms-3320, parent vms-b4f, blocks vms-fd1): extends
+  # alpha-crtl-rms-veneer from the stdio family to open/creat/unlink/rename/
+  # opendir/readdir/closedir. The port image (crtl_rms3_test.c) drives the
+  # vector-substituted decc$* file-ops -> sys$create/$erase/$rename over the ACP;
+  # an INDEPENDENT reader (DCL DIRECTORY) asserts the effects on ODS-2.
+  # -----------------------------------------------------------------------
+  alpha-crtl-rms-fileop:
+    name: "OVMX/Alpha CRTL->RMS file-op veneer gate — boots the veneer-wired crtl_rms3 image on the real /dev/vms executive; its decc$open/creat/unlink/rename/opendir/readdir/closedir reach the ODS-2 ACP, then an INDEPENDENT DIRECTORY reader asserts the created+renamed files landed with genuine File IDs and the deleted+renamed-away files are gone (vms-3320, blocks vms-fd1)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "CRTL->RMS file-op veneer gate — independent DIRECTORY reader asserts genuine ODS-2 effects of the port image file-ops; 4-case can-fail selftest first"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh crtl-rms-fileop-gate
+
+  # -----------------------------------------------------------------------
   # alpha-mf-multifile (vms-bdd): the MULTI-.O STRICT-link + activation gate --
   # the rung above alpha-crtl-rms-n7 (which is single-object). The milestone
   # image is a genuine multi-object program: mf_main.obj calls ACROSS the .o
@@ -844,6 +905,58 @@ jobs:
 
       - name: "multi-.o STRICT-link gate — qemu-system-alpha boots the assembled OVMX/Alpha runtime, STRICT-links (no --allow-undefined) a real multi-object program (mf_main.obj + mf_util.obj across a .o boundary, cross-.o malloc/free/strlen/strcmp/memcpy resolved incl. the ex-blocker decc$free), activates it on the real /dev/vms executive over the ODS-2 ACP, asserts the cross-.o port-test OK + $STATUS=%X0035A029 (sentinel 5); runs its own can-fail selftest before the boot"
         run: tools/cross-alpha/run-module-gp-activation-alpha.sh mf-gate
+
+
+  # -----------------------------------------------------------------------
+  # alpha-libinit (vms-43c): LIB$INITIALIZE. Two longword procedure values in
+  # the LIB$INITIALIZE psect (libinit_tab_p32.c); LINK.EXE puts the STARLET
+  # dispatcher first in the P0 image's transfer vector; it must run both, in
+  # order, before main (sentinel 7). Can-fail selftest first.
+  # -----------------------------------------------------------------------
+  alpha-libinit:
+    name: "OVMX/Alpha LIB$INITIALIZE gate — the STARLET dispatcher runs the image's LIB$INITIALIZE routines in psect order before main, on the real /dev/vms executive (vms-43c)"
+    needs: changes
+    if: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.changes.outputs.alpha_activation == 'true')) && !(github.event_name == 'workflow_dispatch' && github.event.inputs.vax_p4_only == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          df -h /
+
+      - name: Build the alpha-linux-gnu cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha
+          file: tools/cross-alpha/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha:latest
+          cache-from: type=gha,scope=cross-alpha
+          cache-to: type=gha,mode=max,scope=cross-alpha
+
+      - name: Build the alpha-dec-vms cross toolchain image (gha layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: tools/cross-alpha-vms
+          file: tools/cross-alpha-vms/Dockerfile
+          push: false
+          load: true
+          tags: ovmx-cross-alpha-vms:latest
+          cache-from: type=gha,scope=cross-alpha-vms
+          cache-to: type=gha,mode=max,scope=cross-alpha-vms
+
+      - name: "LIB$INITIALIZE gate — two longword LIB$INITIALIZE entries run in order before main on the real executive (P0 image); can-fail selftest first"
+        run: tools/cross-alpha/run-module-gp-activation-alpha.sh libinit-gate
 
   # -----------------------------------------------------------------------
   # alpha-shipped-shareable-activation (vms-410, vms-deec Decision B): Alpha

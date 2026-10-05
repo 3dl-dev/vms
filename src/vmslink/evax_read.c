@@ -106,6 +106,18 @@ static void copy_name(char *dst, const uint8_t *s, uint8_t nl)
     dst[nl] = '\0';
 }
 
+/* Grow a dynamic array to hold at least one more element (doubling). Like the
+ * psect content buffers, the storage lives until process exit. */
+static int grow(void **arr, int *cap, int n, size_t elsz)
+{
+    if (n < *cap) return 0;
+    int nc = *cap ? *cap * 2 : 256;
+    void *p = realloc(*arr, (size_t)nc * elsz);
+    if (!p) { set_err("out of memory"); return -1; }
+    *arr = p; *cap = nc;
+    return 0;
+}
+
 int evax_is_object(const uint8_t *buf, size_t len)
 {
     /* First record: [u16 rms_len][u16 rectyp=EMH]. An ELF object begins with
@@ -152,9 +164,10 @@ static int parse_egsd(const uint8_t *rec, uint16_t rsz, struct evax_object *out)
             copy_name(s->name, e + PSC_NAMLNG_OFF + 1, nl);
             out->nsec++;
         } else if (etyp == EGSD__C_SYM) {
-            if (out->nsym >= EVAX_MAX_SYMBOLS) { set_err("too many symbols"); return -1; }
+            if (grow((void **)&out->sym, &out->sym_cap, out->nsym, sizeof *out->sym) < 0) return -1;
             if (esiz < SYM_FLAGS_OFF + 2) { set_err("truncated SYM entry"); return -1; }
             struct evax_symbol *y = &out->sym[out->nsym];
+            memset(y, 0, sizeof *y);
             uint16_t flags = getl16(e + SYM_FLAGS_OFF);
             y->flags = flags;
             y->defined = (flags & EGSY__V_DEF) ? 1 : 0;
@@ -223,7 +236,7 @@ static int etir_emit(struct evax_object *out, struct etir_state *st,
                      enum evax_reloc_type type, uint64_t address,
                      const uint8_t *limit)
 {
-    if (out->nreloc >= EVAX_MAX_RELOCS) { set_err("too many relocations"); return -1; }
+    if (grow((void **)&out->reloc, &out->reloc_cap, out->nreloc, sizeof *out->reloc) < 0) return -1;
     if (st->cur_psect < 0 || st->cur_psect >= out->nsec) {
         set_err("relocation before CTL_SETRB or bad psect index"); return -1;
     }

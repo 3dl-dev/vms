@@ -191,11 +191,19 @@ SUITE_DRAIN_TIMEOUT=${SUITE_DRAIN_TIMEOUT:-20}
 SHARD_INDEX=0
 SHARD_TOTAL=1
 ONLY_SUITE=""
+# CORPUS RUNTIME MODE (vms-44a, R2.3): ovmx.corpus=1 runs every program staged in
+# /tests/corpus_rt under the live executive INSTEAD of the executive suites, and
+# reports one CORPUS-RT line per program (see the loop below). ovmx.corpus_skip=
+# is a comma list of programs a previous boot already took the guest down on.
+CORPUS_RT=0
+CORPUS_SKIP=""
 for _tok in $(cat /proc/cmdline 2>/dev/null); do
     case "$_tok" in
         ovmx.shard=*)  SHARD_INDEX=${_tok#ovmx.shard=} ;;
         ovmx.shards=*) SHARD_TOTAL=${_tok#ovmx.shards=} ;;
         ovmx.only=*)   ONLY_SUITE=${_tok#ovmx.only=} ;;
+        ovmx.corpus=*) CORPUS_RT=${_tok#ovmx.corpus=} ;;
+        ovmx.corpus_skip=*) CORPUS_SKIP=${_tok#ovmx.corpus_skip=} ;;
     esac
 done
 # Defensive: a malformed/empty value must not silently turn the loop into a
@@ -238,8 +246,56 @@ suite_in_shard() {
 # NOT through its glob, whose iteration order this must not depend on. Not a
 # suite itself: no "=== SUITE ... ===" line, its own exit code is not
 # tallied (see tests/qemu/corpus_seed_lnm.c's header for why).
-if [ -x /tests/corpus_seed_lnm ]; then
+if [ "$CORPUS_RT" = "1" ] && [ -x /tests/corpus_seed_sysvol ]; then
+    # corpus runtime mode boots the system disk instead (VDA300:, mounted, with
+    # the shipped SYSUAF.DAT) -- see tests/qemu/corpus_seed_sysvol.c
+    /tests/corpus_seed_sysvol >&4 2>&1
+elif [ -x /tests/corpus_seed_lnm ]; then
     /tests/corpus_seed_lnm >&4 2>&1
+fi
+
+# CORPUS RUNTIME LOOP (vms-44a, R2.3). One line per program on the assertion
+# channel:  CORPUS-RT <name> rc=<exit> signaled=<0|1>   (rc 124 = the 40s per-program budget expired, >128 =
+# killed by signal).  A "CORPUS-RT-BEGIN <name>" line precedes each run so a
+# program that takes the whole guest down (an executive bug) is attributable even
+# though it prints no result line.  Programs are SCOREBOARD ENTRIES, not gating
+# suites: no PASS/FAIL tally, no SUITE line -- the verdict is computed outside by
+# tests/qemu/corpus_runtime_report.sh against the committed baseline.
+if [ "$CORPUS_RT" = "1" ]; then
+    ONLY_SUITE="__corpus_rt_mode__"     # suppresses the executive-suite loop below
+    echo "--- corpus runtime: /tests/corpus_rt ---" >&4
+    mkdir -p /tmp/corpus_cwd
+    cd /tmp/corpus_cwd
+    n_corpus_rt=0
+    for prog in /tests/corpus_rt/*; do
+        [ -x "$prog" ] || continue
+        name=$(basename "$prog")
+        case ",$CORPUS_SKIP," in *",$name,"*) continue ;; esac
+        echo "CORPUS-RT-BEGIN $name" >&4
+        "$prog" </dev/null >/tmp/corpus_out.$$ 2>&1 &
+        _pp=$!
+        _t=0
+        while kill -0 "$_pp" 2>/dev/null; do
+            if [ "$_t" -ge 40 ]; then kill -KILL "$_pp" 2>/dev/null; break; fi
+            sleep 1; _t=$((_t+1))
+        done
+        wait "$_pp" 2>/dev/null
+        rc=$?
+        [ "$_t" -ge 40 ] && rc=124
+        sig=0
+        grep -qE '^%[A-Z0-9_$]+-[EF]-' /tmp/corpus_out.$$ 2>/dev/null && sig=1
+        echo "CORPUS-RT $name rc=$rc signaled=$sig" >&4
+        if [ "$rc" -ne 0 ]; then
+            # the last lines the program printed, for the CI log (diagnostic only)
+            tail -n 30 /tmp/corpus_out.$$ 2>/dev/null | while IFS= read -r _l; do
+                echo "CORPUS-RT-LOG $name| $_l" >&4
+            done
+        fi
+        n_corpus_rt=$((n_corpus_rt+1))
+    done
+    rm -f /tmp/corpus_out.$$
+    cd /
+    echo "=== CORPUS-RT DONE: $n_corpus_rt programs ===" >&4
 fi
 
 for test in /tests/test_kmod_* /tests/test_syssvc_* /tests/test_imgact_* /tests/test_corpus_*; do

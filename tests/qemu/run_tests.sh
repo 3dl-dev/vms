@@ -110,6 +110,21 @@ if [ -n "${OVMX_KTEST_ONLY:-}" ]; then
     esac
 fi
 
+# CORPUS RUNTIME MODE (rd vms-44a, R2.3). OVMX_CORPUS_RT=1 boots the same guest
+# but init.sh runs the corpus programs staged in /tests/corpus_rt instead of the
+# executive suites and prints one "CORPUS-RT <name> rc=.. signaled=.." line per
+# program. Verdict is NOT this script's: with zero suites run it reports "0 suites
+# failed" and the scoreboard comparison is tests/qemu/corpus_runtime_report.sh's.
+# OVMX_CORPUS_SKIP=a,b lists programs an earlier boot took the whole guest down on.
+KCMD_CORPUS=""
+if [ "${OVMX_CORPUS_RT:-0}" = "1" ]; then
+    KCMD_CORPUS="ovmx.corpus=1"
+    case "${OVMX_CORPUS_SKIP:-}" in
+    ''|*[!A-Za-z0-9_,]*) ;;
+    *) KCMD_CORPUS="$KCMD_CORPUS ovmx.corpus_skip=$OVMX_CORPUS_SKIP" ;;
+    esac
+fi
+
 # ASSERTION TRANSCRIPT (vms-b5b round 2). ttyS0 (below) carries the boot
 # banner, kernel printk and init.sh's own aggregate lines -- exactly what it
 # always has. A SECOND serial port, ttyS1, is wired to a plain file so that
@@ -150,6 +165,14 @@ OVMX_DISK2=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 OVMX_DISK3=$(mktemp) || { echo "run_tests.sh: mktemp failed" >&2; exit 2; }
 truncate -s 16M "$OVMX_DISK1"
 OVMX_ODS2_SRC=/ods2_real.img
+# CORPUS RUNTIME MODE (vms-44a): the guest BOOTS FROM THE SYSTEM DISK -- the generated
+# system-disk volume (the shipped SYSUAF.DAT/RIGHTSLIST.DAT, room to create files)
+# is vda, so SYS$SYSDEVICE, the default device for relative names, and the rights/
+# UAF reads are one mounted volume, as on a booted system. The 400 KB real-VAX
+# fixture the executive suites use for vda has no room for a program's scratch files.
+if [ "${OVMX_CORPUS_RT:-0}" = "1" ] && [ -f /ods2_sysvol.img ]; then
+    OVMX_ODS2_SRC=/ods2_sysvol.img
+fi
 if [ -f "$OVMX_ODS2_SRC" ]; then
     cp "$OVMX_ODS2_SRC" "$OVMX_DISK0"
 else
@@ -275,7 +298,7 @@ OUTPUT=$(timeout "$TIMEOUT" $QEMU \
     -kernel "$KERNEL" \
     -initrd "$INITRD" \
     -nographic \
-    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD $KCMD_HAMMER $KCMD_ONLY" \
+    -append "$CONSOLE panic=-1 loglevel=4 $KCMD_SHARD $KCMD_HAMMER $KCMD_ONLY $KCMD_CORPUS" \
     -m 512M \
     -no-reboot \
     -smp 1 \

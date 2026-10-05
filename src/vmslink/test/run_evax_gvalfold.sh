@@ -54,7 +54,7 @@ $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/dummy.o" "$WORK/d
 
 echo
 echo "== link gvalfold_ref.obj --use the globalvalue producer =="
-"$WORK/LINK.EXE" --transfer MAIN --use "$WORK/CEXIT\$SHR.EXE" \
+"$WORK/LINK.EXE" --base 0 --transfer MAIN --use "$WORK/CEXIT\$SHR.EXE" \
     -o "$WORK/ref_gvalfold.exe" "$FIX/gvalfold_ref.obj"
 
 echo
@@ -69,7 +69,7 @@ EOF
 $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/helper.o" "$WORK/helper.c"
 "$WORK/LINK.EXE" --shareable --symbol-vector "HELPER_PROC=PROCEDURE" \
     --gsmatch LEQUAL,1,0 -o "$WORK/HELPER\$SHR.EXE" "$WORK/helper.o"
-"$WORK/LINK.EXE" --transfer MAIN_PROC --use "$WORK/HELPER\$SHR.EXE" \
+"$WORK/LINK.EXE" --base 0 --transfer MAIN_PROC --use "$WORK/HELPER\$SHR.EXE" \
     -o "$WORK/main_ximport.exe" "$FIX/link_main.obj"
 "$WORK/evax_ximport_verify" "$WORK/main_ximport.exe"
 echo "ok:   PROCEDURE export still produces a cross-image import cell (fold did not break imports)"
@@ -83,7 +83,7 @@ $CC -fPIC -O2 -ffreestanding -fno-stack-protector -c -o "$WORK/other.o" "$WORK/o
 "$WORK/LINK.EXE" --shareable --symbol-vector "OTHER_PROC=PROCEDURE" \
     --gsmatch LEQUAL,1,0 -o "$WORK/OTHER\$SHR.EXE" "$WORK/other.o"
 # C$_EXIT1 is exported by no producer here -> must %LINK-F-UNDEF, never fabricated.
-if "$WORK/LINK.EXE" --transfer MAIN --use "$WORK/OTHER\$SHR.EXE" \
+if "$WORK/LINK.EXE" --base 0 --transfer MAIN --use "$WORK/OTHER\$SHR.EXE" \
         -o "$WORK/should_not_exist.exe" "$FIX/gvalfold_ref.obj" \
         > "$WORK/fail.log" 2>&1; then
     echo "FAIL: link SUCCEEDED against a producer that does not export C\$_EXIT1"

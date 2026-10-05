@@ -265,6 +265,54 @@ is supposed to observe (INV-6 honesty: don't fake the VMS-observable exit). Wher
 
 ---
 
+### 3.6 Image placement: P0, as on OpenVMS Alpha (vms-035)
+
+**Decision (conductor ruling, 2026-10-04): an Alpha VMS-standard executable is
+linked at a fixed P0 address, 0x10000, and IMGACT maps every shareable image it
+activates into P0 directly above it, all below P1 (0x40000000).** This reverses
+the earlier, implicit placement: LINK.EXE emitted the executable as a relocatable
+ET_DYN, the Linux kernel loaded it at its mmap base, and IMGACT mmap'd the
+shareables wherever the kernel chose. Observed addresses under that scheme: the
+port image's code at 0x200_0000_2358, DECC$SHR at 0x200_0002_c000, the heap at
+0x200_0100_2000 -- all above 4 GB.
+
+**Why it had to change.** On OpenVMS Alpha the program region P0 starts at
+0x10000 (the first 64 KB are no-access), the main image is mapped at its low end,
+and shareable images are mapped into P0 above it; P1 (0x40000000-0x7FFFFFFF) holds
+the stack and the process-permanent CLI state; the 64-bit P2 region is reached only
+through explicit 64-bit allocation (`_malloc64`, `$EXPREG_64`). So every image
+address on VMS fits a sign-extended longword, and the port depends on it:
+- The port's own libgcc `crtbegin.o`/`crtend.o` contribute their init routines to
+  the `LIB$INITIALIZE` psect as **REFLONG** (32-bit) relocations to procedure
+  descriptors (observed with LINK.EXE's EVAX reader on the stage-2 libgcc build:
+  crtend reloc REFLONG psect `LIB$INITIALIZE` -> `$LINK$`+8). Above 4 GB no
+  longword can hold a procedure value, and LINK.EXE had to refuse them.
+- Port code compiled with the default 32-bit pointer size (`gcc/config/vms` host
+  objects among it) stores image addresses in 32-bit pointers.
+
+**Mechanism.**
+- LINK.EXE `--base 0x10000` (EVAX executables only): every psect vaddr is
+  base + file offset; the image is an ET_EXEC with one PT_LOAD at 0x10000 and a
+  PT_PHDR at base + offset, so IMGACT's `exec_bias` is 0 and the kernel maps it
+  in place. Addresses are final at link time: no `.vms$rel` is emitted, and a
+  REFLONG to an image address is stored directly (rejected if it would reach P1).
+- IMGACT (Alpha): when the main image is such a P0 image, each producer goes to
+  the next free 64 KB-aligned P0 address above it, mapped `MAP_FIXED_NOREPLACE`
+  (Linux/Alpha 0x200000) so nothing already there is clobbered; if P0 is full
+  the producer falls back to a kernel-chosen address and the activation seam
+  reports `p0=0`. Shareables stay relocatable ET_DYN images biased through
+  `.vms$rel`, as on VMS where they are position-independent.
+- The heap stays where the kernel/mallocng put it (above the image); 32-bit
+  allocations keep using the `_malloc32` arena.
+
+**Staging.** Stage 1 adds `--base` and the IMGACT placement with the default
+unchanged; the six Alpha activation gates run both ways on k3s-worker
+(`JOINT_LINK_BASE=0x10000` makes `build-joint-image.sh` link in P0, and the gate
+then requires the seam's `p0=1`). Stage 2 makes P0 the default: LINK.EXE links
+every EVAX executable at 0x10000 unless told `--base 0` (the relocatable form,
+kept only for the `.vms$rel` unit tests), and every Alpha activation gate
+requires `p0=1`. Host proof: `src/vmslink/test/run_evax_p0base.sh`.
+
 ## 4. Open questions
 
 ### 4a. Need MY (conductor) decision

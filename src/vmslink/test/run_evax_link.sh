@@ -29,7 +29,7 @@ $CC -std=gnu11 -O2 -Wall -Wextra -o "$WORK/evax_link_verify" "$HERE/evax_link_ve
 
 echo
 echo "== link the two-object EVAX fixture =="
-"$WORK/LINK.EXE" --transfer MAIN_PROC -o "$WORK/link_sample.exe" \
+"$WORK/LINK.EXE" --base 0 --transfer MAIN_PROC -o "$WORK/link_sample.exe" \
     "$FIX/link_main.obj" "$FIX/link_helper.obj"
 
 echo

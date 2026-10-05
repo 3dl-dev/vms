@@ -43,7 +43,7 @@ ARG GCC_SHA256=0845e9621c9543a13f484e94584a49ffc0129970e9914624235fc1d061a0c083
 # The NetBSD/vax sets (headers + libc + crt objects) come off the NetBSD CDN and
 # are the security-relevant download here, so they are SHA512-pinned from the
 # CDN's own published manifest:
-#   https://cdn.netbsd.org/pub/NetBSD/NetBSD-10.1/vax/binary/sets/SHA512
+#   https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-10.1/vax/binary/sets/SHA512
 ARG NETBSD_BASE_SHA512=ebb03d22d947691609b7127562210dd746112eac8aa188685b353b494bb9017c9979bd9f46ce70b6f2406ad17e63af073572e41ec47d710214606db68a0e6789
 ARG NETBSD_COMP_SHA512=34105e9eb2f644ee6ff26205d1069841b3996942537d8881b4cb0be94bbcc3b31e694da4c49f909efc0874d576c4b0a23aae34cd74698b64d0234022e958ae89
 
@@ -73,7 +73,7 @@ done; [ "$n" -lt 3 ] && \
 # ------------------------------------------------------------------
 RUN set -eux; \
     mkdir -p "$SYSROOT"; cd /tmp; \
-    CDN="https://cdn.netbsd.org/pub/NetBSD/NetBSD-${NETBSD_VERSION}/vax/binary/sets"; \
+    CDN="https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-${NETBSD_VERSION}/vax/binary/sets"; \
     wget -q "$CDN/base.tgz" "$CDN/comp.tgz"; \
     echo "${NETBSD_BASE_SHA512}  base.tgz" | sha512sum -c -; \
     echo "${NETBSD_COMP_SHA512}  comp.tgz" | sha512sum -c -; \

@@ -66,6 +66,12 @@ cp -v  "${OVERLAY}/src/setjmp/${TARGET}/"* "src/setjmp/${TARGET}/"
 mkdir -p "src/thread/${TARGET}"
 cp -v  "${OVERLAY}/src/thread/${TARGET}/"* "src/thread/${TARGET}/"
 cp -v  "${OVERLAY}/src/internal/vms_alpha_syscall.c" "src/internal/"
+# vms-032: one heap. Replace generic lite_malloc.c (a second, brk-sharing bump
+# allocator reached through section-relative self-binds the linker cannot
+# redirect) with forwarders that name mallocng's __libc_malloc_impl. See the
+# header of src/malloc/alpha-dec-vms/lite_malloc.c.
+mkdir -p "src/malloc/${TARGET}"
+cp -v  "${OVERLAY}/src/malloc/${TARGET}/"* "src/malloc/${TARGET}/"
 # vms-430: LLP64 syscall RETURN-leg width fix. syscall_ret.c is a full overlay
 # (widened __syscall_ret to long long / unsigned long long). Its declaration in
 # syscall.h and the one truncating local in mmap.c are one-line widenings patched
@@ -106,6 +112,37 @@ fi
 grep -q 'long long ret;' src/mman/mmap.c || {
 	echo "vms-430 PATCH FAIL: could not widen 'long ret' in mmap.c" >&2; exit 7; }
 echo "== vms-430 return-leg widening applied (syscall.h decl + mmap.c local) =="
+
+# ==========================================================================
+# vms-537: the DEC C data model for size_t. On OpenVMS Alpha size_t is 32-bit
+# even with 64-bit pointers -- the port compiler says so itself
+# (gcc/config/vms/vms.h: SIZE_TYPE "unsigned int", "Always a 32 bit type";
+# PTRDIFF_TYPE is long long under -mpointer-size=64). The CRTL's ::size_t must
+# equal the compiler's __SIZE_TYPE__ or C++ (libstdc++'s std::size_t) and the
+# GCC port's own sources stop compiling. So: size_t/ssize_t 32-bit, while
+# uintptr_t/intptr_t/ptrdiff_t stay pointer-width (_Addr, 64-bit).
+#
+# The Linux-Alpha kernel still reads 64-bit lengths in the structs it is handed,
+# so the two kernel-shaped structs that carry a length get a 64-bit field rather
+# than a 32-bit size_t with 4 bytes of uninitialized padding above it:
+# struct iovec (readv/writev -- stdio writes through writev) here, and
+# stack_t.ss_size in the arch bits/signal.h overlay.
+# Patched with the same guarded exact-text idiom as vms-430; a drift hard-fails.
+# ==========================================================================
+sed -i 's/^TYPEDEF unsigned _Addr size_t;$/TYPEDEF unsigned int size_t;/' include/alltypes.h.in
+sed -i 's/^TYPEDEF _Addr ssize_t;$/TYPEDEF int ssize_t;/' include/alltypes.h.in
+sed -i 's/^STRUCT iovec { void \*iov_base; size_t iov_len; };$/STRUCT iovec { void *iov_base; unsigned long long iov_len; };/' include/alltypes.h.in
+grep -q '^TYPEDEF unsigned int size_t;$' include/alltypes.h.in \
+ && grep -q '^TYPEDEF int ssize_t;$' include/alltypes.h.in \
+ && grep -q '^STRUCT iovec { void \*iov_base; unsigned long long iov_len; };$' include/alltypes.h.in \
+ || { echo "vms-537 PATCH FAIL: size_t/ssize_t/iovec in include/alltypes.h.in" >&2; exit 7; }
+# mprotect() rounds the ADDRESS through size_t; with a 32-bit size_t that
+# truncates a 64-bit pointer. Round through uintptr_t instead.
+grep -q '^#include <stdint.h>$' src/mman/mprotect.c || sed -i 's/^#include <sys\/mman.h>$/#include <sys\/mman.h>\n#include <stdint.h>/' src/mman/mprotect.c
+sed -i 's/^\tsize_t start, end;$/\tuintptr_t start, end;/; s/(size_t)addr/(uintptr_t)addr/; s/end = (size_t)(/end = (uintptr_t)(/' src/mman/mprotect.c
+grep -q 'uintptr_t start, end;' src/mman/mprotect.c && grep -q '^#include <stdint.h>$' src/mman/mprotect.c && ! grep -q '(size_t)' src/mman/mprotect.c \
+ || { echo "vms-537 PATCH FAIL: src/mman/mprotect.c" >&2; exit 7; }
+echo "== vms-537 DEC C size_t model applied (size_t/ssize_t 32-bit, iovec + mprotect kernel-width) =="
 
 # ==========================================================================
 # PREFLIGHT: assert the ABI model the arch overlay assumes, against the REAL
@@ -384,6 +421,62 @@ else
 	echo "VERIFY FAIL (vms-c5d): PAGE_SIZE is not a compile-time 8192 through musl's own header set:" >&2
 	cat /tmp/pgsz.err >&2
 	exit 7
+fi
+
+# --------------------------------------------------------------------------
+# ONE-HEAP GATE (vms-032): lite_malloc.o must be the alpha-dec-vms override --
+# it may only REFERENCE __libc_malloc_impl (mallocng's), never define it. A
+# local (weak) definition is what the back end self-binds section-relatively,
+# splitting DECC$SHR into two allocators over one brk.
+# --------------------------------------------------------------------------
+echo "== one-heap gate (vms-032): lite_malloc.o references mallocng, defines no allocator =="
+rm -rf /tmp/lmck && mkdir -p /tmp/lmck
+LMEMB=$(grep -m1 -E '(^|/)lite_malloc\.' /tmp/libc.members || true)
+[ -n "${LMEMB}" ] || { echo "VERIFY FAIL (vms-032): no lite_malloc member in libc.a" >&2; exit 8; }
+( cd /tmp/lmck && ar x "${LIBCA}" "${LMEMB}" ) 2>/dev/null || true
+"${NM}" "/tmp/lmck/${LMEMB}" >/tmp/lmck/nm.out 2>&1 || { cat /tmp/lmck/nm.out >&2; exit 8; }
+if grep -qE '^[0-9a-fA-F]+[[:space:]]+[A-TV-Za-tv-z][[:space:]]+(__libc_malloc_impl|__simple_malloc)$' /tmp/lmck/nm.out; then
+	echo "VERIFY FAIL (vms-032): lite_malloc.o DEFINES an allocator (generic lite_malloc.c, not the alpha-dec-vms override):" >&2
+	cat /tmp/lmck/nm.out >&2
+	exit 8
+fi
+if ! grep -qE '[[:space:]]U[[:space:]]+__libc_malloc_impl$' /tmp/lmck/nm.out; then
+	echo "VERIFY FAIL (vms-032): lite_malloc.o does not reference __libc_malloc_impl by name:" >&2
+	cat /tmp/lmck/nm.out >&2
+	exit 8
+fi
+echo "  OK      lite_malloc.o: U __libc_malloc_impl, no local allocator -> one heap (mallocng)"
+
+# --------------------------------------------------------------------------
+# SIZE_T MODEL GATE (vms-537): through musl's own installed header set, ::size_t
+# must BE the compiler's __SIZE_TYPE__ (32-bit, DEC C), ssize_t 32-bit, pointers
+# and uintptr_t/ptrdiff_t 64-bit, and the kernel-shaped iovec / stack_t keep a
+# 64-bit length. Compile-only (no codegen), so it runs in the light leg.
+# --------------------------------------------------------------------------
+echo "== size_t model gate (vms-537): CRTL size_t == compiler __SIZE_TYPE__ =="
+cat > /tmp/szt.c <<'SZTEOF'
+#include <stddef.h>
+#include <stdint.h>
+#include <sys/types.h>
+#include <sys/uio.h>
+#include <signal.h>
+_Static_assert(__builtin_types_compatible_p(size_t, __typeof__(sizeof 0)), "::size_t must be the compiler's __SIZE_TYPE__ (vms-537)");
+_Static_assert(sizeof(size_t) == 4 && sizeof(ssize_t) == 4, "size_t/ssize_t are 32-bit on OpenVMS Alpha (vms-537)");
+_Static_assert(sizeof(void *) == 8 && sizeof(uintptr_t) == 8 && sizeof(ptrdiff_t) == 8, "64-bit pointers keep pointer-width uintptr_t/ptrdiff_t");
+_Static_assert(SIZE_MAX == 0xffffffffu, "SIZE_MAX tracks the 32-bit size_t");
+_Static_assert(sizeof(struct iovec) == 16 && offsetof(struct iovec, iov_len) == 8 && sizeof(((struct iovec *)0)->iov_len) == 8, "iovec is kernel-shaped");
+_Static_assert(offsetof(stack_t, ss_size) == 16 && sizeof(((stack_t *)0)->ss_size) == 8, "stack_t.ss_size is kernel-shaped");
+int __vms_537_sizet_ok;
+SZTEOF
+if "${TARGET}-gcc" ${CC_FLAGS} -nostdinc -D_GNU_SOURCE \
+	-Iarch/${TARGET} -Iarch/generic -Iobj/src/internal \
+	-Isrc/include -Isrc/internal -Iobj/include -Iinclude \
+	-fsyntax-only /tmp/szt.c 2>/tmp/szt.err; then
+	echo "  OK      size_t == __SIZE_TYPE__ (32-bit), pointers/uintptr_t/ptrdiff_t 64-bit, iovec/stack_t kernel-shaped"
+else
+	echo "VERIFY FAIL (vms-537): CRTL size_t model does not match the port compiler:" >&2
+	cat /tmp/szt.err >&2
+	exit 9
 fi
 
 if [ "$PARTIAL" = "1" ]; then

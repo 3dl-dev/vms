@@ -43,6 +43,7 @@
 #include <sys/mman.h>
 #include <sys/ioctl.h>
 #include <errno.h>
+#include <stdlib.h>         /* arc4random_buf (vms_sys_getrandom) */
 #include <fcntl.h>         /* openat (vms_sys_openat) -- vms-706 */
 #include <sys/syscall.h>   /* SYS___futex (vms_sys_futex) -- vms-706 */
 
@@ -84,6 +85,24 @@ static inline void *vms_sys_mmap(void *addr, vms_size_t length, int prot,
 static inline int vms_sys_munmap(void *addr, vms_size_t length)
 {
     return munmap(addr, (size_t)length);
+}
+
+/* The Linux wrappers return -errno; the NetBSD libc returns -1 with errno. */
+static inline int vms_sys_mlock(const void *addr, vms_size_t length)
+{
+    return mlock(addr, (size_t)length) < 0 ? -errno : 0;
+}
+
+static inline int vms_sys_munlock(const void *addr, vms_size_t length)
+{
+    return munlock(addr, (size_t)length) < 0 ? -errno : 0;
+}
+
+static inline vms_ssize_t vms_sys_getrandom(void *buf, vms_size_t length, unsigned int flags)
+{
+    (void)flags;
+    arc4random_buf(buf, (size_t)length);
+    return (vms_ssize_t)length;
 }
 
 /* ================================================================

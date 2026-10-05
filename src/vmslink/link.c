@@ -3916,8 +3916,23 @@ static void evax_fold_globalvalue(struct evax_input *in, int ii,
 /* Append one image-relative slot offset to the .vms$rel fixup table (grown on
  * demand). Each recorded slot holds an 8-byte image-relative address that IMGACT
  * re-biases by the load base at activation (apply_vms_rel, imgact.c). */
+/* vms-035: link-time virtual base of an EVAX/Alpha EXECUTABLE. 0 (default) =
+ * the relocatable ET_DYN the kernel places anywhere, biased by IMGACT through
+ * .vms$rel. Nonzero (--base, OpenVMS Alpha P0: 0x10000) = an ET_EXEC linked at
+ * a fixed address in P0 (below 2 GB) exactly as on OpenVMS Alpha, so every
+ * image address fits a 32-bit slot (LIB$INITIALIZE entries, 32-bit-pointer
+ * code) and no load-bias fixups exist: the image is never moved. */
+static uint64_t g_evax_vbase = 0;
+/* The default for an EVAX executable is P0 (stage 2 of vms-035): OpenVMS Alpha
+ * LINK bases every executable image there. `--base 0` asks for the relocatable
+ * ET_DYN form instead (kept for the .vms$rel unit tests). */
+#define OVMX_P0_DEFAULT_BASE 0x10000ULL
+static int g_evax_base_set = 0;
+#define OVMX_P0_TOP 0x40000000ULL   /* P0 ends where P1 (stack/control) begins */
+
 static void evax_rel_add(uint64_t **arr, int *n, int *cap, uint64_t off)
 {
+    if (g_evax_vbase) return;   /* fixed-address image: nothing to bias (vms-035) */
     if (*n == *cap) {
         int nc = *cap ? *cap * 2 : 16;
         uint64_t *p = realloc(*arr, (size_t)nc * sizeof *p);
@@ -4148,7 +4163,12 @@ store_target:;
          * (every runtime pointer/address is a REFQUAD/CODEADDR/LINKAGE quad; the
          * only REFLONGs are $ABS$/globalvalue folds, S_placed == 0). Fail
          * honestly rather than emit an unbiasable fixup or silently mis-load. */
-        if (S_placed)
+        if (S_placed && g_evax_vbase) {
+            /* Fixed P0 image (vms-035): the address is final at link time and,
+             * like every OpenVMS Alpha P0 address, fits a sign-extended longword. */
+            if (S + r->addend >= OVMX_P0_TOP)
+                die("EVAX REFLONG target lies outside P0 (>= 0x40000000)");
+        } else if (S_placed)
             die("EVAX REFLONG to a placed section needs a load-bias fixup, but a "
                 "32-bit slot cannot hold a 64-bit-biased address (the port must "
                 "emit a REFQUAD, or this is out of .vms$rel scope)");
@@ -4457,10 +4477,10 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                     if (al < 1) al = 1;
                     cur = ALIGN_UP(cur, al);
                     if (!begset) { beg = cur; begset = 1; }
-                    in[i].sec_base[s] = cur;
+                    in[i].sec_base[s] = g_evax_vbase + cur;   /* image vaddr */
                     cur += sec->alloc;
                 }
-            if (begset) { osec[k].addr = beg; osec[k].size = cur - beg; }
+            if (begset) { osec[k].addr = g_evax_vbase + beg; osec[k].size = cur - beg; }
         }
     }
 
@@ -4481,8 +4501,12 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             {".init_array",    "init_array",    0,0,0},
             {".fini_array",    "fini_array",    0,0,0},
             {".preinit_array", "preinit_array", 0,0,0},
+            /* vms-43c: the LIB$INITIALIZE psect -- every object's longword
+             * initialization-routine entries, concatenated in link order. The
+             * OVMX LIB$INITIALIZE dispatcher (STARLET) walks [start, end). */
+            {"LIB$INITIALIZE", "LIB$INITIALIZE", 0,0,0},
         };
-    for (int a = 0; a < 3; a++)
+    for (int a = 0; a < 4; a++)
         for (int k = 0; k < nos; k++)
             if ((!strcmp(osec[k].name, ld_arr[a].sec) ||
                  !strcmp(osec[k].name, ld_arr[a].alt)) && osec[k].size) {
@@ -4498,6 +4522,8 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         { "__fini_array_end",      ld_arr[1].e, ld_arr[1].placed },
         { "__preinit_array_start", ld_arr[2].s, ld_arr[2].placed },
         { "__preinit_array_end",   ld_arr[2].e, ld_arr[2].placed },
+        { "ovmx$lib_initialize_start", ld_arr[3].s, ld_arr[3].placed },
+        { "ovmx$lib_initialize_end",   ld_arr[3].e, ld_arr[3].placed },
         { "_DYNAMIC",              0,           0                 },
     };
     const int n_ldsyms = (int)(sizeof ldsyms / sizeof ldsyms[0]);
@@ -4506,7 +4532,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
      * psects, inside the loaded range, so IMGACT / a --use consumer reads them by
      * section vaddr. Resolution happens HERE (after placement) so every psect
      * base is final -- exactly when the transfer address is resolved. */
-    uint64_t transfer_va = 0;
+    uint64_t transfer_va = 0, libinit_va = 0;
     uint32_t xfer_count = 1;
     uint64_t xfer_addr = 0, xfer_size = 0;
     uint64_t off_sv = 0, sv_size = 0, sv_names_o = 0;
@@ -4521,13 +4547,28 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             die("--transfer symbol is not defined by any input object");
         transfer_va = evax_sym_value_addr(in, di, ds);
 
+        /* vms-43c: an image that links the LIB$INITIALIZE dispatcher (pulled
+         * in by any object referencing LIB$INITIALIZE -- the port's crtbegin/
+         * crtend do) starts there: OpenVMS LINK puts LIB$INITIALIZE ahead of
+         * the main transfer address in the transfer vector, so the activator
+         * calls it first and it runs the LIB$INITIALIZE psect's routines before
+         * calling main. Its longword entries need P0 addresses. */
+        int li_i; const struct evax_symbol *li_s;
+        if (evax_find_sym(in, nin, "LIB$INITIALIZE", &li_i, &li_s) == 0 && li_s->is_proc) {
+            if (!g_evax_vbase)
+                die("LIB$INITIALIZE needs a P0 image (its longword entries cannot "
+                    "hold relocatable addresses; drop --base 0)");
+            libinit_va = evax_sym_value_addr(in, li_i, li_s);
+            xfer_count = 2;
+        }
+
         xfer_size = sizeof(struct ovmx_xfer_header) + (uint64_t)xfer_count * 8;
         cur = ALIGN_UP(cur, 8);
         xfer_addr = cur;
         cur += xfer_size;
         int oi = nos++;
         snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_XFER_SECTION);
-        osec[oi].addr = xfer_addr; osec[oi].size = xfer_size; osec[oi].nobits = 0;
+        osec[oi].addr = g_evax_vbase + xfer_addr; osec[oi].size = xfer_size; osec[oi].nobits = 0;
     } else {
         /* vms-1ef: build the thunk-redirect map now that every psect is placed
          * (sec_base final) — a redirected weak_alias thunk universal must export
@@ -4667,7 +4708,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         cur += imp_size;
         int oi = nos++;
         snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_IMP_SECTION);
-        osec[oi].addr = off_imp; osec[oi].size = imp_size; osec[oi].nobits = 0;
+        osec[oi].addr = g_evax_vbase + off_imp; osec[oi].size = imp_size; osec[oi].nobits = 0;
     }
 
     /* ---- .vms$rel: the load-bias fixup table. Header + one image-relative u64
@@ -4684,7 +4725,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         cur += rel_sec_size;
         int oi = nos++;
         snprintf(osec[oi].name, sizeof osec[oi].name, "%s", OVMX_REL_SECTION);
-        osec[oi].addr = off_rel; osec[oi].size = rel_sec_size; osec[oi].nobits = 0;
+        osec[oi].addr = g_evax_vbase + off_rel; osec[oi].size = rel_sec_size; osec[oi].nobits = 0;
     }
 
     uint64_t file_end = cur;           /* end of loadable file content          */
@@ -4724,7 +4765,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     eh->e_ident[EI_CLASS]   = ELFCLASS64;
     eh->e_ident[EI_DATA]    = ELFDATA2LSB;
     eh->e_ident[EI_VERSION] = EV_CURRENT;
-    eh->e_type    = ET_DYN;
+    eh->e_type    = g_evax_vbase ? ET_EXEC : ET_DYN;
     eh->e_machine = EM_ALPHA;
     eh->e_version = EV_CURRENT;
     eh->e_entry   = transfer_va;
@@ -4748,16 +4789,16 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         li = 0;
     } else {
         ph[0].p_type = PT_PHDR; ph[0].p_flags = PF_R;
-        ph[0].p_offset = off_ph; ph[0].p_vaddr = off_ph; ph[0].p_paddr = off_ph;
+        ph[0].p_offset = off_ph; ph[0].p_vaddr = g_evax_vbase + off_ph; ph[0].p_paddr = ph[0].p_vaddr;
         ph[0].p_filesz = (uint64_t)nph * sizeof(Elf_Phdr);
         ph[0].p_memsz  = ph[0].p_filesz; ph[0].p_align = 8;
         ph[1].p_type = PT_INTERP; ph[1].p_flags = PF_R;
-        ph[1].p_offset = off_interp; ph[1].p_vaddr = off_interp; ph[1].p_paddr = off_interp;
+        ph[1].p_offset = off_interp; ph[1].p_vaddr = g_evax_vbase + off_interp; ph[1].p_paddr = ph[1].p_vaddr;
         ph[1].p_filesz = interp_sz; ph[1].p_memsz = interp_sz; ph[1].p_align = 1;
         li = 2;
     }
     ph[li].p_type = PT_LOAD; ph[li].p_flags = PF_R | PF_W | PF_X;
-    ph[li].p_offset = 0; ph[li].p_vaddr = 0; ph[li].p_paddr = 0;
+    ph[li].p_offset = 0; ph[li].p_vaddr = g_evax_vbase; ph[li].p_paddr = g_evax_vbase;
     ph[li].p_filesz = file_end; ph[li].p_memsz = mem_end; ph[li].p_align = 0x1000;
     if (!is_shareable) memcpy(img + off_interp, IMGACT_INTERP, interp_sz);
 
@@ -4767,7 +4808,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
             struct evax_section *sec = &in[i].obj.sec[s];
             if (sec->alloc == 0 || evax_is_nobits(sec->name)) continue;
             if (evax_is_debug(sec->name)) continue;   /* non-runtime debug psect, unplaced */
-            uint64_t base = in[i].sec_base[s];
+            uint64_t base = in[i].sec_base[s] - g_evax_vbase;   /* file offset */
             if (base + sec->alloc > file_end) die("psect content past file image");
             if (sec->content) memcpy(img + base, sec->content, (size_t)sec->alloc);
             /* NULL content == all zero, already zeroed by calloc. */
@@ -4782,7 +4823,11 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         putl32(img + xfer_addr + 4,  xh.flavor);
         putl32(img + xfer_addr + 8,  xh.count);
         putl32(img + xfer_addr + 12, xh.reserved);
-        putl64(img + xfer_addr + 16, transfer_va);   /* entry[0] = main transfer */
+        if (xfer_count == 2) {
+            putl64(img + xfer_addr + 16, libinit_va);   /* entry[0] = LIB$INITIALIZE */
+            putl64(img + xfer_addr + 24, transfer_va);  /* entry[1] = main transfer  */
+        } else
+            putl64(img + xfer_addr + 16, transfer_va);  /* entry[0] = main transfer  */
     } else {
         /* .vms$sv: the SAME ovmx_sv_header + entry layout + name blob the ELF
          * emit_shareable stamps -- byte-compatible so IMGACT, the cross-image
@@ -4838,7 +4883,7 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
         s->sh_type = osec[k].nobits ? SHT_NOBITS : SHT_PROGBITS;
         s->sh_flags = SHF_ALLOC | (strcmp(osec[k].name, "$CODE$") == 0 ? SHF_EXECINSTR : SHF_WRITE);
         s->sh_addr = osec[k].addr;
-        s->sh_offset = osec[k].nobits ? file_end : osec[k].addr;  /* identity map */
+        s->sh_offset = osec[k].nobits ? file_end : osec[k].addr - g_evax_vbase;  /* file offset */
         s->sh_size = osec[k].size;
         s->sh_addralign = 16;
     }
@@ -4858,10 +4903,11 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
     close(fd);
 
     fprintf(stderr,
-        "%%LINK-S-CREATED, %s: EVAX/Alpha ET_DYN %s, %d object%s, "
+        "%%LINK-S-CREATED, %s: EVAX/Alpha %s %s, %d object%s, "
         "%d data reloc%s applied, %d linkage pair%s applied, "
         "%d call-site reloc%s kept indirect (first-light), %s=%u\n",
-        out, is_shareable ? "shareable" : "image", nin, nin == 1 ? "" : "s",
+        out, g_evax_vbase ? "ET_EXEC (P0)" : "ET_DYN",
+        is_shareable ? "shareable" : "image", nin, nin == 1 ? "" : "s",
         n_data, n_data == 1 ? "" : "s",
         n_linkage, n_linkage == 1 ? "" : "s",
         n_callsite, n_callsite == 1 ? "" : "s",
@@ -4873,8 +4919,16 @@ static void emit_evax_common(struct evax_input *in, int nin, int is_shareable,
                 osec[k].name, (unsigned long long)osec[k].addr,
                 (unsigned long long)osec[k].size);
     if (!is_shareable)
+    {
         fprintf(stderr, "%%LINK-I-XFER, transfer '%s' -> image-relative 0x%llx\n",
                 transfer, (unsigned long long)transfer_va);
+        if (xfer_count == 2)
+            fprintf(stderr, "%%LINK-I-LIBINIT, LIB$INITIALIZE first in the transfer "
+                    "vector (0x%llx); %llu byte%s of LIB$INITIALIZE entries\n",
+                    (unsigned long long)libinit_va,
+                    (unsigned long long)(ld_arr[3].e - ld_arr[3].s),
+                    ld_arr[3].e - ld_arr[3].s == 1 ? "" : "s");
+    }
     else {
         fprintf(stderr, "%%LINK-I-SYMVEC, .vms$sv at 0x%llx, %d universal%s, "
                 "GSMATCH kind=%u %u.%u\n",
@@ -5027,7 +5081,7 @@ static struct evax_input *push_evax(struct evax_input **ein, int *n, int *cap)
 
 /* Parse every EVAX object member of an `ar` archive into the growable ein array. */
 static void load_archive_evax(const char *path, struct evax_input **ein,
-                              int *n, int *cap)
+                              int *n, int *cap, int whole)
 {
     size_t asize;
     uint8_t *abuf = slurp(path, &asize);   /* kept live: members reference it */
@@ -5064,9 +5118,125 @@ static void load_archive_evax(const char *path, struct evax_input **ein,
         pos = mdata + msize;
         if (pos & 1) pos++;
     }
-    fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
-            "(whole-archive)\n", path, members, members == 1 ? "" : "s");
+    if (whole)
+        fprintf(stderr, "%%LINK-I-ARCHIVE, %s: %d EVAX object member%s pulled "
+                "(whole-archive)\n", path, members, members == 1 ? "" : "s");
 }
+
+/* --------------------------------------------------------------------------
+ * EVAX object LIBRARY search (vms-4d0): VMS LINK /LIBRARY semantics for an
+ * `ar` archive named with --library. Unlike a plain `.a` input (whole-archive:
+ * every member is linked, which the C-RTL shareable build relies on), a
+ * library contributes only the members that define a symbol the link still
+ * needs, repeated until nothing new is pulled (a pulled member's own
+ * references may need further members). "Needed" = referenced by a loaded
+ * input, defined by no loaded input, and exported by no --use'd producer.
+ * This is what a C++ program needs from libstdc++.a: whole-archiving all of it
+ * drags in every facility (and its own unresolved dependencies). */
+struct evax_nameset { char **slot; size_t cap, n; };
+
+static uint64_t evax_fnv(const char *s)
+{
+    uint64_t h = 1469598103934665603ULL;
+    while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
+    return h;
+}
+
+static int evax_ns_has(const struct evax_nameset *ns, const char *s)
+{
+    if (!ns->cap) return 0;
+    for (size_t i = evax_fnv(s) & (ns->cap - 1); ns->slot[i]; i = (i + 1) & (ns->cap - 1))
+        if (strcmp(ns->slot[i], s) == 0) return 1;
+    return 0;
+}
+
+static void evax_ns_add(struct evax_nameset *ns, char *s)
+{
+    if (evax_ns_has(ns, s)) return;
+    if ((ns->n + 1) * 2 > ns->cap) {
+        size_t nc = ns->cap ? ns->cap * 2 : 1024;
+        char **ns2 = calloc(nc, sizeof *ns2);
+        if (!ns2) die("oom growing library name set");
+        for (size_t i = 0; i < ns->cap; i++) {
+            if (!ns->slot[i]) continue;
+            size_t j = evax_fnv(ns->slot[i]) & (nc - 1);
+            while (ns2[j]) j = (j + 1) & (nc - 1);
+            ns2[j] = ns->slot[i];
+        }
+        free(ns->slot);
+        ns->slot = ns2; ns->cap = nc;
+    }
+    size_t j = evax_fnv(s) & (ns->cap - 1);
+    while (ns->slot[j]) j = (j + 1) & (ns->cap - 1);
+    ns->slot[j] = s; ns->n++;
+}
+
+static void evax_ns_free(struct evax_nameset *ns) { free(ns->slot); ns->slot = NULL; ns->cap = ns->n = 0; }
+
+static void evax_search_libraries(struct evax_input **ein, int *nein, int *cap,
+                                  const char **libs, int nlibs,
+                                  struct producer *producers, int np)
+{
+    if (nlibs == 0) return;
+    /* Load every library member into a candidate pool (parsed, not yet linked). */
+    struct evax_input *pool = NULL;
+    int npool = 0, cappool = 0;
+    int *lib_of = NULL;
+    for (int l = 0; l < nlibs; l++) {
+        int before = npool;
+        load_archive_evax(libs[l], &pool, &npool, &cappool, 0);
+        lib_of = realloc(lib_of, (size_t)(npool ? npool : 1) * sizeof *lib_of);
+        if (!lib_of) die("oom indexing library members");
+        for (int k = before; k < npool; k++) lib_of[k] = l;
+    }
+    char *pulled = calloc((size_t)(npool ? npool : 1), 1);
+    int *npulled = calloc((size_t)nlibs, sizeof *npulled);
+    if (!pulled || !npulled) die("oom tracking library members");
+
+    for (;;) {
+        /* Rebuild the defined / referenced name sets over the linked inputs. */
+        struct evax_nameset def = {0}, ref = {0};
+        for (int i = 0; i < *nein; i++) {
+            struct evax_object *o = &(*ein)[i].obj;
+            for (int s = 0; s < o->nsym; s++)
+                evax_ns_add(o->sym[s].defined ? &def : &ref, o->sym[s].name);
+            for (int r = 0; r < o->nreloc; r++)
+                if (o->reloc[r].sym[0]) evax_ns_add(&ref, o->reloc[r].sym);
+        }
+        int changed = 0;
+        for (int m = 0; m < npool; m++) {
+            if (pulled[m]) continue;
+            struct evax_object *o = &pool[m].obj;
+            for (int s = 0; s < o->nsym; s++) {
+                const struct evax_symbol *y = &o->sym[s];
+                if (!y->defined || !evax_ns_has(&ref, y->name) || evax_ns_has(&def, y->name))
+                    continue;
+                int pidx; uint32_t svidx;
+                if (np > 0 && find_universal(producers, np, y->name, &pidx, &svidx))
+                    continue;   /* a --use'd shareable provides it: not needed */
+                struct evax_input *slot = push_evax(ein, nein, cap);
+                *slot = pool[m];
+                pulled[m] = 1; npulled[lib_of[m]]++; changed = 1;
+                /* Its definitions satisfy later candidates in this same pass. */
+                for (int t = 0; t < o->nsym; t++)
+                    if (o->sym[t].defined) evax_ns_add(&def, o->sym[t].name);
+                break;
+            }
+        }
+        evax_ns_free(&def); evax_ns_free(&ref);
+        if (!changed) break;
+    }
+    for (int l = 0; l < nlibs; l++) {
+        int total = 0;
+        for (int m = 0; m < npool; m++) if (lib_of[m] == l) total++;
+        fprintf(stderr, "%%LINK-I-LIBRARY, %s: %d of %d member%s pulled to resolve "
+                "references (library search)\n", libs[l], npulled[l], total,
+                total == 1 ? "" : "s");
+    }
+    free(pulled); free(npulled); free(lib_of);
+    /* pool storage (member buffers, parsed objects) stays live like every input. */
+}
+
 
 int main(int argc, char **argv)
 {
@@ -5080,8 +5250,10 @@ int main(int argc, char **argv)
     struct producer *producers = calloc((size_t)argc, sizeof *producers);
     int np = 0;
     const char *transfer = NULL;   /* EVAX/Alpha main transfer symbol (vms-cbe) */
+    const char **libs = calloc((size_t)argc, sizeof *libs);  /* --library FILE (vms-4d0) */
+    int nlibs = 0;
     uint32_t gk = OVMX_GSMATCH_EQUAL, gmaj = 0, gmin = 0;
-    if (!ins || !producers) die("oom parsing arguments");
+    if (!ins || !producers || !libs) die("oom parsing arguments");
     memset(uv, 0, sizeof uv);
 
     for (int i = 1; i < argc; i++) {
@@ -5099,6 +5271,16 @@ int main(int argc, char **argv)
             nuniv = parse_symbol_vector(argv[++i], uv);
         } else if (strcmp(argv[i], "--gsmatch") == 0 && i + 1 < argc) {
             parse_gsmatch(argv[++i], &gk, &gmaj, &gmin);
+        } else if (strcmp(argv[i], "--base") == 0 && i + 1 < argc) {
+            /* vms-035: link the EVAX/Alpha executable at a fixed P0 address. */
+            char *e = NULL;
+            unsigned long long b = strtoull(argv[++i], &e, 0);
+            if (!e || *e || (b & 0xffff) || b >= OVMX_P0_TOP)
+                die("--base must be 0 (relocatable) or a 64 KB-aligned P0 address below 0x40000000");
+            g_evax_vbase = b;
+            g_evax_base_set = 1;
+        } else if (strcmp(argv[i], "--library") == 0 && i + 1 < argc) {
+            libs[nlibs++] = argv[++i];   /* EVAX object library: searched (vms-4d0) */
         } else if (strcmp(argv[i], "--transfer") == 0 && i + 1 < argc) {
             transfer = argv[++i];   /* EVAX/Alpha main transfer address (vms-cbe) */
         } else if (argv[i][0] == '-') {
@@ -5139,7 +5321,7 @@ int main(int argc, char **argv)
                  * and errors on a non-EVAX one (the mixed-format guard). An empty
                  * archive (0 members, e.g. a libgcc.a the alpha port never needed)
                  * contributes nothing — accepted, not rejected. */
-                load_archive_evax(ins[i], &ein, &nein, &cap_ein);
+                load_archive_evax(ins[i], &ein, &nein, &cap_ein, 1);
                 continue;
             }
             size_t sz; uint8_t *b = slurp(ins[i], &sz);
@@ -5154,6 +5336,8 @@ int main(int argc, char **argv)
             }
         }
         if (nein == 0) die("no EVAX object members found in inputs");
+        /* --library: pull only the members the link still needs (vms-4d0). */
+        evax_search_libraries(&ein, &nein, &cap_ein, libs, nlibs, producers, np);
         /* vms-614: linker-view universal dump — list the DEFINED decc$ symbols
          * evax_read resolves (weak-alias equates included), for mk_decc_shr.sh to
          * build the symbol vector from, then stop before any emit. Runs after the
@@ -5163,6 +5347,10 @@ int main(int argc, char **argv)
             evax_dump_universals(ein, nein);
             return 0;
         }
+        if (shareable && g_evax_base_set && g_evax_vbase)
+            die("--base applies to an executable; a shareable is placed by IMGACT");
+        if (!shareable && !g_evax_base_set)
+            g_evax_vbase = OVMX_P0_DEFAULT_BASE;   /* executables live in P0 */
         if (shareable) {
             if (executable)
                 die("specify at most one of --shareable / --executable");
@@ -5176,6 +5364,8 @@ int main(int argc, char **argv)
         }
         return 0;
     }
+    if (nlibs)
+        die("--library searches EVAX/Alpha object libraries only");
     /* ELF object set: fall through to emit_shareable. load_obj does the single
      * byte-exact RMS read per input; no slurp happened above. */
 

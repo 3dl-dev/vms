@@ -1,0 +1,20 @@
+# Tier-1 corpus programs whose DESIGNED outcome is a non-zero exit (vms-44a).
+#
+# run_corpus.sh and tests/qemu/corpus_runtime_report.sh grade a program run-pass
+# when it exits 0. A few Eight-Cubed demonstrations exist precisely to end an image
+# with a failure status -- the demonstration IS the failure -- and grading them
+# "exit 0 or fail" scores a correct run as a failure. Each entry here names the one
+# exit code the demonstration is documented to produce; the program is run-pass iff
+# it exits with EXACTLY that code (any other code, a different signal, a timeout,
+# still fails). Nothing is added for a program that merely fails.
+#
+# format:  <program> <exit-code>   # why this is the designed outcome
+#
+# OVMX maps a VMS image-exit condition to the POSIX exit code as: success -> 0,
+# a condition that stops the image -> the low byte of the condition value
+# (lib$stop/lib$signal fatal: exit(condition)), $EXIT of a failure status -> 1.
+lib_stop         76   # lib$stop(SS$_NOMORENODE=588) "converts a warning to a fatal": exit(588 & 0xFF)
+sys_exit         1    # sys$exit(SS$_POWERFAIL): "the call's sole purpose is to exit the program" with a failure status
+lib_signal       12   # lib$signal(SS$_ACCVIO=12): "Demonstrate how to signal an error" -- fatal, unhandled -> exit(12)
+lib_establish    12   # handler is established, then removed, then lib$signal(SS$_ACCVIO) "crashes the program" by design
+sys_delprc       143  # "This code will delete the process that runs it": the image is killed (SIGTERM = 128+15)

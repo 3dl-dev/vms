@@ -3134,6 +3134,7 @@ uint32_t vms_kif_bg_getsockopt(uint32_t exec_chan, int level, int optname,
  */
 
 uint32_t vms_kif_l2_open(const char *ifname, uint16_t ethertype,
+                         const uint8_t station[6],
                          uint32_t *out_handle, uint32_t *out_ifindex,
                          uint8_t hwaddr[6])
 {
@@ -3148,6 +3149,8 @@ uint32_t vms_kif_l2_open(const char *ifname, uint16_t ethertype,
     vms_memset(&args, 0, sizeof(args));
     vms_strncpy(args.ifname, ifname, sizeof(args.ifname) - 1);
     args.ethertype = ethertype;
+    if (station)
+        vms_memcpy(args.station, station, sizeof(args.station));
 
     KIF_CALL(VMS_IOCTL_L2_OPEN, &args);
 

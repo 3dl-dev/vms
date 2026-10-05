@@ -23,6 +23,15 @@
  *      $SETPRV (vms_kif_setprv), attempting OPEN, then restoring it.
  *   5. Honest failure: OPEN against a nonexistent interface name ->
  *      SS$_NOSUCHDEV, never a fabricated handle (INV-6).
+ *   6. STATION ADDRESS (rd vms-1f69, src/kernel/vms_l2_station.h): OPEN with a
+ *      DECnet Phase IV algorithmic station AA-00-04-00-2A-04 (node 1.42) ->
+ *      SS$_NORMAL; an arbitrary foreign unicast station -> SS$_BADPARAM with
+ *      NO handle minted; and the executive OWNS the source field on SEND: a
+ *      frame handed in with a bogus source goes on the wire carrying the
+ *      handle's validated station -- observed by a SECOND handle bound to
+ *      ETH_P_ALL (which sees the first handle's outgoing frame through the
+ *      kernel's packet taps), so the assertion reads the real transmitted
+ *      bytes, not the userspace buffer.
  *
  * INV-6: every assertion below drives the REAL executive through /dev/vms;
  * nothing here hand-opens a userspace raw socket or fakes a frame send.
@@ -128,7 +137,7 @@ int main(void)
 
     /* ---- 1. OPEN on a real interface, ethertype 0x6007 (SCS) ----------- */
     memset(hwaddr, 0, sizeof(hwaddr));
-    st = vms_kif_l2_open(ifname, 0x6007u, &handle, &ifindex, hwaddr);
+    st = vms_kif_l2_open(ifname, 0x6007u, NULL, &handle, &ifindex, hwaddr);
     CHECK(st == SS_NORMAL, "L2_OPEN on a real interface -> SS$_NORMAL");
     CHECK(handle != 0, "L2_OPEN returns a nonzero handle");
     CHECK(ifindex != 0, "L2_OPEN resolves a nonzero interface index");
@@ -176,7 +185,7 @@ int main(void)
         sp_st = vms_kif_setprv(VMS_PRV_M_PHY_IO, 0 /* disable */, 0 /* temporary */, &prev);
         CHECK(sp_st == SS_NORMAL, "$SETPRV disable PHY_IO -> SS$_NORMAL");
 
-        st = vms_kif_l2_open(ifname, 0x6007u, &h2, &ix2, NULL);
+        st = vms_kif_l2_open(ifname, 0x6007u, NULL, &h2, &ix2, NULL);
         /* negctl: l2-open-bypasses-phy-io */
         CHECK(st == SS_NOPRIV, "L2_OPEN without PHY_IO -> SS$_NOPRIV");
         /* negctl: l2-open-bypasses-phy-io */
@@ -186,7 +195,7 @@ int main(void)
         CHECK(sp_st == SS_NORMAL, "$SETPRV re-enable PHY_IO -> SS$_NORMAL");
 
         /* Prove PHY_IO is back: OPEN succeeds again, then clean up. */
-        st = vms_kif_l2_open(ifname, 0x6007u, &h2, &ix2, NULL);
+        st = vms_kif_l2_open(ifname, 0x6007u, NULL, &h2, &ix2, NULL);
         CHECK(st == SS_NORMAL, "L2_OPEN succeeds again once PHY_IO is restored");
         if (st == SS_NORMAL)
             (void)vms_kif_l2_close(h2);
@@ -196,10 +205,78 @@ int main(void)
     {
         uint32_t h3 = 0, ix3 = 0;
 
-        st = vms_kif_l2_open("ovmx-no-such-if0", 0x6007u, &h3, &ix3, NULL);
+        st = vms_kif_l2_open("ovmx-no-such-if0", 0x6007u, NULL, &h3, &ix3, NULL);
         CHECK(st == SS_NOSUCHDEV,
               "L2_OPEN against a nonexistent interface -> SS$_NOSUCHDEV (honest, no fake handle)");
         CHECK(h3 == 0, "L2_OPEN against a nonexistent interface mints no handle");
+    }
+
+    /* ---- 6. STATION ADDRESS (rd vms-1f69) ------------------------------ */
+    {
+        /* DECnet 1.42: addr = 1<<10 | 42 = 0x042A -> AA-00-04-00-2A-04. */
+        static const uint8_t dna142[6]  = { 0xAA, 0x00, 0x04, 0x00, 0x2A, 0x04 };
+        static const uint8_t foreign[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+        static const uint8_t bcast[6]   = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+        uint32_t hs = 0, ixs = 0, hb = 0, ixb = 0, hf = 0, ixf = 0;
+
+        /* refused: neither the NIC hwaddr nor the Phase IV block */
+        st = vms_kif_l2_open(ifname, 0x6003u, foreign, &hf, &ixf, NULL);
+        CHECK(st == SS_BADPARAM,
+              "L2_OPEN with a foreign unicast station -> SS$_BADPARAM (no impersonation)");
+        CHECK(hf == 0, "L2_OPEN with a refused station mints no handle");
+
+        /* accepted: the DECnet Phase IV algorithmic station for 1.42 */
+        st = vms_kif_l2_open(ifname, 0x6003u, dna142, &hs, &ixs, NULL);
+        CHECK(st == SS_NORMAL,
+              "L2_OPEN with Phase IV station AA-00-04-00-2A-04 -> SS$_NORMAL");
+
+        /* a tap on the same NIC: ETH_P_ALL (0x0003) sees outgoing frames */
+        if (st == SS_NORMAL) {
+            uint32_t tst = vms_kif_l2_open(ifname, 0x0003u, NULL, &hb, &ixb, NULL);
+            CHECK(tst == SS_NORMAL, "L2_OPEN an ETH_P_ALL tap handle -> SS$_NORMAL");
+            if (tst == SS_NORMAL) {
+                uint8_t frame[60], rx[VMS_L2_MAXLEN];
+                uint32_t actlen = 0, rlen = 0;
+                int seen = 0, stamped = 0, tries;
+
+                memset(frame, 0, sizeof(frame));
+                memcpy(frame + 0, bcast, 6);
+                memcpy(frame + 6, foreign, 6);      /* a BOGUS source handed in */
+                frame[12] = 0x60; frame[13] = 0x03; /* DECnet routing ethertype */
+                memcpy(frame + 14, "OVMX-1F69-STATION", 17);   /* marker */
+                st = vms_kif_l2_send(hs, ixs, 0x6003u, bcast, frame,
+                                     (uint32_t)sizeof(frame), &actlen);
+                CHECK(st == SS_NORMAL, "L2_SEND on the Phase IV handle -> SS$_NORMAL");
+
+                for (tries = 0; tries < 40 && !seen; tries++) {
+                    rlen = 0;
+                    if (vms_kif_l2_recv(hb, 100, rx, &rlen) != SS_NORMAL)
+                        continue;
+                    if (rlen >= 31 && rx[12] == 0x60 && rx[13] == 0x03 &&
+                        memcmp(rx + 14, "OVMX-1F69-STATION", 17) == 0) {
+                        seen = 1;
+                        stamped = (memcmp(rx + 6, dna142, 6) == 0);
+                    }
+                }
+                CHECK(seen, "the tap observed the Phase IV handle's transmitted frame");
+                CHECK(stamped,
+                      "the transmitted frame's SOURCE is the validated station AA-00-04-00-2A-04, not the bogus one handed in");
+                (void)vms_kif_l2_close(hb);
+            }
+            (void)vms_kif_l2_close(hs);
+        }
+
+        /* a runt (no room for an Ethernet header) is refused, not sent */
+        st = vms_kif_l2_open(ifname, 0x6003u, NULL, &hs, &ixs, NULL);
+        if (st == SS_NORMAL) {
+            uint8_t runt[8] = { 0 };
+            uint32_t actlen = 0;
+            st = vms_kif_l2_send(hs, ixs, 0x6003u, bcast, runt, sizeof(runt), &actlen);
+            CHECK(st == SS_BADPARAM, "L2_SEND of a frame shorter than an Ethernet header -> SS$_BADPARAM");
+            (void)vms_kif_l2_close(hs);
+        } else {
+            CHECK(0, "L2_OPEN for the runt-send check -> SS$_NORMAL");
+        }
     }
 
     printf("=== test_syssvc_l2_datalink: %d passed, %d failed ===\n", pass, fail);

@@ -92,6 +92,19 @@ else
     bad "auto-detect should pick a real non-lo NIC (got: '$auto', line: $(iface_line))"
 fi
 
+# --- 3c. DATALINK BACKEND readout (rd vms-1f69): the dry run names, honestly,
+#          which raw-L2 path this binary was BUILT with -- the booted runtime's
+#          "executive" (/dev/vms + PHY_IO), the host/lab "AF_PACKET probe", or
+#          NetBSD "bpf" -- and where the executor database lives. -----------------
+dl="$("$BIN" --show-executor 2>&1 | sed -n 's/^Datalink backend = //p')"
+case "$dl" in
+    executive|"AF_PACKET probe"|bpf) ok "--show-executor names the datalink backend ($dl)";;
+    *) bad "--show-executor should name the datalink backend (got: '$dl')";;
+esac
+"$BIN" --show-executor 2>&1 | grep -q "^Executor database = $OVMX_DECNET_EXECUTOR\$" \
+    && ok "--show-executor names where the executor database lives (the host hook here; SYS\$SYSTEM:NETNODE_LOCAL.DAT on the runtime)" \
+    || bad "--show-executor should report the executor database location"
+
 # --- 4. INV-6: a garbage executor.dat is NOT a configured address ---------------
 printf 'garbage not an executor line\n' > "$OVMX_DECNET_EXECUTOR"
 out="$("$BIN" --show-executor 2>&1)"; rc=$?

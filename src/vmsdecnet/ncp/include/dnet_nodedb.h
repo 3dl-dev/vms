@@ -78,6 +78,16 @@ const struct dnet_node_entry *dnet_nodedb_at(const struct dnet_nodedb *db, unsig
 int dnet_nodedb_save(const struct dnet_nodedb *db, const char *path);
 int dnet_nodedb_load(struct dnet_nodedb *db, const char *path);
 
+/* Record-level primitives the VMS-file-layer store (dnet_ncpstore.h, rd
+ * vms-1f69) shares with the path-based load/save above, so both read and write
+ * byte-identical records. apply_line: a comment/blank line is a no-op (OK); a
+ * NODE record is added; anything else is DNET_NODEDB_EIO. format_entry: one
+ * record, no trailing newline. HEADER: the two leading comment lines every
+ * saved database carries (labelling the layout as OVMX's, Rule 8). */
+extern const char *const DNET_NODEDB_HEADER[2];
+int dnet_nodedb_apply_line(struct dnet_nodedb *db, const char *line);
+int dnet_nodedb_format_entry(const struct dnet_node_entry *e, char *buf, size_t bufsz);
+
 #ifdef __cplusplus
 }
 #endif

@@ -584,14 +584,13 @@
  *        NetBSD: contract-only twin (-1).
  *   long exec_l2_send(exec_socket_t s, int ifindex, uint16_t ethertype,
  *                     const uint8_t dst_mac[6], const void *frame, size_t len)
- *        send one frame's payload to dst_mac on ifindex, tagged ethertype
- *        (host order); every send names its destination (sendto-style) --
- *        an L2 socket carries no connect step. SOCK_RAW builds no header of
- *        its own on send, so the backend synthesizes the 14-byte Ethernet
- *        header (dst_mac / this interface's own hwaddr / ethertype) ahead of
- *        the caller's payload. Returns the PAYLOAD byte count sent (not
- *        counting that header), or negative on error. MAY SLEEP. Linux:
- *        kernel_sendmsg with a leading header kvec + a sockaddr_ll msg_name.
+ *        send one COMPLETE Ethernet frame (dst | src | ethertype | payload)
+ *        out ifindex VERBATIM (vms-a84d: SOCK_RAW adds no header and the
+ *        backend no longer prepends one). The source field is the caller's:
+ *        vms_l2.c stamps the handle's validated station address there before
+ *        calling in (rd vms-1f69, vms_l2_station.h). Returns the frame byte
+ *        count sent, or negative on error. MAY SLEEP. Linux: kernel_sendmsg
+ *        with a sockaddr_ll msg_name naming the egress interface.
  *        NetBSD: contract-only twin (-1).
  *   int  exec_l2_recv(exec_socket_t s, void *buf, size_t buf_len,
  *                     uint32_t timeout_ms, size_t *out_len)

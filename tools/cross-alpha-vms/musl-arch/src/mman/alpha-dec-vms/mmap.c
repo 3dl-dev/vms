@@ -15,8 +15,13 @@
 static void dummy(void) { }
 weak_alias(dummy, __vm_wait);
 
+#ifndef SYSCALL_MMAP2_UNIT   /* musl src/internal/syscall.h */
+#define SYSCALL_MMAP2_UNIT 4096ULL
+#endif
 #define UNIT SYSCALL_MMAP2_UNIT
-#define OFF_MASK ((-0x2000ULL << (8*sizeof(syscall_arg_t)-1)) | (UNIT-1))
+/* Stock musl spells the shift 8*sizeof(syscall_arg_t)-1; this port's syscall
+ * arguments are 64-bit (arch/alpha-dec-vms syscall_arch.h), so it is 63. */
+#define OFF_MASK ((-0x2000ULL << 63) | (UNIT-1))
 
 /* Next-fit cursor.  Only a hint: two threads racing for the same candidate
  * are arbitrated by MAP_FIXED_NOREPLACE in the kernel, and the loser moves on. */

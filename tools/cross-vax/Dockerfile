@@ -57,7 +57,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN n=0; until [ "$n" -ge 3 ]; do \
     apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
         build-essential \
-        wget ca-certificates \
+        wget curl ca-certificates \
         xz-utils \
         libgmp-dev libmpfr-dev libmpc-dev \
         texinfo bison flex \
@@ -71,12 +71,12 @@ done; [ "$n" -lt 3 ] && \
 # NetBSD/vax sysroot: headers + libc + crt objects (base + comp sets).
 # Only the paths a cross toolchain needs are extracted, to keep the image lean.
 # ------------------------------------------------------------------
+COPY fetch_verified.sh /usr/local/bin/fetch_verified.sh
 RUN set -eux; \
     mkdir -p "$SYSROOT"; cd /tmp; \
     CDN="https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-${NETBSD_VERSION}/vax/binary/sets"; \
-    wget -q "$CDN/base.tgz" "$CDN/comp.tgz"; \
-    echo "${NETBSD_BASE_SHA512}  base.tgz" | sha512sum -c -; \
-    echo "${NETBSD_COMP_SHA512}  comp.tgz" | sha512sum -c -; \
+    fetch_verified.sh sha512 "${NETBSD_BASE_SHA512}" base.tgz "$CDN/base.tgz"; \
+    fetch_verified.sh sha512 "${NETBSD_COMP_SHA512}" comp.tgz "$CDN/comp.tgz"; \
     tar -C "$SYSROOT" -xzf base.tgz ./usr/include ./usr/lib ./lib || \
         tar -C "$SYSROOT" -xzf base.tgz ./usr/lib ./lib; \
     tar -C "$SYSROOT" -xzf comp.tgz ./usr/include ./usr/lib; \
@@ -122,9 +122,10 @@ RUN set -eux; cd /tmp; \
 # libatomic's lock-based 8-byte ops give a correct atomic read on VAX.
 # ------------------------------------------------------------------
 RUN set -eux; cd /tmp; \
-    { wget --tries=3 --timeout=30 -q "https://ftpmirror.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz" \
-      || wget --tries=3 --timeout=30 -q "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz"; }; \
-    echo "${GCC_SHA256}  gcc-${GCC_VERSION}.tar.xz" | sha256sum -c -; \
+    fetch_verified.sh sha256 "${GCC_SHA256}" "gcc-${GCC_VERSION}.tar.xz" \
+        "https://ftpmirror.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz" \
+        "https://ftp.gnu.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz" \
+        "https://mirrors.kernel.org/gnu/gcc/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz"; \
     tar xf "gcc-${GCC_VERSION}.tar.xz"; \
     mkdir build-gcc; cd build-gcc; \
     ../gcc-${GCC_VERSION}/configure \

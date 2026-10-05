@@ -61,7 +61,7 @@ jobs:
             CLUSTER_AUTH_GROUP=${{ github.event.inputs.cluster_auth_group }}
             CLUSTER_AUTH_PASSWORD=${{ github.event.inputs.cluster_auth_password }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Extract /boot artifacts from the built image
         run: |

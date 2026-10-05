@@ -82,7 +82,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Run persistent boot smoke test
         run: |
@@ -510,7 +510,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: install -> UPGRADE -> boot e2e
         id: upgrade_e2e
@@ -586,7 +586,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: install /DESTINATION -> boot installed target -> login
         id: install_boot_e2e
@@ -673,7 +673,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: media -> menu install -> separate container -> login -> PRODUCT SHOW (incl. the no-flush negative control)
         id: release_install
@@ -795,7 +795,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Release-acceptance gate — boot the cut artifact, run the PARTS scenario, verify the shipped version
         id: acceptance
@@ -876,7 +876,7 @@ jobs:
           # differs from the shipped build, so the kernel + build-static layers are
           # cache hits (fast rebuilds), the reason CI beats a cold rail build here.
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Daytime cold-boot proof — INETD launches DAYTIME (ACP-stage), :13 answers RFC 867
         run: |
@@ -963,7 +963,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: DCL/SHOW acceptance gate — boot, log in, run the battery, assert VMS-faithful output
         run: |
@@ -1014,7 +1014,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Console newline-spam gate — hammer RETURN during boot, assert no echoed blank-line spam
         run: |
@@ -1070,7 +1070,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: Alternate-disk boot — system on the second disk reaches login (vms-9f5)
         run: |
@@ -1359,7 +1359,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: PARTS 0.2 demo e2e — boot, install, run, verify
         run: |
@@ -1421,7 +1421,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: SCSNODE -> hostname e2e — boot, SYSGEN, reboot, verify
         run: |
@@ -1485,7 +1485,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: SYSBOOT> cluster-param e2e — author at prompt, boot, verify in-guest
         run: |
@@ -1550,7 +1550,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: CLUSTER_CONFIG_LAN.COM e2e — run the procedure, reboot, verify adoption
         run: |
@@ -1604,7 +1604,7 @@ jobs:
           load: true
           tags: ovmx-boot:latest
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max' || '' }}
 
       - name: 2-node cluster e2e — configure both nodes, form/join, verify CN=2
         run: |

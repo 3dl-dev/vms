@@ -179,7 +179,7 @@ jobs:
           load: true
           tags: ovmx-ktest:latest
           cache-from: type=gha,scope=kernel-executive
-          cache-to: type=gha,mode=max,scope=kernel-executive
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=kernel-executive' || '' }}
 
       - name: Boot QEMU, insmod vms.ko, run this shard's executive suites against /dev/vms
         env:
@@ -392,7 +392,7 @@ jobs:
           load: true
           tags: ovmx-ktest:latest
           cache-from: type=gha,scope=kernel-executive
-          cache-to: type=gha,mode=max,scope=kernel-executive
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=kernel-executive' || '' }}
 
       - name: Boot QEMU, insmod vms.ko, run ONLY test_kmod_devtab_terminal against /dev/vms
         env:
@@ -477,7 +477,7 @@ jobs:
           load: true
           tags: ovmx-ktest:latest
           cache-from: type=gha,scope=kernel-executive
-          cache-to: type=gha,mode=max,scope=kernel-executive
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=kernel-executive' || '' }}
 
       - name: Boot QEMU, insmod vms.ko, run every corpus program against /dev/vms
         env:
@@ -1043,7 +1043,7 @@ jobs:
           load: true
           tags: ovmx-netbsd-ktest:latest
           cache-from: type=gha,scope=netbsd-harness-v2
-          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=min,scope=netbsd-harness-v2' || '' }}
 
       - name: Install (or restore) the shared NetBSD disk; prime the cache
         run: |
@@ -1119,7 +1119,7 @@ jobs:
           load: true
           tags: ovmx-netbsd-ktest:latest
           cache-from: type=gha,scope=netbsd-harness-v2
-          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=min,scope=netbsd-harness-v2' || '' }}
 
       - name: Boot NetBSD/amd64, drive the console, assert uname -srm
         run: |
@@ -1237,7 +1237,7 @@ jobs:
           load: true
           tags: ovmx-netbsd-ktest:latest
           cache-from: type=gha,scope=netbsd-harness-v2
-          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=min,scope=netbsd-harness-v2' || '' }}
 
       - name: Build + modload /dev/vms; assert one ping ioctl through the seam
         run: |
@@ -1369,7 +1369,7 @@ jobs:
           load: true
           tags: ovmx-netbsd-ktest:latest
           cache-from: type=gha,scope=netbsd-harness-v2
-          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=min,scope=netbsd-harness-v2' || '' }}
 
       - name: Build + modload /dev/vms; prove cross-process shared event-flag state
         run: |
@@ -1503,7 +1503,7 @@ jobs:
           load: true
           tags: ovmx-netbsd-ktest:latest
           cache-from: type=gha,scope=netbsd-harness-v2
-          cache-to: type=gha,mode=min,scope=netbsd-harness-v2
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=min,scope=netbsd-harness-v2' || '' }}
 
       - name: Build + modload /dev/vms; prove proctab, mbx, lock, access, ast cross-process
         run: |
@@ -1673,7 +1673,7 @@ jobs:
           load: true
           tags: ovmx-ktest-negctl-base:latest
           cache-from: type=gha,scope=facility-negctl
-          cache-to: type=gha,mode=max,scope=facility-negctl
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=facility-negctl' || '' }}
 
       # This job (across its shards) is the ONLY place the executive is
       # actually exercised, and rd vms-b1f means it does not run on a dev host

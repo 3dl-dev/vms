@@ -606,7 +606,7 @@ jobs:
           load: true
           tags: ovmx-cross-alpha:latest
           cache-from: type=gha,scope=cross-alpha
-          cache-to: type=gha,mode=max,scope=cross-alpha
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-alpha' || '' }}
 
       - name: Activate a VMS-standard image through the real IMGACT.EXE (alpha)
         run: |
@@ -675,7 +675,7 @@ jobs:
           load: true
           tags: ovmx-cross-vax:latest
           cache-from: type=gha,scope=cross-vax
-          cache-to: type=gha,mode=max,scope=cross-vax
+          cache-to: ${{ github.ref == 'refs/heads/main' && 'type=gha,mode=max,scope=cross-vax' || '' }}
 
       - name: Build + structurally prove the elf32-vax IMGACT backend
         run: |

@@ -1323,12 +1323,15 @@ static int cmd_set_process(struct dcl_command *cmd)
          * to surface the message as a bare pass-through rather than a %SET-
          * wrapper was not captured on the oracle and is flagged there).
          */
-        if (st & 1) {
-            /* Success: VMS prints nothing (oracle §3: a successful
-             * SET PROCESS/PRIVILEGE returns %X10000001 and is silent). */
-        } else if (st == SS$_NOTALLPRIV) {
+        if (st == SS$_NOTALLPRIV) {
+            /* A partial-success status (severity SUCCESS, V7.3 value 1665): the
+             * authorized subset was enabled, so it has the success bit set and
+             * must be tested BEFORE the plain-success branch below. */
             dcl_error("SYSTEM", 0 /* W */, "NOTALLPRIV",
                       "not all requested privileges authorized");
+        } else if (st & 1) {
+            /* Success: VMS prints nothing (oracle §3: a successful
+             * SET PROCESS/PRIVILEGE returns %X10000001 and is silent). */
         } else if (st == SS$_NOPRIV) {
             dcl_error("SYSTEM", 4 /* F */, "NOPRIV",
                       "insufficient privilege or object protection violation");

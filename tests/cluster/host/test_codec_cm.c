@@ -163,6 +163,46 @@ static void test_echo_recipe(const char *req_name, const char *resp_name,
 	assert_body_matches(resp, built, label);
 }
 
+/*
+ * rd vms-f29: the FORMATION, from the real V7.3 cold formation (two nodes,
+ * VOTES=1 EXPECTED_VOTES=2): the founding member's record carries tag 20 01
+ * and is a record OVMX must ADOPT its CSID from; the op-0x07 FORMATION open
+ * is answered by the same three-mutation echo as the op-0x09 ADD open.
+ */
+static void test_formation(void)
+{
+	const struct vms_fixture *rec = fixture("cm-form-membrec-oracle");
+	const struct vms_fixture *open = fixture("cm-form-open-oracle");
+	struct vms_cm_membership_rec r;
+	struct vms_cm_open o;
+
+	printf("-- rd vms-f29: the class-0x01 FORMATION (real V7.3 cold formation)\n");
+	ct_check(rec != NULL && open != NULL, "the formation specimens load");
+	if (rec == NULL || open == NULL)
+		return;
+	ct_check(vms_cm_membership_rec_parse(fx_body(rec), fx_body_len(rec), &r)
+		 == VMS_CODEC_OK,
+		 "the FORMATION's membership record (tag 20 01) parses");
+	ct_check_eq_u32(r.sysid, 1026u, "  it names the founding member, 1026");
+	ct_check_eq_u32(r.csid, 0x00010002u, "  and hands it CSID 00010002");
+	ct_check(vms_cm_open_parse(fx_body(open), fx_body_len(open), &o) ==
+		 VMS_CODEC_OK, "the op-0x07 FORMATION open parses");
+	ct_check_eq_u32(o.cls, VMS_CM_CLASS_FORM, "  class 0x01");
+	ct_check(o.has_bitmap && o.bitmap == 0x06u,
+		 "  and carries the founding nodemap, slots 1 and 2 (0x06)");
+	test_echo_recipe("cm-form-open-oracle", "cm-form-open-resp-oracle", 0,
+			 "cm-form-open (op 0x07)");
+	{
+		uint8_t b[VMS_CM_BODY_LEN];
+
+		memcpy(b, fx_body(rec), VMS_CM_BODY_LEN);
+		b[17] = 0x03u;   /* a class no real record has carried */
+		ct_check(vms_cm_membership_rec_parse(b, VMS_CM_BODY_LEN, &r) !=
+			 VMS_CODEC_OK,
+			 "a record tagged with any other class is still refused");
+	}
+}
+
 static void test_close_recipe(void)
 {
 	const struct vms_fixture *req = fixture("cm-close-req");
@@ -1340,6 +1380,7 @@ int main(void)
 			 "cm-op0f (op 0x0f, echo not force)");
 	test_echo_recipe("cm-relay-req", "cm-relay-resp", 0x04,
 			 "cm-relay (op 0x12)");
+	test_formation();
 	test_close_recipe();
 	test_dlm_op0d_recipe();
 	test_ack_build();

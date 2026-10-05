@@ -1024,6 +1024,7 @@ static enum cnxman_event barrier_event_of_response(const struct barrier_msg *m)
 static enum cnxman_event barrier_event_of_config(const struct barrier_msg *m)
 {
 	switch (m->env.opcode) {
+	case VMS_CM_OP_XITION_FORM:     /* 0x07, class-0x01 FORMATION open */
 	case VMS_CM_OP_XITION_ADD:      /* 0x09, class-0x02 ADD open      */
 	case VMS_CM_OP_XITION_REM:      /* 0x08, class-0x03 REMOVE open   */
 	case VMS_CM_OP_DEPART_XITION:   /* 0x0d, class-0x04 departure open */

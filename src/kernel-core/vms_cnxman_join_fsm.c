@@ -4162,6 +4162,7 @@ static int join_is_barrier_frame(const struct vms_cm_envelope *env)
 	if (env->category != VMS_CM_CAT_CONFIG)
 		return 0;
 	switch (env->opcode) {
+	case VMS_CM_OP_XITION_FORM:
 	case VMS_CM_OP_XITION_REM:
 	case VMS_CM_OP_XITION_ADD:
 	case VMS_CM_OP_XITION_GO:

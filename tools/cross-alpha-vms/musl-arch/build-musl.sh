@@ -224,6 +224,16 @@ if ! grep -q 'vms-28d: psignal' include/signal.h; then
 fi
 grep -q 'vms-28d: psignal' include/signal.h || { echo "vms-28d PATCH FAIL: psignal in include/signal.h" >&2; exit 7; }
 echo "== vms-28d DEC C header forms applied (vaxc\$errno, getcwd 3-arg, psignal) =="
+# vms-fb4: DEC C vfork()/exec*() for clients. vfork() is the DEC C expansion
+# (open the context, then the C RTL's setjmp in the CALLER's frame); the exec
+# family takes DEC C argument vectors (32-bit pointers at every pointer size)
+# and binds DECC$SHR's decc$$exec*32 entry points (src/vmslink/ovmx_decc_vfork.c).
+# The C RTL's own build keeps the POSIX declarations.
+if ! grep -q 'vms-fb4' include/unistd.h; then
+	perl -0pi -e 's/^int execve\(const char \*, char \*const \[\], char \*const \[\]\);\nint execv\(const char \*, char \*const \[\]\);\nint execle\(const char \*, const char \*, \.\.\.\);\nint execl\(const char \*, const char \*, \.\.\.\);\nint execvp\(const char \*, char \*const \[\]\);\nint execlp\(const char \*, const char \*, \.\.\.\);\n/#if !defined(__VMS) || defined(__OVMX_LIBC_BUILD)\n$&#else \/* vms-fb4: DEC C vfork\/exec *\/\ntypedef char *__ovmx_cp32 __attribute__((__mode__(__SI__)));\nint decc\$\$alloc_vfork_blocks(void);\nvoid *decc\$\$vfork_jmpbuf(void);\nint decc\$\$vfork_setjmp(void *) __attribute__((__returns_twice__));\n#define vfork() (decc\$\$alloc_vfork_blocks() >= 0 ? decc\$\$vfork_setjmp(decc\$\$vfork_jmpbuf()) : -1)\nint execve(const char *, __ovmx_cp32 const *, __ovmx_cp32 const *) __asm__("decc\$\$execve32");\nint execv(const char *, __ovmx_cp32 const *) __asm__("decc\$\$execv32");\nint execle(const char *, const char *, ...) __asm__("decc\$\$execle32");\nint execl(const char *, const char *, ...) __asm__("decc\$\$execl32");\nint execvp(const char *, __ovmx_cp32 const *) __asm__("decc\$\$execvp32");\nint execlp(const char *, const char *, ...) __asm__("decc\$\$execlp32");\n#endif\n/m' include/unistd.h
+fi
+grep -q 'decc\$\$execv32' include/unistd.h || { echo "vms-fb4 PATCH FAIL: exec family in include/unistd.h" >&2; exit 7; }
+
 # vms-fe03: the headers declare, for alpha-dec-vms clients, only what DECC$SHR
 # exports -- every function the port's CRTL name map covers (decc-crtl-names.txt);
 # the rest bind bare names no link can reach, so a configure probe would find a

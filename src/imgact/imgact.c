@@ -461,6 +461,8 @@ static int        g_nobjs;
 static imgact_auxv_t *g_auxv;      /* saved for __getauxval builtin */
 static char        **g_envp;      /* process envp — the C-RTL __init_libc arg */
 static char         *g_argv0;     /* process argv[0] (program name for musl)  */
+static long          g_argc;      /* process argc/argv (vms-fb4: imghdr v2)   */
+static char        **g_argv;
 
 /* --------------------------------------------------------------------------
  * Interpreter-exported ("builtin") symbols.
@@ -2621,6 +2623,8 @@ static void imgact_vms_standard_activate(unsigned long exe_base,
 	imghdr.version    = OVMX_IMGHDR_VERSION;
 	imghdr.flags      = 0;
 	imghdr.image_base = (void *)exe_base;
+	imghdr.argc       = (uint32_t)(g_argc > 0 ? g_argc : 0);
+	imghdr.argv       = g_argv;
 
 	/* cliflag (arg 6) + cli_util (arg 2), from the executive process context. */
 	unsigned int cliflag = imgact_query_cli_context();
@@ -2904,6 +2908,153 @@ static void imgact_maybe_boundary_audit(char **envp, const char *image)
 	imgact_boundary_audit_install(image ? image : "IMAGE.EXE", log);
 }
 
+/* --------------------------------------------------------------------------
+ * vms-fb4: IMGACT as a process's MAIN program -- activating an image from the
+ * ODS-2 volume in a new process.
+ *
+ * The kernel can only execve() a file it can reach by POSIX path, and the
+ * images on SYS$DISK live on a Files-11 volume the executive ACP owns (only a
+ * boot-staged handful have a tmpfs copy). So a process that is to run an
+ * arbitrary image -- the one a DEC C exec*() names, created on behalf of
+ * vfork()/exec() -- is created by execve()ing IMGACT.EXE itself (always
+ * staged) with the image spec as its first argument:
+ *     IMGACT.EXE <image-spec> [arg ...]
+ * Run that way (no AT_BASE: the kernel loaded IMGACT as the program, not as an
+ * interpreter) IMGACT reads the image's program headers and segments off the
+ * volume through the ACP, maps them exactly where the kernel would have, and
+ * continues the normal activation with the image's own phdrs/entry and
+ * argv = [<image-spec>, arg ...]. The image bytes never touch a POSIX file.
+ *
+ * <image-spec>: a volume path (/vms/...), a boot-staged path, or
+ * SYS$SYSTEM:<name> (the system image directory). Other logical names are not
+ * translated here -- an unresolvable spec fails honestly (%IMGACT-F-IMGNOTFND).
+ * -------------------------------------------------------------------------- */
+static int imgact_ci_prefix(const char *s, const char *pfx)
+{
+	for (; *pfx; s++, pfx++) {
+		char a = *s, b = *pfx;
+		if (a >= 'a' && a <= 'z') a = (char)(a - 32);
+		if (b >= 'a' && b <= 'z') b = (char)(b - 32);
+		if (a != b)
+			return 0;
+	}
+	return 1;
+}
+
+static const char *imgact_launch_volpath(const char *spec, char *buf, unsigned long sz)
+{
+	if (spec[0] == '/')
+		return imgsrc_map_staged(spec, buf, sz);   /* volume path or staged copy */
+	if (imgact_ci_prefix(spec, "SYS$SYSTEM:")) {
+		const char *vp = IMGACT_SYSEXE_VOLPATH, *n = spec + 11;
+		unsigned long o = 0;
+		while (*vp && o + 1 < sz)
+			buf[o++] = *vp++;
+		while (*n && o + 1 < sz) {
+			char c = *n++;
+			buf[o++] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+		}
+		buf[o] = '\0';
+		return buf;
+	}
+	return 0;
+}
+
+#if defined(__alpha__)
+#define IMGACT_LAUNCH_NOREPLACE 0x200000UL   /* Linux/Alpha MAP_FIXED_NOREPLACE */
+#else
+#define IMGACT_LAUNCH_NOREPLACE 0x100000UL
+#endif
+
+static void imgact_launch_main(const char *spec, char *volpath, unsigned long vsz,
+			       unsigned long *phdr, long *phnum, unsigned long *entry)
+{
+	const char *vp = imgact_launch_volpath(spec, volpath, vsz);
+	if (!vp)
+		die_imgnotfnd(spec);
+	if (vp != volpath)
+		xstrcpy(volpath, vp);
+	struct imgsrc src;
+	if (imgsrc_open(&src, volpath) < 0)
+		die_imgnotfnd(spec);
+	ElfW(Ehdr) eh;
+	if (imgsrc_pread(&src, &eh, sizeof eh, 0) != (long)sizeof eh ||
+	    eh.e_ident[0] != 0x7f || eh.e_ident[1] != 'E' ||
+	    eh.e_ident[2] != 'L'  || eh.e_ident[3] != 'F' ||
+	    (eh.e_type != ET_EXEC && eh.e_type != ET_DYN) || eh.e_phnum > 32) {
+		imgsrc_close(&src);
+		die_imgfmterr(spec);
+	}
+	ElfW(Phdr) ph[32];
+	if (imgsrc_pread(&src, ph, (unsigned long)eh.e_phnum * sizeof(ElfW(Phdr)),
+			 (long)eh.e_phoff) != (long)(eh.e_phnum * sizeof(ElfW(Phdr)))) {
+		imgsrc_close(&src);
+		die_imgfmterr(spec);
+	}
+	unsigned long lo = ~0UL, hi = 0;
+	for (int i = 0; i < eh.e_phnum; i++) {
+		if (ph[i].p_type != PT_LOAD)
+			continue;
+		if (PAGE_DOWN(ph[i].p_vaddr) < lo) lo = PAGE_DOWN(ph[i].p_vaddr);
+		if (ph[i].p_vaddr + ph[i].p_memsz > hi) hi = ph[i].p_vaddr + ph[i].p_memsz;
+	}
+	if (lo == ~0UL) {
+		imgsrc_close(&src);
+		die_imgfmterr(spec);
+	}
+	unsigned long span = PAGE_UP(hi) - lo;
+	/* ET_EXEC (a P0 image, vms-035) goes exactly at its link address, never
+	 * over anything already mapped; ET_DYN wherever the kernel places it. */
+	void *want = eh.e_type == ET_EXEC ? (void *)lo : 0;
+	void *map = sys_mmap(want, span, PROT_READ | PROT_WRITE,
+			     MAP_PRIVATE | MAP_ANONYMOUS |
+			     (eh.e_type == ET_EXEC ? IMGACT_LAUNCH_NOREPLACE : 0), -1, 0);
+	if (map == MAP_FAILED || (want && map != want)) {
+		imgsrc_close(&src);
+		die_mapfail(spec);
+	}
+	unsigned long base = (unsigned long)map - lo;
+	for (int i = 0; i < eh.e_phnum; i++) {
+		if (ph[i].p_type != PT_LOAD || ph[i].p_filesz == 0)
+			continue;
+		if (imgsrc_pread(&src, (void *)(base + ph[i].p_vaddr), ph[i].p_filesz,
+				 (long)ph[i].p_offset) != (long)ph[i].p_filesz) {
+			imgsrc_close(&src);
+			die_mapfail(spec);
+		}
+	}
+	imgsrc_close(&src);
+	for (int i = 0; i < eh.e_phnum; i++) {
+		if (ph[i].p_type != PT_LOAD)
+			continue;
+		int prot = 0;
+		if (ph[i].p_flags & PF_R) prot |= PROT_READ;
+		if (ph[i].p_flags & PF_W) prot |= PROT_WRITE;
+		if (ph[i].p_flags & PF_X) prot |= PROT_EXEC;
+		unsigned long a = PAGE_DOWN(base + ph[i].p_vaddr);
+		unsigned long z = PAGE_UP(base + ph[i].p_vaddr + ph[i].p_memsz);
+		sys_mprotect((void *)a, z - a, prot);
+	}
+	/* The program headers as the kernel would report them: PT_PHDR, or the
+	 * first segment's image of the file header. */
+	unsigned long ph_at = 0;
+	for (int i = 0; i < eh.e_phnum; i++)
+		if (ph[i].p_type == PT_PHDR)
+			ph_at = base + ph[i].p_vaddr;
+	if (!ph_at)
+		for (int i = 0; i < eh.e_phnum; i++)
+			if (ph[i].p_type == PT_LOAD && ph[i].p_offset == 0 &&
+			    eh.e_phoff < ph[i].p_filesz) {
+				ph_at = base + ph[i].p_vaddr + eh.e_phoff;
+				break;
+			}
+	if (!ph_at)
+		die_imgfmterr(spec);
+	*phdr  = ph_at;
+	*phnum = eh.e_phnum;
+	*entry = base + eh.e_entry;
+}
+
 unsigned long imgact_bootstrap(unsigned long *sp)
 {
 	/* ---- Parse the initial process stack (no globals yet). ---- */
@@ -2934,11 +3085,31 @@ unsigned long imgact_bootstrap(unsigned long *sp)
 	g_auxv  = auxv;
 	g_envp  = envp;                         /* for the C-RTL __init_libc bootstrap */
 	g_argv0 = argc > 0 ? argv[0] : 0;
+	g_argc  = argc;
+	g_argv  = argv;
 
 	/* Discover the ACP system device before any image read (imgsrc_open uses
 	 * g_acp_sysdevice). Runtime-discovered, not a compile-time literal
 	 * (vms-29ff/vms-47d). */
 	imgact_discover_sysdevice(envp);
+
+	/* vms-fb4: run as the process's main program (no interpreter base) --
+	 * activate argv[1] off the volume; the image sees argv from there on. */
+	static char launch_volpath[256];
+	if (at_base == 0) {
+		if (argc < 2) {
+			vms_fatal("NOIMAGE", "IMGACT run without an image to activate", 0);
+			sys_exit(IMGACT_EXIT_FAIL);
+		}
+		imgact_launch_main(argv[1], launch_volpath, sizeof launch_volpath,
+				   &at_phdr, &at_phnum, &at_entry);
+		at_execfn = launch_volpath;
+		argc -= 1;
+		argv += 1;
+		g_argv0 = argv[0];
+		g_argc  = argc;
+		g_argv  = argv;
+	}
 
 	/* INV-6 HEDGE (vms-f60d): the kernel-supplied AT_PHDR must point at MAPPED
 	 * memory before we walk ephdr[] (below AND inside exec_bias). A malformed

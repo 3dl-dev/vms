@@ -425,6 +425,34 @@ assert_p32() {
   return 1
 }
 
+assert_vfork() {
+  # vms-fb4: vfork()+execv() created a subprocess running an image with
+  # arguments; its output came back over the child-context pipe, the parent's
+  # stdout was restored, waitpid() collected it; sentinel 7.
+  local log="$1"
+  [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
+  local port_ok seam mile_hex mile_dec sentinel="?" mile_ok=0
+  port_ok=$(grep -qaF 'OVMX vfork test: pid_ok=1 exited=1 piped=1 buf=CHILD-ARGS-OK ' "$log" && echo 1 || echo 0)
+  seam=$(grep -aoE "OVMX-SEAM: image=JOINT_E2E\.EXE[^\"]*STATUS=0x[0-9A-Fa-f]+" "$log" 2>/dev/null | tail -1)
+  mile_hex=$(printf '%s' "$seam" | grep -oiE '0x[0-9a-f]+' | tail -1)
+  if [ -n "$mile_hex" ]; then
+    mile_dec=$(( mile_hex ))
+    if [ "$mile_dec" -ge "$CEXIT1" ] && [ $(( (mile_dec - CEXIT1) % 8 )) -eq 0 ]; then
+      sentinel=$(( (mile_dec - CEXIT1) / 8 + 1 ))
+      [ "$sentinel" -eq 7 ] && mile_ok=1
+    fi
+  fi
+  local errs err_ok=1
+  errs=$(grep -aE "%IMGACT-F|IMGNOTFND|DEVNOTMOUNT|NOSUCHFILE|ACCVIO|terminated abnormally|signal 1[012]|signal [46]|%X0000002C" "$log" 2>/dev/null || true)
+  [ -n "$errs" ] && err_ok=0
+  echo "  (a) vfork/exec/wait          : port_ok=$port_ok (want 1)"
+  echo "  (b) N=7 milestone seam        : ${seam:-<ABSENT>}"
+  echo "      decode: (${mile_hex:-<none>} - C\$_EXIT1 0x35a009)/8 + 1 = $sentinel  (want 7; ok=$mile_ok)"
+  echo "  (c) no activation err         : ok=$err_ok"
+  [ "$port_ok" -eq 1 ] && [ "$mile_ok" -eq 1 ] && [ "$err_ok" -eq 1 ] && return 0
+  return 1
+}
+
 assert_mf() {
   local log="$1"
   [ -f "$log" ] || { echo "  FAIL: no console log at $log"; return 1; }
@@ -1232,6 +1260,44 @@ EOF
       exit 0
     fi
     echo "FAIL: the 32-bit-pointer program did not run as required. Full log: $WORK/modgpA.log"
+    tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
+    exit 1
+    ;;
+  vfork-gate)
+    # vms-fb4: DEC C vfork()/exec*() -- a 32-bit program creates a subprocess
+    # running SYS$SYSTEM:JOINT_E2E.EXE (itself) with arguments.
+    MILESTONE_MAIN=vfork_test.c
+    export JOINT_MAIN_CFLAGS="-mpointer-size=no"
+    WANT_SENTINEL=7
+    JOINT_CRTL_RMS_VENEER=1
+    _st=$(mktemp -d); _fails=0
+    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 exited=1 piped=1 buf=CHILD-ARGS-OK argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a039 p0=1' > "$_st/pass.log"
+    printf '%s\n%s\n' 'OVMX vfork test: pid_ok=1 exited=1 piped=0 buf=CHILD-ARGS-BAD argc=1' \
+      'OVMX-SEAM: image=JOINT_E2E.EXE stdcall_returned=1 has_exited=1 $STATUS=0x0035a019 p0=1' > "$_st/noargs.log"
+    printf '%s\n%s\n' '%DCL-F-ABORT, image SYS$SYSTEM:JOINT_E2E terminated abnormally (signal 11)' \
+      'JOINT-E2E-PROOF: STATUS=%X0000002C SEVERITY=4' > "$_st/crash.log"
+    echo "-- vfork selftest 1/3: child ran with its arguments, output piped back, reaped must PASS --"
+    if assert_vfork "$_st/pass.log" >/dev/null 2>&1; then echo "  PASS"; else echo "  FAIL: clean proof rejected"; _fails=$((_fails+1)); fi
+    echo "-- vfork selftest 2/3: a child that did not receive its arguments must FAIL --"
+    if assert_vfork "$_st/noargs.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    echo "-- vfork selftest 3/3: a crash must FAIL --"
+    if assert_vfork "$_st/crash.log" >/dev/null 2>&1; then echo "  FAIL: accepted"; _fails=$((_fails+1)); else echo "  PASS (rejected)"; fi
+    rm -rf "$_st"
+    [ "$_fails" -eq 0 ] || die "vfork selftest failed -- assert_vfork cannot be trusted"
+    echo ""
+    build_joint_images
+    assemble_boot_image
+    log "step 3: BOOT A -- DEC C vfork/exec on the REAL executive"
+    run_boot_a
+    grep -aE "OVMX vfork|IMGACT|OVMX-SEAM:|%IMGACT|%DCL-|%SYSTEM" "$WORK/modgpA.log" 2>/dev/null | sed 's/^/  | /' || true
+    if assert_vfork "$WORK/modgpA.log"; then
+      echo ""
+      echo "PASS: DEC C vfork()+execv() created a subprocess running an image off the ODS-2"
+      echo "      volume with arguments; output piped back, parent stdout restored, reaped."
+      exit 0
+    fi
+    echo "FAIL: DEC C vfork/exec did not work. Full log: $WORK/modgpA.log"
     tail -40 "$WORK/modgpA.log" | sed 's/^/  | /'
     exit 1
     ;;

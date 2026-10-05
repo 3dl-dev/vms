@@ -265,11 +265,13 @@ if [ "$OVMX_DECC_ARCH" = alpha ]; then
     "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=64 -g0 \
         $ALPHA_MUSL_INC -I"$IMGACT_INC" -o "$ALPHA_CRTL_OBJ" "$CRTL_SRC"
     # vms-5bc9: the DEC C 32-bit-pointer entry points that need code (pointer-
-    # to-pointer parameters, ovmx_decc_p32.c). Compiled at the DEC C DEFAULT
-    # pointer size (32-bit) on purpose: that is what makes the cc1 decorate its
-    # definitions to the 32-bit names (strtol -> decc$strtol).
+    # to-pointer parameters, ovmx_decc_p32.c). Compiled -mpointer-size=32 on
+    # purpose: 32-bit pointers make the cc1 decorate its definitions to the
+    # 32-bit names (strtol -> decc$strtol), and an EXPLICIT pointer size is what
+    # enables #pragma __pointer_size for the 64-bit locals it needs (the port
+    # ignores the pragma when no -mpointer-size is given, as DEC C does).
     ALPHA_P32_OBJ="$ALPHA_BOOT_DIR/ovmx_decc_p32.o"
-    "$ALPHA_CC" -c -fPIC -ffreestanding -g0 \
+    "$ALPHA_CC" -c -fPIC -ffreestanding -mpointer-size=32 -g0 \
         -o "$ALPHA_P32_OBJ" "$(CDPATH= cd "$(dirname "$0")" && pwd)/ovmx_decc_p32.c"
 
     # Ground-truth the decc$ universals these two objects ACTUALLY define —

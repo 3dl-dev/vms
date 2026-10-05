@@ -2,8 +2,10 @@
  * ovmx_decc_p32.c - DEC C RTL 32-bit-pointer entry points that cannot simply be
  * the 64-bit implementation (vms-5bc9). Alpha only.
  *
- * Compiled by the alpha-dec-vms cc1 with the DEC C DEFAULT pointer size
- * (32-bit), so each definition below is decorated to the 32-bit entry name
+ * Compiled by the alpha-dec-vms cc1 with -mpointer-size=32 (32-bit default
+ * pointers; the explicit size enables #pragma __pointer_size, which the port
+ * ignores without one), so each definition below is decorated to the 32-bit
+ * entry name
  * (strtol -> decc$strtol) and each call to _<name>64 binds the 64-bit
  * implementation (decc$_<name>64) DECC$SHR already defines. These functions
  * hand a pointer back THROUGH a pointer argument (char **endptr, ...): the
@@ -50,7 +52,7 @@ extern int                _readdir_r64(void *, d64, d64 *);
 #pragma __pointer_size __restore
 
 /* A pointer the 64-bit implementation produced into the caller's 32-bit data. */
-#define P32(T, p) ((T)(unsigned int)(unsigned long long)(p))
+#define P32(T, p) ((T)(unsigned int)(unsigned long long)(p))   /* 64 -> 32 */
 
 double strtod(const char *s, char **e)
 { c64 e64; double r = _strtod64(s, &e64); if (e) *e = P32(char *, e64); return r; }

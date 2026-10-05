@@ -66,7 +66,7 @@ not the VGA `boot.iso`) automatically, which is why the whole flow works over
 
 Everything is pinned in `netbsd_version.env` — never "latest":
 
-- **NetBSD 10.1 / amd64**, from the official CDN `https://cdn.netbsd.org`.
+- **NetBSD 10.1 / amd64**, from the official release archive `https://archive.netbsd.org/pub/NetBSD-archive/` (10.1 was retired from cdn.netbsd.org).
 - **`boot-com.iso` SHA512** is pinned and **verified on every run** (including
   cached ones) against the CDN's published `SHA512` manifest — anita itself does
   no checksum verification, so `drive_netbsd.py` is the integrity gate.

@@ -983,8 +983,16 @@ jobs:
           . tests/netbsd/netbsd_version.env
           if [ ! -d .netbsd-src/usr/src/sys ]; then
             mkdir -p .netbsd-src
-            curl -sSL -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL"
-            echo "$NETBSD_SYSSRC_SHA512  /tmp/syssrc.tgz" | sha512sum -c -
+            # cdn.netbsd.org intermittently truncates long transfers (sometimes
+            # with a clean EOF, so curl --retry alone is not enough): re-fetch
+            # until the PINNED checksum verifies, fail if it never does.
+            ok=0
+            for attempt in 1 2 3 4 5 6; do
+              curl -sSL --retry 3 --retry-all-errors --retry-delay 5 -o /tmp/syssrc.tgz "$NETBSD_SYSSRC_URL" || true
+              if echo "$NETBSD_SYSSRC_SHA512  /tmp/syssrc.tgz" | sha512sum -c -; then ok=1; break; fi
+              echo "syssrc fetch attempt $attempt failed checksum; retrying"; sleep $((attempt * 10))
+            done
+            [ "$ok" = 1 ] || { echo "FAIL: syssrc.tgz never matched the pinned sha512"; exit 1; }
             tar xzf /tmp/syssrc.tgz -C .netbsd-src usr/src/sys usr/src/common
           fi
 
@@ -1009,6 +1017,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1068,6 +1079,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1187,6 +1201,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1318,6 +1335,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -1456,6 +1476,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enable KVM
+        uses: ./.github/actions/enable-kvm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

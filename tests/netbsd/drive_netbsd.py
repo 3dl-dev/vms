@@ -40,6 +40,9 @@ import signal
 import traceback
 
 import anita
+import netbsd_download
+
+netbsd_download.install(anita)
 
 import netbsd_console
 
@@ -88,11 +91,26 @@ def kvm_available():
 
 
 def accel_args():
-    # KVM where the host offers it (local dev boxes); plain TCG otherwise
-    # (GitHub-hosted runners have no nested virt). Same qemu binary either way.
+    # KVM where the host offers it (GitHub-hosted x86_64 runners since
+    # vms-6bf, or local dev boxes); plain TCG otherwise.
+    #
+    # NOT `-cpu host' (rd vms-8a8): `-cpu host' passes through EVERY feature
+    # of whatever silicon the runner happens to be on, including brand-new
+    # CPUID/MSR surface a 2024-era NetBSD 10.1 GENERIC kernel was never tested
+    # against. Measured on a GitHub-hosted runner (Xeon 6973P-C, job
+    # 108120866684, rd vms-6bf observation 2026-09-25): the install kernel hit
+    # a FATAL PAGE FAULT IN SUPERVISOR MODE ~1.75s into boot, right after the
+    # per-cpu ACPI attach loop, landing in ddb (`--db_more--') -- early enough
+    # that this is new-CPU-surface in MP/ACPI bring-up confusing the kernel,
+    # not anything OVMX touches. `qemu64' is QEMU's conservative, stable
+    # baseline (plain x86_64 + SSE2, no exotic extensions): KVM still backs
+    # EXECUTION of every instruction the guest actually issues on real
+    # hardware (that's where KVM's speed comes from), so this keeps the KVM
+    # win while never handing the guest a CPUID bit newer than what any
+    # NetBSD/amd64 release already assumes.
     if kvm_available():
         log("acceleration: KVM (/dev/kvm present and writable)")
-        return ["-accel", "kvm", "-cpu", "host", "-smp", "4"]
+        return ["-accel", "kvm", "-cpu", "qemu64", "-smp", "4"]
     log("acceleration: TCG (no usable /dev/kvm) -- boot/install will be slower")
     return ["-smp", "2"]
 
@@ -125,7 +143,7 @@ def main():
     version = env("NETBSD_VERSION", "10.1")
     arch = env("NETBSD_ARCH", "amd64")
     url = env("NETBSD_URL",
-              "https://cdn.netbsd.org/pub/NetBSD/NetBSD-%s/%s/" % (version, arch))
+              "https://archive.netbsd.org/pub/NetBSD-archive/NetBSD-%s/%s/" % (version, arch))
     iso_name = env("NETBSD_BOOT_ISO", "boot-com.iso")
     iso_sha512 = env("NETBSD_BOOT_ISO_SHA512", "")
 

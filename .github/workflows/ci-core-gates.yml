@@ -356,6 +356,9 @@ jobs:
 
       - name: Run netbsd_console.py self-tests
         run: python3 tests/netbsd/test_netbsd_console_recovery.py
+
+      - name: Run netbsd_download.py self-tests (vms-8a8)
+        run: python3 tests/netbsd/test_netbsd_download.py
   # -----------------------------------------------------------------------
   # Job: aarch64 system-emulation boot proof (rd vms-f66)
   #

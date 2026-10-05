@@ -27,7 +27,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # python3/pip      : anita is a Python program
 # python3-pexpect  : anita "screen scrapes" the serial console via pexpect
 # genisoimage      : anita builds the install-sets ISO with mkisofs/genisoimage
-# curl/ca-certs    : anita downloads the pinned release from cdn.netbsd.org
+# curl/ca-certs    : anita downloads the pinned release from archive.netbsd.org
 # gzip, cpio       : anita unpacks release media
 RUN n=0; until [ "$n" -ge 3 ]; do \
     apt-get update -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 && apt-get install -o Acquire::Retries=5 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -y --no-install-recommends \
@@ -67,6 +67,7 @@ COPY tests/netbsd/netbsd_version.env tests/netbsd/drive_netbsd.py tests/netbsd/r
 # (drive_netbsd.py, drive_netbsd_p2b.py, drive_netbsd_p2c.py). It sits in /netbsd
 # next to the drivers, so `import netbsd_console' resolves via the script dir.
 COPY tests/netbsd/netbsd_console.py /netbsd/netbsd_console.py
+COPY tests/netbsd/netbsd_download.py /netbsd/netbsd_download.py
 
 # P2b (rd vms-bfe) + P2c (rd vms-4b4): the OVMX/NetBSD `vms' pseudo-device, the
 # transport seam leaf, and the userspace probes -- staged for the in-guest build.

@@ -1,8 +1,8 @@
 {
  "total": 140,
  "summary": {
-  "run-pass": 133,
-  "run-fail": 6,
+  "run-pass": 138,
+  "run-fail": 1,
   "run-crash": 1,
   "vm-crash": 0,
   "not-run": 0,
@@ -502,7 +502,7 @@
   {
    "name": "sys_assign",
    "status": "run-pass",
-   "signaled": true
+   "signaled": false
   },
   {
    "name": "sys_bintim",
@@ -516,7 +516,7 @@
   },
   {
    "name": "sys_cancel",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": false
   },
   {
@@ -536,8 +536,8 @@
   },
   {
    "name": "sys_creprc",
-   "status": "run-fail",
-   "signaled": true
+   "status": "run-pass",
+   "signaled": false
   },
   {
    "name": "sys_dclast",
@@ -591,7 +591,7 @@
   },
   {
    "name": "sys_getdviw",
-   "status": "run-fail",
+   "status": "run-pass",
    "signaled": true
   },
   {
@@ -616,8 +616,8 @@
   },
   {
    "name": "sys_getuai",
-   "status": "run-fail",
-   "signaled": true
+   "status": "run-pass",
+   "signaled": false
   },
   {
    "name": "sys_getutc",
@@ -656,8 +656,8 @@
   },
   {
    "name": "sys_rms_seq",
-   "status": "run-fail",
-   "signaled": true
+   "status": "run-pass",
+   "signaled": false
   },
   {
    "name": "sys_schdwk",
@@ -710,6 +710,6 @@
    "signaled": false
   }
  ],
- "timestamp": "2026-10-04T22:52:33Z",
+ "timestamp": "2026-10-05T00:11:15Z",
  "note": "Runtime column: tier-1 programs run in the QEMU guest under a live vms.ko (OVMX_CORPUS_RT=1 tests/qemu/run_tests.sh). Taken from the CI runner (the reference environment); re-derive with tests/qemu/corpus_runtime_report.sh; raise the floor only from a real run. sys_forcex is timing-dependent (5s sleeps around a subprocess) and passed on a local KVM guest but not on the CI runner: it is held at its CI verdict until rd vms-f45 (test-flaky) is fixed."
 }

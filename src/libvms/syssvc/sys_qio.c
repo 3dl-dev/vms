@@ -196,6 +196,9 @@ static uint32_t qio_sync(int fd, uint32_t base_func, void *iosb_ptr,
  * executive-resident pending-read queue (vms_mbx.c) would remove the polling; that
  * is the follow-on. This is process-local: no other process sees the request.
  */
+extern void vms$$deliver_pending_asts(void);
+
+#if defined(__linux__)
 #define ASYNC_RD_MAX 16
 static struct async_rd {
     int      in_use;
@@ -353,6 +356,10 @@ void vms$$qio_cancel_chan(uint16_t chan)
         async_timer_arm(0);
     sigprocmask(SIG_SETMASK, &old, NULL);
 }
+
+#else  /* !__linux__: no POSIX interval timers/rt signals here -- the read stays synchronous */
+void vms$$qio_cancel_chan(uint16_t chan) { (void)chan; }
+#endif /* __linux__ */
 
 /*
  * qio_mailbox_op - IO$_READVBLK/WRITEVBLK for a MAILBOX channel (vms-d44).
@@ -844,10 +851,14 @@ uint32_t sys$qio(uint32_t efn, uint16_t chan, uint32_t func,
 
     if (vms$$chan_is_mailbox(chan)) {
         uint32_t bf = func & IO$M_FCODE;
+#if defined(__linux__)
         if ((bf == IO$_READVBLK || bf == IO$_READLBLK || bf == IO$_READPBLK) &&
             !(func & IO$M_NOW) && p1)
             return qio_mailbox_read_async(chan, iosb_ptr, p1, p2, efn,
                                           astadr, astprm);
+#else
+        (void)bf;
+#endif
         return qio_mailbox_op(chan, func, iosb_ptr, p1, p2, efn, astadr, astprm);
     }
 

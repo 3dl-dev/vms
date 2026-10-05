@@ -91,10 +91,10 @@
 #define DNET_BROKER_ST_ILLIOFUNC   244u    /* SS$_ILLIOFUNC   */
 #define DNET_BROKER_ST_TIMEOUT     556u    /* SS$_TIMEOUT     */
 #define DNET_BROKER_ST_ENDOFFILE   2160u   /* SS$_ENDOFFILE   */
-#define DNET_BROKER_ST_INVLOGIN    2228u   /* SS$_INVLOGIN    */
-#define DNET_BROKER_ST_NOSUCHDEV   2680u   /* SS$_NOSUCHDEV   */
-#define DNET_BROKER_ST_DEVOFFLINE  2692u   /* SS$_DEVOFFLINE  */
-#define DNET_BROKER_ST_FILNOTACC   2744u   /* SS$_FILNOTACC   */
+#define DNET_BROKER_ST_INVLOGIN    8348u   /* SS$_INVLOGIN    */
+#define DNET_BROKER_ST_NOSUCHDEV   2312u   /* SS$_NOSUCHDEV   */
+#define DNET_BROKER_ST_DEVOFFLINE  132u    /* SS$_DEVOFFLINE  */
+#define DNET_BROKER_ST_FILNOTACC   172u    /* SS$_FILNOTACC   */
 
 /* On-wire header sizes (fixed LE fields; the data buffer follows). */
 #define DNET_BROKER_REQ_HDR    24u  /* magic+corr+pid+handle+reply_unit(5x4) + op+datalen(2x2) */

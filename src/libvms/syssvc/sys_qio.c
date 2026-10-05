@@ -739,7 +739,12 @@ _Static_assert(DNET_BROKER_ST_NORMAL == SS$_NORMAL &&
                DNET_BROKER_ST_DEVOFFLINE == SS$_DEVOFFLINE &&
                DNET_BROKER_ST_FILNOTACC == SS$_FILNOTACC &&
                DNET_BROKER_ST_BADPARAM == SS$_BADPARAM &&
-               DNET_BROKER_ST_ABORT == SS$_ABORT,
+               DNET_BROKER_ST_ABORT == SS$_ABORT &&
+               DNET_BROKER_ST_EXQUOTA == SS$_EXQUOTA &&
+               DNET_BROKER_ST_ILLIOFUNC == SS$_ILLIOFUNC &&
+               DNET_BROKER_ST_TIMEOUT == SS$_TIMEOUT &&
+               DNET_BROKER_ST_INVLOGIN == SS$_INVLOGIN &&
+               DNET_BROKER_ST_NOSUCHDEV == SS$_NOSUCHDEV,
                "broker statuses are the VMS SS$_ values");
 
 #define NET_REQ_LOGNAM  "DNET$NETACP_REQ"
